@@ -1,0 +1,209 @@
+#include "turbo_flow_pgsql.h"
+
+#include "turbo_error.h"
+#include "turbo_parser.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+static int flow_pgsql_config_error(turbo_flow_config_error_t *error, int status, const char *scope,
+                                   const char *name, const char *field, const char *message) {
+  if (error && error->size >= sizeof(*error)) {
+    *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    error->status = status;
+    if (field)
+      (void)snprintf(error->path, sizeof(error->path), "$.%s.%s.config.%s", scope, name, field);
+    else (void)snprintf(error->path, sizeof(error->path), "$.%s.%s", scope, name ? name : "?");
+    (void)snprintf(error->message, sizeof(error->message), "%s", message);
+  }
+  return status;
+}
+
+static int flow_pgsql_field_allowed(const char *field, const char *const *allowed,
+                                    size_t allowed_count) {
+  for (size_t i = 0u; i < allowed_count; ++i) {
+    if (strcmp(field, allowed[i]) == 0) return 1;
+  }
+  return 0;
+}
+
+static int flow_pgsql_validate_fields(const json_value_t *fields, const char *scope,
+                                      const char *name, const char *const *allowed,
+                                      size_t allowed_count, turbo_flow_config_error_t *error) {
+  if (!fields || turbo_json_type(fields) != TURBO_JSON_OBJECT)
+    return flow_pgsql_config_error(error, TURBO_EINVAL, scope, name, NULL,
+                                   "config must be a mapping");
+  for (size_t i = 0u; i < turbo_json_object_size(fields); ++i) {
+    const char *field = turbo_json_object_key(fields, i);
+    if (!field || !flow_pgsql_field_allowed(field, allowed, allowed_count))
+      return flow_pgsql_config_error(error, TURBO_EINVAL, scope, name, field,
+                                     "unknown PostgreSQL outbox field");
+  }
+  return TURBO_OK;
+}
+
+static const char *flow_pgsql_string(const json_value_t *fields, const char *field) {
+  json_value_t *value = turbo_json_object_get(fields, field);
+  return value && turbo_json_type(value) == TURBO_JSON_STRING ? turbo_json_string(value) : NULL;
+}
+
+static int flow_pgsql_required_u64(const json_value_t *fields, const char *field, uint64_t maximum,
+                                   uint64_t *out, const char *channel_name,
+                                   turbo_flow_config_error_t *error) {
+  json_value_t *value = turbo_json_object_get(fields, field);
+  double number;
+  uint64_t converted;
+  if (!value || turbo_json_type(value) != TURBO_JSON_NUMBER)
+    return flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, field,
+                                   "required positive integer is invalid");
+  number = turbo_json_number(value);
+  if (!isfinite(number) || number < 1.0 || number > (double)maximum || number > 9007199254740991.0)
+    return flow_pgsql_config_error(error, TURBO_ERANGE, "channels", channel_name, field,
+                                   "required positive integer is out of range");
+  converted = (uint64_t)number;
+  if ((double)converted != number)
+    return flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, field,
+                                   "required positive integer has a fractional value");
+  *out = converted;
+  return TURBO_OK;
+}
+
+int turbo_flow_pgsql_register_resolved_outbox_adapter(turbo_flow_t *flow, const char *name,
+                                                      const turbo_flow_resolved_config_t *resolved,
+                                                      turbo_flow_config_error_t *error) {
+  static const char *const adapter_allowed[] = {"channel", "role"};
+  static const char *const channel_allowed[] = {
+      "backend",          "conninfo",         "outbox_name",      "capacity",
+      "max_payload_size", "poll_interval_ms", "claim_scan_limit", "create_table"};
+  turbo_flow_pgsql_outbox_config_t config = TURBO_FLOW_PGSQL_OUTBOX_CONFIG_INIT;
+  turbo_json_doc_t *document = NULL;
+  json_value_t *adapters;
+  json_value_t *adapter;
+  json_value_t *adapter_kind;
+  json_value_t *adapter_fields;
+  json_value_t *channels;
+  json_value_t *channel;
+  json_value_t *channel_kind;
+  json_value_t *channel_fields;
+  json_value_t *create_table;
+  const char *channel_name;
+  const char *role;
+  const char *backend;
+  const char *json;
+  size_t json_size = 0u;
+  uint64_t number;
+  int rc;
+  if (!flow || !name || !name[0] || !resolved || !error || error->size < sizeof(*error))
+    return TURBO_EINVAL;
+  *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+  json = turbo_flow_resolved_config_json(resolved, &json_size);
+  if (!json || turbo_parse_json((const uint8_t *)json, json_size, &document) != TURBO_OK ||
+      !document)
+    return flow_pgsql_config_error(error, TURBO_EINVAL, "adapters", name, NULL,
+                                   "invalid resolved configuration snapshot");
+
+  adapters = turbo_json_object_get(document, "adapters");
+  adapter = adapters ? turbo_json_object_get(adapters, name) : NULL;
+  if (!adapter || turbo_json_type(adapter) != TURBO_JSON_OBJECT) {
+    rc = flow_pgsql_config_error(error, TURBO_ENOENT, "adapters", name, NULL,
+                                 "adapter is not resolved");
+    goto done;
+  }
+  adapter_kind = turbo_json_object_get(adapter, "kind");
+  adapter_fields = turbo_json_object_get(adapter, "config");
+  if (!adapter_kind || turbo_json_type(adapter_kind) != TURBO_JSON_STRING ||
+      strcmp(turbo_json_string(adapter_kind), "pgsql_outbox") != 0) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "adapters", name, NULL,
+                                 "adapter kind must be pgsql_outbox");
+    goto done;
+  }
+  rc = flow_pgsql_validate_fields(adapter_fields, "adapters", name, adapter_allowed,
+                                  sizeof(adapter_allowed) / sizeof(adapter_allowed[0]), error);
+  if (rc != TURBO_OK) goto done;
+  channel_name = flow_pgsql_string(adapter_fields, "channel");
+  role = flow_pgsql_string(adapter_fields, "role");
+  if (!channel_name || !channel_name[0]) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "adapters", name, "channel",
+                                 "channel must be a non-empty string");
+    goto done;
+  }
+  if (!role || (strcmp(role, "sink") != 0 && strcmp(role, "source") != 0)) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "adapters", name, "role",
+                                 "role must be sink or source");
+    goto done;
+  }
+  config.role =
+      strcmp(role, "source") == 0 ? TURBO_FLOW_PGSQL_OUTBOX_SOURCE : TURBO_FLOW_PGSQL_OUTBOX_SINK;
+
+  channels = turbo_json_object_get(document, "channels");
+  channel = channels ? turbo_json_object_get(channels, channel_name) : NULL;
+  if (!channel || turbo_json_type(channel) != TURBO_JSON_OBJECT) {
+    rc = flow_pgsql_config_error(error, TURBO_ENOENT, "channels", channel_name, NULL,
+                                 "outbox channel is not resolved");
+    goto done;
+  }
+  channel_kind = turbo_json_object_get(channel, "kind");
+  channel_fields = turbo_json_object_get(channel, "config");
+  if (!channel_kind || turbo_json_type(channel_kind) != TURBO_JSON_STRING ||
+      strcmp(turbo_json_string(channel_kind), "outbox") != 0) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, NULL,
+                                 "channel kind must be outbox");
+    goto done;
+  }
+  rc = flow_pgsql_validate_fields(channel_fields, "channels", channel_name, channel_allowed,
+                                  sizeof(channel_allowed) / sizeof(channel_allowed[0]), error);
+  if (rc != TURBO_OK) goto done;
+  backend = flow_pgsql_string(channel_fields, "backend");
+  config.conninfo = flow_pgsql_string(channel_fields, "conninfo");
+  config.outbox_name = flow_pgsql_string(channel_fields, "outbox_name");
+  if (!backend || strcmp(backend, "postgresql") != 0) {
+    rc = flow_pgsql_config_error(error, backend ? TURBO_ENOTSUP : TURBO_EINVAL, "channels",
+                                 channel_name, "backend", "backend must be postgresql");
+    goto done;
+  }
+  if (!config.conninfo || !config.conninfo[0]) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, "conninfo",
+                                 "conninfo must be a non-empty string");
+    goto done;
+  }
+  if (!config.outbox_name || !config.outbox_name[0] ||
+      strlen(config.outbox_name) > TURBO_FLOW_PGSQL_OUTBOX_NAME_MAX) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, "outbox_name",
+                                 "outbox_name is empty or exceeds the public bound");
+    goto done;
+  }
+  rc = flow_pgsql_required_u64(channel_fields, "capacity", TURBO_FLOW_PGSQL_OUTBOX_MAX_CAPACITY,
+                               &number, channel_name, error);
+  if (rc != TURBO_OK) goto done;
+  config.capacity = (size_t)number;
+  rc = flow_pgsql_required_u64(channel_fields, "max_payload_size",
+                               TURBO_FLOW_PGSQL_OUTBOX_MAX_PAYLOAD_SIZE, &number, channel_name,
+                               error);
+  if (rc != TURBO_OK) goto done;
+  config.max_payload_size = (size_t)number;
+  rc = flow_pgsql_required_u64(channel_fields, "poll_interval_ms", UINT32_MAX, &number,
+                               channel_name, error);
+  if (rc != TURBO_OK) goto done;
+  config.poll_interval_ms = (uint32_t)number;
+  rc =
+      flow_pgsql_required_u64(channel_fields, "claim_scan_limit",
+                              TURBO_FLOW_PGSQL_OUTBOX_MAX_CLAIM_SCAN, &number, channel_name, error);
+  if (rc != TURBO_OK) goto done;
+  config.claim_scan_limit = (size_t)number;
+  create_table = turbo_json_object_get(channel_fields, "create_table");
+  if (!create_table || turbo_json_type(create_table) != TURBO_JSON_BOOL) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, "create_table",
+                                 "create_table must be boolean");
+    goto done;
+  }
+  config.create_table = turbo_json_bool(create_table) ? 1 : 0;
+  rc = turbo_flow_pgsql_register_outbox_adapter(flow, name, &config);
+  if (rc != TURBO_OK)
+    rc = flow_pgsql_config_error(error, rc, "adapters", name, NULL,
+                                 "PostgreSQL outbox adapter registration failed");
+
+done:
+  turbo_free_json(&document);
+  return rc;
+}

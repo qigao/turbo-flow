@@ -1,0 +1,27 @@
+{
+  "name": "vcpkg-flow",
+  "version-semver": "0.1.0",
+  "dependencies": [
+    {
+      "name": "xxhash",
+      "version>=": "0.8.3"
+    },
+    {
+      "name": "openssl",
+      "version>=": "3.2.0"
+    },
+    {
+      "name": "libpq"
+    },
+    {
+      "name": "pkgconf"
+    },
+    {
+      "name": "zstd"
+    },
+    {
+      "name": "sqlite3"
+    }
+  ],
+  "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"
+}

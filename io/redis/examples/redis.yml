@@ -1,0 +1,63 @@
+version: 1
+
+profiles:
+  worker:
+    events_in: redis.events.in
+    checkpoint_out: redis.checkpoint.set
+
+fragments:
+  connection:
+    local-redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 0
+      timeout_ms: 5000
+
+adapters:
+  redis.events.in:
+    kind: redis
+    fragments:
+      connection: local-redis
+    config:
+      pattern: stream
+      role: source
+      stream: flow-events
+      field: payload
+      group: workers
+      consumer: worker-1
+      group_start_id: "0"
+      poll_interval_ms: 10
+      read_count: 32
+      block_ms: 1000
+      create_group: true
+
+  redis.events.out:
+    kind: redis
+    fragments:
+      connection: local-redis
+    config:
+      pattern: stream
+      role: sink
+      stream: flow-events
+      field: payload
+      maxlen: 100000
+
+  redis.checkpoint.set:
+    kind: redis
+    fragments:
+      connection: local-redis
+    config:
+      pattern: data
+      operation: set
+      key: flow:checkpoint
+      max_value_size: 1048576
+
+  redis.checkpoint.get:
+    kind: redis
+    fragments:
+      connection: local-redis
+    config:
+      pattern: data
+      operation: get
+      key: flow:checkpoint
+      max_value_size: 1048576

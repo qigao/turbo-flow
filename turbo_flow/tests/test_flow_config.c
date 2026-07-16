@@ -1,0 +1,305 @@
+#include "tinytest.h"
+#include "turbo_flow_config.h"
+
+#include <string.h>
+
+spec("flow_config") {
+  it("resolves process async ingress defaults and explicit bounds") {
+    static const char defaults_yaml[] = "version: 1\nadapters: {}\n";
+    static const char explicit_yaml[] = "version: 1\n"
+                                        "runtime:\n"
+                                        "  ingress:\n"
+                                        "    workers: 3\n"
+                                        "    capacity: 17\n"
+                                        "adapters: {}\n";
+    static const char partial_yaml[] = "version: 1\n"
+                                       "runtime:\n"
+                                       "  ingress:\n"
+                                       "    workers: 2\n"
+                                       "adapters: {}\n";
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_async_ingress_config_t ingress = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
+    const char *json;
+
+    check_int_eq(turbo_flow_config_resolve_yaml(defaults_yaml, sizeof(defaults_yaml) - 1u,
+                                                &config, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
+    check_uint_eq(ingress.workers, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS);
+    check_size_eq(ingress.queue_capacity, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY);
+    json = turbo_flow_resolved_config_json(config, NULL);
+    check_str_contains(json, "\"runtime\":{\"ingress\":{\"workers\":1,\"capacity\":1024}}");
+    turbo_flow_resolved_config_destroy(config);
+
+    config = NULL;
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    ingress = (turbo_flow_async_ingress_config_t)TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(explicit_yaml, sizeof(explicit_yaml) - 1u,
+                                                &config, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
+    check_uint_eq(ingress.workers, 3u);
+    check_size_eq(ingress.queue_capacity, 17u);
+    turbo_flow_resolved_config_destroy(config);
+
+    config = NULL;
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    ingress = (turbo_flow_async_ingress_config_t)TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(partial_yaml, sizeof(partial_yaml) - 1u, &config,
+                                                &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
+    check_uint_eq(ingress.workers, 2u);
+    check_size_eq(ingress.queue_capacity, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY);
+    turbo_flow_resolved_config_destroy(config);
+  }
+
+  it("rejects malformed or unbounded process async ingress configuration") {
+    static const char unknown[] =
+        "version: 1\nruntime:\n  ingress:\n    blocking: true\nadapters: {}\n";
+    static const char wrong_type[] =
+        "version: 1\nruntime:\n  ingress:\n    workers: many\nadapters: {}\n";
+    static const char fractional[] =
+        "version: 1\nruntime:\n  ingress:\n    capacity: 1.5\nadapters: {}\n";
+    static const char too_many_workers[] =
+        "version: 1\nruntime:\n  ingress:\n    workers: 257\nadapters: {}\n";
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+
+    check_int_eq(turbo_flow_config_resolve_yaml(unknown, sizeof(unknown) - 1u, &config, &error),
+                 TURBO_EINVAL);
+    check_str_eq(error.path, "$.runtime.ingress.blocking");
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(
+        turbo_flow_config_resolve_yaml(wrong_type, sizeof(wrong_type) - 1u, &config, &error),
+        TURBO_EINVAL);
+    check_str_eq(error.path, "$.runtime.ingress.workers");
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(
+        turbo_flow_config_resolve_yaml(fractional, sizeof(fractional) - 1u, &config, &error),
+        TURBO_EINVAL);
+    check_str_eq(error.path, "$.runtime.ingress.capacity");
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(too_many_workers,
+                                                sizeof(too_many_workers) - 1u, &config, &error),
+                 TURBO_ERANGE);
+    check_str_eq(error.path, "$.runtime.ingress.workers");
+    check_null(config);
+  }
+
+  it("resolves YAML fragments and records each final field source") {
+    static const char yaml[] = "version: 1\n"
+                               "profiles:\n"
+                               "  ingress:\n"
+                               "    endpoint: fmq.in\n"
+                               "    policy: routing\n"
+                               "channels:\n"
+                               "  routing:\n"
+                               "    kind: rule_set\n"
+                               "    config:\n"
+                               "      mode: first_match\n"
+                               "fragments:\n"
+                               "  connection:\n"
+                               "    local:\n"
+                               "      transport: tcp\n"
+                               "      host: 127.0.0.1\n"
+                               "      port: 7001\n"
+                               "adapters:\n"
+                               "  fmq.in:\n"
+                               "    kind: fmq\n"
+                               "    fragments:\n"
+                               "      connection: local\n"
+                               "    config:\n"
+                               "      pattern: sub\n";
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    const char *json;
+    const char *adapter_name = NULL;
+    const char *channel_name = NULL;
+    size_t len = 0u;
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+                 TURBO_OK);
+    check_not_null(config);
+    json = turbo_flow_resolved_config_json(config, &len);
+    check_not_null(json);
+    check_size_eq(strlen(json), len);
+    check_str_contains(json, "\"host\":\"127.0.0.1\"");
+    check_str_contains(json, "\"host\":\"fragment.connection.local\"");
+    check_str_contains(json, "\"pattern\":\"adapter.config\"");
+    check_null(strstr(json, "fragments"));
+    check_int_eq(
+        turbo_flow_resolved_config_profile_adapter(config, "ingress", "endpoint", &adapter_name),
+        TURBO_OK);
+    check_str_eq(adapter_name, "fmq.in");
+    check_int_eq(
+        turbo_flow_resolved_config_profile_channel(config, "ingress", "policy", &channel_name),
+        TURBO_OK);
+    check_str_eq(channel_name, "routing");
+    check_int_eq(
+        turbo_flow_resolved_config_profile_adapter(config, "ingress", "policy", &adapter_name),
+        TURBO_ENOENT);
+    check_int_eq(
+        turbo_flow_resolved_config_profile_adapter(config, "missing", "endpoint", &adapter_name),
+        TURBO_ENOENT);
+    turbo_flow_resolved_config_destroy(config);
+  }
+
+  it("fails fast for unknown fields unresolved references and conflicting sources") {
+    static const char unknown[] = "version: 1\nadapters: {}\nextra: true\n";
+    static const char unresolved[] =
+        "version: 1\nprofiles:\n  p:\n    output: missing\nadapters: {}\n";
+    static const char conflict[] =
+        "version: 1\nfragments:\n  timer:\n    fast:\n      timeout_ms: 10\n"
+        "adapters:\n  rpc.client:\n    kind: rpc\n    fragments:\n      timer: fast\n"
+        "    config:\n      timeout_ms: 20\n";
+    static const char malformed_fragment[] =
+        "version: 1\nfragments:\n  connection:\n    unused: bad\nadapters: {}\n";
+    static const char ambiguous[] =
+        "version: 1\nprofiles:\n  p:\n    output: same\n"
+        "channels:\n  same:\n    kind: queue\n    config: {}\n"
+        "adapters:\n  same:\n    kind: socket\n    config:\n      role: sink\n";
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(unknown, sizeof(unknown) - 1u, &config, &error),
+                 TURBO_EINVAL);
+    check_str_eq(error.path, "$.extra");
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(
+        turbo_flow_config_resolve_yaml(unresolved, sizeof(unresolved) - 1u, &config, &error),
+        TURBO_ENOENT);
+    check_str_contains(error.path, "profiles.p.output");
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(conflict, sizeof(conflict) - 1u, &config, &error),
+                 TURBO_EALREADY);
+    check_str_contains(error.path, "timeout_ms");
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(malformed_fragment, sizeof(malformed_fragment) - 1u,
+                                                &config, &error),
+                 TURBO_EINVAL);
+    check_str_contains(error.path, "fragments.connection.unused");
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(ambiguous, sizeof(ambiguous) - 1u, &config,
+                                                &error),
+                 TURBO_EALREADY);
+    check_str_eq(error.path, "$.profiles.p.output");
+    check_null(config);
+  }
+
+  it("preserves validated channel resources in the immutable snapshot") {
+    static const char yaml[] = "version: 1\n"
+                               "channels:\n"
+                               "  orders:\n"
+                               "    kind: queue\n"
+                               "    config:\n"
+                               "      backend: memory\n"
+                               "      pattern: push_pull\n"
+                               "adapters: {}\n";
+    static const char malformed[] =
+        "version: 1\nchannels:\n  orders:\n    kind: queue\n    config: bad\nadapters: {}\n";
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    const char *json;
+    size_t len = 0u;
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+                 TURBO_OK);
+    json = turbo_flow_resolved_config_json(config, &len);
+    check_not_null(json);
+    check_str_contains(json, "\"channels\":{\"orders\"");
+    check_str_contains(json, "\"pattern\":\"push_pull\"");
+    turbo_flow_resolved_config_destroy(config);
+
+    config = NULL;
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(malformed, sizeof(malformed) - 1u, &config, &error),
+                 TURBO_EINVAL);
+    check_str_contains(error.path, "channels.orders");
+    check_null(config);
+  }
+
+  it("projects typed adapter fields from the immutable resolved snapshot") {
+    static const char yaml[] = "version: 1\n"
+                               "fragments:\n"
+                               "  connection:\n"
+                               "    local:\n"
+                               "      host: 127.0.0.1\n"
+                               "      port: 7001\n"
+                               "adapters:\n"
+                               "  socket.in:\n"
+                               "    kind: socket\n"
+                               "    fragments:\n"
+                               "      connection: local\n"
+                               "    config:\n"
+                               "      enabled: true\n"
+                               "      offset: -2\n"
+                               "      topics: [orders, invoices]\n";
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
+    turbo_flow_config_value_type_t type = TURBO_FLOW_CONFIG_NULL;
+    const char *value = NULL;
+    uint64_t port = 0u;
+    int64_t offset = 0;
+    int enabled = 0;
+    size_t count = 0u;
+
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_resolved_config_adapter(config, "socket.in", &view), TURBO_OK);
+    check_str_eq(view.name, "socket.in");
+    check_str_eq(view.kind, "socket");
+    check_size_eq(turbo_flow_resolved_adapter_field_count(&view), 5u);
+    check_not_null(turbo_flow_resolved_adapter_field_name(&view, 0u));
+    check_null(turbo_flow_resolved_adapter_field_name(&view, 5u));
+    check_int_eq(turbo_flow_resolved_adapter_field_type(&view, "topics", &type), TURBO_OK);
+    check_int_eq(type, TURBO_FLOW_CONFIG_ARRAY);
+    check_int_eq(turbo_flow_resolved_adapter_get_string(&view, "host", &value), TURBO_OK);
+    check_str_eq(value, "127.0.0.1");
+    check_int_eq(turbo_flow_resolved_adapter_get_u64(&view, "port", &port), TURBO_OK);
+    check_uint_eq(port, 7001u);
+    check_int_eq(turbo_flow_resolved_adapter_get_i64(&view, "offset", &offset), TURBO_OK);
+    check_int_eq(offset, -2);
+    check_int_eq(turbo_flow_resolved_adapter_get_bool(&view, "enabled", &enabled), TURBO_OK);
+    check_true(enabled);
+    check_int_eq(turbo_flow_resolved_adapter_array_size(&view, "topics", &count), TURBO_OK);
+    check_size_eq(count, 2u);
+    check_int_eq(turbo_flow_resolved_adapter_array_string_at(&view, "topics", 1u, &value),
+                 TURBO_OK);
+    check_str_eq(value, "invoices");
+    check_int_eq(turbo_flow_resolved_adapter_get_string(&view, "missing", &value), TURBO_ENOENT);
+    check_int_eq(turbo_flow_resolved_adapter_get_string(&view, "port", &value), TURBO_EINVAL);
+    check_int_eq(turbo_flow_resolved_adapter_array_string_at(&view, "topics", 2u, &value),
+                 TURBO_ENOENT);
+    check_int_eq(turbo_flow_resolved_config_adapter(config, "missing", &view), TURBO_ENOENT);
+    turbo_flow_resolved_config_destroy(config);
+  }
+
+  it("preflights enabled adapter kinds without projecting disabled config") {
+    static const char yaml[] = "version: 1\n"
+                               "adapters:\n"
+                               "  socket.in:\n"
+                               "    kind: socket\n"
+                               "    config:\n"
+                               "      role: source\n"
+                               "  rpc.out:\n"
+                               "    kind: rpc\n"
+                               "    config:\n"
+                               "      host_only_object: {opaque: true}\n";
+    static const char *const socket_only[] = {"socket"};
+    static const char *const both[] = {"socket", "rpc"};
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_resolved_config_preflight_adapter_kinds(
+                     config, socket_only, sizeof(socket_only) / sizeof(socket_only[0]), &error),
+                 TURBO_ENOTSUP);
+    check_str_eq(error.path, "$.adapters.rpc.out.kind");
+    check_str_contains(error.message, "disabled");
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_resolved_config_preflight_adapter_kinds(
+                     config, both, sizeof(both) / sizeof(both[0]), &error),
+                 TURBO_OK);
+    turbo_flow_resolved_config_destroy(config);
+  }
+}
