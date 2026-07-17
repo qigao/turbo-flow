@@ -609,7 +609,7 @@ int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t sou
                        turbo_flow_publish_result_t *result) {
   int rc;
 
-  if (flow->broadcast_ring && !local->transport_context) {
+  if (flow->broadcast_ring && !flow_msg_transport_context_is_borrowed(local)) {
     uint64_t sequence;
     turbo_mutex_lock(&flow->runtime_mutex);
     sequence = atomic_fetch_add_explicit(&flow->next_sequence, 1u, memory_order_relaxed) + 1u;

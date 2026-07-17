@@ -408,6 +408,10 @@ spec("versioned rule program") {
                  TURBO_OK);
     check_not_null(turbo_flow_find_primitive(flow, "rules.test"));
     check_not_null(turbo_flow_find_operation(flow, TURBO_FLOW_RULE_APPLY_OPERATION));
+    check_not_null(turbo_flow_find_module(flow, "rules.forge"));
+    check_str_eq(turbo_flow_operation_provider_module(
+                     flow, TURBO_FLOW_RULE_APPLY_OPERATION, "rules.test"),
+                 "rules.forge");
     check_int_eq(turbo_flow_compile(flow), TURBO_OK);
 
     stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "apply"));

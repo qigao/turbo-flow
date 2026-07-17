@@ -110,6 +110,23 @@ nomem:
   return TURBO_ENOMEM;
 }
 
+int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg) {
+  uintptr_t context_address;
+  uintptr_t buffer_address;
+  size_t offset;
+  size_t used;
+
+  if (!msg || !msg->transport_context) return 0;
+  if (!msg->buffer) return 1;
+  used = mem_buffer_used(msg->buffer);
+  if (used == 0u) return 1;
+  context_address = (uintptr_t)msg->transport_context;
+  buffer_address = (uintptr_t)mem_buffer_const_data(msg->buffer);
+  if (context_address < buffer_address) return 1;
+  offset = (size_t)(context_address - buffer_address);
+  return offset >= used;
+}
+
 int flow_msg_set_failure(turbo_flow_msg_t *msg, const char *stage_name, const char *adapter_name,
                          const char *route_name, int code, uint32_t attempt) {
   turbo_flow_failure_t failure;
@@ -446,8 +463,8 @@ turbo_flow_msg_protocol_settlement(const turbo_flow_msg_t *msg) {
   return binding && binding->has_protocol_settlement ? &binding->protocol_settlement : NULL;
 }
 
-int turbo_flow_msg_complete_protocol_settlement(
-    turbo_flow_msg_t *msg, turbo_flow_protocol_settlement_point_t point) {
+int turbo_flow_msg_complete_protocol_settlement(turbo_flow_msg_t *msg,
+                                                turbo_flow_protocol_settlement_point_t point) {
   flow_msg_projection_t *binding = (flow_msg_projection_t *)flow_msg_projection(msg);
   if (!binding || !binding->has_protocol_settlement || point == 0 ||
       point != binding->protocol_settlement.requested_point)

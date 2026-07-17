@@ -1,6 +1,95 @@
 #include "flow_http_content.h"
+#include "../include/turbo_flow_http_types.h"
 
 #include <string.h>
+
+static turbo_flow_operation_descriptor_t flow_http_operation(
+    const char *name, uint32_t flags, const char *input_type, const char *output_type,
+    const char *resource_type, turbo_flow_lifetime_scope_t lifetime) {
+  turbo_flow_operation_descriptor_t operation;
+  memset(&operation, 0, sizeof(operation));
+  operation.size = sizeof(operation);
+  operation.name = name;
+  operation.version = TURBO_FLOW_HTTP_MODULE_VERSION;
+  operation.domain = TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN;
+  operation.input_domain = input_type ? TURBO_FLOW_DOMAIN_DATA : TURBO_FLOW_DOMAIN_NONE;
+  operation.input_type = input_type;
+  operation.output_domain = output_type ? TURBO_FLOW_DOMAIN_DATA : TURBO_FLOW_DOMAIN_NONE;
+  operation.output_type = output_type;
+  operation.resource_domain = TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN;
+  operation.resource_type = resource_type;
+  operation.resource_min_version = TURBO_FLOW_HTTP_MODULE_VERSION;
+  operation.resource_max_version = TURBO_FLOW_HTTP_MODULE_VERSION;
+  operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  operation.scope.state = TURBO_FLOW_STATE_SCOPE_RESOURCE_OWNER;
+  operation.scope.lifetime = lifetime;
+  operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+  operation.scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+  operation.flags = flags | TURBO_FLOW_OPERATION_BRIDGE;
+  operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  operation.runtime.handoff = TURBO_FLOW_HANDOFF_DIRECT;
+  operation.runtime.ordering = TURBO_FLOW_ORDERING_UNORDERED;
+  operation.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_NONE;
+  operation.runtime.cancellation = TURBO_FLOW_CANCELLATION_NONE;
+  operation.runtime.error_mode = TURBO_FLOW_ERROR_PROPAGATE;
+  return operation;
+}
+
+int flow_http_register_client_module_contract(turbo_flow_t *flow) {
+  static const char *const primitive_types[] = {TURBO_FLOW_HTTP_CLIENT_PRIMITIVE_TYPE};
+  static const char *const operation_names[] = {TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION,
+                                                TURBO_FLOW_HTTP_CLIENT_POLL_OPERATION};
+  turbo_flow_operation_descriptor_t operations[2];
+  turbo_flow_module_descriptor_t module;
+  memset(&module, 0, sizeof(module));
+  operations[0] = flow_http_operation(TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION,
+                                      TURBO_FLOW_OPERATION_STAGE, "Message", "Message",
+                                      TURBO_FLOW_HTTP_CLIENT_PRIMITIVE_TYPE,
+                                      TURBO_FLOW_LIFETIME_CALL);
+  operations[1] = flow_http_operation(TURBO_FLOW_HTTP_CLIENT_POLL_OPERATION,
+                                      TURBO_FLOW_OPERATION_SOURCE, NULL, "Message",
+                                      TURBO_FLOW_HTTP_CLIENT_PRIMITIVE_TYPE,
+                                      TURBO_FLOW_LIFETIME_DISPATCH);
+  module.size = sizeof(module);
+  module.name = TURBO_FLOW_HTTP_CLIENT_MODULE;
+  module.version = TURBO_FLOW_HTTP_MODULE_VERSION;
+  module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                            TURBO_FLOW_MODULE_MANAGED_RESOURCES |
+                            TURBO_FLOW_MODULE_NATIVE_API;
+  module.primitive_types = primitive_types;
+  module.primitive_type_count = 1u;
+  module.operation_names = operation_names;
+  module.operation_count = 2u;
+  return turbo_flow_register_module_contract(flow, &module, operations, 2u);
+}
+
+int flow_http_register_server_module_contract(turbo_flow_t *flow) {
+  static const char *const primitive_types[] = {TURBO_FLOW_HTTP_SERVER_PRIMITIVE_TYPE};
+  static const char *const operation_names[] = {TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION,
+                                                TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION};
+  turbo_flow_operation_descriptor_t operations[2];
+  turbo_flow_module_descriptor_t module;
+  memset(&module, 0, sizeof(module));
+  operations[0] = flow_http_operation(TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION,
+                                      TURBO_FLOW_OPERATION_SOURCE, NULL, "Message",
+                                      TURBO_FLOW_HTTP_SERVER_PRIMITIVE_TYPE,
+                                      TURBO_FLOW_LIFETIME_DISPATCH);
+  operations[1] = flow_http_operation(TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION,
+                                      TURBO_FLOW_OPERATION_STAGE, "Message", NULL,
+                                      TURBO_FLOW_HTTP_SERVER_PRIMITIVE_TYPE,
+                                      TURBO_FLOW_LIFETIME_CALL);
+  module.size = sizeof(module);
+  module.name = TURBO_FLOW_HTTP_SERVER_MODULE;
+  module.version = TURBO_FLOW_HTTP_MODULE_VERSION;
+  module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                            TURBO_FLOW_MODULE_MANAGED_RESOURCES |
+                            TURBO_FLOW_MODULE_NATIVE_API;
+  module.primitive_types = primitive_types;
+  module.primitive_type_count = 1u;
+  module.operation_names = operation_names;
+  module.operation_count = 2u;
+  return turbo_flow_register_module_contract(flow, &module, operations, 2u);
+}
 
 static int flow_http_copy(char *dst, size_t capacity, const char *src) {
   size_t len;

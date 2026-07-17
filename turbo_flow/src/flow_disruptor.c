@@ -43,15 +43,13 @@ static int flow_worker_request_run(turbo_flow_msg_t *msg, void *ctx) {
 
 static int flow_worker_pool_should_run(void *ctx) {
   flow_worker_pool_adapter_t *adapter = (flow_worker_pool_adapter_t *)ctx;
-  return adapter &&
-         (atomic_load_explicit(&adapter->running, memory_order_acquire) ||
-          atomic_load_explicit(&adapter->pending, memory_order_acquire) > 0u ||
-          atomic_load_explicit(&adapter->submitters, memory_order_acquire) > 0u);
+  return adapter && (atomic_load_explicit(&adapter->running, memory_order_acquire) ||
+                     atomic_load_explicit(&adapter->pending, memory_order_acquire) > 0u ||
+                     atomic_load_explicit(&adapter->submitters, memory_order_acquire) > 0u);
 }
 
 static void flow_worker_pool_pending_finished(flow_worker_pool_adapter_t *adapter) {
-  unsigned int previous =
-      atomic_fetch_sub_explicit(&adapter->pending, 1u, memory_order_acq_rel);
+  unsigned int previous = atomic_fetch_sub_explicit(&adapter->pending, 1u, memory_order_acq_rel);
   if (previous == 1u && !atomic_load_explicit(&adapter->running, memory_order_acquire)) {
     disruptor_worker_wake_all(adapter->ring);
   }
@@ -67,8 +65,8 @@ static void flow_worker_pool_run(void *arg) {
     flow_worker_entry_t *entry;
     flow_worker_request_t *request;
 
-    if (!disruptor_worker_claim_wait(adapter->ring, &cursor, flow_worker_pool_should_run,
-                                     adapter)) return;
+    if (!disruptor_worker_claim_wait(adapter->ring, &cursor, flow_worker_pool_should_run, adapter))
+      return;
 
     entry = (flow_worker_entry_t *)disruptor_acquire_entry(adapter->ring, &cursor);
     request = entry ? entry->request : NULL;
@@ -81,8 +79,8 @@ static void flow_worker_pool_run(void *arg) {
     entry->header.worker_lane = context->lane;
     request->execution.completion.entry.worker_lane = context->lane;
     flow_pool_record_started(flow_pool_record_at(adapter->flow, adapter->pool_record_index));
-    if (flow_entry_header_validate(adapter->flow, &entry->header,
-                                   &request->execution.msg) != TURBO_OK ||
+    if (flow_entry_header_validate(adapter->flow, &entry->header, &request->execution.msg) !=
+            TURBO_OK ||
         entry->header.stage_index != adapter->stage_index ||
         entry->header.segment_kind != FLOW_DATA_SEGMENT_WORKER_POOL ||
         entry->header.completion_handle != &request->execution.completion ||
@@ -427,8 +425,7 @@ static int flow_worker_pool_claim(flow_worker_pool_adapter_t *adapter,
     disruptor_publisher_next_entry_blocking(adapter->ring, cursor);
     return cursor->sequence != 0u ? TURBO_OK : TURBO_EINVAL;
   }
-  if (policy == TURBO_FLOW_BACKPRESSURE_FAIL ||
-      policy == TURBO_FLOW_BACKPRESSURE_DROP_NEWEST) {
+  if (policy == TURBO_FLOW_BACKPRESSURE_FAIL || policy == TURBO_FLOW_BACKPRESSURE_DROP_NEWEST) {
     if (disruptor_publisher_try_claim(adapter->ring, cursor)) return TURBO_OK;
     return policy == TURBO_FLOW_BACKPRESSURE_FAIL ? TURBO_ENOSPC : TURBO_ECANCELED;
   }
@@ -459,18 +456,18 @@ int flow_worker_pool_submit(flow_worker_pool_adapter_t *adapter, turbo_flow_msg_
   request.adapter = adapter;
   runtime = flow_stage_operation_runtime(adapter->flow, adapter->stage);
   record = flow_pool_record_at(adapter->flow, adapter->pool_record_index);
-  rc = flow_execution_task_init(&request.execution, FLOW_EXECUTION_DISRUPTOR,
-                                flow_worker_request_run, &request, msg, completion,
-                                runtime && adapter->executor->exec.kind != TURBO_FLOW_EXEC_THREAD_POOL &&
-                                        adapter->executor->exec.kind != TURBO_FLOW_EXEC_CORO_POOL
-                                    ? runtime->deadline_ms
-                                    : 0u);
+  rc = flow_execution_task_init(
+      &request.execution, FLOW_EXECUTION_DISRUPTOR, flow_worker_request_run, &request, msg,
+      completion,
+      runtime && adapter->executor->exec.kind != TURBO_FLOW_EXEC_THREAD_POOL &&
+              adapter->executor->exec.kind != TURBO_FLOW_EXEC_CORO_POOL
+          ? runtime->deadline_ms
+          : 0u);
   if (rc != TURBO_OK) goto cleanup;
   flow_pool_record_attempted(record);
 
-  rc = flow_worker_pool_claim(adapter,
-                              runtime ? runtime->backpressure : TURBO_FLOW_BACKPRESSURE_BLOCK,
-                              &cursor);
+  rc = flow_worker_pool_claim(
+      adapter, runtime ? runtime->backpressure : TURBO_FLOW_BACKPRESSURE_BLOCK, &cursor);
   if (rc != TURBO_OK) {
     if (rc == TURBO_ECANCELED) {
       flow_pool_record_canceled_unqueued(record);
@@ -535,12 +532,12 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
   int rc = TURBO_OK;
 
   if (!flow || !flow->broadcast_ring || !msg || !result) return TURBO_ENOTSUP;
-  if (msg->transport_context) {
+  if (flow_msg_transport_context_is_borrowed(msg)) {
     return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
                                      "broadcast data plane rejects borrowed transport context");
   }
-  rc = flow_entry_header_init(flow, &header, source_index, FLOW_DATA_SEGMENT_BROADCAST_FANOUT,
-                              0u, sequence, msg->id, FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE, NULL);
+  rc = flow_entry_header_init(flow, &header, source_index, FLOW_DATA_SEGMENT_BROADCAST_FANOUT, 0u,
+                              sequence, msg->id, FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE, NULL);
   if (rc != TURBO_OK) return rc;
 
   stage_count = turbo_vec_size(&flow->stages);
@@ -570,8 +567,7 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
     goto cleanup;
   }
 
-  entry = (flow_broadcast_entry_t *)disruptor_acquire_entry(flow->broadcast_ring,
-                                                            &publish_cursor);
+  entry = (flow_broadcast_entry_t *)disruptor_acquire_entry(flow->broadcast_ring, &publish_cursor);
   entry->header = header;
   (void)turbo_flow_msg_move(&entry->message, msg);
 

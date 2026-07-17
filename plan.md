@@ -74,6 +74,57 @@ listen/connect、字节 send/recv、timeout 和 interrupt，不感知 FMQ patter
   及其注册 ABI 已删除。
 - [x] 明确 domain、primitive、operation、graph node 四层关系：primitive 是 domain 内的
   value/resource 名词，operation 是有单一主要 effect 的动词，node 只做绑定和调度。
+- [x] 增加版本化 module catalog：声明 capability、primitive type/operation exports 和依赖范围，
+  typed operation provider 显式绑定唯一 module owner；RulesForge `rules.forge` 为首个生产接入。
+  Catalog 是注册/校验层，不是 Graph DSL 资源工厂或 plugin loader。
+- [x] 增加原子 native module-adapter 注册：显式绑定 `(module, operation, adapter)`，
+  `ADAPTER_OWNER` operation 不得由 legacy callback/未绑定 adapter 冒充；失败不转移 context 所有权。
+- [x] operation resource requirement 支持 inclusive version range；保留 V1 descriptor ABI，
+  旧尺寸安全归一化为 any-version，新契约可在 compile 阶段拒绝不兼容 primitive version。
+- [x] 固化 HTTP 例外：继续使用 TurboHTTP/Iris native endpoint/adapter，不迁移为 generic
+  `io/socket` primitive；`io.http.client/server` catalog 将 request/poll/reply 固定绑定实际
+  `HttpClientConnection` / `HttpServerEndpoint`，但不替换 transport owner。
+- [x] 按相同 typed binding 接入 RPC、FMQ、Flowie、Queue 与 Storage：RPC 保留 native
+  client/Iris server；FMQ 按 pattern 分开 operation；Flowie 只暴露 PUBLISH ingress/packet egress；
+  Queue/Storage 使用 versioned resource primitive，不将其事实源误报为 adapter owner。
+- [x] 将 FlowMQ 从 `io` 子树提升为顶层 `flowmq` broker 产品，与 Flowie 并列；第一阶段保留
+  `tf_fmq`、`TurboFlow::FMQ`、`turbo_flow_fmq*.h`、YAML `kind: fmq`、API v1 和 wire v2
+  兼容契约，并在 build tree 增加产品别名 `FlowMQ::Runtime` 与过渡别名 `FlowMQ::Broker`。协议、endpoint runtime 与
+  graph-native runtime 的物理拆分按 `flowmq/ARCHITECTURE.md` 后续分阶段完成。
+- [x] 抽取只依赖 TurboUtils 的 `FlowMQ::Protocol`：独占 FMQ v2 frame
+  encode/decode、fragmentation/reassembly 与 heartbeat deadline；单 packet view 借用输入，
+  多 packet payload 由 decoded frame 独占并统一 cleanup。CoroNet endpoint/config validation
+  留在 endpoint/runtime 边界，避免 transport 配置反向污染 wire protocol。
+- [x] 建立未安装的 `flowmq_runtime_core`：独占 FMQ pattern/HELLO 校验、control frame 编码、
+  bounded stream framing、XSUB/XPUB subscription registry 与 REQ/REP session 状态，移除
+  FlowMQ 数据面对于 TurboFlow exchange FSM 的依赖；HELLO 成功才推进 generation 并恢复
+  RESETTING，旧 generation 的迟到 reply 不能完成新请求。该 target 是 FlowMQ endpoint
+  与 peer session 的私有实现，不作为 Client SDK 导出。
+- [x] 将无 TurboFlow 类型依赖的 `flow_coronet_runtime` 从 `tf_executor_common` 拆为独立内部
+  target；Socket/FMQ 及其他 adapter 继续通过公共依赖转接复用同一 transport bridge，避免
+  为 FlowMQ endpoint 复制 CoroNet transport 实现或引入重复符号。
+- [x] 增加私有 `flowmq_coronet_transport` 与 reconnect policy：FlowMQ 自有 transport enum
+  通过编译期固定数值映射到共享 CoroNet runtime，统一 create/apply/connect/listen/send/
+  multicast；指数 backoff、bounded jitter 和 HELLO success reset 由 runtime core 持有。
+  Connect socket/execution/callback owner 由私有 `flowmq_connect_endpoint_runtime` 持有。
+- [x] 将 FMQ ingress 的 borrowed `transport_context` 改为 message-owned protocol metadata，
+  使完整 owned message 可进入 TurboFlow Disruptor graph；raw socket/frame view 仍留在 CoroNet
+  owner lane。REQ/REP 继续要求当前 publish dispatch 内完成，ROUTER/DEALER route 继续使用
+  owner instance + session + generation fence，不新增第二个 FlowMQ data-plane Disruptor。
+- [x] 将 Socket、HTTP 与 RPC 收敛为同一 resource-bound module-adapter 契约：Socket 导出
+  `SocketEndpoint + socket.receive/send`；HTTP/RPC 分别导出自己的 client/server resource，
+  typed DSL 显式绑定 owner，native CoroNet/TurboHTTP/Iris 生命周期保持不变。
+- [x] 补齐 RPC client 对 TurboHTTP provider 的 versioned 显式依赖注入：可信 host 可 borrowed 或转移
+  `http_client_t` 销毁所有权；默认仍创建私有 client，YAML 拒绝 host object，并覆盖 borrowed
+  client 在 flow 销毁后仍有效的生命周期契约。
+- [x] module-adapter 原子注册支持 operation-specific resource name 与 primitive instance；compiler
+  同时校验 module、adapter、operation、resource name/type/domain/version，注册失败回滚新增
+  primitive/resource 且不转移 adapter context。
+- [x] 建立全产品共享的 caller-owned provider registry：YAML resolved snapshot 在任何 native
+  副作用前 preflight 全部 adapter kind；Graph parse 后只装配实际引用的 source/sink adapter 与
+  processor/resource，resource 先于 adapter，同名引用只注册一次。registry 只做依赖注入，不成为
+  plugin loader、全局 service locator 或资源 owner；callback 失败由 host 丢弃本次 Flow generation
+  并按所有权逆序清理。`flowie_server` 已作为首个迁移 host，profile 继续约束允许的产品组合。
 - [x] 明确 operation 的 data、state、lifetime、concurrency、authority 五维作用域；跨 domain
   必须经显式 bridge 转换类型、所有权、错误和 settlement。
 - [x] 将 resource metadata/Status/Condition/Command/Event 查询契约落实为版本化公共 C API；
@@ -1011,7 +1062,7 @@ Chapter 7 当前切片：
   完整 runtime snapshot；协议错误与 owner command status 作为两层 ACK，均生成终态 REP。YAML
   `kind: fmq_control` 固化 protocol version、target、request 上限和 history 容量；transport 继续由
   FMQ adapter 的 CoroNet fragment 正交选择，不改变 FMQ v2 frame。
-- [x] 固化 `io/fmq/MANAGEMENT_PROTOCOL.md` 设计基线：定义 capability/version、failure-domain
+- [x] 固化 `flowmq/MANAGEMENT_PROTOCOL.md` 设计基线：定义 capability/version、failure-domain
   identity、strict REQ/REP RPC、typed command/operation、volatile/durable 两类受理 ACK、独立
   event PUB/SUB、snapshot/gap recovery、storage ownership、YAML schema、迁移/回滚和准入测试；
   保持 Control V1 wire/API/YAML 不变。
@@ -1059,6 +1110,10 @@ Chapter 7 当前切片：
   返还 credit，且不把 HWM 或 transport send success 当作两类 ACK。严格 YAML 区分 volatile
   `at_most_once` 与显式 storage-bound `at_least_once`；真实 ROUTER/DEALER E2E 覆盖 READY、两个并行
   JOB 与独立 COMPLETE。
+  新增 pattern.fmq.credit module、FmqCreditWorker resource 与
+  fmq.credit.control/dispatch/complete/worker_input inline typed operations；易失性 graph
+  原位替换 client/worker route，control message 在成功更新 owner 后 drop。durable graph 在通用
+  message-owned claim projection 完成前 fail fast，不从 message ID 合成 token，也不降级为 volatile。
   worker reconnect fault injection 保留旧 in-flight 为事实源：新 TCP session 的 sequence=1 READY 在
   lease settlement 前返回 `TURBO_EBUSY`，新 route 完成旧 request 返回 `TURBO_EPROTO`；at-most-once
   lease DROP 后接受新 session grant，并恢复后续 JOB/COMPLETE。

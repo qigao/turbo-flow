@@ -1236,6 +1236,15 @@ spec("turbo_flow_queue") {
   }
 
   it("projects one shared queue as typed resources without becoming a connection") {
+    static const char *dsl = "source dequeue adapter queue.source operation "
+                             TURBO_FLOW_QUEUE_DEQUEUE_OPERATION
+                             " resource \"test-queue\"\n"
+                             "stage enqueue adapter queue.sink operation "
+                             TURBO_FLOW_QUEUE_ENQUEUE_OPERATION
+                             " resource \"test-queue\"\n"
+                             "stage main {\n"
+                             "  dequeue -> enqueue\n"
+                             "}\n";
     turbo_flow_queue_t *queue = queue_create(4, 32, TURBO_FLOW_QUEUE_FULL_FAIL, 0);
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_resource_snapshot_t resource = TURBO_FLOW_RESOURCE_SNAPSHOT_INIT;
@@ -1246,6 +1255,13 @@ spec("turbo_flow_queue") {
     check_not_null(flow);
     check_int_eq(turbo_flow_queue_register_source_adapter(flow, "queue.source", queue), TURBO_OK);
     check_int_eq(turbo_flow_queue_register_sink_adapter(flow, "queue.sink", queue), TURBO_OK);
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     flow, "queue.source", TURBO_FLOW_QUEUE_DEQUEUE_OPERATION),
+                 TURBO_FLOW_QUEUE_MODULE);
+    check_str_eq(turbo_flow_adapter_operation_resource(
+                     flow, "queue.sink", TURBO_FLOW_QUEUE_ENQUEUE_OPERATION),
+                 "test-queue");
+    check_not_null(turbo_flow_find_primitive(flow, "test-queue"));
     check_size_eq(turbo_flow_resource_count(flow), 1);
     check_size_eq(turbo_flow_resource_metadata_count(flow), 1);
     check_int_eq(turbo_flow_resource_snapshot_at(flow, 0, &resource), TURBO_OK);
@@ -1264,6 +1280,8 @@ spec("turbo_flow_queue") {
     turbo_flow_resource_document_cleanup(&document);
     check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_ENOTSUP);
     check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 1, &connection), TURBO_ENOTSUP);
+    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
     turbo_flow_destroy(flow);
     check_int_eq(turbo_flow_queue_destroy(queue), TURBO_OK);
   }

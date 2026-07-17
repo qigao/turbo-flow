@@ -54,6 +54,23 @@ if(PROFILE STREQUAL "core")
       TurboFlow::HttpClient TurboFlow::HttpServer TurboFlow::Http
       TurboFlow::RPC TurboFlow::S3 TurboFlow::Email TurboFlow::FMQ
       TurboFlow::Observe TurboFlow::Schedule TurboFlow::Queue)
+elseif(PROFILE STREQUAL "protocol_only")
+  list(APPEND configure_args
+       "-DTURBO_FLOW_BUILD_ADAPTERS=OFF"
+       "-DTURBO_FLOW_BUILD_FMQ_PROTOCOL=ON"
+       "-DCMAKE_DISABLE_FIND_PACKAGE_TurboNet=TRUE"
+       "-DCMAKE_DISABLE_FIND_PACKAGE_TurboHttp=TRUE"
+       "-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE")
+  set(build_targets flowmq_protocol)
+  set(expected_targets TurboFlow::Flow)
+  set(expected_flowmq_targets FlowMQ::Protocol)
+  set(absent_flowmq_targets FlowMQ::FlowMQProtocol)
+  set(absent_targets
+      TurboFlow::FlowieProtocol TurboFlow::Flowie TurboFlow::FlowStorage
+      TurboFlow::Codec TurboFlow::Socket
+      TurboFlow::HttpClient TurboFlow::HttpServer TurboFlow::Http
+      TurboFlow::RPC TurboFlow::S3 TurboFlow::Email TurboFlow::FMQ
+      TurboFlow::Observe TurboFlow::Schedule TurboFlow::Queue)
 elseif(PROFILE STREQUAL "codec_fmq")
   list(APPEND configure_args
        "-DTURBO_FLOW_BUILD_STORAGE=OFF"
@@ -71,8 +88,10 @@ elseif(PROFILE STREQUAL "codec_fmq")
        "-DTURBO_FLOW_BUILD_SCHEDULE=OFF"
        "-DTURBO_FLOW_BUILD_QUEUE=OFF"
        "-DCMAKE_DISABLE_FIND_PACKAGE_TurboHttp=TRUE")
-  set(build_targets turbo_flow tf_codec tf_fmq)
+  set(build_targets turbo_flow tf_codec flowmq_protocol tf_fmq)
   set(expected_targets TurboFlow::Flow TurboFlow::Codec TurboFlow::FMQ)
+  set(expected_flowmq_targets FlowMQ::Protocol)
+  set(absent_flowmq_targets FlowMQ::FlowMQProtocol)
   set(absent_targets
       TurboFlow::FlowieProtocol TurboFlow::Flowie TurboFlow::FlowStorage
       TurboFlow::Socket TurboFlow::HttpClient
@@ -155,9 +174,112 @@ foreach(target IN LISTS expected_targets)
     message(FATAL_ERROR "${PROFILE} export is missing ${target}")
   endif()
 endforeach()
+
+if(DEFINED expected_flowmq_targets)
+  set(flowmq_targets_file "${BINARY_DIR}/flowmq/protocol/FlowMQTargets.cmake")
+  if(NOT EXISTS "${flowmq_targets_file}")
+    message(FATAL_ERROR "${PROFILE} did not generate FlowMQTargets.cmake")
+  endif()
+  file(READ "${flowmq_targets_file}" flowmq_targets_text)
+  foreach(target IN LISTS expected_flowmq_targets)
+    string(FIND "${flowmq_targets_text}" "${target}" target_index)
+    if(target_index EQUAL -1)
+      message(FATAL_ERROR "${PROFILE} export is missing ${target}")
+    endif()
+  endforeach()
+  foreach(target IN LISTS absent_flowmq_targets)
+    string(FIND "${flowmq_targets_text}" "${target}" target_index)
+    if(NOT target_index EQUAL -1)
+      message(FATAL_ERROR "${PROFILE} export unexpectedly contains ${target}")
+    endif()
+  endforeach()
+endif()
 foreach(target IN LISTS absent_targets)
   string(FIND "${targets_text}" "${target}" target_index)
   if(NOT target_index EQUAL -1)
     message(FATAL_ERROR "${PROFILE} export unexpectedly contains ${target}")
   endif()
 endforeach()
+
+if(PROFILE STREQUAL "protocol_only")
+  set(install_prefix "${BINARY_DIR}/install")
+  set(consumer_source_dir "${BINARY_DIR}/consumer-src")
+  set(consumer_binary_dir "${BINARY_DIR}/consumer-build")
+
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" --install "${BINARY_DIR}" --prefix "${install_prefix}"
+            --config "${BUILD_TYPE}" --component FlowMQProtocol
+    RESULT_VARIABLE install_result
+    OUTPUT_VARIABLE install_output
+    ERROR_VARIABLE install_error)
+  if(NOT install_result EQUAL 0)
+    message(FATAL_ERROR
+            "${PROFILE} install failed\n${install_output}\n${install_error}")
+  endif()
+
+  file(MAKE_DIRECTORY "${consumer_source_dir}")
+  file(WRITE "${consumer_source_dir}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.21)
+project(flowmq_protocol_consumer C)
+find_package(FlowMQ CONFIG REQUIRED COMPONENTS Protocol)
+add_executable(flowmq_protocol_consumer main.c)
+target_link_libraries(flowmq_protocol_consumer PRIVATE FlowMQ::Protocol)
+]=])
+  file(WRITE "${consumer_source_dir}/main.c" [=[
+#include "flowmq_protocol.h"
+
+int main(void) {
+  size_t encoded_limit = 0u;
+  return flowmq_protocol_encoded_size_limit(1024u, &encoded_limit) == TURBO_OK &&
+                 encoded_limit > 0u
+             ? 0
+             : 1;
+}
+]=])
+
+  set(consumer_configure_args
+      --fresh
+      -S "${consumer_source_dir}"
+      -B "${consumer_binary_dir}"
+      "-DFlowMQ_DIR=${install_prefix}/lib/cmake/FlowMQ"
+      "-DTurboUtils_DIR=${TURBO_UTILS_ROOT}/lib/cmake/TurboUtils"
+      "-DCMAKE_DISABLE_FIND_PACKAGE_TurboNet=TRUE")
+  if(DEFINED GENERATOR AND NOT GENERATOR STREQUAL "")
+    list(APPEND consumer_configure_args -G "${GENERATOR}")
+  endif()
+  if(DEFINED BUILD_TYPE AND NOT BUILD_TYPE STREQUAL "")
+    list(APPEND consumer_configure_args "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
+  endif()
+  if(DEFINED MAKE_PROGRAM AND NOT MAKE_PROGRAM STREQUAL "")
+    list(APPEND consumer_configure_args "-DCMAKE_MAKE_PROGRAM=${MAKE_PROGRAM}")
+  endif()
+  if(DEFINED TOOLCHAIN_FILE AND NOT TOOLCHAIN_FILE STREQUAL "")
+    list(APPEND consumer_configure_args "-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_FILE}")
+  endif()
+  if(DEFINED VCPKG_INSTALLED_DIR AND NOT VCPKG_INSTALLED_DIR STREQUAL "")
+    list(APPEND consumer_configure_args "-DVCPKG_INSTALLED_DIR=${VCPKG_INSTALLED_DIR}")
+  endif()
+
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" ${consumer_configure_args}
+    RESULT_VARIABLE consumer_configure_result
+    OUTPUT_VARIABLE consumer_configure_output
+    ERROR_VARIABLE consumer_configure_error)
+  if(NOT consumer_configure_result EQUAL 0)
+    message(FATAL_ERROR
+            "${PROFILE} installed consumer configure failed\n"
+            "${consumer_configure_output}\n${consumer_configure_error}")
+  endif()
+
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" --build "${consumer_binary_dir}" --target
+            flowmq_protocol_consumer
+    RESULT_VARIABLE consumer_build_result
+    OUTPUT_VARIABLE consumer_build_output
+    ERROR_VARIABLE consumer_build_error)
+  if(NOT consumer_build_result EQUAL 0)
+    message(FATAL_ERROR
+            "${PROFILE} installed consumer build failed\n"
+            "${consumer_build_output}\n${consumer_build_error}")
+  endif()
+endif()

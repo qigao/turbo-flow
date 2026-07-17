@@ -1,5 +1,6 @@
 #include "turbo_flow_rpc.h"
 
+#include "http/http_client.h"
 #include "tinytest.h"
 #include "turbo_thread.h"
 
@@ -141,6 +142,48 @@ spec("turbo_flow_rpc") {
     turbo_flow_destroy(flow);
   }
 
+  it("rejects an HTTP host object in resolved RPC client YAML") {
+    static const char yaml[] =
+        "version: 1\nadapters:\n  rpc.client:\n    kind: rpc\n    config:\n"
+        "      url: http://127.0.0.1:1/rpc\n      method: echo\n"
+        "      http_client: injected\n";
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_config_t *resolved = NULL;
+    turbo_flow_t *flow = turbo_flow_create();
+    check_not_null(flow);
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_rpc_register_client_resolved_adapter(flow, resolved, "rpc.client"),
+                 TURBO_EINVAL);
+    turbo_flow_resolved_config_destroy(resolved);
+    turbo_flow_destroy(flow);
+  }
+
+  it("borrows an injected HTTP client without destroying it") {
+    http_client_t *http_client = http_client_create(NULL);
+    turbo_flow_rpc_client_config_t config;
+    turbo_flow_rpc_http_client_binding_t binding = TURBO_FLOW_RPC_HTTP_CLIENT_BINDING_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+
+    check_not_null(http_client);
+    check_not_null(flow);
+    memset(&config, 0, sizeof(config));
+    config.url = "http://127.0.0.1:1/rpc";
+    config.method = "echo";
+    binding.client = http_client;
+    binding.size = sizeof(binding) - 1u;
+    check_int_eq(
+        turbo_flow_rpc_register_client_adapter_ex(flow, "rpc.borrowed", &config, &binding),
+        TURBO_EINVAL);
+    binding.size = sizeof(binding);
+    check_int_eq(
+        turbo_flow_rpc_register_client_adapter_ex(flow, "rpc.borrowed", &config, &binding),
+        TURBO_OK);
+    turbo_flow_destroy(flow);
+    check_not_null(http_client_get_context(http_client));
+    http_client_destroy(http_client);
+  }
+
   it("rejects negative client timeouts at registration") {
     turbo_flow_rpc_client_config_t config;
     turbo_flow_t *flow = turbo_flow_create();
@@ -156,14 +199,20 @@ spec("turbo_flow_rpc") {
   }
 
   it("round trips JSON params and results") {
-    static const char *server_dsl = "source request adapter rpc.server.echo\n"
+    static const char *server_dsl = "source request adapter rpc.server.echo operation "
+                                    TURBO_FLOW_RPC_SERVER_REQUEST_OPERATION
+                                    " resource rpc.server.echo\n"
                                     "stage handler\n"
-                                    "stage response adapter rpc.server.echo\n"
+                                    "stage response adapter rpc.server.echo operation "
+                                    TURBO_FLOW_RPC_SERVER_REPLY_OPERATION
+                                    " resource rpc.server.echo\n"
                                     "stage main {\n"
                                     "  request -> handler -> response\n"
                                     "}\n";
     static const char *client_dsl = "source input\n"
-                                    "stage call adapter rpc.client.once\n"
+                                    "stage call adapter rpc.client.once operation "
+                                    TURBO_FLOW_RPC_CLIENT_CALL_OPERATION
+                                    " resource rpc.client.once\n"
                                     "stage capture\n"
                                     "stage main {\n"
                                     "  input -> call -> capture\n"
@@ -194,6 +243,12 @@ spec("turbo_flow_rpc") {
     check_int_eq(
         turbo_flow_rpc_register_server_adapter(server_flow, "rpc.server.echo", &server_config),
         TURBO_OK);
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     server_flow, "rpc.server.echo", TURBO_FLOW_RPC_SERVER_REQUEST_OPERATION),
+                 TURBO_FLOW_RPC_SERVER_MODULE);
+    check_str_eq(turbo_flow_adapter_operation_resource(
+                     server_flow, "rpc.server.echo", TURBO_FLOW_RPC_SERVER_REQUEST_OPERATION),
+                 "rpc.server.echo");
     memset(&server_connection, 0, sizeof(server_connection));
     check_int_eq(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
                  TURBO_OK);
@@ -219,6 +274,14 @@ spec("turbo_flow_rpc") {
     check_int_eq(
         turbo_flow_rpc_register_client_adapter(client_flow, "rpc.client.once", &client_config),
         TURBO_OK);
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     client_flow, "rpc.client.once", TURBO_FLOW_RPC_CLIENT_CALL_OPERATION),
+                 TURBO_FLOW_RPC_CLIENT_MODULE);
+    check_str_eq(turbo_flow_adapter_operation_resource(
+                     client_flow, "rpc.client.once", TURBO_FLOW_RPC_CLIENT_CALL_OPERATION),
+                 "rpc.client.once");
+    check_str_eq(turbo_flow_find_primitive(client_flow, "rpc.client.once")->type_name,
+                 TURBO_FLOW_RPC_CLIENT_PRIMITIVE_TYPE);
     memset(&client_connection, 0, sizeof(client_connection));
     check_int_eq(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
                  TURBO_OK);
@@ -271,13 +334,19 @@ spec("turbo_flow_rpc") {
   }
 
   it("publishes periodic calls as source messages") {
-    static const char *server_dsl = "source request adapter rpc.server.poll\n"
+    static const char *server_dsl = "source request adapter rpc.server.poll operation "
+                                    TURBO_FLOW_RPC_SERVER_REQUEST_OPERATION
+                                    " resource rpc.server.poll\n"
                                     "stage handler\n"
-                                    "stage response adapter rpc.server.poll\n"
+                                    "stage response adapter rpc.server.poll operation "
+                                    TURBO_FLOW_RPC_SERVER_REPLY_OPERATION
+                                    " resource rpc.server.poll\n"
                                     "stage main {\n"
                                     "  request -> handler -> response\n"
                                     "}\n";
-    static const char *client_dsl = "source remote adapter rpc.client.poll\n"
+    static const char *client_dsl = "source remote adapter rpc.client.poll operation "
+                                    TURBO_FLOW_RPC_CLIENT_POLL_OPERATION
+                                    " resource rpc.client.poll\n"
                                     "stage capture\n"
                                     "stage main {\n"
                                     "  remote -> capture\n"

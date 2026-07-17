@@ -850,12 +850,64 @@ static void flow_coronet_socket_shutdown(void *ctx) {
   free(adapter);
 }
 
+static int flow_socket_register_contract(turbo_flow_t *flow) {
+  static const char *const primitive_types[] = {TURBO_FLOW_SOCKET_PRIMITIVE_TYPE};
+  static const char *const operation_names[] = {TURBO_FLOW_SOCKET_RECEIVE_OPERATION,
+                                                TURBO_FLOW_SOCKET_SEND_OPERATION};
+  turbo_flow_operation_descriptor_t operations[2];
+  turbo_flow_module_descriptor_t module;
+
+  memset(operations, 0, sizeof(operations));
+  memset(&module, 0, sizeof(module));
+  for (size_t i = 0u; i < 2u; ++i) {
+    operations[i].size = sizeof(operations[i]);
+    operations[i].name = operation_names[i];
+    operations[i].version = TURBO_FLOW_SOCKET_MODULE_VERSION;
+    operations[i].domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+    operations[i].resource_domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+    operations[i].resource_type = TURBO_FLOW_SOCKET_PRIMITIVE_TYPE;
+    operations[i].resource_min_version = TURBO_FLOW_SOCKET_MODULE_VERSION;
+    operations[i].resource_max_version = TURBO_FLOW_SOCKET_MODULE_VERSION;
+    operations[i].scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+    operations[i].scope.state = TURBO_FLOW_STATE_SCOPE_RESOURCE_OWNER;
+    operations[i].scope.lifetime =
+        i == 0u ? TURBO_FLOW_LIFETIME_DISPATCH : TURBO_FLOW_LIFETIME_CALL;
+    operations[i].scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+    operations[i].scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+    operations[i].flags = (i == 0u ? TURBO_FLOW_OPERATION_SOURCE
+                                   : TURBO_FLOW_OPERATION_STAGE) |
+                          TURBO_FLOW_OPERATION_BRIDGE;
+    operations[i].execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  }
+  operations[0].output_domain = TURBO_FLOW_DOMAIN_DATA;
+  operations[0].output_type = "Message";
+  operations[1].input_domain = TURBO_FLOW_DOMAIN_DATA;
+  operations[1].input_type = "Message";
+  module.size = sizeof(module);
+  module.name = TURBO_FLOW_SOCKET_MODULE;
+  module.version = TURBO_FLOW_SOCKET_MODULE_VERSION;
+  module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                            TURBO_FLOW_MODULE_MANAGED_RESOURCES |
+                            TURBO_FLOW_MODULE_NATIVE_API;
+  module.primitive_types = primitive_types;
+  module.primitive_type_count = 1u;
+  module.operation_names = operation_names;
+  module.operation_count = 2u;
+  return turbo_flow_register_module_contract(flow, &module, operations, 2u);
+}
+
 int turbo_flow_coronet_register_socket_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_coronet_socket_config_t *config,
     const turbo_flow_coronet_execution_binding_t *execution) {
   flow_coronet_socket_adapter_t *adapter;
   turbo_flow_adapter_ops_t ops;
   turbo_flow_adapter_schema_t schema;
+  turbo_flow_module_adapter_registration_t registration =
+      TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+  turbo_flow_primitive_descriptor_t primitive;
+  const char *operation_names[2];
+  const char *operation_resources[2];
+  size_t operation_count;
   int rc;
 
   if (!flow || !name || name[0] == '\0' || !execution) return TURBO_EINVAL;
@@ -866,6 +918,8 @@ int turbo_flow_coronet_register_socket_adapter_ex(
     rc = turbo_flow_coronet_socket_config_validate(config);
     if (rc != TURBO_OK) return rc;
   }
+  rc = flow_socket_register_contract(flow);
+  if (rc != TURBO_OK) return rc;
 
   adapter = (flow_coronet_socket_adapter_t *)calloc(1, sizeof(*adapter));
   if (!adapter) return TURBO_ENOMEM;
@@ -995,12 +1049,39 @@ int turbo_flow_coronet_register_socket_adapter_ex(
   schema.fields = FLOW_SOCKET_OPTION_FIELDS;
   schema.field_count = sizeof(FLOW_SOCKET_OPTION_FIELDS) / sizeof(FLOW_SOCKET_OPTION_FIELDS[0]);
 
-  {
-    rc = turbo_flow_register_adapter_ex(flow, name, &ops, adapter, &schema);
-    if (rc != TURBO_OK) {
-      flow_coronet_socket_shutdown(adapter);
-      return rc;
-    }
+  if (adapter->role == TURBO_FLOW_CORONET_SOCKET_SOURCE) {
+    operation_names[0] = TURBO_FLOW_SOCKET_RECEIVE_OPERATION;
+    operation_count = 1u;
+  } else if (adapter->role == TURBO_FLOW_CORONET_SOCKET_SINK) {
+    operation_names[0] = TURBO_FLOW_SOCKET_SEND_OPERATION;
+    operation_count = 1u;
+  } else {
+    operation_names[0] = TURBO_FLOW_SOCKET_RECEIVE_OPERATION;
+    operation_names[1] = TURBO_FLOW_SOCKET_SEND_OPERATION;
+    operation_count = 2u;
+  }
+  for (size_t i = 0u; i < operation_count; ++i) operation_resources[i] = name;
+  memset(&primitive, 0, sizeof(primitive));
+  primitive.size = sizeof(primitive);
+  primitive.name = name;
+  primitive.type_name = TURBO_FLOW_SOCKET_PRIMITIVE_TYPE;
+  primitive.version = TURBO_FLOW_SOCKET_MODULE_VERSION;
+  primitive.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+  primitive.kind = TURBO_FLOW_PRIMITIVE_RESOURCE;
+  registration.module_name = TURBO_FLOW_SOCKET_MODULE;
+  registration.adapter_name = name;
+  registration.ops = &ops;
+  registration.ctx = adapter;
+  registration.schema = &schema;
+  registration.operation_names = operation_names;
+  registration.operation_count = operation_count;
+  registration.operation_resource_names = operation_resources;
+  registration.primitives = &primitive;
+  registration.primitive_count = 1u;
+  rc = turbo_flow_register_module_adapter(flow, &registration);
+  if (rc != TURBO_OK) {
+    flow_coronet_socket_shutdown(adapter);
+    return rc;
   }
 
   return TURBO_OK;

@@ -181,6 +181,19 @@ static int domain_noop_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_s
   return TURBO_OK;
 }
 
+static int domain_noop_adapter_start(void *ctx, turbo_flow_t *flow,
+                                     const turbo_flow_stage_plan_t *stage) {
+  (void)ctx;
+  (void)flow;
+  (void)stage;
+  return TURBO_OK;
+}
+
+static void domain_count_shutdown(void *ctx) {
+  int *shutdown_count = (int *)ctx;
+  *shutdown_count += 1;
+}
+
 static turbo_flow_primitive_descriptor_t
 resource_descriptor(const char *name, const char *type_name, turbo_flow_domain_t domain) {
   turbo_flow_primitive_descriptor_t descriptor;
@@ -349,6 +362,34 @@ suite("Turbo Flow Domain Contracts") {
       turbo_flow_destroy(flow);
     }
 
+    it("normalizes V1 resource contracts and validates version ranges") {
+      turbo_flow_t *flow = turbo_flow_create();
+      turbo_flow_operation_descriptor_t legacy = operation_descriptor(
+          "queue.legacy", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, TURBO_FLOW_DOMAIN_DATA,
+          "Message", TURBO_FLOW_DOMAIN_DATA, "Message",
+          TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
+      turbo_flow_operation_descriptor_t invalid = operation_descriptor(
+          "queue.invalid", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, TURBO_FLOW_DOMAIN_DATA,
+          "Message", TURBO_FLOW_DOMAIN_DATA, "Message",
+          TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
+      const turbo_flow_operation_descriptor_t *stored;
+
+      require_resource(&legacy, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, "Queue");
+      legacy.resource_min_version = 9u;
+      legacy.resource_max_version = 9u;
+      legacy.size = TURBO_FLOW_OPERATION_DESCRIPTOR_V1_SIZE;
+      require_resource(&invalid, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, "Queue");
+      invalid.resource_max_version = 2u;
+      check_not_null(flow);
+      check_int_eq(turbo_flow_register_operation(flow, &legacy), TURBO_OK);
+      stored = turbo_flow_find_operation(flow, "queue.legacy");
+      check_not_null(stored);
+      check_uint_eq(stored->resource_min_version, 0u);
+      check_uint_eq(stored->resource_max_version, 0u);
+      check_int_eq(turbo_flow_register_operation(flow, &invalid), TURBO_EINVAL);
+      turbo_flow_destroy(flow);
+    }
+
     it("preserves contracts only when reset keeps the registry") {
       turbo_flow_t *flow = turbo_flow_create();
       turbo_flow_primitive_descriptor_t primitive =
@@ -366,11 +407,332 @@ suite("Turbo Flow Domain Contracts") {
       check_int_eq(turbo_flow_reset(flow, 0), TURBO_OK);
       check_size_eq(turbo_flow_primitive_count(flow), 0);
       check_size_eq(turbo_flow_operation_count(flow), 0);
+      check_size_eq(turbo_flow_module_count(flow), 0);
+      turbo_flow_destroy(flow);
+    }
+
+    it("copies module exports and validates dependency contracts") {
+      turbo_flow_t *flow = turbo_flow_create();
+      char native_name[] = "io.native";
+      char operation_name[] = "data.validate";
+      const char *operation_names[] = {operation_name};
+      turbo_flow_operation_descriptor_t operation = operation_descriptor(
+          operation_name, TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DOMAIN_DATA, "Message",
+          TURBO_FLOW_DOMAIN_DATA, "Message", TURBO_FLOW_OPERATION_STAGE);
+      turbo_flow_module_descriptor_t native_module = {0};
+      turbo_flow_module_requirement_t requirement = {0};
+      turbo_flow_module_descriptor_t graph_module = {0};
+      const turbo_flow_module_descriptor_t *stored;
+
+      check_not_null(flow);
+      native_module.size = sizeof(native_module);
+      native_module.name = native_name;
+      native_module.version = 2u;
+      native_module.capability_flags = TURBO_FLOW_MODULE_NATIVE_API;
+      check_int_eq(turbo_flow_register_module(flow, &native_module), TURBO_OK);
+
+      check_int_eq(turbo_flow_register_operation(flow, &operation), TURBO_OK);
+      requirement.size = sizeof(requirement);
+      requirement.module_name = native_name;
+      requirement.min_version = 3u;
+      requirement.capability_flags = TURBO_FLOW_MODULE_NATIVE_API;
+      graph_module.size = sizeof(graph_module);
+      graph_module.name = "data.validation";
+      graph_module.version = 1u;
+      graph_module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS;
+      graph_module.operation_names = operation_names;
+      graph_module.operation_count = 1u;
+      graph_module.requirements = &requirement;
+      graph_module.requirement_count = 1u;
+      check_int_eq(turbo_flow_register_module(flow, &graph_module), TURBO_EPROTO);
+
+      requirement.min_version = 2u;
+      check_int_eq(turbo_flow_register_module(flow, &graph_module), TURBO_OK);
+      native_name[0] = 'x';
+      operation_name[0] = 'x';
+      stored = turbo_flow_find_module(flow, "data.validation");
+      check_not_null(stored);
+      check_str_eq(stored->operation_names[0], "data.validate");
+      check_str_eq(stored->requirements[0].module_name, "io.native");
+      check_size_eq(turbo_flow_module_count(flow), 2u);
+      check_int_eq(turbo_flow_reset(flow, 1), TURBO_OK);
+      check_size_eq(turbo_flow_module_count(flow), 2u);
+      check_int_eq(turbo_flow_reset(flow, 0), TURBO_OK);
+      check_size_eq(turbo_flow_module_count(flow), 0u);
+      turbo_flow_destroy(flow);
+    }
+
+    it("registers complete module contracts idempotently and rejects drift") {
+      static const char *const operation_names[] = {"data.validate"};
+      turbo_flow_t *flow = turbo_flow_create();
+      turbo_flow_operation_descriptor_t operation = operation_descriptor(
+          "data.validate", TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DOMAIN_DATA, "Message",
+          TURBO_FLOW_DOMAIN_DATA, "Message", TURBO_FLOW_OPERATION_STAGE);
+      turbo_flow_module_descriptor_t module = {0};
+
+      module.size = sizeof(module);
+      module.name = "data.validation";
+      module.version = 1u;
+      module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS;
+      module.operation_names = operation_names;
+      module.operation_count = 1u;
+      check_not_null(flow);
+      check_int_eq(turbo_flow_register_module_contract(flow, &module, &operation, 1u), TURBO_OK);
+      check_int_eq(turbo_flow_register_module_contract(flow, &module, &operation, 1u), TURBO_OK);
+      check_size_eq(turbo_flow_operation_count(flow), 1u);
+      check_size_eq(turbo_flow_module_count(flow), 1u);
+      operation.version = 2u;
+      check_int_eq(turbo_flow_register_module_contract(flow, &module, &operation, 1u),
+                   TURBO_EPROTO);
+      turbo_flow_destroy(flow);
+    }
+
+    it("binds typed providers to the module that exports their resource type") {
+      static const char *const primitive_types[] = {"Queue"};
+      static const char *const operation_names[] = {"queue.enqueue"};
+      turbo_flow_t *flow = turbo_flow_create();
+      turbo_flow_primitive_descriptor_t primitive =
+          resource_descriptor("queue.jobs", "Queue", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE);
+      turbo_flow_operation_descriptor_t operation = operation_descriptor(
+          "queue.enqueue", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, TURBO_FLOW_DOMAIN_DATA,
+          "Message", TURBO_FLOW_DOMAIN_DATA, "Message",
+          TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
+      turbo_flow_module_descriptor_t module = {0};
+      turbo_flow_operation_provider_registration_t provider =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+
+      require_resource(&operation, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, "Queue");
+      module.size = sizeof(module);
+      module.name = "queue.core";
+      module.version = 1u;
+      module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                                TURBO_FLOW_MODULE_MANAGED_RESOURCES |
+                                TURBO_FLOW_MODULE_NATIVE_API;
+      module.primitive_types = primitive_types;
+      module.primitive_type_count = 1u;
+      module.operation_names = operation_names;
+      module.operation_count = 1u;
+      provider.operation_name = "queue.enqueue";
+      provider.resource_name = "queue.jobs";
+      provider.fn = domain_noop_stage;
+
+      check_not_null(flow);
+      check_int_eq(turbo_flow_register_primitive(flow, &primitive), TURBO_OK);
+      check_int_eq(turbo_flow_register_operation(flow, &operation), TURBO_OK);
+      check_int_eq(turbo_flow_register_module(flow, &module), TURBO_OK);
+      check_int_eq(turbo_flow_register_operation_provider(flow, &provider), TURBO_OK);
+      check_null(turbo_flow_operation_provider_module(flow, "queue.enqueue", "queue.jobs"));
+      check_int_eq(turbo_flow_bind_operation_provider_module(
+                       flow, "queue.core", "queue.enqueue", "queue.jobs"),
+                   TURBO_OK);
+      check_str_eq(turbo_flow_operation_provider_module(flow, "queue.enqueue", "queue.jobs"),
+                   "queue.core");
+      turbo_flow_destroy(flow);
+    }
+
+    it("atomically binds native adapter operations to their module owner") {
+      static const char *const operation_names[] = {"native.transform"};
+      turbo_flow_t *flow = turbo_flow_create();
+      turbo_flow_operation_descriptor_t operation = operation_descriptor(
+          "native.transform", TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN, TURBO_FLOW_DOMAIN_DATA,
+          "Message", TURBO_FLOW_DOMAIN_DATA, "Message",
+          TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
+      turbo_flow_module_descriptor_t module = {0};
+      turbo_flow_adapter_ops_t ops = {0};
+      turbo_flow_adapter_schema_t schema = {0};
+      turbo_flow_module_adapter_registration_t adapter =
+          TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+      int shutdown_count = 0;
+
+      operation.scope.state = TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER;
+      operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+      operation.scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+      module.size = sizeof(module);
+      module.name = "native.protocol";
+      module.version = 1u;
+      module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                                TURBO_FLOW_MODULE_NATIVE_API;
+      module.operation_names = operation_names;
+      module.operation_count = 1u;
+      ops.consume = domain_noop_consume;
+      ops.shutdown = domain_count_shutdown;
+      schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+      schema.roles = TURBO_FLOW_ADAPTER_TRANSFORM;
+      schema.direction = TURBO_FLOW_ADAPTER_BIDIRECTIONAL;
+      adapter.module_name = "native.protocol";
+      adapter.adapter_name = "native.instance";
+      adapter.ops = &ops;
+      adapter.ctx = &shutdown_count;
+      adapter.schema = &schema;
+      adapter.operation_names = operation_names;
+      adapter.operation_count = 1u;
+
+      check_not_null(flow);
+      check_int_eq(turbo_flow_register_operation(flow, &operation), TURBO_OK);
+      check_int_eq(turbo_flow_register_module(flow, &module), TURBO_OK);
+      schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
+      check_int_eq(turbo_flow_register_module_adapter(flow, &adapter), TURBO_EPROTO);
+      check_size_eq(turbo_flow_adapter_count(flow), 0u);
+      check_int_eq(shutdown_count, 0);
+      schema.roles = TURBO_FLOW_ADAPTER_TRANSFORM;
+      check_int_eq(turbo_flow_register_module_adapter(flow, &adapter), TURBO_OK);
+      check_str_eq(turbo_flow_adapter_operation_module(
+                       flow, "native.instance", "native.transform"),
+                   "native.protocol");
+      check_int_eq(turbo_flow_reset(flow, 1), TURBO_OK);
+      check_str_eq(turbo_flow_adapter_operation_module(
+                       flow, "native.instance", "native.transform"),
+                   "native.protocol");
+      check_int_eq(shutdown_count, 0);
+      check_int_eq(turbo_flow_reset(flow, 0), TURBO_OK);
+      check_null(turbo_flow_adapter_operation_module(
+          flow, "native.instance", "native.transform"));
+      check_int_eq(shutdown_count, 1);
       turbo_flow_destroy(flow);
     }
   }
 
   group("DSL and compiler") {
+    it("rejects an unbound provider for a cataloged operation") {
+      static const char *dsl = "source input\n"
+                               "stage work operation data.validate\n"
+                               "stage main {\n"
+                               "  input -> work\n"
+                               "}\n";
+      static const char *const operations[] = {"data.validate"};
+      turbo_flow_t *flow = turbo_flow_create();
+      turbo_flow_operation_descriptor_t operation = operation_descriptor(
+          "data.validate", TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DOMAIN_DATA, "Message",
+          TURBO_FLOW_DOMAIN_DATA, "Message", TURBO_FLOW_OPERATION_STAGE);
+      turbo_flow_module_descriptor_t module = {0};
+      turbo_flow_operation_provider_registration_t provider =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+
+      module.size = sizeof(module);
+      module.name = "data.validation";
+      module.version = 1u;
+      module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS;
+      module.operation_names = operations;
+      module.operation_count = 1u;
+      provider.operation_name = "data.validate";
+      provider.fn = domain_noop_stage;
+      check_not_null(flow);
+      check_int_eq(turbo_flow_register_operation(flow, &operation), TURBO_OK);
+      check_int_eq(turbo_flow_register_module(flow, &module), TURBO_OK);
+      check_int_eq(turbo_flow_register_operation_provider(flow, &provider), TURBO_OK);
+      check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+      check_int_eq(turbo_flow_compile(flow), TURBO_EPROTO);
+      check_str_contains(turbo_flow_last_error(flow)->message, "not bound to its module owner");
+      turbo_flow_destroy(flow);
+    }
+
+    it("requires a typed native adapter for adapter-owner operations") {
+      static const char *dsl = "source input\n"
+                               "stage work adapter native.instance operation native.transform\n"
+                               "stage main {\n"
+                               "  input -> work\n"
+                               "}\n";
+      static const char *const operation_names[] = {"native.transform"};
+      turbo_flow_t *flow = turbo_flow_create();
+      turbo_flow_operation_descriptor_t operation = operation_descriptor(
+          "native.transform", TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN, TURBO_FLOW_DOMAIN_DATA,
+          "Message", TURBO_FLOW_DOMAIN_DATA, "Message",
+          TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
+      turbo_flow_module_descriptor_t module = {0};
+      turbo_flow_adapter_ops_t ops = {0};
+      turbo_flow_adapter_schema_t schema = {0};
+
+      operation.scope.state = TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER;
+      operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+      operation.scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+      module.size = sizeof(module);
+      module.name = "native.protocol";
+      module.version = 1u;
+      module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                                TURBO_FLOW_MODULE_NATIVE_API;
+      module.operation_names = operation_names;
+      module.operation_count = 1u;
+      ops.start = domain_noop_adapter_start;
+      ops.consume = domain_noop_consume;
+      schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+      schema.roles = TURBO_FLOW_ADAPTER_TRANSFORM;
+      schema.direction = TURBO_FLOW_ADAPTER_BIDIRECTIONAL;
+
+      check_not_null(flow);
+      check_int_eq(turbo_flow_register_operation(flow, &operation), TURBO_OK);
+      check_int_eq(turbo_flow_register_module(flow, &module), TURBO_OK);
+      check_int_eq(turbo_flow_register_adapter_ex(
+                       flow, "native.instance", &ops, NULL, &schema),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+      check_int_eq(turbo_flow_compile(flow), TURBO_EPROTO);
+      check_str_contains(turbo_flow_last_error(flow)->message,
+                         "not bound to its module owner");
+      turbo_flow_destroy(flow);
+    }
+
+    it("rejects a typed adapter operation bound to another resource instance") {
+      static const char *dsl =
+          "source input\n"
+          "stage work adapter native.instance operation queue.enqueue resource queue.other\n"
+          "stage main {\n"
+          "  input -> work\n"
+          "}\n";
+      static const char *const primitive_types[] = {"Queue"};
+      static const char *const operation_names[] = {"queue.enqueue"};
+      static const char *const resource_names[] = {"queue.bound"};
+      turbo_flow_t *flow = turbo_flow_create();
+      turbo_flow_operation_descriptor_t operation = operation_descriptor(
+          "queue.enqueue", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, TURBO_FLOW_DOMAIN_DATA,
+          "Message", TURBO_FLOW_DOMAIN_NONE, NULL,
+          TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
+      turbo_flow_module_descriptor_t module = {0};
+      turbo_flow_primitive_descriptor_t primitives[2];
+      turbo_flow_adapter_ops_t ops = {0};
+      turbo_flow_adapter_schema_t schema = {0};
+      turbo_flow_module_adapter_registration_t adapter =
+          TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+
+      require_resource(&operation, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, "Queue");
+      operation.resource_min_version = 1u;
+      operation.resource_max_version = 1u;
+      module.size = sizeof(module);
+      module.name = "queue.native";
+      module.version = 1u;
+      module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                                TURBO_FLOW_MODULE_MANAGED_RESOURCES;
+      module.primitive_types = primitive_types;
+      module.primitive_type_count = 1u;
+      module.operation_names = operation_names;
+      module.operation_count = 1u;
+      primitives[0] =
+          resource_descriptor("queue.bound", "Queue", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE);
+      primitives[1] =
+          resource_descriptor("queue.other", "Queue", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE);
+      ops.consume = domain_noop_consume;
+      schema.kind = TURBO_FLOW_ADAPTER_KIND_QUEUE;
+      schema.roles = TURBO_FLOW_ADAPTER_SINK;
+      schema.direction = TURBO_FLOW_ADAPTER_OUTPUT;
+      adapter.module_name = module.name;
+      adapter.adapter_name = "native.instance";
+      adapter.ops = &ops;
+      adapter.schema = &schema;
+      adapter.operation_names = operation_names;
+      adapter.operation_count = 1u;
+      adapter.operation_resource_names = resource_names;
+      adapter.primitives = &primitives[0];
+      adapter.primitive_count = 1u;
+
+      check_not_null(flow);
+      check_int_eq(turbo_flow_register_module_contract(flow, &module, &operation, 1u), TURBO_OK);
+      check_int_eq(turbo_flow_register_module_adapter(flow, &adapter), TURBO_OK);
+      check_int_eq(turbo_flow_register_primitive(flow, &primitives[1]), TURBO_OK);
+      check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+      check_int_eq(turbo_flow_compile(flow), TURBO_EPROTO);
+      check_str_contains(turbo_flow_last_error(flow)->message, "another resource primitive");
+      turbo_flow_destroy(flow);
+    }
+
     it("binds registered operations and resources to graph nodes") {
       static const char *dsl =
           "source ingress adapter mqtt.server operation mqtt.publish_in resource mqtt.session\n"
@@ -439,6 +801,48 @@ suite("Turbo Flow Domain Contracts") {
       check_str_contains(turbo_flow_last_error(flow)->message,
                          "resource primitive does not satisfy");
       turbo_flow_destroy(flow);
+    }
+
+    it("accepts and rejects resource primitives by operation version range") {
+      static const char *dsl =
+          "source ingress operation queue.read resource queue.jobs\n"
+          "stage validate operation data.validate\n"
+          "stage main {\n"
+          "  ingress -> validate\n"
+          "}\n";
+      const uint32_t versions[] = {2u, 1u};
+      const int expected[] = {TURBO_OK, TURBO_EPROTO};
+      for (size_t scenario = 0; scenario < 2u; ++scenario) {
+        turbo_flow_t *flow = turbo_flow_create();
+        turbo_flow_primitive_descriptor_t queue =
+            resource_descriptor("queue.jobs", "Queue", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE);
+        turbo_flow_operation_descriptor_t input = operation_descriptor(
+            "queue.read", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, TURBO_FLOW_DOMAIN_NONE, NULL,
+            TURBO_FLOW_DOMAIN_DATA, "Message",
+            TURBO_FLOW_OPERATION_SOURCE | TURBO_FLOW_OPERATION_BRIDGE);
+        turbo_flow_operation_descriptor_t validate = operation_descriptor(
+            "data.validate", TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DOMAIN_DATA, "Message",
+            TURBO_FLOW_DOMAIN_DATA, "Message", TURBO_FLOW_OPERATION_STAGE);
+
+        queue.version = versions[scenario];
+        require_resource(&input, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, "Queue");
+        input.resource_min_version = 2u;
+        input.resource_max_version = 3u;
+        check_not_null(flow);
+        check_int_eq(turbo_flow_register_primitive(flow, &queue), TURBO_OK);
+        check_int_eq(turbo_flow_register_operation(flow, &input), TURBO_OK);
+        check_int_eq(turbo_flow_register_operation(flow, &validate), TURBO_OK);
+        check_int_eq(
+            turbo_flow_register_stage_ex(flow, "validate", domain_noop_stage, NULL, NULL),
+            TURBO_OK);
+        check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+        check_int_eq(turbo_flow_compile(flow), expected[scenario]);
+        if (scenario == 1u) {
+          check_str_contains(turbo_flow_last_error(flow)->message,
+                             "version is incompatible");
+        }
+        turbo_flow_destroy(flow);
+      }
     }
 
     it("requires an adapter owner for an owner-context source") {

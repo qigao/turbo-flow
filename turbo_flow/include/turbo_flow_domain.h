@@ -58,7 +58,9 @@ typedef enum turbo_flow_state_scope_e {
   TURBO_FLOW_STATE_SCOPE_NODE,
   TURBO_FLOW_STATE_SCOPE_GRAPH,
   TURBO_FLOW_STATE_SCOPE_RESOURCE_OWNER,
-  TURBO_FLOW_STATE_SCOPE_PROTOCOL_SESSION
+  TURBO_FLOW_STATE_SCOPE_PROTOCOL_SESSION,
+  /** Mutable state remains owned by the native adapter instance. */
+  TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER
 } turbo_flow_state_scope_t;
 
 typedef enum turbo_flow_lifetime_scope_e {
@@ -189,7 +191,59 @@ typedef struct turbo_flow_operation_descriptor_s {
   uint32_t flags;
   uint32_t execution_mask;
   turbo_flow_operation_runtime_contract_t runtime;
+  /** Inclusive primitive version lower bound; zero preserves the V1 any-version contract. */
+  uint32_t resource_min_version;
+  /** Inclusive upper bound; zero means unbounded when resource_min_version is nonzero. */
+  uint32_t resource_max_version;
 } turbo_flow_operation_descriptor_t;
+
+/** Binary size accepted from callers compiled against the V1 descriptor. */
+#define TURBO_FLOW_OPERATION_DESCRIPTOR_V1_SIZE                                                   \
+  offsetof(turbo_flow_operation_descriptor_t, resource_min_version)
+
+/** Stable module boundary advertised to the graph compiler and management code. */
+typedef enum turbo_flow_module_capability_flags_e {
+  /** The module exports typed operations that may be referenced by Graph DSL nodes. */
+  TURBO_FLOW_MODULE_GRAPH_OPERATIONS = 1u << 0,
+  /** The module owns resources whose lifecycle/status is managed outside the data graph. */
+  TURBO_FLOW_MODULE_MANAGED_RESOURCES = 1u << 1,
+  /** The module retains a domain-native API/runtime below its graph adapter boundary. */
+  TURBO_FLOW_MODULE_NATIVE_API = 1u << 2
+} turbo_flow_module_capability_flags_t;
+
+/** One already-registered module dependency. Version bounds are inclusive. */
+typedef struct turbo_flow_module_requirement_s {
+  size_t size;
+  const char *module_name;
+  uint32_t min_version;
+  /** Zero means that the dependency has no upper version bound. */
+  uint32_t max_version;
+  /** Required turbo_flow_module_capability_flags_t bits. */
+  uint32_t capability_flags;
+} turbo_flow_module_requirement_t;
+
+/**
+ * Immutable module catalog entry copied into a flow.
+ *
+ * Primitive exports are stable `type_name` contracts, not configured resource
+ * binding names. Operation exports must already exist in the operation registry.
+ * Requirements must already exist, so callers register modules in dependency
+ * order. The catalog describes boundaries; it does not construct resources or
+ * replace a module's native transport/runtime.
+ */
+typedef struct turbo_flow_module_descriptor_s {
+  size_t size;
+  const char *name;
+  uint32_t version;
+  /** Bitwise turbo_flow_module_capability_flags_t values. */
+  uint32_t capability_flags;
+  const char *const *primitive_types;
+  size_t primitive_type_count;
+  const char *const *operation_names;
+  size_t operation_count;
+  const turbo_flow_module_requirement_t *requirements;
+  size_t requirement_count;
+} turbo_flow_module_descriptor_t;
 
 /**
  * Register one immutable primitive contract before compile.
@@ -203,23 +257,65 @@ CXX_C_API int turbo_flow_register_primitive(turbo_flow_t *flow,
 /**
  * Register one immutable operation contract before compile.
  *
- * Cross-domain input/output requires TURBO_FLOW_OPERATION_BRIDGE. Owner or
- * protocol-session state scope requires a resource contract. Returns the same
+ * Cross-domain input/output requires TURBO_FLOW_OPERATION_BRIDGE. Resource-owner
+ * or protocol-session state scope requires a resource contract; adapter-owner
+ * state requires a typed module-adapter binding when compiled. Returns the same
  * registration errors as turbo_flow_register_primitive().
  */
 CXX_C_API int turbo_flow_register_operation(turbo_flow_t *flow,
                                             const turbo_flow_operation_descriptor_t *descriptor);
 
+/**
+ * Register one immutable module catalog entry before compile.
+ *
+ * Exported operation names and dependencies are validated against registrations
+ * already present in `flow`. One operation has one module owner. Returns
+ * TURBO_ENOENT for a missing export/dependency and TURBO_EPROTO for an
+ * incompatible dependency contract, in addition to the normal registration
+ * errors.
+ */
+CXX_C_API int turbo_flow_register_module(turbo_flow_t *flow,
+                                         const turbo_flow_module_descriptor_t *descriptor);
+
+/**
+ * Idempotently register one complete module contract and its operation descriptors.
+ * Existing entries must be exactly compatible. Newly appended operations are
+ * rolled back if module registration fails.
+ */
+CXX_C_API int turbo_flow_register_module_contract(
+    turbo_flow_t *flow, const turbo_flow_module_descriptor_t *module,
+    const turbo_flow_operation_descriptor_t *operations, size_t operation_count);
+
+/**
+ * Associate an existing typed operation provider with its exporting module.
+ *
+ * A resource-bound provider must reference a primitive whose `type_name` is
+ * exported by the module. The association is immutable and borrowed query
+ * results remain valid until registry-clearing reset or flow destruction.
+ */
+CXX_C_API int turbo_flow_bind_operation_provider_module(turbo_flow_t *flow,
+                                                        const char *module_name,
+                                                        const char *operation_name,
+                                                        const char *resource_name);
+
 CXX_C_API size_t turbo_flow_primitive_count(const turbo_flow_t *flow);
 CXX_C_API size_t turbo_flow_operation_count(const turbo_flow_t *flow);
+CXX_C_API size_t turbo_flow_module_count(const turbo_flow_t *flow);
 CXX_C_API const turbo_flow_primitive_descriptor_t *turbo_flow_primitive_at(const turbo_flow_t *flow,
                                                                            size_t index);
 CXX_C_API const turbo_flow_operation_descriptor_t *turbo_flow_operation_at(const turbo_flow_t *flow,
                                                                            size_t index);
+CXX_C_API const turbo_flow_module_descriptor_t *turbo_flow_module_at(const turbo_flow_t *flow,
+                                                                     size_t index);
 CXX_C_API const turbo_flow_primitive_descriptor_t *
 turbo_flow_find_primitive(const turbo_flow_t *flow, const char *name);
 CXX_C_API const turbo_flow_operation_descriptor_t *
 turbo_flow_find_operation(const turbo_flow_t *flow, const char *name);
+CXX_C_API const turbo_flow_module_descriptor_t *turbo_flow_find_module(const turbo_flow_t *flow,
+                                                                       const char *name);
+CXX_C_API const char *turbo_flow_operation_provider_module(const turbo_flow_t *flow,
+                                                           const char *operation_name,
+                                                           const char *resource_name);
 
 #ifdef __cplusplus
 }

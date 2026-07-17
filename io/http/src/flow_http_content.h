@@ -23,5 +23,7 @@ int flow_http_content_cache_init(flow_http_content_cache_t *cache,
 void flow_http_content_cache_destroy(flow_http_content_cache_t *cache);
 int flow_http_content_cache_get(flow_http_content_cache_t *cache, const char *media_type,
                                 const turbo_flow_content_descriptor_t **descriptor_out);
+int flow_http_register_client_module_contract(turbo_flow_t *flow);
+int flow_http_register_server_module_contract(turbo_flow_t *flow);
 
 #endif

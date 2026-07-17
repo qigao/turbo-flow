@@ -126,9 +126,13 @@ spec("turbo_flow_http") {
     turbo_flow_observe_graph_snapshot_t graph;
     const turbo_flow_adapter_schema_t *client_schema;
     const turbo_flow_adapter_schema_t *server_schema;
-    static const char dsl[] = "source request adapter http.server\n"
-                              "stage call adapter http.client\n"
-                              "stage response adapter http.server\n"
+    static const char dsl[] =
+        "source request adapter http.server operation "
+        TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION " resource http.server\n"
+        "stage call adapter http.client operation " TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION
+        " resource http.client\n"
+        "stage response adapter http.server operation " TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION
+        " resource http.server\n"
                               "stage main {\n"
                               "  request -> call -> response\n"
                               "}\n";
@@ -147,6 +151,25 @@ spec("turbo_flow_http") {
     check_not_null(server_schema);
     check_uint_eq(client_schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
     check_uint_eq(server_schema->roles, TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK);
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     flow, "http.client", TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
+                 TURBO_FLOW_HTTP_CLIENT_MODULE);
+    check_str_eq(turbo_flow_adapter_operation_resource(
+                     flow, "http.client", TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
+                 "http.client");
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     flow, "http.server", TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
+                 TURBO_FLOW_HTTP_SERVER_MODULE);
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     flow, "http.server", TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION),
+                 TURBO_FLOW_HTTP_SERVER_MODULE);
+    check_str_eq(turbo_flow_adapter_operation_resource(
+                     flow, "http.server", TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
+                 "http.server");
+    check_str_eq(turbo_flow_find_primitive(flow, "http.client")->type_name,
+                 TURBO_FLOW_HTTP_CLIENT_PRIMITIVE_TYPE);
+    check_str_eq(turbo_flow_find_primitive(flow, "http.server")->type_name,
+                 TURBO_FLOW_HTTP_SERVER_PRIMITIVE_TYPE);
     check_int_eq(turbo_flow_parse_string(flow, dsl, sizeof(dsl) - 1u), TURBO_OK);
     check_int_eq(turbo_flow_compile(flow), TURBO_OK);
     check_int_eq(turbo_flow_observe_attach(observe, flow), TURBO_OK);
@@ -287,13 +310,18 @@ spec("turbo_flow_http") {
   }
 
   it("round trips payloads through server and client adapters") {
-    static const char *server_dsl = "source request adapter http.server.echo\n"
-                                    "stage response adapter http.server.echo\n"
+    static const char *server_dsl =
+        "source request adapter http.server.echo operation "
+        TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION " resource http.server.echo\n"
+        "stage response adapter http.server.echo operation "
+        TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION " resource http.server.echo\n"
                                     "stage main {\n"
                                     "  request -> response\n"
                                     "}\n";
     static const char *client_dsl = "source input\n"
-                                    "stage request adapter http.client.once\n"
+                                    "stage request adapter http.client.once operation "
+                                    TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION
+                                    " resource http.client.once\n"
                                     "stage capture\n"
                                     "stage main {\n"
                                     "  input -> request -> capture\n"
@@ -323,6 +351,9 @@ spec("turbo_flow_http") {
     check_int_eq(
         turbo_flow_http_register_server_adapter(server_flow, "http.server.echo", &server_config),
         TURBO_OK);
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     server_flow, "http.server.echo", TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
+                 TURBO_FLOW_HTTP_SERVER_MODULE);
     memset(&server_connection, 0, sizeof(server_connection));
     check_int_eq(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
                  TURBO_OK);
@@ -348,6 +379,9 @@ spec("turbo_flow_http") {
     check_int_eq(
         turbo_flow_http_register_client_adapter(client_flow, "http.client.once", &client_config),
         TURBO_OK);
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     client_flow, "http.client.once", TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
+                 TURBO_FLOW_HTTP_CLIENT_MODULE);
     memset(&client_connection, 0, sizeof(client_connection));
     check_int_eq(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
                  TURBO_OK);
@@ -421,12 +455,17 @@ spec("turbo_flow_http") {
   }
 
   it("publishes periodic GET responses as source messages") {
-    static const char *server_dsl = "source request adapter http.server.poll\n"
-                                    "stage response adapter http.server.poll\n"
+    static const char *server_dsl =
+        "source request adapter http.server.poll operation "
+        TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION " resource http.server.poll\n"
+        "stage response adapter http.server.poll operation "
+        TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION " resource http.server.poll\n"
                                     "stage main {\n"
                                     "  request -> response\n"
                                     "}\n";
-    static const char *client_dsl = "source remote adapter http.client.poll\n"
+    static const char *client_dsl =
+        "source remote adapter http.client.poll operation "
+        TURBO_FLOW_HTTP_CLIENT_POLL_OPERATION " resource http.client.poll\n"
                                     "stage capture\n"
                                     "stage main {\n"
                                     "  remote -> capture\n"

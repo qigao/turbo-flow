@@ -406,7 +406,9 @@ spec("turbo_flow_storage") {
   }
 
   it("publishes regular files from a directory source") {
-    static const char *src = "source dir_in adapter \"dir.read\"\n"
+    static const char *src = "source dir_in adapter \"dir.read\" operation "
+                             TURBO_FLOW_STORAGE_DIRECTORY_READ_OPERATION
+                             " resource \"dir.read\"\n"
                              "stage capture\n"
                              "stage main {\n"
                              "  dir_in -> capture\n"
@@ -436,6 +438,12 @@ spec("turbo_flow_storage") {
     check_not_null(flow);
     check_int_eq(turbo_flow_storage_register_directory_source_adapter(flow, "dir.read", &config),
                  TURBO_OK);
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     flow, "dir.read", TURBO_FLOW_STORAGE_DIRECTORY_READ_OPERATION),
+                 TURBO_FLOW_STORAGE_MODULE);
+    check_str_eq(turbo_flow_adapter_operation_resource(
+                     flow, "dir.read", TURBO_FLOW_STORAGE_DIRECTORY_READ_OPERATION),
+                 "dir.read");
     schema = turbo_flow_find_adapter_schema(flow, "dir.read");
     check_not_null(schema);
     check_int_eq(schema->kind, TURBO_FLOW_ADAPTER_KIND_FILE);
@@ -462,7 +470,9 @@ spec("turbo_flow_storage") {
 
   it("binds payloads into a sqlite sink statement") {
     static const char *src = "source input\n"
-                             "stage db adapter \"sqlite.write\"\n"
+                             "stage db adapter \"sqlite.write\" operation "
+                             TURBO_FLOW_STORAGE_SQLITE_EXECUTE_OPERATION
+                             " resource \"sqlite.write\"\n"
                              "stage main {\n"
                              "  input -> db\n"
                              "}\n";

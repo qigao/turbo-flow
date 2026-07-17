@@ -13,6 +13,12 @@
 extern "C" {
 #endif
 
+#define TURBO_FLOW_SOCKET_MODULE_VERSION 1u
+#define TURBO_FLOW_SOCKET_MODULE "io.socket"
+#define TURBO_FLOW_SOCKET_RECEIVE_OPERATION "socket.receive"
+#define TURBO_FLOW_SOCKET_SEND_OPERATION "socket.send"
+#define TURBO_FLOW_SOCKET_PRIMITIVE_TYPE "SocketEndpoint"
+
 typedef struct turbo_flow_coronet_socket_config_s {
   /** SOURCE listens and publishes received bytes into the flow; SINK connects and sends payloads.
    */

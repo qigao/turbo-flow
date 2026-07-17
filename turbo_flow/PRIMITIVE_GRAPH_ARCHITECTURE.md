@@ -121,6 +121,14 @@ Operation 不能因为被 graph 调度而获得额外状态权限。
 
 ### 4.3 Domain catalog
 
+公共 module catalog 位于 domain contract 之上、Graph DSL 之下。它声明 module identity/version、
+能力边界、primitive type/operation exports、依赖范围以及 typed provider 归属；它不加载代码、
+不创建资源实例，也不接管 native transport。可信 host/module code 在 compile 前调用
+`turbo_flow_register_module()`，再以 `turbo_flow_bind_operation_provider_module()` 将既有
+`(operation, resource)` provider 绑定到唯一 module owner，或以
+`turbo_flow_register_module_adapter()` 原子绑定 native adapter operations。依赖必须按拓扑顺序注册；Graph DSL
+仍只引用 `operation`/`resource`，YAML 仍只选择已注册能力，不能声明 native function。
+
 | Domain | 主要 primitives | 主要 operations | 状态 owner |
 |---|---|---|---|
 | Data | MessageEnvelope、Schema、Batch | decode、validate、transform、filter、route、split、merge | message/batch owner |
@@ -131,8 +139,16 @@ Operation 不能因为被 graph 调度而获得额外状态权限。
 | Rules | RuleProgram、FactsSnapshot、Decision | compile、evaluate | rules owner；evaluation 无副作用 |
 | Management | ResourceRef、Spec、Status、Condition、Command | observe、diff、reconcile、apply command | host reconciler + target owner |
 
-HTTP、SMTP、MQTT、FMQ、Redis 等协议可以各自形成 protocol subdomain，并复用 IO/Transport
-domain 的 primitives。复用 connection/endpoint 不代表共享协议 FSM 或 options。
+HTTP、SMTP、MQTT、FMQ、Redis 等协议可以各自形成 protocol subdomain，并按各自实现需要复用
+IO/Transport primitives。复用 connection/endpoint 不代表共享协议 FSM、options 或 transport
+实现。HTTP 已有 TurboHTTP/Iris native endpoint/adapter，保持该 owner 与 IO 路径，不迁移为
+`io/socket` primitive。`io.socket` 将 CoroNet endpoint 注册为 `SocketEndpoint`；
+`io.http.client/server` 分别将 native client/endpoint 注册为 `HttpClientConnection` /
+`HttpServerEndpoint`；RPC 同理注册自己的 client/server resource。它们共享的是
+module-adapter-resource 校验机制，不共享协议 FSM、连接池或 native transport 实现。
+RPC client 可由可信 host 通过 versioned binding 显式注入 borrowed/owned `http_client_t`，使其复用既有
+TurboHTTP provider 配置；未注入时仍创建私有 client。Borrowed client 必须比 RPC adapter
+活得更久，且不能被另一个 adapter 并发驱动。该 host object 不可由 YAML 构造。
 
 `turbo_flow_protocol` 还提供一个不拥有候选对象的 pattern core：role compatibility、fan-out/
 round-robin candidate iteration、generation-fenced route matching，以及单 correlation 的同步
@@ -154,7 +170,7 @@ Projection 的 schema identity、clone 和 destroy 由可信 provider 定义。G
 | 作用域 | 必须回答的问题 | 典型值 |
 |---|---|---|
 | Data scope | 一次处理哪些数据，能否保留或复制 | message、batch、stream chunk、snapshot |
-| State scope | 可读写哪个事实源 | none/private、node、graph、resource owner、protocol session |
+| State scope | 可读写哪个事实源 | none/private、node、graph、resource owner、protocol session、adapter owner |
 | Lifetime scope | 引用可活多久 | call、dispatch、task、session generation、runtime generation |
 | Concurrency scope | 谁串行化，是否可重入/并发 | inline lane、single owner context、pool、lock-free snapshot |
 | Authority scope | 能产生何种副作用 | pure、observe-only、data mutation、owner-local、typed command |
@@ -167,11 +183,15 @@ validation metadata，不是包含所有 domain 方法的胖 vtable。
 和 runtime pool resource status：host 通过
 `turbo_flow_register_primitive()` / `turbo_flow_register_operation()` 注册可信契约，DSL 使用
 `operation <name>` / `resource <name>` 组合 node。Compiler 已校验 source/stage role、resource
-domain/type、execution mask、owner/pool concurrency scope、management authority 和相邻显式
+domain/type/version range、execution mask、owner/pool concurrency scope、management authority 和相邻显式
 operation 的 input/output domain/type，并把 bounded backpressure、ordering、retry 和 reject 要求核对
 到既有 worker Disruptor、reorder、adapter retry 和 reject edge。所有 runtime node 都解析为
 完整 operation；未显式绑定的 node 使用可查询的 `core.source` / `core.stage.*` concrete contract，
-不存在跳过校验的 legacy path。Runtime pool 已提供 stable UID、generation、typed Status/Condition 和 checked
+未显式绑定的 callback/adapter 仍是兼容路径，不能计入 module-level executable proof。对于已进入
+module catalog 的 operation，compiler 会校验 typed provider 或 native adapter 已绑定唯一 module
+owner；resource-owned adapter operation 还必须匹配注册时固化的 primitive name。Legacy callback
+不能冒充 cataloged operation，`ADAPTER_OWNER` 必须由 typed adapter 执行。
+Runtime pool 已提供 stable UID、generation、typed Status/Condition 和 checked
 resize command；operation execution deadline 已接入 inline、thread/coro pool、worker lane
 以及同步 adapter 边界。Worker runtime 已实现 block、fail 和 drop-newest；drop-oldest 因 active
 sequence 不能安全回收而返回 `TURBO_ENOTSUP`。Generic complete/requeue/dead-letter/canceled 和
@@ -198,7 +218,9 @@ provider 则补齐 fixed tumbling、watermark trigger 和 allowed lateness。两
 downstream failure 后反向回滚已提交 state。Processing-time timer、sliding/session window、
 复杂 trigger、checkpoint 和 exactly-once sink transaction 仍是独立后续契约。
 
-当前 RulesForge 集成再向前推进一个切片：`rules.apply` 是 Rules domain 的显式
+当前 RulesForge 集成再向前推进一个切片：`rules.forge` 是第一个生产 module catalog entry，
+导出 `RuleSet` primitive type 与 `rules.apply` operation，并将每个 `(rules.apply, RuleSet instance)`
+typed provider 绑定回该 module。`rules.apply` 是 Rules domain 的显式
 stage operation，`RuleSet` 是带 owner/resource contract 的 primitive。Host 通过
 `turbo_flow_rule_register_data_operation()` 绑定一个规则资源；compiler 按
 `(operation, resource)` 选择 executable provider，旧的按 stage callback 注册方式继续
@@ -210,6 +232,13 @@ provider 返回的值在本次 `rules.apply` 调用期间保持只读有效，Ru
 求值和 action 应用，不能从 opaque payload 中隐式读取。没有 provider 的 schema-backed
 规则会在注册时 fail fast，provider 的运行时错误则原样沿 operation error boundary
 传播。
+
+Native adapter catalog 已覆盖 HTTP、RPC、FMQ、Flowie MQTT server、Queue 与 Storage。HTTP/RPC
+只描述既有 native client/server 边界；FMQ 按每个 messaging pattern 分开 operation；Flowie 只将
+application PUBLISH ingress 和 encoded packet egress 暴露给 graph，CONNECT/SUBSCRIBE/QoS FSM
+仍由 session owner 消费。Queue/Storage operation 使用 `RESOURCE_OWNER` scope，并通过
+`operation_resource_names + primitives` 把 adapter 实现固定到实际 `QueueBuffer` 或
+`StorageResource`，而不是将共享/持久化状态误报为 adapter-private state。
 
 例如 MQTT publish decode 的 scope 是：单 packet/message data、session-generation lifetime、
 MQTT owner-local state、CoroNet context 串行化；RulesForge route 是 message data、无共享状态、
@@ -442,6 +471,8 @@ reconcile convergence/failure、rule quota 和 protocol settlement integration�
 当前基线证据：
 
 - `include/turbo_flow.h`：message envelope、resource snapshot、adapter command/ops；
+- `include/turbo_flow_domain.h`、`src/flow_domain.c`：module/primitive/operation catalog、dependency
+  compatibility 和 typed provider module binding；
 - `include/turbo_flow_control.h`：immutable fact provider，禁止 read side effect；
 - `src/flow_disruptor.c`：bounded worker/broadcast Disruptor publish path；
 - `../observe/include/turbo_flow_observe.h`：graph snapshot 和 host-owned pool reconcile；

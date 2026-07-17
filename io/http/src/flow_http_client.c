@@ -493,10 +493,16 @@ static void flow_http_client_shutdown(void *ctx) {
 
 int turbo_flow_http_register_client_adapter(turbo_flow_t *flow, const char *name,
                                             const turbo_flow_http_client_config_t *config) {
+  static const char *const request_operation[] = {TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION};
+  static const char *const poll_operation[] = {TURBO_FLOW_HTTP_CLIENT_POLL_OPERATION};
   flow_http_client_adapter_t *adapter;
   turbo_flow_adapter_ops_t ops;
+  turbo_flow_module_adapter_registration_t registration =
+      TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
   turbo_flow_resource_provider_registration_t resource =
       TURBO_FLOW_RESOURCE_PROVIDER_REGISTRATION_INIT;
+  turbo_flow_primitive_descriptor_t primitive;
+  const char *operation_resources[1];
   int rc;
   if (!flow || !name || name[0] == '\0' || !config || !config->url || config->url[0] == '\0' ||
       !flow_http_client_method_valid(config->method) || config->timeout_ms < 0 ||
@@ -504,6 +510,8 @@ int turbo_flow_http_register_client_adapter(turbo_flow_t *flow, const char *name
       (config->poll_interval_ms > 0 && config->method != TURBO_FLOW_HTTP_GET)) {
     return TURBO_EINVAL;
   }
+  rc = flow_http_register_client_module_contract(flow);
+  if (rc != TURBO_OK) return rc;
   adapter = (flow_http_client_adapter_t *)calloc(1, sizeof(*adapter));
   if (!adapter) return TURBO_ENOMEM;
   atomic_init(&adapter->started, 0);
@@ -587,10 +595,30 @@ int turbo_flow_http_register_client_adapter(turbo_flow_t *flow, const char *name
   resource.ops.metadata = flow_http_client_resource_metadata;
   resource.ops.document = flow_http_client_resource_document;
   resource.ctx = adapter;
-  rc = turbo_flow_register_adapter_with_resources(
-      flow, name, &ops, adapter,
-      config->poll_interval_ms > 0 ? &FLOW_HTTP_POLL_SCHEMA : &FLOW_HTTP_CLIENT_SCHEMA, &resource,
-      1u);
+  memset(&primitive, 0, sizeof(primitive));
+  primitive.size = sizeof(primitive);
+  primitive.name = name;
+  primitive.type_name = TURBO_FLOW_HTTP_CLIENT_PRIMITIVE_TYPE;
+  primitive.version = TURBO_FLOW_HTTP_MODULE_VERSION;
+  primitive.domain = TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN;
+  primitive.kind = TURBO_FLOW_PRIMITIVE_RESOURCE;
+  operation_resources[0] = name;
+  registration.module_name = TURBO_FLOW_HTTP_CLIENT_MODULE;
+  registration.adapter_name = name;
+  registration.ops = &ops;
+  registration.ctx = adapter;
+  registration.schema =
+      config->poll_interval_ms > 0 ? &FLOW_HTTP_POLL_SCHEMA : &FLOW_HTTP_CLIENT_SCHEMA;
+  registration.operation_names =
+      config->poll_interval_ms > 0 ? poll_operation : request_operation;
+  registration.operation_count = 1u;
+  registration.resources = &resource;
+  registration.resource_count = 1u;
+  registration.operation_resource_names = operation_resources;
+  registration.primitives = &primitive;
+  registration.primitive_count = 1u;
+  rc = turbo_flow_register_module_adapter(flow, &registration);
+  if (rc != TURBO_OK) flow_http_client_shutdown(adapter);
   return rc;
 }
 

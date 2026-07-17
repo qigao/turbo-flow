@@ -3,6 +3,48 @@
 
 #include <string.h>
 
+typedef struct flow_product_provider_probe_s {
+  int adapter_calls;
+  int resource_calls;
+  int fail_adapter;
+  char order[8];
+  size_t order_len;
+} flow_product_provider_probe_t;
+
+static void flow_product_probe_record(flow_product_provider_probe_t *probe, char event) {
+  if (probe->order_len + 1u < sizeof(probe->order)) {
+    probe->order[probe->order_len++] = event;
+    probe->order[probe->order_len] = '\0';
+  }
+}
+
+static int flow_product_test_adapter_provider(void *ctx, turbo_flow_t *flow,
+                                              const turbo_flow_resolved_config_t *resolved,
+                                              const char *adapter_name,
+                                              turbo_flow_config_error_t *error) {
+  flow_product_provider_probe_t *probe = (flow_product_provider_probe_t *)ctx;
+  (void)resolved;
+  (void)error;
+  ++probe->adapter_calls;
+  flow_product_probe_record(probe, 'A');
+  if (probe->fail_adapter) return TURBO_EIO;
+  return turbo_flow_register_adapter(flow, adapter_name, NULL, NULL);
+}
+
+static int flow_product_test_resource_provider(void *ctx, turbo_flow_t *flow,
+                                               const turbo_flow_resolved_config_t *resolved,
+                                               const char *resource_name,
+                                               turbo_flow_config_error_t *error) {
+  flow_product_provider_probe_t *probe = (flow_product_provider_probe_t *)ctx;
+  (void)flow;
+  (void)resolved;
+  (void)resource_name;
+  (void)error;
+  ++probe->resource_calls;
+  flow_product_probe_record(probe, 'R');
+  return TURBO_OK;
+}
+
 spec("flow_config") {
   it("resolves process async ingress defaults and explicit bounds") {
     static const char defaults_yaml[] = "version: 1\nadapters: {}\n";
@@ -22,9 +64,9 @@ spec("flow_config") {
     turbo_flow_async_ingress_config_t ingress = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
     const char *json;
 
-    check_int_eq(turbo_flow_config_resolve_yaml(defaults_yaml, sizeof(defaults_yaml) - 1u,
-                                                &config, &error),
-                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_config_resolve_yaml(defaults_yaml, sizeof(defaults_yaml) - 1u, &config, &error),
+        TURBO_OK);
     check_int_eq(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
     check_uint_eq(ingress.workers, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS);
     check_size_eq(ingress.queue_capacity, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY);
@@ -35,9 +77,9 @@ spec("flow_config") {
     config = NULL;
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     ingress = (turbo_flow_async_ingress_config_t)TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(explicit_yaml, sizeof(explicit_yaml) - 1u,
-                                                &config, &error),
-                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_config_resolve_yaml(explicit_yaml, sizeof(explicit_yaml) - 1u, &config, &error),
+        TURBO_OK);
     check_int_eq(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
     check_uint_eq(ingress.workers, 3u);
     check_size_eq(ingress.queue_capacity, 17u);
@@ -46,9 +88,9 @@ spec("flow_config") {
     config = NULL;
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     ingress = (turbo_flow_async_ingress_config_t)TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(partial_yaml, sizeof(partial_yaml) - 1u, &config,
-                                                &error),
-                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_config_resolve_yaml(partial_yaml, sizeof(partial_yaml) - 1u, &config, &error),
+        TURBO_OK);
     check_int_eq(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
     check_uint_eq(ingress.workers, 2u);
     check_size_eq(ingress.queue_capacity, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY);
@@ -81,8 +123,8 @@ spec("flow_config") {
         TURBO_EINVAL);
     check_str_eq(error.path, "$.runtime.ingress.capacity");
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(too_many_workers,
-                                                sizeof(too_many_workers) - 1u, &config, &error),
+    check_int_eq(turbo_flow_config_resolve_yaml(too_many_workers, sizeof(too_many_workers) - 1u,
+                                                &config, &error),
                  TURBO_ERANGE);
     check_str_eq(error.path, "$.runtime.ingress.workers");
     check_null(config);
@@ -179,8 +221,7 @@ spec("flow_config") {
                  TURBO_EINVAL);
     check_str_contains(error.path, "fragments.connection.unused");
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(ambiguous, sizeof(ambiguous) - 1u, &config,
-                                                &error),
+    check_int_eq(turbo_flow_config_resolve_yaml(ambiguous, sizeof(ambiguous) - 1u, &config, &error),
                  TURBO_EALREADY);
     check_str_eq(error.path, "$.profiles.p.output");
     check_null(config);
@@ -300,6 +341,139 @@ spec("flow_config") {
     check_int_eq(turbo_flow_resolved_config_preflight_adapter_kinds(
                      config, both, sizeof(both) / sizeof(both[0]), &error),
                  TURBO_OK);
+    turbo_flow_resolved_config_destroy(config);
+  }
+
+  it("assembles each Graph resource and adapter once with resources first") {
+    static const char yaml[] = "version: 1\n"
+                               "channels:\n"
+                               "  routing:\n"
+                               "    kind: rule_set\n"
+                               "    config: {}\n"
+                               "adapters:\n"
+                               "  socket.in:\n"
+                               "    kind: socket\n"
+                               "    config: {role: source}\n"
+                               "  socket.out:\n"
+                               "    kind: socket\n"
+                               "    config: {role: sink}\n";
+    static const char graph[] = "source input adapter socket.in\n"
+                                "stage decide operation rules.apply resource routing\n"
+                                "stage output adapter socket.out\n"
+                                "stage audit adapter socket.out\n"
+                                "stage main {\n"
+                                "  input -> decide -> [output, audit]\n"
+                                "}\n";
+    flow_product_provider_probe_t probe = {0};
+    turbo_flow_product_adapter_provider_t adapter = TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT;
+    turbo_flow_product_resource_provider_t resource = TURBO_FLOW_PRODUCT_RESOURCE_PROVIDER_INIT;
+    turbo_flow_product_provider_registry_t registry = TURBO_FLOW_PRODUCT_PROVIDER_REGISTRY_INIT;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_t *flow = turbo_flow_create();
+
+    adapter.kind = "socket";
+    adapter.register_adapter = flow_product_test_adapter_provider;
+    adapter.ctx = &probe;
+    resource.kind = "rule_set";
+    resource.register_resource = flow_product_test_resource_provider;
+    resource.ctx = &probe;
+    registry.adapter_providers = &adapter;
+    registry.adapter_provider_count = 1u;
+    registry.resource_providers = &resource;
+    registry.resource_provider_count = 1u;
+
+    check_not_null(flow);
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_product_preflight(config, &registry, &error), TURBO_OK);
+    check_int_eq(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), TURBO_OK);
+    {
+      int rc = turbo_flow_product_assemble_graph(flow, config, &registry, &error);
+      info("assembly status=%d state=%d path=%s message=%s", rc, (int)turbo_flow_state(flow),
+           error.path, error.message);
+      check_int_eq(rc, TURBO_OK);
+    }
+    check_int_eq(probe.resource_calls, 1);
+    check_int_eq(probe.adapter_calls, 2);
+    check_str_eq(probe.order, "RAA");
+    check_size_eq(turbo_flow_adapter_count(flow), 2u);
+
+    turbo_flow_destroy(flow);
+    turbo_flow_resolved_config_destroy(config);
+  }
+
+  it("rejects missing and duplicate providers before invoking callbacks") {
+    static const char yaml[] = "version: 1\n"
+                               "adapters:\n"
+                               "  rpc.out:\n"
+                               "    kind: rpc\n"
+                               "    config: {}\n";
+    flow_product_provider_probe_t probe = {0};
+    turbo_flow_product_adapter_provider_t providers[2] = {TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT,
+                                                          TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT};
+    turbo_flow_product_provider_registry_t registry = TURBO_FLOW_PRODUCT_PROVIDER_REGISTRY_INIT;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_config_t *config = NULL;
+
+    providers[0].kind = "socket";
+    providers[0].register_adapter = flow_product_test_adapter_provider;
+    providers[0].ctx = &probe;
+    registry.adapter_providers = providers;
+    registry.adapter_provider_count = 1u;
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_product_preflight(config, &registry, &error), TURBO_ENOTSUP);
+    check_str_eq(error.path, "$.adapters.rpc.out.kind");
+    check_int_eq(probe.adapter_calls, 0);
+
+    providers[1] = providers[0];
+    registry.adapter_provider_count = 2u;
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_product_preflight(config, &registry, &error), TURBO_EALREADY);
+    check_str_eq(error.path, "$.providers.adapters");
+    check_int_eq(probe.adapter_calls, 0);
+    turbo_flow_resolved_config_destroy(config);
+  }
+
+  it("reports provider failure at the owning adapter path") {
+    static const char yaml[] = "version: 1\n"
+                               "adapters:\n"
+                               "  socket.out:\n"
+                               "    kind: socket\n"
+                               "    config: {role: sink}\n";
+    static const char graph[] = "source input\n"
+                                "stage output adapter socket.out\n"
+                                "stage main {\n"
+                                "  input -> output\n"
+                                "}\n";
+    flow_product_provider_probe_t probe = {0};
+    turbo_flow_product_adapter_provider_t adapter = TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT;
+    turbo_flow_product_provider_registry_t registry = TURBO_FLOW_PRODUCT_PROVIDER_REGISTRY_INIT;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_t *flow = turbo_flow_create();
+
+    probe.fail_adapter = 1;
+    adapter.kind = "socket";
+    adapter.register_adapter = flow_product_test_adapter_provider;
+    adapter.ctx = &probe;
+    registry.adapter_providers = &adapter;
+    registry.adapter_provider_count = 1u;
+    check_not_null(flow);
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), TURBO_OK);
+    {
+      int rc = turbo_flow_product_assemble_graph(flow, config, &registry, &error);
+      info("assembly status=%d state=%d path=%s message=%s", rc, (int)turbo_flow_state(flow),
+           error.path, error.message);
+      check_int_eq(rc, TURBO_EIO);
+    }
+    check_str_eq(error.path, "$.adapters.socket.out");
+    check_int_eq(probe.adapter_calls, 1);
+
+    turbo_flow_destroy(flow);
     turbo_flow_resolved_config_destroy(config);
   }
 }

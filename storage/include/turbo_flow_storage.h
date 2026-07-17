@@ -9,6 +9,14 @@
 extern "C" {
 #endif
 
+#define TURBO_FLOW_STORAGE_MODULE "buffer.storage"
+#define TURBO_FLOW_STORAGE_FILE_READ_OPERATION "storage.file.read"
+#define TURBO_FLOW_STORAGE_DIRECTORY_READ_OPERATION "storage.directory.read"
+#define TURBO_FLOW_STORAGE_FILE_WRITE_OPERATION "storage.file.write"
+#define TURBO_FLOW_STORAGE_APPEND_WRITE_OPERATION "storage.append.write"
+#define TURBO_FLOW_STORAGE_SQLITE_EXECUTE_OPERATION "storage.sqlite.execute"
+#define TURBO_FLOW_STORAGE_PRIMITIVE_TYPE "StorageResource"
+
 typedef enum turbo_flow_storage_encoding_e {
   TURBO_FLOW_STORAGE_ENCODING_BINARY = 0,
   TURBO_FLOW_STORAGE_ENCODING_UTF8

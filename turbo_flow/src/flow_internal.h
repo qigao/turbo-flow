@@ -62,6 +62,7 @@ typedef struct flow_stage_registration_s {
 typedef struct flow_operation_provider_registration_s {
   tstr_t operation_name;
   tstr_t resource_name;
+  tstr_t module_name;
   turbo_flow_stage_fn fn;
   turbo_flow_emitting_stage_fn emit_fn;
   turbo_flow_key_selector_fn key_selector;
@@ -76,6 +77,12 @@ typedef struct flow_operation_provider_registration_s {
   turbo_flow_stage_options_t options;
 } flow_operation_provider_registration_t;
 
+typedef struct flow_adapter_operation_binding_s {
+  tstr_t operation_name;
+  tstr_t module_name;
+  tstr_t resource_name;
+} flow_adapter_operation_binding_t;
+
 typedef struct flow_adapter_registration_s {
   tstr_t name;
   turbo_flow_adapter_ops_t ops;
@@ -84,6 +91,7 @@ typedef struct flow_adapter_registration_s {
   void *settlement_ctx;
   turbo_flow_adapter_schema_t schema;
   turbo_flow_option_field_t *schema_fields;
+  turbo_vec_t operation_bindings;
 } flow_adapter_registration_t;
 
 typedef struct flow_resource_registration_s {
@@ -105,6 +113,14 @@ typedef struct flow_operation_registration_s {
   tstr_t output_type;
   tstr_t resource_type;
 } flow_operation_registration_t;
+
+typedef struct flow_module_registration_s {
+  turbo_flow_module_descriptor_t descriptor;
+  tstr_t name;
+  turbo_vec_t primitive_types;
+  turbo_vec_t operation_names;
+  turbo_vec_t requirements;
+} flow_module_registration_t;
 
 typedef struct flow_active_adapter_s {
   uint32_t stage_index;
@@ -385,6 +401,7 @@ struct turbo_flow_s {
   turbo_vec_t operation_providers;
   turbo_vec_t primitives;
   turbo_vec_t operations;
+  turbo_vec_t modules;
   turbo_vec_t adapters;
   turbo_vec_t resources;
   turbo_vec_t active_adapters;
@@ -444,6 +461,11 @@ int flow_native_resource_command(turbo_flow_t *flow, size_t index,
 void flow_make_stage_view(const flow_stage_plan_impl_t *stage, turbo_flow_stage_plan_t *view);
 int flow_find_primitive_index(const turbo_flow_t *flow, const char *name);
 int flow_find_operation_index(const turbo_flow_t *flow, const char *name);
+int flow_find_module_index(const turbo_flow_t *flow, const char *name);
+int flow_find_operation_export_module(const turbo_flow_t *flow, const char *operation_name);
+const flow_adapter_operation_binding_t *
+flow_find_adapter_operation_binding(const flow_adapter_registration_t *adapter,
+                                    const char *operation_name);
 
 void flow_stage_impl_destroy(flow_stage_plan_impl_t *stage);
 void flow_registration_destroy(flow_stage_registration_t *reg);
@@ -452,9 +474,11 @@ void flow_resource_registration_destroy(flow_resource_registration_t *resource);
 void flow_adapter_registration_destroy(flow_adapter_registration_t *adapter);
 void flow_primitive_registration_destroy(flow_primitive_registration_t *primitive);
 void flow_operation_registration_destroy(flow_operation_registration_t *operation);
+void flow_module_registration_destroy(flow_module_registration_t *module);
 void flow_edge_impl_destroy(flow_edge_plan_impl_t *edge);
 int flow_msg_set_failure(turbo_flow_msg_t *msg, const char *stage_name, const char *adapter_name,
                          const char *route_name, int code, uint32_t attempt);
+int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg);
 void flow_clear_runtime_plan(turbo_flow_t *flow);
 void flow_clear_plan(turbo_flow_t *flow);
 void flow_clear_registry(turbo_flow_t *flow);

@@ -901,14 +901,62 @@ static int flow_queue_resource_document(void *ctx,
 
 static int flow_queue_register_adapter(turbo_flow_t *flow, const char *name,
                                        turbo_flow_queue_t *queue, flow_queue_adapter_role_t role) {
+  static const char *const primitive_types[] = {TURBO_FLOW_QUEUE_PRIMITIVE_TYPE};
+  static const char *const operation_names[] = {TURBO_FLOW_QUEUE_DEQUEUE_OPERATION,
+                                                TURBO_FLOW_QUEUE_ENQUEUE_OPERATION};
   flow_queue_adapter_t *adapter;
   turbo_flow_adapter_ops_t ops;
   turbo_flow_resource_provider_registration_t resource =
       TURBO_FLOW_RESOURCE_PROVIDER_REGISTRATION_INIT;
+  turbo_flow_module_adapter_registration_t registration =
+      TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+  turbo_flow_operation_descriptor_t operations[2];
+  turbo_flow_module_descriptor_t module;
+  turbo_flow_primitive_descriptor_t primitive;
   turbo_flow_adapter_schema_t schema;
+  const char *selected_operation[1];
+  const char *selected_resource[1];
   int rc;
   int resource_registered = 0;
   if (!flow || !name || name[0] == '\0' || !queue) return TURBO_EINVAL;
+  memset(operations, 0, sizeof(operations));
+  memset(&module, 0, sizeof(module));
+  for (size_t i = 0; i < 2u; ++i) {
+    operations[i].size = sizeof(operations[i]);
+    operations[i].name = operation_names[i];
+    operations[i].version = 1u;
+    operations[i].domain = TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE;
+    operations[i].resource_domain = TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE;
+    operations[i].resource_type = TURBO_FLOW_QUEUE_PRIMITIVE_TYPE;
+    operations[i].resource_min_version = 1u;
+    operations[i].resource_max_version = 1u;
+    operations[i].scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+    operations[i].scope.state = TURBO_FLOW_STATE_SCOPE_RESOURCE_OWNER;
+    operations[i].scope.lifetime = i == 0u ? TURBO_FLOW_LIFETIME_DISPATCH
+                                            : TURBO_FLOW_LIFETIME_CALL;
+    operations[i].scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+    operations[i].scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+    operations[i].flags = (i == 0u ? TURBO_FLOW_OPERATION_SOURCE
+                                   : TURBO_FLOW_OPERATION_STAGE) |
+                          TURBO_FLOW_OPERATION_BRIDGE;
+    operations[i].execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  }
+  operations[0].output_domain = TURBO_FLOW_DOMAIN_DATA;
+  operations[0].output_type = "Message";
+  operations[1].input_domain = TURBO_FLOW_DOMAIN_DATA;
+  operations[1].input_type = "Message";
+  module.size = sizeof(module);
+  module.name = TURBO_FLOW_QUEUE_MODULE;
+  module.version = 1u;
+  module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                            TURBO_FLOW_MODULE_MANAGED_RESOURCES |
+                            TURBO_FLOW_MODULE_NATIVE_API;
+  module.primitive_types = primitive_types;
+  module.primitive_type_count = 1u;
+  module.operation_names = operation_names;
+  module.operation_count = 2u;
+  rc = turbo_flow_register_module_contract(flow, &module, operations, 2u);
+  if (rc != TURBO_OK) return rc;
   adapter = (flow_queue_adapter_t *)calloc(1, sizeof(*adapter));
   if (!adapter) return TURBO_ENOMEM;
   adapter->queue = queue;
@@ -928,6 +976,27 @@ static int flow_queue_register_adapter(turbo_flow_t *flow, const char *name,
       role == FLOW_QUEUE_ADAPTER_SOURCE ? TURBO_FLOW_ADAPTER_INPUT : TURBO_FLOW_ADAPTER_OUTPUT;
   schema.fields = FLOW_QUEUE_FIELDS;
   schema.field_count = sizeof(FLOW_QUEUE_FIELDS) / sizeof(FLOW_QUEUE_FIELDS[0]);
+  memset(&primitive, 0, sizeof(primitive));
+  primitive.size = sizeof(primitive);
+  primitive.name = queue->owner_name;
+  primitive.type_name = TURBO_FLOW_QUEUE_PRIMITIVE_TYPE;
+  primitive.version = 1u;
+  primitive.domain = TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE;
+  primitive.kind = TURBO_FLOW_PRIMITIVE_RESOURCE;
+  selected_operation[0] = role == FLOW_QUEUE_ADAPTER_SOURCE
+                              ? TURBO_FLOW_QUEUE_DEQUEUE_OPERATION
+                              : TURBO_FLOW_QUEUE_ENQUEUE_OPERATION;
+  selected_resource[0] = queue->owner_name;
+  registration.module_name = TURBO_FLOW_QUEUE_MODULE;
+  registration.adapter_name = name;
+  registration.ops = &ops;
+  registration.ctx = adapter;
+  registration.schema = &schema;
+  registration.operation_names = selected_operation;
+  registration.operation_count = 1u;
+  registration.operation_resource_names = selected_resource;
+  registration.primitives = &primitive;
+  registration.primitive_count = 1u;
   for (size_t i = 0; i < turbo_flow_resource_metadata_count(flow); ++i) {
     turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
     rc = turbo_flow_resource_metadata_at(flow, i, &metadata);
@@ -946,7 +1015,7 @@ static int flow_queue_register_adapter(turbo_flow_t *flow, const char *name,
     }
   }
   if (resource_registered) {
-    rc = turbo_flow_register_adapter_ex(flow, name, &ops, adapter, &schema);
+    rc = turbo_flow_register_module_adapter(flow, &registration);
     if (rc != TURBO_OK) flow_queue_adapter_shutdown(adapter);
     return rc;
   }
@@ -955,8 +1024,10 @@ static int flow_queue_register_adapter(turbo_flow_t *flow, const char *name,
   resource.ops.snapshot = flow_queue_resource_snapshot;
   resource.ops.document = flow_queue_resource_document;
   resource.ctx = adapter;
-  rc =
-      turbo_flow_register_adapter_with_resources(flow, name, &ops, adapter, &schema, &resource, 1u);
+  registration.resources = &resource;
+  registration.resource_count = 1u;
+  rc = turbo_flow_register_module_adapter(flow, &registration);
+  if (rc != TURBO_OK) flow_queue_adapter_shutdown(adapter);
   return rc;
 }
 

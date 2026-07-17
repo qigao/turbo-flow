@@ -13,6 +13,10 @@
 extern "C" {
 #endif
 
+#define FLOWIE_MQTT_SERVER_MODULE "protocol.mqtt.server"
+#define FLOWIE_MQTT_PUBLISH_INGRESS_OPERATION "mqtt.publish.ingress"
+#define FLOWIE_MQTT_PACKET_EGRESS_OPERATION "mqtt.packet.egress"
+
 typedef struct turbo_flow_coronet_execution_binding_s turbo_flow_coronet_execution_binding_t;
 
 #define FLOWIE_ABI_V1 1u

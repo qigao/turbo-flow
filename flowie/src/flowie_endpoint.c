@@ -5366,6 +5366,48 @@ static int flowie_endpoint_restore_sessions(flowie_endpoint_t *endpoint) {
   return rc;
 }
 
+static int flowie_register_mqtt_server_contract(turbo_flow_t *flow) {
+  static const char *const primitive_types[] = {"MqttConnection", "MqttSendQueue",
+                                                "MqttSessionAggregate"};
+  static const char *const operation_names[] = {FLOWIE_MQTT_PUBLISH_INGRESS_OPERATION,
+                                                FLOWIE_MQTT_PACKET_EGRESS_OPERATION};
+  turbo_flow_operation_descriptor_t operations[2];
+  turbo_flow_module_descriptor_t module;
+  memset(operations, 0, sizeof(operations));
+  memset(&module, 0, sizeof(module));
+  for (size_t i = 0u; i < 2u; ++i) {
+    operations[i].size = sizeof(operations[i]);
+    operations[i].name = operation_names[i];
+    operations[i].version = 1u;
+    operations[i].domain = TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN;
+    operations[i].scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+    operations[i].scope.state = TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER;
+    operations[i].scope.lifetime = i == 0u ? TURBO_FLOW_LIFETIME_DISPATCH
+                                            : TURBO_FLOW_LIFETIME_CALL;
+    operations[i].scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+    operations[i].scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+    operations[i].flags = (i == 0u ? TURBO_FLOW_OPERATION_SOURCE
+                                   : TURBO_FLOW_OPERATION_STAGE) |
+                          TURBO_FLOW_OPERATION_BRIDGE;
+    operations[i].execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  }
+  operations[0].output_domain = TURBO_FLOW_DOMAIN_DATA;
+  operations[0].output_type = "Message";
+  operations[1].input_domain = TURBO_FLOW_DOMAIN_DATA;
+  operations[1].input_type = "Message";
+  module.size = sizeof(module);
+  module.name = FLOWIE_MQTT_SERVER_MODULE;
+  module.version = 1u;
+  module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                            TURBO_FLOW_MODULE_MANAGED_RESOURCES |
+                            TURBO_FLOW_MODULE_NATIVE_API;
+  module.primitive_types = primitive_types;
+  module.primitive_type_count = 3u;
+  module.operation_names = operation_names;
+  module.operation_count = 2u;
+  return turbo_flow_register_module_contract(flow, &module, operations, 2u);
+}
+
 static int
 flowie_register_endpoint_internal(turbo_flow_t *flow, const char *name,
                                   const flowie_endpoint_config_t *config,
@@ -5376,6 +5418,10 @@ flowie_register_endpoint_internal(turbo_flow_t *flow, const char *name,
   turbo_flow_adapter_ops_t ops;
   turbo_flow_adapter_schema_t schema;
   turbo_flow_resource_provider_registration_t resources[3];
+  turbo_flow_module_adapter_registration_t registration =
+      TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+  static const char *const operation_names[] = {FLOWIE_MQTT_PUBLISH_INGRESS_OPERATION,
+                                                FLOWIE_MQTT_PACKET_EGRESS_OPERATION};
   int rc;
   if (!flow || !name || name[0] == '\0' || !execution) return TURBO_EINVAL;
   if (turbo_flow_state(flow) == TURBO_FLOW_STATE_COMPILED ||
@@ -5398,6 +5444,8 @@ flowie_register_endpoint_internal(turbo_flow_t *flow, const char *name,
   if (execution->kind != TURBO_FLOW_CORONET_EXECUTION_PRIVATE &&
       (config->coroutine_stack_size != 0u || config->recv_buffer_size != 0u))
     return TURBO_ENOTSUP;
+  rc = flowie_register_mqtt_server_contract(flow);
+  if (rc != TURBO_OK) return rc;
   endpoint = (flowie_endpoint_t *)calloc(1, sizeof(*endpoint));
   if (!endpoint) return TURBO_ENOMEM;
   endpoint->transport = config->transport;
@@ -5622,8 +5670,18 @@ flowie_register_endpoint_internal(turbo_flow_t *flow, const char *name,
   endpoint->resources[1].kind = TURBO_FLOW_RESOURCE_QUEUE_BUFFER;
   endpoint->resources[2].kind = TURBO_FLOW_RESOURCE_PROTOCOL_AGGREGATE;
   resources[2].ops.command = flowie_resource_command;
-  return turbo_flow_register_adapter_with_resources(flow, name, &ops, endpoint, &schema, resources,
-                                                    3u);
+  registration.module_name = FLOWIE_MQTT_SERVER_MODULE;
+  registration.adapter_name = name;
+  registration.ops = &ops;
+  registration.ctx = endpoint;
+  registration.schema = &schema;
+  registration.operation_names = operation_names;
+  registration.operation_count = 2u;
+  registration.resources = resources;
+  registration.resource_count = 3u;
+  rc = turbo_flow_register_module_adapter(flow, &registration);
+  if (rc != TURBO_OK) flowie_endpoint_shutdown(endpoint);
+  return rc;
 }
 
 int flowie_register_endpoint_ex(turbo_flow_t *flow, const char *name,

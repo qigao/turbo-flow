@@ -56,8 +56,10 @@ cmake_dependent_option(TURBO_FLOW_BUILD_S3 "Build TurboHTTP S3 adapter" ON
                        "TURBO_FLOW_BUILD_ADAPTERS" OFF)
 cmake_dependent_option(TURBO_FLOW_BUILD_EMAIL "Build TurboNet SMTP adapter" ON
                        "TURBO_FLOW_BUILD_ADAPTERS" OFF)
-cmake_dependent_option(TURBO_FLOW_BUILD_FMQ "Build CoroNet FMQ adapters" ON
+cmake_dependent_option(TURBO_FLOW_BUILD_FMQ "Build the FlowMQ broker and TurboFlow connector" ON
                        "TURBO_FLOW_BUILD_ADAPTERS" OFF)
+option(TURBO_FLOW_BUILD_FMQ_PROTOCOL
+       "Build the standalone FlowMQ v2 protocol SDK without broker dependencies" OFF)
 cmake_dependent_option(TURBO_FLOW_BUILD_REDIS "Build TurboNet Redis Streams adapters" ON
                        "TURBO_FLOW_BUILD_ADAPTERS" OFF)
 cmake_dependent_option(TURBO_FLOW_BUILD_PGSQL "Build PostgreSQL sink adapter" ON

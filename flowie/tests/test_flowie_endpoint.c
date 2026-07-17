@@ -249,9 +249,11 @@ flowie_settlement_failure_flow(unsigned short port, flowie_endpoint_capture_t *c
 }
 
 static turbo_flow_t *flowie_reply_flow(unsigned short port, size_t send_hwm_bytes) {
-  static const char graph[] = "source mqtt_in adapter flowie.endpoint\n"
+  static const char graph[] = "source mqtt_in adapter flowie.endpoint operation "
+                              FLOWIE_MQTT_PUBLISH_INGRESS_OPERATION "\n"
                               "stage build_reply\n"
-                              "stage mqtt_reply adapter flowie.endpoint\n"
+                              "stage mqtt_reply adapter flowie.endpoint operation "
+                              FLOWIE_MQTT_PACKET_EGRESS_OPERATION "\n"
                               "stage main {\n"
                               "  mqtt_in -> build_reply -> mqtt_reply\n"
                               "}\n";
@@ -510,6 +512,12 @@ spec("Flowie MQTT endpoint primitive") {
     tstr_t json = NULL;
     check_int_gt(port, 0);
     check_not_null(flow);
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     flow, "flowie.endpoint", FLOWIE_MQTT_PUBLISH_INGRESS_OPERATION),
+                 FLOWIE_MQTT_SERVER_MODULE);
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     flow, "flowie.endpoint", FLOWIE_MQTT_PACKET_EGRESS_OPERATION),
+                 FLOWIE_MQTT_SERVER_MODULE);
     if (!flow) return;
     check_int_eq(turbo_flow_start(flow), TURBO_OK);
     client = flowie_test_connect(port);

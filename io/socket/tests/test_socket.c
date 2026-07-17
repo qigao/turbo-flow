@@ -856,7 +856,8 @@ spec("turbo_flow_coronet") {
 
   it("registers a generic socket adapter for inline owner stages") {
     static const char *src = "source input\n"
-                             "stage socket_out adapter \"socket.tcp\"\n"
+                             "stage socket_out adapter \"socket.tcp\" operation "
+                             TURBO_FLOW_SOCKET_SEND_OPERATION " resource \"socket.tcp\"\n"
                              "stage main {\n"
                              "  input -> socket_out\n"
                              "}\n";
@@ -875,6 +876,14 @@ spec("turbo_flow_coronet") {
     msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
 
     check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.tcp", NULL), TURBO_OK);
+    check_str_eq(turbo_flow_adapter_operation_module(
+                     flow, "socket.tcp", TURBO_FLOW_SOCKET_SEND_OPERATION),
+                 TURBO_FLOW_SOCKET_MODULE);
+    check_str_eq(turbo_flow_adapter_operation_resource(
+                     flow, "socket.tcp", TURBO_FLOW_SOCKET_SEND_OPERATION),
+                 "socket.tcp");
+    check_str_eq(turbo_flow_find_primitive(flow, "socket.tcp")->type_name,
+                 TURBO_FLOW_SOCKET_PRIMITIVE_TYPE);
     schema = turbo_flow_find_adapter_schema(flow, "socket.tcp");
     check_not_null(schema);
     check_int_eq(schema->kind, TURBO_FLOW_ADAPTER_KIND_SOCKET);

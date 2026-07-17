@@ -31,9 +31,15 @@ authority.
 ## Layers and ownership
 
 Flowie endpoint is itself a TurboFlow adapter primitive, in the same architectural position as
-`io/fmq`. It owns its CoroNet listener and accepted connection lanes; it does not depend on or
+the FlowMQ endpoint runtime. It owns its CoroNet listener and accepted connection lanes; it does not depend on or
 compose a generic `io/socket` adapter. Reusable code below this boundary is limited to the
 protocol-neutral CoroNet execution/runtime and connection snapshot helpers in `io/common`.
+
+Endpoint registration installs the `protocol.mqtt.server` module catalog. The graph-visible
+operations are `mqtt.publish.ingress` for an admitted application PUBLISH and
+`mqtt.packet.egress` for an encoded routed packet. They bind to the existing endpoint owner;
+CONNECT, SUBSCRIBE, UNSUBSCRIBE, PING, AUTH, QoS transitions, retained state, and session
+persistence remain internal owner behavior rather than invented graph operations.
 
 | Layer | Owner | Mutable state | Forbidden dependencies |
 |---|---|---|---|
@@ -416,11 +422,15 @@ publish ACK. Enhanced authentication exchange through AUTH is deliberately not i
 
 These ingress/session owners remain internal and their headers are not installed. The endpoint
 now has a tested graph-to-socket control reply path, but it is not yet a complete MQTT broker.
-`flowie_server` is the first product host: it resolves one Flowie profile, creates the existing
-bounded Queue and RuleSet resources, registers the endpoint, Queue source/sink, RulesForge
-operation, and CoroNet socket output adapters, compiles the separate TurboFlow DSL graph, and owns
-start/signal/stop order. `--check` performs the same resolution, resource creation, registration,
-and graph compilation without binding the listener.
+`flowie_server` is the first product host migrated to the shared product-provider registry. It
+resolves one Flowie profile as the allowed product boundary, preflights all adapter kinds before
+native resource creation, parses the separate TurboFlow DSL graph, then creates only the RuleSet
+resources and endpoint/Queue/socket adapters referenced by that Graph. Resource providers run
+before adapter providers; repeated references to the same endpoint or Queue binding do not create
+a second owner. The profile still constrains the permitted endpoint, Queue source/sink, RuleSet,
+and output names, and both Queue adapters must reference the same channel. It then compiles the
+Graph and owns start/signal/stop order. `--check` performs the same resolution, resource creation,
+provider assembly, and graph compilation without binding the listener.
 The current host supports unsecured endpoints, the Queue message boundary, and an optional
 `session_store` record-store channel backed by SQLite or Redis. It creates the selected provider
 from the same resolved snapshot, injects the borrowed store through

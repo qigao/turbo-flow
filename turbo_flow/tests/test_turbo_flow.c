@@ -4385,6 +4385,62 @@ suite("Turbo Flow") {
       }
     }
 
+    it("moves buffer-backed transport context through every graph data plane") {
+      static const char *broadcast_src = "source input\n"
+                                         "stage sink\n"
+                                         "stage main {\n"
+                                         "  input -> sink\n"
+                                         "}\n";
+      static const char *worker_src = "source input\n"
+                                      "stage sink worker 1\n"
+                                      "stage main {\n"
+                                      "  input -> sink\n"
+                                      "}\n";
+      static const char *thread_src = "source input\n"
+                                      "stage sink exec thread workers 1\n"
+                                      "stage main {\n"
+                                      "  input -> sink\n"
+                                      "}\n";
+      static const char *coro_src = "source input\n"
+                                    "stage sink exec coro lanes 1 pool 1\n"
+                                    "stage main {\n"
+                                    "  input -> sink\n"
+                                    "}\n";
+      const char *plans[] = {broadcast_src, worker_src, thread_src, coro_src};
+      struct {
+        int transport_marker;
+        char payload[3];
+      } owned = {7, {'a', 'b', 'c'}};
+
+      for (size_t i = 0; i < sizeof(plans) / sizeof(plans[0]); ++i) {
+        publish_trace_t trace = {{0}, 0};
+        publish_stage_ctx_t sink_ctx = {&trace, 1, TURBO_OK};
+        turbo_flow_msg_t msg;
+        turbo_flow_t *flow = turbo_flow_create();
+
+        check_not_null(flow);
+        turbo_flow_msg_init(&msg);
+        msg.id = 200u + i;
+        msg.buffer = mem_wrap_external(&owned, sizeof(owned), NULL, NULL);
+        check_not_null(msg.buffer);
+        msg.payload = tstr_v_from_buf(owned.payload, sizeof(owned.payload));
+        msg.transport_context = &owned.transport_marker;
+        check_int_eq(turbo_flow_parse_string(flow, plans[i], strlen(plans[i])), TURBO_OK);
+        check_int_eq(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
+                     TURBO_OK);
+        check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+        check_int_eq(turbo_flow_start(flow), TURBO_OK);
+        check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+        check_ptr_eq(msg.transport_context, &owned.transport_marker);
+        check_uint_eq(msg.id, 200u + i);
+        check_size_eq(trace.count, 1u);
+        check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+
+        turbo_flow_msg_cleanup(&msg);
+        turbo_flow_destroy(flow);
+      }
+    }
+
     it("returns thread executor message ownership before downstream release") {
       static const char *src = "source input\n"
                                "stage parse exec thread workers 2\n"

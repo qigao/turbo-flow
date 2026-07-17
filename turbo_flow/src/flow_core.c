@@ -96,6 +96,7 @@ void flow_operation_provider_registration_destroy(
   if (!provider) return;
   tstr_freep(&provider->operation_name);
   tstr_freep(&provider->resource_name);
+  tstr_freep(&provider->module_name);
   provider->fn = NULL;
   provider->emit_fn = NULL;
   provider->key_selector = NULL;
@@ -135,8 +136,18 @@ static void flow_adapter_schema_destroy(flow_adapter_registration_t *adapter) {
 }
 
 void flow_adapter_registration_destroy(flow_adapter_registration_t *adapter) {
+  size_t i;
   if (!adapter) return;
   if (adapter->ops.shutdown) adapter->ops.shutdown(adapter->ctx);
+  for (i = 0; i < turbo_vec_size(&adapter->operation_bindings); ++i) {
+    flow_adapter_operation_binding_t *binding =
+        (flow_adapter_operation_binding_t *)turbo_vec_at(&adapter->operation_bindings, i);
+    if (!binding) continue;
+    tstr_freep(&binding->operation_name);
+    tstr_freep(&binding->module_name);
+    tstr_freep(&binding->resource_name);
+  }
+  turbo_vec_destroy(&adapter->operation_bindings);
   flow_adapter_schema_destroy(adapter);
   tstr_freep(&adapter->name);
   memset(&adapter->ops, 0, sizeof(adapter->ops));
@@ -217,6 +228,13 @@ void flow_clear_registry(turbo_flow_t *flow) {
     flow_operation_registration_destroy(operation);
   }
   turbo_vec_clear(&flow->operations);
+
+  for (i = 0; i < turbo_vec_size(&flow->modules); ++i) {
+    flow_module_registration_t *module =
+        (flow_module_registration_t *)turbo_vec_at(&flow->modules, i);
+    flow_module_registration_destroy(module);
+  }
+  turbo_vec_clear(&flow->modules);
 
   for (i = 0; i < turbo_vec_size(&flow->resources); ++i) {
     flow_resource_registration_t *resource =
@@ -333,6 +351,7 @@ turbo_flow_t *turbo_flow_create(void) {
           TURBO_OK ||
       turbo_vec_init(&flow->primitives, sizeof(flow_primitive_registration_t)) != TURBO_OK ||
       turbo_vec_init(&flow->operations, sizeof(flow_operation_registration_t)) != TURBO_OK ||
+      turbo_vec_init(&flow->modules, sizeof(flow_module_registration_t)) != TURBO_OK ||
       turbo_vec_init(&flow->adapters, sizeof(flow_adapter_registration_t)) != TURBO_OK ||
       turbo_vec_init(&flow->resources, sizeof(flow_resource_registration_t)) != TURBO_OK ||
       turbo_vec_init(&flow->active_adapters, sizeof(flow_active_adapter_t)) != TURBO_OK ||
@@ -370,6 +389,7 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   turbo_vec_destroy(&flow->registrations);
   turbo_vec_destroy(&flow->primitives);
   turbo_vec_destroy(&flow->operations);
+  turbo_vec_destroy(&flow->modules);
   turbo_vec_destroy(&flow->adapters);
   turbo_vec_destroy(&flow->resources);
   turbo_vec_destroy(&flow->active_adapters);
@@ -783,12 +803,20 @@ int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
   }
 
   memset(&adapter, 0, sizeof(adapter));
+  if (turbo_vec_init(&adapter.operation_bindings,
+                     sizeof(flow_adapter_operation_binding_t)) != TURBO_OK) {
+    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+  }
   adapter.name = tstr_dup(name);
-  if (!adapter.name) return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+  if (!adapter.name) {
+    turbo_vec_destroy(&adapter.operation_bindings);
+    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+  }
   rc = flow_adapter_schema_copy(&adapter, schema);
   if (rc != TURBO_OK) {
     flow_adapter_schema_destroy(&adapter);
     tstr_freep(&adapter.name);
+    turbo_vec_destroy(&adapter.operation_bindings);
     return flow_set_error_keep_state(
         flow, rc, 0, 0, rc == TURBO_ENOMEM ? "out of memory" : "invalid adapter option schema");
   }
@@ -799,6 +827,7 @@ int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
   if (turbo_vec_push(&flow->adapters, &adapter) != TURBO_OK) {
     flow_adapter_schema_destroy(&adapter);
     tstr_freep(&adapter.name);
+    turbo_vec_destroy(&adapter.operation_bindings);
     return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
   }
   return TURBO_OK;
@@ -843,6 +872,325 @@ int turbo_flow_register_adapter_with_resources(
     return rc;
   }
   return TURBO_OK;
+}
+
+const flow_adapter_operation_binding_t *flow_find_adapter_operation_binding(
+    const flow_adapter_registration_t *adapter, const char *operation_name) {
+  size_t i;
+  if (!adapter || !operation_name) return NULL;
+  for (i = 0; i < turbo_vec_size(&adapter->operation_bindings); ++i) {
+    const flow_adapter_operation_binding_t *binding =
+        (const flow_adapter_operation_binding_t *)turbo_vec_at_const(
+            &adapter->operation_bindings, i);
+    if (binding && binding->operation_name &&
+        strcmp(binding->operation_name, operation_name) == 0) {
+      return binding;
+    }
+  }
+  return NULL;
+}
+
+static int flow_module_adapter_operation_valid(
+    const turbo_flow_module_adapter_registration_t *registration,
+    const turbo_flow_operation_descriptor_t *operation) {
+  uint32_t roles;
+  int source_supported;
+  int stage_supported;
+  if (!registration || !registration->ops || !registration->schema || !operation ||
+      (operation->scope.state != TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER &&
+       operation->scope.state != TURBO_FLOW_STATE_SCOPE_RESOURCE_OWNER &&
+       operation->scope.state != TURBO_FLOW_STATE_SCOPE_PROTOCOL_SESSION)) {
+    return 0;
+  }
+  roles = registration->schema->roles;
+  source_supported = (operation->flags & TURBO_FLOW_OPERATION_SOURCE) != 0u &&
+                     (roles & TURBO_FLOW_ADAPTER_SOURCE) != 0u &&
+                     registration->ops->start != NULL;
+  stage_supported = (operation->flags & TURBO_FLOW_OPERATION_STAGE) != 0u &&
+                    (roles & (TURBO_FLOW_ADAPTER_SINK | TURBO_FLOW_ADAPTER_TRANSFORM)) != 0u &&
+                    registration->ops->consume != NULL;
+  return source_supported || stage_supported;
+}
+
+static int flow_module_exports_primitive(const flow_module_registration_t *module,
+                                         const char *type_name) {
+  size_t i;
+  if (!module || !type_name) return 0;
+  for (i = 0; i < turbo_vec_size(&module->primitive_types); ++i) {
+    const tstr_t *current =
+        (const tstr_t *)turbo_vec_at_const(&module->primitive_types, i);
+    if (current && *current && strcmp(*current, type_name) == 0) return 1;
+  }
+  return 0;
+}
+
+static const turbo_flow_primitive_descriptor_t *flow_module_adapter_pending_primitive(
+    const turbo_flow_module_adapter_registration_t *registration, const char *name) {
+  size_t i;
+  if (!registration || !name) return NULL;
+  for (i = 0; i < registration->primitive_count; ++i) {
+    const turbo_flow_primitive_descriptor_t *primitive = &registration->primitives[i];
+    if (primitive->name && strcmp(primitive->name, name) == 0) return primitive;
+  }
+  return NULL;
+}
+
+static int flow_module_adapter_primitive_compatible(
+    const turbo_flow_primitive_descriptor_t *primitive,
+    const turbo_flow_operation_descriptor_t *operation) {
+  if (!primitive || !operation || primitive->size < sizeof(*primitive) ||
+      primitive->kind != TURBO_FLOW_PRIMITIVE_RESOURCE ||
+      primitive->domain != operation->resource_domain || !primitive->type_name ||
+      strcmp(primitive->type_name, operation->resource_type) != 0) {
+    return 0;
+  }
+  return operation->resource_min_version == 0u ||
+         (primitive->version >= operation->resource_min_version &&
+          (operation->resource_max_version == 0u ||
+           primitive->version <= operation->resource_max_version));
+}
+
+static void flow_module_adapter_registry_rollback(turbo_flow_t *flow, size_t resources_before,
+                                                  size_t primitives_before) {
+  while (turbo_vec_size(&flow->resources) > resources_before) {
+    size_t last = turbo_vec_size(&flow->resources) - 1u;
+    flow_resource_registration_t *resource =
+        (flow_resource_registration_t *)turbo_vec_at(&flow->resources, last);
+    flow_resource_registration_destroy(resource);
+    (void)turbo_vec_resize(&flow->resources, last);
+  }
+  while (turbo_vec_size(&flow->primitives) > primitives_before) {
+    size_t last = turbo_vec_size(&flow->primitives) - 1u;
+    flow_primitive_registration_t *primitive =
+        (flow_primitive_registration_t *)turbo_vec_at(&flow->primitives, last);
+    flow_primitive_registration_destroy(primitive);
+    (void)turbo_vec_resize(&flow->primitives, last);
+  }
+}
+
+static void flow_module_adapter_bindings_destroy(turbo_vec_t *bindings) {
+  size_t i;
+  if (!bindings) return;
+  for (i = 0; i < turbo_vec_size(bindings); ++i) {
+    flow_adapter_operation_binding_t *binding =
+        (flow_adapter_operation_binding_t *)turbo_vec_at(bindings, i);
+    if (!binding) continue;
+    tstr_freep(&binding->operation_name);
+    tstr_freep(&binding->module_name);
+    tstr_freep(&binding->resource_name);
+  }
+  turbo_vec_destroy(bindings);
+}
+
+int turbo_flow_register_module_adapter(
+    turbo_flow_t *flow, const turbo_flow_module_adapter_registration_t *registration) {
+  turbo_flow_module_adapter_registration_t normalized;
+  const flow_module_registration_t *module;
+  flow_adapter_registration_t *adapter;
+  turbo_vec_t bindings;
+  size_t adapters_before;
+  size_t resources_before;
+  size_t primitives_before;
+  size_t i;
+  int module_index;
+  int rc;
+
+  memset(&bindings, 0, sizeof(bindings));
+  memset(&normalized, 0, sizeof(normalized));
+
+  if (!flow || !registration ||
+      registration->size < TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_V1_SIZE) {
+    return TURBO_EINVAL;
+  }
+  memcpy(&normalized, registration,
+         registration->size < sizeof(normalized) ? registration->size : sizeof(normalized));
+  normalized.size = sizeof(normalized);
+  registration = &normalized;
+  if (!registration->module_name || registration->module_name[0] == '\0' ||
+      !registration->adapter_name || registration->adapter_name[0] == '\0' ||
+      !registration->ops || !registration->schema || !registration->operation_names ||
+      registration->operation_count == 0u ||
+      (registration->resource_count != 0u && !registration->resources) ||
+      (registration->primitive_count != 0u && !registration->primitives)) {
+    return TURBO_EINVAL;
+  }
+  module_index = flow_find_module_index(flow, registration->module_name);
+  if (module_index < 0) {
+    return flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0,
+                                     "adapter module is not registered");
+  }
+  module = (const flow_module_registration_t *)turbo_vec_at_const(&flow->modules,
+                                                                  (size_t)module_index);
+  for (i = 0; i < registration->operation_count; ++i) {
+    const turbo_flow_operation_descriptor_t *operation;
+    const turbo_flow_primitive_descriptor_t *primitive;
+    const char *resource_name = registration->operation_resource_names
+                                    ? registration->operation_resource_names[i]
+                                    : NULL;
+    int export_index;
+    size_t j;
+    if (!registration->operation_names[i] || registration->operation_names[i][0] == '\0') {
+      return TURBO_EINVAL;
+    }
+    for (j = 0; j < i; ++j) {
+      if (strcmp(registration->operation_names[i], registration->operation_names[j]) == 0) {
+        return TURBO_EINVAL;
+      }
+    }
+    operation = turbo_flow_find_operation(flow, registration->operation_names[i]);
+    export_index = flow_find_operation_export_module(flow, registration->operation_names[i]);
+    if (!operation || export_index < 0) {
+      return flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0,
+                                       "adapter operation is not exported by a module");
+    }
+    if ((size_t)export_index != (size_t)module_index || !module ||
+        !flow_module_adapter_operation_valid(registration, operation)) {
+      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+                                       "adapter operation is incompatible with its module owner");
+    }
+    if (operation->scope.state == TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER &&
+        operation->resource_type) {
+      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+                                       "adapter-owner operation cannot require a resource primitive");
+    }
+    if (operation->resource_type) {
+      if (!resource_name || resource_name[0] == '\0' ||
+          !flow_module_exports_primitive(module, operation->resource_type)) {
+        return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+                                         "adapter operation resource is not exported by its module");
+      }
+      primitive = turbo_flow_find_primitive(flow, resource_name);
+      if (!primitive) {
+        primitive = flow_module_adapter_pending_primitive(registration, resource_name);
+      }
+      if (!flow_module_adapter_primitive_compatible(primitive, operation)) {
+        return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+                                         "adapter operation resource primitive is incompatible");
+      }
+    } else if (resource_name) {
+      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+                                       "adapter-owned operation cannot bind a resource primitive");
+    }
+  }
+
+  for (i = 0; i < registration->primitive_count; ++i) {
+    const turbo_flow_primitive_descriptor_t *primitive = &registration->primitives[i];
+    const turbo_flow_primitive_descriptor_t *current;
+    size_t j;
+    if (primitive->size < sizeof(*primitive) || !primitive->name ||
+        primitive->name[0] == '\0' || !primitive->type_name ||
+        primitive->type_name[0] == '\0' || primitive->version == 0u ||
+        primitive->domain < TURBO_FLOW_DOMAIN_DATA ||
+        primitive->domain > TURBO_FLOW_DOMAIN_MANAGEMENT ||
+        primitive->kind != TURBO_FLOW_PRIMITIVE_RESOURCE) {
+      return TURBO_EINVAL;
+    }
+    for (j = 0; j < i; ++j) {
+      if (strcmp(primitive->name, registration->primitives[j].name) == 0) return TURBO_EINVAL;
+    }
+    current = turbo_flow_find_primitive(flow, primitive->name);
+    if (current &&
+        (current->version != primitive->version || current->domain != primitive->domain ||
+         current->kind != primitive->kind || strcmp(current->type_name, primitive->type_name) != 0)) {
+      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+                                       "adapter primitive contract is incompatible");
+    }
+  }
+
+  if (turbo_vec_init(&bindings, sizeof(flow_adapter_operation_binding_t)) != TURBO_OK ||
+      turbo_vec_reserve(&bindings, registration->operation_count) != TURBO_OK) {
+    flow_module_adapter_bindings_destroy(&bindings);
+    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+  }
+  for (i = 0; i < registration->operation_count; ++i) {
+    flow_adapter_operation_binding_t binding;
+    memset(&binding, 0, sizeof(binding));
+    binding.operation_name = tstr_dup(registration->operation_names[i]);
+    binding.module_name = tstr_dup(registration->module_name);
+    if (registration->operation_resource_names && registration->operation_resource_names[i]) {
+      binding.resource_name = tstr_dup(registration->operation_resource_names[i]);
+    }
+    if (!binding.operation_name || !binding.module_name ||
+        (registration->operation_resource_names && registration->operation_resource_names[i] &&
+         !binding.resource_name) ||
+        turbo_vec_push(&bindings, &binding) != TURBO_OK) {
+      tstr_freep(&binding.operation_name);
+      tstr_freep(&binding.module_name);
+      tstr_freep(&binding.resource_name);
+      flow_module_adapter_bindings_destroy(&bindings);
+      return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    }
+  }
+
+  adapters_before = turbo_vec_size(&flow->adapters);
+  resources_before = turbo_vec_size(&flow->resources);
+  primitives_before = turbo_vec_size(&flow->primitives);
+  for (i = 0; i < registration->primitive_count; ++i) {
+    if (turbo_flow_find_primitive(flow, registration->primitives[i].name)) continue;
+    rc = turbo_flow_register_primitive(flow, &registration->primitives[i]);
+    if (rc != TURBO_OK) {
+      flow_module_adapter_registry_rollback(flow, resources_before, primitives_before);
+      flow_module_adapter_bindings_destroy(&bindings);
+      return rc;
+    }
+  }
+  for (i = 0; i < registration->resource_count; ++i) {
+    const turbo_flow_resource_provider_registration_t *resource = &registration->resources[i];
+    if (resource->size < sizeof(*resource) || !resource->owner_name ||
+        resource->owner_name[0] == '\0') {
+      flow_module_adapter_registry_rollback(flow, resources_before, primitives_before);
+      flow_module_adapter_bindings_destroy(&bindings);
+      return TURBO_EINVAL;
+    }
+    rc = turbo_flow_register_resource_provider(flow, resource->owner_name, &resource->ops,
+                                               resource->ctx);
+    if (rc != TURBO_OK) {
+      flow_module_adapter_registry_rollback(flow, resources_before, primitives_before);
+      flow_module_adapter_bindings_destroy(&bindings);
+      return rc;
+    }
+  }
+  rc = turbo_flow_register_adapter_ex(flow, registration->adapter_name, registration->ops,
+                                      registration->ctx, registration->schema);
+  if (rc != TURBO_OK) {
+    flow_module_adapter_registry_rollback(flow, resources_before, primitives_before);
+    flow_module_adapter_bindings_destroy(&bindings);
+    return rc;
+  }
+  adapter = (flow_adapter_registration_t *)turbo_vec_at(&flow->adapters, adapters_before);
+  turbo_vec_destroy(&adapter->operation_bindings);
+  adapter->operation_bindings = bindings;
+  return TURBO_OK;
+}
+
+const char *turbo_flow_adapter_operation_module(const turbo_flow_t *flow,
+                                                const char *adapter_name,
+                                                const char *operation_name) {
+  const flow_adapter_registration_t *adapter;
+  const flow_adapter_operation_binding_t *binding;
+  int index;
+  if (!flow || !adapter_name || !operation_name) return NULL;
+  index = flow_find_adapter(flow, adapter_name);
+  if (index < 0) return NULL;
+  adapter = (const flow_adapter_registration_t *)turbo_vec_at_const(&flow->adapters,
+                                                                    (size_t)index);
+  binding = flow_find_adapter_operation_binding(adapter, operation_name);
+  return binding ? binding->module_name : NULL;
+}
+
+const char *turbo_flow_adapter_operation_resource(const turbo_flow_t *flow,
+                                                  const char *adapter_name,
+                                                  const char *operation_name) {
+  const flow_adapter_registration_t *adapter;
+  const flow_adapter_operation_binding_t *binding;
+  int index;
+  if (!flow || !adapter_name || !operation_name) return NULL;
+  index = flow_find_adapter(flow, adapter_name);
+  if (index < 0) return NULL;
+  adapter = (const flow_adapter_registration_t *)turbo_vec_at_const(&flow->adapters,
+                                                                    (size_t)index);
+  binding = flow_find_adapter_operation_binding(adapter, operation_name);
+  return binding ? binding->resource_name : NULL;
 }
 
 int turbo_flow_set_observer(turbo_flow_t *flow, const turbo_flow_observer_ops_t *ops, void *ctx) {

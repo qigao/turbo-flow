@@ -9,8 +9,7 @@ int flow_entry_header_init(const turbo_flow_t *flow, flow_entry_header_t *header
                            flow_stage_completion_t *completion_handle) {
   if (!flow || !header || stage_index >= turbo_vec_size(&flow->stages) ||
       segment_kind < FLOW_DATA_SEGMENT_DIRECT || segment_kind > FLOW_DATA_SEGMENT_FANIN_GATE ||
-      ownership < FLOW_ENTRY_OWNERSHIP_BORROWED ||
-      ownership > FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE) {
+      ownership < FLOW_ENTRY_OWNERSHIP_BORROWED || ownership > FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE) {
     return TURBO_EINVAL;
   }
   *header = (flow_entry_header_t)FLOW_ENTRY_HEADER_INIT;
@@ -27,14 +26,13 @@ int flow_entry_header_init(const turbo_flow_t *flow, flow_entry_header_t *header
 
 int flow_entry_header_validate(const turbo_flow_t *flow, const flow_entry_header_t *header,
                                const turbo_flow_msg_t *message) {
-  if (!flow || !header || header->size < sizeof(*header) ||
-      header->runtime_generation == 0u ||
+  if (!flow || !header || header->size < sizeof(*header) || header->runtime_generation == 0u ||
       header->runtime_generation != flow->runtime_generation ||
       header->stage_index >= turbo_vec_size(&flow->stages) ||
       header->segment_kind < FLOW_DATA_SEGMENT_DIRECT ||
       header->segment_kind > FLOW_DATA_SEGMENT_FANIN_GATE ||
       header->ownership != FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE || !message ||
-      header->message_id != message->id || message->transport_context) {
+      header->message_id != message->id || flow_msg_transport_context_is_borrowed(message)) {
     return TURBO_EPROTO;
   }
   return TURBO_OK;
@@ -63,9 +61,9 @@ static int flow_dispatch_prepare_completion(turbo_flow_t *flow, flow_stage_plan_
                                   FLOW_DATA_SEGMENT_WORKER_POOL, 0u, sequence, msg_id,
                                   FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE, completion);
   } else {
-    return flow_entry_header_init(flow, &completion->entry, stage_index,
-                                  FLOW_DATA_SEGMENT_DIRECT, 0u, sequence, msg_id,
-                                  FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE, completion);
+    return flow_entry_header_init(flow, &completion->entry, stage_index, FLOW_DATA_SEGMENT_DIRECT,
+                                  0u, sequence, msg_id, FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE,
+                                  completion);
   }
 }
 
@@ -123,8 +121,7 @@ static int flow_dispatch_sync_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *
   }
   flow_settlement_scope_leave(previous_settlement);
   if (started_at != 0u &&
-      turbo_hrtime() - started_at >=
-          runtime->deadline_ms * FLOW_NANOSECONDS_PER_MILLISECOND) {
+      turbo_hrtime() - started_at >= runtime->deadline_ms * FLOW_NANOSECONDS_PER_MILLISECOND) {
     return TURBO_ETIMEDOUT;
   }
   return status;
@@ -252,13 +249,13 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
       status = flow_emitter_init(emitter, executor->max_outputs);
       if (status == TURBO_OK) {
         if (executor->window_fn) {
-          status = flow_event_time_window_execute(
-              executor->keyed_store, executor->key_selector, executor->key_ctx,
-              executor->window_fn, executor->ctx, msg);
+          status = flow_event_time_window_execute(executor->keyed_store, executor->key_selector,
+                                                  executor->key_ctx, executor->window_fn,
+                                                  executor->ctx, msg);
         } else if (executor->keyed_emit_fn) {
-          status = flow_keyed_state_execute_emitting(
-              executor->keyed_store, executor->key_selector, executor->key_ctx,
-              executor->keyed_emit_fn, executor->ctx, msg, emitter);
+          status = flow_keyed_state_execute_emitting(executor->keyed_store, executor->key_selector,
+                                                     executor->key_ctx, executor->keyed_emit_fn,
+                                                     executor->ctx, msg, emitter);
         } else {
           status = flow_dispatch_inline_emitting_stage(executor, msg, emitter);
         }

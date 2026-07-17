@@ -341,6 +341,11 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
                              ? flow_find_operation_provider(flow, stage->operation_name,
                                                             stage->resource_name)
                              : -1;
+    int module_index = stage->operation_name
+                           ? flow_find_operation_export_module(flow, stage->operation_name)
+                           : -1;
+    const turbo_flow_operation_descriptor_t *operation =
+        stage->operation_name ? turbo_flow_find_operation(flow, stage->operation_name) : NULL;
     const flow_adapter_registration_t *adapter = NULL;
 
     if (stage_in_inactive_template(flow, stage)) continue;
@@ -386,6 +391,50 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
         return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
                               "retry adapter stage may not override consume with a callback");
       }
+    }
+
+    if (module_index >= 0) {
+      const flow_module_registration_t *module =
+          (const flow_module_registration_t *)turbo_vec_at_const(&flow->modules,
+                                                                 (size_t)module_index);
+      if (provider_index >= 0) {
+        const flow_operation_provider_registration_t *provider =
+            (const flow_operation_provider_registration_t *)turbo_vec_at_const(
+                &flow->operation_providers, (size_t)provider_index);
+        if (!provider || !provider->module_name || !module || !module->name ||
+            strcmp(provider->module_name, module->name) != 0) {
+          return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+                                "cataloged operation provider is not bound to its module owner");
+        }
+      } else if (reg_index >= 0) {
+        return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+                              "legacy stage callback cannot implement a cataloged operation");
+      } else if (adapter) {
+        const flow_adapter_operation_binding_t *binding =
+            flow_find_adapter_operation_binding(adapter, stage->operation_name);
+        if (!binding || !binding->module_name || !module || !module->name ||
+            strcmp(binding->module_name, module->name) != 0) {
+          return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+                                "cataloged adapter operation is not bound to its module owner");
+        }
+        if (operation && operation->resource_type &&
+            (!binding->resource_name || !stage->resource_name ||
+             strcmp(binding->resource_name, stage->resource_name) != 0)) {
+          return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+                                "cataloged adapter operation is bound to another resource primitive");
+        }
+        if (stage->is_source && !adapter->ops.start) {
+          return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+                                "cataloged source adapter operation has no start callback");
+        }
+      } else if (operation &&
+                 operation->scope.state == TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER) {
+        return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+                              "adapter-owner operation requires a typed adapter binding");
+      }
+    } else if (operation && operation->scope.state == TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER) {
+      return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+                            "adapter-owner operation requires a module owner");
     }
 
     if (!stage->is_source && !stage->is_port && reg_index < 0 && provider_index < 0 &&
@@ -758,6 +807,13 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
           strcmp(resource->type_name, operation->resource_type) != 0) {
         return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
                               "resource primitive does not satisfy operation contract");
+      }
+      if (operation->resource_min_version != 0u &&
+          (resource->version < operation->resource_min_version ||
+           (operation->resource_max_version != 0u &&
+            resource->version > operation->resource_max_version))) {
+        return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+                              "resource primitive version is incompatible with operation contract");
       }
     } else if (stage->resource_name) {
       return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,

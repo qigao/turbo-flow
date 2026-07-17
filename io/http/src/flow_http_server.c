@@ -320,14 +320,22 @@ static void flow_http_server_shutdown(void *ctx) {
 
 int turbo_flow_http_register_server_adapter(turbo_flow_t *flow, const char *name,
                                             const turbo_flow_http_server_config_t *config) {
+  static const char *const operations[] = {TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION,
+                                           TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION};
   flow_http_server_adapter_t *adapter;
   turbo_flow_adapter_ops_t ops;
+  turbo_flow_module_adapter_registration_t registration =
+      TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+  turbo_flow_primitive_descriptor_t primitive;
+  const char *operation_resources[2] = {name, name};
   int rc;
   if (!flow || !name || name[0] == '\0' || !config || config->port == 0 || !config->route ||
       config->route[0] != '/' || !flow_http_server_method_valid(config->method) ||
       config->response_status < 0 || config->response_status > 599) {
     return TURBO_EINVAL;
   }
+  rc = flow_http_register_server_module_contract(flow);
+  if (rc != TURBO_OK) return rc;
   adapter = (flow_http_server_adapter_t *)calloc(1, sizeof(*adapter));
   if (!adapter) return TURBO_ENOMEM;
   atomic_init(&adapter->started, 0);
@@ -381,7 +389,24 @@ int turbo_flow_http_register_server_adapter(turbo_flow_t *flow, const char *name
   ops.stop = flow_http_server_stop;
   ops.shutdown = flow_http_server_shutdown;
   ops.connection_snapshot = flow_http_server_connection_snapshot;
-  rc = turbo_flow_register_adapter_ex(flow, name, &ops, adapter, &FLOW_HTTP_SERVER_SCHEMA);
+  memset(&primitive, 0, sizeof(primitive));
+  primitive.size = sizeof(primitive);
+  primitive.name = name;
+  primitive.type_name = TURBO_FLOW_HTTP_SERVER_PRIMITIVE_TYPE;
+  primitive.version = TURBO_FLOW_HTTP_MODULE_VERSION;
+  primitive.domain = TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN;
+  primitive.kind = TURBO_FLOW_PRIMITIVE_RESOURCE;
+  registration.module_name = TURBO_FLOW_HTTP_SERVER_MODULE;
+  registration.adapter_name = name;
+  registration.ops = &ops;
+  registration.ctx = adapter;
+  registration.schema = &FLOW_HTTP_SERVER_SCHEMA;
+  registration.operation_names = operations;
+  registration.operation_count = sizeof(operations) / sizeof(operations[0]);
+  registration.operation_resource_names = operation_resources;
+  registration.primitives = &primitive;
+  registration.primitive_count = 1u;
+  rc = turbo_flow_register_module_adapter(flow, &registration);
   if (rc != TURBO_OK) flow_http_server_shutdown(adapter);
   return rc;
 }

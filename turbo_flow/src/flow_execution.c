@@ -70,7 +70,7 @@ int flow_execution_task_init(flow_execution_task_t *task, flow_execution_backend
   task->completion.entry.completion_handle = &task->completion;
   task->completion.entry.cancel_handle = &task->cancel_requested;
   task->completion.entry.deadline_at_ns = 0u;
-  if (msg->transport_context) {
+  if (flow_msg_transport_context_is_borrowed(msg)) {
     flow_execution_task_cleanup(task);
     return TURBO_EINVAL;
   }
@@ -95,9 +95,8 @@ void flow_execution_task_run(flow_execution_task_t *task) {
   if (task->deadline_ms != 0u) {
     turbo_mutex_lock(&task->mutex);
     atomic_store_explicit(&task->deadline_at_ns,
-                          turbo_hrtime() +
-                              task->deadline_ms * FLOW_NANOSECONDS_PER_MILLISECOND,
-                           memory_order_release);
+                          turbo_hrtime() + task->deadline_ms * FLOW_NANOSECONDS_PER_MILLISECOND,
+                          memory_order_release);
     task->completion.entry.deadline_at_ns =
         atomic_load_explicit(&task->deadline_at_ns, memory_order_acquire);
     turbo_cond_broadcast(&task->cond);
@@ -137,8 +136,7 @@ int flow_execution_task_wait(flow_execution_task_t *task, turbo_flow_msg_t *msg,
   turbo_mutex_lock(&task->mutex);
   while (atomic_load_explicit(&task->state, memory_order_acquire) != FLOW_EXECUTION_COMPLETED &&
          atomic_load_explicit(&task->state, memory_order_acquire) != FLOW_EXECUTION_CANCELED) {
-    uint64_t deadline_at_ns =
-        atomic_load_explicit(&task->deadline_at_ns, memory_order_acquire);
+    uint64_t deadline_at_ns = atomic_load_explicit(&task->deadline_at_ns, memory_order_acquire);
     if (deadline_at_ns != 0u &&
         !atomic_load_explicit(&task->deadline_expired, memory_order_acquire)) {
       uint64_t now = turbo_hrtime();

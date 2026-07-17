@@ -192,8 +192,11 @@ It is rejected while started. A stopped compiled flow may be started again.
 - `buffer` owns shared bytes through `mem_buffer_t` retain/release.
 - `payload` is a borrowed view backed by `buffer` or `owned_payload`.
 - `owned_payload` owns transformed text.
-- `transport_context` is borrowed adapter request state propagated through the
-  graph and never destroyed by the core.
+- `transport_context` has two explicit ownership forms. An address inside the
+  message `buffer` is message-owned metadata and follows that retained buffer
+  across graph/Disruptor boundaries. Any other address is borrowed adapter
+  request state: core propagates it inline, never destroys it, and rejects it at
+  worker, thread, coroutine, and broadcast boundaries.
 - `_content_handle` is core-private; callers attach typed objects only through
   the schema projection APIs and never install arbitrary destroy callbacks.
 - `content_descriptor` is a borrowed immutable content identity. Its adapter or
@@ -335,6 +338,34 @@ cannot overlay concrete adapter fields. Adapter creation copies its resolved
 configuration, and later endpoint changes use explicit owner commands rather
 than mutating profile state.
 
+## Product Assembly
+
+Every TurboFlow product uses the same application model:
+
+```text
+YAML resources/adapters -> Graph source -> processors/subgraphs -> Graph sink
+                                  |
+                         bounded TurboFlow data plane
+```
+
+Trusted host code supplies a caller-owned `turbo_flow_product_provider_registry_t`.
+Adapter providers own native source, sink, and protocol-bridge construction;
+resource providers construct processors such as RulesForge and bind their typed
+operations. `turbo_flow_product_preflight()` validates every resolved adapter
+kind before a provider callback or native side effect. After parsing,
+`turbo_flow_product_assemble_graph()` registers only resources and adapters
+explicitly referenced by the Graph, with resources before adapters and one
+callback per distinct name. Unused configured channels remain valid resources;
+unused adapters still require an enabled provider but are not started.
+
+The registry is dependency injection, not a global service locator or plugin
+loader. It is borrowed for one synchronous build and never becomes a second
+resource owner. A failed callback may have created native state, so the host
+discards that Flow generation and destroys provider-owned resources in reverse
+ownership order. Protocol FSM, connection/session state, ACK/QoS, database
+transactions, and retry ownership remain inside the selected native provider;
+the Graph sees complete owned messages and typed operations.
+
 Implemented modules:
 
 | Module | Current behavior |
@@ -355,12 +386,35 @@ Implemented modules:
 | `TurboFlow::Queue` | Shared bounded in-memory source/sink boundary with explicit ack |
 
 `TurboFlow::Http` remains a compatibility aggregate for the split HTTP client
-and server targets.
+and server targets. HTTP continues to use the existing TurboHTTP/Iris native
+endpoint and adapter implementation; it is not migrated onto the generic socket
+primitive. `io.socket` binds receive/send to its own `SocketEndpoint`;
+`io.http.client` and `io.http.server` bind request/poll and request/reply to
+their actual `HttpClientConnection` or `HttpServerEndpoint`. RPC uses distinct
+client/server resources. These catalogs validate ownership without replacing
+any native transport owner.
+
+Trusted host code may use a versioned binding to inject a borrowed or ownership-transferred
+`http_client_t` into an RPC client adapter. The RPC wrapper never owns that
+HTTP client itself; adapter shutdown destroys the wrapper first and then
+destroys the HTTP client only when ownership was transferred. YAML cannot
+construct this host object, and a borrowed client may not be concurrently
+driven by another adapter.
+
+Core also provides an opt-in module catalog above primitive/operation
+registrations. A module declares its version, capabilities, primitive type and
+operation exports, plus already-registered dependency ranges. Typed operation
+providers and native adapters can be bound to the module that owns the exported operation. The
+catalog is validation and read-only discovery metadata: it is not a loader,
+resource factory, or Graph DSL construct. Production registrations now include
+RulesForge, native HTTP/RPC client/server, FMQ pattern operations, Flowie MQTT
+ingress/egress, Queue, and file/directory/SQLite Storage. Queue and Storage bind
+their adapter operations to explicit versioned resource primitives.
 
 FMQ uses a bounded versioned TurboFlow protocol over CoroNet TCP/TLS. It is
 ZeroMQ-like at the messaging-pattern level but is not ZeroMQ wire compatible.
 Its dotted primitive bindings and strict endpoint pairings are documented in
-`io/fmq/README.md`. Payload codec and DataBind processing remains in
+`flowmq/README.md`. Payload codec and DataBind processing remains in
 explicit graph stages.
 
 ## Build Components

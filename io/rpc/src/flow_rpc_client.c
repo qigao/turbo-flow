@@ -22,6 +22,7 @@ typedef struct flow_rpc_client_adapter_s {
   tstr_t poll_params;
   uint32_t poll_interval_ms;
   http_client_t *http_client;
+  int owns_http_client;
   rpc_client_t *rpc_client;
   atomic_int started;
   tf_connection_state_t connection;
@@ -32,6 +33,51 @@ typedef struct flow_rpc_client_adapter_s {
   int poll_thread_started;
   turbo_thread_t poll_thread;
 } flow_rpc_client_adapter_t;
+
+static int flow_rpc_register_client_contract(turbo_flow_t *flow) {
+  static const char *const primitive_types[] = {TURBO_FLOW_RPC_CLIENT_PRIMITIVE_TYPE};
+  static const char *const operation_names[] = {TURBO_FLOW_RPC_CLIENT_CALL_OPERATION,
+                                                TURBO_FLOW_RPC_CLIENT_POLL_OPERATION};
+  turbo_flow_operation_descriptor_t operations[2];
+  turbo_flow_module_descriptor_t module;
+  memset(operations, 0, sizeof(operations));
+  memset(&module, 0, sizeof(module));
+  for (size_t i = 0; i < 2u; ++i) {
+    operations[i].size = sizeof(operations[i]);
+    operations[i].name = operation_names[i];
+    operations[i].version = TURBO_FLOW_RPC_MODULE_VERSION;
+    operations[i].domain = TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN;
+    operations[i].output_domain = TURBO_FLOW_DOMAIN_DATA;
+    operations[i].output_type = "Message";
+    operations[i].resource_domain = TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN;
+    operations[i].resource_type = TURBO_FLOW_RPC_CLIENT_PRIMITIVE_TYPE;
+    operations[i].resource_min_version = TURBO_FLOW_RPC_MODULE_VERSION;
+    operations[i].resource_max_version = TURBO_FLOW_RPC_MODULE_VERSION;
+    operations[i].scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+    operations[i].scope.state = TURBO_FLOW_STATE_SCOPE_RESOURCE_OWNER;
+    operations[i].scope.lifetime = i == 0u ? TURBO_FLOW_LIFETIME_CALL
+                                            : TURBO_FLOW_LIFETIME_DISPATCH;
+    operations[i].scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+    operations[i].scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+    operations[i].flags = (i == 0u ? TURBO_FLOW_OPERATION_STAGE
+                                   : TURBO_FLOW_OPERATION_SOURCE) |
+                          TURBO_FLOW_OPERATION_BRIDGE;
+    operations[i].execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  }
+  operations[0].input_domain = TURBO_FLOW_DOMAIN_DATA;
+  operations[0].input_type = "Message";
+  module.size = sizeof(module);
+  module.name = TURBO_FLOW_RPC_CLIENT_MODULE;
+  module.version = TURBO_FLOW_RPC_MODULE_VERSION;
+  module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                            TURBO_FLOW_MODULE_MANAGED_RESOURCES |
+                            TURBO_FLOW_MODULE_NATIVE_API;
+  module.primitive_types = primitive_types;
+  module.primitive_type_count = 1u;
+  module.operation_names = operation_names;
+  module.operation_count = 2u;
+  return turbo_flow_register_module_contract(flow, &module, operations, 2u);
+}
 
 static int flow_rpc_client_wait_for_ms(flow_rpc_client_adapter_t *adapter, uint32_t delay_ms) {
   int rc;
@@ -47,6 +93,8 @@ static int flow_rpc_client_wait_for_ms(flow_rpc_client_adapter_t *adapter, uint3
 }
 
 static const turbo_flow_option_field_t FLOW_RPC_CLIENT_FIELDS[] = {
+    {"http_client", TURBO_FLOW_OPTION_HOST_OBJECT, TURBO_FLOW_OPTION_NOT_SERIALIZABLE, 0, 0, NULL,
+     0},
     {"url", TURBO_FLOW_OPTION_STRING, TURBO_FLOW_OPTION_REQUIRED, 0, 0, NULL, 0},
     {"method", TURBO_FLOW_OPTION_STRING, TURBO_FLOW_OPTION_REQUIRED, 0, 0, NULL, 0},
     {"bearer_token", TURBO_FLOW_OPTION_SECRET, TURBO_FLOW_OPTION_SECRET_VALUE, 0, 0, NULL, 0},
@@ -241,7 +289,7 @@ static void flow_rpc_client_shutdown(void *ctx) {
     adapter->wait_timer_initialized = 0;
   }
   rpc_client_destroy(adapter->rpc_client);
-  http_client_destroy(adapter->http_client);
+  if (adapter->owns_http_client) http_client_destroy(adapter->http_client);
   if (adapter->lock_initialized) turbo_mutex_destroy(&adapter->lock);
   tstr_freep(&adapter->url);
   tstr_freep(&adapter->method);
@@ -251,16 +299,26 @@ static void flow_rpc_client_shutdown(void *ctx) {
   free(adapter);
 }
 
-int turbo_flow_rpc_register_client_adapter(turbo_flow_t *flow, const char *name,
-                                           const turbo_flow_rpc_client_config_t *config) {
+int turbo_flow_rpc_register_client_adapter_ex(
+    turbo_flow_t *flow, const char *name, const turbo_flow_rpc_client_config_t *config,
+    const turbo_flow_rpc_http_client_binding_t *binding) {
+  static const char *const call_operation[] = {TURBO_FLOW_RPC_CLIENT_CALL_OPERATION};
+  static const char *const poll_operation[] = {TURBO_FLOW_RPC_CLIENT_POLL_OPERATION};
   flow_rpc_client_adapter_t *adapter;
   rpc_client_config_t rpc_config;
   turbo_flow_adapter_ops_t ops;
+  turbo_flow_module_adapter_registration_t registration =
+      TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+  turbo_flow_primitive_descriptor_t primitive;
+  const char *operation_resources[1];
   int rc;
   if (!flow || !name || name[0] == '\0' || !config || !config->url || config->url[0] == '\0' ||
-      !config->method || config->method[0] == '\0' || config->timeout_ms < 0) {
+      !config->method || config->method[0] == '\0' || config->timeout_ms < 0 ||
+      (binding && (binding->size < sizeof(*binding) || !binding->client))) {
     return TURBO_EINVAL;
   }
+  rc = flow_rpc_register_client_contract(flow);
+  if (rc != TURBO_OK) return rc;
   adapter = (flow_rpc_client_adapter_t *)calloc(1, sizeof(*adapter));
   if (!adapter) return TURBO_ENOMEM;
   atomic_init(&adapter->started, 0);
@@ -279,7 +337,8 @@ int turbo_flow_rpc_register_client_adapter(turbo_flow_t *flow, const char *name,
     flow_rpc_client_shutdown(adapter);
     return TURBO_ENOMEM;
   }
-  adapter->http_client = http_client_create(NULL);
+  adapter->http_client = binding ? binding->client : http_client_create(NULL);
+  adapter->owns_http_client = binding ? binding->take_ownership != 0 : 1;
   if (!adapter->http_client) {
     flow_rpc_client_shutdown(adapter);
     return TURBO_ENOMEM;
@@ -308,11 +367,33 @@ int turbo_flow_rpc_register_client_adapter(turbo_flow_t *flow, const char *name,
   ops.stop = flow_rpc_client_stop;
   ops.shutdown = flow_rpc_client_shutdown;
   ops.connection_snapshot = flow_rpc_client_connection_snapshot;
-  rc = turbo_flow_register_adapter_ex(flow, name, &ops, adapter,
-                                      config->poll_interval_ms > 0 ? &FLOW_RPC_POLL_SCHEMA
-                                                                   : &FLOW_RPC_CLIENT_SCHEMA);
+  memset(&primitive, 0, sizeof(primitive));
+  primitive.size = sizeof(primitive);
+  primitive.name = name;
+  primitive.type_name = TURBO_FLOW_RPC_CLIENT_PRIMITIVE_TYPE;
+  primitive.version = TURBO_FLOW_RPC_MODULE_VERSION;
+  primitive.domain = TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN;
+  primitive.kind = TURBO_FLOW_PRIMITIVE_RESOURCE;
+  operation_resources[0] = name;
+  registration.module_name = TURBO_FLOW_RPC_CLIENT_MODULE;
+  registration.adapter_name = name;
+  registration.ops = &ops;
+  registration.ctx = adapter;
+  registration.schema = config->poll_interval_ms > 0 ? &FLOW_RPC_POLL_SCHEMA
+                                                      : &FLOW_RPC_CLIENT_SCHEMA;
+  registration.operation_names = config->poll_interval_ms > 0 ? poll_operation : call_operation;
+  registration.operation_count = 1u;
+  registration.operation_resource_names = operation_resources;
+  registration.primitives = &primitive;
+  registration.primitive_count = 1u;
+  rc = turbo_flow_register_module_adapter(flow, &registration);
   if (rc != TURBO_OK) flow_rpc_client_shutdown(adapter);
   return rc;
+}
+
+int turbo_flow_rpc_register_client_adapter(turbo_flow_t *flow, const char *name,
+                                           const turbo_flow_rpc_client_config_t *config) {
+  return turbo_flow_rpc_register_client_adapter_ex(flow, name, config, NULL);
 }
 
 int turbo_flow_rpc_register_client_resolved_adapter(turbo_flow_t *flow,

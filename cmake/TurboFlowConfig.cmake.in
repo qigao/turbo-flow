@@ -3,6 +3,9 @@
 include(CMakeFindDependencyMacro)
 
 find_dependency(TurboUtils REQUIRED)
+if(@TURBO_FLOW_BUILD_FMQ@)
+  find_dependency(FlowMQ REQUIRED)
+endif()
 if(@TURBO_FLOW_NEEDS_TURBONET@)
   find_dependency(Threads REQUIRED)
   find_dependency(TurboNet REQUIRED)

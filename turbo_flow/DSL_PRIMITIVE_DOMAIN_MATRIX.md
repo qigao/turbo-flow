@@ -1,6 +1,6 @@
 # TurboFlow DSL / Primitive / Domain 能力矩阵
 
-> 盘点日期：2026-07-16
+> 盘点日期：2026-07-17
 >
 > 本文是仓库级索引和核验表，不替代具体模块契约。`事实`来自当前头文件、实现、测试和
 > 现有设计文档；`目标`表示后续要达到的架构，不表示已经可用。
@@ -20,7 +20,9 @@ Control DSL -> parser -> typed facts evaluation -> resource command / reconcile 
 - Graph DSL 已经能够显式表达 `operation` 和 `resource`，compiler 也会校验 operation 的
   domain/type、source/stage role、resource compatibility、executor scope、worker capacity、
   retry/reject/reorder 和 settlement 边界。
-- `primitive + operation` 作为统一业务契约目前是**部分落地**：RulesForge 已有生产路径；
+- `module + primitive + operation + executable binding` 作为统一业务契约目前是**部分落地**：
+  module catalog/依赖校验、RulesForge typed provider，以及 HTTP/RPC/FMQ/Flowie/Queue/Storage
+  typed native adapter 已实现；
   大多数 IO、协议、队列和存储模块仍以 `adapter + resource provider + core.* implicit
   operation` 接入 graph。
 - 因此，当前不能宣称“所有业务都已经基于显式 primitive + graph”；可以宣称“所有
@@ -31,15 +33,16 @@ Control DSL -> parser -> typed facts evaluation -> resource command / reconcile 
 1. payload graph 是数据执行事实源；
 2. Control DSL/API 是 Management command 的入口，不是第二条 payload graph；
 3. adapter/resource owner 是外部资源状态事实源；
-4. primitive/operation registry 目前还没有覆盖全部 domain adapter。
+4. module/primitive/operation registry 目前还没有覆盖全部 domain adapter。
 
-## 2. 六个概念的唯一职责
+## 2. 七个概念的唯一职责
 
 | 概念 | 应表达什么 | 不应表达什么 | 当前载体 |
 |---|---|---|---|
 | Domain | 词汇、数据类型、状态不变量、错误和 settlement 语义 | 线程数、socket 指针、万能动词 | `turbo_flow_domain_t`、schema/resource metadata |
+| Module | 版本化能力边界、primitive type/operation 导出、模块依赖和 provider 归属 | graph topology、资源实例工厂、替换模块 native runtime | `turbo_flow_module_descriptor_t`；按依赖顺序注册 |
 | Primitive | domain 内可独立说明所有权和生命周期的 value/resource capability | 任意 callback、graph stage 别名、执行器 | `turbo_flow_primitive_descriptor_t`；实际 owner 仍由 adapter/provider 持有 |
-| Operation | 一个主要 effect 的 typed 动词，声明 input/output、scope、runtime boundary | 隐式状态、多个 owner 的事务、万能 `process()` | `turbo_flow_operation_descriptor_t`；执行实现可来自 typed operation provider，legacy stage callback/adapter consume 仍是兼容路径 |
+| Operation | 一个主要 effect 的 typed 动词，声明 input/output、scope、runtime boundary | 隐式状态、多个 owner 的事务、万能 `process()` | `turbo_flow_operation_descriptor_t`；执行实现来自 typed provider 或 module-owned native adapter，legacy callback/adapter 只处理未 catalog 的兼容路径 |
 | Graph node | operation + resource binding + immutable config + execution policy | 独立创造资源、隐式跨 domain 转换 | DSL stage/source、compiled stage plan |
 | Adapter | 外部 ingress/egress 和协议/资源 owner 的薄边界 | 取代 graph topology 或持有第二份业务状态 | `turbo_flow_adapter_ops_t`、各 IO 模块 adapter |
 | Executor/Disruptor | 放置、并发、有界 handoff、顺序和取消 | 业务语义、协议 ACK、持久化事实 | inline/thread/coro、worker/broadcast/fanin segment |
@@ -61,7 +64,7 @@ Control DSL -> parser -> typed facts evaluation -> resource command / reconcile 
 | `stage/step name` | graph processor/egress node | 显式 operation 或 `core.stage.*` | 已实现 |
 | `adapter name` | 绑定已注册 adapter owner | adapter schema、consume、生命周期、settlement | 已实现 |
 | `operation name` | 绑定注册 operation contract | 类型、scope、executor、runtime contract 校验 | 已实现，但生产 catalog 覆盖不全 |
-| `resource name` | 绑定 primitive resource name | domain/type/kind 必须匹配 operation | 已实现，不能自动创建资源 |
+| `resource name` | 绑定 primitive resource name | domain/type/kind/version range 必须匹配 operation | 已实现，不能自动创建资源 |
 | `worker N capacity M` | 有界 worker data segment | Disruptor worker pool；capacity 为 2 的幂 | 已实现 |
 | `exec inline/thread/coro` | 选择计算 executor | execution mask、pool/coro/thread owner 校验 | 已实现 |
 | `retry attempts N delay M` | adapter-owned retry boundary | retry callback、retry settlement、attempt 上限 | 已实现 |
@@ -96,6 +99,8 @@ Control DSL 的 parser、facts evaluation、idempotency、UID/generation 和 own
 - 不用 `adapter` 名称推断 operation 语义；adapter 是 owner/外部边界，operation 是 typed effect。
 - 不用 `worker`、`exec` 或 `coro` 关键字创造业务状态；它们只声明 runtime placement/handoff。
 - 不把 queue、socket、protocol session 或规则资源的内部指针放入 message 或 graph edge。
+- 不在 Graph DSL 增加 `module {}` 资源工厂语法。模块目录由可信 host/module code 注册；YAML
+  继续只选择和配置已注册的 adapter/resource/graph binding。
 
 ## 4. Graph DSL 的实际 lowering
 
@@ -103,7 +108,7 @@ Control DSL 的 parser、facts evaluation、idempotency、UID/generation 和 own
 显式 operation/resource
         │
         ├─ resolve：找注册 operation；未声明时生成 concrete core.* contract
-        ├─ validate：role / resource / executor / scope / edge type / settlement
+        ├─ validate：module owner / role / resource version / executor / scope / edge / settlement
         ├─ lower：runtime node + edge + segment + executor plan
         └─ dispatch：inline callback、adapter owner、thread pool、coro pool、worker lane
 ```
@@ -151,17 +156,18 @@ Domain 不是目录归属。一个模块可以跨多个 domain，但每个状态
 | 模块 | 主要 domain | 当前 graph/owner 接入 | 显式 primitive/operation catalog | 状态 | 结论 |
 |---|---|---|---|---|---|
 | `turbo_flow` core | Data / Execution / Management | Graph DSL/compiler/dispatch + Control DSL/resource command | `core.*` 为 compiler 生成的 implicit contract | `implemented` | graph 与 control 基座已成立；core contract 不是 domain catalog |
-| `turbo_flow/src/flow_policy.c` | Rules | typed provider + graph + resource owner | `RuleSet` + `rules.apply` 生产注册 | `implemented` | 显式 contract 参考实现 |
+| `turbo_flow/src/flow_policy.c` | Rules | typed provider + graph + resource owner | `rules.forge` module 导出 `RuleSet` + `rules.apply`，provider 显式绑定 module | `implemented` | module/contract/binding 参考实现 |
 | `codec` | Data | line/length/databind/csv adapter | 未发现生产 `register_primitive/operation` 路径 | `adapter-only` | 需要补 Data operation catalog |
-| `queue` | Buffer/Persistence | source/sink adapter + claim settlement | resource provider 有；DSL primitive catalog 未统一 | `adapter-only` | 需要区分 Queue primitive 与 source/sink operation |
-| `storage` | Buffer/Persistence | file/directory/sqlite source/sink | resource provider 有；显式 operation 未统一 | `adapter-only` | 需要补 append/read/commit 等 typed operation |
-| `io/socket` | IO/Transport | CoroNet socket adapter | adapter schema/resource 有；显式 operation 未统一 | `adapter-only` | 需要补 listen/connect/read/write/close 的 owner contract |
-| `io/http`、`io/rpc` | IO/Transport + Protocol/Pattern | client/server adapter | adapter schema 有；显式 operation 未统一 | `adapter-only` | HTTP transport 与 HTTP/RPC protocol 要分层 |
-| `io/fmq` | IO/Transport + Protocol/Pattern + Buffer/Persistence | FMQ pattern/proxy/control/management owner | resource/provider 较完整；显式 operation catalog 未统一 | `adapter-only` | 不能用一个 `fmq.*` primitive 覆盖三类 owner |
+| `queue` | Buffer/Persistence | source/sink adapter + claim settlement | `buffer.queue` 导出 `QueueBuffer`、`queue.dequeue/enqueue`；adapter operation 固定绑定实际 Queue primitive | `implemented` | Queue 状态仍由共享 queue owner 独占，不归 adapter |
+| `storage` | Buffer/Persistence | file/directory/sqlite source/sink | `buffer.storage` 导出 `StorageResource` 与 file/directory/append/sqlite operations，绑定实际 storage primitive | `implemented` | source/read 与各 sink commit 保持不同 operation |
+| `io/socket` | IO/Transport | CoroNet socket adapter | `io.socket` 导出 `SocketEndpoint` 与 `socket.receive/send`，绑定实际 endpoint owner | `implemented` | graph operation 只表达 ingress/egress；connect/listen/close 仍是 CoroNet owner lifecycle |
+| `io/http` | IO/Transport + Protocol/Pattern | native TurboHTTP/Iris client/server adapter | `io.http.client` 的 request/poll 绑定 `HttpClientConnection`；`io.http.server` 的 request/reply 绑定 `HttpServerEndpoint` | `implemented` | 保留 native endpoint/adapter；resource catalog 不迁移 I/O |
+| `io/rpc` | IO/Transport + Protocol/Pattern | native RPC client/server adapter | call/poll 绑定 `RpcClientConnection`；request/reply 绑定 `RpcServerEndpoint` | `implemented` | 保留 native RPC/Iris owner；RPC resource 不冒充 HTTP/Socket operation |
+| `flowmq` | Product + IO/Transport + Protocol/Pattern + Buffer/Persistence | FlowMQ pattern/proxy/control/management owner | 兼容 module id `io.fmq` 按 PUB/SUB、PUSH/PULL、REQ/REP、ROUTER/DEALER、PAIR、XPUB/XSUB 分别导出 source/stage operations | `implemented` | 顶层 broker 产品；pattern FSM 不被压缩成万能 send/receive contract |
 | `io/redis` | Protocol/Pattern + Buffer/Persistence | Redis data/stream adapter | stream/blob/record owner 有；DSL operation 未统一 | `adapter-only` | claim/settlement 与 blob commit 必须分成两类 operation |
 | `io/pgsql`、`io/s3` | Buffer/Persistence | query/object source/sink | content/resource schema 有；显式 operation 未统一 | `adapter-only` | query/result/object 的 content type 要留在 domain schema |
 | `io/email` | Protocol/Pattern | SMTP/POP3/MIME adapter/example | MIME schema 有；显式 operation 未统一 | `adapter-only` | parse/encode 与 SMTP/POP3 owner 不应混为一个 primitive |
-| `flowie` | IO/Transport + Protocol/Pattern + Buffer/Persistence | MQTT endpoint + graph | endpoint/resource owner 有；显式 operation 未统一 | `adapter-only` | 需要 `mqtt.*` operation 与 Session/Subscription resource 对齐 |
+| `flowie` | IO/Transport + Protocol/Pattern + Buffer/Persistence | MQTT endpoint + graph | `protocol.mqtt.server` 导出 PUBLISH ingress 与 packet egress，绑定同一 endpoint owner | `implemented` | control packet/session FSM 仍在 protocol owner 内，不伪装为 graph operation |
 | `schedule` | Execution + Management（建议归类） | schedule source adapter | 尚未看到统一 domain operation descriptor | `adapter-only` | 需要先固化 timer/trigger owner 语义再注册 |
 | `observe` | Management + Execution | observe callback/summary sink | 只读 snapshot/derived metric | `owner-api` | 不应成为 payload mutation operation |
 | `security` | Rules + Management | security realm/resource API | Resource metadata 有；不进 payload graph | `owner-api` | 命令授权与数据规则要保持两个边界 |
@@ -173,41 +179,34 @@ catalog。
 
 ## 7. 重复与边界风险
 
-### HIGH：显式 operation descriptor 尚未证明执行实现身份
+### MED：显式执行身份尚未覆盖全部 domain adapter
 
-当前 compiler 为显式 operation node 选择执行实现时，仍接受三类 binding：typed operation
-provider、按 stage name 注册的 legacy callback、adapter consume。后两者没有在注册时声明自己实现
-哪个 operation，因此“DSL 绑定了显式 operation”不等于“执行 callback 已按该 operation 注册”。
+当前 module catalog 已能为 typed operation provider 记录唯一 module owner，也能通过
+`turbo_flow_register_module_adapter()` 原子注册 `(module, operation, adapter)` 关联。Cataloged
+operation 若实际解析到 legacy stage callback、未绑定 adapter 或错误 module owner，compiler 会
+fail fast；resource-owned operation 进一步要求 typed native adapter 固定绑定实际 primitive。
+Socket、HTTP/RPC、FMQ、Flowie、Queue 和 Storage 已使用该路径；其他 domain adapter 仍需增量接入。
 
-影响：任意 legacy stage callback 可以与一个类型和 runtime 配置可通过的 operation descriptor 组合；
-compiler 能证明 descriptor/graph 自洽，却不能证明 callback 的主要 effect、resource owner 或
-settlement 语义与 descriptor 相同。
+影响：未 catalog 的旧 DSL 仍只能得到 `core.*` contract、adapter schema 与模块自有测试的保证；
+它不会被错误地计入 module-level executable proof，但能力发现与跨模块组合仍不完整。
 
-最小修复方向：catalog 必须记录 executable binding 身份。新显式 operation node 只接受 typed
-operation provider；source/adapter 路径需要等价的 typed adapter-operation association。旧 stage
-callback/adapter consume 继续作为 `core.*` compatibility path，并产生 migration diagnostic，不能把
-它们计入 explicit operation proof。
+后续按模块增量注册静态 operation catalog；旧 stage callback/adapter consume 继续作为未显式
+operation 的 compatibility path，不能把它们计入 explicit operation proof。
 
-### HIGH：resource compatibility 尚未包含契约版本
+### 已解决：resource compatibility 包含显式版本范围
 
-primitive 和 operation descriptor 都有非零 `version`，但 operation 当前只声明 required resource
-的 domain/type；compiler 的 resource binding 也只检查 resource kind/domain/type。operation 没有
-声明它要求的 resource contract version 或兼容范围。
+operation descriptor 现可声明 `resource_min_version/resource_max_version`；compiler 在
+kind/domain/type 之后校验 inclusive range。`max=0` 表示无上界；V1 descriptor 没有这两个字段，
+按 ABI `size` 安全归一化为 `min=max=0`，即保持原来的 any-version 语义。
 
-影响：如果同名同类型 resource 从 v1 升级到不兼容 v2，依赖 v1 语义的 operation 仍可能编译通过。
-这会使 canonical catalog 中的 `version` 只成为登记信息，而不是可证明的 compatibility boundary。
+契约版本、descriptor ABI `size`、resource instance UID 和 runtime generation 仍是四个独立概念，
+不能互相替代。新 canonical operation 应显式填写下界；零下界只用于 V1/兼容契约。
 
-最小修复方向：为 operation 增加 required resource contract version 或明确的兼容范围，并补
-exact-version、compatible-range、incompatible-major 三类测试。契约版本、descriptor ABI `size`、
-resource instance UID 和 runtime generation 必须是四个独立概念，不能互相替代。
+### MED：其余 adapter 的能力宣称仍需显式契约证据
 
-### HIGH：现状能力宣称超过显式契约覆盖范围
-
-`turbo_flow_register_primitive()` 的生产调用集中在 RulesForge；其他模块主要调用
-`turbo_flow_register_adapter*()` 或 `turbo_flow_register_resource_provider()`。即使 DSL 手工绑定
-operation，只要执行仍落到未声明 operation 身份的 legacy callback/adapter consume，也不能计入
-operation-level proof。因此 compiler 对大多数 adapter 只能验证通用 `core.*` contract、adapter
-schema，以及用户选择的 descriptor 是否自洽。
+RulesForge、Socket、HTTP、RPC、FMQ、Flowie、Queue 和 Storage 已完成 catalog + executable
+binding；codec、Redis、PgSQL、S3、Email 与 Schedule 仍主要通过 legacy adapter 路径工作。即使 DSL
+手工绑定 operation，只要执行实现没有 typed binding，仍不能计入 operation-level proof。
 
 影响：DSL 看起来已经模块化，但新增一个 adapter 可能绕过统一 domain contract，造成行为只能靠
 模块测试保证，不能由 graph compiler 统一拒绝错误组合。
@@ -216,11 +215,11 @@ schema，以及用户选择的 descriptor 是否自洽。
 `operation descriptor + primitive compatibility` 校验，再逐步让 DSL 显式绑定；保留
 `core.*` 作为兼容路径，但必须可观测并限制在无显式 catalog 的迁移阶段。
 
-### MED：`resource` DSL binding 与实际 resource provider 是两套概念
+### MED：通用 management provider 与 primitive instance 仍需完整类型关联
 
-`resource <name>` 绑定的是 primitive descriptor；`register_resource_provider()` 注册的是拥有
-metadata/snapshot/command 的实际 owner。两者当前可以通过名称和模块约定关联，但没有统一的
-typed instance binding。
+`turbo_flow_register_module_adapter()` 已可原子注册 primitive、management providers 和 adapter，
+并将每个 operation 固定到一个 primitive name；Queue/Storage 已使用该路径。通用 management
+provider registry 本身仍未声明其 primitive type，因此其他模块若只注册 provider，仍可能漂移。
 
 影响：同名资源可能在 descriptor、adapter owner、management metadata 中出现漂移；编译通过不
 等于 runtime 一定找到同一个 owner。
@@ -242,10 +241,40 @@ typed instance binding。
 但 durable input offset、state mutation 和 output commit 尚未形成同一事务事实源。没有这个边界，
 不能把“消息只经过一次 callback”或“发送成功”称为 exactly-once。
 
-## 8. 建议的 canonical catalog
+## 8. 已实现的 module catalog 与 canonical catalog
+
+Module catalog 是注册/校验层，不是 loader、plugin system、资源工厂或新 DSL：
+
+- `turbo_flow_register_module()` 深拷贝 module identity/version/capabilities、导出的 primitive
+  `type_name`、已注册 operation 名称和依赖版本/能力范围；依赖按拓扑顺序注册，缺失或不兼容立即失败；
+- 一个 operation 只能有一个 module owner；`turbo_flow_bind_operation_provider_module()` 将既有
+  `(operation, resource)` typed provider 绑定到该 owner，并校验 resource primitive type 是 module
+  的导出；
+- `turbo_flow_register_module_adapter()` 原子注册 native adapter、resource providers 和 typed
+  operation owner association；resource-owned operation 还会原子注册 primitive instance 并固化
+  adapter-operation-resource 三元关系；失败不转移 adapter context，成功后 registry 接管 shutdown；
+- `turbo_flow_module_count/at/find()`、`turbo_flow_operation_provider_module()` 和
+  `turbo_flow_adapter_operation_module()` 提供只读查询；
+  `reset(..., 1)` 保留目录，registry-clearing reset/destroy 释放它；
+- 生产 catalog 包括 `rules.forge`、`io.socket`、HTTP/RPC client/server、`io.fmq`、
+  `protocol.mqtt.server`、`buffer.queue` 和 `buffer.storage`。HTTP/RPC 仍保留 native endpoint；
+  FMQ/Flowie 仍保留各自 CoroNet/protocol owner；catalog 不替换运行时。
+
+人写配置仍为 YAML。YAML 选择 named resource/adapter/operation，host 在解析/构图前注册可信 module
+catalog；不能从不可信 YAML 动态声明 provider 身份或 native function。
+
+产品装配位于 YAML resolver 与 module/operation catalog 之间，不属于 Graph DSL grammar。
+可信 host 以 caller-owned `turbo_flow_product_provider_registry_t` 注入允许的 adapter/resource
+factory：先用 `turbo_flow_product_preflight()` 对 resolved adapter kind 做无副作用校验，再 parse
+Graph，并用 `turbo_flow_product_assemble_graph()` 只实例化 Graph 实际引用的 source、processor
+resource 和 sink。同名引用只装配一次，resource 先于 adapter；callback 失败后 host 必须丢弃该
+Flow generation 并清理 provider-owned owner。该 registry 不是 plugin loader、全局 service
+locator、协议状态机或新的事实源。
 
 每个 domain module 只维护一份 catalog；文档、compiler、capability 查询和测试都从同一份
-descriptor 派生。最小记录字段：
+descriptor 派生。当前公共 module descriptor 已覆盖 identity、capabilities、primitive type exports、
+operation exports、dependency version range、provider/native-adapter owner 与 resource version range；下列 settlement 字段仍由
+现有 primitive/operation/resource descriptor 分担并需继续收敛：
 
 | 类别 | 必填字段 |
 |---|---|
@@ -275,11 +304,11 @@ settlement。
 
 ## 9. 分阶段迁移，不改变现有业务行为
 
-1. **盘点阶段**：分别盘点 Graph DSL payload operation、Control DSL command 和 owner API；为每个
+1. **盘点阶段**（进行中）：分别盘点 Graph DSL payload operation、Control DSL command 和 owner API；为每个
    adapter/owner 写出 operation catalog，先不改默认行为。
 2. **契约阶段**：补 descriptor、required resource version/range 和 compatibility tests；注册失败
    必须 fail fast，不能静默降级。
-3. **执行绑定阶段**：显式 operation 必须绑定 typed operation provider 或等价 typed adapter；
+3. **执行绑定阶段**（公共机制已完成，模块增量接入）：显式 operation 必须绑定 typed operation provider 或 typed adapter；
    legacy stage callback/adapter consume 只保留在 `core.*` compatibility path，并记录 migration
    diagnostic。
 4. **资源绑定阶段**：adapter/provider 注册同时关联 owner resource primitive；校验
@@ -318,11 +347,12 @@ settlement。
 - Control DSL/Management command：`control_grammar.y`、`control_lexer.re`、
   `turbo_flow/include/turbo_flow_control.h`、`flow_control.c`、`flow_resource_command.c`、
   `flow_reconcile.c`。
-- Domain/primitive/operation ABI：`turbo_flow/include/turbo_flow_domain.h`、`flow_domain.c`。
+- Domain/module/primitive/operation ABI：`turbo_flow/include/turbo_flow_domain.h`、`flow_domain.c`。
 - Operation resolve/validation：`turbo_flow/src/flow_compile.c`。
 - Graph lowering：`turbo_flow/src/flow_plan.c`、`flow_internal.h`。
 - Runtime execution：`turbo_flow/src/flow_executor.c`、`flow_execution.c`、`flow_dispatch.c`。
-- RulesForge 显式 catalog：`turbo_flow/src/flow_policy.c`、`turbo_flow/include/turbo_flow_policy.h`。
+- Module/provider binding 与 RulesForge 显式 catalog：`turbo_flow/src/flow_domain.c`、
+  `flow_compile.c`、`flow_policy.c`、`turbo_flow/tests/test_flow_domain.c`、`test_flow_policy.c`。
 - Domain 原则和所有权：`turbo_flow/PRIMITIVE_GRAPH_ARCHITECTURE.md`、`DOMAIN_CONTRACTS.md`。
 - Domain contract/negative tests：`turbo_flow/tests/test_flow_domain.c`、
   `test_turbo_flow.c`、各 `io/*/tests`。

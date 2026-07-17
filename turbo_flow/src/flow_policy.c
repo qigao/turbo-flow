@@ -17,6 +17,9 @@
 #define FLOW_RULE_STAGE_MAX_ACTIONS 64u
 #define FLOW_RULE_RESOLVED_MAX_RULES 4096u
 
+static const char FLOW_RULE_MODULE_NAME[] = "rules.forge";
+static const uint32_t FLOW_RULE_MODULE_VERSION = 1u;
+
 int turbo_flow_rule_projection_facts_provider(
     const turbo_flow_msg_t *message, const turbo_flow_expr_schema_t *schema,
     const turbo_flow_expr_value_t **values_out, size_t *value_count_out, void *ctx) {
@@ -143,9 +146,41 @@ static int flow_rule_register_apply_contract(turbo_flow_t *flow, const char *res
   return TURBO_OK;
 }
 
+static int flow_rule_register_module_contract(turbo_flow_t *flow) {
+  static const char *const primitive_types[] = {TURBO_FLOW_RULE_SET_TYPE};
+  static const char *const operation_names[] = {TURBO_FLOW_RULE_APPLY_OPERATION};
+  turbo_flow_module_descriptor_t descriptor = {0};
+  const turbo_flow_module_descriptor_t *existing =
+      turbo_flow_find_module(flow, FLOW_RULE_MODULE_NAME);
+  if (existing) {
+    if (existing->version != FLOW_RULE_MODULE_VERSION ||
+        existing->capability_flags != (TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                                       TURBO_FLOW_MODULE_MANAGED_RESOURCES |
+                                       TURBO_FLOW_MODULE_NATIVE_API) ||
+        existing->primitive_type_count != 1u || existing->operation_count != 1u ||
+        existing->requirement_count != 0u ||
+        strcmp(existing->primitive_types[0], TURBO_FLOW_RULE_SET_TYPE) != 0 ||
+        strcmp(existing->operation_names[0], TURBO_FLOW_RULE_APPLY_OPERATION) != 0) {
+      return TURBO_EPROTO;
+    }
+    return TURBO_OK;
+  }
+  descriptor.size = sizeof(descriptor);
+  descriptor.name = FLOW_RULE_MODULE_NAME;
+  descriptor.version = FLOW_RULE_MODULE_VERSION;
+  descriptor.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                                TURBO_FLOW_MODULE_MANAGED_RESOURCES |
+                                TURBO_FLOW_MODULE_NATIVE_API;
+  descriptor.primitive_types = primitive_types;
+  descriptor.primitive_type_count = 1u;
+  descriptor.operation_names = operation_names;
+  descriptor.operation_count = 1u;
+  return turbo_flow_register_module(flow, &descriptor);
+}
+
 static void flow_rule_rollback_operation_registration(turbo_flow_t *flow, size_t resources_before,
-                                                       size_t providers_before, size_t primitives_before,
-                                                       size_t operations_before) {
+                                                       size_t providers_before, size_t modules_before,
+                                                       size_t primitives_before, size_t operations_before) {
   while (turbo_vec_size(&flow->operation_providers) > providers_before) {
     size_t index = turbo_vec_size(&flow->operation_providers) - 1u;
     flow_operation_provider_registration_t *provider =
@@ -159,6 +194,13 @@ static void flow_rule_rollback_operation_registration(turbo_flow_t *flow, size_t
         (flow_resource_registration_t *)turbo_vec_at(&flow->resources, index);
     flow_resource_registration_destroy(resource);
     (void)turbo_vec_resize(&flow->resources, index);
+  }
+  while (turbo_vec_size(&flow->modules) > modules_before) {
+    size_t index = turbo_vec_size(&flow->modules) - 1u;
+    flow_module_registration_t *module =
+        (flow_module_registration_t *)turbo_vec_at(&flow->modules, index);
+    flow_module_registration_destroy(module);
+    (void)turbo_vec_resize(&flow->modules, index);
   }
   while (turbo_vec_size(&flow->primitives) > primitives_before) {
     size_t index = turbo_vec_size(&flow->primitives) - 1u;
@@ -1114,6 +1156,7 @@ int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *reso
       TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
   size_t resources_before;
   size_t providers_before;
+  size_t modules_before;
   size_t primitives_before;
   size_t operations_before;
   int rc;
@@ -1127,13 +1170,20 @@ int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *reso
 
   resources_before = turbo_vec_size(&flow->resources);
   providers_before = turbo_vec_size(&flow->operation_providers);
+  modules_before = turbo_vec_size(&flow->modules);
   primitives_before = turbo_vec_size(&flow->primitives);
   operations_before = turbo_vec_size(&flow->operations);
 
   rc = flow_rule_register_apply_contract(flow, resource_name);
   if (rc != TURBO_OK) {
     flow_rule_rollback_operation_registration(flow, resources_before, providers_before,
-                                               primitives_before, operations_before);
+                                               modules_before, primitives_before, operations_before);
+    return rc;
+  }
+  rc = flow_rule_register_module_contract(flow);
+  if (rc != TURBO_OK) {
+    flow_rule_rollback_operation_registration(flow, resources_before, providers_before,
+                                               modules_before, primitives_before, operations_before);
     return rc;
   }
 
@@ -1146,7 +1196,7 @@ int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *reso
                                              resource.ctx);
   if (rc != TURBO_OK) {
     flow_rule_rollback_operation_registration(flow, resources_before, providers_before,
-                                               primitives_before, operations_before);
+                                               modules_before, primitives_before, operations_before);
     return rc;
   }
 
@@ -1159,7 +1209,14 @@ int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *reso
   rc = turbo_flow_register_operation_provider(flow, &provider);
   if (rc != TURBO_OK) {
     flow_rule_rollback_operation_registration(flow, resources_before, providers_before,
-                                               primitives_before, operations_before);
+                                               modules_before, primitives_before, operations_before);
+    return rc;
+  }
+  rc = turbo_flow_bind_operation_provider_module(flow, FLOW_RULE_MODULE_NAME,
+                                                 TURBO_FLOW_RULE_APPLY_OPERATION, resource_name);
+  if (rc != TURBO_OK) {
+    flow_rule_rollback_operation_registration(flow, resources_before, providers_before,
+                                               modules_before, primitives_before, operations_before);
     return rc;
   }
   return TURBO_OK;

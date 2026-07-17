@@ -14,7 +14,7 @@
 #define FLOWIE_MQTT_CLIENT_TEST_BUFFER_SIZE 4096u
 #define FLOWIE_MQTT_CLIENT_TEST_TIMEOUT_MS 5000u
 #define FLOWIE_MQTT_CLIENT_TEST_CLOSE_GRACE_MS 10u
-#define FLOWIE_MQTT_CLIENT_TEST_MANAGED_DISCONNECT_GRACE_MS 50u
+#define FLOWIE_MQTT_CLIENT_TEST_CALLBACK_DISCONNECT_GRACE_MS 50u
 
 typedef struct flowie_mqtt_test_broker_stream_s {
   coro_socket_t *socket;
@@ -27,29 +27,32 @@ typedef struct flowie_mqtt_test_state_s {
   coro_context_t *context;
   flowie_mqtt_client_t *client;
   flowie_mqtt_version_t version;
-  int client_rc;
   int server_rc;
-  int client_done;
   int server_done;
   int publish_count;
-  char topic[32];
-  char payload[32];
+  int secondary_match_count;
+  char topics[2][32];
+  char payloads[2][32];
   int expect_disconnect;
-  atomic_int managed_completions;
-  atomic_int managed_error;
-  atomic_int managed_disconnect_error;
+  atomic_int completions;
+  atomic_int publish_completions;
+  atomic_int completion_error;
+  atomic_int background_error;
 } flowie_mqtt_test_state_t;
-
-typedef struct flowie_mqtt_test_completion_s {
-  flowie_mqtt_test_state_t *state;
-  flowie_mqtt_packet_type_t expected_type;
-  int expects_response;
-} flowie_mqtt_test_completion_t;
 
 typedef struct flowie_mqtt_test_shutdown_s {
   int count;
   int statuses[2];
 } flowie_mqtt_test_shutdown_t;
+
+typedef struct flowie_mqtt_test_error_state_s {
+  atomic_int connect_done;
+  atomic_int connect_status;
+  atomic_int error_count;
+  atomic_int error_status;
+  int server_status;
+  int server_done;
+} flowie_mqtt_test_error_state_t;
 
 static int flowie_mqtt_test_next_packet(flowie_mqtt_test_broker_stream_t *stream,
                                         flowie_mqtt_version_t version,
@@ -123,9 +126,35 @@ static int flowie_mqtt_test_expect_type(flowie_mqtt_test_broker_stream_t *stream
   return packet->type == expected ? TURBO_OK : TURBO_EPROTO;
 }
 
+static int flowie_mqtt_test_send_publish(flowie_mqtt_test_broker_stream_t *stream,
+                                         flowie_mqtt_version_t version, uint16_t packet_id,
+                                         flowie_mqtt_span_t topic, flowie_mqtt_span_t payload) {
+  flowie_mqtt_publish_packet_t publish = FLOWIE_MQTT_PUBLISH_PACKET_INIT;
+  flowie_mqtt_packet_view_t packet = FLOWIE_MQTT_PACKET_VIEW_INIT;
+  flowie_mqtt_control_packet_view_t control = FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
+  uint8_t encoded[128];
+  size_t written = 0u;
+  int rc;
+  publish.version = version;
+  publish.qos = 1u;
+  publish.packet_id = packet_id;
+  publish.topic = topic;
+  publish.payload = payload;
+  rc = flowie_mqtt_publish_packet_encode(&publish, encoded, sizeof(encoded), &written);
+  if (rc != FLOWIE_MQTT_PARSE_OK) return TURBO_EPROTO;
+  rc = coro_socket_send(stream->socket, (const char *)encoded, written);
+  if (rc != TURBO_OK) return rc;
+  rc = flowie_mqtt_test_expect_type(stream, version, FLOWIE_MQTT_PACKET_PUBACK, &packet);
+  if (rc != TURBO_OK) return rc;
+  rc = flowie_mqtt_control_packet_parse(&packet, &control);
+  return rc == FLOWIE_MQTT_PARSE_OK && control.packet_id == packet_id ? TURBO_OK : TURBO_EPROTO;
+}
+
 static int flowie_mqtt_test_broker_run(coro_socket_t *socket, flowie_mqtt_test_state_t *state) {
-  static const uint8_t inbound_topic[] = "server/topic";
-  static const uint8_t inbound_payload[] = "from-broker";
+  static const uint8_t inbound_topics[2][17] = {"server/topic/one", "server/topic/two"};
+  static const uint8_t inbound_payloads[2][16] = {"from-broker-one", "from-broker-two"};
+  static const uint8_t outbound_topics[2][17] = {"client/topic/one", "client/topic/two"};
+  static const uint8_t outbound_payloads[2][16] = {"from-client-one", "from-client-two"};
   flowie_mqtt_test_broker_stream_t stream = {0};
   flowie_mqtt_packet_view_t packet = FLOWIE_MQTT_PACKET_VIEW_INIT;
   flowie_mqtt_connect_view_t connect = FLOWIE_MQTT_CONNECT_VIEW_INIT;
@@ -133,13 +162,10 @@ static int flowie_mqtt_test_broker_run(coro_socket_t *socket, flowie_mqtt_test_s
   flowie_mqtt_publish_view_t publish = FLOWIE_MQTT_PUBLISH_VIEW_INIT;
   flowie_mqtt_unsubscribe_view_t unsubscribe = FLOWIE_MQTT_UNSUBSCRIBE_VIEW_INIT;
   flowie_mqtt_control_packet_view_t control = FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
-  flowie_mqtt_publish_packet_t outbound = FLOWIE_MQTT_PUBLISH_PACKET_INIT;
-  uint8_t encoded[128];
-  uint8_t granted_qos = 1u;
-  uint8_t unsubscribe_reason = 0u;
-  flowie_mqtt_span_t subscribe_reasons = {&granted_qos, 1u};
-  flowie_mqtt_span_t unsubscribe_reasons = {&unsubscribe_reason, 1u};
-  size_t written = 0u;
+  uint8_t granted_qos[2] = {1u, 1u};
+  uint8_t unsubscribe_reason[2] = {0u, 0u};
+  flowie_mqtt_span_t subscribe_reasons = {granted_qos, 2u};
+  flowie_mqtt_span_t unsubscribe_reasons = {unsubscribe_reason, 2u};
   uint16_t packet_id;
   int rc;
 
@@ -158,32 +184,27 @@ static int flowie_mqtt_test_broker_run(coro_socket_t *socket, flowie_mqtt_test_s
   rc = flowie_mqtt_test_expect_type(&stream, state->version, FLOWIE_MQTT_PACKET_SUBSCRIBE, &packet);
   if (rc != TURBO_OK) return rc;
   rc = flowie_mqtt_subscribe_parse(&packet, &subscribe);
-  if (rc != FLOWIE_MQTT_PARSE_OK || subscribe.packet_id != 1u || subscribe.entry_count != 1u)
+  if (rc != FLOWIE_MQTT_PARSE_OK || subscribe.packet_id != 1u || subscribe.entry_count != 2u)
     return TURBO_EPROTO;
   rc = flowie_mqtt_test_send_control(socket, state->version, FLOWIE_MQTT_PACKET_SUBACK,
                                      subscribe.packet_id, 0u, subscribe_reasons);
   if (rc != TURBO_OK) return rc;
 
-  outbound.version = state->version;
-  outbound.qos = 1u;
-  outbound.packet_id = 77u;
-  outbound.topic = (flowie_mqtt_span_t){inbound_topic, sizeof(inbound_topic) - 1u};
-  outbound.payload = (flowie_mqtt_span_t){inbound_payload, sizeof(inbound_payload) - 1u};
-  rc = flowie_mqtt_publish_packet_encode(&outbound, encoded, sizeof(encoded), &written);
-  if (rc != FLOWIE_MQTT_PARSE_OK) return TURBO_EPROTO;
-  rc = coro_socket_send(socket, (const char *)encoded, written);
-  if (rc != TURBO_OK) return rc;
-  rc = flowie_mqtt_test_expect_type(&stream, state->version, FLOWIE_MQTT_PACKET_PUBACK, &packet);
-  if (rc != TURBO_OK) return rc;
-  rc = flowie_mqtt_control_packet_parse(&packet, &control);
-  if (rc != FLOWIE_MQTT_PARSE_OK || control.packet_id != 77u) return TURBO_EPROTO;
-
   packet = (flowie_mqtt_packet_view_t)FLOWIE_MQTT_PACKET_VIEW_INIT;
   rc = flowie_mqtt_test_expect_type(&stream, state->version, FLOWIE_MQTT_PACKET_PUBLISH, &packet);
   if (rc != TURBO_OK) return rc;
   rc = flowie_mqtt_publish_parse(&packet, &publish);
-  if (rc != FLOWIE_MQTT_PARSE_OK || publish.qos != 1u || publish.packet_id != 2u)
+  if (rc != FLOWIE_MQTT_PARSE_OK || publish.qos != 1u || publish.packet_id != 2u ||
+      publish.topic.size != sizeof(outbound_topics[0]) - 1u ||
+      memcmp(publish.topic.data, outbound_topics[0], publish.topic.size) != 0 ||
+      publish.payload.size != sizeof(outbound_payloads[0]) - 1u ||
+      memcmp(publish.payload.data, outbound_payloads[0], publish.payload.size) != 0)
     return TURBO_EPROTO;
+  rc = flowie_mqtt_test_send_publish(
+      &stream, state->version, 77u,
+      (flowie_mqtt_span_t){inbound_topics[0], sizeof(inbound_topics[0]) - 1u},
+      (flowie_mqtt_span_t){inbound_payloads[0], sizeof(inbound_payloads[0]) - 1u});
+  if (rc != TURBO_OK) return rc;
   rc = flowie_mqtt_test_send_control(socket, state->version, FLOWIE_MQTT_PACKET_PUBACK,
                                      publish.packet_id, 0u, (flowie_mqtt_span_t){0});
   if (rc != TURBO_OK) return rc;
@@ -193,9 +214,18 @@ static int flowie_mqtt_test_broker_run(coro_socket_t *socket, flowie_mqtt_test_s
   rc = flowie_mqtt_test_expect_type(&stream, state->version, FLOWIE_MQTT_PACKET_PUBLISH, &packet);
   if (rc != TURBO_OK) return rc;
   rc = flowie_mqtt_publish_parse(&packet, &publish);
-  if (rc != FLOWIE_MQTT_PARSE_OK || publish.qos != 2u || publish.packet_id != 3u)
+  if (rc != FLOWIE_MQTT_PARSE_OK || publish.qos != 2u || publish.packet_id != 3u ||
+      publish.topic.size != sizeof(outbound_topics[1]) - 1u ||
+      memcmp(publish.topic.data, outbound_topics[1], publish.topic.size) != 0 ||
+      publish.payload.size != sizeof(outbound_payloads[1]) - 1u ||
+      memcmp(publish.payload.data, outbound_payloads[1], publish.payload.size) != 0)
     return TURBO_EPROTO;
   packet_id = publish.packet_id;
+  rc = flowie_mqtt_test_send_publish(
+      &stream, state->version, 78u,
+      (flowie_mqtt_span_t){inbound_topics[1], sizeof(inbound_topics[1]) - 1u},
+      (flowie_mqtt_span_t){inbound_payloads[1], sizeof(inbound_payloads[1]) - 1u});
+  if (rc != TURBO_OK) return rc;
   rc = flowie_mqtt_test_send_control(socket, state->version, FLOWIE_MQTT_PACKET_PUBREC, packet_id,
                                      0u, (flowie_mqtt_span_t){0});
   if (rc != TURBO_OK) return rc;
@@ -214,7 +244,7 @@ static int flowie_mqtt_test_broker_run(coro_socket_t *socket, flowie_mqtt_test_s
                                     &packet);
   if (rc != TURBO_OK) return rc;
   rc = flowie_mqtt_unsubscribe_parse(&packet, &unsubscribe);
-  if (rc != FLOWIE_MQTT_PARSE_OK || unsubscribe.packet_id != 4u || unsubscribe.filter_count != 1u)
+  if (rc != FLOWIE_MQTT_PARSE_OK || unsubscribe.packet_id != 4u || unsubscribe.filter_count != 2u)
     return TURBO_EPROTO;
   rc = flowie_mqtt_test_send_control(
       socket, state->version, FLOWIE_MQTT_PACKET_UNSUBACK, unsubscribe.packet_id, 0u,
@@ -229,7 +259,7 @@ static int flowie_mqtt_test_broker_run(coro_socket_t *socket, flowie_mqtt_test_s
   if (rc != TURBO_OK) return rc;
 
   if (!state->expect_disconnect) {
-    coro_sleep(coro_context_current(), FLOWIE_MQTT_CLIENT_TEST_MANAGED_DISCONNECT_GRACE_MS);
+    coro_sleep(coro_context_current(), FLOWIE_MQTT_CLIENT_TEST_CALLBACK_DISCONNECT_GRACE_MS);
     return TURBO_OK;
   }
 
@@ -249,41 +279,106 @@ static void flowie_mqtt_test_broker_handler(coro_socket_t *socket, void *arg) {
 static int flowie_mqtt_test_on_publish(flowie_mqtt_client_t *client,
                                        const flowie_mqtt_publish_view_t *publish, void *user_data) {
   flowie_mqtt_test_state_t *state = (flowie_mqtt_test_state_t *)user_data;
+  int index = state->publish_count;
   (void)client;
-  if (!publish || publish->topic.size >= sizeof(state->topic) ||
-      publish->payload.size >= sizeof(state->payload))
+  if (!publish || index < 0 || index >= 2 || publish->topic.size >= sizeof(state->topics[index]) ||
+      publish->payload.size >= sizeof(state->payloads[index]))
     return TURBO_EMSGSIZE;
-  memcpy(state->topic, publish->topic.data, publish->topic.size);
-  state->topic[publish->topic.size] = '\0';
-  memcpy(state->payload, publish->payload.data, publish->payload.size);
-  state->payload[publish->payload.size] = '\0';
+  memcpy(state->topics[index], publish->topic.data, publish->topic.size);
+  state->topics[index][publish->topic.size] = '\0';
+  memcpy(state->payloads[index], publish->payload.data, publish->payload.size);
+  state->payloads[index][publish->payload.size] = '\0';
   ++state->publish_count;
   return TURBO_OK;
 }
 
-static void flowie_mqtt_test_managed_completion(flowie_mqtt_client_t *client, int status,
-                                                const flowie_mqtt_control_packet_view_t *response,
-                                                void *user_data) {
-  flowie_mqtt_test_completion_t *expected = (flowie_mqtt_test_completion_t *)user_data;
-  int error = status;
-  (void)client;
-  if (error == TURBO_OK && expected->expects_response &&
-      (!response || response->type != expected->expected_type))
-    error = TURBO_EPROTO;
-  if (error == TURBO_OK && !expected->expects_response && response) error = TURBO_EPROTO;
-  if (error != TURBO_OK) {
-    int unset = TURBO_OK;
-    (void)atomic_compare_exchange_strong_explicit(&expected->state->managed_error, &unset, error,
-                                                  memory_order_acq_rel, memory_order_acquire);
-  }
-  atomic_fetch_add_explicit(&expected->state->managed_completions, 1, memory_order_release);
-}
-
-static void flowie_mqtt_test_managed_disconnect(flowie_mqtt_client_t *client, int status,
-                                                void *user_data) {
+static int flowie_mqtt_test_on_secondary_match(flowie_mqtt_client_t *client,
+                                               const flowie_mqtt_publish_view_t *publish,
+                                               void *user_data) {
+  static const uint8_t expected_topic[] = "server/topic/two";
   flowie_mqtt_test_state_t *state = (flowie_mqtt_test_state_t *)user_data;
   (void)client;
-  atomic_store_explicit(&state->managed_disconnect_error, status, memory_order_release);
+  if (!publish || publish->topic.size != sizeof(expected_topic) - 1u ||
+      memcmp(publish->topic.data, expected_topic, sizeof(expected_topic) - 1u) != 0)
+    return TURBO_EPROTO;
+  ++state->secondary_match_count;
+  return TURBO_OK;
+}
+
+static void flowie_mqtt_test_record_completion(flowie_mqtt_test_state_t *state, int status,
+                                               const flowie_mqtt_control_packet_view_t *response,
+                                               flowie_mqtt_packet_type_t expected_type,
+                                               int expects_response) {
+  int error = status;
+  if (error == TURBO_OK && expects_response && (!response || response->type != expected_type))
+    error = TURBO_EPROTO;
+  if (error == TURBO_OK && !expects_response && response) error = TURBO_EPROTO;
+  if (error != TURBO_OK) {
+    int unset = TURBO_OK;
+    (void)atomic_compare_exchange_strong_explicit(&state->completion_error, &unset, error,
+                                                  memory_order_acq_rel, memory_order_acquire);
+  }
+  atomic_fetch_add_explicit(&state->completions, 1, memory_order_release);
+}
+
+static void flowie_mqtt_test_connect_completion(flowie_mqtt_client_t *client, int status,
+                                                const flowie_mqtt_control_packet_view_t *response,
+                                                void *user_data) {
+  (void)client;
+  flowie_mqtt_test_record_completion((flowie_mqtt_test_state_t *)user_data, status, response,
+                                     FLOWIE_MQTT_PACKET_CONNACK, 1);
+}
+
+static void flowie_mqtt_test_subscribe_completion(flowie_mqtt_client_t *client, int status,
+                                                  const flowie_mqtt_control_packet_view_t *response,
+                                                  void *user_data) {
+  (void)client;
+  flowie_mqtt_test_record_completion((flowie_mqtt_test_state_t *)user_data, status, response,
+                                     FLOWIE_MQTT_PACKET_SUBACK, 1);
+}
+
+static void flowie_mqtt_test_publish_completion(flowie_mqtt_client_t *client, int status,
+                                                const flowie_mqtt_control_packet_view_t *response,
+                                                void *user_data) {
+  flowie_mqtt_test_state_t *state = (flowie_mqtt_test_state_t *)user_data;
+  int index = atomic_fetch_add_explicit(&state->publish_completions, 1, memory_order_relaxed);
+  flowie_mqtt_packet_type_t expected =
+      index == 0 ? FLOWIE_MQTT_PACKET_PUBACK : FLOWIE_MQTT_PACKET_PUBCOMP;
+  (void)client;
+  if (index > 1) status = TURBO_EPROTO;
+  flowie_mqtt_test_record_completion(state, status, response, expected, 1);
+}
+
+static void
+flowie_mqtt_test_unsubscribe_completion(flowie_mqtt_client_t *client, int status,
+                                        const flowie_mqtt_control_packet_view_t *response,
+                                        void *user_data) {
+  (void)client;
+  flowie_mqtt_test_record_completion((flowie_mqtt_test_state_t *)user_data, status, response,
+                                     FLOWIE_MQTT_PACKET_UNSUBACK, 1);
+}
+
+static void flowie_mqtt_test_ping_completion(flowie_mqtt_client_t *client, int status,
+                                             const flowie_mqtt_control_packet_view_t *response,
+                                             void *user_data) {
+  (void)client;
+  flowie_mqtt_test_record_completion((flowie_mqtt_test_state_t *)user_data, status, response,
+                                     (flowie_mqtt_packet_type_t)0, 0);
+}
+
+static void
+flowie_mqtt_test_disconnect_completion(flowie_mqtt_client_t *client, int status,
+                                       const flowie_mqtt_control_packet_view_t *response,
+                                       void *user_data) {
+  (void)client;
+  flowie_mqtt_test_record_completion((flowie_mqtt_test_state_t *)user_data, status, response,
+                                     (flowie_mqtt_packet_type_t)0, 0);
+}
+
+static void flowie_mqtt_test_error(flowie_mqtt_client_t *client, int status, void *user_data) {
+  flowie_mqtt_test_state_t *state = (flowie_mqtt_test_state_t *)user_data;
+  (void)client;
+  atomic_store_explicit(&state->background_error, status, memory_order_release);
 }
 
 static void flowie_mqtt_test_count_completion(flowie_mqtt_client_t *client, int status,
@@ -307,146 +402,68 @@ static void flowie_mqtt_test_shutdown_completion(flowie_mqtt_client_t *client, i
   ++shutdown->count;
 }
 
-static void flowie_mqtt_test_client_task(coro_t *co, void *arg) {
-  static const uint8_t client_id[] = "flowie-test-client";
-  static const uint8_t filter_bytes[] = "client/topic";
-  static const uint8_t payload_bytes[] = "from-client";
-  flowie_mqtt_test_state_t *state = (flowie_mqtt_test_state_t *)arg;
-  flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
-  flowie_mqtt_subscription_t subscription = {0};
-  flowie_mqtt_subscribe_packet_t subscribe = FLOWIE_MQTT_SUBSCRIBE_PACKET_INIT;
-  flowie_mqtt_publish_packet_t publish = FLOWIE_MQTT_PUBLISH_PACKET_INIT;
-  flowie_mqtt_unsubscribe_packet_t unsubscribe = FLOWIE_MQTT_UNSUBSCRIBE_PACKET_INIT;
-  flowie_mqtt_control_packet_view_t response = FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
-  flowie_mqtt_span_t filter = {filter_bytes, sizeof(filter_bytes) - 1u};
-  flowie_mqtt_packet_type_t received_type = (flowie_mqtt_packet_type_t)0;
+static void
+flowie_mqtt_test_error_connect_completion(flowie_mqtt_client_t *client, int status,
+                                          const flowie_mqtt_control_packet_view_t *response,
+                                          void *user_data) {
+  flowie_mqtt_test_error_state_t *state = (flowie_mqtt_test_error_state_t *)user_data;
+  (void)client;
+  if (status == TURBO_OK &&
+      (!response || response->type != FLOWIE_MQTT_PACKET_CONNACK || response->reason_code != 0u))
+    status = TURBO_EPROTO;
+  atomic_store_explicit(&state->connect_status, status, memory_order_relaxed);
+  atomic_store_explicit(&state->connect_done, 1, memory_order_release);
+}
+
+static void flowie_mqtt_test_background_error(flowie_mqtt_client_t *client, int status,
+                                              void *user_data) {
+  flowie_mqtt_test_error_state_t *state = (flowie_mqtt_test_error_state_t *)user_data;
+  (void)client;
+  atomic_store_explicit(&state->error_status, status, memory_order_relaxed);
+  atomic_fetch_add_explicit(&state->error_count, 1, memory_order_release);
+}
+
+static void flowie_mqtt_test_closing_broker_handler(coro_socket_t *socket, void *arg) {
+  flowie_mqtt_test_error_state_t *state = (flowie_mqtt_test_error_state_t *)arg;
+  flowie_mqtt_test_broker_stream_t stream = {0};
+  flowie_mqtt_packet_view_t packet = FLOWIE_MQTT_PACKET_VIEW_INIT;
+  flowie_mqtt_connect_view_t connect = FLOWIE_MQTT_CONNECT_VIEW_INIT;
   int rc;
-  (void)co;
-
-  connect.version = state->version;
-  connect.clean_start = 1u;
-  connect.keep_alive = 30u;
-  connect.client_id = (flowie_mqtt_span_t){client_id, sizeof(client_id) - 1u};
-  rc = flowie_mqtt_client_connect(state->client, &connect, &response);
-  if (rc != TURBO_OK || response.reason_code != 0u ||
-      !flowie_mqtt_client_is_connected(state->client))
-    goto done;
-
-  subscription.filter = filter;
-  subscription.qos = 1u;
-  subscribe.version = state->version;
-  subscribe.subscriptions = &subscription;
-  subscribe.subscription_count = 1u;
-  response = (flowie_mqtt_control_packet_view_t)FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
-  rc = flowie_mqtt_client_subscribe(state->client, &subscribe, &response);
-  if (rc != TURBO_OK || response.reason_codes.size != 1u || response.reason_codes.data[0] != 1u)
-    goto done;
-
-  rc = flowie_mqtt_client_poll(state->client, &received_type);
-  if (rc != TURBO_OK || received_type != FLOWIE_MQTT_PACKET_PUBLISH) goto done;
-
-  publish.version = state->version;
-  publish.qos = 1u;
-  publish.topic = filter;
-  publish.payload = (flowie_mqtt_span_t){payload_bytes, sizeof(payload_bytes) - 1u};
-  response = (flowie_mqtt_control_packet_view_t)FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
-  rc = flowie_mqtt_client_publish(state->client, &publish, &response);
-  if (rc != TURBO_OK || response.type != FLOWIE_MQTT_PACKET_PUBACK || response.packet_id != 2u)
-    goto done;
-
-  publish.qos = 2u;
-  response = (flowie_mqtt_control_packet_view_t)FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
-  rc = flowie_mqtt_client_publish(state->client, &publish, &response);
-  if (rc != TURBO_OK || response.type != FLOWIE_MQTT_PACKET_PUBCOMP || response.packet_id != 3u)
-    goto done;
-
-  unsubscribe.version = state->version;
-  unsubscribe.filters = &filter;
-  unsubscribe.filter_count = 1u;
-  response = (flowie_mqtt_control_packet_view_t)FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
-  rc = flowie_mqtt_client_unsubscribe(state->client, &unsubscribe, &response);
-  if (rc != TURBO_OK || response.packet_id != 4u ||
-      (state->version == FLOWIE_MQTT_VERSION_5 && response.reason_codes.size != 1u))
-    goto done;
-
-  rc = flowie_mqtt_client_ping(state->client);
-  if (rc != TURBO_OK) goto done;
-  rc = flowie_mqtt_client_disconnect(state->client, 0u, (flowie_mqtt_span_t){0});
-
-done:
-  if (rc != TURBO_OK && flowie_mqtt_client_is_connected(state->client))
-    (void)flowie_mqtt_client_disconnect(state->client, 0u, (flowie_mqtt_span_t){0});
-  state->client_rc = rc;
-  state->client_done = 1;
+  stream.socket = socket;
+  coro_socket_set_timeout(socket, FLOWIE_MQTT_CLIENT_TEST_TIMEOUT_MS);
+  rc = flowie_mqtt_test_expect_type(&stream, FLOWIE_MQTT_VERSION_UNSPECIFIED,
+                                    FLOWIE_MQTT_PACKET_CONNECT, &packet);
+  if (rc == TURBO_OK && (flowie_mqtt_connect_parse(&packet, &connect) != FLOWIE_MQTT_PARSE_OK ||
+                         connect.version != FLOWIE_MQTT_VERSION_5))
+    rc = TURBO_EPROTO;
+  if (rc == TURBO_OK)
+    rc = flowie_mqtt_test_send_control(socket, FLOWIE_MQTT_VERSION_5, FLOWIE_MQTT_PACKET_CONNACK,
+                                       0u, 0u, (flowie_mqtt_span_t){0});
+  if (rc == TURBO_OK) coro_sleep(coro_context_current(), FLOWIE_MQTT_CLIENT_TEST_CLOSE_GRACE_MS);
+  state->server_status = rc;
+  state->server_done = 1;
 }
 
-static int flowie_mqtt_test_run(flowie_mqtt_version_t version, flowie_mqtt_test_state_t *state) {
-  flowie_mqtt_client_config_t config = FLOWIE_MQTT_CLIENT_CONFIG_INIT;
-  coro_socket_t *server = NULL;
-  unsigned short port = flowie_test_port();
-  uint64_t deadline;
-  int rc = TURBO_OK;
-
-  if (port == 0u) return TURBO_EIO;
-  memset(state, 0, sizeof(*state));
-  state->version = version;
-  state->expect_disconnect = 1;
-  state->client_rc = TURBO_EBUSY;
-  state->server_rc = TURBO_EBUSY;
-  state->context = coro_context_create(NULL);
-  if (!state->context) return TURBO_ENOMEM;
-  server = coro_socket_create_tcpv4(state->context);
-  if (!server) {
-    rc = TURBO_ENOMEM;
-    goto done;
-  }
-  config.context = state->context;
-  config.host = "127.0.0.1";
-  config.port = port;
-  config.timeout_ms = FLOWIE_MQTT_CLIENT_TEST_TIMEOUT_MS;
-  config.on_publish = flowie_mqtt_test_on_publish;
-  config.user_data = state;
-  rc = flowie_mqtt_client_create(&config, &state->client);
-  if (rc != TURBO_OK) goto done;
-  rc = coro_socket_listen_on(server, config.host, port, flowie_mqtt_test_broker_handler, state);
-  if (rc != TURBO_OK) goto done;
-  rc = coro_context_spawn(state->context, flowie_mqtt_test_client_task, state);
-  if (rc != TURBO_OK) goto done;
-
-  deadline = turbo_monotonic_ms() + FLOWIE_MQTT_CLIENT_TEST_TIMEOUT_MS * 2u;
-  while ((!state->client_done || !state->server_done) && turbo_monotonic_ms() < deadline)
-    (void)coro_context_run(state->context, TURBO_RUN_ONCE);
-  if (!state->client_done || !state->server_done) rc = TURBO_ETIMEDOUT;
-  else if (state->client_rc != TURBO_OK) rc = state->client_rc;
-  else rc = state->server_rc;
-
-done:
-  if (server) coro_socket_destroy(server);
-  flowie_mqtt_client_destroy(state->client);
-  coro_context_destroy(state->context);
-  state->client = NULL;
-  state->context = NULL;
-  return rc;
-}
-
-static int flowie_mqtt_test_run_managed(flowie_mqtt_version_t version,
-                                        flowie_mqtt_test_state_t *state) {
+static int flowie_mqtt_test_run_callbacks(flowie_mqtt_version_t version,
+                                          flowie_mqtt_test_state_t *state) {
   enum { FLOWIE_MQTT_MANAGED_COMMAND_COUNT = 7 };
-  uint8_t client_id[] = "flowie-managed-client";
-  uint8_t filter_bytes[] = "client/topic";
-  uint8_t payload_bytes[] = "from-client";
+  uint8_t client_id[] = "flowie-callback-client";
+  uint8_t filter_one[] = "client/topic/one";
+  uint8_t filter_two[] = "client/topic/two";
+  uint8_t inbound_filter[] = "server/topic/+";
+  uint8_t exact_filter[] = "server/topic/two";
+  uint8_t payload_one[] = "from-client-one";
+  uint8_t payload_two[] = "from-client-two";
   flowie_mqtt_client_config_t config = FLOWIE_MQTT_CLIENT_CONFIG_INIT;
+  flowie_mqtt_client_topic_handler_t topic_handlers[2] = {{0}};
   flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
-  flowie_mqtt_subscription_t subscription = {0};
+  flowie_mqtt_subscription_t subscriptions[2] = {{0}};
   flowie_mqtt_subscribe_packet_t subscribe = FLOWIE_MQTT_SUBSCRIBE_PACKET_INIT;
-  flowie_mqtt_publish_packet_t publish = FLOWIE_MQTT_PUBLISH_PACKET_INIT;
+  flowie_mqtt_client_publish_topic_t publish_topics[2] = {{0}};
+  flowie_mqtt_client_publish_topic_vec_t publish = FLOWIE_MQTT_CLIENT_PUBLISH_TOPIC_VEC_INIT;
   flowie_mqtt_unsubscribe_packet_t unsubscribe = FLOWIE_MQTT_UNSUBSCRIBE_PACKET_INIT;
-  flowie_mqtt_span_t filter = {filter_bytes, sizeof(filter_bytes) - 1u};
-  flowie_mqtt_test_completion_t completions[FLOWIE_MQTT_MANAGED_COMMAND_COUNT] = {
-      {state, FLOWIE_MQTT_PACKET_CONNACK, 1},   {state, FLOWIE_MQTT_PACKET_SUBACK, 1},
-      {state, FLOWIE_MQTT_PACKET_PUBACK, 1},    {state, FLOWIE_MQTT_PACKET_PUBCOMP, 1},
-      {state, FLOWIE_MQTT_PACKET_UNSUBACK, 1},  {state, (flowie_mqtt_packet_type_t)0, 0},
-      {state, FLOWIE_MQTT_PACKET_DISCONNECT, 0}};
+  flowie_mqtt_span_t filters[2] = {{filter_one, sizeof(filter_one) - 1u},
+                                   {filter_two, sizeof(filter_two) - 1u}};
   coro_socket_t *server = NULL;
   unsigned short port = flowie_test_port();
   uint64_t deadline;
@@ -457,9 +474,10 @@ static int flowie_mqtt_test_run_managed(flowie_mqtt_version_t version,
   state->version = version;
   state->expect_disconnect = 0;
   state->server_rc = TURBO_EBUSY;
-  atomic_init(&state->managed_completions, 0);
-  atomic_init(&state->managed_error, TURBO_OK);
-  atomic_init(&state->managed_disconnect_error, TURBO_OK);
+  atomic_init(&state->completions, 0);
+  atomic_init(&state->publish_completions, 0);
+  atomic_init(&state->completion_error, TURBO_OK);
+  atomic_init(&state->background_error, TURBO_OK);
   state->context = coro_context_create(NULL);
   if (!state->context) return TURBO_ENOMEM;
   server = coro_socket_create_tcpv4(state->context);
@@ -471,75 +489,81 @@ static int flowie_mqtt_test_run_managed(flowie_mqtt_version_t version,
   config.port = port;
   config.timeout_ms = FLOWIE_MQTT_CLIENT_TEST_TIMEOUT_MS;
   config.command_queue_capacity = 8u;
-  config.on_publish = flowie_mqtt_test_on_publish;
-  config.on_disconnect = flowie_mqtt_test_managed_disconnect;
+  topic_handlers[0].filter = (flowie_mqtt_span_t){inbound_filter, sizeof(inbound_filter) - 1u};
+  topic_handlers[0].on_message = flowie_mqtt_test_on_publish;
+  topic_handlers[1].filter =
+      (flowie_mqtt_span_t){exact_filter, sizeof(exact_filter) - 1u};
+  topic_handlers[1].on_message = flowie_mqtt_test_on_secondary_match;
+  config.topic_handlers =
+      (flowie_mqtt_client_topic_handler_map_t){topic_handlers, 2u};
+  config.on_connect = flowie_mqtt_test_connect_completion;
+  config.on_publish = flowie_mqtt_test_publish_completion;
+  config.on_subscribe = flowie_mqtt_test_subscribe_completion;
+  config.on_unsubscribe = flowie_mqtt_test_unsubscribe_completion;
+  config.on_ping = flowie_mqtt_test_ping_completion;
+  config.on_disconnect = flowie_mqtt_test_disconnect_completion;
+  config.on_error = flowie_mqtt_test_error;
   config.user_data = state;
   rc = coro_socket_listen_on(server, config.host, port, flowie_mqtt_test_broker_handler, state);
   if (rc != TURBO_OK) goto done;
   rc = flowie_mqtt_client_create(&config, &state->client);
   if (rc != TURBO_OK) goto done;
-  if (!flowie_mqtt_client_is_managed(state->client)) {
-    rc = TURBO_EPROTO;
-    goto done;
-  }
-
   connect.version = version;
   connect.clean_start = 1u;
   connect.keep_alive = 30u;
   connect.client_id = (flowie_mqtt_span_t){client_id, sizeof(client_id) - 1u};
-  subscription.filter = filter;
-  subscription.qos = 1u;
+  subscriptions[0].filter = filters[0];
+  subscriptions[0].qos = 1u;
+  subscriptions[1].filter = filters[1];
+  subscriptions[1].qos = 1u;
   subscribe.version = version;
-  subscribe.subscriptions = &subscription;
-  subscribe.subscription_count = 1u;
+  subscribe.subscriptions = subscriptions;
+  subscribe.subscription_count = 2u;
   publish.version = version;
-  publish.qos = 1u;
-  publish.topic = filter;
-  publish.payload = (flowie_mqtt_span_t){payload_bytes, sizeof(payload_bytes) - 1u};
+  publish.data = publish_topics;
+  publish.count = 2u;
+  publish_topics[0].qos = 1u;
+  publish_topics[0].topic = filters[0];
+  publish_topics[0].payload = (flowie_mqtt_span_t){payload_one, sizeof(payload_one) - 1u};
+  publish_topics[1].qos = 2u;
+  publish_topics[1].topic = filters[1];
+  publish_topics[1].payload = (flowie_mqtt_span_t){payload_two, sizeof(payload_two) - 1u};
   unsubscribe.version = version;
-  unsubscribe.filters = &filter;
-  unsubscribe.filter_count = 1u;
+  unsubscribe.filters = filters;
+  unsubscribe.filter_count = 2u;
 
-  rc = flowie_mqtt_client_connect_async(state->client, &connect,
-                                        flowie_mqtt_test_managed_completion, &completions[0]);
+  rc = flowie_mqtt_client_connect(state->client, &connect);
   if (rc != TURBO_OK) goto done;
-  rc = flowie_mqtt_client_subscribe_async(state->client, &subscribe,
-                                          flowie_mqtt_test_managed_completion, &completions[1]);
+  rc = flowie_mqtt_client_subscribe(state->client, &subscribe);
   if (rc != TURBO_OK) goto done;
-  rc = flowie_mqtt_client_publish_async(state->client, &publish,
-                                        flowie_mqtt_test_managed_completion, &completions[2]);
+  rc = flowie_mqtt_client_publish(state->client, &publish);
   if (rc != TURBO_OK) goto done;
-  publish.qos = 2u;
-  rc = flowie_mqtt_client_publish_async(state->client, &publish,
-                                        flowie_mqtt_test_managed_completion, &completions[3]);
+  rc = flowie_mqtt_client_unsubscribe(state->client, &unsubscribe);
   if (rc != TURBO_OK) goto done;
-  rc = flowie_mqtt_client_unsubscribe_async(state->client, &unsubscribe,
-                                            flowie_mqtt_test_managed_completion, &completions[4]);
+  rc = flowie_mqtt_client_ping(state->client);
   if (rc != TURBO_OK) goto done;
-  rc = flowie_mqtt_client_ping_async(state->client, flowie_mqtt_test_managed_completion,
-                                     &completions[5]);
-  if (rc != TURBO_OK) goto done;
-  rc = flowie_mqtt_client_disconnect_async(state->client, 0u, (flowie_mqtt_span_t){0},
-                                           flowie_mqtt_test_managed_completion, &completions[6]);
+  rc = flowie_mqtt_client_disconnect(state->client, 0u, (flowie_mqtt_span_t){0});
   if (rc != TURBO_OK) goto done;
 
   memset(client_id, 0, sizeof(client_id));
-  memset(filter_bytes, 0, sizeof(filter_bytes));
-  memset(payload_bytes, 0, sizeof(payload_bytes));
+  memset(filter_one, 0, sizeof(filter_one));
+  memset(filter_two, 0, sizeof(filter_two));
+  memset(inbound_filter, 0, sizeof(inbound_filter));
+  memset(exact_filter, 0, sizeof(exact_filter));
+  memset(payload_one, 0, sizeof(payload_one));
+  memset(payload_two, 0, sizeof(payload_two));
   deadline = turbo_monotonic_ms() + FLOWIE_MQTT_CLIENT_TEST_TIMEOUT_MS * 2u;
-  while ((!state->server_done ||
-          atomic_load_explicit(&state->managed_completions, memory_order_acquire) !=
-              FLOWIE_MQTT_MANAGED_COMMAND_COUNT) &&
+  while ((!state->server_done || atomic_load_explicit(&state->completions, memory_order_acquire) !=
+                                     FLOWIE_MQTT_MANAGED_COMMAND_COUNT) &&
          turbo_monotonic_ms() < deadline)
     (void)coro_context_run(state->context, TURBO_RUN_ONCE);
-  if (!state->server_done ||
-      atomic_load_explicit(&state->managed_completions, memory_order_acquire) !=
-          FLOWIE_MQTT_MANAGED_COMMAND_COUNT)
+  if (!state->server_done || atomic_load_explicit(&state->completions, memory_order_acquire) !=
+                                 FLOWIE_MQTT_MANAGED_COMMAND_COUNT)
     rc = TURBO_ETIMEDOUT;
-  else if (atomic_load_explicit(&state->managed_error, memory_order_acquire) != TURBO_OK)
-    rc = atomic_load_explicit(&state->managed_error, memory_order_acquire);
-  else if (atomic_load_explicit(&state->managed_disconnect_error, memory_order_acquire) != TURBO_OK)
-    rc = atomic_load_explicit(&state->managed_disconnect_error, memory_order_acquire);
+  else if (atomic_load_explicit(&state->completion_error, memory_order_acquire) != TURBO_OK)
+    rc = atomic_load_explicit(&state->completion_error, memory_order_acquire);
+  else if (atomic_load_explicit(&state->background_error, memory_order_acquire) != TURBO_OK)
+    rc = atomic_load_explicit(&state->background_error, memory_order_acquire);
   else rc = state->server_rc;
   if (rc == TURBO_EOF) rc = TURBO_OK;
 
@@ -552,46 +576,72 @@ done:
   return rc;
 }
 
-spec("flowie mqtt coroutine client") {
+spec("flowie mqtt callback client") {
   it("validates configuration and starts disconnected") {
+    static const uint8_t duplicate_filter[] = "duplicate/#";
     flowie_mqtt_client_config_t config = FLOWIE_MQTT_CLIENT_CONFIG_INIT;
+    flowie_mqtt_client_topic_handler_t duplicate_handlers[2] = {{0}};
     flowie_mqtt_client_t *client = (flowie_mqtt_client_t *)(uintptr_t)1u;
-    coro_context_t *context = coro_context_create(NULL);
-    check_not_null(context);
-    config.context = context;
     check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_EINVAL);
     check_null(client);
     config.host = "127.0.0.1";
     check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_OK);
     check_not_null(client);
     check_false(flowie_mqtt_client_is_connected(client));
-    check_int_eq(flowie_mqtt_client_ping(client), TURBO_EBUSY);
+    check_int_eq(flowie_mqtt_client_ping(client), TURBO_ENOTSUP);
     flowie_mqtt_client_destroy(client);
-
-    config.size = offsetof(flowie_mqtt_client_config_t, command_queue_capacity);
-    config.abi_version = FLOWIE_MQTT_CLIENT_ABI_V1;
-    check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_OK);
-    check_false(flowie_mqtt_client_is_managed(client));
-    flowie_mqtt_client_destroy(client);
-    coro_context_destroy(context);
+    client = NULL;
+    duplicate_handlers[0].filter =
+        (flowie_mqtt_span_t){duplicate_filter, sizeof(duplicate_filter) - 1u};
+    duplicate_handlers[0].on_message = flowie_mqtt_test_on_publish;
+    duplicate_handlers[1] = duplicate_handlers[0];
+    config.topic_handlers =
+        (flowie_mqtt_client_topic_handler_map_t){duplicate_handlers, 2u};
+    check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_EINVAL);
+    check_null(client);
   }
 
-  it("rejects managed commands that exceed the configured queue byte budget") {
+  it("rejects commands that exceed the configured queue byte budget") {
     flowie_mqtt_client_config_t config = FLOWIE_MQTT_CLIENT_CONFIG_INIT;
     flowie_mqtt_client_t *client = NULL;
     int completion_count = 0;
     config.host = "127.0.0.1";
     config.command_queue_max_bytes = 1u;
+    config.on_ping = flowie_mqtt_test_count_completion;
+    config.user_data = &completion_count;
     check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_OK);
-    check_true(flowie_mqtt_client_is_managed(client));
-    check_int_eq(
-        flowie_mqtt_client_ping_async(client, flowie_mqtt_test_count_completion, &completion_count),
-        TURBO_ENOSPC);
+    check_int_eq(flowie_mqtt_client_ping(client), TURBO_ENOSPC);
     check_int_eq(completion_count, 0);
     flowie_mqtt_client_destroy(client);
   }
 
-  it("cancels accepted managed commands before releasing its worker context") {
+  it("rejects a topic vector atomically when the command queue is too small") {
+    static const uint8_t topic_names[2][12] = {"batch/one", "batch/two"};
+    static const uint8_t payloads[2][4] = {"one", "two"};
+    flowie_mqtt_client_config_t config = FLOWIE_MQTT_CLIENT_CONFIG_INIT;
+    flowie_mqtt_client_publish_topic_t topics[2] = {{0}};
+    flowie_mqtt_client_publish_topic_vec_t topic_vec =
+        FLOWIE_MQTT_CLIENT_PUBLISH_TOPIC_VEC_INIT;
+    flowie_mqtt_client_t *client = NULL;
+    int completion_count = 0;
+    config.host = "127.0.0.1";
+    config.command_queue_capacity = 1u;
+    config.on_publish = flowie_mqtt_test_count_completion;
+    config.user_data = &completion_count;
+    topics[0].topic = (flowie_mqtt_span_t){topic_names[0], strlen((const char *)topic_names[0])};
+    topics[0].payload = (flowie_mqtt_span_t){payloads[0], strlen((const char *)payloads[0])};
+    topics[1].topic = (flowie_mqtt_span_t){topic_names[1], strlen((const char *)topic_names[1])};
+    topics[1].payload = (flowie_mqtt_span_t){payloads[1], strlen((const char *)payloads[1])};
+    topic_vec.version = FLOWIE_MQTT_VERSION_5;
+    topic_vec.data = topics;
+    topic_vec.count = 2u;
+    check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_OK);
+    check_int_eq(flowie_mqtt_client_publish(client, &topic_vec), TURBO_ENOSPC);
+    check_int_eq(completion_count, 0);
+    flowie_mqtt_client_destroy(client);
+  }
+
+  it("cancels accepted commands before releasing its worker context") {
     static const uint8_t client_id[] = "flowie-shutdown-client";
     flowie_mqtt_client_config_t config = FLOWIE_MQTT_CLIENT_CONFIG_INIT;
     flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
@@ -610,16 +660,15 @@ spec("flowie mqtt coroutine client") {
     config.host = "127.0.0.1";
     config.port = port;
     config.timeout_ms = FLOWIE_MQTT_CLIENT_TEST_TIMEOUT_MS;
+    config.on_connect = flowie_mqtt_test_shutdown_completion;
+    config.on_ping = flowie_mqtt_test_shutdown_completion;
+    config.user_data = &shutdown;
     check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_OK);
     connect.version = FLOWIE_MQTT_VERSION_5;
     connect.clean_start = 1u;
     connect.client_id = (flowie_mqtt_span_t){client_id, sizeof(client_id) - 1u};
-    check_int_eq(flowie_mqtt_client_connect_async(client, &connect,
-                                                  flowie_mqtt_test_shutdown_completion, &shutdown),
-                 TURBO_OK);
-    check_int_eq(
-        flowie_mqtt_client_ping_async(client, flowie_mqtt_test_shutdown_completion, &shutdown),
-        TURBO_OK);
+    check_int_eq(flowie_mqtt_client_connect(client, &connect), TURBO_OK);
+    check_int_eq(flowie_mqtt_client_ping(client), TURBO_OK);
     flowie_mqtt_client_destroy(client);
     check_int_eq(shutdown.count, 2);
     check_int_eq(shutdown.statuses[0], TURBO_ESHUTDOWN);
@@ -628,27 +677,76 @@ spec("flowie mqtt coroutine client") {
     coro_context_destroy(server_context);
   }
 
-  it("completes MQTT 3.1.1 client exchanges against a local broker") {
-    flowie_mqtt_test_state_t state;
-    check_int_eq(flowie_mqtt_test_run(FLOWIE_MQTT_VERSION_3_1_1, &state), TURBO_OK);
-    check_int_eq(state.publish_count, 1);
-    check_str_eq(state.topic, "server/topic");
-    check_str_eq(state.payload, "from-broker");
+  it("reports an unsolicited connection close through the error callback") {
+    static const uint8_t client_id[] = "flowie-error-client";
+    flowie_mqtt_client_config_t config = FLOWIE_MQTT_CLIENT_CONFIG_INIT;
+    flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
+    flowie_mqtt_test_error_state_t state = {0};
+    flowie_mqtt_client_t *client = NULL;
+    coro_context_t *server_context = coro_context_create(NULL);
+    coro_socket_t *server = NULL;
+    unsigned short port = flowie_test_port();
+    uint64_t deadline;
+    int error_status;
+    check_not_null(server_context);
+    check_uint_ne(port, 0u);
+    atomic_init(&state.connect_done, 0);
+    atomic_init(&state.connect_status, TURBO_EBUSY);
+    atomic_init(&state.error_count, 0);
+    atomic_init(&state.error_status, TURBO_OK);
+    state.server_status = TURBO_EBUSY;
+    server = coro_socket_create_tcpv4(server_context);
+    check_not_null(server);
+    check_int_eq(coro_socket_listen_on(server, "127.0.0.1", port,
+                                       flowie_mqtt_test_closing_broker_handler, &state),
+                 TURBO_OK);
+    config.host = "127.0.0.1";
+    config.port = port;
+    config.timeout_ms = FLOWIE_MQTT_CLIENT_TEST_TIMEOUT_MS;
+    config.on_connect = flowie_mqtt_test_error_connect_completion;
+    config.on_error = flowie_mqtt_test_background_error;
+    config.user_data = &state;
+    check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_OK);
+    connect.version = FLOWIE_MQTT_VERSION_5;
+    connect.clean_start = 1u;
+    connect.client_id = (flowie_mqtt_span_t){client_id, sizeof(client_id) - 1u};
+    check_int_eq(flowie_mqtt_client_connect(client, &connect), TURBO_OK);
+    deadline = turbo_monotonic_ms() + FLOWIE_MQTT_CLIENT_TEST_TIMEOUT_MS * 2u;
+    while ((!state.server_done ||
+            atomic_load_explicit(&state.error_count, memory_order_acquire) == 0) &&
+           turbo_monotonic_ms() < deadline)
+      (void)coro_context_run(server_context, TURBO_RUN_ONCE);
+    check_true(state.server_done);
+    check_int_eq(state.server_status, TURBO_OK);
+    check_true(atomic_load_explicit(&state.connect_done, memory_order_acquire));
+    check_int_eq(atomic_load_explicit(&state.connect_status, memory_order_relaxed), TURBO_OK);
+    check_int_eq(atomic_load_explicit(&state.error_count, memory_order_acquire), 1);
+    error_status = atomic_load_explicit(&state.error_status, memory_order_relaxed);
+    check_true(error_status == TURBO_EOF || error_status == TURBO_ECONNRESET);
+    flowie_mqtt_client_destroy(client);
+    coro_socket_destroy(server);
+    coro_context_destroy(server_context);
   }
 
-  it("completes MQTT 5 client exchanges against a local broker") {
+  it("completes MQTT 3.1.1 callbacks against a local broker") {
     flowie_mqtt_test_state_t state;
-    check_int_eq(flowie_mqtt_test_run(FLOWIE_MQTT_VERSION_5, &state), TURBO_OK);
-    check_int_eq(state.publish_count, 1);
-    check_str_eq(state.topic, "server/topic");
-    check_str_eq(state.payload, "from-broker");
+    check_int_eq(flowie_mqtt_test_run_callbacks(FLOWIE_MQTT_VERSION_3_1_1, &state), TURBO_OK);
+    check_int_eq(state.publish_count, 2);
+    check_str_eq(state.topics[0], "server/topic/one");
+    check_str_eq(state.payloads[0], "from-broker-one");
+    check_str_eq(state.topics[1], "server/topic/two");
+    check_str_eq(state.payloads[1], "from-broker-two");
+    check_int_eq(state.secondary_match_count, 1);
   }
 
-  it("owns CoroNet and processes managed MQTT 5 commands on its DLL worker") {
+  it("completes MQTT 5 callbacks against a local broker") {
     flowie_mqtt_test_state_t state;
-    check_int_eq(flowie_mqtt_test_run_managed(FLOWIE_MQTT_VERSION_5, &state), TURBO_OK);
-    check_int_eq(state.publish_count, 1);
-    check_str_eq(state.topic, "server/topic");
-    check_str_eq(state.payload, "from-broker");
+    check_int_eq(flowie_mqtt_test_run_callbacks(FLOWIE_MQTT_VERSION_5, &state), TURBO_OK);
+    check_int_eq(state.publish_count, 2);
+    check_str_eq(state.topics[0], "server/topic/one");
+    check_str_eq(state.payloads[0], "from-broker-one");
+    check_str_eq(state.topics[1], "server/topic/two");
+    check_str_eq(state.payloads[1], "from-broker-two");
+    check_int_eq(state.secondary_match_count, 1);
   }
 }

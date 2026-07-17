@@ -543,7 +543,11 @@ typedef struct turbo_flow_msg_s {
   mem_buffer_t *buffer;
   tstr_v payload;
   tstr_t owned_payload;
-  /** Borrowed adapter request context; propagated but never destroyed by the flow. */
+  /**
+   * Adapter context. An address inside `buffer` is message-owned and follows
+   * that buffer across clone/move and asynchronous graph boundaries. Any other
+   * address is borrowed, propagated inline, and never destroyed by the flow.
+   */
   void *transport_context;
   /** Core-private message sidecar. Callers must use content/projection/route APIs. */
   void *_content_handle;
@@ -1286,6 +1290,56 @@ typedef struct turbo_flow_adapter_schema_s {
   size_t field_count;
 } turbo_flow_adapter_schema_t;
 
+/**
+ * Atomically register one native adapter and bind its executable operations to
+ * their module owner. The registry copies all names and schemas; callback and
+ * resource contexts remain owned by the registering module.
+ *
+ * Every operation must already be exported by `module_name` and match the
+ * adapter role/callback used to execute it. Adapter-owned operations leave the
+ * parallel resource entry NULL. Resource/protocol-owner operations name a
+ * compatible primitive exported by the module; missing primitive instances may
+ * be supplied through `primitives`. A failed registration leaves no adapter,
+ * resource provider, primitive, or operation binding behind. `ctx` remains
+ * caller-owned on failure and transfers to registry shutdown ownership only on
+ * success.
+ */
+typedef struct turbo_flow_module_adapter_registration_s {
+  size_t size;
+  const char *module_name;
+  const char *adapter_name;
+  const turbo_flow_adapter_ops_t *ops;
+  void *ctx;
+  const turbo_flow_adapter_schema_t *schema;
+  const char *const *operation_names;
+  size_t operation_count;
+  const turbo_flow_resource_provider_registration_t *resources;
+  size_t resource_count;
+  /** Optional parallel array; NULL entries mean the operation is adapter-owned. */
+  const char *const *operation_resource_names;
+  /** Primitive instances to register atomically before adapter ownership transfers. */
+  const turbo_flow_primitive_descriptor_t *primitives;
+  size_t primitive_count;
+} turbo_flow_module_adapter_registration_t;
+
+#define TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT                                                \
+  {sizeof(turbo_flow_module_adapter_registration_t),                                               \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   0u}
+
+#define TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_V1_SIZE                                             \
+  offsetof(turbo_flow_module_adapter_registration_t, operation_resource_names)
+
 typedef enum turbo_flow_state_e {
   TURBO_FLOW_STATE_NEW = 0,
   TURBO_FLOW_STATE_PARSED,
@@ -1860,6 +1914,24 @@ CXX_C_API int turbo_flow_register_adapter_with_resources(
     const turbo_flow_adapter_schema_t *schema,
     const turbo_flow_resource_provider_registration_t *resources, size_t resource_count);
 
+/** Atomically register a module-owned native adapter and its typed operations. */
+CXX_C_API int
+turbo_flow_register_module_adapter(turbo_flow_t *flow,
+                                   const turbo_flow_module_adapter_registration_t *registration);
+
+/**
+ * Return the module owning an adapter's executable operation association.
+ * The borrowed string remains valid until registry-clearing reset or destroy.
+ */
+CXX_C_API const char *turbo_flow_adapter_operation_module(const turbo_flow_t *flow,
+                                                          const char *adapter_name,
+                                                          const char *operation_name);
+
+/** Return the primitive binding for one typed adapter operation, or NULL when adapter-owned. */
+CXX_C_API const char *turbo_flow_adapter_operation_resource(const turbo_flow_t *flow,
+                                                            const char *adapter_name,
+                                                            const char *operation_name);
+
 /** Attach or clear one host-owned observer. Rejected while the flow is started. */
 CXX_C_API int turbo_flow_set_observer(turbo_flow_t *flow, const turbo_flow_observer_ops_t *ops,
                                       void *ctx);
@@ -1921,9 +1993,10 @@ CXX_C_API int turbo_flow_resize_workflow_retry(turbo_flow_resize_workflow_state_
  * turbo_flow_resource_command_t through turbo_flow_resource_command(). This
  * entry point remains available for source and ABI compatibility.
  */
-CXX_C_API TURBO_FLOW_DEPRECATED("use turbo_flow_resource_command() with a stable resource "
-                                "provider") int turbo_flow_adapter_command(
-    turbo_flow_t *flow, const char *adapter_name, const turbo_flow_adapter_command_t *command);
+CXX_C_API TURBO_FLOW_DEPRECATED(
+    "use turbo_flow_resource_command() with a stable resource "
+    "provider") int turbo_flow_adapter_command(turbo_flow_t *flow, const char *adapter_name,
+                                               const turbo_flow_adapter_command_t *command);
 
 /** Return registry-owned metadata valid until reset without keep_registry or destroy. */
 CXX_C_API const turbo_flow_adapter_schema_t *turbo_flow_adapter_schema_at(const turbo_flow_t *flow,

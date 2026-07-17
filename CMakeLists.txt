@@ -108,6 +108,12 @@ endif()
 if(TURBO_FLOW_BUILD_ADAPTERS)
   add_subdirectory(io)
 endif()
+if(TURBO_FLOW_BUILD_FMQ OR TURBO_FLOW_BUILD_FMQ_PROTOCOL)
+  add_subdirectory(flowmq/protocol)
+endif()
+if(TURBO_FLOW_BUILD_FMQ)
+  add_subdirectory(flowmq)
+endif()
 if(TURBO_FLOW_BUILD_FLOWIE AND TURBO_FLOW_BUILD_QUEUE AND TURBO_FLOW_BUILD_SOCKET)
   add_subdirectory(flowie/app)
 endif()
@@ -183,7 +189,7 @@ install(
 if(BUILD_TESTING
    AND TURBO_FLOW_BUILD_PROFILE_TESTS
    AND TURBO_FLOW_BUILD_ADAPTERS)
-  foreach(profile IN ITEMS core codec_fmq expr_no_jit)
+  foreach(profile IN ITEMS core protocol_only codec_fmq expr_no_jit)
     add_test(
       NAME build_profile_${profile}
       COMMAND

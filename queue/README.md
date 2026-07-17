@@ -128,19 +128,25 @@ unchanged. Successful COMMIT is the durable ACK.
 
 ```flow
 source input
-stage enqueue adapter queue.orders.out
-flow producer {
+stage enqueue adapter queue.orders.out operation queue.enqueue resource "orders-queue"
+stage producer {
   input -> enqueue
 }
 ```
 
 ```flow
-source dequeue adapter queue.orders.in
+source dequeue adapter queue.orders.in operation queue.dequeue resource "orders-queue"
 stage process
-flow consumer {
+stage consumer {
   dequeue -> process
 }
 ```
+
+Adapter registration installs the `buffer.queue` module, a versioned `QueueBuffer`
+primitive named by `owner_name`, and typed `queue.enqueue` / `queue.dequeue`
+operations. The compiler requires the operation's resource name to match the
+adapter's queue instance. The queue object remains the only mutable fact source;
+the source and sink adapters only retain and project it.
 
 Destroy both flows before calling `turbo_flow_queue_destroy()`. Destroy returns
 `TURBO_EBUSY` while any registered adapter retains the queue. Register/destroy

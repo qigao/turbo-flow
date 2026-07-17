@@ -15,6 +15,52 @@ extern "C" {
 
 typedef struct turbo_flow_resolved_config_s turbo_flow_resolved_config_t;
 
+struct turbo_flow_config_error_s;
+
+typedef int (*turbo_flow_product_adapter_register_fn)(void *ctx, turbo_flow_t *flow,
+                                                      const turbo_flow_resolved_config_t *resolved,
+                                                      const char *adapter_name,
+                                                      struct turbo_flow_config_error_s *error);
+
+typedef int (*turbo_flow_product_resource_register_fn)(void *ctx, turbo_flow_t *flow,
+                                                       const turbo_flow_resolved_config_t *resolved,
+                                                       const char *resource_name,
+                                                       struct turbo_flow_config_error_s *error);
+
+/** One trusted native provider for a resolved `adapters.<name>.kind`. */
+typedef struct turbo_flow_product_adapter_provider_s {
+  size_t size;
+  const char *kind;
+  turbo_flow_product_adapter_register_fn register_adapter;
+  void *ctx;
+} turbo_flow_product_adapter_provider_t;
+
+#define TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT                                                   \
+  {sizeof(turbo_flow_product_adapter_provider_t), NULL, NULL, NULL}
+
+/** One trusted processor/resource provider for a resolved `channels.<name>.kind`. */
+typedef struct turbo_flow_product_resource_provider_s {
+  size_t size;
+  const char *kind;
+  turbo_flow_product_resource_register_fn register_resource;
+  void *ctx;
+} turbo_flow_product_resource_provider_t;
+
+#define TURBO_FLOW_PRODUCT_RESOURCE_PROVIDER_INIT                                                  \
+  {sizeof(turbo_flow_product_resource_provider_t), NULL, NULL, NULL}
+
+/** Caller-owned provider catalog used synchronously during one product build. */
+typedef struct turbo_flow_product_provider_registry_s {
+  size_t size;
+  const turbo_flow_product_adapter_provider_t *adapter_providers;
+  size_t adapter_provider_count;
+  const turbo_flow_product_resource_provider_t *resource_providers;
+  size_t resource_provider_count;
+} turbo_flow_product_provider_registry_t;
+
+#define TURBO_FLOW_PRODUCT_PROVIDER_REGISTRY_INIT                                                  \
+  {sizeof(turbo_flow_product_provider_registry_t), NULL, 0u, NULL, 0u}
+
 typedef enum turbo_flow_config_value_type_e {
   TURBO_FLOW_CONFIG_NULL = 0,
   TURBO_FLOW_CONFIG_BOOL,
@@ -74,8 +120,9 @@ CXX_C_API const char *turbo_flow_resolved_config_json(const turbo_flow_resolved_
  * The returned values are always complete, including resolver-expanded
  * defaults when `runtime.ingress` or one of its fields was omitted.
  */
-CXX_C_API int turbo_flow_resolved_config_runtime_ingress(
-    const turbo_flow_resolved_config_t *config, turbo_flow_async_ingress_config_t *ingress);
+CXX_C_API int
+turbo_flow_resolved_config_runtime_ingress(const turbo_flow_resolved_config_t *config,
+                                           turbo_flow_async_ingress_config_t *ingress);
 
 /**
  * Resolve one profile parameter to its concrete adapter name.
@@ -103,6 +150,48 @@ CXX_C_API int turbo_flow_resolved_config_profile_channel(const turbo_flow_resolv
 CXX_C_API int turbo_flow_resolved_config_preflight_adapter_kinds(
     const turbo_flow_resolved_config_t *config, const char *const *enabled_kinds,
     size_t enabled_kind_count, turbo_flow_config_error_t *error);
+
+/**
+ * Validate a trusted product provider registry against every resolved adapter kind.
+ *
+ * This performs no provider callback and no Flow mutation. Duplicate, malformed, or missing
+ * providers fail before any native resource is created, so hosts can call it immediately after
+ * YAML resolution. Resource providers are validated structurally here and selected after Graph
+ * parsing, because unused channels are valid configuration resources.
+ *
+ * @param config Borrowed immutable resolved YAML snapshot.
+ * @param registry Borrowed provider descriptors and callback contexts.
+ * @param error Caller-owned structured error initialized with TURBO_FLOW_CONFIG_ERROR_INIT.
+ * @return TURBO_OK on success; TURBO_EINVAL for malformed descriptors, TURBO_EALREADY for a
+ * duplicate provider kind, TURBO_ENOTSUP for an adapter kind without a provider, or TURBO_EPROTO
+ * for an invalid resolved snapshot.
+ */
+CXX_C_API int turbo_flow_product_preflight(const turbo_flow_resolved_config_t *config,
+                                           const turbo_flow_product_provider_registry_t *registry,
+                                           turbo_flow_config_error_t *error);
+
+/**
+ * Register the resources and adapters explicitly referenced by a parsed Graph.
+ *
+ * Resource callbacks run before adapter callbacks. Each distinct resource or adapter name is
+ * registered once even when multiple nodes reference it. The registry and callback contexts are
+ * borrowed only for this call. A callback may create native state and mutate `flow`; after any
+ * failure the caller must discard that Flow generation and destroy its provider-owned resources.
+ *
+ * @param flow Parsed, caller-owned Flow generation.
+ * @param config Borrowed immutable resolved YAML snapshot used to parse provider config.
+ * @param registry Borrowed provider descriptors and callback contexts.
+ * @param error Caller-owned structured error initialized with TURBO_FLOW_CONFIG_ERROR_INIT.
+ * @return TURBO_OK on success; TURBO_EINVAL when the Graph is not parsed or a provider rejects its
+ * binding, TURBO_ENOENT for a missing referenced adapter/channel, TURBO_ENOTSUP for a missing
+ * resource provider, or the exact provider callback status.
+ *
+ * Typical order is resolve YAML, preflight, parse Graph, assemble Graph providers, then compile.
+ */
+CXX_C_API int
+turbo_flow_product_assemble_graph(turbo_flow_t *flow, const turbo_flow_resolved_config_t *config,
+                                  const turbo_flow_product_provider_registry_t *registry,
+                                  turbo_flow_config_error_t *error);
 
 /**
  * Resolve one adapter without exposing TurboUtils JSON implementation types.

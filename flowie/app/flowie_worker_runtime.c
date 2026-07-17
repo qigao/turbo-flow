@@ -32,6 +32,17 @@ struct flowie_worker_runtime_s {
   int started;
 };
 
+typedef struct flowie_worker_provider_context_s {
+  flowie_worker_runtime_t *runtime;
+  const char *endpoint_name;
+  const char *accept_sink_name;
+  const char *accepted_source_name;
+  const char *rule_set_channel;
+  const char *output_name;
+  const char *queue_channel;
+  const char *session_store_channel;
+} flowie_worker_provider_context_t;
+
 static void flowie_worker_error_reset(flowie_worker_error_t *error) {
   if (!error || error->size != sizeof(*error)) return;
   *error = (flowie_worker_error_t)FLOWIE_WORKER_ERROR_INIT;
@@ -67,7 +78,7 @@ static int flowie_worker_resolve_queue_channel(const turbo_flow_resolved_config_
     error->status = rc;
     (void)snprintf(error->path, sizeof(error->path), "$.adapters.%s.config.channel", adapter_name);
     (void)snprintf(error->message, sizeof(error->message),
-                   "profile accept_sink must reference a Queue adapter with a channel");
+                   "Queue adapter must reference a configured Queue channel");
   }
   return rc;
 }
@@ -146,9 +157,89 @@ static void flowie_worker_destroy_session_store(turbo_flow_record_store_t *store
 #endif
 }
 
+static int flowie_worker_register_rule_resource(void *ctx, turbo_flow_t *flow,
+                                                const turbo_flow_resolved_config_t *resolved,
+                                                const char *resource_name,
+                                                turbo_flow_config_error_t *error) {
+  flowie_worker_provider_context_t *provider = (flowie_worker_provider_context_t *)ctx;
+  int rc;
+  if (!provider || !provider->runtime || !provider->rule_set_channel ||
+      strcmp(resource_name, provider->rule_set_channel) != 0 || provider->runtime->rule_processor) {
+    return TURBO_EINVAL;
+  }
+  rc = turbo_flow_rule_processor_create_resolved(resolved, resource_name, flowie_mqtt_rule_schema(),
+                                                 flowie_mqtt_rule_facts_provider, NULL,
+                                                 &provider->runtime->rule_processor, error);
+  if (rc != TURBO_OK) return rc;
+  rc = turbo_flow_rule_register_data_operation(flow, resource_name,
+                                               provider->runtime->rule_processor);
+  if (rc != TURBO_OK) {
+    turbo_flow_rule_processor_destroy(provider->runtime->rule_processor);
+    provider->runtime->rule_processor = NULL;
+  }
+  return rc;
+}
+
+static int flowie_worker_register_endpoint_adapter(void *ctx, turbo_flow_t *flow,
+                                                   const turbo_flow_resolved_config_t *resolved,
+                                                   const char *adapter_name,
+                                                   turbo_flow_config_error_t *error) {
+  flowie_worker_provider_context_t *provider = (flowie_worker_provider_context_t *)ctx;
+  if (!provider || !provider->runtime || !provider->endpoint_name ||
+      strcmp(adapter_name, provider->endpoint_name) != 0) {
+    return TURBO_EINVAL;
+  }
+  if (provider->session_store_channel) {
+    flowie_endpoint_persistence_binding_t persistence = FLOWIE_ENDPOINT_PERSISTENCE_BINDING_INIT;
+    flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
+    persistence.store_channel = provider->session_store_channel;
+    persistence.store = &provider->runtime->session_store;
+    bindings.persistence = &persistence;
+    return flowie_register_resolved_bound_endpoint(flow, adapter_name, resolved, &bindings, error);
+  }
+  return flowie_register_resolved_endpoint(flow, adapter_name, resolved, error);
+}
+
+static int flowie_worker_register_queue_adapter(void *ctx, turbo_flow_t *flow,
+                                                const turbo_flow_resolved_config_t *resolved,
+                                                const char *adapter_name,
+                                                turbo_flow_config_error_t *error) {
+  flowie_worker_provider_context_t *provider = (flowie_worker_provider_context_t *)ctx;
+  const char *channel = NULL;
+  int rc;
+  if (!provider || !provider->runtime || !provider->runtime->queue ||
+      (!provider->accept_sink_name || strcmp(adapter_name, provider->accept_sink_name) != 0) &&
+          (!provider->accepted_source_name ||
+           strcmp(adapter_name, provider->accepted_source_name) != 0)) {
+    return TURBO_EINVAL;
+  }
+  rc = flowie_worker_resolve_queue_channel(resolved, adapter_name, &channel, error);
+  if (rc != TURBO_OK) return rc;
+  if (!provider->queue_channel || strcmp(channel, provider->queue_channel) != 0) {
+    *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    error->status = TURBO_EINVAL;
+    (void)snprintf(error->path, sizeof(error->path), "$.adapters.%s.config.channel", adapter_name);
+    (void)snprintf(error->message, sizeof(error->message),
+                   "Flowie Queue source and sink must reference the same channel");
+    return TURBO_EINVAL;
+  }
+  return turbo_flow_queue_register_resolved_adapter(flow, adapter_name, resolved,
+                                                    provider->runtime->queue, error);
+}
+
+static int flowie_worker_register_socket_adapter(void *ctx, turbo_flow_t *flow,
+                                                 const turbo_flow_resolved_config_t *resolved,
+                                                 const char *adapter_name,
+                                                 turbo_flow_config_error_t *error) {
+  flowie_worker_provider_context_t *provider = (flowie_worker_provider_context_t *)ctx;
+  (void)error;
+  if (!provider || !provider->output_name || strcmp(adapter_name, provider->output_name) != 0)
+    return TURBO_EINVAL;
+  return turbo_flow_coronet_register_socket_resolved_adapter(flow, resolved, adapter_name);
+}
+
 int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
                                  flowie_worker_runtime_t **out, flowie_worker_error_t *error) {
-  static const char *const enabled_kinds[] = {"flowie_endpoint", "queue", "socket"};
   const char *endpoint_name = NULL;
   const char *accept_sink_name = NULL;
   const char *accepted_source_name = NULL;
@@ -159,6 +250,14 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
   const char *failure_operation = NULL;
   turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_async_ingress_config_t ingress_config = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
+  flowie_worker_provider_context_t provider_context = {0};
+  turbo_flow_product_adapter_provider_t adapter_providers[3] = {
+      TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT, TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT,
+      TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT};
+  turbo_flow_product_resource_provider_t resource_provider =
+      TURBO_FLOW_PRODUCT_RESOURCE_PROVIDER_INIT;
+  turbo_flow_product_provider_registry_t provider_registry =
+      TURBO_FLOW_PRODUCT_PROVIDER_REGISTRY_INIT;
   const turbo_flow_error_t *flow_error = NULL;
   flowie_worker_runtime_t *runtime;
   int rc;
@@ -177,6 +276,24 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
     return TURBO_ENOMEM;
   }
   runtime->session_store = (turbo_flow_record_store_t)TURBO_FLOW_RECORD_STORE_INIT;
+  provider_context.runtime = runtime;
+  adapter_providers[0].kind = "flowie_endpoint";
+  adapter_providers[0].register_adapter = flowie_worker_register_endpoint_adapter;
+  adapter_providers[0].ctx = &provider_context;
+  adapter_providers[1].kind = "queue";
+  adapter_providers[1].register_adapter = flowie_worker_register_queue_adapter;
+  adapter_providers[1].ctx = &provider_context;
+  adapter_providers[2].kind = "socket";
+  adapter_providers[2].register_adapter = flowie_worker_register_socket_adapter;
+  adapter_providers[2].ctx = &provider_context;
+  resource_provider.kind = "rule_set";
+  resource_provider.register_resource = flowie_worker_register_rule_resource;
+  resource_provider.ctx = &provider_context;
+  provider_registry.adapter_providers = adapter_providers;
+  provider_registry.adapter_provider_count =
+      sizeof(adapter_providers) / sizeof(adapter_providers[0]);
+  provider_registry.resource_providers = &resource_provider;
+  provider_registry.resource_provider_count = 1u;
 
   rc = turbo_fs_read_file(config->config_path, &runtime->yaml);
   if (rc != TURBO_OK) {
@@ -199,11 +316,9 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
     failure_operation = "resolve runtime ingress";
     goto fail;
   }
-  rc = turbo_flow_resolved_config_preflight_adapter_kinds(
-      runtime->resolved, enabled_kinds, sizeof(enabled_kinds) / sizeof(enabled_kinds[0]),
-      &config_error);
+  rc = turbo_flow_product_preflight(runtime->resolved, &provider_registry, &config_error);
   if (rc != TURBO_OK) {
-    failure_operation = "preflight adapter kinds";
+    failure_operation = "preflight product providers";
     goto fail;
   }
   rc = turbo_flow_resolved_config_profile_adapter(runtime->resolved, config->profile, "endpoint",
@@ -224,18 +339,25 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
     failure_operation = "resolve profile";
     goto fail;
   }
+  provider_context.endpoint_name = endpoint_name;
+  provider_context.accept_sink_name = accept_sink_name;
+  provider_context.accepted_source_name = accepted_source_name;
+  provider_context.rule_set_channel = rule_set_channel;
+  provider_context.output_name = output_name;
   rc = flowie_worker_resolve_queue_channel(runtime->resolved, accept_sink_name, &queue_channel,
                                            &config_error);
   if (rc != TURBO_OK) {
     failure_operation = "resolve Queue channel";
     goto fail;
   }
+  provider_context.queue_channel = queue_channel;
   rc = flowie_worker_resolve_session_store(runtime->resolved, endpoint_name, &session_store_channel,
                                            &config_error);
   if (rc != TURBO_OK) {
     failure_operation = "resolve session store";
     goto fail;
   }
+  provider_context.session_store_channel = session_store_channel;
   rc = turbo_flow_queue_create_resolved(runtime->resolved, queue_channel, &runtime->queue,
                                         &config_error);
   if (rc != TURBO_OK) {
@@ -251,13 +373,6 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
       goto fail;
     }
   }
-  rc = turbo_flow_rule_processor_create_resolved(
-      runtime->resolved, rule_set_channel, flowie_mqtt_rule_schema(),
-      flowie_mqtt_rule_facts_provider, NULL, &runtime->rule_processor, &config_error);
-  if (rc != TURBO_OK) {
-    failure_operation = "create MQTT RuleSet";
-    goto fail;
-  }
   runtime->flow = turbo_flow_create();
   if (!runtime->flow) {
     rc = TURBO_ENOMEM;
@@ -269,36 +384,19 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
     failure_operation = "configure runtime ingress";
     goto fail;
   }
-  if (session_store_channel) {
-    flowie_endpoint_persistence_binding_t persistence = FLOWIE_ENDPOINT_PERSISTENCE_BINDING_INIT;
-    flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
-    persistence.store_channel = session_store_channel;
-    persistence.store = &runtime->session_store;
-    bindings.persistence = &persistence;
-    rc = flowie_register_resolved_bound_endpoint(runtime->flow, endpoint_name, runtime->resolved,
-                                                 &bindings, &config_error);
-  } else {
-    rc = flowie_register_resolved_endpoint(runtime->flow, endpoint_name, runtime->resolved,
-                                           &config_error);
-  }
-  if (rc == TURBO_OK)
-    rc = turbo_flow_queue_register_resolved_adapter(
-        runtime->flow, accept_sink_name, runtime->resolved, runtime->queue, &config_error);
-  if (rc == TURBO_OK)
-    rc = turbo_flow_queue_register_resolved_adapter(
-        runtime->flow, accepted_source_name, runtime->resolved, runtime->queue, &config_error);
-  if (rc == TURBO_OK)
-    rc = turbo_flow_rule_register_data_operation(runtime->flow, rule_set_channel,
-                                                 runtime->rule_processor);
-  if (rc == TURBO_OK)
-    rc = turbo_flow_coronet_register_socket_resolved_adapter(runtime->flow, runtime->resolved,
-                                                             output_name);
+  rc = turbo_flow_parse_string(runtime->flow, runtime->graph.base, runtime->graph.len);
   if (rc != TURBO_OK) {
-    failure_operation = "register primitives";
+    failure_operation = "parse graph";
+    flow_error = turbo_flow_last_error(runtime->flow);
     goto fail;
   }
-  rc = turbo_flow_parse_string(runtime->flow, runtime->graph.base, runtime->graph.len);
-  if (rc == TURBO_OK) rc = turbo_flow_compile(runtime->flow);
+  rc = turbo_flow_product_assemble_graph(runtime->flow, runtime->resolved, &provider_registry,
+                                         &config_error);
+  if (rc != TURBO_OK) {
+    failure_operation = "assemble product graph";
+    goto fail;
+  }
+  rc = turbo_flow_compile(runtime->flow);
   if (rc != TURBO_OK) {
     failure_operation = "compile graph";
     flow_error = turbo_flow_last_error(runtime->flow);

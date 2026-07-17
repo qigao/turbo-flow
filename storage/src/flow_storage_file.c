@@ -847,15 +847,103 @@ static void flow_storage_shutdown(void *ctx) {
   free(adapter);
 }
 
+static void flow_storage_operation_init(turbo_flow_operation_descriptor_t *operation,
+                                        const char *name, uint32_t role) {
+  memset(operation, 0, sizeof(*operation));
+  operation->size = sizeof(*operation);
+  operation->name = name;
+  operation->version = 1u;
+  operation->domain = TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE;
+  operation->resource_domain = TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE;
+  operation->resource_type = TURBO_FLOW_STORAGE_PRIMITIVE_TYPE;
+  operation->resource_min_version = 1u;
+  operation->resource_max_version = 1u;
+  operation->scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  operation->scope.state = TURBO_FLOW_STATE_SCOPE_RESOURCE_OWNER;
+  operation->scope.lifetime = role == TURBO_FLOW_OPERATION_SOURCE
+                                  ? TURBO_FLOW_LIFETIME_DISPATCH
+                                  : TURBO_FLOW_LIFETIME_CALL;
+  operation->scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+  operation->scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+  operation->flags = role | TURBO_FLOW_OPERATION_BRIDGE;
+  operation->execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  if (role == TURBO_FLOW_OPERATION_SOURCE) {
+    operation->output_domain = TURBO_FLOW_DOMAIN_DATA;
+    operation->output_type = "Message";
+  } else {
+    operation->input_domain = TURBO_FLOW_DOMAIN_DATA;
+    operation->input_type = "Message";
+  }
+}
+
+static int flow_storage_register_contract(turbo_flow_t *flow) {
+  static const char *const primitive_types[] = {TURBO_FLOW_STORAGE_PRIMITIVE_TYPE};
+  static const char *const operation_names[] = {
+      TURBO_FLOW_STORAGE_FILE_READ_OPERATION, TURBO_FLOW_STORAGE_DIRECTORY_READ_OPERATION,
+      TURBO_FLOW_STORAGE_FILE_WRITE_OPERATION, TURBO_FLOW_STORAGE_APPEND_WRITE_OPERATION,
+      TURBO_FLOW_STORAGE_SQLITE_EXECUTE_OPERATION};
+  turbo_flow_operation_descriptor_t operations[5];
+  turbo_flow_module_descriptor_t module;
+  flow_storage_operation_init(&operations[0], operation_names[0], TURBO_FLOW_OPERATION_SOURCE);
+  flow_storage_operation_init(&operations[1], operation_names[1], TURBO_FLOW_OPERATION_SOURCE);
+  flow_storage_operation_init(&operations[2], operation_names[2], TURBO_FLOW_OPERATION_STAGE);
+  flow_storage_operation_init(&operations[3], operation_names[3], TURBO_FLOW_OPERATION_STAGE);
+  flow_storage_operation_init(&operations[4], operation_names[4], TURBO_FLOW_OPERATION_STAGE);
+  memset(&module, 0, sizeof(module));
+  module.size = sizeof(module);
+  module.name = TURBO_FLOW_STORAGE_MODULE;
+  module.version = 1u;
+  module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
+                            TURBO_FLOW_MODULE_MANAGED_RESOURCES |
+                            TURBO_FLOW_MODULE_NATIVE_API;
+  module.primitive_types = primitive_types;
+  module.primitive_type_count = 1u;
+  module.operation_names = operation_names;
+  module.operation_count = 5u;
+  return turbo_flow_register_module_contract(flow, &module, operations, 5u);
+}
+
+static const char *flow_storage_operation_name(flow_storage_adapter_kind_t kind) {
+  switch (kind) {
+  case FLOW_STORAGE_FILE_SOURCE:
+    return TURBO_FLOW_STORAGE_FILE_READ_OPERATION;
+  case FLOW_STORAGE_DIRECTORY_SOURCE:
+    return TURBO_FLOW_STORAGE_DIRECTORY_READ_OPERATION;
+  case FLOW_STORAGE_FILE_SINK:
+    return TURBO_FLOW_STORAGE_FILE_WRITE_OPERATION;
+  case FLOW_STORAGE_APPEND_LOG_SINK:
+    return TURBO_FLOW_STORAGE_APPEND_WRITE_OPERATION;
+  case FLOW_STORAGE_SQLITE_SINK:
+    return TURBO_FLOW_STORAGE_SQLITE_EXECUTE_OPERATION;
+  default:
+    return NULL;
+  }
+}
+
 static int flow_storage_register_adapter(turbo_flow_t *flow, const char *name,
                                          flow_storage_adapter_t *adapter, int is_source,
                                          const turbo_flow_adapter_schema_t *schema) {
   turbo_flow_adapter_ops_t ops;
   turbo_flow_resource_provider_registration_t resource =
       TURBO_FLOW_RESOURCE_PROVIDER_REGISTRATION_INIT;
+  turbo_flow_module_adapter_registration_t registration =
+      TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+  turbo_flow_primitive_descriptor_t primitive;
+  const char *operation_names[1];
+  const char *resource_names[1];
   int rc;
 
   if (!flow || !name || name[0] == '\0' || !adapter) return TURBO_EINVAL;
+  operation_names[0] = flow_storage_operation_name(adapter->kind);
+  if (!operation_names[0]) {
+    flow_storage_shutdown(adapter);
+    return TURBO_EINVAL;
+  }
+  rc = flow_storage_register_contract(flow);
+  if (rc != TURBO_OK) {
+    flow_storage_shutdown(adapter);
+    return rc;
+  }
   memset(&ops, 0, sizeof(ops));
   ops.start = is_source ? flow_storage_file_source_start : flow_storage_sink_start;
   ops.consume = is_source ? NULL : flow_storage_sink_consume;
@@ -867,7 +955,28 @@ static int flow_storage_register_adapter(turbo_flow_t *flow, const char *name,
   resource.ops.snapshot = flow_storage_resource_snapshot;
   resource.ops.document = flow_storage_resource_document;
   resource.ctx = adapter;
-  rc = turbo_flow_register_adapter_with_resources(flow, name, &ops, adapter, schema, &resource, 1u);
+  memset(&primitive, 0, sizeof(primitive));
+  primitive.size = sizeof(primitive);
+  primitive.name = adapter->owner_name;
+  primitive.type_name = TURBO_FLOW_STORAGE_PRIMITIVE_TYPE;
+  primitive.version = 1u;
+  primitive.domain = TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE;
+  primitive.kind = TURBO_FLOW_PRIMITIVE_RESOURCE;
+  resource_names[0] = adapter->owner_name;
+  registration.module_name = TURBO_FLOW_STORAGE_MODULE;
+  registration.adapter_name = name;
+  registration.ops = &ops;
+  registration.ctx = adapter;
+  registration.schema = schema;
+  registration.operation_names = operation_names;
+  registration.operation_count = 1u;
+  registration.resources = &resource;
+  registration.resource_count = 1u;
+  registration.operation_resource_names = resource_names;
+  registration.primitives = &primitive;
+  registration.primitive_count = 1u;
+  rc = turbo_flow_register_module_adapter(flow, &registration);
+  if (rc != TURBO_OK) flow_storage_shutdown(adapter);
   return rc;
 }
 
