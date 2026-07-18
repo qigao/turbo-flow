@@ -104,6 +104,15 @@ int flowmq_coronet_transport_send(coro_socket_t *socket, flowmq_coronet_transpor
   return tf_coronet_send_socket(socket, coronet, data, len);
 }
 
+int flowmq_coronet_transport_sendv(coro_socket_t *socket, flowmq_coronet_transport_t transport,
+                                   const tf_coronet_socket_timeout_config_t *timeouts,
+                                   const turbo_iovec_t *iov, size_t iovcnt) {
+  if (!socket || !timeouts || !iov || iovcnt == 0u) return TURBO_EINVAL;
+  if (transport != FLOWMQ_TRANSPORT_TCP) return TURBO_ENOTSUP;
+  (void)tf_coronet_apply_socket_timeout(socket, timeouts, TF_CORONET_TIMEOUT_SEND);
+  return coro_socket_sendv(socket, iov, iovcnt);
+}
+
 int flowmq_coronet_transport_leave_multicast(coro_socket_t *socket,
                                              flowmq_coronet_transport_t transport,
                                              const tf_coronet_udp_options_t *udp_options) {

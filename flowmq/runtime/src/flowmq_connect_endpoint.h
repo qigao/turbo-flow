@@ -79,6 +79,8 @@ void flowmq_connect_endpoint_destroy(flowmq_connect_endpoint_t *endpoint);
 coro_context_t *flowmq_connect_endpoint_context(flowmq_connect_endpoint_t *endpoint);
 int flowmq_connect_endpoint_send(flowmq_connect_endpoint_t *endpoint, const char *encoded,
                                  size_t encoded_size);
+int flowmq_connect_endpoint_sendv(flowmq_connect_endpoint_t *endpoint, const turbo_iovec_t *iov,
+                                  size_t iovcnt);
 int flowmq_connect_endpoint_interrupt(flowmq_connect_endpoint_t *endpoint, int status);
 int flowmq_connect_endpoint_update_endpoint(flowmq_connect_endpoint_t *endpoint, const char *host,
                                             int port, const char *path);

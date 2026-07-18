@@ -19,6 +19,8 @@
 #define FLOWIE_BENCH_TOPIC_BUFFER_SIZE 128u
 #define FLOWIE_BENCH_FANOUT_SUBSCRIBERS 16u
 #define FLOWIE_BENCH_FANOUT_SAMPLES 1000u
+#define FLOWIE_BENCH_PIPELINE_MESSAGES 64u
+#define FLOWIE_BENCH_PIPELINE_SAMPLES 500u
 #define FLOWIE_BENCH_CHURN_SAMPLES 500u
 #define FLOWIE_BENCH_REBUILD_SAMPLES 8u
 #define FLOWIE_BENCH_CANDIDATE_MATCH_SAMPLES 256u
@@ -619,6 +621,98 @@ done:
   turbo_flow_destroy(flow);
 }
 
+static void flowie_bench_tcp_pipeline_burst(void) {
+  static const uint8_t subscribe[] = {0x82u, 0x0du, 0x00u, 0x01u, 0x00u, 0x00u, 0x07u, 'b',
+                                      'e',   'n',   'c',   'h',   '/',   '#',   0x00u};
+  static const uint8_t suback[] = {0x90u, 0x04u, 0x00u, 0x01u, 0x00u, 0x00u};
+  static const uint8_t publish_template[] = {0x30u, 0x12u, 0x00u, 0x0bu, 'b',   'e',  'n',
+                                             'c',   'h',   '/',   't',   'o',   'p',  'i',
+                                             'c',   0x00u, 0x00u, 0x00u, 0x00u, 0x00u};
+  flowie_test_socket_t subscriber = FLOWIE_TEST_INVALID_SOCKET;
+  flowie_test_socket_t publisher = FLOWIE_TEST_INVALID_SOCKET;
+  turbo_flow_t *flow = NULL;
+  uint64_t *latencies = NULL;
+  uint8_t packets[FLOWIE_BENCH_PIPELINE_MESSAGES][sizeof(publish_template)];
+  uint8_t received[sizeof(packets)];
+  uint8_t reply[sizeof(suback)];
+  unsigned short port = flowie_test_port();
+  size_t sample_index = 0u;
+  int rc = TURBO_OK;
+
+  check_int_gt(port, 0);
+  flow = flowie_bench_fanout_flow(port);
+  check_not_null(flow);
+  if (!flow) return;
+  check_int_eq(turbo_flow_start(flow), TURBO_OK);
+  publisher = flowie_test_connect(port);
+  subscriber = flowie_test_connect(port);
+  check_true(publisher != FLOWIE_TEST_INVALID_SOCKET);
+  check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
+  if (publisher == FLOWIE_TEST_INVALID_SOCKET || subscriber == FLOWIE_TEST_INVALID_SOCKET) {
+    rc = TURBO_ENOTCONN;
+    goto done;
+  }
+  rc = flowie_bench_connect(publisher, (const uint8_t *)"pub");
+  if (rc == TURBO_OK) rc = flowie_bench_connect(subscriber, (const uint8_t *)"sub");
+  if (rc == TURBO_OK) rc = flowie_test_send(subscriber, subscribe, sizeof(subscribe));
+  if (rc == TURBO_OK) rc = flowie_test_recv_exact(subscriber, reply, sizeof(reply));
+  if (rc == TURBO_OK && memcmp(reply, suback, sizeof(reply)) != 0) rc = TURBO_EPROTO;
+  check_int_eq(rc, TURBO_OK);
+  if (rc != TURBO_OK) goto done;
+  for (size_t i = 0u; i < FLOWIE_BENCH_PIPELINE_MESSAGES; ++i)
+    memcpy(packets[i], publish_template, sizeof(publish_template));
+  rc = flowie_test_send(publisher, &packets[0][0], sizeof(packets));
+  if (rc == TURBO_OK) rc = flowie_test_recv_exact(subscriber, received, sizeof(received));
+  check_int_eq(rc, TURBO_OK);
+  check_mem_eq(received, packets, sizeof(packets));
+  if (rc != TURBO_OK) goto done;
+
+  latencies = (uint64_t *)calloc(FLOWIE_BENCH_PIPELINE_SAMPLES, sizeof(*latencies));
+  check_not_null(latencies);
+  if (!latencies) {
+    rc = TURBO_ENOMEM;
+    goto done;
+  }
+  benchmark_io("TCP pipeline burst to one subscriber", FLOWIE_BENCH_PIPELINE_SAMPLES,
+               FLOWIE_BENCH_PIPELINE_MESSAGES, sizeof(packets) * 2u) {
+    uint64_t begin = turbo_hrtime();
+    if (rc == TURBO_OK) {
+      for (size_t i = 0u; i < FLOWIE_BENCH_PIPELINE_MESSAGES; ++i) {
+        const uint32_t sequence =
+            (uint32_t)(sample_index * FLOWIE_BENCH_PIPELINE_MESSAGES + i);
+        packets[i][sizeof(publish_template) - 4u] = (uint8_t)(sequence >> 24u);
+        packets[i][sizeof(publish_template) - 3u] = (uint8_t)(sequence >> 16u);
+        packets[i][sizeof(publish_template) - 2u] = (uint8_t)(sequence >> 8u);
+        packets[i][sizeof(publish_template) - 1u] = (uint8_t)sequence;
+      }
+      rc = flowie_test_send(publisher, &packets[0][0], sizeof(packets));
+      if (rc == TURBO_OK) rc = flowie_test_recv_exact(subscriber, received, sizeof(received));
+      if (rc == TURBO_OK && memcmp(received, packets, sizeof(packets)) != 0) rc = TURBO_EPROTO;
+      latencies[sample_index] = turbo_hrtime() - begin;
+    }
+    ++sample_index;
+  }
+  check_int_eq(rc, TURBO_OK);
+  check_size_eq(sample_index, FLOWIE_BENCH_PIPELINE_SAMPLES);
+  if (rc == TURBO_OK) {
+    qsort(latencies, FLOWIE_BENCH_PIPELINE_SAMPLES, sizeof(*latencies),
+          flowie_bench_u64_compare);
+    printf("FLOWIE_BENCH_RESULT operation=tcp_pipeline_burst messages_per_sample=%u samples=%u"
+           " p50_ns=%" PRIu64 " p95_ns=%" PRIu64 " p99_ns=%" PRIu64 "\n",
+           FLOWIE_BENCH_PIPELINE_MESSAGES, FLOWIE_BENCH_PIPELINE_SAMPLES,
+           flowie_bench_percentile(latencies, FLOWIE_BENCH_PIPELINE_SAMPLES, 50u),
+           flowie_bench_percentile(latencies, FLOWIE_BENCH_PIPELINE_SAMPLES, 95u),
+           flowie_bench_percentile(latencies, FLOWIE_BENCH_PIPELINE_SAMPLES, 99u));
+  }
+
+done:
+  free(latencies);
+  flowie_test_socket_close(subscriber);
+  flowie_test_socket_close(publisher);
+  if (flow) check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+  turbo_flow_destroy(flow);
+}
+
 static size_t flowie_bench_live_tcp_capacity(void) {
   const char *configured = getenv("FLOWIE_BENCH_LIVE_TCP_CONNECTIONS");
   char *end = NULL;
@@ -874,6 +968,8 @@ spec("flowie capacity benchmarks") {
   }
 
   bench("real TCP MQTT fan-out") { flowie_bench_tcp_fanout(); }
+
+  bench("real TCP MQTT pipeline burst") { flowie_bench_tcp_pipeline_burst(); }
 
   bench("real TCP MQTT connection churn") { flowie_bench_tcp_churn(); }
 

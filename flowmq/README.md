@@ -15,6 +15,11 @@ ZeroMQ 的通信模式，但不兼容 ZeroMQ wire/API，也不提供独立 Clien
 当前架构和所有权见 [ARCHITECTURE.md](ARCHITECTURE.md)。发布前必须执行
 [RELEASE_GATE.md](RELEASE_GATE.md)。
 
+希望像 ZeroMQ socket 一样直接创建单 endpoint 时，使用
+[ZMQ-like Application API](ZMQ_STYLE_API.md)。该指南包含可编译的 PUB/SUB、同步 REQ/REP、
+ROUTER/DEALER delayed-reply 示例以及配套 YAML；它是 pattern-level facade，不代表 ZeroMQ
+API 或 wire compatibility。
+
 ## Packages and targets
 
 | Target | Visibility | Purpose |
@@ -89,6 +94,51 @@ Host 使用 `turbo_flow_fmq_register_adapter()` 或
 `TURBO_FLOW_FMQ_CONFIG_INIT` 开始；错误 size/version、未知字段和不适用于 transport 的 option 均
 fail fast。
 
+只需要一个 endpoint 而不需要自行组 graph 时，可使用薄的 Application facade。它仍然创建
+TurboFlow graph 和同一个 FMQ adapter；不会创建第二套 socket、队列、线程或 pattern 状态：
+
+```c
+static int on_message(turbo_flow_fmq_app_t *app, turbo_flow_msg_t *message, void *ctx) {
+  (void)app;
+  (void)message;
+  (void)ctx;
+  /* message 及其 view 只借用到本次回调返回。 */
+  return TURBO_OK;
+}
+
+turbo_flow_fmq_config_t endpoint = TURBO_FLOW_FMQ_CONFIG_INIT;
+turbo_flow_fmq_app_options_t options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+turbo_flow_fmq_app_t *app = NULL;
+
+endpoint.pattern = TURBO_FLOW_FMQ_SUB;
+endpoint.mode = TURBO_FLOW_FMQ_CONNECT;
+endpoint.transport = TURBO_FLOW_FMQ_TCP;
+endpoint.host = "127.0.0.1";
+endpoint.port = 7701;
+endpoint.topic = "orders.";
+options.on_message = on_message;
+
+int rc = turbo_flow_fmq_app_create(&endpoint, &options, &app);
+if (rc == TURBO_OK) rc = turbo_flow_fmq_app_start(app);
+/* ... */
+turbo_flow_fmq_app_destroy(app);
+```
+
+`turbo_flow_fmq_app_send()` 复制 payload 并发布到 facade 的 graph input；
+`turbo_flow_fmq_app_send_batch()` 为 `PUB`、`PUSH`、`DEALER` 一次提交多个 copied payload，
+并在全部已提交 frame 到达与单条 send 相同的交付边界后返回。TCP connect endpoint 会把编码后的
+多个 frame 合并为一次 stream write；其他合法 endpoint 布局保留同一批次提交/完成语义，但不保证
+一次 write。若某个 item 在准备阶段失败，之前的 item 仍会发送，`submitted` 返回实际提交数；调用方
+因此必须同时检查返回码与 `submitted`。`REQ/REP` 不支持此 API，以保留严格 session/correlation
+顺序。单批最多 `TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS` 项，payload 总量最多
+`TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES`；超过上限分别返回 `TURBO_ERANGE` 与
+`TURBO_EMSGSIZE`。
+`turbo_flow_fmq_app_send_message()` 保留已有 message metadata，并作为 ROUTER detached route 的
+delayed-reply 入口。REP callback 可用 `turbo_flow_fmq_app_message_set_payload_copy()` 替换 payload，
+返回 `TURBO_OK` 后由同一次 graph dispatch 同步回复。生命周期和 send API 不可从同一个
+`on_message` callback 重入。YAML 用户先 resolve snapshot，再调用
+`turbo_flow_fmq_app_create_resolved()`；facade 不解释 YAML 文件本身。
+
 ```flow
 source events adapter fmq.events.sub operation fmq.sub.receive
 stage validate
@@ -100,7 +150,9 @@ stage main {
 ```
 
 YAML 配置 transport、endpoint、pattern、topic、identity、timeout、heartbeat、reconnect 和 HWM；graph
-只引用 adapter 与 operation，不解释 provider 私有字段。完整示例见 [examples/fmq.yml](examples/fmq.yml)。
+只引用 adapter 与 operation，不解释 provider 私有字段。完整产品配置见
+[examples/fmq.yml](examples/fmq.yml)，Application API endpoint 配置见
+[examples/zmq_style.yml](examples/zmq_style.yml)。
 
 TFCW/1 credit worker 的易失性 graph 使用 pattern.fmq.credit module、FmqCreditWorker resource 和
 fmq.credit.control/dispatch/complete/worker_input operations。service 固定在

@@ -519,6 +519,17 @@ static int fmq_capture(turbo_flow_msg_t *msg, void *ctx) {
   return TURBO_OK;
 }
 
+static int fmq_app_capture(turbo_flow_fmq_app_t *app, turbo_flow_msg_t *msg, void *ctx) {
+  (void)app;
+  return fmq_capture(msg, ctx);
+}
+
+static int fmq_app_reply(turbo_flow_fmq_app_t *app, turbo_flow_msg_t *msg, void *ctx) {
+  const char *payload = (const char *)ctx;
+  (void)app;
+  return turbo_flow_fmq_app_message_set_payload_copy(msg, payload, strlen(payload));
+}
+
 static void fmq_bench_capture_init(fmq_bench_capture_state_t *state) {
   memset(state, 0, sizeof(*state));
   turbo_mutex_init(&state->mutex);
@@ -2449,6 +2460,36 @@ spec("flow_fmq_config") {
     check_str_eq(control_client, "fmq.control.req");
     check_str_eq(control.target, "data-plane");
     check_size_eq(control.max_request_bytes, TURBO_FLOW_FMQ_CONTROL_REQUEST_MAX_SIZE);
+    turbo_flow_resolved_config_destroy(resolved);
+    free(yaml);
+  }
+
+  it("keeps the ZMQ-style Application YAML endpoints resolvable") {
+    static const char *const adapter_names[] = {
+        "fmq.example.pub",    "fmq.example.sub", "fmq.example.rep",
+        "fmq.example.req",    "fmq.example.router",
+        "fmq.example.dealer",
+    };
+    char path[1024];
+    char *yaml;
+    size_t yaml_len = 0u;
+    turbo_flow_resolved_config_t *resolved = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+
+    (void)snprintf(path, sizeof(path), "%s/examples/zmq_style.yml",
+                   TURBO_FLOW_FMQ_SOURCE_DIR);
+    yaml = tt_read_file(path, &yaml_len);
+    check_not_null(yaml);
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, yaml_len, &resolved, &error), TURBO_OK);
+    check_not_null(resolved);
+    for (size_t i = 0u; i < sizeof(adapter_names) / sizeof(adapter_names[0]); ++i) {
+      turbo_flow_t *flow = turbo_flow_create();
+      check_not_null(flow);
+      check_int_eq(turbo_flow_fmq_register_resolved_adapter(flow, adapter_names[i], resolved,
+                                                            &error),
+                   TURBO_OK);
+      turbo_flow_destroy(flow);
+    }
     turbo_flow_resolved_config_destroy(resolved);
     free(yaml);
   }
@@ -6089,6 +6130,336 @@ spec("flow_fmq_network") {
     tls_test_remove_file(ca_file);
     tls_test_remove_file(cert_file);
     tls_test_remove_file(key_file);
+  }
+}
+
+spec("flow_fmq_application") {
+  it("validates the facade ABI and pattern callback contract") {
+    unsigned short port = fmq_test_port();
+    turbo_flow_fmq_config_t config;
+    turbo_flow_fmq_app_options_t options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_t *app = NULL;
+
+    check_int_gt(port, 0);
+    fmq_config(&config, TURBO_FLOW_FMQ_PUB, TURBO_FLOW_FMQ_BIND, port);
+    options.version = TURBO_FLOW_FMQ_APP_API_VERSION + 1u;
+    check_int_eq(turbo_flow_fmq_app_create(&config, &options, &app), TURBO_EINVAL);
+    check_null(app);
+
+    options = (turbo_flow_fmq_app_options_t)TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    options.on_message = fmq_app_capture;
+    check_int_eq(turbo_flow_fmq_app_create(&config, &options, &app), TURBO_EINVAL);
+    check_null(app);
+
+    fmq_config(&config, TURBO_FLOW_FMQ_SUB, TURBO_FLOW_FMQ_CONNECT, port);
+    options.on_message = NULL;
+    check_int_eq(turbo_flow_fmq_app_create(&config, &options, &app), TURBO_EINVAL);
+    check_null(app);
+  }
+
+  it("sends and receives through a graph-native PAIR facade") {
+    unsigned short port = fmq_test_port();
+    turbo_flow_fmq_config_t bound_config;
+    turbo_flow_fmq_config_t connected_config;
+    turbo_flow_fmq_app_options_t bound_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_options_t connected_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_t *bound = NULL;
+    turbo_flow_fmq_app_t *connected = NULL;
+    fmq_capture_state_t capture;
+    int send_status = TURBO_ENOTCONN;
+
+    check_int_gt(port, 0);
+    fmq_init_capture(&capture);
+    fmq_config(&bound_config, TURBO_FLOW_FMQ_PAIR, TURBO_FLOW_FMQ_BIND, port);
+    fmq_config(&connected_config, TURBO_FLOW_FMQ_PAIR, TURBO_FLOW_FMQ_CONNECT, port);
+    bound_options.on_message = fmq_app_capture;
+    bound_options.message_ctx = &capture;
+
+    check_int_eq(turbo_flow_fmq_app_create(&bound_config, &bound_options, &bound), TURBO_OK);
+    check_not_null(bound);
+    check_int_eq(turbo_flow_fmq_app_create(&connected_config, &connected_options, &connected),
+                 TURBO_OK);
+    check_not_null(connected);
+    check_int_eq(turbo_flow_fmq_app_send(connected, "early", 5u), TURBO_EBUSY);
+    check_int_eq(turbo_flow_fmq_app_start(bound), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_start(bound), TURBO_EALREADY);
+    check_int_eq(turbo_flow_fmq_app_start(connected), TURBO_OK);
+    for (int i = 0; i < 400 && send_status == TURBO_ENOTCONN; ++i) {
+      send_status = turbo_flow_fmq_app_send(connected, "pair-data", 9u);
+      if (send_status == TURBO_ENOTCONN) turbo_sleep_ms(5);
+    }
+    check_int_eq(send_status, TURBO_OK);
+    fmq_wait_called(&capture, 1);
+    check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
+    check_size_eq(capture.payload_len, 9u);
+    check_mem_eq(capture.payload, "pair-data", 9u);
+    check_int_eq(turbo_flow_fmq_app_send(connected, NULL, 0u), TURBO_OK);
+    fmq_wait_called(&capture, 2);
+    check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 2);
+    check_size_eq(capture.payload_len, 0u);
+    check_int_eq(turbo_flow_fmq_app_stop(connected), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_stop(connected), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_stop(bound), TURBO_OK);
+    turbo_flow_fmq_app_destroy(connected);
+    turbo_flow_fmq_app_destroy(bound);
+  }
+
+  it("coalesces DEALER messages and reports partial batch preparation") {
+    unsigned short port = fmq_test_port();
+    turbo_flow_fmq_config_t router_config;
+    turbo_flow_fmq_config_t dealer_config;
+    turbo_flow_fmq_app_options_t router_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_options_t dealer_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_t *router = NULL;
+    turbo_flow_fmq_app_t *dealer = NULL;
+    turbo_flow_fmq_app_send_item_t items[] = {
+        {"batch-one", 9u}, {"batch-two", 9u}, TURBO_FLOW_FMQ_APP_SEND_ITEM_INIT};
+    turbo_flow_fmq_app_send_item_t partial_items[] = {{"accepted", 8u}, {NULL, 1u}};
+    fmq_capture_state_t capture;
+    size_t submitted = SIZE_MAX;
+    int send_status = TURBO_ENOTCONN;
+
+    check_int_gt(port, 0);
+    fmq_init_capture(&capture);
+    fmq_config(&router_config, TURBO_FLOW_FMQ_ROUTER, TURBO_FLOW_FMQ_BIND, port);
+    fmq_config(&dealer_config, TURBO_FLOW_FMQ_DEALER, TURBO_FLOW_FMQ_CONNECT, port);
+    dealer_config.identity = "batch-dealer";
+    router_options.on_message = fmq_app_capture;
+    router_options.message_ctx = &capture;
+
+    check_int_eq(turbo_flow_fmq_app_create(&router_config, &router_options, &router), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_create(&dealer_config, &dealer_options, &dealer), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_send_batch(dealer, items, 3u, &submitted), TURBO_EBUSY);
+    check_size_eq(submitted, 0u);
+    check_int_eq(turbo_flow_fmq_app_start(router), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_start(dealer), TURBO_OK);
+    for (int i = 0; i < 400 && send_status == TURBO_ENOTCONN; ++i) {
+      send_status = turbo_flow_fmq_app_send(dealer, "ready", 5u);
+      if (send_status == TURBO_ENOTCONN) turbo_sleep_ms(5);
+    }
+    check_int_eq(send_status, TURBO_OK);
+    fmq_wait_called(&capture, 1);
+
+    submitted = SIZE_MAX;
+    check_int_eq(turbo_flow_fmq_app_send_batch(
+                     dealer, items, TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS + 1u, &submitted),
+                 TURBO_ERANGE);
+    check_size_eq(submitted, 0u);
+    {
+      const turbo_flow_fmq_app_send_item_t oversized = {
+          "x", TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES + 1u};
+      submitted = SIZE_MAX;
+      check_int_eq(turbo_flow_fmq_app_send_batch(dealer, &oversized, 1u, &submitted),
+                   TURBO_EMSGSIZE);
+      check_size_eq(submitted, 0u);
+    }
+
+    submitted = SIZE_MAX;
+    check_int_eq(turbo_flow_fmq_app_send_batch(dealer, items, 3u, &submitted), TURBO_OK);
+    check_size_eq(submitted, 3u);
+    fmq_wait_called(&capture, 4);
+    check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 4);
+    check_size_eq(capture.payload_len, 0u);
+
+    submitted = SIZE_MAX;
+    check_int_eq(turbo_flow_fmq_app_send_batch(dealer, partial_items, 2u, &submitted),
+                 TURBO_EINVAL);
+    check_size_eq(submitted, 1u);
+    fmq_wait_called(&capture, 5);
+    check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 5);
+    check_size_eq(capture.payload_len, 8u);
+    check_mem_eq(capture.payload, "accepted", 8u);
+
+    check_int_eq(turbo_flow_fmq_app_stop(dealer), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_stop(router), TURBO_OK);
+    turbo_flow_fmq_app_destroy(dealer);
+    turbo_flow_fmq_app_destroy(router);
+  }
+
+  it("coalesces PUB messages while preserving subscriber order") {
+    unsigned short port = fmq_test_port();
+    turbo_flow_fmq_config_t pub_config;
+    turbo_flow_fmq_config_t sub_config;
+    turbo_flow_fmq_app_options_t pub_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_options_t sub_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_t *publisher = NULL;
+    turbo_flow_fmq_app_t *subscriber = NULL;
+    const turbo_flow_fmq_app_send_item_t items[] = {
+        {"pub-one", 7u}, {"pub-two", 7u}, {"pub-three", 9u}, {"pub-four", 8u}};
+    fmq_capture_state_t capture;
+    size_t submitted = SIZE_MAX;
+    int send_status = TURBO_ENOTCONN;
+
+    check_int_gt(port, 0);
+    fmq_init_capture(&capture);
+    fmq_config(&pub_config, TURBO_FLOW_FMQ_PUB, TURBO_FLOW_FMQ_BIND, port);
+    fmq_config(&sub_config, TURBO_FLOW_FMQ_SUB, TURBO_FLOW_FMQ_CONNECT, port);
+    sub_options.on_message = fmq_app_capture;
+    sub_options.message_ctx = &capture;
+    check_int_eq(turbo_flow_fmq_app_create(&pub_config, &pub_options, &publisher), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_create(&sub_config, &sub_options, &subscriber), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_start(publisher), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_start(subscriber), TURBO_OK);
+    for (int i = 0; i < 400 && send_status == TURBO_ENOTCONN; ++i) {
+      send_status = turbo_flow_fmq_app_send(publisher, "ready", 5u);
+      if (send_status == TURBO_ENOTCONN) turbo_sleep_ms(5);
+    }
+    check_int_eq(send_status, TURBO_OK);
+    fmq_wait_called(&capture, 1);
+
+    check_int_eq(turbo_flow_fmq_app_send_batch(publisher, items, 4u, &submitted), TURBO_OK);
+    check_size_eq(submitted, 4u);
+    fmq_wait_called(&capture, 5);
+    check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 5);
+    check_size_eq(capture.payload_len, 8u);
+    check_mem_eq(capture.payload, "pub-four", 8u);
+
+    check_int_eq(turbo_flow_fmq_app_stop(subscriber), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_stop(publisher), TURBO_OK);
+    turbo_flow_fmq_app_destroy(subscriber);
+    turbo_flow_fmq_app_destroy(publisher);
+  }
+
+  it("coalesces PUSH messages without changing round-robin fairness") {
+    unsigned short port = fmq_test_port();
+    turbo_flow_fmq_config_t push_config;
+    turbo_flow_fmq_config_t pull_a_config;
+    turbo_flow_fmq_config_t pull_b_config;
+    turbo_flow_fmq_app_options_t push_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_options_t pull_a_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_options_t pull_b_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_t *push = NULL;
+    turbo_flow_fmq_app_t *pull_a = NULL;
+    turbo_flow_fmq_app_t *pull_b = NULL;
+    const turbo_flow_fmq_app_send_item_t items[] = {
+        {"job-one", 7u}, {"job-two", 7u}, {"job-three", 9u}, {"job-four", 8u}};
+    fmq_capture_state_t capture_a;
+    fmq_capture_state_t capture_b;
+    size_t submitted = SIZE_MAX;
+    int base_a;
+    int base_b;
+
+    check_int_gt(port, 0);
+    fmq_init_capture(&capture_a);
+    fmq_init_capture(&capture_b);
+    fmq_config(&push_config, TURBO_FLOW_FMQ_PUSH, TURBO_FLOW_FMQ_BIND, port);
+    fmq_config(&pull_a_config, TURBO_FLOW_FMQ_PULL, TURBO_FLOW_FMQ_CONNECT, port);
+    fmq_config(&pull_b_config, TURBO_FLOW_FMQ_PULL, TURBO_FLOW_FMQ_CONNECT, port);
+    pull_a_options.on_message = fmq_app_capture;
+    pull_a_options.message_ctx = &capture_a;
+    pull_b_options.on_message = fmq_app_capture;
+    pull_b_options.message_ctx = &capture_b;
+    check_int_eq(turbo_flow_fmq_app_create(&push_config, &push_options, &push), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_create(&pull_a_config, &pull_a_options, &pull_a), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_create(&pull_b_config, &pull_b_options, &pull_b), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_start(push), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_start(pull_a), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_start(pull_b), TURBO_OK);
+    for (int i = 0; i < 400 &&
+                    (atomic_load_explicit(&capture_a.called, memory_order_acquire) == 0 ||
+                     atomic_load_explicit(&capture_b.called, memory_order_acquire) == 0);
+         ++i) {
+      (void)turbo_flow_fmq_app_send(push, "ready", 5u);
+      turbo_sleep_ms(5);
+    }
+    base_a = atomic_load_explicit(&capture_a.called, memory_order_acquire);
+    base_b = atomic_load_explicit(&capture_b.called, memory_order_acquire);
+    check_int_gt(base_a, 0);
+    check_int_gt(base_b, 0);
+
+    check_int_eq(turbo_flow_fmq_app_send_batch(push, items, 4u, &submitted), TURBO_OK);
+    check_size_eq(submitted, 4u);
+    fmq_wait_called(&capture_a, base_a + 2);
+    fmq_wait_called(&capture_b, base_b + 2);
+    check_int_eq(atomic_load_explicit(&capture_a.called, memory_order_acquire), base_a + 2);
+    check_int_eq(atomic_load_explicit(&capture_b.called, memory_order_acquire), base_b + 2);
+
+    check_int_eq(turbo_flow_fmq_app_stop(pull_b), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_stop(pull_a), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_stop(push), TURBO_OK);
+    turbo_flow_fmq_app_destroy(pull_b);
+    turbo_flow_fmq_app_destroy(pull_a);
+    turbo_flow_fmq_app_destroy(push);
+  }
+
+  it("keeps REP replies in the request dispatch") {
+    unsigned short port = fmq_test_port();
+    turbo_flow_fmq_config_t rep_config;
+    turbo_flow_fmq_config_t req_config;
+    turbo_flow_fmq_app_options_t rep_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_options_t req_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_t *rep = NULL;
+    turbo_flow_fmq_app_t *req = NULL;
+    fmq_capture_state_t capture;
+    int send_status = TURBO_ENOTCONN;
+
+    check_int_gt(port, 0);
+    fmq_init_capture(&capture);
+    fmq_config(&rep_config, TURBO_FLOW_FMQ_REP, TURBO_FLOW_FMQ_BIND, port);
+    fmq_config(&req_config, TURBO_FLOW_FMQ_REQ, TURBO_FLOW_FMQ_CONNECT, port);
+    rep_options.on_message = fmq_app_reply;
+    rep_options.message_ctx = (void *)"facade-reply";
+    req_options.on_message = fmq_app_capture;
+    req_options.message_ctx = &capture;
+
+    check_int_eq(turbo_flow_fmq_app_create(&rep_config, &rep_options, &rep), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_create(&req_config, &req_options, &req), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_start(rep), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_start(req), TURBO_OK);
+    {
+      const turbo_flow_fmq_app_send_item_t item = {"unsupported", 11u};
+      size_t submitted = SIZE_MAX;
+      check_int_eq(turbo_flow_fmq_app_send_batch(req, &item, 1u, &submitted), TURBO_ENOTSUP);
+      check_size_eq(submitted, 0u);
+    }
+    for (int i = 0; i < 400 && send_status == TURBO_ENOTCONN; ++i) {
+      send_status = turbo_flow_fmq_app_send(req, "facade-request", 14u);
+      if (send_status == TURBO_ENOTCONN) turbo_sleep_ms(5);
+    }
+    check_int_eq(send_status, TURBO_OK);
+    fmq_wait_called(&capture, 1);
+    check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
+    check_size_eq(capture.payload_len, 12u);
+    check_mem_eq(capture.payload, "facade-reply", 12u);
+    check_true(capture.correlation_id != 0u);
+    check_int_eq(turbo_flow_fmq_app_stop(req), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_app_stop(rep), TURBO_OK);
+    turbo_flow_fmq_app_destroy(req);
+    turbo_flow_fmq_app_destroy(rep);
+  }
+
+  it("creates the same facade from an immutable YAML snapshot") {
+    char yaml[1024];
+    unsigned short port = fmq_test_port();
+    turbo_flow_resolved_config_t *resolved = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_fmq_app_options_t options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+    turbo_flow_fmq_app_t *app = NULL;
+    int yaml_size;
+
+    check_int_gt(port, 0);
+    yaml_size = snprintf(yaml, sizeof(yaml),
+                         "version: 1\n"
+                         "adapters:\n"
+                         "  fmq-app:\n"
+                         "    kind: fmq\n"
+                         "    config:\n"
+                         "      pattern: pub\n"
+                         "      mode: bind\n"
+                         "      transport: tcp\n"
+                         "      host: 127.0.0.1\n"
+                         "      port: %u\n",
+                         (unsigned int)port);
+    check_int_gt(yaml_size, 0);
+    check_true((size_t)yaml_size < sizeof(yaml));
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, (size_t)yaml_size, &resolved, &error),
+                 TURBO_OK);
+    check_not_null(resolved);
+    check_int_eq(turbo_flow_fmq_app_create_resolved(resolved, "fmq-app", &options, &app, &error),
+                 TURBO_OK);
+    check_not_null(app);
+    turbo_flow_fmq_app_destroy(app);
+    turbo_flow_resolved_config_destroy(resolved);
   }
 }
 

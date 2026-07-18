@@ -351,7 +351,8 @@ typedef struct turbo_flow_fmq_app_options_s {
   void *message_ctx;
 } turbo_flow_fmq_app_options_t;
 
-#define TURBO_FLOW_FMQ_APP_OPTIONS_INIT                                                            +  {sizeof(turbo_flow_fmq_app_options_t), TURBO_FLOW_FMQ_APP_API_VERSION, NULL, NULL}
+#define TURBO_FLOW_FMQ_APP_OPTIONS_INIT                                                             \
+  {sizeof(turbo_flow_fmq_app_options_t), TURBO_FLOW_FMQ_APP_API_VERSION, NULL, NULL}
 
 /**
  * Create one ZeroMQ-like application facade over one graph-native FMQ endpoint.
@@ -377,6 +378,31 @@ CXX_C_API int turbo_flow_fmq_app_stop(turbo_flow_fmq_app_t *app);
 /** Send copied bytes through the facade's graph input source. */
 CXX_C_API int turbo_flow_fmq_app_send(turbo_flow_fmq_app_t *app, const void *data,
                                       size_t data_size);
+
+typedef struct turbo_flow_fmq_app_send_item_s {
+  const void *data;
+  size_t data_size;
+} turbo_flow_fmq_app_send_item_t;
+
+#define TURBO_FLOW_FMQ_APP_SEND_ITEM_INIT {NULL, 0u}
+#define TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS 1024u
+#define TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES (64u * 1024u * 1024u)
+
+/**
+ * Send a batch of copied application messages and wait for every submitted
+ * frame to reach the same delivery boundary as turbo_flow_fmq_app_send().
+ *
+ * PUB, PUSH, and DEALER facades are supported. TCP connect endpoints coalesce
+ * the encoded frames into one stream write; other valid endpoint layouts keep
+ * the same batch admission/completion semantics without coalescing. On error,
+ * frames before the failing item remain submitted and @p submitted reports
+ * their count. A batch is bounded by
+ * TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS and
+ * TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES.
+ */
+CXX_C_API int turbo_flow_fmq_app_send_batch(turbo_flow_fmq_app_t *app,
+                                            const turbo_flow_fmq_app_send_item_t *items,
+                                            size_t item_count, size_t *submitted);
 
 /**
  * Send one existing message through the facade.

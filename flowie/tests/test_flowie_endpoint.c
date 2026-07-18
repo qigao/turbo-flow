@@ -1140,6 +1140,61 @@ spec("Flowie MQTT endpoint primitive") {
     turbo_flow_destroy(flow);
   }
 
+  it("preserves FIFO through a full TCP reply batch and closes after its terminal packet") {
+    enum { PIPELINED_PING_COUNT = 63u };
+    static const uint8_t connect_packet[] = {
+        0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',   0x05u, 0x00u, 0x00u, 0x3cu,
+        0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u, 'b',   'a',   't'};
+    static const uint8_t connack[] = {0x20u, 0x03u, 0x00u, 0x00u, 0x00u};
+    static const uint8_t auth_disconnect[] = {0xe0u, 0x01u, 0x8cu};
+    uint8_t pipeline[PIPELINED_PING_COUNT * 2u + 2u];
+    uint8_t expected[PIPELINED_PING_COUNT * 2u + sizeof(auth_disconnect)];
+    uint8_t received[sizeof(expected)];
+    uint8_t received_connack[sizeof(connack)];
+    unsigned short port = flowie_test_port();
+    flowie_endpoint_capture_t capture;
+    turbo_flow_connection_snapshot_t snapshot = {0};
+    turbo_flow_t *flow;
+    flowie_test_socket_t client;
+
+    memset(&capture, 0, sizeof(capture));
+    atomic_init(&capture.calls, 0u);
+    for (size_t i = 0u; i < PIPELINED_PING_COUNT; ++i) {
+      pipeline[i * 2u] = 0xc0u;
+      pipeline[i * 2u + 1u] = 0x00u;
+      expected[i * 2u] = 0xd0u;
+      expected[i * 2u + 1u] = 0x00u;
+    }
+    pipeline[PIPELINED_PING_COUNT * 2u] = 0xf0u;
+    pipeline[PIPELINED_PING_COUNT * 2u + 1u] = 0x00u;
+    memcpy(expected + PIPELINED_PING_COUNT * 2u, auth_disconnect, sizeof(auth_disconnect));
+
+    check_int_gt(port, 0);
+    flow = flowie_managed_session_flow(port, &capture);
+    check_not_null(flow);
+    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    client = flowie_test_connect(port);
+    check_true(client != FLOWIE_TEST_INVALID_SOCKET);
+    check_int_eq(flowie_test_send(client, connect_packet, sizeof(connect_packet)), TURBO_OK);
+    check_int_eq(flowie_test_recv_exact(client, received_connack, sizeof(received_connack)), TURBO_OK);
+    check_mem_eq(received_connack, connack, sizeof(connack));
+
+    check_int_eq(flowie_test_send(client, pipeline, sizeof(pipeline)), TURBO_OK);
+    check_int_eq(flowie_test_recv_exact(client, received, sizeof(received)), TURBO_OK);
+    check_mem_eq(received, expected, sizeof(expected));
+    for (size_t i = 0u; i < FLOWIE_TEST_WAIT_STEPS; ++i) {
+      check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0u, &snapshot), TURBO_OK);
+      if (snapshot.connections_current == 0u) break;
+      turbo_sleep_ms(1u);
+    }
+    check_size_eq(snapshot.connections_current, 0u);
+    check_size_eq(atomic_load_explicit(&capture.calls, memory_order_acquire), 0u);
+
+    flowie_test_socket_close(client);
+    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    turbo_flow_destroy(flow);
+  }
+
   it("sends the default RECEIVED PUBACK before closing on graph failure") {
     static const uint8_t connect_packet[] = {0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',
                                              0x05u, 0x00u, 0x00u, 0x3cu, 0x05u, 0x11u, 0x00u, 0x00u,

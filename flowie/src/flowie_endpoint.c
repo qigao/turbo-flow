@@ -26,6 +26,12 @@
 #include <time.h>
 
 #define FLOWIE_ENDPOINT_DEFAULT_TIMEOUT_MS 1000u
+#ifndef FLOWIE_REPLY_SEND_BATCH_MAX_ITEMS
+#define FLOWIE_REPLY_SEND_BATCH_MAX_ITEMS 64u
+#endif
+#if FLOWIE_REPLY_SEND_BATCH_MAX_ITEMS == 0
+#error "FLOWIE_REPLY_SEND_BATCH_MAX_ITEMS must be greater than zero"
+#endif
 #define FLOWIE_RETAINED_KEY_PREFIX_SIZE 3u
 #define FLOWIE_RETAINED_RECORD_VERSION 1u
 #define FLOWIE_RETAINED_RECORD_HEADER_SIZE 8u
@@ -3321,30 +3327,56 @@ static int flowie_reply_settlement_apply(flowie_endpoint_connection_t *connectio
 }
 
 static int flowie_connection_reply_drain(flowie_endpoint_connection_t *connection) {
+  flowie_reply_request_t *requests[FLOWIE_REPLY_SEND_BATCH_MAX_ITEMS];
+  turbo_iovec_t iov[FLOWIE_REPLY_SEND_BATCH_MAX_ITEMS];
   int result = TURBO_OK;
   if (!connection || !connection->endpoint) return TURBO_EINVAL;
   for (;;) {
-    flowie_reply_request_t *request = NULL;
+    size_t request_count = 0u;
+    int terminal_batch = 0;
     int rc;
-    if (connection->closing || !flowie_reply_queue_t_pop_front(&connection->send_queue, &request)) {
+    if (connection->closing ||
+        !flowie_reply_queue_t_pop_front(&connection->send_queue, &requests[request_count])) {
       if (connection->closing) flowie_connection_fail_reply_queue(connection);
       connection->send_drain_active = 0;
       flowie_connection_usage(connection->endpoint);
       return result;
     }
-    rc = coro_socket_send(connection->socket, request->packet, tstr_len(request->packet));
-    if (rc == TURBO_OK && ((uint8_t)request->packet[0] >> 4u) == FLOWIE_MQTT_PACKET_CONNACK)
-      connection->connack_sent = 1;
-    if (rc == TURBO_OK && (request->close_after_send ||
-                           ((uint8_t)request->packet[0] >> 4u) == FLOWIE_MQTT_PACKET_DISCONNECT)) {
-      flowie_connection_reply_request_release(connection, request);
-      flowie_connection_close(connection, TURBO_ENOTCONN);
-      continue;
+
+    /* O(k) time and O(k) bounded stack storage. The connection queue remains the
+     * sole FIFO fact source, and a terminal packet is always the final vector item. */
+    for (;;) {
+      flowie_reply_request_t *request = requests[request_count];
+      iov[request_count].data = request->packet;
+      iov[request_count].len = tstr_len(request->packet);
+      request_count += 1u;
+      terminal_batch = request->close_after_send ||
+                       ((uint8_t)request->packet[0] >> 4u) == FLOWIE_MQTT_PACKET_DISCONNECT;
+      if (connection->endpoint->transport != FLOWIE_TRANSPORT_TCP || terminal_batch ||
+          request_count == FLOWIE_REPLY_SEND_BATCH_MAX_ITEMS ||
+          !flowie_reply_queue_t_pop_front(&connection->send_queue, &requests[request_count]))
+        break;
     }
-    flowie_connection_reply_request_release(connection, request);
+
+    rc = connection->endpoint->transport == FLOWIE_TRANSPORT_TCP && request_count > 1u
+             ? coro_socket_sendv(connection->socket, iov, request_count)
+             : coro_socket_send(connection->socket, requests[0]->packet,
+                                tstr_len(requests[0]->packet));
+    if (rc == TURBO_OK) {
+      for (size_t i = 0u; i < request_count; ++i) {
+        if (((uint8_t)requests[i]->packet[0] >> 4u) == FLOWIE_MQTT_PACKET_CONNACK)
+          connection->connack_sent = 1;
+      }
+    }
+    for (size_t i = 0u; i < request_count; ++i)
+      flowie_connection_reply_request_release(connection, requests[i]);
     if (rc != TURBO_OK) {
       result = rc;
       flowie_connection_close(connection, rc);
+      continue;
+    }
+    if (terminal_batch) {
+      flowie_connection_close(connection, TURBO_ENOTCONN);
       continue;
     }
     if (connection->close_when_replies_drain && connection->terminal_reply_count == 0u) {

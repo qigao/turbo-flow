@@ -6,6 +6,13 @@ cmake_add_test(
   FOLDER "flowmq/tests")
 
 cmake_add_test(
+  test_fmq_bench_stats
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_fmq_bench_stats.c
+  LIBS TurboUtils::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks
+  FOLDER "flowmq/tests")
+
+cmake_add_test(
   test_fmq_broker
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_fmq_broker.c
   LIBS TurboFlow::FMQ TurboFlow::Queue TurboFlow::Flow TurboUtils::TinyTest
@@ -48,7 +55,7 @@ cmake_add_test(
   FOLDER "flowmq/tests")
 
 set_tests_properties(
-  test_fmq test_fmq_broker test_fmq_pubsub test_fmq_control test_fmq_compatibility
+  test_fmq test_fmq_bench_stats test_fmq_broker test_fmq_pubsub test_fmq_control test_fmq_compatibility
   test_fmq_deployment test_fmq_management_protocol test_fmq_management
   PROPERTIES LABELS "fmq-release;fmq-chaos")
 
@@ -63,7 +70,7 @@ if(WIN32)
   target_link_libraries(test_fmq PRIVATE ws2_32)
   target_link_libraries(test_fmq_control PRIVATE ws2_32)
   set_tests_properties(
-    test_fmq test_fmq_broker test_fmq_pubsub test_fmq_control test_fmq_compatibility
+    test_fmq test_fmq_bench_stats test_fmq_broker test_fmq_pubsub test_fmq_control test_fmq_compatibility
     test_fmq_deployment test_fmq_management
     test_fmq_management_protocol
     PROPERTIES ENVIRONMENT_MODIFICATION

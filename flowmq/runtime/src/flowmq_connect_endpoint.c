@@ -593,6 +593,17 @@ int flowmq_connect_endpoint_send(flowmq_connect_endpoint_t *endpoint, const char
   return flowmq_connect_endpoint_socket_send(endpoint, encoded, encoded_size);
 }
 
+int flowmq_connect_endpoint_sendv(flowmq_connect_endpoint_t *endpoint, const turbo_iovec_t *iov,
+                                  size_t iovcnt) {
+  if (!endpoint || !iov || iovcnt == 0u) return TURBO_EINVAL;
+  if (coro_context_current() != endpoint->context) return TURBO_EINVAL;
+  if (!atomic_load_explicit(&endpoint->started, memory_order_acquire)) return TURBO_ESHUTDOWN;
+  if (endpoint->config.pattern == FLOWMQ_PROTOCOL_XSUB) return TURBO_ENOTSUP;
+  if (!endpoint->socket) return TURBO_ENOTCONN;
+  return flowmq_coronet_transport_sendv(endpoint->socket, endpoint->config.transport,
+                                        &endpoint->config.timeouts, iov, iovcnt);
+}
+
 int flowmq_connect_endpoint_interrupt(flowmq_connect_endpoint_t *endpoint, int status) {
   if (!endpoint || status == TURBO_OK) return TURBO_EINVAL;
   if (coro_context_current() == endpoint->context) {

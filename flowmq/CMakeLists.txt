@@ -52,6 +52,10 @@ add_library(FlowMQ::Runtime ALIAS ${TARGET_NAME})
 add_library(FlowMQ::Broker ALIAS ${TARGET_NAME})
 
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+if(BUILD_BENCHMARKS)
+  target_compile_definitions(${TARGET_NAME}
+                             PRIVATE TURBO_FLOW_FMQ_INTERNAL_PROFILING=1)
+endif()
 target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -66,9 +70,25 @@ target_link_libraries(
 
 install(FILES ${TURBO_FLOW_FMQ_HEADERS} DESTINATION include)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/examples/fmq.yml
+              ${CMAKE_CURRENT_SOURCE_DIR}/examples/zmq_style.yml
         DESTINATION share/turboflow/examples/fmq)
+
+if(BUILD_EXAMPLES)
+  set(FLOWMQ_ZMQ_STYLE_EXAMPLES pub_sub req_rep router_dealer)
+  foreach(example_name IN LISTS FLOWMQ_ZMQ_STYLE_EXAMPLES)
+    set(example_target flowmq_zmq_style_${example_name})
+    add_executable(${example_target}
+                   ${CMAKE_CURRENT_SOURCE_DIR}/examples/zmq_style_${example_name}.c)
+    cmake_config_target(${example_target} FOLDER "flowmq/examples")
+    target_link_libraries(${example_target} PRIVATE ${TARGET_NAME})
+  endforeach()
+endif()
 
 if(BUILD_TESTS)
   add_subdirectory(tests)
+endif()
+
+if(BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
 endif()
 

@@ -36,6 +36,9 @@ int flowmq_coronet_transport_listen(coro_socket_t *socket, flowmq_coronet_transp
 int flowmq_coronet_transport_send(coro_socket_t *socket, flowmq_coronet_transport_t transport,
                                   const tf_coronet_socket_timeout_config_t *timeouts,
                                   const char *data, size_t len);
+int flowmq_coronet_transport_sendv(coro_socket_t *socket, flowmq_coronet_transport_t transport,
+                                   const tf_coronet_socket_timeout_config_t *timeouts,
+                                   const turbo_iovec_t *iov, size_t iovcnt);
 int flowmq_coronet_transport_leave_multicast(coro_socket_t *socket,
                                              flowmq_coronet_transport_t transport,
                                              const tf_coronet_udp_options_t *udp_options);
