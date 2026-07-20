@@ -630,107 +630,24 @@ spec("Flowie memory Queue settlement composition") {
     queue_remove_database(database_path);
   }
 
-  it("ACKs DURABLE only after SQLite COMMIT and replays after Queue recreation") {
-    static const char graph[] = "source mqtt_in adapter mqtt.endpoint\n"
-                                "stage persist adapter queue.persist\n"
-                                "stage main {\n"
-                                "  mqtt_in -> persist\n"
-                                "}\n";
-    static const uint8_t connect_packet[] = {
-        0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T', 0x05u, 0x00u, 0x00u, 0x3cu,
-        0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u, 's',   'q',   'l'};
-    static const uint8_t publish[] = {0x32u, 0x07u, 0x00u, 0x01u, 'a',
-                                      0x00u, 0x55u, 0x00u, 'd'};
-    static const uint8_t puback[] = {0x40u, 0x02u, 0x00u, 0x55u};
-    char database_path[TURBO_FS_MAX_PATH];
-    char yaml[FLOWIE_QUEUE_TEST_YAML_CAPACITY];
-    uint8_t received[8];
-    unsigned short port = flowie_test_port();
+  it("rejects SQLite as a FlowQueue YAML backend") {
+    static const char yaml[] =
+        "version: 1\nchannels:\n  mqtt.durable:\n    kind: queue\n    config:\n"
+        "      backend: sqlite\n      pattern: push_pull\n"
+        "      resource_uid: queue:mqtt.durable\n      owner_name: mqtt-durable\n"
+        "      capacity: 8\n      max_payload_size: 1024\n      full_policy: fail\n"
+        "adapters: {}\n";
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    turbo_flow_queue_claim_t claim = TURBO_FLOW_QUEUE_CLAIM_INIT;
     turbo_flow_queue_t *queue = NULL;
-    turbo_flow_t *flow = turbo_flow_create();
-    flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
-    int yaml_size;
-    queue_test_database_path(database_path, sizeof(database_path));
-    check_int_gt(port, 0);
-    check_not_null(flow);
-    yaml_size = snprintf(
-        yaml, sizeof(yaml),
-        "version: 1\n"
-        "channels:\n"
-        "  mqtt.durable:\n"
-        "    kind: queue\n"
-        "    config:\n"
-        "      backend: sqlite\n"
-        "      pattern: push_pull\n"
-        "      resource_uid: queue:mqtt.durable\n"
-        "      owner_name: mqtt-durable\n"
-        "      capacity: 8\n"
-        "      max_payload_size: 1024\n"
-        "      full_policy: fail\n"
-        "      database_path: '%s'\n"
-        "      queue_name: mqtt-publish\n"
-        "      busy_timeout_ms: 1000\n"
-        "adapters:\n"
-        "  mqtt.endpoint:\n"
-        "    kind: flowie_endpoint\n"
-        "    config:\n"
-        "      transport: tcp\n"
-        "      host: 127.0.0.1\n"
-        "      port: %hu\n"
-        "      max_connections: 4\n"
-        "      manage_sessions: true\n"
-        "      settlement_qos1: durable\n"
-        "      settlement_qos2: durable\n"
-        "      max_sessions: 4\n"
-        "      max_subscriptions_per_session: 8\n"
-        "      max_inflight_per_session: 8\n"
-        "  queue.persist:\n"
-        "    kind: queue\n"
-        "    config:\n"
-        "      channel: mqtt.durable\n"
-        "      role: sink\n",
-        database_path, port);
-    check_int_gt(yaml_size, 0);
-    check_true((size_t)yaml_size < sizeof(yaml));
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, (size_t)yaml_size, &resolved, &error),
-                 TURBO_OK);
-    check_int_eq(turbo_flow_queue_create_resolved(resolved, "mqtt.durable", &queue, &error),
-                 TURBO_OK);
-    check_int_eq(flowie_register_resolved_endpoint(flow, "mqtt.endpoint", resolved, &error),
-                 TURBO_OK);
-    check_int_eq(turbo_flow_queue_register_resolved_adapter(flow, "queue.persist", resolved, queue,
-                                                            &error),
-                 TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    client = flowie_test_connect(port);
-    check_true(client != FLOWIE_TEST_INVALID_SOCKET);
-    check_int_eq(flowie_test_send(client, connect_packet, sizeof(connect_packet)), TURBO_OK);
-    check_int_eq(flowie_test_recv_mqtt5_connack(client, 0u, 8u, FLOWIE_DEFAULT_MAX_PACKET_SIZE),
-                 TURBO_OK);
-    check_int_eq(flowie_test_send(client, publish, sizeof(publish)), TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(client, received, sizeof(puback)), TURBO_OK);
-    check_mem_eq(received, puback, sizeof(puback));
-    flowie_test_socket_close(client);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
-    turbo_flow_destroy(flow);
-    check_int_eq(turbo_flow_queue_destroy(queue), TURBO_OK);
 
-    queue = NULL;
-    check_int_eq(turbo_flow_queue_create_resolved(resolved, "mqtt.durable", &queue, &error),
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_queue_claim(queue, &claim), TURBO_OK);
-    check_mem_eq(claim.message->payload.data, publish, sizeof(publish));
-    check_null(turbo_flow_msg_protocol_route(claim.message));
-    check_null(turbo_flow_msg_protocol_settlement(claim.message));
-    check_int_eq(turbo_flow_queue_claim_ack(queue, claim.token), TURBO_OK);
-    check_int_eq(turbo_flow_queue_destroy(queue), TURBO_OK);
+    check_int_eq(turbo_flow_queue_create_resolved(resolved, "mqtt.durable", &queue, &error),
+                 TURBO_ENOTSUP);
+    check_null(queue);
+    check_str_eq(error.path, "$.channels.mqtt.durable.config.backend");
     turbo_flow_resolved_config_destroy(resolved);
-    queue_remove_database(database_path);
   }
 
   it("restores a persistent MQTT subscription through the SQLite record store") {

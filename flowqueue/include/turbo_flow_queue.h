@@ -181,7 +181,8 @@ CXX_C_API turbo_flow_queue_t *turbo_flow_queue_create(const turbo_flow_queue_con
  * Create one named Queue channel from an immutable resolved YAML snapshot.
  *
  * The channel must have kind `queue`, pattern `push_pull`, and backend
- * `memory` or `sqlite`. Unknown fields and unsupported capabilities fail fast.
+ * `memory`. Unknown fields and unsupported capabilities fail fast. Durable,
+ * cross-process delivery uses the Redis Stream provider.
  */
 CXX_C_API int turbo_flow_queue_create_resolved(const turbo_flow_resolved_config_t *resolved,
                                                const char *channel_name, turbo_flow_queue_t **out,
@@ -195,6 +196,10 @@ CXX_C_API int turbo_flow_queue_create_resolved(const turbo_flow_resolved_config_
  * and process restart make the row pending again, yielding explicit at-least-once
  * delivery: messages are not silently lost, but a crash after an external side
  * effect and before deletion can cause redelivery.
+ *
+ * @deprecated Queue YAML no longer exposes SQLite. Migrate durable queue
+ * traffic to TurboFlow::Redis Streams; this constructor remains only for
+ * source compatibility during migration.
  */
 CXX_C_API turbo_flow_queue_t *
 turbo_flow_sqlite_queue_create(const turbo_flow_sqlite_queue_config_t *config);

@@ -465,7 +465,7 @@ documented in `observe/README.md`.
 different flows. Its source acknowledges only after synchronous downstream
 success; failures are requeued without an implicit retry loop. Capacity,
 payload size, full policy, and finite blocking timeout are configured on the
-host-owned queue. See `queue/README.md` for ownership and shutdown rules.
+host-owned queue. See `flowqueue/README.md` for ownership and shutdown rules.
 
 TurboNet exports `TurboNet::MimeParser`, backed by `turbonet/email/mime_parser`.
 `TurboFlow::Email` reuses it through registered MIME parser, owned-extract, and

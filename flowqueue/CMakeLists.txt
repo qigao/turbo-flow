@@ -10,7 +10,7 @@ add_library(${TARGET_NAME} SHARED
 cmake_config_target(
   ${TARGET_NAME}
   ALIAS TurboFlow::Queue
-  FOLDER "queue"
+  FOLDER "flowqueue"
   EXPORT_NAME Queue)
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 target_include_directories(
@@ -21,8 +21,12 @@ target_link_libraries(${TARGET_NAME}
   PRIVATE SQLite::SQLite3 TurboUtils::Parser)
 install(FILES include/turbo_flow_queue.h DESTINATION include)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/examples/queue.yml
-        DESTINATION share/turboflow/examples/queue)
+        DESTINATION share/turboflow/examples/flowqueue)
 
 if(BUILD_TESTS)
   add_subdirectory(tests)
+endif()
+
+if(BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
 endif()

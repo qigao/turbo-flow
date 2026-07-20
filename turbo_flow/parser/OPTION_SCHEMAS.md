@@ -711,7 +711,7 @@ The YAML channel is the single serialized queue fact source:
 
 ```text
 kind                 queue
-backend              enum(memory, sqlite), required
+backend              enum(memory), required
 pattern              enum(push_pull), required
 resource_uid         string, required
 owner_name           string, required
@@ -720,17 +720,14 @@ max_active_claims    size, optional, min 1, max capacity
 max_payload_size     size, required, min 1, max 67108864
 full_policy          enum(fail, block, drop_oldest), required
 enqueue_timeout_ms   duration_ms, required and finite for block only
-database_path        path, sqlite only, required
-queue_name           string, sqlite only, required
-busy_timeout_ms      duration_ms, sqlite only, optional
-max_state_size       size, sqlite only, optional
 ```
 
 The corresponding C owner config is `turbo_flow_queue_config_t`. It contains
 `resource_uid`, `owner_name`, `capacity`, `max_payload_size`, `full_policy`, and
 `enqueue_timeout_ms`; the queue pointer is returned by the create function and
-is not itself a config field. SQLite construction wraps that owner config with
-its database-specific fields.
+is not itself a config field. The memory backend uses a fixed-entry MPMC
+Disruptor. Durable and cross-process delivery uses a `kind: redis`,
+`pattern: stream` source/sink pair rather than a Queue channel backend.
 
 Each YAML adapter binding references the already resolved channel and contains
 only:
@@ -749,11 +746,11 @@ guessing a backend.
 The sink clones buffer-backed or owned payloads before returning. Parsed data
 and borrowed transport contexts are rejected because they cannot cross the
 asynchronous boundary safely. The source keeps one message in-flight and
-records an accept ACK only after enqueue/commit. The source records a delivery
-ACK only after downstream success and backend finalization; failure restores it
+records an accept ACK only after publish into the Disruptor. The source records a delivery
+ACK only after downstream success; failure restores it
 to the queue front and stops the source worker. `drop_oldest` is explicit and observable;
 the default behavior is never silent drop. Full lifecycle and concurrency
-semantics are documented in `queue/README.md`.
+semantics are documented in `flowqueue/README.md`.
 
 ## DataBind Adapter Schema
 

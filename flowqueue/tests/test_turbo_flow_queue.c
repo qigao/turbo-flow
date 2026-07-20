@@ -1483,6 +1483,12 @@ spec("turbo_flow_queue") {
         "      resource_uid: queue:events\n      owner_name: events-queue\n"
         "      capacity: 4\n      max_payload_size: 64\n      full_policy: fail\n"
         "adapters: {}\n";
+    static const char sqlite_backend[] =
+        "version: 1\nchannels:\n  events:\n    kind: queue\n    config:\n"
+        "      backend: sqlite\n      pattern: push_pull\n"
+        "      resource_uid: queue:events\n      owner_name: events-queue\n"
+        "      capacity: 4\n      max_payload_size: 64\n      full_policy: fail\n"
+        "adapters: {}\n";
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_queue_t *queue = NULL;
@@ -1523,20 +1529,27 @@ spec("turbo_flow_queue") {
     check_str_eq(error.path, "$.channels.events.config.pattern");
     check_null(queue);
     turbo_flow_resolved_config_destroy(resolved);
+
+    resolved = NULL;
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(sqlite_backend, sizeof(sqlite_backend) - 1u,
+                                                &resolved, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_queue_create_resolved(resolved, "events", &queue, &error),
+                 TURBO_ENOTSUP);
+    check_str_eq(error.path, "$.channels.events.config.backend");
+    check_null(queue);
+    turbo_flow_resolved_config_destroy(resolved);
   }
 
-  it("keeps the Queue YAML example resolvable and creates both configured backends") {
+  it("keeps the FlowQueue and Redis Stream YAML example resolvable") {
     char example_path[1024];
-    char database_path[TURBO_FS_MAX_PATH];
-    char sqlite_yaml[TURBO_FS_MAX_PATH + 512];
     char *yaml;
     size_t yaml_len = 0u;
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_queue_t *queue = NULL;
-    turbo_flow_claim_settler_t settler = TURBO_FLOW_CLAIM_SETTLER_INIT;
     const char *adapter_name = NULL;
-    queue_test_database_path(database_path, sizeof(database_path));
     (void)snprintf(example_path, sizeof(example_path), "%s/examples/queue.yml",
                    TURBO_FLOW_QUEUE_SOURCE_DIR);
     yaml = tt_read_file(example_path, &yaml_len);
@@ -1547,32 +1560,12 @@ spec("turbo_flow_queue") {
         turbo_flow_resolved_config_profile_adapter(resolved, "orders", "enqueue", &adapter_name),
         TURBO_OK);
     check_str_eq(adapter_name, "queue.orders.sink");
+    check_int_eq(turbo_flow_resolved_config_profile_adapter(
+                     resolved, "durable-events", "enqueue", &adapter_name),
+                 TURBO_OK);
+    check_str_eq(adapter_name, "redis.events.sink");
     check_int_eq(turbo_flow_queue_destroy(queue), TURBO_OK);
     turbo_flow_resolved_config_destroy(resolved);
     free(yaml);
-
-    (void)snprintf(
-        sqlite_yaml, sizeof(sqlite_yaml),
-        "version: 1\nchannels:\n  durable:\n    kind: queue\n    config:\n"
-        "      backend: sqlite\n      pattern: push_pull\n"
-        "      resource_uid: queue:durable\n      owner_name: durable-queue\n"
-        "      capacity: 4\n      max_active_claims: 3\n      max_payload_size: 64\n"
-        "      max_state_size: 65536\n      full_policy: fail\n"
-        "      database_path: '%s'\n      queue_name: events\n      busy_timeout_ms: 1000\n"
-        "adapters: {}\n",
-        database_path);
-    resolved = NULL;
-    queue = NULL;
-    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(
-        turbo_flow_config_resolve_yaml(sqlite_yaml, strlen(sqlite_yaml), &resolved, &error),
-        TURBO_OK);
-    check_int_eq(turbo_flow_queue_create_resolved(resolved, "durable", &queue, &error), TURBO_OK);
-    check_not_null(queue);
-    check_int_eq(turbo_flow_queue_claim_settler(queue, &settler), TURBO_OK);
-    check_size_eq(settler.max_state_size, 65536u);
-    check_int_eq(turbo_flow_queue_destroy(queue), TURBO_OK);
-    turbo_flow_resolved_config_destroy(resolved);
-    queue_remove_database(database_path);
   }
 }

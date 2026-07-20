@@ -1,0 +1,71 @@
+version: 1
+
+profiles:
+  orders:
+    enqueue: queue.orders.sink
+    dequeue: queue.orders.source
+  durable-events:
+    enqueue: redis.events.sink
+    dequeue: redis.events.source
+
+fragments:
+  connection:
+    local-redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 0
+      timeout_ms: 5000
+
+channels:
+  orders:
+    kind: queue
+    config:
+      backend: memory
+      pattern: push_pull
+      resource_uid: queue:orders
+      owner_name: orders-queue
+      capacity: 1024
+      max_active_claims: 64
+      max_payload_size: 1048576
+      full_policy: fail
+
+adapters:
+  queue.orders.sink:
+    kind: queue
+    config:
+      channel: orders
+      role: sink
+
+  queue.orders.source:
+    kind: queue
+    config:
+      channel: orders
+      role: source
+
+  redis.events.sink:
+    kind: redis
+    fragments:
+      connection: local-redis
+    config:
+      pattern: stream
+      role: sink
+      stream: flow-events
+      field: payload
+      maxlen: 100000
+
+  redis.events.source:
+    kind: redis
+    fragments:
+      connection: local-redis
+    config:
+      pattern: stream
+      role: source
+      stream: flow-events
+      field: payload
+      group: workers
+      consumer: worker-1
+      group_start_id: "0"
+      poll_interval_ms: 10
+      read_count: 64
+      block_ms: 1000
+      create_group: true

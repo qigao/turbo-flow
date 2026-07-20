@@ -1,8 +1,8 @@
 #include "turbo_flow_queue.h"
 
+#include "disruptor.h"
 #include "fmt.h"
 #include "sqlite3.h"
-#include "turbo_deque.h"
 #include "turbo_error.h"
 #include "turbo_hash.h"
 #include "turbo_heap.h"
@@ -67,8 +67,6 @@ typedef struct flow_queue_item_s {
   uint64_t enqueue_sequence;
 } flow_queue_item_t;
 
-TURBO_DEQUE_DEFINE(flow_queue_items, flow_queue_item_t)
-
 static int flow_queue_item_sequence_compare(const void *left, const void *right, void *ctx) {
   const flow_queue_item_t *left_item = (const flow_queue_item_t *)left;
   const flow_queue_item_t *right_item = (const flow_queue_item_t *)right;
@@ -103,7 +101,7 @@ typedef enum flow_queue_backend_e {
 } flow_queue_backend_t;
 
 struct turbo_flow_queue_s {
-  flow_queue_items items;
+  disruptor_t *disruptor;
   flow_queue_requeued requeued;
   flow_queue_claim_records claim_records;
   flow_queue_claim_slots free_claim_slots;
@@ -112,6 +110,7 @@ struct turbo_flow_queue_s {
   turbo_cond_t not_empty;
   turbo_cond_t not_full;
   size_t capacity;
+  size_t memory_depth;
   size_t max_payload_size;
   turbo_flow_queue_full_policy_t full_policy;
   uint64_t enqueue_timeout_ms;
@@ -465,13 +464,46 @@ static void flow_queue_claim_storage_destroy(turbo_flow_queue_t *queue) {
   queue->max_active_claims = 0u;
 }
 
+static uint64_t flow_queue_disruptor_capacity(size_t capacity) {
+  uint64_t ring_capacity = 1u;
+  while (ring_capacity < (uint64_t)capacity) ring_capacity <<= 1u;
+  return ring_capacity;
+}
+
+static int flow_queue_disruptor_init(turbo_flow_queue_t *queue, size_t capacity) {
+  disruptor_config_t config;
+  if (!queue || capacity == 0u) return TURBO_EINVAL;
+  memset(&config, 0, sizeof(config));
+  config.entry_size = sizeof(flow_queue_item_t);
+  config.capacity = flow_queue_disruptor_capacity(capacity);
+  config.consumer_capacity = 1u;
+  config.mode = DISRUPTOR_MODE_WORKER_POOL;
+  queue->disruptor = disruptor_create(&config);
+  return queue->disruptor ? TURBO_OK : TURBO_ENOMEM;
+}
+
+static void flow_queue_disruptor_destroy(turbo_flow_queue_t *queue) {
+  if (!queue || !queue->disruptor) return;
+  disruptor_destroy(queue->disruptor);
+  queue->disruptor = NULL;
+}
+
 static int flow_queue_memory_pop_pending(turbo_flow_queue_t *queue, flow_queue_item_t *out) {
-  const flow_queue_item_t *front = flow_queue_items_front_const(&queue->items);
   const flow_queue_item_t *requeued = flow_queue_requeued_peek(&queue->requeued);
-  if (!front && !requeued) return TURBO_ENOENT;
-  if (requeued && (!front || requeued->enqueue_sequence < front->enqueue_sequence))
-    return flow_queue_requeued_pop(&queue->requeued, out) ? TURBO_OK : TURBO_EPROTO;
-  return flow_queue_items_pop_front(&queue->items, out) ? TURBO_OK : TURBO_EPROTO;
+  disruptor_cursor_t cursor;
+  flow_queue_item_t *entry;
+  if (requeued) return flow_queue_requeued_pop(&queue->requeued, out) ? TURBO_OK : TURBO_EPROTO;
+  if (!queue->disruptor || !disruptor_worker_try_claim(queue->disruptor, &cursor))
+    return TURBO_ENOENT;
+  entry = (flow_queue_item_t *)disruptor_acquire_entry(queue->disruptor, &cursor);
+  if (!entry) {
+    disruptor_worker_release_entry(queue->disruptor, &cursor);
+    return TURBO_EPROTO;
+  }
+  *out = *entry;
+  memset(entry, 0, sizeof(*entry));
+  disruptor_worker_release_entry(queue->disruptor, &cursor);
+  return TURBO_OK;
 }
 
 static int flow_queue_memory_restore_pending(turbo_flow_queue_t *queue, flow_queue_item_t *item) {
@@ -482,8 +514,23 @@ static int flow_queue_memory_restore_pending(turbo_flow_queue_t *queue, flow_que
 
 static size_t flow_queue_occupancy(const turbo_flow_queue_t *queue) {
   if (queue->backend == FLOW_QUEUE_BACKEND_SQLITE) return queue->sqlite_depth;
-  return flow_queue_items_size(&queue->items) + flow_queue_requeued_size(&queue->requeued) +
-         queue->active_claims + (queue->source_in_flight ? 1u : 0u);
+  return queue->memory_depth;
+}
+
+static int flow_queue_memory_push(turbo_flow_queue_t *queue, flow_queue_item_t *item) {
+  disruptor_cursor_t cursor;
+  flow_queue_item_t *entry;
+  if (!queue || !queue->disruptor || !item) return TURBO_EINVAL;
+  if (!disruptor_publisher_try_claim(queue->disruptor, &cursor)) return TURBO_ENOSPC;
+  entry = (flow_queue_item_t *)disruptor_acquire_entry(queue->disruptor, &cursor);
+  if (!entry) {
+    disruptor_publisher_publish(queue->disruptor, &cursor);
+    return TURBO_EPROTO;
+  }
+  *entry = *item;
+  memset(item, 0, sizeof(*item));
+  (void)disruptor_publisher_publish(queue->disruptor, &cursor);
+  return TURBO_OK;
 }
 
 static int flow_queue_valid_config(const turbo_flow_queue_config_t *config) {
@@ -643,7 +690,7 @@ static int flow_queue_sink_consume(void *ctx, turbo_flow_t *flow,
   }
   rc = queue->backend == FLOW_QUEUE_BACKEND_SQLITE
            ? flow_queue_sqlite_enqueue_locked(queue, &incoming, replace_oldest)
-           : flow_queue_items_push_back(&queue->items, incoming);
+           : flow_queue_memory_push(queue, &incoming);
   if (rc != TURBO_OK) {
     if (has_dropped && flow_queue_memory_restore_pending(queue, &dropped) == TURBO_OK)
       has_dropped = 0;
@@ -651,7 +698,7 @@ static int flow_queue_sink_consume(void *ctx, turbo_flow_t *flow,
   }
   if (queue->backend == FLOW_QUEUE_BACKEND_MEMORY) {
     queue->enqueue_sequence += 1u;
-    turbo_flow_msg_init(&incoming.msg);
+    if (!has_dropped) queue->memory_depth += 1u;
   }
   if (has_dropped || replace_oldest) queue->dropped_oldest += 1u;
   queue->enqueued += 1u;
@@ -721,6 +768,8 @@ static void flow_queue_source_thread(void *ctx) {
       rc = flow_queue_sqlite_finish_locked(queue, &item, 1);
     }
     if (rc == TURBO_OK) {
+      if (queue->backend == FLOW_QUEUE_BACKEND_MEMORY && queue->memory_depth > 0u)
+        queue->memory_depth -= 1u;
       queue->delivered += 1u;
       turbo_cond_broadcast(&queue->not_full);
       turbo_mutex_unlock(&queue->mutex);
@@ -1036,12 +1085,11 @@ turbo_flow_queue_t *turbo_flow_queue_create(const turbo_flow_queue_config_t *con
   if (!flow_queue_valid_config(config)) return NULL;
   queue = (turbo_flow_queue_t *)calloc(1, sizeof(*queue));
   if (!queue) return NULL;
-  if (flow_queue_items_init(&queue->items) != TURBO_OK ||
-      flow_queue_items_reserve(&queue->items, config->capacity) != TURBO_OK ||
+  if (flow_queue_disruptor_init(queue, config->capacity) != TURBO_OK ||
       flow_queue_requeued_init(&queue->requeued) != TURBO_OK ||
       turbo_heap_reserve(&queue->requeued.raw, config->capacity) != TURBO_OK ||
       flow_queue_claim_storage_init(queue, 1u) != TURBO_OK) {
-    flow_queue_items_destroy(&queue->items);
+    flow_queue_disruptor_destroy(queue);
     flow_queue_requeued_destroy(&queue->requeued);
     flow_queue_claim_storage_destroy(queue);
     free(queue);
@@ -1060,7 +1108,7 @@ turbo_flow_queue_t *turbo_flow_queue_create(const turbo_flow_queue_config_t *con
   if (!queue->resource_uid || !queue->owner_name) {
     tstr_freep(&queue->resource_uid);
     tstr_freep(&queue->owner_name);
-    flow_queue_items_destroy(&queue->items);
+    flow_queue_disruptor_destroy(queue);
     flow_queue_requeued_destroy(&queue->requeued);
     flow_queue_claim_storage_destroy(queue);
     turbo_cond_destroy(&queue->not_empty);
@@ -1083,10 +1131,8 @@ turbo_flow_queue_t *turbo_flow_sqlite_queue_create(const turbo_flow_sqlite_queue
   }
   queue = (turbo_flow_queue_t *)calloc(1, sizeof(*queue));
   if (!queue) return NULL;
-  if (flow_queue_items_init(&queue->items) != TURBO_OK ||
-      flow_queue_requeued_init(&queue->requeued) != TURBO_OK ||
+  if (flow_queue_requeued_init(&queue->requeued) != TURBO_OK ||
       flow_queue_claim_storage_init(queue, 1u) != TURBO_OK) {
-    flow_queue_items_destroy(&queue->items);
     flow_queue_requeued_destroy(&queue->requeued);
     flow_queue_claim_storage_destroy(queue);
     free(queue);
@@ -1120,7 +1166,6 @@ turbo_flow_queue_t *turbo_flow_sqlite_queue_create(const turbo_flow_sqlite_queue
     tstr_freep(&queue->sqlite_path);
     tstr_freep(&queue->resource_uid);
     tstr_freep(&queue->owner_name);
-    flow_queue_items_destroy(&queue->items);
     flow_queue_requeued_destroy(&queue->requeued);
     flow_queue_claim_storage_destroy(queue);
     turbo_cond_destroy(&queue->not_empty);
@@ -1142,15 +1187,12 @@ int turbo_flow_queue_destroy(turbo_flow_queue_t *queue) {
     return TURBO_EBUSY;
   }
   turbo_mutex_unlock(&queue->mutex);
-  while (flow_queue_items_pop_front(&queue->items, &item)) {
-    turbo_flow_msg_cleanup(&item.msg);
-  }
-  while (flow_queue_requeued_pop(&queue->requeued, &item)) {
+  while (flow_queue_memory_pop_pending(queue, &item) == TURBO_OK) {
     turbo_flow_msg_cleanup(&item.msg);
   }
   if (queue->sqlite_db && sqlite3_close(queue->sqlite_db) != SQLITE_OK) return TURBO_EBUSY;
   queue->sqlite_db = NULL;
-  flow_queue_items_destroy(&queue->items);
+  flow_queue_disruptor_destroy(queue);
   flow_queue_requeued_destroy(&queue->requeued);
   flow_queue_claim_storage_destroy(queue);
   turbo_cond_destroy(&queue->not_empty);
@@ -1309,6 +1351,8 @@ static int flow_queue_claim_finish(turbo_flow_queue_t *queue, uint64_t token, in
     rc = flow_queue_claim_release_locked(queue, slot, 1);
   }
   if (rc == TURBO_OK) {
+    if (queue->backend == FLOW_QUEUE_BACKEND_MEMORY && queue->memory_depth > 0u)
+      queue->memory_depth -= 1u;
     if (delivered) queue->delivered += 1u;
     turbo_cond_broadcast(&queue->not_full);
   }

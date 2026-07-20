@@ -314,9 +314,9 @@ int turbo_flow_queue_create_resolved(const turbo_flow_resolved_config_t *resolve
                                      const char *channel_name, turbo_flow_queue_t **out,
                                      turbo_flow_config_error_t *error) {
   static const char *const channel_fields[] = {
-      "backend",          "pattern",           "resource_uid",       "owner_name",    "capacity",
-      "max_payload_size", "full_policy",       "enqueue_timeout_ms", "database_path", "queue_name",
-      "busy_timeout_ms",  "max_active_claims", "max_state_size"};
+      "backend",          "pattern",         "resource_uid",       "owner_name",
+      "capacity",         "max_payload_size", "full_policy",       "enqueue_timeout_ms",
+      "max_active_claims"};
   turbo_json_doc_t *document = NULL;
   json_value_t *channels;
   json_value_t *channel;
@@ -324,7 +324,6 @@ int turbo_flow_queue_create_resolved(const turbo_flow_resolved_config_t *resolve
   json_value_t *fields;
   turbo_flow_queue_config_t config;
   turbo_flow_queue_claim_owner_config_t claim_config = TURBO_FLOW_QUEUE_CLAIM_OWNER_CONFIG_INIT;
-  turbo_flow_sqlite_queue_config_t sqlite_config;
   turbo_flow_queue_t *queue = NULL;
   const char *backend;
   const char *pattern;
@@ -438,59 +437,15 @@ int turbo_flow_queue_create_resolved(const turbo_flow_resolved_config_t *resolve
                                 "enqueue_timeout_ms is valid only for block policy");
     goto done;
   }
-  if (strcmp(backend, "memory") == 0) {
-    if (turbo_json_object_get(fields, "database_path") ||
-        turbo_json_object_get(fields, "queue_name") ||
-        turbo_json_object_get(fields, "busy_timeout_ms") ||
-        turbo_json_object_get(fields, "max_state_size")) {
-      rc = flow_queue_config_error(error, TURBO_EINVAL, "channels", channel_name, "backend",
-                                   "memory backend does not accept SQLite fields");
-      goto done;
-    }
+  if (strcmp(backend, "memory") != 0) {
+    rc = flow_queue_config_error(error, TURBO_ENOTSUP, "channels", channel_name, "backend",
+                                 "Queue supports only the memory Disruptor backend; use a Redis "
+                                 "Stream adapter for durable or cross-process delivery");
+  } else {
     queue = turbo_flow_queue_create(&config);
     rc = queue ? TURBO_OK
                : flow_queue_config_error(error, TURBO_ENOMEM, "channels", channel_name, NULL,
                                          "memory queue creation failed");
-  } else if (strcmp(backend, "sqlite") == 0) {
-    const char *database_path = flow_queue_string(fields, "database_path");
-    const char *queue_name = flow_queue_string(fields, "queue_name");
-    memset(&sqlite_config, 0, sizeof(sqlite_config));
-    sqlite_config.queue = config;
-    sqlite_config.database_path = database_path;
-    sqlite_config.queue_name = queue_name;
-    if (!database_path || !database_path[0] || !queue_name || !queue_name[0]) {
-      rc = flow_queue_config_error(error, TURBO_EINVAL, "channels", channel_name, NULL,
-                                   "SQLite database_path and queue_name are required");
-      goto done;
-    }
-    if (strlen(queue_name) > TURBO_FLOW_QUEUE_NAME_MAX) {
-      rc = flow_queue_config_error(error, TURBO_ENAMETOOLONG, "channels", channel_name,
-                                   "queue_name", "queue_name exceeds its public bound");
-      goto done;
-    }
-    if (turbo_json_object_get(fields, "busy_timeout_ms")) {
-      rc =
-          flow_queue_required_u64(fields, "busy_timeout_ms", INT_MAX, &number, channel_name, error);
-      if (rc != TURBO_OK) goto done;
-      sqlite_config.busy_timeout_ms = (int)number;
-    }
-    if (turbo_json_object_get(fields, "max_state_size")) {
-      rc = flow_queue_required_u64(fields, "max_state_size", INT_MAX, &number, channel_name, error);
-      if (rc != TURBO_OK || number == 0u) {
-        if (rc == TURBO_OK)
-          rc = flow_queue_config_error(error, TURBO_ERANGE, "channels", channel_name,
-                                       "max_state_size", "max_state_size must be positive");
-        goto done;
-      }
-      sqlite_config.max_state_size = (size_t)number;
-    }
-    queue = turbo_flow_sqlite_queue_create(&sqlite_config);
-    rc = queue ? TURBO_OK
-               : flow_queue_config_error(error, TURBO_EIO, "channels", channel_name, NULL,
-                                         "SQLite queue creation failed");
-  } else {
-    rc = flow_queue_config_error(error, TURBO_ENOTSUP, "channels", channel_name, "backend",
-                                 "Queue backend is not supported");
   }
   if (rc == TURBO_OK) {
     rc = turbo_flow_queue_configure_claims(queue, &claim_config);
