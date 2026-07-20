@@ -136,17 +136,34 @@ static int flow_http_client_method_value(turbo_flow_http_method_t method) {
   }
 }
 
-static int flow_http_client_replace_payload(turbo_flow_msg_t *msg, const char *data, size_t len) {
-  tstr_t payload;
-  if (!msg || (len > 0 && !data)) return TURBO_EINVAL;
-  payload = tstr_new_len(data ? data : "", len);
-  if (!payload) return TURBO_ENOMEM;
+static void flow_http_client_response_release(void *data, void *user_data) {
+  (void)data;
+  http_response_free((http_response_t *)user_data);
+}
+
+static int flow_http_client_adopt_response_payload(turbo_flow_msg_t *msg,
+                                                   http_response_t **response_ptr) {
+  http_response_t *response;
+  mem_buffer_t *buffer = NULL;
+  tstr_t payload = NULL;
+  if (!msg || !response_ptr || !*response_ptr) return TURBO_EINVAL;
+  response = *response_ptr;
+  if (response->body_len > 0u && !response->body) return TURBO_EINVAL;
+  if (response->body_len > 0u) {
+    buffer = mem_wrap_external(response->body, response->body_len, flow_http_client_response_release,
+                               response);
+    if (!buffer) return TURBO_ENOMEM;
+  } else {
+    payload = tstr_new_len("", 0u);
+    if (!payload) return TURBO_ENOMEM;
+  }
   turbo_flow_msg_clear_content(msg);
   tstr_freep(&msg->owned_payload);
   mem_buffer_release(msg->buffer);
-  msg->buffer = NULL;
+  msg->buffer = buffer;
   msg->owned_payload = payload;
-  msg->payload = tstr_to_v(payload);
+  msg->payload = buffer ? tstr_v_from_buf(response->body, response->body_len) : tstr_to_v(payload);
+  if (buffer) *response_ptr = NULL;
   return TURBO_OK;
 }
 
@@ -187,7 +204,8 @@ static void flow_http_client_task(coro_t *co, void *arg) {
 }
 
 static int flow_http_client_publish_poll_result(flow_http_client_adapter_t *adapter,
-                                                const http_response_t *response) {
+                                                http_response_t **response_ptr) {
+  http_response_t *response = response_ptr ? *response_ptr : NULL;
   turbo_flow_msg_t msg;
   const char *data = "";
   size_t len = 0;
@@ -206,9 +224,16 @@ static int flow_http_client_publish_poll_result(flow_http_client_adapter_t *adap
       len = response->body_len;
     }
   }
-  msg.owned_payload = tstr_new_len(data, len);
-  if (!msg.owned_payload) return TURBO_ENOMEM;
-  msg.payload = tstr_to_v(msg.owned_payload);
+  if (response && response->error_code == HTTP_ERROR_NONE &&
+      response->status_code >= adapter->success_status_min &&
+      response->status_code <= adapter->success_status_max) {
+    rc = flow_http_client_adopt_response_payload(&msg, response_ptr);
+    if (rc != TURBO_OK) return rc;
+  } else {
+    msg.owned_payload = tstr_new_len(data, len);
+    if (!msg.owned_payload) return TURBO_ENOMEM;
+    msg.payload = tstr_to_v(msg.owned_payload);
+  }
   if (response && response->error_code == HTTP_ERROR_NONE) {
     content_type = http_response_content_type((http_response_t *)response);
     if (content_type) {
@@ -253,7 +278,7 @@ static void flow_http_client_poll_task(coro_t *co, void *arg) {
     http_response_t *response =
         http_request(adapter->client, HTTP_GET, adapter->url, (const char **)adapter->headers,
                      (int)adapter->header_count, NULL, 0);
-    int rc = flow_http_client_publish_poll_result(adapter, response);
+    int rc = flow_http_client_publish_poll_result(adapter, &response);
     if (response) http_response_free(response);
     if (rc != TURBO_OK || !atomic_load_explicit(&adapter->started, memory_order_acquire)) break;
     if (flow_http_client_wait_for_ms(adapter, adapter->poll_interval_ms) != TURBO_OK) break;
@@ -351,11 +376,12 @@ static int flow_http_client_consume(void *ctx, turbo_flow_t *flow,
                                 task.response->status_code > adapter->success_status_max)) {
     rc = TURBO_EPROTO;
   } else if (rc == TURBO_OK) {
+    http_response_t *response = task.response;
     char *content_type;
     const turbo_flow_content_descriptor_t *descriptor = NULL;
-    msg->status = task.response->status_code;
-    rc = flow_http_client_replace_payload(msg, task.response->body, task.response->body_len);
-    content_type = http_response_content_type(task.response);
+    msg->status = response->status_code;
+    rc = flow_http_client_adopt_response_payload(msg, &task.response);
+    content_type = rc == TURBO_OK ? http_response_content_type(response) : NULL;
     if (rc == TURBO_OK && content_type) {
       rc = flow_http_content_cache_get(&adapter->content_cache, content_type, &descriptor);
       if (rc == TURBO_ENOENT) rc = TURBO_OK;

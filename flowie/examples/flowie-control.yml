@@ -1,0 +1,39 @@
+version: 1
+
+listener:
+  host: 127.0.0.1
+  port: 8443
+  tls:
+    cert_file: certs/flowie-control-server-chain.pem
+    key_file: certs/flowie-control-server-key.pem
+    key_password_ref: env://FLOWIE_CONTROL_KEY_PASSWORD
+    client_ca_file: certs/flowie-control-client-ca.pem
+  limits:
+    max_header_name_length: 128
+    max_header_value_length: 4096
+    max_url_length: 2048
+    max_cookie_name_length: 128
+    max_cookie_value_length: 4096
+    max_json_depth: 32
+    max_log_message_length: 2048
+    max_request_body_size: 65536
+    max_headers_count: 64
+
+storage:
+  sqlite:
+    path: data/flowie-control.sqlite3
+    busy_timeout_ms: 1000
+
+management:
+  rpc_path: /v1/management/rpc
+  rpc_max_request_size: 65536
+  certificate_bindings:
+    - peer_certificate_sha256: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      root_group: root-a
+      principal: admin-a
+
+dashboard:
+  enabled: true
+
+auth:
+  enabled: false

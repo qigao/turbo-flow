@@ -27,11 +27,29 @@ typedef struct flow_fmq_send_profile_snapshot_s {
   uint64_t completion_sum_ns;
   uint64_t waiter_wake_sum_ns;
   uint64_t total_sum_ns;
+  uint64_t batch_socket_calls;
+  uint64_t batch_socket_cpu_samples;
+  uint64_t batch_socket_frames;
+  uint64_t batch_socket_iov_segments;
+  uint64_t batch_socket_send_sum_ns;
+  uint64_t batch_socket_thread_cpu_sum_ns;
+  uint64_t batch_socket_estimated_off_cpu_sum_ns;
+  uint64_t batch_samples;
+  uint64_t batch_post_samples;
+  uint64_t batch_build_sum_ns;
+  uint64_t batch_payload_prepare_sum_ns;
+  uint64_t batch_graph_publish_sum_ns;
+  uint64_t batch_adapter_consume_sum_ns;
+  uint64_t batch_enqueue_prepare_sum_ns;
+  uint64_t batch_owner_wait_sum_ns;
+  uint64_t batch_post_call_sum_ns;
+  uint64_t batch_owner_work_sum_ns;
+  uint64_t batch_waiter_wake_sum_ns;
+  uint64_t batch_total_sum_ns;
 } flow_fmq_send_profile_snapshot_t;
 
-#define FLOW_FMQ_SEND_PROFILE_SNAPSHOT_INIT                                                        \
-  {sizeof(flow_fmq_send_profile_snapshot_t), 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,  \
-   0u}
+#define FLOW_FMQ_SEND_PROFILE_SNAPSHOT_INIT \
+  {sizeof(flow_fmq_send_profile_snapshot_t), 0u}
 
 /**
  * Reset process-wide benchmark counters. The benchmark must ensure no profiled send is in flight.

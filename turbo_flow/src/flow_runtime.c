@@ -1,8 +1,89 @@
 #include "flow_internal.h"
 
+#include "turbo_buffer.h"
+
 #include <limits.h>
-#include <stdlib.h>
 #include <string.h>
+
+#define FLOW_RUNTIME_STACK_STAGE_CAPACITY 64u
+
+typedef struct flow_runtime_stack_workspace_s {
+  uint8_t reachable[FLOW_RUNTIME_STACK_STAGE_CAPACITY];
+  uint8_t done[FLOW_RUNTIME_STACK_STAGE_CAPACITY];
+  uint32_t remaining[FLOW_RUNTIME_STACK_STAGE_CAPACITY];
+  uint32_t activated[FLOW_RUNTIME_STACK_STAGE_CAPACITY];
+  uint32_t queue[FLOW_RUNTIME_STACK_STAGE_CAPACITY];
+  uint64_t stage_sequences[FLOW_RUNTIME_STACK_STAGE_CAPACITY];
+} flow_runtime_stack_workspace_t;
+
+typedef struct flow_runtime_workspace_s {
+  uint8_t *reachable;
+  uint8_t *done;
+  uint32_t *remaining;
+  uint32_t *activated;
+  uint32_t *queue;
+  uint64_t *stage_sequences;
+  void *pooled_storage;
+} flow_runtime_workspace_t;
+
+static size_t flow_runtime_align_offset(size_t offset, size_t alignment) {
+  return (offset + alignment - 1u) & ~(alignment - 1u);
+}
+
+static int flow_runtime_workspace_init(flow_runtime_workspace_t *workspace,
+                                       flow_runtime_stack_workspace_t *stack_workspace,
+                                       size_t stage_count) {
+  const size_t bytes_per_stage = sizeof(uint8_t) * 2u + sizeof(uint32_t) * 3u + sizeof(uint64_t);
+  const size_t alignment_slack = sizeof(uint32_t) - 1u + sizeof(uint64_t) - 1u;
+  unsigned char *storage;
+  size_t offset = 0u;
+  size_t allocation_size;
+
+  if (!workspace || !stack_workspace || stage_count == 0u) return TURBO_EINVAL;
+  memset(workspace, 0, sizeof(*workspace));
+  if (stage_count <= FLOW_RUNTIME_STACK_STAGE_CAPACITY) {
+    memset(stack_workspace->reachable, 0, stage_count * sizeof(*stack_workspace->reachable));
+    memset(stack_workspace->done, 0, stage_count * sizeof(*stack_workspace->done));
+    memset(stack_workspace->remaining, 0, stage_count * sizeof(*stack_workspace->remaining));
+    memset(stack_workspace->activated, 0, stage_count * sizeof(*stack_workspace->activated));
+    memset(stack_workspace->queue, 0, stage_count * sizeof(*stack_workspace->queue));
+    memset(stack_workspace->stage_sequences, 0,
+           stage_count * sizeof(*stack_workspace->stage_sequences));
+    workspace->reachable = stack_workspace->reachable;
+    workspace->done = stack_workspace->done;
+    workspace->remaining = stack_workspace->remaining;
+    workspace->activated = stack_workspace->activated;
+    workspace->queue = stack_workspace->queue;
+    workspace->stage_sequences = stack_workspace->stage_sequences;
+    return TURBO_OK;
+  }
+  if (stage_count > (SIZE_MAX - alignment_slack) / bytes_per_stage) return TURBO_ERANGE;
+  allocation_size = stage_count * bytes_per_stage + alignment_slack;
+  storage = (unsigned char *)mem_alloc(mem_global(), allocation_size);
+  if (!storage) return TURBO_ENOMEM;
+  memset(storage, 0, allocation_size);
+  workspace->pooled_storage = storage;
+  workspace->reachable = storage + offset;
+  offset += stage_count * sizeof(*workspace->reachable);
+  workspace->done = storage + offset;
+  offset += stage_count * sizeof(*workspace->done);
+  offset = flow_runtime_align_offset(offset, sizeof(uint32_t));
+  workspace->remaining = (uint32_t *)(void *)(storage + offset);
+  offset += stage_count * sizeof(*workspace->remaining);
+  workspace->activated = (uint32_t *)(void *)(storage + offset);
+  offset += stage_count * sizeof(*workspace->activated);
+  workspace->queue = (uint32_t *)(void *)(storage + offset);
+  offset += stage_count * sizeof(*workspace->queue);
+  offset = flow_runtime_align_offset(offset, sizeof(uint64_t));
+  workspace->stage_sequences = (uint64_t *)(void *)(storage + offset);
+  return TURBO_OK;
+}
+
+static void flow_runtime_workspace_cleanup(flow_runtime_workspace_t *workspace) {
+  if (!workspace || !workspace->pooled_storage) return;
+  mem_free(mem_global(), workspace->pooled_storage);
+  workspace->pooled_storage = NULL;
+}
 
 int flow_publish_enter(turbo_flow_t *flow) {
   int rc = TURBO_EINVAL;
@@ -388,11 +469,17 @@ int turbo_flow_stop(turbo_flow_t *flow) {
 
 static int flow_cancel_emission_descendant_reorders(turbo_flow_t *flow, uint32_t stage_index,
                                                     uint64_t *stage_sequences, size_t stage_count) {
-  uint8_t *reachable = NULL;
+  uint8_t stack_reachable[FLOW_RUNTIME_STACK_STAGE_CAPACITY] = {0};
+  uint8_t *reachable = stack_reachable;
+  int pooled = 0;
   int rc = TURBO_OK;
 
-  reachable = (uint8_t *)calloc(stage_count, sizeof(*reachable));
-  if (!reachable) return TURBO_ENOMEM;
+  if (stage_count > FLOW_RUNTIME_STACK_STAGE_CAPACITY) {
+    reachable = (uint8_t *)mem_alloc(mem_global(), stage_count);
+    if (!reachable) return TURBO_ENOMEM;
+    memset(reachable, 0, stage_count);
+    pooled = 1;
+  }
   flow_mark_reachable_from_stage(flow, reachable, stage_index);
   for (size_t i = 0u; i < stage_count; ++i) {
     int cancel_rc;
@@ -401,18 +488,20 @@ static int flow_cancel_emission_descendant_reorders(turbo_flow_t *flow, uint32_t
     if (rc == TURBO_OK && cancel_rc != TURBO_OK) rc = cancel_rc;
     stage_sequences[i] = 0u;
   }
-  free(reachable);
+  if (pooled) mem_free(mem_global(), reachable);
   return rc;
 }
 
 int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
                                 turbo_flow_msg_t *message) {
-  uint8_t *reachable = NULL;
-  uint8_t *done = NULL;
-  uint32_t *remaining = NULL;
-  uint32_t *activated = NULL;
-  uint32_t *queue = NULL;
-  uint64_t *stage_sequences = NULL;
+  flow_runtime_stack_workspace_t stack_workspace;
+  flow_runtime_workspace_t workspace;
+  uint8_t *reachable;
+  uint8_t *done;
+  uint32_t *remaining;
+  uint32_t *activated;
+  uint32_t *queue;
+  uint64_t *stage_sequences;
   size_t head = 0;
   size_t tail = 0;
   size_t stage_count = 0;
@@ -423,16 +512,17 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   if (!flow || !message || origin_stage >= turbo_vec_size(&flow->stages)) return TURBO_EINVAL;
 
   stage_count = turbo_vec_size(&flow->stages);
-  reachable = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
-  done = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
-  remaining = (uint32_t *)calloc(stage_count, sizeof(uint32_t));
-  activated = (uint32_t *)calloc(stage_count, sizeof(uint32_t));
-  queue = (uint32_t *)calloc(stage_count, sizeof(uint32_t));
-  stage_sequences = (uint64_t *)calloc(stage_count, sizeof(uint64_t));
-  if (!reachable || !done || !remaining || !activated || !queue || !stage_sequences) {
-    rc = flow_set_error_keep_state(flow, TURBO_ENOMEM, 0, 0, "out of memory");
-    goto cleanup;
-  }
+  rc = flow_runtime_workspace_init(&workspace, &stack_workspace, stage_count);
+  if (rc != TURBO_OK)
+    return flow_set_error_keep_state(flow, rc, 0, 0,
+                                     rc == TURBO_ERANGE ? "flow graph workspace is too large"
+                                                       : "out of memory");
+  reachable = workspace.reachable;
+  done = workspace.done;
+  remaining = workspace.remaining;
+  activated = workspace.activated;
+  queue = workspace.queue;
+  stage_sequences = workspace.stage_sequences;
 
   flow_mark_reachable_from_stage(flow, reachable, origin_stage);
   for (size_t i = 0; i < stage_count; ++i) {
@@ -547,12 +637,7 @@ cleanup:
       }
     }
   }
-  free(reachable);
-  free(done);
-  free(remaining);
-  free(activated);
-  free(queue);
-  free(stage_sequences);
+  flow_runtime_workspace_cleanup(&workspace);
   return rc;
 }
 
@@ -634,48 +719,49 @@ int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t sou
   return rc;
 }
 
-int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name, const turbo_flow_msg_t *msg,
-                          turbo_flow_publish_result_t *result) {
-  turbo_flow_msg_t local;
-  int source_index;
-  int rc = TURBO_OK;
-  uint64_t observe_start = 0u;
-  int publish_entered = 0;
-  int local_initialized = 0;
+static int flow_publish_source_index(turbo_flow_t *flow, const char *source_name,
+                                     uint32_t *source_index) {
+  int found_index;
+  const flow_stage_plan_impl_t *source;
 
-  if (!flow || !source_name || !msg || !result || result->size < sizeof(*result)) {
-    return TURBO_EINVAL;
+  if (!flow || !source_name || !source_index) return TURBO_EINVAL;
+  found_index = turbo_flow_find_stage(flow, source_name);
+  if (found_index < 0) {
+    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+                                     "publish source is unknown");
   }
-  *result = (turbo_flow_publish_result_t)TURBO_FLOW_PUBLISH_RESULT_INIT;
-  flow_publish_error_context_begin(flow);
-  rc = flow_publish_enter(flow);
-  if (rc != TURBO_OK) {
-    rc = flow_set_error_keep_state(flow, rc, 0, 0,
-                                   rc == TURBO_ESHUTDOWN ? "flow is not accepting publications"
-                                                         : "flow must be started before publish");
-    goto cleanup;
+  source = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages,
+                                                              (size_t)found_index);
+  if (!source->is_source) {
+    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+                                     "publish target must be a source");
   }
-  publish_entered = 1;
+  *source_index = (uint32_t)found_index;
+  return TURBO_OK;
+}
+
+static int flow_publish_message_entered(turbo_flow_t *flow, const char *source_name,
+                                        int resolved_source_index,
+                                        const turbo_flow_msg_t *msg,
+                                        turbo_flow_publish_result_t *result) {
+  turbo_flow_msg_t local;
+  uint32_t source_index = 0u;
+  uint64_t observe_start = 0u;
+  int local_initialized = 0;
+  int rc;
+
   if (flow->observer_ops.message_complete) observe_start = turbo_hrtime();
   flow_clear_error(flow);
-
   if (!msg->buffer && !msg->owned_payload && msg->payload.data) {
     rc = flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
                                    "publish payload requires a backing buffer or owned payload");
     goto cleanup;
   }
-  source_index = turbo_flow_find_stage(flow, source_name);
-  if (source_index < 0) {
-    rc = flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0, "publish source is unknown");
-    goto cleanup;
-  }
-  {
-    const flow_stage_plan_impl_t *source =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, (size_t)source_index);
-    if (!source->is_source) {
-      rc = flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0, "publish target must be a source");
-      goto cleanup;
-    }
+  if (resolved_source_index < 0) {
+    rc = flow_publish_source_index(flow, source_name, &source_index);
+    if (rc != TURBO_OK) goto cleanup;
+  } else {
+    source_index = (uint32_t)resolved_source_index;
   }
 
   if (msg->owned_payload || msg->_content_handle) {
@@ -690,13 +776,35 @@ int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name, const tur
     goto cleanup;
   }
   local_initialized = 1;
-
-  rc = flow_publish_local(flow, source_name, (uint32_t)source_index, &local, observe_start, result);
+  rc = flow_publish_local(flow, source_name, source_index, &local, observe_start, result);
 
 cleanup:
-  if (local_initialized) {
-    turbo_flow_msg_cleanup(&local);
+  if (local_initialized) turbo_flow_msg_cleanup(&local);
+  result->status = rc;
+  return rc;
+}
+
+int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name, const turbo_flow_msg_t *msg,
+                          turbo_flow_publish_result_t *result) {
+  int rc = TURBO_OK;
+  int publish_entered = 0;
+
+  if (!flow || !source_name || !msg || !result || result->size < sizeof(*result)) {
+    return TURBO_EINVAL;
   }
+  *result = (turbo_flow_publish_result_t)TURBO_FLOW_PUBLISH_RESULT_INIT;
+  flow_publish_error_context_begin(flow);
+  rc = flow_publish_enter(flow);
+  if (rc != TURBO_OK) {
+    rc = flow_set_error_keep_state(flow, rc, 0, 0,
+                                   rc == TURBO_ESHUTDOWN ? "flow is not accepting publications"
+                                                         : "flow must be started before publish");
+    goto cleanup;
+  }
+  publish_entered = 1;
+  rc = flow_publish_message_entered(flow, source_name, -1, msg, result);
+
+cleanup:
   if (publish_entered) flow_publish_leave(flow);
   flow_publish_error_context_end(flow);
   result->status = rc;
@@ -706,4 +814,60 @@ cleanup:
 int turbo_flow_publish(turbo_flow_t *flow, const char *source_name, const turbo_flow_msg_t *msg) {
   turbo_flow_publish_result_t result = TURBO_FLOW_PUBLISH_RESULT_INIT;
   return turbo_flow_publish_ex(flow, source_name, msg, &result);
+}
+
+int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
+                             const turbo_flow_publish_batch_config_t *config,
+                             size_t *published) {
+  turbo_flow_publish_batch_prepare_fn prepare;
+  size_t message_count;
+  void *prepare_ctx;
+  uint32_t source_index = 0u;
+  int publish_entered = 0;
+  int rc;
+
+  if (published) *published = 0u;
+  if (!flow || !source_name || !config || config->size < sizeof(*config) ||
+      config->message_count == 0u || !config->prepare) {
+    return TURBO_EINVAL;
+  }
+  message_count = config->message_count;
+  prepare = config->prepare;
+  prepare_ctx = config->ctx;
+  flow_publish_error_context_begin(flow);
+  rc = flow_publish_enter(flow);
+  if (rc != TURBO_OK) {
+    rc = flow_set_error_keep_state(flow, rc, 0, 0,
+                                   rc == TURBO_ESHUTDOWN
+                                       ? "flow is not accepting publications"
+                                       : "flow must be started before publish");
+    goto cleanup;
+  }
+  publish_entered = 1;
+  flow_clear_error(flow);
+  rc = flow_publish_source_index(flow, source_name, &source_index);
+  if (rc != TURBO_OK) goto cleanup;
+
+  for (size_t index = 0u; index < message_count; ++index) {
+    turbo_flow_msg_t message;
+    turbo_flow_publish_result_t result = TURBO_FLOW_PUBLISH_RESULT_INIT;
+    turbo_flow_msg_init(&message);
+    rc = prepare(prepare_ctx, index, &message);
+    if (rc != TURBO_OK) {
+      rc = flow_set_error_keep_state(flow, rc, 0, 0,
+                                     "batch message preparation failed");
+      turbo_flow_msg_cleanup(&message);
+      break;
+    }
+    rc = flow_publish_message_entered(flow, source_name, (int)source_index, &message,
+                                      &result);
+    turbo_flow_msg_cleanup(&message);
+    if (rc != TURBO_OK) break;
+    if (published) *published = index + 1u;
+  }
+
+cleanup:
+  if (publish_entered) flow_publish_leave(flow);
+  flow_publish_error_context_end(flow);
+  return rc;
 }

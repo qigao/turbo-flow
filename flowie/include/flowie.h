@@ -26,6 +26,7 @@ typedef struct turbo_flow_coronet_execution_binding_s turbo_flow_coronet_executi
 #define FLOWIE_ENDPOINT_ABI_V5 5u
 #define FLOWIE_ENDPOINT_ABI_V6 6u
 #define FLOWIE_ENDPOINT_ABI_V7 7u
+#define FLOWIE_ENDPOINT_ABI_V8 8u
 #define FLOWIE_DEFAULT_MAX_PACKET_SIZE (1024u * 1024u)
 #define FLOWIE_DEFAULT_MAX_CONNECTIONS 1024u
 #define FLOWIE_DEFAULT_SEND_HWM_BYTES (1024u * 1024u)
@@ -33,7 +34,7 @@ typedef struct turbo_flow_coronet_execution_binding_s turbo_flow_coronet_executi
 #define FLOWIE_DEFAULT_MAX_SUBSCRIPTIONS_PER_SESSION 1024u
 #define FLOWIE_DEFAULT_MAX_INFLIGHT_PER_SESSION 64u
 #define FLOWIE_MAX_CONNECTIONS_LIMIT UINT32_MAX
-#define FLOWIE_MIN_COROUTINE_STACK_SIZE (32u * 1024u)
+#define FLOWIE_MIN_COROUTINE_STACK_SIZE (64u * 1024u)
 #define FLOWIE_MAX_COROUTINE_STACK_SIZE (8u * 1024u * 1024u)
 #define FLOWIE_MIN_RECV_BUFFER_SIZE 1024u
 #define FLOWIE_MAX_RECV_BUFFER_SIZE (1024u * 1024u)
@@ -92,10 +93,12 @@ typedef struct flowie_endpoint_config_s {
   size_t coroutine_stack_size;
   /** Capacity of each private-context CoroNet ping-pong receive buffer. Zero selects 4 KiB. */
   size_t recv_buffer_size;
+  /** Maximum inbound MQTT 5 Topic Alias accepted per connection. Zero disables aliases. */
+  uint16_t topic_alias_maximum;
 } flowie_endpoint_config_t;
 
 #define FLOWIE_ENDPOINT_CONFIG_INIT                                                                \
-  {sizeof(flowie_endpoint_config_t), FLOWIE_ENDPOINT_ABI_V7, FLOWIE_TRANSPORT_TCP,                 \
+  {sizeof(flowie_endpoint_config_t), FLOWIE_ENDPOINT_ABI_V8, FLOWIE_TRANSPORT_TCP,                 \
    TURBO_FLOW_PROTOCOL_SETTLEMENT_POLICY_INIT}
 
 /**
@@ -110,11 +113,13 @@ typedef struct flowie_endpoint_security_binding_s {
   const char *realm_channel;
   const char *auth_method;
   const turbo_flow_security_auth_provider_t *auth_provider;
+  /** Required when MQTT 5 CONNECT carries Authentication Method. No basic-auth fallback occurs. */
+  const turbo_flow_security_enhanced_auth_provider_t *enhanced_auth_provider;
   turbo_flow_security_realm_t *realm;
 } flowie_endpoint_security_binding_t;
 
 #define FLOWIE_ENDPOINT_SECURITY_BINDING_INIT                                                      \
-  {sizeof(flowie_endpoint_security_binding_t), NULL, NULL, NULL, NULL}
+  {sizeof(flowie_endpoint_security_binding_t), NULL, NULL, NULL, NULL, NULL}
 
 /** Borrowed durable state owner for managed MQTT sessions and retained publications. */
 typedef struct flowie_endpoint_persistence_binding_s {

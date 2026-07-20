@@ -70,7 +70,7 @@ typedef struct rule_facts_provider_probe_s {
 } rule_facts_provider_probe_t;
 
 static const turbo_flow_expr_schema_field_t RULE_PROVIDER_FIELDS[] = {
-    {"tenant.level", TURBO_FLOW_EXPR_TYPE_I64, 1u}};
+    {"group.level", TURBO_FLOW_EXPR_TYPE_I64, 1u}};
 static const turbo_flow_expr_schema_t RULE_PROVIDER_SCHEMA = {RULE_PROVIDER_FIELDS, 1u};
 
 static int provide_rule_facts(const turbo_flow_msg_t *message,
@@ -79,7 +79,7 @@ static int provide_rule_facts(const turbo_flow_msg_t *message,
                               size_t *value_count_out, void *ctx) {
   rule_facts_provider_probe_t *probe = (rule_facts_provider_probe_t *)ctx;
   if (!message || !schema || !schema->fields || schema->field_count != 1u ||
-      strcmp(schema->fields[0].path, "tenant.level") != 0 ||
+      strcmp(schema->fields[0].path, "group.level") != 0 ||
       schema->fields[0].type != TURBO_FLOW_EXPR_TYPE_I64 || !values_out ||
       !value_count_out || !probe) {
     return TURBO_EPROTO;
@@ -105,7 +105,7 @@ static int provide_invalid_rule_facts(const turbo_flow_msg_t *message,
 }
 
 typedef struct rule_projection_value_s {
-  int64_t tenant_level;
+  int64_t group_level;
 } rule_projection_value_t;
 
 typedef struct rule_projection_materializer_probe_s {
@@ -143,14 +143,14 @@ static int materialize_rule_projection(
   if (!value || !projection_schema || !rule_schema || !rule_schema->fields ||
       rule_schema->field_count != 1u || strcmp(projection_schema->schema_name, "rules.message") != 0 ||
       strcmp(projection_schema->type_name, "RuleMessage") != 0 ||
-      strcmp(rule_schema->fields[0].path, "tenant.level") != 0 ||
+      strcmp(rule_schema->fields[0].path, "group.level") != 0 ||
       rule_schema->fields[0].type != TURBO_FLOW_EXPR_TYPE_I64 || !values_out ||
       !value_count_out || !probe) {
     return TURBO_EPROTO;
   }
   probe->calls += 1;
   probe->values[0].type = TURBO_FLOW_EXPR_TYPE_I64;
-  probe->values[0].as.i64 = value->tenant_level;
+  probe->values[0].as.i64 = value->group_level;
   *values_out = probe->values;
   *value_count_out = 1u;
   return TURBO_OK;
@@ -186,10 +186,10 @@ spec("versioned rule program") {
         "      mode: all_matches\n"
         "      max_output_actions: 4\n"
         "      rules:\n"
-        "        - when: tenant.level > 1\n"
+        "        - when: group.level > 1\n"
         "          action: route\n"
         "          key: elevated\n"
-        "        - when: tenant.level < 0\n"
+        "        - when: group.level < 0\n"
         "          action: drop\n"
         "adapters: {}\n";
     turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -295,7 +295,7 @@ spec("versioned rule program") {
     turbo_flow_rule_action_t actions[] = {
         mutate_flags(5u, 7u),
         data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "priority"),
-        data_action(TURBO_FLOW_RULE_ACTION_BATCH_KEY, "tenant-7"),
+        data_action(TURBO_FLOW_RULE_ACTION_BATCH_KEY, "group-7"),
         data_action(TURBO_FLOW_RULE_ACTION_RETRY_CLASS, "transient")};
     turbo_flow_rule_action_t status_action =
         data_action(TURBO_FLOW_RULE_ACTION_MUTATE_PRIVATE, NULL);
@@ -311,7 +311,7 @@ spec("versioned rule program") {
     check_int_eq(turbo_flow_rule_apply_data_actions(&message, actions, 4u, &decision), TURBO_OK);
     check_uint_eq(message.flags, 13u);
     check_str_eq(decision.route, "priority");
-    check_str_eq(decision.batch_key, "tenant-7");
+    check_str_eq(decision.batch_key, "group-7");
     check_str_eq(decision.retry_class, "transient");
     check_int_eq(turbo_flow_rule_apply_data_actions(&message, &status_action, 1u, &decision),
                  TURBO_OK);
@@ -446,10 +446,10 @@ spec("versioned rule program") {
                                  "  input -> apply -> sink\n"
                                  "}\n";
     const turbo_flow_expr_schema_field_t field = {
-        "tenant.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     const turbo_flow_expr_schema_t schema = {&field, 1u};
     const turbo_flow_rule_t rule = {
-        "tenant.level > 3", 0u, mutate_flags(8u, 8u)};
+        "group.level > 3", 0u, mutate_flags(8u, 8u)};
     rule_facts_provider_probe_t facts_probe = {0};
     rule_operation_probe_t operation_probe = {0};
     turbo_flow_rule_processor_t *processor = NULL;
@@ -490,10 +490,10 @@ spec("versioned rule program") {
                                  "  input -> apply -> sink\n"
                                  "}\n";
     const turbo_flow_expr_schema_field_t field = {
-        "tenant.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     const turbo_flow_expr_schema_t schema = {&field, 1u};
     const turbo_flow_rule_t rule = {
-        "tenant.level > 3", 0u, mutate_flags(8u, 8u)};
+        "group.level > 3", 0u, mutate_flags(8u, 8u)};
     turbo_flow_rule_projection_provider_t projection_provider =
         TURBO_FLOW_RULE_PROJECTION_PROVIDER_INIT;
     rule_projection_materializer_probe_t materializer_probe = {0};
@@ -506,7 +506,7 @@ spec("versioned rule program") {
     turbo_flow_msg_t message;
 
     check_not_null(projection);
-    projection->tenant_level = 7;
+    projection->group_level = 7;
     projection_provider.materialize = materialize_rule_projection;
     projection_provider.ctx = &materializer_probe;
     config.schema = &schema;
@@ -541,7 +541,7 @@ spec("versioned rule program") {
 
   it("rejects opaque messages at the projection facts boundary") {
     const turbo_flow_expr_schema_field_t field = {
-        "tenant.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     const turbo_flow_expr_schema_t schema = {&field, 1u};
     turbo_flow_rule_projection_provider_t projection_provider =
         TURBO_FLOW_RULE_PROJECTION_PROVIDER_INIT;
@@ -564,10 +564,10 @@ spec("versioned rule program") {
 
   it("rejects schema-backed rules.apply without a facts provider") {
     const turbo_flow_expr_schema_field_t field = {
-        "tenant.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     const turbo_flow_expr_schema_t schema = {&field, 1u};
     const turbo_flow_rule_t rule = {
-        "tenant.level > 3", 0u, mutate_flags(8u, 8u)};
+        "group.level > 3", 0u, mutate_flags(8u, 8u)};
     turbo_flow_rule_processor_t *processor = NULL;
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
     turbo_flow_t *flow = turbo_flow_create();
@@ -590,10 +590,10 @@ spec("versioned rule program") {
                                  "  input -> apply\n"
                                  "}\n";
     const turbo_flow_expr_schema_field_t field = {
-        "tenant.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     const turbo_flow_expr_schema_t schema = {&field, 1u};
     const turbo_flow_rule_t rule = {
-        "tenant.level > 3", 0u, mutate_flags(8u, 8u)};
+        "group.level > 3", 0u, mutate_flags(8u, 8u)};
     turbo_flow_rule_processor_t *processor = NULL;
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
     turbo_flow_t *flow = turbo_flow_create();
@@ -707,14 +707,14 @@ spec("versioned rule program") {
     turbo_flow_error_t error;
     turbo_flow_rule_action_t action;
     turbo_flow_rule_result_t result = TURBO_FLOW_RULE_RESULT_INIT;
-    turbo_flow_expr_schema_field_t field = {"tenant.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+    turbo_flow_expr_schema_field_t field = {"group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     turbo_flow_expr_schema_t schema = {&field, 1u};
     turbo_flow_expr_value_t value;
     turbo_flow_rule_facts_t facts = {sizeof(facts), NULL, &schema, &value, 1u};
     const turbo_flow_rule_t unknown = {
-        "tenant.unknown == 1", 0u, data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL)};
+        "group.unknown == 1", 0u, data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL)};
     const turbo_flow_rule_t typed = {
-        "tenant.level > 3", 0u, data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "high")};
+        "group.level > 3", 0u, data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "high")};
     turbo_flow_rule_processor_config_t config = data_config(&unknown, 1u);
 
     memset(&error, 0, sizeof(error));
@@ -736,15 +736,15 @@ spec("versioned rule program") {
     turbo_flow_rule_processor_t *processor = NULL;
     turbo_flow_rule_action_t action;
     turbo_flow_expr_schema_field_t compiled_field = {
-        "tenant.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     turbo_flow_expr_schema_field_t wrong_field = {
-        "tenant.rank", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+        "group.rank", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     turbo_flow_expr_schema_t compiled_schema = {&compiled_field, 1u};
     turbo_flow_expr_schema_t wrong_schema = {&wrong_field, 1u};
     turbo_flow_expr_value_t value = {TURBO_FLOW_EXPR_TYPE_I64, {.i64 = 7}};
     turbo_flow_rule_facts_t facts = {sizeof(facts), NULL, &wrong_schema, &value, 1u};
     const turbo_flow_rule_t rule = {
-        "tenant.level > 3", 0u, data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "high")};
+        "group.level > 3", 0u, data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "high")};
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     config.schema = &compiled_schema;

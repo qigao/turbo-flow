@@ -5,7 +5,9 @@ Build and run the capacity benchmark with the repository presets:
 ```powershell
 cmake --build --preset win-release-user --target bench_flowie
 build\Msvc-Release\bin\bench_flowie.exe --filter "100k session and topic-index capacity"
+build\Msvc-Release\bin\bench_flowie.exe --filter "compiled MQTT security matcher"
 build\Msvc-Release\bin\bench_flowie.exe --filter "100k wildcard/shared rebuild"
+build\Msvc-Release\bin\bench_flowie.exe --filter "real TCP MQTT pipeline burst"
 build\Msvc-Release\bin\bench_flowie.exe --filter "100k live TCP MQTT selector and packet fan-out"
 build\Msvc-Release\bin\bench_flowie.exe --filter "real TCP stalled-subscriber isolation"
 ```
@@ -14,6 +16,15 @@ The benchmark holds 100,000 internal session owners concurrently, then builds a 
 derived MQTT trie containing exact, `+`, `#`, and shared filters. It reports create/CONNECT rate,
 index build/removal rate, match throughput, and match P50/P95/P99 latency. The removal pass deletes
 all 100,000 bound entries and exercises empty-branch pruning without retaining historical nodes.
+
+The `compiled MQTT security matcher` workload builds complete SecurityRealm snapshots with 64, 512,
+and 4,096 adapter rules under one role leaf. It measures allocation-free authorization after setup:
+PUBLISH uses concrete Topic Name matching, while SUBSCRIBE uses Topic Filter language containment.
+Rule creation, snapshot compilation, and trie construction are outside the timed blocks. Separate
+rows isolate UTF-8/topic validation, validation plus trie lookup, trie traversal after parser
+validation, untrusted programmatic SecurityRealm calls, and Flowie's parser-validated endpoint path.
+Each security row uses 1,000 samples with 64 real operations per sample to amortize timer and
+scheduler noise; comparisons must retain both constants.
 
 The separate wildcard/shared benchmark rebuilds an index containing 100,000 matching filters eight
 times, then performs 256 matches that each return exactly 100,000 candidate entry indices. It
@@ -26,6 +37,11 @@ publications. One sample contains one inbound packet plus 16 complete outbound d
 reports delivery operations per second and application-wire bytes per second; the additional
 `FLOWIE_BENCH_RESULT` line reports latency from publisher send through the final subscriber receive.
 The byte count includes the MQTT packet once on ingress and once per subscriber, not TCP/IP framing.
+
+The `real TCP MQTT pipeline burst` benchmark sends 64 MQTT PUBLISH packets in one TCP write from one
+publisher, then byte-compares all 64 deliveries at one subscriber. It isolates same-connection reply
+queue batching: one sample includes 64 ingress packets and 64 outbound packets. It does not measure
+cross-connection fan-out, where every subscriber still requires its own socket operation.
 
 The `real TCP MQTT connection churn` benchmark performs 500 complete TCP connect, MQTT 5 CONNECT /
 CONNACK, socket close, and owner-registry cleanup cycles against one running endpoint. Its sample
@@ -44,9 +60,9 @@ Connection, session, subscription, and reply state are bounded O(N); one-packet 
 Committed SUBSCRIBE/UNSUBSCRIBE mutations update stable selector entries on the owner lane; a full
 rebuild is reserved for startup, clean-start replacement, or explicit invalid-state repair. The
 published live-TCP setup timing predates that incremental path and remains functional-capacity
-evidence rather than a current mutation-throughput measurement. Endpoint ABI v7 derives private CoroNet pool capacity from
+evidence rather than a current mutation-throughput measurement. Endpoint ABI v8 derives private CoroNet pool capacity from
 `max_connections` and exposes private-context `coroutine_stack_size` plus `recv_buffer_size`. The
-workload uses a 32 KiB coroutine stack and 4 KiB for each of CoroNet's two receive chunks. MQTT
+workload uses a 64 KiB coroutine stack and 4 KiB for each of CoroNet's two receive chunks. MQTT
 framing reassembles across chunks, so receive capacity is independent of `max_packet_size`.
 
 The `real TCP stalled-subscriber isolation` benchmark keeps one publisher and one healthy
@@ -58,9 +74,21 @@ slow-client CONNECT/SUBSCRIBE and disconnect detection; the additional percentil
 four publisher-send through healthy-receive operations.
 
 Local Windows/MSVC Release reference (same machine, not a portable SLA). Network figures are from
-2026-07-16; selector figures were rerun on 2026-07-17 after incremental removal was added:
+2026-07-16; selector figures were rerun on 2026-07-17 after incremental removal was added; security
+matcher figures were measured on 2026-07-19:
 
+- Historical single-operation 4,096-rule SecurityRealm before validated traversal: PUBLISH
+  536,659/s (1.863 us), SUBSCRIBE 482,777/s (2.071 us). The current batched parser-proven endpoint
+  path reaches 1,262,439/s (0.792 us) and 1,209,935/s (0.826 us), using three-run medians.
+- Same-method batched Core A/B: removing the static-realm refresh probe and duplicate request
+  validation raised PUBLISH authorize from 1,070,220/s to 1,262,439/s (+18.0%) and SUBSCRIBE from
+  1,075,661/s to 1,209,935/s (+12.5%). Dynamic `policy_source` realms retain version/expiry refresh.
+- Parser-proven trie traversal alone: PUBLISH 0.373 us, SUBSCRIBE containment 0.389 us. The endpoint
+  fast path remains allocation-free and retains the same immutable snapshot and deny precedence.
 - 16-recipient fan-out: 24,280 deliveries/s; P50/P95/P99 636.8/856.8/1173.5 us.
+- 64-message same-connection pipeline (2026-07-18, seven-run median): 149,606 messages/s;
+  P50/P95/P99 414.3/514.2/678.6 us per 64-message burst. The pre-batch baseline was 51,450
+  messages/s and 1228.4/1419.7/1559.5 us.
 - connect-close churn: 959 complete cycles/s; P50/P95/P99 1008.8/1342.8/1755.6 us.
 - 100k unique-filter build/remove: 313,287 inserts/s and 382,310 removals/s; unique-topic match
   P50/P95/P99 1.3/2.2/2.9 us.

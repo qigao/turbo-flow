@@ -4,6 +4,7 @@
 #include "flowmq_pattern.h"
 #include "flowmq_reconnect.h"
 #include "flowmq_stream_decoder.h"
+#include "flowmq_security.h"
 #include "flowmq_subscription_set.h"
 #include "turbo_error.h"
 #include "turbo_str.h"
@@ -85,11 +86,25 @@ static int flowmq_connect_endpoint_socket_send(flowmq_connect_endpoint_t *endpoi
 
 static int flowmq_connect_endpoint_send_hello(flowmq_connect_endpoint_t *endpoint) {
   tstr_t encoded = NULL;
-  int rc = flowmq_pattern_encode_hello(endpoint->config.pattern, tstr_to_v(endpoint->identity),
-                                       tstr_to_v(endpoint->topic), endpoint->config.max_frame_size,
-                                       &encoded);
+  tstr_t security_payload = NULL;
+  int rc;
+  if (endpoint->config.security) {
+    rc = flowmq_security_client_hello(endpoint->config.security, endpoint->socket,
+                                      tstr_to_v(endpoint->identity), &security_payload);
+  } else {
+    security_payload = tstr_new_len(NULL, 0u);
+    rc = security_payload ? TURBO_OK : TURBO_ENOMEM;
+  }
+  if (rc == TURBO_OK) {
+    rc = flowmq_pattern_encode_hello_ex(
+        endpoint->config.pattern, tstr_to_v(endpoint->identity), tstr_to_v(endpoint->topic),
+        tstr_to_v(security_payload), endpoint->config.max_frame_size, &encoded);
+  }
   if (rc == TURBO_OK)
     rc = flowmq_connect_endpoint_socket_send(endpoint, encoded, tstr_len(encoded));
+  if (security_payload) flowmq_security_clear(security_payload, tstr_len(security_payload));
+  if (encoded) flowmq_security_clear(encoded, tstr_len(encoded));
+  tstr_freep(&security_payload);
   tstr_freep(&encoded);
   return rc;
 }
@@ -160,6 +175,13 @@ static int flowmq_connect_endpoint_read_hello(flowmq_connect_endpoint_t *endpoin
                                               flowmq_protocol_frame_t *hello, size_t *consumed) {
   int rc = flowmq_connect_endpoint_reader_next(endpoint, reader, 0u, hello, consumed);
   if (rc == TURBO_OK) rc = flowmq_pattern_hello_validate(endpoint->config.pattern, hello);
+  if (rc == TURBO_OK && endpoint->config.security) {
+    rc = flowmq_security_client_accept(endpoint->config.security, endpoint->socket, hello->payload);
+  } else if (rc == TURBO_OK) {
+    flowmq_protocol_security_t security;
+    rc = flowmq_protocol_security_decode(hello->payload, &security);
+    if (rc == TURBO_OK && security.mode != FLOWMQ_PROTOCOL_SECURITY_NONE) rc = TURBO_EPERM;
+  }
   if (rc != TURBO_OK) flowmq_protocol_frame_cleanup(hello);
   return rc;
 }

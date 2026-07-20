@@ -70,6 +70,7 @@ typedef struct flowie_session_subscription_s {
   uint8_t no_local;
   uint8_t retain_as_published;
   uint8_t retain_handling;
+  uint32_t subscription_identifier;
 } flowie_session_subscription_t;
 
 #define FLOWIE_SESSION_SUBSCRIPTION_INIT                                                           \
@@ -166,6 +167,7 @@ CXX_C_API flowie_session_owner_t *
 flowie_session_owner_create(const flowie_session_config_t *config);
 CXX_C_API flowie_session_owner_t *
 flowie_session_owner_clone(const flowie_session_owner_t *owner);
+CXX_C_API int flowie_session_owner_touch(flowie_session_owner_t *owner);
 CXX_C_API void flowie_session_owner_destroy(flowie_session_owner_t *owner);
 
 /** Encode only durable MQTT session state into a canonical versioned LTV record. */

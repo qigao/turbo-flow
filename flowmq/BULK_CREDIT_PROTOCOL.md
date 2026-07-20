@@ -3,7 +3,7 @@
 状态：TFCW/1、易失性 credit owner、严格 YAML、memory/SQLite Queue 与 Redis Stream bounded
 multi-claim、运行时 coordinator、TFCS/1.0 durable retry/outbox、同源原子 settlement 和有界 shutdown
 均已实现。`credit_worker + at_least_once` 必须通过显式 storage binding 创建；backend 不可用时
-fail fast，不得在 Redis/SQLite 之间隐式 fallback。本文不改变 FMQ v2 wire。
+fail fast，不得在 Redis/SQLite 之间隐式 fallback。本文不改变 FMQ v3 wire。
 
 ## 1. 决策背景
 
@@ -20,17 +20,17 @@ TFCW/1 因此定义为配置驱动的高级应用协议，而不是 FMQ socket p
 - credit、job correlation 与 worker lease 由单一 pattern owner 管理；
 - payload 持久化继续由 Queue/Redis/SQLite owner 管理；
 - 无 credit 时非阻塞返回，不在 pattern 内建立隐藏临时队列；
-- 不改变 FMQ v2 frame，也不放宽 REQ/REP 同步状态机。
+- 不改变 FMQ v3 frame，也不放宽 REQ/REP 同步状态机。
 
 ## 2. 候选方案
 
 | 方案 | 结论 | 原因 |
 | --- | --- | --- |
-| 在 FMQ v2 增加 CREDIT control frame | 不选 | 改变冻结 wire v2，并把应用容量语义塞进 transport/pattern primitive |
+| 在 FMQ v3 增加 CREDIT control frame | 不选 | 改变冻结 wire v3，并把应用容量语义塞进 transport/pattern primitive |
 | 在 PUSH/PULL 内自动缓存和重试 | 不选 | 产生第二持久化事实源，且 PUSH 无法区分远端接收、处理与落盘 |
 | 把 HWM 当 credit | 不选 | HWM 属于本地内存 admission，不能代表远端容量或重连 generation |
 | 每个并发槽创建一个 worker identity | 保留为兼容基线 | 不改协议但连接数随并发度增长，不能表达 byte credit 或动态容量 |
-| ROUTER/DEALER 上运行独立 Credit Worker 应用协议 | 选择 | 复用 live route、异步 reply 和 graph storage composition，不修改 FMQ v2 |
+| ROUTER/DEALER 上运行独立 Credit Worker 应用协议 | 选择 | 复用 live route、异步 reply 和 graph storage composition，不修改 FMQ v3 |
 
 ## 3. 拓扑与 owner
 
@@ -142,7 +142,7 @@ JOB send 失败时 correlation 返回 accepted/pending，credit token不自动�
   borrowed view，乱序 requeue 仍按原始 enqueue sequence 重放；
 - Redis Stream owner 通过 `turbo_flow_redis_stream_owner_create_ex()` 配置 bounded multi-claim；同一
   consumer 的 PEL 仍是事实源，requeue 不执行 XACK，restart 会按单调 pending cursor 恢复多个 entry；
-- SQLite Queue 使用独立 durable row/token，schema version 2 通过 queue 私有 metadata 表管理；legacy
+- SQLite Queue 使用独立 durable row/token，`schema_version = 2` 通过 queue 私有 metadata 表管理；legacy
   messages 表启动时原位迁移，不受支持的更高 schema version fail fast；
 - ack/requeue 只作用于对应 token，stale/double settlement 返回 `TURBO_EALREADY`；
 - active claim 数量达到上限时返回 `TURBO_EBUSY`，不建立额外 payload 队列。
@@ -230,7 +230,7 @@ Redis/SQLite recovery 完整保留，但 at_least_once graph registration 明确
 TurboFlow message 尚无通用、message-owned claim token projection，不能从 message ID 合成，也不能
 把 graph success 当作 storage accept ACK。
 
-现有 broker、TFBR、FMQ v2、REQ/REP、PUSH/PULL 和 YAML pattern 保持原行为。回滚时移除
+现有 broker、TFBR、FMQ v3、REQ/REP、PUSH/PULL 和 YAML pattern 保持原行为。回滚时移除
 `credit_worker` channel/stage 即可；durable storage schema migration 必须使用其独立回滚流程。
 
 ## 10. 实现与验收状态
@@ -242,7 +242,7 @@ TurboFlow message 尚无通用、message-owned claim token projection，不能�
 | strict YAML | 已实现 | 区分 volatile `at_most_once` 与 storage-bound `at_least_once`，非法组合 fail fast |
 | memory Queue bounded multi-claim | 已实现 | 稳定 view、独立 settlement、原 enqueue 顺序 replay |
 | Redis Stream bounded multi-claim | 已实现 | 真实 Redis PEL restart replay、独立 ack/requeue、上限测试 |
-| SQLite bounded multi-claim | 已实现 | queue schema v2、legacy 原位迁移、稳定 view、独立 settlement、restart requeue |
+| SQLite bounded multi-claim | 已实现 | current queue schema、legacy 原位迁移、稳定 view、独立 settlement、restart requeue |
 | runtime claim settlement coordinator | 已实现 | completion/expiry、ACK/requeue/drop、失败保留与显式 retry |
 | durable retry/outbox recovery | Redis/SQLite 已实现 | TFCS/1.0、逻辑地址 outbox、同源原子 claim disposition、lost-reply retry、restart normalization、terminal TTL、配置化 shutdown |
 | ROUTER/DEALER E2E | 已实现 | READY、两个并行 JOB、独立 COMPLETE、credit 不自动返还；真实 worker reconnect 以新 session route 拒绝旧 COMPLETE，并在旧 lease DROP 后重新 READY/dispatch/complete |
@@ -254,4 +254,4 @@ DEALER -> ROUTER graph echo -> DEALER 的 256 次串行 round trip。绝对值�
 影响，只能与同环境历史比较；benchmark 不以某台开发机的时间作为协议正确性断言。
 
 安全边界保持不变：协议只在宿主建立的可信 transport/network boundary 内使用，不新增认证、
-授权或租户字段，也不能因此宣称 multi-tenant 安全边界。
+授权或安全域字段，也不能因此宣称跨 Root Group 的安全边界。

@@ -1,5 +1,8 @@
 add_subdirectory(protocol)
 add_subdirectory(client)
+if(TURBO_FLOW_BUILD_SECURITY_SQLITE)
+  add_subdirectory(control)
+endif()
 
 set(TARGET_NAME flowie)
 set(FLOWIE_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/flowie.h)
@@ -13,6 +16,7 @@ add_library(
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_ingress_internal.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_rule.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_rule_internal.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_security_internal.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_session.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_session_internal.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_topic_index.c

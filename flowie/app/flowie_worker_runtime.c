@@ -27,6 +27,9 @@ struct flowie_worker_runtime_s {
   turbo_flow_queue_t *queue;
   turbo_flow_record_store_t session_store;
   flowie_worker_store_provider_t session_store_provider;
+  turbo_flow_security_realm_t *security_realm;
+  turbo_flow_security_auth_provider_owner_t auth_provider;
+  turbo_flow_security_policy_provider_owner_t policy_provider;
   turbo_flow_rule_processor_t *rule_processor;
   turbo_flow_t *flow;
   int started;
@@ -41,6 +44,8 @@ typedef struct flowie_worker_provider_context_s {
   const char *output_name;
   const char *queue_channel;
   const char *session_store_channel;
+  const char *security_realm_channel;
+  const char *security_auth_method;
 } flowie_worker_provider_context_t;
 
 static void flowie_worker_error_reset(flowie_worker_error_t *error) {
@@ -103,6 +108,99 @@ static int flowie_worker_resolve_session_store(const turbo_flow_resolved_config_
   (void)snprintf(error->message, sizeof(error->message),
                  "session_store must be a non-empty record-store channel name");
   return error->status;
+}
+
+static int flowie_worker_resolve_security(const turbo_flow_resolved_config_t *resolved,
+                                          const char *profile, const char *endpoint_name,
+                                          const char **realm_channel, const char **auth_method,
+                                          const char **provider_channel,
+                                          turbo_flow_config_error_t *error) {
+  turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
+  int realm_rc;
+  int method_rc;
+  int rc;
+  if (realm_channel) *realm_channel = NULL;
+  if (auth_method) *auth_method = NULL;
+  if (provider_channel) *provider_channel = NULL;
+  if (!resolved || !profile || !profile[0] || !endpoint_name || !endpoint_name[0] ||
+      !realm_channel || !auth_method || !provider_channel || !error)
+    return TURBO_EINVAL;
+  rc = turbo_flow_resolved_config_adapter(resolved, endpoint_name, &view);
+  if (rc == TURBO_OK && strcmp(view.kind, "flowie_endpoint") != 0) rc = TURBO_EINVAL;
+  if (rc != TURBO_OK) goto invalid;
+  realm_rc = turbo_flow_resolved_adapter_get_string(&view, "security_realm", realm_channel);
+  method_rc = turbo_flow_resolved_adapter_get_string(&view, "auth_method", auth_method);
+  if (realm_rc == TURBO_ENOENT && method_rc == TURBO_ENOENT) return TURBO_OK;
+  if (realm_rc != TURBO_OK || method_rc != TURBO_OK || !*realm_channel || !(*realm_channel)[0] ||
+      !*auth_method || !(*auth_method)[0]) {
+    rc = realm_rc != TURBO_OK && realm_rc != TURBO_ENOENT ? realm_rc
+         : method_rc != TURBO_OK                          ? method_rc
+                                                          : TURBO_EINVAL;
+    goto invalid;
+  }
+  rc = turbo_flow_resolved_config_profile_channel(resolved, profile, "auth_provider",
+                                                  provider_channel);
+  if (rc != TURBO_OK || !*provider_channel || !(*provider_channel)[0]) goto invalid;
+  return TURBO_OK;
+
+invalid:
+  *realm_channel = NULL;
+  *auth_method = NULL;
+  *provider_channel = NULL;
+  *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+  error->status = rc == TURBO_OK ? TURBO_EINVAL : rc;
+  (void)snprintf(error->path, sizeof(error->path), "$.adapters.%s.config", endpoint_name);
+  (void)snprintf(
+      error->message, sizeof(error->message),
+      "secure endpoints require security_realm, auth_method, and profiles.%s.auth_provider",
+      profile);
+  return error->status;
+}
+
+static int flowie_worker_env_secret_acquire(void *ctx, const char *reference,
+                                            turbo_flow_security_secret_lease_t *lease_out) {
+  static const char prefix[] = "env://";
+  const char *value;
+  const char *name;
+  (void)ctx;
+  if (!reference || strncmp(reference, prefix, sizeof(prefix) - 1u) != 0 ||
+      !(name = reference + sizeof(prefix) - 1u)[0] || !lease_out ||
+      lease_out->size < sizeof(*lease_out))
+    return TURBO_EINVAL;
+  value = getenv(name);
+  if (!value || !value[0]) return TURBO_ENOENT;
+  *lease_out = (turbo_flow_security_secret_lease_t)TURBO_FLOW_SECURITY_SECRET_LEASE_INIT;
+  lease_out->bytes = (const uint8_t *)value;
+  lease_out->byte_count = strlen(value);
+  lease_out->provider_lease = (void *)value;
+  return TURBO_OK;
+}
+
+static void flowie_worker_env_secret_release(void *ctx, turbo_flow_security_secret_lease_t *lease) {
+  (void)ctx;
+  (void)lease;
+}
+
+static int flowie_worker_create_auth_provider(
+    const flowie_worker_runtime_config_t *worker_config,
+    const turbo_flow_resolved_config_t *resolved, const char *channel,
+    const turbo_flow_security_key_provider_t *key_provider,
+    turbo_flow_security_auth_provider_owner_t *owner, turbo_flow_config_error_t *error) {
+  if (!worker_config) return TURBO_EINVAL;
+  return turbo_flow_security_auth_provider_owner_create_registered(
+      worker_config->auth_provider_factories, worker_config->auth_provider_factory_count, resolved,
+      channel, key_provider, owner, error);
+}
+
+static int flowie_worker_create_policy_provider(
+    const flowie_worker_runtime_config_t *worker_config,
+    const turbo_flow_resolved_config_t *resolved, const char *channel,
+    const turbo_flow_security_key_provider_t *key_provider,
+    turbo_flow_security_policy_provider_owner_t *owner, turbo_flow_config_error_t *error) {
+  if (!worker_config) return TURBO_EINVAL;
+  return turbo_flow_security_policy_provider_owner_create_registered(
+      worker_config->policy_provider_factories, worker_config->policy_provider_factory_count,
+      resolved, channel, key_provider, owner, error);
 }
 
 static int flowie_worker_create_session_store(const turbo_flow_resolved_config_t *resolved,
@@ -189,12 +287,23 @@ static int flowie_worker_register_endpoint_adapter(void *ctx, turbo_flow_t *flow
       strcmp(adapter_name, provider->endpoint_name) != 0) {
     return TURBO_EINVAL;
   }
-  if (provider->session_store_channel) {
+  if (provider->session_store_channel || provider->security_realm_channel) {
     flowie_endpoint_persistence_binding_t persistence = FLOWIE_ENDPOINT_PERSISTENCE_BINDING_INIT;
+    flowie_endpoint_security_binding_t security = FLOWIE_ENDPOINT_SECURITY_BINDING_INIT;
     flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
-    persistence.store_channel = provider->session_store_channel;
-    persistence.store = &provider->runtime->session_store;
-    bindings.persistence = &persistence;
+    if (provider->session_store_channel) {
+      persistence.store_channel = provider->session_store_channel;
+      persistence.store = &provider->runtime->session_store;
+      bindings.persistence = &persistence;
+    }
+    if (provider->security_realm_channel) {
+      security.realm_channel = provider->security_realm_channel;
+      security.auth_method = provider->security_auth_method;
+      security.auth_provider = provider->runtime->auth_provider.provider;
+      security.enhanced_auth_provider = provider->runtime->auth_provider.enhanced_provider;
+      security.realm = provider->runtime->security_realm;
+      bindings.security = &security;
+    }
     return flowie_register_resolved_bound_endpoint(flow, adapter_name, resolved, &bindings, error);
   }
   return flowie_register_resolved_endpoint(flow, adapter_name, resolved, error);
@@ -247,6 +356,9 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
   const char *output_name = NULL;
   const char *queue_channel = NULL;
   const char *session_store_channel = NULL;
+  const char *security_realm_channel = NULL;
+  const char *security_auth_method = NULL;
+  const char *auth_provider_channel = NULL;
   const char *failure_operation = NULL;
   turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_async_ingress_config_t ingress_config = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
@@ -258,6 +370,7 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
       TURBO_FLOW_PRODUCT_RESOURCE_PROVIDER_INIT;
   turbo_flow_product_provider_registry_t provider_registry =
       TURBO_FLOW_PRODUCT_PROVIDER_REGISTRY_INIT;
+  turbo_flow_security_key_provider_t key_provider = TURBO_FLOW_SECURITY_KEY_PROVIDER_INIT;
   const turbo_flow_error_t *flow_error = NULL;
   flowie_worker_runtime_t *runtime;
   int rc;
@@ -266,7 +379,9 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
   flowie_worker_error_reset(error);
   if (!config || config->size != sizeof(*config) || !out || !config->profile ||
       !config->profile[0] || !config->config_path || !config->config_path[0] ||
-      !config->graph_path || !config->graph_path[0]) {
+      !config->graph_path || !config->graph_path[0] ||
+      (config->auth_provider_factory_count > 0u && !config->auth_provider_factories) ||
+      (config->policy_provider_factory_count > 0u && !config->policy_provider_factories)) {
     flowie_worker_error_set(error, "validate worker configuration", TURBO_EINVAL, NULL, NULL);
     return TURBO_EINVAL;
   }
@@ -276,6 +391,12 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
     return TURBO_ENOMEM;
   }
   runtime->session_store = (turbo_flow_record_store_t)TURBO_FLOW_RECORD_STORE_INIT;
+  runtime->auth_provider =
+      (turbo_flow_security_auth_provider_owner_t)TURBO_FLOW_SECURITY_AUTH_PROVIDER_OWNER_INIT;
+  runtime->policy_provider =
+      (turbo_flow_security_policy_provider_owner_t)TURBO_FLOW_SECURITY_POLICY_PROVIDER_OWNER_INIT;
+  key_provider.acquire = flowie_worker_env_secret_acquire;
+  key_provider.release = flowie_worker_env_secret_release;
   provider_context.runtime = runtime;
   adapter_providers[0].kind = "flowie_endpoint";
   adapter_providers[0].register_adapter = flowie_worker_register_endpoint_adapter;
@@ -358,6 +479,15 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
     goto fail;
   }
   provider_context.session_store_channel = session_store_channel;
+  rc = flowie_worker_resolve_security(runtime->resolved, config->profile, endpoint_name,
+                                      &security_realm_channel, &security_auth_method,
+                                      &auth_provider_channel, &config_error);
+  if (rc != TURBO_OK) {
+    failure_operation = "resolve endpoint security";
+    goto fail;
+  }
+  provider_context.security_realm_channel = security_realm_channel;
+  provider_context.security_auth_method = security_auth_method;
   rc = turbo_flow_queue_create_resolved(runtime->resolved, queue_channel, &runtime->queue,
                                         &config_error);
   if (rc != TURBO_OK) {
@@ -373,11 +503,58 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
       goto fail;
     }
   }
+  if (security_realm_channel) {
+    const char *policy_source;
+    rc = turbo_flow_security_realm_create_resolved(runtime->resolved, security_realm_channel, NULL,
+                                                   &runtime->security_realm, &config_error);
+    if (rc != TURBO_OK) {
+      failure_operation = "create security realm";
+      goto fail;
+    }
+    policy_source = turbo_flow_security_realm_policy_source(runtime->security_realm);
+    rc = flowie_worker_create_policy_provider(config, runtime->resolved, policy_source,
+                                              &key_provider, &runtime->policy_provider,
+                                              &config_error);
+    if (rc != TURBO_OK) {
+      failure_operation = "create ACL policy provider";
+      goto fail;
+    }
+    rc = turbo_flow_security_realm_bind_policy_provider(runtime->security_realm,
+                                                        runtime->policy_provider.provider);
+    if (rc != TURBO_OK) {
+      failure_operation = "bind ACL policy provider";
+      goto fail;
+    }
+    rc = flowie_worker_create_auth_provider(config, runtime->resolved, auth_provider_channel,
+                                            &key_provider, &runtime->auth_provider, &config_error);
+    if (rc != TURBO_OK) {
+      failure_operation = "create authentication provider";
+      goto fail;
+    }
+    if (strcmp(runtime->auth_provider.method, security_auth_method) != 0) {
+      rc = TURBO_EINVAL;
+      config_error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+      config_error.status = rc;
+      (void)snprintf(config_error.path, sizeof(config_error.path),
+                     "$.adapters.%s.config.auth_method", endpoint_name);
+      (void)snprintf(config_error.message, sizeof(config_error.message),
+                     "endpoint auth_method must match the authentication provider method");
+      failure_operation = "bind authentication provider";
+      goto fail;
+    }
+  }
   runtime->flow = turbo_flow_create();
   if (!runtime->flow) {
     rc = TURBO_ENOMEM;
     failure_operation = "create flow";
     goto fail;
+  }
+  if (runtime->security_realm) {
+    rc = turbo_flow_security_realm_register(runtime->flow, runtime->security_realm);
+    if (rc != TURBO_OK) {
+      failure_operation = "register security realm";
+      goto fail;
+    }
   }
   rc = turbo_flow_configure_async_ingress(runtime->flow, &ingress_config);
   if (rc != TURBO_OK) {
@@ -459,6 +636,9 @@ int flowie_worker_runtime_destroy(flowie_worker_runtime_t *runtime, flowie_worke
   }
   turbo_flow_destroy(runtime->flow);
   turbo_flow_rule_processor_destroy(runtime->rule_processor);
+  turbo_flow_security_auth_provider_owner_destroy(&runtime->auth_provider);
+  turbo_flow_security_realm_destroy(runtime->security_realm);
+  turbo_flow_security_policy_provider_owner_destroy(&runtime->policy_provider);
   flowie_worker_destroy_session_store(&runtime->session_store, runtime->session_store_provider);
   if (runtime->queue) {
     rc = turbo_flow_queue_destroy(runtime->queue);

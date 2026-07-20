@@ -71,7 +71,7 @@ TurboFlow is an embeddable C data/message graph runtime. The core owns:
   conditional routing remains separate work.
 
 Network protocols, storage, codecs, and email live in adapter modules. The core
-does not own broker discovery, distributed routing, databases, UI, tenants,
+does not own broker discovery, distributed routing, databases, UI, group ownership,
 secrets management, or job-runner behavior.
 
 ## DSL
@@ -302,7 +302,11 @@ synchronous with respect to the message envelope: they return only after they
 no longer depend on the current dispatch-owned message.
 
 `turbo_flow_publish()` remains synchronous and accepts concurrent producer
-calls. Graph dependency arrays and errors are producer-local, sequence and
+calls. `turbo_flow_publish_batch()` executes an ordered producer callback under
+one publication admission and source lookup, cleans each transient message after
+its attempt, stops at the first failure, and reports the successful prefix without
+changing per-message graph execution or ownership.
+Graph dependency arrays and errors are producer-local, sequence and
 reorder reservations are allocated atomically, worker stages use the MPMC
 disruptor ring, and coroutine stages synchronize per lane. The broadcast
 topology fast path is limited to single-source static all-inline graphs and uses

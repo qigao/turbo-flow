@@ -4,4 +4,4 @@ cmake_add_test(
   LIBS Flowie::Protocol TurboUtils::TinyTest
   FOLDER "flowie/protocol/tests")
 
-set_tests_properties(test_flowie_mqtt_protocol PROPERTIES LABELS "flowie")
+set_tests_properties(test_flowie_mqtt_protocol PROPERTIES LABELS "flowie;flowie-release")

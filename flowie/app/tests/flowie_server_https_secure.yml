@@ -1,0 +1,100 @@
+version: 1
+
+profiles:
+  flowie:
+    endpoint: mqtt.endpoint
+    accept_sink: queue.mqtt.accept
+    accepted_source: queue.mqtt.accepted
+    rule_set: mqtt.routing
+    output: socket.application.output
+    auth_provider: mqtt.auth-service
+
+channels:
+  mqtt.accepted:
+    kind: queue
+    config:
+      backend: memory
+      pattern: push_pull
+      resource_uid: queue:mqtt.accepted
+      owner_name: mqtt-accepted
+      capacity: 8
+      max_payload_size: 4096
+      full_policy: fail
+  mqtt.auth-service:
+    kind: auth_provider
+    config:
+      backend: https
+      url: https://auth.internal.example/v2/authenticate
+      method: password
+      service_token_ref: env://FLOWIE_TEST_AUTH_SERVICE_TOKEN
+      timeout_ms: 3000
+      max_secret_size: 4096
+  mqtt.security:
+    kind: security_realm
+    config:
+      resource_uid: security:mqtt
+      owner_name: security.main
+      policy_source: mqtt.acl-service
+  mqtt.acl-service:
+    kind: acl_provider
+    config:
+      backend: https
+      url: https://auth.internal.example/v1/acl-bundle
+      service_token_ref: env://FLOWIE_TEST_AUTH_SERVICE_TOKEN
+      timeout_ms: 3000
+      max_response_size: 4194304
+      max_rules: 4096
+  mqtt.routing:
+    kind: rule_set
+    config:
+      resource_uid: rule-set:mqtt.routing
+      owner_name: flowie.routing
+      mode: first_match
+      rules:
+        - when: mqtt.topic == "application/output"
+          action: route
+          key: application_output
+        - when: "true"
+          action: route
+          key: mqtt_fanout
+
+adapters:
+  mqtt.endpoint:
+    kind: flowie_endpoint
+    config:
+      transport: tcp
+      host: 127.0.0.1
+      port: 1883
+      max_packet_size: 4096
+      coroutine_stack_size: 65536
+      recv_buffer_size: 4096
+      send_hwm_bytes: 4096
+      slow_subscriber_policy: disconnect
+      manage_sessions: true
+      settlement_qos1: accepted
+      settlement_qos2: accepted
+      max_sessions: 16
+      max_retained_messages: 16
+      max_subscriptions_per_session: 8
+      max_inflight_per_session: 8
+      security_realm: mqtt.security
+      auth_method: password
+  queue.mqtt.accept:
+    kind: queue
+    config:
+      channel: mqtt.accepted
+      role: sink
+  queue.mqtt.accepted:
+    kind: queue
+    config:
+      channel: mqtt.accepted
+      role: source
+  socket.application.output:
+    kind: socket
+    config:
+      role: sink
+      transport: tcp
+      host: 127.0.0.1
+      port: 1884
+      timeout_ms: 1000
+      send_hwm_bytes: 4096

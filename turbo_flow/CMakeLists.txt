@@ -15,6 +15,10 @@ cmake_add_grammar(TURBO_FLOW_CONTROL
   GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/control_grammar.y
   FOLDER "turbo_flow/control")
 
+cmake_add_grammar(TURBO_FLOW_SECURITY_RULE
+  LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/security_rule_lexer.re
+  FOLDER "turbo_flow/security")
+
 if(MSVC)
   set_source_files_properties(${TURBO_FLOW_GRAMMAR_GEN} PROPERTIES COMPILE_OPTIONS "/wd4189")
   set_source_files_properties(${TURBO_FLOW_EXPR_GRAMMAR_GEN} PROPERTIES COMPILE_OPTIONS "/wd4189")
@@ -41,6 +45,7 @@ add_library(${TARGET_NAME} SHARED
   ${TURBO_FLOW_EXPR_GRAMMAR_GEN}
   ${TURBO_FLOW_CONTROL_LEXER_GEN}
   ${TURBO_FLOW_CONTROL_GRAMMAR_GEN}
+  ${TURBO_FLOW_SECURITY_RULE_LEXER_GEN}
   ${TURBO_FLOW_HEADERS})
 
 add_dependencies(${TARGET_NAME}
@@ -51,6 +56,7 @@ add_dependencies(${TARGET_NAME}
 add_dependencies(${TARGET_NAME}
   ${TURBO_FLOW_CONTROL_LEXER_TARGET}
   ${TURBO_FLOW_CONTROL_GRAMMAR_TARGET})
+add_dependencies(${TARGET_NAME} ${TURBO_FLOW_SECURITY_RULE_LEXER_TARGET})
 
 cmake_config_target(
   ${TARGET_NAME}

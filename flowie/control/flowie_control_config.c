@@ -1,0 +1,518 @@
+#include "flowie_control_config_internal.h"
+
+#include "turbo_error.h"
+#include "turbo_parser.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+static int control_config_error(flowie_control_config_error_t *error, int status,
+                                const char *path, const char *message) {
+  if (error && error->size >= sizeof(*error)) {
+    *error = (flowie_control_config_error_t)FLOWIE_CONTROL_CONFIG_ERROR_INIT;
+    error->status = status;
+    (void)snprintf(error->path, sizeof(error->path), "%s", path ? path : "$");
+    (void)snprintf(error->message, sizeof(error->message), "%s", message ? message : "error");
+  }
+  return status;
+}
+
+static int control_config_key_allowed(const char *key, const char *const *allowed, size_t count) {
+  for (size_t index = 0u; index < count; ++index) {
+    if (strcmp(key, allowed[index]) == 0) return 1;
+  }
+  return 0;
+}
+
+static int control_config_object(const json_value_t *value, const char *path,
+                                 const char *const *allowed, size_t allowed_count,
+                                 flowie_control_config_error_t *error) {
+  if (!value || turbo_json_type(value) != TURBO_JSON_OBJECT)
+    return control_config_error(error, TURBO_EINVAL, path, "expected mapping");
+  for (size_t index = 0u; index < turbo_json_object_size(value); ++index) {
+    const char *key = turbo_json_object_key(value, index);
+    if (!key || !control_config_key_allowed(key, allowed, allowed_count)) {
+      char field[FLOWIE_CONTROL_CONFIG_ERROR_PATH_MAX + 1u];
+      (void)snprintf(field, sizeof(field), "%s.%s", path, key ? key : "?");
+      return control_config_error(error, TURBO_EINVAL, field, "unknown field");
+    }
+    for (size_t prior = 0u; prior < index; ++prior) {
+      const char *prior_key = turbo_json_object_key(value, prior);
+      if (prior_key && strcmp(prior_key, key) == 0) {
+        char field[FLOWIE_CONTROL_CONFIG_ERROR_PATH_MAX + 1u];
+        (void)snprintf(field, sizeof(field), "%s.%s", path, key);
+        return control_config_error(error, TURBO_EALREADY, field,
+                                    "field appears more than once");
+      }
+    }
+  }
+  return TURBO_OK;
+}
+
+static int control_config_text(const json_value_t *value, const char *path, char *destination,
+                               size_t capacity, int required,
+                               flowie_control_config_error_t *error) {
+  const char *source;
+  size_t length;
+  if (!destination || capacity == 0u) return TURBO_EINVAL;
+  destination[0] = '\0';
+  if (!value)
+    return required ? control_config_error(error, TURBO_EINVAL, path, "required field missing")
+                    : TURBO_OK;
+  if (turbo_json_type(value) != TURBO_JSON_STRING)
+    return control_config_error(error, TURBO_EINVAL, path, "expected string");
+  source = turbo_json_string(value);
+  length = source ? strnlen(source, capacity) : 0u;
+  if (length == 0u)
+    return required ? control_config_error(error, TURBO_EINVAL, path, "empty string") : TURBO_OK;
+  if (length >= capacity)
+    return control_config_error(error, TURBO_ENAMETOOLONG, path, "string exceeds limit");
+  for (size_t index = 0u; index < length; ++index) {
+    unsigned char byte = (unsigned char)source[index];
+    if (byte < 0x20u || byte == 0x7fu)
+      return control_config_error(error, TURBO_EINVAL, path, "control character is not allowed");
+  }
+  memcpy(destination, source, length + 1u);
+  return TURBO_OK;
+}
+
+static int control_config_integer(const json_value_t *value, const char *path, uint64_t minimum,
+                                  uint64_t maximum, uint64_t *out,
+                                  flowie_control_config_error_t *error) {
+  double number;
+  uint64_t converted;
+  if (!value || !out) return TURBO_EINVAL;
+  if (turbo_json_type(value) != TURBO_JSON_NUMBER)
+    return control_config_error(error, TURBO_EINVAL, path, "expected integer");
+  number = turbo_json_number(value);
+  if (!isfinite(number) || number < (double)minimum || number > (double)maximum)
+    return control_config_error(error, TURBO_ERANGE, path, "integer is outside supported range");
+  converted = (uint64_t)number;
+  if ((double)converted != number)
+    return control_config_error(error, TURBO_EINVAL, path, "expected integer");
+  *out = converted;
+  return TURBO_OK;
+}
+
+static int control_config_boolean(const json_value_t *value, const char *path, int *out,
+                                  flowie_control_config_error_t *error) {
+  if (!value || !out) return TURBO_EINVAL;
+  if (turbo_json_type(value) != TURBO_JSON_BOOL)
+    return control_config_error(error, TURBO_EINVAL, path, "expected boolean");
+  *out = turbo_json_bool(value) ? 1 : 0;
+  return TURBO_OK;
+}
+
+static int control_config_fingerprint_valid(const char *value) {
+  static const char prefix[] = "sha256:";
+  if (!value || strlen(value) != FLOWIE_CONTROL_AUTH_CERT_SHA256_TEXT_SIZE ||
+      memcmp(value, prefix, sizeof(prefix) - 1u) != 0)
+    return 0;
+  for (size_t index = sizeof(prefix) - 1u; index < FLOWIE_CONTROL_AUTH_CERT_SHA256_TEXT_SIZE;
+       ++index) {
+    char byte = value[index];
+    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f'))) return 0;
+  }
+  return 1;
+}
+
+static int control_config_secret_ref_valid(const char *value) {
+  static const char prefix[] = "env://";
+  const char *name;
+  if (!value || strncmp(value, prefix, sizeof(prefix) - 1u) != 0) return 0;
+  name = value + sizeof(prefix) - 1u;
+  if (!(name[0] == '_' || (name[0] >= 'A' && name[0] <= 'Z'))) return 0;
+  for (++name; *name; ++name) {
+    if (!(*name == '_' || (*name >= 'A' && *name <= 'Z') || (*name >= '0' && *name <= '9')))
+      return 0;
+  }
+  return 1;
+}
+
+static int control_config_route_valid(const char *value) {
+  if (!value || value[0] != '/' || value[1] == '\0') return 0;
+  for (; *value; ++value) {
+    if (*value == '?' || *value == '#' || *value == '\\') return 0;
+  }
+  return 1;
+}
+
+static int control_config_parse_tls(const json_value_t *tls, flowie_control_config_t *config,
+                                    flowie_control_config_error_t *error) {
+  static const char *const keys[] = {"cert_file", "key_file", "key_password_ref",
+                                     "client_ca_file"};
+  int rc = control_config_object(tls, "$.listener.tls", keys, sizeof(keys) / sizeof(keys[0]), error);
+  if (rc != TURBO_OK) return rc;
+  rc = control_config_text(turbo_json_object_get(tls, "cert_file"), "$.listener.tls.cert_file",
+                           config->listener.tls.cert_file, sizeof(config->listener.tls.cert_file), 1,
+                           error);
+  if (rc == TURBO_OK)
+    rc = control_config_text(turbo_json_object_get(tls, "key_file"), "$.listener.tls.key_file",
+                             config->listener.tls.key_file, sizeof(config->listener.tls.key_file), 1,
+                             error);
+  if (rc == TURBO_OK)
+    rc = control_config_text(turbo_json_object_get(tls, "client_ca_file"),
+                             "$.listener.tls.client_ca_file",
+                             config->listener.tls.client_ca_file,
+                             sizeof(config->listener.tls.client_ca_file), 1, error);
+  if (rc == TURBO_OK)
+    rc = control_config_text(turbo_json_object_get(tls, "key_password_ref"),
+                             "$.listener.tls.key_password_ref",
+                             config->listener.tls.key_password_ref,
+                             sizeof(config->listener.tls.key_password_ref), 0, error);
+  if (rc == TURBO_OK && config->listener.tls.key_password_ref[0] &&
+      !control_config_secret_ref_valid(config->listener.tls.key_password_ref))
+    rc = control_config_error(error, TURBO_EINVAL, "$.listener.tls.key_password_ref",
+                              "only env:// secret references are accepted");
+  return rc;
+}
+
+static int control_config_limit(const json_value_t *limits, const char *key, const char *path,
+                                uint64_t minimum, uint64_t maximum, size_t *target,
+                                flowie_control_config_error_t *error) {
+  json_value_t *value = turbo_json_object_get(limits, key);
+  uint64_t resolved;
+  int rc;
+  if (!value) return TURBO_OK;
+  rc = control_config_integer(value, path, minimum, maximum, &resolved, error);
+  if (rc == TURBO_OK) *target = (size_t)resolved;
+  return rc;
+}
+
+static int control_config_parse_limits(const json_value_t *limits, flowie_control_config_t *config,
+                                       flowie_control_config_error_t *error) {
+  static const char *const keys[] = {
+      "max_header_name_length", "max_header_value_length", "max_url_length",
+      "max_cookie_name_length", "max_cookie_value_length", "max_json_depth",
+      "max_log_message_length", "max_request_body_size", "max_headers_count"};
+  uint64_t count;
+  int rc = control_config_object(limits, "$.listener.limits", keys,
+                                 sizeof(keys) / sizeof(keys[0]), error);
+  if (rc == TURBO_OK)
+    rc = control_config_limit(limits, keys[0], "$.listener.limits.max_header_name_length", 32u,
+                              1024u, &config->listener.limits.max_header_name_length, error);
+  if (rc == TURBO_OK)
+    rc = control_config_limit(limits, keys[1], "$.listener.limits.max_header_value_length", 256u,
+                              16384u, &config->listener.limits.max_header_value_length, error);
+  if (rc == TURBO_OK)
+    rc = control_config_limit(limits, keys[2], "$.listener.limits.max_url_length", 256u, 8192u,
+                              &config->listener.limits.max_url_length, error);
+  if (rc == TURBO_OK)
+    rc = control_config_limit(limits, keys[3], "$.listener.limits.max_cookie_name_length", 32u,
+                              1024u, &config->listener.limits.max_cookie_name_length, error);
+  if (rc == TURBO_OK)
+    rc = control_config_limit(limits, keys[4], "$.listener.limits.max_cookie_value_length", 128u,
+                              16384u, &config->listener.limits.max_cookie_value_length, error);
+  if (rc == TURBO_OK)
+    rc = control_config_limit(limits, keys[5], "$.listener.limits.max_json_depth", 4u, 128u,
+                              &config->listener.limits.max_json_depth, error);
+  if (rc == TURBO_OK)
+    rc = control_config_limit(limits, keys[6], "$.listener.limits.max_log_message_length", 256u,
+                              16384u, &config->listener.limits.max_log_message_length, error);
+  if (rc == TURBO_OK)
+    rc = control_config_limit(limits, keys[7], "$.listener.limits.max_request_body_size", 1024u,
+                              1048576u, &config->listener.limits.max_request_body_size, error);
+  if (rc == TURBO_OK && turbo_json_object_get(limits, keys[8])) {
+    rc = control_config_integer(turbo_json_object_get(limits, keys[8]),
+                                "$.listener.limits.max_headers_count", 8u, 256u, &count, error);
+    if (rc == TURBO_OK) config->listener.limits.max_headers_count = (int)count;
+  }
+  return rc;
+}
+
+static int control_config_parse_listener(const json_value_t *listener,
+                                         flowie_control_config_t *config,
+                                         flowie_control_config_error_t *error) {
+  static const char *const keys[] = {"host", "port", "tls", "limits"};
+  uint64_t port;
+  int rc = control_config_object(listener, "$.listener", keys, sizeof(keys) / sizeof(keys[0]), error);
+  if (rc == TURBO_OK)
+    rc = control_config_text(turbo_json_object_get(listener, "host"), "$.listener.host",
+                             config->listener.host, sizeof(config->listener.host), 0, error);
+  if (rc == TURBO_OK && !config->listener.host[0])
+    memcpy(config->listener.host, "127.0.0.1", sizeof("127.0.0.1"));
+  if (rc == TURBO_OK && turbo_json_object_get(listener, "port")) {
+    rc = control_config_integer(turbo_json_object_get(listener, "port"), "$.listener.port", 1u,
+                                65535u, &port, error);
+    if (rc == TURBO_OK) config->listener.port = (uint16_t)port;
+  }
+  if (rc == TURBO_OK)
+    rc = control_config_parse_tls(turbo_json_object_get(listener, "tls"), config, error);
+  if (rc == TURBO_OK && turbo_json_object_get(listener, "limits"))
+    rc = control_config_parse_limits(turbo_json_object_get(listener, "limits"), config, error);
+  return rc;
+}
+
+static int control_config_parse_storage(const json_value_t *storage, flowie_control_config_t *config,
+                                        flowie_control_config_error_t *error) {
+  static const char *const storage_keys[] = {"sqlite"};
+  static const char *const sqlite_keys[] = {"path", "busy_timeout_ms"};
+  json_value_t *sqlite;
+  uint64_t timeout;
+  int rc = control_config_object(storage, "$.storage", storage_keys,
+                                 sizeof(storage_keys) / sizeof(storage_keys[0]), error);
+  sqlite = storage ? turbo_json_object_get(storage, "sqlite") : NULL;
+  if (rc == TURBO_OK)
+    rc = control_config_object(sqlite, "$.storage.sqlite", sqlite_keys,
+                               sizeof(sqlite_keys) / sizeof(sqlite_keys[0]), error);
+  if (rc == TURBO_OK)
+    rc = control_config_text(turbo_json_object_get(sqlite, "path"), "$.storage.sqlite.path",
+                             config->sqlite_path, sizeof(config->sqlite_path), 1, error);
+  if (rc == TURBO_OK && turbo_json_object_get(sqlite, "busy_timeout_ms")) {
+    rc = control_config_integer(turbo_json_object_get(sqlite, "busy_timeout_ms"),
+                                "$.storage.sqlite.busy_timeout_ms", 1u, 60000u, &timeout, error);
+    if (rc == TURBO_OK) config->sqlite_busy_timeout_ms = (int)timeout;
+  }
+  return rc;
+}
+
+static int control_config_parse_admins(const json_value_t *admins, flowie_control_config_t *config,
+                                       flowie_control_config_error_t *error) {
+  static const char *const keys[] = {"peer_certificate_sha256", "root_group", "principal"};
+  size_t count;
+  if (!admins || turbo_json_type(admins) != TURBO_JSON_ARRAY)
+    return control_config_error(error, TURBO_EINVAL, "$.management.certificate_bindings",
+                                "expected sequence");
+  count = turbo_json_array_size(admins);
+  if (count == 0u || count > FLOWIE_CONTROL_CONFIG_MAX_ADMIN_BINDINGS)
+    return control_config_error(error, TURBO_ERANGE, "$.management.certificate_bindings",
+                                "binding count is outside supported range");
+  for (size_t index = 0u; index < count; ++index) {
+    json_value_t *entry = turbo_json_array_get(admins, index);
+    flowie_control_config_admin_binding_t *binding = &config->management.admin_bindings[index];
+    char path[FLOWIE_CONTROL_CONFIG_ERROR_PATH_MAX + 1u];
+    char field[FLOWIE_CONTROL_CONFIG_ERROR_PATH_MAX + 1u];
+    int rc;
+    (void)snprintf(path, sizeof(path), "$.management.certificate_bindings[%zu]", index);
+    rc = control_config_object(entry, path, keys, sizeof(keys) / sizeof(keys[0]), error);
+    (void)snprintf(field, sizeof(field), "%s.peer_certificate_sha256", path);
+    if (rc == TURBO_OK)
+      rc = control_config_text(turbo_json_object_get(entry, keys[0]), field,
+                               binding->peer_certificate_sha256,
+                               sizeof(binding->peer_certificate_sha256), 1, error);
+    if (rc == TURBO_OK && !control_config_fingerprint_valid(binding->peer_certificate_sha256))
+      rc = control_config_error(error, TURBO_EINVAL, field,
+                                "expected canonical lowercase sha256 fingerprint");
+    (void)snprintf(field, sizeof(field), "%s.root_group", path);
+    if (rc == TURBO_OK)
+      rc = control_config_text(turbo_json_object_get(entry, keys[1]), field, binding->root_group_id,
+                               sizeof(binding->root_group_id), 1, error);
+    (void)snprintf(field, sizeof(field), "%s.principal", path);
+    if (rc == TURBO_OK)
+      rc = control_config_text(turbo_json_object_get(entry, keys[2]), field, binding->principal_id,
+                               sizeof(binding->principal_id), 1, error);
+    if (rc != TURBO_OK) return rc;
+    for (size_t prior = 0u; prior < index; ++prior) {
+      if (strcmp(config->management.admin_bindings[prior].peer_certificate_sha256,
+                 binding->peer_certificate_sha256) == 0)
+        return control_config_error(error, TURBO_EALREADY, path,
+                                    "certificate fingerprint is bound more than once");
+    }
+  }
+  config->management.admin_binding_count = count;
+  return TURBO_OK;
+}
+
+static int control_config_parse_management(const json_value_t *management,
+                                           flowie_control_config_t *config,
+                                           flowie_control_config_error_t *error) {
+  static const char *const keys[] = {"rpc_path", "rpc_max_request_size",
+                                     "certificate_bindings"};
+  uint64_t request_size;
+  int rc = control_config_object(management, "$.management", keys,
+                                 sizeof(keys) / sizeof(keys[0]), error);
+  if (rc == TURBO_OK)
+    rc = control_config_text(turbo_json_object_get(management, "rpc_path"),
+                             "$.management.rpc_path", config->management.rpc_path,
+                             sizeof(config->management.rpc_path), 0, error);
+  if (rc == TURBO_OK && !config->management.rpc_path[0])
+    memcpy(config->management.rpc_path, "/v1/management/rpc", sizeof("/v1/management/rpc"));
+  if (rc == TURBO_OK && !control_config_route_valid(config->management.rpc_path))
+    rc = control_config_error(error, TURBO_EINVAL, "$.management.rpc_path",
+                              "expected one static absolute route");
+  if (rc == TURBO_OK && turbo_json_object_get(management, "rpc_max_request_size")) {
+    rc = control_config_integer(turbo_json_object_get(management, "rpc_max_request_size"),
+                                "$.management.rpc_max_request_size", 1024u, 65536u, &request_size,
+                                error);
+    if (rc == TURBO_OK) config->management.rpc_max_request_size = (size_t)request_size;
+  }
+  if (rc == TURBO_OK)
+    rc = control_config_parse_admins(turbo_json_object_get(management, "certificate_bindings"),
+                                     config, error);
+  return rc;
+}
+
+static int control_config_parse_auth_bindings(const json_value_t *bindings,
+                                              flowie_control_config_t *config,
+                                              flowie_control_config_error_t *error) {
+  static const char *const keys[] = {"peer_certificate_sha256", "root_group"};
+  size_t count;
+  if (!bindings || turbo_json_type(bindings) != TURBO_JSON_ARRAY)
+    return control_config_error(error, TURBO_EINVAL, "$.auth.root_bindings", "expected sequence");
+  count = turbo_json_array_size(bindings);
+  if (count == 0u || count > FLOWIE_CONTROL_AUTH_MAX_BINDINGS)
+    return control_config_error(error, TURBO_ERANGE, "$.auth.root_bindings",
+                                "binding count is outside supported range");
+  for (size_t index = 0u; index < count; ++index) {
+    json_value_t *entry = turbo_json_array_get(bindings, index);
+    char path[FLOWIE_CONTROL_CONFIG_ERROR_PATH_MAX + 1u];
+    char field[FLOWIE_CONTROL_CONFIG_ERROR_PATH_MAX + 1u];
+    int rc;
+    (void)snprintf(path, sizeof(path), "$.auth.root_bindings[%zu]", index);
+    rc = control_config_object(entry, path, keys, sizeof(keys) / sizeof(keys[0]), error);
+    (void)snprintf(field, sizeof(field), "%s.peer_certificate_sha256", path);
+    if (rc == TURBO_OK)
+      rc = control_config_text(turbo_json_object_get(entry, keys[0]), field,
+                               config->auth.bindings[index].peer_certificate_sha256,
+                               sizeof(config->auth.bindings[index].peer_certificate_sha256), 1,
+                               error);
+    if (rc == TURBO_OK &&
+        !control_config_fingerprint_valid(config->auth.bindings[index].peer_certificate_sha256))
+      rc = control_config_error(error, TURBO_EINVAL, field,
+                                "expected canonical lowercase sha256 fingerprint");
+    (void)snprintf(field, sizeof(field), "%s.root_group", path);
+    if (rc == TURBO_OK)
+      rc = control_config_text(turbo_json_object_get(entry, keys[1]), field,
+                               config->auth.bindings[index].root_group_id,
+                               sizeof(config->auth.bindings[index].root_group_id), 1, error);
+    if (rc != TURBO_OK) return rc;
+    for (size_t prior = 0u; prior < index; ++prior) {
+      if (strcmp(config->auth.bindings[prior].peer_certificate_sha256,
+                 config->auth.bindings[index].peer_certificate_sha256) == 0)
+        return control_config_error(error, TURBO_EALREADY, path,
+                                    "certificate fingerprint is bound more than once");
+    }
+  }
+  config->auth.binding_count = count;
+  return TURBO_OK;
+}
+
+static int control_config_parse_auth(const json_value_t *auth, flowie_control_config_t *config,
+                                     flowie_control_config_error_t *error) {
+  static const char *const keys[] = {"enabled", "listener_id", "method", "service_token_ref",
+                                     "principal_ttl_seconds", "credential_cache_capacity",
+                                     "credential_cache_ttl_seconds", "root_bindings"};
+  uint64_t number;
+  int rc = control_config_object(auth, "$.auth", keys, sizeof(keys) / sizeof(keys[0]), error);
+  if (rc == TURBO_OK && turbo_json_object_get(auth, "enabled"))
+    rc = control_config_boolean(turbo_json_object_get(auth, "enabled"), "$.auth.enabled",
+                                &config->auth.enabled, error);
+  if (rc != TURBO_OK || !config->auth.enabled) return rc;
+  rc = control_config_text(turbo_json_object_get(auth, "listener_id"), "$.auth.listener_id",
+                           config->auth.listener_id, sizeof(config->auth.listener_id), 1, error);
+  if (rc == TURBO_OK)
+    rc = control_config_text(turbo_json_object_get(auth, "method"), "$.auth.method",
+                             config->auth.method, sizeof(config->auth.method), 1, error);
+  if (rc == TURBO_OK)
+    rc = control_config_text(turbo_json_object_get(auth, "service_token_ref"),
+                             "$.auth.service_token_ref", config->auth.service_token_ref,
+                             sizeof(config->auth.service_token_ref), 1, error);
+  if (rc == TURBO_OK && !control_config_secret_ref_valid(config->auth.service_token_ref))
+    rc = control_config_error(error, TURBO_EINVAL, "$.auth.service_token_ref",
+                              "only env:// secret references are accepted");
+  if (rc == TURBO_OK && turbo_json_object_get(auth, "principal_ttl_seconds")) {
+    rc = control_config_integer(turbo_json_object_get(auth, "principal_ttl_seconds"),
+                                "$.auth.principal_ttl_seconds", 1u,
+                                FLOWIE_CONTROL_AUTH_MAX_PRINCIPAL_TTL_SECONDS, &number, error);
+    if (rc == TURBO_OK) config->auth.principal_ttl_seconds = number;
+  }
+  if (rc == TURBO_OK && turbo_json_object_get(auth, "credential_cache_capacity")) {
+    rc = control_config_integer(turbo_json_object_get(auth, "credential_cache_capacity"),
+                                "$.auth.credential_cache_capacity", 1u,
+                                FLOWIE_CONTROL_CONFIG_AUTH_CACHE_CAPACITY_MAX, &number, error);
+    if (rc == TURBO_OK) config->auth.credential_cache_capacity = (size_t)number;
+  }
+  if (rc == TURBO_OK && turbo_json_object_get(auth, "credential_cache_ttl_seconds")) {
+    rc = control_config_integer(turbo_json_object_get(auth, "credential_cache_ttl_seconds"),
+                                "$.auth.credential_cache_ttl_seconds", 1u,
+                                FLOWIE_CONTROL_CONFIG_AUTH_CACHE_TTL_SECONDS_MAX, &number, error);
+    if (rc == TURBO_OK) config->auth.credential_cache_ttl_seconds = number;
+  }
+  if (rc == TURBO_OK)
+    rc = control_config_parse_auth_bindings(turbo_json_object_get(auth, "root_bindings"), config,
+                                            error);
+  return rc;
+}
+
+int flowie_control_config_parse_yaml(const char *yaml, size_t yaml_size,
+                                     flowie_control_config_t *out,
+                                     flowie_control_config_error_t *error) {
+  static const char *const root_keys[] = {"version", "listener", "storage", "management",
+                                          "dashboard", "auth"};
+  static const char *const dashboard_keys[] = {"enabled"};
+  flowie_control_config_t resolved = FLOWIE_CONTROL_CONFIG_INIT;
+  turbo_yaml_doc_t *yaml_document = NULL;
+  json_value_t *document = NULL;
+  json_value_t *version;
+  json_value_t *dashboard;
+  uint64_t version_number = 0u;
+  int rc;
+  if (!yaml || yaml_size == 0u || !out || out->size < sizeof(*out) || !error ||
+      error->size < sizeof(*error))
+    return TURBO_EINVAL;
+  *out = resolved;
+  *error = (flowie_control_config_error_t)FLOWIE_CONTROL_CONFIG_ERROR_INIT;
+  if (turbo_parse_yaml((const uint8_t *)yaml, yaml_size, &yaml_document) != TURBO_OK ||
+      !yaml_document)
+    return control_config_error(error, TURBO_EINVAL, "$", "invalid YAML document");
+  document = turbo_yaml_to_json(yaml_document);
+  if (!document) {
+    rc = control_config_error(error, TURBO_EINVAL, "$", "YAML cannot be represented as JSON");
+    goto done;
+  }
+  rc = control_config_object(document, "$", root_keys, sizeof(root_keys) / sizeof(root_keys[0]),
+                             error);
+  version = turbo_json_object_get(document, "version");
+  if (rc == TURBO_OK)
+    rc = control_config_integer(version, "$.version", FLOWIE_CONTROL_CONFIG_VERSION,
+                                FLOWIE_CONTROL_CONFIG_VERSION, &version_number, error);
+  if (rc == TURBO_OK) resolved.version = (uint32_t)version_number;
+  if (rc == TURBO_OK)
+    rc = control_config_parse_listener(turbo_json_object_get(document, "listener"), &resolved,
+                                       error);
+  if (rc == TURBO_OK)
+    rc = control_config_parse_storage(turbo_json_object_get(document, "storage"), &resolved,
+                                      error);
+  if (rc == TURBO_OK)
+    rc = control_config_parse_management(turbo_json_object_get(document, "management"), &resolved,
+                                         error);
+  dashboard = turbo_json_object_get(document, "dashboard");
+  if (rc == TURBO_OK && dashboard) {
+    rc = control_config_object(dashboard, "$.dashboard", dashboard_keys,
+                               sizeof(dashboard_keys) / sizeof(dashboard_keys[0]), error);
+    if (rc == TURBO_OK && turbo_json_object_get(dashboard, "enabled"))
+      rc = control_config_boolean(turbo_json_object_get(dashboard, "enabled"),
+                                  "$.dashboard.enabled", &resolved.dashboard_enabled, error);
+  }
+  if (rc == TURBO_OK && turbo_json_object_get(document, "auth"))
+    rc = control_config_parse_auth(turbo_json_object_get(document, "auth"), &resolved, error);
+  if (rc == TURBO_OK && resolved.listener.limits.max_request_body_size <
+                            resolved.management.rpc_max_request_size)
+    rc = control_config_error(error, TURBO_ERANGE, "$.listener.limits.max_request_body_size",
+                              "must cover management rpc_max_request_size");
+  if (rc == TURBO_OK) *out = resolved;
+
+done:
+  if (document) turbo_free_json((turbo_json_doc_t **)&document);
+  turbo_free_yaml(&yaml_document);
+  if (rc != TURBO_OK) *out = (flowie_control_config_t)FLOWIE_CONTROL_CONFIG_INIT;
+  return rc;
+}
+
+int flowie_control_config_load(const char *path, flowie_control_config_t *out,
+                               flowie_control_config_error_t *error) {
+  turbo_fs_buf_t buffer = {0};
+  int rc;
+  if (!path || !path[0] || !out || out->size < sizeof(*out) || !error ||
+      error->size < sizeof(*error))
+    return TURBO_EINVAL;
+  *out = (flowie_control_config_t)FLOWIE_CONTROL_CONFIG_INIT;
+  *error = (flowie_control_config_error_t)FLOWIE_CONTROL_CONFIG_ERROR_INIT;
+  rc = turbo_fs_read_file(path, &buffer);
+  if (rc != TURBO_OK)
+    return control_config_error(error, rc, "$", "cannot read controller configuration file");
+  rc = flowie_control_config_parse_yaml(buffer.base, buffer.len, out, error);
+  turbo_fs_buf_free(&buffer);
+  return rc;
+}

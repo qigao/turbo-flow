@@ -5,6 +5,8 @@ add_library(${TARGET_NAME} STATIC
             ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_pattern.h
             ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_reconnect.c
             ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_reconnect.h
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_security.c
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_security.h
             ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_subscription_set.c
             ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_subscription_set.h
             ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_peer_session.c
@@ -14,8 +16,12 @@ add_library(${TARGET_NAME} STATIC
 
 cmake_config_target(${TARGET_NAME} FOLDER "flowmq/runtime")
 target_include_directories(
-  ${TARGET_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>)
-target_link_libraries(${TARGET_NAME} PUBLIC FlowMQ::Protocol TurboUtils::Core)
+  ${TARGET_NAME}
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/flowmq/include>
+         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/io/common/include>)
+target_link_libraries(${TARGET_NAME} PUBLIC FlowMQ::Protocol TurboFlow::Flow
+                                             TurboNet::CoroNet TurboUtils::Core)
 
 add_library(flowmq_coronet_transport STATIC
             ${CMAKE_CURRENT_SOURCE_DIR}/src/flowmq_coronet_transport.c

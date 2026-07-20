@@ -1,0 +1,254 @@
+<div class="dashboard__inner">
+  <div id="dashboard-feedback" class="feedback" aria-live="polite"></div>
+
+  <section class="summary" aria-labelledby="summary-title">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Current state</p>
+        <h2 id="summary-title">Policy overview</h2>
+      </div>
+      <span class="scope">Root: {{root_group_id}}</span>
+    </div>
+    <dl class="metrics">
+      <div><dt>Store revision</dt><dd>{{store_revision}}</dd></div>
+      <div><dt>Policy version</dt><dd>{{policy_version}}</dd></div>
+      <div><dt>Draft rules</dt><dd>{{draft_rule_count}}</dd></div>
+      <div><dt>Published rules</dt><dd>{{published_rule_count}}</dd></div>
+    </dl>
+  </section>
+
+  {{#can_user_admin}}
+  <section class="operations" aria-labelledby="identity-operations-title">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Commands</p>
+        <h2 id="identity-operations-title">Identity and groups</h2>
+      </div>
+    </div>
+    <div class="operation-grid">
+      <div class="command">
+        <h3>Create user</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="user.create">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>User ID<input name="principal_id" required maxlength="255"></label>
+        <label>Type<input name="principal_type" required maxlength="63"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Create user</button>
+      </div>
+      <div class="command">
+        <h3>Create group</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="group.create">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>Group ID<input name="group_id" required maxlength="255"></label>
+        <label>Parent group<input name="parent_group_id" required maxlength="255"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Create group</button>
+      </div>
+      <div class="command">
+        <h3>Disable user</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="user.disable">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>User ID<input name="principal_id" required maxlength="255"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button class="button--danger" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Disable this user?">Disable user</button>
+      </div>
+      <div class="command">
+        <h3>Disable group</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="group.disable">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>Group ID<input name="group_id" required maxlength="255"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button class="button--danger" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Disable this group?">Disable group</button>
+      </div>
+      <div class="command">
+        <h3>Add membership</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="group.member.add">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>User ID<input name="principal_id" required maxlength="255"></label>
+        <label>Group ID<input name="group_id" required maxlength="255"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Add membership</button>
+      </div>
+      <div class="command">
+        <h3>Remove membership</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="group.member.remove">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>User ID<input name="principal_id" required maxlength="255"></label>
+        <label>Group ID<input name="group_id" required maxlength="255"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button class="button--secondary" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Remove membership</button>
+      </div>
+    </div>
+  </section>
+  {{/can_user_admin}}
+
+  {{#can_security_admin}}
+  <section class="operations" aria-labelledby="role-operations-title">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Commands</p>
+        <h2 id="role-operations-title">Roles</h2>
+      </div>
+    </div>
+    <div class="operation-grid">
+      <div class="command">
+        <h3>Create role</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="role.create">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>Role ID<input name="role_id" required maxlength="63"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Create role</button>
+      </div>
+      <div class="command">
+        <h3>Disable role</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="role.disable">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>Role ID<input name="role_id" required maxlength="63"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button class="button--danger" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Disable this role?">Disable role</button>
+      </div>
+      <div class="command">
+        <h3>Assign role</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="role.assign">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>User ID<input name="principal_id" required maxlength="255"></label>
+        <label>Role ID<input name="role_id" required maxlength="63"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Assign role</button>
+      </div>
+      <div class="command">
+        <h3>Remove role</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="role.remove">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>User ID<input name="principal_id" required maxlength="255"></label>
+        <label>Role ID<input name="role_id" required maxlength="63"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button class="button--secondary" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Remove role</button>
+      </div>
+    </div>
+  </section>
+  {{/can_security_admin}}
+
+  {{#can_policy_admin}}
+  <section class="operations" aria-labelledby="policy-operations-title">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Commands</p>
+        <h2 id="policy-operations-title">ACL policy</h2>
+      </div>
+    </div>
+    <div class="operation-grid">
+      <div class="command">
+        <h3>Put rule</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="policy.rule.put">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>Ordinal<input name="ordinal" required inputmode="numeric"></label>
+        <label class="field--wide">Canonical rule<input name="rule_line" required maxlength="2047"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Save rule</button>
+      </div>
+      <div class="command">
+        <h3>Delete rule</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="policy.rule.delete">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>Ordinal<input name="ordinal" required inputmode="numeric"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button class="button--danger" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Delete this ACL rule?">Delete rule</button>
+      </div>
+      <div class="command">
+        <h3>Publish policy</h3>
+        <input type="hidden" name="csrf" value="{{csrf}}">
+        <input type="hidden" name="operation" value="policy.publish">
+        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+        <label>Expires at<input name="expires_at" inputmode="numeric"></label>
+        <label>Request ID<input name="request_id" required maxlength="255"></label>
+        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Publish the current ACL draft?">Publish policy</button>
+      </div>
+    </div>
+  </section>
+  {{/can_policy_admin}}
+
+  <section class="dataset" aria-labelledby="users-title">
+    <div class="section-heading">
+      <div><p class="eyebrow">Directory</p><h2 id="users-title">Users</h2></div>
+      <div class="pager">
+        {{#users_pager.first}}<button type="button" class="button--quiet" hx-get="{{users_pager.first_url}}" hx-target="#dashboard" hx-swap="innerHTML">First</button>{{/users_pager.first}}
+        {{#users_pager.more}}<button type="button" class="button--quiet" hx-get="{{users_pager.more_url}}" hx-target="#dashboard" hx-swap="innerHTML">More</button>{{/users_pager.more}}
+      </div>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Revision</th></tr></thead><tbody>
+      {{#users}}<tr><td>{{principal_id}}</td><td>{{principal_type}}</td><td>{{#enabled}}Enabled{{/enabled}}{{^enabled}}Disabled{{/enabled}}</td><td>{{revision}}</td></tr>{{/users}}
+      {{^users}}<tr><td colspan="4" class="empty">No users</td></tr>{{/users}}
+    </tbody></table></div>
+  </section>
+
+  <section class="dataset" aria-labelledby="groups-title">
+    <div class="section-heading">
+      <div><p class="eyebrow">Hierarchy</p><h2 id="groups-title">Groups</h2></div>
+      <div class="pager">
+        {{#groups_pager.first}}<button type="button" class="button--quiet" hx-get="{{groups_pager.first_url}}" hx-target="#dashboard" hx-swap="innerHTML">First</button>{{/groups_pager.first}}
+        {{#groups_pager.more}}<button type="button" class="button--quiet" hx-get="{{groups_pager.more_url}}" hx-target="#dashboard" hx-swap="innerHTML">More</button>{{/groups_pager.more}}
+      </div>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Parent</th><th>Depth</th><th>Status</th></tr></thead><tbody>
+      {{#groups}}<tr><td>{{group_id}}</td><td>{{parent_group_id}}</td><td>{{depth}}</td><td>{{#enabled}}Enabled{{/enabled}}{{^enabled}}Disabled{{/enabled}}</td></tr>{{/groups}}
+      {{^groups}}<tr><td colspan="4" class="empty">No groups</td></tr>{{/groups}}
+    </tbody></table></div>
+  </section>
+
+  <section class="dataset" aria-labelledby="roles-title">
+    <div class="section-heading">
+      <div><p class="eyebrow">Authorization</p><h2 id="roles-title">Roles</h2></div>
+      <div class="pager">
+        {{#roles_pager.first}}<button type="button" class="button--quiet" hx-get="{{roles_pager.first_url}}" hx-target="#dashboard" hx-swap="innerHTML">First</button>{{/roles_pager.first}}
+        {{#roles_pager.more}}<button type="button" class="button--quiet" hx-get="{{roles_pager.more_url}}" hx-target="#dashboard" hx-swap="innerHTML">More</button>{{/roles_pager.more}}
+      </div>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Status</th><th>Revision</th></tr></thead><tbody>
+      {{#roles}}<tr><td>{{role_id}}</td><td>{{#enabled}}Enabled{{/enabled}}{{^enabled}}Disabled{{/enabled}}</td><td>{{revision}}</td></tr>{{/roles}}
+      {{^roles}}<tr><td colspan="3" class="empty">No roles</td></tr>{{/roles}}
+    </tbody></table></div>
+  </section>
+
+  <section class="dataset" aria-labelledby="policy-title">
+    <div class="section-heading">
+      <div><p class="eyebrow">Draft</p><h2 id="policy-title">ACL rules</h2></div>
+      <div class="pager">
+        {{#policy_pager.first}}<button type="button" class="button--quiet" hx-get="{{policy_pager.first_url}}" hx-target="#dashboard" hx-swap="innerHTML">First</button>{{/policy_pager.first}}
+        {{#policy_pager.more}}<button type="button" class="button--quiet" hx-get="{{policy_pager.more_url}}" hx-target="#dashboard" hx-swap="innerHTML">More</button>{{/policy_pager.more}}
+      </div>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Ordinal</th><th>Rule</th><th>Revision</th></tr></thead><tbody>
+      {{#rules}}<tr><td>{{ordinal}}</td><td><code>{{rule_line}}</code></td><td>{{revision}}</td></tr>{{/rules}}
+      {{^rules}}<tr><td colspan="3" class="empty">No draft rules</td></tr>{{/rules}}
+    </tbody></table></div>
+  </section>
+
+  {{#show_audit}}
+  <section class="dataset" aria-labelledby="audit-title">
+    <div class="section-heading">
+      <div><p class="eyebrow">Trace</p><h2 id="audit-title">Audit</h2></div>
+      <div class="pager">
+        {{#audit_pager.first}}<button type="button" class="button--quiet" hx-get="{{audit_pager.first_url}}" hx-target="#dashboard" hx-swap="innerHTML">First</button>{{/audit_pager.first}}
+        {{#audit_pager.more}}<button type="button" class="button--quiet" hx-get="{{audit_pager.more_url}}" hx-target="#dashboard" hx-swap="innerHTML">More</button>{{/audit_pager.more}}
+      </div>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Revision</th><th>Actor</th><th>Operation</th><th>Target</th></tr></thead><tbody>
+      {{#audits}}<tr><td>{{revision}}</td><td>{{actor}}</td><td>{{operation}}</td><td>{{target_id}}</td></tr>{{/audits}}
+      {{^audits}}<tr><td colspan="4" class="empty">No audit entries</td></tr>{{/audits}}
+    </tbody></table></div>
+  </section>
+  {{/show_audit}}
+</div>

@@ -18,6 +18,7 @@ struct flowie_ingress_s {
   flowie_ingress_publish_complete_fn publish_complete;
   void *prepare_ctx;
   turbo_flow_protocol_settlement_envelope_t protocol_settlement;
+  tstr_t publish_packet_override;
   int has_protocol_settlement;
   int has_route;
   int terminal_error;
@@ -100,8 +101,12 @@ static int flowie_ingress_pump(flowie_ingress_t *ingress, size_t *published) {
       int stop_pump = 0;
       ingress->has_protocol_settlement = 0;
       rc = ingress->prepare(ingress->prepare_ctx, ingress, &packet, &publish_packet, &stop_pump);
-      if (rc != TURBO_OK) return rc;
+      if (rc != TURBO_OK) {
+        tstr_freep(&ingress->publish_packet_override);
+        return rc;
+      }
       if (!publish_packet) {
+        tstr_freep(&ingress->publish_packet_override);
         rc = turbo_byte_buffer_consume(&ingress->framing, consumed);
         if (rc != TURBO_OK) return rc;
         if (stop_pump) break;
@@ -110,7 +115,13 @@ static int flowie_ingress_pump(flowie_ingress_t *ingress, size_t *published) {
     }
 
     /* Ownership is transferred before the borrowed framing view is invalidated. */
-    rc = flowie_ingress_message_create(ingress, &packet, bytes.data, consumed, &msg);
+    rc = flowie_ingress_message_create(
+        ingress, &packet,
+        ingress->publish_packet_override ? (const uint8_t *)ingress->publish_packet_override
+                                         : bytes.data,
+        ingress->publish_packet_override ? tstr_len(ingress->publish_packet_override) : consumed,
+        &msg);
+    tstr_freep(&ingress->publish_packet_override);
     ingress->has_protocol_settlement = 0;
     if (rc != TURBO_OK) return rc;
     rc = turbo_byte_buffer_consume(&ingress->framing, consumed);
@@ -144,7 +155,7 @@ flowie_ingress_t *flowie_ingress_create(const flowie_ingress_config_t *config) {
       config->abi_version != FLOWIE_INGRESS_INTERNAL_ABI_V2 || !config->flow ||
       !config->publish_source || config->publish_source[0] == '\0' ||
       (config->version != FLOWIE_MQTT_VERSION_UNSPECIFIED &&
-       config->version != FLOWIE_MQTT_VERSION_3_1_1 && config->version != FLOWIE_MQTT_VERSION_5))
+       !flowie_mqtt_version_is_supported(config->version)))
     return NULL;
   max_packet_size =
       config->max_packet_size ? config->max_packet_size : FLOWIE_MQTT_MAX_WIRE_PACKET_SIZE;
@@ -182,6 +193,7 @@ fail:
 void flowie_ingress_destroy(flowie_ingress_t *ingress) {
   if (!ingress) return;
   turbo_byte_buffer_destroy(&ingress->framing);
+  tstr_freep(&ingress->publish_packet_override);
   tstr_freep(&ingress->publish_source);
   free(ingress);
 }
@@ -246,5 +258,16 @@ int flowie_ingress_set_protocol_settlement(
   ingress->protocol_settlement = *settlement;
   ingress->protocol_settlement.size = sizeof(ingress->protocol_settlement);
   ingress->has_protocol_settlement = 1;
+  return TURBO_OK;
+}
+
+int flowie_ingress_set_publish_packet(flowie_ingress_t *ingress, const void *packet,
+                                      size_t packet_size) {
+  tstr_t replacement;
+  if (!ingress || !packet || packet_size == 0u || ingress->publish_packet_override)
+    return TURBO_EINVAL;
+  replacement = tstr_new_len(packet, packet_size);
+  if (!replacement) return TURBO_ENOMEM;
+  ingress->publish_packet_override = replacement;
   return TURBO_OK;
 }

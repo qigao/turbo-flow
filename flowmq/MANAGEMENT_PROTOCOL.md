@@ -13,7 +13,7 @@ capability/health/target/resource 查询 owner 已实现；该 owner 还实现�
 
 ## 1. 决策背景
 
-FMQ v2 是数据传输层，pattern 与 transport 由 YAML 组合。管理协议不能修改 FMQ v2
+FMQ v3 是数据传输层，pattern 与 transport 由 YAML 组合。管理协议不能修改 FMQ v3
 frame，也不能把 CoroNet socket、route 或进程内指针编码到远端消息中。现有 Control V1
 已验证“独立管理 flow + 普通 FMQ REQ/REP”的最小闭环，但只支持单 target 的 `STATUS`
 与 `EXECUTE`，内存幂等记录没有 TTL，且没有 capability、operation、event 或故障域身份。
@@ -32,7 +32,7 @@ TFMP/1 采用三条彼此独立的契约：
 
 ## 2. 不变量与非目标
 
-1. FMQ 仍只支持 wire v2；TFMP/1 是 FMQ DATA payload 内的应用协议。
+1. FMQ 仍只支持 wire v3；TFMP/1 是 FMQ DATA payload 内的应用协议。
 2. RPC 严格同步：一个 REQ 必须收到一个终态 REP，才可发送下一请求。异步 operation
    只表示同步提交成功后，工作在后台继续；绝不表示 REP 可以延迟到另一个 REQ 周期。
 3. ROUTER/DEALER 的 delayed reply 仍属于业务 pattern，不是 TFMP/1 RPC 的实现方式。

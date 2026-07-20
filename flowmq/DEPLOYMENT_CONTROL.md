@@ -2,7 +2,7 @@
 
 状态：failure-domain membership owner、stable logical route election、route fencing、snapshot
 split-brain classification、mixed-version compatibility evaluator，以及 durable management typed
-reconcile 已实现。它们不改变 FMQ v2 frame、TFMP/1 wire 或 REQ/REP 同步状态机。
+reconcile 已实现。它们不改变 FMQ v3 frame、TFMP/1 wire 或 REQ/REP 同步状态机。
 
 ## 1. 决策背景
 
@@ -67,7 +67,7 @@ version。lease tick 在移除成员前预检 route generation，避免部分过
 
 每个 release manifest 显式声明：
 
-- FMQ wire min/max；当前 release 只能声明 v2；
+- FMQ wire min/max；当前 release 只能声明 v3；
 - TFMP major 与 minor range；major 不兼容，minor 只能增加 optional field/kind/capability；
 - shared management store 的 read/write minor range；
 - YAML schema read range；
@@ -82,7 +82,7 @@ evaluator 只计算共同窗口，不改变 decoder：
 
 例如旧 release 只写 TFMS/1.0，新 release 可读 1.0/1.1 且可配置写 1.0，则 mixed rollout 固定写
 1.0；若新 release 只能写 1.1，而旧 release 不能读 1.1，必须停机迁移。若引入新的 FMQ major，只有
-真实 v2/v3 gateway 或停机升级两条路径；不得让当前 v2 decoder 接受 v1/v3。
+当前 release 不提供 dual-stack gateway，只允许停机升级；v3 decoder 不得接受其他 wire version。
 
 ## 4. Durable side-effect reconcile
 
@@ -121,7 +121,7 @@ inspect/store 错误保留 recovery-required，调用方显式重试。若重放
 | 把 membership 放进 graph stage | 配置项少 | data/control 事实源混合，split-brain 无边界 | 不选 |
 | 每个 adapter 自行选 broker | 局部实现简单 | logical route 多主，无法统一 fencing | 不选 |
 | controller 内实现分布式 consensus | 单包看似完整 | 重复造高风险共识/存储基础设施 | 不选；authority epoch 由宿主强一致服务提供 |
-| 放宽 v2 decoder 做兼容 | 不需要 gateway | 非法 frame 被误接收，当前 wire 契约失真 | 禁止 |
+| 放宽 v3 decoder 做兼容 | 不需要 gateway | 非法 frame 被误接收，当前 wire 契约失真 | 禁止 |
 | crash 后自动重放 RUNNING | 恢复快 | 非幂等副作用重复执行 | 禁止 |
 | typed inspect + generation-checked goal state | 状态归属清楚，可重试 | 每类 resource 必须实现 inspector | 选择 |
 
@@ -135,7 +135,7 @@ inspect/store 错误保留 recovery-required，调用方显式重试。若重放
    compatibility evaluator 必须确认 shared store writer 仍使用旧版本可读 minor。
 
 验证至少覆盖：跨 failure-domain failover、旧 member incarnation、lease expiry、同 version split-brain、
-v2/v3 gateway/stop 路径、shared store writer gap、mutation 已生效 crash window、无 inspector 的 durable
+v3-only stop 路径、shared store writer gap、mutation 已生效 crash window、无 inspector 的 durable
 拒绝，以及 inspector 恢复不重复 command。
 
 ## 7. Release gate

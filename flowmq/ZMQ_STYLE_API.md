@@ -2,7 +2,8 @@
 
 FlowMQ Application API 为单个 graph-native FMQ endpoint 提供类似 ZeroMQ socket 的薄封装：创建、
 启动、发送、回调接收、停止和销毁。它适合不需要自行编写 graph 的应用入口，但底层仍是同一个
-TurboFlow graph、Disruptor 和 CoroNet endpoint，没有额外 socket、队列、协议状态或工作线程。
+TurboFlow graph、Disruptor 和 CoroNet endpoint，没有额外 socket 或协议状态。默认同步模式不增加队列或
+工作线程；显式配置 async send 时增加一条有界队列和一个保序发送 worker。
 
 这不是 libzmq 兼容层。FlowMQ 不实现 ZMTP，不兼容 ZeroMQ wire/API，也不能与 ZeroMQ peer 直接
 通信。这里的 “ZMQ-like” 只表示复用 PUB/SUB、PUSH/PULL、REQ/REP、ROUTER/DEALER 和 PAIR 的
@@ -40,6 +41,7 @@ cmake --build --preset win-release-user --target flowmq_zmq_style_pub_sub flowmq
 | context + socket type | `turbo_flow_fmq_app_create()` | 每个 app 拥有一个最小 graph 和一个 FMQ endpoint |
 | `bind` / `connect` | `endpoint.mode` + transport fields | 在 create 时固定，start 时建立 listener/connection |
 | `zmq_send` | `turbo_flow_fmq_app_send()` | payload 被复制并发布到 graph input |
+| asynchronous send | `turbo_flow_fmq_app_send_async()` | copied admission；单 worker 聚合 micro-batch 并回调 completion |
 | blocking `zmq_recv` | `options.on_message` | receive 是 CoroNet owner lane 上的 borrowed callback |
 | multipart metadata | `turbo_flow_msg_t` + FMQ accessors | topic、identity、correlation 和 route 是类型化 metadata |
 | `zmq_close` | `turbo_flow_fmq_app_stop()` + `destroy()` | stop 可重复；destroy 会在需要时先 stop |
@@ -91,6 +93,12 @@ turbo_flow_fmq_app_destroy(app);
 所需配置；host 必须串行化同一 app 的 create/start/stop/destroy 生命周期。`start()` 重复调用返回
 `TURBO_EALREADY`，未 start 就 send 返回 `TURBO_EBUSY`，不支持发送的 pattern 返回
 `TURBO_ENOTSUP`。
+
+PUB、PUSH、DEALER 可在首次 `start()` 前调用
+`turbo_flow_fmq_app_configure_async_send()`。配置同时限制队列 item 数、payload bytes、micro-batch 大小和
+linger；`send_async()` 返回 `TURBO_OK` 后 facade 已取得副本所有权，非空 completion 最终调用一次。
+队列满返回 `TURBO_ENOSPC` 且不调用 completion。`stop()` 会排空已接收消息；completion 不得对同一 app
+调用 `stop()` 或 `destroy()`。
 
 ## Receive ownership
 

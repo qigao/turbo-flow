@@ -195,17 +195,14 @@ static void redis_runtime_server_thread(void *ctx) {
       size_t reply_size = server->mode == REDIS_RUNTIME_GET ? 11u : 5u;
       if (redis_test_send_all(client, reply, reply_size) != TURBO_OK) break;
       used = 0u;
-    } else if (server->mode == REDIS_RUNTIME_XREADGROUP_ERROR &&
-               strstr(request, "XREADGROUP")) {
+    } else if (server->mode == REDIS_RUNTIME_XREADGROUP_ERROR && strstr(request, "XREADGROUP")) {
       static const char error_reply[] = "-NOGROUP missing consumer group\r\n";
       atomic_store_explicit(&server->saw_xreadgroup, 1, memory_order_release);
-      if (redis_test_send_all(client, error_reply, sizeof(error_reply) - 1u) != TURBO_OK)
-        break;
+      if (redis_test_send_all(client, error_reply, sizeof(error_reply) - 1u) != TURBO_OK) break;
       used = 0u;
     } else if (server->mode == REDIS_RUNTIME_XGROUP_BUSY && strstr(request, "XGROUP")) {
       static const char error_reply[] = "-BUSYGROUP group already exists\r\n";
-      if (redis_test_send_all(client, error_reply, sizeof(error_reply) - 1u) != TURBO_OK)
-        break;
+      if (redis_test_send_all(client, error_reply, sizeof(error_reply) - 1u) != TURBO_OK) break;
       used = 0u;
     } else if ((server->mode == REDIS_RUNTIME_XREADGROUP ||
                 server->mode == REDIS_RUNTIME_XACK_REPLY_LOST ||
@@ -270,8 +267,7 @@ static void redis_runtime_server_thread(void *ctx) {
           break;
         }
         used = 0u;
-      } else if (server->mode == REDIS_RUNTIME_XACK_REPLY_LOST_PENDING &&
-                 strstr(request, "XACK")) {
+      } else if (server->mode == REDIS_RUNTIME_XACK_REPLY_LOST_PENDING && strstr(request, "XACK")) {
         atomic_fetch_add_explicit(&server->xack_count, 1, memory_order_release);
         if (redis_test_send_all(client, ":1\r\n", 4u) != TURBO_OK) break;
         used = 0u;
@@ -387,8 +383,7 @@ static void redis_run_lost_xack_case(redis_runtime_server_mode_t mode, int expec
   unsigned short port = redis_runtime_server_open(&server, mode);
   int rc;
   check_true(port > 0);
-  check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
-               TURBO_OK);
+  check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server), TURBO_OK);
   config.port = port;
   config.group = "workers";
   config.consumer = "reply-lost";
@@ -401,12 +396,10 @@ static void redis_run_lost_xack_case(redis_runtime_server_mode_t mode, int expec
   check_int_eq(atomic_load_explicit(&server.saw_xack, memory_order_acquire), 1);
   check_int_eq(turbo_flow_redis_stream_owner_ack(owner, claim.token), expected_retry_status);
   check_int_eq(atomic_load_explicit(&server.saw_xpending, memory_order_acquire), 1);
-  check_int_eq(atomic_load_explicit(&server.xack_count, memory_order_acquire),
-               expected_xack_count);
+  check_int_eq(atomic_load_explicit(&server.xack_count, memory_order_acquire), expected_xack_count);
   if (expected_retry_status == TURBO_OK)
     check_int_eq(turbo_flow_redis_stream_owner_ack(owner, claim.token), TURBO_EALREADY);
-  else
-    check_int_eq(turbo_flow_redis_stream_owner_requeue(owner, claim.token), TURBO_EBUSY);
+  else check_int_eq(turbo_flow_redis_stream_owner_requeue(owner, claim.token), TURBO_EBUSY);
   turbo_flow_redis_stream_owner_destroy(owner);
   check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
   check_int_eq(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
@@ -784,9 +777,9 @@ spec("turbo_flow_redis") {
 
     check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_redis_record_store_create_resolved(
-                     resolved, "mqtt.sessions", &store, &error),
-                 TURBO_ENOTSUP);
+    check_int_eq(
+        turbo_flow_redis_record_store_create_resolved(resolved, "mqtt.sessions", &store, &error),
+        TURBO_ENOTSUP);
     check_str_eq(error.path, "$.channels.mqtt.sessions.config.backend");
     check_null(store.ctx);
     turbo_flow_resolved_config_destroy(resolved);
@@ -900,4 +893,5 @@ spec("turbo_flow_redis") {
     WSACleanup();
 #endif
   }
+
 }

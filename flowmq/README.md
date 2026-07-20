@@ -1,16 +1,20 @@
 # FlowMQ
 
-FlowMQ 是基于 CoroNet、FMQ v2 和 TurboFlow graph/Disruptor 构建的消息传输产品。它借鉴
+开发接入、pattern 选择、Application facade、Graph、wire v3 安全和背压说明见
+[开发指南](DEVELOPER_GUIDE.md)。
+
+FlowMQ 是基于 CoroNet、FMQ v3 和 TurboFlow graph/Disruptor 构建的消息传输产品。它借鉴
 ZeroMQ 的通信模式，但不兼容 ZeroMQ wire/API，也不提供独立 Client SDK。远端参与者通过 graph
 中的 FMQ endpoint 接入；graph 定义接收、处理、路由和发送流程。
 
 当前稳定边界：
 
-- 本地 C API 为 v1，FMQ wire 只支持 v2；
+- 本地 C API 为 v1，FMQ wire 只支持 v3；decoder 拒绝其他版本，不协商、不降级；
 - 人工配置入口为 YAML v1，resolver 输出 immutable resolved snapshot；
 - `REQ/REP` 严格同步，delayed reply 只属于 `ROUTER/DEALER`；
 - 持久化和重放由 Queue、Redis Stream、SQLite 等 graph resource 提供；
-- 当前不提供认证、授权、租户或密钥管理，只能部署在宿主建立的可信边界内。
+- v3 security binding 是可选能力：未配置时仍要求宿主可信边界；配置后在七种 CoroNet transport 上
+  强制认证、身份绑定与 default-deny ACL，不允许匿名回退。TLS/WSS 额外强制 TLS 1.3 exporter 绑定。
 
 当前架构和所有权见 [ARCHITECTURE.md](ARCHITECTURE.md)。发布前必须执行
 [RELEASE_GATE.md](RELEASE_GATE.md)。
@@ -24,7 +28,7 @@ API 或 wire compatibility。
 
 | Target | Visibility | Purpose |
 | --- | --- | --- |
-| `FlowMQ::Protocol` | installed | FMQ v2 encode/decode、fragmentation 和 heartbeat deadline |
+| `FlowMQ::Protocol` | installed | FMQ v3 encode/decode、security envelope、fragmentation 和 heartbeat deadline |
 | `FlowMQ::Runtime` | build tree | graph-native FlowMQ runtime |
 | `FlowMQ::Broker` | build tree compatibility alias | 过渡名称，不应成为新代码依赖 |
 | `TurboFlow::FMQ` | installed compatibility target | 当前公开 runtime ABI |
@@ -54,6 +58,22 @@ if (rc == TURBO_OK) {
 
 成功 decode 后必须调用 `flowmq_protocol_frame_cleanup()`。单 packet 的 identity、topic 和 payload
 借用输入；fragmented payload 由 decoded frame 持有。
+
+TCP scatter/gather 集成可使用 `flowmq_protocol_encode_frame_segmented()`：
+
+```c
+flowmq_protocol_segmented_frame_t wire = FLOWMQ_PROTOCOL_SEGMENTED_FRAME_INIT;
+
+int rc = flowmq_protocol_encode_frame_segmented(&frame, 1024, &wire);
+if (rc == TURBO_OK) {
+  /* wire.segments[0..segment_count) 可转换为 transport iovec 并同步发送。 */
+  flowmq_protocol_segmented_frame_cleanup(&wire);
+}
+```
+
+segment array、packet header、identity 和 topic 由 `wire` 持有；payload segment 借用
+`frame.payload`，因此 payload backing 必须保持到 send 完成。cleanup 只释放 framing，不释放 payload。
+API 不依赖 CoroNet iovec 类型，其他 transport 可以按自身 scatter/gather 类型转换。
 
 ## Endpoint patterns
 
@@ -133,6 +153,10 @@ turbo_flow_fmq_app_destroy(app);
 顺序。单批最多 `TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS` 项，payload 总量最多
 `TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES`；超过上限分别返回 `TURBO_ERANGE` 与
 `TURBO_EMSGSIZE`。
+高频 producer 可在首次 start 前调用 `turbo_flow_fmq_app_configure_async_send()`，再用
+`turbo_flow_fmq_app_send_async()` 把 copied payload 交给 facade-owned 有界队列。队列同时受 item/byte
+配额约束，满时立即返回 `TURBO_ENOSPC`；accepted 消息由单 worker 保序组成 micro-batch，非空
+completion 每条调用一次。`stop()` 会先关闭 admission 并排空 accepted 消息，再停止底层 Flow。
 `turbo_flow_fmq_app_send_message()` 保留已有 message metadata，并作为 ROUTER detached route 的
 delayed-reply 入口。REP callback 可用 `turbo_flow_fmq_app_message_set_payload_copy()` 替换 payload，
 返回 `TURBO_OK` 后由同一次 graph dispatch 同步回复。生命周期和 send API 不可从同一个
@@ -205,7 +229,7 @@ ACK 必须按边界解释：
 这些 ACK 不能互相模拟。FMQ HWM 只限制本地内存，不代表远端接收、处理或持久化。durable replay
 必须显式组合 storage/queue resource，FMQ 不维护隐藏临时队列。
 
-## Wire v2 summary
+## Wire v3 summary
 
 每个 connection 先双向交换 HELLO，只有 pattern pairing 兼容后才接受 DATA。header 固定 32 bytes，
 整数为 network byte order：
@@ -213,7 +237,7 @@ ACK 必须按边界解释：
 ```text
 offset  size  field
 0       4     magic "TFMQ"
-4       1     version (2)
+4       1     version (3)
 5       1     kind (HELLO, DATA, PING, PONG, SUBSCRIBE, UNSUBSCRIBE)
 6       1     sender pattern
 7       1     packet flags (FIRST=0x01, LAST=0x02)
@@ -228,7 +252,87 @@ offset  size  field
 
 DATA payload 每 packet 最大 64 KiB；较大 payload 按连续 offset 分片。identity/topic 只出现在 FIRST
 packet。`max_frame_size` 限制完整 identity + topic + payload，identity 最大 255 bytes，topic 最大
-1024 bytes。protocol v1、乱序/重叠分片、trailing bytes 和不一致 header 均返回协议错误。
+1024 bytes。未知版本、乱序/重叠分片、trailing bytes 和不一致 header 均返回协议错误。
+
+HELLO payload 在 trusted v3 模式中为空。secure v3 模式中，client HELLO 携带严格长度界定的
+authentication envelope（identity、method、credential、可选 transport channel binding）；
+server 只有在认证、identity/principal 一致性和 CONNECT ACL 全部成功后才返回 ACCEPTED envelope。
+credential 只在 provider lease 和 HELLO write/parse 边界内借用，相关 owned buffer 在消费/释放前清零。
+
+安全端点通过 `turbo_flow_fmq_security_binding_t` 注入。BIND 借用 auth provider 与 immutable realm；
+CONNECT 借用 key provider 并按 secret reference 临时获取 credential。TCP/TLS/UDP/KCP/Pipe/WS/WSS
+都支持认证与 ACL。TLS/WSS 必须协商 1.3、client 必须完成对端验证，并强制 RFC 9266 exporter
+channel binding；
+TCP/UDP/KCP/Pipe/WS 不提供 credential confidentiality，只应部署在可信网络或额外安全隧道内。
+secure identity、auth method 和 ACL topic/resource 是不允许内嵌 NUL 的有界文本，credential 保持
+binary-safe；这避免 C-string ACL matcher 与 wire 长度视图产生截断差异。
+
+`turbo_flow_fmq_security_owner_create_resolved()` 可以从 resolved config 组合这些显式能力。BIND
+endpoint 从 `security_realm` 找到 realm，再按 realm 的 `policy_source` 精确创建 SQLite 或 HTTPS ACL
+provider，并创建 `auth_provider`；CONNECT endpoint 只保留 key provider 与 secret reference。正常
+授权只读取 realm 的本地不可变快照，policy version 变化或过期时才访问 provider。没有 fallback。
+
+```yaml
+channels:
+  acl.fmq:
+    kind: acl_provider
+    config:
+      backend: sqlite
+      database_path: C:/flowmq-state/acl.sqlite3
+      namespace_name: flowmq.fmq3
+  auth.fmq:
+    kind: auth_provider
+    config:
+      backend: https
+      url: https://auth.internal.example/v2/authenticate
+      method: token
+      service_token_ref: env://FLOWMQ_CONTROL_TOKEN
+  security.fmq:
+    kind: security_realm
+    config:
+      resource_uid: security:flowmq.fmq3
+      owner_name: security.fmq
+      policy_source: acl.fmq
+adapters:
+  fmq.secure:
+    kind: fmq
+    config:
+      pattern: router
+      mode: bind
+      transport: tls
+      host: 0.0.0.0
+      port: 7701
+      security_realm: security.fmq
+      auth_provider: auth.fmq
+      auth_method: token
+```
+
+`flowmq.fmq3` 应与 Flowie/MQTT policy namespace 分离。带上述安全字段的 adapter 若通过非 secure
+registration API 创建，会返回 `TURBO_EPERM`，不会静默建立 trusted endpoint。owner 必须晚于 adapter
+停止/销毁后再释放。ACL rule body 和 credential 均不得写入 YAML。
+
+### TLS/WSS 证书配置
+
+TLS 与 WSS 共用 CoroNet 的证书入口。启动 BIND endpoint 前设置 PEM 证书链和匹配的 PEM 私钥：
+
+```powershell
+$env:TURBONET_TLS_CERT_FILE = "C:\\certs\\flowmq-server-chain.pem"
+$env:TURBONET_TLS_KEY_FILE = "C:\\certs\\flowmq-server-key.pem"
+```
+
+```sh
+export TURBONET_TLS_CERT_FILE=/etc/flowmq/server-chain.pem
+export TURBONET_TLS_KEY_FILE=/etc/flowmq/server-key.pem
+```
+
+CONNECT endpoint 默认校验服务端证书。私有 CA 可通过 `TURBONET_TLS_CA_FILE` 指向 PEM CA bundle，
+或通过 `TURBONET_TLS_CA_PATH` 指向 OpenSSL CA 目录；未设置时使用平台/OpenSSL 默认信任库。连接配置中的
+host 必须匹配证书 SAN，例如证书只签发给 `localhost` 时不能用 `127.0.0.1` 连接。WSS 还需在 endpoint
+config 的 `path` 中设置 WebSocket path；证书配置与 TLS 完全相同。
+
+启用 `turbo_flow_fmq_security_binding_t` 后，TLS/WSS 必须协商 TLS 1.3，并在 secure HELLO 中绑定
+RFC 9266 exporter；证书校验或 exporter 失败会直接拒绝连接，不会退回未绑定模式。私钥不得提交到仓库、
+写入 YAML 或输出到日志。
 
 ## Product boundary
 
@@ -242,7 +346,7 @@ packet。`max_frame_size` 限制完整 identity + topic + payload，identity 最
 | PgSQL durable outbox | not claimed；普通 PostgreSQL query/sink 不等于事务 outbox source/sink |
 | TFMP management | supported，strict REQ/REP、typed command、operation/event store |
 | Failure-domain deployment owner | supported，authority epoch 必须由宿主强一致服务分配 |
-| Authentication/authorization/tenant | not supported |
+| Authentication/authorization/Group Forest | supported for optional secure v3 endpoints on TCP/TLS/UDP/KCP/Pipe/WS/WSS；HTTPS v2 authentication、SQLite/HTTPS v3 line-based dynamic ACL bundle、local immutable indexed snapshot、immutable Root Group isolation、hierarchical effective groups、default-deny exact/prefix ACL；TLS/WSS additionally enforce TLS 1.3 exporter binding |
 | ZeroMQ/ZMTP compatibility | not supported |
 
 高级应用协议分别由以下文档约束：

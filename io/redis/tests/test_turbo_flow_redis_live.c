@@ -56,8 +56,8 @@ static int redis_live_record_visit(void *ctx, const turbo_flow_record_view_t *re
   return TURBO_OK;
 }
 
-static size_t redis_live_record_find(const redis_live_record_capture_t *capture,
-                                     const uint8_t *key, size_t key_size) {
+static size_t redis_live_record_find(const redis_live_record_capture_t *capture, const uint8_t *key,
+                                     size_t key_size) {
   if (!capture || !key || key_size == 0u) return SIZE_MAX;
   for (size_t i = 0u; i < capture->count; ++i) {
     if (capture->key_sizes[i] == key_size && memcmp(capture->keys[i], key, key_size) == 0) return i;
@@ -65,9 +65,8 @@ static size_t redis_live_record_find(const redis_live_record_capture_t *capture,
   return SIZE_MAX;
 }
 
-static int redis_live_protocol_settle(
-    void *ctx, const turbo_flow_protocol_route_t *route,
-    const turbo_flow_protocol_settlement_request_t *request) {
+static int redis_live_protocol_settle(void *ctx, const turbo_flow_protocol_route_t *route,
+                                      const turbo_flow_protocol_settlement_request_t *request) {
   redis_live_protocol_owner_t *owner = (redis_live_protocol_owner_t *)ctx;
   if (!owner || !route || !request) return TURBO_EINVAL;
   owner->called += 1;
@@ -145,8 +144,7 @@ static int redis_live_encode_connect(uint8_t *output, size_t capacity, size_t *w
   if (!output || !written || !client_id) return TURBO_EINVAL;
   connect.version = FLOWIE_MQTT_VERSION_5;
   connect.keep_alive = 60u;
-  connect.client_id =
-      (flowie_mqtt_span_t){(const uint8_t *)client_id, strlen(client_id)};
+  connect.client_id = (flowie_mqtt_span_t){(const uint8_t *)client_id, strlen(client_id)};
   if (session_expiry != 0u) {
     properties[0] = FLOWIE_MQTT_PROPERTY_SESSION_EXPIRY_INTERVAL;
     properties[1] = (uint8_t)(session_expiry >> 24u);
@@ -157,18 +155,16 @@ static int redis_live_encode_connect(uint8_t *output, size_t capacity, size_t *w
   }
   if (will_topic) {
     connect.has_will = 1u;
-    connect.will_topic =
-        (flowie_mqtt_span_t){(const uint8_t *)will_topic, strlen(will_topic)};
-    connect.will_payload = (flowie_mqtt_span_t){
-        (const uint8_t *)will_payload, will_payload ? strlen(will_payload) : 0u};
+    connect.will_topic = (flowie_mqtt_span_t){(const uint8_t *)will_topic, strlen(will_topic)};
+    connect.will_payload = (flowie_mqtt_span_t){(const uint8_t *)will_payload,
+                                                will_payload ? strlen(will_payload) : 0u};
     if (will_delay != 0u) {
       will_properties[0] = FLOWIE_MQTT_PROPERTY_WILL_DELAY_INTERVAL;
       will_properties[1] = (uint8_t)(will_delay >> 24u);
       will_properties[2] = (uint8_t)(will_delay >> 16u);
       will_properties[3] = (uint8_t)(will_delay >> 8u);
       will_properties[4] = (uint8_t)will_delay;
-      connect.will_properties =
-          (flowie_mqtt_span_t){will_properties, sizeof(will_properties)};
+      connect.will_properties = (flowie_mqtt_span_t){will_properties, sizeof(will_properties)};
     }
   }
   return flowie_mqtt_connect_packet_encode(&connect, output, capacity, written) ==
@@ -177,9 +173,9 @@ static int redis_live_encode_connect(uint8_t *output, size_t capacity, size_t *w
              : TURBO_EPROTO;
 }
 
-static int redis_live_start_bound_endpoint(
-    const turbo_flow_resolved_config_t *resolved, const flowie_endpoint_bindings_t *bindings,
-    const char *graph, turbo_flow_t **flow_out) {
+static int redis_live_start_bound_endpoint(const turbo_flow_resolved_config_t *resolved,
+                                           const flowie_endpoint_bindings_t *bindings,
+                                           const char *graph, turbo_flow_t **flow_out) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_t *flow;
   int rc;
@@ -213,8 +209,7 @@ spec("turbo_flow_redis_live") {
     char consumer[128];
     turbo_flow_redis_stream_config_t config;
     turbo_flow_redis_stream_claim_t claim = TURBO_FLOW_REDIS_STREAM_CLAIM_INIT;
-    turbo_flow_protocol_route_owner_ops_t owner_ops =
-        TURBO_FLOW_PROTOCOL_ROUTE_OWNER_OPS_INIT;
+    turbo_flow_protocol_route_owner_ops_t owner_ops = TURBO_FLOW_PROTOCOL_ROUTE_OWNER_OPS_INIT;
     turbo_flow_protocol_route_t route = TURBO_FLOW_PROTOCOL_ROUTE_INIT;
     turbo_flow_protocol_settlement_envelope_t envelope =
         TURBO_FLOW_PROTOCOL_SETTLEMENT_ENVELOPE_INIT;
@@ -285,12 +280,10 @@ spec("turbo_flow_redis_live") {
                                 "stage main {\n"
                                 "  mqtt_in -> persist\n"
                                 "}\n";
-    static const uint8_t connect_packet[] = {
-        0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T', 0x05u, 0x00u, 0x00u, 0x3cu,
-        0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u, 'd',   'u',   'r'};
-    static const uint8_t publish[] = {0x32u, 0x07u, 0x00u, 0x01u, 'a',
-                                      0x00u, 0x45u, 0x00u, 'z'};
-    static const uint8_t connack[] = {0x20u, 0x03u, 0x00u, 0x00u, 0x00u};
+    static const uint8_t connect_packet[] = {0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',
+                                             0x05u, 0x00u, 0x00u, 0x3cu, 0x05u, 0x11u, 0x00u, 0x00u,
+                                             0x00u, 0x3cu, 0x00u, 0x03u, 'd',   'u',   'r'};
+    static const uint8_t publish[] = {0x32u, 0x07u, 0x00u, 0x01u, 'a', 0x00u, 0x45u, 0x00u, 'z'};
     static const uint8_t puback[] = {0x40u, 0x02u, 0x00u, 0x45u};
     char yaml[REDIS_LIVE_YAML_CAPACITY];
     char stream[128];
@@ -315,41 +308,40 @@ spec("turbo_flow_redis_live") {
                    (unsigned long long)suffix);
     (void)snprintf(consumer, sizeof(consumer), "turboflow-live-flowie-consumer-%llu",
                    (unsigned long long)suffix);
-    yaml_size = snprintf(
-        yaml, sizeof(yaml),
-        "version: 1\n"
-        "fragments:\n"
-        "  connection:\n"
-        "    local-redis:\n"
-        "      host: 127.0.0.1\n"
-        "      port: 6379\n"
-        "      database: 0\n"
-        "      timeout_ms: 5000\n"
-        "adapters:\n"
-        "  mqtt.endpoint:\n"
-        "    kind: flowie_endpoint\n"
-        "    config:\n"
-        "      transport: tcp\n"
-        "      host: 127.0.0.1\n"
-        "      port: %hu\n"
-        "      max_connections: 4\n"
-        "      manage_sessions: true\n"
-        "      settlement_qos1: durable\n"
-        "      settlement_qos2: durable\n"
-        "      max_sessions: 4\n"
-        "      max_subscriptions_per_session: 8\n"
-        "      max_inflight_per_session: 8\n"
-        "  redis.mqtt:\n"
-        "    kind: redis\n"
-        "    fragments:\n"
-        "      connection: local-redis\n"
-        "    config:\n"
-        "      pattern: stream\n"
-        "      role: sink\n"
-        "      stream: %s\n"
-        "      field: payload\n"
-        "      maxlen: 1000\n",
-        port, stream);
+    yaml_size = snprintf(yaml, sizeof(yaml),
+                         "version: 1\n"
+                         "fragments:\n"
+                         "  connection:\n"
+                         "    local-redis:\n"
+                         "      host: 127.0.0.1\n"
+                         "      port: 6379\n"
+                         "      database: 0\n"
+                         "      timeout_ms: 5000\n"
+                         "adapters:\n"
+                         "  mqtt.endpoint:\n"
+                         "    kind: flowie_endpoint\n"
+                         "    config:\n"
+                         "      transport: tcp\n"
+                         "      host: 127.0.0.1\n"
+                         "      port: %hu\n"
+                         "      max_connections: 4\n"
+                         "      manage_sessions: true\n"
+                         "      settlement_qos1: durable\n"
+                         "      settlement_qos2: durable\n"
+                         "      max_sessions: 4\n"
+                         "      max_subscriptions_per_session: 8\n"
+                         "      max_inflight_per_session: 8\n"
+                         "  redis.mqtt:\n"
+                         "    kind: redis\n"
+                         "    fragments:\n"
+                         "      connection: local-redis\n"
+                         "    config:\n"
+                         "      pattern: stream\n"
+                         "      role: sink\n"
+                         "      stream: %s\n"
+                         "      field: payload\n"
+                         "      maxlen: 1000\n",
+                         port, stream);
     check_int_gt(yaml_size, 0);
     check_true((size_t)yaml_size < sizeof(yaml));
     check_int_eq(turbo_flow_config_resolve_yaml(yaml, (size_t)yaml_size, &resolved, &error),
@@ -364,8 +356,8 @@ spec("turbo_flow_redis_live") {
     client = flowie_test_connect(port);
     check_true(client != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(client, connect_packet, sizeof(connect_packet)), TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(client, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(client, 0u, 8u, FLOWIE_DEFAULT_MAX_PACKET_SIZE),
+                 TURBO_OK);
     check_int_eq(flowie_test_send(client, publish, sizeof(publish)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(client, received, sizeof(puback)), TURBO_OK);
     check_mem_eq(received, puback, sizeof(puback));
@@ -396,11 +388,8 @@ spec("turbo_flow_redis_live") {
                                 "}\n";
     static const uint8_t subscribe[] = {0x82u, 0x07u, 0x00u, 0x01u, 0x00u,
                                         0x00u, 0x01u, 'w',   0x00u};
-    static const uint8_t connack[] = {0x20u, 0x03u, 0x00u, 0x00u, 0x00u};
-    static const uint8_t resumed_connack[] = {0x20u, 0x03u, 0x01u, 0x00u, 0x00u};
     static const uint8_t suback[] = {0x90u, 0x04u, 0x00u, 0x01u, 0x00u, 0x00u};
-    static const uint8_t expected_will[] = {0x30u, 0x05u, 0x00u, 0x01u,
-                                            'w',   0x00u, 'x'};
+    static const uint8_t expected_will[] = {0x30u, 0x05u, 0x00u, 0x01u, 'w', 0x00u, 'x'};
     char key[128];
     char yaml[REDIS_LIVE_YAML_CAPACITY];
     uint8_t subscriber_connect[128];
@@ -422,47 +411,45 @@ spec("turbo_flow_redis_live") {
     int will_readable = 0;
     int yaml_size;
     check_int_gt(port, 0);
-    (void)snprintf(key, sizeof(key), "turboflow:live:flowie:will:%llu",
-                   (unsigned long long)suffix);
+    (void)snprintf(key, sizeof(key), "turboflow:live:flowie:will:%llu", (unsigned long long)suffix);
     check_int_eq(redis_live_encode_connect(subscriber_connect, sizeof(subscriber_connect),
                                            &subscriber_connect_size, "rsu", 60u, NULL, NULL, 0u),
                  TURBO_OK);
     check_int_eq(redis_live_encode_connect(will_connect, sizeof(will_connect), &will_connect_size,
                                            "rwi", 5u, "w", "x", 2u),
                  TURBO_OK);
-    yaml_size = snprintf(
-        yaml, sizeof(yaml),
-        "version: 1\n"
-        "channels:\n"
-        "  mqtt.sessions:\n"
-        "    kind: record_store\n"
-        "    config:\n"
-        "      backend: redis\n"
-        "      host: 127.0.0.1\n"
-        "      port: 6379\n"
-        "      database: 0\n"
-        "      timeout_ms: 5000\n"
-        "      key: '%s'\n"
-        "      max_key_size: 65538\n"
-        "      max_value_size: 1048576\n"
-        "      max_batch_size: 16\n"
-        "      max_records: 8\n"
-        "adapters:\n"
-        "  mqtt.endpoint:\n"
-        "    kind: flowie_endpoint\n"
-        "    config:\n"
-        "      transport: tcp\n"
-        "      host: 127.0.0.1\n"
-        "      port: %hu\n"
-        "      max_packet_size: 4096\n"
-        "      max_connections: 4\n"
-        "      manage_sessions: true\n"
-        "      max_sessions: 4\n"
-        "      max_retained_messages: 4\n"
-        "      max_subscriptions_per_session: 8\n"
-        "      max_inflight_per_session: 8\n"
-        "      session_store: mqtt.sessions\n",
-        key, port);
+    yaml_size = snprintf(yaml, sizeof(yaml),
+                         "version: 1\n"
+                         "channels:\n"
+                         "  mqtt.sessions:\n"
+                         "    kind: record_store\n"
+                         "    config:\n"
+                         "      backend: redis\n"
+                         "      host: 127.0.0.1\n"
+                         "      port: 6379\n"
+                         "      database: 0\n"
+                         "      timeout_ms: 5000\n"
+                         "      key: '%s'\n"
+                         "      max_key_size: 65538\n"
+                         "      max_value_size: 1048576\n"
+                         "      max_batch_size: 16\n"
+                         "      max_records: 8\n"
+                         "adapters:\n"
+                         "  mqtt.endpoint:\n"
+                         "    kind: flowie_endpoint\n"
+                         "    config:\n"
+                         "      transport: tcp\n"
+                         "      host: 127.0.0.1\n"
+                         "      port: %hu\n"
+                         "      max_packet_size: 4096\n"
+                         "      max_connections: 4\n"
+                         "      manage_sessions: true\n"
+                         "      max_sessions: 4\n"
+                         "      max_retained_messages: 4\n"
+                         "      max_subscriptions_per_session: 8\n"
+                         "      max_inflight_per_session: 8\n"
+                         "      session_store: mqtt.sessions\n",
+                         key, port);
     check_int_gt(yaml_size, 0);
     check_true((size_t)yaml_size < sizeof(yaml));
     check_int_eq(turbo_flow_config_resolve_yaml(yaml, (size_t)yaml_size, &resolved, &error),
@@ -471,23 +458,22 @@ spec("turbo_flow_redis_live") {
     persistence.store = &store;
     bindings.persistence = &persistence;
 
-    check_int_eq(turbo_flow_redis_record_store_create_resolved(resolved, "mqtt.sessions", &store,
-                                                               &error),
-                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_redis_record_store_create_resolved(resolved, "mqtt.sessions", &store, &error),
+        TURBO_OK);
     check_int_eq(redis_live_start_bound_endpoint(resolved, &bindings, graph, &flow), TURBO_OK);
     subscriber = flowie_test_connect(port);
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(subscriber, subscriber_connect, subscriber_connect_size),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(subscriber, 0u, 8u, 4096u), TURBO_OK);
     check_int_eq(flowie_test_send(subscriber, subscribe, sizeof(subscribe)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(suback)), TURBO_OK);
     check_mem_eq(received, suback, sizeof(suback));
     will_client = flowie_test_connect(port);
     check_true(will_client != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(will_client, will_connect, will_connect_size), TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(will_client, received, sizeof(connack)), TURBO_OK);
+    check_int_eq(flowie_test_recv_mqtt5_connack(will_client, 0u, 8u, 4096u), TURBO_OK);
     flowie_test_socket_close(will_client);
     will_client = FLOWIE_TEST_INVALID_SOCKET;
     for (size_t i = 0u; i < REDIS_LIVE_WAIT_ITERATIONS; ++i) {
@@ -504,16 +490,15 @@ spec("turbo_flow_redis_live") {
     flow = NULL;
     turbo_flow_redis_record_store_destroy(&store);
 
-    check_int_eq(turbo_flow_redis_record_store_create_resolved(resolved, "mqtt.sessions", &store,
-                                                               &error),
-                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_redis_record_store_create_resolved(resolved, "mqtt.sessions", &store, &error),
+        TURBO_OK);
     check_int_eq(redis_live_start_bound_endpoint(resolved, &bindings, graph, &flow), TURBO_OK);
     subscriber = flowie_test_connect(port);
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(subscriber, subscriber_connect, subscriber_connect_size),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(resumed_connack)), TURBO_OK);
-    check_mem_eq(received, resumed_connack, sizeof(resumed_connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(subscriber, 1u, 8u, 4096u), TURBO_OK);
     for (size_t i = 0u; i < REDIS_LIVE_WAIT_ITERATIONS; ++i) {
       if (flowie_test_socket_readable(subscriber, 10u)) {
         will_readable = 1;
@@ -641,8 +626,8 @@ spec("turbo_flow_redis_live") {
     static const uint8_t value_next[] = {'n', 'e', 'x', 't'};
     turbo_flow_redis_record_store_config_t config;
     turbo_flow_record_store_t store = TURBO_FLOW_RECORD_STORE_INIT;
-    turbo_flow_record_mutation_t mutations[2] = {
-        TURBO_FLOW_RECORD_MUTATION_INIT, TURBO_FLOW_RECORD_MUTATION_INIT};
+    turbo_flow_record_mutation_t mutations[2] = {TURBO_FLOW_RECORD_MUTATION_INIT,
+                                                 TURBO_FLOW_RECORD_MUTATION_INIT};
     redis_live_record_capture_t capture;
     size_t found;
     char key[128];
@@ -670,9 +655,9 @@ spec("turbo_flow_redis_live") {
                         "      max_batch_size: 2\n      max_records: 2\nadapters: {}\n",
                         key) > 0);
     check_int_eq(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), TURBO_OK);
-    check_int_eq(turbo_flow_redis_record_store_create_resolved(resolved, "mqtt.sessions", &store,
-                                                               &error),
-                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_redis_record_store_create_resolved(resolved, "mqtt.sessions", &store, &error),
+        TURBO_OK);
     turbo_flow_resolved_config_destroy(resolved);
     memset(&capture, 0, sizeof(capture));
     check_int_eq(store.scan(store.ctx, redis_live_record_visit, &capture), TURBO_OK);
@@ -1168,4 +1153,5 @@ spec("turbo_flow_redis_live") {
     turbo_flow_fmq_credit_worker_destroy(credit);
     turbo_flow_redis_stream_owner_destroy(owner);
   }
+
 }

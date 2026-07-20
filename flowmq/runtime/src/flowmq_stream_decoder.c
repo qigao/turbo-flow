@@ -25,6 +25,16 @@ void flowmq_stream_decoder_destroy(flowmq_stream_decoder_t *stream) {
   memset(stream, 0, sizeof(*stream));
 }
 
+void flowmq_stream_decoder_destroy_sensitive(flowmq_stream_decoder_t *stream) {
+  turbo_byte_buffer_view_t view;
+  if (!stream) return;
+  if (stream->initialized && turbo_byte_buffer_view(&stream->buffer, &view) == TURBO_OK) {
+    volatile uint8_t *bytes = (volatile uint8_t *)(uintptr_t)view.data;
+    for (size_t i = 0u; i < view.size; ++i) bytes[i] = 0u;
+  }
+  flowmq_stream_decoder_destroy(stream);
+}
+
 size_t flowmq_stream_decoder_available(const flowmq_stream_decoder_t *stream) {
   return stream && stream->initialized ? turbo_byte_buffer_available(&stream->buffer) : 0u;
 }
@@ -47,5 +57,18 @@ int flowmq_stream_decoder_next(flowmq_stream_decoder_t *stream, flowmq_protocol_
 
 int flowmq_stream_decoder_consume(flowmq_stream_decoder_t *stream, size_t count) {
   if (!stream || !stream->initialized) return TURBO_EINVAL;
+  return turbo_byte_buffer_consume(&stream->buffer, count);
+}
+
+int flowmq_stream_decoder_consume_sensitive(flowmq_stream_decoder_t *stream, size_t count) {
+  turbo_byte_buffer_view_t view;
+  volatile uint8_t *bytes;
+  int rc;
+  if (!stream || !stream->initialized) return TURBO_EINVAL;
+  rc = turbo_byte_buffer_view(&stream->buffer, &view);
+  if (rc != TURBO_OK) return rc;
+  if (count > view.size) return TURBO_ERANGE;
+  bytes = (volatile uint8_t *)(uintptr_t)view.data;
+  for (size_t i = 0u; i < count; ++i) bytes[i] = 0u;
   return turbo_byte_buffer_consume(&stream->buffer, count);
 }

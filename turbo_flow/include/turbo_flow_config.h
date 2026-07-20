@@ -81,6 +81,17 @@ typedef struct turbo_flow_resolved_adapter_view_s {
 #define TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT                                                      \
   {sizeof(turbo_flow_resolved_adapter_view_t), NULL, NULL, NULL}
 
+/** Borrowed immutable channel projection from one resolved snapshot. */
+typedef struct turbo_flow_resolved_channel_view_s {
+  size_t size;
+  const char *name;
+  const char *kind;
+  const void *config;
+} turbo_flow_resolved_channel_view_t;
+
+#define TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT                                                      \
+  {sizeof(turbo_flow_resolved_channel_view_t), NULL, NULL, NULL}
+
 typedef struct turbo_flow_config_error_s {
   size_t size;
   int status;
@@ -139,6 +150,15 @@ CXX_C_API int turbo_flow_resolved_config_profile_adapter(const turbo_flow_resolv
 CXX_C_API int turbo_flow_resolved_config_profile_channel(const turbo_flow_resolved_config_t *config,
                                                          const char *profile, const char *parameter,
                                                          const char **channel_name);
+
+/** Project one named channel without exposing the resolver's JSON representation. */
+CXX_C_API int turbo_flow_resolved_config_channel(const turbo_flow_resolved_config_t *config,
+                                                 const char *name,
+                                                 turbo_flow_resolved_channel_view_t *view);
+
+/** Read one borrowed string from a resolved channel config. */
+CXX_C_API int turbo_flow_resolved_channel_get_string(const turbo_flow_resolved_channel_view_t *view,
+                                                     const char *field, const char **value);
 
 /**
  * Preflight a host build's enabled adapter kinds before any adapter projection.

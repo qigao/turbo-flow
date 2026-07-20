@@ -4,6 +4,7 @@
 #include "tinytest.h"
 #include "turbo_flow.h"
 #include "turbo_flow_expr.h"
+#include "turbo_flow_security.h"
 #include "turbo_thread.h"
 
 #include <inttypes.h>
@@ -26,8 +27,171 @@
 #define FLOW_BENCH_EXPR_COMPILE_ITERS 200
 #define FLOW_BENCH_EXPR_EVAL_ITERS 100000
 #define FLOW_BENCH_ASYNC_INGRESS_ITERS 10000
+#define FLOW_BENCH_SECURITY_EVAL_ITERS 100000
+#define FLOW_BENCH_SECURITY_CANDIDATE_ITERS 10000
 
 static atomic_size_t g_flow_bench_count = 0;
+
+static void bench_security_copy(char *output, size_t capacity, const char *value) {
+  size_t size = strlen(value);
+  check_true(size < capacity);
+  memcpy(output, value, size + 1u);
+}
+
+typedef enum bench_security_layout_e {
+  BENCH_SECURITY_DISTINCT_EXACT = 0,
+  BENCH_SECURITY_SHARED_EXACT,
+  BENCH_SECURITY_SHARED_PREFIX,
+  BENCH_SECURITY_SHARED_ADAPTER
+} bench_security_layout_t;
+
+typedef struct bench_security_adapter_entry_s {
+  const char *pattern;
+  size_t candidate_position;
+} bench_security_adapter_entry_t;
+
+typedef struct bench_security_adapter_leaf_s {
+  bench_security_adapter_entry_t *entries;
+  size_t entry_count;
+} bench_security_adapter_leaf_t;
+
+static int bench_security_adapter_compare(const void *left, const void *right) {
+  const bench_security_adapter_entry_t *a = (const bench_security_adapter_entry_t *)left;
+  const bench_security_adapter_entry_t *b = (const bench_security_adapter_entry_t *)right;
+  return strcmp(a->pattern, b->pattern);
+}
+
+static int bench_security_adapter_compile(void *ctx,
+                                          const turbo_flow_security_matcher_leaf_t *input,
+                                          void **compiled_leaf_out) {
+  bench_security_adapter_leaf_t *leaf;
+  (void)ctx;
+  if (compiled_leaf_out) *compiled_leaf_out = NULL;
+  if (!input || input->size < sizeof(*input) || !input->rules || !input->candidate_rule_indices ||
+      input->candidate_count == 0u || !compiled_leaf_out)
+    return TURBO_EINVAL;
+  leaf = (bench_security_adapter_leaf_t *)calloc(1u, sizeof(*leaf));
+  if (!leaf) return TURBO_ENOMEM;
+  leaf->entries =
+      (bench_security_adapter_entry_t *)calloc(input->candidate_count, sizeof(*leaf->entries));
+  if (!leaf->entries) {
+    free(leaf);
+    return TURBO_ENOMEM;
+  }
+  leaf->entry_count = input->candidate_count;
+  for (size_t i = 0u; i < input->candidate_count; ++i) {
+    size_t rule_index = input->candidate_rule_indices[i];
+    if (rule_index >= input->rule_count) {
+      free(leaf->entries);
+      free(leaf);
+      return TURBO_EPROTO;
+    }
+    leaf->entries[i].pattern = input->rules[rule_index].pattern;
+    leaf->entries[i].candidate_position = i;
+  }
+  qsort(leaf->entries, leaf->entry_count, sizeof(*leaf->entries), bench_security_adapter_compare);
+  *compiled_leaf_out = leaf;
+  return TURBO_OK;
+}
+
+static int bench_security_adapter_evaluate(void *ctx, const void *compiled_leaf,
+                                           const turbo_flow_security_request_t *request,
+                                           turbo_flow_security_match_emit_fn emit, void *emit_ctx) {
+  const bench_security_adapter_leaf_t *leaf = (const bench_security_adapter_leaf_t *)compiled_leaf;
+  size_t first = 0u;
+  size_t count;
+  (void)ctx;
+  if (!leaf || !request || !request->resource || !emit) return TURBO_EINVAL;
+  count = leaf->entry_count;
+  while (first < count) {
+    size_t middle = first + (count - first) / 2u;
+    if (strcmp(leaf->entries[middle].pattern, request->resource) < 0) first = middle + 1u;
+    else count = middle;
+  }
+  while (first < leaf->entry_count &&
+         strcmp(leaf->entries[first].pattern, request->resource) == 0) {
+    int rc = emit(emit_ctx, leaf->entries[first].candidate_position);
+    if (rc != TURBO_OK) return rc;
+    ++first;
+  }
+  return TURBO_OK;
+}
+
+static void bench_security_adapter_destroy(void *ctx, void *compiled_leaf) {
+  bench_security_adapter_leaf_t *leaf = (bench_security_adapter_leaf_t *)compiled_leaf;
+  (void)ctx;
+  if (!leaf) return;
+  free(leaf->entries);
+  free(leaf);
+}
+
+static const char *bench_security_layout_name(bench_security_layout_t layout) {
+  static const char *const names[] = {"acl-subject-index", "acl-exact-index", "acl-prefix-index",
+                                      "acl-adapter-compiled"};
+  return layout <= BENCH_SECURITY_SHARED_ADAPTER ? names[layout] : "acl-invalid";
+}
+
+static turbo_flow_security_realm_t *bench_security_realm(size_t rule_count,
+                                                         bench_security_layout_t layout,
+                                                         turbo_flow_security_rule_t **rules_out) {
+  turbo_flow_security_realm_config_t config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
+  turbo_flow_security_rule_t *rules;
+  turbo_flow_security_realm_t *realm = NULL;
+  char subject[32];
+  char pattern[64];
+  check_true(rule_count > 0u && rule_count <= TURBO_FLOW_SECURITY_MAX_RULES);
+  rules = (turbo_flow_security_rule_t *)calloc(rule_count, sizeof(*rules));
+  check_not_null(rules);
+  for (size_t i = 0u; i < rule_count; ++i) {
+    int written;
+    rules[i] = (turbo_flow_security_rule_t)TURBO_FLOW_SECURITY_RULE_INIT;
+    rules[i].effect = TURBO_FLOW_SECURITY_DENY;
+    rules[i].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
+    if (layout != BENCH_SECURITY_DISTINCT_EXACT) {
+      bench_security_copy(rules[i].subject, sizeof(rules[i].subject), "writer");
+    } else {
+      written = snprintf(subject, sizeof(subject), "subject-%llu", (unsigned long long)i);
+      check_true(written > 0 && (size_t)written < sizeof(subject));
+      bench_security_copy(rules[i].subject, sizeof(rules[i].subject), subject);
+    }
+    bench_security_copy(rules[i].root_group_id, sizeof(rules[i].root_group_id), "root-0");
+    rules[i].action_mask = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
+    rules[i].resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+    rules[i].match_kind = layout == BENCH_SECURITY_SHARED_PREFIX ? TURBO_FLOW_SECURITY_MATCH_PREFIX
+                          : layout == BENCH_SECURITY_SHARED_ADAPTER
+                              ? TURBO_FLOW_SECURITY_MATCH_ADAPTER
+                              : TURBO_FLOW_SECURITY_MATCH_EXACT;
+    written = snprintf(pattern, sizeof(pattern),
+                       layout == BENCH_SECURITY_SHARED_PREFIX ? "resource/%llu/" : "resource/%llu",
+                       (unsigned long long)i);
+    check_true(written > 0 && (size_t)written < sizeof(pattern));
+    bench_security_copy(rules[i].pattern, sizeof(rules[i].pattern), pattern);
+  }
+  rules[rule_count - 1u].effect = TURBO_FLOW_SECURITY_ALLOW;
+  bench_security_copy(rules[rule_count - 1u].subject, sizeof(rules[rule_count - 1u].subject),
+                      "writer");
+  bench_security_copy(rules[rule_count - 1u].root_group_id,
+                      sizeof(rules[rule_count - 1u].root_group_id), "root-0");
+  rules[rule_count - 1u].action_mask = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
+  rules[rule_count - 1u].resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+  bench_security_copy(rules[rule_count - 1u].pattern, sizeof(rules[rule_count - 1u].pattern),
+                      layout == BENCH_SECURITY_SHARED_PREFIX ? "target/" : "target/topic");
+  config.resource_uid = "security:benchmark";
+  config.owner_name = "security.benchmark";
+  config.policy_version = 1u;
+  config.rules = rules;
+  config.rule_count = rule_count;
+  if (layout == BENCH_SECURITY_SHARED_ADAPTER) {
+    config.matcher = (turbo_flow_security_matcher_t)TURBO_FLOW_SECURITY_MATCHER_INIT;
+    config.matcher.compile_leaf = bench_security_adapter_compile;
+    config.matcher.evaluate_leaf = bench_security_adapter_evaluate;
+    config.matcher.destroy_leaf = bench_security_adapter_destroy;
+  }
+  check_int_eq(turbo_flow_security_realm_create(&config, &realm), TURBO_OK);
+  check_not_null(realm);
+  *rules_out = rules;
+  return realm;
+}
 
 typedef struct flow_bench_live_jobs_s {
   atomic_int release;
@@ -1103,6 +1267,51 @@ spec("Turbo Flow Bench") {
       check_int_eq(value.as.boolean, 1);
       turbo_flow_expr_destroy(expr);
       turbo_flow_msg_cleanup(&msg);
+    }
+  }
+
+  bench("security") {
+    static const size_t rule_counts[] = {64u, 512u, TURBO_FLOW_SECURITY_MAX_RULES};
+    turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+    turbo_flow_security_request_t request = TURBO_FLOW_SECURITY_REQUEST_INIT;
+    turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
+    bench_security_copy(principal.principal_id, sizeof(principal.principal_id), "device-7");
+    bench_security_copy(principal.principal_type, sizeof(principal.principal_type), "device");
+    bench_security_copy(principal.root_group_id, sizeof(principal.root_group_id), "root-0");
+    bench_security_copy(principal.auth_method, sizeof(principal.auth_method), "token");
+    principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+    principal.role_count = 1u;
+    bench_security_copy(principal.roles[0], sizeof(principal.roles[0]), "writer");
+    principal.group_count = 1u;
+    bench_security_copy(principal.groups[0], sizeof(principal.groups[0]), "root-0");
+    principal.policy_version = 1u;
+    request.principal = &principal;
+    request.root_group_id = "root-0";
+    request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
+    request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+    request.resource = "target/topic";
+    for (size_t i = 0u; i < sizeof(rule_counts) / sizeof(rule_counts[0]); ++i) {
+      for (bench_security_layout_t layout = BENCH_SECURITY_DISTINCT_EXACT;
+           layout <= BENCH_SECURITY_SHARED_ADAPTER; ++layout) {
+        turbo_flow_security_rule_t *rules = NULL;
+        turbo_flow_security_realm_t *realm = bench_security_realm(rule_counts[i], layout, &rules);
+        char label[96];
+        int written =
+            snprintf(label, sizeof(label), "%s rules=%llu authorize",
+                     bench_security_layout_name(layout), (unsigned long long)rule_counts[i]);
+        check_true(written > 0 && (size_t)written < sizeof(label));
+        benchmark_ops(label,
+                      layout == BENCH_SECURITY_DISTINCT_EXACT ? FLOW_BENCH_SECURITY_EVAL_ITERS
+                                                              : FLOW_BENCH_SECURITY_CANDIDATE_ITERS,
+                      1u) {
+          decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+          check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
+                       TURBO_OK);
+        }
+        check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+        turbo_flow_security_realm_destroy(realm);
+        free(rules);
+      }
     }
   }
 }

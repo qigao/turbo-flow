@@ -1,0 +1,266 @@
+find_package(SQLite3 REQUIRED)
+
+add_library(flowie_control_core STATIC flowie_control_auth_cache.c
+                                        flowie_control_auth_cache_internal.h
+                                        flowie_control_auth_rate_limiter.c
+                                        flowie_control_auth_rate_limiter_internal.h
+                                        flowie_control_principal_cache.c
+                                        flowie_control_principal_cache_internal.h
+                                        flowie_control_auth_service.c
+                                        flowie_control_auth_service_internal.h
+                                        flowie_control_credential.c
+                                        flowie_control_credential_internal.h
+                                        flowie_control_management_service.c
+                                        flowie_control_management_service_internal.h
+                                        flowie_control_store.c
+                                        flowie_control_store_internal.h)
+cmake_config_target(flowie_control_core NO_INSTALL FOLDER "flowie/control/internal")
+target_include_directories(flowie_control_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(flowie_control_core
+                      PUBLIC TurboFlow::Flow
+                      PRIVATE Flowie::Protocol SQLite::SQLite3 TurboUtils::Core monocypher)
+
+add_library(flowie_control_startup STATIC flowie_control_config.c
+                                          flowie_control_config_internal.h
+                                          flowie_control_security_limits_internal.h
+                                          flowie_control_startup_options.c
+                                          flowie_control_startup_options_internal.h)
+cmake_config_target(flowie_control_startup NO_INSTALL FOLDER "flowie/control/internal")
+target_include_directories(flowie_control_startup PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(flowie_control_startup
+                      PUBLIC TurboFlow::Flow
+                      PRIVATE TurboUtils::Core TurboUtils::Parser)
+
+if(TURBO_FLOW_BUILD_HTTP_SERVER)
+  set(FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR
+      "${CMAKE_CURRENT_BINARY_DIR}/dashboard-resources")
+  file(MAKE_DIRECTORY
+       "${FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR}/assets"
+       "${FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR}/templates")
+  foreach(resource IN ITEMS control.css htmx-2.0.9.min.js HTMX_LICENSE.txt HTMX_SOURCE.md)
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/assets/${resource}"
+                   "${FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR}/assets/${resource}"
+                   COPYONLY)
+  endforeach()
+  foreach(resource IN ITEMS dashboard.mustache dashboard_content.mustache
+                            dashboard_error.mustache)
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/templates/${resource}"
+                   "${FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR}/templates/${resource}"
+                   COPYONLY)
+  endforeach()
+
+  add_library(flowie_control_iris_adapter STATIC flowie_control_auth_iris_adapter.c
+                                                 flowie_control_auth_iris_adapter_internal.h
+                                                 flowie_control_auth_iris_endpoint.c
+                                                 flowie_control_auth_iris_endpoint_internal.h
+                                                 flowie_control_dashboard.c
+                                                 flowie_control_dashboard_internal.h
+                                                 flowie_control_dashboard_view.c
+                                                 flowie_control_dashboard_view_internal.h)
+  if(TURBO_FLOW_BUILD_RPC)
+    target_sources(flowie_control_iris_adapter
+                   PRIVATE flowie_control_management_rpc.c
+                           flowie_control_management_rpc_internal.h)
+  endif()
+  cmake_config_target(flowie_control_iris_adapter NO_INSTALL
+                      FOLDER "flowie/control/internal")
+  target_include_directories(flowie_control_iris_adapter PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(
+    flowie_control_iris_adapter
+    PRIVATE FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR="${FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR}")
+  target_link_libraries(flowie_control_iris_adapter
+                        PUBLIC flowie_control_core TurboHttp::Iris
+                        PRIVATE TurboHttp::HttpClient TurboNet::CoroNet TurboUtils::Core
+                                TurboUtils::Mustache TurboUtils::Parser monocypher)
+
+  if(TURBO_FLOW_BUILD_RPC)
+    add_library(flowie_control_runtime STATIC flowie_control_runtime.c
+                                              flowie_control_runtime_internal.h)
+    cmake_config_target(flowie_control_runtime NO_INSTALL
+                        FOLDER "flowie/control/internal")
+    target_include_directories(flowie_control_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(flowie_control_runtime
+                          PUBLIC flowie_control_startup
+                          PRIVATE flowie_control_iris_adapter TurboNet::CoroNet TurboUtils::Core
+                                  monocypher)
+
+    add_executable(flowie-control flowie_control_main.c)
+    cmake_config_target(flowie-control FOLDER "flowie/control")
+    target_link_libraries(flowie-control PRIVATE flowie_control_runtime)
+    install(TARGETS flowie-control RUNTIME DESTINATION bin)
+    install(FILES "${PROJECT_SOURCE_DIR}/flowie/examples/flowie-control.yml"
+            DESTINATION share/turboflow/examples/flowie OPTIONAL)
+
+    if(BUILD_TESTS)
+      find_package(OpenSSL REQUIRED)
+      cmake_add_test(
+        test_flowie_control_runtime
+        SOURCES tests/test_flowie_control_runtime.c
+        LIBS flowie_control_runtime TurboUtils::TinyTest
+        INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+        FOLDER "flowie/control/tests")
+      set_tests_properties(test_flowie_control_runtime
+                           PROPERTIES LABELS "flowie;control-plane;security-contract")
+      cmake_add_test(
+        test_flowie_control_https_integration
+        SOURCES tests/test_flowie_control_https_integration.c
+        LIBS flowie_control_runtime flowie_control_core TurboHttp::HttpClient
+             TurboNet::CoroNet TurboUtils::Core TurboUtils::TinyTest OpenSSL::Crypto
+        INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+        FOLDER "flowie/control/tests")
+      target_compile_definitions(
+        test_flowie_control_https_integration
+        PRIVATE FLOWIE_CONTROL_EXECUTABLE="$<TARGET_FILE:flowie-control>")
+      add_dependencies(test_flowie_control_https_integration flowie-control)
+      set_tests_properties(
+        test_flowie_control_https_integration
+        PROPERTIES LABELS "flowie;control-plane;security-contract;integration"
+                   TIMEOUT 30)
+      if(WIN32)
+        target_link_libraries(test_flowie_control_https_integration PRIVATE ws2_32)
+        set_target_properties(
+          test_flowie_control_runtime
+          PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                     "${CMAKE_BINARY_DIR}/flowie/control/test-bin")
+        set_target_properties(
+          test_flowie_control_https_integration
+          PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                     "${CMAKE_BINARY_DIR}/flowie/control/test-bin")
+        set_tests_properties(
+          test_flowie_control_runtime
+          PROPERTIES ENVIRONMENT_MODIFICATION
+                     "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::Iris>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::HttpClient>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboNet::CoroNet>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboUtils::Core>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboFlow::Flow>;PATH=path_list_prepend:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+        set_tests_properties(
+          test_flowie_control_https_integration
+          PROPERTIES ENVIRONMENT_MODIFICATION
+                     "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::Iris>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::HttpClient>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboNet::CoroNet>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboUtils::Core>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboFlow::Flow>;PATH=path_list_prepend:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+      endif()
+    endif()
+  endif()
+endif()
+
+if(BUILD_TESTS)
+  cmake_add_test(
+    test_flowie_control_startup_options
+    SOURCES tests/test_flowie_control_startup_options.c
+    LIBS flowie_control_startup TurboUtils::TinyTest
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+    FOLDER "flowie/control/tests")
+  set_tests_properties(test_flowie_control_startup_options
+                       PROPERTIES LABELS "flowie;control-plane;security-contract")
+  cmake_add_test(
+    test_flowie_control_config
+    SOURCES tests/test_flowie_control_config.c
+    LIBS flowie_control_startup TurboUtils::TinyTest
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+    FOLDER "flowie/control/tests")
+  target_compile_definitions(
+    test_flowie_control_config
+    PRIVATE FLOWIE_CONTROL_TEST_CONFIG_PATH="${PROJECT_SOURCE_DIR}/flowie/examples/flowie-control.yml")
+  set_tests_properties(test_flowie_control_config
+                       PROPERTIES LABELS "flowie;control-plane;security-contract")
+  cmake_add_test(
+    test_flowie_control_store
+    SOURCES tests/test_flowie_control_store.c
+    LIBS flowie_control_core TurboFlow::SecuritySQLite TurboUtils::TinyTest
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+    FOLDER "flowie/control/tests")
+  set_tests_properties(test_flowie_control_store
+                       PROPERTIES LABELS "flowie;control-plane;security-contract")
+  cmake_add_test(
+    test_flowie_control_auth_cache
+    SOURCES tests/test_flowie_control_auth_cache.c
+    LIBS flowie_control_core TurboUtils::TinyTest
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+    FOLDER "flowie/control/tests")
+  set_tests_properties(test_flowie_control_auth_cache
+                       PROPERTIES LABELS "flowie;control-plane;security-contract")
+  cmake_add_test(
+    test_flowie_control_principal_cache
+    SOURCES tests/test_flowie_control_principal_cache.c
+    LIBS flowie_control_core TurboUtils::TinyTest
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+    FOLDER "flowie/control/tests")
+  set_tests_properties(test_flowie_control_principal_cache
+                       PROPERTIES LABELS "flowie;control-plane;security-contract")
+  cmake_add_test(
+    test_flowie_control_auth_rate_limiter
+    SOURCES tests/test_flowie_control_auth_rate_limiter.c
+    LIBS flowie_control_core TurboUtils::TinyTest
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+    FOLDER "flowie/control/tests")
+  set_tests_properties(test_flowie_control_auth_rate_limiter
+                       PROPERTIES LABELS "flowie;control-plane;security-contract")
+  cmake_add_test(
+    test_flowie_control_auth_service
+    SOURCES tests/test_flowie_control_auth_service.c
+    LIBS flowie_control_core TurboUtils::TinyTest
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+    FOLDER "flowie/control/tests")
+  set_tests_properties(test_flowie_control_auth_service
+                       PROPERTIES LABELS "flowie;control-plane;security-contract")
+  cmake_add_test(
+    test_flowie_control_management_service
+    SOURCES tests/test_flowie_control_management_service.c
+    LIBS flowie_control_core TurboUtils::TinyTest
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+    FOLDER "flowie/control/tests")
+  set_tests_properties(test_flowie_control_management_service
+                       PROPERTIES LABELS "flowie;control-plane;security-contract")
+  if(TURBO_FLOW_BUILD_HTTP_SERVER)
+    cmake_add_test(
+      test_flowie_control_auth_iris_adapter
+      SOURCES tests/test_flowie_control_auth_iris_adapter.c
+      LIBS flowie_control_iris_adapter TurboUtils::TinyTest
+      INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+      FOLDER "flowie/control/tests")
+    set_tests_properties(test_flowie_control_auth_iris_adapter
+                         PROPERTIES LABELS "flowie;control-plane;security-contract")
+    if(TURBO_FLOW_BUILD_RPC)
+      cmake_add_test(
+        test_flowie_control_management_rpc
+        SOURCES tests/test_flowie_control_management_rpc.c
+        LIBS flowie_control_iris_adapter TurboUtils::TinyTest
+        INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+        FOLDER "flowie/control/tests")
+      set_tests_properties(test_flowie_control_management_rpc
+                           PROPERTIES LABELS "flowie;control-plane;security-contract")
+    endif()
+    cmake_add_test(
+      test_flowie_control_dashboard
+      SOURCES tests/test_flowie_control_dashboard.c
+      LIBS flowie_control_iris_adapter TurboUtils::TinyTest
+      INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+      FOLDER "flowie/control/tests")
+    set_tests_properties(test_flowie_control_dashboard
+                         PROPERTIES LABELS "flowie;control-plane;security-contract")
+    if(WIN32)
+      set_target_properties(
+        test_flowie_control_auth_iris_adapter
+        PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                   "${CMAKE_BINARY_DIR}/flowie/control/test-bin")
+      set_tests_properties(
+        test_flowie_control_auth_iris_adapter
+        PROPERTIES ENVIRONMENT_MODIFICATION
+                   "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::Iris>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboNet::CoroNet>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboUtils::Core>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboFlow::Flow>;PATH=path_list_prepend:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+      if(TURBO_FLOW_BUILD_RPC)
+        set_target_properties(
+          test_flowie_control_management_rpc
+          PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                     "${CMAKE_BINARY_DIR}/flowie/control/test-bin")
+        set_tests_properties(
+          test_flowie_control_management_rpc
+          PROPERTIES ENVIRONMENT_MODIFICATION
+                     "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::Iris>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboNet::CoroNet>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboUtils::Core>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboFlow::Flow>;PATH=path_list_prepend:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+      endif()
+      set_target_properties(
+        test_flowie_control_dashboard
+        PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                   "${CMAKE_BINARY_DIR}/flowie/control/test-bin")
+      set_tests_properties(
+        test_flowie_control_dashboard
+        PROPERTIES ENVIRONMENT_MODIFICATION
+                   "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::Iris>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::HttpClient>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboNet::CoroNet>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboUtils::Core>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboFlow::Flow>;PATH=path_list_prepend:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+    endif()
+  endif()
+endif()

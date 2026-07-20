@@ -1,5 +1,7 @@
 set(TURBO_FLOW_HTTP_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_http.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_http_acl.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_http_auth.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_http_client.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_http_server.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_http_types.h)
@@ -14,6 +16,11 @@ target_link_libraries(tf_http_content PRIVATE TurboFlow::Flow TurboUtils::Core)
 
 if(TURBO_FLOW_BUILD_HTTP_CLIENT)
   add_library(tf_http_client SHARED
+              ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_http_acl.c
+              ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_http_acl_internal.h
+              ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_http_auth.c
+              ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_http_tls_client.c
+              ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_http_tls_client.h
               ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_http_client.c
               ${TURBO_FLOW_HTTP_HEADERS})
   cmake_config_target(
@@ -29,7 +36,7 @@ if(TURBO_FLOW_BUILD_HTTP_CLIENT)
     tf_http_client
     PUBLIC TurboFlow::Flow
     PRIVATE tf_http_content tf_executor_common TurboHttp::HttpClient TurboNet::CoroNet
-            TurboUtils::Core)
+            TurboUtils::Core TurboUtils::Parser monocypher)
   list(APPEND TURBO_FLOW_HTTP_TARGETS tf_http_client)
 endif()
 
@@ -65,5 +72,9 @@ install(FILES ${TURBO_FLOW_HTTP_HEADERS} DESTINATION include)
 
 if(BUILD_TESTS AND TURBO_FLOW_BUILD_HTTP_CLIENT AND TURBO_FLOW_BUILD_HTTP_SERVER)
   add_subdirectory(tests)
+endif()
+
+if(BUILD_BENCHMARKS AND TURBO_FLOW_BUILD_HTTP_CLIENT AND TURBO_FLOW_BUILD_HTTP_SERVER)
+  add_subdirectory(benchmarks)
 endif()
 

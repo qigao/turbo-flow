@@ -7,6 +7,7 @@
 #include "flowmq_peer_session.h"
 #include "flowmq_stream_decoder.h"
 #include "flowmq_subscription_set.h"
+#include "flowmq_security.h"
 #include "fmq_delivery.h"
 #include "fmq_protocol.h"
 
@@ -40,6 +41,10 @@
 #define FLOW_FMQ_RECONNECT_INITIAL_MS 1000u
 #define FLOW_FMQ_RECONNECT_MAX_MS 30000u
 #define FLOW_FMQ_MESSAGE_CONTEXT_MAGIC UINT32_C(0x464d5143)
+#define FLOW_FMQ_STACK_IOV_CAPACITY 8u
+#ifndef FLOW_FMQ_ZERO_COPY_MIN_PAYLOAD_SIZE
+  #define FLOW_FMQ_ZERO_COPY_MIN_PAYLOAD_SIZE 1024u
+#endif
 
 #define FLOW_FMQ_TRANSPORT_VALUE_ASSERT(name, value)                                               \
   _Static_assert(TURBO_FLOW_FMQ_##name == value, "TurboFlow FMQ transport mapping changed");       \
@@ -72,6 +77,25 @@ typedef struct flow_fmq_send_profile_aggregate_s {
   atomic_uint_fast64_t completion_sum_ns;
   atomic_uint_fast64_t waiter_wake_sum_ns;
   atomic_uint_fast64_t total_sum_ns;
+  atomic_uint_fast64_t batch_socket_calls;
+  atomic_uint_fast64_t batch_socket_cpu_samples;
+  atomic_uint_fast64_t batch_socket_frames;
+  atomic_uint_fast64_t batch_socket_iov_segments;
+  atomic_uint_fast64_t batch_socket_send_sum_ns;
+  atomic_uint_fast64_t batch_socket_cpu_wall_sum_ns;
+  atomic_uint_fast64_t batch_socket_thread_cpu_sum_ns;
+  atomic_uint_fast64_t batch_samples;
+  atomic_uint_fast64_t batch_post_samples;
+  atomic_uint_fast64_t batch_build_sum_ns;
+  atomic_uint_fast64_t batch_payload_prepare_sum_ns;
+  atomic_uint_fast64_t batch_graph_publish_sum_ns;
+  atomic_uint_fast64_t batch_adapter_consume_sum_ns;
+  atomic_uint_fast64_t batch_enqueue_prepare_sum_ns;
+  atomic_uint_fast64_t batch_owner_wait_sum_ns;
+  atomic_uint_fast64_t batch_post_call_sum_ns;
+  atomic_uint_fast64_t batch_owner_work_sum_ns;
+  atomic_uint_fast64_t batch_waiter_wake_sum_ns;
+  atomic_uint_fast64_t batch_total_sum_ns;
 } flow_fmq_send_profile_aggregate_t;
 
 static flow_fmq_send_profile_aggregate_t flow_fmq_send_profile;
@@ -95,6 +119,39 @@ void flow_fmq_send_profile_reset(void) {
   atomic_store_explicit(&flow_fmq_send_profile.completion_sum_ns, 0u, memory_order_relaxed);
   atomic_store_explicit(&flow_fmq_send_profile.waiter_wake_sum_ns, 0u, memory_order_relaxed);
   atomic_store_explicit(&flow_fmq_send_profile.total_sum_ns, 0u, memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_socket_calls, 0u, memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_socket_cpu_samples, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_socket_frames, 0u, memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_socket_iov_segments, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_socket_send_sum_ns, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_socket_cpu_wall_sum_ns, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_socket_thread_cpu_sum_ns, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_samples, 0u, memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_post_samples, 0u, memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_build_sum_ns, 0u, memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_payload_prepare_sum_ns, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_graph_publish_sum_ns, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_adapter_consume_sum_ns, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_enqueue_prepare_sum_ns, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_owner_wait_sum_ns, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_post_call_sum_ns, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_owner_work_sum_ns, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_waiter_wake_sum_ns, 0u,
+                        memory_order_relaxed);
+  atomic_store_explicit(&flow_fmq_send_profile.batch_total_sum_ns, 0u,
+                        memory_order_relaxed);
 #endif
 }
 
@@ -110,6 +167,7 @@ int flow_fmq_send_profile_snapshot(flow_fmq_send_profile_snapshot_t *out) {
   if (!out || out->size < sizeof(*out)) return TURBO_EINVAL;
 #ifdef TURBO_FLOW_FMQ_INTERNAL_PROFILING
   uint64_t socket_cpu_wall_sum_ns;
+  uint64_t batch_socket_cpu_wall_sum_ns;
   out->samples = atomic_load_explicit(&flow_fmq_send_profile.samples, memory_order_relaxed);
   out->post_samples =
       atomic_load_explicit(&flow_fmq_send_profile.post_samples, memory_order_relaxed);
@@ -141,6 +199,48 @@ int flow_fmq_send_profile_snapshot(flow_fmq_send_profile_snapshot_t *out) {
       atomic_load_explicit(&flow_fmq_send_profile.waiter_wake_sum_ns, memory_order_relaxed);
   out->total_sum_ns =
       atomic_load_explicit(&flow_fmq_send_profile.total_sum_ns, memory_order_relaxed);
+  out->batch_socket_calls =
+      atomic_load_explicit(&flow_fmq_send_profile.batch_socket_calls, memory_order_relaxed);
+  out->batch_socket_cpu_samples = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_socket_cpu_samples, memory_order_relaxed);
+  out->batch_socket_frames =
+      atomic_load_explicit(&flow_fmq_send_profile.batch_socket_frames, memory_order_relaxed);
+  out->batch_socket_iov_segments = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_socket_iov_segments, memory_order_relaxed);
+  out->batch_socket_send_sum_ns = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_socket_send_sum_ns, memory_order_relaxed);
+  out->batch_socket_thread_cpu_sum_ns = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_socket_thread_cpu_sum_ns, memory_order_relaxed);
+  batch_socket_cpu_wall_sum_ns = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_socket_cpu_wall_sum_ns, memory_order_relaxed);
+  out->batch_socket_estimated_off_cpu_sum_ns =
+      batch_socket_cpu_wall_sum_ns > out->batch_socket_thread_cpu_sum_ns
+          ? batch_socket_cpu_wall_sum_ns - out->batch_socket_thread_cpu_sum_ns
+          : 0u;
+  out->batch_samples =
+      atomic_load_explicit(&flow_fmq_send_profile.batch_samples, memory_order_relaxed);
+  out->batch_post_samples =
+      atomic_load_explicit(&flow_fmq_send_profile.batch_post_samples, memory_order_relaxed);
+  out->batch_build_sum_ns =
+      atomic_load_explicit(&flow_fmq_send_profile.batch_build_sum_ns, memory_order_relaxed);
+  out->batch_payload_prepare_sum_ns = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_payload_prepare_sum_ns, memory_order_relaxed);
+  out->batch_graph_publish_sum_ns = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_graph_publish_sum_ns, memory_order_relaxed);
+  out->batch_adapter_consume_sum_ns = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_adapter_consume_sum_ns, memory_order_relaxed);
+  out->batch_enqueue_prepare_sum_ns = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_enqueue_prepare_sum_ns, memory_order_relaxed);
+  out->batch_owner_wait_sum_ns = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_owner_wait_sum_ns, memory_order_relaxed);
+  out->batch_post_call_sum_ns = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_post_call_sum_ns, memory_order_relaxed);
+  out->batch_owner_work_sum_ns = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_owner_work_sum_ns, memory_order_relaxed);
+  out->batch_waiter_wake_sum_ns = atomic_load_explicit(
+      &flow_fmq_send_profile.batch_waiter_wake_sum_ns, memory_order_relaxed);
+  out->batch_total_sum_ns =
+      atomic_load_explicit(&flow_fmq_send_profile.batch_total_sum_ns, memory_order_relaxed);
   return TURBO_OK;
 #else
   return TURBO_ENOTSUP;
@@ -412,6 +512,8 @@ typedef struct flow_fmq_peer_s {
   int closing;
   atomic_int disconnect_event_sent;
   flowmq_peer_session_t exchange;
+  turbo_flow_security_principal_t principal;
+  int authenticated;
 } flow_fmq_peer_t;
 
 typedef struct flow_fmq_message_context_s {
@@ -432,6 +534,9 @@ struct flow_fmq_send_request_s {
   flow_fmq_adapter_t *adapter;
   flow_fmq_route_token_t route;
   tstr_t frame;
+  flow_fmq_segmented_frame_t segmented_frame;
+  mem_buffer_t *payload_buffer;
+  tstr_v encoded_topic;
   turbo_mutex_t mutex;
   turbo_cond_t cond;
   coro_wait_t *completion_wait;
@@ -464,6 +569,7 @@ struct flow_fmq_send_request_s {
   uint64_t profile_socket_thread_cpu_started_ns;
   uint64_t profile_socket_thread_cpu_finished_ns;
   int profile_socket_thread_cpu_available;
+  int profile_socket_shared;
   uint64_t profile_completion_signaled_ns;
 #endif
 };
@@ -474,6 +580,8 @@ struct flow_fmq_send_batch_s {
   flow_fmq_send_request_t **requests;
   turbo_iovec_t *iov;
   size_t *iov_indices;
+  void *iov_storage;
+  size_t iov_capacity;
   flow_fmq_send_batch_item_t *items;
   size_t capacity;
   size_t count;
@@ -485,6 +593,19 @@ struct flow_fmq_send_batch_s {
   int completion_wait_armed;
   int committed;
   int first_status;
+#ifdef TURBO_FLOW_FMQ_INTERNAL_PROFILING
+  int profile_active;
+  uint64_t profile_submit_started_ns;
+  uint64_t profile_payload_prepare_sum_ns;
+  uint64_t profile_graph_publish_sum_ns;
+  uint64_t profile_adapter_consume_sum_ns;
+  uint64_t profile_enqueue_started_ns;
+  uint64_t profile_enqueued_ns;
+  uint64_t profile_post_started_ns;
+  uint64_t profile_post_finished_ns;
+  uint64_t profile_owner_dequeued_ns;
+  uint64_t profile_completion_signaled_ns;
+#endif
 };
 
 static _Thread_local flow_fmq_send_batch_t *flow_fmq_active_send_batch;
@@ -567,6 +688,167 @@ static void flow_fmq_profile_request_socket_end(flow_fmq_send_request_t *request
   }
 }
 
+static void flow_fmq_profile_request_shared_socket_begin(flow_fmq_send_request_t *request) {
+  flow_fmq_profile_request_socket_begin(request);
+  if (request->profile_active) request->profile_socket_shared = 1;
+}
+
+static void flow_fmq_profile_request_shared_socket_end(flow_fmq_send_request_t *request) {
+  flow_fmq_profile_request_socket_end(request);
+}
+
+typedef struct flow_fmq_profile_batch_socket_sample_s {
+  uint64_t started_ns;
+  uint64_t thread_cpu_started_ns;
+  int active;
+  int thread_cpu_available;
+} flow_fmq_profile_batch_socket_sample_t;
+
+static void flow_fmq_profile_batch_socket_begin(
+    flow_fmq_profile_batch_socket_sample_t *sample) {
+  if (!sample) return;
+  memset(sample, 0, sizeof(*sample));
+  sample->active =
+      atomic_load_explicit(&flow_fmq_send_profile.enabled, memory_order_acquire);
+  if (!sample->active) return;
+  sample->started_ns = turbo_hrtime();
+  sample->thread_cpu_available =
+      flow_fmq_profile_thread_cpu_ns(&sample->thread_cpu_started_ns);
+}
+
+static void flow_fmq_profile_batch_socket_end(flow_fmq_profile_batch_socket_sample_t *sample,
+                                              size_t frames, size_t iov_segments) {
+  uint64_t finished_ns;
+  uint64_t socket_wall_ns;
+  uint64_t thread_cpu_finished_ns = 0u;
+  uint64_t thread_cpu_ns = 0u;
+  if (!sample || !sample->active || sample->started_ns == 0u) return;
+  if (sample->thread_cpu_available &&
+      !flow_fmq_profile_thread_cpu_ns(&thread_cpu_finished_ns)) {
+    sample->thread_cpu_available = 0;
+  }
+  finished_ns = turbo_hrtime();
+  socket_wall_ns = flow_fmq_profile_delta(finished_ns, sample->started_ns);
+  flow_fmq_profile_add(&flow_fmq_send_profile.batch_socket_send_sum_ns, socket_wall_ns);
+  flow_fmq_profile_add(&flow_fmq_send_profile.batch_socket_frames, frames);
+  flow_fmq_profile_add(&flow_fmq_send_profile.batch_socket_iov_segments, iov_segments);
+  atomic_fetch_add_explicit(&flow_fmq_send_profile.batch_socket_calls, 1u,
+                            memory_order_relaxed);
+  if (sample->thread_cpu_available) {
+    thread_cpu_ns =
+        flow_fmq_profile_delta(thread_cpu_finished_ns, sample->thread_cpu_started_ns);
+    flow_fmq_profile_add(&flow_fmq_send_profile.batch_socket_cpu_wall_sum_ns,
+                         socket_wall_ns);
+    flow_fmq_profile_add(&flow_fmq_send_profile.batch_socket_thread_cpu_sum_ns,
+                         thread_cpu_ns);
+    atomic_fetch_add_explicit(&flow_fmq_send_profile.batch_socket_cpu_samples, 1u,
+                              memory_order_relaxed);
+  }
+}
+
+static void flow_fmq_profile_batch_begin(flow_fmq_send_batch_t *batch) {
+  batch->profile_active =
+      atomic_load_explicit(&flow_fmq_send_profile.enabled, memory_order_acquire);
+  if (batch->profile_active) batch->profile_submit_started_ns = turbo_hrtime();
+}
+
+static void flow_fmq_profile_batch_enqueued(flow_fmq_send_batch_t *batch) {
+  if (batch->profile_active) batch->profile_enqueued_ns = turbo_hrtime();
+}
+
+static uint64_t flow_fmq_profile_batch_step_begin(const flow_fmq_send_batch_t *batch) {
+  return batch->profile_active ? turbo_hrtime() : 0u;
+}
+
+static void flow_fmq_profile_batch_payload_prepared(flow_fmq_send_batch_t *batch,
+                                                    uint64_t started_ns) {
+  if (batch->profile_active) {
+    batch->profile_payload_prepare_sum_ns +=
+        flow_fmq_profile_delta(turbo_hrtime(), started_ns);
+  }
+}
+
+static void flow_fmq_profile_batch_graph_published(flow_fmq_send_batch_t *batch,
+                                                   uint64_t started_ns) {
+  if (batch->profile_active) {
+    batch->profile_graph_publish_sum_ns +=
+        flow_fmq_profile_delta(turbo_hrtime(), started_ns);
+  }
+}
+
+static void flow_fmq_profile_batch_adapter_consumed(flow_fmq_send_batch_t *batch,
+                                                    uint64_t started_ns) {
+  if (batch->profile_active) {
+    batch->profile_adapter_consume_sum_ns +=
+        flow_fmq_profile_delta(turbo_hrtime(), started_ns);
+  }
+}
+
+static void flow_fmq_profile_batch_enqueue_begin(flow_fmq_send_batch_t *batch) {
+  if (batch->profile_active) batch->profile_enqueue_started_ns = turbo_hrtime();
+}
+
+static void flow_fmq_profile_batch_post_begin(flow_fmq_send_batch_t *batch) {
+  if (batch->profile_active) batch->profile_post_started_ns = turbo_hrtime();
+}
+
+static void flow_fmq_profile_batch_post_end(flow_fmq_send_batch_t *batch) {
+  if (batch->profile_active) batch->profile_post_finished_ns = turbo_hrtime();
+}
+
+static void flow_fmq_profile_batch_owner_dequeued(flow_fmq_send_batch_t *batch) {
+  if (batch->profile_active) batch->profile_owner_dequeued_ns = turbo_hrtime();
+}
+
+static void flow_fmq_profile_batch_completed(flow_fmq_send_batch_t *batch) {
+  if (batch->profile_active) batch->profile_completion_signaled_ns = turbo_hrtime();
+}
+
+static void flow_fmq_profile_batch_record(flow_fmq_send_batch_t *batch,
+                                          uint64_t waiter_resumed_ns) {
+  uint64_t completion_ns;
+  if (!batch->profile_active || batch->profile_submit_started_ns == 0u) return;
+  completion_ns = batch->profile_completion_signaled_ns != 0u
+                      ? batch->profile_completion_signaled_ns
+                      : batch->profile_owner_dequeued_ns;
+  flow_fmq_profile_add(
+      &flow_fmq_send_profile.batch_build_sum_ns,
+      flow_fmq_profile_delta(batch->profile_enqueued_ns, batch->profile_submit_started_ns));
+  flow_fmq_profile_add(&flow_fmq_send_profile.batch_payload_prepare_sum_ns,
+                       batch->profile_payload_prepare_sum_ns);
+  flow_fmq_profile_add(&flow_fmq_send_profile.batch_graph_publish_sum_ns,
+                       batch->profile_graph_publish_sum_ns);
+  flow_fmq_profile_add(&flow_fmq_send_profile.batch_adapter_consume_sum_ns,
+                       batch->profile_adapter_consume_sum_ns);
+  flow_fmq_profile_add(
+      &flow_fmq_send_profile.batch_enqueue_prepare_sum_ns,
+      flow_fmq_profile_delta(batch->profile_enqueued_ns,
+                             batch->profile_enqueue_started_ns));
+  flow_fmq_profile_add(
+      &flow_fmq_send_profile.batch_owner_wait_sum_ns,
+      flow_fmq_profile_delta(batch->profile_owner_dequeued_ns, batch->profile_enqueued_ns));
+  if (batch->profile_post_started_ns != 0u && batch->profile_post_finished_ns != 0u) {
+    flow_fmq_profile_add(
+        &flow_fmq_send_profile.batch_post_call_sum_ns,
+        flow_fmq_profile_delta(batch->profile_post_finished_ns,
+                               batch->profile_post_started_ns));
+    atomic_fetch_add_explicit(&flow_fmq_send_profile.batch_post_samples, 1u,
+                              memory_order_relaxed);
+  }
+  flow_fmq_profile_add(
+      &flow_fmq_send_profile.batch_owner_work_sum_ns,
+      flow_fmq_profile_delta(completion_ns, batch->profile_owner_dequeued_ns));
+  flow_fmq_profile_add(
+      &flow_fmq_send_profile.batch_waiter_wake_sum_ns,
+      flow_fmq_profile_delta(waiter_resumed_ns, completion_ns));
+  flow_fmq_profile_add(
+      &flow_fmq_send_profile.batch_total_sum_ns,
+      flow_fmq_profile_delta(waiter_resumed_ns, batch->profile_submit_started_ns));
+  atomic_fetch_add_explicit(&flow_fmq_send_profile.batch_samples, 1u,
+                            memory_order_relaxed);
+  batch->profile_active = 0;
+}
+
 static void flow_fmq_profile_request_completed(flow_fmq_send_request_t *request) {
   if (request->profile_active) request->profile_completion_signaled_ns = turbo_hrtime();
 }
@@ -596,7 +878,8 @@ static void flow_fmq_profile_request_record(flow_fmq_send_request_t *request,
       &flow_fmq_send_profile.owner_dispatch_sum_ns,
       flow_fmq_profile_delta(request->profile_socket_started_ns,
                              request->profile_owner_dequeued_ns));
-  if (request->profile_socket_started_ns != 0u && request->profile_socket_finished_ns != 0u) {
+  if (!request->profile_socket_shared && request->profile_socket_started_ns != 0u &&
+      request->profile_socket_finished_ns != 0u) {
     uint64_t socket_wall_ns = flow_fmq_profile_delta(request->profile_socket_finished_ns,
                                                      request->profile_socket_started_ns);
     flow_fmq_profile_add(
@@ -638,10 +921,34 @@ static void flow_fmq_profile_request_record_batch(flow_fmq_send_request_t *reque
 #define flow_fmq_profile_request_post_end(request) ((void)(request))
 #define flow_fmq_profile_request_socket_begin(request) ((void)(request))
 #define flow_fmq_profile_request_socket_end(request) ((void)(request))
+#define flow_fmq_profile_request_shared_socket_begin(request) ((void)(request))
+#define flow_fmq_profile_request_shared_socket_end(request) ((void)(request))
 #define flow_fmq_profile_request_completed(request) ((void)(request))
 #define flow_fmq_profile_request_record(request, waiter_resumed_ns)                                  \
   ((void)(request), (void)(waiter_resumed_ns))
 #define flow_fmq_profile_request_record_batch(request) ((void)(request))
+typedef struct flow_fmq_profile_batch_socket_sample_s {
+  int unused;
+} flow_fmq_profile_batch_socket_sample_t;
+#define flow_fmq_profile_batch_socket_begin(sample) ((void)(sample))
+#define flow_fmq_profile_batch_socket_end(sample, frames, iov_segments)                              \
+  ((void)(sample), (void)(frames), (void)(iov_segments))
+#define flow_fmq_profile_batch_begin(batch) ((void)(batch))
+#define flow_fmq_profile_batch_step_begin(batch) ((void)(batch), UINT64_C(0))
+#define flow_fmq_profile_batch_payload_prepared(batch, started_ns)                                 \
+  ((void)(batch), (void)(started_ns))
+#define flow_fmq_profile_batch_graph_published(batch, started_ns)                                  \
+  ((void)(batch), (void)(started_ns))
+#define flow_fmq_profile_batch_adapter_consumed(batch, started_ns)                                 \
+  ((void)(batch), (void)(started_ns))
+#define flow_fmq_profile_batch_enqueue_begin(batch) ((void)(batch))
+#define flow_fmq_profile_batch_enqueued(batch) ((void)(batch))
+#define flow_fmq_profile_batch_post_begin(batch) ((void)(batch))
+#define flow_fmq_profile_batch_post_end(batch) ((void)(batch))
+#define flow_fmq_profile_batch_owner_dequeued(batch) ((void)(batch))
+#define flow_fmq_profile_batch_completed(batch) ((void)(batch))
+#define flow_fmq_profile_batch_record(batch, waiter_resumed_ns)                                     \
+  ((void)(batch), (void)(waiter_resumed_ns))
 #endif
 
 TURBO_DEQUE_DEFINE(flow_fmq_send_requests, flow_fmq_send_request_t *)
@@ -655,6 +962,7 @@ struct flow_fmq_adapter_s {
   coro_socket_t *server;
   flowmq_connect_endpoint_t *connect_endpoint;
   turbo_vec_t peers;
+  turbo_vec_t security_selection;
   tstr_t host;
   tstr_t path;
   tstr_t topic;
@@ -717,7 +1025,9 @@ struct flow_fmq_adapter_s {
   int lane_task_sync_initialized;
   turbo_flow_content_descriptor_t data_descriptor;
   turbo_flow_content_descriptor_t control_descriptor;
+  flowmq_security_binding_runtime_t security;
   int has_data_descriptor;
+  int security_selection_initialized;
 };
 
 static void flow_fmq_server_handler(coro_socket_t *client, void *arg);
@@ -726,6 +1036,8 @@ static int flow_fmq_publish(flow_fmq_adapter_t *adapter, flow_fmq_peer_t *peer,
 static int flow_fmq_reserve_drop_oldest(flow_fmq_adapter_t *adapter, size_t frame_bytes);
 static void flow_fmq_fail_peer_send_queue(flow_fmq_peer_t *peer, int status);
 static void flow_fmq_request_release(flow_fmq_send_request_t *request);
+static int flow_fmq_request_encoded_topic(const flow_fmq_send_request_t *request,
+                                          size_t max_frame_size, tstr_v *topic);
 
 static int flow_fmq_allocate_adapter_instance_id(uint64_t *out) {
   uint64_t current;
@@ -784,6 +1096,39 @@ static void flow_fmq_emit_event(flow_fmq_adapter_t *adapter, turbo_flow_fmq_even
   if (peer_topic.data || peer_topic.len != 0) event.peer_topic = peer_topic;
   event.reconnect_delay_ms = reconnect_delay_ms;
   adapter->event_callback(adapter->event_ctx, &event);
+}
+
+static int flow_fmq_peer_authorize(flow_fmq_adapter_t *adapter, flow_fmq_peer_t *peer,
+                                   uint32_t action, tstr_v resource, int emit_denial) {
+  char resource_text[TURBO_FLOW_FMQ_MAX_TOPIC_SIZE + 1u];
+  const char *selected_resource;
+  int rc;
+  if (!adapter || !peer) return TURBO_EINVAL;
+  if (!adapter->security.enabled) return TURBO_OK;
+  if (!peer->authenticated) return TURBO_EPERM;
+  if (resource.len > TURBO_FLOW_FMQ_MAX_TOPIC_SIZE || (resource.len != 0u && !resource.data))
+    return TURBO_EMSGSIZE;
+  if (resource.len != 0u && memchr(resource.data, '\0', resource.len) != NULL) {
+    if (emit_denial) {
+      flow_fmq_emit_event(adapter, TURBO_FLOW_FMQ_EVENT_AUTHORIZATION_DENIED, TURBO_EPERM, peer,
+                          (tstr_v){0}, resource, 0u);
+    }
+    return TURBO_EPERM;
+  }
+  if (resource.len == 0u) {
+    selected_resource = adapter->connection_uid;
+  } else {
+    memcpy(resource_text, resource.data, resource.len);
+    resource_text[resource.len] = '\0';
+    selected_resource = resource_text;
+  }
+  rc = flowmq_security_authorize(&adapter->security, &peer->principal, action,
+                                 TURBO_FLOW_SECURITY_RESOURCE_GENERIC, selected_resource, NULL);
+  if (rc != TURBO_OK && emit_denial) {
+    flow_fmq_emit_event(adapter, TURBO_FLOW_FMQ_EVENT_AUTHORIZATION_DENIED, TURBO_EPERM, peer,
+                        (tstr_v){0}, resource, 0u);
+  }
+  return rc;
 }
 
 static void flow_fmq_emit_peer_disconnected(flow_fmq_adapter_t *adapter, flow_fmq_peer_t *peer,
@@ -915,7 +1260,7 @@ static int flow_fmq_reader_consume(flow_fmq_reader_t *reader, size_t count) {
 
 static int flow_fmq_reader_next(coro_socket_t *socket, flow_fmq_reader_t *reader,
                                 size_t max_frame_size, uint64_t receive_deadline_ns,
-                                flow_fmq_frame_t *frame, size_t *consumed) {
+                                int sensitive, flow_fmq_frame_t *frame, size_t *consumed) {
   int rc;
   if (!socket || !reader || !frame || !consumed) return TURBO_EINVAL;
   rc = flowmq_stream_decoder_prepare(reader, max_frame_size);
@@ -945,10 +1290,12 @@ static int flow_fmq_reader_next(coro_socket_t *socket, flow_fmq_reader_t *reader
         return TURBO_EOF;
       }
       if (chunk_len > flowmq_stream_decoder_available(reader)) {
+        if (sensitive) flowmq_security_clear(chunk, chunk_len);
         coro_socket_free_recv(chunk);
         return TURBO_EMSGSIZE;
       }
       rc = flowmq_stream_decoder_append(reader, chunk, chunk_len);
+      if (sensitive) flowmq_security_clear(chunk, chunk_len);
       coro_socket_free_recv(chunk);
       if (rc != TURBO_OK) return rc;
     }
@@ -971,11 +1318,22 @@ static int flow_fmq_socket_sendv(flow_fmq_adapter_t *adapter, coro_socket_t *soc
 
 static int flow_fmq_send_hello(flow_fmq_adapter_t *adapter, coro_socket_t *socket) {
   tstr_t encoded = NULL;
+  tstr_t security_payload = NULL;
   int rc;
   if (!adapter || !socket) return TURBO_EINVAL;
-  rc = flowmq_pattern_encode_hello(adapter->pattern, tstr_to_v(adapter->identity),
-                                   tstr_to_v(adapter->topic), adapter->max_frame_size, &encoded);
+  if (adapter->security.enabled) {
+    rc = flowmq_security_server_accept(&adapter->security, socket, &security_payload);
+  } else {
+    security_payload = tstr_new_len(NULL, 0u);
+    rc = security_payload ? TURBO_OK : TURBO_ENOMEM;
+  }
+  if (rc == TURBO_OK) {
+    rc = flowmq_pattern_encode_hello_ex(adapter->pattern, tstr_to_v(adapter->identity),
+                                        tstr_to_v(adapter->topic), tstr_to_v(security_payload),
+                                        adapter->max_frame_size, &encoded);
+  }
   if (rc == TURBO_OK) rc = flow_fmq_socket_send(adapter, socket, encoded, tstr_len(encoded));
+  tstr_freep(&security_payload);
   tstr_freep(&encoded);
   return rc;
 }
@@ -996,7 +1354,8 @@ static int flow_fmq_send_control(flow_fmq_adapter_t *adapter, coro_socket_t *soc
 static int flow_fmq_read_hello(flow_fmq_adapter_t *adapter, coro_socket_t *socket,
                                flow_fmq_reader_t *reader, flow_fmq_frame_t *hello,
                                size_t *consumed) {
-  int rc = flow_fmq_reader_next(socket, reader, adapter->max_frame_size, 0u, hello, consumed);
+  int rc = flow_fmq_reader_next(socket, reader, adapter->max_frame_size, 0u,
+                                adapter->security.enabled, hello, consumed);
   if (rc != TURBO_OK) return rc;
   rc = flowmq_pattern_hello_validate(adapter->pattern, hello);
   if (rc != TURBO_OK) {
@@ -1253,6 +1612,9 @@ static int flow_fmq_receive_subscription(flow_fmq_adapter_t *adapter, flow_fmq_p
       (frame->kind != FLOW_FMQ_FRAME_SUBSCRIBE && frame->kind != FLOW_FMQ_FRAME_UNSUBSCRIBE)) {
     return TURBO_EPROTO;
   }
+  rc = flow_fmq_peer_authorize(adapter, peer, TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE, frame->topic,
+                               1);
+  if (rc != TURBO_OK) return TURBO_EPERM;
   rc = flow_fmq_peer_subscription_update(peer, frame->kind == FLOW_FMQ_FRAME_SUBSCRIBE,
                                          frame->topic, &changed);
   if (rc != TURBO_OK || !changed) return rc;
@@ -1317,8 +1679,8 @@ static int flow_fmq_receive_data(flow_fmq_adapter_t *adapter, flow_fmq_peer_t *p
         break;
       }
     }
-    rc = flow_fmq_reader_next(socket, reader, adapter->max_frame_size, receive_deadline_ns, &frame,
-                              &consumed);
+    rc = flow_fmq_reader_next(socket, reader, adapter->max_frame_size, receive_deadline_ns, 0,
+                              &frame, &consumed);
     if (rc == TURBO_ETIMEDOUT && heartbeat_enabled) continue;
     if (rc != TURBO_OK) return rc;
     if (heartbeat_enabled) {
@@ -1351,6 +1713,17 @@ static int flow_fmq_receive_data(flow_fmq_adapter_t *adapter, flow_fmq_peer_t *p
     if (rc != TURBO_OK) {
       flow_fmq_frame_cleanup(&frame);
       return rc;
+    }
+    if (adapter->security.enabled) {
+      uint32_t action = adapter->pattern == TURBO_FLOW_FMQ_REP
+                            ? TURBO_FLOW_SECURITY_ACTION_EXECUTE
+                            : TURBO_FLOW_SECURITY_ACTION_WRITE;
+      rc = flow_fmq_peer_authorize(adapter, peer, action, frame.topic, 1);
+      if (rc != TURBO_OK) {
+        flow_fmq_reader_consume(reader, consumed);
+        flow_fmq_frame_cleanup(&frame);
+        return TURBO_EPERM;
+      }
     }
     if (adapter->pattern == TURBO_FLOW_FMQ_REP) {
       uint64_t generation = 0u;
@@ -1400,20 +1773,65 @@ static void flow_fmq_server_handler(coro_socket_t *client, void *arg) {
   if (rc != TURBO_OK) goto done;
   (void)tf_coronet_apply_socket_timeout(client, &adapter->timeouts, TF_CORONET_TIMEOUT_RECV);
   rc = flow_fmq_read_hello(adapter, client, &peer->reader, &hello, &consumed);
-  if (rc != TURBO_OK) goto done;
+  if (rc != TURBO_OK) {
+    if (adapter->security.enabled) {
+      flow_fmq_emit_event(adapter, TURBO_FLOW_FMQ_EVENT_AUTHENTICATION_FAILED, TURBO_EPERM, NULL,
+                          (tstr_v){0}, (tstr_v){0}, 0u);
+    }
+    goto done;
+  }
+  if (adapter->security.enabled) {
+    rc = flowmq_security_server_authenticate(
+        &adapter->security, client, hello.identity, hello.payload, adapter->connection_uid,
+        &peer->principal);
+    if (rc != TURBO_OK) {
+      flow_fmq_emit_event(adapter, TURBO_FLOW_FMQ_EVENT_AUTHENTICATION_FAILED, TURBO_EPERM, NULL,
+                          hello.identity, (tstr_v){0}, 0u);
+      (void)flowmq_stream_decoder_consume_sensitive(&peer->reader, consumed);
+      consumed = 0u;
+      rc = TURBO_EPERM;
+      goto done;
+    }
+    peer->authenticated = 1;
+  } else {
+    flowmq_protocol_security_t security;
+    rc = flowmq_protocol_security_decode(hello.payload, &security);
+    if (rc != TURBO_OK || security.mode != FLOWMQ_PROTOCOL_SECURITY_NONE) {
+      rc = TURBO_EPERM;
+      goto done;
+    }
+  }
   if (adapter->fanout_enabled && hello.identity.len == 0u) {
     rc = TURBO_EPROTO;
     goto done;
   }
   peer->identity = tstr_from_v(hello.identity);
   peer->topic = tstr_from_v(hello.topic);
+  if (adapter->security.enabled) {
+    int clear_rc = flowmq_stream_decoder_consume_sensitive(&peer->reader, consumed);
+    consumed = 0u;
+    if (clear_rc != TURBO_OK) {
+      rc = clear_rc;
+      goto done;
+    }
+  }
   if ((hello.identity.len > 0 && !peer->identity) || (hello.topic.len > 0 && !peer->topic)) {
     rc = TURBO_ENOMEM;
     goto done;
   }
+  if (adapter->security.enabled && adapter->pattern == TURBO_FLOW_FMQ_PUB) {
+    tstr_v subscription = tstr_to_v(peer->topic);
+    if (subscription.len == 0u) subscription = tstr_v_from_cstr("*");
+    rc = flow_fmq_peer_authorize(adapter, peer, TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE,
+                                 subscription, 1);
+    if (rc != TURBO_OK) {
+      rc = TURBO_EPERM;
+      goto done;
+    }
+  }
   rc = flow_fmq_peer_send_queue_init(peer);
   if (rc != TURBO_OK) goto done;
-  flow_fmq_reader_consume(&peer->reader, consumed);
+  if (consumed != 0u) flow_fmq_reader_consume(&peer->reader, consumed);
   rc = flow_fmq_send_hello(adapter, client);
   if (rc != TURBO_OK) goto done;
   rc = flow_fmq_add_peer(adapter, peer);
@@ -1428,7 +1846,11 @@ static void flow_fmq_server_handler(coro_socket_t *client, void *arg) {
   flow_fmq_remove_peer(adapter, peer);
   peer_added = 0;
 done:
-  (void)rc;
+  if (peer && adapter->security.enabled && peer->authenticated && !peer_added && rc != TURBO_OK &&
+      rc != TURBO_EPERM) {
+    flow_fmq_emit_event(adapter, TURBO_FLOW_FMQ_EVENT_AUTHENTICATION_FAILED, rc, peer,
+                        (tstr_v){0}, (tstr_v){0}, 0u);
+  }
   if (peer) {
     peer->closing = 1;
     if (peer_added) flow_fmq_remove_peer(adapter, peer);
@@ -1440,7 +1862,10 @@ done:
       coro_sleep(adapter->ctx, 1);
     flow_fmq_peer_send_queue_destroy(peer);
     flow_fmq_peer_subscriptions_destroy(peer);
-    flow_fmq_reader_destroy(&peer->reader);
+    if (adapter->security.enabled)
+      flowmq_stream_decoder_destroy_sensitive(&peer->reader);
+    else
+      flow_fmq_reader_destroy(&peer->reader);
     tstr_freep(&peer->identity);
     tstr_freep(&peer->topic);
     free(peer);
@@ -1796,7 +2221,7 @@ static int flow_fmq_resource_document(void *ctx, turbo_flow_resource_document_ki
   return rc;
 }
 
-static int flow_fmq_topic_matches(const flow_fmq_adapter_t *adapter, const flow_fmq_peer_t *peer,
+static int flow_fmq_topic_matches(flow_fmq_adapter_t *adapter, flow_fmq_peer_t *peer,
                                   tstr_v topic) {
   if (!adapter || !peer || peer->closing) return 0;
   if (adapter->pattern == TURBO_FLOW_FMQ_XPUB) {
@@ -1807,6 +2232,18 @@ static int flow_fmq_topic_matches(const flow_fmq_adapter_t *adapter, const flow_
     return prefix_len == 0u ||
            (topic.len >= prefix_len && memcmp(topic.data, peer->topic, prefix_len) == 0);
   }
+}
+
+static int flow_fmq_fanout_selected(flow_fmq_adapter_t *adapter, size_t peer_index,
+                                    flow_fmq_peer_t *peer, tstr_v topic) {
+  const uint8_t *selected;
+  if (!adapter || !peer || !adapter->security_selection_initialized ||
+      peer_index >= turbo_vec_size(&adapter->security_selection) ||
+      !flow_fmq_topic_matches(adapter, peer, topic)) {
+    return 0;
+  }
+  selected = (const uint8_t *)turbo_vec_at_const(&adapter->security_selection, peer_index);
+  return selected && *selected != 0u;
 }
 
 static void flow_fmq_release_send_budget(flow_fmq_adapter_t *adapter, size_t frame_bytes) {
@@ -1855,21 +2292,66 @@ static void flow_fmq_request_mark_delivery(flow_fmq_send_request_t *request,
   turbo_mutex_unlock(&request->mutex);
 }
 
+static int flow_fmq_request_build_iov(const flow_fmq_send_request_t *request,
+                                      turbo_iovec_t *stack_iov, size_t stack_capacity,
+                                      turbo_iovec_t **iov, size_t *iovcnt) {
+  if (!request || !request->segmented_frame.storage || !stack_iov || stack_capacity == 0u ||
+      !iov || !iovcnt) {
+    return TURBO_EINVAL;
+  }
+  *iovcnt = request->segmented_frame.segment_count;
+  if (*iovcnt == 0u || *iovcnt > SIZE_MAX / sizeof(**iov)) return TURBO_ERANGE;
+  *iov = stack_iov;
+  if (*iovcnt > stack_capacity) {
+    *iov = (turbo_iovec_t *)mem_alloc(mem_global(), *iovcnt * sizeof(**iov));
+    if (!*iov) return TURBO_ENOMEM;
+  }
+  for (size_t i = 0u; i < *iovcnt; ++i) {
+    (*iov)[i].data = (const char *)request->segmented_frame.segments[i].data;
+    (*iov)[i].len = request->segmented_frame.segments[i].size;
+  }
+  return TURBO_OK;
+}
+
 static int flow_fmq_request_socket_send(flow_fmq_send_request_t *request, coro_socket_t *socket) {
+  turbo_iovec_t stack_iov[FLOW_FMQ_STACK_IOV_CAPACITY];
+  turbo_iovec_t *iov = stack_iov;
+  size_t iovcnt;
   int rc = flow_fmq_request_begin_socket_send(request);
   if (rc != TURBO_OK) return rc;
   flow_fmq_profile_request_socket_begin(request);
-  rc = flow_fmq_socket_send(request->adapter, socket, request->frame, tstr_len(request->frame));
+  if (!request->segmented_frame.storage) {
+    rc = flow_fmq_socket_send(request->adapter, socket, request->frame, tstr_len(request->frame));
+  } else {
+    rc = flow_fmq_request_build_iov(request, stack_iov, FLOW_FMQ_STACK_IOV_CAPACITY, &iov,
+                                    &iovcnt);
+    if (rc != TURBO_OK) goto send_done;
+    rc = flow_fmq_socket_sendv(request->adapter, socket, iov, iovcnt);
+    if (iov != stack_iov) mem_free(mem_global(), iov);
+  }
+send_done:
   flow_fmq_profile_request_socket_end(request);
   return rc;
 }
 
 static int flow_fmq_request_connect_endpoint_send(flow_fmq_send_request_t *request) {
+  turbo_iovec_t stack_iov[FLOW_FMQ_STACK_IOV_CAPACITY];
+  turbo_iovec_t *iov = stack_iov;
+  size_t iovcnt;
   int rc = flow_fmq_request_begin_socket_send(request);
   if (rc != TURBO_OK) return rc;
   flow_fmq_profile_request_socket_begin(request);
-  rc = flowmq_connect_endpoint_send(request->adapter->connect_endpoint, request->frame,
-                                    tstr_len(request->frame));
+  if (!request->segmented_frame.storage) {
+    rc = flowmq_connect_endpoint_send(request->adapter->connect_endpoint, request->frame,
+                                      tstr_len(request->frame));
+  } else {
+    rc = flow_fmq_request_build_iov(request, stack_iov, FLOW_FMQ_STACK_IOV_CAPACITY, &iov,
+                                    &iovcnt);
+    if (rc != TURBO_OK) goto send_done;
+    rc = flowmq_connect_endpoint_sendv(request->adapter->connect_endpoint, iov, iovcnt);
+    if (iov != stack_iov) mem_free(mem_global(), iov);
+  }
+send_done:
   flow_fmq_profile_request_socket_end(request);
   return rc;
 }
@@ -2005,7 +2487,7 @@ static void flow_fmq_release_peer_reservations(flow_fmq_adapter_t *adapter, tstr
   if (end_index > count) end_index = count;
   for (size_t i = 0; i < end_index; ++i) {
     flow_fmq_peer_t *const *slot = (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, i);
-    if (!slot || !*slot || !flow_fmq_topic_matches(adapter, *slot, topic)) continue;
+    if (!slot || !*slot || !flow_fmq_fanout_selected(adapter, i, *slot, topic)) continue;
     (void)tf_io_budget_release(&(*slot)->send_budget, frame_bytes);
   }
 }
@@ -2017,7 +2499,7 @@ static void flow_fmq_rollback_fanout_enqueue(flow_fmq_adapter_t *adapter,
     flow_fmq_peer_t *const *slot = (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, i);
     flow_fmq_send_request_t **back;
     flow_fmq_send_request_t *removed = NULL;
-    if (!slot || !*slot || !flow_fmq_topic_matches(adapter, *slot, topic)) continue;
+    if (!slot || !*slot || !flow_fmq_fanout_selected(adapter, i, *slot, topic)) continue;
     back = flow_fmq_peer_send_requests_back(&(*slot)->send_queue);
     if (back && *back == request) {
       (void)flow_fmq_peer_send_requests_pop_back(&(*slot)->send_queue, &removed);
@@ -2060,13 +2542,24 @@ static int flow_fmq_enqueue_fanout(flow_fmq_send_request_t *request, tstr_v topi
   if (!request || !(adapter = request->adapter) || !adapter->fanout_enabled) {
     return TURBO_EINVAL;
   }
+  if (!adapter->security_selection_initialized) return TURBO_EPROTO;
+  memset(turbo_vec_data(&adapter->security_selection), 0,
+         turbo_vec_size(&adapter->security_selection));
   rc = flow_fmq_peer_selection_begin(adapter, TURBO_FLOW_PATTERN_SELECT_FAN_OUT, &selection);
   if (rc == TURBO_ENOENT) return TURBO_ENOTCONN;
   if (rc != TURBO_OK) return rc;
   while ((rc = turbo_flow_pattern_selection_next(&selection, &peer_index)) == TURBO_OK) {
     flow_fmq_peer_t *const *slot =
         (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
+    uint8_t *selected;
     if (!slot || !*slot || !flow_fmq_topic_matches(adapter, *slot, topic)) continue;
+    if (flow_fmq_peer_authorize(adapter, *slot, TURBO_FLOW_SECURITY_ACTION_READ, topic, 1) !=
+        TURBO_OK) {
+      continue;
+    }
+    selected = (uint8_t *)turbo_vec_at(&adapter->security_selection, peer_index);
+    if (!selected) return TURBO_EPROTO;
+    *selected = 1u;
     matched += 1u;
     rc = flow_fmq_reserve_peer_queue_slot(*slot);
     if (rc != TURBO_OK) return rc;
@@ -2080,7 +2573,9 @@ static int flow_fmq_enqueue_fanout(flow_fmq_send_request_t *request, tstr_v topi
     flow_fmq_peer_t *const *slot =
         (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
     flow_fmq_peer_t *peer;
-    if (!slot || !(peer = *slot) || !flow_fmq_topic_matches(adapter, peer, topic)) continue;
+    if (!slot || !(peer = *slot) ||
+        !flow_fmq_fanout_selected(adapter, peer_index, peer, topic))
+      continue;
     rc = adapter->fanout.slow_peer_policy == TURBO_FLOW_FMQ_SLOW_PEER_DROP_OLDEST
              ? flow_fmq_acquire_peer_drop_oldest(peer, request)
              : tf_io_budget_acquire(&peer->send_budget, request->budget_bytes);
@@ -2123,7 +2618,7 @@ static int flow_fmq_enqueue_fanout(flow_fmq_send_request_t *request, tstr_v topi
   while ((rc = turbo_flow_pattern_selection_next(&selection, &peer_index)) == TURBO_OK) {
     flow_fmq_peer_t *const *slot =
         (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
-    if (!slot || !*slot || !flow_fmq_topic_matches(adapter, *slot, topic)) continue;
+    if (!slot || !*slot || !flow_fmq_fanout_selected(adapter, peer_index, *slot, topic)) continue;
     rc = flow_fmq_peer_send_requests_push_back(&(*slot)->send_queue, request);
     if (rc != TURBO_OK) {
       flow_fmq_rollback_fanout_enqueue(adapter, request, topic);
@@ -2142,7 +2637,7 @@ static int flow_fmq_enqueue_fanout(flow_fmq_send_request_t *request, tstr_v topi
   while ((rc = turbo_flow_pattern_selection_next(&selection, &peer_index)) == TURBO_OK) {
     flow_fmq_peer_t *const *slot =
         (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
-    if (!slot || !*slot || !flow_fmq_topic_matches(adapter, *slot, topic)) continue;
+    if (!slot || !*slot || !flow_fmq_fanout_selected(adapter, peer_index, *slot, topic)) continue;
     rc = flow_fmq_schedule_peer_send_drain(*slot);
     if (rc != TURBO_OK) {
       flow_fmq_rollback_fanout_enqueue(adapter, request, topic);
@@ -2164,7 +2659,12 @@ static int flow_fmq_send_frame_now(flow_fmq_send_request_t *request) {
     return TURBO_ESHUTDOWN;
   if (request->route.session_id != 0u) {
     flow_fmq_peer_t *peer = flow_fmq_find_peer(adapter, request->route);
+    tstr_v topic;
     if (!peer) return TURBO_ENOTCONN;
+    rc = flow_fmq_request_encoded_topic(request, adapter->max_frame_size, &topic);
+    if (rc != TURBO_OK) return rc;
+    rc = flow_fmq_peer_authorize(adapter, peer, TURBO_FLOW_SECURITY_ACTION_READ, topic, 1);
+    if (rc != TURBO_OK) return TURBO_EPERM;
     rc = flow_fmq_request_socket_send(request, peer->socket);
     if (rc == TURBO_OK) flow_fmq_request_mark_delivery(request, FLOW_FMQ_DELIVERY_DELIVERED);
     return rc;
@@ -2175,8 +2675,7 @@ static int flow_fmq_send_frame_now(flow_fmq_send_request_t *request) {
     tstr_v topic;
     turbo_flow_pattern_selection_iterator_t selection = TURBO_FLOW_PATTERN_SELECTION_ITERATOR_INIT;
     size_t peer_index;
-    if (flow_fmq_encoded_topic(request->frame, tstr_len(request->frame), adapter->max_frame_size,
-                               &topic) != TURBO_OK) {
+    if (flow_fmq_request_encoded_topic(request, adapter->max_frame_size, &topic) != TURBO_OK) {
       return TURBO_EPROTO;
     }
     if (adapter->fanout_enabled) return flow_fmq_enqueue_fanout(request, topic);
@@ -2189,6 +2688,10 @@ static int flow_fmq_send_frame_now(flow_fmq_send_request_t *request) {
           (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
       int peer_rc;
       if (!peer || !*peer || !flow_fmq_topic_matches(adapter, *peer, topic)) continue;
+      if (flow_fmq_peer_authorize(adapter, *peer, TURBO_FLOW_SECURITY_ACTION_READ, topic, 1) !=
+          TURBO_OK) {
+        continue;
+      }
       peer_rc = flow_fmq_request_socket_send(request, (*peer)->socket);
       if (peer_rc == TURBO_OK) {
         sent += 1;
@@ -2207,15 +2710,27 @@ static int flow_fmq_send_frame_now(flow_fmq_send_request_t *request) {
   if (adapter->pattern == TURBO_FLOW_FMQ_PUSH) {
     size_t count = turbo_vec_size(&adapter->peers);
     size_t index;
-    flow_fmq_peer_t *const *peer;
-    turbo_flow_pattern_selection_iterator_t selection = TURBO_FLOW_PATTERN_SELECTION_ITERATOR_INIT;
+    flow_fmq_peer_t *const *peer = NULL;
+    tstr_v topic;
     if (count == 0) return TURBO_ENOTCONN;
-    rc = turbo_flow_pattern_selection_begin(
-        &adapter->selector, TURBO_FLOW_PATTERN_SELECT_ROUND_ROBIN, count, &selection);
+    rc = flow_fmq_request_encoded_topic(request, adapter->max_frame_size, &topic);
     if (rc != TURBO_OK) return rc;
-    rc = turbo_flow_pattern_selection_next(&selection, &index);
-    if (rc != TURBO_OK) return rc;
-    peer = (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, index);
+    for (size_t attempt = 0u; attempt < count; ++attempt) {
+      turbo_flow_pattern_selection_iterator_t selection =
+          TURBO_FLOW_PATTERN_SELECTION_ITERATOR_INIT;
+      rc = turbo_flow_pattern_selection_begin(
+          &adapter->selector, TURBO_FLOW_PATTERN_SELECT_ROUND_ROBIN, count, &selection);
+      if (rc != TURBO_OK) return rc;
+      rc = turbo_flow_pattern_selection_next(&selection, &index);
+      if (rc != TURBO_OK) return rc;
+      peer = (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, index);
+      if (peer && *peer &&
+          flow_fmq_peer_authorize(adapter, *peer, TURBO_FLOW_SECURITY_ACTION_READ, topic, 0) ==
+              TURBO_OK) {
+        break;
+      }
+      peer = NULL;
+    }
     if (!peer || !*peer) return TURBO_ENOTCONN;
     rc = flow_fmq_request_socket_send(request, (*peer)->socket);
     if (rc == TURBO_OK) flow_fmq_request_mark_delivery(request, FLOW_FMQ_DELIVERY_DELIVERED);
@@ -2235,13 +2750,15 @@ static int flow_fmq_send_frame_now(flow_fmq_send_request_t *request) {
 static void flow_fmq_request_release(flow_fmq_send_request_t *request) {
   if (atomic_fetch_sub_explicit(&request->refs, 1, memory_order_acq_rel) != 1) return;
   tstr_freep(&request->frame);
+  flow_fmq_segmented_frame_cleanup(&request->segmented_frame);
+  mem_buffer_release(request->payload_buffer);
   if (request->completion_wait) {
     (void)coro_wait_destroy(request->completion_wait);
     request->completion_wait = NULL;
   }
   turbo_cond_destroy(&request->cond);
   turbo_mutex_destroy(&request->mutex);
-  free(request);
+  mem_free(mem_global(), request);
 }
 
 static void flow_fmq_send_batch_release(flow_fmq_send_batch_t *batch) {
@@ -2252,7 +2769,8 @@ static void flow_fmq_send_batch_release(flow_fmq_send_batch_t *batch) {
   }
   turbo_cond_destroy(&batch->cond);
   turbo_mutex_destroy(&batch->mutex);
-  free(batch);
+  mem_free(mem_global(), batch->iov_storage);
+  mem_free(mem_global(), batch);
 }
 
 static void flow_fmq_retry_batch_wait_interrupt(void *arg1, void *arg2) {
@@ -2267,17 +2785,23 @@ static void flow_fmq_retry_batch_wait_interrupt(void *arg1, void *arg2) {
   flow_fmq_send_batch_release(batch);
 }
 
-static void flow_fmq_send_batch_complete(flow_fmq_send_batch_t *batch, int status) {
+static void flow_fmq_send_batch_complete_n(flow_fmq_send_batch_t *batch, int status,
+                                           size_t completed_count) {
   coro_wait_t *wait = NULL;
   int completed = 0;
   int wait_rc;
-  if (!batch) return;
+  if (!batch || completed_count == 0u) return;
   turbo_mutex_lock(&batch->mutex);
   if (batch->first_status == TURBO_OK && status != TURBO_OK) batch->first_status = status;
   if (batch->completed < batch->count) {
-    batch->completed++;
+    const size_t remaining = batch->count - batch->completed;
+    if (completed_count > remaining && batch->first_status == TURBO_OK) {
+      batch->first_status = TURBO_EPROTO;
+    }
+    batch->completed += completed_count < remaining ? completed_count : remaining;
     completed = batch->completed == batch->count;
   }
+  if (completed) flow_fmq_profile_batch_completed(batch);
   if (completed && batch->completion_wait_armed) wait = batch->completion_wait;
   if (completed) turbo_cond_broadcast(&batch->cond);
   turbo_mutex_unlock(&batch->mutex);
@@ -2292,6 +2816,10 @@ static void flow_fmq_send_batch_complete(flow_fmq_send_batch_t *batch, int statu
     }
   }
   if (completed) flow_fmq_send_batch_release(batch);
+}
+
+static void flow_fmq_send_batch_complete(flow_fmq_send_batch_t *batch, int status) {
+  flow_fmq_send_batch_complete_n(batch, status, 1u);
 }
 
 static void flow_fmq_retry_send_wait_interrupt(void *arg1, void *arg2) {
@@ -2347,6 +2875,25 @@ static void flow_fmq_complete_send_request(flow_fmq_send_request_t *request, int
     flow_fmq_send_batch_complete(batch, status);
     flow_fmq_profile_request_record_batch(request);
   }
+  flow_fmq_request_release(request);
+}
+
+/* The drain owns a fully collected batch, and its requests have no individual waiter. */
+static void flow_fmq_complete_owned_batch_request(flow_fmq_send_request_t *request, int status) {
+  if (!request) return;
+  flow_fmq_profile_request_completed(request);
+  request->status = status;
+  request->done = 1;
+  flow_fmq_emit_frame_event(request->adapter,
+                            status == TURBO_OK ? TURBO_FLOW_FMQ_EVENT_FRAME_SENT
+                                               : TURBO_FLOW_FMQ_EVENT_FRAME_DROPPED,
+                            status, request->budget_bytes);
+  if (request->budget_reserved) {
+    flow_fmq_release_send_budget(request->adapter, request->budget_bytes);
+    request->budget_reserved = 0;
+  }
+  request->batch = NULL;
+  flow_fmq_profile_request_record_batch(request);
   flow_fmq_request_release(request);
 }
 
@@ -2434,8 +2981,82 @@ static flow_fmq_send_batch_mode_t flow_fmq_send_batch_mode(
   return FLOW_FMQ_SEND_BATCH_NONE;
 }
 
+static size_t flow_fmq_request_iov_count(const flow_fmq_send_request_t *request) {
+  if (!request) return 0u;
+  return request->segmented_frame.storage ? request->segmented_frame.segment_count : 1u;
+}
+
+static int flow_fmq_send_batch_prepare_iov(flow_fmq_send_batch_t *batch) {
+  size_t iov_capacity = 0u;
+  size_t iov_bytes;
+  size_t index_bytes;
+  size_t allocation_size;
+  unsigned char *storage;
+  if (!batch || batch->iov_storage) return TURBO_EINVAL;
+  for (size_t i = 0u; i < batch->count; ++i) {
+    size_t request_count = flow_fmq_request_iov_count(batch->requests[i]);
+    if (request_count == 0u || request_count > SIZE_MAX - iov_capacity) return TURBO_ERANGE;
+    iov_capacity += request_count;
+  }
+  if (iov_capacity > SIZE_MAX / sizeof(*batch->iov)) return TURBO_ERANGE;
+  iov_bytes = iov_capacity * sizeof(*batch->iov);
+  if (iov_capacity > SIZE_MAX / sizeof(*batch->iov_indices)) return TURBO_ERANGE;
+  index_bytes = iov_capacity * sizeof(*batch->iov_indices);
+  if (iov_bytes > SIZE_MAX - index_bytes) return TURBO_ERANGE;
+  allocation_size = iov_bytes + index_bytes;
+  storage = (unsigned char *)mem_alloc(mem_global(), allocation_size);
+  if (!storage) return TURBO_ENOMEM;
+  batch->iov_storage = storage;
+  batch->iov = (turbo_iovec_t *)storage;
+  batch->iov_indices = (size_t *)(storage + iov_bytes);
+  batch->iov_capacity = iov_capacity;
+  return TURBO_OK;
+}
+
+static int flow_fmq_send_batch_append_request_iov(flow_fmq_send_batch_t *batch,
+                                                  size_t request_index, size_t *iovcnt) {
+  flow_fmq_send_request_t *request;
+  size_t required;
+  if (!batch || !iovcnt || request_index >= batch->count ||
+      !(request = batch->requests[request_index])) {
+    return TURBO_EINVAL;
+  }
+  required = flow_fmq_request_iov_count(request);
+  if (required == 0u || *iovcnt > batch->iov_capacity ||
+      required > batch->iov_capacity - *iovcnt) {
+    return TURBO_ERANGE;
+  }
+  if (request->segmented_frame.storage) {
+    for (size_t i = 0u; i < required; ++i) {
+      batch->iov[*iovcnt].data =
+          (const char *)request->segmented_frame.segments[i].data;
+      batch->iov[*iovcnt].len = request->segmented_frame.segments[i].size;
+      batch->iov_indices[*iovcnt] = request_index;
+      *iovcnt += 1u;
+    }
+  } else {
+    batch->iov[*iovcnt].data = request->frame;
+    batch->iov[*iovcnt].len = tstr_len(request->frame);
+    batch->iov_indices[*iovcnt] = request_index;
+    *iovcnt += 1u;
+  }
+  return TURBO_OK;
+}
+
+static int flow_fmq_request_encoded_topic(const flow_fmq_send_request_t *request,
+                                          size_t max_frame_size, tstr_v *topic) {
+  if (!request || !topic) return TURBO_EINVAL;
+  if (request->segmented_frame.storage) {
+    *topic = request->encoded_topic;
+    return TURBO_OK;
+  }
+  return flow_fmq_encoded_topic(request->frame, tstr_len(request->frame), max_frame_size, topic);
+}
+
 static void flow_fmq_send_connect_batch(flow_fmq_send_batch_t *batch) {
+  flow_fmq_profile_batch_socket_sample_t socket_sample;
   size_t count;
+  size_t iovcnt = 0u;
   int rc = TURBO_OK;
   if (!batch || !batch->adapter) return;
   count = batch->count;
@@ -2447,21 +3068,26 @@ static void flow_fmq_send_connect_batch(flow_fmq_send_batch_t *batch) {
     }
     rc = flow_fmq_request_begin_socket_send(request);
     if (rc != TURBO_OK) break;
-    flow_fmq_profile_request_socket_begin(request);
-    batch->iov[i].data = request->frame;
-    batch->iov[i].len = tstr_len(request->frame);
+    flow_fmq_profile_request_shared_socket_begin(request);
+    rc = flow_fmq_send_batch_append_request_iov(batch, i, &iovcnt);
+    if (rc != TURBO_OK) break;
   }
   if (rc == TURBO_OK) {
-    rc = flowmq_connect_endpoint_sendv(batch->adapter->connect_endpoint, batch->iov, count);
+    flow_fmq_profile_batch_socket_begin(&socket_sample);
+    rc = flowmq_connect_endpoint_sendv(batch->adapter->connect_endpoint, batch->iov, iovcnt);
+    flow_fmq_profile_batch_socket_end(&socket_sample, count, iovcnt);
   }
   for (size_t i = 0u; i < count; ++i) {
     flow_fmq_send_request_t *request = batch->requests[i];
     if (!request) continue;
-    flow_fmq_profile_request_socket_end(request);
-    if (rc == TURBO_OK) flow_fmq_request_mark_delivery(request, FLOW_FMQ_DELIVERY_DELIVERED);
+    flow_fmq_profile_request_shared_socket_end(request);
+    if (rc == TURBO_OK) {
+      flow_fmq_request_mark_delivery(request, FLOW_FMQ_DELIVERY_DELIVERED);
+    }
     batch->requests[i] = NULL;
-    flow_fmq_complete_send_request(request, rc);
+    flow_fmq_complete_owned_batch_request(request, rc);
   }
+  flow_fmq_send_batch_complete_n(batch, rc, count);
 }
 
 static int flow_fmq_send_batch_prepare_item(flow_fmq_send_batch_t *batch, size_t index) {
@@ -2500,28 +3126,31 @@ static int flow_fmq_send_batch_begin_item(flow_fmq_send_batch_t *batch, size_t i
     return rc;
   }
   if (!item->started) {
-    flow_fmq_profile_request_socket_begin(request);
+    flow_fmq_profile_request_shared_socket_begin(request);
     item->started = 1;
   }
   return TURBO_OK;
 }
 
 static void flow_fmq_send_batch_finish_items(flow_fmq_send_batch_t *batch) {
+  int first_status = TURBO_OK;
   if (!batch) return;
   for (size_t i = 0u; i < batch->count; ++i) {
     flow_fmq_send_request_t *request = batch->requests[i];
     flow_fmq_send_batch_item_t *item = &batch->items[i];
     int status = item->status;
     if (!request) continue;
-    if (item->started) flow_fmq_profile_request_socket_end(request);
+    if (item->started) flow_fmq_profile_request_shared_socket_end(request);
     if (status == TURBO_OK && item->delivered == 0u) status = TURBO_ENOTCONN;
     if (item->delivered != 0u) {
       flow_fmq_request_mark_delivery(
           request, status == TURBO_OK ? FLOW_FMQ_DELIVERY_DELIVERED : FLOW_FMQ_DELIVERY_PARTIAL);
     }
+    if (first_status == TURBO_OK && status != TURBO_OK) first_status = status;
     batch->requests[i] = NULL;
-    flow_fmq_complete_send_request(request, status);
+    flow_fmq_complete_owned_batch_request(request, status);
   }
+  flow_fmq_send_batch_complete_n(batch, first_status, batch->count);
 }
 
 static void flow_fmq_send_bind_pub_batch(flow_fmq_send_batch_t *batch) {
@@ -2533,8 +3162,8 @@ static void flow_fmq_send_bind_pub_batch(flow_fmq_send_batch_t *batch) {
   for (size_t i = 0u; i < batch->count; ++i) {
     flow_fmq_send_request_t *request = batch->requests[i];
     if (flow_fmq_send_batch_prepare_item(batch, i) != TURBO_OK) continue;
-    if (flow_fmq_encoded_topic(request->frame, tstr_len(request->frame), adapter->max_frame_size,
-                               &batch->items[i].topic) != TURBO_OK) {
+    if (flow_fmq_request_encoded_topic(request, adapter->max_frame_size,
+                                       &batch->items[i].topic) != TURBO_OK) {
       batch->items[i].status = TURBO_EPROTO;
       batch->items[i].terminal = 1;
     }
@@ -2553,9 +3182,11 @@ static void flow_fmq_send_bind_pub_batch(flow_fmq_send_batch_t *batch) {
     return;
   }
   while ((rc = turbo_flow_pattern_selection_next(&selection, &peer_index)) == TURBO_OK) {
+    flow_fmq_profile_batch_socket_sample_t socket_sample;
     flow_fmq_peer_t *const *peer =
         (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
     size_t iovcnt = 0u;
+    size_t frame_count = 0u;
     int peer_rc;
     if (!peer || !*peer) continue;
     for (size_t i = 0u; i < batch->count; ++i) {
@@ -2564,15 +3195,26 @@ static void flow_fmq_send_bind_pub_batch(flow_fmq_send_batch_t *batch) {
       if (!request || item->terminal || !flow_fmq_topic_matches(adapter, *peer, item->topic)) {
         continue;
       }
+      if (flow_fmq_peer_authorize(adapter, *peer, TURBO_FLOW_SECURITY_ACTION_READ, item->topic,
+                                  1) != TURBO_OK) {
+        continue;
+      }
       if (flow_fmq_send_batch_begin_item(batch, i) != TURBO_OK) continue;
-      batch->iov[iovcnt].data = request->frame;
-      batch->iov[iovcnt].len = tstr_len(request->frame);
-      batch->iov_indices[iovcnt++] = i;
+      if (flow_fmq_send_batch_append_request_iov(batch, i, &iovcnt) != TURBO_OK) {
+        item->status = TURBO_EPROTO;
+        item->terminal = 1;
+      } else {
+        frame_count += 1u;
+      }
     }
     if (iovcnt == 0u) continue;
+    flow_fmq_profile_batch_socket_begin(&socket_sample);
     peer_rc = flow_fmq_socket_sendv(adapter, (*peer)->socket, batch->iov, iovcnt);
+    flow_fmq_profile_batch_socket_end(&socket_sample, frame_count, iovcnt);
     for (size_t i = 0u; i < iovcnt; ++i) {
-      flow_fmq_send_batch_item_t *item = &batch->items[batch->iov_indices[i]];
+      flow_fmq_send_batch_item_t *item;
+      if (i > 0u && batch->iov_indices[i] == batch->iov_indices[i - 1u]) continue;
+      item = &batch->items[batch->iov_indices[i]];
       if (peer_rc == TURBO_OK) {
         item->delivered += 1u;
       } else {
@@ -2595,24 +3237,41 @@ static void flow_fmq_send_bind_push_batch(flow_fmq_send_batch_t *batch) {
   if (!batch || !(adapter = batch->adapter)) return;
   peer_count = turbo_vec_size(&adapter->peers);
   for (size_t i = 0u; i < batch->count; ++i) {
-    turbo_flow_pattern_selection_iterator_t selection =
-        TURBO_FLOW_PATTERN_SELECTION_ITERATOR_INIT;
     flow_fmq_send_batch_item_t *item = &batch->items[i];
+    flow_fmq_send_request_t *request = batch->requests[i];
     int rc;
     if (flow_fmq_send_batch_prepare_item(batch, i) != TURBO_OK) continue;
-    rc = turbo_flow_pattern_selection_begin(&adapter->selector,
-                                            TURBO_FLOW_PATTERN_SELECT_ROUND_ROBIN, peer_count,
-                                            &selection);
-    if (rc == TURBO_OK) rc = turbo_flow_pattern_selection_next(&selection, &item->target_peer);
+    rc = flow_fmq_request_encoded_topic(request, adapter->max_frame_size, &item->topic);
+    for (size_t attempt = 0u; rc == TURBO_OK && attempt < peer_count; ++attempt) {
+      turbo_flow_pattern_selection_iterator_t selection =
+          TURBO_FLOW_PATTERN_SELECTION_ITERATOR_INIT;
+      flow_fmq_peer_t *const *peer;
+      rc = turbo_flow_pattern_selection_begin(&adapter->selector,
+                                              TURBO_FLOW_PATTERN_SELECT_ROUND_ROBIN, peer_count,
+                                              &selection);
+      if (rc == TURBO_OK)
+        rc = turbo_flow_pattern_selection_next(&selection, &item->target_peer);
+      if (rc != TURBO_OK) break;
+      peer = (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, item->target_peer);
+      if (peer && *peer &&
+          flow_fmq_peer_authorize(adapter, *peer, TURBO_FLOW_SECURITY_ACTION_READ, item->topic,
+                                  0) == TURBO_OK) {
+        break;
+      }
+      item->target_peer = SIZE_MAX;
+    }
+    if (rc == TURBO_OK && item->target_peer == SIZE_MAX) rc = TURBO_ENOENT;
     if (rc != TURBO_OK) {
       item->status = rc == TURBO_ENOENT ? TURBO_ENOTCONN : rc;
       item->terminal = 1;
     }
   }
   for (size_t peer_index = 0u; peer_index < peer_count; ++peer_index) {
+    flow_fmq_profile_batch_socket_sample_t socket_sample;
     flow_fmq_peer_t *const *peer =
         (flow_fmq_peer_t *const *)turbo_vec_at_const(&adapter->peers, peer_index);
     size_t iovcnt = 0u;
+    size_t frame_count = 0u;
     int peer_rc;
     if (!peer || !*peer) continue;
     for (size_t i = 0u; i < batch->count; ++i) {
@@ -2620,14 +3279,21 @@ static void flow_fmq_send_bind_push_batch(flow_fmq_send_batch_t *batch) {
       flow_fmq_send_batch_item_t *item = &batch->items[i];
       if (!request || item->terminal || item->target_peer != peer_index) continue;
       if (flow_fmq_send_batch_begin_item(batch, i) != TURBO_OK) continue;
-      batch->iov[iovcnt].data = request->frame;
-      batch->iov[iovcnt].len = tstr_len(request->frame);
-      batch->iov_indices[iovcnt++] = i;
+      if (flow_fmq_send_batch_append_request_iov(batch, i, &iovcnt) != TURBO_OK) {
+        item->status = TURBO_EPROTO;
+        item->terminal = 1;
+      } else {
+        frame_count += 1u;
+      }
     }
     if (iovcnt == 0u) continue;
+    flow_fmq_profile_batch_socket_begin(&socket_sample);
     peer_rc = flow_fmq_socket_sendv(adapter, (*peer)->socket, batch->iov, iovcnt);
+    flow_fmq_profile_batch_socket_end(&socket_sample, frame_count, iovcnt);
     for (size_t i = 0u; i < iovcnt; ++i) {
-      flow_fmq_send_batch_item_t *item = &batch->items[batch->iov_indices[i]];
+      flow_fmq_send_batch_item_t *item;
+      if (i > 0u && batch->iov_indices[i] == batch->iov_indices[i - 1u]) continue;
+      item = &batch->items[batch->iov_indices[i]];
       if (peer_rc == TURBO_OK) {
         item->delivered = 1u;
       } else {
@@ -2678,6 +3344,7 @@ static void flow_fmq_send_drain_task(coro_t *co, void *arg) {
     }
     turbo_mutex_unlock(&adapter->send_queue_mutex);
     if (batch) {
+      flow_fmq_profile_batch_owner_dequeued(batch);
       for (size_t i = 0u; i < batch->count; ++i)
         flow_fmq_profile_request_owner_dequeued(batch->requests[i]);
       if (batch_mode == FLOW_FMQ_SEND_BATCH_CONNECT) {
@@ -2746,7 +3413,12 @@ static int flow_fmq_enqueue_send_batch(flow_fmq_send_batch_t *batch) {
   int schedule_drain = 0;
   int rc;
   if (!batch || !batch->adapter || batch->count == 0u) return TURBO_EINVAL;
+  flow_fmq_profile_batch_enqueue_begin(batch);
   adapter = batch->adapter;
+  if (flow_fmq_send_batch_mode(batch) != FLOW_FMQ_SEND_BATCH_NONE) {
+    rc = flow_fmq_send_batch_prepare_iov(batch);
+    if (rc != TURBO_OK) return rc;
+  }
   turbo_mutex_lock(&adapter->send_queue_mutex);
   if (!atomic_load_explicit(&adapter->started, memory_order_acquire)) {
     turbo_mutex_unlock(&adapter->send_queue_mutex);
@@ -2776,6 +3448,7 @@ static int flow_fmq_enqueue_send_batch(flow_fmq_send_batch_t *batch) {
     turbo_mutex_unlock(&adapter->send_queue_mutex);
     return rc;
   }
+  flow_fmq_profile_batch_enqueued(batch);
   atomic_fetch_add_explicit(&batch->refs, 1, memory_order_relaxed);
   batch->committed = 1;
   if (!adapter->send_drain_active) {
@@ -2785,9 +3458,11 @@ static int flow_fmq_enqueue_send_batch(flow_fmq_send_batch_t *batch) {
   }
   turbo_mutex_unlock(&adapter->send_queue_mutex);
   if (!schedule_drain) return TURBO_OK;
+  flow_fmq_profile_batch_post_begin(batch);
   flow_fmq_profile_request_post_begin(batch->requests[0]);
   rc = coro_post(adapter->ctx, flow_fmq_send_drain_post, adapter, NULL);
   flow_fmq_profile_request_post_end(batch->requests[0]);
+  flow_fmq_profile_batch_post_end(batch);
   if (rc == TURBO_OK) return TURBO_OK;
   flow_fmq_fail_send_queue(adapter, rc);
   flow_fmq_lane_task_end(adapter);
@@ -2908,6 +3583,7 @@ static int flow_fmq_wait_send_batch(flow_fmq_send_batch_t *batch) {
     if (batch->completed == batch->count) {
       rc = batch->first_status;
       turbo_mutex_unlock(&batch->mutex);
+      flow_fmq_profile_batch_record(batch, turbo_hrtime());
       return rc;
     }
     if (deadline_ns != UINT64_MAX && now >= deadline_ns) {
@@ -2928,6 +3604,7 @@ static int flow_fmq_wait_send_batch(flow_fmq_send_batch_t *batch) {
              ? batch->first_status
              : (wait_rc != TURBO_OK && wait_rc != TURBO_EINTR ? wait_rc : TURBO_ETIMEDOUT);
     turbo_mutex_unlock(&batch->mutex);
+    flow_fmq_profile_batch_record(batch, turbo_hrtime());
     return rc;
   }
   turbo_mutex_lock(&batch->mutex);
@@ -2942,13 +3619,14 @@ static int flow_fmq_wait_send_batch(flow_fmq_send_batch_t *batch) {
   }
   rc = batch->completed == batch->count ? batch->first_status : TURBO_ETIMEDOUT;
   turbo_mutex_unlock(&batch->mutex);
+  flow_fmq_profile_batch_record(batch, turbo_hrtime());
   return rc;
 }
 
 static flow_fmq_send_batch_t *flow_fmq_send_batch_create(turbo_flow_t *flow, size_t capacity) {
   flow_fmq_send_batch_t *batch;
-  const size_t item_allocation_size = sizeof(flow_fmq_send_request_t *) + sizeof(turbo_iovec_t) +
-                                      sizeof(size_t) + sizeof(flow_fmq_send_batch_item_t);
+  const size_t item_allocation_size =
+      sizeof(flow_fmq_send_request_t *) + sizeof(flow_fmq_send_batch_item_t);
   size_t arrays_size;
   size_t allocation_size;
   if (!flow || capacity == 0u ||
@@ -2957,15 +3635,15 @@ static flow_fmq_send_batch_t *flow_fmq_send_batch_create(turbo_flow_t *flow, siz
   }
   arrays_size = capacity * item_allocation_size;
   allocation_size = sizeof(*batch) + arrays_size;
-  batch = (flow_fmq_send_batch_t *)calloc(1, allocation_size);
+  batch = (flow_fmq_send_batch_t *)mem_alloc(mem_global(), allocation_size);
   if (!batch) return NULL;
+  memset(batch, 0, allocation_size);
   batch->flow = flow;
   batch->capacity = capacity;
   batch->requests = (flow_fmq_send_request_t **)(batch + 1);
-  batch->iov = (turbo_iovec_t *)(batch->requests + capacity);
-  batch->iov_indices = (size_t *)(batch->iov + capacity);
-  batch->items = (flow_fmq_send_batch_item_t *)(batch->iov_indices + capacity);
+  batch->items = (flow_fmq_send_batch_item_t *)(batch->requests + capacity);
   batch->first_status = TURBO_OK;
+  flow_fmq_profile_batch_begin(batch);
   atomic_init(&batch->refs, 1);
   turbo_mutex_init(&batch->mutex);
   turbo_cond_init(&batch->cond);
@@ -3004,32 +3682,47 @@ static void flow_fmq_discard_unsubmitted_request(flow_fmq_send_request_t *reques
 }
 
 static int flow_fmq_submit_send(flow_fmq_adapter_t *adapter, flow_fmq_route_token_t route,
-                                tstr_t frame, int defer_enqueue,
+                                tstr_t frame, flow_fmq_segmented_frame_t *segmented_frame,
+                                mem_buffer_t *payload_buffer, tstr_v encoded_topic,
+                                size_t encoded_size, int defer_enqueue,
                                 flow_fmq_send_request_t **out_request) {
   flow_fmq_send_request_t *request;
   int rc;
   if (!out_request) return TURBO_EINVAL;
   *out_request = NULL;
-  request = (flow_fmq_send_request_t *)calloc(1, sizeof(*request));
+  request = (flow_fmq_send_request_t *)mem_alloc(mem_global(), sizeof(*request));
   if (!request) {
     flow_fmq_emit_frame_event(adapter, TURBO_FLOW_FMQ_EVENT_FRAME_DROPPED, TURBO_ENOMEM,
-                              tstr_len(frame));
-    flow_fmq_release_send_budget(adapter, tstr_len(frame));
+                              encoded_size);
+    flow_fmq_release_send_budget(adapter, encoded_size);
     tstr_free(frame);
+    flow_fmq_segmented_frame_cleanup(segmented_frame);
+    mem_buffer_release(payload_buffer);
     return TURBO_ENOMEM;
   }
+  memset(request, 0, sizeof(*request));
   request->adapter = adapter;
   request->route = route;
   request->frame = frame;
+  request->segmented_frame = segmented_frame
+                                 ? *segmented_frame
+                                 : (flow_fmq_segmented_frame_t)
+                                       FLOWMQ_PROTOCOL_SEGMENTED_FRAME_INIT;
+  if (segmented_frame) {
+    *segmented_frame =
+        (flow_fmq_segmented_frame_t)FLOWMQ_PROTOCOL_SEGMENTED_FRAME_INIT;
+  }
+  request->payload_buffer = payload_buffer;
+  request->encoded_topic = encoded_topic;
   request->status = TURBO_EALREADY;
   request->delivery_stage = FLOW_FMQ_DELIVERY_NOT_SUBMITTED;
-  request->budget_bytes = tstr_len(frame);
+  request->budget_bytes = encoded_size;
   request->budget_reserved = 1;
   request->drain_allowed = adapter->frame_linger_ms != 0;
   atomic_init(&request->refs, 2);
   turbo_mutex_init(&request->mutex);
   turbo_cond_init(&request->cond);
-  if (coro_context_current() == adapter->ctx) {
+  if (!defer_enqueue && coro_context_current() == adapter->ctx) {
     request->completion_wait = coro_wait_create(adapter->ctx);
     if (!request->completion_wait) {
       flow_fmq_emit_frame_event(adapter, TURBO_FLOW_FMQ_EVENT_FRAME_DROPPED, TURBO_ENOMEM,
@@ -3091,6 +3784,22 @@ static int flow_fmq_select_metadata(flow_fmq_adapter_t *adapter, const turbo_flo
   return TURBO_OK;
 }
 
+static int flow_fmq_payload_within_buffer(const turbo_flow_msg_t *msg) {
+  uintptr_t payload_address;
+  uintptr_t buffer_address;
+  size_t offset;
+  size_t used;
+  if (!msg) return 0;
+  if (msg->payload.len == 0u) return 1;
+  if (!msg->buffer || !msg->payload.data) return 0;
+  payload_address = (uintptr_t)msg->payload.data;
+  buffer_address = (uintptr_t)mem_buffer_const_data(msg->buffer);
+  if (payload_address < buffer_address) return 0;
+  offset = (size_t)(payload_address - buffer_address);
+  used = mem_buffer_used(msg->buffer);
+  return offset <= used && msg->payload.len <= used - offset;
+}
+
 static int flow_fmq_consume_with_delivery(void *ctx, turbo_flow_t *flow,
                                           const turbo_flow_stage_plan_t *stage,
                                           turbo_flow_msg_t *msg,
@@ -3100,12 +3809,16 @@ static int flow_fmq_consume_with_delivery(void *ctx, turbo_flow_t *flow,
   flow_fmq_frame_t frame;
   flow_fmq_send_request_t *request = NULL;
   flow_fmq_send_batch_t *batch = NULL;
+  flow_fmq_segmented_frame_t segmented = FLOWMQ_PROTOCOL_SEGMENTED_FRAME_INIT;
+  mem_buffer_t *payload_buffer = NULL;
+  tstr_v encoded_topic = {0};
   tstr_t encoded = NULL;
   size_t encoded_size;
   uint64_t correlation_id = 0u;
   uint64_t correlation_generation = 0u;
   flow_fmq_route_token_t send_route = {0u, 0u};
   flow_fmq_delivery_stage_t current_delivery_stage = FLOW_FMQ_DELIVERY_NOT_SUBMITTED;
+  uint64_t profile_consume_started_ns = 0u;
   int req_state_acquired = 0;
   int rc;
   (void)flow;
@@ -3116,6 +3829,7 @@ static int flow_fmq_consume_with_delivery(void *ctx, turbo_flow_t *flow,
   }
   if (flow_fmq_active_send_batch && flow_fmq_active_send_batch->flow == flow) {
     batch = flow_fmq_active_send_batch;
+    profile_consume_started_ns = flow_fmq_profile_batch_step_begin(batch);
   }
   if (!atomic_load_explicit(&adapter->started, memory_order_acquire)) return TURBO_ESHUTDOWN;
   if (adapter->pattern == TURBO_FLOW_FMQ_SUB || adapter->pattern == TURBO_FLOW_FMQ_PULL) {
@@ -3205,13 +3919,33 @@ frame_ready:
     turbo_mutex_unlock(&adapter->send_admission_mutex);
     goto local_failure;
   }
-  rc = flow_fmq_encode_frame(&frame, adapter->max_frame_size, &encoded);
+  if (adapter->transport == TURBO_FLOW_FMQ_TCP &&
+      adapter->pattern != TURBO_FLOW_FMQ_XSUB &&
+      msg->payload.len >= FLOW_FMQ_ZERO_COPY_MIN_PAYLOAD_SIZE &&
+      flow_fmq_payload_within_buffer(msg)) {
+    rc = flow_fmq_encode_frame_segmented(&frame, adapter->max_frame_size, &segmented);
+    if (rc == TURBO_OK && msg->payload.len > 0u) {
+      payload_buffer = mem_buffer_retain(msg->buffer);
+      if (!payload_buffer) rc = TURBO_ENOMEM;
+    }
+    if (rc == TURBO_OK) {
+      encoded_topic = tstr_v_from_buf(
+          (const char *)segmented.segments[0].data + FLOW_FMQ_HEADER_SIZE + frame.identity.len,
+          frame.topic.len);
+    }
+  } else {
+    rc = flow_fmq_encode_frame(&frame, adapter->max_frame_size, &encoded);
+  }
   if (rc != TURBO_OK) {
+    flow_fmq_segmented_frame_cleanup(&segmented);
+    mem_buffer_release(payload_buffer);
     flow_fmq_release_send_budget(adapter, encoded_size);
     turbo_mutex_unlock(&adapter->send_admission_mutex);
     goto local_failure;
   }
-  rc = flow_fmq_submit_send(adapter, send_route, encoded, batch != NULL, &request);
+  rc = flow_fmq_submit_send(adapter, send_route, encoded, &segmented, payload_buffer,
+                            encoded_topic, encoded_size, batch != NULL, &request);
+  payload_buffer = NULL;
   turbo_mutex_unlock(&adapter->send_admission_mutex);
   if (rc != TURBO_OK) goto transport_failure;
   if (batch) {
@@ -3222,6 +3956,7 @@ frame_ready:
       goto transport_failure;
     }
     flow_fmq_request_release(request);
+    flow_fmq_profile_batch_adapter_consumed(batch, profile_consume_started_ns);
     return TURBO_OK;
   }
   rc = flow_fmq_wait_send_request(adapter, request, &current_delivery_stage);
@@ -3535,6 +4270,11 @@ static void flow_fmq_shutdown(void *ctx) {
     adapter->reactor_actor_initialized = 0;
   }
   tf_coronet_execution_destroy(&adapter->execution);
+  flowmq_security_binding_destroy(&adapter->security);
+  if (adapter->security_selection_initialized) {
+    turbo_vec_destroy(&adapter->security_selection);
+    adapter->security_selection_initialized = 0;
+  }
   turbo_vec_destroy(&adapter->peers);
   tstr_freep(&adapter->host);
   tstr_freep(&adapter->path);
@@ -3715,7 +4455,8 @@ static int
 flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
                                    const turbo_flow_fmq_config_t *config,
                                    const turbo_flow_fmq_fanout_config_t *fanout,
-                                   const turbo_flow_coronet_execution_binding_t *execution) {
+                                   const turbo_flow_coronet_execution_binding_t *execution,
+                                   const turbo_flow_fmq_security_binding_t *security) {
   flow_fmq_adapter_t *adapter;
   turbo_flow_adapter_ops_t ops;
   turbo_flow_adapter_schema_t schema;
@@ -3732,6 +4473,10 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
   if (rc != TURBO_OK) return rc;
   rc = flow_fmq_config_validate(config);
   if (rc != TURBO_OK) return rc;
+  if (security && config->mode == TURBO_FLOW_FMQ_CONNECT &&
+      (!config->identity || config->identity[0] == '\0')) {
+    return TURBO_EINVAL;
+  }
   if (fanout) {
     rc = flow_fmq_fanout_config_validate(config, fanout);
     if (rc != TURBO_OK) return rc;
@@ -3753,9 +4498,16 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
     free(adapter);
     return TURBO_ENOMEM;
   }
+  rc = flowmq_security_binding_init(&adapter->security, config->mode, config->transport, security);
+  if (rc != TURBO_OK) {
+    turbo_vec_destroy(&adapter->peers);
+    free(adapter);
+    return rc;
+  }
   if (config->mode == TURBO_FLOW_FMQ_BIND) {
     rc = tf_coronet_execution_init(&adapter->execution, execution);
     if (rc != TURBO_OK) {
+      flowmq_security_binding_destroy(&adapter->security);
       turbo_vec_destroy(&adapter->peers);
       free(adapter);
       return rc;
@@ -3765,6 +4517,7 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
                                sizeof(flow_fmq_reactor_command_t));
     if (rc != TURBO_OK) {
       tf_coronet_execution_destroy(&adapter->execution);
+      flowmq_security_binding_destroy(&adapter->security);
       turbo_vec_destroy(&adapter->peers);
       free(adapter);
       return rc;
@@ -3875,6 +4628,15 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
     adapter->fanout = *fanout;
     adapter->fanout.size = sizeof(adapter->fanout);
     adapter->fanout_enabled = 1;
+    rc = turbo_vec_init(&adapter->security_selection, sizeof(uint8_t));
+    if (rc == TURBO_OK) {
+      adapter->security_selection_initialized = 1;
+      rc = turbo_vec_resize(&adapter->security_selection, adapter->max_connections);
+    }
+    if (rc != TURBO_OK) {
+      flow_fmq_shutdown(adapter);
+      return rc;
+    }
   }
   atomic_init(&adapter->started, 0);
   atomic_init(&adapter->connect_status, TURBO_ENOTCONN);
@@ -3926,6 +4688,7 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
     endpoint_config.on_state = flow_fmq_connect_endpoint_state;
     endpoint_config.on_event = flow_fmq_connect_endpoint_event;
     endpoint_config.callback_ctx = adapter;
+    endpoint_config.security = adapter->security.enabled ? &adapter->security : NULL;
     rc = flowmq_connect_endpoint_create(&endpoint_config, &adapter->connect_endpoint);
     if (rc != TURBO_OK) {
       flow_fmq_shutdown(adapter);
@@ -4015,14 +4778,22 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
 int turbo_flow_fmq_register_adapter_ex(turbo_flow_t *flow, const char *name,
                                        const turbo_flow_fmq_config_t *config,
                                        const turbo_flow_coronet_execution_binding_t *execution) {
-  return flow_fmq_register_adapter_internal(flow, name, config, NULL, execution);
+  return flow_fmq_register_adapter_internal(flow, name, config, NULL, execution, NULL);
+}
+
+int turbo_flow_fmq_register_secure_adapter_ex(
+    turbo_flow_t *flow, const char *name, const turbo_flow_fmq_config_t *config,
+    const turbo_flow_coronet_execution_binding_t *execution,
+    const turbo_flow_fmq_security_binding_t *security) {
+  if (!security) return TURBO_EINVAL;
+  return flow_fmq_register_adapter_internal(flow, name, config, NULL, execution, security);
 }
 
 int turbo_flow_fmq_register_fanout_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_fmq_config_t *config,
     const turbo_flow_fmq_fanout_config_t *fanout,
     const turbo_flow_coronet_execution_binding_t *execution) {
-  return flow_fmq_register_adapter_internal(flow, name, config, fanout, execution);
+  return flow_fmq_register_adapter_internal(flow, name, config, fanout, execution, NULL);
 }
 
 int turbo_flow_fmq_register_adapter(turbo_flow_t *flow, const char *name,
@@ -4046,6 +4817,24 @@ int turbo_flow_fmq_register_adapter(turbo_flow_t *flow, const char *name,
   return turbo_flow_fmq_register_adapter_ex(flow, name, &normalized, &execution);
 }
 
+int turbo_flow_fmq_register_secure_adapter(
+    turbo_flow_t *flow, const char *name, const turbo_flow_fmq_config_t *config,
+    const turbo_flow_fmq_security_binding_t *security) {
+  turbo_flow_coronet_execution_binding_t execution;
+  turbo_flow_fmq_config_t normalized;
+  int rc = flow_fmq_config_validate(config);
+  if (rc != TURBO_OK || !security) return rc != TURBO_OK ? rc : TURBO_EINVAL;
+  memset(&execution, 0, sizeof(execution));
+  execution.size = sizeof(execution);
+  execution.kind = config->context ? TURBO_FLOW_CORONET_EXECUTION_OWNED_CONTEXT
+                                   : TURBO_FLOW_CORONET_EXECUTION_PRIVATE;
+  execution.context = config->context;
+  normalized = *config;
+  normalized.context = NULL;
+  normalized.take_context_ownership = 0;
+  return turbo_flow_fmq_register_secure_adapter_ex(flow, name, &normalized, &execution, security);
+}
+
 int turbo_flow_fmq_register_fanout_adapter(turbo_flow_t *flow, const char *name,
                                            const turbo_flow_fmq_config_t *config,
                                            const turbo_flow_fmq_fanout_config_t *fanout) {
@@ -4067,6 +4856,36 @@ int turbo_flow_fmq_register_fanout_adapter(turbo_flow_t *flow, const char *name,
   normalized.context = NULL;
   normalized.take_context_ownership = 0;
   return turbo_flow_fmq_register_fanout_adapter_ex(flow, name, &normalized, fanout, &execution);
+}
+
+int turbo_flow_fmq_register_secure_fanout_adapter_ex(
+    turbo_flow_t *flow, const char *name, const turbo_flow_fmq_config_t *config,
+    const turbo_flow_fmq_fanout_config_t *fanout,
+    const turbo_flow_coronet_execution_binding_t *execution,
+    const turbo_flow_fmq_security_binding_t *security) {
+  if (!security) return TURBO_EINVAL;
+  return flow_fmq_register_adapter_internal(flow, name, config, fanout, execution, security);
+}
+
+int turbo_flow_fmq_register_secure_fanout_adapter(
+    turbo_flow_t *flow, const char *name, const turbo_flow_fmq_config_t *config,
+    const turbo_flow_fmq_fanout_config_t *fanout,
+    const turbo_flow_fmq_security_binding_t *security) {
+  turbo_flow_coronet_execution_binding_t execution;
+  turbo_flow_fmq_config_t normalized;
+  int rc = flow_fmq_config_validate(config);
+  if (rc == TURBO_OK) rc = flow_fmq_fanout_config_validate(config, fanout);
+  if (rc != TURBO_OK || !security) return rc != TURBO_OK ? rc : TURBO_EINVAL;
+  memset(&execution, 0, sizeof(execution));
+  execution.size = sizeof(execution);
+  execution.kind = config->context ? TURBO_FLOW_CORONET_EXECUTION_OWNED_CONTEXT
+                                   : TURBO_FLOW_CORONET_EXECUTION_PRIVATE;
+  execution.context = config->context;
+  normalized = *config;
+  normalized.context = NULL;
+  normalized.take_context_ownership = 0;
+  return turbo_flow_fmq_register_secure_fanout_adapter_ex(flow, name, &normalized, fanout,
+                                                          &execution, security);
 }
 
 static int flow_fmq_message_context(const turbo_flow_msg_t *msg, flow_fmq_message_context_t **out) {
@@ -4143,14 +4962,148 @@ int turbo_flow_fmq_message_subscription(const turbo_flow_msg_t *msg, int *subscr
   return TURBO_OK;
 }
 
+typedef struct flow_fmq_app_async_request_s {
+  mem_buffer_t *buffer;
+  size_t data_size;
+  turbo_flow_fmq_app_send_completion_fn completion;
+  void *completion_ctx;
+} flow_fmq_app_async_request_t;
+
+TURBO_DEQUE_DEFINE(flow_fmq_app_async_requests, flow_fmq_app_async_request_t)
+
 struct turbo_flow_fmq_app_s {
   turbo_flow_t *flow;
   turbo_flow_fmq_pattern_t pattern;
   turbo_flow_fmq_app_message_fn on_message;
   void *message_ctx;
+  flow_fmq_app_async_requests async_requests;
+  flow_fmq_app_async_request_t *async_batch_requests;
+  turbo_mutex_t async_mutex;
+  turbo_cond_t async_changed;
+  turbo_thread_t async_thread;
+  size_t async_queue_capacity;
+  size_t async_queue_capacity_bytes;
+  size_t async_queued_bytes;
+  size_t async_batch_size;
+  uint64_t async_linger_ns;
+  int async_initialized;
+  int async_configured;
+  int async_accepting;
+  int async_thread_started;
   int can_send;
   int started;
+  int started_once;
 };
+
+static int flow_fmq_app_send_batch_internal(
+    turbo_flow_fmq_app_t *app, const turbo_flow_fmq_app_send_item_t *copied_items,
+    const flow_fmq_app_async_request_t *retained_items, size_t item_count,
+    size_t *submitted);
+
+static int flow_fmq_app_async_pattern_supported(turbo_flow_fmq_pattern_t pattern) {
+  return pattern == TURBO_FLOW_FMQ_PUB || pattern == TURBO_FLOW_FMQ_PUSH ||
+         pattern == TURBO_FLOW_FMQ_DEALER;
+}
+
+static int flow_fmq_app_async_config_validate(
+    const turbo_flow_fmq_app_async_send_config_t *config) {
+  return config && config->size >= sizeof(*config) &&
+         config->version == TURBO_FLOW_FMQ_APP_ASYNC_SEND_API_VERSION &&
+         config->queue_capacity > 0u &&
+         config->queue_capacity <= TURBO_FLOW_FMQ_APP_ASYNC_SEND_MAX_QUEUE_ITEMS &&
+         config->queue_capacity_bytes > 0u && config->batch_size > 0u &&
+         config->batch_size <= config->queue_capacity &&
+         config->batch_size <= TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS &&
+         config->linger_ns <= TURBO_FLOW_FMQ_APP_ASYNC_SEND_MAX_LINGER_NS;
+}
+
+static void flow_fmq_app_async_complete(flow_fmq_app_async_request_t *request, int status) {
+  turbo_flow_fmq_app_send_completion_fn completion;
+  void *completion_ctx;
+  if (!request) return;
+  completion = request->completion;
+  completion_ctx = request->completion_ctx;
+  mem_buffer_release(request->buffer);
+  memset(request, 0, sizeof(*request));
+  if (completion) completion(completion_ctx, status);
+}
+
+static size_t flow_fmq_app_async_take_batch(turbo_flow_fmq_app_t *app) {
+  size_t batch_count = 0u;
+  size_t batch_bytes = 0u;
+  while (batch_count < app->async_batch_size) {
+    const flow_fmq_app_async_request_t *front =
+        flow_fmq_app_async_requests_front_const(&app->async_requests);
+    if (!front || front->data_size >
+                      TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES - batch_bytes) {
+      break;
+    }
+    if (!flow_fmq_app_async_requests_pop_front(
+            &app->async_requests, &app->async_batch_requests[batch_count])) {
+      break;
+    }
+    batch_bytes += app->async_batch_requests[batch_count].data_size;
+    app->async_queued_bytes -= app->async_batch_requests[batch_count].data_size;
+    ++batch_count;
+  }
+  return batch_count;
+}
+
+static void flow_fmq_app_async_worker(void *arg) {
+  turbo_flow_fmq_app_t *app = (turbo_flow_fmq_app_t *)arg;
+  if (!app) return;
+  for (;;) {
+    size_t batch_count;
+    size_t submitted = 0u;
+    int rc;
+    turbo_mutex_lock(&app->async_mutex);
+    while (flow_fmq_app_async_requests_empty(&app->async_requests) &&
+           app->async_accepting) {
+      turbo_cond_wait(&app->async_changed, &app->async_mutex);
+    }
+    if (flow_fmq_app_async_requests_empty(&app->async_requests) &&
+        !app->async_accepting) {
+      turbo_mutex_unlock(&app->async_mutex);
+      break;
+    }
+    if (app->async_accepting && app->async_linger_ns > 0u &&
+        flow_fmq_app_async_requests_size(&app->async_requests) < app->async_batch_size) {
+      const uint64_t started_ns = turbo_hrtime();
+      const uint64_t deadline_ns =
+          app->async_linger_ns > UINT64_MAX - started_ns
+              ? UINT64_MAX
+              : started_ns + app->async_linger_ns;
+      while (app->async_accepting &&
+             flow_fmq_app_async_requests_size(&app->async_requests) <
+                 app->async_batch_size) {
+        const uint64_t now_ns = turbo_hrtime();
+        if (now_ns >= deadline_ns) break;
+        (void)turbo_cond_timedwait(&app->async_changed, &app->async_mutex,
+                                   deadline_ns - now_ns);
+      }
+    }
+    batch_count = flow_fmq_app_async_take_batch(app);
+    turbo_mutex_unlock(&app->async_mutex);
+
+    rc = flow_fmq_app_send_batch_internal(app, NULL, app->async_batch_requests,
+                                          batch_count, &submitted);
+    if (rc == TURBO_OK && submitted != batch_count) rc = TURBO_EPROTO;
+    for (size_t i = 0u; i < batch_count; ++i)
+      flow_fmq_app_async_complete(&app->async_batch_requests[i], rc);
+  }
+}
+
+static void flow_fmq_app_async_destroy(turbo_flow_fmq_app_t *app) {
+  flow_fmq_app_async_request_t request;
+  if (!app || !app->async_initialized) return;
+  while (flow_fmq_app_async_requests_pop_front(&app->async_requests, &request))
+    flow_fmq_app_async_complete(&request, TURBO_ESHUTDOWN);
+  flow_fmq_app_async_requests_destroy(&app->async_requests);
+  free(app->async_batch_requests);
+  turbo_cond_destroy(&app->async_changed);
+  turbo_mutex_destroy(&app->async_mutex);
+  app->async_initialized = 0;
+}
 
 static int flow_fmq_app_options_validate(const turbo_flow_fmq_app_options_t *options) {
   return options && options->size >= sizeof(*options) &&
@@ -4318,6 +5271,14 @@ static int flow_fmq_app_allocate(turbo_flow_fmq_pattern_t pattern,
     free(app);
     return TURBO_ENOMEM;
   }
+  if (flow_fmq_app_async_requests_init(&app->async_requests) != TURBO_OK) {
+    turbo_flow_destroy(app->flow);
+    free(app);
+    return TURBO_ENOMEM;
+  }
+  turbo_mutex_init(&app->async_mutex);
+  turbo_cond_init(&app->async_changed);
+  app->async_initialized = 1;
   app->pattern = pattern;
   app->on_message = options->on_message;
   app->message_ctx = options->message_ctx;
@@ -4345,9 +5306,30 @@ int turbo_flow_fmq_app_create(const turbo_flow_fmq_config_t *endpoint,
   return TURBO_OK;
 }
 
-int turbo_flow_fmq_app_create_resolved(
+int turbo_flow_fmq_app_create_secure(
+    const turbo_flow_fmq_config_t *endpoint, const turbo_flow_fmq_app_options_t *options,
+    const turbo_flow_fmq_security_binding_t *security, turbo_flow_fmq_app_t **out) {
+  static const char *const adapter_name = "fmq.app.endpoint";
+  turbo_flow_fmq_app_t *app = NULL;
+  int rc;
+  if (out) *out = NULL;
+  if (!endpoint || !security) return TURBO_EINVAL;
+  rc = flow_fmq_app_allocate(endpoint->pattern, options, &app);
+  if (rc != TURBO_OK) return rc;
+  rc = turbo_flow_fmq_register_secure_adapter(app->flow, adapter_name, endpoint, security);
+  if (rc == TURBO_OK) rc = flow_fmq_app_build_graph(app, adapter_name);
+  if (rc != TURBO_OK) {
+    turbo_flow_fmq_app_destroy(app);
+    return rc;
+  }
+  *out = app;
+  return TURBO_OK;
+}
+
+static int flow_fmq_app_create_resolved_internal(
     const turbo_flow_resolved_config_t *resolved, const char *adapter_name,
-    const turbo_flow_fmq_app_options_t *options, turbo_flow_fmq_app_t **out,
+    const turbo_flow_fmq_app_options_t *options,
+    const turbo_flow_fmq_security_binding_t *security, turbo_flow_fmq_app_t **out,
     turbo_flow_config_error_t *error) {
   turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
   turbo_flow_fmq_app_t *app = NULL;
@@ -4370,7 +5352,10 @@ int turbo_flow_fmq_app_create_resolved(
   }
   rc = flow_fmq_app_allocate(pattern, options, &app);
   if (rc != TURBO_OK) return rc;
-  rc = turbo_flow_fmq_register_resolved_adapter(app->flow, adapter_name, resolved, error);
+  rc = security ? turbo_flow_fmq_register_resolved_secure_adapter(
+                      app->flow, adapter_name, resolved, security, error)
+                : turbo_flow_fmq_register_resolved_adapter(app->flow, adapter_name, resolved,
+                                                           error);
   if (rc == TURBO_OK) rc = flow_fmq_app_build_graph(app, adapter_name);
   if (rc != TURBO_OK) {
     if (error->status == TURBO_OK) {
@@ -4386,12 +5371,45 @@ int turbo_flow_fmq_app_create_resolved(
   return TURBO_OK;
 }
 
+int turbo_flow_fmq_app_create_resolved(
+    const turbo_flow_resolved_config_t *resolved, const char *adapter_name,
+    const turbo_flow_fmq_app_options_t *options, turbo_flow_fmq_app_t **out,
+    turbo_flow_config_error_t *error) {
+  return flow_fmq_app_create_resolved_internal(resolved, adapter_name, options, NULL, out, error);
+}
+
+int turbo_flow_fmq_app_create_resolved_secure(
+    const turbo_flow_resolved_config_t *resolved, const char *adapter_name,
+    const turbo_flow_fmq_app_options_t *options,
+    const turbo_flow_fmq_security_binding_t *security, turbo_flow_fmq_app_t **out,
+    turbo_flow_config_error_t *error) {
+  if (!security) return TURBO_EINVAL;
+  return flow_fmq_app_create_resolved_internal(resolved, adapter_name, options, security, out,
+                                               error);
+}
+
 int turbo_flow_fmq_app_start(turbo_flow_fmq_app_t *app) {
   int rc;
   if (!app || !app->flow) return TURBO_EINVAL;
   if (app->started) return TURBO_EALREADY;
   rc = turbo_flow_start(app->flow);
-  if (rc == TURBO_OK) app->started = 1;
+  if (rc != TURBO_OK) return rc;
+  app->started = 1;
+  app->started_once = 1;
+  if (!app->async_configured) return TURBO_OK;
+  turbo_mutex_lock(&app->async_mutex);
+  app->async_accepting = 1;
+  turbo_mutex_unlock(&app->async_mutex);
+  rc = turbo_thread_create(&app->async_thread, flow_fmq_app_async_worker, app);
+  if (rc == TURBO_OK) {
+    app->async_thread_started = 1;
+    return TURBO_OK;
+  }
+  turbo_mutex_lock(&app->async_mutex);
+  app->async_accepting = 0;
+  turbo_mutex_unlock(&app->async_mutex);
+  (void)turbo_flow_stop(app->flow);
+  app->started = 0;
   return rc;
 }
 
@@ -4399,6 +5417,18 @@ int turbo_flow_fmq_app_stop(turbo_flow_fmq_app_t *app) {
   int rc;
   if (!app || !app->flow) return TURBO_EINVAL;
   if (!app->started) return TURBO_OK;
+  if (app->async_configured) {
+    turbo_mutex_lock(&app->async_mutex);
+    app->async_accepting = 0;
+    turbo_cond_broadcast(&app->async_changed);
+    turbo_mutex_unlock(&app->async_mutex);
+    if (app->async_thread_started) {
+      rc = turbo_thread_join(&app->async_thread);
+      if (rc != TURBO_OK) return rc;
+      turbo_thread_destroy(&app->async_thread);
+      app->async_thread_started = 0;
+    }
+  }
   rc = turbo_flow_stop(app->flow);
   if (rc == TURBO_OK) app->started = 0;
   return rc;
@@ -4427,17 +5457,64 @@ int turbo_flow_fmq_app_send(turbo_flow_fmq_app_t *app, const void *data, size_t 
   return rc;
 }
 
-int turbo_flow_fmq_app_send_batch(turbo_flow_fmq_app_t *app,
-                                  const turbo_flow_fmq_app_send_item_t *items,
-                                  size_t item_count, size_t *submitted) {
+typedef struct flow_fmq_app_batch_prepare_context_s {
+  const turbo_flow_fmq_app_send_item_t *copied_items;
+  const flow_fmq_app_async_request_t *retained_items;
+  flow_fmq_send_batch_t *batch;
+  size_t prepared_payload_bytes;
+} flow_fmq_app_batch_prepare_context_t;
+
+static int flow_fmq_app_prepare_batch_message(void *ctx, size_t index,
+                                              turbo_flow_msg_t *message) {
+  flow_fmq_app_batch_prepare_context_t *prepare =
+      (flow_fmq_app_batch_prepare_context_t *)ctx;
+  const void *data;
+  size_t data_size;
+  uint64_t profile_started_ns;
+  if (!prepare || !prepare->batch || !message) return TURBO_EINVAL;
+  data = prepare->copied_items ? prepare->copied_items[index].data : NULL;
+  data_size = prepare->copied_items ? prepare->copied_items[index].data_size
+                                    : prepare->retained_items[index].data_size;
+  if ((prepare->copied_items && !data && data_size > 0u) ||
+      (prepare->retained_items && !prepare->retained_items[index].buffer)) {
+    return TURBO_EINVAL;
+  }
+  if (data_size > TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES -
+                      prepare->prepared_payload_bytes) {
+    return TURBO_EMSGSIZE;
+  }
+  profile_started_ns = flow_fmq_profile_batch_step_begin(prepare->batch);
+  prepare->prepared_payload_bytes += data_size;
+  message->buffer = prepare->copied_items
+                        ? mem_get_buffer(mem_global(), data_size)
+                        : mem_buffer_retain(prepare->retained_items[index].buffer);
+  if (!message->buffer) return TURBO_ENOMEM;
+  if (prepare->copied_items) {
+    if (data_size > 0u) memcpy(mem_buffer_data(message->buffer), data, data_size);
+    mem_set_used(message->buffer, data_size);
+  }
+  message->payload = tstr_v_from_buf(mem_buffer_data(message->buffer), data_size);
+  flow_fmq_profile_batch_payload_prepared(prepare->batch, profile_started_ns);
+  return TURBO_OK;
+}
+
+static int flow_fmq_app_send_batch_internal(
+    turbo_flow_fmq_app_t *app, const turbo_flow_fmq_app_send_item_t *copied_items,
+    const flow_fmq_app_async_request_t *retained_items, size_t item_count,
+    size_t *submitted) {
+  turbo_flow_publish_batch_config_t publish_config = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
+  flow_fmq_app_batch_prepare_context_t prepare_context;
   flow_fmq_send_batch_t *batch;
   flow_fmq_send_batch_t *previous_batch;
   int prepare_status = TURBO_OK;
   int commit_status;
   int wait_status = TURBO_OK;
-  size_t prepared_payload_bytes = 0u;
+  size_t published_messages = 0u;
   if (submitted) *submitted = 0u;
-  if (!app || !app->flow || !items || item_count == 0u) return TURBO_EINVAL;
+  if (!app || !app->flow || ((copied_items == NULL) == (retained_items == NULL)) ||
+      item_count == 0u) {
+    return TURBO_EINVAL;
+  }
   if (!app->can_send) return TURBO_ENOTSUP;
   if (!app->started) return TURBO_EBUSY;
   if (app->pattern != TURBO_FLOW_FMQ_PUB && app->pattern != TURBO_FLOW_FMQ_PUSH &&
@@ -4447,37 +5524,23 @@ int turbo_flow_fmq_app_send_batch(turbo_flow_fmq_app_t *app,
   if (item_count > TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS) return TURBO_ERANGE;
   batch = flow_fmq_send_batch_create(app->flow, item_count);
   if (!batch) return TURBO_ENOMEM;
+  prepare_context = (flow_fmq_app_batch_prepare_context_t){copied_items, retained_items, batch,
+                                                           0u};
+  publish_config.message_count = item_count;
+  publish_config.prepare = flow_fmq_app_prepare_batch_message;
+  publish_config.ctx = &prepare_context;
   previous_batch = flow_fmq_active_send_batch;
   flow_fmq_active_send_batch = batch;
-  for (size_t i = 0u; i < item_count; ++i) {
-    turbo_flow_msg_t message;
-    if (!items[i].data && items[i].data_size > 0u) {
-      prepare_status = TURBO_EINVAL;
-      break;
-    }
-    if (items[i].data_size >
-        TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES - prepared_payload_bytes) {
-      prepare_status = TURBO_EMSGSIZE;
-      break;
-    }
-    prepared_payload_bytes += items[i].data_size;
-    turbo_flow_msg_init(&message);
-    message.buffer = mem_get_buffer(mem_global(), items[i].data_size);
-    if (!message.buffer) {
-      prepare_status = TURBO_ENOMEM;
-      break;
-    }
-    if (items[i].data_size > 0u) {
-      memcpy(mem_buffer_data(message.buffer), items[i].data, items[i].data_size);
-    }
-    mem_set_used(message.buffer, items[i].data_size);
-    message.payload =
-        tstr_v_from_buf(mem_buffer_data(message.buffer), items[i].data_size);
-    prepare_status = turbo_flow_publish(app->flow, "input", &message);
-    turbo_flow_msg_cleanup(&message);
-    if (prepare_status != TURBO_OK) break;
+  {
+    const uint64_t profile_started_ns = flow_fmq_profile_batch_step_begin(batch);
+    prepare_status = turbo_flow_publish_batch(app->flow, "input", &publish_config,
+                                              &published_messages);
+    flow_fmq_profile_batch_graph_published(batch, profile_started_ns);
   }
   flow_fmq_active_send_batch = previous_batch;
+  if (published_messages != batch->count && prepare_status == TURBO_OK) {
+    prepare_status = TURBO_EPROTO;
+  }
   if (batch->count == 0u) {
     flow_fmq_send_batch_release(batch);
     return prepare_status;
@@ -4496,6 +5559,75 @@ int turbo_flow_fmq_app_send_batch(turbo_flow_fmq_app_t *app,
   return wait_status;
 }
 
+int turbo_flow_fmq_app_send_batch(turbo_flow_fmq_app_t *app,
+                                  const turbo_flow_fmq_app_send_item_t *items,
+                                  size_t item_count, size_t *submitted) {
+  return flow_fmq_app_send_batch_internal(app, items, NULL, item_count, submitted);
+}
+
+int turbo_flow_fmq_app_configure_async_send(
+    turbo_flow_fmq_app_t *app, const turbo_flow_fmq_app_async_send_config_t *config) {
+  flow_fmq_app_async_request_t *batch_requests;
+  int rc;
+  if (!app || !app->flow || !flow_fmq_app_async_config_validate(config)) return TURBO_EINVAL;
+  if (!flow_fmq_app_async_pattern_supported(app->pattern)) return TURBO_ENOTSUP;
+  if (app->started || app->started_once) return TURBO_EBUSY;
+  if (app->async_configured) return TURBO_EALREADY;
+  batch_requests =
+      (flow_fmq_app_async_request_t *)calloc(config->batch_size, sizeof(*batch_requests));
+  if (!batch_requests) return TURBO_ENOMEM;
+  rc = flow_fmq_app_async_requests_reserve(&app->async_requests, config->queue_capacity);
+  if (rc != TURBO_OK) {
+    free(batch_requests);
+    return rc;
+  }
+  app->async_batch_requests = batch_requests;
+  app->async_queue_capacity = config->queue_capacity;
+  app->async_queue_capacity_bytes = config->queue_capacity_bytes;
+  app->async_batch_size = config->batch_size;
+  app->async_linger_ns = config->linger_ns;
+  app->async_configured = 1;
+  return TURBO_OK;
+}
+
+int turbo_flow_fmq_app_send_async(turbo_flow_fmq_app_t *app, const void *data,
+                                  size_t data_size,
+                                  turbo_flow_fmq_app_send_completion_fn completion, void *ctx) {
+  flow_fmq_app_async_request_t request;
+  int rc;
+  if (!app || (!data && data_size > 0u)) return TURBO_EINVAL;
+  if (!app->can_send || !flow_fmq_app_async_pattern_supported(app->pattern)) return TURBO_ENOTSUP;
+  if (!app->async_configured) return TURBO_ENOTSUP;
+  if (data_size > TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES) return TURBO_EMSGSIZE;
+  if (data_size > app->async_queue_capacity_bytes) return TURBO_ENOSPC;
+  memset(&request, 0, sizeof(request));
+  request.buffer = mem_get_buffer(mem_global(), data_size);
+  if (!request.buffer) return TURBO_ENOMEM;
+  if (data_size > 0u) memcpy(mem_buffer_data(request.buffer), data, data_size);
+  mem_set_used(request.buffer, data_size);
+  request.data_size = data_size;
+  request.completion = completion;
+  request.completion_ctx = ctx;
+
+  turbo_mutex_lock(&app->async_mutex);
+  if (!app->async_accepting) {
+    rc = TURBO_EBUSY;
+  } else if (flow_fmq_app_async_requests_size(&app->async_requests) >=
+                 app->async_queue_capacity ||
+             data_size > app->async_queue_capacity_bytes - app->async_queued_bytes) {
+    rc = TURBO_ENOSPC;
+  } else {
+    rc = flow_fmq_app_async_requests_push_back(&app->async_requests, request);
+    if (rc == TURBO_OK) {
+      app->async_queued_bytes += data_size;
+      turbo_cond_signal(&app->async_changed);
+    }
+  }
+  turbo_mutex_unlock(&app->async_mutex);
+  if (rc != TURBO_OK) mem_buffer_release(request.buffer);
+  return rc;
+}
+
 int turbo_flow_fmq_app_message_set_payload_copy(turbo_flow_msg_t *message, const void *data,
                                                 size_t data_size) {
   tstr_t payload;
@@ -4511,6 +5643,16 @@ int turbo_flow_fmq_app_message_set_payload_copy(turbo_flow_msg_t *message, const
 void turbo_flow_fmq_app_destroy(turbo_flow_fmq_app_t *app) {
   if (!app) return;
   if (app->started) (void)turbo_flow_fmq_app_stop(app);
+  if (app->async_thread_started) {
+    turbo_mutex_lock(&app->async_mutex);
+    app->async_accepting = 0;
+    turbo_cond_broadcast(&app->async_changed);
+    turbo_mutex_unlock(&app->async_mutex);
+    if (turbo_thread_join(&app->async_thread) != TURBO_OK) return;
+    turbo_thread_destroy(&app->async_thread);
+    app->async_thread_started = 0;
+  }
   turbo_flow_destroy(app->flow);
+  flow_fmq_app_async_destroy(app);
   free(app);
 }

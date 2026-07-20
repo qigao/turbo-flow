@@ -5,7 +5,7 @@
 #include <string.h>
 
 spec("flowmq_pattern") {
-  it("defines all FMQ v2 peer relationships without TurboFlow") {
+  it("defines all FMQ v3 peer relationships without TurboFlow") {
     check_true(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_PUB, FLOWMQ_PROTOCOL_SUB));
     check_true(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_PUB, FLOWMQ_PROTOCOL_XSUB));
     check_true(flowmq_patterns_compatible(FLOWMQ_PROTOCOL_XPUB, FLOWMQ_PROTOCOL_SUB));

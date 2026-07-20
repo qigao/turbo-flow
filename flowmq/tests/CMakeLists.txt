@@ -12,6 +12,20 @@ cmake_add_test(
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks
   FOLDER "flowmq/tests")
 
+if(TARGET TurboFlow::SecuritySQLite)
+  cmake_add_test(
+    test_fmq_security_owner
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_fmq_security_owner.c
+    LIBS TurboFlow::FMQ TurboFlow::SecuritySQLite TurboFlow::Flow TurboUtils::TinyTest
+    FOLDER "flowmq/tests")
+  if(TARGET TurboFlow::HttpClient)
+    target_link_libraries(test_fmq_security_owner PRIVATE TurboFlow::HttpClient)
+    target_compile_definitions(test_fmq_security_owner PRIVATE FMQ_TEST_HAVE_HTTP_SECURITY=1)
+  endif()
+  set_tests_properties(test_fmq_security_owner
+                       PROPERTIES LABELS "fmq-release;fmq-chaos;security-contract")
+endif()
+
 cmake_add_test(
   test_fmq_broker
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_fmq_broker.c

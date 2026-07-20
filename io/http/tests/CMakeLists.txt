@@ -5,6 +5,10 @@ cmake_add_test(
        TurboUtils::DataBind TurboUtils::TinyTest
   FOLDER "io/http/tests")
 
+target_include_directories(test_turbo_flow_http PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src
+                                                        ${PROJECT_SOURCE_DIR}/io/socket/tests)
+target_link_libraries(test_turbo_flow_http PRIVATE OpenSSL::SSL OpenSSL::Crypto TurboNet::CoroNet)
+
 set_tests_properties(test_turbo_flow_http PROPERTIES LABELS "fmq-release;fmq-chaos")
 
 if(WIN32)

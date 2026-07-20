@@ -3,9 +3,17 @@ add_executable(flowie_server flowie_server.c flowie_worker_runtime.c
 cmake_config_target(flowie_server FOLDER "flowie/app")
 target_link_libraries(flowie_server PRIVATE Flowie::App TurboFlow::Queue TurboFlow::Socket
                                             TurboUtils::Core)
+if(TARGET TurboFlow::SecuritySQLite)
+  target_link_libraries(flowie_server PRIVATE TurboFlow::SecuritySQLite)
+  target_compile_definitions(flowie_server PRIVATE FLOWIE_SERVER_HAVE_SQLITE_ACL=1)
+endif()
 if(TARGET TurboFlow::Redis)
   target_link_libraries(flowie_server PRIVATE TurboFlow::Redis)
   target_compile_definitions(flowie_server PRIVATE FLOWIE_SERVER_HAVE_REDIS=1)
+endif()
+if(TARGET TurboFlow::HttpClient)
+  target_link_libraries(flowie_server PRIVATE TurboFlow::HttpClient)
+  target_compile_definitions(flowie_server PRIVATE FLOWIE_SERVER_HAVE_HTTPS_AUTH=1)
 endif()
 
 add_executable(flowie_supervisor flowie_supervisor.c flowie_supervisor_runtime.c
@@ -37,14 +45,16 @@ if(BUILD_TESTS)
             FLOWIE_TEST_CONFIG_PATH="${PROJECT_SOURCE_DIR}/flowie/examples/flowie.yml"
             FLOWIE_TEST_GRAPH_PATH="${PROJECT_SOURCE_DIR}/flowie/examples/flowie.flow")
   add_dependencies(test_flowie_supervisor flowie_server flowie_supervisor_test_worker)
-  set_tests_properties(test_flowie_supervisor PROPERTIES LABELS "flowie;product-contract")
+  set_tests_properties(test_flowie_supervisor
+                       PROPERTIES LABELS "flowie;flowie-release;product-contract")
 
   add_test(
     NAME flowie_supervisor_check
     COMMAND flowie_supervisor --check --capture-output 1048576
             "${PROJECT_SOURCE_DIR}/flowie/examples/flowie.yml"
             "${PROJECT_SOURCE_DIR}/flowie/examples/flowie.flow")
-  set_tests_properties(flowie_supervisor_check PROPERTIES LABELS "flowie;product-contract")
+  set_tests_properties(flowie_supervisor_check
+                       PROPERTIES LABELS "flowie;flowie-release;product-contract")
 
   add_test(
     NAME flowie_supervisor_output_limit
@@ -54,14 +64,15 @@ if(BUILD_TESTS)
   set_tests_properties(
     flowie_supervisor_output_limit
     PROPERTIES WILL_FAIL TRUE
-               LABELS "flowie;product-contract;resource-limit")
+               LABELS "flowie;flowie-release;product-contract;resource-limit")
 
   add_test(
     NAME flowie_server_check
     COMMAND flowie_server --check
             "${PROJECT_SOURCE_DIR}/flowie/examples/flowie.yml"
             "${PROJECT_SOURCE_DIR}/flowie/examples/flowie.flow")
-  set_tests_properties(flowie_server_check PROPERTIES LABELS "flowie;product-contract")
+  set_tests_properties(flowie_server_check
+                       PROPERTIES LABELS "flowie;flowie-release;product-contract")
 
   add_test(
     NAME flowie_server_check_sqlite_session_store
@@ -69,7 +80,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/flowie/app/tests/flowie_server_sqlite.yml"
             "${PROJECT_SOURCE_DIR}/flowie/examples/flowie.flow")
   set_tests_properties(flowie_server_check_sqlite_session_store
-                       PROPERTIES LABELS "flowie;product-contract;storage-contract")
+                       PROPERTIES LABELS "flowie;flowie-release;product-contract;storage-contract")
 
   if(TARGET TurboFlow::Redis)
     add_test(
@@ -77,8 +88,25 @@ if(BUILD_TESTS)
       COMMAND flowie_server --check
               "${PROJECT_SOURCE_DIR}/flowie/app/tests/flowie_server_redis.yml"
               "${PROJECT_SOURCE_DIR}/flowie/examples/flowie.flow")
-    set_tests_properties(flowie_server_check_redis_session_store
-                         PROPERTIES DISABLED TRUE
-                                    LABELS "flowie;product-contract;storage-contract;redis-live")
+    set_tests_properties(
+      flowie_server_check_redis_session_store
+      PROPERTIES LABELS
+                 "flowie;flowie-release;product-contract;storage-contract;redis-live")
+    if(NOT TURBO_FLOW_REDIS_LIVE_TESTS)
+      set_tests_properties(flowie_server_check_redis_session_store PROPERTIES DISABLED TRUE)
+    endif()
+
+  endif()
+
+  if(TARGET TurboFlow::HttpClient)
+    add_test(
+      NAME flowie_server_check_https_auth_provider
+      COMMAND flowie_server --check
+              "${PROJECT_SOURCE_DIR}/flowie/app/tests/flowie_server_https_secure.yml"
+              "${PROJECT_SOURCE_DIR}/flowie/examples/flowie.flow")
+    set_tests_properties(
+      flowie_server_check_https_auth_provider
+      PROPERTIES LABELS "flowie;flowie-release;product-contract;security-contract"
+                 ENVIRONMENT "FLOWIE_TEST_AUTH_SERVICE_TOKEN=test-only-token")
   endif()
 endif()

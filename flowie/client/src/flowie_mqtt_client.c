@@ -10,12 +10,15 @@
 #include "turbo_str.h"
 #include "turbo_thread.h"
 #include "turbo_vec.h"
+#include "monocypher.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
 TURBO_SET_DEFINE(flowie_mqtt_packet_id_set_t, uint16_t)
+
+#define FLOWIE_MQTT_CLIENT_TLS_STRING_LIMIT 4096u
 
 typedef enum flowie_mqtt_client_state_e {
   FLOWIE_MQTT_CLIENT_DISCONNECTED = 0,
@@ -61,6 +64,11 @@ struct flowie_mqtt_client_s {
   flowie_mqtt_version_t version;
   tstr_t host;
   tstr_t path;
+  tstr_t tls_ca_file;
+  tstr_t tls_cert_file;
+  tstr_t tls_key_file;
+  tstr_t tls_key_password;
+  int tls_configured;
   int port;
   uint64_t timeout_ms;
   size_t max_packet_size;
@@ -140,10 +148,26 @@ static int flowie_mqtt_client_transport_valid(flowie_mqtt_client_transport_t tra
          transport <= FLOWIE_MQTT_CLIENT_TRANSPORT_WSS;
 }
 
+static const flowie_mqtt_client_tls_config_t *
+flowie_mqtt_client_tls_config(const flowie_mqtt_client_config_t *config) {
+  return config && config->abi_version == FLOWIE_MQTT_CLIENT_ABI_V6 ? &config->tls : NULL;
+}
+
+static int flowie_mqtt_client_tls_string_valid(const char *value) {
+  size_t length;
+  if (!value) return 1;
+  length = strlen(value);
+  return length > 0u && length <= FLOWIE_MQTT_CLIENT_TLS_STRING_LIMIT;
+}
+
 static int flowie_mqtt_client_config_validate(const flowie_mqtt_client_config_t *config) {
+  const flowie_mqtt_client_tls_config_t *tls;
   size_t max_packet_size;
-  if (!config || config->abi_version != FLOWIE_MQTT_CLIENT_ABI_V5 ||
-      config->size < sizeof(*config) || !config->host || config->host[0] == '\0' ||
+  if (!config ||
+      !((config->abi_version == FLOWIE_MQTT_CLIENT_ABI_V5 &&
+         config->size == offsetof(flowie_mqtt_client_config_t, tls)) ||
+        (config->abi_version == FLOWIE_MQTT_CLIENT_ABI_V6 && config->size >= sizeof(*config))) ||
+      !config->host || config->host[0] == '\0' ||
       config->port < 1 || config->port > 65535 ||
       !flowie_mqtt_client_transport_valid(config->transport))
     return TURBO_EINVAL;
@@ -158,6 +182,20 @@ static int flowie_mqtt_client_config_validate(const flowie_mqtt_client_config_t 
     return TURBO_EINVAL;
   if (config->command_queue_capacity == SIZE_MAX || config->command_queue_max_bytes == SIZE_MAX)
     return TURBO_EINVAL;
+  tls = flowie_mqtt_client_tls_config(config);
+  if (tls) {
+    int has_cert = tls->cert_file != NULL;
+    int has_key = tls->key_file != NULL;
+    int has_tls_config = tls->ca_file || tls->cert_file || tls->key_file || tls->key_password;
+    if ((has_tls_config && config->transport != FLOWIE_MQTT_CLIENT_TRANSPORT_TLS &&
+         config->transport != FLOWIE_MQTT_CLIENT_TRANSPORT_WSS) ||
+        has_cert != has_key || (tls->key_password && !has_key) ||
+        !flowie_mqtt_client_tls_string_valid(tls->ca_file) ||
+        !flowie_mqtt_client_tls_string_valid(tls->cert_file) ||
+        !flowie_mqtt_client_tls_string_valid(tls->key_file) ||
+        !flowie_mqtt_client_tls_string_valid(tls->key_password))
+      return TURBO_EINVAL;
+  }
   if (config->topic_handlers.count != 0u && !config->topic_handlers.data) return TURBO_EINVAL;
   for (size_t i = 0u; i < config->topic_handlers.count; ++i) {
     const flowie_mqtt_client_topic_handler_t *handler = &config->topic_handlers.data[i];
@@ -872,6 +910,7 @@ static int flowie_mqtt_client_submit_many(flowie_mqtt_client_t *client,
 
 int flowie_mqtt_client_create(const flowie_mqtt_client_config_t *config,
                               flowie_mqtt_client_t **out) {
+  const flowie_mqtt_client_tls_config_t *tls;
   flowie_mqtt_client_t *client;
   size_t max_packet_size;
   int rc;
@@ -909,8 +948,20 @@ int flowie_mqtt_client_create(const flowie_mqtt_client_config_t *config,
   client->next_packet_id = 1u;
   client->host = tstr_dup(config->host);
   client->path = tstr_dup(config->path ? config->path : "/mqtt");
+  tls = flowie_mqtt_client_tls_config(config);
+  if (tls) {
+    client->tls_ca_file = tls->ca_file ? tstr_dup(tls->ca_file) : NULL;
+    client->tls_cert_file = tls->cert_file ? tstr_dup(tls->cert_file) : NULL;
+    client->tls_key_file = tls->key_file ? tstr_dup(tls->key_file) : NULL;
+    client->tls_key_password = tls->key_password ? tstr_dup(tls->key_password) : NULL;
+    client->tls_configured = tls->ca_file || tls->cert_file || tls->key_file || tls->key_password;
+  }
   client->send_buffer = tstr_new_len(NULL, max_packet_size);
-  if (!client->host || !client->path || !client->send_buffer) {
+  if (!client->host || !client->path || !client->send_buffer ||
+      (tls && ((tls->ca_file && !client->tls_ca_file) ||
+               (tls->cert_file && !client->tls_cert_file) ||
+               (tls->key_file && !client->tls_key_file) ||
+               (tls->key_password && !client->tls_key_password)))) {
     rc = TURBO_ENOMEM;
     goto fail;
   }
@@ -984,6 +1035,13 @@ void flowie_mqtt_client_destroy(flowie_mqtt_client_t *client) {
   tstr_freep(&client->send_buffer);
   tstr_freep(&client->path);
   tstr_freep(&client->host);
+  tstr_freep(&client->tls_ca_file);
+  tstr_freep(&client->tls_cert_file);
+  tstr_freep(&client->tls_key_file);
+  if (client->tls_key_password) {
+    crypto_wipe(client->tls_key_password, tstr_len(client->tls_key_password));
+    tstr_freep(&client->tls_key_password);
+  }
   free(client->topic_handlers);
   free(client);
 }
@@ -994,7 +1052,7 @@ static int flowie_mqtt_client_connect_operation(flowie_mqtt_client_t *client,
   size_t written = 0u;
   int rc;
   if (!client || !packet || !connack || !flowie_mqtt_client_ack_output_valid(connack) ||
-      (packet->version != FLOWIE_MQTT_VERSION_3_1_1 && packet->version != FLOWIE_MQTT_VERSION_5))
+      !flowie_mqtt_version_is_supported(packet->version))
     return TURBO_EINVAL;
   rc = flowie_mqtt_client_begin(client, 0);
   if (rc != TURBO_OK) return rc;
@@ -1019,6 +1077,16 @@ static int flowie_mqtt_client_connect_operation(flowie_mqtt_client_t *client,
   if (!client->socket) {
     rc = TURBO_ENOMEM;
     goto fail;
+  }
+  if (client->tls_configured) {
+    turbo_tls_client_config_t tls_config = {0};
+    tls_config.ca_file = client->tls_ca_file;
+    tls_config.cert_file = client->tls_cert_file;
+    tls_config.key_file = client->tls_key_file;
+    tls_config.key_password = client->tls_key_password;
+    tls_config.verify_peer = 1;
+    rc = coro_socket_set_tls_client_config(client->socket, &tls_config);
+    if (rc != TURBO_OK) goto fail;
   }
   coro_socket_set_timeout(client->socket, client->timeout_ms);
   if (client->transport == FLOWIE_MQTT_CLIENT_TRANSPORT_WS ||

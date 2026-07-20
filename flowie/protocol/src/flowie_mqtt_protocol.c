@@ -73,7 +73,7 @@ int flowie_mqtt_packet_parse(const uint8_t *bytes, size_t byte_count,
   }
   if (!options) options = &defaults;
   if (options->version != FLOWIE_MQTT_VERSION_UNSPECIFIED &&
-      options->version != FLOWIE_MQTT_VERSION_3_1_1 && options->version != FLOWIE_MQTT_VERSION_5) {
+      !flowie_mqtt_version_is_supported(options->version)) {
     flowie_mqtt_error(error, FLOWIE_MQTT_PARSE_INVALID_ARGUMENT, 0u, "unsupported MQTT version");
     return FLOWIE_MQTT_PARSE_INVALID_ARGUMENT;
   }

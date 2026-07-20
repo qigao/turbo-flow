@@ -517,6 +517,43 @@ int turbo_flow_resolved_config_profile_channel(const turbo_flow_resolved_config_
   return TURBO_OK;
 }
 
+int turbo_flow_resolved_config_channel(const turbo_flow_resolved_config_t *config, const char *name,
+                                       turbo_flow_resolved_channel_view_t *view) {
+  json_value_t *channels;
+  json_value_t *channel;
+  json_value_t *kind;
+  json_value_t *fields;
+  if (view && view->size >= sizeof(*view))
+    *view = (turbo_flow_resolved_channel_view_t)TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT;
+  if (!config || !config->document || !name || !name[0] || !view || view->size < sizeof(*view))
+    return TURBO_EINVAL;
+  channels = turbo_json_object_get(config->document, "channels");
+  channel = channels ? turbo_json_object_get(channels, name) : NULL;
+  if (!channel || turbo_json_type(channel) != TURBO_JSON_OBJECT) return TURBO_ENOENT;
+  kind = turbo_json_object_get(channel, "kind");
+  fields = turbo_json_object_get(channel, "config");
+  if (!kind || turbo_json_type(kind) != TURBO_JSON_STRING || !turbo_json_string(kind)[0] ||
+      !fields || turbo_json_type(fields) != TURBO_JSON_OBJECT)
+    return TURBO_EPROTO;
+  view->name = name;
+  view->kind = turbo_json_string(kind);
+  view->config = fields;
+  return TURBO_OK;
+}
+
+int turbo_flow_resolved_channel_get_string(const turbo_flow_resolved_channel_view_t *view,
+                                           const char *field, const char **value) {
+  json_value_t *entry;
+  if (value) *value = NULL;
+  if (!view || view->size < sizeof(*view) || !view->config || !field || !field[0] || !value)
+    return TURBO_EINVAL;
+  entry = turbo_json_object_get((const json_value_t *)view->config, field);
+  if (!entry) return TURBO_ENOENT;
+  if (turbo_json_type(entry) != TURBO_JSON_STRING) return TURBO_EINVAL;
+  *value = turbo_json_string(entry);
+  return *value && (*value)[0] ? TURBO_OK : TURBO_EINVAL;
+}
+
 int turbo_flow_resolved_config_preflight_adapter_kinds(const turbo_flow_resolved_config_t *config,
                                                        const char *const *enabled_kinds,
                                                        size_t enabled_kind_count,

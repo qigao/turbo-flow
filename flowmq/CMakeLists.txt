@@ -21,9 +21,11 @@ set(TURBO_FLOW_FMQ_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_pubsub_config.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_retry.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_retry_config.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_security_owner.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_config.c)
 set(TURBO_FLOW_FMQ_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_security.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_broker.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_broker_protocol.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_compatibility.h
@@ -67,6 +69,11 @@ target_link_libraries(
                  PRIVATE FlowMQ::Protocol flowmq_connect_endpoint_runtime
                          tf_executor_common
                          TurboUtils::Parser)
+
+# Keep the installed target name stable while exposing a symmetric product
+# build target alongside the existing flowie target.
+add_custom_target(flowmq DEPENDS ${TARGET_NAME})
+cmake_config_target(flowmq FOLDER "flowmq")
 
 install(FILES ${TURBO_FLOW_FMQ_HEADERS} DESTINATION include)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/examples/fmq.yml

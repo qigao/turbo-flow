@@ -12,9 +12,19 @@ extern "C" {
 
 typedef enum flowie_mqtt_version_e {
   FLOWIE_MQTT_VERSION_UNSPECIFIED = 0,
+  FLOWIE_MQTT_VERSION_3_1 = 3,
   FLOWIE_MQTT_VERSION_3_1_1 = 4,
   FLOWIE_MQTT_VERSION_5 = 5
 } flowie_mqtt_version_t;
+
+static inline int flowie_mqtt_version_is_supported(flowie_mqtt_version_t version) {
+  return version == FLOWIE_MQTT_VERSION_3_1 || version == FLOWIE_MQTT_VERSION_3_1_1 ||
+         version == FLOWIE_MQTT_VERSION_5;
+}
+
+static inline int flowie_mqtt_version_is_3x(flowie_mqtt_version_t version) {
+  return version == FLOWIE_MQTT_VERSION_3_1 || version == FLOWIE_MQTT_VERSION_3_1_1;
+}
 
 typedef enum flowie_mqtt_packet_type_e {
   FLOWIE_MQTT_PACKET_CONNECT = 1,

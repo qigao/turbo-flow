@@ -5,6 +5,7 @@
 #include "flowmq_coronet_transport.h"
 #include "flowmq_peer_session.h"
 #include "flowmq_protocol.h"
+#include "flowmq_security.h"
 
 typedef struct flowmq_connect_endpoint_s flowmq_connect_endpoint_t;
 
@@ -68,6 +69,8 @@ typedef struct flowmq_connect_endpoint_config_s {
   flowmq_connect_endpoint_state_fn on_state;
   flowmq_connect_endpoint_event_fn on_event;
   void *callback_ctx;
+  /** Borrowed adapter-owned immutable security runtime; NULL selects trusted v3 mode. */
+  flowmq_security_binding_runtime_t *security;
 } flowmq_connect_endpoint_config_t;
 
 int flowmq_connect_endpoint_create(const flowmq_connect_endpoint_config_t *config,

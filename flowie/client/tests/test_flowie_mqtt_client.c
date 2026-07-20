@@ -2,6 +2,7 @@
 
 #include "flowie_mqtt_protocol.h"
 #include "flowie_test_socket.h"
+#include "mtls_test_server.h"
 
 #include "platform.h"
 #include "CoroNet/turbo_coro_socket.h"
@@ -53,6 +54,21 @@ typedef struct flowie_mqtt_test_error_state_s {
   int server_status;
   int server_done;
 } flowie_mqtt_test_error_state_t;
+
+typedef struct flowie_mqtt_mtls_state_s {
+  atomic_int done;
+  atomic_int status;
+} flowie_mqtt_mtls_state_t;
+
+static void flowie_mqtt_mtls_connect_completion(
+    flowie_mqtt_client_t *client, int status,
+    const flowie_mqtt_control_packet_view_t *response, void *user_data) {
+  flowie_mqtt_mtls_state_t *state = (flowie_mqtt_mtls_state_t *)user_data;
+  (void)client;
+  if (!response || response->type != FLOWIE_MQTT_PACKET_CONNACK) status = TURBO_EPROTO;
+  atomic_store_explicit(&state->status, status, memory_order_relaxed);
+  atomic_store_explicit(&state->done, 1, memory_order_release);
+}
 
 static int flowie_mqtt_test_next_packet(flowie_mqtt_test_broker_stream_t *stream,
                                         flowie_mqtt_version_t version,
@@ -580,6 +596,7 @@ spec("flowie mqtt callback client") {
   it("validates configuration and starts disconnected") {
     static const uint8_t duplicate_filter[] = "duplicate/#";
     flowie_mqtt_client_config_t config = FLOWIE_MQTT_CLIENT_CONFIG_INIT;
+    flowie_mqtt_client_config_t legacy;
     flowie_mqtt_client_topic_handler_t duplicate_handlers[2] = {{0}};
     flowie_mqtt_client_t *client = (flowie_mqtt_client_t *)(uintptr_t)1u;
     check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_EINVAL);
@@ -590,6 +607,13 @@ spec("flowie mqtt callback client") {
     check_false(flowie_mqtt_client_is_connected(client));
     check_int_eq(flowie_mqtt_client_ping(client), TURBO_ENOTSUP);
     flowie_mqtt_client_destroy(client);
+    legacy = config;
+    legacy.abi_version = FLOWIE_MQTT_CLIENT_ABI_V5;
+    legacy.size = offsetof(flowie_mqtt_client_config_t, tls);
+    client = NULL;
+    check_int_eq(flowie_mqtt_client_create(&legacy, &client), TURBO_OK);
+    check_not_null(client);
+    flowie_mqtt_client_destroy(client);
     client = NULL;
     duplicate_handlers[0].filter =
         (flowie_mqtt_span_t){duplicate_filter, sizeof(duplicate_filter) - 1u};
@@ -599,6 +623,79 @@ spec("flowie mqtt callback client") {
         (flowie_mqtt_client_topic_handler_map_t){duplicate_handlers, 2u};
     check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_EINVAL);
     check_null(client);
+  }
+
+  it("accepts verified TLS client identity and rejects incomplete credentials") {
+    flowie_mqtt_client_config_t config = FLOWIE_MQTT_CLIENT_CONFIG_INIT;
+    flowie_mqtt_client_t *client = NULL;
+
+    config.host = "localhost";
+    config.transport = FLOWIE_MQTT_CLIENT_TRANSPORT_TLS;
+    config.port = FLOWIE_MQTT_CLIENT_DEFAULT_TLS_PORT;
+    config.tls.ca_file = "ca.pem";
+    config.tls.cert_file = "client.pem";
+    config.tls.key_file = "client-key.pem";
+    config.tls.key_password = "secret";
+    check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_OK);
+    check_not_null(client);
+    flowie_mqtt_client_destroy(client);
+
+    client = NULL;
+    config.tls.key_file = NULL;
+    check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_EINVAL);
+    check_null(client);
+    config.tls.key_file = "client-key.pem";
+    config.transport = FLOWIE_MQTT_CLIENT_TRANSPORT_TCP;
+    check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_EINVAL);
+    check_null(client);
+  }
+
+  it("presents its client certificate to an mTLS MQTT server") {
+    static const uint8_t connack[] = {0x20u, 0x03u, 0x00u, 0x00u, 0x00u};
+    uint8_t client_id[] = "flowie-mtls-client";
+    char ca_file[512] = {0};
+    char cert_file[512] = {0};
+    char key_file[512] = {0};
+    flow_mtls_test_server_t server;
+    flowie_mqtt_mtls_state_t state;
+    flowie_mqtt_client_config_t config = FLOWIE_MQTT_CLIENT_CONFIG_INIT;
+    flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
+    flowie_mqtt_client_t *client = NULL;
+    uint64_t deadline;
+
+    atomic_init(&state.done, 0);
+    atomic_init(&state.status, TURBO_EBUSY);
+    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file), key_file,
+                                             sizeof(key_file)), 0);
+    check_int_eq(flow_mtls_test_server_start(&server, connack, sizeof(connack)), 0);
+    config.host = "localhost";
+    config.port = server.port;
+    config.transport = FLOWIE_MQTT_CLIENT_TRANSPORT_TLS;
+    config.timeout_ms = FLOWIE_MQTT_CLIENT_TEST_TIMEOUT_MS;
+    config.tls.ca_file = ca_file;
+    config.tls.cert_file = cert_file;
+    config.tls.key_file = key_file;
+    config.on_connect = flowie_mqtt_mtls_connect_completion;
+    config.user_data = &state;
+    check_int_eq(flowie_mqtt_client_create(&config, &client), TURBO_OK);
+    connect.version = FLOWIE_MQTT_VERSION_5;
+    connect.clean_start = 1u;
+    connect.client_id = (flowie_mqtt_span_t){client_id, sizeof(client_id) - 1u};
+    check_int_eq(flowie_mqtt_client_connect(client, &connect), TURBO_OK);
+    deadline = turbo_monotonic_ms() + FLOWIE_MQTT_CLIENT_TEST_TIMEOUT_MS;
+    while (!atomic_load_explicit(&state.done, memory_order_acquire) &&
+           turbo_monotonic_ms() < deadline)
+      turbo_sleep_ms(1u);
+    flow_mtls_test_server_join(&server);
+    check_true(atomic_load_explicit(&state.done, memory_order_acquire));
+    check_int_eq(atomic_load_explicit(&state.status, memory_order_relaxed), TURBO_OK);
+    check_int_eq(server.status, 0);
+    check_true(server.peer_verified);
+    flowie_mqtt_client_destroy(client);
+    tls_test_remove_file(key_file);
+    tls_test_remove_file(cert_file);
+    tls_test_remove_file(ca_file);
   }
 
   it("rejects commands that exceed the configured queue byte budget") {
@@ -726,6 +823,17 @@ spec("flowie mqtt callback client") {
     flowie_mqtt_client_destroy(client);
     coro_socket_destroy(server);
     coro_context_destroy(server_context);
+  }
+
+  it("completes MQTT 3.1 callbacks against a local broker") {
+    flowie_mqtt_test_state_t state;
+    check_int_eq(flowie_mqtt_test_run_callbacks(FLOWIE_MQTT_VERSION_3_1, &state), TURBO_OK);
+    check_int_eq(state.publish_count, 2);
+    check_str_eq(state.topics[0], "server/topic/one");
+    check_str_eq(state.payloads[0], "from-broker-one");
+    check_str_eq(state.topics[1], "server/topic/two");
+    check_str_eq(state.payloads[1], "from-broker-two");
+    check_int_eq(state.secondary_match_count, 1);
   }
 
   it("completes MQTT 3.1.1 callbacks against a local broker") {

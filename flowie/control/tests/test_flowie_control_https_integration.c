@@ -1,0 +1,575 @@
+#include "flowie_control_runtime_internal.h"
+
+#include "CoroNet/turbo_coro_context.h"
+#include "CoroNet/turbo_coro_socket.h"
+#include "http_client.h"
+#include "platform.h"
+#include "tinytest.h"
+#include "turbo_error.h"
+#include "turbo_process.h"
+
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#else
+#  include <arpa/inet.h>
+#  include <netinet/in.h>
+#  include <sys/socket.h>
+#  include <unistd.h>
+#endif
+
+#ifndef FLOWIE_CONTROL_EXECUTABLE
+#  error "FLOWIE_CONTROL_EXECUTABLE must point to the built controller"
+#endif
+
+#define CONTROL_INTEGRATION_TIMEOUT_MS 15000u
+#define CONTROL_INTEGRATION_REQUEST_TIMEOUT_MS 1500
+#define CONTROL_INTEGRATION_RSA_BITS 2048
+#define CONTROL_INTEGRATION_RPC_BODY                                                         \
+  "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.system.status\",\"id\":1}"
+
+typedef struct control_tls_material_s {
+  EVP_PKEY *ca_key;
+  X509 *ca_cert;
+  EVP_PKEY *server_key;
+  X509 *server_cert;
+  EVP_PKEY *known_key;
+  X509 *known_cert;
+  EVP_PKEY *unknown_key;
+  X509 *unknown_cert;
+  char *ca_path;
+  char *server_cert_path;
+  char *server_key_path;
+  char *known_cert_path;
+  char *known_key_path;
+  char *unknown_cert_path;
+  char *unknown_key_path;
+  char known_fingerprint[CORO_TLS_PEER_CERT_SHA256_CAPACITY];
+} control_tls_material_t;
+
+typedef struct control_http_state_s {
+  coro_context_t *context;
+  const char *base_url;
+  const char *ca_path;
+  const char *known_cert_path;
+  const char *known_key_path;
+  const char *unknown_cert_path;
+  const char *unknown_key_path;
+  int known_ok;
+  int no_certificate_rejected;
+  int unknown_certificate_forbidden;
+  int no_certificate_status;
+  int no_certificate_error;
+  int unknown_certificate_status;
+  int unknown_certificate_error;
+  char unknown_certificate_body[512];
+} control_http_state_t;
+
+static int control_test_socket_init(void) {
+#ifdef _WIN32
+  static int initialized = 0;
+  WSADATA data;
+  if (initialized) return 0;
+  if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return -1;
+  initialized = 1;
+#endif
+  return 0;
+}
+
+static int control_test_reserve_port(unsigned short *port_out) {
+  struct sockaddr_in address;
+  socklen_t address_size = (socklen_t)sizeof(address);
+#ifdef _WIN32
+  SOCKET socket_handle;
+  if (!port_out || control_test_socket_init() != 0) return -1;
+  socket_handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (socket_handle == INVALID_SOCKET) return -1;
+#else
+  int socket_handle;
+  if (!port_out || control_test_socket_init() != 0) return -1;
+  socket_handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (socket_handle < 0) return -1;
+#endif
+  memset(&address, 0, sizeof(address));
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_port = htons(0);
+  if (bind(socket_handle, (const struct sockaddr *)&address, sizeof(address)) != 0 ||
+      getsockname(socket_handle, (struct sockaddr *)&address, &address_size) != 0) {
+#ifdef _WIN32
+    closesocket(socket_handle);
+#else
+    close(socket_handle);
+#endif
+    return -1;
+  }
+  *port_out = ntohs(address.sin_port);
+#ifdef _WIN32
+  closesocket(socket_handle);
+#else
+  close(socket_handle);
+#endif
+  return 0;
+}
+
+static EVP_PKEY *control_test_generate_key(void) {
+  EVP_PKEY_CTX *context = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+  EVP_PKEY *key = NULL;
+  if (!context || EVP_PKEY_keygen_init(context) <= 0 ||
+      EVP_PKEY_CTX_set_rsa_keygen_bits(context, CONTROL_INTEGRATION_RSA_BITS) <= 0 ||
+      EVP_PKEY_keygen(context, &key) <= 0) {
+    EVP_PKEY_free(key);
+    key = NULL;
+  }
+  EVP_PKEY_CTX_free(context);
+  return key;
+}
+
+static int control_test_add_extension(X509 *certificate, X509 *issuer, int nid,
+                                      const char *value) {
+  X509V3_CTX extension_context;
+  X509_EXTENSION *extension;
+  if (!certificate || !issuer || !value) return -1;
+  X509V3_set_ctx(&extension_context, issuer, certificate, NULL, NULL, 0);
+  extension = X509V3_EXT_conf_nid(NULL, &extension_context, nid, (char *)value);
+  if (!extension) return -1;
+  if (X509_add_ext(certificate, extension, -1) != 1) {
+    X509_EXTENSION_free(extension);
+    return -1;
+  }
+  X509_EXTENSION_free(extension);
+  return 0;
+}
+
+static X509 *control_test_make_certificate(EVP_PKEY *key, X509 *issuer,
+                                            EVP_PKEY *issuer_key, long serial,
+                                            const char *common_name, int is_ca,
+                                            const char *san, const char *extended_usage) {
+  X509 *certificate = X509_new();
+  X509_NAME *subject;
+  if (!certificate || !key || !common_name) goto fail;
+  if (X509_set_version(certificate, 2) != 1 ||
+      ASN1_INTEGER_set(X509_get_serialNumber(certificate), serial) != 1 ||
+      !X509_gmtime_adj(X509_get_notBefore(certificate), -300) ||
+      !X509_gmtime_adj(X509_get_notAfter(certificate), 31536000L))
+    goto fail;
+  subject = X509_get_subject_name(certificate);
+  if (!subject || X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC,
+                                             (const unsigned char *)common_name, -1, -1, 0) != 1)
+    goto fail;
+  if (issuer) {
+    if (X509_set_issuer_name(certificate, X509_get_subject_name(issuer)) != 1) goto fail;
+  } else if (X509_set_issuer_name(certificate, subject) != 1) {
+    goto fail;
+  }
+  if (X509_set_pubkey(certificate, key) != 1) goto fail;
+  if (is_ca) {
+    if (control_test_add_extension(certificate, certificate, NID_basic_constraints,
+                                   "critical,CA:TRUE") != 0 ||
+        control_test_add_extension(certificate, certificate, NID_key_usage,
+                                   "critical,keyCertSign,cRLSign") != 0)
+      goto fail;
+  } else {
+    if (control_test_add_extension(certificate, issuer, NID_basic_constraints, "critical,CA:FALSE") !=
+            0 ||
+        control_test_add_extension(certificate, issuer, NID_key_usage,
+                                   "critical,digitalSignature,keyEncipherment") != 0 ||
+        (san && control_test_add_extension(certificate, issuer, NID_subject_alt_name, san) != 0) ||
+        (extended_usage &&
+         control_test_add_extension(certificate, issuer, NID_ext_key_usage, extended_usage) != 0))
+      goto fail;
+  }
+  if (!issuer_key) issuer_key = key;
+  if (X509_sign(certificate, issuer_key, EVP_sha256()) <= 0) goto fail;
+  return certificate;
+
+fail:
+  X509_free(certificate);
+  return NULL;
+}
+
+static int control_test_write_certificate(const char *path, X509 *certificate) {
+  BIO *file = NULL;
+  int rc = -1;
+  if (!path || !certificate) return -1;
+  file = BIO_new_file(path, "wb");
+  if (file && PEM_write_bio_X509(file, certificate) == 1) rc = 0;
+  BIO_free(file);
+  return rc;
+}
+
+static int control_test_write_key(const char *path, EVP_PKEY *key) {
+  BIO *file = NULL;
+  int rc = -1;
+  if (!path || !key) return -1;
+  file = BIO_new_file(path, "wb");
+  if (file && PEM_write_bio_PrivateKey(file, key, NULL, NULL, 0, NULL, NULL) == 1) rc = 0;
+  BIO_free(file);
+  return rc;
+}
+
+static int control_test_fingerprint(X509 *certificate,
+                                    char output[CORO_TLS_PEER_CERT_SHA256_CAPACITY]) {
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digest_size = 0u;
+  static const char hex[] = "0123456789abcdef";
+  if (!certificate || !output || X509_digest(certificate, EVP_sha256(), digest, &digest_size) != 1 ||
+      digest_size != 32u)
+    return -1;
+  memcpy(output, "sha256:", sizeof("sha256:") - 1u);
+  for (unsigned int index = 0u; index < digest_size; ++index) {
+    output[sizeof("sha256:") - 1u + index * 2u] = hex[digest[index] >> 4u];
+    output[sizeof("sha256:") + index * 2u] = hex[digest[index] & 0x0fu];
+  }
+  output[sizeof("sha256:") - 1u + digest_size * 2u] = '\0';
+  return 0;
+}
+
+static int control_test_tls_material_open(control_tls_material_t *material) {
+  if (!material) return -1;
+  memset(material, 0, sizeof(*material));
+  material->ca_path = tt_make_temp_file("flowie-control-it-ca", ".pem");
+  material->server_cert_path = tt_make_temp_file("flowie-control-it-server", ".pem");
+  material->server_key_path = tt_make_temp_file("flowie-control-it-server", ".key");
+  material->known_cert_path = tt_make_temp_file("flowie-control-it-known", ".pem");
+  material->known_key_path = tt_make_temp_file("flowie-control-it-known", ".key");
+  material->unknown_cert_path = tt_make_temp_file("flowie-control-it-unknown", ".pem");
+  material->unknown_key_path = tt_make_temp_file("flowie-control-it-unknown", ".key");
+  if (!material->ca_path || !material->server_cert_path || !material->server_key_path ||
+      !material->known_cert_path || !material->known_key_path || !material->unknown_cert_path ||
+      !material->unknown_key_path)
+    return -1;
+  material->ca_key = control_test_generate_key();
+  material->ca_cert = control_test_make_certificate(material->ca_key, NULL, NULL, 1,
+                                                    "Flowie integration CA", 1, NULL, NULL);
+  material->server_key = control_test_generate_key();
+  material->server_cert = control_test_make_certificate(
+      material->server_key, material->ca_cert, material->ca_key, 2, "localhost", 0,
+      "DNS:localhost,IP:127.0.0.1", "serverAuth");
+  material->known_key = control_test_generate_key();
+  material->known_cert = control_test_make_certificate(material->known_key, material->ca_cert,
+                                                       material->ca_key, 3, "flowie-admin", 0,
+                                                       NULL, "clientAuth");
+  material->unknown_key = control_test_generate_key();
+  material->unknown_cert = control_test_make_certificate(
+      material->unknown_key, material->ca_cert, material->ca_key, 4, "flowie-unknown", 0, NULL,
+      "clientAuth");
+  if (!material->ca_key || !material->ca_cert || !material->server_key || !material->server_cert ||
+      !material->known_key || !material->known_cert || !material->unknown_key ||
+      !material->unknown_cert || control_test_fingerprint(material->known_cert,
+                                                           material->known_fingerprint) != 0 ||
+      control_test_write_certificate(material->ca_path, material->ca_cert) != 0 ||
+      control_test_write_certificate(material->server_cert_path, material->server_cert) != 0 ||
+      control_test_write_key(material->server_key_path, material->server_key) != 0 ||
+      control_test_write_certificate(material->known_cert_path, material->known_cert) != 0 ||
+      control_test_write_key(material->known_key_path, material->known_key) != 0 ||
+      control_test_write_certificate(material->unknown_cert_path, material->unknown_cert) != 0 ||
+      control_test_write_key(material->unknown_key_path, material->unknown_key) != 0)
+    return -1;
+  return 0;
+}
+
+static void control_test_tls_material_close(control_tls_material_t *material) {
+  char *paths[7];
+  if (!material) return;
+  paths[0] = material->ca_path;
+  paths[1] = material->server_cert_path;
+  paths[2] = material->server_key_path;
+  paths[3] = material->known_cert_path;
+  paths[4] = material->known_key_path;
+  paths[5] = material->unknown_cert_path;
+  paths[6] = material->unknown_key_path;
+  for (size_t index = 0u; index < sizeof(paths) / sizeof(paths[0]); ++index) {
+    if (paths[index]) {
+      (void)tt_remove_file(paths[index]);
+      free(paths[index]);
+    }
+  }
+  X509_free(material->unknown_cert);
+  EVP_PKEY_free(material->unknown_key);
+  X509_free(material->known_cert);
+  EVP_PKEY_free(material->known_key);
+  X509_free(material->server_cert);
+  EVP_PKEY_free(material->server_key);
+  X509_free(material->ca_cert);
+  EVP_PKEY_free(material->ca_key);
+  memset(material, 0, sizeof(*material));
+}
+
+static int control_test_seed_store(const char *database_path) {
+  flowie_control_store_config_t store_config = FLOWIE_CONTROL_STORE_CONFIG_INIT;
+  flowie_control_store_t *store = NULL;
+  flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
+  flowie_control_root_group_create_command_t root = FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+  flowie_control_user_create_command_t user = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
+  flowie_control_role_create_command_t role = FLOWIE_CONTROL_ROLE_CREATE_COMMAND_INIT;
+  flowie_control_user_role_add_command_t assignment = FLOWIE_CONTROL_USER_ROLE_ADD_COMMAND_INIT;
+  uint64_t revision = 0u;
+  int rc;
+  store_config.database_path = database_path;
+  rc = flowie_control_store_open(&store_config, &store);
+  if (rc != TURBO_OK) return rc;
+
+  root.root_group_id = "root-a";
+  root.actor = "bootstrap";
+  root.request_id = "integration-root";
+  root.expected_revision = 0u;
+  root.occurred_at = 1u;
+  rc = flowie_control_store_root_group_create(store, &root, &result);
+  revision = result.revision;
+  if (rc == TURBO_OK) {
+    user.root_group_id = "root-a";
+    user.principal_id = "admin-a";
+    user.principal_type = "operator";
+    user.actor = "bootstrap";
+    user.request_id = "integration-user";
+    user.expected_revision = revision;
+    user.occurred_at = 2u;
+    result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
+    rc = flowie_control_store_user_create(store, &user, &result);
+    revision = result.revision;
+  }
+  if (rc == TURBO_OK) {
+    role.root_group_id = "root-a";
+    role.role_id = FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER;
+    role.actor = "bootstrap";
+    role.request_id = "integration-role";
+    role.expected_revision = revision;
+    role.occurred_at = 3u;
+    result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
+    rc = flowie_control_store_role_create(store, &role, &result);
+    revision = result.revision;
+  }
+  if (rc == TURBO_OK) {
+    assignment.root_group_id = "root-a";
+    assignment.principal_id = "admin-a";
+    assignment.role_id = FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER;
+    assignment.actor = "bootstrap";
+    assignment.request_id = "integration-assignment";
+    assignment.expected_revision = revision;
+    assignment.occurred_at = 4u;
+    result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
+    rc = flowie_control_store_user_role_add(store, &assignment, &result);
+  }
+  flowie_control_store_destroy(store);
+  return rc;
+}
+
+static int control_test_write_config(const char *path, const char *database_path,
+                                     const control_tls_material_t *material,
+                                     unsigned short port) {
+  char yaml[8192];
+  int size;
+  if (!path || !database_path || !material) return -1;
+  size = snprintf(
+      yaml, sizeof(yaml),
+      "version: 1\n"
+      "listener:\n"
+      "  host: 127.0.0.1\n"
+      "  port: %u\n"
+      "  tls:\n"
+      "    cert_file: '%s'\n"
+      "    key_file: '%s'\n"
+      "    client_ca_file: '%s'\n"
+      "storage:\n"
+      "  sqlite:\n"
+      "    path: '%s'\n"
+      "management:\n"
+      "  rpc_path: /v1/management/rpc\n"
+      "  certificate_bindings:\n"
+      "    - peer_certificate_sha256: %s\n"
+      "      root_group: root-a\n"
+      "      principal: admin-a\n"
+      "dashboard:\n"
+      "  enabled: false\n"
+      "auth:\n"
+      "  enabled: false\n",
+      (unsigned int)port, material->server_cert_path, material->server_key_path,
+      material->ca_path, database_path, material->known_fingerprint);
+  if (size <= 0 || (size_t)size >= sizeof(yaml)) return -1;
+  return tt_write_file(path, yaml, (size_t)size);
+}
+
+static http_response_t *control_test_request(const control_http_state_t *state,
+                                             const char *cert_path, const char *key_path) {
+  http_client_t *client = NULL;
+  http_response_t *response = NULL;
+  turbo_tls_client_config_t tls = {0};
+  if (!state || !state->base_url) return NULL;
+  client = http_client_create(state->base_url);
+  if (!client) return NULL;
+  http_client_set_timeout(client, CONTROL_INTEGRATION_REQUEST_TIMEOUT_MS);
+  tls.verify_peer = 1;
+  tls.ca_file = state->ca_path;
+  tls.cert_file = cert_path;
+  tls.key_file = key_path;
+  if (http_client_set_tls_client_config(client, &tls) != TURBO_OK) goto done;
+  response = http_post_json(client, "/v1/management/rpc", CONTROL_INTEGRATION_RPC_BODY);
+done:
+  http_client_destroy(client);
+  return response;
+}
+
+static void control_test_http_task(coro_t *coroutine, void *arg) {
+  control_http_state_t *state = (control_http_state_t *)arg;
+  uint64_t deadline;
+  http_response_t *response = NULL;
+  (void)coroutine;
+  if (!state || !state->context) return;
+  deadline = turbo_monotonic_ms() + CONTROL_INTEGRATION_TIMEOUT_MS;
+  while (turbo_monotonic_ms() < deadline) {
+    response = control_test_request(state, state->known_cert_path, state->known_key_path);
+    if (response && response->status_code == 200 && response->error_code == HTTP_ERROR_NONE &&
+        response->body && strstr(response->body, "\"result\"") != NULL) {
+      state->known_ok = 1;
+      http_response_free(response);
+      response = NULL;
+      break;
+    }
+    http_response_free(response);
+    response = NULL;
+    coro_sleep(state->context, 25u);
+  }
+  if (!state->known_ok) return;
+
+  response = control_test_request(state, NULL, NULL);
+  if (response) {
+    state->no_certificate_status = response->status_code;
+    state->no_certificate_error = response->error_code;
+  }
+  state->no_certificate_rejected =
+      !response || response->error_code != HTTP_ERROR_NONE || response->status_code == 0;
+  http_response_free(response);
+  response = control_test_request(state, state->unknown_cert_path, state->unknown_key_path);
+  if (response) {
+    state->unknown_certificate_status = response->status_code;
+    state->unknown_certificate_error = response->error_code;
+    if (response->body) {
+      (void)snprintf(state->unknown_certificate_body, sizeof(state->unknown_certificate_body),
+                     "%s", response->body);
+    }
+  }
+  state->unknown_certificate_forbidden =
+      response && response->status_code == 200 && response->error_code == HTTP_ERROR_NONE &&
+      response->body && strstr(response->body, "-32003") != NULL;
+  http_response_free(response);
+}
+
+static int control_test_run_network_gate(void) {
+  control_tls_material_t material;
+  control_http_state_t http_state;
+  turbo_process_options_t process_options;
+  turbo_process_result_t process_result;
+  turbo_process_t *process = NULL;
+  coro_context_t *context = NULL;
+  char *database_path = NULL;
+  char *config_path = NULL;
+  char base_url[128];
+  const char *process_args[] = {"--config", NULL, NULL};
+  unsigned short port = 0u;
+  int rc = TURBO_EIO;
+  const char *failure_stage = "initialization";
+
+  memset(&material, 0, sizeof(material));
+  memset(&http_state, 0, sizeof(http_state));
+  database_path = tt_make_temp_file("flowie-control-it", ".sqlite3");
+  config_path = tt_make_temp_file("flowie-control-it", ".yml");
+  if (!database_path || !config_path) {
+    failure_stage = "temporary paths";
+    goto cleanup;
+  }
+  failure_stage = "reserve port";
+  if (control_test_reserve_port(&port) != 0) goto cleanup;
+  failure_stage = "generate TLS material";
+  if (control_test_tls_material_open(&material) != 0) goto cleanup;
+  failure_stage = "seed SQLite store";
+  if (control_test_seed_store(database_path) != TURBO_OK) goto cleanup;
+  failure_stage = "write controller configuration";
+  if (control_test_write_config(config_path, database_path, &material, port) != 0) goto cleanup;
+  failure_stage = "spawn controller";
+
+  process_args[1] = config_path;
+  turbo_process_options_init(&process_options);
+  process_options.program = FLOWIE_CONTROL_EXECUTABLE;
+  process_options.args = process_args;
+  process_options.flags = TURBO_PROCESS_CAPTURE_STDERR;
+  process_options.max_output_bytes = 65536u;
+  if (turbo_process_spawn(&process_options, &process) != TURBO_OK) goto cleanup;
+
+  failure_stage = "create client coroutine context";
+  (void)snprintf(base_url, sizeof(base_url), "https://localhost:%u", (unsigned int)port);
+  context = coro_context_create(NULL);
+  if (!context) goto cleanup;
+  http_state.context = context;
+  http_state.base_url = base_url;
+  http_state.ca_path = material.ca_path;
+  http_state.known_cert_path = material.known_cert_path;
+  http_state.known_key_path = material.known_key_path;
+  http_state.unknown_cert_path = material.unknown_cert_path;
+  http_state.unknown_key_path = material.unknown_key_path;
+  failure_stage = "spawn client coroutine";
+  if (coro_context_spawn(context, control_test_http_task, &http_state) != TURBO_OK) goto cleanup;
+  failure_stage = "complete HTTPS ACL requests";
+  coro_context_run(context, TURBO_RUN_DEFAULT);
+  if (http_state.known_ok && http_state.no_certificate_rejected &&
+      http_state.unknown_certificate_forbidden)
+    rc = TURBO_OK;
+
+cleanup:
+  if (rc != TURBO_OK) {
+    (void)fprintf(stderr,
+                  "flowie-control integration failed at %s: known=%d no-cert=%d(status=%d,error=%d) "
+                  "unknown=%d(status=%d,error=%d)\n",
+                  failure_stage, http_state.known_ok, http_state.no_certificate_rejected,
+                  http_state.no_certificate_status, http_state.no_certificate_error,
+                  http_state.unknown_certificate_forbidden, http_state.unknown_certificate_status,
+                  http_state.unknown_certificate_error);
+    if (http_state.unknown_certificate_body[0])
+      (void)fprintf(stderr, "flowie-control unknown certificate response: %s\n",
+                    http_state.unknown_certificate_body);
+  }
+  if (context) coro_context_destroy(context);
+  if (process) {
+    if (turbo_process_poll(process, &process_result) == TURBO_EBUSY) {
+      (void)turbo_process_terminate(process);
+      (void)turbo_process_wait(process, &process_result);
+    }
+    if (rc != TURBO_OK) {
+      char child_error[4096];
+      size_t child_error_size = 0u;
+      if (turbo_process_read_stderr(process, child_error, sizeof(child_error) - 1u,
+                                    &child_error_size) == TURBO_OK &&
+          child_error_size > 0u) {
+        child_error[child_error_size] = '\0';
+        (void)fprintf(stderr, "flowie-control integration child stderr: %s\n", child_error);
+      }
+    }
+    turbo_process_destroy(process);
+  }
+  control_test_tls_material_close(&material);
+  if (config_path) {
+    (void)tt_remove_file(config_path);
+    free(config_path);
+  }
+  if (database_path) {
+    (void)tt_remove_file(database_path);
+    free(database_path);
+  }
+  return rc;
+}
+
+spec("Flowie controller HTTPS integration") {
+  it("enforces mTLS and certificate-bound management ACL over a real listener") {
+    check_int_eq(control_test_run_network_gate(), TURBO_OK);
+  }
+}

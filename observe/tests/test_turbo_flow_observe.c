@@ -37,6 +37,11 @@ typedef struct observe_export_state_s {
   int saw_resource;
 } observe_export_state_t;
 
+typedef struct observe_batch_state_s {
+  uint64_t fail_id;
+  int fail_status;
+} observe_batch_state_t;
+
 static int observe_export_write(void *ctx, const char *data, size_t len) {
   observe_export_state_t *state = (observe_export_state_t *)ctx;
   if (!state || (len > 0u && !data)) return TURBO_EINVAL;
@@ -63,6 +68,19 @@ static int observe_stage_fail(turbo_flow_msg_t *msg, void *ctx) {
   (void)msg;
   (void)ctx;
   return TURBO_EIO;
+}
+
+static int observe_batch_stage(turbo_flow_msg_t *msg, void *ctx) {
+  const observe_batch_state_t *state = (const observe_batch_state_t *)ctx;
+  if (!msg || !state) return TURBO_EINVAL;
+  return msg->id == state->fail_id ? state->fail_status : TURBO_OK;
+}
+
+static int observe_batch_prepare(void *ctx, size_t index, turbo_flow_msg_t *message) {
+  (void)ctx;
+  if (!message) return TURBO_EINVAL;
+  message->id = index + 1u;
+  return TURBO_OK;
 }
 
 static int observe_adapter_start(void *ctx, turbo_flow_t *flow,
@@ -344,6 +362,43 @@ spec("turbo_flow_observe") {
       turbo_flow_observe_graph_snapshot_t graph_snapshot;
       check_int_eq(turbo_flow_observe_graph_snapshot(observe, &graph_snapshot), TURBO_EINVAL);
     }
+    turbo_flow_destroy(flow);
+    check_int_eq(turbo_flow_observe_destroy(observe), TURBO_OK);
+  }
+
+  it("observes each attempted batch message through the first failure") {
+    static const char *dsl = "source input\n"
+                             "stage work\n"
+                             "stage main {\n"
+                             "  input -> work\n"
+                             "}\n";
+    observe_batch_state_t state = {3u, TURBO_EIO};
+    turbo_flow_publish_batch_config_t batch = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
+    turbo_flow_observe_snapshot_t snapshot;
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_observe_t *observe = turbo_flow_observe_create(NULL);
+    size_t published = SIZE_MAX;
+
+    check_not_null(flow);
+    check_not_null(observe);
+    check_int_eq(turbo_flow_register_stage_ex(flow, "work", observe_batch_stage, &state, NULL),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+    check_int_eq(turbo_flow_observe_attach(observe, flow), TURBO_OK);
+    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+
+    batch.message_count = 5u;
+    batch.prepare = observe_batch_prepare;
+    check_int_eq(turbo_flow_publish_batch(flow, "input", &batch, &published), TURBO_EIO);
+    check_size_eq(published, 2u);
+    check_int_eq(turbo_flow_observe_snapshot(observe, &snapshot), TURBO_OK);
+    check_size_eq(snapshot.messages, 3u);
+    check_size_eq(snapshot.message_errors, 1u);
+    check_size_eq(snapshot.stage_calls, 3u);
+    check_size_eq(snapshot.stage_errors, 1u);
+
+    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
     check_int_eq(turbo_flow_observe_destroy(observe), TURBO_OK);
   }

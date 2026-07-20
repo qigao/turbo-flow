@@ -315,6 +315,32 @@ spec("flow_config") {
     turbo_flow_resolved_config_destroy(config);
   }
 
+  it("projects config-driven channel backends without exposing resolver JSON") {
+    static const char yaml[] = "version: 1\n"
+                               "channels:\n"
+                               "  mqtt.auth:\n"
+                               "    kind: auth_provider\n"
+                               "    config:\n"
+                               "      backend: https\n"
+                               "      url: https://auth.internal/v2/authenticate\n"
+                               "adapters: {}\n";
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_channel_view_t view = TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT;
+    const char *value = NULL;
+
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_resolved_config_channel(config, "mqtt.auth", &view), TURBO_OK);
+    check_str_eq(view.name, "mqtt.auth");
+    check_str_eq(view.kind, "auth_provider");
+    check_int_eq(turbo_flow_resolved_channel_get_string(&view, "backend", &value), TURBO_OK);
+    check_str_eq(value, "https");
+    check_int_eq(turbo_flow_resolved_channel_get_string(&view, "missing", &value), TURBO_ENOENT);
+    check_int_eq(turbo_flow_resolved_config_channel(config, "missing", &view), TURBO_ENOENT);
+    turbo_flow_resolved_config_destroy(config);
+  }
+
   it("preflights enabled adapter kinds without projecting disabled config") {
     static const char yaml[] = "version: 1\n"
                                "adapters:\n"

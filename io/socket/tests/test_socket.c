@@ -2012,9 +2012,9 @@ spec("turbo_flow_coronet") {
     tls_test_remove_file(key_file);
   }
 
-  it("drives owned TCP socket source contexts in the adapter") {
+  it("retains owned TCP source payloads across worker stages") {
     static const char *src = "source socket_in adapter \"socket.tcp\"\n"
-                             "stage record\n"
+                             "stage record worker 1\n"
                              "stage main {\n"
                              "  socket_in -> record\n"
                              "}\n";

@@ -1707,6 +1707,70 @@ CXX_C_API int turbo_flow_stop(turbo_flow_t *flow);
 CXX_C_API int turbo_flow_publish(turbo_flow_t *flow, const char *source_name,
                                  const turbo_flow_msg_t *msg);
 
+/**
+ * Prepare one transient message for an ordered synchronous batch.
+ *
+ * Core initializes `message` before the callback and always cleans it after the
+ * callback/publish attempt. On TURBO_OK, ownership of all fields transfers to
+ * core for that attempt. On failure, core still cleans any fields already set.
+ * The callback must not retain `message` or synchronously stop, drain, reset, or
+ * destroy the same flow.
+ */
+typedef int (*turbo_flow_publish_batch_prepare_fn)(void *ctx, size_t index,
+                                                   turbo_flow_msg_t *message);
+
+typedef struct turbo_flow_publish_batch_config_s {
+  size_t size;
+  size_t message_count;
+  turbo_flow_publish_batch_prepare_fn prepare;
+  void *ctx;
+} turbo_flow_publish_batch_config_t;
+
+#define TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT                                                       \
+  {sizeof(turbo_flow_publish_batch_config_t), 0u, NULL, NULL}
+
+/**
+ * Prepare and publish an ordered batch synchronously through one STARTED source.
+ *
+ * The copied config drives one fixed lifecycle: source validation, prepare,
+ * publish, and cleanup. Processing stops at the first prepare or publish failure.
+ * `published`, when non-NULL, receives the number of successful prefix messages
+ * and is zeroed before input or lifecycle validation. Per-message ownership and
+ * clone/retain rules match `turbo_flow_publish()`. A concurrent stop waits for
+ * the accepted batch to return.
+ *
+ * Returns TURBO_EINVAL for invalid ABI/source/config input or an unknown/non-source
+ * stage, TURBO_ESHUTDOWN when publication admission is closed, or the first prepare,
+ * graph, primitive, or owner callback failure.
+ *
+ * Example (the flow must already be compiled and started):
+ * @code
+ * typedef struct publish_ids_s {
+ *   uint64_t first_id;
+ * } publish_ids_t;
+ *
+ * static int prepare_id(void *ctx, size_t index, turbo_flow_msg_t *message) {
+ *   const publish_ids_t *ids = (const publish_ids_t *)ctx;
+ *   message->id = ids->first_id + index;
+ *   return TURBO_OK;
+ * }
+ *
+ * publish_ids_t ids = {1000u};
+ * turbo_flow_publish_batch_config_t config = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
+ * size_t published = 0u;
+ * config.message_count = 32u;
+ * config.prepare = prepare_id;
+ * config.ctx = &ids;
+ * int rc = turbo_flow_publish_batch(flow, "input", &config, &published);
+ * @endcode
+ *
+ * The callback and `ctx` are borrowed for the duration of this synchronous call.
+ * The config fields are snapshotted before the first callback.
+ */
+CXX_C_API int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
+                                       const turbo_flow_publish_batch_config_t *config,
+                                       size_t *published);
+
 typedef struct turbo_flow_publish_result_s {
   size_t size;
   int status;

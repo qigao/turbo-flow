@@ -17,6 +17,10 @@ static int flowie_topic_test_contains(const turbo_vec_t *matches, size_t expecte
   return 0;
 }
 
+static int flowie_topic_test_collect(void *ctx, size_t entry_index) {
+  return turbo_vec_push((turbo_vec_t *)ctx, &entry_index);
+}
+
 spec("flowie topic index") {
   it("indexes exact wildcard shared and system topic filters") {
     static const char *const filters[] = {
@@ -66,6 +70,94 @@ spec("flowie topic index") {
                  TURBO_EPROTO);
     check_int_eq(flowie_topic_index_match(&index, (flowie_mqtt_span_t){NULL, 0u}, &matches),
                  TURBO_EINVAL);
+    turbo_vec_destroy(&matches);
+    flowie_topic_index_destroy(&index);
+  }
+
+  it("visits concrete topic matches through an immutable query") {
+    static const char *const filters[] = {"sensors/+/temp", "sensors/#", "$SYS/#", "#"};
+    flowie_topic_index_t index;
+    turbo_vec_t matches;
+    memset(&index, 0, sizeof(index));
+    check_int_eq(flowie_topic_index_init(&index), TURBO_OK);
+    check_int_eq(turbo_vec_init(&matches, sizeof(size_t)), TURBO_OK);
+    for (size_t i = 0u; i < sizeof(filters) / sizeof(filters[0]); ++i)
+      check_int_eq(flowie_topic_index_insert(&index, flowie_topic_test_span(filters[i]), i),
+                   TURBO_OK);
+
+    check_int_eq(flowie_topic_index_visit_topic(&index, flowie_topic_test_span("sensors/a/temp"),
+                                                flowie_topic_test_collect, &matches),
+                 TURBO_OK);
+    check_size_eq(turbo_vec_size(&matches), 3u);
+    check_true(flowie_topic_test_contains(&matches, 0u));
+    check_true(flowie_topic_test_contains(&matches, 1u));
+    check_true(flowie_topic_test_contains(&matches, 3u));
+
+    turbo_vec_clear(&matches);
+    check_int_eq(flowie_topic_index_visit_topic(&index, flowie_topic_test_span("$SYS/status"),
+                                                flowie_topic_test_collect, &matches),
+                 TURBO_OK);
+    check_size_eq(turbo_vec_size(&matches), 1u);
+    check_true(flowie_topic_test_contains(&matches, 2u));
+    turbo_vec_destroy(&matches);
+    flowie_topic_index_destroy(&index);
+  }
+
+  it("visits only policy filters that contain the requested filter language") {
+    static const char *const filters[] = {
+        "root-a/+/events/#", "root-a/#", "root-a/device-1/events", "#", "$SYS/#", "root-a/+/+"};
+    flowie_topic_index_t index;
+    turbo_vec_t matches;
+    memset(&index, 0, sizeof(index));
+    check_int_eq(flowie_topic_index_init(&index), TURBO_OK);
+    check_int_eq(turbo_vec_init(&matches, sizeof(size_t)), TURBO_OK);
+    for (size_t i = 0u; i < sizeof(filters) / sizeof(filters[0]); ++i)
+      check_int_eq(flowie_topic_index_insert(&index, flowie_topic_test_span(filters[i]), i),
+                   TURBO_OK);
+
+    check_int_eq(flowie_topic_index_visit_containing_filters(
+                     &index, flowie_topic_test_span("root-a/+/events/temperature"),
+                     flowie_topic_test_collect, &matches),
+                 TURBO_OK);
+    check_size_eq(turbo_vec_size(&matches), 3u);
+    check_true(flowie_topic_test_contains(&matches, 0u));
+    check_true(flowie_topic_test_contains(&matches, 1u));
+    check_true(flowie_topic_test_contains(&matches, 3u));
+
+    turbo_vec_clear(&matches);
+    check_int_eq(flowie_topic_index_visit_containing_filters(
+                     &index, flowie_topic_test_span("root-a/device-1/events"),
+                     flowie_topic_test_collect, &matches),
+                 TURBO_OK);
+    check_size_eq(turbo_vec_size(&matches), 5u);
+    check_true(flowie_topic_test_contains(&matches, 0u));
+    check_true(flowie_topic_test_contains(&matches, 1u));
+    check_true(flowie_topic_test_contains(&matches, 2u));
+    check_true(flowie_topic_test_contains(&matches, 3u));
+    check_true(flowie_topic_test_contains(&matches, 5u));
+
+    turbo_vec_clear(&matches);
+    check_int_eq(flowie_topic_index_visit_containing_filters(&index,
+                                                             flowie_topic_test_span("root-a/#"),
+                                                             flowie_topic_test_collect, &matches),
+                 TURBO_OK);
+    check_size_eq(turbo_vec_size(&matches), 2u);
+    check_true(flowie_topic_test_contains(&matches, 1u));
+    check_true(flowie_topic_test_contains(&matches, 3u));
+
+    turbo_vec_clear(&matches);
+    check_int_eq(flowie_topic_index_visit_containing_filters(
+                     &index, flowie_topic_test_span("$SYS/+"), flowie_topic_test_collect, &matches),
+                 TURBO_OK);
+    check_size_eq(turbo_vec_size(&matches), 1u);
+    check_true(flowie_topic_test_contains(&matches, 4u));
+
+    turbo_vec_clear(&matches);
+    check_int_eq(flowie_topic_index_visit_containing_filters(
+                     &index, flowie_topic_test_span("$share/workers/root-a/+/events/temperature"),
+                     flowie_topic_test_collect, &matches),
+                 TURBO_OK);
+    check_size_eq(turbo_vec_size(&matches), 3u);
     turbo_vec_destroy(&matches);
     flowie_topic_index_destroy(&index);
   }

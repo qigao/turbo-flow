@@ -81,12 +81,63 @@ if(TURBO_FLOW_BUILD_HTTP_CLIENT
   find_package(TurboHttp REQUIRED PATHS ${TURBO_HTTP_ROOT})
 endif()
 
+if(WIN32)
+  find_program(
+    TURBO_FLOW_POWERSHELL_EXECUTABLE
+    NAMES pwsh.exe powershell.exe
+    REQUIRED)
+
+  set(TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS "${TURBO_UTILS_ROOT}"
+                                        "${RULES_FORGE_ROOT}")
+  if(TURBO_FLOW_NEEDS_TURBONET)
+    list(APPEND TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS "${TURBO_NET_ROOT}")
+  endif()
+  if(TURBO_FLOW_NEEDS_TURBOHTTP)
+    list(APPEND TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS "${TURBO_HTTP_ROOT}")
+  endif()
+  list(REMOVE_DUPLICATES TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS)
+
+  set(TURBO_FLOW_RUNTIME_COPY_COMMANDS)
+  foreach(package_root IN LISTS TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS)
+    if(NOT IS_DIRECTORY "${package_root}/bin")
+      message(
+        FATAL_ERROR
+          "External package runtime directory does not exist: ${package_root}/bin")
+    endif()
+    list(
+      APPEND
+      TURBO_FLOW_RUNTIME_COPY_COMMANDS
+      COMMAND
+      "${TURBO_FLOW_POWERSHELL_EXECUTABLE}"
+      -NoProfile
+      -NonInteractive
+      -ExecutionPolicy
+      Bypass
+      -File
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CopyExternalRuntime.ps1"
+      -PackageRoot
+      "${package_root}"
+      -Destination
+      "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+  endforeach()
+
+  add_custom_target(
+    turbo_flow_external_runtime
+    ${TURBO_FLOW_RUNTIME_COPY_COMMANDS}
+    COMMENT "Syncing external package DLLs to the runtime output directory"
+    VERBATIM)
+  set_target_properties(turbo_flow_external_runtime PROPERTIES FOLDER "cmake")
+endif()
+
 # Additional components
 add_subdirectory(tools)
 include(FindTools)
 add_subdirectory(vendor)
 
 add_subdirectory(turbo_flow)
+if(TURBO_FLOW_BUILD_SECURITY_SQLITE)
+  add_subdirectory(security)
+endif()
 if(TURBO_FLOW_BUILD_FLOWIE)
   add_subdirectory(flowie)
 endif()
@@ -123,6 +174,7 @@ foreach(
   target_name
   IN ITEMS
      turbo_flow
+     tf_security_sqlite
      flowie_protocol
      flowie_client
      flowie

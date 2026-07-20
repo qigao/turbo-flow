@@ -79,16 +79,39 @@ CoroNet lane, authenticates and authorizes it when an explicit security binding 
 opens or resumes the bounded session, atomically rebinds
 the provisional connection route to the session generation, and enqueues CONNACK. Rejected and
 accepted CONNECT packets do not enter the application graph. SUBSCRIBE, UNSUBSCRIBE, PUBREL,
-PINGREQ, DISCONNECT, and unsupported enhanced AUTH are also consumed by that protocol owner; only admitted
+PINGREQ, DISCONNECT, and enhanced AUTH are also consumed by that protocol owner; only admitted
 PUBLISH packets enter the application graph.
 When `manage_sessions` is disabled, the endpoint preserves external-session mode and publishes
 CONNECT for a separately assembled session processor.
 
 Each MQTT connection has exactly one CoroNet-lane owner for socket receive, framing, parser,
 negotiated protocol state, close, and backpressure. Raw stream bytes never cross a lane boundary.
-The first client packet must be a valid CONNECT. Its protocol level fixes MQTT 3.1.1 or MQTT 5
-for all later packets on that connection; a non-CONNECT first packet or a second CONNECT is a
-terminal protocol error.
+The first client packet must be a valid CONNECT. Its protocol level fixes MQTT 3.1 level 3,
+MQTT 3.1.1 level 4, or MQTT 5 level 5 for all later packets on that connection; a non-CONNECT
+first packet or a second CONNECT is a terminal protocol error. The CONNECT protocol-name/level
+pair is exact: `MQIsdp`/3 or `MQTT`/4|5.
+Connections using all three supported levels may coexist in one endpoint. Fan-out is encoded for
+the subscriber session's negotiated level: MQTT 5 properties are forwarded only between MQTT 5
+sessions, are removed for MQTT 3.x subscribers, and an MQTT 3.x publication becomes a valid MQTT 5
+PUBLISH with an empty property block for an MQTT 5 subscriber.
+
+Level 3 is a compatibility dialect, not a relaxation of the parser's security boundary. It keeps
+strict UTF-8 validation and the legacy 1--23 byte Client Identifier limit. Because level 3 has
+neither CONNACK Session Present nor a negative SUBACK code, Flowie keeps resumed-session state
+internally but emits a zero CONNACK flag, and closes on subscription ACL/capacity rejection instead
+of reporting false success. MQTT-over-WS was standardized after MQTT 3.1, so accepting level 3 over
+WS/WSS is an explicit Flowie transport extension. Protocol differences are tracked against the
+[MQTT.org 3.1/3.1.1 comparison](https://github.com/mqtt/mqtt.org/wiki/Differences-between-3.1.0-and-3.1.1)
+and the [OASIS MQTT 3.1.1 specification](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html).
+The tested Flowie WS/WSS path uses the WebSocket subprotocol token `mqtt` for MQTT levels 3, 4,
+and 5, with the CONNECT protocol-name/level pair remaining the version fact source. Some legacy
+MQTT 3.1 clients instead require `Sec-WebSocket-Protocol: mqttv3.1`; Flowie does not currently
+claim or test that token. This token difference does not affect MQTT 3.1 clients using TCP, TLS,
+or Pipe.
+The public callback client ABI v6 accepts an optional verified TLS identity for TLS and WSS.
+CA, certificate, key, and password strings are copied at creation; certificate and key are an
+atomic pair, peer verification cannot be disabled, and the copied key password is wiped at
+destruction. ABI v5 callers remain accepted only with the exact pre-v6 structure size.
 The framing buffer owns incomplete bytes only; it is neither a durable Queue nor an ACK fact
 source. Once parsing identifies a complete PUBLISH packet, Flowie copies the full wire packet
 into message-owned payload, consumes the framing bytes, and performs one graph publication to the
@@ -101,7 +124,7 @@ its owner must close or rebuild the connection before accepting more bytes.
 
 ## Pattern composition
 
-Flowie and FMQ share protocol-neutral pattern vocabulary and algorithms, not the FMQ v2 wire
+Flowie and FMQ share protocol-neutral pattern vocabulary and algorithms, not the FMQ v3 wire
 codec. Flowie currently uses the core candidate iterator for ordinary/shared subscription
 selection and its generation-fenced route matcher for live connection lookup:
 
@@ -145,9 +168,25 @@ binds it through `operation rules.apply resource <channel-name>`. Security remai
 composition until its host binding is complete. Session and retained persistence share the explicit
 record-store binding but remain different versioned record kinds.
 The current settlement-, retained-, slow-subscriber-, coroutine-capacity-, and receive-buffer-aware
-endpoint configuration is ABI v7;
+endpoint configuration is ABI v8;
 the protocol SDK and existing Flowie message views remain ABI v1.
 TurboFlow graph topology remains DSL; `flowie.yml` does not invent an unsupported `flows` root.
+
+### MQTT 5 managed-session contract
+
+ABI v8 negotiates Receive Maximum and Maximum Packet Size in both directions, applies the client
+Receive Maximum as the broker-owned QoS 1/2 send window, and derives idle receive timeout from
+1.5 times the CONNECT Keep Alive without exceeding an explicitly tighter endpoint timeout. An empty
+clean-start Client Identifier is replaced by a UUIDv7-based identifier returned in CONNACK; an empty
+non-clean identifier is rejected. `topic_alias_maximum` bounds a connection-owner alias table. Alias
+resolution occurs before ACL evaluation, session admission, and graph publication, so downstream
+code never authorizes an empty or stale topic.
+
+Subscription Identifier is owned by each subscription and deduplicated across overlapping matches
+for one delivery. It is appended to the outbound MQTT 5 PUBLISH while inbound Subscription
+Identifier properties are not forwarded. Canonical session records now write FSES 1.2 with the
+identifier in the subscription options record. Restore accepts FSES 1.0 and 1.1 with identifier zero
+and FSES 1.2 with the bounded value; writes never downgrade to an older record layout.
 
 ### Settlement compatibility, migration, and rollback
 
@@ -173,7 +212,7 @@ inflight work, stop the endpoint, change the YAML policy and graph boundary toge
 resolved profile, and then restart it. These fields are not hot-reloaded. Rollback uses the same
 sequence and explicitly restores `received` (or removes both settlement fields); rolling back only
 the graph while leaving `accepted` or `durable` configured fails instead of silently acknowledging
-at another boundary. Endpoint config ABI v7 is the public layout for this contract.
+at another boundary. Endpoint config ABI v8 is the public layout for this contract.
 
 ## Worker process topology
 
@@ -198,14 +237,17 @@ lane, and declares the TurboFlow source that receives complete owned MQTT packet
 declares protocol/session processors, worker capacity, and sinks. Persistence is an injected
 resource selected explicitly per state class.
 
-Security uses the same composition rule. YAML selects `security_realm` and `auth_method`; the host
-creates that realm from the resolved snapshot with `flowie_mqtt_security_matcher_init()`, registers
-it as a resource, and injects the typed realm plus authentication provider through
-`flowie_endpoint_security_binding_t`. The endpoint borrows both owners, copies only the validated
-principal into session state, and never stores password/authentication bytes. The binding's channel
-and method must equal YAML exactly, so a stale or miswired composition fails before registration.
-There is no realm pointer lookup, service locator, plaintext user database, or implicit anonymous
-fallback.
+Security uses the same composition rule. YAML selects `security_realm`, its exact `policy_source`,
+and `auth_method`; it does not contain ACL rules or a policy version. The host creates the selected
+HTTPS or SQLite ACL provider, binds its borrowed interface to the realm, registers the realm as a
+resource, and injects the typed realm plus HTTPS authentication provider through
+`flowie_endpoint_security_binding_t`. The endpoint copies only the validated principal into session
+state and never stores password/authentication bytes. Version mismatch or expiry triggers a bounded
+provider refresh; normal authorization executes only against a refcounted immutable local snapshot.
+The binding's channels and method must equal YAML exactly, so stale or miswired composition fails
+before registration. There is no realm pointer lookup, service locator, plaintext user database,
+YAML policy body, provider fallback, or implicit anonymous fallback. The complete control/data-plane
+decision is documented in `ADR_DYNAMIC_ACL_BUNDLE.md`.
 
 ## Failure and rollback
 
@@ -265,7 +307,7 @@ session-present, generation-fenced route, CONNACK command, and close-after-rejec
 With explicit `manage_sessions: true`, the endpoint owns a bounded client-id hash index of these
 session owners. Focused real-TCP tests cover persistent reconnect, session-present,
 active-client duplicate rejection, route rebinding, atomic SUBACK/UNSUBACK, PINGRESP,
-QoS1 PUBACK, QoS2 PUBREC/PUBCOMP, duplicate suppression, unknown PUBREL, enhanced AUTH rejection,
+QoS1 PUBACK, QoS2 PUBREC/PUBCOMP, duplicate suppression, unknown PUBREL, enhanced AUTH/re-auth,
 password-provider CONNECT authentication, CONNECT/PUBLISH/SUBSCRIBE authorization denial,
 close-after-reply, wildcard/no-local fan-out, shared-subscription round robin, unsubscribe
 withdrawal, broker-owned outbound packet IDs, and QoS 2 subscriber reconnect/replay. Only admitted
@@ -325,7 +367,7 @@ same-connection FIFO drain. A subscriber that exhausts its pending-send HWM or M
 inflight quota is disconnected and its unsent queue is released; other matching subscribers keep
 their deliveries and the publisher is not failed for that peer-local condition. Aggregate/resource
 admission failure still fails the fan-out command so QoS 1/2 can redeliver; durable subscriber
-inflight state remains eligible for reconnect replay. Endpoint config ABI v7 and strict YAML expose
+inflight state remains eligible for reconnect replay. Endpoint config ABI v8 and strict YAML expose
 this fixed behavior as `slow_subscriber_policy: disconnect`; zero in the C API selects the same
 default and any other value fails registration. Queue Status schema v2 keeps the aggregate
 `load/capacity` view and additionally reports `connection_hwm_bytes`, the stable policy enum, and a
@@ -348,15 +390,16 @@ subscriber. The exact Windows/MSVC Release run on 2026-07-16 completed with
 `connected=100000`, `delivered=100000`, and `status=0`; this closes the functional deployment-capacity
 gate, not a portable connection-rate or latency SLA.
 
-Endpoint ABI v7 derives the private CoroNet object-pool capacity from `max_connections` plus fixed
+Endpoint ABI v8 derives the private CoroNet object-pool capacity from `max_connections` plus fixed
 headroom and exposes both `coroutine_stack_size` and `recv_buffer_size` for that private context.
 Explicit values on borrowed, transferred-owned, or pool-lane contexts fail with `TURBO_ENOTSUP`
 because their host owns capacity. Flowie defaults each of CoroNet's two ping-pong receive chunks to
 4 KiB; MQTT framing reassembles packets across chunks up to `max_packet_size`. Before this change,
 two fixed 128 KiB receive chunks plus a 32 KiB coroutine stack accounted for about 288 KiB of fixed
-per-connection capacity. The capacity workload's 4 KiB chunks and 32 KiB stack reduce that component
-to about 40 KiB
-(`2 * 4 KiB + 32 KiB`). The 100k run peaked near 5.93 GiB private commit on the reference host; the
+per-connection capacity. ABI v8 raises the private-context minimum stack to 64 KiB for managed
+security and MQTT 5 AUTH state, so 4 KiB receive chunks now account for about 72 KiB
+(`2 * 4 KiB + 64 KiB`). Explicit 32 KiB configurations must migrate to at least 64 KiB. The 100k
+run peaked near 5.93 GiB private commit on the reference host; the
 50k run peaked near 3.07 GiB. Those live-TCP setup timings predate incremental selector mutation and
 combine serial TCP/MQTT handshakes, owner creation, subscription commits, and test-driver overhead;
 they are functional capacity evidence, not a current connection- or subscription-rate benchmark.
@@ -364,7 +407,10 @@ they are functional capacity evidence, not a current connection- or subscription
 One owner-lane dispatcher preserves command order up to route admission; it never waits for socket
 I/O. Each connection coroutine owns both receive/framing and its bounded FIFO send drain. Enqueue
 interrupts a pending receive wait, after which that same owner drains queued packets before arming
-receive again; fan-out therefore does not transiently allocate a second coroutine per recipient.
+receive again. A TCP drain combines 2-64 already-admitted replies into one scatter/gather send;
+single replies and non-TCP transports retain the existing one-packet send path. A terminal reply is
+always the final vector item, and queue budgets are released only after the send completes. Fan-out
+therefore does not transiently allocate a second coroutine per recipient.
 Different socket owners can still make progress independently, while one connection keeps strict
 FIFO and one mutable transport owner. Shutdown closes admission, interrupts socket waits, releases
 both global and connection budgets, and waits for connection owners before destroying state. Real
@@ -392,7 +438,7 @@ Finite MQTT 5 session expiry is scheduled on the same CoroNet owner lane with a 
 Disconnect records a monotonic deadline fenced by session generation; reconnect clears the old
 deadline, and expiry removes the inactive session and its selector memberships on the owner lane.
 An already-invalid selector is left invalid for the next atomic repair. A zero interval removes
-state immediately, while MQTT 3.1.1 persistent sessions retain
+state immediately, while MQTT 3.1 and MQTT 3.1.1 persistent sessions retain
 their unbounded in-process lifetime. MQTT 5 DISCONNECT Session Expiry Interval overrides are
 validated by the session owner before close, including the rule that a zero CONNECT interval cannot
 be changed to a non-zero value. The live timer remains process-local, while a persistent record
@@ -414,14 +460,31 @@ subscription restore and an unacknowledged QoS 1 delivery replayed with DUP.
 
 Secure PUBLISH checks one concrete Topic Name before session inflight admission. Secure SUBSCRIBE
 checks every requested Topic Filter before the atomic session mutation; adapter-match ACL rules use
-filter-language containment, not string matching, so a policy for `tenant-a/#` does not authorize a
+filter-language containment, not string matching, so a policy for `root-a/#` does not authorize a
 broader `#`. MQTT 5 authentication failure maps to CONNACK `0x86`, authorization failure to `0x87`,
 and unauthorized QoS 1/2 publication or subscription returns per-packet `0x87` without graph work.
+The MQTT packet parser validates these Topic Name and Topic Filter spans before the endpoint copies
+them into its session-owned authorization scratch string. That exact copy carries an internal,
+single-call provenance token and length into the immutable matcher, avoiding duplicate UTF-8 and
+wildcard scans. The token type is not installed or exposed as public API. Programmatic matcher calls
+without this provenance still perform full validation; truncated contexts, unknown resource kinds,
+or forged provenance fail with a protocol error instead of falling back to the fast path. Both paths
+share the same trie traversal, `$SYS` boundary, filter-containment semantics, rule ordering, and deny
+precedence.
 MQTT 3.1.1 uses its available CONNACK/SUBACK failures and closes when the protocol has no negative
-publish ACK. Enhanced authentication exchange through AUTH is deliberately not implemented.
+publish ACK. MQTT 3.1 uses legacy CONNACK authentication failures, but closes on an authorization
+or capacity failure that cannot be represented by its successful-only SUBACK/PUBACK vocabulary.
+MQTT 5 Authentication Method selects the configured enhanced provider without basic
+authentication fallback. Initial challenge exchange uses AUTH `0x18`, returns the final method/data
+in CONNACK, and connected re-authentication starts with AUTH `0x19`. Re-authentication may refresh
+roles, expiry, and policy version only for the same principal/type/root-group session owner; an owner
+change or CONNECT re-authorization failure closes the connection.
 
 These ingress/session owners remain internal and their headers are not installed. The endpoint
 now has a tested graph-to-socket control reply path, but it is not yet a complete MQTT broker.
+The transport contract runs real MQTT 3.1, MQTT 3.1.1, and MQTT 5 CONNECT, PING, and shutdown
+traffic over TCP, TLS, WS, WSS, and Pipe. TLS/WSS use a verified test CA and certificate; a
+successful config projection is not accepted as transport evidence.
 `flowie_server` is the first product host migrated to the shared product-provider registry. It
 resolves one Flowie profile as the allowed product boundary, preflights all adapter kinds before
 native resource creation, parses the separate TurboFlow DSL graph, then creates only the RuleSet
@@ -441,11 +504,53 @@ scans the selected store, then tears it down without starting the listener. The 
 proves host composition; the SQLite endpoint-recreation and live Redis record-store suites prove
 the persistence contracts, including binary retained keys and pending Will recovery. Configured
 security bindings and disabled/unknown adapter kinds still fail rather than silently degrading.
-Security-provider host assembly remains incomplete. Managed sessions, retained publications, and
-pending Wills are process-local when no session store is selected.
+Authentication providers are selected from `profiles.<name>.auth_provider` and the referenced
+`kind: auth_provider` channel. The worker reads `config.backend`, selects exactly one factory
+registered by the product composition root, and fails before listener startup when the backend is
+missing, duplicated, unavailable, or malformed. Flowie owns only the generic provider lifecycle
+envelope and authentication ABI. The bundled product registers only the `https` authentication
+backend. Redis, SQLite, PostgreSQL, and any other credential database remain private implementation
+details of that service and cannot be configured through an `auth_provider` channel. The CONNECT
+coroutine invokes TurboHTTP directly; DNS, TCP, TLS, send, and receive waits yield on the CoroNet
+owner loop instead of blocking its thread. Redirects and retries are disabled, request/response
+sizes and timeouts are bounded, the service token is acquired by reference for every request, and
+all transport, certificate, status, content-type, version, or principal-validation failures deny
+authentication without a database or anonymous fallback. The returned principal is then evaluated
+by the local SecurityRealm; publish/subscribe ACL checks never perform an HTTP or database call.
+Managed sessions, retained publications, and pending Wills are process-local when no session store
+is selected. See [ADR_HTTPS_AUTH_SERVICE.md](ADR_HTTPS_AUTH_SERVICE.md) for the trust boundary and
+deployment requirements.
 External-session mode remains available for later composition. A requested
 `session_store` never falls back to volatile state, and malformed or incompatible records fail
 endpoint registration before the listener starts.
+
+### Internal ACL management plane
+
+`flowie/control` now contains an internal, non-installed management plane. Its SQLite control store
+is the single fact source for root-scoped users, credentials, hierarchical groups, roles, ACL draft
+rules and audit records. Draft rules are canonical v3 rule lines. A publish command runs under one
+`BEGIN IMMEDIATE` transaction, revalidates the complete draft and every referenced principal,
+group, role and MQTT adapter filter, then atomically replaces the provider-compatible
+`turbo_flow_acl_bundle_v3`/`turbo_flow_acl_rule_v3` generation. Store revision and policy version
+advance independently. Failed or stale publishes leave the previous provider snapshot unchanged.
+
+The management service is the only interface used above the store. It enforces the root/actor
+identity supplied by a trusted transport adapter and the `viewer`, `user_admin`, `policy_admin` and
+`security_admin` permission matrix. Read APIs use bounded keyset pages; no HTTP or Dashboard handler
+receives a SQLite handle.
+
+The optional Iris JSON-RPC adapter binds a caller-owned `rpc_context_t` to an explicit app/path and
+registers 24 bounded management methods. Introspection, batch and notifications are disabled; body
+fields cannot supply root group, actor or audit time. The SSR Dashboard uses the same service,
+normal POST/Redirect/GET forms, constant-time CSRF validation, strict security headers and escaped
+dynamic output. It has no CDN or client framework dependency.
+
+These targets remain internal and create no executable or listener. A production management
+session adapter, login rate limit, HTTPS-only independent `flowie-control` composition root,
+bootstrap flow and operational gates are still required before the management paths may be exposed.
+The live app must stop before Dashboard/RPC objects are destroyed; the caller-owned RPC context is
+destroyed last.
+
 The managed runtime supports explicit `received`, `accepted`, `processed`, and `durable` QoS
 settlement policies. `received` advances the session owner before graph admission. `processed` advances it
 only after the synchronous TurboFlow publication returns successfully, including configured
@@ -454,7 +559,7 @@ Queue clones the complete owned MQTT packet, commits it to its bounded admission
 the one-shot settlement envelope, and routes the settlement command back to the Flowie owner.
 That callback only enters the endpoint's bounded reply command Queue; the CoroNet owner lane still
 owns session mutation and socket send. A worker-ring claim or an arbitrary successful stage is not
-an ACCEPTED boundary. Endpoint config ABI v3 introduced this typed policy; the current ABI v7
+an ACCEPTED boundary. Endpoint config ABI v3 introduced this typed policy; the current ABI v8
 retains it and intentionally rejects obsolete layouts.
 
 The memory Queue commit is not rolled back if routing the owner command later fails. In that case

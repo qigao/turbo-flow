@@ -311,12 +311,15 @@ int flowie_mqtt_connect_parse(const flowie_mqtt_packet_view_t *packet,
   limit = cursor + packet->body.size;
   rc = flowie_mqtt_length_span(&cursor, limit, &protocol_name, 1);
   if (rc != FLOWIE_MQTT_PARSE_OK) return rc;
-  if (protocol_name.size != 4u || memcmp(protocol_name.data, "MQTT", 4u) != 0 ||
-      (size_t)(limit - cursor) < 4u)
-    return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
+  if ((size_t)(limit - cursor) < 4u) return FLOWIE_MQTT_PARSE_MALFORMED;
   parsed.version = (flowie_mqtt_version_t)*cursor++;
-  if ((parsed.version != FLOWIE_MQTT_VERSION_3_1_1 && parsed.version != FLOWIE_MQTT_VERSION_5) ||
+  if (!flowie_mqtt_version_is_supported(parsed.version) ||
       (packet->version != FLOWIE_MQTT_VERSION_UNSPECIFIED && packet->version != parsed.version))
+    return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
+  if ((parsed.version == FLOWIE_MQTT_VERSION_3_1 &&
+       (protocol_name.size != 6u || memcmp(protocol_name.data, "MQIsdp", 6u) != 0)) ||
+      (parsed.version != FLOWIE_MQTT_VERSION_3_1 &&
+       (protocol_name.size != 4u || memcmp(protocol_name.data, "MQTT", 4u) != 0)))
     return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
   flags = *cursor++;
   parsed.keep_alive = flowie_mqtt_read_u16(cursor);
@@ -347,6 +350,9 @@ int flowie_mqtt_connect_parse(const flowie_mqtt_packet_view_t *packet,
   }
   rc = flowie_mqtt_length_span(&cursor, limit, &parsed.client_id, 1);
   if (rc != FLOWIE_MQTT_PARSE_OK) return rc;
+  if (parsed.version == FLOWIE_MQTT_VERSION_3_1 &&
+      (parsed.client_id.size == 0u || parsed.client_id.size > 23u))
+    return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
   if (will_flag) {
     if (parsed.version == FLOWIE_MQTT_VERSION_5) {
       rc = flowie_mqtt_typed_property_block((flowie_mqtt_span_t){cursor, (size_t)(limit - cursor)},
@@ -392,8 +398,7 @@ int flowie_mqtt_publish_parse(const flowie_mqtt_packet_view_t *packet,
   if (!out) return FLOWIE_MQTT_PARSE_INVALID_ARGUMENT;
   parsed.properties = (flowie_mqtt_property_block_view_t)FLOWIE_MQTT_PROPERTY_BLOCK_VIEW_INIT;
   rc = flowie_mqtt_typed_args(packet, out->size, sizeof(*out), FLOWIE_MQTT_PACKET_PUBLISH);
-  if (rc != FLOWIE_MQTT_PARSE_OK ||
-      (packet->version != FLOWIE_MQTT_VERSION_3_1_1 && packet->version != FLOWIE_MQTT_VERSION_5))
+  if (rc != FLOWIE_MQTT_PARSE_OK || !flowie_mqtt_version_is_supported(packet->version))
     return rc != FLOWIE_MQTT_PARSE_OK ? rc : FLOWIE_MQTT_PARSE_INVALID_ARGUMENT;
   cursor = packet->body.data;
   limit = cursor + packet->body.size;
@@ -438,7 +443,7 @@ int flowie_mqtt_subscription_iterator_init(const flowie_mqtt_packet_view_t *pack
   if (!packet || packet->size < sizeof(*packet) || !subscribe ||
       subscribe->size < sizeof(*subscribe) || !iterator || iterator->size < sizeof(*iterator) ||
       iterator->abi_version != FLOWIE_MQTT_PROTOCOL_ABI_V1 ||
-      (packet->version != FLOWIE_MQTT_VERSION_3_1_1 && packet->version != FLOWIE_MQTT_VERSION_5) ||
+      !flowie_mqtt_version_is_supported(packet->version) ||
       !subscribe->entries.data)
     return FLOWIE_MQTT_PARSE_INVALID_ARGUMENT;
   iterator->version = packet->version;
@@ -468,7 +473,7 @@ int flowie_mqtt_subscription_iterator_next(flowie_mqtt_subscription_iterator_t *
   parsed.retain_as_published = (uint8_t)((options >> 3u) & 1u);
   parsed.retain_handling = (uint8_t)((options >> 4u) & 3u);
   if (parsed.qos == 3u || (options & 0xc0u) != 0u || parsed.retain_handling == 3u ||
-      (iterator->version == FLOWIE_MQTT_VERSION_3_1_1 && (options & 0xfcu) != 0u) ||
+      (flowie_mqtt_version_is_3x(iterator->version) && (options & 0xfcu) != 0u) ||
       (parsed.no_local && parsed.filter.size >= 7u &&
        memcmp(parsed.filter.data, "$share/", 7u) == 0))
     return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
@@ -502,9 +507,11 @@ static int flowie_mqtt_reason_code_valid(flowie_mqtt_packet_type_t type,
   static const uint8_t auth_v5[] = {0x00u, 0x18u, 0x19u};
   const uint8_t *allowed = NULL;
   size_t count = 0u;
-  if (version == FLOWIE_MQTT_VERSION_3_1_1) {
+  if (flowie_mqtt_version_is_3x(version)) {
     if (type == FLOWIE_MQTT_PACKET_CONNACK) return reason <= 5u;
-    if (type == FLOWIE_MQTT_PACKET_SUBACK) return reason <= 2u || reason == 0x80u;
+    if (type == FLOWIE_MQTT_PACKET_SUBACK)
+      return reason <= 2u ||
+             (version == FLOWIE_MQTT_VERSION_3_1_1 && reason == UINT8_C(0x80));
     if (type == FLOWIE_MQTT_PACKET_AUTH) return 0;
     return reason == 0u;
   }
@@ -568,7 +575,7 @@ static size_t flowie_mqtt_vbi_write(uint8_t *output, uint32_t value) {
 }
 
 static int flowie_mqtt_version_valid(flowie_mqtt_version_t version) {
-  return version == FLOWIE_MQTT_VERSION_3_1_1 || version == FLOWIE_MQTT_VERSION_5;
+  return flowie_mqtt_version_is_supported(version);
 }
 
 static int flowie_mqtt_span_input_valid(flowie_mqtt_span_t value) {
@@ -589,7 +596,7 @@ static int flowie_mqtt_property_values_validate(flowie_mqtt_version_t version,
   int rc;
   if (!flowie_mqtt_span_input_valid(values)) return FLOWIE_MQTT_PARSE_INVALID_ARGUMENT;
   if (values.size > FLOWIE_MQTT_MAX_REMAINING_LENGTH) return FLOWIE_MQTT_PARSE_TOO_LARGE;
-  if (version == FLOWIE_MQTT_VERSION_3_1_1)
+  if (flowie_mqtt_version_is_3x(version))
     return values.size == 0u ? FLOWIE_MQTT_PARSE_OK : FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
   if (values.size == 0u) {
     if (present_out) *present_out = 0u;
@@ -640,9 +647,11 @@ static size_t flowie_mqtt_property_values_write(uint8_t *output, flowie_mqtt_spa
 
 int flowie_mqtt_connect_packet_encode(const flowie_mqtt_connect_packet_t *packet, uint8_t *output,
                                       size_t output_capacity, size_t *written) {
-  static const uint8_t protocol_name[] = {'M', 'Q', 'T', 'T'};
+  static const uint8_t protocol_name_v3[] = {'M', 'Q', 'I', 's', 'd', 'p'};
+  static const uint8_t protocol_name_v4_v5[] = {'M', 'Q', 'T', 'T'};
+  flowie_mqtt_span_t protocol_name;
   uint64_t present = 0u;
-  size_t remaining = 10u;
+  size_t remaining;
   size_t offset;
   size_t total;
   uint8_t flags;
@@ -663,9 +672,17 @@ int flowie_mqtt_connect_packet_encode(const flowie_mqtt_connect_packet_t *packet
     return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
   rc = flowie_mqtt_length_span_input_validate(packet->client_id, 1);
   if (rc != FLOWIE_MQTT_PARSE_OK) return rc;
+  if (packet->version == FLOWIE_MQTT_VERSION_3_1 &&
+      (packet->client_id.size == 0u || packet->client_id.size > 23u))
+    return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
   if (packet->version == FLOWIE_MQTT_VERSION_3_1_1 && packet->client_id.size == 0u &&
       !packet->clean_start)
     return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
+  protocol_name = packet->version == FLOWIE_MQTT_VERSION_3_1
+                      ? (flowie_mqtt_span_t){protocol_name_v3, sizeof(protocol_name_v3)}
+                      : (flowie_mqtt_span_t){protocol_name_v4_v5,
+                                             sizeof(protocol_name_v4_v5)};
+  remaining = 6u + protocol_name.size;
   rc = flowie_mqtt_property_values_validate(packet->version, packet->properties,
                                             flowie_mqtt_connect_properties_allowed,
                                             flowie_mqtt_user_property_repeatable, &present);
@@ -731,7 +748,7 @@ int flowie_mqtt_connect_packet_encode(const flowie_mqtt_connect_packet_t *packet
   rc = flowie_mqtt_encode_begin(FLOWIE_MQTT_PACKET_CONNECT, 0u, remaining, output, output_capacity,
                                 &offset, &total);
   if (rc != FLOWIE_MQTT_PARSE_OK) return rc;
-  offset += flowie_mqtt_length_span_write(output + offset, (flowie_mqtt_span_t){protocol_name, 4u});
+  offset += flowie_mqtt_length_span_write(output + offset, protocol_name);
   output[offset++] = (uint8_t)packet->version;
   flags = (uint8_t)((packet->has_username << 7u) | (packet->has_password << 6u) |
                     (packet->will_retain << 5u) | (packet->will_qos << 3u) |
@@ -852,7 +869,7 @@ int flowie_mqtt_subscribe_packet_encode(const flowie_mqtt_subscribe_packet_t *pa
     if (rc != FLOWIE_MQTT_PARSE_OK) return rc;
     if (!flowie_mqtt_topic_filter_validate(entry->filter) || entry->qos > 2u ||
         entry->no_local > 1u || entry->retain_as_published > 1u || entry->retain_handling > 2u ||
-        (packet->version == FLOWIE_MQTT_VERSION_3_1_1 &&
+        (flowie_mqtt_version_is_3x(packet->version) &&
          (entry->no_local || entry->retain_as_published || entry->retain_handling)) ||
         (entry->no_local && entry->filter.size >= 7u &&
          memcmp(entry->filter.data, "$share/", 7u) == 0))
@@ -1000,7 +1017,7 @@ static int flowie_mqtt_control_validate(const flowie_mqtt_control_packet_t *pack
   if (!packet || packet->size < sizeof(*packet) ||
       packet->abi_version != FLOWIE_MQTT_PROTOCOL_ABI_V1 || !remaining_out ||
       !flowie_mqtt_control_type(packet->type) ||
-      (packet->version != FLOWIE_MQTT_VERSION_3_1_1 && packet->version != FLOWIE_MQTT_VERSION_5) ||
+      !flowie_mqtt_version_is_supported(packet->version) ||
       (!packet->properties.data && packet->properties.size != 0u) ||
       (!packet->reason_codes.data && packet->reason_codes.size != 0u))
     return FLOWIE_MQTT_PARSE_INVALID_ARGUMENT;
@@ -1020,7 +1037,7 @@ static int flowie_mqtt_control_validate(const flowie_mqtt_control_packet_t *pack
     if (packet->session_present || packet->packet_id || packet->reason_codes.size ||
         !flowie_mqtt_reason_code_valid(packet->type, packet->version, packet->reason_code))
       return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
-    if (packet->version == FLOWIE_MQTT_VERSION_3_1_1) {
+    if (flowie_mqtt_version_is_3x(packet->version)) {
       if (packet->type != FLOWIE_MQTT_PACKET_DISCONNECT || packet->reason_code ||
           packet->properties.size)
         return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
@@ -1038,6 +1055,8 @@ static int flowie_mqtt_control_validate(const flowie_mqtt_control_packet_t *pack
         (packet->session_present && packet->reason_code != 0u) ||
         !flowie_mqtt_reason_code_valid(packet->type, packet->version, packet->reason_code))
       return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
+    if (packet->version == FLOWIE_MQTT_VERSION_3_1 && packet->session_present)
+      return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
     remaining =
         packet->version == FLOWIE_MQTT_VERSION_5
             ? 2u + flowie_mqtt_vbi_size((uint32_t)packet->properties.size) + packet->properties.size
@@ -1049,7 +1068,7 @@ static int flowie_mqtt_control_validate(const flowie_mqtt_control_packet_t *pack
         (packet->type == FLOWIE_MQTT_PACKET_UNSUBACK && packet->version == FLOWIE_MQTT_VERSION_5 &&
          packet->reason_codes.size == 0u))
       return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
-    if (packet->version == FLOWIE_MQTT_VERSION_3_1_1) {
+    if (flowie_mqtt_version_is_3x(packet->version)) {
       if (packet->properties.size != 0u ||
           (packet->type == FLOWIE_MQTT_PACKET_UNSUBACK && packet->reason_codes.size != 0u))
         return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
@@ -1067,7 +1086,7 @@ static int flowie_mqtt_control_validate(const flowie_mqtt_control_packet_t *pack
     if (packet->session_present || packet->packet_id == 0u || packet->reason_codes.size ||
         !flowie_mqtt_reason_code_valid(packet->type, packet->version, packet->reason_code))
       return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
-    if (packet->version == FLOWIE_MQTT_VERSION_3_1_1) {
+    if (flowie_mqtt_version_is_3x(packet->version)) {
       if (packet->properties.size != 0u || packet->reason_code != 0u)
         return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
       remaining = 2u;
@@ -1151,7 +1170,7 @@ int flowie_mqtt_control_packet_parse(const flowie_mqtt_packet_view_t *packet,
   if (!packet || packet->size < sizeof(*packet) ||
       packet->abi_version != FLOWIE_MQTT_PROTOCOL_ABI_V1 || !out || out->size < sizeof(*out) ||
       out->abi_version != FLOWIE_MQTT_PROTOCOL_ABI_V1 || !flowie_mqtt_control_type(packet->type) ||
-      (packet->version != FLOWIE_MQTT_VERSION_3_1_1 && packet->version != FLOWIE_MQTT_VERSION_5) ||
+      !flowie_mqtt_version_is_supported(packet->version) ||
       !packet->body.data || packet->body.size != packet->remaining_length)
     return FLOWIE_MQTT_PARSE_INVALID_ARGUMENT;
   parsed.version = packet->version;
@@ -1165,7 +1184,7 @@ int flowie_mqtt_control_packet_parse(const flowie_mqtt_packet_view_t *packet,
     return FLOWIE_MQTT_PARSE_OK;
   }
   if (packet->type == FLOWIE_MQTT_PACKET_DISCONNECT || packet->type == FLOWIE_MQTT_PACKET_AUTH) {
-    if (packet->version == FLOWIE_MQTT_VERSION_3_1_1) {
+    if (flowie_mqtt_version_is_3x(packet->version)) {
       if (packet->type != FLOWIE_MQTT_PACKET_DISCONNECT || cursor != limit)
         return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
       *out = parsed;
@@ -1178,7 +1197,9 @@ int flowie_mqtt_control_packet_parse(const flowie_mqtt_packet_view_t *packet,
     parsed.session_present = cursor[0];
     parsed.reason_code = cursor[1];
     cursor += 2u;
-    if (parsed.session_present && parsed.reason_code != 0u) return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
+    if ((packet->version == FLOWIE_MQTT_VERSION_3_1 && parsed.session_present) ||
+        (parsed.session_present && parsed.reason_code != 0u))
+      return FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
   } else {
     if ((size_t)(limit - cursor) < 2u) return FLOWIE_MQTT_PARSE_MALFORMED;
     parsed.packet_id = flowie_mqtt_read_u16(cursor);
@@ -1241,7 +1262,7 @@ int flowie_mqtt_subscribe_parse(const flowie_mqtt_packet_view_t *packet,
   parsed.properties = (flowie_mqtt_property_block_view_t)FLOWIE_MQTT_PROPERTY_BLOCK_VIEW_INIT;
   rc = flowie_mqtt_typed_args(packet, out->size, sizeof(*out), FLOWIE_MQTT_PACKET_SUBSCRIBE);
   if (rc != FLOWIE_MQTT_PARSE_OK ||
-      (packet->version != FLOWIE_MQTT_VERSION_3_1_1 && packet->version != FLOWIE_MQTT_VERSION_5))
+      !flowie_mqtt_version_is_supported(packet->version))
     return rc != FLOWIE_MQTT_PARSE_OK ? rc : FLOWIE_MQTT_PARSE_INVALID_ARGUMENT;
   cursor = packet->body.data;
   limit = cursor + packet->body.size;
@@ -1314,7 +1335,7 @@ int flowie_mqtt_unsubscribe_parse(const flowie_mqtt_packet_view_t *packet,
   parsed.properties = (flowie_mqtt_property_block_view_t)FLOWIE_MQTT_PROPERTY_BLOCK_VIEW_INIT;
   rc = flowie_mqtt_typed_args(packet, out->size, sizeof(*out), FLOWIE_MQTT_PACKET_UNSUBSCRIBE);
   if (rc != FLOWIE_MQTT_PARSE_OK ||
-      (packet->version != FLOWIE_MQTT_VERSION_3_1_1 && packet->version != FLOWIE_MQTT_VERSION_5))
+      !flowie_mqtt_version_is_supported(packet->version))
     return rc != FLOWIE_MQTT_PARSE_OK ? rc : FLOWIE_MQTT_PARSE_INVALID_ARGUMENT;
   cursor = packet->body.data;
   limit = cursor + packet->body.size;

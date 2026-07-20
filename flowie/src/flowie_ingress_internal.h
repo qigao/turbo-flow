@@ -65,6 +65,13 @@ CXX_C_API int flowie_ingress_set_route(flowie_ingress_t *ingress,
 CXX_C_API int flowie_ingress_set_protocol_settlement(
     flowie_ingress_t *ingress, const turbo_flow_protocol_settlement_envelope_t *settlement);
 
+/**
+ * Replace the packet selected by the current prepare callback before graph publication.
+ * The ingress copies `packet`; the override is consumed exactly once by the current pump step.
+ */
+CXX_C_API int flowie_ingress_set_publish_packet(flowie_ingress_t *ingress, const void *packet,
+                                                size_t packet_size);
+
 #ifdef __cplusplus
 }
 #endif

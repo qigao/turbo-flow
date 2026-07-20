@@ -15,7 +15,7 @@ TurboFlow graph + typed FMQ operations
 FlowMQ pattern/session runtime
     |
     v
-FMQ v2 framing and HELLO/heartbeat
+FMQ v3-only framing and HELLO/security/heartbeat
     |
     v
 CoroNet TCP/TLS/UDP/KCP/Pipe/WS/WSS
@@ -23,7 +23,7 @@ CoroNet TCP/TLS/UDP/KCP/Pipe/WS/WSS
 
 | Layer | Responsibility | Dependencies |
 | --- | --- | --- |
-| `FlowMQ::Protocol` | v2 frame validation、encode/decode、fragmentation、heartbeat deadline | TurboUtils |
+| `FlowMQ::Protocol` | v3 frame/security-envelope validation、encode/decode、fragmentation、heartbeat deadline | TurboUtils |
 | private endpoint runtime | CoroNet endpoint、stream framing、HELLO、peer session、reconnect | Protocol、CoroNet、TurboUtils |
 | `FlowMQ::Runtime` | graph adapter、pattern owner、management、retry、deployment | TurboFlow、private runtime、Protocol |
 | `TurboFlow::FMQ` | installed compatibility target | current FlowMQ runtime |
@@ -39,7 +39,7 @@ Ingress 路径：
 ```text
 CoroNet recv
   -> bounded stream framing
-  -> complete FMQ v2 frame
+  -> complete FMQ v3 frame
   -> message-owned metadata + payload
   -> TurboFlow graph/Disruptor
   -> processor/subgraph
@@ -60,6 +60,9 @@ Egress 先生成完整 encoded frame，再经过有界 adapter/peer admission �
 | --- | --- | --- |
 | socket、listener、connect lifecycle | CoroNet endpoint owner | endpoint snapshot |
 | peer identity、generation、HELLO、heartbeat | FlowMQ peer session | message metadata |
+| credential lease | host key provider | v3 HELLO transient bytes；发送/消费后清零 |
+| authenticated principal | FlowMQ peer session | authorization request borrowed view |
+| ACL policy generation | immutable security realm | per-operation decision |
 | subscription prefix set | XPUB/XSUB session owner | selector snapshot/event |
 | REQ/REP FSM and correlation | peer session | current request metadata |
 | ROUTER live route | ROUTER session registry | pointer-free route value |
@@ -86,7 +89,7 @@ protocol metadata 都是 owner state 的派生证据，不是第二事实源。
   replay，完整 flow stop 会清除该状态。
 
 高级 load balancer、reliable request 和 credit worker 是普通 ROUTER/DEALER/PUB/SUB 加 graph、typed
-owner 和 storage settlement 形成的应用协议，不扩展 FMQ socket pattern，也不改变 wire v2。
+owner 和 storage settlement 形成的应用协议，不扩展 FMQ socket pattern，也不改变 wire v3。
 TFCW transform adapter 不拥有 socket：它只解码 TFCW/1、串行推进 credit owner，并在 owned message
 上替换 client/worker route。持久化 claim 仍由 Queue/Redis/SQLite owner 独占；在 message contract
 具备通用 claim projection 前，durable TFCW 只通过显式 C owner API 组合。
@@ -119,11 +122,18 @@ Management 和 deployment control 都是普通 FMQ DATA payload 上的版本化�
 当前兼容契约固定为：
 
 - public C API v1；
-- wire v2 only；
+- wire v3 only；decoder 对其他版本返回 `TURBO_EPROTO`，无 negotiation/downgrade；
 - YAML `kind: fmq` 与现有 typed operation name；
 - installed headers `turbo_flow_fmq*.h`；
 - installed runtime target `TurboFlow::FMQ`；
 - installed codec target `FlowMQ::Protocol`。
 
-FlowMQ 不承诺 ZeroMQ API、ZMTP、socket option 或 v1 rolling compatibility。认证、授权和租户隔离不在
-当前产品边界内，TLS 只表示 transport 能力，不能据此宣称 multi-tenant security boundary。
+FlowMQ 不承诺 ZeroMQ API、ZMTP、socket option 或跨 wire version rolling compatibility。v3 trusted
+endpoint 本身不构成安全边界；只有显式 security binding 才启用 provider authentication、
+principal/claimed identity 一致性和 realm default-deny ACL；TLS/WSS 额外强制 TLS 1.3 exporter
+channel binding。`turbo_flow_fmq_security_owner_t` 是产品 composition owner：它根据 adapter 的
+security metadata 和 realm `policy_source` 从宿主注册的 factory 中精确创建 auth/ACL provider，拥有
+realm 与 provider 生命周期，并把 borrowed binding 注入 FMQ。FlowMQ Protocol 与 transport runtime
+不依赖 SQLite、TurboHTTP 或 YAML。Flowie 与 FlowMQ 可复用相同 provider ABI，但必须使用不同 policy
+namespace 和协议资源语义。详见
+[ADR_FMQ_V3_SECURITY.md](ADR_FMQ_V3_SECURITY.md)。

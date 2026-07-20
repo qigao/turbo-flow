@@ -23,7 +23,8 @@ extern "C" {
 #endif
 
 #define FLOWIE_MQTT_CLIENT_ABI_V5 5u
-#define FLOWIE_MQTT_CLIENT_ABI_CURRENT FLOWIE_MQTT_CLIENT_ABI_V5
+#define FLOWIE_MQTT_CLIENT_ABI_V6 6u
+#define FLOWIE_MQTT_CLIENT_ABI_CURRENT FLOWIE_MQTT_CLIENT_ABI_V6
 #define FLOWIE_MQTT_CLIENT_DEFAULT_PORT 1883
 #define FLOWIE_MQTT_CLIENT_DEFAULT_TLS_PORT 8883
 #define FLOWIE_MQTT_CLIENT_DEFAULT_TIMEOUT_MS 30000u
@@ -40,6 +41,18 @@ typedef enum flowie_mqtt_client_transport_e {
   FLOWIE_MQTT_CLIENT_TRANSPORT_WS,
   FLOWIE_MQTT_CLIENT_TRANSPORT_WSS
 } flowie_mqtt_client_transport_t;
+
+/**
+ * Optional verified TLS/WSS client identity. Strings are copied at client creation.
+ * cert_file and key_file must be configured together. key_password is wiped when
+ * the client is destroyed. Peer verification cannot be disabled through this API.
+ */
+typedef struct flowie_mqtt_client_tls_config_s {
+  const char *ca_file;
+  const char *cert_file;
+  const char *key_file;
+  const char *key_password;
+} flowie_mqtt_client_tls_config_t;
 
 /** One caller-owned topic entry in a client publish request. */
 typedef struct flowie_mqtt_client_publish_topic_s {
@@ -133,6 +146,8 @@ typedef struct flowie_mqtt_client_config_s {
   size_t command_queue_capacity;
   /** Maximum total bytes owned by queued commands; zero selects the default. */
   size_t command_queue_max_bytes;
+  /** ABI v6: used only by TLS/WSS; all strings are copied. */
+  flowie_mqtt_client_tls_config_t tls;
 } flowie_mqtt_client_config_t;
 
 #define FLOWIE_MQTT_CLIENT_CONFIG_INIT                                                             \
@@ -155,7 +170,8 @@ typedef struct flowie_mqtt_client_config_s {
    NULL,                                                                                           \
    NULL,                                                                                           \
    FLOWIE_MQTT_CLIENT_DEFAULT_COMMAND_QUEUE_CAPACITY,                                              \
-   FLOWIE_MQTT_CLIENT_DEFAULT_COMMAND_QUEUE_BYTES}
+   FLOWIE_MQTT_CLIENT_DEFAULT_COMMAND_QUEUE_BYTES,                                                 \
+   {NULL, NULL, NULL, NULL}}
 
 /**
  * Create a callback-driven client. The DLL owns its CoroNet context, worker

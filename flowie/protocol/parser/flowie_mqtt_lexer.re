@@ -13,7 +13,7 @@ static int flowie_mqtt_fixed_header_valid(uint8_t first, flowie_mqtt_version_t v
   uint8_t type = (uint8_t)(first >> 4u);
   uint8_t flags = (uint8_t)(first & 0x0fu);
   if (type == 0u || type > FLOWIE_MQTT_PACKET_AUTH) return 0;
-  if (type == FLOWIE_MQTT_PACKET_AUTH && version == FLOWIE_MQTT_VERSION_3_1_1) return 0;
+  if (type == FLOWIE_MQTT_PACKET_AUTH && version != FLOWIE_MQTT_VERSION_5) return 0;
   if (type == FLOWIE_MQTT_PACKET_PUBLISH) return ((flags >> 1u) & 0x03u) != 0x03u;
   return flags == required_flags[type];
 }

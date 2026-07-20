@@ -238,7 +238,6 @@ spec("Flowie memory Queue settlement composition") {
         0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u, 'a',   'c',   'c'};
     static const uint8_t publish[] = {0x32u, 0x07u, 0x00u, 0x01u, 'a',
                                       0x00u, 0x35u, 0x00u, 'q'};
-    static const uint8_t connack[] = {0x20u, 0x03u, 0x00u, 0x00u, 0x00u};
     static const uint8_t puback[] = {0x40u, 0x02u, 0x00u, 0x35u};
     char yaml[FLOWIE_QUEUE_TEST_YAML_CAPACITY];
     uint8_t received[8];
@@ -320,8 +319,8 @@ spec("Flowie memory Queue settlement composition") {
     client = flowie_test_connect(port);
     check_true(client != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(client, connect_packet, sizeof(connect_packet)), TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(client, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(client, 0u, 8u, FLOWIE_DEFAULT_MAX_PACKET_SIZE),
+                 TURBO_OK);
     check_int_eq(flowie_test_send(client, publish, sizeof(publish)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(client, received, sizeof(puback)), TURBO_OK);
     check_mem_eq(received, puback, sizeof(puback));
@@ -364,7 +363,6 @@ spec("Flowie memory Queue settlement composition") {
     static const uint8_t subscriber_connect[] = {
         0x10u, 0x10u, 0x00u, 0x04u, 'M', 'Q', 'T', 'T', 0x05u,
         0x02u, 0x00u, 0x3cu, 0x00u, 0x00u, 0x03u, 's', 'u', 'b'};
-    static const uint8_t connack[] = {0x20u, 0x03u, 0x00u, 0x00u, 0x00u};
     static const uint8_t subscribe[] = {0x82u, 0x0du, 0x00u, 0x01u, 0x00u, 0x00u,
                                         0x07u, 'l',   'o',   'c',   'a',   'l',
                                         '/',   '#',   0x00u};
@@ -459,12 +457,12 @@ spec("Flowie memory Queue settlement composition") {
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(publisher, publisher_connect, sizeof(publisher_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(publisher, 0u, 8u, FLOWIE_DEFAULT_MAX_PACKET_SIZE),
+                 TURBO_OK);
     check_int_eq(flowie_test_send(subscriber, subscriber_connect, sizeof(subscriber_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(subscriber, 0u, 8u, FLOWIE_DEFAULT_MAX_PACKET_SIZE),
+                 TURBO_OK);
     check_int_eq(flowie_test_send(subscriber, subscribe, sizeof(subscribe)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(suback)), TURBO_OK);
     check_mem_eq(received, suback, sizeof(suback));
@@ -643,7 +641,6 @@ spec("Flowie memory Queue settlement composition") {
         0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u, 's',   'q',   'l'};
     static const uint8_t publish[] = {0x32u, 0x07u, 0x00u, 0x01u, 'a',
                                       0x00u, 0x55u, 0x00u, 'd'};
-    static const uint8_t connack[] = {0x20u, 0x03u, 0x00u, 0x00u, 0x00u};
     static const uint8_t puback[] = {0x40u, 0x02u, 0x00u, 0x55u};
     char database_path[TURBO_FS_MAX_PATH];
     char yaml[FLOWIE_QUEUE_TEST_YAML_CAPACITY];
@@ -713,8 +710,8 @@ spec("Flowie memory Queue settlement composition") {
     client = flowie_test_connect(port);
     check_true(client != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(client, connect_packet, sizeof(connect_packet)), TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(client, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(client, 0u, 8u, FLOWIE_DEFAULT_MAX_PACKET_SIZE),
+                 TURBO_OK);
     check_int_eq(flowie_test_send(client, publish, sizeof(publish)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(client, received, sizeof(puback)), TURBO_OK);
     check_mem_eq(received, puback, sizeof(puback));
@@ -750,8 +747,6 @@ spec("Flowie memory Queue settlement composition") {
         0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u, 'p',   'u',   'b'};
     static const uint8_t subscribe[] = {0x82u, 0x07u, 0x00u, 0x01u, 0x00u,
                                         0x00u, 0x01u, 'a',   0x01u};
-    static const uint8_t connack[] = {0x20u, 0x03u, 0x00u, 0x00u, 0x00u};
-    static const uint8_t resumed_connack[] = {0x20u, 0x03u, 0x01u, 0x00u, 0x00u};
     static const uint8_t suback[] = {0x90u, 0x04u, 0x00u, 0x01u, 0x00u, 0x01u};
     static const uint8_t publish[] = {0x32u, 0x07u, 0x00u, 0x01u, 'a',
                                       0x00u, 0x31u, 0x00u, 'x'};
@@ -829,8 +824,7 @@ spec("Flowie memory Queue settlement composition") {
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(subscriber, subscriber_connect, sizeof(subscriber_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(subscriber, 0u, 8u, 4096u), TURBO_OK);
     check_int_eq(flowie_test_send(subscriber, subscribe, sizeof(subscribe)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(suback)), TURBO_OK);
     check_mem_eq(received, suback, sizeof(suback));
@@ -856,14 +850,12 @@ spec("Flowie memory Queue settlement composition") {
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(subscriber, subscriber_connect, sizeof(subscriber_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(resumed_connack)), TURBO_OK);
-    check_mem_eq(received, resumed_connack, sizeof(resumed_connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(subscriber, 1u, 8u, 4096u), TURBO_OK);
     publisher = flowie_test_connect(port);
     check_true(publisher != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(publisher, publisher_connect, sizeof(publisher_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(publisher, 0u, 8u, 4096u), TURBO_OK);
     check_int_eq(flowie_test_send(publisher, publish, sizeof(publish)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(publisher_puback)), TURBO_OK);
     check_mem_eq(received, publisher_puback, sizeof(publisher_puback));
@@ -891,8 +883,7 @@ spec("Flowie memory Queue settlement composition") {
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(subscriber, subscriber_connect, sizeof(subscriber_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(resumed_connack)), TURBO_OK);
-    check_mem_eq(received, resumed_connack, sizeof(resumed_connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(subscriber, 1u, 8u, 4096u), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(replay)), TURBO_OK);
     check_mem_eq(received, replay, sizeof(replay));
     check_int_eq(flowie_test_send(subscriber, subscriber_puback, sizeof(subscriber_puback)),
@@ -920,7 +911,6 @@ spec("Flowie memory Queue settlement composition") {
         0x00u, 0x3cu, 0x00u, 0x00u, 0x03u, 's', 'u', 'b'};
     static const uint8_t subscribe[] = {0x82u, 0x07u, 0x00u, 0x01u, 0x00u,
                                         0x00u, 0x01u, 'a',   0x00u};
-    static const uint8_t connack[] = {0x20u, 0x03u, 0x00u, 0x00u, 0x00u};
     static const uint8_t suback[] = {0x90u, 0x04u, 0x00u, 0x01u, 0x00u, 0x00u};
     static const uint8_t retained[] = {0x31u, 0x05u, 0x00u, 0x01u, 'a', 0x00u, 'x'};
     static const uint8_t retained_delete[] = {0x31u, 0x04u, 0x00u, 0x01u, 'a', 0x00u};
@@ -990,8 +980,7 @@ spec("Flowie memory Queue settlement composition") {
     check_true(publisher != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(publisher, publisher_connect, sizeof(publisher_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(publisher, 0u, 8u, 4096u), TURBO_OK);
     check_int_eq(flowie_test_send(publisher, retained, sizeof(retained)), TURBO_OK);
     check_int_eq(flowie_test_send(publisher, ping, sizeof(ping)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(pingresp)), TURBO_OK);
@@ -1011,8 +1000,7 @@ spec("Flowie memory Queue settlement composition") {
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(subscriber, subscriber_connect, sizeof(subscriber_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(subscriber, 0u, 8u, 4096u), TURBO_OK);
     check_int_eq(flowie_test_send(subscriber, subscribe, sizeof(subscribe)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(suback)), TURBO_OK);
     check_mem_eq(received, suback, sizeof(suback));
@@ -1022,8 +1010,7 @@ spec("Flowie memory Queue settlement composition") {
     check_true(publisher != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(publisher, publisher_connect, sizeof(publisher_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(publisher, 0u, 8u, 4096u), TURBO_OK);
     check_int_eq(flowie_test_send(publisher, retained_delete, sizeof(retained_delete)), TURBO_OK);
     check_int_eq(flowie_test_send(publisher, ping, sizeof(ping)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(pingresp)), TURBO_OK);
@@ -1045,8 +1032,7 @@ spec("Flowie memory Queue settlement composition") {
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(subscriber, subscriber_connect, sizeof(subscriber_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(subscriber, 0u, 8u, 4096u), TURBO_OK);
     check_int_eq(flowie_test_send(subscriber, subscribe, sizeof(subscribe)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(suback)), TURBO_OK);
     check_mem_eq(received, suback, sizeof(suback));
@@ -1055,8 +1041,7 @@ spec("Flowie memory Queue settlement composition") {
     check_true(publisher != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(publisher, publisher_connect, sizeof(publisher_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(publisher, 0u, 8u, 4096u), TURBO_OK);
     check_int_eq(flowie_test_send(publisher, retained_expiring, sizeof(retained_expiring)),
                  TURBO_OK);
     check_int_eq(flowie_test_send(publisher, ping, sizeof(ping)), TURBO_OK);
@@ -1080,8 +1065,7 @@ spec("Flowie memory Queue settlement composition") {
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(subscriber, subscriber_connect, sizeof(subscriber_connect)),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(subscriber, 0u, 8u, 4096u), TURBO_OK);
     check_int_eq(flowie_test_send(subscriber, subscribe, sizeof(subscribe)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(suback)), TURBO_OK);
     check_mem_eq(received, suback, sizeof(suback));
@@ -1103,8 +1087,6 @@ spec("Flowie memory Queue settlement composition") {
                                 "}\n";
     static const uint8_t subscribe[] = {0x82u, 0x07u, 0x00u, 0x01u, 0x00u,
                                         0x00u, 0x01u, 'w',   0x00u};
-    static const uint8_t connack[] = {0x20u, 0x03u, 0x00u, 0x00u, 0x00u};
-    static const uint8_t resumed_connack[] = {0x20u, 0x03u, 0x01u, 0x00u, 0x00u};
     static const uint8_t suback[] = {0x90u, 0x04u, 0x00u, 0x01u, 0x00u, 0x00u};
     static const uint8_t expected_will[] = {0x30u, 0x05u, 0x00u, 0x01u,
                                             'w',   0x00u, 'x'};
@@ -1182,15 +1164,14 @@ spec("Flowie memory Queue settlement composition") {
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(subscriber, subscriber_connect, subscriber_connect_size),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(connack)), TURBO_OK);
-    check_mem_eq(received, connack, sizeof(connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(subscriber, 0u, 8u, 4096u), TURBO_OK);
     check_int_eq(flowie_test_send(subscriber, subscribe, sizeof(subscribe)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(suback)), TURBO_OK);
     check_mem_eq(received, suback, sizeof(suback));
     will_client = flowie_test_connect(port);
     check_true(will_client != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(will_client, will_connect, will_connect_size), TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(will_client, received, sizeof(connack)), TURBO_OK);
+    check_int_eq(flowie_test_recv_mqtt5_connack(will_client, 0u, 8u, 4096u), TURBO_OK);
     flowie_test_socket_close(will_client);
     will_client = FLOWIE_TEST_INVALID_SOCKET;
     for (size_t i = 0u; i < FLOWIE_QUEUE_TEST_WAIT_STEPS; ++i) {
@@ -1215,8 +1196,7 @@ spec("Flowie memory Queue settlement composition") {
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
     check_int_eq(flowie_test_send(subscriber, subscriber_connect, subscriber_connect_size),
                  TURBO_OK);
-    check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(resumed_connack)), TURBO_OK);
-    check_mem_eq(received, resumed_connack, sizeof(resumed_connack));
+    check_int_eq(flowie_test_recv_mqtt5_connack(subscriber, 1u, 8u, 4096u), TURBO_OK);
     check_true(flowie_test_socket_readable(subscriber, WILL_DELIVERY_WAIT_MS));
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(expected_will)), TURBO_OK);
     check_mem_eq(received, expected_will, sizeof(expected_will));

@@ -13,16 +13,18 @@ static void security_copy(char *out, size_t capacity, const char *value) {
   memcpy(out, value, size + 1u);
 }
 
-static turbo_flow_security_principal_t security_principal(const char *tenant,
+static turbo_flow_security_principal_t security_principal(const char *root_group,
                                                           uint64_t policy_version) {
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   security_copy(principal.principal_id, sizeof(principal.principal_id), "device-7");
   security_copy(principal.principal_type, sizeof(principal.principal_type), "device");
-  security_copy(principal.tenant_id, sizeof(principal.tenant_id), tenant);
+  security_copy(principal.root_group_id, sizeof(principal.root_group_id), root_group);
   security_copy(principal.auth_method, sizeof(principal.auth_method), "token");
-  principal.scope = TURBO_FLOW_SECURITY_SCOPE_TENANT;
+  principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
   principal.role_count = 1u;
   security_copy(principal.roles[0], sizeof(principal.roles[0]), "writer");
+  principal.group_count = 1u;
+  security_copy(principal.groups[0], sizeof(principal.groups[0]), root_group);
   principal.policy_version = policy_version;
   return principal;
 }
@@ -34,6 +36,7 @@ static turbo_flow_security_rule_t security_rule(turbo_flow_security_effect_t eff
   rule.effect = effect;
   rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
   security_copy(rule.subject, sizeof(rule.subject), "writer");
+  security_copy(rule.root_group_id, sizeof(rule.root_group_id), "root-a");
   rule.action_mask = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
   rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
   rule.match_kind = match;
@@ -63,7 +66,7 @@ static int security_authenticate(void *ctx, const turbo_flow_security_auth_reque
       memcmp(request->secret, "secret", sizeof("secret") - 1u) != 0) {
     return TURBO_EPERM;
   }
-  *principal = security_principal("tenant-a", 9u);
+  *principal = security_principal("root-a", 9u);
   return TURBO_OK;
 }
 
@@ -73,6 +76,114 @@ typedef struct security_secret_fixture_s {
   int malformed;
   int fail_after_lease;
 } security_secret_fixture_t;
+
+typedef struct security_enhanced_fixture_s {
+  int begin_calls;
+  int continue_calls;
+  int cancel_calls;
+  int omit_exchange;
+} security_enhanced_fixture_t;
+
+typedef struct security_policy_fixture_s {
+  turbo_flow_security_rule_t rule;
+  int load_calls;
+  int release_calls;
+} security_policy_fixture_t;
+
+typedef struct security_matcher_fixture_s {
+  size_t candidate_count;
+  size_t emit_position;
+  int compile_calls;
+  int evaluate_calls;
+  int destroy_calls;
+} security_matcher_fixture_t;
+
+static int security_matcher_compile(void *ctx, const turbo_flow_security_matcher_leaf_t *input,
+                                    void **compiled_leaf_out) {
+  security_matcher_fixture_t *fixture = (security_matcher_fixture_t *)ctx;
+  if (!fixture || !input || input->size < sizeof(*input) || !input->rules ||
+      !input->candidate_rule_indices || input->candidate_count == 0u || !compiled_leaf_out)
+    return TURBO_EINVAL;
+  ++fixture->compile_calls;
+  fixture->candidate_count = input->candidate_count;
+  *compiled_leaf_out = fixture;
+  return TURBO_OK;
+}
+
+static int security_matcher_evaluate(void *ctx, const void *compiled_leaf,
+                                     const turbo_flow_security_request_t *request,
+                                     turbo_flow_security_match_emit_fn emit, void *emit_ctx) {
+  security_matcher_fixture_t *fixture = (security_matcher_fixture_t *)ctx;
+  if (!fixture || compiled_leaf != fixture || !request || !emit) return TURBO_EINVAL;
+  ++fixture->evaluate_calls;
+  return emit(emit_ctx, fixture->emit_position);
+}
+
+static void security_matcher_destroy(void *ctx, void *compiled_leaf) {
+  security_matcher_fixture_t *fixture = (security_matcher_fixture_t *)ctx;
+  check_ptr_eq(compiled_leaf, fixture);
+  ++fixture->destroy_calls;
+}
+
+static int security_policy_load(void *ctx, uint64_t required_version,
+                                turbo_flow_security_policy_bundle_t *bundle_out) {
+  security_policy_fixture_t *fixture = (security_policy_fixture_t *)ctx;
+  ++fixture->load_calls;
+  if (required_version != 9u) return TURBO_ENOENT;
+  *bundle_out = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
+  bundle_out->policy_version = 9u;
+  bundle_out->rules = &fixture->rule;
+  bundle_out->rule_count = 1u;
+  bundle_out->provider_bundle = fixture;
+  return TURBO_OK;
+}
+
+static void security_policy_release(void *ctx, turbo_flow_security_policy_bundle_t *bundle) {
+  security_policy_fixture_t *fixture = (security_policy_fixture_t *)ctx;
+  check_ptr_eq(bundle->provider_bundle, fixture);
+  ++fixture->release_calls;
+  memset(&fixture->rule, 0xa5, sizeof(fixture->rule));
+  *bundle = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
+}
+
+static int security_enhanced_begin(void *ctx,
+                                   const turbo_flow_security_enhanced_auth_request_t *request,
+                                   void **exchange_out,
+                                   turbo_flow_security_enhanced_auth_result_t *result_out) {
+  static const uint8_t challenge[] = "server-first";
+  security_enhanced_fixture_t *fixture = (security_enhanced_fixture_t *)ctx;
+  ++fixture->begin_calls;
+  check_str_eq(request->identity, "device-7");
+  check_str_eq(request->method, "token");
+  check_size_eq(request->data_size, sizeof("client-first") - 1u);
+  *exchange_out = fixture->omit_exchange ? NULL : fixture;
+  result_out->status = TURBO_FLOW_SECURITY_ENHANCED_AUTH_CONTINUE;
+  result_out->data = challenge;
+  result_out->data_size = sizeof(challenge) - 1u;
+  return TURBO_OK;
+}
+
+static int security_enhanced_continue(void *ctx, void *exchange,
+                                      const turbo_flow_security_enhanced_auth_request_t *request,
+                                      turbo_flow_security_enhanced_auth_result_t *result_out) {
+  static const uint8_t final_data[] = "server-final";
+  security_enhanced_fixture_t *fixture = (security_enhanced_fixture_t *)ctx;
+  check_ptr_eq(exchange, fixture);
+  ++fixture->continue_calls;
+  check_str_eq(request->method, "token");
+  check_size_eq(request->data_size, sizeof("client-final") - 1u);
+  result_out->status = TURBO_FLOW_SECURITY_ENHANCED_AUTH_SUCCESS;
+  result_out->data = final_data;
+  result_out->data_size = sizeof(final_data) - 1u;
+  result_out->principal = security_principal("root-a", 9u);
+  return TURBO_OK;
+}
+
+static void security_enhanced_cancel(void *ctx, void *exchange) {
+  security_enhanced_fixture_t *fixture = (security_enhanced_fixture_t *)ctx;
+  check_ptr_eq(exchange, fixture);
+  ++fixture->cancel_calls;
+}
 
 static int security_secret_acquire(void *ctx, const char *reference,
                                    turbo_flow_security_secret_lease_t *lease) {
@@ -94,7 +205,51 @@ static void security_secret_release(void *ctx, turbo_flow_security_secret_lease_
   ++fixture->release_calls;
 }
 
-spec("security realm v1") {
+spec("security realm v3") {
+  it("parses canonical rule lines with re2c keywords and escaped separators") {
+    static const char line[] =
+        "allow|role|writer|root-a|publish,subscribe|mqtt_topic|adapter|root-a/tele\\|metry/#\n";
+    turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
+
+    check_int_eq(turbo_flow_security_rule_parse_line(line, sizeof(line) - 1u, &rule), TURBO_OK);
+    check_int_eq(rule.effect, TURBO_FLOW_SECURITY_ALLOW);
+    check_int_eq(rule.subject_kind, TURBO_FLOW_SECURITY_SUBJECT_ROLE);
+    check_str_eq(rule.subject, "writer");
+    check_str_eq(rule.root_group_id, "root-a");
+    check_int_eq(rule.action_mask,
+                 TURBO_FLOW_SECURITY_ACTION_PUBLISH | TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE);
+    check_int_eq(rule.resource_type, TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC);
+    check_int_eq(rule.match_kind, TURBO_FLOW_SECURITY_MATCH_ADAPTER);
+    check_str_eq(rule.pattern, "root-a/tele|metry/#");
+
+    {
+      char formatted[TURBO_FLOW_SECURITY_RULE_LINE_MAX + 1u] = {0};
+      size_t formatted_size = 0u;
+      turbo_flow_security_rule_t round_trip = TURBO_FLOW_SECURITY_RULE_INIT;
+      check_int_eq(turbo_flow_security_rule_format_line(&rule, formatted, sizeof(formatted),
+                                                        &formatted_size),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_security_rule_parse_line(formatted, formatted_size, &round_trip),
+                   TURBO_OK);
+      check_str_eq(round_trip.pattern, rule.pattern);
+      check_uint_eq(round_trip.action_mask, rule.action_mask);
+    }
+  }
+
+  it("rejects ambiguous or malformed canonical rule lines") {
+    turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
+    static const char duplicate_action[] =
+        "allow|role|writer|root-a|publish,publish|mqtt_topic|exact|root-a/#";
+    static const char invalid_any[] =
+        "allow|any|anonymous|root-a|publish|mqtt_topic|exact|root-a/#";
+
+    check_int_eq(
+        turbo_flow_security_rule_parse_line(duplicate_action, sizeof(duplicate_action) - 1u, &rule),
+        TURBO_EPROTO);
+    check_int_eq(turbo_flow_security_rule_parse_line(invalid_any, sizeof(invalid_any) - 1u, &rule),
+                 TURBO_EPROTO);
+  }
+
   it("normalizes provider authentication output without retaining credentials") {
     int calls = 0;
     turbo_flow_security_auth_provider_t provider = {sizeof(provider), &calls,
@@ -110,38 +265,84 @@ spec("security realm v1") {
     check_int_eq(turbo_flow_security_authenticate(&provider, &request, &principal), TURBO_OK);
     check_int_eq(calls, 1);
     check_str_eq(principal.principal_id, "device-7");
-    check_str_eq(principal.tenant_id, "tenant-a");
+    check_str_eq(principal.root_group_id, "root-a");
     check_str_eq(principal.auth_method, "token");
+  }
+
+  it("validates and owns enhanced authentication exchange lifecycle") {
+    security_enhanced_fixture_t fixture = {0};
+    turbo_flow_security_enhanced_auth_provider_t provider = {
+        sizeof(provider), &fixture, security_enhanced_begin, security_enhanced_continue,
+        security_enhanced_cancel};
+    turbo_flow_security_enhanced_auth_request_t request =
+        TURBO_FLOW_SECURITY_ENHANCED_AUTH_REQUEST_INIT;
+    turbo_flow_security_enhanced_auth_result_t result =
+        TURBO_FLOW_SECURITY_ENHANCED_AUTH_RESULT_INIT;
+    void *exchange = NULL;
+
+    request.identity = "device-7";
+    request.method = "token";
+    request.data = (const uint8_t *)"client-first";
+    request.data_size = sizeof("client-first") - 1u;
+    request.protocol = "mqtt5";
+    check_int_eq(turbo_flow_security_enhanced_auth_begin(&provider, &request, &exchange, &result),
+                 TURBO_OK);
+    check_ptr_eq(exchange, &fixture);
+    check_int_eq(result.status, TURBO_FLOW_SECURITY_ENHANCED_AUTH_CONTINUE);
+    check_size_eq(result.data_size, sizeof("server-first") - 1u);
+
+    request.data = (const uint8_t *)"client-final";
+    request.data_size = sizeof("client-final") - 1u;
+    result =
+        (turbo_flow_security_enhanced_auth_result_t)TURBO_FLOW_SECURITY_ENHANCED_AUTH_RESULT_INIT;
+    check_int_eq(turbo_flow_security_enhanced_auth_continue(&provider, exchange, &request, &result),
+                 TURBO_OK);
+    check_int_eq(result.status, TURBO_FLOW_SECURITY_ENHANCED_AUTH_SUCCESS);
+    check_str_eq(result.principal.principal_id, "device-7");
+    turbo_flow_security_enhanced_auth_cancel(&provider, exchange);
+    check_int_eq(fixture.begin_calls, 1);
+    check_int_eq(fixture.continue_calls, 1);
+    check_int_eq(fixture.cancel_calls, 1);
+
+    fixture.omit_exchange = 1;
+    exchange = NULL;
+    result =
+        (turbo_flow_security_enhanced_auth_result_t)TURBO_FLOW_SECURITY_ENHANCED_AUTH_RESULT_INIT;
+    request.data = (const uint8_t *)"client-first";
+    request.data_size = sizeof("client-first") - 1u;
+    check_int_eq(turbo_flow_security_enhanced_auth_begin(&provider, &request, &exchange, &result),
+                 TURBO_EPROTO);
+    check_null(exchange);
   }
 
   it("uses explicit deny precedence and default deny") {
     turbo_flow_security_rule_t rules[] = {
         security_rule(TURBO_FLOW_SECURITY_ALLOW, TURBO_FLOW_SECURITY_MATCH_PREFIX,
-                      "tenant-a/telemetry/"),
+                      "root-a/telemetry/"),
         security_rule(TURBO_FLOW_SECURITY_DENY, TURBO_FLOW_SECURITY_MATCH_EXACT,
-                      "tenant-a/telemetry/private")};
+                      "root-a/telemetry/private")};
     turbo_flow_security_realm_t *realm = security_realm(rules, 2u);
-    turbo_flow_security_principal_t principal = security_principal("tenant-a", 9u);
+    turbo_flow_security_principal_t principal = security_principal("root-a", 9u);
     turbo_flow_security_request_t request = TURBO_FLOW_SECURITY_REQUEST_INIT;
     turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
 
     request.principal = &principal;
-    request.tenant_id = "tenant-a";
+    request.root_group_id = "root-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
-    request.resource = "tenant-a/telemetry/value";
+    request.resource = "root-a/telemetry/value";
     check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
     check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
     check_size_eq(decision.matched_rule, 0u);
 
-    request.resource = "tenant-a/telemetry/private";
+    request.resource = "root-a/telemetry/private";
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
     check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
                  TURBO_EPERM);
     check_int_eq(decision.reason, TURBO_FLOW_SECURITY_REASON_DENY_RULE);
     check_size_eq(decision.matched_rule, 1u);
 
-    request.resource = "tenant-a/commands/reboot";
+    request.resource = "root-a/commands/reboot";
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
     check_int_eq(turbo_flow_security_realm_evaluate(realm, &request, 100u, &decision), TURBO_OK);
     check_int_eq(decision.effect, TURBO_FLOW_SECURITY_DENY);
@@ -149,22 +350,177 @@ spec("security realm v1") {
     turbo_flow_security_realm_destroy(realm);
   }
 
-  it("rejects tenant escape stale policy and expired principals before rule matching") {
-    turbo_flow_security_rule_t rule =
-        security_rule(TURBO_FLOW_SECURITY_ALLOW, TURBO_FLOW_SECURITY_MATCH_PREFIX, "tenant-b/");
-    turbo_flow_security_realm_t *realm = security_realm(&rule, 1u);
-    turbo_flow_security_principal_t principal = security_principal("tenant-a", 9u);
+  it("preserves deny precedence across indexed prefix leaves") {
+    turbo_flow_security_rule_t rules[] = {
+        security_rule(TURBO_FLOW_SECURITY_ALLOW, TURBO_FLOW_SECURITY_MATCH_PREFIX, "root-a/"),
+        security_rule(TURBO_FLOW_SECURITY_DENY, TURBO_FLOW_SECURITY_MATCH_PREFIX,
+                      "root-a/telemetry/private"),
+        security_rule(TURBO_FLOW_SECURITY_ALLOW, TURBO_FLOW_SECURITY_MATCH_PREFIX,
+                      "root-a/telemetry/")};
+    turbo_flow_security_realm_t *realm = security_realm(rules, 3u);
+    turbo_flow_security_principal_t principal = security_principal("root-a", 9u);
     turbo_flow_security_request_t request = TURBO_FLOW_SECURITY_REQUEST_INIT;
     turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
 
     request.principal = &principal;
-    request.tenant_id = "tenant-b";
+    request.root_group_id = "root-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
-    request.resource = "tenant-b/value";
+    request.resource = "root-a/telemetry/private/value";
     check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
                  TURBO_EPERM);
-    check_int_eq(decision.reason, TURBO_FLOW_SECURITY_REASON_TENANT_MISMATCH);
+    check_int_eq(decision.reason, TURBO_FLOW_SECURITY_REASON_DENY_RULE);
+    check_size_eq(decision.matched_rule, 1u);
+
+    request.resource = "root-a/telemetry/public/value";
+    decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+    check_size_eq(decision.matched_rule, 0u);
+    turbo_flow_security_realm_destroy(realm);
+  }
+
+  it("bounds compiled matcher output to its immutable subject leaf") {
+    security_matcher_fixture_t fixture = {0};
+    turbo_flow_security_rule_t rule =
+        security_rule(TURBO_FLOW_SECURITY_ALLOW, TURBO_FLOW_SECURITY_MATCH_ADAPTER, "root-a/#");
+    turbo_flow_security_realm_config_t config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
+    turbo_flow_security_principal_t principal = security_principal("root-a", 9u);
+    turbo_flow_security_request_t request = TURBO_FLOW_SECURITY_REQUEST_INIT;
+    turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
+    turbo_flow_security_realm_t *realm = NULL;
+
+    config.resource_uid = "security:compiled-matcher";
+    config.owner_name = "security.compiled-matcher";
+    config.policy_version = 9u;
+    config.rules = &rule;
+    config.rule_count = 1u;
+    config.matcher.ctx = &fixture;
+    config.matcher.compile_leaf = security_matcher_compile;
+    config.matcher.evaluate_leaf = security_matcher_evaluate;
+    config.matcher.destroy_leaf = security_matcher_destroy;
+    check_int_eq(turbo_flow_security_realm_create(&config, &realm), TURBO_OK);
+    check_int_eq(fixture.compile_calls, 1);
+    check_size_eq(fixture.candidate_count, 1u);
+
+    request.principal = &principal;
+    request.root_group_id = "root-a";
+    request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
+    request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+    request.resource = "root-a/device-7";
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+
+    fixture.emit_position = fixture.candidate_count;
+    decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    check_int_eq(turbo_flow_security_realm_evaluate(realm, &request, 100u, &decision),
+                 TURBO_EPROTO);
+    check_int_eq(decision.effect, TURBO_FLOW_SECURITY_DENY);
+    turbo_flow_security_realm_destroy(realm);
+    check_int_eq(fixture.evaluate_calls, 2);
+    check_int_eq(fixture.destroy_calls, 1);
+  }
+
+  it("rejects an incomplete compiled matcher lifecycle") {
+    security_matcher_fixture_t fixture = {0};
+    turbo_flow_security_rule_t rule =
+        security_rule(TURBO_FLOW_SECURITY_ALLOW, TURBO_FLOW_SECURITY_MATCH_ADAPTER, "root-a/#");
+    turbo_flow_security_realm_config_t config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
+    turbo_flow_security_realm_t *realm = NULL;
+
+    config.resource_uid = "security:incomplete-matcher";
+    config.owner_name = "security.incomplete-matcher";
+    config.policy_version = 9u;
+    config.rules = &rule;
+    config.rule_count = 1u;
+    config.matcher.ctx = &fixture;
+    config.matcher.compile_leaf = security_matcher_compile;
+    check_int_eq(turbo_flow_security_realm_create(&config, &realm), TURBO_EINVAL);
+    check_null(realm);
+    check_int_eq(fixture.compile_calls, 0);
+  }
+
+  it("keeps compiled subject keys after a provider releases its bundle") {
+    security_policy_fixture_t fixture = {0};
+    turbo_flow_security_policy_provider_t provider =
+        (turbo_flow_security_policy_provider_t)TURBO_FLOW_SECURITY_POLICY_PROVIDER_INIT;
+    turbo_flow_security_realm_config_t config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
+    turbo_flow_security_realm_t *realm = NULL;
+    turbo_flow_security_principal_t principal = security_principal("root-a", 9u);
+    turbo_flow_security_request_t request = TURBO_FLOW_SECURITY_REQUEST_INIT;
+    turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
+
+    fixture.rule = security_rule(TURBO_FLOW_SECURITY_ALLOW, TURBO_FLOW_SECURITY_MATCH_PREFIX,
+                                 "root-a/telemetry/");
+    provider.ctx = &fixture;
+    provider.load = security_policy_load;
+    provider.release = security_policy_release;
+    config.resource_uid = "security:provider-lifetime";
+    config.owner_name = "security.provider-lifetime";
+    config.policy_source = "acl.fixture";
+    check_int_eq(turbo_flow_security_realm_create(&config, &realm), TURBO_OK);
+    check_int_eq(turbo_flow_security_realm_bind_policy_provider(realm, &provider), TURBO_OK);
+
+    request.principal = &principal;
+    request.root_group_id = "root-a";
+    request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
+    request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+    request.resource = "root-a/telemetry/value";
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+    check_int_eq(fixture.load_calls, 1);
+    check_int_eq(fixture.release_calls, 1);
+    turbo_flow_security_realm_destroy(realm);
+  }
+
+  it("authorizes nested members through their bounded effective-group ancestry") {
+    turbo_flow_security_rule_t rule =
+        security_rule(TURBO_FLOW_SECURITY_ALLOW, TURBO_FLOW_SECURITY_MATCH_PREFIX, "devices/");
+    turbo_flow_security_principal_t principal = security_principal("root-a", 9u);
+    turbo_flow_security_request_t request = TURBO_FLOW_SECURITY_REQUEST_INIT;
+    turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
+    turbo_flow_security_realm_t *realm;
+
+    rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_GROUP;
+    security_copy(rule.subject, sizeof(rule.subject), "engineering");
+    principal.group_count = 3u;
+    security_copy(principal.groups[0], sizeof(principal.groups[0]), "root-a");
+    security_copy(principal.groups[1], sizeof(principal.groups[1]), "engineering");
+    security_copy(principal.groups[2], sizeof(principal.groups[2]), "backend");
+    realm = security_realm(&rule, 1u);
+    request.principal = &principal;
+    request.root_group_id = "root-a";
+    request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
+    request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+    request.resource = "devices/7/events";
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+
+    security_copy(principal.groups[0], sizeof(principal.groups[0]), "backend");
+    principal.group_count = 1u;
+    decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
+                 TURBO_EINVAL);
+    turbo_flow_security_realm_destroy(realm);
+  }
+
+  it("rejects root-group escape stale policy and expired principals before rule matching") {
+    turbo_flow_security_rule_t rule =
+        security_rule(TURBO_FLOW_SECURITY_ALLOW, TURBO_FLOW_SECURITY_MATCH_PREFIX, "root-b/");
+    security_copy(rule.root_group_id, sizeof(rule.root_group_id), "root-b");
+    turbo_flow_security_realm_t *realm = security_realm(&rule, 1u);
+    turbo_flow_security_principal_t principal = security_principal("root-a", 9u);
+    turbo_flow_security_request_t request = TURBO_FLOW_SECURITY_REQUEST_INIT;
+    turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
+
+    request.principal = &principal;
+    request.root_group_id = "root-b";
+    request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
+    request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+    request.resource = "root-b/value";
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
+                 TURBO_EPERM);
+    check_int_eq(decision.reason, TURBO_FLOW_SECURITY_REASON_ROOT_GROUP_MISMATCH);
 
     principal.scope = TURBO_FLOW_SECURITY_SCOPE_SYSTEM;
     principal.policy_version = 8u;
@@ -182,7 +538,7 @@ spec("security realm v1") {
     turbo_flow_security_realm_destroy(realm);
   }
 
-  it("creates and exposes a credential-free resource from strict YAML") {
+  it("creates a fail-closed realm from YAML metadata without ACL bodies") {
     static const char yaml[] = "version: 1\n"
                                "channels:\n"
                                "  security.main:\n"
@@ -190,21 +546,12 @@ spec("security realm v1") {
                                "    config:\n"
                                "      resource_uid: security:main\n"
                                "      owner_name: security.main\n"
-                               "      policy_version: 9\n"
-                               "      rules:\n"
-                               "        - effect: allow\n"
-                               "          subject_kind: role\n"
-                               "          subject: writer\n"
-                               "          tenant_id: tenant-a\n"
-                               "          actions: [publish]\n"
-                               "          resource_type: mqtt_topic\n"
-                               "          match: prefix\n"
-                               "          pattern: tenant-a/telemetry/\n"
+                               "      policy_source: acl.provider\n"
                                "adapters: {}\n";
     static const char bad_yaml[] =
         "version: 1\nchannels:\n  security.main:\n    kind: security_realm\n"
         "    config:\n      resource_uid: security:main\n      owner_name: security.main\n"
-        "      policy_version: 9\n      plaintext_key: forbidden\n      rules: []\n"
+        "      policy_source: acl.provider\n      rules: []\n"
         "adapters: {}\n";
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -223,7 +570,8 @@ spec("security realm v1") {
     check_int_eq(turbo_flow_security_realm_register(flow, realm), TURBO_OK);
     check_int_eq(turbo_flow_resource_metadata_at(flow, 0u, &metadata), TURBO_OK);
     check_int_eq(metadata.kind, TURBO_FLOW_RESOURCE_SECURITY_REALM);
-    check_uint_eq(metadata.generation, 9u);
+    check_uint_eq(metadata.generation, 1u);
+    check_uint_eq(metadata.observed_generation, 0u);
     check_int_eq(
         turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
         TURBO_OK);
@@ -231,8 +579,8 @@ spec("security realm v1") {
     payload =
         tstr_new_len(mem_buffer_const_data(document.payload), mem_buffer_used(document.payload));
     check_not_null(payload);
-    check_not_null(strstr(payload, "\"policy_version\":\"9\""));
-    check_null(strstr(payload, "tenant-a"));
+    check_not_null(strstr(payload, "\"policy_version\":\"0\""));
+    check_null(strstr(payload, "root-a"));
     check_null(strstr(payload, "telemetry"));
     tstr_free(payload);
     turbo_flow_resource_document_cleanup(&document);
@@ -248,7 +596,7 @@ spec("security realm v1") {
     check_int_eq(
         turbo_flow_security_realm_create_resolved(resolved, "security.main", NULL, &realm, &error),
         TURBO_EINVAL);
-    check_str_contains(error.path, "plaintext_key");
+    check_str_contains(error.path, "rules");
     check_null(realm);
     turbo_flow_resolved_config_destroy(resolved);
   }

@@ -15,6 +15,7 @@ build\Msvc-Release\bin\bench_turbo_flow.exe --filter "publish"
 build\Msvc-Release\bin\bench_turbo_flow.exe --filter "async ingress"
 build\Msvc-Release\bin\bench_turbo_flow.exe --filter "teardown"
 build\Msvc-Release\bin\bench_turbo_flow.exe --filter "expression"
+build\Msvc-Release\bin\bench_turbo_flow.exe --filter "security"
 ```
 
 The I/O-layer event-time owner has a separate hot-path benchmark:
@@ -73,3 +74,17 @@ Expression benchmarks separately measure parser/type-check cost, MIR
 interpreter/JIT compilation, and evaluation of the same finalized typed
 expression. The benchmark label identifies the expression shape and selected
 backend; compile iterations are 200 and evaluation iterations are 100000.
+
+The security benchmark places 64, 512, and 4096 rules in the same Root Group/action/resource
+bucket. `acl-subject-index` uses distinct subjects, while `acl-exact-index`, `acl-prefix-index`, and
+`acl-adapter-compiled` place every pattern under one subject. This separates subject, exact,
+prefix, and protocol matcher costs and catches a leaf regressing to a rule-count-proportional scan.
+
+Exact patterns use a direct hash leaf. Prefix patterns use hash leaves probed by each prefix of the
+requested resource, so lookup is bounded by resource length rather than the number of rules. A
+reference Windows Release run sustained approximately 1.46-1.70M decisions/s for subject/exact,
+0.69-0.71M decisions/s for prefix, and 1.48-1.58M decisions/s for a compiled adapter across 64, 512,
+and 4096 rules. Adapter rules are compiled once per immutable subject leaf; authorization emits
+leaf-local positions that Core bounds-checks before applying deny precedence and original rule
+ordering. Flowie's production matcher uses its MQTT trie while preserving distinct topic-match and
+filter-containment semantics.

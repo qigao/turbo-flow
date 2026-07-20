@@ -125,6 +125,24 @@ static int flowie_test_recv_exact(flowie_test_socket_t socket_handle, uint8_t *d
   return TURBO_OK;
 }
 
+static int flowie_test_recv_mqtt5_connack(flowie_test_socket_t socket_handle,
+                                          uint8_t session_present, uint16_t receive_maximum,
+                                          uint32_t maximum_packet_size) {
+  uint8_t expected[] = {0x20u, 0x0bu, 0x00u, 0x00u, 0x08u, 0x21u, 0x00u,
+                        0x00u, 0x27u, 0x00u, 0x00u, 0x00u, 0x00u};
+  uint8_t received[sizeof(expected)];
+  expected[2] = session_present;
+  expected[6] = (uint8_t)(receive_maximum >> 8u);
+  expected[7] = (uint8_t)receive_maximum;
+  expected[9] = (uint8_t)(maximum_packet_size >> 24u);
+  expected[10] = (uint8_t)(maximum_packet_size >> 16u);
+  expected[11] = (uint8_t)(maximum_packet_size >> 8u);
+  expected[12] = (uint8_t)maximum_packet_size;
+  if (flowie_test_recv_exact(socket_handle, received, sizeof(received)) != TURBO_OK)
+    return TURBO_EPROTO;
+  return memcmp(received, expected, sizeof(expected)) == 0 ? TURBO_OK : TURBO_EPROTO;
+}
+
 static int flowie_test_socket_readable(flowie_test_socket_t socket_handle, uint32_t timeout_ms) {
   fd_set readers;
   struct timeval timeout;

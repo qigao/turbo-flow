@@ -63,6 +63,19 @@ typedef struct publish_stage_ctx_s {
   int fail_status;
 } publish_stage_ctx_t;
 
+typedef struct batch_publish_probe_s {
+  uint64_t ids[8];
+  size_t calls;
+  uint64_t fail_id;
+  int fail_status;
+} batch_publish_probe_t;
+
+typedef struct batch_prepare_probe_s {
+  size_t calls;
+  size_t fail_index;
+  int fail_status;
+} batch_prepare_probe_t;
+
 typedef struct payload_check_ctx_s {
   const char *expected;
   int called;
@@ -306,6 +319,25 @@ static int record_stage(turbo_flow_msg_t *msg, void *ctx) {
     stage->trace->order[stage->trace->count++] = stage->id;
   }
   return stage->fail_status;
+}
+
+static int batch_publish_probe_stage(turbo_flow_msg_t *msg, void *ctx) {
+  batch_publish_probe_t *probe = (batch_publish_probe_t *)ctx;
+  if (!probe || !msg) return TURBO_EINVAL;
+  if (probe->calls < sizeof(probe->ids) / sizeof(probe->ids[0])) {
+    probe->ids[probe->calls] = msg->id;
+  }
+  probe->calls += 1u;
+  return probe->fail_id != 0u && msg->id == probe->fail_id ? probe->fail_status : TURBO_OK;
+}
+
+static int batch_prepare_message(void *ctx, size_t index, turbo_flow_msg_t *message) {
+  batch_prepare_probe_t *probe = (batch_prepare_probe_t *)ctx;
+  if (!probe || !message) return TURBO_EINVAL;
+  probe->calls += 1u;
+  if (index == probe->fail_index) return probe->fail_status;
+  message->id = index + 1u;
+  return TURBO_OK;
 }
 
 static int set_flags_stage(turbo_flow_msg_t *msg, void *ctx) {
@@ -2864,6 +2896,118 @@ suite("Turbo Flow") {
       check_size_eq(trace.count, 2);
       check_int_eq(trace.order[0], 1);
       check_int_eq(trace.order[1], 2);
+
+      turbo_flow_msg_cleanup(&msg);
+      turbo_flow_destroy(flow);
+    }
+
+    it("publishes an ordered batch under one admission and stops at the first failure") {
+      static const char *src = "source input\n"
+                               "stage sink\n"
+                               "stage main {\n"
+                               "  input -> sink\n"
+                               "}\n";
+      batch_publish_probe_t probe = {{0}, 0u, 0u, TURBO_EPROTO};
+      batch_prepare_probe_t prepare_probe = {0u, SIZE_MAX, TURBO_EIO};
+      turbo_flow_publish_batch_config_t batch_config = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
+      turbo_flow_t *flow = turbo_flow_create();
+      size_t published = SIZE_MAX;
+
+      check_not_null(flow);
+      batch_config.message_count = 4u;
+      batch_config.prepare = batch_prepare_message;
+      batch_config.ctx = &prepare_probe;
+      check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_int_eq(turbo_flow_register_stage_ex(flow, "sink", batch_publish_probe_stage,
+                                                &probe, NULL),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+
+      check_int_eq(turbo_flow_publish_batch(flow, "input", &batch_config, &published),
+                   TURBO_EINVAL);
+      check_size_eq(published, 0u);
+      check_size_eq(probe.calls, 0u);
+
+      check_int_eq(turbo_flow_start(flow), TURBO_OK);
+      check_int_eq(turbo_flow_publish_batch(flow, "missing", &batch_config, &published),
+                   TURBO_EINVAL);
+      check_size_eq(published, 0u);
+      check_size_eq(probe.calls, 0u);
+
+      check_int_eq(turbo_flow_publish_batch(flow, "input", &batch_config, &published), TURBO_OK);
+      check_size_eq(published, 4u);
+      check_size_eq(probe.calls, 4u);
+      for (size_t index = 0u; index < 4u; ++index)
+        check_uint_eq(probe.ids[index], index + 1u);
+
+      memset(probe.ids, 0, sizeof(probe.ids));
+      probe.calls = 0u;
+      probe.fail_id = 3u;
+      check_int_eq(turbo_flow_publish_batch(flow, "input", &batch_config, &published),
+                   TURBO_EPROTO);
+      check_size_eq(published, 2u);
+      check_size_eq(probe.calls, 3u);
+      check_uint_eq(probe.ids[0], 1u);
+      check_uint_eq(probe.ids[1], 2u);
+      check_uint_eq(probe.ids[2], 3u);
+      check_int_eq(turbo_flow_last_error(flow)->code, TURBO_EPROTO);
+
+      memset(probe.ids, 0, sizeof(probe.ids));
+      probe.calls = 0u;
+      probe.fail_id = 0u;
+      prepare_probe.calls = 0u;
+      prepare_probe.fail_index = 2u;
+      check_int_eq(turbo_flow_publish_batch(flow, "input", &batch_config, &published), TURBO_EIO);
+      check_size_eq(published, 2u);
+      check_size_eq(prepare_probe.calls, 3u);
+      check_size_eq(probe.calls, 2u);
+      check_int_eq(turbo_flow_last_error(flow)->code, TURBO_EIO);
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("runs a graph larger than the stack workspace through pooled scratch storage") {
+      enum { LARGE_GRAPH_STAGE_COUNT = 65, LARGE_GRAPH_SOURCE_CAPACITY = 8192 };
+      char source[LARGE_GRAPH_SOURCE_CAPACITY];
+      char stage_name[32];
+      size_t used = 0u;
+      turbo_flow_msg_t msg;
+      turbo_flow_t *flow = turbo_flow_create();
+      int written;
+
+      check_not_null(flow);
+      written = snprintf(source + used, sizeof(source) - used, "source input\n");
+      check_true(written > 0 && (size_t)written < sizeof(source) - used);
+      used += (size_t)written;
+      for (unsigned i = 0u; i < LARGE_GRAPH_STAGE_COUNT; ++i) {
+        written = snprintf(source + used, sizeof(source) - used, "stage node_%u\n", i);
+        check_true(written > 0 && (size_t)written < sizeof(source) - used);
+        used += (size_t)written;
+      }
+      written = snprintf(source + used, sizeof(source) - used, "stage main {\n  input");
+      check_true(written > 0 && (size_t)written < sizeof(source) - used);
+      used += (size_t)written;
+      for (unsigned i = 0u; i < LARGE_GRAPH_STAGE_COUNT; ++i) {
+        written = snprintf(source + used, sizeof(source) - used, " -> node_%u", i);
+        check_true(written > 0 && (size_t)written < sizeof(source) - used);
+        used += (size_t)written;
+      }
+      written = snprintf(source + used, sizeof(source) - used, "\n}\n");
+      check_true(written > 0 && (size_t)written < sizeof(source) - used);
+      used += (size_t)written;
+
+      check_int_eq(turbo_flow_parse_string(flow, source, used), TURBO_OK);
+      for (unsigned i = 0u; i < LARGE_GRAPH_STAGE_COUNT; ++i) {
+        written = snprintf(stage_name, sizeof(stage_name), "node_%u", i);
+        check_true(written > 0 && (size_t)written < sizeof(stage_name));
+        check_int_eq(turbo_flow_register_stage_ex(flow, stage_name, noop_stage, NULL, NULL),
+                     TURBO_OK);
+      }
+      check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+      check_int_eq(turbo_flow_start(flow), TURBO_OK);
+      turbo_flow_msg_init(&msg);
+      check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_int_eq(turbo_flow_stop(flow), TURBO_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);

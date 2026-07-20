@@ -15,6 +15,9 @@ profiles:
     accepted_source: queue.mqtt.accepted
     rule_set: mqtt.routing
     output: socket.application.output
+# A secure product profile also selects an auth-provider channel. The backend
+# must be registered by the composition root; selection is exact and has no fallback.
+#    auth_provider: mqtt.auth-service
 
 channels:
   mqtt.accepted:
@@ -64,33 +67,54 @@ channels:
 #      max_batch_size: 4096
 #      max_records: 200000
 
-# A secure deployment may add a SecurityRealm channel here. Credentials are
-# never stored in YAML: the host injects a typed authentication provider and
-# the realm handle through flowie_endpoint_security_binding_t, then calls
-# flowie_register_resolved_secure_endpoint[_ex]. Example policy shape:
+# A secure deployment adds an HTTPS authentication-service channel and a local SecurityRealm.
+# Flowie never receives database coordinates: Redis, SQLite, PostgreSQL, or another credential
+# store remains private to the authentication service. The service-token value is resolved by the
+# host key provider and is never written into YAML. ACL rule bodies are also absent from YAML:
+# the realm references one exact HTTPS or embedded SQLite ACL provider.
+#  mqtt.auth-service:
+#    kind: auth_provider
+#    config:
+#      backend: https
+#      url: https://auth.internal.example/v2/authenticate
+#      method: password
+#      service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
+#      timeout_ms: 3000
+#      max_secret_size: 4096
+#      tls:
+#        ca_file: C:/certs/auth-service-ca.pem
+#        client_cert_file: C:/certs/flowie-client.pem
+#        client_key_file: C:/certs/flowie-client-key.pem
+#        client_key_password_ref: env://FLOWIE_AUTH_TLS_KEY_PASSWORD
+#  mqtt.acl-service:
+#    kind: acl_provider
+#    config:
+#      backend: https
+#      url: https://auth.internal.example/v1/acl-bundle
+#      service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
+#      timeout_ms: 3000
+#      max_response_size: 4194304
+#      max_rules: 4096
+#      tls:
+#        ca_file: C:/certs/auth-service-ca.pem
+#        client_cert_file: C:/certs/flowie-client.pem
+#        client_key_file: C:/certs/flowie-client-key.pem
+#        client_key_password_ref: env://FLOWIE_AUTH_TLS_KEY_PASSWORD
+# For a single-host control plane, use an embedded SQLite provider instead:
+#  mqtt.acl-local:
+#    kind: acl_provider
+#    config:
+#      backend: sqlite
+#      database_path: flowie-acl.sqlite3
+#      namespace_name: mqtt
+#      busy_timeout_ms: 1000
+#      max_rules: 4096
 #  security.main:
 #    kind: security_realm
 #    config:
 #      resource_uid: security:mqtt
 #      owner_name: security.main
-#      policy_version: 1
-#      rules:
-#        - effect: allow
-#          subject_kind: role
-#          subject: mqtt-writer
-#          tenant_id: tenant-a
-#          actions: [connect]
-#          resource_type: generic
-#          match: prefix
-#          pattern: client-
-#        - effect: allow
-#          subject_kind: role
-#          subject: mqtt-writer
-#          tenant_id: tenant-a
-#          actions: [publish, subscribe]
-#          resource_type: mqtt_topic
-#          match: adapter
-#          pattern: tenant-a/#
+#      policy_source: mqtt.acl-service
 
 adapters:
   mqtt.endpoint:
@@ -101,7 +125,7 @@ adapters:
       port: 1883
       max_packet_size: 1048576
       max_connections: 100000
-      # Applies only to the private CoroNet context. 32768 is the supported minimum;
+      # Applies only to the private CoroNet context. 65536 is the supported minimum;
       # borrowed/owned contexts must be sized by their host and must omit this field.
       coroutine_stack_size: 65536
       # Capacity of each of CoroNet's two receive chunks per connection. MQTT framing
@@ -121,6 +145,8 @@ adapters:
       max_retained_messages: 100000
       max_subscriptions_per_session: 1024
       max_inflight_per_session: 64
+      # Per-connection inbound Topic Alias table. Zero disables aliases.
+      topic_alias_maximum: 256
 #      session_store: mqtt.sessions
 # A secure endpoint additionally requires both fields and the matching typed
 # host binding; normal resolved registration rejects them instead of silently

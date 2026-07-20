@@ -56,6 +56,8 @@ typedef struct flowie_topic_index_s {
   int initialized;
 } flowie_topic_index_t;
 
+typedef int (*flowie_topic_index_visit_fn)(void *ctx, size_t entry_index);
+
 CXX_C_API int flowie_topic_index_init(flowie_topic_index_t *index);
 CXX_C_API void flowie_topic_index_destroy(flowie_topic_index_t *index);
 CXX_C_API int flowie_topic_index_insert(flowie_topic_index_t *index, flowie_mqtt_span_t filter,
@@ -73,6 +75,28 @@ CXX_C_API int flowie_topic_index_remove(flowie_topic_index_t *index,
 /** Append matching entry indices to caller-owned `matched`; existing values remain. */
 CXX_C_API int flowie_topic_index_match(flowie_topic_index_t *index, flowie_mqtt_span_t topic,
                                        turbo_vec_t *matched);
+/**
+ * Visit filters matching one concrete topic without shared mutable scratch. The index must remain
+ * immutable for the duration of this call and may then be read concurrently.
+ */
+CXX_C_API int flowie_topic_index_visit_topic(const flowie_topic_index_t *index,
+                                             flowie_mqtt_span_t topic,
+                                             flowie_topic_index_visit_fn visit, void *ctx);
+/** @internal Visit a Topic Name already accepted by the MQTT parser. */
+CXX_C_API int flowie_topic_index_visit_validated_topic(const flowie_topic_index_t *index,
+                                                       flowie_mqtt_span_t topic,
+                                                       flowie_topic_index_visit_fn visit,
+                                                       void *ctx);
+/** Visit indexed policy filters whose topic language contains all of `requested_filter`. */
+CXX_C_API int flowie_topic_index_visit_containing_filters(const flowie_topic_index_t *index,
+                                                          flowie_mqtt_span_t requested_filter,
+                                                          flowie_topic_index_visit_fn visit,
+                                                          void *ctx);
+/** @internal Visit a Topic Filter already accepted by the MQTT parser. */
+CXX_C_API int
+flowie_topic_index_visit_validated_containing_filters(const flowie_topic_index_t *index,
+                                                      flowie_mqtt_span_t requested_filter,
+                                                      flowie_topic_index_visit_fn visit, void *ctx);
 
 #ifdef __cplusplus
 }

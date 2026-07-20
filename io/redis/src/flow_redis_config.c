@@ -2,11 +2,13 @@
 
 #include "turbo_error.h"
 #include "turbo_parser.h"
+#include "turbo_str.h"
 
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+
 
 static int flow_redis_config_error(turbo_flow_config_error_t *error, int status, const char *name,
                                    const char *field, const char *message) {
@@ -279,13 +281,13 @@ done:
   return rc;
 }
 
-int turbo_flow_redis_record_store_create_resolved(
-    const turbo_flow_resolved_config_t *resolved, const char *channel_name,
-    turbo_flow_record_store_t *out, turbo_flow_config_error_t *error) {
+int turbo_flow_redis_record_store_create_resolved(const turbo_flow_resolved_config_t *resolved,
+                                                  const char *channel_name,
+                                                  turbo_flow_record_store_t *out,
+                                                  turbo_flow_config_error_t *error) {
   static const char *const allowed[] = {
-      "backend",      "host",          "port",          "username",      "password",
-      "database",     "timeout_ms",    "key",           "max_key_size",  "max_value_size",
-      "max_batch_size", "max_records"};
+      "backend",    "host", "port",         "username",       "password",       "database",
+      "timeout_ms", "key",  "max_key_size", "max_value_size", "max_batch_size", "max_records"};
   turbo_flow_redis_record_store_config_t config;
   turbo_json_doc_t *document = NULL;
   json_value_t *channels;

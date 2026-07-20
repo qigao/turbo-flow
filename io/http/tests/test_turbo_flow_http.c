@@ -1,8 +1,14 @@
 #include "data_bind.h"
+#include "flow_http_acl_internal.h"
+#include "flow_http_auth_internal.h"
+#include "turbo_flow_http_acl.h"
+#include "turbo_flow_http_auth.h"
 #include "turbo_flow_http_client.h"
 #include "turbo_flow_http_server.h"
 #include "turbo_flow_observe.h"
 
+#include "CoroNet/turbo_coro_context.h"
+#include "mtls_test_server.h"
 #include "tinytest.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
@@ -28,6 +34,60 @@ typedef struct http_capture_s {
   turbo_flow_data_encoding_t encoding;
   char media_type[TURBO_FLOW_CONTENT_MEDIA_TYPE_MAX + 1u];
 } http_capture_t;
+
+typedef struct http_auth_secret_fixture_s {
+  int acquire_calls;
+  int release_calls;
+} http_auth_secret_fixture_t;
+
+static int http_auth_secret_acquire(void *ctx, const char *reference,
+                                    turbo_flow_security_secret_lease_t *lease) {
+  static const uint8_t token[] = "service-token";
+  http_auth_secret_fixture_t *fixture = (http_auth_secret_fixture_t *)ctx;
+  if (!fixture || !reference || strcmp(reference, "env://FLOWIE_AUTH_TOKEN") != 0 || !lease)
+    return TURBO_ENOENT;
+  ++fixture->acquire_calls;
+  lease->bytes = token;
+  lease->byte_count = sizeof(token) - 1u;
+  lease->version = 1u;
+  lease->provider_lease = fixture;
+  return TURBO_OK;
+}
+
+static void http_auth_secret_release(void *ctx, turbo_flow_security_secret_lease_t *lease) {
+  http_auth_secret_fixture_t *fixture = (http_auth_secret_fixture_t *)ctx;
+  if (fixture) ++fixture->release_calls;
+  if (lease) *lease = (turbo_flow_security_secret_lease_t)TURBO_FLOW_SECURITY_SECRET_LEASE_INIT;
+}
+
+typedef struct http_mtls_auth_task_s {
+  const turbo_flow_security_auth_provider_t *provider;
+  turbo_flow_security_auth_request_t request;
+  turbo_flow_security_principal_t principal;
+  atomic_int done;
+  int status;
+} http_mtls_auth_task_t;
+
+typedef struct http_mtls_acl_task_s {
+  const turbo_flow_security_policy_provider_t *provider;
+  turbo_flow_security_policy_bundle_t bundle;
+  atomic_int done;
+  int status;
+} http_mtls_acl_task_t;
+
+static void http_mtls_authenticate_task(coro_t *coroutine, void *arg) {
+  http_mtls_auth_task_t *task = (http_mtls_auth_task_t *)arg;
+  (void)coroutine;
+  task->status = turbo_flow_security_authenticate(task->provider, &task->request, &task->principal);
+  atomic_store_explicit(&task->done, 1, memory_order_release);
+}
+
+static void http_mtls_acl_load_task(coro_t *coroutine, void *arg) {
+  http_mtls_acl_task_t *task = (http_mtls_acl_task_t *)arg;
+  (void)coroutine;
+  task->status = task->provider->load(task->provider->ctx, 0u, &task->bundle);
+  atomic_store_explicit(&task->done, 1, memory_order_release);
+}
 
 static int capture_response(turbo_flow_msg_t *msg, void *ctx) {
   http_capture_t *capture = (http_capture_t *)ctx;
@@ -127,15 +187,15 @@ spec("turbo_flow_http") {
     const turbo_flow_adapter_schema_t *client_schema;
     const turbo_flow_adapter_schema_t *server_schema;
     static const char dsl[] =
-        "source request adapter http.server operation "
-        TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION " resource http.server\n"
+        "source request adapter http.server operation " TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION
+        " resource http.server\n"
         "stage call adapter http.client operation " TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION
         " resource http.client\n"
         "stage response adapter http.server operation " TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION
         " resource http.server\n"
-                              "stage main {\n"
-                              "  request -> call -> response\n"
-                              "}\n";
+        "stage main {\n"
+        "  request -> call -> response\n"
+        "}\n";
 
     check_not_null(flow);
     check_not_null(observe);
@@ -151,20 +211,20 @@ spec("turbo_flow_http") {
     check_not_null(server_schema);
     check_uint_eq(client_schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
     check_uint_eq(server_schema->roles, TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK);
-    check_str_eq(turbo_flow_adapter_operation_module(
-                     flow, "http.client", TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
+    check_str_eq(turbo_flow_adapter_operation_module(flow, "http.client",
+                                                     TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
                  TURBO_FLOW_HTTP_CLIENT_MODULE);
-    check_str_eq(turbo_flow_adapter_operation_resource(
-                     flow, "http.client", TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
+    check_str_eq(turbo_flow_adapter_operation_resource(flow, "http.client",
+                                                       TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
                  "http.client");
-    check_str_eq(turbo_flow_adapter_operation_module(
-                     flow, "http.server", TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
+    check_str_eq(turbo_flow_adapter_operation_module(flow, "http.server",
+                                                     TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
                  TURBO_FLOW_HTTP_SERVER_MODULE);
-    check_str_eq(turbo_flow_adapter_operation_module(
-                     flow, "http.server", TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION),
+    check_str_eq(turbo_flow_adapter_operation_module(flow, "http.server",
+                                                     TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION),
                  TURBO_FLOW_HTTP_SERVER_MODULE);
-    check_str_eq(turbo_flow_adapter_operation_resource(
-                     flow, "http.server", TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
+    check_str_eq(turbo_flow_adapter_operation_resource(flow, "http.server",
+                                                       TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
                  "http.server");
     check_str_eq(turbo_flow_find_primitive(flow, "http.client")->type_name,
                  TURBO_FLOW_HTTP_CLIENT_PRIMITIVE_TYPE);
@@ -212,6 +272,356 @@ spec("turbo_flow_http") {
     check_int_eq(turbo_flow_http_register_client_adapter(flow, "http.invalid", &config),
                  TURBO_EINVAL);
     turbo_flow_destroy(flow);
+  }
+
+  it("creates only an HTTPS authentication-service provider and keeps ACL local") {
+    static const char yaml[] =
+        "version: 1\nchannels:\n  mqtt.auth-service:\n    kind: auth_provider\n    config:\n"
+        "      backend: https\n      url: https://auth.internal.example/v2/authenticate\n"
+        "      method: password\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+        "      timeout_ms: 2500\n      max_secret_size: 2048\nadapters: {}\n";
+    http_auth_secret_fixture_t fixture = {0};
+    turbo_flow_security_key_provider_t keys = {sizeof(keys), &fixture, http_auth_secret_acquire,
+                                               http_auth_secret_release};
+    turbo_flow_security_auth_provider_owner_t owner = TURBO_FLOW_SECURITY_AUTH_PROVIDER_OWNER_INIT;
+    turbo_flow_security_auth_request_t request = TURBO_FLOW_SECURITY_AUTH_REQUEST_INIT;
+    turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_config_t *resolved = NULL;
+
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_security_auth_provider_owner_create_resolved(
+                     turbo_flow_http_auth_provider_factory(), resolved, "mqtt.auth-service", &keys,
+                     &owner, &error),
+                 TURBO_OK);
+    check_str_eq(owner.backend, "https");
+    check_str_eq(owner.method, "password");
+    check_not_null(owner.enhanced_provider);
+    check_ptr_eq(owner.enhanced_provider,
+                 turbo_flow_http_enhanced_auth_provider_interface(
+                     (const turbo_flow_http_auth_provider_t *)owner.owner));
+    check_int_eq(fixture.acquire_calls, 1);
+    check_int_eq(fixture.release_calls, 1);
+
+    request.identity = "device-a";
+    request.method = "password";
+    request.secret = (const uint8_t *)"secret";
+    request.secret_size = sizeof("secret") - 1u;
+    request.protocol = "mqtt5";
+    check_int_eq(turbo_flow_security_authenticate(owner.provider, &request, &principal),
+                 TURBO_ENOTSUP);
+    check_int_eq(fixture.acquire_calls, 1);
+    turbo_flow_security_auth_provider_owner_destroy(&owner);
+    turbo_flow_resolved_config_destroy(resolved);
+  }
+
+  it("authenticates through an HTTPS service that requires a verified client certificate") {
+    static const char body[] = "{\"version\":2,\"authenticated\":true,\"principal\":{"
+                               "\"id\":\"device-a\",\"type\":\"device\",\"root_group\":\"root-a\","
+                               "\"auth_method\":\"password\",\"scope\":\"root_group\","
+                               "\"roles\":[\"mqtt-user\"],\"groups\":[\"root-a\"],\"expires_at\":0,"
+                               "\"policy_version\":7}}";
+    char response[1024];
+    char yaml[4096];
+    char ca_file[512] = {0};
+    char cert_file[512] = {0};
+    char key_file[512] = {0};
+    flow_mtls_test_server_t server;
+    http_auth_secret_fixture_t fixture = {0};
+    turbo_flow_security_key_provider_t keys = {sizeof(keys), &fixture, http_auth_secret_acquire,
+                                               http_auth_secret_release};
+    turbo_flow_security_auth_provider_owner_t owner = TURBO_FLOW_SECURITY_AUTH_PROVIDER_OWNER_INIT;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_config_t *resolved = NULL;
+    coro_context_t *context = NULL;
+    http_mtls_auth_task_t task;
+    int written;
+
+    memset(&task, 0, sizeof(task));
+    atomic_init(&task.done, 0);
+    task.status = TURBO_EBUSY;
+    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_int_eq(
+        tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
+    written = snprintf(response, sizeof(response),
+                       "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                       "Content-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                       sizeof(body) - 1u, body);
+    check_true(written > 0 && (size_t)written < sizeof(response));
+    check_int_eq(flow_mtls_test_server_start(&server, (const uint8_t *)response, (size_t)written),
+                 0);
+    written = snprintf(yaml, sizeof(yaml),
+                       "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
+                       "      backend: https\n      url: https://localhost:%u/v2/authenticate\n"
+                       "      method: password\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+                       "      timeout_ms: 5000\n      tls:\n        ca_file: %s\n"
+                       "        client_cert_file: %s\n        client_key_file: %s\nadapters: {}\n",
+                       server.port, ca_file, cert_file, key_file);
+    check_true(written > 0 && (size_t)written < sizeof(yaml));
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, (size_t)written, &resolved, &error),
+                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_security_auth_provider_owner_create_resolved(
+            turbo_flow_http_auth_provider_factory(), resolved, "auth", &keys, &owner, &error),
+        TURBO_OK);
+    task.provider = owner.provider;
+    task.request = (turbo_flow_security_auth_request_t)TURBO_FLOW_SECURITY_AUTH_REQUEST_INIT;
+    task.principal = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+    task.request.identity = "device-a";
+    task.request.method = "password";
+    task.request.secret = (const uint8_t *)"secret";
+    task.request.secret_size = sizeof("secret") - 1u;
+    task.request.remote_address = "127.0.0.1";
+    task.request.protocol = "mqtt5";
+    context = coro_context_create(NULL);
+    check_not_null(context);
+    check_int_eq(coro_context_spawn(context, http_mtls_authenticate_task, &task), TURBO_OK);
+    while (!atomic_load_explicit(&task.done, memory_order_acquire))
+      check_int_eq(coro_context_run(context, TURBO_RUN_ONCE), TURBO_OK);
+    flow_mtls_test_server_join(&server);
+    check_int_eq(server.status, 0);
+    check_true(server.peer_verified);
+    check_int_eq(task.status, TURBO_OK);
+    check_str_eq(task.principal.principal_id, "device-a");
+    coro_context_destroy(context);
+    turbo_flow_security_auth_provider_owner_destroy(&owner);
+    turbo_flow_resolved_config_destroy(resolved);
+    tls_test_remove_file(key_file);
+    tls_test_remove_file(cert_file);
+    tls_test_remove_file(ca_file);
+  }
+
+  it("rejects plaintext HTTP and database fields in authentication provider config") {
+    static const char insecure_yaml[] =
+        "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
+        "      backend: https\n      url: http://auth.internal/v2/authenticate\n"
+        "      method: password\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+        "adapters: {}\n";
+    static const char database_yaml[] =
+        "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
+        "      backend: https\n      url: https://auth.internal/v2/authenticate\n"
+        "      method: password\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+        "      database: 3\nadapters: {}\n";
+    static const char invalid_tls_yaml[] =
+        "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
+        "      backend: https\n      url: https://auth.internal/v2/authenticate\n"
+        "      method: password\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+        "      tls:\n        client_cert_file: client.pem\n"
+        "        client_key_file: false\nadapters: {}\n";
+    http_auth_secret_fixture_t fixture = {0};
+    turbo_flow_security_key_provider_t keys = {sizeof(keys), &fixture, http_auth_secret_acquire,
+                                               http_auth_secret_release};
+    turbo_flow_http_auth_provider_t *provider = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_config_t *resolved = NULL;
+
+    check_int_eq(turbo_flow_config_resolve_yaml(insecure_yaml, sizeof(insecure_yaml) - 1u,
+                                                &resolved, &error),
+                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_http_auth_provider_create_resolved(resolved, "auth", &keys, &provider, &error),
+        TURBO_EINVAL);
+    check_null(provider);
+    turbo_flow_resolved_config_destroy(resolved);
+    resolved = NULL;
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(database_yaml, sizeof(database_yaml) - 1u,
+                                                &resolved, &error),
+                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_http_auth_provider_create_resolved(resolved, "auth", &keys, &provider, &error),
+        TURBO_EINVAL);
+    check_str_contains(error.path, "database");
+    check_null(provider);
+    turbo_flow_resolved_config_destroy(resolved);
+    resolved = NULL;
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_int_eq(turbo_flow_config_resolve_yaml(invalid_tls_yaml, sizeof(invalid_tls_yaml) - 1u,
+                                                &resolved, &error),
+                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_http_auth_provider_create_resolved(resolved, "auth", &keys, &provider, &error),
+        TURBO_EINVAL);
+    check_str_contains(error.path, "tls");
+    check_null(provider);
+    turbo_flow_resolved_config_destroy(resolved);
+  }
+
+  it("creates only an HTTPS ACL bundle provider and requires a coroutine to fetch") {
+    static const char yaml[] =
+        "version: 1\nchannels:\n  acl:\n    kind: acl_provider\n    config:\n"
+        "      backend: https\n      url: https://auth.internal/v1/acl-bundle\n"
+        "      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+        "      timeout_ms: 2500\n      max_response_size: 4194304\n"
+        "      max_rules: 128\nadapters: {}\n";
+    http_auth_secret_fixture_t fixture = {0};
+    turbo_flow_security_key_provider_t keys = {sizeof(keys), &fixture, http_auth_secret_acquire,
+                                               http_auth_secret_release};
+    turbo_flow_security_policy_provider_owner_t owner =
+        TURBO_FLOW_SECURITY_POLICY_PROVIDER_OWNER_INIT;
+    turbo_flow_security_policy_bundle_t bundle = TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_config_t *resolved = NULL;
+
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_security_policy_provider_owner_create_resolved(
+            turbo_flow_http_acl_provider_factory(), resolved, "acl", &keys, &owner, &error),
+        TURBO_OK);
+    check_str_eq(owner.backend, "https");
+    check_int_eq(owner.provider->load(owner.provider->ctx, 7u, &bundle), TURBO_ENOTSUP);
+    turbo_flow_security_policy_provider_owner_destroy(&owner);
+    turbo_flow_resolved_config_destroy(resolved);
+  }
+
+  it("loads ACL through an HTTPS service that requires a verified client certificate") {
+    static const char body[] =
+        "{\"version\":3,\"policy_version\":7,\"expires_at\":0,"
+        "\"rules\":[\"allow|role|mqtt-user|root-a|publish,subscribe|mqtt_topic|adapter|root-a/#\"]}";
+    char response[512];
+    char yaml[4096];
+    char ca_file[512] = {0};
+    char cert_file[512] = {0};
+    char key_file[512] = {0};
+    flow_mtls_test_server_t server;
+    http_auth_secret_fixture_t fixture = {0};
+    turbo_flow_security_key_provider_t keys = {sizeof(keys), &fixture, http_auth_secret_acquire,
+                                               http_auth_secret_release};
+    turbo_flow_security_policy_provider_owner_t owner =
+        TURBO_FLOW_SECURITY_POLICY_PROVIDER_OWNER_INIT;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_config_t *resolved = NULL;
+    coro_context_t *context = NULL;
+    http_mtls_acl_task_t task;
+    int written;
+
+    memset(&task, 0, sizeof(task));
+    task.bundle = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
+    atomic_init(&task.done, 0);
+    task.status = TURBO_EBUSY;
+    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_int_eq(
+        tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
+    written = snprintf(response, sizeof(response),
+                       "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                       "Content-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                       sizeof(body) - 1u, body);
+    check_true(written > 0 && (size_t)written < sizeof(response));
+    check_int_eq(flow_mtls_test_server_start(&server, (const uint8_t *)response, (size_t)written),
+                 0);
+    written = snprintf(yaml, sizeof(yaml),
+                       "version: 1\nchannels:\n  acl:\n    kind: acl_provider\n    config:\n"
+                       "      backend: https\n      url: https://localhost:%u/v1/acl-bundle\n"
+                       "      service_token_ref: env://FLOWIE_AUTH_TOKEN\n      timeout_ms: 5000\n"
+                       "      max_response_size: 4194304\n      max_rules: 128\n      tls:\n"
+                       "        ca_file: %s\n        client_cert_file: %s\n"
+                       "        client_key_file: %s\nadapters: {}\n",
+                       server.port, ca_file, cert_file, key_file);
+    check_true(written > 0 && (size_t)written < sizeof(yaml));
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, (size_t)written, &resolved, &error),
+                 TURBO_OK);
+    check_int_eq(
+        turbo_flow_security_policy_provider_owner_create_resolved(
+            turbo_flow_http_acl_provider_factory(), resolved, "acl", &keys, &owner, &error),
+        TURBO_OK);
+    task.provider = owner.provider;
+    context = coro_context_create(NULL);
+    check_not_null(context);
+    check_int_eq(coro_context_spawn(context, http_mtls_acl_load_task, &task), TURBO_OK);
+    while (!atomic_load_explicit(&task.done, memory_order_acquire))
+      check_int_eq(coro_context_run(context, TURBO_RUN_ONCE), TURBO_OK);
+    flow_mtls_test_server_join(&server);
+    check_int_eq(server.status, 0);
+    check_true(server.peer_verified);
+    check_int_eq(task.status, TURBO_OK);
+    check_uint_eq(task.bundle.policy_version, 7u);
+    task.provider->release(task.provider->ctx, &task.bundle);
+    coro_context_destroy(context);
+    turbo_flow_security_policy_provider_owner_destroy(&owner);
+    turbo_flow_resolved_config_destroy(resolved);
+    tls_test_remove_file(key_file);
+    tls_test_remove_file(cert_file);
+    tls_test_remove_file(ca_file);
+  }
+
+  it("strictly decodes a bounded versioned ACL bundle") {
+    static const char success[] =
+        "{\"version\":3,\"policy_version\":7,\"expires_at\":0,"
+        "\"rules\":[\"allow|role|mqtt-user|root-a|publish,subscribe|mqtt_topic|adapter|root-a/#\"]}";
+    static const char extra[] =
+        "{\"version\":3,\"policy_version\":7,\"expires_at\":0,\"debug\":true,"
+        "\"rules\":[]}";
+    static const char overflow[] =
+        "{\"version\":2,\"policy_version\":18446744073709551616,\"expires_at\":0,"
+        "\"rules\":[]}";
+    static const char legacy[] =
+        "{\"version\":2,\"policy_version\":7,\"expires_at\":0,"
+        "\"rules\":[\"allow|role|mqtt-user|root-a|publish|mqtt_topic|adapter|#\"]}";
+    turbo_flow_security_policy_bundle_t bundle = TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
+
+    check_int_eq(flow_http_acl_decode_response(success, sizeof(success) - 1u, 8u, &bundle),
+                 TURBO_OK);
+    check_uint_eq(bundle.policy_version, 7u);
+    check_size_eq(bundle.rule_count, 1u);
+    check_int_eq(bundle.rules[0].effect, TURBO_FLOW_SECURITY_ALLOW);
+    check_uint_eq(bundle.rules[0].action_mask,
+                  TURBO_FLOW_SECURITY_ACTION_PUBLISH | TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE);
+    check_str_eq(bundle.rules[0].pattern, "root-a/#");
+    flow_http_acl_decoded_cleanup(&bundle);
+    check_int_eq(flow_http_acl_decode_response(success, sizeof(success) - 1u, 0u, &bundle),
+                 TURBO_EPROTO);
+    check_int_eq(flow_http_acl_decode_response(extra, sizeof(extra) - 1u, 8u, &bundle),
+                 TURBO_EPROTO);
+    check_int_eq(flow_http_acl_decode_response(overflow, sizeof(overflow) - 1u, 8u, &bundle),
+                 TURBO_EPROTO);
+    check_int_eq(flow_http_acl_decode_response(legacy, sizeof(legacy) - 1u, 8u, &bundle),
+                 TURBO_EPROTO);
+    check_null(bundle.provider_bundle);
+  }
+
+  it("strictly decodes the versioned authentication-service response") {
+    static const char success[] =
+        "{\"version\":2,\"authenticated\":true,\"principal\":{"
+        "\"id\":\"device-a\",\"type\":\"device\",\"root_group\":\"root-a\","
+        "\"auth_method\":\"password\",\"scope\":\"root_group\","
+        "\"roles\":[\"mqtt-user\"],\"groups\":[\"root-a\"],\"expires_at\":0,"
+        "\"policy_version\":7}}";
+    static const char extra_field[] =
+        "{\"version\":2,\"authenticated\":true,\"debug\":true,\"principal\":{}}";
+    static const char legacy[] =
+        "{\"version\":1,\"authenticated\":true,\"principal\":{"
+        "\"id\":\"device-a\",\"type\":\"device\",\"tenant\":\"tenant-a\","
+        "\"auth_method\":\"password\",\"scope\":\"tenant\",\"roles\":[],\"groups\":[],"
+        "\"expires_at\":0,\"policy_version\":7}}";
+    static const char missing_root_group[] =
+        "{\"version\":2,\"authenticated\":true,\"principal\":{"
+        "\"id\":\"device-a\",\"type\":\"device\",\"root_group\":\"root-a\","
+        "\"auth_method\":\"password\",\"scope\":\"root_group\",\"roles\":[],"
+        "\"groups\":[\"backend\"],\"expires_at\":0,\"policy_version\":7}}";
+    turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+
+    check_int_eq(
+        flow_http_auth_decode_response(success, sizeof(success) - 1u, "password", &principal),
+        TURBO_OK);
+    check_str_eq(principal.principal_id, "device-a");
+    check_str_eq(principal.principal_type, "device");
+    check_str_eq(principal.root_group_id, "root-a");
+    check_str_eq(principal.roles[0], "mqtt-user");
+    check_uint_eq(principal.policy_version, 7u);
+    principal = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+    check_int_eq(flow_http_auth_decode_response(success, sizeof(success) - 1u, "token", &principal),
+                 TURBO_EPROTO);
+    check_int_eq(flow_http_auth_decode_response(extra_field, sizeof(extra_field) - 1u, "password",
+                                                &principal),
+                 TURBO_EPROTO);
+    check_int_eq(
+        flow_http_auth_decode_response(legacy, sizeof(legacy) - 1u, "password", &principal),
+        TURBO_EPROTO);
+    check_int_eq(flow_http_auth_decode_response(missing_root_group, sizeof(missing_root_group) - 1u,
+                                                "password", &principal),
+                 TURBO_EPROTO);
   }
 
   it("exposes a typed credential-free HTTP client status document") {
@@ -311,21 +721,21 @@ spec("turbo_flow_http") {
 
   it("round trips payloads through server and client adapters") {
     static const char *server_dsl =
-        "source request adapter http.server.echo operation "
-        TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION " resource http.server.echo\n"
-        "stage response adapter http.server.echo operation "
-        TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION " resource http.server.echo\n"
-                                    "stage main {\n"
-                                    "  request -> response\n"
-                                    "}\n";
-    static const char *client_dsl = "source input\n"
-                                    "stage request adapter http.client.once operation "
-                                    TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION
-                                    " resource http.client.once\n"
-                                    "stage capture\n"
-                                    "stage main {\n"
-                                    "  input -> request -> capture\n"
-                                    "}\n";
+        "source request adapter http.server.echo "
+        "operation " TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION " resource http.server.echo\n"
+        "stage response adapter http.server.echo operation " TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION
+        " resource http.server.echo\n"
+        "stage main {\n"
+        "  request -> response\n"
+        "}\n";
+    static const char *client_dsl =
+        "source input\n"
+        "stage request adapter http.client.once operation " TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION
+        " resource http.client.once\n"
+        "stage capture worker 1\n"
+        "stage main {\n"
+        "  input -> request -> capture\n"
+        "}\n";
     unsigned short port = pick_loopback_port();
     char url[128];
     turbo_flow_http_server_config_t server_config;
@@ -351,8 +761,8 @@ spec("turbo_flow_http") {
     check_int_eq(
         turbo_flow_http_register_server_adapter(server_flow, "http.server.echo", &server_config),
         TURBO_OK);
-    check_str_eq(turbo_flow_adapter_operation_module(
-                     server_flow, "http.server.echo", TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
+    check_str_eq(turbo_flow_adapter_operation_module(server_flow, "http.server.echo",
+                                                     TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
                  TURBO_FLOW_HTTP_SERVER_MODULE);
     memset(&server_connection, 0, sizeof(server_connection));
     check_int_eq(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
@@ -379,8 +789,8 @@ spec("turbo_flow_http") {
     check_int_eq(
         turbo_flow_http_register_client_adapter(client_flow, "http.client.once", &client_config),
         TURBO_OK);
-    check_str_eq(turbo_flow_adapter_operation_module(
-                     client_flow, "http.client.once", TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
+    check_str_eq(turbo_flow_adapter_operation_module(client_flow, "http.client.once",
+                                                     TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
                  TURBO_FLOW_HTTP_CLIENT_MODULE);
     memset(&client_connection, 0, sizeof(client_connection));
     check_int_eq(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
@@ -456,20 +866,20 @@ spec("turbo_flow_http") {
 
   it("publishes periodic GET responses as source messages") {
     static const char *server_dsl =
-        "source request adapter http.server.poll operation "
-        TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION " resource http.server.poll\n"
-        "stage response adapter http.server.poll operation "
-        TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION " resource http.server.poll\n"
-                                    "stage main {\n"
-                                    "  request -> response\n"
-                                    "}\n";
+        "source request adapter http.server.poll "
+        "operation " TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION " resource http.server.poll\n"
+        "stage response adapter http.server.poll operation " TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION
+        " resource http.server.poll\n"
+        "stage main {\n"
+        "  request -> response\n"
+        "}\n";
     static const char *client_dsl =
-        "source remote adapter http.client.poll operation "
-        TURBO_FLOW_HTTP_CLIENT_POLL_OPERATION " resource http.client.poll\n"
-                                    "stage capture\n"
-                                    "stage main {\n"
-                                    "  remote -> capture\n"
-                                    "}\n";
+        "source remote adapter http.client.poll operation " TURBO_FLOW_HTTP_CLIENT_POLL_OPERATION
+        " resource http.client.poll\n"
+        "stage capture worker 1\n"
+        "stage main {\n"
+        "  remote -> capture\n"
+        "}\n";
     unsigned short port = pick_loopback_port();
     char url[128];
     turbo_flow_http_server_config_t server_config;

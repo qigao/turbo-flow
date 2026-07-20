@@ -39,7 +39,7 @@ static const turbo_flow_expr_schema_t FLOWIE_MQTT_RULE_SCHEMA = {
 
 int flowie_mqtt_message_flags_encode(flowie_mqtt_version_t version, uint8_t fixed_flags,
                                      uint32_t *flags_out) {
-  if (!flags_out || (version != FLOWIE_MQTT_VERSION_3_1_1 && version != FLOWIE_MQTT_VERSION_5) ||
+  if (!flags_out || !flowie_mqtt_version_is_supported(version) ||
       (fixed_flags & FLOWIE_MQTT_MESSAGE_FIXED_FLAGS_INVALID_MASK) != 0u)
     return TURBO_EINVAL;
   *flags_out = ((uint32_t)version << FLOWIE_MQTT_MESSAGE_VERSION_SHIFT) | fixed_flags;
@@ -54,7 +54,7 @@ int flowie_mqtt_message_flags_version(uint32_t flags, flowie_mqtt_version_t *ver
   uint32_t encoded;
   if (!version_out) return TURBO_EINVAL;
   encoded = (flags & FLOWIE_MQTT_MESSAGE_VERSION_MASK) >> FLOWIE_MQTT_MESSAGE_VERSION_SHIFT;
-  if (encoded != FLOWIE_MQTT_VERSION_3_1_1 && encoded != FLOWIE_MQTT_VERSION_5)
+  if (!flowie_mqtt_version_is_supported((flowie_mqtt_version_t)encoded))
     return TURBO_EPROTO;
   *version_out = (flowie_mqtt_version_t)encoded;
   return TURBO_OK;

@@ -164,7 +164,7 @@ suite("FMQ Chapter 5 pub-sub state") {
     turbo_flow_fmq_pubsub_state_destroy(state);
   }
 
-  it("rejects topics and subtree prefixes that cannot fit the FMQ v2 topic field") {
+  it("rejects topics and subtree prefixes that cannot fit the FMQ v3 topic field") {
     turbo_flow_fmq_pubsub_config_t config = TURBO_FLOW_FMQ_PUBSUB_CONFIG_INIT;
     turbo_flow_fmq_pubsub_state_t *state = turbo_flow_fmq_pubsub_state_create(&config);
     turbo_flow_fmq_pubsub_snapshot_cursor_t *snapshot = NULL;

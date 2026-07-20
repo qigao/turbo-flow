@@ -30,11 +30,11 @@ compatibility_contract(const char *release, uint16_t wire_min, uint16_t wire_max
 }
 
 spec("fmq_compatibility") {
-  it("selects a direct mixed-version window without widening FMQ v2") {
+  it("selects a direct mixed-version window without widening FMQ v3") {
     turbo_flow_fmq_compatibility_contract_t current =
-        compatibility_contract("2.0.0", 2u, 2u, 1u, 0u, 0u, 1u, 0u, 0u, 0u, 0u);
+        compatibility_contract("3.0.0", 3u, 3u, 1u, 0u, 0u, 1u, 0u, 0u, 0u, 0u);
     turbo_flow_fmq_compatibility_contract_t candidate =
-        compatibility_contract("2.1.0", 2u, 2u, 1u, 0u, 1u, 1u, 0u, 1u, 0u, 1u);
+        compatibility_contract("3.1.0", 3u, 3u, 1u, 0u, 1u, 1u, 0u, 1u, 0u, 1u);
     turbo_flow_fmq_compatibility_result_t result = TURBO_FLOW_FMQ_COMPATIBILITY_RESULT_INIT;
 
     check_int_eq(turbo_flow_fmq_compatibility_evaluate(&current, &candidate, NULL,
@@ -44,7 +44,7 @@ spec("fmq_compatibility") {
                  TURBO_OK);
     check_int_eq(result.mode, TURBO_FLOW_FMQ_ROLLOUT_DIRECT);
     check_int_eq(result.reason, TURBO_FLOW_FMQ_COMPATIBLE);
-    check_uint_eq(result.negotiated_wire, 2u);
+    check_uint_eq(result.negotiated_wire, 3u);
     check_uint_eq(result.negotiated_tfmp_minor, 0u);
     check_uint_eq(result.negotiated_store_minor, 0u);
     check_uint_eq(result.negotiated_yaml_minor, 0u);
@@ -52,9 +52,9 @@ spec("fmq_compatibility") {
 
   it("requires a stop when a new durable writer has no shared schema") {
     turbo_flow_fmq_compatibility_contract_t current =
-        compatibility_contract("2.0.0", 2u, 2u, 1u, 0u, 0u, 1u, 0u, 0u, 0u, 0u);
+        compatibility_contract("3.0.0", 3u, 3u, 1u, 0u, 0u, 1u, 0u, 0u, 0u, 0u);
     turbo_flow_fmq_compatibility_contract_t candidate =
-        compatibility_contract("2.1.0", 2u, 2u, 1u, 0u, 1u, 1u, 0u, 1u, 1u, 1u);
+        compatibility_contract("3.1.0", 3u, 3u, 1u, 0u, 1u, 1u, 0u, 1u, 1u, 1u);
     turbo_flow_fmq_compatibility_result_t result = TURBO_FLOW_FMQ_COMPATIBILITY_RESULT_INIT;
 
     check_int_eq(turbo_flow_fmq_compatibility_evaluate(&current, &candidate, NULL, 0u, &result),
@@ -65,11 +65,11 @@ spec("fmq_compatibility") {
 
   it("uses only an explicit dual-stack gateway for a wire gap") {
     turbo_flow_fmq_compatibility_contract_t current =
-        compatibility_contract("2.0.0", 2u, 2u, 1u, 0u, 0u, 1u, 0u, 0u, 0u, 0u);
-    turbo_flow_fmq_compatibility_contract_t candidate =
         compatibility_contract("3.0.0", 3u, 3u, 1u, 0u, 0u, 1u, 0u, 0u, 0u, 0u);
+    turbo_flow_fmq_compatibility_contract_t candidate =
+        compatibility_contract("4.0.0", 4u, 4u, 1u, 0u, 0u, 1u, 0u, 0u, 0u, 0u);
     turbo_flow_fmq_compatibility_contract_t gateway =
-        compatibility_contract("2-to-3", 2u, 3u, 1u, 0u, 0u, 1u, 0u, 0u, 0u, 0u);
+        compatibility_contract("3-to-4", 3u, 4u, 1u, 0u, 0u, 1u, 0u, 0u, 0u, 0u);
     turbo_flow_fmq_compatibility_result_t result = TURBO_FLOW_FMQ_COMPATIBILITY_RESULT_INIT;
 
     check_int_eq(turbo_flow_fmq_compatibility_evaluate(&current, &candidate, NULL, 0u, &result),
@@ -85,10 +85,10 @@ spec("fmq_compatibility") {
 
   it("fails the rollout contract when either release lacks a required capability") {
     turbo_flow_fmq_compatibility_contract_t current =
-        compatibility_contract("2.0.0", 2u, 2u, 1u, 0u, 0u, 1u, 0u, 0u, 0u, 0u);
+        compatibility_contract("3.0.0", 3u, 3u, 1u, 0u, 0u, 1u, 0u, 0u, 0u, 0u);
     turbo_flow_fmq_compatibility_contract_t candidate = current;
     turbo_flow_fmq_compatibility_result_t result = TURBO_FLOW_FMQ_COMPATIBILITY_RESULT_INIT;
-    memcpy(candidate.release, "2.0.1", sizeof("2.0.1"));
+    memcpy(candidate.release, "3.0.1", sizeof("3.0.1"));
 
     check_int_eq(turbo_flow_fmq_compatibility_evaluate(&current, &candidate, NULL,
                                                        TURBO_FLOW_FMQ_CAPABILITY_BIT(9u), &result),

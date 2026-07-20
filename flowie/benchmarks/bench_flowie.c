@@ -1,3 +1,4 @@
+#include "flowie_security_internal.h"
 #include "flowie_session_internal.h"
 #include "flowie_test_socket.h"
 #include "flowie_topic_index_internal.h"
@@ -24,6 +25,8 @@
 #define FLOWIE_BENCH_CHURN_SAMPLES 500u
 #define FLOWIE_BENCH_REBUILD_SAMPLES 8u
 #define FLOWIE_BENCH_CANDIDATE_MATCH_SAMPLES 256u
+#define FLOWIE_BENCH_SECURITY_SAMPLES 1000u
+#define FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE 64u
 #define FLOWIE_BENCH_STALL_SAMPLES 8u
 #define FLOWIE_BENCH_STALL_MESSAGES 4u
 #define FLOWIE_BENCH_STALL_PAYLOAD_BYTES (512u * 1024u)
@@ -55,21 +58,302 @@ static flowie_mqtt_span_t flowie_bench_span(const char *value) {
   return (flowie_mqtt_span_t){(const uint8_t *)value, strlen(value)};
 }
 
+static void flowie_bench_copy(char *output, size_t capacity, const char *value) {
+  const size_t size = strlen(value);
+  check_size_lt(size, capacity);
+  memcpy(output, value, size + 1u);
+}
+
+typedef struct flowie_bench_security_s {
+  turbo_flow_security_rule_t *rules;
+  turbo_flow_security_realm_t *realm;
+  turbo_flow_security_principal_t principal;
+  turbo_flow_security_request_t request;
+  flowie_mqtt_security_context_t protocol_context;
+} flowie_bench_security_t;
+
+typedef struct flowie_bench_security_visit_s {
+  size_t count;
+} flowie_bench_security_visit_t;
+
+static int flowie_bench_security_visit(void *ctx, size_t entry_index) {
+  flowie_bench_security_visit_t *visit = (flowie_bench_security_visit_t *)ctx;
+  (void)entry_index;
+  if (!visit) return TURBO_EINVAL;
+  ++visit->count;
+  return TURBO_OK;
+}
+
+static int flowie_bench_security_init(flowie_bench_security_t *bench, size_t rule_count) {
+  turbo_flow_security_matcher_t matcher = TURBO_FLOW_SECURITY_MATCHER_INIT;
+  turbo_flow_security_realm_config_t config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
+  int rc;
+  if (!bench || rule_count == 0u || rule_count > TURBO_FLOW_SECURITY_MAX_RULES) return TURBO_EINVAL;
+  memset(bench, 0, sizeof(*bench));
+  bench->principal = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+  bench->request = (turbo_flow_security_request_t)TURBO_FLOW_SECURITY_REQUEST_INIT;
+  bench->protocol_context = (flowie_mqtt_security_context_t)FLOWIE_MQTT_SECURITY_CONTEXT_INIT;
+  bench->rules = (turbo_flow_security_rule_t *)calloc(rule_count, sizeof(*bench->rules));
+  if (!bench->rules) return TURBO_ENOMEM;
+  for (size_t i = 0u; i < rule_count; ++i) {
+    char pattern[FLOWIE_BENCH_TOPIC_BUFFER_SIZE];
+    const int written = snprintf(pattern, sizeof(pattern), "root-a/device-%zu/events/#", i);
+    if (written <= 0 || (size_t)written >= sizeof(pattern)) return TURBO_EMSGSIZE;
+    bench->rules[i] = (turbo_flow_security_rule_t)TURBO_FLOW_SECURITY_RULE_INIT;
+    bench->rules[i].effect = TURBO_FLOW_SECURITY_DENY;
+    bench->rules[i].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
+    flowie_bench_copy(bench->rules[i].subject, sizeof(bench->rules[i].subject), "writer");
+    flowie_bench_copy(bench->rules[i].root_group_id, sizeof(bench->rules[i].root_group_id),
+                      "root-a");
+    bench->rules[i].action_mask =
+        TURBO_FLOW_SECURITY_ACTION_PUBLISH | TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE;
+    bench->rules[i].resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+    bench->rules[i].match_kind = TURBO_FLOW_SECURITY_MATCH_ADAPTER;
+    flowie_bench_copy(bench->rules[i].pattern, sizeof(bench->rules[i].pattern), pattern);
+  }
+  bench->rules[rule_count - 1u].effect = TURBO_FLOW_SECURITY_ALLOW;
+  flowie_bench_copy(bench->rules[rule_count - 1u].pattern,
+                    sizeof(bench->rules[rule_count - 1u].pattern), "root-a/target/events/#");
+  rc = flowie_mqtt_security_matcher_init(&matcher);
+  if (rc != TURBO_OK) return rc;
+  config.resource_uid = "security:flowie-benchmark";
+  config.owner_name = "flowie.security-benchmark";
+  config.policy_version = 1u;
+  config.rules = bench->rules;
+  config.rule_count = rule_count;
+  config.matcher = matcher;
+  rc = turbo_flow_security_realm_create(&config, &bench->realm);
+  if (rc != TURBO_OK) return rc;
+  flowie_bench_copy(bench->principal.principal_id, sizeof(bench->principal.principal_id),
+                    "device-1");
+  flowie_bench_copy(bench->principal.principal_type, sizeof(bench->principal.principal_type),
+                    "device");
+  flowie_bench_copy(bench->principal.root_group_id, sizeof(bench->principal.root_group_id),
+                    "root-a");
+  flowie_bench_copy(bench->principal.auth_method, sizeof(bench->principal.auth_method), "token");
+  bench->principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+  bench->principal.role_count = 1u;
+  flowie_bench_copy(bench->principal.roles[0], sizeof(bench->principal.roles[0]), "writer");
+  bench->principal.group_count = 1u;
+  flowie_bench_copy(bench->principal.groups[0], sizeof(bench->principal.groups[0]), "root-a");
+  bench->principal.policy_version = 1u;
+  bench->request.principal = &bench->principal;
+  bench->request.root_group_id = "root-a";
+  bench->request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+  return TURBO_OK;
+}
+
+static void flowie_bench_security_destroy(flowie_bench_security_t *bench) {
+  if (!bench) return;
+  turbo_flow_security_realm_destroy(bench->realm);
+  free(bench->rules);
+  memset(bench, 0, sizeof(*bench));
+}
+
+static void flowie_bench_security_matcher(size_t rule_count) {
+  flowie_bench_security_t bench;
+  flowie_mqtt_validated_security_context_t validated_context =
+      FLOWIE_MQTT_VALIDATED_SECURITY_CONTEXT_INIT;
+  turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
+  tstr_t validated_resource = NULL;
+  char label[96];
+  int rc = flowie_bench_security_init(&bench, rule_count);
+  check_int_eq(rc, TURBO_OK);
+  if (rc != TURBO_OK) {
+    flowie_bench_security_destroy(&bench);
+    return;
+  }
+  bench.request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
+  bench.request.resource = "root-a/target/events/temperature";
+  rc = turbo_flow_security_realm_authorize(bench.realm, &bench.request, 1u, &decision);
+  check_int_eq(rc, TURBO_OK);
+  check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+  (void)snprintf(label, sizeof(label), "MQTT publish compiled ACL rules=%zu", rule_count);
+  benchmark_ops(label, FLOWIE_BENCH_SECURITY_SAMPLES, FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+    for (size_t operation = 0u;
+         rc == TURBO_OK && operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+      rc = turbo_flow_security_realm_authorize(bench.realm, &bench.request, 1u, &decision);
+  }
+  check_int_eq(rc, TURBO_OK);
+
+  validated_resource = tstr_new_len(bench.request.resource, strlen(bench.request.resource));
+  check_not_null(validated_resource);
+  if (validated_resource) {
+    rc = flowie_mqtt_validated_security_context_init(&validated_context, FLOWIE_MQTT_SECURITY_TOPIC,
+                                                     validated_resource);
+    check_int_eq(rc, TURBO_OK);
+    bench.request.resource = validated_resource;
+    bench.request.protocol_context = &validated_context;
+    decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    (void)snprintf(label, sizeof(label), "MQTT publish parser-validated evaluate rules=%zu",
+                   rule_count);
+    benchmark_ops(label, FLOWIE_BENCH_SECURITY_SAMPLES, FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+      for (size_t operation = 0u;
+           rc == TURBO_OK && operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+        rc = turbo_flow_security_realm_evaluate(bench.realm, &bench.request, 1u, &decision);
+    }
+    check_int_eq(rc, TURBO_OK);
+    check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+    decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    (void)snprintf(label, sizeof(label), "MQTT publish parser-validated ACL rules=%zu", rule_count);
+    benchmark_ops(label, FLOWIE_BENCH_SECURITY_SAMPLES, FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+      for (size_t operation = 0u;
+           rc == TURBO_OK && operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+        rc = turbo_flow_security_realm_authorize(bench.realm, &bench.request, 1u, &decision);
+    }
+    check_int_eq(rc, TURBO_OK);
+    check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+  }
+  tstr_freep(&validated_resource);
+
+  bench.protocol_context.kind = FLOWIE_MQTT_SECURITY_TOPIC_FILTER;
+  bench.request.action = TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE;
+  bench.request.resource = "root-a/target/events/+";
+  bench.request.protocol_context = &bench.protocol_context;
+  decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+  rc = turbo_flow_security_realm_authorize(bench.realm, &bench.request, 1u, &decision);
+  check_int_eq(rc, TURBO_OK);
+  check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+  (void)snprintf(label, sizeof(label), "MQTT subscribe containment ACL rules=%zu", rule_count);
+  benchmark_ops(label, FLOWIE_BENCH_SECURITY_SAMPLES, FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+    for (size_t operation = 0u;
+         rc == TURBO_OK && operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+      rc = turbo_flow_security_realm_authorize(bench.realm, &bench.request, 1u, &decision);
+  }
+  check_int_eq(rc, TURBO_OK);
+
+  validated_resource = tstr_new_len(bench.request.resource, strlen(bench.request.resource));
+  check_not_null(validated_resource);
+  if (validated_resource) {
+    rc = flowie_mqtt_validated_security_context_init(
+        &validated_context, FLOWIE_MQTT_SECURITY_TOPIC_FILTER, validated_resource);
+    check_int_eq(rc, TURBO_OK);
+    bench.request.resource = validated_resource;
+    bench.request.protocol_context = &validated_context;
+    decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    (void)snprintf(label, sizeof(label), "MQTT subscribe parser-validated evaluate rules=%zu",
+                   rule_count);
+    benchmark_ops(label, FLOWIE_BENCH_SECURITY_SAMPLES, FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+      for (size_t operation = 0u;
+           rc == TURBO_OK && operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+        rc = turbo_flow_security_realm_evaluate(bench.realm, &bench.request, 1u, &decision);
+    }
+    check_int_eq(rc, TURBO_OK);
+    check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+    decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    (void)snprintf(label, sizeof(label), "MQTT subscribe parser-validated ACL rules=%zu",
+                   rule_count);
+    benchmark_ops(label, FLOWIE_BENCH_SECURITY_SAMPLES, FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+      for (size_t operation = 0u;
+           rc == TURBO_OK && operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+        rc = turbo_flow_security_realm_authorize(bench.realm, &bench.request, 1u, &decision);
+    }
+    check_int_eq(rc, TURBO_OK);
+    check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+  }
+  tstr_freep(&validated_resource);
+  flowie_bench_security_destroy(&bench);
+}
+
+static void flowie_bench_security_cost_breakdown(void) {
+  static const char publish_topic[] = "root-a/target/events/temperature";
+  static const char subscribe_filter[] = "root-a/target/events/+";
+  flowie_bench_security_t bench;
+  flowie_bench_security_visit_t visit = {0u};
+  flowie_topic_index_t topics;
+  flowie_mqtt_span_t publish = flowie_bench_span(publish_topic);
+  flowie_mqtt_span_t subscribe = flowie_bench_span(subscribe_filter);
+  int valid = 1;
+  int rc = flowie_bench_security_init(&bench, TURBO_FLOW_SECURITY_MAX_RULES);
+  check_int_eq(rc, TURBO_OK);
+  if (rc != TURBO_OK) {
+    flowie_bench_security_destroy(&bench);
+    return;
+  }
+  memset(&topics, 0, sizeof(topics));
+  rc = flowie_topic_index_init(&topics);
+  for (size_t i = 0u; rc == TURBO_OK && i < TURBO_FLOW_SECURITY_MAX_RULES; ++i) {
+    rc = flowie_topic_index_insert(&topics, flowie_bench_span(bench.rules[i].pattern), i);
+  }
+  check_int_eq(rc, TURBO_OK);
+  if (rc != TURBO_OK) goto done;
+
+  benchmark_ops("MQTT publish topic validation", FLOWIE_BENCH_SECURITY_SAMPLES,
+                FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+    for (size_t operation = 0u; operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+      valid = valid && flowie_mqtt_topic_name_validate(publish);
+  }
+  check_true(valid);
+  benchmark_ops("MQTT subscribe filter validation", FLOWIE_BENCH_SECURITY_SAMPLES,
+                FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+    for (size_t operation = 0u; operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+      valid = valid && flowie_mqtt_topic_filter_validate(subscribe);
+  }
+  check_true(valid);
+
+  benchmark_ops("MQTT publish trie visitor with validation", FLOWIE_BENCH_SECURITY_SAMPLES,
+                FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+    for (size_t operation = 0u;
+         rc == TURBO_OK && operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+      rc = flowie_topic_index_visit_topic(&topics, publish, flowie_bench_security_visit, &visit);
+  }
+  check_int_eq(rc, TURBO_OK);
+  check_size_eq(visit.count,
+                FLOWIE_BENCH_SECURITY_SAMPLES * FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE);
+  visit.count = 0u;
+  benchmark_ops("MQTT publish validated trie traversal", FLOWIE_BENCH_SECURITY_SAMPLES,
+                FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+    for (size_t operation = 0u;
+         rc == TURBO_OK && operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+      rc = flowie_topic_index_visit_validated_topic(&topics, publish, flowie_bench_security_visit,
+                                                    &visit);
+  }
+  check_int_eq(rc, TURBO_OK);
+  check_size_eq(visit.count,
+                FLOWIE_BENCH_SECURITY_SAMPLES * FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE);
+  visit.count = 0u;
+  benchmark_ops("MQTT subscribe trie visitor with validation", FLOWIE_BENCH_SECURITY_SAMPLES,
+                FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+    for (size_t operation = 0u;
+         rc == TURBO_OK && operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+      rc = flowie_topic_index_visit_containing_filters(&topics, subscribe,
+                                                       flowie_bench_security_visit, &visit);
+  }
+  check_int_eq(rc, TURBO_OK);
+  check_size_eq(visit.count,
+                FLOWIE_BENCH_SECURITY_SAMPLES * FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE);
+  visit.count = 0u;
+  benchmark_ops("MQTT subscribe validated trie traversal", FLOWIE_BENCH_SECURITY_SAMPLES,
+                FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE) {
+    for (size_t operation = 0u;
+         rc == TURBO_OK && operation < FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE; ++operation)
+      rc = flowie_topic_index_visit_validated_containing_filters(
+          &topics, subscribe, flowie_bench_security_visit, &visit);
+  }
+  check_int_eq(rc, TURBO_OK);
+  check_size_eq(visit.count,
+                FLOWIE_BENCH_SECURITY_SAMPLES * FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE);
+
+done:
+  flowie_topic_index_destroy(&topics);
+  flowie_bench_security_destroy(&bench);
+}
+
 static int flowie_bench_filter(char *out, size_t capacity, size_t index) {
   int written;
   switch (index % 4u) {
   case 0u:
-    written = snprintf(out, capacity, "tenant/%zu/device/+/state", index);
+    written = snprintf(out, capacity, "root/%zu/device/+/state", index);
     break;
   case 1u:
-    written = snprintf(out, capacity, "tenant/%zu/#", index);
+    written = snprintf(out, capacity, "root/%zu/#", index);
     break;
   case 2u:
     written =
-        snprintf(out, capacity, "$share/group%zu/tenant/%zu/device/+/state", index % 64u, index);
+        snprintf(out, capacity, "$share/group%zu/root/%zu/device/+/state", index % 64u, index);
     break;
   default:
-    written = snprintf(out, capacity, "tenant/%zu/device/%zu/state", index, index);
+    written = snprintf(out, capacity, "root/%zu/device/%zu/state", index, index);
     break;
   }
   return written > 0 && (size_t)written < capacity ? TURBO_OK : TURBO_EMSGSIZE;
@@ -132,7 +416,7 @@ static void flowie_bench_topic_index(void) {
   for (size_t i = 0u; i < FLOWIE_BENCH_CAPACITY; ++i) {
     char topic[FLOWIE_BENCH_TOPIC_BUFFER_SIZE];
     uint64_t begin;
-    const int written = snprintf(topic, sizeof(topic), "tenant/%zu/device/%zu/state", i, i);
+    const int written = snprintf(topic, sizeof(topic), "root/%zu/device/%zu/state", i, i);
     if (written <= 0 || (size_t)written >= sizeof(topic)) {
       rc = TURBO_EMSGSIZE;
       break;
@@ -189,14 +473,14 @@ done:
 }
 
 static flowie_mqtt_span_t flowie_bench_candidate_filter(size_t index) {
-  static const char *const filters[] = {"tenant/common/device/+/state", "tenant/common/#",
-                                        "$share/workers/tenant/common/device/+/state",
-                                        "tenant/common/device/42/state"};
+  static const char *const filters[] = {"root/common/device/+/state", "root/common/#",
+                                        "$share/workers/root/common/device/+/state",
+                                        "root/common/device/42/state"};
   return flowie_bench_span(filters[index % (sizeof(filters) / sizeof(filters[0]))]);
 }
 
 static void flowie_bench_topic_rebuild_fanout(void) {
-  static const char topic[] = "tenant/common/device/42/state";
+  static const char topic[] = "root/common/device/42/state";
   flowie_topic_index_t index;
   turbo_vec_t matches;
   uint64_t rebuild_latencies[FLOWIE_BENCH_REBUILD_SAMPLES] = {0};
@@ -678,8 +962,7 @@ static void flowie_bench_tcp_pipeline_burst(void) {
     uint64_t begin = turbo_hrtime();
     if (rc == TURBO_OK) {
       for (size_t i = 0u; i < FLOWIE_BENCH_PIPELINE_MESSAGES; ++i) {
-        const uint32_t sequence =
-            (uint32_t)(sample_index * FLOWIE_BENCH_PIPELINE_MESSAGES + i);
+        const uint32_t sequence = (uint32_t)(sample_index * FLOWIE_BENCH_PIPELINE_MESSAGES + i);
         packets[i][sizeof(publish_template) - 4u] = (uint8_t)(sequence >> 24u);
         packets[i][sizeof(publish_template) - 3u] = (uint8_t)(sequence >> 16u);
         packets[i][sizeof(publish_template) - 2u] = (uint8_t)(sequence >> 8u);
@@ -695,8 +978,7 @@ static void flowie_bench_tcp_pipeline_burst(void) {
   check_int_eq(rc, TURBO_OK);
   check_size_eq(sample_index, FLOWIE_BENCH_PIPELINE_SAMPLES);
   if (rc == TURBO_OK) {
-    qsort(latencies, FLOWIE_BENCH_PIPELINE_SAMPLES, sizeof(*latencies),
-          flowie_bench_u64_compare);
+    qsort(latencies, FLOWIE_BENCH_PIPELINE_SAMPLES, sizeof(*latencies), flowie_bench_u64_compare);
     printf("FLOWIE_BENCH_RESULT operation=tcp_pipeline_burst messages_per_sample=%u samples=%u"
            " p50_ns=%" PRIu64 " p95_ns=%" PRIu64 " p99_ns=%" PRIu64 "\n",
            FLOWIE_BENCH_PIPELINE_MESSAGES, FLOWIE_BENCH_PIPELINE_SAMPLES,
@@ -958,6 +1240,13 @@ done:
 }
 
 spec("flowie capacity benchmarks") {
+  bench("compiled MQTT security matcher") {
+    flowie_bench_security_cost_breakdown();
+    flowie_bench_security_matcher(64u);
+    flowie_bench_security_matcher(512u);
+    flowie_bench_security_matcher(TURBO_FLOW_SECURITY_MAX_RULES);
+  }
+
   bench("100k session and topic-index capacity") {
     flowie_bench_sessions();
     flowie_bench_topic_index();

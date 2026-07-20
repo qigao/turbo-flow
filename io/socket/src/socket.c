@@ -521,18 +521,28 @@ static void flow_coronet_sink_send_task(coro_t *co, void *arg) {
   flow_coronet_send_task_release(task);
 }
 
-static int flow_coronet_source_publish(flow_coronet_socket_adapter_t *adapter, const char *data,
-                                       size_t len) {
+static void flow_coronet_source_recv_release(void *data, void *user_data) {
+  (void)user_data;
+  coro_socket_free_recv(data);
+}
+
+static int flow_coronet_source_publish_received(flow_coronet_socket_adapter_t *adapter, char *data,
+                                                size_t len) {
   turbo_flow_msg_t msg;
   int rc;
 
-  if (!adapter || !adapter->flow || !adapter->source_name) return TURBO_EINVAL;
-  if (len > 0 && !data) return TURBO_EINVAL;
+  if (!adapter || !adapter->flow || !adapter->source_name || !data || len == 0u) {
+    coro_socket_free_recv(data);
+    return TURBO_EINVAL;
+  }
 
   turbo_flow_msg_init(&msg);
-  msg.owned_payload = tstr_new_len(data, len);
-  if (!msg.owned_payload) return TURBO_ENOMEM;
-  msg.payload = tstr_to_v(msg.owned_payload);
+  msg.buffer = mem_wrap_external(data, len, flow_coronet_source_recv_release, NULL);
+  if (!msg.buffer) {
+    coro_socket_free_recv(data);
+    return TURBO_ENOMEM;
+  }
+  msg.payload = tstr_v_from_buf(data, len);
 
   rc = turbo_flow_publish(adapter->flow, adapter->source_name, &msg);
   turbo_flow_msg_cleanup(&msg);
@@ -551,8 +561,7 @@ static void flow_coronet_tcp_source_handler(coro_socket_t *client, void *arg) {
     int rc = coro_socket_recv(client, &data, &len);
     if (rc != TURBO_OK) break;
     if (data && len > 0) {
-      rc = flow_coronet_source_publish(adapter, data, len);
-      coro_socket_free_recv(data);
+      rc = flow_coronet_source_publish_received(adapter, data, len);
       if (rc != TURBO_OK) break;
     } else if (data) {
       coro_socket_free_recv(data);

@@ -11,6 +11,7 @@
 typedef enum flowie_config_field_type_e {
   FLOWIE_CONFIG_STRING = 1,
   FLOWIE_CONFIG_BOOL,
+  FLOWIE_CONFIG_U16,
   FLOWIE_CONFIG_U32,
   FLOWIE_CONFIG_INT,
   FLOWIE_CONFIG_SIZE,
@@ -63,6 +64,7 @@ static const flowie_config_field_t FLOWIE_CONFIG_FIELDS[] = {
     FLOWIE_CONFIG_FIELD(max_subscriptions_per_session, FLOWIE_CONFIG_SIZE, UINT16_MAX),
     FLOWIE_CONFIG_FIELD(max_inflight_per_session, FLOWIE_CONFIG_SIZE, UINT16_MAX),
     FLOWIE_CONFIG_FIELD(max_retained_messages, FLOWIE_CONFIG_SIZE, SIZE_MAX),
+    FLOWIE_CONFIG_FIELD(topic_alias_maximum, FLOWIE_CONFIG_U16, UINT16_MAX),
     FLOWIE_CONFIG_FIELD(slow_subscriber_policy, FLOWIE_CONFIG_SLOW_SUBSCRIBER_POLICY, 0u)};
 
 static int flowie_config_error(turbo_flow_config_error_t *error, int status, const char *name,
@@ -153,6 +155,9 @@ static int flowie_config_assign(flowie_endpoint_config_t *config,
     return TURBO_ERANGE;
   }
   switch (field->type) {
+  case FLOWIE_CONFIG_U16:
+    *(uint16_t *)target = (uint16_t)number;
+    return TURBO_OK;
   case FLOWIE_CONFIG_U32:
     *(uint32_t *)target = (uint32_t)number;
     return TURBO_OK;

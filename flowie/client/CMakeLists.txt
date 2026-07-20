@@ -22,7 +22,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:include>)
 target_link_libraries(
   ${TARGET_NAME}
-  PRIVATE Flowie::Protocol TurboNet::CoroNet TurboUtils::Core)
+  PRIVATE Flowie::Protocol TurboNet::CoroNet TurboUtils::Core monocypher)
 
 install(FILES ${FLOWIE_CLIENT_HEADERS} DESTINATION include)
 

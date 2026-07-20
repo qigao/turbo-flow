@@ -123,6 +123,9 @@ typedef struct flow_redis_task_s {
   const char *payload;
   size_t payload_len;
   const char *id;
+  size_t id_size;
+  const char **ids;
+  size_t id_count;
   const char *state_key;
   turbo_flow_claim_commit_action_t commit_action;
   const turbo_flow_record_mutation_t *record_mutations;
@@ -213,9 +216,9 @@ static int flow_redis_record_decode(const flow_redis_adapter_t *adapter,
   uint64_t revision = 0u;
   size_t revision_size;
   if (!adapter || !key_reply || !value_reply || !out ||
-      key_reply->type != REDIS_REPLY_BULK_STRING ||
-      value_reply->type != REDIS_REPLY_BULK_STRING || !key_reply->str || !value_reply->str ||
-      key_reply->len == 0u || key_reply->len > adapter->record_max_key_size)
+      key_reply->type != REDIS_REPLY_BULK_STRING || value_reply->type != REDIS_REPLY_BULK_STRING ||
+      !key_reply->str || !value_reply->str || key_reply->len == 0u ||
+      key_reply->len > adapter->record_max_key_size)
     return TURBO_EPROTO;
   separator = (const char *)memchr(value_reply->str, '\0', value_reply->len);
   if (!separator) return TURBO_EPROTO;
@@ -227,8 +230,7 @@ static int flow_redis_record_decode(const flow_redis_adapter_t *adapter,
     unsigned int digit;
     if (value_reply->str[i] < '0' || value_reply->str[i] > '9') return TURBO_EPROTO;
     digit = (unsigned int)(value_reply->str[i] - '0');
-    if (revision > ((uint64_t)TURBO_FLOW_RECORD_REVISION_MAX - digit) / 10u)
-      return TURBO_EPROTO;
+    if (revision > ((uint64_t)TURBO_FLOW_RECORD_REVISION_MAX - digit) / 10u) return TURBO_EPROTO;
     revision = revision * 10u + digit;
   }
   if (revision == TURBO_FLOW_RECORD_REVISION_ABSENT) return TURBO_EPROTO;
@@ -251,8 +253,13 @@ static int flow_redis_command_apply(flow_redis_task_t *task, const redis_command
   if (result->status != TURBO_OK) return result->status;
   reply = result->reply;
   if (!reply) return TURBO_EPROTO;
-  if (task->kind == FLOW_REDIS_TASK_XACK)
-    return reply->type == REDIS_REPLY_INTEGER && reply->integer == 1 ? TURBO_OK : TURBO_EPROTO;
+  if (task->kind == FLOW_REDIS_TASK_XACK) {
+    const size_t expected = task->id_count > 0u ? task->id_count : 1u;
+    return reply->type == REDIS_REPLY_INTEGER && reply->integer >= 0 &&
+                   (uint64_t)reply->integer == (uint64_t)expected
+               ? TURBO_OK
+               : TURBO_EPROTO;
+  }
   if (task->kind == FLOW_REDIS_TASK_STATE_COMMIT) {
     if (reply->type != REDIS_REPLY_INTEGER) return TURBO_EPROTO;
     if (reply->integer == 1 || reply->integer == 2) return TURBO_OK;
@@ -268,13 +275,12 @@ static int flow_redis_command_apply(flow_redis_task_t *task, const redis_command
     return TURBO_EPROTO;
   }
   if (task->kind == FLOW_REDIS_TASK_RECORD_SCAN) {
-    if (reply->type != REDIS_REPLY_ARRAY || (reply->element_count & 1u) != 0u)
-      return TURBO_EPROTO;
+    if (reply->type != REDIS_REPLY_ARRAY || (reply->element_count & 1u) != 0u) return TURBO_EPROTO;
     if (reply->element_count / 2u > task->adapter->record_max_records) return TURBO_ENOSPC;
     for (size_t i = 0u; i < reply->element_count; i += 2u) {
       turbo_flow_record_view_t record = TURBO_FLOW_RECORD_VIEW_INIT;
-      int rc = flow_redis_record_decode(task->adapter, reply->elements[i],
-                                        reply->elements[i + 1u], &record);
+      int rc = flow_redis_record_decode(task->adapter, reply->elements[i], reply->elements[i + 1u],
+                                        &record);
       if (rc != TURBO_OK) return rc;
       rc = task->record_visit(task->record_visit_ctx, &record);
       if (rc != TURBO_OK) return rc;
@@ -369,8 +375,11 @@ static void flow_redis_task_run(coro_t *co, void *arg) {
     }
     break;
   case FLOW_REDIS_TASK_XACK: {
-    const char *ack_ids[] = {task->id};
-    (void)redis_xack_result(adapter->client, adapter->stream, adapter->group, 1, ack_ids, &command);
+    const char *single_id[] = {task->id};
+    const size_t id_count = task->id_count > 0u ? task->id_count : 1u;
+    const char **ids_to_ack = task->id_count > 0u ? task->ids : single_id;
+    (void)redis_xack_result(adapter->client, adapter->stream, adapter->group, id_count, ids_to_ack,
+                            &command);
     task->status = flow_redis_command_apply(task, &command);
     break;
   }
@@ -464,15 +473,13 @@ static void flow_redis_task_run(coro_t *co, void *arg) {
     const size_t argument_count = 6u + task->record_mutation_count * 5u;
     const char **arguments = (const char **)calloc(argument_count, sizeof(*arguments));
     size_t *lengths = (size_t *)calloc(argument_count, sizeof(*lengths));
-    flow_redis_record_revision_text_t *revisions =
-        (flow_redis_record_revision_text_t *)calloc(task->record_mutation_count,
-                                                    sizeof(*revisions));
+    flow_redis_record_revision_text_t *revisions = (flow_redis_record_revision_text_t *)calloc(
+        task->record_mutation_count, sizeof(*revisions));
     char max_records[32];
     char mutation_count[32];
     if (!arguments || !lengths || !revisions ||
         snprintf(max_records, sizeof(max_records), "%zu", adapter->record_max_records) < 0 ||
-        snprintf(mutation_count, sizeof(mutation_count), "%zu", task->record_mutation_count) <
-            0) {
+        snprintf(mutation_count, sizeof(mutation_count), "%zu", task->record_mutation_count) < 0) {
       free(revisions);
       free(lengths);
       free(arguments);
@@ -494,8 +501,7 @@ static void flow_redis_task_run(coro_t *co, void *arg) {
     for (size_t i = 0u; i < task->record_mutation_count; ++i) {
       const turbo_flow_record_mutation_t *mutation = &task->record_mutations[i];
       size_t offset = 6u + i * 5u;
-      revisions[i].kind[0] =
-          mutation->kind == TURBO_FLOW_RECORD_PUT ? (char)'1' : (char)'2';
+      revisions[i].kind[0] = mutation->kind == TURBO_FLOW_RECORD_PUT ? (char)'1' : (char)'2';
       (void)snprintf(revisions[i].expected, sizeof(revisions[i].expected), "%llu",
                      (unsigned long long)mutation->expected_revision);
       (void)snprintf(revisions[i].next, sizeof(revisions[i].next), "%llu",
@@ -508,12 +514,10 @@ static void flow_redis_task_run(coro_t *co, void *arg) {
       lengths[offset + 2u] = strlen(revisions[i].expected);
       arguments[offset + 3u] = revisions[i].next;
       lengths[offset + 3u] = strlen(revisions[i].next);
-      arguments[offset + 4u] =
-          mutation->value_size != 0u ? (const char *)mutation->value : "";
+      arguments[offset + 4u] = mutation->value_size != 0u ? (const char *)mutation->value : "";
       lengths[offset + 4u] = mutation->value_size;
     }
-    (void)redis_commandv_result(adapter->client, (int)argument_count, arguments, lengths,
-                                &command);
+    (void)redis_commandv_result(adapter->client, (int)argument_count, arguments, lengths, &command);
     task->status = flow_redis_command_apply(task, &command);
     free(revisions);
     free(lengths);
@@ -567,32 +571,66 @@ static const redis_stream_entry_t *flow_redis_entries_field(const redis_stream_e
   return NULL;
 }
 
+static void flow_redis_stream_payload_release(void *data, void *user_data) {
+  (void)user_data;
+  redis_stream_value_free(data);
+}
+
 static int flow_redis_publish_results(flow_redis_adapter_t *adapter, flow_redis_task_t *read) {
+  turbo_vec_t ack_ids;
   int rc = TURBO_OK;
+  if (turbo_vec_init(&ack_ids, sizeof(const char *)) != TURBO_OK) return TURBO_ENOMEM;
   for (size_t i = 0; i < read->result_count && rc == TURBO_OK; ++i) {
     redis_stream_result_t *result = &read->results[i];
+    turbo_vec_clear(&ack_ids);
+    rc = turbo_vec_reserve(&ack_ids, result->entry_count);
     for (size_t j = 0; j < result->entry_count && rc == TURBO_OK; ++j) {
       redis_stream_entry_t *entry = &result->entries[j];
       size_t field_index = 0;
       turbo_flow_msg_t msg;
-      flow_redis_task_t ack;
       if (!flow_redis_entries_field(entry, adapter->field, &field_index)) {
         rc = TURBO_EPROTO;
         break;
       }
       turbo_flow_msg_init(&msg);
-      msg.owned_payload = tstr_new_len(entry->values[field_index], entry->value_lens[field_index]);
-      if (!msg.owned_payload) return TURBO_ENOMEM;
-      msg.payload = tstr_to_v(msg.owned_payload);
+      if (entry->value_lens[field_index] == 0u) {
+        msg.owned_payload = tstr_new_len("", 0u);
+        if (!msg.owned_payload) {
+          rc = TURBO_ENOMEM;
+          break;
+        }
+        msg.payload = tstr_to_v(msg.owned_payload);
+      } else {
+        char *payload = NULL;
+        size_t payload_len = 0u;
+        rc = redis_stream_entry_take_value(entry, field_index, &payload, &payload_len);
+        if (rc != TURBO_OK) break;
+        msg.buffer =
+            mem_wrap_external(payload, payload_len, flow_redis_stream_payload_release, NULL);
+        if (!msg.buffer) {
+          redis_stream_value_free(payload);
+          rc = TURBO_ENOMEM;
+          break;
+        }
+        msg.payload = tstr_v_from_buf(payload, payload_len);
+      }
       rc = turbo_flow_publish(adapter->flow, adapter->source_name, &msg);
       turbo_flow_msg_cleanup(&msg);
       if (rc != TURBO_OK) break;
+      rc = turbo_vec_push(&ack_ids, &entry->id);
+    }
+    if (turbo_vec_size(&ack_ids) > 0u) {
+      flow_redis_task_t ack;
+      int ack_rc;
       memset(&ack, 0, sizeof(ack));
       ack.kind = FLOW_REDIS_TASK_XACK;
-      ack.id = entry->id;
-      rc = flow_redis_run(adapter, &ack);
+      ack.ids = (const char **)turbo_vec_data(&ack_ids);
+      ack.id_count = turbo_vec_size(&ack_ids);
+      ack_rc = flow_redis_run(adapter, &ack);
+      if (ack_rc != TURBO_OK) rc = ack_rc;
     }
   }
+  turbo_vec_destroy(&ack_ids);
   return rc;
 }
 
@@ -703,8 +741,7 @@ static int flow_redis_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_st
   }
   if (rc == TURBO_OK && settlement) {
     const turbo_flow_protocol_route_t *route = turbo_flow_msg_protocol_route(msg);
-    turbo_flow_protocol_settlement_request_t request =
-        TURBO_FLOW_PROTOCOL_SETTLEMENT_REQUEST_INIT;
+    turbo_flow_protocol_settlement_request_t request = TURBO_FLOW_PROTOCOL_SETTLEMENT_REQUEST_INIT;
     if (!route) rc = TURBO_EPROTO;
     else {
       request.message = settlement->message;
@@ -713,8 +750,7 @@ static int flow_redis_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_st
       request.message_id = msg->id;
       request.attempt = msg->execution_attempt ? msg->execution_attempt : 1u;
       rc = turbo_flow_protocol_route_settle(flow, route, &request);
-      if (rc == TURBO_OK)
-        rc = turbo_flow_msg_complete_protocol_settlement(msg, request.point);
+      if (rc == TURBO_OK) rc = turbo_flow_msg_complete_protocol_settlement(msg, request.point);
     }
   }
   tstr_freep(&task.response);
@@ -1440,9 +1476,9 @@ static bool flow_redis_record_key_equal(const void *left, const void *right, siz
   return a->len == b->len && (a->len == 0u || memcmp(a->data, b->data, a->len) == 0);
 }
 
-static int flow_redis_record_mutations_validate(
-    flow_redis_adapter_t *adapter, const turbo_flow_record_mutation_t *mutations,
-    size_t mutation_count) {
+static int flow_redis_record_mutations_validate(flow_redis_adapter_t *adapter,
+                                                const turbo_flow_record_mutation_t *mutations,
+                                                size_t mutation_count) {
   static const uint8_t present = 1u;
   if (!adapter || !mutations || mutation_count == 0u ||
       mutation_count > adapter->record_max_batch_size)
@@ -1494,8 +1530,7 @@ static int flow_redis_record_store_scan(void *ctx, turbo_flow_record_visit_fn vi
   return rc;
 }
 
-static int flow_redis_record_store_commit(void *ctx,
-                                          const turbo_flow_record_mutation_t *mutations,
+static int flow_redis_record_store_commit(void *ctx, const turbo_flow_record_mutation_t *mutations,
                                           size_t mutation_count) {
   flow_redis_adapter_t *adapter = (flow_redis_adapter_t *)ctx;
   flow_redis_task_t task;
@@ -1531,9 +1566,8 @@ int turbo_flow_redis_record_store_create(const turbo_flow_redis_record_store_con
       config->max_batch_size > UINT16_MAX || config->max_records == 0u ||
       config->max_records > INT_MAX)
     return TURBO_EINVAL;
-  max_key_size = config->max_record_key_size
-                     ? config->max_record_key_size
-                     : TURBO_FLOW_REDIS_RECORD_STORE_MAX_RECORD_KEY_SIZE;
+  max_key_size = config->max_record_key_size ? config->max_record_key_size
+                                             : TURBO_FLOW_REDIS_RECORD_STORE_MAX_RECORD_KEY_SIZE;
   max_value_size =
       config->max_value_size ? config->max_value_size : TURBO_FLOW_REDIS_DEFAULT_MAX_VALUE_SIZE;
   max_batch_size = config->max_batch_size ? config->max_batch_size

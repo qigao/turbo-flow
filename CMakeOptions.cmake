@@ -40,6 +40,9 @@ option(TURBO_FLOW_BUILD_FLOWIE "Build the Flowie MQTT application and protocol S
 # Optional modules default to the historical full build. Disable the master
 # switch for a core-only package, or keep it enabled and select components.
 option(TURBO_FLOW_BUILD_ADAPTERS "Build TurboFlow optional adapter modules" ON)
+cmake_dependent_option(TURBO_FLOW_BUILD_SECURITY_SQLITE
+                       "Build the embedded SQLite ACL policy provider" ON
+                       "TURBO_FLOW_BUILD_ADAPTERS" OFF)
 cmake_dependent_option(TURBO_FLOW_BUILD_STORAGE "Build file storage adapters" ON
                        "TURBO_FLOW_BUILD_ADAPTERS" OFF)
 cmake_dependent_option(TURBO_FLOW_BUILD_CODEC "Build codec and DataBind adapters" ON
@@ -59,7 +62,7 @@ cmake_dependent_option(TURBO_FLOW_BUILD_EMAIL "Build TurboNet SMTP adapter" ON
 cmake_dependent_option(TURBO_FLOW_BUILD_FMQ "Build the FlowMQ broker and TurboFlow connector" ON
                        "TURBO_FLOW_BUILD_ADAPTERS" OFF)
 option(TURBO_FLOW_BUILD_FMQ_PROTOCOL
-       "Build the standalone FlowMQ v2 protocol SDK without broker dependencies" OFF)
+       "Build the standalone FlowMQ v3 protocol SDK without broker dependencies" OFF)
 cmake_dependent_option(TURBO_FLOW_BUILD_REDIS "Build TurboNet Redis Streams adapters" ON
                        "TURBO_FLOW_BUILD_ADAPTERS" OFF)
 cmake_dependent_option(TURBO_FLOW_BUILD_PGSQL "Build PostgreSQL sink adapter" ON

@@ -16,6 +16,7 @@ typedef struct flowie_session_subscription_owned_s {
   uint8_t no_local;
   uint8_t retain_as_published;
   uint8_t retain_handling;
+  uint32_t subscription_identifier;
 } flowie_session_subscription_owned_t;
 
 typedef enum flowie_session_inflight_state_e {
@@ -189,7 +190,7 @@ static int flowie_session_expiry(const flowie_mqtt_connect_view_t *connect, uint
   flowie_mqtt_property_view_t property = FLOWIE_MQTT_PROPERTY_VIEW_INIT;
   int found = 0;
   int rc;
-  if (connect->version == FLOWIE_MQTT_VERSION_3_1_1) {
+  if (flowie_mqtt_version_is_3x(connect->version)) {
     *out = connect->clean_start ? 0u : UINT32_MAX;
     return TURBO_OK;
   }
@@ -293,6 +294,11 @@ fail:
   return NULL;
 }
 
+int flowie_session_owner_touch(flowie_session_owner_t *owner) {
+  if (!owner || !owner->initialized) return TURBO_EINVAL;
+  return flowie_session_generation_advance(owner);
+}
+
 void flowie_session_owner_destroy(flowie_session_owner_t *owner) {
   if (!owner) return;
   flowie_session_subscriptions_destroy(&owner->subscriptions);
@@ -317,8 +323,7 @@ int flowie_session_owner_open(flowie_session_owner_t *owner,
       connect->abi_version != FLOWIE_MQTT_PROTOCOL_ABI_V1 ||
       connect->properties.size < sizeof(connect->properties) ||
       connect->properties.abi_version != FLOWIE_MQTT_PROTOCOL_ABI_V1 ||
-      (connect->version != FLOWIE_MQTT_VERSION_3_1_1 &&
-       connect->version != FLOWIE_MQTT_VERSION_5) ||
+      !flowie_mqtt_version_is_supported(connect->version) ||
       (!connect->client_id.data && connect->client_id.size != 0u))
     return TURBO_EINVAL;
   if (owner->active) return TURBO_EALREADY;
@@ -403,7 +408,8 @@ int flowie_session_owner_connect(flowie_session_owner_t *owner,
   if (rc == TURBO_OK) {
     result.accepted = 1u;
     result.session_present = (uint8_t)(initialized && !connect->clean_start);
-    result.reply.session_present = result.session_present;
+    result.reply.session_present =
+        connect->version == FLOWIE_MQTT_VERSION_3_1 ? 0u : result.session_present;
     rc = flowie_session_owner_route(owner, &result.route);
     if (rc != TURBO_OK) return rc;
     *out = result;
@@ -556,17 +562,20 @@ flowie_session_subscription_find(turbo_vec_t *subscriptions, flowie_mqtt_span_t 
 
 static int flowie_session_subscription_apply(turbo_vec_t *subscriptions, size_t capacity,
                                              const flowie_mqtt_subscription_view_t *entry,
+                                             uint32_t subscription_identifier,
                                              int *changed) {
   flowie_session_subscription_owned_t *existing =
       flowie_session_subscription_find(subscriptions, entry->filter);
   if (existing) {
     if (existing->qos != entry->qos || existing->no_local != entry->no_local ||
         existing->retain_as_published != entry->retain_as_published ||
-        existing->retain_handling != entry->retain_handling) {
+        existing->retain_handling != entry->retain_handling ||
+        existing->subscription_identifier != subscription_identifier) {
       existing->qos = entry->qos;
       existing->no_local = entry->no_local;
       existing->retain_as_published = entry->retain_as_published;
       existing->retain_handling = entry->retain_handling;
+      existing->subscription_identifier = subscription_identifier;
       *changed = 1;
     }
     return TURBO_OK;
@@ -582,6 +591,7 @@ static int flowie_session_subscription_apply(turbo_vec_t *subscriptions, size_t 
     added.no_local = entry->no_local;
     added.retain_as_published = entry->retain_as_published;
     added.retain_handling = entry->retain_handling;
+    added.subscription_identifier = subscription_identifier;
     rc = turbo_vec_push(subscriptions, &added);
     if (rc != TURBO_OK) {
       tstr_free(added.filter);
@@ -601,6 +611,7 @@ int flowie_session_owner_subscribe(flowie_session_owner_t *owner,
   flowie_session_subscribe_result_t result = FLOWIE_SESSION_SUBSCRIBE_RESULT_INIT;
   turbo_vec_t staged;
   size_t count = 0u;
+  uint32_t subscription_identifier = 0u;
   int changed = 0;
   int rc;
   if (!owner || !packet || packet->size < sizeof(*packet) || !subscribe ||
@@ -615,11 +626,23 @@ int flowie_session_owner_subscribe(flowie_session_owner_t *owner,
     return TURBO_EPROTO;
   rc = flowie_mqtt_subscription_iterator_init(packet, subscribe, &iterator);
   if (rc != FLOWIE_MQTT_PARSE_OK) return TURBO_EPROTO;
+  if (packet->version == FLOWIE_MQTT_VERSION_5 && subscribe->properties.values.size != 0u) {
+    flowie_mqtt_property_iterator_t property_iterator = FLOWIE_MQTT_PROPERTY_ITERATOR_INIT;
+    flowie_mqtt_property_view_t property = FLOWIE_MQTT_PROPERTY_VIEW_INIT;
+    rc = flowie_mqtt_property_iterator_init(&subscribe->properties, &property_iterator);
+    if (rc != FLOWIE_MQTT_PARSE_OK) return TURBO_EPROTO;
+    while ((rc = flowie_mqtt_property_iterator_next(&property_iterator, &property)) ==
+           FLOWIE_MQTT_PARSE_OK) {
+      if (property.identifier == FLOWIE_MQTT_PROPERTY_SUBSCRIPTION_IDENTIFIER)
+        subscription_identifier = property.integer;
+    }
+    if (rc != FLOWIE_MQTT_PARSE_NEED_MORE) return TURBO_EPROTO;
+  }
   rc = flowie_session_subscriptions_clone(&owner->subscriptions, &staged);
   if (rc != TURBO_OK) return rc;
   while ((rc = flowie_mqtt_subscription_iterator_next(&iterator, &entry)) == FLOWIE_MQTT_PARSE_OK) {
     rc = flowie_session_subscription_apply(&staged, owner->config.max_subscriptions, &entry,
-                                           &changed);
+                                           subscription_identifier, &changed);
     if (rc != TURBO_OK) goto fail;
     ++count;
   }
@@ -663,6 +686,7 @@ int flowie_session_owner_subscription_at(const flowie_session_owner_t *owner, si
   value.no_local = entry->no_local;
   value.retain_as_published = entry->retain_as_published;
   value.retain_handling = entry->retain_handling;
+  value.subscription_identifier = entry->subscription_identifier;
   *out = value;
   return TURBO_OK;
 }
@@ -966,7 +990,7 @@ int flowie_session_ack_control_packet(const flowie_session_ack_intent_t *ack,
   if (!ack || ack->size < sizeof(*ack) || ack->abi_version != FLOWIE_SESSION_INTERNAL_ABI_V1 ||
       !out || out->size < sizeof(*out) || out->abi_version != FLOWIE_MQTT_PROTOCOL_ABI_V1 ||
       ack->packet_id == 0u ||
-      (version != FLOWIE_MQTT_VERSION_3_1_1 && version != FLOWIE_MQTT_VERSION_5))
+      !flowie_mqtt_version_is_supported(version))
     return TURBO_EINVAL;
   switch (ack->kind) {
   case FLOWIE_SESSION_ACK_PUBACK:
@@ -984,7 +1008,7 @@ int flowie_session_ack_control_packet(const flowie_session_ack_intent_t *ack,
   default:
     return TURBO_EPROTO;
   }
-  if (version == FLOWIE_MQTT_VERSION_3_1_1 && ack->reason_code != 0u) return TURBO_EPROTO;
+  if (flowie_mqtt_version_is_3x(version) && ack->reason_code != 0u) return TURBO_EPROTO;
   packet.version = version;
   packet.packet_id = ack->packet_id;
   packet.reason_code = ack->reason_code;
@@ -1113,7 +1137,7 @@ int flowie_session_owner_qos2_release(flowie_session_owner_t *owner,
 #define FLOWIE_SESSION_RECORD_HEADER_SIZE 8u
 #define FLOWIE_SESSION_RECORD_METADATA_SIZE 25u
 #define FLOWIE_SESSION_RECORD_VERSION_MAJOR 1u
-#define FLOWIE_SESSION_RECORD_VERSION_MINOR 1u
+#define FLOWIE_SESSION_RECORD_VERSION_MINOR 2u
 #define FLOWIE_SESSION_RECORD_WILL_METADATA_SIZE 7u
 
 static void flowie_session_record_write_u16(uint8_t *out, uint16_t value) {
@@ -1190,7 +1214,7 @@ int flowie_session_owner_record_encode(const flowie_session_owner_t *owner, uint
     rc = flowie_session_record_size_add(&required, tstr_len(entry->filter));
   }
   for (size_t i = 0u; rc == TURBO_OK && i < turbo_vec_size(&owner->subscriptions); ++i)
-    rc = flowie_session_record_size_add(&required, 4u);
+    rc = flowie_session_record_size_add(&required, 8u);
   for (size_t i = 0u; rc == TURBO_OK && i < turbo_vec_size(&owner->inflight); ++i) {
     const flowie_session_inflight_t *entry =
         (const flowie_session_inflight_t *)turbo_vec_at_const(&owner->inflight, i);
@@ -1247,8 +1271,9 @@ int flowie_session_owner_record_encode(const flowie_session_owner_t *owner, uint
   for (size_t i = 0u; rc == TURBO_OK && i < turbo_vec_size(&owner->subscriptions); ++i) {
     const flowie_session_subscription_owned_t *entry =
         (const flowie_session_subscription_owned_t *)turbo_vec_at_const(&owner->subscriptions, i);
-    uint8_t options[4] = {entry->qos, entry->no_local, entry->retain_as_published,
-                          entry->retain_handling};
+    uint8_t options[8] = {entry->qos, entry->no_local, entry->retain_as_published,
+                          entry->retain_handling, 0u, 0u, 0u, 0u};
+    flowie_session_record_write_u32(options + 4u, entry->subscription_identifier);
     rc = flowie_session_record_append(out, capacity, &offset, 4u, options, sizeof(options));
   }
   for (size_t i = 0u; rc == TURBO_OK && i < turbo_vec_size(&owner->inflight); ++i) {
@@ -1393,7 +1418,7 @@ int flowie_session_owner_record_restore(const flowie_session_config_t *config,
     if (type == 1u) {
       if (header_seen || offset != 0u || value_size != FLOWIE_SESSION_RECORD_HEADER_SIZE ||
           memcmp(value, "FSES", 4u) != 0 || value[4] != 0u ||
-          value[5] != FLOWIE_SESSION_RECORD_VERSION_MAJOR || value[6] != 0u || value[7] > 1u) {
+          value[5] != FLOWIE_SESSION_RECORD_VERSION_MAJOR || value[6] != 0u || value[7] > 2u) {
         turbo_free_ltv(&message);
         rc = TURBO_EPROTO;
         goto fail;
@@ -1410,7 +1435,7 @@ int flowie_session_owner_record_restore(const flowie_session_config_t *config,
       }
       session_id = flowie_session_record_read_u64(value + 1u);
       session_generation = flowie_session_record_read_u64(value + 9u);
-      if ((value[0] != FLOWIE_MQTT_VERSION_3_1_1 && value[0] != FLOWIE_MQTT_VERSION_5) ||
+      if (!flowie_mqtt_version_is_supported((flowie_mqtt_version_t)value[0]) ||
           session_id == 0u || session_generation == 0u) {
         turbo_free_ltv(&message);
         rc = TURBO_EPROTO;
@@ -1449,7 +1474,8 @@ int flowie_session_owner_record_restore(const flowie_session_config_t *config,
     } else if (type == 4u) {
       flowie_session_subscription_owned_t *subscription =
           (flowie_session_subscription_owned_t *)turbo_vec_at(&owner->subscriptions, option_index);
-      if (!subscription || value_size != 4u || value[0] > 2u || value[1] > 1u ||
+      if (!subscription || value_size != (record_minor >= 2u ? 8u : 4u) || value[0] > 2u ||
+          value[1] > 1u ||
           value[2] > 1u || value[3] > 2u) {
         turbo_free_ltv(&message);
         rc = TURBO_EPROTO;
@@ -1459,6 +1485,13 @@ int flowie_session_owner_record_restore(const flowie_session_config_t *config,
       subscription->no_local = value[1];
       subscription->retain_as_published = value[2];
       subscription->retain_handling = value[3];
+      subscription->subscription_identifier =
+          record_minor >= 2u ? flowie_session_record_read_u32(value + 4u) : 0u;
+      if (subscription->subscription_identifier > FLOWIE_MQTT_MAX_REMAINING_LENGTH) {
+        turbo_free_ltv(&message);
+        rc = TURBO_EPROTO;
+        goto fail;
+      }
       ++option_index;
     } else if (type == 5u) {
       flowie_session_inflight_t inflight;

@@ -33,7 +33,7 @@ install(FILES ${FLOWMQ_PROTOCOL_HEADERS}
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
-  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FlowMQConfig.cmake.in"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/FlowMQConfig.cmake.in"
   "${CMAKE_CURRENT_BINARY_DIR}/FlowMQConfig.cmake"
   INSTALL_DESTINATION "lib/cmake/FlowMQ")
 write_basic_package_version_file(

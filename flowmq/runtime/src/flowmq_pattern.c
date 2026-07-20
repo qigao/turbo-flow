@@ -40,8 +40,10 @@ int flowmq_patterns_compatible(flowmq_protocol_pattern_t local, flowmq_protocol_
 
 int flowmq_pattern_hello_validate(flowmq_protocol_pattern_t local,
                                   const flowmq_protocol_frame_t *hello) {
+  flowmq_protocol_security_t security;
   if (flowmq_pattern_validate(local) != TURBO_OK || !hello) return TURBO_EINVAL;
-  if (hello->kind != FLOWMQ_PROTOCOL_FRAME_HELLO || hello->payload.len != 0u ||
+  if (hello->kind != FLOWMQ_PROTOCOL_FRAME_HELLO ||
+      flowmq_protocol_security_decode(hello->payload, &security) != TURBO_OK ||
       !flowmq_patterns_compatible(local, hello->pattern) ||
       (hello->pattern == FLOWMQ_PROTOCOL_DEALER && hello->identity.len == 0u))
     return TURBO_EPROTO;
@@ -62,6 +64,13 @@ int flowmq_pattern_data_direction_validate(flowmq_protocol_pattern_t local,
 
 int flowmq_pattern_encode_hello(flowmq_protocol_pattern_t pattern, tstr_v identity, tstr_v topic,
                                 size_t max_frame_size, tstr_t *encoded) {
+  return flowmq_pattern_encode_hello_ex(pattern, identity, topic, (tstr_v){0}, max_frame_size,
+                                        encoded);
+}
+
+int flowmq_pattern_encode_hello_ex(flowmq_protocol_pattern_t pattern, tstr_v identity, tstr_v topic,
+                                   tstr_v security_payload, size_t max_frame_size,
+                                   tstr_t *encoded) {
   flowmq_protocol_frame_t frame;
   if (flowmq_pattern_validate(pattern) != TURBO_OK || !encoded) return TURBO_EINVAL;
   frame = (flowmq_protocol_frame_t){0};
@@ -69,6 +78,7 @@ int flowmq_pattern_encode_hello(flowmq_protocol_pattern_t pattern, tstr_v identi
   frame.pattern = pattern;
   frame.identity = identity;
   frame.topic = topic;
+  frame.payload = security_payload;
   return flowmq_protocol_encode_frame(&frame, max_frame_size, encoded);
 }
 

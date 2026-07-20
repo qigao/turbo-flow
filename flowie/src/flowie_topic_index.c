@@ -354,3 +354,131 @@ int flowie_topic_index_match(flowie_topic_index_t *index, flowie_mqtt_span_t top
 done:
   return rc;
 }
+
+static int flowie_topic_entries_visit(const turbo_vec_t *entries, flowie_topic_index_visit_fn visit,
+                                      void *ctx) {
+  if (!entries || !visit) return TURBO_EINVAL;
+  for (size_t i = 0u; i < turbo_vec_size(entries); ++i) {
+    const size_t *entry = (const size_t *)turbo_vec_at_const(entries, i);
+    int rc;
+    if (!entry) return TURBO_EPROTO;
+    rc = visit(ctx, *entry);
+    if (rc != TURBO_OK) return rc;
+  }
+  return TURBO_OK;
+}
+
+static int flowie_topic_node_visit_end(const flowie_topic_node_t *node,
+                                       flowie_topic_index_visit_fn visit, void *ctx) {
+  int rc;
+  if (!node) return TURBO_EPROTO;
+  rc = flowie_topic_entries_visit(&node->terminal_entries, visit, ctx);
+  return rc == TURBO_OK ? flowie_topic_entries_visit(&node->hash_entries, visit, ctx) : rc;
+}
+
+static int flowie_topic_index_visit_topic_node(const flowie_topic_node_t *node,
+                                               flowie_mqtt_span_t topic, size_t offset,
+                                               int first_level, flowie_topic_index_visit_fn visit,
+                                               void *ctx) {
+  flowie_topic_node_t *const *exact;
+  size_t end = offset;
+  tstr_v token;
+  int last;
+  int rc;
+  while (end < topic.size && topic.data[end] != '/')
+    ++end;
+  token = tstr_v_from_buf((const char *)topic.data + offset, end - offset);
+  last = end == topic.size;
+  if (!(first_level && topic.data[0] == '$')) {
+    rc = flowie_topic_entries_visit(&node->hash_entries, visit, ctx);
+    if (rc != TURBO_OK) return rc;
+  }
+  exact = (flowie_topic_node_t *const *)turbo_hash_map_get_const(&node->exact_children, &token);
+  if (exact && *exact) {
+    rc = last ? flowie_topic_node_visit_end(*exact, visit, ctx)
+              : flowie_topic_index_visit_topic_node(*exact, topic, end + 1u, 0, visit, ctx);
+    if (rc != TURBO_OK) return rc;
+  }
+  if (node->plus_child && !(first_level && topic.data[0] == '$')) {
+    rc = last ? flowie_topic_node_visit_end(node->plus_child, visit, ctx)
+              : flowie_topic_index_visit_topic_node(node->plus_child, topic, end + 1u, 0, visit,
+                                                    ctx);
+    if (rc != TURBO_OK) return rc;
+  }
+  return TURBO_OK;
+}
+
+int flowie_topic_index_visit_topic(const flowie_topic_index_t *index, flowie_mqtt_span_t topic,
+                                   flowie_topic_index_visit_fn visit, void *ctx) {
+  if (!flowie_mqtt_topic_name_validate(topic)) return TURBO_EINVAL;
+  return flowie_topic_index_visit_validated_topic(index, topic, visit, ctx);
+}
+
+int flowie_topic_index_visit_validated_topic(const flowie_topic_index_t *index,
+                                             flowie_mqtt_span_t topic,
+                                             flowie_topic_index_visit_fn visit, void *ctx) {
+  if (!index || !index->initialized || !index->root || !visit || !topic.data || topic.size == 0u)
+    return TURBO_EINVAL;
+  return flowie_topic_index_visit_topic_node(index->root, topic, 0u, 1, visit, ctx);
+}
+
+static int flowie_topic_index_visit_containing_node(const flowie_topic_node_t *node,
+                                                    flowie_mqtt_span_t requested, size_t offset,
+                                                    int first_level,
+                                                    flowie_topic_index_visit_fn visit, void *ctx) {
+  flowie_topic_node_t *const *exact;
+  size_t end = offset;
+  tstr_v token;
+  int requested_hash;
+  int requested_plus;
+  int requested_system;
+  int last;
+  int rc;
+  while (end < requested.size && requested.data[end] != '/')
+    ++end;
+  token = tstr_v_from_buf((const char *)requested.data + offset, end - offset);
+  last = end == requested.size;
+  requested_hash = token.len == 1u && token.data[0] == '#';
+  requested_plus = token.len == 1u && token.data[0] == '+';
+  requested_system = first_level && token.len != 0u && token.data[0] == '$';
+  if (!requested_system) {
+    rc = flowie_topic_entries_visit(&node->hash_entries, visit, ctx);
+    if (rc != TURBO_OK) return rc;
+  }
+  if (requested_hash) return TURBO_OK;
+  if (!requested_plus) {
+    exact = (flowie_topic_node_t *const *)turbo_hash_map_get_const(&node->exact_children, &token);
+    if (exact && *exact) {
+      rc = last ? flowie_topic_node_visit_end(*exact, visit, ctx)
+                : flowie_topic_index_visit_containing_node(*exact, requested, end + 1u, 0, visit,
+                                                           ctx);
+      if (rc != TURBO_OK) return rc;
+    }
+  }
+  if (node->plus_child && !requested_system) {
+    rc = last ? flowie_topic_node_visit_end(node->plus_child, visit, ctx)
+              : flowie_topic_index_visit_containing_node(node->plus_child, requested, end + 1u, 0,
+                                                         visit, ctx);
+    if (rc != TURBO_OK) return rc;
+  }
+  return TURBO_OK;
+}
+
+int flowie_topic_index_visit_containing_filters(const flowie_topic_index_t *index,
+                                                flowie_mqtt_span_t requested_filter,
+                                                flowie_topic_index_visit_fn visit, void *ctx) {
+  if (!flowie_mqtt_topic_filter_validate(requested_filter)) return TURBO_EINVAL;
+  return flowie_topic_index_visit_validated_containing_filters(index, requested_filter, visit, ctx);
+}
+
+int flowie_topic_index_visit_validated_containing_filters(const flowie_topic_index_t *index,
+                                                          flowie_mqtt_span_t requested_filter,
+                                                          flowie_topic_index_visit_fn visit,
+                                                          void *ctx) {
+  if (!index || !index->initialized || !index->root || !visit || !requested_filter.data ||
+      requested_filter.size == 0u)
+    return TURBO_EINVAL;
+  requested_filter = flowie_topic_filter_inner(requested_filter);
+  if (!requested_filter.data || requested_filter.size == 0u) return TURBO_EINVAL;
+  return flowie_topic_index_visit_containing_node(index->root, requested_filter, 0u, 1, visit, ctx);
+}

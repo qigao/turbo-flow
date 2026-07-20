@@ -2,6 +2,13 @@
 
 #include "turbo_error.h"
 #include "turbo_thread.h"
+#ifdef FLOWIE_SERVER_HAVE_HTTPS_AUTH
+  #include "turbo_flow_http_acl.h"
+  #include "turbo_flow_http_auth.h"
+#endif
+#ifdef FLOWIE_SERVER_HAVE_SQLITE_ACL
+  #include "turbo_flow_security_sqlite.h"
+#endif
 
 #include <signal.h>
 #include <stdio.h>
@@ -39,11 +46,32 @@ static int flowie_server_report(const flowie_worker_error_t *error) {
 
 int main(int argc, char **argv) {
   flowie_worker_runtime_config_t config = FLOWIE_WORKER_RUNTIME_CONFIG_INIT;
+#ifdef FLOWIE_SERVER_HAVE_HTTPS_AUTH
+  const turbo_flow_security_auth_provider_factory_t *auth_provider_factories[] = {
+      turbo_flow_http_auth_provider_factory()};
+#endif
+  const turbo_flow_security_policy_provider_factory_t *policy_provider_factories[2];
+  size_t policy_provider_factory_count = 0u;
   flowie_worker_error_t error = FLOWIE_WORKER_ERROR_INIT;
   flowie_worker_runtime_t *runtime = NULL;
   int check_only = 0;
   int result = EXIT_FAILURE;
   int rc;
+
+#ifdef FLOWIE_SERVER_HAVE_HTTPS_AUTH
+  config.auth_provider_factories = auth_provider_factories;
+  config.auth_provider_factory_count =
+      sizeof(auth_provider_factories) / sizeof(auth_provider_factories[0]);
+#endif
+#ifdef FLOWIE_SERVER_HAVE_SQLITE_ACL
+  policy_provider_factories[policy_provider_factory_count++] =
+      turbo_flow_security_sqlite_provider_factory();
+#endif
+#ifdef FLOWIE_SERVER_HAVE_HTTPS_AUTH
+  policy_provider_factories[policy_provider_factory_count++] = turbo_flow_http_acl_provider_factory();
+#endif
+  config.policy_provider_factories = policy_provider_factories;
+  config.policy_provider_factory_count = policy_provider_factory_count;
 
   for (int index = 1; index < argc; ++index) {
     if (strcmp(argv[index], "--check") == 0) {

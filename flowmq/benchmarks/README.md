@@ -16,6 +16,7 @@ Run all cases or select one latency/throughput profile:
 .\build\Msvc-Release\bin\bench_fmq.exe --filter "DEALER ROUTER"
 .\build\Msvc-Release\bin\bench_fmq.exe --filter "PUB SUB"
 .\build\Msvc-Release\bin\bench_fmq.exe --filter "PUSH PULL"
+.\build\Msvc-Release\bin\bench_fmq.exe --filter "async micro-batch"
 ```
 
 Enable the benchmark-only send owner-lane profiler for one run:
@@ -37,16 +38,32 @@ establishment, and warmup are outside all timed blocks. Stable `FMQ_BENCH_RESULT
 throughput plus nearest-rank P50/P95/P99 round-trip or batch latency for same-runner trend
 comparisons.
 
-Profiled runs add one `FMQ_PROFILE_RESULT` line. All values are per-request averages in
-nanoseconds: `enqueue` ends when the request becomes visible in the send queue; `owner_wait` ends
-when the owner drain dequeues it; `post_call` is the overlapping subset spent inside `coro_post`;
-`owner_dispatch` ends at the first socket send; `socket_send` spans the request's socket writes;
-`socket_thread_cpu` is CPU consumed by the owner OS thread during that wall-clock interval;
-`socket_estimated_off_cpu` is `socket_send - socket_thread_cpu`, clamped to zero; `completion` ends
-immediately before completion notification; `waiter_wake` ends when the synchronous sender
-resumes. Because the coroutine may yield while other owner-lane work runs, the CPU value can
-include unrelated loop work and the off-CPU value is a conservative estimate rather than exact
-per-coroutine time. A platform without a thread CPU clock reports `socket_cpu_samples=0`.
+The asynchronous micro-batch cases also wait for every accepted per-message completion. They
+therefore measure the facade delivery boundary plus receiver observation, rather than queue
+admission alone. Their configured batch size matches the 64-message benchmark burst.
+
+Profiled runs add an `FMQ_PROFILE_RESULT` line. Its values are per-request averages in nanoseconds:
+`enqueue` ends when the request becomes visible in the send queue; `owner_wait` ends when the owner
+drain dequeues it; `post_call` is the overlapping subset spent inside `coro_post`; `owner_dispatch`
+ends at the first socket send; `completion` ends immediately before completion notification; and
+`waiter_wake` ends when the synchronous sender resumes. Serialized sends also report request-level
+`socket_send`, `socket_thread_cpu`, and `socket_estimated_off_cpu`. A batch shares one socket write,
+so these request-level socket counters exclude shared writes instead of attributing the same wall
+time to every request.
+
+Batch and asynchronous micro-batch runs add `FMQ_PROFILE_BATCH_RESULT`. It reports actual socket
+call, frame, and iovec-segment totals plus per-call socket wall time, owner OS-thread CPU time, and
+estimated off-CPU time. Its lifecycle averages are per batch: `build` covers the entire request
+build through queue visibility; `payload_prepare` covers buffer allocation/retention, copying, and
+message-view setup; `graph_publish` covers the synchronous batch call, including its producer;
+`adapter_consume` is the subset spent encoding and constructing FlowMQ send requests;
+`graph_runtime` is the remainder after producer and adapter work; `enqueue_prepare` covers iovec preparation
+and queue commit through visibility; `owner_wait` ends when the owner dequeues the batch;
+`owner_work` covers owner-side selection, authorization, socket calls, and completion; and
+`waiter_wake` ends when the submitting thread resumes. Because the coroutine may yield while other
+owner-lane work runs, the CPU value can include unrelated loop work and the off-CPU value is a
+conservative estimate rather than exact per-coroutine time. A platform without a thread CPU clock
+reports `socket_cpu_samples=0`.
 Windows reports thread CPU in coarse accounting ticks, so prefer the longer one-way cases when
 interpreting CPU/off-CPU ratios; the profiler derives off-CPU from aggregate totals rather than
 subtracting individual messages.

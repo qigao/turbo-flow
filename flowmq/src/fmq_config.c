@@ -38,8 +38,7 @@ static const char *const FLOW_FMQ_JSON_TRANSPORTS[] = {"tcp",  "tls", "udp", "kc
                                                        "pipe", "ws",  "wss"};
 static const char *const FLOW_FMQ_JSON_METADATA_POLICIES[] = {"static", "inherit", "content"};
 static const char *const FLOW_FMQ_JSON_ADMISSION_POLICIES[] = {"fail", "block", "drop_oldest"};
-static const char *const FLOW_FMQ_JSON_SLOW_PEER_POLICIES[] = {"fail", "drop_oldest",
-                                                               "disconnect"};
+static const char *const FLOW_FMQ_JSON_SLOW_PEER_POLICIES[] = {"fail", "drop_oldest", "disconnect"};
 static const char *const FLOW_FMQ_JSON_FEC_BACKENDS[] = {"none", "wirehair"};
 
 #define FLOW_FMQ_JSON_FIELD(member, field_type, max_value)                                         \
@@ -125,10 +124,10 @@ static const flow_fmq_json_field_t FLOW_FMQ_JSON_FIELDS[] = {
     FLOW_FMQ_JSON_SENTINEL_FIELD(frame_admission_timeout_ms, "unbounded", UINT64_MAX),
     FLOW_FMQ_JSON_FIELD(frame_linger_ms, FLOW_FMQ_JSON_U64, UINT64_MAX)};
 
-#define FLOW_FMQ_FANOUT_JSON_FIELD(member, field_type, max_value)                                 \
-  {#member, field_type, offsetof(turbo_flow_fmq_fanout_config_t, member), max_value, NULL, 0u, 0, \
-   NULL, 0u}
-#define FLOW_FMQ_FANOUT_JSON_ENUM_FIELD(member, enum_values)                                      \
+#define FLOW_FMQ_FANOUT_JSON_FIELD(member, field_type, max_value)                                  \
+  {#member, field_type, offsetof(turbo_flow_fmq_fanout_config_t, member), max_value, NULL, 0u, 0,  \
+   NULL,    0u}
+#define FLOW_FMQ_FANOUT_JSON_ENUM_FIELD(member, enum_values)                                       \
   {#member,                                                                                        \
    FLOW_FMQ_JSON_ENUM,                                                                             \
    offsetof(turbo_flow_fmq_fanout_config_t, member),                                               \
@@ -252,9 +251,10 @@ static int flow_fmq_json_assign(void *object, const flow_fmq_json_field_t *field
   }
 }
 
-int turbo_flow_fmq_register_resolved_adapter_ex(
+static int flow_fmq_register_resolved_adapter_internal(
     turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
-    const turbo_flow_coronet_execution_binding_t *execution, turbo_flow_config_error_t *error) {
+    const turbo_flow_coronet_execution_binding_t *execution,
+    const turbo_flow_fmq_security_binding_t *security, turbo_flow_config_error_t *error) {
   turbo_json_doc_t *document = NULL;
   json_value_t *adapters;
   json_value_t *adapter;
@@ -267,6 +267,11 @@ int turbo_flow_fmq_register_resolved_adapter_ex(
   int fanout_requested = 0;
   int fanout_hwm_seen = 0;
   int fanout_policy_seen = 0;
+  const char *security_realm = NULL;
+  const char *auth_provider = NULL;
+  const char *auth_method = NULL;
+  const char *secret_reference = NULL;
+  int security_metadata_seen = 0;
   int rc;
   if (!flow || !name || !name[0] || !resolved || !execution || !error ||
       error->size < sizeof(*error)) {
@@ -302,6 +307,23 @@ int turbo_flow_fmq_register_resolved_adapter_ex(
     const flow_fmq_json_field_t *field = field_name ? flow_fmq_json_field_find(field_name) : NULL;
     const flow_fmq_json_field_t *fanout_field =
         field_name ? flow_fmq_fanout_json_field_find(field_name) : NULL;
+    if (field_name &&
+        (strcmp(field_name, "security_realm") == 0 || strcmp(field_name, "auth_provider") == 0 ||
+         strcmp(field_name, "auth_method") == 0 || strcmp(field_name, "secret_reference") == 0)) {
+      const char *text;
+      if (turbo_json_type(value) != TURBO_JSON_STRING || !(text = turbo_json_string(value)) ||
+          !text[0]) {
+        rc = flow_fmq_json_error(error, TURBO_EINVAL, name, field_name,
+                                 "FMQ security reference must be a non-empty string");
+        goto done;
+      }
+      if (strcmp(field_name, "security_realm") == 0) security_realm = text;
+      else if (strcmp(field_name, "auth_provider") == 0) auth_provider = text;
+      else if (strcmp(field_name, "auth_method") == 0) auth_method = text;
+      else secret_reference = text;
+      security_metadata_seen = 1;
+      continue;
+    }
     if (fanout_field) {
       rc = flow_fmq_json_assign(&fanout, fanout_field, value);
       if (rc != TURBO_OK) {
@@ -331,15 +353,59 @@ int turbo_flow_fmq_register_resolved_adapter_ex(
                              "peer HWM and slow_peer_policy must be configured together");
     goto done;
   }
-  rc = fanout_requested
-           ? turbo_flow_fmq_register_fanout_adapter_ex(flow, name, &config, &fanout, execution)
-           : turbo_flow_fmq_register_adapter_ex(flow, name, &config, execution);
+  if (security_metadata_seen && !security) {
+    rc = flow_fmq_json_error(error, TURBO_EPERM, name, NULL,
+                             "FMQ security metadata requires an explicit composed binding");
+    goto done;
+  }
+  if (security_metadata_seen && config.mode == TURBO_FLOW_FMQ_BIND) {
+    if (!security_realm || !auth_provider || !auth_method || secret_reference ||
+        !security->realm_channel || strcmp(security->realm_channel, security_realm) != 0 ||
+        !security->auth_method || strcmp(security->auth_method, auth_method) != 0) {
+      rc = flow_fmq_json_error(error, TURBO_EINVAL, name, NULL,
+                               "BIND security metadata does not match the injected binding");
+      goto done;
+    }
+  } else if (security_metadata_seen && config.mode == TURBO_FLOW_FMQ_CONNECT) {
+    if (security_realm || auth_provider || !auth_method || !secret_reference ||
+        !security->auth_method || strcmp(security->auth_method, auth_method) != 0 ||
+        !security->secret_reference || strcmp(security->secret_reference, secret_reference) != 0) {
+      rc = flow_fmq_json_error(error, TURBO_EINVAL, name, NULL,
+                               "CONNECT security metadata does not match the injected binding");
+      goto done;
+    }
+  }
+  if (fanout_requested) {
+    rc = security
+             ? turbo_flow_fmq_register_secure_fanout_adapter_ex(flow, name, &config, &fanout,
+                                                                execution, security)
+             : turbo_flow_fmq_register_fanout_adapter_ex(flow, name, &config, &fanout, execution);
+  } else {
+    rc = security
+             ? turbo_flow_fmq_register_secure_adapter_ex(flow, name, &config, execution, security)
+             : turbo_flow_fmq_register_adapter_ex(flow, name, &config, execution);
+  }
   if (rc != TURBO_OK)
     rc = flow_fmq_json_error(error, rc, name, NULL, "FMQ configuration validation failed");
 
 done:
   turbo_free_json(&document);
   return rc;
+}
+
+int turbo_flow_fmq_register_resolved_adapter_ex(
+    turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
+    const turbo_flow_coronet_execution_binding_t *execution, turbo_flow_config_error_t *error) {
+  return flow_fmq_register_resolved_adapter_internal(flow, name, resolved, execution, NULL, error);
+}
+
+int turbo_flow_fmq_register_resolved_secure_adapter_ex(
+    turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
+    const turbo_flow_coronet_execution_binding_t *execution,
+    const turbo_flow_fmq_security_binding_t *security, turbo_flow_config_error_t *error) {
+  if (!security) return TURBO_EINVAL;
+  return flow_fmq_register_resolved_adapter_internal(flow, name, resolved, execution, security,
+                                                     error);
 }
 
 int turbo_flow_fmq_register_resolved_adapter(turbo_flow_t *flow, const char *name,
@@ -350,4 +416,16 @@ int turbo_flow_fmq_register_resolved_adapter(turbo_flow_t *flow, const char *nam
   execution.size = sizeof(execution);
   execution.kind = TURBO_FLOW_CORONET_EXECUTION_PRIVATE;
   return turbo_flow_fmq_register_resolved_adapter_ex(flow, name, resolved, &execution, error);
+}
+
+int turbo_flow_fmq_register_resolved_secure_adapter(
+    turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
+    const turbo_flow_fmq_security_binding_t *security, turbo_flow_config_error_t *error) {
+  turbo_flow_coronet_execution_binding_t execution;
+  if (!security) return TURBO_EINVAL;
+  memset(&execution, 0, sizeof(execution));
+  execution.size = sizeof(execution);
+  execution.kind = TURBO_FLOW_CORONET_EXECUTION_PRIVATE;
+  return turbo_flow_fmq_register_resolved_secure_adapter_ex(flow, name, resolved, &execution,
+                                                            security, error);
 }
