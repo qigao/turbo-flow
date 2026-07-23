@@ -29,7 +29,7 @@ endif()
 cmake_add_test(
   test_fmq_broker
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_fmq_broker.c
-  LIBS TurboFlow::FMQ TurboFlow::Queue TurboFlow::Flow TurboUtils::TinyTest
+  LIBS TurboFlow::FMQ TurboFlow::Flow TurboUtils::TinyTest
   FOLDER "flowmq/tests")
 
 cmake_add_test(

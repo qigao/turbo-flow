@@ -42,10 +42,12 @@ int flowie_control_auth_cache_create(const flowie_control_auth_cache_config_t *c
 void flowie_control_auth_cache_destroy(flowie_control_auth_cache_t *cache);
 
 /**
- * Verify a credential using a positive cache and the SQLite fact store.
+ * Verify a credential using a bounded positive/negative cache and the SQLite fact store.
  *
  * A cache candidate is accepted only after the current user and credential revisions are read from
  * the store. On a miss or revision change, the store performs the full Argon2id verification.
+ * Explicit permission failures are cached for the configured TTL; storage/provider errors are
+ * never cached.
  */
 int flowie_control_auth_cache_verify(flowie_control_auth_cache_t *cache,
                                      flowie_control_store_t *store, const char *root_group_id,

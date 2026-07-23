@@ -2,13 +2,18 @@
 
 本文面向使用仓库内置 `flowie_server` 或 `flowie_supervisor` 部署 MQTT 服务的运维人员和应用开发者。
 Flowie 服务端支持 MQTT 3.1、3.1.1 与 5，监听 transport 支持 TCP、TLS、WS、WSS 和 Pipe。
+本文中的 provider、backend、adapter、data source、data sink 和 session store 均采用
+[配置式 Broker 概念与术语](CONFIGURED_BROKER_CONCEPTS.md)中的定义。
 
 ## 1. 服务端的两个输入
 
 Flowie 将部署事实与数据流拓扑分开：
 
-- YAML 保存 endpoint、Queue、RuleSet、认证/ACL provider、容量和超时等部署配置。
+- YAML 保存 endpoint、Queue、可选 RuleSet、认证/ACL provider、容量和超时等部署配置。
 - `.flow` 保存 source、stage、adapter、operation 和边的关系。
+
+这里的完整 `flowie_server` 配置式 broker 才是基于 TurboFlow 的典型应用。协议库本身没有
+Graph；单独注册的 Flowie endpoint 只是可复用组件，除非调用方进一步提供完整产品装配。
 
 可直接使用仓库中的完整示例：
 
@@ -78,22 +83,48 @@ build\Msvc-Release\bin\flowie_supervisor.exe `
 
 ## 5. Endpoint 与 Graph
 
-最小 profile 必须能解析到 endpoint、Queue sink/source、RuleSet 和 output。示例 Graph 的数据流是：
+Flowie 的 MQTT broker pipeline 分成协议 owner 阶段和应用 graph 阶段。协议 owner 在连接 lane
+完成 framing、协议/大小校验、CONNECT 认证、操作 ACL 和 session/inflight admission；只有通过这些
+边界的 PUBLISH 才会被 materialize 为拥有 `mem_buffer_t` 的 `turbo_flow_msg_t`。因此未经认证的
+数据不会进入 TurboFlow Policy 或任意用户 stage。
+
+Graph 可以按部署需要组合以下阶段：
 
 ```text
-MQTT endpoint -> accepted Queue -> RuleSet -> MQTT fan-out
-                                      `----> application socket output
+MQTT endpoint
+  -> protocol/auth/ACL/inflight owner boundary
+  -> turbo_flow_msg_t
+  -> optional TurboFlow Policy filter/route/transform
+  -> optional business data sink: Redis / PostgreSQL / HTTP / socket
+  -> optional after-process stage
+  -> MQTT fan-out / socket / HTTP / Redis output
+  -> settlement -> protocol ACK
 ```
 
-完整定义见 [flowie.flow](examples/flowie.flow)。修改 settlement 语义时必须同步修改 Queue 与 Graph：
+最小 profile 必须能解析到 endpoint；只有 Graph 引用 `rules.apply` 时
+才需要 `rule_set`。业务 data source/data sink 不放入 profile，而是由 Graph 直接引用对应 YAML adapter。仓库示例采用
+`endpoint -> RuleSet -> [MQTT fan-out, socket output]`，完整定义见
+[flowie.flow](examples/flowie.flow)。`store` 可以放在 RuleSet 前后，但必须在 `.flow` 中显式
+连接；前者保存原始 admitted packet，后者保存过滤/变换后的消息，二者不是同一种语义。
 
-- `received`：收到并验证 packet 后确认。
-- `accepted`：有界 Queue 接管后确认。
-- `processed`：Graph attempt 完成后确认。
-- `durable`：SQLite transaction 或 Redis XADD 提交后确认。
+`session_store` 不是业务 data sink，也不是用户 Graph 节点。它只由 MQTT session owner 调用，
+保存 session、subscription、inflight、Will 和 retained 等协议事实；普通 PUBLISH 业务正文只有
+在 Graph 显式连接到 data sink 时才会成为外部业务事实。
 
-这些边界不能互相模拟。切换 Queue backend 或 settlement 时，应停止 endpoint、排空流量、同时部署 YAML
-与 Graph，再执行 `--check` 后启动。
+settlement 是协议 owner 的 ACK prerequisite，不是普通 stage 返回值：
+
+- `received`：收到并验证 packet，兼容旧行为；不要求 graph 成功。
+- `accepted`：所选 graph admission stage 显式确认已接管消息。
+- `processed`：本次同步 graph publication 的全部已选择分支完成；任一已选择分支失败都不会 ACK。
+- `durable`：显式 durable store 成功提交，例如 Redis Stream `XADD` 或 record-store commit。
+
+TurboFlow graph 可以处理任意 provider 转换出的 `turbo_flow_msg_t`；当前 Flowie endpoint 只将
+admitted PUBLISH 暴露给 Graph，不能把 CONNECT/AUTH 等仍由协议 owner 管理的控制事务
+直接变成用户 stage。TurboFlow Policy 也不能伪造 MQTT ACK 或推进 session state。若 after-process 不应增加
+ACK 延迟，应先在显式 accepted/durable handoff 完成 settlement，再从独立消费路径执行；不能在
+同一次同步 publication 中静默忽略 branch failure。切换 save/store 位置、
+store backend 或 settlement 时，应停止 endpoint、排空或显式处置 inflight work，同时部署 YAML
+与 Graph，再执行 `--check` 后启动；这些字段不支持热重载。
 
 ## 6. TCP、TLS、WS、WSS 与 Pipe
 
@@ -116,8 +147,14 @@ config:
 
 证书缺失或无法加载时启动失败。私钥文件应只允许服务账户读取，不得写入 YAML、日志或镜像的公共层。
 
-WS/WSS 使用 WebSocket subprotocol `mqtt`。公开 Flowie client 的默认 path 是 `/mqtt`；服务端与反向代理
-应保持 path 和 subprotocol 一致。
+WS/WSS 的 path 是精确匹配，不做前缀或大小写归一化。客户端必须在 Upgrade 请求中提供
+`Sec-WebSocket-Protocol: mqtt`；缺失或不包含 `mqtt` token 的请求会在 MQTT handler 和 session admission
+之前关闭。公开 Flowie client 的默认 path 是 `/mqtt`，反向代理转发时不得改写 path 或移除 subprotocol。
+
+MQTT packet 只能放在 WebSocket binary data frame 中；text data frame 会以 close code 1003 拒绝。单帧及
+分片重组后的累计 payload 都受 endpoint `max_packet_size` 限制，超限会以 close code 1009 拒绝。非法
+control/close frame 会关闭连接。这些拒绝不会创建 MQTT session，也不会使 listener 退出；后续合法客户端
+仍可连接。反向代理的 frame/message 上限应不高于 Flowie 的上限，避免代理层积累 Flowie 必然拒绝的数据。
 
 ## 7. HTTPS 认证、ACL 与 mTLS
 
@@ -188,11 +225,16 @@ MQTT 3.1/3.1.1 没有 MQTT 5 AUTH exchange，使用普通认证结果和各自�
 `manage_sessions: true` 启用受限 session/retained 状态。未配置 `session_store` 时状态只在进程内有效。
 持久化时使用 YAML 中独立的 `record_store` channel：
 
-- SQLite：单机、文件权限可控的部署。
 - Redis：多实例共享或外部持久化部署。
+- PostgreSQL：SMB 部署中的事务型 session/retained 持久化。
 
-Redis/SQLite 在这里是 provider，由配置选择，不是写死在 Flowie 领域代码中的认证数据库。认证用户数据仍
-只能由 HTTPS 认证服务管理。
+Redis/PostgreSQL 在这里是 `session_store` 的 record-store backend，由配置选择，不是 Graph data
+source/sink，也不是写死在 Flowie 领域代码中的认证数据库。认证用户数据仍只能由 HTTPS 认证服务管理。
+
+可直接交付的组合示例位于 `examples/products/`：`flowie-dev.*` 使用全内存状态；
+`flowie-smb.*` 使用 PostgreSQL record store 保存 session/retained，并通过 PostgreSQL outbox
+保存业务 PUBLISH。SMB 的 QoS 1/2 ACK 只在 outbox INSERT 事务 COMMIT 后生成；独立 source
+回放记录，Graph 成功后删行，失败则保留并在后续重试，因此交付语义为 at-least-once。
 
 ## 10. 发布前检查表
 
@@ -203,5 +245,6 @@ Redis/SQLite 在这里是 provider，由配置选择，不是写死在 Flowie �
 5. 验证连接、session、subscription、inflight、retained、Queue 和输出容量上限。
 6. 验证慢订阅者策略和 settlement 终态。
 7. 若使用 Redis，执行启用 Redis live gate 的部署测试。
+8. 若使用 PostgreSQL，设置 `TURBO_FLOW_PGSQL_TEST_CONNINFO` 并执行 PostgreSQL live gate。
 
 协议与尚未声明的产品边界见 [RELEASE_GATE.md](RELEASE_GATE.md)。

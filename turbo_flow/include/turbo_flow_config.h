@@ -146,10 +146,30 @@ CXX_C_API int turbo_flow_resolved_config_profile_adapter(const turbo_flow_resolv
                                                          const char *profile, const char *parameter,
                                                          const char **adapter_name);
 
+/**
+ * Resolve an optional profile adapter parameter.
+ *
+ * A missing parameter returns TURBO_OK with `adapter_name` set to NULL. Unknown
+ * profiles and references that resolve to a channel instead of an adapter fail.
+ */
+CXX_C_API int turbo_flow_resolved_config_profile_adapter_optional(
+    const turbo_flow_resolved_config_t *config, const char *profile, const char *parameter,
+    const char **adapter_name);
+
 /** Resolve one profile parameter to a concrete channel resource name. */
 CXX_C_API int turbo_flow_resolved_config_profile_channel(const turbo_flow_resolved_config_t *config,
                                                          const char *profile, const char *parameter,
                                                          const char **channel_name);
+
+/**
+ * Resolve an optional profile channel parameter.
+ *
+ * A missing parameter returns TURBO_OK with `channel_name` set to NULL. Unknown
+ * profiles and references that resolve to an adapter instead of a channel fail.
+ */
+CXX_C_API int turbo_flow_resolved_config_profile_channel_optional(
+    const turbo_flow_resolved_config_t *config, const char *profile, const char *parameter,
+    const char **channel_name);
 
 /** Project one named channel without exposing the resolver's JSON representation. */
 CXX_C_API int turbo_flow_resolved_config_channel(const turbo_flow_resolved_config_t *config,

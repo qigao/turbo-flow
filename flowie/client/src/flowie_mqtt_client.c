@@ -3,6 +3,7 @@
 #include "CoroNet/turbo_coro_context.h"
 #include "CoroNet/turbo_coro_socket.h"
 #include "flowie_mqtt_protocol.h"
+#include "monocypher.h"
 #include "turbo_byte_buffer.h"
 #include "turbo_deque.h"
 #include "turbo_error.h"
@@ -10,7 +11,6 @@
 #include "turbo_str.h"
 #include "turbo_thread.h"
 #include "turbo_vec.h"
-#include "monocypher.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -32,6 +32,7 @@ typedef enum flowie_mqtt_client_command_type_e {
   FLOWIE_MQTT_CLIENT_COMMAND_SUBSCRIBE,
   FLOWIE_MQTT_CLIENT_COMMAND_UNSUBSCRIBE,
   FLOWIE_MQTT_CLIENT_COMMAND_PING,
+  FLOWIE_MQTT_CLIENT_COMMAND_AUTH,
   FLOWIE_MQTT_CLIENT_COMMAND_DISCONNECT
 } flowie_mqtt_client_command_type_t;
 
@@ -49,7 +50,7 @@ typedef struct flowie_mqtt_client_command_s {
     struct {
       uint8_t reason_code;
       flowie_mqtt_span_t properties;
-    } disconnect;
+    } control;
   } packet;
 } flowie_mqtt_client_command_t;
 
@@ -68,11 +69,18 @@ struct flowie_mqtt_client_s {
   tstr_t tls_cert_file;
   tstr_t tls_key_file;
   tstr_t tls_key_password;
+  tstr_t auth_method;
   int tls_configured;
   int port;
   uint64_t timeout_ms;
   size_t max_packet_size;
+  size_t outbound_max_packet_size;
   size_t max_inbound_qos2;
+  uint16_t server_receive_maximum;
+  uint16_t server_topic_alias_maximum;
+  uint16_t server_keep_alive;
+  uint8_t server_maximum_qos;
+  uint8_t server_retain_available;
   flowie_mqtt_client_topic_handler_t *topic_handlers;
   size_t topic_handler_count;
   flowie_mqtt_client_completion_fn on_connect;
@@ -80,6 +88,8 @@ struct flowie_mqtt_client_s {
   flowie_mqtt_client_completion_fn on_subscribe;
   flowie_mqtt_client_completion_fn on_unsubscribe;
   flowie_mqtt_client_completion_fn on_ping;
+  flowie_mqtt_client_auth_challenge_fn on_auth_challenge;
+  flowie_mqtt_client_completion_fn on_auth;
   flowie_mqtt_client_completion_fn on_disconnect;
   flowie_mqtt_client_error_fn on_error;
   void *user_data;
@@ -124,6 +134,9 @@ static int flowie_mqtt_client_unsubscribe_operation(flowie_mqtt_client_t *client
                                                     const flowie_mqtt_unsubscribe_packet_t *packet,
                                                     flowie_mqtt_control_packet_view_t *unsuback);
 static int flowie_mqtt_client_ping_operation(flowie_mqtt_client_t *client);
+static int flowie_mqtt_client_auth_operation(flowie_mqtt_client_t *client,
+                                             flowie_mqtt_span_t properties,
+                                             flowie_mqtt_control_packet_view_t *auth);
 static int flowie_mqtt_client_disconnect_operation(flowie_mqtt_client_t *client,
                                                    uint8_t reason_code,
                                                    flowie_mqtt_span_t properties);
@@ -150,7 +163,7 @@ static int flowie_mqtt_client_transport_valid(flowie_mqtt_client_transport_t tra
 
 static const flowie_mqtt_client_tls_config_t *
 flowie_mqtt_client_tls_config(const flowie_mqtt_client_config_t *config) {
-  return config && config->abi_version == FLOWIE_MQTT_CLIENT_ABI_V6 ? &config->tls : NULL;
+  return config && config->abi_version >= FLOWIE_MQTT_CLIENT_ABI_V6 ? &config->tls : NULL;
 }
 
 static int flowie_mqtt_client_tls_string_valid(const char *value) {
@@ -166,9 +179,10 @@ static int flowie_mqtt_client_config_validate(const flowie_mqtt_client_config_t 
   if (!config ||
       !((config->abi_version == FLOWIE_MQTT_CLIENT_ABI_V5 &&
          config->size == offsetof(flowie_mqtt_client_config_t, tls)) ||
-        (config->abi_version == FLOWIE_MQTT_CLIENT_ABI_V6 && config->size >= sizeof(*config))) ||
-      !config->host || config->host[0] == '\0' ||
-      config->port < 1 || config->port > 65535 ||
+        (config->abi_version == FLOWIE_MQTT_CLIENT_ABI_V6 &&
+         config->size == offsetof(flowie_mqtt_client_config_t, on_auth_challenge)) ||
+        (config->abi_version == FLOWIE_MQTT_CLIENT_ABI_V7 && config->size >= sizeof(*config))) ||
+      !config->host || config->host[0] == '\0' || config->port < 1 || config->port > 65535 ||
       !flowie_mqtt_client_transport_valid(config->transport))
     return TURBO_EINVAL;
   if ((config->transport == FLOWIE_MQTT_CLIENT_TRANSPORT_WS ||
@@ -197,6 +211,8 @@ static int flowie_mqtt_client_config_validate(const flowie_mqtt_client_config_t 
       return TURBO_EINVAL;
   }
   if (config->topic_handlers.count != 0u && !config->topic_handlers.data) return TURBO_EINVAL;
+  if (config->abi_version < FLOWIE_MQTT_CLIENT_ABI_V7 && config->size >= sizeof(*config))
+    return TURBO_EINVAL;
   for (size_t i = 0u; i < config->topic_handlers.count; ++i) {
     const flowie_mqtt_client_topic_handler_t *handler = &config->topic_handlers.data[i];
     if (!handler->on_message || !handler->filter.data || handler->filter.size == 0u ||
@@ -209,6 +225,61 @@ static int flowie_mqtt_client_config_validate(const flowie_mqtt_client_config_t 
         return TURBO_EINVAL;
     }
   }
+  return TURBO_OK;
+}
+
+static int flowie_mqtt_client_auth_method_get(const flowie_mqtt_property_block_view_t *properties,
+                                              flowie_mqtt_span_t *method) {
+  flowie_mqtt_property_iterator_t iterator = FLOWIE_MQTT_PROPERTY_ITERATOR_INIT;
+  flowie_mqtt_property_view_t property = FLOWIE_MQTT_PROPERTY_VIEW_INIT;
+  int found = 0;
+  int rc;
+  if (!properties || !method) return TURBO_EINVAL;
+  *method = (flowie_mqtt_span_t){0};
+  if (properties->values.size == 0u) return TURBO_OK;
+  rc = flowie_mqtt_property_iterator_init(properties, &iterator);
+  if (rc != FLOWIE_MQTT_PARSE_OK) return flowie_mqtt_client_parse_status(rc);
+  while ((rc = flowie_mqtt_property_iterator_next(&iterator, &property)) == FLOWIE_MQTT_PARSE_OK) {
+    if (property.identifier != FLOWIE_MQTT_PROPERTY_AUTHENTICATION_METHOD) continue;
+    if (found || property.value.size == 0u) return TURBO_EPROTO;
+    *method = property.value;
+    found = 1;
+  }
+  return rc == FLOWIE_MQTT_PARSE_NEED_MORE ? TURBO_OK : flowie_mqtt_client_parse_status(rc);
+}
+
+static int
+flowie_mqtt_client_auth_method_matches(const flowie_mqtt_client_t *client,
+                                       const flowie_mqtt_property_block_view_t *properties,
+                                       int required) {
+  flowie_mqtt_span_t method = {0};
+  int rc;
+  if (!client || !properties) return TURBO_EINVAL;
+  rc = flowie_mqtt_client_auth_method_get(properties, &method);
+  if (rc != TURBO_OK) return rc;
+  if (method.size == 0u) return required ? TURBO_EPROTO : TURBO_OK;
+  if (!client->auth_method || method.size != tstr_len(client->auth_method) ||
+      memcmp(method.data, client->auth_method, method.size) != 0)
+    return TURBO_EPROTO;
+  return TURBO_OK;
+}
+
+static int flowie_mqtt_client_auth_method_select(flowie_mqtt_client_t *client,
+                                                 flowie_mqtt_span_t properties) {
+  flowie_mqtt_property_block_view_t block = FLOWIE_MQTT_PROPERTY_BLOCK_VIEW_INIT;
+  flowie_mqtt_span_t method = {0};
+  tstr_t selected = NULL;
+  int rc;
+  if (!client) return TURBO_EINVAL;
+  block.values = properties;
+  rc = flowie_mqtt_client_auth_method_get(&block, &method);
+  if (rc != TURBO_OK) return rc;
+  if (method.size != 0u) {
+    selected = tstr_new_len(method.data, method.size);
+    if (!selected) return TURBO_ENOMEM;
+  }
+  tstr_freep(&client->auth_method);
+  client->auth_method = selected;
   return TURBO_OK;
 }
 
@@ -230,6 +301,13 @@ static void flowie_mqtt_client_transport_close(flowie_mqtt_client_t *client, int
   client->state = FLOWIE_MQTT_CLIENT_DISCONNECTED;
   atomic_store_explicit(&client->public_connected, 0, memory_order_release);
   client->version = FLOWIE_MQTT_VERSION_UNSPECIFIED;
+  tstr_freep(&client->auth_method);
+  client->outbound_max_packet_size = client->max_packet_size;
+  client->server_receive_maximum = UINT16_MAX;
+  client->server_topic_alias_maximum = 0u;
+  client->server_keep_alive = 0u;
+  client->server_maximum_qos = 2u;
+  client->server_retain_available = 1u;
   client->pending_packet_size = 0u;
   if (reset_framing && client->framing_initialized) turbo_byte_buffer_reset(&client->framing);
   if (client->qos2_initialized) flowie_mqtt_packet_id_set_t_clear(&client->inbound_qos2);
@@ -279,8 +357,9 @@ static void flowie_mqtt_client_copy_span(flowie_mqtt_span_t source, uint8_t **cu
   *cursor += source.size;
 }
 
-static int flowie_mqtt_client_clone_topic_handlers(
-    flowie_mqtt_client_t *client, const flowie_mqtt_client_topic_handler_map_t *map) {
+static int
+flowie_mqtt_client_clone_topic_handlers(flowie_mqtt_client_t *client,
+                                        const flowie_mqtt_client_topic_handler_map_t *map) {
   flowie_mqtt_client_topic_handler_t *handlers;
   size_t array_size = 0u;
   size_t total = 0u;
@@ -288,8 +367,8 @@ static int flowie_mqtt_client_clone_topic_handlers(
   int rc;
   if (!client || !map) return TURBO_EINVAL;
   if (map->count == 0u) return TURBO_OK;
-  rc = flowie_mqtt_client_size_array(&total, map->count,
-                                     sizeof(flowie_mqtt_client_topic_handler_t));
+  rc =
+      flowie_mqtt_client_size_array(&total, map->count, sizeof(flowie_mqtt_client_topic_handler_t));
   if (rc != TURBO_OK) return rc;
   array_size = total;
   for (size_t i = 0u; i < map->count; ++i) {
@@ -387,9 +466,9 @@ static int flowie_mqtt_client_clone_publish(flowie_mqtt_client_command_t *comman
   return TURBO_OK;
 }
 
-static int flowie_mqtt_client_clone_publish_topic(
-    flowie_mqtt_client_command_t *command, flowie_mqtt_version_t version,
-    const flowie_mqtt_client_publish_topic_t *topic) {
+static int flowie_mqtt_client_clone_publish_topic(flowie_mqtt_client_command_t *command,
+                                                  flowie_mqtt_version_t version,
+                                                  const flowie_mqtt_client_publish_topic_t *topic) {
   flowie_mqtt_publish_packet_t packet = FLOWIE_MQTT_PUBLISH_PACKET_INIT;
   if (!topic) return TURBO_EINVAL;
   packet.version = version;
@@ -481,9 +560,79 @@ static uint16_t flowie_mqtt_client_packet_id(flowie_mqtt_client_t *client) {
 }
 
 static int flowie_mqtt_client_send(flowie_mqtt_client_t *client, size_t written) {
-  if (!client || !client->socket || written == 0u || written > client->max_packet_size)
-    return TURBO_EINVAL;
+  if (!client || !client->socket || written == 0u) return TURBO_EINVAL;
+  if (written > client->outbound_max_packet_size) return TURBO_EMSGSIZE;
   return coro_socket_send(client->socket, client->send_buffer, written);
+}
+
+static int flowie_mqtt_client_negotiate_connack(flowie_mqtt_client_t *client,
+                                                const flowie_mqtt_control_packet_view_t *connack) {
+  flowie_mqtt_property_iterator_t iterator = FLOWIE_MQTT_PROPERTY_ITERATOR_INIT;
+  flowie_mqtt_property_view_t property = FLOWIE_MQTT_PROPERTY_VIEW_INIT;
+  int rc;
+  if (!client || !connack) return TURBO_EINVAL;
+  client->outbound_max_packet_size = client->max_packet_size;
+  client->server_receive_maximum = UINT16_MAX;
+  client->server_topic_alias_maximum = 0u;
+  client->server_keep_alive = 0u;
+  client->server_maximum_qos = 2u;
+  client->server_retain_available = 1u;
+  if (client->version != FLOWIE_MQTT_VERSION_5 || connack->properties.values.size == 0u)
+    return TURBO_OK;
+  rc = flowie_mqtt_client_auth_method_matches(client, &connack->properties, 0);
+  if (rc != TURBO_OK) return rc;
+  rc = flowie_mqtt_property_iterator_init(&connack->properties, &iterator);
+  if (rc != FLOWIE_MQTT_PARSE_OK) return TURBO_EPROTO;
+  while ((rc = flowie_mqtt_property_iterator_next(&iterator, &property)) == FLOWIE_MQTT_PARSE_OK) {
+    switch (property.identifier) {
+    case FLOWIE_MQTT_PROPERTY_RECEIVE_MAXIMUM:
+      client->server_receive_maximum = (uint16_t)property.integer;
+      break;
+    case FLOWIE_MQTT_PROPERTY_MAXIMUM_PACKET_SIZE:
+      if ((size_t)property.integer < client->outbound_max_packet_size)
+        client->outbound_max_packet_size = property.integer;
+      break;
+    case FLOWIE_MQTT_PROPERTY_TOPIC_ALIAS_MAXIMUM:
+      client->server_topic_alias_maximum = (uint16_t)property.integer;
+      break;
+    case FLOWIE_MQTT_PROPERTY_SERVER_KEEP_ALIVE:
+      client->server_keep_alive = (uint16_t)property.integer;
+      break;
+    case FLOWIE_MQTT_PROPERTY_MAXIMUM_QOS:
+      client->server_maximum_qos = (uint8_t)property.integer;
+      break;
+    case FLOWIE_MQTT_PROPERTY_RETAIN_AVAILABLE:
+      client->server_retain_available = (uint8_t)property.integer;
+      break;
+    default:
+      break;
+    }
+  }
+  return rc == FLOWIE_MQTT_PARSE_NEED_MORE ? TURBO_OK : TURBO_EPROTO;
+}
+
+static int
+flowie_mqtt_client_publish_capabilities_validate(const flowie_mqtt_client_t *client,
+                                                 const flowie_mqtt_publish_packet_t *packet) {
+  flowie_mqtt_property_block_view_t block = FLOWIE_MQTT_PROPERTY_BLOCK_VIEW_INIT;
+  flowie_mqtt_property_iterator_t iterator = FLOWIE_MQTT_PROPERTY_ITERATOR_INIT;
+  flowie_mqtt_property_view_t property = FLOWIE_MQTT_PROPERTY_VIEW_INIT;
+  int rc;
+  if (!client || !packet) return TURBO_EINVAL;
+  if (client->version != FLOWIE_MQTT_VERSION_5) return TURBO_OK;
+  if (packet->qos > client->server_maximum_qos ||
+      (packet->retain && !client->server_retain_available))
+    return TURBO_ENOTSUP;
+  if (packet->properties.size == 0u) return TURBO_OK;
+  block.values = packet->properties;
+  rc = flowie_mqtt_property_iterator_init(&block, &iterator);
+  if (rc != FLOWIE_MQTT_PARSE_OK) return TURBO_EPROTO;
+  while ((rc = flowie_mqtt_property_iterator_next(&iterator, &property)) == FLOWIE_MQTT_PARSE_OK) {
+    if (property.identifier == FLOWIE_MQTT_PROPERTY_TOPIC_ALIAS &&
+        (property.integer == 0u || property.integer > client->server_topic_alias_maximum))
+      return TURBO_ENOTSUP;
+  }
+  return rc == FLOWIE_MQTT_PARSE_NEED_MORE ? TURBO_OK : TURBO_EPROTO;
 }
 
 static int flowie_mqtt_client_send_control(flowie_mqtt_client_t *client,
@@ -497,7 +646,25 @@ static int flowie_mqtt_client_send_control(flowie_mqtt_client_t *client,
   packet.packet_id = packet_id;
   packet.reason_code = reason_code;
   rc = flowie_mqtt_control_packet_encode(&packet, (uint8_t *)client->send_buffer,
-                                         client->max_packet_size, &written);
+                                         client->outbound_max_packet_size, &written);
+  if (rc != FLOWIE_MQTT_PARSE_OK) return flowie_mqtt_client_parse_status(rc);
+  return flowie_mqtt_client_send(client, written);
+}
+
+static int flowie_mqtt_client_send_auth(flowie_mqtt_client_t *client, uint8_t reason_code,
+                                        flowie_mqtt_span_t properties) {
+  flowie_mqtt_control_packet_t packet = FLOWIE_MQTT_CONTROL_PACKET_INIT;
+  size_t written = 0u;
+  int rc;
+  if (!client || client->version != FLOWIE_MQTT_VERSION_5 ||
+      !flowie_mqtt_client_span_valid(properties))
+    return TURBO_EINVAL;
+  packet.version = FLOWIE_MQTT_VERSION_5;
+  packet.type = FLOWIE_MQTT_PACKET_AUTH;
+  packet.reason_code = reason_code;
+  packet.properties = properties;
+  rc = flowie_mqtt_control_packet_encode(&packet, (uint8_t *)client->send_buffer,
+                                         client->outbound_max_packet_size, &written);
   if (rc != FLOWIE_MQTT_PARSE_OK) return flowie_mqtt_client_parse_status(rc);
   return flowie_mqtt_client_send(client, written);
 }
@@ -622,6 +789,40 @@ static int flowie_mqtt_client_handle_pubrel(flowie_mqtt_client_t *client,
                                          reason_code);
 }
 
+static int
+flowie_mqtt_client_handle_auth_challenge(flowie_mqtt_client_t *client,
+                                         const flowie_mqtt_packet_view_t *packet,
+                                         flowie_mqtt_control_packet_view_t *challenge_out) {
+  flowie_mqtt_control_packet_view_t challenge = FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
+  flowie_mqtt_client_auth_response_t response = FLOWIE_MQTT_CLIENT_AUTH_RESPONSE_INIT;
+  int rc;
+  if (!client || !packet || packet->type != FLOWIE_MQTT_PACKET_AUTH ||
+      client->version != FLOWIE_MQTT_VERSION_5)
+    return TURBO_EINVAL;
+  rc = flowie_mqtt_control_packet_parse(packet, &challenge);
+  if (rc != FLOWIE_MQTT_PARSE_OK) return flowie_mqtt_client_parse_status(rc);
+  if (challenge.reason_code != 0x18u) return TURBO_EPROTO;
+  rc = flowie_mqtt_client_auth_method_matches(client, &challenge.properties, 1);
+  if (rc != TURBO_OK) return rc;
+  if (!client->on_auth_challenge) return TURBO_ENOTSUP;
+  client->callback_active = 1;
+  rc = client->on_auth_challenge(client, &challenge, &response, client->user_data);
+  client->callback_active = 0;
+  if (rc != TURBO_OK) return rc;
+  if (response.size < sizeof(response) || response.abi_version != FLOWIE_MQTT_CLIENT_ABI_CURRENT ||
+      response.reason_code != 0x18u || !flowie_mqtt_client_span_valid(response.properties))
+    return TURBO_EPROTO;
+  {
+    flowie_mqtt_property_block_view_t properties = FLOWIE_MQTT_PROPERTY_BLOCK_VIEW_INIT;
+    properties.values = response.properties;
+    rc = flowie_mqtt_client_auth_method_matches(client, &properties, 1);
+    if (rc != TURBO_OK) return rc;
+  }
+  rc = flowie_mqtt_client_send_auth(client, response.reason_code, response.properties);
+  if (rc == TURBO_OK && challenge_out) *challenge_out = challenge;
+  return rc;
+}
+
 static int flowie_mqtt_client_handle_unsolicited(flowie_mqtt_client_t *client,
                                                  const flowie_mqtt_packet_view_t *packet,
                                                  int *handled) {
@@ -635,7 +836,7 @@ static int flowie_mqtt_client_handle_unsolicited(flowie_mqtt_client_t *client,
   case FLOWIE_MQTT_PACKET_DISCONNECT:
     return TURBO_ECONNRESET;
   case FLOWIE_MQTT_PACKET_AUTH:
-    return TURBO_ENOTSUP;
+    return TURBO_EPROTO;
   default:
     *handled = 0;
     return TURBO_OK;
@@ -651,6 +852,11 @@ static int flowie_mqtt_client_wait_control(flowie_mqtt_client_t *client,
     int handled = 0;
     int rc = flowie_mqtt_client_receive_packet(client, &packet);
     if (rc != TURBO_OK) return rc;
+    if (expected == FLOWIE_MQTT_PACKET_CONNACK && packet.type == FLOWIE_MQTT_PACKET_AUTH) {
+      rc = flowie_mqtt_client_handle_auth_challenge(client, &packet, NULL);
+      if (rc != TURBO_OK) return rc;
+      continue;
+    }
     rc = flowie_mqtt_client_handle_unsolicited(client, &packet, &handled);
     if (rc != TURBO_OK) return rc;
     if (handled) continue;
@@ -707,6 +913,14 @@ static void flowie_mqtt_client_cancel_commands(flowie_mqtt_client_t *client, int
   }
 }
 
+static int flowie_mqtt_client_is_stopping(flowie_mqtt_client_t *client) {
+  int stopping;
+  turbo_mutex_lock(&client->command_mutex);
+  stopping = client->stopping;
+  turbo_mutex_unlock(&client->command_mutex);
+  return stopping;
+}
+
 static void flowie_mqtt_client_run_command(flowie_mqtt_client_t *client,
                                            flowie_mqtt_client_command_t *command) {
   flowie_mqtt_control_packet_view_t response = FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
@@ -732,14 +946,22 @@ static void flowie_mqtt_client_run_command(flowie_mqtt_client_t *client,
   case FLOWIE_MQTT_CLIENT_COMMAND_PING:
     rc = flowie_mqtt_client_ping_operation(client);
     break;
+  case FLOWIE_MQTT_CLIENT_COMMAND_AUTH:
+    rc = flowie_mqtt_client_auth_operation(client, command->packet.control.properties, &response);
+    if (rc == TURBO_OK) response_ptr = &response;
+    break;
   case FLOWIE_MQTT_CLIENT_COMMAND_DISCONNECT:
-    rc = flowie_mqtt_client_disconnect_operation(client, command->packet.disconnect.reason_code,
-                                                 command->packet.disconnect.properties);
+    rc = flowie_mqtt_client_disconnect_operation(client, command->packet.control.reason_code,
+                                                 command->packet.control.properties);
     if (rc == TURBO_EOF || rc == TURBO_ECONNRESET) rc = TURBO_OK;
     break;
   default:
     rc = TURBO_EINVAL;
     break;
+  }
+  if (rc != TURBO_OK && flowie_mqtt_client_is_stopping(client)) {
+    rc = TURBO_ESHUTDOWN;
+    response_ptr = NULL;
   }
   flowie_mqtt_client_complete(client, command, rc, response_ptr);
 }
@@ -813,9 +1035,13 @@ static void flowie_mqtt_client_worker_wake(void *arg1, void *arg2) {
     }
     return;
   }
-  if ((stopping || client->idle_receive) && client->socket) {
-    if (!stopping) client->interrupt_pending = 1;
-    rc = coro_socket_interrupt_wait(client->socket, stopping ? TURBO_ESHUTDOWN : TURBO_EINTR);
+  if (stopping && client->socket) {
+    /* Destruction owns the transport now. Closing on the loop thread wakes an
+     * active command without relying on a second, nested context post. */
+    flowie_mqtt_client_transport_close(client, 1);
+  } else if (client->idle_receive && client->socket) {
+    client->interrupt_pending = 1;
+    rc = coro_socket_interrupt_wait(client->socket, TURBO_EINTR);
     if (rc != TURBO_OK) client->interrupt_pending = 0;
   }
 }
@@ -928,7 +1154,11 @@ int flowie_mqtt_client_create(const flowie_mqtt_client_config_t *config,
   client->timeout_ms =
       config->timeout_ms ? config->timeout_ms : FLOWIE_MQTT_CLIENT_DEFAULT_TIMEOUT_MS;
   client->max_packet_size = max_packet_size;
+  client->outbound_max_packet_size = max_packet_size;
   client->max_inbound_qos2 = config->max_inbound_qos2;
+  client->server_receive_maximum = UINT16_MAX;
+  client->server_maximum_qos = 2u;
+  client->server_retain_available = 1u;
   rc = flowie_mqtt_client_clone_topic_handlers(client, &config->topic_handlers);
   if (rc != TURBO_OK) goto fail;
   client->on_connect = config->on_connect;
@@ -936,6 +1166,10 @@ int flowie_mqtt_client_create(const flowie_mqtt_client_config_t *config,
   client->on_subscribe = config->on_subscribe;
   client->on_unsubscribe = config->on_unsubscribe;
   client->on_ping = config->on_ping;
+  if (config->abi_version >= FLOWIE_MQTT_CLIENT_ABI_V7) {
+    client->on_auth_challenge = config->on_auth_challenge;
+    client->on_auth = config->on_auth;
+  }
   client->on_disconnect = config->on_disconnect;
   client->on_error = config->on_error;
   client->user_data = config->user_data;
@@ -958,10 +1192,10 @@ int flowie_mqtt_client_create(const flowie_mqtt_client_config_t *config,
   }
   client->send_buffer = tstr_new_len(NULL, max_packet_size);
   if (!client->host || !client->path || !client->send_buffer ||
-      (tls && ((tls->ca_file && !client->tls_ca_file) ||
-               (tls->cert_file && !client->tls_cert_file) ||
-               (tls->key_file && !client->tls_key_file) ||
-               (tls->key_password && !client->tls_key_password)))) {
+      (tls &&
+       ((tls->ca_file && !client->tls_ca_file) || (tls->cert_file && !client->tls_cert_file) ||
+        (tls->key_file && !client->tls_key_file) ||
+        (tls->key_password && !client->tls_key_password)))) {
     rc = TURBO_ENOMEM;
     goto fail;
   }
@@ -1066,6 +1300,10 @@ static int flowie_mqtt_client_connect_operation(flowie_mqtt_client_t *client,
     rc = flowie_mqtt_client_parse_status(rc);
     goto done;
   }
+  rc = flowie_mqtt_client_auth_method_select(client, packet->version == FLOWIE_MQTT_VERSION_5
+                                                         ? packet->properties
+                                                         : (flowie_mqtt_span_t){0});
+  if (rc != TURBO_OK) goto done;
   turbo_byte_buffer_reset(&client->framing);
   flowie_mqtt_packet_id_set_t_clear(&client->inbound_qos2);
   client->version = packet->version;
@@ -1107,6 +1345,8 @@ static int flowie_mqtt_client_connect_operation(flowie_mqtt_client_t *client,
     rc = TURBO_OK;
     goto done;
   }
+  rc = flowie_mqtt_client_negotiate_connack(client, connack);
+  if (rc != TURBO_OK) goto fail;
   client->state = FLOWIE_MQTT_CLIENT_CONNECTED;
   atomic_store_explicit(&client->public_connected, 1, memory_order_release);
   rc = TURBO_OK;
@@ -1136,12 +1376,14 @@ static int flowie_mqtt_client_publish_operation(flowie_mqtt_client_t *client,
     rc = TURBO_EPROTO;
     goto done;
   }
+  rc = flowie_mqtt_client_publish_capabilities_validate(client, &encoded);
+  if (rc != TURBO_OK) goto done;
   if (encoded.qos != 0u) {
     packet_id = flowie_mqtt_client_packet_id(client);
     encoded.packet_id = packet_id;
   }
   rc = flowie_mqtt_publish_packet_encode(&encoded, (uint8_t *)client->send_buffer,
-                                         client->max_packet_size, &written);
+                                         client->outbound_max_packet_size, &written);
   if (rc != FLOWIE_MQTT_PARSE_OK) {
     rc = flowie_mqtt_client_parse_status(rc);
     goto done;
@@ -1195,7 +1437,7 @@ static int flowie_mqtt_client_subscribe_operation(flowie_mqtt_client_t *client,
   packet_id = flowie_mqtt_client_packet_id(client);
   encoded.packet_id = packet_id;
   rc = flowie_mqtt_subscribe_packet_encode(&encoded, (uint8_t *)client->send_buffer,
-                                           client->max_packet_size, &written);
+                                           client->outbound_max_packet_size, &written);
   if (rc != FLOWIE_MQTT_PARSE_OK) {
     rc = flowie_mqtt_client_parse_status(rc);
     goto done;
@@ -1239,7 +1481,7 @@ static int flowie_mqtt_client_unsubscribe_operation(flowie_mqtt_client_t *client
   packet_id = flowie_mqtt_client_packet_id(client);
   encoded.packet_id = packet_id;
   rc = flowie_mqtt_unsubscribe_packet_encode(&encoded, (uint8_t *)client->send_buffer,
-                                             client->max_packet_size, &written);
+                                             client->outbound_max_packet_size, &written);
   if (rc != FLOWIE_MQTT_PARSE_OK) {
     rc = flowie_mqtt_client_parse_status(rc);
     goto done;
@@ -1268,7 +1510,7 @@ static int flowie_mqtt_client_ping_operation(flowie_mqtt_client_t *client) {
   int rc = flowie_mqtt_client_begin(client, 1);
   if (rc != TURBO_OK) return rc;
   rc = flowie_mqtt_pingreq_encode(client->version, (uint8_t *)client->send_buffer,
-                                  client->max_packet_size, &written);
+                                  client->outbound_max_packet_size, &written);
   if (rc != FLOWIE_MQTT_PARSE_OK) {
     rc = flowie_mqtt_client_parse_status(rc);
     goto done;
@@ -1277,6 +1519,64 @@ static int flowie_mqtt_client_ping_operation(flowie_mqtt_client_t *client) {
   if (rc == TURBO_OK)
     rc = flowie_mqtt_client_wait_control(client, FLOWIE_MQTT_PACKET_PINGRESP, 0u, NULL);
   if (rc != TURBO_OK) flowie_mqtt_client_transport_close(client, 1);
+done:
+  flowie_mqtt_client_end(client);
+  return rc;
+}
+
+static int flowie_mqtt_client_auth_operation(flowie_mqtt_client_t *client,
+                                             flowie_mqtt_span_t properties,
+                                             flowie_mqtt_control_packet_view_t *auth) {
+  flowie_mqtt_property_block_view_t auth_properties = FLOWIE_MQTT_PROPERTY_BLOCK_VIEW_INIT;
+  int rc;
+  if (!client || !auth || !flowie_mqtt_client_ack_output_valid(auth)) return TURBO_EINVAL;
+  rc = flowie_mqtt_client_begin(client, 1);
+  if (rc != TURBO_OK) return rc;
+  if (client->version != FLOWIE_MQTT_VERSION_5) {
+    rc = TURBO_ENOTSUP;
+    goto done;
+  }
+  auth_properties.values = properties;
+  rc = flowie_mqtt_client_auth_method_matches(client, &auth_properties, 1);
+  if (rc != TURBO_OK) goto fail;
+  rc = flowie_mqtt_client_send_auth(client, 0x19u, properties);
+  if (rc != TURBO_OK) goto fail;
+  for (;;) {
+    flowie_mqtt_packet_view_t packet = FLOWIE_MQTT_PACKET_VIEW_INIT;
+    int handled = 0;
+    rc = flowie_mqtt_client_receive_packet(client, &packet);
+    if (rc != TURBO_OK) goto fail;
+    if (packet.type == FLOWIE_MQTT_PACKET_AUTH) {
+      flowie_mqtt_control_packet_view_t response = FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
+      rc = flowie_mqtt_control_packet_parse(&packet, &response);
+      if (rc != FLOWIE_MQTT_PARSE_OK) {
+        rc = flowie_mqtt_client_parse_status(rc);
+        goto fail;
+      }
+      if (response.reason_code == 0x18u) {
+        rc = flowie_mqtt_client_handle_auth_challenge(client, &packet, NULL);
+        if (rc != TURBO_OK) goto fail;
+        continue;
+      }
+      if (response.reason_code != 0u) {
+        rc = TURBO_EPROTO;
+        goto fail;
+      }
+      rc = flowie_mqtt_client_auth_method_matches(client, &response.properties, 0);
+      if (rc != TURBO_OK) goto fail;
+      *auth = response;
+      rc = TURBO_OK;
+      goto done;
+    }
+    rc = flowie_mqtt_client_handle_unsolicited(client, &packet, &handled);
+    if (rc != TURBO_OK || !handled) {
+      if (rc == TURBO_OK) rc = TURBO_EPROTO;
+      goto fail;
+    }
+  }
+
+fail:
+  flowie_mqtt_client_transport_close(client, 1);
 done:
   flowie_mqtt_client_end(client);
   return rc;
@@ -1294,7 +1594,7 @@ static int flowie_mqtt_client_disconnect_operation(flowie_mqtt_client_t *client,
   packet.reason_code = reason_code;
   packet.properties = properties;
   rc = flowie_mqtt_control_packet_encode(&packet, (uint8_t *)client->send_buffer,
-                                         client->max_packet_size, &written);
+                                         client->outbound_max_packet_size, &written);
   if (rc == FLOWIE_MQTT_PARSE_OK) rc = flowie_mqtt_client_send(client, written);
   else rc = flowie_mqtt_client_parse_status(rc);
   flowie_mqtt_client_transport_close(client, 1);
@@ -1331,8 +1631,8 @@ int flowie_mqtt_client_publish(flowie_mqtt_client_t *client,
   flowie_mqtt_client_command_vec_t commands;
   int rc;
   if (!client || !topics || topics->size < sizeof(*topics) ||
-      topics->abi_version != FLOWIE_MQTT_CLIENT_ABI_CURRENT || !topics->data ||
-      topics->count == 0u)
+      topics->abi_version < FLOWIE_MQTT_CLIENT_ABI_V5 ||
+      topics->abi_version > FLOWIE_MQTT_CLIENT_ABI_CURRENT || !topics->data || topics->count == 0u)
     return TURBO_EINVAL;
   if (!client->on_publish) return TURBO_ENOTSUP;
   if (topics->count > client->command_queue_capacity) return TURBO_ENOSPC;
@@ -1398,6 +1698,25 @@ int flowie_mqtt_client_ping(flowie_mqtt_client_t *client) {
   return rc;
 }
 
+int flowie_mqtt_client_authenticate(flowie_mqtt_client_t *client, flowie_mqtt_span_t properties) {
+  flowie_mqtt_client_command_t *command;
+  uint8_t *cursor;
+  int rc;
+  if (!client || !flowie_mqtt_client_span_valid(properties)) return TURBO_EINVAL;
+  if (!client->on_auth) return TURBO_ENOTSUP;
+  command = flowie_mqtt_client_command_new(FLOWIE_MQTT_CLIENT_COMMAND_AUTH, client->on_auth,
+                                           client->user_data);
+  if (!command) return TURBO_ENOMEM;
+  rc = flowie_mqtt_client_command_allocate(command, properties.size, &cursor);
+  if (rc == TURBO_OK) {
+    command->packet.control.reason_code = 0x19u;
+    flowie_mqtt_client_copy_span(properties, &cursor, &command->packet.control.properties);
+    rc = flowie_mqtt_client_submit(client, command);
+  }
+  if (rc != TURBO_OK) flowie_mqtt_client_command_destroy(command);
+  return rc;
+}
+
 int flowie_mqtt_client_disconnect(flowie_mqtt_client_t *client, uint8_t reason_code,
                                   flowie_mqtt_span_t properties) {
   flowie_mqtt_client_command_t *command;
@@ -1410,8 +1729,8 @@ int flowie_mqtt_client_disconnect(flowie_mqtt_client_t *client, uint8_t reason_c
   if (!command) return TURBO_ENOMEM;
   rc = flowie_mqtt_client_command_allocate(command, properties.size, &cursor);
   if (rc == TURBO_OK) {
-    command->packet.disconnect.reason_code = reason_code;
-    flowie_mqtt_client_copy_span(properties, &cursor, &command->packet.disconnect.properties);
+    command->packet.control.reason_code = reason_code;
+    flowie_mqtt_client_copy_span(properties, &cursor, &command->packet.control.properties);
     rc = flowie_mqtt_client_submit(client, command);
   }
   if (rc != TURBO_OK) flowie_mqtt_client_command_destroy(command);

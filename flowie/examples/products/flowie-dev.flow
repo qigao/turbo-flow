@@ -1,0 +1,7 @@
+source admitted_publish_source adapter mqtt.endpoint
+stage message_policy_processor operation rules.apply resource mqtt.routing
+stage mqtt_delivery_sink adapter mqtt.endpoint
+
+stage main {
+  admitted_publish_source -> message_policy_processor -> mqtt_delivery_sink
+}

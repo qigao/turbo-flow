@@ -210,7 +210,7 @@ CXX_C_API int turbo_flow_fmq_broker_dispatch_at(turbo_flow_fmq_broker_t *broker,
                                                 turbo_flow_fmq_broker_dispatch_result_t *result);
 
 /**
- * Record that an external memory/Redis/SQLite owner has committed a request.
+ * Record that an external durable owner has committed a request.
  * Call only after that owner returns success. This stores correlation metadata,
  * not payload bytes, and returns the broker accept ACK route.
  */
@@ -445,7 +445,7 @@ typedef struct turbo_flow_fmq_tfcw_graph_config_s {
    NULL, NULL}
 
 /**
- * Register one graph-native volatile TFCW/1 transform resource.
+ * Register one optional volatile TFCW/1 transform resource for graph composition.
  *
  * The adapter owns the created credit worker and serializes every owner
  * mutation. service is the fixed JOB dispatch service. All four operations

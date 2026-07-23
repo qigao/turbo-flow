@@ -2,8 +2,15 @@
 
 ## Decision
 
-Flowie is a new TurboFlow application. It does not embed or link the TurboMQTT client,
-broker, socket, queue, worker, processor, sink, or plugin runtime. The server application and
+The configured Flowie broker is a TurboFlow application assembled from a product provider
+registry, resolved YAML, a `.flow` Graph, and the Flowie protocol/session owner. The protocol
+library alone is not an application, and an embedded Flowie endpoint is only one reusable
+component until its host supplies the complete topology. The normative terminology and the three
+composition forms are defined in
+[`CONFIGURED_BROKER_CONCEPTS.md`](CONFIGURED_BROKER_CONCEPTS.md).
+
+Flowie does not embed or link the TurboMQTT client, broker, socket, queue, worker, processor,
+sink, or plugin runtime. The server application and
 the independent `flowie_client` SDK share only the Flowie protocol module; the client SDK builds
 its own single-owner CoroNet transport state. The protocol knowledge migrated from TurboMQTT
 remains deterministic and free of I/O:
@@ -35,6 +42,15 @@ the FlowMQ endpoint runtime. It owns its CoroNet listener and accepted connectio
 compose a generic `io/socket` adapter. Reusable code below this boundary is limited to the
 protocol-neutral CoroNet execution/runtime and connection snapshot helpers in `io/common`.
 
+MQTT business facts have one source of truth: the FlowStore MQTT fact facade, assembled around the
+Record service by the StorageBackend registry. Session, subscription, inflight, retained, and Will mutations commit to
+that service before Flowie swaps its owner/cache state. The in-process vectors, maps, and topic
+trie are rebuildable indexes and scheduling caches only; they must never advance independently or
+serve as a fallback fact source. Flowie does not call backend callbacks after facade construction.
+With no explicit `session_store` channel, the composition root
+binds the volatile `local` Record backend. Redis/PostgreSQL are selected only by an explicit
+storage channel and are never silently substituted.
+
 Endpoint registration installs the `protocol.mqtt.server` module catalog. The graph-visible
 operations are `mqtt.publish.ingress` for an admitted application PUBLISH and
 `mqtt.packet.egress` for an encoded routed packet. They bind to the existing endpoint owner;
@@ -47,10 +63,10 @@ persistence remain internal owner behavior rather than invented graph operations
 | `flowie_client` | caller coroutine or DLL-owned CoroNet worker | one outbound transport, framing, packet IDs, inbound QoS 2 state, bounded async command queue | Flowie endpoint, graph runtime, server session or persistence state |
 | endpoint resource | Flowie endpoint owner | listener lifecycle, limits, connection registry | graph mutation of connection/session state |
 | connection resource | CoroNet-bound Flowie owner | transport handle, receive buffer, negotiated version | MQTT parser performing reads or writes |
-| session owner (internal) | Flowie session owner | client identity, generation, subscriptions, packet IDs, QoS inflight, will | independent public resource identity or queue/sink state advancement |
-| subscription index | Flowie subscription owner | normal/shared filters and recipient membership | graph-owned subscriber membership |
+| session owner (internal) | Flowie session owner | bounded cache reconstructed from session facts | independent public resource identity or queue/sink state advancement |
+| subscription index | Flowie subscription owner | rebuildable filter/member query index | graph-owned subscriber membership |
 | application graph | TurboFlow | private message attempt and settlement result | direct MQTT ACK, reconnect, or socket access |
-| persistence resource | selected memory/Redis/SQLite/PostgreSQL primitive | durable session/retained/inflight record | protocol-specific fallback or a second in-memory fact source |
+| persistence resource | selected FlowStore MQTT facade assembled by StorageBackend registry | session/subscription/inflight/retained/Will facts | protocol-specific fallback or a second in-memory fact source |
 
 Parser output is a zero-copy borrowed view. The connection owner must either finish all use
 before the receive buffer changes or copy selected fields into its own bounded session/message
@@ -108,19 +124,72 @@ and 5, with the CONNECT protocol-name/level pair remaining the version fact sour
 MQTT 3.1 clients instead require `Sec-WebSocket-Protocol: mqttv3.1`; Flowie does not currently
 claim or test that token. This token difference does not affect MQTT 3.1 clients using TCP, TLS,
 or Pipe.
-The public callback client ABI v6 accepts an optional verified TLS identity for TLS and WSS.
-CA, certificate, key, and password strings are copied at creation; certificate and key are an
-atomic pair, peer verification cannot be disabled, and the copied key password is wiped at
-destruction. ABI v5 callers remain accepted only with the exact pre-v6 structure size.
+The public callback client ABI v7 accepts an optional verified TLS identity for TLS and WSS plus
+MQTT 5 Enhanced AUTH challenge and re-authentication callbacks. CA, certificate, key, and password
+strings are copied at creation; certificate and key are an atomic pair, peer verification cannot
+be disabled, and the copied key password is wiped at destruction. ABI v5/v6 callers remain
+accepted only with their exact historical structure sizes.
 The framing buffer owns incomplete bytes only; it is neither a durable Queue nor an ACK fact
-source. Once parsing identifies a complete PUBLISH packet, Flowie copies the full wire packet
-into message-owned payload, consumes the framing bytes, and performs one graph publication to the
-configured source. Managed CONNECT is instead consumed by the same-lane session primitive
-described above. Only a complete owned message may cross an execution boundary. The graph
-plan, not Flowie ingress, selects direct execution or a bounded worker Disruptor. A graph
-admission failure is returned to the connection/session owner and is never retried implicitly by
-the framer. Protocol, HWM, and graph errors put that connection ingress into a terminal state;
-its owner must close or rebuild the connection before accepting more bytes.
+source. Once parsing identifies a complete PUBLISH packet, Flowie materializes the complete wire
+packet in a reference-counted `mem_buffer_t` carried by `turbo_flow_msg_t`, consumes the framing
+bytes, and performs one graph publication to the configured source. Managed CONNECT is instead
+consumed by the same-lane session primitive described above. Only a complete owned message may
+cross an execution boundary. The graph plan, not Flowie ingress, selects direct execution or a
+bounded worker Disruptor. A graph admission failure is returned to the connection/session owner
+and is never retried implicitly by the framer. Protocol, HWM, and graph errors put that
+connection ingress into a terminal state; its owner must close or rebuild the connection before
+accepting more bytes.
+
+## MQTT broker processing stages
+
+Flowie separates the MQTT protocol owner from the application message graph. The owner is the
+only authority for connection, authentication, session and QoS state; the graph is a programmable
+pipeline for messages that have already crossed that security boundary.
+
+```text
+socket/frame
+  -> parse, size and protocol validation
+  -> CONNECT authentication and operation ACL
+  -> session/inflight admission (owner lane)
+  -> turbo_flow_msg_t (owned buffer + MQTT metadata)
+  -> optional TurboFlow Policy filter/route/transform
+  -> optional store/durable boundary
+  -> optional after-process stages
+  -> MQTT fan-out / HTTP / socket / Redis sinks
+  -> settlement result returned to the session owner
+  -> protocol ACK when the configured prerequisite is complete
+```
+
+The first three steps are mandatory owner work; authentication and ACL are mandatory whenever a
+security binding is configured, and the graph can never bypass that binding. A message that fails
+authentication, ACL, protocol validation, inflight limits, or packet-size limits never reaches a
+user graph. A graph stage may reject or transform an admitted PUBLISH, but it may not emit CONNACK,
+PUBACK, PUBREC, SUBACK, or otherwise mutate a session generation. TurboFlow Policy facts are evaluated over the
+versioned MQTT metadata and payload view already attached to `turbo_flow_msg_t`; it does not read
+the connection receive buffer or a live socket.
+
+TurboFlow can process any provider message represented by `turbo_flow_msg_t`. The current Flowie
+endpoint contract exposes only `mqtt.publish.ingress` and `mqtt.packet.egress` to the graph;
+CONNECT, AUTH, SUBSCRIBE and other control packets remain owner-internal. Exposing a future
+normalized control-event source would require a separate protocol contract for authorization,
+session mutation and ACK ownership; it is not implied by adding a generic Policy stage.
+
+The remaining stages are composition points, not mandatory broker behavior:
+
+- **accepted** is completed explicitly by the selected graph admission stage; it is not tied to a
+  hidden queue;
+- **store** commits a selected durable record (for example Redis Stream or a record-store
+  adapter) and is the `durable` settlement point;
+- **after-process** is an optional post-routing side effect or audit stage. Its failure is
+  part of the synchronous graph result when it is connected to the selected path.
+
+The graph may place `store` before Policy when the durable fact must be the original admitted
+packet, or after Policy when the durable fact must be the transformed/filtered message. These
+are different topologies and must be selected explicitly in `.flow`; Flowie does not infer or
+silently reorder them. A branch that is not part of the configured settlement prerequisite is
+not created implicitly. To keep after-process work out of ACK latency, the graph must first commit
+an explicit accepted/durable handoff and run that work from its separately consumed path;
+the original synchronous graph cannot silently ignore a selected branch failure.
 
 ## Pattern composition
 
@@ -146,7 +215,7 @@ Transport/protocol ACK and application settlement are separate facts:
 
 1. **Protocol ACK** is emitted only by the Flowie session owner. It advances MQTT QoS state and
    is governed by the configured received/accepted/processed/durable settlement point.
-2. **Storage/application ACK** is returned by a queue, memory, Redis, SQLite, PostgreSQL, or sink
+2. **Storage/application ACK** is returned by a selected memory, Redis, PostgreSQL, or sink
    primitive after its own write contract succeeds. It never writes directly to the client.
 
 For a durable policy, successful graph processing without successful durable commit is not an
@@ -161,8 +230,10 @@ resolved projection. The target composition is illustrated by
 typed projection for its transport, bounded reply Queue, and optional managed-session fields.
 The process-level `runtime.ingress` entry configures the single Flow-owned bounded asynchronous
 handoff used by timer and I/O producers; it is not an adapter, profile, or second graph ingress.
-Unknown fields and wrong types fail before registration. The profile references adapters for the
-endpoint, Queue sink/source, and socket output, plus a `rule_set` channel resource. The RuleSet
+Unknown fields and wrong types fail before registration. The profile selects the MQTT endpoint
+and Queue sink/source; it selects a `rule_set` channel resource only when the Graph uses
+`rules.apply`. Business data sources and sinks are explicit
+Graph adapter references; they are not inferred from a single profile `output`. The RuleSet
 owns its stable identity, evaluation mode, quotas, and ordered `{when, action}` entries; the graph
 binds it through `operation rules.apply resource <channel-name>`. Security remains explicit target
 composition until its host binding is complete. Session and retained persistence share the explicit
@@ -184,9 +255,21 @@ code never authorizes an empty or stale topic.
 
 Subscription Identifier is owned by each subscription and deduplicated across overlapping matches
 for one delivery. It is appended to the outbound MQTT 5 PUBLISH while inbound Subscription
-Identifier properties are not forwarded. Canonical session records now write FSES 1.2 with the
-identifier in the subscription options record. Restore accepts FSES 1.0 and 1.1 with identifier zero
-and FSES 1.2 with the bounded value; writes never downgrade to an older record layout.
+Identifier properties are not forwarded. Canonical session records now write FSES 1.3. FSES 1.2
+added the bounded identifier to the subscription options record; FSES 1.3 extends each outbound
+delivery metadata record with its absolute Message Expiry epoch deadline. Restore accepts FSES
+1.0-1.3: FSES 1.0/1.1 restore Subscription Identifier as zero, and FSES 1.0-1.2 restore without a
+broker delivery-expiry deadline because those layouts did not preserve that fact.
+
+The session owner prunes expired PUBLISH deliveries before reconnect replay and the connection
+owner checks the same deadline again before a queued socket send. A non-expired MQTT 5 replay
+derives its remaining Message Expiry Interval from the absolute deadline and rewrites only the
+fixed-width four-byte property value. The absolute deadline remains the fact source; the wire value
+is a derived view. MQTT 3 outbound deliveries retain the same broker deadline but have no expiry
+property to rewrite. Once QoS 2 advances to `WAIT_PUBCOMP`, the stored packet is PUBREL rather than
+PUBLISH and its delivery expiry is cleared. New writers never downgrade records. An older FSES 1.2
+reader cannot consume FSES 1.3 records, so rollback requires draining/removing 1.3 session records or
+using a rollback binary that also understands FSES 1.3.
 
 ### Settlement compatibility, migration, and rollback
 
@@ -201,9 +284,9 @@ failure into success or keep the connection accepting new work.
 | YAML value | ACK prerequisite | Required graph boundary |
 | --- | --- | --- |
 | omitted or `received` | Session owner receive transition | None; legacy-compatible default |
-| `accepted` | Bounded ownership-transfer commit | Memory Queue sink consuming the settlement envelope |
+| `accepted` | Explicit graph ownership-transfer commit | Selected admission stage completes the settlement envelope |
 | `processed` | Successful synchronous graph publication | All configured inline/worker stages complete |
-| `durable` | Successful persistent commit | SQLite Queue COMMIT or Redis Stream XADD acknowledgement |
+| `durable` | Successful persistent commit | PostgreSQL COMMIT or Redis Stream XADD acknowledgement |
 
 QoS 0 remains receive-settled and has no MQTT ACK. There is no implicit promotion, downgrade, or
 fallback between the four policies. Moving away from `received` changes ACK latency and the
@@ -266,7 +349,7 @@ decision is documented in `ADR_DYNAMIC_ACL_BUNDLE.md`.
    parser tests;
 2. endpoint/session tests with synthetic primitive completions and no network;
 3. real CoroNet TCP/Pipe/WebSocket protocol integration tests;
-4. Redis/SQLite/PostgreSQL durable reconnect and duplicate-delivery tests;
+4. Redis/PostgreSQL durable reconnect and duplicate-delivery tests;
 5. FMQ release regression and full TurboFlow CTest.
 
 ## Current implementation boundary
@@ -346,7 +429,7 @@ publication at the Will Delay boundary or session end, whichever is earlier, and
 the same client id cancels a still-pending Will before fan-out. The generated owned MQTT PUBLISH
 enters the configured TurboFlow graph with a pointer-free internal flag and route token; an endpoint
 sink transfers the graph-transformed packet into the existing bounded owner command queue before
-the durable Will record is cleared. SQLite and Redis use the same canonical session record, so
+the durable Will record is cleared. Redis and PostgreSQL use the same canonical session record, so
 restart restores the remaining absolute delay/expiry boundary. A failed graph or store operation
 keeps the Will pending and schedules a bounded retry. This provides durable at-least-once recovery,
 not exactly-once publication: a crash after owner-command admission but before the record clear can
@@ -355,8 +438,10 @@ repeat the Will after restart.
 Each selected delivery is re-encoded for the subscriber MQTT version. Its QoS is
 `min(inbound QoS, granted QoS)`; `no_local` and retain-as-published are applied before admission.
 MQTT 5 Topic Alias and inbound Subscription Identifier properties are not forwarded because both
-belong to a connection/subscription context. An aliased PUBLISH without a concrete topic currently
-fails explicitly because topic-alias connection state is not implemented. QoS 1/2 deliveries use
+belong to a connection/subscription context. The endpoint keeps a bounded per-connection Topic
+Alias map: a PUBLISH carrying both a topic and alias updates that map, while a later alias-only
+PUBLISH is normalized to a concrete-topic packet before graph publication. Unknown, zero, or
+out-of-range aliases close MQTT 5 with Topic Alias invalid (`0x94`). QoS 1/2 deliveries use
 broker-owned packet IDs and owner-held outbound inflight records. PUBACK removes QoS 1 state;
 PUBREC emits PUBREL; PUBCOMP completes QoS 2. A persistent reconnect replays pending PUBLISH with
 DUP set or the pending PUBREL after CONNACK.
@@ -373,13 +458,14 @@ default and any other value fails registration. Queue Status schema v2 keeps the
 `load/capacity` view and additionally reports `connection_hwm_bytes`, the stable policy enum, and a
 saturating `slow_subscriber_disconnects` counter. A peer-local overflow increments that counter but
 does not mark the endpoint aggregate saturated or stop admission for healthy connections.
-The selector uses a topic-level trie for exact, `+`, and `#` candidate pruning and stores croaring
-64-bit session membership together with typed member metadata/hash indexes. A filter hash resolves
+The selector uses a topic-level trie for exact, `+`, and `#` candidate pruning. Typed member
+metadata stays in a hash index, while a derived CRoaring64 set accelerates integer membership and
+rank queries; neither structure owns MQTT payload or session facts. A filter hash resolves
 the stable entry slot in expected O(1); entry and member mutations update only that filter. Trie
 terminal bindings support O(1) bucket removal, own exact-level tokens, prune empty branches, and
 reuse inactive entry slots, so subscribe/unsubscribe churn does not retain removed filter storage.
-Croaring deduplicates overlapping ordinary matches and selects shared members by rank without
-copying a candidate array; unrelated mutations preserve each shared filter's cursor. The trie also
+CRoaring deduplicates overlapping ordinary matches and selects shared members by rank without
+copying a candidate array. Unrelated mutations preserve each shared filter's cursor. The trie also
 enforces the MQTT `$SYS` root-wildcard boundary before the defensive protocol matcher.
 The internal capacity benchmark holds 100k session owners concurrently and builds/matches a
 100k-filter derived trie containing exact, `+`, `#`, and shared filters. A second workload performs
@@ -444,8 +530,8 @@ validated by the session owner before close, including the rule that a zero CONN
 be changed to a non-zero value. The live timer remains process-local, while a persistent record
 carries its absolute wall-clock expiry so restart cannot turn a finite session into an unbounded
 one. A shared `turbo_flow_record_store_t` provides bounded namespace scan,
-per-record revision CAS, and atomic batch commit through SQLite transactions or a Redis Hash/Lua
-transaction. The internal session codec emits canonical versioned LTV and deliberately excludes
+per-record revision CAS, and atomic batch commit through PostgreSQL transactions or a Redis
+Hash/Lua transaction. The internal session codec emits canonical versioned LTV and deliberately excludes
 live routes, credentials, reserved outbound identifiers, and unsettled graph attempts. Decode
 always creates an inactive owner under the new endpoint instance. The additive
 `flowie_endpoint_bindings_t` injects a borrowed store without extending endpoint config ABI;
@@ -455,8 +541,8 @@ advances the local session-id allocator before the listener starts. CONNECT, SUB
 UNSUBSCRIBE, inbound QoS transitions, outbound delivery transitions, disconnect and close use
 clone -> durable CAS commit -> owner swap. CONNACK, SUBACK, UNSUBACK and QoS ACK/socket sends occur
 only after the relevant commit. Principal identity, roles and groups are encoded field-by-field;
-credentials, live routes and unsettled graph attempts are never stored. SQLite restart tests cover
-subscription restore and an unacknowledged QoS 1 delivery replayed with DUP.
+credentials, live routes and unsettled graph attempts are never stored. Provider-neutral fault
+tests cover commit/recovery semantics; live backends verify their own restart behavior.
 
 Secure PUBLISH checks one concrete Topic Name before session inflight admission. Secure SUBSCRIBE
 checks every requested Topic Filter before the atomic session mutation; adapter-match ACL rules use
@@ -487,21 +573,29 @@ traffic over TCP, TLS, WS, WSS, and Pipe. TLS/WSS use a verified test CA and cer
 successful config projection is not accepted as transport evidence.
 `flowie_server` is the first product host migrated to the shared product-provider registry. It
 resolves one Flowie profile as the allowed product boundary, preflights all adapter kinds before
-native resource creation, parses the separate TurboFlow DSL graph, then creates only the RuleSet
-resources and endpoint/Queue/socket adapters referenced by that Graph. Resource providers run
-before adapter providers; repeated references to the same endpoint or Queue binding do not create
-a second owner. The profile still constrains the permitted endpoint, Queue source/sink, RuleSet,
-and output names, and both Queue adapters must reference the same channel. It then compiles the
+native resource creation, parses the separate TurboFlow DSL graph, then creates only optional
+RuleSet resources, the endpoint, and injected data source/sink adapters referenced by that Graph.
+The bundled composition root injects socket and, when built, HTTP, Redis, PostgreSQL outbox, and
+PostgreSQL record-store providers. Storage providers are assembled separately: `flowie_server`
+creates one `TurboFlow::StorageBackend` registry, registers the builtin `local` API plus enabled
+Redis/PostgreSQL APIs, and loads external modules through the same versioned `open()/close()` ABI.
+Record owner creation, service lookup, and teardown stay in the registry owner lifecycle; Flowie
+does not call a backend's concrete record/state/index/log/hash functions. Resource providers run
+before adapter providers; repeated references to the same endpoint binding do not create
+a second owner. The profile constrains the endpoint plus a RuleSet name
+when Policy is configured; the
+Graph is the authority for business source/sink names. It then compiles the
 Graph and owns start/signal/stop order. `--check` performs the same resolution, resource creation,
 provider assembly, and graph compilation without binding the listener.
-The current host supports unsecured endpoints, the Queue message boundary, and an optional
-`session_store` record-store channel backed by SQLite or Redis. It creates the selected provider
-from the same resolved snapshot, injects the borrowed store through
+The current host supports unsecured endpoints and an optional explicit `session_store` record-store
+channel backed by Redis or PostgreSQL. When the field is absent, it injects the volatile local
+Record backend through the same registry owner path. It creates the selected provider from the same
+resolved snapshot, injects the borrowed store through
 `flowie_endpoint_bindings_t`, and destroys the endpoint before the store. Provider selection is
 strictly driven by `backend`; malformed provider fields, unavailable Redis support, connection
 failure, or incompatible stored records fail before the listener starts. `--check` creates and
 scans the selected store, then tears it down without starting the listener. The product check
-proves host composition; the SQLite endpoint-recreation and live Redis record-store suites prove
+proves host composition; the live Redis/PostgreSQL record-store suites prove
 the persistence contracts, including binary retained keys and pending Will recovery. Configured
 security bindings and disabled/unknown adapter kinds still fail rather than silently degrading.
 Authentication providers are selected from `profiles.<name>.auth_provider` and the referenced
@@ -517,9 +611,10 @@ sizes and timeouts are bounded, the service token is acquired by reference for e
 all transport, certificate, status, content-type, version, or principal-validation failures deny
 authentication without a database or anonymous fallback. The returned principal is then evaluated
 by the local SecurityRealm; publish/subscribe ACL checks never perform an HTTP or database call.
-Managed sessions, retained publications, and pending Wills are process-local when no session store
-is selected. See [ADR_HTTPS_AUTH_SERVICE.md](ADR_HTTPS_AUTH_SERVICE.md) for the trust boundary and
-deployment requirements.
+Managed sessions, retained publications, and pending Wills use the implicit local Record fact store
+when no explicit session store is selected; that store is process-local and is not restart durable.
+See [ADR_HTTPS_AUTH_SERVICE.md](ADR_HTTPS_AUTH_SERVICE.md) for the trust boundary and deployment
+requirements.
 External-session mode remains available for later composition. A requested
 `session_store` never falls back to volatile state, and malformed or incompatible records fail
 endpoint registration before the listener starts.
@@ -554,45 +649,54 @@ destroyed last.
 The managed runtime supports explicit `received`, `accepted`, `processed`, and `durable` QoS
 settlement policies. `received` advances the session owner before graph admission. `processed` advances it
 only after the synchronous TurboFlow publication returns successfully, including configured
-worker-stage completion. `accepted` requires the selected path to enter a memory Queue sink: the
-Queue clones the complete owned MQTT packet, commits it to its bounded admission record, consumes
-the one-shot settlement envelope, and routes the settlement command back to the Flowie owner.
-That callback only enters the endpoint's bounded reply command Queue; the CoroNet owner lane still
-owns session mutation and socket send. A worker-ring claim or an arbitrary successful stage is not
-an ACCEPTED boundary. Endpoint config ABI v3 introduced this typed policy; the current ABI v8
-retains it and intentionally rejects obsolete layouts.
+worker-stage completion. `accepted` requires the selected graph admission stage to consume the
+one-shot settlement envelope explicitly and route the settlement command back to the Flowie owner.
+That callback only enters the endpoint's bounded reply command queue; the CoroNet owner lane still
+owns session mutation and socket send. An arbitrary successful stage is not an ACCEPTED boundary.
+Endpoint config ABI v3 introduced this typed policy; the current ABI v8 retains it and intentionally
+rejects obsolete layouts.
 
-The memory Queue commit is not rolled back if routing the owner command later fails. In that case
-the graph publication reports failure, no MQTT ACK is promised, and the independently owned Queue
-record remains eligible for delivery; a reconnect/redelivery may therefore produce a duplicate.
-This is the explicit at-least-once failure boundary, not an implicit retry or fallback. The real
-TCP integration test composes endpoint, Queue sink, Queue source, and a downstream stage entirely
-from one resolved YAML snapshot.
+`durable` is emitted only by an explicit storage primitive after its commit boundary, including a
+PostgreSQL outbox COMMIT or Redis Stream XADD acknowledgement. The sink may use the current live,
+generation-fenced route to enqueue the owner settlement command after commit, but that route is
+never serialized. PostgreSQL stores the complete packet, message type/flags, and a serializable
+protocol origin containing the MQTT version and stable publisher session identity. Its source
+reconstructs a route-less message; the current endpoint owner performs subscription selection and
+creates current delivery routes. Whole-graph success is not evidence of durable commit, especially
+with branching.
 
-`durable` is emitted only by a SQLite Queue transaction after COMMIT or by a Redis Stream sink after
-a successful XADD reply. The primitive uses the live generation-fenced route only to enqueue the
-owner command after commit; SQLite strips route and settlement sidecars before serialization, and
-Redis stores only the configured payload field. Whole-graph success is not evidence of durable
-commit, especially with branching. Real TCP tests cover YAML-composed Flowie-to-SQLite and
-Flowie-to-Redis paths; both replay the complete owned MQTT packet from the storage fact source.
+The current Flowie composition evaluates Rules directly after endpoint admission. A different
+`.flow` may connect a durable store before Rules when the original admitted packet is the fact
+source, or after Rules when the transformed message is the fact source; the order is explicit and
+not inferred. Ingress stores the negotiated MQTT version and the packet's fixed-header flags in
+private message metadata; the complete wire packet remains the
+message-owned bytes in the retained buffer. An internal Flowie facts provider uses that metadata and the
+existing typed parser to materialize a 15-field bounded schema. The base fields are `mqtt.topic`,
+`mqtt.payload`, `mqtt.payload_size`, `mqtt.qos`, `mqtt.retain`, `mqtt.duplicate`, `mqtt.packet_id`,
+and `mqtt.version`. MQTT 5 adds nullable `mqtt.payload_format_indicator`,
+`mqtt.message_expiry_interval`, `mqtt.content_type`, `mqtt.response_topic`, and binary-safe
+`mqtt.correlation_data`; `mqtt.user_property_count` reports the bounded repeatable-property count,
+and `mqtt.broker_will` identifies a broker-generated Will. String facts are borrowed
+length-delimited views valid only for the current `rules.apply` call. Optional properties use NULL
+when absent rather than a fabricated zero or empty value. No parsed projection, bitmap, parser
+owner, live connection route, or duplicated payload is persisted. Store replay reparses the
+authoritative wire payload and rebuilds the projection. The version bits are Flowie protocol
+metadata and must not be overwritten before a later MQTT facts evaluation; current transforms
+mutate status instead.
 
-Rules operate after the selected Queue boundary. Ingress stores the negotiated MQTT version and
-the packet's fixed-header flags in the Queue-serializable private message flags field; the complete
-wire packet remains the owned payload. An internal Flowie facts provider uses that metadata and the
-existing typed parser to materialize the bounded schema fields `mqtt.topic`, `mqtt.payload`,
-`mqtt.payload_size`, `mqtt.qos`, `mqtt.retain`, `mqtt.duplicate`, `mqtt.packet_id`, and
-`mqtt.version`. String facts are borrowed length-delimited views valid only for the current
-`rules.apply` call. No parsed projection, parser owner, live connection route, or duplicated payload
-is persisted. The version bits are Flowie protocol metadata and must not be overwritten before a
-later MQTT facts evaluation; current transforms mutate status instead.
-
-The composition tests exercise two concrete graphs. A memory Queue source feeds `rules.apply`,
+The composition tests exercise multiple concrete graphs. Endpoint admission feeds `rules.apply`,
 which mutates private status and routes each MQTT PUBLISH either to the existing Flowie endpoint
-fan-out sink or to the existing CoroNet TCP socket sink. A separate SQLite test destroys and
-recreates the Queue owner, then routes the recovered row through the same facts boundary to the TCP
-sink while preserving the complete wire packet byte-for-byte. The product host now resolves the
-same RuleSet program and one explicitly named CoroNet socket output from its strict YAML profile;
-it does not infer routes, facts providers, or unlisted adapter kinds.
+fan-out sink or to the existing CoroNet TCP socket sink. Provider-neutral record-store tests exercise
+commit faults and recovery independently. The product host resolves a RuleSet
+program only when configured, while the Graph explicitly names every CoroNet, HTTP, Redis, or PostgreSQL
+source/sink adapter. The host does not infer routes, facts providers, storage destinations, or
+unregistered adapter kinds.
+
+The SMB product graph is deliberately two paths: admitted PUBLISH goes directly to the PostgreSQL
+outbox sink so QoS 1/2 ACK cannot precede COMMIT; an independent PostgreSQL source replays the
+committed packet through Policy and the endpoint fan-out sink, deleting the row only after graph
+success. Downstream failure retains the row and stops that source fail fast. This is at-least-once
+delivery; consumers still require idempotency where duplicate side effects are not acceptable.
 
 This durable point proves message persistence, not full broker recovery or exactly-once delivery.
 Flowie's managed session, subscription, QoS, retained, and pending Will state are restored only when

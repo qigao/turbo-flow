@@ -34,13 +34,15 @@ typedef enum flowie_session_delivery_state_e {
   FLOWIE_SESSION_DELIVERY_RESERVED = 1,
   FLOWIE_SESSION_DELIVERY_WAIT_ACK,
   FLOWIE_SESSION_DELIVERY_WAIT_PUBREC,
-  FLOWIE_SESSION_DELIVERY_WAIT_PUBCOMP
+  FLOWIE_SESSION_DELIVERY_WAIT_PUBCOMP,
+  FLOWIE_SESSION_DELIVERY_QUEUED
 } flowie_session_delivery_state_t;
 
 typedef struct flowie_session_delivery_s {
   uint16_t packet_id;
   uint8_t qos;
   flowie_session_delivery_state_t state;
+  uint64_t expiry_at_epoch_seconds;
   tstr_t packet;
 } flowie_session_delivery_t;
 
@@ -68,6 +70,9 @@ struct flowie_session_owner_s {
   uint8_t will_qos;
   uint8_t will_retain;
 };
+
+static int flowie_session_record_delivery_validate(const flowie_session_owner_t *owner,
+                                                   const flowie_session_delivery_t *delivery);
 
 static int flowie_session_config_valid(const flowie_session_config_t *config) {
   return config && config->size >= sizeof(*config) &&
@@ -310,8 +315,9 @@ void flowie_session_owner_destroy(flowie_session_owner_t *owner) {
   free(owner);
 }
 
-int flowie_session_owner_open(flowie_session_owner_t *owner,
-                              const flowie_mqtt_connect_view_t *connect) {
+static int flowie_session_owner_open_impl(flowie_session_owner_t *owner,
+                                           const flowie_mqtt_connect_view_t *connect,
+                                           int allow_active) {
   tstr_t client_id = NULL;
   tstr_t will_topic = NULL;
   tstr_t will_properties = NULL;
@@ -326,7 +332,7 @@ int flowie_session_owner_open(flowie_session_owner_t *owner,
       !flowie_mqtt_version_is_supported(connect->version) ||
       (!connect->client_id.data && connect->client_id.size != 0u))
     return TURBO_EINVAL;
-  if (owner->active) return TURBO_EALREADY;
+  if (owner->active && !allow_active) return TURBO_EALREADY;
   if (connect->client_id.size == 0u) return TURBO_ENOTSUP;
   if (connect->client_id.size > UINT16_MAX) return TURBO_EMSGSIZE;
   if (!flowie_mqtt_utf8_validate(connect->client_id)) return TURBO_EPROTO;
@@ -390,9 +396,15 @@ int flowie_session_owner_open(flowie_session_owner_t *owner,
   return TURBO_OK;
 }
 
-int flowie_session_owner_connect(flowie_session_owner_t *owner,
-                                 const flowie_mqtt_connect_view_t *connect,
-                                 flowie_session_connect_result_t *out) {
+int flowie_session_owner_open(flowie_session_owner_t *owner,
+                              const flowie_mqtt_connect_view_t *connect) {
+  return flowie_session_owner_open_impl(owner, connect, 0);
+}
+
+static int flowie_session_owner_connect_impl(flowie_session_owner_t *owner,
+                                              const flowie_mqtt_connect_view_t *connect,
+                                              flowie_session_connect_result_t *out,
+                                              int allow_active) {
   flowie_session_connect_result_t result = FLOWIE_SESSION_CONNECT_RESULT_INIT;
   int initialized;
   int rc;
@@ -404,7 +416,7 @@ int flowie_session_owner_connect(flowie_session_owner_t *owner,
   initialized = owner->initialized != 0u;
   result.reply.type = FLOWIE_MQTT_PACKET_CONNACK;
   result.reply.version = connect->version;
-  rc = flowie_session_owner_open(owner, connect);
+  rc = flowie_session_owner_open_impl(owner, connect, allow_active);
   if (rc == TURBO_OK) {
     result.accepted = 1u;
     result.session_present = (uint8_t)(initialized && !connect->clean_start);
@@ -428,6 +440,18 @@ int flowie_session_owner_connect(flowie_session_owner_t *owner,
   }
   *out = result;
   return TURBO_OK;
+}
+
+int flowie_session_owner_connect(flowie_session_owner_t *owner,
+                                 const flowie_mqtt_connect_view_t *connect,
+                                 flowie_session_connect_result_t *out) {
+  return flowie_session_owner_connect_impl(owner, connect, out, 0);
+}
+
+int flowie_session_owner_connect_takeover(flowie_session_owner_t *owner,
+                                          const flowie_mqtt_connect_view_t *connect,
+                                          flowie_session_connect_result_t *out) {
+  return flowie_session_owner_connect_impl(owner, connect, out, 1);
 }
 
 int flowie_session_owner_close(flowie_session_owner_t *owner) {
@@ -711,7 +735,8 @@ int flowie_session_owner_delivery_reserve(flowie_session_owner_t *owner, uint8_t
   uint16_t candidate;
   int rc;
   if (!owner || !packet_id || qos == 0u || qos > 2u) return TURBO_EINVAL;
-  if (!owner->active) return TURBO_EBUSY;
+  if (!owner->active && (!owner->initialized || owner->session_expiry_interval == 0u))
+    return TURBO_EBUSY;
   if (turbo_vec_size(&owner->inflight) + turbo_vec_size(&owner->deliveries) >=
       owner->config.max_inflight)
     return TURBO_ENOSPC;
@@ -732,8 +757,10 @@ int flowie_session_owner_delivery_reserve(flowie_session_owner_t *owner, uint8_t
   return TURBO_OK;
 }
 
-int flowie_session_owner_delivery_commit(flowie_session_owner_t *owner, uint16_t packet_id,
-                                         flowie_mqtt_span_t packet) {
+static int flowie_session_owner_delivery_commit_state(flowie_session_owner_t *owner,
+                                                      uint16_t packet_id, flowie_mqtt_span_t packet,
+                                                      uint64_t expiry_at_epoch_seconds,
+                                                      int queued) {
   flowie_session_delivery_t *delivery;
   tstr_t owned;
   if (!owner || !packet.data || packet.size == 0u) return TURBO_EINVAL;
@@ -743,15 +770,39 @@ int flowie_session_owner_delivery_commit(flowie_session_owner_t *owner, uint16_t
   owned = tstr_new_len(packet.data, packet.size);
   if (!owned) return TURBO_ENOMEM;
   delivery->packet = owned;
-  delivery->state = delivery->qos == 1u ? FLOWIE_SESSION_DELIVERY_WAIT_ACK
-                                        : FLOWIE_SESSION_DELIVERY_WAIT_PUBREC;
+  delivery->expiry_at_epoch_seconds = expiry_at_epoch_seconds;
+  delivery->state = queued ? FLOWIE_SESSION_DELIVERY_QUEUED
+                           : delivery->qos == 1u ? FLOWIE_SESSION_DELIVERY_WAIT_ACK
+                                                 : FLOWIE_SESSION_DELIVERY_WAIT_PUBREC;
+  if (expiry_at_epoch_seconds != 0u &&
+      flowie_session_record_delivery_validate(owner, delivery) != TURBO_OK) {
+    tstr_freep(&delivery->packet);
+    delivery->expiry_at_epoch_seconds = 0u;
+    delivery->state = FLOWIE_SESSION_DELIVERY_RESERVED;
+    return TURBO_EPROTO;
+  }
   if (owner->resource_generation == UINT64_MAX) {
     tstr_freep(&delivery->packet);
+    delivery->expiry_at_epoch_seconds = 0u;
     delivery->state = FLOWIE_SESSION_DELIVERY_RESERVED;
     return TURBO_ERANGE;
   }
   owner->resource_generation += 1u;
   return TURBO_OK;
+}
+
+int flowie_session_owner_delivery_commit(flowie_session_owner_t *owner, uint16_t packet_id,
+                                         flowie_mqtt_span_t packet,
+                                         uint64_t expiry_at_epoch_seconds) {
+  return flowie_session_owner_delivery_commit_state(owner, packet_id, packet,
+                                                    expiry_at_epoch_seconds, 0);
+}
+
+int flowie_session_owner_delivery_commit_queued(flowie_session_owner_t *owner, uint16_t packet_id,
+                                                flowie_mqtt_span_t packet,
+                                                uint64_t expiry_at_epoch_seconds) {
+  return flowie_session_owner_delivery_commit_state(owner, packet_id, packet,
+                                                    expiry_at_epoch_seconds, 1);
 }
 
 int flowie_session_owner_delivery_cancel(flowie_session_owner_t *owner, uint16_t packet_id) {
@@ -767,22 +818,160 @@ int flowie_session_owner_delivery_cancel(flowie_session_owner_t *owner, uint16_t
   return TURBO_OK;
 }
 
-int flowie_session_owner_delivery_pending_at(flowie_session_owner_t *owner, size_t index,
-                                             flowie_mqtt_span_t *packet) {
+int flowie_session_owner_delivery_expire(flowie_session_owner_t *owner, uint64_t now_epoch_seconds,
+                                         size_t *removed_count) {
+  size_t count = 0u;
+  size_t index = 0u;
+  if (!owner || !removed_count || now_epoch_seconds == 0u) return TURBO_EINVAL;
+  *removed_count = 0u;
+  for (size_t i = 0u; i < turbo_vec_size(&owner->deliveries); ++i) {
+    const flowie_session_delivery_t *delivery =
+        (const flowie_session_delivery_t *)turbo_vec_at_const(&owner->deliveries, i);
+    if (delivery && delivery->expiry_at_epoch_seconds != 0u &&
+        delivery->expiry_at_epoch_seconds <= now_epoch_seconds)
+      count += 1u;
+  }
+  if (count == 0u) return TURBO_OK;
+  if (owner->resource_generation == UINT64_MAX) return TURBO_ERANGE;
+  while (index < turbo_vec_size(&owner->deliveries)) {
+    flowie_session_delivery_t *delivery =
+        (flowie_session_delivery_t *)turbo_vec_at(&owner->deliveries, index);
+    if (!delivery || delivery->expiry_at_epoch_seconds == 0u ||
+        delivery->expiry_at_epoch_seconds > now_epoch_seconds) {
+      index += 1u;
+      continue;
+    }
+    {
+      flowie_session_delivery_t removed;
+      int rc;
+      memset(&removed, 0, sizeof(removed));
+      rc = turbo_vec_swap_remove(&owner->deliveries, index, &removed);
+      if (rc != TURBO_OK) return rc;
+      tstr_freep(&removed.packet);
+    }
+  }
+  owner->resource_generation += 1u;
+  *removed_count = count;
+  return TURBO_OK;
+}
+
+int flowie_session_owner_delivery_expire_packet(flowie_session_owner_t *owner, uint16_t packet_id,
+                                                uint64_t now_epoch_seconds, int *removed) {
   flowie_session_delivery_t *delivery;
-  if (!owner || !packet) return TURBO_EINVAL;
+  flowie_session_delivery_t removed_delivery;
+  size_t index;
+  int rc;
+  if (!owner || packet_id == 0u || now_epoch_seconds == 0u || !removed) return TURBO_EINVAL;
+  *removed = 0;
+  delivery = flowie_session_delivery_find(owner, packet_id, &index);
+  if (!delivery) return TURBO_ENOENT;
+  if (delivery->expiry_at_epoch_seconds == 0u ||
+      delivery->expiry_at_epoch_seconds > now_epoch_seconds)
+    return TURBO_OK;
+  if (owner->resource_generation == UINT64_MAX) return TURBO_ERANGE;
+  memset(&removed_delivery, 0, sizeof(removed_delivery));
+  rc = turbo_vec_swap_remove(&owner->deliveries, index, &removed_delivery);
+  if (rc != TURBO_OK) return rc;
+  tstr_freep(&removed_delivery.packet);
+  owner->resource_generation += 1u;
+  *removed = 1;
+  return TURBO_OK;
+}
+
+int flowie_session_delivery_packet_expiry_refresh(flowie_mqtt_version_t version, uint8_t *packet,
+                                                  size_t packet_size,
+                                                  uint64_t expiry_at_epoch_seconds,
+                                                  uint64_t now_epoch_seconds) {
+  flowie_mqtt_parse_options_t options = FLOWIE_MQTT_PARSE_OPTIONS_INIT;
+  flowie_mqtt_packet_view_t packet_view = FLOWIE_MQTT_PACKET_VIEW_INIT;
+  flowie_mqtt_publish_view_t publish = FLOWIE_MQTT_PUBLISH_VIEW_INIT;
+  flowie_mqtt_property_iterator_t iterator = FLOWIE_MQTT_PROPERTY_ITERATOR_INIT;
+  flowie_mqtt_property_view_t property = FLOWIE_MQTT_PROPERTY_VIEW_INIT;
+  size_t consumed = 0u;
+  int found = 0;
+  int rc;
+  if (!packet || packet_size == 0u || expiry_at_epoch_seconds == 0u || now_epoch_seconds == 0u ||
+      expiry_at_epoch_seconds <= now_epoch_seconds || version != FLOWIE_MQTT_VERSION_5)
+    return TURBO_EINVAL;
+  options.version = version;
+  options.max_packet_size = packet_size;
+  rc = flowie_mqtt_packet_parse(packet, packet_size, &options, &packet_view, &consumed, NULL);
+  if (rc != FLOWIE_MQTT_PARSE_OK || consumed != packet_size ||
+      flowie_mqtt_publish_parse(&packet_view, &publish) != FLOWIE_MQTT_PARSE_OK)
+    return TURBO_EPROTO;
+  rc = flowie_mqtt_property_iterator_init(&publish.properties, &iterator);
+  if (rc != FLOWIE_MQTT_PARSE_OK) return TURBO_EPROTO;
+  for (;;) {
+    const uint8_t *begin = iterator.cursor;
+    rc = flowie_mqtt_property_iterator_next(&iterator, &property);
+    if (rc == FLOWIE_MQTT_PARSE_NEED_MORE) break;
+    if (rc != FLOWIE_MQTT_PARSE_OK || !begin || iterator.cursor < begin) return TURBO_EPROTO;
+    if (property.identifier == FLOWIE_MQTT_PROPERTY_MESSAGE_EXPIRY_INTERVAL) {
+      uint64_t remaining = expiry_at_epoch_seconds - now_epoch_seconds;
+      uint32_t interval = remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
+      size_t property_size = (size_t)(iterator.cursor - begin);
+      uint8_t *value;
+      if (found || property_size < sizeof(uint32_t)) return TURBO_EPROTO;
+      value = packet + (size_t)(iterator.cursor - packet) - sizeof(uint32_t);
+      value[0] = (uint8_t)(interval >> 24u);
+      value[1] = (uint8_t)(interval >> 16u);
+      value[2] = (uint8_t)(interval >> 8u);
+      value[3] = (uint8_t)interval;
+      found = 1;
+    }
+  }
+  return found ? TURBO_OK : TURBO_EPROTO;
+}
+
+int flowie_session_owner_delivery_pending_at_ex(flowie_session_owner_t *owner, size_t index,
+                                                uint64_t now_epoch_seconds,
+                                                flowie_mqtt_span_t *packet, uint16_t *packet_id,
+                                                uint64_t *expiry_at_epoch_seconds) {
+  flowie_session_delivery_t *delivery;
+  int rc;
+  if (!owner || !packet || !packet_id || !expiry_at_epoch_seconds) return TURBO_EINVAL;
   delivery = (flowie_session_delivery_t *)turbo_vec_at(&owner->deliveries, index);
   if (!delivery || !delivery->packet || delivery->state == FLOWIE_SESSION_DELIVERY_RESERVED)
     return TURBO_ENOENT;
-  if ((delivery->state == FLOWIE_SESSION_DELIVERY_WAIT_ACK ||
-       delivery->state == FLOWIE_SESSION_DELIVERY_WAIT_PUBREC) &&
-      tstr_len(delivery->packet) != 0u &&
-      ((uint8_t)delivery->packet[0] >> 4u) == FLOWIE_MQTT_PACKET_PUBLISH) {
+  if (delivery->expiry_at_epoch_seconds != 0u) {
+    if (now_epoch_seconds == 0u || delivery->expiry_at_epoch_seconds <= now_epoch_seconds)
+      return TURBO_EBUSY;
+    if (owner->version == FLOWIE_MQTT_VERSION_5) {
+      rc = flowie_session_delivery_packet_expiry_refresh(
+          owner->version, (uint8_t *)delivery->packet, tstr_len(delivery->packet),
+          delivery->expiry_at_epoch_seconds, now_epoch_seconds);
+      if (rc != TURBO_OK) return rc;
+    } else if (!flowie_mqtt_version_is_3x(owner->version)) {
+      return TURBO_EPROTO;
+    }
+  }
+  if (delivery->state == FLOWIE_SESSION_DELIVERY_QUEUED) {
+    delivery->state = delivery->qos == 1u ? FLOWIE_SESSION_DELIVERY_WAIT_ACK
+                                          : FLOWIE_SESSION_DELIVERY_WAIT_PUBREC;
+  } else if ((delivery->state == FLOWIE_SESSION_DELIVERY_WAIT_ACK ||
+              delivery->state == FLOWIE_SESSION_DELIVERY_WAIT_PUBREC) &&
+             tstr_len(delivery->packet) != 0u &&
+             ((uint8_t)delivery->packet[0] >> 4u) == FLOWIE_MQTT_PACKET_PUBLISH) {
     delivery->packet[0] = (char)((uint8_t)delivery->packet[0] | UINT8_C(0x08));
   }
   packet->data = (const uint8_t *)delivery->packet;
   packet->size = tstr_len(delivery->packet);
+  *packet_id = delivery->packet_id;
+  *expiry_at_epoch_seconds = delivery->expiry_at_epoch_seconds;
   return TURBO_OK;
+}
+
+int flowie_session_owner_delivery_pending_at(flowie_session_owner_t *owner, size_t index,
+                                             flowie_mqtt_span_t *packet) {
+  uint16_t packet_id = 0u;
+  uint64_t expiry_at_epoch_seconds = 0u;
+  flowie_session_delivery_t *delivery;
+  if (!owner || !packet) return TURBO_EINVAL;
+  delivery = (flowie_session_delivery_t *)turbo_vec_at(&owner->deliveries, index);
+  if (!delivery) return TURBO_ENOENT;
+  if (delivery->expiry_at_epoch_seconds != 0u) return TURBO_EBUSY;
+  return flowie_session_owner_delivery_pending_at_ex(owner, index, 0u, packet, &packet_id,
+                                                     &expiry_at_epoch_seconds);
 }
 
 int flowie_session_owner_delivery_ack(flowie_session_owner_t *owner,
@@ -830,6 +1019,7 @@ int flowie_session_owner_delivery_ack(flowie_session_owner_t *owner,
         tstr_freep(&delivery->packet);
         delivery->packet = owned;
         delivery->state = FLOWIE_SESSION_DELIVERY_WAIT_PUBCOMP;
+        delivery->expiry_at_epoch_seconds = 0u;
       }
       reply->kind = FLOWIE_SESSION_ACK_PUBREL;
       reply->packet_id = control.packet_id;
@@ -1137,7 +1327,7 @@ int flowie_session_owner_qos2_release(flowie_session_owner_t *owner,
 #define FLOWIE_SESSION_RECORD_HEADER_SIZE 8u
 #define FLOWIE_SESSION_RECORD_METADATA_SIZE 25u
 #define FLOWIE_SESSION_RECORD_VERSION_MAJOR 1u
-#define FLOWIE_SESSION_RECORD_VERSION_MINOR 2u
+#define FLOWIE_SESSION_RECORD_VERSION_MINOR 3u
 #define FLOWIE_SESSION_RECORD_WILL_METADATA_SIZE 7u
 
 static void flowie_session_record_write_u16(uint8_t *out, uint16_t value) {
@@ -1226,7 +1416,7 @@ int flowie_session_owner_record_encode(const flowie_session_owner_t *owner, uint
         (const flowie_session_delivery_t *)turbo_vec_at_const(&owner->deliveries, i);
     if (entry && entry->state != FLOWIE_SESSION_DELIVERY_RESERVED) {
       if (!entry->packet) return TURBO_EPROTO;
-      rc = flowie_session_record_size_add(&required, 4u);
+      rc = flowie_session_record_size_add(&required, 12u);
     }
   }
   for (size_t i = 0u; rc == TURBO_OK && i < turbo_vec_size(&owner->deliveries); ++i) {
@@ -1288,11 +1478,17 @@ int flowie_session_owner_record_encode(const flowie_session_owner_t *owner, uint
   for (size_t i = 0u; rc == TURBO_OK && i < turbo_vec_size(&owner->deliveries); ++i) {
     const flowie_session_delivery_t *entry =
         (const flowie_session_delivery_t *)turbo_vec_at_const(&owner->deliveries, i);
-    uint8_t state[4];
+    uint8_t state[12];
+    flowie_session_delivery_state_t persisted_state;
     if (!entry || entry->state == FLOWIE_SESSION_DELIVERY_RESERVED) continue;
     flowie_session_record_write_u16(state, entry->packet_id);
     state[2] = entry->qos;
-    state[3] = (uint8_t)entry->state;
+    persisted_state = entry->state == FLOWIE_SESSION_DELIVERY_QUEUED
+                          ? entry->qos == 1u ? FLOWIE_SESSION_DELIVERY_WAIT_ACK
+                                             : FLOWIE_SESSION_DELIVERY_WAIT_PUBREC
+                          : entry->state;
+    state[3] = (uint8_t)persisted_state;
+    flowie_session_record_write_u64(state + 4u, entry->expiry_at_epoch_seconds);
     rc = flowie_session_record_append(out, capacity, &offset, 6u, state, sizeof(state));
   }
   for (size_t i = 0u; rc == TURBO_OK && i < turbo_vec_size(&owner->deliveries); ++i) {
@@ -1341,7 +1537,7 @@ static int flowie_session_record_delivery_validate(const flowie_session_owner_t 
     flowie_mqtt_control_packet_view_t control = FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
     if (delivery->qos != 2u || packet.type != FLOWIE_MQTT_PACKET_PUBREL ||
         flowie_mqtt_control_packet_parse(&packet, &control) != FLOWIE_MQTT_PARSE_OK ||
-        control.packet_id != delivery->packet_id)
+        control.packet_id != delivery->packet_id || delivery->expiry_at_epoch_seconds != 0u)
       return TURBO_EPROTO;
   } else {
     flowie_mqtt_publish_view_t publish = FLOWIE_MQTT_PUBLISH_VIEW_INIT;
@@ -1349,8 +1545,29 @@ static int flowie_session_record_delivery_validate(const flowie_session_owner_t 
         flowie_mqtt_publish_parse(&packet, &publish) != FLOWIE_MQTT_PARSE_OK ||
         publish.packet_id != delivery->packet_id || publish.qos != delivery->qos ||
         (delivery->state == FLOWIE_SESSION_DELIVERY_WAIT_ACK && delivery->qos != 1u) ||
-        (delivery->state == FLOWIE_SESSION_DELIVERY_WAIT_PUBREC && delivery->qos != 2u))
+        (delivery->state == FLOWIE_SESSION_DELIVERY_WAIT_PUBREC && delivery->qos != 2u) ||
+        (delivery->state == FLOWIE_SESSION_DELIVERY_QUEUED &&
+         (delivery->qos == 0u || delivery->qos > 2u)))
       return TURBO_EPROTO;
+    if (delivery->expiry_at_epoch_seconds != 0u && owner->version == FLOWIE_MQTT_VERSION_5) {
+      flowie_mqtt_property_iterator_t iterator = FLOWIE_MQTT_PROPERTY_ITERATOR_INIT;
+      flowie_mqtt_property_view_t property = FLOWIE_MQTT_PROPERTY_VIEW_INIT;
+      int found = 0;
+      if (flowie_mqtt_property_iterator_init(&publish.properties, &iterator) !=
+          FLOWIE_MQTT_PARSE_OK)
+        return TURBO_EPROTO;
+      while ((rc = flowie_mqtt_property_iterator_next(&iterator, &property)) ==
+             FLOWIE_MQTT_PARSE_OK) {
+        if (property.identifier == FLOWIE_MQTT_PROPERTY_MESSAGE_EXPIRY_INTERVAL) {
+          if (found) return TURBO_EPROTO;
+          found = 1;
+        }
+      }
+      if (!found || rc != FLOWIE_MQTT_PARSE_NEED_MORE) return TURBO_EPROTO;
+    } else if (delivery->expiry_at_epoch_seconds != 0u &&
+               !flowie_mqtt_version_is_3x(owner->version)) {
+      return TURBO_EPROTO;
+    }
   }
   return TURBO_OK;
 }
@@ -1418,7 +1635,8 @@ int flowie_session_owner_record_restore(const flowie_session_config_t *config,
     if (type == 1u) {
       if (header_seen || offset != 0u || value_size != FLOWIE_SESSION_RECORD_HEADER_SIZE ||
           memcmp(value, "FSES", 4u) != 0 || value[4] != 0u ||
-          value[5] != FLOWIE_SESSION_RECORD_VERSION_MAJOR || value[6] != 0u || value[7] > 2u) {
+          value[5] != FLOWIE_SESSION_RECORD_VERSION_MAJOR || value[6] != 0u ||
+          value[7] > FLOWIE_SESSION_RECORD_VERSION_MINOR) {
         turbo_free_ltv(&message);
         rc = TURBO_EPROTO;
         goto fail;
@@ -1517,7 +1735,7 @@ int flowie_session_owner_record_restore(const flowie_session_config_t *config,
       }
     } else if (type == 6u) {
       flowie_session_delivery_t delivery;
-      if (value_size != 4u ||
+      if (value_size != (record_minor >= 3u ? 12u : 4u) ||
           turbo_vec_size(&owner->inflight) + turbo_vec_size(&owner->deliveries) >=
               config->max_inflight) {
         turbo_free_ltv(&message);
@@ -1528,6 +1746,8 @@ int flowie_session_owner_record_restore(const flowie_session_config_t *config,
       delivery.packet_id = flowie_session_record_read_u16(value);
       delivery.qos = value[2];
       delivery.state = (flowie_session_delivery_state_t)value[3];
+      delivery.expiry_at_epoch_seconds =
+          record_minor >= 3u ? flowie_session_record_read_u64(value + 4u) : 0u;
       if (delivery.packet_id == 0u || delivery.qos == 0u || delivery.qos > 2u ||
           delivery.state < FLOWIE_SESSION_DELIVERY_WAIT_ACK ||
           delivery.state > FLOWIE_SESSION_DELIVERY_WAIT_PUBCOMP ||

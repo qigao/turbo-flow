@@ -8,8 +8,8 @@
 
 认证数据可能来自 Redis、SQLite、PostgreSQL 或任意专用数据库。若 Flowie 为每种数据库注册认证
 provider，数据库地址、凭据、schema、KDF 与连接生命周期会穿透产品边界，并容易与 TurboFlow 的
-普通数据/record-store provider 混淆。它还会扩大网络可达面：broker 一旦被攻破，就可能直接访问
-身份数据库。
+Graph data adapter 或 session record-store backend 混淆。它还会扩大网络可达面：broker 一旦
+被攻破，就可能直接访问身份数据库。
 
 本决策只处理 CONNECT 阶段的身份认证。SecurityRealm 使用本地不可变 ACL 快照执行授权；快照的
 动态加载与发布由 `ADR_DYNAMIC_ACL_BUNDLE.md` 规定，不属于 credential 认证接口。
@@ -19,7 +19,7 @@ provider，数据库地址、凭据、schema、KDF 与连接生命周期会穿�
 1. Flowie 直接访问每种认证数据库：延迟较低，但数据库协议、schema、秘密与迁移逻辑进入 broker，
    攻击面和部署耦合最大。
 2. 可插拔数据库认证 provider：隔离部分代码，但仍允许数据库对 Flowie 网络可达，配置名称也容易与
-   普通数据 provider 混淆。
+   Graph data adapter 或 session record-store backend 混淆。
 3. Flowie 只访问 HTTPS 认证服务：服务内部自行选择数据库；Flowie 只依赖一个版本化网络契约。
 
 选择方案 3。
@@ -31,7 +31,8 @@ provider，数据库地址、凭据、schema、KDF 与连接生命周期会穿�
   expiry 与 policy version。
 - ACL provider 拥有版本化 policy 事实源，SecurityRealm 拥有其本地不可变快照。认证完成后的
   connect/publish/subscribe 授权只读取 principal 和本地快照，不在消息热路径访问认证服务或数据库。
-- Redis/SQLite/PostgreSQL 仍可作为普通/session record-store provider，但该用途与认证完全分离。
+- Redis/PostgreSQL 可通过各自 Graph adapter 处理业务数据，Redis/PostgreSQL 可作为 session
+  record-store backend；这些用途都与认证服务内部数据库完全分离。
 
 ```text
 MQTT client -> Flowie CONNECT coroutine -> HTTPS auth service -> private credential database

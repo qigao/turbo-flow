@@ -1,5 +1,6 @@
 # Flowie 文档
 
+- [配置式 Broker 概念与术语](CONFIGURED_BROKER_CONCEPTS.md)
 - [服务端使用指南](SERVER_GUIDE.md)
 - [客户端开发指南](CLIENT_GUIDE.md)
 - [架构说明](ARCHITECTURE.md)

@@ -3,16 +3,21 @@
 开发接入、pattern 选择、Application facade、Graph、wire v3 安全和背压说明见
 [开发指南](DEVELOPER_GUIDE.md)。
 
-FlowMQ 是基于 CoroNet、FMQ v3 和 TurboFlow graph/Disruptor 构建的消息传输产品。它借鉴
-ZeroMQ 的通信模式，但不兼容 ZeroMQ wire/API，也不提供独立 Client SDK。远端参与者通过 graph
-中的 FMQ endpoint 接入；graph 定义接收、处理、路由和发送流程。
+FlowMQ 是基于 CoroNet 和 FMQ v3 的消息传输产品，并通过 TurboFlow graph/Disruptor 提供
+可组合的高级处理能力。它借鉴 ZeroMQ 的通信模式，但不兼容 ZeroMQ wire/API，也不提供独立
+Client SDK。基础 PUB/SUB、PUSH/PULL、REQ/REP、ROUTER/DEALER 等 pattern 以纯数据流转和
+pattern owner 为主；graph 在这些路径上通常只是 typed operation bridge。需要规则、队列、
+持久化、enrichment 或跨 pattern 组合时，才把 `turbo_flow_msg_t` 送入完整 graph。
+
+因此，简单 FlowMQ 应用不需要配置文件；直接创建 socket/pattern 即可。YAML 和 TurboFlow
+属于 proxy 等复杂产品组合，不是基础 API 的前置条件。
 
 当前稳定边界：
 
 - 本地 C API 为 v1，FMQ wire 只支持 v3；decoder 拒绝其他版本，不协商、不降级；
 - 人工配置入口为 YAML v1，resolver 输出 immutable resolved snapshot；
 - `REQ/REP` 严格同步，delayed reply 只属于 `ROUTER/DEALER`；
-- 持久化和重放由 Queue、Redis Stream、SQLite 等 graph resource 提供；
+- 持久化和重放由 Redis Stream 或其他显式 durable store 提供；
 - v3 security binding 是可选能力：未配置时仍要求宿主可信边界；配置后在七种 CoroNet transport 上
   强制认证、身份绑定与 default-deny ACL，不允许匿名回退。TLS/WSS 额外强制 TLS 1.3 exporter 绑定。
 
@@ -29,7 +34,7 @@ API 或 wire compatibility。
 | Target | Visibility | Purpose |
 | --- | --- | --- |
 | `FlowMQ::Protocol` | installed | FMQ v3 encode/decode、security envelope、fragmentation 和 heartbeat deadline |
-| `FlowMQ::Runtime` | build tree | graph-native FlowMQ runtime |
+| `FlowMQ::Runtime` | build tree | FlowMQ pattern runtime with optional graph bridge |
 | `FlowMQ::Broker` | build tree compatibility alias | 过渡名称，不应成为新代码依赖 |
 | `TurboFlow::FMQ` | installed compatibility target | 当前公开 runtime ABI |
 
@@ -107,6 +112,24 @@ detach 后 route 以 `owner_instance_id + session_id + session_generation` 存�
 worker、thread、coro 和 memory queue。peer 断线、同 identity 重连或 ROUTER restart 后，旧 route
 返回 `TURBO_ENOTCONN`；route 不允许持久化重放。
 
+## Message and Graph
+
+The provider-to-graph boundary is also recorded in
+[`../turbo_flow/ADR_MESSAGE_GRAPH_BOUNDARY.md`](../turbo_flow/ADR_MESSAGE_GRAPH_BOUNDARY.md).
+
+`flowmq_protocol_frame_t`/`flow_fmq_frame_t` 是协议 decoder 的临时 frame view，不能跨 owner
+lane、graph executor 或 queue 生命周期保存。FlowMQ provider 会将 frame 的 payload、topic、
+identity、correlation 和 route metadata 转换为拥有 `mem_buffer_t` 的 `turbo_flow_msg_t`。
+
+基础 pattern 仍由 peer session 和 pattern owner 维护匹配、correlation、HWM 和 transport side
+effect；graph 不替代这些协议状态。高级组合则使用统一消息：
+
+```text
+frame -> turbo_flow_msg_t -> graph stages -> FMQ/HTTP/socket/Redis/FlowStore sink
+```
+
+graph stage 失败与 transport send、storage accept、delivery completion 是不同的 ACK 边界。
+
 ## Graph and YAML
 
 Host 使用 `turbo_flow_fmq_register_adapter()` 或
@@ -114,8 +137,9 @@ Host 使用 `turbo_flow_fmq_register_adapter()` 或
 `TURBO_FLOW_FMQ_CONFIG_INIT` 开始；错误 size/version、未知字段和不适用于 transport 的 option 均
 fail fast。
 
-只需要一个 endpoint 而不需要自行组 graph 时，可使用薄的 Application facade。它仍然创建
-TurboFlow graph 和同一个 FMQ adapter；不会创建第二套 socket、队列、线程或 pattern 状态：
+只需要一个 endpoint 而不需要自行组高级 graph 时，可使用薄的 Application facade。它创建同一
+FMQ adapter，并用最小 graph bridge 连接 typed callback；不会创建第二套 socket、队列、线程或
+pattern 状态：
 
 ```c
 static int on_message(turbo_flow_fmq_app_t *app, turbo_flow_msg_t *message, void *ctx) {
@@ -144,7 +168,8 @@ if (rc == TURBO_OK) rc = turbo_flow_fmq_app_start(app);
 turbo_flow_fmq_app_destroy(app);
 ```
 
-`turbo_flow_fmq_app_send()` 复制 payload 并发布到 facade 的 graph input；
+`turbo_flow_fmq_app_send()` 复制 payload 并发布到 facade 的 graph input；这是统一消息边界，
+不是对基础 pattern 已存在的 wire frame 的零拷贝承诺。
 `turbo_flow_fmq_app_send_batch()` 为 `PUB`、`PUSH`、`DEALER` 一次提交多个 copied payload，
 并在全部已提交 frame 到达与单条 send 相同的交付边界后返回。TCP connect endpoint 会把编码后的
 多个 frame 合并为一次 stream write；其他合法 endpoint 布局保留同一批次提交/完成语义，但不保证
@@ -180,7 +205,7 @@ YAML 配置 transport、endpoint、pattern、topic、identity、timeout、heartb
 
 TFCW/1 credit worker 的易失性 graph 使用 pattern.fmq.credit module、FmqCreditWorker resource 和
 fmq.credit.control/dispatch/complete/worker_input operations。service 固定在
-channels.<name>.config，JOB 由上游 processor 预编码。durable owner C API 仍支持 Redis/SQLite，
+channels.<name>.config，JOB 由上游 processor 预编码。durable owner C API 支持 Redis Stream，
 但 durable graph registration 在通用 claim projection 完成前返回 TURBO_ENOTSUP，不会降级到内存。
 
 ```yaml
@@ -223,7 +248,7 @@ ACK 必须按边界解释：
 | graph publish success | 当前 graph attempt 成功 |
 | FMQ frame admission | 本地有界发送队列接管 encoded frame |
 | transport send success | CoroNet 完成一次写入 |
-| storage accept ACK | memory queue 接管，或 Redis/SQLite transaction 已提交 |
+| storage accept ACK | 显式 durable store transaction 已提交 |
 | delivery/completion ACK | consumer/worker 完成且 storage settlement 成功 |
 
 这些 ACK 不能互相模拟。FMQ HWM 只限制本地内存，不代表远端接收、处理或持久化。durable replay
@@ -342,7 +367,6 @@ RFC 9266 exporter；证书校验或 exporter 失败会直接拒绝连接，不�
 | Load balancer、reliable request、credit worker | supported，由 graph + pattern owner 组合，不增加 wire pattern |
 | Redis Stream durable replay | supported，Stream/PEL 是事实源 |
 | Redis Data SET/GET | supported，binary-safe data contract，与 Stream ACK 分离 |
-| SQLite Queue durable replay | supported，queue-private schema 与 transaction settlement |
 | PgSQL durable outbox | not claimed；普通 PostgreSQL query/sink 不等于事务 outbox source/sink |
 | TFMP management | supported，strict REQ/REP、typed command、operation/event store |
 | Failure-domain deployment owner | supported，authority epoch 必须由宿主强一致服务分配 |

@@ -56,10 +56,18 @@ static unsigned short flowie_test_port(void) {
   return port;
 }
 
-static flowie_test_socket_t flowie_test_connect(unsigned short port) {
+static int flowie_test_socket_set_recv_buffer(flowie_test_socket_t socket_handle, size_t bytes);
+
+static flowie_test_socket_t flowie_test_connect_with_recv_buffer(unsigned short port,
+                                                                 size_t recv_buffer_bytes) {
   struct sockaddr_in address;
   flowie_test_socket_t socket_handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (socket_handle == FLOWIE_TEST_INVALID_SOCKET) return FLOWIE_TEST_INVALID_SOCKET;
+  if (recv_buffer_bytes != 0u &&
+      flowie_test_socket_set_recv_buffer(socket_handle, recv_buffer_bytes) != TURBO_OK) {
+    flowie_test_socket_close(socket_handle);
+    return FLOWIE_TEST_INVALID_SOCKET;
+  }
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_port = htons(port);
@@ -69,6 +77,10 @@ static flowie_test_socket_t flowie_test_connect(unsigned short port) {
     return FLOWIE_TEST_INVALID_SOCKET;
   }
   return socket_handle;
+}
+
+static flowie_test_socket_t flowie_test_connect(unsigned short port) {
+  return flowie_test_connect_with_recv_buffer(port, 0u);
 }
 
 static int flowie_test_socket_set_recv_buffer(flowie_test_socket_t socket_handle, size_t bytes) {

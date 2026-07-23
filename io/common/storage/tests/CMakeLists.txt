@@ -1,0 +1,8 @@
+cmake_add_test(
+  test_storage_backend_registry
+  SOURCES test_storage_backend_registry.c
+  LIBS TurboFlow::StorageBackend TurboUtils::TinyTest
+  FOLDER "io/common/storage/tests")
+
+set_tests_properties(test_storage_backend_registry
+                     PROPERTIES LABELS "storage-contract;plugin-contract")

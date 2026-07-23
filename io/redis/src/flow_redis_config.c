@@ -1,4 +1,4 @@
-#include "turbo_flow_redis.h"
+#include "flow_redis_storage_internal.h"
 
 #include "turbo_error.h"
 #include "turbo_parser.h"
@@ -281,10 +281,10 @@ done:
   return rc;
 }
 
-int turbo_flow_redis_record_store_create_resolved(const turbo_flow_resolved_config_t *resolved,
-                                                  const char *channel_name,
-                                                  turbo_flow_record_store_t *out,
-                                                  turbo_flow_config_error_t *error) {
+int flow_redis_record_store_create_resolved(const turbo_flow_resolved_config_t *resolved,
+                                            const char *channel_name,
+                                            turbo_flow_record_store_t *out,
+                                            turbo_flow_config_error_t *error) {
   static const char *const allowed[] = {
       "backend",    "host", "port",         "username",       "password",       "database",
       "timeout_ms", "key",  "max_key_size", "max_value_size", "max_batch_size", "max_records"};
@@ -424,7 +424,7 @@ int turbo_flow_redis_record_store_create_resolved(const turbo_flow_resolved_conf
     goto done;
   }
   config.max_records = (size_t)number;
-  rc = turbo_flow_redis_record_store_create(&config, out);
+  rc = flow_redis_record_store_create(&config, out);
   if (rc != TURBO_OK)
     rc = flow_redis_blob_config_error(error, rc, channel_name, NULL,
                                       "Redis record store creation failed");

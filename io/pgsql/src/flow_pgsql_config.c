@@ -1,4 +1,4 @@
-#include "turbo_flow_pgsql.h"
+#include "flow_pgsql_storage_internal.h"
 
 #include "turbo_error.h"
 #include "turbo_parser.h"
@@ -38,7 +38,7 @@ static int flow_pgsql_validate_fields(const json_value_t *fields, const char *sc
     const char *field = turbo_json_object_key(fields, i);
     if (!field || !flow_pgsql_field_allowed(field, allowed, allowed_count))
       return flow_pgsql_config_error(error, TURBO_EINVAL, scope, name, field,
-                                     "unknown PostgreSQL outbox field");
+                                     "unknown PostgreSQL field");
   }
   return TURBO_OK;
 }
@@ -67,6 +67,17 @@ static int flow_pgsql_required_u64(const json_value_t *fields, const char *field
                                    "required positive integer has a fractional value");
   *out = converted;
   return TURBO_OK;
+}
+
+static int flow_pgsql_optional_u64(const json_value_t *fields, const char *field, uint64_t maximum,
+                                   uint64_t *out, const char *channel_name,
+                                   turbo_flow_config_error_t *error) {
+  json_value_t *value = turbo_json_object_get(fields, field);
+  if (!value) {
+    *out = 0u;
+    return TURBO_OK;
+  }
+  return flow_pgsql_required_u64(fields, field, maximum, out, channel_name, error);
 }
 
 int turbo_flow_pgsql_register_resolved_outbox_adapter(turbo_flow_t *flow, const char *name,
@@ -202,6 +213,112 @@ int turbo_flow_pgsql_register_resolved_outbox_adapter(turbo_flow_t *flow, const 
   if (rc != TURBO_OK)
     rc = flow_pgsql_config_error(error, rc, "adapters", name, NULL,
                                  "PostgreSQL outbox adapter registration failed");
+
+done:
+  turbo_free_json(&document);
+  return rc;
+}
+
+int flow_pgsql_record_store_create_resolved(const turbo_flow_resolved_config_t *resolved,
+                                            const char *channel_name,
+                                            turbo_flow_record_store_t *out,
+                                            turbo_flow_config_error_t *error) {
+  static const char *const channel_allowed[] = {
+      "backend",       "conninfo",       "namespace_name", "max_key_size",
+      "max_value_size", "max_batch_size", "max_records",    "create_table"};
+  turbo_flow_pgsql_record_store_config_t config = TURBO_FLOW_PGSQL_RECORD_STORE_CONFIG_INIT;
+  turbo_json_doc_t *document = NULL;
+  json_value_t *channels;
+  json_value_t *channel;
+  json_value_t *kind;
+  json_value_t *fields;
+  json_value_t *create_table;
+  const char *backend;
+  const char *json;
+  size_t json_size = 0u;
+  uint64_t number = 0u;
+  int rc;
+  if (!resolved || !channel_name || !channel_name[0] || !out || out->size < sizeof(*out) ||
+      out->ctx || !error || error->size < sizeof(*error))
+    return TURBO_EINVAL;
+  *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+  json = turbo_flow_resolved_config_json(resolved, &json_size);
+  if (!json || turbo_parse_json((const uint8_t *)json, json_size, &document) != TURBO_OK ||
+      !document)
+    return flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, NULL,
+                                   "invalid resolved configuration snapshot");
+  channels = turbo_json_object_get(document, "channels");
+  channel = channels ? turbo_json_object_get(channels, channel_name) : NULL;
+  if (!channel || turbo_json_type(channel) != TURBO_JSON_OBJECT) {
+    rc = flow_pgsql_config_error(error, TURBO_ENOENT, "channels", channel_name, NULL,
+                                 "record store channel is not resolved");
+    goto done;
+  }
+  kind = turbo_json_object_get(channel, "kind");
+  fields = turbo_json_object_get(channel, "config");
+  if (!kind || turbo_json_type(kind) != TURBO_JSON_STRING ||
+      strcmp(turbo_json_string(kind), "record_store") != 0) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, NULL,
+                                 "channel kind must be record_store");
+    goto done;
+  }
+  if (!fields || turbo_json_type(fields) != TURBO_JSON_OBJECT) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, NULL,
+                                 "record store config must be a mapping");
+    goto done;
+  }
+  backend = flow_pgsql_string(fields, "backend");
+  if (!backend || strcmp(backend, "postgresql") != 0) {
+    rc = flow_pgsql_config_error(error, backend ? TURBO_ENOTSUP : TURBO_EINVAL, "channels",
+                                 channel_name, "backend", "backend must be postgresql");
+    goto done;
+  }
+  rc = flow_pgsql_validate_fields(fields, "channels", channel_name, channel_allowed,
+                                  sizeof(channel_allowed) / sizeof(channel_allowed[0]), error);
+  if (rc != TURBO_OK) goto done;
+  config.conninfo = flow_pgsql_string(fields, "conninfo");
+  config.namespace_name = flow_pgsql_string(fields, "namespace_name");
+  if (!config.conninfo || !config.conninfo[0]) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, "conninfo",
+                                 "conninfo must be a non-empty string");
+    goto done;
+  }
+  if (!config.namespace_name || !config.namespace_name[0] ||
+      strlen(config.namespace_name) > TURBO_FLOW_PGSQL_RECORD_STORE_NAMESPACE_MAX) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name,
+                                 "namespace_name",
+                                 "namespace_name is empty or exceeds the public bound");
+    goto done;
+  }
+  rc = flow_pgsql_optional_u64(fields, "max_key_size",
+                               TURBO_FLOW_PGSQL_RECORD_STORE_DEFAULT_MAX_KEY_SIZE, &number,
+                               channel_name, error);
+  if (rc != TURBO_OK) goto done;
+  config.max_key_size = (size_t)number;
+  rc = flow_pgsql_optional_u64(fields, "max_value_size",
+                               TURBO_FLOW_PGSQL_RECORD_STORE_MAX_VALUE_SIZE, &number, channel_name,
+                               error);
+  if (rc != TURBO_OK) goto done;
+  config.max_value_size = (size_t)number;
+  rc = flow_pgsql_optional_u64(fields, "max_batch_size", UINT16_MAX, &number, channel_name, error);
+  if (rc != TURBO_OK) goto done;
+  config.max_batch_size = (size_t)number;
+  rc = flow_pgsql_required_u64(fields, "max_records",
+                               TURBO_FLOW_PGSQL_RECORD_STORE_MAX_RECORDS, &number, channel_name,
+                               error);
+  if (rc != TURBO_OK) goto done;
+  config.max_records = (size_t)number;
+  create_table = turbo_json_object_get(fields, "create_table");
+  if (!create_table || turbo_json_type(create_table) != TURBO_JSON_BOOL) {
+    rc = flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, "create_table",
+                                 "create_table must be boolean");
+    goto done;
+  }
+  config.create_table = turbo_json_bool(create_table) ? 1 : 0;
+  rc = flow_pgsql_record_store_create(&config, out);
+  if (rc != TURBO_OK)
+    rc = flow_pgsql_config_error(error, rc, "channels", channel_name, NULL,
+                                 "PostgreSQL record store creation failed");
 
 done:
   turbo_free_json(&document);

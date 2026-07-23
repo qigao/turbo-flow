@@ -36,9 +36,8 @@ ctest --preset win-release-user --output-on-failure
 - Bounded state：credit owner 固定压力为 4096 correlation/256 worker，覆盖乱序 completion、全部
   generation expiry 与容量拒绝；topic journal、management dedup 和 deployment membership 同样受
   配置上限约束。
-- Persistence：真实 Redis 覆盖 binary-safe Data SET/GET、Stream consumer pending restart replay、
-  XACK 终态和 BLOCK interrupt（小于 500 ms）；fake-server suite 覆盖协议/连接失败。SQLite Queue
-  覆盖 committed 与 stale in-flight restart recovery、bounded multi-claim 和原子 settlement。
+- Persistence：真实 Redis 覆盖 Hash record-store、Stream consumer pending restart replay、
+  XACK 终态和 BLOCK interrupt（小于 500 ms）；fake-server suite 覆盖协议/连接失败。
 - Management：TFMP parser、operation store、typed crash-window reconcile、failure-domain fencing 和
   rolling manifest 均必须通过；未知副作用不能自动重放。
 - Graph/config：YAML resolver、disabled-kind preflight、Socket/FMQ/HTTP/RPC projection、compile/

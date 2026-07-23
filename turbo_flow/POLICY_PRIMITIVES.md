@@ -45,7 +45,7 @@ FIFO 是容器的出队顺序；Round Robin 是从一组候选目标中选择下
 - program/action ABI 分别使用 `TURBO_FLOW_RULE_PROGRAM_ABI_V1` 和
   `TURBO_FLOW_RULE_ACTION_ABI_V1`；规则 action 仍然不是任意 callback。标准
   `rules.apply` 若使用 schema 字段，则通过显式的 `turbo_flow_rule_facts_provider_fn` /
-  `facts_provider_ctx` 适配器提供 typed facts，不由 RulesForge 读取 opaque payload。
+  `facts_provider_ctx` 适配器提供 typed facts，不由 Policy processor 读取 opaque payload。
 - `FIRST_MATCH` 只返回首条匹配 action；`ALL_MATCHES` 按声明顺序返回所有匹配 action。
   evaluation 只读同一个 immutable facts snapshot，不在规则之间修改 message。
 - instruction、time、program memory、output action count 和 output bytes 均有显式 quota；

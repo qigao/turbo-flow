@@ -491,6 +491,34 @@ int turbo_flow_resolved_config_profile_adapter(const turbo_flow_resolved_config_
   return TURBO_OK;
 }
 
+int turbo_flow_resolved_config_profile_adapter_optional(
+    const turbo_flow_resolved_config_t *config, const char *profile, const char *parameter,
+    const char **adapter_name) {
+  json_value_t *profiles;
+  json_value_t *profile_value;
+  json_value_t *reference;
+  json_value_t *adapters;
+  const char *name;
+  if (adapter_name) *adapter_name = NULL;
+  if (!config || !config->document || !profile || !profile[0] || !parameter || !parameter[0] ||
+      !adapter_name) {
+    return TURBO_EINVAL;
+  }
+  profiles = turbo_json_object_get(config->document, "profiles");
+  profile_value = profiles ? turbo_json_object_get(profiles, profile) : NULL;
+  if (!profile_value || turbo_json_type(profile_value) != TURBO_JSON_OBJECT) return TURBO_ENOENT;
+  reference = turbo_json_object_get(profile_value, parameter);
+  if (!reference) return TURBO_OK;
+  if (turbo_json_type(reference) != TURBO_JSON_STRING) return TURBO_EPROTO;
+  name = turbo_json_string(reference);
+  adapters = turbo_json_object_get(config->document, "adapters");
+  if (!name || !name[0] || !adapters || !turbo_json_object_get(adapters, name)) {
+    return TURBO_EINVAL;
+  }
+  *adapter_name = name;
+  return TURBO_OK;
+}
+
 int turbo_flow_resolved_config_profile_channel(const turbo_flow_resolved_config_t *config,
                                                const char *profile, const char *parameter,
                                                const char **channel_name) {
@@ -512,6 +540,34 @@ int turbo_flow_resolved_config_profile_channel(const turbo_flow_resolved_config_
   channels = turbo_json_object_get(config->document, "channels");
   if (!name || !name[0] || !channels || !turbo_json_object_get(channels, name)) {
     return TURBO_ENOENT;
+  }
+  *channel_name = name;
+  return TURBO_OK;
+}
+
+int turbo_flow_resolved_config_profile_channel_optional(
+    const turbo_flow_resolved_config_t *config, const char *profile, const char *parameter,
+    const char **channel_name) {
+  json_value_t *profiles;
+  json_value_t *profile_value;
+  json_value_t *reference;
+  json_value_t *channels;
+  const char *name;
+  if (channel_name) *channel_name = NULL;
+  if (!config || !config->document || !profile || !profile[0] || !parameter || !parameter[0] ||
+      !channel_name) {
+    return TURBO_EINVAL;
+  }
+  profiles = turbo_json_object_get(config->document, "profiles");
+  profile_value = profiles ? turbo_json_object_get(profiles, profile) : NULL;
+  if (!profile_value || turbo_json_type(profile_value) != TURBO_JSON_OBJECT) return TURBO_ENOENT;
+  reference = turbo_json_object_get(profile_value, parameter);
+  if (!reference) return TURBO_OK;
+  if (turbo_json_type(reference) != TURBO_JSON_STRING) return TURBO_EPROTO;
+  name = turbo_json_string(reference);
+  channels = turbo_json_object_get(config->document, "channels");
+  if (!name || !name[0] || !channels || !turbo_json_object_get(channels, name)) {
+    return TURBO_EINVAL;
   }
   *channel_name = name;
   return TURBO_OK;

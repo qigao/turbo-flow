@@ -4,6 +4,7 @@
 #include "turbo_flow.h"
 #include "turbo_flow_config.h"
 #include "turbo_flow_security.h"
+#include "turbo_flow_storage_backend.h"
 
 #include <stddef.h>
 
@@ -14,6 +15,10 @@ typedef struct flowie_worker_runtime_config_s {
   const char *profile;
   const char *config_path;
   const char *graph_path;
+  turbo_flow_storage_backend_registry_t *storage_backends;
+  /** Product-owned source/sink adapter providers beyond Flowie's core adapters. */
+  const turbo_flow_product_adapter_provider_t *adapter_providers;
+  size_t adapter_provider_count;
   const turbo_flow_security_auth_provider_factory_t *const *auth_provider_factories;
   size_t auth_provider_factory_count;
   const turbo_flow_security_policy_provider_factory_t *const *policy_provider_factories;
@@ -21,7 +26,8 @@ typedef struct flowie_worker_runtime_config_s {
 } flowie_worker_runtime_config_t;
 
 #define FLOWIE_WORKER_RUNTIME_CONFIG_INIT                                                          \
-  {sizeof(flowie_worker_runtime_config_t), "flowie", NULL, NULL, NULL, 0u, NULL, 0u}
+  {sizeof(flowie_worker_runtime_config_t), "flowie", NULL, NULL, NULL, NULL, 0u, NULL, 0u, NULL,   \
+   0u}
 
 typedef enum flowie_worker_error_detail_e {
   FLOWIE_WORKER_ERROR_NONE = 0,
@@ -47,8 +53,8 @@ typedef struct flowie_worker_error_s {
   }
 
 /** Build one prepared worker from exactly one resolved config and graph. */
-int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
-                                 flowie_worker_runtime_t **out, flowie_worker_error_t *error);
+int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config, flowie_worker_runtime_t **out,
+                                 flowie_worker_error_t *error);
 
 /** Start/stop the prepared Flow generation. Lifecycle calls are caller-serialized. */
 int flowie_worker_runtime_start(flowie_worker_runtime_t *runtime, flowie_worker_error_t *error);

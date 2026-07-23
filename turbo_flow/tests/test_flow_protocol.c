@@ -334,6 +334,7 @@ suite("Turbo Flow Protocol Contract") {
                                   "  input -> accept\n"
                                   "}\n";
       turbo_flow_protocol_route_t route = TURBO_FLOW_PROTOCOL_ROUTE_INIT;
+      turbo_flow_protocol_origin_t origin = TURBO_FLOW_PROTOCOL_ORIGIN_INIT;
       turbo_flow_protocol_settlement_envelope_t envelope =
           TURBO_FLOW_PROTOCOL_SETTLEMENT_ENVELOPE_INIT;
       turbo_flow_publish_result_t result = TURBO_FLOW_PUBLISH_RESULT_INIT;
@@ -345,14 +346,20 @@ suite("Turbo Flow Protocol Contract") {
       route.owner_instance_id = 92u;
       route.session_id = 18u;
       route.session_generation = 7u;
+      origin.protocol = TURBO_FLOW_PROTOCOL_MQTT;
+      origin.protocol_version = TURBO_FLOW_MQTT_PROTOCOL_5_0;
+      origin.session_id = route.session_id;
       envelope.message = mqtt_message(TURBO_FLOW_MQTT_PROTOCOL_5_0,
                                       TURBO_FLOW_PROTOCOL_QOS_1, 32u);
       envelope.requested_point = TURBO_FLOW_PROTOCOL_SETTLE_ACCEPTED;
       turbo_flow_msg_init(&msg);
       turbo_flow_msg_init(&clone);
       check_int_eq(turbo_flow_msg_set_protocol_route(&msg, &route), TURBO_OK);
+      check_int_eq(turbo_flow_msg_set_protocol_origin(&msg, &origin), TURBO_OK);
       check_int_eq(turbo_flow_msg_set_protocol_settlement(&msg, &envelope), TURBO_OK);
       check_int_eq(turbo_flow_msg_clone(&clone, &msg), TURBO_OK);
+      check_not_null(turbo_flow_msg_protocol_origin(&clone));
+      check_uint_eq(turbo_flow_msg_protocol_origin(&clone)->session_id, route.session_id);
       check_not_null(turbo_flow_msg_protocol_settlement(&clone));
       check_uint_eq(turbo_flow_msg_protocol_settlement(&clone)->settled_point, 0u);
       check_int_eq(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), TURBO_OK);
@@ -367,6 +374,9 @@ suite("Turbo Flow Protocol Contract") {
       turbo_flow_msg_clear_protocol_route(&clone);
       check_null(turbo_flow_msg_protocol_route(&clone));
       check_null(turbo_flow_msg_protocol_settlement(&clone));
+      check_not_null(turbo_flow_msg_protocol_origin(&clone));
+      turbo_flow_msg_clear_protocol_origin(&clone);
+      check_null(turbo_flow_msg_protocol_origin(&clone));
       check_int_eq(turbo_flow_stop(flow), TURBO_OK);
       turbo_flow_msg_cleanup(&clone);
       turbo_flow_msg_cleanup(&msg);

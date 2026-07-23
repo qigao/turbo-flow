@@ -105,8 +105,10 @@ typedef enum turbo_flow_pgsql_outbox_role_e {
 /**
  * One PostgreSQL-backed durable outbox graph binding.
  *
- * Sink acceptance is reported only after COMMIT. A source holds a PostgreSQL
- * session advisory lock while synchronously publishing one owned payload and
+ * Sink acceptance is reported only after COMMIT. Payload, message type/flags,
+ * and an optional serializable protocol origin are committed together; live
+ * process-local routes are never serialized. A source holds a PostgreSQL
+ * session advisory lock while synchronously publishing one owned message and
  * deletes the row only after graph success. Connection loss releases the lock;
  * a crash after graph side effects and before DELETE can redeliver the row.
  */
@@ -156,6 +158,51 @@ CXX_C_API int
 turbo_flow_pgsql_register_resolved_outbox_adapter(turbo_flow_t *flow, const char *name,
                                                   const turbo_flow_resolved_config_t *resolved,
                                                   turbo_flow_config_error_t *error);
+
+#define TURBO_FLOW_PGSQL_RECORD_STORE_API_VERSION 1u
+#define TURBO_FLOW_PGSQL_RECORD_STORE_NAMESPACE_MAX 255u
+#define TURBO_FLOW_PGSQL_RECORD_STORE_DEFAULT_MAX_KEY_SIZE 65538u
+#define TURBO_FLOW_PGSQL_RECORD_STORE_DEFAULT_MAX_VALUE_SIZE (16u * 1024u * 1024u)
+#define TURBO_FLOW_PGSQL_RECORD_STORE_DEFAULT_MAX_BATCH_SIZE 4096u
+#define TURBO_FLOW_PGSQL_RECORD_STORE_MAX_VALUE_SIZE (64u * 1024u * 1024u)
+#define TURBO_FLOW_PGSQL_RECORD_STORE_MAX_RECORDS 1000000u
+
+/**
+ * One PostgreSQL-backed record namespace for durable protocol state.
+ *
+ * The provider serializes commits for one namespace with a transaction advisory
+ * lock. Revision checks, capacity validation, and all mutations occur in the
+ * same transaction. The caller serializes scan/commit calls.
+ */
+typedef struct turbo_flow_pgsql_record_store_config_s {
+  size_t size;
+  uint32_t version;
+  /** libpq connection string; copied by the provider. */
+  const char *conninfo;
+  /** Stable namespace stored in the fixed TurboFlow record table. */
+  const char *namespace_name;
+  /** Zero selects TURBO_FLOW_PGSQL_RECORD_STORE_DEFAULT_MAX_KEY_SIZE. */
+  size_t max_key_size;
+  /** Zero selects TURBO_FLOW_PGSQL_RECORD_STORE_DEFAULT_MAX_VALUE_SIZE. */
+  size_t max_value_size;
+  /** Zero selects TURBO_FLOW_PGSQL_RECORD_STORE_DEFAULT_MAX_BATCH_SIZE. */
+  size_t max_batch_size;
+  /** Required maximum record count for bounded scans and commits. */
+  size_t max_records;
+  /** Non-zero creates the fixed table; zero validates an existing schema. */
+  int create_table;
+} turbo_flow_pgsql_record_store_config_t;
+
+#define TURBO_FLOW_PGSQL_RECORD_STORE_CONFIG_INIT                                                  \
+  {sizeof(turbo_flow_pgsql_record_store_config_t),                                                 \
+   TURBO_FLOW_PGSQL_RECORD_STORE_API_VERSION,                                                      \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0}
 
 #ifdef __cplusplus
 }

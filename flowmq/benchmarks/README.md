@@ -27,8 +27,9 @@ $env:FLOWMQ_BENCH_PROFILE='1'
 Remove-Item Env:FLOWMQ_BENCH_PROFILE
 ```
 
-The REQ/REP cases measure one serialized TCP request/reply per sample through two graph-native
-FlowMQ application facades. Their byte throughput counts application payload in both directions.
+The REQ/REP cases measure one serialized TCP request/reply per sample through two FlowMQ
+application facades and their minimal typed graph bridges. Their byte throughput counts
+application payload in both directions.
 
 The DEALER/ROUTER, PUB/SUB, and PUSH/PULL cases measure batches of 64 one-way 64-byte messages.
 Their operation throughput is messages/s and byte throughput counts one-way application payload.

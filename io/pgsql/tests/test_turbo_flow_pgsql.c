@@ -3,6 +3,7 @@
 #include "libpq-fe.h"
 #include "tinytest.h"
 #include "turbo_flow_pgsql.h"
+#include "pgsql_storage_test_helpers.h"
 #include "turbo_str.h"
 
 #include <stdint.h>
@@ -590,5 +591,32 @@ spec("turbo_flow_pgsql") {
                  TURBO_EFBIG);
     turbo_flow_msg_cleanup(&msg);
     PQclear(result);
+  }
+
+  it("validates PostgreSQL record-store ABI and rejects foreign backends") {
+    turbo_flow_pgsql_record_store_config_t config = TURBO_FLOW_PGSQL_RECORD_STORE_CONFIG_INIT;
+    turbo_flow_record_store_t store = TURBO_FLOW_RECORD_STORE_INIT;
+    turbo_flow_resolved_config_t *resolved = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    static const char yaml[] =
+        "version: 1\nchannels:\n  mqtt.sessions:\n    kind: record_store\n"
+        "    config:\n      backend: sqlite\n      database_path: ':memory:'\n"
+        "      namespace_name: mqtt.sessions\nadapters: {}\n";
+
+    config.version = 99u;
+    config.conninfo = "host=127.0.0.1 port=1";
+    config.namespace_name = "mqtt.sessions";
+    config.max_records = 1u;
+    pgsql_test_storage_t storage = {0};
+    check_int_eq(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, &error),
+                 TURBO_EINVAL);
+    check_null(store.ctx);
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+                 TURBO_OK);
+    check_int_eq(pgsql_test_record_store_open(NULL, resolved, "mqtt.sessions", &store, &storage,
+                                              &error),
+                 TURBO_ENOTSUP);
+    check_str_contains(error.path, "backend");
+    turbo_flow_resolved_config_destroy(resolved);
   }
 }

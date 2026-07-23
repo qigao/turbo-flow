@@ -180,6 +180,24 @@ typedef struct turbo_flow_protocol_route_s {
 #define TURBO_FLOW_PROTOCOL_ROUTE_INIT                                                            \
   {sizeof(turbo_flow_protocol_route_t), TURBO_FLOW_PROTOCOL_CONTRACT_VERSION, 0, 0u, 0u, 0u, 0u}
 
+/**
+ * Serializable protocol origin retained across a durable queue boundary.
+ *
+ * Unlike a route, this value carries no live owner capability. `session_id` is
+ * the protocol owner's stable publisher identity and may only be used for
+ * message semantics such as MQTT no-local filtering.
+ */
+typedef struct turbo_flow_protocol_origin_s {
+  size_t size;
+  uint32_t contract_version;
+  turbo_flow_protocol_id_t protocol;
+  uint32_t protocol_version;
+  uint64_t session_id;
+} turbo_flow_protocol_origin_t;
+
+#define TURBO_FLOW_PROTOCOL_ORIGIN_INIT                                                           \
+  {sizeof(turbo_flow_protocol_origin_t), TURBO_FLOW_PROTOCOL_CONTRACT_VERSION, 0, 0u, 0u}
+
 typedef struct turbo_flow_protocol_settlement_policy_s {
   size_t size;
   turbo_flow_protocol_settlement_point_t qos0;
@@ -235,6 +253,7 @@ typedef struct turbo_flow_protocol_owner_ops_s {
 
 CXX_C_API int turbo_flow_protocol_message_validate(
     const turbo_flow_protocol_message_t *message);
+CXX_C_API int turbo_flow_protocol_origin_validate(const turbo_flow_protocol_origin_t *origin);
 CXX_C_API int turbo_flow_pattern_role_validate(turbo_flow_pattern_role_t role);
 CXX_C_API int turbo_flow_pattern_roles_compatible(turbo_flow_pattern_role_t local,
                                                    turbo_flow_pattern_role_t remote);

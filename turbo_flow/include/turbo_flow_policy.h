@@ -14,6 +14,7 @@ extern "C" {
 #define TURBO_FLOW_RULE_PROGRAM_ABI_V1 1u
 #define TURBO_FLOW_RULE_ACTION_ABI_V1 1u
 #define TURBO_FLOW_RULE_KEY_MAX TURBO_FLOW_DATA_DECISION_KEY_MAX
+#define TURBO_FLOW_RULE_MODULE "rules.policy"
 #define TURBO_FLOW_RULE_APPLY_OPERATION "rules.apply"
 #define TURBO_FLOW_RULE_SET_TYPE "RuleSet"
 
@@ -223,7 +224,7 @@ CXX_C_API int turbo_flow_rule_register_data_stage(turbo_flow_t *flow, const char
                                                   const turbo_flow_stage_options_t *options);
 
 /**
- * Register the standard RulesForge data operation and bind one rule-set resource to it.
+ * Register the standard TurboFlow Policy data operation and bind one rule-set resource to it.
  *
  * The DSL can then use `operation rules.apply resource <resource_name>` from any graph node.
  * To bind schema-backed rules through this operation, the processor configuration must provide

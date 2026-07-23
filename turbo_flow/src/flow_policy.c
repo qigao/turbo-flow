@@ -1,7 +1,7 @@
 #include "turbo_flow_policy.h"
 
-#include "flow_internal.h"
 #include "flow_expr_internal.h"
+#include "flow_internal.h"
 #include "turbo_error.h"
 #include "turbo_parser.h"
 #include "turbo_str.h"
@@ -17,12 +17,12 @@
 #define FLOW_RULE_STAGE_MAX_ACTIONS 64u
 #define FLOW_RULE_RESOLVED_MAX_RULES 4096u
 
-static const char FLOW_RULE_MODULE_NAME[] = "rules.forge";
 static const uint32_t FLOW_RULE_MODULE_VERSION = 1u;
 
-int turbo_flow_rule_projection_facts_provider(
-    const turbo_flow_msg_t *message, const turbo_flow_expr_schema_t *schema,
-    const turbo_flow_expr_value_t **values_out, size_t *value_count_out, void *ctx) {
+int turbo_flow_rule_projection_facts_provider(const turbo_flow_msg_t *message,
+                                              const turbo_flow_expr_schema_t *schema,
+                                              const turbo_flow_expr_value_t **values_out,
+                                              size_t *value_count_out, void *ctx) {
   const turbo_flow_rule_projection_provider_t *provider =
       (const turbo_flow_rule_projection_provider_t *)ctx;
   const turbo_flow_data_schema_t *projection_schema = NULL;
@@ -40,8 +40,7 @@ int turbo_flow_rule_projection_facts_provider(
   rc = provider->materialize(projection, projection_schema, schema, values_out, value_count_out,
                              provider->ctx);
   if (rc != TURBO_OK) return rc;
-  if (*value_count_out != schema->field_count ||
-      (*value_count_out > 0u && !*values_out)) {
+  if (*value_count_out != schema->field_count || (*value_count_out > 0u && !*values_out)) {
     *values_out = NULL;
     *value_count_out = 0u;
     return TURBO_EPROTO;
@@ -82,8 +81,9 @@ static int flow_rule_operation_compatible(const turbo_flow_operation_descriptor_
   if (!actual || !expected || actual->version != expected->version ||
       actual->domain != expected->domain || actual->input_domain != expected->input_domain ||
       actual->output_domain != expected->output_domain ||
-      actual->resource_domain != expected->resource_domain || actual->scope.data != expected->scope.data ||
-      actual->scope.state != expected->scope.state || actual->scope.lifetime != expected->scope.lifetime ||
+      actual->resource_domain != expected->resource_domain ||
+      actual->scope.data != expected->scope.data || actual->scope.state != expected->scope.state ||
+      actual->scope.lifetime != expected->scope.lifetime ||
       actual->scope.concurrency != expected->scope.concurrency ||
       actual->scope.authority != expected->scope.authority || actual->flags != expected->flags ||
       actual->execution_mask != expected->execution_mask ||
@@ -98,7 +98,8 @@ static int flow_rule_operation_compatible(const turbo_flow_operation_descriptor_
     return 0;
   }
   return ((!actual->input_type && !expected->input_type) ||
-          (actual->input_type && expected->input_type && strcmp(actual->input_type, expected->input_type) == 0)) &&
+          (actual->input_type && expected->input_type &&
+           strcmp(actual->input_type, expected->input_type) == 0)) &&
          ((!actual->output_type && !expected->output_type) ||
           (actual->output_type && expected->output_type &&
            strcmp(actual->output_type, expected->output_type) == 0)) &&
@@ -151,12 +152,12 @@ static int flow_rule_register_module_contract(turbo_flow_t *flow) {
   static const char *const operation_names[] = {TURBO_FLOW_RULE_APPLY_OPERATION};
   turbo_flow_module_descriptor_t descriptor = {0};
   const turbo_flow_module_descriptor_t *existing =
-      turbo_flow_find_module(flow, FLOW_RULE_MODULE_NAME);
+      turbo_flow_find_module(flow, TURBO_FLOW_RULE_MODULE);
   if (existing) {
     if (existing->version != FLOW_RULE_MODULE_VERSION ||
-        existing->capability_flags != (TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
-                                       TURBO_FLOW_MODULE_MANAGED_RESOURCES |
-                                       TURBO_FLOW_MODULE_NATIVE_API) ||
+        existing->capability_flags !=
+            (TURBO_FLOW_MODULE_GRAPH_OPERATIONS | TURBO_FLOW_MODULE_MANAGED_RESOURCES |
+             TURBO_FLOW_MODULE_NATIVE_API) ||
         existing->primitive_type_count != 1u || existing->operation_count != 1u ||
         existing->requirement_count != 0u ||
         strcmp(existing->primitive_types[0], TURBO_FLOW_RULE_SET_TYPE) != 0 ||
@@ -166,11 +167,10 @@ static int flow_rule_register_module_contract(turbo_flow_t *flow) {
     return TURBO_OK;
   }
   descriptor.size = sizeof(descriptor);
-  descriptor.name = FLOW_RULE_MODULE_NAME;
+  descriptor.name = TURBO_FLOW_RULE_MODULE;
   descriptor.version = FLOW_RULE_MODULE_VERSION;
   descriptor.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
-                                TURBO_FLOW_MODULE_MANAGED_RESOURCES |
-                                TURBO_FLOW_MODULE_NATIVE_API;
+                                TURBO_FLOW_MODULE_MANAGED_RESOURCES | TURBO_FLOW_MODULE_NATIVE_API;
   descriptor.primitive_types = primitive_types;
   descriptor.primitive_type_count = 1u;
   descriptor.operation_names = operation_names;
@@ -179,8 +179,10 @@ static int flow_rule_register_module_contract(turbo_flow_t *flow) {
 }
 
 static void flow_rule_rollback_operation_registration(turbo_flow_t *flow, size_t resources_before,
-                                                       size_t providers_before, size_t modules_before,
-                                                       size_t primitives_before, size_t operations_before) {
+                                                      size_t providers_before,
+                                                      size_t modules_before,
+                                                      size_t primitives_before,
+                                                      size_t operations_before) {
   while (turbo_vec_size(&flow->operation_providers) > providers_before) {
     size_t index = turbo_vec_size(&flow->operation_providers) - 1u;
     flow_operation_provider_registration_t *provider =
@@ -258,9 +260,15 @@ static const char FLOW_RULE_SET_STATUS_SCHEMA_TEXT[] =
     "}\n";
 
 static const turbo_flow_resource_schema_t FLOW_RULE_SET_STATUS_SCHEMA = {
-    sizeof(turbo_flow_resource_schema_t), TURBO_FLOW_DOMAIN_RULES,
-    TURBO_FLOW_RESOURCE_RULE_SET, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS,
-    TURBO_FLOW_RESOURCE_DOCUMENT_JSON, "TurboFlowRuleResource", "RuleSetStatus", 1u, 1u,
+    sizeof(turbo_flow_resource_schema_t),
+    TURBO_FLOW_DOMAIN_RULES,
+    TURBO_FLOW_RESOURCE_RULE_SET,
+    TURBO_FLOW_RESOURCE_DOCUMENT_STATUS,
+    TURBO_FLOW_RESOURCE_DOCUMENT_JSON,
+    "TurboFlowRuleResource",
+    "RuleSetStatus",
+    1u,
+    1u,
     FLOW_RULE_SET_STATUS_SCHEMA_TEXT};
 
 typedef struct flow_rule_fact_reader_s {
@@ -304,8 +312,7 @@ static int flow_rule_action_valid(turbo_flow_rule_domain_t domain,
     return action->kind == TURBO_FLOW_RULE_ACTION_PROPOSE_COMMAND &&
            flow_rule_command_valid(&action->command);
   }
-  if (domain != TURBO_FLOW_RULE_DATA ||
-      action->kind == TURBO_FLOW_RULE_ACTION_PROPOSE_COMMAND) {
+  if (domain != TURBO_FLOW_RULE_DATA || action->kind == TURBO_FLOW_RULE_ACTION_PROPOSE_COMMAND) {
     return 0;
   }
   if (action->kind == TURBO_FLOW_RULE_ACTION_MUTATE_PRIVATE) {
@@ -341,7 +348,9 @@ static int flow_rule_read_fact(void *ctx, uint32_t field_id, turbo_flow_expr_val
   for (size_t i = 0; i < facts->schema->field_count; ++i) {
     if (facts->schema->fields[i].field_id != field_id) continue;
     *out = facts->values[i];
-    return out->type == facts->schema->fields[i].type ? TURBO_OK : TURBO_EPROTO;
+    return out->type == TURBO_FLOW_EXPR_TYPE_NULL || out->type == facts->schema->fields[i].type
+               ? TURBO_OK
+               : TURBO_EPROTO;
   }
   return TURBO_ENOENT;
 }
@@ -410,14 +419,14 @@ static int flow_rule_schema_copy(turbo_flow_rule_processor_t *processor,
   return TURBO_OK;
 }
 
-static turbo_flow_expr_schema_t flow_rule_schema_view(
-    const turbo_flow_rule_processor_t *processor) {
+static turbo_flow_expr_schema_t
+flow_rule_schema_view(const turbo_flow_rule_processor_t *processor) {
   turbo_flow_expr_schema_t schema = {0};
   if (!processor) return schema;
   schema.field_count = turbo_vec_size(&processor->schema_fields);
   if (schema.field_count > 0u) {
-    schema.fields = (const turbo_flow_expr_schema_field_t *)turbo_vec_at_const(
-        &processor->schema_fields, 0u);
+    schema.fields =
+        (const turbo_flow_expr_schema_field_t *)turbo_vec_at_const(&processor->schema_fields, 0u);
   }
   return schema;
 }
@@ -495,8 +504,7 @@ int turbo_flow_rule_processor_create(const turbo_flow_rule_processor_config_t *c
   rc = turbo_vec_reserve(&processor->rules, config->rule_count);
   if (rc != TURBO_OK) goto fail;
   if (config->rule_count >
-      (config->limits.max_memory_bytes - processor->memory_bytes) /
-          sizeof(flow_compiled_rule_t)) {
+      (config->limits.max_memory_bytes - processor->memory_bytes) / sizeof(flow_compiled_rule_t)) {
     rc = TURBO_ENOSPC;
     goto fail;
   }
@@ -574,17 +582,14 @@ static int flow_rule_resolved_fields(const json_value_t *object, const char *cha
                                      const char *scope, const char *const *allowed,
                                      size_t allowed_count, turbo_flow_config_error_t *error) {
   if (!object || turbo_json_type(object) != TURBO_JSON_OBJECT) {
-    return flow_rule_resolved_error(error, TURBO_EINVAL, channel_name, scope,
-                                    "expected a mapping");
+    return flow_rule_resolved_error(error, TURBO_EINVAL, channel_name, scope, "expected a mapping");
   }
   for (size_t i = 0u; i < turbo_json_object_size(object); ++i) {
     const char *key = turbo_json_object_key(object, i);
     if (!key || !flow_rule_resolved_key_allowed(key, allowed, allowed_count)) {
       char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
-      if (scope && scope[0])
-        (void)snprintf(path, sizeof(path), "%s.%s", scope, key ? key : "?");
-      else
-        (void)snprintf(path, sizeof(path), "%s", key ? key : "?");
+      if (scope && scope[0]) (void)snprintf(path, sizeof(path), "%s.%s", scope, key ? key : "?");
+      else (void)snprintf(path, sizeof(path), "%s", key ? key : "?");
       return flow_rule_resolved_error(error, TURBO_EINVAL, channel_name, path,
                                       "unknown RuleSet field");
     }
@@ -652,19 +657,19 @@ static int flow_rule_resolved_parse_action(const json_value_t *object, const cha
       strcmp(name, "retry_class") == 0) {
     static const char *const forbidden[] = {"value", "mask", "status"};
     if (!key || !key[0] || strlen(key) > TURBO_FLOW_RULE_KEY_MAX ||
-        flow_rule_resolved_no_fields(object, forbidden,
-                                     sizeof(forbidden) / sizeof(forbidden[0])) != TURBO_OK) {
+        flow_rule_resolved_no_fields(object, forbidden, sizeof(forbidden) / sizeof(forbidden[0])) !=
+            TURBO_OK) {
       goto invalid;
     }
     action->kind = strcmp(name, "route") == 0       ? TURBO_FLOW_RULE_ACTION_ROUTE
                    : strcmp(name, "batch_key") == 0 ? TURBO_FLOW_RULE_ACTION_BATCH_KEY
-                                                     : TURBO_FLOW_RULE_ACTION_RETRY_CLASS;
+                                                    : TURBO_FLOW_RULE_ACTION_RETRY_CLASS;
     memcpy(action->key, key, strlen(key) + 1u);
     return TURBO_OK;
   }
   if (strcmp(name, "drop") == 0) {
-    if (flow_rule_resolved_no_fields(object, optional,
-                                     sizeof(optional) / sizeof(optional[0])) != TURBO_OK) {
+    if (flow_rule_resolved_no_fields(object, optional, sizeof(optional) / sizeof(optional[0])) !=
+        TURBO_OK) {
       goto invalid;
     }
     action->kind = TURBO_FLOW_RULE_ACTION_DROP;
@@ -672,8 +677,8 @@ static int flow_rule_resolved_parse_action(const json_value_t *object, const cha
   }
   if (strcmp(name, "dead_letter") == 0 || strcmp(name, "mutate_status") == 0) {
     static const char *const forbidden[] = {"key", "value", "mask"};
-    if (flow_rule_resolved_no_fields(object, forbidden,
-                                     sizeof(forbidden) / sizeof(forbidden[0])) != TURBO_OK ||
+    if (flow_rule_resolved_no_fields(object, forbidden, sizeof(forbidden) / sizeof(forbidden[0])) !=
+            TURBO_OK ||
         flow_rule_resolved_i32(object, "status", &status) != TURBO_OK ||
         (strcmp(name, "dead_letter") == 0 && status == TURBO_OK)) {
       goto invalid;
@@ -686,16 +691,15 @@ static int flow_rule_resolved_parse_action(const json_value_t *object, const cha
   }
   if (strcmp(name, "mutate_type") == 0 || strcmp(name, "mutate_flags") == 0) {
     static const char *const forbidden[] = {"key", "status"};
-    if (flow_rule_resolved_no_fields(object, forbidden,
-                                     sizeof(forbidden) / sizeof(forbidden[0])) != TURBO_OK ||
+    if (flow_rule_resolved_no_fields(object, forbidden, sizeof(forbidden) / sizeof(forbidden[0])) !=
+            TURBO_OK ||
         flow_rule_resolved_u64(object, "value", UINT32_MAX, &value) != TURBO_OK ||
         flow_rule_resolved_u64(object, "mask", UINT32_MAX, &mask) != TURBO_OK) {
       goto invalid;
     }
     action->kind = TURBO_FLOW_RULE_ACTION_MUTATE_PRIVATE;
-    action->private_field = strcmp(name, "mutate_type") == 0
-                                ? TURBO_FLOW_RULE_PRIVATE_MSG_TYPE
-                                : TURBO_FLOW_RULE_PRIVATE_MSG_FLAGS;
+    action->private_field = strcmp(name, "mutate_type") == 0 ? TURBO_FLOW_RULE_PRIVATE_MSG_TYPE
+                                                             : TURBO_FLOW_RULE_PRIVATE_MSG_FLAGS;
     action->value = value;
     action->mask = mask;
     return TURBO_OK;
@@ -736,8 +740,8 @@ static int flow_rule_resolved_limit(const json_value_t *fields, const char *chan
   if (!turbo_json_object_get(fields, field)) return TURBO_OK;
   rc = flow_rule_resolved_u64(fields, field, maximum, &value);
   if (rc != TURBO_OK || value == 0u) {
-    return flow_rule_resolved_error(error, rc == TURBO_OK ? TURBO_ERANGE : rc, channel_name,
-                                    field, "RuleSet limit must be a positive bounded integer");
+    return flow_rule_resolved_error(error, rc == TURBO_OK ? TURBO_ERANGE : rc, channel_name, field,
+                                    "RuleSet limit must be a positive bounded integer");
   }
   *out = (size_t)value;
   return TURBO_OK;
@@ -746,12 +750,16 @@ static int flow_rule_resolved_limit(const json_value_t *fields, const char *chan
 int turbo_flow_rule_processor_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     const turbo_flow_expr_schema_t *schema, turbo_flow_rule_facts_provider_fn facts_provider,
-    void *facts_provider_ctx, turbo_flow_rule_processor_t **out,
-    turbo_flow_config_error_t *error) {
-  static const char *const allowed[] = {
-      "resource_uid",      "owner_name",        "mode",          "rules",
-      "max_instructions",  "max_time_ns",       "max_memory_bytes",
-      "max_output_actions", "max_output_bytes"};
+    void *facts_provider_ctx, turbo_flow_rule_processor_t **out, turbo_flow_config_error_t *error) {
+  static const char *const allowed[] = {"resource_uid",
+                                        "owner_name",
+                                        "mode",
+                                        "rules",
+                                        "max_instructions",
+                                        "max_time_ns",
+                                        "max_memory_bytes",
+                                        "max_output_actions",
+                                        "max_output_bytes"};
   turbo_flow_rule_processor_config_t config = TURBO_FLOW_RULE_PROCESSOR_CONFIG_INIT;
   turbo_flow_error_t expression_error = {0};
   turbo_json_doc_t *document = NULL;
@@ -824,8 +832,8 @@ int turbo_flow_rule_processor_create_resolved(
                                   &config.limits.max_memory_bytes, error);
   if (rc == TURBO_OK)
     rc = flow_rule_resolved_limit(fields, channel_name, "max_output_actions",
-                                  FLOW_RULE_STAGE_MAX_ACTIONS,
-                                  &config.limits.max_output_actions, error);
+                                  FLOW_RULE_STAGE_MAX_ACTIONS, &config.limits.max_output_actions,
+                                  error);
   if (rc == TURBO_OK)
     rc = flow_rule_resolved_limit(fields, channel_name, "max_output_bytes", SIZE_MAX,
                                   &config.limits.max_output_bytes, error);
@@ -855,8 +863,8 @@ int turbo_flow_rule_processor_create_resolved(
   rc = turbo_vec_reserve(&rules, turbo_json_array_size(rules_value));
   for (size_t i = 0u; rc == TURBO_OK && i < turbo_json_array_size(rules_value); ++i) {
     turbo_flow_rule_t rule;
-    rc = flow_rule_resolved_parse_rule(turbo_json_array_get(rules_value, i), channel_name, i,
-                                       &rule, error);
+    rc = flow_rule_resolved_parse_rule(turbo_json_array_get(rules_value, i), channel_name, i, &rule,
+                                       error);
     if (rc == TURBO_OK) rc = turbo_vec_push(&rules, &rule);
   }
   if (rc != TURBO_OK) goto done;
@@ -864,8 +872,8 @@ int turbo_flow_rule_processor_create_resolved(
   config.rule_count = turbo_vec_size(&rules);
   rc = turbo_flow_rule_processor_create(&config, out, &expression_error);
   if (rc != TURBO_OK) {
-    const char *message = expression_error.message[0] ? expression_error.message
-                                                      : "RuleSet compilation failed";
+    const char *message =
+        expression_error.message[0] ? expression_error.message : "RuleSet compilation failed";
     rc = flow_rule_resolved_error(error, rc, channel_name, "rules", message);
   }
 
@@ -917,8 +925,7 @@ int turbo_flow_rule_processor_evaluate(const turbo_flow_rule_processor_t *proces
     if (!value.as.boolean) continue;
     local.matched += 1u;
     local.last_match = i;
-    if (local.emitted >= action_capacity ||
-        local.emitted >= processor->limits.max_output_actions ||
+    if (local.emitted >= action_capacity || local.emitted >= processor->limits.max_output_actions ||
         sizeof(*actions) > processor->limits.max_output_bytes - local.output_bytes) {
       rc = TURBO_ENOSPC;
       goto done;
@@ -982,8 +989,7 @@ static int flow_rule_resource_snapshot(void *ctx, turbo_flow_resource_snapshot_t
   return TURBO_OK;
 }
 
-static int flow_rule_resource_document(void *ctx,
-                                       turbo_flow_resource_document_kind_t document_kind,
+static int flow_rule_resource_document(void *ctx, turbo_flow_resource_document_kind_t document_kind,
                                        turbo_flow_resource_document_t *out) {
   turbo_flow_rule_processor_t *processor = (turbo_flow_rule_processor_t *)ctx;
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
@@ -1002,20 +1008,19 @@ static int flow_rule_resource_document(void *ctx,
   matches = atomic_load_explicit(&processor->matches, memory_order_relaxed);
   failures = atomic_load_explicit(&processor->failures, memory_order_relaxed);
   last_status = atomic_load_explicit(&processor->last_status, memory_order_acquire);
-  written = snprintf(
-      payload, sizeof(payload),
-      "{\"domain\":%u,\"mode\":%u,\"rule_count\":\"%llu\","
-      "\"instructions\":\"%llu\",\"memory_bytes\":\"%llu\","
-      "\"evaluations\":\"%llu\",\"matches\":\"%llu\",\"failures\":\"%llu\","
-      "\"last_status\":%d}",
-      (unsigned)processor->domain, (unsigned)processor->mode,
-      (unsigned long long)turbo_vec_size(&processor->rules),
-      (unsigned long long)processor->instructions, (unsigned long long)processor->memory_bytes,
-      (unsigned long long)evaluations, (unsigned long long)matches,
-      (unsigned long long)failures, last_status);
+  written = snprintf(payload, sizeof(payload),
+                     "{\"domain\":%u,\"mode\":%u,\"rule_count\":\"%llu\","
+                     "\"instructions\":\"%llu\",\"memory_bytes\":\"%llu\","
+                     "\"evaluations\":\"%llu\",\"matches\":\"%llu\",\"failures\":\"%llu\","
+                     "\"last_status\":%d}",
+                     (unsigned)processor->domain, (unsigned)processor->mode,
+                     (unsigned long long)turbo_vec_size(&processor->rules),
+                     (unsigned long long)processor->instructions,
+                     (unsigned long long)processor->memory_bytes, (unsigned long long)evaluations,
+                     (unsigned long long)matches, (unsigned long long)failures, last_status);
   if (written < 0 || (size_t)written >= sizeof(payload)) return TURBO_ERANGE;
-  rc = turbo_flow_resource_document_set_payload_copy(
-      out, &metadata, &FLOW_RULE_SET_STATUS_SCHEMA, payload, (size_t)written);
+  rc = turbo_flow_resource_document_set_payload_copy(out, &metadata, &FLOW_RULE_SET_STATUS_SCHEMA,
+                                                     payload, (size_t)written);
   return rc;
 }
 
@@ -1027,8 +1032,7 @@ static int flow_rule_copy_key(char dst[TURBO_FLOW_RULE_KEY_MAX + 1u], const char
 }
 
 int turbo_flow_rule_apply_data_actions(turbo_flow_msg_t *message,
-                                       const turbo_flow_rule_action_t *actions,
-                                       size_t action_count,
+                                       const turbo_flow_rule_action_t *actions, size_t action_count,
                                        turbo_flow_rule_data_decision_t *decision) {
   turbo_flow_rule_data_decision_t pending = TURBO_FLOW_RULE_DATA_DECISION_INIT;
   uint32_t type;
@@ -1049,11 +1053,12 @@ int turbo_flow_rule_apply_data_actions(turbo_flow_msg_t *message,
     case TURBO_FLOW_RULE_ACTION_MUTATE_PRIVATE:
       if (action->private_field == TURBO_FLOW_RULE_PRIVATE_MSG_TYPE) {
         if (action->value > UINT32_MAX || action->mask > UINT32_MAX) return TURBO_ERANGE;
-        type = (type & ~(uint32_t)action->mask) | ((uint32_t)action->value & (uint32_t)action->mask);
+        type =
+            (type & ~(uint32_t)action->mask) | ((uint32_t)action->value & (uint32_t)action->mask);
       } else if (action->private_field == TURBO_FLOW_RULE_PRIVATE_MSG_FLAGS) {
         if (action->value > UINT32_MAX || action->mask > UINT32_MAX) return TURBO_ERANGE;
-        flags = (flags & ~(uint32_t)action->mask) |
-                ((uint32_t)action->value & (uint32_t)action->mask);
+        flags =
+            (flags & ~(uint32_t)action->mask) | ((uint32_t)action->value & (uint32_t)action->mask);
       } else {
         status = action->status;
       }
@@ -1062,7 +1067,9 @@ int turbo_flow_rule_apply_data_actions(turbo_flow_msg_t *message,
       rc = flow_rule_copy_key(pending.route, action->key);
       if (rc != TURBO_OK) return rc;
       break;
-    case TURBO_FLOW_RULE_ACTION_DROP: pending.dropped = 1; break;
+    case TURBO_FLOW_RULE_ACTION_DROP:
+      pending.dropped = 1;
+      break;
     case TURBO_FLOW_RULE_ACTION_BATCH_KEY:
       rc = flow_rule_copy_key(pending.batch_key, action->key);
       if (rc != TURBO_OK) return rc;
@@ -1075,7 +1082,8 @@ int turbo_flow_rule_apply_data_actions(turbo_flow_msg_t *message,
       pending.dead_letter = 1;
       pending.dead_letter_status = action->status;
       break;
-    default: return TURBO_EINVAL;
+    default:
+      return TURBO_EINVAL;
     }
   }
   if (pending.dropped && pending.dead_letter) return TURBO_EPROTO;
@@ -1094,7 +1102,7 @@ static int flow_rule_data_stage(turbo_flow_msg_t *message, void *ctx) {
   turbo_flow_rule_facts_t facts = TURBO_FLOW_RULE_FACTS_INIT;
   turbo_flow_rule_result_t result = TURBO_FLOW_RULE_RESULT_INIT;
   turbo_flow_rule_data_decision_t decision = TURBO_FLOW_RULE_DATA_DECISION_INIT;
-  turbo_flow_rule_action_t actions[FLOW_RULE_STAGE_MAX_ACTIONS];
+  static TURBO_THREAD_LOCAL turbo_flow_rule_action_t actions[FLOW_RULE_STAGE_MAX_ACTIONS];
   size_t capacity;
   int rc;
   if (!processor || !message || processor->domain != TURBO_FLOW_RULE_DATA) {
@@ -1114,6 +1122,7 @@ static int flow_rule_data_stage(turbo_flow_msg_t *message, void *ctx) {
   capacity = processor->limits.max_output_actions;
   if (capacity > turbo_vec_size(&processor->rules)) capacity = turbo_vec_size(&processor->rules);
   if (capacity == 0u || capacity > FLOW_RULE_STAGE_MAX_ACTIONS) return TURBO_ENOSPC;
+  /* Rule actions include a large command envelope; keep bounded ingress coroutine stacks small. */
   rc = turbo_flow_rule_processor_evaluate(processor, &facts, actions, capacity, &result);
   if (rc == TURBO_OK) {
     rc = turbo_flow_rule_apply_data_actions(message, actions, result.emitted, &decision);
@@ -1144,8 +1153,8 @@ int turbo_flow_rule_register_data_stage(turbo_flow_t *flow, const char *stage_na
   resource.ops.snapshot = flow_rule_resource_snapshot;
   resource.ops.document = flow_rule_resource_document;
   resource.ctx = processor;
-  return turbo_flow_register_stage_with_resources(flow, stage_name, flow_rule_data_stage,
-                                                  processor, &effective, &resource, 1u);
+  return turbo_flow_register_stage_with_resources(flow, stage_name, flow_rule_data_stage, processor,
+                                                  &effective, &resource, 1u);
 }
 
 int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *resource_name,
@@ -1177,13 +1186,13 @@ int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *reso
   rc = flow_rule_register_apply_contract(flow, resource_name);
   if (rc != TURBO_OK) {
     flow_rule_rollback_operation_registration(flow, resources_before, providers_before,
-                                               modules_before, primitives_before, operations_before);
+                                              modules_before, primitives_before, operations_before);
     return rc;
   }
   rc = flow_rule_register_module_contract(flow);
   if (rc != TURBO_OK) {
     flow_rule_rollback_operation_registration(flow, resources_before, providers_before,
-                                               modules_before, primitives_before, operations_before);
+                                              modules_before, primitives_before, operations_before);
     return rc;
   }
 
@@ -1192,11 +1201,11 @@ int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *reso
   resource.ops.snapshot = flow_rule_resource_snapshot;
   resource.ops.document = flow_rule_resource_document;
   resource.ctx = processor;
-  rc = turbo_flow_register_resource_provider(flow, resource.owner_name, &resource.ops,
-                                             resource.ctx);
+  rc =
+      turbo_flow_register_resource_provider(flow, resource.owner_name, &resource.ops, resource.ctx);
   if (rc != TURBO_OK) {
     flow_rule_rollback_operation_registration(flow, resources_before, providers_before,
-                                               modules_before, primitives_before, operations_before);
+                                              modules_before, primitives_before, operations_before);
     return rc;
   }
 
@@ -1209,14 +1218,14 @@ int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *reso
   rc = turbo_flow_register_operation_provider(flow, &provider);
   if (rc != TURBO_OK) {
     flow_rule_rollback_operation_registration(flow, resources_before, providers_before,
-                                               modules_before, primitives_before, operations_before);
+                                              modules_before, primitives_before, operations_before);
     return rc;
   }
-  rc = turbo_flow_bind_operation_provider_module(flow, FLOW_RULE_MODULE_NAME,
+  rc = turbo_flow_bind_operation_provider_module(flow, TURBO_FLOW_RULE_MODULE,
                                                  TURBO_FLOW_RULE_APPLY_OPERATION, resource_name);
   if (rc != TURBO_OK) {
     flow_rule_rollback_operation_registration(flow, resources_before, providers_before,
-                                               modules_before, primitives_before, operations_before);
+                                              modules_before, primitives_before, operations_before);
     return rc;
   }
   return TURBO_OK;

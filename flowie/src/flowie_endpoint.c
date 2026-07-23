@@ -11,10 +11,11 @@
 #include "flowie_topic_index_internal.h"
 #include "fmt.h"
 #include "platform.h"
-#include "roaring.h"
 #include "turbo_deque.h"
 #include "turbo_error.h"
+#include "turbo_flow_bitmap_index.h"
 #include "turbo_flow_coronet_execution.h"
+#include "turbo_flow_mqtt_store.h"
 #include "turbo_hash.h"
 #include "turbo_parser.h"
 #include "turbo_str.h"
@@ -22,8 +23,9 @@
 #include "turbo_uuid.h"
 #include "turbo_vec.h"
 
-#include <stdatomic.h>
 #include <stdio.h>
+
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -41,6 +43,8 @@
 #define FLOWIE_RETAINED_RECORD_METADATA_SIZE 17u
 #define FLOWIE_PRIVATE_COROUTINE_HEADROOM 8u
 #define FLOWIE_MQTT_REASON_NOT_AUTHORIZED UINT8_C(0x87)
+#define FLOWIE_MQTT_REASON_SESSION_TAKEN_OVER UINT8_C(0x8e)
+#define FLOWIE_MQTT_REASON_QUOTA_EXCEEDED UINT8_C(0x97)
 #define FLOWIE_MQTT_REASON_TOPIC_ALIAS_INVALID UINT8_C(0x94)
 #define FLOWIE_MQTT_REASON_RECEIVE_MAXIMUM_EXCEEDED UINT8_C(0x93)
 
@@ -242,6 +246,9 @@ typedef struct flowie_reply_request_s {
   turbo_flow_protocol_route_t route;
   turbo_flow_protocol_settlement_request_t settlement;
   tstr_t packet;
+  mem_buffer_t *packet_buffer;
+  size_t packet_offset;
+  size_t packet_size;
   struct flowie_reply_request_s *next;
   size_t reserved_bytes;
   size_t connection_reserved_bytes;
@@ -250,6 +257,11 @@ typedef struct flowie_reply_request_s {
   int subscriber_delivery;
   int qos_delivery;
   int broker_will;
+  int durable_replay;
+  uint64_t publisher_session_id;
+  flowie_endpoint_session_t *delivery_session;
+  uint16_t delivery_packet_id;
+  uint64_t expiry_at_epoch_seconds;
   flowie_mqtt_version_t protocol_version;
 } flowie_reply_request_t;
 
@@ -266,9 +278,11 @@ struct flowie_endpoint_connection_s {
   int send_queue_initialized;
   int send_budget_initialized;
   int send_drain_active;
+  int processing_input;
   int connack_admitted;
   int connack_sent;
   int closing;
+  int session_takeover;
   int close_when_replies_drain;
   int close_when_replies_drain_status;
   size_t terminal_reply_count;
@@ -311,7 +325,7 @@ typedef struct flowie_subscription_entry_s {
   tstr_t filter;
   turbo_vec_t members;
   turbo_hash_map_t member_index;
-  roaring64_bitmap_t *session_ids;
+  turbo_flow_bitmap_index_t *session_ids;
   turbo_flow_pattern_selector_t selector;
   flowie_topic_index_binding_t topic_binding;
   uint8_t shared;
@@ -329,6 +343,7 @@ typedef struct flowie_fanout_delivery_s {
   flowie_endpoint_session_t *session;
   flowie_reply_request_t *request;
   uint16_t packet_id;
+  uint8_t online;
 } flowie_fanout_delivery_t;
 
 typedef struct flowie_retained_message_s {
@@ -342,6 +357,7 @@ typedef struct flowie_retained_message_s {
 
 struct flowie_endpoint_session_s {
   flowie_session_owner_t *owner;
+  flowie_endpoint_connection_t *connection;
   tstr_t client_id_owned;
   tstr_v client_id;
   turbo_flow_security_principal_t principal;
@@ -405,7 +421,7 @@ struct flowie_endpoint_s {
   turbo_flow_security_auth_provider_t auth_provider;
   turbo_flow_security_enhanced_auth_provider_t enhanced_auth_provider;
   turbo_flow_security_realm_t *security_realm;
-  turbo_flow_record_store_t *session_store;
+  turbo_flow_mqtt_store_t *mqtt_store;
   int start_refs;
   int reply_refs;
   atomic_int started;
@@ -501,7 +517,7 @@ static int flowie_subscription_is_shared(flowie_mqtt_span_t filter) {
 
 static void flowie_subscription_entry_destroy(flowie_subscription_entry_t *entry) {
   if (!entry) return;
-  roaring64_bitmap_free(entry->session_ids);
+  turbo_flow_bitmap_index_destroy(entry->session_ids);
   turbo_hash_map_destroy(&entry->member_index);
   turbo_vec_destroy(&entry->members);
   tstr_freep(&entry->filter);
@@ -606,12 +622,11 @@ static int flowie_subscription_index_rebuild(flowie_endpoint_t *endpoint) {
           tstr_free(created.filter);
           goto fail;
         }
-        created.session_ids = roaring64_bitmap_create();
-        if (!created.session_ids) {
+        rc = turbo_flow_bitmap_index_create(endpoint->max_sessions, &created.session_ids);
+        if (rc != TURBO_OK) {
           turbo_hash_map_destroy(&created.member_index);
           turbo_vec_destroy(&created.members);
           tstr_free(created.filter);
-          rc = TURBO_ENOMEM;
           goto fail;
         }
         created.shared = (uint8_t)flowie_subscription_is_shared(subscription.filter);
@@ -633,7 +648,7 @@ static int flowie_subscription_index_rebuild(flowie_endpoint_t *endpoint) {
         }
         rc = turbo_vec_push(&staged, &created);
         if (rc != TURBO_OK) {
-          roaring64_bitmap_free(created.session_ids);
+          turbo_flow_bitmap_index_destroy(created.session_ids);
           turbo_hash_map_destroy(&created.member_index);
           turbo_vec_destroy(&created.members);
           tstr_free(created.filter);
@@ -666,7 +681,8 @@ static int flowie_subscription_index_rebuild(flowie_endpoint_t *endpoint) {
           goto fail;
         }
       }
-      roaring64_bitmap_add(entry->session_ids, member.session_id);
+      rc = turbo_flow_bitmap_index_add(entry->session_ids, member.session_id);
+      if (rc != TURBO_OK) goto fail;
     }
   }
   for (size_t entry_index = 0u; entry_index < turbo_vec_size(&staged); ++entry_index) {
@@ -726,12 +742,15 @@ static int flowie_subscription_member_add(flowie_subscription_entry_t *entry,
     (void)turbo_vec_resize(&entry->members, member_index);
     return rc;
   }
-  roaring64_bitmap_add(entry->session_ids, session_id);
-  return TURBO_OK;
+  rc = turbo_flow_bitmap_index_add(entry->session_ids, session_id);
+  if (rc == TURBO_OK) return TURBO_OK;
+  (void)turbo_hash_map_remove(&entry->member_index, &session_id, NULL);
+  (void)turbo_vec_resize(&entry->members, member_index);
+  return rc;
 }
 
 static int flowie_subscription_entry_init(flowie_subscription_entry_t *entry,
-                                          flowie_mqtt_span_t filter) {
+                                          flowie_mqtt_span_t filter, size_t max_members) {
   int rc;
   if (!entry || !filter.data || filter.size == 0u) return TURBO_EINVAL;
   memset(entry, 0, sizeof(*entry));
@@ -742,11 +761,8 @@ static int flowie_subscription_entry_init(flowie_subscription_entry_t *entry,
   rc =
       turbo_hash_map_init(&entry->member_index, sizeof(uint64_t), sizeof(size_t), NULL, NULL, NULL);
   if (rc != TURBO_OK) goto fail;
-  entry->session_ids = roaring64_bitmap_create();
-  if (!entry->session_ids) {
-    rc = TURBO_ENOMEM;
-    goto fail;
-  }
+  rc = turbo_flow_bitmap_index_create(max_members, &entry->session_ids);
+  if (rc != TURBO_OK) goto fail;
   rc = turbo_flow_pattern_selector_init(&entry->selector);
   if (rc != TURBO_OK) goto fail;
   entry->shared = (uint8_t)flowie_subscription_is_shared(filter);
@@ -794,7 +810,7 @@ static int flowie_subscription_member_upsert(flowie_endpoint_t *endpoint,
     tstr_v key;
     size_t free_count = turbo_vec_size(&endpoint->subscription_free_slots);
     int reused = free_count != 0u;
-    rc = flowie_subscription_entry_init(&created, subscription->filter);
+    rc = flowie_subscription_entry_init(&created, subscription->filter, endpoint->max_sessions);
     if (rc != TURBO_OK) return rc;
     rc = flowie_subscription_member_add(&created, session, snapshot.session_id, subscription);
     if (rc != TURBO_OK) {
@@ -895,7 +911,7 @@ static int flowie_subscription_member_remove(flowie_endpoint_t *endpoint,
       if (!moved_index) return TURBO_EPROTO;
       *moved_index = member_position;
     }
-    roaring64_bitmap_remove(entry->session_ids, snapshot.session_id);
+    (void)turbo_flow_bitmap_index_remove(entry->session_ids, snapshot.session_id);
     return TURBO_OK;
   }
   rc = turbo_vec_push(&endpoint->subscription_free_slots, &entry_index);
@@ -1323,7 +1339,7 @@ static int flowie_retained_record_encode(const flowie_endpoint_t *endpoint,
   if (rc == TURBO_OK) rc = flowie_endpoint_record_size_add(&required, sizeof(metadata));
   if (rc == TURBO_OK) rc = flowie_endpoint_record_size_add(&required, tstr_len(retained->packet));
   if (rc != TURBO_OK) return rc;
-  if (!endpoint->session_store || required > endpoint->session_store->max_value_size)
+  if (!endpoint->mqtt_store || required > turbo_flow_mqtt_store_max_value_size(endpoint->mqtt_store))
     return TURBO_EMSGSIZE;
   record = (uint8_t *)malloc(required);
   if (!record) return TURBO_ENOMEM;
@@ -1358,13 +1374,13 @@ static int flowie_retained_store_put(flowie_endpoint_t *endpoint,
   int rc;
   if (!endpoint || !retained || !retained->topic || !retained->packet) return TURBO_EINVAL;
   if (!endpoint->persistence_enabled) return TURBO_OK;
-  if (!endpoint->session_store || retained->revision <= expected_revision ||
+  if (!endpoint->mqtt_store || retained->revision <= expected_revision ||
       retained->revision > (uint64_t)TURBO_FLOW_RECORD_REVISION_MAX)
     return TURBO_EPROTO;
   topic = (flowie_mqtt_span_t){(const uint8_t *)retained->topic, tstr_len(retained->topic)};
   rc = flowie_retained_key_build(topic, &key, &key_size);
   if (rc != TURBO_OK) return rc;
-  if (key_size > endpoint->session_store->max_key_size) {
+  if (key_size > turbo_flow_mqtt_store_max_key_size(endpoint->mqtt_store)) {
     rc = TURBO_EMSGSIZE;
     goto done;
   }
@@ -1376,7 +1392,7 @@ static int flowie_retained_store_put(flowie_endpoint_t *endpoint,
   mutation.next_revision = retained->revision;
   mutation.value = value;
   mutation.value_size = value_size;
-  rc = endpoint->session_store->commit(endpoint->session_store->ctx, &mutation, 1u);
+  rc = turbo_flow_mqtt_store_commit(endpoint->mqtt_store, &mutation, 1u);
 
 done:
   free(value);
@@ -1393,13 +1409,13 @@ static int flowie_retained_store_delete(flowie_endpoint_t *endpoint,
   int rc;
   if (!endpoint || !retained || !retained->topic) return TURBO_EINVAL;
   if (!endpoint->persistence_enabled) return TURBO_OK;
-  if (!endpoint->session_store || retained->revision == 0u ||
+  if (!endpoint->mqtt_store || retained->revision == 0u ||
       retained->revision > (uint64_t)TURBO_FLOW_RECORD_REVISION_MAX)
     return TURBO_EPROTO;
   topic = (flowie_mqtt_span_t){(const uint8_t *)retained->topic, tstr_len(retained->topic)};
   rc = flowie_retained_key_build(topic, &key, &key_size);
   if (rc != TURBO_OK) return rc;
-  if (key_size > endpoint->session_store->max_key_size) {
+  if (key_size > turbo_flow_mqtt_store_max_key_size(endpoint->mqtt_store)) {
     free(key);
     return TURBO_EMSGSIZE;
   }
@@ -1407,7 +1423,7 @@ static int flowie_retained_store_delete(flowie_endpoint_t *endpoint,
   mutation.key = key;
   mutation.key_size = key_size;
   mutation.expected_revision = retained->revision;
-  rc = endpoint->session_store->commit(endpoint->session_store->ctx, &mutation, 1u);
+  rc = turbo_flow_mqtt_store_commit(endpoint->mqtt_store, &mutation, 1u);
   free(key);
   return rc;
 }
@@ -1476,7 +1492,7 @@ static int flowie_endpoint_record_encode(const flowie_endpoint_t *endpoint,
   }
   if (rc == TURBO_OK) rc = flowie_endpoint_record_size_add(&required, owner_size);
   if (rc != TURBO_OK) goto done;
-  if (endpoint->session_store && required > endpoint->session_store->max_value_size) {
+  if (endpoint->mqtt_store && required > turbo_flow_mqtt_store_max_value_size(endpoint->mqtt_store)) {
     rc = TURBO_EMSGSIZE;
     goto done;
   }
@@ -1732,7 +1748,7 @@ static int flowie_session_record_put(flowie_endpoint_t *endpoint,
   int rc;
   if (!endpoint || !staged) return TURBO_EINVAL;
   if (!endpoint->persistence_enabled) return TURBO_OK;
-  if (!endpoint->session_store) return TURBO_EINVAL;
+  if (!endpoint->mqtt_store) return TURBO_EINVAL;
   if (current) {
     rc = flowie_session_owner_snapshot(current, &before);
     if (rc != TURBO_OK) return rc;
@@ -1740,7 +1756,7 @@ static int flowie_session_record_put(flowie_endpoint_t *endpoint,
   rc = flowie_session_owner_snapshot(staged, &after);
   if (rc != TURBO_OK) return rc;
   if (!after.client_id.data || after.client_id.size == 0u ||
-      after.client_id.size > endpoint->session_store->max_key_size ||
+      after.client_id.size > turbo_flow_mqtt_store_max_key_size(endpoint->mqtt_store) ||
       after.resource_generation <= before.resource_generation ||
       after.resource_generation > (uint64_t)TURBO_FLOW_RECORD_REVISION_MAX)
     return TURBO_EPROTO;
@@ -1753,7 +1769,7 @@ static int flowie_session_record_put(flowie_endpoint_t *endpoint,
   mutation.next_revision = after.resource_generation;
   mutation.value = value;
   mutation.value_size = value_size;
-  rc = endpoint->session_store->commit(endpoint->session_store->ctx, &mutation, 1u);
+  rc = turbo_flow_mqtt_store_commit(endpoint->mqtt_store, &mutation, 1u);
   free(value);
   return rc;
 }
@@ -1771,7 +1787,7 @@ static int flowie_session_record_delete(flowie_endpoint_t *endpoint,
   mutation.key = (const uint8_t *)session->client_id.data;
   mutation.key_size = session->client_id.len;
   mutation.expected_revision = snapshot.resource_generation;
-  return endpoint->session_store->commit(endpoint->session_store->ctx, &mutation, 1u);
+  return turbo_flow_mqtt_store_commit(endpoint->mqtt_store, &mutation, 1u);
 }
 
 static int flowie_session_commit_staged(flowie_endpoint_t *endpoint,
@@ -2107,21 +2123,27 @@ flowie_endpoint_security_binding_validate(const flowie_endpoint_config_t *config
 static int flowie_endpoint_persistence_binding_validate(
     const flowie_endpoint_config_t *config,
     const flowie_endpoint_persistence_binding_t *persistence) {
+  /* Backend callbacks are inspected only at the registration boundary; all runtime fact I/O
+     goes through turbo_flow_mqtt_store_t below. */
   const turbo_flow_record_store_t *store;
   size_t max_sessions;
   size_t max_retained_messages;
   size_t required_records;
   size_t required_value_size;
   size_t max_packet_size;
-  const uint32_t required = TURBO_FLOW_RECORD_STORE_DURABLE | TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH;
+  uint32_t required = TURBO_FLOW_RECORD_STORE_DURABLE | TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH;
+  int local_fact_store;
   if (!config || !persistence || persistence->size < sizeof(*persistence) ||
       !persistence->store_channel || !persistence->store_channel[0] ||
       !(store = persistence->store) || store->size < sizeof(*store) ||
-      store->api_version != TURBO_FLOW_RECORD_STORE_API_VERSION ||
-      (store->capabilities & required) != required || !store->ctx || !store->scan ||
+      store->api_version != TURBO_FLOW_RECORD_STORE_API_VERSION || !store->ctx || !store->scan ||
       !store->commit || store->max_key_size == 0u || store->max_value_size == 0u ||
       store->max_batch_size == 0u || store->max_records == 0u)
     return TURBO_EINVAL;
+  local_fact_store = strcmp(persistence->store_channel,
+                            FLOWIE_IMPLICIT_LOCAL_SESSION_STORE_CHANNEL) == 0;
+  if (local_fact_store) required = TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH;
+  if ((store->capabilities & required) != required) return TURBO_EINVAL;
   if (!config->manage_sessions) return TURBO_ENOTSUP;
   max_sessions = config->max_sessions ? config->max_sessions
                                       : (config->max_connections ? config->max_connections
@@ -2664,7 +2686,12 @@ static void flowie_client_remove(flowie_endpoint_t *endpoint,
     flowie_endpoint_connection_t **slot =
         (flowie_endpoint_connection_t **)turbo_vec_at(&endpoint->clients, i);
     if (!slot || *slot != connection) continue;
-    (void)flowie_route_map_t_remove(&endpoint->routes, connection->route.session_id, NULL);
+    {
+      flowie_endpoint_connection_t **mapped =
+          flowie_route_map_t_get(&endpoint->routes, connection->route.session_id);
+      if (mapped && *mapped == connection)
+        (void)flowie_route_map_t_remove(&endpoint->routes, connection->route.session_id, NULL);
+    }
     if (i + 1u < count) {
       flowie_endpoint_connection_t *const *last =
           (flowie_endpoint_connection_t *const *)turbo_vec_at_const(&endpoint->clients, count - 1u);
@@ -2695,10 +2722,27 @@ flowie_connection_find(flowie_endpoint_t *endpoint, const turbo_flow_protocol_ro
   return turbo_flow_pattern_routes_match(&requested, &candidate) ? connection : NULL;
 }
 
+static const char *flowie_reply_packet_data(const flowie_reply_request_t *request) {
+  if (!request) return NULL;
+  if (request->packet) return request->packet;
+  return request->packet_buffer
+             ? (const char *)mem_buffer_const_data(request->packet_buffer) + request->packet_offset
+             : NULL;
+}
+
+static size_t flowie_reply_packet_size(const flowie_reply_request_t *request) {
+  if (!request) return 0u;
+  return request->packet ? tstr_len(request->packet) : request->packet_size;
+}
+
 static void flowie_reply_request_release(flowie_endpoint_t *endpoint,
                                          flowie_reply_request_t *request) {
   if (!request) return;
   tstr_freep(&request->packet);
+  mem_buffer_release(request->packet_buffer);
+  request->packet_buffer = NULL;
+  request->packet_offset = 0u;
+  request->packet_size = 0u;
   if (request->reserved_bytes != 0u)
     (void)tf_io_budget_release(&endpoint->send_budget, request->reserved_bytes);
   free(request);
@@ -2756,21 +2800,22 @@ static void flowie_slow_subscriber_disconnect(flowie_endpoint_connection_t *conn
   flowie_connection_close(connection, status);
 }
 
-static int flowie_reply_packet_validate(flowie_endpoint_connection_t *connection, tstr_t packet) {
+static int flowie_reply_packet_validate(flowie_endpoint_connection_t *connection,
+                                        const uint8_t *packet, size_t packet_size) {
   flowie_mqtt_parse_options_t options = FLOWIE_MQTT_PARSE_OPTIONS_INIT;
   flowie_mqtt_packet_view_t envelope = FLOWIE_MQTT_PACKET_VIEW_INIT;
   flowie_mqtt_control_packet_view_t control = FLOWIE_MQTT_CONTROL_PACKET_VIEW_INIT;
   flowie_mqtt_publish_view_t publish = FLOWIE_MQTT_PUBLISH_VIEW_INIT;
   size_t consumed = 0u;
   int rc;
-  if (!connection || connection->version == FLOWIE_MQTT_VERSION_UNSPECIFIED || !packet)
+  if (!connection || connection->version == FLOWIE_MQTT_VERSION_UNSPECIFIED || !packet ||
+      packet_size == 0u)
     return TURBO_EBUSY;
-  if (tstr_len(packet) > connection->client_maximum_packet_size) return TURBO_EMSGSIZE;
+  if (packet_size > connection->client_maximum_packet_size) return TURBO_EMSGSIZE;
   options.version = connection->version;
   options.max_packet_size = connection->endpoint->max_packet_size;
-  rc = flowie_mqtt_packet_parse((const uint8_t *)packet, tstr_len(packet), &options, &envelope,
-                                &consumed, NULL);
-  if (rc != FLOWIE_MQTT_PARSE_OK || consumed != tstr_len(packet)) return TURBO_EPROTO;
+  rc = flowie_mqtt_packet_parse(packet, packet_size, &options, &envelope, &consumed, NULL);
+  if (rc != FLOWIE_MQTT_PARSE_OK || consumed != packet_size) return TURBO_EPROTO;
   if (envelope.type == FLOWIE_MQTT_PACKET_PUBLISH) {
     if (!connection->connack_admitted) return TURBO_EBUSY;
     return flowie_mqtt_publish_parse(&envelope, &publish) == FLOWIE_MQTT_PARSE_OK ? TURBO_OK
@@ -2827,16 +2872,21 @@ static void flowie_fanout_targets_destroy(turbo_vec_t *targets) {
   turbo_vec_destroy(targets);
 }
 
-static int flowie_fanout_target_add(turbo_vec_t *targets, roaring64_bitmap_t *selected,
+static int flowie_fanout_target_add(turbo_vec_t *targets, turbo_flow_bitmap_index_t *selected,
                                     turbo_hash_map_t *target_index,
                                     const flowie_subscription_member_t *member, int merge) {
   flowie_fanout_target_t *existing;
   flowie_fanout_target_t target;
   size_t index;
   int rc;
+  int selected_contains = 0;
   if (!targets || !member || !member->session) return TURBO_EINVAL;
   existing = NULL;
-  if (merge && selected && roaring64_bitmap_contains(selected, member->session_id)) {
+  if (merge && selected) {
+    rc = turbo_flow_bitmap_index_contains(selected, member->session_id, &selected_contains);
+    if (rc != TURBO_OK) return rc;
+  }
+  if (selected_contains) {
     const size_t *found =
         (const size_t *)turbo_hash_map_get_const(target_index, &member->session_id);
     if (!found) return TURBO_EPROTO;
@@ -2873,14 +2923,21 @@ static int flowie_fanout_target_add(turbo_vec_t *targets, roaring64_bitmap_t *se
     (void)turbo_vec_resize(targets, index);
     return rc;
   }
-  roaring64_bitmap_add(selected, member->session_id);
-  return TURBO_OK;
+  rc = turbo_flow_bitmap_index_add(selected, member->session_id);
+  if (rc == TURBO_OK) return TURBO_OK;
+  (void)turbo_hash_map_remove(target_index, &member->session_id, NULL);
+  {
+    flowie_fanout_target_t *stored = (flowie_fanout_target_t *)turbo_vec_at(targets, index);
+    flowie_fanout_target_identifiers_destroy(stored);
+  }
+  (void)turbo_vec_resize(targets, index);
+  return rc;
 }
 
 static int flowie_fanout_select(flowie_endpoint_t *endpoint, uint64_t publisher_session_id,
                                 flowie_mqtt_span_t topic, turbo_vec_t *targets) {
   int rc;
-  roaring64_bitmap_t *normal_selected;
+  turbo_flow_bitmap_index_t *normal_selected = NULL;
   turbo_hash_map_t target_index;
   turbo_vec_t matched_entries;
   if (!endpoint || !topic.data || topic.size == 0u || !targets) return TURBO_EINVAL;
@@ -2888,17 +2945,17 @@ static int flowie_fanout_select(flowie_endpoint_t *endpoint, uint64_t publisher_
     rc = flowie_subscription_index_rebuild(endpoint);
     if (rc != TURBO_OK) return rc;
   }
-  normal_selected = roaring64_bitmap_create();
-  if (!normal_selected) return TURBO_ENOMEM;
+  rc = turbo_flow_bitmap_index_create(endpoint->max_sessions, &normal_selected);
+  if (rc != TURBO_OK) return rc;
   rc = turbo_hash_map_init(&target_index, sizeof(uint64_t), sizeof(size_t), NULL, NULL, NULL);
   if (rc != TURBO_OK) {
-    roaring64_bitmap_free(normal_selected);
+    turbo_flow_bitmap_index_destroy(normal_selected);
     return rc;
   }
   rc = turbo_vec_init(&matched_entries, sizeof(size_t));
   if (rc != TURBO_OK) {
     turbo_hash_map_destroy(&target_index);
-    roaring64_bitmap_free(normal_selected);
+    turbo_flow_bitmap_index_destroy(normal_selected);
     return rc;
   }
   rc = flowie_topic_index_match(&endpoint->subscription_topics, topic, &matched_entries);
@@ -2934,39 +2991,39 @@ static int flowie_fanout_select(flowie_endpoint_t *endpoint, uint64_t publisher_
       while ((rc = turbo_flow_pattern_selection_next(&selection, &member_index)) == TURBO_OK) {
         const flowie_subscription_member_t *member =
             (const flowie_subscription_member_t *)turbo_vec_at_const(&entry->members, member_index);
-        turbo_flow_protocol_route_t route = TURBO_FLOW_PROTOCOL_ROUTE_INIT;
+        int present = 0;
         if (!member || !member->session ||
-            !roaring64_bitmap_contains(entry->session_ids, member->session_id)) {
+            turbo_flow_bitmap_index_contains(entry->session_ids, member->session_id, &present) !=
+                TURBO_OK ||
+            !present) {
           rc = TURBO_EPROTO;
           goto done;
         }
         if (member->no_local && member->session_id == publisher_session_id) continue;
-        if (flowie_session_owner_route(member->session->owner, &route) != TURBO_OK) continue;
         rc = flowie_fanout_target_add(targets, normal_selected, &target_index, member, 1);
         if (rc != TURBO_OK) goto done;
       }
       if (rc != TURBO_ENOENT) goto done;
       rc = TURBO_OK;
     } else {
-      uint64_t member_count = roaring64_bitmap_get_cardinality(entry->session_ids);
+      size_t member_count = 0u;
       turbo_flow_pattern_selection_iterator_t selection =
           TURBO_FLOW_PATTERN_SELECTION_ITERATOR_INIT;
       size_t candidate_index;
+      rc = turbo_flow_bitmap_index_count(entry->session_ids, &member_count);
+      if (rc != TURBO_OK) goto done;
       if (member_count == 0u) continue;
-      if (member_count > SIZE_MAX) {
-        rc = TURBO_ERANGE;
-        goto done;
-      }
       rc = turbo_flow_pattern_selection_begin(&entry->selector,
                                               TURBO_FLOW_PATTERN_SELECT_ROUND_ROBIN,
-                                              (size_t)member_count, &selection);
+                                              member_count, &selection);
       if (rc != TURBO_OK) goto done;
       while ((rc = turbo_flow_pattern_selection_next(&selection, &candidate_index)) == TURBO_OK) {
         uint64_t session_id;
         const size_t *member_index;
         const flowie_subscription_member_t *member = NULL;
         turbo_flow_protocol_route_t route = TURBO_FLOW_PROTOCOL_ROUTE_INIT;
-        if (!roaring64_bitmap_select(entry->session_ids, (uint64_t)candidate_index, &session_id)) {
+        if (turbo_flow_bitmap_index_select(entry->session_ids, candidate_index, &session_id) !=
+            TURBO_OK) {
           rc = TURBO_EPROTO;
           goto done;
         }
@@ -2988,15 +3045,16 @@ static int flowie_fanout_select(flowie_endpoint_t *endpoint, uint64_t publisher_
       if (rc != TURBO_OK) goto done;
     }
   }
-  rc = roaring64_bitmap_get_cardinality(normal_selected) ==
-               (uint64_t)turbo_hash_map_size(&target_index)
-           ? TURBO_OK
-           : TURBO_EPROTO;
+  {
+    size_t selected_count = 0u;
+    rc = turbo_flow_bitmap_index_count(normal_selected, &selected_count);
+    if (rc == TURBO_OK && selected_count != turbo_hash_map_size(&target_index)) rc = TURBO_EPROTO;
+  }
 
 done:
   turbo_vec_destroy(&matched_entries);
   turbo_hash_map_destroy(&target_index);
-  roaring64_bitmap_free(normal_selected);
+  turbo_flow_bitmap_index_destroy(normal_selected);
   return rc;
 }
 
@@ -3117,6 +3175,7 @@ static int flowie_fanout_delivery_build(flowie_endpoint_t *endpoint,
                                         const flowie_mqtt_packet_view_t *packet,
                                         const flowie_mqtt_publish_view_t *publish,
                                         tstr_t forwarded_properties, int retained_replay,
+                                        uint64_t expiry_at_epoch_seconds,
                                         flowie_fanout_delivery_t *delivery) {
   flowie_session_snapshot_t snapshot = FLOWIE_SESSION_SNAPSHOT_INIT;
   turbo_flow_protocol_route_t route = TURBO_FLOW_PROTOCOL_ROUTE_INIT;
@@ -3129,6 +3188,7 @@ static int flowie_fanout_delivery_build(flowie_endpoint_t *endpoint,
   size_t written = 0u;
   uint16_t packet_id = 0u;
   uint8_t qos;
+  int online;
   int rc;
   if (!endpoint || !target || !packet || !publish || !delivery) return TURBO_EINVAL;
   owner = target->session->owner;
@@ -3138,13 +3198,18 @@ static int flowie_fanout_delivery_build(flowie_endpoint_t *endpoint,
     owner = staged;
   }
   rc = flowie_session_owner_snapshot(owner, &snapshot);
-  if (rc != TURBO_OK || !snapshot.active) {
-    if (rc == TURBO_OK) rc = TURBO_ENOTCONN;
-    goto fail;
-  }
-  rc = flowie_session_owner_route(owner, &route);
   if (rc != TURBO_OK) goto fail;
   qos = publish->qos < target->qos ? publish->qos : target->qos;
+  online = 0;
+  if (snapshot.active) {
+    rc = flowie_session_owner_route(owner, &route);
+    if (rc != TURBO_OK) goto fail;
+    online = flowie_connection_find(endpoint, &route) != NULL;
+  }
+  if (!online && (qos == 0u || snapshot.session_expiry_interval == 0u)) {
+    rc = TURBO_ENOTCONN;
+    goto fail;
+  }
   if (qos != 0u) {
     rc = flowie_session_owner_delivery_reserve(owner, qos, &packet_id);
     if (rc != TURBO_OK) goto fail;
@@ -3195,8 +3260,14 @@ static int flowie_fanout_delivery_build(flowie_endpoint_t *endpoint,
     goto fail;
   }
   if (packet_id != 0u) {
-    rc = flowie_session_owner_delivery_commit(
-        owner, packet_id, (flowie_mqtt_span_t){(const uint8_t *)request->packet, written});
+    rc =
+        online
+            ? flowie_session_owner_delivery_commit(
+                  owner, packet_id, (flowie_mqtt_span_t){(const uint8_t *)request->packet, written},
+                  expiry_at_epoch_seconds)
+            : flowie_session_owner_delivery_commit_queued(
+                  owner, packet_id, (flowie_mqtt_span_t){(const uint8_t *)request->packet, written},
+                  expiry_at_epoch_seconds);
     if (rc != TURBO_OK) {
       tstr_freep(&request->packet);
       free(request);
@@ -3217,11 +3288,16 @@ static int flowie_fanout_delivery_build(flowie_endpoint_t *endpoint,
   request->kind = FLOWIE_REPLY_PACKET;
   request->subscriber_delivery = 1;
   request->qos_delivery = packet_id != 0u;
+  request->delivery_session = target->session;
+  request->delivery_packet_id = packet_id;
+  request->expiry_at_epoch_seconds = expiry_at_epoch_seconds;
+  request->protocol_version = snapshot.version;
   request->route = route;
   request->route.size = sizeof(request->route);
   delivery->session = target->session;
   delivery->request = request;
   delivery->packet_id = packet_id;
+  delivery->online = (uint8_t)online;
   flowie_session_owner_destroy(staged);
   return TURBO_OK;
 
@@ -3257,9 +3333,10 @@ static int flowie_retained_delivery_enqueue(flowie_endpoint_t *endpoint,
                                             flowie_fanout_delivery_t *delivery) {
   size_t bytes;
   int rc;
-  if (!endpoint || !delivery || !delivery->request || !delivery->request->packet)
+  if (!endpoint || !delivery || !delivery->request ||
+      !flowie_reply_packet_data(delivery->request))
     return TURBO_EINVAL;
-  bytes = tstr_len(delivery->request->packet);
+  bytes = flowie_reply_packet_size(delivery->request);
   rc = tf_io_budget_acquire(&endpoint->send_budget, bytes);
   if (rc != TURBO_OK) goto fail;
   delivery->request->reserved_bytes = bytes;
@@ -3351,7 +3428,7 @@ static int flowie_retained_replay_subscription(flowie_endpoint_connection_t *con
     }
     memset(&delivery, 0, sizeof(delivery));
     rc = flowie_fanout_delivery_build(endpoint, &target, &packet, &publish, properties, 1,
-                                      &delivery);
+                                      retained->expiry_at_epoch_seconds, &delivery);
     flowie_fanout_target_identifiers_destroy(&target);
     tstr_freep(&properties);
     if (rc == TURBO_ENOSPC) {
@@ -3379,8 +3456,10 @@ static int flowie_fanout_batch_admit(flowie_endpoint_t *endpoint, flowie_reply_r
   for (size_t i = 0u; i < count; ++i) {
     flowie_fanout_delivery_t *delivery = (flowie_fanout_delivery_t *)turbo_vec_at(deliveries, i);
     size_t bytes;
-    if (!delivery || !delivery->request || !delivery->request->packet) return TURBO_EPROTO;
-    bytes = tstr_len(delivery->request->packet);
+    if (!delivery || !delivery->request || !flowie_reply_packet_data(delivery->request))
+      return TURBO_EPROTO;
+    if (!delivery->online) continue;
+    bytes = flowie_reply_packet_size(delivery->request);
     first_error = tf_io_budget_acquire(&endpoint->send_budget, bytes);
     if (first_error != TURBO_OK) return first_error;
     delivery->request->reserved_bytes = bytes;
@@ -3388,11 +3467,28 @@ static int flowie_fanout_batch_admit(flowie_endpoint_t *endpoint, flowie_reply_r
 
   for (size_t i = 0u; i < count; ++i) {
     flowie_fanout_delivery_t *delivery = (flowie_fanout_delivery_t *)turbo_vec_at(deliveries, i);
+    if (!delivery->online) {
+      flowie_reply_request_release(endpoint, delivery->request);
+      delivery->request = NULL;
+      continue;
+    }
     flowie_endpoint_connection_t *connection =
         flowie_connection_find(endpoint, &delivery->request->route);
-    int rc = connection ? flowie_connection_reply_enqueue(connection, delivery->request)
-                        : TURBO_ENOTCONN;
-    if (!connection) flowie_reply_request_release(endpoint, delivery->request);
+    int handed_off = 0;
+    int rc = connection
+                 ? flowie_reply_packet_validate(
+                       connection, (const uint8_t *)flowie_reply_packet_data(delivery->request),
+                       flowie_reply_packet_size(delivery->request))
+                 : TURBO_ENOTCONN;
+    if (rc == TURBO_OK) {
+      handed_off = 1;
+      rc = flowie_connection_reply_enqueue(connection, delivery->request);
+    }
+    if (rc == TURBO_EMSGSIZE && connection) {
+      flowie_connection_close(connection, rc);
+      rc = TURBO_ENOTCONN;
+    }
+    if (!handed_off) flowie_reply_request_release(endpoint, delivery->request);
     delivery->request = NULL;
     if (rc == TURBO_OK) continue;
     if (!endpoint->persistence_enabled && delivery->packet_id != 0u && delivery->session)
@@ -3412,6 +3508,7 @@ static int flowie_fanout_apply(flowie_endpoint_t *endpoint, flowie_reply_request
   turbo_vec_t targets;
   turbo_vec_t deliveries;
   tstr_t properties = NULL;
+  uint64_t expiry_at_epoch_seconds = 0u;
   size_t consumed = 0u;
   int rc;
   if (!endpoint || !request || publisher_session_id == 0u ||
@@ -3419,9 +3516,10 @@ static int flowie_fanout_apply(flowie_endpoint_t *endpoint, flowie_reply_request
     return TURBO_EINVAL;
   options.version = version;
   options.max_packet_size = endpoint->max_packet_size;
-  rc = flowie_mqtt_packet_parse((const uint8_t *)request->packet, tstr_len(request->packet),
-                                &options, &packet, &consumed, NULL);
-  if (rc != FLOWIE_MQTT_PARSE_OK || consumed != tstr_len(request->packet) ||
+  rc = flowie_mqtt_packet_parse((const uint8_t *)flowie_reply_packet_data(request),
+                                flowie_reply_packet_size(request), &options, &packet, &consumed,
+                                NULL);
+  if (rc != FLOWIE_MQTT_PARSE_OK || consumed != flowie_reply_packet_size(request) ||
       packet.type != FLOWIE_MQTT_PACKET_PUBLISH)
     return TURBO_EPROTO;
   rc = flowie_mqtt_publish_parse(&packet, &publish);
@@ -3430,6 +3528,11 @@ static int flowie_fanout_apply(flowie_endpoint_t *endpoint, flowie_reply_request
     rc = flowie_retained_message_apply(endpoint, publisher_session_id, &packet, &publish);
     if (rc != TURBO_OK) return rc;
   }
+  rc = flowie_publish_expiry_at(&publish, &expiry_at_epoch_seconds);
+  if (rc != TURBO_OK) return rc;
+  if (expiry_at_epoch_seconds != 0u &&
+      expiry_at_epoch_seconds <= flowie_security_now_epoch_seconds())
+    return TURBO_OK;
   rc = turbo_vec_init(&targets, sizeof(flowie_fanout_target_t));
   if (rc != TURBO_OK) return rc;
   rc = turbo_vec_init(&deliveries, sizeof(flowie_fanout_delivery_t));
@@ -3446,8 +3549,8 @@ static int flowie_fanout_apply(flowie_endpoint_t *endpoint, flowie_reply_request
         (const flowie_fanout_target_t *)turbo_vec_at_const(&targets, i);
     flowie_fanout_delivery_t delivery;
     memset(&delivery, 0, sizeof(delivery));
-    rc =
-        flowie_fanout_delivery_build(endpoint, target, &packet, &publish, properties, 0, &delivery);
+    rc = flowie_fanout_delivery_build(endpoint, target, &packet, &publish, properties, 0,
+                                      expiry_at_epoch_seconds, &delivery);
     if (rc == TURBO_ENOSPC || rc == TURBO_ENOTCONN) {
       turbo_flow_protocol_route_t route = TURBO_FLOW_PROTOCOL_ROUTE_INIT;
       flowie_endpoint_connection_t *slow = NULL;
@@ -3674,8 +3777,8 @@ static int flowie_reply_settlement_apply(flowie_endpoint_connection_t *connectio
     return rc;
   }
   rc = flowie_mqtt_control_packet_encode(&control, encoded, sizeof(encoded), &written);
-  if (rc != FLOWIE_MQTT_PARSE_OK || written != tstr_len(request->packet) ||
-      memcmp(encoded, request->packet, written) != 0) {
+  if (rc != FLOWIE_MQTT_PARSE_OK || written != flowie_reply_packet_size(request) ||
+      memcmp(encoded, flowie_reply_packet_data(request), written) != 0) {
     flowie_session_owner_destroy(staged);
     return TURBO_EPROTO;
   }
@@ -3688,6 +3791,76 @@ static int flowie_reply_settlement_apply(flowie_endpoint_connection_t *connectio
       return rc;
     }
   }
+  return TURBO_OK;
+}
+
+static int flowie_endpoint_session_deliveries_expire(flowie_endpoint_t *endpoint,
+                                                     flowie_endpoint_session_t *session,
+                                                     uint64_t now_epoch_seconds) {
+  flowie_session_owner_t *owner;
+  flowie_session_owner_t *staged = NULL;
+  size_t removed_count = 0u;
+  int rc;
+  if (!endpoint || !session || !session->owner || now_epoch_seconds == 0u) return TURBO_EINVAL;
+  owner = session->owner;
+  if (endpoint->persistence_enabled) {
+    staged = flowie_session_owner_clone(owner);
+    if (!staged) return TURBO_ENOMEM;
+    owner = staged;
+  }
+  rc = flowie_session_owner_delivery_expire(owner, now_epoch_seconds, &removed_count);
+  if (rc == TURBO_OK && staged && removed_count != 0u) {
+    rc = flowie_session_commit_staged(endpoint, session, staged, NULL,
+                                      session->expiry_at_epoch_seconds,
+                                      session->will_at_epoch_seconds);
+    if (rc == TURBO_OK) staged = NULL;
+  }
+  flowie_session_owner_destroy(staged);
+  return rc;
+}
+
+static int flowie_reply_request_expiry_prepare(flowie_endpoint_connection_t *connection,
+                                               flowie_reply_request_t *request,
+                                               uint64_t now_epoch_seconds, int *expired) {
+  flowie_session_owner_t *owner;
+  flowie_session_owner_t *staged = NULL;
+  int removed = 0;
+  int rc;
+  if (!connection || !request || !expired || now_epoch_seconds == 0u) return TURBO_EINVAL;
+  *expired = 0;
+  if (request->expiry_at_epoch_seconds == 0u) return TURBO_OK;
+  if (request->expiry_at_epoch_seconds > now_epoch_seconds) {
+    if (request->protocol_version == FLOWIE_MQTT_VERSION_5)
+      return flowie_session_delivery_packet_expiry_refresh(
+          request->protocol_version, (uint8_t *)flowie_reply_packet_data(request),
+          flowie_reply_packet_size(request), request->expiry_at_epoch_seconds, now_epoch_seconds);
+    return flowie_mqtt_version_is_3x(request->protocol_version) ? TURBO_OK : TURBO_EPROTO;
+  }
+  if (request->delivery_packet_id != 0u) {
+    if (!request->delivery_session || !request->delivery_session->owner) return TURBO_EPROTO;
+    owner = request->delivery_session->owner;
+    if (connection->endpoint->persistence_enabled) {
+      staged = flowie_session_owner_clone(owner);
+      if (!staged) return TURBO_ENOMEM;
+      owner = staged;
+    }
+    rc = flowie_session_owner_delivery_expire_packet(owner, request->delivery_packet_id,
+                                                     now_epoch_seconds, &removed);
+    if (rc != TURBO_OK || !removed) {
+      flowie_session_owner_destroy(staged);
+      return rc != TURBO_OK ? rc : TURBO_EPROTO;
+    }
+    if (staged) {
+      rc = flowie_session_commit_staged(connection->endpoint, request->delivery_session, staged,
+                                        NULL, request->delivery_session->expiry_at_epoch_seconds,
+                                        request->delivery_session->will_at_epoch_seconds);
+      if (rc != TURBO_OK) {
+        flowie_session_owner_destroy(staged);
+        return rc;
+      }
+    }
+  }
+  *expired = 1;
   return TURBO_OK;
 }
 
@@ -3708,6 +3881,19 @@ static int flowie_connection_reply_drain(flowie_endpoint_connection_t *connectio
       flowie_connection_usage(connection->endpoint);
       return result;
     }
+    while (next && *next && (*next)->expiry_at_epoch_seconds != 0u) {
+      uint64_t now_epoch_seconds = flowie_security_now_epoch_seconds();
+      int expired = 0;
+      if (now_epoch_seconds == 0u) return TURBO_EIO;
+      rc = flowie_reply_request_expiry_prepare(connection, *next, now_epoch_seconds, &expired);
+      if (rc != TURBO_OK) return rc;
+      if (!expired) break;
+      if (!flowie_reply_queue_t_pop_front(&connection->send_queue, &requests[0]))
+        return TURBO_EPROTO;
+      flowie_connection_reply_request_release(connection, requests[0]);
+      next = flowie_reply_queue_t_front(&connection->send_queue);
+    }
+    if (!next || !*next) continue;
     if ((*next)->qos_delivery &&
         connection->outbound_qos_inflight >= connection->client_receive_maximum) {
       connection->send_drain_active = 0;
@@ -3721,15 +3907,18 @@ static int flowie_connection_reply_drain(flowie_endpoint_connection_t *connectio
      * sole FIFO fact source, and a terminal packet is always the final vector item. */
     for (;;) {
       flowie_reply_request_t *request = requests[request_count];
-      iov[request_count].data = request->packet;
-      iov[request_count].len = tstr_len(request->packet);
+      iov[request_count].data = flowie_reply_packet_data(request);
+      iov[request_count].len = flowie_reply_packet_size(request);
       if (request->qos_delivery) qos_delivery_count += 1u;
       request_count += 1u;
       terminal_batch = request->close_after_send ||
-                       ((uint8_t)request->packet[0] >> 4u) == FLOWIE_MQTT_PACKET_DISCONNECT;
+                       (((uint8_t)flowie_reply_packet_data(request)[0] >> 4u) ==
+                        FLOWIE_MQTT_PACKET_DISCONNECT);
       next = flowie_reply_queue_t_front(&connection->send_queue);
-      if (connection->endpoint->transport != FLOWIE_TRANSPORT_TCP || terminal_batch ||
+      if (request->expiry_at_epoch_seconds != 0u ||
+          connection->endpoint->transport != FLOWIE_TRANSPORT_TCP || terminal_batch ||
           request_count == FLOWIE_REPLY_SEND_BATCH_MAX_ITEMS || !next || !*next ||
+          (*next)->expiry_at_epoch_seconds != 0u ||
           ((*next)->qos_delivery &&
            (size_t)connection->outbound_qos_inflight + qos_delivery_count >=
                connection->client_receive_maximum) ||
@@ -3739,13 +3928,14 @@ static int flowie_connection_reply_drain(flowie_endpoint_connection_t *connectio
 
     rc = connection->endpoint->transport == FLOWIE_TRANSPORT_TCP && request_count > 1u
              ? coro_socket_sendv(connection->socket, iov, request_count)
-             : coro_socket_send(connection->socket, requests[0]->packet,
-                                tstr_len(requests[0]->packet));
+             : coro_socket_send(connection->socket, flowie_reply_packet_data(requests[0]),
+                                flowie_reply_packet_size(requests[0]));
     if (rc == TURBO_OK) {
       connection->outbound_qos_inflight =
           (uint16_t)(connection->outbound_qos_inflight + qos_delivery_count);
       for (size_t i = 0u; i < request_count; ++i) {
-        if (((uint8_t)requests[i]->packet[0] >> 4u) == FLOWIE_MQTT_PACKET_CONNACK)
+        if (((uint8_t)flowie_reply_packet_data(requests[i])[0] >> 4u) ==
+            FLOWIE_MQTT_PACKET_CONNACK)
           connection->connack_sent = 1;
       }
     }
@@ -3774,6 +3964,11 @@ static int flowie_connection_schedule_reply_drain(flowie_endpoint_connection_t *
     return TURBO_EINVAL;
   if (connection->send_drain_active) return TURBO_OK;
   connection->send_drain_active = 1;
+  /* Replies admitted by the connection's own ingress callback are drained
+   * immediately after flowie_ingress_feed returns. Posting an interrupt here
+   * can race with that drain and interrupt its socket write instead of the
+   * preceding read. */
+  if (connection->processing_input) return TURBO_OK;
   rc = coro_socket_interrupt_wait(connection->socket, TURBO_EINTR);
   if (rc == TURBO_ENOMEM && coro_context_current() == connection->endpoint->ctx && coro_running()) {
     /* CoroNet intentionally defers socket waiter resumption through its bounded
@@ -3793,14 +3988,16 @@ static int flowie_connection_reply_enqueue(flowie_endpoint_connection_t *connect
   size_t queue_size;
   size_t bytes;
   int rc;
-  if (!connection || !request || !request->packet) return TURBO_EINVAL;
+  if (!connection || !request || !flowie_reply_packet_data(request) ||
+      flowie_reply_packet_size(request) == 0u)
+    return TURBO_EINVAL;
   if (connection->closing || connection->close_when_replies_drain ||
       !atomic_load_explicit(&connection->endpoint->started, memory_order_acquire)) {
     flowie_reply_request_release(connection->endpoint, request);
     return connection->closing || connection->close_when_replies_drain ? TURBO_ENOTCONN
                                                                        : TURBO_ESHUTDOWN;
   }
-  bytes = tstr_len(request->packet);
+  bytes = flowie_reply_packet_size(request);
   rc = tf_io_budget_acquire(&connection->send_budget, bytes);
   if (rc != TURBO_OK) {
     if (rc == TURBO_ENOSPC && request->subscriber_delivery)
@@ -3821,7 +4018,7 @@ static int flowie_connection_reply_enqueue(flowie_endpoint_connection_t *connect
     return rc;
   }
   if (request->preserve_on_terminal_error) connection->terminal_reply_count += 1u;
-  if (((uint8_t)request->packet[0] >> 4u) == FLOWIE_MQTT_PACKET_CONNACK)
+  if (((uint8_t)flowie_reply_packet_data(request)[0] >> 4u) == FLOWIE_MQTT_PACKET_CONNACK)
     connection->connack_admitted = 1;
   rc = flowie_connection_schedule_reply_drain(connection);
   if (rc == TURBO_OK) return TURBO_OK;
@@ -3847,13 +4044,11 @@ static void flowie_reply_drain_task(coro_t *co, void *arg) {
     turbo_mutex_unlock(&endpoint->send_queue_mutex);
     connection = flowie_connection_find(endpoint, &request->route);
     if (request->kind == FLOWIE_REPLY_PUBLISH_FANOUT) {
-      flowie_mqtt_version_t version = request->broker_will ? request->protocol_version
-                                      : connection         ? connection->version
-                                                           : FLOWIE_MQTT_VERSION_UNSPECIFIED;
-      if (request->broker_will || connection) {
-        rc = flowie_fanout_apply(endpoint, request, request->route.session_id, version);
+      flowie_mqtt_version_t version = request->protocol_version;
+      if (flowie_mqtt_version_is_supported(version)) {
+        rc = flowie_fanout_apply(endpoint, request, request->publisher_session_id, version);
       } else {
-        rc = TURBO_ENOTCONN;
+        rc = TURBO_EPROTO;
       }
       if (rc != TURBO_OK && connection && !request->broker_will)
         (void)coro_socket_interrupt_wait(connection->socket, rc);
@@ -3864,7 +4059,10 @@ static void flowie_reply_drain_task(coro_t *co, void *arg) {
     rc = connection ? TURBO_OK : TURBO_ENOTCONN;
     if (rc == TURBO_OK && request->kind == FLOWIE_REPLY_PROTOCOL_SETTLEMENT)
       rc = flowie_reply_settlement_apply(connection, request);
-    if (rc == TURBO_OK) rc = flowie_reply_packet_validate(connection, request->packet);
+    if (rc == TURBO_OK)
+      rc = flowie_reply_packet_validate(connection,
+                                        (const uint8_t *)flowie_reply_packet_data(request),
+                                        flowie_reply_packet_size(request));
     if (rc == TURBO_OK) {
       rc = flowie_connection_reply_enqueue(connection, request);
       request = NULL;
@@ -3982,9 +4180,68 @@ static int flowie_reply_control_enqueue(flowie_endpoint_t *endpoint,
   return flowie_reply_enqueue(endpoint, request);
 }
 
+static int flowie_connection_protocol_disconnect(flowie_endpoint_connection_t *connection,
+                                                 uint8_t reason_code) {
+  flowie_mqtt_control_packet_t control = FLOWIE_MQTT_CONTROL_PACKET_INIT;
+  flowie_reply_request_t *request = NULL;
+  int rc;
+  if (!connection || connection->version != FLOWIE_MQTT_VERSION_5 || reason_code == 0u)
+    return TURBO_EINVAL;
+  control.version = FLOWIE_MQTT_VERSION_5;
+  control.type = FLOWIE_MQTT_PACKET_DISCONNECT;
+  control.reason_code = reason_code;
+  rc = flowie_reply_control_request_create(connection->endpoint, &connection->route, &control, 1,
+                                           0, &request);
+  if (rc != TURBO_OK) return rc;
+  rc = flowie_connection_reply_enqueue(connection, request);
+  if (rc != TURBO_OK) return rc;
+  return flowie_connection_reply_drain(connection);
+}
+
+static int flowie_connection_fence_session_takeover(flowie_endpoint_session_t *session,
+                                                     flowie_endpoint_connection_t *replacement) {
+  flowie_endpoint_connection_t *old_connection;
+  flowie_mqtt_control_packet_t control = FLOWIE_MQTT_CONTROL_PACKET_INIT;
+  flowie_reply_request_t *request = NULL;
+  tf_io_budget_snapshot_t send_budget = {0};
+  int has_pending_send;
+  int rc;
+  if (!session || !replacement) return TURBO_EINVAL;
+  old_connection = session->connection;
+  if (!old_connection || old_connection == replacement) return TURBO_OK;
+  old_connection->session_takeover = 1;
+  has_pending_send = old_connection->send_drain_active;
+  if (old_connection->send_budget_initialized &&
+      tf_io_budget_snapshot(&old_connection->send_budget, &send_budget) == TURBO_OK &&
+      (send_budget.messages != 0u || send_budget.bytes != 0u))
+    has_pending_send = 1;
+  if (old_connection->version == FLOWIE_MQTT_VERSION_5 && !old_connection->closing &&
+      !has_pending_send) {
+    control.version = FLOWIE_MQTT_VERSION_5;
+    control.type = FLOWIE_MQTT_PACKET_DISCONNECT;
+    control.reason_code = FLOWIE_MQTT_REASON_SESSION_TAKEN_OVER;
+    rc = flowie_reply_control_request_create(old_connection->endpoint, &old_connection->route,
+                                             &control, 1, 0, &request);
+    if (rc == TURBO_OK) rc = flowie_connection_reply_enqueue(old_connection, request);
+    if (rc != TURBO_OK) {
+      old_connection->session_takeover = 0;
+      return rc;
+    }
+  } else {
+    /* A takeover control packet cannot overtake an in-flight TCP write. Interrupting
+     * that owner lane is the only bounded way to fence its route before the new
+     * generation begins delivering; an idle MQTT 5 connection still receives 0x8e. */
+    flowie_connection_close(old_connection, TURBO_ENOTCONN);
+  }
+  return TURBO_OK;
+}
+
 static int flowie_reply_wire_enqueue(flowie_endpoint_t *endpoint,
                                      const turbo_flow_protocol_route_t *route,
-                                     flowie_mqtt_span_t packet, int subscriber_delivery) {
+                                     flowie_mqtt_span_t packet, int subscriber_delivery,
+                                     flowie_endpoint_session_t *delivery_session,
+                                     uint16_t delivery_packet_id, uint64_t expiry_at_epoch_seconds,
+                                     flowie_mqtt_version_t version) {
   flowie_reply_request_t *request;
   int rc;
   if (!endpoint || !route || !packet.data || packet.size == 0u) return TURBO_EINVAL;
@@ -4001,6 +4258,10 @@ static int flowie_reply_wire_enqueue(flowie_endpoint_t *endpoint,
   request->packet = tstr_new_len(packet.data, packet.size);
   request->subscriber_delivery = subscriber_delivery != 0;
   request->qos_delivery = subscriber_delivery != 0;
+  request->delivery_session = delivery_session;
+  request->delivery_packet_id = delivery_packet_id;
+  request->expiry_at_epoch_seconds = expiry_at_epoch_seconds;
+  request->protocol_version = version;
   request->reserved_bytes = packet.size;
   if (!request->packet) {
     free(request);
@@ -4096,6 +4357,7 @@ static int flowie_connection_bind_session(flowie_endpoint_connection_t *connecti
   connection->route = *route;
   connection->route.size = sizeof(connection->route);
   connection->session = session;
+  session->connection = connection;
   connection->principal_expiry_pending = 0;
   flowie_principal_deadline_apply(endpoint, session, principal_deadline_ns);
   session->expiry_deadline_ns = 0u;
@@ -4124,14 +4386,31 @@ static int flowie_endpoint_ack_enqueue(flowie_endpoint_connection_t *connection,
 }
 
 static int flowie_endpoint_delivery_replay_enqueue(flowie_endpoint_connection_t *connection) {
+  flowie_session_snapshot_t snapshot = FLOWIE_SESSION_SNAPSHOT_INIT;
   size_t index = 0u;
+  uint64_t now_epoch_seconds;
+  int rc;
   if (!connection || !connection->session) return TURBO_EINVAL;
+  rc = flowie_session_owner_snapshot(connection->session->owner, &snapshot);
+  if (rc != TURBO_OK || !flowie_mqtt_version_is_supported(snapshot.version))
+    return rc != TURBO_OK ? rc : TURBO_EPROTO;
+  now_epoch_seconds = flowie_security_now_epoch_seconds();
+  if (now_epoch_seconds == 0u) return TURBO_EIO;
+  rc = flowie_endpoint_session_deliveries_expire(connection->endpoint, connection->session,
+                                                 now_epoch_seconds);
+  if (rc != TURBO_OK) return rc;
   for (;;) {
     flowie_mqtt_span_t packet = {0};
-    int rc = flowie_session_owner_delivery_pending_at(connection->session->owner, index, &packet);
+    uint16_t packet_id = 0u;
+    uint64_t expiry_at_epoch_seconds = 0u;
+    rc = flowie_session_owner_delivery_pending_at_ex(connection->session->owner, index,
+                                                     now_epoch_seconds, &packet, &packet_id,
+                                                     &expiry_at_epoch_seconds);
     if (rc == TURBO_ENOENT) return TURBO_OK;
     if (rc != TURBO_OK) return rc;
-    rc = flowie_reply_wire_enqueue(connection->endpoint, &connection->route, packet, 1);
+    rc = flowie_reply_wire_enqueue(connection->endpoint, &connection->route, packet, 1,
+                                   connection->session, packet_id, expiry_at_epoch_seconds,
+                                   snapshot.version);
     if (rc != TURBO_OK) return rc;
     ++index;
   }
@@ -4247,10 +4526,20 @@ static int flowie_endpoint_prepare_subscribe(flowie_endpoint_connection_t *conne
   flowie_mqtt_subscription_view_t entry;
   flowie_session_subscribe_result_t result = FLOWIE_SESSION_SUBSCRIBE_RESULT_INIT;
   flowie_mqtt_control_packet_t reply = FLOWIE_MQTT_CONTROL_PACKET_INIT;
+  flowie_mqtt_packet_view_t filtered_packet = FLOWIE_MQTT_PACKET_VIEW_INIT;
+  flowie_mqtt_subscribe_view_t filtered_subscribe = FLOWIE_MQTT_SUBSCRIBE_VIEW_INIT;
+  flowie_mqtt_subscribe_packet_t filtered_encode = FLOWIE_MQTT_SUBSCRIBE_PACKET_INIT;
+  const flowie_mqtt_packet_view_t *effective_packet = packet;
+  const flowie_mqtt_subscribe_view_t *effective_subscribe = &subscribe;
+  flowie_mqtt_subscription_t *authorized_entries = NULL;
+  uint8_t *authorized = NULL;
+  uint8_t *filtered_wire = NULL;
   tstr_t reasons = NULL;
   tstr_t existed = NULL;
   flowie_session_owner_t *staged = NULL;
   size_t index = 0u;
+  size_t authorized_count = 0u;
+  size_t filtered_wire_size = 0u;
   uint32_t subscription_identifier = 0u;
   int subscribed = 0;
   int rc;
@@ -4274,55 +4563,95 @@ static int flowie_endpoint_prepare_subscribe(flowie_endpoint_connection_t *conne
     rc = TURBO_ENOMEM;
     goto done;
   }
-  if (connection->endpoint->security_enabled) {
-    rc = flowie_mqtt_subscription_iterator_init(packet, &subscribe, &iterator);
-    if (rc != FLOWIE_MQTT_PARSE_OK) {
-      rc = TURBO_EPROTO;
-      goto done;
-    }
-    while ((rc = flowie_mqtt_subscription_iterator_next(&iterator, &entry)) ==
-           FLOWIE_MQTT_PARSE_OK) {
-      rc = flowie_security_authorize_span(connection, TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE,
-                                          entry.filter, FLOWIE_MQTT_SECURITY_TOPIC_FILTER);
-      if (rc == TURBO_EPERM) {
-        if (packet->version == FLOWIE_MQTT_VERSION_3_1) goto done;
-        memset(reasons, packet->version == FLOWIE_MQTT_VERSION_5 ? 0x87 : 0x80,
-               subscribe.entry_count);
-        goto encode_reply;
-      }
-      if (rc != TURBO_OK) goto done;
-    }
-    if (rc != FLOWIE_MQTT_PARSE_NEED_MORE) {
-      rc = TURBO_EPROTO;
-      goto done;
-    }
+  authorized = (uint8_t *)calloc(subscribe.entry_count, sizeof(*authorized));
+  authorized_entries = (flowie_mqtt_subscription_t *)calloc(subscribe.entry_count,
+                                                             sizeof(*authorized_entries));
+  if (!authorized || !authorized_entries) {
+    rc = TURBO_ENOMEM;
+    goto done;
   }
+  memset(existed, 0, subscribe.entry_count);
   rc = flowie_mqtt_subscription_iterator_init(packet, &subscribe, &iterator);
   if (rc != FLOWIE_MQTT_PARSE_OK) {
     rc = TURBO_EPROTO;
     goto done;
   }
-  index = 0u;
-  while ((rc = flowie_mqtt_subscription_iterator_next(&iterator, &entry)) == FLOWIE_MQTT_PARSE_OK) {
+  while ((rc = flowie_mqtt_subscription_iterator_next(&iterator, &entry)) ==
+         FLOWIE_MQTT_PARSE_OK) {
     int was_present = 0;
+    int authorization = TURBO_OK;
     if (index >= subscribe.entry_count) {
       rc = TURBO_EPROTO;
       goto done;
     }
+    if (connection->endpoint->security_enabled)
+      authorization = flowie_security_authorize_span(
+          connection, TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE, entry.filter,
+          FLOWIE_MQTT_SECURITY_TOPIC_FILTER);
+    if (authorization == TURBO_EPERM) {
+      if (packet->version == FLOWIE_MQTT_VERSION_3_1) {
+        rc = authorization;
+        goto done;
+      }
+      reasons[index++] = (char)(packet->version == FLOWIE_MQTT_VERSION_5 ? 0x87 : 0x80);
+      continue;
+    }
+    if (authorization != TURBO_OK) {
+      rc = authorization;
+      goto done;
+    }
     rc = flowie_session_subscription_exists(connection->session->owner, entry.filter, &was_present);
     if (rc != TURBO_OK) goto done;
-    existed[index++] = (char)(was_present != 0);
+    authorized[index] = 1u;
+    existed[index] = (char)(was_present != 0);
+    reasons[index] = (char)entry.qos;
+    authorized_entries[authorized_count++] = entry;
+    ++index;
   }
   if (rc != FLOWIE_MQTT_PARSE_NEED_MORE || index != subscribe.entry_count) {
     rc = TURBO_EPROTO;
     goto done;
+  }
+  if (authorized_count == 0u) {
+    rc = TURBO_OK;
+    goto encode_reply;
+  }
+  if (authorized_count != subscribe.entry_count) {
+    flowie_mqtt_parse_options_t options = FLOWIE_MQTT_PARSE_OPTIONS_INIT;
+    filtered_wire = (uint8_t *)malloc(packet->packet.size);
+    if (!filtered_wire) {
+      rc = TURBO_ENOMEM;
+      goto done;
+    }
+    filtered_encode.version = packet->version;
+    filtered_encode.packet_id = subscribe.packet_id;
+    filtered_encode.properties = subscribe.properties.values;
+    filtered_encode.subscriptions = authorized_entries;
+    filtered_encode.subscription_count = authorized_count;
+    rc = flowie_mqtt_subscribe_packet_encode(&filtered_encode, filtered_wire, packet->packet.size,
+                                             &filtered_wire_size);
+    if (rc != FLOWIE_MQTT_PARSE_OK) {
+      rc = rc == FLOWIE_MQTT_PARSE_NO_MEMORY ? TURBO_ENOMEM : TURBO_EPROTO;
+      goto done;
+    }
+    options.version = packet->version;
+    rc = flowie_mqtt_packet_parse(filtered_wire, filtered_wire_size, &options, &filtered_packet,
+                                  NULL, NULL);
+    if (rc != FLOWIE_MQTT_PARSE_OK ||
+        flowie_mqtt_subscribe_parse(&filtered_packet, &filtered_subscribe) !=
+            FLOWIE_MQTT_PARSE_OK) {
+      rc = TURBO_EPROTO;
+      goto done;
+    }
+    effective_packet = &filtered_packet;
+    effective_subscribe = &filtered_subscribe;
   }
   staged = flowie_session_owner_clone(connection->session->owner);
   if (!staged) {
     rc = TURBO_ENOMEM;
     goto done;
   }
-  rc = flowie_session_owner_subscribe(staged, packet, &subscribe, &result);
+  rc = flowie_session_owner_subscribe(staged, effective_packet, effective_subscribe, &result);
   if (rc == TURBO_OK) {
     if (result.changed) {
       rc = flowie_session_commit_staged(connection->endpoint, connection->session, staged, NULL,
@@ -4334,32 +4663,17 @@ static int flowie_endpoint_prepare_subscribe(flowie_endpoint_connection_t *conne
     flowie_session_owner_destroy(staged);
     staged = NULL;
     if (result.changed &&
-        flowie_subscription_index_apply_subscribe(connection, packet, &subscribe) != TURBO_OK)
+        flowie_subscription_index_apply_subscribe(connection, effective_packet,
+                                                  effective_subscribe) != TURBO_OK)
       connection->endpoint->subscription_index_valid = 0;
-    rc = flowie_mqtt_subscription_iterator_init(packet, &subscribe, &iterator);
-    if (rc != FLOWIE_MQTT_PARSE_OK) {
-      rc = TURBO_EPROTO;
-      goto done;
-    }
-    index = 0u;
-    while ((rc = flowie_mqtt_subscription_iterator_next(&iterator, &entry)) ==
-           FLOWIE_MQTT_PARSE_OK) {
-      if (index >= subscribe.entry_count) {
-        rc = TURBO_EPROTO;
-        goto done;
-      }
-      reasons[index++] = entry.qos;
-    }
-    if (rc != FLOWIE_MQTT_PARSE_NEED_MORE || index != subscribe.entry_count) {
-      rc = TURBO_EPROTO;
-      goto done;
-    }
     subscribed = 1;
   } else if (rc == TURBO_ENOSPC) {
     flowie_session_owner_destroy(staged);
     staged = NULL;
     if (packet->version == FLOWIE_MQTT_VERSION_3_1) goto done;
-    memset(reasons, packet->version == FLOWIE_MQTT_VERSION_5 ? 0x97 : 0x80, subscribe.entry_count);
+    for (index = 0u; index < subscribe.entry_count; ++index)
+      if (authorized[index])
+        reasons[index] = (char)(packet->version == FLOWIE_MQTT_VERSION_5 ? 0x97 : 0x80);
   } else {
     goto done;
   }
@@ -4381,6 +4695,10 @@ encode_reply:
       rc = TURBO_EPROTO;
       goto done;
     }
+    if (!authorized[index]) {
+      ++index;
+      continue;
+    }
     rc = flowie_retained_replay_subscription(connection, &entry, subscription_identifier,
                                              existed[index] != 0);
     if (rc != TURBO_OK) goto done;
@@ -4391,6 +4709,9 @@ encode_reply:
 
 done:
   flowie_session_owner_destroy(staged);
+  free(filtered_wire);
+  free(authorized_entries);
+  free(authorized);
   tstr_freep(&existed);
   tstr_freep(&reasons);
   return rc;
@@ -4579,6 +4900,19 @@ static int flowie_endpoint_prepare_publish(flowie_endpoint_connection_t *connect
       return flowie_endpoint_ack_enqueue(connection, packet->version, &ack);
     }
     if (rc != TURBO_OK) return rc;
+  }
+  if (publish.retain && publish.payload.size != 0u &&
+      !flowie_retained_message_find(connection->endpoint, publish.topic, NULL) &&
+      turbo_vec_size(&connection->endpoint->retained_messages) >=
+          connection->endpoint->max_retained_messages) {
+    *publish_packet = 0;
+    if (packet->version == FLOWIE_MQTT_VERSION_5 && publish.qos != 0u) {
+      ack.kind = publish.qos == 1u ? FLOWIE_SESSION_ACK_PUBACK : FLOWIE_SESSION_ACK_PUBREC;
+      ack.packet_id = publish.packet_id;
+      ack.reason_code = FLOWIE_MQTT_REASON_QUOTA_EXCEEDED;
+      return flowie_endpoint_ack_enqueue(connection, packet->version, &ack);
+    }
+    return packet->version == FLOWIE_MQTT_VERSION_5 ? TURBO_OK : TURBO_ENOSPC;
   }
   owner = connection->session->owner;
   if (connection->endpoint->persistence_enabled) {
@@ -5134,6 +5468,7 @@ static int flowie_endpoint_session_prepare(void *ctx, flowie_ingress_t *ingress,
   size_t connack_properties_size = 0u;
   uint8_t security_reason = 0u;
   int existing_session = 0;
+  int session_takeover = 0;
   int rc;
   if (!connection || !ingress || !packet || !publish_packet || !stop_pump) return TURBO_EINVAL;
   *publish_packet = 1;
@@ -5224,6 +5559,7 @@ static int flowie_endpoint_session_prepare(void *ctx, flowie_ingress_t *ingress,
     }
     session = flowie_session_find(endpoint, connect.client_id);
     existing_session = session != NULL;
+    session_takeover = session && session->connection && session->connection != connection;
     if (endpoint->security_enabled && session &&
         !flowie_security_principal_same_owner(&session->principal, &principal)) {
       decision.reply.type = FLOWIE_MQTT_PACKET_CONNACK;
@@ -5237,9 +5573,19 @@ static int flowie_endpoint_session_prepare(void *ctx, flowie_ingress_t *ingress,
     }
     if (session) {
       if (endpoint->persistence_enabled) {
+        size_t expired_count = 0u;
+        uint64_t now_epoch_seconds;
         staged_owner = flowie_session_owner_clone(session->owner);
         if (!staged_owner) return TURBO_ENOMEM;
-        rc = flowie_session_owner_connect(staged_owner, &connect, &decision);
+        rc = session_takeover
+                 ? flowie_session_owner_connect_takeover(staged_owner, &connect, &decision)
+                 : flowie_session_owner_connect(staged_owner, &connect, &decision);
+        if (rc == TURBO_OK && decision.accepted) {
+          now_epoch_seconds = flowie_security_now_epoch_seconds();
+          rc = now_epoch_seconds == 0u ? TURBO_EIO
+                                       : flowie_session_owner_delivery_expire(
+                                             staged_owner, now_epoch_seconds, &expired_count);
+        }
         if (rc == TURBO_OK && decision.accepted) {
           rc = flowie_session_commit_staged(
               endpoint, session, staged_owner,
@@ -5249,7 +5595,17 @@ static int flowie_endpoint_session_prepare(void *ctx, flowie_ingress_t *ingress,
         flowie_session_owner_destroy(staged_owner);
         staged_owner = NULL;
       } else {
-        rc = flowie_session_owner_connect(session->owner, &connect, &decision);
+        size_t expired_count = 0u;
+        uint64_t now_epoch_seconds;
+        rc = session_takeover
+                 ? flowie_session_owner_connect_takeover(session->owner, &connect, &decision)
+                 : flowie_session_owner_connect(session->owner, &connect, &decision);
+        if (rc == TURBO_OK && decision.accepted) {
+          now_epoch_seconds = flowie_security_now_epoch_seconds();
+          rc = now_epoch_seconds == 0u ? TURBO_EIO
+                                       : flowie_session_owner_delivery_expire(
+                                             session->owner, now_epoch_seconds, &expired_count);
+        }
         if (rc == TURBO_OK && decision.accepted && endpoint->security_enabled)
           session->principal = principal;
       }
@@ -5267,6 +5623,10 @@ static int flowie_endpoint_session_prepare(void *ctx, flowie_ingress_t *ingress,
     }
     if (rc != TURBO_OK) return rc;
     if (decision.accepted) {
+      if (session_takeover) {
+        rc = flowie_connection_fence_session_takeover(session, connection);
+        if (rc != TURBO_OK) return rc;
+      }
       rc = flowie_connection_bind_session(connection, ingress, session, &decision.route);
       if (rc != TURBO_OK) {
         (void)flowie_session_owner_close(session->owner);
@@ -5326,11 +5686,9 @@ static int flowie_endpoint_session_prepare(void *ctx, flowie_ingress_t *ingress,
     if (method.size == 0u || method.size != tstr_len(connection->enhanced_auth_method) ||
         memcmp(method.data, connection->enhanced_auth_method, method.size) != 0) {
       *stop_pump = 1;
-      return flowie_auth_reply_enqueue(
-          connection, UINT8_C(0x8c),
-          (flowie_mqtt_span_t){(const uint8_t *)connection->enhanced_auth_method,
-                               tstr_len(connection->enhanced_auth_method)},
-          NULL, 0u, 1);
+      rc = flowie_connection_protocol_disconnect(connection, UINT8_C(0x8c));
+      flowie_connection_enhanced_auth_clear(connection);
+      return rc;
     }
     method_text = tstr_new_len(method.data, method.size);
     if (!method_text) return TURBO_ENOMEM;
@@ -5537,9 +5895,16 @@ static void flowie_endpoint_client_handler(coro_socket_t *client, void *arg) {
       rc = TURBO_EOF;
       break;
     }
+    connection->processing_input = 1;
     rc = flowie_ingress_feed(ingress, chunk, chunk_size, &published);
     coro_socket_free_recv(chunk);
     connection->version = flowie_ingress_version(ingress);
+    if (rc != TURBO_OK && connection->version == FLOWIE_MQTT_VERSION_5) {
+      uint8_t reason_code = flowie_ingress_disconnect_reason(ingress);
+      if (reason_code != 0u)
+        (void)flowie_connection_protocol_disconnect(connection, reason_code);
+    }
+    connection->processing_input = 0;
     if (connection->send_drain_active) {
       int send_rc = flowie_connection_reply_drain(connection);
       if (rc == TURBO_OK && send_rc != TURBO_OK) rc = send_rc;
@@ -5555,8 +5920,12 @@ done:
                                                    rc == TURBO_OK ? TURBO_ENOTCONN : rc);
     flowie_client_remove(endpoint, connection);
     if (session) {
-      int close_rc = flowie_session_close_schedule(endpoint, session);
-      if (close_rc != TURBO_OK && rc == TURBO_OK) rc = close_rc;
+      int owns_session = session->connection == connection;
+      if (owns_session) session->connection = NULL;
+      if (!connection->session_takeover && owns_session) {
+        int close_rc = flowie_session_close_schedule(endpoint, session);
+        if (close_rc != TURBO_OK && rc == TURBO_OK) rc = close_rc;
+      }
       connection->session = NULL;
     }
   }
@@ -5582,6 +5951,7 @@ static int flowie_endpoint_consume(void *ctx, turbo_flow_t *flow,
                                    const turbo_flow_stage_plan_t *stage, turbo_flow_msg_t *msg) {
   flowie_endpoint_t *endpoint = (flowie_endpoint_t *)ctx;
   const turbo_flow_protocol_route_t *route;
+  const turbo_flow_protocol_origin_t *origin;
   flowie_mqtt_parse_options_t options = FLOWIE_MQTT_PARSE_OPTIONS_INIT;
   flowie_mqtt_packet_view_t packet = FLOWIE_MQTT_PACKET_VIEW_INIT;
   flowie_mqtt_version_t protocol_version = FLOWIE_MQTT_VERSION_UNSPECIFIED;
@@ -5595,11 +5965,20 @@ static int flowie_endpoint_consume(void *ctx, turbo_flow_t *flow,
   if (!endpoint || !msg || !atomic_load_explicit(&endpoint->started, memory_order_acquire))
     return TURBO_ESHUTDOWN;
   route = turbo_flow_msg_protocol_route(msg);
-  if (!route || route->protocol != TURBO_FLOW_PROTOCOL_MQTT ||
-      route->owner_instance_id != endpoint->instance_id || route->session_id == 0u ||
-      route->session_generation == 0u || msg->payload.len == 0u || !msg->payload.data ||
-      msg->payload.len > endpoint->max_packet_size)
+  origin = turbo_flow_msg_protocol_origin(msg);
+  if (msg->payload.len == 0u || !msg->payload.data || msg->payload.len > endpoint->max_packet_size)
     return TURBO_EINVAL;
+  if (route) {
+    if (route->protocol != TURBO_FLOW_PROTOCOL_MQTT ||
+        route->owner_instance_id != endpoint->instance_id || route->session_id == 0u ||
+        route->session_generation == 0u)
+      return TURBO_EINVAL;
+    if (origin && (origin->protocol != route->protocol || origin->session_id != route->session_id))
+      return TURBO_EPROTO;
+  } else if (!origin || origin->protocol != TURBO_FLOW_PROTOCOL_MQTT ||
+             !flowie_mqtt_version_is_supported((flowie_mqtt_version_t)origin->protocol_version)) {
+    return TURBO_EINVAL;
+  }
   options.version = FLOWIE_MQTT_VERSION_UNSPECIFIED;
   options.max_packet_size = endpoint->max_packet_size;
   rc = flowie_mqtt_packet_parse((const uint8_t *)msg->payload.data, msg->payload.len, &options,
@@ -5612,12 +5991,20 @@ static int flowie_endpoint_consume(void *ctx, turbo_flow_t *flow,
        packet.type != FLOWIE_MQTT_PACKET_PINGRESP && packet.type != FLOWIE_MQTT_PACKET_DISCONNECT &&
        packet.type != FLOWIE_MQTT_PACKET_AUTH))
     return TURBO_EPROTO;
+  if (!route && packet.type != FLOWIE_MQTT_PACKET_PUBLISH) return TURBO_EPROTO;
   if (packet.type == FLOWIE_MQTT_PACKET_PUBLISH && !endpoint->manage_sessions) return TURBO_ENOTSUP;
   broker_will = packet.type == FLOWIE_MQTT_PACKET_PUBLISH &&
                 (msg->flags & FLOWIE_MQTT_MESSAGE_BROKER_WILL) != 0u;
-  if (broker_will) {
-    rc = flowie_mqtt_message_flags_version(msg->flags, &protocol_version);
-    if (rc != TURBO_OK) return rc;
+  if (packet.type == FLOWIE_MQTT_PACKET_PUBLISH) {
+    /* The graph may outlive the publisher connection. Keep the version carried
+     * by the owned message instead of consulting that live connection later. */
+    if (origin) {
+      protocol_version = (flowie_mqtt_version_t)origin->protocol_version;
+      if (!flowie_mqtt_version_is_supported(protocol_version)) return TURBO_EPROTO;
+    } else {
+      rc = flowie_mqtt_message_flags_version(msg->flags, &protocol_version);
+      if (rc != TURBO_OK) return rc;
+    }
   }
   bytes = msg->payload.len;
   rc = tf_io_budget_acquire(&endpoint->send_budget, bytes);
@@ -5627,26 +6014,81 @@ static int flowie_endpoint_consume(void *ctx, turbo_flow_t *flow,
     (void)tf_io_budget_release(&endpoint->send_budget, bytes);
     return TURBO_ENOMEM;
   }
-  request->route = *route;
-  request->route.size = sizeof(request->route);
+  if (route) {
+    request->route = *route;
+    request->route.size = sizeof(request->route);
+    request->publisher_session_id = route->session_id;
+  } else {
+    request->route = (turbo_flow_protocol_route_t)TURBO_FLOW_PROTOCOL_ROUTE_INIT;
+    request->publisher_session_id = origin->session_id;
+    request->durable_replay = 1;
+    request->protocol_version = (flowie_mqtt_version_t)origin->protocol_version;
+  }
   request->kind =
       packet.type == FLOWIE_MQTT_PACKET_PUBLISH ? FLOWIE_REPLY_PUBLISH_FANOUT : FLOWIE_REPLY_PACKET;
   request->broker_will = broker_will;
-  request->protocol_version = protocol_version;
-  request->packet = tstr_new_len(msg->payload.data, bytes);
+  if (!request->durable_replay && packet.type == FLOWIE_MQTT_PACKET_PUBLISH)
+    request->protocol_version = protocol_version;
+  if (msg->buffer) {
+    const uintptr_t buffer_address = (uintptr_t)mem_buffer_const_data(msg->buffer);
+    const uintptr_t payload_address = (uintptr_t)msg->payload.data;
+    const size_t buffer_size = mem_buffer_used(msg->buffer);
+    if (payload_address >= buffer_address) {
+      const uintptr_t raw_offset = payload_address - buffer_address;
+      if (raw_offset <= SIZE_MAX) {
+        const size_t offset = (size_t)raw_offset;
+        if (offset <= buffer_size && bytes <= buffer_size - offset) {
+          request->packet_buffer = mem_buffer_retain(msg->buffer);
+          request->packet_offset = offset;
+          request->packet_size = bytes;
+        }
+      }
+    }
+  }
+  if (!request->packet_buffer) {
+    request->packet = tstr_new_len(msg->payload.data, bytes);
+  }
   request->reserved_bytes = bytes;
-  if (!request->packet) {
+  if (!flowie_reply_packet_data(request)) {
+    mem_buffer_release(request->packet_buffer);
+    request->packet_buffer = NULL;
+    request->packet_offset = 0u;
     free(request);
     (void)tf_io_budget_release(&endpoint->send_budget, bytes);
     return TURBO_ENOMEM;
   }
   rc = flowie_reply_enqueue(endpoint, request);
+  if (rc == TURBO_OK) {
+    const turbo_flow_protocol_settlement_envelope_t *envelope =
+        turbo_flow_msg_protocol_settlement(msg);
+    if (envelope && envelope->settled_point == 0u) {
+      turbo_flow_protocol_settlement_request_t settlement =
+          TURBO_FLOW_PROTOCOL_SETTLEMENT_REQUEST_INIT;
+      settlement.message = envelope->message;
+      settlement.point = envelope->requested_point;
+      settlement.status = TURBO_OK;
+      settlement.attempt = msg->execution_attempt != 0u ? msg->execution_attempt : 1u;
+      if (envelope->requested_point >= TURBO_FLOW_PROTOCOL_SETTLE_ACCEPTED) {
+        if (!route) {
+          rc = TURBO_EPROTO;
+        } else {
+          rc = turbo_flow_protocol_route_settle(flow, route, &settlement);
+        }
+      }
+      if (rc == TURBO_OK)
+        rc = turbo_flow_msg_complete_protocol_settlement(msg, envelope->requested_point);
+    }
+  }
   return rc;
 }
 
 static int flowie_listener_start_call(void *arg) {
   flowie_endpoint_t *endpoint = (flowie_endpoint_t *)arg;
   tf_coronet_transport_t transport;
+  turbo_tls_server_config_t tls_config = {0};
+  coro_ws_server_config_t ws_config = CORO_WS_SERVER_CONFIG_DEFAULT;
+  const char *tls_cert_file = NULL;
+  const char *tls_key_file = NULL;
   int rc;
   if (!endpoint || endpoint->server) return endpoint ? TURBO_EALREADY : TURBO_EINVAL;
   transport = flowie_coronet_transport(endpoint->transport);
@@ -5654,6 +6096,29 @@ static int flowie_listener_start_call(void *arg) {
   if (!endpoint->server) return TURBO_ENOMEM;
   if (endpoint->reuse_port) coro_socket_set_reuse_port(endpoint->server, 1);
   rc = tf_coronet_apply_socket_options(endpoint->server, transport, &endpoint->socket_options);
+  if (rc == TURBO_OK &&
+      (endpoint->transport == FLOWIE_TRANSPORT_WS ||
+       endpoint->transport == FLOWIE_TRANSPORT_WSS)) {
+    ws_config.path = tf_coronet_ws_path(endpoint->path);
+    ws_config.subprotocol = "mqtt";
+    ws_config.max_message_size = endpoint->max_packet_size;
+    ws_config.binary_only = 1;
+    rc = coro_socket_set_ws_server_config(endpoint->server, &ws_config);
+  }
+  if (rc == TURBO_OK &&
+      (endpoint->transport == FLOWIE_TRANSPORT_TLS || endpoint->transport == FLOWIE_TRANSPORT_WSS)) {
+    tls_cert_file = getenv("TURBONET_TLS_CERT_FILE");
+    tls_key_file = getenv("TURBONET_TLS_KEY_FILE");
+    if (!tls_cert_file || tls_cert_file[0] == '\0' || !tls_key_file || tls_key_file[0] == '\0') {
+      rc = TURBO_EINVAL;
+    } else {
+      tls_config.size = sizeof(tls_config);
+      tls_config.cert_file = tls_cert_file;
+      tls_config.key_file = tls_key_file;
+      tls_config.client_auth = TURBO_TLS_CLIENT_AUTH_NONE;
+      rc = coro_socket_set_tls_server_config(endpoint->server, &tls_config);
+    }
+  }
   if (rc == TURBO_OK) {
     (void)tf_coronet_apply_socket_timeout(endpoint->server, &endpoint->timeouts,
                                           TF_CORONET_TIMEOUT_RECV);
@@ -6145,6 +6610,7 @@ static void flowie_endpoint_shutdown(void *ctx) {
   tstr_freep(&endpoint->security_realm_channel);
   tstr_freep(&endpoint->security_auth_method);
   tstr_freep(&endpoint->session_store_channel);
+  turbo_flow_mqtt_store_destroy(endpoint->mqtt_store);
   free(endpoint);
 }
 
@@ -6496,9 +6962,9 @@ static int flowie_endpoint_delete_expired(flowie_endpoint_t *endpoint, turbo_vec
   size_t offset = 0u;
   size_t batch_capacity;
   int rc = TURBO_OK;
-  if (!endpoint || !expired || !endpoint->session_store) return TURBO_EINVAL;
+  if (!endpoint || !expired || !endpoint->mqtt_store) return TURBO_EINVAL;
   if (turbo_vec_size(expired) == 0u) return TURBO_OK;
-  batch_capacity = endpoint->session_store->max_batch_size;
+  batch_capacity = turbo_flow_mqtt_store_max_batch_size(endpoint->mqtt_store);
   if (batch_capacity > turbo_vec_size(expired)) batch_capacity = turbo_vec_size(expired);
   mutations = (turbo_flow_record_mutation_t *)calloc(batch_capacity, sizeof(*mutations));
   if (!mutations) return TURBO_ENOMEM;
@@ -6514,7 +6980,7 @@ static int flowie_endpoint_delete_expired(flowie_endpoint_t *endpoint, turbo_vec
       mutations[i].key_size = tstr_len(record->key);
       mutations[i].expected_revision = record->revision;
     }
-    rc = endpoint->session_store->commit(endpoint->session_store->ctx, mutations, count);
+    rc = turbo_flow_mqtt_store_commit(endpoint->mqtt_store, mutations, count);
     if (rc != TURBO_OK) break;
     offset += count;
   }
@@ -6525,14 +6991,13 @@ static int flowie_endpoint_delete_expired(flowie_endpoint_t *endpoint, turbo_vec
 static int flowie_endpoint_restore_sessions(flowie_endpoint_t *endpoint) {
   flowie_restore_context_t context;
   int rc;
-  if (!endpoint || !endpoint->persistence_enabled || !endpoint->session_store) return TURBO_EINVAL;
+  if (!endpoint || !endpoint->persistence_enabled || !endpoint->mqtt_store) return TURBO_EINVAL;
   memset(&context, 0, sizeof(context));
   context.endpoint = endpoint;
   context.now_epoch_seconds = flowie_security_now_epoch_seconds();
   rc = turbo_vec_init(&context.expired, sizeof(flowie_expired_record_t));
   if (rc != TURBO_OK) return rc;
-  rc = endpoint->session_store->scan(endpoint->session_store->ctx, flowie_endpoint_restore_visit,
-                                     &context);
+  rc = turbo_flow_mqtt_store_scan(endpoint->mqtt_store, flowie_endpoint_restore_visit, &context);
   if (rc == TURBO_OK) rc = flowie_endpoint_delete_expired(endpoint, &context.expired);
   if (rc == TURBO_OK) rc = flowie_subscription_index_rebuild(endpoint);
   if (rc == TURBO_OK) {
@@ -6646,7 +7111,11 @@ flowie_register_endpoint_internal(turbo_flow_t *flow, const char *name,
   }
   if (persistence) {
     endpoint->persistence_enabled = 1;
-    endpoint->session_store = persistence->store;
+    rc = turbo_flow_mqtt_store_create(persistence->store, &endpoint->mqtt_store);
+    if (rc != TURBO_OK) {
+      flowie_endpoint_shutdown(endpoint);
+      return rc;
+    }
     endpoint->session_store_channel = tstr_dup(persistence->store_channel);
   }
   endpoint->max_sessions = config->max_sessions ? config->max_sessions : endpoint->max_connections;

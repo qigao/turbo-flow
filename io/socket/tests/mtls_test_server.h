@@ -30,6 +30,7 @@ typedef struct flow_mtls_test_server_s {
   turbo_thread_t thread;
   const uint8_t *response;
   size_t response_size;
+  uint32_t response_delay_ms;
   unsigned short port;
   int started;
   int status;
@@ -123,7 +124,7 @@ static void flow_mtls_test_server_main(void *arg) {
   if (client == FLOW_MTLS_TEST_INVALID_SOCKET) goto done;
   ssl = SSL_new(ctx);
   if (!ssl || SSL_set_fd(ssl, (int)client) != 1 || SSL_accept(ssl) != 1) goto done;
-  peer = SSL_get1_peer_certificate(ssl);
+  peer = SSL_get_peer_certificate(ssl);
   server->peer_verified =
       peer != NULL && SSL_get_verify_result(ssl) == X509_V_OK;
   if (!server->peer_verified) goto done;
@@ -136,6 +137,7 @@ static void flow_mtls_test_server_main(void *arg) {
   } while (!flow_mtls_test_request_complete(request, request_size) &&
            request_size < sizeof(request) - 1u);
   if (!flow_mtls_test_request_complete(request, request_size)) goto done;
+  if (server->response_delay_ms != 0u) turbo_sleep_ms(server->response_delay_ms);
   if (server->response_size != 0u &&
       SSL_write(ssl, server->response, (int)server->response_size) !=
           (int)server->response_size)
@@ -150,9 +152,9 @@ done:
   SSL_CTX_free(ctx);
 }
 
-static int flow_mtls_test_server_start(flow_mtls_test_server_t *server,
-                                       const uint8_t *response,
-                                       size_t response_size) {
+static int flow_mtls_test_server_start_delayed(flow_mtls_test_server_t *server,
+                                               const uint8_t *response, size_t response_size,
+                                               uint32_t response_delay_ms) {
   struct sockaddr_in address;
 #ifdef _WIN32
   int address_size = (int)sizeof(address);
@@ -179,6 +181,7 @@ static int flow_mtls_test_server_start(flow_mtls_test_server_t *server,
   server->port = ntohs(address.sin_port);
   server->response = response;
   server->response_size = response_size;
+  server->response_delay_ms = response_delay_ms;
   if (turbo_thread_create(&server->thread, flow_mtls_test_server_main, server) != 0) {
     flow_mtls_test_close_socket(server->listener);
     server->listener = FLOW_MTLS_TEST_INVALID_SOCKET;
@@ -186,6 +189,11 @@ static int flow_mtls_test_server_start(flow_mtls_test_server_t *server,
   }
   server->started = 1;
   return 0;
+}
+
+static int flow_mtls_test_server_start(flow_mtls_test_server_t *server,
+                                       const uint8_t *response, size_t response_size) {
+  return flow_mtls_test_server_start_delayed(server, response, response_size, 0u);
 }
 
 static void flow_mtls_test_server_join(flow_mtls_test_server_t *server) {

@@ -262,6 +262,22 @@ int turbo_flow_protocol_message_validate(const turbo_flow_protocol_message_t *me
   return TURBO_OK;
 }
 
+int turbo_flow_protocol_origin_validate(const turbo_flow_protocol_origin_t *origin) {
+  if (!origin || origin->size < sizeof(*origin) ||
+      origin->contract_version != TURBO_FLOW_PROTOCOL_CONTRACT_VERSION ||
+      origin->protocol < TURBO_FLOW_PROTOCOL_FMQ || origin->protocol > TURBO_FLOW_PROTOCOL_MQTT ||
+      origin->protocol_version == 0u || origin->session_id == 0u) {
+    return TURBO_EINVAL;
+  }
+  if (origin->protocol == TURBO_FLOW_PROTOCOL_MQTT &&
+      origin->protocol_version != TURBO_FLOW_MQTT_PROTOCOL_3_1 &&
+      origin->protocol_version != TURBO_FLOW_MQTT_PROTOCOL_3_1_1 &&
+      origin->protocol_version != TURBO_FLOW_MQTT_PROTOCOL_5_0) {
+    return TURBO_EPROTO;
+  }
+  return TURBO_OK;
+}
+
 int turbo_flow_protocol_settlement_policy_validate(
     const turbo_flow_protocol_settlement_policy_t *policy) {
   if (!policy || policy->size < sizeof(*policy) ||

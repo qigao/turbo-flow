@@ -191,18 +191,6 @@ CXX_C_API int turbo_flow_redis_blob_store_create_resolved(
 
 CXX_C_API void turbo_flow_redis_blob_store_destroy(turbo_flow_blob_store_t *store);
 
-/** Create a revision-checked atomic Redis Hash record store. */
-CXX_C_API int
-turbo_flow_redis_record_store_create(const turbo_flow_redis_record_store_config_t *config,
-                                     turbo_flow_record_store_t *out);
-
-/** Create a Redis record store from a `kind: record_store` YAML channel. */
-CXX_C_API int turbo_flow_redis_record_store_create_resolved(
-    const turbo_flow_resolved_config_t *resolved, const char *channel_name,
-    turbo_flow_record_store_t *out, turbo_flow_config_error_t *error);
-
-CXX_C_API void turbo_flow_redis_record_store_destroy(turbo_flow_record_store_t *store);
-
 /**
  * Register a fixed-key Redis data adapter backed by TurboNet::Redis.
  * SET is a sink. GET is a transform and returns TURBO_ENOENT for a missing key

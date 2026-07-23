@@ -121,10 +121,14 @@ typedef struct flowie_endpoint_security_binding_s {
 #define FLOWIE_ENDPOINT_SECURITY_BINDING_INIT                                                      \
   {sizeof(flowie_endpoint_security_binding_t), NULL, NULL, NULL, NULL, NULL}
 
-/** Borrowed durable state owner for managed MQTT sessions and retained publications. */
+/**
+ * Borrowed FlowStore Record owner for managed MQTT facts and retained publications.
+ * Flowie adapts it into an internal `turbo_flow_mqtt_store_t` facade at registration;
+ * endpoint code never calls this backend's callbacks directly.
+ */
 typedef struct flowie_endpoint_persistence_binding_s {
   size_t size;
-  /** Resolved YAML channel name; copied by the endpoint at registration. */
+  /** Resolved YAML channel name, or FLOWIE_IMPLICIT_LOCAL_SESSION_STORE_CHANNEL; copied at registration. */
   const char *store_channel;
   /** Provider remains caller-owned and must outlive the registered endpoint. */
   turbo_flow_record_store_t *store;
@@ -132,6 +136,9 @@ typedef struct flowie_endpoint_persistence_binding_s {
 
 #define FLOWIE_ENDPOINT_PERSISTENCE_BINDING_INIT                                                   \
   {sizeof(flowie_endpoint_persistence_binding_t), NULL, NULL}
+
+/** Reserved channel name used when managed MQTT endpoints use the default local Record backend. */
+#define FLOWIE_IMPLICIT_LOCAL_SESSION_STORE_CHANNEL "__flowie_local_record"
 
 /** Optional capabilities injected into one endpoint without extending its config ABI. */
 typedef struct flowie_endpoint_bindings_s {
@@ -142,7 +149,11 @@ typedef struct flowie_endpoint_bindings_s {
 
 #define FLOWIE_ENDPOINT_BINDINGS_INIT {sizeof(flowie_endpoint_bindings_t), NULL, NULL}
 
-/** Immutable MQTT PUBLISH facts schema for RulesForge (`mqtt.topic`, QoS, retain, and peers). */
+/**
+ * Immutable MQTT PUBLISH facts schema for TurboFlow Policy.
+ * MQTT 5 optional properties materialize as NULL when absent; binary correlation data is exposed
+ * as a length-delimited string view and may contain NUL bytes.
+ */
 CXX_C_API const turbo_flow_expr_schema_t *flowie_mqtt_rule_schema(void);
 
 /** Materialize one complete owned MQTT PUBLISH for a `rules.apply` operation. */
@@ -155,8 +166,8 @@ CXX_C_API int flowie_mqtt_rule_facts_provider(const turbo_flow_msg_t *message,
  * Register one Flowie MQTT server primitive as a bidirectional TurboFlow adapter.
  * The source owns listener/receive/framing; a sink binding accepts an encoded
  * MQTT control packet carrying a message-owned MQTT protocol route.
- * ACCEPTED requires a memory Queue admission boundary in the selected graph.
- * DURABLE requires a SQLite Queue or Redis Stream commit boundary. It proves
+ * ACCEPTED requires an explicit graph admission stage to complete the settlement.
+ * DURABLE requires an explicit durable store commit boundary. It proves
  * message persistence, not restoration of Flowie's process-local session state.
  */
 CXX_C_API int flowie_register_endpoint(turbo_flow_t *flow, const char *name,
@@ -175,10 +186,11 @@ flowie_register_secure_endpoint_ex(turbo_flow_t *flow, const char *name,
                                    const flowie_endpoint_security_binding_t *security);
 
 /** Register with any supported combination of security and durable-session bindings. */
-CXX_C_API int flowie_register_bound_endpoint_ex(
-    turbo_flow_t *flow, const char *name, const flowie_endpoint_config_t *config,
-    const turbo_flow_coronet_execution_binding_t *execution,
-    const flowie_endpoint_bindings_t *bindings);
+CXX_C_API int
+flowie_register_bound_endpoint_ex(turbo_flow_t *flow, const char *name,
+                                  const flowie_endpoint_config_t *config,
+                                  const turbo_flow_coronet_execution_binding_t *execution,
+                                  const flowie_endpoint_bindings_t *bindings);
 
 /** Secure counterpart of flowie_register_endpoint(), including legacy context ownership. */
 CXX_C_API int flowie_register_secure_endpoint(turbo_flow_t *flow, const char *name,
@@ -218,9 +230,10 @@ CXX_C_API int flowie_register_resolved_bound_endpoint_ex(
     const turbo_flow_coronet_execution_binding_t *execution,
     const flowie_endpoint_bindings_t *bindings, turbo_flow_config_error_t *error);
 
-CXX_C_API int flowie_register_resolved_bound_endpoint(
-    turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
-    const flowie_endpoint_bindings_t *bindings, turbo_flow_config_error_t *error);
+CXX_C_API int flowie_register_resolved_bound_endpoint(turbo_flow_t *flow, const char *name,
+                                                      const turbo_flow_resolved_config_t *resolved,
+                                                      const flowie_endpoint_bindings_t *bindings,
+                                                      turbo_flow_config_error_t *error);
 
 /**
  * Borrowed application ingress view produced at the protocol/data bridge.

@@ -9,12 +9,14 @@
 
 #include "CoroNet/turbo_coro_context.h"
 #include "mtls_test_server.h"
+#include "tls_test_pki.h"
 #include "tinytest.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
   #include <winsock2.h>
@@ -87,6 +89,76 @@ static void http_mtls_acl_load_task(coro_t *coroutine, void *arg) {
   (void)coroutine;
   task->status = task->provider->load(task->provider->ctx, 0u, &task->bundle);
   atomic_store_explicit(&task->done, 1, memory_order_release);
+}
+
+static int http_auth_run_response_case_delayed(
+    const uint8_t *response, size_t response_size, uint32_t response_delay_ms,
+    const char *ca_file, const char *cert_file, const char *key_file,
+    turbo_flow_security_principal_t *principal_out) {
+  flow_mtls_test_server_t server;
+  http_auth_secret_fixture_t fixture = {0};
+  turbo_flow_http_auth_provider_config_t config = TURBO_FLOW_HTTP_AUTH_PROVIDER_CONFIG_INIT;
+  turbo_flow_http_auth_provider_t *provider = NULL;
+  http_mtls_auth_task_t task;
+  coro_context_t *context = NULL;
+  char url[160];
+  int rc;
+  if (!ca_file || !cert_file || !key_file || !principal_out) return TURBO_EINVAL;
+  memset(&task, 0, sizeof(task));
+  atomic_init(&task.done, 0);
+  task.status = TURBO_EBUSY;
+  if (flow_mtls_test_server_start_delayed(&server, response, response_size, response_delay_ms) !=
+      0)
+    return TURBO_EIO;
+  if (snprintf(url, sizeof(url), "https://localhost:%u/v2/authenticate", server.port) <= 0) {
+    flow_mtls_test_server_join(&server);
+    return TURBO_EIO;
+  }
+  config.url = url;
+  config.method = "password";
+  config.service_token_ref = "env://FLOWIE_AUTH_TOKEN";
+  config.timeout_ms = 250u;
+  config.key_provider = (turbo_flow_security_key_provider_t){
+      sizeof(turbo_flow_security_key_provider_t), &fixture, http_auth_secret_acquire,
+      http_auth_secret_release};
+  config.tls.ca_file = ca_file;
+  config.tls.client_cert_file = cert_file;
+  config.tls.client_key_file = key_file;
+  rc = turbo_flow_http_auth_provider_create(&config, &provider);
+  if (rc != TURBO_OK) goto done;
+  task.provider = turbo_flow_http_auth_provider_interface(provider);
+  task.request = (turbo_flow_security_auth_request_t)TURBO_FLOW_SECURITY_AUTH_REQUEST_INIT;
+  task.principal = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+  task.request.identity = "device-a";
+  task.request.method = "password";
+  task.request.secret = (const uint8_t *)"secret";
+  task.request.secret_size = sizeof("secret") - 1u;
+  task.request.remote_address = "127.0.0.1";
+  task.request.protocol = "mqtt5";
+  context = coro_context_create(NULL);
+  if (!context) {
+    rc = TURBO_ENOMEM;
+    goto done;
+  }
+  rc = coro_context_spawn(context, http_mtls_authenticate_task, &task);
+  while (rc == TURBO_OK && !atomic_load_explicit(&task.done, memory_order_acquire))
+    rc = coro_context_run(context, TURBO_RUN_ONCE);
+  if (rc == TURBO_OK) rc = task.status;
+  *principal_out = task.principal;
+
+done:
+  if (context) coro_context_destroy(context);
+  turbo_flow_http_auth_provider_destroy(provider);
+  flow_mtls_test_server_join(&server);
+  return rc;
+}
+
+static int http_auth_run_response_case(const uint8_t *response, size_t response_size,
+                                       const char *ca_file, const char *cert_file,
+                                       const char *key_file,
+                                       turbo_flow_security_principal_t *principal_out) {
+  return http_auth_run_response_case_delayed(response, response_size, 0u, ca_file, cert_file,
+                                             key_file, principal_out);
 }
 
 static int capture_response(turbo_flow_msg_t *msg, void *ctx) {
@@ -316,7 +388,7 @@ spec("turbo_flow_http") {
     turbo_flow_resolved_config_destroy(resolved);
   }
 
-  it("authenticates through an HTTPS service that requires a verified client certificate") {
+  it("MQTT-SEC-003 authenticates through verified mTLS HTTPS and validates principal v2") {
     static const char body[] = "{\"version\":2,\"authenticated\":true,\"principal\":{"
                                "\"id\":\"device-a\",\"type\":\"device\",\"root_group\":\"root-a\","
                                "\"auth_method\":\"password\",\"scope\":\"root_group\","
@@ -390,6 +462,114 @@ spec("turbo_flow_http") {
     tls_test_remove_file(key_file);
     tls_test_remove_file(cert_file);
     tls_test_remove_file(ca_file);
+  }
+
+  it("MQTT-SEC-003 rejects HTTPS status content JSON limits and unavailable replies") {
+    static const char unauthorized[] =
+        "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 2\r\n"
+        "Connection: close\r\n\r\n{}";
+    static const char server_error[] =
+        "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n"
+        "Content-Length: 2\r\nConnection: close\r\n\r\n{}";
+    static const char wrong_content[] =
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n"
+        "Connection: close\r\n\r\n{}";
+    static const char malformed_json[] =
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1\r\n"
+        "Connection: close\r\n\r\n{";
+    struct response_case {
+      const uint8_t *bytes;
+      size_t size;
+      int expected;
+    } cases[] = {
+        {(const uint8_t *)unauthorized, sizeof(unauthorized) - 1u, TURBO_EPERM},
+        {(const uint8_t *)server_error, sizeof(server_error) - 1u, TURBO_EIO},
+        {(const uint8_t *)wrong_content, sizeof(wrong_content) - 1u, TURBO_EIO},
+        {(const uint8_t *)malformed_json, sizeof(malformed_json) - 1u, TURBO_EPROTO},
+        {NULL, 0u, TURBO_EIO},
+    };
+    char ca_file[512] = {0};
+    char cert_file[512] = {0};
+    char key_file[512] = {0};
+    char wrong_ca_file[512] = {0};
+    char wrong_ca_key_file[512] = {0};
+    char *oversized = NULL;
+    size_t oversized_header;
+    size_t oversized_size;
+    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_int_eq(
+        tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+      turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+      check_int_eq(http_auth_run_response_case(cases[i].bytes, cases[i].size, ca_file, cert_file,
+                                               key_file, &principal),
+                   cases[i].expected);
+      check_str_eq(principal.principal_id, "");
+      check_uint_eq(principal.policy_version, 0u);
+    }
+    oversized_size = TURBO_FLOW_HTTP_AUTH_RESPONSE_LIMIT + 1u;
+    oversized = (char *)malloc(oversized_size + 256u);
+    check_not_null(oversized);
+    if (oversized) {
+      turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+      int written = snprintf(oversized, 256u,
+                             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                             "Content-Length: %zu\r\nConnection: close\r\n\r\n",
+                             oversized_size);
+      check_true(written > 0);
+      oversized_header = written > 0 ? (size_t)written : 0u;
+      memset(oversized + oversized_header, 'x', oversized_size);
+      check_int_eq(http_auth_run_response_case((const uint8_t *)oversized,
+                                               oversized_header + oversized_size, ca_file,
+                                               cert_file, key_file, &principal),
+                   TURBO_EIO);
+      check_str_eq(principal.principal_id, "");
+      free(oversized);
+    }
+    {
+      turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+      check_int_eq(http_auth_run_response_case_delayed(
+                       (const uint8_t *)server_error, sizeof(server_error) - 1u, 500u, ca_file,
+                       cert_file, key_file, &principal),
+                   TURBO_EIO);
+      check_str_eq(principal.principal_id, "");
+    }
+    check_int_eq(tls_test_write_self_signed_files(wrong_ca_file, sizeof(wrong_ca_file),
+                                                  wrong_ca_key_file,
+                                                  sizeof(wrong_ca_key_file), "untrusted-ca", 1),
+                 0);
+    {
+      turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+      check_int_eq(http_auth_run_response_case((const uint8_t *)server_error,
+                                               sizeof(server_error) - 1u, wrong_ca_file,
+                                               cert_file, key_file, &principal),
+                   TURBO_EIO);
+      check_str_eq(principal.principal_id, "");
+    }
+    tls_test_remove_file(wrong_ca_key_file);
+    tls_test_remove_file(wrong_ca_file);
+    tls_test_remove_file(key_file);
+    tls_test_remove_file(cert_file);
+    tls_test_remove_file(ca_file);
+  }
+
+  it("MQTT-SEC-003 rejects wrong auth protocol versions and principal identity fields") {
+    static const char wrong_version[] =
+        "{\"version\":1,\"authenticated\":true,\"principal\":{}}";
+    static const char wrong_principal[] =
+        "{\"version\":2,\"authenticated\":true,\"principal\":{"
+        "\"id\":\"device-a\",\"type\":\"device\",\"root_group\":\"root-a\","
+        "\"auth_method\":\"certificate\",\"scope\":\"root_group\",\"roles\":[],"
+        "\"groups\":[\"root-a\"],\"expires_at\":0,\"policy_version\":7}}";
+    turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+    check_int_eq(flow_http_auth_decode_response(wrong_version, sizeof(wrong_version) - 1u,
+                                                "password", &principal),
+                 TURBO_EPROTO);
+    check_str_eq(principal.principal_id, "");
+    check_int_eq(flow_http_auth_decode_response(wrong_principal, sizeof(wrong_principal) - 1u,
+                                                "password", &principal),
+                 TURBO_EPROTO);
+    check_str_eq(principal.principal_id, "");
   }
 
   it("rejects plaintext HTTP and database fields in authentication provider config") {

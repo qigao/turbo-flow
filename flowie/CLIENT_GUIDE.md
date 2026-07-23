@@ -144,7 +144,27 @@ client 接管；协议或网络结果通过对应 callback 返回。
 同一个 client connection 只能使用一个协商版本。MQTT 3.x 不支持 MQTT 5 properties、AUTH 和 reason
 code；不要把 MQTT 5 packet 字段直接复用于 3.x。
 
-## 4. TLS、WSS 与客户端 mTLS
+## 4. MQTT 5 Enhanced AUTH
+
+初始增强认证由 CONNECT properties 中的 Authentication Method 和可选 Authentication Data 启动。
+配置 `on_auth_challenge` 后，broker 发来的 `AUTH 0x18` 会在 client worker thread 上同步调用该回调；
+回调填写 `flowie_mqtt_client_auth_response_t`，client 在回调返回后立即编码并发送响应。
+
+已连接会话通过 `flowie_mqtt_client_authenticate()` 发出 `AUTH 0x19` 启动 re-authentication，最终结果由
+`on_auth` 返回。传入的 properties 是不含 property-length VBI 的 MQTT 5 property bytes，并且必须包含
+与 CONNECT 相同的 Authentication Method。client 会复制这些 bytes，因此 API 返回后调用方可以释放或
+复用原缓冲区。
+
+认证状态遵循 fail-closed：challenge callback 缺失或返回错误、AUTH reason 非法、Authentication Method
+缺失或改变、property 编码错误、超时和传输错误都会终止当前连接。challenge、response 和 completion 中
+由 client 提供的 view 仅在对应 callback 内有效。callback 填入的 response properties 必须来自
+`user_data` 所拥有的稳定缓冲区，并保持到该 client 的下一次 callback 开始；不能指向 callback 局部栈。
+MQTT 3.1/3.1.1 调用 re-authentication 会通过 `on_auth` 返回 `TURBO_ENOTSUP`。
+
+配置结构 ABI v7 新增 `on_auth_challenge` 和 `on_auth`。v5/v6 调用方仍按各自历史 `size` 使用，不能用旧
+ABI version 搭配 v7 的完整结构大小。
+
+## 5. TLS、WSS 与客户端 mTLS
 
 TLS：
 
@@ -175,7 +195,7 @@ config.path = "/mqtt";
 - client 销毁时会擦除内部私钥密码副本。
 - 不要把私钥密码写进源码、日志或普通 YAML；从进程 secret provider 获取后临时传入。
 
-## 5. Callback 与线程边界
+## 6. Callback 与线程边界
 
 所有 callback 在 client 自己的 worker thread 上执行：
 
@@ -187,9 +207,9 @@ config.path = "/mqtt";
 
 Topic handler 使用 MQTT filter；多个 filter 匹配时按配置顺序调用，首个非 `TURBO_OK` 返回会停止后续 handler。
 
-## 6. 命令与错误语义
+## 7. 命令与错误语义
 
-公开操作包括 CONNECT、PUBLISH、SUBSCRIBE、UNSUBSCRIBE、PING 和 DISCONNECT。
+公开操作包括 CONNECT、PUBLISH、SUBSCRIBE、UNSUBSCRIBE、PING、AUTH 和 DISCONNECT。
 
 - 立即返回错误：参数无效、状态不允许、缺少对应 callback、queue 已满或正在 shutdown。
 - completion callback 错误：命令已接管后发生的 encode、协议、网络、timeout 或 broker 拒绝。
@@ -198,7 +218,11 @@ Topic handler 使用 MQTT filter；多个 filter 匹配时按配置顺序调用�
 PUBLISH vector 是原子 admission：要么全部 topic 被接管，要么一个都不接管。每个 topic 按输入顺序产生
 一次 `on_publish` callback。
 
-## 7. 容量建议
+MQTT 5 成功 CONNACK 中的 Maximum Packet Size、Maximum QoS、Retain Available 和 Topic Alias Maximum
+会约束后续发送；违反 broker 声明的 PUBLISH 在发送前失败。当前 command worker 对 QoS 1/2 串行执行，
+因此任一时刻最多只有一个发往 broker 的 QoS PUBLISH，天然不超过合法的 Receive Maximum 下限 1。
+
+## 8. 容量建议
 
 默认 command queue 为 64 条、4 MiB owned bytes，默认最大 packet 为 1 MiB。生产环境应按峰值请求和可接受
 内存设置 `command_queue_capacity`、`command_queue_max_bytes`、`max_packet_size` 和

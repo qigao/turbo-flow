@@ -27,11 +27,11 @@ endif()
 if(DEFINED VCPKG_INSTALLED_DIR AND NOT VCPKG_INSTALLED_DIR STREQUAL "")
   list(APPEND configure_args "-DVCPKG_INSTALLED_DIR=${VCPKG_INSTALLED_DIR}")
 endif()
+if(DEFINED VCPKG_OVERLAY_PORTS AND NOT VCPKG_OVERLAY_PORTS STREQUAL "")
+  list(APPEND configure_args "-DVCPKG_OVERLAY_PORTS=${VCPKG_OVERLAY_PORTS}")
+endif()
 if(DEFINED TURBO_UTILS_ROOT AND NOT TURBO_UTILS_ROOT STREQUAL "")
   list(APPEND configure_args "-DTURBO_UTILS_ROOT=${TURBO_UTILS_ROOT}")
-endif()
-if(DEFINED RULES_FORGE_ROOT AND NOT RULES_FORGE_ROOT STREQUAL "")
-  list(APPEND configure_args "-DRULES_FORGE_ROOT=${RULES_FORGE_ROOT}")
 endif()
 if(DEFINED TURBO_NET_ROOT AND NOT TURBO_NET_ROOT STREQUAL "")
   list(APPEND configure_args "-DTURBO_NET_ROOT=${TURBO_NET_ROOT}")
@@ -46,14 +46,14 @@ if(PROFILE STREQUAL "core")
        "-DCMAKE_DISABLE_FIND_PACKAGE_TurboNet=TRUE"
        "-DCMAKE_DISABLE_FIND_PACKAGE_TurboHttp=TRUE"
        "-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE")
-  set(build_targets turbo_flow)
-  set(expected_targets TurboFlow::Flow)
+  set(build_targets turbo_flow tf_flow_store)
+  set(expected_targets TurboFlow::Flow TurboFlow::FlowStore)
   set(absent_targets
-      TurboFlow::FlowieProtocol TurboFlow::Flowie TurboFlow::FlowStorage
+      TurboFlow::FlowieProtocol TurboFlow::Flowie
       TurboFlow::Codec TurboFlow::Socket
       TurboFlow::HttpClient TurboFlow::HttpServer TurboFlow::Http
       TurboFlow::RPC TurboFlow::S3 TurboFlow::Email TurboFlow::FMQ
-      TurboFlow::Observe TurboFlow::Schedule TurboFlow::Queue)
+      TurboFlow::Observe TurboFlow::Schedule)
 elseif(PROFILE STREQUAL "protocol_only")
   list(APPEND configure_args
        "-DTURBO_FLOW_BUILD_ADAPTERS=OFF"
@@ -61,19 +61,18 @@ elseif(PROFILE STREQUAL "protocol_only")
        "-DCMAKE_DISABLE_FIND_PACKAGE_TurboNet=TRUE"
        "-DCMAKE_DISABLE_FIND_PACKAGE_TurboHttp=TRUE"
        "-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE")
-  set(build_targets flowmq_protocol)
-  set(expected_targets TurboFlow::Flow)
+  set(build_targets flowmq_protocol tf_flow_store)
+  set(expected_targets TurboFlow::Flow TurboFlow::FlowStore)
   set(expected_flowmq_targets FlowMQ::Protocol)
   set(absent_flowmq_targets FlowMQ::FlowMQProtocol)
   set(absent_targets
-      TurboFlow::FlowieProtocol TurboFlow::Flowie TurboFlow::FlowStorage
+      TurboFlow::FlowieProtocol TurboFlow::Flowie
       TurboFlow::Codec TurboFlow::Socket
       TurboFlow::HttpClient TurboFlow::HttpServer TurboFlow::Http
       TurboFlow::RPC TurboFlow::S3 TurboFlow::Email TurboFlow::FMQ
-      TurboFlow::Observe TurboFlow::Schedule TurboFlow::Queue)
+      TurboFlow::Observe TurboFlow::Schedule)
 elseif(PROFILE STREQUAL "codec_fmq")
   list(APPEND configure_args
-       "-DTURBO_FLOW_BUILD_STORAGE=OFF"
        "-DTURBO_FLOW_BUILD_CODEC=ON"
        "-DTURBO_FLOW_BUILD_SOCKET=OFF"
        "-DTURBO_FLOW_BUILD_HTTP_CLIENT=OFF"
@@ -86,18 +85,17 @@ elseif(PROFILE STREQUAL "codec_fmq")
        "-DTURBO_FLOW_BUILD_PGSQL=OFF"
        "-DTURBO_FLOW_BUILD_OBSERVE=OFF"
        "-DTURBO_FLOW_BUILD_SCHEDULE=OFF"
-       "-DTURBO_FLOW_BUILD_QUEUE=OFF"
        "-DCMAKE_DISABLE_FIND_PACKAGE_TurboHttp=TRUE")
-  set(build_targets turbo_flow tf_codec flowmq_protocol tf_fmq)
-  set(expected_targets TurboFlow::Flow TurboFlow::Codec TurboFlow::FMQ)
+  set(build_targets turbo_flow tf_flow_store tf_codec flowmq_protocol tf_fmq)
+  set(expected_targets TurboFlow::Flow TurboFlow::FlowStore TurboFlow::Codec TurboFlow::FMQ)
   set(expected_flowmq_targets FlowMQ::Protocol)
   set(absent_flowmq_targets FlowMQ::FlowMQProtocol)
   set(absent_targets
-      TurboFlow::FlowieProtocol TurboFlow::Flowie TurboFlow::FlowStorage
+      TurboFlow::FlowieProtocol TurboFlow::Flowie
       TurboFlow::Socket TurboFlow::HttpClient
       TurboFlow::HttpServer TurboFlow::Http TurboFlow::RPC TurboFlow::S3
       TurboFlow::Email TurboFlow::Redis TurboFlow::PostgreSQL TurboFlow::Observe
-      TurboFlow::Schedule TurboFlow::Queue)
+      TurboFlow::Schedule)
 elseif(PROFILE STREQUAL "expr_no_jit")
   list(APPEND configure_args
        "-DBUILD_TESTING=ON"
@@ -107,14 +105,14 @@ elseif(PROFILE STREQUAL "expr_no_jit")
        "-DCMAKE_DISABLE_FIND_PACKAGE_TurboNet=TRUE"
        "-DCMAKE_DISABLE_FIND_PACKAGE_TurboHttp=TRUE"
        "-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE")
-  set(build_targets test_flow_expr)
-  set(expected_targets TurboFlow::Flow)
+  set(build_targets test_flow_expr tf_flow_store)
+  set(expected_targets TurboFlow::Flow TurboFlow::FlowStore)
   set(absent_targets
-      TurboFlow::FlowieProtocol TurboFlow::Flowie TurboFlow::FlowStorage
+      TurboFlow::FlowieProtocol TurboFlow::Flowie
       TurboFlow::Codec TurboFlow::Socket
       TurboFlow::HttpClient TurboFlow::HttpServer TurboFlow::Http
       TurboFlow::RPC TurboFlow::S3 TurboFlow::Email TurboFlow::FMQ
-      TurboFlow::Observe TurboFlow::Schedule TurboFlow::Queue)
+      TurboFlow::Observe TurboFlow::Schedule)
   set(run_test test_flow_expr)
 else()
   message(FATAL_ERROR "unknown build profile: ${PROFILE}")

@@ -1,32 +1,34 @@
 #include "flowie_worker_runtime_internal.h"
 
 #include "flowie.h"
-#include "socket.h"
-#include "turbo_flow_queue.h"
 #ifdef FLOWIE_SERVER_HAVE_REDIS
   #include "turbo_flow_redis.h"
+#endif
+#ifdef FLOWIE_SERVER_HAVE_PGSQL
+  #include "turbo_flow_pgsql.h"
 #endif
 
 #include "turbo_error.h"
 #include "turbo_fs.h"
+#include "turbo_flow_local_storage_backend.h"
+#include "turbo_parser.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef enum flowie_worker_store_provider_e {
-  FLOWIE_WORKER_STORE_NONE = 0,
-  FLOWIE_WORKER_STORE_SQLITE,
-  FLOWIE_WORKER_STORE_REDIS
-} flowie_worker_store_provider_t;
+#define FLOWIE_WORKER_LOCAL_VALUE_HEADROOM 64u
+#define FLOWIE_WORKER_LOCAL_RETAINED_KEY_PREFIX_SIZE 3u
+#define FLOWIE_WORKER_LOCAL_MAX_KEY_SIZE \
+  (FLOWIE_WORKER_LOCAL_RETAINED_KEY_PREFIX_SIZE + FLOWIE_MQTT_MAX_UTF8_SIZE)
 
 struct flowie_worker_runtime_s {
   turbo_fs_buf_t yaml;
   turbo_fs_buf_t graph;
   turbo_flow_resolved_config_t *resolved;
-  turbo_flow_queue_t *queue;
-  turbo_flow_record_store_t session_store;
-  flowie_worker_store_provider_t session_store_provider;
+  turbo_flow_storage_backend_owner_t *session_store_owner;
+  turbo_flow_record_store_t *session_store;
   turbo_flow_security_realm_t *security_realm;
   turbo_flow_security_auth_provider_owner_t auth_provider;
   turbo_flow_security_policy_provider_owner_t policy_provider;
@@ -38,11 +40,7 @@ struct flowie_worker_runtime_s {
 typedef struct flowie_worker_provider_context_s {
   flowie_worker_runtime_t *runtime;
   const char *endpoint_name;
-  const char *accept_sink_name;
-  const char *accepted_source_name;
   const char *rule_set_channel;
-  const char *output_name;
-  const char *queue_channel;
   const char *session_store_channel;
   const char *security_realm_channel;
   const char *security_auth_method;
@@ -69,36 +67,24 @@ static void flowie_worker_error_set(flowie_worker_error_t *error, const char *op
   }
 }
 
-static int flowie_worker_resolve_queue_channel(const turbo_flow_resolved_config_t *resolved,
-                                               const char *adapter_name, const char **channel,
-                                               turbo_flow_config_error_t *error) {
-  turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
-  int rc;
-  if (!resolved || !adapter_name || !channel || !error) return TURBO_EINVAL;
-  rc = turbo_flow_resolved_config_adapter(resolved, adapter_name, &view);
-  if (rc == TURBO_OK && strcmp(view.kind, "queue") != 0) rc = TURBO_EINVAL;
-  if (rc == TURBO_OK) rc = turbo_flow_resolved_adapter_get_string(&view, "channel", channel);
-  if (rc != TURBO_OK) {
-    *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    error->status = rc;
-    (void)snprintf(error->path, sizeof(error->path), "$.adapters.%s.config.channel", adapter_name);
-    (void)snprintf(error->message, sizeof(error->message),
-                   "Queue adapter must reference a configured Queue channel");
-  }
-  return rc;
-}
-
 static int flowie_worker_resolve_session_store(const turbo_flow_resolved_config_t *resolved,
                                                const char *endpoint_name, const char **channel,
                                                turbo_flow_config_error_t *error) {
   turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
+  int manage_sessions = 0;
   int rc;
   if (channel) *channel = NULL;
   if (!resolved || !endpoint_name || !endpoint_name[0] || !channel || !error) return TURBO_EINVAL;
   rc = turbo_flow_resolved_config_adapter(resolved, endpoint_name, &view);
   if (rc == TURBO_OK && strcmp(view.kind, "flowie_endpoint") != 0) rc = TURBO_EINVAL;
   if (rc == TURBO_OK) rc = turbo_flow_resolved_adapter_get_string(&view, "session_store", channel);
-  if (rc == TURBO_ENOENT) return TURBO_OK;
+  if (rc == TURBO_ENOENT) {
+    rc = turbo_flow_resolved_adapter_get_bool(&view, "manage_sessions", &manage_sessions);
+    if (rc == TURBO_ENOENT || (rc == TURBO_OK && !manage_sessions)) return TURBO_OK;
+    if (rc != TURBO_OK) return rc;
+    *channel = FLOWIE_IMPLICIT_LOCAL_SESSION_STORE_CHANNEL;
+    return TURBO_OK;
+  }
   if (rc == TURBO_OK && *channel && (*channel)[0]) return TURBO_OK;
   *channel = NULL;
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -108,6 +94,113 @@ static int flowie_worker_resolve_session_store(const turbo_flow_resolved_config_
   (void)snprintf(error->message, sizeof(error->message),
                  "session_store must be a non-empty record-store channel name");
   return error->status;
+}
+
+static int flowie_worker_record_store_config_error(turbo_flow_config_error_t *error, int status,
+                                                  const char *channel, const char *field,
+                                                  const char *message) {
+  if (error && error->size >= sizeof(*error)) {
+    *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    error->status = status;
+    if (field) {
+      (void)snprintf(error->path, sizeof(error->path), "$.channels.%s.config.%s", channel, field);
+    } else {
+      (void)snprintf(error->path, sizeof(error->path), "$.channels.%s", channel);
+    }
+    (void)snprintf(error->message, sizeof(error->message), "%s", message);
+  }
+  return status;
+}
+
+static int flowie_worker_resolve_record_store_backend(const turbo_flow_resolved_config_t *resolved,
+                                                     const char *channel_name,
+                                                     const char **backend,
+                                                     turbo_flow_config_error_t *error) {
+  turbo_flow_resolved_channel_view_t view = TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT;
+  int rc;
+  if (backend) *backend = NULL;
+  if (!resolved || !channel_name || !channel_name[0] || !backend || !error ||
+      error->size < sizeof(*error))
+    return TURBO_EINVAL;
+  rc = turbo_flow_resolved_config_channel(resolved, channel_name, &view);
+  if (rc == TURBO_OK && strcmp(view.kind, "record_store") != 0) rc = TURBO_EINVAL;
+  if (rc == TURBO_OK) rc = turbo_flow_resolved_channel_get_string(&view, "backend", backend);
+  if (rc != TURBO_OK) {
+    return flowie_worker_record_store_config_error(error, rc, channel_name, "backend",
+                                                  "record store channel missing backend");
+  }
+  if (!*backend || !(*backend)[0]) {
+    return flowie_worker_record_store_config_error(error, TURBO_EINVAL, channel_name, "backend",
+                                                  "backend must be a non-empty string");
+  }
+  return TURBO_OK;
+}
+
+static int flowie_worker_local_session_options(
+    const turbo_flow_resolved_config_t *resolved, const char *endpoint_name,
+    turbo_flow_local_storage_backend_options_t *options, turbo_flow_store_limits_t *limits) {
+  turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
+  uint64_t max_connections = FLOWIE_DEFAULT_MAX_CONNECTIONS;
+  uint64_t max_sessions = 0u;
+  uint64_t max_retained_messages = 0u;
+  uint64_t max_packet_size = FLOWIE_DEFAULT_MAX_PACKET_SIZE;
+  size_t required_records;
+  size_t value_size;
+  int rc;
+
+  if (!resolved || !endpoint_name || !endpoint_name[0] || !options || !limits) return TURBO_EINVAL;
+  rc = turbo_flow_resolved_config_adapter(resolved, endpoint_name, &view);
+  if (rc != TURBO_OK) return rc;
+  if (strcmp(view.kind, "flowie_endpoint") != 0) return TURBO_EINVAL;
+
+  rc = turbo_flow_resolved_adapter_get_u64(&view, "max_connections", &max_connections);
+  if (rc == TURBO_ENOENT) {
+    max_connections = FLOWIE_DEFAULT_MAX_CONNECTIONS;
+  } else if (rc != TURBO_OK) {
+    return rc;
+  }
+  rc = turbo_flow_resolved_adapter_get_u64(&view, "max_sessions", &max_sessions);
+  if (rc == TURBO_ENOENT) {
+    max_sessions = max_connections;
+  } else if (rc != TURBO_OK) {
+    return rc;
+  }
+  if (max_sessions == 0u) max_sessions = max_connections;
+  rc = turbo_flow_resolved_adapter_get_u64(&view, "max_retained_messages", &max_retained_messages);
+  if (rc == TURBO_ENOENT) {
+    max_retained_messages = max_sessions;
+  } else if (rc != TURBO_OK) {
+    return rc;
+  }
+  if (max_retained_messages == 0u) max_retained_messages = max_sessions;
+  rc = turbo_flow_resolved_adapter_get_u64(&view, "max_packet_size", &max_packet_size);
+  if (rc == TURBO_ENOENT) {
+    max_packet_size = FLOWIE_DEFAULT_MAX_PACKET_SIZE;
+  } else if (rc != TURBO_OK) {
+    return rc;
+  }
+  if (max_sessions > SIZE_MAX || max_retained_messages > SIZE_MAX ||
+      max_packet_size > SIZE_MAX || max_sessions > SIZE_MAX - max_retained_messages)
+    return TURBO_ERANGE;
+  required_records = (size_t)max_sessions + (size_t)max_retained_messages;
+
+  /* Retained records store three LTV fields. Keep the local backend's value bound above the
+     endpoint's largest encoded packet while retaining an explicit bounded store contract. */
+  value_size = turbo_ltv_wire_size((size_t)max_packet_size);
+  if (value_size == 0u || value_size > SIZE_MAX - FLOWIE_WORKER_LOCAL_VALUE_HEADROOM)
+    return TURBO_ERANGE;
+  value_size += FLOWIE_WORKER_LOCAL_VALUE_HEADROOM;
+  *limits = (turbo_flow_store_limits_t)TURBO_FLOW_STORE_LIMITS_INIT;
+  limits->max_records = required_records;
+  limits->max_bytes = SIZE_MAX;
+  limits->max_item_bytes = SIZE_MAX;
+  *options = (turbo_flow_local_storage_backend_options_t)
+      TURBO_FLOW_LOCAL_STORAGE_BACKEND_OPTIONS_INIT;
+  options->limits = limits;
+  options->max_key_size = FLOWIE_WORKER_LOCAL_MAX_KEY_SIZE;
+  options->max_value_size = value_size;
+  options->max_records = required_records;
+  return TURBO_OK;
 }
 
 static int flowie_worker_resolve_security(const turbo_flow_resolved_config_t *resolved,
@@ -203,56 +296,61 @@ static int flowie_worker_create_policy_provider(
       resolved, channel, key_provider, owner, error);
 }
 
-static int flowie_worker_create_session_store(const turbo_flow_resolved_config_t *resolved,
-                                              const char *channel, turbo_flow_record_store_t *store,
-                                              flowie_worker_store_provider_t *provider,
-                                              turbo_flow_config_error_t *error) {
-  turbo_flow_config_error_t sqlite_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+static int flowie_worker_create_session_store(const flowie_worker_runtime_config_t *worker_config,
+                                               const turbo_flow_resolved_config_t *resolved,
+                                               const char *endpoint_name,
+                                               const char *channel,
+                                               turbo_flow_storage_backend_owner_t **owner_out,
+                                               turbo_flow_record_store_t **store_out,
+                                               turbo_flow_config_error_t *error) {
+  turbo_flow_storage_backend_open_request_t request =
+      TURBO_FLOW_STORAGE_BACKEND_OPEN_REQUEST_INIT;
+  void *service = NULL;
+  const char *backend = NULL;
+  turbo_flow_local_storage_backend_options_t local_options =
+      TURBO_FLOW_LOCAL_STORAGE_BACKEND_OPTIONS_INIT;
+  turbo_flow_store_limits_t local_limits = TURBO_FLOW_STORE_LIMITS_INIT;
+  int implicit_local;
   int rc;
-  if (provider) *provider = FLOWIE_WORKER_STORE_NONE;
-  if (!resolved || !channel || !channel[0] || !store || !provider || !error) return TURBO_EINVAL;
-  rc = turbo_flow_sqlite_record_store_create_resolved(resolved, channel, store, &sqlite_error);
-  if (rc == TURBO_OK) {
-    *provider = FLOWIE_WORKER_STORE_SQLITE;
-    return TURBO_OK;
+  if (owner_out) *owner_out = NULL;
+  if (store_out) *store_out = NULL;
+  if (!worker_config || !worker_config->storage_backends || !resolved || !endpoint_name ||
+      !endpoint_name[0] || !channel || !channel[0] || !owner_out || !store_out || !error) {
+    return TURBO_EINVAL;
   }
-  if (rc != TURBO_ENOTSUP) {
-    *error = sqlite_error;
-    return rc;
+  implicit_local = strcmp(channel, FLOWIE_IMPLICIT_LOCAL_SESSION_STORE_CHANNEL) == 0;
+  if (implicit_local) {
+    backend = "local";
+    rc = flowie_worker_local_session_options(resolved, endpoint_name, &local_options, &local_limits);
+    if (rc != TURBO_OK) return rc;
+    request.options = &local_options;
+    request.options_size = sizeof(local_options);
+  } else {
+    rc = flowie_worker_resolve_record_store_backend(resolved, channel, &backend, error);
+    if (rc != TURBO_OK) return rc;
   }
-#ifdef FLOWIE_SERVER_HAVE_REDIS
-  {
-    turbo_flow_config_error_t redis_error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    rc = turbo_flow_redis_record_store_create_resolved(resolved, channel, store, &redis_error);
-    if (rc == TURBO_OK) {
-      *provider = FLOWIE_WORKER_STORE_REDIS;
-      return TURBO_OK;
-    }
-    if (rc != TURBO_ENOTSUP) {
-      *error = redis_error;
-      return rc;
-    }
+  request.model = TURBO_FLOW_STORAGE_MODEL_RECORD;
+  request.resolved = implicit_local ? NULL : resolved;
+  request.channel_name = implicit_local ? NULL : channel;
+  rc = turbo_flow_storage_backend_owner_create_registered(
+      worker_config->storage_backends, backend, &request, owner_out, error);
+  if (rc == TURBO_ENOTSUP) {
+    return flowie_worker_record_store_config_error(
+        error, rc, channel, "backend", "record-store backend is not registered");
   }
-#endif
-  *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-  error->status = TURBO_ENOTSUP;
-  (void)snprintf(error->path, sizeof(error->path), "$.channels.%s.config.backend", channel);
-  (void)snprintf(error->message, sizeof(error->message),
-                 "flowie_server supports SQLite and Redis session record stores");
-  return TURBO_ENOTSUP;
-}
-
-static void flowie_worker_destroy_session_store(turbo_flow_record_store_t *store,
-                                                flowie_worker_store_provider_t provider) {
-  if (!store || !store->ctx) return;
-  if (provider == FLOWIE_WORKER_STORE_SQLITE) {
-    turbo_flow_sqlite_record_store_destroy(store);
+  if (rc != TURBO_OK) return rc;
+  rc = turbo_flow_storage_backend_owner_service(
+      *owner_out, TURBO_FLOW_STORAGE_MODEL_RECORD, &service);
+  if (rc != TURBO_OK || !service || ((turbo_flow_record_store_t *)service)->size <
+                                         sizeof(turbo_flow_record_store_t)) {
+    turbo_flow_storage_backend_owner_destroy(*owner_out);
+    *owner_out = NULL;
+    return flowie_worker_record_store_config_error(
+        error, rc == TURBO_OK ? TURBO_EPROTO : rc, channel, NULL,
+        "storage backend returned an invalid record service");
   }
-#ifdef FLOWIE_SERVER_HAVE_REDIS
-  else if (provider == FLOWIE_WORKER_STORE_REDIS) {
-    turbo_flow_redis_record_store_destroy(store);
-  }
-#endif
+  *store_out = (turbo_flow_record_store_t *)service;
+  return TURBO_OK;
 }
 
 static int flowie_worker_register_rule_resource(void *ctx, turbo_flow_t *flow,
@@ -293,7 +391,7 @@ static int flowie_worker_register_endpoint_adapter(void *ctx, turbo_flow_t *flow
     flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
     if (provider->session_store_channel) {
       persistence.store_channel = provider->session_store_channel;
-      persistence.store = &provider->runtime->session_store;
+      persistence.store = provider->runtime->session_store;
       bindings.persistence = &persistence;
     }
     if (provider->security_realm_channel) {
@@ -309,52 +407,10 @@ static int flowie_worker_register_endpoint_adapter(void *ctx, turbo_flow_t *flow
   return flowie_register_resolved_endpoint(flow, adapter_name, resolved, error);
 }
 
-static int flowie_worker_register_queue_adapter(void *ctx, turbo_flow_t *flow,
-                                                const turbo_flow_resolved_config_t *resolved,
-                                                const char *adapter_name,
-                                                turbo_flow_config_error_t *error) {
-  flowie_worker_provider_context_t *provider = (flowie_worker_provider_context_t *)ctx;
-  const char *channel = NULL;
-  int rc;
-  if (!provider || !provider->runtime || !provider->runtime->queue ||
-      (!provider->accept_sink_name || strcmp(adapter_name, provider->accept_sink_name) != 0) &&
-          (!provider->accepted_source_name ||
-           strcmp(adapter_name, provider->accepted_source_name) != 0)) {
-    return TURBO_EINVAL;
-  }
-  rc = flowie_worker_resolve_queue_channel(resolved, adapter_name, &channel, error);
-  if (rc != TURBO_OK) return rc;
-  if (!provider->queue_channel || strcmp(channel, provider->queue_channel) != 0) {
-    *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    error->status = TURBO_EINVAL;
-    (void)snprintf(error->path, sizeof(error->path), "$.adapters.%s.config.channel", adapter_name);
-    (void)snprintf(error->message, sizeof(error->message),
-                   "Flowie Queue source and sink must reference the same channel");
-    return TURBO_EINVAL;
-  }
-  return turbo_flow_queue_register_resolved_adapter(flow, adapter_name, resolved,
-                                                    provider->runtime->queue, error);
-}
-
-static int flowie_worker_register_socket_adapter(void *ctx, turbo_flow_t *flow,
-                                                 const turbo_flow_resolved_config_t *resolved,
-                                                 const char *adapter_name,
-                                                 turbo_flow_config_error_t *error) {
-  flowie_worker_provider_context_t *provider = (flowie_worker_provider_context_t *)ctx;
-  (void)error;
-  if (!provider || !provider->output_name || strcmp(adapter_name, provider->output_name) != 0)
-    return TURBO_EINVAL;
-  return turbo_flow_coronet_register_socket_resolved_adapter(flow, resolved, adapter_name);
-}
-
 int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
                                  flowie_worker_runtime_t **out, flowie_worker_error_t *error) {
   const char *endpoint_name = NULL;
-  const char *accept_sink_name = NULL;
-  const char *accepted_source_name = NULL;
   const char *rule_set_channel = NULL;
-  const char *output_name = NULL;
-  const char *queue_channel = NULL;
   const char *session_store_channel = NULL;
   const char *security_realm_channel = NULL;
   const char *security_auth_method = NULL;
@@ -363,9 +419,8 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
   turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_async_ingress_config_t ingress_config = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
   flowie_worker_provider_context_t provider_context = {0};
-  turbo_flow_product_adapter_provider_t adapter_providers[3] = {
-      TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT, TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT,
-      TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT};
+  turbo_flow_product_adapter_provider_t *adapter_providers = NULL;
+  size_t adapter_provider_count = 0u;
   turbo_flow_product_resource_provider_t resource_provider =
       TURBO_FLOW_PRODUCT_RESOURCE_PROVIDER_INIT;
   turbo_flow_product_provider_registry_t provider_registry =
@@ -381,7 +436,8 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
       !config->profile[0] || !config->config_path || !config->config_path[0] ||
       !config->graph_path || !config->graph_path[0] ||
       (config->auth_provider_factory_count > 0u && !config->auth_provider_factories) ||
-      (config->policy_provider_factory_count > 0u && !config->policy_provider_factories)) {
+      (config->policy_provider_factory_count > 0u && !config->policy_provider_factories) ||
+      (config->adapter_provider_count > 0u && !config->adapter_providers)) {
     flowie_worker_error_set(error, "validate worker configuration", TURBO_EINVAL, NULL, NULL);
     return TURBO_EINVAL;
   }
@@ -390,7 +446,6 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
     flowie_worker_error_set(error, "create worker", TURBO_ENOMEM, NULL, NULL);
     return TURBO_ENOMEM;
   }
-  runtime->session_store = (turbo_flow_record_store_t)TURBO_FLOW_RECORD_STORE_INIT;
   runtime->auth_provider =
       (turbo_flow_security_auth_provider_owner_t)TURBO_FLOW_SECURITY_AUTH_PROVIDER_OWNER_INIT;
   runtime->policy_provider =
@@ -398,21 +453,38 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
   key_provider.acquire = flowie_worker_env_secret_acquire;
   key_provider.release = flowie_worker_env_secret_release;
   provider_context.runtime = runtime;
+  if (config->adapter_provider_count == SIZE_MAX) {
+    rc = TURBO_ERANGE;
+    failure_operation = "size product providers";
+    goto fail;
+  }
+  adapter_provider_count = config->adapter_provider_count + 1u;
+  if (adapter_provider_count > SIZE_MAX / sizeof(*adapter_providers)) {
+    rc = TURBO_ERANGE;
+    failure_operation = "size product providers";
+    goto fail;
+  }
+  adapter_providers = (turbo_flow_product_adapter_provider_t *)calloc(adapter_provider_count,
+                                                                      sizeof(*adapter_providers));
+  if (!adapter_providers) {
+    rc = TURBO_ENOMEM;
+    failure_operation = "create product providers";
+    goto fail;
+  }
+  adapter_providers[0] =
+      (turbo_flow_product_adapter_provider_t)TURBO_FLOW_PRODUCT_ADAPTER_PROVIDER_INIT;
   adapter_providers[0].kind = "flowie_endpoint";
   adapter_providers[0].register_adapter = flowie_worker_register_endpoint_adapter;
   adapter_providers[0].ctx = &provider_context;
-  adapter_providers[1].kind = "queue";
-  adapter_providers[1].register_adapter = flowie_worker_register_queue_adapter;
-  adapter_providers[1].ctx = &provider_context;
-  adapter_providers[2].kind = "socket";
-  adapter_providers[2].register_adapter = flowie_worker_register_socket_adapter;
-  adapter_providers[2].ctx = &provider_context;
+  if (config->adapter_provider_count > 0u) {
+    memcpy(adapter_providers + 1u, config->adapter_providers,
+           config->adapter_provider_count * sizeof(*adapter_providers));
+  }
   resource_provider.kind = "rule_set";
   resource_provider.register_resource = flowie_worker_register_rule_resource;
   resource_provider.ctx = &provider_context;
   provider_registry.adapter_providers = adapter_providers;
-  provider_registry.adapter_provider_count =
-      sizeof(adapter_providers) / sizeof(adapter_providers[0]);
+  provider_registry.adapter_provider_count = adapter_provider_count;
   provider_registry.resource_providers = &resource_provider;
   provider_registry.resource_provider_count = 1u;
 
@@ -445,33 +517,14 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
   rc = turbo_flow_resolved_config_profile_adapter(runtime->resolved, config->profile, "endpoint",
                                                   &endpoint_name);
   if (rc == TURBO_OK)
-    rc = turbo_flow_resolved_config_profile_adapter(runtime->resolved, config->profile,
-                                                    "accept_sink", &accept_sink_name);
-  if (rc == TURBO_OK)
-    rc = turbo_flow_resolved_config_profile_adapter(runtime->resolved, config->profile,
-                                                    "accepted_source", &accepted_source_name);
-  if (rc == TURBO_OK)
-    rc = turbo_flow_resolved_config_profile_channel(runtime->resolved, config->profile, "rule_set",
-                                                    &rule_set_channel);
-  if (rc == TURBO_OK)
-    rc = turbo_flow_resolved_config_profile_adapter(runtime->resolved, config->profile, "output",
-                                                    &output_name);
+    rc = turbo_flow_resolved_config_profile_channel_optional(runtime->resolved, config->profile,
+                                                             "rule_set", &rule_set_channel);
   if (rc != TURBO_OK) {
     failure_operation = "resolve profile";
     goto fail;
   }
   provider_context.endpoint_name = endpoint_name;
-  provider_context.accept_sink_name = accept_sink_name;
-  provider_context.accepted_source_name = accepted_source_name;
   provider_context.rule_set_channel = rule_set_channel;
-  provider_context.output_name = output_name;
-  rc = flowie_worker_resolve_queue_channel(runtime->resolved, accept_sink_name, &queue_channel,
-                                           &config_error);
-  if (rc != TURBO_OK) {
-    failure_operation = "resolve Queue channel";
-    goto fail;
-  }
-  provider_context.queue_channel = queue_channel;
   rc = flowie_worker_resolve_session_store(runtime->resolved, endpoint_name, &session_store_channel,
                                            &config_error);
   if (rc != TURBO_OK) {
@@ -488,16 +541,10 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
   }
   provider_context.security_realm_channel = security_realm_channel;
   provider_context.security_auth_method = security_auth_method;
-  rc = turbo_flow_queue_create_resolved(runtime->resolved, queue_channel, &runtime->queue,
-                                        &config_error);
-  if (rc != TURBO_OK) {
-    failure_operation = "create Queue";
-    goto fail;
-  }
   if (session_store_channel) {
-    rc = flowie_worker_create_session_store(runtime->resolved, session_store_channel,
-                                            &runtime->session_store,
-                                            &runtime->session_store_provider, &config_error);
+    rc = flowie_worker_create_session_store(config, runtime->resolved, endpoint_name,
+                                            session_store_channel, &runtime->session_store_owner,
+                                            &runtime->session_store, &config_error);
     if (rc != TURBO_OK) {
       failure_operation = "create session store";
       goto fail;
@@ -580,9 +627,11 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
     goto fail;
   }
   *out = runtime;
+  free(adapter_providers);
   return TURBO_OK;
 
 fail:
+  free(adapter_providers);
   flowie_worker_error_set(error, failure_operation, rc, &config_error, flow_error);
   (void)flowie_worker_runtime_destroy(runtime, NULL);
   return rc;
@@ -639,14 +688,7 @@ int flowie_worker_runtime_destroy(flowie_worker_runtime_t *runtime, flowie_worke
   turbo_flow_security_auth_provider_owner_destroy(&runtime->auth_provider);
   turbo_flow_security_realm_destroy(runtime->security_realm);
   turbo_flow_security_policy_provider_owner_destroy(&runtime->policy_provider);
-  flowie_worker_destroy_session_store(&runtime->session_store, runtime->session_store_provider);
-  if (runtime->queue) {
-    rc = turbo_flow_queue_destroy(runtime->queue);
-    if (rc != TURBO_OK && result == TURBO_OK) {
-      result = rc;
-      flowie_worker_error_set(error, "destroy Queue", rc, NULL, NULL);
-    }
-  }
+  turbo_flow_storage_backend_owner_destroy(runtime->session_store_owner);
   turbo_flow_resolved_config_destroy(runtime->resolved);
   turbo_fs_buf_free(&runtime->graph);
   turbo_fs_buf_free(&runtime->yaml);

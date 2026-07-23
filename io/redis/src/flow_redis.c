@@ -1,3 +1,4 @@
+#include "flow_redis_internal.h"
 #include "turbo_flow_redis.h"
 
 #include "CoroNet.h"
@@ -24,7 +25,8 @@ typedef enum flow_redis_adapter_mode_e {
   FLOW_REDIS_MODE_STREAM_SOURCE,
   FLOW_REDIS_MODE_DATA_SET,
   FLOW_REDIS_MODE_DATA_GET,
-  FLOW_REDIS_MODE_RECORD_STORE
+  FLOW_REDIS_MODE_RECORD_STORE,
+  FLOW_REDIS_MODE_FLOW_STORE
 } flow_redis_adapter_mode_t;
 
 typedef struct flow_redis_adapter_s {
@@ -113,6 +115,8 @@ typedef enum flow_redis_task_kind_e {
   FLOW_REDIS_TASK_GET,
   FLOW_REDIS_TASK_STATE_GET,
   FLOW_REDIS_TASK_STATE_COMMIT,
+  FLOW_REDIS_TASK_STORE_COMMAND,
+  FLOW_REDIS_TASK_RECORD_GET,
   FLOW_REDIS_TASK_RECORD_SCAN,
   FLOW_REDIS_TASK_RECORD_COMMIT
 } flow_redis_task_kind_t;
@@ -132,6 +136,11 @@ typedef struct flow_redis_task_s {
   size_t record_mutation_count;
   turbo_flow_record_visit_fn record_visit;
   void *record_visit_ctx;
+  int command_argc;
+  const char **command_argv;
+  const size_t *command_lengths;
+  flow_redis_store_reply_fn command_apply;
+  void *command_apply_ctx;
   redis_stream_result_t *results;
   size_t result_count;
   tstr_t response;
@@ -253,6 +262,8 @@ static int flow_redis_command_apply(flow_redis_task_t *task, const redis_command
   if (result->status != TURBO_OK) return result->status;
   reply = result->reply;
   if (!reply) return TURBO_EPROTO;
+  if (task->kind == FLOW_REDIS_TASK_STORE_COMMAND)
+    return task->command_apply(task->command_apply_ctx, reply);
   if (task->kind == FLOW_REDIS_TASK_XACK) {
     const size_t expected = task->id_count > 0u ? task->id_count : 1u;
     return reply->type == REDIS_REPLY_INTEGER && reply->integer >= 0 &&
@@ -273,6 +284,19 @@ static int flow_redis_command_apply(flow_redis_task_t *task, const redis_command
     if (reply->integer == -1) return TURBO_EBUSY;
     if (reply->integer == -2) return TURBO_ENOSPC;
     return TURBO_EPROTO;
+  }
+  if (task->kind == FLOW_REDIS_TASK_RECORD_GET) {
+    redis_reply_t key_reply;
+    turbo_flow_record_view_t record = TURBO_FLOW_RECORD_VIEW_INIT;
+    int rc;
+    if (reply->type == REDIS_REPLY_NULL) return TURBO_ENOENT;
+    if (reply->type != REDIS_REPLY_BULK_STRING) return TURBO_EPROTO;
+    memset(&key_reply, 0, sizeof(key_reply));
+    key_reply.type = REDIS_REPLY_BULK_STRING;
+    key_reply.str = (char *)task->id;
+    key_reply.len = task->id_size;
+    rc = flow_redis_record_decode(task->adapter, &key_reply, reply, &record);
+    return rc == TURBO_OK ? task->record_visit(task->record_visit_ctx, &record) : rc;
   }
   if (task->kind == FLOW_REDIS_TASK_RECORD_SCAN) {
     if (reply->type != REDIS_REPLY_ARRAY || (reply->element_count & 1u) != 0u) return TURBO_EPROTO;
@@ -441,6 +465,18 @@ static void flow_redis_task_run(coro_t *co, void *arg) {
                             task->id ? strlen(task->id) : 0u,
                             task->payload_len};
     (void)redis_commandv_result(adapter->client, 10, commit_argv, commit_lens, &command);
+    task->status = flow_redis_command_apply(task, &command);
+    break;
+  }
+  case FLOW_REDIS_TASK_STORE_COMMAND:
+    (void)redis_commandv_result(adapter->client, task->command_argc, task->command_argv,
+                                task->command_lengths, &command);
+    task->status = flow_redis_command_apply(task, &command);
+    break;
+  case FLOW_REDIS_TASK_RECORD_GET: {
+    const char *record_get_argv[] = {"HGET", adapter->key, task->id};
+    size_t record_get_lens[] = {4u, adapter->key ? tstr_len(adapter->key) : 0u, task->id_size};
+    (void)redis_commandv_result(adapter->client, 3, record_get_argv, record_get_lens, &command);
     task->status = flow_redis_command_apply(task, &command);
     break;
   }
@@ -1530,6 +1566,71 @@ static int flow_redis_record_store_scan(void *ctx, turbo_flow_record_visit_fn vi
   return rc;
 }
 
+int flow_redis_record_store_get(turbo_flow_record_store_t *store, const uint8_t *key,
+                                size_t key_size, turbo_flow_record_visit_fn visit,
+                                void *visit_ctx) {
+  flow_redis_adapter_t *adapter;
+  flow_redis_task_t task;
+  int rc;
+  if (!store || store->size < sizeof(*store) || !store->ctx || !key || key_size == 0u ||
+      key_size > store->max_key_size || !visit) {
+    return TURBO_EINVAL;
+  }
+  adapter = (flow_redis_adapter_t *)store->ctx;
+  if (adapter->mode != FLOW_REDIS_MODE_RECORD_STORE) return TURBO_EINVAL;
+  memset(&task, 0, sizeof(task));
+  task.kind = FLOW_REDIS_TASK_RECORD_GET;
+  task.id = (const char *)key;
+  task.id_size = key_size;
+  task.record_visit = visit;
+  task.record_visit_ctx = visit_ctx;
+  turbo_mutex_lock(&adapter->lock);
+  rc = flow_redis_run(adapter, &task);
+  turbo_mutex_unlock(&adapter->lock);
+  return rc;
+}
+
+int flow_redis_store_client_create(const flow_redis_store_client_config_t *config,
+                                   flow_redis_store_client_t **out) {
+  flow_redis_adapter_t *adapter;
+  int rc;
+  if (!config || !out || !config->host || !config->host[0] || config->port == 0u ||
+      config->database < 0 || config->database > 15 || config->timeout_ms > INT_MAX) {
+    return TURBO_EINVAL;
+  }
+  *out = NULL;
+  adapter = flow_redis_adapter_create(config->host, config->port, config->username,
+                                      config->password, config->database, config->timeout_ms, &rc);
+  if (!adapter) return rc;
+  adapter->mode = FLOW_REDIS_MODE_FLOW_STORE;
+  *out = (flow_redis_store_client_t *)adapter;
+  return TURBO_OK;
+}
+
+void flow_redis_store_client_destroy(flow_redis_store_client_t *client) {
+  flow_redis_shutdown((flow_redis_adapter_t *)client);
+}
+
+int flow_redis_store_command(flow_redis_store_client_t *client, int argc, const char **argv,
+                             const size_t *lengths, flow_redis_store_reply_fn apply, void *ctx) {
+  flow_redis_adapter_t *adapter = (flow_redis_adapter_t *)client;
+  flow_redis_task_t task;
+  int rc;
+  if (!adapter || adapter->mode != FLOW_REDIS_MODE_FLOW_STORE || argc <= 0 || !argv || !apply)
+    return TURBO_EINVAL;
+  memset(&task, 0, sizeof(task));
+  task.kind = FLOW_REDIS_TASK_STORE_COMMAND;
+  task.command_argc = argc;
+  task.command_argv = argv;
+  task.command_lengths = lengths;
+  task.command_apply = apply;
+  task.command_apply_ctx = ctx;
+  turbo_mutex_lock(&adapter->lock);
+  rc = flow_redis_run(adapter, &task);
+  turbo_mutex_unlock(&adapter->lock);
+  return rc;
+}
+
 static int flow_redis_record_store_commit(void *ctx, const turbo_flow_record_mutation_t *mutations,
                                           size_t mutation_count) {
   flow_redis_adapter_t *adapter = (flow_redis_adapter_t *)ctx;
@@ -1550,8 +1651,8 @@ static int flow_redis_record_store_commit(void *ctx, const turbo_flow_record_mut
   return rc;
 }
 
-int turbo_flow_redis_record_store_create(const turbo_flow_redis_record_store_config_t *config,
-                                         turbo_flow_record_store_t *out) {
+int flow_redis_record_store_create(const turbo_flow_redis_record_store_config_t *config,
+                                   turbo_flow_record_store_t *out) {
   flow_redis_adapter_t *adapter;
   size_t max_key_size;
   size_t max_value_size;
@@ -1605,7 +1706,7 @@ int turbo_flow_redis_record_store_create(const turbo_flow_redis_record_store_con
   return TURBO_OK;
 }
 
-void turbo_flow_redis_record_store_destroy(turbo_flow_record_store_t *store) {
+void flow_redis_record_store_destroy(turbo_flow_record_store_t *store) {
   if (!store || store->size < sizeof(*store) || !store->ctx) return;
   flow_redis_shutdown(store->ctx);
   *store = (turbo_flow_record_store_t)TURBO_FLOW_RECORD_STORE_INIT;

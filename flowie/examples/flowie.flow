@@ -1,11 +1,8 @@
-source mqtt_packet_in adapter mqtt.endpoint
-stage mqtt_accept adapter queue.mqtt.accept
-source mqtt_accepted adapter queue.mqtt.accepted
-stage rules_route operation rules.apply resource mqtt.routing
-stage mqtt_fanout adapter mqtt.endpoint
-stage application_output adapter socket.application.output
+source admitted_publish_source adapter mqtt.endpoint
+stage message_policy_processor operation rules.apply resource mqtt.routing
+stage mqtt_delivery_sink adapter mqtt.endpoint
+stage application_data_sink adapter socket.application.output
 
 stage main {
-  mqtt_packet_in -> mqtt_accept
-  mqtt_accepted -> rules_route -> [mqtt_fanout, application_output]
+  admitted_publish_source -> message_policy_processor -> [mqtt_delivery_sink, application_data_sink]
 }

@@ -40,10 +40,21 @@ target_include_directories(
 target_link_libraries(
   ${TARGET_NAME}
   PUBLIC Flowie::Protocol TurboFlow::Flow TurboNet::CoroNet TurboUtils::Core)
-target_link_libraries(${TARGET_NAME} PRIVATE roaring::roaring)
+target_link_libraries(${TARGET_NAME} PRIVATE TurboFlow::FlowStore)
 install(FILES ${FLOWIE_HEADERS} DESTINATION include)
 
 if(BUILD_TESTING)
   add_subdirectory(tests)
   add_subdirectory(benchmarks)
+  if(FLOWIE_MQTT_RELEASE_GATE)
+    add_test(
+      NAME flowie_release_gate_manifest
+      COMMAND
+        ${CMAKE_COMMAND} "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+        "-DTEST_DIR=${CMAKE_BINARY_DIR}" -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyReleaseGate.cmake")
+    set_tests_properties(
+      flowie_release_gate_manifest
+      PROPERTIES LABELS "flowie;flowie-release;release-gate" TIMEOUT 30)
+  endif()
 endif()

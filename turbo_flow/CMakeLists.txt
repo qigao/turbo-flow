@@ -28,6 +28,7 @@ endif()
 file(GLOB TURBO_FLOW_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_record_store.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_domain.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_control.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_expr.h)

@@ -1,0 +1,17 @@
+services:
+  broker:
+    image: eclipse-mosquitto:2.0.22
+    restart: "no"
+    ports:
+      - "${FLOWIE_MQTT_FIXED_TCP_PORT:-1883}:1883"
+      - "${FLOWIE_MQTT_FIXED_TLS_PORT:-8883}:8883"
+      - "${FLOWIE_MQTT_FIXED_WS_PORT:-8083}:8083"
+      - "${FLOWIE_MQTT_FIXED_WSS_PORT:-8084}:8084"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ${FLOWIE_MQTT_INTEROP_CERT_DIR:?set FLOWIE_MQTT_INTEROP_CERT_DIR}:/mosquitto/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -p 1883 -V mqttv5 -t '$$SYS/broker/version' -C 1 -W 2 >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

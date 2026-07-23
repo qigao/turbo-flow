@@ -154,7 +154,7 @@ Data strategy and execution strategy are independent:
 - `exec coro lanes N pool N` selects the TurboUtils coroutine scheduler.
 - Adapter-owned CoroNet placement is not an executor. An adapter-backed stage
   remains `inline`; the adapter owner enters and serializes its CoroNet context.
-- RulesForge/TurboScript evaluation is an inline pure operation. A graph node
+- TurboFlow Policy expression evaluation is an inline pure operation. A graph node
   may explicitly choose the common thread or coroutine pool for parallel evaluation.
 - Executor-specific counts are fail-fast: other executor/count combinations are
   rejected instead of being ignored.
@@ -342,19 +342,43 @@ cannot overlay concrete adapter fields. Adapter creation copies its resolved
 configuration, and later endpoint changes use explicit owner commands rather
 than mutating profile state.
 
+## Provider, Message, and Graph Boundary
+
+Every protocol or storage provider owns its external representation and converts it at the
+adapter boundary. A decoder `frame`, HTTP request/response view, socket framing view, or Redis
+Stream entry is temporary provider state; it is not a graph message and cannot be retained across
+an asynchronous handoff. The adapter validates and materializes `turbo_flow_msg_t` with an owned
+buffer (or an explicit retained slice), then the graph may run zero or more stages and finally
+returns an owned message or settlement result to a provider sink.
+
+```text
+provider bytes/frame/view
+  -> provider validation and metadata normalization
+  -> turbo_flow_msg_t
+  -> optional graph stages (Policy, process, store)
+  -> provider sink or owner settlement
+```
+
+The graph does not become the owner of a protocol session, socket, MQTT ACK, Redis consumer group,
+or database transaction. Those owners expose typed operations and explicit commit results. A graph
+stage may filter, transform, route, delay, or persist the message only within its registered
+operation contract. FlowStore owns typed State, Index, Log, and TimeSeries facts outside the
+graph; asynchronous delivery remains a provider/executor responsibility rather than a hidden
+second source of truth.
+
 ## Product Assembly
 
 Every TurboFlow product uses the same application model:
 
 ```text
-YAML resources/adapters -> Graph source -> processors/subgraphs -> Graph sink
+YAML resources/adapters -> provider conversion -> Graph source -> processors/subgraphs -> Graph sink
                                   |
                          bounded TurboFlow data plane
 ```
 
 Trusted host code supplies a caller-owned `turbo_flow_product_provider_registry_t`.
 Adapter providers own native source, sink, and protocol-bridge construction;
-resource providers construct processors such as RulesForge and bind their typed
+resource providers construct processors such as TurboFlow Policy and bind their typed
 operations. `turbo_flow_product_preflight()` validates every resolved adapter
 kind before a provider callback or native side effect. After parsing,
 `turbo_flow_product_assemble_graph()` registers only resources and adapters
@@ -374,7 +398,7 @@ Implemented modules:
 
 | Module | Current behavior |
 | --- | --- |
-| `TurboFlow::Storage` | File source, file sink, append-log sink |
+| `TurboFlow::FlowStore` | Bounded in-memory State, Index, Log, and TimeSeries stores |
 | `TurboFlow::Codec` | Line/length framing and DataBind for TBE, JSON, CSV, XML |
 | `TurboFlow::Socket` | TCP, UDP, TLS, WS, WSS source/sink |
 | `TurboFlow::HttpClient` | HTTP transform and periodic GET source |
@@ -383,11 +407,10 @@ Implemented modules:
 | `TurboFlow::S3` | PutObject sink and periodic GetObject source |
 | `TurboFlow::Email` | SMTP sink, POP3 source, and MIME parse/extract/encode transforms |
 | `TurboFlow::PostgreSQL` | Parameterized sink and query/rowset source |
-| `TurboFlow::Redis` | Redis Stream source/sink and binary-safe Data SET/GET |
+| `TurboFlow::Redis` | Redis Stream source/sink and Redis Hash record store |
 | `TurboFlow::FMQ` | CoroNet PUB/SUB, XPUB/XSUB, PUSH/PULL, ROUTER/DEALER, REQ/REP, and PAIR |
 | `TurboFlow::Observe` | Opt-in message/stage/adapter metrics and bounded summary sink |
 | `TurboFlow::Schedule` | Interval, one-shot, bounded-repeat, and local-time cron sources |
-| `TurboFlow::Queue` | Shared bounded in-memory source/sink boundary with explicit ack |
 
 `TurboFlow::Http` remains a compatibility aggregate for the split HTTP client
 and server targets. HTTP continues to use the existing TurboHTTP/Iris native
@@ -411,9 +434,8 @@ operation exports, plus already-registered dependency ranges. Typed operation
 providers and native adapters can be bound to the module that owns the exported operation. The
 catalog is validation and read-only discovery metadata: it is not a loader,
 resource factory, or Graph DSL construct. Production registrations now include
-RulesForge, native HTTP/RPC client/server, FMQ pattern operations, Flowie MQTT
-ingress/egress, Queue, and file/directory/SQLite Storage. Queue and Storage bind
-their adapter operations to explicit versioned resource primitives.
+TurboFlow Policy, native HTTP/RPC client/server, FMQ pattern operations, and Flowie MQTT
+ingress/egress. FlowStore remains a typed fact-store subsystem rather than an adapter operation.
 
 FMQ uses a bounded versioned TurboFlow protocol over CoroNet TCP/TLS. It is
 ZeroMQ-like at the messaging-pattern level but is not ZeroMQ wire compatible.
@@ -424,8 +446,8 @@ explicit graph stages.
 ## Build Components
 
 The historical full build remains the default. Set
-`TURBO_FLOW_BUILD_ADAPTERS=OFF` for a core-only build; this disables storage,
-codec, and every external adapter. A core-only configure finds TurboUtils and
+`TURBO_FLOW_BUILD_ADAPTERS=OFF` for a core-only build; this disables codec and
+every external adapter. A core-only configure finds TurboUtils and
 its declared base64 runtime dependency. `TurboFlow::Flow` publicly links only
 `TurboUtils::Core` and privately embeds the repository `vendor/mir` static
 target; no MIR type enters the installed public headers.
@@ -433,7 +455,7 @@ target; no MIR type enters the installed public headers.
 With the master switch enabled, components are independently selected through:
 
 ```text
-TURBO_FLOW_BUILD_STORAGE
+TURBO_FLOW_BUILD_STORE
 TURBO_FLOW_BUILD_CODEC
 TURBO_FLOW_BUILD_SOCKET
 TURBO_FLOW_BUILD_HTTP_CLIENT
@@ -444,7 +466,6 @@ TURBO_FLOW_BUILD_EMAIL
 TURBO_FLOW_BUILD_FMQ
 TURBO_FLOW_BUILD_OBSERVE
 TURBO_FLOW_BUILD_SCHEDULE
-TURBO_FLOW_BUILD_QUEUE
 ```
 
 TurboNet, Threads, and TurboHTTP are discovered only when an enabled component
@@ -461,11 +482,10 @@ ABI with atomic aggregate counters and bounded per-stage series; its explicit
 summary sink defaults to payload redaction. Ownership and logging behavior are
 documented in `observe/README.md`.
 
-`TurboFlow::Queue` keeps queue state outside core and can connect adapters in
-different flows. Its source acknowledges only after synchronous downstream
-success; failures are requeued without an implicit retry loop. Capacity,
-payload size, full policy, and finite blocking timeout are configured on the
-host-owned queue. See `flowqueue/README.md` for ownership and shutdown rules.
+`TurboFlow::FlowStore` keeps typed fact state outside core and outside Flowie. State and Index use
+bounded HashMap-backed ownership; Log and TimeSeries use bounded ordered storage. The routing
+policy selects memory or Redis from explicit capacity, frequency, retention, and durability
+requirements and fails when the selected backend is unavailable.
 
 TurboNet exports `TurboNet::MimeParser`, backed by `turbonet/email/mime_parser`.
 `TurboFlow::Email` reuses it through registered MIME parser, owned-extract, and

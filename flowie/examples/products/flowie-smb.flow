@@ -1,0 +1,10 @@
+source admitted_publish_source adapter mqtt.endpoint
+stage mqtt_publish_persist adapter pg.mqtt.publish
+source durable_publish_source adapter pg.mqtt.replay
+stage message_policy_processor operation rules.apply resource mqtt.routing
+stage mqtt_delivery_sink adapter mqtt.endpoint
+
+stage main {
+  admitted_publish_source -> mqtt_publish_persist
+  durable_publish_source -> message_policy_processor -> mqtt_delivery_sink
+}

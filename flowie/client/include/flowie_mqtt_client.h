@@ -24,7 +24,8 @@ extern "C" {
 
 #define FLOWIE_MQTT_CLIENT_ABI_V5 5u
 #define FLOWIE_MQTT_CLIENT_ABI_V6 6u
-#define FLOWIE_MQTT_CLIENT_ABI_CURRENT FLOWIE_MQTT_CLIENT_ABI_V6
+#define FLOWIE_MQTT_CLIENT_ABI_V7 7u
+#define FLOWIE_MQTT_CLIENT_ABI_CURRENT FLOWIE_MQTT_CLIENT_ABI_V7
 #define FLOWIE_MQTT_CLIENT_DEFAULT_PORT 1883
 #define FLOWIE_MQTT_CLIENT_DEFAULT_TLS_PORT 8883
 #define FLOWIE_MQTT_CLIENT_DEFAULT_TIMEOUT_MS 30000u
@@ -119,6 +120,32 @@ typedef void (*flowie_mqtt_client_completion_fn)(flowie_mqtt_client_t *client, i
 typedef void (*flowie_mqtt_client_error_fn)(flowie_mqtt_client_t *client, int status,
                                             void *user_data);
 
+/** One synchronous response to an MQTT 5 Continue Authentication challenge. */
+typedef struct flowie_mqtt_client_auth_response_s {
+  size_t size;
+  uint32_t abi_version;
+  /** Must be Continue Authentication (0x18). */
+  uint8_t reason_code;
+  /**
+   * Caller-owned storage. It must remain valid until the next callback for this client begins;
+   * callback-local stack storage is not valid here.
+   */
+  flowie_mqtt_span_t properties;
+} flowie_mqtt_client_auth_response_t;
+
+#define FLOWIE_MQTT_CLIENT_AUTH_RESPONSE_INIT                                                      \
+  {sizeof(flowie_mqtt_client_auth_response_t), FLOWIE_MQTT_CLIENT_ABI_CURRENT, 0x18u, {NULL, 0u}}
+
+/**
+ * Produce the next MQTT 5 AUTH response on the client worker thread. `challenge` is borrowed only
+ * for this call. Response properties follow the longer lifetime documented on
+ * flowie_mqtt_client_auth_response_t. Returning an error fails closed and terminates the current
+ * CONNECT or re-authentication exchange.
+ */
+typedef int (*flowie_mqtt_client_auth_challenge_fn)(
+    flowie_mqtt_client_t *client, const flowie_mqtt_control_packet_view_t *challenge,
+    flowie_mqtt_client_auth_response_t *response, void *user_data);
+
 typedef struct flowie_mqtt_client_config_s {
   size_t size;
   uint32_t abi_version;
@@ -148,6 +175,10 @@ typedef struct flowie_mqtt_client_config_s {
   size_t command_queue_max_bytes;
   /** ABI v6: used only by TLS/WSS; all strings are copied. */
   flowie_mqtt_client_tls_config_t tls;
+  /** ABI v7: required when CONNECT or re-authentication can receive AUTH 0x18. */
+  flowie_mqtt_client_auth_challenge_fn on_auth_challenge;
+  /** ABI v7: completion for flowie_mqtt_client_authenticate(). */
+  flowie_mqtt_client_completion_fn on_auth;
 } flowie_mqtt_client_config_t;
 
 #define FLOWIE_MQTT_CLIENT_CONFIG_INIT                                                             \
@@ -171,7 +202,9 @@ typedef struct flowie_mqtt_client_config_s {
    NULL,                                                                                           \
    FLOWIE_MQTT_CLIENT_DEFAULT_COMMAND_QUEUE_CAPACITY,                                              \
    FLOWIE_MQTT_CLIENT_DEFAULT_COMMAND_QUEUE_BYTES,                                                 \
-   {NULL, NULL, NULL, NULL}}
+   {NULL, NULL, NULL, NULL},                                                                       \
+   NULL,                                                                                           \
+   NULL}
 
 /**
  * Create a callback-driven client. The DLL owns its CoroNet context, worker
@@ -204,8 +237,9 @@ FLOWIE_MQTT_CLIENT_API int flowie_mqtt_client_is_connected(const flowie_mqtt_cli
 FLOWIE_MQTT_CLIENT_API int flowie_mqtt_client_connect(flowie_mqtt_client_t *client,
                                                       const flowie_mqtt_connect_packet_t *packet);
 /** Atomically admits all topics or none; topics.count must be greater than zero. */
-FLOWIE_MQTT_CLIENT_API int flowie_mqtt_client_publish(flowie_mqtt_client_t *client,
-                                                      const flowie_mqtt_client_publish_topic_vec_t *topics);
+FLOWIE_MQTT_CLIENT_API int
+flowie_mqtt_client_publish(flowie_mqtt_client_t *client,
+                           const flowie_mqtt_client_publish_topic_vec_t *topics);
 FLOWIE_MQTT_CLIENT_API int
 flowie_mqtt_client_subscribe(flowie_mqtt_client_t *client,
                              const flowie_mqtt_subscribe_packet_t *packet);
@@ -213,6 +247,13 @@ FLOWIE_MQTT_CLIENT_API int
 flowie_mqtt_client_unsubscribe(flowie_mqtt_client_t *client,
                                const flowie_mqtt_unsubscribe_packet_t *packet);
 FLOWIE_MQTT_CLIENT_API int flowie_mqtt_client_ping(flowie_mqtt_client_t *client);
+/**
+ * Start MQTT 5 re-authentication with AUTH reason 0x19. Properties must contain the selected
+ * Authentication Method and may contain Authentication Data. Completion receives the final
+ * successful AUTH packet; protocol, callback, or transport failures close the connection.
+ */
+FLOWIE_MQTT_CLIENT_API int flowie_mqtt_client_authenticate(flowie_mqtt_client_t *client,
+                                                           flowie_mqtt_span_t properties);
 /**
  * Complete after the transport is closed. EOF/connection-reset observed while
  * performing this no-response MQTT shutdown is treated as successful closure.

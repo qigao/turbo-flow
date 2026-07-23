@@ -6667,7 +6667,7 @@ spec("flow_fmq_application") {
     turbo_flow_fmq_app_destroy(publisher);
   }
 
-  it("sends and receives through a graph-native PAIR facade") {
+  it("sends and receives through a PAIR facade with a minimal graph bridge") {
     unsigned short port = fmq_test_port();
     turbo_flow_fmq_config_t bound_config;
     turbo_flow_fmq_config_t connected_config;

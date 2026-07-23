@@ -4,12 +4,11 @@
 #include "turbo_error.h"
 #include "turbo_str.h"
 
-#include <stdlib.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
-static turbo_flow_rule_action_t data_action(turbo_flow_rule_action_kind_t kind,
-                                            const char *key) {
+static turbo_flow_rule_action_t data_action(turbo_flow_rule_action_kind_t kind, const char *key) {
   turbo_flow_rule_action_t action = TURBO_FLOW_RULE_ACTION_INIT;
   action.kind = kind;
   if (key) memcpy(action.key, key, strlen(key) + 1u);
@@ -75,13 +74,13 @@ static const turbo_flow_expr_schema_t RULE_PROVIDER_SCHEMA = {RULE_PROVIDER_FIEL
 
 static int provide_rule_facts(const turbo_flow_msg_t *message,
                               const turbo_flow_expr_schema_t *schema,
-                              const turbo_flow_expr_value_t **values_out,
-                              size_t *value_count_out, void *ctx) {
+                              const turbo_flow_expr_value_t **values_out, size_t *value_count_out,
+                              void *ctx) {
   rule_facts_provider_probe_t *probe = (rule_facts_provider_probe_t *)ctx;
   if (!message || !schema || !schema->fields || schema->field_count != 1u ||
       strcmp(schema->fields[0].path, "group.level") != 0 ||
-      schema->fields[0].type != TURBO_FLOW_EXPR_TYPE_I64 || !values_out ||
-      !value_count_out || !probe) {
+      schema->fields[0].type != TURBO_FLOW_EXPR_TYPE_I64 || !values_out || !value_count_out ||
+      !probe) {
     return TURBO_EPROTO;
   }
   probe->calls += 1;
@@ -113,9 +112,15 @@ typedef struct rule_projection_materializer_probe_s {
   turbo_flow_expr_value_t values[1];
 } rule_projection_materializer_probe_t;
 
-static const turbo_flow_data_schema_t RULE_PROJECTION_SCHEMA = {
-    sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
-    "rules.message", "RuleMessage", "rules.message.v1", 31u, 1u, NULL};
+static const turbo_flow_data_schema_t RULE_PROJECTION_SCHEMA = {sizeof(turbo_flow_data_schema_t),
+                                                                TURBO_FLOW_DOMAIN_DATA,
+                                                                TURBO_FLOW_DATA_ENCODING_JSON,
+                                                                "rules.message",
+                                                                "RuleMessage",
+                                                                "rules.message.v1",
+                                                                31u,
+                                                                1u,
+                                                                NULL};
 
 static void destroy_rule_projection(void *ptr, void *ctx) {
   (void)ctx;
@@ -133,19 +138,20 @@ static int clone_rule_projection(const void *value, void *ctx, void **out) {
   return TURBO_OK;
 }
 
-static int materialize_rule_projection(
-    const void *projection, const turbo_flow_data_schema_t *projection_schema,
-    const turbo_flow_expr_schema_t *rule_schema, const turbo_flow_expr_value_t **values_out,
-    size_t *value_count_out, void *ctx) {
+static int materialize_rule_projection(const void *projection,
+                                       const turbo_flow_data_schema_t *projection_schema,
+                                       const turbo_flow_expr_schema_t *rule_schema,
+                                       const turbo_flow_expr_value_t **values_out,
+                                       size_t *value_count_out, void *ctx) {
   const rule_projection_value_t *value = (const rule_projection_value_t *)projection;
-  rule_projection_materializer_probe_t *probe =
-      (rule_projection_materializer_probe_t *)ctx;
+  rule_projection_materializer_probe_t *probe = (rule_projection_materializer_probe_t *)ctx;
   if (!value || !projection_schema || !rule_schema || !rule_schema->fields ||
-      rule_schema->field_count != 1u || strcmp(projection_schema->schema_name, "rules.message") != 0 ||
+      rule_schema->field_count != 1u ||
+      strcmp(projection_schema->schema_name, "rules.message") != 0 ||
       strcmp(projection_schema->type_name, "RuleMessage") != 0 ||
       strcmp(rule_schema->fields[0].path, "group.level") != 0 ||
-      rule_schema->fields[0].type != TURBO_FLOW_EXPR_TYPE_I64 || !values_out ||
-      !value_count_out || !probe) {
+      rule_schema->fields[0].type != TURBO_FLOW_EXPR_TYPE_I64 || !values_out || !value_count_out ||
+      !probe) {
     return TURBO_EPROTO;
   }
   probe->calls += 1;
@@ -157,10 +163,38 @@ static int materialize_rule_projection(
 }
 
 spec("versioned rule program") {
+  it("evaluates an absent optional schema fact as null") {
+    const turbo_flow_expr_schema_field_t field = {"optional.value", TURBO_FLOW_EXPR_TYPE_STRING,
+                                                  77u};
+    const turbo_flow_expr_schema_t schema = {&field, 1u};
+    const turbo_flow_rule_t rule = {"optional.value == null", 0u,
+                                    data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL)};
+    turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
+    turbo_flow_rule_processor_t *processor = NULL;
+    turbo_flow_rule_action_t action;
+    turbo_flow_rule_result_t result = TURBO_FLOW_RULE_RESULT_INIT;
+    turbo_flow_rule_facts_t facts = TURBO_FLOW_RULE_FACTS_INIT;
+    turbo_flow_expr_value_t value = {TURBO_FLOW_EXPR_TYPE_NULL};
+    turbo_flow_msg_t message;
+
+    config.schema = &schema;
+    check_int_eq(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
+    turbo_flow_msg_init(&message);
+    facts.message = &message;
+    facts.schema = &schema;
+    facts.values = &value;
+    facts.value_count = 1u;
+    check_int_eq(turbo_flow_rule_processor_evaluate(processor, &facts, &action, 1u, &result),
+                 TURBO_OK);
+    check_size_eq(result.emitted, 1u);
+    check_int_eq(action.kind, TURBO_FLOW_RULE_ACTION_DROP);
+    turbo_flow_msg_cleanup(&message);
+    turbo_flow_rule_processor_destroy(processor);
+  }
+
   it("rejects a rule program without stable resource identity") {
     turbo_flow_rule_processor_t *processor = NULL;
-    const turbo_flow_rule_t rule = {
-        "true", 0u, data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL)};
+    const turbo_flow_rule_t rule = {"true", 0u, data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL)};
     turbo_flow_rule_processor_config_t config = TURBO_FLOW_RULE_PROCESSOR_CONFIG_INIT;
 
     config.rules = &rule;
@@ -172,26 +206,25 @@ spec("versioned rule program") {
   }
 
   it("creates a strict bounded RuleSet from a resolved YAML channel") {
-    static const char yaml[] =
-        "version: 1\n"
-        "profiles:\n"
-        "  app:\n"
-        "    rules: routing\n"
-        "channels:\n"
-        "  routing:\n"
-        "    kind: rule_set\n"
-        "    config:\n"
-        "      resource_uid: rule-set:routing\n"
-        "      owner_name: rules.routing\n"
-        "      mode: all_matches\n"
-        "      max_output_actions: 4\n"
-        "      rules:\n"
-        "        - when: group.level > 1\n"
-        "          action: route\n"
-        "          key: elevated\n"
-        "        - when: group.level < 0\n"
-        "          action: drop\n"
-        "adapters: {}\n";
+    static const char yaml[] = "version: 1\n"
+                               "profiles:\n"
+                               "  app:\n"
+                               "    rules: routing\n"
+                               "channels:\n"
+                               "  routing:\n"
+                               "    kind: rule_set\n"
+                               "    config:\n"
+                               "      resource_uid: rule-set:routing\n"
+                               "      owner_name: rules.routing\n"
+                               "      mode: all_matches\n"
+                               "      max_output_actions: 4\n"
+                               "      rules:\n"
+                               "        - when: group.level > 1\n"
+                               "          action: route\n"
+                               "          key: elevated\n"
+                               "        - when: group.level < 0\n"
+                               "          action: drop\n"
+                               "adapters: {}\n";
     turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_rule_processor_t *processor = NULL;
@@ -202,8 +235,7 @@ spec("versioned rule program") {
     turbo_flow_msg_t message;
     rule_facts_provider_probe_t probe = {0};
 
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved,
-                                                &config_error),
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &config_error),
                  TURBO_OK);
     check_int_eq(turbo_flow_rule_processor_create_resolved(
                      resolved, "routing", &RULE_PROVIDER_SCHEMA, provide_rule_facts, &probe,
@@ -242,11 +274,11 @@ spec("versioned rule program") {
       turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
       turbo_flow_resolved_config_t *resolved = NULL;
       turbo_flow_rule_processor_t *processor = NULL;
-      check_int_eq(turbo_flow_config_resolve_yaml(documents[i], lengths[i], &resolved,
-                                                  &config_error),
-                   TURBO_OK);
-      check_int_eq(turbo_flow_rule_processor_create_resolved(
-                       resolved, "routing", NULL, NULL, NULL, &processor, &config_error),
+      check_int_eq(
+          turbo_flow_config_resolve_yaml(documents[i], lengths[i], &resolved, &config_error),
+          TURBO_OK);
+      check_int_eq(turbo_flow_rule_processor_create_resolved(resolved, "routing", NULL, NULL, NULL,
+                                                             &processor, &config_error),
                    TURBO_EINVAL);
       check_null(processor);
       check_str_contains(config_error.path, "$.channels.routing.config");
@@ -293,15 +325,13 @@ spec("versioned rule program") {
     turbo_flow_msg_t message;
     turbo_flow_rule_data_decision_t decision = TURBO_FLOW_RULE_DATA_DECISION_INIT;
     turbo_flow_rule_action_t actions[] = {
-        mutate_flags(5u, 7u),
-        data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "priority"),
+        mutate_flags(5u, 7u), data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "priority"),
         data_action(TURBO_FLOW_RULE_ACTION_BATCH_KEY, "group-7"),
         data_action(TURBO_FLOW_RULE_ACTION_RETRY_CLASS, "transient")};
     turbo_flow_rule_action_t status_action =
         data_action(TURBO_FLOW_RULE_ACTION_MUTATE_PRIVATE, NULL);
-    turbo_flow_rule_action_t conflict[] = {
-        data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL),
-        data_action(TURBO_FLOW_RULE_ACTION_DEAD_LETTER, NULL)};
+    turbo_flow_rule_action_t conflict[] = {data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL),
+                                           data_action(TURBO_FLOW_RULE_ACTION_DEAD_LETTER, NULL)};
 
     conflict[1].status = TURBO_EIO;
     status_action.private_field = TURBO_FLOW_RULE_PRIVATE_MSG_STATUS;
@@ -334,8 +364,8 @@ spec("versioned rule program") {
     turbo_flow_msg_t message;
     int selected = 0;
     int skipped = 0;
-    const turbo_flow_rule_t rule = {
-        "msg.type == 9", 0u, data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "selected")};
+    const turbo_flow_rule_t rule = {"msg.type == 9", 0u,
+                                    data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "selected")};
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     check_not_null(flow);
@@ -364,11 +394,12 @@ spec("versioned rule program") {
       check_int_eq(metadata.kind, TURBO_FLOW_RESOURCE_RULE_SET);
       check_str_eq(metadata.uid, config.resource_uid);
       check_str_eq(metadata.owner_name, config.owner_name);
-      check_int_eq(turbo_flow_resource_document_at(
-                       flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
-                   TURBO_OK);
+      check_int_eq(
+          turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
+          TURBO_OK);
       check_str_eq(document.schema->type_name, "RuleSetStatus");
-      json = tstr_new_len(mem_buffer_const_data(document.payload), mem_buffer_used(document.payload));
+      json =
+          tstr_new_len(mem_buffer_const_data(document.payload), mem_buffer_used(document.payload));
       check_not_null(json);
       check_not_null(strstr(json, "\"evaluations\":\"1\""));
       check_null(strstr(json, "msg.type"));
@@ -395,23 +426,21 @@ spec("versioned rule program") {
     rule_operation_probe_t probe = {0};
     const turbo_flow_stage_plan_t *stage;
     const turbo_flow_operation_descriptor_t *operation;
-    const turbo_flow_rule_t rule = {
-        "msg.type == 7", 0u, mutate_flags(4u, 4u)};
+    const turbo_flow_rule_t rule = {"msg.type == 7", 0u, mutate_flags(4u, 4u)};
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     check_not_null(flow);
     check_int_eq(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
     check_int_eq(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_int_eq(turbo_flow_rule_register_data_operation(flow, "rules.test", processor),
-                 TURBO_OK);
+    check_int_eq(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), TURBO_OK);
     check_int_eq(turbo_flow_register_stage_ex(flow, "sink", observe_rule_operation, &probe, NULL),
                  TURBO_OK);
     check_not_null(turbo_flow_find_primitive(flow, "rules.test"));
     check_not_null(turbo_flow_find_operation(flow, TURBO_FLOW_RULE_APPLY_OPERATION));
-    check_not_null(turbo_flow_find_module(flow, "rules.forge"));
-    check_str_eq(turbo_flow_operation_provider_module(
-                     flow, TURBO_FLOW_RULE_APPLY_OPERATION, "rules.test"),
-                 "rules.forge");
+    check_not_null(turbo_flow_find_module(flow, TURBO_FLOW_RULE_MODULE));
+    check_str_eq(
+        turbo_flow_operation_provider_module(flow, TURBO_FLOW_RULE_APPLY_OPERATION, "rules.test"),
+        TURBO_FLOW_RULE_MODULE);
     check_int_eq(turbo_flow_compile(flow), TURBO_OK);
 
     stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "apply"));
@@ -445,11 +474,9 @@ spec("versioned rule program") {
                                  "stage main {\n"
                                  "  input -> apply -> sink\n"
                                  "}\n";
-    const turbo_flow_expr_schema_field_t field = {
-        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+    const turbo_flow_expr_schema_field_t field = {"group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     const turbo_flow_expr_schema_t schema = {&field, 1u};
-    const turbo_flow_rule_t rule = {
-        "group.level > 3", 0u, mutate_flags(8u, 8u)};
+    const turbo_flow_rule_t rule = {"group.level > 3", 0u, mutate_flags(8u, 8u)};
     rule_facts_provider_probe_t facts_probe = {0};
     rule_operation_probe_t operation_probe = {0};
     turbo_flow_rule_processor_t *processor = NULL;
@@ -463,11 +490,10 @@ spec("versioned rule program") {
     check_not_null(flow);
     check_int_eq(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
     check_int_eq(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_int_eq(turbo_flow_rule_register_data_operation(flow, "rules.test", processor),
-                 TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "sink", observe_rule_operation,
-                                              &operation_probe, NULL),
-                 TURBO_OK);
+    check_int_eq(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), TURBO_OK);
+    check_int_eq(
+        turbo_flow_register_stage_ex(flow, "sink", observe_rule_operation, &operation_probe, NULL),
+        TURBO_OK);
     check_int_eq(turbo_flow_compile(flow), TURBO_OK);
     check_int_eq(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&message);
@@ -489,17 +515,14 @@ spec("versioned rule program") {
                                  "stage main {\n"
                                  "  input -> apply -> sink\n"
                                  "}\n";
-    const turbo_flow_expr_schema_field_t field = {
-        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+    const turbo_flow_expr_schema_field_t field = {"group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     const turbo_flow_expr_schema_t schema = {&field, 1u};
-    const turbo_flow_rule_t rule = {
-        "group.level > 3", 0u, mutate_flags(8u, 8u)};
+    const turbo_flow_rule_t rule = {"group.level > 3", 0u, mutate_flags(8u, 8u)};
     turbo_flow_rule_projection_provider_t projection_provider =
         TURBO_FLOW_RULE_PROJECTION_PROVIDER_INIT;
     rule_projection_materializer_probe_t materializer_probe = {0};
     rule_operation_probe_t operation_probe = {0};
-    rule_projection_value_t *projection =
-        (rule_projection_value_t *)malloc(sizeof(*projection));
+    rule_projection_value_t *projection = (rule_projection_value_t *)malloc(sizeof(*projection));
     turbo_flow_rule_processor_t *processor = NULL;
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
     turbo_flow_t *flow = turbo_flow_create();
@@ -515,11 +538,10 @@ spec("versioned rule program") {
     check_not_null(flow);
     check_int_eq(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
     check_int_eq(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_int_eq(turbo_flow_rule_register_data_operation(flow, "rules.test", processor),
-                 TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "sink", observe_rule_operation,
-                                              &operation_probe, NULL),
-                 TURBO_OK);
+    check_int_eq(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), TURBO_OK);
+    check_int_eq(
+        turbo_flow_register_stage_ex(flow, "sink", observe_rule_operation, &operation_probe, NULL),
+        TURBO_OK);
     check_int_eq(turbo_flow_compile(flow), TURBO_OK);
     check_int_eq(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&message);
@@ -540,8 +562,7 @@ spec("versioned rule program") {
   }
 
   it("rejects opaque messages at the projection facts boundary") {
-    const turbo_flow_expr_schema_field_t field = {
-        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+    const turbo_flow_expr_schema_field_t field = {"group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     const turbo_flow_expr_schema_t schema = {&field, 1u};
     turbo_flow_rule_projection_provider_t projection_provider =
         TURBO_FLOW_RULE_PROJECTION_PROVIDER_INIT;
@@ -553,8 +574,8 @@ spec("versioned rule program") {
     projection_provider.materialize = materialize_rule_projection;
     projection_provider.ctx = &materializer_probe;
     turbo_flow_msg_init(&message);
-    check_int_eq(turbo_flow_rule_projection_facts_provider(
-                     &message, &schema, &values, &value_count, &projection_provider),
+    check_int_eq(turbo_flow_rule_projection_facts_provider(&message, &schema, &values, &value_count,
+                                                           &projection_provider),
                  TURBO_ENOENT);
     check_null(values);
     check_size_eq(value_count, 0u);
@@ -563,11 +584,9 @@ spec("versioned rule program") {
   }
 
   it("rejects schema-backed rules.apply without a facts provider") {
-    const turbo_flow_expr_schema_field_t field = {
-        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+    const turbo_flow_expr_schema_field_t field = {"group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     const turbo_flow_expr_schema_t schema = {&field, 1u};
-    const turbo_flow_rule_t rule = {
-        "group.level > 3", 0u, mutate_flags(8u, 8u)};
+    const turbo_flow_rule_t rule = {"group.level > 3", 0u, mutate_flags(8u, 8u)};
     turbo_flow_rule_processor_t *processor = NULL;
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
     turbo_flow_t *flow = turbo_flow_create();
@@ -589,11 +608,9 @@ spec("versioned rule program") {
                                  "stage main {\n"
                                  "  input -> apply\n"
                                  "}\n";
-    const turbo_flow_expr_schema_field_t field = {
-        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+    const turbo_flow_expr_schema_field_t field = {"group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     const turbo_flow_expr_schema_t schema = {&field, 1u};
-    const turbo_flow_rule_t rule = {
-        "group.level > 3", 0u, mutate_flags(8u, 8u)};
+    const turbo_flow_rule_t rule = {"group.level > 3", 0u, mutate_flags(8u, 8u)};
     turbo_flow_rule_processor_t *processor = NULL;
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
     turbo_flow_t *flow = turbo_flow_create();
@@ -604,8 +621,7 @@ spec("versioned rule program") {
     check_not_null(flow);
     check_int_eq(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
     check_int_eq(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_int_eq(turbo_flow_rule_register_data_operation(flow, "rules.test", processor),
-                 TURBO_OK);
+    check_int_eq(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), TURBO_OK);
     check_int_eq(turbo_flow_compile(flow), TURBO_OK);
     check_int_eq(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&message);
@@ -628,8 +644,7 @@ spec("versioned rule program") {
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_msg_t message;
     int sink = 0;
-    const turbo_flow_rule_t rule = {
-        "true", 0u, data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL)};
+    const turbo_flow_rule_t rule = {"true", 0u, data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL)};
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     check_not_null(flow);
@@ -659,8 +674,8 @@ spec("versioned rule program") {
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_msg_t message;
     int sink = 0;
-    const turbo_flow_rule_t rule = {
-        "true", 0u, data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "missing")};
+    const turbo_flow_rule_t rule = {"true", 0u,
+                                    data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "missing")};
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     check_not_null(flow);
@@ -688,8 +703,7 @@ spec("versioned rule program") {
                                  "}\n";
     turbo_flow_rule_processor_t *processor = NULL;
     turbo_flow_t *flow = turbo_flow_create();
-    const turbo_flow_rule_t rule = {
-        "true", 0u, data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL)};
+    const turbo_flow_rule_t rule = {"true", 0u, data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL)};
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     check_not_null(flow);
@@ -711,10 +725,10 @@ spec("versioned rule program") {
     turbo_flow_expr_schema_t schema = {&field, 1u};
     turbo_flow_expr_value_t value;
     turbo_flow_rule_facts_t facts = {sizeof(facts), NULL, &schema, &value, 1u};
-    const turbo_flow_rule_t unknown = {
-        "group.unknown == 1", 0u, data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL)};
-    const turbo_flow_rule_t typed = {
-        "group.level > 3", 0u, data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "high")};
+    const turbo_flow_rule_t unknown = {"group.unknown == 1", 0u,
+                                       data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL)};
+    const turbo_flow_rule_t typed = {"group.level > 3", 0u,
+                                     data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "high")};
     turbo_flow_rule_processor_config_t config = data_config(&unknown, 1u);
 
     memset(&error, 0, sizeof(error));
@@ -735,16 +749,14 @@ spec("versioned rule program") {
   it("requires evaluation facts to match the compiled schema identity") {
     turbo_flow_rule_processor_t *processor = NULL;
     turbo_flow_rule_action_t action;
-    turbo_flow_expr_schema_field_t compiled_field = {
-        "group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
-    turbo_flow_expr_schema_field_t wrong_field = {
-        "group.rank", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+    turbo_flow_expr_schema_field_t compiled_field = {"group.level", TURBO_FLOW_EXPR_TYPE_I64, 9u};
+    turbo_flow_expr_schema_field_t wrong_field = {"group.rank", TURBO_FLOW_EXPR_TYPE_I64, 9u};
     turbo_flow_expr_schema_t compiled_schema = {&compiled_field, 1u};
     turbo_flow_expr_schema_t wrong_schema = {&wrong_field, 1u};
     turbo_flow_expr_value_t value = {TURBO_FLOW_EXPR_TYPE_I64, {.i64 = 7}};
     turbo_flow_rule_facts_t facts = {sizeof(facts), NULL, &wrong_schema, &value, 1u};
-    const turbo_flow_rule_t rule = {
-        "group.level > 3", 0u, data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "high")};
+    const turbo_flow_rule_t rule = {"group.level > 3", 0u,
+                                    data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "high")};
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     config.schema = &compiled_schema;
@@ -805,16 +817,14 @@ spec("versioned rule program") {
     check_int_eq(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
     check_int_eq(turbo_flow_rule_processor_evaluate(processor, &facts, &proposal, 1u, &result),
                  TURBO_OK);
-    authority.allowed_command_mask =
-        UINT32_C(1) << TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL;
+    authority.allowed_command_mask = UINT32_C(1) << TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL;
     authority.observed_generation = 11u;
     memcpy(authority.target_uid, uid, sizeof(uid));
     check_int_eq(turbo_flow_rule_authorize_command(&proposal, &authority, &command), TURBO_EBUSY);
     authority.observed_generation = 12u;
     authority.allowed_command_mask = 0u;
     check_int_eq(turbo_flow_rule_authorize_command(&proposal, &authority, &command), TURBO_EPERM);
-    authority.allowed_command_mask =
-        UINT32_C(1) << TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL;
+    authority.allowed_command_mask = UINT32_C(1) << TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL;
     check_int_eq(turbo_flow_rule_authorize_command(&proposal, &authority, &command), TURBO_OK);
     check_int_eq(command.kind, TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL);
     check_str_eq(command.target_uid, uid);

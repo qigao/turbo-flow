@@ -108,6 +108,7 @@ if(TURBO_FLOW_BUILD_HTTP_SERVER)
              TurboNet::CoroNet TurboUtils::Core TurboUtils::TinyTest OpenSSL::Crypto
         INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
         FOLDER "flowie/control/tests")
+      cmake_target_enable_boringssl_linkage(test_flowie_control_https_integration)
       target_compile_definitions(
         test_flowie_control_https_integration
         PRIVATE FLOWIE_CONTROL_EXECUTABLE="$<TARGET_FILE:flowie-control>")
@@ -174,7 +175,8 @@ if(BUILD_TESTS)
     INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
     FOLDER "flowie/control/tests")
   set_tests_properties(test_flowie_control_auth_cache
-                       PROPERTIES LABELS "flowie;control-plane;security-contract")
+                       PROPERTIES LABELS
+                                  "flowie;control-plane;security-contract;mqtt-security")
   cmake_add_test(
     test_flowie_control_principal_cache
     SOURCES tests/test_flowie_control_principal_cache.c
@@ -198,7 +200,8 @@ if(BUILD_TESTS)
     INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
     FOLDER "flowie/control/tests")
   set_tests_properties(test_flowie_control_auth_service
-                       PROPERTIES LABELS "flowie;control-plane;security-contract")
+                       PROPERTIES LABELS
+                                  "flowie;control-plane;security-contract;mqtt-security")
   cmake_add_test(
     test_flowie_control_management_service
     SOURCES tests/test_flowie_control_management_service.c

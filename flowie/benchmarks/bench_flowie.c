@@ -1,3 +1,4 @@
+#include "flowie_rule_internal.h"
 #include "flowie_security_internal.h"
 #include "flowie_session_internal.h"
 #include "flowie_test_socket.h"
@@ -27,6 +28,8 @@
 #define FLOWIE_BENCH_CANDIDATE_MATCH_SAMPLES 256u
 #define FLOWIE_BENCH_SECURITY_SAMPLES 1000u
 #define FLOWIE_BENCH_SECURITY_OPS_PER_SAMPLE 64u
+#define FLOWIE_BENCH_PROJECTION_SAMPLES 1000u
+#define FLOWIE_BENCH_PROJECTION_OPS_PER_SAMPLE 64u
 #define FLOWIE_BENCH_STALL_SAMPLES 8u
 #define FLOWIE_BENCH_STALL_MESSAGES 4u
 #define FLOWIE_BENCH_STALL_PAYLOAD_BYTES (512u * 1024u)
@@ -56,6 +59,56 @@ static uint64_t flowie_bench_percentile(const uint64_t *sorted, size_t count, si
 
 static flowie_mqtt_span_t flowie_bench_span(const char *value) {
   return (flowie_mqtt_span_t){(const uint8_t *)value, strlen(value)};
+}
+
+static void flowie_bench_mqtt_projection(void) {
+  static const uint8_t publish[] = {0x30u, 0x16u, 0x00u, 0x0bu, 'b', 'e', 'n', 'c',
+                                    'h',   '/',   't',   'o',   'p', 'i', 'c', 0x00u,
+                                    'p',   'a',   'y',   'l',   'o', 'a', 'd', '!'};
+  const turbo_flow_expr_schema_t *schema = flowie_mqtt_rule_schema();
+  const turbo_flow_expr_value_t *values = NULL;
+  turbo_flow_msg_t opaque;
+  turbo_flow_msg_t projected;
+  size_t value_count = 0u;
+  int rc;
+
+  turbo_flow_msg_init(&opaque);
+  opaque.type = FLOWIE_MQTT_PACKET_PUBLISH;
+  opaque.payload = tstr_v_from_buf((const char *)publish, sizeof(publish));
+  rc = flowie_mqtt_message_flags_encode(FLOWIE_MQTT_VERSION_5, publish[0] & 0x0fu, &opaque.flags);
+  check_int_eq(rc, TURBO_OK);
+
+  turbo_flow_msg_init(&projected);
+  projected.type = opaque.type;
+  projected.flags = opaque.flags;
+  projected.buffer = mem_get_buffer(mem_global(), sizeof(publish));
+  check_not_null(projected.buffer);
+  if (!projected.buffer) return;
+  memcpy(mem_buffer_data(projected.buffer), publish, sizeof(publish));
+  mem_set_used(projected.buffer, sizeof(publish));
+  projected.payload = tstr_v_from_buf(mem_buffer_data(projected.buffer), sizeof(publish));
+  rc = flowie_mqtt_rule_bind_projection(&projected, NULL);
+  check_int_eq(rc, TURBO_OK);
+
+  benchmark_ops("MQTT opaque facts parse", FLOWIE_BENCH_PROJECTION_SAMPLES,
+                FLOWIE_BENCH_PROJECTION_OPS_PER_SAMPLE) {
+    for (size_t operation = 0u;
+         rc == TURBO_OK && operation < FLOWIE_BENCH_PROJECTION_OPS_PER_SAMPLE; ++operation)
+      rc = flowie_mqtt_rule_facts_provider(&opaque, schema, &values, &value_count, NULL);
+  }
+  check_int_eq(rc, TURBO_OK);
+  check_size_eq(value_count, schema->field_count);
+
+  benchmark_ops("MQTT bound projection facts", FLOWIE_BENCH_PROJECTION_SAMPLES,
+                FLOWIE_BENCH_PROJECTION_OPS_PER_SAMPLE) {
+    for (size_t operation = 0u;
+         rc == TURBO_OK && operation < FLOWIE_BENCH_PROJECTION_OPS_PER_SAMPLE; ++operation)
+      rc = flowie_mqtt_rule_facts_provider(&projected, schema, &values, &value_count, NULL);
+  }
+  check_int_eq(rc, TURBO_OK);
+  check_size_eq(value_count, schema->field_count);
+  turbo_flow_msg_cleanup(&projected);
+  turbo_flow_msg_cleanup(&opaque);
 }
 
 static void flowie_bench_copy(char *output, size_t capacity, const char *value) {
@@ -1240,6 +1293,8 @@ done:
 }
 
 spec("flowie capacity benchmarks") {
+  bench("MQTT typed projection facts") { flowie_bench_mqtt_projection(); }
+
   bench("compiled MQTT security matcher") {
     flowie_bench_security_cost_breakdown();
     flowie_bench_security_matcher(64u);

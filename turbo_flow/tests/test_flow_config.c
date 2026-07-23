@@ -174,10 +174,44 @@ spec("flow_config") {
         turbo_flow_resolved_config_profile_adapter(config, "ingress", "endpoint", &adapter_name),
         TURBO_OK);
     check_str_eq(adapter_name, "fmq.in");
+    adapter_name = NULL;
+    check_int_eq(turbo_flow_resolved_config_profile_adapter_optional(
+                     config, "ingress", "endpoint", &adapter_name),
+                 TURBO_OK);
+    check_str_eq(adapter_name, "fmq.in");
+    adapter_name = (const char *)1;
+    check_int_eq(turbo_flow_resolved_config_profile_adapter_optional(
+                     config, "ingress", "optional_sink", &adapter_name),
+                 TURBO_OK);
+    check_null(adapter_name);
+    check_int_eq(turbo_flow_resolved_config_profile_adapter_optional(
+                     config, "ingress", "policy", &adapter_name),
+                 TURBO_EINVAL);
+    check_null(adapter_name);
+    check_int_eq(turbo_flow_resolved_config_profile_adapter_optional(
+                     config, "missing", "endpoint", &adapter_name),
+                 TURBO_ENOENT);
     check_int_eq(
         turbo_flow_resolved_config_profile_channel(config, "ingress", "policy", &channel_name),
         TURBO_OK);
     check_str_eq(channel_name, "routing");
+    channel_name = NULL;
+    check_int_eq(turbo_flow_resolved_config_profile_channel_optional(
+                     config, "ingress", "policy", &channel_name),
+                 TURBO_OK);
+    check_str_eq(channel_name, "routing");
+    channel_name = (const char *)1;
+    check_int_eq(turbo_flow_resolved_config_profile_channel_optional(
+                     config, "ingress", "optional_policy", &channel_name),
+                 TURBO_OK);
+    check_null(channel_name);
+    check_int_eq(turbo_flow_resolved_config_profile_channel_optional(
+                     config, "ingress", "endpoint", &channel_name),
+                 TURBO_EINVAL);
+    check_null(channel_name);
+    check_int_eq(turbo_flow_resolved_config_profile_channel_optional(
+                     config, "missing", "policy", &channel_name),
+                 TURBO_ENOENT);
     check_int_eq(
         turbo_flow_resolved_config_profile_adapter(config, "ingress", "policy", &adapter_name),
         TURBO_ENOENT);

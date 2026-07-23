@@ -3,22 +3,9 @@ version: 1
 profiles:
   flowie:
     endpoint: mqtt.endpoint
-    accept_sink: queue.mqtt.accept
-    accepted_source: queue.mqtt.accepted
     rule_set: mqtt.routing
-    output: socket.application.output
 
 channels:
-  mqtt.accepted:
-    kind: queue
-    config:
-      backend: memory
-      pattern: push_pull
-      resource_uid: queue:mqtt.accepted
-      owner_name: mqtt-accepted
-      capacity: 8
-      max_payload_size: 4096
-      full_policy: fail
   mqtt.sessions:
     kind: record_store
     config:
@@ -41,10 +28,10 @@ channels:
       rules:
         - when: mqtt.topic == "application/output"
           action: route
-          key: application_output
+          key: application_data_sink
         - when: "true"
           action: route
-          key: mqtt_fanout
+          key: mqtt_delivery_sink
 
 adapters:
   mqtt.endpoint:
@@ -66,16 +53,6 @@ adapters:
       max_subscriptions_per_session: 8
       max_inflight_per_session: 8
       session_store: mqtt.sessions
-  queue.mqtt.accept:
-    kind: queue
-    config:
-      channel: mqtt.accepted
-      role: sink
-  queue.mqtt.accepted:
-    kind: queue
-    config:
-      channel: mqtt.accepted
-      role: source
   socket.application.output:
     kind: socket
     config:

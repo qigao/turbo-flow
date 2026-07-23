@@ -4,13 +4,102 @@
 
 #include "tinytest.h"
 #include "turbo_error.h"
+#include "turbo_parser.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static void flowie_copy(char *out, size_t capacity, const char *value) {
   size_t size = strlen(value);
   check(size < capacity);
   memcpy(out, value, size + 1u);
+}
+
+static void flowie_test_write_u16(uint8_t *out, uint16_t value) {
+  out[0] = (uint8_t)(value >> 8u);
+  out[1] = (uint8_t)value;
+}
+
+static void flowie_test_write_u32(uint8_t *out, uint32_t value) {
+  out[0] = (uint8_t)(value >> 24u);
+  out[1] = (uint8_t)(value >> 16u);
+  out[2] = (uint8_t)(value >> 8u);
+  out[3] = (uint8_t)value;
+}
+
+static void flowie_test_write_u64(uint8_t *out, uint64_t value) {
+  for (size_t i = 0u; i < 8u; ++i)
+    out[i] = (uint8_t)(value >> (56u - i * 8u));
+}
+
+static uint32_t flowie_test_xorshift32(uint32_t *state) {
+  uint32_t value = *state;
+  value ^= value << 13u;
+  value ^= value >> 17u;
+  value ^= value << 5u;
+  *state = value;
+  return value;
+}
+
+static size_t flowie_test_legacy_delivery_record(uint8_t minor, const uint8_t *packet,
+                                                 size_t packet_size, uint8_t *out,
+                                                 size_t capacity) {
+  enum { FLOWIE_TEST_DELIVERY_WAIT_ACK = 2 };
+  uint8_t header[8] = {'F', 'S', 'E', 'S', 0u, 1u, 0u, minor};
+  uint8_t metadata[25] = {0};
+  uint8_t delivery[4] = {0};
+  size_t offset = 0u;
+  size_t written;
+  metadata[0] = (uint8_t)FLOWIE_MQTT_VERSION_5;
+  flowie_test_write_u64(metadata + 1u, 71u);
+  flowie_test_write_u64(metadata + 9u, 1u);
+  flowie_test_write_u16(metadata + 17u, 60u);
+  flowie_test_write_u32(metadata + 19u, 60u);
+  flowie_test_write_u16(metadata + 23u, 1u);
+  flowie_test_write_u16(delivery, 1u);
+  delivery[2] = 1u;
+  delivery[3] = FLOWIE_TEST_DELIVERY_WAIT_ACK;
+  written = turbo_ltv_build(1u, header, sizeof(header), out + offset, capacity - offset);
+  if (written == 0u) return 0u;
+  offset += written;
+  written = turbo_ltv_build(2u, metadata, sizeof(metadata), out + offset, capacity - offset);
+  if (written == 0u) return 0u;
+  offset += written;
+  written = turbo_ltv_build(6u, delivery, sizeof(delivery), out + offset, capacity - offset);
+  if (written == 0u) return 0u;
+  offset += written;
+  written = turbo_ltv_build(7u, packet, packet_size, out + offset, capacity - offset);
+  if (written == 0u) return 0u;
+  return offset + written;
+}
+
+static int flowie_test_owner_round_trip(flowie_session_owner_t *owner,
+                                        const flowie_session_config_t *config,
+                                        flowie_mqtt_span_t client_id, uint64_t owner_instance_id,
+                                        flowie_session_owner_t **restored_out) {
+  flowie_session_config_t restored_config;
+  flowie_session_snapshot_t snapshot = FLOWIE_SESSION_SNAPSHOT_INIT;
+  uint8_t *record = NULL;
+  size_t record_size = 0u;
+  int rc;
+  if (!owner || !config || !restored_out) return TURBO_EINVAL;
+  *restored_out = NULL;
+  rc = flowie_session_owner_snapshot(owner, &snapshot);
+  if (rc != TURBO_OK) return rc;
+  rc = flowie_session_owner_record_encode(owner, NULL, 0u, &record_size);
+  if (rc != TURBO_ENOSPC || record_size == 0u) return rc == TURBO_OK ? TURBO_EPROTO : rc;
+  record = (uint8_t *)malloc(record_size);
+  if (!record) return TURBO_ENOMEM;
+  rc = flowie_session_owner_record_encode(owner, record, record_size, &record_size);
+  if (rc == TURBO_OK) {
+    restored_config = *config;
+    restored_config.owner_instance_id = owner_instance_id;
+    rc = flowie_session_owner_record_restore(&restored_config, client_id,
+                                             snapshot.resource_generation, record, record_size,
+                                             restored_out);
+  }
+  free(record);
+  return rc;
 }
 
 spec("flowie application bridges") {
@@ -211,6 +300,197 @@ static flowie_mqtt_connect_view_t flowie_test_connect(flowie_mqtt_version_t vers
   return connect;
 }
 
+enum {
+  FLOWIE_OWNER_MODEL_PACKET_IDS = 16,
+  FLOWIE_OWNER_MODEL_HWM = 8,
+};
+
+typedef enum flowie_owner_model_operation_e {
+  FLOWIE_OWNER_MODEL_BEGIN = 0,
+  FLOWIE_OWNER_MODEL_SETTLE = 1,
+  FLOWIE_OWNER_MODEL_RELEASE = 2,
+  FLOWIE_OWNER_MODEL_INVALID_PACKET_ID = 3,
+} flowie_owner_model_operation_t;
+
+typedef struct flowie_owner_model_event_s {
+  uint16_t packet_id;
+  uint8_t operation;
+  uint8_t qos;
+} flowie_owner_model_event_t;
+
+typedef struct flowie_owner_model_entry_s {
+  flowie_session_publish_begin_result_t begin;
+  uint8_t active;
+  uint8_t qos;
+  uint8_t pubrec_sent;
+} flowie_owner_model_entry_t;
+
+static int flowie_owner_model_replay(const flowie_owner_model_event_t *events, size_t event_count,
+                                     size_t *failed_index) {
+  static const uint8_t topic[] = "model/events";
+  static const uint8_t payload[] = "x";
+  flowie_owner_model_entry_t model[FLOWIE_OWNER_MODEL_PACKET_IDS + 1u];
+  flowie_session_config_t config = FLOWIE_SESSION_CONFIG_INIT;
+  flowie_mqtt_connect_view_t connect =
+      flowie_test_connect(FLOWIE_MQTT_VERSION_5, "state-model", 0, 60u);
+  flowie_session_snapshot_t snapshot = FLOWIE_SESSION_SNAPSHOT_INIT;
+  turbo_flow_protocol_route_t route = TURBO_FLOW_PROTOCOL_ROUTE_INIT;
+  flowie_session_owner_t *owner = NULL;
+  size_t active_count = 0u;
+  size_t step = 0u;
+  int rc = TURBO_OK;
+  if ((!events && event_count != 0u) || !failed_index) return TURBO_EINVAL;
+  *failed_index = SIZE_MAX;
+  memset(model, 0, sizeof(model));
+  config.owner_instance_id = 101u;
+  config.session_id = 103u;
+  config.max_subscriptions = 4u;
+  config.max_inflight = FLOWIE_OWNER_MODEL_HWM;
+  config.settlement.qos1 = TURBO_FLOW_PROTOCOL_SETTLE_ACCEPTED;
+  config.settlement.qos2 = TURBO_FLOW_PROTOCOL_SETTLE_ACCEPTED;
+  owner = flowie_session_owner_create(&config);
+  if (!owner) return TURBO_ENOMEM;
+  rc = flowie_session_owner_open(owner, &connect);
+  if (rc != TURBO_OK) goto done;
+  rc = flowie_session_owner_route(owner, &route);
+  if (rc != TURBO_OK) goto done;
+
+#define FLOWIE_OWNER_MODEL_REQUIRE(condition)                                                      \
+  do {                                                                                             \
+    if (!(condition)) {                                                                            \
+      rc = TURBO_EPROTO;                                                                           \
+      goto done;                                                                                   \
+    }                                                                                              \
+  } while (0)
+
+  for (step = 0u; step < event_count; ++step) {
+    const flowie_owner_model_event_t *event = &events[step];
+    uint16_t packet_id = event->packet_id;
+    flowie_owner_model_entry_t *entry;
+    FLOWIE_OWNER_MODEL_REQUIRE(packet_id != 0u &&
+                               packet_id <= FLOWIE_OWNER_MODEL_PACKET_IDS);
+    entry = &model[packet_id];
+    switch ((flowie_owner_model_operation_t)event->operation) {
+      case FLOWIE_OWNER_MODEL_BEGIN: {
+        flowie_mqtt_publish_view_t publish = FLOWIE_MQTT_PUBLISH_VIEW_INIT;
+        flowie_session_publish_begin_result_t begin = FLOWIE_SESSION_PUBLISH_BEGIN_RESULT_INIT;
+        publish.qos = entry->active ? entry->qos : event->qos;
+        publish.packet_id = packet_id;
+        publish.duplicate = entry->active;
+        publish.topic = (flowie_mqtt_span_t){topic, sizeof(topic) - 1u};
+        publish.payload = (flowie_mqtt_span_t){payload, sizeof(payload) - 1u};
+        publish.properties =
+            (flowie_mqtt_property_block_view_t)FLOWIE_MQTT_PROPERTY_BLOCK_VIEW_INIT;
+        rc = flowie_session_owner_publish_begin(owner, &publish, &begin);
+        if (entry->active) {
+          FLOWIE_OWNER_MODEL_REQUIRE(rc == TURBO_OK && !begin.admit_graph);
+          if (entry->pubrec_sent)
+            FLOWIE_OWNER_MODEL_REQUIRE(begin.has_ack &&
+                                       begin.ack.kind == FLOWIE_SESSION_ACK_PUBREC &&
+                                       begin.ack.packet_id == packet_id);
+        } else if (active_count == FLOWIE_OWNER_MODEL_HWM) {
+          FLOWIE_OWNER_MODEL_REQUIRE(rc == TURBO_ENOSPC);
+        } else {
+          FLOWIE_OWNER_MODEL_REQUIRE(rc == TURBO_OK && begin.admit_graph && !begin.has_ack);
+          entry->begin = begin;
+          entry->active = 1u;
+          entry->qos = publish.qos;
+          entry->pubrec_sent = 0u;
+          ++active_count;
+        }
+        break;
+      }
+      case FLOWIE_OWNER_MODEL_SETTLE:
+        if (entry->active && !entry->pubrec_sent) {
+          turbo_flow_protocol_settlement_request_t settlement =
+              TURBO_FLOW_PROTOCOL_SETTLEMENT_REQUEST_INIT;
+          flowie_session_ack_intent_t ack = FLOWIE_SESSION_ACK_INTENT_INIT;
+          settlement.message = entry->begin.message.metadata;
+          settlement.point = TURBO_FLOW_PROTOCOL_SETTLE_ACCEPTED;
+          settlement.status = TURBO_OK;
+          rc = flowie_session_owner_publish_settle(owner, &route, &settlement, &ack);
+          FLOWIE_OWNER_MODEL_REQUIRE(rc == TURBO_OK && ack.packet_id == packet_id);
+          if (entry->qos == 1u) {
+            FLOWIE_OWNER_MODEL_REQUIRE(ack.kind == FLOWIE_SESSION_ACK_PUBACK);
+            entry->active = 0u;
+            --active_count;
+          } else {
+            FLOWIE_OWNER_MODEL_REQUIRE(ack.kind == FLOWIE_SESSION_ACK_PUBREC);
+            entry->pubrec_sent = 1u;
+          }
+        }
+        break;
+      case FLOWIE_OWNER_MODEL_RELEASE: {
+        flowie_session_ack_intent_t ack = FLOWIE_SESSION_ACK_INTENT_INIT;
+        rc = flowie_session_owner_qos2_release(owner, &route, packet_id, &ack);
+        if (entry->active && entry->qos == 2u && entry->pubrec_sent) {
+          FLOWIE_OWNER_MODEL_REQUIRE(rc == TURBO_OK && ack.kind == FLOWIE_SESSION_ACK_PUBCOMP &&
+                                     ack.packet_id == packet_id);
+          entry->active = 0u;
+          --active_count;
+        } else {
+          FLOWIE_OWNER_MODEL_REQUIRE(rc != TURBO_OK && ack.kind == FLOWIE_SESSION_ACK_NONE);
+        }
+        break;
+      }
+      case FLOWIE_OWNER_MODEL_INVALID_PACKET_ID: {
+        flowie_mqtt_publish_view_t invalid = FLOWIE_MQTT_PUBLISH_VIEW_INIT;
+        flowie_session_publish_begin_result_t begin = FLOWIE_SESSION_PUBLISH_BEGIN_RESULT_INIT;
+        invalid.qos = 1u;
+        invalid.packet_id = 0u;
+        invalid.topic = (flowie_mqtt_span_t){topic, sizeof(topic) - 1u};
+        invalid.payload = (flowie_mqtt_span_t){payload, sizeof(payload) - 1u};
+        FLOWIE_OWNER_MODEL_REQUIRE(
+            flowie_session_owner_publish_begin(owner, &invalid, &begin) != TURBO_OK);
+        break;
+      }
+      default:
+        FLOWIE_OWNER_MODEL_REQUIRE(0);
+    }
+    rc = flowie_session_owner_snapshot(owner, &snapshot);
+    FLOWIE_OWNER_MODEL_REQUIRE(rc == TURBO_OK && snapshot.inflight_count == active_count &&
+                               snapshot.inflight_count <= FLOWIE_OWNER_MODEL_HWM);
+  }
+
+done:
+  if (rc != TURBO_OK) *failed_index = step;
+  if (owner) {
+    int close_rc = flowie_session_owner_close(owner);
+    if (rc == TURBO_OK && close_rc != TURBO_OK) rc = close_rc;
+    flowie_session_owner_destroy(owner);
+  }
+#undef FLOWIE_OWNER_MODEL_REQUIRE
+  return rc;
+}
+
+static size_t flowie_owner_model_shrink(flowie_owner_model_event_t *events, size_t event_count,
+                                        flowie_owner_model_event_t *candidate,
+                                        size_t *failed_index) {
+  size_t chunk = event_count / 2u;
+  while (chunk != 0u && event_count != 0u) {
+    int reduced = 0;
+    for (size_t start = 0u; start < event_count; start += chunk) {
+      size_t removed = chunk < event_count - start ? chunk : event_count - start;
+      size_t candidate_count = event_count - removed;
+      int rc;
+      if (candidate_count == 0u) continue;
+      memcpy(candidate, events, start * sizeof(*events));
+      memcpy(candidate + start, events + start + removed,
+             (event_count - start - removed) * sizeof(*events));
+      rc = flowie_owner_model_replay(candidate, candidate_count, failed_index);
+      if (rc == TURBO_EPROTO) {
+        memcpy(events, candidate, candidate_count * sizeof(*events));
+        event_count = candidate_count;
+        reduced = 1;
+        break;
+      }
+    }
+    if (!reduced) chunk /= 2u;
+    else if (chunk > event_count) chunk = event_count;
+  }
+  return event_count;
+}
+
 static void flowie_test_subscription_packet(flowie_mqtt_packet_view_t *packet,
                                             flowie_mqtt_subscribe_view_t *subscribe,
                                             const uint8_t *entries, size_t entries_size,
@@ -314,7 +594,7 @@ spec("flowie internal session owner") {
     flowie_session_owner_destroy(owner);
   }
 
-  it("owns persistent CONNECT state and invalidates routes across reconnect") {
+  it("MQTT-OWNER-003 fences stale routes across persistent reconnect generations") {
     flowie_session_config_t config = FLOWIE_SESSION_CONFIG_INIT;
     flowie_mqtt_connect_view_t connect =
         flowie_test_connect(FLOWIE_MQTT_VERSION_5, "device-1", 0, 60u);
@@ -344,7 +624,7 @@ spec("flowie internal session owner") {
     flowie_session_owner_destroy(owner);
   }
 
-  it("applies each SUBSCRIBE atomically and exposes a bounded owner snapshot") {
+  it("MQTT-OWNER-005 applies SUBSCRIBE atomically at the owner quota") {
     static const uint8_t entries[] = {0x00, 0x05, 'a', '/', '+', '/', 'c', 0x01,
                                       0x00, 0x0d, '$', 's', 'h', 'a', 'r', 'e',
                                       '/',  'g',  '/', 'j', 'o', 'b', 's', 0x02};
@@ -425,7 +705,7 @@ spec("flowie internal session owner") {
     flowie_session_owner_destroy(owner);
   }
 
-  it("clears persistent state only at an explicit clean-session boundary") {
+  it("MQTT-OWNER-007 clears persistent state only at an explicit clean-session boundary") {
     static const uint8_t entry[] = {0x00, 0x03, 'a', '/', '#', 0x00};
     flowie_session_config_t config = FLOWIE_SESSION_CONFIG_INIT;
     flowie_mqtt_connect_view_t persistent =
@@ -457,7 +737,7 @@ spec("flowie internal session owner") {
     flowie_session_owner_destroy(owner);
   }
 
-  it("separates graph settlement from QoS protocol ACK intents") {
+  it("MQTT-OWNER-001/002 MQTT-STORE-004 separates settlement from QoS ACK state") {
     static const uint8_t topic[] = "devices/1/events";
     static const uint8_t payload[] = "value";
     flowie_session_config_t config = FLOWIE_SESSION_CONFIG_INIT;
@@ -518,6 +798,23 @@ spec("flowie internal session owner") {
       check_mem_eq(encoded, expected, sizeof(expected));
     }
 
+    publish.packet_id = 73u;
+    begin = (flowie_session_publish_begin_result_t)FLOWIE_SESSION_PUBLISH_BEGIN_RESULT_INIT;
+    check_int_eq(flowie_session_owner_publish_begin(owner, &publish, &begin), TURBO_OK);
+    settlement.message = begin.message.metadata;
+    settlement.status = TURBO_ETIMEDOUT;
+    settlement.point = TURBO_FLOW_PROTOCOL_SETTLE_ACCEPTED;
+    ack = (flowie_session_ack_intent_t)FLOWIE_SESSION_ACK_INTENT_INIT;
+    check_int_eq(flowie_session_owner_publish_settle(owner, &route, &settlement, &ack),
+                 TURBO_ETIMEDOUT);
+    check_int_eq(ack.kind, FLOWIE_SESSION_ACK_NONE);
+    check_int_eq(flowie_session_owner_snapshot(owner, &snapshot), TURBO_OK);
+    check_size_eq(snapshot.inflight_count, 1u);
+    settlement.status = TURBO_OK;
+    check_int_eq(flowie_session_owner_publish_settle(owner, &route, &settlement, &ack), TURBO_OK);
+    check_int_eq(ack.kind, FLOWIE_SESSION_ACK_PUBACK);
+    check_uint_eq(ack.packet_id, 73u);
+
     publish.qos = 2u;
     publish.packet_id = 72u;
     begin = (flowie_session_publish_begin_result_t)FLOWIE_SESSION_PUBLISH_BEGIN_RESULT_INIT;
@@ -553,7 +850,7 @@ spec("flowie internal session owner") {
     flowie_session_owner_destroy(owner);
   }
 
-  it("owns outbound packet identifiers and QoS retransmission state") {
+  it("MQTT-OWNER-002/004 MQTT-STORE-004 owns QoS retransmission stages across restore") {
     static const uint8_t publish_qos1[] = {0x32u, 0x07u, 0x00u, 0x01u, 'a',
                                            0x00u, 0x01u, 0x00u, 'x'};
     static const uint8_t publish_qos2[] = {0x34u, 0x07u, 0x00u, 0x01u, 'a',
@@ -585,12 +882,12 @@ spec("flowie internal session owner") {
     check_int_eq(flowie_session_owner_delivery_reserve(owner, 1u, &qos1_id), TURBO_OK);
     check_uint_eq(qos1_id, 1u);
     check_int_eq(flowie_session_owner_delivery_commit(
-                     owner, qos1_id, (flowie_mqtt_span_t){publish_qos1, sizeof(publish_qos1)}),
+                     owner, qos1_id, (flowie_mqtt_span_t){publish_qos1, sizeof(publish_qos1)}, 0u),
                  TURBO_OK);
     check_int_eq(flowie_session_owner_delivery_reserve(owner, 2u, &qos2_id), TURBO_OK);
     check_uint_eq(qos2_id, 2u);
     check_int_eq(flowie_session_owner_delivery_commit(
-                     owner, qos2_id, (flowie_mqtt_span_t){publish_qos2, sizeof(publish_qos2)}),
+                     owner, qos2_id, (flowie_mqtt_span_t){publish_qos2, sizeof(publish_qos2)}, 0u),
                  TURBO_OK);
     check_int_eq(flowie_session_owner_delivery_reserve(owner, 1u, &rejected_id), TURBO_ENOSPC);
     check_int_eq(flowie_session_owner_snapshot(owner, &snapshot), TURBO_OK);
@@ -631,6 +928,203 @@ spec("flowie internal session owner") {
     check_int_eq(flowie_session_owner_delivery_ack(owner, &packet, &reply), TURBO_OK);
     check_int_eq(flowie_session_owner_snapshot(owner, &snapshot), TURBO_OK);
     check_size_eq(snapshot.inflight_count, 0u);
+    check_int_eq(flowie_session_owner_close(owner), TURBO_OK);
+    flowie_session_owner_destroy(owner);
+  }
+
+  it("MQTT-STORE-004 restores every committed inbound and outbound QoS 2 stage") {
+    static const uint8_t outbound_publish[] = {0x34u, 0x07u, 0x00u, 0x01u, 'a',
+                                               0x00u, 0x01u, 0x00u, 'x'};
+    static const uint8_t pubrec[] = {0x50u, 0x02u, 0x00u, 0x01u};
+    static const uint8_t pubcomp[] = {0x70u, 0x02u, 0x00u, 0x01u};
+    static const uint8_t expected_pubrel[] = {0x62u, 0x02u, 0x00u, 0x01u};
+    static const uint8_t topic[] = "qos2/restore";
+    static const uint8_t payload[] = "value";
+    flowie_session_config_t config = FLOWIE_SESSION_CONFIG_INIT;
+    flowie_mqtt_connect_view_t connect =
+        flowie_test_connect(FLOWIE_MQTT_VERSION_5, "qos2-checkpoints", 0, 60u);
+    flowie_mqtt_parse_options_t options = FLOWIE_MQTT_PARSE_OPTIONS_INIT;
+    flowie_mqtt_packet_view_t packet = FLOWIE_MQTT_PACKET_VIEW_INIT;
+    flowie_session_ack_intent_t reply = FLOWIE_SESSION_ACK_INTENT_INIT;
+    flowie_session_snapshot_t snapshot = FLOWIE_SESSION_SNAPSHOT_INIT;
+    flowie_mqtt_span_t pending = {0};
+    flowie_session_owner_t *owner;
+    flowie_session_owner_t *restored = NULL;
+    uint16_t packet_id = 0u;
+
+    config.owner_instance_id = 101u;
+    config.session_id = 103u;
+    config.max_subscriptions = 2u;
+    config.max_inflight = 4u;
+    owner = flowie_session_owner_create(&config);
+    check_not_null(owner);
+    check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_reserve(owner, 2u, &packet_id), TURBO_OK);
+    check_uint_eq(packet_id, 1u);
+    check_int_eq(flowie_session_owner_delivery_commit(
+                     owner, packet_id,
+                     (flowie_mqtt_span_t){outbound_publish, sizeof(outbound_publish)}, 0u),
+                 TURBO_OK);
+
+    /* Committed PUBLISH: restore retransmits the one owned packet with DUP set. */
+    check_int_eq(flowie_test_owner_round_trip(owner, &config, connect.client_id, 107u, &restored),
+                 TURBO_OK);
+    flowie_session_owner_destroy(owner);
+    owner = restored;
+    restored = NULL;
+    check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_pending_at(owner, 0u, &pending), TURBO_OK);
+    check_size_eq(pending.size, sizeof(outbound_publish));
+    check_uint_eq(pending.data[0], 0x3cu);
+
+    options.version = FLOWIE_MQTT_VERSION_5;
+    check_int_eq(flowie_mqtt_packet_parse(pubrec, sizeof(pubrec), &options, &packet, NULL, NULL),
+                 FLOWIE_MQTT_PARSE_OK);
+    check_int_eq(flowie_session_owner_delivery_ack(owner, &packet, &reply), TURBO_OK);
+    check_int_eq(reply.kind, FLOWIE_SESSION_ACK_PUBREL);
+
+    /* Committed PUBREC and emitted PUBREL share one durable WAIT_PUBCOMP state. */
+    check_int_eq(flowie_test_owner_round_trip(owner, &config, connect.client_id, 109u, &restored),
+                 TURBO_OK);
+    flowie_session_owner_destroy(owner);
+    owner = restored;
+    restored = NULL;
+    check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_pending_at(owner, 0u, &pending), TURBO_OK);
+    check_mem_eq(pending.data, expected_pubrel, sizeof(expected_pubrel));
+    check_int_eq(flowie_test_owner_round_trip(owner, &config, connect.client_id, 113u, &restored),
+                 TURBO_OK);
+    flowie_session_owner_destroy(owner);
+    owner = restored;
+    restored = NULL;
+    check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_pending_at(owner, 0u, &pending), TURBO_OK);
+    check_mem_eq(pending.data, expected_pubrel, sizeof(expected_pubrel));
+
+    packet = (flowie_mqtt_packet_view_t)FLOWIE_MQTT_PACKET_VIEW_INIT;
+    reply = (flowie_session_ack_intent_t)FLOWIE_SESSION_ACK_INTENT_INIT;
+    check_int_eq(flowie_mqtt_packet_parse(pubcomp, sizeof(pubcomp), &options, &packet, NULL, NULL),
+                 FLOWIE_MQTT_PARSE_OK);
+    check_int_eq(flowie_session_owner_delivery_ack(owner, &packet, &reply), TURBO_OK);
+    check_int_eq(flowie_test_owner_round_trip(owner, &config, connect.client_id, 127u, &restored),
+                 TURBO_OK);
+    flowie_session_owner_destroy(owner);
+    owner = restored;
+    restored = NULL;
+    check_int_eq(flowie_session_owner_snapshot(owner, &snapshot), TURBO_OK);
+    check_size_eq(snapshot.inflight_count, 0u);
+    flowie_session_owner_destroy(owner);
+
+    /* Inbound QoS 2: a committed PUBLISH restores PUBREC without graph re-admission. */
+    config.owner_instance_id = 131u;
+    config.session_id = 137u;
+    owner = flowie_session_owner_create(&config);
+    check_not_null(owner);
+    check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+    {
+      flowie_mqtt_publish_view_t publish = FLOWIE_MQTT_PUBLISH_VIEW_INIT;
+      flowie_session_publish_begin_result_t begin = FLOWIE_SESSION_PUBLISH_BEGIN_RESULT_INIT;
+      turbo_flow_protocol_settlement_request_t settlement =
+          TURBO_FLOW_PROTOCOL_SETTLEMENT_REQUEST_INIT;
+      turbo_flow_protocol_route_t route = TURBO_FLOW_PROTOCOL_ROUTE_INIT;
+      publish.qos = 2u;
+      publish.packet_id = 77u;
+      publish.topic = (flowie_mqtt_span_t){topic, sizeof(topic) - 1u};
+      publish.payload = (flowie_mqtt_span_t){payload, sizeof(payload) - 1u};
+      check_int_eq(flowie_session_owner_route(owner, &route), TURBO_OK);
+      check_int_eq(flowie_session_owner_publish_begin(owner, &publish, &begin), TURBO_OK);
+      check_true(begin.admit_graph);
+      settlement.message = begin.message.metadata;
+      settlement.status = TURBO_OK;
+      settlement.point = TURBO_FLOW_PROTOCOL_SETTLE_PROCESSED;
+      check_int_eq(flowie_session_owner_publish_settle(owner, &route, &settlement, &reply),
+                   TURBO_OK);
+      check_int_eq(reply.kind, FLOWIE_SESSION_ACK_PUBREC);
+      check_int_eq(flowie_test_owner_round_trip(owner, &config, connect.client_id, 139u, &restored),
+                   TURBO_OK);
+      flowie_session_owner_destroy(owner);
+      owner = restored;
+      restored = NULL;
+      check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+      publish.duplicate = 1u;
+      begin = (flowie_session_publish_begin_result_t)FLOWIE_SESSION_PUBLISH_BEGIN_RESULT_INIT;
+      check_int_eq(flowie_session_owner_publish_begin(owner, &publish, &begin), TURBO_OK);
+      check_false(begin.admit_graph);
+      check_true(begin.has_ack);
+      check_int_eq(begin.ack.kind, FLOWIE_SESSION_ACK_PUBREC);
+      route = (turbo_flow_protocol_route_t)TURBO_FLOW_PROTOCOL_ROUTE_INIT;
+      check_int_eq(flowie_session_owner_route(owner, &route), TURBO_OK);
+      reply = (flowie_session_ack_intent_t)FLOWIE_SESSION_ACK_INTENT_INIT;
+      check_int_eq(flowie_session_owner_qos2_release(owner, &route, 77u, &reply), TURBO_OK);
+      check_int_eq(reply.kind, FLOWIE_SESSION_ACK_PUBCOMP);
+      check_int_eq(flowie_test_owner_round_trip(owner, &config, connect.client_id, 149u, &restored),
+                   TURBO_OK);
+      flowie_session_owner_destroy(owner);
+      owner = restored;
+      restored = NULL;
+      check_int_eq(flowie_session_owner_snapshot(owner, &snapshot), TURBO_OK);
+      check_size_eq(snapshot.inflight_count, 0u);
+    }
+    flowie_session_owner_destroy(owner);
+  }
+
+  it("MQTT-OWNER-007 queues offline persistent delivery before retransmission") {
+    static const uint8_t publish_qos1[] = {0x32u, 0x07u, 0x00u, 0x01u, 'a',
+                                           0x00u, 0x01u, 0x00u, 'x'};
+    flowie_session_config_t config = FLOWIE_SESSION_CONFIG_INIT;
+    flowie_session_config_t restored_config = FLOWIE_SESSION_CONFIG_INIT;
+    flowie_mqtt_connect_view_t connect =
+        flowie_test_connect(FLOWIE_MQTT_VERSION_5, "offline-subscriber", 0, 60u);
+    flowie_session_snapshot_t snapshot = FLOWIE_SESSION_SNAPSHOT_INIT;
+    flowie_session_owner_t *owner;
+    flowie_session_owner_t *restored = NULL;
+    flowie_mqtt_span_t pending = {0};
+    uint8_t *record;
+    size_t record_size = 0u;
+    uint16_t packet_id = 0u;
+
+    config.owner_instance_id = 41u;
+    config.session_id = 43u;
+    config.max_subscriptions = 2u;
+    config.max_inflight = 2u;
+    owner = flowie_session_owner_create(&config);
+    check_not_null(owner);
+    check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+    check_int_eq(flowie_session_owner_snapshot(owner, &snapshot), TURBO_OK);
+    check_uint_eq(snapshot.session_expiry_interval, 60u);
+    check_int_eq(flowie_session_owner_close(owner), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_reserve(owner, 1u, &packet_id), TURBO_OK);
+    check_uint_eq(packet_id, 1u);
+    check_int_eq(
+        flowie_session_owner_delivery_commit_queued(
+            owner, packet_id, (flowie_mqtt_span_t){publish_qos1, sizeof(publish_qos1)}, 0u),
+        TURBO_OK);
+    check_int_eq(flowie_session_owner_snapshot(owner, &snapshot), TURBO_OK);
+    check_int_eq(flowie_session_owner_record_encode(owner, NULL, 0u, &record_size), TURBO_ENOSPC);
+    record = (uint8_t *)malloc(record_size);
+    check_not_null(record);
+    check_int_eq(flowie_session_owner_record_encode(owner, record, record_size, &record_size),
+                 TURBO_OK);
+    restored_config = config;
+    restored_config.owner_instance_id = 47u;
+    restored_config.session_id = 1u;
+    check_int_eq(flowie_session_owner_record_restore(
+                     &restored_config,
+                     (flowie_mqtt_span_t){connect.client_id.data, connect.client_id.size},
+                     snapshot.resource_generation, record, record_size, &restored),
+                 TURBO_OK);
+    free(record);
+    check_not_null(restored);
+    check_int_eq(flowie_session_owner_open(restored, &connect), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_pending_at(restored, 0u, &pending), TURBO_OK);
+    check_uint_eq(pending.data[0], 0x3au);
+    check_int_eq(flowie_session_owner_close(restored), TURBO_OK);
+    flowie_session_owner_destroy(restored);
+    check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_pending_at(owner, 0u, &pending), TURBO_OK);
+    check_uint_eq(pending.data[0], 0x32u);
+    check_int_eq(flowie_session_owner_delivery_pending_at(owner, 0u, &pending), TURBO_OK);
+    check_uint_eq(pending.data[0], 0x3au);
     check_int_eq(flowie_session_owner_close(owner), TURBO_OK);
     flowie_session_owner_destroy(owner);
   }
@@ -695,9 +1189,10 @@ spec("flowie internal session owner") {
         flowie_session_owner_subscribe(owner, &subscribe_packet, &subscribe, &subscribe_result),
         TURBO_OK);
     check_int_eq(flowie_session_owner_delivery_reserve(owner, 1u, &packet_id), TURBO_OK);
-    check_int_eq(flowie_session_owner_delivery_commit(
-                     owner, packet_id, (flowie_mqtt_span_t){publish_qos1, sizeof(publish_qos1)}),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_session_owner_delivery_commit(
+            owner, packet_id, (flowie_mqtt_span_t){publish_qos1, sizeof(publish_qos1)}, 0u),
+        TURBO_OK);
     check_int_eq(flowie_session_owner_snapshot(owner, &snapshot), TURBO_OK);
     clone = flowie_session_owner_clone(owner);
     check_not_null(clone);
@@ -749,7 +1244,188 @@ spec("flowie internal session owner") {
     flowie_session_owner_destroy(owner);
   }
 
-  it("owns, persists, suppresses, and completes MQTT Will state") {
+  it("MQTT-OWNER-011 persists absolute delivery expiry and restores legacy records") {
+    static const uint8_t expiring_publish[] = {
+        0x32u, 0x0cu, 0x00u,
+        0x01u, 'a',   0x00u,
+        0x01u, 0x05u, FLOWIE_MQTT_PROPERTY_MESSAGE_EXPIRY_INTERVAL,
+        0x00u, 0x00u, 0x00u,
+        0x0au, 'x'};
+    flowie_session_config_t config = FLOWIE_SESSION_CONFIG_INIT;
+    flowie_session_config_t restored_config = FLOWIE_SESSION_CONFIG_INIT;
+    flowie_mqtt_connect_view_t connect =
+        flowie_test_connect(FLOWIE_MQTT_VERSION_5, "expiry-delivery", 0, 60u);
+    flowie_session_snapshot_t before = FLOWIE_SESSION_SNAPSHOT_INIT;
+    flowie_session_snapshot_t after = FLOWIE_SESSION_SNAPSHOT_INIT;
+    flowie_session_owner_t *owner;
+    flowie_session_owner_t *restored = NULL;
+    turbo_ltv_message_t *header_message = NULL;
+    flowie_mqtt_span_t pending = {0};
+    uint8_t legacy_record[128];
+    uint8_t *record;
+    const uint8_t *header;
+    uint64_t expiry_at = 0u;
+    size_t legacy_size;
+    size_t record_size = 0u;
+    size_t removed_count = 0u;
+    uint16_t packet_id = 0u;
+    uint16_t pending_packet_id = 0u;
+
+    config.owner_instance_id = 67u;
+    config.session_id = 71u;
+    config.max_subscriptions = 2u;
+    config.max_inflight = 2u;
+    owner = flowie_session_owner_create(&config);
+    check_not_null(owner);
+    check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+    check_int_eq(flowie_session_owner_close(owner), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_reserve(owner, 1u, &packet_id), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_commit_queued(
+                     owner, packet_id,
+                     (flowie_mqtt_span_t){expiring_publish, sizeof(expiring_publish)}, 110u),
+                 TURBO_OK);
+    check_int_eq(flowie_session_owner_snapshot(owner, &before), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_pending_at_ex(owner, 0u, 105u, &pending,
+                                                             &pending_packet_id, &expiry_at),
+                 TURBO_OK);
+    check_uint_eq(pending_packet_id, packet_id);
+    check_uint_eq(expiry_at, 110u);
+    check_uint_eq(pending.data[9], 0u);
+    check_uint_eq(pending.data[10], 0u);
+    check_uint_eq(pending.data[11], 0u);
+    check_uint_eq(pending.data[12], 5u);
+
+    check_int_eq(flowie_session_owner_record_encode(owner, NULL, 0u, &record_size), TURBO_ENOSPC);
+    record = (uint8_t *)malloc(record_size);
+    check_not_null(record);
+    check_int_eq(flowie_session_owner_record_encode(owner, record, record_size, &record_size),
+                 TURBO_OK);
+    check_int_eq(turbo_parse_ltv(record, record_size, &header_message), TURBO_OK);
+    check_not_null(header_message);
+    check_uint_eq(turbo_ltv_type(header_message), 1u);
+    check_size_eq(turbo_ltv_value_len(header_message), 8u);
+    header = turbo_ltv_value(header_message);
+    check_mem_eq(header, "FSES", 4u);
+    check_uint_eq(header[5], 1u);
+    check_uint_eq(header[7], 3u);
+    turbo_free_ltv(&header_message);
+
+    restored_config = config;
+    restored_config.owner_instance_id = 73u;
+    restored_config.session_id = 1u;
+    check_int_eq(flowie_session_owner_record_restore(&restored_config, connect.client_id,
+                                                     before.resource_generation, record,
+                                                     record_size, &restored),
+                 TURBO_OK);
+    free(record);
+    check_not_null(restored);
+    check_int_eq(flowie_session_owner_delivery_pending_at_ex(restored, 0u, 107u, &pending,
+                                                             &pending_packet_id, &expiry_at),
+                 TURBO_OK);
+    check_uint_eq(expiry_at, 110u);
+    check_uint_eq(pending.data[12], 3u);
+    check_int_eq(flowie_session_owner_snapshot(restored, &before), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_expire(restored, 110u, &removed_count), TURBO_OK);
+    check_size_eq(removed_count, 1u);
+    check_int_eq(flowie_session_owner_snapshot(restored, &after), TURBO_OK);
+    check_uint_eq(after.resource_generation, before.resource_generation + 1u);
+    check_size_eq(after.inflight_count, 0u);
+    flowie_session_owner_destroy(restored);
+    restored = NULL;
+
+    legacy_size = flowie_test_legacy_delivery_record(2u, expiring_publish, sizeof(expiring_publish),
+                                                     legacy_record, sizeof(legacy_record));
+    check_true(legacy_size != 0u);
+    check_int_eq(
+        flowie_session_owner_record_restore(
+            &restored_config,
+            (flowie_mqtt_span_t){(const uint8_t *)"legacy-expiry", sizeof("legacy-expiry") - 1u},
+            2u, legacy_record, legacy_size, &restored),
+        TURBO_OK);
+    check_not_null(restored);
+    check_int_eq(flowie_session_owner_delivery_pending_at(restored, 0u, &pending), TURBO_OK);
+    check_uint_eq(pending.data[12], 10u);
+    flowie_session_owner_destroy(restored);
+    restored = NULL;
+
+    legacy_size = flowie_test_legacy_delivery_record(3u, expiring_publish, sizeof(expiring_publish),
+                                                     legacy_record, sizeof(legacy_record));
+    check_true(legacy_size != 0u);
+    check_int_eq(
+        flowie_session_owner_record_restore(
+            &restored_config,
+            (flowie_mqtt_span_t){(const uint8_t *)"legacy-expiry", sizeof("legacy-expiry") - 1u},
+            2u, legacy_record, legacy_size, &restored),
+        TURBO_EPROTO);
+    check_null(restored);
+    flowie_session_owner_destroy(owner);
+  }
+
+  it("rejects durable expiry metadata when the PUBLISH has no expiry property") {
+    static const uint8_t publish_qos1[] = {0x32u, 0x07u, 0x00u, 0x01u, 'a',
+                                           0x00u, 0x01u, 0x00u, 'x'};
+    flowie_session_config_t config = FLOWIE_SESSION_CONFIG_INIT;
+    flowie_mqtt_connect_view_t connect =
+        flowie_test_connect(FLOWIE_MQTT_VERSION_5, "invalid-expiry", 0, 60u);
+    flowie_session_owner_t *owner;
+    size_t record_size = 0u;
+    uint16_t packet_id = 0u;
+    config.owner_instance_id = 79u;
+    config.session_id = 83u;
+    config.max_subscriptions = 2u;
+    config.max_inflight = 2u;
+    owner = flowie_session_owner_create(&config);
+    check_not_null(owner);
+    check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_reserve(owner, 1u, &packet_id), TURBO_OK);
+    check_int_eq(
+        flowie_session_owner_delivery_commit(
+            owner, packet_id, (flowie_mqtt_span_t){publish_qos1, sizeof(publish_qos1)}, 110u),
+        TURBO_EPROTO);
+    check_int_eq(flowie_session_owner_record_encode(owner, NULL, 0u, &record_size), TURBO_ENOSPC);
+    flowie_session_owner_destroy(owner);
+  }
+
+  it("MQTT-OWNER-011 applies broker expiry to MQTT 3 delivery without a wire property") {
+    static const uint8_t publish_qos1[] = {0x32u, 0x06u, 0x00u, 0x01u, 'a', 0x00u, 0x01u, 'x'};
+    flowie_session_config_t config = FLOWIE_SESSION_CONFIG_INIT;
+    flowie_mqtt_connect_view_t connect =
+        flowie_test_connect(FLOWIE_MQTT_VERSION_3_1_1, "v3-expiry", 0, 0u);
+    flowie_session_owner_t *owner;
+    flowie_mqtt_span_t pending = {0};
+    uint64_t expiry_at = 0u;
+    size_t record_size = 0u;
+    size_t removed_count = 0u;
+    uint16_t packet_id = 0u;
+    uint16_t pending_packet_id = 0u;
+    config.owner_instance_id = 89u;
+    config.session_id = 97u;
+    config.max_subscriptions = 2u;
+    config.max_inflight = 2u;
+    owner = flowie_session_owner_create(&config);
+    check_not_null(owner);
+    check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+    check_int_eq(flowie_session_owner_delivery_reserve(owner, 1u, &packet_id), TURBO_OK);
+    check_int_eq(
+        flowie_session_owner_delivery_commit(
+            owner, packet_id, (flowie_mqtt_span_t){publish_qos1, sizeof(publish_qos1)}, 110u),
+        TURBO_OK);
+    check_int_eq(flowie_session_owner_record_encode(owner, NULL, 0u, &record_size), TURBO_ENOSPC);
+    check_true(record_size != 0u);
+    check_int_eq(flowie_session_owner_delivery_pending_at_ex(owner, 0u, 107u, &pending,
+                                                             &pending_packet_id, &expiry_at),
+                 TURBO_OK);
+    check_uint_eq(pending_packet_id, packet_id);
+    check_uint_eq(expiry_at, 110u);
+    check_size_eq(pending.size, sizeof(publish_qos1));
+    check_uint_eq(pending.data[0], 0x3au);
+    check_mem_eq(pending.data + 1u, publish_qos1 + 1u, sizeof(publish_qos1) - 1u);
+    check_int_eq(flowie_session_owner_delivery_expire(owner, 110u, &removed_count), TURBO_OK);
+    check_size_eq(removed_count, 1u);
+    flowie_session_owner_destroy(owner);
+  }
+
+  it("MQTT-OWNER-008 MQTT-STORE-005/009 persists binary Will flags and lifecycle state") {
     static const uint8_t will_properties[] = {FLOWIE_MQTT_PROPERTY_WILL_DELAY_INTERVAL, 0x00u,
                                               0x00u, 0x00u, 0x02u};
     uint8_t will_topic[] = "status/device";
@@ -883,5 +1559,128 @@ spec("flowie internal session owner") {
     check_int_eq(flowie_session_owner_disconnect(owner, &disconnect), TURBO_EPROTO);
     check_int_eq(flowie_session_owner_close(owner), TURBO_OK);
     flowie_session_owner_destroy(owner);
+  }
+
+  it("MQTT-STORE-009 round trips maximum UTF-8 fields and the configured payload bound") {
+    enum {
+      STORE_BOUNDARY_UTF8_SIZE = FLOWIE_MQTT_MAX_UTF8_SIZE,
+      STORE_BOUNDARY_CONTENT_TYPE_SIZE = FLOWIE_MQTT_MAX_UTF8_SIZE - 3u,
+      STORE_BOUNDARY_PAYLOAD_SIZE = 1024u * 1024u,
+    };
+    flowie_session_config_t config = FLOWIE_SESSION_CONFIG_INIT;
+    flowie_mqtt_connect_view_t connect = FLOWIE_MQTT_CONNECT_VIEW_INIT;
+    flowie_session_snapshot_t snapshot = FLOWIE_SESSION_SNAPSHOT_INIT;
+    flowie_session_snapshot_t restored_snapshot = FLOWIE_SESSION_SNAPSHOT_INIT;
+    flowie_session_owner_t *owner = NULL;
+    flowie_session_owner_t *restored = NULL;
+    uint8_t *client_id = NULL;
+    uint8_t *topic = NULL;
+    uint8_t *properties = NULL;
+    uint8_t *payload = NULL;
+    uint8_t *record = NULL;
+    size_t record_size = 0u;
+
+    client_id = (uint8_t *)malloc(STORE_BOUNDARY_UTF8_SIZE);
+    topic = (uint8_t *)malloc(STORE_BOUNDARY_UTF8_SIZE);
+    properties = (uint8_t *)malloc(STORE_BOUNDARY_UTF8_SIZE);
+    payload = (uint8_t *)malloc(STORE_BOUNDARY_PAYLOAD_SIZE);
+    check_not_null(client_id);
+    check_not_null(topic);
+    check_not_null(properties);
+    check_not_null(payload);
+    memset(client_id, 'c', STORE_BOUNDARY_UTF8_SIZE);
+    memset(topic, 't', STORE_BOUNDARY_UTF8_SIZE);
+    properties[0] = FLOWIE_MQTT_PROPERTY_CONTENT_TYPE;
+    properties[1] = (uint8_t)(STORE_BOUNDARY_CONTENT_TYPE_SIZE >> 8u);
+    properties[2] = (uint8_t)(STORE_BOUNDARY_CONTENT_TYPE_SIZE & 0xffu);
+    memset(properties + 3u, 'p', STORE_BOUNDARY_CONTENT_TYPE_SIZE);
+    for (size_t i = 0u; i < STORE_BOUNDARY_PAYLOAD_SIZE; ++i)
+      payload[i] = (uint8_t)(i * 29u + 7u);
+
+    config.owner_instance_id = 157u;
+    config.session_id = 163u;
+    config.max_subscriptions = 1u;
+    config.max_inflight = 1u;
+    connect.version = FLOWIE_MQTT_VERSION_5;
+    connect.clean_start = 0u;
+    connect.keep_alive = 60u;
+    connect.properties =
+        (flowie_mqtt_property_block_view_t)FLOWIE_MQTT_PROPERTY_BLOCK_VIEW_INIT;
+    connect.client_id =
+        (flowie_mqtt_span_t){client_id, STORE_BOUNDARY_UTF8_SIZE};
+    connect.will_qos = 2u;
+    connect.will_retain = 1u;
+    connect.will_topic = (flowie_mqtt_span_t){topic, STORE_BOUNDARY_UTF8_SIZE};
+    connect.will_properties =
+        (flowie_mqtt_property_block_view_t)FLOWIE_MQTT_PROPERTY_BLOCK_VIEW_INIT;
+    connect.will_properties.values =
+        (flowie_mqtt_span_t){properties, STORE_BOUNDARY_UTF8_SIZE};
+    connect.will_payload =
+        (flowie_mqtt_span_t){payload, STORE_BOUNDARY_PAYLOAD_SIZE};
+
+    owner = flowie_session_owner_create(&config);
+    check_not_null(owner);
+    check_int_eq(flowie_session_owner_open(owner, &connect), TURBO_OK);
+    check_int_eq(flowie_session_owner_close(owner), TURBO_OK);
+    check_int_eq(flowie_session_owner_snapshot(owner, &snapshot), TURBO_OK);
+    check_true(snapshot.will_pending);
+    check_int_eq(flowie_session_owner_record_encode(owner, NULL, 0u, &record_size), TURBO_ENOSPC);
+    check_size_gt(record_size, STORE_BOUNDARY_PAYLOAD_SIZE);
+    record = (uint8_t *)malloc(record_size);
+    check_not_null(record);
+    check_int_eq(flowie_session_owner_record_encode(owner, record, record_size, &record_size),
+                 TURBO_OK);
+    check_int_eq(flowie_session_owner_record_restore(
+                     &config, connect.client_id, snapshot.resource_generation, record,
+                     record_size, &restored),
+                 TURBO_OK);
+    check_int_eq(flowie_session_owner_snapshot(restored, &restored_snapshot), TURBO_OK);
+    check_size_eq(restored_snapshot.client_id.size, STORE_BOUNDARY_UTF8_SIZE);
+    check_mem_eq(restored_snapshot.client_id.data, client_id, STORE_BOUNDARY_UTF8_SIZE);
+    check_size_eq(restored_snapshot.will_topic.size, STORE_BOUNDARY_UTF8_SIZE);
+    check_mem_eq(restored_snapshot.will_topic.data, topic, STORE_BOUNDARY_UTF8_SIZE);
+    check_size_eq(restored_snapshot.will_properties.size, STORE_BOUNDARY_UTF8_SIZE);
+    check_mem_eq(restored_snapshot.will_properties.data, properties, STORE_BOUNDARY_UTF8_SIZE);
+    check_size_eq(restored_snapshot.will_payload.size, STORE_BOUNDARY_PAYLOAD_SIZE);
+    check_mem_eq(restored_snapshot.will_payload.data, payload, STORE_BOUNDARY_PAYLOAD_SIZE);
+    check_uint_eq(restored_snapshot.will_qos, 2u);
+    check_true(restored_snapshot.will_retain);
+    check_true(restored_snapshot.will_pending);
+
+    flowie_session_owner_destroy(restored);
+    flowie_session_owner_destroy(owner);
+    free(record);
+    free(payload);
+    free(properties);
+    free(topic);
+    free(client_id);
+  }
+
+  it("MQTT-FUZZ-004 preserves owner packet ID HWM and ACK prerequisites for generated events") {
+    enum { MODEL_STEPS = 4096 };
+    const uint32_t initial_seed = UINT32_C(0x4d515454);
+    flowie_owner_model_event_t events[MODEL_STEPS];
+    flowie_owner_model_event_t candidate[MODEL_STEPS];
+    uint32_t state = initial_seed;
+    size_t failed_index = SIZE_MAX;
+    size_t original_failed_index = SIZE_MAX;
+    size_t reduced_count = MODEL_STEPS;
+    int rc;
+    for (size_t step = 0u; step < MODEL_STEPS; ++step) {
+      uint32_t random = flowie_test_xorshift32(&state);
+      events[step].packet_id =
+          (uint16_t)(1u + random % FLOWIE_OWNER_MODEL_PACKET_IDS);
+      events[step].operation = (uint8_t)((random >> 8u) & 3u);
+      events[step].qos = (uint8_t)(1u + ((random >> 10u) & 1u));
+    }
+    info("seed=0x%08x events=%u", (unsigned)initial_seed, (unsigned)MODEL_STEPS);
+    rc = flowie_owner_model_replay(events, MODEL_STEPS, &failed_index);
+    if (rc == TURBO_EPROTO) {
+      original_failed_index = failed_index;
+      reduced_count = flowie_owner_model_shrink(events, MODEL_STEPS, candidate, &failed_index);
+      info("first_failed=%zu minimized_events=%zu minimized_failed=%zu", original_failed_index,
+           reduced_count, failed_index);
+    }
+    check_int_eq(rc, TURBO_OK);
   }
 }

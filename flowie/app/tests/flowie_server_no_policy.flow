@@ -1,0 +1,6 @@
+source admitted_publish_source adapter mqtt.endpoint
+stage mqtt_delivery_sink adapter mqtt.endpoint
+
+stage main {
+  admitted_publish_source -> mqtt_delivery_sink
+}

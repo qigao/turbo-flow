@@ -1,35 +1,30 @@
-# Flowie endpoint, owner-lane subscription fan-out, and memory Queue ACCEPTED composition.
+# Default configured Flowie broker.
+#
+# This YAML creates deployment instances and sets resource bounds. The companion
+# flowie.flow is the only source of truth for data sources, processors, data
+# sinks, branches, and their execution order.
 version: 1
 
-# Process-level handoff for timer and I/O producers. Capacity exhaustion fails
-# immediately; these workers submit into the same Flow sources as direct calls.
+# Process-level handoff used by timer and I/O producers. Capacity exhaustion
+# fails immediately; workers publish into the same Graph sources as direct calls.
 runtime:
   ingress:
     workers: 1
     capacity: 1024
 
+# Composition-root bindings required to construct the MQTT protocol owner and
+# optional RuleSet binding. The RuleSet binding is required only when the Graph
+# references rules.apply. These names do not define Graph
+# topology or select a business data sink.
 profiles:
   flowie:
     endpoint: mqtt.endpoint
-    accept_sink: queue.mqtt.accept
-    accepted_source: queue.mqtt.accepted
     rule_set: mqtt.routing
-    output: socket.application.output
-# A secure product profile also selects an auth-provider channel. The backend
-# must be registered by the composition root; selection is exact and has no fallback.
-#    auth_provider: mqtt.auth-service
+    # A secure profile also selects an auth-provider channel. Its backend must
+    # be registered by the composition root; selection is exact with no fallback.
+#   auth_provider: mqtt.auth-service
 
 channels:
-  mqtt.accepted:
-    kind: queue
-    config:
-      backend: memory
-      pattern: push_pull
-      resource_uid: queue:mqtt.accepted
-      owner_name: mqtt-accepted
-      capacity: 1024
-      max_payload_size: 1048576
-      full_policy: fail
   mqtt.routing:
     kind: rule_set
     config:
@@ -44,24 +39,25 @@ channels:
       rules:
         - when: mqtt.topic == "application/output"
           action: route
-          key: application_output
+          key: application_data_sink
         - when: "true"
           action: route
-          key: mqtt_fanout
+          key: mqtt_delivery_sink
 
 # Durable managed sessions and retained publications use one record-store channel with distinct
 # versioned keys. `max_records` must cover max_sessions + max_retained_messages, and
 # max_key_size must cover the 3-byte retained prefix plus a maximum MQTT Topic Name.
-# `flowie_server` creates the selected SQLite or Redis provider from this YAML and injects it through
+# `flowie_server` creates the selected Redis or PostgreSQL provider from this YAML and injects it through
 # flowie_endpoint_bindings_t. Uncomment both this channel and session_store below to enable it.
 # A custom host may provide the same binding through flowie_register_resolved_bound_endpoint[_ex].
 #  mqtt.sessions:
 #    kind: record_store
 #    config:
-#      backend: sqlite
-#      database_path: flowie.sqlite3
-#      namespace_name: mqtt.sessions
-#      busy_timeout_ms: 1000
+#      backend: redis
+#      host: 127.0.0.1
+#      port: 6379
+#      database: 0
+#      key: flowie-mqtt-sessions-v1
 #      max_key_size: 65538
 #      max_value_size: 16777216
 #      max_batch_size: 4096
@@ -117,6 +113,8 @@ channels:
 #      policy_source: mqtt.acl-service
 
 adapters:
+  # Bidirectional MQTT boundary: admitted PUBLISH source and subscription
+  # delivery sink. The Graph decides where each role appears.
   mqtt.endpoint:
     kind: flowie_endpoint
     config:
@@ -136,8 +134,7 @@ adapters:
       slow_subscriber_policy: disconnect
       manage_sessions: true
       # Omit both fields, or use received, for the legacy receive-boundary ACK contract.
-      # accepted requires the bounded memory Queue below; processed waits for graph completion;
-      # durable requires a SQLite COMMIT or Redis XADD settlement. There is no fallback.
+      # accepted and processed wait for the configured graph boundary. There is no fallback.
       # Quiesce and drain the endpoint before changing these fields and the graph together.
       settlement_qos1: accepted
       settlement_qos2: accepted
@@ -153,16 +150,7 @@ adapters:
 # running without authentication:
 #      security_realm: security.main
 #      auth_method: password
-  queue.mqtt.accept:
-    kind: queue
-    config:
-      channel: mqtt.accepted
-      role: sink
-  queue.mqtt.accepted:
-    kind: queue
-    config:
-      channel: mqtt.accepted
-      role: source
+  # Explicit application data sink selected by the Policy route above.
   socket.application.output:
     kind: socket
     config:
@@ -172,25 +160,9 @@ adapters:
       port: 1884
       timeout_ms: 5000
       send_hwm_bytes: 1048576
-# The managed endpoint consumes MQTT control packets and publishes only admitted
-# owned PUBLISH packets. ACCEPTED is the memory Queue commit, and its source
-# republishes the owned packet into the application path. A second explicit use
-# of the same bidirectional endpoint adapter performs subscription fan-out; the
-# socket ingress never hides that application routing decision. The graph remains
-# TurboFlow DSL until a typed YAML graph projection exists:
-# source mqtt_packet_in adapter mqtt.endpoint
-# stage mqtt_accept adapter queue.mqtt.accept
-# source mqtt_accepted adapter queue.mqtt.accepted
-# stage rules_route operation rules.apply resource mqtt.routing
-# stage mqtt_fanout adapter mqtt.endpoint
-# stage application_output adapter socket.application.output
-# stage main {
-#   mqtt_packet_in -> mqtt_accept
-#   mqtt_accepted -> rules_route -> [mqtt_fanout, application_output]
-# }
-# For durable message settlement, set settlement_qos1/qos2 to durable and
-# replace mqtt.accept with a SQLite Queue sink or Redis Stream sink. The
-# persistent message primitive stores the owned packet without its live route. Durable session
-# restore is an independent `session_store` record-store binding; both may be enabled together.
-# Rollback requires quiescing/draining again, restoring received (or omitting both fields), and
-# restoring the matching graph in the same stopped deployment; settlement fields are not hot-reloaded.
+# The managed endpoint consumes MQTT control packets and publishes only admitted,
+# owned PUBLISH messages. flowie.flow explicitly connects that source to the
+# Policy stage and then to either the MQTT delivery sink or the application data sink.
+# Control packets and session
+# state remain owned by the endpoint and never become implicit Graph stages.
+# Durable session restore remains an independent `session_store` record-store binding.

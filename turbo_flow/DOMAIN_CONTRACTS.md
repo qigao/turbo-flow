@@ -311,7 +311,7 @@ worker backpressure 当前支持 `block`、`fail` 和 `drop-newest`；`drop-olde
 complete/requeue/dead-letter settlement、protocol ACK settlement 和 `SETTLE` error mode 只通过
 显式 runtime owner callback 执行，不能由 adapter 私下从字符串 option 推断。
 
-内建计算 executor 只有 `inline`、thread pool 和 coroutine pool。RulesForge/TurboScript evaluate
+内建计算 executor 只有 `inline`、thread pool 和 coroutine pool。TurboFlow Policy expression evaluate
 是 inline pure evaluator，不创建独立 pool。Disruptor worker 是 bounded data handoff/consumer
 lane，CoroNet context 是 adapter-owned IO placement；两者都不是新的计算 executor 类别。
 旧 `socket`、`io` 和 `custom` executor 已删除；扩展行为必须建模为 typed operation、adapter

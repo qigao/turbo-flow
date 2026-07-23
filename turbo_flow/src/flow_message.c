@@ -17,13 +17,15 @@ typedef struct flow_msg_projection_s {
   int owns_descriptor;
   turbo_flow_protocol_route_t route;
   int has_route;
+  turbo_flow_protocol_origin_t protocol_origin;
+  int has_protocol_origin;
   turbo_flow_protocol_settlement_envelope_t protocol_settlement;
   int has_protocol_settlement;
 } flow_msg_projection_t;
 
 static int flow_msg_projection_empty(const flow_msg_projection_t *projection) {
   return projection && !projection->descriptor && !projection->value && !projection->has_route &&
-         !projection->has_protocol_settlement;
+         !projection->has_protocol_origin && !projection->has_protocol_settlement;
 }
 
 static void flow_msg_projection_destroy(void *ptr, void *ctx) {
@@ -427,6 +429,40 @@ void turbo_flow_msg_clear_protocol_route(turbo_flow_msg_t *msg) {
   binding->has_protocol_settlement = 0;
   memset(&binding->route, 0, sizeof(binding->route));
   binding->has_route = 0;
+  if (flow_msg_projection_empty(binding)) {
+    free(binding);
+    msg->_content_handle = NULL;
+  }
+}
+
+int turbo_flow_msg_set_protocol_origin(turbo_flow_msg_t *msg,
+                                       const turbo_flow_protocol_origin_t *origin) {
+  flow_msg_projection_t *binding;
+  if (!msg || turbo_flow_protocol_origin_validate(origin) != TURBO_OK) return TURBO_EINVAL;
+  binding = (flow_msg_projection_t *)flow_msg_projection(msg);
+  if (binding && binding->has_protocol_origin) return TURBO_EALREADY;
+  if (!binding) {
+    binding = (flow_msg_projection_t *)calloc(1, sizeof(*binding));
+    if (!binding) return TURBO_ENOMEM;
+    binding->magic = FLOW_MSG_PROJECTION_MAGIC;
+    msg->_content_handle = binding;
+  }
+  binding->protocol_origin = *origin;
+  binding->protocol_origin.size = sizeof(binding->protocol_origin);
+  binding->has_protocol_origin = 1;
+  return TURBO_OK;
+}
+
+const turbo_flow_protocol_origin_t *turbo_flow_msg_protocol_origin(const turbo_flow_msg_t *msg) {
+  const flow_msg_projection_t *binding = flow_msg_projection(msg);
+  return binding && binding->has_protocol_origin ? &binding->protocol_origin : NULL;
+}
+
+void turbo_flow_msg_clear_protocol_origin(turbo_flow_msg_t *msg) {
+  flow_msg_projection_t *binding = (flow_msg_projection_t *)flow_msg_projection(msg);
+  if (!binding || !binding->has_protocol_origin) return;
+  memset(&binding->protocol_origin, 0, sizeof(binding->protocol_origin));
+  binding->has_protocol_origin = 0;
   if (flow_msg_projection_empty(binding)) {
     free(binding);
     msg->_content_handle = NULL;

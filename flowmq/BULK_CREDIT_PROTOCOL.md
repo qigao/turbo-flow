@@ -1,9 +1,9 @@
 # FlowMQ Credit Worker Protocol v1
 
-状态：TFCW/1、易失性 credit owner、严格 YAML、memory/SQLite Queue 与 Redis Stream bounded
+状态：TFCW/1、易失性 credit owner、严格 YAML 与 Redis Stream bounded
 multi-claim、运行时 coordinator、TFCS/1.0 durable retry/outbox、同源原子 settlement 和有界 shutdown
 均已实现。`credit_worker + at_least_once` 必须通过显式 storage binding 创建；backend 不可用时
-fail fast，不得在 Redis/SQLite 之间隐式 fallback。本文不改变 FMQ v3 wire。
+fail fast，不得隐式 fallback 到本地内存。本文不改变 FMQ v3 wire。
 
 ## 1. 决策背景
 
@@ -18,7 +18,7 @@ TFCW/1 因此定义为配置驱动的高级应用协议，而不是 FMQ socket p
 
 - 使用普通 FMQ ROUTER/DEALER 连接和 CoroNet transport；
 - credit、job correlation 与 worker lease 由单一 pattern owner 管理；
-- payload 持久化继续由 Queue/Redis/SQLite owner 管理；
+- payload 持久化继续由 Redis Stream 或显式 durable owner 管理；
 - 无 credit 时非阻塞返回，不在 pattern 内建立隐藏临时队列；
 - 不改变 FMQ v3 frame，也不放宽 REQ/REP 同步状态机。
 
@@ -35,7 +35,7 @@ TFCW/1 因此定义为配置驱动的高级应用协议，而不是 FMQ socket p
 ## 3. 拓扑与 owner
 
 ```text
-client/source -> Queue or Redis fact source -> credit_worker owner -> FMQ ROUTER
+client/source -> Redis Stream or durable fact source -> credit_worker owner -> FMQ ROUTER
                                                            |             |
                                                            |       FMQ DEALER worker
                                                            |             |
@@ -44,7 +44,7 @@ client/source -> Queue or Redis fact source -> credit_worker owner -> FMQ ROUTER
 
 | 状态 | 唯一 owner | 持久化 |
 | --- | --- | --- |
-| payload、pending/in-flight delivery record | Queue/Redis/SQLite | 由 backend contract 决定 |
+| payload、pending/in-flight delivery record | Redis Stream/durable owner | 由 backend contract 决定 |
 | worker identity、live route、lease | credit_worker owner | 否；重连后重建 |
 | available message/byte tokens、credit sequence | credit_worker owner | 否；session-scoped |
 | request -> worker correlation | credit_worker owner | metadata only；payload 不复制进 broker |
@@ -126,7 +126,7 @@ snapshot 不会覆盖 broker 已消费的 token。
 
 credit 不是 ACK。TFCW 保持两类业务 ACK：
 
-1. `ACK_ACCEPT`：memory Queue 接管，或 SQLite/Redis transaction/XADD 已提交。它不表示 worker 收到。
+1. `ACK_ACCEPT`：显式 durable transaction/XADD 已提交。它不表示 worker 收到。
 2. `ACK_WORKER_COMPLETION`：worker COMPLETE 被当前 route generation 接受，并且 storage claim
    ack/delete 成功。transport send success、credit consumption 和 HWM admission 均不能生成该 ACK。
 
@@ -138,19 +138,15 @@ JOB send 失败时 correlation 返回 accepted/pending，credit token不自动�
 
 已经完成的存储前置能力：
 
-- memory Queue 可配置 bounded `max_active_claims`，默认值 1；每个 claim 使用独立 token 和稳定的
-  borrowed view，乱序 requeue 仍按原始 enqueue sequence 重放；
 - Redis Stream owner 通过 `turbo_flow_redis_stream_owner_create_ex()` 配置 bounded multi-claim；同一
   consumer 的 PEL 仍是事实源，requeue 不执行 XACK，restart 会按单调 pending cursor 恢复多个 entry；
-- SQLite Queue 使用独立 durable row/token，`schema_version = 2` 通过 queue 私有 metadata 表管理；legacy
-  messages 表启动时原位迁移，不受支持的更高 schema version fail fast；
 - ack/requeue 只作用于对应 token，stale/double settlement 返回 `TURBO_EALREADY`；
 - active claim 数量达到上限时返回 `TURBO_EBUSY`，不建立额外 payload 队列。
 - `turbo_flow_fmq_credit_settlement_t` 在一个 host-serialized owner lane 内绑定
   `request_id -> claim_token`；completion、cancel 和 lease expiry 关闭 credit correlation 后同步执行
   storage ACK/requeue/drop，失败则保留 pending settlement 供显式 retry；
-- Queue/Redis 通过 `turbo_flow_claim_settler_t` 薄适配，不把 payload 或 backend 类型复制进 FMQ；
-  drop 与 delivery ACK 使用不同 callback，Queue drop 不增加 `delivery_acks`。
+- Redis Stream 通过 `turbo_flow_claim_settler_t` 薄适配，不把 payload 或 backend 类型复制进 FMQ；
+  drop 与 delivery ACK 使用不同 callback。
 - Redis XACK 的 uncertain transport outcome 保留 active claim；显式 retry 通过 group-wide exact
   XPENDING 对账，ID 不存在才确认旧 XACK，仍由当前 consumer 持有才重发，已转移则返回
   `TURBO_EBUSY`，不 ACK 其他 consumer 的 claim。
@@ -164,12 +160,10 @@ JOB send 失败时 correlation 返回 accepted/pending，credit token不自动�
 - completion outbox 保存 TFBR logical address；Redis 使用一次 EVAL 原子提交 snapshot + XACK，
   回复丢失后以完全相同 snapshot 重试可判定幂等成功；
 - outbox publish 由 host 显式 confirm；COMPLETED/POISONED 到 TTL 后持久删除，避免 bounded table 耗尽。
-- SQLite 在同一 transaction 中 upsert TFCS snapshot 并 ACK/requeue/drop 对应 row；响应不确定时按
-  snapshot equality + row disposition 精确对账，重启将残留 in-flight row 恢复为 pending；
 - `turbo_flow_fmq_credit_durable_shutdown()` 先关闭 admission，再按配置选择有界 requeue/drop drain 或
   preserve-for-restart；backend failure 保持 quiesced 并允许同一调用重试。
 
-因此 Redis Stream 与 SQLite Queue 均可提供配置驱动的 durable `at_least_once`；未提供 durable
+因此 Redis Stream 可提供配置驱动的 durable `at_least_once`；未提供 durable
 callbacks、绑定名不匹配、snapshot 不兼容或 backend 不可用时均 fail fast，不降级为 volatile。
 
 ## 8. 当前 YAML
@@ -213,7 +207,7 @@ single-credit broker API 变成行为可变的胖接口。新 owner 提供：
 - nonblocking dispatch/reserve；
 - complete/fail/cancel/expire-one；
 - caller-owned bounded snapshot；
-- TFCW encode/decode 与 graph-native transform operations。
+- TFCW encode/decode 与可选 graph transform operations。
 
 易失性 at_most_once graph 由 FmqCreditWorker resource 和四个 inline typed operation 组成：
 
@@ -226,7 +220,7 @@ single-credit broker API 变成行为可变的胖接口。新 owner 提供：
 
 service 属于 credit_worker provider 配置，graph 节点只引用 resource。JOB 必须由上游 processor
 按 TFCW/1 预编码；credit stage 不猜测业务 payload 到 TFCW 的映射。当前 durable owner 的 C API 与
-Redis/SQLite recovery 完整保留，但 at_least_once graph registration 明确返回 TURBO_ENOTSUP：
+Redis recovery 完整保留，但 at_least_once graph registration 明确返回 TURBO_ENOTSUP：
 TurboFlow message 尚无通用、message-owned claim token projection，不能从 message ID 合成，也不能
 把 graph success 当作 storage accept ACK。
 
@@ -240,13 +234,11 @@ TurboFlow message 尚无通用、message-owned claim token projection，不能�
 | TFCW/1 codec 与 zero-copy fields | 已实现 | canonical LTV、schema、truncation/overflow 单元测试 |
 | 易失性 credit owner | 已实现 | 双维 grant、duplicate/gap、generation fencing、LRU、多 in-flight、lease expiry |
 | strict YAML | 已实现 | 区分 volatile `at_most_once` 与 storage-bound `at_least_once`，非法组合 fail fast |
-| memory Queue bounded multi-claim | 已实现 | 稳定 view、独立 settlement、原 enqueue 顺序 replay |
 | Redis Stream bounded multi-claim | 已实现 | 真实 Redis PEL restart replay、独立 ack/requeue、上限测试 |
-| SQLite bounded multi-claim | 已实现 | current queue schema、legacy 原位迁移、稳定 view、独立 settlement、restart requeue |
 | runtime claim settlement coordinator | 已实现 | completion/expiry、ACK/requeue/drop、失败保留与显式 retry |
-| durable retry/outbox recovery | Redis/SQLite 已实现 | TFCS/1.0、逻辑地址 outbox、同源原子 claim disposition、lost-reply retry、restart normalization、terminal TTL、配置化 shutdown |
+| durable retry/outbox recovery | Redis 已实现 | TFCS/1.0、逻辑地址 outbox、同源原子 claim disposition、lost-reply retry、restart normalization、terminal TTL、配置化 shutdown |
 | ROUTER/DEALER E2E | 已实现 | READY、两个并行 JOB、独立 COMPLETE、credit 不自动返还；真实 worker reconnect 以新 session route 拒绝旧 COMPLETE，并在旧 lease DROP 后重新 READY/dispatch/complete |
-| 压力与故障注入 | 部分完成 | 4096 in-flight 容量、置换 completion、显式 credit 恢复及 256 slow-worker lease expiry 已覆盖；共享 FMQ TCP transport 已覆盖 12 轮 broker reconnect/stop、HELLO/订阅恢复、不重放与有界 shutdown；TFCW 已覆盖 in-flight reconnect generation fence、lease settlement、shutdown lost-reply retry，以及真实 Redis/SQLite coordinator restart；credit owner 与真实 TCP ROUTER/DEALER serialized echo 均输出 throughput、P50/P95/P99。剩余项是发布流水线的多环境 soak/chaos 趋势门槛，不再是本地基线缺失 |
+| 压力与故障注入 | 部分完成 | 4096 in-flight 容量、置换 completion、显式 credit 恢复及 256 slow-worker lease expiry 已覆盖；共享 FMQ TCP transport 已覆盖 broker reconnect/stop、HELLO/订阅恢复、不重放与有界 shutdown；TFCW 已覆盖 in-flight reconnect generation fence、lease settlement、shutdown lost-reply retry，以及真实 Redis coordinator restart。剩余项是发布流水线的多环境 soak/chaos 趋势门槛。 |
 
 分位数使用 nearest-rank，在 warmup 后统一由 `FMQ_BENCH_RESULT` 输出。`test_fmq_broker` 测量纯
 credit owner 的 4096 次 dispatch 与 4096 次 complete；`test_fmq` 测量 64-byte payload 经真实 TCP

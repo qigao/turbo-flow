@@ -1,0 +1,85 @@
+# Flowie SMB product: protocol state and admitted PUBLISH records are PostgreSQL-backed.
+# QoS 1/2 acknowledgement occurs only after the outbox INSERT transaction commits.
+version: 1
+
+runtime:
+  ingress:
+    workers: 1
+    capacity: 1024
+
+profiles:
+  flowie:
+    endpoint: mqtt.endpoint
+    rule_set: mqtt.routing
+
+channels:
+  mqtt.routing:
+    kind: rule_set
+    config:
+      resource_uid: rule-set:mqtt.smb.routing
+      owner_name: flowie.smb.routing
+      mode: first_match
+      max_instructions: 4096
+      max_time_ns: 10000000
+      max_memory_bytes: 1048576
+      max_output_actions: 16
+      max_output_bytes: 16384
+      rules:
+        - when: "true"
+          action: route
+          key: mqtt_delivery_sink
+  mqtt.publish.outbox:
+    kind: outbox
+    config:
+      backend: postgresql
+      conninfo: "host=127.0.0.1 port=5432 dbname=turboflow user=turboflow password=change-me"
+      outbox_name: flowie_smb_publish
+      capacity: 100000
+      max_payload_size: 1048576
+      poll_interval_ms: 50
+      claim_scan_limit: 128
+      create_table: true
+  mqtt.sessions:
+    kind: record_store
+    config:
+      backend: postgresql
+      conninfo: "host=127.0.0.1 port=5432 dbname=turboflow user=turboflow password=change-me"
+      namespace_name: flowie_smb_sessions
+      max_key_size: 65538
+      max_value_size: 16777216
+      max_batch_size: 4096
+      max_records: 200000
+      create_table: true
+
+adapters:
+  mqtt.endpoint:
+    kind: flowie_endpoint
+    config:
+      transport: tcp
+      host: 127.0.0.1
+      port: 1883
+      max_packet_size: 1048576
+      max_connections: 4096
+      coroutine_stack_size: 65536
+      recv_buffer_size: 4096
+      send_hwm_bytes: 1048576
+      slow_subscriber_policy: disconnect
+      manage_sessions: true
+      settlement_qos1: durable
+      settlement_qos2: durable
+      max_sessions: 4096
+      max_retained_messages: 4096
+      max_subscriptions_per_session: 256
+      max_inflight_per_session: 64
+      topic_alias_maximum: 64
+      session_store: mqtt.sessions
+  pg.mqtt.publish:
+    kind: pgsql_outbox
+    config:
+      channel: mqtt.publish.outbox
+      role: sink
+  pg.mqtt.replay:
+    kind: pgsql_outbox
+    config:
+      channel: mqtt.publish.outbox
+      role: source

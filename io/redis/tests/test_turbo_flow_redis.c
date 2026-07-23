@@ -1,7 +1,10 @@
 #include "tinytest.h"
 #include "turbo_flow_redis.h"
+#include "turbo_flow_store_redis.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
+
+#include "redis_storage_test_helpers.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -410,6 +413,68 @@ static void redis_run_lost_xack_case(redis_runtime_server_mode_t mode, int expec
 }
 
 spec("turbo_flow_redis") {
+  it("accepts documented Redis StateStore defaults without connecting eagerly") {
+    turbo_flow_redis_record_store_config_t config;
+    turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+    turbo_flow_state_store_t *store = NULL;
+
+    memset(&config, 0, sizeof(config));
+    config.host = "127.0.0.1";
+    config.port = 1u;
+    config.database = 0;
+    config.timeout_ms = 100u;
+    config.key = "turboflow:test:state-defaults";
+    config.max_records = 2u;
+    limits.max_records = 2u;
+    limits.max_bytes = 64u;
+    limits.max_item_bytes = 32u;
+    check_int_eq(redis_test_state_store_open(&config, &limits, &store), TURBO_OK);
+    check_not_null(store);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+  }
+
+  it("accepts documented Redis IndexStore defaults without connecting eagerly") {
+    turbo_flow_redis_index_store_config_t config;
+    turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+    turbo_flow_index_store_t *store = NULL;
+
+    memset(&config, 0, sizeof(config));
+    config.host = "127.0.0.1";
+    config.port = 1u;
+    config.database = 0;
+    config.timeout_ms = 100u;
+    config.key = "turboflow:test:index-defaults";
+    limits.max_records = 2u;
+    limits.max_bytes = 64u;
+    limits.max_item_bytes = 32u;
+    check_int_eq(redis_test_index_store_open(&config, &limits, &store), TURBO_OK);
+    check_not_null(store);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+  }
+
+  it("accepts documented Redis LogStore defaults without connecting eagerly") {
+    turbo_flow_redis_log_store_config_t config;
+    turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+    turbo_flow_log_store_t *store = NULL;
+
+    memset(&config, 0, sizeof(config));
+    config.host = "127.0.0.1";
+    config.port = 1u;
+    config.database = 0;
+    config.timeout_ms = 100u;
+    config.key = "turboflow:test:log-defaults";
+    limits.max_records = 2u;
+    limits.max_bytes = 64u;
+    limits.max_item_bytes = 32u;
+    limits.full_policy = TURBO_FLOW_STORE_FULL_TRIM_OLDEST;
+    check_int_eq(redis_test_log_store_open(&config, &limits, &store), TURBO_OK);
+    check_not_null(store);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+
+    config.max_operation_records = 1u;
+    check_int_eq(redis_test_log_store_open(&config, &limits, &store), TURBO_EINVAL);
+  }
+
   it("propagates Redis Stream errors instead of reporting an empty queue") {
     redis_runtime_server_t server;
     turbo_thread_t server_thread;
@@ -777,9 +842,9 @@ spec("turbo_flow_redis") {
 
     check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(
-        turbo_flow_redis_record_store_create_resolved(resolved, "mqtt.sessions", &store, &error),
-        TURBO_ENOTSUP);
+    check_int_eq(redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store,
+                                                          &error),
+                 TURBO_ENOTSUP);
     check_str_eq(error.path, "$.channels.mqtt.sessions.config.backend");
     check_null(store.ctx);
     turbo_flow_resolved_config_destroy(resolved);
@@ -893,5 +958,4 @@ spec("turbo_flow_redis") {
     WSACleanup();
 #endif
   }
-
 }

@@ -167,11 +167,86 @@ channels:
       max_records: 100000
 ```
 
-`turbo_flow_redis_record_store_create_resolved()` binds one Redis Hash. A Lua
-transaction validates all expected revisions and capacity before applying any
-HSET/HDEL, so success is one durable batch ACK and conflict returns
-`TURBO_EBUSY`; there is no memory fallback. The maximum key size is 65538 bytes,
-which accommodates Flowie's binary retained-record prefix plus a maximum MQTT Topic Name.
+The Redis storage backend's `open()` binds one Redis Hash for a record channel.
+Register `turbo_flow_redis_storage_backend_api()` in the common storage registry,
+then create an owner for `TURBO_FLOW_STORAGE_MODEL_RECORD`; the owner exposes the
+provider-neutral record facade and is the only destroy path. A Lua transaction
+validates all expected revisions and capacity before applying any HSET/HDEL, so
+success is one durable batch ACK and conflict returns `TURBO_EBUSY`; there is no
+memory fallback. The maximum key size is 65538 bytes, which accommodates Flowie's
+binary retained-record prefix plus a maximum MQTT Topic Name.
+
+The same Hash/Lua fact source can be used through the typed FlowStore API:
+
+```c
+turbo_flow_redis_record_store_config_t redis = {
+    .host = "127.0.0.1",
+    .port = 6379,
+    .key = "flowie:mqtt:state",
+    .max_records = 100000,
+};
+turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+turbo_flow_state_store_t *state = NULL;
+
+limits.max_records = 100000;
+limits.max_bytes = 256u * 1024u * 1024u;
+limits.max_item_bytes = 1024u * 1024u;
+/* Register the builtin backend, create an owner for STATE, and obtain `state`
+ * with turbo_flow_storage_backend_owner_service(). */
+int rc = turbo_flow_storage_backend_owner_create_registered(
+    registry, "redis", &request, &owner, &error);
+```
+
+The STATE service is binary safe and uses `HGET` for point reads. Writes perform
+one bounded `HGETALL` capacity snapshot and then use the record-store Lua
+compare-and-set transaction. Consequently each namespace has one mutable
+FlowStore writer; the Lua revision check still rejects stale writes, but the
+aggregate byte limit is not a multi-process admission protocol. Redis errors are
+returned directly and never fall back to memory.
+
+For membership and mapping queries, open the INDEX model through the same Redis
+backend owner. It maps each binary index name to a native Redis Set. The namespace and index name
+are hex encoded into Redis Cluster-compatible keys sharing one hash tag.
+`SISMEMBER`, `SCARD`, `SMEMBERS`, and `SINTER` implement the typed query
+contract. Add/remove use Lua to update the Set and namespace-wide
+`max_records/max_bytes` counters atomically, so capacity remains one fact even
+with multiple writers. Bitmap and Redis string/stream types are not used for
+membership storage.
+
+For ordered event payloads, open the LOG model through the same Redis backend
+owner. It uses one Redis Stream as the payload fact source, one ZSet for bounded order metadata, and one
+Hash for cursor/capacity metadata. Their keys share one Redis Cluster hash tag.
+Append and trim validate the stored schema and immutable limits before one Lua
+mutation; writers with different limits receive `TURBO_EBUSY`. A rejected
+append does not consume a cursor. Retention and `TRIM_OLDEST` delete only an
+oldest prefix, while reads copy payloads into caller-owned `mem_buffer_t`
+records and return `TURBO_ERANGE` for a stale cursor.
+
+```c
+turbo_flow_redis_log_store_config_t redis = {
+    .host = "127.0.0.1",
+    .port = 6379,
+    .key = "flowie:mqtt:events",
+    .max_operation_records = 4096,
+};
+turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+turbo_flow_log_store_t *log = NULL;
+
+limits.max_records = 4096;
+limits.max_bytes = 64u * 1024u * 1024u;
+limits.max_item_bytes = 1024u * 1024u;
+limits.retention_ms = 24u * 60u * 60u * 1000u;
+limits.full_policy = TURBO_FLOW_STORE_FULL_TRIM_OLDEST;
+/* Open LOG through the registered Redis backend and obtain `log` from the owner. */
+int rc = turbo_flow_storage_backend_owner_create_registered(
+    registry, "redis", &request, &owner, &error);
+```
+
+`max_operation_records` bounds a read and every Lua prefix scan. It must be at
+least `limits.max_records` and is capped at
+`TURBO_FLOW_REDIS_LOG_MAX_OPERATION_RECORDS`. The Redis provider accepts
+timestamps and cursors through `2^53 - 1`, because Lua performs exact integer
+capacity and ordering checks. There is no memory fallback.
 
 ## Live verification
 
@@ -183,6 +258,8 @@ cmake --build --preset win-dev-user --target test_turbo_flow_redis_live
 ctest --preset win-dev-user -R "test_turbo_flow_redis_live$" --output-on-failure
 ```
 
-It covers binary-safe Data SET/GET, bounded multi-claim, stable borrowed views,
+It covers the binary-safe revisioned StateStore, Redis Set IndexStore, bounded
+Redis Stream LogStore cursor/trim/retention/reopen behavior, binary-safe Data
+SET/GET, bounded multi-claim, stable borrowed views,
 same-consumer multi-entry PEL restart replay, independent requeue/exact-XACK
 settlement, and interruption of a blocked XREADGROUP.

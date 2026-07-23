@@ -21,7 +21,7 @@ Control DSL -> parser -> typed facts evaluation -> resource command / reconcile 
   domain/type、source/stage role、resource compatibility、executor scope、worker capacity、
   retry/reject/reorder 和 settlement 边界。
 - `module + primitive + operation + executable binding` 作为统一业务契约目前是**部分落地**：
-  module catalog/依赖校验、RulesForge typed provider，以及 HTTP/RPC/FMQ/Flowie/Queue/Storage
+  module catalog/依赖校验、TurboFlow Policy typed provider，以及 HTTP/RPC/FMQ/Flowie/Queue/Storage
   typed native adapter 已实现；
   大多数 IO、协议、队列和存储模块仍以 `adapter + resource provider + core.* implicit
   operation` 接入 graph。
@@ -134,7 +134,7 @@ owner。
 
 | Domain | 核心 value primitive | 核心 resource primitive | 典型 operation | 状态 owner | 当前证据摘要 |
 |---|---|---|---|---|---|
-| Data | Message、ContentDescriptor、Schema、Batch、Decision | keyed state/window store、schema registry | decode、validate、transform、filter、route、emit、keyed update、window close | message/processor/schema owner | graph/core、codec、RulesForge、keyed/window 已有实现 |
+| Data | Message、ContentDescriptor、Schema、Batch、Decision | keyed state/window store、schema registry | decode、validate、transform、filter、route、emit、keyed update、window close | message/processor/schema owner | graph/core、codec、Policy、keyed/window 已有实现 |
 | Execution | Task、ExecutionPlan、Completion、OrderingKey | thread/coro pool、Disruptor segment、runtime | submit、yield、cancel、wait、drain、resize、reorder | flow runtime/executor owner | 已有 executor、segment plan、pool status/resize |
 | IO/Transport | EndpointSpec、ConnectionView、StreamChunk | endpoint、connection、CoroNet execution binding | listen、connect、read、write、interrupt、quiesce、resume | adapter/CoroNet context owner | socket、HTTP、FMQ、Flowie endpoint 已接入 |
 | Protocol/Pattern | Frame、RouteToken、Correlation、Subscription、DeliveryAttempt | ProtocolSession、route/session aggregate、broker pattern state | parse、encode、publish、request/reply、subscribe、settle | 协议 owner | FMQ、MQTT/Flowie、HTTP/RPC、email、Redis protocol paths |
@@ -148,7 +148,7 @@ Domain 不是目录归属。一个模块可以跨多个 domain，但每个状态
   management state 不能合成一个 FMQ 万能 primitive。
 - Flowie 的 MQTT endpoint 在 IO/Transport 和 Protocol/Pattern 之间做 bridge；topic、session、
   QoS、membership 和 route 状态仍由 Flowie owner 独占。
-- RulesForge 的输入输出属于 Data，但 RuleSet 属于 Rules；`rules.apply` 是显式跨 domain
+- Policy 的输入输出属于 Data，但 RuleSet 属于 Rules；`rules.apply` 是显式跨 domain
   operation，不能把规则资源变成 Data 的普通 map。
 
 ## 6. 模块接入矩阵：现状与缺口
@@ -156,7 +156,7 @@ Domain 不是目录归属。一个模块可以跨多个 domain，但每个状态
 | 模块 | 主要 domain | 当前 graph/owner 接入 | 显式 primitive/operation catalog | 状态 | 结论 |
 |---|---|---|---|---|---|
 | `turbo_flow` core | Data / Execution / Management | Graph DSL/compiler/dispatch + Control DSL/resource command | `core.*` 为 compiler 生成的 implicit contract | `implemented` | graph 与 control 基座已成立；core contract 不是 domain catalog |
-| `turbo_flow/src/flow_policy.c` | Rules | typed provider + graph + resource owner | `rules.forge` module 导出 `RuleSet` + `rules.apply`，provider 显式绑定 module | `implemented` | module/contract/binding 参考实现 |
+| `turbo_flow/src/flow_policy.c` | Rules | typed provider + graph + resource owner | `rules.policy` module 导出 `RuleSet` + `rules.apply`，provider 显式绑定 module | `implemented` | module/contract/binding 参考实现 |
 | `codec` | Data | line/length/databind/csv adapter | 未发现生产 `register_primitive/operation` 路径 | `adapter-only` | 需要补 Data operation catalog |
 | `queue` | Buffer/Persistence | source/sink adapter + claim settlement | `buffer.queue` 导出 `QueueBuffer`、`queue.dequeue/enqueue`；adapter operation 固定绑定实际 Queue primitive | `implemented` | Queue 状态仍由共享 queue owner 独占，不归 adapter |
 | `storage` | Buffer/Persistence | file/directory/sqlite source/sink | `buffer.storage` 导出 `StorageResource` 与 file/directory/append/sqlite operations，绑定实际 storage primitive | `implemented` | source/read 与各 sink commit 保持不同 operation |
@@ -204,7 +204,7 @@ kind/domain/type 之后校验 inclusive range。`max=0` 表示无上界；V1 des
 
 ### MED：其余 adapter 的能力宣称仍需显式契约证据
 
-RulesForge、Socket、HTTP、RPC、FMQ、Flowie、Queue 和 Storage 已完成 catalog + executable
+TurboFlow Policy、Socket、HTTP、RPC、FMQ、Flowie、Queue 和 Storage 已完成 catalog + executable
 binding；codec、Redis、PgSQL、S3、Email 与 Schedule 仍主要通过 legacy adapter 路径工作。即使 DSL
 手工绑定 operation，只要执行实现没有 typed binding，仍不能计入 operation-level proof。
 
@@ -256,7 +256,7 @@ Module catalog 是注册/校验层，不是 loader、plugin system、资源工�
 - `turbo_flow_module_count/at/find()`、`turbo_flow_operation_provider_module()` 和
   `turbo_flow_adapter_operation_module()` 提供只读查询；
   `reset(..., 1)` 保留目录，registry-clearing reset/destroy 释放它；
-- 生产 catalog 包括 `rules.forge`、`io.socket`、HTTP/RPC client/server、`io.fmq`、
+- 生产 catalog 包括 `rules.policy`、`io.socket`、HTTP/RPC client/server、`io.fmq`、
   `protocol.mqtt.server`、`buffer.queue` 和 `buffer.storage`。HTTP/RPC 仍保留 native endpoint；
   FMQ/Flowie 仍保留各自 CoroNet/protocol owner；catalog 不替换运行时。
 
@@ -351,7 +351,7 @@ settlement。
 - Operation resolve/validation：`turbo_flow/src/flow_compile.c`。
 - Graph lowering：`turbo_flow/src/flow_plan.c`、`flow_internal.h`。
 - Runtime execution：`turbo_flow/src/flow_executor.c`、`flow_execution.c`、`flow_dispatch.c`。
-- Module/provider binding 与 RulesForge 显式 catalog：`turbo_flow/src/flow_domain.c`、
+- Module/provider binding 与 TurboFlow Policy 显式 catalog：`turbo_flow/src/flow_domain.c`、
   `flow_compile.c`、`flow_policy.c`、`turbo_flow/tests/test_flow_domain.c`、`test_flow_policy.c`。
 - Domain 原则和所有权：`turbo_flow/PRIMITIVE_GRAPH_ARCHITECTURE.md`、`DOMAIN_CONTRACTS.md`。
 - Domain contract/negative tests：`turbo_flow/tests/test_flow_domain.c`、

@@ -4,6 +4,7 @@ Build and run the capacity benchmark with the repository presets:
 
 ```powershell
 cmake --build --preset win-release-user --target bench_flowie
+build\Msvc-Release\bin\bench_flowie.exe --filter "MQTT typed projection facts"
 build\Msvc-Release\bin\bench_flowie.exe --filter "100k session and topic-index capacity"
 build\Msvc-Release\bin\bench_flowie.exe --filter "compiled MQTT security matcher"
 build\Msvc-Release\bin\bench_flowie.exe --filter "100k wildcard/shared rebuild"
@@ -11,6 +12,12 @@ build\Msvc-Release\bin\bench_flowie.exe --filter "real TCP MQTT pipeline burst"
 build\Msvc-Release\bin\bench_flowie.exe --filter "100k live TCP MQTT selector and packet fan-out"
 build\Msvc-Release\bin\bench_flowie.exe --filter "real TCP stalled-subscriber isolation"
 ```
+
+The `MQTT typed projection facts` benchmark compares repeated full-schema rule reads from an
+opaque MQTT 5 PUBLISH with reads from an ingress-style buffer-owned projection. Both rows evaluate
+the same 15 fields in batches of 64; setup, payload copy, and projection binding are outside the
+timed blocks. The opaque row reparses wire bytes on every facts-provider call, while the bound row
+uses stable field IDs and branch-local inline bitmaps.
 
 The benchmark holds 100,000 internal session owners concurrently, then builds a 100,000-filter
 derived MQTT trie containing exact, `+`, `#`, and shared filters. It reports create/CONNECT rate,
@@ -77,6 +84,9 @@ Local Windows/MSVC Release reference (same machine, not a portable SLA). Network
 2026-07-16; selector figures were rerun on 2026-07-17 after incremental removal was added; security
 matcher figures were measured on 2026-07-19:
 
+- MQTT facts reads (2026-07-21, one 15-field Release run): opaque wire parse 1.53 million/s
+  (0.654 us), bound typed projection 18.85 million/s (0.053 us), a 12.3x field-read improvement.
+  This excludes ingress copy/bind, Queue handoff, graph scheduling, and network I/O.
 - Historical single-operation 4,096-rule SecurityRealm before validated traversal: PUBLISH
   536,659/s (1.863 us), SUBSCRIBE 482,777/s (2.071 us). The current batched parser-proven endpoint
   path reaches 1,262,439/s (0.792 us) and 1,209,935/s (0.826 us), using three-run medians.

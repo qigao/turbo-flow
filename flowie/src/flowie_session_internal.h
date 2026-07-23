@@ -192,8 +192,12 @@ CXX_C_API int flowie_session_owner_open(flowie_session_owner_t *owner,
  * close_after_reply=1; internal/state-owner failures are returned directly.
  */
 CXX_C_API int flowie_session_owner_connect(flowie_session_owner_t *owner,
-                                           const flowie_mqtt_connect_view_t *connect,
-                                           flowie_session_connect_result_t *out);
+                                            const flowie_mqtt_connect_view_t *connect,
+                                            flowie_session_connect_result_t *out);
+/** Reconnect an already-active owner after MQTT Client ID takeover without arming its Will. */
+CXX_C_API int flowie_session_owner_connect_takeover(flowie_session_owner_t *owner,
+                                                     const flowie_mqtt_connect_view_t *connect,
+                                                     flowie_session_connect_result_t *out);
 CXX_C_API int flowie_session_owner_close(flowie_session_owner_t *owner);
 CXX_C_API int flowie_session_owner_snapshot(const flowie_session_owner_t *owner,
                                             flowie_session_snapshot_t *out);
@@ -223,13 +227,41 @@ CXX_C_API int flowie_session_owner_delivery_reserve(flowie_session_owner_t *owne
                                                     uint16_t *packet_id);
 /** Commit an encoded outbound PUBLISH so a persistent reconnect can retransmit it. */
 CXX_C_API int flowie_session_owner_delivery_commit(flowie_session_owner_t *owner,
-                                                   uint16_t packet_id, flowie_mqtt_span_t packet);
+                                                   uint16_t packet_id, flowie_mqtt_span_t packet,
+                                                   uint64_t expiry_at_epoch_seconds);
+/** Commit a delivery accepted while its persistent subscriber is offline. */
+CXX_C_API int flowie_session_owner_delivery_commit_queued(flowie_session_owner_t *owner,
+                                                          uint16_t packet_id,
+                                                          flowie_mqtt_span_t packet,
+                                                          uint64_t expiry_at_epoch_seconds);
 /** Roll back a reservation or a committed delivery that was not admitted to the send Queue. */
 CXX_C_API int flowie_session_owner_delivery_cancel(flowie_session_owner_t *owner,
                                                    uint16_t packet_id);
-/** Return a borrowed pending wire packet; PUBLISH retransmissions are returned with DUP set. */
+/** Remove every expired outbound PUBLISH and advance the durable resource generation once. */
+CXX_C_API int flowie_session_owner_delivery_expire(flowie_session_owner_t *owner,
+                                                   uint64_t now_epoch_seconds,
+                                                   size_t *removed_count);
+/** Remove one expired outbound PUBLISH identified by its broker packet identifier. */
+CXX_C_API int flowie_session_owner_delivery_expire_packet(flowie_session_owner_t *owner,
+                                                          uint16_t packet_id,
+                                                          uint64_t now_epoch_seconds, int *removed);
+/** Return a borrowed pending packet; only retransmissions, not first queued sends, set DUP. */
 CXX_C_API int flowie_session_owner_delivery_pending_at(flowie_session_owner_t *owner, size_t index,
                                                        flowie_mqtt_span_t *packet);
+/**
+ * Return one pending packet with Message Expiry derived from the absolute delivery deadline.
+ * The caller must prune expired deliveries before iterating.
+ */
+CXX_C_API int flowie_session_owner_delivery_pending_at_ex(flowie_session_owner_t *owner,
+                                                          size_t index, uint64_t now_epoch_seconds,
+                                                          flowie_mqtt_span_t *packet,
+                                                          uint16_t *packet_id,
+                                                          uint64_t *expiry_at_epoch_seconds);
+/** Rewrite the fixed-width MQTT 5 Message Expiry value without changing packet ownership/size. */
+CXX_C_API int flowie_session_delivery_packet_expiry_refresh(flowie_mqtt_version_t version,
+                                                            uint8_t *packet, size_t packet_size,
+                                                            uint64_t expiry_at_epoch_seconds,
+                                                            uint64_t now_epoch_seconds);
 /** Consume PUBACK/PUBREC/PUBCOMP for one broker-owned outbound delivery. */
 CXX_C_API int flowie_session_owner_delivery_ack(flowie_session_owner_t *owner,
                                                 const flowie_mqtt_packet_view_t *packet,

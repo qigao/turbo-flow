@@ -141,7 +141,7 @@ static int control_test_add_extension(X509 *certificate, X509 *issuer, int nid,
   X509_EXTENSION *extension;
   if (!certificate || !issuer || !value) return -1;
   X509V3_set_ctx(&extension_context, issuer, certificate, NULL, NULL, 0);
-  extension = X509V3_EXT_conf_nid(NULL, &extension_context, nid, (char *)value);
+  extension = X509V3_EXT_nconf_nid(NULL, &extension_context, nid, value);
   if (!extension) return -1;
   if (X509_add_ext(certificate, extension, -1) != 1) {
     X509_EXTENSION_free(extension);

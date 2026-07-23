@@ -1,9 +1,13 @@
+#include "flowie_record_store_contract.h"
 #include "tinytest.h"
 #include "turbo_error.h"
 #include "turbo_flow_fmq_broker.h"
 #include "turbo_flow_redis.h"
+#include "turbo_flow_store_redis.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
+
+#include "redis_storage_test_helpers.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -38,6 +42,24 @@ typedef struct redis_live_record_capture_s {
   uint64_t revisions[4];
   size_t count;
 } redis_live_record_capture_t;
+
+typedef struct redis_live_member_capture_s {
+  uint8_t members[4][16];
+  size_t sizes[4];
+  size_t count;
+} redis_live_member_capture_t;
+
+static int redis_live_member_visit(void *ctx, turbo_flow_store_bytes_t member) {
+  redis_live_member_capture_t *capture = (redis_live_member_capture_t *)ctx;
+  if (!capture || !member.data || member.size == 0u || member.size > sizeof(capture->members[0]) ||
+      capture->count >= 4u) {
+    return TURBO_EPROTO;
+  }
+  memcpy(capture->members[capture->count], member.data, member.size);
+  capture->sizes[capture->count] = member.size;
+  capture->count++;
+  return TURBO_OK;
+}
 
 static int redis_live_record_visit(void *ctx, const turbo_flow_record_view_t *record) {
   redis_live_record_capture_t *capture = (redis_live_record_capture_t *)ctx;
@@ -197,6 +219,337 @@ static int redis_live_start_bound_endpoint(const turbo_flow_resolved_config_t *r
 #endif
 
 spec("turbo_flow_redis_live") {
+  it("uses Redis Sets as the bounded binary-safe IndexStore fact source") {
+    static const uint8_t online_name[] = {'o', 0u, 'n'};
+    static const uint8_t room_name[] = {'r', '1'};
+    static const uint8_t first_member[] = {'d', 0u, '1'};
+    static const uint8_t second_member[] = {'d', 0u, '2'};
+    static const uint8_t third_member[] = {'d', 0u, '3'};
+    turbo_flow_redis_index_store_config_t config;
+    turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+    turbo_flow_index_store_t *store = NULL;
+    turbo_flow_store_stats_t stats = TURBO_FLOW_STORE_STATS_INIT;
+    redis_live_member_capture_t capture;
+    turbo_flow_store_bytes_t online = {online_name, sizeof(online_name)};
+    turbo_flow_store_bytes_t room = {room_name, sizeof(room_name)};
+    turbo_flow_store_bytes_t first = {first_member, sizeof(first_member)};
+    turbo_flow_store_bytes_t second = {second_member, sizeof(second_member)};
+    turbo_flow_store_bytes_t third = {third_member, sizeof(third_member)};
+    turbo_flow_store_bytes_t indices[] = {online, room};
+    size_t count = 0u;
+    int present = 0;
+    char redis_key[128];
+
+    (void)snprintf(redis_key, sizeof(redis_key), "turboflow:live:index:%llu",
+                   (unsigned long long)turbo_hrtime());
+    memset(&config, 0, sizeof(config));
+    config.host = "127.0.0.1";
+    config.port = 6379u;
+    config.database = 0;
+    config.timeout_ms = 5000u;
+    config.key = redis_key;
+    config.max_index_name_size = 8u;
+    config.max_member_size = 8u;
+    limits.max_records = 3u;
+    limits.max_bytes = 32u;
+    limits.max_item_bytes = 16u;
+
+    check_int_eq(redis_test_index_store_open(&config, &limits, &store), TURBO_OK);
+    check_int_eq(turbo_flow_index_store_add(store, online, first), TURBO_OK);
+    check_int_eq(turbo_flow_index_store_add(store, online, second), TURBO_OK);
+    check_int_eq(turbo_flow_index_store_add(store, room, second), TURBO_OK);
+    check_int_eq(turbo_flow_index_store_add(store, online, first), TURBO_EALREADY);
+    check_int_eq(turbo_flow_index_store_add(store, room, third), TURBO_ENOSPC);
+    check_int_eq(turbo_flow_index_store_contains(store, room, second, &present), TURBO_OK);
+    check_int_eq(present, 1);
+    check_int_eq(turbo_flow_index_store_count(store, online, &count), TURBO_OK);
+    check_size_eq(count, 2u);
+    check_int_eq(turbo_flow_index_store_intersection_count(store, indices, 2u, &count), TURBO_OK);
+    check_size_eq(count, 1u);
+    memset(&capture, 0, sizeof(capture));
+    check_int_eq(turbo_flow_index_store_visit(store, online, redis_live_member_visit, &capture),
+                 TURBO_OK);
+    check_size_eq(capture.count, 2u);
+    check_int_eq(turbo_flow_index_store_stats(store, &stats), TURBO_OK);
+    check_size_eq(stats.records, 3u);
+    check_size_eq(stats.bytes, sizeof(online_name) + sizeof(room_name) + sizeof(first_member) +
+                                   sizeof(second_member) * 2u);
+    check_int_eq(turbo_flow_index_store_remove(store, online, first), TURBO_OK);
+    check_int_eq(turbo_flow_index_store_remove(store, online, second), TURBO_OK);
+    check_int_eq(turbo_flow_index_store_remove(store, room, second), TURBO_OK);
+    check_int_eq(turbo_flow_index_store_close(store), TURBO_OK);
+    check_int_eq(turbo_flow_index_store_add(store, room, third), TURBO_ESHUTDOWN);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+  }
+
+  it("uses Redis Stream as the bounded cursor-ordered LogStore fact source") {
+    static const uint8_t first_payload[] = {'a'};
+    static const uint8_t second_payload[] = {'b', 0u};
+    static const uint8_t third_payload[] = {'c', 'c', 'c'};
+    turbo_flow_redis_log_store_config_t config;
+    turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+    turbo_flow_log_store_t *store = NULL;
+    turbo_flow_log_record_t records[2] = {TURBO_FLOW_LOG_RECORD_INIT, TURBO_FLOW_LOG_RECORD_INIT};
+    turbo_flow_store_stats_t stats = TURBO_FLOW_STORE_STATS_INIT;
+    turbo_flow_store_bytes_t first = {first_payload, sizeof(first_payload)};
+    turbo_flow_store_bytes_t second = {second_payload, sizeof(second_payload)};
+    turbo_flow_store_bytes_t third = {third_payload, sizeof(third_payload)};
+    turbo_flow_store_bytes_t empty = TURBO_FLOW_STORE_BYTES_INIT;
+    size_t count = 0u;
+    size_t trimmed = 0u;
+    uint64_t cursor = 0u;
+    uint64_t head = 0u;
+    uint64_t tail = 0u;
+    char redis_key[128];
+
+    (void)snprintf(redis_key, sizeof(redis_key), "turboflow:live:log:%llu",
+                   (unsigned long long)turbo_hrtime());
+    memset(&config, 0, sizeof(config));
+    config.host = "127.0.0.1";
+    config.port = 6379u;
+    config.database = 0;
+    config.timeout_ms = 5000u;
+    config.key = redis_key;
+    config.max_operation_records = 2u;
+    limits.max_records = 2u;
+    limits.max_bytes = 8u;
+    limits.max_item_bytes = 8u;
+    limits.full_policy = TURBO_FLOW_STORE_FULL_TRIM_OLDEST;
+
+    check_int_eq(redis_test_log_store_open(&config, &limits, &store), TURBO_OK);
+    check_int_eq(turbo_flow_log_store_append(store, 10u, first, &cursor), TURBO_OK);
+    check_uint_eq(cursor, 1u);
+    check_int_eq(turbo_flow_log_store_append(store, 20u, second, &cursor), TURBO_OK);
+    check_uint_eq(cursor, 2u);
+    check_int_eq(turbo_flow_log_store_append(store, 30u, third, &cursor), TURBO_OK);
+    check_uint_eq(cursor, 3u);
+    check_int_eq(turbo_flow_log_store_bounds(store, &head, &tail), TURBO_OK);
+    check_uint_eq(head, 2u);
+    check_uint_eq(tail, 3u);
+    check_int_eq(turbo_flow_log_store_read(store, 1u, records, 2u, &count), TURBO_ERANGE);
+    check_size_eq(count, 0u);
+    check_int_eq(turbo_flow_log_store_read(store, 0u, records, 2u, &count), TURBO_OK);
+    check_size_eq(count, 2u);
+    check_uint_eq(records[0].cursor, 2u);
+    check_uint_eq(records[0].timestamp_ms, 20u);
+    check_mem_eq(mem_buffer_const_data(records[0].payload), second_payload, sizeof(second_payload));
+    check_uint_eq(records[1].cursor, 3u);
+    check_uint_eq(records[1].timestamp_ms, 30u);
+    check_mem_eq(mem_buffer_const_data(records[1].payload), third_payload, sizeof(third_payload));
+    turbo_flow_log_record_cleanup(&records[0]);
+    turbo_flow_log_record_cleanup(&records[1]);
+
+    check_int_eq(turbo_flow_log_store_trim_before_time(store, 30u, &trimmed), TURBO_OK);
+    check_size_eq(trimmed, 1u);
+    check_int_eq(turbo_flow_log_store_bounds(store, &head, &tail), TURBO_OK);
+    check_uint_eq(head, 3u);
+    check_uint_eq(tail, 3u);
+    check_int_eq(turbo_flow_log_store_stats(store, &stats), TURBO_OK);
+    check_size_eq(stats.records, 1u);
+    check_size_eq(stats.bytes, sizeof(third_payload));
+    check_size_eq(stats.trims, 2u);
+    check_int_eq(turbo_flow_log_store_append(store, 29u, first, &cursor), TURBO_ERANGE);
+    check_int_eq(turbo_flow_log_store_trim_before_cursor(store, 4u, &trimmed), TURBO_OK);
+    check_size_eq(trimmed, 1u);
+    check_int_eq(turbo_flow_log_store_bounds(store, &head, &tail), TURBO_OK);
+    check_uint_eq(head, 4u);
+    check_uint_eq(tail, 0u);
+    check_int_eq(turbo_flow_log_store_close(store), TURBO_OK);
+    check_int_eq(turbo_flow_log_store_append(store, 40u, first, &cursor), TURBO_ESHUTDOWN);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+
+    store = NULL;
+    check_int_eq(redis_test_log_store_open(&config, &limits, &store), TURBO_OK);
+    check_int_eq(turbo_flow_log_store_append(store, 40u, empty, &cursor), TURBO_OK);
+    check_uint_eq(cursor, 4u);
+    check_int_eq(turbo_flow_log_store_read(store, 4u, records, 1u, &count), TURBO_OK);
+    check_size_eq(count, 1u);
+    check_uint_eq(records[0].cursor, 4u);
+    check_uint_eq(records[0].timestamp_ms, 40u);
+    check_null(records[0].payload);
+    turbo_flow_log_record_cleanup(&records[0]);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+
+    store = NULL;
+    limits.retention_ms = 1u;
+    check_int_eq(redis_test_log_store_open(&config, &limits, &store), TURBO_OK);
+    check_int_eq(turbo_flow_log_store_append(store, 41u, empty, &cursor), TURBO_EBUSY);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+  }
+
+  it("keeps a rejected append atomic and applies retention before FULL_REJECT admission") {
+    static const uint8_t payload[] = {'x'};
+    turbo_flow_redis_log_store_config_t config;
+    turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+    turbo_flow_log_store_t *store = NULL;
+    turbo_flow_store_stats_t stats = TURBO_FLOW_STORE_STATS_INIT;
+    turbo_flow_store_bytes_t value = {payload, sizeof(payload)};
+    uint64_t cursor = 0u;
+    uint64_t head = 0u;
+    uint64_t tail = 0u;
+    char redis_key[128];
+
+    (void)snprintf(redis_key, sizeof(redis_key), "turboflow:live:log-reject:%llu",
+                   (unsigned long long)turbo_hrtime());
+    memset(&config, 0, sizeof(config));
+    config.host = "127.0.0.1";
+    config.port = 6379u;
+    config.database = 0;
+    config.timeout_ms = 5000u;
+    config.key = redis_key;
+    config.max_operation_records = 2u;
+    limits.max_records = 2u;
+    limits.max_bytes = 2u;
+    limits.max_item_bytes = 1u;
+    limits.retention_ms = 15u;
+    limits.full_policy = TURBO_FLOW_STORE_FULL_REJECT;
+
+    check_int_eq(redis_test_log_store_open(&config, &limits, &store), TURBO_OK);
+    check_int_eq(turbo_flow_log_store_append(store, 10u, value, &cursor), TURBO_OK);
+    check_int_eq(turbo_flow_log_store_append(store, 20u, value, &cursor), TURBO_OK);
+    check_uint_eq(cursor, 2u);
+    check_int_eq(turbo_flow_log_store_append(store, 25u, value, &cursor), TURBO_ENOSPC);
+    check_uint_eq(cursor, 2u);
+    check_int_eq(turbo_flow_log_store_bounds(store, &head, &tail), TURBO_OK);
+    check_uint_eq(head, 1u);
+    check_uint_eq(tail, 2u);
+    check_int_eq(turbo_flow_log_store_append(store, 26u, value, &cursor), TURBO_OK);
+    check_uint_eq(cursor, 3u);
+    check_int_eq(turbo_flow_log_store_bounds(store, &head, &tail), TURBO_OK);
+    check_uint_eq(head, 2u);
+    check_uint_eq(tail, 3u);
+    check_int_eq(turbo_flow_log_store_stats(store, &stats), TURBO_OK);
+    check_size_eq(stats.records, 2u);
+    check_size_eq(stats.bytes, 2u);
+    check_size_eq(stats.rejects, 1u);
+    check_size_eq(stats.trims, 1u);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+  }
+
+  it("uses Redis Hash as the bounded revisioned StateStore fact source") {
+    static const uint8_t record_key[] = {'d', 0u, '1'};
+    static const uint8_t first_value[] = {'o', 'n'};
+    static const uint8_t second_value[] = {'o', 'f', 'f'};
+    turbo_flow_redis_record_store_config_t config;
+    turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+    turbo_flow_state_store_t *store = NULL;
+    turbo_flow_state_record_t record = TURBO_FLOW_STATE_RECORD_INIT;
+    turbo_flow_store_stats_t stats = TURBO_FLOW_STORE_STATS_INIT;
+    turbo_flow_store_bytes_t key = {record_key, sizeof(record_key)};
+    turbo_flow_store_bytes_t first = {first_value, sizeof(first_value)};
+    turbo_flow_store_bytes_t second = {second_value, sizeof(second_value)};
+    uint64_t revision = 0u;
+    char redis_key[128];
+
+    (void)snprintf(redis_key, sizeof(redis_key), "turboflow:live:state:%llu",
+                   (unsigned long long)turbo_hrtime());
+    memset(&config, 0, sizeof(config));
+    config.host = "127.0.0.1";
+    config.port = 6379u;
+    config.database = 0;
+    config.timeout_ms = 5000u;
+    config.key = redis_key;
+    config.max_record_key_size = 8u;
+    config.max_value_size = 8u;
+    config.max_batch_size = 1u;
+    config.max_records = 2u;
+    limits.max_records = 2u;
+    limits.max_bytes = 16u;
+    limits.max_item_bytes = 16u;
+
+    check_int_eq(redis_test_state_store_open(&config, &limits, &store), TURBO_OK);
+    check_int_eq(turbo_flow_state_store_put(store, key, first, 0u, &revision), TURBO_OK);
+    check_uint_eq(revision, 1u);
+    check_int_eq(turbo_flow_state_store_get(store, key, &record), TURBO_OK);
+    check_uint_eq(record.revision, 1u);
+    check_mem_eq(mem_buffer_const_data(record.value), first_value, sizeof(first_value));
+    turbo_flow_state_record_cleanup(&record);
+    check_int_eq(turbo_flow_state_store_put(store, key, second, 7u, &revision), TURBO_EBUSY);
+    check_int_eq(turbo_flow_state_store_put(store, key, second, 1u, &revision), TURBO_OK);
+    check_uint_eq(revision, 2u);
+    check_int_eq(turbo_flow_state_store_stats(store, &stats), TURBO_OK);
+    check_size_eq(stats.records, 1u);
+    check_size_eq(stats.bytes, sizeof(record_key) + sizeof(second_value));
+    check_int_eq(turbo_flow_state_store_remove(store, key, 2u), TURBO_OK);
+    check_int_eq(turbo_flow_state_store_get(store, key, &record), TURBO_ENOENT);
+    check_int_eq(turbo_flow_state_store_close(store), TURBO_OK);
+    check_int_eq(turbo_flow_state_store_put(store, key, first, 0u, &revision), TURBO_ESHUTDOWN);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+  }
+
+  it("MQTT-STORE-010 runs the provider-neutral record trace through Redis") {
+    turbo_flow_redis_record_store_config_t config;
+    turbo_flow_record_store_t store = TURBO_FLOW_RECORD_STORE_INIT;
+    flowie_record_store_contract_result_t result = {0};
+    char key[128];
+    (void)snprintf(key, sizeof(key), "turboflow:live:provider-neutral:%llu",
+                   (unsigned long long)turbo_hrtime());
+    memset(&config, 0, sizeof(config));
+    config.host = "127.0.0.1";
+    config.port = 6379u;
+    config.database = 0;
+    config.timeout_ms = 5000u;
+    config.key = key;
+    config.max_record_key_size = 64u;
+    config.max_value_size = 64u;
+    config.max_batch_size = 2u;
+    config.max_records = 4u;
+    check_int_eq(redis_test_record_store_open(&config, &store), TURBO_OK);
+    check_int_eq(flowie_record_store_contract_run(&store, &result), TURBO_OK);
+    check_size_eq(result.restored_count, 1u);
+    check_uint_eq(result.restored_revision, 2u);
+    check_int_eq(result.duplicate_create_status, TURBO_EBUSY);
+    check_int_eq(result.stale_update_status, TURBO_EBUSY);
+    check_int_eq(result.stale_delete_status, TURBO_EBUSY);
+    check_true(result.empty_after_delete);
+    check_size_eq(result.mqtt_wire_size, 12u);
+    check_true(result.mqtt_wire_equal);
+    check_int_eq(redis_test_storage_destroy(&store), TURBO_OK);
+  }
+
+  it("MQTT-SOAK-005 MQTT-STORE-007 resolves Redis timeout and lost commit replies by revision") {
+    static const uint8_t unavailable_key[] = {'u'};
+    static const uint8_t unavailable_value[] = {'v'};
+    turbo_flow_redis_record_store_config_t config;
+    turbo_flow_record_store_t store = TURBO_FLOW_RECORD_STORE_INIT;
+    turbo_flow_record_mutation_t mutation = TURBO_FLOW_RECORD_MUTATION_INIT;
+    flowie_record_store_recovery_result_t recovery = {0};
+    char key[128];
+    (void)snprintf(key, sizeof(key), "turboflow:live:recovery:%llu",
+                   (unsigned long long)turbo_hrtime());
+    memset(&config, 0, sizeof(config));
+    config.host = "127.0.0.1";
+    config.port = 1u;
+    config.database = 0;
+    config.timeout_ms = 100u;
+    config.key = key;
+    config.max_record_key_size = 16u;
+    config.max_value_size = 16u;
+    config.max_batch_size = 1u;
+    config.max_records = 2u;
+    mutation.kind = TURBO_FLOW_RECORD_PUT;
+    mutation.key = unavailable_key;
+    mutation.key_size = sizeof(unavailable_key);
+    mutation.next_revision = 1u;
+    mutation.value = unavailable_value;
+    mutation.value_size = sizeof(unavailable_value);
+    check_int_eq(redis_test_record_store_open(&config, &store), TURBO_OK);
+    check_int_ne(store.commit(store.ctx, &mutation, 1u), TURBO_OK);
+    check_int_eq(redis_test_storage_destroy(&store), TURBO_OK);
+
+    config.port = 6379u;
+    config.timeout_ms = 5000u;
+    check_int_eq(redis_test_record_store_open(&config, &store), TURBO_OK);
+    check_int_eq(flowie_record_store_recovery_contract_run(&store, &recovery), TURBO_OK);
+    check_int_eq(recovery.timeout_status, TURBO_ETIMEDOUT);
+    check_int_eq(recovery.lost_reply_status, TURBO_EIO);
+    check_int_eq(recovery.retry_status, TURBO_EBUSY);
+    check_uint_eq(recovery.revision_after_timeout, 1u);
+    check_uint_eq(recovery.revision_after_lost_reply, 2u);
+    check_uint_eq(recovery.revision_after_recovery, 3u);
+    check_int_eq(redis_test_storage_destroy(&store), TURBO_OK);
+  }
+
   it("uses a replied XADD as one exact routed DURABLE boundary and replays the payload") {
     static const char sink_dsl[] = "source input\n"
                                    "stage append adapter redis.out\n"
@@ -458,9 +811,9 @@ spec("turbo_flow_redis_live") {
     persistence.store = &store;
     bindings.persistence = &persistence;
 
-    check_int_eq(
-        turbo_flow_redis_record_store_create_resolved(resolved, "mqtt.sessions", &store, &error),
-        TURBO_OK);
+    check_int_eq(redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store,
+                                                          &error),
+                 TURBO_OK);
     check_int_eq(redis_live_start_bound_endpoint(resolved, &bindings, graph, &flow), TURBO_OK);
     subscriber = flowie_test_connect(port);
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
@@ -488,11 +841,11 @@ spec("turbo_flow_redis_live") {
     check_int_eq(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
     flow = NULL;
-    turbo_flow_redis_record_store_destroy(&store);
+    check_int_eq(redis_test_storage_destroy(&store), TURBO_OK);
 
-    check_int_eq(
-        turbo_flow_redis_record_store_create_resolved(resolved, "mqtt.sessions", &store, &error),
-        TURBO_OK);
+    check_int_eq(redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store,
+                                                          &error),
+                 TURBO_OK);
     check_int_eq(redis_live_start_bound_endpoint(resolved, &bindings, graph, &flow), TURBO_OK);
     subscriber = flowie_test_connect(port);
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
@@ -511,7 +864,7 @@ spec("turbo_flow_redis_live") {
     flowie_test_socket_close(subscriber);
     check_int_eq(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
-    turbo_flow_redis_record_store_destroy(&store);
+    check_int_eq(redis_test_storage_destroy(&store), TURBO_OK);
     turbo_flow_resolved_config_destroy(resolved);
   }
 #endif
@@ -617,7 +970,7 @@ spec("turbo_flow_redis_live") {
     turbo_flow_redis_blob_store_destroy(&store);
   }
 
-  it("commits atomic revision-checked Redis record batches and restores the namespace") {
+  it("MQTT-STORE-003/010 commits revision-checked Redis records and restores namespace") {
     static const uint8_t key_a[] = {0u, 'R', 1u, 'a'};
     static const uint8_t key_b[] = {'b'};
     static const uint8_t key_c[] = {'c'};
@@ -655,9 +1008,9 @@ spec("turbo_flow_redis_live") {
                         "      max_batch_size: 2\n      max_records: 2\nadapters: {}\n",
                         key) > 0);
     check_int_eq(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), TURBO_OK);
-    check_int_eq(
-        turbo_flow_redis_record_store_create_resolved(resolved, "mqtt.sessions", &store, &error),
-        TURBO_OK);
+    check_int_eq(redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store,
+                                                          &error),
+                 TURBO_OK);
     turbo_flow_resolved_config_destroy(resolved);
     memset(&capture, 0, sizeof(capture));
     check_int_eq(store.scan(store.ctx, redis_live_record_visit, &capture), TURBO_OK);
@@ -698,9 +1051,9 @@ spec("turbo_flow_redis_live") {
     mutations[0].expected_revision = 1u;
     mutations[0].next_revision = 2u;
     check_int_eq(store.commit(store.ctx, mutations, 2u), TURBO_OK);
-    turbo_flow_redis_record_store_destroy(&store);
+    check_int_eq(redis_test_storage_destroy(&store), TURBO_OK);
 
-    check_int_eq(turbo_flow_redis_record_store_create(&config, &store), TURBO_OK);
+    check_int_eq(redis_test_record_store_open(&config, &store), TURBO_OK);
     memset(&capture, 0, sizeof(capture));
     check_int_eq(store.scan(store.ctx, redis_live_record_visit, &capture), TURBO_OK);
     check_size_eq(capture.count, 1u);
@@ -727,7 +1080,7 @@ spec("turbo_flow_redis_live") {
     memset(&capture, 0, sizeof(capture));
     check_int_eq(store.scan(store.ctx, redis_live_record_visit, &capture), TURBO_OK);
     check_size_eq(capture.count, 1u);
-    turbo_flow_redis_record_store_destroy(&store);
+    check_int_eq(redis_test_storage_destroy(&store), TURBO_OK);
   }
 
   it("replays one consumer pending entry and interrupts a real blocked XREADGROUP") {
@@ -1153,5 +1506,4 @@ spec("turbo_flow_redis_live") {
     turbo_flow_fmq_credit_worker_destroy(credit);
     turbo_flow_redis_stream_owner_destroy(owner);
   }
-
 }

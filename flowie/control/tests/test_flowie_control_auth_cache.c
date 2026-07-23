@@ -4,6 +4,7 @@
 
 #include "tinytest.h"
 #include "turbo_error.h"
+#include "turbo_fs.h"
 #include "turbo_thread.h"
 
 #include <stdatomic.h>
@@ -135,7 +136,7 @@ static void auth_cache_concurrent_verify(void *arg) {
 }
 
 spec("Flowie control authentication cache") {
-  it("uses a short positive TTL and invalidates rotated revoked or disabled credentials") {
+  it("MQTT-SEC-006/007 expires positive cache and invalidates rotated revoked credentials") {
     char *path = NULL;
     flowie_control_store_t *store = auth_cache_store_open(&path);
     flowie_control_generated_credential_t first = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
@@ -177,7 +178,11 @@ spec("Flowie control authentication cache") {
                                                   sizeof(wrong), &verified, &cache_hit),
                  TURBO_EPERM);
     check_false(cache_hit);
-    check_size_eq(flowie_control_auth_cache_size(cache), 1u);
+    check_size_eq(flowie_control_auth_cache_size(cache), 2u);
+    check_int_eq(flowie_control_auth_cache_verify(cache, store, "root-a", "device-a", wrong,
+                                                  sizeof(wrong), &verified, &cache_hit),
+                 TURBO_EPERM);
+    check_true(cache_hit);
     flowie_control_credential_wipe(wrong, sizeof(wrong));
 
     now_ms = 1100u;
@@ -230,7 +235,7 @@ spec("Flowie control authentication cache") {
     auth_cache_store_close(store, path);
   }
 
-  it("evicts the least recently used digest at the configured capacity") {
+  it("MQTT-SEC-007 bounds authentication cache with deterministic LRU eviction") {
     char *path = NULL;
     flowie_control_store_t *store = auth_cache_store_open(&path);
     flowie_control_generated_credential_t first = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
@@ -276,17 +281,15 @@ spec("Flowie control authentication cache") {
     auth_cache_store_close(store, path);
   }
 
-  it("serves concurrent positive hits while keeping store checks outside the cache lock") {
-    enum { THREAD_COUNT = 4, VERIFY_COUNT = 16 };
+  it("MQTT-SEC-007 denies provider outages and never caches storage failures") {
     char *path = NULL;
+    char *backup_path = NULL;
     flowie_control_store_t *store = auth_cache_store_open(&path);
     flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
     flowie_control_credential_verify_result_t verified =
         FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
     flowie_control_auth_cache_config_t config = FLOWIE_CONTROL_AUTH_CACHE_CONFIG_INIT;
     flowie_control_auth_cache_t *cache = NULL;
-    auth_cache_concurrent_task_t task;
-    turbo_thread_t threads[THREAD_COUNT] = {0};
     int cache_hit = -1;
 
     check_int_eq(auth_cache_user_create(store, "device-a", "request-user-a", 1u), TURBO_OK);
@@ -299,6 +302,65 @@ spec("Flowie control authentication cache") {
                                                   &verified, &cache_hit),
                  TURBO_OK);
     check_false(cache_hit);
+    check_int_eq(flowie_control_auth_cache_verify(cache, store, "root-a", "device-a",
+                                                  generated.secret, generated.secret_size,
+                                                  &verified, &cache_hit),
+                 TURBO_OK);
+    check_true(cache_hit);
+
+    backup_path = tt_make_temp_file("flowie-auth-cache-backup", ".sqlite3");
+    check_not_null(backup_path);
+    check_int_eq(tt_remove_file(backup_path), 0);
+    check_int_eq(turbo_fs_rename(path, backup_path), TURBO_OK);
+    check_int_eq(turbo_fs_mkdir(path, 0700), TURBO_OK);
+
+    check_int_eq(flowie_control_auth_cache_verify(cache, store, "root-a", "device-a",
+                                                  generated.secret, generated.secret_size,
+                                                  &verified, &cache_hit),
+                 TURBO_EIO);
+    check_false(cache_hit);
+    check_size_eq(flowie_control_auth_cache_size(cache), 0u);
+    check_int_eq(flowie_control_auth_cache_verify(cache, store, "root-a", "device-a",
+                                                  generated.secret, generated.secret_size,
+                                                  &verified, &cache_hit),
+                 TURBO_EIO);
+    check_false(cache_hit);
+    check_size_eq(flowie_control_auth_cache_size(cache), 0u);
+
+    check_int_eq(turbo_fs_rmdir(path), TURBO_OK);
+    check_int_eq(turbo_fs_rename(backup_path, path), TURBO_OK);
+    check_int_eq(flowie_control_auth_cache_verify(cache, store, "root-a", "device-a",
+                                                  generated.secret, generated.secret_size,
+                                                  &verified, &cache_hit),
+                 TURBO_OK);
+    check_false(cache_hit);
+    check_int_eq(flowie_control_auth_cache_verify(cache, store, "root-a", "device-a",
+                                                  generated.secret, generated.secret_size,
+                                                  &verified, &cache_hit),
+                 TURBO_OK);
+    check_true(cache_hit);
+
+    flowie_control_auth_cache_destroy(cache);
+    flowie_control_generated_credential_wipe(&generated);
+    auth_cache_store_close(store, path);
+    free(backup_path);
+  }
+
+  it("MQTT-SEC-007 coalesces concurrent credential verification into bounded cache hits") {
+    enum { THREAD_COUNT = 4, VERIFY_COUNT = 16 };
+    char *path = NULL;
+    flowie_control_store_t *store = auth_cache_store_open(&path);
+    flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
+    flowie_control_auth_cache_config_t config = FLOWIE_CONTROL_AUTH_CACHE_CONFIG_INIT;
+    flowie_control_auth_cache_t *cache = NULL;
+    auth_cache_concurrent_task_t task;
+    turbo_thread_t threads[THREAD_COUNT] = {0};
+
+    check_int_eq(auth_cache_user_create(store, "device-a", "request-user-a", 1u), TURBO_OK);
+    check_int_eq(
+        auth_cache_credential_generate(store, "device-a", "request-generate-a", 2u, &generated),
+        TURBO_OK);
+    check_int_eq(flowie_control_auth_cache_create(&config, &cache), TURBO_OK);
 
     task.cache = cache;
     task.store = store;
@@ -314,7 +376,7 @@ spec("Flowie control authentication cache") {
     }
     check_int_eq(atomic_load_explicit(&task.failures, memory_order_relaxed), 0);
     check_int_eq(atomic_load_explicit(&task.hits, memory_order_relaxed),
-                 THREAD_COUNT * VERIFY_COUNT);
+                 THREAD_COUNT * VERIFY_COUNT - 1);
     check_size_eq(flowie_control_auth_cache_size(cache), 1u);
 
     flowie_control_auth_cache_destroy(cache);

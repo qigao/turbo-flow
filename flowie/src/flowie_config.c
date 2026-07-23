@@ -266,7 +266,8 @@ static int flowie_register_resolved_endpoint_internal(
                                !security_realm_seen ? "security_realm" : "auth_method",
                                "secure endpoint requires both security fields");
   }
-  if (persistence && !session_store_seen) {
+  if (persistence && !session_store_seen &&
+      strcmp(persistence->store_channel, FLOWIE_IMPLICIT_LOCAL_SESSION_STORE_CHANNEL) != 0) {
     return flowie_config_error(error, TURBO_EINVAL, name, "session_store",
                                "persistent endpoint requires session_store");
   }

@@ -1,8 +1,8 @@
 # FlowMQ ZMQ-like Application API
 
-FlowMQ Application API 为单个 graph-native FMQ endpoint 提供类似 ZeroMQ socket 的薄封装：创建、
-启动、发送、回调接收、停止和销毁。它适合不需要自行编写 graph 的应用入口，但底层仍是同一个
-TurboFlow graph、Disruptor 和 CoroNet endpoint，没有额外 socket 或协议状态。默认同步模式不增加队列或
+FlowMQ Application API 为单个 FMQ pattern endpoint 提供类似 ZeroMQ socket 的薄封装：创建、
+启动、发送、回调接收、停止和销毁。它适合不需要自行编写高级 graph 的应用入口；底层使用同一个
+FMQ adapter、最小 typed graph bridge 和 CoroNet endpoint，没有额外 socket 或协议状态。默认同步模式不增加队列或
 工作线程；显式配置 async send 时增加一条有界队列和一个保序发送 worker。
 
 这不是 libzmq 兼容层。FlowMQ 不实现 ZMTP，不兼容 ZeroMQ wire/API，也不能与 ZeroMQ peer 直接
@@ -179,6 +179,6 @@ host 负责读取 `.yml` 并调用 `turbo_flow_config_resolve_yaml()`；Applicat
 ## Choosing the facade or a full graph
 
 Application facade 用于一个 endpoint 与一个 host callback 的最短路径。出现以下任一需求时，直接使用
-完整 graph：多个 endpoint、RulesForge processor、条件分支、HTTP/RPC/Redis/SQL enrichment、
+完整 graph：多个 endpoint、TurboFlow Policy processor、条件分支、HTTP/RPC/Redis/SQL enrichment、
 Disruptor lane 配置、memory/Redis Stream queue、持久化、重放、broker 或 XPUB/XSUB proxy。两种入口
 共享同一个 FMQ adapter 和 pattern 实现，因此不存在第二套 client runtime。

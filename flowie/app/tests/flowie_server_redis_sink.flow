@@ -1,0 +1,6 @@
+source mqtt_packet_in adapter mqtt.endpoint
+stage rules_route operation rules.apply resource mqtt.routing
+stage application_sink adapter redis.application.sink
+stage main {
+  mqtt_packet_in -> rules_route -> application_sink
+}

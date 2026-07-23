@@ -68,7 +68,7 @@ FMQ 需要在 peer admission 前完成身份认证和 root-group-aware authoriza
 
 - 只支持 wire v3，不提供 fallback、version negotiation 或内置 gateway。
 - 同一通信域必须先 quiesce，升级所有 bind/connect participants，再整体恢复。升级前应排空 volatile
-  in-flight frame；durable payload 由 Queue/Redis/SQLite owner 按各自 settlement 规则恢复。
+  in-flight frame；durable payload 由 Redis Stream 或显式 durable owner 按各自 settlement 规则恢复。
 - C API v1 endpoint config 保持布局不变；安全能力通过独立 versioned binding 和 secure registration/
   application entry point 注入。现有 registration 创建 trusted v3 endpoint，不会隐式启用安全。
 - 若 secure deployment 回滚，只能整体回滚到同一个 release 并保持通信域停止；不得临时放宽

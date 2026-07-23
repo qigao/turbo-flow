@@ -9,6 +9,7 @@ cmake_add_test(test_turbo_flow_pgsql_live
                SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_turbo_flow_pgsql_live.c
                LIBS TurboFlow::PostgreSQL TurboFlow::Flow PostgreSQL::PostgreSQL
                     TurboUtils::TinyTest
+               INCLUDES ${PROJECT_SOURCE_DIR}/flowie/tests
                FOLDER "io/pgsql/tests")
 
 # Keep result conversion internal to the PostgreSQL DLL ABI while testing it directly.
@@ -19,7 +20,9 @@ target_compile_definitions(
 
 set_tests_properties(test_turbo_flow_pgsql test_turbo_flow_pgsql_live
                      PROPERTIES LABELS "storage-contract")
-set_tests_properties(test_turbo_flow_pgsql_live PROPERTIES LABELS "storage-contract;integration;pgsql-live")
+set_tests_properties(
+  test_turbo_flow_pgsql_live
+  PROPERTIES LABELS "storage-contract;integration;pgsql-live;mqtt-persistence;mqtt-soak")
 if(NOT TURBO_FLOW_PGSQL_LIVE_TESTS)
   set_tests_properties(test_turbo_flow_pgsql_live PROPERTIES DISABLED TRUE)
 endif()

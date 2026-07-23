@@ -358,7 +358,7 @@ spec("Flowie control trusted authentication service") {
     auth_service_store_close(store, path);
   }
 
-  it("fails closed when policy state is unavailable and invalidates a revoked credential") {
+  it("MQTT-SEC-006/007 fails closed on policy outage and revoked credentials") {
     char *path = NULL;
     flowie_control_store_t *store = auth_service_store_open(&path);
     flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;

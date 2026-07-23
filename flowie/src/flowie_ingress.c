@@ -22,7 +22,21 @@ struct flowie_ingress_s {
   int has_protocol_settlement;
   int has_route;
   int terminal_error;
+  uint8_t disconnect_reason;
 };
+
+static uint8_t flowie_ingress_parse_disconnect_reason(int parse_rc) {
+  switch (parse_rc) {
+  case FLOWIE_MQTT_PARSE_MALFORMED:
+    return UINT8_C(0x81);
+  case FLOWIE_MQTT_PARSE_PROTOCOL_ERROR:
+    return UINT8_C(0x82);
+  case FLOWIE_MQTT_PARSE_TOO_LARGE:
+    return UINT8_C(0x95);
+  default:
+    return 0u;
+  }
+}
 
 static int flowie_ingress_parse_error(int parse_rc) {
   switch (parse_rc) {
@@ -49,9 +63,18 @@ static int flowie_ingress_message_create(const flowie_ingress_t *ingress,
   rc = flowie_mqtt_message_flags_encode(ingress->parse_options.version, packet->flags,
                                         &msg->flags);
   if (rc != TURBO_OK) return rc;
-  msg->owned_payload = tstr_new_len(bytes, packet_size);
-  if (!msg->owned_payload) return TURBO_ENOMEM;
-  msg->payload = tstr_to_v(msg->owned_payload);
+  msg->buffer = mem_get_buffer(mem_global(), packet_size);
+  if (!msg->buffer) return TURBO_ENOMEM;
+  if (packet_size > 0u) memcpy(mem_buffer_data(msg->buffer), bytes, packet_size);
+  mem_set_used(msg->buffer, packet_size);
+  msg->payload = tstr_v_from_buf(mem_buffer_data(msg->buffer), packet_size);
+  if (packet->type == FLOWIE_MQTT_PACKET_PUBLISH) {
+    rc = flowie_mqtt_rule_bind_projection(msg, bytes == packet->packet.data ? packet : NULL);
+    if (rc != TURBO_OK) {
+      turbo_flow_msg_cleanup(msg);
+      return rc;
+    }
+  }
   if (ingress->has_route) {
     rc = turbo_flow_msg_set_protocol_route(msg, &ingress->route);
     if (rc != TURBO_OK) {
@@ -83,16 +106,24 @@ static int flowie_ingress_pump(flowie_ingress_t *ingress, size_t *published) {
     rc = flowie_mqtt_packet_parse(bytes.data, bytes.size, &ingress->parse_options, &packet,
                                   &consumed, &error);
     if (rc == FLOWIE_MQTT_PARSE_NEED_MORE) break;
-    if (rc != FLOWIE_MQTT_PARSE_OK) return flowie_ingress_parse_error(rc);
-    if (consumed == 0u || consumed > bytes.size) return TURBO_EPROTO;
+    if (rc != FLOWIE_MQTT_PARSE_OK) {
+      ingress->disconnect_reason = flowie_ingress_parse_disconnect_reason(rc);
+      return flowie_ingress_parse_error(rc);
+    }
+    if (consumed == 0u || consumed > bytes.size) {
+      ingress->disconnect_reason = UINT8_C(0x81);
+      return TURBO_EPROTO;
+    }
     if (ingress->parse_options.version == FLOWIE_MQTT_VERSION_UNSPECIFIED) {
       flowie_mqtt_connect_view_t connect = FLOWIE_MQTT_CONNECT_VIEW_INIT;
       if (packet.type != FLOWIE_MQTT_PACKET_CONNECT ||
           flowie_mqtt_connect_parse(&packet, &connect) != FLOWIE_MQTT_PARSE_OK) {
+        ingress->disconnect_reason = UINT8_C(0x82);
         return TURBO_EPROTO;
       }
       ingress->parse_options.version = connect.version;
     } else if (packet.type == FLOWIE_MQTT_PACKET_CONNECT) {
+      ingress->disconnect_reason = UINT8_C(0x82);
       return TURBO_EPROTO;
     }
 
@@ -102,6 +133,10 @@ static int flowie_ingress_pump(flowie_ingress_t *ingress, size_t *published) {
       ingress->has_protocol_settlement = 0;
       rc = ingress->prepare(ingress->prepare_ctx, ingress, &packet, &publish_packet, &stop_pump);
       if (rc != TURBO_OK) {
+        if (rc == TURBO_EPROTO)
+          ingress->disconnect_reason = UINT8_C(0x82);
+        else if (rc == TURBO_EMSGSIZE)
+          ingress->disconnect_reason = UINT8_C(0x95);
         tstr_freep(&ingress->publish_packet_override);
         return rc;
       }
@@ -232,6 +267,10 @@ size_t flowie_ingress_buffered_bytes(const flowie_ingress_t *ingress) {
 
 flowie_mqtt_version_t flowie_ingress_version(const flowie_ingress_t *ingress) {
   return ingress ? ingress->parse_options.version : FLOWIE_MQTT_VERSION_UNSPECIFIED;
+}
+
+uint8_t flowie_ingress_disconnect_reason(const flowie_ingress_t *ingress) {
+  return ingress ? ingress->disconnect_reason : 0u;
 }
 
 int flowie_ingress_set_route(flowie_ingress_t *ingress, const turbo_flow_protocol_route_t *route) {

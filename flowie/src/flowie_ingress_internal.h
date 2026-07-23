@@ -60,6 +60,8 @@ CXX_C_API int flowie_ingress_feed(flowie_ingress_t *ingress, const void *data, s
 
 CXX_C_API size_t flowie_ingress_buffered_bytes(const flowie_ingress_t *ingress);
 CXX_C_API flowie_mqtt_version_t flowie_ingress_version(const flowie_ingress_t *ingress);
+/** MQTT 5 DISCONNECT reason for the terminal protocol error, or zero when not applicable. */
+CXX_C_API uint8_t flowie_ingress_disconnect_reason(const flowie_ingress_t *ingress);
 CXX_C_API int flowie_ingress_set_route(flowie_ingress_t *ingress,
                                        const turbo_flow_protocol_route_t *route);
 CXX_C_API int flowie_ingress_set_protocol_settlement(

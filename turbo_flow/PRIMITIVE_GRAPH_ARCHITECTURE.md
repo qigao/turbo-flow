@@ -218,7 +218,7 @@ provider 则补齐 fixed tumbling、watermark trigger 和 allowed lateness。两
 downstream failure 后反向回滚已提交 state。Processing-time timer、sliding/session window、
 复杂 trigger、checkpoint 和 exactly-once sink transaction 仍是独立后续契约。
 
-当前 RulesForge 集成再向前推进一个切片：`rules.forge` 是第一个生产 module catalog entry，
+当前 TurboFlow Policy 集成提供 `rules.policy` module catalog entry，
 导出 `RuleSet` primitive type 与 `rules.apply` operation，并将每个 `(rules.apply, RuleSet instance)`
 typed provider 绑定回该 module。`rules.apply` 是 Rules domain 的显式
 stage operation，`RuleSet` 是带 owner/resource contract 的 primitive。Host 通过
@@ -228,7 +228,7 @@ stage operation，`RuleSet` 是带 owner/resource contract 的 primitive。Host 
 程序、资源状态或执行调度塞进 parser/descriptor。无 schema 的 processor 可以直接使用；
 带 schema 的 processor 必须通过
 `turbo_flow_rule_facts_provider_fn` 显式提供同一字段顺序、字段 ID 和类型的 typed facts。
-provider 返回的值在本次 `rules.apply` 调用期间保持只读有效，RulesForge 只负责契约校验、
+provider 返回的值在本次 `rules.apply` 调用期间保持只读有效，Policy processor 只负责契约校验、
 求值和 action 应用，不能从 opaque payload 中隐式读取。没有 provider 的 schema-backed
 规则会在注册时 fail fast，provider 的运行时错误则原样沿 operation error boundary
 传播。
@@ -241,7 +241,7 @@ application PUBLISH ingress 和 encoded packet egress 暴露给 graph，CONNECT/
 `StorageResource`，而不是将共享/持久化状态误报为 adapter-private state。
 
 例如 MQTT publish decode 的 scope 是：单 packet/message data、session-generation lifetime、
-MQTT owner-local state、CoroNet context 串行化；RulesForge route 是 message data、无共享状态、
+MQTT owner-local state、CoroNet context 串行化；Policy route 是 message data、无共享状态、
 dispatch lifetime、pure authority；pool resize 是无 payload、runtime resource state、command
 deadline lifetime、host 串行化、typed-command authority。
 
@@ -375,9 +375,9 @@ PostgreSQL outbox 同样是 Buffer/Persistence primitive，而不是 FMQ、Flowi
 不跨 graph，进程崩溃自动释放 session lock；graph side effect 与 DELETE 之间的 crash window 明确
 采用 at-least-once，不伪造跨数据库/graph 原子提交，也不回退到 memory ACK。
 
-## 8. RulesForge/TurboScript 边界
+## 8. TurboFlow Policy 与表达式边界
 
-RulesForge/TurboScript 将声明式规则编译为 immutable program，并针对 typed facts 求值。
+TurboFlow Policy 将声明式规则编译为 immutable program，并针对 typed facts 求值。
 它是绑定到 graph node 的 inline pure evaluator，不拥有 thread/coroutine pool，也不创建
 隐藏 scheduler。若 host 需要并行规则求值，应由 node 显式选择公共 thread/coroutine pool。
 schema-backed `rules.apply` 由 host 提供 `turbo_flow_rule_facts_provider_fn`，将当前 message
@@ -406,7 +406,7 @@ CoroNet TCP/TLS/WS
   -> MQTT protocol owner（parse、session、subscription、QoS FSM）
   -> Input/PUBLISH envelope
   -> Disruptor segment
-  -> decode -> RulesForge -> route -> batch/processor
+  -> decode -> Policy -> route -> batch/processor
   -> Output delivery attempt
   -> Settlement result
   -> MQTT owner command/event（在已声明边界发送 PUBACK/PUBREC/PUBREL/PUBCOMP）

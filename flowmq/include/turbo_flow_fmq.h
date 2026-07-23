@@ -421,9 +421,9 @@ typedef struct turbo_flow_fmq_app_options_s {
   {sizeof(turbo_flow_fmq_app_options_t), TURBO_FLOW_FMQ_APP_API_VERSION, NULL, NULL}
 
 /**
- * Create one ZeroMQ-like application facade over one graph-native FMQ endpoint.
+ * Create one ZeroMQ-like application facade over one FMQ pattern endpoint.
  *
- * The returned application owns its TurboFlow generation and FMQ adapter but
+ * The returned application owns its minimal TurboFlow bridge and FMQ adapter but
  * creates no additional socket, receive queue, protocol state, or worker
  * thread. Receive-only patterns require on_message. Bidirectional patterns may
  * omit it to discard ingress. Send-only patterns reject a callback.

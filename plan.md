@@ -66,16 +66,16 @@ listen/connect、字节 send/recv、timeout 和 interrupt，不感知 FMQ patter
   目标职责与所有权边界。
 - [x] 定义 IO 为受控 ingress/egress：data、typed status/event、typed command 三个接口
   分离；Queue/Buffer 不伪装为 IO connection。
-- [x] 定义 RulesForge/TurboScript 的纯判定边界：data rule 返回 data action，control
+- [x] 定义 TurboFlow Policy 的纯判定边界：data rule 返回 data action，control
   condition 返回 owner command proposal，规则执行器自身不做 IO 或资源状态迁移。
-- [x] 明确内建计算 executor 只有 `inline`、thread pool、coroutine pool；RulesForge 是
+- [x] 明确内建计算 executor 只有 `inline`、thread pool、coroutine pool；Policy 是
   inline evaluator，Disruptor worker 是 bounded data handoff/consumer lane，CoroNet context
   是 IO owner placement。后二者不是额外计算 executor；旧 `socket`、`io`、`custom` executor
   及其注册 ABI 已删除。
 - [x] 明确 domain、primitive、operation、graph node 四层关系：primitive 是 domain 内的
   value/resource 名词，operation 是有单一主要 effect 的动词，node 只做绑定和调度。
 - [x] 增加版本化 module catalog：声明 capability、primitive type/operation exports 和依赖范围，
-  typed operation provider 显式绑定唯一 module owner；RulesForge `rules.forge` 为首个生产接入。
+  typed operation provider 显式绑定唯一 module owner；TurboFlow Policy `rules.policy` 为首个生产接入。
   Catalog 是注册/校验层，不是 Graph DSL 资源工厂或 plugin loader。
 - [x] 增加原子 native module-adapter 注册：显式绑定 `(module, operation, adapter)`，
   `ADAPTER_OWNER` operation 不得由 legacy callback/未绑定 adapter 冒充；失败不转移 context 所有权。
@@ -300,9 +300,8 @@ listen/connect、字节 send/recv、timeout 和 interrupt，不感知 FMQ patter
   接入 connection snapshot provider；HTTP/RPC client 只报告逻辑 endpoint/state/request
   load，S3 同样只报告逻辑 object endpoint/state/request load，不猜测 TurboHTTP 内部复用
   连接数，且 snapshot 不包含 credential。
-- [x] Queue 不映射为 IO connection；有界 buffer 继续使用
-  `turbo_flow_queue_snapshot_t`，thread/coro/Disruptor pool 使用
-  `turbo_flow_pool_snapshot_t`。
+- [x] 已删除公开 FlowQueue；FlowStore 通过类型化 stats 报告 records/bytes/rejects/trims，
+  thread/coro/Disruptor pool 继续使用 `turbo_flow_pool_snapshot_t`。
 - [x] 定义通用类型化 resource provider，让 Observe 可聚合 queue/buffer、connection 和 pool，
   同时保留各资源专属 snapshot，不用 connection 字段承载 queue depth。
 - [x] `io/common` 提供协议无关的 connection state primitive；generic socket、Redis 和
@@ -752,7 +751,7 @@ completion 和 backpressure 可证明。
 - [x] 与当前 inline/worker 实现做吞吐及 P50/P95/P99 对比；无 profile/benchmark 证据时
   不替换已有稳定路径。
 
-### Phase 12：RulesForge/TurboScript 与透明控制
+### Phase 12：TurboFlow Policy 与透明控制
 
 目标：让数据规则和资源控制条件使用同一 typed facts 基础，但保持执行权限和副作用边界
 分离。
@@ -925,13 +924,13 @@ TurboFlow primitive 和 CoroNet 重建 connection、session、processor、sink �
   SQLite Queue recreation/Redis consumer-group replay。该能力只证明 message persistence；Flowie
   session/subscription/QoS/retained/Will owner restore 由独立 record store binding 负责，且不宣称
   exactly-once。
-- [x] 将 RulesForge route/transform、Queue durable boundary 和现有 IO output 组合到 MQTT
+- [x] 将 Policy route/transform、Queue durable boundary 和现有 IO output 组合到 MQTT
   PUBLISH graph：ingress 在 Queue 可序列化的 private message flags 中保存 MQTT version + fixed
   header flags；Queue source 后的 Flowie facts provider 复用 typed parser，按 schema 提供
   `mqtt.topic/payload/payload_size/qos/retain/duplicate/packet_id/version`，不把 projection、live
   route 或 parser owner 写进持久化记录。真实 TCP 回归覆盖 memory Queue 后按 topic 选择 endpoint
-  fan-out 或 `io/socket` output，并由 RulesForge 同时 mutate private status；SQLite Queue recreation
-  回归覆盖 durable row -> RulesForge -> TCP socket output，完整 owned wire packet 字节保持不变。
+  fan-out 或 `io/socket` output，并由 Policy 同时 mutate private status；SQLite Queue recreation
+  回归覆盖 durable row -> Policy -> TCP socket output，完整 owned wire packet 字节保持不变。
 - [x] 将上述 composition 装配进 `flowie_server` 的 strict resolved YAML profile：RuleSet 作为
   `channels.<name>.kind: rule_set` resource，profile 通过 channel reference 显式选定；MQTT facts
   provider、`rules.apply` 与 socket output 在 `--check` 时完成创建、注册和 graph route 校验，未知字段、
@@ -1274,7 +1273,7 @@ stage main {
 - `test_socket`
 - `test_fmq`
 - `test_turbo_flow`
-- `test_turbo_flow_queue`
+- `test_turbo_flow_store`
 - `test_turbo_flow_observe`
 - `test_turbo_flow_redis`
 - 相关 CoroNet transport tests
