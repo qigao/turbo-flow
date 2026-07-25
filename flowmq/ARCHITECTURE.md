@@ -129,9 +129,9 @@ Management 和 deployment control 都是普通 FMQ DATA payload 上的版本化�
 
 ## Compatibility
 
-当前兼容契约固定为：
+当前公开契约固定为：
 
-- public C API v1；
+- public C API 只有当前完整结构，不设本地版本号，也不接受历史结构布局；
 - wire v3 only；decoder 对其他版本返回 `TURBO_EPROTO`，无 negotiation/downgrade；
 - YAML `kind: fmq` 与现有 typed operation name；
 - installed headers `turbo_flow_fmq*.h`；

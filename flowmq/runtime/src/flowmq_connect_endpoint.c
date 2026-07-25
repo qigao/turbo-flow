@@ -467,6 +467,14 @@ int flowmq_connect_endpoint_create(const flowmq_connect_endpoint_config_t *confi
     flowmq_connect_endpoint_destroy(endpoint);
     return TURBO_ENOMEM;
   }
+  if (config->stream_recv_buffer_bytes != 0u) {
+    rc = coro_context_set_stream_recv_buffer_size(endpoint->context,
+                                                  config->stream_recv_buffer_bytes);
+    if (rc != TURBO_OK) {
+      flowmq_connect_endpoint_destroy(endpoint);
+      return rc;
+    }
+  }
   if (config->drive_context) coro_context_set_persistent(endpoint->context, 1);
   turbo_mutex_init(&endpoint->mutex);
   turbo_cond_init(&endpoint->changed);

@@ -873,9 +873,10 @@ TurboFlow primitive 和 CoroNet 重建 connection、session、processor、sink �
   callback 期间借用，session 只复制 principal；MQTT Topic Filter ACL 以 filter containment 授权，
   deny 不修改 session、不进入 graph，真实 TCP 覆盖 `0x86/0x87`。
 - [x] 新增 protocol-neutral `turbo_flow_record_store_t`：namespaced provider 暴露 bounded scan、
-  per-key revision CAS 与 all-or-none batch commit；SQLite transaction 和 Redis Hash + Lua 均实现
-  durable ACK，YAML `kind: record_store` projection 与真实 Redis/SQLite restart tests 覆盖冲突、
-  容量、重复 key 和无 volatile fallback。单-key blob store 不用于全 broker 热路径。
+  per-key revision CAS 与 all-or-none batch commit；`tf_local_storage` 提供默认 volatile local
+  Record，`tf_redis` 与 `tf_pgsql` 提供 durable Record。YAML `kind: record_store` projection 与
+  Redis/PG restart tests 覆盖冲突、容量、重复 key 和显式 store 失败；请求 durable 时不回退到 local。
+  单-key blob store 不用于全 broker 热路径。
 - [x] session owner 提供 canonical versioned LTV record codec 与 deep clone：只保存 subscription、
   已完成 PUBREC 的 inbound QoS2 release、已提交的 outbound QoS delivery；restore 强制 inactive，
   使用新 owner instance，不恢复 route、credential、reserved delivery 或未 settlement graph attempt。
@@ -883,31 +884,32 @@ TurboFlow primitive 和 CoroNet 重建 connection、session、processor、sink �
   store：resolved YAML `session_store` 必须与注入 channel 精确匹配；启动先 scan/校验 LTV、清理
   过期记录、恢复 inactive owner 与 selector。CONNECT/SUBSCRIBE/UNSUBSCRIBE、双向 QoS、fan-out
   delivery、disconnect/close 采用 clone -> revision CAS commit -> swap，ACK/send 不越过 commit。
-  真实 SQLite endpoint recreation 覆盖 subscription restore 与未确认 QoS1 的 DUP replay；binary
-  MQTT packet clone 使用 `tstr_clone`，不再被 NUL 截断。
+  local 重建覆盖默认 process-local 语义；Redis/PG endpoint recreation 覆盖 subscription restore
+  与未确认 QoS1 的 DUP replay；binary MQTT packet clone 使用 `tstr_clone`，不再被 NUL 截断。
 - [x] endpoint owner lane 提供有界 exact-topic retained fact source：RETAIN=1 原子替换，零 payload
   删除，Message Expiry 到期清理；SUBSCRIBE 按 RH=0/1/2 与订阅前态重放，shared subscription 不
   重放，SUBACK 在线序上先于 retained PUBLISH。重放复用 broker-owned packet ID、session delivery、
   durable session CAS 与 bounded reply Queue，不建立第二套 processor/queue runtime。公开 ABI v4/YAML
   以 `max_retained_messages` 独立限额；显式 `session_store` 使用保留二进制 key 前缀和 versioned `FRET`
   LTV record，在 owner 状态切换前完成 PUT/replace/delete CAS，启动时恢复并 CAS 删除过期记录。
-  SQLite endpoint recreation 覆盖恢复、删除和 Message Expiry；真实 Redis suite 覆盖 binary key、CAS、
-  scan/recreation contract。未配置 store 时 retained 明确保持 process-local。
+  Redis/PG endpoint recreation 覆盖恢复、删除和 Message Expiry；local/Redis/PG suite 覆盖 binary
+  key、CAS、scan/recreation contract。未配置 store 时 retained 明确使用 local volatile Record。
 - [x] 提供首个 `flowie_server` 产品 host：从 YAML profile 解析 endpoint、Queue source/sink、
   `rule_set` channel 与 socket output，创建并复用同一个有界 Queue primitive，注册既有
   Flowie/TurboFlow adapter、MQTT facts provider 与 `rules.apply` operation，编译独立 `.flow` graph，并按
   start/signal/stop 顺序管理生命周期；`--check` 在绑定 listener 前执行同一套配置、primitive 与 graph
-  预检。host 现按 `record_store.backend` 显式创建 SQLite/Redis session store，并以 borrowed binding
+  预检。host 现按 `record_store.backend` 显式创建 local/Redis/PostgreSQL session store，并以 borrowed binding
   注入 endpoint；provider 不匹配先返回 `TURBO_ENOTSUP`，同 provider 未知字段、连接/scan/record 错误
-  均 fail fast，不回退到 memory。普通/SQLite `--check`、真实 Redis `--check`、SQLite endpoint recreation
+  均 fail fast，不回退到 local。普通/local `--check`、真实 Redis/PG `--check`、backend endpoint recreation
   与真实 Redis record-store contract suite 分别覆盖产品装配与持久化契约。security binding 和未链接
   adapter kind 仍显式拒绝；当前 host 尚未自动装配 security provider。
 - [x] MQTT owner 已独占 session、subscription、双向 QoS inflight、ACK、reconnect、expiry、retained
   与完整 Will 状态。CONNECT 深拷贝有界 Will，正常 DISCONNECT 抑制，异常关闭和 `0x04` 触发；deadline
   取 Will Delay 与 session expiry 较早者，同 client-id 重连取消 pending Will。生成的 owned PUBLISH 复用
   TurboFlow graph、pointer-free route 和 endpoint bounded owner Queue；graph/store 失败保留 pending 并
-  重试。canonical session record 同时覆盖 SQLite/Redis 重建，真实 TCP、SQLite endpoint recreation 与
-  live Redis suite 分别验证正常/异常、delay/expiry、重连取消和剩余 deadline 恢复；不宣称 exactly-once。
+  重试。canonical session record 同时覆盖 local/Redis/PG 重建，真实 TCP、backend endpoint recreation
+  与 live Redis/PG suite 分别验证正常/异常、delay/expiry、重连取消和剩余 deadline 恢复；不宣称
+  exactly-once。
 - [x] 将 FMQ PUB/SUB、PUSH/PULL、REQ/REP、ROUTER/DEALER 的 role compatibility、
   fan-out/round-robin candidate iteration、generation-fenced route matching 与单 correlation
   同步 exchange 抽入 `turbo_flow_protocol` 的 protocol-neutral pattern core；core 不拥有 peer、
@@ -948,7 +950,7 @@ TurboFlow primitive 和 CoroNet 重建 connection、session、processor、sink �
 验收：
 
 - [x] QoS ACK 时点、duplicate delivery、session generation、retained/Will 和重连恢复通过
-  owner、真实 TCP、SQLite endpoint recreation 与 live Redis protocol integration tests。
+  owner、真实 TCP、local/Redis/PG backend recreation 与 live backend integration tests。
 - [x] 单独固化“进入接收边界后 ACK”的兼容性、迁移和回滚：省略字段或显式 `received` 仍先提交
   session transition 并将 ACK 放入 connection-owned bounded reply Queue；graph 随后失败时先排空该
   已提交 ACK 再关闭连接。`processed` graph 失败不 ACK；`accepted`/`durable` 仍严格依赖对应 primitive

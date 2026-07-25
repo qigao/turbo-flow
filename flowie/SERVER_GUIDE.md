@@ -4,6 +4,8 @@
 Flowie 服务端支持 MQTT 3.1、3.1.1 与 5，监听 transport 支持 TCP、TLS、WS、WSS 和 Pipe。
 本文中的 provider、backend、adapter、data source、data sink 和 session store 均采用
 [配置式 Broker 概念与术语](CONFIGURED_BROKER_CONCEPTS.md)中的定义。
+网络与用户态 buffer 参数见
+[CoroNet Buffer Tuning Contract](../io/common/CORONET_BUFFER_TUNING.md)。
 
 ## 1. 服务端的两个输入
 
@@ -55,6 +57,12 @@ flowie_server: configuration and graph are valid
 `--check` 会解析配置、解析 Graph、创建所选 provider、装配资源并编译 Graph，但不会绑定 listener。
 字段类型错误、未知 backend、缺少 secret reference、Graph 引用不存在或 provider 无法初始化都会直接失败，
 不会回退到不安全模式。
+
+StorageBackend 也在该预检边界装配：产品宿主注册同级的 `tf_local_storage`、`tf_redis`、
+`tf_pgsql` shared library，并通过 `io/common/storage` 的 registry/owner ABI 创建 service。
+外部模块使用 `--storage-backend-plugin` 加载；`--record-store-plugin` 仅是兼容别名。Flowie
+只消费 provider-neutral 的 FlowStore facade，不调用具体 backend 的 record/hash/index/log/state
+函数；插件 function table 只公开 `open()` 和 `close()`。
 
 ## 4. 启动与监管
 
@@ -222,16 +230,18 @@ MQTT 3.1/3.1.1 没有 MQTT 5 AUTH exchange，使用普通认证结果和各自�
 
 ## 9. Session、retained 与持久化
 
-`manage_sessions: true` 启用受限 session/retained 状态。未配置 `session_store` 时状态只在进程内有效。
-持久化时使用 YAML 中独立的 `record_store` channel：
+`manage_sessions: true` 启用受限 session/retained 状态。未配置 `session_store` 时，Flowie 使用
+`tf_local_storage` DLL 提供的 local Record backend；它是进程内 volatile，关闭或进程退出后状态
+不可恢复。持久化时使用 YAML 中独立的 `record_store` channel：
 
 - Redis：多实例共享或外部持久化部署。
 - PostgreSQL：SMB 部署中的事务型 session/retained 持久化。
 
-Redis/PostgreSQL 在这里是 `session_store` 的 record-store backend，由配置选择，不是 Graph data
-source/sink，也不是写死在 Flowie 领域代码中的认证数据库。认证用户数据仍只能由 HTTPS 认证服务管理。
+Redis/PostgreSQL 在这里是 `session_store` 的 durable record-store backend，由配置选择，不是
+Graph data source/sink，也不是写死在 Flowie 领域代码中的认证数据库。认证用户数据仍只能由
+HTTPS 认证服务管理。显式 `session_store` 选择失败时直接报错，不回退到 local。
 
-可直接交付的组合示例位于 `examples/products/`：`flowie-dev.*` 使用全内存状态；
+可直接交付的组合示例位于 `examples/products/`：`flowie-dev.*` 使用 local volatile Record；
 `flowie-smb.*` 使用 PostgreSQL record store 保存 session/retained，并通过 PostgreSQL outbox
 保存业务 PUBLISH。SMB 的 QoS 1/2 ACK 只在 outbox INSERT 事务 COMMIT 后生成；独立 source
 回放记录，Graph 成功后删行，失败则保留并在后续重试，因此交付语义为 at-least-once。

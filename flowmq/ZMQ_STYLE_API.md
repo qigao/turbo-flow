@@ -18,6 +18,19 @@ cmake --preset win-release-user -DBUILD_EXAMPLES=ON
 cmake --build --preset win-release-user --target flowmq_zmq_style_pub_sub flowmq_zmq_style_req_rep flowmq_zmq_style_router_dealer
 ```
 
+YAML host 入口也会随 `BUILD_EXAMPLES` 构建：
+
+```powershell
+cmake --build --preset win-release-user --target flowmq_yaml_endpoint
+build\Msvc-Release\bin\flowmq_yaml_endpoint.exe `
+  flowmq\examples\zmq_style.yml fmq.example.pub 1000
+```
+
+命令格式为 `<yaml> <adapter> [duration_ms] [payload]`。它负责读取 YAML、调用统一 resolver，
+再从指定 adapter 创建并启动一个 Application facade。`PUB`/`PUSH` 可发送 payload；其他 pattern
+需要对应 peer 才能完成实际通信。`fmq.yml` 是产品装配配置，包含 management 和 durable store 引用，
+仍需宿主注入对应 provider，不能由这个轻量入口独立启动。
+
 每个示例在一个进程内创建一对 endpoint，默认使用本机 TCP 端口 7711、7712 和 7713。可用第一个
 参数覆盖端口：
 
@@ -38,7 +51,7 @@ cmake --build --preset win-release-user --target flowmq_zmq_style_pub_sub flowmq
 
 | ZeroMQ concept | FlowMQ Application API | Difference |
 | --- | --- | --- |
-| context + socket type | `turbo_flow_fmq_app_create()` | 每个 app 拥有一个最小 graph 和一个 FMQ endpoint |
+| context + socket type | `turbo_flow_fmq_app_create()` / `_ex()` | 每个 app 拥有一个最小 graph 和一个 FMQ endpoint；`_ex` 可绑定 host execution |
 | `bind` / `connect` | `endpoint.mode` + transport fields | 在 create 时固定，start 时建立 listener/connection |
 | `zmq_send` | `turbo_flow_fmq_app_send()` | payload 被复制并发布到 graph input |
 | asynchronous send | `turbo_flow_fmq_app_send_async()` | copied admission；单 worker 聚合 micro-batch 并回调 completion |
@@ -46,8 +59,10 @@ cmake --build --preset win-release-user --target flowmq_zmq_style_pub_sub flowmq
 | multipart metadata | `turbo_flow_msg_t` + FMQ accessors | topic、identity、correlation 和 route 是类型化 metadata |
 | `zmq_close` | `turbo_flow_fmq_app_stop()` + `destroy()` | stop 可重复；destroy 会在需要时先 stop |
 
-Application API 不暴露独立 context，也没有阻塞 `recv`。需要 processor、subgraph、queue、持久化或
-跨 lane 调度时，应直接注册 FMQ adapter 并编译完整 graph；不要在 callback 中另造一套消息循环。
+默认 Application API 不暴露独立 context，也没有阻塞 `recv`。`turbo_flow_fmq_app_create_ex()` 可将
+endpoint 放到 host 已经驱动的 borrowed CoroNet context 或 thread-pool lane；它不改变 callback 或
+send 语义。需要 processor、subgraph、queue、持久化或运行时跨 lane 调度时，仍应直接注册 FMQ
+adapter 并编译完整 graph；不要在 callback 中另造一套消息循环。
 
 ## Pattern contract
 
@@ -93,6 +108,20 @@ turbo_flow_fmq_app_destroy(app);
 所需配置；host 必须串行化同一 app 的 create/start/stop/destroy 生命周期。`start()` 重复调用返回
 `TURBO_EALREADY`，未 start 就 send 返回 `TURBO_EBUSY`，不支持发送的 pattern 返回
 `TURBO_ENOTSUP`。
+
+### Host-driven CoroNet execution
+
+需要让多个 endpoint 复用 host 的 CoroNet 调度资源时，使用
+`turbo_flow_fmq_app_create_ex(endpoint, options, execution, out)`。execution 设为
+`TURBO_FLOW_CORONET_EXECUTION_BORROWED_CONTEXT` 并提供 `context`，或设为
+`TURBO_FLOW_CORONET_EXECUTION_POOL_LANE` 并提供 `pool` 和稳定 `lane`。
+
+`BORROWED_CONTEXT` 和 `POOL_LANE` 始终由 host 持有；create 失败、app stop 或 app destroy 都不会停止或
+销毁它们。host 必须在调用 create/start 前启动 owner loop，并保持其运行直到所有绑定 facade 完成
+destroy，然后才能停止 runner 并销毁 context/pool。`OWNED_CONTEXT` 在 Facade `_ex` 中返回
+`TURBO_EINVAL`，因为 create 失败无法安全表达部分所有权转移；需要 adapter 接管 context 时使用底层
+`turbo_flow_fmq_register_adapter_ex()`。完整的可编译 runner、binding 和销毁顺序见
+[`test_fmq.c`](tests/test_fmq.c) 中的 `keeps explicitly borrowed facade contexts owned by the host`。
 
 PUB、PUSH、DEALER 可在首次 `start()` 前调用
 `turbo_flow_fmq_app_configure_async_send()`。配置同时限制队列 item 数、payload bytes、micro-batch 大小和

@@ -19,12 +19,9 @@ add_library(
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_security_internal.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_session.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_session_internal.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_task_group_internal.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_topic_index.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_topic_index_internal.h
-  ${PROJECT_SOURCE_DIR}/io/common/src/flow_connection.c
-  ${PROJECT_SOURCE_DIR}/io/common/src/flow_coronet_execution.c
-  ${PROJECT_SOURCE_DIR}/io/common/src/flow_coronet_runtime.c
-  ${PROJECT_SOURCE_DIR}/io/common/src/flow_io_policy.c
   ${FLOWIE_HEADERS})
 cmake_config_target(
   ${TARGET_NAME}
@@ -40,7 +37,7 @@ target_include_directories(
 target_link_libraries(
   ${TARGET_NAME}
   PUBLIC Flowie::Protocol TurboFlow::Flow TurboNet::CoroNet TurboUtils::Core)
-target_link_libraries(${TARGET_NAME} PRIVATE TurboFlow::FlowStore)
+target_link_libraries(${TARGET_NAME} PRIVATE tf_executor_common TurboFlow::FlowStore)
 install(FILES ${FLOWIE_HEADERS} DESTINATION include)
 
 if(BUILD_TESTING)

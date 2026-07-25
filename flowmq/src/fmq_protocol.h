@@ -58,6 +58,14 @@ typedef flowmq_protocol_heartbeat_deadlines_t flow_fmq_heartbeat_deadlines_t;
 #define flow_fmq_encoded_size_limit flowmq_protocol_encoded_size_limit
 #define flow_fmq_encoded_size flowmq_protocol_encoded_size
 
+/*
+ * Private cross-target encoder used by the FMQ adapter's batch arena. The
+ * installed protocol API remains allocation-owning.
+ */
+CXX_C_API int flowmq_protocol_encode_frame_into_internal(
+    const flowmq_protocol_frame_t *frame, size_t max_frame_size, void *storage,
+    size_t storage_size, size_t *encoded_size);
+
 int flow_fmq_config_validate(const turbo_flow_fmq_config_t *config);
 
 #endif /* TURBO_FLOW_FMQ_PROTOCOL_H */

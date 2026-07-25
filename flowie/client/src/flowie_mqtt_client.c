@@ -12,6 +12,7 @@
 #include "turbo_thread.h"
 #include "turbo_vec.h"
 
+#include <limits.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,6 +77,9 @@ struct flowie_mqtt_client_s {
   size_t max_packet_size;
   size_t outbound_max_packet_size;
   size_t max_inbound_qos2;
+  size_t stream_recv_buffer_bytes;
+  size_t socket_recv_buffer_bytes;
+  size_t socket_send_buffer_bytes;
   uint16_t server_receive_maximum;
   uint16_t server_topic_alias_maximum;
   uint16_t server_keep_alive;
@@ -163,7 +167,7 @@ static int flowie_mqtt_client_transport_valid(flowie_mqtt_client_transport_t tra
 
 static const flowie_mqtt_client_tls_config_t *
 flowie_mqtt_client_tls_config(const flowie_mqtt_client_config_t *config) {
-  return config && config->abi_version >= FLOWIE_MQTT_CLIENT_ABI_V6 ? &config->tls : NULL;
+  return config ? &config->tls : NULL;
 }
 
 static int flowie_mqtt_client_tls_string_valid(const char *value) {
@@ -176,12 +180,7 @@ static int flowie_mqtt_client_tls_string_valid(const char *value) {
 static int flowie_mqtt_client_config_validate(const flowie_mqtt_client_config_t *config) {
   const flowie_mqtt_client_tls_config_t *tls;
   size_t max_packet_size;
-  if (!config ||
-      !((config->abi_version == FLOWIE_MQTT_CLIENT_ABI_V5 &&
-         config->size == offsetof(flowie_mqtt_client_config_t, tls)) ||
-        (config->abi_version == FLOWIE_MQTT_CLIENT_ABI_V6 &&
-         config->size == offsetof(flowie_mqtt_client_config_t, on_auth_challenge)) ||
-        (config->abi_version == FLOWIE_MQTT_CLIENT_ABI_V7 && config->size >= sizeof(*config))) ||
+  if (!config || config->size != sizeof(*config) ||
       !config->host || config->host[0] == '\0' || config->port < 1 || config->port > 65535 ||
       !flowie_mqtt_client_transport_valid(config->transport))
     return TURBO_EINVAL;
@@ -211,8 +210,13 @@ static int flowie_mqtt_client_config_validate(const flowie_mqtt_client_config_t 
       return TURBO_EINVAL;
   }
   if (config->topic_handlers.count != 0u && !config->topic_handlers.data) return TURBO_EINVAL;
-  if (config->abi_version < FLOWIE_MQTT_CLIENT_ABI_V7 && config->size >= sizeof(*config))
-    return TURBO_EINVAL;
+  if (config->socket_recv_buffer_bytes > (size_t)INT_MAX ||
+      config->socket_send_buffer_bytes > (size_t)INT_MAX)
+    return TURBO_ERANGE;
+  if ((config->stream_recv_buffer_bytes != 0u &&
+       config->stream_recv_buffer_bytes < FLOWIE_MQTT_CLIENT_MIN_STREAM_RECV_BUFFER_SIZE) ||
+      config->stream_recv_buffer_bytes > FLOWIE_MQTT_CLIENT_MAX_STREAM_RECV_BUFFER_SIZE)
+    return TURBO_ERANGE;
   for (size_t i = 0u; i < config->topic_handlers.count; ++i) {
     const flowie_mqtt_client_topic_handler_t *handler = &config->topic_handlers.data[i];
     if (!handler->on_message || !handler->filter.data || handler->filter.size == 0u ||
@@ -711,13 +715,21 @@ static int flowie_mqtt_client_receive_packet(flowie_mqtt_client_t *client,
     }
     rc = coro_socket_recv(client->socket, &client->recv_data, &client->recv_size);
     if (rc != TURBO_OK) {
-      if (rc == TURBO_EINTR) client->interrupt_pending = 0;
+      if (rc == TURBO_EINTR && client->interrupt_pending) {
+        client->interrupt_pending = 0;
+        /* Command submission uses EINTR only to leave the idle receive. If the
+         * wake raced with normal input, its retained interrupt can reach the
+         * command that consumed that input; keep waiting for that command's
+         * protocol response instead of failing it. */
+        if (client->busy) continue;
+      }
       return rc;
     }
     client->recv_offset = 0u;
     if (!client->recv_data && client->recv_size == 0u) {
       if (client->interrupt_pending) {
         client->interrupt_pending = 0;
+        if (client->busy) continue;
         return TURBO_EINTR;
       }
       return TURBO_ECONNRESET;
@@ -809,8 +821,8 @@ flowie_mqtt_client_handle_auth_challenge(flowie_mqtt_client_t *client,
   rc = client->on_auth_challenge(client, &challenge, &response, client->user_data);
   client->callback_active = 0;
   if (rc != TURBO_OK) return rc;
-  if (response.size < sizeof(response) || response.abi_version != FLOWIE_MQTT_CLIENT_ABI_CURRENT ||
-      response.reason_code != 0x18u || !flowie_mqtt_client_span_valid(response.properties))
+  if (response.size != sizeof(response) || response.reason_code != 0x18u ||
+      !flowie_mqtt_client_span_valid(response.properties))
     return TURBO_EPROTO;
   {
     flowie_mqtt_property_block_view_t properties = FLOWIE_MQTT_PROPERTY_BLOCK_VIEW_INIT;
@@ -1156,6 +1168,9 @@ int flowie_mqtt_client_create(const flowie_mqtt_client_config_t *config,
   client->max_packet_size = max_packet_size;
   client->outbound_max_packet_size = max_packet_size;
   client->max_inbound_qos2 = config->max_inbound_qos2;
+  client->stream_recv_buffer_bytes = config->stream_recv_buffer_bytes;
+  client->socket_recv_buffer_bytes = config->socket_recv_buffer_bytes;
+  client->socket_send_buffer_bytes = config->socket_send_buffer_bytes;
   client->server_receive_maximum = UINT16_MAX;
   client->server_maximum_qos = 2u;
   client->server_retain_available = 1u;
@@ -1166,10 +1181,8 @@ int flowie_mqtt_client_create(const flowie_mqtt_client_config_t *config,
   client->on_subscribe = config->on_subscribe;
   client->on_unsubscribe = config->on_unsubscribe;
   client->on_ping = config->on_ping;
-  if (config->abi_version >= FLOWIE_MQTT_CLIENT_ABI_V7) {
-    client->on_auth_challenge = config->on_auth_challenge;
-    client->on_auth = config->on_auth;
-  }
+  client->on_auth_challenge = config->on_auth_challenge;
+  client->on_auth = config->on_auth;
   client->on_disconnect = config->on_disconnect;
   client->on_error = config->on_error;
   client->user_data = config->user_data;
@@ -1219,6 +1232,11 @@ int flowie_mqtt_client_create(const flowie_mqtt_client_config_t *config,
   if (!client->context) {
     rc = TURBO_ENOMEM;
     goto fail;
+  }
+  if (client->stream_recv_buffer_bytes != 0u) {
+    rc = coro_context_set_stream_recv_buffer_size(client->context,
+                                                  client->stream_recv_buffer_bytes);
+    if (rc != TURBO_OK) goto fail;
   }
   coro_context_set_persistent(client->context, 1);
   rc = turbo_thread_create(&client->worker, flowie_mqtt_client_worker, client);
@@ -1315,6 +1333,14 @@ static int flowie_mqtt_client_connect_operation(flowie_mqtt_client_t *client,
   if (!client->socket) {
     rc = TURBO_ENOMEM;
     goto fail;
+  }
+  if (client->socket_recv_buffer_bytes != 0u) {
+    rc = coro_socket_set_recv_buffer_size(client->socket, client->socket_recv_buffer_bytes);
+    if (rc != TURBO_OK) goto fail;
+  }
+  if (client->socket_send_buffer_bytes != 0u) {
+    rc = coro_socket_set_send_buffer_size(client->socket, client->socket_send_buffer_bytes);
+    if (rc != TURBO_OK) goto fail;
   }
   if (client->tls_configured) {
     turbo_tls_client_config_t tls_config = {0};
@@ -1630,9 +1656,8 @@ int flowie_mqtt_client_publish(flowie_mqtt_client_t *client,
                                const flowie_mqtt_client_publish_topic_vec_t *topics) {
   flowie_mqtt_client_command_vec_t commands;
   int rc;
-  if (!client || !topics || topics->size < sizeof(*topics) ||
-      topics->abi_version < FLOWIE_MQTT_CLIENT_ABI_V5 ||
-      topics->abi_version > FLOWIE_MQTT_CLIENT_ABI_CURRENT || !topics->data || topics->count == 0u)
+  if (!client || !topics || topics->size != sizeof(*topics) || !topics->data ||
+      topics->count == 0u)
     return TURBO_EINVAL;
   if (!client->on_publish) return TURBO_ENOTSUP;
   if (topics->count > client->command_queue_capacity) return TURBO_ENOSPC;

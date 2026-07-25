@@ -1129,6 +1129,39 @@ typedef struct turbo_flow_adapter_ops_s {
   turbo_flow_adapter_command_fn command;
 } turbo_flow_adapter_ops_t;
 
+/**
+ * Core-owned iterator for one native adapter batch.
+ *
+ * The adapter calls next exactly once for each index in ascending order. On
+ * TURBO_OK, message owns an independent clone/retained view and must be cleaned
+ * with turbo_flow_msg_cleanup() before requesting the next item. On failure,
+ * message is initialized but empty and the batch must stop at that index.
+ */
+typedef int (*turbo_flow_adapter_batch_next_fn)(void *ctx, size_t index,
+                                                turbo_flow_msg_t *message);
+
+typedef struct turbo_flow_adapter_batch_s {
+  size_t size;
+  size_t message_count;
+  turbo_flow_adapter_batch_next_fn next;
+  void *ctx;
+} turbo_flow_adapter_batch_t;
+
+#define TURBO_FLOW_ADAPTER_BATCH_INIT {sizeof(turbo_flow_adapter_batch_t), 0u, NULL, NULL}
+
+/**
+ * Optional native batch consumer for a direct terminal adapter stage.
+ *
+ * Core invokes this callback only when one source is connected directly to one
+ * inline terminal adapter stage without observers, retry, reorder, deadline, or
+ * settlement behavior. The callback processes messages in ascending order and
+ * stops at the first prepare or consume failure. consumed reports only
+ * successful items before that failure.
+ */
+typedef int (*turbo_flow_adapter_consume_batch_fn)(
+    void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
+    const turbo_flow_adapter_batch_t *batch, size_t *consumed);
+
 typedef enum turbo_flow_adapter_event_e {
   TURBO_FLOW_ADAPTER_EVENT_START = 0,
   TURBO_FLOW_ADAPTER_EVENT_STOP
@@ -1235,6 +1268,8 @@ typedef struct turbo_flow_module_adapter_registration_s {
   /** Primitive instances to register atomically before adapter ownership transfers. */
   const turbo_flow_primitive_descriptor_t *primitives;
   size_t primitive_count;
+  /** Optional native direct-terminal batch consumer. */
+  turbo_flow_adapter_consume_batch_fn consume_batch;
 } turbo_flow_module_adapter_registration_t;
 
 #define TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT                                                \
@@ -1250,10 +1285,13 @@ typedef struct turbo_flow_module_adapter_registration_s {
    0u,                                                                                             \
    NULL,                                                                                           \
    NULL,                                                                                           \
-   0u}
+   0u,                                                                                             \
+   NULL}
 
 #define TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_V1_SIZE                                             \
   offsetof(turbo_flow_module_adapter_registration_t, operation_resource_names)
+#define TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_V2_SIZE                                             \
+  offsetof(turbo_flow_module_adapter_registration_t, consume_batch)
 
 typedef enum turbo_flow_state_e {
   TURBO_FLOW_STATE_NEW = 0,

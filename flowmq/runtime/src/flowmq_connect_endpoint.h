@@ -51,6 +51,7 @@ typedef struct flowmq_connect_endpoint_config_s {
   const char *identity;
   int port;
   size_t max_frame_size;
+  size_t stream_recv_buffer_bytes;
   tf_coronet_socket_timeout_config_t timeouts;
   tf_coronet_socket_options_t socket_options;
   tf_coronet_udp_options_t udp_options;

@@ -344,18 +344,11 @@ int flow_fmq_encoded_size_limit(size_t max_frame_size, size_t *limit) {
   return TURBO_OK;
 }
 
-int flow_fmq_encode_frame(const flow_fmq_frame_t *frame, size_t max_frame_size, tstr_t *out) {
-  size_t total;
+static void flow_fmq_encode_frame_bytes(const flow_fmq_frame_t *frame, unsigned char *out) {
   size_t encoded_offset = 0u;
   size_t payload_offset = 0u;
-  int rc;
-  if (!out || *out) return TURBO_EINVAL;
-  rc = flow_fmq_frame_lengths(frame, max_frame_size, &total);
-  if (rc != TURBO_OK) return rc;
-  *out = tstr_new_len(NULL, total);
-  if (!*out) return TURBO_ENOMEM;
   do {
-    unsigned char *header = (unsigned char *)*out + encoded_offset;
+    unsigned char *header = out + encoded_offset;
     size_t chunk_len = frame->payload.len - payload_offset;
     uint8_t flags = payload_offset == 0u ? FLOW_FMQ_PACKET_FIRST : 0u;
     uint16_t identity_len = payload_offset == 0u ? (uint16_t)frame->identity.len : 0u;
@@ -366,19 +359,44 @@ int flow_fmq_encode_frame(const flow_fmq_frame_t *frame, size_t max_frame_size, 
                                  payload_offset);
     encoded_offset += FLOW_FMQ_HEADER_SIZE;
     if (identity_len > 0u) {
-      memcpy(*out + encoded_offset, frame->identity.data, identity_len);
+      memcpy(out + encoded_offset, frame->identity.data, identity_len);
       encoded_offset += identity_len;
     }
     if (topic_len > 0u) {
-      memcpy(*out + encoded_offset, frame->topic.data, topic_len);
+      memcpy(out + encoded_offset, frame->topic.data, topic_len);
       encoded_offset += topic_len;
     }
     if (chunk_len > 0u) {
-      memcpy(*out + encoded_offset, frame->payload.data + payload_offset, chunk_len);
+      memcpy(out + encoded_offset, frame->payload.data + payload_offset, chunk_len);
       encoded_offset += chunk_len;
       payload_offset += chunk_len;
     }
   } while (payload_offset < frame->payload.len);
+}
+
+int flow_fmq_encode_frame(const flow_fmq_frame_t *frame, size_t max_frame_size, tstr_t *out) {
+  size_t total;
+  int rc;
+  if (!out || *out) return TURBO_EINVAL;
+  rc = flow_fmq_frame_lengths(frame, max_frame_size, &total);
+  if (rc != TURBO_OK) return rc;
+  *out = tstr_new_len(NULL, total);
+  if (!*out) return TURBO_ENOMEM;
+  flow_fmq_encode_frame_bytes(frame, (unsigned char *)*out);
+  return TURBO_OK;
+}
+
+CXX_C_API int flowmq_protocol_encode_frame_into_internal(
+    const flowmq_protocol_frame_t *frame, size_t max_frame_size, void *storage,
+    size_t storage_size, size_t *encoded_size) {
+  size_t total;
+  int rc;
+  if (!storage || !encoded_size) return TURBO_EINVAL;
+  rc = flow_fmq_frame_lengths(frame, max_frame_size, &total);
+  if (rc != TURBO_OK) return rc;
+  *encoded_size = total;
+  if (storage_size < total) return TURBO_ENOSPC;
+  flow_fmq_encode_frame_bytes(frame, (unsigned char *)storage);
   return TURBO_OK;
 }
 

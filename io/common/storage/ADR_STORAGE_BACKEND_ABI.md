@@ -12,6 +12,11 @@ backend operations 只有：
 模型能力通过 capability bitset 协商。宿主在调用 `open()` 前检查所需 capability，因而
 不支持的模型会稳定返回 `TURBO_ENOTSUP`，不会连接后再失败。
 
+`tf_local_storage`、`tf_redis` 和 `tf_pgsql` 是三个同级的 shared library。local 不是
+宿主内置的 direct-factory 特例；它和 Redis/ PostgreSQL 一样由 StorageBackend registry
+注册、由 owner 装配，只是其 Record/State/Index/Log/Series 数据语义为进程内 volatile，
+关闭或进程退出后不可恢复。模块形态与数据持久性是两个独立维度。
+
 ## Ownership and lifetime
 
 注册表借用静态 API，拥有动态加载模块。每次成功 `open()` 都由一个 opaque owner 持有；
@@ -24,7 +29,7 @@ service，宿主也会调用 `close()` 清理部分状态。
 
 ## Visibility boundary
 
-Redis/PG 的具体 `create/destroy` 函数、连接对象和数据库操作不属于插件 ABI。它们只在
+local/Redis/PG 的具体 `create/destroy` 函数、连接对象和数据库操作不属于插件 ABI。它们只在
 各自 `src/*_storage_internal.h` 中声明，由 backend adapter 内部调用；面向插件宿主的
 backend 头文件仅提供配置结构、能力声明和 function-table accessor。具体 create/destroy
 符号不再作为公开 API 导出，因而不能绕过 registry owner 生命周期。这样可以替换内部实现

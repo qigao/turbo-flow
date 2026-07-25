@@ -1,5 +1,9 @@
 # FlowMQ deployment control and rolling upgrade contract
 
+本文件是 [协议索引](PROTOCOL_SPEC.md) 指定的 deployment control contract 唯一正文。
+它定义 membership、fencing、rolling upgrade 和 reconcile 的 owner 与状态边界，不新增
+FMQ/3 frame；基础 framing 见 [FMQ_WIRE_PROTOCOL.md](FMQ_WIRE_PROTOCOL.md)。
+
 状态：failure-domain membership owner、stable logical route election、route fencing、snapshot
 split-brain classification、mixed-version compatibility evaluator，以及 durable management typed
 reconcile 已实现。它们不改变 FMQ v3 frame、TFMP/1 wire 或 REQ/REP 同步状态机。

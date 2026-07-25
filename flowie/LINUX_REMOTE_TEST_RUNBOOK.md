@@ -283,6 +283,9 @@ ctest --preset linux-release-user --output-on-failure \
   --output-junit "$ARTIFACT_ROOT/turbonet-linux-release.xml"
 cmake --install build/linux-gcc-release
 
+# Keep the private SDK ahead of host-installed TurboUtils/TurboNet libraries.
+export LD_LIBRARY_PATH="$SDK_ROOT/turbonet/lib:$SDK_ROOT/turboutils/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 cd "$TURBO_HTTP_SRC"
 cmake --list-presets
 cmake --fresh --preset linux-release-user \
@@ -294,10 +297,13 @@ cmake --build --preset linux-release-user --parallel "$(nproc)"
 ctest --preset linux-release-user --output-on-failure \
   --output-junit "$ARTIFACT_ROOT/turbohttp-linux-release.xml"
 cmake --install build/linux-gcc-release
+
+export LD_LIBRARY_PATH="$SDK_ROOT/turbohttp/lib:$LD_LIBRARY_PATH"
 ```
 
 命令行显式覆盖 TurboNet/TurboFlow Linux preset 中继承的安装前缀，防止它们误写
-`/opt/turboutils`。
+`/opt/turboutils`。`LD_LIBRARY_PATH` 必须保持本次 run 的 SDK 在主机系统路径之前，避免
+`/usr/local/lib` 中旧版本库满足同名 SONAME 后造成 ABI 符号错配。
 
 ## 6. 配置并构建 TurboFlow release gate
 

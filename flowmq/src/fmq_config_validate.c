@@ -69,6 +69,8 @@ static int flow_fmq_coronet_options_validate(const turbo_flow_fmq_config_t *conf
   socket_options.linger = config->linger;
   socket_options.linger_ms = config->linger_ms;
   socket_options.send_hwm_bytes = config->send_hwm_bytes;
+  socket_options.socket_recv_buffer_bytes = config->socket_recv_buffer_bytes;
+  socket_options.socket_send_buffer_bytes = config->socket_send_buffer_bytes;
   rc = tf_coronet_socket_options_validate(transport, &socket_options);
   if (rc != TURBO_OK) return rc;
 
@@ -119,7 +121,7 @@ int flow_fmq_config_validate(const turbo_flow_fmq_config_t *config) {
   uint32_t max_connections;
   int rc;
 
-  if (!config || config->size < sizeof(*config) || config->version != TURBO_FLOW_FMQ_API_VERSION ||
+  if (!config || config->size != sizeof(*config) ||
       turbo_flow_fmq_pattern_validate(config->pattern) != TURBO_OK ||
       config->mode < TURBO_FLOW_FMQ_BIND || config->mode > TURBO_FLOW_FMQ_CONNECT ||
       config->transport < TURBO_FLOW_FMQ_TCP || config->transport > TURBO_FLOW_FMQ_WSS) {
@@ -128,6 +130,11 @@ int flow_fmq_config_validate(const turbo_flow_fmq_config_t *config) {
   if (config->timeout_ms == TURBO_FLOW_FMQ_TIMEOUT_DISABLED ||
       config->connect_timeout_ms == TURBO_FLOW_FMQ_TIMEOUT_DISABLED) {
     return TURBO_EINVAL;
+  }
+  if ((config->stream_recv_buffer_bytes != 0u &&
+       config->stream_recv_buffer_bytes < TURBO_FLOW_FMQ_MIN_STREAM_RECV_BUFFER_SIZE) ||
+      config->stream_recv_buffer_bytes > TURBO_FLOW_FMQ_MAX_STREAM_RECV_BUFFER_SIZE) {
+    return TURBO_ERANGE;
   }
   memset(&timeouts, 0, sizeof(timeouts));
   flow_fmq_timeout_config_resolve(&timeouts, config);
@@ -190,10 +197,6 @@ int flow_fmq_config_validate(const turbo_flow_fmq_config_t *config) {
   if (config->reconnect_initial_ms > 0 && config->reconnect_initial_ms > config->reconnect_max_ms &&
       config->reconnect_max_ms != 0) {
     return TURBO_ERANGE;
-  }
-  if ((config->context && !config->take_context_ownership) ||
-      (!config->context && config->take_context_ownership)) {
-    return TURBO_ENOTSUP;
   }
   return TURBO_OK;
 }

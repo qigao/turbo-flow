@@ -3,6 +3,7 @@
 #include "tinytest.h"
 #include "turbo_error.h"
 
+#include <limits.h>
 #include <string.h>
 
 spec("flow_coronet_runtime") {
@@ -267,6 +268,25 @@ spec("flow_coronet_runtime") {
 
     check_int_eq(tf_coronet_apply_socket_options(NULL, TF_CORONET_TRANSPORT_TCP, &options),
                  TURBO_EINVAL);
+
+    memset(&options, 0, sizeof(options));
+    options.socket_recv_buffer_bytes = 1024u * 1024u;
+    options.socket_send_buffer_bytes = 512u * 1024u;
+    check_int_eq(tf_coronet_socket_options_validate(TF_CORONET_TRANSPORT_TCP, &options), TURBO_OK);
+    check_int_eq(tf_coronet_socket_options_validate(TF_CORONET_TRANSPORT_TLS, &options), TURBO_OK);
+    check_int_eq(tf_coronet_socket_options_validate(TF_CORONET_TRANSPORT_WS, &options), TURBO_OK);
+    check_int_eq(tf_coronet_socket_options_validate(TF_CORONET_TRANSPORT_WSS, &options), TURBO_OK);
+    check_int_eq(tf_coronet_socket_options_validate(TF_CORONET_TRANSPORT_UDP, &options),
+                 TURBO_EINVAL);
+    check_int_eq(tf_coronet_socket_options_validate(TF_CORONET_TRANSPORT_KCP, &options),
+                 TURBO_EINVAL);
+    check_int_eq(tf_coronet_socket_options_validate(TF_CORONET_TRANSPORT_PIPE, &options),
+                 TURBO_EINVAL);
+
+    options.socket_recv_buffer_bytes = (size_t)INT_MAX + 1u;
+    options.socket_send_buffer_bytes = 0;
+    check_int_eq(tf_coronet_socket_options_validate(TF_CORONET_TRANSPORT_TCP, &options),
+                 TURBO_ERANGE);
   }
 
   it("restricts reuse-port to non-pipe listeners") {

@@ -7,14 +7,21 @@ MQTT 规范符合性或生产稳定性。
 
 ## 基线与目标
 
-截至 2026-07-22，Windows 本机 release 配置的完整构建已通过；排除仅属于 scheduled、固定外部 broker
-互操作和 PostgreSQL live 环境的用例后，本机 CTest 共 `92/92` 通过。该结果包含协议、client、endpoint、
-session/store fault、真实 TCP/TLS/WS/WSS/Pipe、BDD、public MQTT smoke、Redis live、ACL/RPC/dashboard
-以及 Flowie Graph integration。现有测试已覆盖 MQTT 3.1/3.1.1/5、QoS 0/1/2、retained、
+截至 2026-07-24，Windows release preset 当前注册 `93` 个 CTest；其中
+`test_turbo_flow_pgsql_live` 与 `flowie_server_check_smb_product` 仍为 Disabled。注册数量不是通过数量，
+本矩阵不再沿用旧的 `92/92` 通过结论。此前 targeted run 暴露的
+`MQTT-SOAK-004`、`MQTT-SOAK-005`、`MQTT-OWNER-003` 和 dev-server BDD 问题均已完成修复并复验；
+soak `1/1`、endpoint/dev-server `2/2`、StorageBackend/local/product `4/4` 通过，且
+`flowie_server --check` 通过。本轮新增的 TurboFlow disruptor 与 HTTPS auth 回归也已在远端 Linux
+完整执行：`test_turbo_flow` 为 `138/138`，`test_turbo_flow_http` 为 `17/17`。这些均为 focused
+或子集证据，不能替代完整产品 gate 或规定的 30/60 分钟 scheduled soak。
+
+已覆盖的行为范围包括协议、client、endpoint、session/store fault、真实 TCP/TLS/WS/WSS/Pipe、BDD、
+public MQTT smoke、Redis live、ACL/RPC/dashboard 以及 Flowie Graph integration。现有测试已覆盖 MQTT 3.1/3.1.1/5、QoS 0/1/2、retained、
 Will/Will Delay、session resume、Topic Alias、Subscription Identifier、Receive Maximum、
 Enhanced AUTH、ACL、真实 TCP/TLS/WS/WSS/Pipe 基本往返及 WS/WSS admission 安全边界。
 
-上述是来自测试源文件与 CTest 配置的事实，不代表组合状态空间已穷尽。与 Mosquitto 官方
+上述注册数来自 CTest 配置，修复与复验结果来自测试输出；不代表组合状态空间已穷尽。与 Mosquitto 官方
 broker suite 的场景分类相比，固定版本跨 broker 互操作、持续 sanitizer fuzz 和规定时长的长稳仍属于
 独立执行环境。本矩阵使这些范围可逐项复验并进入分层 gate；已经进入 release gate 的子集仍按具体
 测试证据界定。
@@ -42,21 +49,24 @@ sanitizer 持续 fuzz job。
 只带平台标签的项目默认在对应 OS 的常规 gate 中始终执行，不需要额外的本机标签。
 
 标签只有“有/没有”，不表达“一半实现”。实际结果独立记录，不能用一个平台的结果推定另一个平台。
-2026-07-22 的 `[🪟]` release 构建及 CTest 为 `92/92` 通过、0 失败；CoroNet EOF/TLS 修复后，
-proxy、WS/WSS policy/server、stream TLS/WS 五个相邻 executable 又各连续 10 轮通过。随后在 `root@eu`
-以安装后的 TurboNet 重链接 Flowie：无容器 release 子集 `23/23` 通过，client/transport/endpoint
-各连续 5 轮通过，dev server BDD 与 Mosquitto client interop 各连续 10 轮通过。TurboNet 自身
+2026-07-24 的 `[🪟]` 条目以 93 个注册测试为基线；focused run 当前通过，但不能写成
+全量通过。CoroNet EOF/TLS 修复后的相邻 executable 证据仍需与完整 gate 分开记录。Linux full CTest
+本轮尝试在未改动的 `test_turbo_flow_email` POP3 pending-source 用例处持续等待，未形成完整退出结果；
+这不影响上文两个直接相关 executable 的完整通过证据。此前在 `root@eu`
+以安装后的 TurboNet 重链接 Flowie 的无容器 release 子集 `23/23`、client/transport/endpoint
+各连续 5 轮，以及 dev server BDD/Mosquitto client interop 各连续 10 轮，均属于历史证据；当前
+focused run 的通过结果也不等于完整 scheduled gate。TurboNet 自身
 Linux CTest 为 `49/49`，每项连续 3 次通过。Windows 本机 gate 和本轮 Linux 无容器 gate 均不包含
 PostgreSQL、固定外部 broker、sanitizer 或规定时长的 scheduled job。
 
 | 执行标签 | 本轮结果 | 证据边界 |
 |---|---|---|
-| `[🪟]` | Passed | release 全量构建；CTest `92/92`，0 失败，177.22 秒；CoroNet 相邻五组各连续 10 轮通过 |
+| `[🪟]` | Blocked | CTest 注册 93 个；Disabled 2 个；focused soak/endpoint/BDD/storage checks 通过，完整 gate 尚未重跑 |
 | `[🪟][redis]` | Passed | Redis live 已运行并通过 |
 | `[🪟][pgsql]` | Not run | PostgreSQL live 不属于本机 gate |
 | `[🪟][fixed-broker]` | Not run | 固定互操作 targets 编译通过，但未把编译冒充运行结果 |
 | `[🪟][sanitizer]` | Not run | deterministic corpus 已通过；持续 sanitizer job 未运行 |
-| `[🪟][scheduled]` | Not run | 六项短时验证通过；未运行规定的 30/60 分钟任务 |
+| `[🪟][scheduled]` | Not run | focused soak 已通过；未运行规定的 30/60 分钟任务 |
 | `[🐧]` | Passed | TurboNet release build + CTest `49/49`，每项连续 3 次；Flowie release 重链接、无容器子集 `23/23`；client/transport/endpoint 各 5 轮；dev BDD/Mosquitto client interop 各 10 轮 |
 | `[🐧][redis]` | Not run | 按本轮范围保持 Docker/Redis 停止；未把配置检查冒充 live backend 测试 |
 | `[🐧][pgsql]` | Not run | 按本轮范围保持 Docker/PostgreSQL 停止 |

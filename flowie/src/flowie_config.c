@@ -48,7 +48,10 @@ static const flowie_config_field_t FLOWIE_CONFIG_FIELDS[] = {
     FLOWIE_CONFIG_FIELD(max_connections, FLOWIE_CONFIG_U32, FLOWIE_MAX_CONNECTIONS_LIMIT),
     FLOWIE_CONFIG_FIELD(coroutine_stack_size, FLOWIE_CONFIG_SIZE,
                         FLOWIE_MAX_COROUTINE_STACK_SIZE),
-    FLOWIE_CONFIG_FIELD(recv_buffer_size, FLOWIE_CONFIG_SIZE, FLOWIE_MAX_RECV_BUFFER_SIZE),
+    FLOWIE_CONFIG_FIELD(stream_recv_buffer_bytes, FLOWIE_CONFIG_SIZE,
+                        FLOWIE_MAX_RECV_BUFFER_SIZE),
+    FLOWIE_CONFIG_FIELD(socket_recv_buffer_bytes, FLOWIE_CONFIG_SIZE, INT_MAX),
+    FLOWIE_CONFIG_FIELD(socket_send_buffer_bytes, FLOWIE_CONFIG_SIZE, INT_MAX),
     FLOWIE_CONFIG_FIELD(timeout_ms, FLOWIE_CONFIG_U64, UINT64_MAX),
     FLOWIE_CONFIG_FIELD(recv_timeout_ms, FLOWIE_CONFIG_U64, UINT64_MAX),
     FLOWIE_CONFIG_FIELD(reuse_port, FLOWIE_CONFIG_BOOL, 0u),
@@ -144,7 +147,8 @@ static int flowie_config_assign(flowie_endpoint_config_t *config,
   if (strcmp(field->name, "coroutine_stack_size") == 0 &&
       number < FLOWIE_MIN_COROUTINE_STACK_SIZE)
     return TURBO_ERANGE;
-  if (strcmp(field->name, "recv_buffer_size") == 0 && number < FLOWIE_MIN_RECV_BUFFER_SIZE)
+  if (strcmp(field->name, "stream_recv_buffer_bytes") == 0 &&
+      number < FLOWIE_MIN_RECV_BUFFER_SIZE)
     return TURBO_ERANGE;
   if (number == 0u &&
       (strcmp(field->name, "max_packet_size") == 0 || strcmp(field->name, "max_connections") == 0 ||

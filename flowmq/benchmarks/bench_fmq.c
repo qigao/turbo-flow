@@ -13,6 +13,8 @@
 #ifdef _WIN32
   #include <winsock2.h>
   #include <ws2tcpip.h>
+  #include <windows.h>
+  #include <mmsystem.h>
 #else
   #include <arpa/inet.h>
   #include <netinet/in.h>
@@ -25,15 +27,24 @@
 #define FMQ_BENCH_TYPICAL_SAMPLES 1000u
 #define FMQ_BENCH_LARGE_PAYLOAD_BYTES (64u * 1024u)
 #define FMQ_BENCH_LARGE_WARMUP 8u
-#define FMQ_BENCH_LARGE_SAMPLES 128u
+#define FMQ_BENCH_LARGE_SAMPLES 512u
 #define FMQ_BENCH_THROUGHPUT_PAYLOAD_BYTES 64u
 #define FMQ_BENCH_THROUGHPUT_MESSAGES_PER_SAMPLE 64u
 #define FMQ_BENCH_THROUGHPUT_SAMPLES 200u
 #define FMQ_BENCH_THROUGHPUT_WARMUP_MESSAGES 32u
 #define FMQ_BENCH_LARGE_BATCH_PAYLOAD_BYTES (64u * 1024u)
+#define FMQ_BENCH_LARGE_BATCH_MESSAGES_SMALL 2u
+#define FMQ_BENCH_LARGE_BATCH_MESSAGES_MEDIUM 4u
 #define FMQ_BENCH_LARGE_BATCH_MESSAGES_PER_SAMPLE 8u
-#define FMQ_BENCH_LARGE_BATCH_SAMPLES 64u
+#define FMQ_BENCH_LARGE_BATCH_SAMPLES 256u
 #define FMQ_BENCH_LARGE_BATCH_WARMUP_MESSAGES 8u
+#define FMQ_BENCH_LARGE_BATCH_MESSAGES_ENV "FLOWMQ_BENCH_LARGE_BATCH_MESSAGES"
+#define FMQ_BENCH_STREAM_RECV_BUFFER_ENV "FLOWMQ_BENCH_STREAM_RECV_BUFFER_BYTES"
+#define FMQ_BENCH_STREAM_RECV_BUFFER_SMALL (128u * 1024u)
+#define FMQ_BENCH_STREAM_RECV_BUFFER_MEDIUM (256u * 1024u)
+#define FMQ_BENCH_STREAM_RECV_BUFFER_LARGE (512u * 1024u)
+#define FMQ_BENCH_WINDOWS_TIMER_RESOLUTION_ENV "FLOWMQ_BENCH_WINDOWS_TIMER_RESOLUTION"
+#define FMQ_BENCH_SLOW_SAMPLE_NS UINT64_C(1000000)
 #define FMQ_BENCH_WAIT_TIMEOUT_NS UINT64_C(2000000000)
 #define FMQ_BENCH_CONNECT_ATTEMPTS 400u
 #define FMQ_BENCH_CONNECT_RETRY_MS 5u
@@ -62,15 +73,25 @@ typedef struct fmq_bench_throughput_case_s {
   size_t samples;
   int use_batch_api;
   int use_async_api;
+  size_t receiver_stream_recv_buffer_bytes;
 } fmq_bench_throughput_case_t;
 
 typedef struct fmq_bench_receive_state_s {
   turbo_mutex_t mutex;
   turbo_cond_t changed;
   uint64_t received_ns;
+  uint64_t sample_first_received_ns;
+  uint64_t sample_first_thread_cycles;
+  uint64_t sample_last_thread_cycles;
+  size_t sample_base_received;
+  size_t sample_message_count;
   size_t received;
   size_t expected_payload_bytes;
   size_t last_payload_bytes;
+  unsigned long sample_thread_id;
+  int sample_thread_cycles_available;
+  int sample_thread_hop;
+  int sample_tracking;
   int status;
 } fmq_bench_receive_state_t;
 
@@ -82,9 +103,147 @@ typedef struct fmq_bench_async_completion_state_s {
   int status;
 } fmq_bench_async_completion_state_t;
 
+typedef struct fmq_bench_windows_tuning_s {
+  int timer_resolution_active;
+} fmq_bench_windows_tuning_t;
+
+typedef struct fmq_bench_context_runner_s {
+  coro_context_t *context;
+  turbo_thread_t thread;
+  int started;
+} fmq_bench_context_runner_t;
+
+static void fmq_bench_context_thread(void *arg) {
+  fmq_bench_context_runner_t *runner = (fmq_bench_context_runner_t *)arg;
+  if (runner && runner->context)
+    (void)coro_context_run(runner->context, TURBO_RUN_DEFAULT);
+}
+
+static void fmq_bench_context_stop_post(void *arg1, void *arg2) {
+  (void)arg2;
+  coro_context_stop((coro_context_t *)arg1);
+}
+
+static int fmq_bench_context_runner_start(fmq_bench_context_runner_t *runner,
+                                          coro_context_t *context) {
+  if (!runner || !context || runner->started) return TURBO_EINVAL;
+  memset(runner, 0, sizeof(*runner));
+  runner->context = context;
+  coro_context_set_persistent(context, 1);
+  if (turbo_thread_create(&runner->thread, fmq_bench_context_thread, runner) != TURBO_OK) {
+    coro_context_set_persistent(context, 0);
+    runner->context = NULL;
+    return TURBO_EIO;
+  }
+  runner->started = 1;
+  return TURBO_OK;
+}
+
+static void fmq_bench_context_runner_stop(fmq_bench_context_runner_t *runner) {
+  if (!runner || !runner->started || !runner->context) return;
+  coro_context_set_persistent(runner->context, 0);
+  if (coro_post(runner->context, fmq_bench_context_stop_post, runner->context, NULL) !=
+      TURBO_OK)
+    coro_context_stop(runner->context);
+  (void)turbo_thread_join(&runner->thread);
+  memset(runner, 0, sizeof(*runner));
+}
+
+static int fmq_bench_env_enabled(const char *name, int *enabled) {
+  const char *value;
+  if (!name || !enabled) return TURBO_EINVAL;
+  value = getenv(name);
+  if (!value || strcmp(value, "0") == 0) {
+    *enabled = 0;
+    return TURBO_OK;
+  }
+  if (strcmp(value, "1") == 0) {
+    *enabled = 1;
+    return TURBO_OK;
+  }
+  return TURBO_EINVAL;
+}
+
+static void fmq_bench_windows_tuning_end(fmq_bench_windows_tuning_t *tuning) {
+  if (!tuning) return;
+#ifdef _WIN32
+  if (tuning->timer_resolution_active) {
+    (void)timeEndPeriod(1u);
+    tuning->timer_resolution_active = 0;
+  }
+#endif
+}
+
+static int fmq_bench_windows_tuning_begin(fmq_bench_windows_tuning_t *tuning) {
+  int request_timer_resolution = 0;
+  int rc;
+  if (!tuning) return TURBO_EINVAL;
+  memset(tuning, 0, sizeof(*tuning));
+  rc = fmq_bench_env_enabled(FMQ_BENCH_WINDOWS_TIMER_RESOLUTION_ENV,
+                             &request_timer_resolution);
+  if (rc != TURBO_OK) return rc;
+#ifdef _WIN32
+  if (request_timer_resolution) {
+    if (timeBeginPeriod(1u) != TIMERR_NOERROR) return TURBO_EIO;
+    tuning->timer_resolution_active = 1;
+  }
+  printf("FMQ_BENCH_WINDOWS_TUNING timer_resolution_ms=%u\n",
+         tuning->timer_resolution_active ? 1u : 0u);
+  return TURBO_OK;
+#else
+  return request_timer_resolution ? TURBO_ENOTSUP : TURBO_OK;
+#endif
+}
+
 static int fmq_bench_profile_requested(void) {
   const char *value = getenv("FLOWMQ_BENCH_PROFILE");
   return value && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
+static int fmq_bench_large_batch_messages(size_t *messages_per_sample) {
+  const char *value;
+  if (!messages_per_sample) return TURBO_EINVAL;
+  value = getenv(FMQ_BENCH_LARGE_BATCH_MESSAGES_ENV);
+  if (!value) {
+    *messages_per_sample = FMQ_BENCH_LARGE_BATCH_MESSAGES_PER_SAMPLE;
+    return TURBO_OK;
+  }
+  if (strcmp(value, "2") == 0) {
+    *messages_per_sample = FMQ_BENCH_LARGE_BATCH_MESSAGES_SMALL;
+    return TURBO_OK;
+  }
+  if (strcmp(value, "4") == 0) {
+    *messages_per_sample = FMQ_BENCH_LARGE_BATCH_MESSAGES_MEDIUM;
+    return TURBO_OK;
+  }
+  if (strcmp(value, "8") == 0) {
+    *messages_per_sample = 8u;
+    return TURBO_OK;
+  }
+  return TURBO_EINVAL;
+}
+
+static int fmq_bench_stream_recv_buffer_bytes(size_t *bytes) {
+  const char *value;
+  if (!bytes) return TURBO_EINVAL;
+  value = getenv(FMQ_BENCH_STREAM_RECV_BUFFER_ENV);
+  if (!value) {
+    *bytes = 0u;
+    return TURBO_OK;
+  }
+  if (strcmp(value, "131072") == 0) {
+    *bytes = FMQ_BENCH_STREAM_RECV_BUFFER_SMALL;
+    return TURBO_OK;
+  }
+  if (strcmp(value, "262144") == 0) {
+    *bytes = FMQ_BENCH_STREAM_RECV_BUFFER_MEDIUM;
+    return TURBO_OK;
+  }
+  if (strcmp(value, "524288") == 0) {
+    *bytes = FMQ_BENCH_STREAM_RECV_BUFFER_LARGE;
+    return TURBO_OK;
+  }
+  return TURBO_EINVAL;
 }
 
 static int fmq_bench_profile_begin(void) {
@@ -97,6 +256,26 @@ static int fmq_bench_profile_begin(void) {
 
 static uint64_t fmq_bench_profile_average(uint64_t sum, uint64_t count) {
   return count == 0u ? 0u : sum / count;
+}
+
+static size_t fmq_bench_count_at_least(const uint64_t *values, size_t count,
+                                       uint64_t threshold) {
+  size_t matches = 0u;
+  if (!values) return 0u;
+  for (size_t i = 0u; i < count; ++i) {
+    if (values[i] >= threshold) matches += 1u;
+  }
+  return matches;
+}
+
+static size_t fmq_bench_count_equal(const uint64_t *values, size_t count,
+                                    uint64_t expected) {
+  size_t matches = 0u;
+  if (!values) return 0u;
+  for (size_t i = 0u; i < count; ++i) {
+    if (values[i] == expected) matches += 1u;
+  }
+  return matches;
 }
 
 static uint64_t fmq_bench_profile_remainder(uint64_t total, uint64_t first_part,
@@ -115,8 +294,11 @@ static void fmq_bench_profile_print(const char *pattern,
          " avg_enqueue_ns=%" PRIu64 " avg_owner_wait_ns=%" PRIu64
          " avg_post_call_ns=%" PRIu64 " avg_owner_dispatch_ns=%" PRIu64
          " avg_socket_send_ns=%" PRIu64 " avg_socket_thread_cpu_ns=%" PRIu64
-         " avg_socket_estimated_off_cpu_ns=%" PRIu64 " avg_completion_ns=%" PRIu64
-         " avg_waiter_wake_ns=%" PRIu64 " avg_total_ns=%" PRIu64 "\n",
+         " avg_socket_estimated_off_cpu_ns=%" PRIu64
+         " max_socket_send_ns=%" PRIu64 " slow_socket_send_samples=%" PRIu64
+         " avg_completion_ns=%" PRIu64 " avg_waiter_wake_ns=%" PRIu64
+         " avg_total_ns=%" PRIu64 " max_total_ns=%" PRIu64
+         " slow_total_samples=%" PRIu64 "\n",
          pattern, profile->samples, profile->post_samples, profile->socket_samples,
          profile->socket_cpu_samples,
          fmq_bench_profile_average(profile->enqueue_sum_ns, profile->samples),
@@ -128,9 +310,11 @@ static void fmq_bench_profile_print(const char *pattern,
                                    profile->socket_cpu_samples),
          fmq_bench_profile_average(profile->socket_estimated_off_cpu_sum_ns,
                                    profile->socket_cpu_samples),
+         profile->socket_send_max_ns, profile->socket_send_slow_samples,
          fmq_bench_profile_average(profile->completion_sum_ns, profile->samples),
          fmq_bench_profile_average(profile->waiter_wake_sum_ns, profile->samples),
-         fmq_bench_profile_average(profile->total_sum_ns, profile->samples));
+         fmq_bench_profile_average(profile->total_sum_ns, profile->samples),
+         profile->total_max_ns, profile->total_slow_samples);
   if (profile->batch_socket_calls == 0u) return;
   printf("FMQ_PROFILE_BATCH_RESULT component=send_owner_lane pattern=%s"
          " samples=%" PRIu64 " post_samples=%" PRIu64
@@ -144,7 +328,15 @@ static void fmq_bench_profile_print(const char *pattern,
          " avg_frames_per_call=%" PRIu64 " avg_iov_segments_per_call=%" PRIu64
          " avg_socket_send_ns=%" PRIu64 " avg_socket_thread_cpu_ns=%" PRIu64
          " avg_socket_estimated_off_cpu_ns=%" PRIu64
-         " avg_waiter_wake_ns=%" PRIu64 " avg_total_ns=%" PRIu64 "\n",
+         " max_socket_send_ns=%" PRIu64 " slow_socket_send_samples=%" PRIu64
+         " max_build_ns=%" PRIu64 " slow_build_samples=%" PRIu64
+         " max_payload_prepare_ns=%" PRIu64 " slow_payload_prepare_samples=%" PRIu64
+         " max_owner_wait_ns=%" PRIu64 " slow_owner_wait_samples=%" PRIu64
+         " max_owner_work_ns=%" PRIu64 " slow_owner_work_samples=%" PRIu64
+         " avg_waiter_wake_ns=%" PRIu64 " max_waiter_wake_ns=%" PRIu64
+         " slow_waiter_wake_samples=%" PRIu64
+         " avg_total_ns=%" PRIu64 " max_total_ns=%" PRIu64
+         " slow_total_samples=%" PRIu64 "\n",
          pattern, profile->batch_samples, profile->batch_post_samples,
          profile->batch_socket_calls, profile->batch_socket_cpu_samples,
          profile->batch_socket_frames, profile->batch_socket_iov_segments,
@@ -178,9 +370,41 @@ static void fmq_bench_profile_print(const char *pattern,
                                    profile->batch_socket_cpu_samples),
          fmq_bench_profile_average(profile->batch_socket_estimated_off_cpu_sum_ns,
                                    profile->batch_socket_cpu_samples),
+         profile->batch_socket_send_max_ns,
+         profile->batch_socket_send_slow_samples,
+         profile->batch_build_max_ns, profile->batch_build_slow_samples,
+         profile->batch_payload_prepare_max_ns,
+         profile->batch_payload_prepare_slow_samples,
+         profile->batch_owner_wait_max_ns,
+         profile->batch_owner_wait_slow_samples,
+         profile->batch_owner_work_max_ns,
+         profile->batch_owner_work_slow_samples,
          fmq_bench_profile_average(profile->batch_waiter_wake_sum_ns,
                                    profile->batch_samples),
-         fmq_bench_profile_average(profile->batch_total_sum_ns, profile->batch_samples));
+         profile->batch_waiter_wake_max_ns,
+         profile->batch_waiter_wake_slow_samples,
+         fmq_bench_profile_average(profile->batch_total_sum_ns, profile->batch_samples),
+         profile->batch_total_max_ns, profile->batch_total_slow_samples);
+  printf("FMQ_PROFILE_STAGE_RESULT component=send_owner_lane pattern=%s"
+         " samples=%" PRIu64 " socket_calls=%" PRIu64
+         " encode_ns=%" PRIu64 " queue_ns=%" PRIu64
+         " socket_ns=%" PRIu64 " completion_ns=%" PRIu64
+         " total_ns=%" PRIu64 "\n",
+         pattern, profile->batch_samples, profile->batch_socket_calls,
+         fmq_bench_profile_average(profile->batch_payload_prepare_sum_ns,
+                                   profile->batch_samples) +
+         fmq_bench_profile_average(profile->batch_adapter_consume_sum_ns,
+                                   profile->batch_samples),
+         fmq_bench_profile_average(profile->batch_enqueue_prepare_sum_ns,
+                                   profile->batch_samples) +
+             fmq_bench_profile_average(profile->batch_owner_wait_sum_ns,
+                                       profile->batch_samples),
+         fmq_bench_profile_average(profile->batch_socket_send_sum_ns,
+                                   profile->batch_socket_calls),
+         fmq_bench_profile_average(profile->batch_waiter_wake_sum_ns,
+                                   profile->batch_samples),
+         fmq_bench_profile_average(profile->batch_total_sum_ns,
+                                   profile->batch_samples));
 }
 
 static unsigned short fmq_bench_loopback_port(void) {
@@ -234,6 +458,18 @@ static void fmq_bench_receive_state_destroy(fmq_bench_receive_state_t *state) {
   turbo_mutex_destroy(&state->mutex);
 }
 
+static int fmq_bench_thread_cycles(uint64_t *out) {
+  if (!out) return 0;
+#ifdef _WIN32
+  ULONG64 cycles = 0u;
+  if (!QueryThreadCycleTime(GetCurrentThread(), &cycles)) return 0;
+  *out = (uint64_t)cycles;
+  return 1;
+#else
+  return 0;
+#endif
+}
+
 static int fmq_bench_echo_request(turbo_flow_fmq_app_t *app, turbo_flow_msg_t *message, void *ctx) {
   (void)app;
   (void)ctx;
@@ -253,12 +489,69 @@ static int fmq_bench_capture_message(turbo_flow_fmq_app_t *app, turbo_flow_msg_t
 
   turbo_mutex_lock(&state->mutex);
   if (state->status == TURBO_OK) state->status = status;
+  if (state->sample_tracking && state->received >= state->sample_base_received) {
+    const size_t sample_offset = state->received - state->sample_base_received;
+    if (sample_offset == 0u) {
+      state->sample_first_received_ns = received_ns;
+#ifdef _WIN32
+      state->sample_thread_id = GetCurrentThreadId();
+#endif
+      state->sample_thread_cycles_available =
+          fmq_bench_thread_cycles(&state->sample_first_thread_cycles);
+    }
+    if (sample_offset + 1u == state->sample_message_count) {
+#ifdef _WIN32
+      if (state->sample_thread_id != GetCurrentThreadId())
+        state->sample_thread_hop = 1;
+#endif
+      if (!fmq_bench_thread_cycles(&state->sample_last_thread_cycles))
+        state->sample_thread_cycles_available = 0;
+    }
+  }
   state->received_ns = received_ns;
   state->last_payload_bytes = message->payload.len;
   state->received += 1u;
   turbo_cond_signal(&state->changed);
   turbo_mutex_unlock(&state->mutex);
   return status;
+}
+
+static void fmq_bench_receive_sample_begin(fmq_bench_receive_state_t *state,
+                                           size_t message_count) {
+  if (!state || message_count == 0u) return;
+  turbo_mutex_lock(&state->mutex);
+  state->sample_base_received = state->received;
+  state->sample_message_count = message_count;
+  state->sample_first_received_ns = 0u;
+  state->sample_first_thread_cycles = 0u;
+  state->sample_last_thread_cycles = 0u;
+  state->sample_thread_id = 0u;
+  state->sample_thread_cycles_available = 0;
+  state->sample_thread_hop = 0;
+  state->sample_tracking = 1;
+  turbo_mutex_unlock(&state->mutex);
+}
+
+static uint64_t fmq_bench_receive_sample_end(fmq_bench_receive_state_t *state,
+                                             uint64_t *thread_cycles,
+                                             int *thread_cycles_available,
+                                             int *thread_hop) {
+  uint64_t first_received_ns = 0u;
+  if (!state) return 0u;
+  turbo_mutex_lock(&state->mutex);
+  first_received_ns = state->sample_first_received_ns;
+  if (thread_cycles)
+    *thread_cycles =
+        state->sample_thread_cycles_available &&
+                state->sample_last_thread_cycles >= state->sample_first_thread_cycles
+            ? state->sample_last_thread_cycles - state->sample_first_thread_cycles
+            : 0u;
+  if (thread_cycles_available)
+    *thread_cycles_available = state->sample_thread_cycles_available;
+  if (thread_hop) *thread_hop = state->sample_thread_hop;
+  state->sample_tracking = 0;
+  turbo_mutex_unlock(&state->mutex);
+  return first_received_ns;
 }
 
 static int fmq_bench_wait_received(fmq_bench_receive_state_t *state, size_t expected_received,
@@ -400,8 +693,15 @@ static int fmq_bench_send_api_batch(turbo_flow_fmq_app_t *sender,
                                     fmq_bench_receive_state_t *state,
                                     const turbo_flow_fmq_app_send_item_t *items,
                                     size_t message_count, size_t expected_received,
-                                    uint64_t *latency_ns) {
+                                    uint64_t *latency_ns, uint64_t *submit_ns,
+                                    uint64_t *first_receive_after_submit_ns,
+                                    uint64_t *receive_batch_span_ns,
+                                    uint64_t *receive_thread_cycles,
+                                    int *receive_thread_cycles_available,
+                                    int *receive_thread_hop) {
   const uint64_t started_ns = turbo_hrtime();
+  uint64_t submitted_ns;
+  uint64_t first_received_ns;
   uint64_t received_ns = 0u;
   size_t submitted = 0u;
   int rc;
@@ -409,13 +709,32 @@ static int fmq_bench_send_api_batch(turbo_flow_fmq_app_t *sender,
       expected_received < message_count)
     return TURBO_EINVAL;
 
+  fmq_bench_receive_sample_begin(state, message_count);
   rc = turbo_flow_fmq_app_send_batch(sender, items, message_count, &submitted);
-  if (rc != TURBO_OK) return rc;
-  if (submitted != message_count) return TURBO_EPROTO;
+  submitted_ns = turbo_hrtime();
+  if (rc != TURBO_OK) {
+    (void)fmq_bench_receive_sample_end(state, NULL, NULL, NULL);
+    return rc;
+  }
+  if (submitted != message_count) {
+    (void)fmq_bench_receive_sample_end(state, NULL, NULL, NULL);
+    return TURBO_EPROTO;
+  }
   rc = fmq_bench_wait_received(state, expected_received, &received_ns);
+  first_received_ns =
+      fmq_bench_receive_sample_end(state, receive_thread_cycles,
+                                   receive_thread_cycles_available,
+                                   receive_thread_hop);
   if (rc != TURBO_OK) return rc;
-  if (received_ns < started_ns) return TURBO_EPROTO;
+  if (first_received_ns < started_ns || received_ns < first_received_ns)
+    return TURBO_EPROTO;
   if (latency_ns) *latency_ns = received_ns - started_ns;
+  if (submit_ns) *submit_ns = submitted_ns - started_ns;
+  if (first_receive_after_submit_ns)
+    *first_receive_after_submit_ns =
+        first_received_ns > submitted_ns ? first_received_ns - submitted_ns : 0u;
+  if (receive_batch_span_ns)
+    *receive_batch_span_ns = received_ns - first_received_ns;
   return TURBO_OK;
 }
 
@@ -606,12 +925,14 @@ static void fmq_bench_tcp_req_rep(const fmq_bench_case_t *bench_case) {
   printf("FMQ_BENCH_RESULT component=application_facade pattern=req_rep transport=tcp"
          " mode=serialized-echo payload_bytes=%zu application_bytes_roundtrip=%zu"
          " warmup=%zu samples=%zu throughput_roundtrip_s=%.2f mib_s=%.2f"
-         " p50_ns=%" PRIu64 " p95_ns=%" PRIu64 " p99_ns=%" PRIu64 "\n",
+         " p50_ns=%" PRIu64 " p95_ns=%" PRIu64 " p99_ns=%" PRIu64
+         " max_ns=%" PRIu64 " slow_1ms_samples=%zu\n",
          bench_case->payload_bytes, bench_case->payload_bytes * 2u, bench_case->warmup,
          bench_case->samples, throughput, mib_per_second,
          fmq_bench_percentile(latencies, completed, 50u),
          fmq_bench_percentile(latencies, completed, 95u),
-         fmq_bench_percentile(latencies, completed, 99u));
+         fmq_bench_percentile(latencies, completed, 99u), latencies[completed - 1u],
+         fmq_bench_count_at_least(latencies, completed, FMQ_BENCH_SLOW_SAMPLE_NS));
   if (profile_status == TURBO_OK) {
     check_uint_eq(profile.samples, (uint64_t)bench_case->samples * 2u);
     check_uint_eq(profile.socket_samples, profile.samples);
@@ -636,13 +957,24 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
   turbo_flow_fmq_config_t receiver_endpoint = TURBO_FLOW_FMQ_CONFIG_INIT;
   turbo_flow_fmq_app_options_t sender_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
   turbo_flow_fmq_app_options_t receiver_options = TURBO_FLOW_FMQ_APP_OPTIONS_INIT;
+  turbo_flow_coronet_execution_binding_t receiver_execution;
   turbo_flow_fmq_app_t *sender = NULL;
   turbo_flow_fmq_app_t *receiver = NULL;
+  coro_context_t *receiver_context = NULL;
+  fmq_bench_context_runner_t receiver_runner;
   fmq_bench_receive_state_t receive_state;
   fmq_bench_async_completion_state_t completion_state;
   unsigned char *payload = NULL;
   turbo_flow_fmq_app_send_item_t *batch_items = NULL;
   uint64_t *latencies = NULL;
+  uint64_t *submit_latencies = NULL;
+  uint64_t *first_receive_after_submit_latencies = NULL;
+  uint64_t *receive_batch_span_latencies = NULL;
+  uint64_t *receive_thread_cycles = NULL;
+  uint64_t *receive_normal_thread_cycles = NULL;
+  uint64_t *receive_slow_thread_cycles = NULL;
+  int *receive_thread_cycles_available = NULL;
+  int *receive_thread_hops = NULL;
   uint64_t measurement_started_ns = 0u;
   uint64_t measurement_finished_ns = 0u;
   uint64_t elapsed_ns;
@@ -667,6 +999,8 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
   int profile_enabled = 0;
   int profile_status = TURBO_ENOTSUP;
 
+  memset(&receiver_execution, 0, sizeof(receiver_execution));
+  memset(&receiver_runner, 0, sizeof(receiver_runner));
   check_not_null(bench_case);
   if (!bench_case) return;
   check_not_null(bench_case->title);
@@ -702,13 +1036,44 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
   if (bench_case->use_batch_api) {
     batch_items = (turbo_flow_fmq_app_send_item_t *)calloc(
         bench_case->messages_per_sample, sizeof(*batch_items));
+    submit_latencies =
+        (uint64_t *)calloc(bench_case->samples, sizeof(*submit_latencies));
+    first_receive_after_submit_latencies = (uint64_t *)calloc(
+        bench_case->samples, sizeof(*first_receive_after_submit_latencies));
+    receive_batch_span_latencies = (uint64_t *)calloc(
+        bench_case->samples, sizeof(*receive_batch_span_latencies));
+    receive_thread_cycles = (uint64_t *)calloc(
+        bench_case->samples, sizeof(*receive_thread_cycles));
+    receive_normal_thread_cycles = (uint64_t *)calloc(
+        bench_case->samples, sizeof(*receive_normal_thread_cycles));
+    receive_slow_thread_cycles = (uint64_t *)calloc(
+        bench_case->samples, sizeof(*receive_slow_thread_cycles));
+    receive_thread_cycles_available = (int *)calloc(
+        bench_case->samples, sizeof(*receive_thread_cycles_available));
+    receive_thread_hops =
+        (int *)calloc(bench_case->samples, sizeof(*receive_thread_hops));
   }
   check_int_gt(port, 0);
   check_not_null(payload);
   check_not_null(latencies);
-  if (bench_case->use_batch_api) check_not_null(batch_items);
+  if (bench_case->use_batch_api) {
+    check_not_null(batch_items);
+    check_not_null(submit_latencies);
+    check_not_null(first_receive_after_submit_latencies);
+    check_not_null(receive_batch_span_latencies);
+    check_not_null(receive_thread_cycles);
+    check_not_null(receive_normal_thread_cycles);
+    check_not_null(receive_slow_thread_cycles);
+    check_not_null(receive_thread_cycles_available);
+    check_not_null(receive_thread_hops);
+  }
   if (port == 0u || !payload || !latencies ||
-      (bench_case->use_batch_api && !batch_items))
+      (bench_case->use_batch_api &&
+       (!batch_items || !submit_latencies ||
+        !first_receive_after_submit_latencies || !receive_batch_span_latencies ||
+        !receive_thread_cycles || !receive_normal_thread_cycles ||
+        !receive_slow_thread_cycles || !receive_thread_cycles_available ||
+        !receive_thread_hops)))
     goto cleanup;
   memset(payload, 0x5a, bench_case->payload_bytes);
   if (bench_case->use_batch_api) {
@@ -746,7 +1111,28 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
   rc = turbo_flow_fmq_app_create(&sender_endpoint, &sender_options, &sender);
   check_int_eq(rc, TURBO_OK);
   if (rc != TURBO_OK) goto cleanup;
-  rc = turbo_flow_fmq_app_create(&receiver_endpoint, &receiver_options, &receiver);
+  if (bench_case->receiver_stream_recv_buffer_bytes != 0u) {
+    receiver_context = coro_context_create(NULL);
+    check_not_null(receiver_context);
+    if (!receiver_context) {
+      rc = TURBO_ENOMEM;
+      goto cleanup;
+    }
+    rc = coro_context_set_stream_recv_buffer_size(
+        receiver_context, bench_case->receiver_stream_recv_buffer_bytes);
+    check_int_eq(rc, TURBO_OK);
+    if (rc != TURBO_OK) goto cleanup;
+    rc = fmq_bench_context_runner_start(&receiver_runner, receiver_context);
+    check_int_eq(rc, TURBO_OK);
+    if (rc != TURBO_OK) goto cleanup;
+    receiver_execution.size = sizeof(receiver_execution);
+    receiver_execution.kind = TURBO_FLOW_CORONET_EXECUTION_BORROWED_CONTEXT;
+    receiver_execution.context = receiver_context;
+    rc = turbo_flow_fmq_app_create_ex(&receiver_endpoint, &receiver_options,
+                                      &receiver_execution, &receiver);
+  } else {
+    rc = turbo_flow_fmq_app_create(&receiver_endpoint, &receiver_options, &receiver);
+  }
   check_int_eq(rc, TURBO_OK);
   if (rc != TURBO_OK) goto cleanup;
   if (bench_case->use_async_api) {
@@ -792,7 +1178,8 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
           remaining_warmup, expected_received, expected_completed, NULL);
     } else if (bench_case->use_batch_api) {
       rc = fmq_bench_send_api_batch(sender, &receive_state, batch_items, remaining_warmup,
-                                    expected_received, NULL);
+                                    expected_received, NULL, NULL, NULL, NULL,
+                                    NULL, NULL, NULL);
     } else {
       rc = fmq_bench_send_batch(sender, &receive_state, payload, bench_case->payload_bytes,
                                 remaining_warmup, expected_received, NULL);
@@ -816,7 +1203,13 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
       } else if (bench_case->use_batch_api) {
         rc = fmq_bench_send_api_batch(sender, &receive_state, batch_items,
                                       bench_case->messages_per_sample, expected_received,
-                                      &latencies[sample_index]);
+                                      &latencies[sample_index],
+                                      &submit_latencies[sample_index],
+                                      &first_receive_after_submit_latencies[sample_index],
+                                      &receive_batch_span_latencies[sample_index],
+                                      &receive_thread_cycles[sample_index],
+                                      &receive_thread_cycles_available[sample_index],
+                                      &receive_thread_hops[sample_index]);
       } else {
         rc = fmq_bench_send_batch(sender, &receive_state, payload,
                                   bench_case->payload_bytes,
@@ -864,10 +1257,12 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
   throughput = ((double)measured_messages * 1000000000.0) / (double)elapsed_ns;
   mib_per_second = ((double)measured_messages * (double)bench_case->payload_bytes * 1000000000.0) /
                    ((double)elapsed_ns * 1024.0 * 1024.0);
-  info("FMQ_BENCH_RESULT component=application_facade pattern=%s transport=tcp"
+  printf("FMQ_BENCH_RESULT component=application_facade pattern=%s transport=tcp"
          " mode=%s payload_bytes=%zu messages_per_sample=%zu"
          " warmup_messages=%zu samples=%zu throughput_message_s=%.2f mib_s=%.2f"
-         " batch_p50_ns=%" PRIu64 " batch_p95_ns=%" PRIu64 " batch_p99_ns=%" PRIu64 "\n",
+         " batch_p50_ns=%" PRIu64 " batch_p95_ns=%" PRIu64
+         " batch_p99_ns=%" PRIu64 " batch_max_ns=%" PRIu64
+         " slow_1ms_samples=%zu\n",
          bench_case->result_pattern,
          bench_case->use_async_api
              ? "async-micro-batch-one-way"
@@ -876,7 +1271,104 @@ static void fmq_bench_tcp_one_way(const fmq_bench_throughput_case_t *bench_case)
          bench_case->samples, throughput, mib_per_second,
          fmq_bench_percentile(latencies, completed_samples, 50u),
          fmq_bench_percentile(latencies, completed_samples, 95u),
-         fmq_bench_percentile(latencies, completed_samples, 99u));
+         fmq_bench_percentile(latencies, completed_samples, 99u),
+         latencies[completed_samples - 1u],
+         fmq_bench_count_at_least(latencies, completed_samples,
+                                  FMQ_BENCH_SLOW_SAMPLE_NS));
+  if (bench_case->use_batch_api) {
+    size_t receive_thread_cycle_samples = 0u;
+    size_t receive_normal_thread_cycle_samples = 0u;
+    size_t receive_slow_thread_cycle_samples = 0u;
+    size_t receive_thread_hop_samples = 0u;
+    for (size_t i = 0u; i < completed_samples; ++i) {
+      if (receive_thread_hops[i]) receive_thread_hop_samples += 1u;
+      if (!receive_thread_cycles_available[i] || receive_thread_hops[i]) continue;
+      if (receive_batch_span_latencies[i] >= FMQ_BENCH_SLOW_SAMPLE_NS) {
+        receive_slow_thread_cycles[receive_slow_thread_cycle_samples] =
+            receive_thread_cycles[i];
+        receive_slow_thread_cycle_samples += 1u;
+      } else {
+        receive_normal_thread_cycles[receive_normal_thread_cycle_samples] =
+            receive_thread_cycles[i];
+        receive_normal_thread_cycle_samples += 1u;
+      }
+      receive_thread_cycle_samples += 1u;
+    }
+    qsort(submit_latencies, completed_samples, sizeof(*submit_latencies),
+          fmq_bench_u64_compare);
+    qsort(first_receive_after_submit_latencies, completed_samples,
+          sizeof(*first_receive_after_submit_latencies), fmq_bench_u64_compare);
+    qsort(receive_batch_span_latencies, completed_samples,
+          sizeof(*receive_batch_span_latencies), fmq_bench_u64_compare);
+    qsort(receive_normal_thread_cycles, receive_normal_thread_cycle_samples,
+          sizeof(*receive_normal_thread_cycles), fmq_bench_u64_compare);
+    qsort(receive_slow_thread_cycles, receive_slow_thread_cycle_samples,
+          sizeof(*receive_slow_thread_cycles), fmq_bench_u64_compare);
+    printf("FMQ_BENCH_STAGE_RESULT component=application_facade pattern=%s"
+           " mode=batch-api-one-way samples=%zu"
+           " submit_p50_ns=%" PRIu64 " submit_p99_ns=%" PRIu64
+           " submit_max_ns=%" PRIu64 " submit_slow_1ms_samples=%zu"
+           " first_receive_after_submit_p50_ns=%" PRIu64
+           " first_receive_after_submit_p99_ns=%" PRIu64
+           " first_receive_after_submit_max_ns=%" PRIu64
+           " first_receive_after_submit_slow_1ms_samples=%zu"
+           " receive_batch_span_p50_ns=%" PRIu64
+           " receive_batch_span_p99_ns=%" PRIu64
+           " receive_batch_span_max_ns=%" PRIu64
+           " receive_batch_span_slow_1ms_samples=%zu"
+           " first_receiver_before_submit_return_samples=%zu\n",
+           bench_case->result_pattern, completed_samples,
+           fmq_bench_percentile(submit_latencies, completed_samples, 50u),
+           fmq_bench_percentile(submit_latencies, completed_samples, 99u),
+           submit_latencies[completed_samples - 1u],
+           fmq_bench_count_at_least(submit_latencies, completed_samples,
+                                    FMQ_BENCH_SLOW_SAMPLE_NS),
+           fmq_bench_percentile(first_receive_after_submit_latencies,
+                                completed_samples, 50u),
+           fmq_bench_percentile(first_receive_after_submit_latencies,
+                                completed_samples, 99u),
+           first_receive_after_submit_latencies[completed_samples - 1u],
+           fmq_bench_count_at_least(first_receive_after_submit_latencies,
+                                    completed_samples, FMQ_BENCH_SLOW_SAMPLE_NS),
+           fmq_bench_percentile(receive_batch_span_latencies,
+                                completed_samples, 50u),
+           fmq_bench_percentile(receive_batch_span_latencies,
+                                completed_samples, 99u),
+           receive_batch_span_latencies[completed_samples - 1u],
+           fmq_bench_count_at_least(receive_batch_span_latencies,
+                                    completed_samples, FMQ_BENCH_SLOW_SAMPLE_NS),
+           fmq_bench_count_equal(first_receive_after_submit_latencies,
+                                 completed_samples, 0u));
+    if (receive_thread_cycle_samples > 0u) {
+      printf("FMQ_BENCH_RECEIVE_SCHED_RESULT component=application_facade"
+             " pattern=%s mode=batch-api-one-way samples=%zu"
+             " cycle_samples=%zu thread_hop_samples=%zu"
+             " normal_samples=%zu normal_cycles_p50=%" PRIu64
+             " normal_cycles_p99=%" PRIu64 " normal_cycles_max=%" PRIu64
+             " slow_1ms_samples=%zu slow_cycles_p50=%" PRIu64
+             " slow_cycles_p99=%" PRIu64 " slow_cycles_max=%" PRIu64 "\n",
+             bench_case->result_pattern, completed_samples,
+             receive_thread_cycle_samples, receive_thread_hop_samples,
+             receive_normal_thread_cycle_samples,
+             fmq_bench_percentile(receive_normal_thread_cycles,
+                                  receive_normal_thread_cycle_samples, 50u),
+             fmq_bench_percentile(receive_normal_thread_cycles,
+                                  receive_normal_thread_cycle_samples, 99u),
+             receive_normal_thread_cycle_samples > 0u
+                 ? receive_normal_thread_cycles[
+                       receive_normal_thread_cycle_samples - 1u]
+                 : 0u,
+             receive_slow_thread_cycle_samples,
+             fmq_bench_percentile(receive_slow_thread_cycles,
+                                  receive_slow_thread_cycle_samples, 50u),
+             fmq_bench_percentile(receive_slow_thread_cycles,
+                                  receive_slow_thread_cycle_samples, 99u),
+             receive_slow_thread_cycle_samples > 0u
+                 ? receive_slow_thread_cycles[
+                       receive_slow_thread_cycle_samples - 1u]
+                 : 0u);
+    }
+  }
   if (profile_status == TURBO_OK) {
     check_uint_eq(profile.samples, measured_messages);
     if (bench_case->use_batch_api || bench_case->use_async_api) {
@@ -905,12 +1397,68 @@ cleanup:
   }
   turbo_flow_fmq_app_destroy(receiver);
   turbo_flow_fmq_app_destroy(sender);
+  fmq_bench_context_runner_stop(&receiver_runner);
+  coro_context_destroy(receiver_context);
   if (receive_state_initialized) fmq_bench_receive_state_destroy(&receive_state);
   if (completion_state_initialized)
     fmq_bench_async_completion_state_destroy(&completion_state);
   free(latencies);
+  free(receive_thread_hops);
+  free(receive_thread_cycles_available);
+  free(receive_slow_thread_cycles);
+  free(receive_normal_thread_cycles);
+  free(receive_thread_cycles);
+  free(receive_batch_span_latencies);
+  free(first_receive_after_submit_latencies);
+  free(submit_latencies);
   free(batch_items);
   free(payload);
+}
+
+static void fmq_bench_tcp_large_batch_one_way(
+    const fmq_bench_throughput_case_t *base_case) {
+  fmq_bench_throughput_case_t resolved_case;
+  fmq_bench_windows_tuning_t windows_tuning;
+  size_t messages_per_sample = 0u;
+  size_t stream_recv_buffer_bytes = 0u;
+  int rc;
+  check_not_null(base_case);
+  if (!base_case) return;
+  rc = fmq_bench_windows_tuning_begin(&windows_tuning);
+  check_int_eq(rc, TURBO_OK);
+  if (rc != TURBO_OK) {
+    fprintf(stderr, "%s must be exactly 0 or 1 and supported by this platform\n",
+            FMQ_BENCH_WINDOWS_TIMER_RESOLUTION_ENV);
+    return;
+  }
+  rc = fmq_bench_large_batch_messages(&messages_per_sample);
+  check_int_eq(rc, TURBO_OK);
+  if (rc != TURBO_OK) {
+    const char *value = getenv(FMQ_BENCH_LARGE_BATCH_MESSAGES_ENV);
+    fprintf(stderr, "%s must be exactly 2, 4, or 8; received \"%s\"\n",
+            FMQ_BENCH_LARGE_BATCH_MESSAGES_ENV, value ? value : "");
+    fmq_bench_windows_tuning_end(&windows_tuning);
+    return;
+  }
+  rc = fmq_bench_stream_recv_buffer_bytes(&stream_recv_buffer_bytes);
+  check_int_eq(rc, TURBO_OK);
+  if (rc != TURBO_OK) {
+    const char *value = getenv(FMQ_BENCH_STREAM_RECV_BUFFER_ENV);
+    fprintf(stderr, "%s must be exactly 131072, 262144, or 524288; received \"%s\"\n",
+            FMQ_BENCH_STREAM_RECV_BUFFER_ENV, value ? value : "");
+    fmq_bench_windows_tuning_end(&windows_tuning);
+    return;
+  }
+  resolved_case = *base_case;
+  resolved_case.messages_per_sample = messages_per_sample;
+  resolved_case.warmup_messages = messages_per_sample;
+  resolved_case.receiver_stream_recv_buffer_bytes = stream_recv_buffer_bytes;
+  printf("FMQ_BENCH_RECEIVER_TUNING stream_recv_buffer_bytes=%zu execution=%s\n",
+         stream_recv_buffer_bytes ? stream_recv_buffer_bytes
+                                  : (size_t)CORO_CONTEXT_DEFAULT_STREAM_RECV_BUFFER_SIZE,
+         stream_recv_buffer_bytes ? "borrowed-context" : "private-context");
+  fmq_bench_tcp_one_way(&resolved_case);
+  fmq_bench_windows_tuning_end(&windows_tuning);
 }
 
 spec("flowmq application facade") {
@@ -1002,7 +1550,7 @@ spec("flowmq application facade") {
         FMQ_BENCH_LARGE_BATCH_WARMUP_MESSAGES,
         FMQ_BENCH_LARGE_BATCH_SAMPLES,
         1};
-    fmq_bench_tcp_one_way(&bench_case);
+    fmq_bench_tcp_large_batch_one_way(&bench_case);
   }
 
   bench("real TCP PUB SUB 64-byte serialized one-way throughput") {
@@ -1079,7 +1627,7 @@ spec("flowmq application facade") {
         FMQ_BENCH_LARGE_BATCH_WARMUP_MESSAGES,
         FMQ_BENCH_LARGE_BATCH_SAMPLES,
         1};
-    fmq_bench_tcp_one_way(&bench_case);
+    fmq_bench_tcp_large_batch_one_way(&bench_case);
   }
 
   bench("real TCP PUSH PULL 64-byte serialized one-way throughput") {
@@ -1156,6 +1704,6 @@ spec("flowmq application facade") {
         FMQ_BENCH_LARGE_BATCH_WARMUP_MESSAGES,
         FMQ_BENCH_LARGE_BATCH_SAMPLES,
         1};
-    fmq_bench_tcp_one_way(&bench_case);
+    fmq_bench_tcp_large_batch_one_way(&bench_case);
   }
 }

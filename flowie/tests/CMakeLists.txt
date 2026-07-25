@@ -35,7 +35,9 @@ cmake_add_test(
   LIBS Flowie::App Flowie::Protocol TurboFlow::Flow TurboUtils::TinyTest
   FOLDER "flowie/tests")
 
-target_include_directories(test_flowie_endpoint PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(
+  test_flowie_endpoint PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                               ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
 set_tests_properties(
   test_flowie_endpoint

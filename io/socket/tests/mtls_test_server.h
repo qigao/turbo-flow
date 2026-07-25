@@ -17,6 +17,7 @@ typedef SOCKET flow_mtls_test_socket_t;
 #else
 #  include <arpa/inet.h>
 #  include <netinet/in.h>
+#  include <signal.h>
 #  include <sys/select.h>
 #  include <sys/socket.h>
 #  include <unistd.h>
@@ -162,6 +163,9 @@ static int flow_mtls_test_server_start_delayed(flow_mtls_test_server_t *server,
   if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return -1;
 #else
   socklen_t address_size = (socklen_t)sizeof(address);
+  /* OpenSSL SSL_write cannot carry MSG_NOSIGNAL; invalid-response tests may
+   * close the peer before the server drains an oversized response. */
+  signal(SIGPIPE, SIG_IGN);
 #endif
   if (!server || (!response && response_size != 0u)) return -1;
   memset(server, 0, sizeof(*server));

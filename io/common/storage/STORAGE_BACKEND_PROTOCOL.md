@@ -1,7 +1,7 @@
 # Storage Backend Protocol
 
-本文档是 `TurboFlow::StorageBackend` 的规范性协议。内置 local、Redis、PostgreSQL 以及后续的
-SQLite/远程 provider 都必须同时满足本协议和各自的数据模型契约。
+本文档是 `TurboFlow::StorageBackend` 的规范性协议。当前的 `tf_local_storage`、`tf_redis`、
+`tf_pgsql` 以及未来新增的 provider 都必须同时满足本协议和各自的数据模型契约。
 
 ## 1. Boundary
 
@@ -38,13 +38,21 @@ provider-neutral FlowStore facade 的 opaque 指针。
 | Log | `TURBO_FLOW_STORAGE_CAP_LOG` |
 | Series | `TURBO_FLOW_STORAGE_CAP_SERIES` |
 
-能力缺失必须返回 `TURBO_ENOTSUP`，不得连接后静默降级到另一个模型或 memory backend。
+能力缺失必须返回 `TURBO_ENOTSUP`，不得连接后静默降级到另一个模型或 local backend。
 
-内置 `local` backend 通过同一 registry/owner ABI 提供 `Record|State|Index|Log|Series` 五种
-模型。它是进程内 volatile 实现：close 或进程退出后数据不可恢复，Record 只声明
-`TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH`，不声明 `TURBO_FLOW_RECORD_STORE_DURABLE`。因此
-`local` 不能作为 Flowie 的 durable `session_store`；需要会话恢复时必须选择声明 durable 的
-Redis 或 PostgreSQL Record backend。`local` 是 registry 中唯一的内置进程内 backend 名称。
+三个当前 backend 是同级 shared library，并通过同一 registry/owner ABI 装配。能力声明以
+实际实现为准：
+
+| Module | Declared models | Record properties |
+| --- | --- | --- |
+| `tf_local_storage` | `Record|State|Index|Log|Series` | atomic batch；volatile，不 durable |
+| `tf_redis` | `Record|State|Index|Log` | durable、atomic batch Record |
+| `tf_pgsql` | `Record` | durable、atomic batch Record |
+
+local 的模块形态是 DLL/shared library，但其数据语义是进程内 volatile：close 或进程退出后
+数据不可恢复。因此 local 不能作为 Flowie 的 durable `session_store`；需要会话恢复或跨进程
+共享时必须选择声明 durable 的 Redis 或 PostgreSQL Record backend。模块是否为 DLL 与数据是否
+持久化不能互相推断。
 
 ## 4. Open contract
 
@@ -90,7 +98,7 @@ Provider facade 的所有读、写、查询、stats、bounds、range 和 aggrega
 
 ## 7. Data and concurrency rules
 
-每个领域状态只有一个事实源。memory、Redis、PG 和缓存不能各自推进同一业务状态。
+每个领域状态只有一个事实源。local、Redis、PG 和缓存不能各自推进同一业务状态。
 写入命令必须在校验容量和不变量后一次提交；失败不得留下半状态。读取返回只读快照或
 调用方拥有的 copy-out 数据。
 

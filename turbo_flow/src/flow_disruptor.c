@@ -91,6 +91,7 @@ static void flow_worker_pool_run(void *arg) {
     }
     flow_pool_record_finished(flow_pool_record_at(adapter->flow, adapter->pool_record_index),
                               request->execution.status);
+    flow_execution_task_mark_accounting_done(&request->execution);
     entry->header = (flow_entry_header_t)FLOW_ENTRY_HEADER_INIT;
     entry->request = NULL;
     disruptor_worker_release_entry(adapter->ring, &cursor);
@@ -487,6 +488,7 @@ int flow_worker_pool_submit(flow_worker_pool_adapter_t *adapter, turbo_flow_msg_
   submitter_registered = 0;
 
   rc = flow_execution_task_wait(&request.execution, msg, completion);
+  flow_execution_task_wait_accounting(&request.execution);
   if (rc != TURBO_OK && request.error.code != TURBO_OK) {
     rc = flow_set_error_keep_state(adapter->flow, request.error.code, request.error.line,
                                    request.error.column, request.error.message);

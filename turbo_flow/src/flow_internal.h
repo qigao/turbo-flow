@@ -86,6 +86,7 @@ typedef struct flow_adapter_operation_binding_s {
 typedef struct flow_adapter_registration_s {
   tstr_t name;
   turbo_flow_adapter_ops_t ops;
+  turbo_flow_adapter_consume_batch_fn consume_batch;
   void *ctx;
   turbo_flow_settlement_owner_ops_t settlement_ops;
   void *settlement_ctx;
@@ -278,6 +279,7 @@ typedef struct flow_execution_task_s {
   atomic_int state;
   atomic_int cancel_requested;
   atomic_int deadline_expired;
+  atomic_int accounting_done;
   uint64_t deadline_ms;
   atomic_uint_fast64_t deadline_at_ns;
   int status;
@@ -539,6 +541,8 @@ CXX_C_API void flow_execution_task_run(flow_execution_task_t *task);
 CXX_C_API void flow_execution_task_fail(flow_execution_task_t *task, int status);
 CXX_C_API int flow_execution_task_wait(flow_execution_task_t *task, turbo_flow_msg_t *msg,
                                        flow_stage_completion_t *completion);
+CXX_C_API void flow_execution_task_mark_accounting_done(flow_execution_task_t *task);
+CXX_C_API void flow_execution_task_wait_accounting(flow_execution_task_t *task);
 CXX_C_API int flow_execution_task_abort(flow_execution_task_t *task);
 CXX_C_API void flow_execution_task_discard(flow_execution_task_t *task);
 CXX_C_API int flow_execution_yield(void);

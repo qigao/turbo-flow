@@ -22,10 +22,6 @@
 extern "C" {
 #endif
 
-#define FLOWIE_MQTT_CLIENT_ABI_V5 5u
-#define FLOWIE_MQTT_CLIENT_ABI_V6 6u
-#define FLOWIE_MQTT_CLIENT_ABI_V7 7u
-#define FLOWIE_MQTT_CLIENT_ABI_CURRENT FLOWIE_MQTT_CLIENT_ABI_V7
 #define FLOWIE_MQTT_CLIENT_DEFAULT_PORT 1883
 #define FLOWIE_MQTT_CLIENT_DEFAULT_TLS_PORT 8883
 #define FLOWIE_MQTT_CLIENT_DEFAULT_TIMEOUT_MS 30000u
@@ -33,6 +29,8 @@ extern "C" {
 #define FLOWIE_MQTT_CLIENT_DEFAULT_MAX_INBOUND_QOS2 64u
 #define FLOWIE_MQTT_CLIENT_DEFAULT_COMMAND_QUEUE_CAPACITY 64u
 #define FLOWIE_MQTT_CLIENT_DEFAULT_COMMAND_QUEUE_BYTES (4u * 1024u * 1024u)
+#define FLOWIE_MQTT_CLIENT_MIN_STREAM_RECV_BUFFER_SIZE 1024u
+#define FLOWIE_MQTT_CLIENT_MAX_STREAM_RECV_BUFFER_SIZE (1024u * 1024u)
 
 typedef struct flowie_mqtt_client_s flowie_mqtt_client_t;
 
@@ -68,14 +66,13 @@ typedef struct flowie_mqtt_client_publish_topic_s {
 /** Caller-owned vector view of publish topics; data is a borrowed array. */
 typedef struct flowie_mqtt_client_publish_topic_vec_s {
   size_t size;
-  uint32_t abi_version;
   flowie_mqtt_version_t version;
   const flowie_mqtt_client_publish_topic_t *data;
   size_t count;
 } flowie_mqtt_client_publish_topic_vec_t;
 
 #define FLOWIE_MQTT_CLIENT_PUBLISH_TOPIC_VEC_INIT                                                  \
-  {sizeof(flowie_mqtt_client_publish_topic_vec_t), FLOWIE_MQTT_CLIENT_ABI_CURRENT}
+  {sizeof(flowie_mqtt_client_publish_topic_vec_t)}
 
 /**
  * Called on the DLL-owned worker thread for an inbound PUBLISH.
@@ -123,7 +120,6 @@ typedef void (*flowie_mqtt_client_error_fn)(flowie_mqtt_client_t *client, int st
 /** One synchronous response to an MQTT 5 Continue Authentication challenge. */
 typedef struct flowie_mqtt_client_auth_response_s {
   size_t size;
-  uint32_t abi_version;
   /** Must be Continue Authentication (0x18). */
   uint8_t reason_code;
   /**
@@ -134,7 +130,7 @@ typedef struct flowie_mqtt_client_auth_response_s {
 } flowie_mqtt_client_auth_response_t;
 
 #define FLOWIE_MQTT_CLIENT_AUTH_RESPONSE_INIT                                                      \
-  {sizeof(flowie_mqtt_client_auth_response_t), FLOWIE_MQTT_CLIENT_ABI_CURRENT, 0x18u, {NULL, 0u}}
+  {sizeof(flowie_mqtt_client_auth_response_t), 0x18u, {NULL, 0u}}
 
 /**
  * Produce the next MQTT 5 AUTH response on the client worker thread. `challenge` is borrowed only
@@ -148,7 +144,6 @@ typedef int (*flowie_mqtt_client_auth_challenge_fn)(
 
 typedef struct flowie_mqtt_client_config_s {
   size_t size;
-  uint32_t abi_version;
   flowie_mqtt_client_transport_t transport;
   /** Copied by flowie_mqtt_client_create(). */
   const char *host;
@@ -173,17 +168,25 @@ typedef struct flowie_mqtt_client_config_s {
   size_t command_queue_capacity;
   /** Maximum total bytes owned by queued commands; zero selects the default. */
   size_t command_queue_max_bytes;
-  /** ABI v6: used only by TLS/WSS; all strings are copied. */
+  /** Used only by TLS/WSS; all strings are copied. */
   flowie_mqtt_client_tls_config_t tls;
-  /** ABI v7: required when CONNECT or re-authentication can receive AUTH 0x18. */
+  /** Required when CONNECT or re-authentication can receive AUTH 0x18. */
   flowie_mqtt_client_auth_challenge_fn on_auth_challenge;
-  /** ABI v7: completion for flowie_mqtt_client_authenticate(). */
+  /** Completion for flowie_mqtt_client_authenticate(). */
   flowie_mqtt_client_completion_fn on_auth;
+  /**
+   * Capacity of each of the two CoroNet user-space receive buffers.
+   * 0 keeps the CoroNet default.
+   */
+  size_t stream_recv_buffer_bytes;
+  /** Requested OS SO_RCVBUF bytes; 0 preserves the OS default. */
+  size_t socket_recv_buffer_bytes;
+  /** Requested OS SO_SNDBUF bytes; 0 preserves the OS default. */
+  size_t socket_send_buffer_bytes;
 } flowie_mqtt_client_config_t;
 
 #define FLOWIE_MQTT_CLIENT_CONFIG_INIT                                                             \
   {sizeof(flowie_mqtt_client_config_t),                                                            \
-   FLOWIE_MQTT_CLIENT_ABI_CURRENT,                                                                 \
    FLOWIE_MQTT_CLIENT_TRANSPORT_TCP,                                                               \
    NULL,                                                                                           \
    FLOWIE_MQTT_CLIENT_DEFAULT_PORT,                                                                \
@@ -204,7 +207,10 @@ typedef struct flowie_mqtt_client_config_s {
    FLOWIE_MQTT_CLIENT_DEFAULT_COMMAND_QUEUE_BYTES,                                                 \
    {NULL, NULL, NULL, NULL},                                                                       \
    NULL,                                                                                           \
-   NULL}
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u}
 
 /**
  * Create a callback-driven client. The DLL owns its CoroNet context, worker

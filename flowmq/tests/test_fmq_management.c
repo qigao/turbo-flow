@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <string.h>
 
+static const turbo_flow_coronet_execution_binding_t MANAGEMENT_PRIVATE_EXECUTION = {
+    sizeof(turbo_flow_coronet_execution_binding_t), TURBO_FLOW_CORONET_EXECUTION_PRIVATE};
+
 typedef struct tfmp_management_capture_s {
   atomic_int called;
   uint8_t payload[TURBO_FLOW_TFMP_MAX_MESSAGE_SIZE];
@@ -609,13 +612,17 @@ spec("fmq_tfmp_management_owner") {
                  TURBO_OK);
     check_int_eq(turbo_flow_tfmp_management_service_set_state(service, TURBO_FLOW_TFMP_OWNER_READY),
                  TURBO_OK);
-    check_int_eq(turbo_flow_fmq_register_adapter(server, "fmq.rep", &rep), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_register_adapter_ex(server, "fmq.rep", &rep,
+                                                    &MANAGEMENT_PRIVATE_EXECUTION),
+                 TURBO_OK);
     check_int_eq(turbo_flow_register_stage_ex(server, "management",
                                               turbo_flow_tfmp_management_stage, service, NULL),
                  TURBO_OK);
     check_int_eq(turbo_flow_parse_string(server, server_dsl, strlen(server_dsl)), TURBO_OK);
     check_int_eq(turbo_flow_compile(server), TURBO_OK);
-    check_int_eq(turbo_flow_fmq_register_adapter(client, "fmq.req", &req), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_register_adapter_ex(client, "fmq.req", &req,
+                                                    &MANAGEMENT_PRIVATE_EXECUTION),
+                 TURBO_OK);
     check_int_eq(
         turbo_flow_register_stage_ex(client, "capture", tfmp_management_capture, &capture, NULL),
         TURBO_OK);

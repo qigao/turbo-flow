@@ -53,7 +53,11 @@ static void tf_coronet_execution_loop(void *arg) {
 
 static void tf_coronet_execution_stop_post(void *arg1, void *arg2) {
   (void)arg2;
-  coro_context_stop((coro_context_t *)arg1);
+  /* The caller already clears persistent mode before posting this wake-up.
+   * Let the loop drain canceled admission/close coroutines before it exits;
+   * coro_context_stop() would terminate after one scheduler tick and can
+   * leave transport-owned sockets unreleased. */
+  coro_context_set_persistent((coro_context_t *)arg1, 0);
 }
 
 int tf_coronet_execution_init(tf_coronet_execution_t *execution,

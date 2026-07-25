@@ -194,9 +194,11 @@ stage main {
 - Pipe：使用 pipe endpoint path，不使用 host/port。
 - KCP：可配置 FEC backend、data/parity shard 和 payload 上限。
 - UDP：multicast、TTL、loop、broadcast 通过显式 option flag 设置。
-- TCP-backed transport：可配置 keepalive、linger 和 socket send HWM。
+- TCP-backed transport：可配置 keepalive、linger、OS receive/send buffer 和 socket send HWM。
 
 不适用于当前 transport 的 option 会失败，不会静默忽略。
+buffer 分层、默认值、内存预算和调优边界见
+[CoroNet Buffer Tuning Contract](../io/common/CORONET_BUFFER_TUNING.md)。
 
 ## 11. wire v3 安全
 

@@ -66,6 +66,7 @@ int flow_execution_task_init(flow_execution_task_t *task, flow_execution_backend
   atomic_init(&task->state, FLOW_EXECUTION_NEW);
   atomic_init(&task->cancel_requested, 0);
   atomic_init(&task->deadline_expired, 0);
+  atomic_init(&task->accounting_done, 0);
   atomic_init(&task->deadline_at_ns, 0u);
   task->completion.entry.completion_handle = &task->completion;
   task->completion.entry.cancel_handle = &task->cancel_requested;
@@ -157,6 +158,22 @@ int flow_execution_task_wait(flow_execution_task_t *task, turbo_flow_msg_t *msg,
 
   rc = turbo_flow_msg_move(msg, &task->msg);
   return rc == TURBO_OK ? status : rc;
+}
+
+void flow_execution_task_mark_accounting_done(flow_execution_task_t *task) {
+  if (!task || !task->sync_initialized) return;
+  turbo_mutex_lock(&task->mutex);
+  atomic_store_explicit(&task->accounting_done, 1, memory_order_release);
+  turbo_cond_broadcast(&task->cond);
+  turbo_mutex_unlock(&task->mutex);
+}
+
+void flow_execution_task_wait_accounting(flow_execution_task_t *task) {
+  if (!task || !task->sync_initialized) return;
+  turbo_mutex_lock(&task->mutex);
+  while (!atomic_load_explicit(&task->accounting_done, memory_order_acquire))
+    turbo_cond_wait(&task->cond, &task->mutex);
+  turbo_mutex_unlock(&task->mutex);
 }
 
 int flow_execution_task_abort(flow_execution_task_t *task) {

@@ -18,11 +18,11 @@ extern "C" {
 #define TURBO_FLOW_FMQ_DEFAULT_MAX_FRAME_SIZE (8u * 1024u * 1024u)
 #define TURBO_FLOW_FMQ_DEFAULT_MAX_CONNECTIONS 1024u
 #define TURBO_FLOW_FMQ_MAX_CONNECTIONS_LIMIT 65535u
+#define TURBO_FLOW_FMQ_MIN_STREAM_RECV_BUFFER_SIZE 1024u
+#define TURBO_FLOW_FMQ_MAX_STREAM_RECV_BUFFER_SIZE (1024u * 1024u)
 #define TURBO_FLOW_FMQ_MAX_IDENTITY_SIZE 255u
 #define TURBO_FLOW_FMQ_MAX_TOPIC_SIZE 1024u
-#define TURBO_FLOW_FMQ_API_VERSION 1u
 #define TURBO_FLOW_FMQ_WIRE_VERSION 3u
-#define TURBO_FLOW_FMQ_APP_API_VERSION 1u
 #define TURBO_FLOW_FMQ_MODULE "io.fmq"
 #define TURBO_FLOW_FMQ_PUB_SEND_OPERATION "fmq.pub.send"
 #define TURBO_FLOW_FMQ_SUB_RECEIVE_OPERATION "fmq.sub.receive"
@@ -90,7 +90,6 @@ typedef enum turbo_flow_fmq_event_kind_e {
 
 typedef struct turbo_flow_fmq_event_s {
   size_t size;
-  uint32_t version;
   turbo_flow_fmq_event_kind_t kind;
   int status;
   turbo_flow_fmq_pattern_t pattern;
@@ -102,7 +101,7 @@ typedef struct turbo_flow_fmq_event_s {
   uint64_t frame_bytes;
 } turbo_flow_fmq_event_t;
 
-#define TURBO_FLOW_FMQ_EVENT_INIT {sizeof(turbo_flow_fmq_event_t), TURBO_FLOW_FMQ_API_VERSION}
+#define TURBO_FLOW_FMQ_EVENT_INIT {sizeof(turbo_flow_fmq_event_t)}
 
 /**
  * Host-owned monitoring callback. Values are borrowed for the call only, and
@@ -116,7 +115,6 @@ typedef void (*turbo_flow_fmq_event_fn)(void *ctx, const turbo_flow_fmq_event_t 
 
 typedef struct turbo_flow_fmq_config_s {
   size_t size;
-  uint32_t version;
   turbo_flow_fmq_pattern_t pattern;
   turbo_flow_fmq_endpoint_mode_t mode;
   turbo_flow_fmq_transport_t transport;
@@ -163,9 +161,6 @@ typedef struct turbo_flow_fmq_config_s {
   uint64_t heartbeat_timeout_ms;
   turbo_flow_fmq_event_fn event_callback;
   void *event_ctx;
-  /** Optional CoroNet context. A supplied context must transfer ownership. */
-  coro_context_t *context;
-  int take_context_ownership;
   /**
    * Outbound metadata policy. STATIC uses topic/identity above. INHERIT copies
    * the current FMQ message metadata and requires synchronous FMQ input.
@@ -213,9 +208,24 @@ typedef struct turbo_flow_fmq_config_s {
   uint64_t frame_admission_timeout_ms;
   /** FMQ stop drain timeout for in-flight frames; 0 closes immediately. */
   uint64_t frame_linger_ms;
+  /**
+   * Capacity of each of the two CoroNet user-space receive buffers per stream.
+   * 0 keeps the CoroNet default. Supported only for endpoint-owned private contexts.
+   */
+  size_t stream_recv_buffer_bytes;
+  /**
+   * Requested OS SO_RCVBUF size in bytes for TCP/TLS/WS/WSS.
+   * 0 preserves the OS default. Configure before bind/connect; not hot-reloadable.
+   */
+  size_t socket_recv_buffer_bytes;
+  /**
+   * Requested OS SO_SNDBUF size in bytes for TCP/TLS/WS/WSS.
+   * 0 preserves the OS default. Configure before bind/connect; not hot-reloadable.
+   */
+  size_t socket_send_buffer_bytes;
 } turbo_flow_fmq_config_t;
 
-#define TURBO_FLOW_FMQ_CONFIG_INIT {sizeof(turbo_flow_fmq_config_t), TURBO_FLOW_FMQ_API_VERSION}
+#define TURBO_FLOW_FMQ_CONFIG_INIT {sizeof(turbo_flow_fmq_config_t)}
 
 /**
  * Optional FMQ v3 authentication and default-deny authorization owners.
@@ -256,22 +266,19 @@ typedef enum turbo_flow_fmq_slow_peer_policy_e {
 /**
  * Optional bounded per-peer queue policy for PUB/XPUB fan-out.
  *
- * This separate versioned structure preserves the frozen FMQ API-v1 endpoint config layout.
  * At least one HWM must be non-zero. A remote SUB/XSUB must send a non-empty identity that is
  * unique among live peers. A successful publish is a volatile queue-admission ACK; actual peer
  * writes and policy actions are reported through turbo_flow_fmq_event_fn.
  */
 typedef struct turbo_flow_fmq_fanout_config_s {
   size_t size;
-  uint32_t version;
   size_t peer_hwm_messages;
   size_t peer_hwm_bytes;
   turbo_flow_fmq_slow_peer_policy_t slow_peer_policy;
 } turbo_flow_fmq_fanout_config_t;
 
 #define TURBO_FLOW_FMQ_FANOUT_CONFIG_INIT                                                          \
-  {sizeof(turbo_flow_fmq_fanout_config_t), TURBO_FLOW_FMQ_API_VERSION, 0u, 0u,                     \
-   TURBO_FLOW_FMQ_SLOW_PEER_FAIL}
+  {sizeof(turbo_flow_fmq_fanout_config_t), 0u, 0u, TURBO_FLOW_FMQ_SLOW_PEER_FAIL}
 
 #define TURBO_FLOW_FMQ_UDP_OPTION_MULTICAST_LOOP (1u << 0)
 #define TURBO_FLOW_FMQ_UDP_OPTION_MULTICAST_TTL (1u << 1)
@@ -286,18 +293,14 @@ typedef struct turbo_flow_fmq_fanout_config_s {
  * REQ(connect)/REP(bind), ROUTER(bind)/DEALER(connect), and
  * PAIR(bind)/PAIR(connect).
  *
- * `config` must be initialized with TURBO_FLOW_FMQ_CONFIG_INIT. FMQ API v1
- * accepts structures whose size is at least the v1 size and rejects unknown
- * API versions. The wire protocol is v3-only and is independent from the
- * local C API version.
+ * `config` must be the complete structure initialized with
+ * TURBO_FLOW_FMQ_CONFIG_INIT. The wire protocol is v3-only and is independent
+ * from this local C layout.
  */
-CXX_C_API int turbo_flow_fmq_register_adapter(turbo_flow_t *flow, const char *name,
-                                              const turbo_flow_fmq_config_t *config);
-
 /**
  * Register an FMQ adapter with an explicit CoroNet execution binding.
  *
- * The legacy context fields in config must be zero. Borrowed contexts and pool
+ * Borrowed contexts and pool
  * lanes are driven by their owner, which must keep them running until adapter
  * shutdown completes. Returns TURBO_OK or a concrete config, lane-resolution,
  * allocation, or adapter-registration error.
@@ -313,16 +316,6 @@ CXX_C_API int turbo_flow_fmq_register_secure_adapter_ex(
     const turbo_flow_coronet_execution_binding_t *execution,
     const turbo_flow_fmq_security_binding_t *security);
 
-/** Register the same secure adapter using the config-owned/private execution convenience path. */
-CXX_C_API int turbo_flow_fmq_register_secure_adapter(
-    turbo_flow_t *flow, const char *name, const turbo_flow_fmq_config_t *config,
-    const turbo_flow_fmq_security_binding_t *security);
-
-/** Register PUB/XPUB with an explicit bounded per-peer slow-subscriber policy. */
-CXX_C_API int turbo_flow_fmq_register_fanout_adapter(turbo_flow_t *flow, const char *name,
-                                                     const turbo_flow_fmq_config_t *config,
-                                                     const turbo_flow_fmq_fanout_config_t *fanout);
-
 /** Register bounded per-peer fan-out with an explicit CoroNet execution binding. */
 CXX_C_API int
 turbo_flow_fmq_register_fanout_adapter_ex(turbo_flow_t *flow, const char *name,
@@ -335,11 +328,6 @@ CXX_C_API int turbo_flow_fmq_register_secure_fanout_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_fmq_config_t *config,
     const turbo_flow_fmq_fanout_config_t *fanout,
     const turbo_flow_coronet_execution_binding_t *execution,
-    const turbo_flow_fmq_security_binding_t *security);
-
-CXX_C_API int turbo_flow_fmq_register_secure_fanout_adapter(
-    turbo_flow_t *flow, const char *name, const turbo_flow_fmq_config_t *config,
-    const turbo_flow_fmq_fanout_config_t *fanout,
     const turbo_flow_fmq_security_binding_t *security);
 
 /**
@@ -412,13 +400,12 @@ typedef int (*turbo_flow_fmq_app_message_fn)(turbo_flow_fmq_app_t *app,
 
 typedef struct turbo_flow_fmq_app_options_s {
   size_t size;
-  uint32_t version;
   turbo_flow_fmq_app_message_fn on_message;
   void *message_ctx;
 } turbo_flow_fmq_app_options_t;
 
 #define TURBO_FLOW_FMQ_APP_OPTIONS_INIT                                                             \
-  {sizeof(turbo_flow_fmq_app_options_t), TURBO_FLOW_FMQ_APP_API_VERSION, NULL, NULL}
+  {sizeof(turbo_flow_fmq_app_options_t), NULL, NULL}
 
 /**
  * Create one ZeroMQ-like application facade over one FMQ pattern endpoint.
@@ -432,9 +419,46 @@ CXX_C_API int turbo_flow_fmq_app_create(const turbo_flow_fmq_config_t *endpoint,
                                         const turbo_flow_fmq_app_options_t *options,
                                         turbo_flow_fmq_app_t **out);
 
+/**
+ * Create an application facade with explicit CoroNet execution placement.
+ *
+ * PRIVATE, BORROWED_CONTEXT, and POOL_LANE bindings are supported. The host
+ * must drive a borrowed context or pool lane and keep it alive until facade
+ * destruction completes. The facade never takes ownership of those host
+ * resources, including on failure. OWNED_CONTEXT is rejected because a create
+ * failure cannot safely report partial ownership transfer.
+ *
+ * @param endpoint Complete FMQ endpoint configuration, copied during create.
+ * @param options Complete callback and application options.
+ * @param execution Valid immutable execution binding. Must not be OWNED_CONTEXT.
+ * @param out Receives the created facade on success and NULL on failure.
+ * @return TURBO_OK; TURBO_EINVAL for an invalid endpoint, options, binding, or
+ * callback contract; TURBO_ERANGE for an invalid pool lane; TURBO_ENOMEM for
+ * allocation failure; or a concrete adapter/graph registration error.
+ */
+CXX_C_API int turbo_flow_fmq_app_create_ex(
+    const turbo_flow_fmq_config_t *endpoint, const turbo_flow_fmq_app_options_t *options,
+    const turbo_flow_coronet_execution_binding_t *execution, turbo_flow_fmq_app_t **out);
+
 /** Create an application facade backed by one mandatory-secure v3 endpoint. */
 CXX_C_API int turbo_flow_fmq_app_create_secure(
     const turbo_flow_fmq_config_t *endpoint, const turbo_flow_fmq_app_options_t *options,
+    const turbo_flow_fmq_security_binding_t *security, turbo_flow_fmq_app_t **out);
+
+/**
+ * Secure counterpart of turbo_flow_fmq_app_create_ex.
+ *
+ * @param endpoint Complete mandatory-secure FMQ endpoint configuration.
+ * @param options Complete callback and application options.
+ * @param execution Valid immutable execution binding. Must not be OWNED_CONTEXT.
+ * @param security Mandatory v3 authentication and authorization binding.
+ * @param out Receives the created facade on success and NULL on failure.
+ * @return The same errors as turbo_flow_fmq_app_create_ex, plus concrete
+ * security binding validation or registration errors.
+ */
+CXX_C_API int turbo_flow_fmq_app_create_secure_ex(
+    const turbo_flow_fmq_config_t *endpoint, const turbo_flow_fmq_app_options_t *options,
+    const turbo_flow_coronet_execution_binding_t *execution,
     const turbo_flow_fmq_security_binding_t *security, turbo_flow_fmq_app_t **out);
 
 /** Create the same facade from one resolved YAML adapter entry. */
@@ -465,7 +489,6 @@ typedef struct turbo_flow_fmq_app_send_item_s {
 #define TURBO_FLOW_FMQ_APP_SEND_ITEM_INIT {NULL, 0u}
 #define TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS 1024u
 #define TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES (64u * 1024u * 1024u)
-#define TURBO_FLOW_FMQ_APP_ASYNC_SEND_API_VERSION 1u
 #define TURBO_FLOW_FMQ_APP_ASYNC_SEND_DEFAULT_QUEUE_ITEMS 8192u
 #define TURBO_FLOW_FMQ_APP_ASYNC_SEND_DEFAULT_QUEUE_BYTES (64u * 1024u * 1024u)
 #define TURBO_FLOW_FMQ_APP_ASYNC_SEND_DEFAULT_BATCH_ITEMS 256u
@@ -477,18 +500,17 @@ typedef void (*turbo_flow_fmq_app_send_completion_fn)(void *ctx, int status);
 
 typedef struct turbo_flow_fmq_app_async_send_config_s {
   size_t size;
-  uint32_t version;
   size_t queue_capacity;
   size_t queue_capacity_bytes;
   size_t batch_size;
   uint64_t linger_ns;
 } turbo_flow_fmq_app_async_send_config_t;
 
-#define TURBO_FLOW_FMQ_APP_ASYNC_SEND_CONFIG_INIT                                          \
-  {sizeof(turbo_flow_fmq_app_async_send_config_t), TURBO_FLOW_FMQ_APP_ASYNC_SEND_API_VERSION, \
-   TURBO_FLOW_FMQ_APP_ASYNC_SEND_DEFAULT_QUEUE_ITEMS,                                      \
-   TURBO_FLOW_FMQ_APP_ASYNC_SEND_DEFAULT_QUEUE_BYTES,                                      \
-   TURBO_FLOW_FMQ_APP_ASYNC_SEND_DEFAULT_BATCH_ITEMS,                                      \
+#define TURBO_FLOW_FMQ_APP_ASYNC_SEND_CONFIG_INIT                                      \
+  {sizeof(turbo_flow_fmq_app_async_send_config_t),                                     \
+   TURBO_FLOW_FMQ_APP_ASYNC_SEND_DEFAULT_QUEUE_ITEMS,                                  \
+   TURBO_FLOW_FMQ_APP_ASYNC_SEND_DEFAULT_QUEUE_BYTES,                                  \
+   TURBO_FLOW_FMQ_APP_ASYNC_SEND_DEFAULT_BATCH_ITEMS,                                  \
    TURBO_FLOW_FMQ_APP_ASYNC_SEND_DEFAULT_LINGER_NS}
 
 /**

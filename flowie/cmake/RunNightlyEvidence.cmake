@@ -26,6 +26,10 @@ endif()
 if(NOT DEFINED FUZZ_RUNS OR FUZZ_RUNS LESS 1)
   set(FUZZ_RUNS 100000)
 endif()
+set(soak_asan_options "quarantine_size_mb=0:thread_local_quarantine_size_kb=0")
+if(DEFINED ENV{ASAN_OPTIONS} AND NOT "$ENV{ASAN_OPTIONS}" STREQUAL "")
+  set(soak_asan_options "$ENV{ASAN_OPTIONS}:${soak_asan_options}")
+endif()
 
 set(config_args)
 if(DEFINED CONFIG AND NOT "${CONFIG}" STREQUAL "")
@@ -36,7 +40,9 @@ execute_process(
           -R "^test_flowie_mqtt_protocol_corpus$"
   RESULT_VARIABLE corpus_result)
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env "FLOWIE_MQTT_SOAK_SEED=${SEED}"
+  COMMAND "${CMAKE_COMMAND}" -E env
+          "ASAN_OPTIONS=${soak_asan_options}"
+          "FLOWIE_MQTT_SOAK_SEED=${SEED}"
           "FLOWIE_MQTT_SOAK_001_DURATION_MS=${SOAK_SHORT_MS}"
           "FLOWIE_MQTT_SOAK_002_DURATION_MS=${SOAK_SHORT_MS}"
           "FLOWIE_MQTT_SOAK_003_DURATION_MS=${SOAK_SHORT_MS}"

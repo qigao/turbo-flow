@@ -31,7 +31,7 @@ data source、data sink、持久化和业务处理拓扑。
 
 | 产品 | 消息 handoff | MQTT session / retained | PUBLISH 业务记录 | MQTT ACK 边界 |
 |---|---|---|---|---|
-| `dev` | bounded memory | memory | memory | accepted |
+| `dev` | bounded memory | local Record backend (volatile) | not persisted by default | accepted |
 | `smb` | not used | PostgreSQL record store | PostgreSQL outbox | durable |
 
 `dev` 用于开发和单机验证。`smb` 的 MQTT endpoint 直接把 admitted PUBLISH 写入 PostgreSQL
@@ -65,7 +65,7 @@ factory 或 ACL policy provider factory。Provider 决定“这个宿主能够�
 
 ### Backend
 
-`backend` 是某个 provider 或 store 内部选择的具体实现，例如 FlowStore 的 `memory`/`redis`，
+`backend` 是某个 provider 或 store 内部选择的具体实现，例如 FlowStore 的 `local`/`redis`，
 record store 的 `redis`/`postgresql`，或 auth provider 的 `https`。Backend 是实现细节，不是 Graph
 角色，也不自动成为 data source 或 data sink。
 
@@ -109,9 +109,13 @@ HTTP request view、Redis entry view 等短生命周期对象不能直接跨异�
 
 ### FlowStore
 
-FlowStore 独立于 Flowie，按 State、Index、Log、TimeSeries 保存类型化事实。内存与 Redis
-backend 不能同时作为同一状态的写事实源；bitmap 仅可作为可重建的整数查询索引。FlowStore
-提交成功只证明对应 store 契约完成，不能替代另一个业务 sink 的事务。
+FlowStore 独立于 Flowie，按 Record、State、Index、Log、TimeSeries 保存类型化事实。当前
+`tf_local_storage`、`tf_redis`、`tf_pgsql` 是同级 StorageBackend shared library，通过
+`io/common/storage` registry 的 `open()/close()` function table 装配；Flowie 只拿到
+provider-neutral facade，不调用 concrete record/hash/index/log/state 函数。local 是 DLL 形态的
+volatile 进程内实现，Redis/PG 是否 durable 由 capability 和配置明确声明。不同 backend 不能
+同时作为同一状态的写事实源；bitmap 仅可作为可重建的整数查询索引。FlowStore 提交成功只证明
+对应 store 契约完成，不能替代另一个业务 sink 的事务。
 
 ### Session owner 与 session store
 
@@ -136,7 +140,7 @@ sink 或 auth provider，也不能推进 MQTT session 状态或生成协议 ACK�
 |---|---|---|
 | 部署/基础设施 | Redis service | 进程外 external data service |
 | Provider | Redis adapter provider | 宿主可根据 `kind: redis` 注册 adapter |
-| Store backend | FlowStore Redis provider | Hash/Set/Stream/TimeSeries 的远端事实实现 |
+| Store backend | FlowStore Redis provider | 当前声明的 Hash/Set/Stream 远端事实实现 |
 | Graph source | Redis Stream source adapter | 从 Stream 读取并发布 `turbo_flow_msg_t` |
 | Graph sink | Redis SET/Stream sink adapter | 消费 `turbo_flow_msg_t` 并执行外部写入 |
 | 协议持久化 | Redis record-store backend | 保存 session/retained record，不进入 Graph |

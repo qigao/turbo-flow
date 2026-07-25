@@ -711,7 +711,7 @@ static turbo_flow_t *flowie_bench_live_fanout_flow(unsigned short port, size_t c
   config.max_packet_size = 256u;
   config.max_connections = (uint32_t)connections;
   config.coroutine_stack_size = FLOWIE_BENCH_LIVE_COROUTINE_STACK_SIZE;
-  config.recv_buffer_size = FLOWIE_DEFAULT_RECV_BUFFER_SIZE;
+  config.stream_recv_buffer_bytes = FLOWIE_DEFAULT_RECV_BUFFER_SIZE;
   /* Capacity setup is intentionally serial and may exceed ordinary idle
    * timeouts before the final subscriber is admitted. Keep live sessions
    * open so this benchmark measures concurrent capacity and fan-out. */

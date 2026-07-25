@@ -46,6 +46,8 @@
 #define FLOWIE_SOAK_CHILD_TIMEOUT_MS 120000u
 #define FLOWIE_SOAK_MAX_ITERATIONS 1000u
 #define FLOWIE_SOAK_LATENCY_SAMPLES 4096u
+#define FLOWIE_SOAK_RESOURCE_REPRO_ITERATIONS 256u
+#define FLOWIE_SOAK_PROCESS_RELEASE_TIMEOUT_MS 1000u
 #define FLOWIE_SOAK_MAX_DURATION_MS (8u * 60u * 60u * 1000u)
 #define FLOWIE_SOAK_DEFAULT_SEED UINT64_C(0x464c4f574945534f)
 #define FLOWIE_SOAK_DEFAULT_RSS_TOLERANCE (8u * 1024u * 1024u)
@@ -208,6 +210,23 @@ static int flowie_soak_resource_snapshot(flowie_soak_resources_t *out) {
   return TURBO_OK;
 }
 
+static int flowie_soak_wait_for_process_release(const flowie_soak_resources_t *baseline,
+                                                flowie_soak_resources_t *current) {
+  const uint64_t deadline =
+      turbo_monotonic_ms() + (uint64_t)FLOWIE_SOAK_PROCESS_RELEASE_TIMEOUT_MS;
+  int rc;
+  if (!baseline || !current) return TURBO_EINVAL;
+  /* pthread_join may return before Linux removes the exiting task from procfs. */
+  do {
+    rc = flowie_soak_resource_snapshot(current);
+    if (rc != TURBO_OK) return rc;
+    if (current->handles <= baseline->handles && current->threads <= baseline->threads)
+      return TURBO_OK;
+    turbo_sleep_ms(1u);
+  } while (turbo_monotonic_ms() < deadline);
+  return TURBO_ENOSPC;
+}
+
 static size_t flowie_soak_env_size(const char *name, size_t fallback, size_t maximum) {
   const char *value = getenv(name);
   char *end = NULL;
@@ -235,12 +254,29 @@ static size_t flowie_soak_duration_ms(const char *case_suffix) {
   return (size_t)parsed;
 }
 
-static int flowie_soak_run_child(const char *program, const char *filter) {
-  const char *args[] = {"--filter", filter, NULL};
+static void flowie_soak_report_child_stream(turbo_process_t *process, int stdout_stream) {
+  char buffer[4096];
+  size_t count = 0u;
+  int rc;
+  if (!process) return;
+  do {
+    rc = stdout_stream ? turbo_process_read_stdout(process, buffer, sizeof(buffer), &count)
+                       : turbo_process_read_stderr(process, buffer, sizeof(buffer), &count);
+    if (count != 0u) (void)fwrite(buffer, 1u, count, stderr);
+  } while (rc == TURBO_OK && count != 0u);
+}
+
+static int flowie_soak_run_child_args(const char *program, const char *const *args,
+                                      const char *description) {
   turbo_process_options_t options;
   turbo_process_t *process = NULL;
-  turbo_process_result_t result;
+  turbo_process_result_t result = {0};
+  flowie_soak_resources_t resources_before;
+  flowie_soak_resources_t resources_after;
+  int release_rc;
   int rc;
+  rc = flowie_soak_resource_snapshot(&resources_before);
+  if (rc != TURBO_OK) return rc;
   turbo_process_options_init(&options);
   options.program = program;
   options.args = args;
@@ -248,12 +284,45 @@ static int flowie_soak_run_child(const char *program, const char *filter) {
   options.timeout_ms = FLOWIE_SOAK_CHILD_TIMEOUT_MS;
   options.max_output_bytes = 65536u;
   rc = turbo_process_spawn(&options, &process);
-  if (rc != TURBO_OK) return rc;
+  if (rc != TURBO_OK) {
+    fprintf(stderr, "SOAK_CHILD_FAILURE program=%s command=\"%s\" spawn_status=%d\n", program,
+            description, rc);
+    return rc;
+  }
   rc = turbo_process_wait(process, &result);
-  if (rc == TURBO_OK && (result.state != TURBO_PROCESS_EXITED || result.exit_code != 0))
+  if (rc == TURBO_OK && (result.state != TURBO_PROCESS_EXITED || result.exit_code != 0)) {
+    fprintf(stderr,
+            "SOAK_CHILD_FAILURE program=%s command=\"%s\" state=%s exit_code=%d "
+            "term_signal=%d error_code=%d\nstdout:\n",
+            program, description, turbo_process_state_name(result.state), result.exit_code,
+            result.term_signal, result.error_code);
+    flowie_soak_report_child_stream(process, 1);
+    fputs("\nstderr:\n", stderr);
+    flowie_soak_report_child_stream(process, 0);
+    fputc('\n', stderr);
     rc = TURBO_EIO;
+  } else if (rc != TURBO_OK) {
+    fprintf(stderr, "SOAK_CHILD_FAILURE program=%s command=\"%s\" wait_status=%d\n", program,
+            description, rc);
+  }
   turbo_process_destroy(process);
+  release_rc = flowie_soak_wait_for_process_release(&resources_before, &resources_after);
+  if (release_rc != TURBO_OK) {
+    fprintf(stderr,
+            "SOAK_CHILD_RESOURCE_FAILURE program=%s command=\"%s\" "
+            "handles_before=%zu handles_current=%zu threads_before=%zu threads_current=%zu "
+            "settle_timeout_ms=%u\n",
+            program, description, resources_before.handles, resources_after.handles,
+            resources_before.threads, resources_after.threads,
+            FLOWIE_SOAK_PROCESS_RELEASE_TIMEOUT_MS);
+    if (rc == TURBO_OK) rc = release_rc;
+  }
   return rc;
+}
+
+static int flowie_soak_run_child(const char *program, const char *filter) {
+  const char *args[] = {"--filter", filter, NULL};
+  return flowie_soak_run_child_args(program, args, filter);
 }
 
 static int flowie_soak_run_series(const char *case_id, const char *const *programs,
@@ -303,8 +372,15 @@ static int flowie_soak_run_series(const char *case_id, const char *const *progra
     if (rc != TURBO_OK) ++failures;
     if (flowie_soak_resource_snapshot(&current) != TURBO_OK) return TURBO_EIO;
     if (current.handles > baseline.handles || current.threads > baseline.threads ||
-        current.rss_bytes > baseline.rss_bytes + rss_tolerance)
+        current.rss_bytes > baseline.rss_bytes + rss_tolerance) {
+      fprintf(stderr,
+              "SOAK_RESOURCE_FAILURE id=%s rss_baseline=%zu rss_current=%zu "
+              "rss_tolerance=%zu handles_baseline=%zu handles_current=%zu "
+              "threads_baseline=%zu threads_current=%zu\n",
+              case_id, baseline.rss_bytes, current.rss_bytes, rss_tolerance, baseline.handles,
+              current.handles, baseline.threads, current.threads);
       return TURBO_ENOSPC;
+    }
   }
 
   printf("SOAK_RESULT id=%s seed=%" PRIu64 " operations=%zu failures=%zu "
@@ -464,6 +540,50 @@ cleanup:
 }
 
 spec("Flowie MQTT scheduled soak") {
+  it("child process resource sampling observes no resources after destroy returns") {
+    static const char *args[] = {"--list", NULL};
+    flowie_soak_resources_t first;
+    flowie_soak_resources_t sample;
+    size_t handles_min;
+    size_t handles_max;
+    size_t threads_min;
+    size_t threads_max;
+    size_t sample_count = 1u;
+
+    check_int_eq(flowie_soak_run_child_args(FLOWIE_SOAK_ENDPOINT_TEST, args, "--list"), TURBO_OK);
+    check_int_eq(flowie_soak_resource_snapshot(&first), TURBO_OK);
+    handles_min = handles_max = first.handles;
+    threads_min = threads_max = first.threads;
+
+    for (size_t iteration = 0u; iteration < FLOWIE_SOAK_RESOURCE_REPRO_ITERATIONS; ++iteration) {
+      check_int_eq(flowie_soak_run_child_args(FLOWIE_SOAK_ENDPOINT_TEST, args, "--list"),
+                   TURBO_OK);
+      check_int_eq(flowie_soak_resource_snapshot(&sample), TURBO_OK);
+      ++sample_count;
+      if (sample.handles < handles_min) handles_min = sample.handles;
+      if (sample.handles > handles_max) handles_max = sample.handles;
+      if (sample.threads < threads_min) threads_min = sample.threads;
+      if (sample.threads > threads_max) threads_max = sample.threads;
+      if (handles_min != handles_max || threads_min != threads_max) break;
+    }
+
+    info("samples=%zu handles_min=%zu handles_max=%zu threads_min=%zu threads_max=%zu",
+         sample_count, handles_min, handles_max, threads_min, threads_max);
+    check_size_eq(handles_max, handles_min);
+    check_size_eq(threads_max, threads_min);
+  }
+
+  it("child process release barrier rejects sustained resource growth") {
+    flowie_soak_resources_t baseline;
+    flowie_soak_resources_t current;
+
+    check_int_eq(flowie_soak_resource_snapshot(&baseline), TURBO_OK);
+    check_size_ge(baseline.threads, 1u);
+    --baseline.threads;
+    check_int_eq(flowie_soak_wait_for_process_release(&baseline, &current), TURBO_ENOSPC);
+    check_size_gt(current.threads, baseline.threads);
+  }
+
   it("MQTT-SOAK-001 repeats reconnect and client-id takeover traces") {
     const size_t iterations = flowie_soak_env_size("FLOWIE_MQTT_SOAK_ITERATIONS",
                                                    FLOWIE_SOAK_DEFAULT_ITERATIONS,

@@ -535,8 +535,11 @@ spec("flowie mqtt protocol") {
   it("encodes PINGREQ and rejects client packets before modifying output") {
     static const uint8_t invalid_publish_property[] = {0x1fu, 0x00u, 0x02u, 'n', 'o'};
     static const uint8_t expected_ping[] = {0xc0u, 0x00u};
+    static const uint8_t invalid_ping[] = {0xc0u, 0x03u, 0x08u, 0x00u, 0x00u};
     uint8_t unchanged[16];
     flowie_mqtt_publish_packet_t publish = FLOWIE_MQTT_PUBLISH_PACKET_INIT;
+    flowie_mqtt_parse_options_t options = FLOWIE_MQTT_PARSE_OPTIONS_INIT;
+    flowie_mqtt_packet_view_t packet = FLOWIE_MQTT_PACKET_VIEW_INIT;
     size_t written = 99u;
     memset(unchanged, 0xa5, sizeof(unchanged));
     check_int_eq(flowie_mqtt_pingreq_encode(FLOWIE_MQTT_VERSION_3_1_1, unchanged, sizeof(unchanged),
@@ -544,6 +547,9 @@ spec("flowie mqtt protocol") {
                  FLOWIE_MQTT_PARSE_OK);
     check_size_eq(written, sizeof(expected_ping));
     check_mem_eq(unchanged, expected_ping, sizeof(expected_ping));
+    check_int_eq(flowie_mqtt_packet_parse(invalid_ping, sizeof(invalid_ping), &options, &packet,
+                                          NULL, NULL),
+                 FLOWIE_MQTT_PARSE_PROTOCOL_ERROR);
 
     memset(unchanged, 0xa5, sizeof(unchanged));
     check_int_eq(flowie_mqtt_pingreq_encode(FLOWIE_MQTT_VERSION_5, unchanged, 1u, &written),

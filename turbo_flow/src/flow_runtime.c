@@ -816,6 +816,112 @@ int turbo_flow_publish(turbo_flow_t *flow, const char *source_name, const turbo_
   return turbo_flow_publish_ex(flow, source_name, msg, &result);
 }
 
+typedef struct flow_publish_batch_next_context_s {
+  turbo_flow_t *flow;
+  turbo_flow_publish_batch_prepare_fn prepare;
+  void *prepare_ctx;
+  size_t message_count;
+  size_t next_index;
+  int failed;
+  int protocol_error;
+} flow_publish_batch_next_context_t;
+
+static int flow_publish_batch_next(void *ctx, size_t index, turbo_flow_msg_t *message) {
+  flow_publish_batch_next_context_t *next = (flow_publish_batch_next_context_t *)ctx;
+  turbo_flow_msg_t prepared;
+  int rc;
+
+  if (message) turbo_flow_msg_init(message);
+  if (!next || !next->flow || !next->prepare || !message) {
+    return TURBO_EINVAL;
+  }
+  if (next->failed || index != next->next_index || index >= next->message_count) {
+    next->protocol_error = 1;
+    return flow_set_error_keep_state(next->flow, TURBO_EPROTO, 0, 0,
+                                     "adapter batch iterator order is invalid");
+  }
+  turbo_flow_msg_init(&prepared);
+  flow_clear_error(next->flow);
+  rc = next->prepare(next->prepare_ctx, index, &prepared);
+  if (rc != TURBO_OK) {
+    next->failed = 1;
+    rc = flow_set_error_keep_state(next->flow, rc, 0, 0,
+                                   "batch message preparation failed");
+    goto cleanup;
+  }
+  if (!prepared.buffer && !prepared.owned_payload && prepared.payload.data) {
+    next->failed = 1;
+    rc = flow_set_error_keep_state(
+        next->flow, TURBO_EINVAL, 0, 0,
+        "publish payload requires a backing buffer or owned payload");
+    goto cleanup;
+  }
+  rc = prepared.owned_payload || prepared._content_handle
+           ? turbo_flow_msg_clone(message, &prepared)
+           : turbo_flow_msg_retain_view(message, &prepared);
+  if (rc != TURBO_OK) {
+    next->failed = 1;
+    rc = flow_set_error_keep_state(
+        next->flow, rc, 0, 0,
+        rc == TURBO_ENOTSUP ? "publish cannot clone the schema projection"
+                            : "publish requires a cloneable payload view");
+  } else {
+    next->next_index += 1u;
+  }
+
+cleanup:
+  turbo_flow_msg_cleanup(&prepared);
+  return rc;
+}
+
+static const flow_adapter_registration_t *flow_publish_batch_direct_adapter(
+    turbo_flow_t *flow, uint32_t source_index, const flow_stage_plan_impl_t **out_stage) {
+  const flow_runtime_edge_plan_t *source_edge = NULL;
+  const flow_stage_plan_impl_t *stage;
+  const flow_executor_plan_t *executor;
+  const flow_adapter_registration_t *adapter;
+  const turbo_flow_operation_runtime_contract_t *runtime;
+
+  if (out_stage) *out_stage = NULL;
+  if (!flow || !out_stage || flow->broadcast_ring || flow->observer_ops.message_complete ||
+      flow->observer_ops.stage_complete) {
+    return NULL;
+  }
+  for (size_t i = 0u; i < turbo_vec_size(&flow->runtime_edges); ++i) {
+    const flow_runtime_edge_plan_t *edge =
+        (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, i);
+    if (!edge || edge->from_stage != source_index) continue;
+    if (source_edge || edge->kind != TURBO_FLOW_EDGE_UNCONDITIONAL || edge->predicate) return NULL;
+    source_edge = edge;
+  }
+  if (!source_edge) return NULL;
+  for (size_t i = 0u; i < turbo_vec_size(&flow->runtime_edges); ++i) {
+    const flow_runtime_edge_plan_t *edge =
+        (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, i);
+    if (edge && edge->from_stage == source_edge->to_stage) return NULL;
+  }
+  stage = (const flow_stage_plan_impl_t *)turbo_vec_at_const(
+      &flow->stages, (size_t)source_edge->to_stage);
+  executor = flow_executor_plan_for_stage(flow, source_edge->to_stage);
+  if (!stage || !executor || stage->is_source || stage->is_port ||
+      stage->effects != TURBO_FLOW_STAGE_EFFECT_NONE ||
+      stage->retry.max_attempts > 1u || stage->reorder.capacity != 0u ||
+      executor->exec.kind != TURBO_FLOW_EXEC_INLINE || executor->fn || executor->emit_fn ||
+      executor->keyed_fn || executor->keyed_emit_fn || executor->window_fn) {
+    return NULL;
+  }
+  runtime = flow_stage_operation_runtime(flow, stage);
+  if (runtime &&
+      (runtime->handoff != TURBO_FLOW_HANDOFF_DIRECT || runtime->deadline_ms != 0u ||
+       runtime->settlement != 0u)) {
+    return NULL;
+  }
+  adapter = flow_adapter_for_stage(flow, stage);
+  if (!adapter || !adapter->ops.consume || !adapter->consume_batch) return NULL;
+  *out_stage = stage;
+  return adapter;
+}
+
 int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
                              const turbo_flow_publish_batch_config_t *config,
                              size_t *published) {
@@ -847,6 +953,43 @@ int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
   flow_clear_error(flow);
   rc = flow_publish_source_index(flow, source_name, &source_index);
   if (rc != TURBO_OK) goto cleanup;
+
+  {
+    const flow_stage_plan_impl_t *batch_stage = NULL;
+    const flow_adapter_registration_t *batch_adapter =
+        flow_publish_batch_direct_adapter(flow, source_index, &batch_stage);
+    if (batch_adapter) {
+      flow_publish_batch_next_context_t next_context = {
+          flow, prepare, prepare_ctx, message_count, 0u, 0, 0};
+      turbo_flow_adapter_batch_t adapter_batch = TURBO_FLOW_ADAPTER_BATCH_INIT;
+      turbo_flow_stage_plan_t stage_view;
+      size_t consumed = 0u;
+      adapter_batch.message_count = message_count;
+      adapter_batch.next = flow_publish_batch_next;
+      adapter_batch.ctx = &next_context;
+      flow_make_stage_view(batch_stage, &stage_view);
+      rc = batch_adapter->consume_batch(batch_adapter->ctx, flow, &stage_view, &adapter_batch,
+                                        &consumed);
+      if (next_context.protocol_error || consumed > message_count ||
+          consumed > next_context.next_index ||
+          (rc == TURBO_OK &&
+           (next_context.failed || consumed != message_count ||
+            next_context.next_index != message_count)) ||
+          (rc != TURBO_OK &&
+           ((next_context.failed && consumed != next_context.next_index) ||
+            (!next_context.failed &&
+             next_context.next_index - consumed > 1u)))) {
+        rc = flow_set_error_keep_state(flow, TURBO_EPROTO, batch_stage->line,
+                                       batch_stage->column,
+                                       "adapter batch completion count is invalid");
+      } else if (rc != TURBO_OK && flow_error_code(flow) == TURBO_OK) {
+        rc = flow_set_error_keep_state(flow, rc, batch_stage->line, batch_stage->column,
+                                       "adapter batch consume failed");
+      }
+      if (published) *published = consumed <= message_count ? consumed : 0u;
+      goto cleanup;
+    }
+  }
 
   for (size_t index = 0u; index < message_count; ++index) {
     turbo_flow_msg_t message;

@@ -8,5 +8,5 @@ target_include_directories(bench_fmq
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
 if(WIN32)
-  target_link_libraries(bench_fmq PRIVATE ws2_32)
+  target_link_libraries(bench_fmq PRIVATE ws2_32 winmm)
 endif()

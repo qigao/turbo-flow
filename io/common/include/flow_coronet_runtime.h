@@ -68,6 +68,8 @@ typedef struct tf_coronet_socket_options_s {
   int linger;
   uint64_t linger_ms;
   size_t send_hwm_bytes;
+  size_t socket_recv_buffer_bytes;
+  size_t socket_send_buffer_bytes;
 } tf_coronet_socket_options_t;
 
 typedef enum tf_coronet_udp_option_flag_e {

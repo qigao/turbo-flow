@@ -4,6 +4,7 @@ add_library(tf_coronet_runtime STATIC
             ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_coronet_runtime.c
             ${CMAKE_CURRENT_SOURCE_DIR}/include/flow_coronet_runtime.h)
 cmake_config_target(tf_coronet_runtime FOLDER "io/common")
+set_target_properties(tf_coronet_runtime PROPERTIES C_VISIBILITY_PRESET hidden)
 target_include_directories(tf_coronet_runtime
                            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(tf_coronet_runtime
@@ -31,6 +32,7 @@ add_library(${TARGET_NAME} STATIC ${TURBO_FLOW_EXECUTOR_COMMON_SOURCES}
                                   ${TURBO_FLOW_EXECUTOR_COMMON_HEADERS})
 
 cmake_config_target(${TARGET_NAME} FOLDER "io/common")
+set_target_properties(${TARGET_NAME} PROPERTIES C_VISIBILITY_PRESET hidden)
 
 target_include_directories(${TARGET_NAME}
                            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include

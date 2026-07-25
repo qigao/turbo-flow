@@ -1,5 +1,9 @@
 # ADR: FMQ v3-only optional security binding
 
+本 ADR 是 [协议索引](PROTOCOL_SPEC.md) 指定的安全决策记录；FMS/3 字段和 wire 校验的
+唯一正文见 [FMQ_WIRE_PROTOCOL.md](FMQ_WIRE_PROTOCOL.md)。本文记录决策理由、owner、
+迁移和回滚，不重复维护 envelope layout。
+
 状态：已采用（2026-07-18）
 
 ## 背景
@@ -69,8 +73,8 @@ FMQ 需要在 peer admission 前完成身份认证和 root-group-aware authoriza
 - 只支持 wire v3，不提供 fallback、version negotiation 或内置 gateway。
 - 同一通信域必须先 quiesce，升级所有 bind/connect participants，再整体恢复。升级前应排空 volatile
   in-flight frame；durable payload 由 Redis Stream 或显式 durable owner 按各自 settlement 规则恢复。
-- C API v1 endpoint config 保持布局不变；安全能力通过独立 versioned binding 和 secure registration/
-  application entry point 注入。现有 registration 创建 trusted v3 endpoint，不会隐式启用安全。
+- C endpoint config 只有当前完整布局；安全能力通过独立 binding 和 secure registration/application
+  entry point 注入。普通 registration 创建 trusted v3 endpoint，不会隐式启用安全。
 - 若 secure deployment 回滚，只能整体回滚到同一个 release 并保持通信域停止；不得临时放宽
   decoder。数据格式迁移不属于本决策。
 

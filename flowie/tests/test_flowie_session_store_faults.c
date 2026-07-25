@@ -17,6 +17,11 @@
 #define FLOWIE_STORE_TEST_MAX_KEY_SIZE 65538u
 #define FLOWIE_STORE_TEST_ENDPOINT_OWNER_RECORD_TYPE 10u
 
+static const uint8_t persistent_connect[] = {
+    0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',  0x05u, 0x00u,
+    0x00u, 0x3cu, 0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u,
+    'd',   'u',   'r'};
+
 typedef struct flowie_test_record_store_s {
   atomic_int fail_commits;
   atomic_int scan_status;
@@ -374,12 +379,94 @@ static int flowie_test_restore_will_state(const flowie_test_record_store_t *stor
   return rc;
 }
 
-spec("Flowie durable session store failure boundaries") {
-  static const uint8_t persistent_connect[] = {
-      0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',  0x05u, 0x00u,
-      0x00u, 0x3cu, 0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u,
-      'd',   'u',   'r'};
+static int flowie_test_lost_commit_recovery(unsigned short first_port,
+                                            unsigned short second_port) {
+  flowie_test_record_store_t fixture;
+  turbo_flow_record_store_t store;
+  turbo_flow_t *first = NULL;
+  turbo_flow_t *restored = NULL;
+  flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
+  flowie_test_socket_t resumed = FLOWIE_TEST_INVALID_SOCKET;
+  int first_started = 0;
+  int restored_started = 0;
+  int rc = TURBO_OK;
 
+  flowie_test_record_store_init(&fixture, &store);
+  atomic_store_explicit(&fixture.lose_commit_reply, 1, memory_order_release);
+  first = flowie_test_persistent_flow(first_port, &store);
+  if (!first) {
+    rc = TURBO_ENOMEM;
+    goto cleanup;
+  }
+  rc = turbo_flow_start(first);
+  if (rc != TURBO_OK) goto cleanup;
+  first_started = 1;
+  client = flowie_test_connect(first_port);
+  if (client == FLOWIE_TEST_INVALID_SOCKET) {
+    rc = TURBO_ENOTCONN;
+    goto cleanup;
+  }
+  rc = flowie_test_send(client, persistent_connect, sizeof(persistent_connect));
+  if (rc != TURBO_OK) goto cleanup;
+  {
+    uint8_t connack[5];
+    if (flowie_test_recv_exact(client, connack, sizeof(connack)) == TURBO_OK) {
+      rc = TURBO_EPROTO;
+      goto cleanup;
+    }
+  }
+  rc = flowie_test_wait_commits(&fixture, 1u);
+  if (rc != TURBO_OK) goto cleanup;
+  if (!atomic_load_explicit(&fixture.present, memory_order_acquire)) {
+    rc = TURBO_EPROTO;
+    goto cleanup;
+  }
+  flowie_test_socket_close(client);
+  client = FLOWIE_TEST_INVALID_SOCKET;
+  rc = turbo_flow_stop(first);
+  first_started = 0;
+  if (rc != TURBO_OK) goto cleanup;
+  turbo_flow_destroy(first);
+  first = NULL;
+
+  restored = flowie_test_persistent_flow(second_port, &store);
+  if (!restored) {
+    rc = TURBO_ENOMEM;
+    goto cleanup;
+  }
+  rc = turbo_flow_start(restored);
+  if (rc != TURBO_OK) goto cleanup;
+  restored_started = 1;
+  resumed = flowie_test_connect(second_port);
+  if (resumed == FLOWIE_TEST_INVALID_SOCKET) {
+    rc = TURBO_ENOTCONN;
+    goto cleanup;
+  }
+  rc = flowie_test_send(resumed, persistent_connect, sizeof(persistent_connect));
+  if (rc == TURBO_OK) rc = flowie_test_recv_mqtt5_connack(resumed, 1u, 8u, 4096u);
+
+cleanup:
+  if (resumed != FLOWIE_TEST_INVALID_SOCKET) flowie_test_socket_close(resumed);
+  if (client != FLOWIE_TEST_INVALID_SOCKET) flowie_test_socket_close(client);
+  if (restored) {
+    if (restored_started) {
+      int stop_rc = turbo_flow_stop(restored);
+      if (rc == TURBO_OK) rc = stop_rc;
+    }
+    turbo_flow_destroy(restored);
+  }
+  if (first) {
+    if (first_started) {
+      int stop_rc = turbo_flow_stop(first);
+      if (rc == TURBO_OK) rc = stop_rc;
+    }
+    turbo_flow_destroy(first);
+  }
+  flowie_test_record_store_destroy(&fixture);
+  return rc;
+}
+
+spec("Flowie durable session store failure boundaries") {
   it("MQTT-STORE-001 does not expose a failed CONNECT commit and retries from absent") {
     uint8_t received[5];
     unsigned short port = flowie_test_port();
@@ -549,43 +636,9 @@ spec("Flowie durable session store failure boundaries") {
   it("MQTT-STORE-007 resolves a lost commit reply by scanning the committed revision") {
     unsigned short first_port = flowie_test_port();
     unsigned short second_port = flowie_test_port();
-    flowie_test_record_store_t fixture;
-    turbo_flow_record_store_t store;
-    turbo_flow_t *first;
-    turbo_flow_t *restored;
-    flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
-    flowie_test_socket_t resumed = FLOWIE_TEST_INVALID_SOCKET;
-    flowie_test_record_store_init(&fixture, &store);
-    atomic_store_explicit(&fixture.lose_commit_reply, 1, memory_order_release);
-    first = flowie_test_persistent_flow(first_port, &store);
-    check_not_null(first);
-    check_int_eq(turbo_flow_start(first), TURBO_OK);
-    client = flowie_test_connect(first_port);
-    check_true(client != FLOWIE_TEST_INVALID_SOCKET);
-    check_int_eq(flowie_test_send(client, persistent_connect, sizeof(persistent_connect)),
-                 TURBO_OK);
-    {
-      uint8_t connack[5];
-      check_int_ne(flowie_test_recv_exact(client, connack, sizeof(connack)), TURBO_OK);
-    }
-    check_int_eq(flowie_test_wait_commits(&fixture, 1u), TURBO_OK);
-    check_true(atomic_load_explicit(&fixture.present, memory_order_acquire));
-    flowie_test_socket_close(client);
-    check_int_eq(turbo_flow_stop(first), TURBO_OK);
-    turbo_flow_destroy(first);
-
-    restored = flowie_test_persistent_flow(second_port, &store);
-    check_not_null(restored);
-    check_int_eq(turbo_flow_start(restored), TURBO_OK);
-    resumed = flowie_test_connect(second_port);
-    check_true(resumed != FLOWIE_TEST_INVALID_SOCKET);
-    check_int_eq(flowie_test_send(resumed, persistent_connect, sizeof(persistent_connect)),
-                 TURBO_OK);
-    check_int_eq(flowie_test_recv_mqtt5_connack(resumed, 1u, 8u, 4096u), TURBO_OK);
-    flowie_test_socket_close(resumed);
-    check_int_eq(turbo_flow_stop(restored), TURBO_OK);
-    turbo_flow_destroy(restored);
-    flowie_test_record_store_destroy(&fixture);
+    check_int_gt(first_port, 0);
+    check_int_gt(second_port, 0);
+    check_int_eq(flowie_test_lost_commit_recovery(first_port, second_port), TURBO_OK);
   }
 
   it("MQTT-STORE-005 rebuilds retained put replace and delete at both commit sides") {

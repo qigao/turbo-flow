@@ -17,6 +17,9 @@
   #include <unistd.h>
 #endif
 
+static const turbo_flow_coronet_execution_binding_t CONTROL_PRIVATE_EXECUTION = {
+    sizeof(turbo_flow_coronet_execution_binding_t), TURBO_FLOW_CORONET_EXECUTION_PRIVATE};
+
 typedef struct control_capture_s {
   atomic_int called;
   uint8_t payload[TURBO_FLOW_FMQ_CONTROL_REPLY_MAX_SIZE];
@@ -297,13 +300,17 @@ spec("fmq_control_v1") {
     req.mode = TURBO_FLOW_FMQ_CONNECT;
     check_int_eq(turbo_flow_fmq_control_service_create(target, &service_config, &service),
                  TURBO_OK);
-    check_int_eq(turbo_flow_fmq_register_adapter(server, "fmq.rep", &rep), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_register_adapter_ex(server, "fmq.rep", &rep,
+                                                    &CONTROL_PRIVATE_EXECUTION),
+                 TURBO_OK);
     check_int_eq(turbo_flow_register_stage_ex(server, "control", turbo_flow_fmq_control_stage,
                                               service, NULL),
                  TURBO_OK);
     check_int_eq(turbo_flow_parse_string(server, server_dsl, strlen(server_dsl)), TURBO_OK);
     check_int_eq(turbo_flow_compile(server), TURBO_OK);
-    check_int_eq(turbo_flow_fmq_register_adapter(client, "fmq.req", &req), TURBO_OK);
+    check_int_eq(turbo_flow_fmq_register_adapter_ex(client, "fmq.req", &req,
+                                                    &CONTROL_PRIVATE_EXECUTION),
+                 TURBO_OK);
     check_int_eq(turbo_flow_register_stage_ex(client, "capture", control_capture, &capture, NULL),
                  TURBO_OK);
     check_int_eq(turbo_flow_parse_string(client, client_dsl, strlen(client_dsl)), TURBO_OK);

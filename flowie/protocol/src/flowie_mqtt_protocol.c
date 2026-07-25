@@ -20,12 +20,21 @@ static void flowie_mqtt_error(flowie_mqtt_parse_error_t *error, flowie_mqtt_pars
 void flowie_mqtt_parser_accept(flowie_mqtt_parse_ctx_t *ctx, flowie_mqtt_token_t header,
                                flowie_mqtt_token_t remaining, flowie_mqtt_token_t body) {
   size_t fixed_header_size;
+  uint8_t packet_type;
   if (!ctx || ctx->code != FLOWIE_MQTT_PARSE_OK) return;
   fixed_header_size = 1u + remaining.span.size;
   if ((remaining.integer == 0u && body.span.size != 0u) || (remaining.integer != body.span.size)) {
     ctx->code = FLOWIE_MQTT_PARSE_MALFORMED;
     ctx->error_offset = body.offset;
     ctx->message = "packet body length does not match Remaining Length";
+    return;
+  }
+  packet_type = (uint8_t)(header.integer >> 4u);
+  if ((packet_type == FLOWIE_MQTT_PACKET_PINGREQ ||
+       packet_type == FLOWIE_MQTT_PACKET_PINGRESP) && remaining.integer != 0u) {
+    ctx->code = FLOWIE_MQTT_PARSE_PROTOCOL_ERROR;
+    ctx->error_offset = remaining.offset;
+    ctx->message = "PING packet must have zero Remaining Length";
     return;
   }
   ctx->packet = (flowie_mqtt_packet_view_t)FLOWIE_MQTT_PACKET_VIEW_INIT;

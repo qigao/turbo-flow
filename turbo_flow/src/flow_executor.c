@@ -8,6 +8,9 @@ typedef struct flow_threadpool_task_s {
   flow_execution_task_t execution;
   turbo_flow_t *flow;
   flow_pool_record_t *pool_record;
+  turbo_mutex_t worker_mutex;
+  turbo_cond_t worker_cond;
+  int worker_finished;
 } flow_threadpool_task_t;
 
 typedef struct flow_coro_task_s {
@@ -32,6 +35,10 @@ static void flow_threadpool_task_run(void *arg) {
     flow_execution_task_fail(&task->execution, TURBO_EPROTO);
   }
   flow_pool_record_finished(task->pool_record, task->execution.status);
+  turbo_mutex_lock(&task->worker_mutex);
+  task->worker_finished = 1;
+  turbo_cond_broadcast(&task->worker_cond);
+  turbo_mutex_unlock(&task->worker_mutex);
 }
 
 static void flow_coro_task_run(coro_t *co, void *arg) {
@@ -285,19 +292,29 @@ int flow_execute_threadpool_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *st
   }
   task.pool_record = record;
   task.flow = flow;
+  turbo_mutex_init(&task.worker_mutex);
+  turbo_cond_init(&task.worker_cond);
+  task.worker_finished = 0;
   flow_pool_record_submitted(record);
 
   if (turbo_threadpool_submit(adapter->pool, flow_threadpool_task_run, &task) != TURBO_OK) {
     flow_pool_record_rejected(record);
     turbo_flow_msg_move(msg, &task.execution.msg);
     flow_execution_task_cleanup(&task.execution);
+    turbo_cond_destroy(&task.worker_cond);
+    turbo_mutex_destroy(&task.worker_mutex);
     completion->status = TURBO_ENOSPC;
     return flow_set_error_keep_state(flow, TURBO_ENOSPC, stage->line, stage->column,
                                      "thread executor rejected task");
   }
 
   rc = flow_execution_task_wait(&task.execution, msg, completion);
+  turbo_mutex_lock(&task.worker_mutex);
+  while (!task.worker_finished) turbo_cond_wait(&task.worker_cond, &task.worker_mutex);
+  turbo_mutex_unlock(&task.worker_mutex);
   flow_execution_task_cleanup(&task.execution);
+  turbo_cond_destroy(&task.worker_cond);
+  turbo_mutex_destroy(&task.worker_mutex);
   return rc;
 }
 

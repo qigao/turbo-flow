@@ -122,7 +122,11 @@ static const flow_fmq_json_field_t FLOW_FMQ_JSON_FIELDS[] = {
     FLOW_FMQ_JSON_FIELD(frame_hwm_bytes, FLOW_FMQ_JSON_SIZE, SIZE_MAX),
     FLOW_FMQ_JSON_ENUM_ZERO_FIELD(frame_admission_policy, FLOW_FMQ_JSON_ADMISSION_POLICIES),
     FLOW_FMQ_JSON_SENTINEL_FIELD(frame_admission_timeout_ms, "unbounded", UINT64_MAX),
-    FLOW_FMQ_JSON_FIELD(frame_linger_ms, FLOW_FMQ_JSON_U64, UINT64_MAX)};
+    FLOW_FMQ_JSON_FIELD(frame_linger_ms, FLOW_FMQ_JSON_U64, UINT64_MAX),
+    FLOW_FMQ_JSON_FIELD(stream_recv_buffer_bytes, FLOW_FMQ_JSON_SIZE,
+                        TURBO_FLOW_FMQ_MAX_STREAM_RECV_BUFFER_SIZE),
+    FLOW_FMQ_JSON_FIELD(socket_recv_buffer_bytes, FLOW_FMQ_JSON_SIZE, INT_MAX),
+    FLOW_FMQ_JSON_FIELD(socket_send_buffer_bytes, FLOW_FMQ_JSON_SIZE, INT_MAX)};
 
 #define FLOW_FMQ_FANOUT_JSON_FIELD(member, field_type, max_value)                                  \
   {#member, field_type, offsetof(turbo_flow_fmq_fanout_config_t, member), max_value, NULL, 0u, 0,  \

@@ -201,6 +201,22 @@ function(cmake_add_test target_name)
     target_include_directories(${target_name} PRIVATE ${ARG_INCLUDES})
   endif()
   add_test(NAME ${target_name} COMMAND ${target_name})
+  if(UNIX AND NOT APPLE)
+    set(_runtime_test_environment)
+    foreach(_runtime_target IN ITEMS
+            TurboUtils::Core TurboUtils::Parser TurboNet::CoroNet TurboHttp::HttpClient
+            TurboHttp::Iris)
+      if(TARGET ${_runtime_target})
+        list(APPEND _runtime_test_environment
+             "LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:${_runtime_target}>")
+      endif()
+    endforeach()
+    if(_runtime_test_environment)
+      set_tests_properties(${target_name} PROPERTIES
+                           ENVIRONMENT_MODIFICATION "${_runtime_test_environment}")
+    endif()
+    unset(_runtime_test_environment)
+  endif()
   cmake_config_target(${target_name} FOLDER "${ARG_FOLDER}")
 endfunction()
 

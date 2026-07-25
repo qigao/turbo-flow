@@ -2,6 +2,8 @@
 
 #include "turbo_error.h"
 
+#include <limits.h>
+
 const char *const TF_CORONET_TRANSPORT_VALUES[TF_CORONET_TRANSPORT_VALUE_COUNT] = {
     "tcp", "udp", "kcp", "tls", "ws", "wss", "pipe"};
 const char *const TF_CORONET_KCP_FEC_BACKEND_VALUES[2] = {"none", "wirehair"};
@@ -59,6 +61,14 @@ int tf_coronet_socket_options_validate(tf_coronet_transport_t transport,
   }
   if (options->send_hwm_bytes != 0 && !tf_coronet_transport_supports_send_hwm(transport)) {
     return TURBO_EINVAL;
+  }
+  if ((options->socket_recv_buffer_bytes != 0 || options->socket_send_buffer_bytes != 0) &&
+      !tf_coronet_transport_is_tcp_backed(transport)) {
+    return TURBO_EINVAL;
+  }
+  if (options->socket_recv_buffer_bytes > (size_t)INT_MAX ||
+      options->socket_send_buffer_bytes > (size_t)INT_MAX) {
+    return TURBO_ERANGE;
   }
   return TURBO_OK;
 }
@@ -252,6 +262,14 @@ int tf_coronet_apply_socket_options(coro_socket_t *socket, tf_coronet_transport_
   }
   if (options->send_hwm_bytes != 0) {
     rc = coro_socket_set_send_hwm(socket, options->send_hwm_bytes);
+    if (rc != TURBO_OK) return rc;
+  }
+  if (options->socket_recv_buffer_bytes != 0) {
+    rc = coro_socket_set_recv_buffer_size(socket, options->socket_recv_buffer_bytes);
+    if (rc != TURBO_OK) return rc;
+  }
+  if (options->socket_send_buffer_bytes != 0) {
+    rc = coro_socket_set_send_buffer_size(socket, options->socket_send_buffer_bytes);
     if (rc != TURBO_OK) return rc;
   }
   return TURBO_OK;

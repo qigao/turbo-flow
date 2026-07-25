@@ -36,6 +36,23 @@ security、settlement 或 store boundary；但基础 pattern 的默认 graph 只
 高级 pattern（例如 load balancer、reliable request、credit worker、规则处理、持久化和
 跨 provider enrichment）才组合多个 graph stage、executor 和显式外部存储。
 
+#### Direct terminal native batch
+
+`turbo_flow_module_adapter_registration_t.consume_batch` 是 size-versioned 的可选 provider
+ABI。它只优化 `source -> terminal adapter` 的薄 bridge：source 必须只有一条无条件边，
+terminal stage 不得有下游、observer、emitter、retry、reorder、deadline、settlement 或
+非 inline executor。任何条件不满足时，core 使用原有逐消息 dispatch，语义不变。
+
+core 仍拥有消息准备和生命周期。provider 必须按升序且恰好一次调用 batch iterator；每次成功
+返回的 `turbo_flow_msg_t` 都是独立 clone/retained view，provider 在读取下一项前清理它。
+provider 在首个 prepare/consume 错误停止，`consumed` 只报告错误之前已成功消费的项。成功返回
+必须消费全部消息；跳号、重复读取、超额计数或未消费完整批次却返回成功均为 `TURBO_EPROTO`。
+旧 registration size 不暴露该回调，自动保留逐消息路径。
+
+该优化不把 facade payload 直接借给 socket，也不改变 HWM、编码、首错、partial submission、
+request completion 或 socket coalescing。其时间复杂度为 O(n)，额外活跃消息存储为 O(1)；
+每个 iterator step 最多保留一个消息 view。
+
 ### Flowie
 
 Flowie 的协议 owner 在 connection lane 处理 CONNECT、SUBSCRIBE、UNSUBSCRIBE、PING、AUTH、
@@ -58,8 +75,9 @@ broker owner 隐式重排。
 
 ### FlowStore
 
-FlowStore 按事实语义拆分 State、Index、Log 和 TimeSeries。写入必须复制或 retain 足够的
-`turbo_flow_msg_t` 数据，不能保存短生命周期 frame/view。内存或 Redis 只能有一个事实源；
+FlowStore 按事实语义拆分 Record、State、Index、Log 和 TimeSeries。写入必须复制或 retain 足够的
+`turbo_flow_msg_t` 数据，不能保存短生命周期 frame/view。local、Redis 或 PostgreSQL backend
+只能有一个事实源；
 缓存和 bitmap 都是可重建的派生查询结构，不承担 ACK/requeue 或协议 session 所有权。
 
 ## 所有权和复制
@@ -89,8 +107,8 @@ origin 的 graph。回滚代码前应先排空新格式 outbox，避免旧二进
 ## 影响
 
 - 文档、接口说明和性能分析必须分别说明 frame、msg、graph stage、store record 的边界；
-- 基础 FMQ throughput 优化可以评估薄 graph bridge 或 direct fast path，但不能绕过 msg ownership
-  contract；
+- 基础 FMQ throughput 可以使用受限的 direct terminal native batch，但不能绕过 msg ownership
+  contract，也不能改变标量 dispatch 的可观察语义；
 - Flowie 继续使用 graph 处理 admitted application messages，控制协议不强行 graph 化；
 - FlowStore 的容量、保留、revision 和 durable recovery 是独立于 graph executor 的资源契约；
 - 本决策不改变 wire；公开 API 为只增不改，表迁移为无损加列，验证范围包括消息 clone/clear、

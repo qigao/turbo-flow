@@ -27,6 +27,9 @@ cmake --build --preset win-release-user --target flowie_client
 ```
 
 公开头文件是 `flowie_mqtt_client.h`。所有配置结构必须从对应 `*_INIT` 宏初始化。
+`stream_recv_buffer_bytes`、`socket_recv_buffer_bytes` 和 `socket_send_buffer_bytes` 的层次、
+默认值与内存预算见
+[CoroNet Buffer Tuning Contract](../io/common/CORONET_BUFFER_TUNING.md)。
 
 ## 2. 完整最小示例
 
@@ -161,8 +164,8 @@ code；不要把 MQTT 5 packet 字段直接复用于 3.x。
 `user_data` 所拥有的稳定缓冲区，并保持到该 client 的下一次 callback 开始；不能指向 callback 局部栈。
 MQTT 3.1/3.1.1 调用 re-authentication 会通过 `on_auth` 返回 `TURBO_ENOTSUP`。
 
-配置结构 ABI v7 新增 `on_auth_challenge` 和 `on_auth`。v5/v6 调用方仍按各自历史 `size` 使用，不能用旧
-ABI version 搭配 v7 的完整结构大小。
+配置结构没有本地 ABI 版本号，也不接受历史布局；`size` 必须精确匹配当前完整结构。
+MQTT 版本只来自 CONNECT packet 的 MQTT 3.1、3.1.1 或 5 协议字段。
 
 ## 5. TLS、WSS 与客户端 mTLS
 

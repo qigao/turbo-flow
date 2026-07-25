@@ -61,7 +61,7 @@ adapters:
       max_packet_size: 1048576
       max_connections: 4096
       coroutine_stack_size: 65536
-      recv_buffer_size: 4096
+      stream_recv_buffer_bytes: 4096
       send_hwm_bytes: 1048576
       slow_subscriber_policy: disconnect
       manage_sessions: true

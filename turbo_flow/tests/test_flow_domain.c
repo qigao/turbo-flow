@@ -45,6 +45,29 @@ typedef struct emission_probe_s {
   uint64_t sink_ids[8];
 } emission_probe_t;
 
+typedef enum domain_batch_probe_mode_e {
+  DOMAIN_BATCH_PROBE_NORMAL = 0,
+  DOMAIN_BATCH_PROBE_INCOMPLETE_SUCCESS,
+  DOMAIN_BATCH_PROBE_OUT_OF_ORDER
+} domain_batch_probe_mode_t;
+
+typedef struct domain_batch_probe_s {
+  domain_batch_probe_mode_t mode;
+  size_t scalar_calls;
+  size_t batch_calls;
+  size_t next_calls;
+  size_t observed_count;
+  uint64_t observed_ids[8];
+  uint64_t fail_id;
+  int fail_status;
+} domain_batch_probe_t;
+
+typedef struct domain_batch_prepare_probe_s {
+  size_t calls;
+  size_t fail_index;
+  int fail_status;
+} domain_batch_prepare_probe_t;
+
 static int domain_noop_stage(turbo_flow_msg_t *message, void *ctx) {
   (void)message;
   (void)ctx;
@@ -181,6 +204,84 @@ static int domain_noop_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_s
   return TURBO_OK;
 }
 
+static int domain_batch_consume(void *ctx, turbo_flow_t *flow,
+                                const turbo_flow_stage_plan_t *stage,
+                                turbo_flow_msg_t *message) {
+  domain_batch_probe_t *probe = (domain_batch_probe_t *)ctx;
+  (void)flow;
+  (void)stage;
+  if (!probe || !message) return TURBO_EINVAL;
+  probe->scalar_calls += 1u;
+  if (probe->observed_count < sizeof(probe->observed_ids) / sizeof(probe->observed_ids[0])) {
+    probe->observed_ids[probe->observed_count++] = message->id;
+  }
+  return message->id == probe->fail_id ? probe->fail_status : TURBO_OK;
+}
+
+static int domain_batch_consume_native(void *ctx, turbo_flow_t *flow,
+                                       const turbo_flow_stage_plan_t *stage,
+                                       const turbo_flow_adapter_batch_t *batch,
+                                       size_t *consumed) {
+  domain_batch_probe_t *probe = (domain_batch_probe_t *)ctx;
+  size_t limit;
+  int rc = TURBO_OK;
+  (void)flow;
+  (void)stage;
+  if (!probe || !batch || !batch->next || !consumed) return TURBO_EINVAL;
+  *consumed = 0u;
+  probe->batch_calls += 1u;
+  if (probe->mode == DOMAIN_BATCH_PROBE_OUT_OF_ORDER) {
+    turbo_flow_msg_t message;
+    turbo_flow_msg_init(&message);
+    probe->next_calls += 1u;
+    rc = batch->next(batch->ctx, 1u, &message);
+    turbo_flow_msg_cleanup(&message);
+    return rc;
+  }
+  limit = probe->mode == DOMAIN_BATCH_PROBE_INCOMPLETE_SUCCESS && batch->message_count > 2u
+              ? 2u
+              : batch->message_count;
+  for (size_t index = 0u; index < limit; ++index) {
+    turbo_flow_msg_t message;
+    turbo_flow_msg_init(&message);
+    probe->next_calls += 1u;
+    rc = batch->next(batch->ctx, index, &message);
+    if (rc == TURBO_OK) {
+      if (probe->observed_count <
+          sizeof(probe->observed_ids) / sizeof(probe->observed_ids[0])) {
+        probe->observed_ids[probe->observed_count++] = message.id;
+      }
+      if (message.id == probe->fail_id) {
+        rc = probe->fail_status;
+      } else {
+        *consumed = index + 1u;
+      }
+    }
+    turbo_flow_msg_cleanup(&message);
+    if (rc != TURBO_OK) return rc;
+  }
+  return TURBO_OK;
+}
+
+static int domain_batch_prepare(void *ctx, size_t index, turbo_flow_msg_t *message) {
+  domain_batch_prepare_probe_t *probe = (domain_batch_prepare_probe_t *)ctx;
+  if (!probe || !message) return TURBO_EINVAL;
+  probe->calls += 1u;
+  if (index == probe->fail_index) return probe->fail_status;
+  message->id = index + 1u;
+  return TURBO_OK;
+}
+
+static void domain_batch_message_observed(void *ctx, const char *source_name,
+                                          const turbo_flow_msg_t *message,
+                                          uint64_t duration_ns, int status) {
+  (void)ctx;
+  (void)source_name;
+  (void)message;
+  (void)duration_ns;
+  (void)status;
+}
+
 static int domain_noop_adapter_start(void *ctx, turbo_flow_t *flow,
                                      const turbo_flow_stage_plan_t *stage) {
   (void)ctx;
@@ -229,6 +330,59 @@ operation_descriptor(const char *name, turbo_flow_domain_t domain, turbo_flow_do
   descriptor.flags = flags;
   descriptor.execution_mask = EXEC_INLINE_ONLY;
   return descriptor;
+}
+
+static int register_domain_batch_graph(turbo_flow_t *flow, domain_batch_probe_t *probe,
+                                       size_t registration_size) {
+  static const char *dsl =
+      "source input\n"
+      "stage sink adapter native.batch.instance operation native.batch.consume\n"
+      "stage main {\n"
+      "  input -> sink\n"
+      "}\n";
+  static const char *const operation_names[] = {"native.batch.consume"};
+  turbo_flow_operation_descriptor_t operation = operation_descriptor(
+      "native.batch.consume", TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN, TURBO_FLOW_DOMAIN_DATA,
+      "Message", TURBO_FLOW_DOMAIN_NONE, NULL,
+      TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
+  turbo_flow_module_descriptor_t module = {0};
+  turbo_flow_adapter_ops_t ops = {0};
+  turbo_flow_adapter_schema_t schema = {0};
+  turbo_flow_module_adapter_registration_t adapter =
+      TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+  int rc;
+
+  operation.scope.state = TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER;
+  operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+  operation.scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+  module.size = sizeof(module);
+  module.name = "native.batch";
+  module.version = 1u;
+  module.capability_flags =
+      TURBO_FLOW_MODULE_GRAPH_OPERATIONS | TURBO_FLOW_MODULE_NATIVE_API;
+  module.operation_names = operation_names;
+  module.operation_count = 1u;
+  ops.consume = domain_batch_consume;
+  schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+  schema.roles = TURBO_FLOW_ADAPTER_SINK;
+  schema.direction = TURBO_FLOW_ADAPTER_OUTPUT;
+  adapter.size = registration_size;
+  adapter.module_name = module.name;
+  adapter.adapter_name = "native.batch.instance";
+  adapter.ops = &ops;
+  adapter.ctx = probe;
+  adapter.schema = &schema;
+  adapter.operation_names = operation_names;
+  adapter.operation_count = 1u;
+  adapter.consume_batch = domain_batch_consume_native;
+
+  rc = turbo_flow_register_module_contract(flow, &module, &operation, 1u);
+  if (rc != TURBO_OK) return rc;
+  rc = turbo_flow_register_module_adapter(flow, &adapter);
+  if (rc != TURBO_OK) return rc;
+  rc = turbo_flow_parse_string(flow, dsl, strlen(dsl));
+  if (rc != TURBO_OK) return rc;
+  return turbo_flow_compile(flow);
 }
 
 static void require_resource(turbo_flow_operation_descriptor_t *operation,
@@ -589,6 +743,103 @@ suite("Turbo Flow Domain Contracts") {
           flow, "native.instance", "native.transform"));
       check_int_eq(shutdown_count, 1);
       turbo_flow_destroy(flow);
+    }
+  }
+
+  group("Native adapter batches") {
+    it("uses one native callback, preserves first-error counts, and rejects incomplete success") {
+      domain_batch_probe_t probe = {0};
+      domain_batch_prepare_probe_t prepare_probe = {0u, SIZE_MAX, TURBO_EIO};
+      turbo_flow_publish_batch_config_t config = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
+      turbo_flow_t *flow = turbo_flow_create();
+      size_t published = SIZE_MAX;
+
+      check_not_null(flow);
+      probe.fail_status = TURBO_EIO;
+      config.message_count = 4u;
+      config.prepare = domain_batch_prepare;
+      config.ctx = &prepare_probe;
+      check_int_eq(register_domain_batch_graph(flow, &probe, sizeof(
+                                                        turbo_flow_module_adapter_registration_t)),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_start(flow), TURBO_OK);
+
+      check_int_eq(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_OK);
+      check_size_eq(published, 4u);
+      check_size_eq(probe.batch_calls, 1u);
+      check_size_eq(probe.scalar_calls, 0u);
+      check_size_eq(probe.next_calls, 4u);
+      check_size_eq(probe.observed_count, 4u);
+      for (size_t index = 0u; index < 4u; ++index) {
+        check_uint_eq(probe.observed_ids[index], index + 1u);
+      }
+
+      probe.observed_count = 0u;
+      probe.fail_id = 3u;
+      check_int_eq(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_EIO);
+      check_size_eq(published, 2u);
+      check_size_eq(probe.batch_calls, 2u);
+      check_size_eq(probe.scalar_calls, 0u);
+      check_size_eq(probe.next_calls, 7u);
+      check_size_eq(probe.observed_count, 3u);
+
+      probe.observed_count = 0u;
+      probe.fail_id = 0u;
+      prepare_probe.fail_index = 2u;
+      check_int_eq(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_EIO);
+      check_size_eq(published, 2u);
+      check_size_eq(probe.batch_calls, 3u);
+      check_size_eq(probe.scalar_calls, 0u);
+      check_size_eq(probe.next_calls, 10u);
+      check_size_eq(probe.observed_count, 2u);
+
+      probe.mode = DOMAIN_BATCH_PROBE_INCOMPLETE_SUCCESS;
+      prepare_probe.fail_index = SIZE_MAX;
+      check_int_eq(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_EPROTO);
+      check_size_eq(published, 2u);
+      check_int_eq(turbo_flow_last_error(flow)->code, TURBO_EPROTO);
+
+      probe.mode = DOMAIN_BATCH_PROBE_OUT_OF_ORDER;
+      check_int_eq(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_EPROTO);
+      check_size_eq(published, 0u);
+      check_int_eq(turbo_flow_last_error(flow)->code, TURBO_EPROTO);
+
+      check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+      turbo_flow_destroy(flow);
+    }
+
+    it("falls back to scalar delivery for observers and older adapter registrations") {
+      for (size_t variant = 0u; variant < 2u; ++variant) {
+        domain_batch_probe_t probe = {0};
+        domain_batch_prepare_probe_t prepare_probe = {0u, SIZE_MAX, TURBO_EIO};
+        turbo_flow_publish_batch_config_t config = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
+        turbo_flow_observer_ops_t observer = {0};
+        turbo_flow_t *flow = turbo_flow_create();
+        size_t registration_size =
+            variant == 0u ? sizeof(turbo_flow_module_adapter_registration_t)
+                          : TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_V2_SIZE;
+        size_t published = SIZE_MAX;
+
+        check_not_null(flow);
+        probe.fail_status = TURBO_EIO;
+        config.message_count = 4u;
+        config.prepare = domain_batch_prepare;
+        config.ctx = &prepare_probe;
+        check_int_eq(register_domain_batch_graph(flow, &probe, registration_size), TURBO_OK);
+        if (variant == 0u) {
+          observer.size = sizeof(observer);
+          observer.message_complete = domain_batch_message_observed;
+          check_int_eq(turbo_flow_set_observer(flow, &observer, NULL), TURBO_OK);
+        }
+        check_int_eq(turbo_flow_start(flow), TURBO_OK);
+        check_int_eq(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_OK);
+        check_size_eq(published, 4u);
+        check_size_eq(probe.batch_calls, 0u);
+        check_size_eq(probe.scalar_calls, 4u);
+        check_size_eq(probe.observed_count, 4u);
+        check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+        turbo_flow_destroy(flow);
+      }
     }
   }
 

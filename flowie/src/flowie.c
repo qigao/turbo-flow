@@ -14,8 +14,8 @@ int flowie_publish_message_map(const flowie_mqtt_publish_view_t *publish,
   flowie_publish_message_view_t mapped = FLOWIE_PUBLISH_MESSAGE_VIEW_INIT;
   int rc;
   if (!publish || publish->size < sizeof(*publish) ||
-      publish->abi_version != FLOWIE_MQTT_PROTOCOL_ABI_V1 || !out || out->size < sizeof(*out) ||
-      out->abi_version != FLOWIE_ABI_V1 || owner_instance_id == 0u || session_id == 0u ||
+      publish->abi_version != FLOWIE_MQTT_PROTOCOL_ABI_V1 || !out || out->size != sizeof(*out) ||
+      owner_instance_id == 0u || session_id == 0u ||
       session_generation == 0u || (!publish->topic.data && publish->topic.size != 0u) ||
       (!publish->payload.data && publish->payload.size != 0u) ||
       !flowie_mqtt_version_is_supported(version) || publish->qos > 2u) {

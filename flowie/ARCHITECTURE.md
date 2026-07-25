@@ -47,8 +47,8 @@ Record service by the StorageBackend registry. Session, subscription, inflight, 
 that service before Flowie swaps its owner/cache state. The in-process vectors, maps, and topic
 trie are rebuildable indexes and scheduling caches only; they must never advance independently or
 serve as a fallback fact source. Flowie does not call backend callbacks after facade construction.
-With no explicit `session_store` channel, the composition root
-binds the volatile `local` Record backend. Redis/PostgreSQL are selected only by an explicit
+With no explicit `session_store` channel, the composition root binds the volatile Record service
+from the `tf_local_storage` shared library. Redis/PostgreSQL are selected only by an explicit
 storage channel and are never silently substituted.
 
 Endpoint registration installs the `protocol.mqtt.server` module catalog. The graph-visible
@@ -124,11 +124,11 @@ and 5, with the CONNECT protocol-name/level pair remaining the version fact sour
 MQTT 3.1 clients instead require `Sec-WebSocket-Protocol: mqttv3.1`; Flowie does not currently
 claim or test that token. This token difference does not affect MQTT 3.1 clients using TCP, TLS,
 or Pipe.
-The public callback client ABI v7 accepts an optional verified TLS identity for TLS and WSS plus
+The public callback client accepts an optional verified TLS identity for TLS and WSS plus
 MQTT 5 Enhanced AUTH challenge and re-authentication callbacks. CA, certificate, key, and password
 strings are copied at creation; certificate and key are an atomic pair, peer verification cannot
-be disabled, and the copied key password is wiped at destruction. ABI v5/v6 callers remain
-accepted only with their exact historical structure sizes.
+be disabled, and the copied key password is wiped at destruction. Only the current complete client
+configuration layout is accepted.
 The framing buffer owns incomplete bytes only; it is neither a durable Queue nor an ACK fact
 source. Once parsing identifies a complete PUBLISH packet, Flowie materializes the complete wire
 packet in a reference-counted `mem_buffer_t` carried by `turbo_flow_msg_t`, consumes the framing
@@ -215,7 +215,7 @@ Transport/protocol ACK and application settlement are separate facts:
 
 1. **Protocol ACK** is emitted only by the Flowie session owner. It advances MQTT QoS state and
    is governed by the configured received/accepted/processed/durable settlement point.
-2. **Storage/application ACK** is returned by a selected memory, Redis, PostgreSQL, or sink
+2. **Storage/application ACK** is returned by a selected local, Redis, PostgreSQL, or sink
    primitive after its own write contract succeeds. It never writes directly to the client.
 
 For a durable policy, successful graph processing without successful durable commit is not an
@@ -238,14 +238,14 @@ owns its stable identity, evaluation mode, quotas, and ordered `{when, action}` 
 binds it through `operation rules.apply resource <channel-name>`. Security remains explicit target
 composition until its host binding is complete. Session and retained persistence share the explicit
 record-store binding but remain different versioned record kinds.
-The current settlement-, retained-, slow-subscriber-, coroutine-capacity-, and receive-buffer-aware
-endpoint configuration is ABI v8;
-the protocol SDK and existing Flowie message views remain ABI v1.
+The settlement-, retained-, slow-subscriber-, coroutine-capacity-, and receive-buffer-aware endpoint
+configuration is the only public endpoint layout. Local endpoint/client ABI version numbers are not
+part of the API; MQTT 3.1/3.1.1/5 remain the protocol version facts.
 TurboFlow graph topology remains DSL; `flowie.yml` does not invent an unsupported `flows` root.
 
 ### MQTT 5 managed-session contract
 
-ABI v8 negotiates Receive Maximum and Maximum Packet Size in both directions, applies the client
+The managed endpoint negotiates Receive Maximum and Maximum Packet Size in both directions, applies the client
 Receive Maximum as the broker-owned QoS 1/2 send window, and derives idle receive timeout from
 1.5 times the CONNECT Keep Alive without exceeding an explicitly tighter endpoint timeout. An empty
 clean-start Client Identifier is replaced by a UUIDv7-based identifier returned in CONNACK; an empty
@@ -476,13 +476,13 @@ subscriber. The exact Windows/MSVC Release run on 2026-07-16 completed with
 `connected=100000`, `delivered=100000`, and `status=0`; this closes the functional deployment-capacity
 gate, not a portable connection-rate or latency SLA.
 
-Endpoint ABI v8 derives the private CoroNet object-pool capacity from `max_connections` plus fixed
-headroom and exposes both `coroutine_stack_size` and `recv_buffer_size` for that private context.
+The endpoint derives the private CoroNet object-pool capacity from `max_connections` plus fixed
+headroom and exposes `coroutine_stack_size` and `stream_recv_buffer_bytes` for that private context.
 Explicit values on borrowed, transferred-owned, or pool-lane contexts fail with `TURBO_ENOTSUP`
 because their host owns capacity. Flowie defaults each of CoroNet's two ping-pong receive chunks to
 4 KiB; MQTT framing reassembles packets across chunks up to `max_packet_size`. Before this change,
 two fixed 128 KiB receive chunks plus a 32 KiB coroutine stack accounted for about 288 KiB of fixed
-per-connection capacity. ABI v8 raises the private-context minimum stack to 64 KiB for managed
+per-connection capacity. The private-context minimum stack is 64 KiB for managed
 security and MQTT 5 AUTH state, so 4 KiB receive chunks now account for about 72 KiB
 (`2 * 4 KiB + 64 KiB`). Explicit 32 KiB configurations must migrate to at least 64 KiB. The 100k
 run peaked near 5.93 GiB private commit on the reference host; the
@@ -577,8 +577,9 @@ native resource creation, parses the separate TurboFlow DSL graph, then creates 
 RuleSet resources, the endpoint, and injected data source/sink adapters referenced by that Graph.
 The bundled composition root injects socket and, when built, HTTP, Redis, PostgreSQL outbox, and
 PostgreSQL record-store providers. Storage providers are assembled separately: `flowie_server`
-creates one `TurboFlow::StorageBackend` registry, registers the builtin `local` API plus enabled
-Redis/PostgreSQL APIs, and loads external modules through the same versioned `open()/close()` ABI.
+creates one `TurboFlow::StorageBackend` registry, registers the three sibling shared-library APIs
+(`tf_local_storage`, `tf_redis`, and `tf_pgsql`) when enabled, and loads external modules through the
+same versioned `open()/close()` ABI.
 Record owner creation, service lookup, and teardown stay in the registry owner lifecycle; Flowie
 does not call a backend's concrete record/state/index/log/hash functions. Resource providers run
 before adapter providers; repeated references to the same endpoint binding do not create
@@ -653,8 +654,8 @@ worker-stage completion. `accepted` requires the selected graph admission stage 
 one-shot settlement envelope explicitly and route the settlement command back to the Flowie owner.
 That callback only enters the endpoint's bounded reply command queue; the CoroNet owner lane still
 owns session mutation and socket send. An arbitrary successful stage is not an ACCEPTED boundary.
-Endpoint config ABI v3 introduced this typed policy; the current ABI v8 retains it and intentionally
-rejects obsolete layouts.
+The current endpoint config exposes this typed policy and intentionally rejects every non-current
+layout.
 
 `durable` is emitted only by an explicit storage primitive after its commit boundary, including a
 PostgreSQL outbox COMMIT or Redis Stream XADD acknowledgement. The sink may use the current live,

@@ -9,6 +9,8 @@
 #include "turbo_flow_protocol.h"
 #include "turbo_flow_security.h"
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -19,14 +21,6 @@ extern "C" {
 
 typedef struct turbo_flow_coronet_execution_binding_s turbo_flow_coronet_execution_binding_t;
 
-#define FLOWIE_ABI_V1 1u
-#define FLOWIE_ENDPOINT_ABI_V2 2u
-#define FLOWIE_ENDPOINT_ABI_V3 3u
-#define FLOWIE_ENDPOINT_ABI_V4 4u
-#define FLOWIE_ENDPOINT_ABI_V5 5u
-#define FLOWIE_ENDPOINT_ABI_V6 6u
-#define FLOWIE_ENDPOINT_ABI_V7 7u
-#define FLOWIE_ENDPOINT_ABI_V8 8u
 #define FLOWIE_DEFAULT_MAX_PACKET_SIZE (1024u * 1024u)
 #define FLOWIE_DEFAULT_MAX_CONNECTIONS 1024u
 #define FLOWIE_DEFAULT_SEND_HWM_BYTES (1024u * 1024u)
@@ -56,7 +50,6 @@ typedef enum flowie_slow_subscriber_policy_e {
 
 typedef struct flowie_endpoint_config_s {
   size_t size;
-  uint32_t abi_version;
   flowie_transport_t transport;
   /** Managed-session QoS ACK gates. All four typed settlement points are implemented. */
   turbo_flow_protocol_settlement_policy_t settlement;
@@ -82,23 +75,27 @@ typedef struct flowie_endpoint_config_s {
   size_t max_sessions;
   size_t max_subscriptions_per_session;
   size_t max_inflight_per_session;
-  /** Legacy convenience ownership. Prefer the explicit execution-binding registration API. */
-  coro_context_t *context;
-  int take_context_ownership;
   /** Independent endpoint-owned retained-message capacity. Zero selects max_sessions. */
   size_t max_retained_messages;
   /** Zero selects DISCONNECT; no other slow-subscriber policy is currently supported. */
   flowie_slow_subscriber_policy_t slow_subscriber_policy;
   /** Private-context coroutine stack size. Zero selects the CoroNet default. */
   size_t coroutine_stack_size;
-  /** Capacity of each private-context CoroNet ping-pong receive buffer. Zero selects 4 KiB. */
-  size_t recv_buffer_size;
   /** Maximum inbound MQTT 5 Topic Alias accepted per connection. Zero disables aliases. */
   uint16_t topic_alias_maximum;
+  /**
+   * Capacity of each private-context CoroNet user-space receive buffer.
+   * 0 selects the 4 KiB component default.
+   */
+  size_t stream_recv_buffer_bytes;
+  /** Requested OS SO_RCVBUF bytes for TCP/TLS/WS/WSS; 0 preserves the OS default. */
+  size_t socket_recv_buffer_bytes;
+  /** Requested OS SO_SNDBUF bytes for TCP/TLS/WS/WSS; 0 preserves the OS default. */
+  size_t socket_send_buffer_bytes;
 } flowie_endpoint_config_t;
 
 #define FLOWIE_ENDPOINT_CONFIG_INIT                                                                \
-  {sizeof(flowie_endpoint_config_t), FLOWIE_ENDPOINT_ABI_V8, FLOWIE_TRANSPORT_TCP,                 \
+  {sizeof(flowie_endpoint_config_t), FLOWIE_TRANSPORT_TCP,                                         \
    TURBO_FLOW_PROTOCOL_SETTLEMENT_POLICY_INIT}
 
 /**
@@ -192,7 +189,7 @@ flowie_register_bound_endpoint_ex(turbo_flow_t *flow, const char *name,
                                   const turbo_flow_coronet_execution_binding_t *execution,
                                   const flowie_endpoint_bindings_t *bindings);
 
-/** Secure counterpart of flowie_register_endpoint(), including legacy context ownership. */
+/** Secure counterpart of flowie_register_endpoint() using a private execution context. */
 CXX_C_API int flowie_register_secure_endpoint(turbo_flow_t *flow, const char *name,
                                               const flowie_endpoint_config_t *config,
                                               const flowie_endpoint_security_binding_t *security);
@@ -242,7 +239,6 @@ CXX_C_API int flowie_register_resolved_bound_endpoint(turbo_flow_t *flow, const 
  */
 typedef struct flowie_publish_message_view_s {
   size_t size;
-  uint32_t abi_version;
   turbo_flow_protocol_message_t metadata;
   turbo_flow_protocol_route_t route;
   flowie_mqtt_span_t topic;
@@ -251,7 +247,7 @@ typedef struct flowie_publish_message_view_s {
 } flowie_publish_message_view_t;
 
 #define FLOWIE_PUBLISH_MESSAGE_VIEW_INIT                                                           \
-  {sizeof(flowie_publish_message_view_t), FLOWIE_ABI_V1, TURBO_FLOW_PROTOCOL_MESSAGE_INIT,         \
+  {sizeof(flowie_publish_message_view_t), TURBO_FLOW_PROTOCOL_MESSAGE_INIT,                         \
    TURBO_FLOW_PROTOCOL_ROUTE_INIT}
 
 /**

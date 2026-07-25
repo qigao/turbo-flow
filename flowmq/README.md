@@ -132,9 +132,10 @@ graph stage 失败与 transport send、storage accept、delivery completion 是�
 
 ## Graph and YAML
 
-Host 使用 `turbo_flow_fmq_register_adapter()` 或
+Host 使用 `turbo_flow_fmq_register_adapter_ex()` 或
 `turbo_flow_fmq_register_resolved_adapter()` 注册 endpoint。C config 必须从
-`TURBO_FLOW_FMQ_CONFIG_INIT` 开始；错误 size/version、未知字段和不适用于 transport 的 option 均
+`TURBO_FLOW_FMQ_CONFIG_INIT` 开始并提供显式 execution binding；错误 size、未知字段和不适用于
+transport 的 option 均
 fail fast。
 
 只需要一个 endpoint 而不需要自行组高级 graph 时，可使用薄的 Application facade。它创建同一
@@ -178,6 +179,11 @@ turbo_flow_fmq_app_destroy(app);
 顺序。单批最多 `TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS` 项，payload 总量最多
 `TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES`；超过上限分别返回 `TURBO_ERANGE` 与
 `TURBO_EMSGSIZE`。
+当 facade graph 仅为 direct terminal FMQ adapter 时，TurboFlow 可使用原生 batch bridge 降低
+逐消息 graph dispatch 成本；带 observer、retry、reorder、deadline、settlement、emitter 或下游
+stage 的 graph 自动保留标量路径。该选择不改变提交计数、首错、消息所有权或 FMQ/3 wire，完整
+ABI 与 iterator 契约见
+[Message and Graph Boundaries](../turbo_flow/ADR_MESSAGE_GRAPH_BOUNDARY.md#direct-terminal-native-batch)。
 高频 producer 可在首次 start 前调用 `turbo_flow_fmq_app_configure_async_send()`，再用
 `turbo_flow_fmq_app_send_async()` 把 copied payload 交给 facade-owned 有界队列。队列同时受 item/byte
 配额约束，满时立即返回 `TURBO_ENOSPC`；accepted 消息由单 worker 保序组成 micro-batch，非空
@@ -235,129 +241,20 @@ adapters:
 transport 正交，但 option 由具体 transport 校验，例如 KCP FEC、TCP keepalive、UDP multicast
 不会被其他 transport 静默接受。
 
-## Message and ACK ownership
+## Protocol ownership
 
-完整 ingress message 的 payload、topic、identity、correlation 和 FMQ metadata 共用一个 retained
-`mem_buffer_t`，因此可进入 TurboFlow Disruptor 和异步 executor。raw socket bytes 与 framing view
-始终留在 CoroNet owner lane。REP 是唯一刻意保留 borrowed peer context 的基础模式。
+协议字段和状态机不在 README 重复维护。请从
+[协议索引](PROTOCOL_SPEC.md) 进入对应唯一正文：
 
-ACK 必须按边界解释：
+- [FMQ/3 与 FMS/3 wire](FMQ_WIRE_PROTOCOL.md)
+- [Control V1](CONTROL_PROTOCOL.md)
+- [TFMP/1 与 TFMS snapshot](MANAGEMENT_PROTOCOL.md)
+- [TFCW/1、TFBR/1 与 TFCS/1.0](BULK_CREDIT_PROTOCOL.md)
+- [安全决策](ADR_FMQ_V3_SECURITY.md)
+- [部署控制](DEPLOYMENT_CONTROL.md)
 
-| Signal | Meaning |
-| --- | --- |
-| graph publish success | 当前 graph attempt 成功 |
-| FMQ frame admission | 本地有界发送队列接管 encoded frame |
-| transport send success | CoroNet 完成一次写入 |
-| storage accept ACK | 显式 durable store transaction 已提交 |
-| delivery/completion ACK | consumer/worker 完成且 storage settlement 成功 |
-
-这些 ACK 不能互相模拟。FMQ HWM 只限制本地内存，不代表远端接收、处理或持久化。durable replay
-必须显式组合 storage/queue resource，FMQ 不维护隐藏临时队列。
-
-## Wire v3 summary
-
-每个 connection 先双向交换 HELLO，只有 pattern pairing 兼容后才接受 DATA。header 固定 32 bytes，
-整数为 network byte order：
-
-```text
-offset  size  field
-0       4     magic "TFMQ"
-4       1     version (3)
-5       1     kind (HELLO, DATA, PING, PONG, SUBSCRIBE, UNSUBSCRIBE)
-6       1     sender pattern
-7       1     packet flags (FIRST=0x01, LAST=0x02)
-8       2     identity length
-10      2     topic length
-12      4     packet payload length
-16      8     message ID
-24      4     complete payload length
-28      4     packet payload offset
-32      ...   identity, topic, packet payload
-```
-
-DATA payload 每 packet 最大 64 KiB；较大 payload 按连续 offset 分片。identity/topic 只出现在 FIRST
-packet。`max_frame_size` 限制完整 identity + topic + payload，identity 最大 255 bytes，topic 最大
-1024 bytes。未知版本、乱序/重叠分片、trailing bytes 和不一致 header 均返回协议错误。
-
-HELLO payload 在 trusted v3 模式中为空。secure v3 模式中，client HELLO 携带严格长度界定的
-authentication envelope（identity、method、credential、可选 transport channel binding）；
-server 只有在认证、identity/principal 一致性和 CONNECT ACL 全部成功后才返回 ACCEPTED envelope。
-credential 只在 provider lease 和 HELLO write/parse 边界内借用，相关 owned buffer 在消费/释放前清零。
-
-安全端点通过 `turbo_flow_fmq_security_binding_t` 注入。BIND 借用 auth provider 与 immutable realm；
-CONNECT 借用 key provider 并按 secret reference 临时获取 credential。TCP/TLS/UDP/KCP/Pipe/WS/WSS
-都支持认证与 ACL。TLS/WSS 必须协商 1.3、client 必须完成对端验证，并强制 RFC 9266 exporter
-channel binding；
-TCP/UDP/KCP/Pipe/WS 不提供 credential confidentiality，只应部署在可信网络或额外安全隧道内。
-secure identity、auth method 和 ACL topic/resource 是不允许内嵌 NUL 的有界文本，credential 保持
-binary-safe；这避免 C-string ACL matcher 与 wire 长度视图产生截断差异。
-
-`turbo_flow_fmq_security_owner_create_resolved()` 可以从 resolved config 组合这些显式能力。BIND
-endpoint 从 `security_realm` 找到 realm，再按 realm 的 `policy_source` 精确创建 SQLite 或 HTTPS ACL
-provider，并创建 `auth_provider`；CONNECT endpoint 只保留 key provider 与 secret reference。正常
-授权只读取 realm 的本地不可变快照，policy version 变化或过期时才访问 provider。没有 fallback。
-
-```yaml
-channels:
-  acl.fmq:
-    kind: acl_provider
-    config:
-      backend: sqlite
-      database_path: C:/flowmq-state/acl.sqlite3
-      namespace_name: flowmq.fmq3
-  auth.fmq:
-    kind: auth_provider
-    config:
-      backend: https
-      url: https://auth.internal.example/v2/authenticate
-      method: token
-      service_token_ref: env://FLOWMQ_CONTROL_TOKEN
-  security.fmq:
-    kind: security_realm
-    config:
-      resource_uid: security:flowmq.fmq3
-      owner_name: security.fmq
-      policy_source: acl.fmq
-adapters:
-  fmq.secure:
-    kind: fmq
-    config:
-      pattern: router
-      mode: bind
-      transport: tls
-      host: 0.0.0.0
-      port: 7701
-      security_realm: security.fmq
-      auth_provider: auth.fmq
-      auth_method: token
-```
-
-`flowmq.fmq3` 应与 Flowie/MQTT policy namespace 分离。带上述安全字段的 adapter 若通过非 secure
-registration API 创建，会返回 `TURBO_EPERM`，不会静默建立 trusted endpoint。owner 必须晚于 adapter
-停止/销毁后再释放。ACL rule body 和 credential 均不得写入 YAML。
-
-### TLS/WSS 证书配置
-
-TLS 与 WSS 共用 CoroNet 的证书入口。启动 BIND endpoint 前设置 PEM 证书链和匹配的 PEM 私钥：
-
-```powershell
-$env:TURBONET_TLS_CERT_FILE = "C:\\certs\\flowmq-server-chain.pem"
-$env:TURBONET_TLS_KEY_FILE = "C:\\certs\\flowmq-server-key.pem"
-```
-
-```sh
-export TURBONET_TLS_CERT_FILE=/etc/flowmq/server-chain.pem
-export TURBONET_TLS_KEY_FILE=/etc/flowmq/server-key.pem
-```
-
-CONNECT endpoint 默认校验服务端证书。私有 CA 可通过 `TURBONET_TLS_CA_FILE` 指向 PEM CA bundle，
-或通过 `TURBONET_TLS_CA_PATH` 指向 OpenSSL CA 目录；未设置时使用平台/OpenSSL 默认信任库。连接配置中的
-host 必须匹配证书 SAN，例如证书只签发给 `localhost` 时不能用 `127.0.0.1` 连接。WSS 还需在 endpoint
-config 的 `path` 中设置 WebSocket path；证书配置与 TLS 完全相同。
-
-启用 `turbo_flow_fmq_security_binding_t` 后，TLS/WSS 必须协商 TLS 1.3，并在 secure HELLO 中绑定
-RFC 9266 exporter；证书校验或 exporter 失败会直接拒绝连接，不会退回未绑定模式。私钥不得提交到仓库、
-写入 YAML 或输出到日志。
+README 只保留产品使用层的 pattern、graph 和 facade 说明；ACK、ownership、TLS/WSS
+证书和安全 envelope 的规范以专题文档为准。
 
 ## Product boundary
 
@@ -373,9 +270,5 @@ RFC 9266 exporter；证书校验或 exporter 失败会直接拒绝连接，不�
 | Authentication/authorization/Group Forest | supported for optional secure v3 endpoints on TCP/TLS/UDP/KCP/Pipe/WS/WSS；HTTPS v2 authentication、SQLite/HTTPS v3 line-based dynamic ACL bundle、local immutable indexed snapshot、immutable Root Group isolation、hierarchical effective groups、default-deny exact/prefix ACL；TLS/WSS additionally enforce TLS 1.3 exporter binding |
 | ZeroMQ/ZMTP compatibility | not supported |
 
-高级应用协议分别由以下文档约束：
-
-- [MANAGEMENT_PROTOCOL.md](MANAGEMENT_PROTOCOL.md)：TFMP management envelope、operation 和 event；
-- [DEPLOYMENT_CONTROL.md](DEPLOYMENT_CONTROL.md)：failure-domain fencing、rolling upgrade 与 reconcile；
-- [BULK_CREDIT_PROTOCOL.md](BULK_CREDIT_PROTOCOL.md)：TFCW credit worker、双维 credit 和 durable claim；
-- [RELEASE_GATE.md](RELEASE_GATE.md)：真实 Redis、chaos、persistence 和性能趋势门槛。
+所有高级协议和部署契约统一从 [PROTOCOL_SPEC.md](PROTOCOL_SPEC.md) 导航；发布验证仍见
+[RELEASE_GATE.md](RELEASE_GATE.md)。

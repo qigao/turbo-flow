@@ -1,4 +1,5 @@
 #include "flowie.h"
+#include "flowie_task_group_internal.h"
 #include "flowie_test_socket.h"
 
 #include "tinytest.h"
@@ -7,6 +8,7 @@
 #include "turbo_thread.h"
 #include "turbo_uuid.h"
 
+#include <limits.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -47,6 +49,19 @@ typedef struct flowie_enhanced_security_fixture_s {
   uint64_t first_expires_at;
   uint64_t next_expires_at;
 } flowie_enhanced_security_fixture_t;
+
+typedef struct flowie_task_group_wait_fixture_s {
+  flowie_task_group_t *group;
+  atomic_int entered;
+  atomic_int exited;
+} flowie_task_group_wait_fixture_t;
+
+static void flowie_task_group_wait_thread(void *arg) {
+  flowie_task_group_wait_fixture_t *fixture = (flowie_task_group_wait_fixture_t *)arg;
+  atomic_store_explicit(&fixture->entered, 1, memory_order_release);
+  flowie_task_group_wait(fixture->group);
+  atomic_store_explicit(&fixture->exited, 1, memory_order_release);
+}
 
 static void flowie_test_security_principal(turbo_flow_security_principal_t *principal,
                                            const char *method) {
@@ -739,27 +754,55 @@ done:
 }
 
 spec("Flowie MQTT endpoint primitive") {
+  it("closes task admission before draining already admitted work") {
+    flowie_task_group_t group;
+    flowie_task_group_wait_fixture_t fixture;
+    turbo_thread_t waiter;
+    int create_rc;
+    int rejected_rc;
+    int waiter_blocked;
+    int join_rc = TURBO_OK;
+
+    flowie_task_group_init(&group);
+    fixture.group = &group;
+    atomic_init(&fixture.entered, 0);
+    atomic_init(&fixture.exited, 0);
+    create_rc = flowie_task_group_open(&group);
+    if (create_rc == TURBO_OK) create_rc = flowie_task_group_try_begin(&group);
+    if (create_rc == TURBO_OK)
+      create_rc = turbo_thread_create(&waiter, flowie_task_group_wait_thread, &fixture);
+    if (create_rc == TURBO_OK) {
+      while (!atomic_load_explicit(&fixture.entered, memory_order_acquire)) turbo_thread_yield();
+      flowie_task_group_close(&group);
+      rejected_rc = flowie_task_group_try_begin(&group);
+      turbo_sleep_ms(10u);
+      waiter_blocked = !atomic_load_explicit(&fixture.exited, memory_order_acquire);
+      flowie_task_group_end(&group);
+      join_rc = turbo_thread_join(&waiter);
+      turbo_thread_destroy(&waiter);
+    } else {
+      rejected_rc = TURBO_EALREADY;
+      waiter_blocked = 0;
+      if (group.count != 0u) flowie_task_group_end(&group);
+    }
+    flowie_task_group_destroy(&group);
+
+    check_int_eq(create_rc, TURBO_OK);
+    check_int_eq(rejected_rc, TURBO_ESHUTDOWN);
+    check_true(waiter_blocked);
+    check_int_eq(join_rc, TURBO_OK);
+    check_int_eq(atomic_load_explicit(&fixture.exited, memory_order_acquire), 1);
+  }
+
   it("rejects invalid endpoint configuration before registration") {
     flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
     turbo_flow_t *flow = turbo_flow_create();
     check_not_null(flow);
-    config.abi_version = FLOWIE_ABI_V1;
+    config.size -= 1u;
     check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
-    config.abi_version = FLOWIE_ENDPOINT_ABI_V2;
+    config.size = sizeof(config) + 1u;
     check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
-    config.abi_version = FLOWIE_ENDPOINT_ABI_V3;
-    check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
-    config.abi_version = FLOWIE_ENDPOINT_ABI_V4;
-    check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
-    config.abi_version = FLOWIE_ENDPOINT_ABI_V5;
-    config.host = "127.0.0.1";
-    config.port = 1883;
-    check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
-    config.abi_version = FLOWIE_ENDPOINT_ABI_V6;
-    check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
-    config.abi_version = FLOWIE_ENDPOINT_ABI_V7;
-    check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
-    config.abi_version = FLOWIE_ENDPOINT_ABI_V8;
+    config.size = sizeof(config);
     config.host = NULL;
     check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
     config.host = "127.0.0.1";
@@ -780,20 +823,16 @@ spec("Flowie MQTT endpoint primitive") {
     config.coroutine_stack_size = FLOWIE_MIN_COROUTINE_STACK_SIZE - 1u;
     check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_ERANGE);
     config.coroutine_stack_size = 0u;
-    config.recv_buffer_size = FLOWIE_MIN_RECV_BUFFER_SIZE - 1u;
+    config.stream_recv_buffer_bytes = FLOWIE_MIN_RECV_BUFFER_SIZE - 1u;
     check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_ERANGE);
-    config.recv_buffer_size = FLOWIE_MIN_RECV_BUFFER_SIZE;
-    config.context = coro_context_create(NULL);
-    check_not_null(config.context);
-    check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_ENOTSUP);
-    coro_context_destroy(config.context);
-    config.context = NULL;
-    config.recv_buffer_size = 0u;
-    config.coroutine_stack_size = FLOWIE_MIN_COROUTINE_STACK_SIZE;
-    config.context = coro_context_create(NULL);
-    check_not_null(config.context);
-    check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_ENOTSUP);
-    coro_context_destroy(config.context);
+    config.stream_recv_buffer_bytes = 0u;
+    config.socket_recv_buffer_bytes = (size_t)INT_MAX + 1u;
+    check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_ERANGE);
+    config.socket_recv_buffer_bytes = 1024u * 1024u;
+    config.transport = FLOWIE_TRANSPORT_PIPE;
+    check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
+    config.transport = FLOWIE_TRANSPORT_TCP;
+    config.socket_recv_buffer_bytes = 0u;
     turbo_flow_destroy(flow);
   }
 
@@ -809,6 +848,9 @@ spec("Flowie MQTT endpoint primitive") {
     turbo_flow_t *flow = turbo_flow_create();
     config.host = "127.0.0.1";
     config.port = 1883;
+    config.stream_recv_buffer_bytes = 128u * 1024u;
+    config.socket_recv_buffer_bytes = 1024u * 1024u;
+    config.socket_send_buffer_bytes = 512u * 1024u;
     check_not_null(flow);
     check_int_eq(flowie_register_endpoint(flow, "flowie.endpoint", &config), TURBO_OK);
     check_size_eq(turbo_flow_resource_metadata_count(flow), 3u);
@@ -994,7 +1036,7 @@ spec("Flowie MQTT endpoint primitive") {
                                 "      max_packet_size: 1048576\n"
                                 "      max_connections: 100000\n"
                                 "      coroutine_stack_size: 65536\n"
-                                "      recv_buffer_size: 4096\n"
+                                "      stream_recv_buffer_bytes: 4096\n"
                                 "      send_hwm_bytes: 1048576\n"
                                 "      slow_subscriber_policy: disconnect\n"
                                 "      manage_sessions: true\n"
@@ -1064,7 +1106,7 @@ spec("Flowie MQTT endpoint primitive") {
                                                  "      transport: tcp\n"
                                                  "      host: 127.0.0.1\n"
                                                  "      port: 1883\n"
-                                                 "      recv_buffer_size: 512\n";
+                                                 "      stream_recv_buffer_bytes: 512\n";
     static const char undeclared_origin_policy[] =
         "version: 1\nadapters:\n  mqtt.endpoint:\n    kind: flowie_endpoint\n    config:\n"
         "      transport: wss\n      host: 127.0.0.1\n      port: 8884\n"
@@ -1097,7 +1139,8 @@ spec("Flowie MQTT endpoint primitive") {
           {unsupported_slow_policy, sizeof(unsupported_slow_policy) - 1u, "slow_subscriber_policy"},
           {undersized_coroutine_stack, sizeof(undersized_coroutine_stack) - 1u,
            "coroutine_stack_size"},
-          {undersized_recv_buffer, sizeof(undersized_recv_buffer) - 1u, "recv_buffer_size"},
+          {undersized_recv_buffer, sizeof(undersized_recv_buffer) - 1u,
+           "stream_recv_buffer_bytes"},
           {undeclared_origin_policy, sizeof(undeclared_origin_policy) - 1u,
            "allowed_origins"}};
       for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {

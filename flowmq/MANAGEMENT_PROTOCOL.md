@@ -1,5 +1,9 @@
 # TurboFlow Management Protocol v1
 
+本文件是 [协议索引](PROTOCOL_SPEC.md) 指定的 TFMP/1 与 TFMS/1.0、TFMS/1.1 唯一正文。
+FMQ/3 framing 见 [FMQ_WIRE_PROTOCOL.md](FMQ_WIRE_PROTOCOL.md)，Control V1 见
+[CONTROL_PROTOCOL.md](CONTROL_PROTOCOL.md)。
+
 状态：wire envelope、canonical LTV body codec、v1 typed field schema，以及单 target 的
 capability/health/target/resource 查询 owner 已实现；该 owner 还实现了 `FLOW_PAUSE`、
 `FLOW_RESUME`、`FLOW_DRAIN` 与四种 resource command。同步路径为

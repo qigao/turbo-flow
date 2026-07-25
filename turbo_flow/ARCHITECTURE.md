@@ -362,7 +362,7 @@ provider bytes/frame/view
 The graph does not become the owner of a protocol session, socket, MQTT ACK, Redis consumer group,
 or database transaction. Those owners expose typed operations and explicit commit results. A graph
 stage may filter, transform, route, delay, or persist the message only within its registered
-operation contract. FlowStore owns typed State, Index, Log, and TimeSeries facts outside the
+operation contract. FlowStore owns typed Record, State, Index, Log, and TimeSeries facts outside the
 graph; asynchronous delivery remains a provider/executor responsibility rather than a hidden
 second source of truth.
 
@@ -398,7 +398,7 @@ Implemented modules:
 
 | Module | Current behavior |
 | --- | --- |
-| `TurboFlow::FlowStore` | Bounded in-memory State, Index, Log, and TimeSeries stores |
+| `TurboFlow::FlowStore` | Provider-neutral Record/State/Index/Log/TimeSeries facades; local/Redis/PG backends are assembled through StorageBackend |
 | `TurboFlow::Codec` | Line/length framing and DataBind for TBE, JSON, CSV, XML |
 | `TurboFlow::Socket` | TCP, UDP, TLS, WS, WSS source/sink |
 | `TurboFlow::HttpClient` | HTTP transform and periodic GET source |
@@ -484,8 +484,9 @@ documented in `observe/README.md`.
 
 `TurboFlow::FlowStore` keeps typed fact state outside core and outside Flowie. State and Index use
 bounded HashMap-backed ownership; Log and TimeSeries use bounded ordered storage. The routing
-policy selects memory or Redis from explicit capacity, frequency, retention, and durability
-requirements and fails when the selected backend is unavailable.
+policy selects local, Redis, or PostgreSQL from explicit capacity, frequency, retention, and durability
+requirements and fails when the selected backend or model capability is unavailable. `tf_local_storage`
+is volatile process-local data even though it is delivered as a shared library.
 
 TurboNet exports `TurboNet::MimeParser`, backed by `turbonet/email/mime_parser`.
 `TurboFlow::Email` reuses it through registered MIME parser, owned-extract, and

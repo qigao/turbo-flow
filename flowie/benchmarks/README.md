@@ -67,8 +67,8 @@ Connection, session, subscription, and reply state are bounded O(N); one-packet 
 Committed SUBSCRIBE/UNSUBSCRIBE mutations update stable selector entries on the owner lane; a full
 rebuild is reserved for startup, clean-start replacement, or explicit invalid-state repair. The
 published live-TCP setup timing predates that incremental path and remains functional-capacity
-evidence rather than a current mutation-throughput measurement. Endpoint ABI v8 derives private CoroNet pool capacity from
-`max_connections` and exposes private-context `coroutine_stack_size` plus `recv_buffer_size`. The
+evidence rather than a current mutation-throughput measurement. The endpoint derives private CoroNet pool capacity from
+`max_connections` and exposes private-context `coroutine_stack_size` plus `stream_recv_buffer_bytes`. The
 workload uses a 64 KiB coroutine stack and 4 KiB for each of CoroNet's two receive chunks. MQTT
 framing reassembles across chunks, so receive capacity is independent of `max_packet_size`.
 

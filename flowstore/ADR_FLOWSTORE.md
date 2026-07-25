@@ -15,8 +15,9 @@ CRoaring 实现。
 
 Record 的公共契约位于基础 `turbo_flow/include/turbo_flow_record_store.h`，因为它是
 Flow/TurboFlow 的稳定数据边界；它不反向依赖 FlowStore。FlowStore 提供 State/Index/Log/
-Series facade 及内存实现，具体 backend 则由 `io/common/storage` 的
-`StorageBackend` registry 按 model 单独装配。
+Series facade，具体 backend 实现则由 `io/common/storage` 的 `StorageBackend` registry 按
+model 单独装配；local 的实现位于同级 `tf_local_storage` shared library，而不是 Flowie 内部
+direct-factory。
 
 面向 Flowie 的 MQTT 事实访问统一经过 `turbo_flow_mqtt_store_t`（
 `include/turbo_flow_mqtt_store.h`）。它只借用 registry 提供的 Record service，封装 scan、
@@ -44,20 +45,21 @@ FlowStore 及其 Record contract 分为五种不能互换的数据模型：
 | State | 带 revision 的最新键值状态 | TurboUtils Hash Map | Hash | - |
 | Index | 无序成员集合和映射查询 | TurboUtils Hash Map/Set | Set 或 Sorted Set | - |
 | Log | 带单调 cursor 的有序事件历史 | 有界分段日志 | Stream | - |
-| TimeSeries | 按时间排序的标量采样 | 有界有序 chunk | Redis TimeSeries | - |
+| TimeSeries | 按时间排序的标量采样 | 有界有序 chunk | -（未声明 Series capability） | - |
 
 CRoaring 不保存事实数据。它封装在有硬容量上限的 `turbo_flow_bitmap_index_t` 中，只允许作为
 可从 IndexStore 重建的派生加速索引，并且必须由代表性 benchmark 证明其相对 HashTable 的收益。
 
 `turbo_flow_store_route` 先按数据语义选择上述模型，再比较部署配置给出的本地
-`records/bytes/item/write-rate/retention` 上限。local 是进程内、非 durable 的事实源；要求
-durable 或跨进程共享时选择 Redis/PostgreSQL，并由 storage backend capability 明确拒绝不支持
-的模型，不自动静默退回 local。
+`records/bytes/item/write-rate/retention` 上限。local 是由 `tf_local_storage` DLL 提供的
+进程内、非 durable 事实源；要求 durable 或跨进程共享时选择 Redis/PostgreSQL，并由 storage
+backend capability 明确拒绝不支持的模型，不自动静默退回 local。
 
-内置 local adapter 位于 `io/local`，只通过 StorageBackend 的 `open()/close()` function table
-暴露 provider-neutral service。Flowie 启动时先创建 registry、注册 local（以及可用的 Redis/
-PostgreSQL）API，再由 owner 创建并持有 service；Flowie 不直接调用 local 容器或远程数据库的
-`create_*`/`destroy_*` 函数。
+`io/local`、`io/redis` 和 `io/pgsql` 是同级 backend 模块，只通过 StorageBackend 的
+`open()/close()` function table 暴露 provider-neutral service。Flowie 启动时先创建 registry、
+注册三个可用 API，再由 owner 创建并持有 service；Flowie 不直接调用 local 容器或远程数据库的
+`create_*`/`destroy_*` 函数。当前 `tf_redis` 不声明 Series capability，TimeSeries 路由必须
+在 `open()` 前被拒绝，而不是退回 Stream、Sorted Set 或 local。
 
 ## 公共协议
 
@@ -153,14 +155,14 @@ HashMap、Log 或 TimeSeries 承载。该数字只用于数据结构分工，不
 
 ## Redis 一致性
 
-一个领域状态只能选择 memory 或 Redis 为事实源，不做双主写入。需要同时修改 Hash 与
+一个领域状态只能选择 local、Redis 或 PostgreSQL 为事实源，不做双主写入。需要同时修改 Hash 与
 Set/ZSet 的 Redis 操作使用相同 hash tag，并由 Lua/事务原子提交。Redis 提交成功后才刷新本地
 派生缓存；失败时本地派生索引失效并从 Redis 重建。
 
 StateStore 的首个 Redis provider 复用既有二进制安全 Hash/Lua revision backend。点查使用
 `HGET`，写入先以一次有界 `HGETALL` 快照核算 `max_records/max_bytes`，再执行 Lua CAS。
 因此该 namespace 只允许一个 FlowStore mutable writer；revision 冲突仍由 Redis 原子拒绝，但
-总字节准入不声称支持多个独立 writer。连接、协议、容量或 CAS 失败均原样返回，不降级到内存。
+总字节准入不声称支持多个独立 writer。连接、协议、容量或 CAS 失败均原样返回，不降级到 local。
 
 IndexStore 使用 Redis 原生 Set。namespace/index 二进制名编码为共享同一 hash tag 的 key；
 membership、count、visit、intersection 分别落到 `SISMEMBER/SCARD/SMEMBERS/SINTER`。
@@ -174,10 +176,10 @@ LogStore 使用 Redis Stream 保存唯一 payload 副本，以 ZSet 保存可解
 cursor，TRIM_OLDEST/retention 只删除已规划的前缀；已裁剪 cursor 返回 `TURBO_ERANGE`。
 同一 namespace 的多个 writer 必须使用相同 limits，不一致的 mutation 返回 `TURBO_EBUSY`。
 单次 Lua 扫描和 read copy-out 均由 `max_operation_records` 限制，且该值不得小于
-`limits.max_records`。Redis 错误不回退内存。
+`limits.max_records`。Redis 错误不回退 local。
 
-Redis TimeSeries 是显式 capability。启动时缺少所需命令返回 `TURBO_ENOTSUP`，不隐式改用
-Stream 或 Sorted Set。
+若未来 provider 声明 Redis TimeSeries capability，启动时缺少所需命令必须返回
+`TURBO_ENOTSUP`，不隐式改用 Stream、Sorted Set 或 local。
 
 ## 删除与迁移
 

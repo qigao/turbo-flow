@@ -1,5 +1,9 @@
 # FlowMQ Credit Worker Protocol v1
 
+本文件是 [协议索引](PROTOCOL_SPEC.md) 指定的 TFCW/1、TFBR/1 与 TFCS/1.0 唯一正文。
+它只定义 credit-worker 应用与 durable claim 格式，不重复 FMQ/3 framing；wire 细节见
+[FMQ_WIRE_PROTOCOL.md](FMQ_WIRE_PROTOCOL.md)。
+
 状态：TFCW/1、易失性 credit owner、严格 YAML 与 Redis Stream bounded
 multi-claim、运行时 coordinator、TFCS/1.0 durable retry/outbox、同源原子 settlement 和有界 shutdown
 均已实现。`credit_worker + at_least_once` 必须通过显式 storage binding 创建；backend 不可用时

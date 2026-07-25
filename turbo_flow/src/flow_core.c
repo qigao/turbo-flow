@@ -387,6 +387,7 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   turbo_vec_destroy(&flow->worker_pool_adapters);
   turbo_vec_destroy(&flow->reorder_states);
   turbo_vec_destroy(&flow->registrations);
+  turbo_vec_destroy(&flow->operation_providers);
   turbo_vec_destroy(&flow->primitives);
   turbo_vec_destroy(&flow->operations);
   turbo_vec_destroy(&flow->modules);
@@ -1158,6 +1159,7 @@ int turbo_flow_register_module_adapter(
     return rc;
   }
   adapter = (flow_adapter_registration_t *)turbo_vec_at(&flow->adapters, adapters_before);
+  adapter->consume_batch = registration->consume_batch;
   turbo_vec_destroy(&adapter->operation_bindings);
   adapter->operation_bindings = bindings;
   return TURBO_OK;

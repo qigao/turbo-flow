@@ -44,10 +44,12 @@ channels:
           action: route
           key: mqtt_delivery_sink
 
+# By default Flowie uses the volatile local Record backend from the tf_local_storage shared library.
 # Durable managed sessions and retained publications use one record-store channel with distinct
 # versioned keys. `max_records` must cover max_sessions + max_retained_messages, and
 # max_key_size must cover the 3-byte retained prefix plus a maximum MQTT Topic Name.
-# `flowie_server` creates the selected Redis or PostgreSQL provider from this YAML and injects it through
+# `flowie_server` registers local/Redis/PostgreSQL through the StorageBackend registry and creates the
+# selected Redis or PostgreSQL provider from this YAML, then injects it through
 # flowie_endpoint_bindings_t. Uncomment both this channel and session_store below to enable it.
 # A custom host may provide the same binding through flowie_register_resolved_bound_endpoint[_ex].
 #  mqtt.sessions:
@@ -128,7 +130,7 @@ adapters:
       coroutine_stack_size: 65536
       # Capacity of each of CoroNet's two receive chunks per connection. MQTT framing
       # reassembles across chunks; borrowed/owned contexts must omit this field.
-      recv_buffer_size: 4096
+      stream_recv_buffer_bytes: 4096
       send_hwm_bytes: 1048576
       # A connection that exhausts this bounded send budget is isolated; fan-out continues.
       slow_subscriber_policy: disconnect
