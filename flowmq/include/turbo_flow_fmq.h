@@ -134,8 +134,7 @@ typedef struct turbo_flow_fmq_config_s {
   const char *identity;
   size_t max_frame_size;
   uint32_t max_connections;
-  /** Backward-compatible default timeout in milliseconds for all operations when not specialized.
-   */
+  /** Default timeout in milliseconds for operations without a phase-specific value. */
   uint64_t timeout_ms;
   /** Per-phase connect timeout in milliseconds; 0 falls back to timeout_ms. */
   uint64_t connect_timeout_ms;
@@ -170,13 +169,20 @@ typedef struct turbo_flow_fmq_config_s {
   turbo_flow_fmq_metadata_policy_t identity_policy;
   /** Pipe endpoint for PIPE; WebSocket request path for WS/WSS, default "/". */
   const char *path;
-  /** Enable KCP packet-erasure FEC. Valid only when transport is KCP. */
-  int kcp_fec;
-  /** KCP FEC backend enum: 0 = none, 1 = wirehair. */
-  int kcp_fec_backend;
+  /** Required 64-character hexadecimal PSK when transport is KCP. */
+  const char *kcp_pre_shared_key;
+  uint32_t kcp_mtu;
+  uint32_t kcp_send_window;
+  uint32_t kcp_receive_window;
+  uint32_t kcp_interval_ms;
+  uint32_t kcp_handshake_retry_ms;
+  uint32_t kcp_fast_resend;
+  /** Enable KCP congestion-window control; disabled by default for low latency. */
+  int kcp_congestion_control;
   uint32_t kcp_fec_data_shards;
   uint32_t kcp_fec_parity_shards;
   uint32_t kcp_fec_max_payload_size;
+  uint32_t kcp_fec_receive_groups;
   /** Enable listener reuse-port binding where CoroNet supports it. BIND only. */
   int reuse_port;
   /** Enable OS TCP keepalive on TCP-backed transports. */
@@ -193,7 +199,7 @@ typedef struct turbo_flow_fmq_config_s {
   const char *udp_multicast_group;
   /** IPv4 local address or IPv6 decimal interface index used for multicast membership. */
   const char *udp_multicast_interface;
-  /** Presence bits for loop/TTL/broadcast so an all-zero legacy config preserves OS defaults. */
+  /** Presence bits distinguish omitted loop/TTL/broadcast values from explicit zero values. */
   uint32_t udp_option_flags;
   int udp_multicast_loop;
   uint32_t udp_multicast_ttl;
@@ -202,7 +208,7 @@ typedef struct turbo_flow_fmq_config_s {
   size_t frame_hwm_messages;
   /** FMQ in-flight encoded-frame byte high-water mark; 0 disables the FMQ-level cap. */
   size_t frame_hwm_bytes;
-  /** Capacity behavior. FAIL is the backward-compatible default. */
+  /** Capacity behavior. FAIL is the default. */
   turbo_flow_fmq_frame_admission_policy_t frame_admission_policy;
   /** BLOCK only: zero checks immediately; UINT64_MAX waits until capacity or stop. */
   uint64_t frame_admission_timeout_ms;
@@ -390,8 +396,8 @@ typedef struct turbo_flow_fmq_app_s turbo_flow_fmq_app_t;
  * Borrowed-message application callback.
  *
  * The message and its payload/topic/identity views remain valid only for this
- * call unless explicitly cloned. Returning an error fails the current graph
- * attempt. REP callbacks may replace the payload and return TURBO_OK to send
+ * Core dispatch unless explicitly cloned. Returning an error fails the current
+ * receive operation. REP callbacks may replace the payload and return TURBO_OK to send
  * the synchronous reply. Do not re-enter lifecycle or send APIs on the same
  * application from this callback.
  */
@@ -410,10 +416,10 @@ typedef struct turbo_flow_fmq_app_options_s {
 /**
  * Create one ZeroMQ-like application facade over one FMQ pattern endpoint.
  *
- * The returned application owns its minimal TurboFlow bridge and FMQ adapter but
- * creates no additional socket, receive queue, protocol state, or worker
- * thread. Receive-only patterns require on_message. Bidirectional patterns may
- * omit it to discard ingress. Send-only patterns reject a callback.
+ * The returned application directly owns one graph-neutral FMQ endpoint Core.
+ * It does not create or compile a TurboFlow graph. Receive-only patterns
+ * require on_message. Bidirectional patterns may omit it to discard ingress.
+ * Send-only patterns reject a callback.
  */
 CXX_C_API int turbo_flow_fmq_app_create(const turbo_flow_fmq_config_t *endpoint,
                                         const turbo_flow_fmq_app_options_t *options,
@@ -434,7 +440,7 @@ CXX_C_API int turbo_flow_fmq_app_create(const turbo_flow_fmq_config_t *endpoint,
  * @param out Receives the created facade on success and NULL on failure.
  * @return TURBO_OK; TURBO_EINVAL for an invalid endpoint, options, binding, or
  * callback contract; TURBO_ERANGE for an invalid pool lane; TURBO_ENOMEM for
- * allocation failure; or a concrete adapter/graph registration error.
+ * allocation failure; or a concrete endpoint/security initialization error.
  */
 CXX_C_API int turbo_flow_fmq_app_create_ex(
     const turbo_flow_fmq_config_t *endpoint, const turbo_flow_fmq_app_options_t *options,
@@ -477,7 +483,34 @@ CXX_C_API int turbo_flow_fmq_app_create_resolved_secure(
 CXX_C_API int turbo_flow_fmq_app_start(turbo_flow_fmq_app_t *app);
 CXX_C_API int turbo_flow_fmq_app_stop(turbo_flow_fmq_app_t *app);
 
-/** Send copied bytes through the facade's graph input source. */
+/**
+ * Send one copied message and wait for the facade's local delivery boundary.
+ *
+ * Use this serialized synchronous mode when messages are infrequent, the
+ * producer needs an immediate per-message status, or the pattern requires
+ * strict request/session sequencing. REQ must use this mode; REP replies are
+ * produced by its receive callback. It also minimizes intentional queueing for
+ * latency-sensitive control messages.
+ *
+ * For sustained small-message traffic, prefer
+ * turbo_flow_fmq_app_send_batch() when the caller already owns a burst, or
+ * turbo_flow_fmq_app_send_async() when messages arrive individually and the
+ * producer must not wait for socket delivery. All three modes copy payloads;
+ * successful local delivery does not mean remote processing or durability.
+ * Benchmark the selected pattern, transport, payload size, and batch limits:
+ * coalescing behavior is transport/layout dependent.
+ * "Serialized" describes one-at-a-time synchronous submission, not a
+ * different wire encoding. Send mode never changes FMQ/3, pattern semantics,
+ * or the configured transport.
+ *
+ * @param app Started facade whose pattern supports sending.
+ * @param data Payload copied before return; NULL is valid only when
+ * data_size is zero.
+ * @param data_size Payload byte count.
+ * @return TURBO_OK at the local delivery boundary, TURBO_EBUSY before start,
+ * TURBO_ENOTSUP for a receive-only pattern, or another explicit
+ * validation/allocation/delivery error.
+ */
 CXX_C_API int turbo_flow_fmq_app_send(turbo_flow_fmq_app_t *app, const void *data,
                                       size_t data_size);
 
@@ -499,11 +532,11 @@ typedef struct turbo_flow_fmq_app_send_item_s {
 typedef void (*turbo_flow_fmq_app_send_completion_fn)(void *ctx, int status);
 
 typedef struct turbo_flow_fmq_app_async_send_config_s {
-  size_t size;
-  size_t queue_capacity;
-  size_t queue_capacity_bytes;
-  size_t batch_size;
-  uint64_t linger_ns;
+  size_t size;                 /**< Must equal sizeof(turbo_flow_fmq_app_async_send_config_t). */
+  size_t queue_capacity;       /**< Maximum queued messages waiting for the worker. */
+  size_t queue_capacity_bytes; /**< Maximum copied payload bytes waiting in the queue. */
+  size_t batch_size;           /**< Maximum messages in one worker-built micro-batch. */
+  uint64_t linger_ns;          /**< Maximum wait for more messages after a non-empty wake. */
 } turbo_flow_fmq_app_async_send_config_t;
 
 #define TURBO_FLOW_FMQ_APP_ASYNC_SEND_CONFIG_INIT                                      \
@@ -516,6 +549,14 @@ typedef struct turbo_flow_fmq_app_async_send_config_s {
 /**
  * Send a batch of copied application messages and wait for every submitted
  * frame to reach the same delivery boundary as turbo_flow_fmq_app_send().
+ *
+ * Use explicit synchronous batching when the producer already has two or more
+ * independent messages ready and can wait for the complete burst. It avoids
+ * per-message submission overhead and, on supported stream layouts, can reduce
+ * socket calls. This is the preferred throughput mode for sustained small
+ * PUB/PUSH/DEALER messages. Large-message batches must also be sized by total
+ * bytes and tail-latency goals; the maximum limits are safety bounds, not
+ * recommended operating sizes.
  *
  * PUB, PUSH, and DEALER facades are supported. TCP connect endpoints coalesce
  * the encoded frames into one stream write; other valid endpoint layouts keep
@@ -532,6 +573,15 @@ CXX_C_API int turbo_flow_fmq_app_send_batch(turbo_flow_fmq_app_t *app,
 /**
  * Configure copied, ordered asynchronous send admission before the first start.
  *
+ * Use asynchronous micro-batching when producers receive messages one at a
+ * time, cannot construct explicit batches, or must avoid waiting for the
+ * socket-delivery boundary. Admission is fast but not unbounded: callers must
+ * handle TURBO_ENOSPC and every accepted message completes later on the worker.
+ * A zero linger favors latency; a nonzero linger gives sparse traffic time to
+ * form fuller batches and therefore trades added queueing latency for
+ * throughput. Explicit batching remains preferable when the caller already
+ * owns the burst and can wait synchronously.
+ *
  * PUB, PUSH, and DEALER facades are supported. The queue is bounded by both
  * waiting item count and copied payload bytes. The active batch is bounded
  * separately by TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS and
@@ -542,7 +592,7 @@ CXX_C_API int turbo_flow_fmq_app_send_batch(turbo_flow_fmq_app_t *app,
  * performed once and cannot be changed after start.
  *
  * @param app Facade to configure.
- * @param config Versioned queue, byte quota, batch, and linger limits.
+ * @param config Complete queue, byte quota, batch, and linger limits.
  * @return TURBO_OK, TURBO_EINVAL for an invalid config, TURBO_ENOTSUP for an
  * unsupported pattern, TURBO_EBUSY after the first start, or TURBO_EALREADY
  * when already configured.
@@ -552,6 +602,12 @@ CXX_C_API int turbo_flow_fmq_app_configure_async_send(
 
 /**
  * Copy and admit one message without waiting for socket delivery.
+ *
+ * This is the per-message producer API for the configured asynchronous
+ * micro-batch mode. TURBO_OK is admission, not delivery: release or reuse the
+ * caller's input after return, but use @p completion when delivery status
+ * matters. This queue is an in-memory load-leveling boundary and is not a
+ * durable store.
  *
  * TURBO_OK means the facade owns a copy and will invoke @p completion exactly
  * once when provided. A full item or byte quota returns TURBO_ENOSPC without
@@ -575,8 +631,9 @@ CXX_C_API int turbo_flow_fmq_app_send_async(
 /**
  * Send one existing message through the facade.
  *
- * The Flow clones/retains the message for the current publish. This form
- * preserves a detached ROUTER route and is therefore the delayed-reply entry.
+ * The endpoint consumes the message synchronously and retains any buffer needed
+ * past the call. This form preserves a detached ROUTER route and is therefore
+ * the delayed-reply entry.
  */
 CXX_C_API int turbo_flow_fmq_app_send_message(turbo_flow_fmq_app_t *app,
                                               const turbo_flow_msg_t *message);

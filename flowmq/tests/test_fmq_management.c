@@ -446,7 +446,7 @@ tfmp_management_create_with_durable_events(tfmp_management_blob_store_t *blob,
 }
 
 spec("fmq_tfmp_management_owner") {
-  it("resolves a strict YAML management channel without backend fallback") {
+  it("resolves a pipelined ROUTER management channel without backend fallback") {
     static const char valid_yaml[] = "version: 1\n"
                                      "channels:\n"
                                      "  management:\n"
@@ -455,11 +455,11 @@ spec("fmq_tfmp_management_owner") {
                                      "      protocol_major: 1\n"
                                      "      protocol_minor: 0\n"
                                      "      authority_id: authority-yaml\n"
-                                     "      rpc_adapter: management.rep\n"
+                                     "      rpc_adapter: management.router\n"
                                      "      mailbox_capacity: 8\n"
                                      "      max_request_bytes: 4096\n"
                                      "      max_reply_bytes: 8192\n"
-                                     "      max_inflight_per_target: 1\n"
+                                     "      max_inflight_per_target: 4\n"
                                      "      dedup_capacity: 16\n"
                                      "      dedup_ttl_ms: 30000\n"
                                      "      operation_store: memory\n"
@@ -468,10 +468,10 @@ spec("fmq_tfmp_management_owner") {
                                      "      event_replay_store: memory\n"
                                      "      shutdown_timeout_ms: 2000\n"
                                      "adapters:\n"
-                                     "  management.rep:\n"
+                                     "  management.router:\n"
                                      "    kind: fmq\n"
                                      "    config:\n"
-                                     "      pattern: rep\n"
+                                     "      pattern: router\n"
                                      "      mode: bind\n"
                                      "      transport: tcp\n"
                                      "      host: 127.0.0.1\n"
@@ -500,11 +500,11 @@ spec("fmq_tfmp_management_owner") {
                                        "      protocol_major: 1\n"
                                        "      protocol_minor: 0\n"
                                        "      authority_id: authority-yaml\n"
-                                       "      rpc_adapter: management.rep\n"
+                                       "      rpc_adapter: management.router\n"
                                        "      mailbox_capacity: 8\n"
                                        "      max_request_bytes: 4096\n"
                                        "      max_reply_bytes: 8192\n"
-                                       "      max_inflight_per_target: 1\n"
+                                       "      max_inflight_per_target: 4\n"
                                        "      dedup_capacity: 16\n"
                                        "      dedup_ttl_ms: 30000\n"
                                        "      operation_store: redis.operations\n"
@@ -512,10 +512,10 @@ spec("fmq_tfmp_management_owner") {
                                        "      event_replay_store: redis.operations\n"
                                        "      shutdown_timeout_ms: 2000\n"
                                        "adapters:\n"
-                                       "  management.rep:\n"
+                                       "  management.router:\n"
                                        "    kind: fmq\n"
                                        "    config:\n"
-                                       "      pattern: rep\n"
+                                       "      pattern: router\n"
                                        "      mode: bind\n"
                                        "      transport: tcp\n";
     turbo_flow_resolved_config_t *resolved = NULL;
@@ -531,7 +531,8 @@ spec("fmq_tfmp_management_owner") {
         turbo_flow_tfmp_management_channel_config_resolve(resolved, "management", &config, &error),
         TURBO_OK);
     check_str_eq(config.service.authority_id, "authority-yaml");
-    check_str_eq(config.rpc_adapter, "management.rep");
+    check_str_eq(config.rpc_adapter, "management.router");
+    check_uint_eq(config.max_inflight_per_target, 4u);
     check_str_eq(config.operation_store, "memory");
     check_size_eq(config.service.operation_capacity, 8u);
     check_size_eq(config.service.dedup_capacity, 16u);
@@ -562,23 +563,23 @@ spec("fmq_tfmp_management_owner") {
     turbo_flow_resolved_config_destroy(resolved);
   }
 
-  it("serves TFMP through the ordinary CoroNet Pipe REQ REP graph") {
-    static const char server_dsl[] = "source request adapter fmq.rep\n"
+  it("serves asynchronous TFMP through a CoroNet Pipe DEALER ROUTER graph") {
+    static const char server_dsl[] = "source request adapter fmq.router\n"
                                      "stage management\n"
-                                     "stage reply adapter fmq.rep\n"
+                                     "stage reply adapter fmq.router\n"
                                      "stage main {\n"
                                      "  request -> management -> reply\n"
                                      "}\n";
-    static const char client_dsl[] = "source response adapter fmq.req\n"
+    static const char client_dsl[] = "source response adapter fmq.dealer\n"
                                      "source input\n"
-                                     "stage send adapter fmq.req\n"
+                                     "stage send adapter fmq.dealer\n"
                                      "stage capture\n"
                                      "stage main {\n"
                                      "  input -> send\n"
                                      "  response -> capture\n"
                                      "}\n";
-    turbo_flow_fmq_config_t rep = TURBO_FLOW_FMQ_CONFIG_INIT;
-    turbo_flow_fmq_config_t req = TURBO_FLOW_FMQ_CONFIG_INIT;
+    turbo_flow_fmq_config_t router = TURBO_FLOW_FMQ_CONFIG_INIT;
+    turbo_flow_fmq_config_t dealer = TURBO_FLOW_FMQ_CONFIG_INIT;
     turbo_flow_tfmp_management_service_t *service = NULL;
     turbo_flow_tfmp_envelope_t response = TURBO_FLOW_TFMP_ENVELOPE_INIT;
     turbo_flow_t *target = tfmp_management_started_flow();
@@ -598,21 +599,22 @@ spec("fmq_tfmp_management_owner") {
     check_int_gt(snprintf(pipe_path, sizeof(pipe_path), "pipe://turbo_flow_tfmp_%llu",
                           (unsigned long long)turbo_hrtime()),
                  0);
-    rep.pattern = TURBO_FLOW_FMQ_REP;
-    rep.mode = TURBO_FLOW_FMQ_BIND;
-    rep.transport = TURBO_FLOW_FMQ_PIPE;
-    rep.path = pipe_path;
-    rep.timeout_ms = 2000u;
-    req = rep;
-    req.pattern = TURBO_FLOW_FMQ_REQ;
-    req.mode = TURBO_FLOW_FMQ_CONNECT;
+    router.pattern = TURBO_FLOW_FMQ_ROUTER;
+    router.mode = TURBO_FLOW_FMQ_BIND;
+    router.transport = TURBO_FLOW_FMQ_PIPE;
+    router.path = pipe_path;
+    router.timeout_ms = 2000u;
+    dealer = router;
+    dealer.pattern = TURBO_FLOW_FMQ_DEALER;
+    dealer.mode = TURBO_FLOW_FMQ_CONNECT;
+    dealer.identity = "tfmp-client-pipe";
 
     check_int_eq(tfmp_management_create(&service), TURBO_OK);
     check_int_eq(turbo_flow_tfmp_management_service_bind_target(service, "flow:pipe", target),
                  TURBO_OK);
     check_int_eq(turbo_flow_tfmp_management_service_set_state(service, TURBO_FLOW_TFMP_OWNER_READY),
                  TURBO_OK);
-    check_int_eq(turbo_flow_fmq_register_adapter_ex(server, "fmq.rep", &rep,
+    check_int_eq(turbo_flow_fmq_register_adapter_ex(server, "fmq.router", &router,
                                                     &MANAGEMENT_PRIVATE_EXECUTION),
                  TURBO_OK);
     check_int_eq(turbo_flow_register_stage_ex(server, "management",
@@ -620,7 +622,7 @@ spec("fmq_tfmp_management_owner") {
                  TURBO_OK);
     check_int_eq(turbo_flow_parse_string(server, server_dsl, strlen(server_dsl)), TURBO_OK);
     check_int_eq(turbo_flow_compile(server), TURBO_OK);
-    check_int_eq(turbo_flow_fmq_register_adapter_ex(client, "fmq.req", &req,
+    check_int_eq(turbo_flow_fmq_register_adapter_ex(client, "fmq.dealer", &dealer,
                                                     &MANAGEMENT_PRIVATE_EXECUTION),
                  TURBO_OK);
     check_int_eq(
@@ -633,7 +635,8 @@ spec("fmq_tfmp_management_owner") {
 
     check_int_eq(tfmp_management_build_flow_command(
                      body, sizeof(body), &body_size, "client-pipe", "pause", "flow:pipe",
-                     TURBO_FLOW_TFMP_COMMAND_FLOW_PAUSE, TURBO_FLOW_TFMP_REPLY_MODE_WAIT_TERMINAL,
+                     TURBO_FLOW_TFMP_COMMAND_FLOW_PAUSE,
+                     TURBO_FLOW_TFMP_REPLY_MODE_ACCEPT_OPERATION,
                      TURBO_FLOW_TFMP_DURABILITY_VOLATILE, 0, 0u, UINT64_MAX),
                  TURBO_OK);
     check_int_eq(tfmp_management_encode_body_request(TURBO_FLOW_TFMP_COMMAND_SUBMIT, 150u, body,
@@ -649,7 +652,28 @@ spec("fmq_tfmp_management_owner") {
                  TURBO_OK);
     check_uint_eq(response.correlation_id, 150u);
     check_int_eq(response.status, TURBO_FLOW_TFMP_STATUS_OK);
-    check_int_eq(response.disposition, TURBO_FLOW_TFMP_DISPOSITION_COMPLETED);
+    check_int_eq(response.disposition, TURBO_FLOW_TFMP_DISPOSITION_ACCEPTED_VOLATILE);
+    check_int_eq(turbo_flow_tfmp_management_service_run_one(service), TURBO_OK);
+
+    check_int_eq(tfmp_management_build_flow_command(
+                     body, sizeof(body), &body_size, "client-pipe", "sync-resume", "flow:pipe",
+                     TURBO_FLOW_TFMP_COMMAND_FLOW_RESUME,
+                     TURBO_FLOW_TFMP_REPLY_MODE_WAIT_TERMINAL,
+                     TURBO_FLOW_TFMP_DURABILITY_VOLATILE, 0, 0u, UINT64_MAX),
+                 TURBO_OK);
+    check_int_eq(tfmp_management_encode_body_request(TURBO_FLOW_TFMP_COMMAND_SUBMIT, 151u, body,
+                                                     body_size, request, sizeof(request),
+                                                     &request_size),
+                 TURBO_OK);
+    check_int_eq(tfmp_management_publish(client, request, request_size), TURBO_OK);
+    for (int i = 0; i < 400 && atomic_load_explicit(&capture.called, memory_order_acquire) < 2; ++i)
+      turbo_sleep_ms(5u);
+    check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 2);
+    check_int_eq(turbo_flow_tfmp_envelope_decode(capture.payload, capture.payload_size, &response),
+                 TURBO_OK);
+    check_uint_eq(response.correlation_id, 151u);
+    check_int_eq(response.status, TURBO_FLOW_TFMP_STATUS_UNSUPPORTED_CAPABILITY);
+    check_int_eq(response.disposition, TURBO_FLOW_TFMP_DISPOSITION_FAILED);
 
     check_int_eq(turbo_flow_stop(client), TURBO_OK);
     check_int_eq(turbo_flow_stop(server), TURBO_OK);
@@ -1109,8 +1133,8 @@ spec("fmq_tfmp_management_owner") {
                  TURBO_OK);
     check_int_eq(turbo_flow_tfmp_envelope_decode(reply, reply_size, &response), TURBO_OK);
     check_int_eq(tfmp_management_find_field(&response, 3u, &field), TURBO_OK);
-    check_size_eq(field.value_size, 12u);
-    check_mem_eq(field.value, "\0\1\0\2\0\3\0\4\0\5\0\7", 12u);
+    check_size_eq(field.value_size, 10u);
+    check_mem_eq(field.value, "\0\1\0\2\0\3\0\5\0\7", 10u);
     field = (turbo_flow_tfmp_field_t)TURBO_FLOW_TFMP_FIELD_INIT;
     check_int_eq(tfmp_management_find_body_field(response.body, response.body_size, 4u, 2u, &field),
                  TURBO_OK);

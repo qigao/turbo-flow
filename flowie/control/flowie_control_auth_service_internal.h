@@ -2,8 +2,9 @@
 #define FLOWIE_CONTROL_AUTH_SERVICE_INTERNAL_H
 
 #include "flowie_control_auth_cache_internal.h"
-#include "flowie_control_principal_cache_internal.h"
 #include "flowie_control_auth_rate_limiter_internal.h"
+#include "flowie_control_external_authenticator_internal.h"
+#include "flowie_control_principal_cache_internal.h"
 #include "flowie_control_security_limits_internal.h"
 
 #include <stddef.h>
@@ -41,7 +42,7 @@ typedef struct flowie_control_auth_policy_version_provider_s {
 
 typedef struct flowie_control_auth_service_config_s {
   size_t size;
-  flowie_control_store_t *store;
+  const flowie_control_repository_t *repository;
   const flowie_control_auth_root_binding_t *bindings;
   size_t binding_count;
   const char *method;
@@ -51,6 +52,9 @@ typedef struct flowie_control_auth_service_config_s {
   flowie_control_auth_cache_config_t principal_cache;
   flowie_control_auth_rate_limiter_config_t rate_limiter;
   flowie_control_auth_policy_version_provider_t policy_version;
+  /** Optional pair. Configure both to replace local credential verification for this method. */
+  const flowie_control_external_authenticator_t *external_authenticator;
+  const flowie_control_external_identity_mapper_t *external_identity_mapper;
   flowie_control_auth_clock_fn clock_seconds;
   void *clock_ctx;
 } flowie_control_auth_service_config_t;
@@ -66,6 +70,8 @@ typedef struct flowie_control_auth_service_config_s {
    FLOWIE_CONTROL_AUTH_CACHE_CONFIG_INIT,                                                          \
    FLOWIE_CONTROL_AUTH_RATE_LIMITER_CONFIG_INIT,                                                   \
    FLOWIE_CONTROL_AUTH_POLICY_VERSION_PROVIDER_INIT,                                               \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
    NULL,                                                                                           \
    NULL}
 
@@ -92,10 +98,14 @@ typedef struct flowie_control_authenticate_request_s {
   const char *method;
   const uint8_t *secret;
   size_t secret_size;
+  const char *protocol;
+  const char *remote_address;
+  /** MQTT TLS/WSS client identity asserted by the trusted Broker caller. */
+  const char *peer_certificate_sha256;
 } flowie_control_authenticate_request_t;
 
 #define FLOWIE_CONTROL_AUTHENTICATE_REQUEST_INIT                                                   \
-  {sizeof(flowie_control_authenticate_request_t), NULL, NULL, NULL, NULL, 0u}
+  {sizeof(flowie_control_authenticate_request_t), NULL, NULL, NULL, NULL, 0u, NULL, NULL, NULL}
 
 /**
  * Create an immutable, thread-safe authentication service core.
@@ -115,6 +125,14 @@ int flowie_control_auth_service_authenticate(flowie_control_auth_service_t *serv
                                              const flowie_control_authenticate_request_t *request,
                                              turbo_flow_security_principal_t *principal_out,
                                              int *credential_cache_hit_out);
+
+/**
+ * Resolve a verified transport caller to its configured Root Group without authenticating a
+ * credential. Used by read-only broker-facing services such as ACL bundle distribution.
+ */
+int flowie_control_auth_service_resolve_root_group(
+    const flowie_control_auth_service_t *service, const flowie_control_verified_caller_t *caller,
+    char root_group_id_out[TURBO_FLOW_SECURITY_ID_MAX + 1u]);
 
 #ifdef __cplusplus
 }

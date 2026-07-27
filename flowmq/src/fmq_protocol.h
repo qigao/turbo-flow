@@ -2,6 +2,7 @@
 #define TURBO_FLOW_FMQ_PROTOCOL_H
 
 #include "flowmq_protocol.h"
+#include "CoroNet/turbo_kcp.h"
 #include "turbo_flow_fmq.h"
 
 #define FLOW_FMQ_PATTERN_WIRE_ASSERT(name, value)                                                  \
@@ -67,5 +68,8 @@ CXX_C_API int flowmq_protocol_encode_frame_into_internal(
     size_t storage_size, size_t *encoded_size);
 
 int flow_fmq_config_validate(const turbo_flow_fmq_config_t *config);
+int flow_fmq_kcp_config_resolve(const turbo_flow_fmq_config_t *config,
+                                turbo_kcp_config_t *out,
+                                int *configured);
 
 #endif /* TURBO_FLOW_FMQ_PROTOCOL_H */

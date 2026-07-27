@@ -157,9 +157,10 @@ int turbo_flow_security_authenticate(const turbo_flow_security_auth_provider_t *
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   int rc;
   if (!provider || provider->size < sizeof(*provider) || !provider->authenticate || !request ||
-      request->size < sizeof(*request) || !request->identity || !request->identity[0] ||
-      !request->method || !request->method[0] || (request->secret_size > 0u && !request->secret) ||
-      !principal_out || principal_out->size < sizeof(*principal_out)) {
+      request->size < TURBO_FLOW_SECURITY_AUTH_REQUEST_BASE_SIZE || !request->identity ||
+      !request->identity[0] || !request->method || !request->method[0] ||
+      (request->secret_size > 0u && !request->secret) || !principal_out ||
+      principal_out->size < sizeof(*principal_out)) {
     return TURBO_EINVAL;
   }
   rc = provider->authenticate(provider->ctx, request, &principal);
@@ -183,8 +184,8 @@ flow_security_enhanced_result_validate(const turbo_flow_security_enhanced_auth_r
 
 static int
 flow_security_enhanced_request_valid(const turbo_flow_security_enhanced_auth_request_t *request) {
-  return request && request->size >= sizeof(*request) && request->method && request->method[0] &&
-         (!request->data_size || request->data);
+  return request && request->size >= TURBO_FLOW_SECURITY_ENHANCED_AUTH_REQUEST_BASE_SIZE &&
+         request->method && request->method[0] && (!request->data_size || request->data);
 }
 
 int turbo_flow_security_enhanced_auth_begin(

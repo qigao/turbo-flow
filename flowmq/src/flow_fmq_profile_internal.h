@@ -48,7 +48,7 @@ typedef struct flow_fmq_send_profile_snapshot_s {
   uint64_t batch_payload_prepare_sum_ns;
   uint64_t batch_payload_prepare_max_ns;
   uint64_t batch_payload_prepare_slow_samples;
-  uint64_t batch_graph_publish_sum_ns;
+  uint64_t batch_submit_sum_ns;
   uint64_t batch_adapter_consume_sum_ns;
   uint64_t batch_enqueue_prepare_sum_ns;
   uint64_t batch_owner_wait_sum_ns;

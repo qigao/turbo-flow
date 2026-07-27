@@ -57,13 +57,20 @@ typedef struct turbo_flow_coronet_socket_config_s {
    */
   coro_context_t *context;
   int take_context_ownership;
-  /** Enable KCP packet-erasure FEC. Valid only when transport is KCP. */
-  int kcp_fec;
-  /** KCP FEC backend enum: 0 = none, 1 = wirehair. */
-  int kcp_fec_backend;
+  /** Required 64-character hexadecimal PSK when transport is KCP. */
+  const char *kcp_pre_shared_key;
+  uint32_t kcp_mtu;
+  uint32_t kcp_send_window;
+  uint32_t kcp_receive_window;
+  uint32_t kcp_interval_ms;
+  uint32_t kcp_handshake_retry_ms;
+  uint32_t kcp_fast_resend;
+  /** Enable KCP congestion-window control; disabled by default for low latency. */
+  int kcp_congestion_control;
   uint32_t kcp_fec_data_shards;
   uint32_t kcp_fec_parity_shards;
   uint32_t kcp_fec_max_payload_size;
+  uint32_t kcp_fec_receive_groups;
   /** Enable listener reuse-port binding where CoroNet supports it. SOURCE only. */
   int reuse_port;
   /** Enable OS TCP keepalive on TCP-backed transports. */

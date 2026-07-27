@@ -29,12 +29,13 @@ credential -> HTTPS auth service -> principal(policy_version)
                                       v
 Flowie -> SecurityRealm -> local immutable ACL snapshot -> allow/deny
                 |
-                +-> exact policy_source -> HTTPS or SQLite ACL provider
+                +-> exact policy_source -> HTTPS ACL provider
 ```
 
-- 用户凭据、账户状态和身份映射只属于 HTTPS 认证服务，Flowie 与 ACL SQLite 模块不保存用户密码。
+- 用户凭据、账户状态和身份映射只属于 HTTPS 认证服务，Flowie 不保存用户密码。
 - 每个 `security_realm` 只声明资源身份和 `policy_source`；它不拥有可写规则。
-- 配置选择的 HTTPS 服务或 SQLite namespace 是 ACL 事实源，二者不会同时推进同一 realm。
+- bundled Broker 的 `policy_source` 只接受 HTTPS provider。ACL 事实源位于 `flowie-control`
+  Repository，Broker 不读取其数据库。
 - realm 中的快照是事实源的有界派生缓存。bundle 包含单调递增的 `policy_version`、可选
   `expires_at` 和完整规范规则行数组；加载时由 re2c parser 编译为不可变查询索引。
 - 查询索引按 `root_group -> action -> resource_type -> subject_kind/subject -> pattern` 编译。
@@ -42,34 +43,14 @@ Flowie -> SecurityRealm -> local immutable ACL snapshot -> allow/deny
   受资源长度约束而不随同 subject 的 prefix 规则数增长。协议 adapter 只扫描已命中 subject 叶内的
   有界候选，不扫描其它 Root Group、action、resource type 或 subject。显式 deny 仍跨叶优先，
   `matched_rule` 保持原始规则行序号。
-- SQLite `publish` 在一个事务内替换单个 namespace 的规则与版本；读取者只能看到旧 bundle 或完整新
-  bundle。SQLite 仅是 ACL 模块内部的控制存储，不是 endpoint 的普通 database provider。
+- `flowie-control` 在一个 Repository 事务内发布单个 Root Group 的规则与版本；读取者只能看到旧
+  bundle 或完整新 bundle。Repository 可以由 SQLite 或 PostgreSQL 实现，不改变 HTTPS 契约。
 - HTTPS provider 只读取 ACL bundle，不接收客户端 credential。认证与 ACL 可以由同一控制面产品管理，
   但必须使用独立、最小权限的认证接口和策略读取接口。
 
 ## 配置契约
 
-最小 SQLite 部署：
-
-```yaml
-channels:
-  acl.main:
-    kind: acl_provider
-    config:
-      backend: sqlite
-      database_path: C:/flowie-state/acl.sqlite3
-      namespace_name: mqtt
-      busy_timeout_ms: 1000
-      max_rules: 4096
-  security.main:
-    kind: security_realm
-    config:
-      resource_uid: security:mqtt
-      owner_name: security.main
-      policy_source: acl.main
-```
-
-远端控制面部署：
+Broker 配置：
 
 ```yaml
 channels:
@@ -77,16 +58,16 @@ channels:
     kind: acl_provider
     config:
       backend: https
-      url: https://auth.internal.example/v2/acl-bundle
+      url: https://flowie-control.internal/v3/acl
       service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
       timeout_ms: 3000
       max_response_size: 4194304
       max_rules: 4096
 ```
 
-SQLite store 必须使用文件路径；`:memory:` 被拒绝，因为 load/publish 使用独立连接。HTTPS URL 必须有
-明确 path，禁止 HTTP、userinfo、query、fragment、redirect 和自动 retry。service token 只能通过 key
-provider 引用，不能以明文写入 YAML。
+HTTPS URL 必须有明确 path，禁止 HTTP、userinfo、query、fragment、redirect 和自动 retry。service
+token 只能通过 key provider 引用，不能以明文写入 YAML。Broker 配置不接受数据库路径、conninfo 或
+schema。
 
 HTTPS 成功响应是严格 JSON：
 
@@ -113,7 +94,7 @@ HTTPS 成功响应是严格 JSON：
   外部 I/O 均不持锁。
 - 同一版本的策略内容不可变。已过期 bundle 不能用相同版本替换，管理端必须发布更高版本。
 - 没有快照、版本不匹配、bundle 过期、provider 不可达、429、认证失败或响应无效时全部 fail closed。
-- provider 是精确选择，不做 HTTPS/SQLite 互相 fallback，也不退回 YAML 或匿名规则。
+- provider 是精确选择，不做数据库或 YAML fallback，也不匿名放行。
 - realm 销毁必须在 endpoint 停止、并发授权完成之后；provider 生命周期必须长于绑定它的 realm。
 
 该模型不会在每条消息上远程查询。稳定版本的 publish/subscribe 只付出本地快照引用和规则匹配成本；
@@ -121,8 +102,8 @@ HTTPS 成功响应是严格 JSON：
 
 ## 管理、迁移与回滚
 
-动态管理 API 应发布完整 bundle，而不是逐条修改 realm 缓存。SQLite provider 的 `publish` 已提供事务化
-命令；远端 HTTP 服务应在自身事务中管理用户、角色和策略，再通过只读 bundle endpoint 发布结果。
+动态管理 API 应发布完整 bundle，而不是逐条修改 realm 缓存。`flowie-control` Repository 的
+`policy.publish` 提供事务化命令，再通过只读 `/v3/acl` endpoint 发布结果。
 
 迁移步骤：
 
@@ -132,16 +113,16 @@ HTTPS 成功响应是严格 JSON：
 4. 验证允许、显式拒绝、版本升级、过期、provider 不可达和畸形 bundle 均符合预期。
 5. 撤销 Flowie 对任何用户数据库的网络权限和数据库凭据。
 
-回滚策略规则时，发布一个更高版本、内容等同于旧策略的新 bundle；禁止降低版本。切换 provider、URL、
-SQLite 路径或 namespace 属于部署配置变更，需要停止 endpoint、校验配置并重启，不是热更新。
+回滚策略规则时，发布一个更高版本、内容等同于旧策略的新 bundle；禁止降低版本。切换 provider 或 URL
+属于部署配置变更，需要停止 endpoint、校验配置并重启，不是热更新。
 
 ## 兼容性与验证
 
 - **HIGH**：YAML ACL body 被有意移除；旧配置会启动失败，必须先完成上述迁移。
-- **HIGH**：Security C ABI 与 ACL wire/storage bundle 均为唯一 v3，使用规范规则行和必填 Root Group。SQLite provider 只访问
-  `turbo_flow_acl_bundle_v3`/`turbo_flow_acl_rule_v3`；旧表保留但不读取，必须重新发布完整 bundle。
+- **HIGH**：Security C ABI 与 ACL wire/storage bundle 均为唯一 v3，使用规范规则行和必填 Root Group。
+  旧表保留但 Broker 不读取，必须经控制面重新发布完整 bundle。
 - C ABI 追加了 `policy_source`，旧尺寸的程序化静态 realm config 仍被接受；新产品配置应使用 provider。
-- SQLite 测试覆盖单调发布、事务快照、namespace 隔离、动态刷新和内存库拒绝。
+- SQLite Repository 测试覆盖单调发布、事务快照、Root Group 隔离和当前/精确版本读取。
 - HTTP 测试覆盖严格配置、非 coroutine 拒绝、bundle 边界和整数溢出；共享 HTTPS transport 的真实
   mTLS 测试要求并验证客户端证书。发布验证仍需覆盖部署证书链、主机名、超时、状态码和 token 轮换。
 - Flowie endpoint 测试覆盖 provider 绑定后的 connect/publish/subscribe 授权和默认拒绝。

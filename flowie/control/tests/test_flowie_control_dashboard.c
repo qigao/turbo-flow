@@ -45,7 +45,7 @@ static flowie_control_dashboard_t *dashboard_open(char **path_out,
   root.request_id = "request-root";
   root.occurred_at = 1000u;
   check_int_eq(flowie_control_store_root_group_create(*store_out, &root, &root_result), TURBO_OK);
-  service_config.store = *store_out;
+  service_config.repository = flowie_control_store_repository(*store_out);
   check_int_eq(flowie_control_management_service_create(&service_config, service_out), TURBO_OK);
   dashboard_config.service = *service_out;
   dashboard_config.resolve_session = dashboard_resolve;
@@ -248,12 +248,9 @@ spec("Flowie ACL dashboard") {
                  TURBO_OK);
     check_str_contains(html, "device-000");
     check_false(strstr(html, "device-025") != NULL);
-    check_str_contains(
-        html,
-        "hx-get=\"/v1/management/dashboard/content?users_after=device-024&amp;groups_after=root-a\"");
-    check_str_contains(
-        html,
-        "hx-post=\"/v1/management/dashboard/action?groups_after=root-a\"");
+    check_str_contains(html, "hx-get=\"/v1/management/dashboard/"
+                             "content?users_after=device-024&amp;groups_after=root-a\"");
+    check_str_contains(html, "hx-post=\"/v1/management/dashboard/action?groups_after=root-a\"");
     flowie_control_dashboard_html_free(html);
 
     (void)snprintf(page.users_after, sizeof(page.users_after), "%s", "device-024");
@@ -264,8 +261,7 @@ spec("Flowie ACL dashboard") {
                  TURBO_OK);
     check_str_contains(html, "device-025");
     check_false(strstr(html, "device-000") != NULL);
-    check_str_contains(html,
-                       "hx-get=\"/v1/management/dashboard/content?groups_after=root-a\"");
+    check_str_contains(html, "hx-get=\"/v1/management/dashboard/content?groups_after=root-a\"");
     flowie_control_dashboard_html_free(html);
 
     dashboard_close(dashboard, service, store, path);

@@ -1,6 +1,6 @@
 # MQTT-GATE-002: collect and verify one complete release evidence manifest.
 foreach(required CTEST_COMMAND CMAKE_COMMAND TEST_DIR OUTPUT_FILE REVISION PROJECT_VERSION
-                 PUBLIC_BROKER_VERSION FIXED_BROKER_VERSION REDIS_VERSION)
+                 FIXED_BROKER_VERSION REDIS_VERSION)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required to collect release evidence")
   endif()
@@ -14,7 +14,7 @@ if(NOT DEFINED FIXED_SUPPORT_31_WS OR
   message(FATAL_ERROR "FIXED_SUPPORT_31_WS must be an explicit CMake boolean")
 endif()
 
-foreach(metadata REVISION PROJECT_VERSION PUBLIC_BROKER_VERSION FIXED_BROKER_VERSION REDIS_VERSION)
+foreach(metadata REVISION PROJECT_VERSION FIXED_BROKER_VERSION REDIS_VERSION)
   if(NOT "${${metadata}}" MATCHES "^[A-Za-z0-9._+:/-]+$")
     message(FATAL_ERROR
             "${metadata} contains characters that cannot be represented safely in evidence")
@@ -32,7 +32,6 @@ endif()
 set(records
     "test_flowie_mqtt_protocol_matrix|local|${PROJECT_VERSION}|none"
     "test_flowie_mqtt_protocol_corpus|local|${PROJECT_VERSION}|none"
-    "test_flowie_mqtt_client_live|public|${PUBLIC_BROKER_VERSION}|TLS/WSS"
     "test_flowie_mqtt_client_fixed_interop|fixed|${FIXED_BROKER_VERSION}|TLS/WSS"
     "flowie_mqtt_fixed_mqtt31_capability|fixed|${FIXED_BROKER_VERSION}|TLS"
     "flowie_mqtt_fixed_mqtt31_ws_capability|fixed|${FIXED_BROKER_VERSION}|WSS"
@@ -40,6 +39,7 @@ set(records
     "test_flowie_mosquitto_fixed_interop|fixed|${FIXED_BROKER_VERSION}|TCP"
     "test_flowie_session_store_faults|memory|${PROJECT_VERSION}|none"
     "test_flowie_transport|local|OpenSSL|TLS/WSS"
+    "test_flowie_mqtt_endurance|memory|${PROJECT_VERSION}|none"
     "test_flowie_mqtt_soak|redis|Redis-${REDIS_VERSION}+PostgreSQL|TLS/WSS"
     "flowie_server_check_redis_session_store|redis|${REDIS_VERSION}|none"
     "flowie_server_check_https_auth_provider|http|${PROJECT_VERSION}|mTLS")

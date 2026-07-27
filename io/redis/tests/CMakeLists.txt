@@ -23,7 +23,7 @@ set_tests_properties(test_turbo_flow_redis PROPERTIES LABELS "fmq-release;storag
 set_tests_properties(
   test_turbo_flow_redis_live
   PROPERTIES LABELS
-             "fmq-release;fmq-chaos;integration;redis-live;mqtt-persistence;mqtt-soak")
+             "fmq-release;fmq-chaos;storage-contract;integration;redis-live;mqtt-persistence;mqtt-endurance;mqtt-soak")
 if(NOT TURBO_FLOW_REDIS_LIVE_TESTS)
   set_tests_properties(test_turbo_flow_redis_live PROPERTIES DISABLED TRUE)
 endif()

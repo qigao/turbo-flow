@@ -18,6 +18,12 @@ typedef struct flow_actor_test_state_s {
   uint32_t delay_ms;
 } flow_actor_test_state_t;
 
+typedef struct flow_execution_coro_state_s {
+  coro_context_t *expected_context;
+  int entered;
+  int resumed;
+} flow_execution_coro_state_t;
+
 static int flow_actor_test_handler(void *ctx, uint64_t command_id, const void *bytes, size_t size) {
   flow_actor_test_state_t *state = (flow_actor_test_state_t *)ctx;
   const flow_actor_test_command_t *command = (const flow_actor_test_command_t *)bytes;
@@ -45,6 +51,22 @@ static turbo_flow_coronet_execution_binding_t flow_actor_private_binding(void) {
   binding.size = sizeof(binding);
   binding.kind = TURBO_FLOW_CORONET_EXECUTION_PRIVATE;
   return binding;
+}
+
+static int flow_actor_execution_ping(void *ctx) {
+  return coro_context_current() == (coro_context_t *)ctx ? TURBO_OK : TURBO_EPROTO;
+}
+
+static int flow_execution_yielding_call(void *ctx) {
+  flow_execution_coro_state_t *state =
+      (flow_execution_coro_state_t *)ctx;
+  if (!state || coro_context_current() != state->expected_context ||
+      !coro_running())
+    return TURBO_EPROTO;
+  state->entered = 1;
+  coro_sleep(state->expected_context, 2u);
+  state->resumed = 1;
+  return 47;
 }
 
 spec("flow_coronet_actor") {
@@ -157,6 +179,51 @@ spec("flow_coronet_actor") {
     check_int_eq(tf_coronet_actor_drain(&actor, 0u), TURBO_OK);
     check_int_eq(tf_coronet_actor_destroy(&actor), TURBO_OK);
     tf_coronet_execution_stop(&execution);
+    tf_coronet_execution_destroy(&execution);
+  }
+
+  it("returns only after a coroutine call resumes from I/O-style yielding") {
+    turbo_flow_coronet_execution_binding_t binding =
+        flow_actor_private_binding();
+    tf_coronet_execution_t execution;
+    flow_execution_coro_state_t state = {0};
+
+    check_int_eq(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
+    state.expected_context = execution.context;
+    check_int_eq(tf_coronet_execution_start(&execution), TURBO_OK);
+    check_int_eq(tf_coronet_execution_call_coro(
+                     &execution, flow_execution_yielding_call, &state,
+                     UINT64_C(500000000)),
+                 47);
+    check_true(state.entered);
+    check_true(state.resumed);
+    tf_coronet_execution_stop(&execution);
+    tf_coronet_execution_destroy(&execution);
+  }
+
+  it("explicitly stops and restarts a drained private execution context") {
+    enum {
+      EXECUTION_RESTART_CYCLES = 64u,
+      EXECUTION_STOP_MAX_MS = 1000u,
+    };
+    turbo_flow_coronet_execution_binding_t binding = flow_actor_private_binding();
+    tf_coronet_execution_t execution;
+
+    check_int_eq(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
+    for (size_t cycle = 0u; cycle < EXECUTION_RESTART_CYCLES; ++cycle) {
+      uint64_t started_at;
+      uint64_t elapsed;
+
+      check_int_eq(tf_coronet_execution_start(&execution), TURBO_OK);
+      check_int_eq(tf_coronet_execution_call(&execution, flow_actor_execution_ping,
+                                             execution.context, UINT64_C(500000000)),
+                   TURBO_OK);
+      started_at = turbo_monotonic_ms();
+      tf_coronet_execution_stop(&execution);
+      elapsed = turbo_monotonic_ms() - started_at;
+      info("cycle=%zu stop_elapsed_ms=%llu", cycle, (unsigned long long)elapsed);
+      check_size_le((size_t)elapsed, (size_t)EXECUTION_STOP_MAX_MS);
+    }
     tf_coronet_execution_destroy(&execution);
   }
 }

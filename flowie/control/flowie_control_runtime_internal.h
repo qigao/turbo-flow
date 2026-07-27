@@ -15,7 +15,7 @@ extern "C" {
 
 typedef struct flowie_control_runtime_s flowie_control_runtime_t;
 
-/** Validate TLS server identity and required client CA without opening a listener or database. */
+/** Validate TLS identity, secret references, and store selection without opening a listener/DB. */
 int flowie_control_runtime_validate(const flowie_control_config_t *config);
 
 /** Create the complete controller composition root and bind all enabled routes. */
@@ -25,19 +25,24 @@ int flowie_control_runtime_create(const flowie_control_config_t *config,
 /** Run the configured HTTPS/mTLS listener until Iris receives a shutdown signal. */
 int flowie_control_runtime_run(flowie_control_runtime_t *runtime);
 
-/** Stop request handling before destroying this object. */
-void flowie_control_runtime_destroy(flowie_control_runtime_t *runtime);
+/**
+ * Stop request handling and destroy the selected repository.
+ *
+ * PostgreSQL returns a close error without freeing the runtime so the caller can retry after
+ * outstanding leases are returned.
+ */
+int flowie_control_runtime_destroy(flowie_control_runtime_t *runtime);
 
-/** Resolve an exact configured certificate fingerprint against current SQLite state. */
+/** Resolve an exact configured certificate fingerprint against current repository state. */
 int flowie_control_runtime_resolve_management_fingerprint(
     flowie_control_runtime_t *runtime, const char *fingerprint,
     flowie_control_management_caller_t *caller_out);
 
 /** Deterministic identity boundary used by the runtime callback and focused tests. */
 int flowie_control_management_identity_resolve(
-    flowie_control_store_t *store, const flowie_control_config_admin_binding_t *bindings,
-    size_t binding_count, const char *fingerprint,
-    flowie_control_management_caller_t *caller_out);
+    const flowie_control_repository_t *repository,
+    const flowie_control_config_admin_binding_t *bindings, size_t binding_count,
+    const char *fingerprint, flowie_control_management_caller_t *caller_out);
 
 #ifdef __cplusplus
 }

@@ -22,7 +22,8 @@ set_tests_properties(test_turbo_flow_pgsql test_turbo_flow_pgsql_live
                      PROPERTIES LABELS "storage-contract")
 set_tests_properties(
   test_turbo_flow_pgsql_live
-  PROPERTIES LABELS "storage-contract;integration;pgsql-live;mqtt-persistence;mqtt-soak")
+  PROPERTIES LABELS
+             "storage-contract;integration;pgsql-live;mqtt-persistence;mqtt-endurance;mqtt-soak")
 if(NOT TURBO_FLOW_PGSQL_LIVE_TESTS)
   set_tests_properties(test_turbo_flow_pgsql_live PROPERTIES DISABLED TRUE)
 endif()

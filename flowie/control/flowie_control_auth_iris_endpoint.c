@@ -1,18 +1,39 @@
 #include "flowie_control_auth_iris_endpoint_internal.h"
 
+#include "CoroNet/turbo_coro_context.h"
 #include "base64_utils.h"
 #include "monocypher.h"
 #include "turbo_error.h"
 #include "turbo_parser.h"
+#include "turbo_thread.h"
 
 #include <ctype.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define FLOWIE_CONTROL_AUTH_HTTP_TOKEN_MAX 4096u
 #define FLOWIE_CONTROL_AUTH_HTTP_DIGEST_SIZE 32u
-#define FLOWIE_CONTROL_AUTH_HTTP_AUTHORIZATION_MAX \
+#define FLOWIE_CONTROL_AUTH_HTTP_AUTHORIZATION_MAX                                                 \
   (sizeof("Bearer ") - 1u + FLOWIE_CONTROL_AUTH_HTTP_TOKEN_MAX)
+
+enum {
+  FLOWIE_CONTROL_AUTH_JOB_OWNER_IDLE = 0,
+  FLOWIE_CONTROL_AUTH_JOB_OWNER_ARMED = 1,
+  FLOWIE_CONTROL_AUTH_JOB_OWNER_DONE = 2
+};
+
+typedef struct flowie_control_auth_local_job_s {
+  flowie_control_auth_iris_adapter_t *adapter;
+  coro_wait_t *wait;
+  atomic_uint references;
+  atomic_int completed;
+  atomic_int owner_state;
+  char peer_certificate_sha256[CORO_TLS_PEER_CERT_SHA256_CAPACITY];
+  flowie_control_auth_http_request_t request;
+  turbo_flow_security_principal_t principal;
+  int result;
+} flowie_control_auth_local_job_t;
 
 struct flowie_control_auth_iris_endpoint_s {
   flowie_control_auth_iris_adapter_t *adapter;
@@ -20,8 +41,47 @@ struct flowie_control_auth_iris_endpoint_s {
   char *service_token_ref;
   size_t max_request_body_size;
   size_t max_secret_size;
+  turbo_threadpool_t *local_executor;
+  uint32_t local_executor_deadline_ms;
   iris_app_t *bound_app;
 };
+
+static void flowie_control_auth_principal_init(turbo_flow_security_principal_t *principal) {
+  if (!principal) return;
+  memset(principal, 0, sizeof(*principal));
+  principal->size = sizeof(*principal);
+  principal->abi_version = TURBO_FLOW_SECURITY_ABI_V3;
+}
+
+static void flowie_control_auth_local_job_release(flowie_control_auth_local_job_t *job) {
+  if (!job || atomic_fetch_sub_explicit(&job->references, 1u, memory_order_acq_rel) != 1u) return;
+  (void)coro_wait_destroy(job->wait);
+  crypto_wipe(job, sizeof(*job));
+  free(job);
+}
+
+static void flowie_control_auth_local_job_run(void *arg) {
+  flowie_control_auth_local_job_t *job = (flowie_control_auth_local_job_t *)arg;
+  int wake_rc;
+  if (!job) return;
+
+  flowie_control_auth_principal_init(&job->principal);
+  job->result = flowie_control_auth_iris_adapter_authenticate_verified(
+      job->adapter, job->peer_certificate_sha256, job->request.identity, job->request.method,
+      job->request.secret, job->request.secret_size, job->request.protocol,
+      job->request.remote_address,
+      job->request.peer_certificate_sha256[0] != '\0' ? job->request.peer_certificate_sha256 : NULL,
+      &job->principal, NULL);
+  atomic_store_explicit(&job->completed, 1, memory_order_release);
+
+  while (atomic_load_explicit(&job->owner_state, memory_order_acquire) ==
+         FLOWIE_CONTROL_AUTH_JOB_OWNER_ARMED) {
+    wake_rc = coro_wait_interrupt(job->wait, TURBO_EINTR);
+    if (wake_rc != TURBO_EALREADY) break;
+    turbo_thread_yield();
+  }
+  flowie_control_auth_local_job_release(job);
+}
 
 static int flowie_control_auth_http_ascii_equal(const char *left, const char *right) {
   if (!left || !right) return 0;
@@ -64,8 +124,7 @@ static int flowie_control_auth_http_array_add(json_value_t *array, json_value_t 
 }
 
 static int flowie_control_auth_http_fields_exact(const json_value_t *object,
-                                                 const char *const *allowed,
-                                                 size_t allowed_count) {
+                                                 const char *const *allowed, size_t allowed_count) {
   if (!object || turbo_json_type(object) != TURBO_JSON_OBJECT ||
       turbo_json_object_size(object) != allowed_count)
     return TURBO_EPROTO;
@@ -94,8 +153,7 @@ static int flowie_control_auth_http_json_u64(const json_value_t *value, uint64_t
   if (!text || size == 0u || size >= sizeof(buffer)) return TURBO_EPROTO;
   memcpy(buffer, text, size);
   buffer[size] = '\0';
-  if (buffer[0] == '-' || buffer[0] == '+' || (size > 1u && buffer[0] == '0'))
-    return TURBO_EPROTO;
+  if (buffer[0] == '-' || buffer[0] == '+' || (size > 1u && buffer[0] == '0')) return TURBO_EPROTO;
   parsed = strtoull(buffer, &end, 10);
   if (!end || *end != '\0') return TURBO_EPROTO;
   *out = (uint64_t)parsed;
@@ -103,7 +161,7 @@ static int flowie_control_auth_http_json_u64(const json_value_t *value, uint64_t
 }
 
 static int flowie_control_auth_http_copy_string(const json_value_t *object, const char *field,
-                                                char *output, size_t capacity) {
+                                                char *output, size_t capacity, int required) {
   json_value_t *value;
   const char *text;
   size_t size;
@@ -112,10 +170,24 @@ static int flowie_control_auth_http_copy_string(const json_value_t *object, cons
   if (!value || turbo_json_type(value) != TURBO_JSON_STRING) return TURBO_EPROTO;
   text = turbo_json_string(value);
   size = turbo_json_string_len(value);
-  if (!text || size == 0u || size >= capacity || memchr(text, '\0', size)) return TURBO_EPROTO;
+  if (!text || (required && size == 0u) || size >= capacity || memchr(text, '\0', size))
+    return TURBO_EPROTO;
   memcpy(output, text, size);
   output[size] = '\0';
   return TURBO_OK;
+}
+
+static int flowie_control_auth_http_fingerprint_valid(const char *value) {
+  static const char prefix[] = "sha256:";
+  size_t size;
+  if (!value || value[0] == '\0') return 1;
+  size = strlen(value);
+  if (size != FLOWIE_CONTROL_AUTH_CERT_SHA256_TEXT_SIZE ||
+      memcmp(value, prefix, sizeof(prefix) - 1u) != 0)
+    return 0;
+  for (size_t i = sizeof(prefix) - 1u; i < size; ++i)
+    if (!((value[i] >= '0' && value[i] <= '9') || (value[i] >= 'a' && value[i] <= 'f'))) return 0;
+  return 1;
 }
 
 void flowie_control_auth_http_request_clear(flowie_control_auth_http_request_t *request) {
@@ -125,8 +197,13 @@ void flowie_control_auth_http_request_clear(flowie_control_auth_http_request_t *
 int flowie_control_auth_http_decode_request(const char *body, size_t body_size,
                                             size_t max_secret_size,
                                             flowie_control_auth_http_request_t *request_out) {
-  static const char *const allowed[] = {"version",       "identity", "method",
-                                        "secret_base64", "protocol", "remote_address"};
+  static const char *const allowed[] = {"version",
+                                        "identity",
+                                        "method",
+                                        "secret_base64",
+                                        "protocol",
+                                        "remote_address",
+                                        "peer_certificate_sha256"};
   turbo_json_doc_t *document = NULL;
   json_value_t *encoded_value;
   const char *encoded;
@@ -139,8 +216,7 @@ int flowie_control_auth_http_decode_request(const char *body, size_t body_size,
 
   if (!request_out) return TURBO_EINVAL;
   memset(request_out, 0, sizeof(*request_out));
-  if (!body || body_size == 0u ||
-      body_size > FLOWIE_CONTROL_AUTH_HTTP_ABSOLUTE_REQUEST_BODY_MAX ||
+  if (!body || body_size == 0u || body_size > FLOWIE_CONTROL_AUTH_HTTP_ABSOLUTE_REQUEST_BODY_MAX ||
       max_secret_size == 0u || max_secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX)
     return TURBO_EPROTO;
   if (turbo_parse_json((const uint8_t *)body, body_size, &document) != TURBO_OK || !document)
@@ -151,22 +227,24 @@ int flowie_control_auth_http_decode_request(const char *body, size_t body_size,
           TURBO_OK ||
       version != FLOWIE_CONTROL_AUTH_HTTP_PROTOCOL_VERSION ||
       flowie_control_auth_http_copy_string(document, "identity", request_out->identity,
-                                           sizeof(request_out->identity)) != TURBO_OK ||
+                                           sizeof(request_out->identity), 1) != TURBO_OK ||
       flowie_control_auth_http_copy_string(document, "method", request_out->method,
-                                           sizeof(request_out->method)) != TURBO_OK ||
+                                           sizeof(request_out->method), 1) != TURBO_OK ||
       flowie_control_auth_http_copy_string(document, "protocol", request_out->protocol,
-                                           sizeof(request_out->protocol)) != TURBO_OK ||
-      flowie_control_auth_http_copy_string(document, "remote_address",
-                                           request_out->remote_address,
-                                           sizeof(request_out->remote_address)) != TURBO_OK)
+                                           sizeof(request_out->protocol), 1) != TURBO_OK ||
+      flowie_control_auth_http_copy_string(document, "remote_address", request_out->remote_address,
+                                           sizeof(request_out->remote_address), 1) != TURBO_OK ||
+      flowie_control_auth_http_copy_string(
+          document, "peer_certificate_sha256", request_out->peer_certificate_sha256,
+          sizeof(request_out->peer_certificate_sha256), 0) != TURBO_OK ||
+      !flowie_control_auth_http_fingerprint_valid(request_out->peer_certificate_sha256))
     goto done;
 
   encoded_value = turbo_json_object_get(document, "secret_base64");
   if (!encoded_value || turbo_json_type(encoded_value) != TURBO_JSON_STRING) goto done;
   encoded = turbo_json_string(encoded_value);
   encoded_size = turbo_json_string_len(encoded_value);
-  if (!encoded || encoded_size == 0u ||
-      encoded_size > ((max_secret_size + 2u) / 3u) * 4u ||
+  if (!encoded || encoded_size == 0u || encoded_size > ((max_secret_size + 2u) / 3u) * 4u ||
       memchr(encoded, '\0', encoded_size) || strlen(encoded) != encoded_size ||
       tn_base64_decode(encoded, &decoded, &decoded_size) != 0 || !decoded || decoded_size == 0u ||
       decoded_size > max_secret_size)
@@ -175,8 +253,7 @@ int flowie_control_auth_http_decode_request(const char *body, size_t body_size,
     rc = TURBO_ENOMEM;
     goto done;
   }
-  if (strlen(canonical) != encoded_size || memcmp(canonical, encoded, encoded_size) != 0)
-    goto done;
+  if (strlen(canonical) != encoded_size || memcmp(canonical, encoded, encoded_size) != 0) goto done;
   memcpy(request_out->secret, decoded, decoded_size);
   request_out->secret_size = decoded_size;
   rc = TURBO_OK;
@@ -225,14 +302,11 @@ int flowie_control_auth_http_encode_principal(const turbo_flow_security_principa
       principal->role_count > TURBO_FLOW_SECURITY_MAX_ROLES ||
       principal->group_count > TURBO_FLOW_SECURITY_MAX_GROUPS || principal->policy_version == 0u ||
       !(scope = flowie_control_auth_http_scope_name(principal->scope)) ||
-      !flowie_control_auth_http_text_valid(principal->principal_id,
-                                           TURBO_FLOW_SECURITY_ID_MAX) ||
+      !flowie_control_auth_http_text_valid(principal->principal_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_auth_http_text_valid(principal->principal_type,
                                            TURBO_FLOW_SECURITY_TYPE_MAX) ||
-      !flowie_control_auth_http_text_valid(principal->root_group_id,
-                                           TURBO_FLOW_SECURITY_ID_MAX) ||
-      !flowie_control_auth_http_text_valid(principal->auth_method,
-                                           TURBO_FLOW_SECURITY_TYPE_MAX))
+      !flowie_control_auth_http_text_valid(principal->root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+      !flowie_control_auth_http_text_valid(principal->auth_method, TURBO_FLOW_SECURITY_TYPE_MAX))
     return TURBO_EINVAL;
 
   document = (turbo_json_doc_t *)turbo_json_create_object();
@@ -260,9 +334,9 @@ int flowie_control_auth_http_encode_principal(const turbo_flow_security_principa
             groups, turbo_json_create_string(principal->groups[index])) != TURBO_OK)
       goto done;
   }
-  if (flowie_control_auth_http_add(document, "version",
-                                   turbo_json_create_uint64(
-                                       FLOWIE_CONTROL_AUTH_HTTP_PROTOCOL_VERSION)) != TURBO_OK ||
+  if (flowie_control_auth_http_add(
+          document, "version",
+          turbo_json_create_uint64(FLOWIE_CONTROL_AUTH_HTTP_PROTOCOL_VERSION)) != TURBO_OK ||
       flowie_control_auth_http_add(document, "authenticated", turbo_json_create_bool(true)) !=
           TURBO_OK ||
       flowie_control_auth_http_add(principal_json, "id",
@@ -290,9 +364,8 @@ int flowie_control_auth_http_encode_principal(const turbo_flow_security_principa
   groups = NULL;
   if (flowie_control_auth_http_add(principal_json, "expires_at",
                                    turbo_json_create_uint64(principal->expires_at)) != TURBO_OK ||
-      flowie_control_auth_http_add(
-          principal_json, "policy_version",
-          turbo_json_create_uint64(principal->policy_version)) != TURBO_OK)
+      flowie_control_auth_http_add(principal_json, "policy_version",
+                                   turbo_json_create_uint64(principal->policy_version)) != TURBO_OK)
     goto done;
   if (flowie_control_auth_http_add(document, "principal", principal_json) != TURBO_OK) {
     principal_json = NULL;
@@ -326,9 +399,9 @@ static int flowie_control_auth_http_encode_denied(char **body_out, size_t *body_
   if (!body_out || !body_size_out) return TURBO_EINVAL;
   document = (turbo_json_doc_t *)turbo_json_create_object();
   if (!document) return TURBO_ENOMEM;
-  if (flowie_control_auth_http_add(document, "version",
-                                   turbo_json_create_uint64(
-                                       FLOWIE_CONTROL_AUTH_HTTP_PROTOCOL_VERSION)) == TURBO_OK &&
+  if (flowie_control_auth_http_add(
+          document, "version",
+          turbo_json_create_uint64(FLOWIE_CONTROL_AUTH_HTTP_PROTOCOL_VERSION)) == TURBO_OK &&
       flowie_control_auth_http_add(document, "authenticated", turbo_json_create_bool(false)) ==
           TURBO_OK) {
     *body_out = turbo_json_serialize(document, body_size_out);
@@ -382,11 +455,10 @@ static int flowie_control_auth_http_verify_token(flowie_control_auth_iris_endpoi
   memset(actual, 0, sizeof(actual));
   rc = flowie_control_auth_http_header(req, "Authorization", &authorization);
   if (rc != TURBO_OK) return TURBO_EPERM;
-  rc = turbo_flow_security_secret_acquire(&endpoint->key_provider,
-                                          endpoint->service_token_ref, &lease);
+  rc = turbo_flow_security_secret_acquire(&endpoint->key_provider, endpoint->service_token_ref,
+                                          &lease);
   if (rc != TURBO_OK) return rc;
-  authorization_size =
-      strnlen(authorization, FLOWIE_CONTROL_AUTH_HTTP_AUTHORIZATION_MAX + 1u);
+  authorization_size = strnlen(authorization, FLOWIE_CONTROL_AUTH_HTTP_AUTHORIZATION_MAX + 1u);
   if (authorization_size > FLOWIE_CONTROL_AUTH_HTTP_AUTHORIZATION_MAX) {
     rc = TURBO_EPERM;
     goto done;
@@ -401,8 +473,8 @@ static int flowie_control_auth_http_verify_token(flowie_control_auth_iris_endpoi
     goto done;
   }
   crypto_blake2b(expected, sizeof(expected), lease.bytes, lease.byte_count);
-  crypto_blake2b(actual, sizeof(actual),
-                 (const uint8_t *)authorization + sizeof(prefix) - 1u, lease.byte_count);
+  crypto_blake2b(actual, sizeof(actual), (const uint8_t *)authorization + sizeof(prefix) - 1u,
+                 lease.byte_count);
   rc = crypto_verify32(expected, actual) == 0 ? TURBO_OK : TURBO_EPERM;
 
 done:
@@ -418,16 +490,95 @@ static int flowie_control_auth_http_response_status(int rc) {
   return SERVICE_UNAVAILABLE;
 }
 
+int flowie_control_auth_iris_endpoint_authenticate_verified(
+    flowie_control_auth_iris_endpoint_t *endpoint, const char *peer_certificate_sha256,
+    const flowie_control_auth_http_request_t *request,
+    turbo_flow_security_principal_t *principal_out) {
+  flowie_control_auth_local_job_t *job;
+  coro_context_t *context;
+  int completed;
+  int wait_rc = TURBO_OK;
+  int rc;
+
+  if (principal_out && principal_out->size >= sizeof(*principal_out))
+    flowie_control_auth_principal_init(principal_out);
+  if (!endpoint || !peer_certificate_sha256 || !request || !principal_out ||
+      principal_out->size < sizeof(*principal_out) ||
+      !flowie_control_auth_http_text_valid(peer_certificate_sha256,
+                                           CORO_TLS_PEER_CERT_SHA256_CAPACITY - 1u) ||
+      !flowie_control_auth_http_text_valid(request->identity, TURBO_FLOW_SECURITY_ID_MAX) ||
+      !flowie_control_auth_http_text_valid(request->method, TURBO_FLOW_SECURITY_TYPE_MAX) ||
+      !flowie_control_auth_http_text_valid(request->protocol, TURBO_FLOW_SECURITY_TYPE_MAX) ||
+      !flowie_control_auth_http_text_valid(request->remote_address,
+                                           FLOWIE_CONTROL_AUTH_HTTP_REMOTE_ADDRESS_MAX) ||
+      !flowie_control_auth_http_fingerprint_valid(request->peer_certificate_sha256) ||
+      request->secret_size == 0u || request->secret_size > endpoint->max_secret_size)
+    return TURBO_EINVAL;
+
+  if (!endpoint->local_executor)
+    return flowie_control_auth_iris_adapter_authenticate_verified(
+        endpoint->adapter, peer_certificate_sha256, request->identity, request->method,
+        request->secret, request->secret_size, request->protocol, request->remote_address,
+        request->peer_certificate_sha256[0] != '\0' ? request->peer_certificate_sha256 : NULL,
+        principal_out, NULL);
+
+  context = coro_context_current();
+  if (!context) return TURBO_EINVAL;
+  job = (flowie_control_auth_local_job_t *)calloc(1u, sizeof(*job));
+  if (!job) return TURBO_ENOMEM;
+  job->wait = coro_wait_create(context);
+  if (!job->wait) {
+    crypto_wipe(job, sizeof(*job));
+    free(job);
+    return TURBO_ENOMEM;
+  }
+  job->adapter = endpoint->adapter;
+  memcpy(job->peer_certificate_sha256, peer_certificate_sha256,
+         strlen(peer_certificate_sha256) + 1u);
+  job->request = *request;
+  flowie_control_auth_principal_init(&job->principal);
+  job->result = TURBO_EIO;
+  atomic_init(&job->references, 2u);
+  atomic_init(&job->completed, 0);
+  atomic_init(&job->owner_state, FLOWIE_CONTROL_AUTH_JOB_OWNER_ARMED);
+
+  if (turbo_threadpool_try_submit(endpoint->local_executor, flowie_control_auth_local_job_run,
+                                  job) != 0) {
+    atomic_store_explicit(&job->owner_state, FLOWIE_CONTROL_AUTH_JOB_OWNER_DONE,
+                          memory_order_release);
+    flowie_control_auth_local_job_release(job);
+    flowie_control_auth_local_job_release(job);
+    return TURBO_EBUSY;
+  }
+
+  completed = atomic_load_explicit(&job->completed, memory_order_acquire);
+  if (!completed) wait_rc = coro_wait_for(job->wait, endpoint->local_executor_deadline_ms);
+  atomic_store_explicit(&job->owner_state, FLOWIE_CONTROL_AUTH_JOB_OWNER_DONE,
+                        memory_order_release);
+  completed = atomic_load_explicit(&job->completed, memory_order_acquire);
+  if (completed) {
+    rc = job->result;
+    if (rc == TURBO_OK) *principal_out = job->principal;
+  } else {
+    rc = wait_rc == TURBO_OK ? TURBO_ETIMEDOUT : wait_rc;
+  }
+  flowie_control_auth_local_job_release(job);
+  return rc;
+}
+
 int flowie_control_auth_iris_endpoint_process(flowie_control_auth_iris_endpoint_t *endpoint,
                                               Req *req, int *status_out, char **body_out,
                                               size_t *body_size_out) {
   flowie_control_auth_http_request_t request;
-  turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+  turbo_flow_security_principal_t principal;
+  char peer_certificate_sha256[CORO_TLS_PEER_CERT_SHA256_CAPACITY];
   const char *content_type = NULL;
   int status = BAD_REQUEST;
   int rc = TURBO_EPROTO;
 
   memset(&request, 0, sizeof(request));
+  flowie_control_auth_principal_init(&principal);
+  memset(peer_certificate_sha256, 0, sizeof(peer_certificate_sha256));
   if (status_out) *status_out = INTERNAL_SERVER_ERROR;
   if (body_out) *body_out = NULL;
   if (body_size_out) *body_size_out = 0u;
@@ -442,8 +593,8 @@ int flowie_control_auth_iris_endpoint_process(flowie_control_auth_iris_endpoint_
       flowie_control_auth_http_header(req, "Content-Type", &content_type) != TURBO_OK ||
       !flowie_control_auth_http_ascii_equal(content_type, "application/json"))
     goto done;
-  rc = flowie_control_auth_http_decode_request(req->body, req->body_len,
-                                               endpoint->max_secret_size, &request);
+  rc = flowie_control_auth_http_decode_request(req->body, req->body_len, endpoint->max_secret_size,
+                                               &request);
   if (rc != TURBO_OK) {
     if (rc == TURBO_ENOMEM) status = SERVICE_UNAVAILABLE;
     goto done;
@@ -453,9 +604,13 @@ int flowie_control_auth_iris_endpoint_process(flowie_control_auth_iris_endpoint_
     status = flowie_control_auth_http_response_status(rc);
     goto done;
   }
-  rc = flowie_control_auth_iris_adapter_authenticate(
-      endpoint->adapter, req, request.identity, request.method, request.secret,
-      request.secret_size, &principal, NULL);
+  rc = flowie_control_auth_iris_adapter_verified_peer_certificate(req, peer_certificate_sha256);
+  if (rc != TURBO_OK) {
+    status = flowie_control_auth_http_response_status(rc);
+    goto done;
+  }
+  rc = flowie_control_auth_iris_endpoint_authenticate_verified(endpoint, peer_certificate_sha256,
+                                                               &request, &principal);
   if (rc != TURBO_OK) {
     status = flowie_control_auth_http_response_status(rc);
     goto done;
@@ -466,6 +621,7 @@ int flowie_control_auth_iris_endpoint_process(flowie_control_auth_iris_endpoint_
 done:
   flowie_control_auth_http_request_clear(&request);
   crypto_wipe(&principal, sizeof(principal));
+  crypto_wipe(peer_certificate_sha256, sizeof(peer_certificate_sha256));
   if (req->body && req->body_len > 0u) crypto_wipe(req->body, req->body_len);
   flowie_control_auth_http_wipe_header(req, "Authorization");
   if (rc != TURBO_OK && !*body_out) {
@@ -478,16 +634,15 @@ done:
 
 void flowie_control_auth_iris_endpoint_handle(flowie_control_auth_iris_endpoint_t *endpoint,
                                               Req *req, Res *res) {
-  static const char internal_error[] =
-      "{\"version\":2,\"authenticated\":false}";
+  static const char internal_error[] = "{\"version\":2,\"authenticated\":false}";
   char *body = NULL;
   size_t body_size = 0u;
   int status = INTERNAL_SERVER_ERROR;
   if (!res) return;
   set_header(res, "Cache-Control", "no-store");
   set_header(res, "Pragma", "no-cache");
-  if (flowie_control_auth_iris_endpoint_process(endpoint, req, &status, &body,
-                                                &body_size) != TURBO_OK) {
+  if (flowie_control_auth_iris_endpoint_process(endpoint, req, &status, &body, &body_size) !=
+      TURBO_OK) {
     reply(res, INTERNAL_SERVER_ERROR, "application/json", internal_error,
           sizeof(internal_error) - 1u);
     return;
@@ -497,8 +652,7 @@ void flowie_control_auth_iris_endpoint_handle(flowie_control_auth_iris_endpoint_
 }
 
 static void flowie_control_auth_iris_endpoint_unbound(void *context, void *user_data) {
-  flowie_control_auth_iris_endpoint_t *endpoint =
-      (flowie_control_auth_iris_endpoint_t *)context;
+  flowie_control_auth_iris_endpoint_t *endpoint = (flowie_control_auth_iris_endpoint_t *)context;
   iris_app_t *app = (iris_app_t *)user_data;
   if (endpoint && (!app || endpoint->bound_app == app)) endpoint->bound_app = NULL;
 }
@@ -520,12 +674,19 @@ int flowie_control_auth_iris_endpoint_create(
   if (!config || config->size < sizeof(*config) || !out || !config->adapter ||
       !flowie_control_auth_http_text_valid(config->service_token_ref,
                                            FLOWIE_CONTROL_AUTH_HTTP_TOKEN_REFERENCE_MAX) ||
-      config->key_provider.size < sizeof(config->key_provider) ||
-      !config->key_provider.acquire || !config->key_provider.release ||
-      config->max_request_body_size == 0u ||
+      config->key_provider.size < sizeof(config->key_provider) || !config->key_provider.acquire ||
+      !config->key_provider.release || config->max_request_body_size == 0u ||
       config->max_request_body_size > FLOWIE_CONTROL_AUTH_HTTP_ABSOLUTE_REQUEST_BODY_MAX ||
       config->max_secret_size == 0u ||
-      config->max_secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX)
+      config->max_secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX ||
+      (config->local_executor_enabled &&
+       (config->local_executor_workers == 0u ||
+        config->local_executor_workers > FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_MAX_WORKERS ||
+        config->local_executor_queue_capacity == 0u ||
+        config->local_executor_queue_capacity >
+            FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_MAX_QUEUE_CAPACITY ||
+        config->local_executor_deadline_ms == 0u ||
+        config->local_executor_deadline_ms > FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_MAX_DEADLINE_MS)))
     return TURBO_EINVAL;
   endpoint = (flowie_control_auth_iris_endpoint_t *)calloc(1u, sizeof(*endpoint));
   if (!endpoint) return TURBO_ENOMEM;
@@ -540,6 +701,19 @@ int flowie_control_auth_iris_endpoint_create(
   endpoint->key_provider = config->key_provider;
   endpoint->max_request_body_size = config->max_request_body_size;
   endpoint->max_secret_size = config->max_secret_size;
+  endpoint->local_executor_deadline_ms = config->local_executor_deadline_ms;
+  if (config->local_executor_enabled) {
+    turbo_threadpool_config_t executor_config = {(int)config->local_executor_workers,
+                                                 config->local_executor_queue_capacity};
+    endpoint->local_executor = turbo_threadpool_create_with_config(&executor_config);
+    if (!endpoint->local_executor) {
+      crypto_wipe(endpoint->service_token_ref, reference_size);
+      free(endpoint->service_token_ref);
+      crypto_wipe(endpoint, sizeof(*endpoint));
+      free(endpoint);
+      return TURBO_ENOMEM;
+    }
+  }
   *out = endpoint;
   return TURBO_OK;
 }
@@ -547,10 +721,11 @@ int flowie_control_auth_iris_endpoint_create(
 void flowie_control_auth_iris_endpoint_destroy(flowie_control_auth_iris_endpoint_t *endpoint) {
   if (!endpoint) return;
   if (endpoint->bound_app)
-    (void)iris_app_unbind_rpc_context(endpoint->bound_app,
-                                      FLOWIE_CONTROL_AUTH_HTTP_PATH, endpoint);
+    (void)iris_app_unbind_rpc_context(endpoint->bound_app, FLOWIE_CONTROL_AUTH_HTTP_PATH, endpoint);
+  turbo_threadpool_destroy(endpoint->local_executor);
+  endpoint->local_executor = NULL;
   if (endpoint->service_token_ref) {
-    memset(endpoint->service_token_ref, 0, strlen(endpoint->service_token_ref));
+    crypto_wipe(endpoint->service_token_ref, strlen(endpoint->service_token_ref));
     free(endpoint->service_token_ref);
   }
   crypto_wipe(endpoint, sizeof(*endpoint));
@@ -564,7 +739,6 @@ int flowie_control_auth_iris_endpoint_register(flowie_control_auth_iris_endpoint
                                    flowie_control_auth_iris_endpoint_unbound, app) != 0)
     return TURBO_EBUSY;
   endpoint->bound_app = app;
-  iris_app_post(app, FLOWIE_CONTROL_AUTH_HTTP_PATH,
-                flowie_control_auth_iris_registered_handler);
+  iris_app_post(app, FLOWIE_CONTROL_AUTH_HTTP_PATH, flowie_control_auth_iris_registered_handler);
   return TURBO_OK;
 }

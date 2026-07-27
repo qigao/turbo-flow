@@ -22,6 +22,12 @@ option(TURBO_FLOW_BUILD_STORE "Build the typed FlowStore state, index, log, and 
 # Optional modules default to the historical full build. Disable the master
 # switch for a core-only package, or keep it enabled and select components.
 option(TURBO_FLOW_BUILD_ADAPTERS "Build TurboFlow optional adapter modules" ON)
+cmake_dependent_option(TURBO_FLOW_BUILD_GATEWAYS
+                       "Build MQTT protocol gateway ABI and six codec plugins" ON
+                       "TURBO_FLOW_BUILD_ADAPTERS" OFF)
+cmake_dependent_option(TURBO_FLOW_BUILD_GATEWAY_BUSINESS
+                       "Build schema-bound gateway business providers" ON
+                       "TURBO_FLOW_BUILD_GATEWAYS" OFF)
 cmake_dependent_option(TURBO_FLOW_BUILD_SECURITY_SQLITE
                        "Build the embedded SQLite ACL policy provider" ON
                        "TURBO_FLOW_BUILD_ADAPTERS" OFF)
@@ -58,7 +64,7 @@ option(TURBO_FLOW_REDIS_LIVE_TESTS
 option(TURBO_FLOW_PGSQL_LIVE_TESTS
        "Enable PostgreSQL outbox integration tests using TURBO_FLOW_PGSQL_TEST_CONNINFO" OFF)
 option(FLOWIE_MQTT_PUBLIC_LIVE_TESTS
-       "Enable Flowie MQTT client integration tests against public MQTT brokers" OFF)
+       "Enable optional Flowie MQTT client external-connectivity smoke tests" OFF)
 option(FLOWIE_MQTT_FIXED_INTEROP_TESTS
        "Run Flowie and Mosquitto interoperability against one fixed broker" OFF)
 set(FLOWIE_MQTT_FIXED_BROKER_NAME "Mosquitto-2.0.22" CACHE STRING
@@ -75,13 +81,13 @@ option(FLOWIE_MQTT_FIXED_SUPPORT_31 "Fixed broker accepts MQTT 3.1 on TCP and TL
 option(FLOWIE_MQTT_FIXED_SUPPORT_31_WS
        "Fixed broker accepts MQTT 3.1 over WS and WSS with the mqtt subprotocol" ON)
 option(FLOWIE_MQTT_SOAK_TESTS "Register scheduled Flowie MQTT soak tests" OFF)
+option(GATEWAY_TRANSPORT_SOAK_TESTS
+       "Register scheduled gateway CoroNet transport soak tests" OFF)
 option(FLOWIE_MQTT_FUZZ_TARGETS "Build Flowie MQTT libFuzzer targets" OFF)
 option(FLOWIE_MQTT_RELEASE_GATE
        "Register the strict Flowie MQTT release-manifest CTest" OFF)
 set(FLOWIE_RELEASE_REVISION "" CACHE STRING
     "Immutable source revision written into Flowie release/nightly evidence")
-set(FLOWIE_MQTT_PUBLIC_BROKER_VERSION "HiveMQ+EMQX/live" CACHE STRING
-    "Public broker implementations/version label written into release evidence")
 set(FLOWIE_REDIS_SERVER_VERSION "8.8.0" CACHE STRING
     "Redis server version written into release evidence")
 set(FLOWIE_MQTT_NIGHTLY_SEED "11794061671962178383" CACHE STRING

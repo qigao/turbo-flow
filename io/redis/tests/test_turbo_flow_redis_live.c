@@ -1,4 +1,5 @@
 #include "flowie_record_store_contract.h"
+#include "flowie_record_store_endurance.h"
 #include "tinytest.h"
 #include "turbo_error.h"
 #include "turbo_flow_fmq_broker.h"
@@ -507,6 +508,33 @@ spec("turbo_flow_redis_live") {
     check_int_eq(redis_test_storage_destroy(&store), TURBO_OK);
   }
 
+  it("MQTT-STORE-ENDURANCE-001 runs the shared revision trace through Redis") {
+    turbo_flow_redis_record_store_config_t config;
+    turbo_flow_record_store_t store = TURBO_FLOW_RECORD_STORE_INIT;
+    flowie_record_store_endurance_result_t result = {0};
+    char key[128];
+    (void)snprintf(key, sizeof(key), "turboflow:live:record-endurance:%llu",
+                   (unsigned long long)turbo_hrtime());
+    memset(&config, 0, sizeof(config));
+    config.host = "127.0.0.1";
+    config.port = 6379u;
+    config.database = 0;
+    config.timeout_ms = 5000u;
+    config.key = key;
+    config.max_record_key_size = FLOWIE_RECORD_ENDURANCE_KEY_SIZE;
+    config.max_value_size = FLOWIE_RECORD_ENDURANCE_VALUE_SIZE;
+    config.max_batch_size = FLOWIE_RECORD_ENDURANCE_BATCH_SIZE;
+    config.max_records = FLOWIE_RECORD_ENDURANCE_RECORDS;
+    check_int_eq(redis_test_record_store_open(&config, &store), TURBO_OK);
+    check_int_eq(flowie_record_store_endurance_run(&store, &result), TURBO_OK);
+    check_size_eq(result.successful_commits, 40u);
+    check_size_eq(result.scans, 39u);
+    check_size_eq(result.conflicts, 4u);
+    check_size_eq(result.final_count, 0u);
+    check_true(result.durable);
+    check_int_eq(redis_test_storage_destroy(&store), TURBO_OK);
+  }
+
   it("MQTT-SOAK-005 MQTT-STORE-007 resolves Redis timeout and lost commit replies by revision") {
     static const uint8_t unavailable_key[] = {'u'};
     static const uint8_t unavailable_value[] = {'v'};
@@ -811,9 +839,9 @@ spec("turbo_flow_redis_live") {
     persistence.store = &store;
     bindings.persistence = &persistence;
 
-    check_int_eq(redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store,
-                                                          &error),
-                 TURBO_OK);
+    check_int_eq(
+        redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store, &error),
+        TURBO_OK);
     check_int_eq(redis_live_start_bound_endpoint(resolved, &bindings, graph, &flow), TURBO_OK);
     subscriber = flowie_test_connect(port);
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
@@ -843,9 +871,9 @@ spec("turbo_flow_redis_live") {
     flow = NULL;
     check_int_eq(redis_test_storage_destroy(&store), TURBO_OK);
 
-    check_int_eq(redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store,
-                                                          &error),
-                 TURBO_OK);
+    check_int_eq(
+        redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store, &error),
+        TURBO_OK);
     check_int_eq(redis_live_start_bound_endpoint(resolved, &bindings, graph, &flow), TURBO_OK);
     subscriber = flowie_test_connect(port);
     check_true(subscriber != FLOWIE_TEST_INVALID_SOCKET);
@@ -1008,9 +1036,9 @@ spec("turbo_flow_redis_live") {
                         "      max_batch_size: 2\n      max_records: 2\nadapters: {}\n",
                         key) > 0);
     check_int_eq(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), TURBO_OK);
-    check_int_eq(redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store,
-                                                          &error),
-                 TURBO_OK);
+    check_int_eq(
+        redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store, &error),
+        TURBO_OK);
     turbo_flow_resolved_config_destroy(resolved);
     memset(&capture, 0, sizeof(capture));
     check_int_eq(store.scan(store.ctx, redis_live_record_visit, &capture), TURBO_OK);

@@ -14,7 +14,6 @@ endif()
 set(required_tests
     test_flowie_mqtt_protocol_matrix
     test_flowie_mqtt_protocol_corpus
-    test_flowie_mqtt_client_live
     test_flowie_mqtt_client_fixed_interop
     flowie_mqtt_fixed_mqtt31_capability
     flowie_mqtt_fixed_mqtt31_ws_capability
@@ -22,6 +21,7 @@ set(required_tests
     test_flowie_mosquitto_fixed_interop
     test_flowie_session_store_faults
     test_flowie_transport
+    test_flowie_mqtt_endurance
     test_flowie_mqtt_soak
     flowie_server_check_redis_session_store
     flowie_server_check_https_auth_provider)

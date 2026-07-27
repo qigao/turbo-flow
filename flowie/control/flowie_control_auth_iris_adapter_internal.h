@@ -23,21 +23,41 @@ typedef struct flowie_control_auth_iris_adapter_config_s {
  * Create a transport adapter that borrows the authentication service and copies
  * listener_id. Destroy it only after all request handlers using it have stopped.
  */
-int flowie_control_auth_iris_adapter_create(
-    const flowie_control_auth_iris_adapter_config_t *config,
-    flowie_control_auth_iris_adapter_t **out);
+int flowie_control_auth_iris_adapter_create(const flowie_control_auth_iris_adapter_config_t *config,
+                                            flowie_control_auth_iris_adapter_t **out);
 void flowie_control_auth_iris_adapter_destroy(flowie_control_auth_iris_adapter_t *adapter);
+
+/**
+ * Copy the canonical SHA-256 identity from Iris/CoroNet's verified TLS peer.
+ * The caller must provide CORO_TLS_PEER_CERT_SHA256_CAPACITY bytes and wipe the
+ * result after use. Plain or unverified transports are normalized to EPERM.
+ */
+int flowie_control_auth_iris_adapter_verified_peer_certificate(
+    const Req *http_request, char peer_certificate_sha256[CORO_TLS_PEER_CERT_SHA256_CAPACITY]);
+
+/**
+ * Authenticate fields after the owner lane has already extracted the verified
+ * transport identity. This form never accesses Req and is safe for a bounded
+ * local-auth worker.
+ */
+int flowie_control_auth_iris_adapter_authenticate_verified(
+    flowie_control_auth_iris_adapter_t *adapter, const char *peer_certificate_sha256,
+    const char *identity, const char *method, const uint8_t *secret, size_t secret_size,
+    const char *protocol, const char *remote_address, const char *client_peer_certificate_sha256,
+    turbo_flow_security_principal_t *principal_out, int *credential_cache_hit_out);
 
 /**
  * Authenticate decoded request fields using only Iris/CoroNet's verified mTLS
  * peer identity. HTTP headers and body fields cannot supply or override caller
  * identity. Transport identity failures are normalized to TURBO_EPERM.
  */
-int flowie_control_auth_iris_adapter_authenticate(
-    flowie_control_auth_iris_adapter_t *adapter, const Req *http_request,
-    const char *identity, const char *method, const uint8_t *secret,
-    size_t secret_size, turbo_flow_security_principal_t *principal_out,
-    int *credential_cache_hit_out);
+int flowie_control_auth_iris_adapter_authenticate(flowie_control_auth_iris_adapter_t *adapter,
+                                                  const Req *http_request, const char *identity,
+                                                  const char *method, const uint8_t *secret,
+                                                  size_t secret_size, const char *protocol,
+                                                  const char *remote_address,
+                                                  turbo_flow_security_principal_t *principal_out,
+                                                  int *credential_cache_hit_out);
 
 #ifdef __cplusplus
 }

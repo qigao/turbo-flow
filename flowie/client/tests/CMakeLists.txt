@@ -21,7 +21,7 @@ cmake_add_test(
 
 set_tests_properties(
   test_flowie_mqtt_client_live
-  PROPERTIES LABELS "flowie;flowie-release;mqtt;client;integration;mqtt-public-live"
+  PROPERTIES LABELS "flowie;mqtt;client;integration;mqtt-public-live;external-smoke"
              TIMEOUT 120)
 if(NOT FLOWIE_MQTT_PUBLIC_LIVE_TESTS)
   set_tests_properties(test_flowie_mqtt_client_live PROPERTIES DISABLED TRUE)

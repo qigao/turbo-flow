@@ -8,12 +8,18 @@
 extern "C" {
 #endif
 
-#define FLOWIE_CONTROL_AUTH_HTTP_PATH "/v2/authenticate"
-#define FLOWIE_CONTROL_AUTH_HTTP_PROTOCOL_VERSION 2u
+#define FLOWIE_CONTROL_AUTH_HTTP_PATH "/v3/authenticate"
+#define FLOWIE_CONTROL_AUTH_HTTP_PROTOCOL_VERSION 3u
 #define FLOWIE_CONTROL_AUTH_HTTP_DEFAULT_REQUEST_BODY_MAX 8192u
 #define FLOWIE_CONTROL_AUTH_HTTP_ABSOLUTE_REQUEST_BODY_MAX 16384u
-#define FLOWIE_CONTROL_AUTH_HTTP_REMOTE_ADDRESS_MAX 255u
+#define FLOWIE_CONTROL_AUTH_HTTP_REMOTE_ADDRESS_MAX FLOWIE_CONTROL_AUTH_REMOTE_ADDRESS_MAX
 #define FLOWIE_CONTROL_AUTH_HTTP_TOKEN_REFERENCE_MAX 1024u
+#define FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_DEFAULT_WORKERS 4u
+#define FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_MAX_WORKERS 64u
+#define FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_DEFAULT_QUEUE_CAPACITY 128u
+#define FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_MAX_QUEUE_CAPACITY 4096u
+#define FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_DEFAULT_DEADLINE_MS 10000u
+#define FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_MAX_DEADLINE_MS 60000u
 
 typedef struct flowie_control_auth_iris_endpoint_s flowie_control_auth_iris_endpoint_t;
 
@@ -24,21 +30,30 @@ typedef struct flowie_control_auth_iris_endpoint_config_s {
   turbo_flow_security_key_provider_t key_provider;
   size_t max_request_body_size;
   size_t max_secret_size;
+  int local_executor_enabled;
+  uint32_t local_executor_workers;
+  size_t local_executor_queue_capacity;
+  uint32_t local_executor_deadline_ms;
 } flowie_control_auth_iris_endpoint_config_t;
 
-#define FLOWIE_CONTROL_AUTH_IRIS_ENDPOINT_CONFIG_INIT                                             \
-  {sizeof(flowie_control_auth_iris_endpoint_config_t),                                            \
-   NULL,                                                                                          \
-   NULL,                                                                                          \
-   TURBO_FLOW_SECURITY_KEY_PROVIDER_INIT,                                                         \
-   FLOWIE_CONTROL_AUTH_HTTP_DEFAULT_REQUEST_BODY_MAX,                                             \
-   FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX}
+#define FLOWIE_CONTROL_AUTH_IRIS_ENDPOINT_CONFIG_INIT                                              \
+  {sizeof(flowie_control_auth_iris_endpoint_config_t),                                             \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   TURBO_FLOW_SECURITY_KEY_PROVIDER_INIT,                                                          \
+   FLOWIE_CONTROL_AUTH_HTTP_DEFAULT_REQUEST_BODY_MAX,                                              \
+   FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX,                                                           \
+   0,                                                                                              \
+   FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_DEFAULT_WORKERS,                                             \
+   FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_DEFAULT_QUEUE_CAPACITY,                                      \
+   FLOWIE_CONTROL_AUTH_LOCAL_EXECUTOR_DEFAULT_DEADLINE_MS}
 
 typedef struct flowie_control_auth_http_request_s {
   char identity[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char method[TURBO_FLOW_SECURITY_TYPE_MAX + 1u];
   char protocol[TURBO_FLOW_SECURITY_TYPE_MAX + 1u];
   char remote_address[FLOWIE_CONTROL_AUTH_HTTP_REMOTE_ADDRESS_MAX + 1u];
+  char peer_certificate_sha256[FLOWIE_CONTROL_AUTH_CERT_SHA256_TEXT_SIZE + 1u];
   uint8_t secret[FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX];
   size_t secret_size;
 } flowie_control_auth_http_request_t;
@@ -53,7 +68,7 @@ int flowie_control_auth_iris_endpoint_create(
 void flowie_control_auth_iris_endpoint_destroy(flowie_control_auth_iris_endpoint_t *endpoint);
 
 /**
- * Bind exactly POST /v2/authenticate on one Iris app. The caller keeps ownership
+ * Bind exactly POST /v3/authenticate on one Iris app. The caller keeps ownership
  * of both objects and must stop the app before destroying the endpoint.
  */
 int flowie_control_auth_iris_endpoint_register(flowie_control_auth_iris_endpoint_t *endpoint,
@@ -70,6 +85,17 @@ void flowie_control_auth_iris_endpoint_handle(flowie_control_auth_iris_endpoint_
 int flowie_control_auth_iris_endpoint_process(flowie_control_auth_iris_endpoint_t *endpoint,
                                               Req *req, int *status_out, char **body_out,
                                               size_t *body_size_out);
+
+/**
+ * Execute one decoded request using an already verified transport identity.
+ * With the local executor enabled this function must run inside a CoroNet
+ * coroutine. A deadline only abandons the response; accepted synchronous work
+ * remains owned by the executor and is drained during endpoint destruction.
+ */
+int flowie_control_auth_iris_endpoint_authenticate_verified(
+    flowie_control_auth_iris_endpoint_t *endpoint, const char *peer_certificate_sha256,
+    const flowie_control_auth_http_request_t *request,
+    turbo_flow_security_principal_t *principal_out);
 
 int flowie_control_auth_http_decode_request(const char *body, size_t body_size,
                                             size_t max_secret_size,

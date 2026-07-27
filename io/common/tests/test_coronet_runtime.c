@@ -16,8 +16,6 @@ spec("flow_coronet_runtime") {
     check_str_eq(TF_CORONET_TRANSPORT_VALUES[TF_CORONET_TRANSPORT_WS], "ws");
     check_str_eq(TF_CORONET_TRANSPORT_VALUES[TF_CORONET_TRANSPORT_WSS], "wss");
     check_str_eq(TF_CORONET_TRANSPORT_VALUES[TF_CORONET_TRANSPORT_PIPE], "pipe");
-    check_str_eq(TF_CORONET_KCP_FEC_BACKEND_VALUES[TURBO_KCP_FEC_BACKEND_NONE], "none");
-    check_str_eq(TF_CORONET_KCP_FEC_BACKEND_VALUES[TURBO_KCP_FEC_BACKEND_WIREHAIR], "wirehair");
   }
 
   it("validates transport families") {
@@ -181,50 +179,54 @@ spec("flow_coronet_runtime") {
     check_uint_eq(timeout_ms, 400);
   }
 
-  it("validates KCP FEC options before socket bind or connect") {
-    tf_coronet_kcp_fec_options_t options = {0};
-    turbo_kcp_fec_config_t config;
+  it("validates one authenticated KCP config before socket bind or connect") {
+    tf_coronet_kcp_options_t options = {0};
+    turbo_kcp_config_t config;
     int configured = 1;
-    int rc;
 
-    check_int_eq(tf_coronet_kcp_fec_options_resolve(TF_CORONET_TRANSPORT_TCP, &options, &config,
-                                                    &configured),
+    check_int_eq(tf_coronet_kcp_options_resolve(TF_CORONET_TRANSPORT_TCP, &options, &config,
+                                                &configured),
                  TURBO_OK);
     check_int_eq(configured, 0);
-    check_int_eq(config.enabled, 0);
 
-    options.enabled = 1;
-    options.backend = TURBO_KCP_FEC_BACKEND_WIREHAIR;
+    memset(options.pre_shared_key, 0x5a, sizeof(options.pre_shared_key));
+    options.mtu = 1200;
+    options.send_window = 256;
+    options.receive_window = 256;
+    options.interval_ms = 5;
+    options.handshake_retry_ms = 200;
+    options.fast_resend = 2;
+    options.no_congestion_window = 1;
     options.data_shards = 4;
     options.parity_shards = 2;
-    options.max_payload_size = 1200;
-    check_int_eq(tf_coronet_kcp_fec_options_resolve(TF_CORONET_TRANSPORT_TCP, &options, &config,
-                                                    &configured),
+    options.max_payload_size = 1248;
+    options.receive_group_count = 16;
+    check_int_eq(tf_coronet_kcp_options_resolve(TF_CORONET_TRANSPORT_TCP, &options, &config,
+                                                &configured),
                  TURBO_EINVAL);
 
-    options.backend = TURBO_KCP_FEC_BACKEND_NONE;
-    check_int_eq(tf_coronet_kcp_fec_options_resolve(TF_CORONET_TRANSPORT_KCP, &options, &config,
-                                                    &configured),
-                 TURBO_EINVAL);
+    check_int_eq(tf_coronet_kcp_options_resolve(TF_CORONET_TRANSPORT_KCP, &options, &config,
+                                                &configured),
+                 TURBO_OK);
+    check_int_eq(configured, 1);
+    check_uint_eq(config.mtu, 1200);
+    check_uint_eq(config.send_window, 256);
+    check_uint_eq(config.receive_window, 256);
+    check_uint_eq(config.interval_ms, 5);
+    check_uint_eq(config.handshake_retry_ms, 200);
+    check_uint_eq(config.fast_resend, 2);
+    check_int_eq(config.no_congestion_window, 1);
+    check_int_eq(config.fec.backend, TURBO_KCP_FEC_BACKEND_REED_SOLOMON);
+    check_uint_eq(config.fec.data_shards, 4);
+    check_uint_eq(config.fec.parity_shards, 2);
+    check_uint_eq(config.fec.max_payload_size, 1248);
+    check_uint_eq(config.fec.receive_group_count, 16);
 
-    options.backend = TURBO_KCP_FEC_BACKEND_WIREHAIR;
-    rc = tf_coronet_kcp_fec_options_resolve(TF_CORONET_TRANSPORT_KCP, &options, &config,
-                                            &configured);
-    if (turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_WIREHAIR)) {
-      check_int_eq(rc, TURBO_OK);
-      check_int_eq(configured, 1);
-      check_int_eq(config.enabled, 1);
-      check_int_eq(config.backend, TURBO_KCP_FEC_BACKEND_WIREHAIR);
-      check_uint_eq(config.data_shards, 4);
-      check_uint_eq(config.parity_shards, 2);
-      check_uint_eq(config.max_payload_size, 1200);
-    } else {
-      check_int_eq(rc, TURBO_ENOTSUP);
-    }
-
-    check_int_eq(tf_coronet_apply_kcp_fec(NULL, TF_CORONET_TRANSPORT_KCP, &config, 0), TURBO_OK);
-    check_int_eq(tf_coronet_apply_kcp_fec(NULL, TF_CORONET_TRANSPORT_KCP, &config, 1),
+    check_int_eq(tf_coronet_apply_kcp_config(NULL, TF_CORONET_TRANSPORT_KCP, &config, 0),
+                 TURBO_OK);
+    check_int_eq(tf_coronet_apply_kcp_config(NULL, TF_CORONET_TRANSPORT_KCP, &config, 1),
                  TURBO_EINVAL);
+    turbo_kcp_config_wipe(&config);
   }
 
   it("validates CoroNet socket primitive option matrices") {

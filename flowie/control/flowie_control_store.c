@@ -1,8 +1,9 @@
 #include "flowie_control_store_internal.h"
 
 #include "flowie_control_credential_internal.h"
+#include "flowie_control_repository_internal.h"
+#include "flowie_control_validation_internal.h"
 
-#include "flowie_mqtt_protocol.h"
 #include "turbo_error.h"
 #include "turbo_str.h"
 
@@ -164,6 +165,7 @@ static const char
 struct flowie_control_store_s {
   tstr_t database_path;
   int busy_timeout_ms;
+  flowie_control_repository_t repository;
 };
 
 typedef struct flowie_control_credential_record_s {
@@ -177,6 +179,10 @@ typedef struct flowie_control_credential_record_s {
   int credential_enabled;
 } flowie_control_credential_record_t;
 
+typedef struct flowie_control_policy_bundle_owner_s {
+  turbo_flow_security_rule_t *rules;
+} flowie_control_policy_bundle_owner_t;
+
 static int flowie_control_sqlite_status(int status) {
   int primary = status & 0xff;
   if (primary == SQLITE_BUSY || primary == SQLITE_LOCKED) return TURBO_EBUSY;
@@ -184,18 +190,6 @@ static int flowie_control_sqlite_status(int status) {
   if (primary == SQLITE_CONSTRAINT || primary == SQLITE_MISMATCH || primary == SQLITE_RANGE)
     return TURBO_EINVAL;
   return TURBO_EIO;
-}
-
-static int flowie_control_text_valid(const char *value, size_t limit) {
-  size_t length;
-  if (!value || limit == 0u) return 0;
-  length = strnlen(value, limit + 1u);
-  if (length == 0u || length > limit) return 0;
-  for (size_t i = 0u; i < length; ++i) {
-    unsigned char byte = (unsigned char)value[i];
-    if (byte < 0x20u || byte == 0x7fu) return 0;
-  }
-  return 1;
 }
 
 static int flowie_control_open_database(const flowie_control_store_t *store, sqlite3 **out) {
@@ -471,9 +465,9 @@ done:
   return rc;
 }
 
-static int flowie_control_policy_subject_referenced(
-    sqlite3 *database, const char *root_group_id,
-    turbo_flow_security_subject_kind_t subject_kind, const char *subject, int *referenced_out) {
+static int flowie_control_policy_subject_referenced(sqlite3 *database, const char *root_group_id,
+                                                    turbo_flow_security_subject_kind_t subject_kind,
+                                                    const char *subject, int *referenced_out) {
   static const char sql[] =
       "SELECT rule_line FROM flowie_control_policy_draft WHERE root_group_id=?1 "
       "UNION ALL SELECT rule_line FROM turbo_flow_acl_rule_v3 WHERE namespace_name=?1";
@@ -779,20 +773,12 @@ static int flowie_control_policy_rule_validate(sqlite3 *database, const char *ro
                                                const char *rule_line, size_t rule_line_size,
                                                turbo_flow_security_rule_t *rule_out) {
   turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
-  char canonical[TURBO_FLOW_SECURITY_RULE_LINE_MAX + 1u];
-  size_t canonical_size = 0u;
   uint32_t depth = 0u;
   int enabled = 0;
   int rc;
-  if (!database || !root_group_id || !rule_line || rule_line_size == 0u ||
-      rule_line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX || memchr(rule_line, '\0', rule_line_size))
-    return TURBO_EINVAL;
-  rc = turbo_flow_security_rule_parse_line(rule_line, rule_line_size, &rule);
-  if (rc != TURBO_OK || strcmp(rule.root_group_id, root_group_id) != 0) return TURBO_EPROTO;
-  rc = turbo_flow_security_rule_format_line(&rule, canonical, sizeof(canonical), &canonical_size);
-  if (rc != TURBO_OK || canonical_size != rule_line_size ||
-      memcmp(canonical, rule_line, rule_line_size) != 0)
-    return TURBO_EPROTO;
+  if (!database) return TURBO_EINVAL;
+  rc = flowie_control_policy_rule_syntax_validate(root_group_id, rule_line, rule_line_size, &rule);
+  if (rc != TURBO_OK) return rc;
   rc = flowie_control_group_lookup(database, root_group_id, root_group_id, &depth, &enabled);
   if (rc != TURBO_OK) return rc;
   if (!enabled || depth != 0u) return TURBO_EPERM;
@@ -817,11 +803,6 @@ static int flowie_control_policy_rule_validate(sqlite3 *database, const char *ro
   default:
     return TURBO_EPROTO;
   }
-  if (rule.resource_type == TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC &&
-      rule.match_kind == TURBO_FLOW_SECURITY_MATCH_ADAPTER &&
-      !flowie_mqtt_topic_filter_validate(
-          (flowie_mqtt_span_t){(const uint8_t *)rule.pattern, strlen(rule.pattern)}))
-    return TURBO_EPROTO;
   if (rule_out) *rule_out = rule;
   return TURBO_OK;
 }
@@ -908,6 +889,10 @@ int flowie_control_store_open(const flowie_control_store_config_t *config,
     goto fail;
   }
   (void)sqlite3_close(database);
+  database = NULL;
+  store->repository = (flowie_control_repository_t)FLOWIE_CONTROL_REPOSITORY_INIT;
+  rc = flowie_control_repository_bind_sqlite(store, &store->repository);
+  if (rc != TURBO_OK) goto fail;
   *out = store;
   return TURBO_OK;
 
@@ -920,7 +905,13 @@ fail:
 void flowie_control_store_destroy(flowie_control_store_t *store) {
   if (!store) return;
   tstr_freep(&store->database_path);
+  store->repository = (flowie_control_repository_t)FLOWIE_CONTROL_REPOSITORY_INIT;
   free(store);
+}
+
+const flowie_control_repository_t *flowie_control_store_repository(flowie_control_store_t *store) {
+  if (!store || flowie_control_repository_validate(&store->repository) != TURBO_OK) return NULL;
+  return &store->repository;
 }
 
 int flowie_control_store_root_group_create(
@@ -1196,9 +1187,9 @@ int flowie_control_store_group_disable(flowie_control_store_t *store,
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_policy_subject_referenced(
-      database, command->root_group_id, TURBO_FLOW_SECURITY_SUBJECT_GROUP, command->group_id,
-      &policy_reference);
+  rc = flowie_control_policy_subject_referenced(database, command->root_group_id,
+                                                TURBO_FLOW_SECURITY_SUBJECT_GROUP,
+                                                command->group_id, &policy_reference);
   if (rc != TURBO_OK) goto done;
   if (policy_reference) {
     rc = TURBO_EBUSY;
@@ -1432,9 +1423,9 @@ int flowie_control_store_user_disable(flowie_control_store_t *store,
   }
   (void)sqlite3_finalize(statement);
   statement = NULL;
-  rc = flowie_control_policy_subject_referenced(
-      database, command->root_group_id, TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL,
-      command->principal_id, &policy_reference);
+  rc = flowie_control_policy_subject_referenced(database, command->root_group_id,
+                                                TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL,
+                                                command->principal_id, &policy_reference);
   if (rc != TURBO_OK) goto done;
   if (policy_reference) {
     rc = TURBO_EBUSY;
@@ -2068,6 +2059,97 @@ done:
   return rc;
 }
 
+int flowie_control_store_external_principal_snapshot(flowie_control_store_t *store,
+                                                     const char *root_group_id,
+                                                     const char *principal_id,
+                                                     uint64_t assertion_revision,
+                                                     flowie_control_principal_snapshot_t *out) {
+  static const char sql[] = "SELECT root_group_id,principal_id,principal_type,enabled,revision "
+                            "FROM flowie_control_user WHERE root_group_id=?1 AND principal_id=?2";
+  flowie_control_principal_snapshot_t snapshot = FLOWIE_CONTROL_PRINCIPAL_SNAPSHOT_INIT;
+  sqlite3 *database = NULL;
+  sqlite3_stmt *statement = NULL;
+  sqlite3_int64 user_revision;
+  int transaction_started = 0;
+  int status;
+  int rc;
+
+  if (out && out->size >= sizeof(*out)) *out = snapshot;
+  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+      !flowie_control_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+      assertion_revision == 0u || !out || out->size < sizeof(*out))
+    return TURBO_EINVAL;
+
+  rc = flowie_control_open_database(store, &database);
+  if (rc != TURBO_OK) goto done;
+  status = sqlite3_exec(database, "BEGIN", NULL, NULL, NULL);
+  if (status != SQLITE_OK) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  transaction_started = 1;
+  status = sqlite3_prepare_v2(database, sql, -1, &statement, NULL);
+  if (status != SQLITE_OK) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, principal_id);
+  if (rc != TURBO_OK) goto done;
+  status = sqlite3_step(statement);
+  if (status == SQLITE_DONE) {
+    rc = TURBO_EPERM;
+    goto done;
+  }
+  if (status != SQLITE_ROW || sqlite3_column_type(statement, 3) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement, 4) != SQLITE_INTEGER ||
+      (sqlite3_column_int(statement, 3) != 0 && sqlite3_column_int(statement, 3) != 1)) {
+    rc = status == SQLITE_ROW ? TURBO_EPROTO : flowie_control_sqlite_status(status);
+    goto done;
+  }
+  user_revision = sqlite3_column_int64(statement, 4);
+  if (!sqlite3_column_int(statement, 3) || user_revision <= 0) {
+    rc = TURBO_EPERM;
+    goto done;
+  }
+  rc = flowie_control_copy_column(statement, 0, snapshot.root_group_id,
+                                  sizeof(snapshot.root_group_id));
+  if (rc == TURBO_OK)
+    rc = flowie_control_copy_column(statement, 1, snapshot.principal_id,
+                                    sizeof(snapshot.principal_id));
+  if (rc == TURBO_OK)
+    rc = flowie_control_copy_column(statement, 2, snapshot.principal_type,
+                                    sizeof(snapshot.principal_type));
+  if (rc != TURBO_OK) goto done;
+  snapshot.user_revision = (uint64_t)user_revision;
+  snapshot.credential_revision = assertion_revision;
+  (void)sqlite3_finalize(statement);
+  statement = NULL;
+
+  rc = flowie_control_effective_groups_database(database, root_group_id, principal_id,
+                                                &snapshot.effective_groups);
+  if (rc == TURBO_OK)
+    rc = flowie_control_effective_roles_database(database, root_group_id, principal_id,
+                                                 &snapshot.effective_roles);
+  if (rc != TURBO_OK) goto done;
+  status = sqlite3_exec(database, "COMMIT", NULL, NULL, NULL);
+  if (status != SQLITE_OK) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  transaction_started = 0;
+  *out = snapshot;
+  rc = TURBO_OK;
+
+done:
+  if (statement) (void)sqlite3_finalize(statement);
+  if (transaction_started && database) (void)sqlite3_exec(database, "ROLLBACK", NULL, NULL, NULL);
+  if (database) (void)sqlite3_close(database);
+  if (rc != TURBO_OK && out && out->size >= sizeof(*out))
+    *out = (flowie_control_principal_snapshot_t)FLOWIE_CONTROL_PRINCIPAL_SNAPSHOT_INIT;
+  return rc;
+}
+
 int flowie_control_store_membership_add(flowie_control_store_t *store,
                                         const flowie_control_membership_add_command_t *command,
                                         flowie_control_command_result_t *result) {
@@ -2451,9 +2533,9 @@ int flowie_control_store_role_disable(flowie_control_store_t *store,
     rc = TURBO_EALREADY;
     goto done;
   }
-  rc = flowie_control_policy_subject_referenced(
-      database, command->root_group_id, TURBO_FLOW_SECURITY_SUBJECT_ROLE, command->role_id,
-      &policy_reference);
+  rc = flowie_control_policy_subject_referenced(database, command->root_group_id,
+                                                TURBO_FLOW_SECURITY_SUBJECT_ROLE, command->role_id,
+                                                &policy_reference);
   if (rc != TURBO_OK) goto done;
   if (policy_reference) {
     rc = TURBO_EBUSY;
@@ -3123,6 +3205,158 @@ int flowie_control_store_policy_status(flowie_control_store_t *store, const char
 done:
   if (statement) (void)sqlite3_finalize(statement);
   (void)sqlite3_close(database);
+  return rc;
+}
+
+void flowie_control_store_policy_bundle_release(turbo_flow_security_policy_bundle_t *bundle) {
+  flowie_control_policy_bundle_owner_t *owner;
+  if (!bundle) return;
+  owner = (flowie_control_policy_bundle_owner_t *)bundle->provider_bundle;
+  if (owner) {
+    free(owner->rules);
+    free(owner);
+  }
+  *bundle = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
+}
+
+int flowie_control_store_policy_bundle_load(flowie_control_store_t *store,
+                                            const char *root_group_id, uint64_t required_version,
+                                            turbo_flow_security_policy_bundle_t *bundle_out) {
+  flowie_control_policy_bundle_owner_t *owner = NULL;
+  sqlite3 *database = NULL;
+  sqlite3_stmt *statement = NULL;
+  sqlite3_int64 rule_count_value;
+  size_t expected_ordinal = 0u;
+  size_t rule_count = 0u;
+  uint64_t policy_version = 0u;
+  uint64_t expires_at = 0u;
+  int transaction_started = 0;
+  int status;
+  int rc;
+  if (bundle_out && bundle_out->size >= sizeof(*bundle_out))
+    *bundle_out = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
+  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+      required_version > (uint64_t)INT64_MAX || !bundle_out ||
+      bundle_out->size < sizeof(*bundle_out))
+    return TURBO_EINVAL;
+  rc = flowie_control_open_database(store, &database);
+  if (rc != TURBO_OK) return rc;
+  status = sqlite3_exec(database, "BEGIN", NULL, NULL, NULL);
+  if (status != SQLITE_OK) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  transaction_started = 1;
+  status = sqlite3_prepare_v2(
+      database,
+      "SELECT b.policy_version,b.expires_at,"
+      "(SELECT COUNT(*) FROM turbo_flow_acl_rule_v3 r WHERE r.namespace_name=b.namespace_name) "
+      "FROM turbo_flow_acl_bundle_v3 b WHERE b.namespace_name=?1 "
+      "AND (?2=0 OR b.policy_version=?2)",
+      -1, &statement, NULL);
+  if (status != SQLITE_OK) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  if (rc == TURBO_OK &&
+      sqlite3_bind_int64(statement, 2, (sqlite3_int64)required_version) != SQLITE_OK)
+    rc = flowie_control_sqlite_status(sqlite3_errcode(database));
+  if (rc != TURBO_OK) goto done;
+  status = sqlite3_step(statement);
+  if (status == SQLITE_DONE) {
+    rc = TURBO_ENOENT;
+    goto done;
+  }
+  if (status != SQLITE_ROW || sqlite3_column_type(statement, 0) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement, 1) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement, 2) != SQLITE_INTEGER ||
+      sqlite3_column_int64(statement, 0) <= 0 || sqlite3_column_int64(statement, 1) < 0 ||
+      (rule_count_value = sqlite3_column_int64(statement, 2)) <= 0 ||
+      rule_count_value > (sqlite3_int64)TURBO_FLOW_SECURITY_MAX_RULES) {
+    rc = status == SQLITE_ROW ? TURBO_EPROTO : flowie_control_sqlite_status(status);
+    goto done;
+  }
+  policy_version = (uint64_t)sqlite3_column_int64(statement, 0);
+  expires_at = (uint64_t)sqlite3_column_int64(statement, 1);
+  rule_count = (size_t)rule_count_value;
+  (void)sqlite3_finalize(statement);
+  statement = NULL;
+
+  owner = (flowie_control_policy_bundle_owner_t *)calloc(1u, sizeof(*owner));
+  if (!owner) {
+    rc = TURBO_ENOMEM;
+    goto done;
+  }
+  owner->rules = (turbo_flow_security_rule_t *)calloc(rule_count, sizeof(*owner->rules));
+  if (!owner->rules) {
+    rc = TURBO_ENOMEM;
+    goto done;
+  }
+  status = sqlite3_prepare_v2(database,
+                              "SELECT ordinal,rule_line FROM turbo_flow_acl_rule_v3 "
+                              "WHERE namespace_name=?1 ORDER BY ordinal",
+                              -1, &statement, NULL);
+  if (status != SQLITE_OK) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  if (rc != TURBO_OK) goto done;
+  while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
+    const unsigned char *line;
+    int line_size;
+    sqlite3_int64 ordinal;
+    turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
+    if (expected_ordinal >= rule_count || sqlite3_column_type(statement, 0) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement, 1) != SQLITE_TEXT) {
+      rc = TURBO_EPROTO;
+      goto done;
+    }
+    ordinal = sqlite3_column_int64(statement, 0);
+    line = sqlite3_column_text(statement, 1);
+    line_size = sqlite3_column_bytes(statement, 1);
+    if (ordinal < 0 || (uint64_t)ordinal != (uint64_t)expected_ordinal || !line || line_size <= 0 ||
+        (size_t)line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX ||
+        memchr(line, '\0', (size_t)line_size) ||
+        turbo_flow_security_rule_parse_line((const char *)line, (size_t)line_size, &rule) !=
+            TURBO_OK ||
+        strcmp(rule.root_group_id, root_group_id) != 0) {
+      rc = TURBO_EPROTO;
+      goto done;
+    }
+    owner->rules[expected_ordinal++] = rule;
+  }
+  if (status != SQLITE_DONE || expected_ordinal != rule_count) {
+    rc = status == SQLITE_DONE ? TURBO_EPROTO : flowie_control_sqlite_status(status);
+    goto done;
+  }
+  (void)sqlite3_finalize(statement);
+  statement = NULL;
+  status = sqlite3_exec(database, "COMMIT", NULL, NULL, NULL);
+  if (status != SQLITE_OK) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  transaction_started = 0;
+  bundle_out->policy_version = policy_version;
+  bundle_out->expires_at = expires_at;
+  bundle_out->rules = owner->rules;
+  bundle_out->rule_count = rule_count;
+  bundle_out->provider_bundle = owner;
+  owner = NULL;
+  rc = TURBO_OK;
+
+done:
+  if (statement) (void)sqlite3_finalize(statement);
+  if (transaction_started) (void)sqlite3_exec(database, "ROLLBACK", NULL, NULL, NULL);
+  if (database) (void)sqlite3_close(database);
+  if (owner) {
+    free(owner->rules);
+    free(owner);
+  }
+  if (rc != TURBO_OK)
+    *bundle_out = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
   return rc;
 }
 

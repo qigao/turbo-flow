@@ -4,10 +4,8 @@
 它只定义 credit-worker 应用与 durable claim 格式，不重复 FMQ/3 framing；wire 细节见
 [FMQ_WIRE_PROTOCOL.md](FMQ_WIRE_PROTOCOL.md)。
 
-状态：TFCW/1、易失性 credit owner、严格 YAML 与 Redis Stream bounded
-multi-claim、运行时 coordinator、TFCS/1.0 durable retry/outbox、同源原子 settlement 和有界 shutdown
-均已实现。`credit_worker + at_least_once` 必须通过显式 storage binding 创建；backend 不可用时
-fail fast，不得隐式 fallback 到本地内存。本文不改变 FMQ v3 wire。
+`credit_worker + at_least_once` 必须通过显式 storage binding 创建；backend 不可用时
+fail fast，不得隐式 fallback 到本地内存。本文不改变 FMQ/3 wire。
 
 ## 1. 决策背景
 
@@ -24,7 +22,7 @@ TFCW/1 因此定义为配置驱动的高级应用协议，而不是 FMQ socket p
 - credit、job correlation 与 worker lease 由单一 pattern owner 管理；
 - payload 持久化继续由 Redis Stream 或显式 durable owner 管理；
 - 无 credit 时非阻塞返回，不在 pattern 内建立隐藏临时队列；
-- 不改变 FMQ v3 frame，也不放宽 REQ/REP 同步状态机。
+- 不改变 FMQ/3 frame 或基础 pattern 状态机。
 
 ## 2. 候选方案
 
@@ -33,7 +31,7 @@ TFCW/1 因此定义为配置驱动的高级应用协议，而不是 FMQ socket p
 | 在 FMQ v3 增加 CREDIT control frame | 不选 | 改变冻结 wire v3，并把应用容量语义塞进 transport/pattern primitive |
 | 在 PUSH/PULL 内自动缓存和重试 | 不选 | 产生第二持久化事实源，且 PUSH 无法区分远端接收、处理与落盘 |
 | 把 HWM 当 credit | 不选 | HWM 属于本地内存 admission，不能代表远端容量或重连 generation |
-| 每个并发槽创建一个 worker identity | 保留为兼容基线 | 不改协议但连接数随并发度增长，不能表达 byte credit 或动态容量 |
+| 每个并发槽创建一个 worker identity | 不选 | 连接数随并发度增长，不能表达 byte credit 或动态容量 |
 | ROUTER/DEALER 上运行独立 Credit Worker 应用协议 | 选择 | 复用 live route、异步 reply 和 graph storage composition，不修改 FMQ v3 |
 
 ## 3. 拓扑与 owner
@@ -140,7 +138,7 @@ JOB send 失败时 correlation 返回 accepted/pending，credit token不自动�
 
 ## 7. 持久化多 claim 状态
 
-已经完成的存储前置能力：
+存储与 settlement 契约：
 
 - Redis Stream owner 通过 `turbo_flow_redis_stream_owner_create_ex()` 配置 bounded multi-claim；同一
   consumer 的 PEL 仍是事实源，requeue 不执行 XACK，restart 会按单调 pending cursor 恢复多个 entry；
@@ -155,7 +153,7 @@ JOB send 失败时 correlation 返回 accepted/pending，credit token不自动�
   XPENDING 对账，ID 不存在才确认旧 XACK，仍由当前 consumer 持有才重发，已转移则返回
   `TURBO_EBUSY`，不 ACK 其他 consumer 的 claim。
 
-已完成的 durable bulk 边界：
+durable bulk 边界：
 
 - `turbo_flow_claim_settler_t` 暴露 bounded `load_state/commit_state`；FMQ 不依赖 Redis 类型；
 - TFCS/1.0 LTV 严格校验 schema major/minor、记录边界、逻辑地址和 attempt 上限；
@@ -168,9 +166,9 @@ JOB send 失败时 correlation 返回 accepted/pending，credit token不自动�
   preserve-for-restart；backend failure 保持 quiesced 并允许同一调用重试。
 
 因此 Redis Stream 可提供配置驱动的 durable `at_least_once`；未提供 durable
-callbacks、绑定名不匹配、snapshot 不兼容或 backend 不可用时均 fail fast，不降级为 volatile。
+callbacks、绑定名不匹配、snapshot schema 错误或 backend 不可用时均 fail fast，不降级为 volatile。
 
-## 8. 当前 YAML
+## 8. YAML
 
 ```yaml
 channels:
@@ -200,11 +198,10 @@ storage/state/retry/TTL/shutdown 契约，并由 durable create-resolved API 与
 unknown、wrong-type、zero、binding mismatch、credit 上限乘法溢出和 job bound 大于 worker byte bound
 均启动失败。
 
-## 9. 公开接口兼容方案
+## 9. 公开接口
 
-没有追加或重排 `turbo_flow_fmq_broker_config_t`。实现使用独立 versioned
-`turbo_flow_fmq_credit_worker_config_t` 和 opaque `turbo_flow_fmq_credit_worker_t`，避免把现有
-single-credit broker API 变成行为可变的胖接口。新 owner 提供：
+`turbo_flow_fmq_credit_worker_config_t` 和 opaque `turbo_flow_fmq_credit_worker_t`
+表达唯一 credit-worker owner，不把 single-credit broker API 变成行为可变的胖接口。owner 提供：
 
 - create/create-resolved/destroy；
 - READY/CREDIT/HEARTBEAT apply；
@@ -223,31 +220,26 @@ single-credit broker API 变成行为可变的胖接口。新 owner 提供：
 | fmq.credit.worker_input | control 或 COMPLETE/FAIL | 自动选择以上控制/完成路径 |
 
 service 属于 credit_worker provider 配置，graph 节点只引用 resource。JOB 必须由上游 processor
-按 TFCW/1 预编码；credit stage 不猜测业务 payload 到 TFCW 的映射。当前 durable owner 的 C API 与
-Redis recovery 完整保留，但 at_least_once graph registration 明确返回 TURBO_ENOTSUP：
-TurboFlow message 尚无通用、message-owned claim token projection，不能从 message ID 合成，也不能
-把 graph success 当作 storage accept ACK。
+按 TFCW/1 预编码；credit stage 不猜测业务 payload 到 TFCW 的映射。`at_least_once` graph
+registration 要求 message-owned claim token projection；缺失该 projection 时明确返回
+`TURBO_ENOTSUP`，不能从 message ID 合成，也不能把 graph success 当作 storage accept ACK。
 
-现有 broker、TFBR、FMQ v3、REQ/REP、PUSH/PULL 和 YAML pattern 保持原行为。回滚时移除
-`credit_worker` channel/stage 即可；durable storage schema migration 必须使用其独立回滚流程。
+## 10. 验证契约
 
-## 10. 实现与验收状态
+发布验证必须覆盖：
 
-| 能力 | 状态 | 证据边界 |
-| --- | --- | --- |
-| TFCW/1 codec 与 zero-copy fields | 已实现 | canonical LTV、schema、truncation/overflow 单元测试 |
-| 易失性 credit owner | 已实现 | 双维 grant、duplicate/gap、generation fencing、LRU、多 in-flight、lease expiry |
-| strict YAML | 已实现 | 区分 volatile `at_most_once` 与 storage-bound `at_least_once`，非法组合 fail fast |
-| Redis Stream bounded multi-claim | 已实现 | 真实 Redis PEL restart replay、独立 ack/requeue、上限测试 |
-| runtime claim settlement coordinator | 已实现 | completion/expiry、ACK/requeue/drop、失败保留与显式 retry |
-| durable retry/outbox recovery | Redis 已实现 | TFCS/1.0、逻辑地址 outbox、同源原子 claim disposition、lost-reply retry、restart normalization、terminal TTL、配置化 shutdown |
-| ROUTER/DEALER E2E | 已实现 | READY、两个并行 JOB、独立 COMPLETE、credit 不自动返还；真实 worker reconnect 以新 session route 拒绝旧 COMPLETE，并在旧 lease DROP 后重新 READY/dispatch/complete |
-| 压力与故障注入 | 部分完成 | 4096 in-flight 容量、置换 completion、显式 credit 恢复及 256 slow-worker lease expiry 已覆盖；共享 FMQ TCP transport 已覆盖 broker reconnect/stop、HELLO/订阅恢复、不重放与有界 shutdown；TFCW 已覆盖 in-flight reconnect generation fence、lease settlement、shutdown lost-reply retry，以及真实 Redis coordinator restart。剩余项是发布流水线的多环境 soak/chaos 趋势门槛。 |
+- TFCW/1 canonical LTV、schema、truncation、overflow 和 unknown critical field；
+- 双维 grant、duplicate/gap、generation fencing、LRU、多 inflight 与 lease expiry；
+- `at_most_once`/`at_least_once` YAML 非法组合和 backend fail-fast；
+- Redis PEL restart replay、独立 ack/requeue、settlement retry 与 bounded shutdown；
+- READY、并行 JOB、独立 COMPLETE、worker reconnect、stale generation 和 credit 不自动返还；
+- capacity、slow-worker、lost reply、claim disposition 与 coordinator restart 故障注入。
 
 分位数使用 nearest-rank，在 warmup 后统一由 `FMQ_BENCH_RESULT` 输出。`test_fmq_broker` 测量纯
 credit owner 的 4096 次 dispatch 与 4096 次 complete；`test_fmq` 测量 64-byte payload 经真实 TCP
 DEALER -> ROUTER graph echo -> DEALER 的 256 次串行 round trip。绝对值受平台、构建类型和机器负载
 影响，只能与同环境历史比较；benchmark 不以某台开发机的时间作为协议正确性断言。
 
-安全边界保持不变：协议只在宿主建立的可信 transport/network boundary 内使用，不新增认证、
-授权或安全域字段，也不能因此宣称跨 Root Group 的安全边界。
+TFCW 不定义应用认证或授权字段。使用 KCP 时必须服从
+[KCP_TRANSPORT_PROTOCOL.md](KCP_TRANSPORT_PROTOCOL.md) 的认证会话、AEAD 与 replay 规则；
+跨 Root Group 的 authority/ACL 仍由 FMQ security owner 判定。

@@ -3,12 +3,13 @@
 ## 状态
 
 已接受。内部服务核心、CoroNet/Iris 的显式服务端 mTLS 配置、已验证 peer certificate fingerprint 查询、
-Flowie 的薄 Iris 身份适配层和严格 `/v2/authenticate` JSON handler 均已实现；独立控制面进程尚未开放。
+Flowie 的薄 Iris 身份适配层和严格 `/v3/authenticate` JSON handler 均已实现；独立控制面进程尚未开放。
 
 ## 背景
 
-Flowie 允许不同 Root Group 使用相同 `principal_id`。Broker 的 HTTPS `/v2/authenticate` 请求当前只包含
-MQTT identity、method、secret、remote address 和 protocol，不能仅凭 identity 在控制数据库中全局搜索用户。
+Flowie 允许不同 Root Group 使用相同 `principal_id`。Broker 的 HTTPS `/v3/authenticate` 请求包含
+MQTT identity、method、secret、protocol、直接 remote address 和可选的已验证 MQTT client certificate
+fingerprint，仍不能仅凭 identity 在控制数据库中全局搜索用户。
 让 MQTT 客户端在请求中声明 Root Group 会把隔离根交给不可信输入，无法满足 fail-closed 边界。
 
 现有 Broker HTTPS provider 支持验证服务端证书并携带客户端证书。CoroNet/Iris 现已提供版本化服务端 TLS 配置、
@@ -31,22 +32,27 @@ MQTT identity、method、secret、remote address 和 protocol，不能仅凭 ide
 - `flowie_control_verified_caller_t` 只能由 TLS listener adapter 在证书链验证成功后构造。HTTP header 和
   request body 永远不是该结构的输入来源。
 - 未验证证书、未知 listener/fingerprint、重复绑定和方法不匹配全部 fail closed。
-- 认证成功后，user、credential revisions、roles 和 effective groups 在一个 SQLite read transaction 中生成一致
-  snapshot。credential cache 仍只缓存正向 KDF 结果，不保存明文 secret。
+- 内部本地 verifier 测试中，认证成功后 user、credential revisions、roles 和 effective groups 在一个
+  SQLite read transaction 中生成一致 snapshot。credential cache 仍只缓存正向 KDF 结果，不保存明文
+  secret；该 verifier 不能由 controller 部署 schema 选择。
+  第三方企业模式先从唯一 HTTPS 上游取得断言，再使用 credential-free snapshot 加载本地授权事实。
 - `policy_version` 由注入的只读 provider 提供；返回零或 provider 失败时不签发 principal。
 - principal expiry 有界，默认 300 秒、最大 3600 秒。该 TTL 不替代已连接 session 的撤销策略。
 
 ## 状态归属与失败语义
 
 - Root binding 配置是认证服务启动时复制的不可变状态；更新需要构建新实例并切换，不做双向同步。
-- SQLite control store 是 user、credential、roles 和 groups 的唯一事实源。
+- 内部本地 verifier 测试中，SQLite control store 是 user、credential、roles 和 groups 的事实源；
+  可部署模式下，外部 credential 事实只来自 HTTPS 服务，control store 只拥有本地 user enabled、
+  roles 和 groups。
 - ACL publisher 是 `policy_version` 的事实源；认证服务只读取，不自行推进版本。
 - credential cache 和 principal response 都是派生状态，任何事实源读取失败均不返回部分 principal。
 - authenticate 输出由调用方持有；服务不保留请求 secret 或输出 principal。
 
 ## 架构与兼容性影响
 
-- Broker `/v2/authenticate` JSON body 不增加 Root Group 字段，现有 v2 request contract 保持不变。
+- Broker `/v3/authenticate` JSON body 不增加 Root Group 字段。v3 新增的是 MQTT listener 产生的
+  `peer_certificate_sha256`；它不能替代外层 Broker mTLS caller binding。
 - Flowie 新实现仅位于不安装的 `flowie_control_core` 与 `flowie_control_iris_adapter`，没有 executable、listener、
   YAML 或已安装公开头文件变化。
 - CoroNet/Iris 提供版本化 server mTLS 配置和 verified peer identity API；Flowie 薄 adapter 只依赖该公开传输
@@ -64,4 +70,4 @@ MQTT identity、method、secret、remote address 和 protocol，不能仅凭 ide
 - credential cache 命中、credential revoke、policy provider 失败和零版本 fail closed。
 - CoroNet 已覆盖真实双向 TLS 握手和双方证书 fingerprint；Iris/Flowie 已覆盖非 TLS 请求、严格 JSON、Bearer
   token、原始 body/Authorization wipe 和 endpoint bind/unbind fail-closed。证书轮换、缺少客户端证书的 Iris
-  端到端拒绝、限流和 `/v2/authenticate` 真实网络测试仍属于 release gate。
+  端到端拒绝、限流和 `/v3/authenticate` 真实网络测试仍属于 release gate。

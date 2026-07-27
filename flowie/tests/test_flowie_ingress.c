@@ -53,6 +53,11 @@ static int flowie_ingress_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   return capture->result;
 }
 
+static int flowie_ingress_graph_dispatch(void *ctx, turbo_flow_msg_t *message,
+                                         turbo_flow_publish_result_t *result) {
+  return turbo_flow_publish_ex((turbo_flow_t *)ctx, "mqtt_in", message, result);
+}
+
 static void flowie_ingress_capture_cleanup(flowie_ingress_capture_t *capture) {
   for (size_t i = 0u; i < 4u; ++i) {
     tstr_freep(&capture->packets[i]);
@@ -95,8 +100,8 @@ static turbo_flow_t *flowie_ingress_flow(const char *stage_declaration,
 
 static flowie_ingress_t *flowie_ingress_for(turbo_flow_t *flow, size_t max_packet_size) {
   flowie_ingress_config_t config = FLOWIE_INGRESS_CONFIG_INIT;
-  config.flow = flow;
-  config.publish_source = "mqtt_in";
+  config.dispatch = flowie_ingress_graph_dispatch;
+  config.dispatch_ctx = flow;
   config.max_packet_size = max_packet_size;
   return flowie_ingress_create(&config);
 }
@@ -456,8 +461,8 @@ spec("flowie MQTT connection ingress") {
     size_t published = 0u;
 
     check_not_null(flow);
-    config.flow = flow;
-    config.publish_source = "mqtt_in";
+    config.dispatch = flowie_ingress_graph_dispatch;
+    config.dispatch_ctx = flow;
     config.max_packet_size = sizeof(packet);
     config.publish_complete = flowie_ingress_completion;
     config.prepare_ctx = &probe;
@@ -488,8 +493,8 @@ spec("flowie MQTT connection ingress") {
 
     check_not_null(flow);
     capture.result = TURBO_EIO;
-    config.flow = flow;
-    config.publish_source = "mqtt_in";
+    config.dispatch = flowie_ingress_graph_dispatch;
+    config.dispatch_ctx = flow;
     config.max_packet_size = sizeof(packet);
     config.publish_complete = flowie_ingress_completion;
     config.prepare_ctx = &probe;

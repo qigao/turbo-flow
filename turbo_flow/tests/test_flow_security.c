@@ -267,6 +267,13 @@ spec("security realm v3") {
     check_str_eq(principal.principal_id, "device-7");
     check_str_eq(principal.root_group_id, "root-a");
     check_str_eq(principal.auth_method, "token");
+    request.size = TURBO_FLOW_SECURITY_AUTH_REQUEST_BASE_SIZE;
+    principal = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+    check_int_eq(turbo_flow_security_authenticate(&provider, &request, &principal), TURBO_OK);
+    check_int_eq(calls, 2);
+    request.size = TURBO_FLOW_SECURITY_AUTH_REQUEST_BASE_SIZE - 1u;
+    check_int_eq(turbo_flow_security_authenticate(&provider, &request, &principal), TURBO_EINVAL);
+    check_int_eq(calls, 2);
   }
 
   it("validates and owns enhanced authentication exchange lifecycle") {
@@ -285,6 +292,7 @@ spec("security realm v3") {
     request.data = (const uint8_t *)"client-first";
     request.data_size = sizeof("client-first") - 1u;
     request.protocol = "mqtt5";
+    request.size = TURBO_FLOW_SECURITY_ENHANCED_AUTH_REQUEST_BASE_SIZE;
     check_int_eq(turbo_flow_security_enhanced_auth_begin(&provider, &request, &exchange, &result),
                  TURBO_OK);
     check_ptr_eq(exchange, &fixture);
@@ -304,7 +312,16 @@ spec("security realm v3") {
     check_int_eq(fixture.continue_calls, 1);
     check_int_eq(fixture.cancel_calls, 1);
 
+    request.size = TURBO_FLOW_SECURITY_ENHANCED_AUTH_REQUEST_BASE_SIZE - 1u;
+    exchange = NULL;
+    result =
+        (turbo_flow_security_enhanced_auth_result_t)TURBO_FLOW_SECURITY_ENHANCED_AUTH_RESULT_INIT;
+    check_int_eq(turbo_flow_security_enhanced_auth_begin(&provider, &request, &exchange, &result),
+                 TURBO_EINVAL);
+    check_int_eq(fixture.begin_calls, 1);
+
     fixture.omit_exchange = 1;
+    request.size = TURBO_FLOW_SECURITY_ENHANCED_AUTH_REQUEST_BASE_SIZE;
     exchange = NULL;
     result =
         (turbo_flow_security_enhanced_auth_result_t)TURBO_FLOW_SECURITY_ENHANCED_AUTH_RESULT_INIT;

@@ -26,6 +26,8 @@ typedef int flow_mtls_test_socket_t;
 #  define flow_mtls_test_close_socket close
 #endif
 
+#define FLOW_MTLS_TEST_REQUEST_CAPACITY 4096u
+
 typedef struct flow_mtls_test_server_s {
   flow_mtls_test_socket_t listener;
   turbo_thread_t thread;
@@ -36,6 +38,8 @@ typedef struct flow_mtls_test_server_s {
   int started;
   int status;
   int peer_verified;
+  uint8_t request[FLOW_MTLS_TEST_REQUEST_CAPACITY];
+  size_t request_size;
 } flow_mtls_test_server_t;
 
 static SSL_CTX *flow_mtls_test_server_context(void) {
@@ -115,7 +119,7 @@ static void flow_mtls_test_server_main(void *arg) {
   SSL_CTX *ctx = NULL;
   SSL *ssl = NULL;
   X509 *peer = NULL;
-  uint8_t request[4096];
+  uint8_t request[FLOW_MTLS_TEST_REQUEST_CAPACITY];
   size_t request_size = 0u;
 
   server->status = -1;
@@ -138,6 +142,8 @@ static void flow_mtls_test_server_main(void *arg) {
   } while (!flow_mtls_test_request_complete(request, request_size) &&
            request_size < sizeof(request) - 1u);
   if (!flow_mtls_test_request_complete(request, request_size)) goto done;
+  memcpy(server->request, request, request_size + 1u);
+  server->request_size = request_size;
   if (server->response_delay_ms != 0u) turbo_sleep_ms(server->response_delay_ms);
   if (server->response_size != 0u &&
       SSL_write(ssl, server->response, (int)server->response_size) !=

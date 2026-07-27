@@ -55,8 +55,8 @@ typedef struct flowmq_connect_endpoint_config_s {
   tf_coronet_socket_timeout_config_t timeouts;
   tf_coronet_socket_options_t socket_options;
   tf_coronet_udp_options_t udp_options;
-  turbo_kcp_fec_config_t kcp_fec;
-  int kcp_fec_configured;
+  turbo_kcp_config_t kcp_config;
+  int kcp_configured;
   int initial_subscription_configured;
   uint64_t reconnect_initial_ms;
   uint64_t reconnect_max_ms;

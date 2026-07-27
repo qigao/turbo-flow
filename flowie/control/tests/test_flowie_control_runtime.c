@@ -1,18 +1,27 @@
 #include "flowie_control_runtime_internal.h"
 
 #include "tinytest.h"
+#include "tls_test_support.h"
 #include "turbo_error.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define TEST_FINGERPRINT                                                                          \
-  "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+#define TEST_FINGERPRINT "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 typedef struct control_runtime_fixture_s {
   char *path;
   flowie_control_store_t *store;
 } control_runtime_fixture_t;
+
+static int runtime_test_set_env(const char *name, const char *value) {
+#ifdef _WIN32
+  return _putenv_s(name, value ? value : "");
+#else
+  return value ? setenv(name, value, 1) : unsetenv(name);
+#endif
+}
 
 static int runtime_root_create(flowie_control_store_t *store, uint64_t revision) {
   flowie_control_root_group_create_command_t command =
@@ -52,8 +61,8 @@ static int runtime_role_create(flowie_control_store_t *store, const char *role,
   return flowie_control_store_role_create(store, &command, &result);
 }
 
-static int runtime_role_add(flowie_control_store_t *store, const char *role,
-                            const char *request_id, uint64_t revision) {
+static int runtime_role_add(flowie_control_store_t *store, const char *role, const char *request_id,
+                            uint64_t revision) {
   flowie_control_user_role_add_command_t command = FLOWIE_CONTROL_USER_ROLE_ADD_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   command.root_group_id = "root-a";
@@ -91,24 +100,26 @@ spec("Flowie controller runtime") {
     flowie_control_config_admin_binding_t binding = {TEST_FINGERPRINT, "root-a", "admin-a"};
     flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
 
-    check_int_eq(flowie_control_management_identity_resolve(
-                     fixture.store, &binding, 1u, TEST_FINGERPRINT, &caller),
-                 TURBO_EPERM);
+    check_int_eq(
+        flowie_control_management_identity_resolve(flowie_control_store_repository(fixture.store),
+                                                   &binding, 1u, TEST_FINGERPRINT, &caller),
+        TURBO_EPERM);
     check_int_eq(runtime_role_create(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER,
                                      "role-viewer", 2u),
                  TURBO_OK);
-    check_int_eq(runtime_role_add(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER,
-                                  "assign-viewer", 3u),
-                 TURBO_OK);
+    check_int_eq(
+        runtime_role_add(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER, "assign-viewer", 3u),
+        TURBO_OK);
     check_int_eq(runtime_role_create(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_USER_ADMIN,
                                      "role-user-admin", 4u),
                  TURBO_OK);
     check_int_eq(runtime_role_add(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_USER_ADMIN,
                                   "assign-user-admin", 5u),
                  TURBO_OK);
-    check_int_eq(flowie_control_management_identity_resolve(
-                     fixture.store, &binding, 1u, TEST_FINGERPRINT, &caller),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_control_management_identity_resolve(flowie_control_store_repository(fixture.store),
+                                                   &binding, 1u, TEST_FINGERPRINT, &caller),
+        TURBO_OK);
     check_str_eq(caller.root_group_id, "root-a");
     check_str_eq(caller.actor, "admin-a");
     check_uint_eq(caller.permissions,
@@ -122,7 +133,7 @@ spec("Flowie controller runtime") {
     flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
 
     check_int_eq(flowie_control_management_identity_resolve(
-                     fixture.store, &binding, 1u,
+                     flowie_control_store_repository(fixture.store), &binding, 1u,
                      "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                      &caller),
                  TURBO_EPERM);
@@ -133,8 +144,7 @@ spec("Flowie controller runtime") {
 
   it("fails closed when TLS identity files cannot be validated") {
     flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
-    memcpy(config.management.rpc_path, "/v1/management/rpc",
-           sizeof("/v1/management/rpc"));
+    memcpy(config.management.rpc_path, "/v1/management/rpc", sizeof("/v1/management/rpc"));
     memcpy(config.listener.tls.cert_file, "missing-control-cert.pem",
            sizeof("missing-control-cert.pem"));
     memcpy(config.listener.tls.key_file, "missing-control-key.pem",
@@ -151,5 +161,195 @@ spec("Flowie controller runtime") {
            sizeof("/v1/management/dashboard"));
 
     check_int_eq(flowie_control_runtime_validate(&config), TURBO_EINVAL);
+  }
+
+  it("rejects incomplete local auth configuration") {
+    flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
+    memcpy(config.management.rpc_path, "/v1/management/rpc", sizeof("/v1/management/rpc"));
+    config.auth.enabled = 1;
+
+    check_int_eq(flowie_control_runtime_validate(&config), TURBO_EINVAL);
+  }
+
+  it("rejects invalid local executor bounds before TLS startup") {
+    flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
+    memcpy(config.management.rpc_path, "/v1/management/rpc", sizeof("/v1/management/rpc"));
+    config.auth.enabled = 1;
+    config.auth.local_executor.workers = 0u;
+
+    check_int_eq(flowie_control_runtime_validate(&config), TURBO_EINVAL);
+  }
+
+  it("rejects simultaneous local executor and external HTTPS modes") {
+    flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
+    memcpy(config.management.rpc_path, "/v1/management/rpc", sizeof("/v1/management/rpc"));
+    config.auth.enabled = 1;
+    config.auth.local_executor.configured = 1;
+    config.auth.external_https.enabled = 1;
+
+    check_int_eq(flowie_control_runtime_validate(&config), TURBO_EINVAL);
+  }
+
+#if defined(FLOWIE_CONTROL_HAS_PGSQL)
+  it("validates PostgreSQL credentials before TLS or database startup") {
+    flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
+    (void)snprintf(config.management.rpc_path, sizeof(config.management.rpc_path), "%s",
+                   "/v1/management/rpc");
+    config.store_provider = FLOWIE_CONTROL_CONFIG_STORE_POSTGRESQL;
+    (void)snprintf(config.postgresql.conninfo, sizeof(config.postgresql.conninfo), "%s",
+                   "host=db.internal dbname=flowie user=flowie password=literal "
+                   "sslmode=verify-full");
+    (void)snprintf(config.postgresql.password_ref, sizeof(config.postgresql.password_ref), "%s",
+                   "env://FLOWIE_RUNTIME_PG_PASSWORD");
+    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_PG_PASSWORD", "secret"), 0);
+    check_int_eq(flowie_control_runtime_validate(&config), TURBO_EPERM);
+
+    (void)snprintf(config.postgresql.conninfo, sizeof(config.postgresql.conninfo), "%s",
+                   "host=db.internal dbname=flowie user=flowie sslmode=verify-full");
+    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_PG_PASSWORD", NULL), 0);
+    check_int_eq(flowie_control_runtime_validate(&config), TURBO_ENOENT);
+
+    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_PG_PASSWORD", "secret"), 0);
+    (void)snprintf(config.listener.tls.cert_file, sizeof(config.listener.tls.cert_file), "%s",
+                   "missing-control-cert.pem");
+    (void)snprintf(config.listener.tls.key_file, sizeof(config.listener.tls.key_file), "%s",
+                   "missing-control-key.pem");
+    (void)snprintf(config.listener.tls.client_ca_file, sizeof(config.listener.tls.client_ca_file),
+                   "%s", "missing-control-ca.pem");
+    check_int_eq(flowie_control_runtime_validate(&config), TURBO_EIO);
+    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_PG_PASSWORD", NULL), 0);
+  }
+#else
+  it("rejects PostgreSQL selection when the provider is not built") {
+    flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
+    (void)snprintf(config.management.rpc_path, sizeof(config.management.rpc_path), "%s",
+                   "/v1/management/rpc");
+    config.store_provider = FLOWIE_CONTROL_CONFIG_STORE_POSTGRESQL;
+    check_int_eq(flowie_control_runtime_validate(&config), TURBO_ENOTSUP);
+  }
+#endif
+
+  it("validates the configured external HTTPS identity and secrets before startup") {
+    char cert_file[512] = {0};
+    char key_file[512] = {0};
+    flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
+
+    check_int_eq(
+        tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
+    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_EXTERNAL_TOKEN", "service-token"), 0);
+    (void)snprintf(config.management.rpc_path, sizeof(config.management.rpc_path), "%s",
+                   "/v1/management/rpc");
+    (void)snprintf(config.listener.tls.cert_file, sizeof(config.listener.tls.cert_file), "%s",
+                   cert_file);
+    (void)snprintf(config.listener.tls.key_file, sizeof(config.listener.tls.key_file), "%s",
+                   key_file);
+    (void)snprintf(config.listener.tls.client_ca_file, sizeof(config.listener.tls.client_ca_file),
+                   "%s", cert_file);
+    config.auth.external_https.enabled = 1;
+    check_int_eq(flowie_control_runtime_validate(&config), TURBO_EINVAL);
+    config.auth.enabled = 1;
+    (void)snprintf(config.auth.method, sizeof(config.auth.method), "%s", "bearer");
+    (void)snprintf(config.auth.external_https.url, sizeof(config.auth.external_https.url), "%s",
+                   "https://localhost/v1/assert");
+    (void)snprintf(config.auth.external_https.service_token_ref,
+                   sizeof(config.auth.external_https.service_token_ref), "%s",
+                   "env://FLOWIE_RUNTIME_EXTERNAL_TOKEN");
+    (void)snprintf(config.auth.external_https.trusted_issuer,
+                   sizeof(config.auth.external_https.trusted_issuer), "%s",
+                   "https://identity.example");
+    (void)snprintf(config.auth.external_https.subject_type,
+                   sizeof(config.auth.external_https.subject_type), "%s", "device");
+    (void)snprintf(config.auth.external_https.tls.ca_file,
+                   sizeof(config.auth.external_https.tls.ca_file), "%s", cert_file);
+    (void)snprintf(config.auth.external_https.tls.client_cert_file,
+                   sizeof(config.auth.external_https.tls.client_cert_file), "%s", cert_file);
+    (void)snprintf(config.auth.external_https.tls.client_key_file,
+                   sizeof(config.auth.external_https.tls.client_key_file), "%s", key_file);
+
+    check_int_eq(flowie_control_runtime_validate(&config), TURBO_OK);
+    (void)snprintf(config.auth.external_https.tls.ca_file,
+                   sizeof(config.auth.external_https.tls.ca_file), "%s", "missing-external-ca.pem");
+    check_int_eq(flowie_control_runtime_validate(&config), TURBO_EIO);
+
+    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_EXTERNAL_TOKEN", NULL), 0);
+    tls_test_remove_file(key_file);
+    tls_test_remove_file(cert_file);
+  }
+
+  it("owns the external HTTPS provider for the complete runtime lifecycle") {
+    char cert_file[512] = {0};
+    char key_file[512] = {0};
+    control_runtime_fixture_t fixture = runtime_fixture_open();
+    flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
+    flowie_control_runtime_t *runtime = NULL;
+
+    check_int_eq(runtime_role_create(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER,
+                                     "runtime-viewer", 2u),
+                 TURBO_OK);
+    check_int_eq(runtime_role_add(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER,
+                                  "runtime-viewer-add", 3u),
+                 TURBO_OK);
+    flowie_control_store_destroy(fixture.store);
+    fixture.store = NULL;
+    check_int_eq(
+        tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
+    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_AUTH_TOKEN", "inbound-token"), 0);
+    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_EXTERNAL_TOKEN", "outbound-token"), 0);
+    (void)snprintf(config.management.rpc_path, sizeof(config.management.rpc_path), "%s",
+                   "/v1/management/rpc");
+    config.dashboard_enabled = 0;
+    config.management.admin_binding_count = 1u;
+    (void)snprintf(config.management.admin_bindings[0].peer_certificate_sha256,
+                   sizeof(config.management.admin_bindings[0].peer_certificate_sha256), "%s",
+                   TEST_FINGERPRINT);
+    (void)snprintf(config.management.admin_bindings[0].root_group_id,
+                   sizeof(config.management.admin_bindings[0].root_group_id), "%s", "root-a");
+    (void)snprintf(config.management.admin_bindings[0].principal_id,
+                   sizeof(config.management.admin_bindings[0].principal_id), "%s", "admin-a");
+    (void)snprintf(config.listener.tls.cert_file, sizeof(config.listener.tls.cert_file), "%s",
+                   cert_file);
+    (void)snprintf(config.listener.tls.key_file, sizeof(config.listener.tls.key_file), "%s",
+                   key_file);
+    (void)snprintf(config.listener.tls.client_ca_file, sizeof(config.listener.tls.client_ca_file),
+                   "%s", cert_file);
+    (void)snprintf(config.sqlite_path, sizeof(config.sqlite_path), "%s", fixture.path);
+    config.auth.enabled = 1;
+    (void)snprintf(config.auth.listener_id, sizeof(config.auth.listener_id), "%s",
+                   "flowie-control-auth");
+    (void)snprintf(config.auth.method, sizeof(config.auth.method), "%s", "bearer");
+    (void)snprintf(config.auth.service_token_ref, sizeof(config.auth.service_token_ref), "%s",
+                   "env://FLOWIE_RUNTIME_AUTH_TOKEN");
+    config.auth.binding_count = 1u;
+    (void)snprintf(config.auth.bindings[0].peer_certificate_sha256,
+                   sizeof(config.auth.bindings[0].peer_certificate_sha256), "%s", TEST_FINGERPRINT);
+    (void)snprintf(config.auth.bindings[0].root_group_id,
+                   sizeof(config.auth.bindings[0].root_group_id), "%s", "root-a");
+    config.auth.external_https.enabled = 1;
+    (void)snprintf(config.auth.external_https.url, sizeof(config.auth.external_https.url), "%s",
+                   "https://localhost/v1/assert");
+    (void)snprintf(config.auth.external_https.service_token_ref,
+                   sizeof(config.auth.external_https.service_token_ref), "%s",
+                   "env://FLOWIE_RUNTIME_EXTERNAL_TOKEN");
+    (void)snprintf(config.auth.external_https.trusted_issuer,
+                   sizeof(config.auth.external_https.trusted_issuer), "%s",
+                   "https://identity.example");
+    (void)snprintf(config.auth.external_https.subject_type,
+                   sizeof(config.auth.external_https.subject_type), "%s", "device");
+    (void)snprintf(config.auth.external_https.tls.ca_file,
+                   sizeof(config.auth.external_https.tls.ca_file), "%s", cert_file);
+    (void)snprintf(config.auth.external_https.tls.client_cert_file,
+                   sizeof(config.auth.external_https.tls.client_cert_file), "%s", cert_file);
+    (void)snprintf(config.auth.external_https.tls.client_key_file,
+                   sizeof(config.auth.external_https.tls.client_key_file), "%s", key_file);
+
+    check_int_eq(flowie_control_runtime_create(&config, &runtime), TURBO_OK);
+    check_not_null(runtime);
+    check_int_eq(flowie_control_runtime_destroy(runtime), TURBO_OK);
+
+    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_EXTERNAL_TOKEN", NULL), 0);
+    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_AUTH_TOKEN", NULL), 0);
+    tls_test_remove_file(key_file);
+    tls_test_remove_file(cert_file);
+    runtime_fixture_close(&fixture);
   }
 }

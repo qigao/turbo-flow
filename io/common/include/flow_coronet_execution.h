@@ -27,6 +27,14 @@ int tf_coronet_execution_post(tf_coronet_execution_t *execution, coro_post_fn fn
                               void *arg2);
 int tf_coronet_execution_call(tf_coronet_execution_t *execution, tf_coronet_execution_call_fn fn,
                               void *arg, uint64_t timeout_ns);
+/*
+ * Run fn inside a scheduled coroutine on the bound context. Unlike the regular
+ * call, fn may yield for transport completion before its synchronous result is
+ * returned to the caller.
+ */
+int tf_coronet_execution_call_coro(tf_coronet_execution_t *execution,
+                                   tf_coronet_execution_call_fn fn, void *arg,
+                                   uint64_t timeout_ns);
 void tf_coronet_execution_stop(tf_coronet_execution_t *execution);
 void tf_coronet_execution_destroy(tf_coronet_execution_t *execution);
 

@@ -1,6 +1,6 @@
 # FlowMQ architecture
 
-本文描述当前实现，不记录迁移计划。FlowMQ 是以 pattern owner 为核心、可组合 TurboFlow graph
+本文描述 FlowMQ 的最终架构边界。FlowMQ 是以 pattern owner 为核心、可组合 TurboFlow graph
 的 message broker，与 Flowie 并列；基础 pattern 不等于完整业务 graph。
 `io/common` 只提供共享 CoroNet execution/transport bridge。
 
@@ -11,30 +11,37 @@ PUSH/PULL 等基础 pattern 由各自 owner 完成协议状态与数据流转；
 ## Layers
 
 ```text
-YAML/C API
-    |
-    v
-FlowMQ pattern/session runtime + typed operations
-    |
-    +--> optional TurboFlow graph bridge/stages
-    |
-    v
-FMQ v3-only framing and HELLO/security/heartbeat
-    |
-    v
-CoroNet TCP/TLS/UDP/KCP/Pipe/WS/WSS
+YAML resolver --------> typed endpoint configuration <-------- C API
+                                  |
+                                  v
+                    FlowMQ pattern/session Core
+                                  |
+                 +----------------+----------------+
+                 |                                 |
+                 v                                 v
+       direct application callback       optional TurboFlow adapter
+                                                   |
+                                                   v
+                                      graph stages / new composition
+                                  |
+                                  v
+                 FMQ/3 framing + security + heartbeat
+                                  |
+                                  v
+             CoroNet TCP/TLS/KCP/Pipe/WS/WSS transport
 ```
 
 | Layer | Responsibility | Dependencies |
 | --- | --- | --- |
 | `FlowMQ::Protocol` | v3 frame/security-envelope validation、encode/decode、fragmentation、heartbeat deadline | TurboUtils |
-| private endpoint runtime | CoroNet endpoint、stream framing、HELLO、peer session、reconnect | Protocol、CoroNet、TurboUtils |
-| `FlowMQ::Runtime` | graph adapter、pattern owner、management、retry、deployment | TurboFlow、private runtime、Protocol |
-| `TurboFlow::FMQ` | installed compatibility target | current FlowMQ runtime |
+| FlowMQ endpoint Core | CoroNet endpoint、pattern/session owner、stream framing、HELLO、peer queue、reconnect | Protocol、CoroNet、TurboUtils |
+| optional TurboFlow adapter | Core message 与 graph owned message/typed operation 之间的薄适配 | FlowMQ Core、TurboFlow |
+| `TurboFlow::FMQ` | 当前安装 target；management、retry、deployment 与可选 graph composition | FlowMQ Core、TurboFlow |
 
 `FlowMQ::Protocol` 已独立安装。`flowmq_runtime_core`、`flowmq_coronet_transport` 和
-`flowmq_connect_endpoint_runtime` 是 build-only target，不进入安装 export。`FlowMQ::Broker` 只是
-build-tree 过渡 alias；当前安装消费者继续使用 `TurboFlow::FMQ`。
+`flowmq_connect_endpoint_runtime` 是 build-only target，不进入安装 export。当前安装消费者只使用
+`TurboFlow::FMQ`。这里的 Core 是运行时所有权边界，不是第二套协议实现；Graph adapter 不复制
+endpoint/session 状态。
 
 ## Data path
 
@@ -47,15 +54,17 @@ Ingress 路径：
 CoroNet recv
   -> bounded stream framing
   -> complete FMQ v3 frame (temporary protocol view)
-  -> turbo_flow_msg_t (owned buffer + typed metadata)
-  -> basic pattern owner, or optional TurboFlow graph stages
+  -> owned message buffer + typed protocol metadata
+  -> basic pattern owner
+  -> direct callback, or optional TurboFlow graph adapter/stages
   -> FMQ / HTTP / socket / Redis / FlowStore sink
 ```
 
 raw socket bytes、decoder accumulation buffer 和单次 frame view 只允许存在于 CoroNet owner lane。
-进入 graph 或异步 queue 前，FlowMQ 将 payload、topic、identity、correlation 和 metadata 放进同一个引用计数
-`mem_buffer_t`。因此完整消息可以跨 broadcast ring、worker、thread 或 coro；TurboFlow 会拒绝任何
-仍携带外部 borrowed transport context 的消息进入异步边界。
+进入 direct callback、graph adapter 或异步 queue 前，FlowMQ 将 payload、topic、identity、
+correlation 和 metadata 放进同一个引用计数 `mem_buffer_t`。Direct callback 在 owner dispatch
+期间借用消息；若要延迟处理，调用方必须显式 clone/detach。Graph adapter 只把同一 owned message
+交给 TurboFlow，不保留 socket、peer pointer 或 decoder view。
 
 基础 pattern 的 graph bridge 只完成统一消息/typed operation 交接，不拥有 peer session、订阅
 匹配、REQ/REP FSM 或 socket side effect。只有高级组合才把多个 processor、executor 和 queue
@@ -63,6 +72,25 @@ raw socket bytes、decoder accumulation buffer 和单次 frame view 只允许存
 
 Egress 先生成完整 encoded frame，再经过有界 adapter/peer admission 提交给 CoroNet owner。worker
 只提交 owned send command，不持有 socket 或 peer pointer。
+
+## Core / Graph ownership protocol
+
+- 一个 endpoint Core 独占 socket、peer/session、pattern FSM、selector、发送预算和 per-peer queue。
+  Direct facade 与 Graph adapter 都只是该 Core 的调用面，不能各自推进副本状态。
+- ingress dispatch 是同步、同 owner-lane 的 borrowed callback。Core 在 callback 返回后清理本次
+  message；异步消费者必须先 clone/detach，失败则当前 frame 明确失败。
+- Graph adapter 在 ingress callback 内构造/保留完整 owned `turbo_flow_msg_t`，然后发布到明确的
+  graph source。Graph 停止后 adapter 关闭 admission，不把消息静默改投 direct callback。
+- egress 在返回成功前完成本地 admission/交付边界。serialized 每次等待一个结果；explicit batch
+  在同一 Core 内合并已准备好的 frame；async micro-batch 只增加一个有 item/byte 上限的 facade
+  queue，三者共享相同 wire、pattern FSM、HWM 与错误语义。
+- 所有增长结构均受 endpoint HWM、per-peer HWM、batch item/byte limit 或 async item/byte limit
+  约束。容量不足返回显式错误或执行已配置的 admission policy，不创建隐藏无界队列。
+- shutdown 顺序固定为：停止新 admission，唤醒/关闭等待者，完成或取消已接受 queue，等待
+  CoroNet owner-lane task 退出，最后销毁 session/queue/socket 并清除 transport key。Graph runtime
+  的销毁不能早于其 adapter 从 Core 解除 dispatch。
+- Flowie 使用同一边界：MQTT broker/session Core 独占协议状态，ingress 通过注入 sink 交给 direct
+  handler 或可选 Graph adapter。Flowie Core 不解析、编译或启动 graph。
 
 ## State ownership
 
@@ -121,7 +149,8 @@ store owner，并区分 accept ACK、transport send 和 delivery/completion ACK�
 
 Management 和 deployment control 都是普通 FMQ DATA payload 上的版本化应用协议：
 
-- TFMP 使用严格 REQ/REP 提交同步 command/query，并用单独 PUB/SUB channel 发布 live event；
+- TFMP 使用稳定身份 DEALER/ROUTER 流水化 query 与异步 operation acceptance/result，并用单独
+  PUB/SUB channel 发布 live event；
 - failure-domain controller 维护 membership/election/fencing，authority epoch 由宿主强一致事实源提供；
 - durable side effect 只有在 typed inspector 可以证明 APPLIED/NOT_APPLIED 时才能自动 reconcile。
 

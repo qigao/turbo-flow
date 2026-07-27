@@ -11,7 +11,7 @@ channels:
     kind: auth_provider
     config:
       backend: https
-      url: https://auth.internal.example/v2/authenticate
+      url: https://auth.internal.example/v3/authenticate
       method: password
       service_token_ref: env://FLOWIE_TEST_AUTH_SERVICE_TOKEN
       timeout_ms: 3000
@@ -26,7 +26,7 @@ channels:
     kind: acl_provider
     config:
       backend: https
-      url: https://auth.internal.example/v1/acl-bundle
+      url: https://auth.internal.example/v3/acl
       service_token_ref: env://FLOWIE_TEST_AUTH_SERVICE_TOKEN
       timeout_ms: 3000
       max_response_size: 4194304

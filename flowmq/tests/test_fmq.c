@@ -1,6 +1,5 @@
 #include "turbo_flow_fmq.h"
 #include "turbo_flow_fmq_broker.h"
-#include "turbo_flow_fmq_control.h"
 #include "turbo_flow_fmq_management.h"
 #include "turbo_flow_fmq_pubsub.h"
 
@@ -49,6 +48,9 @@ typedef int fmq_test_socket_t;
 #define FMQ_BENCH_TCP_SAMPLES 256u
 #define FMQ_BENCH_TCP_PAYLOAD_BYTES 64u
 #define FMQ_BENCH_TCP_WAIT_LIMIT_NS UINT64_C(2000000000)
+
+static const char FMQ_TEST_KCP_PSK[] =
+    "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
 
 typedef struct fmq_capture_state_s {
   char payload[128];
@@ -1306,6 +1308,15 @@ static int fmq_publish_payload(turbo_flow_t *flow, const char *payload) {
   return payload ? fmq_publish_bytes(flow, payload, strlen(payload)) : TURBO_EINVAL;
 }
 
+static int fmq_publish_payload_after_peer_ready(turbo_flow_t *flow, const char *payload) {
+  int rc = TURBO_ENOTCONN;
+  for (int attempt = 0; attempt < 400 && rc == TURBO_ENOTCONN; ++attempt) {
+    rc = fmq_publish_payload(flow, payload);
+    if (rc == TURBO_ENOTCONN) turbo_sleep_ms(5);
+  }
+  return rc;
+}
+
 static int fmq_publish_bytes(turbo_flow_t *flow, const char *payload, size_t payload_len) {
   turbo_flow_msg_t msg;
   int rc;
@@ -2450,9 +2461,23 @@ spec("flow_fmq_config") {
     config.udp_multicast_loop = 0;
     config.udp_multicast_ttl = 0;
     config.udp_broadcast = 0;
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
     config.transport = TURBO_FLOW_FMQ_KCP;
+    config.host = "127.0.0.1";
+    config.port = 7001;
+    config.kcp_pre_shared_key = FMQ_TEST_KCP_PSK;
+    {
+      turbo_kcp_config_t kcp_config;
+      int kcp_configured = 0;
+      check_int_eq(flow_fmq_kcp_config_resolve(&config, &kcp_config, &kcp_configured), TURBO_OK);
+      check_int_eq(kcp_configured, 1);
+      turbo_kcp_config_wipe(&kcp_config);
+    }
     check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
     config.transport = TURBO_FLOW_FMQ_WS;
+    config.kcp_pre_shared_key = NULL;
     config.path = "/fmq";
     check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
     config.transport = TURBO_FLOW_FMQ_WSS;
@@ -2752,11 +2777,10 @@ spec("flow_fmq_config") {
     size_t yaml_len = 0u;
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    turbo_flow_fmq_control_config_t control = TURBO_FLOW_FMQ_CONTROL_CONFIG_INIT;
     const char *publisher = NULL;
     const char *subscriber = NULL;
-    const char *control_server = NULL;
-    const char *control_client = NULL;
+    const char *management_server = NULL;
+    const char *management_client = NULL;
     (void)snprintf(path, sizeof(path), "%s/examples/fmq.yml", TURBO_FLOW_FMQ_SOURCE_DIR);
     yaml = tt_read_file(path, &yaml_len);
     check_not_null(yaml);
@@ -2768,19 +2792,17 @@ spec("flow_fmq_config") {
                                                             &subscriber),
                  TURBO_OK);
     check_int_eq(turbo_flow_resolved_config_profile_adapter(resolved, "production",
-                                                            "control_server", &control_server),
+                                                            "management_server",
+                                                            &management_server),
                  TURBO_OK);
     check_int_eq(turbo_flow_resolved_config_profile_adapter(resolved, "production",
-                                                            "control_client", &control_client),
-                 TURBO_OK);
-    check_int_eq(turbo_flow_fmq_control_config_resolve(resolved, "flow-control", &control, &error),
+                                                            "management_client",
+                                                            &management_client),
                  TURBO_OK);
     check_str_eq(publisher, "fmq.events.pub");
     check_str_eq(subscriber, "fmq.events.sub");
-    check_str_eq(control_server, "fmq.control.rep");
-    check_str_eq(control_client, "fmq.control.req");
-    check_str_eq(control.target, "data-plane");
-    check_size_eq(control.max_request_bytes, TURBO_FLOW_FMQ_CONTROL_REQUEST_MAX_SIZE);
+    check_str_eq(management_server, "fmq.management.router");
+    check_str_eq(management_client, "fmq.management.dealer");
     turbo_flow_resolved_config_destroy(resolved);
     free(yaml);
   }
@@ -2872,6 +2894,8 @@ spec("flow_fmq_config") {
   }
 
   it("rejects incomplete primitive endpoint configurations") {
+    static const char KCP_PSK[] =
+        "102132435465768798a9bacbdcedfe0f1f2e3d4c5b6a798897a6b5c4d3e2f101";
     turbo_flow_fmq_config_t config;
     config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
     config.pattern = TURBO_FLOW_FMQ_PUB;
@@ -2902,19 +2926,18 @@ spec("flow_fmq_config") {
     config.host = "127.0.0.1";
     config.port = 7001;
     config.path = NULL;
-    config.kcp_fec = 1;
-    config.kcp_fec_backend = TURBO_KCP_FEC_BACKEND_WIREHAIR;
+    config.kcp_pre_shared_key = KCP_PSK;
     config.kcp_fec_data_shards = 4;
     config.kcp_fec_parity_shards = 2;
-    config.kcp_fec_max_payload_size = 1200;
+    config.kcp_fec_max_payload_size = 1248;
     check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
 
     config.transport = TURBO_FLOW_FMQ_KCP;
-    config.kcp_fec_backend = TURBO_KCP_FEC_BACKEND_NONE;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
+    config.kcp_pre_shared_key = NULL;
     check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
 
-    config.kcp_fec = 0;
-    config.kcp_fec_backend = 0;
+    config.kcp_pre_shared_key = NULL;
     config.kcp_fec_data_shards = 0;
     config.kcp_fec_parity_shards = 0;
     config.kcp_fec_max_payload_size = 0;
@@ -2939,11 +2962,13 @@ spec("flow_fmq_config") {
     config.tcp_keepalive_idle_ms = 0;
 
     config.transport = TURBO_FLOW_FMQ_KCP;
+    config.kcp_pre_shared_key = KCP_PSK;
     config.send_hwm_bytes = 4096;
     check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
     config.send_hwm_bytes = 0;
 
     config.transport = TURBO_FLOW_FMQ_PIPE;
+    config.kcp_pre_shared_key = NULL;
     config.linger = 1;
     check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
     config.linger = 0;
@@ -3360,7 +3385,7 @@ spec("flow_fmq_config") {
       check_not_null(schema);
       check_int_eq(schema->kind, TURBO_FLOW_ADAPTER_KIND_FMQ);
       check_int_eq(schema->roles, cases[i].roles);
-      check_size_eq(schema->field_count, 52);
+      check_size_eq(schema->field_count, 59);
       turbo_flow_destroy(flow);
     }
   }
@@ -3371,11 +3396,18 @@ spec("flow_fmq_config") {
     const turbo_flow_adapter_schema_t *schema;
     const turbo_flow_option_field_t *pattern = NULL;
     const turbo_flow_option_field_t *transport = NULL;
-    const turbo_flow_option_field_t *kcp_fec = NULL;
-    const turbo_flow_option_field_t *kcp_fec_backend = NULL;
+    const turbo_flow_option_field_t *kcp_pre_shared_key = NULL;
+    const turbo_flow_option_field_t *kcp_mtu = NULL;
+    const turbo_flow_option_field_t *kcp_send_window = NULL;
+    const turbo_flow_option_field_t *kcp_receive_window = NULL;
+    const turbo_flow_option_field_t *kcp_interval_ms = NULL;
+    const turbo_flow_option_field_t *kcp_handshake_retry_ms = NULL;
+    const turbo_flow_option_field_t *kcp_fast_resend = NULL;
+    const turbo_flow_option_field_t *kcp_congestion_control = NULL;
     const turbo_flow_option_field_t *kcp_fec_data_shards = NULL;
     const turbo_flow_option_field_t *kcp_fec_parity_shards = NULL;
     const turbo_flow_option_field_t *kcp_fec_max_payload_size = NULL;
+    const turbo_flow_option_field_t *kcp_fec_receive_groups = NULL;
     const turbo_flow_option_field_t *content_type = NULL;
     const turbo_flow_option_field_t *content_binding = NULL;
 
@@ -3425,12 +3457,21 @@ spec("flow_fmq_config") {
     for (size_t i = 0; i < schema->field_count; ++i) {
       if (strcmp(schema->fields[i].name, "pattern") == 0) pattern = &schema->fields[i];
       if (strcmp(schema->fields[i].name, "transport") == 0) transport = &schema->fields[i];
-      if (strcmp(schema->fields[i].name, "kcp_fec") == 0) {
-        kcp_fec = &schema->fields[i];
-      }
-      if (strcmp(schema->fields[i].name, "kcp_fec_backend") == 0) {
-        kcp_fec_backend = &schema->fields[i];
-      }
+      if (strcmp(schema->fields[i].name, "kcp_pre_shared_key") == 0)
+        kcp_pre_shared_key = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_mtu") == 0) kcp_mtu = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_send_window") == 0)
+        kcp_send_window = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_receive_window") == 0)
+        kcp_receive_window = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_interval_ms") == 0)
+        kcp_interval_ms = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_handshake_retry_ms") == 0)
+        kcp_handshake_retry_ms = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_fast_resend") == 0)
+        kcp_fast_resend = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_congestion_control") == 0)
+        kcp_congestion_control = &schema->fields[i];
       if (strcmp(schema->fields[i].name, "kcp_fec_data_shards") == 0) {
         kcp_fec_data_shards = &schema->fields[i];
       }
@@ -3439,6 +3480,9 @@ spec("flow_fmq_config") {
       }
       if (strcmp(schema->fields[i].name, "kcp_fec_max_payload_size") == 0) {
         kcp_fec_max_payload_size = &schema->fields[i];
+      }
+      if (strcmp(schema->fields[i].name, "kcp_fec_receive_groups") == 0) {
+        kcp_fec_receive_groups = &schema->fields[i];
       }
       if (strcmp(schema->fields[i].name, "content_type") == 0) {
         content_type = &schema->fields[i];
@@ -3545,11 +3589,18 @@ spec("flow_fmq_config") {
     }
     check_not_null(pattern);
     check_not_null(transport);
-    check_not_null(kcp_fec);
-    check_not_null(kcp_fec_backend);
+    check_not_null(kcp_pre_shared_key);
+    check_not_null(kcp_mtu);
+    check_not_null(kcp_send_window);
+    check_not_null(kcp_receive_window);
+    check_not_null(kcp_interval_ms);
+    check_not_null(kcp_handshake_retry_ms);
+    check_not_null(kcp_fast_resend);
+    check_not_null(kcp_congestion_control);
     check_not_null(kcp_fec_data_shards);
     check_not_null(kcp_fec_parity_shards);
     check_not_null(kcp_fec_max_payload_size);
+    check_not_null(kcp_fec_receive_groups);
     check_not_null(content_type);
     check_not_null(content_binding);
     check_int_eq(content_type->type, TURBO_FLOW_OPTION_STRING);
@@ -3619,9 +3670,6 @@ spec("flow_fmq_config") {
                  "drop_oldest");
     check_str_eq(slow_peer_policy->enum_values[TURBO_FLOW_FMQ_SLOW_PEER_DISCONNECT - 1],
                  "disconnect");
-    check_size_eq(kcp_fec_backend->enum_value_count, 2);
-    check_str_eq(kcp_fec_backend->enum_values[TURBO_KCP_FEC_BACKEND_NONE], "none");
-    check_str_eq(kcp_fec_backend->enum_values[TURBO_KCP_FEC_BACKEND_WIREHAIR], "wirehair");
     turbo_flow_destroy(flow);
   }
 }
@@ -4991,6 +5039,10 @@ spec("flow_fmq_network") {
       fmq_config(&sub_config, TURBO_FLOW_FMQ_SUB, TURBO_FLOW_FMQ_CONNECT, port);
       pub_config.transport = cases[i].transport;
       sub_config.transport = cases[i].transport;
+      if (cases[i].transport == TURBO_FLOW_FMQ_KCP) {
+        pub_config.kcp_pre_shared_key = FMQ_TEST_KCP_PSK;
+        sub_config.kcp_pre_shared_key = FMQ_TEST_KCP_PSK;
+      }
       pub_config.topic = cases[i].name;
       sub_config.topic = cases[i].name;
       if (cases[i].path) {
@@ -5007,13 +5059,18 @@ spec("flow_fmq_network") {
         sub_config.path = pipe_path;
       }
 
+      check_int_eq(flow_fmq_config_validate(&pub_config), TURBO_OK);
+      check_int_eq(flow_fmq_config_validate(&sub_config), TURBO_OK);
       publisher = fmq_make_sink_flow("fmq.output", &pub_config);
       subscriber = fmq_make_source_flow("fmq.input", &sub_config, &capture);
       check_not_null(publisher);
       check_not_null(subscriber);
       check_int_eq(turbo_flow_start(publisher), TURBO_OK);
       check_int_eq(turbo_flow_start(subscriber), TURBO_OK);
-      check_int_eq(fmq_publish_payload(publisher, cases[i].name), TURBO_OK);
+      {
+        int publish_rc = fmq_publish_payload_after_peer_ready(publisher, cases[i].name);
+        check_int_eq(publish_rc, TURBO_OK);
+      }
       fmq_wait_called(&capture, 1);
       check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
       check_size_eq(capture.payload_len, strlen(cases[i].name));
@@ -6533,6 +6590,10 @@ spec("flow_fmq_network") {
       pub_config.topic = "secure";
       pub_config.path = cases[i].path;
       sub_config.transport = cases[i].transport;
+      if (cases[i].transport == TURBO_FLOW_FMQ_KCP) {
+        pub_config.kcp_pre_shared_key = FMQ_TEST_KCP_PSK;
+        sub_config.kcp_pre_shared_key = FMQ_TEST_KCP_PSK;
+      }
       sub_config.host =
           cases[i].transport == TURBO_FLOW_FMQ_TLS || cases[i].transport == TURBO_FLOW_FMQ_WSS
               ? "localhost"
@@ -6551,6 +6612,8 @@ spec("flow_fmq_network") {
         sub_config.port = 0;
         sub_config.path = pipe_path;
       }
+      check_int_eq(flow_fmq_config_validate(&pub_config), TURBO_OK);
+      check_int_eq(flow_fmq_config_validate(&sub_config), TURBO_OK);
       publisher = fmq_make_sink_flow_with_security("fmq.output", &pub_config, &server_security);
       subscriber =
           fmq_make_source_flow_with_security("fmq.input", &sub_config, &capture, &client_security);
@@ -6558,7 +6621,10 @@ spec("flow_fmq_network") {
       check_not_null(subscriber);
       check_int_eq(turbo_flow_start(publisher), TURBO_OK);
       check_int_eq(turbo_flow_start(subscriber), TURBO_OK);
-      check_int_eq(fmq_publish_payload(publisher, "authorized"), TURBO_OK);
+      {
+        int publish_rc = fmq_publish_payload_after_peer_ready(publisher, "authorized");
+        check_int_eq(publish_rc, TURBO_OK);
+      }
       fmq_wait_called(&capture, 1);
       check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
       check_int_eq(turbo_flow_stop(subscriber), TURBO_OK);
@@ -6925,7 +6991,7 @@ spec("flow_fmq_application") {
     turbo_flow_fmq_app_destroy(publisher);
   }
 
-  it("sends and receives through a PAIR facade with a minimal graph bridge") {
+  it("sends and receives through a graph-neutral PAIR facade Core") {
     unsigned short port = fmq_test_port();
     turbo_flow_fmq_config_t bound_config;
     turbo_flow_fmq_config_t connected_config;

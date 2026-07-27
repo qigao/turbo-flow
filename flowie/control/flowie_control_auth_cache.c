@@ -235,9 +235,9 @@ void flowie_control_auth_cache_destroy(flowie_control_auth_cache_t *cache) {
 }
 
 int flowie_control_auth_cache_verify(flowie_control_auth_cache_t *cache,
-                                     flowie_control_store_t *store, const char *root_group_id,
-                                     const char *principal_id, const void *secret,
-                                     size_t secret_size,
+                                     const flowie_control_repository_t *repository,
+                                     const char *root_group_id, const char *principal_id,
+                                     const void *secret, size_t secret_size,
                                      flowie_control_credential_verify_result_t *result,
                                      int *cache_hit_out) {
   flowie_control_credential_verify_result_t cached = FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
@@ -253,7 +253,8 @@ int flowie_control_auth_cache_verify(flowie_control_auth_cache_t *cache,
     *result =
         (flowie_control_credential_verify_result_t)FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
   if (cache_hit_out) *cache_hit_out = 0;
-  if (!cache || !store || !flowie_control_auth_cache_text_valid(root_group_id) ||
+  if (!cache || flowie_control_repository_validate(repository) != TURBO_OK ||
+      !flowie_control_auth_cache_text_valid(root_group_id) ||
       !flowie_control_auth_cache_text_valid(principal_id) || !secret || secret_size == 0u ||
       secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX || !result ||
       result->size < sizeof(*result) || !cache_hit_out)
@@ -312,7 +313,7 @@ reserve:
       rc = TURBO_EPERM;
       goto done;
     }
-    rc = flowie_control_store_credential_state(store, root_group_id, principal_id, &current);
+    rc = repository->auth->credential_state(repository->ctx, root_group_id, principal_id, &current);
     if (rc != TURBO_OK) {
       turbo_mutex_lock(&cache->lock);
       flowie_control_auth_cache_remove_locked(cache, digest);
@@ -349,8 +350,8 @@ reserve:
     rc = TURBO_EPROTO;
     goto done;
   }
-  rc = flowie_control_store_credential_verify(store, root_group_id, principal_id, secret,
-                                              secret_size, &current);
+  rc = repository->auth->credential_verify(repository->ctx, root_group_id, principal_id, secret,
+                                           secret_size, &current);
   if (rc == TURBO_OK) {
     flowie_control_auth_cache_store(cache, digest, TURBO_OK, &current, now_ms);
     *result = current;

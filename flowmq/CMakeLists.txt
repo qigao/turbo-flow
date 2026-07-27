@@ -8,10 +8,6 @@ set(TURBO_FLOW_FMQ_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_broker_config.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_broker_protocol.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_config_validate.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_control.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_control_config.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_control_protocol.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_compatibility.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_deployment.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_management.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fmq_management_protocol.c
@@ -28,8 +24,6 @@ set(TURBO_FLOW_FMQ_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_security.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_broker.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_broker_protocol.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_compatibility.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_control.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_deployment.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_management.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_fmq_management_protocol.h
@@ -48,11 +42,6 @@ cmake_config_target(
   EXPORT_NAME
   FMQ)
 
-# Graph-native product alias. FlowMQ::Broker remains a build-tree compatibility
-# name while installed consumers continue to use TurboFlow::FMQ.
-add_library(FlowMQ::Runtime ALIAS ${TARGET_NAME})
-add_library(FlowMQ::Broker ALIAS ${TARGET_NAME})
-
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 if(BUILD_BENCHMARKS)
   target_compile_definitions(${TARGET_NAME}
@@ -68,10 +57,9 @@ target_link_libraries(
   ${TARGET_NAME} PUBLIC TurboFlow::Flow TurboNet::CoroNet TurboUtils::Core
                  PRIVATE FlowMQ::Protocol flowmq_connect_endpoint_runtime
                          tf_executor_common
-                         TurboUtils::Parser TurboUtils::Mustache)
+                         TurboUtils::Parser)
 
-# Keep the installed target name stable while exposing a symmetric product
-# build target alongside the existing flowie target.
+# Product build target; installed consumers link the canonical TurboFlow::FMQ target.
 add_custom_target(flowmq DEPENDS ${TARGET_NAME})
 cmake_config_target(flowmq FOLDER "flowmq")
 

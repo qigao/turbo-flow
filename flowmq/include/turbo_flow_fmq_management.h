@@ -17,6 +17,7 @@ extern "C" {
 #define TURBO_FLOW_TFMP_MANAGEMENT_CLIENT_ID_MAX 255u
 #define TURBO_FLOW_TFMP_MANAGEMENT_DEDUP_MAX 4096u
 #define TURBO_FLOW_TFMP_MANAGEMENT_REFERENCE_MAX 255u
+#define TURBO_FLOW_TFMP_MANAGEMENT_DEFAULT_INFLIGHT_PER_TARGET 8u
 #define TURBO_FLOW_TFMP_MANAGEMENT_STORE_KEY_MAX 1024u
 #define TURBO_FLOW_TFMP_MANAGEMENT_EVENT_MAX 4096u
 #define TURBO_FLOW_TFMP_MANAGEMENT_EVENT_TOPIC_MAX 31u
@@ -70,7 +71,7 @@ typedef struct turbo_flow_tfmp_management_channel_config_s {
    {0},                                                                                            \
    "memory",                                                                                       \
    {0},                                                                                            \
-   1u,                                                                                             \
+   TURBO_FLOW_TFMP_MANAGEMENT_DEFAULT_INFLIGHT_PER_TARGET,                                        \
    5000u}
 
 typedef struct turbo_flow_tfmp_management_service_s turbo_flow_tfmp_management_service_t;
@@ -226,7 +227,7 @@ CXX_C_API turbo_flow_tfmp_owner_state_t
 turbo_flow_tfmp_management_service_state(const turbo_flow_tfmp_management_service_t *service);
 
 /**
- * Execute exactly one TFMP request and encode one terminal REP.
+ * Execute exactly one TFMP request and encode one correlated response.
  *
  * This function is single-thread owner-lane only. It serves capability/health
  * and, when a target is bound, TARGET_LIST/GET and
@@ -236,7 +237,7 @@ turbo_flow_tfmp_management_service_state(const turbo_flow_tfmp_management_servic
  * the response uses TURBO_FLOW_TFMP_PROTOCOL_ERROR with correlation ID zero.
  *
  * `out` is unchanged on TURBO_ENOSPC and `out_len` receives the required size.
- * A TURBO_OK return only means a terminal reply was encoded; callers must
+ * A TURBO_OK return only means a response was encoded; callers must
  * inspect its TFMP status and disposition.
  */
 CXX_C_API int
@@ -247,7 +248,7 @@ turbo_flow_tfmp_management_service_execute(turbo_flow_tfmp_management_service_t 
 /**
  * Claim and execute one accepted volatile or durable operation on the owner lane.
  *
- * The acceptance REP is emitted before this call can mutate the target. A
+ * The acceptance response is emitted before this call can mutate the target. A
  * For a durable operation, RUNNING is committed before target mutation and the
  * terminal state is committed afterward. A terminal commit failure returns the
  * provider error and moves the owner to FAILED; restart will not blindly replay
@@ -272,11 +273,11 @@ CXX_C_API int
 turbo_flow_tfmp_management_service_reconcile_one(turbo_flow_tfmp_management_service_t *service);
 
 /**
- * Thin TurboFlow stage for a dedicated FMQ REP graph.
+ * Thin TurboFlow stage for a dedicated FMQ ROUTER graph.
  *
  * `ctx` is a management service. The stage replaces the request payload with
- * exactly one terminal TFMP reply while preserving the FMQ protocol route used
- * by the downstream REP adapter. The service and stage must share one owner
+ * exactly one correlated TFMP response while preserving the FMQ identity route
+ * used by the downstream ROUTER adapter. The service and stage must share one owner
  * lane; this function does not add a second lock or state owner.
  */
 CXX_C_API int turbo_flow_tfmp_management_stage(turbo_flow_msg_t *msg, void *ctx);

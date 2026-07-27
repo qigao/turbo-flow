@@ -9,8 +9,8 @@
 #include <string.h>
 
 struct flowie_ingress_s {
-  turbo_flow_t *flow;
-  tstr_t publish_source;
+  flowie_ingress_dispatch_fn dispatch;
+  void *dispatch_ctx;
   flowie_mqtt_parse_options_t parse_options;
   turbo_byte_buffer_t framing;
   turbo_flow_protocol_route_t route;
@@ -163,7 +163,7 @@ static int flowie_ingress_pump(flowie_ingress_t *ingress, size_t *published) {
     {
       turbo_flow_publish_result_t result = TURBO_FLOW_PUBLISH_RESULT_INIT;
       if (rc == TURBO_OK)
-        rc = turbo_flow_publish_ex(ingress->flow, ingress->publish_source, &msg, &result);
+        rc = ingress->dispatch(ingress->dispatch_ctx, &msg, &result);
       else result.status = rc;
       if (ingress->publish_complete) {
         int completion_rc = ingress->publish_complete(ingress->prepare_ctx, ingress, &msg, &result);
@@ -186,9 +186,7 @@ flowie_ingress_t *flowie_ingress_create(const flowie_ingress_config_t *config) {
   flowie_ingress_t *ingress;
   size_t max_packet_size;
   int rc;
-  if (!config || config->size < sizeof(*config) ||
-      config->abi_version != FLOWIE_INGRESS_INTERNAL_ABI_V2 || !config->flow ||
-      !config->publish_source || config->publish_source[0] == '\0' ||
+  if (!config || config->size != sizeof(*config) || !config->dispatch ||
       (config->version != FLOWIE_MQTT_VERSION_UNSPECIFIED &&
        !flowie_mqtt_version_is_supported(config->version)))
     return NULL;
@@ -197,9 +195,8 @@ flowie_ingress_t *flowie_ingress_create(const flowie_ingress_config_t *config) {
   if (max_packet_size > FLOWIE_MQTT_MAX_WIRE_PACKET_SIZE) return NULL;
   ingress = (flowie_ingress_t *)calloc(1, sizeof(*ingress));
   if (!ingress) return NULL;
-  ingress->flow = config->flow;
-  ingress->publish_source = tstr_dup(config->publish_source);
-  if (!ingress->publish_source) goto fail;
+  ingress->dispatch = config->dispatch;
+  ingress->dispatch_ctx = config->dispatch_ctx;
   ingress->parse_options = (flowie_mqtt_parse_options_t)FLOWIE_MQTT_PARSE_OPTIONS_INIT;
   ingress->parse_options.version = config->version;
   ingress->parse_options.max_packet_size = max_packet_size;
@@ -229,7 +226,6 @@ void flowie_ingress_destroy(flowie_ingress_t *ingress) {
   if (!ingress) return;
   turbo_byte_buffer_destroy(&ingress->framing);
   tstr_freep(&ingress->publish_packet_override);
-  tstr_freep(&ingress->publish_source);
   free(ingress);
 }
 

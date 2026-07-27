@@ -18,7 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FLOW_HTTP_AUTH_PROTOCOL_VERSION 2u
+#define FLOW_HTTP_AUTH_PROTOCOL_VERSION 3u
 #define FLOW_HTTP_AUTH_REMOTE_ADDRESS_MAX 255u
 
 struct turbo_flow_http_auth_provider_s {
@@ -94,6 +94,23 @@ static int flow_http_auth_string_valid(const char *value, size_t maximum, int re
   if (!value) return !required;
   size = strnlen(value, maximum + 1u);
   return size <= maximum && (!required || size > 0u);
+}
+
+static int flow_http_auth_certificate_fingerprint_valid(const char *value) {
+  static const char prefix[] = "sha256:";
+  size_t size;
+  if (!value) return 1;
+  size = strlen(value);
+  if (size != sizeof(prefix) - 1u + 64u || memcmp(value, prefix, sizeof(prefix) - 1u) != 0)
+    return 0;
+  for (size_t i = sizeof(prefix) - 1u; i < size; ++i)
+    if (!((value[i] >= '0' && value[i] <= '9') || (value[i] >= 'a' && value[i] <= 'f'))) return 0;
+  return 1;
+}
+
+static const char *
+flow_http_auth_peer_certificate(const turbo_flow_security_auth_request_t *request) {
+  return request && request->size >= sizeof(*request) ? request->peer_certificate_sha256 : NULL;
 }
 
 static int flow_http_auth_json_fields(const json_value_t *object, const char *const *allowed,
@@ -286,11 +303,16 @@ static int flow_http_auth_encode_request(const turbo_flow_security_auth_request_
                                          char **body_out, size_t *body_size_out) {
   turbo_json_doc_t *document = NULL;
   char *secret_base64 = NULL;
+  const char *peer_certificate_sha256;
   int rc = TURBO_ENOMEM;
   if (body_out) *body_out = NULL;
   if (body_size_out) *body_size_out = 0u;
-  if (!request || !body_out || !body_size_out ||
-      tn_base64_encode(request->secret, request->secret_size, &secret_base64) != 0 ||
+  if (!request || request->size < TURBO_FLOW_SECURITY_AUTH_REQUEST_BASE_SIZE || !body_out ||
+      !body_size_out || !request->identity || !request->method || !request->secret)
+    return TURBO_EINVAL;
+  peer_certificate_sha256 = flow_http_auth_peer_certificate(request);
+  if (!flow_http_auth_certificate_fingerprint_valid(peer_certificate_sha256)) return TURBO_EPERM;
+  if (tn_base64_encode(request->secret, request->secret_size, &secret_base64) != 0 ||
       !secret_base64)
     return TURBO_ENOMEM;
   document = (turbo_json_doc_t *)turbo_json_create_object();
@@ -308,6 +330,9 @@ static int flow_http_auth_encode_request(const turbo_flow_security_auth_request_
           TURBO_OK ||
       flow_http_auth_add(document, "remote_address",
                          turbo_json_create_string(request->remote_address ? request->remote_address
+                                                                          : "")) != TURBO_OK ||
+      flow_http_auth_add(document, "peer_certificate_sha256",
+                         turbo_json_create_string(peer_certificate_sha256 ? peer_certificate_sha256
                                                                           : "")) != TURBO_OK)
     goto done;
   *body_out = turbo_json_serialize(document, body_size_out);
@@ -367,21 +392,24 @@ static int flow_http_authenticate(void *ctx, const turbo_flow_security_auth_requ
   char *body = NULL;
   size_t body_size = 0u;
   const char *headers[3];
+  const char *peer_certificate_sha256;
   size_t identity_size;
   size_t token_size;
   int rc = TURBO_EIO;
-  if (!provider || !request || request->size < sizeof(*request) || !principal_out ||
-      principal_out->size < sizeof(*principal_out) || !request->identity || !request->method ||
-      !request->secret)
+  if (!provider || !request || request->size < TURBO_FLOW_SECURITY_AUTH_REQUEST_BASE_SIZE ||
+      !principal_out || principal_out->size < sizeof(*principal_out) || !request->identity ||
+      !request->method || !request->secret)
     return TURBO_EINVAL;
   *principal_out = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   if (!coro_running() || !coro_context_current()) return TURBO_ENOTSUP;
+  peer_certificate_sha256 = flow_http_auth_peer_certificate(request);
   identity_size = strnlen(request->identity, TURBO_FLOW_SECURITY_ID_MAX + 1u);
   if (identity_size == 0u || identity_size > TURBO_FLOW_SECURITY_ID_MAX ||
       strcmp(request->method, provider->method) != 0 || request->secret_size == 0u ||
       request->secret_size > provider->max_secret_size ||
       !flow_http_auth_string_valid(request->protocol, TURBO_FLOW_SECURITY_TYPE_MAX, 0) ||
-      !flow_http_auth_string_valid(request->remote_address, FLOW_HTTP_AUTH_REMOTE_ADDRESS_MAX, 0))
+      !flow_http_auth_string_valid(request->remote_address, FLOW_HTTP_AUTH_REMOTE_ADDRESS_MAX, 0) ||
+      !flow_http_auth_certificate_fingerprint_valid(peer_certificate_sha256))
     return TURBO_EPERM;
   rc = turbo_flow_security_secret_acquire(&provider->key_provider, provider->service_token_ref,
                                           &lease);
@@ -474,6 +502,8 @@ static int flow_http_enhanced_auth_begin(void *ctx,
   basic.secret_size = request->data_size;
   basic.remote_address = request->remote_address;
   basic.protocol = request->protocol;
+  basic.peer_certificate_sha256 =
+      request->size >= sizeof(*request) ? request->peer_certificate_sha256 : NULL;
   rc = flow_http_authenticate(ctx, &basic, &result_out->principal);
   if (rc != TURBO_OK) return rc;
   result_out->status = TURBO_FLOW_SECURITY_ENHANCED_AUTH_SUCCESS;

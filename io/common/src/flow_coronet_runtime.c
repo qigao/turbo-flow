@@ -3,10 +3,10 @@
 #include "turbo_error.h"
 
 #include <limits.h>
+#include <string.h>
 
 const char *const TF_CORONET_TRANSPORT_VALUES[TF_CORONET_TRANSPORT_VALUE_COUNT] = {
     "tcp", "udp", "kcp", "tls", "ws", "wss", "pipe"};
-const char *const TF_CORONET_KCP_FEC_BACKEND_VALUES[2] = {"none", "wirehair"};
 
 int tf_coronet_transport_valid(tf_coronet_transport_t transport) {
   return transport >= TF_CORONET_TRANSPORT_TCP && transport < TF_CORONET_TRANSPORT_COUNT;
@@ -122,28 +122,98 @@ int tf_coronet_udp_options_validate(tf_coronet_transport_t transport,
   return TURBO_OK;
 }
 
-int tf_coronet_kcp_fec_options_resolve(tf_coronet_transport_t transport,
-                                       const tf_coronet_kcp_fec_options_t *options,
-                                       turbo_kcp_fec_config_t *config, int *configured) {
+static int tf_coronet_hex_nibble(char value, uint8_t *out) {
+  if (!out) return TURBO_EINVAL;
+  if (value >= '0' && value <= '9')
+    *out = (uint8_t)(value - '0');
+  else if (value >= 'a' && value <= 'f')
+    *out = (uint8_t)(value - 'a' + 10);
+  else if (value >= 'A' && value <= 'F')
+    *out = (uint8_t)(value - 'A' + 10);
+  else
+    return TURBO_EINVAL;
+  return TURBO_OK;
+}
+
+int tf_coronet_kcp_pre_shared_key_parse(const char *hex,
+                                        uint8_t out[TURBO_KCP_PSK_SIZE]) {
+  size_t i;
+  if (!hex || !out || strlen(hex) != TURBO_KCP_PSK_SIZE * 2U) return TURBO_EINVAL;
+  for (i = 0u; i < TURBO_KCP_PSK_SIZE; ++i) {
+    uint8_t high;
+    uint8_t low;
+    if (tf_coronet_hex_nibble(hex[i * 2u], &high) != TURBO_OK ||
+        tf_coronet_hex_nibble(hex[i * 2u + 1u], &low) != TURBO_OK) {
+      memset(out, 0, TURBO_KCP_PSK_SIZE);
+      return TURBO_EINVAL;
+    }
+    out[i] = (uint8_t)((high << 4u) | low);
+  }
+  return TURBO_OK;
+}
+
+int tf_coronet_kcp_options_resolve(tf_coronet_transport_t transport,
+                                   const tf_coronet_kcp_options_t *options,
+                                   turbo_kcp_config_t *config, int *configured) {
+  static const uint64_t KCP_MAX_FEC_STATE_BYTES = UINT64_C(64) * 1024u * 1024u;
+  uint8_t key_bits = 0u;
+  uint64_t fec_state_bytes;
+  uint32_t total_shards;
+  int has_options;
+  size_t i;
   if (!options || !config || !configured) return TURBO_EINVAL;
-  turbo_kcp_fec_config_default(config);
+  turbo_kcp_config_default(config);
   *configured = 0;
-  if (!options->enabled) return TURBO_OK;
-  if (transport != TF_CORONET_TRANSPORT_KCP) return TURBO_EINVAL;
-  if (options->backend <= TURBO_KCP_FEC_BACKEND_NONE ||
-      options->backend > TURBO_KCP_FEC_BACKEND_WIREHAIR || options->data_shards == 0 ||
-      options->data_shards > 256 || options->parity_shards == 0 || options->parity_shards > 256 ||
-      options->max_payload_size == 0 || options->max_payload_size > UINT16_MAX) {
+  for (i = 0u; i < TURBO_KCP_PSK_SIZE; ++i)
+    key_bits |= options->pre_shared_key[i];
+  has_options = key_bits != 0u || options->mtu != 0u ||
+                options->send_window != 0u || options->receive_window != 0u ||
+                options->interval_ms != 0u || options->handshake_retry_ms != 0u ||
+                options->fast_resend != 0u || options->no_congestion_window != 0 ||
+                options->data_shards != 0u || options->parity_shards != 0u ||
+                options->max_payload_size != 0u ||
+                options->receive_group_count != 0u;
+  if (transport != TF_CORONET_TRANSPORT_KCP)
+    return has_options ? TURBO_EINVAL : TURBO_OK;
+  if (key_bits == 0u || options->mtu < 576u || options->mtu > UINT16_MAX ||
+      options->send_window == 0u || options->send_window > UINT16_MAX ||
+      options->receive_window == 0u || options->receive_window > UINT16_MAX ||
+      options->interval_ms == 0u || options->interval_ms > 100u ||
+      options->handshake_retry_ms == 0u ||
+      options->handshake_retry_ms > UINT16_MAX ||
+      options->fast_resend > UINT8_MAX ||
+      (options->no_congestion_window != 0 &&
+       options->no_congestion_window != 1) ||
+      options->data_shards == 0 || options->data_shards > 255u ||
+      options->parity_shards == 0 || options->parity_shards > 255u ||
+      options->max_payload_size < options->mtu + TURBO_KCP_SECURE_RECORD_OVERHEAD ||
+      options->max_payload_size > UINT16_MAX ||
+      options->receive_group_count == 0 ||
+      options->receive_group_count > 64u) {
     return TURBO_EINVAL;
   }
-  if (!turbo_kcp_fec_backend_available((turbo_kcp_fec_backend_t)options->backend)) {
-    return TURBO_ENOTSUP;
-  }
-  config->enabled = 1;
-  config->backend = (turbo_kcp_fec_backend_t)options->backend;
-  config->data_shards = (uint16_t)options->data_shards;
-  config->parity_shards = (uint16_t)options->parity_shards;
-  config->max_payload_size = (uint16_t)options->max_payload_size;
+  total_shards = options->data_shards + options->parity_shards;
+  if (total_shards > 255u) return TURBO_EINVAL;
+  fec_state_bytes = (uint64_t)total_shards *
+                    ((uint64_t)options->max_payload_size + 2u) *
+                    options->receive_group_count;
+  if (fec_state_bytes > KCP_MAX_FEC_STATE_BYTES) return TURBO_ERANGE;
+  memcpy(config->pre_shared_key, options->pre_shared_key,
+         TURBO_KCP_PSK_SIZE);
+  config->mtu = (uint16_t)options->mtu;
+  config->send_window = (uint16_t)options->send_window;
+  config->receive_window = (uint16_t)options->receive_window;
+  config->interval_ms = (uint16_t)options->interval_ms;
+  config->handshake_retry_ms = (uint16_t)options->handshake_retry_ms;
+  config->fast_resend = (uint8_t)options->fast_resend;
+  config->no_congestion_window =
+      (uint8_t)options->no_congestion_window;
+  config->fec.backend = TURBO_KCP_FEC_BACKEND_REED_SOLOMON;
+  config->fec.data_shards = (uint16_t)options->data_shards;
+  config->fec.parity_shards = (uint16_t)options->parity_shards;
+  config->fec.max_payload_size = (uint16_t)options->max_payload_size;
+  config->fec.receive_group_count =
+      (uint16_t)options->receive_group_count;
   *configured = 1;
   return TURBO_OK;
 }
@@ -230,12 +300,14 @@ coro_socket_t *tf_coronet_apply_socket_timeout(coro_socket_t *socket,
   return socket;
 }
 
-int tf_coronet_apply_kcp_fec(coro_socket_t *socket, tf_coronet_transport_t transport,
-                             const turbo_kcp_fec_config_t *config, int configured) {
+int tf_coronet_apply_kcp_config(coro_socket_t *socket,
+                                tf_coronet_transport_t transport,
+                                const turbo_kcp_config_t *config,
+                                int configured) {
   if (!configured) return TURBO_OK;
   if (!socket || !config) return TURBO_EINVAL;
   if (transport != TF_CORONET_TRANSPORT_KCP) return TURBO_EINVAL;
-  return coro_socket_set_kcp_fec(socket, config);
+  return coro_socket_set_kcp_config(socket, config);
 }
 
 int tf_coronet_apply_socket_options(coro_socket_t *socket, tf_coronet_transport_t transport,

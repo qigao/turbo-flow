@@ -1035,7 +1035,7 @@ spec("Flowie control SQLite fact store") {
     control_store_close(store, path);
   }
 
-  it("publishes an atomic versioned bundle that the SQLite provider can load") {
+  it("publishes an atomic versioned bundle through the repository and legacy SQLite provider") {
     static const char first_rule[] =
         "deny|any|*|root-a|subscribe|mqtt_topic|adapter|root-a/private/#";
     static const char second_rule[] =
@@ -1049,6 +1049,8 @@ spec("Flowie control SQLite fact store") {
     turbo_flow_security_sqlite_provider_t *provider = NULL;
     const turbo_flow_security_policy_provider_t *interface = NULL;
     turbo_flow_security_policy_bundle_t bundle = TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
+    turbo_flow_security_policy_bundle_t repository_bundle =
+        TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
 
     check_int_eq(control_policy_rule_put(store, 20u, first_rule, "request-policy-first", 1u, &put),
                  TURBO_OK);
@@ -1060,6 +1062,27 @@ spec("Flowie control SQLite fact store") {
     check_uint_eq(published.revision, 4u);
     check_uint_eq(published.policy_version, 1u);
     check_false(published.replayed);
+
+    check_int_eq(flowie_control_store_policy_bundle_load(store, "root-a", 0u,
+                                                         &repository_bundle),
+                 TURBO_OK);
+    check_uint_eq(repository_bundle.policy_version, 1u);
+    check_uint_eq(repository_bundle.expires_at, 20000u);
+    check_size_eq(repository_bundle.rule_count, 2u);
+    check_str_eq(repository_bundle.rules[0].pattern, "root-a/private/#");
+    check_str_eq(repository_bundle.rules[1].pattern, "root-a/events/#");
+    flowie_control_store_policy_bundle_release(&repository_bundle);
+
+    repository_bundle =
+        (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
+    check_int_eq(flowie_control_store_policy_bundle_load(store, "root-a", 1u,
+                                                         &repository_bundle),
+                 TURBO_OK);
+    check_size_eq(repository_bundle.rule_count, 2u);
+    flowie_control_store_policy_bundle_release(&repository_bundle);
+    check_int_eq(flowie_control_store_policy_bundle_load(store, "root-a", 2u,
+                                                         &repository_bundle),
+                 TURBO_ENOENT);
 
     provider_config.database_path = path;
     provider_config.namespace_name = "root-a";

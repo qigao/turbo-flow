@@ -20,9 +20,23 @@ listener:
     max_headers_count: 64
 
 storage:
+  # Exactly one control store is active. Omit control_store for backward-compatible SQLite.
+  control_store: sqlite
   sqlite:
     path: data/flowie-control.sqlite3
     busy_timeout_ms: 1000
+  # To use PostgreSQL, set control_store: postgresql, remove the sqlite block, and enable:
+  # postgresql:
+  #   # Never put password/passfile/service in conninfo. verify-full is mandatory.
+  #   conninfo: host=control-db.internal dbname=flowie user=flowie_control sslmode=verify-full sslrootcert=certs/control-db-ca.pem
+  #   password_ref: env://FLOWIE_CONTROL_PG_PASSWORD
+  #   schema_name: flowie_control
+  #   connect_timeout_seconds: 5
+  #   statement_timeout_ms: 5000
+  #   lock_timeout_ms: 5000
+  #   pool_capacity: 4
+  #   acquire_timeout_ms: 5000
+  #   schema_mode: validate
 
 management:
   rpc_path: /v1/management/rpc
@@ -37,3 +51,29 @@ dashboard:
 
 auth:
   enabled: false
+  # Set enabled=true and configure the common fields below to use local Auth.
+  # Add external_https only when third-party HTTPS Auth must replace the local verifier.
+  # listener_id: flowie-control-auth
+  # method: bearer
+  # service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
+  # principal_ttl_seconds: 300
+  # local_executor:
+  #   workers: 4
+  #   queue_capacity: 128
+  #   deadline_ms: 10000
+  # root_bindings:
+  #   - peer_certificate_sha256: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  #     root_group: root-a
+  # external_https: # mutually exclusive with an explicit local_executor block
+  #   url: https://third-party-auth.internal/v2/assert
+  #   service_token_ref: env://FLOWIE_THIRD_PARTY_AUTH_TOKEN
+  #   trusted_issuer: https://identity.internal
+  #   subject_type: device
+  #   timeout_ms: 3000
+  #   max_response_size: 16384
+  #   max_in_flight: 64
+  #   tls:
+  #     ca_file: certs/third-party-auth-ca.pem
+  #     client_cert_file: certs/flowie-auth-client-chain.pem
+  #     client_key_file: certs/flowie-auth-client-key.pem
+  #     client_key_password_ref: env://FLOWIE_THIRD_PARTY_AUTH_KEY_PASSWORD

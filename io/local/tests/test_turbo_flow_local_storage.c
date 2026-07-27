@@ -1,3 +1,4 @@
+#include "flowie_record_store_endurance.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
 #include "turbo_flow_config.h"
@@ -40,11 +41,11 @@ spec("turbo_flow_local_storage_backend") {
     request.model = TURBO_FLOW_STORAGE_MODEL_RECORD;
     request.options = &options;
     request.options_size = sizeof(options);
-    check_int_eq(turbo_flow_storage_backend_owner_create_registered(
-                     registry, "local", &request, &owner, &error),
+    check_int_eq(turbo_flow_storage_backend_owner_create_registered(registry, "local", &request,
+                                                                    &owner, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_storage_backend_owner_service(
-                     owner, TURBO_FLOW_STORAGE_MODEL_RECORD, (void **)&service),
+    check_int_eq(turbo_flow_storage_backend_owner_service(owner, TURBO_FLOW_STORAGE_MODEL_RECORD,
+                                                          (void **)&service),
                  TURBO_OK);
     store = service;
     mutation.key = key;
@@ -69,7 +70,7 @@ spec("turbo_flow_local_storage_backend") {
     turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
     turbo_flow_record_store_t *store = NULL;
     turbo_flow_record_mutation_t mutations[2] = {TURBO_FLOW_RECORD_MUTATION_INIT,
-                                                   TURBO_FLOW_RECORD_MUTATION_INIT};
+                                                 TURBO_FLOW_RECORD_MUTATION_INIT};
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     size_t count = 0u;
     static const uint8_t key_a[] = {'a'};
@@ -88,11 +89,11 @@ spec("turbo_flow_local_storage_backend") {
     request.model = TURBO_FLOW_STORAGE_MODEL_RECORD;
     request.options = &options;
     request.options_size = sizeof(options);
-    check_int_eq(turbo_flow_storage_backend_owner_create_registered(
-                     registry, "local", &request, &owner, &error),
+    check_int_eq(turbo_flow_storage_backend_owner_create_registered(registry, "local", &request,
+                                                                    &owner, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_storage_backend_owner_service(
-                     owner, TURBO_FLOW_STORAGE_MODEL_RECORD, (void **)&store),
+    check_int_eq(turbo_flow_storage_backend_owner_service(owner, TURBO_FLOW_STORAGE_MODEL_RECORD,
+                                                          (void **)&store),
                  TURBO_OK);
     mutations[0].key = key_a;
     mutations[0].key_size = sizeof(key_a);
@@ -110,8 +111,8 @@ spec("turbo_flow_local_storage_backend") {
     turbo_flow_storage_backend_owner_destroy(owner);
     check_int_eq(turbo_flow_storage_backend_registry_destroy(registry), TURBO_OK);
 
-    options = (turbo_flow_local_storage_backend_options_t)
-        TURBO_FLOW_LOCAL_STORAGE_BACKEND_OPTIONS_INIT;
+    options =
+        (turbo_flow_local_storage_backend_options_t)TURBO_FLOW_LOCAL_STORAGE_BACKEND_OPTIONS_INIT;
     check_int_eq(turbo_flow_storage_backend_registry_create(1u, &registry), TURBO_OK);
     check_int_eq(turbo_flow_storage_backend_registry_register(
                      registry, turbo_flow_local_storage_backend_api()),
@@ -120,12 +121,50 @@ spec("turbo_flow_local_storage_backend") {
     request.options_size = sizeof(options);
     for (request.model = TURBO_FLOW_STORAGE_MODEL_STATE;
          request.model <= TURBO_FLOW_STORAGE_MODEL_SERIES; ++request.model) {
-      check_int_eq(turbo_flow_storage_backend_owner_create_registered(
-                       registry, "local", &request, &owner, &error),
+      check_int_eq(turbo_flow_storage_backend_owner_create_registered(registry, "local", &request,
+                                                                      &owner, &error),
                    TURBO_OK);
       turbo_flow_storage_backend_owner_destroy(owner);
       owner = NULL;
     }
+    check_int_eq(turbo_flow_storage_backend_registry_destroy(registry), TURBO_OK);
+  }
+
+  it("MQTT-STORE-ENDURANCE-001 runs the shared revision trace through local memory") {
+    turbo_flow_storage_backend_registry_t *registry = NULL;
+    turbo_flow_storage_backend_owner_t *owner = NULL;
+    turbo_flow_storage_backend_open_request_t request =
+        TURBO_FLOW_STORAGE_BACKEND_OPEN_REQUEST_INIT;
+    turbo_flow_local_storage_backend_options_t options =
+        TURBO_FLOW_LOCAL_STORAGE_BACKEND_OPTIONS_INIT;
+    turbo_flow_record_store_t *store = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    flowie_record_store_endurance_result_t result = {0};
+
+    options.max_key_size = FLOWIE_RECORD_ENDURANCE_KEY_SIZE;
+    options.max_value_size = FLOWIE_RECORD_ENDURANCE_VALUE_SIZE;
+    options.max_batch_size = FLOWIE_RECORD_ENDURANCE_BATCH_SIZE;
+    options.max_records = FLOWIE_RECORD_ENDURANCE_RECORDS;
+    check_int_eq(turbo_flow_storage_backend_registry_create(1u, &registry), TURBO_OK);
+    check_int_eq(turbo_flow_storage_backend_registry_register(
+                     registry, turbo_flow_local_storage_backend_api()),
+                 TURBO_OK);
+    request.model = TURBO_FLOW_STORAGE_MODEL_RECORD;
+    request.options = &options;
+    request.options_size = sizeof(options);
+    check_int_eq(turbo_flow_storage_backend_owner_create_registered(registry, "local", &request,
+                                                                    &owner, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_storage_backend_owner_service(owner, TURBO_FLOW_STORAGE_MODEL_RECORD,
+                                                          (void **)&store),
+                 TURBO_OK);
+    check_int_eq(flowie_record_store_endurance_run(store, &result), TURBO_OK);
+    check_size_eq(result.successful_commits, 40u);
+    check_size_eq(result.scans, 39u);
+    check_size_eq(result.conflicts, 4u);
+    check_size_eq(result.final_count, 0u);
+    check_false(result.durable);
+    turbo_flow_storage_backend_owner_destroy(owner);
     check_int_eq(turbo_flow_storage_backend_registry_destroy(registry), TURBO_OK);
   }
 }

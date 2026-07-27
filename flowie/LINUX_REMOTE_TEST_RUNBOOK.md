@@ -10,9 +10,11 @@
   CodeGraph 索引和 `.env`。
 - 远端每次使用 `/root/dev/runs/<run-id>`；SDK 安装到该 run 目录，不覆盖 `/opt` 下已有包。
 - Docker 端口只绑定 `127.0.0.1`。数据库凭据只用于本次临时 PostgreSQL 容器。
-- 所有命令 fail fast。不要用跳过、Disabled 或仅编译结果替代测试成功。
+- 所有命令 fail fast。不要用发布必需用例的跳过、Disabled 或仅编译结果替代测试成功；
+  可选 public broker smoke 默认 Disabled。
 - release 与 nightly 分开：release 使用 GCC；libFuzzer/nightly 使用 Clang 独立构建树。
-- PostgreSQL、Redis、固定 broker 和 public broker 是独立证据；失败时保留本次 run 目录和日志。
+- PostgreSQL、Redis 和固定 broker 是独立发布证据；可选 public broker smoke 只验证公网访问能力。
+  发布证据失败时保留本次 run 目录和日志。
 
 ## 2. Windows：打包并上传当前源码
 
@@ -245,16 +247,18 @@ docker image inspect "$REDIS_IMAGE" "$PG_IMAGE" eclipse-mosquitto:2.0.22 \
   > "$ARTIFACT_ROOT/docker-images.json"
 ```
 
-public MQTT cases 还需要以下出站端口；任何失败都应在 configure/test 前处理：
+仅在显式启用可选 public MQTT smoke 时检查以下出站端口；失败不影响 release gate：
 
 ```bash
-for endpoint in \
-  broker.hivemq.com:1883 broker.hivemq.com:8000 \
-  broker.emqx.io:1883 broker.emqx.io:8883 broker.emqx.io:8083 broker.emqx.io:8084; do
-  host="${endpoint%:*}"
-  port="${endpoint##*:}"
-  timeout 5 bash -c "</dev/tcp/$host/$port"
-done
+if [[ "${FLOWIE_RUN_PUBLIC_SMOKE:-0}" == "1" ]]; then
+  for endpoint in \
+    broker.hivemq.com:1883 broker.hivemq.com:8000 \
+    broker.emqx.io:1883 broker.emqx.io:8883 broker.emqx.io:8083 broker.emqx.io:8084; do
+    host="${endpoint%:*}"
+    port="${endpoint##*:}"
+    timeout 5 bash -c "</dev/tcp/$host/$port"
+  done
+fi
 ```
 
 ## 5. 构建、测试并安装依赖 SDK
@@ -320,7 +324,7 @@ cmake --fresh --preset linux-release-user \
   -DCMAKE_PREFIX_PATH="$SDK_ROOT/turboutils;$SDK_ROOT/turbonet;$SDK_ROOT/turbohttp;$TURBO_FLOW_SRC/vcpkg_installed/x64-linux" \
   -DCMAKE_INSTALL_PREFIX="$SDK_ROOT/turboflow" \
   -DFLOWIE_MQTT_RELEASE_GATE=ON \
-  -DFLOWIE_MQTT_PUBLIC_LIVE_TESTS=ON \
+  -DFLOWIE_MQTT_PUBLIC_LIVE_TESTS=OFF \
   -DFLOWIE_MQTT_FIXED_INTEROP_TESTS=ON \
   -DFLOWIE_MQTT_FIXED_CA_FILE="$CERT_DIR/ca.pem" \
   -DFLOWIE_MQTT_FIXED_SUPPORT_31=ON \
@@ -466,7 +470,7 @@ docker rm -f "$REDIS_CONTAINER" "$PG_CONTAINER"
 
 - TurboUtils、TurboNet、TurboHTTP 与 TurboFlow configure/build 成功。
 - 四个 release JUnit 结果无失败，TurboFlow 全量 CTest 不是零用例。
-- Redis live、PostgreSQL live、固定 Mosquitto、public MQTT、TLS/WSS/mTLS 均有实际 PASS。
+- Redis live、PostgreSQL live、固定 Mosquitto、TLS/WSS/mTLS 均有实际 PASS。
 - `flowie-release-evidence.json` 通过内置 verifier。
 - nightly 的 corpus、六项 30/60 分钟 soak 和 Clang libFuzzer 全部 PASS，且无资源单调增长。
 - 结果记录同一个源码归档 SHA-256；Linux 结果不得从 Windows 结果推定。

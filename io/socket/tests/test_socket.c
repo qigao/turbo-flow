@@ -1,5 +1,6 @@
 #include "socket.h"
 
+#include "CoroNet/turbo_kcp.h"
 #include "CoroNet/turbo_coro_socket.h"
 #include "tinytest.h"
 #include "tls_test_support.h"
@@ -43,6 +44,19 @@ typedef struct socket_test_spawn_request_s {
 } socket_test_spawn_request_t;
 
 static socket_test_context_runner_t socket_test_runner;
+static const char SOCKET_TEST_KCP_PSK[] =
+    "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+
+static int socket_test_apply_kcp_config(coro_socket_t *socket) {
+  turbo_kcp_config_t config;
+  int rc;
+  if (!socket) return TURBO_EINVAL;
+  turbo_kcp_config_default(&config);
+  memset(config.pre_shared_key, 0x5a, sizeof(config.pre_shared_key));
+  rc = coro_socket_set_kcp_config(socket, &config);
+  turbo_kcp_config_wipe(&config);
+  return rc;
+}
 
 static void socket_test_context_thread(void *arg) {
   socket_test_context_runner_t *runner = (socket_test_context_runner_t *)arg;
@@ -788,7 +802,8 @@ static void kcp_source_client_task(coro_t *co, void *arg) {
   }
 
   coro_socket_set_timeout(client, 1000);
-  rc = coro_socket_connect(client, "127.0.0.1", state->port);
+  rc = socket_test_apply_kcp_config(client);
+  if (rc == TURBO_OK) rc = coro_socket_connect(client, "127.0.0.1", state->port);
   if (rc == TURBO_OK) rc = coro_socket_send(client, state->data, state->len);
 
   coro_socket_destroy(client);
@@ -892,12 +907,19 @@ spec("turbo_flow_coronet") {
     check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
     check_int_eq(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
     check_str_eq(connection.endpoint, "tcp://:0");
-    check_size_eq(schema->field_count, 32);
-    const turbo_flow_option_field_t *kcp_fec = NULL;
-    const turbo_flow_option_field_t *kcp_fec_backend = NULL;
+    check_size_eq(schema->field_count, 39);
+    const turbo_flow_option_field_t *kcp_pre_shared_key = NULL;
+    const turbo_flow_option_field_t *kcp_mtu = NULL;
+    const turbo_flow_option_field_t *kcp_send_window = NULL;
+    const turbo_flow_option_field_t *kcp_receive_window = NULL;
+    const turbo_flow_option_field_t *kcp_interval_ms = NULL;
+    const turbo_flow_option_field_t *kcp_handshake_retry_ms = NULL;
+    const turbo_flow_option_field_t *kcp_fast_resend = NULL;
+    const turbo_flow_option_field_t *kcp_congestion_control = NULL;
     const turbo_flow_option_field_t *kcp_fec_data_shards = NULL;
     const turbo_flow_option_field_t *kcp_fec_parity_shards = NULL;
     const turbo_flow_option_field_t *kcp_fec_max_payload_size = NULL;
+    const turbo_flow_option_field_t *kcp_fec_receive_groups = NULL;
     const turbo_flow_option_field_t *connect_timeout_ms = NULL;
     const turbo_flow_option_field_t *send_timeout_ms = NULL;
     const turbo_flow_option_field_t *recv_timeout_ms = NULL;
@@ -918,15 +940,29 @@ spec("turbo_flow_coronet") {
     const turbo_flow_option_field_t *udp_broadcast = NULL;
     for (size_t i = 0; i < schema->field_count; ++i) {
       if (strcmp(schema->fields[i].name, "transport") == 0) transport = &schema->fields[i];
-      if (strcmp(schema->fields[i].name, "kcp_fec") == 0) kcp_fec = &schema->fields[i];
-      if (strcmp(schema->fields[i].name, "kcp_fec_backend") == 0)
-        kcp_fec_backend = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_pre_shared_key") == 0)
+        kcp_pre_shared_key = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_mtu") == 0) kcp_mtu = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_send_window") == 0)
+        kcp_send_window = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_receive_window") == 0)
+        kcp_receive_window = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_interval_ms") == 0)
+        kcp_interval_ms = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_handshake_retry_ms") == 0)
+        kcp_handshake_retry_ms = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_fast_resend") == 0)
+        kcp_fast_resend = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_congestion_control") == 0)
+        kcp_congestion_control = &schema->fields[i];
       if (strcmp(schema->fields[i].name, "kcp_fec_data_shards") == 0)
         kcp_fec_data_shards = &schema->fields[i];
       if (strcmp(schema->fields[i].name, "kcp_fec_parity_shards") == 0)
         kcp_fec_parity_shards = &schema->fields[i];
       if (strcmp(schema->fields[i].name, "kcp_fec_max_payload_size") == 0)
         kcp_fec_max_payload_size = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "kcp_fec_receive_groups") == 0)
+        kcp_fec_receive_groups = &schema->fields[i];
       if (strcmp(schema->fields[i].name, "connect_timeout_ms") == 0)
         connect_timeout_ms = &schema->fields[i];
       if (strcmp(schema->fields[i].name, "send_timeout_ms") == 0)
@@ -960,11 +996,18 @@ spec("turbo_flow_coronet") {
       if (strcmp(schema->fields[i].name, "udp_broadcast") == 0) udp_broadcast = &schema->fields[i];
     }
     check_not_null(transport);
-    check_not_null(kcp_fec);
-    check_not_null(kcp_fec_backend);
+    check_not_null(kcp_pre_shared_key);
+    check_not_null(kcp_mtu);
+    check_not_null(kcp_send_window);
+    check_not_null(kcp_receive_window);
+    check_not_null(kcp_interval_ms);
+    check_not_null(kcp_handshake_retry_ms);
+    check_not_null(kcp_fast_resend);
+    check_not_null(kcp_congestion_control);
     check_not_null(kcp_fec_data_shards);
     check_not_null(kcp_fec_parity_shards);
     check_not_null(kcp_fec_max_payload_size);
+    check_not_null(kcp_fec_receive_groups);
     check_not_null(connect_timeout_ms);
     check_not_null(send_timeout_ms);
     check_not_null(recv_timeout_ms);
@@ -991,9 +1034,6 @@ spec("turbo_flow_coronet") {
     check_str_eq(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_WS], "ws");
     check_str_eq(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_WSS], "wss");
     check_str_eq(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_PIPE], "pipe");
-    check_size_eq(kcp_fec_backend->enum_value_count, 2);
-    check_str_eq(kcp_fec_backend->enum_values[TURBO_KCP_FEC_BACKEND_NONE], "none");
-    check_str_eq(kcp_fec_backend->enum_values[TURBO_KCP_FEC_BACKEND_WIREHAIR], "wirehair");
     check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
     check_int_eq(turbo_flow_compile(flow), TURBO_OK);
     check_int_eq(turbo_flow_start(flow), TURBO_OK);
@@ -1005,6 +1045,8 @@ spec("turbo_flow_coronet") {
   }
 
   it("validates concrete socket endpoint configurations") {
+    static const char KCP_PSK[] =
+        "102132435465768798a9bacbdcedfe0f1f2e3d4c5b6a798897a6b5c4d3e2f101";
     turbo_flow_coronet_socket_config_t config;
     memset(&config, 0, sizeof(config));
 
@@ -1077,15 +1119,12 @@ spec("turbo_flow_coronet") {
     config.udp_broadcast = 0;
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_KCP;
+    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    config.kcp_pre_shared_key = KCP_PSK;
     check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
 
-    config.kcp_fec = 1;
-    config.kcp_fec_backend = TURBO_KCP_FEC_BACKEND_NONE;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
-    config.kcp_fec = 0;
-    config.kcp_fec_backend = 0;
-
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TLS;
+    config.kcp_pre_shared_key = NULL;
     check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_WS;
@@ -1183,6 +1222,8 @@ spec("turbo_flow_coronet") {
   }
 
   it("rejects incomplete socket endpoint configurations") {
+    static const char KCP_PSK[] =
+        "102132435465768798a9bacbdcedfe0f1f2e3d4c5b6a798897a6b5c4d3e2f101";
     turbo_flow_coronet_socket_config_t config;
     turbo_flow_t *flow = turbo_flow_create();
     memset(&config, 0, sizeof(config));
@@ -1201,14 +1242,12 @@ spec("turbo_flow_coronet") {
     check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
-    config.kcp_fec = 1;
-    config.kcp_fec_backend = TURBO_KCP_FEC_BACKEND_WIREHAIR;
+    config.kcp_pre_shared_key = KCP_PSK;
     config.kcp_fec_data_shards = 4;
     config.kcp_fec_parity_shards = 2;
     config.kcp_fec_max_payload_size = 1200;
     check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
-    config.kcp_fec = 0;
-    config.kcp_fec_backend = 0;
+    config.kcp_pre_shared_key = NULL;
     config.kcp_fec_data_shards = 0;
     config.kcp_fec_parity_shards = 0;
     config.kcp_fec_max_payload_size = 0;
@@ -1541,6 +1580,7 @@ spec("turbo_flow_coronet") {
     check_int_gt(port, 0);
     server = coro_socket_create_kcp(ctx);
     check_not_null(server);
+    check_int_eq(socket_test_apply_kcp_config(server), TURBO_OK);
     check_int_eq(
         coro_socket_listen_on(server, "127.0.0.1", (int)port, tcp_sink_server_handler, &state),
         TURBO_OK);
@@ -1553,6 +1593,7 @@ spec("turbo_flow_coronet") {
     config.port = (int)port;
     config.timeout_ms = 1000;
     config.max_pump_iterations = 20000;
+    config.kcp_pre_shared_key = SOCKET_TEST_KCP_PSK;
 
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
@@ -2267,6 +2308,7 @@ spec("turbo_flow_coronet") {
     config.host = "127.0.0.1";
     config.port = (int)port;
     config.timeout_ms = 1000;
+    config.kcp_pre_shared_key = SOCKET_TEST_KCP_PSK;
 
     client_state.ctx = ctx;
     client_state.port = (int)port;

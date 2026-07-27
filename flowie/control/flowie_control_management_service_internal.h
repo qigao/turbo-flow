@@ -1,7 +1,7 @@
 #ifndef FLOWIE_CONTROL_MANAGEMENT_SERVICE_INTERNAL_H
 #define FLOWIE_CONTROL_MANAGEMENT_SERVICE_INTERNAL_H
 
-#include "flowie_control_store_internal.h"
+#include "flowie_control_repository_internal.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,7 +28,7 @@ typedef struct flowie_control_management_caller_s {
 
 typedef struct flowie_control_management_service_config_s {
   size_t size;
-  flowie_control_store_t *store;
+  const flowie_control_repository_t *repository;
 } flowie_control_management_service_config_t;
 
 #define FLOWIE_CONTROL_MANAGEMENT_SERVICE_CONFIG_INIT                                              \
@@ -47,6 +47,11 @@ int flowie_control_management_service_create(
     const flowie_control_management_service_config_t *config,
     flowie_control_management_service_t **out);
 void flowie_control_management_service_destroy(flowie_control_management_service_t *service);
+
+/** Validate one resolved caller against a read permission without touching repository state. */
+int flowie_control_management_authorize(flowie_control_management_service_t *service,
+                                        const flowie_control_management_caller_t *caller,
+                                        uint32_t required_permission);
 
 int flowie_control_management_system_status(flowie_control_management_service_t *service,
                                             const flowie_control_management_caller_t *caller,
@@ -68,18 +73,15 @@ int flowie_control_management_user_disable(flowie_control_management_service_t *
                                            const flowie_control_user_disable_command_t *command,
                                            flowie_control_command_result_t *result);
 int flowie_control_management_credential_generate(
-    flowie_control_management_service_t *service,
-    const flowie_control_management_caller_t *caller,
+    flowie_control_management_service_t *service, const flowie_control_management_caller_t *caller,
     const flowie_control_credential_issue_command_t *command,
     flowie_control_generated_credential_t *result);
 int flowie_control_management_credential_rotate(
-    flowie_control_management_service_t *service,
-    const flowie_control_management_caller_t *caller,
+    flowie_control_management_service_t *service, const flowie_control_management_caller_t *caller,
     const flowie_control_credential_issue_command_t *command,
     flowie_control_generated_credential_t *result);
 int flowie_control_management_credential_revoke(
-    flowie_control_management_service_t *service,
-    const flowie_control_management_caller_t *caller,
+    flowie_control_management_service_t *service, const flowie_control_management_caller_t *caller,
     const flowie_control_credential_revoke_command_t *command,
     flowie_control_command_result_t *result);
 

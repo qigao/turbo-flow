@@ -131,9 +131,9 @@ Batch and asynchronous micro-batch runs add `FMQ_PROFILE_BATCH_RESULT`. It repor
 call, frame, and iovec-segment totals plus per-call socket wall time, owner OS-thread CPU time, and
 estimated off-CPU time. Its lifecycle averages are per batch: `build` covers the entire request
 build through queue visibility; `payload_prepare` covers buffer allocation/retention, copying, and
-message-view setup; `graph_publish` covers the synchronous batch call, including its producer;
+message-view setup; `batch_submit` covers the synchronous Core batch call, including its producer;
 `adapter_consume` is the subset spent encoding and constructing FlowMQ send requests;
-`graph_runtime` is the remainder after producer and adapter work; `enqueue_prepare` covers iovec preparation
+`dispatch_overhead` is the remainder after producer and adapter work; `enqueue_prepare` covers iovec preparation
 and queue commit through visibility; `owner_wait` ends when the owner dequeues the batch;
 `owner_work` covers owner-side selection, authorization, socket calls, and completion; and
 `waiter_wake` ends when the submitting thread resumes. Because the coroutine may yield while other

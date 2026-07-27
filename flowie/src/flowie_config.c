@@ -46,12 +46,11 @@ static const flowie_config_field_t FLOWIE_CONFIG_FIELDS[] = {
     FLOWIE_CONFIG_FIELD(path, FLOWIE_CONFIG_STRING, 0u),
     FLOWIE_CONFIG_FIELD(max_packet_size, FLOWIE_CONFIG_SIZE, FLOWIE_MQTT_MAX_WIRE_PACKET_SIZE),
     FLOWIE_CONFIG_FIELD(max_connections, FLOWIE_CONFIG_U32, FLOWIE_MAX_CONNECTIONS_LIMIT),
-    FLOWIE_CONFIG_FIELD(coroutine_stack_size, FLOWIE_CONFIG_SIZE,
-                        FLOWIE_MAX_COROUTINE_STACK_SIZE),
-    FLOWIE_CONFIG_FIELD(stream_recv_buffer_bytes, FLOWIE_CONFIG_SIZE,
-                        FLOWIE_MAX_RECV_BUFFER_SIZE),
+    FLOWIE_CONFIG_FIELD(coroutine_stack_size, FLOWIE_CONFIG_SIZE, FLOWIE_MAX_COROUTINE_STACK_SIZE),
+    FLOWIE_CONFIG_FIELD(stream_recv_buffer_bytes, FLOWIE_CONFIG_SIZE, FLOWIE_MAX_RECV_BUFFER_SIZE),
     FLOWIE_CONFIG_FIELD(socket_recv_buffer_bytes, FLOWIE_CONFIG_SIZE, INT_MAX),
     FLOWIE_CONFIG_FIELD(socket_send_buffer_bytes, FLOWIE_CONFIG_SIZE, INT_MAX),
+    FLOWIE_CONFIG_FIELD(tls_client_ca_file, FLOWIE_CONFIG_STRING, 0u),
     FLOWIE_CONFIG_FIELD(timeout_ms, FLOWIE_CONFIG_U64, UINT64_MAX),
     FLOWIE_CONFIG_FIELD(recv_timeout_ms, FLOWIE_CONFIG_U64, UINT64_MAX),
     FLOWIE_CONFIG_FIELD(reuse_port, FLOWIE_CONFIG_BOOL, 0u),
@@ -144,11 +143,9 @@ static int flowie_config_assign(flowie_endpoint_config_t *config,
   rc = turbo_flow_resolved_adapter_get_u64(view, field->name, &number);
   if (rc != TURBO_OK) return rc;
   if (number > field->maximum) return TURBO_ERANGE;
-  if (strcmp(field->name, "coroutine_stack_size") == 0 &&
-      number < FLOWIE_MIN_COROUTINE_STACK_SIZE)
+  if (strcmp(field->name, "coroutine_stack_size") == 0 && number < FLOWIE_MIN_COROUTINE_STACK_SIZE)
     return TURBO_ERANGE;
-  if (strcmp(field->name, "stream_recv_buffer_bytes") == 0 &&
-      number < FLOWIE_MIN_RECV_BUFFER_SIZE)
+  if (strcmp(field->name, "stream_recv_buffer_bytes") == 0 && number < FLOWIE_MIN_RECV_BUFFER_SIZE)
     return TURBO_ERANGE;
   if (number == 0u &&
       (strcmp(field->name, "max_packet_size") == 0 || strcmp(field->name, "max_connections") == 0 ||
@@ -184,8 +181,7 @@ static int flowie_register_resolved_endpoint_internal(
     turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_coronet_execution_binding_t *execution,
     const flowie_endpoint_security_binding_t *security,
-    const flowie_endpoint_persistence_binding_t *persistence,
-    turbo_flow_config_error_t *error) {
+    const flowie_endpoint_persistence_binding_t *persistence, turbo_flow_config_error_t *error) {
   turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
   flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
   int security_realm_seen = 0;
@@ -203,9 +199,8 @@ static int flowie_register_resolved_endpoint_internal(
     return flowie_config_error(error, TURBO_EINVAL, name, NULL,
                                "security binding is incomplete or has an invalid ABI size");
   }
-  if (persistence &&
-      (persistence->size < sizeof(*persistence) || !persistence->store_channel ||
-       !persistence->store_channel[0] || !persistence->store)) {
+  if (persistence && (persistence->size < sizeof(*persistence) || !persistence->store_channel ||
+                      !persistence->store_channel[0] || !persistence->store)) {
     return flowie_config_error(error, TURBO_EINVAL, name, NULL,
                                "persistence binding is incomplete or has an invalid ABI size");
   }
@@ -302,8 +297,8 @@ int flowie_register_resolved_secure_endpoint_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_coronet_execution_binding_t *execution,
     const flowie_endpoint_security_binding_t *security, turbo_flow_config_error_t *error) {
-  return flowie_register_resolved_endpoint_internal(flow, name, resolved, execution, security,
-                                                    NULL, error);
+  return flowie_register_resolved_endpoint_internal(flow, name, resolved, execution, security, NULL,
+                                                    error);
 }
 
 int flowie_register_resolved_bound_endpoint_ex(
@@ -339,9 +334,10 @@ int flowie_register_resolved_secure_endpoint(turbo_flow_t *flow, const char *nam
                                                      error);
 }
 
-int flowie_register_resolved_bound_endpoint(
-    turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
-    const flowie_endpoint_bindings_t *bindings, turbo_flow_config_error_t *error) {
+int flowie_register_resolved_bound_endpoint(turbo_flow_t *flow, const char *name,
+                                            const turbo_flow_resolved_config_t *resolved,
+                                            const flowie_endpoint_bindings_t *bindings,
+                                            turbo_flow_config_error_t *error) {
   turbo_flow_coronet_execution_binding_t execution;
   memset(&execution, 0, sizeof(execution));
   execution.size = sizeof(execution);

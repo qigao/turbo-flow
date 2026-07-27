@@ -87,7 +87,9 @@ build\Msvc-Release\bin\flowmq_zmq_style_router_dealer.exe 7713
 7. `turbo_flow_fmq_app_stop()`。
 8. `turbo_flow_fmq_app_destroy()`。
 
-Application facade 仍然使用同一个 TurboFlow Graph 和 FMQ adapter，不会额外创建第二套 socket 或协议状态。
+Application facade 直接拥有一个 graph-neutral FMQ endpoint Core，不创建、解析或启动 TurboFlow
+Graph。需要拓扑组合时，Graph adapter 才把同一个 Core 接入 TurboFlow；两条入口都不会创建第二套
+socket 或协议状态。
 默认同步模式没有额外队列或 worker；只有显式配置异步发送后，facade 才创建一条有界队列和一个保序发送
 worker。
 
@@ -95,6 +97,22 @@ Callback 中的 `turbo_flow_msg_t`、payload、topic 和 identity view 只借用
 Queue 或 callback 保存消息，必须 clone/retain 对应 owned message。
 
 ## 6. 发送与批量发送
+
+三种发送模式针对不同的 producer 形态，不能只按接口名字互换：
+
+| 模式 | API | 适用场景 | 主要权衡 |
+| --- | --- | --- | --- |
+| Serialized synchronous | `turbo_flow_fmq_app_send()` | 低频消息、低排队延迟、需要立即逐条状态，或 REQ 的严格 request/session 顺序 | 每条消息独立经过 Core admission 与发送边界；高频小包的固定开销最大 |
+| Explicit Batch | `turbo_flow_fmq_app_send_batch()` | 调用方已经持有一组彼此独立的 PUB/PUSH/DEALER 消息，且可以等待整批完成 | 小包吞吐优先、没有额外 worker；返回可能是部分提交，必须检查 `submitted` |
+| Async Micro-Batch | `configure_async_send()` + `turbo_flow_fmq_app_send_async()` | 消息逐条到达、producer 不应等待 socket delivery，或者需要有界削峰 | admission 与 delivery 分离；增加队列、worker 和可配置 linger，必须处理 `TURBO_ENOSPC` 与 completion |
+
+这里的 Serialized 表示逐条同步提交，不是另一套 wire serialization。三种模式都使用相同的 FMQ/3
+frame、pattern 状态机和已配置 transport，只改变 producer admission、批次边界及完成通知方式。
+
+对于高频 64-byte 级消息，优先让 producer 形成 Explicit Batch；无法形成显式批次时再选择 Async
+Micro-Batch。对于大 payload，batch item 上限不是推荐批量大小，应同时限制单批总字节数并测量
+P95/P99。不同 pattern、transport 和 endpoint layout 的 coalescing 能力不同，最终参数必须以目标部署
+环境的 benchmark 为准。
 
 `turbo_flow_fmq_app_send()` 会复制 payload。成功表示消息到达本地发送交付边界，不表示远端业务已经处理或
 持久化。
@@ -193,7 +211,9 @@ stage main {
 - WS/WSS：使用 `path`。
 - Pipe：使用 pipe endpoint path，不使用 host/port。
 - KCP：可配置 FEC backend、data/parity shard 和 payload 上限。
-- UDP：multicast、TTL、loop、broadcast 通过显式 option flag 设置。
+- UDP：bind 端显式使用 CoroNet per-peer session admission，以远端 IP/port 映射 HELLO 后续数据报；
+  每个 peer 最多保留一个未读数据报，拥塞时保持 UDP 的丢包语义。multicast、TTL、loop、broadcast
+  通过显式 option flag 设置；需要有序、重传、FEC 与 AEAD 时选择 KCP。
 - TCP-backed transport：可配置 keepalive、linger、OS receive/send buffer 和 socket send HWM。
 
 不适用于当前 transport 的 option 会失败，不会静默忽略。

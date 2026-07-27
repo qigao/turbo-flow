@@ -323,8 +323,9 @@ static void flowmq_connect_endpoint_connect_task(coro_t *co, void *arg) {
       goto attempt_done;
     }
     rc = flowmq_coronet_transport_apply(
-        endpoint->socket, endpoint->config.transport, &endpoint->config.kcp_fec,
-        endpoint->config.kcp_fec_configured, &endpoint->config.socket_options);
+        endpoint->socket, endpoint->config.transport,
+        &endpoint->config.kcp_config, endpoint->config.kcp_configured,
+        &endpoint->config.socket_options);
     if (rc == TURBO_OK) {
       rc = flowmq_coronet_transport_connect(
           endpoint->socket, endpoint->config.transport, endpoint->host, endpoint->config.port,
@@ -587,6 +588,7 @@ void flowmq_connect_endpoint_destroy(flowmq_connect_endpoint_t *endpoint) {
   tstr_freep(&endpoint->path);
   tstr_freep(&endpoint->topic);
   tstr_freep(&endpoint->identity);
+  turbo_kcp_config_wipe(&endpoint->config.kcp_config);
   free(endpoint);
 }
 

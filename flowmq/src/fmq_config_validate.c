@@ -35,11 +35,10 @@ static void flow_fmq_timeout_config_resolve(tf_coronet_socket_timeout_config_t *
 
 static int flow_fmq_coronet_options_validate(const turbo_flow_fmq_config_t *config) {
   tf_coronet_transport_t transport;
-  tf_coronet_kcp_fec_options_t fec_options;
-  turbo_kcp_fec_config_t fec_config;
+  turbo_kcp_config_t kcp_config;
   tf_coronet_socket_options_t socket_options;
   tf_coronet_udp_options_t udp_options;
-  int fec_configured;
+  int kcp_configured;
   int rc;
   if (!config) return TURBO_EINVAL;
   transport = flowmq_coronet_transport_coronet((flowmq_coronet_transport_t)config->transport);
@@ -50,15 +49,7 @@ static int flow_fmq_coronet_options_validate(const turbo_flow_fmq_config_t *conf
                                       config->mode == TURBO_FLOW_FMQ_BIND);
   if (rc != TURBO_OK) return rc;
 
-  memset(&fec_options, 0, sizeof(fec_options));
-  fec_options.enabled = config->kcp_fec;
-  fec_options.backend = config->kcp_fec_backend;
-  fec_options.data_shards = config->kcp_fec_data_shards;
-  fec_options.parity_shards = config->kcp_fec_parity_shards;
-  fec_options.max_payload_size = config->kcp_fec_max_payload_size;
-  rc = flowmq_coronet_transport_kcp_fec_resolve(
-      (flowmq_coronet_transport_t)config->transport, &fec_options, &fec_config,
-      &fec_configured);
+  rc = flow_fmq_kcp_config_resolve(config, &kcp_config, &kcp_configured);
   if (rc != TURBO_OK) return rc;
 
   memset(&socket_options, 0, sizeof(socket_options));
@@ -83,6 +74,64 @@ static int flow_fmq_coronet_options_validate(const turbo_flow_fmq_config_t *conf
   udp_options.broadcast = config->udp_broadcast;
   return tf_coronet_udp_options_validate(transport, &udp_options,
                                          config->mode == TURBO_FLOW_FMQ_BIND);
+}
+
+int flow_fmq_kcp_config_resolve(const turbo_flow_fmq_config_t *config,
+                                turbo_kcp_config_t *out,
+                                int *configured) {
+  tf_coronet_kcp_options_t options;
+  turbo_kcp_config_t defaults;
+  if (!config || !out || !configured) return TURBO_EINVAL;
+  turbo_kcp_config_default(&defaults);
+  memset(&options, 0, sizeof(options));
+  if (config->transport != TURBO_FLOW_FMQ_KCP) {
+    if (config->kcp_pre_shared_key || config->kcp_mtu ||
+        config->kcp_send_window || config->kcp_receive_window ||
+        config->kcp_interval_ms || config->kcp_handshake_retry_ms ||
+        config->kcp_fast_resend || config->kcp_congestion_control ||
+        config->kcp_fec_data_shards || config->kcp_fec_parity_shards ||
+        config->kcp_fec_max_payload_size ||
+        config->kcp_fec_receive_groups)
+      return TURBO_EINVAL;
+    return flowmq_coronet_transport_kcp_resolve(
+        (flowmq_coronet_transport_t)config->transport, &options, out,
+        configured);
+  }
+  if (tf_coronet_kcp_pre_shared_key_parse(config->kcp_pre_shared_key,
+                                          options.pre_shared_key) != TURBO_OK)
+    return TURBO_EINVAL;
+  options.mtu = config->kcp_mtu ? config->kcp_mtu : defaults.mtu;
+  options.send_window = config->kcp_send_window
+                            ? config->kcp_send_window
+                            : defaults.send_window;
+  options.receive_window = config->kcp_receive_window
+                               ? config->kcp_receive_window
+                               : defaults.receive_window;
+  options.interval_ms = config->kcp_interval_ms
+                            ? config->kcp_interval_ms
+                            : defaults.interval_ms;
+  options.handshake_retry_ms =
+      config->kcp_handshake_retry_ms ? config->kcp_handshake_retry_ms
+                                     : defaults.handshake_retry_ms;
+  options.fast_resend = config->kcp_fast_resend
+                            ? config->kcp_fast_resend
+                            : defaults.fast_resend;
+  options.no_congestion_window = config->kcp_congestion_control ? 0 : 1;
+  options.data_shards = config->kcp_fec_data_shards
+                            ? config->kcp_fec_data_shards
+                            : defaults.fec.data_shards;
+  options.parity_shards = config->kcp_fec_parity_shards
+                              ? config->kcp_fec_parity_shards
+                              : defaults.fec.parity_shards;
+  options.max_payload_size =
+      config->kcp_fec_max_payload_size ? config->kcp_fec_max_payload_size
+                                       : defaults.fec.max_payload_size;
+  options.receive_group_count =
+      config->kcp_fec_receive_groups ? config->kcp_fec_receive_groups
+                                     : defaults.fec.receive_group_count;
+  return flowmq_coronet_transport_kcp_resolve(
+      (flowmq_coronet_transport_t)config->transport, &options, out,
+      configured);
 }
 
 static int flow_fmq_frame_hwm_validate(const turbo_flow_fmq_config_t *config) {

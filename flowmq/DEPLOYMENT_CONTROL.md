@@ -1,12 +1,11 @@
-# FlowMQ deployment control and rolling upgrade contract
+# FlowMQ deployment control and release replacement contract
 
 本文件是 [协议索引](PROTOCOL_SPEC.md) 指定的 deployment control contract 唯一正文。
-它定义 membership、fencing、rolling upgrade 和 reconcile 的 owner 与状态边界，不新增
+它定义 membership、fencing、release replacement 和 reconcile 的 owner 与状态边界，不新增
 FMQ/3 frame；基础 framing 见 [FMQ_WIRE_PROTOCOL.md](FMQ_WIRE_PROTOCOL.md)。
 
-状态：failure-domain membership owner、stable logical route election、route fencing、snapshot
-split-brain classification、mixed-version compatibility evaluator，以及 durable management typed
-reconcile 已实现。它们不改变 FMQ v3 frame、TFMP/1 wire 或 REQ/REP 同步状态机。
+deployment control 不改变 FMQ/3 frame 或 TFMP/1 wire，也不提供 dual-stack decoder、
+gateway、mixed-version negotiation 或兼容 wrapper。
 
 ## 1. 决策背景
 
@@ -19,7 +18,6 @@ reconcile 都会跨越进程或版本，若把这些状态放入 graph adapter�
 | Owner | 主事实源 | 公开边界 |
 | --- | --- | --- |
 | Deployment controller | member lease、logical route primary、route generation | `turbo_flow_fmq_deployment_*` |
-| Compatibility evaluator | 两个 release manifest 与可选 gateway manifest | `turbo_flow_fmq_compatibility_evaluate()` |
 | TFMP operation owner | durable command、recovery-required、terminal result | `turbo_flow_tfmp_management_service_*` |
 
 Discovery controller 仍只把已决议 snapshot 投影到固定 adapter slots；它不参与 membership 或 election。
@@ -36,8 +34,8 @@ Observe 只能导出上述 owner 的派生指标，不能写回 registry、route
   新 incarnation。
 - registry mutation 必须携带精确 `expected_registry_version`，因此一个 owner lane 上不存在 lost update。
 
-宿主通过既有严格管理 REQ/REP 传递 pointer-free membership command 和 snapshot；本模块不新增 wire
-kind，也不编码 socket 指针、CoroNet route 或本地 monotonic deadline。snapshot 只携带相对
+宿主通过 TFMP DEALER/ROUTER 传递 pointer-free membership operation 和 snapshot；本模块不新增
+wire kind，也不编码 socket 指针、CoroNet route 或本地 monotonic deadline。snapshot 只携带相对
 `lease_remaining_ms`，该值不得跨 snapshot 比较。
 
 ### 2.2 Election 与 fencing
@@ -67,26 +65,19 @@ fencing 后的新 authority；本地 controller 不替宿主实现分布式 cons
 version。lease tick 在移除成员前预检 route generation，避免部分过期。宿主可从 normalized snapshot
 持久化/复制 registry；跨进程写 authority epoch 必须由外部强一致 election/fencing 服务负责。
 
-## 3. Rolling upgrade
+## 3. Release replacement
 
-每个 release manifest 显式声明：
+一个 rolling replacement 只允许同一协议集合和同一持久化 schema 的二进制参与：
 
-- FMQ wire min/max；当前 release 只能声明 v3；
-- TFMP major 与 minor range；major 不兼容，minor 只能增加 optional field/kind/capability；
-- shared management store 的 read/write minor range；
-- YAML schema read range；
-- rollout 必需 capability bits。
+- FMQ/3、FMS/3、TFMP/1、TKSH/1、TKSR/1 与 TKF1/1 必须完全一致；
+- TFMS 与 TFCS 持久化 schema 必须完全一致；
+- resolved YAML 字段集合和必需 capability 必须完全一致；
+- 任一项不同都必须先停止 admission、drain operation/outbox、关闭旧 owner，再由新 release
+  独占打开 store 与 endpoint。
 
-evaluator 只计算共同窗口，不改变 decoder：
-
-- wire、TFMP、store、YAML 都有共同窗口时为 `DIRECT`；
-- wire/TFMP 无共同窗口，但显式 dual-stack gateway 分别覆盖两端时为 `GATEWAY`；
-- shared store 或 YAML 无共同版本时 gateway 也不能补救，必须 `STOP_THE_WORLD`；
-- 任一 release 缺少发布所需 capability 时为 `INCOMPATIBLE`。
-
-例如旧 release 只写 TFMS/1.0，新 release 可读 1.0/1.1 且可配置写 1.0，则 mixed rollout 固定写
-1.0；若新 release 只能写 1.1，而旧 release 不能读 1.1，必须停机迁移。若引入新的 FMQ major，只有
-当前 release 不提供 dual-stack gateway，只允许停机升级；v3 decoder 不得接受其他 wire version。
+decoder 不接受其他版本，部署面不提供版本范围、mixed-version evaluator、dual-stack gateway
+或自动转换。宿主必须在调用 deployment controller admission 前确认所有 live member 来自
+同一 release；release identity 不进入 FMQ wire 或由 controller 推断。
 
 ## 4. Durable side-effect reconcile
 
@@ -125,22 +116,26 @@ inspect/store 错误保留 recovery-required，调用方显式重试。若重放
 | 把 membership 放进 graph stage | 配置项少 | data/control 事实源混合，split-brain 无边界 | 不选 |
 | 每个 adapter 自行选 broker | 局部实现简单 | logical route 多主，无法统一 fencing | 不选 |
 | controller 内实现分布式 consensus | 单包看似完整 | 重复造高风险共识/存储基础设施 | 不选；authority epoch 由宿主强一致服务提供 |
-| 放宽 v3 decoder 做兼容 | 不需要 gateway | 非法 frame 被误接收，当前 wire 契约失真 | 禁止 |
+| 放宽 decoder 或引入 gateway | 可同时运行不同协议 | 非法 frame 被误接收，状态与安全边界分叉 | 禁止 |
+| 同协议 rolling replacement | 保持服务连续 | 要求协议、store schema 和配置完全一致 | 选择 |
+| 不同协议 stop/drain/replace | 单一事实源和 decoder | 有维护窗口 | 选择 |
 | crash 后自动重放 RUNNING | 恢复快 | 非幂等副作用重复执行 | 禁止 |
 | typed inspect + generation-checked goal state | 状态归属清楚，可重试 | 每类 resource 必须实现 inspector | 选择 |
 
-## 6. 迁移与回滚
+## 6. Shutdown 与 replacement
 
-1. 先部署 compatibility manifest 检查，只报告结果，不改变流量。
-2. 部署 controller 并让 discovery 继续消费旧 registry；对比 normalized snapshot。
-3. authority 服务分配新 epoch 后切换 discovery source；异常时恢复旧 epoch 的只读 snapshot，不能让旧
-   controller 继续接受 mutation。
-4. durable management 先配置 inspector，再开放相应 command 的 durable capability。回滚到旧版本前，
-   compatibility evaluator 必须确认 shared store writer 仍使用旧版本可读 minor。
+replacement 顺序固定为：
 
-验证至少覆盖：跨 failure-domain failover、旧 member incarnation、lease expiry、同 version split-brain、
-v3-only stop 路径、shared store writer gap、mutation 已生效 crash window、无 inspector 的 durable
-拒绝，以及 inspector 恢复不重复 command。
+1. controller 停止接纳新 member 和 management mutation；
+2. drain inflight operation、event outbox 与 durable settlement；
+3. 持久化 normalized snapshot 并关闭 endpoint/store；
+4. 宿主校验 release identity、协议集合与 store schema，新 owner 取得更高 authority epoch 后启动；
+5. 旧 epoch 永久 fenced，不得恢复 mutation admission。
+
+失败时保持 admission closed，由同一 release identity 重试关闭或启动；不得自动启动另一协议、
+另一 schema 或 gateway。验证至少覆盖跨 failure-domain failover、旧 member incarnation、
+lease expiry、split-brain、不同 release identity 拒绝、drain 超时、mutation crash window、
+无 inspector 的 durable 拒绝，以及 inspector 恢复不重复 command。
 
 ## 7. Release gate
 

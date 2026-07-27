@@ -3,10 +3,6 @@ add_executable(flowie_server flowie_server.c flowie_worker_runtime.c
 cmake_config_target(flowie_server FOLDER "flowie/app")
 target_link_libraries(flowie_server PRIVATE Flowie::App TurboFlow::Socket
                                              TurboFlow::LocalStorage TurboUtils::Core)
-if(TARGET TurboFlow::SecuritySQLite)
-  target_link_libraries(flowie_server PRIVATE TurboFlow::SecuritySQLite)
-  target_compile_definitions(flowie_server PRIVATE FLOWIE_SERVER_HAVE_SQLITE_ACL=1)
-endif()
 if(TARGET TurboFlow::Redis)
   target_link_libraries(flowie_server PRIVATE TurboFlow::Redis)
   target_compile_definitions(flowie_server PRIVATE FLOWIE_SERVER_HAVE_REDIS=1)

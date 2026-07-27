@@ -19,6 +19,7 @@ extern "C" {
 #define FLOWIE_CONTROL_OPERATION_NAME_MAX 31u
 
 typedef struct flowie_control_store_s flowie_control_store_t;
+typedef struct flowie_control_repository_s flowie_control_repository_t;
 
 typedef struct flowie_control_store_config_s {
   size_t size;
@@ -408,6 +409,13 @@ int flowie_control_store_open(const flowie_control_store_config_t *config,
                               flowie_control_store_t **out);
 void flowie_control_store_destroy(flowie_control_store_t *store);
 
+/**
+ * Return the borrowed repository adapter owned by this SQLite store.
+ *
+ * The returned interface becomes invalid when `store` is destroyed.
+ */
+const flowie_control_repository_t *flowie_control_store_repository(flowie_control_store_t *store);
+
 /** One transaction: validate revision, create user, advance revision, append audit, commit. */
 int flowie_control_store_user_create(flowie_control_store_t *store,
                                      const flowie_control_user_create_command_t *command,
@@ -462,6 +470,19 @@ int flowie_control_store_principal_snapshot(
     flowie_control_store_t *store, const char *root_group_id, const char *principal_id,
     const flowie_control_credential_verify_result_t *expected,
     flowie_control_principal_snapshot_t *out);
+
+/**
+ * Read one local authorization snapshot for an externally authenticated identity.
+ *
+ * The user must exist and be enabled, but no local credential is required. assertion_revision is
+ * copied into credential_revision as the opaque external authentication generation; callers must
+ * not use this snapshot in the local credential cache.
+ */
+int flowie_control_store_external_principal_snapshot(flowie_control_store_t *store,
+                                                     const char *root_group_id,
+                                                     const char *principal_id,
+                                                     uint64_t assertion_revision,
+                                                     flowie_control_principal_snapshot_t *out);
 
 /** Erase the caller-owned one-time secret. Safe to call on an initialized empty result. */
 void flowie_control_generated_credential_wipe(flowie_control_generated_credential_t *credential);
@@ -550,6 +571,16 @@ int flowie_control_store_policy_rule_list(flowie_control_store_t *store, const c
 /** Return current draft and published bundle metadata. */
 int flowie_control_store_policy_status(flowie_control_store_t *store, const char *root_group_id,
                                        flowie_control_policy_status_t *out);
+
+/**
+ * Load one immutable published ACL generation. required_version zero selects the current
+ * generation; a positive value requires an exact match. The returned rules are owned by the
+ * bundle and remain valid until flowie_control_store_policy_bundle_release().
+ */
+int flowie_control_store_policy_bundle_load(
+    flowie_control_store_t *store, const char *root_group_id, uint64_t required_version,
+    turbo_flow_security_policy_bundle_t *bundle_out);
+void flowie_control_store_policy_bundle_release(turbo_flow_security_policy_bundle_t *bundle);
 
 /** Root-scoped keyset pages. Cursor values are exclusive and all results are caller-owned. */
 int flowie_control_store_user_list(flowie_control_store_t *store, const char *root_group_id,

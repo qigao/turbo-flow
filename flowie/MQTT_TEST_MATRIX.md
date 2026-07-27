@@ -59,11 +59,16 @@ focused run 的通过结果也不等于完整 scheduled gate。TurboNet 自身
 Linux CTest 为 `49/49`，每项连续 3 次通过。Windows 本机 gate 和本轮 Linux 无容器 gate 均不包含
 PostgreSQL、固定外部 broker、sanitizer 或规定时长的 scheduled job。
 
+2026-07-26 新增的 `MQTT-ENDURANCE-006/007` 已在 Windows ASan 构建中完整运行，并分别重复
+20/100 次；共享 Record endurance trace 的 local 版本已通过。Redis/PostgreSQL live target 均已编译，
+但本机 Redis trace 的首次 store 操作返回 `-1225`，PostgreSQL conninfo 未配置，因此两个 live provider
+的新 trace 均不得标记为通过。
+
 | 执行标签 | 本轮结果 | 证据边界 |
 |---|---|---|
-| `[🪟]` | Blocked | CTest 注册 93 个；Disabled 2 个；focused soak/endpoint/BDD/storage checks 通过，完整 gate 尚未重跑 |
-| `[🪟][redis]` | Passed | Redis live 已运行并通过 |
-| `[🪟][pgsql]` | Not run | PostgreSQL live 不属于本机 gate |
+| `[🪟]` | Blocked | CTest 注册 93 个；focused endurance/local storage 与相邻 endpoint 回归通过，完整 gate 尚未重跑 |
+| `[🪟][redis]` | Blocked | 历史 Redis live 通过；新 Record endurance trace 因当前 provider 不可用返回 `-1225`，需在 live 环境重跑 |
+| `[🪟][pgsql]` | Not run | 新 target 编译通过；`TURBO_FLOW_PGSQL_TEST_CONNINFO` 未配置，未把编译冒充运行结果 |
 | `[🪟][fixed-broker]` | Not run | 固定互操作 targets 编译通过，但未把编译冒充运行结果 |
 | `[🪟][sanitizer]` | Not run | deterministic corpus 已通过；持续 sanitizer job 未运行 |
 | `[🪟][scheduled]` | Not run | focused soak 已通过；未运行规定的 30/60 分钟任务 |
@@ -76,7 +81,7 @@ PostgreSQL、固定外部 broker、sanitizer 或规定时长的 scheduled job。
 
 主要证据锚点：protocol matrix/corpus 对应 PROTO/FUZZ；session owner 与 endpoint integration
 对应 OWNER/STORE；transport 与 client lifecycle 对应 NET；client mTLS、endpoint security 和 control
-auth cache 对应 SEC；public HiveMQ/EMQX live suite 只能作为 INTEROP 的部分证据；release manifest 对应 GATE。
+auth cache 对应 SEC；public HiveMQ/EMQX live suite 只作为可选公网连通性 smoke；release manifest 对应 GATE。
 
 非目标：
 
@@ -209,6 +214,7 @@ record-store 适配器边界，不能通过任意 sleep 猜测时序。
 | MQTT-STORE-008 | MED | `[🪟][🐧]` | session/message expiry cleanup 与新写入并发 | 仅过期 revision 被删，新 revision 不被旧 cleanup 删除 | store revision + deadline 为权威；可控时钟 | `mqtt-persistence` / 180 s |
 | MQTT-STORE-009 | MED | `[🪟][🐧]` | binary retained key、最大合法 client/topic/property/payload 边界 round-trip | bytes、长度、flags、origin metadata 完全一致 | serialized record 为权威；逐后端随机 namespace | `mqtt-persistence` / 180 s |
 | MQTT-STORE-010 | MED | `[🪟][🐧][redis][pgsql]` | Redis/PostgreSQL 运行同一 provider-neutral trace | 可观察 MQTT wire 与恢复状态一致；错误码映射一致 | 不比较 backend 内部布局；各自隔离资源 | `mqtt-persistence` / 300 s |
+| MQTT-STORE-ENDURANCE-001 | HIGH | `[🪟][🐧][redis][pgsql]` | local/Redis/PostgreSQL 运行同一 16-record、32-round revision/CAS/atomic-batch trace | 每轮 scan 与模型一致；4 次 stale revision 使整个 batch 返回 `TURBO_EBUSY` 且零部分提交；最终为空 | Record service 是唯一事实源；local 验证 volatile atomic 语义，Redis/PostgreSQL 还必须声明 durable；逐 provider 隔离 namespace | `storage-contract;mqtt-persistence;mqtt-endurance` / local 默认执行，live 300 s |
 
 ## E. TLS、认证与 ACL
 
@@ -254,13 +260,26 @@ view。常规构建只运行固定 corpus replay；ASan/UBSan 或 Windows 对应
 初始 corpus 必须包含本矩阵 A 类的每个非法边界、各版本最小合法 packet、最大 VBI 边界、历史回归输入。
 任何发现的 crash 或语义偏差先加入 deterministic regression，再修复实现。
 
-## H. Soak、混沌与资源边界
+## H. 单实例 Endurance、Soak、混沌与资源边界
 
-这些用例使用独立 executable/job，不进入 `mqtt-fast`。每次记录持续时间、消息数、payload 分布、并发数、
-随机种子、P50/P95/P99、失败率、进程内存、线程/句柄数和 backend retry 次数。
+这些用例使用独立 executable/job，不进入 `mqtt-fast`。单实例 endurance 记录 seed、客户端数、消息数、
+有界历史容量、drain 终态和停止耗时；scheduled soak 另行记录持续时间、payload 分布、并发数、
+P50/P95/P99、失败率、进程内存、线程/句柄数和 backend retry 次数。
+
+`test_flowie_mqtt_endurance` 与旧 `test_flowie_mqtt_soak` 的隔离语义不同：前者在一个 broker 实例中
+持续推进多客户端状态，后者反复启动子进程以验证独立 trace 和进程级资源释放。两者不能互相替代。
+`FLOWIE_MQTT_ENDURANCE_MESSAGES` 调整 ENDURANCE-001 发布数（1..10000），
+`FLOWIE_MQTT_ENDURANCE_TAKEOVERS` 调整 ENDURANCE-002 接管轮数（1..1000）；非法值使对应测试失败。
 
 | ID | 优先级 | 支持/环境标签 | 负载与故障 | 验收条件 | 权威终态、清理 | 标签/建议时长 |
 |---|---|---|---|---|---|---|
+| MQTT-ENDURANCE-001 | MED | `[🪟][🐧]` | 单 broker 实例；MQTT 3.1.1/5 发布者与订阅者交错发送；持久订阅者离线后恢复 | 每生产者序列、跨版本 fan-out、Session Present 与离线重放准确；固定 seed 可复现 | 有界元数据历史；drain 后 connection/inflight/queue 为零，持久 session 保留 | `mqtt-endurance;mqtt-persistence` / 默认 32 条，门禁可配置至 10k |
+| MQTT-ENDURANCE-002 | HIGH | `[🪟][🐧]` | 单 broker 实例；两个 MQTT 5 连接使用相同 Client ID，反复接管同一持久 session，并在每次接管前后发布 | replacement CONNACK 始终为 Session Present=1；旧 owner 收到 `0x8e`；接管前后 payload、生产者序列准确 | 始终只有一个 session 事实源；有界历史；drain 后 connection/inflight/queue 为零，session 保留 | `mqtt-endurance;mqtt-persistence` / 默认 16 轮，可配置至 1000 |
+| MQTT-ENDURANCE-003 | HIGH | `[🪟][🐧]` | 单 broker 实例；MQTT 5 持久订阅者 Receive Maximum=1 且不确认首条 QoS 1，MQTT 3.1.1 健康订阅者正常确认 | 第二条消息触发慢连接隔离；健康连接继续准确接收后续 32 条消息，无跨客户端阻塞 | per-session inflight 配额；慢 session 保留供恢复；drain 后 connection/inflight/queue 为零 | `mqtt-endurance;mqtt-persistence` / 34 条发布 |
+| MQTT-ENDURANCE-004 | HIGH | `[🪟][🐧]` | 单 broker 实例；MQTT 5 QoS 2 持久订阅者分别在收到 PUBLISH 未发 PUBREC、收到 PUBREL 未发 PUBCOMP 时断线重连 | 首次恢复重放相同 packet ID 的 DUP PUBLISH；第二次恢复重放 PUBREL；完成后无额外投递 | broker-owned outbound QoS 2 阶段为事实源；drain 后 connection/inflight/queue 为零，session 保留 | `mqtt-endurance;mqtt-persistence` / 2 次恢复 |
+| MQTT-ENDURANCE-005 | HIGH | `[🪟][🐧]` | 单 broker 实例；异常断开后在 Will Delay 内以同 Client ID 重连；另一个连接设置 Will Delay 大于零且 Session Expiry=0 | 重连取消第一个 Will；第二个 Will 因 session 先 expiry 立即且仅发布一次 | pending Will/session deadline 为事实源；1.2 s 有界观察；drain 后 connection/inflight/queue 为零 | `mqtt-endurance;mqtt-persistence` / 2 个 Will 竞争 |
+| MQTT-ENDURANCE-006 | HIGH | `[🪟][🐧]` | 单 broker 实例；exact、`+`、`#` 与双成员 shared group 并存，exact 在固定轮次 unsubscribe/resubscribe，topic A/B 交替发布 | exact 仅收到 4 个 active+A 交集；`+`/`#` 各收到全部 16 条；每条 shared publication 恰有一个成员收到 | subscription index 为路由事实源；每轮同步 ACK 与负交付观察；drain 后 connection/inflight/queue/session 为零 | `mqtt-endurance;mqtt-persistence` / 16 轮 |
+| MQTT-ENDURANCE-007 | HIGH | `[🪟][🐧]` | 单 broker 实例同时保留未 PUBREC 的 QoS 2、离线 QoS 1、未 PUBACK inflight 和 delayed Will，再直接 stop | stop 在 3 s 上界内成功；不死锁、不依赖客户端补 ACK；connection/inflight/queue 为零 | task admission、session store 与 CoroNet execution 共同遵守 drain 协议；4 个持久 session 事实保留 | `mqtt-endurance;mqtt-persistence` / 4 类 admitted state |
 | MQTT-SOAK-001 | MED | `[🪟][🐧][scheduled]` | reconnect storm + 相同/不同 client ID takeover | 无死锁/UAF；拒绝明确；结束后 connection/session 数符合 expiry | owner counters；停止后等待 drain | `mqtt-soak` / 30 min |
 | MQTT-SOAK-002 | MED | `[🪟][🐧][scheduled]` | 100k subscription add/remove 与并发 publish | topic index 结果正确，延迟无持续增长 | subscription owner；结束删除 sessions | `mqtt-soak` / 30 min |
 | MQTT-SOAK-003 | HIGH | `[🪟][🐧][scheduled]` | 一个慢 subscriber + 多个正常 subscriber，填满 send HWM | 慢连接被隔离/拒绝，正常连接持续前进，无无界内存 | per-connection Queue/HWM；内存回基线 | `mqtt-soak` / 30 min |
@@ -277,7 +296,7 @@ allocation、连接、session、route、pending command 和 CoroNet handle 回�
 | ID | 优先级 | 支持/环境标签 | 检查 | 失败条件 | 标签/超时 |
 |---|---|---|---|---|---|
 | MQTT-GATE-001 | HIGH | `[🪟][🐧]` | configure/CTest guard 枚举 `flowie-release` 必需 live tests | 任一必需测试不存在或 `Disabled` 即失败，不允许以 0 tests 通过 | `flowie-release` / 10 s |
-| MQTT-GATE-002 | HIGH | `[🪟][🐧][redis][pgsql][fixed-broker]` | release manifest 收集 test、label、backend/version、证书模式与结果 | 缺少 Redis、public/固定 interop、真实 TLS/mTLS 证据即失败 | `flowie-release` / 10 s |
+| MQTT-GATE-002 | HIGH | `[🪟][🐧][redis][pgsql][fixed-broker]` | release manifest 收集 test、label、backend/version、证书模式与结果 | 缺少 Redis、固定 interop、真实 TLS/mTLS 证据即失败 | `flowie-release` / 10 s |
 | MQTT-GATE-003 | MED | `[🪟][🐧][scheduled][sanitizer]` | nightly corpus、soak 和 sanitizer 结果关联同一 revision | crash、sanitizer finding、资源单调增长或无法复现的缺失 seed 即失败 | scheduled job |
 
 实施顺序：
@@ -310,8 +329,13 @@ wire、owner 和 store 三类断言同时成立。
   `flowie/tests/test_flowie_session_store_faults.c` 覆盖；QoS checkpoint、CAS、丢失 commit reply、损坏记录、
   expiry revision fencing 和二进制边界已经进入统一 trace。Redis 已有本轮证据，PostgreSQL 归
   `[pgsql]` 环境。
-- client local/public smoke 已分别在 `flowie/client/tests/test_flowie_mqtt_client.c` 与
-  `test_flowie_mqtt_client_live.c`；固定 broker 互操作不能替换现有 public smoke，也不能依赖它的可用性。
+- 单实例路由 churn、shared-group 单交付 oracle 和四类 admitted state 的 shutdown 收敛由
+  `flowie/tests/test_flowie_mqtt_endurance.c` 的 `MQTT-ENDURANCE-006/007` 覆盖。
+- `flowie/tests/flowie_record_store_endurance.h` 定义同一 Record revision/CAS/atomic-batch trace；
+  local 默认测试验证 volatile atomic 语义，Redis/PostgreSQL live 测试复用该 trace 验证 durable provider，
+  live 环境未执行时不得由 local 结果推定为通过。
+- client 本地功能测试与可选公网 smoke 已分别在 `flowie/client/tests/test_flowie_mqtt_client.c` 与
+  `test_flowie_mqtt_client_live.c`；发布兼容性证据来自固定 broker，不能依赖公网 endpoint 的可用性。
 
 新增 CTest target 时，先沿用相邻 `cmake_add_test(...)`、TinyTest fixture 和 CoroNet helper。只有 failure
 domain 不同或需要 sanitizer/live backend 时才拆 executable。测试文件、证书、corpus 与 runner 都归属

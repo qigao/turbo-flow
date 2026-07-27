@@ -160,6 +160,9 @@ endif()
 if(TURBO_FLOW_BUILD_ADAPTERS)
   add_subdirectory(io)
 endif()
+if(TURBO_FLOW_BUILD_GATEWAYS)
+  add_subdirectory(gateway)
+endif()
 if(FLOWIE_MQTT_SOAK_TESTS)
   set(_flowie_soak_required_targets
       test_flowie_endpoint
@@ -214,7 +217,6 @@ if(BUILD_TESTING AND TURBO_FLOW_BUILD_FLOWIE)
   set(_flowie_release_evidence_targets
       test_flowie_mqtt_protocol_matrix
       test_flowie_mqtt_protocol_corpus
-      test_flowie_mqtt_client_live
       test_flowie_mqtt_client_fixed_interop
       flowie_mqtt_fixed_mqtt31_capability
       flowie_mqtt_fixed_mqtt31_ws_capability
@@ -222,6 +224,7 @@ if(BUILD_TESTING AND TURBO_FLOW_BUILD_FLOWIE)
       test_flowie_mosquitto_fixed_interop
       test_flowie_session_store_faults
       test_flowie_transport
+      test_flowie_mqtt_endurance
       test_flowie_mqtt_soak
       flowie_server_check_redis_session_store
       flowie_server_check_https_auth_provider)
@@ -238,7 +241,6 @@ if(BUILD_TESTING AND TURBO_FLOW_BUILD_FLOWIE)
       "-DCMAKE_COMMAND=${CMAKE_COMMAND}" "-DTEST_DIR=${CMAKE_BINARY_DIR}"
       "-DOUTPUT_FILE=${CMAKE_BINARY_DIR}/flowie-release-evidence.json"
       "-DREVISION=${FLOWIE_RELEASE_REVISION}" "-DPROJECT_VERSION=${PROJECT_VERSION}"
-      "-DPUBLIC_BROKER_VERSION=${FLOWIE_MQTT_PUBLIC_BROKER_VERSION}"
       "-DFIXED_BROKER_VERSION=${FLOWIE_MQTT_FIXED_BROKER_NAME}"
       "-DFIXED_SUPPORT_31=${FLOWIE_MQTT_FIXED_SUPPORT_31}"
       "-DFIXED_SUPPORT_31_WS=${FLOWIE_MQTT_FIXED_SUPPORT_31_WS}"
@@ -289,6 +291,14 @@ foreach(
   target_name
   IN ITEMS
      turbo_flow
+     tf_gateway
+     tf_gateway_mqtt_sn
+     tf_gateway_coap
+     tf_gateway_lwm2m
+     tf_gateway_ocpp
+     tf_gateway_gbt32960
+     tf_gateway_jtt808
+     tf_gateway_business_ocpp201_core
      tf_storage_backend
      tf_flow_store
      tf_local_storage

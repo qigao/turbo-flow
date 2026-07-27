@@ -28,12 +28,13 @@ tf_coronet_transport_t flowmq_coronet_transport_coronet(flowmq_coronet_transport
   }
 }
 
-int flowmq_coronet_transport_kcp_fec_resolve(flowmq_coronet_transport_t transport,
-                                             const tf_coronet_kcp_fec_options_t *options,
-                                             turbo_kcp_fec_config_t *config, int *configured) {
+int flowmq_coronet_transport_kcp_resolve(
+    flowmq_coronet_transport_t transport,
+    const tf_coronet_kcp_options_t *options, turbo_kcp_config_t *config,
+    int *configured) {
   tf_coronet_transport_t coronet = flowmq_coronet_transport_coronet(transport);
   if (coronet == TF_CORONET_TRANSPORT_COUNT) return TURBO_EINVAL;
-  return tf_coronet_kcp_fec_options_resolve(coronet, options, config, configured);
+  return tf_coronet_kcp_options_resolve(coronet, options, config, configured);
 }
 
 coro_socket_t *flowmq_coronet_transport_create(coro_context_t *ctx,
@@ -46,12 +47,14 @@ coro_socket_t *flowmq_coronet_transport_create(coro_context_t *ctx,
 }
 
 int flowmq_coronet_transport_apply(coro_socket_t *socket, flowmq_coronet_transport_t transport,
-                                   const turbo_kcp_fec_config_t *kcp_fec, int kcp_fec_configured,
+                                   const turbo_kcp_config_t *kcp_config,
+                                   int kcp_configured,
                                    const tf_coronet_socket_options_t *socket_options) {
   tf_coronet_transport_t coronet = flowmq_coronet_transport_coronet(transport);
   int rc;
   if (!socket || !socket_options || coronet == TF_CORONET_TRANSPORT_COUNT) return TURBO_EINVAL;
-  rc = tf_coronet_apply_kcp_fec(socket, coronet, kcp_fec, kcp_fec_configured);
+  rc = tf_coronet_apply_kcp_config(socket, coronet, kcp_config,
+                                   kcp_configured);
   if (rc != TURBO_OK) return rc;
   return tf_coronet_apply_socket_options(socket, coronet, socket_options);
 }
@@ -86,6 +89,10 @@ int flowmq_coronet_transport_listen(coro_socket_t *socket, flowmq_coronet_transp
   if (!socket || !timeouts || !udp_options || !handler || coronet == TF_CORONET_TRANSPORT_COUNT)
     return TURBO_EINVAL;
   if (reuse_port) coro_socket_set_reuse_port(socket, 1);
+  if (coronet == TF_CORONET_TRANSPORT_UDP) {
+    rc = coro_socket_set_udp_sessionized(socket, 1);
+    if (rc != TURBO_OK) return rc;
+  }
   (void)tf_coronet_apply_socket_timeout(socket, timeouts, TF_CORONET_TIMEOUT_RECV);
   rc = tf_coronet_listen_socket(socket, coronet, host, port, path, handler, ctx);
   if (rc != TURBO_OK) return rc;

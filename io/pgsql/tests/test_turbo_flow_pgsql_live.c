@@ -1,8 +1,9 @@
-#include "libpq-fe.h"
 #include "flowie_record_store_contract.h"
+#include "flowie_record_store_endurance.h"
+#include "libpq-fe.h"
+#include "pgsql_storage_test_helpers.h"
 #include "tinytest.h"
 #include "turbo_flow_pgsql.h"
-#include "pgsql_storage_test_helpers.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
 
@@ -51,8 +52,7 @@ static int pgsql_live_record_visit(void *ctx, const turbo_flow_record_view_t *re
   memcpy(capture->keys[index], record->key, record->key_size);
   capture->key_sizes[index] = record->key_size;
   capture->revisions[index] = record->revision;
-  if (record->value_size != 0u)
-    memcpy(capture->values[index], record->value, record->value_size);
+  if (record->value_size != 0u) memcpy(capture->values[index], record->value, record->value_size);
   capture->value_sizes[index] = record->value_size;
   return TURBO_OK;
 }
@@ -212,6 +212,35 @@ spec("turbo_flow_pgsql_live") {
     check_true(result.empty_after_delete);
     check_size_eq(result.mqtt_wire_size, 12u);
     check_true(result.mqtt_wire_equal);
+    pgsql_test_record_store_close(&storage);
+  }
+
+  it("MQTT-STORE-ENDURANCE-001 runs the shared revision trace through PostgreSQL") {
+    const char *conninfo = getenv("TURBO_FLOW_PGSQL_TEST_CONNINFO");
+    char namespace_name[128];
+    turbo_flow_pgsql_record_store_config_t config = TURBO_FLOW_PGSQL_RECORD_STORE_CONFIG_INIT;
+    turbo_flow_record_store_t store = TURBO_FLOW_RECORD_STORE_INIT;
+    pgsql_test_storage_t storage = {0};
+    flowie_record_store_endurance_result_t result = {0};
+    check_not_null(conninfo);
+    check_true(conninfo[0] != '\0');
+    (void)snprintf(namespace_name, sizeof(namespace_name), "turboflow_record_endurance_%llu",
+                   (unsigned long long)turbo_hrtime());
+    config.conninfo = conninfo;
+    config.namespace_name = namespace_name;
+    config.max_key_size = FLOWIE_RECORD_ENDURANCE_KEY_SIZE;
+    config.max_value_size = FLOWIE_RECORD_ENDURANCE_VALUE_SIZE;
+    config.max_batch_size = FLOWIE_RECORD_ENDURANCE_BATCH_SIZE;
+    config.max_records = FLOWIE_RECORD_ENDURANCE_RECORDS;
+    config.create_table = 1;
+    check_int_eq(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
+                 TURBO_OK);
+    check_int_eq(flowie_record_store_endurance_run(&store, &result), TURBO_OK);
+    check_size_eq(result.successful_commits, 40u);
+    check_size_eq(result.scans, 39u);
+    check_size_eq(result.conflicts, 4u);
+    check_size_eq(result.final_count, 0u);
+    check_true(result.durable);
     pgsql_test_record_store_close(&storage);
   }
 

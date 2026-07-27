@@ -1,6 +1,7 @@
 #ifndef FLOWIE_CONTROL_MANAGEMENT_RPC_INTERNAL_H
 #define FLOWIE_CONTROL_MANAGEMENT_RPC_INTERNAL_H
 
+#include "flowie_control_external_https_authenticator_internal.h"
 #include "flowie_control_management_service_internal.h"
 #include "iris/iris_app.h"
 #include "iris/rpc_server.h"
@@ -17,6 +18,8 @@ typedef struct flowie_control_management_rpc_server_s flowie_control_management_
 typedef int (*flowie_control_management_rpc_resolve_caller_fn)(
     void *ctx, const Req *request, flowie_control_management_caller_t *caller_out);
 typedef uint64_t (*flowie_control_management_rpc_clock_fn)(void *ctx);
+typedef int (*flowie_control_management_rpc_external_https_stats_fn)(
+    void *ctx, flowie_control_external_https_authenticator_stats_t *stats_out);
 
 typedef struct flowie_control_management_rpc_server_config_s {
   size_t size;
@@ -26,10 +29,20 @@ typedef struct flowie_control_management_rpc_server_config_s {
   void *resolve_caller_ctx;
   flowie_control_management_rpc_clock_fn clock;
   void *clock_ctx;
+  flowie_control_management_rpc_external_https_stats_fn external_https_stats;
+  void *external_https_stats_ctx;
 } flowie_control_management_rpc_server_config_t;
 
 #define FLOWIE_CONTROL_MANAGEMENT_RPC_SERVER_CONFIG_INIT                                           \
-  {sizeof(flowie_control_management_rpc_server_config_t), NULL, NULL, NULL, NULL, NULL, NULL}
+  {sizeof(flowie_control_management_rpc_server_config_t),                                          \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL}
 
 /** The RPC context and management service are borrowed and must outlive the server. */
 int flowie_control_management_rpc_server_create(

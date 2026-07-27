@@ -1,7 +1,9 @@
 #include "flowie.h"
 #include "flowie_task_group_internal.h"
 #include "flowie_test_socket.h"
+#include "tls_test_support.h"
 
+#include "CoroNet/turbo_coro_socket.h"
 #include "tinytest.h"
 #include "turbo_error.h"
 #include "turbo_str.h"
@@ -33,6 +35,8 @@ typedef struct flowie_security_fixture_s {
   uint64_t policy_version;
   int result;
   int revoked;
+  char remote_address[CORO_SOCKET_ADDRESS_TEXT_CAPACITY];
+  char peer_certificate_sha256[CORO_TLS_PEER_CERT_SHA256_CAPACITY];
 } flowie_security_fixture_t;
 
 typedef struct flowie_policy_fixture_s {
@@ -55,6 +59,73 @@ typedef struct flowie_task_group_wait_fixture_s {
   atomic_int entered;
   atomic_int exited;
 } flowie_task_group_wait_fixture_t;
+
+typedef struct flowie_tls_auth_client_s {
+  coro_context_t *context;
+  const char *ca_file;
+  const char *cert_file;
+  const char *key_file;
+  const uint8_t *connect_packet;
+  size_t connect_packet_size;
+  unsigned short port;
+  int done;
+  int status;
+} flowie_tls_auth_client_t;
+
+static void flowie_tls_auth_client_run(coro_t *coroutine, void *arg) {
+  flowie_tls_auth_client_t *client = (flowie_tls_auth_client_t *)arg;
+  turbo_tls_client_config_t tls_config = {0};
+  coro_socket_t *socket = NULL;
+  char *response = NULL;
+  size_t response_size = 0u;
+  int rc = TURBO_EINVAL;
+  (void)coroutine;
+  if (!client || !client->context || !client->ca_file || !client->connect_packet ||
+      client->connect_packet_size == 0u)
+    goto done;
+  socket = coro_socket_create(client->context, CORO_SOCKET_TLS);
+  if (!socket) {
+    rc = TURBO_ENOMEM;
+    goto done;
+  }
+  tls_config.ca_file = client->ca_file;
+  tls_config.cert_file = client->cert_file;
+  tls_config.key_file = client->key_file;
+  tls_config.verify_peer = 1;
+  rc = coro_socket_set_tls_client_config(socket, &tls_config);
+  if (rc == TURBO_OK) coro_socket_set_timeout(socket, 5000u);
+  if (rc == TURBO_OK) rc = coro_socket_connect(socket, "localhost", client->port);
+  if (rc == TURBO_OK)
+    rc =
+        coro_socket_send(socket, (const char *)client->connect_packet, client->connect_packet_size);
+  if (rc == TURBO_OK) rc = coro_socket_recv(socket, &response, &response_size);
+  if (rc == TURBO_OK && (response_size < 4u || (uint8_t)response[0] != UINT8_C(0x20) ||
+                         (uint8_t)response[3] != UINT8_C(0x00)))
+    rc = TURBO_EPROTO;
+done:
+  coro_socket_free_recv(response);
+  coro_socket_destroy(socket);
+  client->status = rc;
+  client->done = 1;
+}
+
+static int flowie_tls_auth_client_execute(flowie_tls_auth_client_t *client) {
+  uint64_t deadline;
+  int rc;
+  if (!client) return TURBO_EINVAL;
+  client->context = coro_context_create(NULL);
+  if (!client->context) return TURBO_ENOMEM;
+  client->done = 0;
+  client->status = TURBO_EBUSY;
+  rc = coro_context_spawn(client->context, flowie_tls_auth_client_run, client);
+  deadline = turbo_monotonic_ms() + 5000u;
+  while (rc == TURBO_OK && !client->done && turbo_monotonic_ms() < deadline)
+    rc = coro_context_run(client->context, TURBO_RUN_ONCE);
+  if (rc == TURBO_OK) rc = client->done ? client->status : TURBO_ETIMEDOUT;
+  coro_context_destroy(client->context);
+  client->context = NULL;
+  return rc;
+}
 
 static void flowie_task_group_wait_thread(void *arg) {
   flowie_task_group_wait_fixture_t *fixture = (flowie_task_group_wait_fixture_t *)arg;
@@ -113,8 +184,8 @@ static int flowie_test_enhanced_continue(void *ctx, void *exchange,
   expected = round + 1u < rounds ? "client-middle" : "client-final";
   expected_size = strlen(expected);
   if (!fixture || exchange != fixture || !request || !result_out ||
-      strcmp(request->method, "challenge") != 0 ||
-      request->data_size != expected_size || memcmp(request->data, expected, expected_size) != 0)
+      strcmp(request->method, "challenge") != 0 || request->data_size != expected_size ||
+      memcmp(request->data, expected, expected_size) != 0)
     return TURBO_EPERM;
   ++fixture->continue_calls;
   if (round + 1u < rounds) {
@@ -127,8 +198,8 @@ static int flowie_test_enhanced_continue(void *ctx, void *exchange,
   result_out->data = final_data;
   result_out->data_size = sizeof(final_data) - 1u;
   flowie_test_security_principal(&result_out->principal, "challenge");
-  result_out->principal.expires_at = fixture->begin_calls == 1u ? fixture->first_expires_at
-                                                                : fixture->next_expires_at;
+  result_out->principal.expires_at =
+      fixture->begin_calls == 1u ? fixture->first_expires_at : fixture->next_expires_at;
   return TURBO_OK;
 }
 
@@ -165,10 +236,15 @@ static int flowie_test_authenticate(void *ctx, const turbo_flow_security_auth_re
   flowie_security_fixture_t *fixture = (flowie_security_fixture_t *)ctx;
   if (!fixture || !request || !principal) return TURBO_EINVAL;
   ++fixture->calls;
+  (void)snprintf(fixture->remote_address, sizeof(fixture->remote_address), "%s",
+                 request->remote_address ? request->remote_address : "");
+  (void)snprintf(fixture->peer_certificate_sha256, sizeof(fixture->peer_certificate_sha256), "%s",
+                 request->size >= sizeof(*request) && request->peer_certificate_sha256
+                     ? request->peer_certificate_sha256
+                     : "");
   if (fixture->result != TURBO_OK) return fixture->result;
   if (fixture->revoked || strcmp(request->identity, "writer") != 0 ||
-      strcmp(request->method, "password") != 0 ||
-      request->secret_size != sizeof("secret") - 1u ||
+      strcmp(request->method, "password") != 0 || request->secret_size != sizeof("secret") - 1u ||
       memcmp(request->secret, "secret", sizeof("secret") - 1u) != 0)
     return TURBO_EPERM;
   flowie_test_security_principal(principal, request->method);
@@ -240,6 +316,16 @@ static int flowie_endpoint_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   }
   atomic_store_explicit(&capture->calls, index + 1u, memory_order_release);
   return capture->result;
+}
+
+static int flowie_endpoint_core_capture(flowie_endpoint_core_t *endpoint, turbo_flow_msg_t *message,
+                                        turbo_flow_publish_result_t *result, void *ctx) {
+  int rc;
+  (void)endpoint;
+  if (!result) return TURBO_EINVAL;
+  rc = flowie_endpoint_capture_stage(message, ctx);
+  result->status = rc;
+  return rc;
 }
 
 static int flowie_wait_calls(flowie_endpoint_capture_t *capture, size_t expected) {
@@ -754,6 +840,48 @@ done:
 }
 
 spec("Flowie MQTT endpoint primitive") {
+  it("starts and stops a direct endpoint Core without creating a graph") {
+    flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
+    flowie_endpoint_core_options_t options = FLOWIE_ENDPOINT_CORE_OPTIONS_INIT;
+    flowie_endpoint_capture_t capture;
+    flowie_endpoint_core_t *endpoint = NULL;
+    flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
+    uint8_t connect_packet[128];
+    size_t connect_size = 0u;
+    unsigned short port = flowie_test_port();
+
+    memset(&capture, 0, sizeof(capture));
+    atomic_init(&capture.calls, 0u);
+    config.host = "127.0.0.1";
+    config.port = (int)port;
+    config.max_packet_size = 1024u;
+    config.max_connections = 4u;
+    config.recv_timeout_ms = 5000u;
+    options.on_message = flowie_endpoint_core_capture;
+    options.message_ctx = &capture;
+
+    check_int_gt(port, 0);
+    check_int_eq(flowie_test_encode_connect(connect_packet, sizeof(connect_packet), &connect_size,
+                                            "d", 60u, NULL, NULL, 0u),
+                 TURBO_OK);
+    check_int_eq(flowie_endpoint_core_create("flowie.direct", &config, &options, &endpoint),
+                 TURBO_OK);
+    check_not_null(endpoint);
+    check_int_eq(flowie_endpoint_core_start(endpoint), TURBO_OK);
+    check_int_eq(flowie_endpoint_core_start(endpoint), TURBO_EALREADY);
+    client = flowie_test_connect(port);
+    check_true(client != FLOWIE_TEST_INVALID_SOCKET);
+    check_int_eq(flowie_test_send(client, connect_packet, connect_size), TURBO_OK);
+    check_int_eq(flowie_wait_calls(&capture, 1u), TURBO_OK);
+    check_uint_eq(capture.types[0], FLOWIE_MQTT_PACKET_CONNECT);
+    flowie_test_socket_close(client);
+    client = FLOWIE_TEST_INVALID_SOCKET;
+    check_int_eq(flowie_endpoint_core_stop(endpoint), TURBO_OK);
+    check_int_eq(flowie_endpoint_core_start(endpoint), TURBO_OK);
+    check_int_eq(flowie_endpoint_core_stop(endpoint), TURBO_OK);
+    flowie_endpoint_core_destroy(endpoint);
+  }
+
   it("closes task admission before draining already admitted work") {
     flowie_task_group_t group;
     flowie_task_group_wait_fixture_t fixture;
@@ -772,7 +900,8 @@ spec("Flowie MQTT endpoint primitive") {
     if (create_rc == TURBO_OK)
       create_rc = turbo_thread_create(&waiter, flowie_task_group_wait_thread, &fixture);
     if (create_rc == TURBO_OK) {
-      while (!atomic_load_explicit(&fixture.entered, memory_order_acquire)) turbo_thread_yield();
+      while (!atomic_load_explicit(&fixture.entered, memory_order_acquire))
+        turbo_thread_yield();
       flowie_task_group_close(&group);
       rejected_rc = flowie_task_group_try_begin(&group);
       turbo_sleep_ms(10u);
@@ -792,6 +921,33 @@ spec("Flowie MQTT endpoint primitive") {
     check_true(waiter_blocked);
     check_int_eq(join_rc, TURBO_OK);
     check_int_eq(atomic_load_explicit(&fixture.exited, memory_order_acquire), 1);
+  }
+
+  it("serializes managed-session expiry cancellation with immediate shutdown") {
+    enum { IMMEDIATE_STOP_CYCLES = 32u };
+    flowie_endpoint_capture_t capture = {0};
+    unsigned short port = flowie_test_port();
+    turbo_flow_t *flow;
+
+    atomic_init(&capture.calls, 0u);
+    check_int_gt(port, 0);
+    flow = flowie_managed_session_flow(port, &capture);
+    check_not_null(flow);
+    if (!flow) return;
+
+    for (size_t cycle = 0u; cycle < IMMEDIATE_STOP_CYCLES; ++cycle) {
+      uint64_t started_at;
+      uint64_t elapsed;
+
+      check_int_eq(turbo_flow_start(flow), TURBO_OK);
+      started_at = turbo_monotonic_ms();
+      check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+      elapsed = turbo_monotonic_ms() - started_at;
+      info("cycle=%zu stop_elapsed_ms=%llu", cycle, (unsigned long long)elapsed);
+      check_size_le((size_t)elapsed, (size_t)FLOWIE_TEST_STOP_MAX_MS);
+    }
+
+    turbo_flow_destroy(flow);
   }
 
   it("rejects invalid endpoint configuration before registration") {
@@ -833,6 +989,10 @@ spec("Flowie MQTT endpoint primitive") {
     check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
     config.transport = FLOWIE_TRANSPORT_TCP;
     config.socket_recv_buffer_bytes = 0u;
+    config.tls_client_ca_file = "client-ca.pem";
+    check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
+    config.transport = FLOWIE_TRANSPORT_TLS;
+    check_int_eq(flowie_register_endpoint(flow, "flowie.invalid", &config), TURBO_EINVAL);
     turbo_flow_destroy(flow);
   }
 
@@ -1139,10 +1299,8 @@ spec("Flowie MQTT endpoint primitive") {
           {unsupported_slow_policy, sizeof(unsupported_slow_policy) - 1u, "slow_subscriber_policy"},
           {undersized_coroutine_stack, sizeof(undersized_coroutine_stack) - 1u,
            "coroutine_stack_size"},
-          {undersized_recv_buffer, sizeof(undersized_recv_buffer) - 1u,
-           "stream_recv_buffer_bytes"},
-          {undeclared_origin_policy, sizeof(undeclared_origin_policy) - 1u,
-           "allowed_origins"}};
+          {undersized_recv_buffer, sizeof(undersized_recv_buffer) - 1u, "stream_recv_buffer_bytes"},
+          {undeclared_origin_policy, sizeof(undeclared_origin_policy) - 1u, "allowed_origins"}};
       for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         resolved = NULL;
         error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -1231,20 +1389,18 @@ spec("Flowie MQTT endpoint primitive") {
     static const uint8_t suback_allowed[] = {0x90u, 0x04u, 0x00u, 0x03u, 0x00u, 0x01u};
     static const uint8_t suback_denied[] = {0x90u, 0x04u, 0x00u, 0x04u, 0x00u, 0x87u};
     static const uint8_t subscribe_mixed[] = {
-        0x82u, 0x2au, 0x00u, 0x05u, 0x00u,
-        0x00u, 0x0fu, 'r',   'o',   'o',   't',   '-',   'a',   '/',   '+',   '/',   'e',
-        'v',   'e',   'n',   't',   's',   0x01u,
-        0x00u, 0x06u, '$',   'S',   'Y',   'S',   '/',   '#',   0x01u,
-        0x00u, 0x09u, 'r',   'o',   'o',   't',   '-',   'a',   'x',   '/',   '#',   0x01u};
-    static const uint8_t suback_mixed[] = {0x90u, 0x06u, 0x00u, 0x05u,
-                                           0x00u, 0x01u, 0x87u, 0x87u};
+        0x82u, 0x2au, 0x00u, 0x05u, 0x00u, 0x00u, 0x0fu, 'r', 'o', 'o',   't',
+        '-',   'a',   '/',   '+',   '/',   'e',   'v',   'e', 'n', 't',   's',
+        0x01u, 0x00u, 0x06u, '$',   'S',   'Y',   'S',   '/', '#', 0x01u, 0x00u,
+        0x09u, 'r',   'o',   'o',   't',   '-',   'a',   'x', '/', '#',   0x01u};
+    static const uint8_t suback_mixed[] = {0x90u, 0x06u, 0x00u, 0x05u, 0x00u, 0x01u, 0x87u, 0x87u};
     static const uint8_t connack_v31[] = {0x20u, 0x02u, 0x00u, 0x00u};
     static const uint8_t normal_disconnect[] = {0xe0u, 0x00u};
     static const uint8_t subscribe_denied_v31[] = {0x82u, 0x06u, 0x00u, 0x04u,
                                                    0x00u, 0x01u, '#',   0x01u};
-    static const uint8_t publish_denied_v31[] = {0x32u, 0x12u, 0x00u, 0x0du, 'r', 'o', 'o',
-                                                 't',   '-',   'b',   '/',   'e',   'v', 'e', 'n',
-                                                 't',   's',   0x00u, 0x02u, 'x'};
+    static const uint8_t publish_denied_v31[] = {0x32u, 0x12u, 0x00u, 0x0du, 'r',   'o', 'o',
+                                                 't',   '-',   'b',   '/',   'e',   'v', 'e',
+                                                 'n',   't',   's',   0x00u, 0x02u, 'x'};
     flowie_endpoint_capture_t capture;
     flowie_security_fixture_t auth = {0};
     flowie_policy_fixture_t policy = {0};
@@ -1443,12 +1599,13 @@ spec("Flowie MQTT endpoint primitive") {
                  TURBO_OK);
     check_int_eq(flowie_test_recv_exact(legacy_publish, received, sizeof(connack_v31)), TURBO_OK);
     check_mem_eq(received, connack_v31, sizeof(connack_v31));
-    check_int_eq(flowie_test_send(legacy_publish, publish_denied_v31,
-                                  sizeof(publish_denied_v31)),
+    check_int_eq(flowie_test_send(legacy_publish, publish_denied_v31, sizeof(publish_denied_v31)),
                  TURBO_OK);
     check_true(flowie_test_socket_readable(legacy_publish, 500u));
     check(flowie_test_recv_exact(legacy_publish, received, 1u) != TURBO_OK);
     check_size_eq(auth.calls, 6u);
+    check_true(strncmp(auth.remote_address, "127.0.0.1:", sizeof("127.0.0.1:") - 1u) == 0);
+    check_str_eq(auth.peer_certificate_sha256, "");
 
     flowie_test_socket_close(legacy_publish);
     flowie_test_socket_close(client);
@@ -1456,6 +1613,119 @@ spec("Flowie MQTT endpoint primitive") {
     turbo_flow_destroy(flow);
     turbo_flow_security_realm_destroy(realm);
     turbo_flow_resolved_config_destroy(resolved);
+  }
+
+  it("MQTT-SEC-003 forwards only a CoroNet-verified TLS client identity to Auth") {
+    static const char graph[] = "source mqtt_in adapter flowie.endpoint\n"
+                                "stage capture worker 1 capacity 8\n"
+                                "stage main {\n"
+                                "  mqtt_in -> capture\n"
+                                "}\n";
+    char ca_file[512] = {0};
+    char cert_file[512] = {0};
+    char key_file[512] = {0};
+    flowie_endpoint_capture_t capture = {0};
+    flowie_security_fixture_t auth = {0};
+    turbo_flow_security_auth_provider_t provider = {sizeof(provider), &auth,
+                                                    flowie_test_authenticate};
+    turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
+    turbo_flow_security_realm_config_t realm_config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
+    turbo_flow_security_realm_t *realm = NULL;
+    flowie_endpoint_security_binding_t security = FLOWIE_ENDPOINT_SECURITY_BINDING_INIT;
+    flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
+    flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
+    flowie_tls_auth_client_t client = {0};
+    uint8_t connect_packet[128];
+    size_t connect_size = 0u;
+    unsigned short port = flowie_test_port();
+    turbo_flow_t *flow = turbo_flow_create();
+
+    atomic_init(&capture.calls, 0u);
+    check_int_gt(port, 0);
+    check_not_null(flow);
+    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_int_eq(
+        tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
+    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+
+    rule.effect = TURBO_FLOW_SECURITY_ALLOW;
+    rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
+    (void)snprintf(rule.subject, sizeof(rule.subject), "%s", "writer");
+    (void)snprintf(rule.root_group_id, sizeof(rule.root_group_id), "%s", "root-a");
+    rule.action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;
+    rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
+    rule.match_kind = TURBO_FLOW_SECURITY_MATCH_PREFIX;
+    (void)snprintf(rule.pattern, sizeof(rule.pattern), "%s", "mtls-");
+    realm_config.resource_uid = "security:mtls-auth-context";
+    realm_config.owner_name = "security.mtls-auth-context";
+    realm_config.policy_version = 1u;
+    realm_config.rules = &rule;
+    realm_config.rule_count = 1u;
+    check_int_eq(turbo_flow_security_realm_create(&realm_config, &realm), TURBO_OK);
+    check_int_eq(turbo_flow_security_realm_register(flow, realm), TURBO_OK);
+
+    security.realm_channel = "security.mtls-auth-context";
+    security.auth_method = "password";
+    security.auth_provider = &provider;
+    security.realm = realm;
+    config.transport = FLOWIE_TRANSPORT_TLS;
+    config.host = "127.0.0.1";
+    config.port = (int)port;
+    config.max_connections = 2u;
+    config.manage_sessions = 1;
+    config.max_sessions = 2u;
+    config.max_subscriptions_per_session = 2u;
+    config.max_inflight_per_session = 2u;
+    config.tls_client_ca_file = ca_file;
+    check_int_eq(flowie_register_secure_endpoint(flow, "flowie.endpoint", &config, &security),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_register_stage_ex(flow, "capture", flowie_endpoint_capture_stage,
+                                              &capture, NULL),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), TURBO_OK);
+    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+
+    connect.version = FLOWIE_MQTT_VERSION_5;
+    connect.clean_start = 1u;
+    connect.client_id = (flowie_mqtt_span_t){(const uint8_t *)"mtls-client", 11u};
+    connect.has_username = 1u;
+    connect.has_password = 1u;
+    connect.username = (flowie_mqtt_span_t){(const uint8_t *)"writer", 6u};
+    connect.password = (flowie_mqtt_span_t){(const uint8_t *)"secret", 6u};
+    check_int_eq(flowie_mqtt_connect_packet_encode(&connect, connect_packet, sizeof(connect_packet),
+                                                   &connect_size),
+                 FLOWIE_MQTT_PARSE_OK);
+    client.ca_file = ca_file;
+    client.connect_packet = connect_packet;
+    client.connect_packet_size = connect_size;
+    client.port = port;
+    check_int_ne(flowie_tls_auth_client_execute(&client), TURBO_OK);
+    check_size_eq(auth.calls, 0u);
+
+    client.cert_file = cert_file;
+    client.key_file = key_file;
+    check_int_eq(flowie_tls_auth_client_execute(&client), TURBO_OK);
+    check_size_eq(auth.calls, 1u);
+    check_true(strncmp(auth.remote_address, "127.0.0.1:", sizeof("127.0.0.1:") - 1u) == 0);
+    check_size_eq(
+        strlen(auth.peer_certificate_sha256),
+        sizeof("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef") - 1u);
+    check_true(strncmp(auth.peer_certificate_sha256, "sha256:", sizeof("sha256:") - 1u) == 0);
+    for (size_t index = sizeof("sha256:") - 1u; auth.peer_certificate_sha256[index] != '\0';
+         ++index)
+      check_true((auth.peer_certificate_sha256[index] >= '0' &&
+                  auth.peer_certificate_sha256[index] <= '9') ||
+                 (auth.peer_certificate_sha256[index] >= 'a' &&
+                  auth.peer_certificate_sha256[index] <= 'f'));
+
+    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    turbo_flow_destroy(flow);
+    turbo_flow_security_realm_destroy(realm);
+    tls_test_clear_server_env();
+    tls_test_remove_file(key_file);
+    tls_test_remove_file(cert_file);
+    tls_test_remove_file(ca_file);
   }
 
   it("MQTT-SEC-003 maps remote auth denial to CONNACK and provider failures to close") {
@@ -1526,12 +1796,10 @@ spec("Flowie MQTT endpoint primitive") {
         (flowie_mqtt_span_t){(const uint8_t *)"secure-http-auth", sizeof("secure-http-auth") - 1u};
     connect.has_username = 1u;
     connect.has_password = 1u;
-    connect.username =
-        (flowie_mqtt_span_t){(const uint8_t *)"writer", sizeof("writer") - 1u};
-    connect.password =
-        (flowie_mqtt_span_t){(const uint8_t *)"secret", sizeof("secret") - 1u};
-    check_int_eq(flowie_mqtt_connect_packet_encode(&connect, connect_packet,
-                                                   sizeof(connect_packet), &connect_size),
+    connect.username = (flowie_mqtt_span_t){(const uint8_t *)"writer", sizeof("writer") - 1u};
+    connect.password = (flowie_mqtt_span_t){(const uint8_t *)"secret", sizeof("secret") - 1u};
+    check_int_eq(flowie_mqtt_connect_packet_encode(&connect, connect_packet, sizeof(connect_packet),
+                                                   &connect_size),
                  FLOWIE_MQTT_PARSE_OK);
 
     auth.result = TURBO_EPERM;
@@ -1563,18 +1831,18 @@ spec("Flowie MQTT endpoint primitive") {
                                 "stage main {\n"
                                 "  mqtt_in -> capture\n"
                                 "}\n";
-    static const uint8_t publish_v1[] = {0x32u, 0x14u, 0x00u, 0x0eu, 'r',   'o',   'o', 't',
-                                         '-',   'a',   '/',   'v',   '1',   '/',   'd', 'a',
+    static const uint8_t publish_v1[] = {0x32u, 0x14u, 0x00u, 0x0eu, 'r',   'o', 'o', 't',
+                                         '-',   'a',   '/',   'v',   '1',   '/', 'd', 'a',
                                          't',   'a',   0x00u, 0x01u, 0x00u, 'x'};
-    static const uint8_t publish_v2_first[] = {
-        0x32u, 0x14u, 0x00u, 0x0eu, 'r',   'o',   'o', 't', '-', 'a', '/', 'v',
-        '2',   '/',   'd',   'a',   't',   'a',   0x00u, 0x03u, 0x00u, 'x'};
+    static const uint8_t publish_v2_first[] = {0x32u, 0x14u, 0x00u, 0x0eu, 'r',   'o', 'o', 't',
+                                               '-',   'a',   '/',   'v',   '2',   '/', 'd', 'a',
+                                               't',   'a',   0x00u, 0x03u, 0x00u, 'x'};
     static const uint8_t publish_v2_after_revoke[] = {
-        0x32u, 0x14u, 0x00u, 0x0eu, 'r',   'o',   'o', 't', '-', 'a', '/', 'v',
-        '2',   '/',   'd',   'a',   't',   'a',   0x00u, 0x04u, 0x00u, 'x'};
-    static const uint8_t subscribe_v1[] = {0x82u, 0x11u, 0x00u, 0x02u, 0x00u, 0x00u,
-                                           0x0bu, 'r',   'o',   'o',   't',   '-',   'a',
-                                           '/',   'v',   '1',   '/',   '#',   0x01u};
+        0x32u, 0x14u, 0x00u, 0x0eu, 'r', 'o', 'o', 't',   '-',   'a',   '/',
+        'v',   '2',   '/',   'd',   'a', 't', 'a', 0x00u, 0x04u, 0x00u, 'x'};
+    static const uint8_t subscribe_v1[] = {0x82u, 0x11u, 0x00u, 0x02u, 0x00u, 0x00u, 0x0bu,
+                                           'r',   'o',   'o',   't',   '-',   'a',   '/',
+                                           'v',   '1',   '/',   '#',   0x01u};
     static const uint8_t puback_first[] = {0x40u, 0x02u, 0x00u, 0x03u};
     static const uint8_t puback_after_revoke[] = {0x40u, 0x02u, 0x00u, 0x04u};
     static const char *client_ids[] = {"secure-generation-publish", "secure-generation-subscribe",
@@ -1704,9 +1972,9 @@ spec("Flowie MQTT endpoint primitive") {
     check_int_eq(flowie_wait_calls(&capture, 1u), TURBO_OK);
 
     auth.revoked = 1;
-    check_int_eq(flowie_test_send(current, publish_v2_after_revoke,
-                                  sizeof(publish_v2_after_revoke)),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_test_send(current, publish_v2_after_revoke, sizeof(publish_v2_after_revoke)),
+        TURBO_OK);
     check_int_eq(flowie_test_recv_exact(current, received, sizeof(puback_after_revoke)), TURBO_OK);
     check_mem_eq(received, puback_after_revoke, sizeof(puback_after_revoke));
     check_int_eq(flowie_wait_calls(&capture, 2u), TURBO_OK);
@@ -1981,8 +2249,8 @@ spec("Flowie MQTT endpoint primitive") {
     auth.type = FLOWIE_MQTT_PACKET_AUTH;
     auth.reason_code = UINT8_C(0x18);
     auth.properties = (flowie_mqtt_span_t){client_middle_properties, client_middle_size};
-    check_int_eq(flowie_mqtt_control_packet_encode(
-                     &auth, client_middle, sizeof(client_middle), &client_middle_packet_size),
+    check_int_eq(flowie_mqtt_control_packet_encode(&auth, client_middle, sizeof(client_middle),
+                                                   &client_middle_packet_size),
                  FLOWIE_MQTT_PARSE_OK);
     auth.properties = (flowie_mqtt_span_t){client_final_properties, client_final_size};
     check_int_eq(flowie_mqtt_control_packet_encode(&auth, client_continue, sizeof(client_continue),
@@ -2004,8 +2272,8 @@ spec("Flowie MQTT endpoint primitive") {
                      &auth, server_challenge, sizeof(server_challenge), &server_challenge_size),
                  FLOWIE_MQTT_PARSE_OK);
     auth.properties = (flowie_mqtt_span_t){server_middle_properties, server_middle_size};
-    check_int_eq(flowie_mqtt_control_packet_encode(
-                     &auth, server_middle, sizeof(server_middle), &server_middle_packet_size),
+    check_int_eq(flowie_mqtt_control_packet_encode(&auth, server_middle, sizeof(server_middle),
+                                                   &server_middle_packet_size),
                  FLOWIE_MQTT_PARSE_OK);
     auth.reason_code = UINT8_C(0x00);
     auth.properties = (flowie_mqtt_span_t){server_final_properties, server_final_size};
@@ -2133,16 +2401,15 @@ spec("Flowie MQTT endpoint primitive") {
     static const uint8_t subscribe[] = {0x82u, 0x07u, 0x00u, 0x01u, 0x00u,
                                         0x00u, 0x01u, 'a',   0x01u};
     static const uint8_t suback[] = {0x90u, 0x04u, 0x00u, 0x01u, 0x00u, 0x01u};
-    static const uint8_t publishes[] = {
-        0x32u, 0x07u, 0x00u, 0x01u, 'a', 0x00u, 0x2au, 0x00u, 'x',
-        0x32u, 0x07u, 0x00u, 0x01u, 'a', 0x00u, 0x2bu, 0x00u, 'y'};
+    static const uint8_t publishes[] = {0x32u, 0x07u, 0x00u, 0x01u, 'a', 0x00u, 0x2au, 0x00u, 'x',
+                                        0x32u, 0x07u, 0x00u, 0x01u, 'a', 0x00u, 0x2bu, 0x00u, 'y'};
     static const uint8_t publisher_pubacks[] = {0x40u, 0x02u, 0x00u, 0x2au,
                                                 0x40u, 0x02u, 0x00u, 0x2bu};
-    static const uint8_t subscriber_deliveries[] = {
-        0x32u, 0x07u, 0x00u, 0x01u, 'a', 0x00u, 0x01u, 0x00u, 'x',
-        0x32u, 0x07u, 0x00u, 0x01u, 'a', 0x00u, 0x02u, 0x00u, 'y'};
-    static const uint8_t acknowledgements_and_ping[] = {
-        0x40u, 0x02u, 0x00u, 0x01u, 0x40u, 0x02u, 0x00u, 0x02u, 0xc0u, 0x00u};
+    static const uint8_t subscriber_deliveries[] = {0x32u, 0x07u, 0x00u, 0x01u, 'a',   0x00u,
+                                                    0x01u, 0x00u, 'x',   0x32u, 0x07u, 0x00u,
+                                                    0x01u, 'a',   0x00u, 0x02u, 0x00u, 'y'};
+    static const uint8_t acknowledgements_and_ping[] = {0x40u, 0x02u, 0x00u, 0x01u, 0x40u,
+                                                        0x02u, 0x00u, 0x02u, 0xc0u, 0x00u};
     static const uint8_t pingresp[] = {0xd0u, 0x00u};
     static const uint8_t disconnect[] = {0xe0u, 0x00u};
     flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
@@ -2192,9 +2459,9 @@ spec("Flowie MQTT endpoint primitive") {
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(subscriber_deliveries)),
                  TURBO_OK);
     check_mem_eq(received, subscriber_deliveries, sizeof(subscriber_deliveries));
-    check_int_eq(flowie_test_send(subscriber, acknowledgements_and_ping,
-                                  sizeof(acknowledgements_and_ping)),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_test_send(subscriber, acknowledgements_and_ping, sizeof(acknowledgements_and_ping)),
+        TURBO_OK);
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(pingresp)), TURBO_OK);
     check_mem_eq(received, pingresp, sizeof(pingresp));
 
@@ -2387,6 +2654,43 @@ spec("Flowie MQTT endpoint primitive") {
     turbo_flow_destroy(flow);
   }
 
+  it("preserves the MQTT 5 takeover reason across the initial CONNACK completion handoff") {
+    enum { TAKEOVER_CONNACK_HANDOFF_CYCLES = 32u };
+    static const uint8_t connect_packet[] = {0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',
+                                             0x05u, 0x00u, 0x00u, 0x3cu, 0x05u, 0x11u, 0x00u, 0x00u,
+                                             0x00u, 0x3cu, 0x00u, 0x03u, 'c',   'l',   'i'};
+    static const uint8_t takeover_disconnect[] = {0xe0u, 0x01u, 0x8eu};
+    uint8_t received[sizeof(takeover_disconnect)];
+
+    for (size_t cycle = 0u; cycle < TAKEOVER_CONNACK_HANDOFF_CYCLES; ++cycle) {
+      flowie_endpoint_capture_t capture = {0};
+      unsigned short port = flowie_test_port();
+      turbo_flow_t *flow;
+      flowie_test_socket_t first;
+      flowie_test_socket_t replacement;
+
+      atomic_init(&capture.calls, 0u);
+      check_int_gt(port, 0);
+      flow = flowie_managed_session_flow(port, &capture);
+      check_not_null(flow);
+      check_int_eq(turbo_flow_start(flow), TURBO_OK);
+      first = flowie_test_connect(port);
+      check_true(first != FLOWIE_TEST_INVALID_SOCKET);
+      check_int_eq(flowie_test_send(first, connect_packet, sizeof(connect_packet)), TURBO_OK);
+      check_int_eq(flowie_test_recv_connack(first, 0u, 0u), TURBO_OK);
+      replacement = flowie_test_connect(port);
+      check_true(replacement != FLOWIE_TEST_INVALID_SOCKET);
+      check_int_eq(flowie_test_send(replacement, connect_packet, sizeof(connect_packet)), TURBO_OK);
+      check_int_eq(flowie_test_recv_connack(replacement, 1u, 0u), TURBO_OK);
+      check_int_eq(flowie_test_recv_exact(first, received, sizeof(received)), TURBO_OK);
+      check_mem_eq(received, takeover_disconnect, sizeof(takeover_disconnect));
+      flowie_test_socket_close(replacement);
+      flowie_test_socket_close(first);
+      check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+      turbo_flow_destroy(flow);
+    }
+  }
+
   it("MQTT-OWNER-003 takes over MQTT 5 and fences the old connection") {
     static const uint8_t connect_packet[] = {0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',
                                              0x05u, 0x00u, 0x00u, 0x3cu, 0x05u, 0x11u, 0x00u, 0x00u,
@@ -2492,8 +2796,9 @@ spec("Flowie MQTT endpoint primitive") {
     check_uint_eq(capture.types[1], FLOWIE_MQTT_PACKET_PUBLISH);
     check_mem_eq(capture.packets[1], publish_qos2, sizeof(publish_qos2));
 
-    check_int_eq(flowie_test_send(duplicate, publish_qos2_duplicate, sizeof(publish_qos2_duplicate)),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_test_send(duplicate, publish_qos2_duplicate, sizeof(publish_qos2_duplicate)),
+        TURBO_OK);
     check_int_eq(flowie_test_recv_exact(duplicate, received, sizeof(pubrec)), TURBO_OK);
     check_mem_eq(received, pubrec, sizeof(pubrec));
     check_size_eq(atomic_load_explicit(&capture.calls, memory_order_acquire), 2u);
@@ -2528,9 +2833,9 @@ spec("Flowie MQTT endpoint primitive") {
   }
 
   it("MQTT-OWNER-003 takes over MQTT 3.1.1 by closing the old connection") {
-    static const uint8_t connect_packet[] = {0x10u, 0x0fu, 0x00u, 0x04u, 'M',   'Q', 'T', 'T',
-                                             0x04u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u, 'v', '3',
-                                             'x'};
+    static const uint8_t connect_packet[] = {0x10u, 0x0fu, 0x00u, 0x04u, 'M',   'Q',
+                                             'T',   'T',   0x04u, 0x00u, 0x00u, 0x3cu,
+                                             0x00u, 0x03u, 'v',   '3',   'x'};
     static const uint8_t first_connack[] = {0x20u, 0x02u, 0x00u, 0x00u};
     static const uint8_t takeover_connack[] = {0x20u, 0x02u, 0x01u, 0x00u};
     static const uint8_t ping[] = {0xc0u, 0x00u};
@@ -2551,7 +2856,8 @@ spec("Flowie MQTT endpoint primitive") {
     replacement = flowie_test_connect(port);
     check_true(old_connection != FLOWIE_TEST_INVALID_SOCKET);
     check_true(replacement != FLOWIE_TEST_INVALID_SOCKET);
-    check_int_eq(flowie_test_send(old_connection, connect_packet, sizeof(connect_packet)), TURBO_OK);
+    check_int_eq(flowie_test_send(old_connection, connect_packet, sizeof(connect_packet)),
+                 TURBO_OK);
     check_int_eq(flowie_test_recv_exact(old_connection, received, sizeof(first_connack)), TURBO_OK);
     check_mem_eq(received, first_connack, sizeof(first_connack));
     check_int_eq(flowie_test_send(replacement, connect_packet, sizeof(connect_packet)), TURBO_OK);
@@ -2569,18 +2875,16 @@ spec("Flowie MQTT endpoint primitive") {
   }
 
   it("MQTT-PROTO-001/002/003/005/006/008/010 returns exact reasons for hostile packets") {
-    static const uint8_t connect_packet[] = {
-        0x10u, 0x10u, 0x00u, 0x04u, 'M', 'Q', 'T', 'T', 0x05u, 0x02u,
-        0x00u, 0x3cu, 0x00u, 0x00u, 0x03u, 'b', 'a', 'd'};
+    static const uint8_t connect_packet[] = {0x10u, 0x10u, 0x00u, 0x04u, 'M',   'Q',
+                                             'T',   'T',   0x05u, 0x02u, 0x00u, 0x3cu,
+                                             0x00u, 0x00u, 0x03u, 'b',   'a',   'd'};
     static const uint8_t invalid_flags[] = {0xc1u, 0x00u};
     static const uint8_t malformed_vbi[] = {0x30u, 0x80u, 0x00u};
-    static const uint8_t invalid_utf8[] = {0x30u, 0x05u, 0x00u, 0x02u,
-                                           0xc0u, 0x80u, 0x00u};
-    static const uint8_t duplicate_topic_alias[] = {0x30u, 0x0au, 0x00u, 0x01u, 'a',
-                                                     0x06u, 0x23u, 0x00u, 0x01u, 0x23u,
-                                                     0x00u, 0x02u};
+    static const uint8_t invalid_utf8[] = {0x30u, 0x05u, 0x00u, 0x02u, 0xc0u, 0x80u, 0x00u};
+    static const uint8_t duplicate_topic_alias[] = {0x30u, 0x0au, 0x00u, 0x01u, 'a',   0x06u,
+                                                    0x23u, 0x00u, 0x01u, 0x23u, 0x00u, 0x02u};
     static const uint8_t disallowed_receive_maximum[] = {0x30u, 0x07u, 0x00u, 0x01u, 'a',
-                                                          0x03u, 0x21u, 0x00u, 0x01u};
+                                                         0x03u, 0x21u, 0x00u, 0x01u};
     static const uint8_t oversized_header[] = {0x30u, 0x1fu};
     static const struct {
       const uint8_t *packet;
@@ -2632,13 +2936,12 @@ spec("Flowie MQTT endpoint primitive") {
   }
 
   it("MQTT-PROTO-004 rejects zero MQTT 5 CONNECT limits before admitting a session") {
-    static const uint8_t zero_receive_maximum[] = {
-        0x10u, 0x13u, 0x00u, 0x04u, 'M',   'Q', 'T', 'T', 0x05u, 0x02u, 0x00u,
-        0x3cu, 0x03u, 0x21u, 0x00u, 0x00u, 0x00u, 0x03u, 'z',   'r',   'm'};
+    static const uint8_t zero_receive_maximum[] = {0x10u, 0x13u, 0x00u, 0x04u, 'M',   'Q',   'T',
+                                                   'T',   0x05u, 0x02u, 0x00u, 0x3cu, 0x03u, 0x21u,
+                                                   0x00u, 0x00u, 0x00u, 0x03u, 'z',   'r',   'm'};
     static const uint8_t zero_maximum_packet_size[] = {
-        0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',   0x05u, 0x02u, 0x00u,
-        0x3cu, 0x05u, 0x27u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x03u, 'z',   'm',
-        'p'};
+        0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',   0x05u, 0x02u, 0x00u, 0x3cu,
+        0x05u, 0x27u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x03u, 'z',   'm',   'p'};
     static const struct {
       const uint8_t *packet;
       size_t packet_size;
@@ -2663,26 +2966,25 @@ spec("Flowie MQTT endpoint primitive") {
   }
 
   it("MQTT-OWNER-005 returns quota reasons without disturbing admitted state") {
-    static const uint8_t first_connect[] = {
-        0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T', 0x05u, 0x00u, 0x00u, 0x3cu,
-        0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u, 'o',   'n',   'e'};
-    static const uint8_t second_connect[] = {
-        0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T', 0x05u, 0x00u, 0x00u, 0x3cu,
-        0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u, 't',   'w',   'o'};
+    static const uint8_t first_connect[] = {0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',
+                                            0x05u, 0x00u, 0x00u, 0x3cu, 0x05u, 0x11u, 0x00u, 0x00u,
+                                            0x00u, 0x3cu, 0x00u, 0x03u, 'o',   'n',   'e'};
+    static const uint8_t second_connect[] = {0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',
+                                             0x05u, 0x00u, 0x00u, 0x3cu, 0x05u, 0x11u, 0x00u, 0x00u,
+                                             0x00u, 0x3cu, 0x00u, 0x03u, 't',   'w',   'o'};
     static const uint8_t subscribe_first[] = {0x82u, 0x07u, 0x00u, 0x01u, 0x00u,
-                                               0x00u, 0x01u, 'a',   0x00u};
+                                              0x00u, 0x01u, 'a',   0x00u};
     static const uint8_t subscribe_over_quota[] = {0x82u, 0x07u, 0x00u, 0x02u, 0x00u,
-                                                    0x00u, 0x01u, 'b',   0x00u};
+                                                   0x00u, 0x01u, 'b',   0x00u};
     static const uint8_t suback_first[] = {0x90u, 0x04u, 0x00u, 0x01u, 0x00u, 0x00u};
     static const uint8_t suback_quota[] = {0x90u, 0x04u, 0x00u, 0x02u, 0x00u, 0x97u};
     static const uint8_t connack_quota[] = {0x20u, 0x03u, 0x00u, 0x97u, 0x00u};
-    static const uint8_t retained_first[] = {0x33u, 0x09u, 0x00u, 0x03u, 'r', '/', '1',
-                                             0x00u, 0x0au, 0x00u, 'x'};
-    static const uint8_t retained_over_quota[] = {0x33u, 0x09u, 0x00u, 0x03u, 'r', '/', '2',
-                                                  0x00u, 0x0bu, 0x00u, 'y'};
+    static const uint8_t retained_first[] = {0x33u, 0x09u, 0x00u, 0x03u, 'r', '/',
+                                             '1',   0x00u, 0x0au, 0x00u, 'x'};
+    static const uint8_t retained_over_quota[] = {0x33u, 0x09u, 0x00u, 0x03u, 'r', '/',
+                                                  '2',   0x00u, 0x0bu, 0x00u, 'y'};
     static const uint8_t retained_ack[] = {0x40u, 0x02u, 0x00u, 0x0au};
-    static const uint8_t retained_quota_ack[] = {0x40u, 0x04u, 0x00u,
-                                                 0x0bu, 0x97u, 0x00u};
+    static const uint8_t retained_quota_ack[] = {0x40u, 0x04u, 0x00u, 0x0bu, 0x97u, 0x00u};
     static const uint8_t ping[] = {0xc0u, 0x00u};
     static const uint8_t pingresp[] = {0xd0u, 0x00u};
     uint8_t received[8];
@@ -2731,9 +3033,9 @@ spec("Flowie MQTT endpoint primitive") {
   }
 
   it("MQTT-OWNER-005 closes only the transport admitted beyond the connection HWM") {
-    static const uint8_t connect_packet[] = {
-        0x10u, 0x12u, 0x00u, 0x04u, 'M', 'Q', 'T', 'T', 0x05u, 0x02u,
-        0x00u, 0x3cu, 0x00u, 0x00u, 0x05u, 'h', 'w', 'm', '-', '1'};
+    static const uint8_t connect_packet[] = {0x10u, 0x12u, 0x00u, 0x04u, 'M',   'Q',   'T',
+                                             'T',   0x05u, 0x02u, 0x00u, 0x3cu, 0x00u, 0x00u,
+                                             0x05u, 'h',   'w',   'm',   '-',   '1'};
     static const uint8_t ping[] = {0xc0u, 0x00u};
     static const uint8_t pingresp[] = {0xd0u, 0x00u};
     flowie_endpoint_capture_t capture = {0};
@@ -3114,6 +3416,11 @@ spec("Flowie MQTT endpoint primitive") {
   }
 
   it("bridges PUBLISH traffic across MQTT 3.1, MQTT 3.1.1, and MQTT 5 sessions") {
+    enum {
+      BRIDGE_EXPIRY_INTERVAL_SECONDS = 10u,
+      BRIDGE_EXPIRY_VALUE_SIZE = 4u,
+      BRIDGE_TRAILING_PAYLOAD_SIZE = 1u,
+    };
     static const uint8_t connect_v31[] = {0x10u, 0x11u, 0x00u, 0x06u, 'M',   'Q',   'I',
                                           's',   'd',   'p',   0x03u, 0x02u, 0x00u, 0x3cu,
                                           0x00u, 0x03u, 'v',   '3',   'l'};
@@ -3121,9 +3428,9 @@ spec("Flowie MQTT endpoint primitive") {
                                            0x02u, 0x00u, 0x3cu, 0x00u, 0x03u, 'v', '3', 's'};
     static const uint8_t connect_v5[] = {0x10u, 0x10u, 0x00u, 0x04u, 'M',   'Q',   'T', 'T', 0x05u,
                                          0x02u, 0x00u, 0x3cu, 0x00u, 0x00u, 0x03u, 'v', '5', 'p'};
-    static const uint8_t connect_v5_sub[] = {0x10u, 0x10u, 0x00u, 0x04u, 'M',   'Q',   'T', 'T',
-                                             0x05u, 0x02u, 0x00u, 0x3cu, 0x00u, 0x00u, 0x03u, 'v',
-                                             '5',   's'};
+    static const uint8_t connect_v5_sub[] = {0x10u, 0x10u, 0x00u, 0x04u, 'M',   'Q',
+                                             'T',   'T',   0x05u, 0x02u, 0x00u, 0x3cu,
+                                             0x00u, 0x00u, 0x03u, 'v',   '5',   's'};
     static const uint8_t connack_v311[] = {0x20u, 0x02u, 0x00u, 0x00u};
     static const uint8_t subscribe_v31[] = {0x82u, 0x0cu, 0x00u, 0x03u, 0x00u, 0x07u, 'c',
                                             'r',   'o',   's',   's',   '/',   '+',   0x01u};
@@ -3150,7 +3457,7 @@ spec("Flowie MQTT endpoint primitive") {
                                          0x00u, 0x01u,
                                          'v',   FLOWIE_MQTT_PROPERTY_MESSAGE_EXPIRY_INTERVAL,
                                          0x00u, 0x00u,
-                                         0x00u, 0x0au,
+                                         0x00u, BRIDGE_EXPIRY_INTERVAL_SECONDS,
                                          'x'};
     static const uint8_t puback_v5[] = {0x40u, 0x02u, 0x00u, 0x2au};
     static const uint8_t delivery_v311[] = {0x32u, 0x0cu, 0x00u, 0x07u, 'c',   'r',   'o',
@@ -3160,9 +3467,20 @@ spec("Flowie MQTT endpoint primitive") {
                                            's',   's',   '/',   'a',   0x00u, 0x01u, 'x'};
     static const uint8_t delivery_v31_ack[] = {0x40u, 0x02u, 0x00u, 0x01u};
     static const uint8_t delivery_v5_properties[] = {
-        0x32u, 0x19u, 0x00u, 0x07u, 'c',   'r',   'o',   's',   's',   '/',
-        'a',   0x00u, 0x01u, 0x0cu, 0x26u, 0x00u, 0x01u, 'k',   0x00u, 0x01u,
-        'v',   FLOWIE_MQTT_PROPERTY_MESSAGE_EXPIRY_INTERVAL, 0x00u, 0x00u, 0x00u, 0x0au, 'x'};
+        0x32u, 0x19u,
+        0x00u, 0x07u,
+        'c',   'r',
+        'o',   's',
+        's',   '/',
+        'a',   0x00u,
+        0x01u, 0x0cu,
+        0x26u, 0x00u,
+        0x01u, 'k',
+        0x00u, 0x01u,
+        'v',   FLOWIE_MQTT_PROPERTY_MESSAGE_EXPIRY_INTERVAL,
+        0x00u, 0x00u,
+        0x00u, BRIDGE_EXPIRY_INTERVAL_SECONDS,
+        'x'};
     static const uint8_t delivery_v5_properties_ack[] = {0x40u, 0x02u, 0x00u, 0x01u};
     static const uint8_t publish_v311[] = {0x32u, 0x0eu, 0x00u, 0x09u, 'r', 'e',   'v',   'e',
                                            'r',   's',   'e',   '/',   'a', 0x00u, 0x2bu, 'y'};
@@ -3184,6 +3502,9 @@ spec("Flowie MQTT endpoint primitive") {
     flowie_test_socket_t client_v311;
     flowie_test_socket_t client_v5;
     flowie_test_socket_t client_v5_sub;
+    const size_t delivery_expiry_offset =
+        sizeof(delivery_v5_properties) - BRIDGE_EXPIRY_VALUE_SIZE - BRIDGE_TRAILING_PAYLOAD_SIZE;
+    uint32_t delivery_expiry_interval;
     check_int_gt(port, 0);
     check_not_null(flow);
     check_int_eq(turbo_flow_start(flow), TURBO_OK);
@@ -3212,9 +3533,9 @@ spec("Flowie MQTT endpoint primitive") {
     check_int_eq(flowie_test_send(client_v311, subscribe_v311, sizeof(subscribe_v311)), TURBO_OK);
     check_int_eq(flowie_test_recv_exact(client_v311, received, sizeof(suback_v311)), TURBO_OK);
     check_mem_eq(received, suback_v311, sizeof(suback_v311));
-    check_int_eq(flowie_test_send(client_v5_sub, subscribe_v5_properties,
-                                  sizeof(subscribe_v5_properties)),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_test_send(client_v5_sub, subscribe_v5_properties, sizeof(subscribe_v5_properties)),
+        TURBO_OK);
     check_int_eq(flowie_test_recv_exact(client_v5_sub, received, sizeof(suback_v5_properties)),
                  TURBO_OK);
     check_mem_eq(received, suback_v5_properties, sizeof(suback_v5_properties));
@@ -3227,7 +3548,17 @@ spec("Flowie MQTT endpoint primitive") {
     check_mem_eq(received, delivery_v31, sizeof(delivery_v31));
     check_int_eq(flowie_test_recv_exact(client_v5_sub, received, sizeof(delivery_v5_properties)),
                  TURBO_OK);
-    check_mem_eq(received, delivery_v5_properties, sizeof(delivery_v5_properties));
+    check_mem_eq(received, delivery_v5_properties, delivery_expiry_offset);
+    delivery_expiry_interval = ((uint32_t)received[delivery_expiry_offset] << 24u) |
+                               ((uint32_t)received[delivery_expiry_offset + 1u] << 16u) |
+                               ((uint32_t)received[delivery_expiry_offset + 2u] << 8u) |
+                               (uint32_t)received[delivery_expiry_offset + 3u];
+    info("forwarded_message_expiry_interval=%u", delivery_expiry_interval);
+    check_true(delivery_expiry_interval != 0u);
+    check_true(delivery_expiry_interval <= BRIDGE_EXPIRY_INTERVAL_SECONDS);
+    check_mem_eq(received + delivery_expiry_offset + BRIDGE_EXPIRY_VALUE_SIZE,
+                 delivery_v5_properties + delivery_expiry_offset + BRIDGE_EXPIRY_VALUE_SIZE,
+                 BRIDGE_TRAILING_PAYLOAD_SIZE);
     check_int_eq(flowie_test_send(client_v31, delivery_v31_ack, sizeof(delivery_v31_ack)),
                  TURBO_OK);
     check_int_eq(flowie_test_send(client_v311, delivery_v311_ack, sizeof(delivery_v311_ack)),
@@ -3386,9 +3717,9 @@ spec("Flowie MQTT endpoint primitive") {
     check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(publisher_pubrec_first)),
                  TURBO_OK);
     check_mem_eq(received, publisher_pubrec_first, sizeof(publisher_pubrec_first));
-    check_int_eq(flowie_test_send(publisher, publisher_pubrel_first,
-                                  sizeof(publisher_pubrel_first)),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_test_send(publisher, publisher_pubrel_first, sizeof(publisher_pubrel_first)),
+        TURBO_OK);
     check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(publisher_pubcomp_first)),
                  TURBO_OK);
     check_mem_eq(received, publisher_pubcomp_first, sizeof(publisher_pubcomp_first));
@@ -3397,9 +3728,9 @@ spec("Flowie MQTT endpoint primitive") {
     check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(publisher_pubrec_second)),
                  TURBO_OK);
     check_mem_eq(received, publisher_pubrec_second, sizeof(publisher_pubrec_second));
-    check_int_eq(flowie_test_send(publisher, publisher_pubrel_second,
-                                  sizeof(publisher_pubrel_second)),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_test_send(publisher, publisher_pubrel_second, sizeof(publisher_pubrel_second)),
+        TURBO_OK);
     check_int_eq(flowie_test_recv_exact(publisher, received, sizeof(publisher_pubcomp_second)),
                  TURBO_OK);
     check_mem_eq(received, publisher_pubcomp_second, sizeof(publisher_pubcomp_second));
@@ -3407,26 +3738,26 @@ spec("Flowie MQTT endpoint primitive") {
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(delivery_first)), TURBO_OK);
     check_mem_eq(received, delivery_first, sizeof(delivery_first));
     check_false(flowie_test_socket_readable(subscriber, 100u));
-    check_int_eq(flowie_test_send(subscriber, subscriber_pubrec_first,
-                                  sizeof(subscriber_pubrec_first)),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_test_send(subscriber, subscriber_pubrec_first, sizeof(subscriber_pubrec_first)),
+        TURBO_OK);
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(delivery_second)), TURBO_OK);
     check_mem_eq(received, delivery_second, sizeof(delivery_second));
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(subscriber_pubrel_first)),
                  TURBO_OK);
     check_mem_eq(received, subscriber_pubrel_first, sizeof(subscriber_pubrel_first));
-    check_int_eq(flowie_test_send(subscriber, subscriber_pubcomp_first,
-                                  sizeof(subscriber_pubcomp_first)),
-                 TURBO_OK);
-    check_int_eq(flowie_test_send(subscriber, subscriber_pubrec_second,
-                                  sizeof(subscriber_pubrec_second)),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_test_send(subscriber, subscriber_pubcomp_first, sizeof(subscriber_pubcomp_first)),
+        TURBO_OK);
+    check_int_eq(
+        flowie_test_send(subscriber, subscriber_pubrec_second, sizeof(subscriber_pubrec_second)),
+        TURBO_OK);
     check_int_eq(flowie_test_recv_exact(subscriber, received, sizeof(subscriber_pubrel_second)),
                  TURBO_OK);
     check_mem_eq(received, subscriber_pubrel_second, sizeof(subscriber_pubrel_second));
-    check_int_eq(flowie_test_send(subscriber, subscriber_pubcomp_second,
-                                  sizeof(subscriber_pubcomp_second)),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_test_send(subscriber, subscriber_pubcomp_second, sizeof(subscriber_pubcomp_second)),
+        TURBO_OK);
     check_false(flowie_test_socket_readable(subscriber, 50u));
 
     flowie_test_socket_close(subscriber);
@@ -3439,17 +3770,15 @@ spec("Flowie MQTT endpoint primitive") {
     static const uint8_t publisher_connect[] = {0x10u, 0x10u, 0x00u, 0x04u, 'M',   'Q',
                                                 'T',   'T',   0x05u, 0x02u, 0x00u, 0x3cu,
                                                 0x00u, 0x00u, 0x03u, 'm',   'p',   'p'};
-    static const uint8_t subscribe[] = {0x82u, 0x0du, 0x00u, 0x01u, 0x00u, 0x00u,
-                                        0x07u, 'l',   'a',   'r',   'g',   'e',   '/',
-                                        '#',   0x01u};
+    static const uint8_t subscribe[] = {0x82u, 0x0du, 0x00u, 0x01u, 0x00u, 0x00u, 0x07u, 'l',
+                                        'a',   'r',   'g',   'e',   '/',   '#',   0x01u};
     static const uint8_t suback[] = {0x90u, 0x04u, 0x00u, 0x01u, 0x00u, 0x01u};
-    static const uint8_t publish[] = {0x32u, 0x1cu, 0x00u, 0x07u, 'l',   'a',   'r',   'g',
-                                      'e',   '/',   'a',   0x00u, 0x2au, 0x00u, '0',   '1',
-                                      '2',   '3',   '4',   '5',   '6',   '7',   '8',   '9',
-                                      'a',   'b',   'c',   'd',   'e',   'f'};
+    static const uint8_t publish[] = {0x32u, 0x1cu, 0x00u, 0x07u, 'l', 'a', 'r', 'g', 'e', '/',
+                                      'a',   0x00u, 0x2au, 0x00u, '0', '1', '2', '3', '4', '5',
+                                      '6',   '7',   '8',   '9',   'a', 'b', 'c', 'd', 'e', 'f'};
     static const uint8_t puback[] = {0x40u, 0x02u, 0x00u, 0x2au};
-    static const uint8_t maximum_packet_properties[] = {
-        FLOWIE_MQTT_PROPERTY_MAXIMUM_PACKET_SIZE, 0x00u, 0x00u, 0x00u, 0x14u};
+    static const uint8_t maximum_packet_properties[] = {FLOWIE_MQTT_PROPERTY_MAXIMUM_PACKET_SIZE,
+                                                        0x00u, 0x00u, 0x00u, 0x14u};
     flowie_mqtt_connect_packet_t subscriber_connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
     uint8_t subscriber_connect_packet[64];
     uint8_t received[sizeof(suback)];
@@ -3702,9 +4031,9 @@ spec("Flowie MQTT endpoint primitive") {
                                   sizeof(second_subscriber_connect)),
                  TURBO_OK);
     check_int_eq(flowie_test_recv_connack(second_subscriber, 0u, 0u), TURBO_OK);
-    check_int_eq(flowie_test_send(second_subscriber, subscribe_rap1_rh2,
-                                  sizeof(subscribe_rap1_rh2)),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_test_send(second_subscriber, subscribe_rap1_rh2, sizeof(subscribe_rap1_rh2)),
+        TURBO_OK);
     check_int_eq(flowie_test_recv_exact(second_subscriber, received, sizeof(suback5)), TURBO_OK);
     check_mem_eq(received, suback5, sizeof(suback5));
     check_false(flowie_test_socket_readable(second_subscriber, 50u));
@@ -3761,8 +4090,8 @@ spec("Flowie MQTT endpoint primitive") {
                                               'i',   'd',   '/',   'a',   0x02u};
     static const uint8_t suback_wildcard[] = {0x90u, 0x04u, 0x00u, 0x01u, 0x00u, 0x01u};
     static const uint8_t suback_exact[] = {0x90u, 0x04u, 0x00u, 0x02u, 0x00u, 0x02u};
-    static const uint8_t publish[] = {0x34u, 0x0bu, 0x00u, 0x05u, 's',   'i',
-                                      'd',   '/',   'a',   0x00u, 0x2au, 0x00u, 'x'};
+    static const uint8_t publish[] = {0x34u, 0x0bu, 0x00u, 0x05u, 's',   'i', 'd',
+                                      '/',   'a',   0x00u, 0x2au, 0x00u, 'x'};
     static const uint8_t publisher_pubrec[] = {0x50u, 0x02u, 0x00u, 0x2au};
     static const uint8_t publisher_pubrel[] = {0x62u, 0x02u, 0x00u, 0x2au};
     static const uint8_t publisher_pubcomp[] = {0x70u, 0x02u, 0x00u, 0x2au};
@@ -4424,9 +4753,9 @@ spec("Flowie MQTT endpoint primitive") {
     static const uint8_t slow_subscribe[] = {
         0x82u, 0x18u, 0x00u, 0x01u, 0x02u, 0x0bu, 0x01u, 0x00u, 0x10u, '$', 's', 'h', 'a',
         'r',   'e',   '/',   'w',   'o',   'r',   'k',   'e',   'r',   's', '/', '#', 0x00u};
-    static const uint8_t subscribe[] = {
-        0x82u, 0x16u, 0x00u, 0x01u, 0x00u, 0x00u, 0x10u, '$', 's', 'h', 'a', 'r', 'e',
-        '/',   'w',   'o',   'r',   'k',   'e',   'r',   's', '/', '#', 0x00u};
+    static const uint8_t subscribe[] = {0x82u, 0x16u, 0x00u, 0x01u, 0x00u, 0x00u, 0x10u, '$',
+                                        's',   'h',   'a',   'r',   'e',   '/',   'w',   'o',
+                                        'r',   'k',   'e',   'r',   's',   '/',   '#',   0x00u};
     static const uint8_t suback[] = {0x90u, 0x04u, 0x00u, 0x01u, 0x00u, 0x00u};
     static const uint8_t pingreq[] = {0xc0u, 0x00u};
     static const uint8_t pingresp[] = {0xd0u, 0x00u};
@@ -4712,9 +5041,9 @@ spec("Flowie MQTT endpoint primitive") {
     static const uint8_t subscribe[] = {0x82u, 0x07u, 0x00u, 0x01u, 0x00u,
                                         0x00u, 0x01u, '#',   0x00u};
     static const uint8_t suback[] = {0x90u, 0x04u, 0x00u, 0x01u, 0x00u, 0x00u};
-    static const uint8_t takeover_publish[] = {
-        0x30u, 0x0fu, 0x00u, 0x0bu, 't', 'a', 'k', 'e', 'o', 'v', 'e', 'r', '/', 'o', 'k', 0x00u,
-        'x'};
+    static const uint8_t takeover_publish[] = {0x30u, 0x0fu, 0x00u, 0x0bu, 't', 'a',
+                                               'k',   'e',   'o',   'v',   'e', 'r',
+                                               '/',   'o',   'k',   0x00u, 'x'};
     static const uint8_t pingreq[] = {0xc0u, 0x00u};
     static const uint8_t pingresp[] = {0xd0u, 0x00u};
     flowie_mqtt_publish_packet_t publish = FLOWIE_MQTT_PUBLISH_PACKET_INIT;
@@ -4734,8 +5063,8 @@ spec("Flowie MQTT endpoint primitive") {
     turbo_flow_connection_snapshot_t snapshot = {0};
     turbo_flow_resource_snapshot_t queue_snapshot = TURBO_FLOW_RESOURCE_SNAPSHOT_INIT;
     turbo_flow_resource_snapshot_t session_snapshot = TURBO_FLOW_RESOURCE_SNAPSHOT_INIT;
-    turbo_flow_t *flow = flowie_fanout_flow_with_limits(
-        port, PENDING_SEND_PACKET_CAPACITY, PENDING_SEND_HWM_BYTES, 8u);
+    turbo_flow_t *flow = flowie_fanout_flow_with_limits(port, PENDING_SEND_PACKET_CAPACITY,
+                                                        PENDING_SEND_HWM_BYTES, 8u);
     flowie_test_socket_t publisher = FLOWIE_TEST_INVALID_SOCKET;
     flowie_test_socket_t subscriber = FLOWIE_TEST_INVALID_SOCKET;
     flowie_test_socket_t replacement = FLOWIE_TEST_INVALID_SOCKET;
@@ -4800,12 +5129,11 @@ spec("Flowie MQTT endpoint primitive") {
     check_int_eq(flowie_test_send(publisher, takeover_publish, sizeof(takeover_publish)), TURBO_OK);
     for (size_t i = 0u; i <= PENDING_SEND_MESSAGES; ++i) {
       int readable = flowie_test_socket_readable(replacement, 4000u);
-      int recv_rc = flowie_test_recv_packet(replacement, wire, PENDING_SEND_PACKET_CAPACITY,
-                                            &received_size);
+      int recv_rc =
+          flowie_test_recv_packet(replacement, wire, PENDING_SEND_PACKET_CAPACITY, &received_size);
       check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0u, &snapshot), TURBO_OK);
-      info("pending_recv=%zu readable=%d status=%d size=%zu type=%u connections=%zu", i,
-           readable, recv_rc, received_size,
-           recv_rc == TURBO_OK ? (unsigned int)(wire[0] >> 4u) : 0u,
+      info("pending_recv=%zu readable=%d status=%d size=%zu type=%u connections=%zu", i, readable,
+           recv_rc, received_size, recv_rc == TURBO_OK ? (unsigned int)(wire[0] >> 4u) : 0u,
            snapshot.connections_current);
       check_true(readable);
       check_int_eq(recv_rc, TURBO_OK);

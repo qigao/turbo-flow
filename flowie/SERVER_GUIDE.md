@@ -15,7 +15,8 @@ Flowie 将部署事实与数据流拓扑分开：
 - `.flow` 保存 source、stage、adapter、operation 和边的关系。
 
 这里的完整 `flowie_server` 配置式 broker 才是基于 TurboFlow 的典型应用。协议库本身没有
-Graph；单独注册的 Flowie endpoint 只是可复用组件，除非调用方进一步提供完整产品装配。
+Graph；`flowie_endpoint_core_*` 直连 endpoint 不创建 Graph。只有调用方显式注册 Graph adapter
+并提供拓扑时，它才成为 TurboFlow composition 的一部分。
 
 可直接使用仓库中的完整示例：
 
@@ -23,7 +24,9 @@ Graph；单独注册的 Flowie endpoint 只是可复用组件，除非调用方�
 - [flowie.flow](examples/flowie.flow)
 
 服务端不会从 YAML 中读取 ACL rule body，也不会连接用户认证数据库。用户认证数据库只能由独立认证
-服务访问；Flowie 只访问 HTTPS auth/ACL 服务，或在单机部署中使用本地 SQLite ACL bundle。
+服务访问；Flowie 只访问 HTTPS auth/ACL 服务。单机部署也由本机 `flowie-control` 提供 loopback HTTPS，
+Broker 不直接读取 SQLite 或 PostgreSQL。`flowie-control` 可把自己的本地 Auth/ACL/管理事实存入
+SQLite 或 PostgreSQL；该数据库连接与权限不会进入 Broker。
 
 ## 2. 构建
 
@@ -151,9 +154,13 @@ $env:TURBONET_TLS_KEY_FILE = "C:\certs\server-key.pem"
 config:
   transport: wss
   path: /mqtt
+  tls_client_ca_file: C:/certs/mqtt-client-ca.pem
 ```
 
-证书缺失或无法加载时启动失败。私钥文件应只允许服务账户读取，不得写入 YAML、日志或镜像的公共层。
+`tls_client_ca_file` 仅允许用于 TLS/WSS；配置后客户端证书变为必需，并且 endpoint 必须绑定
+`security_realm`。证书链验证成功后，Flowie 才把规范 SHA-256 指纹传给 Auth provider。省略该字段时
+保持 server-auth-only TLS，Auth 请求中的客户端证书字段为空。证书或 CA 缺失、无法加载或客户端验证
+失败时启动/握手 fail closed。私钥文件应只允许服务账户读取，不得写入 YAML、日志或镜像的公共层。
 
 WS/WSS 的 path 是精确匹配，不做前缀或大小写归一化。客户端必须在 Upgrade 请求中提供
 `Sec-WebSocket-Protocol: mqtt`；缺失或不包含 `mqtt` token 的请求会在 MQTT handler 和 session admission
@@ -180,7 +187,7 @@ channels:
     kind: auth_provider
     config:
       backend: https
-      url: https://auth.internal.example/v2/authenticate
+      url: https://auth.internal.example/v3/authenticate
       method: password
       service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
       timeout_ms: 3000
@@ -199,7 +206,13 @@ channels:
 - `client_cert_file` 与 `client_key_file` 必须同时存在。
 - 私钥密码只允许使用 key-provider reference，不允许 YAML literal。
 - service token 每次请求重新从 key provider 获取，以支持轮换。
+- Auth v3 的 `remote_address` 只来自直接 socket peer；当前不信任 PROXY protocol、
+  `X-Forwarded-For` 或其他代理 header。代理部署中该字段是代理地址。
+- Auth v3 的 `peer_certificate_sha256` 只来自已启用 `tls_client_ca_file` 的 TLS/WSS listener，并与
+  Broker 调用 Auth 服务时使用的 mTLS client certificate 相互独立。
 - 认证失败、ACL bundle 过期、证书失败和 provider 网络错误全部 fail closed。
+- bundled 产品只注册 `https` auth backend；FlowStore、session store、Graph adapter、本地
+  SQLite/Redis/PostgreSQL 或进程内 OIDC/LDAP/RADIUS 模块都不能成为认证来源。
 - Flowie 进程网络 ACL 只允许访问认证服务；认证数据库不得暴露给 Flowie 网段或公网。
 - auth service 返回的 principal 必须带短 TTL。到期时即使连接完全空闲，MQTT 5 也会返回
   `DISCONNECT 0x87` 后关闭，MQTT 3.x 直接关闭；MQTT 5 必须在到期前完成 Enhanced AUTH
@@ -223,8 +236,9 @@ enhanced provider 是 MQTT 5 多轮认证状态机，接口包含：
 AUTH reason `0x18` 继续认证，已连接会话使用 `0x19` 发起 re-authentication。
 
 内置 HTTPS provider 只支持一次 HTTPS credential 验证：它的 `begin` 可以直接成功，但
-`continue_exchange` 返回 `TURBO_ENOTSUP`。需要真正多轮认证时，应由自定义 product composition root
-注入实现完整 enhanced provider ABI 的模块，不能依靠 YAML 将一次性 HTTPS provider 自动升级为多轮协议。
+`continue_exchange` 返回 `TURBO_ENOTSUP`。底层 ABI 允许程序化宿主实现 exchange，但 bundled 产品不把
+自定义进程内模块作为第二认证来源。若未来支持真正多轮认证，必须定义版本化 HTTPS exchange 契约并
+完成取消、超时和重认证测试；当前部署不能依靠 YAML 把一次性 HTTPS provider 自动升级为多轮协议。
 
 MQTT 3.1/3.1.1 没有 MQTT 5 AUTH exchange，使用普通认证结果和各自版本可表达的 CONNACK 错误。
 

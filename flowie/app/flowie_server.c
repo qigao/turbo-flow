@@ -23,10 +23,6 @@
   #include "turbo_flow_http_acl.h"
   #include "turbo_flow_http_auth.h"
 #endif
-#ifdef FLOWIE_SERVER_HAVE_SQLITE_ACL
-  #include "turbo_flow_security_sqlite.h"
-#endif
-
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -162,7 +158,7 @@ int main(int argc, char **argv) {
   const turbo_flow_security_auth_provider_factory_t *auth_provider_factories[] = {
       turbo_flow_http_auth_provider_factory()};
 #endif
-  const turbo_flow_security_policy_provider_factory_t *policy_provider_factories[2];
+  const turbo_flow_security_policy_provider_factory_t *policy_provider_factories[1];
   size_t policy_provider_factory_count = 0u;
   const char *storage_backend_plugin_paths[FLOWIE_STORAGE_BACKEND_PLUGIN_MAX];
   size_t storage_backend_plugin_path_count = 0u;
@@ -200,10 +196,6 @@ int main(int argc, char **argv) {
   config.auth_provider_factories = auth_provider_factories;
   config.auth_provider_factory_count =
       sizeof(auth_provider_factories) / sizeof(auth_provider_factories[0]);
-#endif
-#ifdef FLOWIE_SERVER_HAVE_SQLITE_ACL
-  policy_provider_factories[policy_provider_factory_count++] =
-      turbo_flow_security_sqlite_provider_factory();
 #endif
 #ifdef FLOWIE_SERVER_HAVE_HTTPS_AUTH
   policy_provider_factories[policy_provider_factory_count++] =

@@ -69,12 +69,12 @@ channels:
 # Flowie never receives database coordinates: Redis, SQLite, PostgreSQL, or another credential
 # store remains private to the authentication service. The service-token value is resolved by the
 # host key provider and is never written into YAML. ACL rule bodies are also absent from YAML:
-# the realm references one exact HTTPS or embedded SQLite ACL provider.
+# the realm references the exact HTTPS ACL provider exposed by flowie-control.
 #  mqtt.auth-service:
 #    kind: auth_provider
 #    config:
 #      backend: https
-#      url: https://auth.internal.example/v2/authenticate
+#      url: https://auth.internal.example/v3/authenticate
 #      method: password
 #      service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
 #      timeout_ms: 3000
@@ -88,7 +88,7 @@ channels:
 #    kind: acl_provider
 #    config:
 #      backend: https
-#      url: https://auth.internal.example/v1/acl-bundle
+#      url: https://auth.internal.example/v3/acl
 #      service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
 #      timeout_ms: 3000
 #      max_response_size: 4194304
@@ -98,15 +98,6 @@ channels:
 #        client_cert_file: C:/certs/flowie-client.pem
 #        client_key_file: C:/certs/flowie-client-key.pem
 #        client_key_password_ref: env://FLOWIE_AUTH_TLS_KEY_PASSWORD
-# For a single-host control plane, use an embedded SQLite provider instead:
-#  mqtt.acl-local:
-#    kind: acl_provider
-#    config:
-#      backend: sqlite
-#      database_path: flowie-acl.sqlite3
-#      namespace_name: mqtt
-#      busy_timeout_ms: 1000
-#      max_rules: 4096
 #  security.main:
 #    kind: security_realm
 #    config:
@@ -152,6 +143,10 @@ adapters:
 # running without authentication:
 #      security_realm: security.main
 #      auth_method: password
+# For MQTT client mTLS, also change transport to tls/wss and configure the
+# client CA. This makes client certificates mandatory and forwards only the
+# CoroNet-verified SHA-256 fingerprint to Auth:
+#      tls_client_ca_file: C:/certs/mqtt-client-ca.pem
   # Explicit application data sink selected by the Policy route above.
   socket.application.output:
     kind: socket

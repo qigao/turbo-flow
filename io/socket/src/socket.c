@@ -18,14 +18,27 @@ static const turbo_flow_option_field_t FLOW_SOCKET_OPTION_FIELDS[] = {
     {"role", TURBO_FLOW_OPTION_ENUM, TURBO_FLOW_OPTION_REQUIRED, 0, 0, FLOW_SOCKET_ROLE_VALUES, 2},
     {"transport", TURBO_FLOW_OPTION_ENUM, TURBO_FLOW_OPTION_REQUIRED, 0, 0,
      TF_CORONET_TRANSPORT_VALUES, TF_CORONET_TRANSPORT_VALUE_COUNT},
-    {"kcp_fec", TURBO_FLOW_OPTION_BOOL, 0, 0, 0, NULL, 0},
-    {"kcp_fec_backend", TURBO_FLOW_OPTION_ENUM, 0, 0, 0, TF_CORONET_KCP_FEC_BACKEND_VALUES, 2},
+    {"kcp_pre_shared_key", TURBO_FLOW_OPTION_STRING, 0, 0, 0, NULL, 0},
+    {"kcp_mtu", TURBO_FLOW_OPTION_U32, TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 576,
+     UINT16_MAX, NULL, 0},
+    {"kcp_send_window", TURBO_FLOW_OPTION_U32,
+     TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1, UINT16_MAX, NULL, 0},
+    {"kcp_receive_window", TURBO_FLOW_OPTION_U32,
+     TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1, UINT16_MAX, NULL, 0},
+    {"kcp_interval_ms", TURBO_FLOW_OPTION_U32,
+     TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1, 100, NULL, 0},
+    {"kcp_handshake_retry_ms", TURBO_FLOW_OPTION_U32,
+     TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1, UINT16_MAX, NULL, 0},
+    {"kcp_fast_resend", TURBO_FLOW_OPTION_U32, TURBO_FLOW_OPTION_HAS_MAX, 0, UINT8_MAX, NULL, 0},
+    {"kcp_congestion_control", TURBO_FLOW_OPTION_BOOL, 0, 0, 0, NULL, 0},
     {"kcp_fec_data_shards", TURBO_FLOW_OPTION_U32,
-     TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1, 256, NULL, 0},
+     TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1, 255, NULL, 0},
     {"kcp_fec_parity_shards", TURBO_FLOW_OPTION_U32,
-     TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1, 256, NULL, 0},
+     TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1, 255, NULL, 0},
     {"kcp_fec_max_payload_size", TURBO_FLOW_OPTION_U32,
      TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1, UINT16_MAX, NULL, 0},
+    {"kcp_fec_receive_groups", TURBO_FLOW_OPTION_U32,
+     TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1, 64, NULL, 0},
     {"host", TURBO_FLOW_OPTION_STRING, 0, 0, 0, NULL, 0},
     {"port", TURBO_FLOW_OPTION_U32, TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1, 65535,
      NULL, 0},
@@ -113,9 +126,10 @@ typedef struct flow_coronet_socket_adapter_s {
   tf_coronet_socket_timeout_config_t timeouts;
   tf_coronet_socket_options_t socket_options;
   tf_coronet_udp_options_t udp_options;
-  turbo_kcp_fec_config_t kcp_fec;
-  int kcp_fec_configured;
+  turbo_kcp_config_t kcp_config;
+  int kcp_configured;
   int reuse_port;
+  uint32_t max_pump_iterations;
   atomic_int started;
   atomic_int quiesced;
   tf_connection_state_t connection;
@@ -186,12 +200,51 @@ static tf_coronet_transport_t flow_coronet_transport(turbo_flow_coronet_transpor
   return (tf_coronet_transport_t)transport;
 }
 
+static int flow_coronet_kcp_config_resolve(tf_coronet_transport_t transport,
+                                           const turbo_flow_coronet_socket_config_t *config,
+                                           turbo_kcp_config_t *out, int *configured) {
+  tf_coronet_kcp_options_t options;
+  turbo_kcp_config_t defaults;
+  if (!config || !out || !configured) return TURBO_EINVAL;
+  memset(&options, 0, sizeof(options));
+  if (transport != TF_CORONET_TRANSPORT_KCP) {
+    if (config->kcp_pre_shared_key || config->kcp_mtu || config->kcp_send_window ||
+        config->kcp_receive_window || config->kcp_interval_ms || config->kcp_handshake_retry_ms ||
+        config->kcp_fast_resend || config->kcp_congestion_control || config->kcp_fec_data_shards ||
+        config->kcp_fec_parity_shards || config->kcp_fec_max_payload_size ||
+        config->kcp_fec_receive_groups)
+      return TURBO_EINVAL;
+    return tf_coronet_kcp_options_resolve(transport, &options, out, configured);
+  }
+  if (tf_coronet_kcp_pre_shared_key_parse(config->kcp_pre_shared_key, options.pre_shared_key) !=
+      TURBO_OK)
+    return TURBO_EINVAL;
+  turbo_kcp_config_default(&defaults);
+  options.mtu = config->kcp_mtu ? config->kcp_mtu : defaults.mtu;
+  options.send_window = config->kcp_send_window ? config->kcp_send_window : defaults.send_window;
+  options.receive_window =
+      config->kcp_receive_window ? config->kcp_receive_window : defaults.receive_window;
+  options.interval_ms = config->kcp_interval_ms ? config->kcp_interval_ms : defaults.interval_ms;
+  options.handshake_retry_ms =
+      config->kcp_handshake_retry_ms ? config->kcp_handshake_retry_ms : defaults.handshake_retry_ms;
+  options.fast_resend = config->kcp_fast_resend ? config->kcp_fast_resend : defaults.fast_resend;
+  options.no_congestion_window = config->kcp_congestion_control ? 0 : 1;
+  options.data_shards =
+      config->kcp_fec_data_shards ? config->kcp_fec_data_shards : defaults.fec.data_shards;
+  options.parity_shards =
+      config->kcp_fec_parity_shards ? config->kcp_fec_parity_shards : defaults.fec.parity_shards;
+  options.max_payload_size = config->kcp_fec_max_payload_size ? config->kcp_fec_max_payload_size
+                                                              : defaults.fec.max_payload_size;
+  options.receive_group_count = config->kcp_fec_receive_groups ? config->kcp_fec_receive_groups
+                                                               : defaults.fec.receive_group_count;
+  return tf_coronet_kcp_options_resolve(transport, &options, out, configured);
+}
+
 int turbo_flow_coronet_socket_config_validate(const turbo_flow_coronet_socket_config_t *config) {
   tf_coronet_transport_t transport;
   tf_coronet_socket_timeout_config_t timeouts;
-  tf_coronet_kcp_fec_options_t fec_options;
-  turbo_kcp_fec_config_t fec_config;
-  int fec_configured = 0;
+  turbo_kcp_config_t kcp_config;
+  int kcp_configured = 0;
   int rc;
 
   if (!config || (config->role != TURBO_FLOW_CORONET_SOCKET_SOURCE &&
@@ -222,14 +275,9 @@ int turbo_flow_coronet_socket_config_validate(const turbo_flow_coronet_socket_co
     }
   }
 
-  memset(&fec_options, 0, sizeof(fec_options));
-  fec_options.enabled = config->kcp_fec;
-  fec_options.backend = config->kcp_fec_backend;
-  fec_options.data_shards = config->kcp_fec_data_shards;
-  fec_options.parity_shards = config->kcp_fec_parity_shards;
-  fec_options.max_payload_size = config->kcp_fec_max_payload_size;
-  rc = tf_coronet_kcp_fec_options_resolve(transport, &fec_options, &fec_config, &fec_configured);
+  rc = flow_coronet_kcp_config_resolve(transport, config, &kcp_config, &kcp_configured);
   if (rc != TURBO_OK) return rc;
+  turbo_kcp_config_wipe(&kcp_config);
 
   {
     tf_coronet_socket_options_t socket_options;
@@ -290,10 +338,18 @@ static const flow_socket_resolved_field_t FLOW_SOCKET_RESOLVED_FIELDS[] = {
     FLOW_SOCKET_FIELD(send_timeout_ms, FLOW_SOCKET_RESOLVED_U64, UINT64_MAX),
     FLOW_SOCKET_FIELD(recv_timeout_ms, FLOW_SOCKET_RESOLVED_U64, UINT64_MAX),
     FLOW_SOCKET_FIELD(handshake_timeout_ms, FLOW_SOCKET_RESOLVED_U64, UINT64_MAX),
-    FLOW_SOCKET_FIELD(kcp_fec, FLOW_SOCKET_RESOLVED_BOOL, 1u),
+    FLOW_SOCKET_FIELD(kcp_pre_shared_key, FLOW_SOCKET_RESOLVED_STRING, 0u),
+    FLOW_SOCKET_FIELD(kcp_mtu, FLOW_SOCKET_RESOLVED_U32, UINT16_MAX),
+    FLOW_SOCKET_FIELD(kcp_send_window, FLOW_SOCKET_RESOLVED_U32, UINT16_MAX),
+    FLOW_SOCKET_FIELD(kcp_receive_window, FLOW_SOCKET_RESOLVED_U32, UINT16_MAX),
+    FLOW_SOCKET_FIELD(kcp_interval_ms, FLOW_SOCKET_RESOLVED_U32, 100u),
+    FLOW_SOCKET_FIELD(kcp_handshake_retry_ms, FLOW_SOCKET_RESOLVED_U32, UINT16_MAX),
+    FLOW_SOCKET_FIELD(kcp_fast_resend, FLOW_SOCKET_RESOLVED_U32, UINT8_MAX),
+    FLOW_SOCKET_FIELD(kcp_congestion_control, FLOW_SOCKET_RESOLVED_BOOL, 1u),
     FLOW_SOCKET_FIELD(kcp_fec_data_shards, FLOW_SOCKET_RESOLVED_U32, UINT32_MAX),
     FLOW_SOCKET_FIELD(kcp_fec_parity_shards, FLOW_SOCKET_RESOLVED_U32, UINT32_MAX),
     FLOW_SOCKET_FIELD(kcp_fec_max_payload_size, FLOW_SOCKET_RESOLVED_U32, UINT32_MAX),
+    FLOW_SOCKET_FIELD(kcp_fec_receive_groups, FLOW_SOCKET_RESOLVED_U32, UINT16_MAX),
     FLOW_SOCKET_FIELD(reuse_port, FLOW_SOCKET_RESOLVED_BOOL, 1u),
     FLOW_SOCKET_FIELD(tcp_keepalive, FLOW_SOCKET_RESOLVED_BOOL, 1u),
     FLOW_SOCKET_FIELD(tcp_keepalive_idle_ms, FLOW_SOCKET_RESOLVED_U64, UINT64_MAX),
@@ -370,7 +426,6 @@ static int flow_socket_resolved_assign(const turbo_flow_resolved_adapter_view_t 
 static int flow_socket_config_from_resolved(const turbo_flow_resolved_config_t *resolved,
                                             const char *adapter_name,
                                             turbo_flow_coronet_socket_config_t *config) {
-  static const char *const fec_backend_values[] = {"none", "wirehair"};
   turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
   int have_role = 0;
   int have_transport = 0;
@@ -397,11 +452,6 @@ static int flow_socket_config_from_resolved(const turbo_flow_resolved_config_t *
       rc = flow_socket_resolved_enum(&view, name, TF_CORONET_TRANSPORT_VALUES,
                                      TF_CORONET_TRANSPORT_VALUE_COUNT, &config->transport);
       have_transport = rc == TURBO_OK;
-      matched = 1;
-    } else if (strcmp(name, "kcp_fec_backend") == 0) {
-      rc = flow_socket_resolved_enum(&view, name, fec_backend_values,
-                                     sizeof(fec_backend_values) / sizeof(fec_backend_values[0]),
-                                     &config->kcp_fec_backend);
       matched = 1;
     } else {
       rc = TURBO_EINVAL;
@@ -476,8 +526,8 @@ static void flow_coronet_sink_send_task(coro_t *co, void *arg) {
   }
   turbo_mutex_unlock(&adapter->request_mutex);
 
-  rc = tf_coronet_apply_kcp_fec(socket, flow_coronet_transport(adapter->transport),
-                                &adapter->kcp_fec, adapter->kcp_fec_configured);
+  rc = tf_coronet_apply_kcp_config(socket, flow_coronet_transport(adapter->transport),
+                                   &adapter->kcp_config, adapter->kcp_configured);
   if (rc != TURBO_OK) {
     flow_coronet_send_task_detach_socket(task);
     coro_socket_destroy(socket);
@@ -589,8 +639,8 @@ static int flow_coronet_socket_start_source(flow_coronet_socket_adapter_t *adapt
   adapter->server =
       tf_coronet_create_server_socket(adapter->ctx, flow_coronet_transport(adapter->transport));
   if (!adapter->server) return TURBO_ENOTSUP;
-  rc = tf_coronet_apply_kcp_fec(adapter->server, flow_coronet_transport(adapter->transport),
-                                &adapter->kcp_fec, adapter->kcp_fec_configured);
+  rc = tf_coronet_apply_kcp_config(adapter->server, flow_coronet_transport(adapter->transport),
+                                   &adapter->kcp_config, adapter->kcp_configured);
   if (rc != TURBO_OK) {
     coro_socket_destroy(adapter->server);
     adapter->server = NULL;
@@ -763,9 +813,10 @@ static int flow_coronet_socket_consume(void *ctx, turbo_flow_t *flow,
   return rc;
 }
 
-static int flow_coronet_socket_close_resources_call(void *arg) {
+static int flow_coronet_socket_begin_close_resources_call(void *arg) {
   flow_coronet_socket_adapter_t *adapter = (flow_coronet_socket_adapter_t *)arg;
   flow_coronet_send_task_t *task;
+  int rc = TURBO_OK;
   if (!adapter) return TURBO_EINVAL;
 
   turbo_mutex_lock(&adapter->request_mutex);
@@ -776,10 +827,50 @@ static int flow_coronet_socket_close_resources_call(void *arg) {
   if (adapter->server) {
     (void)tf_coronet_leave_multicast(adapter->server, flow_coronet_transport(adapter->transport),
                                      &adapter->udp_options);
-    coro_socket_destroy(adapter->server);
-    adapter->server = NULL;
+    rc = coro_socket_server_stop(adapter->server);
   }
+  return rc;
+}
+
+static int flow_coronet_socket_server_stopped_call(void *arg) {
+  flow_coronet_socket_adapter_t *adapter = (flow_coronet_socket_adapter_t *)arg;
+  if (!adapter) return TURBO_EINVAL;
+  return !adapter->server || coro_socket_server_is_stopped(adapter->server) ? TURBO_OK
+                                                                            : TURBO_EBUSY;
+}
+
+static int flow_coronet_socket_destroy_server_call(void *arg) {
+  flow_coronet_socket_adapter_t *adapter = (flow_coronet_socket_adapter_t *)arg;
+  if (!adapter) return TURBO_EINVAL;
+  if (!adapter->server) return TURBO_OK;
+  if (!coro_socket_server_is_stopped(adapter->server)) return TURBO_EBUSY;
+  coro_socket_destroy(adapter->server);
+  adapter->server = NULL;
   return TURBO_OK;
+}
+
+static int flow_coronet_socket_close_resources(flow_coronet_socket_adapter_t *adapter) {
+  uint64_t call_timeout_ns;
+  int rc;
+  if (!adapter) return TURBO_EINVAL;
+
+  call_timeout_ns = flow_coronet_timeout_ns(adapter->timeouts.timeout_ms);
+  rc =
+      tf_coronet_execution_call(&adapter->execution, flow_coronet_socket_begin_close_resources_call,
+                                adapter, call_timeout_ns);
+  if (rc != TURBO_OK || !adapter->server) return rc;
+
+  for (uint32_t i = 0u; i < adapter->max_pump_iterations; ++i) {
+    rc = tf_coronet_execution_call(&adapter->execution, flow_coronet_socket_server_stopped_call,
+                                   adapter, call_timeout_ns);
+    if (rc == TURBO_OK) {
+      return tf_coronet_execution_call(&adapter->execution, flow_coronet_socket_destroy_server_call,
+                                       adapter, call_timeout_ns);
+    }
+    if (rc != TURBO_EBUSY) return rc;
+    turbo_sleep_ms(1);
+  }
+  return TURBO_ETIMEDOUT;
 }
 
 static void flow_coronet_socket_drain_requests(flow_coronet_socket_adapter_t *adapter) {
@@ -794,17 +885,18 @@ static void flow_coronet_socket_drain_requests(flow_coronet_socket_adapter_t *ad
 static void flow_coronet_socket_stop(void *ctx, turbo_flow_t *flow,
                                      const turbo_flow_stage_plan_t *stage) {
   flow_coronet_socket_adapter_t *adapter = (flow_coronet_socket_adapter_t *)ctx;
+  int close_status;
   (void)flow;
   (void)stage;
 
   if (!adapter) return;
   atomic_store_explicit(&adapter->started, 0, memory_order_release);
   tf_connection_transition(&adapter->connection, TURBO_FLOW_CONNECTION_CLOSING, TURBO_OK);
-  (void)tf_coronet_execution_call(&adapter->execution, flow_coronet_socket_close_resources_call,
-                                  adapter, flow_coronet_timeout_ns(adapter->timeouts.timeout_ms));
+  close_status = flow_coronet_socket_close_resources(adapter);
   flow_coronet_socket_drain_requests(adapter);
   tf_coronet_execution_stop(&adapter->execution);
-  tf_connection_transition(&adapter->connection, TURBO_FLOW_CONNECTION_STOPPED, TURBO_ESHUTDOWN);
+  tf_connection_transition(&adapter->connection, TURBO_FLOW_CONNECTION_STOPPED,
+                           close_status == TURBO_OK ? TURBO_ESHUTDOWN : close_status);
 }
 
 static int flow_coronet_socket_connection_snapshot(void *ctx,
@@ -841,8 +933,7 @@ static void flow_coronet_socket_shutdown(void *ctx) {
   if (!adapter) return;
   atomic_store_explicit(&adapter->started, 0, memory_order_release);
   if (adapter->server || adapter->active_request_count != 0u) {
-    (void)tf_coronet_execution_call(&adapter->execution, flow_coronet_socket_close_resources_call,
-                                    adapter, flow_coronet_timeout_ns(adapter->timeouts.timeout_ms));
+    (void)flow_coronet_socket_close_resources(adapter);
   }
   flow_coronet_socket_drain_requests(adapter);
   tf_coronet_execution_destroy(&adapter->execution);
@@ -855,6 +946,7 @@ static void flow_coronet_socket_shutdown(void *ctx) {
     turbo_cond_destroy(&adapter->request_cond);
     turbo_mutex_destroy(&adapter->request_mutex);
   }
+  turbo_kcp_config_wipe(&adapter->kcp_config);
   adapter->ctx = NULL;
   free(adapter);
 }
@@ -883,8 +975,7 @@ static int flow_socket_register_contract(turbo_flow_t *flow) {
         i == 0u ? TURBO_FLOW_LIFETIME_DISPATCH : TURBO_FLOW_LIFETIME_CALL;
     operations[i].scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
     operations[i].scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
-    operations[i].flags = (i == 0u ? TURBO_FLOW_OPERATION_SOURCE
-                                   : TURBO_FLOW_OPERATION_STAGE) |
+    operations[i].flags = (i == 0u ? TURBO_FLOW_OPERATION_SOURCE : TURBO_FLOW_OPERATION_STAGE) |
                           TURBO_FLOW_OPERATION_BRIDGE;
     operations[i].execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
   }
@@ -896,8 +987,7 @@ static int flow_socket_register_contract(turbo_flow_t *flow) {
   module.name = TURBO_FLOW_SOCKET_MODULE;
   module.version = TURBO_FLOW_SOCKET_MODULE_VERSION;
   module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS |
-                            TURBO_FLOW_MODULE_MANAGED_RESOURCES |
-                            TURBO_FLOW_MODULE_NATIVE_API;
+                            TURBO_FLOW_MODULE_MANAGED_RESOURCES | TURBO_FLOW_MODULE_NATIVE_API;
   module.primitive_types = primitive_types;
   module.primitive_type_count = 1u;
   module.operation_names = operation_names;
@@ -954,21 +1044,14 @@ int turbo_flow_coronet_register_socket_adapter_ex(
     adapter->transport = (turbo_flow_coronet_transport_t)config->transport;
     adapter->port = config->port;
     flow_coronet_timeout_config_resolve(&adapter->timeouts, config);
-    {
-      tf_coronet_kcp_fec_options_t fec_options;
-      memset(&fec_options, 0, sizeof(fec_options));
-      fec_options.enabled = config->kcp_fec;
-      fec_options.backend = config->kcp_fec_backend;
-      fec_options.data_shards = config->kcp_fec_data_shards;
-      fec_options.parity_shards = config->kcp_fec_parity_shards;
-      fec_options.max_payload_size = config->kcp_fec_max_payload_size;
-      rc = tf_coronet_kcp_fec_options_resolve(flow_coronet_transport(adapter->transport),
-                                              &fec_options, &adapter->kcp_fec,
-                                              &adapter->kcp_fec_configured);
-      if (rc != TURBO_OK) {
-        flow_coronet_socket_shutdown(adapter);
-        return rc;
-      }
+    adapter->max_pump_iterations = config->max_pump_iterations
+                                       ? config->max_pump_iterations
+                                       : FLOW_CORONET_DEFAULT_PUMP_ITERATIONS;
+    rc = flow_coronet_kcp_config_resolve(flow_coronet_transport(adapter->transport), config,
+                                         &adapter->kcp_config, &adapter->kcp_configured);
+    if (rc != TURBO_OK) {
+      flow_coronet_socket_shutdown(adapter);
+      return rc;
     }
     adapter->reuse_port = config->reuse_port ? 1 : 0;
     adapter->socket_options.tcp_keepalive = config->tcp_keepalive;
@@ -1016,6 +1099,7 @@ int turbo_flow_coronet_register_socket_adapter_ex(
     adapter->role = TURBO_FLOW_CORONET_SOCKET_UNCONFIGURED;
     adapter->transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
     adapter->timeouts.timeout_ms = FLOW_CORONET_DEFAULT_TIMEOUT_MS;
+    adapter->max_pump_iterations = FLOW_CORONET_DEFAULT_PUMP_ITERATIONS;
     tf_coronet_socket_timeouts_resolve(&adapter->timeouts, FLOW_CORONET_DEFAULT_TIMEOUT_MS);
   }
 
@@ -1069,7 +1153,8 @@ int turbo_flow_coronet_register_socket_adapter_ex(
     operation_names[1] = TURBO_FLOW_SOCKET_SEND_OPERATION;
     operation_count = 2u;
   }
-  for (size_t i = 0u; i < operation_count; ++i) operation_resources[i] = name;
+  for (size_t i = 0u; i < operation_count; ++i)
+    operation_resources[i] = name;
   memset(&primitive, 0, sizeof(primitive));
   primitive.size = sizeof(primitive);
   primitive.name = name;

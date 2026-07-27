@@ -3,8 +3,9 @@
 ## 状态
 
 已采纳，当前适用于 `flowie/control` 内部 SQLite 事实源。Credential 生命周期已通过内部 management RPC
-暴露为 `flowie.credential.generate/rotate/revoke`；生产网络必须先完成独立 HTTPS/mTLS 或受信 OIDC
-listener gate，不改变 Flowie Broker 只访问 HTTPS 认证服务的边界。
+暴露为 `flowie.credential.generate/rotate/revoke`。未配置 `auth.external_https` 时，这些 credential
+是本地 Auth 的 verifier 事实；配置外部 Auth 时不参与认证。`flowie-control` 不增加 OIDC listener
+或第三方数据库 auth backend。
 
 ## 背景
 
@@ -14,7 +15,8 @@ listener gate，不改变 Flowie Broker 只访问 HTTPS 认证服务的边界。
 
 本决策只定义 credential 事实的存储和内部命令语义。内部认证缓存和受信 Root Group 绑定见本文后续章节及
 `ADR_CONTROL_AUTH_ROOT_BINDING.md`；HTTPS adapter、防爆破、管理权限和已连接 session 的处置仍由后续
-阶段完成。
+阶段完成。部署 parser/runtime 以 `auth.external_https` 是否出现选择 verifier：缺失时使用本地
+credential 与正向 cache；出现时二者不参与该请求，第三方 HTTPS 失败不得回退到本地 credential。
 
 ## 候选方案
 
@@ -74,8 +76,9 @@ adapter 仍必须实现请求限流、失败审计和统一拒绝响应。
 
 ## Revision-aware 正向缓存
 
-`flowie/control` 提供内部 positive credential cache，供未来 HTTPS 认证服务组合使用。缓存不属于 Broker
-HTTP provider，也不改变 Broker 每次 CONNECT 调用认证服务的边界。
+`flowie/control` 提供内部 positive credential cache，仅用于本地 verifier 的内部测试与迁移工具。
+缓存不属于 Broker HTTPS provider，也不能通过 controller 部署 schema 选择；企业第三方路径不读取
+该缓存。
 
 - 缓存键是进程启动时由 TurboUtils CSPRNG 生成的 32-byte 随机 key 所派生的 keyed BLAKE2b digest；输入
   包含有长度边界的 root group、principal 和 credential。缓存不保存 credential、Base64 或可恢复明文。
@@ -86,6 +89,11 @@ HTTP provider，也不改变 Broker 每次 CONNECT 调用认证服务的边界�
   在访问或容量驱逐时清理，内存不会无界增长。
 - TurboUtils mutex 只保护 hash map、LRU sequence 和缓存 entry。SQLite、Argon2id 和外部 I/O 均在锁外
   执行；cache destroy 要求调用方先停止并发认证。
+
+`flowie-control` 的本地 HTTPS Auth composition root 还把 Argon2id、SQLite 与同步 PostgreSQL 调用
+放入专用有界 executor。每个任务拥有解码字段和 secret 副本；Iris `Req`/`Res`/socket 不跨线程。
+队列满返回 429，HTTP deadline 返回 503。同步工作不做不安全的强制取消：迟到结果丢弃、secret 由任务
+结束时擦除，shutdown 停止接单并 drain。第三方 HTTPS verifier 不使用该 executor。
 
 当前缓存只消除重复 Argon2id，不缓存 roles、effective groups 或最终 principal。未来认证服务应在成功
 验证后从事实源读取授权身份视图；在 ACL draft/policy version 完成前，不得用全局 control revision 冒充

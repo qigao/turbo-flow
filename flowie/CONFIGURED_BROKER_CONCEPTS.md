@@ -21,10 +21,11 @@ Flowie MQTT protocol/session owner
 | 使用方式 | Flowie 提供什么 | 是否是配置式 TurboFlow 应用 |
 |---|---|---|
 | 协议库 | MQTT parser、packet view、编码与校验 | 否；没有运行时或 Graph |
-| 嵌入式 endpoint | 由调用方注册和持有的 MQTT endpoint primitive | 不一定；产品拓扑由调用方负责 |
+| 嵌入式 endpoint Core | 调用方直接创建/持有的 MQTT owner 与同步 dispatch callback | 否；不创建 Graph |
+| Endpoint + Graph adapter | 同一 Core 的可选 TurboFlow source/sink 边界 | 不一定；取决于宿主是否完成产品拓扑 |
 | `flowie_server` 配置式 broker | YAML、Graph、provider registry、endpoint/session owner 的完整装配 | 是 |
 
-嵌入式 endpoint 可以成为另一个 TurboFlow 应用的一部分，但 endpoint 本身不代表已经存在
+Endpoint Core 可以经薄 adapter 成为另一个 TurboFlow 应用的一部分，但 Core 本身不代表已经存在
 data source、data sink、持久化和业务处理拓扑。
 
 ### 可交付产品组合
@@ -56,7 +57,7 @@ factory 或 ACL policy provider factory。Provider 决定“这个宿主能够�
 
 - **adapter provider**：根据 YAML `adapters.<name>.kind` 创建 Graph adapter；
 - **resource provider**：根据 channel 创建 TurboFlow Policy 等 Graph resource；
-- **auth provider**：验证 credential，返回 principal 或拒绝；
+- **auth provider**：验证 credential，返回 principal 或拒绝；bundled 产品只注册 `https`；
 - **policy provider**：提供版本化 ACL bundle；
 - **facts provider**：把 `turbo_flow_msg_t` 投影为 TurboFlow Policy facts；
 - **external data service**：Redis、PostgreSQL、HTTP 服务等进程外系统。
@@ -67,7 +68,8 @@ factory 或 ACL policy provider factory。Provider 决定“这个宿主能够�
 
 `backend` 是某个 provider 或 store 内部选择的具体实现，例如 FlowStore 的 `local`/`redis`，
 record store 的 `redis`/`postgresql`，或 auth provider 的 `https`。Backend 是实现细节，不是 Graph
-角色，也不自动成为 data source 或 data sink。
+角色，也不自动成为 data source 或 data sink。auth provider 的 backend 不复用 FlowStore/record-store
+backend；Redis、PostgreSQL、SQLite 等身份数据只能留在 HTTPS 认证服务内部。
 
 ### Adapter
 
@@ -144,7 +146,8 @@ sink 或 auth provider，也不能推进 MQTT session 状态或生成协议 ACK�
 | Graph source | Redis Stream source adapter | 从 Stream 读取并发布 `turbo_flow_msg_t` |
 | Graph sink | Redis SET/Stream sink adapter | 消费 `turbo_flow_msg_t` 并执行外部写入 |
 | 协议持久化 | Redis record-store backend | 保存 session/retained record，不进入 Graph |
-| 认证系统内部 | auth service 的用户数据库 | Flowie 不直接访问，也不由 Graph 配置 |
+| 认证系统边界 | HTTPS auth service | bundled Flowie 唯一可配置的认证来源 |
+| 认证系统内部 | auth service 的用户数据库/目录 | Flowie 不直接访问，也不由 Graph 配置 |
 
 因此“Redis provider”“Redis storage”不足以表达设计。必须写明它是 FlowStore backend、record-store
 backend、Graph source/sink adapter，还是认证服务内部数据库。

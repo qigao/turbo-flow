@@ -12,13 +12,13 @@ Linux release/nightly gate，使用 [`LINUX_REMOTE_TEST_RUNBOOK.md`](LINUX_REMOT
 ## 运行
 
 本机必须已有 `127.0.0.1:6379` Redis，并允许测试创建、扫描及删除随机 namespace 下的记录。
-public MQTT suite 会访问其测试文件中声明的 HiveMQ 与 EMQX 公共端点；发布环境必须允许对应的
-TCP、TLS、WS 与 WSS 出站连接。
+`test_flowie_mqtt_client_live` 是可选公网连通性 smoke；它访问 HiveMQ 与 EMQX 公共端点，
+不属于 release gate，也不作为固定 broker 兼容性证据。
 
 ```powershell
 cmake --preset win-release-user `
   -DFLOWIE_MQTT_RELEASE_GATE=ON `
-  -DFLOWIE_MQTT_PUBLIC_LIVE_TESTS=ON `
+  -DFLOWIE_MQTT_PUBLIC_LIVE_TESTS=OFF `
   -DFLOWIE_MQTT_FIXED_INTEROP_TESTS=ON `
   -DFLOWIE_MQTT_FIXED_CA_FILE=C:/path/to/mosquitto/ca.crt `
   -DFLOWIE_MQTT_FIXED_SUPPORT_31=ON `
@@ -33,7 +33,7 @@ ctest --preset win-release-user --output-on-failure
 ```
 
 普通开发配置不会注册严格发布门禁；只有显式设置 `FLOWIE_MQTT_RELEASE_GATE=ON` 才会注册
-`flowie_release_gate_manifest`。该测试会强制检查 `test_flowie_mqtt_client_live`、协议矩阵与 corpus、
+`flowie_release_gate_manifest`。该测试会强制检查固定 broker interop、协议矩阵与 corpus、
 session store 故障边界、`test_flowie_transport`、`flowie_server_check_redis_session_store` 和
 `flowie_server_check_https_auth_provider` 均已注册且未被标为 `Disabled`。整个 gate 只允许
 `flowie_server_check_smb_product` 因未提供 PostgreSQL 测试数据库而 Disabled；出现其他 Disabled 项时
@@ -49,15 +49,15 @@ cmake -DEVIDENCE_FILE=build/flowie-nightly-evidence.json `
       -P flowie/cmake/VerifyNightlyEvidence.cmake
 ```
 
-release evidence 缺 Redis、public/fixed interop、真实 TLS 或 mTLS 时失败；nightly evidence
+release evidence 缺 Redis、fixed interop、真实 TLS 或 mTLS 时失败；nightly evidence
 必须包含同一 revision 的 corpus、soak、sanitizer 记录、非空 seed，并明确报告资源没有单调增长。
 脚本只验证实际证据，不会把未运行的 live/scheduled 用例自动视为通过。
 
 ## 固定门槛
 
 - MQTT protocol/client：MQTT 3.1/3.1.1/5 编解码、QoS 0/1/2、订阅、取消订阅、PING、断线、MQTT 5
-  Enhanced AUTH/re-auth、CONNACK 发送能力约束与有界 command queue 必须通过；public live suite 必须覆盖
-  TCP/TLS/WS/WSS。
+  Enhanced AUTH/re-auth、CONNACK 发送能力约束与有界 command queue 必须通过；固定 broker interop
+  必须覆盖 TCP/TLS/WS/WSS。公网 live suite 仅用于人工确认外网访问能力。
 - Server transport：MQTT 3.1、MQTT 3.1.1 与 MQTT 5 必须分别在 TCP/TLS/WS/WSS/Pipe 完成真实 CONNECT 与
   PING 往返；TCP/TLS/WS/WSS 还必须完成公开 client 的 DISCONNECT。TLS/WSS 使用验证 CA 和证书，
   不能用配置解析代替握手；错误 CA、SAN 不匹配、无客户端证书和不受信客户端证书必须在 MQTT CONNECT
@@ -82,15 +82,20 @@ release evidence 缺 Redis、public/fixed interop、真实 TLS 或 mTLS 时失�
 - Authentication provider：`profiles.<name>.auth_provider` 必须精确选择唯一注册的 `https` backend；
   `http://`、userinfo、query、fragment、数据库字段、literal token、未知字段和无效 secret reference
   必须在 listener 启动前 fail fast。运行时 TLS、超时、状态码、Content-Type、协议版本和 principal
-  校验失败必须拒绝认证，不得 fallback。
+  校验失败必须拒绝认证，不得 fallback。`flowie-control` 必须明确选择本地 Auth 或唯一
+  `external_https`；选择外部模式时不得再尝试本地 verifier、FlowStore 或其他数据库认证路径。
+   使用外部模式的发布证据必须显示 `flowie.auth.external_https.stats` 的 `enabled: true`；本地 Auth
+   模式应为 `enabled: false`，并通过本地 credential contract、executor queue-full 429、deadline
+   503 和 shutdown drain gate。显式 `local_executor` 与 `external_https` 必须在配置期判定为冲突。
 - Product host：provider preflight、独立 YAML/Graph 解析、RuleSet/socket 装配、supervisor
   lifecycle、输出上限及 `--check` 必须通过。
 
 ## 明确边界
 
 本 gate 证明库级 security binding/本地 ACL 行为及 bundled `flowie_server` 的配置驱动 provider 装配。
-Flowie 只访问 HTTPS 认证服务，不接受 Redis/SQLite/PostgreSQL 或其他身份库连接配置；数据库网络 ACL
-必须只允许认证服务访问。认证服务 token 只能通过 key-provider reference 注入。TLS 始终校验服务主机名；
+Flowie 只访问 HTTPS Auth/ACL 服务，不接受 Redis/SQLite/PostgreSQL 或其他身份/ACL 数据库连接配置；
+数据库网络 ACL 必须只允许 `flowie-control` 或第三方认证服务访问。认证服务 token 只能通过
+key-provider reference 注入。TLS 始终校验服务主机名；
 私有 CA 与 mTLS 客户端证书可按 provider 注入，私钥密码只能通过 key-provider reference 获取。生产网络还必须限制 Flowie 仅能出站到认证服务地址，
 认证数据库不得暴露到 Flowie 网段或公网。内置 HTTPS provider 当前把 MQTT 5 Authentication Data
 作为一次性 HTTPS credential 完成认证；需要多轮 challenge 的部署必须注入实现 enhanced provider ABI

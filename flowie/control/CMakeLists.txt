@@ -6,12 +6,18 @@ add_library(flowie_control_core STATIC flowie_control_auth_cache.c
                                         flowie_control_auth_rate_limiter_internal.h
                                         flowie_control_principal_cache.c
                                         flowie_control_principal_cache_internal.h
+                                        flowie_control_repository.c
+                                        flowie_control_repository_internal.h
+                                        flowie_control_external_authenticator.c
+                                        flowie_control_external_authenticator_internal.h
                                         flowie_control_auth_service.c
                                         flowie_control_auth_service_internal.h
                                         flowie_control_credential.c
                                         flowie_control_credential_internal.h
                                         flowie_control_management_service.c
                                         flowie_control_management_service_internal.h
+                                        flowie_control_validation.c
+                                        flowie_control_validation_internal.h
                                         flowie_control_store.c
                                         flowie_control_store_internal.h)
 cmake_config_target(flowie_control_core NO_INSTALL FOLDER "flowie/control/internal")
@@ -19,6 +25,42 @@ target_include_directories(flowie_control_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR
 target_link_libraries(flowie_control_core
                       PUBLIC TurboFlow::Flow
                       PRIVATE Flowie::Protocol SQLite::SQLite3 TurboUtils::Core monocypher)
+
+if(TURBO_FLOW_BUILD_HTTP_CLIENT)
+  find_package(OpenSSL REQUIRED)
+  add_library(
+    flowie_control_external_https_authenticator STATIC
+    flowie_control_external_https_authenticator.c
+    flowie_control_external_https_authenticator_internal.h)
+  cmake_config_target(flowie_control_external_https_authenticator NO_INSTALL
+                      FOLDER "flowie/control/internal")
+  target_include_directories(flowie_control_external_https_authenticator
+                             PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(
+    flowie_control_external_https_authenticator
+    PUBLIC flowie_control_core
+    PRIVATE TurboHttp::HttpClient TurboNet::CoroNet TurboUtils::Core
+            TurboUtils::Parser OpenSSL::SSL OpenSSL::Crypto monocypher)
+endif()
+
+if(TURBO_FLOW_BUILD_PGSQL)
+  add_library(flowie_control_pgsql_database STATIC
+              flowie_control_pgsql_database.c
+              flowie_control_pgsql_database_internal.h
+              flowie_control_pgsql_command.c
+              flowie_control_pgsql_command_internal.h
+              flowie_control_pgsql_repository.c
+              flowie_control_pgsql_repository_internal.h
+              flowie_control_pgsql_query.c
+              flowie_control_pgsql_query_internal.h)
+  cmake_config_target(flowie_control_pgsql_database NO_INSTALL
+                      FOLDER "flowie/control/internal")
+  target_include_directories(flowie_control_pgsql_database PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(flowie_control_pgsql_database
+                        PUBLIC flowie_control_core
+                        PRIVATE Flowie::Protocol TurboFlow::Flow PostgreSQL::PostgreSQL
+                                TurboUtils::Core monocypher)
+endif()
 
 add_library(flowie_control_startup STATIC flowie_control_config.c
                                           flowie_control_config_internal.h
@@ -53,6 +95,8 @@ if(TURBO_FLOW_BUILD_HTTP_SERVER)
                                                  flowie_control_auth_iris_adapter_internal.h
                                                  flowie_control_auth_iris_endpoint.c
                                                  flowie_control_auth_iris_endpoint_internal.h
+                                                 flowie_control_acl_iris_endpoint.c
+                                                 flowie_control_acl_iris_endpoint_internal.h
                                                  flowie_control_dashboard.c
                                                  flowie_control_dashboard_internal.h
                                                  flowie_control_dashboard_view.c
@@ -83,10 +127,23 @@ if(TURBO_FLOW_BUILD_HTTP_SERVER)
                           PUBLIC flowie_control_startup
                           PRIVATE flowie_control_iris_adapter TurboNet::CoroNet TurboUtils::Core
                                   monocypher)
+    if(TURBO_FLOW_BUILD_HTTP_CLIENT)
+      target_link_libraries(flowie_control_runtime
+                            PRIVATE flowie_control_external_https_authenticator)
+      target_compile_definitions(flowie_control_runtime
+                                 PRIVATE FLOWIE_CONTROL_HAS_EXTERNAL_HTTPS_AUTH=1)
+    endif()
+    if(TURBO_FLOW_BUILD_PGSQL)
+      target_link_libraries(flowie_control_runtime
+                            PRIVATE flowie_control_pgsql_database)
+      target_compile_definitions(flowie_control_runtime
+                                 PRIVATE FLOWIE_CONTROL_HAS_PGSQL=1)
+    endif()
 
     add_executable(flowie-control flowie_control_main.c)
     cmake_config_target(flowie-control FOLDER "flowie/control")
     target_link_libraries(flowie-control PRIVATE flowie_control_runtime)
+    cmake_target_enable_boringssl_linkage(flowie-control)
     install(TARGETS flowie-control RUNTIME DESTINATION bin)
     install(FILES "${PROJECT_SOURCE_DIR}/flowie/examples/flowie-control.yml"
             DESTINATION share/turboflow/examples/flowie OPTIONAL)
@@ -97,8 +154,13 @@ if(TURBO_FLOW_BUILD_HTTP_SERVER)
         test_flowie_control_runtime
         SOURCES tests/test_flowie_control_runtime.c
         LIBS flowie_control_runtime TurboUtils::TinyTest
-        INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+        INCLUDES ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/io/socket/tests
         FOLDER "flowie/control/tests")
+      cmake_target_enable_boringssl_linkage(test_flowie_control_runtime)
+      if(TURBO_FLOW_BUILD_PGSQL)
+        target_compile_definitions(test_flowie_control_runtime
+                                   PRIVATE FLOWIE_CONTROL_HAS_PGSQL=1)
+      endif()
       set_tests_properties(test_flowie_control_runtime
                            PROPERTIES LABELS "flowie;control-plane;security-contract")
       cmake_add_test(
@@ -169,6 +231,47 @@ if(BUILD_TESTS)
   set_tests_properties(test_flowie_control_store
                        PROPERTIES LABELS "flowie;control-plane;security-contract")
   cmake_add_test(
+    test_flowie_control_repository
+    SOURCES tests/test_flowie_control_repository.c
+    LIBS flowie_control_core TurboUtils::TinyTest
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+    FOLDER "flowie/control/tests")
+  set_tests_properties(test_flowie_control_repository
+                       PROPERTIES LABELS "flowie;control-plane;security-contract;storage-contract")
+  if(TURBO_FLOW_BUILD_PGSQL)
+    cmake_add_test(
+      test_flowie_control_pgsql_database
+      SOURCES tests/test_flowie_control_pgsql_database.c
+      LIBS flowie_control_pgsql_database TurboUtils::TinyTest
+      INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+      FOLDER "flowie/control/tests")
+    set_tests_properties(
+      test_flowie_control_pgsql_database
+      PROPERTIES LABELS "flowie;control-plane;security-contract;storage-contract")
+    cmake_add_test(
+      test_flowie_control_pgsql_database_live
+      SOURCES tests/test_flowie_control_pgsql_database_live.c
+      LIBS flowie_control_pgsql_database PostgreSQL::PostgreSQL TurboUtils::TinyTest
+      INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+      FOLDER "flowie/control/tests")
+    set_tests_properties(
+      test_flowie_control_pgsql_database_live
+      PROPERTIES LABELS
+                 "flowie;control-plane;security-contract;storage-contract;integration;pgsql-live")
+    # Static libpq pulls vcpkg BoringSSL C++ objects into these pure-C final targets.
+    cmake_target_enable_boringssl_linkage(test_flowie_control_pgsql_database)
+    cmake_target_enable_boringssl_linkage(test_flowie_control_pgsql_database_live)
+    if(NOT TURBO_FLOW_PGSQL_LIVE_TESTS)
+      set_tests_properties(test_flowie_control_pgsql_database_live PROPERTIES DISABLED TRUE)
+    endif()
+    if(WIN32)
+      set_tests_properties(
+        test_flowie_control_pgsql_database test_flowie_control_pgsql_database_live
+        PROPERTIES ENVIRONMENT_MODIFICATION
+                   "PATH=path_list_prepend:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+    endif()
+  endif()
+  cmake_add_test(
     test_flowie_control_auth_cache
     SOURCES tests/test_flowie_control_auth_cache.c
     LIBS flowie_control_core TurboUtils::TinyTest
@@ -177,6 +280,45 @@ if(BUILD_TESTS)
   set_tests_properties(test_flowie_control_auth_cache
                        PROPERTIES LABELS
                                   "flowie;control-plane;security-contract;mqtt-security")
+  cmake_add_test(
+    test_flowie_control_external_authenticator
+    SOURCES tests/test_flowie_control_external_authenticator.c
+    LIBS flowie_control_core TurboUtils::TinyTest
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+    FOLDER "flowie/control/tests")
+  set_tests_properties(test_flowie_control_external_authenticator
+                       PROPERTIES LABELS
+                                  "flowie;control-plane;security-contract;external-auth")
+  if(TURBO_FLOW_BUILD_HTTP_CLIENT)
+    cmake_add_test(
+      test_flowie_control_external_https_authenticator
+      SOURCES tests/test_flowie_control_external_https_authenticator.c
+      LIBS flowie_control_external_https_authenticator TurboNet::CoroNet
+           TurboUtils::TinyTest
+      INCLUDES ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/io/socket/tests
+      FOLDER "flowie/control/tests")
+    find_package(OpenSSL REQUIRED)
+    target_link_libraries(test_flowie_control_external_https_authenticator
+                          PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    cmake_target_enable_boringssl_linkage(test_flowie_control_external_https_authenticator)
+    if(WIN32)
+      target_link_libraries(test_flowie_control_external_https_authenticator PRIVATE ws2_32)
+    endif()
+    set_tests_properties(
+      test_flowie_control_external_https_authenticator
+      PROPERTIES LABELS
+                 "flowie;control-plane;security-contract;external-auth;https")
+    if(WIN32)
+      set_target_properties(
+        test_flowie_control_external_https_authenticator
+        PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                   "${CMAKE_BINARY_DIR}/flowie/control/test-bin")
+      set_tests_properties(
+        test_flowie_control_external_https_authenticator
+        PROPERTIES ENVIRONMENT_MODIFICATION
+                   "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::HttpClient>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboNet::CoroNet>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboUtils::Core>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboFlow::Flow>;PATH=path_list_prepend:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+    endif()
+  endif()
   cmake_add_test(
     test_flowie_control_principal_cache
     SOURCES tests/test_flowie_control_principal_cache.c

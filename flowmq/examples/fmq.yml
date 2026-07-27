@@ -4,9 +4,8 @@ profiles:
   production:
     publisher: fmq.events.pub
     subscriber: fmq.events.sub
-    control_server: fmq.control.rep
-    control_client: fmq.control.req
-    management_server: fmq.management.rep
+    management_server: fmq.management.router
+    management_client: fmq.management.dealer
     management_events: fmq.management.events
 
 fragments:
@@ -15,10 +14,6 @@ fragments:
       transport: tcp
       host: 127.0.0.1
       port: 7701
-    local-control:
-      transport: tcp
-      host: 127.0.0.1
-      port: 7702
     local-management:
       transport: tcp
       host: 127.0.0.1
@@ -43,25 +38,17 @@ channels:
       busy_timeout_ms: 1000
       max_value_size: 8388608
 
-  flow-control:
-    kind: fmq_control
-    config:
-      protocol_version: 1
-      target: data-plane
-      dedup_capacity: 256
-      max_request_bytes: 5179
-
   flow-management:
     kind: fmq_management
     config:
       protocol_major: 1
       protocol_minor: 0
       authority_id: local-flow-management
-      rpc_adapter: fmq.management.rep
+      rpc_adapter: fmq.management.router
       mailbox_capacity: 256
       max_request_bytes: 65536
       max_reply_bytes: 65536
-      max_inflight_per_target: 1
+      max_inflight_per_target: 8
       dedup_capacity: 512
       dedup_ttl_ms: 300000
       operation_store: management-operations
@@ -145,41 +132,30 @@ adapters:
       reconnect_initial_ms: 500
       reconnect_max_ms: 10000
 
-  fmq.control.rep:
-    kind: fmq
-    fragments:
-      connection: local-control
-      timer: realtime
-    config:
-      pattern: rep
-      mode: bind
-      content_type: application/vnd.turboflow.control-v1
-      frame_hwm_messages: 256
-      frame_hwm_bytes: 2097152
-
-  fmq.control.req:
-    kind: fmq
-    fragments:
-      connection: local-control
-      timer: realtime
-    config:
-      pattern: req
-      mode: connect
-      content_type: application/vnd.turboflow.control-v1
-      reconnect_initial_ms: 500
-      reconnect_max_ms: 10000
-
-  fmq.management.rep:
+  fmq.management.router:
     kind: fmq
     fragments:
       connection: local-management
       timer: realtime
     config:
-      pattern: rep
+      pattern: router
       mode: bind
       content_type: application/vnd.turboflow.management-v1
       frame_hwm_messages: 256
       frame_hwm_bytes: 16777216
+
+  fmq.management.dealer:
+    kind: fmq
+    fragments:
+      connection: local-management
+      timer: realtime
+    config:
+      pattern: dealer
+      mode: connect
+      identity: management-client-1
+      content_type: application/vnd.turboflow.management-v1
+      reconnect_initial_ms: 500
+      reconnect_max_ms: 10000
 
   fmq.management.events:
     kind: fmq

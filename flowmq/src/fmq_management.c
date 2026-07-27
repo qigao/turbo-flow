@@ -523,8 +523,7 @@ static int flow_tfmp_management_build_command_descriptor(uint16_t command_type,
   if (rc == TURBO_OK) rc = turbo_flow_tfmp_body_builder_append_u16(&builder, 1u, 1, command_type);
   if (rc == TURBO_OK)
     rc = turbo_flow_tfmp_body_builder_append_u16(&builder, 2u, 1,
-                                                 TURBO_FLOW_TFMP_REPLY_MODE_WAIT_TERMINAL |
-                                                     TURBO_FLOW_TFMP_REPLY_MODE_ACCEPT_OPERATION);
+                                                 TURBO_FLOW_TFMP_REPLY_MODE_ACCEPT_OPERATION);
   if (rc == TURBO_OK)
     rc = turbo_flow_tfmp_body_builder_append_u16(&builder, 3u, 1, durability_mask);
   if (rc == TURBO_OK) rc = turbo_flow_tfmp_body_builder_append_u16(&builder, 4u, 1, payload_schema);
@@ -540,16 +539,14 @@ static int flow_tfmp_management_build_capabilities(turbo_flow_tfmp_management_se
       0u, TURBO_FLOW_TFMP_CAPABILITY_TARGET_QUERY,
       0u, TURBO_FLOW_TFMP_CAPABILITY_RESOURCE_QUERY,
       0u, TURBO_FLOW_TFMP_CAPABILITY_CONDITIONAL_COMMAND,
-      0u, TURBO_FLOW_TFMP_CAPABILITY_IMMEDIATE_COMMAND,
       0u, TURBO_FLOW_TFMP_CAPABILITY_VOLATILE_OPERATION,
       0u, TURBO_FLOW_TFMP_CAPABILITY_OPERATION_CANCEL,
       0u, TURBO_FLOW_TFMP_CAPABILITY_LIVE_EVENT,
       0u, TURBO_FLOW_TFMP_CAPABILITY_EVENT_REPLAY};
   static const uint8_t durable_capabilities[] = {0u, TURBO_FLOW_TFMP_CAPABILITY_TARGET_QUERY,
-                                                 0u, TURBO_FLOW_TFMP_CAPABILITY_RESOURCE_QUERY,
-                                                 0u, TURBO_FLOW_TFMP_CAPABILITY_CONDITIONAL_COMMAND,
-                                                 0u, TURBO_FLOW_TFMP_CAPABILITY_IMMEDIATE_COMMAND,
-                                                 0u, TURBO_FLOW_TFMP_CAPABILITY_VOLATILE_OPERATION,
+                                                  0u, TURBO_FLOW_TFMP_CAPABILITY_RESOURCE_QUERY,
+                                                  0u, TURBO_FLOW_TFMP_CAPABILITY_CONDITIONAL_COMMAND,
+                                                  0u, TURBO_FLOW_TFMP_CAPABILITY_VOLATILE_OPERATION,
                                                  0u, TURBO_FLOW_TFMP_CAPABILITY_DURABLE_OPERATION,
                                                  0u, TURBO_FLOW_TFMP_CAPABILITY_OPERATION_CANCEL,
                                                  0u, TURBO_FLOW_TFMP_CAPABILITY_LIVE_EVENT,
@@ -1412,9 +1409,10 @@ static turbo_flow_tfmp_status_t flow_tfmp_management_command_status(int error) {
 }
 
 static int flow_tfmp_management_build_command_submit(turbo_flow_tfmp_management_service_t *service,
-                                                     const turbo_flow_tfmp_envelope_t *request,
-                                                     flow_tfmp_management_result_t *result,
-                                                     size_t *body_size) {
+                                                      const turbo_flow_tfmp_envelope_t *request,
+                                                      flow_tfmp_management_result_t *result,
+                                                      size_t *body_size,
+                                                      int allow_wait_terminal) {
   flow_tfmp_command_request_t command = {0};
   flow_tfmp_command_record_t *record = NULL;
   uint64_t generation_before = 0u;
@@ -1423,6 +1421,13 @@ static int flow_tfmp_management_build_command_submit(turbo_flow_tfmp_management_
   uint64_t now_ns = turbo_hrtime();
   int rc = flow_tfmp_management_parse_command(request, &command, result);
   if (rc != TURBO_OK || result->status != TURBO_FLOW_TFMP_STATUS_OK) return rc;
+  if (!allow_wait_terminal &&
+      command.reply_mode != TURBO_FLOW_TFMP_REPLY_MODE_ACCEPT_OPERATION) {
+    flow_tfmp_management_result_fail(result, TURBO_FLOW_TFMP_STATUS_UNSUPPORTED_CAPABILITY,
+                                     "network management mutations require ACCEPT_OPERATION",
+                                     TURBO_ENOTSUP);
+    return TURBO_OK;
+  }
   if (!flow_tfmp_management_is_flow_command(command.command_type) &&
       !flow_tfmp_management_is_resource_command(command.command_type)) {
     flow_tfmp_management_result_fail(result, TURBO_FLOW_TFMP_STATUS_UNSUPPORTED_CAPABILITY,
@@ -1811,9 +1816,10 @@ static int flow_tfmp_management_build_events_get(turbo_flow_tfmp_management_serv
 }
 
 static int flow_tfmp_management_build_success(turbo_flow_tfmp_management_service_t *service,
-                                              const turbo_flow_tfmp_envelope_t *request,
-                                              flow_tfmp_management_result_t *result,
-                                              size_t *body_size) {
+                                               const turbo_flow_tfmp_envelope_t *request,
+                                               flow_tfmp_management_result_t *result,
+                                               size_t *body_size,
+                                               int allow_wait_terminal) {
   switch (request->kind) {
   case TURBO_FLOW_TFMP_CAPABILITIES_GET:
     return flow_tfmp_management_build_capabilities(service, body_size);
@@ -1849,7 +1855,8 @@ static int flow_tfmp_management_build_success(turbo_flow_tfmp_management_service
   case TURBO_FLOW_TFMP_RESOURCE_DOCUMENT_GET:
     return flow_tfmp_management_build_resource_document(service, request, result, body_size);
   case TURBO_FLOW_TFMP_COMMAND_SUBMIT:
-    return flow_tfmp_management_build_command_submit(service, request, result, body_size);
+    return flow_tfmp_management_build_command_submit(service, request, result, body_size,
+                                                     allow_wait_terminal);
   case TURBO_FLOW_TFMP_OPERATION_GET:
     return flow_tfmp_management_build_operation_get(service, request, result, body_size);
   case TURBO_FLOW_TFMP_OPERATION_CANCEL:
@@ -1862,16 +1869,18 @@ static int flow_tfmp_management_build_success(turbo_flow_tfmp_management_service
 }
 
 static int flow_tfmp_management_encode_response(turbo_flow_tfmp_management_service_t *service,
-                                                const turbo_flow_tfmp_envelope_t *request,
-                                                uint16_t kind, uint64_t correlation_id,
-                                                flow_tfmp_management_result_t *result, uint8_t *out,
-                                                size_t capacity, size_t *out_len) {
+                                                 const turbo_flow_tfmp_envelope_t *request,
+                                                 uint16_t kind, uint64_t correlation_id,
+                                                 flow_tfmp_management_result_t *result, uint8_t *out,
+                                                 size_t capacity, size_t *out_len,
+                                                 int allow_wait_terminal) {
   turbo_flow_tfmp_envelope_t response = TURBO_FLOW_TFMP_ENVELOPE_INIT;
   size_t body_size = 0u;
   int rc;
 
   if (result->status == TURBO_FLOW_TFMP_STATUS_OK) {
-    rc = flow_tfmp_management_build_success(service, request, result, &body_size);
+    rc = flow_tfmp_management_build_success(service, request, result, &body_size,
+                                            allow_wait_terminal);
     if (rc != TURBO_OK) {
       flow_tfmp_management_result_fail(result, flow_tfmp_management_query_status(rc),
                                        "management query failed", rc);
@@ -2088,8 +2097,10 @@ int turbo_flow_tfmp_management_channel_config_resolve(
   FLOW_TFMP_CONFIG_REQUIRED_U64("max_reply_bytes", TURBO_FLOW_TFMP_HEADER_SIZE,
                                 TURBO_FLOW_TFMP_MAX_MESSAGE_SIZE, parsed.service.max_reply_bytes,
                                 "max_reply_bytes is outside the TFMP envelope limit");
-  FLOW_TFMP_CONFIG_REQUIRED_U64("max_inflight_per_target", 1u, 1u, parsed.max_inflight_per_target,
-                                "this owner requires max_inflight_per_target equal to 1");
+  FLOW_TFMP_CONFIG_REQUIRED_U64("max_inflight_per_target", 1u,
+                                TURBO_FLOW_TFMP_MANAGEMENT_DEDUP_MAX,
+                                parsed.max_inflight_per_target,
+                                "max_inflight_per_target must be a bounded positive integer");
   FLOW_TFMP_CONFIG_REQUIRED_U64("dedup_capacity", 1u, TURBO_FLOW_TFMP_MANAGEMENT_DEDUP_MAX,
                                 parsed.service.dedup_capacity,
                                 "dedup_capacity must be a bounded positive integer");
@@ -2113,6 +2124,12 @@ int turbo_flow_tfmp_management_channel_config_resolve(
   if (parsed.service.operation_capacity > parsed.service.dedup_capacity) {
     rc = flow_tfmp_management_config_error(error, TURBO_EINVAL, channel_name, "mailbox_capacity",
                                            "mailbox_capacity cannot exceed dedup_capacity");
+    goto done;
+  }
+  if (parsed.max_inflight_per_target > parsed.service.operation_capacity) {
+    rc = flow_tfmp_management_config_error(
+        error, TURBO_EINVAL, channel_name, "max_inflight_per_target",
+        "max_inflight_per_target cannot exceed mailbox_capacity");
     goto done;
   }
   rc = flow_tfmp_management_config_copy(fields, "authority_id", 1, parsed.service.authority_id,
@@ -2174,7 +2191,7 @@ int turbo_flow_tfmp_management_channel_config_resolve(
     }
   }
   rc = flow_tfmp_management_config_adapter(document, channel_name, "rpc_adapter",
-                                           parsed.rpc_adapter, "rep", NULL, 1, error);
+                                           parsed.rpc_adapter, "router", NULL, 1, error);
   if (rc == TURBO_OK && parsed.event_adapter[0] != '\0')
     rc = flow_tfmp_management_config_adapter(document, channel_name, "event_adapter",
                                              parsed.event_adapter, "pub", "content", 0, error);
@@ -2936,9 +2953,9 @@ turbo_flow_tfmp_management_service_state(const turbo_flow_tfmp_management_servic
   return service ? service->state : (turbo_flow_tfmp_owner_state_t)0;
 }
 
-int turbo_flow_tfmp_management_service_execute(turbo_flow_tfmp_management_service_t *service,
-                                               const uint8_t *request, size_t request_size,
-                                               uint8_t *out, size_t capacity, size_t *out_len) {
+static int flow_tfmp_management_service_execute_impl(
+    turbo_flow_tfmp_management_service_t *service, const uint8_t *request, size_t request_size,
+    uint8_t *out, size_t capacity, size_t *out_len, int allow_wait_terminal) {
   turbo_flow_tfmp_envelope_t envelope = TURBO_FLOW_TFMP_ENVELOPE_INIT;
   flow_tfmp_management_result_t result = {TURBO_FLOW_TFMP_STATUS_OK, NULL, TURBO_OK, 0u,
                                           TURBO_FLOW_TFMP_DISPOSITION_NONE};
@@ -3006,7 +3023,15 @@ int turbo_flow_tfmp_management_service_execute(turbo_flow_tfmp_management_servic
 
 reply:
   return flow_tfmp_management_encode_response(service, decoded_request, reply_kind, correlation_id,
-                                              &result, out, capacity, out_len);
+                                              &result, out, capacity, out_len,
+                                              allow_wait_terminal);
+}
+
+int turbo_flow_tfmp_management_service_execute(turbo_flow_tfmp_management_service_t *service,
+                                               const uint8_t *request, size_t request_size,
+                                               uint8_t *out, size_t capacity, size_t *out_len) {
+  return flow_tfmp_management_service_execute_impl(service, request, request_size, out, capacity,
+                                                   out_len, 1);
 }
 
 static int flow_tfmp_management_reconcile_pool(turbo_flow_tfmp_management_service_t *service,
@@ -3315,9 +3340,9 @@ int turbo_flow_tfmp_management_stage(turbo_flow_msg_t *msg, void *ctx) {
   size_t reply_size = 0u;
   int rc;
   if (!msg || !service || (!msg->payload.data && msg->payload.len > 0u)) return TURBO_EINVAL;
-  rc = turbo_flow_tfmp_management_service_execute(service, (const uint8_t *)msg->payload.data,
-                                                  msg->payload.len, service->stage_reply,
-                                                  service->config.max_reply_bytes, &reply_size);
+  rc = flow_tfmp_management_service_execute_impl(
+      service, (const uint8_t *)msg->payload.data, msg->payload.len, service->stage_reply,
+      service->config.max_reply_bytes, &reply_size, 0);
   if (rc != TURBO_OK) return rc;
   payload = tstr_new_len(service->stage_reply, reply_size);
   if (!payload) return TURBO_ENOMEM;

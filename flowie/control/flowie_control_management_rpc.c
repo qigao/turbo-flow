@@ -20,16 +20,34 @@ enum {
   FLOWIE_CONTROL_RPC_DEFAULT_PAGE = 25
 };
 
-static const char *const FLOWIE_CONTROL_RPC_METHODS[] = {
-    "flowie.system.status",       "flowie.user.get",        "flowie.user.list",
-    "flowie.user.create",         "flowie.user.disable",    "flowie.group.list",
-    "flowie.group.create",        "flowie.group.disable",   "flowie.group.member.add",
-    "flowie.group.member.remove", "flowie.group.effective", "flowie.role.list",
-    "flowie.role.create",         "flowie.role.disable",    "flowie.role.assign",
-    "flowie.role.remove",         "flowie.role.effective",  "flowie.policy.status",
-    "flowie.policy.rule.list",    "flowie.policy.rule.put", "flowie.policy.rule.delete",
-    "flowie.policy.validate",     "flowie.policy.publish",  "flowie.audit.list",
-    "flowie.credential.generate", "flowie.credential.rotate", "flowie.credential.revoke"};
+static const char *const FLOWIE_CONTROL_RPC_METHODS[] = {"flowie.system.status",
+                                                         "flowie.auth.external_https.stats",
+                                                         "flowie.user.get",
+                                                         "flowie.user.list",
+                                                         "flowie.user.create",
+                                                         "flowie.user.disable",
+                                                         "flowie.group.list",
+                                                         "flowie.group.create",
+                                                         "flowie.group.disable",
+                                                         "flowie.group.member.add",
+                                                         "flowie.group.member.remove",
+                                                         "flowie.group.effective",
+                                                         "flowie.role.list",
+                                                         "flowie.role.create",
+                                                         "flowie.role.disable",
+                                                         "flowie.role.assign",
+                                                         "flowie.role.remove",
+                                                         "flowie.role.effective",
+                                                         "flowie.policy.status",
+                                                         "flowie.policy.rule.list",
+                                                         "flowie.policy.rule.put",
+                                                         "flowie.policy.rule.delete",
+                                                         "flowie.policy.validate",
+                                                         "flowie.policy.publish",
+                                                         "flowie.audit.list",
+                                                         "flowie.credential.generate",
+                                                         "flowie.credential.rotate",
+                                                         "flowie.credential.revoke"};
 
 struct flowie_control_management_rpc_server_s {
   flowie_control_management_service_t *service;
@@ -38,6 +56,8 @@ struct flowie_control_management_rpc_server_s {
   void *resolve_caller_ctx;
   flowie_control_management_rpc_clock_fn clock;
   void *clock_ctx;
+  flowie_control_management_rpc_external_https_stats_fn external_https_stats;
+  void *external_https_stats_ctx;
   iris_app_t *bound_app;
   size_t registered_method_count;
 };
@@ -281,6 +301,54 @@ static int flowie_control_rpc_system_status(flowie_control_management_rpc_server
   return flowie_control_rpc_result(response, object);
 }
 
+static int flowie_control_rpc_external_https_stats(flowie_control_management_rpc_server_t *server,
+                                                   const flowie_control_management_caller_t *caller,
+                                                   const rpc_request_t *request,
+                                                   rpc_response_t *response) {
+  flowie_control_external_https_authenticator_stats_t stats =
+      FLOWIE_CONTROL_EXTERNAL_HTTPS_AUTHENTICATOR_STATS_INIT;
+  turbo_json_doc_t *params = NULL;
+  json_value_t *object = NULL;
+  int rc = flowie_control_rpc_params(request, NULL, 0u, &params);
+  if (rc == TURBO_OK)
+    rc = flowie_control_management_authorize(server->service, caller,
+                                             FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN);
+  if (rc == TURBO_OK) rc = server->external_https_stats(server->external_https_stats_ctx, &stats);
+  turbo_free_json(&params);
+  if (rc != TURBO_OK && rc != TURBO_ENOENT) return flowie_control_rpc_error(response, rc);
+  object = turbo_json_create_object();
+  if (!object || flowie_control_rpc_add(object, "enabled",
+                                        turbo_json_create_bool(rc == TURBO_OK)) != TURBO_OK) {
+    flowie_control_rpc_free_json_value(object);
+    return flowie_control_rpc_error(response, TURBO_ENOMEM);
+  }
+  if (rc == TURBO_ENOENT) return flowie_control_rpc_result(response, object);
+  if (flowie_control_rpc_add(object, "started_requests",
+                             turbo_json_create_uint64(stats.started_requests)) != TURBO_OK ||
+      flowie_control_rpc_add(object, "in_flight", turbo_json_create_uint64(stats.in_flight)) !=
+          TURBO_OK ||
+      flowie_control_rpc_add(object, "succeeded", turbo_json_create_uint64(stats.succeeded)) !=
+          TURBO_OK ||
+      flowie_control_rpc_add(object, "denied", turbo_json_create_uint64(stats.denied)) !=
+          TURBO_OK ||
+      flowie_control_rpc_add(object, "local_overload",
+                             turbo_json_create_uint64(stats.local_overload)) != TURBO_OK ||
+      flowie_control_rpc_add(object, "remote_overload",
+                             turbo_json_create_uint64(stats.remote_overload)) != TURBO_OK ||
+      flowie_control_rpc_add(object, "remote_server_failures",
+                             turbo_json_create_uint64(stats.remote_server_failures)) != TURBO_OK ||
+      flowie_control_rpc_add(object, "transport_failures",
+                             turbo_json_create_uint64(stats.transport_failures)) != TURBO_OK ||
+      flowie_control_rpc_add(object, "protocol_failures",
+                             turbo_json_create_uint64(stats.protocol_failures)) != TURBO_OK ||
+      flowie_control_rpc_add(object, "local_failures",
+                             turbo_json_create_uint64(stats.local_failures)) != TURBO_OK) {
+    flowie_control_rpc_free_json_value(object);
+    return flowie_control_rpc_error(response, TURBO_ENOMEM);
+  }
+  return flowie_control_rpc_result(response, object);
+}
+
 static int flowie_control_rpc_user_get(flowie_control_management_rpc_server_t *server,
                                        const flowie_control_management_caller_t *caller,
                                        const rpc_request_t *request, rpc_response_t *response) {
@@ -402,10 +470,10 @@ static int flowie_control_rpc_user_write(flowie_control_management_rpc_server_t 
              : flowie_control_rpc_error(response, rc);
 }
 
-static int flowie_control_rpc_credential_issue(
-    flowie_control_management_rpc_server_t *server,
-    const flowie_control_management_caller_t *caller, const rpc_request_t *request,
-    rpc_response_t *response, int rotate) {
+static int flowie_control_rpc_credential_issue(flowie_control_management_rpc_server_t *server,
+                                               const flowie_control_management_caller_t *caller,
+                                               const rpc_request_t *request,
+                                               rpc_response_t *response, int rotate) {
   static const char *const allowed[] = {"principal_id", "request_id", "expected_revision"};
   turbo_json_doc_t *params = NULL;
   flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
@@ -438,9 +506,9 @@ static int flowie_control_rpc_credential_issue(
     command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = rotate ? flowie_control_management_credential_rotate(server->service, caller, &command,
-                                                               &generated)
+                                                              &generated)
                 : flowie_control_management_credential_generate(server->service, caller, &command,
-                                                                 &generated);
+                                                                &generated);
   }
   turbo_free_json(&params);
   if (rc == TURBO_EALREADY) {
@@ -479,10 +547,10 @@ done:
   return TURBO_OK;
 }
 
-static int flowie_control_rpc_credential_revoke(
-    flowie_control_management_rpc_server_t *server,
-    const flowie_control_management_caller_t *caller, const rpc_request_t *request,
-    rpc_response_t *response) {
+static int flowie_control_rpc_credential_revoke(flowie_control_management_rpc_server_t *server,
+                                                const flowie_control_management_caller_t *caller,
+                                                const rpc_request_t *request,
+                                                rpc_response_t *response) {
   static const char *const allowed[] = {"principal_id", "request_id", "expected_revision"};
   turbo_json_doc_t *params = NULL;
   flowie_control_credential_revoke_command_t command =
@@ -1072,6 +1140,8 @@ static int flowie_control_rpc_dispatch(flowie_control_management_rpc_server_t *s
   const char *method = request->method;
   if (strcmp(method, "flowie.system.status") == 0)
     return flowie_control_rpc_system_status(server, caller, request, response);
+  if (strcmp(method, "flowie.auth.external_https.stats") == 0)
+    return flowie_control_rpc_external_https_stats(server, caller, request, response);
   if (strcmp(method, "flowie.user.get") == 0)
     return flowie_control_rpc_user_get(server, caller, request, response);
   if (strcmp(method, "flowie.user.list") == 0)
@@ -1246,7 +1316,7 @@ int flowie_control_management_rpc_server_create(
   rpc_method_t method;
   if (out) *out = NULL;
   if (!config || config->size < sizeof(*config) || !config->service || !config->rpc_context ||
-      !config->resolve_caller || !config->clock || !out ||
+      !config->resolve_caller || !config->clock || !config->external_https_stats || !out ||
       config->rpc_context->method_count != 0u ||
       config->rpc_context->config.default_protocol != RPC_PROTOCOL_JSON ||
       config->rpc_context->config.enable_batch ||
@@ -1263,6 +1333,8 @@ int flowie_control_management_rpc_server_create(
   server->resolve_caller_ctx = config->resolve_caller_ctx;
   server->clock = config->clock;
   server->clock_ctx = config->clock_ctx;
+  server->external_https_stats = config->external_https_stats;
+  server->external_https_stats_ctx = config->external_https_stats_ctx;
   memset(&method, 0, sizeof(method));
   method.handler = flowie_control_rpc_registered_method;
   method.description = "Flowie management method";

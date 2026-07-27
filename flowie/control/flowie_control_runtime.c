@@ -1,16 +1,23 @@
 #include "flowie_control_runtime_internal.h"
 
+#include "platform.h"
+#include "CoroNet/turbo_coro_context.h"
+#include "CoroNet/turbo_coro_socket.h"
+#include "flowie_control_acl_iris_endpoint_internal.h"
 #include "flowie_control_auth_iris_adapter_internal.h"
 #include "flowie_control_auth_iris_endpoint_internal.h"
 #include "flowie_control_dashboard_internal.h"
+#if defined(FLOWIE_CONTROL_HAS_EXTERNAL_HTTPS_AUTH)
+  #include "flowie_control_external_https_authenticator_internal.h"
+#endif
+#if defined(FLOWIE_CONTROL_HAS_PGSQL)
+  #include "flowie_control_pgsql_repository_internal.h"
+#endif
 #include "flowie_control_management_rpc_internal.h"
-#include "CoroNet/turbo_coro_context.h"
-#include "CoroNet/turbo_coro_socket.h"
 #include "iris/iris_app.h"
 #include "iris/middleware.h"
 #include "iris/rpc_server.h"
 #include "monocypher.h"
-#include "platform.h"
 #include "turbo_error.h"
 
 #include <stdlib.h>
@@ -23,6 +30,10 @@ struct flowie_control_runtime_s {
   flowie_control_config_t config;
   uint8_t csrf_key[FLOWIE_CONTROL_CSRF_KEY_SIZE];
   flowie_control_store_t *store;
+#if defined(FLOWIE_CONTROL_HAS_PGSQL)
+  flowie_control_pgsql_repository_provider_t *pgsql_provider;
+#endif
+  const flowie_control_repository_t *repository;
   flowie_control_management_service_t *management_service;
   rpc_context_t *rpc_context;
   iris_app_t *app;
@@ -31,11 +42,35 @@ struct flowie_control_runtime_s {
   flowie_control_auth_service_t *auth_service;
   flowie_control_auth_iris_adapter_t *auth_adapter;
   flowie_control_auth_iris_endpoint_t *auth_endpoint;
+  flowie_control_acl_iris_endpoint_t *acl_endpoint;
+#if defined(FLOWIE_CONTROL_HAS_EXTERNAL_HTTPS_AUTH)
+  flowie_control_external_https_authenticator_t *external_https_authenticator;
+  flowie_control_external_subject_mapper_t *external_subject_mapper;
+#endif
 };
+
+#if defined(FLOWIE_CONTROL_HAS_EXTERNAL_HTTPS_AUTH)
+static int flowie_control_runtime_validate_external_https(const flowie_control_config_t *config);
+#endif
 
 static uint64_t flowie_control_runtime_clock(void *ctx) {
   (void)ctx;
   return turbo_realtime_ms() / 1000u;
+}
+
+static int flowie_control_runtime_external_https_stats(
+    void *ctx, flowie_control_external_https_authenticator_stats_t *stats_out) {
+  flowie_control_runtime_t *runtime = (flowie_control_runtime_t *)ctx;
+  if (!runtime || !stats_out || stats_out->size < sizeof(*stats_out)) return TURBO_EINVAL;
+  *stats_out = (flowie_control_external_https_authenticator_stats_t)
+      FLOWIE_CONTROL_EXTERNAL_HTTPS_AUTHENTICATOR_STATS_INIT;
+#if defined(FLOWIE_CONTROL_HAS_EXTERNAL_HTTPS_AUTH)
+  if (!runtime->external_https_authenticator) return TURBO_ENOENT;
+  return flowie_control_external_https_authenticator_get_stats(
+      runtime->external_https_authenticator, stats_out);
+#else
+  return TURBO_ENOENT;
+#endif
 }
 
 static int flowie_control_runtime_routes_valid(const flowie_control_config_t *config) {
@@ -44,8 +79,12 @@ static int flowie_control_runtime_routes_valid(const flowie_control_config_t *co
       FLOWIE_CONTROL_DASHBOARD_ACTION_PATH, FLOWIE_CONTROL_DASHBOARD_CSS_PATH,
       FLOWIE_CONTROL_DASHBOARD_HTMX_PATH};
   if (!config || !config->management.rpc_path[0]) return 0;
+  if (config->auth.external_https.enabled && !config->auth.enabled) return 0;
   if (config->auth.enabled &&
       strcmp(config->management.rpc_path, FLOWIE_CONTROL_AUTH_HTTP_PATH) == 0)
+    return 0;
+  if (config->auth.enabled &&
+      strcmp(config->management.rpc_path, FLOWIE_CONTROL_ACL_HTTP_PATH) == 0)
     return 0;
   if (config->dashboard_enabled) {
     for (size_t index = 0u; index < sizeof(dashboard_paths) / sizeof(dashboard_paths[0]); ++index) {
@@ -75,19 +114,46 @@ static int flowie_control_runtime_tls_config(const flowie_control_config_t *conf
                                              turbo_tls_server_config_t *tls_out) {
   const char *password = NULL;
   int rc;
-  if (!config || config->size < sizeof(*config) || config->version != FLOWIE_CONTROL_CONFIG_VERSION ||
-      !tls_out)
+  if (!config || config->size < sizeof(*config) ||
+      config->version != FLOWIE_CONTROL_CONFIG_VERSION || !tls_out)
     return TURBO_EINVAL;
   rc = flowie_control_runtime_env_secret(config->listener.tls.key_password_ref, &password);
   if (rc != TURBO_OK) return rc;
   *tls_out = (turbo_tls_server_config_t){sizeof(*tls_out),
-                                        config->listener.tls.cert_file,
-                                        config->listener.tls.key_file,
-                                        password,
-                                        config->listener.tls.client_ca_file,
-                                        NULL,
-                                        TURBO_TLS_CLIENT_AUTH_REQUIRED};
+                                         config->listener.tls.cert_file,
+                                         config->listener.tls.key_file,
+                                         password,
+                                         config->listener.tls.client_ca_file,
+                                         NULL,
+                                         TURBO_TLS_CLIENT_AUTH_REQUIRED};
   return TURBO_OK;
+}
+
+static int flowie_control_runtime_validate_store(const flowie_control_config_t *config) {
+  const char *password = NULL;
+  int rc;
+  if (!config || config->size < sizeof(*config) || config->version != FLOWIE_CONTROL_CONFIG_VERSION)
+    return TURBO_EINVAL;
+  switch (config->store_provider) {
+  case FLOWIE_CONTROL_CONFIG_STORE_SQLITE:
+    return TURBO_OK;
+  case FLOWIE_CONTROL_CONFIG_STORE_POSTGRESQL:
+#if defined(FLOWIE_CONTROL_HAS_PGSQL)
+    rc = flowie_control_pgsql_public_conninfo_validate(config->postgresql.conninfo);
+    if (rc != TURBO_OK) return rc;
+    rc = flowie_control_runtime_env_secret(config->postgresql.password_ref, &password);
+    if (rc != TURBO_OK) return rc;
+    if (!password || strlen(password) > FLOWIE_CONTROL_CONFIG_PGSQL_CONNINFO_MAX)
+      return TURBO_EINVAL;
+    return TURBO_OK;
+#else
+    (void)password;
+    (void)rc;
+    return TURBO_ENOTSUP;
+#endif
+  default:
+    return TURBO_EINVAL;
+  }
 }
 
 int flowie_control_runtime_validate(const flowie_control_config_t *config) {
@@ -96,6 +162,21 @@ int flowie_control_runtime_validate(const flowie_control_config_t *config) {
   coro_socket_t *socket = NULL;
   int rc;
   if (!flowie_control_runtime_routes_valid(config)) return TURBO_EINVAL;
+  if (config->auth.enabled &&
+      ((config->auth.external_https.enabled && config->auth.local_executor.configured) ||
+       (!config->auth.external_https.enabled &&
+        (config->auth.local_executor.workers == 0u ||
+         config->auth.local_executor.workers >
+             FLOWIE_CONTROL_CONFIG_AUTH_LOCAL_EXECUTOR_MAX_WORKERS ||
+         config->auth.local_executor.queue_capacity == 0u ||
+         config->auth.local_executor.queue_capacity >
+             FLOWIE_CONTROL_CONFIG_AUTH_LOCAL_EXECUTOR_MAX_QUEUE_CAPACITY ||
+         config->auth.local_executor.deadline_ms == 0u ||
+         config->auth.local_executor.deadline_ms >
+             FLOWIE_CONTROL_CONFIG_AUTH_LOCAL_EXECUTOR_MAX_DEADLINE_MS))))
+    return TURBO_EINVAL;
+  rc = flowie_control_runtime_validate_store(config);
+  if (rc != TURBO_OK) return rc;
   rc = flowie_control_runtime_tls_config(config, &tls);
   if (rc != TURBO_OK) return rc;
   context = coro_context_create(NULL);
@@ -106,6 +187,13 @@ int flowie_control_runtime_validate(const flowie_control_config_t *config) {
     goto done;
   }
   rc = coro_socket_set_tls_server_config(socket, &tls);
+  if (rc == TURBO_OK && config->auth.external_https.enabled) {
+#if defined(FLOWIE_CONTROL_HAS_EXTERNAL_HTTPS_AUTH)
+    rc = flowie_control_runtime_validate_external_https(config);
+#else
+    rc = TURBO_ENOTSUP;
+#endif
+  }
 
 done:
   if (socket) coro_socket_destroy(socket);
@@ -113,8 +201,8 @@ done:
   return rc;
 }
 
-static uint32_t flowie_control_runtime_permissions(
-    const flowie_control_effective_roles_view_t *roles) {
+static uint32_t
+flowie_control_runtime_permissions(const flowie_control_effective_roles_view_t *roles) {
   uint32_t permissions = 0u;
   if (!roles || roles->size < sizeof(*roles)) return 0u;
   for (uint32_t index = 0u; index < roles->role_count; ++index) {
@@ -132,18 +220,18 @@ static uint32_t flowie_control_runtime_permissions(
 }
 
 int flowie_control_management_identity_resolve(
-    flowie_control_store_t *store, const flowie_control_config_admin_binding_t *bindings,
-    size_t binding_count, const char *fingerprint,
-    flowie_control_management_caller_t *caller_out) {
+    const flowie_control_repository_t *repository,
+    const flowie_control_config_admin_binding_t *bindings, size_t binding_count,
+    const char *fingerprint, flowie_control_management_caller_t *caller_out) {
   flowie_control_user_view_t user = FLOWIE_CONTROL_USER_VIEW_INIT;
   flowie_control_effective_roles_view_t roles = FLOWIE_CONTROL_EFFECTIVE_ROLES_VIEW_INIT;
   flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   const flowie_control_config_admin_binding_t *binding = NULL;
   int rc;
   if (caller_out && caller_out->size >= sizeof(*caller_out)) *caller_out = caller;
-  if (!store || !bindings || binding_count == 0u ||
-      binding_count > FLOWIE_CONTROL_CONFIG_MAX_ADMIN_BINDINGS || !fingerprint || !caller_out ||
-      caller_out->size < sizeof(*caller_out))
+  if (flowie_control_repository_validate(repository) != TURBO_OK || !bindings ||
+      binding_count == 0u || binding_count > FLOWIE_CONTROL_CONFIG_MAX_ADMIN_BINDINGS ||
+      !fingerprint || !caller_out || caller_out->size < sizeof(*caller_out))
     return TURBO_EINVAL;
   for (size_t index = 0u; index < binding_count; ++index) {
     const flowie_control_config_admin_binding_t *candidate = &bindings[index];
@@ -153,10 +241,10 @@ int flowie_control_management_identity_resolve(
     }
   }
   if (!binding) return TURBO_EPERM;
-  rc = flowie_control_store_user_get(store, binding->root_group_id, binding->principal_id, &user);
+  rc = repository->user->get(repository->ctx, binding->root_group_id, binding->principal_id, &user);
   if (rc != TURBO_OK || !user.enabled) return TURBO_EPERM;
-  rc = flowie_control_store_effective_roles(store, binding->root_group_id, binding->principal_id,
-                                            &roles);
+  rc = repository->role->effective(repository->ctx, binding->root_group_id, binding->principal_id,
+                                   &roles);
   if (rc != TURBO_OK) return rc == TURBO_EINVAL ? rc : TURBO_EPERM;
   caller.permissions = flowie_control_runtime_permissions(&roles);
   if (caller.permissions == 0u) return TURBO_EPERM;
@@ -171,7 +259,7 @@ int flowie_control_runtime_resolve_management_fingerprint(
     flowie_control_management_caller_t *caller_out) {
   if (!runtime) return TURBO_EINVAL;
   return flowie_control_management_identity_resolve(
-      runtime->store, runtime->config.management.admin_bindings,
+      runtime->repository, runtime->config.management.admin_bindings,
       runtime->config.management.admin_binding_count, fingerprint, caller_out);
 }
 
@@ -179,7 +267,7 @@ static int flowie_control_runtime_fingerprint(const Req *request,
                                               char output[CORO_TLS_PEER_CERT_SHA256_CAPACITY]) {
   if (!request || !output) return TURBO_EINVAL;
   return req_get_verified_tls_peer_certificate_sha256(request, output) == TURBO_OK ? TURBO_OK
-                                                                                  : TURBO_EPERM;
+                                                                                   : TURBO_EPERM;
 }
 
 static int flowie_control_runtime_mtls_middleware(Req *request, Res *response, Chain *chain) {
@@ -196,13 +284,13 @@ static int flowie_control_runtime_mtls_middleware(Req *request, Res *response, C
   return next(chain, request, response);
 }
 
-static int flowie_control_runtime_resolve_caller(
-    void *ctx, const Req *request, flowie_control_management_caller_t *caller_out) {
+static int flowie_control_runtime_resolve_caller(void *ctx, const Req *request,
+                                                 flowie_control_management_caller_t *caller_out) {
   char fingerprint[CORO_TLS_PEER_CERT_SHA256_CAPACITY] = {0};
   int rc = flowie_control_runtime_fingerprint(request, fingerprint);
   if (rc == TURBO_OK)
-    rc = flowie_control_runtime_resolve_management_fingerprint(
-        (flowie_control_runtime_t *)ctx, fingerprint, caller_out);
+    rc = flowie_control_runtime_resolve_management_fingerprint((flowie_control_runtime_t *)ctx,
+                                                               fingerprint, caller_out);
   crypto_wipe(fingerprint, sizeof(fingerprint));
   return rc;
 }
@@ -240,14 +328,16 @@ static int flowie_control_runtime_policy_version(void *ctx, const char *root_gro
   flowie_control_policy_status_t status = FLOWIE_CONTROL_POLICY_STATUS_INIT;
   int rc;
   if (policy_version_out) *policy_version_out = 0u;
-  if (!runtime || !runtime->store || !root_group_id || !policy_version_out) return TURBO_EINVAL;
-  rc = flowie_control_store_policy_status(runtime->store, root_group_id, &status);
+  if (!runtime || flowie_control_repository_validate(runtime->repository) != TURBO_OK ||
+      !root_group_id || !policy_version_out)
+    return TURBO_EINVAL;
+  rc = runtime->repository->policy->status(runtime->repository->ctx, root_group_id, &status);
   if (rc == TURBO_OK) *policy_version_out = status.policy_version;
   return rc;
 }
 
-static int flowie_control_runtime_secret_acquire(
-    void *ctx, const char *reference, turbo_flow_security_secret_lease_t *lease_out) {
+static int flowie_control_runtime_secret_acquire(void *ctx, const char *reference,
+                                                 turbo_flow_security_secret_lease_t *lease_out) {
   const char *value = NULL;
   int rc;
   (void)ctx;
@@ -267,6 +357,84 @@ static void flowie_control_runtime_secret_release(void *ctx,
   (void)lease;
 }
 
+static turbo_flow_security_key_provider_t
+flowie_control_runtime_key_provider(flowie_control_runtime_t *runtime) {
+  turbo_flow_security_key_provider_t provider = TURBO_FLOW_SECURITY_KEY_PROVIDER_INIT;
+  provider.ctx = runtime;
+  provider.acquire = flowie_control_runtime_secret_acquire;
+  provider.release = flowie_control_runtime_secret_release;
+  return provider;
+}
+
+#if defined(FLOWIE_CONTROL_HAS_EXTERNAL_HTTPS_AUTH)
+static void flowie_control_runtime_external_configs(
+    const flowie_control_config_t *config, const turbo_flow_security_key_provider_t *key_provider,
+    flowie_control_external_https_authenticator_config_t *authenticator_out,
+    flowie_control_external_subject_mapper_config_t *mapper_out) {
+  const flowie_control_config_external_https_t *external = &config->auth.external_https;
+  *authenticator_out = (flowie_control_external_https_authenticator_config_t)
+      FLOWIE_CONTROL_EXTERNAL_HTTPS_AUTHENTICATOR_CONFIG_INIT;
+  authenticator_out->url = external->url;
+  authenticator_out->method = config->auth.method;
+  authenticator_out->service_token_ref = external->service_token_ref;
+  authenticator_out->timeout_ms = external->timeout_ms;
+  authenticator_out->max_response_size = external->max_response_size;
+  authenticator_out->max_in_flight = external->max_in_flight;
+  authenticator_out->key_provider = *key_provider;
+  authenticator_out->tls.ca_file = external->tls.ca_file[0] ? external->tls.ca_file : NULL;
+  authenticator_out->tls.client_cert_file =
+      external->tls.client_cert_file[0] ? external->tls.client_cert_file : NULL;
+  authenticator_out->tls.client_key_file =
+      external->tls.client_key_file[0] ? external->tls.client_key_file : NULL;
+  authenticator_out->tls.client_key_password_ref =
+      external->tls.client_key_password_ref[0] ? external->tls.client_key_password_ref : NULL;
+  *mapper_out = (flowie_control_external_subject_mapper_config_t)
+      FLOWIE_CONTROL_EXTERNAL_SUBJECT_MAPPER_CONFIG_INIT;
+  mapper_out->trusted_issuer = external->trusted_issuer;
+  mapper_out->subject_type = external->subject_type;
+}
+
+static int flowie_control_runtime_validate_external_https(const flowie_control_config_t *config) {
+  turbo_flow_security_key_provider_t key_provider = flowie_control_runtime_key_provider(NULL);
+  flowie_control_external_https_authenticator_config_t authenticator_config;
+  flowie_control_external_subject_mapper_config_t mapper_config;
+  flowie_control_external_https_authenticator_t *authenticator = NULL;
+  flowie_control_external_subject_mapper_t *mapper = NULL;
+  int rc;
+  if (!config->auth.external_https.enabled) return TURBO_OK;
+  flowie_control_runtime_external_configs(config, &key_provider, &authenticator_config,
+                                          &mapper_config);
+  rc = flowie_control_external_https_authenticator_create(&authenticator_config, &authenticator);
+  if (rc == TURBO_OK) rc = flowie_control_external_subject_mapper_create(&mapper_config, &mapper);
+  flowie_control_external_subject_mapper_destroy(mapper);
+  flowie_control_external_https_authenticator_destroy(authenticator);
+  return rc;
+}
+
+static int
+flowie_control_runtime_create_external_https(flowie_control_runtime_t *runtime,
+                                             flowie_control_auth_service_config_t *service_config) {
+  turbo_flow_security_key_provider_t key_provider = flowie_control_runtime_key_provider(runtime);
+  flowie_control_external_https_authenticator_config_t authenticator_config;
+  flowie_control_external_subject_mapper_config_t mapper_config;
+  int rc;
+  if (!runtime->config.auth.external_https.enabled) return TURBO_OK;
+  flowie_control_runtime_external_configs(&runtime->config, &key_provider, &authenticator_config,
+                                          &mapper_config);
+  rc = flowie_control_external_https_authenticator_create(&authenticator_config,
+                                                          &runtime->external_https_authenticator);
+  if (rc != TURBO_OK) return rc;
+  rc = flowie_control_external_subject_mapper_create(&mapper_config,
+                                                     &runtime->external_subject_mapper);
+  if (rc != TURBO_OK) return rc;
+  service_config->external_authenticator =
+      flowie_control_external_https_authenticator_interface(runtime->external_https_authenticator);
+  service_config->external_identity_mapper =
+      flowie_control_external_subject_mapper_interface(runtime->external_subject_mapper);
+  return TURBO_OK;
+}
+#endif
+
 static int flowie_control_runtime_create_auth(flowie_control_runtime_t *runtime) {
   flowie_control_auth_root_binding_t bindings[FLOWIE_CONTROL_AUTH_MAX_BINDINGS];
   flowie_control_auth_service_config_t service_config = FLOWIE_CONTROL_AUTH_SERVICE_CONFIG_INIT;
@@ -274,6 +442,8 @@ static int flowie_control_runtime_create_auth(flowie_control_runtime_t *runtime)
       FLOWIE_CONTROL_AUTH_IRIS_ADAPTER_CONFIG_INIT;
   flowie_control_auth_iris_endpoint_config_t endpoint_config =
       FLOWIE_CONTROL_AUTH_IRIS_ENDPOINT_CONFIG_INIT;
+  flowie_control_acl_iris_endpoint_config_t acl_config =
+      FLOWIE_CONTROL_ACL_IRIS_ENDPOINT_CONFIG_INIT;
   int rc;
   if (!runtime->config.auth.enabled) return TURBO_OK;
   memset(bindings, 0, sizeof(bindings));
@@ -284,10 +454,11 @@ static int flowie_control_runtime_create_auth(flowie_control_runtime_t *runtime)
     bindings[index].peer_certificate_sha256 =
         runtime->config.auth.bindings[index].peer_certificate_sha256;
     bindings[index].root_group_id = runtime->config.auth.bindings[index].root_group_id;
-    rc = flowie_control_store_policy_status(runtime->store, bindings[index].root_group_id, &status);
+    rc = runtime->repository->policy->status(runtime->repository->ctx,
+                                             bindings[index].root_group_id, &status);
     if (rc != TURBO_OK) return rc;
   }
-  service_config.store = runtime->store;
+  service_config.repository = runtime->repository;
   service_config.bindings = bindings;
   service_config.binding_count = runtime->config.auth.binding_count;
   service_config.method = runtime->config.auth.method;
@@ -296,10 +467,15 @@ static int flowie_control_runtime_create_auth(flowie_control_runtime_t *runtime)
   service_config.credential_cache.ttl_ms =
       runtime->config.auth.credential_cache_ttl_seconds * 1000u;
   service_config.principal_cache.capacity = runtime->config.auth.credential_cache_capacity;
-  service_config.principal_cache.ttl_ms =
-      runtime->config.auth.credential_cache_ttl_seconds * 1000u;
+  service_config.principal_cache.ttl_ms = runtime->config.auth.credential_cache_ttl_seconds * 1000u;
   service_config.policy_version.ctx = runtime;
   service_config.policy_version.current = flowie_control_runtime_policy_version;
+#if defined(FLOWIE_CONTROL_HAS_EXTERNAL_HTTPS_AUTH)
+  rc = flowie_control_runtime_create_external_https(runtime, &service_config);
+  if (rc != TURBO_OK) return rc;
+#else
+  if (runtime->config.auth.external_https.enabled) return TURBO_ENOTSUP;
+#endif
   rc = flowie_control_auth_service_create(&service_config, &runtime->auth_service);
   if (rc != TURBO_OK) return rc;
   adapter_config.service = runtime->auth_service;
@@ -308,19 +484,77 @@ static int flowie_control_runtime_create_auth(flowie_control_runtime_t *runtime)
   if (rc != TURBO_OK) return rc;
   endpoint_config.adapter = runtime->auth_adapter;
   endpoint_config.service_token_ref = runtime->config.auth.service_token_ref;
-  endpoint_config.key_provider.ctx = runtime;
-  endpoint_config.key_provider.acquire = flowie_control_runtime_secret_acquire;
-  endpoint_config.key_provider.release = flowie_control_runtime_secret_release;
+  endpoint_config.key_provider = flowie_control_runtime_key_provider(runtime);
   endpoint_config.max_request_body_size = FLOWIE_CONTROL_AUTH_ENDPOINT_BODY_MAX;
+  endpoint_config.local_executor_enabled = runtime->config.auth.external_https.enabled ? 0 : 1;
+  endpoint_config.local_executor_workers = runtime->config.auth.local_executor.workers;
+  endpoint_config.local_executor_queue_capacity =
+      runtime->config.auth.local_executor.queue_capacity;
+  endpoint_config.local_executor_deadline_ms = runtime->config.auth.local_executor.deadline_ms;
   rc = flowie_control_auth_iris_endpoint_create(&endpoint_config, &runtime->auth_endpoint);
   if (rc != TURBO_OK) return rc;
-  return flowie_control_auth_iris_endpoint_register(runtime->auth_endpoint, runtime->app);
+  rc = flowie_control_auth_iris_endpoint_register(runtime->auth_endpoint, runtime->app);
+  if (rc != TURBO_OK) return rc;
+  acl_config.repository = runtime->repository;
+  acl_config.auth_service = runtime->auth_service;
+  acl_config.listener_id = runtime->config.auth.listener_id;
+  acl_config.service_token_ref = runtime->config.auth.service_token_ref;
+  acl_config.key_provider = flowie_control_runtime_key_provider(runtime);
+  rc = flowie_control_acl_iris_endpoint_create(&acl_config, &runtime->acl_endpoint);
+  if (rc != TURBO_OK) return rc;
+  return flowie_control_acl_iris_endpoint_register(runtime->acl_endpoint, runtime->app);
+}
+
+static int flowie_control_runtime_create_repository(flowie_control_runtime_t *runtime) {
+  flowie_control_store_config_t sqlite_config = FLOWIE_CONTROL_STORE_CONFIG_INIT;
+  if (!runtime) return TURBO_EINVAL;
+  switch (runtime->config.store_provider) {
+  case FLOWIE_CONTROL_CONFIG_STORE_SQLITE:
+    sqlite_config.database_path = runtime->config.sqlite_path;
+    sqlite_config.busy_timeout_ms = runtime->config.sqlite_busy_timeout_ms;
+    {
+      int rc = flowie_control_store_open(&sqlite_config, &runtime->store);
+      if (rc != TURBO_OK) return rc;
+    }
+    runtime->repository = flowie_control_store_repository(runtime->store);
+    break;
+  case FLOWIE_CONTROL_CONFIG_STORE_POSTGRESQL:
+#if defined(FLOWIE_CONTROL_HAS_PGSQL)
+  {
+    flowie_control_pgsql_pool_config_t pgsql_config = FLOWIE_CONTROL_PGSQL_POOL_CONFIG_INIT;
+    const char *password = NULL;
+    int rc = flowie_control_runtime_env_secret(runtime->config.postgresql.password_ref, &password);
+    if (rc != TURBO_OK) return rc;
+    pgsql_config.database.conninfo = runtime->config.postgresql.conninfo;
+    pgsql_config.database.password = password;
+    pgsql_config.database.schema_name = runtime->config.postgresql.schema_name;
+    pgsql_config.database.connect_timeout_seconds =
+        runtime->config.postgresql.connect_timeout_seconds;
+    pgsql_config.database.statement_timeout_ms = runtime->config.postgresql.statement_timeout_ms;
+    pgsql_config.database.lock_timeout_ms = runtime->config.postgresql.lock_timeout_ms;
+    pgsql_config.database.require_tls = 1;
+    pgsql_config.database.schema_mode =
+        runtime->config.postgresql.schema_mode == FLOWIE_CONTROL_CONFIG_PGSQL_SCHEMA_MIGRATE
+            ? FLOWIE_CONTROL_PGSQL_SCHEMA_MIGRATE
+            : FLOWIE_CONTROL_PGSQL_SCHEMA_VALIDATE;
+    pgsql_config.capacity = runtime->config.postgresql.pool_capacity;
+    pgsql_config.acquire_timeout_ms = runtime->config.postgresql.acquire_timeout_ms;
+    rc = flowie_control_pgsql_repository_create(&pgsql_config, &runtime->pgsql_provider);
+    if (rc != TURBO_OK) return rc;
+    runtime->repository = flowie_control_pgsql_repository_view(runtime->pgsql_provider);
+  } break;
+#else
+    return TURBO_ENOTSUP;
+#endif
+  default:
+    return TURBO_EINVAL;
+  }
+  return flowie_control_repository_validate(runtime->repository);
 }
 
 int flowie_control_runtime_create(const flowie_control_config_t *config,
                                   flowie_control_runtime_t **out) {
   flowie_control_runtime_t *runtime = NULL;
-  flowie_control_store_config_t store_config = FLOWIE_CONTROL_STORE_CONFIG_INIT;
   flowie_control_management_service_config_t management_config =
       FLOWIE_CONTROL_MANAGEMENT_SERVICE_CONFIG_INIT;
   flowie_control_management_rpc_server_config_t rpc_server_config =
@@ -330,8 +564,8 @@ int flowie_control_runtime_create(const flowie_control_config_t *config,
   rpc_config_t rpc_config = RPC_DEFAULT_CONFIG();
   int rc;
   if (out) *out = NULL;
-  if (!config || config->size < sizeof(*config) || config->version != FLOWIE_CONTROL_CONFIG_VERSION ||
-      !out)
+  if (!config || config->size < sizeof(*config) ||
+      config->version != FLOWIE_CONTROL_CONFIG_VERSION || !out)
     return TURBO_EINVAL;
   rc = flowie_control_runtime_validate(config);
   if (rc != TURBO_OK) return rc;
@@ -342,11 +576,9 @@ int flowie_control_runtime_create(const flowie_control_config_t *config,
     rc = TURBO_EIO;
     goto fail;
   }
-  store_config.database_path = runtime->config.sqlite_path;
-  store_config.busy_timeout_ms = runtime->config.sqlite_busy_timeout_ms;
-  rc = flowie_control_store_open(&store_config, &runtime->store);
+  rc = flowie_control_runtime_create_repository(runtime);
   if (rc != TURBO_OK) goto fail;
-  management_config.store = runtime->store;
+  management_config.repository = runtime->repository;
   rc = flowie_control_management_service_create(&management_config, &runtime->management_service);
   if (rc != TURBO_OK) goto fail;
   runtime->app = iris_app_create();
@@ -380,6 +612,8 @@ int flowie_control_runtime_create(const flowie_control_config_t *config,
   rpc_server_config.resolve_caller = flowie_control_runtime_resolve_caller;
   rpc_server_config.resolve_caller_ctx = runtime;
   rpc_server_config.clock = flowie_control_runtime_clock;
+  rpc_server_config.external_https_stats = flowie_control_runtime_external_https_stats;
+  rpc_server_config.external_https_stats_ctx = runtime;
   rc = flowie_control_management_rpc_server_create(&rpc_server_config, &runtime->management_rpc);
   if (rc != TURBO_OK) goto fail;
   rc = flowie_control_management_rpc_server_bind(runtime->management_rpc, runtime->app);
@@ -404,8 +638,10 @@ int flowie_control_runtime_create(const flowie_control_config_t *config,
   *out = runtime;
   return TURBO_OK;
 
-fail:
-  flowie_control_runtime_destroy(runtime);
+fail: {
+  int cleanup_rc = flowie_control_runtime_destroy(runtime);
+  if (cleanup_rc != TURBO_OK) return cleanup_rc;
+}
   return rc;
 }
 
@@ -421,14 +657,23 @@ int flowie_control_runtime_run(flowie_control_runtime_t *runtime) {
              : TURBO_EIO;
 }
 
-void flowie_control_runtime_destroy(flowie_control_runtime_t *runtime) {
-  if (!runtime) return;
+int flowie_control_runtime_destroy(flowie_control_runtime_t *runtime) {
+  int rc;
+  if (!runtime) return TURBO_OK;
+  flowie_control_acl_iris_endpoint_destroy(runtime->acl_endpoint);
+  runtime->acl_endpoint = NULL;
   flowie_control_auth_iris_endpoint_destroy(runtime->auth_endpoint);
   runtime->auth_endpoint = NULL;
   flowie_control_auth_iris_adapter_destroy(runtime->auth_adapter);
   runtime->auth_adapter = NULL;
   flowie_control_auth_service_destroy(runtime->auth_service);
   runtime->auth_service = NULL;
+#if defined(FLOWIE_CONTROL_HAS_EXTERNAL_HTTPS_AUTH)
+  flowie_control_external_subject_mapper_destroy(runtime->external_subject_mapper);
+  runtime->external_subject_mapper = NULL;
+  flowie_control_external_https_authenticator_destroy(runtime->external_https_authenticator);
+  runtime->external_https_authenticator = NULL;
+#endif
   flowie_control_dashboard_destroy(runtime->dashboard);
   runtime->dashboard = NULL;
   flowie_control_management_rpc_server_destroy(runtime->management_rpc);
@@ -439,8 +684,17 @@ void flowie_control_runtime_destroy(flowie_control_runtime_t *runtime) {
   runtime->rpc_context = NULL;
   flowie_control_management_service_destroy(runtime->management_service);
   runtime->management_service = NULL;
+#if defined(FLOWIE_CONTROL_HAS_PGSQL)
+  rc = flowie_control_pgsql_repository_destroy(runtime->pgsql_provider, 0);
+  if (rc != TURBO_OK) return rc;
+  runtime->pgsql_provider = NULL;
+#else
+  rc = TURBO_OK;
+#endif
   flowie_control_store_destroy(runtime->store);
   runtime->store = NULL;
+  runtime->repository = NULL;
   crypto_wipe(runtime, sizeof(*runtime));
   free(runtime);
+  return rc;
 }

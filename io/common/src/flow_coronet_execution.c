@@ -44,20 +44,55 @@ static void tf_coronet_call_run(void *arg1, void *arg2) {
   tf_coronet_call_release(call);
 }
 
+static void tf_coronet_call_coro_run(coro_t *co, void *arg) {
+  tf_coronet_call_t *call = (tf_coronet_call_t *)arg;
+  int status;
+  (void)co;
+  turbo_mutex_lock(&call->mutex);
+  if (call->canceled) {
+    turbo_mutex_unlock(&call->mutex);
+    tf_coronet_call_release(call);
+    return;
+  }
+  call->started = 1;
+  turbo_mutex_unlock(&call->mutex);
+  status = call->fn(call->arg);
+  turbo_mutex_lock(&call->mutex);
+  call->status = status;
+  call->done = 1;
+  turbo_cond_signal(&call->cond);
+  turbo_mutex_unlock(&call->mutex);
+  tf_coronet_call_release(call);
+}
+
+static void tf_coronet_call_coro_spawn(void *arg1, void *arg2) {
+  tf_coronet_call_t *call = (tf_coronet_call_t *)arg1;
+  coro_context_t *context = coro_context_current();
+  int rc;
+  (void)arg2;
+  turbo_mutex_lock(&call->mutex);
+  if (call->canceled) {
+    turbo_mutex_unlock(&call->mutex);
+    tf_coronet_call_release(call);
+    return;
+  }
+  turbo_mutex_unlock(&call->mutex);
+  rc = coro_context_spawn(context, tf_coronet_call_coro_run, call);
+  if (rc == TURBO_OK) return;
+  turbo_mutex_lock(&call->mutex);
+  call->started = 1;
+  call->status = rc;
+  call->done = 1;
+  turbo_cond_signal(&call->cond);
+  turbo_mutex_unlock(&call->mutex);
+  tf_coronet_call_release(call);
+}
+
 static void tf_coronet_execution_loop(void *arg) {
   tf_coronet_execution_t *execution = (tf_coronet_execution_t *)arg;
   if (execution && execution->context) {
     (void)coro_context_run(execution->context, TURBO_RUN_DEFAULT);
   }
-}
-
-static void tf_coronet_execution_stop_post(void *arg1, void *arg2) {
-  (void)arg2;
-  /* The caller already clears persistent mode before posting this wake-up.
-   * Let the loop drain canceled admission/close coroutines before it exits;
-   * coro_context_stop() would terminate after one scheduler tick and can
-   * leave transport-owned sockets unreleased. */
-  coro_context_set_persistent((coro_context_t *)arg1, 0);
 }
 
 int tf_coronet_execution_init(tf_coronet_execution_t *execution,
@@ -163,17 +198,59 @@ int tf_coronet_execution_call(tf_coronet_execution_t *execution, tf_coronet_exec
   return rc;
 }
 
+int tf_coronet_execution_call_coro(tf_coronet_execution_t *execution,
+                                   tf_coronet_execution_call_fn fn, void *arg,
+                                   uint64_t timeout_ns) {
+  tf_coronet_call_t *call;
+  int rc;
+  if (!execution || !execution->context || !fn || timeout_ns == 0u)
+    return TURBO_EINVAL;
+  if (coro_context_current() == execution->context)
+    return coro_running() ? fn(arg) : TURBO_EBUSY;
+  call = (tf_coronet_call_t *)calloc(1, sizeof(*call));
+  if (!call) return TURBO_ENOMEM;
+  call->fn = fn;
+  call->arg = arg;
+  call->status = TURBO_EALREADY;
+  atomic_init(&call->refs, 2);
+  turbo_mutex_init(&call->mutex);
+  turbo_cond_init(&call->cond);
+  rc = coro_post(execution->context, tf_coronet_call_coro_spawn, call, NULL);
+  if (rc != TURBO_OK) {
+    tf_coronet_call_release(call);
+    tf_coronet_call_release(call);
+    return rc;
+  }
+  turbo_mutex_lock(&call->mutex);
+  while (!call->done && !call->started) {
+    if (turbo_cond_timedwait(&call->cond, &call->mutex, timeout_ns) !=
+        TURBO_OK)
+      break;
+  }
+  if (!call->done && !call->started) {
+    call->canceled = 1;
+    rc = TURBO_ETIMEDOUT;
+  } else {
+    while (!call->done)
+      turbo_cond_wait(&call->cond, &call->mutex);
+    rc = call->status;
+  }
+  turbo_mutex_unlock(&call->mutex);
+  tf_coronet_call_release(call);
+  return rc;
+}
+
 void tf_coronet_execution_stop(tf_coronet_execution_t *execution) {
   if (!execution || !execution->context || !execution->drives_context) return;
-  coro_context_set_persistent(execution->context, 0);
   if (execution->loop_thread_started) {
-    if (coro_post(execution->context, tf_coronet_execution_stop_post, execution->context, NULL) !=
-        TURBO_OK) {
-      coro_context_stop(execution->context);
-    }
+    /* Callers close admission and drain context-owned work before this boundary.
+     * An explicit stop is still required because private Linux transport reactors
+     * retain the context after the last application task has completed. */
+    coro_context_stop(execution->context);
     (void)turbo_thread_join(&execution->loop_thread);
     execution->loop_thread_started = 0;
   }
+  coro_context_set_persistent(execution->context, 0);
 }
 
 void tf_coronet_execution_destroy(tf_coronet_execution_t *execution) {

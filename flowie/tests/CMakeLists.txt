@@ -37,7 +37,8 @@ cmake_add_test(
 
 target_include_directories(
   test_flowie_endpoint PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-                               ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+                               ${CMAKE_CURRENT_SOURCE_DIR}/../src
+                               ${PROJECT_SOURCE_DIR}/io/socket/tests)
 
 set_tests_properties(
   test_flowie_endpoint
@@ -45,6 +46,18 @@ set_tests_properties(
              "flowie;flowie-release;mqtt-fast;mqtt-negative;mqtt-persistence;mqtt-transport;mqtt-security"
              TIMEOUT 180)
 target_compile_definitions(test_flowie_endpoint PRIVATE FLOWIE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+cmake_add_test(
+  test_flowie_mqtt_endurance
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flowie_mqtt_endurance.c
+  LIBS Flowie::App Flowie::Protocol TurboFlow::Flow TurboUtils::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+  FOLDER "flowie/tests")
+
+set_tests_properties(
+  test_flowie_mqtt_endurance
+  PROPERTIES LABELS "flowie;flowie-release;mqtt-endurance;mqtt-persistence"
+             TIMEOUT 180)
 
 cmake_add_test(
   test_flowie_session_store_faults
@@ -79,6 +92,7 @@ set_tests_properties(
 
 if(WIN32)
   target_link_libraries(test_flowie_endpoint PRIVATE ws2_32)
+  target_link_libraries(test_flowie_mqtt_endurance PRIVATE ws2_32)
   target_link_libraries(test_flowie_session_store_faults PRIVATE ws2_32)
   target_link_libraries(test_flowie_transport PRIVATE ws2_32)
 endif()

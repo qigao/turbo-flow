@@ -1,4 +1,5 @@
 #include "turbo_flow_fmq.h"
+#include "flow_fmq_internal.h"
 
 #include "turbo_error.h"
 #include "turbo_parser.h"
@@ -39,7 +40,6 @@ static const char *const FLOW_FMQ_JSON_TRANSPORTS[] = {"tcp",  "tls", "udp", "kc
 static const char *const FLOW_FMQ_JSON_METADATA_POLICIES[] = {"static", "inherit", "content"};
 static const char *const FLOW_FMQ_JSON_ADMISSION_POLICIES[] = {"fail", "block", "drop_oldest"};
 static const char *const FLOW_FMQ_JSON_SLOW_PEER_POLICIES[] = {"fail", "drop_oldest", "disconnect"};
-static const char *const FLOW_FMQ_JSON_FEC_BACKENDS[] = {"none", "wirehair"};
 
 #define FLOW_FMQ_JSON_FIELD(member, field_type, max_value)                                         \
   {#member, field_type, offsetof(turbo_flow_fmq_config_t, member), max_value, NULL, 0u, 0, NULL, 0u}
@@ -99,11 +99,18 @@ static const flow_fmq_json_field_t FLOW_FMQ_JSON_FIELDS[] = {
     FLOW_FMQ_JSON_ENUM_FIELD(topic_policy, FLOW_FMQ_JSON_METADATA_POLICIES),
     FLOW_FMQ_JSON_ENUM_FIELD(identity_policy, FLOW_FMQ_JSON_METADATA_POLICIES),
     FLOW_FMQ_JSON_FIELD(path, FLOW_FMQ_JSON_STRING, 0u),
-    FLOW_FMQ_JSON_FIELD(kcp_fec, FLOW_FMQ_JSON_BOOL, 0u),
-    FLOW_FMQ_JSON_ENUM_ZERO_FIELD(kcp_fec_backend, FLOW_FMQ_JSON_FEC_BACKENDS),
+    FLOW_FMQ_JSON_FIELD(kcp_pre_shared_key, FLOW_FMQ_JSON_STRING, 0u),
+    FLOW_FMQ_JSON_FIELD(kcp_mtu, FLOW_FMQ_JSON_U32, UINT16_MAX),
+    FLOW_FMQ_JSON_FIELD(kcp_send_window, FLOW_FMQ_JSON_U32, UINT16_MAX),
+    FLOW_FMQ_JSON_FIELD(kcp_receive_window, FLOW_FMQ_JSON_U32, UINT16_MAX),
+    FLOW_FMQ_JSON_FIELD(kcp_interval_ms, FLOW_FMQ_JSON_U32, 100u),
+    FLOW_FMQ_JSON_FIELD(kcp_handshake_retry_ms, FLOW_FMQ_JSON_U32, UINT16_MAX),
+    FLOW_FMQ_JSON_FIELD(kcp_fast_resend, FLOW_FMQ_JSON_U32, UINT8_MAX),
+    FLOW_FMQ_JSON_FIELD(kcp_congestion_control, FLOW_FMQ_JSON_BOOL, 0u),
     FLOW_FMQ_JSON_FIELD(kcp_fec_data_shards, FLOW_FMQ_JSON_U32, UINT32_MAX),
     FLOW_FMQ_JSON_FIELD(kcp_fec_parity_shards, FLOW_FMQ_JSON_U32, UINT32_MAX),
     FLOW_FMQ_JSON_FIELD(kcp_fec_max_payload_size, FLOW_FMQ_JSON_U32, UINT32_MAX),
+    FLOW_FMQ_JSON_FIELD(kcp_fec_receive_groups, FLOW_FMQ_JSON_U32, UINT16_MAX),
     FLOW_FMQ_JSON_FIELD(reuse_port, FLOW_FMQ_JSON_BOOL, 0u),
     FLOW_FMQ_JSON_FIELD(tcp_keepalive, FLOW_FMQ_JSON_BOOL, 0u),
     FLOW_FMQ_JSON_FIELD(tcp_keepalive_idle_ms, FLOW_FMQ_JSON_U64, UINT64_MAX),
@@ -258,7 +265,9 @@ static int flow_fmq_json_assign(void *object, const flow_fmq_json_field_t *field
 static int flow_fmq_register_resolved_adapter_internal(
     turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_coronet_execution_binding_t *execution,
-    const turbo_flow_fmq_security_binding_t *security, turbo_flow_config_error_t *error) {
+    const turbo_flow_fmq_security_binding_t *security,
+    const turbo_flow_fmq_app_options_t *app_options, turbo_flow_fmq_app_t **app_out,
+    turbo_flow_config_error_t *error) {
   turbo_json_doc_t *document = NULL;
   json_value_t *adapters;
   json_value_t *adapter;
@@ -277,7 +286,9 @@ static int flow_fmq_register_resolved_adapter_internal(
   const char *secret_reference = NULL;
   int security_metadata_seen = 0;
   int rc;
-  if (!flow || !name || !name[0] || !resolved || !execution || !error ||
+  if (app_out) *app_out = NULL;
+  if ((!flow && !app_out) || (flow && app_out) || !name || !name[0] || !resolved || !execution ||
+      !error ||
       error->size < sizeof(*error)) {
     return TURBO_EINVAL;
   }
@@ -379,7 +390,11 @@ static int flow_fmq_register_resolved_adapter_internal(
       goto done;
     }
   }
-  if (fanout_requested) {
+  if (app_out) {
+    rc = flow_fmq_app_create_endpoint_internal(
+        name, &config, fanout_requested ? &fanout : NULL, app_options, execution, security,
+        app_out);
+  } else if (fanout_requested) {
     rc = security
              ? turbo_flow_fmq_register_secure_fanout_adapter_ex(flow, name, &config, &fanout,
                                                                 execution, security)
@@ -400,7 +415,8 @@ done:
 int turbo_flow_fmq_register_resolved_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_coronet_execution_binding_t *execution, turbo_flow_config_error_t *error) {
-  return flow_fmq_register_resolved_adapter_internal(flow, name, resolved, execution, NULL, error);
+  return flow_fmq_register_resolved_adapter_internal(flow, name, resolved, execution, NULL, NULL,
+                                                     NULL, error);
 }
 
 int turbo_flow_fmq_register_resolved_secure_adapter_ex(
@@ -409,7 +425,19 @@ int turbo_flow_fmq_register_resolved_secure_adapter_ex(
     const turbo_flow_fmq_security_binding_t *security, turbo_flow_config_error_t *error) {
   if (!security) return TURBO_EINVAL;
   return flow_fmq_register_resolved_adapter_internal(flow, name, resolved, execution, security,
-                                                     error);
+                                                     NULL, NULL, error);
+}
+
+int flow_fmq_app_create_resolved_endpoint_internal(
+    const turbo_flow_resolved_config_t *resolved, const char *adapter_name,
+    const turbo_flow_fmq_app_options_t *options,
+    const turbo_flow_fmq_security_binding_t *security, turbo_flow_fmq_app_t **out,
+    turbo_flow_config_error_t *error) {
+  const turbo_flow_coronet_execution_binding_t execution = {
+      sizeof(turbo_flow_coronet_execution_binding_t), TURBO_FLOW_CORONET_EXECUTION_PRIVATE};
+  if (!options || !out) return TURBO_EINVAL;
+  return flow_fmq_register_resolved_adapter_internal(
+      NULL, adapter_name, resolved, &execution, security, options, out, error);
 }
 
 int turbo_flow_fmq_register_resolved_adapter(turbo_flow_t *flow, const char *name,

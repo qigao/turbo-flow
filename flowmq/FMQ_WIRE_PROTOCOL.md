@@ -1,19 +1,22 @@
 # FMQ/3 与 FMS/3 Wire Protocol
 
-状态：FMQ/3 是当前唯一 FlowMQ socket framing；FMS/3 是可选但不可降级的
-HELLO security envelope。本文是 wire 字段、校验、分片、心跳、pattern、queue 和
+FMQ/3 是 FlowMQ 唯一 socket framing；FMS/3 是可选但不可降级的 HELLO security
+envelope。本文是 wire 字段、校验、分片、心跳、pattern、queue 和
 backpressure 边界的唯一详细正文。
 
 协议总索引见 [PROTOCOL_SPEC.md](PROTOCOL_SPEC.md)。安全决策、provider 生命周期、
-ACL 和迁移理由见 [ADR_FMQ_V3_SECURITY.md](ADR_FMQ_V3_SECURITY.md)。本文不定义
-TFMP、TFCW 或 Control V1 的应用字段。
+ACL 和决策理由见 [ADR_FMQ_V3_SECURITY.md](ADR_FMQ_V3_SECURITY.md)。本文不定义
+TFMP 或 TFCW 的应用字段。
+
+KCP transport 的 TKSH/1、TKSR/1 与 TKF1/1 由
+[KCP_TRANSPORT_PROTOCOL.md](KCP_TRANSPORT_PROTOCOL.md) 定义。
 
 ## 1. 分层与版本
 
 FMQ/3 位于 CoroNet transport 之上，应用协议位于 FMQ `DATA` payload 之内：
 
 ```text
-TFMP/1、TFCW/1、Control V1
+TFMP/1、TFCW/1
               |
        FMQ/3 DATA payload
               |
@@ -92,10 +95,12 @@ message 前完成认证、claimed identity 与 principal 一致性以及 CONNECT
 SUBSCRIBE、READ、WRITE、EXECUTE 仍需 ACL 检查。credential 只在 provider lease 和
 HELLO 边界内存在，消费或释放前必须清零。
 
-TCP、UDP、KCP、Pipe、WS 只提供应用层认证和 ACL，不提供 credential confidentiality；
-生产环境需要可信网络或额外安全隧道。TLS/WSS 必须验证证书、协商 TLS 1.3，并使用
-RFC 9266 exporter channel binding。证书校验、exporter 或 binding 失败必须关闭连接，
-不得回退 trusted v3。
+TCP、UDP、Pipe、WS 的 FMS credential 需要可信网络或额外安全隧道。KCP 在 FMS/3
+之下强制执行 PSK 认证与 TKSR/1 AEAD，因此具备 transport confidentiality 和
+integrity；FMS/3 仍负责应用 principal 与 ACL，不能由 transport PSK 替代。TLS/WSS
+必须验证证书、协商 TLS 1.3，并使用 RFC 9266 exporter channel binding。任何认证、
+证书、exporter 或 binding 失败都必须关闭连接，不得回退到其他 transport 或 trusted
+session。
 
 ## 4. Pattern registry
 

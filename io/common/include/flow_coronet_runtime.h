@@ -30,7 +30,6 @@ typedef enum tf_coronet_transport_e {
 #define TF_CORONET_OPTION_HANDSHAKE_TIMEOUT_MS "handshake_timeout_ms"
 
 extern const char *const TF_CORONET_TRANSPORT_VALUES[TF_CORONET_TRANSPORT_VALUE_COUNT];
-extern const char *const TF_CORONET_KCP_FEC_BACKEND_VALUES[2];
 
 typedef struct tf_coronet_socket_timeout_config_s {
   uint64_t timeout_ms;
@@ -52,13 +51,20 @@ typedef enum tf_coronet_timeout_set_flag_e {
 
 #define TF_CORONET_TIMEOUT_SET_ALL ((1u << 5) - 1u)
 
-typedef struct tf_coronet_kcp_fec_options_s {
-  int enabled;
-  int backend;
+typedef struct tf_coronet_kcp_options_s {
+  uint8_t pre_shared_key[TURBO_KCP_PSK_SIZE];
+  uint32_t mtu;
+  uint32_t send_window;
+  uint32_t receive_window;
+  uint32_t interval_ms;
+  uint32_t handshake_retry_ms;
+  uint32_t fast_resend;
+  int no_congestion_window;
   uint32_t data_shards;
   uint32_t parity_shards;
   uint32_t max_payload_size;
-} tf_coronet_kcp_fec_options_t;
+  uint32_t receive_group_count;
+} tf_coronet_kcp_options_t;
 
 typedef struct tf_coronet_socket_options_s {
   int tcp_keepalive;
@@ -101,9 +107,11 @@ int tf_coronet_transport_is_ws(tf_coronet_transport_t transport);
 int tf_coronet_transport_is_pipe(tf_coronet_transport_t transport);
 int tf_coronet_endpoint_config_validate(tf_coronet_transport_t transport, const char *host,
                                         int port, const char *path);
-int tf_coronet_kcp_fec_options_resolve(tf_coronet_transport_t transport,
-                                       const tf_coronet_kcp_fec_options_t *options,
-                                       turbo_kcp_fec_config_t *config, int *configured);
+int tf_coronet_kcp_pre_shared_key_parse(const char *hex,
+                                        uint8_t out[TURBO_KCP_PSK_SIZE]);
+int tf_coronet_kcp_options_resolve(tf_coronet_transport_t transport,
+                                   const tf_coronet_kcp_options_t *options,
+                                   turbo_kcp_config_t *config, int *configured);
 int tf_coronet_socket_options_validate(tf_coronet_transport_t transport,
                                        const tf_coronet_socket_options_t *options);
 int tf_coronet_reuse_port_validate(tf_coronet_transport_t transport, int reuse_port,
@@ -115,8 +123,10 @@ const char *tf_coronet_ws_path(const char *path);
 coro_socket_t *tf_coronet_apply_socket_timeout(coro_socket_t *socket,
                                                const tf_coronet_socket_timeout_config_t *timeouts,
                                                tf_coronet_timeout_kind_t timeout_kind);
-int tf_coronet_apply_kcp_fec(coro_socket_t *socket, tf_coronet_transport_t transport,
-                             const turbo_kcp_fec_config_t *config, int configured);
+int tf_coronet_apply_kcp_config(coro_socket_t *socket,
+                                tf_coronet_transport_t transport,
+                                const turbo_kcp_config_t *config,
+                                int configured);
 int tf_coronet_apply_socket_options(coro_socket_t *socket, tf_coronet_transport_t transport,
                                     const tf_coronet_socket_options_t *options);
 int tf_coronet_apply_udp_options(coro_socket_t *socket, tf_coronet_transport_t transport,

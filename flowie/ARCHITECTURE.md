@@ -2,10 +2,11 @@
 
 ## Decision
 
-The configured Flowie broker is a TurboFlow application assembled from a product provider
-registry, resolved YAML, a `.flow` Graph, and the Flowie protocol/session owner. The protocol
-library alone is not an application, and an embedded Flowie endpoint is only one reusable
-component until its host supplies the complete topology. The normative terminology and the three
+Flowie MQTT protocol/session Core is graph-neutral. An embedded application may create and drive
+that Core directly through `flowie_endpoint_core_*`; a TurboFlow adapter is an optional thin
+composition layer over the same owner. The configured `flowie_server` product is a TurboFlow
+application assembled from a product provider registry, resolved YAML, a `.flow` Graph, and that
+same Core. The protocol library alone is not an application. The normative terminology and the
 composition forms are defined in
 [`CONFIGURED_BROKER_CONCEPTS.md`](CONFIGURED_BROKER_CONCEPTS.md).
 
@@ -37,9 +38,9 @@ authority.
 
 ## Layers and ownership
 
-Flowie endpoint is itself a TurboFlow adapter primitive, in the same architectural position as
-the FlowMQ endpoint runtime. It owns its CoroNet listener and accepted connection lanes; it does not depend on or
-compose a generic `io/socket` adapter. Reusable code below this boundary is limited to the
+Flowie endpoint Core owns its CoroNet listener and accepted connection lanes; it does not depend on
+or compose a generic `io/socket` adapter. The optional TurboFlow endpoint adapter injects a graph
+dispatch sink into that Core and exposes graph operations without duplicating state. Reusable code below this boundary is limited to the
 protocol-neutral CoroNet execution/runtime and connection snapshot helpers in `io/common`.
 
 MQTT business facts have one source of truth: the FlowStore MQTT fact facade, assembled around the
@@ -61,7 +62,8 @@ persistence remain internal owner behavior rather than invented graph operations
 |---|---|---|---|
 | `flowie_protocol` | caller-owned parse invocation | none; results borrow input bytes | CoroNet, sockets, queues, graph runtime, storage |
 | `flowie_client` | caller coroutine or DLL-owned CoroNet worker | one outbound transport, framing, packet IDs, inbound QoS 2 state, bounded async command queue | Flowie endpoint, graph runtime, server session or persistence state |
-| endpoint resource | Flowie endpoint owner | listener lifecycle, limits, connection registry | graph mutation of connection/session state |
+| endpoint Core | Flowie endpoint owner | listener lifecycle, limits, connection registry | direct callback or graph adapter mutation of connection/session state |
+| optional graph adapter | TurboFlow composition | source name, route-owner registration, graph settlement result | socket/session ownership |
 | connection resource | CoroNet-bound Flowie owner | transport handle, receive buffer, negotiated version | MQTT parser performing reads or writes |
 | session owner (internal) | Flowie session owner | bounded cache reconstructed from session facts | independent public resource identity or queue/sink state advancement |
 | subscription index | Flowie subscription owner | rebuildable filter/member query index | graph-owned subscriber membership |
@@ -82,10 +84,11 @@ commands, but may not perform synchronous client I/O or destroy the client. Dest
 queue closed, interrupts pending I/O, completes accepted queued commands with `TURBO_ESHUTDOWN`,
 joins the worker, and only then frees the context and client state.
 
-Stream transport and graph execution are separate bounded paths:
+Stream transport and application dispatch are separate bounded paths:
 
 - connection lane: socket recv -> framing/parser -> complete MQTT packet;
-- graph admission: owned packet -> configured TurboFlow source -> inline/worker stage.
+- direct admission: owned packet -> required Core callback; or
+- graph admission: owned packet -> optional TurboFlow adapter/source -> inline/worker stage.
 - reply admission: encoded control packet + message-owned route -> bounded endpoint Queue ->
   owner-lane route lookup -> CoroNet send.
 
@@ -94,9 +97,9 @@ publication. The endpoint's private session primitive consumes the complete CONN
 CoroNet lane, authenticates and authorizes it when an explicit security binding is installed,
 opens or resumes the bounded session, atomically rebinds
 the provisional connection route to the session generation, and enqueues CONNACK. Rejected and
-accepted CONNECT packets do not enter the application graph. SUBSCRIBE, UNSUBSCRIBE, PUBREL,
+accepted CONNECT packets do not enter application dispatch. SUBSCRIBE, UNSUBSCRIBE, PUBREL,
 PINGREQ, DISCONNECT, and enhanced AUTH are also consumed by that protocol owner; only admitted
-PUBLISH packets enter the application graph.
+PUBLISH packets enter the selected direct callback or optional graph adapter.
 When `manage_sessions` is disabled, the endpoint preserves external-session mode and publishes
 CONNECT for a separately assembled session processor.
 
@@ -132,10 +135,10 @@ configuration layout is accepted.
 The framing buffer owns incomplete bytes only; it is neither a durable Queue nor an ACK fact
 source. Once parsing identifies a complete PUBLISH packet, Flowie materializes the complete wire
 packet in a reference-counted `mem_buffer_t` carried by `turbo_flow_msg_t`, consumes the framing
-bytes, and performs one graph publication to the configured source. Managed CONNECT is instead
+bytes, and performs one dispatch to the injected sink. Managed CONNECT is instead
 consumed by the same-lane session primitive described above. Only a complete owned message may
-cross an execution boundary. The graph plan, not Flowie ingress, selects direct execution or a
-bounded worker Disruptor. A graph admission failure is returned to the connection/session owner
+cross an execution boundary. A direct Core callback runs synchronously on the owner dispatch;
+the optional graph plan may select inline execution or a bounded worker Disruptor. A dispatch failure is returned to the connection/session owner
 and is never retried implicitly by the framer. Protocol, HWM, and graph errors put that
 connection ingress into a terminal state; its owner must close or rebuild the connection before
 accepting more bytes.
@@ -320,9 +323,9 @@ lane, and declares the TurboFlow source that receives complete owned MQTT packet
 declares protocol/session processors, worker capacity, and sinks. Persistence is an injected
 resource selected explicitly per state class.
 
-Security uses the same composition rule. YAML selects `security_realm`, its exact `policy_source`,
-and `auth_method`; it does not contain ACL rules or a policy version. The host creates the selected
-HTTPS or SQLite ACL provider, binds its borrowed interface to the realm, registers the realm as a
+Security uses the same composition rule. YAML selects `security_realm`, its exact HTTPS
+`policy_source`, and `auth_method`; it does not contain ACL rules or a policy version. The host
+creates the HTTPS ACL provider, binds its borrowed interface to the realm, registers the realm as a
 resource, and injects the typed realm plus HTTPS authentication provider through
 `flowie_endpoint_security_binding_t`. The endpoint copies only the validated principal into session
 state and never stores password/authentication bytes. Version mismatch or expiry triggers a bounded
@@ -331,6 +334,17 @@ The binding's channels and method must equal YAML exactly, so stale or miswired 
 before registration. There is no realm pointer lookup, service locator, plaintext user database,
 YAML policy body, provider fallback, or implicit anonymous fallback. The complete control/data-plane
 decision is documented in `ADR_DYNAMIC_ACL_BUNDLE.md`.
+
+The endpoint also owns the provenance of transport authentication context. TCP/TLS/WS/WSS
+`remote_address` is the numeric direct socket peer and Pipe uses the literal `local`; Flowie does
+not consume PROXY protocol or forwarded headers. When a TLS/WSS endpoint explicitly configures
+`tls_client_ca_file`, CoroNet requires and verifies the MQTT client certificate before Flowie reads
+its canonical SHA-256 fingerprint. These values cross the provider ABI as borrowed, request-lifetime
+fields and the certificate append is guarded by the request `size`. Broker HTTPS Auth v3 forwards
+them to `flowie-control`; the latter still derives Root Group from the separate verified mTLS
+identity of the Broker-to-control connection. Neither address nor MQTT client certificate is an ACL
+fact source: the control Repository remains the only ACL owner and Broker authorization remains a
+local immutable snapshot lookup.
 
 ## Failure and rollback
 
@@ -605,7 +619,11 @@ registered by the product composition root, and fails before listener startup wh
 missing, duplicated, unavailable, or malformed. Flowie owns only the generic provider lifecycle
 envelope and authentication ABI. The bundled product registers only the `https` authentication
 backend. Redis, SQLite, PostgreSQL, and any other credential database remain private implementation
-details of that service and cannot be configured through an `auth_provider` channel. The CONNECT
+details of that service and cannot be configured through an `auth_provider` channel. When
+`flowie-control` bridges an enterprise identity system, its sole credential source is the configured
+third-party HTTPS assertion service; its Repository contributes only local enabled/Role/Group/ACL
+authorization facts. FlowStore, the control Repository, and Graph adapters never form a fallback
+authentication chain. The CONNECT
 coroutine invokes TurboHTTP directly; DNS, TCP, TLS, send, and receive waits yield on the CoroNet
 owner loop instead of blocking its thread. Redirects and retries are disabled, request/response
 sizes and timeouts are bounded, the service token is acquired by reference for every request, and
@@ -636,8 +654,10 @@ identity supplied by a trusted transport adapter and the `viewer`, `user_admin`,
 receives a SQLite handle.
 
 The optional Iris JSON-RPC adapter binds a caller-owned `rpc_context_t` to an explicit app/path and
-registers 24 bounded management methods. Introspection, batch and notifications are disabled; body
-fields cannot supply root group, actor or audit time. The SSR Dashboard uses the same service,
+registers 28 bounded management methods. Introspection, batch and notifications are disabled; body
+fields cannot supply root group, actor or audit time. Global external-HTTPS adapter counters are
+available only to `security_admin` through `flowie.auth.external_https.stats`; root-scoped viewers
+cannot observe cross-root traffic. The SSR Dashboard uses the same service,
 normal POST/Redirect/GET forms, constant-time CSRF validation, strict security headers and escaped
 dynamic output. It has no CDN or client framework dependency.
 

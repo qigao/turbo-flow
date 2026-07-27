@@ -321,8 +321,8 @@ static void fmq_bench_profile_print(const char *pattern,
          " socket_calls=%" PRIu64 " socket_cpu_samples=%" PRIu64
          " frames=%" PRIu64 " iov_segments=%" PRIu64
          " avg_build_ns=%" PRIu64 " avg_payload_prepare_ns=%" PRIu64
-         " avg_graph_publish_ns=%" PRIu64 " avg_adapter_consume_ns=%" PRIu64
-         " avg_graph_runtime_ns=%" PRIu64 " avg_enqueue_prepare_ns=%" PRIu64
+         " avg_batch_submit_ns=%" PRIu64 " avg_adapter_consume_ns=%" PRIu64
+         " avg_dispatch_overhead_ns=%" PRIu64 " avg_enqueue_prepare_ns=%" PRIu64
          " avg_owner_wait_ns=%" PRIu64
          " avg_post_call_ns=%" PRIu64 " avg_owner_work_ns=%" PRIu64
          " avg_frames_per_call=%" PRIu64 " avg_iov_segments_per_call=%" PRIu64
@@ -343,12 +343,12 @@ static void fmq_bench_profile_print(const char *pattern,
          fmq_bench_profile_average(profile->batch_build_sum_ns, profile->batch_samples),
          fmq_bench_profile_average(profile->batch_payload_prepare_sum_ns,
                                    profile->batch_samples),
-         fmq_bench_profile_average(profile->batch_graph_publish_sum_ns,
+         fmq_bench_profile_average(profile->batch_submit_sum_ns,
                                    profile->batch_samples),
          fmq_bench_profile_average(profile->batch_adapter_consume_sum_ns,
                                    profile->batch_samples),
          fmq_bench_profile_average(
-             fmq_bench_profile_remainder(profile->batch_graph_publish_sum_ns,
+             fmq_bench_profile_remainder(profile->batch_submit_sum_ns,
                                          profile->batch_payload_prepare_sum_ns,
                                          profile->batch_adapter_consume_sum_ns),
              profile->batch_samples),

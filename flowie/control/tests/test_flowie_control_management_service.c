@@ -1,3 +1,4 @@
+#include "flowie_control_management_repository_contract.h"
 #include "flowie_control_management_service_internal.h"
 
 #include "tinytest.h"
@@ -25,7 +26,7 @@ static flowie_control_management_service_t *management_open(char **path_out,
   root.expected_revision = 0u;
   root.occurred_at = 1000u;
   check_int_eq(flowie_control_store_root_group_create(*store_out, &root, &result), TURBO_OK);
-  service_config.store = *store_out;
+  service_config.repository = flowie_control_store_repository(*store_out);
   check_int_eq(flowie_control_management_service_create(&service_config, &service), TURBO_OK);
   return service;
 }
@@ -39,6 +40,20 @@ static void management_close(flowie_control_management_service_t *service,
 }
 
 spec("Flowie ACL management service") {
+  it("uses the provider-neutral Repository for account and ACL management") {
+    flowie_control_store_config_t store_config = FLOWIE_CONTROL_STORE_CONFIG_INIT;
+    flowie_control_store_t *store = NULL;
+    char *path = tt_make_temp_file("flowie-management-contract", ".sqlite3");
+
+    check_not_null(path);
+    store_config.database_path = path;
+    check_int_eq(flowie_control_store_open(&store_config, &store), TURBO_OK);
+    flowie_control_management_repository_contract_run(flowie_control_store_repository(store));
+    flowie_control_store_destroy(store);
+    check_int_eq(tt_remove_file(path), 0);
+    free(path);
+  }
+
   it("enforces method permissions and root-bound command identity") {
     char *path = NULL;
     flowie_control_store_t *store = NULL;
@@ -165,8 +180,7 @@ spec("Flowie ACL management service") {
     flowie_control_management_caller_t user_admin = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
     flowie_control_management_caller_t security_admin = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
     flowie_control_user_create_command_t user = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
-    flowie_control_credential_issue_command_t issue =
-        FLOWIE_CONTROL_CREDENTIAL_ISSUE_COMMAND_INIT;
+    flowie_control_credential_issue_command_t issue = FLOWIE_CONTROL_CREDENTIAL_ISSUE_COMMAND_INIT;
     flowie_control_credential_revoke_command_t revoke =
         FLOWIE_CONTROL_CREDENTIAL_REVOKE_COMMAND_INIT;
     flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
@@ -196,15 +210,15 @@ spec("Flowie ACL management service") {
     issue.request_id = "request-credential-denied";
     issue.expected_revision = 2u;
     issue.occurred_at = 3000u;
-    check_int_eq(flowie_control_management_credential_generate(service, &user_admin, &issue,
-                                                               &generated),
-                 TURBO_EPERM);
+    check_int_eq(
+        flowie_control_management_credential_generate(service, &user_admin, &issue, &generated),
+        TURBO_EPERM);
 
     issue.actor = security_admin.actor;
     issue.request_id = "request-credential-generate";
-    check_int_eq(flowie_control_management_credential_generate(service, &security_admin, &issue,
-                                                               &generated),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_control_management_credential_generate(service, &security_admin, &issue, &generated),
+        TURBO_OK);
     check_uint_eq(generated.revision, 3u);
     check_size_eq(generated.secret_size, FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE);
     flowie_control_generated_credential_wipe(&generated);
@@ -212,14 +226,14 @@ spec("Flowie ACL management service") {
     issue.root_group_id = "root-b";
     issue.request_id = "request-credential-cross-root";
     issue.expected_revision = 3u;
-    check_int_eq(flowie_control_management_credential_rotate(service, &security_admin, &issue,
-                                                             &generated),
-                 TURBO_EPERM);
+    check_int_eq(
+        flowie_control_management_credential_rotate(service, &security_admin, &issue, &generated),
+        TURBO_EPERM);
     issue.root_group_id = security_admin.root_group_id;
     issue.request_id = "request-credential-rotate";
-    check_int_eq(flowie_control_management_credential_rotate(service, &security_admin, &issue,
-                                                             &generated),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_control_management_credential_rotate(service, &security_admin, &issue, &generated),
+        TURBO_OK);
     check_uint_eq(generated.revision, 4u);
     check_size_eq(generated.secret_size, FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE);
     flowie_control_generated_credential_wipe(&generated);
@@ -230,9 +244,9 @@ spec("Flowie ACL management service") {
     revoke.request_id = "request-credential-revoke";
     revoke.expected_revision = 4u;
     revoke.occurred_at = 4000u;
-    check_int_eq(flowie_control_management_credential_revoke(service, &security_admin, &revoke,
-                                                             &result),
-                 TURBO_OK);
+    check_int_eq(
+        flowie_control_management_credential_revoke(service, &security_admin, &revoke, &result),
+        TURBO_OK);
     check_uint_eq(result.revision, 5u);
 
     flowie_control_generated_credential_wipe(&generated);

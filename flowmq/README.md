@@ -34,9 +34,7 @@ API 或 wire compatibility。
 | Target | Visibility | Purpose |
 | --- | --- | --- |
 | `FlowMQ::Protocol` | installed | FMQ v3 encode/decode、security envelope、fragmentation 和 heartbeat deadline |
-| `FlowMQ::Runtime` | build tree | FlowMQ pattern runtime with optional graph bridge |
-| `FlowMQ::Broker` | build tree compatibility alias | 过渡名称，不应成为新代码依赖 |
-| `TurboFlow::FMQ` | installed compatibility target | 当前公开 runtime ABI |
+| `TurboFlow::FMQ` | installed | FlowMQ Core、management、deployment 与可选 graph adapter |
 
 `flowmq_runtime_core`、`flowmq_coronet_transport` 和
 `flowmq_connect_endpoint_runtime` 是私有实现，不安装、不导出。
@@ -138,9 +136,9 @@ Host 使用 `turbo_flow_fmq_register_adapter_ex()` 或
 transport 的 option 均
 fail fast。
 
-只需要一个 endpoint 而不需要自行组高级 graph 时，可使用薄的 Application facade。它创建同一
-FMQ adapter，并用最小 graph bridge 连接 typed callback；不会创建第二套 socket、队列、线程或
-pattern 状态：
+只需要一个 endpoint 而不需要自行组高级 graph 时，可使用 Application facade。它直接创建
+graph-neutral FMQ endpoint Core 并连接 typed callback，不解析或启动 Graph；只有可选 Graph
+adapter 才负责拓扑组合：
 
 ```c
 static int on_message(turbo_flow_fmq_app_t *app, turbo_flow_msg_t *message, void *ctx) {
@@ -179,18 +177,16 @@ turbo_flow_fmq_app_destroy(app);
 顺序。单批最多 `TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_ITEMS` 项，payload 总量最多
 `TURBO_FLOW_FMQ_APP_SEND_BATCH_MAX_PAYLOAD_BYTES`；超过上限分别返回 `TURBO_ERANGE` 与
 `TURBO_EMSGSIZE`。
-当 facade graph 仅为 direct terminal FMQ adapter 时，TurboFlow 可使用原生 batch bridge 降低
-逐消息 graph dispatch 成本；带 observer、retry、reorder、deadline、settlement、emitter 或下游
-stage 的 graph 自动保留标量路径。该选择不改变提交计数、首错、消息所有权或 FMQ/3 wire，完整
-ABI 与 iterator 契约见
-[Message and Graph Boundaries](../turbo_flow/ADR_MESSAGE_GRAPH_BOUNDARY.md#direct-terminal-native-batch)。
+Facade 的 explicit batch 直接在同一 Core 内准备并提交 frame，不经过 Graph dispatch。单独使用
+Graph adapter 时，带 observer、retry、reorder、deadline、settlement、emitter 或下游 stage 的
+Graph 仍按其自身标量/批量契约执行。两者都不改变提交计数、首错、消息所有权或 FMQ/3 wire。
 高频 producer 可在首次 start 前调用 `turbo_flow_fmq_app_configure_async_send()`，再用
 `turbo_flow_fmq_app_send_async()` 把 copied payload 交给 facade-owned 有界队列。队列同时受 item/byte
 配额约束，满时立即返回 `TURBO_ENOSPC`；accepted 消息由单 worker 保序组成 micro-batch，非空
-completion 每条调用一次。`stop()` 会先关闭 admission 并排空 accepted 消息，再停止底层 Flow。
+completion 每条调用一次。`stop()` 会先关闭 admission 并排空 accepted 消息，再停止 endpoint Core。
 `turbo_flow_fmq_app_send_message()` 保留已有 message metadata，并作为 ROUTER detached route 的
 delayed-reply 入口。REP callback 可用 `turbo_flow_fmq_app_message_set_payload_copy()` 替换 payload，
-返回 `TURBO_OK` 后由同一次 graph dispatch 同步回复。生命周期和 send API 不可从同一个
+返回 `TURBO_OK` 后由同一次 Core dispatch 同步回复。生命周期和 send API 不可从同一个
 `on_message` callback 重入。YAML 用户先 resolve snapshot，再调用
 `turbo_flow_fmq_app_create_resolved()`；facade 不解释 YAML 文件本身。
 
@@ -239,7 +235,8 @@ adapters:
 
 支持的 CoroNet transport 为 `tcp`、`tls`、`udp`、`kcp`、`pipe`、`ws` 和 `wss`。pattern 与
 transport 正交，但 option 由具体 transport 校验，例如 KCP FEC、TCP keepalive、UDP multicast
-不会被其他 transport 静默接受。
+不会被其他 transport 静默接受。UDP bind 端按远端 IP/port 维持 HELLO 会话，但每个 peer
+只保留一个未读数据报，仍然允许丢包；需要可靠、有序、FEC 和 AEAD 的 UDP 数据面应选择 KCP。
 
 ## Protocol ownership
 
@@ -247,7 +244,6 @@ transport 正交，但 option 由具体 transport 校验，例如 KCP FEC、TCP 
 [协议索引](PROTOCOL_SPEC.md) 进入对应唯一正文：
 
 - [FMQ/3 与 FMS/3 wire](FMQ_WIRE_PROTOCOL.md)
-- [Control V1](CONTROL_PROTOCOL.md)
 - [TFMP/1 与 TFMS snapshot](MANAGEMENT_PROTOCOL.md)
 - [TFCW/1、TFBR/1 与 TFCS/1.0](BULK_CREDIT_PROTOCOL.md)
 - [安全决策](ADR_FMQ_V3_SECURITY.md)
@@ -265,7 +261,7 @@ README 只保留产品使用层的 pattern、graph 和 facade 说明；ACK、own
 | Redis Stream durable replay | supported，Stream/PEL 是事实源 |
 | Redis Data SET/GET | supported，binary-safe data contract，与 Stream ACK 分离 |
 | PgSQL durable outbox | not claimed；普通 PostgreSQL query/sink 不等于事务 outbox source/sink |
-| TFMP management | supported，strict REQ/REP、typed command、operation/event store |
+| TFMP management | supported，bounded DEALER/ROUTER inflight、typed async operation、event store |
 | Failure-domain deployment owner | supported，authority epoch 必须由宿主强一致服务分配 |
 | Authentication/authorization/Group Forest | supported for optional secure v3 endpoints on TCP/TLS/UDP/KCP/Pipe/WS/WSS；HTTPS v2 authentication、SQLite/HTTPS v3 line-based dynamic ACL bundle、local immutable indexed snapshot、immutable Root Group isolation、hierarchical effective groups、default-deny exact/prefix ACL；TLS/WSS additionally enforce TLS 1.3 exporter binding |
 | ZeroMQ/ZMTP compatibility | not supported |

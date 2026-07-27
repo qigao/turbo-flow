@@ -13,6 +13,9 @@ typedef struct management_rpc_fixture_s {
   flowie_control_management_caller_t caller;
   uint64_t now;
   int resolver_rc;
+  int external_https_enabled;
+  size_t external_https_stats_calls;
+  flowie_control_external_https_authenticator_stats_t external_https_stats;
 } management_rpc_fixture_t;
 
 static int management_rpc_resolve(void *ctx, const Req *request,
@@ -25,6 +28,16 @@ static int management_rpc_resolve(void *ctx, const Req *request,
 }
 
 static uint64_t management_rpc_clock(void *ctx) { return ((management_rpc_fixture_t *)ctx)->now; }
+
+static int management_rpc_external_https_stats(
+    void *ctx, flowie_control_external_https_authenticator_stats_t *stats_out) {
+  management_rpc_fixture_t *fixture = (management_rpc_fixture_t *)ctx;
+  if (!fixture || !stats_out || stats_out->size < sizeof(*stats_out)) return TURBO_EINVAL;
+  ++fixture->external_https_stats_calls;
+  if (!fixture->external_https_enabled) return TURBO_ENOENT;
+  *stats_out = fixture->external_https_stats;
+  return TURBO_OK;
+}
 
 static flowie_control_management_rpc_server_t *
 management_rpc_open(char **path_out, flowie_control_store_t **store_out,
@@ -49,7 +62,7 @@ management_rpc_open(char **path_out, flowie_control_store_t **store_out,
   root.request_id = "request-root";
   root.occurred_at = 1000u;
   check_int_eq(flowie_control_store_root_group_create(*store_out, &root, &root_result), TURBO_OK);
-  service_config.store = *store_out;
+  service_config.repository = flowie_control_store_repository(*store_out);
   check_int_eq(flowie_control_management_service_create(&service_config, service_out), TURBO_OK);
   rpc_config.endpoint = "/v1/management/rpc";
   rpc_config.enable_batch = 0;
@@ -64,6 +77,8 @@ management_rpc_open(char **path_out, flowie_control_store_t **store_out,
   server_config.resolve_caller_ctx = fixture;
   server_config.clock = management_rpc_clock;
   server_config.clock_ctx = fixture;
+  server_config.external_https_stats = management_rpc_external_https_stats;
+  server_config.external_https_stats_ctx = fixture;
   check_int_eq(flowie_control_management_rpc_server_create(&server_config, &server), TURBO_OK);
   *app_out = iris_app_create();
   check_not_null(*app_out);
@@ -134,7 +149,7 @@ spec("Flowie management JSON-RPC") {
     fixture.caller.permissions = FLOWIE_CONTROL_MANAGEMENT_VIEWER;
     check_int_eq(mem_init(&arena, 0u), 0);
     server = management_rpc_open(&path, &store, &service, &rpc, &app, &fixture);
-    check_uint_eq(rpc->method_count, 27u);
+    check_uint_eq(rpc->method_count, 28u);
     check_ptr_eq(iris_app_lookup_rpc_context(app, "/v1/management/rpc"), server);
 
     document = management_rpc_call(
@@ -152,6 +167,115 @@ spec("Flowie management JSON-RPC") {
         management_rpc_call(server, app, &arena, &security,
                             "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.system.status\"}", &status);
     check_int_eq(management_rpc_error_code(document), RPC_ERROR_INVALID_REQUEST);
+    turbo_free_json(&document);
+
+    management_rpc_close(server, rpc, app, service, store, path);
+    mem_destroy(&arena);
+  }
+
+  it("restricts global external HTTPS statistics to security administrators") {
+    char *path = NULL;
+    flowie_control_store_t *store = NULL;
+    flowie_control_management_service_t *service = NULL;
+    flowie_control_management_rpc_server_t *server = NULL;
+    rpc_context_t *rpc = NULL;
+    iris_app_t *app = NULL;
+    management_rpc_fixture_t fixture = {FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT, 5000u, TURBO_OK};
+    iris_security_context_t security = {0};
+    mem_pool_t arena;
+    turbo_json_doc_t *document = NULL;
+    json_value_t *result = NULL;
+    int status = 0;
+
+    fixture.caller.root_group_id = "root-a";
+    fixture.caller.actor = "viewer-1";
+    fixture.caller.permissions = FLOWIE_CONTROL_MANAGEMENT_VIEWER;
+    fixture.external_https_enabled = 1;
+    fixture.external_https_stats = (flowie_control_external_https_authenticator_stats_t)
+        FLOWIE_CONTROL_EXTERNAL_HTTPS_AUTHENTICATOR_STATS_INIT;
+    fixture.external_https_stats.started_requests = 17u;
+    fixture.external_https_stats.in_flight = 2u;
+    fixture.external_https_stats.succeeded = 8u;
+    fixture.external_https_stats.denied = 3u;
+    fixture.external_https_stats.local_overload = 1u;
+    fixture.external_https_stats.remote_overload = 1u;
+    fixture.external_https_stats.remote_server_failures = 1u;
+    fixture.external_https_stats.transport_failures = 1u;
+    fixture.external_https_stats.protocol_failures = 1u;
+    fixture.external_https_stats.local_failures = 1u;
+    security.authenticated = true;
+    check_int_eq(mem_init(&arena, 0u), 0);
+    server = management_rpc_open(&path, &store, &service, &rpc, &app, &fixture);
+
+    document =
+        management_rpc_call(server, app, &arena, &security,
+                            "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.auth.external_https.stats\","
+                            "\"params\":{\"identity\":\"forbidden\"},\"id\":1}",
+                            &status);
+    check_int_eq(status, TURBO_EPROTO);
+    check_int_eq(management_rpc_error_code(document), RPC_ERROR_INVALID_PARAMS);
+    check_size_eq(fixture.external_https_stats_calls, 0u);
+    turbo_free_json(&document);
+
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.auth.external_https.stats\",\"id\":2}", &status);
+    check_int_eq(status, TURBO_EPERM);
+    check_int_eq(management_rpc_error_code(document), -32003);
+    check_size_eq(fixture.external_https_stats_calls, 0u);
+    turbo_free_json(&document);
+
+    fixture.caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.auth.external_https.stats\",\"id\":3}", &status);
+    check_int_eq(status, TURBO_OK);
+    check_int_eq(management_rpc_error_code(document), 0);
+    result = turbo_json_object_get(document, "result");
+    check_not_null(result);
+    check_size_eq(turbo_json_object_size(result), 11u);
+    check_true(turbo_json_bool(turbo_json_object_get(result, "enabled")));
+    check_double_eq(turbo_json_number(turbo_json_object_get(result, "started_requests")), 17.0,
+                    0.001);
+    check_double_eq(turbo_json_number(turbo_json_object_get(result, "in_flight")), 2.0, 0.001);
+    check_double_eq(turbo_json_number(turbo_json_object_get(result, "succeeded")), 8.0, 0.001);
+    check_double_eq(turbo_json_number(turbo_json_object_get(result, "denied")), 3.0, 0.001);
+    check_double_eq(turbo_json_number(turbo_json_object_get(result, "local_overload")), 1.0, 0.001);
+    check_double_eq(turbo_json_number(turbo_json_object_get(result, "remote_overload")), 1.0,
+                    0.001);
+    check_double_eq(turbo_json_number(turbo_json_object_get(result, "remote_server_failures")), 1.0,
+                    0.001);
+    check_double_eq(turbo_json_number(turbo_json_object_get(result, "transport_failures")), 1.0,
+                    0.001);
+    check_double_eq(turbo_json_number(turbo_json_object_get(result, "protocol_failures")), 1.0,
+                    0.001);
+    check_double_eq(turbo_json_number(turbo_json_object_get(result, "local_failures")), 1.0, 0.001);
+    check_size_eq(fixture.external_https_stats_calls, 1u);
+    turbo_free_json(&document);
+
+    fixture.caller.permissions = FLOWIE_CONTROL_MANAGEMENT_USER_ADMIN;
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.auth.external_https.stats\",\"id\":4}", &status);
+    check_int_eq(status, TURBO_EPERM);
+    check_int_eq(management_rpc_error_code(document), -32003);
+    check_size_eq(fixture.external_https_stats_calls, 1u);
+    turbo_free_json(&document);
+
+    fixture.caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
+    fixture.external_https_enabled = 0;
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.auth.external_https.stats\",\"params\":{},"
+        "\"id\":5}",
+        &status);
+    check_int_eq(status, TURBO_OK);
+    check_int_eq(management_rpc_error_code(document), 0);
+    result = turbo_json_object_get(document, "result");
+    check_not_null(result);
+    check_size_eq(turbo_json_object_size(result), 1u);
+    check_false(turbo_json_bool(turbo_json_object_get(result, "enabled")));
+    check_size_eq(fixture.external_https_stats_calls, 2u);
     turbo_free_json(&document);
 
     management_rpc_close(server, rpc, app, service, store, path);
@@ -245,12 +369,12 @@ spec("Flowie management JSON-RPC") {
     check_int_eq(mem_init(&arena, 0u), 0);
     server = management_rpc_open(&path, &store, &service, &rpc, &app, &fixture);
 
-    document = management_rpc_call(
-        server, app, &arena, &security,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.user.create\",\"params\":{"
-        "\"principal_id\":\"device-1\",\"principal_type\":\"device\","
-        "\"request_id\":\"request-user\",\"expected_revision\":1},\"id\":1}",
-        &status);
+    document =
+        management_rpc_call(server, app, &arena, &security,
+                            "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.user.create\",\"params\":{"
+                            "\"principal_id\":\"device-1\",\"principal_type\":\"device\","
+                            "\"request_id\":\"request-user\",\"expected_revision\":1},\"id\":1}",
+                            &status);
     check_int_eq(management_rpc_error_code(document), 0);
     turbo_free_json(&document);
 
@@ -310,11 +434,10 @@ spec("Flowie management JSON-RPC") {
     check_int_eq(flowie_control_store_credential_verify(store, "root-a", "device-1", first_secret,
                                                         first_secret_size, &verified),
                  TURBO_EPERM);
-    verified = (flowie_control_credential_verify_result_t)
-        FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
-    check_int_eq(flowie_control_store_credential_verify(store, "root-a", "device-1",
-                                                        rotated_secret, rotated_secret_size,
-                                                        &verified),
+    verified =
+        (flowie_control_credential_verify_result_t)FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+    check_int_eq(flowie_control_store_credential_verify(store, "root-a", "device-1", rotated_secret,
+                                                        rotated_secret_size, &verified),
                  TURBO_OK);
     check_uint_eq(verified.credential_revision, 4u);
 
@@ -329,9 +452,8 @@ spec("Flowie management JSON-RPC") {
     check_not_null(result);
     check_double_eq(turbo_json_number(turbo_json_object_get(result, "revision")), 5.0, 0.001);
     turbo_free_json(&document);
-    check_int_eq(flowie_control_store_credential_verify(store, "root-a", "device-1",
-                                                        rotated_secret, rotated_secret_size,
-                                                        &verified),
+    check_int_eq(flowie_control_store_credential_verify(store, "root-a", "device-1", rotated_secret,
+                                                        rotated_secret_size, &verified),
                  TURBO_EPERM);
 
     flowie_control_credential_wipe(first_secret, first_secret_size);

@@ -63,9 +63,17 @@ typedef struct turbo_flow_security_auth_request_s {
   size_t secret_size;
   const char *remote_address;
   const char *protocol;
+  /**
+   * Canonical transport-verified `sha256:<64-lowercase-hex>` client certificate.
+   * NULL means the transport did not authenticate a client certificate. Providers
+   * must size-gate this appended field before reading it.
+   */
+  const char *peer_certificate_sha256;
 } turbo_flow_security_auth_request_t;
 
 #define TURBO_FLOW_SECURITY_AUTH_REQUEST_INIT {sizeof(turbo_flow_security_auth_request_t)}
+#define TURBO_FLOW_SECURITY_AUTH_REQUEST_BASE_SIZE                                                 \
+  offsetof(turbo_flow_security_auth_request_t, peer_certificate_sha256)
 
 typedef int (*turbo_flow_security_authenticate_fn)(
     void *ctx, const turbo_flow_security_auth_request_t *request,
@@ -94,10 +102,14 @@ typedef struct turbo_flow_security_enhanced_auth_request_s {
   size_t data_size;
   const char *remote_address;
   const char *protocol;
+  /** Size-gated transport identity with the same semantics as the basic request. */
+  const char *peer_certificate_sha256;
 } turbo_flow_security_enhanced_auth_request_t;
 
 #define TURBO_FLOW_SECURITY_ENHANCED_AUTH_REQUEST_INIT                                             \
-  {sizeof(turbo_flow_security_enhanced_auth_request_t), NULL, NULL, NULL, 0u, NULL, NULL}
+  {sizeof(turbo_flow_security_enhanced_auth_request_t), NULL, NULL, NULL, 0u, NULL, NULL, NULL}
+#define TURBO_FLOW_SECURITY_ENHANCED_AUTH_REQUEST_BASE_SIZE                                        \
+  offsetof(turbo_flow_security_enhanced_auth_request_t, peer_certificate_sha256)
 
 /** Provider-owned output spans remain valid until the next provider callback or cancel(). */
 typedef struct turbo_flow_security_enhanced_auth_result_s {

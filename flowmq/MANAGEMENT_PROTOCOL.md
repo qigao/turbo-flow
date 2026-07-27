@@ -1,32 +1,24 @@
 # TurboFlow Management Protocol v1
 
 本文件是 [协议索引](PROTOCOL_SPEC.md) 指定的 TFMP/1 与 TFMS/1.0、TFMS/1.1 唯一正文。
-FMQ/3 framing 见 [FMQ_WIRE_PROTOCOL.md](FMQ_WIRE_PROTOCOL.md)，Control V1 见
-[CONTROL_PROTOCOL.md](CONTROL_PROTOCOL.md)。
+FMQ/3 framing 见 [FMQ_WIRE_PROTOCOL.md](FMQ_WIRE_PROTOCOL.md)。
 
-状态：wire envelope、canonical LTV body codec、v1 typed field schema，以及单 target 的
-capability/health/target/resource 查询 owner 已实现；该 owner 还实现了 `FLOW_PAUSE`、
-`FLOW_RESUME`、`FLOW_DRAIN` 与四种 resource command。同步路径为
-`WAIT_TERMINAL + VOLATILE`；异步路径支持 volatile memory owner，以及显式注入 SQLite/Redis
-原子 blob store 的 durable accept/cancel、重启恢复与不确定 RUNNING 防重放。strict YAML channel、
-普通 FMQ REP stage、独立 live event PUB topic、有界进程内 replay，以及与 durable operation 共用
-一次原子 snapshot commit 的 SQLite/Redis event journal/outbox 已实现。
-本文定义的协议简称 **TFMP/1**。
-现有 Flow Control V1 保持原有 wire、公开 API 与 YAML 行为；只有完成本文的兼容性与故障
-测试后，TFMP/1 才可成为其替代入口。
+本文定义的协议简称 **TFMP/1**。管理请求通过稳定身份 DEALER 发往 ROUTER；客户端可在
+`max_inflight_per_target` 上限内流水化请求，并以 `correlation ID` 关联乱序响应。mutation
+只使用 `ACCEPT_OPERATION`：服务端先返回 volatile 或 durable acceptance，随后由
+`OPERATION_GET` 或 event 返回终态。该网络契约不提供同步 mutation 模式。
 
 ## 1. 决策背景
 
 FMQ v3 是数据传输层，pattern 与 transport 由 YAML 组合。管理协议不能修改 FMQ v3
-frame，也不能把 CoroNet socket、route 或进程内指针编码到远端消息中。现有 Control V1
-已验证“独立管理 flow + 普通 FMQ REQ/REP”的最小闭环，但只支持单 target 的 `STATUS`
-与 `EXECUTE`，内存幂等记录没有 TTL，且没有 capability、operation、event 或故障域身份。
+frame，也不能把 CoroNet socket、route 或进程内指针编码到远端消息中。管理通道需要避免
+同步 request/reply 的 head-of-line blocking，同时保留幂等、operation、event 与故障域身份。
 
 TFMP/1 采用三条彼此独立的契约：
 
 | 契约 | FMQ pattern | 用途 | 事实源 |
 | --- | --- | --- | --- |
-| Management RPC | `REQ -> REP` | capability、查询、命令提交、operation 查询 | 管理 owner/资源 owner |
+| Management RPC | `DEALER -> ROUTER` | capability、查询、operation acceptance/result | 管理 owner/资源 owner |
 | Live event | `PUB -> SUB` | 状态变化提示、operation 进度、故障通知 | 非事实源，仅派生通知 |
 | Operation store | memory/SQLite/Redis/PG adapter | 幂等记录、长操作状态、可选 event journal | operation owner |
 
@@ -37,14 +29,16 @@ TFMP/1 采用三条彼此独立的契约：
 ## 2. 不变量与非目标
 
 1. FMQ 仍只支持 wire v3；TFMP/1 是 FMQ DATA payload 内的应用协议。
-2. RPC 严格同步：一个 REQ 必须收到一个终态 REP，才可发送下一请求。异步 operation
-   只表示同步提交成功后，工作在后台继续；绝不表示 REP 可以延迟到另一个 REQ 周期。
-3. ROUTER/DEALER 的 delayed reply 仍属于业务 pattern，不是 TFMP/1 RPC 的实现方式。
-4. 管理 flow 与被管理 data flow 必须不同。目标执行 `drain` 时不得等待自己的 REP dispatch。
+2. DEALER 可以在有界 inflight 表中并发多个请求；ROUTER 响应按 `correlation ID` 关联，
+   不依赖收发顺序，也不能让一个长操作阻塞其他 correlation。
+3. mutation 的网络响应只能是明确失败或 `ACCEPTED_VOLATILE`/`ACCEPTED_DURABLE`；
+   终态由 operation 查询或 event 取得。
+4. 管理 flow 与被管理 data flow 必须不同。目标执行 `drain` 时不得等待自己的 ROUTER dispatch。
 5. transport 独立于协议，可选择 `pipe`、`tcp`、`tls`、`kcp`、`ws` 或 `wss`。raw UDP
    不进入 TFMP/1 产品验证矩阵，因为它不能提供 RPC 所需的可靠、有序会话语义。
-6. 当前版本不设计认证、鉴权、租户或密钥字段，也不据此宣称安全边界。TLS 只是 transport
-   选择，不改变 TFMP/1 的应用语义。
+6. TFMP 的 `client_id` 不是认证身份。TLS/WSS 使用各自安全会话；KCP 必须使用
+   [KCP_TRANSPORT_PROTOCOL.md](KCP_TRANSPORT_PROTOCOL.md) 的认证握手、AEAD、replay window
+   和认证 FEC。应用 authority/ACL 仍由 FMQ security owner 决定。
 7. 所有 wire 数据有界、pointer-free、network byte order；未知 critical 字段 fail fast。
 8. resource 状态由 resource owner 掌握；operation 状态由 operation owner 掌握；event
    只能从二者派生，不得反向修改事实。
@@ -59,7 +53,7 @@ TFMP/1 采用三条彼此独立的契约：
 | `incarnation_id` | memory journal 启动时改变；durable journal epoch 内稳定 | 16-byte journal 身份，用于检测事件序列失效 |
 | `target_uid` | 资源生命周期稳定 | flow/resource 的稳定 UID，不使用显示名或 route 作为身份 |
 | `client_id` | 客户端配置稳定 | 幂等作用域的一部分，不是认证身份 |
-| `request_id` | 客户端进程内单调非零 | 只用于一次 RPC 的请求/响应关联 |
+| `request_id` | DEALER inflight 生命周期内唯一且非零 | 只用于请求/响应关联；响应可乱序 |
 | `idempotency_key` | 一次语义命令稳定 | 与 `client_id` 共同唯一，重连或客户端重启后仍可复用 |
 | `operation_id` | operation 生命周期稳定 | 服务端生成的 16-byte ID，可跨服务重启查询 |
 
@@ -84,7 +78,6 @@ journal epoch 的 sequence 拼接为全局顺序。
 | 1 | `target_query` | target list/get 与稳定 catalog generation |
 | 2 | `resource_query` | resource list/get/document |
 | 3 | `conditional_command` | expected generation 条件写入 |
-| 4 | `immediate_command` | 同步等待 owner 的终态结果 |
 | 5 | `volatile_operation` | operation 已复制进入有界 owner queue，但重启可丢失 |
 | 6 | `durable_operation` | operation 与幂等记录已原子持久化，可重启恢复 |
 | 7 | `operation_cancel` | 仅取消尚未开始或显式支持取消的步骤 |
@@ -93,7 +86,7 @@ journal epoch 的 sequence 拼接为全局顺序。
 
 ## 4. RPC wire envelope
 
-每个 REQ 和 REP 的 payload 都由 40-byte header 加 canonical LTV body 组成：
+每个 request 和 correlated response 的 payload 都由 40-byte header 加 canonical LTV body 组成：
 
 ```text
 offset  size  field
@@ -147,11 +140,11 @@ canonical 约束由 TFMP schema adapter 在 `ltv_parse()` 结果上校验：
 - nesting 最大 4 层；body、field 数量与 repeated 数量均受 capability 中的上限约束。
 - 幂等比较使用 canonical command body 的完整 bytes，不用 hash 碰撞代表相等。
 
-已实现的 `turbo_flow_tfmp_envelope_validate_schema()` 使用单一内建 registry 校验所有 RPC
+`turbo_flow_tfmp_envelope_validate_schema()` 使用单一内建 registry 校验所有 RPC
 kind、公共 response identity、nested target/resource/condition/event 和 command payload。
 未知 optional 字段被跳过；未知 critical 字段或 command type 返回 `TURBO_ENOTSUP`，由
-management adapter 映射为稳定的 `UNSUPPORTED_CAPABILITY` status。只有显式 registry version
-声明兼容时才能接受未知字段；schema validator 不持有
+management adapter 映射为稳定的 `UNSUPPORTED_CAPABILITY` status。只有本文 registry
+定义为 optional 的未知字段才能跳过；schema validator 不持有
 body，也不把 resource/operation 状态带入 codec。
 
 FMQ DATA 已经提供一条完整 payload，TFMP 使用 `turbo_ltv_peek_size()` zero-copy 切分字段，
@@ -177,7 +170,7 @@ frame，此时使用 response-only `PROTOCOL_ERROR`；客户端不得发送该 k
 | `0x0020` | `RESOURCE_LIST` | 以 target UID 为范围，generation cursor 分页 |
 | `0x0021` | `RESOURCE_GET` | 返回 metadata、generation、observed generation 与可选 conditions |
 | `0x0022` | `RESOURCE_DOCUMENT_GET` | 返回 versioned pointer-free resource document |
-| `0x0030` | `COMMAND_SUBMIT` | 条件写入、幂等、同步终态或 operation acceptance |
+| `0x0030` | `COMMAND_SUBMIT` | 条件写入、幂等与 operation acceptance |
 | `0x0040` | `OPERATION_GET` | 返回 operation state、revision、result 或错误 |
 | `0x0041` | `OPERATION_CANCEL` | capability-gated 条件取消 |
 | `0x0050` | `EVENTS_GET` | capability-gated journal replay；没有 store 时返回 unsupported |
@@ -295,8 +288,9 @@ pool payload 为 `1 pool_kind:U16 R, 2 parallelism:U32 R`。payload schema regis
 `0 NONE, 1 ENDPOINT/v1, 2 POOL/v1`；pool kind 固定为 `1 THREAD, 2 CORO, 3 DISRUPTOR`，不得直接
 编码进程内 `turbo_flow_pool_kind_t` 数值。
 
-相关 enum 固定如下：`reply_mode` 为 `1 WAIT_TERMINAL, 2 ACCEPT_OPERATION`；durability
-为 `1 VOLATILE, 2 DURABLE`，capability/descriptor 中使用 bitmask `0x1/0x2`；owner state 为
+网络 `reply_mode` 固定为 `2 ACCEPT_OPERATION`；值 `1 WAIT_TERMINAL` 只供同进程
+`turbo_flow_tfmp_management_service_execute()` 调用，不由 ROUTER stage 接受或 capability 宣告。
+durability 为 `1 VOLATILE, 2 DURABLE`，capability/descriptor 中使用 bitmask `0x1/0x2`；owner state 为
 `1 STARTING, 2 READY, 3 DRAINING, 4 STOPPED, 5 FAILED`。`OPERATION_GET` 成功只表示查询成功；
 operation 自身失败由 body 的 `terminal_status` 表示，不能把它复制成 RPC header status。
 
@@ -333,7 +327,7 @@ TFMP client 不得把平台相关 `TURBO_*` 值当作协议契约。adapter 在�
 | 3 | `ACCEPTED_DURABLE` | dedup 与 operation 已在同一事务提交，返回 operation ID |
 | 4 | `FAILED` | 请求得到终态失败，不会在后台偷偷开始新 mutation |
 
-因此 ACK 分两层：FMQ REP 完成一次 transport/application exchange；TFMP 的
+因此 ACK 分两层：FMQ ROUTER 发送 correlated response；TFMP 的
 `status + disposition` 说明业务是否完成、易失受理或持久受理。仅“写入 queue 成功”不能伪装
 为 durable ACK；memory queue 只能返回 `ACCEPTED_VOLATILE`，SQLite/Redis/PG 只有在原子提交
 成功后才能返回 `ACCEPTED_DURABLE`。
@@ -345,7 +339,7 @@ TFMP client 不得把平台相关 `TURBO_*` 值当作协议契约。adapter 在�
 mutation 请求必须包含：
 
 - `client_id`、`idempotency_key`、`target_uid`、`command_type`
-- `reply_mode = WAIT_TERMINAL | ACCEPT_OPERATION`
+- `reply_mode = ACCEPT_OPERATION`
 - `required_durability = VOLATILE | DURABLE`
 - 可选 `expected_generation`
 - `queue_timeout_ms`：相对 server 接收时间，在开始 mutation 前过期
@@ -353,8 +347,8 @@ mutation 请求必须包含：
 - command-specific nested payload
 
 不传输 client 的 absolute monotonic timestamp；server 在收到请求后用本机
-`turbo_hrtime()` 转换相对 timeout。`WAIT_TERMINAL` 始终等待 owner 的终态 reply；一旦 mutation
-开始，RPC timeout 不取消它。客户端若先超时，只能用相同 idempotency key 重试并查询原结果。
+`turbo_hrtime()` 转换相对 timeout。客户端在 acceptance 前断开时结果未知，只能以相同
+`(authority_id, client_id, idempotency_key)` 重试或查询，不能生成新 key 猜测执行结果。
 
 初始 command family 与现有 typed owner command 对齐：
 
@@ -365,14 +359,13 @@ mutation 请求必须包含：
 command handler 只接收 versioned、pointer-free command。协议 adapter 不直接操作 socket、flow
 内部结构或数据库。
 
-当前单 Flow owner 声明并接受三种 Flow command 与四种 resource command，支持
-`reply_mode=WAIT_TERMINAL|ACCEPT_OPERATION`。`WAIT_TERMINAL` 只接受
-`required_durability=VOLATILE`；`ACCEPT_OPERATION` 在未绑定 store 时只接受 `VOLATILE`，绑定
+单 Flow owner 声明并接受三种 Flow command 与四种 resource command。网络请求只接受
+`reply_mode=ACCEPT_OPERATION`；未绑定 store 时只接受 `VOLATILE`，绑定
 原子 blob store 后也接受 `DURABLE`。Flow command 的 `target_uid` 指向
 绑定 Flow；resource command 的 `target_uid` 指向该 Flow 所有的稳定 resource UID，且必须携带
 非零 `expected_generation`。它在
-同步命令在 `turbo_flow_tfmp_management_service_execute()` 内直接开始 mutation；异步命令先把
-canonical bytes 复制进有界 owner 并返回 `ACCEPTED_VOLATILE`；durable operation 则先把 canonical
+volatile operation 先把 canonical bytes 复制进有界 owner 并返回 `ACCEPTED_VOLATILE`；
+durable operation 则先把 canonical
 bytes、dedup identity 与 operation 状态原子提交，再返回 `ACCEPTED_DURABLE`。只有宿主随后串行调用
 `turbo_flow_tfmp_management_service_run_one()` 才会 claim 并开始 mutation。`queue_timeout_ms` 在
 claim 前检查，`operation_timeout_ms` 是 Flow drain 或 resource owner 的相对 deadline，其中 `0`
@@ -408,7 +401,7 @@ revision 做条件写入。
 operation state 数值固定为 `1 ACCEPTED, 2 RUNNING, 3 SUCCEEDED, 4 FAILED,
 5 CANCEL_REQUESTED, 6 CANCELED`。terminal state 是 3、4、6，之后不得回到 active state。
 
-当前实现的 crash recovery 规则：
+crash recovery 规则：
 
 - `ACCEPTED` 可重新 claim。
 - `RUNNING`/`CANCEL_REQUESTED` 表示副作用结果不确定；重启时保持 recovery-required，owner 在完成
@@ -508,7 +501,11 @@ PUB fan-out、HWM drop、没有订阅者或连接断开都不能回滚已经提�
 ## 8. Runtime ownership 与线程模型
 
 ```text
-FMQ REP stage
+stable DEALER clients
+  bounded inflight table
+        |
+        v
+FMQ ROUTER stage
   decode/validate
        |
        v
@@ -519,18 +516,18 @@ typed management command owner ---- operation store
        +---- derived event/outbox ---- FMQ PUB
        |
        v
-typed result -> encode terminal REP
+accept/query result -> encode correlated response
 ```
 
-- REP stage 是薄 adapter，只拥有 request/reply bytes，不拥有 target 状态。
+- ROUTER stage 是薄 adapter，只拥有 request/response bytes 与当前 route，不拥有 target 状态。
 - management command owner 显式注入 target registry、operation store 与 event sink；不使用
   singleton 或 service locator。
 - owner mailbox 有界，命令按值复制，并在指定 CoroNet owner lane 执行。现有
   `tf_coronet_actor_t` 可复用 placement、deadline、close/drain 语义，但其 `int status` reply
   不足以表达 typed result；接入异步 operation 时需要 typed result handle，不能借用 caller stack。
-- 当前 owner 通过普通 CoroNet/FMQ REP graph 的薄 stage 接收请求；operation execution 仍由宿主在
+- owner 通过 CoroNet/FMQ ROUTER graph 的薄 stage 接收请求；operation execution 仍由宿主在
   同一 owner lane 显式调用 `run_one()`。任何替代 scheduler 都必须保留同一 dedup 事实源、单写者
-  和 bounded mailbox，不能在 REP stage 与 scheduler 各维护一份状态。
+  和 bounded mailbox，不能在 ROUTER stage 与 scheduler 各维护一份状态。
 - 一个 target 的 mutation 串行化；不同 target 可分 lane。跨 target workflow 没有隐式事务，
   必须有显式 orchestrator、补偿与 operation 状态。
 - storage adapter 是注入的薄接口。memory、SQLite、Redis、PG 共享同一 operation/dedup 状态模型，
@@ -541,8 +538,8 @@ typed result -> encode terminal REP
 配置源必须是 YAML，经现有 resolver 形成 immutable JSON projection 后再由 strict parser 校验。
 transport 仍放在 `kind: fmq` adapter；TFMP policy 放在独立 `kind: fmq_management` channel。
 
-当前 parser 已实现该 channel，要求专用且已解析的 `pattern: rep` FMQ adapter，拒绝 raw UDP、
-未知字段、非 1/0 协议版本、超过 dedup 容量的 mailbox 与非 1 的 per-target inflight。
+该 channel 要求专用且已解析的 `pattern: router` FMQ adapter，拒绝 raw UDP、未知字段、
+非 1/0 协议版本、超过 dedup 容量的 mailbox，以及大于 mailbox capacity 的 per-target inflight。
 `operation_store: memory` 明确选择 volatile owner；其他值必须引用已解析的 `kind: blob_store`
 channel。宿主再用 SQLite/Redis provider 的 `*_blob_store_create_resolved()` 创建 store，并通过
 `turbo_flow_tfmp_management_service_create_configured()` 注入；引用缺失、backend 错误、store 不可用
@@ -551,53 +548,44 @@ channel。宿主再用 SQLite/Redis provider 的 `*_blob_store_create_resolved()
 会在启动时失败。
 `flowmq/examples/fmq.yml` 给出 SQLite 装配配置。
 
-目标 schema：
+YAML schema：
 
 | YAML path | 必填 | 约束 |
 | --- | --- | --- |
 | `protocol_major` | 是 | 必须为 1 |
 | `protocol_minor` | 是 | server 支持范围内 |
 | `authority_id` | 是 | 非空、长度有界、配置域内唯一 |
-| `rpc_adapter` | 是 | 指向专用 FMQ REP adapter |
+| `rpc_adapter` | 是 | 指向专用 FMQ ROUTER adapter |
 | `event_adapter` | 否 | 指向 FMQ PUB adapter；启用 live_event 时必填 |
 | `mailbox_capacity` | 是 | 正整数、有编译期上限 |
 | `max_request_bytes` / `max_reply_bytes` | 是 | 不超过 protocol 上限 |
-| `max_inflight_per_target` | 是 | 正整数 |
+| `max_inflight_per_target` | 是 | 正整数，且不超过 `mailbox_capacity` |
 | `dedup_capacity` / `dedup_ttl_ms` | 是 | 正整数；active 不淘汰 |
-| `operation_store` | 否 | `memory` 或 `kind: blob_store` channel reference；已实现 SQLite/Redis |
+| `operation_store` | 否 | `memory` 或 SQLite/Redis `kind: blob_store` channel reference |
 | `event_replay_store` | 否 | `memory` 或与 `operation_store` 相同的 `blob_store` reference |
 | `shutdown_timeout_ms` | 是 | close -> drain 的有界期限 |
 
 未知字段、未知 adapter reference、raw UDP RPC、durable capability 无 store、event capability 无
 publisher 都必须在启动时 fail fast。命令行和环境变量若覆盖这些值，仍需走同一 schema 校验。
 
-## 10. 兼容、迁移与回滚
+## 10. 当前协议边界
 
-TFMP/1 不复用 `TFCQ`/`TFCP` magic，也不改变 `kind: fmq_control`。迁移分四个可回滚切片：
-
-1. 新增 TFMP codec、golden vector、capability 与只读 query；Control V1 继续提供服务。
-2. 新增 typed management owner，把 Control V1 和 TFMP immediate command 都适配到同一内部
-   command/result，不改变任一旧 wire。
-3. 接入 memory/SQLite/Redis operation store，验证 volatile/durable ACK 与 crash recovery；随后
-   扩展 PG。Redis 与 PG 不得因网络失败自动降级为 memory。
-4. 增加 event PUB/SUB、snapshot barrier 与可选 journal replay。完成兼容窗口后再单独决定
-   是否 deprecate Control V1。
-
-回滚只需停用 `fmq_management` channel 并保留原 `fmq_control` endpoint；没有数据格式迁移时，
-Control V1 行为不受影响。已有 durable operation 不能通过关闭 endpoint 删除，必须 drain 或由
-同 authority 的兼容版本恢复。
+TFMP/1 使用 `TFMP` magic、DEALER/ROUTER RPC 与独立 event PUB/SUB。实现只接受本文定义的
+frame、schema 和 YAML 组合，不提供旧 frame、REQ/REP management adapter、兼容 wrapper、
+version negotiation 或自动 transport fallback。
 
 ## 11. 候选方案与取舍
 
 | 方案 | 优点 | 缺点 | 结论 |
 | --- | --- | --- | --- |
-| 继续扩展固定 `TFCQ/TFCP` struct | 改动最小 | capability、分页、operation/event 会导致固定 header 膨胀，minor 演进困难 | 保留兼容，不作为新协议 |
+| 固定 command/reply struct | header 简单 | capability、分页、operation/event 会导致固定 header 膨胀，minor 演进困难 | 不选 |
 | JSON-only RPC | 可读、低频管理足够快 | canonical idempotency、整数精度、schema/size 约束更依赖 parser | 不选作 wire；YAML 仍是配置格式 |
 | TurboUtils `TLVParser` frame | 已有 CRC、stream parser | 它是固定 `0xAA ... CRC ... 0x55` little-endian frame，不是通用 field TLV；与 FMQ frame 重叠 | 不用于 TFMP |
-| 固定 header + `TurboUtils::Parser` canonical LTV | 已有 zero-copy framing/build、跨语言、可跳过 optional 字段 | 1-byte type 限制 field ID；schema 仍需 typed validation | 选择并已实现基础 codec |
+| 固定 header + `TurboUtils::Parser` canonical LTV | zero-copy framing/build、跨语言、可跳过 optional 字段 | 1-byte type 限制 field ID；schema 仍需 typed validation | 选择 |
 | TurboUtils `SoaParser` | 固定宽度批量列式数据高效 | 依赖全局 schema registry、little-endian、缺少稀疏异构管理字段演进 | 不用于 TFMP RPC；metrics/event 若采用它必须建立独立 schema contract |
-| 全部使用 ROUTER/DEALER | delayed reply 与路由灵活 | 破坏严格 REQ/REP 契约，客户端状态与错误恢复更复杂 | 不用于 management RPC |
-| event 与 RPC 共用 REP | endpoint 少 | server 无法主动通知，长轮询造成 head-of-line blocking | 使用独立 PUB/SUB |
+| DEALER/ROUTER + 有界 inflight | 请求可流水化，响应可乱序关联 | 客户端必须维护 correlation 与 unknown-outcome 语义 | 选择 |
+| REQ/REP management | 客户端状态简单 | 长 operation 造成 head-of-line blocking，无法流水化 | 不选 |
+| event 与 RPC 共用 ROUTER | endpoint 少 | 主动通知与 request correlation 混合，重连语义复杂 | 使用独立 PUB/SUB |
 | event 自身作为事实源 | 实现看似简单 | HWM/drop/reconnect 会造成不可恢复状态分叉 | event 只做派生提示 |
 
 性能取舍：management 是低频控制路径，canonical LTV 与 owner serialization 优先保证一致性。
@@ -610,7 +598,8 @@ Control V1 行为不受影响。已有 durable operation 不能通过关闭 endp
 1. TurboUtils LTV conformance 与 TFMP golden vectors：最短 varint、大小端、每个 kind、unknown
    optional/critical、reserved、trailing、深度与所有 size limit；decoder fuzz/截断输入不越界。
 2. version/capability：major 拒绝、minor additive、无静默 fallback、capability/command 组合矩阵。
-3. strict REQ/REP：每个 malformed 或 owner error 都产生一个终态 REP；下一 REQ 状态可继续。
+3. DEALER/ROUTER：多 inflight、乱序 correlation、同步 mutation 拒绝、malformed/owner error
+   response、断连 unknown outcome 与同 idempotency key 重试。
 4. owner：同 target 串行、跨 target 隔离、mailbox 满、queued deadline、close/drain、started
    mutation 不被 caller timeout 伪取消。
 5. idempotency：exact replay、bytes conflict、TTL、active 不淘汰、capacity exhaustion、客户端重连。
@@ -619,21 +608,21 @@ Control V1 行为不受影响。已有 durable operation 不能通过关闭 endp
 7. event：prefix fan-out、无订阅者、HWM gap、incarnation change、snapshot barrier、journal replay。
 8. transport：Pipe 最小回归，TCP 与 WebSocket 端到端；TLS/WSS/KCP 使用现有 transport contract
    suite。raw UDP 必须被配置拒绝。
-9. compatibility：Control V1 原 golden vectors、API、YAML 与端到端测试保持不变。
+9. current-only：REQ/REP management adapter、旧 frame、兼容 wrapper 和 transport fallback
+   均被配置或 decoder 拒绝。
 
 ## 13. 已知风险
 
-- **HIGH — 事实：**现有 Control V1 dedup 与 TFMP 同步 command history 仍是 bounded memory；只有
-  `ACCEPT_OPERATION + DURABLE` 的 dedup/operation record 进入注入的原子 blob store。调用方不能把
-  同步 command 或 `memory` operation 的 REP 解释成 durable ACK。
+- **HIGH — 事实：**只有 `ACCEPT_OPERATION + DURABLE` 的 dedup/operation record 进入注入的
+  原子 blob store。调用方不能把
+  `memory` operation 的 acceptance response 解释成 durable ACK。
 - **HIGH — 事实：**target mutation 与 blob store 不是同一事务。实现先提交 `RUNNING` 再执行副作用，
-  终态提交失败会使 owner 进入 FAILED；重启把残留 RUNNING 标为 `FAILED/INTERNAL` 并禁止自动重放。
-  这避免重复副作用，但不能自动判定副作用是否已发生；需要自动恢复的 command 仍须增加 typed
-  reconcile contract 与对应 crash injection 测试。
-- **MED — 事实：**当前 CoroNet actor reply 只携带 `int status`，无法返回 operation ID、generation
-  与 document。实现必须增加 typed result ownership，不能跨 lane 借用 request/message 内存。
-- **MED — 推论：**同步 external store transaction 会阻塞 management owner lane。首版可接受低频
-  SQLite/Redis 管理负载，但必须记录 P50/P95/P99；达到每秒 1000 次或占 owner lane 20% 以上时，
+  终态提交失败会使 owner 进入 FAILED；重启后的残留 RUNNING 保持 recovery-required，必须由
+  typed inspector 判定 APPLIED、NOT_APPLIED 或 CONFLICT，不能盲目重放。
+- **MED — 事实：**客户端必须为每个 target 维护有界 correlation table；route 断开时未收到
+  acceptance 的 mutation 是 unknown outcome，只能按相同 idempotency identity 对账。
+- **MED — 推论：**同步 external store transaction 会阻塞 management owner lane。必须记录
+  SQLite/Redis 管理负载的 P50/P95/P99；达到每秒 1000 次或占 owner lane 20% 以上时，
   再依据 profiling 拆分 storage execution placement。
 - **MED — 事实：**TurboUtils 源码已补 canonical/overflow、无 partial build 与 stream view 生命周期
   测试；TFMP codec 通过已安装 `TurboUtils::Parser` 的公开 `turbo_ltv_*` API 接入，并在 schema
