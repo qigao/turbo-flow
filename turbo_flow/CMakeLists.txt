@@ -1,5 +1,5 @@
 set(TARGET_NAME turbo_flow)
-
+find_package(RulesForge 0.9 CONFIG REQUIRED PATHS "${RulesForge_ROOT}")
 cmake_add_grammar(TURBO_FLOW
   LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/flow_lexer.re
   GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/flow_grammar.y
@@ -31,7 +31,8 @@ set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_record_store.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_domain.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_control.h
-  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_expr.h)
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_expr.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_rulesforge.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_policy.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_protocol.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_discovery.h)
@@ -66,11 +67,7 @@ cmake_config_target(
   EXPORT_NAME Flow)
 
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
-if(TURBO_FLOW_EXPR_ENABLE_JIT)
-  target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_EXPR_ENABLE_JIT=1)
-else()
-  target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_EXPR_ENABLE_JIT=0)
-endif()
+target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_EXPR_ENABLE_JIT=1)
 
 target_include_directories(
   ${TARGET_NAME}
@@ -81,7 +78,9 @@ target_include_directories(
           ${CMAKE_CURRENT_BINARY_DIR}
           ${PROJECT_SOURCE_DIR}/vendor/mir)
 
-target_link_libraries(${TARGET_NAME} PUBLIC TurboUtils::Core PRIVATE TurboUtils::Parser mir_static)
+target_link_libraries(${TARGET_NAME} PUBLIC 
+  TurboUtils::Core RulesForge::rules_forge
+  PRIVATE TurboUtils::Parser mir_static)
 
 install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)
 

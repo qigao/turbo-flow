@@ -451,6 +451,8 @@ spec("flow_expr") {
     turbo_flow_msg_init(&msg);
     msg.id = 42;
     msg.status = -7;
+    msg.data_decision.evaluation_status = TURBO_FLOW_DATA_MATCHED;
+    msg.data_decision.match_count = 2u;
     msg.payload = tstr_v_from_buf("body", 4);
     context.message = &msg;
     context.read_schema_field = read_test_schema_field;
@@ -470,6 +472,22 @@ spec("flow_expr") {
     check_int_eq(value.type, TURBO_FLOW_EXPR_TYPE_STRING);
     check_size_eq(value.as.string.len, 4);
     check_mem_eq(value.as.string.data, "body", 4);
+    check_int_eq(turbo_flow_expr_read_field(&context, TURBO_FLOW_EXPR_FIELD_BUILTIN,
+                                            TURBO_FLOW_EXPR_FIELD_MSG_RULE_STATUS, &value),
+                 TURBO_OK);
+    check_int_eq(value.as.i64, TURBO_FLOW_DATA_MATCHED);
+    check_int_eq(turbo_flow_expr_read_field(&context, TURBO_FLOW_EXPR_FIELD_BUILTIN,
+                                            TURBO_FLOW_EXPR_FIELD_MSG_RULE_MATCHED, &value),
+                 TURBO_OK);
+    check_true(value.as.boolean);
+    check_int_eq(turbo_flow_expr_read_field(&context, TURBO_FLOW_EXPR_FIELD_BUILTIN,
+                                            TURBO_FLOW_EXPR_FIELD_MSG_RULE_MATCH_COUNT, &value),
+                 TURBO_OK);
+    check_int_eq(value.as.i64, 2);
+    check_int_eq(turbo_flow_expr_read_field(&context, TURBO_FLOW_EXPR_FIELD_BUILTIN,
+                                            TURBO_FLOW_EXPR_FIELD_MSG_RULE_ERROR, &value),
+                 TURBO_OK);
+    check_int_eq(value.as.i64, TURBO_OK);
     check_int_eq(turbo_flow_expr_read_field(&context, TURBO_FLOW_EXPR_FIELD_SCHEMA, 10, &value),
                  TURBO_OK);
     check_int_eq(value.type, TURBO_FLOW_EXPR_TYPE_BOOL);
@@ -502,6 +520,9 @@ spec("flow_expr") {
     turbo_flow_msg_t msg;
     expr_eval_state_t state;
     turbo_flow_msg_init(&msg);
+    msg.flags = 6u;
+    msg.data_decision.evaluation_status = TURBO_FLOW_DATA_MATCHED;
+    msg.data_decision.match_count = 2u;
     memset(&state, 0, sizeof(state));
     state.age = 21;
     state.name = "Ada";
@@ -531,6 +552,14 @@ spec("flow_expr") {
 
     expected.type = TURBO_FLOW_EXPR_TYPE_BOOL;
     expected.as.boolean = 1;
+    check_eval_value_pair("has_flag(msg.flags, 2)", &context, expected.type, &expected);
+    expected.as.boolean = 0;
+    check_eval_value_pair("has_flag(msg.flags, 8)", &context, expected.type, &expected);
+    expected.as.boolean = 1;
+    check_eval_value_pair(
+        "msg.rule_matched and msg.rule_status == 2 and msg.rule_match_count == 2 and "
+        "msg.rule_error == 0",
+        &context, expected.type, &expected);
     check_eval_value_pair("\"abc\" < \"abd\"", &context, expected.type, &expected);
     check_eval_value_pair("\"abc\" <= \"abc\"", &context, expected.type, &expected);
     check_eval_value_pair("\"b\" >= \"a\"", &context, expected.type, &expected);

@@ -23,10 +23,11 @@ Graph；`flowie_endpoint_core_*` 直连 endpoint 不创建 Graph。只有调用�
 - [flowie.yml](examples/flowie.yml)
 - [flowie.flow](examples/flowie.flow)
 
-服务端不会从 YAML 中读取 ACL rule body，也不会连接用户认证数据库。用户认证数据库只能由独立认证
-服务访问；Flowie 只访问 HTTPS auth/ACL 服务。单机部署也由本机 `flowie-control` 提供 loopback HTTPS，
-Broker 不直接读取 SQLite 或 PostgreSQL。`flowie-control` 可把自己的本地 Auth/ACL/管理事实存入
-SQLite 或 PostgreSQL；该数据库连接与权限不会进入 Broker。
+服务端不会从 Broker YAML 中读取 ACL rule body，也不会让 MQTT worker 连接用户认证数据库。生产入口
+使用 `flowie_server --control-config <flowie-control.yml>` 在同一应用生命周期内启动 Control runtime；
+MQTT worker 仍只通过 loopback HTTPS `/v3/authenticate` 和 `/v3/acl` 访问它，不跨层调用 Repository。
+Control 可把本地 Auth/ACL/管理事实存入 SQLite 或 PostgreSQL；数据库连接与权限不会进入 MQTT worker。
+独立 `flowie-control` 可执行文件保留为兼容、诊断入口，不是推荐的生产组合入口。
 
 ## 2. 构建
 
@@ -46,8 +47,10 @@ cmake --build --preset win-release-user --target flowie_server flowie_supervisor
 
 ```powershell
 build\Msvc-Release\bin\flowie_server.exe --check `
+  --require-security `
   --profile flowie `
-  flowie\examples\flowie.yml `
+  --control-config flowie\examples\flowie-control.yml `
+  flowie\app\tests\flowie_server_https_secure.yml `
   flowie\examples\flowie.flow
 ```
 
@@ -57,9 +60,14 @@ build\Msvc-Release\bin\flowie_server.exe --check `
 flowie_server: configuration and graph are valid
 ```
 
-`--check` 会解析配置、解析 Graph、创建所选 provider、装配资源并编译 Graph，但不会绑定 listener。
+`--check` 会解析 Broker/Control 配置、解析 Graph、创建所选 Broker provider、装配资源并编译 Graph，
+但不会绑定 listener、打开 Control 数据库或执行 bootstrap。
 字段类型错误、未知 backend、缺少 secret reference、Graph 引用不存在或 provider 无法初始化都会直接失败，
 不会回退到不安全模式。
+
+生产预检和启动必须使用 `--require-security`。该开关要求 endpoint 同时组合 `auth_method`、HTTPS Auth
+provider、`security_realm` 与 HTTPS ACL policy provider；任一环节缺失或初始化失败都会拒绝启动。省略该
+开关只用于兼容仓库内现有开发与匿名测试 profile，不应作为生产部署方式。
 
 StorageBackend 也在该预检边界装配：产品宿主注册同级的 `tf_local_storage`、`tf_redis`、
 `tf_pgsql` shared library，并通过 `io/common/storage` 的 registry/owner ABI 创建 service。
@@ -67,14 +75,20 @@ StorageBackend 也在该预检边界装配：产品宿主注册同级的 `tf_loc
 只消费 provider-neutral 的 FlowStore facade，不调用具体 backend 的 record/hash/index/log/state
 函数；插件 function table 只公开 `open()` 和 `close()`。
 
+Bundled Server 固定包含 Socket、Redis、PostgreSQL、HTTP client/server 与 HTTPS Auth/ACL 能力，不按
+编译开关生成不同语义的二进制。YAML 与 Flow 是实例的唯一组合来源：只有被 profile、channel、adapter
+或 Graph 引用的 provider/backend 才会创建连接和运行时状态。
+
 ## 4. 启动与监管
 
 直接运行 worker：
 
 ```powershell
 build\Msvc-Release\bin\flowie_server.exe `
+  --require-security `
   --profile flowie `
-  flowie\examples\flowie.yml `
+  --control-config C:\flowie\flowie-control.yml `
+  flowie\app\tests\flowie_server_https_secure.yml `
   flowie\examples\flowie.flow
 ```
 
@@ -82,10 +96,12 @@ build\Msvc-Release\bin\flowie_server.exe `
 
 ```powershell
 build\Msvc-Release\bin\flowie_supervisor.exe `
+  --require-security `
   --profile flowie `
   --worker build\Msvc-Release\bin\flowie_server.exe `
   --capture-output 1048576 `
-  flowie\examples\flowie.yml `
+  --control-config C:\flowie\flowie-control.yml `
+  flowie\app\tests\flowie_server_https_secure.yml `
   flowie\examples\flowie.flow
 ```
 
@@ -171,11 +187,28 @@ MQTT packet 只能放在 WebSocket binary data frame 中；text data frame 会�
 control/close frame 会关闭连接。这些拒绝不会创建 MQTT session，也不会使 listener 退出；后续合法客户端
 仍可连接。反向代理的 frame/message 上限应不高于 Flowie 的上限，避免代理层积累 Flowie 必然拒绝的数据。
 
-## 7. HTTPS 认证、ACL 与 mTLS
+## 7. HTTPS 认证、ACL 与服务凭证
+
+### 公网 TLS 部署组件
+
+`flowie/deploy/nginx/` 是 `flowie_server` 的版本化部署组件，并随安装产物复制到
+`share/turboflow/deploy/flowie-nginx`。单个 `flowie-nginx` Compose 服务负责公网 `443` HTTPS、
+`8883` MQTT TLS、`80` ACME challenge 和限定 `FLOWIE_PUBLIC_HOST` 的 Certbot 续期。它不是第二个
+Auth/ACL 服务，也不持有用户、规则、MQTT session 或数据库凭据。
+
+推荐拓扑为公网 Nginx到 loopback TLS：Control `127.0.0.1:8443`，MQTT
+`127.0.0.1:18883`。Nginx 必须用内部 CA 和显式 TLS name 校验两个上游；公网浏览器和 MQTT 客户端
+只校验公共证书，不提供客户端证书。Dashboard 仍使用登录 session，Broker 仍通过 HTTPS service token
+访问 Auth/ACL。完整 `.env`、首次签发、Compose 启动和源地址边界见
+[deploy/nginx/README.md](deploy/nginx/README.md)。
+
+容器 healthcheck 会经 `443` 访问真实登录页并检查 MQTT 内部 listener；`nginx -t` 在每次容器启动前
+执行。部署主机必须显式放行 `80/443/8883`，且不能同时运行另一个证书续期 timer 或 Nginx 容器。
 
 安全 profile 同时选择 auth provider 和 security realm。完整结构见
-[flowie_server_https_secure.yml](app/tests/flowie_server_https_secure.yml)。生产配置可为 auth 与 ACL 服务分别
-配置 mTLS：
+[flowie_server_https_secure.yml](app/tests/flowie_server_https_secure.yml)。默认使用普通 TLS server
+authentication 加有作用域的 service token；以下 `client_cert_file/client_key_file` 只是在隔离服务网络中
+显式启用的第二因子，不得成为浏览器或公网 MQTT 客户端的要求：
 
 ```yaml
 profiles:
@@ -262,9 +295,9 @@ HTTPS 认证服务管理。显式 `session_store` 选择失败时直接报错，
 
 ## 10. 发布前检查表
 
-1. 运行 `flowie_server --check`。
+1. 对生产配置运行 `flowie_server --check --require-security`。
 2. 运行 `ctest --preset win-release-user -L flowie-release --output-on-failure`。
-3. 验证证书链、主机名、过期时间和 mTLS 客户端身份。
+3. 验证公网/内部证书链、主机名与过期时间；仅在显式启用时验证服务端 mTLS 第二因子。
 4. 验证 auth/ACL service token 与私钥密码 reference 可解析且没有进入日志。
 5. 验证连接、session、subscription、inflight、retained、Queue 和输出容量上限。
 6. 验证慢订阅者策略和 settlement 终态。

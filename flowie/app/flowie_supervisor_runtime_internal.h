@@ -16,13 +16,15 @@ typedef struct flowie_supervisor_runtime_config_s {
   const char *profile;
   const char *config_path;
   const char *graph_path;
+  const char *control_config_path;
   int check_only;
+  int require_security;
   int capture_output;
   size_t max_output_bytes;
 } flowie_supervisor_runtime_config_t;
 
 #define FLOWIE_SUPERVISOR_RUNTIME_CONFIG_INIT                                                      \
-  {sizeof(flowie_supervisor_runtime_config_t), NULL, "flowie", NULL, NULL, 0, 0,                   \
+  {sizeof(flowie_supervisor_runtime_config_t), NULL, "flowie", NULL, NULL, NULL, 0, 0, 0,          \
    FLOWIE_SUPERVISOR_DEFAULT_CAPTURE_LIMIT}
 
 typedef struct flowie_supervisor_error_s {

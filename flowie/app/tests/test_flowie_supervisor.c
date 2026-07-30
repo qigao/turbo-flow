@@ -97,6 +97,29 @@ spec("flowie supervisor runtime") {
     flowie_supervisor_runtime_destroy(runtime);
   }
 
+  it("forwards the embedded Control configuration to the worker") {
+    flowie_supervisor_runtime_config_t config = FLOWIE_SUPERVISOR_RUNTIME_CONFIG_INIT;
+    flowie_supervisor_error_t error = FLOWIE_SUPERVISOR_ERROR_INIT;
+    flowie_supervisor_runtime_t *runtime = NULL;
+    turbo_process_result_t child;
+    char output[512];
+
+    config.worker_program = FLOWIE_TEST_WORKER_PROGRAM;
+    config.config_path = FLOWIE_TEST_CONFIG_PATH;
+    config.graph_path = FLOWIE_TEST_GRAPH_PATH;
+    config.control_config_path = "missing-flowie-control.yml";
+    config.check_only = 1;
+    config.capture_output = 1;
+    check_int_eq(flowie_supervisor_runtime_create(&config, &runtime, &error), TURBO_OK);
+    check_int_eq(flowie_supervisor_runtime_start(runtime, &error), TURBO_OK);
+    check_int_eq(flowie_supervisor_runtime_wait_for(runtime, 10000u, &child, &error), TURBO_OK);
+    check_int_eq(child.state, TURBO_PROCESS_EXITED);
+    check_int_ne(child.exit_code, 0);
+    check_int_eq(read_all_stderr(runtime, output, sizeof(output)), TURBO_EOF);
+    check_str_contains(output, "load control configuration failed");
+    flowie_supervisor_runtime_destroy(runtime);
+  }
+
   it("terminates and reaps a long-running worker on stop") {
     flowie_supervisor_runtime_config_t config = FLOWIE_SUPERVISOR_RUNTIME_CONFIG_INIT;
     flowie_supervisor_error_t error = FLOWIE_SUPERVISOR_ERROR_INIT;

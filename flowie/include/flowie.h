@@ -223,6 +223,16 @@ CXX_C_API int flowie_mqtt_rule_facts_provider(const turbo_flow_msg_t *message,
                                               size_t *value_count_out, void *ctx);
 
 /**
+ * Return the MQTT PUBLISH application payload rather than the encoded packet.
+ *
+ * The returned view is borrowed from the message buffer and remains valid for
+ * the message lifetime. `ctx` is ignored so this function can be used directly
+ * as a `turbo_flow_rulesforge_payload_view_fn`.
+ */
+CXX_C_API int flowie_mqtt_payload_view(const turbo_flow_msg_t *message, tstr_v *payload_out,
+                                       void *ctx);
+
+/**
  * Register one Flowie MQTT server primitive as a bidirectional TurboFlow adapter.
  * The source owns listener/receive/framing; a sink binding accepts an encoded
  * MQTT control packet carrying a message-owned MQTT protocol route.
@@ -265,6 +275,17 @@ CXX_C_API int flowie_register_bound_endpoint(turbo_flow_t *flow, const char *nam
 CXX_C_API int flowie_register_resolved_endpoint(turbo_flow_t *flow, const char *name,
                                                 const turbo_flow_resolved_config_t *resolved,
                                                 turbo_flow_config_error_t *error);
+
+/**
+ * Register one MQTT 5 client source from a strict resolved `flowie_client`
+ * adapter. The source subscribes one explicit topic filter and publishes an
+ * owned MQTT PUBLISH message into the graph. Network reconnect is bounded by
+ * the configured initial and maximum delays; durable processing remains the
+ * responsibility of a downstream outbox sink.
+ */
+CXX_C_API int flowie_register_resolved_client_source(
+    turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
+    turbo_flow_config_error_t *error);
 
 CXX_C_API int flowie_register_resolved_endpoint_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,

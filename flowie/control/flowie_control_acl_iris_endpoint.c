@@ -10,17 +10,12 @@
 
 enum {
   FLOWIE_CONTROL_ACL_TOKEN_MAX = 4096,
-  FLOWIE_CONTROL_ACL_DIGEST_SIZE = 32,
   FLOWIE_CONTROL_ACL_VERSION_HEADER_MAX = 32,
-  FLOWIE_CONTROL_ACL_SECRET_REF_MAX = 1024
 };
 
 struct flowie_control_acl_iris_endpoint_s {
   const flowie_control_repository_t *repository;
-  const flowie_control_auth_service_t *auth_service;
-  turbo_flow_security_key_provider_t key_provider;
-  char listener_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
-  char *service_token_ref;
+  flowie_control_service_credential_resolver_t *service_credentials;
   size_t max_response_size;
   iris_app_t *bound_app;
 };
@@ -68,38 +63,24 @@ static void flowie_control_acl_wipe_authorization(Req *req) {
   }
 }
 
-static int flowie_control_acl_verify_token(flowie_control_acl_iris_endpoint_t *endpoint,
-                                           const Req *req) {
+static int flowie_control_acl_resolve_caller(
+    flowie_control_acl_iris_endpoint_t *endpoint, const Req *req,
+    const char *verified_peer_certificate_sha256, flowie_control_verified_caller_t *caller_out) {
   static const char prefix[] = "Bearer ";
-  turbo_flow_security_secret_lease_t lease = TURBO_FLOW_SECURITY_SECRET_LEASE_INIT;
   const char *authorization = NULL;
-  uint8_t expected[FLOWIE_CONTROL_ACL_DIGEST_SIZE] = {0};
-  uint8_t actual[FLOWIE_CONTROL_ACL_DIGEST_SIZE] = {0};
   size_t authorization_size;
   int rc = flowie_control_acl_header(req, "Authorization", &authorization);
   if (rc != TURBO_OK) return TURBO_EPERM;
-  rc = turbo_flow_security_secret_acquire(&endpoint->key_provider, endpoint->service_token_ref,
-                                          &lease);
-  if (rc != TURBO_OK) return rc;
   authorization_size = strnlen(authorization, sizeof(prefix) + FLOWIE_CONTROL_ACL_TOKEN_MAX);
-  if (!lease.bytes || lease.byte_count == 0u || lease.byte_count > FLOWIE_CONTROL_ACL_TOKEN_MAX ||
-      authorization_size != sizeof(prefix) - 1u + lease.byte_count ||
+  if (authorization_size <= sizeof(prefix) - 1u ||
+      authorization_size > sizeof(prefix) - 1u + FLOWIE_CONTROL_ACL_TOKEN_MAX ||
       memcmp(authorization, prefix, sizeof(prefix) - 1u) != 0 ||
-      memchr(lease.bytes, '\0', lease.byte_count) || memchr(lease.bytes, '\r', lease.byte_count) ||
-      memchr(lease.bytes, '\n', lease.byte_count)) {
-    rc = TURBO_EPERM;
-    goto done;
-  }
-  crypto_blake2b(expected, sizeof(expected), lease.bytes, lease.byte_count);
-  crypto_blake2b(actual, sizeof(actual), (const uint8_t *)authorization + sizeof(prefix) - 1u,
-                 lease.byte_count);
-  rc = crypto_verify32(expected, actual) == 0 ? TURBO_OK : TURBO_EPERM;
-
-done:
-  crypto_wipe(expected, sizeof(expected));
-  crypto_wipe(actual, sizeof(actual));
-  turbo_flow_security_secret_release(&endpoint->key_provider, &lease);
-  return rc;
+      !caller_out || caller_out->size < sizeof(*caller_out))
+    return TURBO_EPERM;
+  return flowie_control_service_credential_resolve(
+      endpoint->service_credentials,
+      (const uint8_t *)authorization + sizeof(prefix) - 1u,
+      authorization_size - (sizeof(prefix) - 1u), verified_peer_certificate_sha256, caller_out);
 }
 
 static int flowie_control_acl_required_version(const Req *req, uint64_t *version_out) {
@@ -223,19 +204,12 @@ int flowie_control_acl_iris_endpoint_process(flowie_control_acl_iris_endpoint_t 
   if (!endpoint || !req || !status_out || !body_out || !body_size_out) return TURBO_EINVAL;
   if (!req->method || strcmp(req->method, "GET") != 0 || req->body_stream || req->body_len != 0u)
     goto done;
-  rc = flowie_control_acl_verify_token(endpoint, req);
-  if (rc != TURBO_OK) goto done;
   rc = req_get_verified_tls_peer_certificate_sha256(req, fingerprint);
-  if (rc != TURBO_OK) {
-    rc = TURBO_EPERM;
-    goto done;
-  }
-  caller.listener_id = endpoint->listener_id;
-  caller.peer_certificate_sha256 = fingerprint;
-  caller.certificate_verified = 1;
-  rc = flowie_control_auth_service_resolve_root_group(endpoint->auth_service, &caller,
-                                                      root_group_id);
+  if (rc != TURBO_OK) fingerprint[0] = '\0';
+  rc = flowie_control_acl_resolve_caller(endpoint, req, fingerprint[0] ? fingerprint : NULL,
+                                         &caller);
   if (rc != TURBO_OK) goto done;
+  memcpy(root_group_id, caller.root_group_id, strlen(caller.root_group_id) + 1u);
   rc = flowie_control_acl_required_version(req, &required_version);
   if (rc != TURBO_OK) goto done;
   rc = endpoint->repository->policy->bundle_load(endpoint->repository->ctx, root_group_id,
@@ -292,30 +266,15 @@ static void flowie_control_acl_registered_handler(Req *req, Res *res) {
 int flowie_control_acl_iris_endpoint_create(const flowie_control_acl_iris_endpoint_config_t *config,
                                             flowie_control_acl_iris_endpoint_t **out) {
   flowie_control_acl_iris_endpoint_t *endpoint;
-  size_t listener_size;
-  size_t reference_size;
   if (out) *out = NULL;
   if (!config || config->size < sizeof(*config) ||
-      flowie_control_repository_validate(config->repository) != TURBO_OK || !config->auth_service ||
-      !config->listener_id || !config->listener_id[0] ||
-      (listener_size = strlen(config->listener_id)) > TURBO_FLOW_SECURITY_ID_MAX ||
-      !config->service_token_ref || !config->service_token_ref[0] ||
-      (reference_size = strlen(config->service_token_ref)) > FLOWIE_CONTROL_ACL_SECRET_REF_MAX ||
-      config->key_provider.size < sizeof(config->key_provider) || !config->key_provider.acquire ||
-      !config->key_provider.release || config->max_response_size == 0u || !out)
+      flowie_control_repository_validate(config->repository) != TURBO_OK ||
+      !config->service_credentials || config->max_response_size == 0u || !out)
     return TURBO_EINVAL;
   endpoint = (flowie_control_acl_iris_endpoint_t *)calloc(1u, sizeof(*endpoint));
   if (!endpoint) return TURBO_ENOMEM;
-  endpoint->service_token_ref = (char *)malloc(reference_size + 1u);
-  if (!endpoint->service_token_ref) {
-    free(endpoint);
-    return TURBO_ENOMEM;
-  }
-  memcpy(endpoint->service_token_ref, config->service_token_ref, reference_size + 1u);
-  memcpy(endpoint->listener_id, config->listener_id, listener_size + 1u);
   endpoint->repository = config->repository;
-  endpoint->auth_service = config->auth_service;
-  endpoint->key_provider = config->key_provider;
+  endpoint->service_credentials = config->service_credentials;
   endpoint->max_response_size = config->max_response_size;
   *out = endpoint;
   return TURBO_OK;
@@ -325,10 +284,6 @@ void flowie_control_acl_iris_endpoint_destroy(flowie_control_acl_iris_endpoint_t
   if (!endpoint) return;
   if (endpoint->bound_app)
     (void)iris_app_unbind_rpc_context(endpoint->bound_app, FLOWIE_CONTROL_ACL_HTTP_PATH, endpoint);
-  if (endpoint->service_token_ref) {
-    crypto_wipe(endpoint->service_token_ref, strlen(endpoint->service_token_ref));
-    free(endpoint->service_token_ref);
-  }
   crypto_wipe(endpoint, sizeof(*endpoint));
   free(endpoint);
 }

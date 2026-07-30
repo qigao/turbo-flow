@@ -8,11 +8,6 @@
 extern "C" {
 #endif
 
-#define FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER "viewer"
-#define FLOWIE_CONTROL_MANAGEMENT_ROLE_USER_ADMIN "user_admin"
-#define FLOWIE_CONTROL_MANAGEMENT_ROLE_POLICY_ADMIN "policy_admin"
-#define FLOWIE_CONTROL_MANAGEMENT_ROLE_SECURITY_ADMIN "security_admin"
-
 typedef struct flowie_control_runtime_s flowie_control_runtime_t;
 
 /** Validate TLS identity, secret references, and store selection without opening a listener/DB. */
@@ -21,6 +16,16 @@ int flowie_control_runtime_validate(const flowie_control_config_t *config);
 /** Create the complete controller composition root and bind all enabled routes. */
 int flowie_control_runtime_create(const flowie_control_config_t *config,
                                   flowie_control_runtime_t **out);
+
+/**
+ * Start and stop the owned HTTPS listener without installing process signal handlers.
+ *
+ * These calls are caller-serialized. start() binds the configured endpoint before it returns;
+ * stop() asks the owner context to cancel accepted connections, closes the listener there,
+ * stops the context, and joins the owner thread.
+ */
+int flowie_control_runtime_start(flowie_control_runtime_t *runtime);
+int flowie_control_runtime_stop(flowie_control_runtime_t *runtime);
 
 /** Run the configured HTTPS/mTLS listener until Iris receives a shutdown signal. */
 int flowie_control_runtime_run(flowie_control_runtime_t *runtime);
@@ -32,17 +37,6 @@ int flowie_control_runtime_run(flowie_control_runtime_t *runtime);
  * outstanding leases are returned.
  */
 int flowie_control_runtime_destroy(flowie_control_runtime_t *runtime);
-
-/** Resolve an exact configured certificate fingerprint against current repository state. */
-int flowie_control_runtime_resolve_management_fingerprint(
-    flowie_control_runtime_t *runtime, const char *fingerprint,
-    flowie_control_management_caller_t *caller_out);
-
-/** Deterministic identity boundary used by the runtime callback and focused tests. */
-int flowie_control_management_identity_resolve(
-    const flowie_control_repository_t *repository,
-    const flowie_control_config_admin_binding_t *bindings, size_t binding_count,
-    const char *fingerprint, flowie_control_management_caller_t *caller_out);
 
 #ifdef __cplusplus
 }

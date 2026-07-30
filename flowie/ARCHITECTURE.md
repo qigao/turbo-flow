@@ -352,8 +352,8 @@ local immutable snapshot lookup.
 - authorization denial does not allocate session/application work;
 - a graph or persistence failure leaves the session inflight record at its previous committed
   generation and follows the configured retry/disconnect policy;
-- migration can be rolled back by disabling `TURBO_FLOW_BUILD_FLOWIE`; FMQ and other adapters do
-  not depend on Flowie;
+- source migration rollback requires deploying the previous complete TurboFlow release; Flowie is
+  part of the invariant product build and cannot be removed with a CMake feature switch;
 - no TurboMQTT runtime file is modified, so source migration can be audited or repeated without
   changing the original application.
 

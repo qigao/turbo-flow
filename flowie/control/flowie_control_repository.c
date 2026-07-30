@@ -8,6 +8,18 @@ static int sqlite_root_group_create(void *ctx,
   return flowie_control_store_root_group_create((flowie_control_store_t *)ctx, command, result);
 }
 
+static int sqlite_root_group_get(void *ctx, const char *root_group_id,
+                                 flowie_control_root_group_view_t *out) {
+  return flowie_control_store_root_group_get((flowie_control_store_t *)ctx, root_group_id, out);
+}
+
+static int sqlite_root_group_list(void *ctx, const char *after_root_group_id,
+                                  flowie_control_root_group_view_t *items, size_t item_capacity,
+                                  size_t *count_out, int *has_more_out) {
+  return flowie_control_store_root_group_list((flowie_control_store_t *)ctx, after_root_group_id,
+                                              items, item_capacity, count_out, has_more_out);
+}
+
 static int sqlite_user_create(void *ctx, const flowie_control_user_create_command_t *command,
                               flowie_control_command_result_t *result) {
   return flowie_control_store_user_create((flowie_control_store_t *)ctx, command, result);
@@ -216,7 +228,8 @@ static int sqlite_audit_count(void *ctx, size_t *count_out) {
 }
 
 static const flowie_control_repository_user_ops_t SQLITE_USER_OPS = {
-    sqlite_root_group_create, sqlite_user_create, sqlite_user_disable, sqlite_user_get,
+    sqlite_root_group_create, sqlite_root_group_get, sqlite_root_group_list,
+    sqlite_user_create,       sqlite_user_disable,  sqlite_user_get,
     sqlite_user_list};
 static const flowie_control_repository_auth_ops_t SQLITE_AUTH_OPS = {
     sqlite_credential_verify, sqlite_credential_state, sqlite_current_revision,
@@ -245,7 +258,8 @@ int flowie_control_repository_validate(const flowie_control_repository_t *reposi
       !repository->ctx || !repository->user || !repository->auth || !repository->credential ||
       !repository->group || !repository->role || !repository->policy || !repository->audit)
     return TURBO_EINVAL;
-  if (!repository->user->root_group_create || !repository->user->create ||
+  if (!repository->user->root_group_create || !repository->user->root_group_get ||
+      !repository->user->root_group_list || !repository->user->create ||
       !repository->user->disable || !repository->user->get || !repository->user->list ||
       !repository->auth->credential_verify || !repository->auth->credential_state ||
       !repository->auth->current_revision || !repository->auth->principal_snapshot ||

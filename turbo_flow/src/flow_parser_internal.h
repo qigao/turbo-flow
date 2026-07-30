@@ -13,6 +13,7 @@ typedef struct flow_lexer_s {
   uint32_t line;
   uint32_t column;
   int expression_pending;
+  int line_has_arrow;
 } flow_lexer_t;
 
 typedef struct flow_token_s {

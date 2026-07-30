@@ -20,6 +20,14 @@ int flowie_control_pgsql_query_create(flowie_control_pgsql_pool_t *pool,
                                       flowie_control_pgsql_query_t **out);
 void flowie_control_pgsql_query_destroy(flowie_control_pgsql_query_t *query);
 
+int flowie_control_pgsql_query_root_group_get(flowie_control_pgsql_query_t *query,
+                                              const char *root_group_id,
+                                              flowie_control_root_group_view_t *out);
+int flowie_control_pgsql_query_root_group_list(flowie_control_pgsql_query_t *query,
+                                               const char *after_root_group_id,
+                                               flowie_control_root_group_view_t *items,
+                                               size_t item_capacity, size_t *count_out,
+                                               int *has_more_out);
 int flowie_control_pgsql_query_user_get(flowie_control_pgsql_query_t *query,
                                         const char *root_group_id, const char *principal_id,
                                         flowie_control_user_view_t *out);

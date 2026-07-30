@@ -93,6 +93,26 @@ int flowie_control_credential_generate(uint8_t secret[FLOWIE_CONTROL_CREDENTIAL_
   return rc;
 }
 
+int flowie_control_credential_hash(const void *secret, size_t secret_size,
+                                   uint8_t salt[FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE],
+                                   uint8_t verifier[FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE],
+                                   const flowie_control_credential_kdf_params_t *params) {
+  int rc;
+  if (!secret || secret_size == 0u || secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX || !salt ||
+      !verifier || !flowie_control_credential_params_valid(params))
+    return TURBO_EINVAL;
+  memset(salt, 0, FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE);
+  memset(verifier, 0, FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE);
+  rc = turbo_secure_random(salt, FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE);
+  if (rc == TURBO_OK)
+    rc = flowie_control_credential_derive(secret, secret_size, salt, params, verifier);
+  if (rc != TURBO_OK) {
+    crypto_wipe(salt, FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE);
+    crypto_wipe(verifier, FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE);
+  }
+  return rc;
+}
+
 int flowie_control_credential_verify(
     const void *secret, size_t secret_size, const uint8_t salt[FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE],
     const uint8_t verifier[FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE],

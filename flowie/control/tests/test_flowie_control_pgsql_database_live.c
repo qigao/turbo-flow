@@ -1,4 +1,5 @@
 #include "flowie_control_auth_repository_contract.h"
+#include "flowie_control_bootstrap_internal.h"
 #include "flowie_control_credential_internal.h"
 #include "flowie_control_management_repository_contract.h"
 #include "flowie_control_pgsql_command_internal.h"
@@ -105,6 +106,49 @@ static void drop_test_schema(const char *conninfo, const char *schema_name) {
 }
 
 spec("Flowie control PostgreSQL database live") {
+  it("bootstraps one administrator through the PostgreSQL repository contract") {
+    const char *conninfo = getenv("TURBO_FLOW_PGSQL_TEST_CONNINFO");
+    static const char password[] = "postgres-bootstrap-password";
+    char schema_name[64];
+    flowie_control_pgsql_pool_config_t pool_config = FLOWIE_CONTROL_PGSQL_POOL_CONFIG_INIT;
+    flowie_control_pgsql_repository_provider_t *provider = NULL;
+    const flowie_control_repository_t *repository;
+    flowie_control_config_bootstrap_t bootstrap = {0};
+    flowie_control_credential_verify_result_t credential =
+        FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+
+    check_not_null(conninfo);
+    check_true(conninfo[0] != '\0');
+    (void)snprintf(schema_name, sizeof(schema_name), "flowie_control_bootstrap_%llu",
+                   (unsigned long long)turbo_hrtime());
+    pool_config.database.conninfo = conninfo;
+    pool_config.database.schema_name = schema_name;
+    pool_config.database.require_tls = strstr(conninfo, "sslmode=verify-full") != NULL;
+    pool_config.database.schema_mode = FLOWIE_CONTROL_PGSQL_SCHEMA_MIGRATE;
+    pool_config.capacity = 2u;
+    bootstrap.enabled = 1;
+    (void)snprintf(bootstrap.root_group_id, sizeof(bootstrap.root_group_id), "%s", "root-a");
+    (void)snprintf(bootstrap.principal_id, sizeof(bootstrap.principal_id), "%s", "admin-a");
+    (void)snprintf(bootstrap.principal_type, sizeof(bootstrap.principal_type), "%s", "human");
+    (void)snprintf(bootstrap.password_ref, sizeof(bootstrap.password_ref), "%s",
+                   "env://FLOWIE_BOOTSTRAP_PASSWORD");
+
+    check_int_eq(flowie_control_pgsql_repository_create(&pool_config, &provider), TURBO_OK);
+    repository = flowie_control_pgsql_repository_view(provider);
+    check_not_null(repository);
+    check_int_eq(flowie_control_bootstrap_apply(repository, &bootstrap, password,
+                                                sizeof(password) - 1u, 1000u),
+                 TURBO_OK);
+    check_int_eq(flowie_control_bootstrap_apply(repository, &bootstrap, password,
+                                                sizeof(password) - 1u, 2000u),
+                 TURBO_OK);
+    check_int_eq(repository->auth->credential_verify(repository->ctx, "root-a", "admin-a", password,
+                                                     sizeof(password) - 1u, &credential),
+                 TURBO_OK);
+    check_int_eq(flowie_control_pgsql_repository_destroy(provider, 5000), TURBO_OK);
+    drop_test_schema(conninfo, schema_name);
+  }
+
   it("serializes migration and validates the resulting schema version") {
     const char *conninfo = getenv("TURBO_FLOW_PGSQL_TEST_CONNINFO");
     char schema_name[64];
@@ -484,9 +528,9 @@ spec("Flowie control PostgreSQL database live") {
                  TURBO_EPROTO);
     check_false(committed);
 
-    check_int_eq(flowie_control_pgsql_command_commit_confirm(
-                     commands, "request-root", "admin-1", "root_group.create", "root-a", "root-a",
-                     NULL, 1u, &committed),
+    check_int_eq(flowie_control_pgsql_command_commit_confirm(commands, "request-root", "admin-1",
+                                                             "root_group.create", "root-a",
+                                                             "root-a", NULL, 1u, &committed),
                  TURBO_EINVAL);
 
     flowie_control_pgsql_command_destroy(commands);

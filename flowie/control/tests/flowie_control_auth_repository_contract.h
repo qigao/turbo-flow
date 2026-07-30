@@ -61,12 +61,10 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
   flowie_control_generated_credential_t credential = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   flowie_control_policy_publish_result_t published = FLOWIE_CONTROL_POLICY_PUBLISH_RESULT_INIT;
-  flowie_control_auth_root_binding_t binding = {sizeof(flowie_control_auth_root_binding_t),
-                                                "listener-a", FLOWIE_CONTROL_AUTH_CONTRACT_CERT,
-                                                "root-a"};
   flowie_control_auth_service_config_t config = FLOWIE_CONTROL_AUTH_SERVICE_CONFIG_INIT;
   flowie_control_auth_service_t *service = NULL;
   flowie_control_verified_caller_t caller = {sizeof(flowie_control_verified_caller_t), "listener-a",
+                                             "broker-a", "root-a",
                                              FLOWIE_CONTROL_AUTH_CONTRACT_CERT, 1};
   flowie_control_authenticate_request_t request = FLOWIE_CONTROL_AUTHENTICATE_REQUEST_INIT;
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
@@ -154,8 +152,6 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
   check_uint_eq(published.policy_version, 1u);
 
   config.repository = repository;
-  config.bindings = &binding;
-  config.binding_count = 1u;
   config.policy_version.ctx = (void *)repository;
   config.policy_version.current = flowie_control_auth_contract_policy_version;
   config.clock_seconds = flowie_control_auth_contract_clock;

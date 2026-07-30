@@ -1,8 +1,8 @@
 #ifndef FLOWIE_CONTROL_ACL_IRIS_ENDPOINT_INTERNAL_H
 #define FLOWIE_CONTROL_ACL_IRIS_ENDPOINT_INTERNAL_H
 
-#include "flowie_control_auth_service_internal.h"
 #include "flowie_control_repository_internal.h"
+#include "flowie_control_service_credential_internal.h"
 #include "iris/iris_app.h"
 
 #ifdef __cplusplus
@@ -18,10 +18,7 @@ typedef struct flowie_control_acl_iris_endpoint_s flowie_control_acl_iris_endpoi
 typedef struct flowie_control_acl_iris_endpoint_config_s {
   size_t size;
   const flowie_control_repository_t *repository;
-  const flowie_control_auth_service_t *auth_service;
-  const char *listener_id;
-  const char *service_token_ref;
-  turbo_flow_security_key_provider_t key_provider;
+  flowie_control_service_credential_resolver_t *service_credentials;
   size_t max_response_size;
 } flowie_control_acl_iris_endpoint_config_t;
 
@@ -29,9 +26,6 @@ typedef struct flowie_control_acl_iris_endpoint_config_s {
   {sizeof(flowie_control_acl_iris_endpoint_config_t),                                              \
    NULL,                                                                                           \
    NULL,                                                                                           \
-   NULL,                                                                                           \
-   NULL,                                                                                           \
-   TURBO_FLOW_SECURITY_KEY_PROVIDER_INIT,                                                          \
    FLOWIE_CONTROL_ACL_HTTP_DEFAULT_RESPONSE_MAX}
 
 int flowie_control_acl_iris_endpoint_create(const flowie_control_acl_iris_endpoint_config_t *config,

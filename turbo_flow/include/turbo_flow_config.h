@@ -256,8 +256,21 @@ CXX_C_API int turbo_flow_resolved_adapter_get_string(const turbo_flow_resolved_a
                                                      const char *field, const char **value);
 CXX_C_API int turbo_flow_resolved_adapter_get_bool(const turbo_flow_resolved_adapter_view_t *view,
                                                    const char *field, int *value);
+/**
+ * Read an unsigned 64-bit field.
+ *
+ * JSON-safe integer numbers up to 2^53-1 are accepted directly. Use a string
+ * containing only decimal digits for larger values up to UINT64_MAX.
+ */
 CXX_C_API int turbo_flow_resolved_adapter_get_u64(const turbo_flow_resolved_adapter_view_t *view,
                                                   const char *field, uint64_t *value);
+/**
+ * Read a signed 64-bit field.
+ *
+ * JSON-safe integer numbers in the range -(2^53-1)..2^53-1 are accepted
+ * directly. Use a decimal string with an optional leading minus sign for the
+ * full INT64_MIN..INT64_MAX range.
+ */
 CXX_C_API int turbo_flow_resolved_adapter_get_i64(const turbo_flow_resolved_adapter_view_t *view,
                                                   const char *field, int64_t *value);
 CXX_C_API int turbo_flow_resolved_adapter_array_size(const turbo_flow_resolved_adapter_view_t *view,

@@ -1,7 +1,7 @@
 # Flowie Linux 远程测试 Runbook
 
-本文用于从 Windows 工作站打包当前工作树，将 TurboUtils、TurboNet、TurboHTTP 和 TurboFlow 上传到
-`root@eu:/root/dev`，在隔离目录中构建四个仓库，启动 Redis、PostgreSQL 与固定 Mosquitto Docker
+本文用于从 Windows 工作站打包当前工作树，将 TurboUtils、TurboNet、TurboHTTP、RulesForge 和
+TurboFlow 上传到 `root@eu:/root/dev`，在隔离目录中构建五个仓库，启动 Redis、PostgreSQL 与固定 Mosquitto Docker
 服务，并运行 Flowie MQTT release/nightly cases。
 
 ## 1. 执行边界
@@ -23,6 +23,7 @@
 - `C:\projects\cpp\turbonet\turbo-utils`
 - `C:\projects\cpp\turbonet\turbonet`
 - `C:\projects\cpp\TurboHTTP`
+- `C:\projects\cpp\rulesforge`
 - `C:\projects\cpp\turbonet\turbo-flow`
 
 ```powershell
@@ -43,6 +44,7 @@ $repositories = [ordered]@{
     'turbo-utils' = Join-Path $sourceRoot 'turbonet\turbo-utils'
     'turbonet'    = Join-Path $sourceRoot 'turbonet\turbonet'
     'TurboHTTP'   = Join-Path $sourceRoot 'TurboHTTP'
+    'rulesforge'  = Join-Path $sourceRoot 'rulesforge'
     'turbo-flow'  = Join-Path $sourceRoot 'turbonet\turbo-flow'
 }
 
@@ -67,11 +69,13 @@ tar.exe -a -cf $bundle `
     --exclude='turbonet/turbonet/vcpkg_installed' `
     --exclude='TurboHTTP/build' `
     --exclude='TurboHTTP/vcpkg_installed' `
+    --exclude='rulesforge/build' `
+    --exclude='rulesforge/vcpkg_installed' `
     --exclude='turbonet/turbo-flow/build' `
     --exclude='turbonet/turbo-flow/vcpkg_installed' `
     --exclude='.env' --exclude='.env.*' --exclude='*.log' `
     -C $sourceRoot `
-    'turbonet/turbo-utils' 'turbonet/turbonet' 'TurboHTTP' 'turbonet/turbo-flow' `
+    'turbonet/turbo-utils' 'turbonet/turbonet' 'TurboHTTP' 'rulesforge' 'turbonet/turbo-flow' `
     -C $artifactRoot $manifestName
 if ($LASTEXITCODE -ne 0) { throw 'source archive failed' }
 
@@ -139,9 +143,10 @@ unzip -q "$BUNDLE" -d "$SRC_ROOT"
 TURBO_UTILS_SRC="$SRC_ROOT/turbonet/turbo-utils"
 TURBO_NET_SRC="$SRC_ROOT/turbonet/turbonet"
 TURBO_HTTP_SRC="$SRC_ROOT/TurboHTTP"
+RULES_FORGE_SRC="$SRC_ROOT/rulesforge"
 TURBO_FLOW_SRC="$SRC_ROOT/turbonet/turbo-flow"
 
-for source_dir in "$TURBO_UTILS_SRC" "$TURBO_NET_SRC" "$TURBO_HTTP_SRC" "$TURBO_FLOW_SRC"; do
+for source_dir in "$TURBO_UTILS_SRC" "$TURBO_NET_SRC" "$TURBO_HTTP_SRC" "$RULES_FORGE_SRC" "$TURBO_FLOW_SRC"; do
   test -f "$source_dir/CMakePresets.json"
   test -f "$source_dir/CMakeUserPresets.json"
 done
@@ -263,7 +268,7 @@ fi
 
 ## 5. 构建、测试并安装依赖 SDK
 
-顺序固定为 TurboUtils → TurboNet → TurboHTTP。每个仓库先完成 Linux release CTest，再安装到本次
+顺序固定为 TurboUtils → TurboNet → TurboHTTP → RulesForge。每个仓库先完成 Linux release CTest，再安装到本次
 run 的私有 SDK 目录。
 
 ```bash
@@ -303,6 +308,19 @@ ctest --preset linux-release-user --output-on-failure \
 cmake --install build/linux-gcc-release
 
 export LD_LIBRARY_PATH="$SDK_ROOT/turbohttp/lib:$LD_LIBRARY_PATH"
+
+cd "$RULES_FORGE_SRC"
+cmake --list-presets
+cmake --fresh --preset linux-release-user \
+  -DTURBO_UTILS_ROOT="$SDK_ROOT/turboutils" \
+  -DCMAKE_PREFIX_PATH="$SDK_ROOT/turboutils;$RULES_FORGE_SRC/vcpkg_installed/x64-linux" \
+  -DCMAKE_INSTALL_PREFIX="$SDK_ROOT/rulesforge"
+cmake --build --preset linux-release-user --parallel "$(nproc)"
+ctest --preset linux-release-user --output-on-failure \
+  --output-junit "$ARTIFACT_ROOT/rulesforge-linux-release.xml"
+cmake --install build/linux-gcc-release
+
+export LD_LIBRARY_PATH="$SDK_ROOT/rulesforge/lib:$LD_LIBRARY_PATH"
 ```
 
 命令行显式覆盖 TurboNet/TurboFlow Linux preset 中继承的安装前缀，防止它们误写
@@ -321,7 +339,7 @@ cmake --fresh --preset linux-release-user \
   -DTURBO_UTILS_ROOT="$SDK_ROOT/turboutils" \
   -DTURBO_NET_ROOT="$SDK_ROOT/turbonet" \
   -DTURBO_HTTP_ROOT="$SDK_ROOT/turbohttp" \
-  -DCMAKE_PREFIX_PATH="$SDK_ROOT/turboutils;$SDK_ROOT/turbonet;$SDK_ROOT/turbohttp;$TURBO_FLOW_SRC/vcpkg_installed/x64-linux" \
+  -DCMAKE_PREFIX_PATH="$SDK_ROOT/turboutils;$SDK_ROOT/turbonet;$SDK_ROOT/turbohttp;$SDK_ROOT/rulesforge;$TURBO_FLOW_SRC/vcpkg_installed/x64-linux" \
   -DCMAKE_INSTALL_PREFIX="$SDK_ROOT/turboflow" \
   -DFLOWIE_MQTT_RELEASE_GATE=ON \
   -DFLOWIE_MQTT_PUBLIC_LIVE_TESTS=OFF \
@@ -391,7 +409,7 @@ cmake --fresh --preset linux-dev-user \
   -DTURBO_UTILS_ROOT="$SDK_ROOT/turboutils" \
   -DTURBO_NET_ROOT="$SDK_ROOT/turbonet" \
   -DTURBO_HTTP_ROOT="$SDK_ROOT/turbohttp" \
-  -DCMAKE_PREFIX_PATH="$SDK_ROOT/turboutils;$SDK_ROOT/turbonet;$SDK_ROOT/turbohttp;$TURBO_FLOW_SRC/vcpkg_installed/x64-linux/debug" \
+  -DCMAKE_PREFIX_PATH="$SDK_ROOT/turboutils;$SDK_ROOT/turbonet;$SDK_ROOT/turbohttp;$SDK_ROOT/rulesforge;$TURBO_FLOW_SRC/vcpkg_installed/x64-linux/debug" \
   -DCMAKE_INSTALL_PREFIX="$RUN_ROOT/pkgs/turboflow-clang" \
   -DFLOWIE_MQTT_RELEASE_GATE=OFF \
   -DFLOWIE_MQTT_PUBLIC_LIVE_TESTS=OFF \
@@ -468,7 +486,7 @@ docker rm -f "$REDIS_CONTAINER" "$PG_CONTAINER"
 
 一次完整 Linux 结果必须同时满足：
 
-- TurboUtils、TurboNet、TurboHTTP 与 TurboFlow configure/build 成功。
+- TurboUtils、TurboNet、TurboHTTP、RulesForge 与 TurboFlow configure/build 成功。
 - 四个 release JUnit 结果无失败，TurboFlow 全量 CTest 不是零用例。
 - Redis live、PostgreSQL live、固定 Mosquitto、TLS/WSS/mTLS 均有实际 PASS。
 - `flowie-release-evidence.json` 通过内置 verifier。

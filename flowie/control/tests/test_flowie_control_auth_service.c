@@ -278,14 +278,11 @@ static int auth_service_user_disable(flowie_control_store_t *store, uint64_t exp
 }
 
 static flowie_control_auth_service_t *
-auth_service_create(flowie_control_store_t *store,
-                    const flowie_control_auth_root_binding_t *bindings, size_t binding_count,
-                    auth_service_policy_fixture_t *policy, uint64_t *now_seconds) {
+auth_service_create(flowie_control_store_t *store, auth_service_policy_fixture_t *policy,
+                    uint64_t *now_seconds) {
   flowie_control_auth_service_config_t config = FLOWIE_CONTROL_AUTH_SERVICE_CONFIG_INIT;
   flowie_control_auth_service_t *service = NULL;
   config.repository = flowie_control_store_repository(store);
-  config.bindings = bindings;
-  config.binding_count = binding_count;
   config.policy_version.ctx = policy;
   config.policy_version.current = auth_service_policy_version;
   config.clock_seconds = auth_service_clock;
@@ -310,21 +307,17 @@ spec("Flowie control trusted authentication service") {
     auth_service_store_close(store, path);
   }
 
-  it("binds duplicate MQTT identities to Root Groups only through verified listener certificates") {
+  it("authenticates duplicate MQTT identities only inside the service credential Root Group") {
     char *path = NULL;
     flowie_control_store_t *store = auth_service_store_open(&path);
     flowie_control_generated_credential_t root_a = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
     flowie_control_generated_credential_t root_b = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
-    flowie_control_auth_root_binding_t bindings[] = {
-        {sizeof(flowie_control_auth_root_binding_t), "auth-listener", AUTH_SERVICE_CERT_A,
-         "root-a"},
-        {sizeof(flowie_control_auth_root_binding_t), "auth-listener", AUTH_SERVICE_CERT_B,
-         "root-b"}};
     auth_service_policy_fixture_t policy = {11u, 12u, TURBO_OK};
     uint64_t now_seconds = 10000u;
     flowie_control_auth_service_t *service;
     flowie_control_verified_caller_t caller = {sizeof(flowie_control_verified_caller_t),
-                                               "auth-listener", AUTH_SERVICE_CERT_A, 1};
+                                               "auth-listener", "broker-a", "root-a",
+                                               AUTH_SERVICE_CERT_A, 1};
     flowie_control_authenticate_request_t request = FLOWIE_CONTROL_AUTHENTICATE_REQUEST_INIT;
     turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
     int cache_hit = -1;
@@ -343,7 +336,7 @@ spec("Flowie control trusted authentication service") {
     check_int_eq(auth_service_membership_add(store, 7u), TURBO_OK);
     check_int_eq(auth_service_role_create(store, 8u), TURBO_OK);
     check_int_eq(auth_service_role_add(store, 9u), TURBO_OK);
-    service = auth_service_create(store, bindings, 2u, &policy, &now_seconds);
+    service = auth_service_create(store, &policy, &now_seconds);
 
     request.caller = &caller;
     request.identity = "device-a";
@@ -388,6 +381,8 @@ spec("Flowie control trusted authentication service") {
         flowie_control_auth_service_authenticate(service, &request, &principal, &cache_hit),
         TURBO_EPERM);
     check_uint_eq(principal.policy_version, 0u);
+    caller.root_group_id = "root-b";
+    caller.service_id = "broker-b";
     caller.peer_certificate_sha256 = AUTH_SERVICE_CERT_B;
     check_int_eq(
         flowie_control_auth_service_authenticate(service, &request, &principal, &cache_hit),
@@ -397,12 +392,12 @@ spec("Flowie control trusted authentication service") {
     check_str_eq(principal.groups[0], "root-b");
     check_uint_eq(principal.policy_version, 12u);
 
-    caller.peer_certificate_sha256 = AUTH_SERVICE_CERT_UNKNOWN;
+    caller.root_group_id = "";
     check_int_eq(
         flowie_control_auth_service_authenticate(service, &request, &principal, &cache_hit),
         TURBO_EPERM);
-    caller.peer_certificate_sha256 = AUTH_SERVICE_CERT_B;
-    caller.certificate_verified = 0;
+    caller.root_group_id = "root-b";
+    caller.authenticated = 0;
     check_int_eq(
         flowie_control_auth_service_authenticate(service, &request, &principal, &cache_hit),
         TURBO_EPERM);
@@ -413,47 +408,16 @@ spec("Flowie control trusted authentication service") {
     auth_service_store_close(store, path);
   }
 
-  it("rejects malformed or ambiguous transport bindings at construction") {
-    char *path = NULL;
-    flowie_control_store_t *store = auth_service_store_open(&path);
-    auth_service_policy_fixture_t policy = {1u, 2u, TURBO_OK};
-    uint64_t now_seconds = 100u;
-    flowie_control_auth_service_config_t config = FLOWIE_CONTROL_AUTH_SERVICE_CONFIG_INIT;
-    flowie_control_auth_service_t *service = NULL;
-    flowie_control_auth_root_binding_t duplicate[] = {
-        {sizeof(flowie_control_auth_root_binding_t), "listener-a", AUTH_SERVICE_CERT_A, "root-a"},
-        {sizeof(flowie_control_auth_root_binding_t), "listener-a", AUTH_SERVICE_CERT_A, "root-b"}};
-    flowie_control_auth_root_binding_t malformed = {sizeof(flowie_control_auth_root_binding_t),
-                                                    "listener-a", "sha256:ABC", "root-a"};
-
-    config.repository = flowie_control_store_repository(store);
-    config.bindings = duplicate;
-    config.binding_count = 2u;
-    config.policy_version.ctx = &policy;
-    config.policy_version.current = auth_service_policy_version;
-    config.clock_seconds = auth_service_clock;
-    config.clock_ctx = &now_seconds;
-    check_int_eq(flowie_control_auth_service_create(&config, &service), TURBO_EINVAL);
-    check_null(service);
-    config.bindings = &malformed;
-    config.binding_count = 1u;
-    check_int_eq(flowie_control_auth_service_create(&config, &service), TURBO_EINVAL);
-    check_null(service);
-
-    auth_service_store_close(store, path);
-  }
-
   it("MQTT-SEC-006/007 fails closed on policy outage and revoked credentials") {
     char *path = NULL;
     flowie_control_store_t *store = auth_service_store_open(&path);
     flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
-    flowie_control_auth_root_binding_t binding = {sizeof(flowie_control_auth_root_binding_t),
-                                                  "listener-a", AUTH_SERVICE_CERT_A, "root-a"};
     auth_service_policy_fixture_t policy = {21u, 0u, TURBO_EIO};
     uint64_t now_seconds = 9000u;
     flowie_control_auth_service_t *service;
     flowie_control_verified_caller_t caller = {sizeof(flowie_control_verified_caller_t),
-                                               "listener-a", AUTH_SERVICE_CERT_A, 1};
+                                               "listener-a", "broker-a", "root-a",
+                                               AUTH_SERVICE_CERT_A, 1};
     flowie_control_authenticate_request_t request = FLOWIE_CONTROL_AUTHENTICATE_REQUEST_INIT;
     turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
 
@@ -462,7 +426,7 @@ spec("Flowie control trusted authentication service") {
     check_int_eq(
         auth_service_credential_generate(store, "root-a", "request-credential-a", 2u, &generated),
         TURBO_OK);
-    service = auth_service_create(store, &binding, 1u, &policy, &now_seconds);
+    service = auth_service_create(store, &policy, &now_seconds);
     request.caller = &caller;
     request.identity = "device-a";
     request.method = "password";
@@ -491,8 +455,6 @@ spec("Flowie control trusted authentication service") {
   it("uses third-party authentication facts while keeping local authorization authoritative") {
     char *path = NULL;
     flowie_control_store_t *store = auth_service_store_open(&path);
-    flowie_control_auth_root_binding_t binding = {sizeof(flowie_control_auth_root_binding_t),
-                                                  "listener-a", AUTH_SERVICE_CERT_A, "root-a"};
     auth_service_policy_fixture_t policy = {31u, 0u, TURBO_OK};
     auth_service_external_fixture_t external = {TURBO_OK, TURBO_OK, 10120u, 1, 0, 0};
     flowie_control_external_authenticator_t authenticator =
@@ -501,7 +463,8 @@ spec("Flowie control trusted authentication service") {
     flowie_control_auth_service_config_t config = FLOWIE_CONTROL_AUTH_SERVICE_CONFIG_INIT;
     flowie_control_auth_service_t *service = NULL;
     flowie_control_verified_caller_t caller = {sizeof(flowie_control_verified_caller_t),
-                                               "listener-a", AUTH_SERVICE_CERT_A, 1};
+                                               "listener-a", "broker-a", "root-a",
+                                               AUTH_SERVICE_CERT_A, 1};
     flowie_control_authenticate_request_t request = FLOWIE_CONTROL_AUTHENTICATE_REQUEST_INIT;
     turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
     uint64_t now_seconds = 10000u;
@@ -522,8 +485,6 @@ spec("Flowie control trusted authentication service") {
     mapper.ctx = &external;
     mapper.map = auth_service_external_map;
     config.repository = flowie_control_store_repository(store);
-    config.bindings = &binding;
-    config.binding_count = 1u;
     config.method = "oidc-token";
     config.policy_version.ctx = &policy;
     config.policy_version.current = auth_service_policy_version;
@@ -589,13 +550,12 @@ spec("Flowie control trusted authentication service") {
     char *path = NULL;
     flowie_control_store_t *store = auth_service_store_open(&path);
     flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
-    flowie_control_auth_root_binding_t binding = {sizeof(flowie_control_auth_root_binding_t),
-                                                  "listener-a", AUTH_SERVICE_CERT_A, "root-a"};
     auth_service_policy_fixture_t policy = {1u, 0u, TURBO_OK};
     flowie_control_auth_service_config_t config = FLOWIE_CONTROL_AUTH_SERVICE_CONFIG_INIT;
     flowie_control_auth_service_t *service = NULL;
     flowie_control_verified_caller_t caller = {sizeof(flowie_control_verified_caller_t),
-                                               "listener-a", AUTH_SERVICE_CERT_A, 1};
+                                               "listener-a", "broker-a", "root-a",
+                                               AUTH_SERVICE_CERT_A, 1};
     flowie_control_authenticate_request_t request = FLOWIE_CONTROL_AUTHENTICATE_REQUEST_INIT;
     turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
     uint64_t now_ms = 100u;
@@ -607,8 +567,6 @@ spec("Flowie control trusted authentication service") {
                                                   &generated),
                  TURBO_OK);
     config.repository = flowie_control_store_repository(store);
-    config.bindings = &binding;
-    config.binding_count = 1u;
     config.policy_version.ctx = &policy;
     config.policy_version.current = auth_service_policy_version;
     config.rate_limiter.caller_capacity = 1u;

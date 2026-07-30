@@ -78,7 +78,8 @@ static int flow_dispatch_finish_status(turbo_flow_t *flow, flow_stage_plan_impl_
   }
 
   if (msg->data_decision.stage_index == UINT32_MAX &&
-      (msg->data_decision.dropped || msg->data_decision.dead_letter ||
+      (msg->data_decision.evaluation_status != TURBO_FLOW_DATA_NOT_EVALUATED ||
+       msg->data_decision.dropped || msg->data_decision.dead_letter ||
        msg->data_decision.route[0] != '\0' || msg->data_decision.batch_key[0] != '\0' ||
        msg->data_decision.retry_class[0] != '\0')) {
     msg->data_decision.stage_index = completion->entry.stage_index;
@@ -202,6 +203,7 @@ int flow_dispatch_validate_stage(turbo_flow_t *flow, uint32_t stage_index) {
 int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg_t *msg,
                         uint64_t sequence, uint64_t msg_id, flow_stage_completion_t *completion,
                         turbo_flow_emitter_t *emitter) {
+  turbo_flow_observe_event_t event;
   flow_stage_plan_impl_t *stage;
   const flow_executor_plan_t *executor;
   int rc;
@@ -214,7 +216,21 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
   }
 
   stage = (flow_stage_plan_impl_t *)turbo_vec_at(&flow->stages, (size_t)stage_index);
-  if (flow->observer_ops.stage_complete) observe_start = turbo_hrtime();
+  if (flow->observer_ops.stage_complete ||
+      flow_observer_event_enabled(flow, TURBO_FLOW_OBSERVE_STAGE_END)) {
+    observe_start = turbo_hrtime();
+  }
+  memset(&event, 0, sizeof(event));
+  event.kind = TURBO_FLOW_OBSERVE_STAGE_BEGIN;
+  event.stage_name = stage->name;
+  event.adapter_name = stage->adapter_name;
+  event.operation_name = stage->operation_name;
+  event.msg = msg;
+  event.status = TURBO_OK;
+  event.selected = -1;
+  event.edge_kind = -1;
+  event.attempt = msg->execution_attempt;
+  flow_observer_emit(flow, &event);
   executor = flow_executor_plan_for_stage(flow, stage_index);
   rc = flow_dispatch_validate_stage(flow, stage_index);
   if (rc != TURBO_OK) {
@@ -293,5 +309,17 @@ observe:
     flow->observer_ops.stage_complete(flow->observer_ctx, stage->name, stage->adapter_name, msg,
                                       turbo_hrtime() - observe_start, result);
   }
+  memset(&event, 0, sizeof(event));
+  event.kind = TURBO_FLOW_OBSERVE_STAGE_END;
+  event.stage_name = stage->name;
+  event.adapter_name = stage->adapter_name;
+  event.operation_name = stage->operation_name;
+  event.msg = msg;
+  event.status = result;
+  event.selected = -1;
+  event.edge_kind = -1;
+  event.attempt = msg->execution_attempt;
+  event.duration_ns = observe_start != 0u ? turbo_hrtime() - observe_start : 0u;
+  flow_observer_emit(flow, &event);
   return result;
 }

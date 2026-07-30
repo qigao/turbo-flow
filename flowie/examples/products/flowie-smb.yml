@@ -39,6 +39,10 @@ channels:
       poll_interval_ms: 50
       claim_scan_limit: 128
       create_table: true
+      completion: archive
+      max_delivery_attempts: 5
+      retry_delay_ms: 1000
+      archive_ttl_ms: 604800000
   mqtt.sessions:
     kind: record_store
     config:

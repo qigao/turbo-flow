@@ -15,6 +15,10 @@
 #define FLOW_PGSQL_OUTBOX_TABLE "turbo_flow_outbox"
 #define FLOW_PGSQL_OUTBOX_CAPACITY_LOCK_SEED "607599061"
 #define FLOW_PGSQL_OUTBOX_ROW_LOCK_SEED "607599065"
+#define FLOW_PGSQL_OUTBOX_STATE_PENDING "pending"
+#define FLOW_PGSQL_OUTBOX_STATE_RETRY_WAIT "retry_wait"
+#define FLOW_PGSQL_OUTBOX_STATE_DEAD_LETTER "dead_letter"
+#define FLOW_PGSQL_OUTBOX_STATE_ARCHIVED "archived"
 
 typedef struct flow_pgsql_outbox_adapter_s {
   tstr_t resource_uid;
@@ -27,6 +31,10 @@ typedef struct flow_pgsql_outbox_adapter_s {
   uint32_t poll_interval_ms;
   size_t claim_scan_limit;
   int create_table;
+  turbo_flow_pgsql_outbox_completion_t completion;
+  uint32_t max_delivery_attempts;
+  uint32_t retry_delay_ms;
+  uint32_t archive_ttl_ms;
   PGconn *connection;
   PGcancel *cancel;
   turbo_mutex_t lock;
@@ -51,6 +59,7 @@ typedef struct flow_pgsql_outbox_record_s {
   uint32_t message_type;
   uint32_t message_flags;
   turbo_flow_protocol_origin_t origin;
+  uint32_t delivery_attempts;
   int has_origin;
 } flow_pgsql_outbox_record_t;
 
@@ -69,7 +78,12 @@ static const turbo_flow_option_field_t FLOW_PGSQL_OUTBOX_FIELDS[] = {
     {"claim_scan_limit", TURBO_FLOW_OPTION_SIZE,
      TURBO_FLOW_OPTION_REQUIRED | TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 1u,
      TURBO_FLOW_PGSQL_OUTBOX_MAX_CLAIM_SCAN, NULL, 0u},
-    {"create_table", TURBO_FLOW_OPTION_BOOL, TURBO_FLOW_OPTION_REQUIRED, 0u, 0u, NULL, 0u}};
+    {"create_table", TURBO_FLOW_OPTION_BOOL, TURBO_FLOW_OPTION_REQUIRED, 0u, 0u, NULL, 0u},
+    {"completion", TURBO_FLOW_OPTION_STRING, 0u, 0u, 0u, NULL, 0u},
+    {"max_delivery_attempts", TURBO_FLOW_OPTION_U32, TURBO_FLOW_OPTION_HAS_MAX, 0u,
+     TURBO_FLOW_PGSQL_OUTBOX_MAX_DELIVERY_ATTEMPTS, NULL, 0u},
+    {"retry_delay_ms", TURBO_FLOW_OPTION_U32, 0u, 0u, 0u, NULL, 0u},
+    {"archive_ttl_ms", TURBO_FLOW_OPTION_U32, 0u, 0u, 0u, NULL, 0u}};
 
 static const turbo_flow_adapter_schema_t FLOW_PGSQL_OUTBOX_SINK_SCHEMA = {
     NULL,
@@ -138,6 +152,11 @@ static int flow_pgsql_outbox_schema_prepare(flow_pgsql_outbox_adapter_t *adapter
       "origin_protocol integer,"
       "origin_protocol_version bigint,"
       "origin_session_id numeric(20,0),"
+      "delivery_state text NOT NULL DEFAULT '" FLOW_PGSQL_OUTBOX_STATE_PENDING "',"
+      "delivery_attempts bigint NOT NULL DEFAULT 0,"
+      "available_at timestamptz NOT NULL DEFAULT clock_timestamp(),"
+      "completed_at timestamptz,"
+      "last_error integer,"
       "created_at timestamptz NOT NULL DEFAULT clock_timestamp(),"
       "PRIMARY KEY(outbox_name,id));"
       "ALTER TABLE " FLOW_PGSQL_OUTBOX_TABLE
@@ -149,22 +168,41 @@ static int flow_pgsql_outbox_schema_prepare(flow_pgsql_outbox_adapter_t *adapter
       " ADD COLUMN IF NOT EXISTS origin_protocol_version bigint;"
       "ALTER TABLE " FLOW_PGSQL_OUTBOX_TABLE
       " ADD COLUMN IF NOT EXISTS origin_session_id numeric(20,0);"
+      "ALTER TABLE " FLOW_PGSQL_OUTBOX_TABLE " ADD COLUMN IF NOT EXISTS delivery_state text NOT "
+      "NULL DEFAULT '" FLOW_PGSQL_OUTBOX_STATE_PENDING "';"
+      "ALTER TABLE " FLOW_PGSQL_OUTBOX_TABLE
+      " ADD COLUMN IF NOT EXISTS delivery_attempts bigint NOT NULL DEFAULT 0;"
+      "ALTER TABLE " FLOW_PGSQL_OUTBOX_TABLE
+      " ADD COLUMN IF NOT EXISTS available_at timestamptz NOT NULL DEFAULT clock_timestamp();"
+      "ALTER TABLE " FLOW_PGSQL_OUTBOX_TABLE " ADD COLUMN IF NOT EXISTS completed_at timestamptz;"
+      "ALTER TABLE " FLOW_PGSQL_OUTBOX_TABLE " ADD COLUMN IF NOT EXISTS last_error integer;"
       "CREATE INDEX IF NOT EXISTS turbo_flow_outbox_pending_idx ON " FLOW_PGSQL_OUTBOX_TABLE
-      "(outbox_name,id);";
-  static const char validate[] =
+      "(outbox_name,id);"
+      "CREATE INDEX IF NOT EXISTS turbo_flow_outbox_ready_idx ON " FLOW_PGSQL_OUTBOX_TABLE
+      "(outbox_name,available_at,id) WHERE delivery_state IN ('" FLOW_PGSQL_OUTBOX_STATE_PENDING
+      "','" FLOW_PGSQL_OUTBOX_STATE_RETRY_WAIT "');";
+  static const char validate_legacy[] =
       "SELECT outbox_name::text,id::text,payload::bytea,message_type::text,message_flags::text,"
       "origin_protocol::text,origin_protocol_version::text,origin_session_id::text FROM "
       FLOW_PGSQL_OUTBOX_TABLE " LIMIT 0";
+  static const char validate_lifecycle[] =
+      "SELECT outbox_name::text,id::text,payload::bytea,message_type::text,message_flags::text,"
+      "origin_protocol::text,origin_protocol_version::text,origin_session_id::text,"
+      "delivery_state::text,delivery_attempts::text,available_at,completed_at,last_error::text FROM "
+      FLOW_PGSQL_OUTBOX_TABLE " LIMIT 0";
   PGresult *result;
+  int lifecycle;
   int rc;
   if (!adapter || !adapter->connection) return TURBO_EINVAL;
+  lifecycle = adapter->completion == TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_ARCHIVE ||
+              adapter->max_delivery_attempts != 0u || adapter->archive_ttl_ms != 0u;
   if (adapter->create_table) {
     rc = flow_pgsql_outbox_exec_simple(adapter->connection, ddl, PGRES_COMMAND_OK);
     if (rc != TURBO_OK) return rc;
   }
-  result = PQexec(adapter->connection, validate);
+  result = PQexec(adapter->connection, lifecycle ? validate_lifecycle : validate_legacy);
   rc = flow_pgsql_outbox_result_status(result, PGRES_TUPLES_OK);
-  if (rc == TURBO_OK && PQnfields(result) != 8) rc = TURBO_EPROTO;
+  if (rc == TURBO_OK && PQnfields(result) != (lifecycle ? 13 : 8)) rc = TURBO_EPROTO;
   if (result) PQclear(result);
   return rc;
 }
@@ -223,6 +261,10 @@ static int flow_pgsql_outbox_sink_commit(flow_pgsql_outbox_adapter_t *adapter,
       "SELECT pg_advisory_xact_lock(hashtextextended($1," FLOW_PGSQL_OUTBOX_CAPACITY_LOCK_SEED "))";
   static const char count_rows[] =
       "SELECT count(*)::text FROM " FLOW_PGSQL_OUTBOX_TABLE " WHERE outbox_name=$1";
+  static const char count_active_rows[] =
+      "SELECT count(*)::text FROM " FLOW_PGSQL_OUTBOX_TABLE
+      " WHERE outbox_name=$1 AND delivery_state IN ('" FLOW_PGSQL_OUTBOX_STATE_PENDING "','" 
+      FLOW_PGSQL_OUTBOX_STATE_RETRY_WAIT "')";
   static const char insert_row[] =
       "INSERT INTO " FLOW_PGSQL_OUTBOX_TABLE
       "(outbox_name,payload,message_type,message_flags,origin_protocol,"
@@ -280,7 +322,12 @@ static int flow_pgsql_outbox_sink_commit(flow_pgsql_outbox_adapter_t *adapter,
   rc = flow_pgsql_outbox_result_status(result, PGRES_TUPLES_OK);
   if (result) PQclear(result);
   if (rc != TURBO_OK) goto rollback;
-  result = PQexecParams(adapter->connection, count_rows, 1, NULL, one_value, NULL, NULL, 0);
+  result = PQexecParams(adapter->connection,
+                        adapter->completion == TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_ARCHIVE ||
+                                adapter->max_delivery_attempts != 0u
+                            ? count_active_rows
+                            : count_rows,
+                        1, NULL, one_value, NULL, NULL, 0);
   rc = flow_pgsql_outbox_parse_count(result, &depth);
   if (result) PQclear(result);
   if (rc != TURBO_OK) goto rollback;
@@ -371,12 +418,13 @@ static void flow_pgsql_outbox_record_cleanup(flow_pgsql_outbox_record_t *record)
 }
 
 static int flow_pgsql_outbox_metadata_read(PGresult *selected,
-                                           flow_pgsql_outbox_record_t *record) {
+                                           flow_pgsql_outbox_record_t *record, int lifecycle) {
   uint64_t value;
   int origin_nulls;
   int rc;
   if (!selected || !record || PQresultStatus(selected) != PGRES_TUPLES_OK ||
-      PQntuples(selected) != 1 || PQnfields(selected) != 5 || PQgetisnull(selected, 0, 0) ||
+      PQntuples(selected) != 1 || PQnfields(selected) != (lifecycle ? 6 : 5) ||
+      PQgetisnull(selected, 0, 0) ||
       PQgetisnull(selected, 0, 1))
     return TURBO_EPROTO;
   rc = flow_pgsql_outbox_parse_u64(PQgetvalue(selected, 0, 0), UINT32_MAX, &value);
@@ -387,21 +435,28 @@ static int flow_pgsql_outbox_metadata_read(PGresult *selected,
   record->message_flags = (uint32_t)value;
   origin_nulls = PQgetisnull(selected, 0, 2) + PQgetisnull(selected, 0, 3) +
                  PQgetisnull(selected, 0, 4);
-  if (origin_nulls == 3) return TURBO_OK;
-  if (origin_nulls != 0) return TURBO_EPROTO;
-  record->origin = (turbo_flow_protocol_origin_t)TURBO_FLOW_PROTOCOL_ORIGIN_INIT;
-  rc = flow_pgsql_outbox_parse_u64(PQgetvalue(selected, 0, 2), UINT32_MAX, &value);
+  if (origin_nulls != 3) {
+    if (origin_nulls != 0) return TURBO_EPROTO;
+    record->origin = (turbo_flow_protocol_origin_t)TURBO_FLOW_PROTOCOL_ORIGIN_INIT;
+    rc = flow_pgsql_outbox_parse_u64(PQgetvalue(selected, 0, 2), UINT32_MAX, &value);
+    if (rc != TURBO_OK) return rc;
+    record->origin.protocol = (turbo_flow_protocol_id_t)value;
+    rc = flow_pgsql_outbox_parse_u64(PQgetvalue(selected, 0, 3), UINT32_MAX, &value);
+    if (rc != TURBO_OK) return rc;
+    record->origin.protocol_version = (uint32_t)value;
+    rc = flow_pgsql_outbox_parse_u64(PQgetvalue(selected, 0, 4), UINT64_MAX, &value);
+    if (rc != TURBO_OK) return rc;
+    record->origin.session_id = value;
+    rc = turbo_flow_protocol_origin_validate(&record->origin);
+    if (rc != TURBO_OK) return rc;
+    record->has_origin = 1;
+  }
+  if (!lifecycle) return TURBO_OK;
+  if (PQgetisnull(selected, 0, 5)) return TURBO_EPROTO;
+  rc = flow_pgsql_outbox_parse_u64(PQgetvalue(selected, 0, 5),
+                                   TURBO_FLOW_PGSQL_OUTBOX_MAX_DELIVERY_ATTEMPTS, &value);
   if (rc != TURBO_OK) return rc;
-  record->origin.protocol = (turbo_flow_protocol_id_t)value;
-  rc = flow_pgsql_outbox_parse_u64(PQgetvalue(selected, 0, 3), UINT32_MAX, &value);
-  if (rc != TURBO_OK) return rc;
-  record->origin.protocol_version = (uint32_t)value;
-  rc = flow_pgsql_outbox_parse_u64(PQgetvalue(selected, 0, 4), UINT64_MAX, &value);
-  if (rc != TURBO_OK) return rc;
-  record->origin.session_id = value;
-  rc = turbo_flow_protocol_origin_validate(&record->origin);
-  if (rc != TURBO_OK) return rc;
-  record->has_origin = 1;
+  record->delivery_attempts = (uint32_t)value;
   return TURBO_OK;
 }
 
@@ -409,22 +464,35 @@ static int flow_pgsql_outbox_claim(flow_pgsql_outbox_adapter_t *adapter,
                                    flow_pgsql_outbox_record_t *record) {
   static const char candidates_sql[] = "SELECT id::text FROM " FLOW_PGSQL_OUTBOX_TABLE
                                        " WHERE outbox_name=$1 ORDER BY id LIMIT $2::integer";
+  static const char lifecycle_candidates_sql[] =
+      "SELECT id::text FROM " FLOW_PGSQL_OUTBOX_TABLE
+      " WHERE outbox_name=$1 AND delivery_state IN ('" FLOW_PGSQL_OUTBOX_STATE_PENDING "','" 
+      FLOW_PGSQL_OUTBOX_STATE_RETRY_WAIT
+      "') AND available_at<=clock_timestamp() ORDER BY available_at,id LIMIT $2::integer";
   static const char metadata_sql[] =
       "SELECT message_type::text,message_flags::text,origin_protocol::text,"
       "origin_protocol_version::text,origin_session_id::text FROM " FLOW_PGSQL_OUTBOX_TABLE
       " WHERE outbox_name=$1 AND id=$2::bigint";
+  static const char lifecycle_metadata_sql[] =
+      "SELECT message_type::text,message_flags::text,origin_protocol::text,"
+      "origin_protocol_version::text,origin_session_id::text,delivery_attempts::text FROM "
+      FLOW_PGSQL_OUTBOX_TABLE " WHERE outbox_name=$1 AND id=$2::bigint";
   static const char payload_sql[] =
       "SELECT payload FROM " FLOW_PGSQL_OUTBOX_TABLE " WHERE outbox_name=$1 AND id=$2::bigint";
   char scan_limit[32];
   const char *candidate_values[2] = {adapter->outbox_name, scan_limit};
   PGresult *candidates = NULL;
+  int lifecycle;
   int written;
   int rc;
   if (!record || record->row_id || record->payload) return TURBO_EINVAL;
+  lifecycle = adapter->completion == TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_ARCHIVE ||
+              adapter->max_delivery_attempts != 0u || adapter->archive_ttl_ms != 0u;
   written = snprintf(scan_limit, sizeof(scan_limit), "%zu", adapter->claim_scan_limit);
   if (written < 0 || (size_t)written >= sizeof(scan_limit)) return TURBO_ERANGE;
-  candidates =
-      PQexecParams(adapter->connection, candidates_sql, 2, NULL, candidate_values, NULL, NULL, 0);
+  candidates = PQexecParams(adapter->connection,
+                            lifecycle ? lifecycle_candidates_sql : candidates_sql, 2, NULL,
+                            candidate_values, NULL, NULL, 0);
   rc = flow_pgsql_outbox_result_status(candidates, PGRES_TUPLES_OK);
   if (rc != TURBO_OK) goto done;
   if (PQnfields(candidates) != 1) {
@@ -456,9 +524,10 @@ static int flow_pgsql_outbox_claim(flow_pgsql_outbox_adapter_t *adapter,
     }
     payload_values[0] = adapter->outbox_name;
     payload_values[1] = record->row_id;
-    selected =
-        PQexecParams(adapter->connection, metadata_sql, 2, NULL, payload_values, NULL, NULL, 0);
-    rc = flow_pgsql_outbox_metadata_read(selected, record);
+    selected = PQexecParams(adapter->connection,
+                            lifecycle ? lifecycle_metadata_sql : metadata_sql, 2, NULL,
+                            payload_values, NULL, NULL, 0);
+    rc = flow_pgsql_outbox_metadata_read(selected, record, lifecycle);
     if (selected) PQclear(selected);
     selected = NULL;
     if (rc != TURBO_OK) goto selected_done;
@@ -506,28 +575,111 @@ static int flow_pgsql_outbox_delete(flow_pgsql_outbox_adapter_t *adapter, const 
   return rc;
 }
 
+static int flow_pgsql_outbox_update_state(flow_pgsql_outbox_adapter_t *adapter, const char *row_id,
+                                          const char *state, uint32_t attempts, int error,
+                                          uint32_t delay_ms) {
+  static const char sql[] =
+      "UPDATE " FLOW_PGSQL_OUTBOX_TABLE
+      " SET delivery_state=$3,delivery_attempts=$4::bigint,"
+      "last_error=CASE WHEN $3='" FLOW_PGSQL_OUTBOX_STATE_ARCHIVED
+      "' THEN NULL ELSE $5::integer END,"
+      "available_at=clock_timestamp()+($6::bigint*interval '1 millisecond'),"
+      "completed_at=CASE WHEN $3='" FLOW_PGSQL_OUTBOX_STATE_ARCHIVED
+      "' THEN clock_timestamp() ELSE NULL END "
+      "WHERE outbox_name=$1 AND id=$2::bigint";
+  const char *values[6] = {adapter->outbox_name, row_id, state, NULL, NULL, NULL};
+  char attempts_text[32];
+  char error_text[32];
+  char delay_text[32];
+  PGresult *result;
+  const char *affected;
+  int written;
+  int rc;
+  written = snprintf(attempts_text, sizeof(attempts_text), "%u", attempts);
+  if (written < 0 || (size_t)written >= sizeof(attempts_text)) return TURBO_ERANGE;
+  written = snprintf(error_text, sizeof(error_text), "%d", error);
+  if (written < 0 || (size_t)written >= sizeof(error_text)) return TURBO_ERANGE;
+  written = snprintf(delay_text, sizeof(delay_text), "%u", delay_ms);
+  if (written < 0 || (size_t)written >= sizeof(delay_text)) return TURBO_ERANGE;
+  values[3] = attempts_text;
+  values[4] = error_text;
+  values[5] = delay_text;
+  result = PQexecParams(adapter->connection, sql, 6, NULL, values, NULL, NULL, 0);
+  rc = flow_pgsql_outbox_result_status(result, PGRES_COMMAND_OK);
+  if (rc == TURBO_OK) {
+    affected = PQcmdTuples(result);
+    if (!affected || strcmp(affected, "1") != 0) rc = TURBO_EALREADY;
+  }
+  if (result) PQclear(result);
+  return rc;
+}
+
+static int flow_pgsql_outbox_expire_archived(flow_pgsql_outbox_adapter_t *adapter) {
+  static const char sql[] =
+      "DELETE FROM " FLOW_PGSQL_OUTBOX_TABLE
+      " WHERE outbox_name=$1 AND delivery_state='" FLOW_PGSQL_OUTBOX_STATE_ARCHIVED
+      "' AND completed_at<=clock_timestamp()-($2::bigint*interval '1 millisecond')";
+  const char *values[2] = {adapter->outbox_name, NULL};
+  char ttl_text[32];
+  PGresult *result;
+  int written;
+  int rc;
+  if (adapter->archive_ttl_ms == 0u) return TURBO_OK;
+  written = snprintf(ttl_text, sizeof(ttl_text), "%u", adapter->archive_ttl_ms);
+  if (written < 0 || (size_t)written >= sizeof(ttl_text)) return TURBO_ERANGE;
+  values[1] = ttl_text;
+  result = PQexecParams(adapter->connection, sql, 2, NULL, values, NULL, NULL, 0);
+  rc = flow_pgsql_outbox_result_status(result, PGRES_COMMAND_OK);
+  if (result) PQclear(result);
+  return rc;
+}
+
 static int flow_pgsql_outbox_source_once(flow_pgsql_outbox_adapter_t *adapter) {
   flow_pgsql_outbox_record_t record = {0};
   turbo_flow_msg_t message;
   int rc;
+  int delivery_rc;
   int unlock_rc;
   rc = flow_pgsql_outbox_claim(adapter, &record);
   if (rc != TURBO_OK) return rc;
   turbo_flow_msg_init(&message);
   message.type = record.message_type;
   message.flags = record.message_flags;
+  if (adapter->max_delivery_attempts != 0u)
+    message.execution_attempt = record.delivery_attempts + 1u;
   message.owned_payload = tstr_move(&record.payload);
   message.payload = tstr_to_v(message.owned_payload);
   if (record.has_origin) rc = turbo_flow_msg_set_protocol_origin(&message, &record.origin);
   else rc = TURBO_OK;
   if (rc == TURBO_OK) rc = turbo_flow_publish(adapter->flow, adapter->source_name, &message);
   turbo_flow_msg_cleanup(&message);
-  if (rc == TURBO_OK) rc = flow_pgsql_outbox_delete(adapter, record.row_id);
-  else (void)atomic_fetch_add_explicit(&adapter->requeued, 1u, memory_order_relaxed);
+  delivery_rc = rc;
+  if (delivery_rc == TURBO_OK) {
+    if (adapter->completion == TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_ARCHIVE) {
+      rc = flow_pgsql_outbox_update_state(adapter, record.row_id,
+                                          FLOW_PGSQL_OUTBOX_STATE_ARCHIVED,
+                                          record.delivery_attempts, TURBO_OK, 0u);
+      if (rc == TURBO_OK) rc = flow_pgsql_outbox_expire_archived(adapter);
+    } else {
+      rc = flow_pgsql_outbox_delete(adapter, record.row_id);
+    }
+  } else if (adapter->max_delivery_attempts != 0u) {
+    uint32_t attempts = record.delivery_attempts + 1u;
+    const int dead_letter = attempts >= adapter->max_delivery_attempts;
+    rc = flow_pgsql_outbox_update_state(
+        adapter, record.row_id,
+        dead_letter ? FLOW_PGSQL_OUTBOX_STATE_DEAD_LETTER
+                    : FLOW_PGSQL_OUTBOX_STATE_RETRY_WAIT,
+        attempts, delivery_rc, dead_letter ? 0u : adapter->retry_delay_ms);
+    if (rc == TURBO_OK)
+      (void)atomic_fetch_add_explicit(&adapter->requeued, 1u, memory_order_relaxed);
+  } else {
+    (void)atomic_fetch_add_explicit(&adapter->requeued, 1u, memory_order_relaxed);
+  }
   unlock_rc = flow_pgsql_outbox_unlock_row(adapter, record.row_id);
   flow_pgsql_outbox_record_cleanup(&record);
   if (rc == TURBO_OK && unlock_rc != TURBO_OK) rc = unlock_rc;
-  if (rc == TURBO_OK)
+  if (rc == TURBO_OK && delivery_rc == TURBO_OK)
     (void)atomic_fetch_add_explicit(&adapter->delivered, 1u, memory_order_relaxed);
   return rc;
 }
@@ -723,11 +875,25 @@ static void flow_pgsql_outbox_shutdown(void *ctx) {
 int turbo_flow_pgsql_register_outbox_adapter(turbo_flow_t *flow, const char *name,
                                              const turbo_flow_pgsql_outbox_config_t *config) {
   flow_pgsql_outbox_adapter_t *adapter;
+  turbo_flow_pgsql_outbox_completion_t completion =
+      TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_DELETE;
+  uint32_t max_delivery_attempts = 0u;
+  uint32_t retry_delay_ms = 0u;
+  uint32_t archive_ttl_ms = 0u;
   turbo_flow_adapter_ops_t ops;
   turbo_flow_resource_provider_registration_t resource =
       TURBO_FLOW_RESOURCE_PROVIDER_REGISTRATION_INIT;
   int rc;
-  if (!flow || !name || !name[0] || !config || config->size < sizeof(*config) ||
+  if (config && config->size >= sizeof(*config)) {
+    completion = config->completion;
+    max_delivery_attempts = config->max_delivery_attempts;
+    retry_delay_ms = config->retry_delay_ms;
+    archive_ttl_ms = config->archive_ttl_ms;
+  }
+  if (!flow || !name || !name[0] || !config ||
+      config->size < TURBO_FLOW_PGSQL_OUTBOX_CONFIG_V1_SIZE ||
+      (config->size > TURBO_FLOW_PGSQL_OUTBOX_CONFIG_V1_SIZE &&
+       config->size < sizeof(*config)) ||
       config->version != TURBO_FLOW_PGSQL_OUTBOX_API_VERSION ||
       (config->role != TURBO_FLOW_PGSQL_OUTBOX_SINK &&
        config->role != TURBO_FLOW_PGSQL_OUTBOX_SOURCE) ||
@@ -738,7 +904,12 @@ int turbo_flow_pgsql_register_outbox_adapter(turbo_flow_t *flow, const char *nam
       config->max_payload_size > TURBO_FLOW_PGSQL_OUTBOX_MAX_PAYLOAD_SIZE ||
       config->poll_interval_ms == 0u || config->claim_scan_limit == 0u ||
       config->claim_scan_limit > TURBO_FLOW_PGSQL_OUTBOX_MAX_CLAIM_SCAN ||
-      (config->create_table != 0 && config->create_table != 1))
+      (config->create_table != 0 && config->create_table != 1) ||
+      (completion != TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_DELETE &&
+       completion != TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_ARCHIVE) ||
+      max_delivery_attempts > TURBO_FLOW_PGSQL_OUTBOX_MAX_DELIVERY_ATTEMPTS ||
+      ((max_delivery_attempts == 0u) != (retry_delay_ms == 0u)) ||
+      (archive_ttl_ms != 0u && completion != TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_ARCHIVE))
     return TURBO_EINVAL;
   adapter = (flow_pgsql_outbox_adapter_t *)calloc(1u, sizeof(*adapter));
   if (!adapter) return TURBO_ENOMEM;
@@ -758,6 +929,10 @@ int turbo_flow_pgsql_register_outbox_adapter(turbo_flow_t *flow, const char *nam
   adapter->poll_interval_ms = config->poll_interval_ms;
   adapter->claim_scan_limit = config->claim_scan_limit;
   adapter->create_table = config->create_table;
+  adapter->completion = completion;
+  adapter->max_delivery_attempts = max_delivery_attempts;
+  adapter->retry_delay_ms = retry_delay_ms;
+  adapter->archive_ttl_ms = archive_ttl_ms;
   if (!adapter->resource_uid || !adapter->resource_owner || !adapter->conninfo ||
       !adapter->outbox_name) {
     flow_pgsql_outbox_shutdown(adapter);

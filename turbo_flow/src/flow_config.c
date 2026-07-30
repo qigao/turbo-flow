@@ -3,6 +3,7 @@
 #include "turbo_error.h"
 #include "turbo_parser.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -255,7 +256,8 @@ static int flow_config_resolve_adapters(const json_value_t *input_adapters,
                                         const json_value_t *fragments, json_value_t *output,
                                         turbo_flow_config_error_t *error) {
   static const char *const adapter_keys[] = {"kind", "fragments", "config"};
-  if (!input_adapters || turbo_json_type(input_adapters) != TURBO_JSON_OBJECT)
+  if (!input_adapters) return TURBO_OK;
+  if (turbo_json_type(input_adapters) != TURBO_JSON_OBJECT)
     return flow_config_error(error, TURBO_EINVAL, "$.adapters", "expected mapping");
   for (size_t i = 0; i < turbo_json_object_size(input_adapters); ++i) {
     const char *name = turbo_json_object_key(input_adapters, i);
@@ -970,10 +972,29 @@ static int flow_resolved_adapter_number(const turbo_flow_resolved_adapter_view_t
 
 int turbo_flow_resolved_adapter_get_u64(const turbo_flow_resolved_adapter_view_t *view,
                                         const char *field, uint64_t *value) {
+  const json_value_t *field_value;
+  const char *text;
+  char *end = NULL;
+  unsigned long long parsed;
   double number;
   uint64_t converted;
   int rc;
   if (!value) return TURBO_EINVAL;
+  field_value = flow_resolved_adapter_field(view, field);
+  if (!field_value) return TURBO_ENOENT;
+  if (turbo_json_type(field_value) == TURBO_JSON_STRING) {
+    text = turbo_json_string(field_value);
+    if (!text || !text[0]) return TURBO_EINVAL;
+    for (const char *cursor = text; *cursor; ++cursor) {
+      if (*cursor < '0' || *cursor > '9') return TURBO_EINVAL;
+    }
+    errno = 0;
+    parsed = strtoull(text, &end, 10);
+    if (errno == ERANGE || parsed > UINT64_MAX) return TURBO_ERANGE;
+    if (!end || *end != '\0') return TURBO_EINVAL;
+    *value = (uint64_t)parsed;
+    return TURBO_OK;
+  }
   rc = flow_resolved_adapter_number(view, field, &number);
   if (rc != TURBO_OK) return rc;
   if (number < 0.0 || number > 9007199254740991.0) return TURBO_ERANGE;
@@ -985,10 +1006,32 @@ int turbo_flow_resolved_adapter_get_u64(const turbo_flow_resolved_adapter_view_t
 
 int turbo_flow_resolved_adapter_get_i64(const turbo_flow_resolved_adapter_view_t *view,
                                         const char *field, int64_t *value) {
+  const json_value_t *field_value;
+  const char *text;
+  const char *digits;
+  char *end = NULL;
+  long long parsed;
   double number;
   int64_t converted;
   int rc;
   if (!value) return TURBO_EINVAL;
+  field_value = flow_resolved_adapter_field(view, field);
+  if (!field_value) return TURBO_ENOENT;
+  if (turbo_json_type(field_value) == TURBO_JSON_STRING) {
+    text = turbo_json_string(field_value);
+    if (!text || !text[0]) return TURBO_EINVAL;
+    digits = text[0] == '-' ? text + 1 : text;
+    if (!digits[0]) return TURBO_EINVAL;
+    for (const char *cursor = digits; *cursor; ++cursor) {
+      if (*cursor < '0' || *cursor > '9') return TURBO_EINVAL;
+    }
+    errno = 0;
+    parsed = strtoll(text, &end, 10);
+    if (errno == ERANGE || parsed < INT64_MIN || parsed > INT64_MAX) return TURBO_ERANGE;
+    if (!end || *end != '\0') return TURBO_EINVAL;
+    *value = (int64_t)parsed;
+    return TURBO_OK;
+  }
   rc = flow_resolved_adapter_number(view, field, &number);
   if (rc != TURBO_OK) return rc;
   if (number < -9007199254740991.0 || number > 9007199254740991.0) return TURBO_ERANGE;

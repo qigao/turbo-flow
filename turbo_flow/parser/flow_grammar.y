@@ -144,6 +144,9 @@ binding_segment(A) ::= RESOURCE(T). { A = T; }
 binding_segment(A) ::= INLINE(T). { A = T; }
 binding_segment(A) ::= THREAD(T). { A = T; }
 binding_segment(A) ::= CORO(T). { A = T; }
+binding_segment(A) ::= ROUTE(T). { A = T; }
+binding_segment(A) ::= WHEN(T). { A = T; }
+binding_segment(A) ::= REJECT(T). { A = T; }
 binding_segment(A) ::= RETRY(T). { A = T; }
 binding_segment(A) ::= ATTEMPTS(T). { A = T; }
 binding_segment(A) ::= DELAY(T). { A = T; }

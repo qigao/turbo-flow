@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define FLOWIE_CONTROL_REPOSITORY_VERSION 2u
+#define FLOWIE_CONTROL_REPOSITORY_VERSION 3u
 
 typedef enum flowie_control_repository_capability_e {
   FLOWIE_CONTROL_REPOSITORY_DURABLE = 1u << 0,
@@ -26,6 +26,11 @@ typedef enum flowie_control_repository_capability_e {
 typedef struct flowie_control_repository_user_ops_s {
   int (*root_group_create)(void *ctx, const flowie_control_root_group_create_command_t *command,
                            flowie_control_command_result_t *result);
+  int (*root_group_get)(void *ctx, const char *root_group_id,
+                        flowie_control_root_group_view_t *out);
+  int (*root_group_list)(void *ctx, const char *after_root_group_id,
+                         flowie_control_root_group_view_t *items, size_t item_capacity,
+                         size_t *count_out, int *has_more_out);
   int (*create)(void *ctx, const flowie_control_user_create_command_t *command,
                 flowie_control_command_result_t *result);
   int (*disable)(void *ctx, const flowie_control_user_disable_command_t *command,

@@ -1,73 +1,54 @@
-# ADR：认证服务以受信 TLS 调用方绑定 Root Group
+# ADR：Broker 调用方与 Root Group 绑定
 
 ## 状态
 
-已接受。内部服务核心、CoroNet/Iris 的显式服务端 mTLS 配置、已验证 peer certificate fingerprint 查询、
-Flowie 的薄 Iris 身份适配层和严格 `/v3/authenticate` JSON handler 均已实现；独立控制面进程尚未开放。
+已被 [`ADR_HTTPS_AUTH_SERVICE.md`](ADR_HTTPS_AUTH_SERVICE.md) 替代。
 
-## 背景
+本文只记录历史决策迁移，不再定义当前配置或安全契约。旧实现曾把 Broker 客户端证书指纹作为
+Root Group 的唯一绑定键；当前实现改为作用域 service credential，mTLS 只保留为可选第二因子。
 
-Flowie 允许不同 Root Group 使用相同 `principal_id`。Broker 的 HTTPS `/v3/authenticate` 请求包含
-MQTT identity、method、secret、protocol、直接 remote address 和可选的已验证 MQTT client certificate
-fingerprint，仍不能仅凭 identity 在控制数据库中全局搜索用户。
-让 MQTT 客户端在请求中声明 Root Group 会把隔离根交给不可信输入，无法满足 fail-closed 边界。
+## 保留的不变量
 
-现有 Broker HTTPS provider 支持验证服务端证书并携带客户端证书。CoroNet/Iris 现已提供版本化服务端 TLS 配置、
-强制客户端证书验证和请求级 verified peer certificate SHA-256 查询；Flowie adapter 只从该传输接口构造
-`flowie_control_verified_caller_t`。控制面网络入口仍由 feature flag 隐藏，直至严格 JSON handler、进程生命周期、
-限流和真实网络集成 gate 完成；不得使用 HTTP header、Bearer token 或 JSON 字段冒充 mTLS 身份。
+- MQTT 请求 body、query、普通 header 和 MQTT identity 都不能声明或覆盖 `root_group_id`。
+- 同一 MQTT identity 可以存在于不同 Root Group，认证查询必须先取得受信 Root Group 范围。
+- 未知调用方、重复绑定、作用域冲突、凭据读取失败和认证失败全部 fail closed。
+- Broker 不直连账户或 ACL 数据库；认证结果和 ACL bundle 仍通过版本化 HTTPS 契约取得。
 
-## 候选方案
+## 当前决策
 
-1. MQTT 请求携带 `root_group`：实现简单，但客户端可控，拒绝。
-2. 认证服务按 identity 全局搜索：同名主体存在歧义，也可能形成跨 Root Group 探测，拒绝。
-3. 由受信 listener 和已验证客户端证书身份精确绑定 Root Group：选择。
+`auth.service_bindings[]` 为每个 Broker 或内部服务定义：
 
-## 决策
+- 唯一 `service_id`；
+- 只接受 secret reference 的 `token_ref`；
+- 唯一 `root_group_id`；
+- 可选的 `peer_certificate_sha256` 第二因子。
 
-- 认证服务内部使用 `(listener_id, peer_certificate_sha256)` 的不可变精确映射确定唯一
-  `root_group_id`。
-- certificate fingerprint 必须是规范化的小写 `sha256:` 加 64 位十六进制文本；不接受 wildcard、subject
-  substring、大小写自动修复或默认 Root Group。
-- `flowie_control_verified_caller_t` 只能由 TLS listener adapter 在证书链验证成功后构造。HTTP header 和
-  request body 永远不是该结构的输入来源。
-- 未验证证书、未知 listener/fingerprint、重复绑定和方法不匹配全部 fail closed。
-- 内部本地 verifier 测试中，认证成功后 user、credential revisions、roles 和 effective groups 在一个
-  SQLite read transaction 中生成一致 snapshot。credential cache 仍只缓存正向 KDF 结果，不保存明文
-  secret；该 verifier 不能由 controller 部署 schema 选择。
-  第三方企业模式先从唯一 HTTPS 上游取得断言，再使用 credential-free snapshot 加载本地授权事实。
-- `policy_version` 由注入的只读 provider 提供；返回零或 provider 失败时不签发 principal。
-- principal expiry 有界，默认 300 秒、最大 3600 秒。该 TTL 不替代已连接 session 的撤销策略。
+请求必须提供 bearer token。`flowie-control` 每次请求从 secret provider 取得当前 token，使用 keyed
+digest 匹配唯一 binding，并构造 `flowie_control_verified_caller_t`。Root Group 只来自命中的 binding，
+不能来自请求 body。当前 token 发生重复时请求失败，防止轮换期间一个 token 获得多个 Root Group。
 
-## 状态归属与失败语义
+默认 listener 使用单向 TLS，只验证服务端身份。若部署显式设置
+`listener.tls.client_auth: required`，binding 可同时要求已验证客户端证书指纹；证书不能替代 bearer。
+由于当前 listener 不支持“可选请求客户端证书”，该高安全模式只用于关闭 Dashboard 的 service-only
+部署，不能作为浏览器或面向用户管理 RPC 的认证方式。
 
-- Root binding 配置是认证服务启动时复制的不可变状态；更新需要构建新实例并切换，不做双向同步。
-- 内部本地 verifier 测试中，SQLite control store 是 user、credential、roles 和 groups 的事实源；
-  可部署模式下，外部 credential 事实只来自 HTTPS 服务，control store 只拥有本地 user enabled、
-  roles 和 groups。
-- ACL publisher 是 `policy_version` 的事实源；认证服务只读取，不自行推进版本。
-- credential cache 和 principal response 都是派生状态，任何事实源读取失败均不返回部分 principal。
-- authenticate 输出由调用方持有；服务不保留请求 secret 或输出 principal。
+## 管理面边界
 
-## 架构与兼容性影响
+Dashboard 和面向用户的 JSON-RPC 不使用上述 service binding，也不从客户端证书映射管理员。
+管理员以 Repository 中的账户凭据登录，取得有界服务端 session；后续请求使用
+`Secure; HttpOnly; SameSite=Strict` cookie 或同一不透明 token 的 bearer 表示该 session。每次请求重新
+检查 user enabled 与当前保留角色，禁用账户或撤销管理角色会立即失权。
 
-- Broker `/v3/authenticate` JSON body 不增加 Root Group 字段。v3 新增的是 MQTT listener 产生的
-  `peer_certificate_sha256`；它不能替代外层 Broker mTLS caller binding。
-- Flowie 新实现仅位于不安装的 `flowie_control_core` 与 `flowie_control_iris_adapter`，没有 executable、listener、
-  YAML 或已安装公开头文件变化。
-- CoroNet/Iris 提供版本化 server mTLS 配置和 verified peer identity API；Flowie 薄 adapter 只依赖该公开传输
-  契约，不直接访问 OpenSSL 内部对象。JSON endpoint 只通过显式注册进入 Iris app，网络开放仍需独立控制面
-  进程、限流和真实集成 gate。
-- 迁移时为每个受信 Broker client certificate 配置精确 binding；证书轮换期间可并列配置新旧 fingerprint，完成
-  切流后删除旧 binding。
-- 回滚只需停止未开放的 control service，Broker 恢复原认证服务；不会修改现有 MQTT session 或 ACL bundle。
+## 迁移与回滚
 
-## 验证范围
+迁移时为每个 Broker 配置独立 token secret reference 和精确 Root Group。需要证书第二因子时，再配置
+客户端 CA、证书指纹及 `client_auth: required`；不能复用用户登录凭据或第三方 Auth 上游 token。
 
-- 两个 Root Group 中相同 MQTT identity 使用不同 credential，不发生跨 Root Group 认证。
-- verified/unknown/unverified certificate、重复 binding 和非规范 fingerprint 拒绝。
-- roles/effective groups/root/policy version/expiry 组装正确。
-- credential cache 命中、credential revoke、policy provider 失败和零版本 fail closed。
-- CoroNet 已覆盖真实双向 TLS 握手和双方证书 fingerprint；Iris/Flowie 已覆盖非 TLS 请求、严格 JSON、Bearer
-  token、原始 body/Authorization wipe 和 endpoint bind/unbind fail-closed。证书轮换、缺少客户端证书的 Iris
-  端到端拒绝、限流和 `/v3/authenticate` 真实网络测试仍属于 release gate。
+回滚必须成组恢复旧 controller、Broker 配置与旧密钥，不允许同时启用证书唯一绑定和 service-token
+绑定两套事实源。ACL bundle 与本地账户 Repository 不需要因绑定方式变化而迁移。
+
+## 验证
+
+当前 focused tests 覆盖 token 唯一匹配、动态轮换、重复 token 冲突、错误 token、Root Group 隔离和
+可选证书第二因子。真实 HTTPS 集成覆盖无客户端证书的 Broker Auth/ACL、错误 token 拒绝、管理登录
+session，以及“客户端证书本身不能授权管理 RPC”。

@@ -47,7 +47,7 @@ static int flow_product_test_resource_provider(void *ctx, turbo_flow_t *flow,
 
 spec("flow_config") {
   it("resolves process async ingress defaults and explicit bounds") {
-    static const char defaults_yaml[] = "version: 1\nadapters: {}\n";
+    static const char defaults_yaml[] = "version: 1\n";
     static const char explicit_yaml[] = "version: 1\n"
                                         "runtime:\n"
                                         "  ingress:\n"
@@ -218,6 +218,38 @@ spec("flow_config") {
     check_int_eq(
         turbo_flow_resolved_config_profile_adapter(config, "missing", "endpoint", &adapter_name),
         TURBO_ENOENT);
+    turbo_flow_resolved_config_destroy(config);
+  }
+
+  it("reads full range 64 bit adapter integers from decimal strings") {
+    static const char yaml[] =
+        "version: 1\n"
+        "adapters:\n"
+        "  limits:\n"
+        "    kind: test\n"
+        "    config:\n"
+        "      max_u64: \"18446744073709551615\"\n"
+        "      min_i64: \"-9223372036854775808\"\n"
+        "      safe_u64: 9007199254740991\n"
+        "      invalid_u64: \"12x\"\n";
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
+    uint64_t u64 = 0u;
+    int64_t i64 = 0;
+
+    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_resolved_config_adapter(config, "limits", &view), TURBO_OK);
+    check_int_eq(turbo_flow_resolved_adapter_get_u64(&view, "max_u64", &u64), TURBO_OK);
+    check_uint_eq(u64, UINT64_MAX);
+    check_int_eq(turbo_flow_resolved_adapter_get_i64(&view, "min_i64", &i64), TURBO_OK);
+    check_true(i64 == INT64_MIN);
+    check_int_eq(turbo_flow_resolved_adapter_get_u64(&view, "safe_u64", &u64), TURBO_OK);
+    check_true(u64 == UINT64_C(9007199254740991));
+    check_int_eq(turbo_flow_resolved_adapter_get_u64(&view, "invalid_u64", &u64),
+                 TURBO_EINVAL);
+
     turbo_flow_resolved_config_destroy(config);
   }
 

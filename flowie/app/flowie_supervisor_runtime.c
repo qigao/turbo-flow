@@ -10,9 +10,11 @@ struct flowie_supervisor_runtime_s {
   tstr_t profile;
   tstr_t config_path;
   tstr_t graph_path;
+  tstr_t control_config_path;
   turbo_process_t *process;
   size_t max_output_bytes;
   int check_only;
+  int require_security;
   int capture_output;
   int started;
 };
@@ -36,10 +38,13 @@ static int flowie_supervisor_copy_config(flowie_supervisor_runtime_t *runtime,
   runtime->profile = tstr_dup(config->profile);
   runtime->config_path = tstr_dup(config->config_path);
   runtime->graph_path = tstr_dup(config->graph_path);
+  if (config->control_config_path)
+    runtime->control_config_path = tstr_dup(config->control_config_path);
   if (!runtime->worker_program || !runtime->profile || !runtime->config_path ||
-      !runtime->graph_path)
+      !runtime->graph_path || (config->control_config_path && !runtime->control_config_path))
     return TURBO_ENOMEM;
   runtime->check_only = config->check_only != 0;
+  runtime->require_security = config->require_security != 0;
   runtime->capture_output = config->capture_output != 0;
   runtime->max_output_bytes = config->max_output_bytes;
   return TURBO_OK;
@@ -55,7 +60,9 @@ int flowie_supervisor_runtime_create(const flowie_supervisor_runtime_config_t *c
   if (!config || config->size != sizeof(*config) || !out || !config->worker_program ||
       !config->worker_program[0] || !config->profile || !config->profile[0] ||
       !config->config_path || !config->config_path[0] || !config->graph_path ||
-      !config->graph_path[0] || (config->capture_output && config->max_output_bytes == 0)) {
+      !config->graph_path[0] ||
+      (config->control_config_path && !config->control_config_path[0]) ||
+      (config->capture_output && config->max_output_bytes == 0)) {
     flowie_supervisor_error_set(error, "validate supervisor configuration", TURBO_EINVAL);
     return TURBO_EINVAL;
   }
@@ -76,7 +83,7 @@ int flowie_supervisor_runtime_create(const flowie_supervisor_runtime_config_t *c
 
 int flowie_supervisor_runtime_start(flowie_supervisor_runtime_t *runtime,
                                     flowie_supervisor_error_t *error) {
-  const char *args[7];
+  const char *args[10];
   size_t count = 0;
   turbo_process_options_t options;
   int rc;
@@ -90,8 +97,13 @@ int flowie_supervisor_runtime_start(flowie_supervisor_runtime_t *runtime,
     return TURBO_EALREADY;
   }
   if (runtime->check_only) args[count++] = "--check";
+  if (runtime->require_security) args[count++] = "--require-security";
   args[count++] = "--profile";
   args[count++] = runtime->profile;
+  if (runtime->control_config_path) {
+    args[count++] = "--control-config";
+    args[count++] = runtime->control_config_path;
+  }
   args[count++] = runtime->config_path;
   args[count++] = runtime->graph_path;
   args[count] = NULL;
@@ -171,6 +183,7 @@ int flowie_supervisor_runtime_read_stderr(flowie_supervisor_runtime_t *runtime, 
 void flowie_supervisor_runtime_destroy(flowie_supervisor_runtime_t *runtime) {
   if (!runtime) return;
   turbo_process_destroy(runtime->process);
+  tstr_free(runtime->control_config_path);
   tstr_free(runtime->graph_path);
   tstr_free(runtime->config_path);
   tstr_free(runtime->profile);

@@ -30,6 +30,17 @@ target_include_directories(test_flowie_ingress PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 set_tests_properties(test_flowie_ingress PROPERTIES LABELS "flowie;flowie-release")
 
 cmake_add_test(
+  test_flowie_client_adapter
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flowie_client_adapter.c
+  LIBS Flowie::App TurboFlow::Flow TurboUtils::TinyTest
+       $<$<PLATFORM_ID:Windows>:ws2_32>
+  FOLDER "flowie/tests")
+
+set_tests_properties(
+  test_flowie_client_adapter
+  PROPERTIES LABELS "flowie;flowie-release;mqtt;client;product-contract")
+
+cmake_add_test(
   test_flowie_endpoint
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flowie_endpoint.c
   LIBS Flowie::App Flowie::Protocol TurboFlow::Flow TurboUtils::TinyTest

@@ -11,6 +11,7 @@ static int flow_expr_keyword_token(const char *value, size_t length) {
   if (length == 4 && strncmp(value, "true", 4) == 0) return TURBO_FLOW_EXPR_TOKEN_TRUE;
   if (length == 4 && strncmp(value, "null", 4) == 0) return TURBO_FLOW_EXPR_TOKEN_NULL_VALUE;
   if (length == 5 && strncmp(value, "false", 5) == 0) return TURBO_FLOW_EXPR_TOKEN_FALSE;
+  if (length == 8 && strncmp(value, "has_flag", 8) == 0) return TURBO_FLOW_EXPR_TOKEN_HAS_FLAG;
   return TURBO_FLOW_EXPR_TOKEN_IDENT;
 }
 
@@ -51,11 +52,16 @@ lex_start:
     float = ([0-9]+ "." [0-9]* | "." [0-9]+) exponent? | [0-9]+ exponent;
     string = "\"" ([^"\\\r\n] | "\\" [^\r\n])* "\"";
     space = [ \t]+;
+    comment = "#" [^\r\n]* | "%%" [^\r\n]*;
     newline = "\r\n" | "\n" | "\r";
 
     $ { lexer->cursor = YYCURSOR; return 0; }
 
     space {
+      lexer->column += (uint32_t)(YYCURSOR - start);
+      goto lex_start;
+    }
+    comment {
       lexer->column += (uint32_t)(YYCURSOR - start);
       goto lex_start;
     }
@@ -97,6 +103,7 @@ lex_start:
     "*" { token->length = 1; lexer->cursor = YYCURSOR; lexer->column += 1; return TURBO_FLOW_EXPR_TOKEN_MUL; }
     "/" { token->length = 1; lexer->cursor = YYCURSOR; lexer->column += 1; return TURBO_FLOW_EXPR_TOKEN_DIV; }
     "%" { token->length = 1; lexer->cursor = YYCURSOR; lexer->column += 1; return TURBO_FLOW_EXPR_TOKEN_MOD; }
+    "," { token->length = 1; lexer->cursor = YYCURSOR; lexer->column += 1; return TURBO_FLOW_EXPR_TOKEN_COMMA; }
     "." { token->length = 1; lexer->cursor = YYCURSOR; lexer->column += 1; return TURBO_FLOW_EXPR_TOKEN_DOT; }
     "(" { token->length = 1; lexer->cursor = YYCURSOR; lexer->column += 1; return TURBO_FLOW_EXPR_TOKEN_LPAREN; }
     ")" { token->length = 1; lexer->cursor = YYCURSOR; lexer->column += 1; return TURBO_FLOW_EXPR_TOKEN_RPAREN; }

@@ -15,6 +15,8 @@
 typedef enum flowie_control_pgsql_query_sql_e {
   FLOWIE_CONTROL_PGSQL_QUERY_CREDENTIAL = 0,
   FLOWIE_CONTROL_PGSQL_QUERY_REVISION,
+  FLOWIE_CONTROL_PGSQL_QUERY_ROOT_GROUP_GET,
+  FLOWIE_CONTROL_PGSQL_QUERY_ROOT_GROUP_LIST,
   FLOWIE_CONTROL_PGSQL_QUERY_USER_GET,
   FLOWIE_CONTROL_PGSQL_QUERY_USER_LIST,
   FLOWIE_CONTROL_PGSQL_QUERY_USER_ENABLED,
@@ -105,6 +107,19 @@ int flowie_control_pgsql_query_create(flowie_control_pgsql_pool_t *pool,
     rc = flowie_control_pgsql_query_sql_set(query, FLOWIE_CONTROL_PGSQL_QUERY_REVISION,
                                             "SELECT revision::text FROM %s.meta WHERE singleton=1",
                                             schema);
+  if (rc == TURBO_OK)
+    rc = flowie_control_pgsql_query_sql_set(
+        query, FLOWIE_CONTROL_PGSQL_QUERY_ROOT_GROUP_GET,
+        "SELECT root_group_id FROM %s.security_group WHERE root_group_id=$1 AND group_id=$1 "
+        "AND parent_group_id IS NULL AND depth=0 AND enabled",
+        schema);
+  if (rc == TURBO_OK)
+    rc = flowie_control_pgsql_query_sql_set(
+        query, FLOWIE_CONTROL_PGSQL_QUERY_ROOT_GROUP_LIST,
+        "SELECT root_group_id FROM %s.security_group WHERE group_id=root_group_id "
+        "AND parent_group_id IS NULL AND depth=0 AND enabled "
+        "AND ($1='' OR root_group_id>$1) ORDER BY root_group_id LIMIT $2::bigint",
+        schema);
   if (rc == TURBO_OK)
     rc =
         flowie_control_pgsql_query_sql_set(query, FLOWIE_CONTROL_PGSQL_QUERY_USER_GET,
@@ -468,6 +483,16 @@ static int flowie_control_pgsql_query_role_row(PGresult *result, int row, void *
   return rc;
 }
 
+static int flowie_control_pgsql_query_root_group_row(PGresult *result, int row, void *item) {
+  flowie_control_root_group_view_t view = FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT;
+  int rc;
+  if (!result || PQnfields(result) != 1 || !item) return TURBO_EPROTO;
+  rc = flowie_control_pgsql_result_copy(result, row, 0, view.root_group_id,
+                                        sizeof(view.root_group_id));
+  if (rc == TURBO_OK) *(flowie_control_root_group_view_t *)item = view;
+  return rc;
+}
+
 static int flowie_control_pgsql_query_text_page(flowie_control_pgsql_query_t *query,
                                                 flowie_control_pgsql_query_sql_t sql_index,
                                                 const char *root_group_id, const char *after_id,
@@ -581,6 +606,81 @@ int flowie_control_pgsql_query_user_get(flowie_control_pgsql_query_t *query,
   if (rc == TURBO_OK) rc = flowie_control_pgsql_query_user_row(result, 0, out);
   if (result) PQclear(result);
   return flowie_control_pgsql_query_session_close(&session, 0, rc);
+}
+
+int flowie_control_pgsql_query_root_group_get(flowie_control_pgsql_query_t *query,
+                                              const char *root_group_id,
+                                              flowie_control_root_group_view_t *out) {
+  const char *values[1] = {root_group_id};
+  flowie_control_pgsql_query_session_t session;
+  PGresult *result = NULL;
+  int rc;
+  if (out && out->size >= sizeof(*out))
+    *out = (flowie_control_root_group_view_t)FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT;
+  if (!query || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) || !out ||
+      out->size < sizeof(*out))
+    return TURBO_EINVAL;
+  rc = flowie_control_pgsql_query_session_open(query, &session);
+  if (rc != TURBO_OK) return rc;
+  rc = flowie_control_pgsql_query_exec(
+      &session, query->sql[FLOWIE_CONTROL_PGSQL_QUERY_ROOT_GROUP_GET], 1, values, &result);
+  if (rc == TURBO_OK && PQntuples(result) == 0)
+    rc = PQnfields(result) == 1 ? TURBO_ENOENT : TURBO_EPROTO;
+  else if (rc == TURBO_OK && PQntuples(result) != 1)
+    rc = TURBO_EPROTO;
+  if (rc == TURBO_OK) rc = flowie_control_pgsql_query_root_group_row(result, 0, out);
+  if (result) PQclear(result);
+  return flowie_control_pgsql_query_session_close(&session, 0, rc);
+}
+
+int flowie_control_pgsql_query_root_group_list(flowie_control_pgsql_query_t *query,
+                                               const char *after_root_group_id,
+                                               flowie_control_root_group_view_t *items,
+                                               size_t item_capacity, size_t *count_out,
+                                               int *has_more_out) {
+  flowie_control_pgsql_query_session_t session;
+  char limit[32];
+  const char *values[2] = {after_root_group_id ? after_root_group_id : "", limit};
+  PGresult *result = NULL;
+  size_t count = 0u;
+  int written;
+  int rc;
+  if (count_out) *count_out = 0u;
+  if (has_more_out) *has_more_out = 0;
+  if (!query ||
+      (after_root_group_id &&
+       !flowie_control_text_valid(after_root_group_id, TURBO_FLOW_SECURITY_ID_MAX)) ||
+      !items || item_capacity == 0u || item_capacity > FLOWIE_CONTROL_PAGE_MAX || !count_out ||
+      !has_more_out)
+    return TURBO_EINVAL;
+  for (size_t index = 0u; index < item_capacity; ++index) {
+    if (items[index].size < sizeof(items[index])) return TURBO_EINVAL;
+    items[index] = (flowie_control_root_group_view_t)FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT;
+  }
+  written = snprintf(limit, sizeof(limit), "%llu",
+                     (unsigned long long)(item_capacity + 1u));
+  if (written <= 0 || (size_t)written >= sizeof(limit)) return TURBO_ERANGE;
+  rc = flowie_control_pgsql_query_session_open(query, &session);
+  if (rc != TURBO_OK) return rc;
+  rc = flowie_control_pgsql_query_exec(
+      &session, query->sql[FLOWIE_CONTROL_PGSQL_QUERY_ROOT_GROUP_LIST], 2, values, &result);
+  for (int row = 0; rc == TURBO_OK && row < PQntuples(result); ++row) {
+    if (count == item_capacity) {
+      *has_more_out = 1;
+      continue;
+    }
+    rc = flowie_control_pgsql_query_root_group_row(result, row, &items[count]);
+    if (rc == TURBO_OK) ++count;
+  }
+  if (result) PQclear(result);
+  rc = flowie_control_pgsql_query_session_close(&session, 0, rc);
+  if (rc == TURBO_OK)
+    *count_out = count;
+  else {
+    *count_out = 0u;
+    *has_more_out = 0;
+  }
+  return rc;
 }
 
 int flowie_control_pgsql_query_user_list(flowie_control_pgsql_query_t *query,

@@ -252,4 +252,161 @@ spec("Flowie ACL management service") {
     flowie_control_generated_credential_wipe(&generated);
     management_close(service, store, path);
   }
+
+  it("lets only the system administrator set human passwords across root groups") {
+    static const char initial_password[] = "Root-B-Initial-Password-2026";
+    static const char replacement_password[] = "Root-B-Replaced-Password-2026";
+    char *path = NULL;
+    flowie_control_store_t *store = NULL;
+    flowie_control_management_service_t *service = management_open(&path, &store);
+    flowie_control_management_caller_t system_admin = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
+    flowie_control_management_caller_t root_admin = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
+    flowie_control_root_group_create_command_t root = FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+    flowie_control_user_create_command_t user = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
+    flowie_control_password_set_command_t password = FLOWIE_CONTROL_PASSWORD_SET_COMMAND_INIT;
+    flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
+    flowie_control_credential_verify_result_t verified =
+        FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+
+    system_admin.root_group_id = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP;
+    system_admin.actor = "admin";
+    system_admin.permissions = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN;
+    root_admin.root_group_id = "root-a";
+    root_admin.actor = "root-admin";
+    root_admin.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
+
+    root.root_group_id = "root-b";
+    root.actor = system_admin.actor;
+    root.request_id = "root-b-create";
+    root.expected_revision = 1u;
+    root.occurred_at = 2000u;
+    check_int_eq(flowie_control_management_root_group_create(service, &system_admin, &root, &result),
+                 TURBO_OK);
+    user.root_group_id = "root-b";
+    user.principal_id = "admin-b";
+    user.principal_type = "human";
+    user.actor = system_admin.actor;
+    user.request_id = "admin-b-create";
+    user.expected_revision = 2u;
+    user.occurred_at = 2001u;
+    check_int_eq(flowie_control_management_user_create(service, &system_admin, &user, &result),
+                 TURBO_OK);
+
+    password.root_group_id = "root-b";
+    password.principal_id = "admin-b";
+    password.new_password = initial_password;
+    password.new_password_size = sizeof(initial_password) - 1u;
+    password.mode = FLOWIE_CONTROL_PASSWORD_CREATE;
+    password.actor = system_admin.actor;
+    password.request_id = "admin-b-password-create";
+    password.expected_revision = 3u;
+    password.occurred_at = 2002u;
+    check_int_eq(flowie_control_management_password_set(service, &root_admin, &password, &result),
+                 TURBO_EPERM);
+    check_int_eq(flowie_control_management_password_set(service, &system_admin, &password, &result),
+                 TURBO_OK);
+    check_uint_eq(result.revision, 4u);
+    check_int_eq(flowie_control_store_credential_verify(
+                     store, "root-b", "admin-b", initial_password, sizeof(initial_password) - 1u,
+                     &verified),
+                 TURBO_OK);
+    check_uint_eq(verified.credential_revision, 4u);
+
+    password.new_password = replacement_password;
+    password.new_password_size = sizeof(replacement_password) - 1u;
+    password.mode = FLOWIE_CONTROL_PASSWORD_REPLACE;
+    password.request_id = "admin-b-password-replace";
+    password.expected_revision = 4u;
+    password.occurred_at = 2003u;
+    check_int_eq(flowie_control_management_password_set(service, &system_admin, &password, &result),
+                 TURBO_OK);
+    check_uint_eq(result.revision, 5u);
+    verified = (flowie_control_credential_verify_result_t)
+        FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+    check_int_eq(flowie_control_store_credential_verify(
+                     store, "root-b", "admin-b", replacement_password,
+                     sizeof(replacement_password) - 1u, &verified),
+                 TURBO_OK);
+    check_uint_eq(verified.credential_revision, 5u);
+
+    management_close(service, store, path);
+  }
+
+  it("lets only the system administrator select another existing root group") {
+    char *path = NULL;
+    flowie_control_store_t *store = NULL;
+    flowie_control_management_service_t *service = management_open(&path, &store);
+    flowie_control_management_caller_t system_admin = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
+    flowie_control_management_caller_t root_admin = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
+    flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
+    flowie_control_root_group_create_command_t root = FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+    flowie_control_user_create_command_t user = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
+    flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
+    flowie_control_user_view_t users[2] = {
+        FLOWIE_CONTROL_USER_VIEW_INIT, FLOWIE_CONTROL_USER_VIEW_INIT};
+    flowie_control_root_group_view_t roots[3] = {
+        FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT, FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT,
+        FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT};
+    size_t count = 0u;
+    int has_more = 0;
+
+    system_admin.root_group_id = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP;
+    system_admin.actor = "admin";
+    system_admin.permissions = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN;
+    root_admin.root_group_id = "root-a";
+    root_admin.actor = "admin-a";
+    root_admin.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
+
+    root.root_group_id = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP;
+    root.actor = "bootstrap";
+    root.request_id = "request-system-root";
+    root.expected_revision = 1u;
+    root.occurred_at = 2000u;
+    check_int_eq(flowie_control_store_root_group_create(store, &root, &result), TURBO_OK);
+    root.root_group_id = "root-b";
+    root.actor = system_admin.actor;
+    root.request_id = "request-root-b";
+    root.expected_revision = 2u;
+    root.occurred_at = 2001u;
+    check_int_eq(flowie_control_management_root_group_create(service, &system_admin, &root, &result),
+                 TURBO_OK);
+    user.root_group_id = "root-b";
+    user.principal_id = "admin-b";
+    user.principal_type = "human";
+    user.actor = system_admin.actor;
+    user.request_id = "request-admin-b";
+    user.expected_revision = 3u;
+    user.occurred_at = 2002u;
+    check_int_eq(flowie_control_management_user_create(service, &system_admin, &user, &result),
+                 TURBO_OK);
+
+    check_int_eq(flowie_control_management_scope_caller(service, &system_admin, "root-b", &scoped),
+                 TURBO_OK);
+    check_str_eq(scoped.root_group_id, "root-b");
+    check_int_eq(flowie_control_management_user_list(service, &scoped, NULL, users, 2u, &count,
+                                                     &has_more),
+                 TURBO_OK);
+    check_size_eq(count, 1u);
+    check_str_eq(users[0].principal_id, "admin-b");
+    check_false(has_more);
+    check_int_eq(flowie_control_management_scope_caller(service, &root_admin, "root-b", &scoped),
+                 TURBO_EPERM);
+    check_int_eq(
+        flowie_control_management_scope_caller(service, &system_admin, "missing", &scoped),
+        TURBO_ENOENT);
+
+    check_int_eq(flowie_control_management_root_group_list(
+                     service, &system_admin, NULL, roots, 3u, &count, &has_more),
+                 TURBO_OK);
+    check_size_eq(count, 3u);
+    check_str_eq(roots[0].root_group_id, "root-a");
+    check_str_eq(roots[1].root_group_id, "root-b");
+    check_str_eq(roots[2].root_group_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP);
+    check_false(has_more);
+    check_int_eq(flowie_control_management_root_group_list(
+                     service, &root_admin, NULL, roots, 3u, &count, &has_more),
+                 TURBO_EPERM);
+
+    management_close(service, store, path);
+  }
 }

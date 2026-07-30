@@ -36,6 +36,7 @@
                 "TURBO_UTILS_ROOT": "C:/projects/cpp/external/pkgs/turboutils",
                 "TURBO_NET_ROOT": "C:/projects/cpp/external/pkgs/turbonet",
                 "TURBO_HTTP_ROOT": "C:/projects/cpp/external/pkgs/turbohttp",
+                "RulesForge_ROOT": "c:/projects/cpp/external/pkgs/rules_forge",
                 "CMAKE_INSTALL_PREFIX": "C:/projects/cpp/external/pkgs/turboflow",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
                 "PKG_CONFIG_EXECUTABLE": "${sourceDir}/vcpkg_installed/x64-windows/tools/pkgconf/pkgconf.exe",

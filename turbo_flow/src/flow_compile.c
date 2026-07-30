@@ -22,8 +22,8 @@ static int compile_validate_edges(turbo_flow_t *flow) {
 
       turbo_flow_expr_destroy(edge->predicate);
       edge->predicate = NULL;
-      rc = turbo_flow_expr_compile(edge->condition, tstr_len(edge->condition), NULL,
-                                   &edge->predicate, &error);
+      rc = flow_expr_projection_compile(flow, edge->condition, tstr_len(edge->condition),
+                                        &edge->predicate, &error);
       if (rc != TURBO_OK) {
         return flow_set_error(flow, rc, edge->line, edge->column, error.message);
       }

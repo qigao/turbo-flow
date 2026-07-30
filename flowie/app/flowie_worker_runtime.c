@@ -1,12 +1,6 @@
 #include "flowie_worker_runtime_internal.h"
 
 #include "flowie.h"
-#ifdef FLOWIE_SERVER_HAVE_REDIS
-  #include "turbo_flow_redis.h"
-#endif
-#ifdef FLOWIE_SERVER_HAVE_PGSQL
-  #include "turbo_flow_pgsql.h"
-#endif
 
 #include "turbo_error.h"
 #include "turbo_fs.h"
@@ -539,6 +533,18 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
     failure_operation = "resolve endpoint security";
     goto fail;
   }
+  if (config->require_security && !security_realm_channel) {
+    rc = TURBO_EINVAL;
+    config_error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    config_error.status = rc;
+    (void)snprintf(config_error.path, sizeof(config_error.path), "$.adapters.%s.config",
+                   endpoint_name);
+    (void)snprintf(config_error.message, sizeof(config_error.message),
+                   "production security requires security_realm, auth_method, Auth provider, "
+                   "and ACL policy provider");
+    failure_operation = "enforce endpoint security";
+    goto fail;
+  }
   provider_context.security_realm_channel = security_realm_channel;
   provider_context.security_auth_method = security_auth_method;
   if (session_store_channel) {
@@ -552,8 +558,15 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
   }
   if (security_realm_channel) {
     const char *policy_source;
-    rc = turbo_flow_security_realm_create_resolved(runtime->resolved, security_realm_channel, NULL,
-                                                   &runtime->security_realm, &config_error);
+    turbo_flow_security_matcher_t mqtt_matcher = TURBO_FLOW_SECURITY_MATCHER_INIT;
+    rc = flowie_mqtt_security_matcher_init(&mqtt_matcher);
+    if (rc != TURBO_OK) {
+      failure_operation = "initialize MQTT security matcher";
+      goto fail;
+    }
+    rc = turbo_flow_security_realm_create_resolved(runtime->resolved, security_realm_channel,
+                                                   &mqtt_matcher, &runtime->security_realm,
+                                                   &config_error);
     if (rc != TURBO_OK) {
       failure_operation = "create security realm";
       goto fail;

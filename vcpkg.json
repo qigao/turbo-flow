@@ -13,6 +13,9 @@
       "name": "libpq"
     },
     {
+      "name": "llhttp"
+    },
+    {
       "name": "pkgconf"
     },
     {

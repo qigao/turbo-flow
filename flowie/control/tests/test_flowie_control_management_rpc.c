@@ -149,7 +149,7 @@ spec("Flowie management JSON-RPC") {
     fixture.caller.permissions = FLOWIE_CONTROL_MANAGEMENT_VIEWER;
     check_int_eq(mem_init(&arena, 0u), 0);
     server = management_rpc_open(&path, &store, &service, &rpc, &app, &fixture);
-    check_uint_eq(rpc->method_count, 28u);
+    check_uint_eq(rpc->method_count, 32u);
     check_ptr_eq(iris_app_lookup_rpc_context(app, "/v1/management/rpc"), server);
 
     document = management_rpc_call(
@@ -460,6 +460,171 @@ spec("Flowie management JSON-RPC") {
     flowie_control_credential_wipe(rotated_secret, rotated_secret_size);
     free(first_secret);
     free(rotated_secret);
+    management_rpc_close(server, rpc, app, service, store, path);
+    mem_destroy(&arena);
+  }
+
+  it("lets only the system administrator provision a root administrator") {
+    char *path = NULL;
+    flowie_control_store_t *store = NULL;
+    flowie_control_management_service_t *service = NULL;
+    flowie_control_management_rpc_server_t *server = NULL;
+    rpc_context_t *rpc = NULL;
+    iris_app_t *app = NULL;
+    management_rpc_fixture_t fixture = {FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT, 5000u, TURBO_OK};
+    iris_security_context_t security = {0};
+    mem_pool_t arena;
+    turbo_json_doc_t *document = NULL;
+    flowie_control_user_view_t user = FLOWIE_CONTROL_USER_VIEW_INIT;
+    flowie_control_effective_roles_view_t roles = FLOWIE_CONTROL_EFFECTIVE_ROLES_VIEW_INIT;
+    flowie_control_credential_verify_result_t verified =
+        FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+    int status = 0;
+
+    fixture.caller.root_group_id = "root-a";
+    fixture.caller.actor = "root-admin";
+    fixture.caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
+    security.authenticated = true;
+    check_int_eq(mem_init(&arena, 0u), 0);
+    server = management_rpc_open(&path, &store, &service, &rpc, &app, &fixture);
+
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.root.create\",\"params\":{"
+        "\"root_group_id\":\"root-b\",\"request_id\":\"root-b-create\","
+        "\"expected_revision\":1},\"id\":1}",
+        &status);
+    check_int_eq(management_rpc_error_code(document), -32003);
+    turbo_free_json(&document);
+
+    fixture.caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN;
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.root.create\",\"params\":{"
+        "\"root_group_id\":\"root-b\",\"request_id\":\"root-b-create\","
+        "\"expected_revision\":1},\"id\":2}",
+        &status);
+    check_int_eq(management_rpc_error_code(document), -32003);
+    turbo_free_json(&document);
+
+    fixture.caller.root_group_id = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP;
+    fixture.caller.actor = "admin";
+    fixture.caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN;
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.root.create\",\"params\":{"
+        "\"root_group_id\":\"root-b\",\"request_id\":\"root-b-create\","
+        "\"expected_revision\":1},\"id\":3}",
+        &status);
+    check_int_eq(management_rpc_error_code(document), 0);
+    turbo_free_json(&document);
+
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.user.create\",\"params\":{"
+        "\"root_group_id\":\"root-b\",\"principal_id\":\"admin-b\","
+        "\"principal_type\":\"human\",\"request_id\":\"admin-b-create\","
+        "\"expected_revision\":2},\"id\":3}",
+        &status);
+    check_int_eq(management_rpc_error_code(document), 0);
+    turbo_free_json(&document);
+
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.password.set\",\"params\":{"
+        "\"root_group_id\":\"root-b\",\"principal_id\":\"admin-b\","
+        "\"new_password\":\"Root-B-Admin-Password-2026\",\"mode\":\"create\","
+        "\"request_id\":\"admin-b-password\",\"expected_revision\":3},\"id\":4}",
+        &status);
+    check_int_eq(management_rpc_error_code(document), 0);
+    check_not_null(turbo_json_object_get(document, "result"));
+    turbo_free_json(&document);
+    check_int_eq(flowie_control_store_credential_verify(
+                     store, "root-b", "admin-b", "Root-B-Admin-Password-2026",
+                     sizeof("Root-B-Admin-Password-2026") - 1u, &verified),
+                 TURBO_OK);
+    check_uint_eq(verified.credential_revision, 4u);
+
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.role.create\",\"params\":{"
+        "\"root_group_id\":\"root-b\",\"role_id\":\"security_admin\","
+        "\"request_id\":\"root-b-security-role\",\"expected_revision\":4},\"id\":5}",
+        &status);
+    check_int_eq(management_rpc_error_code(document), 0);
+    turbo_free_json(&document);
+
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.role.assign\",\"params\":{"
+        "\"root_group_id\":\"root-b\",\"principal_id\":\"admin-b\","
+        "\"role_id\":\"security_admin\",\"request_id\":\"admin-b-role\","
+        "\"expected_revision\":5},\"id\":6}",
+        &status);
+    check_int_eq(management_rpc_error_code(document), 0);
+    turbo_free_json(&document);
+
+    check_int_eq(flowie_control_store_user_get(store, "root-b", "admin-b", &user), TURBO_OK);
+    check_true(user.enabled);
+    check_int_eq(flowie_control_store_effective_roles(store, "root-b", "admin-b", &roles),
+                 TURBO_OK);
+    check_uint_eq(roles.role_count, 1u);
+    check_str_eq(roles.roles[0], FLOWIE_CONTROL_MANAGEMENT_ROLE_SECURITY_ADMIN);
+
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.group.create\",\"params\":{"
+        "\"root_group_id\":\"root-b\",\"group_id\":\"operators\","
+        "\"parent_group_id\":\"root-b\",\"request_id\":\"root-b-operators\","
+        "\"expected_revision\":6},\"id\":7}",
+        &status);
+    check_int_eq(management_rpc_error_code(document), 0);
+    turbo_free_json(&document);
+
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.root_group.list\",\"params\":{"
+        "\"limit\":10},\"id\":8}",
+        &status);
+    check_int_eq(management_rpc_error_code(document), 0);
+    {
+      json_value_t *rpc_result = turbo_json_object_get(document, "result");
+      json_value_t *items = turbo_json_object_get(rpc_result, "items");
+      check_size_eq(turbo_json_array_size(items), 2u);
+      check_str_eq(
+          turbo_json_string(
+              turbo_json_object_get(turbo_json_array_get(items, 1u), "root_group_id")),
+          "root-b");
+    }
+    turbo_free_json(&document);
+
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.user.list\",\"params\":{"
+        "\"root_group_id\":\"root-b\",\"limit\":10},\"id\":9}",
+        &status);
+    check_int_eq(management_rpc_error_code(document), 0);
+    {
+      json_value_t *rpc_result = turbo_json_object_get(document, "result");
+      json_value_t *items = turbo_json_object_get(rpc_result, "items");
+      check_size_eq(turbo_json_array_size(items), 1u);
+      check_str_eq(turbo_json_string(turbo_json_object_get(turbo_json_array_get(items, 0u), "id")),
+                   "admin-b");
+    }
+    turbo_free_json(&document);
+
+    fixture.caller.root_group_id = "root-a";
+    fixture.caller.actor = "root-admin";
+    fixture.caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
+    document = management_rpc_call(
+        server, app, &arena, &security,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"flowie.user.list\",\"params\":{"
+        "\"root_group_id\":\"root-b\",\"limit\":10},\"id\":10}",
+        &status);
+    check_int_eq(status, TURBO_EPERM);
+    check_int_eq(management_rpc_error_code(document), -32003);
+    turbo_free_json(&document);
+
     management_rpc_close(server, rpc, app, service, store, path);
     mem_destroy(&arena);
   }

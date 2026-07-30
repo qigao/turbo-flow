@@ -371,6 +371,29 @@ static int flowie_mqtt_rule_values(const flowie_mqtt_projection_t *projection,
   return TURBO_OK;
 }
 
+int flowie_mqtt_payload_view(const turbo_flow_msg_t *message, tstr_v *payload_out, void *ctx) {
+  flowie_mqtt_projection_t decoded;
+  const turbo_flow_data_schema_t *projection_schema = NULL;
+  const flowie_mqtt_projection_t *projection;
+  int rc;
+
+  (void)ctx;
+  if (!message || !payload_out) return TURBO_EINVAL;
+  *payload_out = (tstr_v){0};
+  projection =
+      (const flowie_mqtt_projection_t *)turbo_flow_msg_projection(message, &projection_schema);
+  if (projection && projection_schema == &FLOWIE_MQTT_PROJECTION_SCHEMA) {
+    if (!flowie_mqtt_projection_matches(projection, message)) return TURBO_EPROTO;
+  } else {
+    rc = flowie_mqtt_projection_decode(message, NULL, &decoded);
+    if (rc != TURBO_OK) return rc;
+    projection = &decoded;
+  }
+  *payload_out = tstr_v_from_buf((const char *)projection->publish.payload.data,
+                                 projection->publish.payload.size);
+  return TURBO_OK;
+}
+
 int flowie_mqtt_rule_facts_provider(const turbo_flow_msg_t *message,
                                     const turbo_flow_expr_schema_t *schema,
                                     const turbo_flow_expr_value_t **values_out,

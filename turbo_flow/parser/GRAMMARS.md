@@ -74,6 +74,17 @@ Whitespace:
 - `#` comments are skipped until end of line.
 - `%%` comments are skipped until end of line.
 
+For a conditional route, comment recognition also applies to the captured
+expression remainder. `#` and `%%` start a comment only outside a quoted
+expression string; an escaped byte inside a quoted string does not change quote
+state. The comment and whitespace before it are not passed to the expression
+parser:
+
+```flow
+route validate -> persist when msg.flags == 7 # accepted
+route validate -> audit when msg.type == "invoice#paid" %% audit branch
+```
+
 Identifiers:
 
 ```text
@@ -184,6 +195,10 @@ Binding segments may use identifier or reserved-word text, so protocol names
 such as `socket.server` and direction names such as `codec.json.in` do not need
 quotes. The dot must be adjacent to both segments; `http . client` is rejected.
 Quoted names remain supported for compatibility and names outside this shape.
+This includes `route`, `when`, and `reject`: they retain keyword meaning in
+statements but are ordinary segments after `adapter`, `operation`, or
+`resource`. In particular, `when` starts expression capture only after an arrow
+on the same route line, so bindings such as `rules.when` remain unambiguous.
 
 FMQ primitives use this same binding grammar; `pub`, `sub`, `push`, `pull`,
 `router`, `dealer`, and `pair` are registry name segments, not lexer keywords:
@@ -423,6 +438,15 @@ separate expression grammar during `turbo_flow_compile()`. The expression must
 return BOOL. It evaluates the successful upstream stage output, and false
 filters the edge without failing publication. Conditional routes are not
 accepted inside reusable stage declarations.
+
+The built-in `msg` facts describe TurboFlow-owned message metadata, including
+`msg.type`, `msg.flags`, and `msg.status`; the value observed by a route is the
+upstream stage's current output, not the original source snapshot. TurboFlow
+does not infer a schema from opaque payload bytes. Domain-field filtering must
+be supplied through an explicit typed facts provider, and multi-rule,
+schema-backed decisions belong in a registered RulesForge-backed
+`rules.apply` node. Graph routes remain topology filters and do not implicitly
+invoke RulesForge.
 
 A reject statement names one failure edge from an executable stage:
 

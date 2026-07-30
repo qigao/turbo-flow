@@ -79,7 +79,7 @@ static void flow_async_publish_task_run(void *arg) {
 
   flow_publish_error_context_begin(task->flow);
   flow_clear_error(task->flow);
-  if (task->flow->observer_ops.message_complete) observe_start = turbo_hrtime();
+  if (flow_observer_has_handlers(task->flow)) observe_start = turbo_hrtime();
   (void)flow_publish_local(task->flow, task->source_name, task->source_index, &task->message,
                            observe_start, &result);
   turbo_flow_msg_cleanup(&task->message);

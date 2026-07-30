@@ -182,6 +182,34 @@ done:
   return rc;
 }
 
+static int pgsql_live_count_state(const char *conninfo, const char *outbox_name,
+                                  const char *state, size_t *count) {
+  static const char sql[] =
+      "SELECT count(*)::text FROM turbo_flow_outbox WHERE outbox_name=$1 AND delivery_state=$2";
+  const char *values[2] = {outbox_name, state};
+  PGconn *connection = PQconnectdb(conninfo);
+  PGresult *result = NULL;
+  char *end = NULL;
+  unsigned long long value;
+  int rc = TURBO_EIO;
+  if (!connection || PQstatus(connection) != CONNECTION_OK) goto done;
+  result = PQexecParams(connection, sql, 2, NULL, values, NULL, NULL, 0);
+  if (!result || PQresultStatus(result) != PGRES_TUPLES_OK || PQntuples(result) != 1 ||
+      PQnfields(result) != 1 || PQgetisnull(result, 0, 0))
+    goto done;
+  value = strtoull(PQgetvalue(result, 0, 0), &end, 10);
+  if (!end || *end != '\0' || value > SIZE_MAX) {
+    rc = TURBO_EPROTO;
+    goto done;
+  }
+  *count = (size_t)value;
+  rc = TURBO_OK;
+done:
+  if (result) PQclear(result);
+  if (connection) PQfinish(connection);
+  return rc;
+}
+
 spec("turbo_flow_pgsql_live") {
   it("MQTT-STORE-010 runs the provider-neutral record trace through PostgreSQL") {
     const char *conninfo = getenv("TURBO_FLOW_PGSQL_TEST_CONNINFO");
@@ -487,5 +515,77 @@ spec("turbo_flow_pgsql_live") {
     turbo_flow_destroy(source_first);
     check_int_eq(pgsql_live_count(conninfo, outbox_name, &depth), TURBO_OK);
     check_size_eq(depth, 0u);
+  }
+
+  it("persists retry, dead-letter, and archive lifecycle states") {
+    static const unsigned char failed_payload[] = {'f', 'a', 'i', 'l'};
+    static const unsigned char archived_payload[] = {'o', 'k'};
+    const char *conninfo = getenv("TURBO_FLOW_PGSQL_TEST_CONNINFO");
+    char outbox_name[128];
+    turbo_flow_pgsql_outbox_config_t config = TURBO_FLOW_PGSQL_OUTBOX_CONFIG_INIT;
+    turbo_flow_publish_result_t publish_result = TURBO_FLOW_PUBLISH_RESULT_INIT;
+    pgsql_live_capture_t capture;
+    turbo_flow_t *flow;
+    size_t count = 0u;
+
+    check_not_null(conninfo);
+    check_true(conninfo[0] != '\0');
+    (void)snprintf(outbox_name, sizeof(outbox_name), "turboflow_lifecycle_%llu",
+                   (unsigned long long)turbo_hrtime());
+    config.conninfo = conninfo;
+    config.outbox_name = outbox_name;
+    config.capacity = 1u;
+    config.max_payload_size = PGSQL_LIVE_MAX_PAYLOAD_SIZE;
+    config.poll_interval_ms = 5u;
+    config.claim_scan_limit = 8u;
+    config.create_table = 1;
+    config.completion = TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_ARCHIVE;
+    config.max_delivery_attempts = 2u;
+    config.retry_delay_ms = 5u;
+
+    flow = pgsql_live_sink_flow(&config);
+    check_not_null(flow);
+    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_int_eq(pgsql_live_publish(flow, failed_payload, sizeof(failed_payload), NULL, NULL,
+                                    &publish_result),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    turbo_flow_destroy(flow);
+
+    memset(&capture, 0, sizeof(capture));
+    atomic_init(&capture.called, 0);
+    atomic_init(&capture.result, TURBO_EIO);
+    config.role = TURBO_FLOW_PGSQL_OUTBOX_SOURCE;
+    flow = pgsql_live_source_flow(&config, "pg.lifecycle.failed", &capture);
+    check_not_null(flow);
+    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_int_eq(pgsql_live_wait_total(&capture, NULL, 2), TURBO_OK);
+    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    turbo_flow_destroy(flow);
+    check_int_eq(pgsql_live_count_state(conninfo, outbox_name, "dead_letter", &count), TURBO_OK);
+    check_size_eq(count, 1u);
+
+    config.role = TURBO_FLOW_PGSQL_OUTBOX_SINK;
+    flow = pgsql_live_sink_flow(&config);
+    check_not_null(flow);
+    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_int_eq(pgsql_live_publish(flow, archived_payload, sizeof(archived_payload), NULL, NULL,
+                                    &publish_result),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    turbo_flow_destroy(flow);
+
+    memset(&capture, 0, sizeof(capture));
+    atomic_init(&capture.called, 0);
+    atomic_init(&capture.result, TURBO_OK);
+    config.role = TURBO_FLOW_PGSQL_OUTBOX_SOURCE;
+    flow = pgsql_live_source_flow(&config, "pg.lifecycle.archived", &capture);
+    check_not_null(flow);
+    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_int_eq(pgsql_live_wait_total(&capture, NULL, 1), TURBO_OK);
+    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    turbo_flow_destroy(flow);
+    check_int_eq(pgsql_live_count_state(conninfo, outbox_name, "archived", &count), TURBO_OK);
+    check_size_eq(count, 1u);
   }
 }

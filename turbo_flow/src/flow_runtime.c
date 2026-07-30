@@ -692,7 +692,17 @@ cleanup_watermark:
 int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t source_index,
                        turbo_flow_msg_t *local, uint64_t observe_start,
                        turbo_flow_publish_result_t *result) {
+  turbo_flow_observe_event_t event;
   int rc;
+
+  memset(&event, 0, sizeof(event));
+  event.kind = TURBO_FLOW_OBSERVE_SOURCE_RECEIVED;
+  event.source_name = source_name;
+  event.msg = local;
+  event.status = TURBO_OK;
+  event.selected = -1;
+  event.edge_kind = -1;
+  flow_observer_emit(flow, &event);
 
   if (flow->broadcast_ring && !flow_msg_transport_context_is_borrowed(local)) {
     uint64_t sequence;
@@ -710,6 +720,15 @@ int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t sou
     flow->observer_ops.message_complete(flow->observer_ctx, source_name, local,
                                         turbo_hrtime() - observe_start, rc);
   }
+  memset(&event, 0, sizeof(event));
+  event.kind = TURBO_FLOW_OBSERVE_FLOW_COMPLETE;
+  event.source_name = source_name;
+  event.msg = local;
+  event.status = rc;
+  event.selected = -1;
+  event.edge_kind = -1;
+  event.duration_ns = observe_start != 0u ? turbo_hrtime() - observe_start : 0u;
+  flow_observer_emit(flow, &event);
   {
     const turbo_flow_protocol_settlement_envelope_t *settlement =
         turbo_flow_msg_protocol_settlement(local);
@@ -750,7 +769,7 @@ static int flow_publish_message_entered(turbo_flow_t *flow, const char *source_n
   int local_initialized = 0;
   int rc;
 
-  if (flow->observer_ops.message_complete) observe_start = turbo_hrtime();
+  if (flow_observer_has_handlers(flow)) observe_start = turbo_hrtime();
   flow_clear_error(flow);
   if (!msg->buffer && !msg->owned_payload && msg->payload.data) {
     rc = flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
@@ -883,8 +902,7 @@ static const flow_adapter_registration_t *flow_publish_batch_direct_adapter(
   const turbo_flow_operation_runtime_contract_t *runtime;
 
   if (out_stage) *out_stage = NULL;
-  if (!flow || !out_stage || flow->broadcast_ring || flow->observer_ops.message_complete ||
-      flow->observer_ops.stage_complete) {
+  if (!flow || !out_stage || flow->broadcast_ring || flow_observer_has_handlers(flow)) {
     return NULL;
   }
   for (size_t i = 0u; i < turbo_vec_size(&flow->runtime_edges); ++i) {

@@ -7,7 +7,7 @@ listener:
     cert_file: certs/flowie-control-server-chain.pem
     key_file: certs/flowie-control-server-key.pem
     key_password_ref: env://FLOWIE_CONTROL_KEY_PASSWORD
-    client_ca_file: certs/flowie-control-client-ca.pem
+    client_auth: none
   limits:
     max_header_name_length: 128
     max_header_value_length: 4096
@@ -38,13 +38,25 @@ storage:
   #   acquire_timeout_ms: 5000
   #   schema_mode: validate
 
+# One-time system administrator initialization. The username defaults to `admin`; the password
+# reference defaults to the environment variable below. First login must change the password.
+# bootstrap:
+#   username: admin
+#   password_ref: env://FLOWIE_BOOTSTRAP_PASSWORD
+
 management:
   rpc_path: /v1/management/rpc
   rpc_max_request_size: 65536
-  certificate_bindings:
-    - peer_certificate_sha256: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      root_group: root-a
-      principal: admin-a
+  session:
+    capacity: 1024
+    max_sessions_per_principal: 5
+    ttl_seconds: 3600
+  # Local password verification runs outside the Iris owner lane.
+  # Remove this explicit block when auth.external_https is enabled.
+  login_executor:
+    workers: 4
+    queue_capacity: 128
+    deadline_ms: 10000
 
 dashboard:
   enabled: true
@@ -55,15 +67,18 @@ auth:
   # Add external_https only when third-party HTTPS Auth must replace the local verifier.
   # listener_id: flowie-control-auth
   # method: bearer
-  # service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
   # principal_ttl_seconds: 300
   # local_executor:
   #   workers: 4
   #   queue_capacity: 128
   #   deadline_ms: 10000
-  # root_bindings:
-  #   - peer_certificate_sha256: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  # service_bindings:
+  #   - service_id: broker-main
+  #     token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
   #     root_group: root-a
+  #     # Optional second factor. This additionally requires listener.tls.client_auth: required,
+  #     # a client_ca_file, and dashboard.enabled: false.
+  #     # peer_certificate_sha256: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   # external_https: # mutually exclusive with an explicit local_executor block
   #   url: https://third-party-auth.internal/v2/assert
   #   service_token_ref: env://FLOWIE_THIRD_PARTY_AUTH_TOKEN

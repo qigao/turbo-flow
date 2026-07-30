@@ -46,43 +46,15 @@ include(CMakeOptions.cmake)
 include(Sanitizers)
 include(CmakeUtils)
 
-if(TURBO_FLOW_BUILD_FLOWIE AND NOT TURBO_FLOW_BUILD_STORE)
-  message(FATAL_ERROR "TURBO_FLOW_BUILD_FLOWIE requires TURBO_FLOW_BUILD_STORE")
-endif()
-
 find_package(TurboUtils REQUIRED PATHS ${TURBO_UTILS_ROOT})
-if(TURBO_FLOW_BUILD_PGSQL)
-  find_package(PostgreSQL REQUIRED)
-endif()
+find_package(PostgreSQL REQUIRED)
 
-set(TURBO_FLOW_NEEDS_TURBONET OFF)
-if(TURBO_FLOW_BUILD_FLOWIE
-   OR TURBO_FLOW_BUILD_SOCKET
-   OR TURBO_FLOW_BUILD_HTTP_CLIENT
-   OR TURBO_FLOW_BUILD_HTTP_SERVER
-   OR TURBO_FLOW_BUILD_RPC
-   OR TURBO_FLOW_BUILD_S3
-   OR TURBO_FLOW_BUILD_EMAIL
-   OR TURBO_FLOW_BUILD_FMQ
-   OR TURBO_FLOW_BUILD_REDIS)
-  set(TURBO_FLOW_NEEDS_TURBONET ON)
-  # TurboNet's exported CoroNet target references Threads::Threads.
-  find_package(Threads REQUIRED)
-  if(TURBO_NET_ROOT)
-    find_package(TurboNet REQUIRED CONFIG PATHS "${TURBO_NET_ROOT}" NO_DEFAULT_PATH)
-  else()
-    find_package(TurboNet REQUIRED)
-  endif()
-endif()
+# TurboNet's exported targets reference these dependency targets.
+find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(TurboNet REQUIRED PATHS ${TURBO_NET_ROOT})
 
-set(TURBO_FLOW_NEEDS_TURBOHTTP OFF)
-if(TURBO_FLOW_BUILD_HTTP_CLIENT
-   OR TURBO_FLOW_BUILD_HTTP_SERVER
-   OR TURBO_FLOW_BUILD_RPC
-   OR TURBO_FLOW_BUILD_S3)
-  set(TURBO_FLOW_NEEDS_TURBOHTTP ON)
-  find_package(TurboHttp REQUIRED PATHS ${TURBO_HTTP_ROOT})
-endif()
+find_package(TurboHttp REQUIRED PATHS ${TURBO_HTTP_ROOT})
 
 if(WIN32)
   find_program(
@@ -90,13 +62,8 @@ if(WIN32)
     NAMES pwsh.exe powershell.exe
     REQUIRED)
 
-  set(TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS "${TURBO_UTILS_ROOT}")
-  if(TURBO_FLOW_NEEDS_TURBONET)
-    list(APPEND TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS "${TURBO_NET_ROOT}")
-  endif()
-  if(TURBO_FLOW_NEEDS_TURBOHTTP)
-    list(APPEND TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS "${TURBO_HTTP_ROOT}")
-  endif()
+  set(TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS
+      "${TURBO_UTILS_ROOT}" "${TURBO_NET_ROOT}" "${TURBO_HTTP_ROOT}")
   list(REMOVE_DUPLICATES TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS)
 
   set(TURBO_FLOW_RUNTIME_COPY_COMMANDS)
@@ -138,31 +105,15 @@ add_subdirectory(vendor)
 
 add_subdirectory(turbo_flow)
 add_subdirectory(io/common/storage)
-if(TURBO_FLOW_BUILD_STORE)
   add_subdirectory(flowstore)
   add_subdirectory(io/local)
-endif()
-if(TURBO_FLOW_BUILD_SECURITY_SQLITE)
   add_subdirectory(security)
-endif()
-if(TURBO_FLOW_BUILD_FLOWIE)
   add_subdirectory(flowie)
-endif()
-if(TURBO_FLOW_BUILD_CODEC)
   add_subdirectory(codec)
-endif()
-if(TURBO_FLOW_BUILD_OBSERVE)
   add_subdirectory(observe)
-endif()
-if(TURBO_FLOW_BUILD_SCHEDULE)
   add_subdirectory(schedule)
-endif()
-if(TURBO_FLOW_BUILD_ADAPTERS)
   add_subdirectory(io)
-endif()
-if(TURBO_FLOW_BUILD_GATEWAYS)
   add_subdirectory(gateway)
-endif()
 if(FLOWIE_MQTT_SOAK_TESTS)
   set(_flowie_soak_required_targets
       test_flowie_endpoint
@@ -203,17 +154,11 @@ if(FLOWIE_MQTT_SOAK_TESTS)
   unset(_flowie_soak_required_targets)
   unset(_flowie_soak_target)
 endif()
-if(TURBO_FLOW_BUILD_FMQ OR TURBO_FLOW_BUILD_FMQ_PROTOCOL)
   add_subdirectory(flowmq/protocol)
-endif()
-if(TURBO_FLOW_BUILD_FMQ)
   add_subdirectory(flowmq)
-endif()
-if(TURBO_FLOW_BUILD_FLOWIE AND TURBO_FLOW_BUILD_SOCKET)
   add_subdirectory(flowie/app)
-endif()
 
-if(BUILD_TESTING AND TURBO_FLOW_BUILD_FLOWIE)
+if(BUILD_TESTING)
   set(_flowie_release_evidence_targets
       test_flowie_mqtt_protocol_matrix
       test_flowie_mqtt_protocol_corpus
@@ -363,29 +308,3 @@ install(
   FILE TurboFlowTargets.cmake
   NAMESPACE TurboFlow::
   DESTINATION "lib/cmake/TurboFlow")
-
-if(BUILD_TESTING
-   AND TURBO_FLOW_BUILD_PROFILE_TESTS
-   AND TURBO_FLOW_BUILD_ADAPTERS)
-  foreach(profile IN ITEMS core protocol_only codec_fmq expr_no_jit)
-    add_test(
-      NAME build_profile_${profile}
-      COMMAND
-        ${CMAKE_COMMAND} "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
-        "-DBINARY_DIR=${CMAKE_BINARY_DIR}/profiles/${profile}"
-        "-DPROFILE=${profile}" "-DGENERATOR=${CMAKE_GENERATOR}"
-        "-DBUILD_TYPE=${CMAKE_BUILD_TYPE}"
-        "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
-        "-DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
-        "-DVCPKG_INSTALLED_DIR=${VCPKG_INSTALLED_DIR}"
-        "-DVCPKG_OVERLAY_PORTS=${VCPKG_OVERLAY_PORTS}"
-        "-DVCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
-        "-DTURBO_UTILS_ROOT=${TURBO_UTILS_ROOT}"
-        "-DTURBO_NET_ROOT=${TURBO_NET_ROOT}"
-        "-DTURBO_HTTP_ROOT=${TURBO_HTTP_ROOT}" -P
-        "${CMAKE_SOURCE_DIR}/cmake/VerifyBuildProfile.cmake")
-    set_tests_properties(
-      build_profile_${profile} PROPERTIES LABELS "build-profile" RUN_SERIAL
-                                          TRUE TIMEOUT 180)
-  endforeach()
-endif()

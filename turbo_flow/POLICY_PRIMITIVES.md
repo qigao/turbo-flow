@@ -69,6 +69,24 @@ FIFO 是容器的出队顺序；Round Robin 是从一组候选目标中选择下
   所需的 `key/value/mask/status`。支持 route、drop、batch_key、retry_class、dead_letter、
   mutate_type、mutate_flags、mutate_status；未知字段或不完整 action 在 graph compile 前失败。
 
+### Graph 与 RulesForge 的判定边界
+
+TurboFlow Graph 是流程和状态事实源：它拥有节点顺序、边选择、执行状态、retry/reject 和
+completion。普通 `route ... when ...` 适合对当前上游输出的 TurboFlow message metadata
+做一次 BOOL 判定；predicate 为 false 只过滤该 edge，不构成执行失败。`msg.type`、
+`msg.flags` 和 `msg.status` 可直接读取，但 Graph 不猜测 opaque payload 的 schema，也不会
+因为配置中出现 `when` 而自动调用 RulesForge。
+
+RulesForge 是数据规则求值边界：领域字段先由 DataBind/schema materializer 形成 immutable
+typed facts snapshot，再由显式注册的 `rules.apply` operation 或 data stage 求值。规则输出
+是受 quota 约束的 typed decision sidecar，Graph 只消费其中的 route/drop/mutation 等决策并
+继续流转。facts provider、schema identity、类型或 quota 错误沿 operation boundary 返回
+失败；Observer、日志或 route predicate 不得吞掉这些错误。
+
+因此，一个节点需要查看或修改任意业务数据时，应显式放置 RulesForge 节点；只需根据
+TurboFlow 状态选择后继 edge 时，使用 Graph route。二者共享同一条 message 生命周期，但
+不共享第二份业务状态。
+
 YAML 示例：
 
 ```yaml

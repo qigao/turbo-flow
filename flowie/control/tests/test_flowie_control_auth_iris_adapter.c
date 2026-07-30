@@ -18,6 +18,7 @@ typedef struct auth_executor_fixture_s {
   char *database_path;
   flowie_control_store_t *store;
   flowie_control_auth_service_t *service;
+  flowie_control_service_credential_resolver_t *service_credentials;
   flowie_control_auth_iris_adapter_t *adapter;
   flowie_control_auth_iris_endpoint_t *endpoint;
   flowie_control_generated_credential_t credential;
@@ -60,19 +61,33 @@ static int auth_endpoint_make_adapter(flowie_control_auth_iris_adapter_t **adapt
   flowie_control_auth_iris_adapter_config_t config = FLOWIE_CONTROL_AUTH_IRIS_ADAPTER_CONFIG_INIT;
   /* Transport-failure tests must prove the core pointer is never dereferenced. */
   config.service = (flowie_control_auth_service_t *)(uintptr_t)1u;
-  config.listener_id = "broker-mtls";
   return flowie_control_auth_iris_adapter_create(&config, adapter_out);
 }
 
 static int auth_endpoint_make_endpoint(flowie_control_auth_iris_adapter_t *adapter,
                                        auth_endpoint_secret_fixture_t *fixture,
+                                       flowie_control_service_credential_resolver_t **resolver_out,
                                        flowie_control_auth_iris_endpoint_t **endpoint_out) {
+  flowie_control_service_credential_binding_t binding =
+      FLOWIE_CONTROL_SERVICE_CREDENTIAL_BINDING_INIT;
+  flowie_control_service_credential_config_t credential_config =
+      FLOWIE_CONTROL_SERVICE_CREDENTIAL_CONFIG_INIT;
   flowie_control_auth_iris_endpoint_config_t config = FLOWIE_CONTROL_AUTH_IRIS_ENDPOINT_CONFIG_INIT;
-  config.adapter = adapter;
-  config.service_token_ref = "env://FLOWIE_AUTH_SERVICE_TOKEN";
-  config.key_provider = (turbo_flow_security_key_provider_t){
+  binding.service_id = "broker-main";
+  binding.token_ref = "env://FLOWIE_AUTH_SERVICE_TOKEN";
+  binding.root_group_id = "root-a";
+  binding.peer_certificate_sha256 = AUTH_EXECUTOR_CERT;
+  credential_config.listener_id = "broker-https";
+  credential_config.bindings = &binding;
+  credential_config.binding_count = 1u;
+  credential_config.key_provider = (turbo_flow_security_key_provider_t){
       sizeof(turbo_flow_security_key_provider_t), fixture, auth_endpoint_secret_acquire,
       auth_endpoint_secret_release};
+  if (flowie_control_service_credential_resolver_create(&credential_config, resolver_out) !=
+      TURBO_OK)
+    return TURBO_EINVAL;
+  config.adapter = adapter;
+  config.service_credentials = *resolver_out;
   return flowie_control_auth_iris_endpoint_create(&config, endpoint_out);
 }
 
@@ -113,8 +128,10 @@ static void auth_executor_fixture_open(auth_executor_fixture_t *fixture,
   flowie_control_user_create_command_t user = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
   flowie_control_credential_issue_command_t issue = FLOWIE_CONTROL_CREDENTIAL_ISSUE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  flowie_control_auth_root_binding_t binding = {sizeof(flowie_control_auth_root_binding_t),
-                                                "broker-mtls", AUTH_EXECUTOR_CERT, "root-a"};
+  flowie_control_service_credential_binding_t binding =
+      FLOWIE_CONTROL_SERVICE_CREDENTIAL_BINDING_INIT;
+  flowie_control_service_credential_config_t credential_config =
+      FLOWIE_CONTROL_SERVICE_CREDENTIAL_CONFIG_INIT;
   flowie_control_auth_service_config_t service_config = FLOWIE_CONTROL_AUTH_SERVICE_CONFIG_INIT;
   flowie_control_auth_iris_adapter_config_t adapter_config =
       FLOWIE_CONTROL_AUTH_IRIS_ADAPTER_CONFIG_INIT;
@@ -156,24 +173,30 @@ static void auth_executor_fixture_open(auth_executor_fixture_t *fixture,
       TURBO_OK);
 
   service_config.repository = flowie_control_store_repository(fixture->store);
-  service_config.bindings = &binding;
-  service_config.binding_count = 1u;
   service_config.policy_version.current = auth_executor_policy_version;
   service_config.clock_seconds = auth_executor_clock;
   check_int_eq(flowie_control_auth_service_create(&service_config, &fixture->service), TURBO_OK);
   check_not_null(fixture->service);
 
   adapter_config.service = fixture->service;
-  adapter_config.listener_id = "broker-mtls";
   check_int_eq(flowie_control_auth_iris_adapter_create(&adapter_config, &fixture->adapter),
                TURBO_OK);
   check_not_null(fixture->adapter);
 
-  endpoint_config.adapter = fixture->adapter;
-  endpoint_config.service_token_ref = "env://FLOWIE_AUTH_SERVICE_TOKEN";
-  endpoint_config.key_provider = (turbo_flow_security_key_provider_t){
+  binding.service_id = "broker-main";
+  binding.token_ref = "env://FLOWIE_AUTH_SERVICE_TOKEN";
+  binding.root_group_id = "root-a";
+  credential_config.listener_id = "broker-https";
+  credential_config.bindings = &binding;
+  credential_config.binding_count = 1u;
+  credential_config.key_provider = (turbo_flow_security_key_provider_t){
       sizeof(turbo_flow_security_key_provider_t), secret_fixture, auth_endpoint_secret_acquire,
       auth_endpoint_secret_release};
+  check_int_eq(flowie_control_service_credential_resolver_create(
+                   &credential_config, &fixture->service_credentials),
+               TURBO_OK);
+  endpoint_config.adapter = fixture->adapter;
+  endpoint_config.service_credentials = fixture->service_credentials;
   endpoint_config.local_executor_enabled = 1;
   endpoint_config.local_executor_workers = workers;
   endpoint_config.local_executor_queue_capacity = queue_capacity;
@@ -185,6 +208,7 @@ static void auth_executor_fixture_open(auth_executor_fixture_t *fixture,
 
 static void auth_executor_fixture_close(auth_executor_fixture_t *fixture) {
   flowie_control_auth_iris_endpoint_destroy(fixture->endpoint);
+  flowie_control_service_credential_resolver_destroy(fixture->service_credentials);
   flowie_control_auth_iris_adapter_destroy(fixture->adapter);
   flowie_control_auth_service_destroy(fixture->service);
   flowie_control_generated_credential_wipe(&fixture->credential);
@@ -212,8 +236,11 @@ static void auth_executor_authenticate_task(coro_t *co, void *arg) {
   memset(&task->principal, 0, sizeof(task->principal));
   task->principal.size = sizeof(task->principal);
   task->principal.abi_version = TURBO_FLOW_SECURITY_ABI_V3;
+  flowie_control_verified_caller_t caller = {sizeof(flowie_control_verified_caller_t),
+                                             "broker-https", "broker-main", "root-a",
+                                             AUTH_EXECUTOR_CERT, 1};
   task->result = flowie_control_auth_iris_endpoint_authenticate_verified(
-      task->endpoint, AUTH_EXECUTOR_CERT, task->request, &task->principal);
+      task->endpoint, &caller, task->request, &task->principal);
 }
 
 spec("flowie control auth iris adapter") {
@@ -225,31 +252,23 @@ spec("flowie control auth iris adapter") {
     check_null(adapter);
   }
 
-  it("fails closed before core authentication on a plain HTTP connection") {
-    flowie_control_auth_iris_adapter_config_t config = FLOWIE_CONTROL_AUTH_IRIS_ADAPTER_CONFIG_INIT;
-    flowie_control_auth_iris_adapter_t *adapter = NULL;
-    turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+  it("treats a connection without a client certificate as an empty optional identity") {
     coro_context_t *context = coro_context_create(NULL);
     coro_socket_t *plain;
     Req request;
-    int cache_hit = 1;
+    char fingerprint[CORO_TLS_PEER_CERT_SHA256_CAPACITY];
 
     check_not_null(context);
     plain = coro_socket_create(context, CORO_SOCKET_TCP_V4);
     check_not_null(plain);
     memset(&request, 0, sizeof(request));
     request.client = plain;
-    config.service = (flowie_control_auth_service_t *)(uintptr_t)1u;
-    config.listener_id = "broker-mtls";
-    check_int_eq(flowie_control_auth_iris_adapter_create(&config, &adapter), TURBO_OK);
-    check_int_eq(flowie_control_auth_iris_adapter_authenticate(
-                     adapter, &request, "device-a", "password", (const uint8_t *)"secret",
-                     sizeof("secret") - 1u, "mqtt", "127.0.0.1:1883", &principal, &cache_hit),
-                 TURBO_EPERM);
-    check_false(cache_hit);
-    check_str_eq(principal.principal_id, "");
+    memset(fingerprint, 0xa5, sizeof(fingerprint));
+    check_int_eq(flowie_control_auth_iris_adapter_optional_verified_peer_certificate(
+                     &request, fingerprint),
+                 TURBO_OK);
+    check_str_eq(fingerprint, "");
 
-    flowie_control_auth_iris_adapter_destroy(adapter);
     coro_socket_destroy(plain);
     coro_context_destroy(context);
   }
@@ -375,24 +394,26 @@ spec("flowie control auth iris adapter") {
     auth_endpoint_secret_fixture_t fixture = {token, sizeof(token) - 1u, 0, 0};
     flowie_control_auth_iris_adapter_t *adapter = NULL;
     flowie_control_auth_iris_endpoint_t *endpoint = NULL;
+    flowie_control_service_credential_resolver_t *resolver = NULL;
     Req request;
     int status = 0;
     char *response = NULL;
     size_t response_size = 0u;
 
     check_int_eq(auth_endpoint_make_adapter(&adapter), TURBO_OK);
-    check_int_eq(auth_endpoint_make_endpoint(adapter, &fixture, &endpoint), TURBO_OK);
+    check_int_eq(auth_endpoint_make_endpoint(adapter, &fixture, &resolver, &endpoint), TURBO_OK);
     memcpy(mutable_body, body, sizeof(body));
     auth_endpoint_request_init(&request, mutable_body, sizeof(body) - 1u, headers, 1, NULL);
     check_int_eq(flowie_control_auth_iris_endpoint_process(endpoint, &request, &status, &response,
                                                            &response_size),
                  TURBO_OK);
     check_int_eq(status, FORBIDDEN);
-    check_int_eq(fixture.acquire_count, 0);
-    check_int_eq(fixture.release_count, 0);
+    check_int_eq(fixture.acquire_count, 1);
+    check_int_eq(fixture.release_count, 1);
     check_mem_eq(mutable_body, (char[sizeof(body)]){0}, sizeof(body));
     turbo_json_serialize_free(response);
     flowie_control_auth_iris_endpoint_destroy(endpoint);
+    flowie_control_service_credential_resolver_destroy(resolver);
     flowie_control_auth_iris_adapter_destroy(adapter);
   }
 
@@ -409,6 +430,7 @@ spec("flowie control auth iris adapter") {
     auth_endpoint_secret_fixture_t fixture = {token, sizeof(token) - 1u, 0, 0};
     flowie_control_auth_iris_adapter_t *adapter = NULL;
     flowie_control_auth_iris_endpoint_t *endpoint = NULL;
+    flowie_control_service_credential_resolver_t *resolver = NULL;
     coro_context_t *context = coro_context_create(NULL);
     coro_socket_t *plain = NULL;
     Req request;
@@ -418,7 +440,7 @@ spec("flowie control auth iris adapter") {
 
     check_not_null(context);
     check_int_eq(auth_endpoint_make_adapter(&adapter), TURBO_OK);
-    check_int_eq(auth_endpoint_make_endpoint(adapter, &fixture, &endpoint), TURBO_OK);
+    check_int_eq(auth_endpoint_make_endpoint(adapter, &fixture, &resolver, &endpoint), TURBO_OK);
     plain = coro_socket_create(context, CORO_SOCKET_TCP_V4);
     check_not_null(plain);
     memcpy(mutable_body, body, sizeof(body));
@@ -427,13 +449,14 @@ spec("flowie control auth iris adapter") {
                                                            &response_size),
                  TURBO_OK);
     check_int_eq(status, FORBIDDEN);
-    check_int_eq(fixture.acquire_count, 1);
-    check_int_eq(fixture.release_count, 1);
+    check_int_eq(fixture.acquire_count, 2);
+    check_int_eq(fixture.release_count, 2);
     check_not_null(response);
     check_mem_eq(mutable_body, (char[sizeof(body)]){0}, sizeof(body));
     check_mem_eq(authorization, (char[sizeof(authorization)]){0}, sizeof(authorization));
     turbo_json_serialize_free(response);
     flowie_control_auth_iris_endpoint_destroy(endpoint);
+    flowie_control_service_credential_resolver_destroy(resolver);
     flowie_control_auth_iris_adapter_destroy(adapter);
     coro_socket_destroy(plain);
     coro_context_destroy(context);
@@ -515,16 +538,18 @@ spec("flowie control auth iris adapter") {
     auth_endpoint_secret_fixture_t fixture = {token, sizeof(token) - 1u, 0, 0};
     flowie_control_auth_iris_adapter_t *adapter = NULL;
     flowie_control_auth_iris_endpoint_t *endpoint = NULL;
+    flowie_control_service_credential_resolver_t *resolver = NULL;
     iris_app_t *app = iris_app_create();
 
     check_not_null(app);
     check_int_eq(auth_endpoint_make_adapter(&adapter), TURBO_OK);
-    check_int_eq(auth_endpoint_make_endpoint(adapter, &fixture, &endpoint), TURBO_OK);
+    check_int_eq(auth_endpoint_make_endpoint(adapter, &fixture, &resolver, &endpoint), TURBO_OK);
     check_int_eq(flowie_control_auth_iris_endpoint_register(endpoint, app), TURBO_OK);
     check_ptr_eq(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_AUTH_HTTP_PATH), endpoint);
     check_int_eq(flowie_control_auth_iris_endpoint_register(endpoint, app), TURBO_EINVAL);
     flowie_control_auth_iris_endpoint_destroy(endpoint);
     check_null(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_AUTH_HTTP_PATH));
+    flowie_control_service_credential_resolver_destroy(resolver);
     flowie_control_auth_iris_adapter_destroy(adapter);
     iris_app_destroy(app);
   }

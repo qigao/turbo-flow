@@ -2,14 +2,16 @@
 
 ## 目标与发布边界
 
-目标是交付独立的 `flowie-control` 管理面，统一管理本地用户映射、角色、层级组、ACL 草稿、原子发布和
-审计。Flowie Broker 仍是数据面，只通过 mTLS HTTPS 调用认证接口并读取版本化 ACL bundle；第三方
+目标是交付与 MQTT 数据面职责隔离、由 `flowie_server` 统一管理生命周期的 Control runtime，统一管理
+本地用户映射、角色、层级组、ACL 草稿、原子发布和
+审计。Flowie Broker 仍是数据面，只通过 HTTPS 调用认证接口并读取版本化 ACL bundle；默认调用身份是
+绑定到唯一 `(service_id, root_group)` 的作用域 bearer，mTLS 仅可作为显式启用的第二因子。第三方
 credential 只由第三方 HTTPS 服务验证，本地 credential 只由 `flowie-control` Repository 验证。Broker
 不直连任何身份/ACL 数据库，`flowie-control` 也不直连第三方身份数据库或目录，
 Dashboard 和 JSON-RPC 也不得绕过领域命令直接写本地授权库。
 
 在本清单的“生产开放门槛”全部通过前，独立进程可以构建、安装并用于 loopback/隔离管理网的受控验证，
-但不得暴露到公网或被发布文档声明为生产可用产品。未完成的 bootstrap、限流、HA/migration 等能力不得用
+但不得暴露到公网或被发布文档声明为生产可用产品。未完成的限流、HA/migration 等能力不得用
 fallback、默认账号或手工改库绕过。
 
 ## 状态模型决定
@@ -68,8 +70,10 @@ fallback、默认账号或手工改库绕过。
 - [x] 内部 `generate_credential`/`rotate_credential` 只使用 TurboUtils CSPRNG，明文只返回一次；幂等重放不恢复明文，临时 secret、salt、verifier 和 KDF work area 在释放前清零。
 - [x] 实现 `/v3/authenticate` 严格 HTTPS 契约，返回 principal、root group、roles、effective groups、expiry 和 policy version。内部 Iris endpoint 已限制为 `POST`、精确 v3 字段、规范 Base64、Bearer service token、无缓存响应和明确错误映射；v3 请求新增受信 `remote_address` 与 MQTT client `peer_certificate_sha256`，endpoint 仍由独立控制面进程显式注册，默认不监听。
 - [x] 认证结果缓存使用有界容量、短 TTL 和 revision 失效；缓存键不得包含可恢复的明文 secret。positive credential cache 使用 keyed digest、TTL/LRU 和 credential/user revision 复核；principal snapshot cache 使用 root/principal keyed digest、TTL/LRU，并同时校验 user revision、credential revision、全局 store revision 与 policy version。缓存只保存不可变派生 snapshot，不保存 secret；数据库/revision 读取失败时 fail closed。
-- [x] Argon2id/KDF 前执行有界双层 token bucket：按 verified mTLS caller 限制总量，并按 `(caller, root_group, principal)` 限制连续失败；成功只清除 identity failure bucket，不能重置 caller 总量。状态只保存 keyed digest，满容量按 LRU 淘汰，时间回拨/资源错误 fail closed；HTTP endpoint 将 `TURBO_EBUSY` 映射为 429。
-- [x] `/v3/authenticate` 的 Broker 调用方身份必须从受信服务身份解析唯一 Root Group；内部服务核心按 `(listener_id, peer certificate SHA-256)` 精确绑定并覆盖跨 Root Group 同名主体测试。CoroNet/Iris 已提供强制 mTLS 和 verified peer identity，Flowie 薄 adapter 只从 `Req` 的已验证传输身份构造 caller；它与 v3 body 中由 Broker 转发的 MQTT client certificate 是两个独立身份，禁止用 header/body 代替前者。
+- [x] Argon2id/KDF 前执行有界双层 token bucket：按 verified service caller 限制总量，并按 `(caller, root_group, principal)` 限制连续失败；成功只清除 identity failure bucket，不能重置 caller 总量。状态只保存 keyed digest，满容量按 LRU 淘汰，时间回拨/资源错误 fail closed；HTTP endpoint 将 `TURBO_EBUSY` 映射为 429。
+- [x] `/v3/authenticate` 与 `/v3/acl` 的 Broker caller 由作用域 bearer token 唯一解析为
+  `(service_id, root_group)`；token 每次从 secret provider 获取并支持轮换，重复实际 token fail closed。
+  `peer_certificate_sha256` 仅是 binding 可选第二因子，不再是默认 caller 身份，也不能代替 bearer。
 - [x] 已连接 session 采用 principal TTL 有界传播：到期时完全空闲连接也会主动 fail closed，MQTT 5
   发送 `DISCONNECT 0x87` 后关闭，MQTT 3.x 直接关闭；Enhanced AUTH 必须在到期前完成，成功提交的新
   principal 会替换旧 deadline。当前没有控制面即时 push 撤销，最坏传播时间由当前 principal TTL 决定。
@@ -96,14 +100,21 @@ fallback、默认账号或手工改库绕过。
   验证第三方服务器实际收到逐请求重新加载的新 bearer token。
 - [x] HTTPS adapter 已提供无敏感字段的原子统计快照，区分成功、拒绝、本地舱壁、远端 429/5xx、传输、
   协议和本地依赖故障；真实 mTLS 与 token-provider 测试覆盖分类。
-- [x] 现有 mTLS management JSON-RPC 已增加 `flowie.auth.external_https.stats`，仅 `security_admin` 可读取
+- [x] management JSON-RPC 已增加 `flowie.auth.external_https.stats`，仅持有有效登录会话且当前仍有
+  `security_admin` 角色的调用方可读取
   跨 Root Group 聚合统计；未启用 provider 时显式返回 disabled，未知参数 fail closed。
 - [ ] 配置外部 collector，定义窗口化 SLO/告警阈值与故障 runbook；不新增匿名 metrics listener。
 - [ ] 完成证书文件替换后的受控重启/回滚演练、端到端压力和部署运维 gate。
   OIDC、LDAP/AD、RADIUS 与外部数据库访问统一由第三方 HTTPS 服务内部承担，不再增加进程内原生
   adapter，也不增加 FlowStore/database 认证 backend。
 
-当前验证：内部 SQLite store 已覆盖正确/错误/不存在主体凭据、禁用、轮换、撤销、幂等重放、revision 二次校验和 secret wipe；positive credential cache 已覆盖命中、TTL 过期、LRU 容量、revision 失效和并发读取；principal cache 已覆盖命中、TTL 过期、LRU 容量、revision 失效和并发读取，auth service 已覆盖组变更导致的 snapshot 失效；rate limiter 已覆盖 caller/identity 双桶、成功 reset、refill、容量和安全配置，以及 auth service 在 KDF 前返回 `TURBO_EBUSY`。内部 auth service 已覆盖受信 listener/certificate Root Group 绑定、跨 Root Group 同名主体隔离、事务化 principal snapshot、policy failure 和 credential revoke。第三方 seam 已覆盖 descriptor/capability、断言时效/账户/重复组校验、transport context、subject mapping、无本地 credential 的授权快照、外部组不自动授权、external expiry 收紧 TTL、上游失败无 fallback 和本地 user disable；通用 HTTPS adapter 已覆盖精确 JSON、非规范/溢出数值、动态 token、非 coroutine 拒绝、真实 mTLS 成功/401/429/5xx/畸形 JSON/超时/响应前断连/服务端证书不受信/缺少客户端证书、token 轮换请求捕获、实例并发舱壁、结果统计分类、配置 schema、subject mapper 和启动 TLS/secret 预检。受保护统计 RPC 已覆盖角色和参数边界，真实管理 HTTPS listener 已验证受信 mTLS `security_admin` 可读取 disabled 状态，且无证书和未知证书继续 fail closed。CoroNet 已覆盖真实 mTLS 握手和双方 verified fingerprint；Iris/Flowie adapter 已覆盖非法配置及普通 HTTP 请求 fail-closed；Iris endpoint 已覆盖严格字段、root_group 注入拒绝、非规范 Base64、Bearer token、body/header wipe、principal JSON 和 bind/unbind。Broker 已覆盖 principal 到期时 MQTT 5/3.x 空闲连接主动断开，以及到期前 Enhanced AUTH 替换旧 deadline。外部统计 collector/告警 runbook、证书替换后的受控重启/回滚演练、管理面 connection limit、真实网络压力 gate 及数据库/网络故障注入仍待完成，因此 Phase 2 尚未整体验收。
+当前验证：SQLite store、credential/principal cache、双层 rate limiter、本地/第三方 Auth、严格 JSON、
+secret wipe、principal TTL 与 Broker 失效传播均有 focused tests。Broker-facing endpoint 已覆盖作用域
+service token、Root Group 隔离、动态轮换、重复 token 冲突、错误 token、无客户端证书的单向 TLS，
+以及可选证书第二因子。真实 HTTPS 集成还覆盖管理员密码登录、Secure session cookie、未登录 RPC 拒绝，
+并证明客户端证书本身不能取得管理权限。第三方 bridge 自身的可选 mTLS、故障注入和舱壁测试继续保留。
+外部统计 collector/告警 runbook、证书替换后的受控重启/回滚演练、基于真实 peer 的登录限流、
+connection limit、真实网络压力 gate 及数据库/网络故障注入仍待完成，因此 Phase 2 尚未整体验收。
 
 验收：第三方 HTTPS 的正确/错误凭据、禁用、轮换、缓存命中/失效、防爆破、secret wipe，以及第三方
 网络和本地授权 Repository 失败的 fail-closed 测试通过。
@@ -121,8 +132,9 @@ fallback、默认账号或手工改库绕过。
 - [x] `policy.publish(expected_revision)` 在 `BEGIN IMMEDIATE` 事务内重新验证、连续编号冻结完整 v3 bundle、
   推进独立 `policy_version`/store revision 并追加审计。`request_id` 重放包含 `expires_at` command identity，
   同 ID 不同过期时间按冲突拒绝。
-- [x] Repository 已提供当前/精确版本的完整 bundle 只读快照，`flowie-control` 通过受 mTLS、
-  service token 与证书 Root Group 绑定保护的 `GET /v3/acl` 分发；Broker HTTPS provider 加载后统一
+- [x] Repository 已提供当前/精确版本的完整 bundle 只读快照，`flowie-control` 通过作用域
+  service token 保护的 `GET /v3/acl` 分发；Root Group 只来自命中的 binding，可选证书指纹只作第二因子。
+  Broker HTTPS provider 加载后统一
   编译为不可变索引，不逐条更新 Broker 快照。
 - [x] bundled Broker 已移除 SQLite ACL factory 和链接依赖；单机部署也通过 loopback HTTPS 访问
   `flowie-control`。
@@ -136,19 +148,34 @@ fallback、默认账号或手工改库绕过。
   context 与 management service 必须长于 request handling，关闭顺序仍是先停 app 再 destroy server/context。
 - [x] introspection、batch 和全部 notification 已禁用；request body 上限为 64 KiB，方法参数采用精确字段白名单，
   分页最多 100 项。
-- [ ] 独立 HTTPS/mTLS listener 和 header/body 配额已落地；仍需完成 connection/rate limit 与真实网络压力 gate，
+- [x] 独立 HTTPS listener 和 header/body 配额已落地；管理面默认登录会话，Broker 面默认作用域 service
+  token，高安全服务部署可显式增加 mTLS 第二因子。`flowie_server --control-config` 已统一组合 Control/MQTT
+  生命周期并覆盖双 listener 关闭与 MQTT 启动失败回滚。仍需完成 connection/rate limit 与真实网络压力 gate，
   不能用 endpoint 单元测试替代。
-- [x] 实现 `flowie.system.status`，user get/list/create/disable，credential generate/rotate/revoke，role list/create/disable/assign/remove/effective，
+- [x] 实现 `flowie.system.status`、`flowie.root_group.list`，user get/list/create/disable，credential generate/rotate/revoke，role list/create/disable/assign/remove/effective，
   group list/create/disable/member add/remove/effective，policy status/rule list/put/delete/validate/publish 和 audit list，
-  以及仅限 `security_admin` 的 `flowie.auth.external_https.stats`，共 28 个方法。credential
+  以及仅限管理员的 `flowie.auth.external_https.stats`、`flowie.root.create` 与
+  `flowie.password.set`、`flowie.password.change`，共 32 个方法。credential
   generate/rotate 仅在成功响应中返回一次 Base64 secret；幂等重放不恢复明文并返回
   `-32010`，Dashboard 不渲染 credential。生产网络仍必须等待 management connection/rate limit、压力和
   运维发布 gate。
 - [x] Iris authenticated 状态只作为第一层检查；`viewer`、`user_admin`、`policy_admin`、`security_admin`
-  权限在共享 management service 再次检查，root group 与 actor 由 resolver 注入，body 不能覆盖。
+  权限在共享 management service 再次检查，登录身份的 Root Group 与 actor 由 resolver 注入且不能覆盖。
+  read/list/write 方法可携带可选目标 `root_group_id`：省略时使用登录 Root；只有登录在 `system` Root 且
+  拥有 `system_admin` 的 caller 才能跨 Root，服务端会重新校验目标 Root 存在并以相同边界授权读写。
+  普通 Root 管理员伪造其他 `root_group_id` 返回 forbidden。
 - [x] RPC handler 只使用结构化 JSON parser 做协议映射并调用共享 command/query service，不执行 SQL；审计时间由
   server clock 注入，客户端不能伪造。
-- [ ] 首位管理员通过本机 bootstrap 或一次性凭据创建；禁止默认账号和默认密码。
+- [x] 首位系统管理员通过 YAML username（默认 `admin`）与 `env://` DotEnv 密码执行一次性 bootstrap。
+  实现复用 Repository command/audit，按固定 revision 创建内部 `system` Root Group、user、credential、
+  `system_admin`、`password_change_required`
+  Role 与 assignment；创建有界登录 session store 后才打开 listener。相同输入可在中断后幂等重放，
+  无关非空 Repository fail closed。完成后初始密码不再验证或覆盖当前 credential；成功改密会撤销
+  受限 session。运维必须删除 YAML block 和 DotEnv 密码；禁止通用默认密码与手工改库。
+- [x] 一次性 `provision-root.ps1` operator 工具只通过登录 session + management RPC 创建业务 Root
+  Group、首位 human user、local password、`security_admin` Role 与 assignment。密码只从进程环境读取；
+  固定 request ID 支持中断后 replay，每步重新读取 revision，结束时以业务管理员重新登录验证。Broker
+  与业务系统不持有 `system_admin` 凭据。
 
 验收：JSON-RPC 2.0 id/error 语义、权限矩阵、通知拒绝、重复命令、请求上限、context 生命周期和并发写测试通过。
 
@@ -160,14 +187,32 @@ fallback、默认账号或手工改库绕过。
 - [x] Dashboard HTTP handler 与 JSON-RPC 共用 command/query service，不解析或回调 JSON-RPC。
 - [x] 页面读取 users、roles、groups、policy draft、audit 和 status，并提供 user/group/role 创建与禁用、group
   membership 增删、role assignment 增删、rule put/delete 与 policy publish 表单；全部写入仍经过共享领域命令。
-- [x] users/groups/roles/policy/audit 使用各自独立的 keyset cursor；HTMX 分页仅替换 Dashboard 内容片段，
-  每个列表翻页时保留其他列表 cursor，支持 More/First 前向导航。
+- [x] Group membership 只从 Users 的 Access 操作维护；add/remove 使用按 `parent_group_id` 与 `depth`
+  深度优先投影的 Group 层级选择器，Root 节点不可选。创建 Group 时也从同一树选择 enabled 且未达到
+  最大深度的 parent；Groups 表格不再提供重复的 Members 操作。
+- [x] users/groups/roles/policy/audit 分别位于独立 Dashboard 页面，并使用各自独立的 keyset cursor；HTMX
+  查询与分页只替换当前页表格，写操作成功后刷新当前页，支持 Next page/First page 前向导航。
+- [x] `system/system_admin` Dashboard 提供 Root Group 作用域选择器；候选项通过
+  `flowie.root_group.list` 的同一 Repository 事实源取得，首屏最多提示 100 个，同时允许手工输入更多
+  已存在 Root。选定的 `root_group_id` 会传播到导航、分页、查询和 HTMX CRUD；普通 Root 管理员不显示
+  选择器，伪造跨 Root 请求仍由共享 management service 拒绝。
 - [x] Dashboard shell、片段、写操作与本地资源都强制 Iris authenticated 状态；片段和写操作额外要求精确的
   `HX-Request: true`。64 字节 CSRF token 常量时间比较、精确表单字段、严格 CSP、no-store、nosniff、
   cross-origin/referrer/permissions policy 和 Mustache 默认 HTML 转义均已启用；HTMX eval、响应脚本执行与
   history cache 已禁用。
-- [ ] 当前 Dashboard 使用 verified mTLS fingerprint 映射 caller，并以进程随机 key 派生 CSRF，不签发弱本地
-  session；若增加 Cookie/OIDC 会话，仍必须完成 Secure/HttpOnly/SameSite、rotation 与登录限流。
+- [x] Dashboard 与面向用户的管理 RPC 使用有界服务端登录 session；浏览器 cookie 为
+  `Secure; HttpOnly; SameSite=Strict`，API 可使用同一不透明 token 作为 bearer。每个请求重新检查当前
+  user enabled 与保留角色，客户端证书不能替代登录；登录/登出要求精确同源 `Origin`/`Host`。
+- [x] Dashboard 本地密码验证已移入专用有界 executor；队列满映射 429，deadline 映射 503，超时后完成
+  的登录会撤销刚签发的 session，不会留下孤儿 credential。认证服务的双层 token bucket 在 KDF 前执行。
+- [x] Dashboard executor focused regression 已覆盖 owner lane 队列饱和、deadline 返回及迟到成功 session
+  撤销；销毁会 drain 已接收任务，测试不依赖真实 Argon2id 时序。
+- [x] 独立进程真实 HTTPS 管理流程已覆盖 session fixation 防护、Cookie 登录 RPC、HTMX 内容读取、CSRF
+  拒绝与领域写入、logout 清理、重新登录 token 轮换，以及保留角色撤销后的下一请求即时失效。
+- [x] 每个 `(root_group, principal)` 默认最多保留 5 个管理 session；第 6 次成功登录撤销该主体最早
+  签发的 session，不影响其他主体，全局有界容量仍以 LRU 作为最终上限。
+- [ ] 增加基于真实直接 peer address 的登录 caller bucket 及浏览器引擎 DOM/HTMX 回归；
+  当前安装版 Iris 未公开 request peer address，所有 Dashboard 登录仍共享固定 caller scope。
 - [x] 客户端交互只使用 vendored HTMX 2.0.9，不引入 jQuery 或自定义客户端状态事实源。
 
 验收：CSRF、XSS、未授权/越权、会话固定、CSP、分页上限和浏览器端关键流程测试通过。
@@ -193,7 +238,7 @@ fallback、默认账号或手工改库绕过。
   Root Group、user、credential、group/membership、role/assignment 与 policy draft/publish 写命令已实现
   `SERIALIZABLE`、request-id replay、revision CAS、ACL subject 引用检查、secret 一次返回与 audit
   原子事务，并对 effective group/role ABI 容量越界执行整笔回滚；policy publish 会在事务中重新验证
-  完整 draft、连续编号替换 bundle 并独立推进 `policy_version`。完整 Repository v2 operation table 和
+  完整 draft、连续编号替换 bundle 并独立推进 `policy_version`。完整 Repository v3 operation table 和
   内部 provider lifecycle factory 已绑定并通过 live contract；公开 `control_store` 配置、
   `env://` password、verify-full conninfo gate 和 runtime composition factory 已完成。全量
   SQLite/PostgreSQL 已复用 basic transactional contract，覆盖 revision conflict、User、Group、
@@ -218,7 +263,8 @@ fallback、默认账号或手工改库绕过。
   网络断连故障注入与生产门槛。
 - [x] 本地 Auth 的 Argon2id、SQLite 与同步 PostgreSQL 调用已进入专用有界 TurboUtils executor；
   `auth.local_executor` 定义 `workers`、`queue_capacity` 和 `deadline_ms`，默认 `4/128/10000`，硬上限
-  `64/4096/60000`。Iris `Req`/`Res`/socket 不跨线程；owner lane 只提交 mTLS 指纹和有所有权的解码
+  `64/4096/60000`。Iris `Req`/`Res`/socket 不跨线程；owner lane 只提交作用域 service caller、可选证书
+  第二因子和有所有权的解码
   副本。队列满立即映射 429，deadline 映射 503。同步 KDF/SQL 不做不安全的强制取消：请求放弃迟到
   结果，任务继续拥有并擦除 secret；endpoint shutdown 停止接单并 drain。显式 local executor 与
   `external_https` 配置互斥，第三方 HTTPS Auth 保持 CoroNet coroutine I/O。Windows ASan 与 Linux
@@ -231,7 +277,7 @@ fallback、默认账号或手工改库绕过。
   受限 subject mapper、启动预检与真实 mTLS contract test。
 - [x] 第三方 HTTPS bridge 已完成逐请求 token 轮换、真实 TLS/HTTP 故障注入、实例舱壁与无敏感数据
   统计快照；不再增加 OIDC/JWT、LDAP/AD 或 RADIUS 进程内原生 adapter。
-- [x] 第三方 HTTPS bridge 的实例统计已接入受 mTLS 和 `security_admin` 保护的 management JSON-RPC。
+- [x] 第三方 HTTPS bridge 的实例统计已接入受登录 session 和 `security_admin` 保护的 management JSON-RPC。
 - [ ] 第三方 HTTPS bridge 仍需完成证书受控重启/回滚、collector/告警 runbook、压力与生产运维 gate。
 
 2026-07-27 的 Linux 精确源码 gate 使用 revision
@@ -249,15 +295,47 @@ fallback、默认账号或手工改库绕过。
 ASan 全量 endpoint 均通过。该问题不改变本阶段 Auth 身份上下文契约的验收证据，但属于独立的
 产品稳定性缺口，必须在生产开放前完成根因修复和独立压力回归，不能通过增加重试掩盖。
 
-验收：mTLS 身份绑定、证书轮换/撤销、源地址欺骗拒绝、enhanced auth 取消/超时以及 HTTPS contract
-tests 通过；配置与网络证据证明不存在第二认证来源。
+2026-07-27 的历史 eu 部署 smoke gate 只保留一个 `postgres:17-alpine` 容器 `flowie-pg`；
+`flowie-control` 与 `flowie_server` 均作为 host tmux 进程运行。PostgreSQL TLS
+`verify-full` bootstrap live 用例 1/1、13 个断言通过并清理临时 schema。正式 `flowie_control`
+schema 从空库经一次性 YAML + DotEnv bootstrap 建立首位 `security_admin`，随后按当时实现只通过 mTLS
+JSON-RPC 创建 `device-1`、Group、Role、credential 和两条 ACL，发布为 policy version 1；
+移除 bootstrap block/密码并切回 `schema_mode: validate` 后重启，状态为 store revision 15、
+2 条 draft/2 条 published rule。
+
+该 gate 同时发现并修复 bundled composition root 未向 SecurityRealm 注入既有 MQTT matcher 的
+问题：修复后 Linux `flowie_server` 构建、HTTPS secure config check 与 `test_flowie` 通过；
+真实 MQTT 5/TLS 验证得到允许路径 `CONNACK 0`、`PUBACK 0`、`SUBACK` 和 retained 消息，
+错误密码得到 `CONNACK 134`，越权 topic 得到 `PUBACK 135`。Broker 到 control 的 URL 固定为
+`127.0.0.1`，避免 control 只绑定 IPv4 时 `localhost` 首选 `::1`；MQTT server certificate
+补齐并验证 `DNS:localhost,DNS:eu,IP:127.0.0.1` SAN。该 smoke gate 不替代自动化双进程回归、
+压力/故障注入、备份/PITR/HA、systemd/容器编排与生产发布门槛。该历史 gate 不再定义当前管理身份
+契约；当前契约是登录 session，Broker 调用身份是作用域 service token。
+
+2026-07-28 的 eu 安全边界部署使用代码归档 SHA-256
+`6a1d7e4f15260f8cd41c4c50abac69e9f951666b0b672edf83e64cb694743ded`，隔离 run 为
+`/root/dev/runs/20260727T232005Z-security-session`。GCC Release focused 8/8 通过后，保留原 PostgreSQL
+数据并原子切换 controller/Broker 配置：公网登录页在无客户端证书时返回 200 且公共证书验证为 0，
+作用域 bearer 在无客户端证书时取得 ACL 200，错误 Auth 返回 403；未登录 RPC 返回
+JSON-RPC `-32001`，旧客户端证书单独调用 RPC/ACL 仍分别返回 `-32001`/403。MQTT 错误凭据被拒绝，
+`flowie-pg` 与 `flowie-nginx` 是仅存的两个 Docker 容器且均为 healthy。
+
+同日组合部署 gate 改由一个 systemd `flowie_server` 同时拥有 Control/MQTT runtime，仓库
+`flowie/deploy/nginx/` 拥有公网 TLS/Certbot。公网验证得到 Dashboard 登录页 200、MQTT TLS 1.3
+证书链通过、允许 topic 的 `PUBACK 0`/`SUBACK 1`，越权 publish 断开且越权 subscribe 返回
+`SUBACK 128`。空闲 CPU gate 发现 expiry coroutine 把 `UINT64_MAX` 当 timer delay 后持续创建线程；
+改为上限一小时的可中断有限 wait 后，eu 进程运行 91 秒仅累计 147 ms CPU，3 秒 `clone3` 采样为零。
+
+验收：作用域 service token 的 Root Group 绑定与轮换、可选 mTLS 第二因子、源地址欺骗拒绝、
+enhanced auth 取消/超时以及 HTTPS contract tests 通过；配置与网络证据证明不存在第二认证来源。
 
 ## 生产开放门槛
 
 - [x] 内部 controller startup-options 使用 TurboUtils CMD/DotEnv 选择独立配置文件；优先级固定为
   `CLI > process environment > explicitly selected DotEnv`，不隐式加载当前目录 `.env`，不接受明文 secret。
 - [x] 独立 `flowie-control` 进程和 version 1 独立配置已接入；默认绑定 `127.0.0.1:8443`，不与 MQTT listener 共用地址。
-- [x] 管理入口只调用显式 host 的 HTTPS listener，并固定要求 mTLS；证书/私钥/client CA 校验失败时不监听且无 HTTP fallback。
+- [x] 管理入口只调用显式 host 的 HTTPS listener，默认不请求客户端证书并要求登录 session；高安全
+  service-only 部署可在 Dashboard 关闭时显式要求 mTLS。服务端证书/私钥校验失败时不监听且无 HTTP fallback。
 - [x] controller schema 的 service token 与私钥密码只接受 `env://...` reference；用户 credential、ACL rule body 与 secret literal 不进入 YAML、RPC 或 Dashboard。
 - [x] 配置 parser 与 runtime 双重要求 Auth 公共字段完整；`external_https` 缺失选择本地 Auth，
   出现则选择第三方 Auth，禁止同时执行或失败 fallback。

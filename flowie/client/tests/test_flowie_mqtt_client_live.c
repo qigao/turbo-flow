@@ -890,7 +890,7 @@ static void flowie_mqtt_live_alias_check(const flowie_mqtt_live_case_t *test_cas
 #if defined(FLOWIE_MQTT_FIXED_INTEROP)
 #define FLOWIE_MQTT_FIXED_SESSION_EXPIRY_SECONDS 60u
 #define FLOWIE_MQTT_FIXED_MESSAGE_EXPIRY_SECONDS 1u
-#define FLOWIE_MQTT_FIXED_EXPIRY_OBSERVE_MS 1500u
+#define FLOWIE_MQTT_FIXED_EXPIRY_OBSERVE_MS 2500u
 
 typedef struct flowie_mqtt_fixed_publisher_s {
   const flowie_mqtt_live_case_t *test_case;

@@ -23,11 +23,13 @@ typedef struct flowie_worker_runtime_config_s {
   size_t auth_provider_factory_count;
   const turbo_flow_security_policy_provider_factory_t *const *policy_provider_factories;
   size_t policy_provider_factory_count;
+  /** Reject endpoints that do not compose both authentication and an ACL security realm. */
+  int require_security;
 } flowie_worker_runtime_config_t;
 
 #define FLOWIE_WORKER_RUNTIME_CONFIG_INIT                                                          \
   {sizeof(flowie_worker_runtime_config_t), "flowie", NULL, NULL, NULL, NULL, 0u, NULL, 0u, NULL,   \
-   0u}
+   0u, 0}
 
 typedef enum flowie_worker_error_detail_e {
   FLOWIE_WORKER_ERROR_NONE = 0,

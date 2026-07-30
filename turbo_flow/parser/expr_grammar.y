@@ -12,7 +12,7 @@
 
 %token IDENT INTEGER FLOAT STRING TRUE FALSE NULL_VALUE.
 %token OR AND NOT EQ NE LT LE GT GE PLUS MINUS MUL DIV MOD DOT.
-%token LPAREN RPAREN.
+%token HAS_FLAG LPAREN RPAREN COMMA.
 
 %type expression {uint32_t}
 %type or_expression {uint32_t}
@@ -97,6 +97,9 @@ unary_expression(A) ::= MINUS(O) unary_expression(E). {
 primary_expression(A) ::= literal(E). { A = E; }
 primary_expression(A) ::= field_reference(E). { A = E; }
 primary_expression(A) ::= LPAREN expression(E) RPAREN. { A = E; }
+primary_expression(A) ::= HAS_FLAG(O) LPAREN expression(V) COMMA expression(M) RPAREN. {
+  A = flow_expr_push_binary(ctx, FLOW_EXPR_HAS_FLAG, V, M, O);
+}
 
 field_reference(A) ::= IDENT(I). { A = flow_expr_push_field(ctx, I); }
 field_reference(A) ::= field_reference(F) DOT IDENT(I). {

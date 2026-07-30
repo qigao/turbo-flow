@@ -27,8 +27,9 @@ static void flowie_supervisor_signal(int signal_number) {
 
 static void flowie_supervisor_usage(const char *program) {
   (void)fprintf(stderr,
-                "Usage: %s [--check] [--profile NAME] [--worker PATH] "
-                "[--capture-output BYTES] <config.yml> <graph.flow>\n",
+                "Usage: %s [--check] [--require-security] [--profile NAME] [--worker PATH] "
+                "[--control-config PATH] [--capture-output BYTES] "
+                "<config.yml> <graph.flow>\n",
                 program ? program : "flowie_supervisor");
 }
 
@@ -103,12 +104,20 @@ int main(int argc, char **argv) {
   for (int index = 1; index < argc; ++index) {
     if (strcmp(argv[index], "--check") == 0) {
       config.check_only = 1;
+    } else if (strcmp(argv[index], "--require-security") == 0) {
+      config.require_security = 1;
     } else if (strcmp(argv[index], "--profile") == 0) {
       if (++index >= argc || !argv[index][0]) {
         flowie_supervisor_usage(argv[0]);
         goto done;
       }
       config.profile = argv[index];
+    } else if (strcmp(argv[index], "--control-config") == 0) {
+      if (++index >= argc || !argv[index][0] || config.control_config_path) {
+        flowie_supervisor_usage(argv[0]);
+        goto done;
+      }
+      config.control_config_path = argv[index];
     } else if (strcmp(argv[index], "--worker") == 0) {
       if (++index >= argc || !argv[index][0]) {
         flowie_supervisor_usage(argv[0]);

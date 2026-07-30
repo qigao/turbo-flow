@@ -17,9 +17,17 @@ void flowie_control_dashboard_view_destroy(flowie_control_dashboard_view_t *view
 int flowie_control_dashboard_view_render_shell(
     flowie_control_dashboard_view_t *view, const flowie_control_dashboard_page_t *page,
     char **html_out, size_t *html_size_out);
+int flowie_control_dashboard_view_render_login(flowie_control_dashboard_view_t *view,
+                                               int group_mode, int show_error, char **html_out,
+                                               size_t *html_size_out);
+int flowie_control_dashboard_view_render_password(
+    flowie_control_dashboard_view_t *view,
+    const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u], char **html_out,
+    size_t *html_size_out);
 int flowie_control_dashboard_view_render_content(
     flowie_control_dashboard_view_t *view, flowie_control_management_service_t *service,
-    const flowie_control_management_caller_t *caller,
+    const flowie_control_management_caller_t *authority_caller,
+    const flowie_control_management_caller_t *scoped_caller,
     const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u],
     const flowie_control_dashboard_page_t *page, char **html_out, size_t *html_size_out);
 int flowie_control_dashboard_view_render_error(flowie_control_dashboard_view_t *view,

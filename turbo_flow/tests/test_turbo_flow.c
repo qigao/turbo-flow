@@ -57,6 +57,31 @@ typedef struct publish_trace_s {
   size_t count;
 } publish_trace_t;
 
+typedef struct observer_probe_s {
+  size_t event_counts[TURBO_FLOW_OBSERVE_EVENT_COUNT];
+  size_t selected_routes;
+  int fail_kind;
+  int destroy_count;
+} observer_probe_t;
+
+static int observer_probe_on_event(void *ctx, const turbo_flow_observe_event_t *event) {
+  observer_probe_t *probe = (observer_probe_t *)ctx;
+  check_not_null(event);
+  check_size_eq(event->size, sizeof(*event));
+  if (event->kind >= 0 && event->kind < TURBO_FLOW_OBSERVE_EVENT_COUNT) {
+    probe->event_counts[event->kind] += 1u;
+  }
+  if (event->kind == TURBO_FLOW_OBSERVE_ROUTE_EVALUATED && event->selected == 1) {
+    probe->selected_routes += 1u;
+  }
+  return event->kind == probe->fail_kind ? TURBO_EIO : TURBO_OK;
+}
+
+static void observer_probe_destroy(void *ctx) {
+  observer_probe_t *probe = (observer_probe_t *)ctx;
+  probe->destroy_count += 1;
+}
+
 typedef struct publish_stage_ctx_s {
   publish_trace_t *trace;
   int id;
@@ -4721,8 +4746,8 @@ suite("Turbo Flow") {
                                "stage rejected\n"
                                "stage main {\n"
                                "  input -> validate\n"
-                               "  route validate -> accepted when msg.flags == 7\n"
-                               "  route validate -> rejected when msg.flags != 7\n"
+                               "  route validate -> accepted when msg.flags == 7 # accepted\n"
+                               "  route validate -> rejected when msg.flags != 7 %% rejected\n"
                                "}\n";
       uint32_t validated_flags = 7;
       turbo_flow_msg_t msg;
@@ -4754,6 +4779,24 @@ suite("Turbo Flow") {
       check_int_eq(trace.order[0], 1);
 
       turbo_flow_msg_cleanup(&msg);
+      turbo_flow_destroy(flow);
+    }
+
+    it("accepts route keywords in dotted adapter bindings") {
+      static const char *src =
+          "stage sink adapter flowmq.route operation rules.when resource channel.reject\n";
+      turbo_flow_t *flow = turbo_flow_create();
+      const turbo_flow_stage_plan_t *stage;
+
+      check_not_null(flow);
+      check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_size_eq(turbo_flow_stage_count(flow), 1u);
+      stage = turbo_flow_stage_at(flow, 0u);
+      check_not_null(stage);
+      check_str_eq(stage->adapter_name, "flowmq.route");
+      check_str_eq(stage->operation_name, "rules.when");
+      check_str_eq(stage->resource_name, "channel.reject");
+
       turbo_flow_destroy(flow);
     }
 
@@ -5369,6 +5412,64 @@ suite("Turbo Flow") {
       check_int_eq(turbo_thread_join(&thread), TURBO_OK);
       check_int_eq(atomic_load_explicit(&wait.result, memory_order_acquire), TURBO_ESHUTDOWN);
       check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+      turbo_flow_destroy(flow);
+    }
+  }
+
+  group("structured observers") {
+    it("observes source stage route sink and completion without controlling the flow") {
+      static const char *src = "source input\n"
+                               "stage validate\n"
+                               "stage accepted\n"
+                               "stage rejected\n"
+                               "stage main {\n"
+                               "  input -> validate\n"
+                               "  route validate -> accepted when msg.flags == 1\n"
+                               "  reject failed validate -> rejected\n"
+                               "}\n";
+      observer_probe_t probe;
+      turbo_flow_event_observer_ops_t ops = TURBO_FLOW_EVENT_OBSERVER_OPS_INIT;
+      turbo_flow_msg_t msg;
+      turbo_flow_t *flow = turbo_flow_create();
+
+      memset(&probe, 0, sizeof(probe));
+      probe.fail_kind = TURBO_FLOW_OBSERVE_ROUTE_EVALUATED;
+      ops.on_event = observer_probe_on_event;
+      ops.destroy = observer_probe_destroy;
+
+      check_not_null(flow);
+      check_int_eq(turbo_flow_register_observer(flow, "probe", &ops, &probe), TURBO_OK);
+      check_int_eq(turbo_flow_register_observer(flow, "probe", &ops, &probe), TURBO_EALREADY);
+      check_size_eq(turbo_flow_observer_count(flow), 1u);
+      check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_int_eq(turbo_flow_register_stage_ex(flow, "validate", noop_stage, NULL, NULL),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_register_stage_ex(flow, "accepted", noop_stage, NULL, NULL),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_register_stage_ex(flow, "rejected", noop_stage, NULL, NULL),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+      check_int_eq(turbo_flow_start(flow), TURBO_OK);
+      check_int_eq(turbo_flow_unregister_observer(flow, "probe"), TURBO_EBUSY);
+
+      turbo_flow_msg_init(&msg);
+      msg.flags = 1u;
+      check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_size_eq(probe.event_counts[TURBO_FLOW_OBSERVE_SOURCE_RECEIVED], 1u);
+      check_size_eq(probe.event_counts[TURBO_FLOW_OBSERVE_FLOW_COMPLETE], 1u);
+      check_size_eq(probe.event_counts[TURBO_FLOW_OBSERVE_STAGE_BEGIN], 2u);
+      check_size_eq(probe.event_counts[TURBO_FLOW_OBSERVE_STAGE_END], 2u);
+      check_size_eq(probe.event_counts[TURBO_FLOW_OBSERVE_ROUTE_EVALUATED], 3u);
+      check_size_eq(probe.event_counts[TURBO_FLOW_OBSERVE_SINK_COMPLETE], 1u);
+      check_size_eq(probe.selected_routes, 2u);
+      check_true(turbo_flow_observer_failure_count(flow) >= 1u);
+
+      check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+      check_int_eq(turbo_flow_unregister_observer(flow, "probe"), TURBO_OK);
+      check_int_eq(probe.destroy_count, 1);
+      check_size_eq(turbo_flow_observer_count(flow), 0u);
+
+      turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
     }
   }

@@ -314,7 +314,12 @@ static int flow_expr_resolve_builtin(flow_expr_node_t *node) {
                 {"msg.type", FLOW_EXPR_TYPE_I64, FLOW_EXPR_FIELD_MSG_TYPE},
                 {"msg.flags", FLOW_EXPR_TYPE_I64, FLOW_EXPR_FIELD_MSG_FLAGS},
                 {"msg.status", FLOW_EXPR_TYPE_I64, FLOW_EXPR_FIELD_MSG_STATUS},
-                {"msg.payload", FLOW_EXPR_TYPE_STRING, FLOW_EXPR_FIELD_MSG_PAYLOAD}};
+                {"msg.payload", FLOW_EXPR_TYPE_STRING, FLOW_EXPR_FIELD_MSG_PAYLOAD},
+                {"msg.rule_status", FLOW_EXPR_TYPE_I64, FLOW_EXPR_FIELD_MSG_RULE_STATUS},
+                {"msg.rule_matched", FLOW_EXPR_TYPE_BOOL, FLOW_EXPR_FIELD_MSG_RULE_MATCHED},
+                {"msg.rule_match_count", FLOW_EXPR_TYPE_I64,
+                 FLOW_EXPR_FIELD_MSG_RULE_MATCH_COUNT},
+                {"msg.rule_error", FLOW_EXPR_TYPE_I64, FLOW_EXPR_FIELD_MSG_RULE_ERROR}};
   size_t i;
   for (i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
     if (strcmp(node->text, fields[i].name) == 0) {
@@ -459,6 +464,14 @@ static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_re
              right->value_type == FLOW_EXPR_TYPE_STRING)))
         return flow_expr_type_error(error, node, TURBO_EINVAL,
                                     "ordering operands have incompatible types");
+      node->value_type = FLOW_EXPR_TYPE_BOOL;
+      break;
+    case FLOW_EXPR_HAS_FLAG:
+      if (!left || !right || left->value_type != FLOW_EXPR_TYPE_I64 ||
+          right->value_type != FLOW_EXPR_TYPE_I64 || right->kind != FLOW_EXPR_I64 ||
+          right->i64 <= 0)
+        return flow_expr_type_error(error, node, TURBO_EINVAL,
+                                    "has_flag requires an integer value and a positive literal mask");
       node->value_type = FLOW_EXPR_TYPE_BOOL;
       break;
     case FLOW_EXPR_AND:
@@ -765,6 +778,23 @@ int turbo_flow_expr_read_field(const turbo_flow_expr_eval_context_t *context,
   case TURBO_FLOW_EXPR_FIELD_MSG_PAYLOAD:
     out->type = TURBO_FLOW_EXPR_TYPE_STRING;
     out->as.string = msg->payload;
+    break;
+  case TURBO_FLOW_EXPR_FIELD_MSG_RULE_STATUS:
+    out->type = TURBO_FLOW_EXPR_TYPE_I64;
+    out->as.i64 = (int64_t)msg->data_decision.evaluation_status;
+    break;
+  case TURBO_FLOW_EXPR_FIELD_MSG_RULE_MATCHED:
+    out->type = TURBO_FLOW_EXPR_TYPE_BOOL;
+    out->as.boolean =
+        msg->data_decision.evaluation_status == TURBO_FLOW_DATA_MATCHED;
+    break;
+  case TURBO_FLOW_EXPR_FIELD_MSG_RULE_MATCH_COUNT:
+    out->type = TURBO_FLOW_EXPR_TYPE_I64;
+    out->as.i64 = (int64_t)msg->data_decision.match_count;
+    break;
+  case TURBO_FLOW_EXPR_FIELD_MSG_RULE_ERROR:
+    out->type = TURBO_FLOW_EXPR_TYPE_I64;
+    out->as.i64 = (int64_t)msg->data_decision.evaluation_error;
     break;
   default:
     return TURBO_ENOENT;

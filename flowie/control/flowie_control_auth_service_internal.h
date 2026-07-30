@@ -17,17 +17,6 @@ extern "C" {
 typedef struct flowie_control_auth_service_s flowie_control_auth_service_t;
 typedef uint64_t (*flowie_control_auth_clock_fn)(void *ctx);
 
-typedef struct flowie_control_auth_root_binding_s {
-  size_t size;
-  const char *listener_id;
-  /** Canonical lowercase `sha256:` followed by exactly 64 hexadecimal digits. */
-  const char *peer_certificate_sha256;
-  const char *root_group_id;
-} flowie_control_auth_root_binding_t;
-
-#define FLOWIE_CONTROL_AUTH_ROOT_BINDING_INIT                                                      \
-  {sizeof(flowie_control_auth_root_binding_t), NULL, NULL, NULL}
-
 typedef int (*flowie_control_auth_policy_version_fn)(void *ctx, const char *root_group_id,
                                                      uint64_t *policy_version_out);
 
@@ -43,8 +32,6 @@ typedef struct flowie_control_auth_policy_version_provider_s {
 typedef struct flowie_control_auth_service_config_s {
   size_t size;
   const flowie_control_repository_t *repository;
-  const flowie_control_auth_root_binding_t *bindings;
-  size_t binding_count;
   const char *method;
   uint64_t principal_ttl_seconds;
   flowie_control_auth_cache_config_t credential_cache;
@@ -62,8 +49,6 @@ typedef struct flowie_control_auth_service_config_s {
 #define FLOWIE_CONTROL_AUTH_SERVICE_CONFIG_INIT                                                    \
   {sizeof(flowie_control_auth_service_config_t),                                                   \
    NULL,                                                                                           \
-   NULL,                                                                                           \
-   0u,                                                                                             \
    "password",                                                                                     \
    FLOWIE_CONTROL_AUTH_DEFAULT_PRINCIPAL_TTL_SECONDS,                                              \
    FLOWIE_CONTROL_AUTH_CACHE_CONFIG_INIT,                                                          \
@@ -76,20 +61,22 @@ typedef struct flowie_control_auth_service_config_s {
    NULL}
 
 /**
- * Transport-owned, request-local caller identity.
+ * Request-local Broker service identity produced by the service-credential resolver.
  *
- * Only the TLS listener adapter may construct this value, after certificate-chain verification.
- * HTTP headers and request JSON are never valid sources for any field below.
+ * The bearer token selects service_id and root_group_id. peer_certificate_sha256 is present only
+ * when that credential also requires a verified client certificate.
  */
 typedef struct flowie_control_verified_caller_s {
   size_t size;
   const char *listener_id;
+  const char *service_id;
+  const char *root_group_id;
   const char *peer_certificate_sha256;
-  int certificate_verified;
+  int authenticated;
 } flowie_control_verified_caller_t;
 
 #define FLOWIE_CONTROL_VERIFIED_CALLER_INIT                                                        \
-  {sizeof(flowie_control_verified_caller_t), NULL, NULL, 0}
+  {sizeof(flowie_control_verified_caller_t), NULL, NULL, NULL, NULL, 0}
 
 typedef struct flowie_control_authenticate_request_s {
   size_t size;
@@ -118,7 +105,7 @@ int flowie_control_auth_service_create(const flowie_control_auth_service_config_
 void flowie_control_auth_service_destroy(flowie_control_auth_service_t *service);
 
 /**
- * Authenticate one request inside the Root Group selected only by verified transport identity.
+ * Authenticate one request inside the Root Group selected by a verified service credential.
  * Unknown callers and credential failures return TURBO_EPERM without cross-Root probing.
  */
 int flowie_control_auth_service_authenticate(flowie_control_auth_service_t *service,
@@ -127,7 +114,20 @@ int flowie_control_auth_service_authenticate(flowie_control_auth_service_t *serv
                                              int *credential_cache_hit_out);
 
 /**
- * Resolve a verified transport caller to its configured Root Group without authenticating a
+ * Authenticate a human login inside an explicitly presented Root Group.
+ *
+ * The Root Group is untrusted input and never grants authority by itself: the credential or
+ * external assertion must resolve to an enabled local principal in that Root Group. caller_scope
+ * is used only for bounded rate limiting. When require_policy is zero, login does not depend on a
+ * published MQTT ACL generation.
+ */
+int flowie_control_auth_service_authenticate_root(
+    flowie_control_auth_service_t *service, const char *root_group_id, const char *caller_scope,
+    const flowie_control_authenticate_request_t *request, int require_policy,
+    turbo_flow_security_principal_t *principal_out, int *credential_cache_hit_out);
+
+/**
+ * Resolve a verified service caller to its scoped Root Group without authenticating a user
  * credential. Used by read-only broker-facing services such as ACL bundle distribution.
  */
 int flowie_control_auth_service_resolve_root_group(

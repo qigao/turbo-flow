@@ -1,13 +1,32 @@
 <div class="dashboard__inner">
+  <nav class="dashboard-nav" aria-label="Control sections">
+    <div class="dashboard-nav__group">
+      <p class="dashboard-nav__label">Workspace</p>
+      <a href="{{overview_path}}"{{#is_overview}} aria-current="page"{{/is_overview}}>Overview</a>
+    </div>
+    <div class="dashboard-nav__group">
+      <p class="dashboard-nav__label">Records</p>
+      <a href="{{users_path}}"{{#is_users}} aria-current="page"{{/is_users}}>Users</a>
+      <a href="{{groups_path}}"{{#is_groups}} aria-current="page"{{/is_groups}}>Groups</a>
+      <a href="{{roles_path}}"{{#is_roles}} aria-current="page"{{/is_roles}}>Roles</a>
+      <a href="{{acls_path}}"{{#is_acls}} aria-current="page"{{/is_acls}}>ACL rules</a>
+      {{#can_audit_read}}<a href="{{audit_path}}"{{#is_audit}} aria-current="page"{{/is_audit}}>Audit</a>{{/can_audit_read}}
+    </div>
+  </nav>
+
+  <div class="dashboard__content">
+  {{#can_select_root}}<form class="root-scope" hx-get="/v1/management/dashboard/content" hx-target="#dashboard" hx-swap="innerHTML">
+    <label for="root-group-scope">Root Group</label>
+    <input id="root-group-scope" name="root_group_id" list="root-groups" value="{{root_group_id}}" required maxlength="255" aria-label="Root Group">
+    <datalist id="root-groups">{{#root_groups}}<option value="{{root_group_id}}"></option>{{/root_groups}}</datalist>
+    <button type="submit" class="button--quiet">Switch</button>
+  </form>{{/can_select_root}}
   <div id="dashboard-feedback" class="feedback" aria-live="polite"></div>
 
-  <section class="summary" aria-labelledby="summary-title">
+  {{#show_overview}}<section id="overview" class="summary" aria-labelledby="summary-title">
     <div class="section-heading">
-      <div>
-        <p class="eyebrow">Current state</p>
-        <h2 id="summary-title">Policy overview</h2>
-      </div>
-      <span class="scope">Root: {{root_group_id}}</span>
+      <div><p class="eyebrow">Current state</p><h2 id="summary-title">Policy overview</h2></div>
+      <span class="scope">Root: {{root_group_id}} · User: {{actor}}</span>
     </div>
     <dl class="metrics">
       <div><dt>Store revision</dt><dd>{{store_revision}}</dd></div>
@@ -15,240 +34,106 @@
       <div><dt>Draft rules</dt><dd>{{draft_rule_count}}</dd></div>
       <div><dt>Published rules</dt><dd>{{published_rule_count}}</dd></div>
     </dl>
-  </section>
+  </section>{{/show_overview}}
 
-  {{#can_user_admin}}
-  <section class="operations" aria-labelledby="identity-operations-title">
+  {{#show_users}}<section id="users" class="dataset" aria-labelledby="users-title">
     <div class="section-heading">
-      <div>
-        <p class="eyebrow">Commands</p>
-        <h2 id="identity-operations-title">Identity and groups</h2>
+      <div><p class="eyebrow">Directory</p><h2 id="users-title">Users</h2></div>
+      <div class="dataset-toolbar" role="group" aria-label="Users tools">
+        <button type="button" class="button--quiet" popovertarget="users-query">Query</button>
+        {{#can_user_admin}}<button type="button" popovertarget="users-add">Add</button>{{/can_user_admin}}
       </div>
     </div>
-    <div class="operation-grid">
-      <div class="command">
-        <h3>Create user</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="user.create">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
+    <div id="users-query" class="control-popover" popover>
+      <div class="popover-heading"><div><p class="eyebrow">Users</p><h3>Query from cursor</h3></div><button type="button" class="button--close" popovertarget="users-query" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div>
+      <div class="query-panel">
+        <label>Start after user ID<input name="users_after" required maxlength="255"></label>
+        <button type="button" hx-get="{{users_pager.query_url}}" hx-include="closest .query-panel" hx-select="#users" hx-target="#users" hx-swap="outerHTML" hx-disabled-elt="this">Query users</button>
+      </div>
+    </div>
+    {{#can_user_admin}}
+    <div id="users-add" class="control-popover" popover>
+      <div class="popover-heading"><div><p class="eyebrow">Users</p><h3>Add user</h3></div><button type="button" class="button--close" popovertarget="users-add" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div>
+      <div class="command command--compact">
+        <input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="user.create"><input type="hidden" name="expected_revision" value="{{store_revision}}">
         <label>User ID<input name="principal_id" required maxlength="255"></label>
         <label>Type<input name="principal_type" required maxlength="63"></label>
         <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Create user</button>
-      </div>
-      <div class="command">
-        <h3>Create group</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="group.create">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>Group ID<input name="group_id" required maxlength="255"></label>
-        <label>Parent group<input name="parent_group_id" required maxlength="255"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Create group</button>
-      </div>
-      <div class="command">
-        <h3>Disable user</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="user.disable">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>User ID<input name="principal_id" required maxlength="255"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button class="button--danger" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Disable this user?">Disable user</button>
-      </div>
-      <div class="command">
-        <h3>Disable group</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="group.disable">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>Group ID<input name="group_id" required maxlength="255"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button class="button--danger" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Disable this group?">Disable group</button>
-      </div>
-      <div class="command">
-        <h3>Add membership</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="group.member.add">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>User ID<input name="principal_id" required maxlength="255"></label>
-        <label>Group ID<input name="group_id" required maxlength="255"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Add membership</button>
-      </div>
-      <div class="command">
-        <h3>Remove membership</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="group.member.remove">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>User ID<input name="principal_id" required maxlength="255"></label>
-        <label>Group ID<input name="group_id" required maxlength="255"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button class="button--secondary" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Remove membership</button>
+        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Add user</button>
       </div>
     </div>
-  </section>
-  {{/can_user_admin}}
-
-  {{#can_security_admin}}
-  <section class="operations" aria-labelledby="role-operations-title">
-    <div class="section-heading">
-      <div>
-        <p class="eyebrow">Commands</p>
-        <h2 id="role-operations-title">Roles</h2>
-      </div>
-    </div>
-    <div class="operation-grid">
-      <div class="command">
-        <h3>Create role</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="role.create">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>Role ID<input name="role_id" required maxlength="63"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Create role</button>
-      </div>
-      <div class="command">
-        <h3>Disable role</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="role.disable">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>Role ID<input name="role_id" required maxlength="63"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button class="button--danger" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Disable this role?">Disable role</button>
-      </div>
-      <div class="command">
-        <h3>Assign role</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="role.assign">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>User ID<input name="principal_id" required maxlength="255"></label>
-        <label>Role ID<input name="role_id" required maxlength="63"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Assign role</button>
-      </div>
-      <div class="command">
-        <h3>Remove role</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="role.remove">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>User ID<input name="principal_id" required maxlength="255"></label>
-        <label>Role ID<input name="role_id" required maxlength="63"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button class="button--secondary" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Remove role</button>
-      </div>
-    </div>
-  </section>
-  {{/can_security_admin}}
-
-  {{#can_policy_admin}}
-  <section class="operations" aria-labelledby="policy-operations-title">
-    <div class="section-heading">
-      <div>
-        <p class="eyebrow">Commands</p>
-        <h2 id="policy-operations-title">ACL policy</h2>
-      </div>
-    </div>
-    <div class="operation-grid">
-      <div class="command">
-        <h3>Put rule</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="policy.rule.put">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>Ordinal<input name="ordinal" required inputmode="numeric"></label>
-        <label class="field--wide">Canonical rule<input name="rule_line" required maxlength="2047"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Save rule</button>
-      </div>
-      <div class="command">
-        <h3>Delete rule</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="policy.rule.delete">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>Ordinal<input name="ordinal" required inputmode="numeric"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button class="button--danger" type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Delete this ACL rule?">Delete rule</button>
-      </div>
-      <div class="command">
-        <h3>Publish policy</h3>
-        <input type="hidden" name="csrf" value="{{csrf}}">
-        <input type="hidden" name="operation" value="policy.publish">
-        <input type="hidden" name="expected_revision" value="{{store_revision}}">
-        <label>Expires at<input name="expires_at" inputmode="numeric"></label>
-        <label>Request ID<input name="request_id" required maxlength="255"></label>
-        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Publish the current ACL draft?">Publish policy</button>
-      </div>
-    </div>
-  </section>
-  {{/can_policy_admin}}
-
-  <section class="dataset" aria-labelledby="users-title">
-    <div class="section-heading">
-      <div><p class="eyebrow">Directory</p><h2 id="users-title">Users</h2></div>
-      <div class="pager">
-        {{#users_pager.first}}<button type="button" class="button--quiet" hx-get="{{users_pager.first_url}}" hx-target="#dashboard" hx-swap="innerHTML">First</button>{{/users_pager.first}}
-        {{#users_pager.more}}<button type="button" class="button--quiet" hx-get="{{users_pager.more_url}}" hx-target="#dashboard" hx-swap="innerHTML">More</button>{{/users_pager.more}}
-      </div>
-    </div>
-    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Revision</th></tr></thead><tbody>
-      {{#users}}<tr><td>{{principal_id}}</td><td>{{principal_type}}</td><td>{{#enabled}}Enabled{{/enabled}}{{^enabled}}Disabled{{/enabled}}</td><td>{{revision}}</td></tr>{{/users}}
-      {{^users}}<tr><td colspan="4" class="empty">No users</td></tr>{{/users}}
+    {{/can_user_admin}}
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Revision</th><th class="actions-column">Actions</th></tr></thead><tbody>
+      {{#users}}<tr><td>{{principal_id}}</td><td>{{principal_type}}</td><td>{{#enabled}}Enabled{{/enabled}}{{^enabled}}Disabled{{/enabled}}</td><td>{{revision}}</td><td class="table-actions">
+        {{#can_user_admin}}<button type="button" class="button--quiet" popovertarget="user-access-{{row_index}}">Access</button>{{#enabled}}<button type="button" class="button--quiet button--danger-text" popovertarget="user-delete-{{row_index}}">Delete</button>{{/enabled}}{{^enabled}}<button type="button" class="button--quiet" disabled>Delete</button>{{/enabled}}{{/can_user_admin}}
+        {{^can_user_admin}}<span class="muted">View only</span>{{/can_user_admin}}
+        {{#can_user_admin}}
+        <div id="user-access-{{row_index}}" class="control-popover control-popover--wide" popover>
+          <div class="popover-heading"><div><p class="eyebrow">{{principal_id}}</p><h3>Manage user access</h3></div><button type="button" class="button--close" popovertarget="user-access-{{row_index}}" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div>
+          <div class="command-grid">
+            <div class="command command--compact"><h4>Add membership</h4><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="group.member.add"><input type="hidden" name="expected_revision" value="{{store_revision}}"><input type="hidden" name="principal_id" value="{{principal_id}}"><label>Group<select name="group_id" required><option value="" selected disabled>Select group</option>{{#group_options}}<option value="{{group_id}}"{{#add_disabled}} disabled{{/add_disabled}}>{{tree_label}}</option>{{/group_options}}</select></label><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Add</button></div>
+            <div class="command command--compact"><h4>Remove membership</h4><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="group.member.remove"><input type="hidden" name="expected_revision" value="{{store_revision}}"><input type="hidden" name="principal_id" value="{{principal_id}}"><label>Group<select name="group_id" required><option value="" selected disabled>Select group</option>{{#group_options}}<option value="{{group_id}}"{{#remove_disabled}} disabled{{/remove_disabled}}>{{tree_label}}</option>{{/group_options}}</select></label><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" class="button--secondary" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Remove</button></div>
+            {{#can_security_admin}}<div class="command command--compact"><h4>Assign role</h4><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="role.assign"><input type="hidden" name="expected_revision" value="{{store_revision}}"><input type="hidden" name="principal_id" value="{{principal_id}}"><label>Role ID<input name="role_id" required maxlength="63"></label><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Assign</button></div>
+            <div class="command command--compact"><h4>Remove role</h4><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="role.remove"><input type="hidden" name="expected_revision" value="{{store_revision}}"><input type="hidden" name="principal_id" value="{{principal_id}}"><label>Role ID<input name="role_id" required maxlength="63"></label><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" class="button--secondary" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Remove</button></div>{{/can_security_admin}}
+          </div>
+        </div>
+        {{#enabled}}<div id="user-delete-{{row_index}}" class="control-popover control-popover--danger" popover><div class="popover-heading"><div><p class="eyebrow">{{principal_id}}</p><h3>Delete user</h3></div><button type="button" class="button--close" popovertarget="user-delete-{{row_index}}" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><p class="muted">The user is disabled; audit history is retained.</p><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="user.disable"><input type="hidden" name="expected_revision" value="{{store_revision}}"><input type="hidden" name="principal_id" value="{{principal_id}}"><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" class="button--danger" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Disable this user?">Delete user</button></div></div>{{/enabled}}
+        {{/can_user_admin}}
+      </td></tr>{{/users}}
+      {{^users}}<tr><td colspan="5" class="empty">No users</td></tr>{{/users}}
     </tbody></table></div>
-  </section>
+    <div class="dataset-footer"><div class="pager" role="group" aria-label="Users pagination"><span class="pager__status">{{users_pager.count}} shown</span>{{#users_pager.first}}<button type="button" class="button--quiet" hx-get="{{users_pager.first_url}}" hx-select="#users" hx-target="#users" hx-swap="outerHTML">First page</button>{{/users_pager.first}}{{^users_pager.first}}<button type="button" class="button--quiet" disabled>First page</button>{{/users_pager.first}}{{#users_pager.more}}<button type="button" class="button--quiet" hx-get="{{users_pager.more_url}}" hx-select="#users" hx-target="#users" hx-swap="outerHTML">Next page</button>{{/users_pager.more}}{{^users_pager.more}}<button type="button" class="button--quiet" disabled>Next page</button>{{/users_pager.more}}</div></div>
+  </section>{{/show_users}}
 
-  <section class="dataset" aria-labelledby="groups-title">
-    <div class="section-heading">
-      <div><p class="eyebrow">Hierarchy</p><h2 id="groups-title">Groups</h2></div>
-      <div class="pager">
-        {{#groups_pager.first}}<button type="button" class="button--quiet" hx-get="{{groups_pager.first_url}}" hx-target="#dashboard" hx-swap="innerHTML">First</button>{{/groups_pager.first}}
-        {{#groups_pager.more}}<button type="button" class="button--quiet" hx-get="{{groups_pager.more_url}}" hx-target="#dashboard" hx-swap="innerHTML">More</button>{{/groups_pager.more}}
-      </div>
-    </div>
-    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Parent</th><th>Depth</th><th>Status</th></tr></thead><tbody>
-      {{#groups}}<tr><td>{{group_id}}</td><td>{{parent_group_id}}</td><td>{{depth}}</td><td>{{#enabled}}Enabled{{/enabled}}{{^enabled}}Disabled{{/enabled}}</td></tr>{{/groups}}
-      {{^groups}}<tr><td colspan="4" class="empty">No groups</td></tr>{{/groups}}
+  {{#show_groups}}<section id="groups" class="dataset" aria-labelledby="groups-title">
+    <div class="section-heading"><div><p class="eyebrow">Hierarchy</p><h2 id="groups-title">Groups</h2></div><div class="dataset-toolbar" role="group" aria-label="Groups tools"><button type="button" class="button--quiet" popovertarget="groups-query">Query</button>{{#can_user_admin}}<button type="button" popovertarget="groups-add">Add</button>{{/can_user_admin}}</div></div>
+    <div id="groups-query" class="control-popover" popover><div class="popover-heading"><div><p class="eyebrow">Groups</p><h3>Query from cursor</h3></div><button type="button" class="button--close" popovertarget="groups-query" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><div class="query-panel"><label>Start after group ID<input name="groups_after" required maxlength="255"></label><button type="button" hx-get="{{groups_pager.query_url}}" hx-include="closest .query-panel" hx-select="#groups" hx-target="#groups" hx-swap="outerHTML" hx-disabled-elt="this">Query groups</button></div></div>
+    {{#can_user_admin}}<div id="groups-add" class="control-popover" popover><div class="popover-heading"><div><p class="eyebrow">Groups</p><h3>Add group</h3></div><button type="button" class="button--close" popovertarget="groups-add" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="group.create"><input type="hidden" name="expected_revision" value="{{store_revision}}"><label>Group ID<input name="group_id" required maxlength="255"></label><label>Parent group<select name="parent_group_id" required><option value="" selected disabled>Select parent group</option>{{#group_options}}<option value="{{group_id}}"{{#parent_disabled}} disabled{{/parent_disabled}}>{{tree_label}}</option>{{/group_options}}</select></label><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Add group</button></div></div>{{/can_user_admin}}
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Parent</th><th>Depth</th><th>Status</th><th class="actions-column">Actions</th></tr></thead><tbody>
+      {{#groups}}<tr><td>{{group_id}}</td><td>{{parent_group_id}}</td><td>{{depth}}</td><td>{{#enabled}}Enabled{{/enabled}}{{^enabled}}Disabled{{/enabled}}</td><td class="table-actions">{{#can_user_admin}}{{#enabled}}{{^is_root}}<button type="button" class="button--quiet button--danger-text" popovertarget="group-delete-{{row_index}}">Delete</button>{{/is_root}}{{#is_root}}<button type="button" class="button--quiet" disabled>Delete</button>{{/is_root}}{{/enabled}}{{^enabled}}<button type="button" class="button--quiet" disabled>Delete</button>{{/enabled}}{{/can_user_admin}}{{^can_user_admin}}<span class="muted">View only</span>{{/can_user_admin}}
+        {{#can_user_admin}}{{#enabled}}{{^is_root}}<div id="group-delete-{{row_index}}" class="control-popover control-popover--danger" popover><div class="popover-heading"><div><p class="eyebrow">{{group_id}}</p><h3>Delete group</h3></div><button type="button" class="button--close" popovertarget="group-delete-{{row_index}}" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><p class="muted">The group is disabled; audit history is retained.</p><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="group.disable"><input type="hidden" name="expected_revision" value="{{store_revision}}"><input type="hidden" name="group_id" value="{{group_id}}"><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" class="button--danger" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Disable this group?">Delete group</button></div></div>{{/is_root}}{{/enabled}}{{/can_user_admin}}
+      </td></tr>{{/groups}}
+      {{^groups}}<tr><td colspan="5" class="empty">No groups</td></tr>{{/groups}}
     </tbody></table></div>
-  </section>
+    <div class="dataset-footer"><div class="pager" role="group" aria-label="Groups pagination"><span class="pager__status">{{groups_pager.count}} shown</span>{{#groups_pager.first}}<button type="button" class="button--quiet" hx-get="{{groups_pager.first_url}}" hx-select="#groups" hx-target="#groups" hx-swap="outerHTML">First page</button>{{/groups_pager.first}}{{^groups_pager.first}}<button type="button" class="button--quiet" disabled>First page</button>{{/groups_pager.first}}{{#groups_pager.more}}<button type="button" class="button--quiet" hx-get="{{groups_pager.more_url}}" hx-select="#groups" hx-target="#groups" hx-swap="outerHTML">Next page</button>{{/groups_pager.more}}{{^groups_pager.more}}<button type="button" class="button--quiet" disabled>Next page</button>{{/groups_pager.more}}</div></div>
+  </section>{{/show_groups}}
 
-  <section class="dataset" aria-labelledby="roles-title">
-    <div class="section-heading">
-      <div><p class="eyebrow">Authorization</p><h2 id="roles-title">Roles</h2></div>
-      <div class="pager">
-        {{#roles_pager.first}}<button type="button" class="button--quiet" hx-get="{{roles_pager.first_url}}" hx-target="#dashboard" hx-swap="innerHTML">First</button>{{/roles_pager.first}}
-        {{#roles_pager.more}}<button type="button" class="button--quiet" hx-get="{{roles_pager.more_url}}" hx-target="#dashboard" hx-swap="innerHTML">More</button>{{/roles_pager.more}}
-      </div>
-    </div>
-    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Status</th><th>Revision</th></tr></thead><tbody>
-      {{#roles}}<tr><td>{{role_id}}</td><td>{{#enabled}}Enabled{{/enabled}}{{^enabled}}Disabled{{/enabled}}</td><td>{{revision}}</td></tr>{{/roles}}
-      {{^roles}}<tr><td colspan="3" class="empty">No roles</td></tr>{{/roles}}
+  {{#show_roles}}<section id="roles" class="dataset" aria-labelledby="roles-title">
+    <div class="section-heading"><div><p class="eyebrow">Authorization</p><h2 id="roles-title">Roles</h2></div><div class="dataset-toolbar" role="group" aria-label="Roles tools"><button type="button" class="button--quiet" popovertarget="roles-query">Query</button>{{#can_security_admin}}<button type="button" popovertarget="roles-add">Add</button>{{/can_security_admin}}</div></div>
+    <div id="roles-query" class="control-popover" popover><div class="popover-heading"><div><p class="eyebrow">Roles</p><h3>Query from cursor</h3></div><button type="button" class="button--close" popovertarget="roles-query" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><div class="query-panel"><label>Start after role ID<input name="roles_after" required maxlength="63"></label><button type="button" hx-get="{{roles_pager.query_url}}" hx-include="closest .query-panel" hx-select="#roles" hx-target="#roles" hx-swap="outerHTML" hx-disabled-elt="this">Query roles</button></div></div>
+    {{#can_security_admin}}<div id="roles-add" class="control-popover" popover><div class="popover-heading"><div><p class="eyebrow">Roles</p><h3>Add role</h3></div><button type="button" class="button--close" popovertarget="roles-add" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="role.create"><input type="hidden" name="expected_revision" value="{{store_revision}}"><label>Role ID<input name="role_id" required maxlength="63"></label><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Add role</button></div></div>{{/can_security_admin}}
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Status</th><th>Revision</th><th class="actions-column">Actions</th></tr></thead><tbody>
+      {{#roles}}<tr><td>{{role_id}}</td><td>{{#enabled}}Enabled{{/enabled}}{{^enabled}}Disabled{{/enabled}}</td><td>{{revision}}</td><td class="table-actions">{{#can_security_admin}}<button type="button" class="button--quiet" popovertarget="role-assignments-{{row_index}}">Assignments</button>{{#enabled}}<button type="button" class="button--quiet button--danger-text" popovertarget="role-delete-{{row_index}}">Delete</button>{{/enabled}}{{^enabled}}<button type="button" class="button--quiet" disabled>Delete</button>{{/enabled}}{{/can_security_admin}}{{^can_security_admin}}<span class="muted">View only</span>{{/can_security_admin}}
+        {{#can_security_admin}}<div id="role-assignments-{{row_index}}" class="control-popover control-popover--wide" popover><div class="popover-heading"><div><p class="eyebrow">{{role_id}}</p><h3>Manage role assignments</h3></div><button type="button" class="button--close" popovertarget="role-assignments-{{row_index}}" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><div class="command-grid"><div class="command command--compact"><h4>Assign user</h4><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="role.assign"><input type="hidden" name="expected_revision" value="{{store_revision}}"><input type="hidden" name="role_id" value="{{role_id}}"><label>User ID<input name="principal_id" required maxlength="255"></label><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Assign</button></div><div class="command command--compact"><h4>Remove user</h4><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="role.remove"><input type="hidden" name="expected_revision" value="{{store_revision}}"><input type="hidden" name="role_id" value="{{role_id}}"><label>User ID<input name="principal_id" required maxlength="255"></label><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" class="button--secondary" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Remove</button></div></div></div>
+        {{#enabled}}<div id="role-delete-{{row_index}}" class="control-popover control-popover--danger" popover><div class="popover-heading"><div><p class="eyebrow">{{role_id}}</p><h3>Delete role</h3></div><button type="button" class="button--close" popovertarget="role-delete-{{row_index}}" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><p class="muted">The role is disabled; audit history is retained.</p><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="role.disable"><input type="hidden" name="expected_revision" value="{{store_revision}}"><input type="hidden" name="role_id" value="{{role_id}}"><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" class="button--danger" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Disable this role?">Delete role</button></div></div>{{/enabled}}{{/can_security_admin}}
+      </td></tr>{{/roles}}
+      {{^roles}}<tr><td colspan="4" class="empty">No roles</td></tr>{{/roles}}
     </tbody></table></div>
-  </section>
+    <div class="dataset-footer"><div class="pager" role="group" aria-label="Roles pagination"><span class="pager__status">{{roles_pager.count}} shown</span>{{#roles_pager.first}}<button type="button" class="button--quiet" hx-get="{{roles_pager.first_url}}" hx-select="#roles" hx-target="#roles" hx-swap="outerHTML">First page</button>{{/roles_pager.first}}{{^roles_pager.first}}<button type="button" class="button--quiet" disabled>First page</button>{{/roles_pager.first}}{{#roles_pager.more}}<button type="button" class="button--quiet" hx-get="{{roles_pager.more_url}}" hx-select="#roles" hx-target="#roles" hx-swap="outerHTML">Next page</button>{{/roles_pager.more}}{{^roles_pager.more}}<button type="button" class="button--quiet" disabled>Next page</button>{{/roles_pager.more}}</div></div>
+  </section>{{/show_roles}}
 
-  <section class="dataset" aria-labelledby="policy-title">
-    <div class="section-heading">
-      <div><p class="eyebrow">Draft</p><h2 id="policy-title">ACL rules</h2></div>
-      <div class="pager">
-        {{#policy_pager.first}}<button type="button" class="button--quiet" hx-get="{{policy_pager.first_url}}" hx-target="#dashboard" hx-swap="innerHTML">First</button>{{/policy_pager.first}}
-        {{#policy_pager.more}}<button type="button" class="button--quiet" hx-get="{{policy_pager.more_url}}" hx-target="#dashboard" hx-swap="innerHTML">More</button>{{/policy_pager.more}}
-      </div>
-    </div>
-    <div class="table-wrap"><table><thead><tr><th>Ordinal</th><th>Rule</th><th>Revision</th></tr></thead><tbody>
-      {{#rules}}<tr><td>{{ordinal}}</td><td><code>{{rule_line}}</code></td><td>{{revision}}</td></tr>{{/rules}}
-      {{^rules}}<tr><td colspan="3" class="empty">No draft rules</td></tr>{{/rules}}
+  {{#show_acls}}<section id="acl-rules" class="dataset" aria-labelledby="policy-title">
+    <div class="section-heading"><div><p class="eyebrow">Draft</p><h2 id="policy-title">ACL rules</h2></div><div class="dataset-toolbar" role="group" aria-label="ACL rules tools"><button type="button" class="button--quiet" popovertarget="acl-query">Query</button>{{#can_policy_admin}}<button type="button" popovertarget="acl-add">Add</button><button type="button" class="button--secondary" popovertarget="acl-publish">Publish</button>{{/can_policy_admin}}</div></div>
+    <div id="acl-query" class="control-popover" popover><div class="popover-heading"><div><p class="eyebrow">ACL rules</p><h3>Query from cursor</h3></div><button type="button" class="button--close" popovertarget="acl-query" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><div class="query-panel"><label>Start after ordinal<input name="policy_after" required inputmode="numeric"></label><button type="button" hx-get="{{policy_pager.query_url}}" hx-include="closest .query-panel" hx-select="#acl-rules" hx-target="#acl-rules" hx-swap="outerHTML" hx-disabled-elt="this">Query rules</button></div></div>
+    {{#can_policy_admin}}<div id="acl-add" class="control-popover control-popover--wide" popover><div class="popover-heading"><div><p class="eyebrow">ACL rules</p><h3>Add rule</h3></div><button type="button" class="button--close" popovertarget="acl-add" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="policy.rule.put"><input type="hidden" name="expected_revision" value="{{store_revision}}"><label>Ordinal<input name="ordinal" required inputmode="numeric"></label><label>Canonical rule<input name="rule_line" required maxlength="2047"></label><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Add rule</button></div></div>
+    <div id="acl-publish" class="control-popover" popover><div class="popover-heading"><div><p class="eyebrow">ACL rules</p><h3>Publish policy</h3></div><button type="button" class="button--close" popovertarget="acl-publish" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="policy.publish"><input type="hidden" name="expected_revision" value="{{store_revision}}"><label>Expires at<input name="expires_at" inputmode="numeric"></label><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Publish the current ACL draft?">Publish</button></div></div>{{/can_policy_admin}}
+    <div class="table-wrap"><table><thead><tr><th>Ordinal</th><th>Rule</th><th>Revision</th><th class="actions-column">Actions</th></tr></thead><tbody>
+      {{#rules}}<tr><td>{{ordinal}}</td><td><code>{{rule_line}}</code></td><td>{{revision}}</td><td class="table-actions">{{#can_policy_admin}}<button type="button" class="button--quiet" popovertarget="acl-edit-{{row_index}}">Edit</button><button type="button" class="button--quiet button--danger-text" popovertarget="acl-delete-{{row_index}}">Delete</button>{{/can_policy_admin}}{{^can_policy_admin}}<span class="muted">View only</span>{{/can_policy_admin}}
+        {{#can_policy_admin}}<div id="acl-edit-{{row_index}}" class="control-popover control-popover--wide" popover><div class="popover-heading"><div><p class="eyebrow">Ordinal {{ordinal}}</p><h3>Edit rule</h3></div><button type="button" class="button--close" popovertarget="acl-edit-{{row_index}}" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="policy.rule.put"><input type="hidden" name="expected_revision" value="{{store_revision}}"><input type="hidden" name="ordinal" value="{{ordinal}}"><label>Canonical rule<input name="rule_line" value="{{rule_line}}" required maxlength="2047"></label><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Save rule</button></div></div>
+        <div id="acl-delete-{{row_index}}" class="control-popover control-popover--danger" popover><div class="popover-heading"><div><p class="eyebrow">Ordinal {{ordinal}}</p><h3>Delete rule</h3></div><button type="button" class="button--close" popovertarget="acl-delete-{{row_index}}" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="policy.rule.delete"><input type="hidden" name="expected_revision" value="{{store_revision}}"><input type="hidden" name="ordinal" value="{{ordinal}}"><label>Request ID<input name="request_id" required maxlength="255"></label><button type="button" class="button--danger" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Delete this ACL rule?">Delete rule</button></div></div>{{/can_policy_admin}}
+      </td></tr>{{/rules}}
+      {{^rules}}<tr><td colspan="4" class="empty">No draft rules</td></tr>{{/rules}}
     </tbody></table></div>
-  </section>
+    <div class="dataset-footer"><div class="pager" role="group" aria-label="ACL rules pagination"><span class="pager__status">{{policy_pager.count}} shown</span>{{#policy_pager.first}}<button type="button" class="button--quiet" hx-get="{{policy_pager.first_url}}" hx-select="#acl-rules" hx-target="#acl-rules" hx-swap="outerHTML">First page</button>{{/policy_pager.first}}{{^policy_pager.first}}<button type="button" class="button--quiet" disabled>First page</button>{{/policy_pager.first}}{{#policy_pager.more}}<button type="button" class="button--quiet" hx-get="{{policy_pager.more_url}}" hx-select="#acl-rules" hx-target="#acl-rules" hx-swap="outerHTML">Next page</button>{{/policy_pager.more}}{{^policy_pager.more}}<button type="button" class="button--quiet" disabled>Next page</button>{{/policy_pager.more}}</div></div>
+  </section>{{/show_acls}}
 
   {{#show_audit}}
-  <section class="dataset" aria-labelledby="audit-title">
-    <div class="section-heading">
-      <div><p class="eyebrow">Trace</p><h2 id="audit-title">Audit</h2></div>
-      <div class="pager">
-        {{#audit_pager.first}}<button type="button" class="button--quiet" hx-get="{{audit_pager.first_url}}" hx-target="#dashboard" hx-swap="innerHTML">First</button>{{/audit_pager.first}}
-        {{#audit_pager.more}}<button type="button" class="button--quiet" hx-get="{{audit_pager.more_url}}" hx-target="#dashboard" hx-swap="innerHTML">More</button>{{/audit_pager.more}}
-      </div>
-    </div>
-    <div class="table-wrap"><table><thead><tr><th>Revision</th><th>Actor</th><th>Operation</th><th>Target</th></tr></thead><tbody>
-      {{#audits}}<tr><td>{{revision}}</td><td>{{actor}}</td><td>{{operation}}</td><td>{{target_id}}</td></tr>{{/audits}}
-      {{^audits}}<tr><td colspan="4" class="empty">No audit entries</td></tr>{{/audits}}
-    </tbody></table></div>
+  <section id="audit" class="dataset" aria-labelledby="audit-title">
+    <div class="section-heading"><div><p class="eyebrow">Trace</p><h2 id="audit-title">Audit</h2></div><div class="dataset-toolbar" role="group" aria-label="Audit tools"><button type="button" class="button--quiet" popovertarget="audit-query">Query</button></div></div>
+    <div id="audit-query" class="control-popover" popover><div class="popover-heading"><div><p class="eyebrow">Audit</p><h3>Query from cursor</h3></div><button type="button" class="button--close" popovertarget="audit-query" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><div class="query-panel"><label>Start before revision<input name="audit_after" required inputmode="numeric"></label><button type="button" hx-get="{{audit_pager.query_url}}" hx-include="closest .query-panel" hx-select="#audit" hx-target="#audit" hx-swap="outerHTML" hx-disabled-elt="this">Query audit</button></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Revision</th><th>Actor</th><th>Operation</th><th>Target</th></tr></thead><tbody>{{#audits}}<tr><td>{{revision}}</td><td>{{actor}}</td><td>{{operation}}</td><td>{{target_id}}</td></tr>{{/audits}}{{^audits}}<tr><td colspan="4" class="empty">No audit entries</td></tr>{{/audits}}</tbody></table></div>
+    <div class="dataset-footer"><div class="pager" role="group" aria-label="Audit pagination"><span class="pager__status">{{audit_pager.count}} shown</span>{{#audit_pager.first}}<button type="button" class="button--quiet" hx-get="{{audit_pager.first_url}}" hx-select="#audit" hx-target="#audit" hx-swap="outerHTML">First page</button>{{/audit_pager.first}}{{^audit_pager.first}}<button type="button" class="button--quiet" disabled>First page</button>{{/audit_pager.first}}{{#audit_pager.more}}<button type="button" class="button--quiet" hx-get="{{audit_pager.more_url}}" hx-select="#audit" hx-target="#audit" hx-swap="outerHTML">Next page</button>{{/audit_pager.more}}{{^audit_pager.more}}<button type="button" class="button--quiet" disabled>Next page</button>{{/audit_pager.more}}</div></div>
   </section>
   {{/show_audit}}
+  </div>
 </div>

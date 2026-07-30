@@ -435,10 +435,20 @@ typedef struct turbo_flow_failure_s {
 
 #define TURBO_FLOW_DATA_DECISION_KEY_MAX 127u
 
+typedef enum turbo_flow_data_evaluation_status_e {
+  TURBO_FLOW_DATA_NOT_EVALUATED = 0,
+  TURBO_FLOW_DATA_NOT_MATCHED,
+  TURBO_FLOW_DATA_MATCHED,
+  TURBO_FLOW_DATA_EVALUATION_ERROR
+} turbo_flow_data_evaluation_status_t;
+
 /** Runtime-owned decision sidecar produced by a typed data-rule stage. */
 typedef struct turbo_flow_data_decision_s {
   size_t size;
   uint32_t stage_index;
+  turbo_flow_data_evaluation_status_t evaluation_status;
+  uint32_t match_count;
+  int evaluation_error;
   int dropped;
   int dead_letter;
   int dead_letter_status;
@@ -448,7 +458,8 @@ typedef struct turbo_flow_data_decision_s {
 } turbo_flow_data_decision_t;
 
 #define TURBO_FLOW_DATA_DECISION_INIT                                                              \
-  {sizeof(turbo_flow_data_decision_t), UINT32_MAX, 0, 0, TURBO_OK, {0}, {0}, {0}}
+  {sizeof(turbo_flow_data_decision_t), UINT32_MAX, TURBO_FLOW_DATA_NOT_EVALUATED, 0u, TURBO_OK,    \
+   0, 0, TURBO_OK, {0}, {0}, {0}}
 
 typedef struct turbo_flow_msg_s {
   uint64_t id;
@@ -1184,6 +1195,69 @@ typedef struct turbo_flow_observer_ops_s {
   /** Called after adapter shutdown and before the flow storage is released. */
   void (*flow_destroyed)(void *ctx);
 } turbo_flow_observer_ops_t;
+
+typedef enum turbo_flow_observe_event_kind_e {
+  TURBO_FLOW_OBSERVE_SOURCE_RECEIVED = 0,
+  TURBO_FLOW_OBSERVE_STAGE_BEGIN,
+  TURBO_FLOW_OBSERVE_STAGE_END,
+  TURBO_FLOW_OBSERVE_ROUTE_EVALUATED,
+  TURBO_FLOW_OBSERVE_SINK_COMPLETE,
+  TURBO_FLOW_OBSERVE_ADAPTER_START,
+  TURBO_FLOW_OBSERVE_ADAPTER_STOP,
+  TURBO_FLOW_OBSERVE_FLOW_COMPLETE,
+  TURBO_FLOW_OBSERVE_EVENT_COUNT
+} turbo_flow_observe_event_kind_t;
+
+#define TURBO_FLOW_OBSERVE_EVENT_MASK(kind) (UINT64_C(1) << (uint32_t)(kind))
+#define TURBO_FLOW_OBSERVE_ALL_EVENTS                                                        \
+  ((UINT64_C(1) << (uint32_t)TURBO_FLOW_OBSERVE_EVENT_COUNT) - UINT64_C(1))
+#define TURBO_FLOW_MAX_EVENT_OBSERVERS 64u
+
+/**
+ * One immutable runtime observation borrowed for the duration of on_event().
+ *
+ * selected is -1 outside route events, otherwise zero or one. edge_kind is -1
+ * outside route events. All strings and msg are flow-owned borrowed views.
+ */
+typedef struct turbo_flow_observe_event_s {
+  size_t size;
+  turbo_flow_observe_event_kind_t kind;
+  const char *source_name;
+  const char *stage_name;
+  const char *adapter_name;
+  const char *operation_name;
+  const char *from_name;
+  const char *to_name;
+  const char *route_name;
+  const turbo_flow_msg_t *msg;
+  int status;
+  int selected;
+  int edge_kind;
+  uint32_t attempt;
+  uint64_t timestamp_ns;
+  uint64_t duration_ns;
+} turbo_flow_observe_event_t;
+
+typedef int (*turbo_flow_observer_on_event_fn)(void *ctx,
+                                               const turbo_flow_observe_event_t *event);
+
+/**
+ * One named structured Observer.
+ *
+ * on_event() is synchronous and may run concurrently for concurrent
+ * publications. It must not mutate or re-enter the flow. A non-OK result is
+ * counted but never changes Graph execution. If destroy is present, a
+ * successful registration transfers ctx lifecycle to the flow.
+ */
+typedef struct turbo_flow_event_observer_ops_s {
+  size_t size;
+  uint64_t event_mask;
+  turbo_flow_observer_on_event_fn on_event;
+  void (*destroy)(void *ctx);
+} turbo_flow_event_observer_ops_t;
+
+#define TURBO_FLOW_EVENT_OBSERVER_OPS_INIT \
+  {sizeof(turbo_flow_event_observer_ops_t), TURBO_FLOW_OBSERVE_ALL_EVENTS, NULL, NULL}
 
 typedef enum turbo_flow_option_type_e {
   TURBO_FLOW_OPTION_BOOL = 0,
@@ -1952,6 +2026,20 @@ CXX_C_API const char *turbo_flow_adapter_operation_resource(const turbo_flow_t *
 /** Attach or clear one host-owned observer. Rejected while the flow is started. */
 CXX_C_API int turbo_flow_set_observer(turbo_flow_t *flow, const turbo_flow_observer_ops_t *ops,
                                       void *ctx);
+
+/**
+ * Register one named structured Observer.
+ *
+ * Registration is rejected while started, on duplicate names, or after the
+ * bounded observer limit is reached. The registration remains across reset.
+ */
+CXX_C_API int turbo_flow_register_observer(turbo_flow_t *flow, const char *name,
+                                           const turbo_flow_event_observer_ops_t *ops, void *ctx);
+/** Unregister and destroy one Observer. Rejected while the flow is started. */
+CXX_C_API int turbo_flow_unregister_observer(turbo_flow_t *flow, const char *name);
+CXX_C_API size_t turbo_flow_observer_count(const turbo_flow_t *flow);
+/** Return the aggregate count of non-OK structured Observer callback results. */
+CXX_C_API uint64_t turbo_flow_observer_failure_count(const turbo_flow_t *flow);
 
 CXX_C_API size_t turbo_flow_adapter_count(const turbo_flow_t *flow);
 /**

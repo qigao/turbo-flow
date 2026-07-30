@@ -415,6 +415,15 @@ static int64_t flow_expr_mir_eval_node(flow_expr_mir_frame_t *frame, int64_t nod
   case FLOW_EXPR_GT:
   case FLOW_EXPR_GE:
     return left && right ? flow_expr_mir_eval_ordering(node->kind, left, right, out) : TURBO_EINVAL;
+  case FLOW_EXPR_HAS_FLAG:
+    if (!left || !right || left->type != TURBO_FLOW_EXPR_TYPE_I64 ||
+        right->type != TURBO_FLOW_EXPR_TYPE_I64 || left->as.i64 < 0 || right->as.i64 <= 0) {
+      return TURBO_EPROTO;
+    }
+    out->type = TURBO_FLOW_EXPR_TYPE_BOOL;
+    out->as.boolean =
+        (((uint64_t)left->as.i64 & (uint64_t)right->as.i64) == (uint64_t)right->as.i64);
+    return TURBO_OK;
   case FLOW_EXPR_AND:
   case FLOW_EXPR_OR:
     if (!left || !right || left->type != TURBO_FLOW_EXPR_TYPE_BOOL ||

@@ -43,9 +43,7 @@ turbo_flow_add_gateway(
 turbo_flow_add_gateway(
   tf_gateway_jtt808 GatewayJtt808 jtt808/flow_gateway_jtt808.c)
 
-if(TURBO_FLOW_BUILD_GATEWAY_BUSINESS)
   add_subdirectory(business)
-endif()
 
 if(BUILD_TESTS)
   add_subdirectory(tests)

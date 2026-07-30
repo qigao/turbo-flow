@@ -1,8 +1,6 @@
 add_subdirectory(protocol)
 add_subdirectory(client)
-if(TURBO_FLOW_BUILD_SECURITY_SQLITE)
   add_subdirectory(control)
-endif()
 
 set(TARGET_NAME flowie)
 set(FLOWIE_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/flowie.h)
@@ -10,6 +8,7 @@ set(FLOWIE_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/flowie.h)
 add_library(
   ${TARGET_NAME} SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_client_adapter.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_config.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_endpoint.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flowie_ingress.c
@@ -37,7 +36,7 @@ target_include_directories(
 target_link_libraries(
   ${TARGET_NAME}
   PUBLIC Flowie::Protocol TurboFlow::Flow TurboNet::CoroNet TurboUtils::Core)
-target_link_libraries(${TARGET_NAME} PRIVATE tf_executor_common TurboFlow::FlowStore)
+target_link_libraries(${TARGET_NAME} PRIVATE Flowie::Client tf_executor_common TurboFlow::FlowStore)
 install(FILES ${FLOWIE_HEADERS} DESTINATION include)
 
 if(BUILD_TESTING)

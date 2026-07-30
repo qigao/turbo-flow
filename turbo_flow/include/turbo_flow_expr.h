@@ -35,7 +35,11 @@ typedef enum turbo_flow_expr_builtin_field_e {
   TURBO_FLOW_EXPR_FIELD_MSG_TYPE,
   TURBO_FLOW_EXPR_FIELD_MSG_FLAGS,
   TURBO_FLOW_EXPR_FIELD_MSG_STATUS,
-  TURBO_FLOW_EXPR_FIELD_MSG_PAYLOAD
+  TURBO_FLOW_EXPR_FIELD_MSG_PAYLOAD,
+  TURBO_FLOW_EXPR_FIELD_MSG_RULE_STATUS,
+  TURBO_FLOW_EXPR_FIELD_MSG_RULE_MATCHED,
+  TURBO_FLOW_EXPR_FIELD_MSG_RULE_MATCH_COUNT,
+  TURBO_FLOW_EXPR_FIELD_MSG_RULE_ERROR
 } turbo_flow_expr_builtin_field_t;
 
 typedef struct turbo_flow_expr_value_s {
@@ -77,6 +81,35 @@ typedef struct turbo_flow_expr_schema_s {
   size_t field_count;
 } turbo_flow_expr_schema_t;
 
+/**
+ * Read one field from a borrowed schema projection.
+ *
+ * `projection` is the value attached to the current working message and is
+ * valid only for the callback duration. `ctx` remains caller-owned and must
+ * outlive the flow registry entry. The callback must not retain `projection`
+ * or `out`.
+ */
+typedef int (*turbo_flow_expr_projection_field_fn)(const void *projection, uint32_t field_id,
+                                                   turbo_flow_expr_value_t *out, void *ctx);
+
+/**
+ * Register one immutable projection schema for graph route expressions.
+ *
+ * TurboFlow copies the schema identity and expression field paths. The reader
+ * and its context remain provider-owned. Registrations sharing a field path
+ * must use the same type and field id; conflicting path/id mappings fail fast.
+ */
+typedef struct turbo_flow_expr_projection_registration_s {
+  size_t size;
+  const turbo_flow_data_schema_t *projection_schema;
+  const turbo_flow_expr_schema_t *expr_schema;
+  turbo_flow_expr_projection_field_fn read_field;
+  void *ctx;
+} turbo_flow_expr_projection_registration_t;
+
+#define TURBO_FLOW_EXPR_PROJECTION_REGISTRATION_INIT                                               \
+  {sizeof(turbo_flow_expr_projection_registration_t), NULL, NULL, NULL, NULL}
+
 typedef enum turbo_flow_expr_backend_e {
   TURBO_FLOW_EXPR_BACKEND_INVALID = -1,
   TURBO_FLOW_EXPR_MIR_INTERP = 0,
@@ -94,11 +127,24 @@ typedef struct turbo_flow_expr_compile_options_s {
   {sizeof(turbo_flow_expr_compile_options_t), TURBO_FLOW_EXPR_AUTO}
 
 /**
+ * Add one projection schema to the flow-level `parsed.*` expression namespace.
+ *
+ * Registration is allowed before compile. It is preserved by reset with
+ * `keep_registry != 0` and removed by reset without registry preservation or
+ * flow destruction.
+ */
+CXX_C_API int turbo_flow_register_expr_projection(
+    turbo_flow_t *flow, const turbo_flow_expr_projection_registration_t *registration);
+
+/**
  * Parse, resolve fields, and type-check one backend-neutral expression.
  *
  * The returned object owns its AST and copied strings. `schema` is borrowed
  * only for this call. Unknown fields and incompatible operators fail without
  * returning a partially compiled object.
+ *
+ * Standard predicates include `has_flag(integer_value, positive_literal_mask)`.
+ * It returns true only when every bit in the non-zero mask is present.
  *
  * Returns TURBO_OK on success. Parse/type/schema errors return their Turbo
  * error code and set `*out` to NULL. `error` may be NULL.

@@ -38,6 +38,7 @@ static const flow_runtime_edge_plan_t *flow_reject_edge_for_stage(const turbo_fl
 static int flow_route_edge_active(turbo_flow_t *flow, const flow_runtime_edge_plan_t *edge,
                                   const turbo_flow_msg_t *msg, int stage_status, int *active) {
   turbo_flow_expr_eval_context_t context = TURBO_FLOW_EXPR_EVAL_CONTEXT_INIT;
+  flow_expr_projection_eval_binding_t projection_binding;
   turbo_flow_expr_value_t value;
   int rc;
 
@@ -65,6 +66,7 @@ static int flow_route_edge_active(turbo_flow_t *flow, const flow_runtime_edge_pl
                                      "conditional route predicate is not compiled");
   }
   context.message = msg;
+  flow_expr_projection_bind_eval(flow, msg, &projection_binding, &context);
   memset(&value, 0, sizeof(value));
   rc = turbo_flow_expr_evaluate(edge->predicate, &context, &value);
   if (rc != TURBO_OK) {
@@ -98,6 +100,7 @@ static int flow_release_downstream(turbo_flow_t *flow, uint32_t stage_index,
                                    int stage_status, uint8_t *done, const uint8_t *reachable,
                                    uint32_t *remaining, uint32_t *activated, uint32_t *queue,
                                    size_t queue_cap, size_t *tail) {
+  int has_downstream = 0;
   for (size_t i = 0; i < turbo_vec_size(&flow->runtime_edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
         (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, i);
@@ -105,9 +108,28 @@ static int flow_release_downstream(turbo_flow_t *flow, uint32_t stage_index,
     int rc;
 
     if (edge->from_stage != stage_index || !reachable[edge->to_stage]) continue;
+    has_downstream = 1;
     if (remaining[edge->to_stage] == 0) return TURBO_EINVAL;
     if (stage_selected) {
       rc = flow_route_edge_active(flow, edge, msg, stage_status, &active);
+      {
+        const flow_stage_plan_impl_t *from =
+            (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->from_stage);
+        const flow_stage_plan_impl_t *to =
+            (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->to_stage);
+        turbo_flow_observe_event_t event;
+        memset(&event, 0, sizeof(event));
+        event.kind = TURBO_FLOW_OBSERVE_ROUTE_EVALUATED;
+        event.from_name = from ? from->name : NULL;
+        event.to_name = to ? to->name : NULL;
+        event.route_name = edge->name;
+        event.msg = msg;
+        event.status = rc == TURBO_OK ? stage_status : rc;
+        event.selected = rc == TURBO_OK ? active : 0;
+        event.edge_kind = edge->kind;
+        event.attempt = msg->execution_attempt;
+        flow_observer_emit(flow, &event);
+      }
       if (rc != TURBO_OK) return rc;
     }
     --remaining[edge->to_stage];
@@ -123,6 +145,23 @@ static int flow_release_downstream(turbo_flow_t *flow, uint32_t stage_index,
         if (rc != TURBO_OK) return rc;
       }
     }
+  }
+
+  if (stage_selected && !has_downstream) {
+    const flow_stage_plan_impl_t *stage =
+        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+    turbo_flow_observe_event_t event;
+    memset(&event, 0, sizeof(event));
+    event.kind = TURBO_FLOW_OBSERVE_SINK_COMPLETE;
+    event.stage_name = stage ? stage->name : NULL;
+    event.adapter_name = stage ? stage->adapter_name : NULL;
+    event.operation_name = stage ? stage->operation_name : NULL;
+    event.msg = msg;
+    event.status = stage_status;
+    event.selected = -1;
+    event.edge_kind = -1;
+    event.attempt = msg->execution_attempt;
+    flow_observer_emit(flow, &event);
   }
 
   return TURBO_OK;
@@ -154,8 +193,23 @@ int flow_apply_completion(turbo_flow_t *flow, const flow_stage_completion_t *com
                                    reachable, remaining, activated, queue, queue_cap, tail);
   }
   if (completion->terminal) {
+    const flow_stage_plan_impl_t *stage =
+        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages,
+                                                           completion->entry.stage_index);
+    turbo_flow_observe_event_t event;
     if (done[completion->entry.stage_index]) return TURBO_OK;
     done[completion->entry.stage_index] = 1;
+    memset(&event, 0, sizeof(event));
+    event.kind = TURBO_FLOW_OBSERVE_SINK_COMPLETE;
+    event.stage_name = stage ? stage->name : NULL;
+    event.adapter_name = stage ? stage->adapter_name : NULL;
+    event.operation_name = stage ? stage->operation_name : NULL;
+    event.msg = msg;
+    event.status = completion->status;
+    event.selected = -1;
+    event.edge_kind = -1;
+    event.attempt = msg->execution_attempt;
+    flow_observer_emit(flow, &event);
     return flow_release_downstream(flow, completion->entry.stage_index, msg, 0, TURBO_OK, done,
                                    reachable, remaining, activated, queue, queue_cap, tail);
   }

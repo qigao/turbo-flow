@@ -86,7 +86,8 @@ int turbo_flow_pgsql_register_resolved_outbox_adapter(turbo_flow_t *flow, const 
   static const char *const adapter_allowed[] = {"channel", "role"};
   static const char *const channel_allowed[] = {
       "backend",          "conninfo",         "outbox_name",      "capacity",
-      "max_payload_size", "poll_interval_ms", "claim_scan_limit", "create_table"};
+      "max_payload_size", "poll_interval_ms", "claim_scan_limit", "create_table",
+      "completion",       "max_delivery_attempts", "retry_delay_ms", "archive_ttl_ms"};
   turbo_flow_pgsql_outbox_config_t config = TURBO_FLOW_PGSQL_OUTBOX_CONFIG_INIT;
   turbo_json_doc_t *document = NULL;
   json_value_t *adapters;
@@ -98,6 +99,7 @@ int turbo_flow_pgsql_register_resolved_outbox_adapter(turbo_flow_t *flow, const 
   json_value_t *channel_kind;
   json_value_t *channel_fields;
   json_value_t *create_table;
+  json_value_t *completion;
   const char *channel_name;
   const char *role;
   const char *backend;
@@ -209,6 +211,38 @@ int turbo_flow_pgsql_register_resolved_outbox_adapter(turbo_flow_t *flow, const 
     goto done;
   }
   config.create_table = turbo_json_bool(create_table) ? 1 : 0;
+  completion = turbo_json_object_get(channel_fields, "completion");
+  if (completion) {
+    const char *text;
+    if (turbo_json_type(completion) != TURBO_JSON_STRING) {
+      rc = flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, "completion",
+                                   "completion must be delete or archive");
+      goto done;
+    }
+    text = turbo_json_string(completion);
+    if (strcmp(text, "delete") == 0)
+      config.completion = TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_DELETE;
+    else if (strcmp(text, "archive") == 0)
+      config.completion = TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_ARCHIVE;
+    else {
+      rc = flow_pgsql_config_error(error, TURBO_EINVAL, "channels", channel_name, "completion",
+                                   "completion must be delete or archive");
+      goto done;
+    }
+  }
+  rc = flow_pgsql_optional_u64(channel_fields, "max_delivery_attempts",
+                               TURBO_FLOW_PGSQL_OUTBOX_MAX_DELIVERY_ATTEMPTS, &number,
+                               channel_name, error);
+  if (rc != TURBO_OK) goto done;
+  config.max_delivery_attempts = (uint32_t)number;
+  rc = flow_pgsql_optional_u64(channel_fields, "retry_delay_ms", UINT32_MAX, &number,
+                               channel_name, error);
+  if (rc != TURBO_OK) goto done;
+  config.retry_delay_ms = (uint32_t)number;
+  rc = flow_pgsql_optional_u64(channel_fields, "archive_ttl_ms", UINT32_MAX, &number,
+                               channel_name, error);
+  if (rc != TURBO_OK) goto done;
+  config.archive_ttl_ms = (uint32_t)number;
   rc = turbo_flow_pgsql_register_outbox_adapter(flow, name, &config);
   if (rc != TURBO_OK)
     rc = flow_pgsql_config_error(error, rc, "adapters", name, NULL,

@@ -135,6 +135,10 @@ spec("turbo_flow_pgsql") {
                                "      poll_interval_ms: 50\n"
                                "      claim_scan_limit: 64\n"
                                "      create_table: true\n"
+                               "      completion: archive\n"
+                               "      max_delivery_attempts: 3\n"
+                               "      retry_delay_ms: 100\n"
+                               "      archive_ttl_ms: 60000\n"
                                "adapters:\n"
                                "  pg.orders.sink:\n"
                                "    kind: pgsql_outbox\n"
@@ -246,6 +250,16 @@ spec("turbo_flow_pgsql") {
       turbo_flow_t *flow = turbo_flow_create();
       check_not_null(flow);
       direct.version++;
+      check_int_eq(turbo_flow_pgsql_register_outbox_adapter(flow, "pg.invalid", &direct),
+                   TURBO_EINVAL);
+      turbo_flow_destroy(flow);
+    }
+    {
+      turbo_flow_t *flow = turbo_flow_create();
+      check_not_null(flow);
+      direct.version = TURBO_FLOW_PGSQL_OUTBOX_API_VERSION;
+      direct.max_delivery_attempts = 3u;
+      direct.retry_delay_ms = 0u;
       check_int_eq(turbo_flow_pgsql_register_outbox_adapter(flow, "pg.invalid", &direct),
                    TURBO_EINVAL);
       turbo_flow_destroy(flow);

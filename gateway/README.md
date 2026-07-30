@@ -141,7 +141,7 @@ payload。
 - minimal `Authorize` 只接受一个 `idToken` typed unit；证书与
   ISO 15118 certificate hash 扩展尚未装配时 fail fast。
 
-`TURBO_FLOW_BUILD_GATEWAY_BUSINESS=ON` 时配置阶段必须找到 host
+完整产品配置阶段必须找到用于 gateway business bindings 的 host
 `tbe_compiler`。SDK 未安装该工具时，通过
 `TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE` 显式指定；缺失时配置 fail fast，
 不会回退到运行时 schema 编译。

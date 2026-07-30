@@ -85,10 +85,13 @@ typedef struct flowie_control_credential_issue_command_s {
   const char *request_id;
   uint64_t expected_revision;
   uint64_t occurred_at;
+  /** Optional borrowed bootstrap-only secret. Providers hash it and never return its plaintext. */
+  const void *initial_secret;
+  size_t initial_secret_size;
 } flowie_control_credential_issue_command_t;
 
 #define FLOWIE_CONTROL_CREDENTIAL_ISSUE_COMMAND_INIT                                               \
-  {sizeof(flowie_control_credential_issue_command_t), NULL, NULL, NULL, NULL, 0u, 0u}
+  {sizeof(flowie_control_credential_issue_command_t), NULL, NULL, NULL, NULL, 0u, 0u, NULL, 0u}
 
 typedef struct flowie_control_generated_credential_s {
   size_t size;
@@ -133,6 +136,13 @@ typedef struct flowie_control_root_group_create_command_s {
 
 #define FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT                                              \
   {sizeof(flowie_control_root_group_create_command_t), NULL, NULL, NULL, 0u, 0u}
+
+typedef struct flowie_control_root_group_view_s {
+  size_t size;
+  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+} flowie_control_root_group_view_t;
+
+#define FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT {sizeof(flowie_control_root_group_view_t), {0}}
 
 typedef struct flowie_control_group_create_command_s {
   size_t size;
@@ -577,12 +587,19 @@ int flowie_control_store_policy_status(flowie_control_store_t *store, const char
  * generation; a positive value requires an exact match. The returned rules are owned by the
  * bundle and remain valid until flowie_control_store_policy_bundle_release().
  */
-int flowie_control_store_policy_bundle_load(
-    flowie_control_store_t *store, const char *root_group_id, uint64_t required_version,
-    turbo_flow_security_policy_bundle_t *bundle_out);
+int flowie_control_store_policy_bundle_load(flowie_control_store_t *store,
+                                            const char *root_group_id, uint64_t required_version,
+                                            turbo_flow_security_policy_bundle_t *bundle_out);
 void flowie_control_store_policy_bundle_release(turbo_flow_security_policy_bundle_t *bundle);
 
 /** Root-scoped keyset pages. Cursor values are exclusive and all results are caller-owned. */
+int flowie_control_store_root_group_get(flowie_control_store_t *store, const char *root_group_id,
+                                        flowie_control_root_group_view_t *out);
+int flowie_control_store_root_group_list(flowie_control_store_t *store,
+                                         const char *after_root_group_id,
+                                         flowie_control_root_group_view_t *items,
+                                         size_t item_capacity, size_t *count_out,
+                                         int *has_more_out);
 int flowie_control_store_user_list(flowie_control_store_t *store, const char *root_group_id,
                                    const char *after_principal_id,
                                    flowie_control_user_view_t *items, size_t item_capacity,

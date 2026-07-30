@@ -249,6 +249,7 @@ void flow_clear_registry(turbo_flow_t *flow) {
     flow_adapter_registration_destroy(adapter);
   }
   turbo_vec_clear(&flow->adapters);
+  flow_expr_projection_clear(flow);
   turbo_hash_map_clear(&flow->protocol_route_owners);
 }
 
@@ -354,9 +355,13 @@ turbo_flow_t *turbo_flow_create(void) {
       turbo_vec_init(&flow->modules, sizeof(flow_module_registration_t)) != TURBO_OK ||
       turbo_vec_init(&flow->adapters, sizeof(flow_adapter_registration_t)) != TURBO_OK ||
       turbo_vec_init(&flow->resources, sizeof(flow_resource_registration_t)) != TURBO_OK ||
+      turbo_vec_init(&flow->expr_projection_registrations,
+                     sizeof(flow_expr_projection_registration_t)) != TURBO_OK ||
       turbo_vec_init(&flow->active_adapters, sizeof(flow_active_adapter_t)) != TURBO_OK ||
       turbo_vec_init(&flow->pool_records, sizeof(flow_pool_record_t)) != TURBO_OK ||
       turbo_vec_init(&flow->resource_command_history, sizeof(flow_resource_command_record_t)) !=
+          TURBO_OK ||
+      turbo_vec_init(&flow->event_observers, sizeof(flow_event_observer_registration_t)) !=
           TURBO_OK ||
       turbo_hash_map_init(&flow->protocol_route_owners, sizeof(flow_protocol_route_owner_key_t),
                           sizeof(flow_protocol_route_owner_t), NULL, NULL, NULL) != TURBO_OK) {
@@ -365,6 +370,7 @@ turbo_flow_t *turbo_flow_create(void) {
   }
 
   flow->state = TURBO_FLOW_STATE_NEW;
+  atomic_init(&flow->observer_failures, 0u);
   flow_clear_error(flow);
   return flow;
 }
@@ -375,6 +381,7 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   flow_stop_async_ingress(flow);
   flow_clear_plan(flow);
   flow_clear_registry(flow);
+  flow_observer_clear(flow);
   turbo_vec_destroy(&flow->stages);
   turbo_vec_destroy(&flow->edges);
   turbo_vec_destroy(&flow->runtime_nodes);
@@ -393,9 +400,11 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   turbo_vec_destroy(&flow->modules);
   turbo_vec_destroy(&flow->adapters);
   turbo_vec_destroy(&flow->resources);
+  turbo_vec_destroy(&flow->expr_projection_registrations);
   turbo_vec_destroy(&flow->active_adapters);
   turbo_vec_destroy(&flow->pool_records);
   turbo_vec_destroy(&flow->resource_command_history);
+  turbo_vec_destroy(&flow->event_observers);
   turbo_hash_map_destroy(&flow->protocol_route_owners);
   if (flow->observer_ops.flow_destroyed) {
     flow->observer_ops.flow_destroyed(flow->observer_ctx);
@@ -1213,6 +1222,130 @@ int turbo_flow_set_observer(turbo_flow_t *flow, const turbo_flow_observer_ops_t 
   else memset(&flow->observer_ops, 0, sizeof(flow->observer_ops));
   flow->observer_ctx = ops ? ctx : NULL;
   return TURBO_OK;
+}
+
+static int flow_find_event_observer(const turbo_flow_t *flow, const char *name) {
+  if (!flow || !name) return -1;
+  for (size_t i = 0u; i < turbo_vec_size(&flow->event_observers); ++i) {
+    const flow_event_observer_registration_t *observer =
+        (const flow_event_observer_registration_t *)turbo_vec_at_const(&flow->event_observers, i);
+    if (observer && observer->name && strcmp(observer->name, name) == 0) return (int)i;
+  }
+  return -1;
+}
+
+static void flow_event_observer_destroy(flow_event_observer_registration_t *observer) {
+  if (!observer) return;
+  if (observer->ops.destroy) observer->ops.destroy(observer->ctx);
+  tstr_freep(&observer->name);
+  memset(&observer->ops, 0, sizeof(observer->ops));
+  observer->ctx = NULL;
+}
+
+int flow_observer_event_enabled(const turbo_flow_t *flow,
+                                turbo_flow_observe_event_kind_t kind) {
+  const uint64_t mask =
+      kind >= 0 && kind < TURBO_FLOW_OBSERVE_EVENT_COUNT
+          ? TURBO_FLOW_OBSERVE_EVENT_MASK(kind)
+          : 0u;
+  if (!flow || mask == 0u) return 0;
+  for (size_t i = 0u; i < turbo_vec_size(&flow->event_observers); ++i) {
+    const flow_event_observer_registration_t *observer =
+        (const flow_event_observer_registration_t *)turbo_vec_at_const(&flow->event_observers, i);
+    if (observer && observer->ops.on_event && (observer->ops.event_mask & mask) != 0u) return 1;
+  }
+  return 0;
+}
+
+int flow_observer_has_handlers(const turbo_flow_t *flow) {
+  if (!flow) return 0;
+  return flow->observer_ops.message_complete || flow->observer_ops.stage_complete ||
+         flow->observer_ops.adapter_event || turbo_vec_size(&flow->event_observers) != 0u;
+}
+
+void flow_observer_emit(turbo_flow_t *flow, const turbo_flow_observe_event_t *event) {
+  turbo_flow_observe_event_t view;
+  uint64_t mask;
+  if (!flow || !event || event->kind < 0 || event->kind >= TURBO_FLOW_OBSERVE_EVENT_COUNT) return;
+  mask = TURBO_FLOW_OBSERVE_EVENT_MASK(event->kind);
+  view = *event;
+  view.size = sizeof(view);
+  if (view.timestamp_ns == 0u) view.timestamp_ns = turbo_hrtime();
+  for (size_t i = 0u; i < turbo_vec_size(&flow->event_observers); ++i) {
+    const flow_event_observer_registration_t *observer =
+        (const flow_event_observer_registration_t *)turbo_vec_at_const(&flow->event_observers, i);
+    if (!observer || !observer->ops.on_event || (observer->ops.event_mask & mask) == 0u) continue;
+    if (observer->ops.on_event(observer->ctx, &view) != TURBO_OK) {
+      atomic_fetch_add_explicit(&flow->observer_failures, 1u, memory_order_relaxed);
+    }
+  }
+}
+
+void flow_observer_clear(turbo_flow_t *flow) {
+  if (!flow) return;
+  for (size_t i = 0u; i < turbo_vec_size(&flow->event_observers); ++i) {
+    flow_event_observer_registration_t *observer =
+        (flow_event_observer_registration_t *)turbo_vec_at(&flow->event_observers, i);
+    flow_event_observer_destroy(observer);
+  }
+  turbo_vec_clear(&flow->event_observers);
+}
+
+int turbo_flow_register_observer(turbo_flow_t *flow, const char *name,
+                                 const turbo_flow_event_observer_ops_t *ops, void *ctx) {
+  flow_event_observer_registration_t observer;
+  int rc;
+  if (!flow || !name || name[0] == '\0' || !ops || ops->size < sizeof(*ops) || !ops->on_event ||
+      ops->event_mask == 0u || (ops->event_mask & ~TURBO_FLOW_OBSERVE_ALL_EVENTS) != 0u) {
+    return TURBO_EINVAL;
+  }
+  if (flow->state == TURBO_FLOW_STATE_STARTED) {
+    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+                                     "observer cannot register while flow is started");
+  }
+  if (flow_find_event_observer(flow, name) >= 0) {
+    return flow_set_error_keep_state(flow, TURBO_EALREADY, 0, 0,
+                                     "observer name is already registered");
+  }
+  if (turbo_vec_size(&flow->event_observers) >= TURBO_FLOW_MAX_EVENT_OBSERVERS) {
+    return flow_set_error_keep_state(flow, TURBO_ENOSPC, 0, 0,
+                                     "observer registration limit reached");
+  }
+  memset(&observer, 0, sizeof(observer));
+  observer.name = tstr_dup(name);
+  if (!observer.name) return TURBO_ENOMEM;
+  observer.ops = *ops;
+  observer.ctx = ctx;
+  rc = turbo_vec_push(&flow->event_observers, &observer);
+  if (rc != TURBO_OK) {
+    tstr_freep(&observer.name);
+    return rc;
+  }
+  return TURBO_OK;
+}
+
+int turbo_flow_unregister_observer(turbo_flow_t *flow, const char *name) {
+  int index;
+  flow_event_observer_registration_t *observer;
+  if (!flow || !name || name[0] == '\0') return TURBO_EINVAL;
+  if (flow->state == TURBO_FLOW_STATE_STARTED) {
+    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+                                     "observer cannot unregister while flow is started");
+  }
+  index = flow_find_event_observer(flow, name);
+  if (index < 0) return TURBO_ENOENT;
+  observer =
+      (flow_event_observer_registration_t *)turbo_vec_at(&flow->event_observers, (size_t)index);
+  flow_event_observer_destroy(observer);
+  return turbo_vec_erase(&flow->event_observers, (size_t)index, NULL);
+}
+
+size_t turbo_flow_observer_count(const turbo_flow_t *flow) {
+  return flow ? turbo_vec_size(&flow->event_observers) : 0u;
+}
+
+uint64_t turbo_flow_observer_failure_count(const turbo_flow_t *flow) {
+  return flow ? atomic_load_explicit(&flow->observer_failures, memory_order_relaxed) : 0u;
 }
 
 size_t turbo_flow_adapter_count(const turbo_flow_t *flow) {

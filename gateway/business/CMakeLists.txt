@@ -25,9 +25,9 @@ endif()
 if(NOT EXISTS "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}")
   message(
     FATAL_ERROR
-      "TURBO_FLOW_BUILD_GATEWAY_BUSINESS requires the DataBind 2.0 host "
+      "The complete TurboFlow build requires the DataBind 2.0 host "
       "tbe_compiler. Set TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE to the "
-      "compiler executable, or disable TURBO_FLOW_BUILD_GATEWAY_BUSINESS.")
+      "compiler executable.")
 endif()
 
 add_subdirectory(ocpp201_core)

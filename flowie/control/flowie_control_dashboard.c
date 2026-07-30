@@ -1,21 +1,33 @@
 #include "flowie_control_dashboard_internal.h"
 #include "flowie_control_dashboard_view_internal.h"
+#include "flowie_control_http_request_internal.h"
 
+#include "CoroNet/turbo_coro_context.h"
 #include "http_common.h"
+#include "iris/cookie.h"
 #include "monocypher.h"
+#include "platform.h"
 #include "turbo_error.h"
+#include "turbo_thread.h"
 
 #include <ctype.h>
 #include <limits.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { FLOWIE_CONTROL_DASHBOARD_FORM_FIELDS = 8 };
+enum {
+  FLOWIE_CONTROL_DASHBOARD_FORM_FIELDS = 8,
+  FLOWIE_CONTROL_DASHBOARD_HOST_MAX = 255
+};
 
 static const char FLOWIE_CONTROL_DASHBOARD_CSP[] =
     "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-    "img-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'";
+    "img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+static const char FLOWIE_CONTROL_DASHBOARD_LOGIN_CSP[] =
+    "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; "
+    "base-uri 'none'";
 
 typedef struct flowie_control_dashboard_form_field_s {
   char *key;
@@ -27,15 +39,144 @@ typedef struct flowie_control_dashboard_form_s {
   size_t count;
 } flowie_control_dashboard_form_t;
 
+enum {
+  FLOWIE_CONTROL_DASHBOARD_LOGIN_ARMED = 1,
+  FLOWIE_CONTROL_DASHBOARD_LOGIN_ACCEPTED = 2,
+  FLOWIE_CONTROL_DASHBOARD_LOGIN_ABANDONED = 3
+};
+
+typedef struct flowie_control_dashboard_login_job_s {
+  struct flowie_control_dashboard_s *dashboard;
+  coro_wait_t *wait;
+  atomic_uint references;
+  atomic_int completed;
+  atomic_int owner_state;
+  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char principal_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  uint8_t secret[FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX];
+  size_t secret_size;
+  char remote_address[FLOWIE_CONTROL_AUTH_REMOTE_ADDRESS_MAX + 1u];
+  char token[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u];
+  int result;
+} flowie_control_dashboard_login_job_t;
+
 struct flowie_control_dashboard_s {
   flowie_control_management_service_t *service;
   flowie_control_dashboard_resolve_session_fn resolve_session;
   void *resolve_session_ctx;
   flowie_control_dashboard_clock_fn clock;
   void *clock_ctx;
+  flowie_control_dashboard_login_fn login;
+  flowie_control_dashboard_logout_fn logout;
+  void *session_ctx;
+  uint64_t session_ttl_seconds;
+  turbo_threadpool_t *login_executor;
+  uint32_t login_executor_deadline_ms;
   flowie_control_dashboard_view_t *view;
   iris_app_t *bound_app;
 };
+
+static void flowie_control_dashboard_login_job_release(
+    flowie_control_dashboard_login_job_t *job) {
+  if (!job || atomic_fetch_sub_explicit(&job->references, 1u, memory_order_acq_rel) != 1u) return;
+  (void)coro_wait_destroy(job->wait);
+  crypto_wipe(job, sizeof(*job));
+  free(job);
+}
+
+static void flowie_control_dashboard_login_job_run(void *arg) {
+  flowie_control_dashboard_login_job_t *job = (flowie_control_dashboard_login_job_t *)arg;
+  int owner_state;
+  int wake_rc;
+  if (!job) return;
+  job->result = job->dashboard->login(
+      job->dashboard->session_ctx, job->root_group_id, job->principal_id, job->secret,
+      job->secret_size, job->remote_address, job->token);
+  atomic_store_explicit(&job->completed, 1, memory_order_release);
+  while (atomic_load_explicit(&job->owner_state, memory_order_acquire) ==
+         FLOWIE_CONTROL_DASHBOARD_LOGIN_ARMED) {
+    wake_rc = coro_wait_interrupt(job->wait, TURBO_EINTR);
+    if (wake_rc != TURBO_EALREADY) break;
+    turbo_thread_yield();
+  }
+  owner_state = atomic_load_explicit(&job->owner_state, memory_order_acquire);
+  if (owner_state == FLOWIE_CONTROL_DASHBOARD_LOGIN_ABANDONED &&
+      job->result == TURBO_OK)
+    (void)job->dashboard->logout(job->dashboard->session_ctx, job->token);
+  flowie_control_dashboard_login_job_release(job);
+}
+
+int flowie_control_dashboard_execute_login(
+    flowie_control_dashboard_t *dashboard, const char *root_group_id, const char *principal_id,
+    const uint8_t *secret, size_t secret_size, const char *remote_address,
+    char token_out[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u]) {
+  flowie_control_dashboard_login_job_t *job;
+  coro_context_t *context;
+  int completed;
+  int wait_rc = TURBO_OK;
+  int rc;
+  size_t root_group_size;
+  size_t principal_size;
+  size_t remote_size;
+  if (token_out) token_out[0] = '\0';
+  if (!dashboard || !dashboard->login || !root_group_id || !principal_id || !secret ||
+      secret_size == 0u || secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX ||
+      !remote_address || !token_out)
+    return TURBO_EINVAL;
+  root_group_size = strnlen(root_group_id, TURBO_FLOW_SECURITY_ID_MAX + 1u);
+  principal_size = strnlen(principal_id, TURBO_FLOW_SECURITY_ID_MAX + 1u);
+  remote_size = strnlen(remote_address, FLOWIE_CONTROL_AUTH_REMOTE_ADDRESS_MAX + 1u);
+  if (root_group_size == 0u || root_group_size > TURBO_FLOW_SECURITY_ID_MAX ||
+      principal_size == 0u || principal_size > TURBO_FLOW_SECURITY_ID_MAX ||
+      remote_size == 0u || remote_size > FLOWIE_CONTROL_AUTH_REMOTE_ADDRESS_MAX)
+    return TURBO_EINVAL;
+  if (!dashboard->login_executor)
+    return dashboard->login(dashboard->session_ctx, root_group_id, principal_id, secret,
+                            secret_size, remote_address, token_out);
+  context = coro_context_current();
+  if (!context) return TURBO_EINVAL;
+  job = (flowie_control_dashboard_login_job_t *)calloc(1u, sizeof(*job));
+  if (!job) return TURBO_ENOMEM;
+  job->wait = coro_wait_create(context);
+  if (!job->wait) {
+    crypto_wipe(job, sizeof(*job));
+    free(job);
+    return TURBO_ENOMEM;
+  }
+  job->dashboard = dashboard;
+  memcpy(job->root_group_id, root_group_id, root_group_size + 1u);
+  memcpy(job->principal_id, principal_id, principal_size + 1u);
+  memcpy(job->secret, secret, secret_size);
+  job->secret_size = secret_size;
+  memcpy(job->remote_address, remote_address, remote_size + 1u);
+  job->result = TURBO_EIO;
+  atomic_init(&job->references, 2u);
+  atomic_init(&job->completed, 0);
+  atomic_init(&job->owner_state, FLOWIE_CONTROL_DASHBOARD_LOGIN_ARMED);
+  if (turbo_threadpool_try_submit(dashboard->login_executor,
+                                  flowie_control_dashboard_login_job_run, job) != 0) {
+    atomic_store_explicit(&job->owner_state, FLOWIE_CONTROL_DASHBOARD_LOGIN_ABANDONED,
+                          memory_order_release);
+    flowie_control_dashboard_login_job_release(job);
+    flowie_control_dashboard_login_job_release(job);
+    return TURBO_EBUSY;
+  }
+  completed = atomic_load_explicit(&job->completed, memory_order_acquire);
+  if (!completed) wait_rc = coro_wait_for(job->wait, dashboard->login_executor_deadline_ms);
+  completed = atomic_load_explicit(&job->completed, memory_order_acquire);
+  if (completed) {
+    rc = job->result;
+    if (rc == TURBO_OK) memcpy(token_out, job->token, sizeof(job->token));
+    atomic_store_explicit(&job->owner_state, FLOWIE_CONTROL_DASHBOARD_LOGIN_ACCEPTED,
+                          memory_order_release);
+  } else {
+    rc = wait_rc == TURBO_OK ? TURBO_ETIMEDOUT : wait_rc;
+    atomic_store_explicit(&job->owner_state, FLOWIE_CONTROL_DASHBOARD_LOGIN_ABANDONED,
+                          memory_order_release);
+  }
+  flowie_control_dashboard_login_job_release(job);
+  return rc;
+}
 
 static int flowie_control_dashboard_csrf_valid(const char *token) {
   if (!token ||
@@ -48,15 +189,102 @@ static int flowie_control_dashboard_csrf_valid(const char *token) {
   return 1;
 }
 
+int flowie_control_dashboard_request_is_same_origin(const Req *request) {
+  const char *host = NULL;
+  const char *origin = NULL;
+  const char *fetch_site = NULL;
+  char expected[FLOWIE_CONTROL_DASHBOARD_HOST_MAX + 32u];
+  int written;
+  if (flowie_control_http_header_exact(request, "Host", &host) != TURBO_OK ||
+      strnlen(host, FLOWIE_CONTROL_DASHBOARD_HOST_MAX + 1u) >
+          FLOWIE_CONTROL_DASHBOARD_HOST_MAX)
+    return 0;
+  if (flowie_control_http_header_optional_exact(request, "Origin", &origin) != TURBO_OK) return 0;
+  if (!origin || strcmp(origin, "null") == 0)
+    return flowie_control_http_header_exact(request, "Sec-Fetch-Site", &fetch_site) == TURBO_OK &&
+           strcmp(fetch_site, "same-origin") == 0;
+  written = snprintf(expected, sizeof(expected), "https://%s", host);
+  return written > 0 && (size_t)written < sizeof(expected) && strcmp(origin, expected) == 0;
+}
+
+static int flowie_control_dashboard_page_section_valid(
+    const flowie_control_dashboard_page_t *page) {
+  int has_users = page->users_after[0] != '\0';
+  int has_groups = page->groups_after[0] != '\0';
+  int has_roles = page->roles_after[0] != '\0';
+  switch (page->section) {
+    case FLOWIE_CONTROL_DASHBOARD_SECTION_ALL:
+      return 1;
+    case FLOWIE_CONTROL_DASHBOARD_SECTION_OVERVIEW:
+      return !has_users && !has_groups && !has_roles && !page->policy_has_after &&
+             !page->audit_has_after;
+    case FLOWIE_CONTROL_DASHBOARD_SECTION_USERS:
+      return !has_groups && !has_roles && !page->policy_has_after && !page->audit_has_after;
+    case FLOWIE_CONTROL_DASHBOARD_SECTION_GROUPS:
+      return !has_users && !has_roles && !page->policy_has_after && !page->audit_has_after;
+    case FLOWIE_CONTROL_DASHBOARD_SECTION_ROLES:
+      return !has_users && !has_groups && !page->policy_has_after && !page->audit_has_after;
+    case FLOWIE_CONTROL_DASHBOARD_SECTION_ACLS:
+      return !has_users && !has_groups && !has_roles && !page->audit_has_after;
+    case FLOWIE_CONTROL_DASHBOARD_SECTION_AUDIT:
+      return !has_users && !has_groups && !has_roles && !page->policy_has_after;
+    default:
+      return 0;
+  }
+}
+
 static int flowie_control_dashboard_page_valid(const flowie_control_dashboard_page_t *page) {
   return page && page->size >= sizeof(*page) &&
+         strnlen(page->root_group_id, sizeof(page->root_group_id)) <
+             sizeof(page->root_group_id) &&
          strnlen(page->users_after, sizeof(page->users_after)) < sizeof(page->users_after) &&
          strnlen(page->groups_after, sizeof(page->groups_after)) < sizeof(page->groups_after) &&
          strnlen(page->roles_after, sizeof(page->roles_after)) < sizeof(page->roles_after) &&
          (page->policy_has_after == 0 || page->policy_has_after == 1) &&
          (!page->policy_has_after || page->policy_after < TURBO_FLOW_SECURITY_MAX_RULES) &&
          (page->audit_has_after == 0 || page->audit_has_after == 1) &&
-         (!page->audit_has_after || page->audit_after <= (uint64_t)INT64_MAX);
+         (!page->audit_has_after || page->audit_after <= (uint64_t)INT64_MAX) &&
+         flowie_control_dashboard_page_section_valid(page);
+}
+
+static int flowie_control_dashboard_section_parse(
+    const char *value, flowie_control_dashboard_section_t *section_out) {
+  if (!value || !section_out) return TURBO_EINVAL;
+  if (strcmp(value, "overview") == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_OVERVIEW;
+  else if (strcmp(value, "users") == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_USERS;
+  else if (strcmp(value, "groups") == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_GROUPS;
+  else if (strcmp(value, "roles") == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_ROLES;
+  else if (strcmp(value, "acls") == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_ACLS;
+  else if (strcmp(value, "audit") == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_AUDIT;
+  else
+    return TURBO_EPROTO;
+  return TURBO_OK;
+}
+
+static int flowie_control_dashboard_section_from_path(
+    const char *path, flowie_control_dashboard_section_t *section_out) {
+  if (!path || !section_out) return TURBO_EINVAL;
+  if (strcmp(path, FLOWIE_CONTROL_DASHBOARD_PATH) == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_OVERVIEW;
+  else if (strcmp(path, FLOWIE_CONTROL_DASHBOARD_USERS_PATH) == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_USERS;
+  else if (strcmp(path, FLOWIE_CONTROL_DASHBOARD_GROUPS_PATH) == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_GROUPS;
+  else if (strcmp(path, FLOWIE_CONTROL_DASHBOARD_ROLES_PATH) == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_ROLES;
+  else if (strcmp(path, FLOWIE_CONTROL_DASHBOARD_ACLS_PATH) == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_ACLS;
+  else if (strcmp(path, FLOWIE_CONTROL_DASHBOARD_AUDIT_PATH) == 0)
+    *section_out = FLOWIE_CONTROL_DASHBOARD_SECTION_AUDIT;
+  else
+    return TURBO_EPROTO;
+  return TURBO_OK;
 }
 
 int flowie_control_dashboard_render_shell(flowie_control_dashboard_t *dashboard,
@@ -67,15 +295,41 @@ int flowie_control_dashboard_render_shell(flowie_control_dashboard_t *dashboard,
                                                     html_size_out);
 }
 
+int flowie_control_dashboard_render_login(flowie_control_dashboard_t *dashboard, int group_mode,
+                                          int show_error, char **html_out,
+                                          size_t *html_size_out) {
+  if (!dashboard) return TURBO_EINVAL;
+  return flowie_control_dashboard_view_render_login(dashboard->view, group_mode, show_error,
+                                                    html_out, html_size_out);
+}
+
+int flowie_control_dashboard_render_password(
+    flowie_control_dashboard_t *dashboard,
+    const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u], char **html_out,
+    size_t *html_size_out) {
+  if (!dashboard) return TURBO_EINVAL;
+  return flowie_control_dashboard_view_render_password(dashboard->view, csrf_token, html_out,
+                                                       html_size_out);
+}
+
 int flowie_control_dashboard_render_page(
     flowie_control_dashboard_t *dashboard, const flowie_control_management_caller_t *caller,
     const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u],
     const flowie_control_dashboard_page_t *page, char **html_out, size_t *html_size_out) {
+  flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
+  const char *target_root_group_id;
+  int rc;
   if (!dashboard || !caller || !flowie_control_dashboard_page_valid(page) ||
       !flowie_control_dashboard_csrf_valid(csrf_token))
     return TURBO_EINVAL;
-  return flowie_control_dashboard_view_render_content(dashboard->view, dashboard->service, caller,
-                                                      csrf_token, page, html_out, html_size_out);
+  target_root_group_id =
+      page->root_group_id[0] ? page->root_group_id : caller->root_group_id;
+  rc = flowie_control_management_scope_caller(dashboard->service, caller, target_root_group_id,
+                                              &scoped);
+  if (rc != TURBO_OK) return rc;
+  return flowie_control_dashboard_view_render_content(
+      dashboard->view, dashboard->service, caller, &scoped, csrf_token, page, html_out,
+      html_size_out);
 }
 
 int flowie_control_dashboard_render(flowie_control_dashboard_t *dashboard,
@@ -208,9 +462,10 @@ static int flowie_control_dashboard_page_text(const char *encoded, char *out, si
 
 int flowie_control_dashboard_page_parse(const Req *request, flowie_control_dashboard_page_t *out) {
   flowie_control_dashboard_page_t page = FLOWIE_CONTROL_DASHBOARD_PAGE_INIT;
+  int has_section = 0;
   if (out && out->size >= sizeof(*out)) *out = page;
   if (!request || !out || out->size < sizeof(*out) || request->query.count < 0 ||
-      request->query.count > 5 || (request->query.count > 0 && !request->query.items))
+      request->query.count > 7 || (request->query.count > 0 && !request->query.items))
     return TURBO_EINVAL;
   for (int index = 0; index < request->query.count; ++index) {
     const char *key = request->query.items[index].key;
@@ -218,7 +473,15 @@ int flowie_control_dashboard_page_parse(const Req *request, flowie_control_dashb
     uint64_t number = 0u;
     int rc;
     if (!key || !value) return TURBO_EPROTO;
-    if (strcmp(key, "users_after") == 0) {
+    if (strcmp(key, "root_group_id") == 0) {
+      if (page.root_group_id[0]) return TURBO_EPROTO;
+      rc = flowie_control_dashboard_page_text(value, page.root_group_id,
+                                              sizeof(page.root_group_id));
+    } else if (strcmp(key, "section") == 0) {
+      if (has_section) return TURBO_EPROTO;
+      rc = flowie_control_dashboard_section_parse(value, &page.section);
+      has_section = rc == TURBO_OK;
+    } else if (strcmp(key, "users_after") == 0) {
       if (page.users_after[0]) return TURBO_EPROTO;
       rc = flowie_control_dashboard_page_text(value, page.users_after, sizeof(page.users_after));
     } else if (strcmp(key, "groups_after") == 0) {
@@ -248,6 +511,7 @@ int flowie_control_dashboard_page_parse(const Req *request, flowie_control_dashb
     }
     if (rc != TURBO_OK) return rc;
   }
+  if (!flowie_control_dashboard_page_valid(&page)) return TURBO_EPROTO;
   *out = page;
   return TURBO_OK;
 }
@@ -528,9 +792,18 @@ done:
 }
 
 static const char *const FLOWIE_CONTROL_DASHBOARD_ROUTES[] = {
-    FLOWIE_CONTROL_DASHBOARD_PATH,        FLOWIE_CONTROL_DASHBOARD_CONTENT_PATH,
-    FLOWIE_CONTROL_DASHBOARD_ACTION_PATH, FLOWIE_CONTROL_DASHBOARD_CSS_PATH,
-    FLOWIE_CONTROL_DASHBOARD_HTMX_PATH};
+    FLOWIE_CONTROL_DASHBOARD_PATH,
+    FLOWIE_CONTROL_DASHBOARD_USERS_PATH,
+    FLOWIE_CONTROL_DASHBOARD_GROUPS_PATH,
+    FLOWIE_CONTROL_DASHBOARD_ROLES_PATH,
+    FLOWIE_CONTROL_DASHBOARD_ACLS_PATH,
+    FLOWIE_CONTROL_DASHBOARD_AUDIT_PATH,
+    FLOWIE_CONTROL_DASHBOARD_CONTENT_PATH,
+    FLOWIE_CONTROL_DASHBOARD_ACTION_PATH,
+    FLOWIE_CONTROL_DASHBOARD_CSS_PATH,
+    FLOWIE_CONTROL_DASHBOARD_HTMX_PATH,
+    FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH,
+    FLOWIE_CONTROL_DASHBOARD_PASSWORD_PATH, FLOWIE_CONTROL_DASHBOARD_LOGOUT_PATH};
 
 static void flowie_control_dashboard_headers(Res *response) {
   set_header(response, "Cache-Control", "no-store");
@@ -543,11 +816,29 @@ static void flowie_control_dashboard_headers(Res *response) {
   set_header(response, "Permissions-Policy", "camera=(), microphone=(), geolocation=()");
 }
 
+static void flowie_control_dashboard_login_headers(Res *response) {
+  flowie_control_dashboard_headers(response);
+  set_header(response, "Content-Security-Policy", FLOWIE_CONTROL_DASHBOARD_LOGIN_CSP);
+}
+
+static void flowie_control_dashboard_redirect(Res *response, const char *location) {
+  set_header(response, "Location", location);
+  reply(response, SEE_OTHER, "text/plain; charset=utf-8", "", 0u);
+}
+
+static void flowie_control_dashboard_auth_required(Res *response, int htmx) {
+  if (htmx) {
+    set_header(response, "HX-Redirect", FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH);
+    send_text(response, UNAUTHORIZED, "Authentication required");
+  } else {
+    flowie_control_dashboard_redirect(response, FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH);
+  }
+}
+
 int flowie_control_dashboard_request_is_htmx(const Req *request) {
   const char *header;
-  if (!request) return 0;
-  header = get_headers(request, "HX-Request");
-  return header && strcmp(header, "true") == 0;
+  return flowie_control_http_header_exact(request, "HX-Request", &header) == TURBO_OK &&
+         strcmp(header, "true") == 0;
 }
 
 static int flowie_control_dashboard_status(int rc) {
@@ -609,11 +900,20 @@ static void flowie_control_dashboard_shell_handler(Req *request, Res *response) 
   int rc;
   flowie_control_dashboard_headers(response);
   if (!dashboard || !request->security || !request->security->authenticated) {
-    send_text(response, UNAUTHORIZED, "Unauthorized");
+    flowie_control_dashboard_auth_required(response, 0);
     return;
   }
   rc = flowie_control_dashboard_resolve(dashboard, request, &caller, csrf);
+  if (rc == TURBO_OK && caller.permissions == FLOWIE_CONTROL_MANAGEMENT_PASSWORD_CHANGE) {
+    crypto_wipe(csrf, sizeof(csrf));
+    flowie_control_dashboard_redirect(response, FLOWIE_CONTROL_DASHBOARD_PASSWORD_PATH);
+    return;
+  }
   if (rc == TURBO_OK) rc = flowie_control_dashboard_page_parse(request, &page);
+  if (rc == TURBO_OK && page.section != FLOWIE_CONTROL_DASHBOARD_SECTION_ALL)
+    rc = TURBO_EPROTO;
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_section_from_path(request->path, &page.section);
   if (rc == TURBO_OK)
     rc = flowie_control_dashboard_render_shell(dashboard, &page, &html, &html_size);
   crypto_wipe(csrf, sizeof(csrf));
@@ -635,7 +935,7 @@ static void flowie_control_dashboard_content_handler(Req *request, Res *response
   int rc;
   flowie_control_dashboard_headers(response);
   if (!dashboard || !request->security || !request->security->authenticated) {
-    send_text(response, UNAUTHORIZED, "Unauthorized");
+    flowie_control_dashboard_auth_required(response, 1);
     return;
   }
   if (!flowie_control_dashboard_request_is_htmx(request)) {
@@ -643,6 +943,12 @@ static void flowie_control_dashboard_content_handler(Req *request, Res *response
     return;
   }
   rc = flowie_control_dashboard_resolve(dashboard, request, &caller, csrf);
+  if (rc == TURBO_OK && caller.permissions == FLOWIE_CONTROL_MANAGEMENT_PASSWORD_CHANGE) {
+    crypto_wipe(csrf, sizeof(csrf));
+    set_header(response, "HX-Redirect", FLOWIE_CONTROL_DASHBOARD_PASSWORD_PATH);
+    send_text(response, FORBIDDEN, "Password change required");
+    return;
+  }
   if (rc == TURBO_OK) rc = flowie_control_dashboard_page_parse(request, &page);
   if (rc == TURBO_OK)
     rc = flowie_control_dashboard_render_page(dashboard, &caller, csrf, &page, &html, &html_size);
@@ -658,6 +964,7 @@ static void flowie_control_dashboard_content_handler(Req *request, Res *response
 static void flowie_control_dashboard_post_handler(Req *request, Res *response) {
   flowie_control_dashboard_t *dashboard = flowie_control_dashboard_from_request(request);
   flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
+  flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   flowie_control_dashboard_page_t page = FLOWIE_CONTROL_DASHBOARD_PAGE_INIT;
   char csrf[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u] = {0};
   char *html = NULL;
@@ -666,15 +973,15 @@ static void flowie_control_dashboard_post_handler(Req *request, Res *response) {
   int rc;
   flowie_control_dashboard_headers(response);
   if (!dashboard || !request->security || !request->security->authenticated) {
-    send_text(response, UNAUTHORIZED, "Unauthorized");
+    flowie_control_dashboard_auth_required(response, 1);
     return;
   }
   if (!flowie_control_dashboard_request_is_htmx(request)) {
     send_text(response, BAD_REQUEST, "HTMX request required");
     return;
   }
-  content_type = get_headers(request, "Content-Type");
-  if (!content_type || strcmp(content_type, "application/x-www-form-urlencoded") != 0 ||
+  if (flowie_control_http_header_exact(request, "Content-Type", &content_type) != TURBO_OK ||
+      strcmp(content_type, "application/x-www-form-urlencoded") != 0 ||
       request->body_len == 0u || request->body_len > FLOWIE_CONTROL_DASHBOARD_BODY_MAX) {
     flowie_control_dashboard_send_error(dashboard, response, TURBO_EPROTO);
     return;
@@ -682,7 +989,11 @@ static void flowie_control_dashboard_post_handler(Req *request, Res *response) {
   rc = flowie_control_dashboard_resolve(dashboard, request, &caller, csrf);
   if (rc == TURBO_OK) rc = flowie_control_dashboard_page_parse(request, &page);
   if (rc == TURBO_OK)
-    rc = flowie_control_dashboard_process_form(dashboard, &caller, csrf, request->body,
+    rc = flowie_control_management_scope_caller(
+        dashboard->service, &caller,
+        page.root_group_id[0] ? page.root_group_id : caller.root_group_id, &scoped);
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_process_form(dashboard, &scoped, csrf, request->body,
                                                request->body_len);
   if (rc == TURBO_OK)
     rc = flowie_control_dashboard_render_page(dashboard, &caller, csrf, &page, &html, &html_size);
@@ -703,8 +1014,8 @@ static void flowie_control_dashboard_asset_handler(Req *request, Res *response,
   size_t size = 0u;
   int rc;
   flowie_control_dashboard_headers(response);
-  if (!dashboard || !request->security || !request->security->authenticated) {
-    send_text(response, UNAUTHORIZED, "Unauthorized");
+  if (!dashboard) {
+    send_text(response, NOT_FOUND, "Asset unavailable");
     return;
   }
   rc = flowie_control_dashboard_view_asset(dashboard->view, asset, &data, &size);
@@ -725,6 +1036,268 @@ static void flowie_control_dashboard_htmx_handler(Req *request, Res *response) {
                                          "text/javascript; charset=utf-8");
 }
 
+static int flowie_control_dashboard_login_group_mode(const Req *request, int *group_mode_out) {
+  const request_item_t *scope;
+  if (group_mode_out) *group_mode_out = 0;
+  if (!request || !group_mode_out || request->query.count < 0 ||
+      (request->query.count > 0 && !request->query.items))
+    return TURBO_EINVAL;
+  if (request->query.count == 0) return TURBO_OK;
+  if (request->query.count != 1) return TURBO_EPROTO;
+  scope = &request->query.items[0];
+  if (!scope->key || !scope->value || strcmp(scope->key, "scope") != 0 ||
+      strcmp(scope->value, "group") != 0)
+    return TURBO_EPROTO;
+  *group_mode_out = 1;
+  return TURBO_OK;
+}
+
+static void flowie_control_dashboard_login_get_handler(Req *request, Res *response) {
+  flowie_control_dashboard_t *dashboard = flowie_control_dashboard_from_request(request);
+  char *html = NULL;
+  size_t html_size = 0u;
+  int group_mode = 0;
+  int rc;
+  flowie_control_dashboard_login_headers(response);
+  if (!dashboard) {
+    send_text(response, NOT_FOUND, "Login unavailable");
+    return;
+  }
+  if (request->security && request->security->authenticated) {
+    flowie_control_dashboard_redirect(response, FLOWIE_CONTROL_DASHBOARD_PATH);
+    return;
+  }
+  rc = flowie_control_dashboard_login_group_mode(request, &group_mode);
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_render_login(dashboard, group_mode, 0, &html, &html_size);
+  if (rc != TURBO_OK) {
+    send_text(response, rc == TURBO_EPROTO ? BAD_REQUEST : INTERNAL_SERVER_ERROR,
+              "Login unavailable");
+    return;
+  }
+  reply(response, OK, "text/html; charset=utf-8", html, html_size);
+  flowie_control_dashboard_html_free(html);
+}
+
+static void flowie_control_dashboard_login_post_handler(Req *request, Res *response) {
+  static const char *const keys[] = {"root_group", "principal", "password"};
+  flowie_control_dashboard_t *dashboard = flowie_control_dashboard_from_request(request);
+  flowie_control_dashboard_form_t form = {0};
+  char token[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u] = {0};
+  const char *content_type;
+  const char *root_group = NULL;
+  const char *principal = NULL;
+  const char *password = NULL;
+  char *html = NULL;
+  size_t html_size = 0u;
+  size_t password_size;
+  int rc = TURBO_EPROTO;
+  flowie_control_dashboard_login_headers(response);
+  if (!dashboard || !dashboard->login || !request->client || request->body_stream ||
+      !request->body || request->body_len == 0u ||
+      request->body_len > FLOWIE_CONTROL_DASHBOARD_BODY_MAX ||
+      !flowie_control_dashboard_request_is_same_origin(request)) {
+    send_text(response, BAD_REQUEST, "Invalid login request");
+    return;
+  }
+  if (flowie_control_http_header_exact(request, "Content-Type", &content_type) != TURBO_OK ||
+      strcmp(content_type, "application/x-www-form-urlencoded") != 0) {
+    send_text(response, BAD_REQUEST, "Invalid login request");
+    return;
+  }
+  rc = flowie_control_dashboard_form_parse(request->body, request->body_len, &form);
+  if (rc != TURBO_OK ||
+      !flowie_control_dashboard_form_exact(&form, keys, sizeof(keys) / sizeof(keys[0])))
+    goto denied;
+  root_group = flowie_control_dashboard_form_get(&form, keys[0]);
+  principal = flowie_control_dashboard_form_get(&form, keys[1]);
+  password = flowie_control_dashboard_form_get(&form, keys[2]);
+  password_size = password ? strnlen(password, FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX + 1u) : 0u;
+  if (!root_group || !principal || password_size == 0u ||
+      password_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX)
+    goto denied;
+  rc = flowie_control_dashboard_execute_login(dashboard, root_group, principal,
+                                              (const uint8_t *)password, password_size,
+                                              "management-dashboard", token);
+  if (rc == TURBO_OK) {
+    cookie_options_t options = {(int)dashboard->session_ttl_seconds, "/v1/management", "Strict",
+                                true, true};
+    set_cookie(response, FLOWIE_CONTROL_MANAGEMENT_SESSION_COOKIE, token, &options);
+    flowie_control_dashboard_redirect(response, FLOWIE_CONTROL_DASHBOARD_PATH);
+    goto done;
+  }
+  if (rc == TURBO_EBUSY) {
+    send_text(response, TOO_MANY_REQUESTS, "Login temporarily rate limited");
+    goto done;
+  }
+  if (rc == TURBO_ETIMEDOUT || rc == TURBO_EINTR || rc == TURBO_EIO) {
+    send_text(response, SERVICE_UNAVAILABLE, "Login temporarily unavailable");
+    goto done;
+  }
+
+denied:
+  rc = flowie_control_dashboard_render_login(
+      dashboard,
+      root_group && strcmp(root_group, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP) != 0, 1,
+      &html, &html_size);
+  if (rc == TURBO_OK) {
+    reply(response, UNAUTHORIZED, "text/html; charset=utf-8", html, html_size);
+    flowie_control_dashboard_html_free(html);
+  } else {
+    send_text(response, INTERNAL_SERVER_ERROR, "Login unavailable");
+  }
+
+done:
+  if (form.count > 0u) {
+    char *owned_password = (char *)flowie_control_dashboard_form_get(&form, "password");
+    if (owned_password) crypto_wipe(owned_password, strlen(owned_password));
+  }
+  crypto_wipe(token, sizeof(token));
+  flowie_control_dashboard_form_destroy(&form);
+}
+
+static void flowie_control_dashboard_password_get_handler(Req *request, Res *response) {
+  flowie_control_dashboard_t *dashboard = flowie_control_dashboard_from_request(request);
+  flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
+  char csrf[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u] = {0};
+  char *html = NULL;
+  size_t html_size = 0u;
+  int rc;
+  flowie_control_dashboard_login_headers(response);
+  if (!dashboard || !request->security || !request->security->authenticated) {
+    flowie_control_dashboard_auth_required(response, 0);
+    return;
+  }
+  rc = flowie_control_dashboard_resolve(dashboard, request, &caller, csrf);
+  if (rc != TURBO_OK) {
+    crypto_wipe(csrf, sizeof(csrf));
+    flowie_control_dashboard_auth_required(response, 0);
+    return;
+  }
+  if (caller.permissions != FLOWIE_CONTROL_MANAGEMENT_PASSWORD_CHANGE) {
+    crypto_wipe(csrf, sizeof(csrf));
+    flowie_control_dashboard_redirect(response, FLOWIE_CONTROL_DASHBOARD_PATH);
+    return;
+  }
+  rc = flowie_control_dashboard_render_password(dashboard, csrf, &html, &html_size);
+  crypto_wipe(csrf, sizeof(csrf));
+  if (rc != TURBO_OK) {
+    send_text(response, INTERNAL_SERVER_ERROR, "Password form unavailable");
+    return;
+  }
+  reply(response, OK, "text/html; charset=utf-8", html, html_size);
+  flowie_control_dashboard_html_free(html);
+}
+
+static void flowie_control_dashboard_password_post_handler(Req *request, Res *response) {
+  static const char *const keys[] = {"csrf", "new_password", "confirm_password"};
+  static const char hex[] = "0123456789abcdef";
+  flowie_control_dashboard_t *dashboard = flowie_control_dashboard_from_request(request);
+  flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
+  flowie_control_password_change_command_t command = FLOWIE_CONTROL_PASSWORD_CHANGE_COMMAND_INIT;
+  flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
+  flowie_control_dashboard_form_t form = {0};
+  uint8_t random[16] = {0};
+  char csrf[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u] = {0};
+  char request_id[sizeof("password-change-") + sizeof(random) * 2u] = "password-change-";
+  char token[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u] = {0};
+  const char *submitted_csrf;
+  const char *new_password;
+  const char *confirm_password;
+  const char *content_type;
+  size_t password_size = 0u;
+  cookie_options_t options = {0, "/v1/management", "Strict", true, true};
+  int rc = TURBO_EPROTO;
+  flowie_control_dashboard_login_headers(response);
+  if (!dashboard || !request->security || !request->security->authenticated ||
+      !flowie_control_dashboard_request_is_same_origin(request) || request->body_stream ||
+      !request->body ||
+      request->body_len == 0u || request->body_len > FLOWIE_CONTROL_DASHBOARD_BODY_MAX) {
+    send_text(response, BAD_REQUEST, "Invalid password change request");
+    return;
+  }
+  if (flowie_control_http_header_exact(request, "Content-Type", &content_type) != TURBO_OK ||
+      strcmp(content_type, "application/x-www-form-urlencoded") != 0) {
+    send_text(response, BAD_REQUEST, "Invalid password change request");
+    return;
+  }
+  rc = flowie_control_dashboard_resolve(dashboard, request, &caller, csrf);
+  if (rc != TURBO_OK || caller.permissions != FLOWIE_CONTROL_MANAGEMENT_PASSWORD_CHANGE) goto done;
+  rc = flowie_control_dashboard_form_parse(request->body, request->body_len, &form);
+  if (rc != TURBO_OK ||
+      !flowie_control_dashboard_form_exact(&form, keys, sizeof(keys) / sizeof(keys[0])))
+    goto done;
+  submitted_csrf = flowie_control_dashboard_form_get(&form, keys[0]);
+  new_password = flowie_control_dashboard_form_get(&form, keys[1]);
+  confirm_password = flowie_control_dashboard_form_get(&form, keys[2]);
+  password_size = new_password ? strnlen(new_password, FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX + 1u)
+                               : 0u;
+  if (!submitted_csrf || strlen(submitted_csrf) != FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE ||
+      crypto_verify64((const uint8_t *)submitted_csrf, (const uint8_t *)csrf) != 0 ||
+      password_size < FLOWIE_CONTROL_HUMAN_PASSWORD_MIN_SIZE ||
+      password_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX || !confirm_password ||
+      strlen(confirm_password) != password_size ||
+      memcmp(new_password, confirm_password, password_size) != 0) {
+    rc = TURBO_EINVAL;
+    goto done;
+  }
+  rc = turbo_secure_random(random, sizeof(random));
+  for (size_t index = 0u; rc == TURBO_OK && index < sizeof(random); ++index) {
+    request_id[sizeof("password-change-") - 1u + index * 2u] = hex[random[index] >> 4u];
+    request_id[sizeof("password-change-") + index * 2u] = hex[random[index] & 0x0fu];
+  }
+  if (rc == TURBO_OK)
+    rc = flowie_control_management_current_revision(dashboard->service, &caller,
+                                                    &command.expected_revision);
+  if (rc == TURBO_OK) {
+    command.new_password = new_password;
+    command.new_password_size = password_size;
+    command.request_id = request_id;
+    command.occurred_at = dashboard->clock(dashboard->clock_ctx);
+    rc = flowie_control_management_password_change(dashboard->service, &caller, &command, &result);
+  }
+  if (rc == TURBO_OK) {
+    if (flowie_control_http_cookie_exact(request, FLOWIE_CONTROL_MANAGEMENT_SESSION_COOKIE, token,
+                                         sizeof(token)) == TURBO_OK)
+      (void)dashboard->logout(dashboard->session_ctx, token);
+    set_cookie(response, FLOWIE_CONTROL_MANAGEMENT_SESSION_COOKIE, "", &options);
+    flowie_control_dashboard_redirect(response, FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH);
+  }
+
+done:
+  if (rc != TURBO_OK) send_text(response, flowie_control_dashboard_status(rc), "Password change failed");
+  if (form.count > 0u) {
+    char *owned = (char *)flowie_control_dashboard_form_get(&form, "new_password");
+    char *confirmation = (char *)flowie_control_dashboard_form_get(&form, "confirm_password");
+    if (owned) crypto_wipe(owned, strlen(owned));
+    if (confirmation) crypto_wipe(confirmation, strlen(confirmation));
+  }
+  crypto_wipe(token, sizeof(token));
+  crypto_wipe(random, sizeof(random));
+  crypto_wipe(csrf, sizeof(csrf));
+  crypto_wipe(request_id, sizeof(request_id));
+  flowie_control_dashboard_form_destroy(&form);
+}
+
+static void flowie_control_dashboard_logout_handler(Req *request, Res *response) {
+  flowie_control_dashboard_t *dashboard = flowie_control_dashboard_from_request(request);
+  char token[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u] = {0};
+  int has_token = flowie_control_http_cookie_exact(request, FLOWIE_CONTROL_MANAGEMENT_SESSION_COOKIE,
+                                                   token, sizeof(token)) == TURBO_OK;
+  cookie_options_t options = {0, "/v1/management", "Strict", true, true};
+  flowie_control_dashboard_headers(response);
+  if (!flowie_control_dashboard_request_is_same_origin(request)) {
+    crypto_wipe(token, sizeof(token));
+    send_text(response, FORBIDDEN, "Invalid origin");
+    return;
+  }
+  if (dashboard && dashboard->logout && has_token)
+    (void)dashboard->logout(dashboard->session_ctx, token);
+  set_cookie(response, FLOWIE_CONTROL_MANAGEMENT_SESSION_COOKIE, "", &options);
+  crypto_wipe(token, sizeof(token));
+  flowie_control_dashboard_redirect(response, FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH);
+}
+
 int flowie_control_dashboard_create(const flowie_control_dashboard_config_t *config,
                                     flowie_control_dashboard_t **out) {
   flowie_control_dashboard_t *dashboard;
@@ -732,7 +1305,18 @@ int flowie_control_dashboard_create(const flowie_control_dashboard_config_t *con
   int rc;
   if (out) *out = NULL;
   if (!config || config->size < sizeof(*config) || !config->service || !config->resolve_session ||
-      !config->clock || !out)
+      !config->clock || !config->login || !config->logout || !config->session_ctx ||
+      config->session_ttl_seconds < 60u || config->session_ttl_seconds > INT_MAX ||
+      (config->login_executor_enabled &&
+       (config->login_executor_workers == 0u ||
+        config->login_executor_workers > FLOWIE_CONTROL_DASHBOARD_LOGIN_EXECUTOR_MAX_WORKERS ||
+        config->login_executor_queue_capacity == 0u ||
+        config->login_executor_queue_capacity >
+            FLOWIE_CONTROL_DASHBOARD_LOGIN_EXECUTOR_MAX_QUEUE_CAPACITY ||
+        config->login_executor_deadline_ms == 0u ||
+        config->login_executor_deadline_ms >
+            FLOWIE_CONTROL_DASHBOARD_LOGIN_EXECUTOR_MAX_DEADLINE_MS)) ||
+      !out)
     return TURBO_EINVAL;
   resource_directory = config->resource_directory;
 #ifdef FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR
@@ -751,6 +1335,22 @@ int flowie_control_dashboard_create(const flowie_control_dashboard_config_t *con
   dashboard->resolve_session_ctx = config->resolve_session_ctx;
   dashboard->clock = config->clock;
   dashboard->clock_ctx = config->clock_ctx;
+  dashboard->login = config->login;
+  dashboard->logout = config->logout;
+  dashboard->session_ctx = config->session_ctx;
+  dashboard->session_ttl_seconds = config->session_ttl_seconds;
+  dashboard->login_executor_deadline_ms = config->login_executor_deadline_ms;
+  if (config->login_executor_enabled) {
+    turbo_threadpool_config_t executor_config = {(int)config->login_executor_workers,
+                                                 config->login_executor_queue_capacity};
+    dashboard->login_executor = turbo_threadpool_create_with_config(&executor_config);
+    if (!dashboard->login_executor) {
+      flowie_control_dashboard_view_destroy(dashboard->view);
+      memset(dashboard, 0, sizeof(*dashboard));
+      free(dashboard);
+      return TURBO_ENOMEM;
+    }
+  }
   *out = dashboard;
   return TURBO_OK;
 }
@@ -780,10 +1380,25 @@ int flowie_control_dashboard_bind(flowie_control_dashboard_t *dashboard, iris_ap
   }
   dashboard->bound_app = app;
   iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_PATH, flowie_control_dashboard_shell_handler);
+  iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_USERS_PATH, flowie_control_dashboard_shell_handler);
+  iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_GROUPS_PATH, flowie_control_dashboard_shell_handler);
+  iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_ROLES_PATH, flowie_control_dashboard_shell_handler);
+  iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_ACLS_PATH, flowie_control_dashboard_shell_handler);
+  iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_AUDIT_PATH, flowie_control_dashboard_shell_handler);
   iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_CONTENT_PATH, flowie_control_dashboard_content_handler);
   iris_app_post(app, FLOWIE_CONTROL_DASHBOARD_ACTION_PATH, flowie_control_dashboard_post_handler);
   iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_CSS_PATH, flowie_control_dashboard_css_handler);
   iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_HTMX_PATH, flowie_control_dashboard_htmx_handler);
+  iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH,
+               flowie_control_dashboard_login_get_handler);
+  iris_app_post(app, FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH,
+                flowie_control_dashboard_login_post_handler);
+  iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_PASSWORD_PATH,
+               flowie_control_dashboard_password_get_handler);
+  iris_app_post(app, FLOWIE_CONTROL_DASHBOARD_PASSWORD_PATH,
+                flowie_control_dashboard_password_post_handler);
+  iris_app_post(app, FLOWIE_CONTROL_DASHBOARD_LOGOUT_PATH,
+                flowie_control_dashboard_logout_handler);
   return TURBO_OK;
 }
 
@@ -801,6 +1416,8 @@ void flowie_control_dashboard_unbind(flowie_control_dashboard_t *dashboard) {
 void flowie_control_dashboard_destroy(flowie_control_dashboard_t *dashboard) {
   if (!dashboard) return;
   flowie_control_dashboard_unbind(dashboard);
+  turbo_threadpool_destroy(dashboard->login_executor);
+  dashboard->login_executor = NULL;
   flowie_control_dashboard_view_destroy(dashboard->view);
   memset(dashboard, 0, sizeof(*dashboard));
   free(dashboard);

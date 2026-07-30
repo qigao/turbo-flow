@@ -54,9 +54,9 @@ Flowie 已提交与设备已收到响应混为同一个事实。
 
 ## 兼容性、迁移与回滚
 
-该能力由 `TURBO_FLOW_BUILD_GATEWAYS` 控制，不修改现有 Flowie endpoint、
-`turbo_flow_protocol_id_t` 或产品配置格式。现有部署关闭该 option 即保持原
-构建图。
+该能力是 TurboFlow 完整产品构建图的一部分，不修改现有 Flowie endpoint、
+`turbo_flow_protocol_id_t` 或产品配置格式。构建系统不提供关闭 gateway
+能力的 feature option。
 
 ABI 使用 major/minor 和每个结构的 `size`。未来只可在结构末尾追加字段；
 破坏性变更提升 major。回滚时移除 gateway 配置与 DLL，Flowie/FlowStore

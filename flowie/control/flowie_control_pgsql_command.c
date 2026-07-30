@@ -627,10 +627,11 @@ done:
   return rc;
 }
 
-int flowie_control_pgsql_command_commit_confirm(
-    flowie_control_pgsql_command_t *view, const char *request_id, const char *actor,
-    const char *operation, const char *root_group_id, const char *target_id,
-    const char *target_detail, uint64_t revision, int *committed_out) {
+int flowie_control_pgsql_command_commit_confirm(flowie_control_pgsql_command_t *view,
+                                                const char *request_id, const char *actor,
+                                                const char *operation, const char *root_group_id,
+                                                const char *target_id, const char *target_detail,
+                                                uint64_t revision, int *committed_out) {
   flowie_control_pgsql_command_session_t session;
   flowie_control_command_result_t replay = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   int found = 0;
@@ -641,8 +642,9 @@ int flowie_control_pgsql_command_commit_confirm(
     return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_session_open(view, &session);
   if (rc != TURBO_OK) return rc;
-  rc = flowie_control_pgsql_command_replay(view, &session, request_id, actor, operation,
-                                           root_group_id, target_id, target_detail, &replay, &found);
+  rc =
+      flowie_control_pgsql_command_replay(view, &session, request_id, actor, operation,
+                                          root_group_id, target_id, target_detail, &replay, &found);
   if (rc == TURBO_OK && found && replay.revision != revision) rc = TURBO_EPROTO;
   if (rc == TURBO_OK) *committed_out = found;
   (void)flowie_control_pgsql_pool_release(&session.lease);
@@ -1208,6 +1210,10 @@ static int flowie_control_pgsql_command_credential_issue(
   }
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) || !operation ||
+      ((!command->initial_secret && command->initial_secret_size != 0u) ||
+       (command->initial_secret &&
+        (command->initial_secret_size == 0u ||
+         command->initial_secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX))) ||
       !flowie_control_pgsql_command_common_valid(command->root_group_id, command->principal_id,
                                                  command->actor, command->request_id,
                                                  command->expected_revision, command->occurred_at))
@@ -1215,7 +1221,10 @@ static int flowie_control_pgsql_command_credential_issue(
   rc = flowie_control_pgsql_command_credential_issue_preflight(view, command, operation,
                                                                require_existing);
   flowie_control_credential_default_params(&params);
-  if (rc == TURBO_OK) rc = flowie_control_credential_generate(secret, salt, verifier, &params);
+  if (rc == TURBO_OK && command->initial_secret)
+    rc = flowie_control_credential_hash(command->initial_secret, command->initial_secret_size, salt,
+                                        verifier, &params);
+  else if (rc == TURBO_OK) rc = flowie_control_credential_generate(secret, salt, verifier, &params);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_pgsql_command_session_open(view, &session);
   if (rc != TURBO_OK) goto done;
@@ -1272,8 +1281,10 @@ static int flowie_control_pgsql_command_credential_issue(
   rc = flowie_control_pgsql_command_session_close(&session, rc);
   if (rc == TURBO_OK) {
     result->revision = next;
-    memcpy(result->secret, secret, sizeof(result->secret));
-    result->secret_size = sizeof(result->secret);
+    if (!command->initial_secret) {
+      memcpy(result->secret, secret, sizeof(result->secret));
+      result->secret_size = sizeof(result->secret);
+    }
   }
 
 done:

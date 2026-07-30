@@ -32,6 +32,7 @@
 #include <string.h>
 #include <time.h>
 
+#define FLOWIE_EXPIRY_WAIT_MAX_MS UINT64_C(3600000)
 #define FLOWIE_ENDPOINT_DEFAULT_TIMEOUT_MS 1000u
 #ifndef FLOWIE_REPLY_SEND_BATCH_MAX_ITEMS
   #define FLOWIE_REPLY_SEND_BATCH_MAX_ITEMS 64u
@@ -2323,7 +2324,9 @@ static void flowie_expiry_task(coro_t *co, void *arg) {
   while (atomic_load_explicit(&endpoint->started, memory_order_acquire)) {
     uint64_t earliest = UINT64_MAX;
     uint64_t now = turbo_hrtime();
+    uint64_t wait_ms;
     size_t index = 0u;
+    int wait_rc;
     while (index < turbo_vec_size(&endpoint->sessions)) {
       flowie_endpoint_session_t **slot =
           (flowie_endpoint_session_t **)turbo_vec_at(&endpoint->sessions, index);
@@ -2438,16 +2441,17 @@ static void flowie_expiry_task(coro_t *co, void *arg) {
       ++index;
     }
     if (earliest == UINT64_MAX) {
-      (void)coro_wait_for(endpoint->expiry_wait, UINT64_MAX);
-      continue;
-    }
-    {
+      wait_ms = FLOWIE_EXPIRY_WAIT_MAX_MS;
+    } else {
       uint64_t remaining = earliest > now ? earliest - now : 0u;
-      uint64_t wait_ms =
-          remaining / UINT64_C(1000000) + (remaining % UINT64_C(1000000) != 0u ? 1u : 0u);
+      wait_ms = remaining / UINT64_C(1000000) +
+                (remaining % UINT64_C(1000000) != 0u ? 1u : 0u);
       if (wait_ms == 0u) wait_ms = 1u;
-      (void)coro_wait_for(endpoint->expiry_wait, wait_ms);
+      if (wait_ms > FLOWIE_EXPIRY_WAIT_MAX_MS) wait_ms = FLOWIE_EXPIRY_WAIT_MAX_MS;
     }
+    wait_rc = coro_wait_for(endpoint->expiry_wait, wait_ms);
+    if (wait_rc == TURBO_ESHUTDOWN) break;
+    if (wait_rc != TURBO_OK && wait_rc != TURBO_EINTR) break;
   }
   endpoint->expiry_task_active = 0;
   flowie_task_end(endpoint);

@@ -25,6 +25,10 @@ int flowie_control_credential_generate(uint8_t secret[FLOWIE_CONTROL_CREDENTIAL_
                                        uint8_t salt[FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE],
                                        uint8_t verifier[FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE],
                                        const flowie_control_credential_kdf_params_t *params);
+int flowie_control_credential_hash(const void *secret, size_t secret_size,
+                                   uint8_t salt[FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE],
+                                   uint8_t verifier[FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE],
+                                   const flowie_control_credential_kdf_params_t *params);
 
 int flowie_control_credential_verify(
     const void *secret, size_t secret_size, const uint8_t salt[FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE],

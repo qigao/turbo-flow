@@ -1574,6 +1574,10 @@ static int flowie_control_store_credential_issue(
   }
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) || !operation ||
+      ((!command->initial_secret && command->initial_secret_size != 0u) ||
+       (command->initial_secret &&
+        (command->initial_secret_size == 0u ||
+         command->initial_secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX))) ||
       !flowie_control_command_common_valid(command->root_group_id, command->principal_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at))
@@ -1614,7 +1618,10 @@ static int flowie_control_store_credential_issue(
   (void)sqlite3_close(database);
   database = NULL;
 
-  rc = flowie_control_credential_generate(secret, salt, verifier, &params);
+  if (command->initial_secret)
+    rc = flowie_control_credential_hash(command->initial_secret, command->initial_secret_size, salt,
+                                        verifier, &params);
+  else rc = flowie_control_credential_generate(secret, salt, verifier, &params);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) goto done;
@@ -1708,8 +1715,10 @@ static int flowie_control_store_credential_issue(
   }
   transaction_started = 0;
   result->revision = next;
-  memcpy(result->secret, secret, sizeof(result->secret));
-  result->secret_size = sizeof(result->secret);
+  if (!command->initial_secret) {
+    memcpy(result->secret, secret, sizeof(result->secret));
+    result->secret_size = sizeof(result->secret);
+  }
   rc = TURBO_OK;
 
 done:
@@ -3599,6 +3608,117 @@ done:
 }
 
 typedef int (*flowie_control_page_row_fn)(sqlite3_stmt *statement, void *item);
+
+int flowie_control_store_root_group_get(flowie_control_store_t *store, const char *root_group_id,
+                                        flowie_control_root_group_view_t *out) {
+  sqlite3 *database = NULL;
+  sqlite3_stmt *statement = NULL;
+  flowie_control_root_group_view_t view = FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT;
+  int status;
+  int rc;
+  if (out && out->size >= sizeof(*out)) *out = view;
+  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) || !out ||
+      out->size < sizeof(*out))
+    return TURBO_EINVAL;
+  rc = flowie_control_open_database(store, &database);
+  if (rc != TURBO_OK) return rc;
+  status = sqlite3_prepare_v2(
+      database,
+      "SELECT root_group_id FROM flowie_control_group WHERE root_group_id=?1 AND group_id=?1 "
+      "AND parent_group_id IS NULL AND depth=0 AND enabled=1",
+      -1, &statement, NULL);
+  if (status != SQLITE_OK) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  if (rc != TURBO_OK) goto done;
+  status = sqlite3_step(statement);
+  if (status == SQLITE_DONE) {
+    rc = TURBO_ENOENT;
+    goto done;
+  }
+  if (status != SQLITE_ROW) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  rc = flowie_control_copy_column(statement, 0, view.root_group_id,
+                                  sizeof(view.root_group_id));
+  if (rc == TURBO_OK && sqlite3_step(statement) != SQLITE_DONE) rc = TURBO_EPROTO;
+  if (rc == TURBO_OK) *out = view;
+
+done:
+  if (statement) (void)sqlite3_finalize(statement);
+  (void)sqlite3_close(database);
+  return rc;
+}
+
+int flowie_control_store_root_group_list(flowie_control_store_t *store,
+                                         const char *after_root_group_id,
+                                         flowie_control_root_group_view_t *items,
+                                         size_t item_capacity, size_t *count_out,
+                                         int *has_more_out) {
+  sqlite3 *database = NULL;
+  sqlite3_stmt *statement = NULL;
+  size_t count = 0u;
+  int status;
+  int rc;
+  if (count_out) *count_out = 0u;
+  if (has_more_out) *has_more_out = 0;
+  if (!store ||
+      (after_root_group_id &&
+       !flowie_control_text_valid(after_root_group_id, TURBO_FLOW_SECURITY_ID_MAX)) ||
+      !items || item_capacity == 0u || item_capacity > FLOWIE_CONTROL_PAGE_MAX || !count_out ||
+      !has_more_out)
+    return TURBO_EINVAL;
+  for (size_t index = 0u; index < item_capacity; ++index) {
+    if (items[index].size < sizeof(items[index])) return TURBO_EINVAL;
+    items[index] = (flowie_control_root_group_view_t)FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT;
+  }
+  rc = flowie_control_open_database(store, &database);
+  if (rc != TURBO_OK) return rc;
+  status = sqlite3_prepare_v2(
+      database,
+      "SELECT root_group_id FROM flowie_control_group WHERE group_id=root_group_id "
+      "AND parent_group_id IS NULL AND depth=0 AND enabled=1 "
+      "AND (?1='' OR root_group_id>?1) ORDER BY root_group_id LIMIT ?2",
+      -1, &statement, NULL);
+  if (status != SQLITE_OK) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  rc = flowie_control_bind_text(statement, 1,
+                                after_root_group_id ? after_root_group_id : "");
+  if (rc == TURBO_OK &&
+      sqlite3_bind_int64(statement, 2, (sqlite3_int64)(item_capacity + 1u)) != SQLITE_OK)
+    rc = flowie_control_sqlite_status(sqlite3_errcode(database));
+  if (rc != TURBO_OK) goto done;
+  while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
+    if (count == item_capacity) {
+      *has_more_out = 1;
+      continue;
+    }
+    rc = flowie_control_copy_column(statement, 0, items[count].root_group_id,
+                                    sizeof(items[count].root_group_id));
+    if (rc != TURBO_OK) goto done;
+    ++count;
+  }
+  if (status != SQLITE_DONE) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  *count_out = count;
+  rc = TURBO_OK;
+
+done:
+  if (statement) (void)sqlite3_finalize(statement);
+  (void)sqlite3_close(database);
+  if (rc != TURBO_OK) {
+    *count_out = 0u;
+    *has_more_out = 0;
+  }
+  return rc;
+}
 
 static int flowie_control_page_arguments_valid(flowie_control_store_t *store,
                                                const char *root_group_id, const char *after_id,

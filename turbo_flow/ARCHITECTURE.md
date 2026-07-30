@@ -68,11 +68,51 @@ TurboFlow is an embeddable C data/message graph runtime. The core owns:
 - Message ownership, stage dispatch, lifecycle, and structured errors.
 - Backend-neutral expression parsing, schema-backed type checking, and private
   MIR interpreter/JIT evaluation through an opaque compiled-expression API;
-  conditional routing remains separate work.
+  conditional routes evaluate the current successful upstream output, while
+  RulesForge-backed operations own multi-rule schema data decisions.
 
 Network protocols, storage, codecs, and email live in adapter modules. The core
 does not own broker discovery, distributed routing, databases, UI, group ownership,
 secrets management, or job-runner behavior.
+
+## Runtime Observation
+
+Runtime observation is attached to a compiled Graph by the host; it is not a
+source, sink, route, or state owner. `turbo_flow_register_observer()` registers a
+named structured Observer before the flow starts. Registration is bounded to
+`TURBO_FLOW_MAX_EVENT_OBSERVERS`, rejects duplicate names, survives
+`turbo_flow_reset()`, and transfers `ctx` destruction to the flow only after
+successful registration. Unregistration is allowed only while stopped.
+
+An Observer selects events with `event_mask` and receives immutable borrowed
+`turbo_flow_observe_event_t` views:
+
+| Event | Semantic point |
+| --- | --- |
+| `SOURCE_RECEIVED` | One message has been admitted from the named source into Graph execution. |
+| `STAGE_BEGIN` | An executable stage attempt is about to run. |
+| `STAGE_END` | That stage attempt has ended; `status` and `duration_ns` describe the attempt. |
+| `ROUTE_EVALUATED` | One ordinary, conditional, or reject edge was considered; `selected` is zero or one and `edge_kind` identifies the edge class. |
+| `SINK_COMPLETE` | A selected terminal stage has completed. |
+| `ADAPTER_START` | Adapter startup completed with the reported status. |
+| `ADAPTER_STOP` | Adapter shutdown completed with the reported status. |
+| `FLOW_COMPLETE` | The publication's selected Graph work has settled with the reported status and duration. |
+
+Names, message pointers, and all other pointed-to values are valid only during
+`on_event()`. The callback is synchronous and may execute concurrently for
+concurrent publications; it must be thread-safe and must not mutate or re-enter
+the flow. A non-OK callback result increments
+`turbo_flow_observer_failure_count()` but never changes edge selection, message
+status, adapter lifecycle, or Graph completion. This failure isolation prevents
+telemetry from becoming a hidden data-plane state transition.
+
+The structured Observer API is independent of
+`turbo_flow_set_observer()`, which remains the compatibility callback surface.
+It is also independent of log sinks: a host may translate events into metrics,
+traces, or logs, but TurboFlow does not require a logging backend. The
+`TurboFlow::Observe` summary adapter is a separate explicit terminal data-plane
+sink. Consequently, `.flow` source/sink declarations need no observer grammar;
+only a deliberately selected Observe summary adapter appears in Graph config.
 
 ## DSL
 
@@ -445,36 +485,19 @@ explicit graph stages.
 
 ## Build Components
 
-The historical full build remains the default. Set
-`TURBO_FLOW_BUILD_ADAPTERS=OFF` for a core-only build; this disables codec and
-every external adapter. A core-only configure finds TurboUtils and
-its declared base64 runtime dependency. `TurboFlow::Flow` publicly links only
-`TurboUtils::Core` and privately embeds the repository `vendor/mir` static
-target; no MIR type enters the installed public headers.
+TurboFlow is configured and installed as one complete product. Flowie,
+FlowStore, gateways, security, codecs, network and persistence adapters,
+FlowMQ, observation, scheduling, and the MIR JIT backend are always present in
+the build graph. Product feature selection is not a supported CMake
+configuration boundary.
 
-With the master switch enabled, components are independently selected through:
-
-```text
-TURBO_FLOW_BUILD_STORE
-TURBO_FLOW_BUILD_CODEC
-TURBO_FLOW_BUILD_SOCKET
-TURBO_FLOW_BUILD_HTTP_CLIENT
-TURBO_FLOW_BUILD_HTTP_SERVER
-TURBO_FLOW_BUILD_RPC
-TURBO_FLOW_BUILD_S3
-TURBO_FLOW_BUILD_EMAIL
-TURBO_FLOW_BUILD_FMQ
-TURBO_FLOW_BUILD_OBSERVE
-TURBO_FLOW_BUILD_SCHEDULE
-```
-
-TurboNet, Threads, and TurboHTTP are discovered only when an enabled component
-needs them. Package exports and `find_package(TurboFlow COMPONENTS ...)` status
-contain only enabled targets. `build_profile_core`, `build_profile_codec_fmq`,
-and `build_profile_expr_no_jit` perform nested configure/build/export checks in
-full test builds; set `TURBO_FLOW_BUILD_PROFILE_TESTS=OFF` to skip those slower
-profile checks. On Windows, profile tests prepend the vcpkg triplet `bin`
-directory to the test process `PATH`; CMake does not copy runtime DLLs.
+TurboUtils, TurboNet, Threads, TurboHTTP, PostgreSQL, RulesForge, and the other
+declared dependencies are therefore required by every product build.
+`find_package(TurboFlow COMPONENTS ...)` remains a consumer-side target
+availability check; it does not select or remove producer-side features.
+`TurboFlow::Flow` publicly links only `TurboUtils::Core` and privately embeds
+the repository `vendor/mir` static target; no MIR type enters the installed
+public headers.
 
 Core exposes a single optional read-only observer callback slot. Timing and
 callbacks are skipped when it is empty. `TurboFlow::Observe` implements that

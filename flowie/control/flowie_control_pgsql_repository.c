@@ -25,6 +25,20 @@ static int pgsql_root_group_create(void *ctx,
                                                         command, result);
 }
 
+static int pgsql_root_group_get(void *ctx, const char *root_group_id,
+                                flowie_control_root_group_view_t *out) {
+  return flowie_control_pgsql_query_root_group_get(flowie_control_pgsql_provider(ctx)->query,
+                                                   root_group_id, out);
+}
+
+static int pgsql_root_group_list(void *ctx, const char *after_root_group_id,
+                                 flowie_control_root_group_view_t *items, size_t item_capacity,
+                                 size_t *count_out, int *has_more_out) {
+  return flowie_control_pgsql_query_root_group_list(
+      flowie_control_pgsql_provider(ctx)->query, after_root_group_id, items, item_capacity,
+      count_out, has_more_out);
+}
+
 static int pgsql_user_create(void *ctx, const flowie_control_user_create_command_t *command,
                              flowie_control_command_result_t *result) {
   return flowie_control_pgsql_command_user_create(flowie_control_pgsql_provider(ctx)->command,
@@ -249,7 +263,8 @@ static int pgsql_audit_count(void *ctx, size_t *count_out) {
 }
 
 static const flowie_control_repository_user_ops_t PGSQL_USER_OPS = {
-    pgsql_root_group_create, pgsql_user_create, pgsql_user_disable, pgsql_user_get,
+    pgsql_root_group_create, pgsql_root_group_get, pgsql_root_group_list,
+    pgsql_user_create,       pgsql_user_disable,  pgsql_user_get,
     pgsql_user_list};
 static const flowie_control_repository_auth_ops_t PGSQL_AUTH_OPS = {
     pgsql_credential_verify, pgsql_credential_state, pgsql_current_revision,

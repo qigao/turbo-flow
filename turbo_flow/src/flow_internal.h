@@ -142,6 +142,28 @@ typedef struct flow_edge_plan_impl_s {
   turbo_flow_expr_t *predicate;
 } flow_edge_plan_impl_t;
 
+typedef struct flow_expr_projection_field_s {
+  tstr_t path;
+  turbo_flow_expr_value_type_t type;
+  uint32_t field_id;
+} flow_expr_projection_field_t;
+
+typedef struct flow_expr_projection_registration_s {
+  turbo_flow_data_schema_t schema;
+  tstr_t schema_name;
+  tstr_t type_name;
+  tstr_t projection_type;
+  flow_expr_projection_field_t *fields;
+  size_t field_count;
+  turbo_flow_expr_projection_field_fn read_field;
+  void *ctx;
+} flow_expr_projection_registration_t;
+
+typedef struct flow_expr_projection_eval_binding_s {
+  const flow_expr_projection_registration_t *registration;
+  const void *projection;
+} flow_expr_projection_eval_binding_t;
+
 typedef enum flow_runtime_node_flags_e {
   FLOW_RUNTIME_NODE_SOURCE = 1u << 0,
   FLOW_RUNTIME_NODE_PORT = 1u << 1,
@@ -384,6 +406,12 @@ typedef struct flow_reorder_state_s {
   turbo_cond_t cond;
 } flow_reorder_state_t;
 
+typedef struct flow_event_observer_registration_s {
+  tstr_t name;
+  turbo_flow_event_observer_ops_t ops;
+  void *ctx;
+} flow_event_observer_registration_t;
+
 struct turbo_flow_s {
   turbo_flow_state_t state;
   turbo_vec_t stages;
@@ -406,12 +434,15 @@ struct turbo_flow_s {
   turbo_vec_t modules;
   turbo_vec_t adapters;
   turbo_vec_t resources;
+  turbo_vec_t expr_projection_registrations;
   turbo_vec_t active_adapters;
   turbo_vec_t pool_records;
   turbo_vec_t resource_command_history;
+  turbo_vec_t event_observers;
   turbo_hash_map_t protocol_route_owners;
   uint64_t runtime_generation;
   atomic_uint_fast64_t next_sequence;
+  atomic_uint_fast64_t observer_failures;
   turbo_mutex_t runtime_mutex;
   turbo_cond_t runtime_cond;
   turbo_mutex_t broadcast_mutex;
@@ -434,6 +465,11 @@ void flow_clear_error(turbo_flow_t *flow);
 void flow_publish_error_context_begin(turbo_flow_t *flow);
 void flow_publish_error_context_end(turbo_flow_t *flow);
 int flow_error_code(const turbo_flow_t *flow);
+int flow_observer_event_enabled(const turbo_flow_t *flow,
+                                turbo_flow_observe_event_kind_t kind);
+int flow_observer_has_handlers(const turbo_flow_t *flow);
+void flow_observer_emit(turbo_flow_t *flow, const turbo_flow_observe_event_t *event);
+void flow_observer_clear(turbo_flow_t *flow);
 int flow_entry_header_init(const turbo_flow_t *flow, flow_entry_header_t *header,
                            uint32_t stage_index, flow_data_segment_kind_t segment_kind,
                            uint64_t ordering_key, uint64_t sequence, uint64_t message_id,
@@ -465,6 +501,12 @@ int flow_find_primitive_index(const turbo_flow_t *flow, const char *name);
 int flow_find_operation_index(const turbo_flow_t *flow, const char *name);
 int flow_find_module_index(const turbo_flow_t *flow, const char *name);
 int flow_find_operation_export_module(const turbo_flow_t *flow, const char *operation_name);
+void flow_expr_projection_clear(turbo_flow_t *flow);
+int flow_expr_projection_compile(turbo_flow_t *flow, const char *text, size_t len,
+                                 turbo_flow_expr_t **out, turbo_flow_error_t *error);
+void flow_expr_projection_bind_eval(
+    const turbo_flow_t *flow, const turbo_flow_msg_t *msg,
+    flow_expr_projection_eval_binding_t *binding, turbo_flow_expr_eval_context_t *context);
 const flow_adapter_operation_binding_t *
 flow_find_adapter_operation_binding(const flow_adapter_registration_t *adapter,
                                     const char *operation_name);

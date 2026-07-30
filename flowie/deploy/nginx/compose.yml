@@ -1,0 +1,36 @@
+services:
+  flowie-nginx:
+    build:
+      context: .
+    image: flowie-nginx:local
+    container_name: flowie-nginx
+    network_mode: host
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    environment:
+      FLOWIE_PUBLIC_HOST: ${FLOWIE_PUBLIC_HOST:?set FLOWIE_PUBLIC_HOST}
+      FLOWIE_CONTROL_UPSTREAM: ${FLOWIE_CONTROL_UPSTREAM:-127.0.0.1:8443}
+      FLOWIE_MQTT_UPSTREAM: ${FLOWIE_MQTT_UPSTREAM:-127.0.0.1:18883}
+      FLOWIE_CONTROL_TLS_NAME: ${FLOWIE_CONTROL_TLS_NAME:-flowie-control.internal}
+      FLOWIE_MQTT_TLS_NAME: ${FLOWIE_MQTT_TLS_NAME:-flowie-mqtt.internal}
+      FLOWIE_CERTBOT_EMAIL: ${FLOWIE_CERTBOT_EMAIL:?set FLOWIE_CERTBOT_EMAIL}
+      FLOWIE_CERTBOT_RENEW_INTERVAL: ${FLOWIE_CERTBOT_RENEW_INTERVAL:-12h}
+    volumes:
+      - ${FLOWIE_LETSENCRYPT_DIR:-./state/letsencrypt}:/etc/letsencrypt
+      - ${FLOWIE_ACME_WEBROOT_DIR:-./state/acme}:/var/www/certbot
+      - ${FLOWIE_INTERNAL_CA_FILE:?set FLOWIE_INTERNAL_CA_FILE}:/etc/flowie/internal-ca.pem:ro
+      - ${FLOWIE_HTTP_CONF_DIR:-./http.d}:/etc/flowie-nginx/http.d:ro
+      - ${FLOWIE_HTTP_ASSET_DIR:-./http-assets}:/srv/http:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --no-check-certificate -O /dev/null https://127.0.0.1/v1/management/login && nc -z 127.0.0.1 18883",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

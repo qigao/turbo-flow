@@ -96,11 +96,17 @@ turbo_flow_pgsql_register_query_adapter(turbo_flow_t *flow, const char *name,
 #define TURBO_FLOW_PGSQL_OUTBOX_MAX_CAPACITY 1000000u
 #define TURBO_FLOW_PGSQL_OUTBOX_MAX_PAYLOAD_SIZE (64u * 1024u * 1024u)
 #define TURBO_FLOW_PGSQL_OUTBOX_MAX_CLAIM_SCAN 1024u
+#define TURBO_FLOW_PGSQL_OUTBOX_MAX_DELIVERY_ATTEMPTS 1000000u
 
 typedef enum turbo_flow_pgsql_outbox_role_e {
   TURBO_FLOW_PGSQL_OUTBOX_SINK = 1,
   TURBO_FLOW_PGSQL_OUTBOX_SOURCE = 2
 } turbo_flow_pgsql_outbox_role_t;
+
+typedef enum turbo_flow_pgsql_outbox_completion_e {
+  TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_DELETE = 0,
+  TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_ARCHIVE = 1
+} turbo_flow_pgsql_outbox_completion_t;
 
 /**
  * One PostgreSQL-backed durable outbox graph binding.
@@ -128,7 +134,20 @@ typedef struct turbo_flow_pgsql_outbox_config_s {
   size_t claim_scan_limit;
   /** Non-zero creates the fixed table/index; zero validates an existing schema. */
   int create_table;
+  /**
+   * Optional lifecycle policy. These tail fields are read only when size covers
+   * the complete current structure; the v1 prefix keeps old callers compatible.
+   */
+  turbo_flow_pgsql_outbox_completion_t completion;
+  /** Zero preserves legacy fail-fast delivery; non-zero enables retry/dead-letter. */
+  uint32_t max_delivery_attempts;
+  uint32_t retry_delay_ms;
+  /** Archived rows are retained forever when zero. */
+  uint32_t archive_ttl_ms;
 } turbo_flow_pgsql_outbox_config_t;
+
+#define TURBO_FLOW_PGSQL_OUTBOX_CONFIG_V1_SIZE \
+  offsetof(turbo_flow_pgsql_outbox_config_t, completion)
 
 #define TURBO_FLOW_PGSQL_OUTBOX_CONFIG_INIT                                                        \
   {sizeof(turbo_flow_pgsql_outbox_config_t),                                                       \
@@ -140,7 +159,11 @@ typedef struct turbo_flow_pgsql_outbox_config_s {
    0u,                                                                                             \
    0u,                                                                                             \
    0u,                                                                                             \
-   0}
+   0,                                                                                              \
+   TURBO_FLOW_PGSQL_OUTBOX_COMPLETION_DELETE,                                                      \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u}
 
 /** Register one source or sink against the fixed PostgreSQL outbox schema. */
 CXX_C_API int

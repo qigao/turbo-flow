@@ -80,6 +80,18 @@ void flow_stop_adapters(turbo_flow_t *flow) {
       flow->observer_ops.adapter_event(flow->observer_ctx, stage->name, adapter->name,
                                        TURBO_FLOW_ADAPTER_EVENT_STOP, TURBO_OK);
     }
+    {
+      turbo_flow_observe_event_t event;
+      memset(&event, 0, sizeof(event));
+      event.kind = TURBO_FLOW_OBSERVE_ADAPTER_STOP;
+      event.stage_name = stage->name;
+      event.adapter_name = adapter->name;
+      event.operation_name = stage->operation_name;
+      event.status = TURBO_OK;
+      event.selected = -1;
+      event.edge_kind = -1;
+      flow_observer_emit(flow, &event);
+    }
   }
 
   turbo_vec_clear(&flow->active_adapters);
@@ -121,6 +133,18 @@ int flow_start_adapters(turbo_flow_t *flow) {
       if (flow->observer_ops.adapter_event) {
         flow->observer_ops.adapter_event(flow->observer_ctx, stage->name, adapter->name,
                                          TURBO_FLOW_ADAPTER_EVENT_START, rc);
+      }
+      {
+        turbo_flow_observe_event_t event;
+        memset(&event, 0, sizeof(event));
+        event.kind = TURBO_FLOW_OBSERVE_ADAPTER_START;
+        event.stage_name = stage->name;
+        event.adapter_name = adapter->name;
+        event.operation_name = stage->operation_name;
+        event.status = rc;
+        event.selected = -1;
+        event.edge_kind = -1;
+        flow_observer_emit(flow, &event);
       }
       if (rc != TURBO_OK) {
         if (flow->last_error.code == TURBO_OK) {

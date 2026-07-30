@@ -13,11 +13,10 @@ typedef struct flowie_control_auth_iris_adapter_s flowie_control_auth_iris_adapt
 typedef struct flowie_control_auth_iris_adapter_config_s {
   size_t size;
   flowie_control_auth_service_t *service;
-  const char *listener_id;
 } flowie_control_auth_iris_adapter_config_t;
 
 #define FLOWIE_CONTROL_AUTH_IRIS_ADAPTER_CONFIG_INIT                                               \
-  {sizeof(flowie_control_auth_iris_adapter_config_t), NULL, NULL}
+  {sizeof(flowie_control_auth_iris_adapter_config_t), NULL}
 
 /**
  * Create a transport adapter that borrows the authentication service and copies
@@ -28,11 +27,10 @@ int flowie_control_auth_iris_adapter_create(const flowie_control_auth_iris_adapt
 void flowie_control_auth_iris_adapter_destroy(flowie_control_auth_iris_adapter_t *adapter);
 
 /**
- * Copy the canonical SHA-256 identity from Iris/CoroNet's verified TLS peer.
- * The caller must provide CORO_TLS_PEER_CERT_SHA256_CAPACITY bytes and wipe the
- * result after use. Plain or unverified transports are normalized to EPERM.
+ * Copy the optional canonical SHA-256 identity from Iris/CoroNet's verified TLS peer.
+ * A TLS request without a client certificate succeeds with an empty output.
  */
-int flowie_control_auth_iris_adapter_verified_peer_certificate(
+int flowie_control_auth_iris_adapter_optional_verified_peer_certificate(
     const Req *http_request, char peer_certificate_sha256[CORO_TLS_PEER_CERT_SHA256_CAPACITY]);
 
 /**
@@ -41,23 +39,10 @@ int flowie_control_auth_iris_adapter_verified_peer_certificate(
  * local-auth worker.
  */
 int flowie_control_auth_iris_adapter_authenticate_verified(
-    flowie_control_auth_iris_adapter_t *adapter, const char *peer_certificate_sha256,
+    flowie_control_auth_iris_adapter_t *adapter, const flowie_control_verified_caller_t *caller,
     const char *identity, const char *method, const uint8_t *secret, size_t secret_size,
     const char *protocol, const char *remote_address, const char *client_peer_certificate_sha256,
     turbo_flow_security_principal_t *principal_out, int *credential_cache_hit_out);
-
-/**
- * Authenticate decoded request fields using only Iris/CoroNet's verified mTLS
- * peer identity. HTTP headers and body fields cannot supply or override caller
- * identity. Transport identity failures are normalized to TURBO_EPERM.
- */
-int flowie_control_auth_iris_adapter_authenticate(flowie_control_auth_iris_adapter_t *adapter,
-                                                  const Req *http_request, const char *identity,
-                                                  const char *method, const uint8_t *secret,
-                                                  size_t secret_size, const char *protocol,
-                                                  const char *remote_address,
-                                                  turbo_flow_security_principal_t *principal_out,
-                                                  int *credential_cache_hit_out);
 
 #ifdef __cplusplus
 }

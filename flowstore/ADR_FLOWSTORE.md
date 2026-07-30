@@ -185,7 +185,8 @@ cursor，TRIM_OLDEST/retention 只删除已规划的前缀；已裁剪 cursor �
 
 - 删除 `storage/`、`TurboFlow::FlowStorage`、`TURBO_FLOW_BUILD_STORAGE` 及其文档和测试。
 - 删除 `flowqueue/`、`TurboFlow::FlowQueue`、`TURBO_FLOW_BUILD_QUEUE` 及其文档和测试。
-- 新增 `flowstore/`、`TurboFlow::FlowStore` 和 `TURBO_FLOW_BUILD_STORE`。
+- 新增 `flowstore/` 和 `TurboFlow::FlowStore`；FlowStore 属于完整产品构建图，
+  不提供独立 feature option。
 - Flowie 按 Session/Inflight/Will、subscription index、Retained、PUBLISH Log/Series 的顺序迁移。
 
 ## 验证

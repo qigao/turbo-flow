@@ -43,6 +43,7 @@ void flow_lexer_init(flow_lexer_t *lexer, const char *input, size_t length) {
   lexer->line = TURBO_FLOW_LINE_START;
   lexer->column = TURBO_FLOW_COLUMN_START;
   lexer->expression_pending = 0;
+  lexer->line_has_arrow = 0;
 }
 
 int flow_lexer_next(flow_lexer_t *lexer, flow_token_t *token) {
@@ -56,6 +57,9 @@ int flow_lexer_next(flow_lexer_t *lexer, flow_token_t *token) {
     const char *expression_start = lexer->cursor;
     const char *expression_end;
     const char *line_end;
+    const char *scan;
+    int in_string = 0;
+    int escaped = 0;
 
     while (expression_start < lexer->limit &&
            (*expression_start == ' ' || *expression_start == '\t')) {
@@ -64,6 +68,23 @@ int flow_lexer_next(flow_lexer_t *lexer, flow_token_t *token) {
     line_end = expression_start;
     while (line_end < lexer->limit && *line_end != '\r' && *line_end != '\n') ++line_end;
     expression_end = line_end;
+    for (scan = expression_start; scan < line_end; ++scan) {
+      if (in_string) {
+        if (escaped) {
+          escaped = 0;
+        } else if (*scan == '\\') {
+          escaped = 1;
+        } else if (*scan == '"') {
+          in_string = 0;
+        }
+      } else if (*scan == '"') {
+        in_string = 1;
+      } else if (*scan == '#' ||
+                 (*scan == '%' && scan + 1 < line_end && scan[1] == '%')) {
+        expression_end = scan;
+        break;
+      }
+    }
     while (expression_end > expression_start &&
            (expression_end[-1] == ' ' || expression_end[-1] == '\t')) {
       --expression_end;
@@ -155,6 +176,7 @@ lex_start:
       lexer->cursor = YYCURSOR;
       lexer->line += 1u;
       lexer->column = TURBO_FLOW_COLUMN_START;
+      lexer->line_has_arrow = 0;
       return TURBO_FLOW_TOKEN_NEWLINE;
     }
 
@@ -163,6 +185,7 @@ lex_start:
       token->length = (size_t)(YYCURSOR - start);
       lexer->cursor = YYCURSOR;
       lexer->column += (uint32_t)token->length;
+      lexer->line_has_arrow = 1;
       return TURBO_FLOW_TOKEN_ARROW;
     }
 
@@ -246,7 +269,9 @@ lex_start:
       lexer->column += (uint32_t)token->length;
       {
         int keyword = flow_keyword_token(token->value, token->length);
-        if (keyword == TURBO_FLOW_TOKEN_WHEN) lexer->expression_pending = 1;
+        if (keyword == TURBO_FLOW_TOKEN_WHEN && lexer->line_has_arrow) {
+          lexer->expression_pending = 1;
+        }
         return keyword;
       }
     }

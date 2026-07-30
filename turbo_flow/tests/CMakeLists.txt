@@ -33,6 +33,13 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
+  test_flow_rulesforge
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_rulesforge.c
+  LIBS TurboFlow::Flow TurboUtils::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  FOLDER "turbo_flow/tests")
+
+cmake_add_test(
   test_flow_security
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_security.c
   LIBS TurboFlow::Flow TurboUtils::TinyTest
