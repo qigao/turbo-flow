@@ -1,43 +1,39 @@
-# Flowie 公网 TLS 代理
+# Flowie 公网 edge Compose
 
-该部署目录是 `flowie_server` 的正式配套组件。单个长期运行的 `flowie-nginx` 容器负责：
+该目录保留既有安装路径，但 Compose 现在明确拆分两个长期服务：
 
-- `443`：终止公网 Let's Encrypt HTTPS，并以已验证的内部 TLS 转发到 Control/Dashboard。
-- `8883`：终止公网 Let's Encrypt MQTT TLS，并以已验证的内部 TLS 转发到 MQTT listener。
-- `80`：只提供 ACME HTTP-01 challenge 和 HTTPS redirect。
-- 定期运行 Certbot renew；仅在证书实际更新后 reload Nginx。
+- `flowie-nginx`：负责 `80/443`、ACME HTTP-01、HTTPS TLS termination，并通过已验证的内部 TLS
+  转发 Control/Dashboard。
+- `flowie-haproxy`：负责 `8883` MQTTS TLS termination、MQTT CONNECT 校验、Client ID consistent
+  hash，以及到 Flowie cluster edge 的 PROXY protocol v1 转发。
 
-Nginx/Certbot 不持有用户、ACL、MQTT session 或其他业务事实。它们属于部署边界，不进入
-`flowie_server` C 进程的领域状态或生命周期。
+两个代理都不持有用户、ACL、MQTT session、shard ownership 或数据库凭据。Nginx 继续执行 Certbot
+renew；HAProxy 只读挂载同一证书目录，并在证书内容变化后先校验配置再平滑 reload。
 
 ## 附加 HTTP vhost
 
 `FLOWIE_HTTP_CONF_DIR` 可指定宿主机上的附加 HTTP vhost 目录；Compose 将它只读挂载到
-`/etc/flowie-nginx/http.d`。该入口只扩展 Nginx `http` context，不进入 `stream` context，也不能
-改写 Flowie 自动生成的 Control/MQTT 配置。
+`/etc/flowie-nginx/http.d`。该入口只扩展 Nginx `http` context，不能改写 HAProxy MQTT 配置。
 
-`FLOWIE_HTTP_ASSET_DIR` 可把附加 vhost 的静态文件目录只读挂载到 `/srv/http`。Flowie 不生成、
-修改或解释其中内容；多个应用共享该目录时必须使用独立子目录，避免互相覆盖。
-
-附加配置负责自己的域名、证书、upstream 和安全策略。配置生效前必须执行 `nginx -t`；宿主机
-upstream 只能使用明确监听地址，不得把 Flowie 的 service token、管理密码或 MQTT credential 写入
-Nginx 配置。
+`FLOWIE_HTTP_ASSET_DIR` 可把附加 vhost 的静态文件目录只读挂载到 `/srv/http`。附加配置负责自己的
+域名、证书、upstream 和安全策略。配置生效前必须执行 `nginx -t`；不得把 Flowie service token、
+管理密码或 MQTT credential 写入代理配置。
 
 ## 内部 listener
 
 - Embedded Control：`127.0.0.1:8443`，TLS identity `flowie-control.internal`。
-- MQTT：`127.0.0.1:18883`，TLS identity `flowie-mqtt.internal`。
-- 两张内部证书必须由 `FLOWIE_INTERNAL_CA_FILE` 指定的 CA 签发。
-- 公网 HTTPS/MQTT listener 都不请求客户端证书。Dashboard 使用登录 session；MQTT 使用配置的
-  Auth/ACL provider。mTLS 只能保留为显式的 service-to-service 第二因子，不得加在公网 listener。
+- 单机 HAProxy：Flowie MQTT 使用 `127.0.0.1:18883` plaintext TCP。
+- 多节点 HAProxy：每个 MQTT listener 绑定私网地址，并只允许 HAProxy 节点访问。
 
-`.env.example` 中的 `FLOWIE_INTERNAL_CA_FILE` 是宿主机路径，Compose 会把它只读挂载到容器内固定路径。
+公网 HTTPS/MQTTS listener 都不请求客户端证书。Dashboard 使用登录 session；MQTT 使用 Flowie 配置的
+Auth/ACL provider。HAProxy 解密 MQTTS 后，Flowie 到 Auth/ACL 的认证语义不变。
+
 `.dockerignore` 和 `.gitignore` 会排除 `.env`、私钥及 `state/`；不得把证书私钥放进镜像层或 Git。
 
 ## 首次签发与启动
 
-复制 `.env.example` 为 `.env`，设置实际域名、邮件地址、内部 CA 文件和上游 TLS identity。确保 DNS
-已指向该主机，并且签发期间 port 80 未被其他进程占用：
+复制 `.env.example` 为 `.env`，设置实际域名、邮件地址、内部 Control CA 以及 MQTT cluster backend
+列表。确保 DNS 已指向该主机，并且签发期间 port 80 未被其他进程占用：
 
 ```sh
 set -a
@@ -47,13 +43,43 @@ set +a
 docker compose -f compose.yml up -d --build
 ```
 
-`bootstrap-cert.sh` 先构建并复用同一个 `flowie-nginx:local` 镜像，以一次性容器执行 Certbot；不会引入
-第二个长期 Certbot 容器。长期容器使用 webroot 完成续期。`/` 重定向到
-`/v1/management/dashboard`，其他 HTTPS path 原样转发给 embedded Control。
+`bootstrap-cert.sh` 使用一次性容器签发证书。长期 Nginx 容器以 webroot 续期；HAProxy 默认每 300 秒
+检测同一证书内容，更新成功后通过 master-worker `SIGUSR2` 平滑 reload。
 
-## 源地址边界
+## Client ID 路由
 
-Flowie 当前不解析 PROXY protocol。MQTT Broker 因此只观察到 Nginx 的上游地址，不能把
-`remote_address` 用作该拓扑中的授权事实。用户名、credential、Client ID、Root Group 和本地 ACL
-才是授权事实源。在 Flowie 增加显式 trusted-proxy 配置和防欺骗测试前，禁止在 Nginx 中启用
-`proxy_protocol`；直接启用会破坏 MQTT framing。
+`FLOWIE_MQTT_BACKENDS` 是逗号分隔、最多 32 个节点的 `host:port` 列表：
+
+```text
+FLOWIE_MQTT_BACKENDS=10.20.0.11:18883,10.20.0.12:18883,10.20.0.13:18883
+```
+
+HAProxy 只接受首包为有效 MQTT CONNECT 且 Client ID 非空的连接。完整 CONNECT 必须在
+`FLOWIE_MQTT_INSPECT_DELAY_MS` 内装入 `FLOWIE_MQTT_INSPECTION_BUFFER_BYTES`；否则 fail closed，不回退
+到 source hash 或 round-robin。HAProxy 对 Client ID 使用 consistent hash，但 Flowie 会从同一原始 CONNECT
+独立解析 Client ID，并通过 PostgreSQL ownership/fencing 决定 shard owner；路由命中只是一项性能提示。
+
+## 源地址与信任边界
+
+HAProxy backend `send-proxy` 固定发送文本 PROXY v1。对应 Flowie endpoint 使用 plaintext TCP，并显式
+要求可信代理 header：
+
+```yaml
+adapters:
+  mqtt.endpoint:
+    kind: flowie_endpoint
+    config:
+      transport: tcp
+      host: 127.0.0.1
+      port: 18883
+      trusted_proxy_cidrs: '127.0.0.1/32, ::1/128'
+      proxy_header_max_bytes: 256
+      proxy_header_timeout_ms: 1000
+```
+
+该 listener 不能直接暴露公网，也不能与不发送 PROXY header 的客户端混用。若 HAProxy 和 Flowie 不在
+同一主机，`host` 必须是受防火墙保护的私网地址，`trusted_proxy_cidrs` 必须收窄到实际 HAProxy 地址，
+不得信任整个应用网段。缺失、畸形、超限、超时或来自未信任 peer 的 header 都在 MQTT 认证前拒绝。
+
+PROXY v1 只传递源/目标地址和端口，不携带 Client ID 或 TLS TLV。`remote_address` 可用于审计、限流和
+策略上下文；`transport_peer_address` 保留直接 HAProxy peer。两者都不是 MQTT ownership/fencing 事实。

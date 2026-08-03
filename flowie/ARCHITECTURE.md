@@ -43,14 +43,15 @@ or compose a generic `io/socket` adapter. The optional TurboFlow endpoint adapte
 dispatch sink into that Core and exposes graph operations without duplicating state. Reusable code below this boundary is limited to the
 protocol-neutral CoroNet execution/runtime and connection snapshot helpers in `io/common`.
 
-MQTT business facts have one source of truth: the FlowStore MQTT fact facade, assembled around the
-Record service by the StorageBackend registry. Session, subscription, inflight, retained, and Will mutations commit to
-that service before Flowie swaps its owner/cache state. The in-process vectors, maps, and topic
+MQTT protocol facts have one source of truth: Flowie's ProtocolStore facade, assembled around a
+Record service by the StorageBackend registry. Session, subscription, inflight, retained, and Will
+mutations commit to that service before Flowie swaps its owner/cache state. The in-process vectors, maps, and topic
 trie are rebuildable indexes and scheduling caches only; they must never advance independently or
 serve as a fallback fact source. Flowie does not call backend callbacks after facade construction.
-With no explicit `session_store` channel, the composition root binds the volatile Record service
-from the `tf_local_storage` shared library. Redis/PostgreSQL are selected only by an explicit
-storage channel and are never silently substituted.
+With no explicit `protocol_store` channel, standalone composition binds a durable SQLite Record
+service using `--protocol-store-path`. Business FlowStore channels remain Graph-owned and cannot be
+used as implicit protocol sources. The legacy `session_store` name is accepted only as a mutually
+exclusive compatibility alias; no backend is silently substituted.
 
 Endpoint registration installs the `protocol.mqtt.server` module catalog. The graph-visible
 operations are `mqtt.publish.ingress` for an admitted application PUBLISH and
@@ -68,7 +69,9 @@ persistence remain internal owner behavior rather than invented graph operations
 | session owner (internal) | Flowie session owner | bounded cache reconstructed from session facts | independent public resource identity or queue/sink state advancement |
 | subscription index | Flowie subscription owner | rebuildable filter/member query index | graph-owned subscriber membership |
 | application graph | TurboFlow | private message attempt and settlement result | direct MQTT ACK, reconnect, or socket access |
-| persistence resource | selected FlowStore MQTT facade assembled by StorageBackend registry | session/subscription/inflight/retained/Will facts | protocol-specific fallback or a second in-memory fact source |
+| protocol persistence resource | Flowie ProtocolStore facade assembled by StorageBackend registry | session/subscription/inflight/retained/Will facts | BusinessStore writes, backend fallback, or a second in-memory fact source |
+| cluster MemberDirectory | membership worker publishes one bounded immutable PG-derived snapshot; shard projectors copy exact node+boot members under a read lock | derived endpoint/state/lease view only | direct `PGconn` access, independent writes, route fallback, or publication before topology apply |
+| Redis route projection | one cluster maintenance owner refreshes the shared namespace from MemberDirectory; shard outbox dispatchers CAS session events | derived Client ID to edge route with monotonic lease | MQTT fact ownership, per-shard full scans, Nginx/HAProxy state, or cross-backend fallback |
 
 Parser output is a zero-copy borrowed view. The connection owner must either finish all use
 before the receive buffer changes or copy selected fields into its own bounded session/message
@@ -336,8 +339,10 @@ YAML policy body, provider fallback, or implicit anonymous fallback. The complet
 decision is documented in `ADR_DYNAMIC_ACL_BUNDLE.md`.
 
 The endpoint also owns the provenance of transport authentication context. TCP/TLS/WS/WSS
-`remote_address` is the numeric direct socket peer and Pipe uses the literal `local`; Flowie does
-not consume PROXY protocol or forwarded headers. When a TLS/WSS endpoint explicitly configures
+`remote_address` is the numeric direct socket peer and Pipe uses the literal `local`. A TLS/WSS
+endpoint may explicitly require trusted PROXY v1/v2 admission before TLS; only a direct peer in the
+configured numeric CIDRs can then supply the source address, while the direct transport peer remains
+available separately. Flowie does not consume HTTP forwarded headers. When an endpoint configures
 `tls_client_ca_file`, CoroNet requires and verifies the MQTT client certificate before Flowie reads
 its canonical SHA-256 fingerprint. These values cross the provider ABI as borrowed, request-lifetime
 fields and the certificate append is guarded by the request `size`. Broker HTTPS Auth v3 forwards
@@ -529,7 +534,7 @@ session mutation, sends SUBACK first, then applies Retain Handling 0/1/2. Shared
 receive retained replay. Replayed QoS 1/2 packets use the same broker packet-id allocator, session
 delivery state, durable session CAS, and bounded reply Queue as live fan-out. Retained capacity is
 independently bounded by `max_retained_messages` (zero in the C API selects `max_sessions`). When a
-`session_store` is bound, retained PUT/replace/delete crosses the durable record-store CAS boundary
+`protocol_store` is bound, retained PUT/replace/delete crosses the durable record-store CAS boundary
 before the owner changes its in-memory fact. A reserved binary key prefix separates canonical
 versioned `FRET` records from the existing client-id keyed session records. Startup restores valid
 non-expired retained records and CAS-deletes expired records before opening the listener.
@@ -549,7 +554,8 @@ Hash/Lua transaction. The internal session codec emits canonical versioned LTV a
 live routes, credentials, reserved outbound identifiers, and unsettled graph attempts. Decode
 always creates an inactive owner under the new endpoint instance. The additive
 `flowie_endpoint_bindings_t` injects a borrowed store without extending endpoint config ABI;
-resolved YAML must name the same channel with `session_store`. Registration scans and validates the
+resolved YAML must name the same channel with `protocol_store` (or legacy `session_store`).
+Registration scans and validates the
 namespace, deletes expired records with revision CAS, rebuilds the trie/bitmap selector, and
 advances the local session-id allocator before the listener starts. CONNECT, SUBSCRIBE,
 UNSUBSCRIBE, inbound QoS transitions, outbound delivery transitions, disconnect and close use
@@ -591,8 +597,8 @@ native resource creation, parses the separate TurboFlow DSL graph, then creates 
 RuleSet resources, the endpoint, and injected data source/sink adapters referenced by that Graph.
 The bundled composition root injects socket and, when built, HTTP, Redis, PostgreSQL outbox, and
 PostgreSQL record-store providers. Storage providers are assembled separately: `flowie_server`
-creates one `TurboFlow::StorageBackend` registry, registers the three sibling shared-library APIs
-(`tf_local_storage`, `tf_redis`, and `tf_pgsql`) when enabled, and loads external modules through the
+creates one `TurboFlow::StorageBackend` registry, registers the four sibling shared-library APIs
+(`tf_local_storage`, `tf_sqlite_storage`, `tf_redis`, and `tf_pgsql`) when enabled, and loads external modules through the
 same versioned `open()/close()` ABI.
 Record owner creation, service lookup, and teardown stay in the registry owner lifecycle; Flowie
 does not call a backend's concrete record/state/index/log/hash functions. Resource providers run
@@ -602,9 +608,9 @@ when Policy is configured; the
 Graph is the authority for business source/sink names. It then compiles the
 Graph and owns start/signal/stop order. `--check` performs the same resolution, resource creation,
 provider assembly, and graph compilation without binding the listener.
-The current host supports unsecured endpoints and an optional explicit `session_store` record-store
-channel backed by Redis or PostgreSQL. When the field is absent, it injects the volatile local
-Record backend through the same registry owner path. It creates the selected provider from the same
+The current host supports unsecured endpoints and an optional explicit `protocol_store` record-store
+channel. When the field is absent in standalone mode, it injects a durable SQLite Record backend
+through the same registry owner path. It creates the selected provider from the same
 resolved snapshot, injects the borrowed store through
 `flowie_endpoint_bindings_t`, and destroys the endpoint before the store. Provider selection is
 strictly driven by `backend`; malformed provider fields, unavailable Redis support, connection
@@ -630,12 +636,12 @@ sizes and timeouts are bounded, the service token is acquired by reference for e
 all transport, certificate, status, content-type, version, or principal-validation failures deny
 authentication without a database or anonymous fallback. The returned principal is then evaluated
 by the local SecurityRealm; publish/subscribe ACL checks never perform an HTTP or database call.
-Managed sessions, retained publications, and pending Wills use the implicit local Record fact store
-when no explicit session store is selected; that store is process-local and is not restart durable.
+Managed sessions, retained publications, and pending Wills use the implicit standalone SQLite
+ProtocolStore when no explicit protocol store is selected; open or recovery failure aborts startup.
 See [ADR_HTTPS_AUTH_SERVICE.md](ADR_HTTPS_AUTH_SERVICE.md) for the trust boundary and deployment
 requirements.
 External-session mode remains available for later composition. A requested
-`session_store` never falls back to volatile state, and malformed or incompatible records fail
+`protocol_store` never falls back to another backend, and malformed or incompatible records fail
 endpoint registration before the listener starts.
 
 ### Internal ACL management plane

@@ -105,6 +105,24 @@ static void drop_test_schema(const char *conninfo, const char *schema_name) {
   PQfinish(connection);
 }
 
+static void terminate_test_backend(const char *conninfo, int backend_pid) {
+  const char *keywords[] = {"dbname", "connect_timeout", "application_name", NULL};
+  const char *values[] = {conninfo, "5", "flowie-control-test-terminator", NULL};
+  char sql[96];
+  PGconn *connection = PQconnectdbParams(keywords, values, 1);
+  PGresult *result;
+  check_not_null(connection);
+  check_int_eq(PQstatus(connection), CONNECTION_OK);
+  check_true(snprintf(sql, sizeof(sql), "SELECT pg_catalog.pg_terminate_backend(%d)",
+                      backend_pid) > 0);
+  result = PQexec(connection, sql);
+  check_not_null(result);
+  check_int_eq(PQresultStatus(result), PGRES_TUPLES_OK);
+  check_str_eq(PQgetvalue(result, 0, 0), "t");
+  PQclear(result);
+  PQfinish(connection);
+}
+
 spec("Flowie control PostgreSQL database live") {
   it("bootstraps one administrator through the PostgreSQL repository contract") {
     const char *conninfo = getenv("TURBO_FLOW_PGSQL_TEST_CONNINFO");
@@ -227,6 +245,62 @@ spec("Flowie control PostgreSQL database live") {
     check_int_eq(flowie_control_pgsql_pool_close(pool, 20), TURBO_OK);
     check_int_eq(flowie_control_pgsql_pool_destroy(pool), TURBO_OK);
 
+    drop_test_schema(conninfo, schema_name);
+  }
+
+  it("reopens a dead pool slot asynchronously after PostgreSQL becomes healthy") {
+    const char *conninfo = getenv("TURBO_FLOW_PGSQL_TEST_CONNINFO");
+    char schema_name[64];
+    flowie_control_pgsql_pool_config_t config = FLOWIE_CONTROL_PGSQL_POOL_CONFIG_INIT;
+    flowie_control_pgsql_pool_t *pool = NULL;
+    flowie_control_pgsql_pool_lease_t lease = FLOWIE_CONTROL_PGSQL_POOL_LEASE_INIT;
+    flowie_control_pgsql_pool_stats_t stats = FLOWIE_CONTROL_PGSQL_POOL_STATS_INIT;
+    flowie_control_pgsql_database_t *restored = NULL;
+    PGconn *connection;
+    PGresult *result;
+
+    check_not_null(conninfo);
+    check_true(conninfo[0] != '\0');
+    (void)snprintf(schema_name, sizeof(schema_name), "flowie_control_reconnect_%llu",
+                   (unsigned long long)turbo_hrtime());
+    config.database.conninfo = conninfo;
+    config.database.schema_name = schema_name;
+    config.database.require_tls = strstr(conninfo, "sslmode=verify-full") != NULL;
+    config.database.schema_mode = FLOWIE_CONTROL_PGSQL_SCHEMA_MIGRATE;
+    config.capacity = 1u;
+    config.acquire_timeout_ms = 5000;
+    check_int_eq(flowie_control_pgsql_pool_create(&config, &pool), TURBO_OK);
+    check_int_eq(flowie_control_pgsql_pool_acquire(pool, &lease), TURBO_OK);
+    connection = flowie_control_pgsql_pool_lease_connection(&lease);
+    check_not_null(connection);
+
+    terminate_test_backend(conninfo, PQbackendPID(connection));
+    result = PQexec(connection, "SELECT 1");
+    check_not_null(result);
+    check_int_eq(PQresultStatus(result), PGRES_FATAL_ERROR);
+    PQclear(result);
+    drop_test_schema(conninfo, schema_name);
+
+    check_int_ne(flowie_control_pgsql_pool_release(&lease), TURBO_OK);
+    check_int_eq(flowie_control_pgsql_pool_stats(pool, &stats), TURBO_OK);
+    check_uint_eq(stats.healthy, 0u);
+    check_uint_eq(stats.available, 0u);
+    check_uint_eq(stats.cleanup_failures, 1u);
+
+    check_int_eq(flowie_control_pgsql_database_open(&config.database, &restored), TURBO_OK);
+    flowie_control_pgsql_database_destroy(restored);
+    restored = NULL;
+    check_int_eq(flowie_control_pgsql_pool_acquire(pool, &lease), TURBO_OK);
+    check_not_null(flowie_control_pgsql_pool_lease_connection(&lease));
+    check_int_eq(flowie_control_pgsql_pool_stats(pool, &stats), TURBO_OK);
+    check_uint_eq(stats.healthy, 1u);
+    check_uint_eq(stats.leased, 1u);
+    check_int_eq(flowie_control_pgsql_pool_release(&lease), TURBO_OK);
+    check_int_eq(flowie_control_pgsql_pool_stats(pool, &stats), TURBO_OK);
+    check_uint_eq(stats.available, 1u);
+
+    check_int_eq(flowie_control_pgsql_pool_close(pool, 5000), TURBO_OK);
+    check_int_eq(flowie_control_pgsql_pool_destroy(pool), TURBO_OK);
     drop_test_schema(conninfo, schema_name);
   }
 

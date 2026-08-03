@@ -140,8 +140,10 @@ int flowie_control_pgsql_pool_create(const flowie_control_pgsql_pool_config_t *c
 /**
  * Acquire one exclusive connection, waiting at most the configured acquire timeout.
  *
- * Returns TURBO_ETIMEDOUT when every healthy slot stays leased, TURBO_EIO when no healthy slot
- * remains, and TURBO_ESHUTDOWN after close begins.
+ * When no slot is available and dead capacity exists, acquire coalesces one asynchronous reopen
+ * request and waits within the same deadline. Returns TURBO_ETIMEDOUT when capacity remains busy
+ * or recovery exceeds that deadline, TURBO_EIO when the requested recovery fails and no healthy
+ * slot remains, and TURBO_ESHUTDOWN after close begins.
  */
 int flowie_control_pgsql_pool_acquire(flowie_control_pgsql_pool_t *pool,
                                       flowie_control_pgsql_pool_lease_t *lease);

@@ -536,7 +536,8 @@ static int flowie_endurance_connect_with_will(flowie_endurance_client_t *client,
   rc = flowie_test_send(client->socket, wire, wire_size);
   if (rc == TURBO_OK)
     rc = flowie_endurance_recv_control(client->socket, client->profile->version, &connack);
-  if (rc != TURBO_OK || connack.type != FLOWIE_MQTT_PACKET_CONNACK || connack.reason_code != 0u ||
+  if (rc != TURBO_OK) return rc;
+  if (connack.type != FLOWIE_MQTT_PACKET_CONNACK || connack.reason_code != 0u ||
       connack.session_present != expected_session_present)
     return TURBO_EPROTO;
   return flowie_endurance_transition(client, expected_session_present

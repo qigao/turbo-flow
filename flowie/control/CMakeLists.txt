@@ -80,7 +80,8 @@ target_link_libraries(flowie_control_startup
   file(MAKE_DIRECTORY
        "${FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR}/assets"
        "${FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR}/templates")
-  foreach(resource IN ITEMS control.css htmx-2.0.9.min.js HTMX_LICENSE.txt HTMX_SOURCE.md)
+  foreach(resource IN ITEMS control.css control.js htmx-2.0.9.min.js HTMX_LICENSE.txt
+                            HTMX_SOURCE.md)
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/assets/${resource}"
                    "${FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR}/assets/${resource}"
                    COPYONLY)

@@ -3,6 +3,7 @@
 
 #include "turbo_flow.h"
 #include "turbo_flow_config.h"
+#include "turbo_flow_state_store.h"
 
 #include <stdint.h>
 
@@ -35,6 +36,54 @@ typedef struct turbo_flow_redis_stream_config_s {
 } turbo_flow_redis_stream_config_t;
 
 typedef struct turbo_flow_redis_stream_owner_s turbo_flow_redis_stream_owner_t;
+typedef struct turbo_flow_redis_stream_publisher_s turbo_flow_redis_stream_publisher_t;
+
+#define TURBO_FLOW_REDIS_STREAM_PUBLISHER_API_VERSION 1u
+
+typedef struct turbo_flow_redis_stream_publisher_config_s {
+  size_t size;
+  uint32_t version;
+  const char *host;
+  uint16_t port;
+  const char *username;
+  const char *password;
+  int database;
+  uint32_t timeout_ms;
+  const char *stream;
+  const char *field;
+  size_t maxlen;
+  size_t max_payload_size;
+} turbo_flow_redis_stream_publisher_config_t;
+
+#define TURBO_FLOW_REDIS_STREAM_PUBLISHER_CONFIG_INIT                                              \
+  {sizeof(turbo_flow_redis_stream_publisher_config_t),                                             \
+   TURBO_FLOW_REDIS_STREAM_PUBLISHER_API_VERSION,                                                  \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   0,                                                                                              \
+   0u,                                                                                             \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   0u}
+
+/** Create one mutex-serialized, binary-safe XADD publisher with explicit hard bounds. */
+CXX_C_API int
+turbo_flow_redis_stream_publisher_create(const turbo_flow_redis_stream_publisher_config_t *config,
+                                         turbo_flow_redis_stream_publisher_t **out);
+CXX_C_API void
+turbo_flow_redis_stream_publisher_destroy(turbo_flow_redis_stream_publisher_t *publisher);
+/** OK means Redis returned the new stream ID; the ID remains transport metadata and is discarded.
+ */
+CXX_C_API int
+turbo_flow_redis_stream_publisher_append(turbo_flow_redis_stream_publisher_t *publisher,
+                                         const void *payload, size_t payload_size);
+
+/** Type-erased append port for embedding the publisher in a transport-neutral dispatcher. */
+CXX_C_API int turbo_flow_redis_stream_publisher_publish(void *publisher, const void *payload,
+                                                        size_t payload_size);
 
 typedef struct turbo_flow_redis_stream_claim_s {
   size_t size;
@@ -118,6 +167,56 @@ CXX_C_API int turbo_flow_redis_stream_owner_settler(turbo_flow_redis_stream_owne
 #define TURBO_FLOW_REDIS_RECORD_STORE_MAX_RECORD_KEY_SIZE 65538u
 #define TURBO_FLOW_REDIS_RECORD_STORE_DEFAULT_MAX_BATCH_SIZE 4096u
 
+#define TURBO_FLOW_REDIS_CONNECTION_CONFIG_VERSION 1u
+
+typedef enum turbo_flow_redis_deployment_e {
+  TURBO_FLOW_REDIS_DEPLOYMENT_STANDALONE = 0,
+  TURBO_FLOW_REDIS_DEPLOYMENT_CLUSTER = 1,
+  TURBO_FLOW_REDIS_DEPLOYMENT_SENTINEL = 2
+} turbo_flow_redis_deployment_t;
+
+/** Optional deployment-aware connection settings. Zero-initialized means legacy standalone. */
+typedef struct turbo_flow_redis_connection_config_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_redis_deployment_t deployment;
+  const char *host;
+  uint16_t port;
+  const char **seed_hosts;
+  uint16_t *seed_ports;
+  size_t seed_count;
+  const char *service_name;
+  const char *sentinel_username;
+  const char *sentinel_password;
+  const char *username;
+  const char *password;
+  int database;
+  uint32_t timeout_ms;
+  size_t connections_per_node;
+  uint32_t topology_refresh_ms;
+  int max_redirections;
+} turbo_flow_redis_connection_config_t;
+
+#define TURBO_FLOW_REDIS_CONNECTION_CONFIG_INIT                                                    \
+  {sizeof(turbo_flow_redis_connection_config_t),                                                   \
+   TURBO_FLOW_REDIS_CONNECTION_CONFIG_VERSION,                                                     \
+   TURBO_FLOW_REDIS_DEPLOYMENT_STANDALONE,                                                         \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   0,                                                                                              \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u}
+
 typedef enum turbo_flow_redis_data_operation_e {
   /** Store the input payload at the configured key using binary-safe SET. */
   TURBO_FLOW_REDIS_DATA_SET = 1,
@@ -168,7 +267,13 @@ typedef struct turbo_flow_redis_record_store_config_s {
   size_t max_batch_size;
   /** Required maximum record count for bounded startup scans. */
   size_t max_records;
+  turbo_flow_redis_connection_config_t connection;
 } turbo_flow_redis_record_store_config_t;
+
+/** Create a mutex-serialized Redis state store for rebuildable projections. */
+CXX_C_API int turbo_flow_redis_state_store_create(
+    const turbo_flow_redis_record_store_config_t *config,
+    const turbo_flow_store_limits_t *limits, turbo_flow_state_store_t **out);
 
 /**
  * Create a binary-safe Redis SET/GET store view.

@@ -1,4 +1,5 @@
 #include "flow_redis_internal.h"
+#include "flow_redis_storage_internal.h"
 #include "turbo_flow_redis.h"
 
 #include "CoroNet.h"
@@ -29,6 +30,12 @@ typedef enum flow_redis_adapter_mode_e {
   FLOW_REDIS_MODE_FLOW_STORE
 } flow_redis_adapter_mode_t;
 
+typedef enum flow_redis_transport_mode_e {
+  FLOW_REDIS_TRANSPORT_STANDALONE = 0,
+  FLOW_REDIS_TRANSPORT_CLUSTER,
+  FLOW_REDIS_TRANSPORT_SENTINEL
+} flow_redis_transport_mode_t;
+
 typedef struct flow_redis_adapter_s {
   tstr_t stream;
   tstr_t field;
@@ -50,6 +57,9 @@ typedef struct flow_redis_adapter_s {
   int create_group;
   coro_context_t *context;
   redis_client_t *client;
+  redis_cluster_t *cluster;
+  redis_sentinel_t *sentinel;
+  flow_redis_transport_mode_t transport_mode;
   turbo_mutex_t lock;
   int lock_initialized;
   tf_timer_t poll_wait;
@@ -104,6 +114,11 @@ struct turbo_flow_redis_stream_owner_s {
   int replay_pending;
 };
 
+struct turbo_flow_redis_stream_publisher_s {
+  flow_redis_adapter_t *adapter;
+  size_t max_payload_size;
+};
+
 typedef enum flow_redis_task_kind_e {
   FLOW_REDIS_TASK_CONNECT,
   FLOW_REDIS_TASK_XADD,
@@ -139,6 +154,7 @@ typedef struct flow_redis_task_s {
   int command_argc;
   const char **command_argv;
   const size_t *command_lengths;
+  int command_key_index;
   flow_redis_store_reply_fn command_apply;
   void *command_apply_ctx;
   redis_stream_result_t *results;
@@ -342,11 +358,40 @@ static int flow_redis_command_apply(flow_redis_task_t *task, const redis_command
   return task->response ? TURBO_OK : TURBO_ENOMEM;
 }
 
+static int flow_redis_transport_command(flow_redis_adapter_t *adapter, int argc, const char **argv,
+                                        const size_t *lengths, int key_index,
+                                        redis_command_result_t *out) {
+  if (!adapter || !out) return TURBO_EINVAL;
+  switch (adapter->transport_mode) {
+  case FLOW_REDIS_TRANSPORT_STANDALONE:
+    return redis_commandv_result(adapter->client, argc, argv, lengths, out);
+  case FLOW_REDIS_TRANSPORT_CLUSTER:
+    return redis_cluster_commandv_result(adapter->cluster, argc, argv, lengths, key_index, out);
+  case FLOW_REDIS_TRANSPORT_SENTINEL:
+    return redis_sentinel_commandv_result(adapter->sentinel, argc, argv, lengths, out);
+  default:
+    return TURBO_EINVAL;
+  }
+}
+
 static int flow_redis_connect(flow_redis_adapter_t *adapter) {
   int rc;
   if (adapter->connected) return TURBO_OK;
   tf_connection_transition(&adapter->connection, TURBO_FLOW_CONNECTION_CONNECTING, TURBO_OK);
-  rc = redis_client_connect(adapter->client, NULL, NULL);
+  switch (adapter->transport_mode) {
+  case FLOW_REDIS_TRANSPORT_STANDALONE:
+    rc = redis_client_connect(adapter->client, NULL, NULL);
+    break;
+  case FLOW_REDIS_TRANSPORT_CLUSTER:
+    rc = redis_cluster_connect(adapter->cluster);
+    break;
+  case FLOW_REDIS_TRANSPORT_SENTINEL:
+    rc = redis_sentinel_connect(adapter->sentinel);
+    break;
+  default:
+    rc = TURBO_EINVAL;
+    break;
+  }
   if (rc != TURBO_OK) {
     tf_connection_transition(&adapter->connection, TURBO_FLOW_CONNECTION_FAILED, rc);
     return rc;
@@ -410,7 +455,7 @@ static void flow_redis_task_run(coro_t *co, void *arg) {
   case FLOW_REDIS_TASK_XPENDING_EXACT: {
     const char *pending_argv[] = {"XPENDING", adapter->stream, adapter->group,
                                   task->id,   task->id,        "1"};
-    (void)redis_commandv_result(adapter->client, 6, pending_argv, NULL, &command);
+    (void)flow_redis_transport_command(adapter, 6, pending_argv, NULL, 1, &command);
     task->status = flow_redis_command_apply(task, &command);
     break;
   }
@@ -420,15 +465,15 @@ static void flow_redis_task_run(coro_t *co, void *arg) {
     task->status = flow_redis_command_apply(task, &command);
     break;
   case FLOW_REDIS_TASK_SET:
-    (void)redis_commandv_result(adapter->client, 3, set_argv, set_lens, &command);
+    (void)flow_redis_transport_command(adapter, 3, set_argv, set_lens, 1, &command);
     task->status = flow_redis_command_apply(task, &command);
     break;
   case FLOW_REDIS_TASK_GET:
-    (void)redis_commandv_result(adapter->client, 2, get_argv, get_lens, &command);
+    (void)flow_redis_transport_command(adapter, 2, get_argv, get_lens, 1, &command);
     task->status = flow_redis_command_apply(task, &command);
     break;
   case FLOW_REDIS_TASK_STATE_GET:
-    (void)redis_commandv_result(adapter->client, 2, state_get_argv, state_get_lens, &command);
+    (void)flow_redis_transport_command(adapter, 2, state_get_argv, state_get_lens, 1, &command);
     task->status = flow_redis_command_apply(task, &command);
     break;
   case FLOW_REDIS_TASK_STATE_COMMIT: {
@@ -464,26 +509,26 @@ static void flow_redis_task_run(coro_t *co, void *arg) {
                             tstr_len(adapter->consumer),
                             task->id ? strlen(task->id) : 0u,
                             task->payload_len};
-    (void)redis_commandv_result(adapter->client, 10, commit_argv, commit_lens, &command);
+    (void)flow_redis_transport_command(adapter, 10, commit_argv, commit_lens, 1, &command);
     task->status = flow_redis_command_apply(task, &command);
     break;
   }
   case FLOW_REDIS_TASK_STORE_COMMAND:
-    (void)redis_commandv_result(adapter->client, task->command_argc, task->command_argv,
-                                task->command_lengths, &command);
+    (void)flow_redis_transport_command(adapter, task->command_argc, task->command_argv,
+                                       task->command_lengths, task->command_key_index, &command);
     task->status = flow_redis_command_apply(task, &command);
     break;
   case FLOW_REDIS_TASK_RECORD_GET: {
     const char *record_get_argv[] = {"HGET", adapter->key, task->id};
     size_t record_get_lens[] = {4u, adapter->key ? tstr_len(adapter->key) : 0u, task->id_size};
-    (void)redis_commandv_result(adapter->client, 3, record_get_argv, record_get_lens, &command);
+    (void)flow_redis_transport_command(adapter, 3, record_get_argv, record_get_lens, 1, &command);
     task->status = flow_redis_command_apply(task, &command);
     break;
   }
   case FLOW_REDIS_TASK_RECORD_SCAN: {
     const char *scan_argv[] = {"HGETALL", adapter->key};
     size_t scan_lens[] = {7u, adapter->key ? tstr_len(adapter->key) : 0u};
-    (void)redis_commandv_result(adapter->client, 2, scan_argv, scan_lens, &command);
+    (void)flow_redis_transport_command(adapter, 2, scan_argv, scan_lens, 1, &command);
     task->status = flow_redis_command_apply(task, &command);
     break;
   }
@@ -553,7 +598,8 @@ static void flow_redis_task_run(coro_t *co, void *arg) {
       arguments[offset + 4u] = mutation->value_size != 0u ? (const char *)mutation->value : "";
       lengths[offset + 4u] = mutation->value_size;
     }
-    (void)redis_commandv_result(adapter->client, (int)argument_count, arguments, lengths, &command);
+    (void)flow_redis_transport_command(adapter, (int)argument_count, arguments, lengths, 3,
+                                       &command);
     task->status = flow_redis_command_apply(task, &command);
     free(revisions);
     free(lengths);
@@ -801,12 +847,18 @@ static void flow_redis_stop(void *ctx, turbo_flow_t *flow, const turbo_flow_stag
   atomic_store_explicit(&adapter->started, 0, memory_order_release);
   tf_connection_transition(&adapter->connection, TURBO_FLOW_CONNECTION_CLOSING, TURBO_OK);
   if (adapter->poll_wait_initialized) tf_timer_stop(&adapter->poll_wait);
-  (void)redis_client_interrupt(adapter->client, TURBO_ESHUTDOWN);
+  if (adapter->transport_mode == FLOW_REDIS_TRANSPORT_STANDALONE && adapter->client)
+    (void)redis_client_interrupt(adapter->client, TURBO_ESHUTDOWN);
   if (adapter->thread_started) {
     (void)turbo_thread_join(&adapter->thread);
     adapter->thread_started = 0;
   }
-  redis_client_disconnect(adapter->client);
+  if (adapter->transport_mode == FLOW_REDIS_TRANSPORT_STANDALONE && adapter->client)
+    redis_client_disconnect(adapter->client);
+  else if (adapter->transport_mode == FLOW_REDIS_TRANSPORT_CLUSTER && adapter->cluster)
+    redis_cluster_disconnect(adapter->cluster);
+  else if (adapter->transport_mode == FLOW_REDIS_TRANSPORT_SENTINEL && adapter->sentinel)
+    redis_sentinel_disconnect(adapter->sentinel);
   adapter->connected = 0;
   tf_connection_set_usage(&adapter->connection, 0u, 0u, 0u);
   tf_connection_transition(&adapter->connection, TURBO_FLOW_CONNECTION_STOPPED, TURBO_ESHUTDOWN);
@@ -839,6 +891,8 @@ static void flow_redis_shutdown(void *ctx) {
   if (!adapter) return;
   flow_redis_stop(adapter, NULL, NULL);
   redis_client_destroy(adapter->client);
+  redis_cluster_destroy(adapter->cluster);
+  redis_sentinel_destroy(adapter->sentinel);
   coro_context_destroy(adapter->context);
   if (adapter->poll_wait_initialized) tf_timer_destroy(&adapter->poll_wait);
   if (adapter->lock_initialized) turbo_mutex_destroy(&adapter->lock);
@@ -870,6 +924,7 @@ static flow_redis_adapter_t *flow_redis_adapter_create(const char *host, uint16_
   *status_out = TURBO_ENOMEM;
   adapter = (flow_redis_adapter_t *)calloc(1, sizeof(*adapter));
   if (!adapter) return NULL;
+  adapter->transport_mode = FLOW_REDIS_TRANSPORT_STANDALONE;
   atomic_init(&adapter->started, 0);
   atomic_init(&adapter->quiesced, 0);
   written =
@@ -891,6 +946,119 @@ static flow_redis_adapter_t *flow_redis_adapter_create(const char *host, uint16_
   redis_config.command_timeout_ms = redis_config.timeout_ms;
   adapter->client = redis_client_create_with_config(&redis_config);
   if (!adapter->context || !adapter->client) {
+    flow_redis_shutdown(adapter);
+    return NULL;
+  }
+  turbo_mutex_init(&adapter->lock);
+  adapter->lock_initialized = 1;
+  if (tf_timer_init(&adapter->poll_wait) != TURBO_OK) {
+    flow_redis_shutdown(adapter);
+    return NULL;
+  }
+  adapter->poll_wait_initialized = 1;
+  *status_out = TURBO_OK;
+  return adapter;
+}
+
+static flow_redis_adapter_t *
+flow_redis_adapter_create_store(const flow_redis_store_client_config_t *config, int *status_out) {
+  const turbo_flow_redis_connection_config_t *connection;
+  flow_redis_adapter_t *adapter;
+  const char *endpoint_host;
+  uint16_t endpoint_port;
+  char endpoint[TURBO_FLOW_ENDPOINT_MAX + 1u];
+  int written;
+  if (!config || !status_out) return NULL;
+  connection = &config->connection;
+  if (connection->version == 0u)
+    return flow_redis_adapter_create(config->host, config->port, config->username, config->password,
+                                     config->database, config->timeout_ms, status_out);
+  if (connection->size < sizeof(*connection) ||
+      connection->version != TURBO_FLOW_REDIS_CONNECTION_CONFIG_VERSION ||
+      (connection->username && !connection->password)) {
+    *status_out = TURBO_EINVAL;
+    return NULL;
+  }
+  if (connection->deployment == TURBO_FLOW_REDIS_DEPLOYMENT_STANDALONE) {
+    return flow_redis_adapter_create(connection->host, connection->port, connection->username,
+                                     connection->password, connection->database,
+                                     connection->timeout_ms, status_out);
+  }
+  if (!connection->seed_hosts || !connection->seed_ports || connection->seed_count == 0u ||
+      (connection->deployment == TURBO_FLOW_REDIS_DEPLOYMENT_CLUSTER &&
+       connection->database != 0) ||
+      (connection->deployment == TURBO_FLOW_REDIS_DEPLOYMENT_SENTINEL &&
+       (!connection->service_name || !connection->service_name[0]))) {
+    *status_out = TURBO_EINVAL;
+    return NULL;
+  }
+  for (size_t index = 0u; index < connection->seed_count; ++index) {
+    if (!connection->seed_hosts[index] || !connection->seed_hosts[index][0] ||
+        connection->seed_ports[index] == 0u) {
+      *status_out = TURBO_EINVAL;
+      return NULL;
+    }
+  }
+  endpoint_host = connection->seed_hosts[0];
+  endpoint_port = connection->seed_ports[0];
+  *status_out = TURBO_ENOMEM;
+  adapter = (flow_redis_adapter_t *)calloc(1u, sizeof(*adapter));
+  if (!adapter) return NULL;
+  atomic_init(&adapter->started, 0);
+  atomic_init(&adapter->quiesced, 0);
+  written = snprintf(endpoint, sizeof(endpoint), "redis://%s:%u/%d", endpoint_host,
+                     (unsigned int)endpoint_port, connection->database);
+  if (written < 0 || (size_t)written >= sizeof(endpoint) ||
+      tf_connection_init(&adapter->connection, endpoint, 1u) != TURBO_OK) {
+    *status_out = TURBO_ENOSPC;
+    free(adapter);
+    return NULL;
+  }
+  adapter->context = coro_context_create(NULL);
+  if (connection->deployment == TURBO_FLOW_REDIS_DEPLOYMENT_CLUSTER) {
+    redis_cluster_config_t cluster_config = REDIS_CLUSTER_CONFIG_DEFAULT;
+    adapter->transport_mode = FLOW_REDIS_TRANSPORT_CLUSTER;
+    cluster_config.seed_hosts = connection->seed_hosts;
+    cluster_config.seed_ports = connection->seed_ports;
+    cluster_config.seed_count = connection->seed_count;
+    cluster_config.username = connection->username;
+    cluster_config.password = connection->password;
+    cluster_config.connections_per_node = connection->connections_per_node;
+    cluster_config.connect_timeout_ms = connection->timeout_ms;
+    cluster_config.command_timeout_ms = connection->timeout_ms;
+    cluster_config.topology_refresh_ms = connection->topology_refresh_ms;
+    cluster_config.max_redirections = connection->max_redirections;
+    adapter->cluster = redis_cluster_create(&cluster_config);
+  } else if (connection->deployment == TURBO_FLOW_REDIS_DEPLOYMENT_SENTINEL) {
+    redis_sentinel_config_t sentinel_config = REDIS_SENTINEL_CONFIG_DEFAULT;
+    adapter->transport_mode = FLOW_REDIS_TRANSPORT_SENTINEL;
+    sentinel_config.sentinel_hosts = connection->seed_hosts;
+    sentinel_config.sentinel_ports = connection->seed_ports;
+    sentinel_config.sentinel_count = connection->seed_count;
+    sentinel_config.service_name = connection->service_name;
+    sentinel_config.sentinel_username = connection->sentinel_username;
+    sentinel_config.sentinel_password = connection->sentinel_password;
+    sentinel_config.username = connection->username;
+    sentinel_config.password = connection->password;
+    sentinel_config.database = connection->database;
+    if (connection->connections_per_node != 0u) {
+      sentinel_config.min_connections = 1u;
+      sentinel_config.max_connections = connection->connections_per_node;
+    }
+    if (connection->timeout_ms != 0u) {
+      sentinel_config.connect_timeout_ms = connection->timeout_ms;
+      sentinel_config.command_timeout_ms = connection->timeout_ms;
+    }
+    sentinel_config.topology_refresh_ms = connection->topology_refresh_ms;
+    adapter->sentinel = redis_sentinel_create(&sentinel_config);
+  } else {
+    *status_out = TURBO_EINVAL;
+    flow_redis_shutdown(adapter);
+    return NULL;
+  }
+  if (!adapter->context ||
+      (adapter->transport_mode == FLOW_REDIS_TRANSPORT_CLUSTER && !adapter->cluster) ||
+      (adapter->transport_mode == FLOW_REDIS_TRANSPORT_SENTINEL && !adapter->sentinel)) {
     flow_redis_shutdown(adapter);
     return NULL;
   }
@@ -1376,6 +1544,76 @@ int turbo_flow_redis_register_stream_adapter(turbo_flow_t *flow, const char *nam
                                                                       : &FLOW_REDIS_OUTPUT_SCHEMA);
 }
 
+int turbo_flow_redis_stream_publisher_create(
+    const turbo_flow_redis_stream_publisher_config_t *config,
+    turbo_flow_redis_stream_publisher_t **out) {
+  turbo_flow_redis_stream_publisher_t *publisher;
+  flow_redis_adapter_t *adapter;
+  int rc;
+  if (out) *out = NULL;
+  if (!config || config->size != sizeof(*config) ||
+      config->version != TURBO_FLOW_REDIS_STREAM_PUBLISHER_API_VERSION || !config->host ||
+      !config->host[0] || config->port == 0u || config->database < 0 || config->database > 15 ||
+      config->timeout_ms > INT_MAX || !config->stream || !config->stream[0] ||
+      strlen(config->stream) > TURBO_FLOW_REDIS_MAX_KEY_SIZE ||
+      (config->field &&
+       (!config->field[0] || strlen(config->field) > TURBO_FLOW_REDIS_MAX_KEY_SIZE)) ||
+      config->maxlen == 0u || config->max_payload_size == 0u ||
+      config->max_payload_size > TURBO_FLOW_REDIS_DEFAULT_MAX_VALUE_SIZE || !out)
+    return TURBO_EINVAL;
+  publisher = (turbo_flow_redis_stream_publisher_t *)calloc(1u, sizeof(*publisher));
+  if (!publisher) return TURBO_ENOMEM;
+  adapter = flow_redis_adapter_create(config->host, config->port, config->username,
+                                      config->password, config->database, config->timeout_ms, &rc);
+  if (!adapter) {
+    free(publisher);
+    return rc;
+  }
+  adapter->stream = tstr_dup(config->stream);
+  adapter->field = tstr_dup(config->field ? config->field : "payload");
+  adapter->mode = FLOW_REDIS_MODE_STREAM_SINK;
+  adapter->maxlen = config->maxlen;
+  if (!adapter->stream || !adapter->field) {
+    flow_redis_shutdown(adapter);
+    free(publisher);
+    return TURBO_ENOMEM;
+  }
+  publisher->adapter = adapter;
+  publisher->max_payload_size = config->max_payload_size;
+  *out = publisher;
+  return TURBO_OK;
+}
+
+void turbo_flow_redis_stream_publisher_destroy(turbo_flow_redis_stream_publisher_t *publisher) {
+  if (!publisher) return;
+  flow_redis_shutdown(publisher->adapter);
+  free(publisher);
+}
+
+int turbo_flow_redis_stream_publisher_append(turbo_flow_redis_stream_publisher_t *publisher,
+                                             const void *payload, size_t payload_size) {
+  flow_redis_task_t task;
+  flow_redis_adapter_t *adapter;
+  int rc;
+  if (!publisher || !(adapter = publisher->adapter) || (!payload && payload_size != 0u))
+    return TURBO_EINVAL;
+  if (payload_size > publisher->max_payload_size) return TURBO_EMSGSIZE;
+  memset(&task, 0, sizeof(task));
+  task.kind = FLOW_REDIS_TASK_XADD;
+  task.payload = payload_size != 0u ? (const char *)payload : "";
+  task.payload_len = payload_size;
+  turbo_mutex_lock(&adapter->lock);
+  rc = flow_redis_run(adapter, &task);
+  turbo_mutex_unlock(&adapter->lock);
+  return rc;
+}
+
+int turbo_flow_redis_stream_publisher_publish(void *publisher, const void *payload,
+                                              size_t payload_size) {
+  return turbo_flow_redis_stream_publisher_append((turbo_flow_redis_stream_publisher_t *)publisher,
+                                                  payload, payload_size);
+}
+
 int turbo_flow_redis_register_data_adapter(turbo_flow_t *flow, const char *name,
                                            const turbo_flow_redis_data_config_t *config) {
   flow_redis_adapter_t *adapter;
@@ -1594,13 +1832,14 @@ int flow_redis_store_client_create(const flow_redis_store_client_config_t *confi
                                    flow_redis_store_client_t **out) {
   flow_redis_adapter_t *adapter;
   int rc;
-  if (!config || !out || !config->host || !config->host[0] || config->port == 0u ||
-      config->database < 0 || config->database > 15 || config->timeout_ms > INT_MAX) {
+  if (!config || !out ||
+      (config->connection.version == 0u &&
+       (!config->host || !config->host[0] || config->port == 0u || config->database < 0 ||
+        config->database > 15 || config->timeout_ms > INT_MAX))) {
     return TURBO_EINVAL;
   }
   *out = NULL;
-  adapter = flow_redis_adapter_create(config->host, config->port, config->username,
-                                      config->password, config->database, config->timeout_ms, &rc);
+  adapter = flow_redis_adapter_create_store(config, &rc);
   if (!adapter) return rc;
   adapter->mode = FLOW_REDIS_MODE_FLOW_STORE;
   *out = (flow_redis_store_client_t *)adapter;
@@ -1616,13 +1855,17 @@ int flow_redis_store_command(flow_redis_store_client_t *client, int argc, const 
   flow_redis_adapter_t *adapter = (flow_redis_adapter_t *)client;
   flow_redis_task_t task;
   int rc;
-  if (!adapter || adapter->mode != FLOW_REDIS_MODE_FLOW_STORE || argc <= 0 || !argv || !apply)
+  if (!adapter ||
+      (adapter->mode != FLOW_REDIS_MODE_FLOW_STORE &&
+       adapter->mode != FLOW_REDIS_MODE_RECORD_STORE) ||
+      argc <= 1 || !argv || !apply)
     return TURBO_EINVAL;
   memset(&task, 0, sizeof(task));
   task.kind = FLOW_REDIS_TASK_STORE_COMMAND;
   task.command_argc = argc;
   task.command_argv = argv;
   task.command_lengths = lengths;
+  task.command_key_index = argc > 3 && strcmp(argv[0], "EVAL") == 0 ? 3 : 1;
   task.command_apply = apply;
   task.command_apply_ctx = ctx;
   turbo_mutex_lock(&adapter->lock);
@@ -1654,14 +1897,16 @@ static int flow_redis_record_store_commit(void *ctx, const turbo_flow_record_mut
 int flow_redis_record_store_create(const turbo_flow_redis_record_store_config_t *config,
                                    turbo_flow_record_store_t *out) {
   flow_redis_adapter_t *adapter;
+  flow_redis_store_client_config_t client_config;
   size_t max_key_size;
   size_t max_value_size;
   size_t max_batch_size;
   int rc;
-  if (!config || !out || out->size < sizeof(*out) || out->ctx || !config->host ||
-      !config->host[0] || config->port == 0u || config->database < 0 || config->database > 15 ||
-      config->timeout_ms > INT_MAX || !config->key || !config->key[0] ||
-      strlen(config->key) > TURBO_FLOW_REDIS_MAX_KEY_SIZE ||
+  if (!config || !out || out->size < sizeof(*out) || out->ctx ||
+      (config->connection.version == 0u &&
+       (!config->host || !config->host[0] || config->port == 0u || config->database < 0 ||
+        config->database > 15 || config->timeout_ms > INT_MAX)) ||
+      !config->key || !config->key[0] || strlen(config->key) > TURBO_FLOW_REDIS_MAX_KEY_SIZE ||
       config->max_record_key_size > TURBO_FLOW_REDIS_RECORD_STORE_MAX_RECORD_KEY_SIZE ||
       config->max_value_size > TURBO_FLOW_REDIS_DEFAULT_MAX_VALUE_SIZE ||
       config->max_batch_size > UINT16_MAX || config->max_records == 0u ||
@@ -1674,8 +1919,15 @@ int flow_redis_record_store_create(const turbo_flow_redis_record_store_config_t 
   max_batch_size = config->max_batch_size ? config->max_batch_size
                                           : TURBO_FLOW_REDIS_RECORD_STORE_DEFAULT_MAX_BATCH_SIZE;
   if (max_key_size == 0u || max_value_size == 0u || max_batch_size == 0u) return TURBO_EINVAL;
-  adapter = flow_redis_adapter_create(config->host, config->port, config->username,
-                                      config->password, config->database, config->timeout_ms, &rc);
+  memset(&client_config, 0, sizeof(client_config));
+  client_config.host = config->host;
+  client_config.port = config->port;
+  client_config.username = config->username;
+  client_config.password = config->password;
+  client_config.database = config->database;
+  client_config.timeout_ms = config->timeout_ms;
+  client_config.connection = config->connection;
+  adapter = flow_redis_adapter_create_store(&client_config, &rc);
   if (!adapter) return rc;
   adapter->key = tstr_dup(config->key);
   adapter->mode = FLOW_REDIS_MODE_RECORD_STORE;
@@ -1704,6 +1956,12 @@ int flow_redis_record_store_create(const turbo_flow_redis_record_store_config_t 
   out->scan = flow_redis_record_store_scan;
   out->commit = flow_redis_record_store_commit;
   return TURBO_OK;
+}
+
+int turbo_flow_redis_state_store_create(const turbo_flow_redis_record_store_config_t *config,
+                                        const turbo_flow_store_limits_t *limits,
+                                        turbo_flow_state_store_t **out) {
+  return flow_redis_state_store_create(config, limits, out);
 }
 
 void flow_redis_record_store_destroy(turbo_flow_record_store_t *store) {

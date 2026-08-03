@@ -1,8 +1,9 @@
 #ifndef TURBO_FLOW_REDIS_STORAGE_BACKEND_H
 #define TURBO_FLOW_REDIS_STORAGE_BACKEND_H
 
-#include "turbo_flow_store.h"
+#include "turbo_flow_redis.h"
 #include "turbo_flow_storage_backend.h"
+#include "turbo_flow_store.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -28,6 +29,7 @@ typedef struct turbo_flow_redis_index_store_config_s {
   const char *key;
   size_t max_index_name_size;
   size_t max_member_size;
+  turbo_flow_redis_connection_config_t connection;
 } turbo_flow_redis_index_store_config_t;
 
 #define TURBO_FLOW_REDIS_LOG_DEFAULT_MAX_OPERATION_RECORDS 4096u
@@ -42,6 +44,7 @@ typedef struct turbo_flow_redis_log_store_config_s {
   uint32_t timeout_ms;
   const char *key;
   size_t max_operation_records;
+  turbo_flow_redis_connection_config_t connection;
 } turbo_flow_redis_log_store_config_t;
 
 /**
@@ -63,8 +66,7 @@ typedef struct turbo_flow_redis_storage_backend_options_s {
    TURBO_FLOW_REDIS_STORAGE_BACKEND_OPTIONS_VERSION, NULL, 0u, NULL}
 
 /** Return Redis's limited RECORD|STATE|INDEX|LOG storage backend function table. */
-CXX_C_API const turbo_flow_storage_backend_plugin_api_t *
-turbo_flow_redis_storage_backend_api(void);
+CXX_C_API const turbo_flow_storage_backend_plugin_api_t *turbo_flow_redis_storage_backend_api(void);
 
 #ifdef __cplusplus
 }

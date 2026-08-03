@@ -2,7 +2,10 @@
 #define TURBO_FLOW_REDIS_INTERNAL_H
 
 #include "redis_client.h"
+#include "redis_cluster.h"
+#include "redis_sentinel.h"
 #include "turbo_flow.h"
+#include "turbo_flow_redis.h"
 
 typedef struct flow_redis_store_client_s flow_redis_store_client_t;
 
@@ -13,6 +16,7 @@ typedef struct flow_redis_store_client_config_s {
   const char *password;
   int database;
   uint32_t timeout_ms;
+  turbo_flow_redis_connection_config_t connection;
 } flow_redis_store_client_config_t;
 
 typedef int (*flow_redis_store_reply_fn)(void *ctx, const redis_reply_t *reply);

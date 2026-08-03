@@ -69,6 +69,11 @@ typedef struct turbo_flow_security_auth_request_s {
    * must size-gate this appended field before reading it.
    */
   const char *peer_certificate_sha256;
+  /**
+   * Direct transport peer, even when remote_address came from a trusted proxy.
+   * Providers must size-gate this appended diagnostic field before reading it.
+   */
+  const char *transport_peer_address;
 } turbo_flow_security_auth_request_t;
 
 #define TURBO_FLOW_SECURITY_AUTH_REQUEST_INIT {sizeof(turbo_flow_security_auth_request_t)}
@@ -104,10 +109,12 @@ typedef struct turbo_flow_security_enhanced_auth_request_s {
   const char *protocol;
   /** Size-gated transport identity with the same semantics as the basic request. */
   const char *peer_certificate_sha256;
+  /** Size-gated direct transport peer diagnostic; see the basic request. */
+  const char *transport_peer_address;
 } turbo_flow_security_enhanced_auth_request_t;
 
 #define TURBO_FLOW_SECURITY_ENHANCED_AUTH_REQUEST_INIT                                             \
-  {sizeof(turbo_flow_security_enhanced_auth_request_t), NULL, NULL, NULL, 0u, NULL, NULL, NULL}
+  {sizeof(turbo_flow_security_enhanced_auth_request_t), NULL, NULL, NULL, 0u, NULL, NULL, NULL, NULL}
 #define TURBO_FLOW_SECURITY_ENHANCED_AUTH_REQUEST_BASE_SIZE                                        \
   offsetof(turbo_flow_security_enhanced_auth_request_t, peer_certificate_sha256)
 

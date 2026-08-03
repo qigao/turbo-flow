@@ -14,7 +14,7 @@
 事务外执行后不重新校验状态，又可能覆盖并发的禁用、撤销或轮换。
 
 本决策只定义 credential 事实的存储和内部命令语义。内部认证缓存和受信 Root Group 绑定见本文后续章节及
-`ADR_CONTROL_AUTH_ROOT_BINDING.md`；HTTPS adapter、防爆破、管理权限和已连接 session 的处置仍由后续
+`ADR_HTTPS_AUTH_SERVICE.md`；HTTPS adapter、防爆破、管理权限和已连接 session 的处置仍由后续
 阶段完成。部署 parser/runtime 以 `auth.external_https` 是否出现选择 verifier：缺失时使用本地
 credential 与正向 cache；出现时二者不参与该请求，第三方 HTTPS 失败不得回退到本地 credential。
 

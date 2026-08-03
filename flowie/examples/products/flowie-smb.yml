@@ -43,17 +43,19 @@ channels:
       max_delivery_attempts: 5
       retry_delay_ms: 1000
       archive_ttl_ms: 604800000
-  mqtt.sessions:
+  mqtt.protocol:
     kind: record_store
     config:
-      backend: postgresql
-      conninfo: "host=127.0.0.1 port=5432 dbname=turboflow user=turboflow password=change-me"
-      namespace_name: flowie_smb_sessions
+      backend: sqlite
+      database_path: flowie-smb-protocol.sqlite3
+      namespace_name: mqtt.endpoint
+      busy_timeout_ms: 5000
       max_key_size: 65538
       max_value_size: 16777216
       max_batch_size: 4096
-      max_records: 200000
-      create_table: true
+      max_records: 8192
+      max_item_bytes: 16842754
+      max_bytes: 137975840768
 
 adapters:
   mqtt.endpoint:
@@ -76,7 +78,7 @@ adapters:
       max_subscriptions_per_session: 256
       max_inflight_per_session: 64
       topic_alias_maximum: 64
-      session_store: mqtt.sessions
+      protocol_store: mqtt.protocol
   pg.mqtt.publish:
     kind: pgsql_outbox
     config:

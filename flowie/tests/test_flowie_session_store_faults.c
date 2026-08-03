@@ -279,7 +279,10 @@ static turbo_flow_t *flowie_test_persistent_flow_with_send_hwm(
                               "}\n";
   flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
   flowie_endpoint_persistence_binding_t persistence = FLOWIE_ENDPOINT_PERSISTENCE_BINDING_INIT;
-  flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
+  struct {
+    flowie_endpoint_bindings_t v1;
+    const void *unknown_future_binding;
+  } bindings = {FLOWIE_ENDPOINT_BINDINGS_INIT, NULL};
   turbo_flow_t *flow = turbo_flow_create();
   if (!flow) return NULL;
   config.host = "127.0.0.1";
@@ -295,8 +298,9 @@ static turbo_flow_t *flowie_test_persistent_flow_with_send_hwm(
   config.max_inflight_per_session = 8u;
   persistence.store_channel = "mqtt.sessions";
   persistence.store = store;
-  bindings.persistence = &persistence;
-  if (flowie_register_bound_endpoint(flow, "mqtt.endpoint", &config, &bindings) != TURBO_OK ||
+  bindings.v1.size = sizeof(bindings);
+  bindings.v1.persistence = &persistence;
+  if (flowie_register_bound_endpoint(flow, "mqtt.endpoint", &config, &bindings.v1) != TURBO_OK ||
       turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u) != TURBO_OK ||
       turbo_flow_compile(flow) != TURBO_OK) {
     turbo_flow_destroy(flow);

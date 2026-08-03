@@ -6,6 +6,7 @@
 #include "CoroNet/turbo_coro_socket.h"
 #include "tinytest.h"
 #include "turbo_error.h"
+#include "turbo_flow_coronet_execution.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
 #include "turbo_uuid.h"
@@ -36,6 +37,7 @@ typedef struct flowie_security_fixture_s {
   int result;
   int revoked;
   char remote_address[CORO_SOCKET_ADDRESS_TEXT_CAPACITY];
+  char transport_peer_address[CORO_SOCKET_ADDRESS_TEXT_CAPACITY];
   char peer_certificate_sha256[CORO_TLS_PEER_CERT_SHA256_CAPACITY];
 } flowie_security_fixture_t;
 
@@ -60,6 +62,163 @@ typedef struct flowie_task_group_wait_fixture_s {
   atomic_int exited;
 } flowie_task_group_wait_fixture_t;
 
+typedef struct flowie_cluster_endpoint_fixture_s {
+  coro_context_t *context;
+  flowie_endpoint_cluster_complete_fn pending_complete;
+  void *pending_complete_ctx;
+  flowie_endpoint_cluster_socket_port_t socket_port;
+  flowie_endpoint_cluster_command_t pending_command;
+  flowie_mqtt_version_t mqtt_version;
+  uint64_t connection_id;
+  uint64_t connection_generation;
+  atomic_size_t connect_calls;
+  atomic_size_t command_calls;
+  atomic_size_t settlement_calls;
+  atomic_size_t lost_calls;
+  atomic_size_t detach_calls;
+  uint8_t command_packet[32];
+  size_t command_packet_size;
+  uint8_t proxy_tlvs[32];
+  size_t proxy_tlvs_size;
+  char client_id[64];
+  char remote_address[64];
+  char transport_peer_address[64];
+  turbo_flow_protocol_settlement_request_t settlement;
+  int publish_admit_graph;
+} flowie_cluster_endpoint_fixture_t;
+
+static void flowie_cluster_endpoint_complete_post(void *arg1, void *arg2) {
+  static const uint8_t connack_v5[] = {0x20u, 0x03u, 0x00u, 0x00u, 0x00u};
+  static const uint8_t puback[] = {0x40u, 0x02u, 0x00u, 0x2au};
+  static const uint8_t suback[] = {0x90u, 0x04u, 0x00u, 0x2au, 0x00u, 0x01u};
+  flowie_cluster_endpoint_fixture_t *fixture = (flowie_cluster_endpoint_fixture_t *)arg1;
+  flowie_endpoint_cluster_action_t action = FLOWIE_ENDPOINT_CLUSTER_ACTION_INIT;
+  (void)arg2;
+  if (!fixture || !fixture->pending_complete) return;
+  action.mqtt_version = fixture->mqtt_version;
+  if (fixture->pending_command == FLOWIE_ENDPOINT_CLUSTER_COMMAND_NONE)
+    action.packet = (flowie_mqtt_span_t){connack_v5, sizeof(connack_v5)};
+  else if (fixture->pending_command == FLOWIE_ENDPOINT_CLUSTER_COMMAND_PUBLISH) {
+    if (fixture->publish_admit_graph) action.settlement_point = TURBO_FLOW_PROTOCOL_SETTLE_DURABLE;
+    else action.packet = (flowie_mqtt_span_t){puback, sizeof(puback)};
+  } else if (fixture->pending_command == FLOWIE_ENDPOINT_CLUSTER_COMMAND_PUBLISH_SETTLE)
+    action.packet = (flowie_mqtt_span_t){puback, sizeof(puback)};
+  else if (fixture->pending_command == FLOWIE_ENDPOINT_CLUSTER_COMMAND_SUBSCRIBE)
+    action.packet = (flowie_mqtt_span_t){suback, sizeof(suback)};
+  else if (fixture->pending_command == FLOWIE_ENDPOINT_CLUSTER_COMMAND_DISCONNECT)
+    action.close_after_send = 1u;
+  fixture->pending_complete(fixture->pending_complete_ctx, TURBO_OK, &action);
+  fixture->pending_complete = NULL;
+  fixture->pending_complete_ctx = NULL;
+}
+
+static int flowie_cluster_endpoint_connect(void *ctx, uint64_t connection_id,
+                                           uint64_t connection_generation,
+                                           const flowie_mqtt_connect_view_t *connect,
+                                           const turbo_flow_security_principal_t *principal,
+                                           const flowie_endpoint_cluster_ingress_t *ingress,
+                                           const flowie_endpoint_cluster_socket_port_t *socket_port,
+                                           flowie_endpoint_cluster_complete_fn complete,
+                                           void *complete_ctx) {
+  flowie_cluster_endpoint_fixture_t *fixture = (flowie_cluster_endpoint_fixture_t *)ctx;
+  (void)principal;
+  if (!fixture || !connect || !ingress || ingress->size < sizeof(*ingress) ||
+      !ingress->remote_address || !ingress->remote_address[0] || !ingress->transport_peer_address ||
+      !ingress->transport_peer_address[0] || !socket_port || !complete ||
+      socket_port->size < sizeof(*socket_port) || !socket_port->takeover_close ||
+      !socket_port->apply_action || connect->client_id.size >= sizeof(fixture->client_id) ||
+      fixture->pending_complete)
+    return TURBO_EINVAL;
+  fixture->context = coro_context_current();
+  fixture->connection_id = connection_id;
+  fixture->connection_generation = connection_generation;
+  fixture->socket_port = *socket_port;
+  fixture->mqtt_version = connect->version;
+  if (ingress->proxy_tlvs.size > sizeof(fixture->proxy_tlvs)) return TURBO_EMSGSIZE;
+  (void)snprintf(fixture->remote_address, sizeof(fixture->remote_address), "%s",
+                 ingress->remote_address);
+  (void)snprintf(fixture->transport_peer_address, sizeof(fixture->transport_peer_address), "%s",
+                 ingress->transport_peer_address);
+  if (ingress->proxy_tlvs.size != 0u)
+    memcpy(fixture->proxy_tlvs, ingress->proxy_tlvs.data, ingress->proxy_tlvs.size);
+  fixture->proxy_tlvs_size = ingress->proxy_tlvs.size;
+  memcpy(fixture->client_id, connect->client_id.data, connect->client_id.size);
+  fixture->client_id[connect->client_id.size] = '\0';
+  fixture->pending_command = FLOWIE_ENDPOINT_CLUSTER_COMMAND_NONE;
+  fixture->pending_complete = complete;
+  fixture->pending_complete_ctx = complete_ctx;
+  atomic_fetch_add_explicit(&fixture->connect_calls, 1u, memory_order_release);
+  return coro_post(fixture->context, flowie_cluster_endpoint_complete_post, fixture, NULL);
+}
+
+static int flowie_cluster_endpoint_command(void *ctx, uint64_t connection_id,
+                                           uint64_t connection_generation,
+                                           flowie_endpoint_cluster_command_t command,
+                                           flowie_mqtt_version_t mqtt_version,
+                                           flowie_mqtt_span_t client_id, flowie_mqtt_span_t packet,
+                                           flowie_endpoint_cluster_complete_fn complete,
+                                           void *complete_ctx) {
+  flowie_cluster_endpoint_fixture_t *fixture = (flowie_cluster_endpoint_fixture_t *)ctx;
+  if (!fixture || !complete || fixture->pending_complete ||
+      connection_id != fixture->connection_id ||
+      connection_generation != fixture->connection_generation ||
+      mqtt_version != fixture->mqtt_version || packet.size > sizeof(fixture->command_packet) ||
+      client_id.size != strlen(fixture->client_id) ||
+      memcmp(client_id.data, fixture->client_id, client_id.size) != 0)
+    return TURBO_EINVAL;
+  memcpy(fixture->command_packet, packet.data, packet.size);
+  fixture->command_packet_size = packet.size;
+  fixture->pending_command = command;
+  fixture->pending_complete = complete;
+  fixture->pending_complete_ctx = complete_ctx;
+  atomic_fetch_add_explicit(&fixture->command_calls, 1u, memory_order_release);
+  return coro_post(fixture->context, flowie_cluster_endpoint_complete_post, fixture, NULL);
+}
+
+static int
+flowie_cluster_endpoint_settle(void *ctx, uint64_t connection_id, uint64_t connection_generation,
+                               flowie_mqtt_version_t mqtt_version, flowie_mqtt_span_t client_id,
+                               const turbo_flow_protocol_settlement_request_t *settlement,
+                               flowie_endpoint_cluster_complete_fn complete, void *complete_ctx) {
+  flowie_cluster_endpoint_fixture_t *fixture = (flowie_cluster_endpoint_fixture_t *)ctx;
+  if (!fixture || !settlement || settlement->size < sizeof(*settlement) || !complete ||
+      fixture->pending_complete || connection_id != fixture->connection_id ||
+      connection_generation != fixture->connection_generation ||
+      mqtt_version != fixture->mqtt_version || client_id.size != strlen(fixture->client_id) ||
+      memcmp(client_id.data, fixture->client_id, client_id.size) != 0)
+    return TURBO_EINVAL;
+  fixture->settlement = *settlement;
+  fixture->pending_command = FLOWIE_ENDPOINT_CLUSTER_COMMAND_PUBLISH_SETTLE;
+  fixture->pending_complete = complete;
+  fixture->pending_complete_ctx = complete_ctx;
+  atomic_fetch_add_explicit(&fixture->settlement_calls, 1u, memory_order_release);
+  return coro_post(fixture->context, flowie_cluster_endpoint_complete_post, fixture, NULL);
+}
+
+static int flowie_cluster_endpoint_connection_lost(void *ctx, uint64_t connection_id,
+                                                   uint64_t connection_generation,
+                                                   flowie_mqtt_version_t mqtt_version,
+                                                   flowie_mqtt_span_t client_id) {
+  flowie_cluster_endpoint_fixture_t *fixture = (flowie_cluster_endpoint_fixture_t *)ctx;
+  if (!fixture || connection_id != fixture->connection_id ||
+      connection_generation != fixture->connection_generation ||
+      mqtt_version != fixture->mqtt_version || client_id.size != strlen(fixture->client_id))
+    return TURBO_EINVAL;
+  atomic_fetch_add_explicit(&fixture->lost_calls, 1u, memory_order_release);
+  return TURBO_OK;
+}
+
+static void flowie_cluster_endpoint_detach(void *ctx, uint64_t connection_id,
+                                           uint64_t connection_generation) {
+  flowie_cluster_endpoint_fixture_t *fixture = (flowie_cluster_endpoint_fixture_t *)ctx;
+  if (!fixture || connection_id != fixture->connection_id ||
+      connection_generation != fixture->connection_generation)
+    return;
+  fixture->pending_complete = NULL;
+  fixture->pending_complete_ctx = NULL;
+  atomic_fetch_add_explicit(&fixture->detach_calls, 1u, memory_order_release);
+}
+
 typedef struct flowie_tls_auth_client_s {
   coro_context_t *context;
   const char *ca_file;
@@ -67,6 +226,8 @@ typedef struct flowie_tls_auth_client_s {
   const char *key_file;
   const uint8_t *connect_packet;
   size_t connect_packet_size;
+  const uint8_t *proxy_header;
+  size_t proxy_header_size;
   unsigned short port;
   int done;
   int status;
@@ -83,7 +244,8 @@ static void flowie_tls_auth_client_run(coro_t *coroutine, void *arg) {
   if (!client || !client->context || !client->ca_file || !client->connect_packet ||
       client->connect_packet_size == 0u)
     goto done;
-  socket = coro_socket_create(client->context, CORO_SOCKET_TLS);
+  socket = coro_socket_create(client->context,
+                              client->proxy_header ? CORO_SOCKET_TCP_V4 : CORO_SOCKET_TLS);
   if (!socket) {
     rc = TURBO_ENOMEM;
     goto done;
@@ -94,7 +256,12 @@ static void flowie_tls_auth_client_run(coro_t *coroutine, void *arg) {
   tls_config.verify_peer = 1;
   rc = coro_socket_set_tls_client_config(socket, &tls_config);
   if (rc == TURBO_OK) coro_socket_set_timeout(socket, 5000u);
-  if (rc == TURBO_OK) rc = coro_socket_connect(socket, "localhost", client->port);
+  if (rc == TURBO_OK)
+    rc =
+        coro_socket_connect(socket, client->proxy_header ? "127.0.0.1" : "localhost", client->port);
+  if (rc == TURBO_OK && client->proxy_header)
+    rc = coro_socket_send(socket, (const char *)client->proxy_header, client->proxy_header_size);
+  if (rc == TURBO_OK && client->proxy_header) rc = coro_socket_upgrade_tls(socket, "localhost");
   if (rc == TURBO_OK)
     rc =
         coro_socket_send(socket, (const char *)client->connect_packet, client->connect_packet_size);
@@ -238,6 +405,10 @@ static int flowie_test_authenticate(void *ctx, const turbo_flow_security_auth_re
   ++fixture->calls;
   (void)snprintf(fixture->remote_address, sizeof(fixture->remote_address), "%s",
                  request->remote_address ? request->remote_address : "");
+  (void)snprintf(fixture->transport_peer_address, sizeof(fixture->transport_peer_address), "%s",
+                 request->size >= sizeof(*request) && request->transport_peer_address
+                     ? request->transport_peer_address
+                     : "");
   (void)snprintf(fixture->peer_certificate_sha256, sizeof(fixture->peer_certificate_sha256), "%s",
                  request->size >= sizeof(*request) && request->peer_certificate_sha256
                      ? request->peer_certificate_sha256
@@ -840,6 +1011,557 @@ done:
 }
 
 spec("Flowie MQTT endpoint primitive") {
+  it("delegates coalesced MQTT packets to an asynchronous cluster owner in order") {
+    static const uint8_t publish[] = {0x32u, 0x06u, 0x00u, 0x01u, 'a', 0x00u, 0x2au, 0x00u};
+    static const uint8_t expected[] = {0x20u, 0x0bu, 0x00u, 0x00u, 0x08u, 0x21u,
+                                       0x00u, 0x04u, 0x27u, 0x00u, 0x00u, 0x04u,
+                                       0x00u, 0x40u, 0x02u, 0x00u, 0x2au};
+    const turbo_flow_coronet_execution_binding_t execution = {
+        sizeof(turbo_flow_coronet_execution_binding_t), TURBO_FLOW_CORONET_EXECUTION_PRIVATE};
+    flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
+    flowie_endpoint_core_options_t options = FLOWIE_ENDPOINT_CORE_OPTIONS_INIT;
+    flowie_endpoint_cluster_binding_t cluster = FLOWIE_ENDPOINT_CLUSTER_BINDING_INIT;
+    flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
+    flowie_cluster_endpoint_fixture_t fixture;
+    flowie_endpoint_capture_t capture;
+    flowie_endpoint_core_t *endpoint = NULL;
+    flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
+    uint8_t connect_packet[128];
+    uint8_t input[160];
+    uint8_t received[sizeof(expected)];
+    size_t connect_size = 0u;
+    unsigned short port = flowie_test_port();
+
+    memset(&fixture, 0, sizeof(fixture));
+    memset(&capture, 0, sizeof(capture));
+    atomic_init(&fixture.connect_calls, 0u);
+    atomic_init(&fixture.command_calls, 0u);
+    atomic_init(&fixture.lost_calls, 0u);
+    atomic_init(&fixture.detach_calls, 0u);
+    atomic_init(&capture.calls, 0u);
+    config.host = "127.0.0.1";
+    config.port = (int)port;
+    config.max_packet_size = 1024u;
+    config.max_connections = 2u;
+    config.recv_timeout_ms = 5000u;
+    config.manage_sessions = 1;
+    config.max_sessions = 2u;
+    config.max_subscriptions_per_session = 4u;
+    config.max_inflight_per_session = 4u;
+    options.on_message = flowie_endpoint_core_capture;
+    options.message_ctx = &capture;
+    cluster.ctx = &fixture;
+    cluster.request_timeout_ms = 1000u;
+    cluster.connect = flowie_cluster_endpoint_connect;
+    cluster.command = flowie_cluster_endpoint_command;
+    cluster.settle = flowie_cluster_endpoint_settle;
+    cluster.connection_lost = flowie_cluster_endpoint_connection_lost;
+    cluster.detach = flowie_cluster_endpoint_detach;
+    bindings.cluster = &cluster;
+
+    check_int_gt(port, 0);
+    check_int_eq(flowie_test_encode_connect(connect_packet, sizeof(connect_packet), &connect_size,
+                                            "cluster-a", 60u, NULL, NULL, 0u),
+                 TURBO_OK);
+    memcpy(input, connect_packet, connect_size);
+    memcpy(input + connect_size, publish, sizeof(publish));
+    cluster.abi_version = FLOWIE_ENDPOINT_CLUSTER_BINDING_ABI_V1;
+    check_int_eq(flowie_endpoint_core_create_ex("flowie.cluster", &config, &options, &execution,
+                                                &bindings, &endpoint),
+                 TURBO_EINVAL);
+    check_null(endpoint);
+    cluster.abi_version = FLOWIE_ENDPOINT_CLUSTER_BINDING_ABI_CURRENT;
+    check_int_eq(flowie_endpoint_core_create_ex("flowie.cluster", &config, &options, &execution,
+                                                &bindings, &endpoint),
+                 TURBO_OK);
+    check_not_null(endpoint);
+    check_int_eq(flowie_endpoint_core_start(endpoint), TURBO_OK);
+    client = flowie_test_connect(port);
+    check_true(client != FLOWIE_TEST_INVALID_SOCKET);
+    check_int_eq(flowie_test_send(client, input, connect_size + sizeof(publish)), TURBO_OK);
+    check_int_eq(flowie_test_recv_exact(client, received, sizeof(received)), TURBO_OK);
+    check_mem_eq(received, expected, sizeof(expected));
+    check_uint_eq(atomic_load_explicit(&fixture.connect_calls, memory_order_acquire), 1u);
+    check_uint_eq(atomic_load_explicit(&fixture.command_calls, memory_order_acquire), 1u);
+    check_uint_eq(fixture.pending_command, FLOWIE_ENDPOINT_CLUSTER_COMMAND_PUBLISH);
+    check_uint_eq(fixture.command_packet_size, sizeof(publish));
+    check_mem_eq(fixture.command_packet, publish, sizeof(publish));
+    check_true(strncmp(fixture.remote_address, "127.0.0.1:", sizeof("127.0.0.1:") - 1u) == 0);
+    check_true(strncmp(fixture.transport_peer_address, "127.0.0.1:", sizeof("127.0.0.1:") - 1u) ==
+               0);
+    check_size_eq(fixture.proxy_tlvs_size, 0u);
+    check_uint_eq(atomic_load_explicit(&capture.calls, memory_order_acquire), 0u);
+    flowie_test_socket_close(client);
+    client = FLOWIE_TEST_INVALID_SOCKET;
+    for (size_t i = 0u; i < FLOWIE_TEST_WAIT_STEPS &&
+                        atomic_load_explicit(&fixture.detach_calls, memory_order_acquire) == 0u;
+         ++i)
+      turbo_sleep_ms(1u);
+    check_uint_eq(atomic_load_explicit(&fixture.lost_calls, memory_order_acquire), 1u);
+    check_uint_eq(atomic_load_explicit(&fixture.detach_calls, memory_order_acquire), 1u);
+    check_int_eq(flowie_endpoint_core_stop(endpoint), TURBO_OK);
+    flowie_endpoint_core_destroy(endpoint);
+  }
+
+  it("publishes owner-admitted MQTT data into the graph and settles it back asynchronously") {
+    static const uint8_t publish[] = {0x32u, 0x06u, 0x00u, 0x01u, 'a', 0x00u, 0x2au, 0x00u};
+    static const uint8_t expected[] = {0x20u, 0x0bu, 0x00u, 0x00u, 0x08u, 0x21u,
+                                       0x00u, 0x04u, 0x27u, 0x00u, 0x00u, 0x04u,
+                                       0x00u, 0x40u, 0x02u, 0x00u, 0x2au};
+    const turbo_flow_coronet_execution_binding_t execution = {
+        sizeof(turbo_flow_coronet_execution_binding_t), TURBO_FLOW_CORONET_EXECUTION_PRIVATE};
+    flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
+    flowie_endpoint_core_options_t options = FLOWIE_ENDPOINT_CORE_OPTIONS_INIT;
+    flowie_endpoint_cluster_binding_t cluster = FLOWIE_ENDPOINT_CLUSTER_BINDING_INIT;
+    flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
+    flowie_cluster_endpoint_fixture_t fixture;
+    flowie_endpoint_capture_t capture;
+    flowie_endpoint_core_t *endpoint = NULL;
+    flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
+    uint8_t connect_packet[128];
+    uint8_t input[160];
+    uint8_t received[sizeof(expected)];
+    size_t connect_size = 0u;
+    unsigned short port = flowie_test_port();
+
+    memset(&fixture, 0, sizeof(fixture));
+    memset(&capture, 0, sizeof(capture));
+    atomic_init(&fixture.connect_calls, 0u);
+    atomic_init(&fixture.command_calls, 0u);
+    atomic_init(&fixture.settlement_calls, 0u);
+    atomic_init(&fixture.lost_calls, 0u);
+    atomic_init(&fixture.detach_calls, 0u);
+    atomic_init(&capture.calls, 0u);
+    fixture.publish_admit_graph = 1;
+    config.host = "127.0.0.1";
+    config.port = (int)port;
+    config.max_packet_size = 1024u;
+    config.max_connections = 2u;
+    config.recv_timeout_ms = 5000u;
+    config.manage_sessions = 1;
+    config.max_sessions = 2u;
+    config.max_subscriptions_per_session = 4u;
+    config.max_inflight_per_session = 4u;
+    config.settlement.qos1 = TURBO_FLOW_PROTOCOL_SETTLE_PROCESSED;
+    options.on_message = flowie_endpoint_core_capture;
+    options.message_ctx = &capture;
+    cluster.ctx = &fixture;
+    cluster.request_timeout_ms = 1000u;
+    cluster.connect = flowie_cluster_endpoint_connect;
+    cluster.command = flowie_cluster_endpoint_command;
+    cluster.settle = flowie_cluster_endpoint_settle;
+    cluster.connection_lost = flowie_cluster_endpoint_connection_lost;
+    cluster.detach = flowie_cluster_endpoint_detach;
+    bindings.cluster = &cluster;
+
+    check_int_gt(port, 0);
+    check_int_eq(flowie_test_encode_connect(connect_packet, sizeof(connect_packet), &connect_size,
+                                            "cluster-graph", 60u, NULL, NULL, 0u),
+                 TURBO_OK);
+    memcpy(input, connect_packet, connect_size);
+    memcpy(input + connect_size, publish, sizeof(publish));
+    check_int_eq(flowie_endpoint_core_create_ex("flowie.cluster.graph", &config, &options,
+                                                &execution, &bindings, &endpoint),
+                 TURBO_OK);
+    check_int_eq(flowie_endpoint_core_start(endpoint), TURBO_OK);
+    client = flowie_test_connect(port);
+    check_true(client != FLOWIE_TEST_INVALID_SOCKET);
+    check_int_eq(flowie_test_send(client, input, connect_size + sizeof(publish)), TURBO_OK);
+    check_int_eq(flowie_test_recv_exact(client, received, sizeof(received)), TURBO_OK);
+    check_mem_eq(received, expected, sizeof(expected));
+    check_uint_eq(atomic_load_explicit(&capture.calls, memory_order_acquire), 1u);
+    check_uint_eq(atomic_load_explicit(&fixture.command_calls, memory_order_acquire), 1u);
+    check_uint_eq(atomic_load_explicit(&fixture.settlement_calls, memory_order_acquire), 1u);
+    check_uint_eq(fixture.pending_command, FLOWIE_ENDPOINT_CLUSTER_COMMAND_PUBLISH_SETTLE);
+    check_int_eq(fixture.settlement.point, TURBO_FLOW_PROTOCOL_SETTLE_PROCESSED);
+    check_uint_eq(fixture.settlement.message.packet_id, 42u);
+    check_uint_eq(fixture.settlement.message.session_generation, fixture.connection_generation);
+    check_uint_eq(fixture.settlement.attempt, 1u);
+    flowie_test_socket_close(client);
+    check_int_eq(flowie_endpoint_core_stop(endpoint), TURBO_OK);
+    flowie_endpoint_core_destroy(endpoint);
+  }
+
+  it("normalizes connection-local Topic Aliases before cluster owner submission") {
+    static const uint8_t register_alias[] = {0x32u, 0x09u, 0x00u, 0x01u, 'a',  0x00u,
+                                             0x2au, 0x03u, 0x23u, 0x00u, 0x01u};
+    static const uint8_t use_alias[] = {0x32u, 0x08u, 0x00u, 0x00u, 0x00u,
+                                        0x2au, 0x03u, 0x23u, 0x00u, 0x01u};
+    static const uint8_t expected_normalized[] = {0x32u, 0x09u, 0x00u, 0x01u, 'a',  0x00u,
+                                                  0x2au, 0x03u, 0x23u, 0x00u, 0x01u};
+    static const uint8_t puback[] = {0x40u, 0x02u, 0x00u, 0x2au};
+    const turbo_flow_coronet_execution_binding_t execution = {
+        sizeof(turbo_flow_coronet_execution_binding_t), TURBO_FLOW_CORONET_EXECUTION_PRIVATE};
+    flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
+    flowie_endpoint_core_options_t options = FLOWIE_ENDPOINT_CORE_OPTIONS_INIT;
+    flowie_endpoint_cluster_binding_t cluster = FLOWIE_ENDPOINT_CLUSTER_BINDING_INIT;
+    flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
+    flowie_cluster_endpoint_fixture_t fixture;
+    flowie_endpoint_capture_t capture;
+    flowie_endpoint_core_t *endpoint = NULL;
+    flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
+    uint8_t connect_packet[128];
+    uint8_t received[sizeof(puback)];
+    size_t connect_size = 0u;
+    unsigned short port = flowie_test_port();
+
+    memset(&fixture, 0, sizeof(fixture));
+    memset(&capture, 0, sizeof(capture));
+    atomic_init(&fixture.connect_calls, 0u);
+    atomic_init(&fixture.command_calls, 0u);
+    atomic_init(&fixture.lost_calls, 0u);
+    atomic_init(&fixture.detach_calls, 0u);
+    atomic_init(&capture.calls, 0u);
+    config.host = "127.0.0.1";
+    config.port = (int)port;
+    config.max_packet_size = 1024u;
+    config.max_connections = 2u;
+    config.recv_timeout_ms = 5000u;
+    config.manage_sessions = 1;
+    config.max_sessions = 2u;
+    config.max_subscriptions_per_session = 4u;
+    config.max_inflight_per_session = 4u;
+    config.topic_alias_maximum = 4u;
+    options.on_message = flowie_endpoint_core_capture;
+    options.message_ctx = &capture;
+    cluster.ctx = &fixture;
+    cluster.request_timeout_ms = 1000u;
+    cluster.connect = flowie_cluster_endpoint_connect;
+    cluster.command = flowie_cluster_endpoint_command;
+    cluster.settle = flowie_cluster_endpoint_settle;
+    cluster.connection_lost = flowie_cluster_endpoint_connection_lost;
+    cluster.detach = flowie_cluster_endpoint_detach;
+    bindings.cluster = &cluster;
+
+    check_int_gt(port, 0);
+    check_int_eq(flowie_test_encode_connect(connect_packet, sizeof(connect_packet), &connect_size,
+                                            "cluster-alias", 60u, NULL, NULL, 0u),
+                 TURBO_OK);
+    check_int_eq(flowie_endpoint_core_create_ex("flowie.cluster.alias", &config, &options,
+                                                &execution, &bindings, &endpoint),
+                 TURBO_OK);
+    check_not_null(endpoint);
+    check_int_eq(flowie_endpoint_core_start(endpoint), TURBO_OK);
+    client = flowie_test_connect(port);
+    check_true(client != FLOWIE_TEST_INVALID_SOCKET);
+    check_int_eq(flowie_test_send(client, connect_packet, connect_size), TURBO_OK);
+    check_int_eq(flowie_test_recv_connack(client, 0u, 0u), TURBO_OK);
+    check_int_eq(flowie_test_send(client, register_alias, sizeof(register_alias)), TURBO_OK);
+    check_int_eq(flowie_test_recv_exact(client, received, sizeof(received)), TURBO_OK);
+    check_mem_eq(received, puback, sizeof(puback));
+    check_int_eq(flowie_test_send(client, use_alias, sizeof(use_alias)), TURBO_OK);
+    check_int_eq(flowie_test_recv_exact(client, received, sizeof(received)), TURBO_OK);
+    check_mem_eq(received, puback, sizeof(puback));
+    check_uint_eq(atomic_load_explicit(&fixture.command_calls, memory_order_acquire), 2u);
+    check_size_eq(fixture.command_packet_size, sizeof(expected_normalized));
+    check_mem_eq(fixture.command_packet, expected_normalized, sizeof(expected_normalized));
+    check_uint_eq(atomic_load_explicit(&capture.calls, memory_order_acquire), 0u);
+    flowie_test_socket_close(client);
+    check_int_eq(flowie_endpoint_core_stop(endpoint), TURBO_OK);
+    flowie_endpoint_core_destroy(endpoint);
+  }
+
+  it("rejects an unauthorized cluster PUBLISH before owner submission") {
+    static const uint8_t denied_publish[] = {0x32u, 0x0bu, 0x00u, 0x06u, 'd',   'e',  'n',
+                                             'i',   'e',   'd',   0x00u, 0x2au, 0x00u};
+    static const uint8_t denied_puback[] = {0x40u, 0x04u, 0x00u, 0x2au, 0x87u, 0x00u};
+    const turbo_flow_coronet_execution_binding_t execution = {
+        sizeof(turbo_flow_coronet_execution_binding_t), TURBO_FLOW_CORONET_EXECUTION_PRIVATE};
+    flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
+    flowie_endpoint_core_options_t options = FLOWIE_ENDPOINT_CORE_OPTIONS_INIT;
+    flowie_endpoint_cluster_binding_t cluster = FLOWIE_ENDPOINT_CLUSTER_BINDING_INIT;
+    flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
+    flowie_cluster_endpoint_fixture_t fixture;
+    flowie_endpoint_capture_t capture;
+    flowie_security_fixture_t auth = {0};
+    turbo_flow_security_auth_provider_t provider = {sizeof(provider), &auth,
+                                                    flowie_test_authenticate};
+    turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
+    turbo_flow_security_realm_config_t realm_config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
+    turbo_flow_security_realm_t *realm = NULL;
+    flowie_endpoint_security_binding_t security = FLOWIE_ENDPOINT_SECURITY_BINDING_INIT;
+    flowie_endpoint_core_t *endpoint = NULL;
+    flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
+    flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
+    uint8_t connect_packet[128];
+    uint8_t received[sizeof(denied_puback)];
+    size_t connect_size = 0u;
+    unsigned short port = flowie_test_port();
+
+    memset(&fixture, 0, sizeof(fixture));
+    memset(&capture, 0, sizeof(capture));
+    atomic_init(&fixture.connect_calls, 0u);
+    atomic_init(&fixture.command_calls, 0u);
+    atomic_init(&fixture.lost_calls, 0u);
+    atomic_init(&fixture.detach_calls, 0u);
+    atomic_init(&capture.calls, 0u);
+    rule.effect = TURBO_FLOW_SECURITY_ALLOW;
+    rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
+    (void)snprintf(rule.subject, sizeof(rule.subject), "%s", "writer");
+    (void)snprintf(rule.root_group_id, sizeof(rule.root_group_id), "%s", "root-a");
+    rule.action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;
+    rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
+    rule.match_kind = TURBO_FLOW_SECURITY_MATCH_PREFIX;
+    (void)snprintf(rule.pattern, sizeof(rule.pattern), "%s", "cluster-secure");
+    realm_config.resource_uid = "security:cluster-publish";
+    realm_config.owner_name = "security.cluster-publish";
+    realm_config.policy_version = 1u;
+    realm_config.rules = &rule;
+    realm_config.rule_count = 1u;
+    check_int_eq(turbo_flow_security_realm_create(&realm_config, &realm), TURBO_OK);
+    security.realm_channel = "security.cluster-publish";
+    security.auth_method = "password";
+    security.auth_provider = &provider;
+    security.realm = realm;
+    config.host = "127.0.0.1";
+    config.port = (int)port;
+    config.max_packet_size = 1024u;
+    config.max_connections = 2u;
+    config.recv_timeout_ms = 5000u;
+    config.manage_sessions = 1;
+    config.max_sessions = 2u;
+    config.max_subscriptions_per_session = 4u;
+    config.max_inflight_per_session = 4u;
+    options.on_message = flowie_endpoint_core_capture;
+    options.message_ctx = &capture;
+    cluster.ctx = &fixture;
+    cluster.request_timeout_ms = 1000u;
+    cluster.connect = flowie_cluster_endpoint_connect;
+    cluster.command = flowie_cluster_endpoint_command;
+    cluster.settle = flowie_cluster_endpoint_settle;
+    cluster.connection_lost = flowie_cluster_endpoint_connection_lost;
+    cluster.detach = flowie_cluster_endpoint_detach;
+    bindings.security = &security;
+    bindings.cluster = &cluster;
+    connect.version = FLOWIE_MQTT_VERSION_5;
+    connect.clean_start = 1u;
+    connect.keep_alive = 60u;
+    connect.client_id = (flowie_mqtt_span_t){(const uint8_t *)"cluster-secure", 14u};
+    connect.has_username = 1u;
+    connect.has_password = 1u;
+    connect.username = (flowie_mqtt_span_t){(const uint8_t *)"writer", 6u};
+    connect.password = (flowie_mqtt_span_t){(const uint8_t *)"secret", 6u};
+
+    check_int_gt(port, 0);
+    check_int_eq(flowie_mqtt_connect_packet_encode(&connect, connect_packet, sizeof(connect_packet),
+                                                   &connect_size),
+                 FLOWIE_MQTT_PARSE_OK);
+    check_int_eq(flowie_endpoint_core_create_ex("flowie.cluster.secure", &config, &options,
+                                                &execution, &bindings, &endpoint),
+                 TURBO_OK);
+    check_not_null(endpoint);
+    check_int_eq(flowie_endpoint_core_start(endpoint), TURBO_OK);
+    client = flowie_test_connect(port);
+    check_true(client != FLOWIE_TEST_INVALID_SOCKET);
+    check_int_eq(flowie_test_send(client, connect_packet, connect_size), TURBO_OK);
+    check_int_eq(flowie_test_recv_connack(client, 0u, 0u), TURBO_OK);
+    check_int_eq(flowie_test_send(client, denied_publish, sizeof(denied_publish)), TURBO_OK);
+    check_int_eq(flowie_test_recv_exact(client, received, sizeof(received)), TURBO_OK);
+    check_mem_eq(received, denied_puback, sizeof(denied_puback));
+    check_uint_eq(atomic_load_explicit(&fixture.command_calls, memory_order_acquire), 0u);
+    check_uint_eq(atomic_load_explicit(&capture.calls, memory_order_acquire), 0u);
+    flowie_test_socket_close(client);
+    check_int_eq(flowie_endpoint_core_stop(endpoint), TURBO_OK);
+    flowie_endpoint_core_destroy(endpoint);
+    turbo_flow_security_realm_destroy(realm);
+  }
+
+  it("merges denied cluster subscriptions without exposing them to the owner") {
+    static const uint8_t subscribe[] = {
+        0x82u, 0x1au, 0x00u, 0x2au, 0x00u, 0x00u, 0x09u, 'a', 'l', 'l', 'o', 'w', 'e', 'd',
+        '/',   '#',   0x01u, 0x00u, 0x08u, 'd',   'e',   'n', 'i', 'e', 'd', '/', '#', 0x02u};
+    static const uint8_t filtered_subscribe[] = {0x82u, 0x0fu, 0x00u, 0x2au, 0x00u, 0x00u,
+                                                 0x09u, 'a',   'l',   'l',   'o',   'w',
+                                                 'e',   'd',   '/',   '#',   0x01u};
+    static const uint8_t merged_suback[] = {0x90u, 0x05u, 0x00u, 0x2au, 0x00u, 0x01u, 0x87u};
+    const turbo_flow_coronet_execution_binding_t execution = {
+        sizeof(turbo_flow_coronet_execution_binding_t), TURBO_FLOW_CORONET_EXECUTION_PRIVATE};
+    flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
+    flowie_endpoint_core_options_t options = FLOWIE_ENDPOINT_CORE_OPTIONS_INIT;
+    flowie_endpoint_cluster_binding_t cluster = FLOWIE_ENDPOINT_CLUSTER_BINDING_INIT;
+    flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
+    flowie_cluster_endpoint_fixture_t fixture;
+    flowie_endpoint_capture_t capture;
+    flowie_security_fixture_t auth = {0};
+    turbo_flow_security_auth_provider_t provider = {sizeof(provider), &auth,
+                                                    flowie_test_authenticate};
+    turbo_flow_security_rule_t rules[2];
+    turbo_flow_security_realm_config_t realm_config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
+    turbo_flow_security_realm_t *realm = NULL;
+    flowie_endpoint_security_binding_t security = FLOWIE_ENDPOINT_SECURITY_BINDING_INIT;
+    flowie_endpoint_core_t *endpoint = NULL;
+    flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
+    flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
+    uint8_t connect_packet[128];
+    uint8_t received[sizeof(merged_suback)];
+    size_t connect_size = 0u;
+    unsigned short port = flowie_test_port();
+
+    memset(&fixture, 0, sizeof(fixture));
+    memset(&capture, 0, sizeof(capture));
+    atomic_init(&fixture.connect_calls, 0u);
+    atomic_init(&fixture.command_calls, 0u);
+    atomic_init(&fixture.lost_calls, 0u);
+    atomic_init(&fixture.detach_calls, 0u);
+    atomic_init(&capture.calls, 0u);
+    for (size_t index = 0u; index < 2u; ++index) {
+      rules[index] = (turbo_flow_security_rule_t)TURBO_FLOW_SECURITY_RULE_INIT;
+      rules[index].effect = TURBO_FLOW_SECURITY_ALLOW;
+      rules[index].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
+      (void)snprintf(rules[index].subject, sizeof(rules[index].subject), "%s", "writer");
+      (void)snprintf(rules[index].root_group_id, sizeof(rules[index].root_group_id), "%s",
+                     "root-a");
+      rules[index].match_kind = TURBO_FLOW_SECURITY_MATCH_PREFIX;
+    }
+    rules[0].action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;
+    rules[0].resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
+    (void)snprintf(rules[0].pattern, sizeof(rules[0].pattern), "%s", "cluster-subscribe");
+    rules[1].action_mask = TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE;
+    rules[1].resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+    (void)snprintf(rules[1].pattern, sizeof(rules[1].pattern), "%s", "allowed/");
+    realm_config.resource_uid = "security:cluster-subscribe";
+    realm_config.owner_name = "security.cluster-subscribe";
+    realm_config.policy_version = 1u;
+    realm_config.rules = rules;
+    realm_config.rule_count = 2u;
+    check_int_eq(turbo_flow_security_realm_create(&realm_config, &realm), TURBO_OK);
+    security.realm_channel = "security.cluster-subscribe";
+    security.auth_method = "password";
+    security.auth_provider = &provider;
+    security.realm = realm;
+    config.host = "127.0.0.1";
+    config.port = (int)port;
+    config.max_packet_size = 1024u;
+    config.max_connections = 2u;
+    config.recv_timeout_ms = 5000u;
+    config.manage_sessions = 1;
+    config.max_sessions = 2u;
+    config.max_subscriptions_per_session = 4u;
+    config.max_inflight_per_session = 4u;
+    options.on_message = flowie_endpoint_core_capture;
+    options.message_ctx = &capture;
+    cluster.ctx = &fixture;
+    cluster.request_timeout_ms = 1000u;
+    cluster.connect = flowie_cluster_endpoint_connect;
+    cluster.command = flowie_cluster_endpoint_command;
+    cluster.settle = flowie_cluster_endpoint_settle;
+    cluster.connection_lost = flowie_cluster_endpoint_connection_lost;
+    cluster.detach = flowie_cluster_endpoint_detach;
+    bindings.security = &security;
+    bindings.cluster = &cluster;
+    connect.version = FLOWIE_MQTT_VERSION_5;
+    connect.clean_start = 1u;
+    connect.keep_alive = 60u;
+    connect.client_id = (flowie_mqtt_span_t){(const uint8_t *)"cluster-subscribe", 17u};
+    connect.has_username = 1u;
+    connect.has_password = 1u;
+    connect.username = (flowie_mqtt_span_t){(const uint8_t *)"writer", 6u};
+    connect.password = (flowie_mqtt_span_t){(const uint8_t *)"secret", 6u};
+
+    check_int_gt(port, 0);
+    check_int_eq(flowie_mqtt_connect_packet_encode(&connect, connect_packet, sizeof(connect_packet),
+                                                   &connect_size),
+                 FLOWIE_MQTT_PARSE_OK);
+    check_int_eq(flowie_endpoint_core_create_ex("flowie.cluster.subscribe", &config, &options,
+                                                &execution, &bindings, &endpoint),
+                 TURBO_OK);
+    check_not_null(endpoint);
+    check_int_eq(flowie_endpoint_core_start(endpoint), TURBO_OK);
+    client = flowie_test_connect(port);
+    check_true(client != FLOWIE_TEST_INVALID_SOCKET);
+    check_int_eq(flowie_test_send(client, connect_packet, connect_size), TURBO_OK);
+    check_int_eq(flowie_test_recv_connack(client, 0u, 0u), TURBO_OK);
+    check_int_eq(flowie_test_send(client, subscribe, sizeof(subscribe)), TURBO_OK);
+    check_int_eq(flowie_test_recv_exact(client, received, sizeof(received)), TURBO_OK);
+    check_mem_eq(received, merged_suback, sizeof(merged_suback));
+    check_uint_eq(atomic_load_explicit(&fixture.command_calls, memory_order_acquire), 1u);
+    check_uint_eq(fixture.pending_command, FLOWIE_ENDPOINT_CLUSTER_COMMAND_SUBSCRIBE);
+    check_size_eq(fixture.command_packet_size, sizeof(filtered_subscribe));
+    check_mem_eq(fixture.command_packet, filtered_subscribe, sizeof(filtered_subscribe));
+    check_uint_eq(atomic_load_explicit(&capture.calls, memory_order_acquire), 0u);
+    flowie_test_socket_close(client);
+    check_int_eq(flowie_endpoint_core_stop(endpoint), TURBO_OK);
+    flowie_endpoint_core_destroy(endpoint);
+    turbo_flow_security_realm_destroy(realm);
+  }
+
+  it("adds endpoint MQTT 5 limits and an assigned Client ID to cluster CONNACK") {
+    const turbo_flow_coronet_execution_binding_t execution = {
+        sizeof(turbo_flow_coronet_execution_binding_t), TURBO_FLOW_CORONET_EXECUTION_PRIVATE};
+    flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
+    flowie_endpoint_core_options_t options = FLOWIE_ENDPOINT_CORE_OPTIONS_INIT;
+    flowie_endpoint_cluster_binding_t cluster = FLOWIE_ENDPOINT_CLUSTER_BINDING_INIT;
+    flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
+    flowie_cluster_endpoint_fixture_t fixture;
+    flowie_endpoint_capture_t capture;
+    flowie_endpoint_core_t *endpoint = NULL;
+    flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
+    flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
+    uint8_t connect_packet[128];
+    char assigned_client_id[64] = {0};
+    size_t connect_size = 0u;
+    unsigned short port = flowie_test_port();
+
+    memset(&fixture, 0, sizeof(fixture));
+    memset(&capture, 0, sizeof(capture));
+    atomic_init(&fixture.connect_calls, 0u);
+    atomic_init(&fixture.command_calls, 0u);
+    atomic_init(&fixture.lost_calls, 0u);
+    atomic_init(&fixture.detach_calls, 0u);
+    atomic_init(&capture.calls, 0u);
+    config.host = "127.0.0.1";
+    config.port = (int)port;
+    config.max_packet_size = 1024u;
+    config.max_connections = 2u;
+    config.recv_timeout_ms = 5000u;
+    config.manage_sessions = 1;
+    config.max_sessions = 2u;
+    config.max_subscriptions_per_session = 4u;
+    config.max_inflight_per_session = 4u;
+    options.on_message = flowie_endpoint_core_capture;
+    options.message_ctx = &capture;
+    cluster.ctx = &fixture;
+    cluster.request_timeout_ms = 1000u;
+    cluster.connect = flowie_cluster_endpoint_connect;
+    cluster.command = flowie_cluster_endpoint_command;
+    cluster.settle = flowie_cluster_endpoint_settle;
+    cluster.connection_lost = flowie_cluster_endpoint_connection_lost;
+    cluster.detach = flowie_cluster_endpoint_detach;
+    bindings.cluster = &cluster;
+    connect.version = FLOWIE_MQTT_VERSION_5;
+    connect.clean_start = 1u;
+    connect.keep_alive = 60u;
+
+    check_int_gt(port, 0);
+    check_int_eq(flowie_mqtt_connect_packet_encode(&connect, connect_packet, sizeof(connect_packet),
+                                                   &connect_size),
+                 FLOWIE_MQTT_PARSE_OK);
+    check_int_eq(flowie_endpoint_core_create_ex("flowie.cluster.assigned", &config, &options,
+                                                &execution, &bindings, &endpoint),
+                 TURBO_OK);
+    check_not_null(endpoint);
+    check_int_eq(flowie_endpoint_core_start(endpoint), TURBO_OK);
+    client = flowie_test_connect(port);
+    check_true(client != FLOWIE_TEST_INVALID_SOCKET);
+    check_int_eq(flowie_test_send(client, connect_packet, connect_size), TURBO_OK);
+    check_int_eq(flowie_test_recv_connack_ex(client, 0u, 0u, assigned_client_id,
+                                             sizeof(assigned_client_id), NULL, 0u, NULL, 0u),
+                 TURBO_OK);
+    check_str_contains(assigned_client_id, "flowie-");
+    check_str_eq(assigned_client_id, fixture.client_id);
+    check_uint_eq(atomic_load_explicit(&fixture.connect_calls, memory_order_acquire), 1u);
+    flowie_test_socket_close(client);
+    client = FLOWIE_TEST_INVALID_SOCKET;
+    for (size_t i = 0u; i < FLOWIE_TEST_WAIT_STEPS &&
+                        atomic_load_explicit(&fixture.detach_calls, memory_order_acquire) == 0u;
+         ++i)
+      turbo_sleep_ms(1u);
+    check_uint_eq(atomic_load_explicit(&fixture.lost_calls, memory_order_acquire), 1u);
+    check_uint_eq(atomic_load_explicit(&fixture.detach_calls, memory_order_acquire), 1u);
+    check_int_eq(flowie_endpoint_core_stop(endpoint), TURBO_OK);
+    flowie_endpoint_core_destroy(endpoint);
+  }
+
   it("starts and stops a direct endpoint Core without creating a graph") {
     flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
     flowie_endpoint_core_options_t options = FLOWIE_ENDPOINT_CORE_OPTIONS_INIT;
@@ -1271,6 +1993,15 @@ spec("Flowie MQTT endpoint primitive") {
         "version: 1\nadapters:\n  mqtt.endpoint:\n    kind: flowie_endpoint\n    config:\n"
         "      transport: wss\n      host: 127.0.0.1\n      port: 8884\n"
         "      path: /mqtt\n      allowed_origins: https://console.example\n";
+    static const char valid_trusted_proxy[] =
+        "version: 1\nadapters:\n  mqtt.endpoint:\n    kind: flowie_endpoint\n    config:\n"
+        "      transport: tcp\n      host: 127.0.0.1\n      port: 18883\n"
+        "      trusted_proxy_cidrs: '127.0.0.1/32, ::1/128'\n"
+        "      proxy_header_max_bytes: 256\n      proxy_header_timeout_ms: 1000\n";
+    static const char incomplete_trusted_proxy[] =
+        "version: 1\nadapters:\n  mqtt.endpoint:\n    kind: flowie_endpoint\n    config:\n"
+        "      transport: tls\n      host: 127.0.0.1\n      port: 8883\n"
+        "      trusted_proxy_cidrs: 127.0.0.1/32\n";
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_connection_snapshot_t snapshot = {0};
@@ -1283,6 +2014,18 @@ spec("Flowie MQTT endpoint primitive") {
     check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0u, &snapshot), TURBO_OK);
     check_str_eq(snapshot.endpoint, "tcp://127.0.0.1:1883");
     check_size_eq(snapshot.connection_limit, 100000u);
+    turbo_flow_resolved_config_destroy(resolved);
+    turbo_flow_destroy(flow);
+
+    resolved = NULL;
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    flow = turbo_flow_create();
+    check_not_null(flow);
+    check_int_eq(turbo_flow_config_resolve_yaml(
+                     valid_trusted_proxy, sizeof(valid_trusted_proxy) - 1u, &resolved, &error),
+                 TURBO_OK);
+    check_int_eq(flowie_register_resolved_endpoint(flow, "mqtt.endpoint", resolved, &error),
+                 TURBO_OK);
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_destroy(flow);
 
@@ -1300,7 +2043,8 @@ spec("Flowie MQTT endpoint primitive") {
           {undersized_coroutine_stack, sizeof(undersized_coroutine_stack) - 1u,
            "coroutine_stack_size"},
           {undersized_recv_buffer, sizeof(undersized_recv_buffer) - 1u, "stream_recv_buffer_bytes"},
-          {undeclared_origin_policy, sizeof(undeclared_origin_policy) - 1u, "allowed_origins"}};
+          {undeclared_origin_policy, sizeof(undeclared_origin_policy) - 1u, "allowed_origins"},
+          {incomplete_trusted_proxy, sizeof(incomplete_trusted_proxy) - 1u, "trusted_proxy_cidrs"}};
       for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         resolved = NULL;
         error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -1615,7 +2359,108 @@ spec("Flowie MQTT endpoint primitive") {
     turbo_flow_resolved_config_destroy(resolved);
   }
 
-  it("MQTT-SEC-003 forwards only a CoroNet-verified TLS client identity to Auth") {
+  it("accepts HAProxy PROXY v1 before plaintext MQTT and forwards trusted provenance") {
+    static const char graph[] = "source mqtt_in adapter flowie.endpoint\n"
+                                "stage capture worker 1 capacity 8\n"
+                                "stage main {\n"
+                                "  mqtt_in -> capture\n"
+                                "}\n";
+    static const uint8_t expected_connack[] = {0x20u, 0x0bu, 0x00u, 0x00u, 0x08u, 0x21u, 0x00u,
+                                               0x02u, 0x27u, 0x00u, 0x00u, 0x04u, 0x00u};
+    static const char *const trusted_proxy_cidrs[] = {"127.0.0.1/32"};
+    flowie_endpoint_capture_t capture = {0};
+    flowie_endpoint_proxy_binding_t proxy = FLOWIE_ENDPOINT_PROXY_BINDING_INIT;
+    flowie_endpoint_cluster_binding_t cluster = FLOWIE_ENDPOINT_CLUSTER_BINDING_INIT;
+    flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
+    flowie_cluster_endpoint_fixture_t cluster_fixture;
+    flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
+    flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
+    uint8_t connect_packet[128];
+    uint8_t request[256];
+    uint8_t received[sizeof(expected_connack)];
+    char proxy_header[128];
+    size_t connect_size = 0u;
+    size_t request_size;
+    int proxy_header_size;
+    unsigned short port = flowie_test_port();
+    turbo_flow_t *flow = turbo_flow_create();
+    flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
+
+    memset(&cluster_fixture, 0, sizeof(cluster_fixture));
+    atomic_init(&capture.calls, 0u);
+    atomic_init(&cluster_fixture.connect_calls, 0u);
+    atomic_init(&cluster_fixture.command_calls, 0u);
+    atomic_init(&cluster_fixture.settlement_calls, 0u);
+    atomic_init(&cluster_fixture.lost_calls, 0u);
+    atomic_init(&cluster_fixture.detach_calls, 0u);
+    check_int_gt(port, 0);
+    check_not_null(flow);
+    proxy_header_size =
+        snprintf(proxy_header, sizeof(proxy_header),
+                 "PROXY TCP4 203.0.113.9 127.0.0.1 45678 %u\r\n", (unsigned int)port);
+    check_int_gt(proxy_header_size, 8);
+    check_true((size_t)proxy_header_size < sizeof(proxy_header));
+
+    config.transport = FLOWIE_TRANSPORT_TCP;
+    config.host = "127.0.0.1";
+    config.port = (int)port;
+    config.max_packet_size = 1024u;
+    config.max_connections = 2u;
+    config.manage_sessions = 1;
+    config.max_sessions = 2u;
+    config.max_subscriptions_per_session = 2u;
+    config.max_inflight_per_session = 2u;
+    proxy.trusted_peer_cidrs = trusted_proxy_cidrs;
+    proxy.trusted_peer_count = 1u;
+    proxy.max_header_bytes = 256u;
+    proxy.header_timeout_ms = 1000u;
+    cluster.ctx = &cluster_fixture;
+    cluster.request_timeout_ms = 1000u;
+    cluster.connect = flowie_cluster_endpoint_connect;
+    cluster.command = flowie_cluster_endpoint_command;
+    cluster.settle = flowie_cluster_endpoint_settle;
+    cluster.connection_lost = flowie_cluster_endpoint_connection_lost;
+    cluster.detach = flowie_cluster_endpoint_detach;
+    bindings.proxy = &proxy;
+    bindings.cluster = &cluster;
+    check_int_eq(flowie_register_bound_endpoint(flow, "flowie.endpoint", &config, &bindings),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_register_stage_ex(flow, "capture", flowie_endpoint_capture_stage,
+                                              &capture, NULL),
+                 TURBO_OK);
+    check_int_eq(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), TURBO_OK);
+    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+
+    connect.version = FLOWIE_MQTT_VERSION_5;
+    connect.clean_start = 1u;
+    connect.client_id =
+        (flowie_mqtt_span_t){(const uint8_t *)"haproxy-client", sizeof("haproxy-client") - 1u};
+    check_int_eq(flowie_mqtt_connect_packet_encode(&connect, connect_packet, sizeof(connect_packet),
+                                                   &connect_size),
+                 FLOWIE_MQTT_PARSE_OK);
+    request_size = (size_t)proxy_header_size + connect_size;
+    check_true(request_size <= sizeof(request));
+    memcpy(request, proxy_header, (size_t)proxy_header_size);
+    memcpy(request + (size_t)proxy_header_size, connect_packet, connect_size);
+    client = flowie_test_connect(port);
+    check_true(client != FLOWIE_TEST_INVALID_SOCKET);
+    check_int_eq(flowie_test_send(client, request, request_size), TURBO_OK);
+    check_int_eq(flowie_test_recv_exact(client, received, sizeof(received)), TURBO_OK);
+    check_mem_eq(received, expected_connack, sizeof(expected_connack));
+    check_uint_eq(atomic_load_explicit(&cluster_fixture.connect_calls, memory_order_acquire), 1u);
+    check_str_eq(cluster_fixture.client_id, "haproxy-client");
+    check_str_eq(cluster_fixture.remote_address, "203.0.113.9:45678");
+    check_true(strncmp(cluster_fixture.transport_peer_address,
+                       "127.0.0.1:", sizeof("127.0.0.1:") - 1u) == 0);
+    check_size_eq(cluster_fixture.proxy_tlvs_size, 0u);
+
+    flowie_test_socket_close(client);
+    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("MQTT-SEC-003 forwards verified TLS and trusted PROXY identities to Auth") {
     static const char graph[] = "source mqtt_in adapter flowie.endpoint\n"
                                 "stage capture worker 1 capacity 8\n"
                                 "stage main {\n"
@@ -1632,15 +2477,30 @@ spec("Flowie MQTT endpoint primitive") {
     turbo_flow_security_realm_config_t realm_config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
     turbo_flow_security_realm_t *realm = NULL;
     flowie_endpoint_security_binding_t security = FLOWIE_ENDPOINT_SECURITY_BINDING_INIT;
+    static const char *const trusted_proxy_cidrs[] = {"127.0.0.1/32"};
+    static const uint8_t expected_proxy_tlvs[] = {0xe0u, 0x00u, 0x02u, 'a', 'b'};
+    flowie_endpoint_proxy_binding_t proxy = FLOWIE_ENDPOINT_PROXY_BINDING_INIT;
+    flowie_endpoint_cluster_binding_t cluster = FLOWIE_ENDPOINT_CLUSTER_BINDING_INIT;
+    flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
+    flowie_cluster_endpoint_fixture_t cluster_fixture;
     flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
     flowie_mqtt_connect_packet_t connect = FLOWIE_MQTT_CONNECT_PACKET_INIT;
     flowie_tls_auth_client_t client = {0};
     uint8_t connect_packet[128];
+    uint8_t proxy_header[33] = {0x0du, 0x0au, 0x0du, 0x0au, 0x00u, 0x0du, 0x0au, 0x51u, 0x55u,
+                                0x49u, 0x54u, 0x0au, 0x21u, 0x11u, 0x00u, 0x11u, 203u,  0u,
+                                113u,  9u,    127u,  0u,    0u,    1u,    0xb2u, 0x6eu, 0u,
+                                0u,    0xe0u, 0x00u, 0x02u, 'a',   'b'};
     size_t connect_size = 0u;
     unsigned short port = flowie_test_port();
     turbo_flow_t *flow = turbo_flow_create();
 
+    memset(&cluster_fixture, 0, sizeof(cluster_fixture));
     atomic_init(&capture.calls, 0u);
+    atomic_init(&cluster_fixture.connect_calls, 0u);
+    atomic_init(&cluster_fixture.command_calls, 0u);
+    atomic_init(&cluster_fixture.lost_calls, 0u);
+    atomic_init(&cluster_fixture.detach_calls, 0u);
     check_int_gt(port, 0);
     check_not_null(flow);
     check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
@@ -1677,7 +2537,23 @@ spec("Flowie MQTT endpoint primitive") {
     config.max_subscriptions_per_session = 2u;
     config.max_inflight_per_session = 2u;
     config.tls_client_ca_file = ca_file;
-    check_int_eq(flowie_register_secure_endpoint(flow, "flowie.endpoint", &config, &security),
+    proxy_header[26] = (uint8_t)(port >> 8u);
+    proxy_header[27] = (uint8_t)port;
+    proxy.trusted_peer_cidrs = trusted_proxy_cidrs;
+    proxy.trusted_peer_count = 1u;
+    proxy.max_header_bytes = 256u;
+    proxy.header_timeout_ms = 1000u;
+    cluster.ctx = &cluster_fixture;
+    cluster.request_timeout_ms = 1000u;
+    cluster.connect = flowie_cluster_endpoint_connect;
+    cluster.command = flowie_cluster_endpoint_command;
+    cluster.settle = flowie_cluster_endpoint_settle;
+    cluster.connection_lost = flowie_cluster_endpoint_connection_lost;
+    cluster.detach = flowie_cluster_endpoint_detach;
+    bindings.security = &security;
+    bindings.proxy = &proxy;
+    bindings.cluster = &cluster;
+    check_int_eq(flowie_register_bound_endpoint(flow, "flowie.endpoint", &config, &bindings),
                  TURBO_OK);
     check_int_eq(turbo_flow_register_stage_ex(flow, "capture", flowie_endpoint_capture_stage,
                                               &capture, NULL),
@@ -1700,6 +2576,15 @@ spec("Flowie MQTT endpoint primitive") {
     client.connect_packet = connect_packet;
     client.connect_packet_size = connect_size;
     client.port = port;
+    client.cert_file = cert_file;
+    client.key_file = key_file;
+    check_int_ne(flowie_tls_auth_client_execute(&client), TURBO_OK);
+    check_size_eq(auth.calls, 0u);
+
+    client.cert_file = NULL;
+    client.key_file = NULL;
+    client.proxy_header = proxy_header;
+    client.proxy_header_size = sizeof(proxy_header);
     check_int_ne(flowie_tls_auth_client_execute(&client), TURBO_OK);
     check_size_eq(auth.calls, 0u);
 
@@ -1707,7 +2592,14 @@ spec("Flowie MQTT endpoint primitive") {
     client.key_file = key_file;
     check_int_eq(flowie_tls_auth_client_execute(&client), TURBO_OK);
     check_size_eq(auth.calls, 1u);
-    check_true(strncmp(auth.remote_address, "127.0.0.1:", sizeof("127.0.0.1:") - 1u) == 0);
+    check_str_eq(auth.remote_address, "203.0.113.9:45678");
+    check_true(strncmp(auth.transport_peer_address, "127.0.0.1:", sizeof("127.0.0.1:") - 1u) == 0);
+    check_uint_eq(atomic_load_explicit(&cluster_fixture.connect_calls, memory_order_acquire), 1u);
+    check_str_eq(cluster_fixture.remote_address, "203.0.113.9:45678");
+    check_true(strncmp(cluster_fixture.transport_peer_address,
+                       "127.0.0.1:", sizeof("127.0.0.1:") - 1u) == 0);
+    check_size_eq(cluster_fixture.proxy_tlvs_size, sizeof(expected_proxy_tlvs));
+    check_mem_eq(cluster_fixture.proxy_tlvs, expected_proxy_tlvs, sizeof(expected_proxy_tlvs));
     check_size_eq(
         strlen(auth.peer_certificate_sha256),
         sizeof("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef") - 1u);

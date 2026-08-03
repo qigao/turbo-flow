@@ -42,6 +42,14 @@ ACK is promised and peer redelivery remains at-least-once. The Redis live suite
 also composes this boundary with a Flowie TCP endpoint and replays the stored
 MQTT packet through a consumer group.
 
+An embedded dispatcher that already owns its retry and durable-completion
+policy can use `turbo_flow_redis_stream_publisher_create()` and pass
+`turbo_flow_redis_stream_publisher_publish` as a type-erased append callback.
+The publisher enforces `max_payload_size` and exact `MAXLEN`, serializes access,
+and deliberately does not expose the Redis Stream ID. A successful call means
+only that XADD replied successfully; the embedding dispatcher must retain its
+own durable work until its authoritative completion condition is satisfied.
+
 For asynchronous FMQ worker replies,
 `turbo_flow_redis_stream_owner_create()` exposes the same Redis fact source as
 an explicit `claim -> ack/requeue` contract with the compatibility bound of one.
@@ -197,12 +205,38 @@ int rc = turbo_flow_storage_backend_owner_create_registered(
     registry, "redis", &request, &owner, &error);
 ```
 
-The STATE service is binary safe and uses `HGET` for point reads. Writes perform
-one bounded `HGETALL` capacity snapshot and then use the record-store Lua
-compare-and-set transaction. Consequently each namespace has one mutable
-FlowStore writer; the Lua revision check still rejects stale writes, but the
-aggregate byte limit is not a multi-process admission protocol. Redis errors are
+The STATE service is binary safe and uses `HGET` for point reads. One Lua CAS
+updates the record Hash and capacity metadata Hash atomically, so initialized
+put/remove operations are O(1) and multiple writers share one records/bytes
+admission fact. The first mutation of a legacy namespace performs one bounded
+`HGETALL` inside the Lua critical section to rebuild metadata. Redis errors are
 returned directly and never fall back to memory.
+
+FlowStore State, Index, Log, and Record configs accept an optional versioned
+`connection`. A zeroed connection keeps the legacy standalone `host/port`
+behavior. Cluster mode uses TurboNet Redis slot discovery and MOVED/ASK handling;
+Sentinel mode discovers the named master and preserves uncertain-write results.
+Cluster uses database 0 and every multi-key namespace must include a non-empty
+hash tag:
+
+```c
+const char *seeds[] = {"redis-a", "redis-b", "redis-c"};
+uint16_t ports[] = {6379, 6379, 6379};
+turbo_flow_redis_record_store_config_t redis = {0};
+
+redis.connection = (turbo_flow_redis_connection_config_t)
+    TURBO_FLOW_REDIS_CONNECTION_CONFIG_INIT;
+redis.connection.deployment = TURBO_FLOW_REDIS_DEPLOYMENT_CLUSTER;
+redis.connection.seed_hosts = seeds;
+redis.connection.seed_ports = ports;
+redis.connection.seed_count = 3;
+redis.key = "flowie:{cluster-a:session:42}:state";
+redis.max_records = 100000;
+```
+
+For Sentinel, select `TURBO_FLOW_REDIS_DEPLOYMENT_SENTINEL`, provide the Sentinel
+endpoints in `seed_hosts/seed_ports`, and set `service_name`. Sentinel is HA for
+one Redis master dataset; it does not shard writes.
 
 For membership and mapping queries, open the INDEX model through the same Redis
 backend owner. It maps each binary index name to a native Redis Set. The namespace and index name

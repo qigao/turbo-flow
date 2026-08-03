@@ -1,4 +1,4 @@
-# Flowie dev product: tf_local_storage provides bounded volatile local Record state.
+# Flowie dev product: the server binds a standalone SQLite ProtocolStore by default.
 version: 1
 
 runtime:

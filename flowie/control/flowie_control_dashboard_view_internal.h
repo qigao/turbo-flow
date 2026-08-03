@@ -7,6 +7,7 @@ typedef struct flowie_control_dashboard_view_s flowie_control_dashboard_view_t;
 
 typedef enum flowie_control_dashboard_asset_e {
   FLOWIE_CONTROL_DASHBOARD_ASSET_CSS = 0,
+  FLOWIE_CONTROL_DASHBOARD_ASSET_JS,
   FLOWIE_CONTROL_DASHBOARD_ASSET_HTMX
 } flowie_control_dashboard_asset_t;
 

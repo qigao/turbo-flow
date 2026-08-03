@@ -1,0 +1,38 @@
+global
+    log stdout format raw local0
+    master-worker
+    user haproxy
+    group haproxy
+    stats socket /run/flowie-haproxy/admin.sock mode 660 level admin expose-fd listeners
+    ssl-default-bind-options ssl-min-ver TLSv1.2
+    tune.bufsize ${FLOWIE_MQTT_INSPECTION_BUFFER_BYTES}
+
+defaults
+    mode tcp
+    log global
+    option tcplog
+    timeout connect ${FLOWIE_MQTT_CONNECT_TIMEOUT_MS}ms
+    timeout client ${FLOWIE_MQTT_IDLE_TIMEOUT_SECONDS}s
+    timeout server ${FLOWIE_MQTT_IDLE_TIMEOUT_SECONDS}s
+    timeout client-fin 30s
+    timeout server-fin 30s
+
+crt-store flowie
+    load crt /etc/letsencrypt/live/${FLOWIE_PUBLIC_HOST}/fullchain.pem key /etc/letsencrypt/live/${FLOWIE_PUBLIC_HOST}/privkey.pem alias mqtt
+
+frontend flowie_mqtts
+    bind :${FLOWIE_MQTT_PUBLIC_PORT} ssl crt @flowie/mqtt
+    tcp-request inspect-delay ${FLOWIE_MQTT_INSPECT_DELAY_MS}ms
+    acl mqtt_connect_valid req.payload(0,0),mqtt_is_valid
+    tcp-request content set-var(sess.mqtt_client_id) req.payload(0,0),mqtt_field_value(connect,client_identifier) if mqtt_connect_valid
+    acl mqtt_client_id_present var(sess.mqtt_client_id) -m len gt 0
+    tcp-request content reject if mqtt_connect_valid !mqtt_client_id_present
+    tcp-request content accept if mqtt_connect_valid mqtt_client_id_present
+    tcp-request content reject if WAIT_END
+    default_backend flowie_mqtt_edges
+
+backend flowie_mqtt_edges
+    balance hash var(sess.mqtt_client_id)
+    hash-type consistent sdbm avalanche
+    option tcp-check
+    default-server inter 5s fall 3 rise 2

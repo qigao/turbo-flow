@@ -15,8 +15,8 @@ int flowie_publish_message_map(const flowie_mqtt_publish_view_t *publish,
   int rc;
   if (!publish || publish->size < sizeof(*publish) ||
       publish->abi_version != FLOWIE_MQTT_PROTOCOL_ABI_V1 || !out || out->size != sizeof(*out) ||
-      owner_instance_id == 0u || session_id == 0u ||
-      session_generation == 0u || (!publish->topic.data && publish->topic.size != 0u) ||
+      owner_instance_id == 0u || session_id == 0u || session_generation == 0u ||
+      (!publish->topic.data && publish->topic.size != 0u) ||
       (!publish->payload.data && publish->payload.size != 0u) ||
       !flowie_mqtt_version_is_supported(version) || publish->qos > 2u) {
     return TURBO_EINVAL;
@@ -47,6 +47,49 @@ typedef struct flowie_mqtt_security_leaf_s {
 } flowie_mqtt_security_leaf_t;
 
 static const uint8_t FLOWIE_MQTT_VALIDATED_SECURITY_PROVENANCE = 0u;
+
+static int flowie_security_principal_text_validate(const char *value, size_t capacity,
+                                                   int required) {
+  const char *end;
+  if (!value || capacity == 0u) return TURBO_EINVAL;
+  end = (const char *)memchr(value, '\0', capacity);
+  return !end || (required && end == value) ? TURBO_EPROTO : TURBO_OK;
+}
+
+int flowie_security_principal_validate(const turbo_flow_security_principal_t *principal) {
+  int contains_root = 0;
+  if (!principal || principal->size < sizeof(*principal) ||
+      principal->abi_version != TURBO_FLOW_SECURITY_ABI_V3 ||
+      principal->scope < TURBO_FLOW_SECURITY_SCOPE_SELF ||
+      principal->scope > TURBO_FLOW_SECURITY_SCOPE_SYSTEM ||
+      principal->role_count > TURBO_FLOW_SECURITY_MAX_ROLES ||
+      principal->group_count > TURBO_FLOW_SECURITY_MAX_GROUPS || principal->policy_version == 0u ||
+      flowie_security_principal_text_validate(principal->principal_id,
+                                              sizeof(principal->principal_id), 1) != TURBO_OK ||
+      flowie_security_principal_text_validate(principal->principal_type,
+                                              sizeof(principal->principal_type), 1) != TURBO_OK ||
+      flowie_security_principal_text_validate(
+          principal->root_group_id, sizeof(principal->root_group_id),
+          principal->scope != TURBO_FLOW_SECURITY_SCOPE_SYSTEM) != TURBO_OK ||
+      flowie_security_principal_text_validate(principal->auth_method,
+                                              sizeof(principal->auth_method), 1) != TURBO_OK ||
+      (principal->scope != TURBO_FLOW_SECURITY_SCOPE_SYSTEM && principal->group_count == 0u))
+    return TURBO_EPROTO;
+  for (uint32_t index = 0u; index < principal->role_count; ++index)
+    if (flowie_security_principal_text_validate(principal->roles[index],
+                                                sizeof(principal->roles[index]), 1) != TURBO_OK)
+      return TURBO_EPROTO;
+  for (uint32_t index = 0u; index < principal->group_count; ++index) {
+    if (flowie_security_principal_text_validate(principal->groups[index],
+                                                sizeof(principal->groups[index]), 1) != TURBO_OK)
+      return TURBO_EPROTO;
+    if (strcmp(principal->groups[index], principal->root_group_id) == 0) contains_root = 1;
+    for (uint32_t prior = 0u; prior < index; ++prior)
+      if (strcmp(principal->groups[index], principal->groups[prior]) == 0) return TURBO_EPROTO;
+  }
+  return principal->scope != TURBO_FLOW_SECURITY_SCOPE_SYSTEM && !contains_root ? TURBO_EPROTO
+                                                                                : TURBO_OK;
+}
 
 int flowie_mqtt_validated_security_context_init(flowie_mqtt_validated_security_context_t *out,
                                                 flowie_mqtt_security_resource_kind_t kind,

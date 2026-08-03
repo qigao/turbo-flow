@@ -19,18 +19,19 @@ Series facade，具体 backend 实现则由 `io/common/storage` 的 `StorageBack
 model 单独装配；local 的实现位于同级 `tf_local_storage` shared library，而不是 Flowie 内部
 direct-factory。
 
-面向 Flowie 的 MQTT 事实访问统一经过 `turbo_flow_mqtt_store_t`（
-`include/turbo_flow_mqtt_store.h`）。它只借用 registry 提供的 Record service，封装 scan、
-CAS/atomic commit 和容量元数据；Flowie 不得在门面构造后直接调用 Record callback。
+Flowie 的 MQTT 协议事实不属于 FlowStore 业务领域。Flowie 通过自身的 opaque
+`flowie_protocol_store_t` 借用 registry 提供的 Record service；endpoint 不得直接调用 Record
+callback。`turbo_flow_mqtt_store_t` 仅作为旧 ABI 兼容层保留，新 Flowie 代码不再依赖它。
 
-### MQTT 事实源不变量
+### 业务事实与协议事实不变量
 
-Flowie 的 MQTT 业务事实必须由 FlowStore 管理，不能由 Flowie owner 的容器独立推进。事实
-包括 session、subscription、inflight、retained 和 Will；默认使用进程内 `local` Record
-backend，显式 `session_store` 才选择 Redis/PostgreSQL。Flowie owner 内的 session/vector、
-topic trie、member map 和 retained map 只能作为从 Record 重建的单 owner cache，用于协议调度
-和查询加速；每次状态迁移必须先完成 FlowStore CAS/atomic batch，再交换 cache owner，失败
-不得推进 cache。
+FlowStore 只拥有 Graph 显式写入的业务事实。session、subscription、inflight、retained、Will、
+presence 和 route projection 是 MQTT 协议事实，由 Flowie ProtocolStore 管理。Flowie owner 内的
+session/vector、topic trie、member map 和 retained map 只能作为从 ProtocolStore 重建的单 owner
+cache；每次状态迁移必须先完成协议 CAS/atomic batch，再交换 cache owner，失败不得推进 cache。
+业务 Store 与 ProtocolStore 即使使用同一种 backend，也必须使用独立 namespace、连接 owner、
+容量和 migration，且禁止 fallback 或同步双写。完整决策见
+[`flowie/ADR_PROTOCOL_BUSINESS_STORAGE.md`](../flowie/ADR_PROTOCOL_BUSINESS_STORAGE.md)。
 
 连接对象、解析缓冲、发送队列、CoroNet lane 状态和 ACL/control-plane SQLite 不属于 MQTT
 业务事实：前者是传输运行时状态，后者是独立管理面，均不通过 FlowStore 承载。
@@ -159,10 +160,11 @@ HashMap、Log 或 TimeSeries 承载。该数字只用于数据结构分工，不
 Set/ZSet 的 Redis 操作使用相同 hash tag，并由 Lua/事务原子提交。Redis 提交成功后才刷新本地
 派生缓存；失败时本地派生索引失效并从 Redis 重建。
 
-StateStore 的首个 Redis provider 复用既有二进制安全 Hash/Lua revision backend。点查使用
-`HGET`，写入先以一次有界 `HGETALL` 快照核算 `max_records/max_bytes`，再执行 Lua CAS。
-因此该 namespace 只允许一个 FlowStore mutable writer；revision 冲突仍由 Redis 原子拒绝，但
-总字节准入不声称支持多个独立 writer。连接、协议、容量或 CAS 失败均原样返回，不降级到 local。
+StateStore 的 Redis provider 使用二进制安全 Hash/Lua revision backend。点查使用 `HGET`；
+`records` Hash 与 capacity metadata Hash 使用相同 cluster hash tag，写入和删除在一个 Lua CAS 中
+同时更新 revision、records 和 bytes，因此初始化后的 mutation 为 O(1)，并支持多个独立 writer。
+旧 namespace 首次 mutation 会在同一 Lua 临界区执行一次受 `max_records` 约束的 `HGETALL` 以重建
+metadata，后续不再扫描。连接、协议、容量、配置不一致或 CAS 失败均原样返回，不降级到 local。
 
 IndexStore 使用 Redis 原生 Set。namespace/index 二进制名编码为共享同一 hash tag 的 key；
 membership、count、visit、intersection 分别落到 `SISMEMBER/SCARD/SMEMBERS/SINTER`。

@@ -34,6 +34,9 @@ flowie_mqtt_validated_security_context_init(flowie_mqtt_validated_security_conte
                                             flowie_mqtt_security_resource_kind_t kind,
                                             tstr_t parser_validated_resource);
 
+/** Validate one complete authentication result before persistence or peer transfer. */
+CXX_C_API int flowie_security_principal_validate(const turbo_flow_security_principal_t *principal);
+
 #ifdef __cplusplus
 }
 #endif

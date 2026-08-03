@@ -801,6 +801,7 @@ static const char *const FLOWIE_CONTROL_DASHBOARD_ROUTES[] = {
     FLOWIE_CONTROL_DASHBOARD_CONTENT_PATH,
     FLOWIE_CONTROL_DASHBOARD_ACTION_PATH,
     FLOWIE_CONTROL_DASHBOARD_CSS_PATH,
+    FLOWIE_CONTROL_DASHBOARD_JS_PATH,
     FLOWIE_CONTROL_DASHBOARD_HTMX_PATH,
     FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH,
     FLOWIE_CONTROL_DASHBOARD_PASSWORD_PATH, FLOWIE_CONTROL_DASHBOARD_LOGOUT_PATH};
@@ -1029,6 +1030,11 @@ static void flowie_control_dashboard_asset_handler(Req *request, Res *response,
 static void flowie_control_dashboard_css_handler(Req *request, Res *response) {
   flowie_control_dashboard_asset_handler(request, response, FLOWIE_CONTROL_DASHBOARD_ASSET_CSS,
                                          "text/css; charset=utf-8");
+}
+
+static void flowie_control_dashboard_js_handler(Req *request, Res *response) {
+  flowie_control_dashboard_asset_handler(request, response, FLOWIE_CONTROL_DASHBOARD_ASSET_JS,
+                                         "text/javascript; charset=utf-8");
 }
 
 static void flowie_control_dashboard_htmx_handler(Req *request, Res *response) {
@@ -1388,6 +1394,7 @@ int flowie_control_dashboard_bind(flowie_control_dashboard_t *dashboard, iris_ap
   iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_CONTENT_PATH, flowie_control_dashboard_content_handler);
   iris_app_post(app, FLOWIE_CONTROL_DASHBOARD_ACTION_PATH, flowie_control_dashboard_post_handler);
   iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_CSS_PATH, flowie_control_dashboard_css_handler);
+  iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_JS_PATH, flowie_control_dashboard_js_handler);
   iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_HTMX_PATH, flowie_control_dashboard_htmx_handler);
   iris_app_get(app, FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH,
                flowie_control_dashboard_login_get_handler);

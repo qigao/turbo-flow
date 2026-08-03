@@ -19,7 +19,7 @@ option(BUILD_BENCHMARKS "Build benchmark suite" ON)
 option(TURBO_FLOW_REDIS_LIVE_TESTS
        "Enable Redis integration tests against 127.0.0.1:6379" OFF)
 option(TURBO_FLOW_PGSQL_LIVE_TESTS
-       "Enable PostgreSQL outbox integration tests using TURBO_FLOW_PGSQL_TEST_CONNINFO" OFF)
+       "Enable PostgreSQL integration tests using TURBO_FLOW_PGSQL_TEST_CONNINFO" OFF)
 option(FLOWIE_MQTT_PUBLIC_LIVE_TESTS
        "Enable optional Flowie MQTT client external-connectivity smoke tests" OFF)
 option(FLOWIE_MQTT_FIXED_INTEROP_TESTS

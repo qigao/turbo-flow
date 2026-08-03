@@ -520,6 +520,7 @@ int flow_redis_index_store_create(const turbo_flow_redis_index_store_config_t *c
   client_config.password = config->password;
   client_config.database = config->database;
   client_config.timeout_ms = config->timeout_ms;
+  client_config.connection = config->connection;
   if (rc == TURBO_OK) rc = flow_redis_store_client_create(&client_config, &store->client);
   if (rc == TURBO_OK)
     rc = turbo_flow_index_store_create_provider(&FLOW_REDIS_INDEX_OPS, store, out);

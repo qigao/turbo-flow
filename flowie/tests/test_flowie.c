@@ -103,6 +103,19 @@ static int flowie_test_owner_round_trip(flowie_session_owner_t *owner,
 }
 
 spec("flowie application bridges") {
+  it("rejects a truncated endpoint bindings v1 prefix") {
+    flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
+    flowie_endpoint_persistence_binding_t persistence = FLOWIE_ENDPOINT_PERSISTENCE_BINDING_INIT;
+    flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+    check_not_null(flow);
+    bindings.size = FLOWIE_ENDPOINT_BINDINGS_V1_SIZE - 1u;
+    bindings.persistence = &persistence;
+    check_int_eq(flowie_register_bound_endpoint(flow, "mqtt.endpoint", &config, &bindings),
+                 TURBO_EINVAL);
+    turbo_flow_destroy(flow);
+  }
+
   it("maps a parsed publish into pointer-free protocol metadata and an owned route token") {
     static const uint8_t topic[] = "root-a/events";
     static const uint8_t payload[] = "value";

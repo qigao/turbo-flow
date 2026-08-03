@@ -8,6 +8,50 @@
 #include <stdio.h>
 #include <string.h>
 
+enum {
+  FLOWIE_CONFIG_IPV6_TEXT_CAPACITY = 46,
+  FLOWIE_CONFIG_PROXY_CIDR_CAPACITY = FLOWIE_CONFIG_IPV6_TEXT_CAPACITY + 4
+};
+
+static int flowie_config_proxy_cidrs_split(
+    const char *text,
+    char storage[FLOWIE_ENDPOINT_PROXY_MAX_TRUSTED_PEERS][FLOWIE_CONFIG_PROXY_CIDR_CAPACITY],
+    const char *items[FLOWIE_ENDPOINT_PROXY_MAX_TRUSTED_PEERS], size_t *out_count) {
+  const char *cursor;
+  size_t count = 0u;
+
+  if (out_count) *out_count = 0u;
+  if (!text || !text[0] || !storage || !items || !out_count) return TURBO_EINVAL;
+  cursor = text;
+  for (;;) {
+    const char *begin;
+    const char *end;
+    size_t length;
+    while (*cursor == ' ' || *cursor == '\t')
+      ++cursor;
+    begin = cursor;
+    while (*cursor != '\0' && *cursor != ',')
+      ++cursor;
+    end = cursor;
+    while (end > begin && (end[-1] == ' ' || end[-1] == '\t'))
+      --end;
+    length = (size_t)(end - begin);
+    if (length == 0u || length >= FLOWIE_CONFIG_PROXY_CIDR_CAPACITY ||
+        count >= FLOWIE_ENDPOINT_PROXY_MAX_TRUSTED_PEERS) {
+      return TURBO_EINVAL;
+    }
+    memcpy(storage[count], begin, length);
+    storage[count][length] = '\0';
+    items[count] = storage[count];
+    ++count;
+    if (*cursor == '\0') break;
+    ++cursor;
+    if (*cursor == '\0') return TURBO_EINVAL;
+  }
+  *out_count = count;
+  return TURBO_OK;
+}
+
 typedef enum flowie_config_field_type_e {
   FLOWIE_CONFIG_STRING = 1,
   FLOWIE_CONFIG_BOOL,
@@ -181,12 +225,25 @@ static int flowie_register_resolved_endpoint_internal(
     turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_coronet_execution_binding_t *execution,
     const flowie_endpoint_security_binding_t *security,
-    const flowie_endpoint_persistence_binding_t *persistence, turbo_flow_config_error_t *error) {
+    const flowie_endpoint_persistence_binding_t *persistence,
+    const flowie_endpoint_proxy_binding_t *injected_proxy,
+    const flowie_endpoint_cluster_binding_t *cluster, turbo_flow_config_error_t *error) {
   turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
   flowie_endpoint_config_t config = FLOWIE_ENDPOINT_CONFIG_INIT;
+  flowie_endpoint_proxy_binding_t resolved_proxy = FLOWIE_ENDPOINT_PROXY_BINDING_INIT;
+  char proxy_cidr_storage[FLOWIE_ENDPOINT_PROXY_MAX_TRUSTED_PEERS]
+                         [FLOWIE_CONFIG_PROXY_CIDR_CAPACITY];
+  const char *proxy_cidrs[FLOWIE_ENDPOINT_PROXY_MAX_TRUSTED_PEERS];
+  const char *proxy_cidrs_text = NULL;
+  uint64_t proxy_header_max_bytes = 0u;
+  uint64_t proxy_header_timeout_ms = 0u;
+  int proxy_cidrs_seen = 0;
+  int proxy_max_seen = 0;
+  int proxy_timeout_seen = 0;
   int security_realm_seen = 0;
   int auth_method_seen = 0;
-  int session_store_seen = 0;
+  int protocol_store_seen = 0;
+  int legacy_session_store_seen = 0;
   int rc;
   if (!flow || !name || !name[0] || !resolved || !execution || !error ||
       error->size < sizeof(*error)) {
@@ -203,6 +260,18 @@ static int flowie_register_resolved_endpoint_internal(
                       !persistence->store_channel[0] || !persistence->store)) {
     return flowie_config_error(error, TURBO_EINVAL, name, NULL,
                                "persistence binding is incomplete or has an invalid ABI size");
+  }
+  if (injected_proxy && injected_proxy->size != sizeof(*injected_proxy)) {
+    return flowie_config_error(error, TURBO_EINVAL, name, NULL,
+                               "proxy binding has an invalid ABI size");
+  }
+  if (cluster &&
+      (cluster->size < sizeof(*cluster) ||
+       cluster->abi_version != FLOWIE_ENDPOINT_CLUSTER_BINDING_ABI_CURRENT || !cluster->ctx ||
+       cluster->request_timeout_ms == 0u || !cluster->connect || !cluster->command ||
+       !cluster->settle || !cluster->connection_lost || !cluster->detach)) {
+    return flowie_config_error(error, TURBO_EINVAL, name, NULL,
+                               "cluster binding is incomplete or has an invalid ABI");
   }
   rc = turbo_flow_resolved_config_adapter(resolved, name, &view);
   if (rc != TURBO_OK) {
@@ -236,18 +305,49 @@ static int flowie_register_resolved_endpoint_internal(
       else auth_method_seen = 1;
       continue;
     }
-    if (field_name && strcmp(field_name, "session_store") == 0) {
+    if (field_name &&
+        (strcmp(field_name, "protocol_store") == 0 || strcmp(field_name, "session_store") == 0)) {
       const char *value = NULL;
       if (!persistence) {
         return flowie_config_error(error, TURBO_EINVAL, name, field_name,
-                                   "session_store requires an explicit persistence binding");
+                                   "protocol store requires an explicit persistence binding");
       }
       rc = turbo_flow_resolved_adapter_get_string(&view, field_name, &value);
       if (rc != TURBO_OK || strcmp(value, persistence->store_channel) != 0) {
         return flowie_config_error(error, rc == TURBO_OK ? TURBO_EINVAL : rc, name, field_name,
-                                   "session_store does not match the injected binding");
+                                   "protocol store does not match the injected binding");
       }
-      session_store_seen = 1;
+      if (strcmp(field_name, "protocol_store") == 0) protocol_store_seen = 1;
+      else legacy_session_store_seen = 1;
+      if (protocol_store_seen && legacy_session_store_seen) {
+        return flowie_config_error(
+            error, TURBO_EINVAL, name, field_name,
+            "protocol_store and legacy session_store are mutually exclusive");
+      }
+      continue;
+    }
+    if (field_name && strcmp(field_name, "trusted_proxy_cidrs") == 0) {
+      rc = turbo_flow_resolved_adapter_get_string(&view, field_name, &proxy_cidrs_text);
+      if (rc != TURBO_OK || !proxy_cidrs_text || !proxy_cidrs_text[0])
+        return flowie_config_error(error, rc == TURBO_OK ? TURBO_EINVAL : rc, name, field_name,
+                                   "trusted proxy CIDRs are invalid");
+      proxy_cidrs_seen = 1;
+      continue;
+    }
+    if (field_name && strcmp(field_name, "proxy_header_max_bytes") == 0) {
+      rc = turbo_flow_resolved_adapter_get_u64(&view, field_name, &proxy_header_max_bytes);
+      if (rc != TURBO_OK || proxy_header_max_bytes > SIZE_MAX)
+        return flowie_config_error(error, rc == TURBO_OK ? TURBO_ERANGE : rc, name, field_name,
+                                   "proxy header limit is invalid");
+      proxy_max_seen = 1;
+      continue;
+    }
+    if (field_name && strcmp(field_name, "proxy_header_timeout_ms") == 0) {
+      rc = turbo_flow_resolved_adapter_get_u64(&view, field_name, &proxy_header_timeout_ms);
+      if (rc != TURBO_OK || proxy_header_timeout_ms == 0u)
+        return flowie_config_error(error, rc == TURBO_OK ? TURBO_ERANGE : rc, name, field_name,
+                                   "proxy header timeout is invalid");
+      proxy_timeout_seen = 1;
       continue;
     }
     if (!field) {
@@ -265,15 +365,34 @@ static int flowie_register_resolved_endpoint_internal(
                                !security_realm_seen ? "security_realm" : "auth_method",
                                "secure endpoint requires both security fields");
   }
-  if (persistence && !session_store_seen &&
-      strcmp(persistence->store_channel, FLOWIE_IMPLICIT_LOCAL_SESSION_STORE_CHANNEL) != 0) {
-    return flowie_config_error(error, TURBO_EINVAL, name, "session_store",
-                               "persistent endpoint requires session_store");
+  if (persistence && !protocol_store_seen && !legacy_session_store_seen &&
+      strcmp(persistence->store_channel, FLOWIE_IMPLICIT_PROTOCOL_STORE_CHANNEL) != 0) {
+    return flowie_config_error(error, TURBO_EINVAL, name, "protocol_store",
+                               "persistent endpoint requires protocol_store");
   }
-  if (security || persistence) {
+  if (proxy_cidrs_seen || proxy_max_seen || proxy_timeout_seen) {
+    if (!proxy_cidrs_seen || !proxy_max_seen || !proxy_timeout_seen || injected_proxy) {
+      return flowie_config_error(
+          error, TURBO_EINVAL, name, "trusted_proxy_cidrs",
+          injected_proxy ? "resolved and injected proxy bindings cannot be combined"
+                         : "trusted proxy configuration requires CIDRs, limit, and timeout");
+    }
+    rc = flowie_config_proxy_cidrs_split(proxy_cidrs_text, proxy_cidr_storage, proxy_cidrs,
+                                         &resolved_proxy.trusted_peer_count);
+    if (rc != TURBO_OK)
+      return flowie_config_error(error, rc, name, "trusted_proxy_cidrs",
+                                 "trusted proxy CIDR list is invalid");
+    resolved_proxy.trusted_peer_cidrs = proxy_cidrs;
+    resolved_proxy.max_header_bytes = (size_t)proxy_header_max_bytes;
+    resolved_proxy.header_timeout_ms = proxy_header_timeout_ms;
+    injected_proxy = &resolved_proxy;
+  }
+  if (security || persistence || injected_proxy || cluster) {
     flowie_endpoint_bindings_t bindings = FLOWIE_ENDPOINT_BINDINGS_INIT;
     bindings.security = security;
     bindings.persistence = persistence;
+    bindings.proxy = injected_proxy;
+    bindings.cluster = cluster;
     rc = flowie_register_bound_endpoint_ex(flow, name, &config, execution, &bindings);
   } else {
     rc = flowie_register_endpoint_ex(flow, name, &config, execution);
@@ -290,7 +409,7 @@ int flowie_register_resolved_endpoint_ex(turbo_flow_t *flow, const char *name,
                                          const turbo_flow_coronet_execution_binding_t *execution,
                                          turbo_flow_config_error_t *error) {
   return flowie_register_resolved_endpoint_internal(flow, name, resolved, execution, NULL, NULL,
-                                                    error);
+                                                    NULL, NULL, error);
 }
 
 int flowie_register_resolved_secure_endpoint_ex(
@@ -298,18 +417,22 @@ int flowie_register_resolved_secure_endpoint_ex(
     const turbo_flow_coronet_execution_binding_t *execution,
     const flowie_endpoint_security_binding_t *security, turbo_flow_config_error_t *error) {
   return flowie_register_resolved_endpoint_internal(flow, name, resolved, execution, security, NULL,
-                                                    error);
+                                                    NULL, NULL, error);
 }
 
 int flowie_register_resolved_bound_endpoint_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_coronet_execution_binding_t *execution,
     const flowie_endpoint_bindings_t *bindings, turbo_flow_config_error_t *error) {
-  if (!bindings || bindings->size < sizeof(*bindings) ||
-      (!bindings->security && !bindings->persistence))
-    return TURBO_EINVAL;
-  return flowie_register_resolved_endpoint_internal(
-      flow, name, resolved, execution, bindings->security, bindings->persistence, error);
+  const flowie_endpoint_proxy_binding_t *proxy;
+  const flowie_endpoint_cluster_binding_t *cluster;
+  if (!bindings || bindings->size < FLOWIE_ENDPOINT_BINDINGS_V1_SIZE) return TURBO_EINVAL;
+  proxy = bindings->size >= FLOWIE_ENDPOINT_BINDINGS_V2_SIZE ? bindings->proxy : NULL;
+  cluster = bindings->size >= FLOWIE_ENDPOINT_BINDINGS_V3_SIZE ? bindings->cluster : NULL;
+  if (!bindings->security && !bindings->persistence && !proxy && !cluster) return TURBO_EINVAL;
+  return flowie_register_resolved_endpoint_internal(flow, name, resolved, execution,
+                                                    bindings->security, bindings->persistence,
+                                                    proxy, cluster, error);
 }
 
 int flowie_register_resolved_endpoint(turbo_flow_t *flow, const char *name,

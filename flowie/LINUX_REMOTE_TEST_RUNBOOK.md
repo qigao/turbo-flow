@@ -370,7 +370,7 @@ ctest --preset linux-release-user -N \
   2>&1 | tee "$ARTIFACT_ROOT/turboflow-linux-tests.txt"
 
 ctest --preset linux-release-user --output-on-failure \
-  -R '^(test_turbo_flow_redis_live|test_turbo_flow_pgsql_live|flowie_server_check_redis_session_store|flowie_server_check_smb_product)$' \
+  -R '^(test_turbo_flow_redis_live|test_flowie_cluster_route_redis_live|test_turbo_flow_pgsql_live|flowie_server_check_redis_session_store|flowie_server_check_smb_product)$' \
   --output-junit "$ARTIFACT_ROOT/storage-live.xml"
 
 ctest --preset linux-release-user --output-on-failure \
@@ -488,7 +488,7 @@ docker rm -f "$REDIS_CONTAINER" "$PG_CONTAINER"
 
 - TurboUtils、TurboNet、TurboHTTP、RulesForge 与 TurboFlow configure/build 成功。
 - 四个 release JUnit 结果无失败，TurboFlow 全量 CTest 不是零用例。
-- Redis live、PostgreSQL live、固定 Mosquitto、TLS/WSS/mTLS 均有实际 PASS。
+- Redis live、route projection Redis live、PostgreSQL live、固定 Mosquitto、TLS/WSS/mTLS 均有实际 PASS。
 - `flowie-release-evidence.json` 通过内置 verifier。
 - nightly 的 corpus、六项 30/60 分钟 soak 和 Clang libFuzzer 全部 PASS，且无资源单调增长。
 - 结果记录同一个源码归档 SHA-256；Linux 结果不得从 Windows 结果推定。

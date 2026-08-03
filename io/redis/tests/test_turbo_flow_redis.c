@@ -45,7 +45,8 @@ typedef enum redis_runtime_server_mode_e {
   REDIS_RUNTIME_XGROUP_BUSY,
   REDIS_RUNTIME_SET,
   REDIS_RUNTIME_GET,
-  REDIS_RUNTIME_GET_MISSING
+  REDIS_RUNTIME_GET_MISSING,
+  REDIS_RUNTIME_STATE_STORE
 } redis_runtime_server_mode_t;
 
 typedef struct redis_runtime_server_s {
@@ -57,6 +58,7 @@ typedef struct redis_runtime_server_s {
   atomic_int xack_count;
   atomic_int saw_xpending;
   atomic_int payload_matched;
+  atomic_int eval_count;
   atomic_int client_closed;
   atomic_int status;
 } redis_runtime_server_t;
@@ -160,6 +162,7 @@ static unsigned short redis_runtime_server_open(redis_runtime_server_t *server,
   atomic_init(&server->xack_count, 0);
   atomic_init(&server->saw_xpending, 0);
   atomic_init(&server->payload_matched, 0);
+  atomic_init(&server->eval_count, 0);
   atomic_init(&server->client_closed, 0);
   atomic_init(&server->status, TURBO_EIO);
   return redis_test_listener_open(&server->listener);
@@ -181,7 +184,19 @@ static void redis_runtime_server_thread(void *ctx) {
     if (received <= 0) break;
     used += (size_t)received;
     request[used] = '\0';
-    if (server->mode == REDIS_RUNTIME_XADD && strstr(request, "XADD")) {
+    if (server->mode == REDIS_RUNTIME_STATE_STORE && strstr(request, "EVAL")) {
+      static const char put_reply[] = "*4\r\n:1\r\n$1\r\n1\r\n:1\r\n:2\r\n";
+      static const char remove_reply[] = "*4\r\n:1\r\n:0\r\n:0\r\n:0\r\n";
+      int count = atomic_fetch_add_explicit(&server->eval_count, 1, memory_order_acq_rel);
+      const char *reply = count == 0 ? put_reply : remove_reply;
+      size_t reply_size = count == 0 ? sizeof(put_reply) - 1u : sizeof(remove_reply) - 1u;
+      if (redis_test_send_all(client, reply, reply_size) != TURBO_OK) break;
+      used = 0u;
+    } else if (server->mode == REDIS_RUNTIME_STATE_STORE && strstr(request, "HGET")) {
+      static const char state_reply[] = {'$', '3', '\r', '\n', '1', '\0', 'v', '\r', '\n'};
+      if (redis_test_send_all(client, state_reply, sizeof(state_reply)) != TURBO_OK) break;
+      used = 0u;
+    } else if (server->mode == REDIS_RUNTIME_XADD && strstr(request, "XADD")) {
       atomic_store_explicit(&server->saw_xadd, 1, memory_order_release);
       atomic_store_explicit(&server->payload_matched, strstr(request, "hello") != NULL,
                             memory_order_release);
@@ -452,6 +467,111 @@ spec("turbo_flow_redis") {
     check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
   }
 
+  it("accepts Redis Cluster StateStore configuration without connecting eagerly") {
+    const char *seeds[] = {"127.0.0.1", "127.0.0.2"};
+    uint16_t ports[] = {7000u, 7001u};
+    turbo_flow_redis_record_store_config_t config;
+    turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+    turbo_flow_state_store_t *store = NULL;
+
+    memset(&config, 0, sizeof(config));
+    config.connection =
+        (turbo_flow_redis_connection_config_t)TURBO_FLOW_REDIS_CONNECTION_CONFIG_INIT;
+    config.connection.deployment = TURBO_FLOW_REDIS_DEPLOYMENT_CLUSTER;
+    config.connection.seed_hosts = seeds;
+    config.connection.seed_ports = ports;
+    config.connection.seed_count = 2u;
+    config.key = "turboflow:{state-cluster}:records";
+    config.max_records = 2u;
+    limits.max_records = 2u;
+    limits.max_bytes = 64u;
+    limits.max_item_bytes = 32u;
+    check_int_eq(redis_test_state_store_open(&config, &limits, &store), TURBO_OK);
+    check_not_null(store);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+
+    config.connection.database = 1;
+    check_int_eq(redis_test_state_store_open(&config, &limits, &store), TURBO_EINVAL);
+    config.connection.database = 0;
+    config.key = "turboflow:state-cluster:records";
+    check_int_eq(redis_test_state_store_open(&config, &limits, &store), TURBO_EINVAL);
+  }
+
+  it("accepts Redis Sentinel IndexStore configuration without connecting eagerly") {
+    const char *sentinels[] = {"127.0.0.1", "127.0.0.2", "127.0.0.3"};
+    uint16_t ports[] = {26379u, 26379u, 26379u};
+    turbo_flow_redis_index_store_config_t config;
+    turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+    turbo_flow_index_store_t *store = NULL;
+
+    memset(&config, 0, sizeof(config));
+    config.connection =
+        (turbo_flow_redis_connection_config_t)TURBO_FLOW_REDIS_CONNECTION_CONFIG_INIT;
+    config.connection.deployment = TURBO_FLOW_REDIS_DEPLOYMENT_SENTINEL;
+    config.connection.seed_hosts = sentinels;
+    config.connection.seed_ports = ports;
+    config.connection.seed_count = 3u;
+    config.connection.service_name = "flowie-state";
+    config.key = "turboflow:{index-sentinel}";
+    limits.max_records = 2u;
+    limits.max_bytes = 64u;
+    limits.max_item_bytes = 32u;
+    check_int_eq(redis_test_index_store_open(&config, &limits, &store), TURBO_OK);
+    check_not_null(store);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+    config.connection.service_name = NULL;
+    check_int_eq(redis_test_index_store_open(&config, &limits, &store), TURBO_EINVAL);
+  }
+
+  it("executes StateStore mutations through one Lua CAS command without a pre-scan") {
+    static const uint8_t key_bytes[] = {'k'};
+    static const uint8_t value_bytes[] = {'v'};
+    redis_runtime_server_t server;
+    turbo_thread_t server_thread;
+    turbo_flow_redis_record_store_config_t config;
+    turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
+    turbo_flow_state_store_t *store = NULL;
+    turbo_flow_state_record_t record = TURBO_FLOW_STATE_RECORD_INIT;
+    turbo_flow_store_bytes_t key = {key_bytes, sizeof(key_bytes)};
+    turbo_flow_store_bytes_t value = {value_bytes, sizeof(value_bytes)};
+    uint64_t revision = 0u;
+    unsigned short port = redis_runtime_server_open(&server, REDIS_RUNTIME_STATE_STORE);
+
+    check_true(port > 0u);
+    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+                 TURBO_OK);
+    memset(&config, 0, sizeof(config));
+    config.host = "127.0.0.1";
+    config.port = port;
+    config.database = 0;
+    config.timeout_ms = 1000u;
+    config.key = "turboflow:{state-unit}:records";
+    config.max_record_key_size = 8u;
+    config.max_value_size = 8u;
+    config.max_batch_size = 1u;
+    config.max_records = 2u;
+    limits.max_records = 2u;
+    limits.max_bytes = 16u;
+    limits.max_item_bytes = 16u;
+
+    check_int_eq(redis_test_state_store_open(&config, &limits, &store), TURBO_OK);
+    check_int_eq(turbo_flow_state_store_put(store, key, value, 0u, &revision), TURBO_OK);
+    check_uint_eq(revision, 1u);
+    check_int_eq(turbo_flow_state_store_get(store, key, &record), TURBO_OK);
+    check_uint_eq(record.revision, 1u);
+    check_mem_eq(mem_buffer_const_data(record.value), value_bytes, sizeof(value_bytes));
+    turbo_flow_state_record_cleanup(&record);
+    check_int_eq(turbo_flow_state_store_remove(store, key, 1u), TURBO_OK);
+    check_int_eq(atomic_load_explicit(&server.eval_count, memory_order_acquire), 2);
+    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
+    check_int_eq(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
+    redis_test_close_socket(server.listener);
+#ifdef _WIN32
+    WSACleanup();
+#endif
+  }
+
   it("accepts documented Redis LogStore defaults without connecting eagerly") {
     turbo_flow_redis_log_store_config_t config;
     turbo_flow_store_limits_t limits = TURBO_FLOW_STORE_LIMITS_INIT;
@@ -683,6 +803,39 @@ spec("turbo_flow_redis") {
 #endif
   }
 
+  it("publishes one bounded binary payload without exposing the Redis stream ID") {
+    redis_runtime_server_t server;
+    turbo_thread_t server_thread;
+    turbo_flow_redis_stream_publisher_config_t config =
+        TURBO_FLOW_REDIS_STREAM_PUBLISHER_CONFIG_INIT;
+    turbo_flow_redis_stream_publisher_t *publisher = NULL;
+    unsigned short port = redis_runtime_server_open(&server, REDIS_RUNTIME_XADD);
+    check_true(port > 0);
+    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+                 TURBO_OK);
+    config.host = "127.0.0.1";
+    config.port = port;
+    config.database = 0;
+    config.timeout_ms = 1000u;
+    config.stream = "flow:test";
+    config.field = "payload";
+    config.maxlen = 128u;
+    config.max_payload_size = 5u;
+    check_int_eq(turbo_flow_redis_stream_publisher_create(&config, &publisher), TURBO_OK);
+    check_not_null(publisher);
+    check_int_eq(turbo_flow_redis_stream_publisher_publish(publisher, "hello", 5u), TURBO_OK);
+    check_int_eq(turbo_flow_redis_stream_publisher_append(publisher, "longer", 6u), TURBO_EMSGSIZE);
+    turbo_flow_redis_stream_publisher_destroy(publisher);
+    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
+    check_int_eq(atomic_load_explicit(&server.saw_xadd, memory_order_acquire), 1);
+    check_int_eq(atomic_load_explicit(&server.payload_matched, memory_order_acquire), 1);
+    check_int_eq(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
+    redis_test_close_socket(server.listener);
+#ifdef _WIN32
+    WSACleanup();
+#endif
+  }
+
   it("acknowledges XREADGROUP only after successful graph delivery") {
     redis_run_stream_source_case(TURBO_OK, 1);
   }
@@ -842,9 +995,9 @@ spec("turbo_flow_redis") {
 
     check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store,
-                                                          &error),
-                 TURBO_ENOTSUP);
+    check_int_eq(
+        redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store, &error),
+        TURBO_ENOTSUP);
     check_str_eq(error.path, "$.channels.mqtt.sessions.config.backend");
     check_null(store.ctx);
     turbo_flow_resolved_config_destroy(resolved);

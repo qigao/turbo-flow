@@ -48,6 +48,7 @@ include(CmakeUtils)
 
 find_package(TurboUtils REQUIRED PATHS ${TURBO_UTILS_ROOT})
 find_package(PostgreSQL REQUIRED)
+find_package(xxHash CONFIG REQUIRED)
 
 # TurboNet's exported targets reference these dependency targets.
 find_package(Threads REQUIRED)
@@ -156,7 +157,8 @@ if(FLOWIE_MQTT_SOAK_TESTS)
 endif()
   add_subdirectory(flowmq/protocol)
   add_subdirectory(flowmq)
-  add_subdirectory(flowie/app)
+  add_subdirectory(flowie/cluster)
+  add_subdirectory(flowie/server)
 
 if(BUILD_TESTING)
   set(_flowie_release_evidence_targets
@@ -262,6 +264,7 @@ foreach(
      tf_s3
      tf_redis
      tf_pgsql
+     tf_sqlite_storage
      tf_email
      tf_fmq)
   if(TARGET ${target_name})

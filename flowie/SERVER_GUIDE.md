@@ -69,10 +69,12 @@ flowie_server: configuration and graph are valid
 provider、`security_realm` 与 HTTPS ACL policy provider；任一环节缺失或初始化失败都会拒绝启动。省略该
 开关只用于兼容仓库内现有开发与匿名测试 profile，不应作为生产部署方式。
 
-StorageBackend 也在该预检边界装配：产品宿主注册同级的 `tf_local_storage`、`tf_redis`、
-`tf_pgsql` shared library，并通过 `io/common/storage` 的 registry/owner ABI 创建 service。
+StorageBackend 也在该预检边界装配：产品宿主注册同级的 `tf_local_storage`、
+`tf_sqlite_storage`、`tf_redis`、`tf_pgsql` shared library，并通过 `io/common/storage` 的
+registry/owner ABI 创建 service。
 外部模块使用 `--storage-backend-plugin` 加载；`--record-store-plugin` 仅是兼容别名。Flowie
-只消费 provider-neutral 的 FlowStore facade，不调用具体 backend 的 record/hash/index/log/state
+协议路径只消费 ProtocolStore facade，业务路径消费 FlowStore facade，不调用具体 backend 的
+record/hash/index/log/state
 函数；插件 function table 只公开 `open()` 和 `close()`。
 
 Bundled Server 固定包含 Socket、Redis、PostgreSQL、HTTP client/server 与 HTTPS Auth/ACL 能力，不按
@@ -134,9 +136,10 @@ MQTT endpoint
 [flowie.flow](examples/flowie.flow)。`store` 可以放在 RuleSet 前后，但必须在 `.flow` 中显式
 连接；前者保存原始 admitted packet，后者保存过滤/变换后的消息，二者不是同一种语义。
 
-`session_store` 不是业务 data sink，也不是用户 Graph 节点。它只由 MQTT session owner 调用，
+`protocol_store` 不是业务 data sink，也不是用户 Graph 节点。它只由 MQTT protocol owner 调用，
 保存 session、subscription、inflight、Will 和 retained 等协议事实；普通 PUBLISH 业务正文只有
-在 Graph 显式连接到 data sink 时才会成为外部业务事实。
+在 Graph 显式连接到 BusinessStore/data sink 时才会成为外部业务事实。旧 `session_store` 仅是
+互斥的配置兼容名，不代表第二存储层。
 
 settlement 是协议 owner 的 ACK prerequisite，不是普通 stage 返回值：
 
@@ -191,19 +194,22 @@ control/close frame 会关闭连接。这些拒绝不会创建 MQTT session，�
 
 ### 公网 TLS 部署组件
 
-`flowie/deploy/nginx/` 是 `flowie_server` 的版本化部署组件，并随安装产物复制到
-`share/turboflow/deploy/flowie-nginx`。单个 `flowie-nginx` Compose 服务负责公网 `443` HTTPS、
-`8883` MQTT TLS、`80` ACME challenge 和限定 `FLOWIE_PUBLIC_HOST` 的 Certbot 续期。它不是第二个
-Auth/ACL 服务，也不持有用户、规则、MQTT session 或数据库凭据。
+`flowie/deploy/nginx/` 是 `flowie_server` 的版本化 edge Compose，并随安装产物复制到
+`share/turboflow/deploy/flowie-nginx`；MQTT 专用组件同时安装到
+`share/turboflow/deploy/flowie-haproxy`。Compose 中 Nginx 只负责公网 `80/443`、ACME challenge、
+HTTPS TLS termination 和 Certbot；HAProxy 负责 `8883` MQTTS TLS termination、CONNECT Client ID
+consistent hash 及 backend PROXY protocol v1。二者都不是 Auth/ACL 服务，也不持有用户、规则、
+MQTT session、shard ownership 或数据库凭据。
 
-推荐拓扑为公网 Nginx到 loopback TLS：Control `127.0.0.1:8443`，MQTT
-`127.0.0.1:18883`。Nginx 必须用内部 CA 和显式 TLS name 校验两个上游；公网浏览器和 MQTT 客户端
-只校验公共证书，不提供客户端证书。Dashboard 仍使用登录 session，Broker 仍通过 HTTPS service token
-访问 Auth/ACL。完整 `.env`、首次签发、Compose 启动和源地址边界见
+推荐单机拓扑为 Nginx 到 loopback Control TLS `127.0.0.1:8443`，HAProxy 到 loopback plaintext MQTT
+`127.0.0.1:18883`。多节点部署把 `FLOWIE_MQTT_BACKENDS` 指向各 Flowie edge 的受保护私网 listener。
+公网浏览器和 MQTT 客户端只校验公共证书，不提供客户端证书；Dashboard 仍使用登录 session，Broker
+仍通过 HTTPS service token 访问 Auth/ACL。MQTT endpoint 必须启用只信任 HAProxy transport peer 的
+PROXY 策略。完整 `.env`、首次签发、Compose 启动、Client ID 路由和源地址边界见
 [deploy/nginx/README.md](deploy/nginx/README.md)。
 
-容器 healthcheck 会经 `443` 访问真实登录页并检查 MQTT 内部 listener；`nginx -t` 在每次容器启动前
-执行。部署主机必须显式放行 `80/443/8883`，且不能同时运行另一个证书续期 timer 或 Nginx 容器。
+Nginx 和 HAProxy 都在启动前校验配置；HAProxy 会监测续期证书并使用 master-worker 平滑 reload。
+部署主机必须显式放行 `80/443/8883`，不能同时运行另一个证书续期 timer 或占用这些端口的代理。
 
 安全 profile 同时选择 auth provider 和 security realm。完整结构见
 [flowie_server_https_secure.yml](app/tests/flowie_server_https_secure.yml)。默认使用普通 TLS server
@@ -239,8 +245,9 @@ channels:
 - `client_cert_file` 与 `client_key_file` 必须同时存在。
 - 私钥密码只允许使用 key-provider reference，不允许 YAML literal。
 - service token 每次请求重新从 key provider 获取，以支持轮换。
-- Auth v3 的 `remote_address` 只来自直接 socket peer；当前不信任 PROXY protocol、
-  `X-Forwarded-For` 或其他代理 header。代理部署中该字段是代理地址。
+- Auth v3 的 `remote_address` 来自 endpoint 已验证的 transport provenance：默认是直接 socket peer；
+  显式启用 trusted PROXY v1/v2 后是 header 中的源地址，同时保留 direct transport peer。Flowie 不读取
+  `X-Forwarded-For`，且未信任 peer 不能提供源地址。
 - Auth v3 的 `peer_certificate_sha256` 只来自已启用 `tls_client_ca_file` 的 TLS/WSS listener，并与
   Broker 调用 Auth 服务时使用的 mTLS client certificate 相互独立。
 - 认证失败、ACL bundle 过期、证书失败和 provider 网络错误全部 fail closed。
@@ -277,20 +284,22 @@ MQTT 3.1/3.1.1 没有 MQTT 5 AUTH exchange，使用普通认证结果和各自�
 
 ## 9. Session、retained 与持久化
 
-`manage_sessions: true` 启用受限 session/retained 状态。未配置 `session_store` 时，Flowie 使用
-`tf_local_storage` DLL 提供的 local Record backend；它是进程内 volatile，关闭或进程退出后状态
-不可恢复。持久化时使用 YAML 中独立的 `record_store` channel：
+`manage_sessions: true` 启用受限 session/retained 状态。未配置 `protocol_store` 时，standalone
+Flowie 使用 `--protocol-store-path` 指定的 SQLite Record backend（默认
+`flowie-protocol.sqlite3`）；打开、schema 或恢复失败会中止启动。显式配置使用 YAML 中独立的
+`record_store` channel：
 
-- Redis：多实例共享或外部持久化部署。
-- PostgreSQL：SMB 部署中的事务型 session/retained 持久化。
+- SQLite：standalone 协议事实。
+- Redis：cluster 协议事实的目标 backend；切换前必须通过 epoch/failover durability gate。
 
-Redis/PostgreSQL 在这里是 `session_store` 的 durable record-store backend，由配置选择，不是
-Graph data source/sink，也不是写死在 Flowie 领域代码中的认证数据库。认证用户数据仍只能由
-HTTPS 认证服务管理。显式 `session_store` 选择失败时直接报错，不回退到 local。
+PostgreSQL继续保存 cluster ownership、owner epoch 和 fencing；当前 cluster session facts 在
+Redis cutover 完成前仍使用既有 PostgreSQL 实现。协议 Store 和业务 FlowStore 即使选择同一种
+引擎，也使用独立 namespace、连接 owner、权限、容量和 migration。显式 `protocol_store` 失败时
+直接报错，不回退到 SQLite、Redis、PostgreSQL 或 local。
 
-可直接交付的组合示例位于 `examples/products/`：`flowie-dev.*` 使用 local volatile Record；
-`flowie-smb.*` 使用 PostgreSQL record store 保存 session/retained，并通过 PostgreSQL outbox
-保存业务 PUBLISH。SMB 的 QoS 1/2 ACK 只在 outbox INSERT 事务 COMMIT 后生成；独立 source
+可直接交付的组合示例位于 `examples/products/`。旧 product 配置中的 `session_store` 仍可解析，
+但应迁移为 `protocol_store`；业务 PUBLISH 可继续通过 PostgreSQL outbox 保存。SMB 的 QoS 1/2
+ACK 只在 outbox INSERT 事务 COMMIT 后生成；独立 source
 回放记录，Graph 成功后删行，失败则保留并在后续重试，因此交付语义为 at-least-once。
 
 ## 10. 发布前检查表

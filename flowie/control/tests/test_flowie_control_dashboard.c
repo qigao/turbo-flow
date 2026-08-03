@@ -565,7 +565,7 @@ spec("Flowie ACL dashboard") {
     check_str_contains(html, "id=\"roles\"");
     check_str_contains(html, "id=\"acl-rules\"");
     check_str_contains(html, "aria-label=\"Users pagination\"");
-    check_str_contains(html, "aria-label=\"Groups pagination\"");
+    check_str_contains(html, "<th>Group tree</th>");
     check_str_contains(html, "aria-label=\"Roles pagination\"");
     check_str_contains(html, "aria-label=\"ACL rules pagination\"");
     check_str_contains(html, "aria-label=\"Audit pagination\"");
@@ -579,21 +579,38 @@ spec("Flowie ACL dashboard") {
     check_str_contains(html, "popovertarget=\"role-assignments-1\"");
     check_str_contains(html, "Manage user access");
     check_str_contains(html, "Manage role assignments");
-    check_str_contains(html, "<select name=\"group_id\" required>");
-    check_str_contains(html, "<option value=\"root-a\" disabled>root-a</option>");
-    check_str_contains(html, "<option value=\"operators\">-- operators</option>");
-    check_str_contains(html, "<option value=\"operators-east\">---- operators-east</option>");
-    check_str_contains(html, "<select name=\"parent_group_id\" required>");
-    check_str_contains(html, "<option value=\"root-a\">root-a</option>");
+    check_str_contains(html, "data-picker-options=\"group-member-picker-options\"");
+    check_str_contains(html, "data-picker-options=\"group-parent-picker-options\"");
+    check_str_contains(html, "data-picker-options=\"role-picker-options\"");
+    check_str_contains(html, "data-value=\"operators\"");
+    check_str_contains(html, ">-- operators</span>");
+    check_str_contains(html, "data-value=\"operators-east\"");
+    check_str_contains(html, ">---- operators-east</span>");
+    check_str_contains(html, "data-value=\"publisher\"");
+    check_str_contains(html, "name=\"parent_group_id\" data-picker-target");
     check_false(strstr(html, "<label>Parent group<input") != NULL);
-    check_false(strstr(html, "popovertarget=\"group-members-") != NULL);
-    check_false(strstr(html, "Manage group members") != NULL);
+    check_str_contains(html, "popovertarget=\"group-members-");
+    check_str_contains(html, "Add a user to this group");
+    check_false(strstr(html, "popovertarget=\"group-members-1\"") != NULL);
+    check_str_contains(html, "popovertarget=\"group-members-2\"");
+    check_false(strstr(html, "popovertarget=\"group-delete-2\"") != NULL);
+    check_str_contains(html, "popovertarget=\"group-delete-3\"");
+    check_str_contains(html, "data-entity-picker");
+    check_str_contains(html, "data-picker-option");
+    check_str_contains(html, "data-picker-target");
+    check_str_contains(html, "data-request-id");
+    check_false(strstr(html, "Request ID") != NULL);
+    check_str_contains(html, "data-acl-builder-host");
+    check_str_contains(html, "Start from an example");
+    check_str_contains(html, "Allow event subscriptions");
+    check_false(strstr(html, "<label>Canonical rule") != NULL);
+    check_str_contains(html, "root-a / events / #");
     check_false(strstr(html, "user-edit-") != NULL);
     check_false(strstr(html, "group-edit-") != NULL);
     check_false(strstr(html, "role-edit-") != NULL);
     check_str_contains(html, "popovertarget=\"user-delete-1\"");
     check_str_contains(html, "popovertarget=\"acl-edit-1\"");
-    check_str_contains(html, "Edit rule");
+    check_str_contains(html, "Edit access rule");
     check_str_contains(html, "popovertarget=\"acl-delete-1\"");
     check_str_contains(html, "class=\"actions-column\">Actions");
     check_false(strstr(html, "<form") != NULL);
@@ -610,6 +627,7 @@ spec("Flowie ACL dashboard") {
                    TURBO_OK);
     }
     check_str_contains(html, "src=\"/v1/management/assets/htmx-2.0.9.min.js\"");
+    check_str_contains(html, "src=\"/v1/management/assets/control.js\"");
     check_str_contains(html, "hx-get=\"/v1/management/dashboard/content\"");
     check_str_contains(html, "hx-trigger=\"load\"");
     check_str_contains(html, "\"allowEval\":false");
@@ -656,6 +674,7 @@ spec("Flowie ACL dashboard") {
                  dashboard);
     check_ptr_eq(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_DASHBOARD_ACTION_PATH), dashboard);
     check_ptr_eq(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_DASHBOARD_CSS_PATH), dashboard);
+    check_ptr_eq(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_DASHBOARD_JS_PATH), dashboard);
     check_ptr_eq(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_DASHBOARD_HTMX_PATH), dashboard);
     check_ptr_eq(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_DASHBOARD_PASSWORD_PATH),
                  dashboard);
@@ -669,6 +688,7 @@ spec("Flowie ACL dashboard") {
     check_null(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_DASHBOARD_CONTENT_PATH));
     check_null(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_DASHBOARD_ACTION_PATH));
     check_null(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_DASHBOARD_CSS_PATH));
+    check_null(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_DASHBOARD_JS_PATH));
     check_null(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_DASHBOARD_HTMX_PATH));
     check_null(iris_app_lookup_rpc_context(app, FLOWIE_CONTROL_DASHBOARD_PASSWORD_PATH));
 
@@ -798,7 +818,7 @@ spec("Flowie ACL dashboard") {
                                                       &html, &html_size),
                  TURBO_OK);
     check_str_contains(html, "device-000");
-    check_false(strstr(html, "device-025") != NULL);
+    check_false(strstr(html, "<tr><td>device-025</td>") != NULL);
     check_str_contains(html, "25 shown");
     check_str_contains(html, "hx-get=\"/v1/management/dashboard/"
                              "content?users_after=device-024&amp;groups_after=root-a\"");
@@ -817,7 +837,7 @@ spec("Flowie ACL dashboard") {
                                                       &html, &html_size),
                  TURBO_OK);
     check_str_contains(html, "device-025");
-    check_false(strstr(html, "device-000") != NULL);
+    check_false(strstr(html, "<tr><td>device-000</td>") != NULL);
     check_str_contains(html, "1 shown");
     check_str_contains(html, "hx-get=\"/v1/management/dashboard/content?groups_after=root-a\"");
     check_str_contains(html, "hx-select=\"#users\"");
@@ -870,6 +890,8 @@ spec("Flowie ACL dashboard") {
     check_str_contains(html, "operation\" value=\"policy.rule.put");
     check_str_contains(html, "hx-post=\"/v1/management/dashboard/action\"");
     check_str_contains(html, "id=\"root-group-scope\"");
+    check_str_contains(html, "hx-trigger=\"change from:#root-group-scope\"");
+    check_false(strstr(html, ">Switch</button>") != NULL);
     flowie_control_dashboard_html_free(html);
     html = NULL;
 

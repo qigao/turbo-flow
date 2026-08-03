@@ -100,6 +100,7 @@ static int flowie_ingress_pump(flowie_ingress_t *ingress, size_t *published) {
     flowie_mqtt_parse_error_t error = FLOWIE_MQTT_PARSE_ERROR_INIT;
     turbo_flow_msg_t msg;
     size_t consumed = 0u;
+    int stop_after_publish = 0;
     rc = turbo_byte_buffer_view(&ingress->framing, &bytes);
     if (rc != TURBO_OK) return rc;
     if (bytes.size == 0u) break;
@@ -147,6 +148,7 @@ static int flowie_ingress_pump(flowie_ingress_t *ingress, size_t *published) {
         if (stop_pump) break;
         continue;
       }
+      stop_after_publish = stop_pump;
     }
 
     /* Ownership is transferred before the borrowed framing view is invalidated. */
@@ -173,6 +175,7 @@ static int flowie_ingress_pump(flowie_ingress_t *ingress, size_t *published) {
     turbo_flow_msg_cleanup(&msg);
     if (rc != TURBO_OK) return rc;
     ++*published;
+    if (stop_after_publish) break;
   }
   return TURBO_OK;
 }
@@ -255,6 +258,15 @@ int flowie_ingress_feed(flowie_ingress_t *ingress, const void *data, size_t size
     if (rc != TURBO_OK) return flowie_ingress_terminal(ingress, rc);
   }
   return TURBO_OK;
+}
+
+int flowie_ingress_resume(flowie_ingress_t *ingress, size_t *published) {
+  int rc;
+  if (!ingress || !published) return TURBO_EINVAL;
+  *published = 0u;
+  if (ingress->terminal_error != TURBO_OK) return ingress->terminal_error;
+  rc = flowie_ingress_pump(ingress, published);
+  return rc == TURBO_OK ? TURBO_OK : flowie_ingress_terminal(ingress, rc);
 }
 
 size_t flowie_ingress_buffered_bytes(const flowie_ingress_t *ingress) {

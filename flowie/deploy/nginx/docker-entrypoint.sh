@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-required_vars="FLOWIE_PUBLIC_HOST FLOWIE_CONTROL_UPSTREAM FLOWIE_MQTT_UPSTREAM FLOWIE_CONTROL_TLS_NAME FLOWIE_MQTT_TLS_NAME FLOWIE_CERTBOT_EMAIL"
+required_vars="FLOWIE_PUBLIC_HOST FLOWIE_CONTROL_UPSTREAM FLOWIE_CONTROL_TLS_NAME FLOWIE_CERTBOT_EMAIL"
 for variable in $required_vars; do
     eval "value=\${$variable:-}"
     if [ -z "$value" ]; then
@@ -23,13 +23,10 @@ if [ ! -s /etc/flowie/internal-ca.pem ]; then
 fi
 
 mkdir -p /etc/flowie-nginx/generated /etc/flowie-nginx/http.d /var/www/certbot
-substitutions='${FLOWIE_PUBLIC_HOST} ${FLOWIE_CONTROL_UPSTREAM} ${FLOWIE_MQTT_UPSTREAM} ${FLOWIE_CONTROL_TLS_NAME} ${FLOWIE_MQTT_TLS_NAME}'
+substitutions='${FLOWIE_PUBLIC_HOST} ${FLOWIE_CONTROL_UPSTREAM} ${FLOWIE_CONTROL_TLS_NAME}'
 envsubst "$substitutions" \
     < /etc/flowie-nginx/templates/http.conf.template \
     > /etc/flowie-nginx/generated/http.conf
-envsubst "$substitutions" \
-    < /etc/flowie-nginx/templates/mqtt.conf.template \
-    > /etc/flowie-nginx/generated/mqtt.conf
 
 nginx -t
 

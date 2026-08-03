@@ -180,10 +180,11 @@ token 和加密私钥密码只能通过 key provider reference 注入。
 同一作用域服务凭证和轮换机制，但服务端分别执行最小权限检查；ACL 接口不接收客户端 credential，Auth 接口
 不返回 ACL rule body。
 
-`remote_address` 只来自 CoroNet 直接 socket peer：TCP/TLS/WS/WSS 使用数值 `IP:port`，Pipe 使用
-`local`。当前版本不解析或信任 PROXY protocol、`X-Forwarded-For` 或其他客户端/代理 header；经反向
-代理连接时只能看到代理地址。以后若支持原始源地址，必须作为显式启用、限定可信 listener 的版本化
-传输能力交付，不能悄悄覆盖这个字段。
+`remote_address` 来自 endpoint 验证过的 transport provenance：TCP/TLS/WS/WSS 默认使用直接 socket
+peer 的数值 `IP:port`，Pipe 使用 `local`。TLS/WSS listener 可显式要求 trusted PROXY v1/v2；只有直接
+peer 命中配置的数值 CIDR 时才在 TLS 前消费 header，并用其中的源地址覆盖该请求字段，同时单独保留
+transport peer 用于诊断。缺失、畸形、超限、超时或未信任输入全部 fail closed。Flowie 不解析
+`X-Forwarded-For` 或其他 HTTP 代理 header。
 
 MQTT TLS/WSS endpoint 只有在配置 `tls_client_ca_file` 时才要求客户端证书。CoroNet 完成证书链验证后，
 Flowie 才读取规范小写 `sha256:` 指纹并传给 auth provider；验证失败在认证请求发出前 fail closed。

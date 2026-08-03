@@ -46,10 +46,14 @@ struct flowie_control_pgsql_pool_s {
   uint64_t cleanup_failures;
   int acquire_timeout_ms;
   int closing;
+  int reconnect_requested;
+  int reconnect_in_progress;
+  int reconnect_thread_started;
   tstr_t conninfo;
   tstr_t password;
   tstr_t schema_name;
   flowie_control_pgsql_database_config_t database_config;
+  turbo_thread_t reconnect_thread;
   turbo_mutex_t mutex;
   turbo_cond_t changed;
 };
@@ -550,6 +554,14 @@ static void flowie_control_pgsql_pool_lease_reset(flowie_control_pgsql_pool_leas
 
 static void flowie_control_pgsql_pool_storage_destroy(flowie_control_pgsql_pool_t *pool) {
   if (!pool) return;
+  if (pool->reconnect_thread_started) {
+    turbo_mutex_lock(&pool->mutex);
+    pool->closing = 1;
+    turbo_cond_broadcast(&pool->changed);
+    turbo_mutex_unlock(&pool->mutex);
+    (void)turbo_thread_join(&pool->reconnect_thread);
+    turbo_thread_destroy(&pool->reconnect_thread);
+  }
   if (pool->slots) {
     for (size_t index = 0u; index < pool->capacity; ++index)
       flowie_control_pgsql_database_destroy(pool->slots[index].database);
@@ -576,6 +588,8 @@ flowie_control_pgsql_pool_config_valid(const flowie_control_pgsql_pool_config_t 
     return 0;
   return 1;
 }
+
+static void flowie_control_pgsql_pool_reconnect_worker(void *ctx);
 
 int flowie_control_pgsql_pool_create(const flowie_control_pgsql_pool_config_t *config,
                                      flowie_control_pgsql_pool_t **out) {
@@ -613,6 +627,10 @@ int flowie_control_pgsql_pool_create(const flowie_control_pgsql_pool_config_t *c
     if (rc != TURBO_OK) goto fail;
     pool->slots[index].state = FLOWIE_CONTROL_PGSQL_POOL_SLOT_AVAILABLE;
   }
+  rc = turbo_thread_create(&pool->reconnect_thread, flowie_control_pgsql_pool_reconnect_worker,
+                           pool);
+  if (rc != TURBO_OK) goto fail;
+  pool->reconnect_thread_started = 1;
   *out = pool;
   return TURBO_OK;
 
@@ -633,10 +651,70 @@ static int flowie_control_pgsql_pool_wait(flowie_control_pgsql_pool_t *pool, uin
              : TURBO_ETIMEDOUT;
 }
 
+static void flowie_control_pgsql_pool_reconnect_worker(void *ctx) {
+  flowie_control_pgsql_pool_t *pool = (flowie_control_pgsql_pool_t *)ctx;
+  for (;;) {
+    flowie_control_pgsql_pool_slot_t *slot;
+    flowie_control_pgsql_database_t *previous_database;
+    flowie_control_pgsql_database_t *reopened_database = NULL;
+    flowie_control_pgsql_database_config_t reopen_config;
+    size_t slot_index;
+    int rc;
+
+    turbo_mutex_lock(&pool->mutex);
+    while (!pool->closing && !pool->reconnect_requested)
+      turbo_cond_wait(&pool->changed, &pool->mutex);
+    if (pool->closing) {
+      pool->reconnect_requested = 0;
+      turbo_cond_broadcast(&pool->changed);
+      turbo_mutex_unlock(&pool->mutex);
+      return;
+    }
+    pool->reconnect_requested = 0;
+    for (slot_index = 0u; slot_index < pool->capacity; ++slot_index) {
+      if (pool->slots[slot_index].state == FLOWIE_CONTROL_PGSQL_POOL_SLOT_DEAD) break;
+    }
+    if (slot_index == pool->capacity) {
+      turbo_mutex_unlock(&pool->mutex);
+      continue;
+    }
+    slot = &pool->slots[slot_index];
+    previous_database = slot->database;
+    slot->database = NULL;
+    slot->state = FLOWIE_CONTROL_PGSQL_POOL_SLOT_CLEANING;
+    pool->reconnect_in_progress = 1;
+    reopen_config = pool->database_config;
+    reopen_config.schema_mode = FLOWIE_CONTROL_PGSQL_SCHEMA_VALIDATE;
+    turbo_mutex_unlock(&pool->mutex);
+
+    flowie_control_pgsql_database_destroy(previous_database);
+    rc = flowie_control_pgsql_database_open(&reopen_config, &reopened_database);
+
+    turbo_mutex_lock(&pool->mutex);
+    slot->database = reopened_database;
+    slot->state = rc == TURBO_OK ? FLOWIE_CONTROL_PGSQL_POOL_SLOT_AVAILABLE
+                                 : FLOWIE_CONTROL_PGSQL_POOL_SLOT_DEAD;
+    pool->reconnect_in_progress = 0;
+    if (rc != TURBO_OK) {
+      ++pool->cleanup_failures;
+    } else if (!pool->closing) {
+      for (slot_index = 0u; slot_index < pool->capacity; ++slot_index) {
+        if (pool->slots[slot_index].state == FLOWIE_CONTROL_PGSQL_POOL_SLOT_DEAD) {
+          pool->reconnect_requested = 1;
+          break;
+        }
+      }
+    }
+    turbo_cond_broadcast(&pool->changed);
+    turbo_mutex_unlock(&pool->mutex);
+  }
+}
+
 int flowie_control_pgsql_pool_acquire(flowie_control_pgsql_pool_t *pool,
                                       flowie_control_pgsql_pool_lease_t *lease) {
   uint64_t started_ms;
   uint64_t deadline_ms;
+  int reconnect_attempted = 0;
   int rc = TURBO_OK;
   if (!pool || !lease) return TURBO_EINVAL;
   flowie_control_pgsql_pool_lease_reset(lease);
@@ -651,13 +729,18 @@ int flowie_control_pgsql_pool_acquire(flowie_control_pgsql_pool_t *pool,
   ++pool->acquire_waiters;
   for (;;) {
     size_t healthy_count = 0u;
+    int has_dead_slot = 0;
     if (pool->closing) {
       rc = TURBO_ESHUTDOWN;
       break;
     }
     for (size_t index = 0u; index < pool->capacity; ++index) {
       flowie_control_pgsql_pool_slot_t *slot = &pool->slots[index];
-      if (slot->state != FLOWIE_CONTROL_PGSQL_POOL_SLOT_DEAD) ++healthy_count;
+      if (slot->state != FLOWIE_CONTROL_PGSQL_POOL_SLOT_DEAD) {
+        ++healthy_count;
+      } else {
+        has_dead_slot = 1;
+      }
       if (slot->state != FLOWIE_CONTROL_PGSQL_POOL_SLOT_AVAILABLE) continue;
       slot->state = FLOWIE_CONTROL_PGSQL_POOL_SLOT_LEASED;
       ++slot->generation;
@@ -670,7 +753,14 @@ int flowie_control_pgsql_pool_acquire(flowie_control_pgsql_pool_t *pool,
       rc = TURBO_OK;
       goto done;
     }
-    if (healthy_count == 0u) {
+    if (has_dead_slot && !reconnect_attempted) {
+      if (!pool->reconnect_requested && !pool->reconnect_in_progress) {
+        pool->reconnect_requested = 1;
+        turbo_cond_broadcast(&pool->changed);
+      }
+      reconnect_attempted = 1;
+    }
+    if (healthy_count == 0u && !pool->reconnect_requested && !pool->reconnect_in_progress) {
       rc = TURBO_EIO;
       break;
     }
@@ -782,7 +872,7 @@ int flowie_control_pgsql_pool_close(flowie_control_pgsql_pool_t *pool, int timeo
   turbo_mutex_lock(&pool->mutex);
   pool->closing = 1;
   turbo_cond_broadcast(&pool->changed);
-  while (pool->leased_count != 0u || pool->acquire_waiters != 0u) {
+  while (pool->leased_count != 0u || pool->acquire_waiters != 0u || pool->reconnect_in_progress) {
     if (timeout_ms == 0 || turbo_monotonic_ms() >= deadline_ms) {
       rc = TURBO_ETIMEDOUT;
       break;
@@ -798,7 +888,8 @@ int flowie_control_pgsql_pool_close(flowie_control_pgsql_pool_t *pool, int timeo
 int flowie_control_pgsql_pool_destroy(flowie_control_pgsql_pool_t *pool) {
   if (!pool) return TURBO_OK;
   turbo_mutex_lock(&pool->mutex);
-  if (!pool->closing || pool->leased_count != 0u || pool->acquire_waiters != 0u) {
+  if (!pool->closing || pool->leased_count != 0u || pool->acquire_waiters != 0u ||
+      pool->reconnect_in_progress) {
     turbo_mutex_unlock(&pool->mutex);
     return TURBO_EBUSY;
   }

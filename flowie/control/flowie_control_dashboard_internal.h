@@ -18,6 +18,7 @@ extern "C" {
 #define FLOWIE_CONTROL_DASHBOARD_CONTENT_PATH "/v1/management/dashboard/content"
 #define FLOWIE_CONTROL_DASHBOARD_ACTION_PATH "/v1/management/dashboard/action"
 #define FLOWIE_CONTROL_DASHBOARD_CSS_PATH "/v1/management/assets/control.css"
+#define FLOWIE_CONTROL_DASHBOARD_JS_PATH "/v1/management/assets/control.js"
 #define FLOWIE_CONTROL_DASHBOARD_HTMX_PATH "/v1/management/assets/htmx-2.0.9.min.js"
 #define FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH "/v1/management/login"
 #define FLOWIE_CONTROL_DASHBOARD_PASSWORD_PATH "/v1/management/password"

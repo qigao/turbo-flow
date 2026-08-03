@@ -59,9 +59,10 @@ MQTT Broker -> HTTPS /v3/authenticate -> flowie-control
                                          +-> local authorization Repository
 ```
 
-Broker v3 请求中的 `remote_address` 只来自 CoroNet 直接 socket peer；TCP/TLS/WS/WSS 使用数值
-`IP:port`，Pipe 使用 `local`。当前不读取 PROXY protocol、`X-Forwarded-For` 或其他代理 header，
-因此经代理接入时记录的是代理地址。`peer_certificate_sha256` 仅在 MQTT TLS/WSS endpoint 配置
+Broker v3 请求中的 `remote_address` 由 endpoint transport provenance 提供；默认是 CoroNet 直接 socket
+peer，显式启用 trusted PROXY v1/v2 的 TLS/WSS endpoint 则使用已验证 header 中的数值 `IP:port`，并
+单独保留 direct transport peer。Pipe 使用 `local`。Flowie 不读取 `X-Forwarded-For` 或其他 HTTP
+代理 header。`peer_certificate_sha256` 仅在 MQTT TLS/WSS endpoint 配置
 `tls_client_ca_file`、CoroNet 已验证客户端证书后出现；否则是空字符串。该 MQTT 客户证书只描述
 MQTT client；Broker 调用 `flowie-control` 的 Root Group 来自作用域 service binding。若 binding
 额外配置 Broker 客户证书指纹，它也是另一条独立信任链上的第二因子。

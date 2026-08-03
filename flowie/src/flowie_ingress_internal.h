@@ -58,6 +58,9 @@ CXX_C_API void flowie_ingress_destroy(flowie_ingress_t *ingress);
 CXX_C_API int flowie_ingress_feed(flowie_ingress_t *ingress, const void *data, size_t size,
                                   size_t *published);
 
+/** Resume parsing bytes already buffered after a prepare callback stopped the pump. */
+CXX_C_API int flowie_ingress_resume(flowie_ingress_t *ingress, size_t *published);
+
 CXX_C_API size_t flowie_ingress_buffered_bytes(const flowie_ingress_t *ingress);
 CXX_C_API flowie_mqtt_version_t flowie_ingress_version(const flowie_ingress_t *ingress);
 /** MQTT 5 DISCONNECT reason for the terminal protocol error, or zero when not applicable. */

@@ -44,26 +44,26 @@ channels:
           action: route
           key: mqtt_delivery_sink
 
-# By default Flowie uses the volatile local Record backend from the tf_local_storage shared library.
-# Durable managed sessions and retained publications use one record-store channel with distinct
-# versioned keys. `max_records` must cover max_sessions + max_retained_messages, and
-# max_key_size must cover the 3-byte retained prefix plus a maximum MQTT Topic Name.
-# `flowie_server` registers local/Redis/PostgreSQL through the StorageBackend registry and creates the
-# selected Redis or PostgreSQL provider from this YAML, then injects it through
-# flowie_endpoint_bindings_t. Uncomment both this channel and session_store below to enable it.
+# Standalone Flowie defaults to the durable SQLite ProtocolStore selected by
+# `flowie_server --protocol-store-path`. Managed sessions and retained publications use distinct
+# versioned keys in an endpoint namespace. `max_records` must cover max_sessions plus
+# max_retained_messages, and max_key_size must cover the retained prefix plus an MQTT Topic Name.
+# The protocol store is independent of Graph business data sinks. Uncomment this explicit SQLite
+# channel and `protocol_store` below only when limits/path must live in YAML.
 # A custom host may provide the same binding through flowie_register_resolved_bound_endpoint[_ex].
-#  mqtt.sessions:
+#  mqtt.protocol:
 #    kind: record_store
 #    config:
-#      backend: redis
-#      host: 127.0.0.1
-#      port: 6379
-#      database: 0
-#      key: flowie-mqtt-sessions-v1
+#      backend: sqlite
+#      database_path: flowie-protocol.sqlite3
+#      namespace_name: mqtt.endpoint
+#      busy_timeout_ms: 5000
 #      max_key_size: 65538
 #      max_value_size: 16777216
 #      max_batch_size: 4096
 #      max_records: 200000
+#      max_item_bytes: 16842754
+#      max_bytes: 3368550800000
 
 # A secure deployment adds an HTTPS authentication-service channel and a local SecurityRealm.
 # Flowie never receives database coordinates: Redis, SQLite, PostgreSQL, or another credential
@@ -137,7 +137,7 @@ adapters:
       max_inflight_per_session: 64
       # Per-connection inbound Topic Alias table. Zero disables aliases.
       topic_alias_maximum: 256
-#      session_store: mqtt.sessions
+#      protocol_store: mqtt.protocol
 # A secure endpoint additionally requires both fields and the matching typed
 # host binding; normal resolved registration rejects them instead of silently
 # running without authentication:
@@ -162,4 +162,4 @@ adapters:
 # Policy stage and then to either the MQTT delivery sink or the application data sink.
 # Control packets and session
 # state remain owned by the endpoint and never become implicit Graph stages.
-# Durable session restore remains an independent `session_store` record-store binding.
+# Durable protocol restore remains independent from every business FlowStore/data-sink binding.

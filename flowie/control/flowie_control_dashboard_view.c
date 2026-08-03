@@ -16,8 +16,10 @@ enum {
   FLOWIE_CONTROL_DASHBOARD_PAGE_SIZE = 25,
   FLOWIE_CONTROL_DASHBOARD_ROOT_GROUP_LIMIT = 100,
   FLOWIE_CONTROL_DASHBOARD_GROUP_SELECTOR_LIMIT = FLOWIE_CONTROL_PAGE_MAX,
+  FLOWIE_CONTROL_DASHBOARD_ROLE_SELECTOR_LIMIT = FLOWIE_CONTROL_PAGE_MAX,
   FLOWIE_CONTROL_DASHBOARD_GROUP_LABEL_MAX =
       TURBO_FLOW_SECURITY_ID_MAX + FLOWIE_CONTROL_GROUP_MAX_DEPTH * 2 + 2,
+  FLOWIE_CONTROL_DASHBOARD_RESOURCE_LABEL_MAX = TURBO_FLOW_SECURITY_PATTERN_MAX * 3 + 1,
   FLOWIE_CONTROL_DASHBOARD_RESOURCE_PATH_MAX = 1024,
   FLOWIE_CONTROL_DASHBOARD_TEMPLATE_MAX = 512 * 1024,
   FLOWIE_CONTROL_DASHBOARD_ASSET_MAX = 1024 * 1024
@@ -30,6 +32,7 @@ static const char FLOWIE_CONTROL_DASHBOARD_ERROR_TEMPLATE[] = "templates/dashboa
 static const char FLOWIE_CONTROL_DASHBOARD_LOGIN_TEMPLATE[] = "templates/login.mustache";
 static const char FLOWIE_CONTROL_DASHBOARD_PASSWORD_TEMPLATE[] = "templates/password.mustache";
 static const char FLOWIE_CONTROL_DASHBOARD_CSS_ASSET[] = "assets/control.css";
+static const char FLOWIE_CONTROL_DASHBOARD_JS_ASSET[] = "assets/control.js";
 static const char FLOWIE_CONTROL_DASHBOARD_HTMX_ASSET[] = "assets/htmx-2.0.9.min.js";
 
 typedef enum flowie_control_dashboard_cursor_kind_e {
@@ -85,6 +88,7 @@ struct flowie_control_dashboard_view_s {
   MUSTACHE_TEMPLATE *login_template;
   MUSTACHE_TEMPLATE *password_template;
   turbo_fs_buf_t css;
+  turbo_fs_buf_t javascript;
   turbo_fs_buf_t htmx;
 };
 
@@ -431,7 +435,8 @@ flowie_control_dashboard_group_label(const flowie_control_group_view_t *group,
 }
 
 static int flowie_control_dashboard_add_group_option(json_value_t *array,
-                                                     const flowie_control_group_view_t *group) {
+                                                     const flowie_control_group_view_t *group,
+                                                     size_t row_index, int has_children) {
   char label[FLOWIE_CONTROL_DASHBOARD_GROUP_LABEL_MAX];
   json_value_t *item;
   int rc;
@@ -440,8 +445,23 @@ static int flowie_control_dashboard_add_group_option(json_value_t *array,
   if (rc != TURBO_OK) return rc;
   item = turbo_json_create_object();
   if (!item) return TURBO_ENOMEM;
-  rc = flowie_control_dashboard_json_string(item, "group_id", group->group_id);
+  rc = flowie_control_dashboard_json_u64(item, "row_index", row_index);
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_json_string(item, "group_id", group->group_id);
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_json_string(item, "parent_group_id", group->parent_group_id);
   if (rc == TURBO_OK) rc = flowie_control_dashboard_json_string(item, "tree_label", label);
+  if (rc == TURBO_OK) rc = flowie_control_dashboard_json_u64(item, "depth", group->depth);
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_json_bool(item, "enabled", group->enabled);
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_json_bool(item, "is_root", group->depth == 0u);
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_json_bool(
+        item, "member_allowed", group->enabled && group->depth > 0u);
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_json_bool(
+        item, "delete_candidate", group->enabled && group->depth > 0u && !has_children);
   if (rc == TURBO_OK)
     rc = flowie_control_dashboard_json_bool(item, "add_disabled",
                                             group->depth == 0u || !group->enabled);
@@ -455,6 +475,15 @@ static int flowie_control_dashboard_add_group_option(json_value_t *array,
   return rc;
 }
 
+static int flowie_control_dashboard_group_has_children(
+    const flowie_control_group_view_t *groups, size_t count, const char *group_id) {
+  if (!groups || !group_id) return 0;
+  for (size_t index = 0u; index < count; ++index) {
+    if (strcmp(groups[index].parent_group_id, group_id) == 0) return 1;
+  }
+  return 0;
+}
+
 static int flowie_control_dashboard_add_group_children(json_value_t *array,
                                                        const flowie_control_group_view_t *groups,
                                                        size_t count, const char *parent_group_id,
@@ -465,7 +494,9 @@ static int flowie_control_dashboard_add_group_children(json_value_t *array,
   for (size_t index = 0u; rc == TURBO_OK && index < count; ++index) {
     if (groups[index].depth != depth || strcmp(groups[index].parent_group_id, parent_group_id) != 0)
       continue;
-    rc = flowie_control_dashboard_add_group_option(array, &groups[index]);
+    rc = flowie_control_dashboard_add_group_option(
+        array, &groups[index], *emitted + 1u,
+        flowie_control_dashboard_group_has_children(groups, count, groups[index].group_id));
     if (rc == TURBO_OK) ++*emitted;
     if (rc == TURBO_OK && depth < FLOWIE_CONTROL_GROUP_MAX_DEPTH)
       rc = flowie_control_dashboard_add_group_children(array, groups, count, groups[index].group_id,
@@ -494,7 +525,9 @@ flowie_control_dashboard_add_group_options(json_value_t *model,
   if (rc == TURBO_OK && has_more) rc = TURBO_ENOSPC;
   for (size_t index = 0u; rc == TURBO_OK && index < count; ++index) {
     if (groups[index].depth != 0u || groups[index].parent_group_id[0]) continue;
-    rc = flowie_control_dashboard_add_group_option(array, &groups[index]);
+    rc = flowie_control_dashboard_add_group_option(
+        array, &groups[index], emitted + 1u,
+        flowie_control_dashboard_group_has_children(groups, count, groups[index].group_id));
     if (rc == TURBO_OK) ++emitted;
     if (rc == TURBO_OK)
       rc = flowie_control_dashboard_add_group_children(array, groups, count, groups[index].group_id,
@@ -503,6 +536,76 @@ flowie_control_dashboard_add_group_options(json_value_t *model,
   if (rc == TURBO_OK && emitted != count) rc = TURBO_EPROTO;
   if (rc == TURBO_OK) rc = flowie_control_dashboard_json_take(model, "group_options", array);
   else flowie_control_dashboard_json_free(array);
+  return rc;
+}
+
+static int
+flowie_control_dashboard_add_user_options(json_value_t *model,
+                                          flowie_control_management_service_t *service,
+                                          const flowie_control_management_caller_t *caller) {
+  flowie_control_user_view_t users[FLOWIE_CONTROL_PAGE_MAX];
+  json_value_t *array = turbo_json_create_array();
+  size_t count = 0u;
+  int has_more = 0;
+  int rc;
+  if (!array) return TURBO_ENOMEM;
+  for (size_t index = 0u; index < FLOWIE_CONTROL_PAGE_MAX; ++index)
+    users[index] = (flowie_control_user_view_t)FLOWIE_CONTROL_USER_VIEW_INIT;
+  rc = flowie_control_management_user_list(service, caller, NULL, users, FLOWIE_CONTROL_PAGE_MAX,
+                                           &count, &has_more);
+  for (size_t index = 0u; rc == TURBO_OK && index < count; ++index) {
+    json_value_t *item = turbo_json_create_object();
+    if (!item) {
+      rc = TURBO_ENOMEM;
+      break;
+    }
+    rc = flowie_control_dashboard_json_string(item, "principal_id", users[index].principal_id);
+    if (rc == TURBO_OK)
+      rc =
+          flowie_control_dashboard_json_string(item, "principal_type", users[index].principal_type);
+    if (rc == TURBO_OK)
+      rc = flowie_control_dashboard_json_bool(item, "enabled", users[index].enabled);
+    if (rc == TURBO_OK) rc = flowie_control_dashboard_json_array_take(array, item);
+    else flowie_control_dashboard_json_free(item);
+  }
+  if (rc == TURBO_OK) rc = flowie_control_dashboard_json_take(model, "user_options", array);
+  else flowie_control_dashboard_json_free(array);
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_json_bool(model, "user_options_truncated", has_more);
+  return rc;
+}
+
+static int
+flowie_control_dashboard_add_role_options(json_value_t *model,
+                                          flowie_control_management_service_t *service,
+                                          const flowie_control_management_caller_t *caller) {
+  flowie_control_role_view_t roles[FLOWIE_CONTROL_DASHBOARD_ROLE_SELECTOR_LIMIT];
+  json_value_t *array = turbo_json_create_array();
+  size_t count = 0u;
+  int has_more = 0;
+  int rc;
+  if (!array) return TURBO_ENOMEM;
+  for (size_t index = 0u; index < FLOWIE_CONTROL_DASHBOARD_ROLE_SELECTOR_LIMIT; ++index)
+    roles[index] = (flowie_control_role_view_t)FLOWIE_CONTROL_ROLE_VIEW_INIT;
+  rc = flowie_control_management_role_list(service, caller, NULL, roles,
+                                           FLOWIE_CONTROL_DASHBOARD_ROLE_SELECTOR_LIMIT, &count,
+                                           &has_more);
+  for (size_t index = 0u; rc == TURBO_OK && index < count; ++index) {
+    json_value_t *item = turbo_json_create_object();
+    if (!item) {
+      rc = TURBO_ENOMEM;
+      break;
+    }
+    rc = flowie_control_dashboard_json_string(item, "role_id", roles[index].role_id);
+    if (rc == TURBO_OK)
+      rc = flowie_control_dashboard_json_bool(item, "enabled", roles[index].enabled);
+    if (rc == TURBO_OK) rc = flowie_control_dashboard_json_array_take(array, item);
+    else flowie_control_dashboard_json_free(item);
+  }
+  if (rc == TURBO_OK) rc = flowie_control_dashboard_json_take(model, "role_options", array);
+  else flowie_control_dashboard_json_free(array);
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_json_bool(model, "role_options_truncated", has_more);
   return rc;
 }
 
@@ -549,50 +652,6 @@ static int flowie_control_dashboard_add_users(json_value_t *model,
   return rc;
 }
 
-static int flowie_control_dashboard_add_groups(json_value_t *model,
-                                               flowie_control_management_service_t *service,
-                                               const flowie_control_management_caller_t *caller,
-                                               const flowie_control_dashboard_page_t *page) {
-  flowie_control_group_view_t groups[FLOWIE_CONTROL_DASHBOARD_PAGE_SIZE];
-  json_value_t *array = turbo_json_create_array();
-  size_t count = 0u;
-  int has_more = 0;
-  int rc;
-  if (!array) return TURBO_ENOMEM;
-  for (size_t index = 0u; index < FLOWIE_CONTROL_DASHBOARD_PAGE_SIZE; ++index)
-    groups[index] = (flowie_control_group_view_t)FLOWIE_CONTROL_GROUP_VIEW_INIT;
-  rc = flowie_control_management_group_list(
-      service, caller, page->groups_after[0] ? page->groups_after : NULL, groups,
-      FLOWIE_CONTROL_DASHBOARD_PAGE_SIZE, &count, &has_more);
-  for (size_t index = 0u; rc == TURBO_OK && index < count; ++index) {
-    json_value_t *item = turbo_json_create_object();
-    if (!item) {
-      rc = TURBO_ENOMEM;
-      break;
-    }
-    rc = flowie_control_dashboard_json_u64(item, "row_index", index + 1u);
-    if (rc == TURBO_OK)
-      rc = flowie_control_dashboard_json_string(item, "group_id", groups[index].group_id);
-    if (rc == TURBO_OK)
-      rc = flowie_control_dashboard_json_string(item, "parent_group_id",
-                                                groups[index].parent_group_id);
-    if (rc == TURBO_OK) rc = flowie_control_dashboard_json_u64(item, "depth", groups[index].depth);
-    if (rc == TURBO_OK)
-      rc = flowie_control_dashboard_json_bool(item, "enabled", groups[index].enabled);
-    if (rc == TURBO_OK)
-      rc = flowie_control_dashboard_json_bool(item, "is_root", groups[index].depth == 0u);
-    if (rc == TURBO_OK) rc = flowie_control_dashboard_json_array_take(array, item);
-    else flowie_control_dashboard_json_free(item);
-  }
-  if (rc == TURBO_OK) rc = flowie_control_dashboard_json_take(model, "groups", array);
-  else flowie_control_dashboard_json_free(array);
-  if (rc == TURBO_OK)
-    rc = flowie_control_dashboard_add_pager(
-        model, "groups_pager", page, FLOWIE_CONTROL_DASHBOARD_GROUPS_CURSOR, count,
-        has_more && count > 0u, count > 0u ? groups[count - 1u].group_id : NULL, 0u);
-  return rc;
-}
-
 static int flowie_control_dashboard_add_roles(json_value_t *model,
                                               flowie_control_management_service_t *service,
                                               const flowie_control_management_caller_t *caller,
@@ -633,6 +692,28 @@ static int flowie_control_dashboard_add_roles(json_value_t *model,
   return rc;
 }
 
+static int flowie_control_dashboard_resource_label(
+    const char *pattern, char label[FLOWIE_CONTROL_DASHBOARD_RESOURCE_LABEL_MAX]) {
+  size_t offset = 0u;
+  size_t pattern_size;
+  if (!pattern || !label) return TURBO_EINVAL;
+  pattern_size = strnlen(pattern, TURBO_FLOW_SECURITY_PATTERN_MAX + 1u);
+  if (pattern_size == 0u || pattern_size > TURBO_FLOW_SECURITY_PATTERN_MAX) return TURBO_EPROTO;
+  for (size_t index = 0u; index < pattern_size; ++index) {
+    if (pattern[index] == '/') {
+      if (offset + 3u >= FLOWIE_CONTROL_DASHBOARD_RESOURCE_LABEL_MAX) return TURBO_ENOSPC;
+      label[offset++] = ' ';
+      label[offset++] = '/';
+      label[offset++] = ' ';
+    } else {
+      if (offset + 1u >= FLOWIE_CONTROL_DASHBOARD_RESOURCE_LABEL_MAX) return TURBO_ENOSPC;
+      label[offset++] = pattern[index];
+    }
+  }
+  label[offset] = '\0';
+  return TURBO_OK;
+}
+
 static int flowie_control_dashboard_add_rules(json_value_t *model,
                                               flowie_control_management_service_t *service,
                                               const flowie_control_management_caller_t *caller,
@@ -650,16 +731,28 @@ static int flowie_control_dashboard_add_rules(json_value_t *model,
       FLOWIE_CONTROL_DASHBOARD_PAGE_SIZE, &count, &has_more);
   if (rc == TURBO_ENOENT) rc = TURBO_OK;
   for (size_t index = 0u; rc == TURBO_OK && index < count; ++index) {
+    turbo_flow_security_rule_t parsed = TURBO_FLOW_SECURITY_RULE_INIT;
+    char resource_label[FLOWIE_CONTROL_DASHBOARD_RESOURCE_LABEL_MAX];
     json_value_t *item = turbo_json_create_object();
     if (!item) {
       rc = TURBO_ENOMEM;
       break;
     }
-    rc = flowie_control_dashboard_json_u64(item, "row_index", index + 1u);
+    rc = turbo_flow_security_rule_parse_line(rules[index].rule_line,
+                                             strlen(rules[index].rule_line), &parsed);
+    if (rc == TURBO_OK) rc = flowie_control_dashboard_resource_label(parsed.pattern, resource_label);
+    if (rc == TURBO_OK)
+      rc = flowie_control_dashboard_json_u64(item, "row_index", index + 1u);
     if (rc == TURBO_OK)
       rc = flowie_control_dashboard_json_u64(item, "ordinal", rules[index].ordinal);
     if (rc == TURBO_OK)
       rc = flowie_control_dashboard_json_string(item, "rule_line", rules[index].rule_line);
+    if (rc == TURBO_OK)
+      rc = flowie_control_dashboard_json_string(item, "resource_label", resource_label);
+    if (rc == TURBO_OK)
+      rc = flowie_control_dashboard_json_bool(
+          item, "is_mqtt_topic",
+          parsed.resource_type == TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC);
     if (rc == TURBO_OK)
       rc = flowie_control_dashboard_json_u64(item, "revision", rules[index].revision);
     if (rc == TURBO_OK) rc = flowie_control_dashboard_json_array_take(array, item);
@@ -746,6 +839,9 @@ int flowie_control_dashboard_view_create(const char *resource_directory,
     rc = flowie_control_dashboard_read(resource_directory, FLOWIE_CONTROL_DASHBOARD_CSS_ASSET,
                                        FLOWIE_CONTROL_DASHBOARD_ASSET_MAX, &view->css);
   if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_read(resource_directory, FLOWIE_CONTROL_DASHBOARD_JS_ASSET,
+                                       FLOWIE_CONTROL_DASHBOARD_ASSET_MAX, &view->javascript);
+  if (rc == TURBO_OK)
     rc = flowie_control_dashboard_read(resource_directory, FLOWIE_CONTROL_DASHBOARD_HTMX_ASSET,
                                        FLOWIE_CONTROL_DASHBOARD_ASSET_MAX, &view->htmx);
   if (rc != TURBO_OK) {
@@ -764,6 +860,7 @@ void flowie_control_dashboard_view_destroy(flowie_control_dashboard_view_t *view
   mustache_release(view->content_template);
   mustache_release(view->shell_template);
   turbo_fs_buf_free(&view->htmx);
+  turbo_fs_buf_free(&view->javascript);
   turbo_fs_buf_free(&view->css);
   memset(view, 0, sizeof(*view));
   free(view);
@@ -930,6 +1027,9 @@ int flowie_control_dashboard_view_render_content(
   if (rc == TURBO_OK)
     rc = flowie_control_dashboard_json_bool(model, "can_policy_admin", can_policy_admin);
   if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_json_bool(model, "can_manage_access",
+                                            can_user_admin || can_security_admin);
+  if (rc == TURBO_OK)
     rc = flowie_control_dashboard_json_bool(model, "can_audit_read", can_audit_read);
   if (rc == TURBO_OK)
     rc = flowie_control_dashboard_json_bool(model, "can_select_root", can_select_root);
@@ -967,12 +1067,15 @@ int flowie_control_dashboard_view_render_content(
   if (rc == TURBO_OK) rc = flowie_control_dashboard_json_string(model, "roles_path", roles_url);
   if (rc == TURBO_OK) rc = flowie_control_dashboard_json_string(model, "acls_path", acls_url);
   if (rc == TURBO_OK) rc = flowie_control_dashboard_json_string(model, "audit_path", audit_url);
-  if (rc == TURBO_OK && (show_users || show_groups) && can_user_admin)
+  if (rc == TURBO_OK && (show_groups || show_acls || (show_users && can_user_admin)))
     rc = flowie_control_dashboard_add_group_options(model, service, caller);
+  if (rc == TURBO_OK &&
+      (show_acls || ((show_groups || show_roles) && (can_user_admin || can_security_admin))))
+    rc = flowie_control_dashboard_add_user_options(model, service, caller);
+  if (rc == TURBO_OK && ((show_users && can_security_admin) || show_acls))
+    rc = flowie_control_dashboard_add_role_options(model, service, caller);
   if (rc == TURBO_OK && show_users)
     rc = flowie_control_dashboard_add_users(model, service, caller, page);
-  if (rc == TURBO_OK && show_groups)
-    rc = flowie_control_dashboard_add_groups(model, service, caller, page);
   if (rc == TURBO_OK && show_roles)
     rc = flowie_control_dashboard_add_roles(model, service, caller, page);
   if (rc == TURBO_OK && show_acls)
@@ -1020,6 +1123,9 @@ int flowie_control_dashboard_view_asset(const flowie_control_dashboard_view_t *v
   switch (asset) {
   case FLOWIE_CONTROL_DASHBOARD_ASSET_CSS:
     resource = &view->css;
+    break;
+  case FLOWIE_CONTROL_DASHBOARD_ASSET_JS:
+    resource = &view->javascript;
     break;
   case FLOWIE_CONTROL_DASHBOARD_ASSET_HTMX:
     resource = &view->htmx;
