@@ -76,7 +76,8 @@ target_link_libraries(flowie_control_startup
                       PRIVATE TurboUtils::Core TurboUtils::Parser)
 
   set(FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR
-      "${CMAKE_CURRENT_BINARY_DIR}/dashboard-resources")
+      "${CMAKE_CURRENT_BINARY_DIR}/dashboard-resources"
+      CACHE PATH "Runtime directory for generated Flowie Control dashboard resources")
   file(MAKE_DIRECTORY
        "${FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR}/assets"
        "${FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR}/templates")

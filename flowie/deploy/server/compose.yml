@@ -1,0 +1,49 @@
+services:
+  flowie-server:
+    build:
+      context: ../../..
+      dockerfile: flowie/deploy/server/Dockerfile
+      additional_contexts:
+        turbo_utils: ../../../../turbo-utils
+        turbo_net: ../../../../turbonet
+        turbo_http: ../../../../../TurboHTTP
+        rules_forge: ../../../../../rulesforge
+      args:
+        SOURCE_REVISION: ${FLOWIE_SOURCE_REVISION:-local}
+    image: ${FLOWIE_SERVER_IMAGE:-flowie-server:local}
+    container_name: flowie-server
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    env_file:
+      - path: ${FLOWIE_SECRET_ENV_FILE:?set FLOWIE_SECRET_ENV_FILE}
+        required: true
+    environment:
+      FLOWIE_PROFILE: ${FLOWIE_PROFILE:-flowie}
+      FLOWIE_HEALTH_HOST: ${FLOWIE_HEALTH_HOST:-127.0.0.1}
+      FLOWIE_HEALTH_PORT: ${FLOWIE_HEALTH_PORT:-18883}
+      FLOWIE_STORAGE_BACKEND_PLUGINS: ${FLOWIE_STORAGE_BACKEND_PLUGINS:-}
+    volumes:
+      - flowie-data:/var/lib/flowie
+      - ${FLOWIE_CONFIG_FILE:?set FLOWIE_CONFIG_FILE}:/etc/flowie/flowie.yml:ro
+      - ${FLOWIE_GRAPH_FILE:?set FLOWIE_GRAPH_FILE}:/etc/flowie/flowie.flow:ro
+      - ${FLOWIE_CONTROL_CONFIG_FILE:?set FLOWIE_CONTROL_CONFIG_FILE}:/etc/flowie/control.yml:ro
+      - ${FLOWIE_CERT_DIR:?set FLOWIE_CERT_DIR}:/etc/flowie/certs:ro
+      - ${FLOWIE_PLUGIN_DIR:-./plugins}:/opt/flowie/plugins:ro
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /run:size=16m,mode=0755
+
+volumes:
+  flowie-data:
+    name: ${FLOWIE_DATA_VOLUME:-flowie-data}

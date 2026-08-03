@@ -35,6 +35,8 @@ install(DIRECTORY "${PROJECT_SOURCE_DIR}/flowie/deploy/nginx/"
         DESTINATION share/turboflow/deploy/flowie-nginx)
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/flowie/deploy/haproxy/"
         DESTINATION share/turboflow/deploy/flowie-haproxy)
+install(DIRECTORY "${PROJECT_SOURCE_DIR}/flowie/deploy/server/"
+        DESTINATION share/turboflow/deploy/flowie-server)
 install(FILES "${PROJECT_SOURCE_DIR}/flowie/deploy/provision-root.ps1"
         DESTINATION share/turboflow/deploy)
 install(

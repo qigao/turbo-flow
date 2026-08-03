@@ -67,6 +67,9 @@ set_tests_properties(
   test_fmq_deployment test_fmq_management_protocol test_fmq_management
   PROPERTIES LABELS "fmq-release;fmq-chaos")
 
+# Network lifecycle regressions must fail diagnostically instead of retaining a CTest worker forever.
+set_tests_properties(test_fmq PROPERTIES TIMEOUT 90)
+
 target_sources(test_fmq PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/fmq_config_validate.c)
 target_include_directories(
   test_fmq PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src
