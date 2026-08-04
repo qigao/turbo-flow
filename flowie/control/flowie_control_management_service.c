@@ -36,25 +36,25 @@ flowie_control_management_permissions(const flowie_control_effective_roles_view_
 }
 
 int flowie_control_management_identity_resolve_principal(
-    const flowie_control_repository_t *repository, const char *root_group_id,
+    const flowie_control_repository_t *repository, const char *domain_id,
     const char *principal_id, flowie_control_management_caller_t *caller_out) {
   flowie_control_user_view_t user = FLOWIE_CONTROL_USER_VIEW_INIT;
   flowie_control_effective_roles_view_t roles = FLOWIE_CONTROL_EFFECTIVE_ROLES_VIEW_INIT;
   flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   int rc;
   if (caller_out && caller_out->size >= sizeof(*caller_out)) *caller_out = caller;
-  if (flowie_control_repository_validate(repository) != TURBO_OK || !root_group_id ||
+  if (flowie_control_repository_validate(repository) != TURBO_OK || !domain_id ||
       !principal_id || !caller_out || caller_out->size < sizeof(*caller_out))
     return TURBO_EINVAL;
-  rc = repository->user->get(repository->ctx, root_group_id, principal_id, &user);
+  rc = repository->user->get(repository->ctx, domain_id, principal_id, &user);
   if (rc != TURBO_OK || !user.enabled) return TURBO_EPERM;
-  rc = repository->role->effective(repository->ctx, root_group_id, principal_id, &roles);
+  rc = repository->role->effective(repository->ctx, domain_id, principal_id, &roles);
   if (rc != TURBO_OK) return rc == TURBO_EINVAL ? rc : TURBO_EPERM;
   caller.permissions = flowie_control_management_permissions(&roles);
-  if (strcmp(root_group_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP) != 0)
+  if (strcmp(domain_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN) != 0)
     caller.permissions &= ~FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN;
   if (caller.permissions == 0u) return TURBO_EPERM;
-  caller.root_group_id = root_group_id;
+  caller.domain_id = domain_id;
   caller.actor = principal_id;
   *caller_out = caller;
   return TURBO_OK;
@@ -69,10 +69,10 @@ static int flowie_control_management_caller_valid(const flowie_control_managemen
                    FLOWIE_CONTROL_MANAGEMENT_PASSWORD_CHANGE;
   size_t root_size;
   size_t actor_size;
-  if (!caller || caller->size < sizeof(*caller) || !caller->root_group_id || !caller->actor ||
+  if (!caller || caller->size < sizeof(*caller) || !caller->domain_id || !caller->actor ||
       (caller->permissions & ~known) != 0u)
     return 0;
-  root_size = strnlen(caller->root_group_id, TURBO_FLOW_SECURITY_ID_MAX + 1u);
+  root_size = strnlen(caller->domain_id, TURBO_FLOW_SECURITY_ID_MAX + 1u);
   actor_size = strnlen(caller->actor, FLOWIE_CONTROL_ACTOR_MAX + 1u);
   if (root_size == 0u || root_size > TURBO_FLOW_SECURITY_ID_MAX || actor_size == 0u ||
       actor_size > FLOWIE_CONTROL_ACTOR_MAX)
@@ -93,27 +93,27 @@ int flowie_control_management_authorize(flowie_control_management_service_t *ser
 
 int flowie_control_management_scope_caller(
     flowie_control_management_service_t *service,
-    const flowie_control_management_caller_t *caller, const char *target_root_group_id,
+    const flowie_control_management_caller_t *caller, const char *target_domain_id,
     flowie_control_management_caller_t *scoped_out) {
-  flowie_control_root_group_view_t root = FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT;
+  flowie_control_domain_view_t root = FLOWIE_CONTROL_DOMAIN_VIEW_INIT;
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   int rc;
   if (scoped_out && scoped_out->size >= sizeof(*scoped_out)) *scoped_out = scoped;
-  if (!target_root_group_id ||
-      !flowie_control_text_valid(target_root_group_id, TURBO_FLOW_SECURITY_ID_MAX) || !scoped_out ||
+  if (!target_domain_id ||
+      !flowie_control_text_valid(target_domain_id, TURBO_FLOW_SECURITY_ID_MAX) || !scoped_out ||
       scoped_out->size < sizeof(*scoped_out))
     return TURBO_EINVAL;
   rc = flowie_control_management_authorize(service, caller, 0u);
   if (rc != TURBO_OK) return rc;
-  if (strcmp(target_root_group_id, caller->root_group_id) != 0 &&
+  if (strcmp(target_domain_id, caller->domain_id) != 0 &&
       (((caller->permissions & FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN) == 0u) ||
-       strcmp(caller->root_group_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP) != 0))
+       strcmp(caller->domain_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN) != 0))
     return TURBO_EPERM;
-  rc = service->repository.user->root_group_get(service->repository.ctx, target_root_group_id,
+  rc = service->repository.user->domain_get(service->repository.ctx, target_domain_id,
                                                  &root);
   if (rc != TURBO_OK) return rc;
   scoped = *caller;
-  scoped.root_group_id = target_root_group_id;
+  scoped.domain_id = target_domain_id;
   *scoped_out = scoped;
   return TURBO_OK;
 }
@@ -126,47 +126,47 @@ static int flowie_control_management_read(flowie_control_management_service_t *s
 
 static int flowie_control_management_write(flowie_control_management_service_t *service,
                                            const flowie_control_management_caller_t *caller,
-                                           uint32_t permission, const char *root_group_id,
+                                           uint32_t permission, const char *domain_id,
                                            const char *actor) {
   int rc = flowie_control_management_read(service, caller, permission);
   if (rc != TURBO_OK) return rc;
-  if (!root_group_id || !actor || strcmp(actor, caller->actor) != 0 ||
-      (strcmp(root_group_id, caller->root_group_id) != 0 &&
+  if (!domain_id || !actor || strcmp(actor, caller->actor) != 0 ||
+      (strcmp(domain_id, caller->domain_id) != 0 &&
        ((caller->permissions & FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN) == 0u ||
-        strcmp(caller->root_group_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP) != 0)))
+        strcmp(caller->domain_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN) != 0)))
     return TURBO_EPERM;
   return TURBO_OK;
 }
 
-int flowie_control_management_root_group_create(
+int flowie_control_management_domain_create(
     flowie_control_management_service_t *service, const flowie_control_management_caller_t *caller,
-    const flowie_control_root_group_create_command_t *command,
+    const flowie_control_domain_create_command_t *command,
     flowie_control_command_result_t *result) {
   int rc;
-  if (!command || command->size < sizeof(*command) || !command->root_group_id || !command->actor ||
-      strcmp(command->root_group_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP) == 0)
+  if (!command || command->size < sizeof(*command) || !command->domain_id || !command->actor ||
+      strcmp(command->domain_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN) == 0)
     return TURBO_EINVAL;
   rc = flowie_control_management_authorize(service, caller,
                                            FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN);
   if (rc != TURBO_OK ||
-      strcmp(caller->root_group_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP) != 0 ||
+      strcmp(caller->domain_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN) != 0 ||
       strcmp(command->actor, caller->actor) != 0)
     return TURBO_EPERM;
-  return service->repository.user->root_group_create(service->repository.ctx, command, result);
+  return service->repository.user->domain_create(service->repository.ctx, command, result);
 }
 
-int flowie_control_management_root_group_list(
+int flowie_control_management_domain_list(
     flowie_control_management_service_t *service,
-    const flowie_control_management_caller_t *caller, const char *after_root_group_id,
-    flowie_control_root_group_view_t *items, size_t capacity, size_t *count_out,
+    const flowie_control_management_caller_t *caller, const char *after_domain_id,
+    flowie_control_domain_view_t *items, size_t capacity, size_t *count_out,
     int *has_more_out) {
   int rc = flowie_control_management_authorize(service, caller,
                                                FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN);
   if (rc != TURBO_OK) return rc;
-  if (strcmp(caller->root_group_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP) != 0)
+  if (strcmp(caller->domain_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN) != 0)
     return TURBO_EPERM;
-  return service->repository.user->root_group_list(
-      service->repository.ctx, after_root_group_id, items, capacity, count_out, has_more_out);
+  return service->repository.user->domain_list(
+      service->repository.ctx, after_domain_id, items, capacity, count_out, has_more_out);
 }
 
 int flowie_control_management_password_change(
@@ -209,7 +209,7 @@ int flowie_control_management_password_change(
                  credential_suffix);
   (void)snprintf(complete_request, sizeof(complete_request), "%s%s", command->request_id,
                  complete_suffix);
-  credential.root_group_id = caller->root_group_id;
+  credential.domain_id = caller->domain_id;
   credential.principal_id = caller->actor;
   credential.actor = caller->actor;
   credential.request_id = credential_request;
@@ -221,7 +221,7 @@ int flowie_control_management_password_change(
   if (rc == TURBO_EALREADY) {
     credential_replayed = 1;
     rc = service->repository.auth->credential_verify(
-        service->repository.ctx, caller->root_group_id, caller->actor, command->new_password,
+        service->repository.ctx, caller->domain_id, caller->actor, command->new_password,
         command->new_password_size, &verified);
   }
   if (rc != TURBO_OK) goto done;
@@ -235,7 +235,7 @@ int flowie_control_management_password_change(
   }
   rc = service->repository.audit->revision(service->repository.ctx, &current);
   if (rc != TURBO_OK) goto done;
-  complete.root_group_id = caller->root_group_id;
+  complete.domain_id = caller->domain_id;
   complete.principal_id = caller->actor;
   complete.role_id = FLOWIE_CONTROL_MANAGEMENT_ROLE_PASSWORD_CHANGE_REQUIRED;
   complete.actor = caller->actor;
@@ -260,7 +260,7 @@ int flowie_control_management_password_set(
   if (result && result->size >= sizeof(*result))
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!service || !caller || !command || command->size < sizeof(*command) || !result ||
-      result->size < sizeof(*result) || !command->root_group_id || !command->principal_id ||
+      result->size < sizeof(*result) || !command->domain_id || !command->principal_id ||
       !command->new_password || command->new_password_size < FLOWIE_CONTROL_HUMAN_PASSWORD_MIN_SIZE ||
       command->new_password_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX ||
       (command->mode != FLOWIE_CONTROL_PASSWORD_CREATE &&
@@ -268,9 +268,9 @@ int flowie_control_management_password_set(
       !command->actor || !command->request_id || command->occurred_at == 0u)
     return TURBO_EINVAL;
   rc = flowie_control_management_write(service, caller, FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN,
-                                       command->root_group_id, command->actor);
+                                       command->domain_id, command->actor);
   if (rc != TURBO_OK) return rc;
-  credential.root_group_id = command->root_group_id;
+  credential.domain_id = command->domain_id;
   credential.principal_id = command->principal_id;
   credential.actor = command->actor;
   credential.request_id = command->request_id;
@@ -336,7 +336,7 @@ int flowie_control_management_system_status(flowie_control_management_service_t 
   if (rc == TURBO_OK)
     rc = service->repository.audit->revision(service->repository.ctx, &status.store_revision);
   if (rc == TURBO_OK)
-    rc = service->repository.policy->status(service->repository.ctx, caller->root_group_id,
+    rc = service->repository.policy->status(service->repository.ctx, caller->domain_id,
                                             &status.policy);
   if (rc == TURBO_OK) *out = status;
   return rc;
@@ -347,7 +347,7 @@ int flowie_control_management_user_get(flowie_control_management_service_t *serv
                                        const char *principal_id, flowie_control_user_view_t *out) {
   int rc = flowie_control_management_read(service, caller, FLOWIE_CONTROL_MANAGEMENT_VIEWER);
   return rc == TURBO_OK ? service->repository.user->get(service->repository.ctx,
-                                                        caller->root_group_id, principal_id, out)
+                                                        caller->domain_id, principal_id, out)
                         : rc;
 }
 
@@ -358,7 +358,7 @@ int flowie_control_management_user_list(flowie_control_management_service_t *ser
                                         size_t *count_out, int *has_more_out) {
   int rc = flowie_control_management_read(service, caller, FLOWIE_CONTROL_MANAGEMENT_VIEWER);
   return rc == TURBO_OK ? service->repository.user->list(service->repository.ctx,
-                                                         caller->root_group_id, after_principal_id,
+                                                         caller->domain_id, after_principal_id,
                                                          items, capacity, count_out, has_more_out)
                         : rc;
 }
@@ -369,7 +369,7 @@ int flowie_control_management_user_list(flowie_control_management_service_t *ser
            flowie_control_command_result_t *result) {                                              \
     int rc;                                                                                        \
     if (!command || command->size < sizeof(*command)) return TURBO_EINVAL;                         \
-    rc = flowie_control_management_write(service, caller, permission, command->root_group_id,      \
+    rc = flowie_control_management_write(service, caller, permission, command->domain_id,      \
                                          command->actor);                                          \
     return rc == TURBO_OK ? service->repository.capability->operation(service->repository.ctx,     \
                                                                       command, result)             \
@@ -388,9 +388,9 @@ FLOWIE_CONTROL_MANAGEMENT_WRITE(flowie_control_management_credential_revoke,
 FLOWIE_CONTROL_MANAGEMENT_WRITE(flowie_control_management_group_create,
                                 FLOWIE_CONTROL_MANAGEMENT_USER_ADMIN,
                                 flowie_control_group_create_command_t, group, create)
-FLOWIE_CONTROL_MANAGEMENT_WRITE(flowie_control_management_group_disable,
+FLOWIE_CONTROL_MANAGEMENT_WRITE(flowie_control_management_group_delete,
                                 FLOWIE_CONTROL_MANAGEMENT_USER_ADMIN,
-                                flowie_control_group_disable_command_t, group, disable)
+                                flowie_control_group_delete_command_t, group, delete_group)
 FLOWIE_CONTROL_MANAGEMENT_WRITE(flowie_control_management_membership_add,
                                 FLOWIE_CONTROL_MANAGEMENT_USER_ADMIN,
                                 flowie_control_membership_add_command_t, group, membership_add)
@@ -426,7 +426,7 @@ static int flowie_control_management_credential_issue(
   int rc;
   if (!command || command->size < sizeof(*command)) return TURBO_EINVAL;
   rc = flowie_control_management_write(service, caller, FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN,
-                                       command->root_group_id, command->actor);
+                                       command->domain_id, command->actor);
   if (rc != TURBO_OK) return rc;
   return rotate
              ? service->repository.credential->rotate(service->repository.ctx, command, result)
@@ -454,7 +454,7 @@ int flowie_control_management_group_list(flowie_control_management_service_t *se
                                          size_t *count_out, int *has_more_out) {
   int rc = flowie_control_management_read(service, caller, FLOWIE_CONTROL_MANAGEMENT_VIEWER);
   return rc == TURBO_OK ? service->repository.group->list(service->repository.ctx,
-                                                          caller->root_group_id, after_group_id,
+                                                          caller->domain_id, after_group_id,
                                                           items, capacity, count_out, has_more_out)
                         : rc;
 }
@@ -465,7 +465,7 @@ int flowie_control_management_effective_groups(flowie_control_management_service
                                                flowie_control_effective_groups_view_t *out) {
   int rc = flowie_control_management_read(service, caller, FLOWIE_CONTROL_MANAGEMENT_VIEWER);
   return rc == TURBO_OK ? service->repository.group->effective(
-                              service->repository.ctx, caller->root_group_id, principal_id, out)
+                              service->repository.ctx, caller->domain_id, principal_id, out)
                         : rc;
 }
 
@@ -476,7 +476,7 @@ int flowie_control_management_role_list(flowie_control_management_service_t *ser
                                         size_t *count_out, int *has_more_out) {
   int rc = flowie_control_management_read(service, caller, FLOWIE_CONTROL_MANAGEMENT_VIEWER);
   return rc == TURBO_OK ? service->repository.role->list(service->repository.ctx,
-                                                         caller->root_group_id, after_role_id,
+                                                         caller->domain_id, after_role_id,
                                                          items, capacity, count_out, has_more_out)
                         : rc;
 }
@@ -487,7 +487,7 @@ int flowie_control_management_effective_roles(flowie_control_management_service_
                                               flowie_control_effective_roles_view_t *out) {
   int rc = flowie_control_management_read(service, caller, FLOWIE_CONTROL_MANAGEMENT_VIEWER);
   return rc == TURBO_OK ? service->repository.role->effective(
-                              service->repository.ctx, caller->root_group_id, principal_id, out)
+                              service->repository.ctx, caller->domain_id, principal_id, out)
                         : rc;
 }
 
@@ -499,7 +499,7 @@ int flowie_control_management_policy_rule_list(flowie_control_management_service
                                                int *has_more_out) {
   int rc = flowie_control_management_read(service, caller, FLOWIE_CONTROL_MANAGEMENT_VIEWER);
   return rc == TURBO_OK
-             ? service->repository.policy->rule_list(service->repository.ctx, caller->root_group_id,
+             ? service->repository.policy->rule_list(service->repository.ctx, caller->domain_id,
                                                      after_ordinal, has_after, items, capacity,
                                                      count_out, has_more_out)
              : rc;
@@ -510,7 +510,7 @@ int flowie_control_management_policy_validate(flowie_control_management_service_
                                               flowie_control_policy_validation_t *out) {
   int rc = flowie_control_management_read(service, caller, FLOWIE_CONTROL_MANAGEMENT_VIEWER);
   return rc == TURBO_OK ? service->repository.policy->validate(service->repository.ctx,
-                                                               caller->root_group_id, out)
+                                                               caller->domain_id, out)
                         : rc;
 }
 
@@ -519,7 +519,7 @@ int flowie_control_management_policy_status(flowie_control_management_service_t 
                                             flowie_control_policy_status_t *out) {
   int rc = flowie_control_management_read(service, caller, FLOWIE_CONTROL_MANAGEMENT_VIEWER);
   return rc == TURBO_OK ? service->repository.policy->status(service->repository.ctx,
-                                                             caller->root_group_id, out)
+                                                             caller->domain_id, out)
                         : rc;
 }
 
@@ -530,7 +530,7 @@ int flowie_control_management_policy_publish(flowie_control_management_service_t
   int rc;
   if (!command || command->size < sizeof(*command)) return TURBO_EINVAL;
   rc = flowie_control_management_write(service, caller, FLOWIE_CONTROL_MANAGEMENT_POLICY_ADMIN,
-                                       command->root_group_id, command->actor);
+                                       command->domain_id, command->actor);
   return rc == TURBO_OK
              ? service->repository.policy->publish(service->repository.ctx, command, result)
              : rc;
@@ -544,7 +544,7 @@ int flowie_control_management_audit_list(flowie_control_management_service_t *se
   int rc =
       flowie_control_management_read(service, caller, FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN);
   return rc == TURBO_OK ? service->repository.audit->list(service->repository.ctx,
-                                                          caller->root_group_id, after_revision,
+                                                          caller->domain_id, after_revision,
                                                           items, capacity, count_out, has_more_out)
                         : rc;
 }

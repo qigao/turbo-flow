@@ -112,7 +112,7 @@ static int http_auth_run_response_case_delayed(const uint8_t *response, size_t r
   task.status = TURBO_EBUSY;
   if (flow_mtls_test_server_start_delayed(&server, response, response_size, response_delay_ms) != 0)
     return TURBO_EIO;
-  if (snprintf(url, sizeof(url), "https://localhost:%u/v3/authenticate", server.port) <= 0) {
+  if (snprintf(url, sizeof(url), "https://localhost:%u/v4/authenticate", server.port) <= 0) {
     flow_mtls_test_server_join(&server);
     return TURBO_EIO;
   }
@@ -366,7 +366,7 @@ spec("turbo_flow_http") {
   it("creates only an HTTPS authentication-service provider and keeps ACL local") {
     static const char yaml[] =
         "version: 1\nchannels:\n  mqtt.auth-service:\n    kind: auth_provider\n    config:\n"
-        "      backend: https\n      url: https://auth.internal.example/v3/authenticate\n"
+        "      backend: https\n      url: https://auth.internal.example/v4/authenticate\n"
         "      method: password\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
         "      timeout_ms: 2500\n      max_secret_size: 2048\nadapters: {}\n";
     http_auth_secret_fixture_t fixture = {0};
@@ -407,8 +407,8 @@ spec("turbo_flow_http") {
 
   it("MQTT-SEC-003 authenticates through verified mTLS HTTPS and validates principal v3") {
     static const char body[] = "{\"version\":3,\"authenticated\":true,\"principal\":{"
-                               "\"id\":\"device-a\",\"type\":\"device\",\"root_group\":\"root-a\","
-                               "\"auth_method\":\"password\",\"scope\":\"root_group\","
+                               "\"id\":\"device-a\",\"type\":\"device\",\"domain\":\"root-a\","
+                               "\"auth_method\":\"password\",\"scope\":\"domain\","
                                "\"roles\":[\"mqtt-user\"],\"groups\":[\"root-a\"],\"expires_at\":0,"
                                "\"policy_version\":7}}";
     char response[1024];
@@ -442,7 +442,7 @@ spec("turbo_flow_http") {
                  0);
     written = snprintf(yaml, sizeof(yaml),
                        "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
-                       "      backend: https\n      url: https://localhost:%u/v3/authenticate\n"
+                       "      backend: https\n      url: https://localhost:%u/v4/authenticate\n"
                        "      method: password\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
                        "      timeout_ms: 5000\n      tls:\n        ca_file: %s\n"
                        "        client_cert_file: %s\n        client_key_file: %s\nadapters: {}\n",
@@ -576,8 +576,8 @@ spec("turbo_flow_http") {
     static const char wrong_version[] = "{\"version\":1,\"authenticated\":true,\"principal\":{}}";
     static const char wrong_principal[] =
         "{\"version\":3,\"authenticated\":true,\"principal\":{"
-        "\"id\":\"device-a\",\"type\":\"device\",\"root_group\":\"root-a\","
-        "\"auth_method\":\"certificate\",\"scope\":\"root_group\",\"roles\":[],"
+        "\"id\":\"device-a\",\"type\":\"device\",\"domain\":\"root-a\","
+        "\"auth_method\":\"certificate\",\"scope\":\"domain\",\"roles\":[],"
         "\"groups\":[\"root-a\"],\"expires_at\":0,\"policy_version\":7}}";
     turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
     check_int_eq(flow_http_auth_decode_response(wrong_version, sizeof(wrong_version) - 1u,
@@ -593,17 +593,17 @@ spec("turbo_flow_http") {
   it("rejects plaintext HTTP and database fields in authentication provider config") {
     static const char insecure_yaml[] =
         "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
-        "      backend: https\n      url: http://auth.internal/v3/authenticate\n"
+        "      backend: https\n      url: http://auth.internal/v4/authenticate\n"
         "      method: password\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
         "adapters: {}\n";
     static const char database_yaml[] =
         "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
-        "      backend: https\n      url: https://auth.internal/v3/authenticate\n"
+        "      backend: https\n      url: https://auth.internal/v4/authenticate\n"
         "      method: password\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
         "      database: 3\nadapters: {}\n";
     static const char invalid_tls_yaml[] =
         "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
-        "      backend: https\n      url: https://auth.internal/v3/authenticate\n"
+        "      backend: https\n      url: https://auth.internal/v4/authenticate\n"
         "      method: password\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
         "      tls:\n        client_cert_file: client.pem\n"
         "        client_key_file: false\nadapters: {}\n";
@@ -649,7 +649,7 @@ spec("turbo_flow_http") {
   it("creates only an HTTPS ACL bundle provider and requires a coroutine to fetch") {
     static const char yaml[] =
         "version: 1\nchannels:\n  acl:\n    kind: acl_provider\n    config:\n"
-        "      backend: https\n      url: https://auth.internal/v3/acl\n"
+        "      backend: https\n      url: https://auth.internal/v4/acl\n"
         "      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
         "      timeout_ms: 2500\n      max_response_size: 4194304\n"
         "      max_rules: 128\nadapters: {}\n";
@@ -711,7 +711,7 @@ spec("turbo_flow_http") {
                  0);
     written = snprintf(yaml, sizeof(yaml),
                        "version: 1\nchannels:\n  acl:\n    kind: acl_provider\n    config:\n"
-                       "      backend: https\n      url: https://localhost:%u/v3/acl\n"
+                       "      backend: https\n      url: https://localhost:%u/v4/acl\n"
                        "      service_token_ref: env://FLOWIE_AUTH_TOKEN\n      timeout_ms: 5000\n"
                        "      max_response_size: 4194304\n      max_rules: 128\n      tls:\n"
                        "        ca_file: %s\n        client_cert_file: %s\n"
@@ -782,9 +782,9 @@ spec("turbo_flow_http") {
   it("strictly decodes the versioned authentication-service response") {
     static const char success[] =
         "{\"version\":3,\"authenticated\":true,\"principal\":{"
-        "\"id\":\"device-a\",\"type\":\"device\",\"root_group\":\"root-a\","
-        "\"auth_method\":\"password\",\"scope\":\"root_group\","
-        "\"roles\":[\"mqtt-user\"],\"groups\":[\"root-a\"],\"expires_at\":0,"
+        "\"id\":\"device-a\",\"type\":\"device\",\"domain\":\"root-a\","
+        "\"auth_method\":\"password\",\"scope\":\"domain\","
+        "\"roles\":[\"mqtt-user\"],\"groups\":[\"backend\"],\"expires_at\":0,"
         "\"policy_version\":7}}";
     static const char extra_field[] =
         "{\"version\":3,\"authenticated\":true,\"debug\":true,\"principal\":{}}";
@@ -793,11 +793,16 @@ spec("turbo_flow_http") {
         "\"id\":\"device-a\",\"type\":\"device\",\"tenant\":\"tenant-a\","
         "\"auth_method\":\"password\",\"scope\":\"tenant\",\"roles\":[],\"groups\":[],"
         "\"expires_at\":0,\"policy_version\":7}}";
-    static const char missing_root_group[] =
+    static const char no_groups[] =
         "{\"version\":3,\"authenticated\":true,\"principal\":{"
-        "\"id\":\"device-a\",\"type\":\"device\",\"root_group\":\"root-a\","
-        "\"auth_method\":\"password\",\"scope\":\"root_group\",\"roles\":[],"
-        "\"groups\":[\"backend\"],\"expires_at\":0,\"policy_version\":7}}";
+        "\"id\":\"device-a\",\"type\":\"device\",\"domain\":\"root-a\","
+        "\"auth_method\":\"password\",\"scope\":\"domain\",\"roles\":[],"
+        "\"groups\":[],\"expires_at\":0,\"policy_version\":7}}";
+    static const char missing_domain[] =
+        "{\"version\":3,\"authenticated\":true,\"principal\":{"
+        "\"id\":\"device-a\",\"type\":\"device\",\"domain\":\"\","
+        "\"auth_method\":\"password\",\"scope\":\"domain\",\"roles\":[],"
+        "\"groups\":[],\"expires_at\":0,\"policy_version\":7}}";
     turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
 
     check_int_eq(
@@ -805,8 +810,9 @@ spec("turbo_flow_http") {
         TURBO_OK);
     check_str_eq(principal.principal_id, "device-a");
     check_str_eq(principal.principal_type, "device");
-    check_str_eq(principal.root_group_id, "root-a");
+    check_str_eq(principal.domain_id, "root-a");
     check_str_eq(principal.roles[0], "mqtt-user");
+    check_str_eq(principal.groups[0], "backend");
     check_uint_eq(principal.policy_version, 7u);
     principal = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
     check_int_eq(flow_http_auth_decode_response(success, sizeof(success) - 1u, "token", &principal),
@@ -817,7 +823,10 @@ spec("turbo_flow_http") {
     check_int_eq(
         flow_http_auth_decode_response(legacy, sizeof(legacy) - 1u, "password", &principal),
         TURBO_EPROTO);
-    check_int_eq(flow_http_auth_decode_response(missing_root_group, sizeof(missing_root_group) - 1u,
+    check_int_eq(flow_http_auth_decode_response(no_groups, sizeof(no_groups) - 1u, "password",
+                                                &principal),
+                 TURBO_OK);
+    check_int_eq(flow_http_auth_decode_response(missing_domain, sizeof(missing_domain) - 1u,
                                                 "password", &principal),
                  TURBO_EPROTO);
   }

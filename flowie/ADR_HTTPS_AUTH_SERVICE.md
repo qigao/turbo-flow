@@ -16,18 +16,18 @@ MQTT client
     |
     v
 flowie_server
-    |-- POST /v3/authenticate --> flowie-control --> local Auth Repository
+    |-- POST /v4/authenticate --> flowie-control --> local Auth Repository
     |                                             或 third-party HTTPS Auth
     |
-    `-- GET  /v3/acl ---------> flowie-control --> local ACL Repository
+    `-- GET  /v4/acl ---------> flowie-control --> local ACL Repository
               |
               `-> Broker 编译并原子替换本地不可变 ACL snapshot
 
 third-party management system
     `-- HTTPS login session --> flowie-control --> user/credential/role/group/ACL commands
 
-one-time operator bootstrap
-    `-- YAML identity + env password --> flowie-control --> same repository commands/audit
+empty-store operator bootstrap
+    `-- fixed system/admin credential --> flowie-control --> same repository commands/audit
 ```
 
 - Broker 只依赖 HTTPS Auth/ACL 契约，不接收数据库连接信息。
@@ -36,13 +36,13 @@ one-time operator bootstrap
 - ACL 只有本地 Repository 这一事实源；不存在第三方 ACL 热路径和 Broker 数据库 ACL provider。
 - SQLite 与 PostgreSQL 是 `flowie-control` Repository 的可替换持久化实现，不改变 Broker 契约。
 - FlowStore、session store 和 Graph data adapter 只承载 MQTT/业务状态，不能作为 Auth/ACL 事实源。
-- 空 Repository 只允许显式的一次性 bootstrap 建立首位 `security_admin`；之后全部写入走管理 RPC。
+- 空 Repository 自动以固定公开初始凭据建立首位 `system_admin`；首次登录只允许改密，之后全部写入走管理 RPC。
 
 TLS 身份边界也固定：
 
 - Dashboard 和面向用户的管理 RPC 使用登录 session，浏览器不请求客户端证书。
 - Broker 默认使用服务端 TLS 校验加 `service_bindings[].token_ref`；每个 token 只绑定一个
-  `(service_id, root_group)`，最多 32 个 binding。
+  `(service_id, domain)`，最多 32 个 binding。
 - 高安全部署可把 `listener.tls.client_auth` 设为 `required`，并在 binding 上增加
   `peer_certificate_sha256`。由于当前 CoroNet listener 不支持“可选请求客户端证书”，该模式必须关闭
   Dashboard，不能与浏览器入口混用；它不改变 bearer token 仍为必需条件。
@@ -85,7 +85,7 @@ OIDC、LDAP/AD、RADIUS、Redis、PostgreSQL 或专用身份库；这些 SDK、�
 Flowie 或 `flowie-control` 的领域核心。
 
 第三方服务只返回 version 2 类型化断言：issuer、稳定 subject、subject type、认证方式、强度、时效、
-账户状态、revision 和有界 external groups。`flowie-control` 随后把稳定 subject 映射为当前 Root Group
+账户状态、revision 和有界 external groups。`flowie-control` 随后把稳定 subject 映射为当前 Domain
 中的本地 principal，并再次从本地 Repository 检查 user enabled、Role、Group 和 ACL policy version。
 external groups 只是映射输入，不自动获得本地 ACL 权限。请求中的
 `peer_certificate_sha256` 是 Flowie MQTT listener 已验证的客户端证书指纹；未启用 MQTT mTLS 时该字段
@@ -112,12 +112,12 @@ closed，不回退到本地密码。本地 Auth 失败时也不会尝试第三�
 ACL 规则由 `flowie-control` 的管理命令定义。规则在 Repository 中按稳定 ordinal 逐行存储，但发布是
 一个事务命令：
 
-1. 校验完整 draft、主体引用、Root Group、规则语法、MQTT filter 和容量；
+1. 校验完整 draft、主体引用、Domain、规则语法、MQTT filter 和容量；
 2. 冻结完整规范规则行集合；
 3. 推进单调 `policy_version`；
 4. 写入审计并一次提交。
 
-Broker 不读取这些表。`GET /v3/acl` 从 Repository 的只读事务快照返回一个完整 bundle：
+Broker 不读取这些表。`GET /v4/acl` 从 Repository 的只读事务快照返回一个完整 bundle：
 
 ```json
 {
@@ -130,14 +130,14 @@ Broker 不读取这些表。`GET /v3/acl` 从 Repository 的只读事务快照�
 }
 ```
 
-Root Group 不由 query/header 提供，而是由 Bearer token 命中的 `service_bindings` 唯一解析。可选
+Domain 不由 query/header 提供，而是由 Bearer token 命中的 `service_bindings` 唯一解析。可选
 证书指纹只是该 binding 的第二因子。可选 `X-TurboFlow-Policy-Version` 请求一个精确正版本；
 不存在时返回 404，不静默返回其他版本。
 
 Broker 使用公共严格 parser 把完整 bundle 编译为两层不可变索引：
 
 - 通用结构索引：
-  `root_group -> action -> resource_type -> subject_kind/subject -> pattern`；
+  `domain -> action -> resource_type -> subject_kind/subject -> pattern`；
 - MQTT adapter 索引：按 topic filter 编译的 trie/有界候选结构。
 
 数据库中“逐行存储”不等于 Broker “逐条查询”。Broker 每次只接受完整 bundle，并原子替换 snapshot；
@@ -153,7 +153,7 @@ channels:
     kind: auth_provider
     config:
       backend: https
-      url: https://flowie-control.internal/v3/authenticate
+      url: https://flowie-control.internal/v4/authenticate
       method: password
       service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
       tls:
@@ -163,7 +163,7 @@ channels:
     kind: acl_provider
     config:
       backend: https
-      url: https://flowie-control.internal/v3/acl
+      url: https://flowie-control.internal/v4/acl
       service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
       max_response_size: 16777216
       max_rules: 4096
@@ -174,9 +174,9 @@ channels:
 URL 必须使用 HTTPS 并包含明确 path；userinfo、query、fragment、redirect 和自动 retry 被拒绝。service
 token 和加密私钥密码只能通过 key provider reference 注入。
 
-认证使用 `POST /v3/authenticate` version 3 JSON。请求精确包含 `version`、`identity`、`method`、
+认证使用 `POST /v4/authenticate` version 3 JSON。请求精确包含 `version`、`identity`、`method`、
 `secret_base64`、`protocol`、`remote_address` 和 `peer_certificate_sha256`。ACL 使用
-`GET /v3/acl` version 3 JSON。两者可以共享
+`GET /v4/acl` version 3 JSON。两者可以共享
 同一作用域服务凭证和轮换机制，但服务端分别执行最小权限检查；ACL 接口不接收客户端 credential，Auth 接口
 不返回 ACL rule body。
 
@@ -207,7 +207,7 @@ auth:
   service_bindings:
     - service_id: broker-main
       token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
-      root_group: root-a
+      domain: root-a
 ```
 
 上面即为本地 Auth 配置。`workers` 范围为 `1..64`，`queue_capacity` 为 `1..4096`，
@@ -229,7 +229,7 @@ auth:
       client_key_file: C:/certs/flowie-control-client-key.pem
 ```
 
-外层 token 保护 Broker 到 `flowie-control` 的 `/v3/authenticate` 与 `/v3/acl`；内层 token 保护
+外层 token 保护 Broker 到 `flowie-control` 的 `/v4/authenticate` 与 `/v4/acl`；内层 token 保护
 `flowie-control` 到第三方 assertion 服务。它们信任方向和权限不同，不能复用。
 
 ## Repository 与数据库
@@ -252,11 +252,11 @@ service 和 Dashboard 只依赖该 port，不执行或解释具体数据库 SQL�
 或 Secure/HttpOnly/SameSite cookie 调用受领域 RBAC 保护的 JSON-RPC 操作
 用户、credential、Role、Group 和 ACL；这样 revision、引用校验、发布原子性与审计不会被绕过。
 
-空 Repository 的首次启动是唯一例外入口，但不绕过领域边界：YAML 只声明 Root Group、principal 和
-principal type，密码只接受 `env://`；`flowie-control` 使用 Repository command/audit 依次创建 Root
-Group、用户、credential、`security_admin` Role 和 assignment。固定 request ID/revision 允许中断后
-使用相同配置幂等重放；密码或目标身份发生漂移、Repository 含无关状态时 fail closed。首次验证成功后
-必须删除 bootstrap block 与 DotEnv 密码；后续管理登录使用 Repository 中的账户 credential。
+空 Repository 的首次启动是唯一例外入口，但不绕过领域边界：身份固定为 `system/admin`，公开初始密码
+固定为 `Flowie@ChangeMe!`。`flowie-control` 使用 Repository command/audit 依次创建 Domain、用户、
+credential、`system_admin`/`password_change_required` Role 和 assignment。固定 request ID/revision 允许
+中断后幂等重放；Repository 含无关状态时 fail closed。首次认证期间有效权限只包含改密；改密事务移除
+限制角色并撤销当前 session，之后 `system_admin` 才成为有效权限。
 
 ## 并发、缓存与失效
 
@@ -277,8 +277,8 @@ Group、用户、credential、`security_admin` Role 和 assignment。固定 requ
   高安全部署可显式要求客户端证书，但作用域 bearer 仍是必需身份因子。
 - token、credential、Base64 request 和临时 KDF 数据在生命周期结束前清零。
 - timeout、header、body、rule count、group/role 数量和 cache/in-flight 容量都有硬上限。
-- 不提供默认账号、默认密码、匿名 fallback 或手工改库 bootstrap；显式一次性 bootstrap 密码只来自
-  `env://`，成功后必须从 YAML/DotEnv 运维输入中移除。
+- 固定默认账号和公开初始密码只允许进入首次改密流程；不提供匿名 fallback、可配置默认身份或手工改库
+  bootstrap。完成 bootstrap 的 Repository 重启时只验证结构，绝不恢复默认密码。
 
 ## 兼容性与迁移
 
@@ -290,6 +290,8 @@ Group、用户、credential、`security_admin` Role 和 assignment。固定 requ
   assertion v1、旧 tenant、旧 bundle 版本和 YAML 内嵌 rules 均不解析。
 - 恢复 `flowie-control` 本地 Auth 为正式可选 verifier；配置 `external_https` 时仍严格替换本地路径，
   没有失败 fallback。
+- 配置 version 1 不再接受旧 `bootstrap` block；相同 `system/admin` 数据可重放校验，其他旧 bootstrap
+  身份必须在升级前通过旧版本管理 RPC 迁移，否则新版本 fail closed。
 
 迁移时先部署支持 Auth v3 和 assertion v2 的 `flowie-control`/第三方 bridge，再以同一维护窗口升级
 Broker，并在控制面 Repository 发布完整 v3 bundle。协议不自动降级；回滚必须成组恢复旧
@@ -300,10 +302,10 @@ Broker/control/bridge 进程和旧数据库备份。当前 Broker 不会重新�
 已验证：
 
 - 本地与第三方 Auth 配置选择；
-- SQLite 一次性管理员 bootstrap、幂等重放、密码漂移/非空库拒绝及启动顺序；
+- SQLite 固定管理员 bootstrap、首次改密权限门、幂等重放、不恢复默认密码、非空库拒绝及启动顺序；
 - PostgreSQL `verify-full` 一次性管理员 bootstrap live gate；
 - Repository bundle 当前/精确版本读取及不存在版本；
-- 真实 TLS listener 上不带客户端证书的 `/v3/authenticate`、`/v3/acl` 成功，错误 token 403、
+- 真实 TLS listener 上不带客户端证书的 `/v4/authenticate`、`/v4/acl` 成功，错误 token 403、
   版本不存在 404；另有证书第二因子匹配/拒绝单元测试；
 - Broker HTTPS-only 产品构建、secure config check，以及注入 MQTT matcher 后真实 MQTT 5/TLS
   Auth/ACL allow/deny smoke gate；

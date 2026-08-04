@@ -14,7 +14,7 @@ enum {
   FLOWIE_SERVER_APPLICATION_ERROR_MESSAGE_MAX = 512u
 };
 
-#define FLOWIE_SERVER_DEFAULT_PROTOCOL_STORE_PATH "flowie-protocol.sqlite3"
+#define FLOWIE_SERVER_DEFAULT_PROTOCOL_STORE_PATH ":memory:"
 
 typedef struct flowie_server_application_config_s {
   size_t size;

@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define FLOWIE_CONTROL_AUTH_HTTP_PATH "/v3/authenticate"
+#define FLOWIE_CONTROL_AUTH_HTTP_PATH "/v4/authenticate"
 #define FLOWIE_CONTROL_AUTH_HTTP_PROTOCOL_VERSION 3u
 #define FLOWIE_CONTROL_AUTH_HTTP_DEFAULT_REQUEST_BODY_MAX 8192u
 #define FLOWIE_CONTROL_AUTH_HTTP_ABSOLUTE_REQUEST_BODY_MAX 16384u
@@ -67,7 +67,7 @@ int flowie_control_auth_iris_endpoint_create(
 void flowie_control_auth_iris_endpoint_destroy(flowie_control_auth_iris_endpoint_t *endpoint);
 
 /**
- * Bind exactly POST /v3/authenticate on one Iris app. The caller keeps ownership
+ * Bind exactly POST /v4/authenticate on one Iris app. The caller keeps ownership
  * of both objects and must stop the app before destroying the endpoint.
  */
 int flowie_control_auth_iris_endpoint_register(flowie_control_auth_iris_endpoint_t *endpoint,

@@ -24,9 +24,9 @@ static turbo_flow_security_principal_t flowie_cluster_peer_connect_bind_test_pri
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   (void)strcpy(principal.principal_id, "writer");
   (void)strcpy(principal.principal_type, "device");
-  (void)strcpy(principal.root_group_id, "root-a");
+  (void)strcpy(principal.domain_id, "root-a");
   (void)strcpy(principal.auth_method, "token");
-  principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+  principal.scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
   principal.role_count = 1u;
   (void)strcpy(principal.roles[0], "writer");
   principal.group_count = 2u;
@@ -110,7 +110,7 @@ spec("flowie cluster peer CONNECT_BIND codec") {
                  TURBO_OK);
     check_true(decoded.security_enabled);
     check_str_eq(decoded.principal.principal_id, "writer");
-    check_str_eq(decoded.principal.root_group_id, "root-a");
+    check_str_eq(decoded.principal.domain_id, "root-a");
     check_uint_eq(decoded.principal.policy_version, 7u);
     check_int_eq(decoded.connect.version, FLOWIE_MQTT_VERSION_5);
     check_uint_eq(decoded.connect.keep_alive, 45u);

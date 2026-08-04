@@ -16,16 +16,16 @@ static uint64_t flowie_control_auth_contract_clock(void *ctx) {
   return ctx ? *(const uint64_t *)ctx : 0u;
 }
 
-static int flowie_control_auth_contract_policy_version(void *ctx, const char *root_group_id,
+static int flowie_control_auth_contract_policy_version(void *ctx, const char *domain_id,
                                                        uint64_t *policy_version_out) {
   const flowie_control_repository_t *repository = (const flowie_control_repository_t *)ctx;
   flowie_control_policy_status_t status = FLOWIE_CONTROL_POLICY_STATUS_INIT;
   int rc;
   if (policy_version_out) *policy_version_out = 0u;
-  if (flowie_control_repository_validate(repository) != TURBO_OK || !root_group_id ||
+  if (flowie_control_repository_validate(repository) != TURBO_OK || !domain_id ||
       !policy_version_out)
     return TURBO_EINVAL;
-  rc = repository->policy->status(repository->ctx, root_group_id, &status);
+  rc = repository->policy->status(repository->ctx, domain_id, &status);
   if (rc == TURBO_OK) *policy_version_out = status.policy_version;
   return rc;
 }
@@ -48,7 +48,7 @@ flowie_control_auth_contract_group_present(const turbo_flow_security_principal_t
 static void
 flowie_control_auth_repository_contract_run(const flowie_control_repository_t *repository) {
   static const char policy_rule[] = "allow|role|publisher|root-a|connect|generic|exact|client";
-  flowie_control_root_group_create_command_t root = FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+  flowie_control_domain_create_command_t root = FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
   flowie_control_user_create_command_t user = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
   flowie_control_group_create_command_t group = FLOWIE_CONTROL_GROUP_CREATE_COMMAND_INIT;
   flowie_control_membership_add_command_t membership = FLOWIE_CONTROL_MEMBERSHIP_ADD_COMMAND_INIT;
@@ -75,13 +75,13 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
   check_not_null(repository);
   check_int_eq(flowie_control_repository_validate(repository), TURBO_OK);
 
-  root.root_group_id = "root-a";
+  root.domain_id = "root-a";
   root.actor = "bootstrap";
   root.request_id = "auth-contract-root";
   root.occurred_at = 1000u;
-  check_int_eq(repository->user->root_group_create(repository->ctx, &root, &result), TURBO_OK);
+  check_int_eq(repository->user->domain_create(repository->ctx, &root, &result), TURBO_OK);
 
-  user.root_group_id = "root-a";
+  user.domain_id = "root-a";
   user.principal_id = "device-a";
   user.principal_type = "device";
   user.actor = "bootstrap";
@@ -90,16 +90,16 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
   user.occurred_at = 1001u;
   check_int_eq(repository->user->create(repository->ctx, &user, &result), TURBO_OK);
 
-  group.root_group_id = "root-a";
+  group.domain_id = "root-a";
   group.group_id = "engineering";
-  group.parent_group_id = "root-a";
+  group.parent_group_id = NULL;
   group.actor = "bootstrap";
   group.request_id = "auth-contract-group";
   group.expected_revision = 2u;
   group.occurred_at = 1002u;
   check_int_eq(repository->group->create(repository->ctx, &group, &result), TURBO_OK);
 
-  membership.root_group_id = "root-a";
+  membership.domain_id = "root-a";
   membership.principal_id = "device-a";
   membership.group_id = "engineering";
   membership.actor = "bootstrap";
@@ -108,7 +108,7 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
   membership.occurred_at = 1003u;
   check_int_eq(repository->group->membership_add(repository->ctx, &membership, &result), TURBO_OK);
 
-  role.root_group_id = "root-a";
+  role.domain_id = "root-a";
   role.role_id = "publisher";
   role.actor = "bootstrap";
   role.request_id = "auth-contract-role";
@@ -116,7 +116,7 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
   role.occurred_at = 1004u;
   check_int_eq(repository->role->create(repository->ctx, &role, &result), TURBO_OK);
 
-  assignment.root_group_id = "root-a";
+  assignment.domain_id = "root-a";
   assignment.principal_id = "device-a";
   assignment.role_id = "publisher";
   assignment.actor = "bootstrap";
@@ -125,7 +125,7 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
   assignment.occurred_at = 1005u;
   check_int_eq(repository->role->assignment_add(repository->ctx, &assignment, &result), TURBO_OK);
 
-  issue.root_group_id = "root-a";
+  issue.domain_id = "root-a";
   issue.principal_id = "device-a";
   issue.actor = "bootstrap";
   issue.request_id = "auth-contract-credential";
@@ -133,7 +133,7 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
   issue.occurred_at = 1006u;
   check_int_eq(repository->credential->generate(repository->ctx, &issue, &credential), TURBO_OK);
 
-  rule.root_group_id = "root-a";
+  rule.domain_id = "root-a";
   rule.ordinal = 10u;
   rule.rule_line = policy_rule;
   rule.actor = "bootstrap";
@@ -142,7 +142,7 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
   rule.occurred_at = 1007u;
   check_int_eq(repository->policy->rule_put(repository->ctx, &rule, &result), TURBO_OK);
 
-  publish.root_group_id = "root-a";
+  publish.domain_id = "root-a";
   publish.actor = "bootstrap";
   publish.request_id = "auth-contract-publish";
   publish.expected_revision = 8u;
@@ -162,19 +162,18 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
   request.caller = &caller;
   request.identity = "device-a";
   request.method = "password";
-  request.secret = credential.secret;
-  request.secret_size = credential.secret_size;
+  request.secret = (const uint8_t *)credential.token;
+  request.secret_size = credential.token_size;
   request.protocol = "mqtt";
   request.remote_address = "192.0.2.10:1883";
   check_int_eq(flowie_control_auth_service_authenticate(service, &request, &principal, &cache_hit),
                TURBO_OK);
   check_false(cache_hit);
-  check_str_eq(principal.root_group_id, "root-a");
+  check_str_eq(principal.domain_id, "root-a");
   check_str_eq(principal.principal_id, "device-a");
   check_str_eq(principal.auth_method, "password");
   check_uint_eq(principal.policy_version, 1u);
   check_uint_eq(principal.expires_at, 10300u);
-  check_true(flowie_control_auth_contract_group_present(&principal, "root-a"));
   check_true(flowie_control_auth_contract_group_present(&principal, "engineering"));
   check_uint_eq(principal.role_count, 1u);
   check_str_eq(principal.roles[0], "publisher");
@@ -183,7 +182,7 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
                TURBO_OK);
   check_true(cache_hit);
 
-  revoke.root_group_id = "root-a";
+  revoke.domain_id = "root-a";
   revoke.principal_id = "device-a";
   revoke.actor = "bootstrap";
   revoke.request_id = "auth-contract-revoke";

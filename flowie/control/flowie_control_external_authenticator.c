@@ -89,7 +89,7 @@ static int external_subject_map(void *ctx,
   size_t subject_size;
   if (result_out && result_out->size >= sizeof(*result_out)) *result_out = result;
   if (!mapper || !request || request->size < sizeof(*request) ||
-      !external_auth_text_valid(request->root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+      !external_auth_text_valid(request->domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !external_auth_text_valid(request->presented_identity, TURBO_FLOW_SECURITY_ID_MAX) ||
       !request->assertion || request->assertion->size < sizeof(*request->assertion) ||
       !result_out || result_out->size < sizeof(*result_out))

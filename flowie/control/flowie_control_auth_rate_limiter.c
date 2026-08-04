@@ -65,7 +65,7 @@ static void flowie_control_auth_rate_hash_text(crypto_blake2b_ctx *hash, const c
 
 static void flowie_control_auth_rate_digest(
     const flowie_control_auth_rate_limiter_t *limiter, uint8_t scope,
-    const char *peer_certificate_sha256, const char *root_group_id, const char *principal_id,
+    const char *peer_certificate_sha256, const char *domain_id, const char *principal_id,
     uint8_t digest[FLOWIE_CONTROL_AUTH_RATE_DIGEST_SIZE]) {
   crypto_blake2b_ctx hash;
   crypto_blake2b_keyed_init(&hash, FLOWIE_CONTROL_AUTH_RATE_DIGEST_SIZE, limiter->digest_key,
@@ -75,7 +75,7 @@ static void flowie_control_auth_rate_digest(
   crypto_blake2b_update(&hash, &scope, sizeof(scope));
   flowie_control_auth_rate_hash_text(&hash, peer_certificate_sha256);
   if (scope == FLOWIE_CONTROL_AUTH_RATE_IDENTITY_SCOPE) {
-    flowie_control_auth_rate_hash_text(&hash, root_group_id);
+    flowie_control_auth_rate_hash_text(&hash, domain_id);
     flowie_control_auth_rate_hash_text(&hash, principal_id);
   }
   crypto_blake2b_final(&hash, digest);
@@ -221,7 +221,7 @@ void flowie_control_auth_rate_limiter_destroy(flowie_control_auth_rate_limiter_t
 
 int flowie_control_auth_rate_limiter_acquire(flowie_control_auth_rate_limiter_t *limiter,
                                              const char *peer_certificate_sha256,
-                                             const char *root_group_id,
+                                             const char *domain_id,
                                              const char *principal_id) {
   uint8_t caller_digest[FLOWIE_CONTROL_AUTH_RATE_DIGEST_SIZE] = {0};
   uint8_t identity_digest[FLOWIE_CONTROL_AUTH_RATE_DIGEST_SIZE] = {0};
@@ -232,14 +232,14 @@ int flowie_control_auth_rate_limiter_acquire(flowie_control_auth_rate_limiter_t 
   if (!limiter ||
       !flowie_control_auth_rate_text_valid(peer_certificate_sha256,
                                            FLOWIE_CONTROL_AUTH_CERT_SHA256_TEXT_SIZE) ||
-      !flowie_control_auth_rate_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+      !flowie_control_auth_rate_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_auth_rate_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX))
     return TURBO_EINVAL;
   flowie_control_auth_rate_digest(limiter, FLOWIE_CONTROL_AUTH_RATE_CALLER_SCOPE,
-                                  peer_certificate_sha256, root_group_id, principal_id,
+                                  peer_certificate_sha256, domain_id, principal_id,
                                   caller_digest);
   flowie_control_auth_rate_digest(limiter, FLOWIE_CONTROL_AUTH_RATE_IDENTITY_SCOPE,
-                                  peer_certificate_sha256, root_group_id, principal_id,
+                                  peer_certificate_sha256, domain_id, principal_id,
                                   identity_digest);
   now_ms = limiter->clock_ms(limiter->clock_ctx);
   turbo_mutex_lock(&limiter->lock);
@@ -275,16 +275,16 @@ int flowie_control_auth_rate_limiter_acquire(flowie_control_auth_rate_limiter_t 
 
 void flowie_control_auth_rate_limiter_record_success(
     flowie_control_auth_rate_limiter_t *limiter, const char *peer_certificate_sha256,
-    const char *root_group_id, const char *principal_id) {
+    const char *domain_id, const char *principal_id) {
   uint8_t digest[FLOWIE_CONTROL_AUTH_RATE_DIGEST_SIZE] = {0};
   if (!limiter ||
       !flowie_control_auth_rate_text_valid(peer_certificate_sha256,
                                            FLOWIE_CONTROL_AUTH_CERT_SHA256_TEXT_SIZE) ||
-      !flowie_control_auth_rate_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+      !flowie_control_auth_rate_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_auth_rate_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX))
     return;
   flowie_control_auth_rate_digest(limiter, FLOWIE_CONTROL_AUTH_RATE_IDENTITY_SCOPE,
-                                  peer_certificate_sha256, root_group_id, principal_id, digest);
+                                  peer_certificate_sha256, domain_id, principal_id, digest);
   turbo_mutex_lock(&limiter->lock);
   flowie_control_auth_rate_remove_locked(&limiter->identities, digest);
   turbo_mutex_unlock(&limiter->lock);

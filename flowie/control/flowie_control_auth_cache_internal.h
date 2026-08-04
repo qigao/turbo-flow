@@ -51,7 +51,7 @@ void flowie_control_auth_cache_destroy(flowie_control_auth_cache_t *cache);
  */
 int flowie_control_auth_cache_verify(flowie_control_auth_cache_t *cache,
                                      const flowie_control_repository_t *repository,
-                                     const char *root_group_id, const char *principal_id,
+                                     const char *domain_id, const char *principal_id,
                                      const void *secret, size_t secret_size,
                                      flowie_control_credential_verify_result_t *result,
                                      int *cache_hit_out);

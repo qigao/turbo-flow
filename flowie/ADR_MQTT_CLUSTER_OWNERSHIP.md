@@ -288,6 +288,24 @@ owner 的边界。
 - `connection_generation`：同一 Client ID 每次成功绑定时单调推进。
 - `owner_epoch`：同一 shard 每次 claim 时由 PostgreSQL 单调推进。
 
+### MQTT User Name 与 Client Identifier
+
+两者是不同的 MQTT CONNECT 字段，不能互相替代：
+
+- User Name 是 UTF-8 认证输入，映射到 Flowie Control 的 `principal_id`；Password 是与该
+  principal 绑定的 credential。它们决定“谁在连接”。
+- Client Identifier 是 MQTT Session 的唯一键，决定 session、takeover、订阅/inflight 状态和
+  HAProxy/Flowie 的路由键。它决定“哪个会话在连接”。
+- Client ID 可以由客户端生成随机或哈希风格的非空字符串（例如 UUID 或 32 位十六进制值），但
+  它不是密钥、不是用户名，也不能从 User Name 推导。持久 Session 重连必须复用同一 Client ID。
+- HAProxy 只读取 Client ID 做路由提示；Flowie 从 CONNECT 独立读取 User Name 做认证，再独立
+  对 Client ID 执行 CONNECT ACL。PostgreSQL ownership/fencing 只保护 Client ID 对应的 MQTT 事实。
+
+该边界遵循 OASIS MQTT 5.0
+[`§3.1.3.1 Client Identifier`](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc385349242)
+和 [`§3.1.3.5 User Name`](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc385349245)；
+标准没有规定 User Name 与 Client ID 必须相等。
+
 任何跨节点命令至少携带：
 
 ```text
@@ -716,7 +734,7 @@ session generation，并仅在 PostgreSQL `TFSE`/`TFUE` 提交成功后推进 Qo
 `CONNECT_BIND` 使用独立的 `TFCB` version 1 contract。edge 必须先完成基础或 enhanced authentication、
 CONNECT 授权、Assigned Client Identifier 和连接级协商，再编码 authentication principal 与去凭据化
 CONNECT。principal 使用定长 metadata 加有界长度字段，decode 后重新验证 scope、policy version、role、
-group 和 root group 不变量；CONNECT body 重新经过完整 MQTT parser。仅 Session Expiry Interval 作为
+group 和 domain 不变量；CONNECT body 重新经过完整 MQTT parser。仅 Session Expiry Interval 作为
 session-owned CONNECT property 进入 payload，Will properties 原样保留给 owner，username、password、
 Authentication Method/Data、Receive Maximum、Maximum Packet Size 和 Topic Alias Maximum 等 edge-owned
 信息不会跨节点传递。decode 返回的 packet/connect view 只借用 payload；principal 按值复制。

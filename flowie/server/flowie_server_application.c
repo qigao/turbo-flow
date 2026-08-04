@@ -176,7 +176,8 @@ int flowie_server_application_create(const flowie_server_application_config_t *c
   if (!config || config->size != sizeof(*config) || !out || !config->profile ||
       !config->profile[0] || !config->config_path || !config->config_path[0] ||
       !config->graph_path || !config->graph_path[0] ||
-      (config->protocol_store_path && !config->protocol_store_path[0]) ||
+      (config->protocol_store_path &&
+       strcmp(config->protocol_store_path, FLOWIE_SERVER_DEFAULT_PROTOCOL_STORE_PATH) != 0) ||
       (config->control_config_path && !config->control_config_path[0]) ||
       (config->endpoint_cluster && !config->endpoint_execution) ||
       (config->cluster && (config->endpoint_execution || config->endpoint_cluster)) ||

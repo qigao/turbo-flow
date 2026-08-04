@@ -247,7 +247,7 @@ if(BUILD_TESTS)
   cmake_add_test(
     test_flowie_control_store
     SOURCES tests/test_flowie_control_store.c
-    LIBS flowie_control_core TurboFlow::SecuritySQLite TurboUtils::TinyTest
+    LIBS flowie_control_core TurboFlow::SecuritySQLite SQLite::SQLite3 TurboUtils::TinyTest
     INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
     FOLDER "flowie/control/tests")
   set_tests_properties(test_flowie_control_store

@@ -22,9 +22,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $managementRoot = "system"
-$managementLoginPath = "/v1/management/login"
-$managementRpcPath = "/v1/management/rpc"
-$managementLogoutPath = "/v1/management/logout"
+$managementLoginPath = "/v2/control/login"
+$managementRpcPath = "/v2/control/rpc"
+$managementLogoutPath = "/v2/control/logout"
 $securityAdminRole = "security_admin"
 $minimumPasswordLength = 16
 $maximumPasswordLength = 4096
@@ -98,7 +98,7 @@ function New-ManagementSession {
 
     $session = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
     $body = @{
-        root_group = $RootGroupId
+        domain = $RootGroupId
         principal  = $PrincipalId
         password   = $Password
     }
@@ -110,7 +110,8 @@ function New-ManagementSession {
         -Body $body `
         -WebSession $session `
         -MaximumRedirection 0 `
-        -SkipHttpErrorCheck
+        -SkipHttpErrorCheck `
+        -ErrorAction SilentlyContinue
     if ($response.StatusCode -ne 303) {
         throw "Flowie management login failed with HTTP status $($response.StatusCode)"
     }
@@ -150,26 +151,17 @@ function Invoke-ManagementRpc {
     $document = $response.Content | ConvertFrom-Json
     $errorProperty = $document.PSObject.Properties["error"]
     if ($null -ne $errorProperty -and $null -ne $errorProperty.Value) {
-        throw "$Method failed with RPC code $($errorProperty.Value.code): $($errorProperty.Value.message)"
+        $exception = [System.InvalidOperationException]::new(
+            "$Method failed with RPC code $($errorProperty.Value.code): $($errorProperty.Value.message)"
+        )
+        $exception.Data["FlowieRpcCode"] = [long]$errorProperty.Value.code
+        throw $exception
     }
     $resultProperty = $document.PSObject.Properties["result"]
     if ($null -eq $resultProperty -or $null -eq $resultProperty.Value) {
         throw "$Method returned no result"
     }
     return $resultProperty.Value
-}
-
-function Get-StoreRevision {
-    param(
-        [Parameter(Mandatory = $true)]
-        [Microsoft.PowerShell.Commands.WebRequestSession]$Session
-    )
-
-    $status = Invoke-ManagementRpc -Session $Session -Method "flowie.system.status" -Params @{}
-    if ($null -eq $status.store_revision) {
-        throw "flowie.system.status returned no store_revision"
-    }
-    return [uint64]$status.store_revision
 }
 
 function Invoke-ProvisionStep {
@@ -181,19 +173,35 @@ function Invoke-ProvisionStep {
         [string]$Method,
 
         [Parameter(Mandatory = $true)]
-        [hashtable]$Params
+        [hashtable]$Params,
+
+        [switch]$DeferCredentialCreateConflict
     )
+
+    if ($DeferCredentialCreateConflict -and
+        ($Method -ne "control.password.set" -or $Params.mode -ne "create")) {
+        throw "Deferred conflict verification is restricted to control.password.set mode=create"
+    }
 
     $commandParams = @{}
     foreach ($entry in $Params.GetEnumerator()) {
         $commandParams[$entry.Key] = $entry.Value
     }
-    $commandParams.expected_revision = Get-StoreRevision -Session $Session
-    $result = Invoke-ManagementRpc -Session $Session -Method $Method -Params $commandParams
-    if ($null -eq $result.revision -or $null -eq $result.replayed) {
+    try {
+        $result = Invoke-ManagementRpc -Session $Session -Method $Method -Params $commandParams
+    }
+    catch {
+        if ($DeferCredentialCreateConflict -and
+            $_.Exception.Data["FlowieRpcCode"] -eq -32009) {
+            Write-Host "$Method existing credential deferred to final authentication verification"
+            return
+        }
+        throw
+    }
+    if ($null -eq $result.replayed) {
         throw "$Method returned an invalid command result"
     }
-    Write-Host "$Method revision=$($result.revision) replayed=$($result.replayed)"
+    Write-Host "$Method replayed=$($result.replayed)"
 }
 
 function Close-ManagementSession {
@@ -211,7 +219,8 @@ function Close-ManagementSession {
             -Headers @{ Origin = $origin } `
             -WebSession $Session `
             -MaximumRedirection 0 `
-            -SkipHttpErrorCheck | Out-Null
+            -SkipHttpErrorCheck `
+            -ErrorAction SilentlyContinue | Out-Null
     }
     catch {
         Write-Warning "Flowie management logout did not complete"
@@ -255,30 +264,30 @@ try {
         -PrincipalId $SystemPrincipal `
         -Password $systemPassword
 
-    Invoke-ProvisionStep -Session $systemSession -Method "flowie.root.create" -Params @{
-        root_group_id = $RootGroup
+    Invoke-ProvisionStep -Session $systemSession -Method "control.domain.create" -Params @{
+        domain_id = $RootGroup
         request_id    = "$requestPrefix-root"
     }
-    Invoke-ProvisionStep -Session $systemSession -Method "flowie.user.create" -Params @{
-        root_group_id  = $RootGroup
+    Invoke-ProvisionStep -Session $systemSession -Method "control.user.create" -Params @{
+        domain_id  = $RootGroup
         principal_id   = $AdminPrincipal
         principal_type = "human"
         request_id     = "$requestPrefix-user"
     }
-    Invoke-ProvisionStep -Session $systemSession -Method "flowie.password.set" -Params @{
-        root_group_id = $RootGroup
+    Invoke-ProvisionStep -Session $systemSession -Method "control.password.set" -Params @{
+        domain_id = $RootGroup
         principal_id  = $AdminPrincipal
         new_password  = $adminPassword
         mode          = "create"
         request_id    = "$requestPrefix-password"
-    }
-    Invoke-ProvisionStep -Session $systemSession -Method "flowie.role.create" -Params @{
-        root_group_id = $RootGroup
+    } -DeferCredentialCreateConflict
+    Invoke-ProvisionStep -Session $systemSession -Method "control.role.create" -Params @{
+        domain_id = $RootGroup
         role_id       = $securityAdminRole
         request_id    = "$requestPrefix-role"
     }
-    Invoke-ProvisionStep -Session $systemSession -Method "flowie.role.assign" -Params @{
-        root_group_id = $RootGroup
+    Invoke-ProvisionStep -Session $systemSession -Method "control.role.assign" -Params @{
+        domain_id = $RootGroup
         principal_id  = $AdminPrincipal
         role_id       = $securityAdminRole
         request_id    = "$requestPrefix-assignment"
@@ -290,10 +299,10 @@ try {
         -Password $adminPassword
     $adminStatus = Invoke-ManagementRpc `
         -Session $adminSession `
-        -Method "flowie.system.status" `
+        -Method "control.system.status" `
         -Params @{}
-    if ($adminStatus.root_group -ne $RootGroup) {
-        throw "Provisioned administrator resolved to an unexpected Root Group"
+    if ($adminStatus.domain -ne $RootGroup) {
+        throw "Provisioned administrator resolved to an unexpected Domain"
     }
 
     Write-Host "Provisioned and verified $RootGroup/$AdminPrincipal through Flowie management RPC"

@@ -1,4 +1,5 @@
 #include "flowie_control_runtime_internal.h"
+#include "flowie_control_bootstrap_internal.h"
 
 #include "flowie_test_socket.h"
 #include "tinytest.h"
@@ -14,6 +15,7 @@
 typedef struct control_runtime_fixture_s {
   char *path;
   flowie_control_store_t *store;
+  uint64_t revision;
 } control_runtime_fixture_t;
 
 static int runtime_test_set_env(const char *name, const char *value) {
@@ -24,22 +26,22 @@ static int runtime_test_set_env(const char *name, const char *value) {
 #endif
 }
 
-static int runtime_root_create(flowie_control_store_t *store, uint64_t revision) {
-  flowie_control_root_group_create_command_t command =
-      FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+static int runtime_domain_create(flowie_control_store_t *store, uint64_t revision) {
+  flowie_control_domain_create_command_t command =
+      FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.actor = "bootstrap";
   command.request_id = "root-create";
   command.expected_revision = revision;
   command.occurred_at = 1000u;
-  return flowie_control_store_root_group_create(store, &command, &result);
+  return flowie_control_store_domain_create(store, &command, &result);
 }
 
 static int runtime_user_create(flowie_control_store_t *store, uint64_t revision) {
   flowie_control_user_create_command_t command = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.principal_id = "admin-a";
   command.principal_type = "operator";
   command.actor = "bootstrap";
@@ -53,7 +55,7 @@ static int runtime_role_create(flowie_control_store_t *store, const char *role,
                                const char *request_id, uint64_t revision) {
   flowie_control_role_create_command_t command = FLOWIE_CONTROL_ROLE_CREATE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.role_id = role;
   command.actor = "bootstrap";
   command.request_id = request_id;
@@ -66,7 +68,7 @@ static int runtime_role_add(flowie_control_store_t *store, const char *role, con
                             uint64_t revision) {
   flowie_control_user_role_add_command_t command = FLOWIE_CONTROL_USER_ROLE_ADD_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.principal_id = "admin-a";
   command.role_id = role;
   command.actor = "bootstrap";
@@ -83,8 +85,19 @@ static control_runtime_fixture_t runtime_fixture_open(void) {
   check_not_null(fixture.path);
   config.database_path = fixture.path;
   check_int_eq(flowie_control_store_open(&config, &fixture.store), TURBO_OK);
-  check_int_eq(runtime_root_create(fixture.store, 0u), TURBO_OK);
-  check_int_eq(runtime_user_create(fixture.store, 1u), TURBO_OK);
+  {
+    flowie_control_config_t runtime_config = FLOWIE_CONTROL_CONFIG_INIT;
+    check_int_eq(flowie_control_bootstrap_apply(
+                     flowie_control_store_repository(fixture.store), &runtime_config.bootstrap,
+                     FLOWIE_CONTROL_SYSTEM_ADMIN_INITIAL_PASSWORD,
+                     sizeof(FLOWIE_CONTROL_SYSTEM_ADMIN_INITIAL_PASSWORD) - 1u, 900u),
+                 TURBO_OK);
+  }
+  check_int_eq(flowie_control_store_current_revision(fixture.store, &fixture.revision), TURBO_OK);
+  check_int_eq(runtime_domain_create(fixture.store, fixture.revision), TURBO_OK);
+  check_int_eq(flowie_control_store_current_revision(fixture.store, &fixture.revision), TURBO_OK);
+  check_int_eq(runtime_user_create(fixture.store, fixture.revision), TURBO_OK);
+  check_int_eq(flowie_control_store_current_revision(fixture.store, &fixture.revision), TURBO_OK);
   return fixture;
 }
 
@@ -104,28 +117,29 @@ spec("Flowie controller runtime") {
                      flowie_control_store_repository(fixture.store), "root-a", "admin-a", &caller),
                  TURBO_EPERM);
     check_int_eq(runtime_role_create(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER,
-                                     "role-viewer", 2u),
+                                     "role-viewer", fixture.revision),
                  TURBO_OK);
     check_int_eq(
-        runtime_role_add(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER, "assign-viewer", 3u),
+        runtime_role_add(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER, "assign-viewer",
+                         fixture.revision + 1u),
         TURBO_OK);
     check_int_eq(runtime_role_create(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_USER_ADMIN,
-                                     "role-user-admin", 4u),
+                                     "role-user-admin", fixture.revision + 2u),
                  TURBO_OK);
     check_int_eq(runtime_role_add(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_USER_ADMIN,
-                                  "assign-user-admin", 5u),
+                                  "assign-user-admin", fixture.revision + 3u),
                  TURBO_OK);
     check_int_eq(flowie_control_management_identity_resolve_principal(
                      flowie_control_store_repository(fixture.store), "root-a", "admin-a", &caller),
                  TURBO_OK);
-    check_str_eq(caller.root_group_id, "root-a");
+    check_str_eq(caller.domain_id, "root-a");
     check_str_eq(caller.actor, "admin-a");
     check_uint_eq(caller.permissions,
                   FLOWIE_CONTROL_MANAGEMENT_VIEWER | FLOWIE_CONTROL_MANAGEMENT_USER_ADMIN);
     runtime_fixture_close(&fixture);
   }
 
-  it("rejects principals that do not exist in the presented Root Group") {
+  it("rejects principals that do not exist in the presented Domain") {
     control_runtime_fixture_t fixture = runtime_fixture_open();
     flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
 
@@ -133,14 +147,14 @@ spec("Flowie controller runtime") {
                      flowie_control_store_repository(fixture.store), "root-a", "missing-admin",
                      &caller),
                  TURBO_EPERM);
-    check_null(caller.root_group_id);
+    check_null(caller.domain_id);
     check_null(caller.actor);
     runtime_fixture_close(&fixture);
   }
 
   it("fails closed when TLS identity files cannot be validated") {
     flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
-    memcpy(config.management.rpc_path, "/v1/management/rpc", sizeof("/v1/management/rpc"));
+    memcpy(config.management.rpc_path, "/v2/control/rpc", sizeof("/v2/control/rpc"));
     memcpy(config.listener.tls.cert_file, "missing-control-cert.pem",
            sizeof("missing-control-cert.pem"));
     memcpy(config.listener.tls.key_file, "missing-control-key.pem",
@@ -153,15 +167,15 @@ spec("Flowie controller runtime") {
 
   it("rejects RPC routes that collide with fixed Dashboard routes") {
     flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
-    memcpy(config.management.rpc_path, "/v1/management/dashboard",
-           sizeof("/v1/management/dashboard"));
+    memcpy(config.management.rpc_path, "/v2/control/dashboard",
+           sizeof("/v2/control/dashboard"));
 
     check_int_eq(flowie_control_runtime_validate(&config), TURBO_EINVAL);
   }
 
   it("rejects incomplete local auth configuration") {
     flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
-    memcpy(config.management.rpc_path, "/v1/management/rpc", sizeof("/v1/management/rpc"));
+    memcpy(config.management.rpc_path, "/v2/control/rpc", sizeof("/v2/control/rpc"));
     config.auth.enabled = 1;
 
     check_int_eq(flowie_control_runtime_validate(&config), TURBO_EINVAL);
@@ -169,7 +183,7 @@ spec("Flowie controller runtime") {
 
   it("rejects invalid local executor bounds before TLS startup") {
     flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
-    memcpy(config.management.rpc_path, "/v1/management/rpc", sizeof("/v1/management/rpc"));
+    memcpy(config.management.rpc_path, "/v2/control/rpc", sizeof("/v2/control/rpc"));
     config.auth.enabled = 1;
     config.auth.local_executor.workers = 0u;
 
@@ -178,7 +192,7 @@ spec("Flowie controller runtime") {
 
   it("rejects simultaneous local executor and external HTTPS modes") {
     flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
-    memcpy(config.management.rpc_path, "/v1/management/rpc", sizeof("/v1/management/rpc"));
+    memcpy(config.management.rpc_path, "/v2/control/rpc", sizeof("/v2/control/rpc"));
     config.auth.enabled = 1;
     config.auth.local_executor.configured = 1;
     config.auth.external_https.enabled = 1;
@@ -190,7 +204,7 @@ spec("Flowie controller runtime") {
   it("validates PostgreSQL credentials before TLS or database startup") {
     flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
     (void)snprintf(config.management.rpc_path, sizeof(config.management.rpc_path), "%s",
-                   "/v1/management/rpc");
+                   "/v2/control/rpc");
     config.store_provider = FLOWIE_CONTROL_CONFIG_STORE_POSTGRESQL;
     (void)snprintf(config.postgresql.conninfo, sizeof(config.postgresql.conninfo), "%s",
                    "host=db.internal dbname=flowie user=flowie password=literal "
@@ -219,7 +233,7 @@ spec("Flowie controller runtime") {
   it("rejects PostgreSQL selection when the provider is not built") {
     flowie_control_config_t config = FLOWIE_CONTROL_CONFIG_INIT;
     (void)snprintf(config.management.rpc_path, sizeof(config.management.rpc_path), "%s",
-                   "/v1/management/rpc");
+                   "/v2/control/rpc");
     config.store_provider = FLOWIE_CONTROL_CONFIG_STORE_POSTGRESQL;
     check_int_eq(flowie_control_runtime_validate(&config), TURBO_ENOTSUP);
   }
@@ -234,7 +248,7 @@ spec("Flowie controller runtime") {
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
     check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_EXTERNAL_TOKEN", "service-token"), 0);
     (void)snprintf(config.management.rpc_path, sizeof(config.management.rpc_path), "%s",
-                   "/v1/management/rpc");
+                   "/v2/control/rpc");
     (void)snprintf(config.listener.tls.cert_file, sizeof(config.listener.tls.cert_file), "%s",
                    cert_file);
     (void)snprintf(config.listener.tls.key_file, sizeof(config.listener.tls.key_file), "%s",
@@ -280,10 +294,10 @@ spec("Flowie controller runtime") {
     flowie_control_runtime_t *runtime = NULL;
 
     check_int_eq(runtime_role_create(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER,
-                                     "runtime-viewer", 2u),
+                                     "runtime-viewer", fixture.revision),
                  TURBO_OK);
     check_int_eq(runtime_role_add(fixture.store, FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER,
-                                  "runtime-viewer-add", 3u),
+                                  "runtime-viewer-add", fixture.revision + 1u),
                  TURBO_OK);
     flowie_control_store_destroy(fixture.store);
     fixture.store = NULL;
@@ -292,7 +306,7 @@ spec("Flowie controller runtime") {
     check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_AUTH_TOKEN", "inbound-token"), 0);
     check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_EXTERNAL_TOKEN", "outbound-token"), 0);
     (void)snprintf(config.management.rpc_path, sizeof(config.management.rpc_path), "%s",
-                   "/v1/management/rpc");
+                   "/v2/control/rpc");
     config.dashboard_enabled = 1;
     (void)snprintf(config.listener.tls.cert_file, sizeof(config.listener.tls.cert_file), "%s",
                    cert_file);
@@ -309,8 +323,8 @@ spec("Flowie controller runtime") {
     (void)snprintf(config.auth.service_bindings[0].token_ref,
                    sizeof(config.auth.service_bindings[0].token_ref), "%s",
                    "env://FLOWIE_RUNTIME_AUTH_TOKEN");
-    (void)snprintf(config.auth.service_bindings[0].root_group_id,
-                   sizeof(config.auth.service_bindings[0].root_group_id), "%s", "root-a");
+    (void)snprintf(config.auth.service_bindings[0].domain_id,
+                   sizeof(config.auth.service_bindings[0].domain_id), "%s", "root-a");
     config.auth.external_https.enabled = 1;
     (void)snprintf(config.auth.external_https.url, sizeof(config.auth.external_https.url), "%s",
                    "https://localhost/v1/assert");
@@ -359,7 +373,7 @@ spec("Flowie controller runtime") {
     (void)snprintf(config.listener.tls.key_file, sizeof(config.listener.tls.key_file), "%s",
                    key_file);
     (void)snprintf(config.management.rpc_path, sizeof(config.management.rpc_path), "%s",
-                   "/v1/management/rpc");
+                   "/v2/control/rpc");
     (void)snprintf(config.sqlite_path, sizeof(config.sqlite_path), "%s", fixture.path);
 
     check_int_eq(flowie_control_runtime_create(&config, &runtime), TURBO_OK);

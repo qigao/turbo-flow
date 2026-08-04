@@ -370,7 +370,7 @@ ctest --preset linux-release-user -N \
   2>&1 | tee "$ARTIFACT_ROOT/turboflow-linux-tests.txt"
 
 ctest --preset linux-release-user --output-on-failure \
-  -R '^(test_turbo_flow_redis_live|test_flowie_cluster_route_redis_live|test_turbo_flow_pgsql_live|flowie_server_check_redis_session_store|flowie_server_check_smb_product)$' \
+  -R '^(test_turbo_flow_redis_live|test_flowie_cluster_route_redis_live|test_turbo_flow_pgsql_live|flowie_server_check_smb_product)$' \
   --output-junit "$ARTIFACT_ROOT/storage-live.xml"
 
 ctest --preset linux-release-user --output-on-failure \

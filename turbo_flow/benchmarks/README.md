@@ -75,7 +75,7 @@ interpreter/JIT compilation, and evaluation of the same finalized typed
 expression. The benchmark label identifies the expression shape and selected
 backend; compile iterations are 200 and evaluation iterations are 100000.
 
-The security benchmark places 64, 512, and 4096 rules in the same Root Group/action/resource
+The security benchmark places 64, 512, and 4096 rules in the same Domain/action/resource
 bucket. `acl-subject-index` uses distinct subjects, while `acl-exact-index`, `acl-prefix-index`, and
 `acl-adapter-compiled` place every pattern under one subject. This separates subject, exact,
 prefix, and protocol matcher costs and catches a leaf regressing to a rule-count-proportional scan.

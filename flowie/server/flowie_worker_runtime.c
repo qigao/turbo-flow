@@ -154,6 +154,31 @@ static int flowie_worker_resolve_record_store_backend(const turbo_flow_resolved_
   return TURBO_OK;
 }
 
+static int flowie_worker_standalone_protocol_store_validate(
+    const turbo_flow_resolved_config_t *resolved, const char *channel_name, const char *backend,
+    turbo_flow_config_error_t *error) {
+  turbo_flow_resolved_channel_view_t view = TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT;
+  const char *database_path = NULL;
+  int rc;
+  if (!resolved || !channel_name || !channel_name[0] || !backend || !error ||
+      error->size < sizeof(*error))
+    return TURBO_EINVAL;
+  if (strcmp(backend, "sqlite") != 0) {
+    return flowie_worker_record_store_config_error(
+        error, TURBO_ENOTSUP, channel_name, "backend",
+        "standalone protocol store backend must be sqlite");
+  }
+  rc = turbo_flow_resolved_config_channel(resolved, channel_name, &view);
+  if (rc == TURBO_OK)
+    rc = turbo_flow_resolved_channel_get_string(&view, "database_path", &database_path);
+  if (rc != TURBO_OK || !database_path || strcmp(database_path, ":memory:") != 0) {
+    return flowie_worker_record_store_config_error(
+        error, rc == TURBO_OK ? TURBO_EINVAL : rc, channel_name, "database_path",
+        "standalone protocol store database_path must be :memory:");
+  }
+  return TURBO_OK;
+}
+
 static int flowie_worker_protocol_store_config(const turbo_flow_resolved_config_t *resolved,
                                                const char *endpoint_name, const char *database_path,
                                                turbo_flow_sqlite_record_store_config_t *config) {
@@ -354,6 +379,8 @@ static int flowie_worker_create_protocol_store(const flowie_worker_runtime_confi
     request.options_size = sizeof(sqlite_options);
   } else {
     rc = flowie_worker_resolve_record_store_backend(resolved, channel, &backend, error);
+    if (rc != TURBO_OK) return rc;
+    rc = flowie_worker_standalone_protocol_store_validate(resolved, channel, backend, error);
     if (rc != TURBO_OK) return rc;
   }
   request.model = TURBO_FLOW_STORAGE_MODEL_RECORD;

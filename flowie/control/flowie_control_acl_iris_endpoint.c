@@ -195,7 +195,7 @@ int flowie_control_acl_iris_endpoint_process(flowie_control_acl_iris_endpoint_t 
   turbo_flow_security_policy_bundle_t bundle = TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
   flowie_control_verified_caller_t caller = FLOWIE_CONTROL_VERIFIED_CALLER_INIT;
   char fingerprint[CORO_TLS_PEER_CERT_SHA256_CAPACITY] = {0};
-  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u] = {0};
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u] = {0};
   uint64_t required_version = 0u;
   int rc = TURBO_EPROTO;
   if (status_out) *status_out = INTERNAL_SERVER_ERROR;
@@ -209,10 +209,10 @@ int flowie_control_acl_iris_endpoint_process(flowie_control_acl_iris_endpoint_t 
   rc = flowie_control_acl_resolve_caller(endpoint, req, fingerprint[0] ? fingerprint : NULL,
                                          &caller);
   if (rc != TURBO_OK) goto done;
-  memcpy(root_group_id, caller.root_group_id, strlen(caller.root_group_id) + 1u);
+  memcpy(domain_id, caller.domain_id, strlen(caller.domain_id) + 1u);
   rc = flowie_control_acl_required_version(req, &required_version);
   if (rc != TURBO_OK) goto done;
-  rc = endpoint->repository->policy->bundle_load(endpoint->repository->ctx, root_group_id,
+  rc = endpoint->repository->policy->bundle_load(endpoint->repository->ctx, domain_id,
                                                  required_version, &bundle);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_acl_encode_bundle(&bundle, endpoint->max_response_size, body_out,
@@ -222,7 +222,7 @@ done:
   if (bundle.provider_bundle)
     endpoint->repository->policy->bundle_release(endpoint->repository->ctx, &bundle);
   crypto_wipe(fingerprint, sizeof(fingerprint));
-  crypto_wipe(root_group_id, sizeof(root_group_id));
+  crypto_wipe(domain_id, sizeof(domain_id));
   flowie_control_acl_wipe_authorization(req);
   *status_out = rc == TURBO_OK ? OK : flowie_control_acl_status(rc);
   return TURBO_OK;

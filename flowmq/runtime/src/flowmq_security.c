@@ -194,7 +194,7 @@ int flowmq_security_authorize(flowmq_security_binding_runtime_t *runtime,
   now = time(NULL);
   if (now < 0 || (principal->expires_at != 0u && now == 0)) return TURBO_EIO;
   request.principal = principal;
-  request.root_group_id = principal->root_group_id;
+  request.domain_id = principal->domain_id;
   request.action = action;
   request.resource_type = resource_type;
   request.resource = resource;

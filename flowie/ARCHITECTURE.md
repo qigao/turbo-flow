@@ -48,10 +48,11 @@ Record service by the StorageBackend registry. Session, subscription, inflight, 
 mutations commit to that service before Flowie swaps its owner/cache state. The in-process vectors, maps, and topic
 trie are rebuildable indexes and scheduling caches only; they must never advance independently or
 serve as a fallback fact source. Flowie does not call backend callbacks after facade construction.
-With no explicit `protocol_store` channel, standalone composition binds a durable SQLite Record
-service using `--protocol-store-path`. Business FlowStore channels remain Graph-owned and cannot be
-used as implicit protocol sources. The legacy `session_store` name is accepted only as a mutually
-exclusive compatibility alias; no backend is silently substituted.
+Standalone composition binds a process-local SQLite `:memory:` Record service. Its owner-exclusive
+connection is the sole protocol fact source for that application generation, and closing it removes
+all protocol facts. Business FlowStore channels remain Graph-owned and cannot restore or substitute
+protocol state. The legacy `session_store` name is accepted only as a mutually exclusive
+compatibility alias; no backend is silently substituted.
 
 Endpoint registration installs the `protocol.mqtt.server` module catalog. The graph-visible
 operations are `mqtt.publish.ingress` for an admitted application PUBLISH and
@@ -346,7 +347,7 @@ available separately. Flowie does not consume HTTP forwarded headers. When an en
 `tls_client_ca_file`, CoroNet requires and verifies the MQTT client certificate before Flowie reads
 its canonical SHA-256 fingerprint. These values cross the provider ABI as borrowed, request-lifetime
 fields and the certificate append is guarded by the request `size`. Broker HTTPS Auth v3 forwards
-them to `flowie-control`; the latter still derives Root Group from the separate verified mTLS
+them to `flowie-control`; the latter still derives Domain from the separate verified mTLS
 identity of the Broker-to-control connection. Neither address nor MQTT client certificate is an ACL
 fact source: the control Repository remains the only ACL owner and Broker authorization remains a
 local immutable snapshot lookup.
@@ -448,11 +449,12 @@ publication at the Will Delay boundary or session end, whichever is earlier, and
 the same client id cancels a still-pending Will before fan-out. The generated owned MQTT PUBLISH
 enters the configured TurboFlow graph with a pointer-free internal flag and route token; an endpoint
 sink transfers the graph-transformed packet into the existing bounded owner command queue before
-the durable Will record is cleared. Redis and PostgreSQL use the same canonical session record, so
-restart restores the remaining absolute delay/expiry boundary. A failed graph or store operation
-keeps the Will pending and schedules a bounded retry. This provides durable at-least-once recovery,
-not exactly-once publication: a crash after owner-command admission but before the record clear can
-repeat the Will after restart.
+the committed Will record is cleared. Cluster Redis and PostgreSQL use the same canonical session
+record, so a durable cluster store can restore the remaining absolute delay/expiry boundary.
+Standalone SQLite `:memory:` intentionally cannot restore a Will after process restart. A failed
+graph or store operation keeps the Will pending and schedules a bounded retry. A durable cluster
+store provides at-least-once recovery, not exactly-once publication: a crash after owner-command
+admission but before the record clear can repeat the Will after restart.
 
 Each selected delivery is re-encoded for the subscriber MQTT version. Its QoS is
 `min(inbound QoS, granted QoS)`; `no_local` and retain-as-published are applied before admission.
@@ -470,8 +472,8 @@ peer admission. Each accepted packet then enters the matching connection's own b
 same-connection FIFO drain. A subscriber that exhausts its pending-send HWM or MQTT outbound
 inflight quota is disconnected and its unsent queue is released; other matching subscribers keep
 their deliveries and the publisher is not failed for that peer-local condition. Aggregate/resource
-admission failure still fails the fan-out command so QoS 1/2 can redeliver; durable subscriber
-inflight state remains eligible for reconnect replay. Endpoint config ABI v8 and strict YAML expose
+admission failure still fails the fan-out command so QoS 1/2 can redeliver; committed subscriber
+inflight state remains eligible for reconnect replay within the store lifetime. Endpoint config ABI v8 and strict YAML expose
 this fixed behavior as `slow_subscriber_policy: disconnect`; zero in the C API selects the same
 default and any other value fails registration. Queue Status schema v2 keeps the aggregate
 `load/capacity` view and additionally reports `connection_hwm_bytes`, the stable policy enum, and a
@@ -532,9 +534,9 @@ sink; a zero-length payload removes it, and an expired MQTT 5 Message Expiry Int
 before subscription replay. SUBSCRIBE captures whether each filter existed before the atomic
 session mutation, sends SUBACK first, then applies Retain Handling 0/1/2. Shared subscriptions never
 receive retained replay. Replayed QoS 1/2 packets use the same broker packet-id allocator, session
-delivery state, durable session CAS, and bounded reply Queue as live fan-out. Retained capacity is
+delivery state, protocol-store session CAS, and bounded reply Queue as live fan-out. Retained capacity is
 independently bounded by `max_retained_messages` (zero in the C API selects `max_sessions`). When a
-`protocol_store` is bound, retained PUT/replace/delete crosses the durable record-store CAS boundary
+`protocol_store` is bound, retained PUT/replace/delete crosses the atomic record-store CAS boundary
 before the owner changes its in-memory fact. A reserved binary key prefix separates canonical
 versioned `FRET` records from the existing client-id keyed session records. Startup restores valid
 non-expired retained records and CAS-deletes expired records before opening the listener.
@@ -546,9 +548,10 @@ An already-invalid selector is left invalid for the next atomic repair. A zero i
 state immediately, while MQTT 3.1 and MQTT 3.1.1 persistent sessions retain
 their unbounded in-process lifetime. MQTT 5 DISCONNECT Session Expiry Interval overrides are
 validated by the session owner before close, including the rule that a zero CONNECT interval cannot
-be changed to a non-zero value. The live timer remains process-local, while a persistent record
-carries its absolute wall-clock expiry so restart cannot turn a finite session into an unbounded
-one. A shared `turbo_flow_record_store_t` provides bounded namespace scan,
+be changed to a non-zero value. The live timer remains process-local, while its record carries an
+absolute wall-clock expiry. A durable cluster backend can preserve that bound across restart;
+standalone SQLite `:memory:` discards the record at process exit. A shared
+`turbo_flow_record_store_t` provides bounded namespace scan,
 per-record revision CAS, and atomic batch commit through PostgreSQL transactions or a Redis
 Hash/Lua transaction. The internal session codec emits canonical versioned LTV and deliberately excludes
 live routes, credentials, reserved outbound identifiers, and unsettled graph attempts. Decode
@@ -559,7 +562,7 @@ Registration scans and validates the
 namespace, deletes expired records with revision CAS, rebuilds the trie/bitmap selector, and
 advances the local session-id allocator before the listener starts. CONNECT, SUBSCRIBE,
 UNSUBSCRIBE, inbound QoS transitions, outbound delivery transitions, disconnect and close use
-clone -> durable CAS commit -> owner swap. CONNACK, SUBACK, UNSUBACK and QoS ACK/socket sends occur
+clone -> atomic CAS commit -> owner swap. CONNACK, SUBACK, UNSUBACK and QoS ACK/socket sends occur
 only after the relevant commit. Principal identity, roles and groups are encoded field-by-field;
 credentials, live routes and unsettled graph attempts are never stored. Provider-neutral fault
 tests cover commit/recovery semantics; live backends verify their own restart behavior.
@@ -583,7 +586,7 @@ or capacity failure that cannot be represented by its successful-only SUBACK/PUB
 MQTT 5 Authentication Method selects the configured enhanced provider without basic
 authentication fallback. Initial challenge exchange uses AUTH `0x18`, returns the final method/data
 in CONNACK, and connected re-authentication starts with AUTH `0x19`. Re-authentication may refresh
-roles, expiry, and policy version only for the same principal/type/root-group session owner; an owner
+roles, expiry, and policy version only for the same principal/type/domain session owner; an owner
 change or CONNECT re-authorization failure closes the connection.
 
 These ingress/session owners remain internal and their headers are not installed. The endpoint
@@ -609,8 +612,10 @@ Graph is the authority for business source/sink names. It then compiles the
 Graph and owns start/signal/stop order. `--check` performs the same resolution, resource creation,
 provider assembly, and graph compilation without binding the listener.
 The current host supports unsecured endpoints and an optional explicit `protocol_store` record-store
-channel. When the field is absent in standalone mode, it injects a durable SQLite Record backend
-through the same registry owner path. It creates the selected provider from the same
+channel. When the field is absent in standalone mode, it injects a process-local SQLite Record backend
+through the same registry owner path. The standalone product requires SQLite `:memory:` for both
+implicit and explicit protocol channels; file-backed SQLite remains available to independent
+BusinessStore users. It creates the selected provider from the same
 resolved snapshot, injects the borrowed store through
 `flowie_endpoint_bindings_t`, and destroys the endpoint before the store. Provider selection is
 strictly driven by `backend`; malformed provider fields, unavailable Redis support, connection
@@ -636,8 +641,9 @@ sizes and timeouts are bounded, the service token is acquired by reference for e
 all transport, certificate, status, content-type, version, or principal-validation failures deny
 authentication without a database or anonymous fallback. The returned principal is then evaluated
 by the local SecurityRealm; publish/subscribe ACL checks never perform an HTTP or database call.
-Managed sessions, retained publications, and pending Wills use the implicit standalone SQLite
-ProtocolStore when no explicit protocol store is selected; open or recovery failure aborts startup.
+Managed sessions, retained publications, and pending Wills use the standalone SQLite `:memory:`
+ProtocolStore. Open or schema failure aborts startup; application restart intentionally begins with
+empty protocol state, so clients reconnect and resubscribe. BusinessStore never restores it.
 See [ADR_HTTPS_AUTH_SERVICE.md](ADR_HTTPS_AUTH_SERVICE.md) for the trust boundary and deployment
 requirements.
 External-session mode remains available for later composition. A requested
@@ -661,7 +667,7 @@ receives a SQLite handle.
 
 The optional Iris JSON-RPC adapter binds a caller-owned `rpc_context_t` to an explicit app/path and
 registers 28 bounded management methods. Introspection, batch and notifications are disabled; body
-fields cannot supply root group, actor or audit time. Global external-HTTPS adapter counters are
+fields cannot supply domain, actor or audit time. Global external-HTTPS adapter counters are
 available only to `security_admin` through `flowie.auth.external_https.stats`; root-scoped viewers
 cannot observe cross-root traffic. The SSR Dashboard uses the same service,
 normal POST/Redirect/GET forms, constant-time CSRF validation, strict security headers and escaped

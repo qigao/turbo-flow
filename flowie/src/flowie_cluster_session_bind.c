@@ -478,7 +478,7 @@ flowie_cluster_session_principal_same_owner(const turbo_flow_security_principal_
                                             const turbo_flow_security_principal_t *right) {
   return left && right && strcmp(left->principal_id, right->principal_id) == 0 &&
          strcmp(left->principal_type, right->principal_type) == 0 &&
-         strcmp(left->root_group_id, right->root_group_id) == 0;
+         strcmp(left->domain_id, right->domain_id) == 0;
 }
 
 static int flowie_cluster_session_size_add(size_t *total, size_t value) {

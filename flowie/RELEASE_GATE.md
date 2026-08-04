@@ -34,7 +34,8 @@ ctest --preset win-release-user --output-on-failure
 
 普通开发配置不会注册严格发布门禁；只有显式设置 `FLOWIE_MQTT_RELEASE_GATE=ON` 才会注册
 `flowie_release_gate_manifest`。该测试会强制检查固定 broker interop、协议矩阵与 corpus、
-session store 故障边界、`test_flowie_transport`、`flowie_server_check_redis_session_store` 和
+session store 故障边界、`test_flowie_transport`、cluster Redis route live、
+`flowie_server_rejects_redis_protocol_store` 和
 `flowie_server_check_https_auth_provider` 均已注册且未被标为 `Disabled`。整个 gate 只允许
 `flowie_server_check_smb_product` 因未提供 PostgreSQL 测试数据库而 Disabled；出现其他 Disabled 项时
 manifest 自检直接失败。Gate 与全量回归必须零失败；不能用未启用 live suite 的结果替代。

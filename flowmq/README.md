@@ -263,7 +263,7 @@ README 只保留产品使用层的 pattern、graph 和 facade 说明；ACK、own
 | PgSQL durable outbox | not claimed；普通 PostgreSQL query/sink 不等于事务 outbox source/sink |
 | TFMP management | supported，bounded DEALER/ROUTER inflight、typed async operation、event store |
 | Failure-domain deployment owner | supported，authority epoch 必须由宿主强一致服务分配 |
-| Authentication/authorization/Group Forest | supported for optional secure v3 endpoints on TCP/TLS/UDP/KCP/Pipe/WS/WSS；HTTPS v2 authentication、SQLite/HTTPS v3 line-based dynamic ACL bundle、local immutable indexed snapshot、immutable Root Group isolation、hierarchical effective groups、default-deny exact/prefix ACL；TLS/WSS additionally enforce TLS 1.3 exporter binding |
+| Authentication/authorization/Group Forest | supported for optional secure v3 endpoints on TCP/TLS/UDP/KCP/Pipe/WS/WSS；HTTPS v2 authentication、SQLite/HTTPS v3 line-based dynamic ACL bundle、local immutable indexed snapshot、immutable Domain isolation、hierarchical effective groups、default-deny exact/prefix ACL；TLS/WSS additionally enforce TLS 1.3 exporter binding |
 | ZeroMQ/ZMTP compatibility | not supported |
 
 所有高级协议和部署契约统一从 [PROTOCOL_SPEC.md](PROTOCOL_SPEC.md) 导航；发布验证仍见

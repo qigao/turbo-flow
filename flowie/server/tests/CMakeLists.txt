@@ -203,17 +203,14 @@ set_tests_properties(
   PROPERTIES LABELS "flowie;flowie-release;product-contract;storage-contract")
 
 add_test(
-  NAME flowie_server_check_redis_session_store
+  NAME flowie_server_rejects_redis_protocol_store
   COMMAND flowie_server --check
           "${CMAKE_CURRENT_SOURCE_DIR}/flowie_server_redis.yml"
           "${PROJECT_SOURCE_DIR}/flowie/examples/flowie.flow")
 set_tests_properties(
-  flowie_server_check_redis_session_store
-  PROPERTIES LABELS
-             "flowie;flowie-release;product-contract;storage-contract;redis-live")
-if(NOT TURBO_FLOW_REDIS_LIVE_TESTS)
-  set_tests_properties(flowie_server_check_redis_session_store PROPERTIES DISABLED TRUE)
-endif()
+  flowie_server_rejects_redis_protocol_store
+  PROPERTIES WILL_FAIL TRUE
+             LABELS "flowie;flowie-release;product-contract;storage-contract")
 
 add_test(
   NAME flowie_server_check_storage_backend_plugin_duplicate_redis

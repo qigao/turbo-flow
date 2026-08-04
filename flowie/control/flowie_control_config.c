@@ -413,7 +413,7 @@ static int control_config_parse_management(const json_value_t *management,
                              config->management.rpc_path, sizeof(config->management.rpc_path), 0,
                              error);
   if (rc == TURBO_OK && !config->management.rpc_path[0])
-    memcpy(config->management.rpc_path, "/v1/management/rpc", sizeof("/v1/management/rpc"));
+    memcpy(config->management.rpc_path, "/v2/control/rpc", sizeof("/v2/control/rpc"));
   if (rc == TURBO_OK && !control_config_route_valid(config->management.rpc_path))
     rc = control_config_error(error, TURBO_EINVAL, "$.management.rpc_path",
                               "expected one static absolute route");
@@ -477,31 +477,10 @@ static int control_config_parse_management(const json_value_t *management,
   return rc;
 }
 
-static int control_config_parse_bootstrap(const json_value_t *bootstrap,
-                                          flowie_control_config_t *config,
-                                          flowie_control_config_error_t *error) {
-  static const char *const keys[] = {"username", "password_ref"};
-  int rc =
-      control_config_object(bootstrap, "$.bootstrap", keys, sizeof(keys) / sizeof(keys[0]), error);
-  if (rc == TURBO_OK && turbo_json_object_get(bootstrap, keys[0]))
-    rc = control_config_text(turbo_json_object_get(bootstrap, keys[0]), "$.bootstrap.username",
-                             config->bootstrap.principal_id,
-                             sizeof(config->bootstrap.principal_id), 1, error);
-  if (rc == TURBO_OK && turbo_json_object_get(bootstrap, keys[1]))
-    rc = control_config_text(turbo_json_object_get(bootstrap, keys[1]), "$.bootstrap.password_ref",
-                             config->bootstrap.password_ref, sizeof(config->bootstrap.password_ref),
-                             1, error);
-  if (rc == TURBO_OK && !control_config_secret_ref_valid(config->bootstrap.password_ref))
-    rc = control_config_error(error, TURBO_EINVAL, "$.bootstrap.password_ref",
-                              "expected env:// secret reference");
-  if (rc == TURBO_OK) config->bootstrap.enabled = 1;
-  return rc;
-}
-
 static int control_config_parse_auth_service_bindings(const json_value_t *bindings,
                                                       flowie_control_config_t *config,
                                                       flowie_control_config_error_t *error) {
-  static const char *const keys[] = {"service_id", "token_ref", "root_group",
+  static const char *const keys[] = {"service_id", "token_ref", "domain",
                                      "peer_certificate_sha256"};
   size_t count;
   if (!bindings || turbo_json_type(bindings) != TURBO_JSON_ARRAY)
@@ -533,11 +512,11 @@ static int control_config_parse_auth_service_bindings(const json_value_t *bindin
         !control_config_secret_ref_valid(config->auth.service_bindings[index].token_ref))
       rc = control_config_error(error, TURBO_EINVAL, field,
                                 "only env:// secret references are accepted");
-    (void)snprintf(field, sizeof(field), "%s.root_group", path);
+    (void)snprintf(field, sizeof(field), "%s.domain", path);
     if (rc == TURBO_OK)
       rc = control_config_text(turbo_json_object_get(entry, keys[2]), field,
-                               config->auth.service_bindings[index].root_group_id,
-                               sizeof(config->auth.service_bindings[index].root_group_id), 1,
+                               config->auth.service_bindings[index].domain_id,
+                               sizeof(config->auth.service_bindings[index].domain_id), 1,
                                error);
     fingerprint = turbo_json_object_get(entry, keys[3]);
     (void)snprintf(field, sizeof(field), "%s.peer_certificate_sha256", path);
@@ -772,8 +751,8 @@ static int control_config_parse_auth(const json_value_t *auth, flowie_control_co
 int flowie_control_config_parse_yaml(const char *yaml, size_t yaml_size,
                                      flowie_control_config_t *out,
                                      flowie_control_config_error_t *error) {
-  static const char *const root_keys[] = {"version",    "listener",  "storage", "bootstrap",
-                                          "management", "dashboard", "auth"};
+  static const char *const root_keys[] = {"version", "listener", "storage", "management",
+                                          "dashboard", "auth"};
   static const char *const dashboard_keys[] = {"enabled"};
   flowie_control_config_t resolved = FLOWIE_CONTROL_CONFIG_INIT;
   turbo_yaml_doc_t *yaml_document = NULL;
@@ -810,9 +789,6 @@ int flowie_control_config_parse_yaml(const char *yaml, size_t yaml_size,
   if (rc == TURBO_OK)
     rc = control_config_parse_management(turbo_json_object_get(document, "management"), &resolved,
                                          error);
-  if (rc == TURBO_OK && turbo_json_object_get(document, "bootstrap"))
-    rc = control_config_parse_bootstrap(turbo_json_object_get(document, "bootstrap"), &resolved,
-                                        error);
   dashboard = turbo_json_object_get(document, "dashboard");
   if (rc == TURBO_OK && dashboard) {
     rc = control_config_object(dashboard, "$.dashboard", dashboard_keys,

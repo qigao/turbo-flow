@@ -56,7 +56,7 @@ typedef struct flow_security_pattern_index_s {
 } flow_security_pattern_index_t;
 
 typedef struct flow_security_root_index_s {
-  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   flow_security_rule_bucket_t buckets[7u][5u];
 } flow_security_root_index_t;
 
@@ -120,7 +120,7 @@ static int flow_security_principal_valid(const turbo_flow_security_principal_t *
       principal->abi_version != TURBO_FLOW_SECURITY_ABI_V3 ||
       !flow_security_cstr_valid(principal->principal_id, sizeof(principal->principal_id), 1) ||
       !flow_security_cstr_valid(principal->principal_type, sizeof(principal->principal_type), 1) ||
-      !flow_security_cstr_valid(principal->root_group_id, sizeof(principal->root_group_id), 0) ||
+      !flow_security_cstr_valid(principal->domain_id, sizeof(principal->domain_id), 0) ||
       !flow_security_cstr_valid(principal->auth_method, sizeof(principal->auth_method), 1) ||
       principal->scope < TURBO_FLOW_SECURITY_SCOPE_SELF ||
       principal->scope > TURBO_FLOW_SECURITY_SCOPE_SYSTEM ||
@@ -129,8 +129,7 @@ static int flow_security_principal_valid(const turbo_flow_security_principal_t *
       (principal->scope == TURBO_FLOW_SECURITY_SCOPE_GROUP && principal->group_count == 0u)) {
     return 0;
   }
-  if (principal->scope != TURBO_FLOW_SECURITY_SCOPE_SYSTEM &&
-      (principal->root_group_id[0] == '\0' || principal->group_count == 0u)) {
+  if (principal->scope != TURBO_FLOW_SECURITY_SCOPE_SYSTEM && principal->domain_id[0] == '\0') {
     return 0;
   }
   for (uint32_t i = 0u; i < principal->role_count; ++i) {
@@ -140,13 +139,6 @@ static int flow_security_principal_valid(const turbo_flow_security_principal_t *
     if (!flow_security_cstr_valid(principal->groups[i], sizeof(principal->groups[i]), 1)) return 0;
     for (uint32_t j = 0u; j < i; ++j)
       if (strcmp(principal->groups[i], principal->groups[j]) == 0) return 0;
-  }
-  if (principal->scope != TURBO_FLOW_SECURITY_SCOPE_SYSTEM) {
-    int contains_root = 0;
-    for (uint32_t i = 0u; i < principal->group_count; ++i) {
-      if (strcmp(principal->groups[i], principal->root_group_id) == 0) contains_root = 1;
-    }
-    if (!contains_root) return 0;
   }
   return 1;
 }
@@ -251,7 +243,7 @@ static int flow_security_rule_valid(const turbo_flow_security_rule_t *rule,
       rule->subject_kind < TURBO_FLOW_SECURITY_SUBJECT_ANY ||
       rule->subject_kind > TURBO_FLOW_SECURITY_SUBJECT_GROUP ||
       !flow_security_cstr_valid(rule->subject, sizeof(rule->subject), 0) ||
-      !flow_security_cstr_valid(rule->root_group_id, sizeof(rule->root_group_id), 1) ||
+      !flow_security_cstr_valid(rule->domain_id, sizeof(rule->domain_id), 1) ||
       rule->action_mask == 0u || (rule->action_mask & ~TURBO_FLOW_SECURITY_ACTION_ALL) != 0u ||
       rule->resource_type < TURBO_FLOW_SECURITY_RESOURCE_GENERIC ||
       rule->resource_type > TURBO_FLOW_SECURITY_RESOURCE_SECRET ||
@@ -631,14 +623,14 @@ static void flow_security_root_index_destroy(flow_security_root_index_t *root) {
 }
 
 static int flow_security_snapshot_root(flow_security_policy_snapshot_t *snapshot,
-                                       const char *root_group_id,
+                                       const char *domain_id,
                                        flow_security_root_index_t **root_out) {
   tstr_v key;
   flow_security_root_index_t **found;
   flow_security_root_index_t *root;
-  if (!snapshot || !root_group_id || !root_out) return TURBO_EINVAL;
+  if (!snapshot || !domain_id || !root_out) return TURBO_EINVAL;
   *root_out = NULL;
-  key = tstr_v_from_buf(root_group_id, strlen(root_group_id));
+  key = tstr_v_from_buf(domain_id, strlen(domain_id));
   found = (flow_security_root_index_t **)turbo_hash_map_get(&snapshot->root_index, &key);
   if (found && *found) {
     *root_out = *found;
@@ -646,12 +638,12 @@ static int flow_security_snapshot_root(flow_security_policy_snapshot_t *snapshot
   }
   root = (flow_security_root_index_t *)calloc(1u, sizeof(*root));
   if (!root) return TURBO_ENOMEM;
-  memcpy(root->root_group_id, root_group_id, strlen(root_group_id) + 1u);
+  memcpy(root->domain_id, domain_id, strlen(domain_id) + 1u);
   if (turbo_vec_push(&snapshot->roots, &root) != TURBO_OK) {
     flow_security_root_index_destroy(root);
     return TURBO_ENOMEM;
   }
-  key = tstr_v_from_buf(root->root_group_id, strlen(root->root_group_id));
+  key = tstr_v_from_buf(root->domain_id, strlen(root->domain_id));
   if (turbo_hash_map_put(&snapshot->root_index, &key, &root) != TURBO_OK) {
     size_t last = turbo_vec_size(&snapshot->roots) - 1u;
     (void)turbo_vec_swap_remove(&snapshot->roots, last, NULL);
@@ -724,7 +716,7 @@ static int flow_security_policy_snapshot_create(uint64_t policy_version, uint64_
       rc = TURBO_EPROTO;
       break;
     }
-    rc = flow_security_snapshot_root(snapshot, compiled_rule->root_group_id, &root);
+    rc = flow_security_snapshot_root(snapshot, compiled_rule->domain_id, &root);
     if (rc != TURBO_OK) break;
     for (size_t action = 0u; action < 7u; ++action) {
       if ((compiled_rule->action_mask & (UINT32_C(1) << action)) == 0u) continue;
@@ -1068,8 +1060,8 @@ static int flow_security_request_valid(const turbo_flow_security_realm_t *realm,
                                        const turbo_flow_security_request_t *request,
                                        const turbo_flow_security_decision_t *decision) {
   return realm && request && request->size >= sizeof(*request) &&
-         flow_security_principal_valid(request->principal) && request->root_group_id &&
-         request->root_group_id[0] && request->resource && request->resource[0] &&
+         flow_security_principal_valid(request->principal) && request->domain_id &&
+         request->domain_id[0] && request->resource && request->resource[0] &&
          request->action != 0u && (request->action & (request->action - 1u)) == 0u &&
          (request->action & ~TURBO_FLOW_SECURITY_ACTION_ALL) == 0u &&
          request->resource_type >= TURBO_FLOW_SECURITY_RESOURCE_GENERIC &&
@@ -1091,9 +1083,9 @@ static int flow_security_realm_evaluate_validated(turbo_flow_security_realm_t *r
   snapshot = flow_security_policy_snapshot_acquire(realm);
   result.policy_version = snapshot ? snapshot->policy_version : 0u;
   if (request->principal->scope != TURBO_FLOW_SECURITY_SCOPE_SYSTEM &&
-      (request->root_group_id[0] == '\0' ||
-       strcmp(request->principal->root_group_id, request->root_group_id) != 0)) {
-    result.reason = TURBO_FLOW_SECURITY_REASON_ROOT_GROUP_MISMATCH;
+      (request->domain_id[0] == '\0' ||
+       strcmp(request->principal->domain_id, request->domain_id) != 0)) {
+    result.reason = TURBO_FLOW_SECURITY_REASON_DOMAIN_MISMATCH;
     goto complete;
   }
   if (request->principal->expires_at != 0u) {
@@ -1113,7 +1105,7 @@ static int flow_security_realm_evaluate_validated(turbo_flow_security_realm_t *r
     goto complete;
   }
   {
-    tstr_v root_key = tstr_v_from_buf(request->root_group_id, strlen(request->root_group_id));
+    tstr_v root_key = tstr_v_from_buf(request->domain_id, strlen(request->domain_id));
     flow_security_root_index_t **root =
         (flow_security_root_index_t **)turbo_hash_map_get(&snapshot->root_index, &root_key);
     flow_security_rule_bucket_t *bucket =

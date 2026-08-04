@@ -114,7 +114,7 @@ spec("Flowie control external authenticator contract") {
     check_not_null(mapper);
     interface = flowie_control_external_subject_mapper_interface(mapper);
     check_int_eq(flowie_control_external_identity_mapper_validate(interface), TURBO_OK);
-    request.root_group_id = "root-a";
+    request.domain_id = "root-a";
     request.presented_identity = "device@example";
     request.assertion = &assertion;
     check_int_eq(interface->map(interface->ctx, &request, &result), TURBO_OK);

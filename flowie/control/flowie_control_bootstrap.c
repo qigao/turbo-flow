@@ -39,11 +39,11 @@ static int flowie_control_bootstrap_verify(const flowie_control_repository_t *re
   flowie_control_effective_roles_view_t roles = FLOWIE_CONTROL_EFFECTIVE_ROLES_VIEW_INIT;
   int has_system_admin = 0;
   int rc =
-      repository->user->get(repository->ctx, config->root_group_id, config->principal_id, &user);
+      repository->user->get(repository->ctx, config->domain_id, config->principal_id, &user);
   if (rc == TURBO_OK && (!user.enabled || strcmp(user.principal_type, config->principal_type) != 0))
     rc = TURBO_EPROTO;
   if (rc == TURBO_OK)
-    rc = repository->role->effective(repository->ctx, config->root_group_id, config->principal_id,
+    rc = repository->role->effective(repository->ctx, config->domain_id, config->principal_id,
                                      &roles);
   if (rc == TURBO_OK) {
     for (uint32_t index = 0u; index < roles.role_count; ++index) {
@@ -59,7 +59,7 @@ int flowie_control_bootstrap_apply(const flowie_control_repository_t *repository
                                    const flowie_control_config_bootstrap_t *config,
                                    const void *password, size_t password_size,
                                    uint64_t occurred_at) {
-  flowie_control_root_group_create_command_t root = FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+  flowie_control_domain_create_command_t root = FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
   flowie_control_user_create_command_t user = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
   flowie_control_credential_issue_command_t credential =
       FLOWIE_CONTROL_CREDENTIAL_ISSUE_COMMAND_INIT;
@@ -71,22 +71,22 @@ int flowie_control_bootstrap_apply(const flowie_control_repository_t *repository
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
   int rc;
-  if (flowie_control_repository_validate(repository) != TURBO_OK || !config || !config->enabled ||
-      !config->root_group_id[0] || !config->principal_id[0] || !config->principal_type[0] ||
+  if (flowie_control_repository_validate(repository) != TURBO_OK || !config ||
+      !config->domain_id[0] || !config->principal_id[0] || !config->principal_type[0] ||
       !password || password_size < FLOWIE_CONTROL_CONFIG_BOOTSTRAP_PASSWORD_MIN ||
       password_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX || occurred_at == 0u)
     return TURBO_EINVAL;
 
-  root.root_group_id = config->root_group_id;
+  root.domain_id = config->domain_id;
   root.actor = FLOWIE_CONTROL_BOOTSTRAP_ACTOR;
   root.request_id = FLOWIE_CONTROL_BOOTSTRAP_ROOT_REQUEST;
   root.expected_revision = FLOWIE_CONTROL_BOOTSTRAP_EMPTY_REVISION;
   root.occurred_at = occurred_at;
-  rc = repository->user->root_group_create(repository->ctx, &root, &result);
+  rc = repository->user->domain_create(repository->ctx, &root, &result);
   rc = flowie_control_bootstrap_result(rc, &result, FLOWIE_CONTROL_BOOTSTRAP_ROOT_REVISION);
   if (rc != TURBO_OK) goto done;
 
-  user.root_group_id = config->root_group_id;
+  user.domain_id = config->domain_id;
   user.principal_id = config->principal_id;
   user.principal_type = config->principal_type;
   user.actor = FLOWIE_CONTROL_BOOTSTRAP_ACTOR;
@@ -98,7 +98,7 @@ int flowie_control_bootstrap_apply(const flowie_control_repository_t *repository
   rc = flowie_control_bootstrap_result(rc, &result, FLOWIE_CONTROL_BOOTSTRAP_USER_REVISION);
   if (rc != TURBO_OK) goto done;
 
-  credential.root_group_id = config->root_group_id;
+  credential.domain_id = config->domain_id;
   credential.principal_id = config->principal_id;
   credential.actor = FLOWIE_CONTROL_BOOTSTRAP_ACTOR;
   credential.request_id = FLOWIE_CONTROL_BOOTSTRAP_CREDENTIAL_REQUEST;
@@ -108,12 +108,12 @@ int flowie_control_bootstrap_apply(const flowie_control_repository_t *repository
   credential.initial_secret_size = password_size;
   rc = repository->credential->generate(repository->ctx, &credential, &generated);
   if (rc == TURBO_OK && (generated.revision != FLOWIE_CONTROL_BOOTSTRAP_CREDENTIAL_REVISION ||
-                         generated.secret_size != 0u))
+                         generated.token_size != 0u))
     rc = TURBO_EPROTO;
   if (rc == TURBO_EALREADY) rc = TURBO_OK;
   if (rc != TURBO_OK) goto done;
 
-  role.root_group_id = config->root_group_id;
+  role.domain_id = config->domain_id;
   role.role_id = FLOWIE_CONTROL_MANAGEMENT_ROLE_SYSTEM_ADMIN;
   role.actor = FLOWIE_CONTROL_BOOTSTRAP_ACTOR;
   role.request_id = FLOWIE_CONTROL_BOOTSTRAP_ROLE_REQUEST;
@@ -124,7 +124,7 @@ int flowie_control_bootstrap_apply(const flowie_control_repository_t *repository
   rc = flowie_control_bootstrap_result(rc, &result, FLOWIE_CONTROL_BOOTSTRAP_ROLE_REVISION);
   if (rc != TURBO_OK) goto done;
 
-  password_role.root_group_id = config->root_group_id;
+  password_role.domain_id = config->domain_id;
   password_role.role_id = FLOWIE_CONTROL_MANAGEMENT_ROLE_PASSWORD_CHANGE_REQUIRED;
   password_role.actor = FLOWIE_CONTROL_BOOTSTRAP_ACTOR;
   password_role.request_id = FLOWIE_CONTROL_BOOTSTRAP_PASSWORD_ROLE_REQUEST;
@@ -136,7 +136,7 @@ int flowie_control_bootstrap_apply(const flowie_control_repository_t *repository
                                        FLOWIE_CONTROL_BOOTSTRAP_PASSWORD_ROLE_REVISION);
   if (rc != TURBO_OK) goto done;
 
-  assignment.root_group_id = config->root_group_id;
+  assignment.domain_id = config->domain_id;
   assignment.principal_id = config->principal_id;
   assignment.role_id = FLOWIE_CONTROL_MANAGEMENT_ROLE_SYSTEM_ADMIN;
   assignment.actor = FLOWIE_CONTROL_BOOTSTRAP_ACTOR;
@@ -148,7 +148,7 @@ int flowie_control_bootstrap_apply(const flowie_control_repository_t *repository
   rc = flowie_control_bootstrap_result(rc, &result, FLOWIE_CONTROL_BOOTSTRAP_ASSIGNMENT_REVISION);
   if (rc != TURBO_OK) goto done;
 
-  password_assignment.root_group_id = config->root_group_id;
+  password_assignment.domain_id = config->domain_id;
   password_assignment.principal_id = config->principal_id;
   password_assignment.role_id = FLOWIE_CONTROL_MANAGEMENT_ROLE_PASSWORD_CHANGE_REQUIRED;
   password_assignment.actor = FLOWIE_CONTROL_BOOTSTRAP_ACTOR;

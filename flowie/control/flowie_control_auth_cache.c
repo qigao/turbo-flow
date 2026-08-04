@@ -57,17 +57,17 @@ static void flowie_control_auth_cache_hash_u64(crypto_blake2b_ctx *ctx, uint64_t
 }
 
 static void flowie_control_auth_cache_digest(
-    const flowie_control_auth_cache_t *cache, const char *root_group_id, const char *principal_id,
+    const flowie_control_auth_cache_t *cache, const char *domain_id, const char *principal_id,
     const void *secret, size_t secret_size, uint8_t digest[FLOWIE_CONTROL_AUTH_CACHE_DIGEST_SIZE]) {
   crypto_blake2b_ctx hash;
-  size_t root_size = strlen(root_group_id);
+  size_t root_size = strlen(domain_id);
   size_t principal_size = strlen(principal_id);
   crypto_blake2b_keyed_init(&hash, FLOWIE_CONTROL_AUTH_CACHE_DIGEST_SIZE, cache->digest_key,
                             sizeof(cache->digest_key));
   crypto_blake2b_update(&hash, (const uint8_t *)FLOWIE_CONTROL_AUTH_CACHE_DOMAIN,
                         sizeof(FLOWIE_CONTROL_AUTH_CACHE_DOMAIN) - 1u);
   flowie_control_auth_cache_hash_u64(&hash, root_size);
-  crypto_blake2b_update(&hash, (const uint8_t *)root_group_id, root_size);
+  crypto_blake2b_update(&hash, (const uint8_t *)domain_id, root_size);
   flowie_control_auth_cache_hash_u64(&hash, principal_size);
   crypto_blake2b_update(&hash, (const uint8_t *)principal_id, principal_size);
   flowie_control_auth_cache_hash_u64(&hash, secret_size);
@@ -236,7 +236,7 @@ void flowie_control_auth_cache_destroy(flowie_control_auth_cache_t *cache) {
 
 int flowie_control_auth_cache_verify(flowie_control_auth_cache_t *cache,
                                      const flowie_control_repository_t *repository,
-                                     const char *root_group_id, const char *principal_id,
+                                     const char *domain_id, const char *principal_id,
                                      const void *secret, size_t secret_size,
                                      flowie_control_credential_verify_result_t *result,
                                      int *cache_hit_out) {
@@ -254,12 +254,12 @@ int flowie_control_auth_cache_verify(flowie_control_auth_cache_t *cache,
         (flowie_control_credential_verify_result_t)FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
   if (cache_hit_out) *cache_hit_out = 0;
   if (!cache || flowie_control_repository_validate(repository) != TURBO_OK ||
-      !flowie_control_auth_cache_text_valid(root_group_id) ||
+      !flowie_control_auth_cache_text_valid(domain_id) ||
       !flowie_control_auth_cache_text_valid(principal_id) || !secret || secret_size == 0u ||
       secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX || !result ||
       result->size < sizeof(*result) || !cache_hit_out)
     return TURBO_EINVAL;
-  flowie_control_auth_cache_digest(cache, root_group_id, principal_id, secret, secret_size, digest);
+  flowie_control_auth_cache_digest(cache, domain_id, principal_id, secret, secret_size, digest);
 reserve:
   now_ms = cache->clock_ms(cache->clock_ctx);
   turbo_mutex_lock(&cache->lock);
@@ -313,7 +313,7 @@ reserve:
       rc = TURBO_EPERM;
       goto done;
     }
-    rc = repository->auth->credential_state(repository->ctx, root_group_id, principal_id, &current);
+    rc = repository->auth->credential_state(repository->ctx, domain_id, principal_id, &current);
     if (rc != TURBO_OK) {
       turbo_mutex_lock(&cache->lock);
       flowie_control_auth_cache_remove_locked(cache, digest);
@@ -350,7 +350,7 @@ reserve:
     rc = TURBO_EPROTO;
     goto done;
   }
-  rc = repository->auth->credential_verify(repository->ctx, root_group_id, principal_id, secret,
+  rc = repository->auth->credential_verify(repository->ctx, domain_id, principal_id, secret,
                                            secret_size, &current);
   if (rc == TURBO_OK) {
     flowie_control_auth_cache_store(cache, digest, TURBO_OK, &current, now_ms);

@@ -156,7 +156,7 @@ application_test_write_control_config(const flowie_server_application_fixture_t 
                   "  sqlite:\n"
                   "    path: '%s'\n"
                   "management:\n"
-                  "  rpc_path: /v1/management/rpc\n"
+                  "  rpc_path: /v2/control/rpc\n"
                   "  session:\n"
                   "    capacity: 64\n"
                   "    ttl_seconds: 3600\n"
@@ -330,7 +330,6 @@ application_test_create(const flowie_server_application_fixture_t *fixture,
   flowie_server_application_t *application = NULL;
   config.config_path = fixture->worker_config_path;
   config.graph_path = FLOWIE_TEST_GRAPH_PATH;
-  config.protocol_store_path = fixture->protocol_store_path;
   config.control_config_path = fixture->control_config_path;
   check_int_eq(flowie_server_application_create(&config, &application, error), TURBO_OK);
   check_not_null(application);
@@ -376,9 +375,23 @@ static flowie_test_socket_t application_test_reserve_port(unsigned short *port_o
 }
 
 spec("Flowie server application") {
-  it("defines the standalone protocol database default at the application boundary") {
+  it("defines the standalone process-local protocol store at the application boundary") {
     flowie_server_application_config_t config = FLOWIE_SERVER_APPLICATION_CONFIG_INIT;
     check_str_eq(config.protocol_store_path, FLOWIE_SERVER_DEFAULT_PROTOCOL_STORE_PATH);
+  }
+
+  it("rejects a file protocol path at the standalone application boundary") {
+    flowie_server_application_config_t config = FLOWIE_SERVER_APPLICATION_CONFIG_INIT;
+    flowie_server_application_error_t error = FLOWIE_SERVER_APPLICATION_ERROR_INIT;
+    flowie_server_application_t *application = NULL;
+
+    config.config_path = "unused-flowie.yml";
+    config.graph_path = "unused-flowie.flow";
+    config.protocol_store_path = "flowie-protocol.sqlite3";
+    check_int_eq(flowie_server_application_create(&config, &application, &error), TURBO_EINVAL);
+    check_null(application);
+    check_int_eq(error.status, TURBO_EINVAL);
+    check_str_eq(error.operation, "validate server configuration");
   }
 
   it("requires a shared endpoint owner lane when cluster ownership is injected") {
@@ -429,7 +442,6 @@ spec("Flowie server application") {
     proxy.header_timeout_ms = 1000u;
     config.config_path = fixture.worker_config_path;
     config.graph_path = FLOWIE_TEST_GRAPH_PATH;
-    config.protocol_store_path = fixture.protocol_store_path;
     config.endpoint_proxy = &proxy;
     check_int_eq(flowie_server_application_create(&config, &application, &error), TURBO_OK);
     check_not_null(application);
@@ -437,7 +449,7 @@ spec("Flowie server application") {
     application_test_fixture_close(&fixture);
   }
 
-  it("restores the implicit standalone protocol store from SQLite after restart") {
+  it("starts each implicit standalone protocol store with empty memory state") {
     static const uint8_t persistent_connect[] = {
         0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',   0x05u, 0x00u, 0x00u, 0x3cu,
         0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u, 'd',   'u',   'r'};
@@ -449,7 +461,6 @@ spec("Flowie server application") {
 
     config.config_path = fixture.worker_config_path;
     config.graph_path = FLOWIE_TEST_GRAPH_PATH;
-    config.protocol_store_path = fixture.protocol_store_path;
     for (int generation = 0; generation < 2; ++generation) {
       check_int_eq(flowie_server_application_create(&config, &application, &error), TURBO_OK);
       check_not_null(application);
@@ -458,7 +469,7 @@ spec("Flowie server application") {
       check_true(client != FLOWIE_TEST_INVALID_SOCKET);
       check_int_eq(flowie_test_send(client, persistent_connect, sizeof(persistent_connect)),
                    TURBO_OK);
-      check_int_eq(application_test_recv_connack(client, generation == 0 ? 0u : 1u), TURBO_OK);
+      check_int_eq(application_test_recv_connack(client, 0u), TURBO_OK);
       flowie_test_socket_close(client);
       client = FLOWIE_TEST_INVALID_SOCKET;
       check_int_eq(flowie_server_application_stop(application, &error), TURBO_OK);
@@ -468,7 +479,7 @@ spec("Flowie server application") {
     application_test_fixture_close(&fixture);
   }
 
-  it("restores an explicit protocol_store SQLite channel after restart") {
+  it("starts each explicit SQLite memory protocol store with empty state") {
     static const uint8_t persistent_connect[] = {
         0x10u, 0x15u, 0x00u, 0x04u, 'M',   'Q',   'T',   'T',   0x05u, 0x00u, 0x00u, 0x3cu,
         0x05u, 0x11u, 0x00u, 0x00u, 0x00u, 0x3cu, 0x00u, 0x03u, 'e',   'x',   'p'};
@@ -479,7 +490,7 @@ spec("Flowie server application") {
     flowie_test_socket_t client = FLOWIE_TEST_INVALID_SOCKET;
 
     check_int_eq(application_test_write_worker_config_protocol_channel(
-                     &fixture, "      protocol_store: mqtt.protocol\n", fixture.protocol_store_path),
+                     &fixture, "      protocol_store: mqtt.protocol\n", ":memory:"),
                  0);
     config.config_path = fixture.worker_config_path;
     config.graph_path = FLOWIE_TEST_GRAPH_PATH;
@@ -490,7 +501,7 @@ spec("Flowie server application") {
       check_true(client != FLOWIE_TEST_INVALID_SOCKET);
       check_int_eq(flowie_test_send(client, persistent_connect, sizeof(persistent_connect)),
                    TURBO_OK);
-      check_int_eq(application_test_recv_connack(client, generation == 0 ? 0u : 1u), TURBO_OK);
+      check_int_eq(application_test_recv_connack(client, 0u), TURBO_OK);
       flowie_test_socket_close(client);
       client = FLOWIE_TEST_INVALID_SOCKET;
       check_int_eq(flowie_server_application_stop(application, &error), TURBO_OK);
@@ -507,7 +518,7 @@ spec("Flowie server application") {
     flowie_server_application_t *application = NULL;
 
     check_int_eq(application_test_write_worker_config_protocol_channel(
-                     &fixture, "      session_store: mqtt.protocol\n", fixture.protocol_store_path),
+                     &fixture, "      session_store: mqtt.protocol\n", ":memory:"),
                  0);
     config.config_path = fixture.worker_config_path;
     config.graph_path = FLOWIE_TEST_GRAPH_PATH;
@@ -527,7 +538,7 @@ spec("Flowie server application") {
                      &fixture,
                      "      protocol_store: mqtt.protocol\n"
                      "      session_store: mqtt.protocol\n",
-                     fixture.protocol_store_path),
+                     ":memory:"),
                  0);
     config.config_path = fixture.worker_config_path;
     config.graph_path = FLOWIE_TEST_GRAPH_PATH;
@@ -556,6 +567,26 @@ spec("Flowie server application") {
     check_int_eq(error.worker.detail, FLOWIE_WORKER_ERROR_CONFIG);
     check_str_contains(error.worker.config.path, "mqtt.protocol.config");
     check_str_contains(error.worker.config.message, "database_path");
+    application_test_fixture_close(&fixture);
+  }
+
+  it("rejects a file-backed standalone protocol store") {
+    flowie_server_application_fixture_t fixture = application_test_fixture_open();
+    flowie_server_application_config_t config = FLOWIE_SERVER_APPLICATION_CONFIG_INIT;
+    flowie_server_application_error_t error = FLOWIE_SERVER_APPLICATION_ERROR_INIT;
+    flowie_server_application_t *application = NULL;
+
+    check_int_eq(application_test_write_worker_config_protocol_channel(
+                     &fixture, "      protocol_store: mqtt.protocol\n", fixture.protocol_store_path),
+                 0);
+    config.config_path = fixture.worker_config_path;
+    config.graph_path = FLOWIE_TEST_GRAPH_PATH;
+    check_int_eq(flowie_server_application_create(&config, &application, &error), TURBO_EINVAL);
+    check_null(application);
+    check_int_eq(error.detail, FLOWIE_SERVER_APPLICATION_ERROR_WORKER);
+    check_int_eq(error.worker.detail, FLOWIE_WORKER_ERROR_CONFIG);
+    check_str_contains(error.worker.config.path, "mqtt.protocol.config.database_path");
+    check_str_contains(error.worker.config.message, ":memory:");
     application_test_fixture_close(&fixture);
   }
 

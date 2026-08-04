@@ -14,8 +14,13 @@
 #define FLOW_SQLITE_RECORD_TABLE "turbo_flow_record_store_v1"
 #define FLOW_SQLITE_MAX_BATCH_SIZE UINT16_MAX
 
+static const char FLOW_SQLITE_RECORD_FILE_PRAGMAS[] =
+    "PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;";
+
+static const char FLOW_SQLITE_RECORD_MEMORY_PRAGMAS[] =
+    "PRAGMA journal_mode=MEMORY;PRAGMA synchronous=OFF;";
+
 static const char FLOW_SQLITE_RECORD_SCHEMA[] =
-    "PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;"
     "CREATE TABLE IF NOT EXISTS " FLOW_SQLITE_RECORD_TABLE "("
     "namespace_name TEXT NOT NULL,record_key BLOB NOT NULL,revision INTEGER NOT NULL "
     "CHECK(revision>0),value BLOB NOT NULL,PRIMARY KEY(namespace_name,record_key)) WITHOUT ROWID;";
@@ -430,8 +435,7 @@ static int flow_sqlite_record_config_validate(const turbo_flow_sqlite_record_sto
   if (!config || config->size < sizeof(*config) ||
       config->version != TURBO_FLOW_SQLITE_RECORD_STORE_CONFIG_VERSION || !out ||
       out->size < sizeof(*out) || out->ctx || !config->database_path || !config->database_path[0] ||
-      strcmp(config->database_path, ":memory:") == 0 || !config->namespace_name ||
-      !config->namespace_name[0] ||
+      !config->namespace_name || !config->namespace_name[0] ||
       strlen(config->namespace_name) > TURBO_FLOW_SQLITE_RECORD_STORE_NAMESPACE_MAX ||
       config->busy_timeout_ms < 0 || config->max_records == 0u || config->max_bytes == 0u ||
       config->max_item_bytes == 0u || config->max_item_bytes > config->max_bytes ||
@@ -449,10 +453,12 @@ int turbo_flow_sqlite_record_store_create(const turbo_flow_sqlite_record_store_c
   flow_sqlite_record_store_t *store = NULL;
   size_t records;
   size_t bytes;
+  int process_local;
   int status;
   int rc;
   rc = flow_sqlite_record_config_validate(config, out);
   if (rc != TURBO_OK) return rc;
+  process_local = strcmp(config->database_path, ":memory:") == 0;
   store = (flow_sqlite_record_store_t *)calloc(1u, sizeof(*store));
   if (!store) return TURBO_ENOMEM;
   store->database_path = tstr_dup(config->database_path);
@@ -485,6 +491,9 @@ int turbo_flow_sqlite_record_store_create(const turbo_flow_sqlite_record_store_c
     rc = flow_sqlite_status(sqlite3_errcode(store->database));
     goto fail;
   }
+  rc = flow_sqlite_exec(store->database, process_local ? FLOW_SQLITE_RECORD_MEMORY_PRAGMAS
+                                                       : FLOW_SQLITE_RECORD_FILE_PRAGMAS);
+  if (rc != TURBO_OK) goto fail;
   rc = flow_sqlite_exec(store->database, FLOW_SQLITE_RECORD_SCHEMA);
   if (rc != TURBO_OK) goto fail;
   rc = flow_sqlite_record_stats(store, &records, &bytes);
@@ -494,7 +503,8 @@ int turbo_flow_sqlite_record_store_create(const turbo_flow_sqlite_record_store_c
     goto fail;
   }
   out->api_version = TURBO_FLOW_RECORD_STORE_API_VERSION;
-  out->capabilities = TURBO_FLOW_RECORD_STORE_DURABLE | TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH;
+  out->capabilities = TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH;
+  if (!process_local) out->capabilities |= TURBO_FLOW_RECORD_STORE_DURABLE;
   out->max_key_size = store->max_key_size;
   out->max_value_size = store->max_value_size;
   out->max_batch_size = store->max_batch_size;

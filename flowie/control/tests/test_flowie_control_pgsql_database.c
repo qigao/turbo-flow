@@ -125,8 +125,7 @@ spec("Flowie control PostgreSQL database") {
     flowie_control_credential_revoke_command_t revoke =
         FLOWIE_CONTROL_CREDENTIAL_REVOKE_COMMAND_INIT;
     flowie_control_group_create_command_t group = FLOWIE_CONTROL_GROUP_CREATE_COMMAND_INIT;
-    flowie_control_group_disable_command_t group_disable =
-        FLOWIE_CONTROL_GROUP_DISABLE_COMMAND_INIT;
+    flowie_control_group_delete_command_t group_delete = FLOWIE_CONTROL_GROUP_DELETE_COMMAND_INIT;
     flowie_control_membership_add_command_t membership_add =
         FLOWIE_CONTROL_MEMBERSHIP_ADD_COMMAND_INIT;
     flowie_control_membership_remove_command_t membership_remove =
@@ -156,7 +155,7 @@ spec("Flowie control PostgreSQL database") {
     check_int_eq(flowie_control_pgsql_command_credential_revoke(NULL, &revoke, &result),
                  TURBO_EINVAL);
     check_int_eq(flowie_control_pgsql_command_group_create(NULL, &group, &result), TURBO_EINVAL);
-    check_int_eq(flowie_control_pgsql_command_group_disable(NULL, &group_disable, &result),
+    check_int_eq(flowie_control_pgsql_command_group_delete(NULL, &group_delete, &result),
                  TURBO_EINVAL);
     check_int_eq(flowie_control_pgsql_command_membership_add(NULL, &membership_add, &result),
                  TURBO_EINVAL);

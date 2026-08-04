@@ -31,7 +31,7 @@ typedef struct flowie_control_auth_local_job_s {
   flowie_control_verified_caller_t caller;
   char listener_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char service_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
-  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char peer_certificate_sha256[CORO_TLS_PEER_CERT_SHA256_CAPACITY];
   flowie_control_auth_http_request_t request;
   turbo_flow_security_principal_t principal;
@@ -280,8 +280,8 @@ static const char *flowie_control_auth_http_scope_name(turbo_flow_security_scope
     return "self";
   case TURBO_FLOW_SECURITY_SCOPE_GROUP:
     return "group";
-  case TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP:
-    return "root_group";
+  case TURBO_FLOW_SECURITY_SCOPE_DOMAIN:
+    return "domain";
   case TURBO_FLOW_SECURITY_SCOPE_SYSTEM:
     return "system";
   default:
@@ -307,7 +307,7 @@ int flowie_control_auth_http_encode_principal(const turbo_flow_security_principa
       !flowie_control_auth_http_text_valid(principal->principal_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_auth_http_text_valid(principal->principal_type,
                                            TURBO_FLOW_SECURITY_TYPE_MAX) ||
-      !flowie_control_auth_http_text_valid(principal->root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+      !flowie_control_auth_http_text_valid(principal->domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_auth_http_text_valid(principal->auth_method, TURBO_FLOW_SECURITY_TYPE_MAX))
     return TURBO_EINVAL;
 
@@ -346,8 +346,8 @@ int flowie_control_auth_http_encode_principal(const turbo_flow_security_principa
       flowie_control_auth_http_add(principal_json, "type",
                                    turbo_json_create_string(principal->principal_type)) !=
           TURBO_OK ||
-      flowie_control_auth_http_add(principal_json, "root_group",
-                                   turbo_json_create_string(principal->root_group_id)) !=
+      flowie_control_auth_http_add(principal_json, "domain",
+                                   turbo_json_create_string(principal->domain_id)) !=
           TURBO_OK ||
       flowie_control_auth_http_add(principal_json, "auth_method",
                                    turbo_json_create_string(principal->auth_method)) != TURBO_OK ||
@@ -488,7 +488,7 @@ int flowie_control_auth_iris_endpoint_authenticate_verified(
       caller->authenticated != 1 ||
       !flowie_control_auth_http_text_valid(caller->listener_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_auth_http_text_valid(caller->service_id, TURBO_FLOW_SECURITY_ID_MAX) ||
-      !flowie_control_auth_http_text_valid(caller->root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+      !flowie_control_auth_http_text_valid(caller->domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       (caller->peer_certificate_sha256 &&
        !flowie_control_auth_http_fingerprint_valid(caller->peer_certificate_sha256)) ||
       !flowie_control_auth_http_text_valid(request->identity, TURBO_FLOW_SECURITY_ID_MAX) ||
@@ -521,13 +521,13 @@ int flowie_control_auth_iris_endpoint_authenticate_verified(
   job->caller = (flowie_control_verified_caller_t)FLOWIE_CONTROL_VERIFIED_CALLER_INIT;
   memcpy(job->listener_id, caller->listener_id, strlen(caller->listener_id) + 1u);
   memcpy(job->service_id, caller->service_id, strlen(caller->service_id) + 1u);
-  memcpy(job->root_group_id, caller->root_group_id, strlen(caller->root_group_id) + 1u);
+  memcpy(job->domain_id, caller->domain_id, strlen(caller->domain_id) + 1u);
   if (caller->peer_certificate_sha256)
     memcpy(job->peer_certificate_sha256, caller->peer_certificate_sha256,
            strlen(caller->peer_certificate_sha256) + 1u);
   job->caller.listener_id = job->listener_id;
   job->caller.service_id = job->service_id;
-  job->caller.root_group_id = job->root_group_id;
+  job->caller.domain_id = job->domain_id;
   job->caller.peer_certificate_sha256 =
       job->peer_certificate_sha256[0] ? job->peer_certificate_sha256 : NULL;
   job->caller.authenticated = caller->authenticated;

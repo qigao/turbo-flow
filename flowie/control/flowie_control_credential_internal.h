@@ -21,7 +21,7 @@ typedef struct flowie_control_credential_kdf_params_s {
 void flowie_control_credential_default_params(flowie_control_credential_kdf_params_t *out);
 int flowie_control_credential_params_valid(const flowie_control_credential_kdf_params_t *params);
 
-int flowie_control_credential_generate(uint8_t secret[FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE],
+int flowie_control_credential_generate(char token[FLOWIE_CONTROL_CREDENTIAL_TOKEN_CAPACITY],
                                        uint8_t salt[FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE],
                                        uint8_t verifier[FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE],
                                        const flowie_control_credential_kdf_params_t *params);

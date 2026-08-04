@@ -21,7 +21,7 @@
 #define FLOWIE_CONTROL_MANAGEMENT_SESSION_MAX_TTL_SECONDS 86400u
 
 typedef struct flowie_control_management_session_entry_s {
-  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char principal_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char csrf[FLOWIE_CONTROL_MANAGEMENT_SESSION_CSRF_SIZE + 1u];
   uint64_t expires_at;
@@ -172,7 +172,7 @@ static int flowie_control_management_session_evict_locked(
 }
 
 static void flowie_control_management_session_evict_principal_locked(
-    flowie_control_management_session_store_t *store, const char *root_group_id,
+    flowie_control_management_session_store_t *store, const char *domain_id,
     const char *principal_id) {
   uint8_t oldest[FLOWIE_CONTROL_MANAGEMENT_SESSION_DIGEST_SIZE] = {0};
   uint64_t sequence = UINT64_MAX;
@@ -184,7 +184,7 @@ static void flowie_control_management_session_evict_principal_locked(
     const flowie_control_management_session_entry_t *entry =
         (const flowie_control_management_session_entry_t *)turbo_hash_map_value_at_const(
             &store->sessions, slot);
-    if (!key || !entry || strcmp(entry->root_group_id, root_group_id) != 0 ||
+    if (!key || !entry || strcmp(entry->domain_id, domain_id) != 0 ||
         strcmp(entry->principal_id, principal_id) != 0)
       continue;
     ++matching;
@@ -265,10 +265,10 @@ void flowie_control_management_session_store_destroy(
 }
 
 static int flowie_control_management_session_authenticate(
-    flowie_control_management_session_store_t *store, const char *root_group_id,
+    flowie_control_management_session_store_t *store, const char *domain_id,
     const char *presented_identity, const uint8_t *secret, size_t secret_size,
     const char *remote_address, flowie_control_management_caller_t *caller_out,
-    char caller_root_group_out[TURBO_FLOW_SECURITY_ID_MAX + 1u],
+    char caller_domain_out[TURBO_FLOW_SECURITY_ID_MAX + 1u],
     char caller_actor_out[TURBO_FLOW_SECURITY_ID_MAX + 1u],
     uint64_t *principal_expires_at_out) {
   flowie_control_authenticate_request_t request = FLOWIE_CONTROL_AUTHENTICATE_REQUEST_INIT;
@@ -277,12 +277,12 @@ static int flowie_control_management_session_authenticate(
   int rc;
   if (caller_out && caller_out->size >= sizeof(*caller_out))
     *caller_out = (flowie_control_management_caller_t)FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
-  if (caller_root_group_out) caller_root_group_out[0] = '\0';
+  if (caller_domain_out) caller_domain_out[0] = '\0';
   if (caller_actor_out) caller_actor_out[0] = '\0';
   if (principal_expires_at_out) *principal_expires_at_out = 0u;
   if (!store || !caller_out || caller_out->size < sizeof(*caller_out) ||
-      !caller_root_group_out || !caller_actor_out || !principal_expires_at_out ||
-      !flowie_control_management_session_text_valid(root_group_id,
+      !caller_domain_out || !caller_actor_out || !principal_expires_at_out ||
+      !flowie_control_management_session_text_valid(domain_id,
                                                      TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_management_session_text_valid(presented_identity,
                                                      TURBO_FLOW_SECURITY_ID_MAX) ||
@@ -297,15 +297,15 @@ static int flowie_control_management_session_authenticate(
   request.protocol = "https";
   request.remote_address = remote_address;
   rc = flowie_control_auth_service_authenticate_root(
-      store->auth_service, root_group_id, FLOWIE_CONTROL_MANAGEMENT_SESSION_SCOPE, &request, 0,
+      store->auth_service, domain_id, FLOWIE_CONTROL_MANAGEMENT_SESSION_SCOPE, &request, 0,
       &principal, NULL);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_management_identity_resolve_principal(
-      &store->repository, principal.root_group_id, principal.principal_id, &caller);
+      &store->repository, principal.domain_id, principal.principal_id, &caller);
   if (rc == TURBO_OK) {
-    memcpy(caller_root_group_out, caller.root_group_id, strlen(caller.root_group_id) + 1u);
+    memcpy(caller_domain_out, caller.domain_id, strlen(caller.domain_id) + 1u);
     memcpy(caller_actor_out, caller.actor, strlen(caller.actor) + 1u);
-    caller_out->root_group_id = caller_root_group_out;
+    caller_out->domain_id = caller_domain_out;
     caller_out->actor = caller_actor_out;
     caller_out->permissions = caller.permissions;
     *principal_expires_at_out = principal.expires_at;
@@ -327,7 +327,7 @@ static int flowie_control_management_session_issue(
   int rc;
   if (token_out) token_out[0] = '\0';
   if (!store || !caller || caller->size < sizeof(*caller) || !token_out ||
-      !flowie_control_management_session_text_valid(caller->root_group_id,
+      !flowie_control_management_session_text_valid(caller->domain_id,
                                                      TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_management_session_text_valid(caller->actor,
                                                      TURBO_FLOW_SECURITY_ID_MAX) ||
@@ -347,7 +347,7 @@ static int flowie_control_management_session_issue(
   if (rc != TURBO_OK) goto done;
   flowie_control_management_session_hex(token_random, token_out);
   flowie_control_management_session_hex(csrf_random, entry.csrf);
-  memcpy(entry.root_group_id, caller->root_group_id, strlen(caller->root_group_id) + 1u);
+  memcpy(entry.domain_id, caller->domain_id, strlen(caller->domain_id) + 1u);
   memcpy(entry.principal_id, caller->actor, strlen(caller->actor) + 1u);
   entry.expires_at = now + store->ttl_seconds;
   if (principal_expires_at < entry.expires_at) entry.expires_at = principal_expires_at;
@@ -355,7 +355,7 @@ static int flowie_control_management_session_issue(
   turbo_mutex_lock(&store->lock);
   flowie_control_management_session_prune_locked(store, now);
   flowie_control_management_session_evict_principal_locked(
-      store, entry.root_group_id, entry.principal_id);
+      store, entry.domain_id, entry.principal_id);
   if (turbo_hash_map_size(&store->sessions) >= store->capacity &&
       !flowie_control_management_session_evict_locked(store))
     rc = TURBO_EBUSY;
@@ -376,18 +376,18 @@ done:
 }
 
 int flowie_control_management_session_login(
-    flowie_control_management_session_store_t *store, const char *root_group_id,
+    flowie_control_management_session_store_t *store, const char *domain_id,
     const char *presented_identity, const uint8_t *secret, size_t secret_size,
     const char *remote_address,
     char token_out[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u]) {
   flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
-  char caller_root_group[TURBO_FLOW_SECURITY_ID_MAX + 1u] = {0};
+  char caller_domain[TURBO_FLOW_SECURITY_ID_MAX + 1u] = {0};
   char caller_actor[TURBO_FLOW_SECURITY_ID_MAX + 1u] = {0};
   uint64_t principal_expires_at = 0u;
   int rc;
   if (token_out) token_out[0] = '\0';
   if (!store || !token_out ||
-      !flowie_control_management_session_text_valid(root_group_id,
+      !flowie_control_management_session_text_valid(domain_id,
                                                      TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_management_session_text_valid(presented_identity,
                                                      TURBO_FLOW_SECURITY_ID_MAX) ||
@@ -396,12 +396,12 @@ int flowie_control_management_session_login(
                                                      FLOWIE_CONTROL_AUTH_REMOTE_ADDRESS_MAX))
     return TURBO_EINVAL;
   rc = flowie_control_management_session_authenticate(
-      store, root_group_id, presented_identity, secret, secret_size, remote_address, &caller,
-      caller_root_group, caller_actor, &principal_expires_at);
+      store, domain_id, presented_identity, secret, secret_size, remote_address, &caller,
+      caller_domain, caller_actor, &principal_expires_at);
   if (rc == TURBO_OK)
     rc = flowie_control_management_session_issue(store, &caller, principal_expires_at, token_out);
   flowie_control_credential_wipe(&caller, sizeof(caller));
-  flowie_control_credential_wipe(caller_root_group, sizeof(caller_root_group));
+  flowie_control_credential_wipe(caller_domain, sizeof(caller_domain));
   flowie_control_credential_wipe(caller_actor, sizeof(caller_actor));
   return rc;
 }
@@ -440,12 +440,12 @@ int flowie_control_management_session_resolve(
     goto done;
   }
   rc = flowie_control_management_identity_resolve_principal(
-      &store->repository, entry.root_group_id, entry.principal_id, &caller);
+      &store->repository, entry.domain_id, entry.principal_id, &caller);
   if (rc != TURBO_OK) {
     (void)flowie_control_management_session_revoke(store, token);
     goto done;
   }
-  memcpy(identity.root_group_id, caller.root_group_id, strlen(caller.root_group_id) + 1u);
+  memcpy(identity.domain_id, caller.domain_id, strlen(caller.domain_id) + 1u);
   memcpy(identity.principal_id, caller.actor, strlen(caller.actor) + 1u);
   identity.permissions = caller.permissions;
   memcpy(identity.csrf, entry.csrf, sizeof(entry.csrf));

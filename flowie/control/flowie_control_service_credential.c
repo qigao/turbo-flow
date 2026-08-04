@@ -11,7 +11,7 @@ enum { FLOWIE_CONTROL_SERVICE_CREDENTIAL_DIGEST_SIZE = 32 };
 typedef struct flowie_control_service_credential_record_s {
   char service_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char token_ref[FLOWIE_CONTROL_SERVICE_CREDENTIAL_REFERENCE_MAX + 1u];
-  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char peer_certificate_sha256[FLOWIE_CONTROL_AUTH_CERT_SHA256_TEXT_SIZE + 1u];
 } flowie_control_service_credential_record_t;
 
@@ -96,7 +96,7 @@ int flowie_control_service_credential_resolver_create(
                                                       TURBO_FLOW_SECURITY_ID_MAX) ||
         !flowie_control_service_credential_text_valid(source->token_ref,
                                                       FLOWIE_CONTROL_SERVICE_CREDENTIAL_REFERENCE_MAX) ||
-        !flowie_control_service_credential_text_valid(source->root_group_id,
+        !flowie_control_service_credential_text_valid(source->domain_id,
                                                       TURBO_FLOW_SECURITY_ID_MAX) ||
         (source->peer_certificate_sha256 &&
          !flowie_control_service_credential_fingerprint_valid(
@@ -132,8 +132,8 @@ int flowie_control_service_credential_resolver_create(
     if (rc != TURBO_OK) break;
     memcpy(destination->service_id, source->service_id, strlen(source->service_id) + 1u);
     memcpy(destination->token_ref, source->token_ref, strlen(source->token_ref) + 1u);
-    memcpy(destination->root_group_id, source->root_group_id,
-           strlen(source->root_group_id) + 1u);
+    memcpy(destination->domain_id, source->domain_id,
+           strlen(source->domain_id) + 1u);
     if (source->peer_certificate_sha256)
       memcpy(destination->peer_certificate_sha256, source->peer_certificate_sha256,
              FLOWIE_CONTROL_AUTH_CERT_SHA256_TEXT_SIZE + 1u);
@@ -207,7 +207,7 @@ int flowie_control_service_credential_resolve(
   if (match_count != 1u) return TURBO_EPERM;
   caller.listener_id = resolver->listener_id;
   caller.service_id = resolver->bindings[matched].service_id;
-  caller.root_group_id = resolver->bindings[matched].root_group_id;
+  caller.domain_id = resolver->bindings[matched].domain_id;
   caller.peer_certificate_sha256 =
       resolver->bindings[matched].peer_certificate_sha256[0]
           ? resolver->bindings[matched].peer_certificate_sha256

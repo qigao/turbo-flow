@@ -23,11 +23,11 @@ static uint64_t management_session_clock(void *ctx) {
   return 10000u;
 }
 
-static int management_session_policy_version(void *ctx, const char *root_group_id,
+static int management_session_policy_version(void *ctx, const char *domain_id,
                                              uint64_t *version_out) {
   (void)ctx;
   if (version_out) *version_out = 0u;
-  if (!root_group_id || !version_out || strcmp(root_group_id, "root-a") != 0)
+  if (!domain_id || !version_out || strcmp(domain_id, "root-a") != 0)
     return TURBO_EINVAL;
   *version_out = 1u;
   return TURBO_OK;
@@ -42,7 +42,7 @@ static management_session_fixture_t management_session_fixture_open(
       FLOWIE_CONTROL_MANAGEMENT_SESSION_CONFIG_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
-  flowie_control_root_group_create_command_t root = FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+  flowie_control_domain_create_command_t root = FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
   flowie_control_user_create_command_t user = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
   flowie_control_credential_issue_command_t credential =
       FLOWIE_CONTROL_CREDENTIAL_ISSUE_COMMAND_INIT;
@@ -55,15 +55,15 @@ static management_session_fixture_t management_session_fixture_open(
   store_config.database_path = fixture.database_path;
   check_int_eq(flowie_control_store_open(&store_config, &fixture.store), TURBO_OK);
 
-  root.root_group_id = "root-a";
+  root.domain_id = "root-a";
   root.actor = "bootstrap";
   root.request_id = "session-root";
   root.expected_revision = revision;
   root.occurred_at = 1u;
-  check_int_eq(flowie_control_store_root_group_create(fixture.store, &root, &result), TURBO_OK);
+  check_int_eq(flowie_control_store_domain_create(fixture.store, &root, &result), TURBO_OK);
   revision = result.revision;
 
-  user.root_group_id = "root-a";
+  user.domain_id = "root-a";
   user.principal_id = "admin-a";
   user.principal_type = "operator";
   user.actor = "bootstrap";
@@ -74,7 +74,7 @@ static management_session_fixture_t management_session_fixture_open(
   check_int_eq(flowie_control_store_user_create(fixture.store, &user, &result), TURBO_OK);
   revision = result.revision;
 
-  credential.root_group_id = "root-a";
+  credential.domain_id = "root-a";
   credential.principal_id = "admin-a";
   credential.actor = "bootstrap";
   credential.request_id = "session-credential-a";
@@ -107,7 +107,7 @@ static management_session_fixture_t management_session_fixture_open(
   revision = generated.revision;
   flowie_control_generated_credential_wipe(&generated);
 
-  role.root_group_id = "root-a";
+  role.domain_id = "root-a";
   role.role_id = FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER;
   role.actor = "bootstrap";
   role.request_id = "session-role-viewer";
@@ -117,7 +117,7 @@ static management_session_fixture_t management_session_fixture_open(
   check_int_eq(flowie_control_store_role_create(fixture.store, &role, &result), TURBO_OK);
   revision = result.revision;
 
-  assignment.root_group_id = "root-a";
+  assignment.domain_id = "root-a";
   assignment.principal_id = "admin-a";
   assignment.role_id = FLOWIE_CONTROL_MANAGEMENT_ROLE_VIEWER;
   assignment.actor = "bootstrap";

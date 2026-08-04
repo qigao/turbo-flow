@@ -13,7 +13,7 @@
 #include <string.h>
 
 #define FLOWIE_CONTROL_PGSQL_MIGRATION_LOCK_SEED "194728351"
-#define FLOWIE_CONTROL_PGSQL_SCHEMA_FINGERPRINT "flowie-control-schema-v1-20260727"
+#define FLOWIE_CONTROL_PGSQL_SCHEMA_FINGERPRINT "flowie-control-domain-schema-v2-20260804"
 #define FLOWIE_CONTROL_PGSQL_STRINGIFY_VALUE(value) #value
 #define FLOWIE_CONTROL_PGSQL_STRINGIFY(value) FLOWIE_CONTROL_PGSQL_STRINGIFY_VALUE(value)
 
@@ -221,46 +221,45 @@ static tstr_t flowie_control_pgsql_schema_sql(const char *schema) {
                               "INSERT INTO %s.meta(singleton,revision) VALUES(1,0)"
                               " ON CONFLICT(singleton) DO NOTHING;",
                               schema, schema);
-  FLOWIE_CONTROL_PGSQL_APPEND("CREATE TABLE IF NOT EXISTS %s.root_group("
-                              "root_group_id TEXT PRIMARY KEY);",
+  FLOWIE_CONTROL_PGSQL_APPEND("CREATE TABLE IF NOT EXISTS %s.domain("
+                              "domain_id TEXT PRIMARY KEY);",
                               schema);
   FLOWIE_CONTROL_PGSQL_APPEND(
       "CREATE TABLE IF NOT EXISTS %s.user_account("
-      "root_group_id TEXT NOT NULL,principal_id TEXT NOT NULL,principal_type TEXT NOT NULL,"
+      "domain_id TEXT NOT NULL,principal_id TEXT NOT NULL,principal_type TEXT NOT NULL,"
       "enabled BOOLEAN NOT NULL,revision BIGINT NOT NULL CHECK(revision>0),"
       "created_at BIGINT NOT NULL CHECK(created_at>0),updated_at BIGINT NOT NULL "
       "CHECK(updated_at>0),"
-      "PRIMARY KEY(root_group_id,principal_id),"
-      "FOREIGN KEY(root_group_id) REFERENCES %s.root_group(root_group_id));",
+      "PRIMARY KEY(domain_id,principal_id),"
+      "FOREIGN KEY(domain_id) REFERENCES %s.domain(domain_id));",
       schema, schema);
   FLOWIE_CONTROL_PGSQL_APPEND(
       "CREATE TABLE IF NOT EXISTS %s.security_group("
-      "root_group_id TEXT NOT NULL,group_id TEXT NOT NULL,parent_group_id TEXT,"
+      "domain_id TEXT NOT NULL,group_id TEXT NOT NULL,parent_group_id TEXT,"
       "depth INTEGER NOT NULL CHECK(depth>=0 AND depth<=" FLOWIE_CONTROL_PGSQL_STRINGIFY(
           FLOWIE_CONTROL_GROUP_MAX_DEPTH) "),enabled BOOLEAN NOT NULL,"
                                           "revision BIGINT NOT NULL CHECK(revision>0),created_at "
                                           "BIGINT NOT NULL CHECK(created_at>0),"
                                           "updated_at BIGINT NOT NULL CHECK(updated_at>0),PRIMARY "
-                                          "KEY(root_group_id,group_id),"
-                                          "FOREIGN KEY(root_group_id) REFERENCES "
-                                          "%s.root_group(root_group_id),"
-                                          "FOREIGN KEY(root_group_id,parent_group_id) REFERENCES "
-                                          "%s.security_group(root_group_id,group_id),"
-                                          "CHECK((group_id=root_group_id AND parent_group_id IS "
-                                          "NULL AND depth=0) OR"
-                                          "(group_id<>root_group_id AND parent_group_id IS NOT "
-                                          "NULL AND depth>0)));",
+                                          "KEY(domain_id,group_id),"
+                                          "FOREIGN KEY(domain_id) REFERENCES "
+                                          "%s.domain(domain_id),"
+                                          "FOREIGN KEY(domain_id,parent_group_id) REFERENCES "
+                                          "%s.security_group(domain_id,group_id),"
+                                          "CHECK(group_id<>domain_id),"
+                                          "CHECK((parent_group_id IS NULL AND depth=0) OR"
+                                          "(parent_group_id IS NOT NULL AND depth>0)));",
       schema, schema, schema);
   FLOWIE_CONTROL_PGSQL_APPEND(
       "CREATE TABLE IF NOT EXISTS %s.security_role("
-      "root_group_id TEXT NOT NULL,role_id TEXT NOT NULL,enabled BOOLEAN NOT NULL,"
+      "domain_id TEXT NOT NULL,role_id TEXT NOT NULL,enabled BOOLEAN NOT NULL,"
       "revision BIGINT NOT NULL CHECK(revision>0),created_at BIGINT NOT NULL CHECK(created_at>0),"
-      "updated_at BIGINT NOT NULL CHECK(updated_at>0),PRIMARY KEY(root_group_id,role_id),"
-      "FOREIGN KEY(root_group_id) REFERENCES %s.root_group(root_group_id));",
+      "updated_at BIGINT NOT NULL CHECK(updated_at>0),PRIMARY KEY(domain_id,role_id),"
+      "FOREIGN KEY(domain_id) REFERENCES %s.domain(domain_id));",
       schema, schema);
   FLOWIE_CONTROL_PGSQL_APPEND(
       "CREATE TABLE IF NOT EXISTS %s.credential("
-      "root_group_id TEXT NOT NULL,principal_id TEXT NOT NULL,"
+      "domain_id TEXT NOT NULL,principal_id TEXT NOT NULL,"
       "kdf_algorithm INTEGER NOT NULL CHECK(kdf_algorithm=" FLOWIE_CONTROL_PGSQL_STRINGIFY(
           FLOWIE_CONTROL_CREDENTIAL_KDF_ARGON2ID) "),"
                                                   "memory_blocks INTEGER NOT NULL "
@@ -284,45 +283,44 @@ static tstr_t flowie_control_pgsql_schema_sql(const char *schema) {
                                                                                            "=" FLOWIE_CONTROL_PGSQL_STRINGIFY(
                                                                                                FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE) "),enabled BOOLEAN NOT NULL,"
                                                                                                                                         "revision BIGINT NOT NULL CHECK(revision>0),created_at BIGINT NOT NULL CHECK(created_at>0),"
-                                                                                                                                        "updated_at BIGINT NOT NULL CHECK(updated_at>0),PRIMARY KEY(root_group_id,principal_id),"
-                                                                                                                                        "FOREIGN KEY(root_group_id,principal_id) REFERENCES %s.user_account(root_group_id,principal_id));",
+                                                                                                                                        "updated_at BIGINT NOT NULL CHECK(updated_at>0),PRIMARY KEY(domain_id,principal_id),"
+                                                                                                                                        "FOREIGN KEY(domain_id,principal_id) REFERENCES %s.user_account(domain_id,principal_id));",
       schema, schema);
   FLOWIE_CONTROL_PGSQL_APPEND(
       "CREATE TABLE IF NOT EXISTS %s.membership("
-      "root_group_id TEXT NOT NULL,principal_id TEXT NOT NULL,group_id TEXT NOT NULL,"
+      "domain_id TEXT NOT NULL,principal_id TEXT NOT NULL,group_id TEXT NOT NULL,"
       "revision BIGINT NOT NULL CHECK(revision>0),created_at BIGINT NOT NULL CHECK(created_at>0),"
-      "PRIMARY KEY(root_group_id,principal_id,group_id),"
-      "FOREIGN KEY(root_group_id,principal_id) REFERENCES "
-      "%s.user_account(root_group_id,principal_id),"
-      "FOREIGN KEY(root_group_id,group_id) REFERENCES %s.security_group(root_group_id,group_id),"
-      "CHECK(group_id<>root_group_id));",
+      "PRIMARY KEY(domain_id,principal_id,group_id),"
+      "FOREIGN KEY(domain_id,principal_id) REFERENCES "
+      "%s.user_account(domain_id,principal_id),"
+      "FOREIGN KEY(domain_id,group_id) REFERENCES %s.security_group(domain_id,group_id));",
       schema, schema, schema);
   FLOWIE_CONTROL_PGSQL_APPEND(
       "CREATE TABLE IF NOT EXISTS %s.user_role("
-      "root_group_id TEXT NOT NULL,principal_id TEXT NOT NULL,role_id TEXT NOT NULL,"
+      "domain_id TEXT NOT NULL,principal_id TEXT NOT NULL,role_id TEXT NOT NULL,"
       "revision BIGINT NOT NULL CHECK(revision>0),created_at BIGINT NOT NULL CHECK(created_at>0),"
-      "PRIMARY KEY(root_group_id,principal_id,role_id),"
-      "FOREIGN KEY(root_group_id,principal_id) REFERENCES "
-      "%s.user_account(root_group_id,principal_id),"
-      "FOREIGN KEY(root_group_id,role_id) REFERENCES %s.security_role(root_group_id,role_id));",
+      "PRIMARY KEY(domain_id,principal_id,role_id),"
+      "FOREIGN KEY(domain_id,principal_id) REFERENCES "
+      "%s.user_account(domain_id,principal_id),"
+      "FOREIGN KEY(domain_id,role_id) REFERENCES %s.security_role(domain_id,role_id));",
       schema, schema, schema);
   FLOWIE_CONTROL_PGSQL_APPEND(
       "CREATE TABLE IF NOT EXISTS %s.audit("
       "request_id TEXT PRIMARY KEY,actor TEXT NOT NULL,operation TEXT NOT NULL,"
-      "root_group_id TEXT NOT NULL,target_id TEXT NOT NULL,target_detail TEXT NOT NULL,"
+      "domain_id TEXT NOT NULL,target_id TEXT NOT NULL,target_detail TEXT NOT NULL,"
       "result_revision BIGINT NOT NULL CHECK(result_revision>0),"
       "occurred_at BIGINT NOT NULL CHECK(occurred_at>0),"
-      "FOREIGN KEY(root_group_id) REFERENCES %s.root_group(root_group_id));"
+      "FOREIGN KEY(domain_id) REFERENCES %s.domain(domain_id));"
       "CREATE INDEX IF NOT EXISTS audit_root_revision_idx"
-      " ON %s.audit(root_group_id,result_revision);",
+      " ON %s.audit(domain_id,result_revision);",
       schema, schema, schema);
   FLOWIE_CONTROL_PGSQL_APPEND(
       "CREATE TABLE IF NOT EXISTS %s.policy_draft("
-      "root_group_id TEXT NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal>=0 AND ordinal<4096),"
+      "domain_id TEXT NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal>=0 AND ordinal<4096),"
       "rule_line TEXT NOT NULL CHECK(length(rule_line)>0 AND length(rule_line)<=2047),"
       "revision BIGINT NOT NULL CHECK(revision>0),updated_at BIGINT NOT NULL CHECK(updated_at>0),"
-      "PRIMARY KEY(root_group_id,ordinal),"
-      "FOREIGN KEY(root_group_id) REFERENCES %s.root_group(root_group_id));",
+      "PRIMARY KEY(domain_id,ordinal),"
+      "FOREIGN KEY(domain_id) REFERENCES %s.domain(domain_id));",
       schema, schema);
   FLOWIE_CONTROL_PGSQL_APPEND(
       "CREATE TABLE IF NOT EXISTS %s.acl_bundle("
@@ -388,7 +386,7 @@ static int flowie_control_pgsql_schema_objects_validate(PGconn *connection,
       "SELECT count(*)::text FROM pg_catalog.pg_class c"
       " JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace"
       " WHERE n.nspname=$1 AND c.relkind IN('r','p') AND c.relname IN("
-      "'schema_version','meta','root_group','user_account','security_group','security_role',"
+      "'schema_version','meta','domain','user_account','security_group','security_role',"
       "'credential','membership','user_role','audit','policy_draft','acl_bundle','acl_rule',"
       "'policy_publish_result')";
   static const unsigned long expected_count = 14u;

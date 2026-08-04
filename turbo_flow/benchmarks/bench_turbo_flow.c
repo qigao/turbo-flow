@@ -154,7 +154,7 @@ static turbo_flow_security_realm_t *bench_security_realm(size_t rule_count,
       check_true(written > 0 && (size_t)written < sizeof(subject));
       bench_security_copy(rules[i].subject, sizeof(rules[i].subject), subject);
     }
-    bench_security_copy(rules[i].root_group_id, sizeof(rules[i].root_group_id), "root-0");
+    bench_security_copy(rules[i].domain_id, sizeof(rules[i].domain_id), "root-0");
     rules[i].action_mask = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     rules[i].resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     rules[i].match_kind = layout == BENCH_SECURITY_SHARED_PREFIX ? TURBO_FLOW_SECURITY_MATCH_PREFIX
@@ -170,8 +170,8 @@ static turbo_flow_security_realm_t *bench_security_realm(size_t rule_count,
   rules[rule_count - 1u].effect = TURBO_FLOW_SECURITY_ALLOW;
   bench_security_copy(rules[rule_count - 1u].subject, sizeof(rules[rule_count - 1u].subject),
                       "writer");
-  bench_security_copy(rules[rule_count - 1u].root_group_id,
-                      sizeof(rules[rule_count - 1u].root_group_id), "root-0");
+  bench_security_copy(rules[rule_count - 1u].domain_id,
+                      sizeof(rules[rule_count - 1u].domain_id), "root-0");
   rules[rule_count - 1u].action_mask = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
   rules[rule_count - 1u].resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
   bench_security_copy(rules[rule_count - 1u].pattern, sizeof(rules[rule_count - 1u].pattern),
@@ -1277,16 +1277,16 @@ spec("Turbo Flow Bench") {
     turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
     bench_security_copy(principal.principal_id, sizeof(principal.principal_id), "device-7");
     bench_security_copy(principal.principal_type, sizeof(principal.principal_type), "device");
-    bench_security_copy(principal.root_group_id, sizeof(principal.root_group_id), "root-0");
+    bench_security_copy(principal.domain_id, sizeof(principal.domain_id), "root-0");
     bench_security_copy(principal.auth_method, sizeof(principal.auth_method), "token");
-    principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+    principal.scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
     principal.role_count = 1u;
     bench_security_copy(principal.roles[0], sizeof(principal.roles[0]), "writer");
     principal.group_count = 1u;
     bench_security_copy(principal.groups[0], sizeof(principal.groups[0]), "root-0");
     principal.policy_version = 1u;
     request.principal = &principal;
-    request.root_group_id = "root-0";
+    request.domain_id = "root-0";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "target/topic";

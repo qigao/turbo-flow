@@ -20,7 +20,7 @@ static int flowie_control_management_contract_contains(const char *items, size_t
 /**
  * Exercise the production management service through one new, empty Repository provider.
  *
- * Root Group bootstrap intentionally uses the Repository directly because bootstrap is not an
+ * Domain bootstrap intentionally uses the Repository directly because bootstrap is not an
  * authenticated management operation. Every subsequent account, Group, Role and ACL operation
  * crosses the same service boundary used by JSON-RPC.
  */
@@ -28,7 +28,7 @@ static void
 flowie_control_management_repository_contract_run(const flowie_control_repository_t *repository) {
   static const char policy_rule[] =
       "allow|role|operator|root-a|subscribe|mqtt_topic|adapter|root-a/events/#";
-  flowie_control_root_group_create_command_t root = FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+  flowie_control_domain_create_command_t root = FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
   flowie_control_management_service_config_t config = FLOWIE_CONTROL_MANAGEMENT_SERVICE_CONFIG_INIT;
   flowie_control_management_service_t *service = NULL;
   flowie_control_management_caller_t viewer = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
@@ -74,30 +74,30 @@ flowie_control_management_repository_contract_run(const flowie_control_repositor
   check_not_null(repository);
   check_int_eq(flowie_control_repository_validate(repository), TURBO_OK);
 
-  root.root_group_id = "root-a";
+  root.domain_id = "root-a";
   root.actor = "bootstrap";
   root.request_id = "management-contract-root";
   root.occurred_at = 1000u;
-  check_int_eq(repository->user->root_group_create(repository->ctx, &root, &result), TURBO_OK);
+  check_int_eq(repository->user->domain_create(repository->ctx, &root, &result), TURBO_OK);
 
   config.repository = repository;
   check_int_eq(flowie_control_management_service_create(&config, &service), TURBO_OK);
   check_not_null(service);
 
-  viewer.root_group_id = "root-a";
+  viewer.domain_id = "root-a";
   viewer.actor = "viewer-a";
   viewer.permissions = FLOWIE_CONTROL_MANAGEMENT_VIEWER;
-  user_admin.root_group_id = "root-a";
+  user_admin.domain_id = "root-a";
   user_admin.actor = "user-admin-a";
   user_admin.permissions = FLOWIE_CONTROL_MANAGEMENT_USER_ADMIN;
-  policy_admin.root_group_id = "root-a";
+  policy_admin.domain_id = "root-a";
   policy_admin.actor = "policy-admin-a";
   policy_admin.permissions = FLOWIE_CONTROL_MANAGEMENT_POLICY_ADMIN;
-  security_admin.root_group_id = "root-a";
+  security_admin.domain_id = "root-a";
   security_admin.actor = "security-admin-a";
   security_admin.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
 
-  user.root_group_id = "root-a";
+  user.domain_id = "root-a";
   user.principal_id = "device-a";
   user.principal_type = "device";
   user.actor = viewer.actor;
@@ -138,9 +138,9 @@ flowie_control_management_repository_contract_run(const flowie_control_repositor
   check_false(has_more);
   check_str_eq(user_page[0].principal_id, "device-b");
 
-  group.root_group_id = "root-a";
+  group.domain_id = "root-a";
   group.group_id = "operators";
-  group.parent_group_id = "root-a";
+  group.parent_group_id = NULL;
   group.actor = user_admin.actor;
   group.request_id = "management-contract-group";
   group.expected_revision = 3u;
@@ -151,10 +151,10 @@ flowie_control_management_repository_contract_run(const flowie_control_repositor
   check_int_eq(flowie_control_management_group_list(service, &viewer, NULL, group_page, 4u, &count,
                                                     &has_more),
                TURBO_OK);
-  check_size_eq(count, 2u);
+  check_size_eq(count, 1u);
   check_false(has_more);
 
-  membership.root_group_id = "root-a";
+  membership.domain_id = "root-a";
   membership.principal_id = "device-a";
   membership.group_id = "operators";
   membership.actor = user_admin.actor;
@@ -167,14 +167,11 @@ flowie_control_management_repository_contract_run(const flowie_control_repositor
   check_int_eq(
       flowie_control_management_effective_groups(service, &viewer, "device-a", &effective_groups),
       TURBO_OK);
-  check_true(flowie_control_management_contract_contains(effective_groups.groups[0],
-                                                         sizeof(effective_groups.groups[0]),
-                                                         effective_groups.group_count, "root-a"));
   check_true(flowie_control_management_contract_contains(
       effective_groups.groups[0], sizeof(effective_groups.groups[0]), effective_groups.group_count,
       "operators"));
 
-  role.root_group_id = "root-a";
+  role.domain_id = "root-a";
   role.role_id = "operator";
   role.actor = security_admin.actor;
   role.request_id = "management-contract-role";
@@ -190,7 +187,7 @@ flowie_control_management_repository_contract_run(const flowie_control_repositor
   check_false(has_more);
   check_str_eq(role_page[0].role_id, "operator");
 
-  assignment.root_group_id = "root-a";
+  assignment.domain_id = "root-a";
   assignment.principal_id = "device-a";
   assignment.role_id = "operator";
   assignment.actor = security_admin.actor;
@@ -207,7 +204,7 @@ flowie_control_management_repository_contract_run(const flowie_control_repositor
   check_uint_eq(effective_roles.role_count, 1u);
   check_str_eq(effective_roles.roles[0], "operator");
 
-  rule.root_group_id = "root-a";
+  rule.domain_id = "root-a";
   rule.ordinal = 10u;
   rule.rule_line = policy_rule;
   rule.actor = policy_admin.actor;
@@ -230,7 +227,7 @@ flowie_control_management_repository_contract_run(const flowie_control_repositor
   check_uint_eq(validation.store_revision, 8u);
   check_size_eq(validation.rule_count, 1u);
 
-  publish.root_group_id = "root-a";
+  publish.domain_id = "root-a";
   publish.actor = policy_admin.actor;
   publish.request_id = "management-contract-publish";
   publish.expected_revision = 8u;

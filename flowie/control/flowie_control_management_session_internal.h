@@ -18,7 +18,7 @@ typedef uint64_t (*flowie_control_management_session_clock_fn)(void *ctx);
 
 typedef struct flowie_control_management_session_identity_s {
   size_t size;
-  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char principal_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   uint32_t permissions;
   char csrf[FLOWIE_CONTROL_MANAGEMENT_SESSION_CSRF_SIZE + 1u];
@@ -55,7 +55,7 @@ void flowie_control_management_session_store_destroy(
  * All input strings are borrowed for this call. token_out is always cleared on failure.
  */
 int flowie_control_management_session_login(
-    flowie_control_management_session_store_t *store, const char *root_group_id,
+    flowie_control_management_session_store_t *store, const char *domain_id,
     const char *presented_identity, const uint8_t *secret, size_t secret_size,
     const char *remote_address,
     char token_out[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u]);

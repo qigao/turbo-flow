@@ -25,7 +25,7 @@ Graph；`flowie_endpoint_core_*` 直连 endpoint 不创建 Graph。只有调用�
 
 服务端不会从 Broker YAML 中读取 ACL rule body，也不会让 MQTT worker 连接用户认证数据库。生产入口
 使用 `flowie_server --control-config <flowie-control.yml>` 在同一应用生命周期内启动 Control runtime；
-MQTT worker 仍只通过 loopback HTTPS `/v3/authenticate` 和 `/v3/acl` 访问它，不跨层调用 Repository。
+MQTT worker 仍只通过 loopback HTTPS `/v4/authenticate` 和 `/v4/acl` 访问它，不跨层调用 Repository。
 Control 可把本地 Auth/ACL/管理事实存入 SQLite 或 PostgreSQL；数据库连接与权限不会进入 MQTT worker。
 独立 `flowie-control` 可执行文件保留为兼容、诊断入口，不是推荐的生产组合入口。
 
@@ -226,7 +226,7 @@ channels:
     kind: auth_provider
     config:
       backend: https
-      url: https://auth.internal.example/v3/authenticate
+      url: https://auth.internal.example/v4/authenticate
       method: password
       service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
       timeout_ms: 3000
@@ -285,17 +285,21 @@ MQTT 3.1/3.1.1 没有 MQTT 5 AUTH exchange，使用普通认证结果和各自�
 ## 9. Session、retained 与持久化
 
 `manage_sessions: true` 启用受限 session/retained 状态。未配置 `protocol_store` 时，standalone
-Flowie 使用 `--protocol-store-path` 指定的 SQLite Record backend（默认
-`flowie-protocol.sqlite3`）；打开、schema 或恢复失败会中止启动。显式配置使用 YAML 中独立的
-`record_store` channel：
+Flowie 使用独占连接的 SQLite `:memory:` Record backend；打开、schema、CAS 或容量失败会中止启动。
+显式配置可使用 YAML 中独立的 `record_store` channel，但 `flowie-server` 仍要求 `backend: sqlite`
+及 `database_path: ':memory:'`，只允许调整 namespace 和容量：
 
-- SQLite：standalone 协议事实。
+- SQLite `:memory:`：standalone 协议事实，进程停止后清空。
 - Redis：cluster 协议事实的目标 backend；切换前必须通过 epoch/failover durability gate。
 
 PostgreSQL继续保存 cluster ownership、owner epoch 和 fencing；当前 cluster session facts 在
 Redis cutover 完成前仍使用既有 PostgreSQL 实现。协议 Store 和业务 FlowStore 即使选择同一种
 引擎，也使用独立 namespace、连接 owner、权限、容量和 migration。显式 `protocol_store` 失败时
 直接报错，不回退到 SQLite、Redis、PostgreSQL 或 local。
+
+standalone 重启后 Client 必须重新连接和订阅，Session Present 不从 BusinessStore 恢复。需要长期保存
+的消息、设备业务状态、索引或 outbox 由 Graph 写入独立 BusinessStore，可选择 SQLite、Redis 或
+PostgreSQL；它与 ProtocolStore 没有 fallback、恢复或双写关系。
 
 可直接交付的组合示例位于 `examples/products/`。旧 product 配置中的 `session_store` 仍可解析，
 但应迁移为 `protocol_store`；业务 PUBLISH 可继续通过 PostgreSQL outbox 保存。SMB 的 QoS 1/2

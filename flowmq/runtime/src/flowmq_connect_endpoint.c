@@ -559,11 +559,13 @@ void flowmq_connect_endpoint_stop(flowmq_connect_endpoint_t *endpoint) {
         turbo_cond_wait(&endpoint->changed, &endpoint->mutex);
       turbo_mutex_unlock(&endpoint->mutex);
     }
-    coro_context_set_persistent(endpoint->context, 0);
+    /* Keep the loop alive until its stop callback is queued; otherwise a stale stop can survive
+     * into the next start generation. */
     if (coro_post(endpoint->context, flowmq_connect_endpoint_context_stop_post, endpoint->context,
                   NULL) != TURBO_OK) {
       coro_context_stop(endpoint->context);
     }
+    coro_context_set_persistent(endpoint->context, 0);
     (void)turbo_thread_join(&endpoint->loop_thread);
     endpoint->loop_thread_started = 0;
   }

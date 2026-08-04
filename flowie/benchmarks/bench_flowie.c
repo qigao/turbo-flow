@@ -156,7 +156,7 @@ static int flowie_bench_security_init(flowie_bench_security_t *bench, size_t rul
     bench->rules[i].effect = TURBO_FLOW_SECURITY_DENY;
     bench->rules[i].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
     flowie_bench_copy(bench->rules[i].subject, sizeof(bench->rules[i].subject), "writer");
-    flowie_bench_copy(bench->rules[i].root_group_id, sizeof(bench->rules[i].root_group_id),
+    flowie_bench_copy(bench->rules[i].domain_id, sizeof(bench->rules[i].domain_id),
                       "root-a");
     bench->rules[i].action_mask =
         TURBO_FLOW_SECURITY_ACTION_PUBLISH | TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE;
@@ -181,17 +181,17 @@ static int flowie_bench_security_init(flowie_bench_security_t *bench, size_t rul
                     "device-1");
   flowie_bench_copy(bench->principal.principal_type, sizeof(bench->principal.principal_type),
                     "device");
-  flowie_bench_copy(bench->principal.root_group_id, sizeof(bench->principal.root_group_id),
+  flowie_bench_copy(bench->principal.domain_id, sizeof(bench->principal.domain_id),
                     "root-a");
   flowie_bench_copy(bench->principal.auth_method, sizeof(bench->principal.auth_method), "token");
-  bench->principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+  bench->principal.scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
   bench->principal.role_count = 1u;
   flowie_bench_copy(bench->principal.roles[0], sizeof(bench->principal.roles[0]), "writer");
   bench->principal.group_count = 1u;
   flowie_bench_copy(bench->principal.groups[0], sizeof(bench->principal.groups[0]), "root-a");
   bench->principal.policy_version = 1u;
   bench->request.principal = &bench->principal;
-  bench->request.root_group_id = "root-a";
+  bench->request.domain_id = "root-a";
   bench->request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
   return TURBO_OK;
 }

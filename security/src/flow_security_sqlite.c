@@ -77,7 +77,7 @@ static int flow_security_sqlite_rule_valid(const turbo_flow_security_rule_t *rul
       rule->subject_kind < TURBO_FLOW_SECURITY_SUBJECT_ANY ||
       rule->subject_kind > TURBO_FLOW_SECURITY_SUBJECT_GROUP ||
       !flow_security_sqlite_cstr_valid(rule->subject, sizeof(rule->subject), 0) ||
-      !flow_security_sqlite_cstr_valid(rule->root_group_id, sizeof(rule->root_group_id), 1) ||
+      !flow_security_sqlite_cstr_valid(rule->domain_id, sizeof(rule->domain_id), 1) ||
       rule->action_mask == 0u || (rule->action_mask & ~TURBO_FLOW_SECURITY_ACTION_ALL) != 0u ||
       rule->resource_type < TURBO_FLOW_SECURITY_RESOURCE_GENERIC ||
       rule->resource_type > TURBO_FLOW_SECURITY_RESOURCE_SECRET ||

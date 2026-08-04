@@ -107,7 +107,7 @@ spec("flowie mqtt protocol") {
 
   it("parses ACL text as borrowed views without importing plugin runtime") {
     static const char rule_text[] =
-        "allow:readwrite:device:root-group:user-1:client.1:$share/workers/root/+/events/#\n";
+        "allow:readwrite:device:domain:user-1:client.1:$share/workers/root/+/events/#\n";
     static const char invalid_text[] = "allow:execute:*:*:*:*:events/#";
     flowie_mqtt_acl_rule_view_t rule = FLOWIE_MQTT_ACL_RULE_VIEW_INIT;
     check_int_eq(flowie_mqtt_acl_parse_line(rule_text, sizeof(rule_text) - 1u, &rule),
@@ -115,7 +115,7 @@ spec("flowie mqtt protocol") {
     check_int_eq(rule.effect, FLOWIE_MQTT_ACL_ALLOW);
     check_int_eq(rule.permission, FLOWIE_MQTT_ACL_READ_WRITE);
     check_span(rule.role, "device");
-    check_span(rule.scope, "root-group");
+    check_span(rule.scope, "domain");
     check_span(rule.username, "user-1");
     check_span(rule.client_id, "client.1");
     check_span(rule.topic_filter, "$share/workers/root/+/events/#");

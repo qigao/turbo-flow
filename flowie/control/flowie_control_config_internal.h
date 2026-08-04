@@ -142,7 +142,7 @@ typedef struct flowie_control_config_auth_s {
   struct {
     char service_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
     char token_ref[FLOWIE_CONTROL_CONFIG_SECRET_REF_MAX + 1u];
-    char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+    char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
     char peer_certificate_sha256[FLOWIE_CONTROL_AUTH_CERT_SHA256_TEXT_SIZE + 1u];
   } service_bindings[FLOWIE_CONTROL_AUTH_MAX_SERVICE_BINDINGS];
   flowie_control_config_external_https_t external_https;
@@ -161,11 +161,9 @@ typedef struct flowie_control_config_pgsql_s {
 } flowie_control_config_pgsql_t;
 
 typedef struct flowie_control_config_bootstrap_s {
-  int enabled;
-  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char principal_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char principal_type[TURBO_FLOW_SECURITY_TYPE_MAX + 1u];
-  char password_ref[FLOWIE_CONTROL_CONFIG_SECRET_REF_MAX + 1u];
 } flowie_control_config_bootstrap_t;
 
 typedef struct flowie_control_config_s {
@@ -193,8 +191,7 @@ typedef struct flowie_control_config_s {
         {{0}, {0},  "flowie_control",                                                              \
          5,   5000, 5000,                                                                          \
          4u,  5000, FLOWIE_CONTROL_CONFIG_PGSQL_SCHEMA_VALIDATE},                                  \
-        {0, FLOWIE_CONTROL_SYSTEM_ROOT_GROUP, FLOWIE_CONTROL_SYSTEM_ADMIN_DEFAULT_USERNAME,        \
-         "human", FLOWIE_CONTROL_SYSTEM_ADMIN_DEFAULT_PASSWORD_REF},                              \
+        {FLOWIE_CONTROL_SYSTEM_DOMAIN, FLOWIE_CONTROL_SYSTEM_ADMIN_DEFAULT_USERNAME, "human"}, \
         {{0}, 65536u, FLOWIE_CONTROL_CONFIG_SESSION_DEFAULT_CAPACITY,                              \
          FLOWIE_CONTROL_CONFIG_SESSION_DEFAULT_MAX_PER_PRINCIPAL,                                 \
          FLOWIE_CONTROL_CONFIG_SESSION_DEFAULT_TTL_SECONDS, 0,                                    \

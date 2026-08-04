@@ -328,7 +328,7 @@ static int external_https_json_add(json_value_t *object, const char *field, json
 
 static int external_https_request_valid(const flowie_control_external_auth_request_t *request) {
   return request && request->size >= sizeof(*request) &&
-         external_https_text_valid(request->root_group_id, TURBO_FLOW_SECURITY_ID_MAX, 1) &&
+         external_https_text_valid(request->domain_id, TURBO_FLOW_SECURITY_ID_MAX, 1) &&
          external_https_text_valid(request->presented_identity, TURBO_FLOW_SECURITY_ID_MAX, 1) &&
          external_https_text_valid(request->method, TURBO_FLOW_SECURITY_TYPE_MAX, 1) &&
          request->secret && request->secret_size > 0u &&
@@ -355,8 +355,8 @@ int flowie_control_external_https_encode_request(
   if (external_https_json_add(
           document, "version",
           turbo_json_create_uint64(FLOWIE_CONTROL_EXTERNAL_HTTPS_PROTOCOL_VERSION)) != TURBO_OK ||
-      external_https_json_add(document, "root_group",
-                              turbo_json_create_string(request->root_group_id)) != TURBO_OK ||
+      external_https_json_add(document, "domain",
+                              turbo_json_create_string(request->domain_id)) != TURBO_OK ||
       external_https_json_add(document, "identity",
                               turbo_json_create_string(request->presented_identity)) != TURBO_OK ||
       external_https_json_add(document, "method", turbo_json_create_string(request->method)) !=

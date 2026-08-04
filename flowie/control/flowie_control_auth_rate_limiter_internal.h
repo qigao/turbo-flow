@@ -54,13 +54,13 @@ void flowie_control_auth_rate_limiter_destroy(flowie_control_auth_rate_limiter_t
 /** Consume one caller and one identity token atomically, or return TURBO_EBUSY. */
 int flowie_control_auth_rate_limiter_acquire(flowie_control_auth_rate_limiter_t *limiter,
                                              const char *peer_certificate_sha256,
-                                             const char *root_group_id,
+                                             const char *domain_id,
                                              const char *principal_id);
 
 /** Remove only the identity failure bucket after successful credential verification. */
 void flowie_control_auth_rate_limiter_record_success(
     flowie_control_auth_rate_limiter_t *limiter, const char *peer_certificate_sha256,
-    const char *root_group_id, const char *principal_id);
+    const char *domain_id, const char *principal_id);
 
 size_t flowie_control_auth_rate_limiter_caller_size(flowie_control_auth_rate_limiter_t *limiter);
 size_t flowie_control_auth_rate_limiter_identity_size(flowie_control_auth_rate_limiter_t *limiter);

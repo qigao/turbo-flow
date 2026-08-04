@@ -56,10 +56,12 @@ typedef struct turbo_flow_sqlite_storage_backend_options_s {
    TURBO_FLOW_SQLITE_STORAGE_BACKEND_OPTIONS_VERSION, NULL}
 
 /**
- * Open a durable, caller-serialized SQLite RecordStore.
+ * Open a caller-serialized SQLite RecordStore.
  *
- * The store copies the path and namespace, rejects process-local `:memory:`, and owns its SQLite
- * connection until turbo_flow_sqlite_record_store_close(). Keys and values are binary-safe.
+ * The store copies the path and namespace and owns one SQLite connection until
+ * turbo_flow_sqlite_record_store_close(). A `:memory:` path is process-local, is visible only
+ * through that owner, is destroyed on close, and does not advertise the durable capability.
+ * File paths remain durable. Keys and values are binary-safe.
  */
 CXX_C_API int
 turbo_flow_sqlite_record_store_create(const turbo_flow_sqlite_record_store_config_t *config,
@@ -73,7 +75,7 @@ CXX_C_API int turbo_flow_sqlite_record_store_create_resolved(
 /** Close the owned SQLite connection and reset the RecordStore view. */
 CXX_C_API int turbo_flow_sqlite_record_store_close(turbo_flow_record_store_t *store);
 
-/** Return the builtin durable SQLite RECORD storage backend function table. */
+/** Return the builtin SQLite RECORD storage backend function table. */
 CXX_C_API const turbo_flow_storage_backend_plugin_api_t *
 turbo_flow_sqlite_storage_backend_api(void);
 

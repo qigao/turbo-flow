@@ -17,18 +17,18 @@ int flowie_control_text_valid(const char *value, size_t limit) {
   return 1;
 }
 
-int flowie_control_policy_rule_syntax_validate(const char *root_group_id, const char *rule_line,
+int flowie_control_policy_rule_syntax_validate(const char *domain_id, const char *rule_line,
                                                size_t rule_line_size,
                                                turbo_flow_security_rule_t *rule_out) {
   turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
   char canonical[TURBO_FLOW_SECURITY_RULE_LINE_MAX + 1u];
   size_t canonical_size = 0u;
   int rc;
-  if (!root_group_id || !rule_line || rule_line_size == 0u ||
+  if (!domain_id || !rule_line || rule_line_size == 0u ||
       rule_line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX || memchr(rule_line, '\0', rule_line_size))
     return TURBO_EINVAL;
   rc = turbo_flow_security_rule_parse_line(rule_line, rule_line_size, &rule);
-  if (rc != TURBO_OK || strcmp(rule.root_group_id, root_group_id) != 0) return TURBO_EPROTO;
+  if (rc != TURBO_OK || strcmp(rule.domain_id, domain_id) != 0) return TURBO_EPROTO;
   rc = turbo_flow_security_rule_format_line(&rule, canonical, sizeof(canonical), &canonical_size);
   if (rc != TURBO_OK || canonical_size != rule_line_size ||
       memcmp(canonical, rule_line, rule_line_size) != 0)

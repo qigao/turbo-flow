@@ -16,7 +16,7 @@ typedef struct flowie_worker_runtime_config_s {
   const char *profile;
   const char *config_path;
   const char *graph_path;
-  /** Standalone SQLite protocol-fact path; required only for the implicit protocol store. */
+  /** Standalone SQLite protocol-fact path; defaults to process-local `:memory:`. */
   const char *protocol_store_path;
   turbo_flow_storage_backend_registry_t *storage_backends;
   /** Product-owned source/sink adapter providers beyond Flowie's core adapters. */

@@ -2,7 +2,8 @@
 
 ## 状态
 
-已接受，2026-08-03。按阶段实施：standalone ProtocolStore SQLite 已接线；cluster Redis route
+已接受，2026-08-03，2026-08-04 修订 standalone 生命周期。standalone ProtocolStore SQLite
+`:memory:` 已接线；cluster Redis route
 projection、MemberDirectory 与周期 reconciliation 已接线，Redis 尚未替换现有 PostgreSQL
 authoritative cluster facts。
 
@@ -13,10 +14,10 @@ Flowie 同时处理两类生命周期、确认语义和故障边界不同的数�
 - MQTT 协议数据：session、subscription、inflight、retained、Will、presence、route projection。
 - 业务数据：Graph 接纳后的业务消息、状态、索引、日志、时间序列和 outbox。
 
-旧设计把 endpoint 的 `session_store` 描述为 FlowStore MQTT fact facade，并允许默认使用 volatile
-local Record backend。这会让业务存储与协议恢复看起来可以互换，也使未显式配置的 standalone
-broker 在重启后丢失协议事实。cluster 当前又将 session/retained authoritative facts 放在
-PostgreSQL，使 ownership/fencing、协议状态和业务持久化共享一个实现边界。
+旧设计把 endpoint 的 `session_store` 描述为 FlowStore MQTT fact facade，使业务存储与协议状态看起来
+可以互换。后续 standalone 文件型 SQLite 又把进程内协议状态误建模为长期数据。cluster 当前还将
+session/retained authoritative facts 放在 PostgreSQL，使 ownership/fencing、协议状态和业务持久化
+共享一个实现边界。
 
 ## 决策
 
@@ -26,7 +27,7 @@ PostgreSQL，使 ownership/fencing、协议状态和业务持久化共享一个�
 ```text
 Flowie MQTT endpoint
   -> ProtocolStore
-       standalone: SQLite
+       standalone: SQLite :memory:
        cluster target: Redis
 
 Flowie ClusterCoordinator
@@ -43,13 +44,20 @@ Log、Series 和业务 Record 的职责，不再是 MQTT 协议事实的领域 o
 
 ### Standalone
 
-`manage_sessions: true` 且未配置显式 `protocol_store` 时，composition root 使用独立 SQLite
-Record backend。数据库路径由 `flowie_server --protocol-store-path` 指定，默认
-`flowie-protocol.sqlite3`。namespace 使用 endpoint 名；SQLite 连接和容量只归 ProtocolStore
-owner。打开、schema、容量或恢复失败会中止 endpoint 注册，不回退到 volatile local。
+`manage_sessions: true` 时，`flowie-server` 的 ProtocolStore 必须使用独立 SQLite `:memory:` Record
+backend。每个 endpoint store owner 独占一个连接；session、subscription、inflight、retained、Will
+及其 revision 在该连接中原子提交，owner close 后全部销毁。进程重启后 Client 必须重新连接、订阅并
+重建协议状态。打开、schema、CAS 或容量失败会中止 endpoint 注册，不回退到文件、Redis、PostgreSQL
+或另一份内存事实。
 
-显式 `protocol_store` 可引用 `backend: sqlite` channel。旧 `session_store` 只作为互斥的配置兼容
-名称保留；两者同时出现立即失败。它不是第二事实源，也不触发双写。
+隐式 store 默认使用 `:memory:`。显式 `protocol_store` 只用于声明独立容量和 namespace，backend 仍
+必须为 SQLite 且 `database_path` 必须为 `:memory:`。旧 `session_store` 只作为互斥的配置兼容名称
+保留；两者同时出现立即失败。通用 SQLite backend 仍支持文件路径，但只供 BusinessStore 或其他
+产品使用，不允许借此改变 standalone ProtocolStore 生命周期。
+
+需要跨进程长期保存的数据由 Graph 写入独立 BusinessStore，可选择 SQLite、Redis 或 PostgreSQL。
+BusinessStore 不导入、恢复、补写或替代 ProtocolStore，也不参与 MQTT Session Present、ACK、
+takeover、Will 或 subscription 路由判定。
 
 ### Cluster
 
@@ -92,20 +100,20 @@ EXPIRED 时不续租，让旧 route 按 deadline 自然失效。Redis I/O 失败
 ## 影响与权衡
 
 - 架构：Flowie 不再依赖 FlowStore 的 MQTT facade；StorageBackend 只是实现 SPI，不是领域接口。
-- 接口：新增 `protocol_store`；旧 `session_store` 兼容但互斥。默认 standalone 从 volatile 变为
-  durable SQLite。
-- 状态归属：协议写先 durable commit，再交换 endpoint cache；业务 Graph 不能推进协议 revision。
+- 接口：新增 `protocol_store`；旧 `session_store` 兼容但互斥。standalone 仅接受 SQLite `:memory:`。
+- 状态归属：协议写先 atomic commit，再交换 endpoint cache；业务 Graph 不能推进协议 revision。
 - 错误语义：配置/open/schema/CAS/容量失败原样向上返回，不进行 backend fallback 或静默修复。
-- 性能：standalone 增加 SQLite FULL synchronous commit 成本；换取可复验的重启恢复。cluster Redis
-  切换前必须以 owner lane benchmark 验证吞吐和 P99。
+- 性能：standalone 使用 memory journal 且不执行磁盘同步，避免协议查询和状态迁移进入文件 I/O；容量
+  仍受 RecordStore 上限约束。cluster Redis 切换前必须以 owner lane benchmark 验证吞吐和 P99。
 - 资源：相同物理 Redis/PG/SQLite 的 namespace 隔离不等于 CPU、内存、I/O 和故障域隔离；生产可按
   容量把两层部署到独立实例。
 
 ## 迁移与回滚
 
-Standalone 先停止 listener 并排空 owner lane，再从旧 durable `session_store` 导出离线 snapshot，
-写入目标 SQLite namespace，校验 record count、revision 和 codec 后切换配置。volatile local 没有可
-恢复数据。回滚只能在无新写入的停机窗口切回原 durable store；不得双向同步。
+Standalone 升级前先停止 listener 并排空 owner lane。旧文件型协议数据库不导入 `:memory:`，可按运维
+保留策略离线归档；新进程启动后由 Client 重连和重订阅重建协议状态。需要长期保存的业务事实应通过
+明确 Graph/BusinessStore migration 独立迁移，禁止把旧协议 snapshot 转成业务事实或双写。回滚旧
+版本只能在停机窗口执行，不能把新进程的内存协议状态反向同步到旧文件。
 
 Cluster 迁移采用 `PG claim -> Redis epoch barrier -> snapshot import -> recover -> ACTIVE`。回滚在
 ACTIVE 前删除未激活的 Redis namespace；ACTIVE 后必须再次停机、提升 fencing epoch 并执行反向离线
@@ -114,8 +122,9 @@ snapshot，不能直接让旧 PostgreSQL facts 重新上线。
 ## 验证
 
 - SQLite RecordStore：binary key/value、CAS conflict、atomic rollback、容量、稳定 scan snapshot、
-  namespace 隔离、损坏数据库、close/reopen。
-- Standalone composition：隐式 ProtocolStore 跨 application generation 恢复 MQTT Session Present。
+  namespace 隔离、文件损坏、文件 close/reopen，以及 `:memory:` close/reopen 后为空。
+- Standalone composition：隐式和显式 `:memory:` ProtocolStore 在每个 application generation 均以
+  `Session Present = 0` 启动；文件路径在配置边界被拒绝。
 - Cluster gate：旧 epoch 拒绝、takeover、Will、route、Redis Cluster/Sentinel failover、AOF/replica
   丢失窗口和无双写 cutover。
 - Route projection：同版本 settlement 重放、连续 member lease 续期、endpoint 更新、OFFLINE/EXPIRED

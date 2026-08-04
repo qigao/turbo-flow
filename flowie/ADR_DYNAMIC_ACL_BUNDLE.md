@@ -38,12 +38,12 @@ Flowie -> SecurityRealm -> local immutable ACL snapshot -> allow/deny
   Repository，Broker 不读取其数据库。
 - realm 中的快照是事实源的有界派生缓存。bundle 包含单调递增的 `policy_version`、可选
   `expires_at` 和完整规范规则行数组；加载时由 re2c parser 编译为不可变查询索引。
-- 查询索引按 `root_group -> action -> resource_type -> subject_kind/subject -> pattern` 编译。
-  Root Group、subject 与 exact pattern 使用哈希查找；prefix 按请求资源的每个前缀探测哈希叶，复杂度
+- 查询索引按 `domain -> action -> resource_type -> subject_kind/subject -> pattern` 编译。
+  Domain、subject 与 exact pattern 使用哈希查找；prefix 按请求资源的每个前缀探测哈希叶，复杂度
   受资源长度约束而不随同 subject 的 prefix 规则数增长。协议 adapter 只扫描已命中 subject 叶内的
-  有界候选，不扫描其它 Root Group、action、resource type 或 subject。显式 deny 仍跨叶优先，
+  有界候选，不扫描其它 Domain、action、resource type 或 subject。显式 deny 仍跨叶优先，
   `matched_rule` 保持原始规则行序号。
-- `flowie-control` 在一个 Repository 事务内发布单个 Root Group 的规则与版本；读取者只能看到旧
+- `flowie-control` 在一个 Repository 事务内发布单个 Domain 的规则与版本；读取者只能看到旧
   bundle 或完整新 bundle。Repository 可以由 SQLite 或 PostgreSQL 实现，不改变 HTTPS 契约。
 - HTTPS provider 只读取 ACL bundle，不接收客户端 credential。认证与 ACL 可以由同一控制面产品管理，
   但必须使用独立、最小权限的认证接口和策略读取接口。
@@ -58,7 +58,7 @@ channels:
     kind: acl_provider
     config:
       backend: https
-      url: https://flowie-control.internal/v3/acl
+      url: https://flowie-control.internal/v4/acl
       service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
       timeout_ms: 3000
       max_response_size: 4194304
@@ -82,7 +82,7 @@ HTTPS 成功响应是严格 JSON：
 }
 ```
 
-每一行格式为 `effect|subject_kind|subject|root_group|actions|resource_type|match_kind|pattern`。
+每一行格式为 `effect|subject_kind|subject|domain|actions|resource_type|match_kind|pattern`。
 规则行最多 2047 字节；`\\`、`\|`、`\xHH` 可用于字段转义。未知 token、重复 action、非法枚举、
 越界字符串、空规则集、超过容量、版本为零或整数溢出均为协议错误。版本 1/2 和 `tenant_id` 字段
 不解析，也没有兼容 fallback。
@@ -103,7 +103,7 @@ HTTPS 成功响应是严格 JSON：
 ## 管理、迁移与回滚
 
 动态管理 API 应发布完整 bundle，而不是逐条修改 realm 缓存。`flowie-control` Repository 的
-`policy.publish` 提供事务化命令，再通过只读 `/v3/acl` endpoint 发布结果。
+`policy.publish` 提供事务化命令，再通过只读 `/v4/acl` endpoint 发布结果。
 
 迁移步骤：
 
@@ -119,10 +119,10 @@ HTTPS 成功响应是严格 JSON：
 ## 兼容性与验证
 
 - **HIGH**：YAML ACL body 被有意移除；旧配置会启动失败，必须先完成上述迁移。
-- **HIGH**：Security C ABI 与 ACL wire/storage bundle 均为唯一 v3，使用规范规则行和必填 Root Group。
+- **HIGH**：Security C ABI 与 ACL wire/storage bundle 均为唯一 v3，使用规范规则行和必填 Domain。
   旧表保留但 Broker 不读取，必须经控制面重新发布完整 bundle。
 - C ABI 追加了 `policy_source`，旧尺寸的程序化静态 realm config 仍被接受；新产品配置应使用 provider。
-- SQLite Repository 测试覆盖单调发布、事务快照、Root Group 隔离和当前/精确版本读取。
+- SQLite Repository 测试覆盖单调发布、事务快照、Domain 隔离和当前/精确版本读取。
 - HTTP 测试覆盖严格配置、非 coroutine 拒绝、bundle 边界和整数溢出；共享 HTTPS transport 的真实
   mTLS 测试要求并验证客户端证书。发布验证仍需覆盖部署证书链、主机名、超时、状态码和 token 轮换。
 - Flowie endpoint 测试覆盖 provider 绑定后的 connect/publish/subscribe 授权和默认拒绝。

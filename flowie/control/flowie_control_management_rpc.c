@@ -1,6 +1,5 @@
 #include "flowie_control_management_rpc_internal.h"
 
-#include "base64_utils.h"
 #include "flowie_control_credential_internal.h"
 #include "turbo_error.h"
 #include "turbo_parser.h"
@@ -15,43 +14,41 @@ enum {
   FLOWIE_CONTROL_RPC_NOT_FOUND = -32004,
   FLOWIE_CONTROL_RPC_CONFLICT = -32009,
   FLOWIE_CONTROL_RPC_SECRET_UNAVAILABLE = -32010,
-  FLOWIE_CONTROL_RPC_CREDENTIAL_BASE64_SIZE =
-      4u * ((FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE + 2u) / 3u) + 1u,
   FLOWIE_CONTROL_RPC_DEFAULT_PAGE = 25
 };
 
-static const char *const FLOWIE_CONTROL_RPC_METHODS[] = {"flowie.system.status",
-                                                         "flowie.auth.external_https.stats",
-                                                         "flowie.root.create",
-                                                         "flowie.root_group.list",
-                                                         "flowie.user.get",
-                                                         "flowie.user.list",
-                                                         "flowie.user.create",
-                                                         "flowie.user.disable",
-                                                         "flowie.group.list",
-                                                         "flowie.group.create",
-                                                         "flowie.group.disable",
-                                                         "flowie.group.member.add",
-                                                         "flowie.group.member.remove",
-                                                         "flowie.group.effective",
-                                                         "flowie.role.list",
-                                                         "flowie.role.create",
-                                                         "flowie.role.disable",
-                                                         "flowie.role.assign",
-                                                         "flowie.role.remove",
-                                                         "flowie.role.effective",
-                                                         "flowie.policy.status",
-                                                         "flowie.policy.rule.list",
-                                                         "flowie.policy.rule.put",
-                                                         "flowie.policy.rule.delete",
-                                                         "flowie.policy.validate",
-                                                         "flowie.policy.publish",
-                                                         "flowie.audit.list",
-                                                         "flowie.credential.generate",
-                                                         "flowie.credential.rotate",
-                                                         "flowie.credential.revoke",
-                                                         "flowie.password.set",
-                                                         "flowie.password.change"};
+static const char *const FLOWIE_CONTROL_RPC_METHODS[] = {"control.system.status",
+                                                         "control.auth.external_https.stats",
+                                                         "control.domain.create",
+                                                         "control.domain.list",
+                                                         "control.user.get",
+                                                         "control.user.list",
+                                                         "control.user.create",
+                                                         "control.user.disable",
+                                                         "control.group.list",
+                                                         "control.group.create",
+                                                         "control.group.delete",
+                                                         "control.group.member.add",
+                                                         "control.group.member.remove",
+                                                         "control.group.effective",
+                                                         "control.role.list",
+                                                         "control.role.create",
+                                                         "control.role.disable",
+                                                         "control.role.assign",
+                                                         "control.role.remove",
+                                                         "control.role.effective",
+                                                         "control.policy.status",
+                                                         "control.policy.rule.list",
+                                                         "control.policy.rule.put",
+                                                         "control.policy.rule.delete",
+                                                         "control.policy.validate",
+                                                         "control.policy.publish",
+                                                         "control.audit.list",
+                                                         "control.credential.generate",
+                                                         "control.credential.rotate",
+                                                         "control.credential.revoke",
+                                                         "control.password.set",
+                                                         "control.password.change"};
 
 struct flowie_control_management_rpc_server_s {
   flowie_control_management_service_t *service;
@@ -188,20 +185,20 @@ static int flowie_control_rpc_page_limit(const json_value_t *params, size_t *lim
 
 static int flowie_control_rpc_target_root(
     const json_value_t *params, const flowie_control_management_caller_t *caller,
-    const char **root_group_id_out) {
-  const char *root_group_id = NULL;
+    const char **domain_id_out) {
+  const char *domain_id = NULL;
   int rc;
-  if (root_group_id_out) *root_group_id_out = NULL;
-  if (!params || !caller || !caller->root_group_id || !root_group_id_out) return TURBO_EINVAL;
-  rc = flowie_control_rpc_string(params, "root_group_id", TURBO_FLOW_SECURITY_ID_MAX, 0,
-                                 &root_group_id);
+  if (domain_id_out) *domain_id_out = NULL;
+  if (!params || !caller || !caller->domain_id || !domain_id_out) return TURBO_EINVAL;
+  rc = flowie_control_rpc_string(params, "domain_id", TURBO_FLOW_SECURITY_ID_MAX, 0,
+                                 &domain_id);
   if (rc != TURBO_OK) return rc;
-  if (!root_group_id) root_group_id = caller->root_group_id;
-  if (strcmp(root_group_id, caller->root_group_id) != 0 &&
+  if (!domain_id) domain_id = caller->domain_id;
+  if (strcmp(domain_id, caller->domain_id) != 0 &&
       ((caller->permissions & FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN) == 0u ||
-       strcmp(caller->root_group_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP) != 0))
+       strcmp(caller->domain_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN) != 0))
     return TURBO_EPERM;
-  *root_group_id_out = root_group_id;
+  *domain_id_out = domain_id;
   return TURBO_OK;
 }
 
@@ -209,43 +206,41 @@ static int flowie_control_rpc_scope(
     flowie_control_management_rpc_server_t *server, const json_value_t *params,
     const flowie_control_management_caller_t *caller,
     flowie_control_management_caller_t *scoped_out) {
-  const char *root_group_id = NULL;
+  const char *domain_id = NULL;
   int rc;
   if (!server || !params || !caller || !scoped_out) return TURBO_EINVAL;
-  rc = flowie_control_rpc_target_root(params, caller, &root_group_id);
+  rc = flowie_control_rpc_target_root(params, caller, &domain_id);
   if (rc != TURBO_OK) return rc;
-  return flowie_control_management_scope_caller(server->service, caller, root_group_id, scoped_out);
+  return flowie_control_management_scope_caller(server->service, caller, domain_id, scoped_out);
 }
 
-static int flowie_control_rpc_root_create(flowie_control_management_rpc_server_t *server,
+static int flowie_control_rpc_domain_create(flowie_control_management_rpc_server_t *server,
                                           const flowie_control_management_caller_t *caller,
                                           const rpc_request_t *request,
                                           rpc_response_t *response) {
-  static const char *const allowed[] = {"root_group_id", "request_id", "expected_revision"};
+  static const char *const allowed[] = {"domain_id", "request_id"};
   turbo_json_doc_t *params = NULL;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  flowie_control_root_group_create_command_t command =
-      FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
-  const char *root_group_id = NULL;
+  flowie_control_domain_create_command_t command =
+      FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
+  const char *domain_id = NULL;
   const char *request_id = NULL;
-  int rc = flowie_control_rpc_params(request, allowed, 3u, &params);
+  int rc = flowie_control_rpc_params(request, allowed, 2u, &params);
   if (rc == TURBO_OK)
-    rc = flowie_control_rpc_string(params, "root_group_id", TURBO_FLOW_SECURITY_ID_MAX, 1,
-                                   &root_group_id);
+    rc = flowie_control_rpc_string(params, "domain_id", TURBO_FLOW_SECURITY_ID_MAX, 1,
+                                   &domain_id);
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "request_id", FLOWIE_CONTROL_REQUEST_ID_MAX, 1,
                                    &request_id);
-  if (rc == TURBO_OK)
-    rc = flowie_control_rpc_u64(params, "expected_revision", 1, &command.expected_revision);
   if (rc == TURBO_OK) {
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.actor = caller->actor;
     command.request_id = request_id;
     command.occurred_at = server->clock(server->clock_ctx);
     if (command.occurred_at == 0u)
       rc = TURBO_EIO;
     else
-      rc = flowie_control_management_root_group_create(server->service, caller, &command, &result);
+      rc = flowie_control_management_domain_create(server->service, caller, &command, &result);
   }
   turbo_free_json(&params);
   return rc == TURBO_OK
@@ -257,7 +252,7 @@ static int flowie_control_rpc_password_change(flowie_control_management_rpc_serv
                                               const flowie_control_management_caller_t *caller,
                                               const rpc_request_t *request,
                                               rpc_response_t *response) {
-  static const char *const allowed[] = {"new_password", "request_id", "expected_revision"};
+  static const char *const allowed[] = {"new_password", "request_id"};
   turbo_json_doc_t *params = NULL;
   flowie_control_password_change_command_t command = FLOWIE_CONTROL_PASSWORD_CHANGE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
@@ -275,8 +270,6 @@ static int flowie_control_rpc_password_change(flowie_control_management_rpc_serv
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "request_id", FLOWIE_CONTROL_REQUEST_ID_MAX, 1,
                                    &request_id);
-  if (rc == TURBO_OK)
-    rc = flowie_control_rpc_u64(params, "expected_revision", 1, &command.expected_revision);
   if (rc == TURBO_OK) {
     command.new_password = new_password;
     command.new_password_size = password_size;
@@ -298,19 +291,19 @@ static int flowie_control_rpc_password_set(flowie_control_management_rpc_server_
                                            const flowie_control_management_caller_t *caller,
                                            const rpc_request_t *request,
                                            rpc_response_t *response) {
-  static const char *const allowed[] = {"root_group_id", "principal_id", "new_password",
-                                        "mode", "request_id", "expected_revision"};
+  static const char *const allowed[] = {"domain_id", "principal_id", "new_password",
+                                        "mode", "request_id"};
   turbo_json_doc_t *params = NULL;
   flowie_control_password_set_command_t command = FLOWIE_CONTROL_PASSWORD_SET_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  const char *root_group_id = NULL;
+  const char *domain_id = NULL;
   const char *principal_id = NULL;
   const char *new_password = NULL;
   const char *mode = NULL;
   const char *request_id = NULL;
   size_t password_size = 0u;
-  int rc = flowie_control_rpc_params(request, allowed, 6u, &params);
-  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &root_group_id);
+  int rc = flowie_control_rpc_params(request, allowed, 5u, &params);
+  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &domain_id);
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "principal_id", TURBO_FLOW_SECURITY_ID_MAX, 1,
                                    &principal_id);
@@ -334,10 +327,8 @@ static int flowie_control_rpc_password_set(flowie_control_management_rpc_server_
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "request_id", FLOWIE_CONTROL_REQUEST_ID_MAX, 1,
                                    &request_id);
-  if (rc == TURBO_OK)
-    rc = flowie_control_rpc_u64(params, "expected_revision", 1, &command.expected_revision);
   if (rc == TURBO_OK) {
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.principal_id = principal_id;
     command.new_password = new_password;
     command.new_password_size = password_size;
@@ -361,8 +352,6 @@ static json_value_t *
 flowie_control_rpc_command_result(const flowie_control_command_result_t *result) {
   json_value_t *object = turbo_json_create_object();
   if (!object ||
-      flowie_control_rpc_add(object, "revision", turbo_json_create_uint64(result->revision)) !=
-          TURBO_OK ||
       flowie_control_rpc_add(object, "replayed", turbo_json_create_bool(result->replayed != 0)) !=
           TURBO_OK) {
     flowie_control_rpc_free_json_value(object);
@@ -386,7 +375,7 @@ static int flowie_control_rpc_error(rpc_response_t *response, int rc) {
     rpc_set_error(response, FLOWIE_CONTROL_RPC_NOT_FOUND, "Not found");
     break;
   case TURBO_EBUSY:
-    rpc_set_error(response, FLOWIE_CONTROL_RPC_CONFLICT, "Revision conflict");
+    rpc_set_error(response, FLOWIE_CONTROL_RPC_CONFLICT, "Concurrent update conflict");
     break;
   default:
     rpc_set_error(response, RPC_ERROR_INTERNAL, "Internal error");
@@ -404,8 +393,6 @@ static json_value_t *flowie_control_rpc_user(const flowie_control_user_view_t *u
           TURBO_OK ||
       flowie_control_rpc_add(object, "enabled", turbo_json_create_bool(user->enabled != 0)) !=
           TURBO_OK ||
-      flowie_control_rpc_add(object, "revision", turbo_json_create_uint64(user->revision)) !=
-          TURBO_OK ||
       flowie_control_rpc_add(object, "created_at", turbo_json_create_uint64(user->created_at)) !=
           TURBO_OK ||
       flowie_control_rpc_add(object, "updated_at", turbo_json_create_uint64(user->updated_at)) !=
@@ -421,11 +408,11 @@ static json_value_t *flowie_control_rpc_group(const flowie_control_group_view_t 
   if (!object ||
       flowie_control_rpc_add(object, "id", turbo_json_create_string(group->group_id)) != TURBO_OK ||
       flowie_control_rpc_add(object, "parent_id",
-                             turbo_json_create_string(group->parent_group_id)) != TURBO_OK ||
+                             group->parent_group_id[0]
+                                 ? turbo_json_create_string(group->parent_group_id)
+                                 : turbo_json_create_null()) != TURBO_OK ||
       flowie_control_rpc_add(object, "depth", turbo_json_create_uint64(group->depth)) != TURBO_OK ||
       flowie_control_rpc_add(object, "enabled", turbo_json_create_bool(group->enabled != 0)) !=
-          TURBO_OK ||
-      flowie_control_rpc_add(object, "revision", turbo_json_create_uint64(group->revision)) !=
           TURBO_OK) {
     flowie_control_rpc_free_json_value(object);
     return NULL;
@@ -438,8 +425,6 @@ static json_value_t *flowie_control_rpc_role(const flowie_control_role_view_t *r
   if (!object ||
       flowie_control_rpc_add(object, "id", turbo_json_create_string(role->role_id)) != TURBO_OK ||
       flowie_control_rpc_add(object, "enabled", turbo_json_create_bool(role->enabled != 0)) !=
-          TURBO_OK ||
-      flowie_control_rpc_add(object, "revision", turbo_json_create_uint64(role->revision)) !=
           TURBO_OK) {
     flowie_control_rpc_free_json_value(object);
     return NULL;
@@ -447,13 +432,13 @@ static json_value_t *flowie_control_rpc_role(const flowie_control_role_view_t *r
   return object;
 }
 
-static int flowie_control_rpc_root_group_list(
+static int flowie_control_rpc_domain_list(
     flowie_control_management_rpc_server_t *server,
     const flowie_control_management_caller_t *caller, const rpc_request_t *request,
     rpc_response_t *response) {
   static const char *const allowed[] = {"after", "limit"};
   turbo_json_doc_t *params = NULL;
-  flowie_control_root_group_view_t *items = NULL;
+  flowie_control_domain_view_t *items = NULL;
   json_value_t *result = NULL;
   json_value_t *array = NULL;
   const char *after = NULL;
@@ -465,13 +450,13 @@ static int flowie_control_rpc_root_group_list(
     rc = flowie_control_rpc_string(params, "after", TURBO_FLOW_SECURITY_ID_MAX, 0, &after);
   if (rc == TURBO_OK) rc = flowie_control_rpc_page_limit(params, &capacity);
   if (rc == TURBO_OK) {
-    items = (flowie_control_root_group_view_t *)calloc(capacity, sizeof(*items));
+    items = (flowie_control_domain_view_t *)calloc(capacity, sizeof(*items));
     if (!items) rc = TURBO_ENOMEM;
   }
   for (size_t index = 0u; rc == TURBO_OK && index < capacity; ++index)
-    items[index] = (flowie_control_root_group_view_t)FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT;
+    items[index] = (flowie_control_domain_view_t)FLOWIE_CONTROL_DOMAIN_VIEW_INIT;
   if (rc == TURBO_OK)
-    rc = flowie_control_management_root_group_list(server->service, caller, after, items, capacity,
+    rc = flowie_control_management_domain_list(server->service, caller, after, items, capacity,
                                                    &count, &has_more);
   if (rc == TURBO_OK) {
     result = turbo_json_create_object();
@@ -481,8 +466,8 @@ static int flowie_control_rpc_root_group_list(
   for (size_t index = 0u; rc == TURBO_OK && index < count; ++index) {
     json_value_t *item = turbo_json_create_object();
     if (!item ||
-        flowie_control_rpc_add(item, "root_group_id",
-                               turbo_json_create_string(items[index].root_group_id)) != TURBO_OK) {
+        flowie_control_rpc_add(item, "domain_id",
+                               turbo_json_create_string(items[index].domain_id)) != TURBO_OK) {
       flowie_control_rpc_free_json_value(item);
       rc = TURBO_ENOMEM;
     } else {
@@ -509,23 +494,23 @@ static int flowie_control_rpc_system_status(flowie_control_management_rpc_server
                                             const flowie_control_management_caller_t *caller,
                                             const rpc_request_t *request,
                                             rpc_response_t *response) {
-  static const char *const allowed[] = {"root_group_id"};
+  static const char *const allowed[] = {"domain_id"};
   flowie_control_management_status_t status = FLOWIE_CONTROL_MANAGEMENT_STATUS_INIT;
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u] = "";
   turbo_json_doc_t *params = NULL;
   json_value_t *object = NULL;
   int rc = flowie_control_rpc_params(request, allowed, 1u, &params);
   if (rc == TURBO_OK) rc = flowie_control_rpc_scope(server, params, caller, &scoped);
   if (rc == TURBO_OK)
     rc = flowie_control_management_system_status(server->service, &scoped, &status);
+  if (rc == TURBO_OK) memcpy(domain_id, scoped.domain_id, strlen(scoped.domain_id) + 1u);
   turbo_free_json(&params);
   if (rc != TURBO_OK) return flowie_control_rpc_error(response, rc);
   object = turbo_json_create_object();
   if (!object ||
-      flowie_control_rpc_add(object, "root_group",
-                             turbo_json_create_string(scoped.root_group_id)) != TURBO_OK ||
-      flowie_control_rpc_add(object, "store_revision",
-                             turbo_json_create_uint64(status.store_revision)) != TURBO_OK ||
+      flowie_control_rpc_add(object, "domain",
+                             turbo_json_create_string(domain_id)) != TURBO_OK ||
       flowie_control_rpc_add(object, "policy_version",
                              turbo_json_create_uint64(status.policy.policy_version)) != TURBO_OK ||
       flowie_control_rpc_add(object, "draft_rules",
@@ -591,7 +576,7 @@ static int flowie_control_rpc_external_https_stats(flowie_control_management_rpc
 static int flowie_control_rpc_user_get(flowie_control_management_rpc_server_t *server,
                                        const flowie_control_management_caller_t *caller,
                                        const rpc_request_t *request, rpc_response_t *response) {
-  static const char *const allowed[] = {"root_group_id", "principal_id"};
+  static const char *const allowed[] = {"domain_id", "principal_id"};
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   flowie_control_user_view_t user = FLOWIE_CONTROL_USER_VIEW_INIT;
   turbo_json_doc_t *params = NULL;
@@ -611,7 +596,7 @@ static int flowie_control_rpc_user_get(flowie_control_management_rpc_server_t *s
 static int flowie_control_rpc_user_list(flowie_control_management_rpc_server_t *server,
                                         const flowie_control_management_caller_t *caller,
                                         const rpc_request_t *request, rpc_response_t *response) {
-  static const char *const allowed[] = {"root_group_id", "after", "limit"};
+  static const char *const allowed[] = {"domain_id", "after", "limit"};
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   turbo_json_doc_t *params = NULL;
   flowie_control_user_view_t *items = NULL;
@@ -662,21 +647,19 @@ static int flowie_control_rpc_user_write(flowie_control_management_rpc_server_t 
                                          const flowie_control_management_caller_t *caller,
                                          const rpc_request_t *request, rpc_response_t *response,
                                          int disable) {
-  static const char *const create_allowed[] = {"root_group_id", "principal_id", "principal_type",
-                                               "request_id", "expected_revision"};
-  static const char *const disable_allowed[] = {"root_group_id", "principal_id", "request_id",
-                                                "expected_revision"};
+  static const char *const create_allowed[] = {"domain_id", "principal_id", "principal_type",
+                                               "request_id"};
+  static const char *const disable_allowed[] = {"domain_id", "principal_id", "request_id"};
   turbo_json_doc_t *params = NULL;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   const char *principal_id = NULL;
   const char *principal_type = NULL;
   const char *request_id = NULL;
-  const char *root_group_id = NULL;
-  uint64_t expected_revision = 0u;
-  uint64_t occurred_at;
+  const char *domain_id = NULL;
+  uint64_t occurred_at = 0u;
   int rc = flowie_control_rpc_params(request, disable ? disable_allowed : create_allowed,
-                                     disable ? 4u : 5u, &params);
-  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &root_group_id);
+                                     disable ? 3u : 4u, &params);
+  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &domain_id);
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "principal_id", TURBO_FLOW_SECURITY_ID_MAX, 1,
                                    &principal_id);
@@ -687,26 +670,23 @@ static int flowie_control_rpc_user_write(flowie_control_management_rpc_server_t 
     rc = flowie_control_rpc_string(params, "request_id", FLOWIE_CONTROL_REQUEST_ID_MAX, 1,
                                    &request_id);
   if (rc == TURBO_OK)
-    rc = flowie_control_rpc_u64(params, "expected_revision", 1, &expected_revision);
   occurred_at = server->clock(server->clock_ctx);
   if (rc == TURBO_OK && occurred_at == 0u) rc = TURBO_EIO;
   if (rc == TURBO_OK && disable) {
     flowie_control_user_disable_command_t command = FLOWIE_CONTROL_USER_DISABLE_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.principal_id = principal_id;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_user_disable(server->service, caller, &command, &result);
   } else if (rc == TURBO_OK) {
     flowie_control_user_create_command_t command = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.principal_id = principal_id;
     command.principal_type = principal_type;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_user_create(server->service, caller, &command, &result);
   }
@@ -720,27 +700,22 @@ static int flowie_control_rpc_credential_issue(flowie_control_management_rpc_ser
                                                const flowie_control_management_caller_t *caller,
                                                const rpc_request_t *request,
                                                rpc_response_t *response, int rotate) {
-  static const char *const allowed[] = {"root_group_id", "principal_id", "request_id",
-                                        "expected_revision"};
+  static const char *const allowed[] = {"domain_id", "principal_id", "request_id"};
   turbo_json_doc_t *params = NULL;
   flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
   json_value_t *object = NULL;
   const char *principal_id = NULL;
   const char *request_id = NULL;
-  const char *root_group_id = NULL;
-  char secret_base64[FLOWIE_CONTROL_RPC_CREDENTIAL_BASE64_SIZE] = {0};
-  uint64_t expected_revision = 0u;
+  const char *domain_id = NULL;
   uint64_t occurred_at = 0u;
-  int rc = flowie_control_rpc_params(request, allowed, 4u, &params);
-  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &root_group_id);
+  int rc = flowie_control_rpc_params(request, allowed, 3u, &params);
+  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &domain_id);
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "principal_id", TURBO_FLOW_SECURITY_ID_MAX, 1,
                                    &principal_id);
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "request_id", FLOWIE_CONTROL_REQUEST_ID_MAX, 1,
                                    &request_id);
-  if (rc == TURBO_OK)
-    rc = flowie_control_rpc_u64(params, "expected_revision", 1, &expected_revision);
   if (rc == TURBO_OK) {
     occurred_at = server->clock(server->clock_ctx);
     if (occurred_at == 0u) rc = TURBO_EIO;
@@ -748,11 +723,10 @@ static int flowie_control_rpc_credential_issue(flowie_control_management_rpc_ser
   if (rc == TURBO_OK) {
     flowie_control_credential_issue_command_t command =
         FLOWIE_CONTROL_CREDENTIAL_ISSUE_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.principal_id = principal_id;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = rotate ? flowie_control_management_credential_rotate(server->service, caller, &command,
                                                               &generated)
@@ -763,24 +737,21 @@ static int flowie_control_rpc_credential_issue(flowie_control_management_rpc_ser
   if (rc == TURBO_EALREADY) {
     flowie_control_generated_credential_wipe(&generated);
     rpc_set_error(response, FLOWIE_CONTROL_RPC_SECRET_UNAVAILABLE,
-                  "Credential secret is unavailable; use a new request_id");
+                  "Credential token is unavailable; use a new request_id");
     return rc;
   }
   if (rc != TURBO_OK) {
     flowie_control_generated_credential_wipe(&generated);
     return flowie_control_rpc_error(response, rc);
   }
-  if (generated.secret_size != FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE ||
-      tn_base64_encode_buf(generated.secret, generated.secret_size, secret_base64,
-                           sizeof(secret_base64)) != 0) {
+  if (generated.token_size != FLOWIE_CONTROL_CREDENTIAL_TOKEN_SIZE ||
+      generated.token[generated.token_size] != '\0') {
     rc = TURBO_EIO;
     goto done;
   }
   object = turbo_json_create_object();
   if (!object ||
-      flowie_control_rpc_add(object, "revision", turbo_json_create_uint64(generated.revision)) !=
-          TURBO_OK ||
-      flowie_control_rpc_add(object, "secret_base64", turbo_json_create_string(secret_base64)) !=
+      flowie_control_rpc_add(object, "token", turbo_json_create_string(generated.token)) !=
           TURBO_OK) {
     rc = TURBO_ENOMEM;
     goto done;
@@ -791,7 +762,6 @@ static int flowie_control_rpc_credential_issue(flowie_control_management_rpc_ser
 done:
   flowie_control_rpc_free_json_value(object);
   flowie_control_generated_credential_wipe(&generated);
-  flowie_control_credential_wipe(secret_base64, sizeof(secret_base64));
   if (rc != TURBO_OK) return flowie_control_rpc_error(response, rc);
   return TURBO_OK;
 }
@@ -800,32 +770,29 @@ static int flowie_control_rpc_credential_revoke(flowie_control_management_rpc_se
                                                 const flowie_control_management_caller_t *caller,
                                                 const rpc_request_t *request,
                                                 rpc_response_t *response) {
-  static const char *const allowed[] = {"root_group_id", "principal_id", "request_id",
-                                        "expected_revision"};
+  static const char *const allowed[] = {"domain_id", "principal_id", "request_id"};
   turbo_json_doc_t *params = NULL;
   flowie_control_credential_revoke_command_t command =
       FLOWIE_CONTROL_CREDENTIAL_REVOKE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   const char *principal_id = NULL;
   const char *request_id = NULL;
-  const char *root_group_id = NULL;
+  const char *domain_id = NULL;
   uint64_t occurred_at = 0u;
-  int rc = flowie_control_rpc_params(request, allowed, 4u, &params);
-  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &root_group_id);
+  int rc = flowie_control_rpc_params(request, allowed, 3u, &params);
+  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &domain_id);
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "principal_id", TURBO_FLOW_SECURITY_ID_MAX, 1,
                                    &principal_id);
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "request_id", FLOWIE_CONTROL_REQUEST_ID_MAX, 1,
                                    &request_id);
-  if (rc == TURBO_OK)
-    rc = flowie_control_rpc_u64(params, "expected_revision", 1, &command.expected_revision);
   if (rc == TURBO_OK) {
     occurred_at = server->clock(server->clock_ctx);
     if (occurred_at == 0u) rc = TURBO_EIO;
   }
   if (rc == TURBO_OK) {
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.principal_id = principal_id;
     command.actor = caller->actor;
     command.request_id = request_id;
@@ -841,7 +808,7 @@ static int flowie_control_rpc_named_list(flowie_control_management_rpc_server_t 
                                          const flowie_control_management_caller_t *caller,
                                          const rpc_request_t *request, rpc_response_t *response,
                                          int groups) {
-  static const char *const allowed[] = {"root_group_id", "after", "limit"};
+  static const char *const allowed[] = {"domain_id", "after", "limit"};
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   turbo_json_doc_t *params = NULL;
   void *items = NULL;
@@ -906,31 +873,29 @@ static int flowie_control_rpc_group_write(flowie_control_management_rpc_server_t
                                           const flowie_control_management_caller_t *caller,
                                           const rpc_request_t *request, rpc_response_t *response,
                                           int operation) {
-  static const char *const create_allowed[] = {"root_group_id", "group_id", "parent_group_id",
-                                               "request_id", "expected_revision"};
-  static const char *const disable_allowed[] = {"root_group_id", "group_id", "request_id",
-                                                "expected_revision"};
-  static const char *const member_allowed[] = {"root_group_id", "principal_id", "group_id",
-                                               "request_id", "expected_revision"};
+  static const char *const create_allowed[] = {"domain_id", "group_id", "parent_group_id",
+                                               "request_id"};
+  static const char *const delete_allowed[] = {"domain_id", "group_id", "request_id"};
+  static const char *const member_allowed[] = {"domain_id", "principal_id", "group_id",
+                                               "request_id"};
   const char *const *allowed = operation == 0   ? create_allowed
-                               : operation == 1 ? disable_allowed
+                                : operation == 1 ? delete_allowed
                                                 : member_allowed;
-  size_t allowed_count = operation == 1 ? 4u : 5u;
+  size_t allowed_count = 4u;
   turbo_json_doc_t *params = NULL;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   const char *group_id = NULL;
   const char *parent_group_id = NULL;
   const char *principal_id = NULL;
   const char *request_id = NULL;
-  const char *root_group_id = NULL;
-  uint64_t expected_revision = 0u;
-  uint64_t occurred_at;
+  const char *domain_id = NULL;
+  uint64_t occurred_at = 0u;
   int rc = flowie_control_rpc_params(request, allowed, allowed_count, &params);
-  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &root_group_id);
+  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &domain_id);
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "group_id", TURBO_FLOW_SECURITY_ID_MAX, 1, &group_id);
   if (rc == TURBO_OK && operation == 0)
-    rc = flowie_control_rpc_string(params, "parent_group_id", TURBO_FLOW_SECURITY_ID_MAX, 1,
+    rc = flowie_control_rpc_string(params, "parent_group_id", TURBO_FLOW_SECURITY_ID_MAX, 0,
                                    &parent_group_id);
   if (rc == TURBO_OK && operation >= 2)
     rc = flowie_control_rpc_string(params, "principal_id", TURBO_FLOW_SECURITY_ID_MAX, 1,
@@ -939,47 +904,42 @@ static int flowie_control_rpc_group_write(flowie_control_management_rpc_server_t
     rc = flowie_control_rpc_string(params, "request_id", FLOWIE_CONTROL_REQUEST_ID_MAX, 1,
                                    &request_id);
   if (rc == TURBO_OK)
-    rc = flowie_control_rpc_u64(params, "expected_revision", 1, &expected_revision);
   occurred_at = server->clock(server->clock_ctx);
   if (rc == TURBO_OK && occurred_at == 0u) rc = TURBO_EIO;
   if (rc == TURBO_OK && operation == 0) {
     flowie_control_group_create_command_t command = FLOWIE_CONTROL_GROUP_CREATE_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.group_id = group_id;
     command.parent_group_id = parent_group_id;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_group_create(server->service, caller, &command, &result);
   } else if (rc == TURBO_OK && operation == 1) {
-    flowie_control_group_disable_command_t command = FLOWIE_CONTROL_GROUP_DISABLE_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    flowie_control_group_delete_command_t command = FLOWIE_CONTROL_GROUP_DELETE_COMMAND_INIT;
+    command.domain_id = domain_id;
     command.group_id = group_id;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
-    rc = flowie_control_management_group_disable(server->service, caller, &command, &result);
+    rc = flowie_control_management_group_delete(server->service, caller, &command, &result);
   } else if (rc == TURBO_OK && operation == 2) {
     flowie_control_membership_add_command_t command = FLOWIE_CONTROL_MEMBERSHIP_ADD_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.principal_id = principal_id;
     command.group_id = group_id;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_membership_add(server->service, caller, &command, &result);
   } else if (rc == TURBO_OK) {
     flowie_control_membership_remove_command_t command =
         FLOWIE_CONTROL_MEMBERSHIP_REMOVE_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.principal_id = principal_id;
     command.group_id = group_id;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_membership_remove(server->service, caller, &command, &result);
   }
@@ -993,21 +953,19 @@ static int flowie_control_rpc_role_write(flowie_control_management_rpc_server_t 
                                          const flowie_control_management_caller_t *caller,
                                          const rpc_request_t *request, rpc_response_t *response,
                                          int operation) {
-  static const char *const role_allowed[] = {"root_group_id", "role_id", "request_id",
-                                             "expected_revision"};
-  static const char *const assignment_allowed[] = {"root_group_id", "principal_id", "role_id",
-                                                   "request_id", "expected_revision"};
+  static const char *const role_allowed[] = {"domain_id", "role_id", "request_id"};
+  static const char *const assignment_allowed[] = {"domain_id", "principal_id", "role_id",
+                                                   "request_id"};
   turbo_json_doc_t *params = NULL;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   const char *role_id = NULL;
   const char *principal_id = NULL;
   const char *request_id = NULL;
-  const char *root_group_id = NULL;
-  uint64_t expected_revision = 0u;
-  uint64_t occurred_at;
+  const char *domain_id = NULL;
+  uint64_t occurred_at = 0u;
   int rc = flowie_control_rpc_params(request, operation < 2 ? role_allowed : assignment_allowed,
-                                     operation < 2 ? 4u : 5u, &params);
-  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &root_group_id);
+                                     operation < 2 ? 3u : 4u, &params);
+  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &domain_id);
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "role_id", TURBO_FLOW_SECURITY_TYPE_MAX, 1, &role_id);
   if (rc == TURBO_OK && operation >= 2)
@@ -1017,46 +975,41 @@ static int flowie_control_rpc_role_write(flowie_control_management_rpc_server_t 
     rc = flowie_control_rpc_string(params, "request_id", FLOWIE_CONTROL_REQUEST_ID_MAX, 1,
                                    &request_id);
   if (rc == TURBO_OK)
-    rc = flowie_control_rpc_u64(params, "expected_revision", 1, &expected_revision);
   occurred_at = server->clock(server->clock_ctx);
   if (rc == TURBO_OK && occurred_at == 0u) rc = TURBO_EIO;
   if (rc == TURBO_OK && operation == 0) {
     flowie_control_role_create_command_t command = FLOWIE_CONTROL_ROLE_CREATE_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.role_id = role_id;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_role_create(server->service, caller, &command, &result);
   } else if (rc == TURBO_OK && operation == 1) {
     flowie_control_role_disable_command_t command = FLOWIE_CONTROL_ROLE_DISABLE_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.role_id = role_id;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_role_disable(server->service, caller, &command, &result);
   } else if (rc == TURBO_OK && operation == 2) {
     flowie_control_user_role_add_command_t command = FLOWIE_CONTROL_USER_ROLE_ADD_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.principal_id = principal_id;
     command.role_id = role_id;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_user_role_add(server->service, caller, &command, &result);
   } else if (rc == TURBO_OK) {
     flowie_control_user_role_remove_command_t command =
         FLOWIE_CONTROL_USER_ROLE_REMOVE_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.principal_id = principal_id;
     command.role_id = role_id;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_user_role_remove(server->service, caller, &command, &result);
   }
@@ -1070,7 +1023,7 @@ static int flowie_control_rpc_effective(flowie_control_management_rpc_server_t *
                                         const flowie_control_management_caller_t *caller,
                                         const rpc_request_t *request, rpc_response_t *response,
                                         int groups) {
-  static const char *const allowed[] = {"root_group_id", "principal_id"};
+  static const char *const allowed[] = {"domain_id", "principal_id"};
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   turbo_json_doc_t *params = NULL;
   const char *principal_id = NULL;
@@ -1109,7 +1062,7 @@ static int flowie_control_rpc_policy_status(flowie_control_management_rpc_server
                                             const flowie_control_management_caller_t *caller,
                                             const rpc_request_t *request,
                                             rpc_response_t *response) {
-  static const char *const allowed[] = {"root_group_id"};
+  static const char *const allowed[] = {"domain_id"};
   flowie_control_policy_status_t status = FLOWIE_CONTROL_POLICY_STATUS_INIT;
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   turbo_json_doc_t *params = NULL;
@@ -1122,8 +1075,6 @@ static int flowie_control_rpc_policy_status(flowie_control_management_rpc_server
   if (rc != TURBO_OK) return flowie_control_rpc_error(response, rc);
   object = turbo_json_create_object();
   if (!object ||
-      flowie_control_rpc_add(object, "store_revision",
-                             turbo_json_create_uint64(status.store_revision)) != TURBO_OK ||
       flowie_control_rpc_add(object, "policy_version",
                              turbo_json_create_uint64(status.policy_version)) != TURBO_OK ||
       flowie_control_rpc_add(object, "expires_at", turbo_json_create_uint64(status.expires_at)) !=
@@ -1142,7 +1093,7 @@ static int flowie_control_rpc_policy_rule_list(flowie_control_management_rpc_ser
                                                const flowie_control_management_caller_t *caller,
                                                const rpc_request_t *request,
                                                rpc_response_t *response) {
-  static const char *const allowed[] = {"root_group_id", "after_ordinal", "limit"};
+  static const char *const allowed[] = {"domain_id", "after_ordinal", "limit"};
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   turbo_json_doc_t *params = NULL;
   flowie_control_policy_rule_view_t *items = NULL;
@@ -1182,8 +1133,8 @@ static int flowie_control_rpc_policy_rule_list(flowie_control_management_rpc_ser
             TURBO_OK ||
         flowie_control_rpc_add(item, "rule_line",
                                turbo_json_create_string(items[index].rule_line)) != TURBO_OK ||
-        flowie_control_rpc_add(item, "revision", turbo_json_create_uint64(items[index].revision)) !=
-            TURBO_OK) {
+        flowie_control_rpc_add(item, "updated_at",
+                               turbo_json_create_uint64(items[index].updated_at)) != TURBO_OK) {
       flowie_control_rpc_free_json_value(item);
       rc = TURBO_ENOMEM;
     } else {
@@ -1210,21 +1161,18 @@ static int flowie_control_rpc_policy_rule_write(flowie_control_management_rpc_se
                                                 const flowie_control_management_caller_t *caller,
                                                 const rpc_request_t *request,
                                                 rpc_response_t *response, int remove) {
-  static const char *const put_allowed[] = {"root_group_id", "ordinal", "rule_line", "request_id",
-                                            "expected_revision"};
-  static const char *const delete_allowed[] = {"root_group_id", "ordinal", "request_id",
-                                               "expected_revision"};
+  static const char *const put_allowed[] = {"domain_id", "ordinal", "rule_line", "request_id"};
+  static const char *const delete_allowed[] = {"domain_id", "ordinal", "request_id"};
   turbo_json_doc_t *params = NULL;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   const char *rule_line = NULL;
   const char *request_id = NULL;
-  const char *root_group_id = NULL;
+  const char *domain_id = NULL;
   uint64_t ordinal = 0u;
-  uint64_t expected_revision = 0u;
-  uint64_t occurred_at;
+  uint64_t occurred_at = 0u;
   int rc = flowie_control_rpc_params(request, remove ? delete_allowed : put_allowed,
-                                     remove ? 4u : 5u, &params);
-  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &root_group_id);
+                                     remove ? 3u : 4u, &params);
+  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &domain_id);
   if (rc == TURBO_OK) rc = flowie_control_rpc_u64(params, "ordinal", 1, &ordinal);
   if (rc == TURBO_OK && ordinal >= TURBO_FLOW_SECURITY_MAX_RULES) rc = TURBO_ERANGE;
   if (rc == TURBO_OK && !remove)
@@ -1234,27 +1182,24 @@ static int flowie_control_rpc_policy_rule_write(flowie_control_management_rpc_se
     rc = flowie_control_rpc_string(params, "request_id", FLOWIE_CONTROL_REQUEST_ID_MAX, 1,
                                    &request_id);
   if (rc == TURBO_OK)
-    rc = flowie_control_rpc_u64(params, "expected_revision", 1, &expected_revision);
   occurred_at = server->clock(server->clock_ctx);
   if (rc == TURBO_OK && occurred_at == 0u) rc = TURBO_EIO;
   if (rc == TURBO_OK && remove) {
     flowie_control_policy_rule_delete_command_t command =
         FLOWIE_CONTROL_POLICY_RULE_DELETE_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.ordinal = (uint32_t)ordinal;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_policy_rule_delete(server->service, caller, &command, &result);
   } else if (rc == TURBO_OK) {
     flowie_control_policy_rule_put_command_t command = FLOWIE_CONTROL_POLICY_RULE_PUT_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.ordinal = (uint32_t)ordinal;
     command.rule_line = rule_line;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_policy_rule_put(server->service, caller, &command, &result);
   }
@@ -1268,7 +1213,7 @@ static int flowie_control_rpc_policy_validate(flowie_control_management_rpc_serv
                                               const flowie_control_management_caller_t *caller,
                                               const rpc_request_t *request,
                                               rpc_response_t *response) {
-  static const char *const allowed[] = {"root_group_id"};
+  static const char *const allowed[] = {"domain_id"};
   flowie_control_policy_validation_t validation = FLOWIE_CONTROL_POLICY_VALIDATION_INIT;
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   turbo_json_doc_t *params = NULL;
@@ -1281,8 +1226,6 @@ static int flowie_control_rpc_policy_validate(flowie_control_management_rpc_serv
   if (rc != TURBO_OK) return flowie_control_rpc_error(response, rc);
   object = turbo_json_create_object();
   if (!object ||
-      flowie_control_rpc_add(object, "store_revision",
-                             turbo_json_create_uint64(validation.store_revision)) != TURBO_OK ||
       flowie_control_rpc_add(object, "rule_count",
                              turbo_json_create_uint64(validation.rule_count)) != TURBO_OK ||
       flowie_control_rpc_add(object, "deny_rule_count",
@@ -1297,31 +1240,27 @@ static int flowie_control_rpc_policy_publish(flowie_control_management_rpc_serve
                                              const flowie_control_management_caller_t *caller,
                                              const rpc_request_t *request,
                                              rpc_response_t *response) {
-  static const char *const allowed[] = {"root_group_id", "request_id", "expected_revision",
+  static const char *const allowed[] = {"domain_id", "request_id",
                                         "expires_at"};
   turbo_json_doc_t *params = NULL;
   flowie_control_policy_publish_result_t result = FLOWIE_CONTROL_POLICY_PUBLISH_RESULT_INIT;
   const char *request_id = NULL;
-  const char *root_group_id = NULL;
-  uint64_t expected_revision = 0u;
+  const char *domain_id = NULL;
   uint64_t expires_at = 0u;
-  uint64_t occurred_at;
-  int rc = flowie_control_rpc_params(request, allowed, 4u, &params);
-  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &root_group_id);
+  uint64_t occurred_at = 0u;
+  int rc = flowie_control_rpc_params(request, allowed, 3u, &params);
+  if (rc == TURBO_OK) rc = flowie_control_rpc_target_root(params, caller, &domain_id);
   if (rc == TURBO_OK)
     rc = flowie_control_rpc_string(params, "request_id", FLOWIE_CONTROL_REQUEST_ID_MAX, 1,
                                    &request_id);
-  if (rc == TURBO_OK)
-    rc = flowie_control_rpc_u64(params, "expected_revision", 1, &expected_revision);
   if (rc == TURBO_OK) rc = flowie_control_rpc_u64(params, "expires_at", 0, &expires_at);
   occurred_at = server->clock(server->clock_ctx);
   if (rc == TURBO_OK && occurred_at == 0u) rc = TURBO_EIO;
   if (rc == TURBO_OK) {
     flowie_control_policy_publish_command_t command = FLOWIE_CONTROL_POLICY_PUBLISH_COMMAND_INIT;
-    command.root_group_id = root_group_id;
+    command.domain_id = domain_id;
     command.actor = caller->actor;
     command.request_id = request_id;
-    command.expected_revision = expected_revision;
     command.occurred_at = occurred_at;
     command.expires_at = expires_at;
     rc = flowie_control_management_policy_publish(server->service, caller, &command, &result);
@@ -1331,8 +1270,6 @@ static int flowie_control_rpc_policy_publish(flowie_control_management_rpc_serve
   {
     json_value_t *object = turbo_json_create_object();
     if (!object ||
-        flowie_control_rpc_add(object, "revision", turbo_json_create_uint64(result.revision)) !=
-            TURBO_OK ||
         flowie_control_rpc_add(object, "policy_version",
                                turbo_json_create_uint64(result.policy_version)) != TURBO_OK ||
         flowie_control_rpc_add(object, "replayed", turbo_json_create_bool(result.replayed != 0)) !=
@@ -1347,7 +1284,7 @@ static int flowie_control_rpc_policy_publish(flowie_control_management_rpc_serve
 static int flowie_control_rpc_audit_list(flowie_control_management_rpc_server_t *server,
                                          const flowie_control_management_caller_t *caller,
                                          const rpc_request_t *request, rpc_response_t *response) {
-  static const char *const allowed[] = {"root_group_id", "after_revision", "limit"};
+  static const char *const allowed[] = {"domain_id", "after", "limit"};
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   turbo_json_doc_t *params = NULL;
   flowie_control_audit_view_t *items = NULL;
@@ -1359,7 +1296,7 @@ static int flowie_control_rpc_audit_list(flowie_control_management_rpc_server_t 
   int has_more = 0;
   int rc = flowie_control_rpc_params(request, allowed, 3u, &params);
   if (rc == TURBO_OK) rc = flowie_control_rpc_scope(server, params, caller, &scoped);
-  if (rc == TURBO_OK) rc = flowie_control_rpc_u64(params, "after_revision", 0, &after);
+  if (rc == TURBO_OK) rc = flowie_control_rpc_u64(params, "after", 0, &after);
   if (rc == TURBO_OK) rc = flowie_control_rpc_page_limit(params, &capacity);
   if (rc == TURBO_OK) {
     items = (flowie_control_audit_view_t *)calloc(capacity, sizeof(*items));
@@ -1386,7 +1323,7 @@ static int flowie_control_rpc_audit_list(flowie_control_management_rpc_server_t 
                                turbo_json_create_string(items[index].operation)) != TURBO_OK ||
         flowie_control_rpc_add(item, "target", turbo_json_create_string(items[index].target_id)) !=
             TURBO_OK ||
-        flowie_control_rpc_add(item, "revision", turbo_json_create_uint64(items[index].revision)) !=
+        flowie_control_rpc_add(item, "cursor", turbo_json_create_uint64(items[index].revision)) !=
             TURBO_OK ||
         flowie_control_rpc_add(item, "occurred_at",
                                turbo_json_create_uint64(items[index].occurred_at)) != TURBO_OK) {
@@ -1416,69 +1353,69 @@ static int flowie_control_rpc_dispatch(flowie_control_management_rpc_server_t *s
                                        const flowie_control_management_caller_t *caller,
                                        const rpc_request_t *request, rpc_response_t *response) {
   const char *method = request->method;
-  if (strcmp(method, "flowie.system.status") == 0)
+  if (strcmp(method, "control.system.status") == 0)
     return flowie_control_rpc_system_status(server, caller, request, response);
-  if (strcmp(method, "flowie.auth.external_https.stats") == 0)
+  if (strcmp(method, "control.auth.external_https.stats") == 0)
     return flowie_control_rpc_external_https_stats(server, caller, request, response);
-  if (strcmp(method, "flowie.root.create") == 0)
-    return flowie_control_rpc_root_create(server, caller, request, response);
-  if (strcmp(method, "flowie.root_group.list") == 0)
-    return flowie_control_rpc_root_group_list(server, caller, request, response);
-  if (strcmp(method, "flowie.user.get") == 0)
+  if (strcmp(method, "control.domain.create") == 0)
+    return flowie_control_rpc_domain_create(server, caller, request, response);
+  if (strcmp(method, "control.domain.list") == 0)
+    return flowie_control_rpc_domain_list(server, caller, request, response);
+  if (strcmp(method, "control.user.get") == 0)
     return flowie_control_rpc_user_get(server, caller, request, response);
-  if (strcmp(method, "flowie.user.list") == 0)
+  if (strcmp(method, "control.user.list") == 0)
     return flowie_control_rpc_user_list(server, caller, request, response);
-  if (strcmp(method, "flowie.user.create") == 0)
+  if (strcmp(method, "control.user.create") == 0)
     return flowie_control_rpc_user_write(server, caller, request, response, 0);
-  if (strcmp(method, "flowie.user.disable") == 0)
+  if (strcmp(method, "control.user.disable") == 0)
     return flowie_control_rpc_user_write(server, caller, request, response, 1);
-  if (strcmp(method, "flowie.credential.generate") == 0)
+  if (strcmp(method, "control.credential.generate") == 0)
     return flowie_control_rpc_credential_issue(server, caller, request, response, 0);
-  if (strcmp(method, "flowie.credential.rotate") == 0)
+  if (strcmp(method, "control.credential.rotate") == 0)
     return flowie_control_rpc_credential_issue(server, caller, request, response, 1);
-  if (strcmp(method, "flowie.credential.revoke") == 0)
+  if (strcmp(method, "control.credential.revoke") == 0)
     return flowie_control_rpc_credential_revoke(server, caller, request, response);
-  if (strcmp(method, "flowie.password.set") == 0)
+  if (strcmp(method, "control.password.set") == 0)
     return flowie_control_rpc_password_set(server, caller, request, response);
-  if (strcmp(method, "flowie.password.change") == 0)
+  if (strcmp(method, "control.password.change") == 0)
     return flowie_control_rpc_password_change(server, caller, request, response);
-  if (strcmp(method, "flowie.group.list") == 0)
+  if (strcmp(method, "control.group.list") == 0)
     return flowie_control_rpc_named_list(server, caller, request, response, 1);
-  if (strcmp(method, "flowie.group.create") == 0)
+  if (strcmp(method, "control.group.create") == 0)
     return flowie_control_rpc_group_write(server, caller, request, response, 0);
-  if (strcmp(method, "flowie.group.disable") == 0)
+  if (strcmp(method, "control.group.delete") == 0)
     return flowie_control_rpc_group_write(server, caller, request, response, 1);
-  if (strcmp(method, "flowie.group.member.add") == 0)
+  if (strcmp(method, "control.group.member.add") == 0)
     return flowie_control_rpc_group_write(server, caller, request, response, 2);
-  if (strcmp(method, "flowie.group.member.remove") == 0)
+  if (strcmp(method, "control.group.member.remove") == 0)
     return flowie_control_rpc_group_write(server, caller, request, response, 3);
-  if (strcmp(method, "flowie.group.effective") == 0)
+  if (strcmp(method, "control.group.effective") == 0)
     return flowie_control_rpc_effective(server, caller, request, response, 1);
-  if (strcmp(method, "flowie.role.list") == 0)
+  if (strcmp(method, "control.role.list") == 0)
     return flowie_control_rpc_named_list(server, caller, request, response, 0);
-  if (strcmp(method, "flowie.role.create") == 0)
+  if (strcmp(method, "control.role.create") == 0)
     return flowie_control_rpc_role_write(server, caller, request, response, 0);
-  if (strcmp(method, "flowie.role.disable") == 0)
+  if (strcmp(method, "control.role.disable") == 0)
     return flowie_control_rpc_role_write(server, caller, request, response, 1);
-  if (strcmp(method, "flowie.role.assign") == 0)
+  if (strcmp(method, "control.role.assign") == 0)
     return flowie_control_rpc_role_write(server, caller, request, response, 2);
-  if (strcmp(method, "flowie.role.remove") == 0)
+  if (strcmp(method, "control.role.remove") == 0)
     return flowie_control_rpc_role_write(server, caller, request, response, 3);
-  if (strcmp(method, "flowie.role.effective") == 0)
+  if (strcmp(method, "control.role.effective") == 0)
     return flowie_control_rpc_effective(server, caller, request, response, 0);
-  if (strcmp(method, "flowie.policy.status") == 0)
+  if (strcmp(method, "control.policy.status") == 0)
     return flowie_control_rpc_policy_status(server, caller, request, response);
-  if (strcmp(method, "flowie.policy.rule.list") == 0)
+  if (strcmp(method, "control.policy.rule.list") == 0)
     return flowie_control_rpc_policy_rule_list(server, caller, request, response);
-  if (strcmp(method, "flowie.policy.rule.put") == 0)
+  if (strcmp(method, "control.policy.rule.put") == 0)
     return flowie_control_rpc_policy_rule_write(server, caller, request, response, 0);
-  if (strcmp(method, "flowie.policy.rule.delete") == 0)
+  if (strcmp(method, "control.policy.rule.delete") == 0)
     return flowie_control_rpc_policy_rule_write(server, caller, request, response, 1);
-  if (strcmp(method, "flowie.policy.validate") == 0)
+  if (strcmp(method, "control.policy.validate") == 0)
     return flowie_control_rpc_policy_validate(server, caller, request, response);
-  if (strcmp(method, "flowie.policy.publish") == 0)
+  if (strcmp(method, "control.policy.publish") == 0)
     return flowie_control_rpc_policy_publish(server, caller, request, response);
-  if (strcmp(method, "flowie.audit.list") == 0)
+  if (strcmp(method, "control.audit.list") == 0)
     return flowie_control_rpc_audit_list(server, caller, request, response);
   rpc_set_error(response, RPC_ERROR_METHOD_NOT_FOUND, "Method not found");
   return TURBO_ENOENT;

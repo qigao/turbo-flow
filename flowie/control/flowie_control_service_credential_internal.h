@@ -17,7 +17,7 @@ typedef struct flowie_control_service_credential_binding_s {
   size_t size;
   const char *service_id;
   const char *token_ref;
-  const char *root_group_id;
+  const char *domain_id;
   /**
    * Optional second factor. When set, the HTTPS listener must require and verify client
    * certificates, and the request certificate must match this canonical SHA-256 fingerprint.

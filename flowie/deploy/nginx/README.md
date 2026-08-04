@@ -48,6 +48,11 @@ docker compose -f compose.yml up -d --build
 
 ## Client ID 路由
 
+Client ID 与 MQTT User Name 是两个独立字段。HAProxy 只解析 Client ID 进行接入一致性 hash；它不把
+Client ID 当作用户名，也不从 Client ID 推导认证 principal。Flowie 从 CONNECT 的 User Name 独立完成
+principal 认证，再对 Client ID 单独执行 CONNECT ACL。设备端应分别提供 `FLOWIE_MQTT_USERNAME`、
+`FLOWIE_DEVICE_TOKEN` 和 `FLOWIE_MQTT_CLIENT_ID`。
+
 `FLOWIE_MQTT_BACKENDS` 是逗号分隔、最多 32 个节点的 `host:port` 列表：
 
 ```text

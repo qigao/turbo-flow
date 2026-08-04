@@ -17,7 +17,7 @@ static turbo_flow_security_rule_t acl_rule(const char *pattern) {
   rule.effect = TURBO_FLOW_SECURITY_ALLOW;
   rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
   acl_copy(rule.subject, sizeof(rule.subject), "writer");
-  acl_copy(rule.root_group_id, sizeof(rule.root_group_id), "root-a");
+  acl_copy(rule.domain_id, sizeof(rule.domain_id), "domain-a");
   rule.action_mask = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
   rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
   rule.match_kind = TURBO_FLOW_SECURITY_MATCH_PREFIX;
@@ -29,13 +29,12 @@ static turbo_flow_security_principal_t acl_principal(uint64_t version) {
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   acl_copy(principal.principal_id, sizeof(principal.principal_id), "device-a");
   acl_copy(principal.principal_type, sizeof(principal.principal_type), "device");
-  acl_copy(principal.root_group_id, sizeof(principal.root_group_id), "root-a");
+  acl_copy(principal.domain_id, sizeof(principal.domain_id), "domain-a");
   acl_copy(principal.auth_method, sizeof(principal.auth_method), "password");
-  principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+  principal.scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
   principal.role_count = 1u;
   acl_copy(principal.roles[0], sizeof(principal.roles[0]), "writer");
-  principal.group_count = 1u;
-  acl_copy(principal.groups[0], sizeof(principal.groups[0]), "root-a");
+  principal.group_count = 0u;
   principal.policy_version = version;
   return principal;
 }
@@ -73,7 +72,7 @@ spec("SQLite ACL control store") {
                      realm, turbo_flow_security_sqlite_provider_interface(provider)),
                  TURBO_OK);
     request.principal = &principal;
-    request.root_group_id = "root-a";
+    request.domain_id = "domain-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/telemetry/value";

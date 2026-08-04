@@ -157,19 +157,6 @@ static int flowie_control_runtime_env_secret(const char *reference, const char *
   return TURBO_OK;
 }
 
-static int flowie_control_runtime_clear_env_secret(const char *reference) {
-  static const char prefix[] = "env://";
-  const char *name;
-  if (!reference || strncmp(reference, prefix, sizeof(prefix) - 1u) != 0 ||
-      !(name = reference + sizeof(prefix) - 1u)[0])
-    return TURBO_EINVAL;
-#ifdef _WIN32
-  return _putenv_s(name, "") == 0 ? TURBO_OK : TURBO_EIO;
-#else
-  return unsetenv(name) == 0 ? TURBO_OK : TURBO_EIO;
-#endif
-}
-
 static int flowie_control_runtime_tls_config(const flowie_control_config_t *config,
                                              turbo_tls_server_config_t *tls_out) {
   const char *password = NULL;
@@ -240,16 +227,14 @@ int flowie_control_runtime_validate(const flowie_control_config_t *config) {
         config->management.login_executor_deadline_ms >
             FLOWIE_CONTROL_CONFIG_AUTH_LOCAL_EXECUTOR_MAX_DEADLINE_MS)))
     return TURBO_EINVAL;
-  if (config->bootstrap.enabled) {
-    const char *password = NULL;
-    size_t password_size;
-    rc = flowie_control_runtime_env_secret(config->bootstrap.password_ref, &password);
-    if (rc != TURBO_OK) return rc;
-    password_size = password ? strnlen(password, FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX + 1u) : 0u;
-    if (password_size < FLOWIE_CONTROL_CONFIG_BOOTSTRAP_PASSWORD_MIN ||
-        password_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX)
-      return TURBO_EINVAL;
-  }
+  if (strcmp(config->bootstrap.domain_id, FLOWIE_CONTROL_SYSTEM_DOMAIN) != 0 ||
+      strcmp(config->bootstrap.principal_id, FLOWIE_CONTROL_SYSTEM_ADMIN_DEFAULT_USERNAME) != 0 ||
+      strcmp(config->bootstrap.principal_type, "human") != 0 ||
+      sizeof(FLOWIE_CONTROL_SYSTEM_ADMIN_INITIAL_PASSWORD) - 1u <
+          FLOWIE_CONTROL_CONFIG_BOOTSTRAP_PASSWORD_MIN ||
+      sizeof(FLOWIE_CONTROL_SYSTEM_ADMIN_INITIAL_PASSWORD) - 1u >
+          FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX)
+    return TURBO_EINVAL;
   if (config->auth.enabled &&
       ((config->auth.external_https.enabled && config->auth.local_executor.configured) ||
        (!config->auth.external_https.enabled &&
@@ -361,7 +346,7 @@ static int flowie_control_runtime_resolve_caller(void *ctx, const Req *request,
     return TURBO_EINVAL;
   identity = (const flowie_control_management_session_identity_t *)get_context((Req *)request);
   if (!identity || identity->size < sizeof(*identity)) return TURBO_EPERM;
-  caller_out->root_group_id = identity->root_group_id;
+  caller_out->domain_id = identity->domain_id;
   caller_out->actor = identity->principal_id;
   caller_out->permissions = identity->permissions;
   return TURBO_OK;
@@ -377,7 +362,7 @@ static int flowie_control_runtime_resolve_session(
     return TURBO_EINVAL;
   identity = (const flowie_control_management_session_identity_t *)get_context((Req *)request);
   if (!identity || identity->size < sizeof(*identity)) return TURBO_EPERM;
-  caller_out->root_group_id = identity->root_group_id;
+  caller_out->domain_id = identity->domain_id;
   caller_out->actor = identity->principal_id;
   caller_out->permissions = identity->permissions;
   memcpy(csrf_token_out, identity->csrf, sizeof(identity->csrf));
@@ -385,12 +370,12 @@ static int flowie_control_runtime_resolve_session(
 }
 
 static int flowie_control_runtime_login(
-    void *ctx, const char *root_group_id, const char *principal_id, const uint8_t *secret,
+    void *ctx, const char *domain_id, const char *principal_id, const uint8_t *secret,
     size_t secret_size, const char *remote_address,
     char token_out[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u]) {
   flowie_control_runtime_t *runtime = (flowie_control_runtime_t *)ctx;
   if (!runtime) return TURBO_EINVAL;
-  return flowie_control_management_session_login(runtime->management_sessions, root_group_id,
+  return flowie_control_management_session_login(runtime->management_sessions, domain_id,
                                                  principal_id, secret, secret_size, remote_address,
                                                  token_out);
 }
@@ -401,16 +386,16 @@ static int flowie_control_runtime_logout(void *ctx, const char *token) {
                  : TURBO_EINVAL;
 }
 
-static int flowie_control_runtime_policy_version(void *ctx, const char *root_group_id,
+static int flowie_control_runtime_policy_version(void *ctx, const char *domain_id,
                                                  uint64_t *policy_version_out) {
   flowie_control_runtime_t *runtime = (flowie_control_runtime_t *)ctx;
   flowie_control_policy_status_t status = FLOWIE_CONTROL_POLICY_STATUS_INIT;
   int rc;
   if (policy_version_out) *policy_version_out = 0u;
   if (!runtime || flowie_control_repository_validate(runtime->repository) != TURBO_OK ||
-      !root_group_id || !policy_version_out)
+      !domain_id || !policy_version_out)
     return TURBO_EINVAL;
-  rc = runtime->repository->policy->status(runtime->repository->ctx, root_group_id, &status);
+  rc = runtime->repository->policy->status(runtime->repository->ctx, domain_id, &status);
   if (rc == TURBO_OK) *policy_version_out = status.policy_version;
   return rc;
 }
@@ -587,13 +572,13 @@ static int flowie_control_runtime_create_auth(flowie_control_runtime_t *runtime)
         FLOWIE_CONTROL_SERVICE_CREDENTIAL_BINDING_INIT;
     bindings[index].service_id = runtime->config.auth.service_bindings[index].service_id;
     bindings[index].token_ref = runtime->config.auth.service_bindings[index].token_ref;
-    bindings[index].root_group_id = runtime->config.auth.service_bindings[index].root_group_id;
+    bindings[index].domain_id = runtime->config.auth.service_bindings[index].domain_id;
     bindings[index].peer_certificate_sha256 =
         runtime->config.auth.service_bindings[index].peer_certificate_sha256[0]
             ? runtime->config.auth.service_bindings[index].peer_certificate_sha256
             : NULL;
     rc = runtime->repository->policy->status(runtime->repository->ctx,
-                                             bindings[index].root_group_id, &status);
+                                             bindings[index].domain_id, &status);
     if (rc != TURBO_OK) return rc;
   }
   service_config.repository = runtime->repository;
@@ -714,20 +699,12 @@ int flowie_control_runtime_create(const flowie_control_config_t *config,
   runtime->config = *config;
   rc = flowie_control_runtime_create_repository(runtime);
   if (rc != TURBO_OK) goto fail;
-  if (runtime->config.bootstrap.enabled) {
-    const char *password = NULL;
-    size_t password_size;
-    int clear_rc;
-    rc = flowie_control_runtime_env_secret(runtime->config.bootstrap.password_ref, &password);
-    if (rc == TURBO_OK) {
-      password_size = strnlen(password, FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX + 1u);
-      rc = flowie_control_bootstrap_apply(runtime->repository, &runtime->config.bootstrap, password,
-                                          password_size, flowie_control_runtime_clock(NULL));
-    }
-    clear_rc = flowie_control_runtime_clear_env_secret(runtime->config.bootstrap.password_ref);
-    if (rc == TURBO_OK && clear_rc != TURBO_OK) rc = clear_rc;
-    if (rc != TURBO_OK) goto fail;
-  }
+  rc = flowie_control_bootstrap_apply(
+      runtime->repository, &runtime->config.bootstrap,
+      FLOWIE_CONTROL_SYSTEM_ADMIN_INITIAL_PASSWORD,
+      sizeof(FLOWIE_CONTROL_SYSTEM_ADMIN_INITIAL_PASSWORD) - 1u,
+      flowie_control_runtime_clock(NULL));
+  if (rc != TURBO_OK) goto fail;
   rc = flowie_control_runtime_create_management_sessions(runtime);
   if (rc != TURBO_OK) goto fail;
   management_config.repository = runtime->repository;

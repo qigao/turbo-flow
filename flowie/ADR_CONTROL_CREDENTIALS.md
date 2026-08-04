@@ -13,7 +13,7 @@
 普通数据校验的快速 hash。密码 KDF 消耗较高，若在 SQLite 写事务内执行，会长时间占用单写者锁；若在
 事务外执行后不重新校验状态，又可能覆盖并发的禁用、撤销或轮换。
 
-本决策只定义 credential 事实的存储和内部命令语义。内部认证缓存和受信 Root Group 绑定见本文后续章节及
+本决策只定义 credential 事实的存储和内部命令语义。内部认证缓存和受信 Domain 绑定见本文后续章节及
 `ADR_HTTPS_AUTH_SERVICE.md`；HTTPS adapter、防爆破、管理权限和已连接 session 的处置仍由后续
 阶段完成。部署 parser/runtime 以 `auth.external_https` 是否出现选择 verifier：缺失时使用本地
 credential 与正向 cache；出现时二者不参与该请求，第三方 HTTPS 失败不得回退到本地 credential。
@@ -23,22 +23,23 @@ credential 与正向 cache；出现时二者不参与该请求，第三方 HTTPS
 1. 保存明文或可逆密文：便于重放 secret，但数据库或密钥泄漏会直接暴露全部 credential，拒绝。
 2. SHA-2 等快速 hash：实现简单，但离线猜测成本过低，拒绝。
 3. OpenSSL PBKDF2：依赖已存在且适用于部分合规环境，但默认内存硬度不足。
-4. 复用仓库 Monocypher Argon2id，并用 TurboUtils CSPRNG 生成 secret 和 salt：不新增依赖，提供内存
+4. 复用仓库 Monocypher Argon2id，并用 TurboUtils CSPRNG 生成 Token entropy 和 salt：不新增依赖，提供内存
    硬度，并保持成熟密码实现边界。
 
 选择方案 4。若未来需要 FIPS profile，应新增明确、版本化的 KDF algorithm，而不是静默切换现有记录。
 
 ## 数据与所有权
 
-SQLite `flowie_control_credential` 是 verifier 事实源，并以 `(root_group_id, principal_id)` 为主键关联用户。
+SQLite `flowie_control_credential` 是 verifier 事实源，并以 `(domain_id, principal_id)` 为主键关联用户。
 每条记录分别保存：
 
 - KDF algorithm、memory blocks、passes 和 lanes；
 - 16-byte salt 和 32-byte verifier；
 - enabled、revision 和时间戳。
 
-数据库不保存生成的 32-byte secret。`generate` 和 `rotate` 仅在事务提交成功后把 secret 返回给调用者一次；
-幂等重放返回 `TURBO_EALREADY` 和空 secret，因为系统无法也不应恢复原明文。调用方拥有返回 buffer，必须
+数据库不保存生成的明文 Token。机器 Token 由 32-byte entropy 编码为
+`flw_mqtt_v1_<Base64URL-no-padding>`；`generate` 和 `rotate` 仅在事务提交成功后把 Token 返回给调用者一次。
+幂等重放返回 `TURBO_EALREADY` 和空 Token，因为系统无法也不应恢复原明文。调用方拥有返回 buffer，必须
 在持久化到受保护的 secret store 后调用 `flowie_control_generated_credential_wipe()`。
 
 默认参数为 Argon2id、19 MiB、2 passes、1 lane。读取记录时严格校验 algorithm、参数范围和 BLOB 长度；
@@ -51,12 +52,12 @@ SQLite `flowie_control_credential` 是 verifier 事实源，并以 `(root_group_
 `generate`/`rotate` 分为三个阶段：
 
 1. 只读预检 request replay、expected revision、用户状态和 credential 存在性；
-2. 在数据库事务外使用 CSPRNG 和 Argon2id 生成 secret、salt 和 verifier；
+2. 在数据库事务外使用 CSPRNG 生成可打印 Token，并用 Argon2id 生成 salt 和 verifier；
 3. `BEGIN IMMEDIATE` 后重新检查 replay、revision、用户和 credential 状态，再原子写入 revision、audit 和
    verifier。
 
 因此昂贵 KDF 不持有 SQLite writer lock；并发状态变化会在第二次校验时失败，不会覆盖新事实。失败路径
-回滚事务并清零所有临时 secret、salt、verifier 和 KDF work area。`revoke` 在单事务内 tombstone 当前
+回滚事务并清零所有临时 entropy、Token、salt、verifier 和 KDF work area。`revoke` 在单事务内 tombstone 当前
 credential；`rotate` 可用新 verifier 显式重新启用已撤销 credential。
 
 ## 验证与错误语义
@@ -68,10 +69,10 @@ credential；`rotate` 可用新 verifier 显式重新启用已撤销 credential�
 - KDF 完成后重新读取用户和 credential revision。若期间发生禁用、撤销或轮换，验证 fail closed。
 - 数据库错误、损坏 KDF 字段和随机源失败向上传播，不自动生成弱 secret、不切换算法。
 
-内部 store API 不记录 credential，也不把 secret 写入 audit detail。management RPC 仅在成功的 generate/rotate
-响应中返回一次 Base64 secret；重放返回专用冲突错误且不恢复明文，RPC 响应设置 `Cache-Control: no-store`，
+内部 store API 不记录 credential，也不把 Token 写入 audit detail。management RPC 仅在成功的 generate/rotate
+响应中返回一次 `token`；重放返回专用冲突错误且不恢复明文，RPC 响应设置 `Cache-Control: no-store`，
 实际发送后立即清零响应副本。Dashboard 不渲染 credential。内部 auth service 已实现有界
-revision-aware credential cache、事务化 principal snapshot 和受信 TLS caller Root Group 绑定；外层 HTTPS
+revision-aware credential cache、事务化 principal snapshot 和受信 TLS caller Domain 绑定；外层 HTTPS
 adapter 仍必须实现请求限流、失败审计和统一拒绝响应。
 
 ## Revision-aware 正向缓存
@@ -81,7 +82,7 @@ adapter 仍必须实现请求限流、失败审计和统一拒绝响应。
 该缓存。
 
 - 缓存键是进程启动时由 TurboUtils CSPRNG 生成的 32-byte 随机 key 所派生的 keyed BLAKE2b digest；输入
-  包含有长度边界的 root group、principal 和 credential。缓存不保存 credential、Base64 或可恢复明文。
+  包含有长度边界的 domain、principal 和 credential。缓存不保存 credential、Base64 或可恢复明文。
 - 缓存只保存成功验证得到的 user/credential revision，不缓存失败结果，不成为用户状态事实源。
 - 每次候选命中都通过轻量 SQLite query 读取当前 active 状态和 revision。禁用、撤销或 revision 不一致时
   立即删除候选；revision 不一致时重新执行当前 verifier 的完整 Argon2id 验证。
@@ -110,8 +111,9 @@ adapter 仍必须实现请求限流、失败审计和统一拒绝响应。
 
 ## 验证范围与剩余风险
 
-当前 TinyTest 覆盖一次性生成、正确/错误/不存在主体验证、幂等重放、轮换使旧 secret 失效、撤销、重新
-启用、用户禁用和 secret wipe。缓存测试覆盖正向命中、TTL 过期、错误 secret 不入缓存、revision
+当前 TinyTest 覆盖一次性 Token 生成、Base64URL alphabet、正确/错误/不存在主体验证、幂等重放、轮换使旧
+Token 失效、撤销、重新启用、用户禁用和 Token wipe。缓存测试覆盖正向命中、TTL 过期、错误 credential
+不入缓存、revision
 失效、撤销/禁用 fail closed、LRU 容量驱逐和并发命中。SQLite revision 与 audit 同事务提交。
 
 - **HIGH**：在 HTTPS 认证服务、防爆破和管理权限完成前，不得把内部 store API 直接暴露到公网。

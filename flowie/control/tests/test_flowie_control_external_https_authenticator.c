@@ -88,7 +88,7 @@ static void external_https_secret_release(void *ctx, turbo_flow_security_secret_
 static flowie_control_external_auth_request_t external_https_request(void) {
   static const uint8_t secret[] = "signed-token";
   flowie_control_external_auth_request_t request = FLOWIE_CONTROL_EXTERNAL_AUTH_REQUEST_INIT;
-  request.root_group_id = "root-a";
+  request.domain_id = "root-a";
   request.presented_identity = "external-device";
   request.method = "oidc-token";
   request.secret = secret;
@@ -319,7 +319,7 @@ spec("Flowie control external HTTPS authenticator") {
     check_not_null(document);
     check_size_eq(turbo_json_object_size(document), 8u);
     check_double_eq(turbo_json_number(turbo_json_object_get(document, "version")), 2.0, 0.001);
-    check_str_eq(turbo_json_string(turbo_json_object_get(document, "root_group")), "root-a");
+    check_str_eq(turbo_json_string(turbo_json_object_get(document, "domain")), "root-a");
     check_str_eq(turbo_json_string(turbo_json_object_get(document, "identity")), "external-device");
     check_str_eq(turbo_json_string(turbo_json_object_get(document, "secret_base64")),
                  "c2lnbmVkLXRva2Vu");

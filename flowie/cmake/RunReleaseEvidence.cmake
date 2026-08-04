@@ -41,7 +41,8 @@ set(records
     "test_flowie_transport|local|OpenSSL|TLS/WSS"
     "test_flowie_mqtt_endurance|memory|${PROJECT_VERSION}|none"
     "test_flowie_mqtt_soak|redis|Redis-${REDIS_VERSION}+PostgreSQL|TLS/WSS"
-    "flowie_server_check_redis_session_store|redis|${REDIS_VERSION}|none"
+    "test_flowie_cluster_route_redis_live|redis|${REDIS_VERSION}|none"
+    "flowie_server_rejects_redis_protocol_store|server-boundary|${PROJECT_VERSION}|none"
     "flowie_server_check_https_auth_provider|http|${PROJECT_VERSION}|mTLS")
 
 file(WRITE "${OUTPUT_FILE}" "{\n  \"revision\": \"${REVISION}\",\n  \"tests\": [\n")

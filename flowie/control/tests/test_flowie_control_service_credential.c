@@ -58,7 +58,7 @@ static flowie_control_service_credential_resolver_t *service_resolver_create(
 }
 
 spec("Flowie scoped service credentials") {
-  it("maps a bearer token to exactly one service and Root Group without mTLS") {
+  it("maps a bearer token to exactly one service and Domain without mTLS") {
     service_secret_fixture_t fixture = {"token-a", "token-b"};
     flowie_control_service_credential_resolver_t *resolver =
         service_resolver_create(&fixture, NULL);
@@ -70,7 +70,7 @@ spec("Flowie scoped service credentials") {
                  TURBO_OK);
     check_str_eq(caller.listener_id, "flowie-control-auth");
     check_str_eq(caller.service_id, "broker-b");
-    check_str_eq(caller.root_group_id, "root-b");
+    check_str_eq(caller.domain_id, "root-b");
     check_null(caller.peer_certificate_sha256);
     check_true(caller.authenticated);
 
@@ -96,7 +96,7 @@ spec("Flowie scoped service credentials") {
                      SERVICE_CERT_A, &caller),
                  TURBO_OK);
     check_str_eq(caller.service_id, "broker-a");
-    check_str_eq(caller.root_group_id, "root-a");
+    check_str_eq(caller.domain_id, "root-a");
     check_str_eq(caller.peer_certificate_sha256, SERVICE_CERT_A);
 
     flowie_control_service_credential_resolver_destroy(resolver);

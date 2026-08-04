@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sign in | Flowie Control</title>
-  <link rel="stylesheet" href="/v1/management/assets/control.css">
+  <link rel="stylesheet" href="/v2/control/assets/control.css">
 </head>
 <body class="auth-page">
   <main class="auth-shell">
@@ -15,20 +15,20 @@
       </header>
 
       <nav class="scope-switch" aria-label="Sign-in scope">
-        <a href="/v1/management/login" {{#system_mode}}aria-current="page"{{/system_mode}}>System administrator</a>
-        <a href="/v1/management/login?scope=group" {{#group_mode}}aria-current="page"{{/group_mode}}>Root group</a>
+        <a href="/v2/control/login" {{#system_mode}}aria-current="page"{{/system_mode}}>System administrator</a>
+        <a href="/v2/control/login?scope=group" {{#group_mode}}aria-current="page"{{/group_mode}}>Domain</a>
       </nav>
 
       {{#error}}<p class="auth-error" role="alert">The username or password is incorrect.</p>{{/error}}
 
-      <form class="auth-form" method="post" action="/v1/management/login">
+      <form class="auth-form" method="post" action="/v2/control/login">
         {{#system_mode}}
-        <input type="hidden" name="root_group" value="system">
+        <input type="hidden" name="domain" value="system">
         <div class="scope-field"><span>Scope</span><strong>System</strong></div>
         {{/system_mode}}
         {{#group_mode}}
-        <label>Root group
-          <input name="root_group" required maxlength="128" autocomplete="organization" placeholder="root-a">
+        <label>Domain
+          <input name="domain" required maxlength="128" autocomplete="organization" placeholder="root-a">
         </label>
         {{/group_mode}}
         <label>Username

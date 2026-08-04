@@ -41,7 +41,7 @@ typedef enum flowie_control_external_assurance_level_e {
  */
 typedef struct flowie_control_external_auth_request_s {
   size_t size;
-  const char *root_group_id;
+  const char *domain_id;
   const char *presented_identity;
   const char *method;
   const uint8_t *secret;
@@ -101,7 +101,7 @@ typedef struct flowie_control_external_authenticator_s {
 
 typedef struct flowie_control_external_identity_map_request_s {
   size_t size;
-  const char *root_group_id;
+  const char *domain_id;
   const char *presented_identity;
   const flowie_control_external_auth_assertion_t *assertion;
 } flowie_control_external_identity_map_request_t;
@@ -157,7 +157,7 @@ int flowie_control_external_identity_map_result_validate(
  * Map a trusted assertion subject directly to one existing local principal id.
  *
  * The mapper first requires exact issuer and subject-type matches. Authorization remains local:
- * the repository subsequently checks the principal in the caller-bound Root Group and loads only
+ * the repository subsequently checks the principal in the caller-bound Domain and loads only
  * local roles/groups.
  */
 int flowie_control_external_subject_mapper_create(

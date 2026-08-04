@@ -44,18 +44,18 @@ channels:
           action: route
           key: mqtt_delivery_sink
 
-# Standalone Flowie defaults to the durable SQLite ProtocolStore selected by
-# `flowie_server --protocol-store-path`. Managed sessions and retained publications use distinct
-# versioned keys in an endpoint namespace. `max_records` must cover max_sessions plus
+# Standalone Flowie uses an owner-exclusive SQLite `:memory:` ProtocolStore. Managed sessions and
+# retained publications use distinct versioned keys in an endpoint namespace, and all protocol
+# facts disappear when the process stops. `max_records` must cover max_sessions plus
 # max_retained_messages, and max_key_size must cover the retained prefix plus an MQTT Topic Name.
 # The protocol store is independent of Graph business data sinks. Uncomment this explicit SQLite
-# channel and `protocol_store` below only when limits/path must live in YAML.
+# channel and `protocol_store` below only when limits/namespace must live in YAML.
 # A custom host may provide the same binding through flowie_register_resolved_bound_endpoint[_ex].
 #  mqtt.protocol:
 #    kind: record_store
 #    config:
 #      backend: sqlite
-#      database_path: flowie-protocol.sqlite3
+#      database_path: ":memory:"
 #      namespace_name: mqtt.endpoint
 #      busy_timeout_ms: 5000
 #      max_key_size: 65538
@@ -74,7 +74,7 @@ channels:
 #    kind: auth_provider
 #    config:
 #      backend: https
-#      url: https://auth.internal.example/v3/authenticate
+#      url: https://auth.internal.example/v4/authenticate
 #      method: password
 #      service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
 #      timeout_ms: 3000
@@ -88,7 +88,7 @@ channels:
 #    kind: acl_provider
 #    config:
 #      backend: https
-#      url: https://auth.internal.example/v3/acl
+#      url: https://auth.internal.example/v4/acl
 #      service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
 #      timeout_ms: 3000
 #      max_response_size: 4194304

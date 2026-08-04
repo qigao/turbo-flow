@@ -31,11 +31,11 @@ void flowie_control_pgsql_command_destroy(flowie_control_pgsql_command_t *comman
  */
 int flowie_control_pgsql_command_commit_confirm(
     flowie_control_pgsql_command_t *view, const char *request_id, const char *actor,
-    const char *operation, const char *root_group_id, const char *target_id,
+    const char *operation, const char *domain_id, const char *target_id,
     const char *target_detail, uint64_t revision, int *committed_out);
 
-int flowie_control_pgsql_command_root_group_create(
-    flowie_control_pgsql_command_t *view, const flowie_control_root_group_create_command_t *command,
+int flowie_control_pgsql_command_domain_create(
+    flowie_control_pgsql_command_t *view, const flowie_control_domain_create_command_t *command,
     flowie_control_command_result_t *result);
 int flowie_control_pgsql_command_user_create(flowie_control_pgsql_command_t *view,
                                              const flowie_control_user_create_command_t *command,
@@ -68,8 +68,8 @@ int flowie_control_pgsql_command_credential_revoke(
 int flowie_control_pgsql_command_group_create(flowie_control_pgsql_command_t *view,
                                               const flowie_control_group_create_command_t *command,
                                               flowie_control_command_result_t *result);
-int flowie_control_pgsql_command_group_disable(
-    flowie_control_pgsql_command_t *view, const flowie_control_group_disable_command_t *command,
+int flowie_control_pgsql_command_group_delete(
+    flowie_control_pgsql_command_t *view, const flowie_control_group_delete_command_t *command,
     flowie_control_command_result_t *result);
 int flowie_control_pgsql_command_membership_add(
     flowie_control_pgsql_command_t *view, const flowie_control_membership_add_command_t *command,

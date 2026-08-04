@@ -18,7 +18,7 @@ int flowie_control_text_valid(const char *value, size_t limit);
  * Subject existence and enabled state belong to the selected fact-store transaction and are
  * intentionally not checked here.
  */
-int flowie_control_policy_rule_syntax_validate(const char *root_group_id, const char *rule_line,
+int flowie_control_policy_rule_syntax_validate(const char *domain_id, const char *rule_line,
                                                size_t rule_line_size,
                                                turbo_flow_security_rule_t *rule_out);
 

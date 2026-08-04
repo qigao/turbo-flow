@@ -2,8 +2,9 @@
 
 Flowie 是 MQTT 协议与业务处理层。MQTT 协议事实（session、subscription、inflight、retained、
 Will、presence 和 route）由独立 ProtocolStore 管理；Graph 业务事实由 FlowStore/业务 sink 管理。
-Flowie 内部容器只能保存可重建的 owner cache。standalone 默认使用独立 SQLite ProtocolStore；
-cluster 目标使用 Redis 协议存储，并由 PostgreSQL ownership/epoch/fencing 约束。两层即使使用相同
+Flowie 内部容器只能保存可重建的 owner cache。standalone 使用独立 SQLite `:memory:`
+ProtocolStore，进程重启后由 Client 重连和重订阅重建；cluster 目标使用 Redis 协议存储，并由
+PostgreSQL ownership/epoch/fencing 约束。长期业务数据进入独立 BusinessStore。两层即使使用相同
 引擎，也必须分开 namespace、连接、权限、容量、migration 和故障语义。
 
 认证与上述存储边界完全分离：bundled Flowie 只配置 HTTPS auth provider；`flowie-control` 可选择

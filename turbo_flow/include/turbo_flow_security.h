@@ -27,7 +27,7 @@ typedef struct turbo_flow_security_policy_provider_owner_s
 typedef enum turbo_flow_security_scope_e {
   TURBO_FLOW_SECURITY_SCOPE_SELF = 1,
   TURBO_FLOW_SECURITY_SCOPE_GROUP,
-  TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP,
+  TURBO_FLOW_SECURITY_SCOPE_DOMAIN,
   TURBO_FLOW_SECURITY_SCOPE_SYSTEM
 } turbo_flow_security_scope_t;
 
@@ -37,13 +37,13 @@ typedef struct turbo_flow_security_principal_s {
   uint32_t abi_version;
   char principal_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char principal_type[TURBO_FLOW_SECURITY_TYPE_MAX + 1u];
-  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char auth_method[TURBO_FLOW_SECURITY_TYPE_MAX + 1u];
   turbo_flow_security_scope_t scope;
   uint32_t role_count;
   char roles[TURBO_FLOW_SECURITY_MAX_ROLES][TURBO_FLOW_SECURITY_TYPE_MAX + 1u];
   uint32_t group_count;
-  /** Direct groups and their ancestors; non-SYSTEM principals must include root_group_id. */
+  /** Direct groups and their Group ancestors. Domain identity is carried only by domain_id. */
   char groups[TURBO_FLOW_SECURITY_MAX_GROUPS][TURBO_FLOW_SECURITY_ID_MAX + 1u];
   /** Unix epoch seconds; zero means the provider did not assign an expiry. */
   uint64_t expires_at;
@@ -207,8 +207,8 @@ typedef struct turbo_flow_security_rule_s {
   turbo_flow_security_effect_t effect;
   turbo_flow_security_subject_kind_t subject_kind;
   char subject[TURBO_FLOW_SECURITY_ID_MAX + 1u];
-  /** Immutable security-tree root. Every rule belongs to exactly one root group. */
-  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  /** Immutable security-tree root. Every rule belongs to exactly one domain. */
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   uint32_t action_mask;
   turbo_flow_security_resource_type_t resource_type;
   turbo_flow_security_match_kind_t match_kind;
@@ -220,9 +220,9 @@ typedef struct turbo_flow_security_rule_s {
 
 /**
  * Parse one canonical ACL rule line:
- * `effect|subject_kind|subject|root_group|actions|resource_type|match_kind|pattern`.
+ * `effect|subject_kind|subject|domain|actions|resource_type|match_kind|pattern`.
  * `subject` must be `*` for `any`; actions are comma-separated. `\\`, `\|`, and
- * `\xHH` escapes are accepted in subject, root_group, and pattern fields.
+ * `\xHH` escapes are accepted in subject, domain, and pattern fields.
  *
  * The parser copies into `rule_out`, performs no allocation, and returns TURBO_OK,
  * TURBO_EINVAL for invalid pointers/capacities, or TURBO_EPROTO for invalid syntax.
@@ -278,7 +278,7 @@ typedef struct turbo_flow_security_policy_provider_s {
 typedef struct turbo_flow_security_request_s {
   size_t size;
   const turbo_flow_security_principal_t *principal;
-  const char *root_group_id;
+  const char *domain_id;
   uint32_t action;
   turbo_flow_security_resource_type_t resource_type;
   const char *resource;
@@ -337,7 +337,7 @@ typedef enum turbo_flow_security_decision_reason_e {
   TURBO_FLOW_SECURITY_REASON_DEFAULT_DENY = 1,
   TURBO_FLOW_SECURITY_REASON_ALLOW_RULE,
   TURBO_FLOW_SECURITY_REASON_DENY_RULE,
-  TURBO_FLOW_SECURITY_REASON_ROOT_GROUP_MISMATCH,
+  TURBO_FLOW_SECURITY_REASON_DOMAIN_MISMATCH,
   TURBO_FLOW_SECURITY_REASON_PRINCIPAL_EXPIRED,
   TURBO_FLOW_SECURITY_REASON_POLICY_VERSION_MISMATCH
 } turbo_flow_security_decision_reason_t;

@@ -56,19 +56,19 @@ static uint64_t flowie_control_auth_default_clock(void *ctx) {
   return now > 0 ? (uint64_t)now : 0u;
 }
 
-int flowie_control_auth_service_resolve_root_group(
+int flowie_control_auth_service_resolve_domain(
     const flowie_control_auth_service_t *service, const flowie_control_verified_caller_t *caller,
-    char root_group_id_out[TURBO_FLOW_SECURITY_ID_MAX + 1u]) {
-  if (root_group_id_out) root_group_id_out[0] = '\0';
-  if (!service || !caller || caller->size < sizeof(*caller) || !root_group_id_out ||
+    char domain_id_out[TURBO_FLOW_SECURITY_ID_MAX + 1u]) {
+  if (domain_id_out) domain_id_out[0] = '\0';
+  if (!service || !caller || caller->size < sizeof(*caller) || !domain_id_out ||
       caller->authenticated != 1 ||
       !flowie_control_auth_text_valid(caller->listener_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_auth_text_valid(caller->service_id, TURBO_FLOW_SECURITY_ID_MAX) ||
-      !flowie_control_auth_text_valid(caller->root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+      !flowie_control_auth_text_valid(caller->domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       (caller->peer_certificate_sha256 &&
        !flowie_control_auth_fingerprint_valid(caller->peer_certificate_sha256)))
     return TURBO_EPERM;
-  memcpy(root_group_id_out, caller->root_group_id, strlen(caller->root_group_id) + 1u);
+  memcpy(domain_id_out, caller->domain_id, strlen(caller->domain_id) + 1u);
   return TURBO_OK;
 }
 
@@ -139,7 +139,7 @@ void flowie_control_auth_service_destroy(flowie_control_auth_service_t *service)
 }
 
 int flowie_control_auth_service_authenticate_root(
-    flowie_control_auth_service_t *service, const char *root_group_id, const char *caller_scope,
+    flowie_control_auth_service_t *service, const char *domain_id, const char *caller_scope,
     const flowie_control_authenticate_request_t *request, int require_policy,
     turbo_flow_security_principal_t *principal_out, int *credential_cache_hit_out) {
   flowie_control_credential_verify_result_t verified = FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
@@ -158,9 +158,9 @@ int flowie_control_auth_service_authenticate_root(
 
   if (credential_cache_hit_out) *credential_cache_hit_out = 0;
   if (principal_out && principal_out->size >= sizeof(*principal_out)) *principal_out = principal;
-  if (!service || !root_group_id || !caller_scope || !request ||
+  if (!service || !domain_id || !caller_scope || !request ||
       request->size < sizeof(*request) ||
-      !flowie_control_auth_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+      !flowie_control_auth_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_auth_text_valid(caller_scope, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_auth_text_valid(request->identity, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_auth_text_valid(request->method, TURBO_FLOW_SECURITY_TYPE_MAX) ||
@@ -174,7 +174,7 @@ int flowie_control_auth_service_authenticate_root(
       strcmp(request->method, service->method) != 0)
     return TURBO_EPERM;
 
-  rc = flowie_control_auth_rate_limiter_acquire(service->rate_limiter, caller_scope, root_group_id,
+  rc = flowie_control_auth_rate_limiter_acquire(service->rate_limiter, caller_scope, domain_id,
                                                 request->identity);
   if (rc != TURBO_OK) goto done;
   if (service->external_auth_enabled) {
@@ -188,7 +188,7 @@ int flowie_control_auth_service_authenticate_root(
       rc = TURBO_EINVAL;
       goto done;
     }
-    external_request.root_group_id = root_group_id;
+    external_request.domain_id = domain_id;
     external_request.presented_identity = request->identity;
     external_request.method = request->method;
     external_request.secret = request->secret;
@@ -219,7 +219,7 @@ int flowie_control_auth_service_authenticate_root(
       rc = TURBO_EPROTO;
       goto done;
     }
-    map_request.root_group_id = root_group_id;
+    map_request.domain_id = domain_id;
     map_request.presented_identity = request->identity;
     map_request.assertion = &assertion;
     rc = service->external_identity_mapper.map(service->external_identity_mapper.ctx, &map_request,
@@ -230,19 +230,19 @@ int flowie_control_auth_service_authenticate_root(
       goto done;
     }
     rc = service->repository.auth->external_principal_snapshot(
-        service->repository.ctx, root_group_id, mapped.principal_id, assertion.revision, &snapshot);
+        service->repository.ctx, domain_id, mapped.principal_id, assertion.revision, &snapshot);
     if (rc != TURBO_OK) goto done;
     expiration_cap = assertion.expires_at;
   } else {
     rc = flowie_control_auth_cache_verify(service->credential_cache, &service->repository,
-                                          root_group_id, request->identity, request->secret,
+                                          domain_id, request->identity, request->secret,
                                           request->secret_size, &verified, &cache_hit);
     if (rc != TURBO_OK) goto done;
   }
-  flowie_control_auth_rate_limiter_record_success(service->rate_limiter, caller_scope, root_group_id,
+  flowie_control_auth_rate_limiter_record_success(service->rate_limiter, caller_scope, domain_id,
                                                   request->identity);
   if (require_policy) {
-    rc = service->policy_version.current(service->policy_version.ctx, root_group_id, &policy_version);
+    rc = service->policy_version.current(service->policy_version.ctx, domain_id, &policy_version);
     if (rc != TURBO_OK) goto done;
     if (policy_version == 0u) {
       rc = TURBO_EPROTO;
@@ -251,7 +251,7 @@ int flowie_control_auth_service_authenticate_root(
   }
   if (!service->external_auth_enabled) {
     if (!require_policy) {
-      rc = service->repository.auth->principal_snapshot(service->repository.ctx, root_group_id,
+      rc = service->repository.auth->principal_snapshot(service->repository.ctx, domain_id,
                                                         request->identity, &verified, &snapshot);
       if (rc != TURBO_OK) goto done;
     } else {
@@ -260,13 +260,13 @@ int flowie_control_auth_service_authenticate_root(
         if (rc == TURBO_OK) rc = TURBO_EPROTO;
         goto done;
       }
-      rc = flowie_control_principal_cache_get(service->principal_cache, root_group_id,
+      rc = flowie_control_principal_cache_get(service->principal_cache, domain_id,
                                               request->identity, verified.user_revision,
                                               verified.credential_revision, store_revision,
                                               policy_version, &snapshot, &principal_cache_hit);
       if (rc == TURBO_ENOENT) {
         rc = service->repository.auth->principal_snapshot(
-            service->repository.ctx, root_group_id, request->identity, &verified, &snapshot);
+            service->repository.ctx, domain_id, request->identity, &verified, &snapshot);
         if (rc != TURBO_OK) goto done;
         rc = flowie_control_principal_cache_put(service->principal_cache, &snapshot, store_revision,
                                                 policy_version);
@@ -288,9 +288,9 @@ int flowie_control_auth_service_authenticate_root(
 
   memcpy(principal.principal_id, snapshot.principal_id, strlen(snapshot.principal_id) + 1u);
   memcpy(principal.principal_type, snapshot.principal_type, strlen(snapshot.principal_type) + 1u);
-  memcpy(principal.root_group_id, snapshot.root_group_id, strlen(snapshot.root_group_id) + 1u);
+  memcpy(principal.domain_id, snapshot.domain_id, strlen(snapshot.domain_id) + 1u);
   memcpy(principal.auth_method, service->method, strlen(service->method) + 1u);
-  principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+  principal.scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
   principal.role_count = snapshot.effective_roles.role_count;
   principal.group_count = snapshot.effective_groups.group_count;
   memcpy(principal.roles, snapshot.effective_roles.roles, sizeof(principal.roles));
@@ -321,12 +321,12 @@ int flowie_control_auth_service_authenticate(flowie_control_auth_service_t *serv
       request->caller->authenticated != 1 ||
       !flowie_control_auth_text_valid(request->caller->listener_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_auth_text_valid(request->caller->service_id, TURBO_FLOW_SECURITY_ID_MAX) ||
-      !flowie_control_auth_text_valid(request->caller->root_group_id,
+      !flowie_control_auth_text_valid(request->caller->domain_id,
                                       TURBO_FLOW_SECURITY_ID_MAX) ||
       (request->caller->peer_certificate_sha256 &&
        !flowie_control_auth_fingerprint_valid(request->caller->peer_certificate_sha256)))
     return TURBO_EPERM;
   return flowie_control_auth_service_authenticate_root(
-      service, request->caller->root_group_id, request->caller->service_id, request, 1, principal_out,
+      service, request->caller->domain_id, request->caller->service_id, request, 1, principal_out,
       credential_cache_hit_out);
 }

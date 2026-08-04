@@ -206,8 +206,8 @@ int turbo_flow_security_rule_parse_line(const char *line, size_t line_size,
   if (rc != TURBO_OK ||
       (rule.subject_kind == TURBO_FLOW_SECURITY_SUBJECT_ANY && fields[2].size != 1u))
     return TURBO_EPROTO;
-  rc = flow_security_rule_unescape(fields[3], rule.root_group_id,
-                                   sizeof(rule.root_group_id), 0);
+  rc = flow_security_rule_unescape(fields[3], rule.domain_id,
+                                   sizeof(rule.domain_id), 0);
   if (rc != TURBO_OK) return rc;
   rc = flow_security_rule_actions(fields[4], &rule.action_mask);
   if (rc != TURBO_OK) return rc;
@@ -305,8 +305,8 @@ int turbo_flow_security_rule_format_line(const turbo_flow_security_rule_t *rule,
   }
   if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
   if (rc == TURBO_OK)
-    rc = flow_security_rule_append_escaped(line_out, line_capacity, &offset, rule->root_group_id,
-                                           sizeof(rule->root_group_id));
+    rc = flow_security_rule_append_escaped(line_out, line_capacity, &offset, rule->domain_id,
+                                           sizeof(rule->domain_id));
   if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
   for (size_t i = 0u; rc == TURBO_OK && i < 7u; ++i) {
     if ((rule->action_mask & (UINT32_C(1) << i)) == 0u) continue;

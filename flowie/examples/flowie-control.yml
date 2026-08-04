@@ -38,14 +38,12 @@ storage:
   #   acquire_timeout_ms: 5000
   #   schema_mode: validate
 
-# One-time system administrator initialization. The username defaults to `admin`; the password
-# reference defaults to the environment variable below. First login must change the password.
-# bootstrap:
-#   username: admin
-#   password_ref: env://FLOWIE_BOOTSTRAP_PASSWORD
+# An empty control store is initialized with system/admin and the public initial password
+# Flowie@ChangeMe!. First login is restricted to changing that password. Existing stores are never
+# overwritten, and bootstrap identity or password overrides are intentionally unsupported.
 
 management:
-  rpc_path: /v1/management/rpc
+  rpc_path: /v2/control/rpc
   rpc_max_request_size: 65536
   session:
     capacity: 1024
@@ -75,7 +73,7 @@ auth:
   # service_bindings:
   #   - service_id: broker-main
   #     token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
-  #     root_group: root-a
+  #     domain: root-a
   #     # Optional second factor. This additionally requires listener.tls.client_auth: required,
   #     # a client_ca_file, and dashboard.enabled: false.
   #     # peer_certificate_sha256: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef

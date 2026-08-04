@@ -57,7 +57,6 @@ static int flowie_security_principal_text_validate(const char *value, size_t cap
 }
 
 int flowie_security_principal_validate(const turbo_flow_security_principal_t *principal) {
-  int contains_root = 0;
   if (!principal || principal->size < sizeof(*principal) ||
       principal->abi_version != TURBO_FLOW_SECURITY_ABI_V3 ||
       principal->scope < TURBO_FLOW_SECURITY_SCOPE_SELF ||
@@ -69,11 +68,10 @@ int flowie_security_principal_validate(const turbo_flow_security_principal_t *pr
       flowie_security_principal_text_validate(principal->principal_type,
                                               sizeof(principal->principal_type), 1) != TURBO_OK ||
       flowie_security_principal_text_validate(
-          principal->root_group_id, sizeof(principal->root_group_id),
+          principal->domain_id, sizeof(principal->domain_id),
           principal->scope != TURBO_FLOW_SECURITY_SCOPE_SYSTEM) != TURBO_OK ||
       flowie_security_principal_text_validate(principal->auth_method,
-                                              sizeof(principal->auth_method), 1) != TURBO_OK ||
-      (principal->scope != TURBO_FLOW_SECURITY_SCOPE_SYSTEM && principal->group_count == 0u))
+                                              sizeof(principal->auth_method), 1) != TURBO_OK)
     return TURBO_EPROTO;
   for (uint32_t index = 0u; index < principal->role_count; ++index)
     if (flowie_security_principal_text_validate(principal->roles[index],
@@ -83,12 +81,10 @@ int flowie_security_principal_validate(const turbo_flow_security_principal_t *pr
     if (flowie_security_principal_text_validate(principal->groups[index],
                                                 sizeof(principal->groups[index]), 1) != TURBO_OK)
       return TURBO_EPROTO;
-    if (strcmp(principal->groups[index], principal->root_group_id) == 0) contains_root = 1;
     for (uint32_t prior = 0u; prior < index; ++prior)
       if (strcmp(principal->groups[index], principal->groups[prior]) == 0) return TURBO_EPROTO;
   }
-  return principal->scope != TURBO_FLOW_SECURITY_SCOPE_SYSTEM && !contains_root ? TURBO_EPROTO
-                                                                                : TURBO_OK;
+  return TURBO_OK;
 }
 
 int flowie_mqtt_validated_security_context_init(flowie_mqtt_validated_security_context_t *out,

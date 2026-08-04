@@ -16,14 +16,17 @@
 
 enum { FLOWIE_CONTROL_OPERATION_MAX = 31, FLOWIE_CONTROL_BUSY_TIMEOUT_MAX_MS = 30000 };
 
+#define FLOWIE_CONTROL_SQLITE_SCHEMA_VERSION 2
+#define FLOWIE_CONTROL_SQLITE_SCHEMA_FINGERPRINT "flowie-control-domain-schema-v2-20260804"
+
 #define FLOWIE_CONTROL_STRINGIFY_VALUE(value) #value
 #define FLOWIE_CONTROL_STRINGIFY(value) FLOWIE_CONTROL_STRINGIFY_VALUE(value)
 
 static const char FLOWIE_CONTROL_OPERATION_USER_CREATE[] = "user.create";
 static const char FLOWIE_CONTROL_OPERATION_USER_DISABLE[] = "user.disable";
-static const char FLOWIE_CONTROL_OPERATION_ROOT_GROUP_CREATE[] = "root_group.create";
+static const char FLOWIE_CONTROL_OPERATION_DOMAIN_CREATE[] = "domain.create";
 static const char FLOWIE_CONTROL_OPERATION_GROUP_CREATE[] = "group.create";
-static const char FLOWIE_CONTROL_OPERATION_GROUP_DISABLE[] = "group.disable";
+static const char FLOWIE_CONTROL_OPERATION_GROUP_DELETE[] = "group.delete";
 static const char FLOWIE_CONTROL_OPERATION_MEMBERSHIP_ADD[] = "membership.add";
 static const char FLOWIE_CONTROL_OPERATION_MEMBERSHIP_REMOVE[] = "membership.remove";
 static const char FLOWIE_CONTROL_OPERATION_ROLE_CREATE[] = "role.create";
@@ -36,7 +39,7 @@ static const char FLOWIE_CONTROL_OPERATION_CREDENTIAL_REVOKE[] = "credential.rev
 static const char FLOWIE_CONTROL_OPERATION_POLICY_RULE_PUT[] = "policy.rule.put";
 static const char FLOWIE_CONTROL_OPERATION_POLICY_RULE_DELETE[] = "policy.rule.delete";
 static const char FLOWIE_CONTROL_OPERATION_POLICY_PUBLISH[] = "policy.publish";
-static const char FLOWIE_CONTROL_TARGET_ROOT_GROUP[] = "root_group";
+static const char FLOWIE_CONTROL_TARGET_DOMAIN[] = "domain";
 static const char FLOWIE_CONTROL_TARGET_GROUP[] = "group";
 static const char FLOWIE_CONTROL_TARGET_ROLE[] = "role";
 static const char FLOWIE_CONTROL_TARGET_CREDENTIAL[] = "credential";
@@ -44,10 +47,11 @@ static const char FLOWIE_CONTROL_DETAIL_ARGON2ID[] = "argon2id";
 static const char FLOWIE_CONTROL_TARGET_POLICY_RULE[] = "policy_rule";
 static const char FLOWIE_CONTROL_POLICY_SCHEMA[] =
     "CREATE TABLE IF NOT EXISTS flowie_control_policy_draft("
-    "root_group_id TEXT NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal>=0 AND ordinal<4096),"
+    "domain_id TEXT NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal>=0 AND ordinal<4096),"
     "rule_line TEXT NOT NULL CHECK(length(rule_line)>0 AND length(rule_line)<=2047),"
     "revision INTEGER NOT NULL CHECK(revision>0),updated_at INTEGER NOT NULL CHECK(updated_at>0),"
-    "PRIMARY KEY(root_group_id,ordinal)) WITHOUT ROWID;"
+    "PRIMARY KEY(domain_id,ordinal),"
+    "FOREIGN KEY(domain_id) REFERENCES flowie_control_domain(domain_id)) WITHOUT ROWID;"
     "CREATE TABLE IF NOT EXISTS turbo_flow_acl_bundle_v3("
     "namespace_name TEXT PRIMARY KEY,policy_version INTEGER NOT NULL CHECK(policy_version>0),"
     "expires_at INTEGER NOT NULL CHECK(expires_at>=0));"
@@ -63,19 +67,28 @@ static const char FLOWIE_CONTROL_POLICY_SCHEMA[] =
 static const char
     FLOWIE_CONTROL_SCHEMA
         [] = "PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;PRAGMA foreign_keys=ON;"
+             "CREATE TABLE IF NOT EXISTS flowie_control_schema_version("
+             "singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
+             "version INTEGER NOT NULL CHECK(version>0),fingerprint TEXT NOT NULL);"
+             "INSERT OR IGNORE INTO flowie_control_schema_version(singleton,version,fingerprint) "
+             "VALUES(1," FLOWIE_CONTROL_STRINGIFY(FLOWIE_CONTROL_SQLITE_SCHEMA_VERSION) ","
+             "'" FLOWIE_CONTROL_SQLITE_SCHEMA_FINGERPRINT "');"
              "CREATE TABLE IF NOT EXISTS flowie_control_meta("
              "singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
              "revision INTEGER NOT NULL CHECK(revision>=0));"
              "INSERT OR IGNORE INTO flowie_control_meta(singleton,revision) VALUES(1,0);"
+             "CREATE TABLE IF NOT EXISTS flowie_control_domain("
+             "domain_id TEXT PRIMARY KEY) WITHOUT ROWID;"
              "CREATE TABLE IF NOT EXISTS flowie_control_user("
-             "root_group_id TEXT NOT NULL,principal_id TEXT NOT NULL,principal_type TEXT NOT NULL,"
+             "domain_id TEXT NOT NULL,principal_id TEXT NOT NULL,principal_type TEXT NOT NULL,"
              "enabled INTEGER NOT NULL CHECK(enabled IN(0,1)),"
              "revision INTEGER NOT NULL CHECK(revision>0),"
              "created_at INTEGER NOT NULL CHECK(created_at>0),"
              "updated_at INTEGER NOT NULL CHECK(updated_at>0),"
-             "PRIMARY KEY(root_group_id,principal_id)) WITHOUT ROWID;"
+             "PRIMARY KEY(domain_id,principal_id),"
+             "FOREIGN KEY(domain_id) REFERENCES flowie_control_domain(domain_id)) WITHOUT ROWID;"
              "CREATE TABLE IF NOT EXISTS flowie_control_credential("
-             "root_group_id TEXT NOT NULL,principal_id TEXT NOT NULL,"
+             "domain_id TEXT NOT NULL,principal_id TEXT NOT NULL,"
              "kdf_algorithm INTEGER NOT NULL CHECK(kdf_algorithm=" FLOWIE_CONTROL_STRINGIFY(
                  FLOWIE_CONTROL_CREDENTIAL_KDF_ARGON2ID) "),"
                                                          "memory_blocks INTEGER NOT NULL "
@@ -91,76 +104,59 @@ static const char
                                                                                                                                                                         "revision INTEGER NOT NULL CHECK(revision>0),"
                                                                                                                                                                         "created_at INTEGER NOT NULL CHECK(created_at>0),"
                                                                                                                                                                         "updated_at INTEGER NOT NULL CHECK(updated_at>0),"
-                                                                                                                                                                        "PRIMARY KEY(root_group_id,principal_id),"
-                                                                                                                                                                        "FOREIGN KEY(root_group_id,principal_id) REFERENCES "
-                                                                                                                                                                        "flowie_control_user(root_group_id,principal_id)) WITHOUT ROWID;"
+                                                                                                                                                                        "PRIMARY KEY(domain_id,principal_id),"
+                                                                                                                                                                        "FOREIGN KEY(domain_id,principal_id) REFERENCES "
+                                                                                                                                                                        "flowie_control_user(domain_id,principal_id)) WITHOUT ROWID;"
                                                                                                                                                                         "CREATE TABLE IF NOT EXISTS flowie_control_group("
-                                                                                                                                                                        "root_group_id TEXT NOT NULL,group_id TEXT NOT NULL,parent_group_id TEXT,"
+                                                                                                                                                                        "domain_id TEXT NOT NULL,group_id TEXT NOT NULL,parent_group_id TEXT,"
                                                                                                                                                                         "depth INTEGER NOT NULL CHECK(depth>=0 AND depth<=" FLOWIE_CONTROL_STRINGIFY(FLOWIE_CONTROL_GROUP_MAX_DEPTH) "),"
                                                                                                                                                                                                                                                                                      "enabled INTEGER NOT NULL CHECK(enabled IN(0,1)),"
                                                                                                                                                                                                                                                                                      "revision INTEGER NOT NULL CHECK(revision>0),"
                                                                                                                                                                                                                                                                                      "created_at INTEGER NOT NULL CHECK(created_at>0),"
                                                                                                                                                                                                                                                                                      "updated_at INTEGER NOT NULL CHECK(updated_at>0),"
-                                                                                                                                                                                                                                                                                     "PRIMARY KEY(root_group_id,group_id),"
-                                                                                                                                                                                                                                                                                     "FOREIGN KEY(root_group_id,parent_group_id) REFERENCES "
-                                                                                                                                                                                                                                                                                     "flowie_control_group(root_group_id,group_id),"
-                                                                                                                                                                                                                                                                                     "CHECK((group_id=root_group_id AND parent_group_id IS NULL "
-                                                                                                                                                                                                                                                                                     "AND depth=0) OR "
-                                                                                                                                                                                                                                                                                     "(group_id<>root_group_id AND parent_group_id IS NOT NULL "
-                                                                                                                                                                                                                                                                                     "AND depth>0))) WITHOUT ROWID;"
+                                                                                                                                                                                                                                                                                     "PRIMARY KEY(domain_id,group_id),"
+                                                                                                                                                                                                                                                                                     "FOREIGN KEY(domain_id) REFERENCES flowie_control_domain(domain_id),"
+                                                                                                                                                                                                                                                                                     "FOREIGN KEY(domain_id,parent_group_id) REFERENCES "
+                                                                                                                                                                                                                                                                                     "flowie_control_group(domain_id,group_id),"
+                                                                                                                                                                                                                                                                                     "CHECK(group_id<>domain_id),"
+                                                                                                                                                                                                                                                                                     "CHECK((parent_group_id IS NULL AND depth=0) OR "
+                                                                                                                                                                                                                                                                                     "(parent_group_id IS NOT NULL AND depth>0))) WITHOUT ROWID;"
                                                                                                                                                                                                                                                                                      "CREATE TABLE IF NOT EXISTS flowie_control_role("
-                                                                                                                                                                                                                                                                                     "root_group_id TEXT NOT NULL,role_id TEXT NOT NULL,"
+                                                                                                                                                                                                                                                                                     "domain_id TEXT NOT NULL,role_id TEXT NOT NULL,"
                                                                                                                                                                                                                                                                                      "enabled INTEGER NOT NULL CHECK(enabled IN(0,1)),"
                                                                                                                                                                                                                                                                                      "revision INTEGER NOT NULL CHECK(revision>0),"
                                                                                                                                                                                                                                                                                      "created_at INTEGER NOT NULL CHECK(created_at>0),"
                                                                                                                                                                                                                                                                                      "updated_at INTEGER NOT NULL CHECK(updated_at>0),"
-                                                                                                                                                                                                                                                                                     "PRIMARY KEY(root_group_id,role_id)) WITHOUT ROWID;"
+                                                                                                                                                                                                                                                                                     "PRIMARY KEY(domain_id,role_id),"
+                                                                                                                                                                                                                                                                                     "FOREIGN KEY(domain_id) REFERENCES flowie_control_domain(domain_id)) WITHOUT ROWID;"
                                                                                                                                                                                                                                                                                      "CREATE TABLE IF NOT EXISTS flowie_control_membership("
-                                                                                                                                                                                                                                                                                     "root_group_id TEXT NOT NULL,principal_id TEXT NOT "
+                                                                                                                                                                                                                                                                                     "domain_id TEXT NOT NULL,principal_id TEXT NOT "
                                                                                                                                                                                                                                                                                      "NULL,group_id TEXT NOT NULL,"
                                                                                                                                                                                                                                                                                      "revision INTEGER NOT NULL CHECK(revision>0),created_at "
                                                                                                                                                                                                                                                                                      "INTEGER NOT NULL CHECK(created_at>0),"
-                                                                                                                                                                                                                                                                                     "PRIMARY KEY(root_group_id,principal_id,group_id),"
-                                                                                                                                                                                                                                                                                     "FOREIGN KEY(root_group_id,principal_id) REFERENCES "
-                                                                                                                                                                                                                                                                                     "flowie_control_user(root_group_id,principal_id),"
-                                                                                                                                                                                                                                                                                     "FOREIGN KEY(root_group_id,group_id) REFERENCES "
-                                                                                                                                                                                                                                                                                     "flowie_control_group(root_group_id,group_id),"
-                                                                                                                                                                                                                                                                                     "CHECK(group_id<>root_group_id)) WITHOUT ROWID;"
+                                                                                                                                                                                                                                                                                     "PRIMARY KEY(domain_id,principal_id,group_id),"
+                                                                                                                                                                                                                                                                                     "FOREIGN KEY(domain_id,principal_id) REFERENCES "
+                                                                                                                                                                                                                                                                                     "flowie_control_user(domain_id,principal_id),"
+                                                                                                                                                                                                                                                                                     "FOREIGN KEY(domain_id,group_id) REFERENCES "
+                                                                                                                                                                                                                                                                                     "flowie_control_group(domain_id,group_id)) WITHOUT ROWID;"
                                                                                                                                                                                                                                                                                      "CREATE TABLE IF NOT EXISTS flowie_control_user_role("
-                                                                                                                                                                                                                                                                                     "root_group_id TEXT NOT NULL,principal_id TEXT NOT NULL,"
+                                                                                                                                                                                                                                                                                     "domain_id TEXT NOT NULL,principal_id TEXT NOT NULL,"
                                                                                                                                                                                                                                                                                      "role_id TEXT NOT NULL,revision INTEGER NOT NULL "
                                                                                                                                                                                                                                                                                      "CHECK(revision>0),created_at INTEGER NOT NULL "
                                                                                                                                                                                                                                                                                      "CHECK(created_at>0),"
-                                                                                                                                                                                                                                                                                     "PRIMARY KEY(root_group_id,principal_id,role_id),"
-                                                                                                                                                                                                                                                                                     "FOREIGN KEY(root_group_id,principal_id) REFERENCES "
-                                                                                                                                                                                                                                                                                     "flowie_control_user(root_group_id,principal_id),"
-                                                                                                                                                                                                                                                                                     "FOREIGN KEY(root_group_id,role_id) REFERENCES "
-                                                                                                                                                                                                                                                                                     "flowie_control_role(root_group_id,role_id)) WITHOUT ROWID;"
-                                                                                                                                                                                                                                                                                     "CREATE TRIGGER IF NOT EXISTS "
-                                                                                                                                                                                                                                                                                     "flowie_control_user_requires_root BEFORE INSERT ON "
-                                                                                                                                                                                                                                                                                     "flowie_control_user WHEN NOT EXISTS(SELECT 1 FROM "
-                                                                                                                                                                                                                                                                                     "flowie_control_group g WHERE "
-                                                                                                                                                                                                                                                                                     "g.root_group_id=NEW.root_group_id AND "
-                                                                                                                                                                                                                                                                                     "g.group_id=NEW.root_group_id AND "
-                                                                                                                                                                                                                                                                                     "g.parent_group_id IS NULL AND g.enabled=1) BEGIN SELECT "
-                                                                                                                                                                                                                                                                                     "RAISE(ABORT,'missing root group'); "
-                                                                                                                                                                                                                                                                                     "END;"
-                                                                                                                                                                                                                                                                                     "CREATE TRIGGER IF NOT EXISTS "
-                                                                                                                                                                                                                                                                                     "flowie_control_role_requires_root BEFORE INSERT ON "
-                                                                                                                                                                                                                                                                                     "flowie_control_role WHEN NOT EXISTS(SELECT 1 FROM "
-                                                                                                                                                                                                                                                                                     "flowie_control_group g WHERE "
-                                                                                                                                                                                                                                                                                     "g.root_group_id=NEW.root_group_id AND "
-                                                                                                                                                                                                                                                                                     "g.group_id=NEW.root_group_id AND "
-                                                                                                                                                                                                                                                                                     "g.parent_group_id IS NULL AND g.enabled=1) BEGIN SELECT "
-                                                                                                                                                                                                                                                                                     "RAISE(ABORT,'missing root group'); "
-                                                                                                                                                                                                                                                                                     "END;"
+                                                                                                                                                                                                                                                                                     "PRIMARY KEY(domain_id,principal_id,role_id),"
+                                                                                                                                                                                                                                                                                     "FOREIGN KEY(domain_id,principal_id) REFERENCES "
+                                                                                                                                                                                                                                                                                     "flowie_control_user(domain_id,principal_id),"
+                                                                                                                                                                                                                                                                                     "FOREIGN KEY(domain_id,role_id) REFERENCES "
+                                                                                                                                                                                                                                                                                     "flowie_control_role(domain_id,role_id)) WITHOUT ROWID;"
                                                                                                                                                                                                                                                                                      "CREATE TABLE IF NOT EXISTS flowie_control_audit("
                                                                                                                                                                                                                                                                                      "request_id TEXT PRIMARY KEY,actor TEXT NOT NULL,operation "
                                                                                                                                                                                                                                                                                      "TEXT NOT NULL,"
-                                                                                                                                                                                                                                                                                     "root_group_id TEXT NOT NULL,target_id TEXT NOT "
+                                                                                                                                                                                                                                                                                     "domain_id TEXT NOT NULL,target_id TEXT NOT "
                                                                                                                                                                                                                                                                                      "NULL,target_detail TEXT NOT NULL,"
                                                                                                                                                                                                                                                                                      "result_revision INTEGER NOT NULL CHECK(result_revision>0),"
-                                                                                                                                                                                                                                                                                     "occurred_at INTEGER NOT NULL CHECK(occurred_at>0));";
+                                                                                                                                                                                                                                                                                     "occurred_at INTEGER NOT NULL CHECK(occurred_at>0),"
+                                                                                                                                                                                                                                                                                     "FOREIGN KEY(domain_id) REFERENCES flowie_control_domain(domain_id));";
 
 struct flowie_control_store_s {
   tstr_t database_path;
@@ -190,6 +186,57 @@ static int flowie_control_sqlite_status(int status) {
   if (primary == SQLITE_CONSTRAINT || primary == SQLITE_MISMATCH || primary == SQLITE_RANGE)
     return TURBO_EINVAL;
   return TURBO_EIO;
+}
+
+static int flowie_control_schema_preflight(sqlite3 *database) {
+  static const char sql[] =
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' "
+      "AND name='flowie_control_schema_version'),"
+      "EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' "
+      "AND name GLOB 'flowie_control_*' AND name<>'flowie_control_schema_version')";
+  sqlite3_stmt *statement = NULL;
+  int status;
+  int rc;
+  if (!database) return TURBO_EINVAL;
+  status = sqlite3_prepare_v2(database, sql, -1, &statement, NULL);
+  if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
+  status = sqlite3_step(statement);
+  if (status != SQLITE_ROW || sqlite3_column_type(statement, 0) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement, 1) != SQLITE_INTEGER) {
+    rc = status == SQLITE_ROW ? TURBO_EPROTO : flowie_control_sqlite_status(status);
+    goto done;
+  }
+  rc = !sqlite3_column_int(statement, 0) && sqlite3_column_int(statement, 1) ? TURBO_EPROTO
+                                                                            : TURBO_OK;
+done:
+  (void)sqlite3_finalize(statement);
+  return rc;
+}
+
+static int flowie_control_schema_validate(sqlite3 *database) {
+  sqlite3_stmt *statement = NULL;
+  int status;
+  int rc;
+  if (!database) return TURBO_EINVAL;
+  status = sqlite3_prepare_v2(
+      database,
+      "SELECT version,fingerprint FROM flowie_control_schema_version WHERE singleton=1", -1,
+      &statement, NULL);
+  if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
+  status = sqlite3_step(statement);
+  if (status != SQLITE_ROW || sqlite3_column_type(statement, 0) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement, 1) != SQLITE_TEXT ||
+      sqlite3_column_int(statement, 0) != FLOWIE_CONTROL_SQLITE_SCHEMA_VERSION ||
+      strcmp((const char *)sqlite3_column_text(statement, 1),
+             FLOWIE_CONTROL_SQLITE_SCHEMA_FINGERPRINT) != 0 ||
+      sqlite3_step(statement) != SQLITE_DONE) {
+    rc = TURBO_EPROTO;
+    goto done;
+  }
+  rc = TURBO_OK;
+done:
+  (void)sqlite3_finalize(statement);
+  return rc;
 }
 
 static int flowie_control_open_database(const flowie_control_store_t *store, sqlite3 **out) {
@@ -285,7 +332,7 @@ static int flowie_control_advance_revision(sqlite3 *database, uint64_t current,
 }
 
 static int flowie_control_replay(sqlite3 *database, const char *request_id, const char *actor,
-                                 const char *operation, const char *root_group_id,
+                                 const char *operation, const char *domain_id,
                                  const char *target_id, const char *target_detail,
                                  flowie_control_command_result_t *result, int *found_out) {
   sqlite3_stmt *statement = NULL;
@@ -296,13 +343,13 @@ static int flowie_control_replay(sqlite3 *database, const char *request_id, cons
   const unsigned char *stored_detail;
   int status;
   int rc = TURBO_EIO;
-  if (!database || !request_id || !actor || !operation || !root_group_id || !target_id || !result ||
+  if (!database || !request_id || !actor || !operation || !domain_id || !target_id || !result ||
       !found_out)
     return TURBO_EINVAL;
   *found_out = 0;
   status = sqlite3_prepare_v2(
       database,
-      "SELECT actor,operation,root_group_id,target_id,target_detail,result_revision "
+      "SELECT actor,operation,domain_id,target_id,target_detail,result_revision "
       "FROM flowie_control_audit WHERE request_id=?1",
       -1, &statement, NULL);
   if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
@@ -331,7 +378,7 @@ static int flowie_control_replay(sqlite3 *database, const char *request_id, cons
   if (!stored_actor || !stored_operation || !stored_root || !stored_target || !stored_detail ||
       strcmp((const char *)stored_actor, actor) != 0 ||
       strcmp((const char *)stored_operation, operation) != 0 ||
-      strcmp((const char *)stored_root, root_group_id) != 0 ||
+      strcmp((const char *)stored_root, domain_id) != 0 ||
       strcmp((const char *)stored_target, target_id) != 0 ||
       (target_detail && strcmp((const char *)stored_detail, target_detail) != 0)) {
     rc = TURBO_EBUSY;
@@ -348,7 +395,7 @@ done:
 }
 
 static int flowie_control_insert_audit(sqlite3 *database, const char *request_id, const char *actor,
-                                       const char *operation, const char *root_group_id,
+                                       const char *operation, const char *domain_id,
                                        const char *target_id, const char *target_detail,
                                        uint64_t revision, uint64_t occurred_at) {
   sqlite3_stmt *statement = NULL;
@@ -356,14 +403,14 @@ static int flowie_control_insert_audit(sqlite3 *database, const char *request_id
   int rc;
   status = sqlite3_prepare_v2(
       database,
-      "INSERT INTO flowie_control_audit(request_id,actor,operation,root_group_id,target_id,"
+      "INSERT INTO flowie_control_audit(request_id,actor,operation,domain_id,target_id,"
       "target_detail,result_revision,occurred_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
       -1, &statement, NULL);
   if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
   rc = flowie_control_bind_text(statement, 1, request_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, actor);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 3, operation);
-  if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 4, root_group_id);
+  if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 4, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 5, target_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 6, target_detail);
   if (rc == TURBO_OK && sqlite3_bind_int64(statement, 7, (sqlite3_int64)revision) != SQLITE_OK)
@@ -378,10 +425,10 @@ static int flowie_control_insert_audit(sqlite3 *database, const char *request_id
   return rc;
 }
 
-static int flowie_control_command_common_valid(const char *root_group_id, const char *target_id,
+static int flowie_control_command_common_valid(const char *domain_id, const char *target_id,
                                                const char *actor, const char *request_id,
                                                uint64_t expected_revision, uint64_t occurred_at) {
-  return flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) &&
+  return flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) &&
          flowie_control_text_valid(target_id, TURBO_FLOW_SECURITY_ID_MAX) &&
          flowie_control_text_valid(actor, FLOWIE_CONTROL_ACTOR_MAX) &&
          flowie_control_text_valid(request_id, FLOWIE_CONTROL_REQUEST_ID_MAX) &&
@@ -389,7 +436,29 @@ static int flowie_control_command_common_valid(const char *root_group_id, const 
          occurred_at <= (uint64_t)INT64_MAX;
 }
 
-static int flowie_control_group_lookup(sqlite3 *database, const char *root_group_id,
+static int flowie_control_domain_exists(sqlite3 *database, const char *domain_id) {
+  sqlite3_stmt *statement = NULL;
+  int status;
+  int rc;
+  if (!database || !domain_id) return TURBO_EINVAL;
+  status = sqlite3_prepare_v2(
+      database, "SELECT 1 FROM flowie_control_domain WHERE domain_id=?1", -1, &statement, NULL);
+  if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
+  if (rc != TURBO_OK) goto done;
+  status = sqlite3_step(statement);
+  if (status == SQLITE_DONE)
+    rc = TURBO_ENOENT;
+  else if (status != SQLITE_ROW || sqlite3_step(statement) != SQLITE_DONE)
+    rc = status == SQLITE_ROW ? TURBO_EPROTO : flowie_control_sqlite_status(status);
+  else
+    rc = TURBO_OK;
+done:
+  (void)sqlite3_finalize(statement);
+  return rc;
+}
+
+static int flowie_control_group_lookup(sqlite3 *database, const char *domain_id,
                                        const char *group_id, uint32_t *depth_out,
                                        int *enabled_out) {
   sqlite3_stmt *statement = NULL;
@@ -397,13 +466,13 @@ static int flowie_control_group_lookup(sqlite3 *database, const char *root_group
   int rc;
   if (depth_out) *depth_out = 0u;
   if (enabled_out) *enabled_out = 0;
-  if (!database || !root_group_id || !group_id || !depth_out || !enabled_out) return TURBO_EINVAL;
+  if (!database || !domain_id || !group_id || !depth_out || !enabled_out) return TURBO_EINVAL;
   status = sqlite3_prepare_v2(
       database,
-      "SELECT depth,enabled FROM flowie_control_group WHERE root_group_id=?1 AND group_id=?2", -1,
+      "SELECT depth,enabled FROM flowie_control_group WHERE domain_id=?1 AND group_id=?2", -1,
       &statement, NULL);
   if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, group_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
@@ -428,7 +497,7 @@ done:
   return rc;
 }
 
-static int flowie_control_group_references(sqlite3 *database, const char *root_group_id,
+static int flowie_control_group_references(sqlite3 *database, const char *domain_id,
                                            const char *group_id, int *active_child_out,
                                            int *direct_membership_out) {
   sqlite3_stmt *statement = NULL;
@@ -436,16 +505,16 @@ static int flowie_control_group_references(sqlite3 *database, const char *root_g
   int rc;
   if (active_child_out) *active_child_out = 0;
   if (direct_membership_out) *direct_membership_out = 0;
-  if (!database || !root_group_id || !group_id || !active_child_out || !direct_membership_out)
+  if (!database || !domain_id || !group_id || !active_child_out || !direct_membership_out)
     return TURBO_EINVAL;
   status = sqlite3_prepare_v2(
       database,
-      "SELECT EXISTS(SELECT 1 FROM flowie_control_group WHERE root_group_id=?1 AND "
-      "parent_group_id=?2 AND enabled=1),EXISTS(SELECT 1 FROM flowie_control_membership WHERE "
-      "root_group_id=?1 AND group_id=?2)",
+      "SELECT EXISTS(SELECT 1 FROM flowie_control_group WHERE domain_id=?1 AND "
+      "parent_group_id=?2),EXISTS(SELECT 1 FROM flowie_control_membership WHERE "
+      "domain_id=?1 AND group_id=?2)",
       -1, &statement, NULL);
   if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, group_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
@@ -465,24 +534,24 @@ done:
   return rc;
 }
 
-static int flowie_control_policy_subject_referenced(sqlite3 *database, const char *root_group_id,
+static int flowie_control_policy_subject_referenced(sqlite3 *database, const char *domain_id,
                                                     turbo_flow_security_subject_kind_t subject_kind,
                                                     const char *subject, int *referenced_out) {
   static const char sql[] =
-      "SELECT rule_line FROM flowie_control_policy_draft WHERE root_group_id=?1 "
+      "SELECT rule_line FROM flowie_control_policy_draft WHERE domain_id=?1 "
       "UNION ALL SELECT rule_line FROM turbo_flow_acl_rule_v3 WHERE namespace_name=?1";
   sqlite3_stmt *statement = NULL;
   int status;
   int rc;
   if (referenced_out) *referenced_out = 0;
-  if (!database || !root_group_id || !subject || !referenced_out ||
+  if (!database || !domain_id || !subject || !referenced_out ||
       (subject_kind != TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL &&
        subject_kind != TURBO_FLOW_SECURITY_SUBJECT_ROLE &&
        subject_kind != TURBO_FLOW_SECURITY_SUBJECT_GROUP))
     return TURBO_EINVAL;
   status = sqlite3_prepare_v2(database, sql, -1, &statement, NULL);
   if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc != TURBO_OK) goto done;
   while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
     turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
@@ -497,7 +566,7 @@ static int flowie_control_policy_subject_referenced(sqlite3 *database, const cha
     if (!line || line_size <= 0 || (size_t)line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX ||
         turbo_flow_security_rule_parse_line((const char *)line, (size_t)line_size, &rule) !=
             TURBO_OK ||
-        strcmp(rule.root_group_id, root_group_id) != 0) {
+        strcmp(rule.domain_id, domain_id) != 0) {
       rc = TURBO_EPROTO;
       goto done;
     }
@@ -514,19 +583,19 @@ done:
   return rc;
 }
 
-static int flowie_control_user_enabled(sqlite3 *database, const char *root_group_id,
+static int flowie_control_user_enabled(sqlite3 *database, const char *domain_id,
                                        const char *principal_id, int *enabled_out) {
   sqlite3_stmt *statement = NULL;
   int status;
   int rc;
   if (enabled_out) *enabled_out = 0;
-  if (!database || !root_group_id || !principal_id || !enabled_out) return TURBO_EINVAL;
+  if (!database || !domain_id || !principal_id || !enabled_out) return TURBO_EINVAL;
   status = sqlite3_prepare_v2(
       database,
-      "SELECT enabled FROM flowie_control_user WHERE root_group_id=?1 AND principal_id=?2", -1,
+      "SELECT enabled FROM flowie_control_user WHERE domain_id=?1 AND principal_id=?2", -1,
       &statement, NULL);
   if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, principal_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
@@ -547,7 +616,7 @@ done:
   return rc;
 }
 
-static int flowie_control_credential_record_read(sqlite3 *database, const char *root_group_id,
+static int flowie_control_credential_record_read(sqlite3 *database, const char *domain_id,
                                                  const char *principal_id,
                                                  flowie_control_credential_record_t *out) {
   flowie_control_credential_record_t record = {0};
@@ -556,16 +625,16 @@ static int flowie_control_credential_record_read(sqlite3 *database, const char *
   const void *verifier;
   int status;
   int rc;
-  if (!database || !root_group_id || !principal_id || !out) return TURBO_EINVAL;
+  if (!database || !domain_id || !principal_id || !out) return TURBO_EINVAL;
   status = sqlite3_prepare_v2(
       database,
       "SELECT u.enabled,u.revision,c.kdf_algorithm,c.memory_blocks,c.passes,c.lanes,c.salt,"
       "c.verifier,c.enabled,c.revision FROM flowie_control_user u LEFT JOIN "
-      "flowie_control_credential c ON c.root_group_id=u.root_group_id AND "
-      "c.principal_id=u.principal_id WHERE u.root_group_id=?1 AND u.principal_id=?2",
+      "flowie_control_credential c ON c.domain_id=u.domain_id AND "
+      "c.principal_id=u.principal_id WHERE u.domain_id=?1 AND u.principal_id=?2",
       -1, &statement, NULL);
   if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, principal_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
@@ -640,18 +709,18 @@ done:
   return rc;
 }
 
-static int flowie_control_role_enabled(sqlite3 *database, const char *root_group_id,
+static int flowie_control_role_enabled(sqlite3 *database, const char *domain_id,
                                        const char *role_id, int *enabled_out) {
   sqlite3_stmt *statement = NULL;
   int status;
   int rc;
   if (enabled_out) *enabled_out = 0;
-  if (!database || !root_group_id || !role_id || !enabled_out) return TURBO_EINVAL;
+  if (!database || !domain_id || !role_id || !enabled_out) return TURBO_EINVAL;
   status = sqlite3_prepare_v2(
-      database, "SELECT enabled FROM flowie_control_role WHERE root_group_id=?1 AND role_id=?2", -1,
+      database, "SELECT enabled FROM flowie_control_role WHERE domain_id=?1 AND role_id=?2", -1,
       &statement, NULL);
   if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, role_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
@@ -672,22 +741,22 @@ done:
   return rc;
 }
 
-static int flowie_control_effective_roles_database(sqlite3 *database, const char *root_group_id,
+static int flowie_control_effective_roles_database(sqlite3 *database, const char *domain_id,
                                                    const char *principal_id,
                                                    flowie_control_effective_roles_view_t *out) {
   static const char sql[] =
       "SELECT r.role_id FROM flowie_control_user_role ur "
-      "JOIN flowie_control_role r ON r.root_group_id=ur.root_group_id AND r.role_id=ur.role_id "
-      "WHERE ur.root_group_id=?1 AND ur.principal_id=?2 AND r.enabled=1 ORDER BY r.role_id";
+      "JOIN flowie_control_role r ON r.domain_id=ur.domain_id AND r.role_id=ur.role_id "
+      "WHERE ur.domain_id=?1 AND ur.principal_id=?2 AND r.enabled=1 ORDER BY r.role_id";
   flowie_control_effective_roles_view_t view = FLOWIE_CONTROL_EFFECTIVE_ROLES_VIEW_INIT;
   sqlite3_stmt *statement = NULL;
   int status;
   int rc;
-  if (!database || !root_group_id || !principal_id || !out || out->size < sizeof(*out))
+  if (!database || !domain_id || !principal_id || !out || out->size < sizeof(*out))
     return TURBO_EINVAL;
   status = sqlite3_prepare_v2(database, sql, -1, &statement, NULL);
   if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, principal_id);
   if (rc != TURBO_OK) goto done;
   while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
@@ -712,29 +781,27 @@ done:
   return rc;
 }
 
-static int flowie_control_effective_groups_database(sqlite3 *database, const char *root_group_id,
+static int flowie_control_effective_groups_database(sqlite3 *database, const char *domain_id,
                                                     const char *principal_id,
                                                     flowie_control_effective_groups_view_t *out) {
   static const char sql[] =
       "WITH RECURSIVE effective(group_id,parent_group_id,depth) AS ("
-      "SELECT group_id,parent_group_id,depth FROM flowie_control_group "
-      "WHERE root_group_id=?1 AND group_id=?1 AND enabled=1 "
-      "UNION SELECT g.group_id,g.parent_group_id,g.depth FROM flowie_control_membership m "
-      "JOIN flowie_control_group g ON g.root_group_id=m.root_group_id AND g.group_id=m.group_id "
-      "WHERE m.root_group_id=?1 AND m.principal_id=?2 AND g.enabled=1 "
+      "SELECT g.group_id,g.parent_group_id,g.depth FROM flowie_control_membership m "
+      "JOIN flowie_control_group g ON g.domain_id=m.domain_id AND g.group_id=m.group_id "
+      "WHERE m.domain_id=?1 AND m.principal_id=?2 AND g.enabled=1 "
       "UNION SELECT p.group_id,p.parent_group_id,p.depth FROM effective e "
-      "JOIN flowie_control_group p ON p.root_group_id=?1 AND p.group_id=e.parent_group_id "
+      "JOIN flowie_control_group p ON p.domain_id=?1 AND p.group_id=e.parent_group_id "
       "WHERE p.enabled=1) SELECT group_id FROM effective GROUP BY group_id "
       "ORDER BY MIN(depth),group_id";
   flowie_control_effective_groups_view_t view = FLOWIE_CONTROL_EFFECTIVE_GROUPS_VIEW_INIT;
   sqlite3_stmt *statement = NULL;
   int status;
   int rc;
-  if (!database || !root_group_id || !principal_id || !out || out->size < sizeof(*out))
+  if (!database || !domain_id || !principal_id || !out || out->size < sizeof(*out))
     return TURBO_EINVAL;
   status = sqlite3_prepare_v2(database, sql, -1, &statement, NULL);
   if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, principal_id);
   if (rc != TURBO_OK) goto done;
   while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
@@ -747,8 +814,8 @@ static int flowie_control_effective_groups_database(sqlite3 *database, const cha
     if (rc != TURBO_OK) goto done;
     ++view.group_count;
   }
-  if (status != SQLITE_DONE || view.group_count == 0u) {
-    rc = status == SQLITE_DONE ? TURBO_EPROTO : flowie_control_sqlite_status(status);
+  if (status != SQLITE_DONE) {
+    rc = flowie_control_sqlite_status(status);
     goto done;
   }
   *out = view;
@@ -769,7 +836,7 @@ static int flowie_control_policy_publish_detail(uint64_t expires_at, char output
   return written > 0 && written < 64 ? TURBO_OK : TURBO_EINVAL;
 }
 
-static int flowie_control_policy_rule_validate(sqlite3 *database, const char *root_group_id,
+static int flowie_control_policy_rule_validate(sqlite3 *database, const char *domain_id,
                                                const char *rule_line, size_t rule_line_size,
                                                turbo_flow_security_rule_t *rule_out) {
   turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
@@ -777,26 +844,25 @@ static int flowie_control_policy_rule_validate(sqlite3 *database, const char *ro
   int enabled = 0;
   int rc;
   if (!database) return TURBO_EINVAL;
-  rc = flowie_control_policy_rule_syntax_validate(root_group_id, rule_line, rule_line_size, &rule);
+  rc = flowie_control_policy_rule_syntax_validate(domain_id, rule_line, rule_line_size, &rule);
   if (rc != TURBO_OK) return rc;
-  rc = flowie_control_group_lookup(database, root_group_id, root_group_id, &depth, &enabled);
+  rc = flowie_control_domain_exists(database, domain_id);
   if (rc != TURBO_OK) return rc;
-  if (!enabled || depth != 0u) return TURBO_EPERM;
   switch (rule.subject_kind) {
   case TURBO_FLOW_SECURITY_SUBJECT_ANY:
     break;
   case TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL:
-    rc = flowie_control_user_enabled(database, root_group_id, rule.subject, &enabled);
+    rc = flowie_control_user_enabled(database, domain_id, rule.subject, &enabled);
     if (rc != TURBO_OK) return rc;
     if (!enabled) return TURBO_EPERM;
     break;
   case TURBO_FLOW_SECURITY_SUBJECT_ROLE:
-    rc = flowie_control_role_enabled(database, root_group_id, rule.subject, &enabled);
+    rc = flowie_control_role_enabled(database, domain_id, rule.subject, &enabled);
     if (rc != TURBO_OK) return rc;
     if (!enabled) return TURBO_EPERM;
     break;
   case TURBO_FLOW_SECURITY_SUBJECT_GROUP:
-    rc = flowie_control_group_lookup(database, root_group_id, rule.subject, &depth, &enabled);
+    rc = flowie_control_group_lookup(database, domain_id, rule.subject, &depth, &enabled);
     if (rc != TURBO_OK) return rc;
     if (!enabled) return TURBO_EPERM;
     break;
@@ -807,21 +873,21 @@ static int flowie_control_policy_rule_validate(sqlite3 *database, const char *ro
   return TURBO_OK;
 }
 
-static int flowie_control_policy_validate_database(sqlite3 *database, const char *root_group_id,
+static int flowie_control_policy_validate_database(sqlite3 *database, const char *domain_id,
                                                    flowie_control_policy_validation_t *out) {
   flowie_control_policy_validation_t validation = FLOWIE_CONTROL_POLICY_VALIDATION_INIT;
   sqlite3_stmt *statement = NULL;
   int status;
   int rc;
-  if (!database || !root_group_id || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
+  if (!database || !domain_id || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
   rc = flowie_control_read_revision(database, &validation.store_revision);
   if (rc != TURBO_OK) return rc;
   status = sqlite3_prepare_v2(
       database,
-      "SELECT rule_line FROM flowie_control_policy_draft WHERE root_group_id=?1 ORDER BY ordinal",
+      "SELECT rule_line FROM flowie_control_policy_draft WHERE domain_id=?1 ORDER BY ordinal",
       -1, &statement, NULL);
   if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc != TURBO_OK) goto done;
   while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
     const unsigned char *line;
@@ -838,7 +904,7 @@ static int flowie_control_policy_validate_database(sqlite3 *database, const char
       rc = TURBO_EPROTO;
       goto done;
     }
-    rc = flowie_control_policy_rule_validate(database, root_group_id, (const char *)line,
+    rc = flowie_control_policy_rule_validate(database, domain_id, (const char *)line,
                                              (size_t)line_size, &rule);
     if (rc != TURBO_OK) goto done;
     ++validation.rule_count;
@@ -881,6 +947,8 @@ int flowie_control_store_open(const flowie_control_store_config_t *config,
   }
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) goto fail;
+  rc = flowie_control_schema_preflight(database);
+  if (rc != TURBO_OK) goto fail;
   status = sqlite3_exec(database, FLOWIE_CONTROL_SCHEMA, NULL, NULL, NULL);
   if (status == SQLITE_OK)
     status = sqlite3_exec(database, FLOWIE_CONTROL_POLICY_SCHEMA, NULL, NULL, NULL);
@@ -888,6 +956,8 @@ int flowie_control_store_open(const flowie_control_store_config_t *config,
     rc = flowie_control_sqlite_status(status);
     goto fail;
   }
+  rc = flowie_control_schema_validate(database);
+  if (rc != TURBO_OK) goto fail;
   (void)sqlite3_close(database);
   database = NULL;
   store->repository = (flowie_control_repository_t)FLOWIE_CONTROL_REPOSITORY_INIT;
@@ -914,8 +984,8 @@ const flowie_control_repository_t *flowie_control_store_repository(flowie_contro
   return &store->repository;
 }
 
-int flowie_control_store_root_group_create(
-    flowie_control_store_t *store, const flowie_control_root_group_create_command_t *command,
+int flowie_control_store_domain_create(
+    flowie_control_store_t *store, const flowie_control_domain_create_command_t *command,
     flowie_control_command_result_t *result) {
   sqlite3 *database = NULL;
   sqlite3_stmt *statement = NULL;
@@ -929,7 +999,7 @@ int flowie_control_store_root_group_create(
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->root_group_id,
+      !flowie_control_command_common_valid(command->domain_id, command->domain_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at))
     return TURBO_EINVAL;
@@ -942,14 +1012,14 @@ int flowie_control_store_root_group_create(
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_ROOT_GROUP_CREATE, command->root_group_id,
-                             command->root_group_id, FLOWIE_CONTROL_TARGET_ROOT_GROUP, result,
+                             FLOWIE_CONTROL_OPERATION_DOMAIN_CREATE, command->domain_id,
+                             command->domain_id, FLOWIE_CONTROL_TARGET_DOMAIN, result,
                              &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
@@ -959,20 +1029,13 @@ int flowie_control_store_root_group_create(
   }
   next = current + 1u;
   status = sqlite3_prepare_v2(
-      database,
-      "INSERT INTO flowie_control_group(root_group_id,group_id,parent_group_id,depth,enabled,"
-      "revision,created_at,updated_at) VALUES(?1,?1,NULL,0,1,?2,?3,?3)",
+      database, "INSERT INTO flowie_control_domain(domain_id) VALUES(?1)",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
-  if (rc == TURBO_OK && sqlite3_bind_int64(statement, 2, (sqlite3_int64)next) != SQLITE_OK)
-    rc = flowie_control_sqlite_status(sqlite3_errcode(database));
-  if (rc == TURBO_OK &&
-      sqlite3_bind_int64(statement, 3, (sqlite3_int64)command->occurred_at) != SQLITE_OK)
-    rc = flowie_control_sqlite_status(sqlite3_errcode(database));
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK) {
     status = sqlite3_step(statement);
     rc = status == SQLITE_DONE
@@ -986,9 +1049,9 @@ int flowie_control_store_root_group_create(
   rc = flowie_control_advance_revision(database, current, &next);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(database, command->request_id, command->actor,
-                                   FLOWIE_CONTROL_OPERATION_ROOT_GROUP_CREATE,
-                                   command->root_group_id, command->root_group_id,
-                                   FLOWIE_CONTROL_TARGET_ROOT_GROUP, next, command->occurred_at);
+                                   FLOWIE_CONTROL_OPERATION_DOMAIN_CREATE,
+                                   command->domain_id, command->domain_id,
+                                   FLOWIE_CONTROL_TARGET_DOMAIN, next, command->occurred_at);
   if (rc != TURBO_OK) goto done;
   result->revision = next;
   result->replayed = 0;
@@ -1027,12 +1090,13 @@ int flowie_control_store_group_create(flowie_control_store_t *store,
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->group_id,
+      !flowie_control_command_common_valid(command->domain_id, command->group_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at) ||
-      !flowie_control_text_valid(command->parent_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
-      strcmp(command->group_id, command->root_group_id) == 0 ||
-      strcmp(command->group_id, command->parent_group_id) == 0)
+      (command->parent_group_id &&
+       !flowie_control_text_valid(command->parent_group_id, TURBO_FLOW_SECURITY_ID_MAX)) ||
+      strcmp(command->group_id, command->domain_id) == 0 ||
+      (command->parent_group_id && strcmp(command->group_id, command->parent_group_id) == 0))
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) return rc;
@@ -1043,26 +1107,34 @@ int flowie_control_store_group_create(flowie_control_store_t *store,
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_GROUP_CREATE, command->root_group_id,
-                             command->group_id, command->parent_group_id, result, &found);
+                             FLOWIE_CONTROL_OPERATION_GROUP_CREATE, command->domain_id,
+                             command->group_id,
+                             command->parent_group_id ? command->parent_group_id
+                                                      : FLOWIE_CONTROL_TARGET_DOMAIN,
+                             result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_group_lookup(database, command->root_group_id, command->parent_group_id,
-                                   &parent_depth, &parent_enabled);
-  if (rc != TURBO_OK) goto done;
-  if (!parent_enabled) {
-    rc = TURBO_EPERM;
-    goto done;
-  }
-  if (parent_depth >= FLOWIE_CONTROL_GROUP_MAX_DEPTH) {
-    rc = TURBO_ENOSPC;
-    goto done;
+  if (command->parent_group_id) {
+    rc = flowie_control_group_lookup(database, command->domain_id, command->parent_group_id,
+                                     &parent_depth, &parent_enabled);
+    if (rc != TURBO_OK) goto done;
+    if (!parent_enabled) {
+      rc = TURBO_EPERM;
+      goto done;
+    }
+    if (parent_depth >= FLOWIE_CONTROL_GROUP_MAX_DEPTH) {
+      rc = TURBO_ENOSPC;
+      goto done;
+    }
+  } else {
+    rc = flowie_control_domain_exists(database, command->domain_id);
+    if (rc != TURBO_OK) goto done;
   }
   if (current >= (uint64_t)INT64_MAX) {
     rc = TURBO_ERANGE;
@@ -1071,17 +1143,22 @@ int flowie_control_store_group_create(flowie_control_store_t *store,
   next = current + 1u;
   status = sqlite3_prepare_v2(
       database,
-      "INSERT INTO flowie_control_group(root_group_id,group_id,parent_group_id,depth,enabled,"
+      "INSERT INTO flowie_control_group(domain_id,group_id,parent_group_id,depth,enabled,"
       "revision,created_at,updated_at) VALUES(?1,?2,?3,?4,1,?5,?6,?6)",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, command->group_id);
-  if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 3, command->parent_group_id);
-  if (rc == TURBO_OK && sqlite3_bind_int(statement, 4, (int)(parent_depth + 1u)) != SQLITE_OK)
+  if (rc == TURBO_OK && command->parent_group_id)
+    rc = flowie_control_bind_text(statement, 3, command->parent_group_id);
+  else if (rc == TURBO_OK && sqlite3_bind_null(statement, 3) != SQLITE_OK)
+    rc = flowie_control_sqlite_status(sqlite3_errcode(database));
+  if (rc == TURBO_OK &&
+      sqlite3_bind_int(statement, 4,
+                       command->parent_group_id ? (int)(parent_depth + 1u) : 0) != SQLITE_OK)
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
   if (rc == TURBO_OK && sqlite3_bind_int64(statement, 5, (sqlite3_int64)next) != SQLITE_OK)
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
@@ -1101,8 +1178,11 @@ int flowie_control_store_group_create(flowie_control_store_t *store,
   rc = flowie_control_advance_revision(database, current, &next);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(database, command->request_id, command->actor,
-                                   FLOWIE_CONTROL_OPERATION_GROUP_CREATE, command->root_group_id,
-                                   command->group_id, command->parent_group_id, next,
+                                   FLOWIE_CONTROL_OPERATION_GROUP_CREATE, command->domain_id,
+                                   command->group_id,
+                                   command->parent_group_id ? command->parent_group_id
+                                                            : FLOWIE_CONTROL_TARGET_DOMAIN,
+                                   next,
                                    command->occurred_at);
   if (rc != TURBO_OK) goto done;
   result->revision = next;
@@ -1125,16 +1205,16 @@ done:
   return rc;
 }
 
-int flowie_control_store_group_disable(flowie_control_store_t *store,
-                                       const flowie_control_group_disable_command_t *command,
-                                       flowie_control_command_result_t *result) {
+int flowie_control_store_group_delete(flowie_control_store_t *store,
+                                      const flowie_control_group_delete_command_t *command,
+                                      flowie_control_command_result_t *result) {
   sqlite3 *database = NULL;
   sqlite3_stmt *statement = NULL;
   uint64_t current = 0u;
   uint64_t next = 0u;
   uint32_t group_depth = 0u;
   int group_enabled = 0;
-  int active_child = 0;
+  int child = 0;
   int direct_membership = 0;
   int policy_reference = 0;
   int transaction_started = 0;
@@ -1145,10 +1225,10 @@ int flowie_control_store_group_disable(flowie_control_store_t *store,
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->group_id,
+      !flowie_control_command_common_valid(command->domain_id, command->group_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at) ||
-      strcmp(command->group_id, command->root_group_id) == 0)
+      strcmp(command->group_id, command->domain_id) == 0)
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) return rc;
@@ -1159,35 +1239,27 @@ int flowie_control_store_group_disable(flowie_control_store_t *store,
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_GROUP_DISABLE, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_GROUP_DELETE, command->domain_id,
                              command->group_id, FLOWIE_CONTROL_TARGET_GROUP, result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_group_lookup(database, command->root_group_id, command->group_id,
+  rc = flowie_control_group_lookup(database, command->domain_id, command->group_id,
                                    &group_depth, &group_enabled);
   if (rc != TURBO_OK) goto done;
-  if (group_depth == 0u) {
-    rc = TURBO_EPERM;
-    goto done;
-  }
-  if (!group_enabled) {
-    rc = TURBO_EALREADY;
-    goto done;
-  }
-  rc = flowie_control_group_references(database, command->root_group_id, command->group_id,
-                                       &active_child, &direct_membership);
+  rc = flowie_control_group_references(database, command->domain_id, command->group_id,
+                                       &child, &direct_membership);
   if (rc != TURBO_OK) goto done;
-  if (active_child || direct_membership) {
+  if (child || direct_membership) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_policy_subject_referenced(database, command->root_group_id,
+  rc = flowie_control_policy_subject_referenced(database, command->domain_id,
                                                 TURBO_FLOW_SECURITY_SUBJECT_GROUP,
                                                 command->group_id, &policy_reference);
   if (rc != TURBO_OK) goto done;
@@ -1199,20 +1271,14 @@ int flowie_control_store_group_disable(flowie_control_store_t *store,
   if (rc != TURBO_OK) goto done;
   status = sqlite3_prepare_v2(
       database,
-      "UPDATE flowie_control_group SET enabled=0,revision=?1,updated_at=?2 WHERE root_group_id=?3 "
-      "AND group_id=?4 AND enabled=1",
+      "DELETE FROM flowie_control_group WHERE domain_id=?1 AND group_id=?2",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  if (sqlite3_bind_int64(statement, 1, (sqlite3_int64)next) != SQLITE_OK ||
-      sqlite3_bind_int64(statement, 2, (sqlite3_int64)command->occurred_at) != SQLITE_OK) {
-    rc = flowie_control_sqlite_status(sqlite3_errcode(database));
-    goto done;
-  }
-  rc = flowie_control_bind_text(statement, 3, command->root_group_id);
-  if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 4, command->group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
+  if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, command->group_id);
   if (rc == TURBO_OK) {
     status = sqlite3_step(statement);
     rc = status == SQLITE_DONE && sqlite3_changes(database) == 1
@@ -1223,7 +1289,7 @@ int flowie_control_store_group_disable(flowie_control_store_t *store,
   statement = NULL;
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(database, command->request_id, command->actor,
-                                   FLOWIE_CONTROL_OPERATION_GROUP_DISABLE, command->root_group_id,
+                                   FLOWIE_CONTROL_OPERATION_GROUP_DELETE, command->domain_id,
                                    command->group_id, FLOWIE_CONTROL_TARGET_GROUP, next,
                                    command->occurred_at);
   if (rc != TURBO_OK) goto done;
@@ -1254,8 +1320,6 @@ int flowie_control_store_user_create(flowie_control_store_t *store,
   sqlite3_stmt *statement = NULL;
   uint64_t current = 0u;
   uint64_t next = 0u;
-  uint32_t root_depth = 0u;
-  int root_enabled = 0;
   int transaction_started = 0;
   int found = 0;
   int status;
@@ -1264,7 +1328,7 @@ int flowie_control_store_user_create(flowie_control_store_t *store,
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->principal_id,
+      !flowie_control_command_common_valid(command->domain_id, command->principal_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->principal_type, TURBO_FLOW_SECURITY_TYPE_MAX))
@@ -1278,23 +1342,18 @@ int flowie_control_store_user_create(flowie_control_store_t *store,
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_USER_CREATE, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_USER_CREATE, command->domain_id,
                              command->principal_id, command->principal_type, result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_group_lookup(database, command->root_group_id, command->root_group_id,
-                                   &root_depth, &root_enabled);
+  rc = flowie_control_domain_exists(database, command->domain_id);
   if (rc != TURBO_OK) goto done;
-  if (root_depth != 0u || !root_enabled) {
-    rc = TURBO_EPERM;
-    goto done;
-  }
   if (current >= (uint64_t)INT64_MAX) {
     rc = TURBO_ERANGE;
     goto done;
@@ -1302,14 +1361,14 @@ int flowie_control_store_user_create(flowie_control_store_t *store,
   next = current + 1u;
   status = sqlite3_prepare_v2(
       database,
-      "INSERT INTO flowie_control_user(root_group_id,principal_id,principal_type,enabled,revision,"
+      "INSERT INTO flowie_control_user(domain_id,principal_id,principal_type,enabled,revision,"
       "created_at,updated_at) VALUES(?1,?2,?3,1,?4,?5,?5)",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, command->principal_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 3, command->principal_type);
   if (rc == TURBO_OK && sqlite3_bind_int64(statement, 4, (sqlite3_int64)next) != SQLITE_OK)
@@ -1330,7 +1389,7 @@ int flowie_control_store_user_create(flowie_control_store_t *store,
   rc = flowie_control_advance_revision(database, current, &next);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(database, command->request_id, command->actor,
-                                   FLOWIE_CONTROL_OPERATION_USER_CREATE, command->root_group_id,
+                                   FLOWIE_CONTROL_OPERATION_USER_CREATE, command->domain_id,
                                    command->principal_id, command->principal_type, next,
                                    command->occurred_at);
   if (rc != TURBO_OK) goto done;
@@ -1371,7 +1430,7 @@ int flowie_control_store_user_disable(flowie_control_store_t *store,
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->principal_id,
+      !flowie_control_command_common_valid(command->domain_id, command->principal_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at))
     return TURBO_EINVAL;
@@ -1384,26 +1443,26 @@ int flowie_control_store_user_disable(flowie_control_store_t *store,
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_USER_DISABLE, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_USER_DISABLE, command->domain_id,
                              command->principal_id, NULL, result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
   status = sqlite3_prepare_v2(
       database,
-      "SELECT principal_type,enabled FROM flowie_control_user WHERE root_group_id=?1 AND "
+      "SELECT principal_type,enabled FROM flowie_control_user WHERE domain_id=?1 AND "
       "principal_id=?2",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, command->principal_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
@@ -1423,7 +1482,7 @@ int flowie_control_store_user_disable(flowie_control_store_t *store,
   }
   (void)sqlite3_finalize(statement);
   statement = NULL;
-  rc = flowie_control_policy_subject_referenced(database, command->root_group_id,
+  rc = flowie_control_policy_subject_referenced(database, command->domain_id,
                                                 TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL,
                                                 command->principal_id, &policy_reference);
   if (rc != TURBO_OK) goto done;
@@ -1435,7 +1494,7 @@ int flowie_control_store_user_disable(flowie_control_store_t *store,
   if (rc != TURBO_OK) goto done;
   status = sqlite3_prepare_v2(
       database,
-      "UPDATE flowie_control_user SET enabled=0,revision=?1,updated_at=?2 WHERE root_group_id=?3 "
+      "UPDATE flowie_control_user SET enabled=0,revision=?1,updated_at=?2 WHERE domain_id=?3 "
       "AND principal_id=?4 AND enabled=1",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
@@ -1447,7 +1506,7 @@ int flowie_control_store_user_disable(flowie_control_store_t *store,
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 3, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 3, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 4, command->principal_id);
   if (rc == TURBO_OK) {
     status = sqlite3_step(statement);
@@ -1460,7 +1519,7 @@ int flowie_control_store_user_disable(flowie_control_store_t *store,
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(
       database, command->request_id, command->actor, FLOWIE_CONTROL_OPERATION_USER_DISABLE,
-      command->root_group_id, command->principal_id, principal_type, next, command->occurred_at);
+      command->domain_id, command->principal_id, principal_type, next, command->occurred_at);
   if (rc != TURBO_OK) goto done;
   result->revision = next;
   result->replayed = 0;
@@ -1482,7 +1541,7 @@ done:
   return rc;
 }
 
-int flowie_control_store_user_get(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_user_get(flowie_control_store_t *store, const char *domain_id,
                                   const char *principal_id, flowie_control_user_view_t *out) {
   sqlite3 *database = NULL;
   sqlite3_stmt *statement = NULL;
@@ -1490,7 +1549,7 @@ int flowie_control_store_user_get(flowie_control_store_t *store, const char *roo
   int status;
   int rc;
   if (out && out->size >= sizeof(*out)) *out = view;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX) || !out ||
       out->size < sizeof(*out))
     return TURBO_EINVAL;
@@ -1498,14 +1557,14 @@ int flowie_control_store_user_get(flowie_control_store_t *store, const char *roo
   if (rc != TURBO_OK) return rc;
   status = sqlite3_prepare_v2(
       database,
-      "SELECT root_group_id,principal_id,principal_type,enabled,revision,created_at,updated_at "
-      "FROM flowie_control_user WHERE root_group_id=?1 AND principal_id=?2",
+      "SELECT domain_id,principal_id,principal_type,enabled,revision,created_at,updated_at "
+      "FROM flowie_control_user WHERE domain_id=?1 AND principal_id=?2",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, principal_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
@@ -1522,7 +1581,7 @@ int flowie_control_store_user_get(flowie_control_store_t *store, const char *roo
     rc = status == SQLITE_ROW ? TURBO_EPROTO : flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_copy_column(statement, 0, view.root_group_id, sizeof(view.root_group_id));
+  rc = flowie_control_copy_column(statement, 0, view.domain_id, sizeof(view.domain_id));
   if (rc == TURBO_OK)
     rc = flowie_control_copy_column(statement, 1, view.principal_id, sizeof(view.principal_id));
   if (rc == TURBO_OK)
@@ -1547,8 +1606,8 @@ done:
 
 void flowie_control_generated_credential_wipe(flowie_control_generated_credential_t *credential) {
   if (!credential || credential->size < sizeof(*credential)) return;
-  flowie_control_credential_wipe(credential->secret, sizeof(credential->secret));
-  credential->secret_size = 0u;
+  flowie_control_credential_wipe(credential->token, sizeof(credential->token));
+  credential->token_size = 0u;
 }
 
 static int flowie_control_store_credential_issue(
@@ -1559,7 +1618,7 @@ static int flowie_control_store_credential_issue(
   flowie_control_credential_record_t record = {0};
   flowie_control_credential_kdf_params_t params;
   flowie_control_command_result_t replay = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  uint8_t secret[FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE] = {0};
+  char token[FLOWIE_CONTROL_CREDENTIAL_TOKEN_CAPACITY] = {0};
   uint8_t salt[FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE] = {0};
   uint8_t verifier[FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE] = {0};
   uint64_t current = 0u;
@@ -1578,7 +1637,7 @@ static int flowie_control_store_credential_issue(
        (command->initial_secret &&
         (command->initial_secret_size == 0u ||
          command->initial_secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX))) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->principal_id,
+      !flowie_control_command_common_valid(command->domain_id, command->principal_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at))
     return TURBO_EINVAL;
@@ -1586,7 +1645,7 @@ static int flowie_control_store_credential_issue(
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_replay(database, command->request_id, command->actor, operation,
-                             command->root_group_id, command->principal_id,
+                             command->domain_id, command->principal_id,
                              FLOWIE_CONTROL_DETAIL_ARGON2ID, &replay, &found);
   if (rc != TURBO_OK) goto done;
   if (found) {
@@ -1595,11 +1654,11 @@ static int flowie_control_store_credential_issue(
   }
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_credential_record_read(database, command->root_group_id,
+  rc = flowie_control_credential_record_read(database, command->domain_id,
                                              command->principal_id, &record);
   if (rc != TURBO_OK) goto done;
   if (!record.user_enabled) {
@@ -1621,7 +1680,7 @@ static int flowie_control_store_credential_issue(
   if (command->initial_secret)
     rc = flowie_control_credential_hash(command->initial_secret, command->initial_secret_size, salt,
                                         verifier, &params);
-  else rc = flowie_control_credential_generate(secret, salt, verifier, &params);
+  else rc = flowie_control_credential_generate(token, salt, verifier, &params);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) goto done;
@@ -1634,7 +1693,7 @@ static int flowie_control_store_credential_issue(
   replay = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   found = 0;
   rc = flowie_control_replay(database, command->request_id, command->actor, operation,
-                             command->root_group_id, command->principal_id,
+                             command->domain_id, command->principal_id,
                              FLOWIE_CONTROL_DETAIL_ARGON2ID, &replay, &found);
   if (rc != TURBO_OK) goto done;
   if (found) {
@@ -1643,11 +1702,11 @@ static int flowie_control_store_credential_issue(
   }
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_credential_record_read(database, command->root_group_id,
+  rc = flowie_control_credential_record_read(database, command->domain_id,
                                              command->principal_id, &record);
   if (rc != TURBO_OK) goto done;
   if (!record.user_enabled) {
@@ -1669,8 +1728,8 @@ static int flowie_control_store_credential_issue(
       require_existing
           ? "UPDATE flowie_control_credential SET kdf_algorithm=?3,memory_blocks=?4,passes=?5,"
             "lanes=?6,salt=?7,verifier=?8,enabled=1,revision=?9,updated_at=?10 WHERE "
-            "root_group_id=?1 AND principal_id=?2"
-          : "INSERT INTO flowie_control_credential(root_group_id,principal_id,kdf_algorithm,"
+            "domain_id=?1 AND principal_id=?2"
+          : "INSERT INTO flowie_control_credential(domain_id,principal_id,kdf_algorithm,"
             "memory_blocks,passes,lanes,salt,verifier,enabled,revision,created_at,updated_at) "
             "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1,?9,?10,?10)",
       -1, &statement, NULL);
@@ -1678,7 +1737,7 @@ static int flowie_control_store_credential_issue(
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, command->principal_id);
   if (rc == TURBO_OK && sqlite3_bind_int64(statement, 3, params.algorithm) != SQLITE_OK)
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
@@ -1705,7 +1764,7 @@ static int flowie_control_store_credential_issue(
   statement = NULL;
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(database, command->request_id, command->actor, operation,
-                                   command->root_group_id, command->principal_id,
+                                   command->domain_id, command->principal_id,
                                    FLOWIE_CONTROL_DETAIL_ARGON2ID, next, command->occurred_at);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_exec(database, "COMMIT", NULL, NULL, NULL);
@@ -1716,8 +1775,8 @@ static int flowie_control_store_credential_issue(
   transaction_started = 0;
   result->revision = next;
   if (!command->initial_secret) {
-    memcpy(result->secret, secret, sizeof(result->secret));
-    result->secret_size = sizeof(result->secret);
+    memcpy(result->token, token, sizeof(result->token));
+    result->token_size = FLOWIE_CONTROL_CREDENTIAL_TOKEN_SIZE;
   }
   rc = TURBO_OK;
 
@@ -1726,7 +1785,7 @@ done:
   if (transaction_started && database) (void)sqlite3_exec(database, "ROLLBACK", NULL, NULL, NULL);
   if (database) (void)sqlite3_close(database);
   flowie_control_credential_wipe(&record, sizeof(record));
-  flowie_control_credential_wipe(secret, sizeof(secret));
+  flowie_control_credential_wipe(token, sizeof(token));
   flowie_control_credential_wipe(salt, sizeof(salt));
   flowie_control_credential_wipe(verifier, sizeof(verifier));
   if (rc != TURBO_OK && result && result->size >= sizeof(*result))
@@ -1764,7 +1823,7 @@ int flowie_control_store_credential_revoke(
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->principal_id,
+      !flowie_control_command_common_valid(command->domain_id, command->principal_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at))
     return TURBO_EINVAL;
@@ -1777,18 +1836,18 @@ int flowie_control_store_credential_revoke(
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_CREDENTIAL_REVOKE, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_CREDENTIAL_REVOKE, command->domain_id,
                              command->principal_id, FLOWIE_CONTROL_TARGET_CREDENTIAL, result,
                              &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_credential_record_read(database, command->root_group_id,
+  rc = flowie_control_credential_record_read(database, command->domain_id,
                                              command->principal_id, &record);
   if (rc != TURBO_OK) goto done;
   if (!record.credential_exists) {
@@ -1804,7 +1863,7 @@ int flowie_control_store_credential_revoke(
   status = sqlite3_prepare_v2(
       database,
       "UPDATE flowie_control_credential SET enabled=0,revision=?1,updated_at=?2 WHERE "
-      "root_group_id=?3 AND principal_id=?4 AND enabled=1",
+      "domain_id=?3 AND principal_id=?4 AND enabled=1",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
@@ -1815,7 +1874,7 @@ int flowie_control_store_credential_revoke(
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 3, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 3, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 4, command->principal_id);
   if (rc == TURBO_OK) {
     status = sqlite3_step(statement);
@@ -1828,7 +1887,7 @@ int flowie_control_store_credential_revoke(
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(database, command->request_id, command->actor,
                                    FLOWIE_CONTROL_OPERATION_CREDENTIAL_REVOKE,
-                                   command->root_group_id, command->principal_id,
+                                   command->domain_id, command->principal_id,
                                    FLOWIE_CONTROL_TARGET_CREDENTIAL, next, command->occurred_at);
   if (rc != TURBO_OK) goto done;
   result->revision = next;
@@ -1852,7 +1911,7 @@ done:
   return rc;
 }
 
-int flowie_control_store_credential_verify(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_credential_verify(flowie_control_store_t *store, const char *domain_id,
                                            const char *principal_id, const void *secret,
                                            size_t secret_size,
                                            flowie_control_credential_verify_result_t *result) {
@@ -1867,7 +1926,7 @@ int flowie_control_store_credential_verify(flowie_control_store_t *store, const 
   if (result && result->size >= sizeof(*result))
     *result =
         (flowie_control_credential_verify_result_t)FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX) || !secret ||
       secret_size == 0u || secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX || !result ||
       result->size < sizeof(*result))
@@ -1875,7 +1934,7 @@ int flowie_control_store_credential_verify(flowie_control_store_t *store, const 
   flowie_control_credential_default_params(&dummy_params);
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) goto done;
-  rc = flowie_control_credential_record_read(database, root_group_id, principal_id, &record);
+  rc = flowie_control_credential_record_read(database, domain_id, principal_id, &record);
   (void)sqlite3_close(database);
   database = NULL;
   if (rc == TURBO_ENOENT) {
@@ -1895,7 +1954,7 @@ int flowie_control_store_credential_verify(flowie_control_store_t *store, const 
   }
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) goto done;
-  rc = flowie_control_credential_record_read(database, root_group_id, principal_id, &fresh);
+  rc = flowie_control_credential_record_read(database, domain_id, principal_id, &fresh);
   if (rc != TURBO_OK) goto done;
   if (!fresh.user_enabled || !fresh.credential_exists || !fresh.credential_enabled ||
       fresh.user_revision != record.user_revision ||
@@ -1919,7 +1978,7 @@ done:
   return rc;
 }
 
-int flowie_control_store_credential_state(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_credential_state(flowie_control_store_t *store, const char *domain_id,
                                           const char *principal_id,
                                           flowie_control_credential_verify_result_t *result) {
   flowie_control_credential_record_t record = {0};
@@ -1928,13 +1987,13 @@ int flowie_control_store_credential_state(flowie_control_store_t *store, const c
   if (result && result->size >= sizeof(*result))
     *result =
         (flowie_control_credential_verify_result_t)FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX) || !result ||
       result->size < sizeof(*result))
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) goto done;
-  rc = flowie_control_credential_record_read(database, root_group_id, principal_id, &record);
+  rc = flowie_control_credential_record_read(database, domain_id, principal_id, &record);
   if (rc == TURBO_ENOENT) rc = TURBO_EPERM;
   if (rc != TURBO_OK) goto done;
   if (!record.user_enabled || !record.credential_exists || !record.credential_enabled) {
@@ -1967,14 +2026,14 @@ int flowie_control_store_current_revision(flowie_control_store_t *store, uint64_
 }
 
 int flowie_control_store_principal_snapshot(
-    flowie_control_store_t *store, const char *root_group_id, const char *principal_id,
+    flowie_control_store_t *store, const char *domain_id, const char *principal_id,
     const flowie_control_credential_verify_result_t *expected,
     flowie_control_principal_snapshot_t *out) {
   static const char sql[] =
-      "SELECT u.root_group_id,u.principal_id,u.principal_type,u.enabled,u.revision,"
+      "SELECT u.domain_id,u.principal_id,u.principal_type,u.enabled,u.revision,"
       "c.enabled,c.revision FROM flowie_control_user u LEFT JOIN flowie_control_credential c "
-      "ON c.root_group_id=u.root_group_id AND c.principal_id=u.principal_id "
-      "WHERE u.root_group_id=?1 AND u.principal_id=?2";
+      "ON c.domain_id=u.domain_id AND c.principal_id=u.principal_id "
+      "WHERE u.domain_id=?1 AND u.principal_id=?2";
   flowie_control_principal_snapshot_t snapshot = FLOWIE_CONTROL_PRINCIPAL_SNAPSHOT_INIT;
   sqlite3 *database = NULL;
   sqlite3_stmt *statement = NULL;
@@ -1985,7 +2044,7 @@ int flowie_control_store_principal_snapshot(
   int rc;
 
   if (out && out->size >= sizeof(*out)) *out = snapshot;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX) || !expected ||
       expected->size < sizeof(*expected) || expected->user_revision == 0u ||
       expected->credential_revision == 0u || !out || out->size < sizeof(*out))
@@ -2004,7 +2063,7 @@ int flowie_control_store_principal_snapshot(
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, principal_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
@@ -2030,8 +2089,8 @@ int flowie_control_store_principal_snapshot(
     rc = TURBO_EPERM;
     goto done;
   }
-  rc = flowie_control_copy_column(statement, 0, snapshot.root_group_id,
-                                  sizeof(snapshot.root_group_id));
+  rc = flowie_control_copy_column(statement, 0, snapshot.domain_id,
+                                  sizeof(snapshot.domain_id));
   if (rc == TURBO_OK)
     rc = flowie_control_copy_column(statement, 1, snapshot.principal_id,
                                     sizeof(snapshot.principal_id));
@@ -2044,10 +2103,10 @@ int flowie_control_store_principal_snapshot(
   (void)sqlite3_finalize(statement);
   statement = NULL;
 
-  rc = flowie_control_effective_groups_database(database, root_group_id, principal_id,
+  rc = flowie_control_effective_groups_database(database, domain_id, principal_id,
                                                 &snapshot.effective_groups);
   if (rc == TURBO_OK)
-    rc = flowie_control_effective_roles_database(database, root_group_id, principal_id,
+    rc = flowie_control_effective_roles_database(database, domain_id, principal_id,
                                                  &snapshot.effective_roles);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_exec(database, "COMMIT", NULL, NULL, NULL);
@@ -2069,12 +2128,12 @@ done:
 }
 
 int flowie_control_store_external_principal_snapshot(flowie_control_store_t *store,
-                                                     const char *root_group_id,
+                                                     const char *domain_id,
                                                      const char *principal_id,
                                                      uint64_t assertion_revision,
                                                      flowie_control_principal_snapshot_t *out) {
-  static const char sql[] = "SELECT root_group_id,principal_id,principal_type,enabled,revision "
-                            "FROM flowie_control_user WHERE root_group_id=?1 AND principal_id=?2";
+  static const char sql[] = "SELECT domain_id,principal_id,principal_type,enabled,revision "
+                            "FROM flowie_control_user WHERE domain_id=?1 AND principal_id=?2";
   flowie_control_principal_snapshot_t snapshot = FLOWIE_CONTROL_PRINCIPAL_SNAPSHOT_INIT;
   sqlite3 *database = NULL;
   sqlite3_stmt *statement = NULL;
@@ -2084,7 +2143,7 @@ int flowie_control_store_external_principal_snapshot(flowie_control_store_t *sto
   int rc;
 
   if (out && out->size >= sizeof(*out)) *out = snapshot;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       assertion_revision == 0u || !out || out->size < sizeof(*out))
     return TURBO_EINVAL;
@@ -2102,7 +2161,7 @@ int flowie_control_store_external_principal_snapshot(flowie_control_store_t *sto
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, principal_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
@@ -2121,8 +2180,8 @@ int flowie_control_store_external_principal_snapshot(flowie_control_store_t *sto
     rc = TURBO_EPERM;
     goto done;
   }
-  rc = flowie_control_copy_column(statement, 0, snapshot.root_group_id,
-                                  sizeof(snapshot.root_group_id));
+  rc = flowie_control_copy_column(statement, 0, snapshot.domain_id,
+                                  sizeof(snapshot.domain_id));
   if (rc == TURBO_OK)
     rc = flowie_control_copy_column(statement, 1, snapshot.principal_id,
                                     sizeof(snapshot.principal_id));
@@ -2135,10 +2194,10 @@ int flowie_control_store_external_principal_snapshot(flowie_control_store_t *sto
   (void)sqlite3_finalize(statement);
   statement = NULL;
 
-  rc = flowie_control_effective_groups_database(database, root_group_id, principal_id,
+  rc = flowie_control_effective_groups_database(database, domain_id, principal_id,
                                                 &snapshot.effective_groups);
   if (rc == TURBO_OK)
-    rc = flowie_control_effective_roles_database(database, root_group_id, principal_id,
+    rc = flowie_control_effective_roles_database(database, domain_id, principal_id,
                                                  &snapshot.effective_roles);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_exec(database, "COMMIT", NULL, NULL, NULL);
@@ -2178,11 +2237,11 @@ int flowie_control_store_membership_add(flowie_control_store_t *store,
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->principal_id,
+      !flowie_control_command_common_valid(command->domain_id, command->principal_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
-      strcmp(command->group_id, command->root_group_id) == 0)
+      strcmp(command->group_id, command->domain_id) == 0)
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) return rc;
@@ -2193,27 +2252,27 @@ int flowie_control_store_membership_add(flowie_control_store_t *store,
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_MEMBERSHIP_ADD, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_MEMBERSHIP_ADD, command->domain_id,
                              command->principal_id, command->group_id, result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_user_enabled(database, command->root_group_id, command->principal_id,
+  rc = flowie_control_user_enabled(database, command->domain_id, command->principal_id,
                                    &user_enabled);
   if (rc != TURBO_OK) goto done;
   if (!user_enabled) {
     rc = TURBO_EPERM;
     goto done;
   }
-  rc = flowie_control_group_lookup(database, command->root_group_id, command->group_id,
+  rc = flowie_control_group_lookup(database, command->domain_id, command->group_id,
                                    &group_depth, &group_enabled);
   if (rc != TURBO_OK) goto done;
-  if (!group_enabled || group_depth == 0u) {
+  if (!group_enabled) {
     rc = TURBO_EPERM;
     goto done;
   }
@@ -2224,14 +2283,14 @@ int flowie_control_store_membership_add(flowie_control_store_t *store,
   next = current + 1u;
   status = sqlite3_prepare_v2(
       database,
-      "INSERT INTO flowie_control_membership(root_group_id,principal_id,group_id,revision,"
+      "INSERT INTO flowie_control_membership(domain_id,principal_id,group_id,revision,"
       "created_at) VALUES(?1,?2,?3,?4,?5)",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, command->principal_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 3, command->group_id);
   if (rc == TURBO_OK && sqlite3_bind_int64(statement, 4, (sqlite3_int64)next) != SQLITE_OK)
@@ -2249,14 +2308,14 @@ int flowie_control_store_membership_add(flowie_control_store_t *store,
   (void)sqlite3_finalize(statement);
   statement = NULL;
   if (rc != TURBO_OK) goto done;
-  rc = flowie_control_effective_groups_database(database, command->root_group_id,
+  rc = flowie_control_effective_groups_database(database, command->domain_id,
                                                 command->principal_id, &effective);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_advance_revision(database, current, &next);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(
       database, command->request_id, command->actor, FLOWIE_CONTROL_OPERATION_MEMBERSHIP_ADD,
-      command->root_group_id, command->principal_id, command->group_id, next, command->occurred_at);
+      command->domain_id, command->principal_id, command->group_id, next, command->occurred_at);
   if (rc != TURBO_OK) goto done;
   result->revision = next;
   result->replayed = 0;
@@ -2293,11 +2352,11 @@ int flowie_control_store_membership_remove(
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->principal_id,
+      !flowie_control_command_common_valid(command->domain_id, command->principal_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
-      strcmp(command->group_id, command->root_group_id) == 0)
+      strcmp(command->group_id, command->domain_id) == 0)
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) return rc;
@@ -2308,26 +2367,26 @@ int flowie_control_store_membership_remove(
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_MEMBERSHIP_REMOVE, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_MEMBERSHIP_REMOVE, command->domain_id,
                              command->principal_id, command->group_id, result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
   status = sqlite3_prepare_v2(
       database,
-      "DELETE FROM flowie_control_membership WHERE root_group_id=?1 AND principal_id=?2 AND "
+      "DELETE FROM flowie_control_membership WHERE domain_id=?1 AND principal_id=?2 AND "
       "group_id=?3",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, command->principal_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 3, command->group_id);
   if (rc == TURBO_OK) {
@@ -2343,7 +2402,7 @@ int flowie_control_store_membership_remove(
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(
       database, command->request_id, command->actor, FLOWIE_CONTROL_OPERATION_MEMBERSHIP_REMOVE,
-      command->root_group_id, command->principal_id, command->group_id, next, command->occurred_at);
+      command->domain_id, command->principal_id, command->group_id, next, command->occurred_at);
   if (rc != TURBO_OK) goto done;
   result->revision = next;
   result->replayed = 0;
@@ -2365,7 +2424,7 @@ done:
   return rc;
 }
 
-int flowie_control_store_effective_groups(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_effective_groups(flowie_control_store_t *store, const char *domain_id,
                                           const char *principal_id,
                                           flowie_control_effective_groups_view_t *out) {
   sqlite3 *database = NULL;
@@ -2373,16 +2432,16 @@ int flowie_control_store_effective_groups(flowie_control_store_t *store, const c
   int enabled = 0;
   int rc;
   if (out && out->size >= sizeof(*out)) *out = view;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX) || !out ||
       out->size < sizeof(*out))
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) return rc;
-  rc = flowie_control_user_enabled(database, root_group_id, principal_id, &enabled);
+  rc = flowie_control_user_enabled(database, domain_id, principal_id, &enabled);
   if (rc == TURBO_OK && !enabled) rc = TURBO_EPERM;
   if (rc == TURBO_OK)
-    rc = flowie_control_effective_groups_database(database, root_group_id, principal_id, &view);
+    rc = flowie_control_effective_groups_database(database, domain_id, principal_id, &view);
   (void)sqlite3_close(database);
   if (rc == TURBO_OK) *out = view;
   return rc;
@@ -2395,8 +2454,6 @@ int flowie_control_store_role_create(flowie_control_store_t *store,
   sqlite3_stmt *statement = NULL;
   uint64_t current = 0u;
   uint64_t next = 0u;
-  uint32_t root_depth = 0u;
-  int root_enabled = 0;
   int transaction_started = 0;
   int found = 0;
   int status;
@@ -2405,7 +2462,7 @@ int flowie_control_store_role_create(flowie_control_store_t *store,
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->role_id, command->actor,
+      !flowie_control_command_common_valid(command->domain_id, command->role_id, command->actor,
                                            command->request_id, command->expected_revision,
                                            command->occurred_at) ||
       !flowie_control_text_valid(command->role_id, TURBO_FLOW_SECURITY_TYPE_MAX))
@@ -2419,23 +2476,18 @@ int flowie_control_store_role_create(flowie_control_store_t *store,
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_ROLE_CREATE, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_ROLE_CREATE, command->domain_id,
                              command->role_id, FLOWIE_CONTROL_TARGET_ROLE, result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_group_lookup(database, command->root_group_id, command->root_group_id,
-                                   &root_depth, &root_enabled);
+  rc = flowie_control_domain_exists(database, command->domain_id);
   if (rc != TURBO_OK) goto done;
-  if (root_depth != 0u || !root_enabled) {
-    rc = TURBO_EPERM;
-    goto done;
-  }
   if (current >= (uint64_t)INT64_MAX) {
     rc = TURBO_ERANGE;
     goto done;
@@ -2443,14 +2495,14 @@ int flowie_control_store_role_create(flowie_control_store_t *store,
   next = current + 1u;
   status = sqlite3_prepare_v2(
       database,
-      "INSERT INTO flowie_control_role(root_group_id,role_id,enabled,revision,created_at,"
+      "INSERT INTO flowie_control_role(domain_id,role_id,enabled,revision,created_at,"
       "updated_at) VALUES(?1,?2,1,?3,?4,?4)",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, command->role_id);
   if (rc == TURBO_OK && sqlite3_bind_int64(statement, 3, (sqlite3_int64)next) != SQLITE_OK)
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
@@ -2470,7 +2522,7 @@ int flowie_control_store_role_create(flowie_control_store_t *store,
   rc = flowie_control_advance_revision(database, current, &next);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(database, command->request_id, command->actor,
-                                   FLOWIE_CONTROL_OPERATION_ROLE_CREATE, command->root_group_id,
+                                   FLOWIE_CONTROL_OPERATION_ROLE_CREATE, command->domain_id,
                                    command->role_id, FLOWIE_CONTROL_TARGET_ROLE, next,
                                    command->occurred_at);
   if (rc != TURBO_OK) goto done;
@@ -2511,7 +2563,7 @@ int flowie_control_store_role_disable(flowie_control_store_t *store,
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->role_id, command->actor,
+      !flowie_control_command_common_valid(command->domain_id, command->role_id, command->actor,
                                            command->request_id, command->expected_revision,
                                            command->occurred_at) ||
       !flowie_control_text_valid(command->role_id, TURBO_FLOW_SECURITY_TYPE_MAX))
@@ -2525,24 +2577,24 @@ int flowie_control_store_role_disable(flowie_control_store_t *store,
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_ROLE_DISABLE, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_ROLE_DISABLE, command->domain_id,
                              command->role_id, FLOWIE_CONTROL_TARGET_ROLE, result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_role_enabled(database, command->root_group_id, command->role_id,
+  rc = flowie_control_role_enabled(database, command->domain_id, command->role_id,
                                    &role_enabled);
   if (rc != TURBO_OK) goto done;
   if (!role_enabled) {
     rc = TURBO_EALREADY;
     goto done;
   }
-  rc = flowie_control_policy_subject_referenced(database, command->root_group_id,
+  rc = flowie_control_policy_subject_referenced(database, command->domain_id,
                                                 TURBO_FLOW_SECURITY_SUBJECT_ROLE, command->role_id,
                                                 &policy_reference);
   if (rc != TURBO_OK) goto done;
@@ -2554,7 +2606,7 @@ int flowie_control_store_role_disable(flowie_control_store_t *store,
   if (rc != TURBO_OK) goto done;
   status = sqlite3_prepare_v2(
       database,
-      "UPDATE flowie_control_role SET enabled=0,revision=?1,updated_at=?2 WHERE root_group_id=?3 "
+      "UPDATE flowie_control_role SET enabled=0,revision=?1,updated_at=?2 WHERE domain_id=?3 "
       "AND role_id=?4 AND enabled=1",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
@@ -2566,7 +2618,7 @@ int flowie_control_store_role_disable(flowie_control_store_t *store,
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 3, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 3, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 4, command->role_id);
   if (rc == TURBO_OK) {
     status = sqlite3_step(statement);
@@ -2578,7 +2630,7 @@ int flowie_control_store_role_disable(flowie_control_store_t *store,
   statement = NULL;
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(database, command->request_id, command->actor,
-                                   FLOWIE_CONTROL_OPERATION_ROLE_DISABLE, command->root_group_id,
+                                   FLOWIE_CONTROL_OPERATION_ROLE_DISABLE, command->domain_id,
                                    command->role_id, FLOWIE_CONTROL_TARGET_ROLE, next,
                                    command->occurred_at);
   if (rc != TURBO_OK) goto done;
@@ -2620,7 +2672,7 @@ int flowie_control_store_user_role_add(flowie_control_store_t *store,
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->principal_id,
+      !flowie_control_command_common_valid(command->domain_id, command->principal_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->role_id, TURBO_FLOW_SECURITY_TYPE_MAX))
@@ -2634,24 +2686,24 @@ int flowie_control_store_user_role_add(flowie_control_store_t *store,
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_USER_ROLE_ADD, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_USER_ROLE_ADD, command->domain_id,
                              command->principal_id, command->role_id, result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_user_enabled(database, command->root_group_id, command->principal_id,
+  rc = flowie_control_user_enabled(database, command->domain_id, command->principal_id,
                                    &user_enabled);
   if (rc != TURBO_OK) goto done;
   if (!user_enabled) {
     rc = TURBO_EPERM;
     goto done;
   }
-  rc = flowie_control_role_enabled(database, command->root_group_id, command->role_id,
+  rc = flowie_control_role_enabled(database, command->domain_id, command->role_id,
                                    &role_enabled);
   if (rc != TURBO_OK) goto done;
   if (!role_enabled) {
@@ -2666,14 +2718,14 @@ int flowie_control_store_user_role_add(flowie_control_store_t *store,
   status = sqlite3_prepare_v2(
       database,
       "INSERT INTO "
-      "flowie_control_user_role(root_group_id,principal_id,role_id,revision,created_at) "
+      "flowie_control_user_role(domain_id,principal_id,role_id,revision,created_at) "
       "VALUES(?1,?2,?3,?4,?5)",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, command->principal_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 3, command->role_id);
   if (rc == TURBO_OK && sqlite3_bind_int64(statement, 4, (sqlite3_int64)next) != SQLITE_OK)
@@ -2691,14 +2743,14 @@ int flowie_control_store_user_role_add(flowie_control_store_t *store,
   (void)sqlite3_finalize(statement);
   statement = NULL;
   if (rc != TURBO_OK) goto done;
-  rc = flowie_control_effective_roles_database(database, command->root_group_id,
+  rc = flowie_control_effective_roles_database(database, command->domain_id,
                                                command->principal_id, &effective);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_advance_revision(database, current, &next);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(
       database, command->request_id, command->actor, FLOWIE_CONTROL_OPERATION_USER_ROLE_ADD,
-      command->root_group_id, command->principal_id, command->role_id, next, command->occurred_at);
+      command->domain_id, command->principal_id, command->role_id, next, command->occurred_at);
   if (rc != TURBO_OK) goto done;
   result->revision = next;
   result->replayed = 0;
@@ -2735,7 +2787,7 @@ int flowie_control_store_user_role_remove(flowie_control_store_t *store,
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->principal_id,
+      !flowie_control_command_common_valid(command->domain_id, command->principal_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->role_id, TURBO_FLOW_SECURITY_TYPE_MAX))
@@ -2749,26 +2801,26 @@ int flowie_control_store_user_role_remove(flowie_control_store_t *store,
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_USER_ROLE_REMOVE, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_USER_ROLE_REMOVE, command->domain_id,
                              command->principal_id, command->role_id, result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
   status = sqlite3_prepare_v2(
       database,
-      "DELETE FROM flowie_control_user_role WHERE root_group_id=?1 AND principal_id=?2 AND "
+      "DELETE FROM flowie_control_user_role WHERE domain_id=?1 AND principal_id=?2 AND "
       "role_id=?3",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, command->principal_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 3, command->role_id);
   if (rc == TURBO_OK) {
@@ -2784,7 +2836,7 @@ int flowie_control_store_user_role_remove(flowie_control_store_t *store,
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(
       database, command->request_id, command->actor, FLOWIE_CONTROL_OPERATION_USER_ROLE_REMOVE,
-      command->root_group_id, command->principal_id, command->role_id, next, command->occurred_at);
+      command->domain_id, command->principal_id, command->role_id, next, command->occurred_at);
   if (rc != TURBO_OK) goto done;
   result->revision = next;
   result->replayed = 0;
@@ -2806,7 +2858,7 @@ done:
   return rc;
 }
 
-int flowie_control_store_effective_roles(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_effective_roles(flowie_control_store_t *store, const char *domain_id,
                                          const char *principal_id,
                                          flowie_control_effective_roles_view_t *out) {
   sqlite3 *database = NULL;
@@ -2814,16 +2866,16 @@ int flowie_control_store_effective_roles(flowie_control_store_t *store, const ch
   int enabled = 0;
   int rc;
   if (out && out->size >= sizeof(*out)) *out = view;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       !flowie_control_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX) || !out ||
       out->size < sizeof(*out))
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) return rc;
-  rc = flowie_control_user_enabled(database, root_group_id, principal_id, &enabled);
+  rc = flowie_control_user_enabled(database, domain_id, principal_id, &enabled);
   if (rc == TURBO_OK && !enabled) rc = TURBO_EPERM;
   if (rc == TURBO_OK)
-    rc = flowie_control_effective_roles_database(database, root_group_id, principal_id, &view);
+    rc = flowie_control_effective_roles_database(database, domain_id, principal_id, &view);
   (void)sqlite3_close(database);
   if (rc == TURBO_OK) *out = view;
   return rc;
@@ -2847,7 +2899,7 @@ int flowie_control_store_policy_rule_put(flowie_control_store_t *store,
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) || command->ordinal >= TURBO_FLOW_SECURITY_MAX_RULES ||
-      !flowie_control_command_common_valid(command->root_group_id, command->root_group_id,
+      !flowie_control_command_common_valid(command->domain_id, command->domain_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at) ||
       !command->rule_line ||
@@ -2864,17 +2916,17 @@ int flowie_control_store_policy_rule_put(flowie_control_store_t *store,
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_POLICY_RULE_PUT, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_POLICY_RULE_PUT, command->domain_id,
                              target, command->rule_line, result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_policy_rule_validate(database, command->root_group_id, command->rule_line,
+  rc = flowie_control_policy_rule_validate(database, command->domain_id, command->rule_line,
                                            line_size, &rule);
   if (rc != TURBO_OK) goto done;
   if (current >= (uint64_t)INT64_MAX) {
@@ -2884,15 +2936,15 @@ int flowie_control_store_policy_rule_put(flowie_control_store_t *store,
   next = current + 1u;
   status = sqlite3_prepare_v2(
       database,
-      "INSERT INTO flowie_control_policy_draft(root_group_id,ordinal,rule_line,revision,updated_at)"
-      " VALUES(?1,?2,?3,?4,?5) ON CONFLICT(root_group_id,ordinal) DO UPDATE SET "
+      "INSERT INTO flowie_control_policy_draft(domain_id,ordinal,rule_line,revision,updated_at)"
+      " VALUES(?1,?2,?3,?4,?5) ON CONFLICT(domain_id,ordinal) DO UPDATE SET "
       "rule_line=excluded.rule_line,revision=excluded.revision,updated_at=excluded.updated_at",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK && sqlite3_bind_int64(statement, 2, command->ordinal) != SQLITE_OK)
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 3, command->rule_line);
@@ -2911,7 +2963,7 @@ int flowie_control_store_policy_rule_put(flowie_control_store_t *store,
   rc = flowie_control_advance_revision(database, current, &next);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(database, command->request_id, command->actor,
-                                   FLOWIE_CONTROL_OPERATION_POLICY_RULE_PUT, command->root_group_id,
+                                   FLOWIE_CONTROL_OPERATION_POLICY_RULE_PUT, command->domain_id,
                                    target, command->rule_line, next, command->occurred_at);
   if (rc != TURBO_OK) goto done;
   result->revision = next;
@@ -2950,7 +3002,7 @@ int flowie_control_store_policy_rule_delete(
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) || command->ordinal >= TURBO_FLOW_SECURITY_MAX_RULES ||
-      !flowie_control_command_common_valid(command->root_group_id, command->root_group_id,
+      !flowie_control_command_common_valid(command->domain_id, command->domain_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at) ||
       flowie_control_policy_target(command->ordinal, target) != TURBO_OK)
@@ -2964,24 +3016,24 @@ int flowie_control_store_policy_rule_delete(
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_POLICY_RULE_DELETE, command->root_group_id,
+                             FLOWIE_CONTROL_OPERATION_POLICY_RULE_DELETE, command->domain_id,
                              target, FLOWIE_CONTROL_TARGET_POLICY_RULE, result, &found);
   if (rc != TURBO_OK) goto done;
   if (found) goto commit;
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
   status = sqlite3_prepare_v2(
-      database, "DELETE FROM flowie_control_policy_draft WHERE root_group_id=?1 AND ordinal=?2", -1,
+      database, "DELETE FROM flowie_control_policy_draft WHERE domain_id=?1 AND ordinal=?2", -1,
       &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK && sqlite3_bind_int64(statement, 2, command->ordinal) != SQLITE_OK)
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
   if (rc == TURBO_OK) {
@@ -2997,7 +3049,7 @@ int flowie_control_store_policy_rule_delete(
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(database, command->request_id, command->actor,
                                    FLOWIE_CONTROL_OPERATION_POLICY_RULE_DELETE,
-                                   command->root_group_id, target,
+                                   command->domain_id, target,
                                    FLOWIE_CONTROL_TARGET_POLICY_RULE, next, command->occurred_at);
   if (rc != TURBO_OK) goto done;
   result->revision = next;
@@ -3020,7 +3072,7 @@ done:
   return rc;
 }
 
-int flowie_control_store_policy_validate(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_policy_validate(flowie_control_store_t *store, const char *domain_id,
                                          flowie_control_policy_validation_t *out) {
   sqlite3 *database = NULL;
   flowie_control_policy_validation_t validation = FLOWIE_CONTROL_POLICY_VALIDATION_INIT;
@@ -3029,7 +3081,7 @@ int flowie_control_store_policy_validate(flowie_control_store_t *store, const ch
   int rc;
   if (out && out->size >= sizeof(*out))
     *out = (flowie_control_policy_validation_t)FLOWIE_CONTROL_POLICY_VALIDATION_INIT;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) || !out ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) || !out ||
       out->size < sizeof(*out))
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
@@ -3040,7 +3092,7 @@ int flowie_control_store_policy_validate(flowie_control_store_t *store, const ch
     goto done;
   }
   transaction_started = 1;
-  rc = flowie_control_policy_validate_database(database, root_group_id, &validation);
+  rc = flowie_control_policy_validate_database(database, domain_id, &validation);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_exec(database, "COMMIT", NULL, NULL, NULL);
   if (status != SQLITE_OK) {
@@ -3057,7 +3109,7 @@ done:
   return rc;
 }
 
-int flowie_control_store_policy_rule_list(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_policy_rule_list(flowie_control_store_t *store, const char *domain_id,
                                           uint32_t after_ordinal, int has_after,
                                           flowie_control_policy_rule_view_t *items,
                                           size_t item_capacity, size_t *count_out,
@@ -3069,7 +3121,7 @@ int flowie_control_store_policy_rule_list(flowie_control_store_t *store, const c
   int rc;
   if (count_out) *count_out = 0u;
   if (has_more_out) *has_more_out = 0;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) || !items ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) || !items ||
       item_capacity == 0u || item_capacity > FLOWIE_CONTROL_PAGE_MAX || !count_out ||
       !has_more_out || (has_after != 0 && has_after != 1))
     return TURBO_EINVAL;
@@ -3082,13 +3134,13 @@ int flowie_control_store_policy_rule_list(flowie_control_store_t *store, const c
   status = sqlite3_prepare_v2(
       database,
       "SELECT ordinal,rule_line,revision,updated_at FROM flowie_control_policy_draft "
-      "WHERE root_group_id=?1 AND (?2=0 OR ordinal>?3) ORDER BY ordinal LIMIT ?4",
+      "WHERE domain_id=?1 AND (?2=0 OR ordinal>?3) ORDER BY ordinal LIMIT ?4",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK && sqlite3_bind_int(statement, 2, has_after) != SQLITE_OK)
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
   if (rc == TURBO_OK && sqlite3_bind_int64(statement, 3, after_ordinal) != SQLITE_OK)
@@ -3140,7 +3192,7 @@ done:
   return rc;
 }
 
-int flowie_control_store_policy_status(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_policy_status(flowie_control_store_t *store, const char *domain_id,
                                        flowie_control_policy_status_t *out) {
   flowie_control_policy_status_t view = FLOWIE_CONTROL_POLICY_STATUS_INIT;
   sqlite3 *database = NULL;
@@ -3151,7 +3203,7 @@ int flowie_control_store_policy_status(flowie_control_store_t *store, const char
   int rc;
   if (out && out->size >= sizeof(*out))
     *out = (flowie_control_policy_status_t)FLOWIE_CONTROL_POLICY_STATUS_INIT;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) || !out ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) || !out ||
       out->size < sizeof(*out))
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
@@ -3160,7 +3212,7 @@ int flowie_control_store_policy_status(flowie_control_store_t *store, const char
   if (rc != TURBO_OK) goto done;
   status = sqlite3_prepare_v2(
       database,
-      "SELECT (SELECT COUNT(*) FROM flowie_control_policy_draft WHERE root_group_id=?1),"
+      "SELECT (SELECT COUNT(*) FROM flowie_control_policy_draft WHERE domain_id=?1),"
       "b.policy_version,b.expires_at,(SELECT COUNT(*) FROM turbo_flow_acl_rule_v3 "
       "WHERE namespace_name=?1) FROM turbo_flow_acl_bundle_v3 b WHERE b.namespace_name=?1",
       -1, &statement, NULL);
@@ -3168,20 +3220,20 @@ int flowie_control_store_policy_status(flowie_control_store_t *store, const char
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
   if (status == SQLITE_DONE) {
     (void)sqlite3_finalize(statement);
     statement = NULL;
     status = sqlite3_prepare_v2(
-        database, "SELECT COUNT(*) FROM flowie_control_policy_draft WHERE root_group_id=?1", -1,
+        database, "SELECT COUNT(*) FROM flowie_control_policy_draft WHERE domain_id=?1", -1,
         &statement, NULL);
     if (status != SQLITE_OK) {
       rc = flowie_control_sqlite_status(status);
       goto done;
     }
-    rc = flowie_control_bind_text(statement, 1, root_group_id);
+    rc = flowie_control_bind_text(statement, 1, domain_id);
     if (rc != TURBO_OK) goto done;
     status = sqlite3_step(statement);
     if (status != SQLITE_ROW || sqlite3_column_type(statement, 0) != SQLITE_INTEGER ||
@@ -3229,7 +3281,7 @@ void flowie_control_store_policy_bundle_release(turbo_flow_security_policy_bundl
 }
 
 int flowie_control_store_policy_bundle_load(flowie_control_store_t *store,
-                                            const char *root_group_id, uint64_t required_version,
+                                            const char *domain_id, uint64_t required_version,
                                             turbo_flow_security_policy_bundle_t *bundle_out) {
   flowie_control_policy_bundle_owner_t *owner = NULL;
   sqlite3 *database = NULL;
@@ -3244,7 +3296,7 @@ int flowie_control_store_policy_bundle_load(flowie_control_store_t *store,
   int rc;
   if (bundle_out && bundle_out->size >= sizeof(*bundle_out))
     *bundle_out = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       required_version > (uint64_t)INT64_MAX || !bundle_out ||
       bundle_out->size < sizeof(*bundle_out))
     return TURBO_EINVAL;
@@ -3267,7 +3319,7 @@ int flowie_control_store_policy_bundle_load(flowie_control_store_t *store,
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK &&
       sqlite3_bind_int64(statement, 2, (sqlite3_int64)required_version) != SQLITE_OK)
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
@@ -3310,7 +3362,7 @@ int flowie_control_store_policy_bundle_load(flowie_control_store_t *store,
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc != TURBO_OK) goto done;
   while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
     const unsigned char *line;
@@ -3330,7 +3382,7 @@ int flowie_control_store_policy_bundle_load(flowie_control_store_t *store,
         memchr(line, '\0', (size_t)line_size) ||
         turbo_flow_security_rule_parse_line((const char *)line, (size_t)line_size, &rule) !=
             TURBO_OK ||
-        strcmp(rule.root_group_id, root_group_id) != 0) {
+        strcmp(rule.domain_id, domain_id) != 0) {
       rc = TURBO_EPROTO;
       goto done;
     }
@@ -3392,7 +3444,7 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
     *result = (flowie_control_policy_publish_result_t)FLOWIE_CONTROL_POLICY_PUBLISH_RESULT_INIT;
   if (!store || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_command_common_valid(command->root_group_id, command->root_group_id,
+      !flowie_control_command_common_valid(command->domain_id, command->domain_id,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at) ||
       command->expires_at > (uint64_t)INT64_MAX ||
@@ -3408,8 +3460,8 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
   }
   transaction_started = 1;
   rc = flowie_control_replay(database, command->request_id, command->actor,
-                             FLOWIE_CONTROL_OPERATION_POLICY_PUBLISH, command->root_group_id,
-                             command->root_group_id, publish_detail, &replay, &found);
+                             FLOWIE_CONTROL_OPERATION_POLICY_PUBLISH, command->domain_id,
+                             command->domain_id, publish_detail, &replay, &found);
   if (rc != TURBO_OK) goto done;
   if (found) {
     status = sqlite3_prepare_v2(
@@ -3437,11 +3489,11 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
   }
   rc = flowie_control_read_revision(database, &current);
   if (rc != TURBO_OK) goto done;
-  if (current != command->expected_revision) {
+  if (command->expected_revision != 0u && current != command->expected_revision) {
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_policy_validate_database(database, command->root_group_id, &validation);
+  rc = flowie_control_policy_validate_database(database, command->domain_id, &validation);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_prepare_v2(
       database, "SELECT policy_version FROM turbo_flow_acl_bundle_v3 WHERE namespace_name=?1", -1,
@@ -3450,7 +3502,7 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
   if (status == SQLITE_ROW) {
@@ -3477,7 +3529,7 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK) {
     status = sqlite3_step(statement);
     rc = status == SQLITE_DONE ? TURBO_OK : flowie_control_sqlite_status(status);
@@ -3495,7 +3547,7 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, command->root_group_id);
+  rc = flowie_control_bind_text(statement, 1, command->domain_id);
   if (rc == TURBO_OK && sqlite3_bind_int64(statement, 2, (sqlite3_int64)next_policy) != SQLITE_OK)
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
   if (rc == TURBO_OK &&
@@ -3510,7 +3562,7 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
   if (rc != TURBO_OK) goto done;
   status = sqlite3_prepare_v2(
       database,
-      "SELECT rule_line FROM flowie_control_policy_draft WHERE root_group_id=?1 ORDER BY ordinal",
+      "SELECT rule_line FROM flowie_control_policy_draft WHERE domain_id=?1 ORDER BY ordinal",
       -1, &draft, NULL);
   if (status == SQLITE_OK)
     status = sqlite3_prepare_v2(
@@ -3521,7 +3573,7 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(draft, 1, command->root_group_id);
+  rc = flowie_control_bind_text(draft, 1, command->domain_id);
   if (rc != TURBO_OK) goto done;
   while ((status = sqlite3_step(draft)) == SQLITE_ROW) {
     const unsigned char *line;
@@ -3538,7 +3590,7 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
     }
     (void)sqlite3_reset(insert_rule);
     (void)sqlite3_clear_bindings(insert_rule);
-    rc = flowie_control_bind_text(insert_rule, 1, command->root_group_id);
+    rc = flowie_control_bind_text(insert_rule, 1, command->domain_id);
     if (rc == TURBO_OK && sqlite3_bind_int64(insert_rule, 2, (sqlite3_int64)ordinal) != SQLITE_OK)
       rc = flowie_control_sqlite_status(sqlite3_errcode(database));
     if (rc == TURBO_OK && sqlite3_bind_text(insert_rule, 3, (const char *)line, line_size,
@@ -3563,7 +3615,7 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_insert_audit(
       database, command->request_id, command->actor, FLOWIE_CONTROL_OPERATION_POLICY_PUBLISH,
-      command->root_group_id, command->root_group_id, publish_detail, next, command->occurred_at);
+      command->domain_id, command->domain_id, publish_detail, next, command->occurred_at);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_prepare_v2(
       database,
@@ -3609,29 +3661,27 @@ done:
 
 typedef int (*flowie_control_page_row_fn)(sqlite3_stmt *statement, void *item);
 
-int flowie_control_store_root_group_get(flowie_control_store_t *store, const char *root_group_id,
-                                        flowie_control_root_group_view_t *out) {
+int flowie_control_store_domain_get(flowie_control_store_t *store, const char *domain_id,
+                                        flowie_control_domain_view_t *out) {
   sqlite3 *database = NULL;
   sqlite3_stmt *statement = NULL;
-  flowie_control_root_group_view_t view = FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT;
+  flowie_control_domain_view_t view = FLOWIE_CONTROL_DOMAIN_VIEW_INIT;
   int status;
   int rc;
   if (out && out->size >= sizeof(*out)) *out = view;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) || !out ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) || !out ||
       out->size < sizeof(*out))
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) return rc;
   status = sqlite3_prepare_v2(
-      database,
-      "SELECT root_group_id FROM flowie_control_group WHERE root_group_id=?1 AND group_id=?1 "
-      "AND parent_group_id IS NULL AND depth=0 AND enabled=1",
+      database, "SELECT domain_id FROM flowie_control_domain WHERE domain_id=?1",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc != TURBO_OK) goto done;
   status = sqlite3_step(statement);
   if (status == SQLITE_DONE) {
@@ -3642,8 +3692,8 @@ int flowie_control_store_root_group_get(flowie_control_store_t *store, const cha
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_copy_column(statement, 0, view.root_group_id,
-                                  sizeof(view.root_group_id));
+  rc = flowie_control_copy_column(statement, 0, view.domain_id,
+                                  sizeof(view.domain_id));
   if (rc == TURBO_OK && sqlite3_step(statement) != SQLITE_DONE) rc = TURBO_EPROTO;
   if (rc == TURBO_OK) *out = view;
 
@@ -3653,9 +3703,9 @@ done:
   return rc;
 }
 
-int flowie_control_store_root_group_list(flowie_control_store_t *store,
-                                         const char *after_root_group_id,
-                                         flowie_control_root_group_view_t *items,
+int flowie_control_store_domain_list(flowie_control_store_t *store,
+                                         const char *after_domain_id,
+                                         flowie_control_domain_view_t *items,
                                          size_t item_capacity, size_t *count_out,
                                          int *has_more_out) {
   sqlite3 *database = NULL;
@@ -3666,29 +3716,28 @@ int flowie_control_store_root_group_list(flowie_control_store_t *store,
   if (count_out) *count_out = 0u;
   if (has_more_out) *has_more_out = 0;
   if (!store ||
-      (after_root_group_id &&
-       !flowie_control_text_valid(after_root_group_id, TURBO_FLOW_SECURITY_ID_MAX)) ||
+      (after_domain_id &&
+       !flowie_control_text_valid(after_domain_id, TURBO_FLOW_SECURITY_ID_MAX)) ||
       !items || item_capacity == 0u || item_capacity > FLOWIE_CONTROL_PAGE_MAX || !count_out ||
       !has_more_out)
     return TURBO_EINVAL;
   for (size_t index = 0u; index < item_capacity; ++index) {
     if (items[index].size < sizeof(items[index])) return TURBO_EINVAL;
-    items[index] = (flowie_control_root_group_view_t)FLOWIE_CONTROL_ROOT_GROUP_VIEW_INIT;
+    items[index] = (flowie_control_domain_view_t)FLOWIE_CONTROL_DOMAIN_VIEW_INIT;
   }
   rc = flowie_control_open_database(store, &database);
   if (rc != TURBO_OK) return rc;
   status = sqlite3_prepare_v2(
       database,
-      "SELECT root_group_id FROM flowie_control_group WHERE group_id=root_group_id "
-      "AND parent_group_id IS NULL AND depth=0 AND enabled=1 "
-      "AND (?1='' OR root_group_id>?1) ORDER BY root_group_id LIMIT ?2",
+      "SELECT domain_id FROM flowie_control_domain "
+      "WHERE (?1='' OR domain_id>?1) ORDER BY domain_id LIMIT ?2",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
   rc = flowie_control_bind_text(statement, 1,
-                                after_root_group_id ? after_root_group_id : "");
+                                after_domain_id ? after_domain_id : "");
   if (rc == TURBO_OK &&
       sqlite3_bind_int64(statement, 2, (sqlite3_int64)(item_capacity + 1u)) != SQLITE_OK)
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
@@ -3698,8 +3747,8 @@ int flowie_control_store_root_group_list(flowie_control_store_t *store,
       *has_more_out = 1;
       continue;
     }
-    rc = flowie_control_copy_column(statement, 0, items[count].root_group_id,
-                                    sizeof(items[count].root_group_id));
+    rc = flowie_control_copy_column(statement, 0, items[count].domain_id,
+                                    sizeof(items[count].domain_id));
     if (rc != TURBO_OK) goto done;
     ++count;
   }
@@ -3721,12 +3770,12 @@ done:
 }
 
 static int flowie_control_page_arguments_valid(flowie_control_store_t *store,
-                                               const char *root_group_id, const char *after_id,
+                                               const char *domain_id, const char *after_id,
                                                const void *items, size_t item_size,
                                                size_t item_capacity, size_t *count_out,
                                                int *has_more_out) {
   const uint8_t *cursor = (const uint8_t *)items;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) ||
       (after_id && !flowie_control_text_valid(after_id, TURBO_FLOW_SECURITY_ID_MAX)) || !items ||
       item_size < sizeof(size_t) || item_capacity == 0u ||
       item_capacity > FLOWIE_CONTROL_PAGE_MAX || !count_out || !has_more_out)
@@ -3737,7 +3786,7 @@ static int flowie_control_page_arguments_valid(flowie_control_store_t *store,
   return 1;
 }
 
-static int flowie_control_text_page(flowie_control_store_t *store, const char *root_group_id,
+static int flowie_control_text_page(flowie_control_store_t *store, const char *domain_id,
                                     const char *after_id, const char *sql, void *items,
                                     size_t item_size, size_t item_capacity,
                                     flowie_control_page_row_fn decode, size_t *count_out,
@@ -3751,7 +3800,7 @@ static int flowie_control_text_page(flowie_control_store_t *store, const char *r
   if (count_out) *count_out = 0u;
   if (has_more_out) *has_more_out = 0;
   if (!sql || !decode ||
-      !flowie_control_page_arguments_valid(store, root_group_id, after_id, items, item_size,
+      !flowie_control_page_arguments_valid(store, domain_id, after_id, items, item_size,
                                            item_capacity, count_out, has_more_out))
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
@@ -3761,7 +3810,7 @@ static int flowie_control_text_page(flowie_control_store_t *store, const char *r
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, after_id ? after_id : "");
   if (rc == TURBO_OK &&
       sqlite3_bind_int64(statement, 3, (sqlite3_int64)(item_capacity + 1u)) != SQLITE_OK)
@@ -3810,7 +3859,7 @@ static int flowie_control_user_page_row(sqlite3_stmt *statement, void *item) {
       (updated_at = sqlite3_column_int64(statement, 6)) <= 0)
     return TURBO_EPROTO;
   *view = (flowie_control_user_view_t)FLOWIE_CONTROL_USER_VIEW_INIT;
-  rc = flowie_control_copy_column(statement, 0, view->root_group_id, sizeof(view->root_group_id));
+  rc = flowie_control_copy_column(statement, 0, view->domain_id, sizeof(view->domain_id));
   if (rc == TURBO_OK)
     rc = flowie_control_copy_column(statement, 1, view->principal_id, sizeof(view->principal_id));
   if (rc == TURBO_OK)
@@ -3844,7 +3893,7 @@ static int flowie_control_group_page_row(sqlite3_stmt *statement, void *item) {
       (updated_at = sqlite3_column_int64(statement, 7)) <= 0)
     return TURBO_EPROTO;
   *view = (flowie_control_group_view_t)FLOWIE_CONTROL_GROUP_VIEW_INIT;
-  rc = flowie_control_copy_column(statement, 0, view->root_group_id, sizeof(view->root_group_id));
+  rc = flowie_control_copy_column(statement, 0, view->domain_id, sizeof(view->domain_id));
   if (rc == TURBO_OK)
     rc = flowie_control_copy_column(statement, 1, view->group_id, sizeof(view->group_id));
   if (rc == TURBO_OK && sqlite3_column_type(statement, 2) != SQLITE_NULL)
@@ -3876,7 +3925,7 @@ static int flowie_control_role_page_row(sqlite3_stmt *statement, void *item) {
       (updated_at = sqlite3_column_int64(statement, 5)) <= 0)
     return TURBO_EPROTO;
   *view = (flowie_control_role_view_t)FLOWIE_CONTROL_ROLE_VIEW_INIT;
-  rc = flowie_control_copy_column(statement, 0, view->root_group_id, sizeof(view->root_group_id));
+  rc = flowie_control_copy_column(statement, 0, view->domain_id, sizeof(view->domain_id));
   if (rc == TURBO_OK)
     rc = flowie_control_copy_column(statement, 1, view->role_id, sizeof(view->role_id));
   if (rc != TURBO_OK) return rc;
@@ -3887,44 +3936,44 @@ static int flowie_control_role_page_row(sqlite3_stmt *statement, void *item) {
   return TURBO_OK;
 }
 
-int flowie_control_store_user_list(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_user_list(flowie_control_store_t *store, const char *domain_id,
                                    const char *after_principal_id,
                                    flowie_control_user_view_t *items, size_t item_capacity,
                                    size_t *count_out, int *has_more_out) {
   static const char sql[] =
-      "SELECT root_group_id,principal_id,principal_type,enabled,revision,created_at,updated_at "
-      "FROM flowie_control_user WHERE root_group_id=?1 AND (?2='' OR principal_id>?2) "
+      "SELECT domain_id,principal_id,principal_type,enabled,revision,created_at,updated_at "
+      "FROM flowie_control_user WHERE domain_id=?1 AND (?2='' OR principal_id>?2) "
       "ORDER BY principal_id LIMIT ?3";
-  return flowie_control_text_page(store, root_group_id, after_principal_id, sql, items,
+  return flowie_control_text_page(store, domain_id, after_principal_id, sql, items,
                                   sizeof(*items), item_capacity, flowie_control_user_page_row,
                                   count_out, has_more_out);
 }
 
-int flowie_control_store_group_list(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_group_list(flowie_control_store_t *store, const char *domain_id,
                                     const char *after_group_id, flowie_control_group_view_t *items,
                                     size_t item_capacity, size_t *count_out, int *has_more_out) {
   static const char sql[] =
-      "SELECT root_group_id,group_id,parent_group_id,depth,enabled,revision,created_at,updated_at "
-      "FROM flowie_control_group WHERE root_group_id=?1 AND (?2='' OR group_id>?2) "
+      "SELECT domain_id,group_id,parent_group_id,depth,enabled,revision,created_at,updated_at "
+      "FROM flowie_control_group WHERE domain_id=?1 AND (?2='' OR group_id>?2) "
       "ORDER BY group_id LIMIT ?3";
-  return flowie_control_text_page(store, root_group_id, after_group_id, sql, items, sizeof(*items),
+  return flowie_control_text_page(store, domain_id, after_group_id, sql, items, sizeof(*items),
                                   item_capacity, flowie_control_group_page_row, count_out,
                                   has_more_out);
 }
 
-int flowie_control_store_role_list(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_role_list(flowie_control_store_t *store, const char *domain_id,
                                    const char *after_role_id, flowie_control_role_view_t *items,
                                    size_t item_capacity, size_t *count_out, int *has_more_out) {
   static const char sql[] =
-      "SELECT root_group_id,role_id,enabled,revision,created_at,updated_at FROM "
+      "SELECT domain_id,role_id,enabled,revision,created_at,updated_at FROM "
       "flowie_control_role "
-      "WHERE root_group_id=?1 AND (?2='' OR role_id>?2) ORDER BY role_id LIMIT ?3";
-  return flowie_control_text_page(store, root_group_id, after_role_id, sql, items, sizeof(*items),
+      "WHERE domain_id=?1 AND (?2='' OR role_id>?2) ORDER BY role_id LIMIT ?3";
+  return flowie_control_text_page(store, domain_id, after_role_id, sql, items, sizeof(*items),
                                   item_capacity, flowie_control_role_page_row, count_out,
                                   has_more_out);
 }
 
-int flowie_control_store_audit_list(flowie_control_store_t *store, const char *root_group_id,
+int flowie_control_store_audit_list(flowie_control_store_t *store, const char *domain_id,
                                     uint64_t after_revision, flowie_control_audit_view_t *items,
                                     size_t item_capacity, size_t *count_out, int *has_more_out) {
   sqlite3 *database = NULL;
@@ -3934,7 +3983,7 @@ int flowie_control_store_audit_list(flowie_control_store_t *store, const char *r
   int rc;
   if (count_out) *count_out = 0u;
   if (has_more_out) *has_more_out = 0;
-  if (!store || !flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) || !items ||
+  if (!store || !flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) || !items ||
       item_capacity == 0u || item_capacity > FLOWIE_CONTROL_PAGE_MAX || !count_out ||
       !has_more_out || after_revision > (uint64_t)INT64_MAX)
     return TURBO_EINVAL;
@@ -3946,15 +3995,15 @@ int flowie_control_store_audit_list(flowie_control_store_t *store, const char *r
   if (rc != TURBO_OK) return rc;
   status = sqlite3_prepare_v2(
       database,
-      "SELECT request_id,actor,operation,root_group_id,target_id,target_detail,result_revision,"
-      "occurred_at FROM flowie_control_audit WHERE root_group_id=?1 AND result_revision>?2 "
+      "SELECT request_id,actor,operation,domain_id,target_id,target_detail,result_revision,"
+      "occurred_at FROM flowie_control_audit WHERE domain_id=?1 AND result_revision>?2 "
       "ORDER BY result_revision LIMIT ?3",
       -1, &statement, NULL);
   if (status != SQLITE_OK) {
     rc = flowie_control_sqlite_status(status);
     goto done;
   }
-  rc = flowie_control_bind_text(statement, 1, root_group_id);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc == TURBO_OK &&
       sqlite3_bind_int64(statement, 2, (sqlite3_int64)after_revision) != SQLITE_OK)
     rc = flowie_control_sqlite_status(sqlite3_errcode(database));
@@ -3984,8 +4033,8 @@ int flowie_control_store_audit_list(flowie_control_store_t *store, const char *r
     if (rc == TURBO_OK)
       rc = flowie_control_copy_column(statement, 2, view->operation, sizeof(view->operation));
     if (rc == TURBO_OK)
-      rc = flowie_control_copy_column(statement, 3, view->root_group_id,
-                                      sizeof(view->root_group_id));
+      rc = flowie_control_copy_column(statement, 3, view->domain_id,
+                                      sizeof(view->domain_id));
     if (rc == TURBO_OK)
       rc = flowie_control_copy_column(statement, 4, view->target_id, sizeof(view->target_id));
     if (rc == TURBO_OK)

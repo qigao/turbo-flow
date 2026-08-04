@@ -32,7 +32,7 @@ server {
     ssl_session_tickets off;
 
     location = / {
-        return 303 /v1/management/dashboard;
+        return 303 /v2/control/dashboard;
     }
 
     location / {

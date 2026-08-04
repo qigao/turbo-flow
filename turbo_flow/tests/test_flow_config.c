@@ -388,7 +388,7 @@ spec("flow_config") {
                                "    kind: auth_provider\n"
                                "    config:\n"
                                "      backend: https\n"
-                               "      url: https://auth.internal/v3/authenticate\n"
+                               "      url: https://auth.internal/v4/authenticate\n"
                                "adapters: {}\n";
     turbo_flow_resolved_config_t *config = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;

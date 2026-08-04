@@ -1,5 +1,6 @@
 #include "flowie_control_credential_internal.h"
 
+#include "base64_utils.h"
 #include "platform.h"
 #include "monocypher.h"
 #include "turbo_error.h"
@@ -16,6 +17,8 @@
 #define FLOWIE_CONTROL_ARGON2_DEFAULT_LANES 1u
 #define FLOWIE_CONTROL_ARGON2_MAX_LANES 4u
 #define FLOWIE_CONTROL_ARGON2_BLOCK_SIZE 1024u
+#define FLOWIE_CONTROL_CREDENTIAL_ENTROPY_BASE64_CAPACITY                                         \
+  (4u * ((FLOWIE_CONTROL_CREDENTIAL_ENTROPY_SIZE + 2u) / 3u) + 1u)
 
 void flowie_control_credential_default_params(flowie_control_credential_kdf_params_t *out) {
   if (!out) return;
@@ -70,26 +73,46 @@ static int flowie_control_credential_derive(const void *secret, size_t secret_si
   return rc;
 }
 
-int flowie_control_credential_generate(uint8_t secret[FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE],
+int flowie_control_credential_generate(char token[FLOWIE_CONTROL_CREDENTIAL_TOKEN_CAPACITY],
                                        uint8_t salt[FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE],
                                        uint8_t verifier[FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE],
                                        const flowie_control_credential_kdf_params_t *params) {
+  uint8_t entropy[FLOWIE_CONTROL_CREDENTIAL_ENTROPY_SIZE] = {0};
+  char encoded[FLOWIE_CONTROL_CREDENTIAL_ENTROPY_BASE64_CAPACITY] = {0};
+  size_t index;
   int rc;
-  if (!secret || !salt || !verifier || !flowie_control_credential_params_valid(params))
+  if (!token || !salt || !verifier || !flowie_control_credential_params_valid(params))
     return TURBO_EINVAL;
-  memset(secret, 0, FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE);
+  memset(token, 0, FLOWIE_CONTROL_CREDENTIAL_TOKEN_CAPACITY);
   memset(salt, 0, FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE);
   memset(verifier, 0, FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE);
-  rc = turbo_secure_random(secret, FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE);
+  rc = turbo_secure_random(entropy, sizeof(entropy));
+  if (rc == TURBO_OK &&
+      (tn_base64_encode_buf(entropy, sizeof(entropy), encoded, sizeof(encoded)) != 0 ||
+       strlen(encoded) != FLOWIE_CONTROL_CREDENTIAL_TOKEN_PAYLOAD_SIZE + 1u ||
+       encoded[FLOWIE_CONTROL_CREDENTIAL_TOKEN_PAYLOAD_SIZE] != '='))
+    rc = TURBO_EIO;
+  if (rc == TURBO_OK) {
+    memcpy(token, FLOWIE_CONTROL_CREDENTIAL_TOKEN_PREFIX,
+           FLOWIE_CONTROL_CREDENTIAL_TOKEN_PREFIX_SIZE);
+    for (index = 0u; index < FLOWIE_CONTROL_CREDENTIAL_TOKEN_PAYLOAD_SIZE; ++index) {
+      char value = encoded[index];
+      token[FLOWIE_CONTROL_CREDENTIAL_TOKEN_PREFIX_SIZE + index] =
+          value == '+' ? '-' : (value == '/' ? '_' : value);
+    }
+    token[FLOWIE_CONTROL_CREDENTIAL_TOKEN_SIZE] = '\0';
+  }
   if (rc == TURBO_OK) rc = turbo_secure_random(salt, FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE);
   if (rc == TURBO_OK)
-    rc = flowie_control_credential_derive(secret, FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE, salt,
-                                          params, verifier);
+    rc = flowie_control_credential_derive(token, FLOWIE_CONTROL_CREDENTIAL_TOKEN_SIZE, salt, params,
+                                          verifier);
   if (rc != TURBO_OK) {
-    crypto_wipe(secret, FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE);
+    crypto_wipe(token, FLOWIE_CONTROL_CREDENTIAL_TOKEN_CAPACITY);
     crypto_wipe(salt, FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE);
     crypto_wipe(verifier, FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE);
   }
+  crypto_wipe(entropy, sizeof(entropy));
+  crypto_wipe(encoded, sizeof(encoded));
   return rc;
 }
 

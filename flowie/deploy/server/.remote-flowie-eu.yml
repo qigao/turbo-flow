@@ -1,5 +1,10 @@
 version: 1
 
+runtime:
+  ingress:
+    workers: 1
+    capacity: 1024
+
 profiles:
   flowie:
     endpoint: mqtt.endpoint
@@ -11,26 +16,30 @@ channels:
     kind: auth_provider
     config:
       backend: https
-      url: https://auth.internal.example/v4/authenticate
+      url: https://127.0.0.1:8443/v4/authenticate
       method: password
-      service_token_ref: env://FLOWIE_TEST_AUTH_SERVICE_TOKEN
+      service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
       timeout_ms: 3000
       max_secret_size: 4096
+      tls:
+        ca_file: /etc/flowie/certs/control-ca.crt
+  mqtt.acl-service:
+    kind: acl_provider
+    config:
+      backend: https
+      url: https://127.0.0.1:8443/v4/acl
+      service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
+      timeout_ms: 3000
+      max_response_size: 4194304
+      max_rules: 4096
+      tls:
+        ca_file: /etc/flowie/certs/control-ca.crt
   mqtt.security:
     kind: security_realm
     config:
       resource_uid: security:mqtt
       owner_name: security.main
       policy_source: mqtt.acl-service
-  mqtt.acl-service:
-    kind: acl_provider
-    config:
-      backend: https
-      url: https://auth.internal.example/v4/acl
-      service_token_ref: env://FLOWIE_TEST_AUTH_SERVICE_TOKEN
-      timeout_ms: 3000
-      max_response_size: 4194304
-      max_rules: 4096
   mqtt.routing:
     kind: rule_set
     config:
@@ -38,9 +47,6 @@ channels:
       owner_name: flowie.routing
       mode: first_match
       rules:
-        - when: mqtt.topic == "application/output"
-          action: route
-          key: application_data_sink
         - when: "true"
           action: route
           key: mqtt_delivery_sink
@@ -49,29 +55,22 @@ adapters:
   mqtt.endpoint:
     kind: flowie_endpoint
     config:
-      transport: tcp
+      transport: tls
       host: 127.0.0.1
-      port: 1883
-      max_packet_size: 4096
+      port: 18883
+      max_packet_size: 1048576
+      max_connections: 1024
       coroutine_stack_size: 65536
       stream_recv_buffer_bytes: 4096
-      send_hwm_bytes: 4096
+      send_hwm_bytes: 1048576
       slow_subscriber_policy: disconnect
       manage_sessions: true
       settlement_qos1: accepted
       settlement_qos2: accepted
-      max_sessions: 16
-      max_retained_messages: 16
-      max_subscriptions_per_session: 8
-      max_inflight_per_session: 8
+      max_sessions: 1024
+      max_retained_messages: 1024
+      max_subscriptions_per_session: 128
+      max_inflight_per_session: 64
+      topic_alias_maximum: 128
       security_realm: mqtt.security
       auth_method: password
-  socket.application.output:
-    kind: socket
-    config:
-      role: sink
-      transport: tcp
-      host: 127.0.0.1
-      port: 1884
-      timeout_ms: 1000
-      send_hwm_bytes: 4096

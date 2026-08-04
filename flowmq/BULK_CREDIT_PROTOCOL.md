@@ -242,4 +242,4 @@ DEALER -> ROUTER graph echo -> DEALER 的 256 次串行 round trip。绝对值�
 
 TFCW 不定义应用认证或授权字段。使用 KCP 时必须服从
 [KCP_TRANSPORT_PROTOCOL.md](KCP_TRANSPORT_PROTOCOL.md) 的认证会话、AEAD 与 replay 规则；
-跨 Root Group 的 authority/ACL 仍由 FMQ security owner 判定。
+跨 Domain 的 authority/ACL 仍由 FMQ security owner 判定。

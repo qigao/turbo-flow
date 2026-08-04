@@ -9,20 +9,20 @@
 extern "C" {
 #endif
 
-#define FLOWIE_CONTROL_DASHBOARD_PATH "/v1/management/dashboard"
-#define FLOWIE_CONTROL_DASHBOARD_USERS_PATH "/v1/management/dashboard/users"
-#define FLOWIE_CONTROL_DASHBOARD_GROUPS_PATH "/v1/management/dashboard/groups"
-#define FLOWIE_CONTROL_DASHBOARD_ROLES_PATH "/v1/management/dashboard/roles"
-#define FLOWIE_CONTROL_DASHBOARD_ACLS_PATH "/v1/management/dashboard/acls"
-#define FLOWIE_CONTROL_DASHBOARD_AUDIT_PATH "/v1/management/dashboard/audit"
-#define FLOWIE_CONTROL_DASHBOARD_CONTENT_PATH "/v1/management/dashboard/content"
-#define FLOWIE_CONTROL_DASHBOARD_ACTION_PATH "/v1/management/dashboard/action"
-#define FLOWIE_CONTROL_DASHBOARD_CSS_PATH "/v1/management/assets/control.css"
-#define FLOWIE_CONTROL_DASHBOARD_JS_PATH "/v1/management/assets/control.js"
-#define FLOWIE_CONTROL_DASHBOARD_HTMX_PATH "/v1/management/assets/htmx-2.0.9.min.js"
-#define FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH "/v1/management/login"
-#define FLOWIE_CONTROL_DASHBOARD_PASSWORD_PATH "/v1/management/password"
-#define FLOWIE_CONTROL_DASHBOARD_LOGOUT_PATH "/v1/management/logout"
+#define FLOWIE_CONTROL_DASHBOARD_PATH "/v2/control/dashboard"
+#define FLOWIE_CONTROL_DASHBOARD_USERS_PATH "/v2/control/dashboard/users"
+#define FLOWIE_CONTROL_DASHBOARD_GROUPS_PATH "/v2/control/dashboard/groups"
+#define FLOWIE_CONTROL_DASHBOARD_ROLES_PATH "/v2/control/dashboard/roles"
+#define FLOWIE_CONTROL_DASHBOARD_ACLS_PATH "/v2/control/dashboard/acls"
+#define FLOWIE_CONTROL_DASHBOARD_AUDIT_PATH "/v2/control/dashboard/audit"
+#define FLOWIE_CONTROL_DASHBOARD_CONTENT_PATH "/v2/control/dashboard/content"
+#define FLOWIE_CONTROL_DASHBOARD_ACTION_PATH "/v2/control/dashboard/action"
+#define FLOWIE_CONTROL_DASHBOARD_CSS_PATH "/v2/control/assets/control.css"
+#define FLOWIE_CONTROL_DASHBOARD_JS_PATH "/v2/control/assets/control.js"
+#define FLOWIE_CONTROL_DASHBOARD_HTMX_PATH "/v2/control/assets/htmx-2.0.9.min.js"
+#define FLOWIE_CONTROL_DASHBOARD_LOGIN_PATH "/v2/control/login"
+#define FLOWIE_CONTROL_DASHBOARD_PASSWORD_PATH "/v2/control/password"
+#define FLOWIE_CONTROL_DASHBOARD_LOGOUT_PATH "/v2/control/logout"
 #define FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE 64u
 #define FLOWIE_CONTROL_DASHBOARD_BODY_MAX 16384u
 #define FLOWIE_CONTROL_DASHBOARD_LOGIN_EXECUTOR_DEFAULT_WORKERS 4u
@@ -46,7 +46,7 @@ typedef enum flowie_control_dashboard_section_e {
 
 typedef struct flowie_control_dashboard_page_s {
   size_t size;
-  char root_group_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char users_after[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char groups_after[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char roles_after[TURBO_FLOW_SECURITY_TYPE_MAX + 1u];
@@ -74,7 +74,7 @@ typedef int (*flowie_control_dashboard_resolve_session_fn)(
     char csrf_token_out[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u]);
 typedef uint64_t (*flowie_control_dashboard_clock_fn)(void *ctx);
 typedef int (*flowie_control_dashboard_login_fn)(
-    void *ctx, const char *root_group_id, const char *principal_id, const uint8_t *secret,
+    void *ctx, const char *domain_id, const char *principal_id, const uint8_t *secret,
     size_t secret_size, const char *remote_address,
     char token_out[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u]);
 typedef int (*flowie_control_dashboard_logout_fn)(void *ctx, const char *token);
@@ -127,7 +127,7 @@ void flowie_control_dashboard_destroy(flowie_control_dashboard_t *dashboard);
  * abandons the result; a later successful result is revoked before its worker releases the job.
  */
 int flowie_control_dashboard_execute_login(
-    flowie_control_dashboard_t *dashboard, const char *root_group_id, const char *principal_id,
+    flowie_control_dashboard_t *dashboard, const char *domain_id, const char *principal_id,
     const uint8_t *secret, size_t secret_size, const char *remote_address,
     char token_out[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u]);
 

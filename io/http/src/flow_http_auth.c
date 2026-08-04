@@ -173,7 +173,7 @@ static int flow_http_auth_scope(const char *text, turbo_flow_security_scope_t *s
   if (!text || !scope) return TURBO_EPROTO;
   if (strcmp(text, "self") == 0) *scope = TURBO_FLOW_SECURITY_SCOPE_SELF;
   else if (strcmp(text, "group") == 0) *scope = TURBO_FLOW_SECURITY_SCOPE_GROUP;
-  else if (strcmp(text, "root_group") == 0) *scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+  else if (strcmp(text, "domain") == 0) *scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
   else if (strcmp(text, "system") == 0) *scope = TURBO_FLOW_SECURITY_SCOPE_SYSTEM;
   else return TURBO_EPROTO;
   return TURBO_OK;
@@ -205,21 +205,18 @@ static int flow_http_auth_string_array(const json_value_t *object, const char *f
 }
 
 static int flow_http_auth_effective_groups_valid(const turbo_flow_security_principal_t *principal) {
-  int contains_root = 0;
   if (!principal) return 0;
   for (uint32_t i = 0u; i < principal->group_count; ++i) {
-    if (strcmp(principal->groups[i], principal->root_group_id) == 0) contains_root = 1;
     for (uint32_t j = 0u; j < i; ++j)
       if (strcmp(principal->groups[i], principal->groups[j]) == 0) return 0;
   }
-  return principal->scope == TURBO_FLOW_SECURITY_SCOPE_SYSTEM ||
-         (principal->root_group_id[0] != '\0' && principal->group_count != 0u && contains_root);
+  return principal->scope == TURBO_FLOW_SECURITY_SCOPE_SYSTEM || principal->domain_id[0] != '\0';
 }
 
 int flow_http_auth_decode_response(const char *body, size_t body_size, const char *method,
                                    turbo_flow_security_principal_t *principal_out) {
   static const char *const outer_allowed[] = {"version", "authenticated", "principal"};
-  static const char *const principal_allowed[] = {"id",          "type",       "root_group",
+  static const char *const principal_allowed[] = {"id",          "type",       "domain",
                                                   "auth_method", "scope",      "roles",
                                                   "groups",      "expires_at", "policy_version"};
   turbo_json_doc_t *document = NULL;
@@ -256,8 +253,8 @@ int flow_http_auth_decode_response(const char *body, size_t body_size, const cha
                                       sizeof(principal_out->principal_id), 1) != TURBO_OK ||
       flow_http_auth_copy_json_string(principal, "type", principal_out->principal_type,
                                       sizeof(principal_out->principal_type), 1) != TURBO_OK ||
-      flow_http_auth_copy_json_string(principal, "root_group", principal_out->root_group_id,
-                                      sizeof(principal_out->root_group_id), 0) != TURBO_OK ||
+      flow_http_auth_copy_json_string(principal, "domain", principal_out->domain_id,
+                                      sizeof(principal_out->domain_id), 0) != TURBO_OK ||
       flow_http_auth_copy_json_string(principal, "auth_method", principal_out->auth_method,
                                       sizeof(principal_out->auth_method), 1) != TURBO_OK ||
       strcmp(principal_out->auth_method, method) != 0)

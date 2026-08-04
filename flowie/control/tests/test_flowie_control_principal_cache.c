@@ -14,7 +14,7 @@ static flowie_control_principal_snapshot_t principal_cache_snapshot(const char *
                                                                     const char *principal,
                                                                     uint64_t user_revision) {
   flowie_control_principal_snapshot_t snapshot = FLOWIE_CONTROL_PRINCIPAL_SNAPSHOT_INIT;
-  memcpy(snapshot.root_group_id, root, strlen(root) + 1u);
+  memcpy(snapshot.domain_id, root, strlen(root) + 1u);
   memcpy(snapshot.principal_id, principal, strlen(principal) + 1u);
   memcpy(snapshot.principal_type, "device", sizeof("device"));
   snapshot.user_revision = user_revision;

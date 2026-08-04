@@ -50,7 +50,7 @@ static const char valid_external_https_config[] =
     "  service_bindings:\n"
     "    - service_id: broker-main\n"
     "      token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN\n"
-    "      root_group: root-a\n"
+    "      domain: root-a\n"
     "  external_https:\n"
     "    url: https://auth.example/v1/assert\n"
     "    service_token_ref: env://FLOWIE_THIRD_PARTY_AUTH_TOKEN\n"
@@ -88,7 +88,7 @@ static const char valid_postgresql_config[] =
     "    capacity: 1024\n"
     "    ttl_seconds: 3600\n";
 
-static const char valid_bootstrap_config[] =
+static const char legacy_bootstrap_config[] =
     "version: 1\n"
     "listener:\n"
     "  tls:\n"
@@ -98,7 +98,7 @@ static const char valid_bootstrap_config[] =
     "  sqlite:\n"
     "    path: control.db\n"
     "bootstrap:\n"
-    "  username: platform-admin\n"
+    "  username: admin\n"
     "  password_ref: env://FLOWIE_BOOTSTRAP_PASSWORD\n"
     "management:\n"
     "  session:\n"
@@ -155,7 +155,7 @@ spec("Flowie controller configuration") {
     check_int_eq(parse_config(valid_config, &config, &error), TURBO_OK);
     check_str_eq(config.listener.host, "127.0.0.1");
     check_int_eq(config.listener.port, 8443);
-    check_str_eq(config.management.rpc_path, "/v1/management/rpc");
+    check_str_eq(config.management.rpc_path, "/v2/control/rpc");
     check_size_eq(config.management.session_capacity, 512u);
     check_size_eq(config.management.session_max_sessions_per_principal, 7u);
     check_uint_eq(config.management.session_ttl_seconds, 1800u);
@@ -170,6 +170,10 @@ spec("Flowie controller configuration") {
     check_uint_eq(config.auth.local_executor.workers, 4u);
     check_size_eq(config.auth.local_executor.queue_capacity, 128u);
     check_uint_eq(config.auth.local_executor.deadline_ms, 10000u);
+    check_str_eq(config.bootstrap.domain_id, "system");
+    check_str_eq(config.bootstrap.principal_id, "admin");
+    check_str_eq(config.bootstrap.principal_type, "human");
+    check_str_eq(FLOWIE_CONTROL_SYSTEM_ADMIN_INITIAL_PASSWORD, "Flowie@ChangeMe!");
   }
 
   it("defaults each principal to five concurrent management sessions") {
@@ -203,69 +207,9 @@ spec("Flowie controller configuration") {
     check_true(config.sqlite_path[0] == '\0');
   }
 
-  it("loads an initial administrator whose password is only an environment reference") {
-    check_int_eq(parse_config(valid_bootstrap_config, &config, &error), TURBO_OK);
-    check_true(config.bootstrap.enabled);
-    check_str_eq(config.bootstrap.root_group_id, "system");
-    check_str_eq(config.bootstrap.principal_id, "platform-admin");
-    check_str_eq(config.bootstrap.principal_type, "human");
-    check_str_eq(config.bootstrap.password_ref, "env://FLOWIE_BOOTSTRAP_PASSWORD");
-  }
-
-  it("defaults the bootstrap username and password environment reference") {
-    static const char yaml[] =
-        "version: 1\n"
-        "listener:\n"
-        "  tls:\n"
-        "    cert_file: cert.pem\n"
-        "    key_file: key.pem\n"
-        "storage:\n"
-        "  sqlite:\n"
-        "    path: control.db\n"
-        "bootstrap:\n"
-        "  password_ref: env://FLOWIE_BOOTSTRAP_PASSWORD\n"
-        "management:\n"
-        "  session:\n"
-        "    capacity: 1024\n";
-    check_int_eq(parse_config(yaml, &config, &error), TURBO_OK);
-    check_true(config.bootstrap.enabled);
-    check_str_eq(config.bootstrap.root_group_id, "system");
-    check_str_eq(config.bootstrap.principal_id, "admin");
-    check_str_eq(config.bootstrap.password_ref, "env://FLOWIE_BOOTSTRAP_PASSWORD");
-  }
-
-  it("defaults the bootstrap password environment reference") {
-    static const char yaml[] =
-        "version: 1\n"
-        "listener:\n"
-        "  tls:\n"
-        "    cert_file: cert.pem\n"
-        "    key_file: key.pem\n"
-        "storage:\n"
-        "  sqlite:\n"
-        "    path: control.db\n"
-        "bootstrap:\n"
-        "  username: admin\n"
-        "management:\n"
-        "  session:\n"
-        "    capacity: 1024\n";
-    check_int_eq(parse_config(yaml, &config, &error), TURBO_OK);
-    check_str_eq(config.bootstrap.password_ref, "env://FLOWIE_BOOTSTRAP_PASSWORD");
-  }
-
-  it("rejects a literal bootstrap password") {
-    char yaml[sizeof(valid_bootstrap_config)];
-    char *reference;
-
-    memcpy(yaml, valid_bootstrap_config, sizeof(valid_bootstrap_config));
-    reference = strstr(yaml, "env://FLOWIE_BOOTSTRAP_PASSWORD");
-    check_not_null(reference);
-    memcpy(reference, "literal-password", sizeof("literal-password") - 1u);
-    memmove(reference + sizeof("literal-password") - 1u,
-            reference + sizeof("env://FLOWIE_BOOTSTRAP_PASSWORD") - 1u,
-            strlen(reference + sizeof("env://FLOWIE_BOOTSTRAP_PASSWORD") - 1u) + 1u);
-    check_int_eq(parse_config(yaml, &config, &error), TURBO_EINVAL);
-    check_str_eq(error.path, "$.bootstrap.password_ref");
+  it("rejects the legacy configurable bootstrap block") {
+    check_int_eq(parse_config(legacy_bootstrap_config, &config, &error), TURBO_EINVAL);
+    check_str_eq(error.path, "$.bootstrap");
   }
 
   it("rejects simultaneous SQLite and PostgreSQL control store configuration") {
@@ -352,10 +296,10 @@ spec("Flowie controller configuration") {
                                "  service_bindings:\n"
                                "    - service_id: broker-a\n"
                                "      token_ref: env://FLOWIE_BROKER_A_TOKEN\n"
-                               "      root_group: root-a\n"
+                               "      domain: root-a\n"
                                "    - service_id: broker-a\n"
                                "      token_ref: env://FLOWIE_BROKER_B_TOKEN\n"
-                               "      root_group: root-b\n";
+                               "      domain: root-b\n";
     check_int_eq(parse_config(yaml, &config, &error), TURBO_EALREADY);
   }
 
@@ -399,7 +343,7 @@ spec("Flowie controller configuration") {
                                "  service_bindings:\n"
                                "    - service_id: broker-main\n"
                                "      token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN\n"
-                               "      root_group: root-a\n";
+                               "      domain: root-a\n";
     check_int_eq(parse_config(yaml, &config, &error), TURBO_OK);
     check_true(config.auth.enabled);
     check_false(config.auth.external_https.enabled);
@@ -465,7 +409,7 @@ spec("Flowie controller configuration") {
                                "  service_bindings:\n"
                                "    - service_id: broker-main\n"
                                "      token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN\n"
-                               "      root_group: root-a\n";
+                               "      domain: root-a\n";
     check_int_eq(parse_config(yaml, &config, &error), TURBO_ERANGE);
     check_str_eq(error.path, "$.auth.local_executor.deadline_ms");
   }

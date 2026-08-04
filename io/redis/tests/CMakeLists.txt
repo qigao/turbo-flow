@@ -39,7 +39,8 @@ endif()
 
 set_tests_properties(
   test_flowie_cluster_route_redis_live
-  PROPERTIES LABELS "flowie;cluster;route;redis-live;integration;settlement")
+  PROPERTIES LABELS
+             "flowie;flowie-release;cluster;route;redis-live;integration;settlement")
 
 if(WIN32)
   target_link_libraries(test_turbo_flow_redis PRIVATE ws2_32)

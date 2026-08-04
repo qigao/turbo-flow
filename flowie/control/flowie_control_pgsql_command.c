@@ -13,14 +13,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char FLOWIE_CONTROL_PGSQL_OPERATION_ROOT_GROUP_CREATE[] = "root_group.create";
+static const char FLOWIE_CONTROL_PGSQL_OPERATION_DOMAIN_CREATE[] = "domain.create";
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_USER_CREATE[] = "user.create";
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_USER_DISABLE[] = "user.disable";
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_CREDENTIAL_GENERATE[] = "credential.generate";
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_CREDENTIAL_ROTATE[] = "credential.rotate";
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_CREDENTIAL_REVOKE[] = "credential.revoke";
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_GROUP_CREATE[] = "group.create";
-static const char FLOWIE_CONTROL_PGSQL_OPERATION_GROUP_DISABLE[] = "group.disable";
+static const char FLOWIE_CONTROL_PGSQL_OPERATION_GROUP_DELETE[] = "group.delete";
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_MEMBERSHIP_ADD[] = "membership.add";
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_MEMBERSHIP_REMOVE[] = "membership.remove";
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_ROLE_CREATE[] = "role.create";
@@ -30,7 +30,7 @@ static const char FLOWIE_CONTROL_PGSQL_OPERATION_USER_ROLE_REMOVE[] = "user_role
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_RULE_PUT[] = "policy.rule.put";
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_RULE_DELETE[] = "policy.rule.delete";
 static const char FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_PUBLISH[] = "policy.publish";
-static const char FLOWIE_CONTROL_PGSQL_TARGET_ROOT_GROUP[] = "root_group";
+static const char FLOWIE_CONTROL_PGSQL_TARGET_DOMAIN[] = "domain";
 static const char FLOWIE_CONTROL_PGSQL_TARGET_CREDENTIAL[] = "credential";
 static const char FLOWIE_CONTROL_PGSQL_TARGET_GROUP[] = "group";
 static const char FLOWIE_CONTROL_PGSQL_TARGET_ROLE[] = "role";
@@ -43,8 +43,8 @@ typedef enum flowie_control_pgsql_command_sql_e {
   FLOWIE_CONTROL_PGSQL_COMMAND_REVISION_LOCK,
   FLOWIE_CONTROL_PGSQL_COMMAND_REVISION_ADVANCE,
   FLOWIE_CONTROL_PGSQL_COMMAND_AUDIT_INSERT,
-  FLOWIE_CONTROL_PGSQL_COMMAND_ROOT_GROUP_INSERT,
-  FLOWIE_CONTROL_PGSQL_COMMAND_ROOT_GROUP_LOOKUP,
+  FLOWIE_CONTROL_PGSQL_COMMAND_DOMAIN_INSERT,
+  FLOWIE_CONTROL_PGSQL_COMMAND_DOMAIN_LOOKUP,
   FLOWIE_CONTROL_PGSQL_COMMAND_USER_INSERT,
   FLOWIE_CONTROL_PGSQL_COMMAND_USER_LOCK,
   FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_SUBJECT_LINES,
@@ -56,7 +56,7 @@ typedef enum flowie_control_pgsql_command_sql_e {
   FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_LOOKUP,
   FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_INSERT,
   FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_REFERENCES,
-  FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_DISABLE,
+  FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_DELETE,
   FLOWIE_CONTROL_PGSQL_COMMAND_MEMBERSHIP_EFFECTIVE_COUNT,
   FLOWIE_CONTROL_PGSQL_COMMAND_MEMBERSHIP_INSERT,
   FLOWIE_CONTROL_PGSQL_COMMAND_MEMBERSHIP_DELETE,
@@ -88,7 +88,7 @@ typedef struct flowie_control_pgsql_commit_evidence_s {
   const char *request_id;
   const char *actor;
   const char *operation;
-  const char *root_group_id;
+  const char *domain_id;
   const char *target_id;
   const char *target_detail;
   uint64_t revision;
@@ -138,7 +138,7 @@ int flowie_control_pgsql_command_create(flowie_control_pgsql_pool_t *pool,
   command->pool = pool;
   rc = flowie_control_pgsql_command_sql_set(
       command, FLOWIE_CONTROL_PGSQL_COMMAND_REPLAY,
-      "SELECT actor,operation,root_group_id,target_id,target_detail,result_revision::text "
+      "SELECT actor,operation,domain_id,target_id,target_detail,result_revision::text "
       "FROM %s.audit WHERE request_id=$1",
       schema);
   if (rc == TURBO_OK)
@@ -158,30 +158,25 @@ int flowie_control_pgsql_command_create(flowie_control_pgsql_pool_t *pool,
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_AUDIT_INSERT,
-        "INSERT INTO %s.audit(request_id,actor,operation,root_group_id,target_id,target_detail,"
+        "INSERT INTO %s.audit(request_id,actor,operation,domain_id,target_id,target_detail,"
         "result_revision,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7::bigint,$8::bigint) "
         "RETURNING request_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
-        command, FLOWIE_CONTROL_PGSQL_COMMAND_ROOT_GROUP_INSERT,
-        "WITH root AS (INSERT INTO %s.root_group(root_group_id) VALUES($1) "
-        "RETURNING root_group_id) "
-        "INSERT INTO %s.security_group(root_group_id,group_id,parent_group_id,depth,enabled,"
-        "revision,created_at,updated_at) "
-        "SELECT root_group_id,root_group_id,NULL,0,true,$2::bigint,$3::bigint,$3::bigint "
-        "FROM root RETURNING group_id",
+        command, FLOWIE_CONTROL_PGSQL_COMMAND_DOMAIN_INSERT,
+        "INSERT INTO %s.domain(domain_id) SELECT $1 "
+        "WHERE $2::bigint>0 AND $3::bigint>0 RETURNING domain_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
-        command, FLOWIE_CONTROL_PGSQL_COMMAND_ROOT_GROUP_LOOKUP,
-        "SELECT depth::text,CASE WHEN enabled THEN '1' ELSE '0' END "
-        "FROM %s.security_group WHERE root_group_id=$1 AND group_id=$1 FOR SHARE",
+        command, FLOWIE_CONTROL_PGSQL_COMMAND_DOMAIN_LOOKUP,
+        "SELECT '0','1' FROM %s.domain WHERE domain_id=$1 FOR SHARE",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_USER_INSERT,
-        "INSERT INTO %s.user_account(root_group_id,principal_id,principal_type,enabled,revision,"
+        "INSERT INTO %s.user_account(domain_id,principal_id,principal_type,enabled,revision,"
         "created_at,updated_at) VALUES($1,$2,$3,true,$4::bigint,$5::bigint,$5::bigint) "
         "RETURNING principal_id",
         schema);
@@ -189,19 +184,19 @@ int flowie_control_pgsql_command_create(flowie_control_pgsql_pool_t *pool,
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_USER_LOCK,
         "SELECT principal_type,CASE WHEN enabled THEN '1' ELSE '0' END "
-        "FROM %s.user_account WHERE root_group_id=$1 AND principal_id=$2 FOR UPDATE",
+        "FROM %s.user_account WHERE domain_id=$1 AND principal_id=$2 FOR UPDATE",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_SUBJECT_LINES,
-        "SELECT rule_line FROM %s.policy_draft WHERE root_group_id=$1 "
+        "SELECT rule_line FROM %s.policy_draft WHERE domain_id=$1 "
         "UNION ALL SELECT rule_line FROM %s.acl_rule WHERE namespace_name=$1",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_USER_DISABLE,
         "UPDATE %s.user_account SET enabled=false,revision=$1::bigint,updated_at=$2::bigint "
-        "WHERE root_group_id=$3 AND principal_id=$4 AND enabled RETURNING principal_id",
+        "WHERE domain_id=$3 AND principal_id=$4 AND enabled RETURNING principal_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
@@ -210,13 +205,13 @@ int flowie_control_pgsql_command_create(flowie_control_pgsql_pool_t *pool,
         "CASE WHEN c.principal_id IS NULL THEN '0' ELSE '1' END,"
         "CASE WHEN c.enabled IS NULL THEN NULL WHEN c.enabled THEN '1' ELSE '0' END "
         "FROM %s.user_account u LEFT JOIN %s.credential c "
-        "ON c.root_group_id=u.root_group_id AND c.principal_id=u.principal_id "
-        "WHERE u.root_group_id=$1 AND u.principal_id=$2",
+        "ON c.domain_id=u.domain_id AND c.principal_id=u.principal_id "
+        "WHERE u.domain_id=$1 AND u.principal_id=$2",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_CREDENTIAL_INSERT,
-        "INSERT INTO %s.credential(root_group_id,principal_id,kdf_algorithm,memory_blocks,passes,"
+        "INSERT INTO %s.credential(domain_id,principal_id,kdf_algorithm,memory_blocks,passes,"
         "lanes,salt,verifier,enabled,revision,created_at,updated_at) "
         "VALUES($1,$2,$3::integer,$4::integer,$5::integer,$6::integer,"
         "pg_catalog.decode($7::text,'hex'),pg_catalog.decode($8::text,'hex'),true,$9::bigint,"
@@ -228,125 +223,122 @@ int flowie_control_pgsql_command_create(flowie_control_pgsql_pool_t *pool,
         "UPDATE %s.credential SET kdf_algorithm=$3::integer,memory_blocks=$4::integer,"
         "passes=$5::integer,lanes=$6::integer,salt=pg_catalog.decode($7::text,'hex'),"
         "verifier=pg_catalog.decode($8::text,'hex'),enabled=true,revision=$9::bigint,"
-        "updated_at=$10::bigint WHERE root_group_id=$1 AND principal_id=$2 "
+        "updated_at=$10::bigint WHERE domain_id=$1 AND principal_id=$2 "
         "RETURNING principal_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_CREDENTIAL_REVOKE,
         "UPDATE %s.credential SET enabled=false,revision=$1::bigint,updated_at=$2::bigint "
-        "WHERE root_group_id=$3 AND principal_id=$4 AND enabled RETURNING principal_id",
+        "WHERE domain_id=$3 AND principal_id=$4 AND enabled RETURNING principal_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_LOOKUP,
         "SELECT depth::text,CASE WHEN enabled THEN '1' ELSE '0' END "
-        "FROM %s.security_group WHERE root_group_id=$1 AND group_id=$2",
+        "FROM %s.security_group WHERE domain_id=$1 AND group_id=$2",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_INSERT,
-        "INSERT INTO %s.security_group(root_group_id,group_id,parent_group_id,depth,enabled,"
+        "INSERT INTO %s.security_group(domain_id,group_id,parent_group_id,depth,enabled,"
         "revision,created_at,updated_at) VALUES($1,$2,$3,$4::integer,true,$5::bigint,$6::bigint,"
         "$6::bigint) RETURNING group_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_REFERENCES,
-        "SELECT CASE WHEN EXISTS(SELECT 1 FROM %s.security_group WHERE root_group_id=$1 "
-        "AND parent_group_id=$2 AND enabled) THEN '1' ELSE '0' END,"
-        "CASE WHEN EXISTS(SELECT 1 FROM %s.membership WHERE root_group_id=$1 AND group_id=$2) "
+        "SELECT CASE WHEN EXISTS(SELECT 1 FROM %s.security_group WHERE domain_id=$1 "
+        "AND parent_group_id=$2) THEN '1' ELSE '0' END,"
+        "CASE WHEN EXISTS(SELECT 1 FROM %s.membership WHERE domain_id=$1 AND group_id=$2) "
         "THEN '1' ELSE '0' END",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
-        command, FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_DISABLE,
-        "UPDATE %s.security_group SET enabled=false,revision=$1::bigint,updated_at=$2::bigint "
-        "WHERE root_group_id=$3 AND group_id=$4 AND enabled RETURNING group_id",
+        command, FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_DELETE,
+        "DELETE FROM %s.security_group WHERE domain_id=$1 AND group_id=$2 RETURNING group_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_MEMBERSHIP_EFFECTIVE_COUNT,
         "WITH RECURSIVE effective(group_id,parent_group_id) AS ("
-        "SELECT group_id,parent_group_id FROM %s.security_group WHERE root_group_id=$1 "
-        "AND group_id=$1 AND enabled "
-        "UNION SELECT g.group_id,g.parent_group_id FROM %s.membership m "
-        "JOIN %s.security_group g ON g.root_group_id=m.root_group_id AND g.group_id=m.group_id "
-        "WHERE m.root_group_id=$1 AND m.principal_id=$2 AND g.enabled "
-        "UNION SELECT group_id,parent_group_id FROM %s.security_group WHERE root_group_id=$1 "
+        "SELECT g.group_id,g.parent_group_id FROM %s.membership m "
+        "JOIN %s.security_group g ON g.domain_id=m.domain_id AND g.group_id=m.group_id "
+        "WHERE m.domain_id=$1 AND m.principal_id=$2 AND g.enabled "
+        "UNION SELECT group_id,parent_group_id FROM %s.security_group WHERE domain_id=$1 "
         "AND group_id=$3 AND enabled "
         "UNION SELECT p.group_id,p.parent_group_id FROM effective e "
-        "JOIN %s.security_group p ON p.root_group_id=$1 AND p.group_id=e.parent_group_id "
+        "JOIN %s.security_group p ON p.domain_id=$1 AND p.group_id=e.parent_group_id "
         "WHERE p.enabled) SELECT count(*)::text FROM effective",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_MEMBERSHIP_INSERT,
-        "INSERT INTO %s.membership(root_group_id,principal_id,group_id,revision,created_at) "
+        "INSERT INTO %s.membership(domain_id,principal_id,group_id,revision,created_at) "
         "VALUES($1,$2,$3,$4::bigint,$5::bigint) RETURNING group_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_MEMBERSHIP_DELETE,
-        "DELETE FROM %s.membership WHERE root_group_id=$1 AND principal_id=$2 AND group_id=$3 "
+        "DELETE FROM %s.membership WHERE domain_id=$1 AND principal_id=$2 AND group_id=$3 "
         "RETURNING group_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_ROLE_LOOKUP,
         "SELECT CASE WHEN enabled THEN '1' ELSE '0' END FROM %s.security_role "
-        "WHERE root_group_id=$1 AND role_id=$2 FOR SHARE",
+        "WHERE domain_id=$1 AND role_id=$2 FOR SHARE",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_ROLE_INSERT,
         "INSERT INTO "
-        "%s.security_role(root_group_id,role_id,enabled,revision,created_at,updated_at) "
+        "%s.security_role(domain_id,role_id,enabled,revision,created_at,updated_at) "
         "VALUES($1,$2,true,$3::bigint,$4::bigint,$4::bigint) RETURNING role_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_ROLE_DISABLE,
         "UPDATE %s.security_role SET enabled=false,revision=$1::bigint,updated_at=$2::bigint "
-        "WHERE root_group_id=$3 AND role_id=$4 AND enabled RETURNING role_id",
+        "WHERE domain_id=$3 AND role_id=$4 AND enabled RETURNING role_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_USER_ROLE_INSERT,
-        "INSERT INTO %s.user_role(root_group_id,principal_id,role_id,revision,created_at) "
+        "INSERT INTO %s.user_role(domain_id,principal_id,role_id,revision,created_at) "
         "VALUES($1,$2,$3,$4::bigint,$5::bigint) RETURNING role_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_USER_ROLE_EFFECTIVE_COUNT,
         "SELECT count(*)::text FROM %s.user_role ur JOIN %s.security_role r "
-        "ON r.root_group_id=ur.root_group_id AND r.role_id=ur.role_id "
-        "WHERE ur.root_group_id=$1 AND ur.principal_id=$2 AND r.enabled",
+        "ON r.domain_id=ur.domain_id AND r.role_id=ur.role_id "
+        "WHERE ur.domain_id=$1 AND ur.principal_id=$2 AND r.enabled",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_USER_ROLE_DELETE,
-        "DELETE FROM %s.user_role WHERE root_group_id=$1 AND principal_id=$2 AND role_id=$3 "
+        "DELETE FROM %s.user_role WHERE domain_id=$1 AND principal_id=$2 AND role_id=$3 "
         "RETURNING role_id",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_DRAFT_UPSERT,
-        "INSERT INTO %s.policy_draft(root_group_id,ordinal,rule_line,revision,updated_at) "
+        "INSERT INTO %s.policy_draft(domain_id,ordinal,rule_line,revision,updated_at) "
         "VALUES($1,$2::integer,$3,$4::bigint,$5::bigint) "
-        "ON CONFLICT(root_group_id,ordinal) DO UPDATE SET rule_line=excluded.rule_line,"
+        "ON CONFLICT(domain_id,ordinal) DO UPDATE SET rule_line=excluded.rule_line,"
         "revision=excluded.revision,updated_at=excluded.updated_at RETURNING ordinal::text",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_DRAFT_DELETE,
-        "DELETE FROM %s.policy_draft WHERE root_group_id=$1 AND ordinal=$2::integer "
+        "DELETE FROM %s.policy_draft WHERE domain_id=$1 AND ordinal=$2::integer "
         "RETURNING ordinal::text",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_DRAFT_LINES,
-        "SELECT rule_line FROM %s.policy_draft WHERE root_group_id=$1 ORDER BY ordinal", schema);
+        "SELECT rule_line FROM %s.policy_draft WHERE domain_id=$1 ORDER BY ordinal", schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_BUNDLE_VERSION,
@@ -369,7 +361,7 @@ int flowie_control_pgsql_command_create(flowie_control_pgsql_pool_t *pool,
         command, FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_RULES_COPY,
         "INSERT INTO %s.acl_rule(namespace_name,ordinal,rule_line) "
         "SELECT $1,(pg_catalog.row_number() OVER (ORDER BY ordinal)-1)::integer,rule_line "
-        "FROM %s.policy_draft WHERE root_group_id=$1 RETURNING ordinal::text",
+        "FROM %s.policy_draft WHERE domain_id=$1 RETURNING ordinal::text",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
@@ -451,13 +443,13 @@ flowie_control_pgsql_command_transaction_begin(flowie_control_pgsql_command_sess
 
 static void flowie_control_pgsql_command_evidence_set(
     flowie_control_pgsql_command_session_t *session, const char *request_id, const char *actor,
-    const char *operation, const char *root_group_id, const char *target_id,
+    const char *operation, const char *domain_id, const char *target_id,
     const char *target_detail, uint64_t revision) {
   if (!session) return;
   session->evidence.request_id = request_id;
   session->evidence.actor = actor;
   session->evidence.operation = operation;
-  session->evidence.root_group_id = root_group_id;
+  session->evidence.domain_id = domain_id;
   session->evidence.target_id = target_id;
   session->evidence.target_detail = target_detail;
   session->evidence.revision = revision;
@@ -486,7 +478,7 @@ flowie_control_pgsql_command_session_close(flowie_control_pgsql_command_session_
     int committed = 0;
     int confirm_status = flowie_control_pgsql_command_commit_confirm(
         session->view, session->evidence.request_id, session->evidence.actor,
-        session->evidence.operation, session->evidence.root_group_id, session->evidence.target_id,
+        session->evidence.operation, session->evidence.domain_id, session->evidence.target_id,
         session->evidence.target_detail, session->evidence.revision, &committed);
     if (confirm_status != TURBO_OK) return confirm_status;
     if (committed) return TURBO_OK;
@@ -494,12 +486,12 @@ flowie_control_pgsql_command_session_close(flowie_control_pgsql_command_session_
   return transaction_status;
 }
 
-static int flowie_control_pgsql_command_common_valid(const char *root_group_id,
+static int flowie_control_pgsql_command_common_valid(const char *domain_id,
                                                      const char *target_id, const char *actor,
                                                      const char *request_id,
                                                      uint64_t expected_revision,
                                                      uint64_t occurred_at) {
-  return flowie_control_text_valid(root_group_id, TURBO_FLOW_SECURITY_ID_MAX) &&
+  return flowie_control_text_valid(domain_id, TURBO_FLOW_SECURITY_ID_MAX) &&
          flowie_control_text_valid(target_id, TURBO_FLOW_SECURITY_ID_MAX) &&
          flowie_control_text_valid(actor, FLOWIE_CONTROL_ACTOR_MAX) &&
          flowie_control_text_valid(request_id, FLOWIE_CONTROL_REQUEST_ID_MAX) &&
@@ -585,7 +577,7 @@ static int flowie_control_pgsql_u64_text(uint64_t value, char output[32]) {
 static int flowie_control_pgsql_command_replay(flowie_control_pgsql_command_t *view,
                                                flowie_control_pgsql_command_session_t *session,
                                                const char *request_id, const char *actor,
-                                               const char *operation, const char *root_group_id,
+                                               const char *operation, const char *domain_id,
                                                const char *target_id, const char *target_detail,
                                                flowie_control_command_result_t *result,
                                                int *found_out) {
@@ -593,7 +585,7 @@ static int flowie_control_pgsql_command_replay(flowie_control_pgsql_command_t *v
   PGresult *replay = NULL;
   int rc;
   if (found_out) *found_out = 0;
-  if (!view || !session || !request_id || !actor || !operation || !root_group_id || !target_id ||
+  if (!view || !session || !request_id || !actor || !operation || !domain_id || !target_id ||
       !result || !found_out)
     return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_exec(session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_REPLAY], 1,
@@ -609,7 +601,7 @@ static int flowie_control_pgsql_command_replay(flowie_control_pgsql_command_t *v
   }
   rc = flowie_control_pgsql_text_equals(replay, 0, 0, actor);
   if (rc == TURBO_OK) rc = flowie_control_pgsql_text_equals(replay, 0, 1, operation);
-  if (rc == TURBO_OK) rc = flowie_control_pgsql_text_equals(replay, 0, 2, root_group_id);
+  if (rc == TURBO_OK) rc = flowie_control_pgsql_text_equals(replay, 0, 2, domain_id);
   if (rc == TURBO_OK) rc = flowie_control_pgsql_text_equals(replay, 0, 3, target_id);
   if (rc == TURBO_OK && target_detail)
     rc = flowie_control_pgsql_text_equals(replay, 0, 4, target_detail);
@@ -618,7 +610,7 @@ static int flowie_control_pgsql_command_replay(flowie_control_pgsql_command_t *v
   if (rc == TURBO_OK) {
     result->replayed = 1;
     *found_out = 1;
-    flowie_control_pgsql_command_evidence_set(session, request_id, actor, operation, root_group_id,
+    flowie_control_pgsql_command_evidence_set(session, request_id, actor, operation, domain_id,
                                               target_id, target_detail, result->revision);
   }
 
@@ -629,7 +621,7 @@ done:
 
 int flowie_control_pgsql_command_commit_confirm(flowie_control_pgsql_command_t *view,
                                                 const char *request_id, const char *actor,
-                                                const char *operation, const char *root_group_id,
+                                                const char *operation, const char *domain_id,
                                                 const char *target_id, const char *target_detail,
                                                 uint64_t revision, int *committed_out) {
   flowie_control_pgsql_command_session_t session;
@@ -637,14 +629,14 @@ int flowie_control_pgsql_command_commit_confirm(flowie_control_pgsql_command_t *
   int found = 0;
   int rc;
   if (committed_out) *committed_out = 0;
-  if (!view || !request_id || !actor || !operation || !root_group_id || !target_id ||
+  if (!view || !request_id || !actor || !operation || !domain_id || !target_id ||
       !target_detail || revision == 0u || !committed_out)
     return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_session_open(view, &session);
   if (rc != TURBO_OK) return rc;
   rc =
       flowie_control_pgsql_command_replay(view, &session, request_id, actor, operation,
-                                          root_group_id, target_id, target_detail, &replay, &found);
+                                          domain_id, target_id, target_detail, &replay, &found);
   if (rc == TURBO_OK && found && replay.revision != revision) rc = TURBO_EPROTO;
   if (rc == TURBO_OK) *committed_out = found;
   (void)flowie_control_pgsql_pool_release(&session.lease);
@@ -665,7 +657,8 @@ flowie_control_pgsql_command_revision_lock(flowie_control_pgsql_command_t *view,
   if (rc == TURBO_OK && (PQntuples(revision) != 1 || PQnfields(revision) != 1)) rc = TURBO_EPROTO;
   if (rc == TURBO_OK) rc = flowie_control_pgsql_parse_u64(revision, 0, 0, current_out);
   if (revision) PQclear(revision);
-  if (rc == TURBO_OK && *current_out != expected_revision) return TURBO_EBUSY;
+  if (rc == TURBO_OK && expected_revision != 0u && *current_out != expected_revision)
+    return TURBO_EBUSY;
   return rc;
 }
 
@@ -682,7 +675,8 @@ flowie_control_pgsql_command_revision_read(flowie_control_pgsql_command_t *view,
   if (rc == TURBO_OK && (PQntuples(revision) != 1 || PQnfields(revision) != 1)) rc = TURBO_EPROTO;
   if (rc == TURBO_OK) rc = flowie_control_pgsql_parse_u64(revision, 0, 0, &current);
   if (revision) PQclear(revision);
-  if (rc == TURBO_OK && current != expected_revision) return TURBO_EBUSY;
+  if (rc == TURBO_OK && expected_revision != 0u && current != expected_revision)
+    return TURBO_EBUSY;
   return rc;
 }
 
@@ -717,7 +711,7 @@ flowie_control_pgsql_command_revision_advance(flowie_control_pgsql_command_t *vi
 
 static int flowie_control_pgsql_command_audit_insert(
     flowie_control_pgsql_command_t *view, flowie_control_pgsql_command_session_t *session,
-    const char *request_id, const char *actor, const char *operation, const char *root_group_id,
+    const char *request_id, const char *actor, const char *operation, const char *domain_id,
     const char *target_id, const char *target_detail, uint64_t revision, uint64_t occurred_at) {
   char revision_text[32];
   char occurred_at_text[32];
@@ -728,7 +722,7 @@ static int flowie_control_pgsql_command_audit_insert(
   values[0] = request_id;
   values[1] = actor;
   values[2] = operation;
-  values[3] = root_group_id;
+  values[3] = domain_id;
   values[4] = target_id;
   values[5] = target_detail;
   values[6] = revision_text;
@@ -739,19 +733,19 @@ static int flowie_control_pgsql_command_audit_insert(
   if (rc == TURBO_OK && (PQntuples(audit) != 1 || PQnfields(audit) != 1)) rc = TURBO_EPROTO;
   if (audit) PQclear(audit);
   if (rc == TURBO_OK)
-    flowie_control_pgsql_command_evidence_set(session, request_id, actor, operation, root_group_id,
+    flowie_control_pgsql_command_evidence_set(session, request_id, actor, operation, domain_id,
                                               target_id, target_detail, revision);
   return rc;
 }
 
 static int flowie_control_pgsql_command_root_lookup(flowie_control_pgsql_command_t *view,
                                                     flowie_control_pgsql_command_session_t *session,
-                                                    const char *root_group_id) {
-  const char *values[1] = {root_group_id};
+                                                    const char *domain_id) {
+  const char *values[1] = {domain_id};
   PGresult *group = NULL;
   uint64_t depth = 0u;
   int rc = flowie_control_pgsql_command_exec(
-      session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_ROOT_GROUP_LOOKUP], 1, values, &group);
+      session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_DOMAIN_LOOKUP], 1, values, &group);
   if (rc != TURBO_OK) return rc;
   if (PQntuples(group) == 0) {
     rc = PQnfields(group) == 2 ? TURBO_ENOENT : TURBO_EPROTO;
@@ -772,13 +766,13 @@ done:
 
 static int flowie_control_pgsql_command_group_lookup(
     flowie_control_pgsql_command_t *view, flowie_control_pgsql_command_session_t *session,
-    const char *root_group_id, const char *group_id, uint64_t *depth_out, int *enabled_out) {
-  const char *values[2] = {root_group_id, group_id};
+    const char *domain_id, const char *group_id, uint64_t *depth_out, int *enabled_out) {
+  const char *values[2] = {domain_id, group_id};
   PGresult *group = NULL;
   int rc;
   if (depth_out) *depth_out = 0u;
   if (enabled_out) *enabled_out = 0;
-  if (!view || !session || !root_group_id || !group_id || !depth_out || !enabled_out)
+  if (!view || !session || !domain_id || !group_id || !depth_out || !enabled_out)
     return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_exec(
       session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_LOOKUP], 2, values, &group);
@@ -793,14 +787,14 @@ static int flowie_control_pgsql_command_group_lookup(
 
 static int flowie_control_pgsql_command_group_references(
     flowie_control_pgsql_command_t *view, flowie_control_pgsql_command_session_t *session,
-    const char *root_group_id, const char *group_id, int *referenced_out) {
-  const char *values[2] = {root_group_id, group_id};
+    const char *domain_id, const char *group_id, int *referenced_out) {
+  const char *values[2] = {domain_id, group_id};
   PGresult *result = NULL;
   int active_child = 0;
   int direct_membership = 0;
   int rc;
   if (referenced_out) *referenced_out = 0;
-  if (!view || !session || !root_group_id || !group_id || !referenced_out) return TURBO_EINVAL;
+  if (!view || !session || !domain_id || !group_id || !referenced_out) return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_exec(
       session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_REFERENCES], 2, values, &result);
   if (rc == TURBO_OK && (PQntuples(result) != 1 || PQnfields(result) != 2)) rc = TURBO_EPROTO;
@@ -814,13 +808,13 @@ static int flowie_control_pgsql_command_group_references(
 
 static int flowie_control_pgsql_command_role_lookup(flowie_control_pgsql_command_t *view,
                                                     flowie_control_pgsql_command_session_t *session,
-                                                    const char *root_group_id, const char *role_id,
+                                                    const char *domain_id, const char *role_id,
                                                     int *enabled_out) {
-  const char *values[2] = {root_group_id, role_id};
+  const char *values[2] = {domain_id, role_id};
   PGresult *role = NULL;
   int rc;
   if (enabled_out) *enabled_out = 0;
-  if (!view || !session || !root_group_id || !role_id || !enabled_out) return TURBO_EINVAL;
+  if (!view || !session || !domain_id || !role_id || !enabled_out) return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_exec(
       session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_ROLE_LOOKUP], 2, values, &role);
   if (rc == TURBO_OK && PQntuples(role) == 0)
@@ -833,8 +827,8 @@ static int flowie_control_pgsql_command_role_lookup(flowie_control_pgsql_command
 
 static int flowie_control_pgsql_command_user_role_capacity(
     flowie_control_pgsql_command_t *view, flowie_control_pgsql_command_session_t *session,
-    const char *root_group_id, const char *principal_id) {
-  const char *values[2] = {root_group_id, principal_id};
+    const char *domain_id, const char *principal_id) {
+  const char *values[2] = {domain_id, principal_id};
   PGresult *result = NULL;
   uint64_t count = 0u;
   int rc = flowie_control_pgsql_command_exec(
@@ -849,8 +843,8 @@ static int flowie_control_pgsql_command_user_role_capacity(
 
 static int flowie_control_pgsql_command_membership_capacity(
     flowie_control_pgsql_command_t *view, flowie_control_pgsql_command_session_t *session,
-    const char *root_group_id, const char *principal_id, const char *group_id) {
-  const char *values[3] = {root_group_id, principal_id, group_id};
+    const char *domain_id, const char *principal_id, const char *group_id) {
+  const char *values[3] = {domain_id, principal_id, group_id};
   PGresult *result = NULL;
   uint64_t count = 0u;
   int rc = flowie_control_pgsql_command_exec(
@@ -866,13 +860,13 @@ static int flowie_control_pgsql_command_membership_capacity(
 
 static int flowie_control_pgsql_command_policy_subject_referenced(
     flowie_control_pgsql_command_t *view, flowie_control_pgsql_command_session_t *session,
-    const char *root_group_id, turbo_flow_security_subject_kind_t subject_kind, const char *subject,
+    const char *domain_id, turbo_flow_security_subject_kind_t subject_kind, const char *subject,
     int *referenced_out) {
-  const char *values[1] = {root_group_id};
+  const char *values[1] = {domain_id};
   PGresult *lines = NULL;
   int rc;
   if (referenced_out) *referenced_out = 0;
-  if (!view || !session || !root_group_id || !subject || !referenced_out ||
+  if (!view || !session || !domain_id || !subject || !referenced_out ||
       (subject_kind != TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL &&
        subject_kind != TURBO_FLOW_SECURITY_SUBJECT_ROLE &&
        subject_kind != TURBO_FLOW_SECURITY_SUBJECT_GROUP))
@@ -891,7 +885,7 @@ static int flowie_control_pgsql_command_policy_subject_referenced(
     rc = flowie_control_pgsql_result_text(lines, row, 0, &line, &line_size);
     if (rc != TURBO_OK || line_size == 0u || line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX ||
         turbo_flow_security_rule_parse_line(line, line_size, &rule) != TURBO_OK ||
-        strcmp(rule.root_group_id, root_group_id) != 0) {
+        strcmp(rule.domain_id, domain_id) != 0) {
       rc = TURBO_EPROTO;
       goto done;
     }
@@ -924,13 +918,13 @@ static int flowie_control_pgsql_command_result_bool(PGresult *result, int row, i
 static int
 flowie_control_pgsql_command_credential_state(flowie_control_pgsql_command_t *view,
                                               flowie_control_pgsql_command_session_t *session,
-                                              const char *root_group_id, const char *principal_id,
+                                              const char *domain_id, const char *principal_id,
                                               flowie_control_pgsql_credential_state_t *state_out) {
-  const char *values[2] = {root_group_id, principal_id};
+  const char *values[2] = {domain_id, principal_id};
   flowie_control_pgsql_credential_state_t state = {0};
   PGresult *result = NULL;
   int rc;
-  if (!view || !session || !root_group_id || !principal_id || !state_out) return TURBO_EINVAL;
+  if (!view || !session || !domain_id || !principal_id || !state_out) return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_exec(
       session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_CREDENTIAL_STATE], 2, values, &result);
   if (rc == TURBO_OK && PQntuples(result) == 0)
@@ -961,7 +955,7 @@ static int flowie_control_pgsql_command_policy_publish_detail(uint64_t expires_a
 
 static int flowie_control_pgsql_command_policy_rule_validate(
     flowie_control_pgsql_command_t *view, flowie_control_pgsql_command_session_t *session,
-    const char *root_group_id, const char *rule_line, size_t rule_line_size,
+    const char *domain_id, const char *rule_line, size_t rule_line_size,
     turbo_flow_security_rule_t *rule_out) {
   flowie_control_pgsql_credential_state_t user = {0};
   turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
@@ -969,27 +963,27 @@ static int flowie_control_pgsql_command_policy_rule_validate(
   int enabled = 0;
   int rc;
   if (!view || !session) return TURBO_EINVAL;
-  rc = flowie_control_policy_rule_syntax_validate(root_group_id, rule_line, rule_line_size, &rule);
+  rc = flowie_control_policy_rule_syntax_validate(domain_id, rule_line, rule_line_size, &rule);
   if (rc != TURBO_OK) return rc;
-  rc = flowie_control_pgsql_command_root_lookup(view, session, root_group_id);
+  rc = flowie_control_pgsql_command_root_lookup(view, session, domain_id);
   if (rc != TURBO_OK) return rc;
   switch (rule.subject_kind) {
   case TURBO_FLOW_SECURITY_SUBJECT_ANY:
     break;
   case TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL:
-    rc = flowie_control_pgsql_command_credential_state(view, session, root_group_id, rule.subject,
+    rc = flowie_control_pgsql_command_credential_state(view, session, domain_id, rule.subject,
                                                        &user);
     if (rc != TURBO_OK) return rc;
     if (!user.user_enabled) return TURBO_EPERM;
     break;
   case TURBO_FLOW_SECURITY_SUBJECT_ROLE:
-    rc = flowie_control_pgsql_command_role_lookup(view, session, root_group_id, rule.subject,
+    rc = flowie_control_pgsql_command_role_lookup(view, session, domain_id, rule.subject,
                                                   &enabled);
     if (rc != TURBO_OK) return rc;
     if (!enabled) return TURBO_EPERM;
     break;
   case TURBO_FLOW_SECURITY_SUBJECT_GROUP:
-    rc = flowie_control_pgsql_command_group_lookup(view, session, root_group_id, rule.subject,
+    rc = flowie_control_pgsql_command_group_lookup(view, session, domain_id, rule.subject,
                                                    &depth, &enabled);
     if (rc != TURBO_OK) return rc;
     if (!enabled) return TURBO_EPERM;
@@ -1003,12 +997,12 @@ static int flowie_control_pgsql_command_policy_rule_validate(
 
 static int flowie_control_pgsql_command_policy_validate(
     flowie_control_pgsql_command_t *view, flowie_control_pgsql_command_session_t *session,
-    const char *root_group_id, uint64_t store_revision, flowie_control_policy_validation_t *out) {
-  const char *values[1] = {root_group_id};
+    const char *domain_id, uint64_t store_revision, flowie_control_policy_validation_t *out) {
+  const char *values[1] = {domain_id};
   flowie_control_policy_validation_t validation = FLOWIE_CONTROL_POLICY_VALIDATION_INIT;
   PGresult *lines = NULL;
   int rc;
-  if (!view || !session || !root_group_id || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
+  if (!view || !session || !domain_id || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_exec(
       session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_DRAFT_LINES], 1, values, &lines);
   if (rc != TURBO_OK) return rc;
@@ -1027,7 +1021,7 @@ static int flowie_control_pgsql_command_policy_validate(
     }
     rc = flowie_control_pgsql_result_text(lines, row, 0, &line, &line_size);
     if (rc != TURBO_OK) goto done;
-    rc = flowie_control_pgsql_command_policy_rule_validate(view, session, root_group_id, line,
+    rc = flowie_control_pgsql_command_policy_rule_validate(view, session, domain_id, line,
                                                            line_size, &rule);
     if (rc != TURBO_OK) goto done;
     ++validation.rule_count;
@@ -1048,12 +1042,12 @@ done:
 static int
 flowie_control_pgsql_command_policy_version(flowie_control_pgsql_command_t *view,
                                             flowie_control_pgsql_command_session_t *session,
-                                            const char *root_group_id, uint64_t *version_out) {
-  const char *values[1] = {root_group_id};
+                                            const char *domain_id, uint64_t *version_out) {
+  const char *values[1] = {domain_id};
   PGresult *result = NULL;
   int rc;
   if (version_out) *version_out = 0u;
-  if (!view || !session || !root_group_id || !version_out) return TURBO_EINVAL;
+  if (!view || !session || !domain_id || !version_out) return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_exec(
       session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_BUNDLE_VERSION], 1, values, &result);
   if (rc == TURBO_OK && PQntuples(result) == 0)
@@ -1097,8 +1091,8 @@ static int flowie_control_pgsql_hex_encode(const uint8_t *input, size_t input_si
   return TURBO_OK;
 }
 
-int flowie_control_pgsql_command_root_group_create(
-    flowie_control_pgsql_command_t *view, const flowie_control_root_group_create_command_t *command,
+int flowie_control_pgsql_command_domain_create(
+    flowie_control_pgsql_command_t *view, const flowie_control_domain_create_command_t *command,
     flowie_control_command_result_t *result) {
   flowie_control_pgsql_command_session_t session;
   char next_text[32];
@@ -1113,7 +1107,7 @@ int flowie_control_pgsql_command_root_group_create(
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_pgsql_command_common_valid(command->root_group_id, command->root_group_id,
+      !flowie_control_pgsql_command_common_valid(command->domain_id, command->domain_id,
                                                  command->actor, command->request_id,
                                                  command->expected_revision, command->occurred_at))
     return TURBO_EINVAL;
@@ -1123,8 +1117,8 @@ int flowie_control_pgsql_command_root_group_create(
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_ROOT_GROUP_CREATE, command->root_group_id,
-        command->root_group_id, FLOWIE_CONTROL_PGSQL_TARGET_ROOT_GROUP, result, &found);
+        FLOWIE_CONTROL_PGSQL_OPERATION_DOMAIN_CREATE, command->domain_id,
+        command->domain_id, FLOWIE_CONTROL_PGSQL_TARGET_DOMAIN, result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
@@ -1133,20 +1127,20 @@ int flowie_control_pgsql_command_root_group_create(
   if (rc == TURBO_OK && !found) rc = flowie_control_pgsql_u64_text(next, next_text);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
-  values[0] = command->root_group_id;
+  values[0] = command->domain_id;
   values[1] = next_text;
   values[2] = occurred_at_text;
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_exec(
-        &session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_ROOT_GROUP_INSERT], 3, values, &inserted);
+        &session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_DOMAIN_INSERT], 3, values, &inserted);
   if (rc == TURBO_OK && !found && (PQntuples(inserted) != 1 || PQnfields(inserted) != 1))
     rc = TURBO_EPROTO;
   if (inserted) PQclear(inserted);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_ROOT_GROUP_CREATE, command->root_group_id,
-        command->root_group_id, FLOWIE_CONTROL_PGSQL_TARGET_ROOT_GROUP, next, command->occurred_at);
+        FLOWIE_CONTROL_PGSQL_OPERATION_DOMAIN_CREATE, command->domain_id,
+        command->domain_id, FLOWIE_CONTROL_PGSQL_TARGET_DOMAIN, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
     result->replayed = 0;
@@ -1166,13 +1160,13 @@ static int flowie_control_pgsql_command_credential_issue_preflight(
   int rc = flowie_control_pgsql_command_session_open(view, &session);
   if (rc != TURBO_OK) return rc;
   rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
-                                           operation, command->root_group_id, command->principal_id,
+                                           operation, command->domain_id, command->principal_id,
                                            FLOWIE_CONTROL_PGSQL_DETAIL_ARGON2ID, &replay, &found);
   if (rc == TURBO_OK && found) rc = TURBO_EALREADY;
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_revision_read(view, &session, command->expected_revision);
   if (rc == TURBO_OK)
-    rc = flowie_control_pgsql_command_credential_state(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_credential_state(view, &session, command->domain_id,
                                                        command->principal_id, &state);
   if (rc == TURBO_OK && !state.user_enabled) rc = TURBO_EPERM;
   if (rc == TURBO_OK && require_existing && !state.credential_exists) rc = TURBO_ENOENT;
@@ -1187,7 +1181,7 @@ static int flowie_control_pgsql_command_credential_issue(
   flowie_control_pgsql_credential_state_t state = {0};
   flowie_control_credential_kdf_params_t params;
   flowie_control_command_result_t replay = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  uint8_t secret[FLOWIE_CONTROL_CREDENTIAL_SECRET_SIZE] = {0};
+  char token[FLOWIE_CONTROL_CREDENTIAL_TOKEN_CAPACITY] = {0};
   uint8_t salt[FLOWIE_CONTROL_CREDENTIAL_SALT_SIZE] = {0};
   uint8_t verifier[FLOWIE_CONTROL_CREDENTIAL_VERIFIER_SIZE] = {0};
   char algorithm_text[32];
@@ -1214,7 +1208,7 @@ static int flowie_control_pgsql_command_credential_issue(
        (command->initial_secret &&
         (command->initial_secret_size == 0u ||
          command->initial_secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX))) ||
-      !flowie_control_pgsql_command_common_valid(command->root_group_id, command->principal_id,
+      !flowie_control_pgsql_command_common_valid(command->domain_id, command->principal_id,
                                                  command->actor, command->request_id,
                                                  command->expected_revision, command->occurred_at))
     return TURBO_EINVAL;
@@ -1224,21 +1218,21 @@ static int flowie_control_pgsql_command_credential_issue(
   if (rc == TURBO_OK && command->initial_secret)
     rc = flowie_control_credential_hash(command->initial_secret, command->initial_secret_size, salt,
                                         verifier, &params);
-  else if (rc == TURBO_OK) rc = flowie_control_credential_generate(secret, salt, verifier, &params);
+  else if (rc == TURBO_OK) rc = flowie_control_credential_generate(token, salt, verifier, &params);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_pgsql_command_session_open(view, &session);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_pgsql_command_transaction_begin(&session);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(
-        view, &session, command->request_id, command->actor, operation, command->root_group_id,
+        view, &session, command->request_id, command->actor, operation, command->domain_id,
         command->principal_id, FLOWIE_CONTROL_PGSQL_DETAIL_ARGON2ID, &replay, &found);
   if (rc == TURBO_OK && found) rc = TURBO_EALREADY;
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
   if (rc == TURBO_OK)
-    rc = flowie_control_pgsql_command_credential_state(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_credential_state(view, &session, command->domain_id,
                                                        command->principal_id, &state);
   if (rc == TURBO_OK && !state.user_enabled) rc = TURBO_EPERM;
   if (rc == TURBO_OK && require_existing && !state.credential_exists) rc = TURBO_ENOENT;
@@ -1256,7 +1250,7 @@ static int flowie_control_pgsql_command_credential_issue(
                                          sizeof(verifier_hex));
   if (rc == TURBO_OK) rc = flowie_control_pgsql_u64_text(next, next_text);
   if (rc == TURBO_OK) rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
-  values[0] = command->root_group_id;
+  values[0] = command->domain_id;
   values[1] = command->principal_id;
   values[2] = algorithm_text;
   values[3] = memory_blocks_text;
@@ -1276,19 +1270,19 @@ static int flowie_control_pgsql_command_credential_issue(
   if (updated) PQclear(updated);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_audit_insert(
-        view, &session, command->request_id, command->actor, operation, command->root_group_id,
+        view, &session, command->request_id, command->actor, operation, command->domain_id,
         command->principal_id, FLOWIE_CONTROL_PGSQL_DETAIL_ARGON2ID, next, command->occurred_at);
   rc = flowie_control_pgsql_command_session_close(&session, rc);
   if (rc == TURBO_OK) {
     result->revision = next;
     if (!command->initial_secret) {
-      memcpy(result->secret, secret, sizeof(result->secret));
-      result->secret_size = sizeof(result->secret);
+      memcpy(result->token, token, sizeof(result->token));
+      result->token_size = FLOWIE_CONTROL_CREDENTIAL_TOKEN_SIZE;
     }
   }
 
 done:
-  flowie_control_credential_wipe(secret, sizeof(secret));
+  flowie_control_credential_wipe(token, sizeof(token));
   flowie_control_credential_wipe(salt, sizeof(salt));
   flowie_control_credential_wipe(verifier, sizeof(verifier));
   flowie_control_credential_wipe(salt_hex, sizeof(salt_hex));
@@ -1329,7 +1323,7 @@ int flowie_control_pgsql_command_credential_revoke(
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_pgsql_command_common_valid(command->root_group_id, command->principal_id,
+      !flowie_control_pgsql_command_common_valid(command->domain_id, command->principal_id,
                                                  command->actor, command->request_id,
                                                  command->expected_revision, command->occurred_at))
     return TURBO_EINVAL;
@@ -1339,13 +1333,13 @@ int flowie_control_pgsql_command_credential_revoke(
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_CREDENTIAL_REVOKE, command->root_group_id,
+        FLOWIE_CONTROL_PGSQL_OPERATION_CREDENTIAL_REVOKE, command->domain_id,
         command->principal_id, FLOWIE_CONTROL_PGSQL_TARGET_CREDENTIAL, result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_credential_state(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_credential_state(view, &session, command->domain_id,
                                                        command->principal_id, &state);
   if (rc == TURBO_OK && !found && !state.credential_exists) rc = TURBO_ENOENT;
   if (rc == TURBO_OK && !found && !state.credential_enabled) rc = TURBO_EALREADY;
@@ -1356,7 +1350,7 @@ int flowie_control_pgsql_command_credential_revoke(
     rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
   values[0] = next_text;
   values[1] = occurred_at_text;
-  values[2] = command->root_group_id;
+  values[2] = command->domain_id;
   values[3] = command->principal_id;
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_exec(
@@ -1367,7 +1361,7 @@ int flowie_control_pgsql_command_credential_revoke(
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_CREDENTIAL_REVOKE, command->root_group_id,
+        FLOWIE_CONTROL_PGSQL_OPERATION_CREDENTIAL_REVOKE, command->domain_id,
         command->principal_id, FLOWIE_CONTROL_PGSQL_TARGET_CREDENTIAL, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -1395,7 +1389,7 @@ int flowie_control_pgsql_command_user_create(flowie_control_pgsql_command_t *vie
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->principal_id, command->actor, command->request_id,
+          command->domain_id, command->principal_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->principal_type, TURBO_FLOW_SECURITY_TYPE_MAX))
     return TURBO_EINVAL;
@@ -1405,19 +1399,19 @@ int flowie_control_pgsql_command_user_create(flowie_control_pgsql_command_t *vie
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
                                              FLOWIE_CONTROL_PGSQL_OPERATION_USER_CREATE,
-                                             command->root_group_id, command->principal_id,
+                                             command->domain_id, command->principal_id,
                                              command->principal_type, result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_root_lookup(view, &session, command->root_group_id);
+    rc = flowie_control_pgsql_command_root_lookup(view, &session, command->domain_id);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_advance(view, &session, current, &next);
   if (rc == TURBO_OK && !found) rc = flowie_control_pgsql_u64_text(next, next_text);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
-  values[0] = command->root_group_id;
+  values[0] = command->domain_id;
   values[1] = command->principal_id;
   values[2] = command->principal_type;
   values[3] = next_text;
@@ -1431,7 +1425,7 @@ int flowie_control_pgsql_command_user_create(flowie_control_pgsql_command_t *vie
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_USER_CREATE, command->root_group_id, command->principal_id,
+        FLOWIE_CONTROL_PGSQL_OPERATION_USER_CREATE, command->domain_id, command->principal_id,
         command->principal_type, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -1462,7 +1456,7 @@ int flowie_control_pgsql_command_user_disable(flowie_control_pgsql_command_t *vi
     *result = (flowie_control_command_result_t)FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
-      !flowie_control_pgsql_command_common_valid(command->root_group_id, command->principal_id,
+      !flowie_control_pgsql_command_common_valid(command->domain_id, command->principal_id,
                                                  command->actor, command->request_id,
                                                  command->expected_revision, command->occurred_at))
     return TURBO_EINVAL;
@@ -1472,12 +1466,12 @@ int flowie_control_pgsql_command_user_disable(flowie_control_pgsql_command_t *vi
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
                                              FLOWIE_CONTROL_PGSQL_OPERATION_USER_DISABLE,
-                                             command->root_group_id, command->principal_id, NULL,
+                                             command->domain_id, command->principal_id, NULL,
                                              result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
-  lookup_values[0] = command->root_group_id;
+  lookup_values[0] = command->domain_id;
   lookup_values[1] = command->principal_id;
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_exec(
@@ -1491,7 +1485,7 @@ int flowie_control_pgsql_command_user_disable(flowie_control_pgsql_command_t *vi
   if (user) PQclear(user);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_policy_subject_referenced(
-        view, &session, command->root_group_id, TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL,
+        view, &session, command->domain_id, TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL,
         command->principal_id, &policy_reference);
   if (rc == TURBO_OK && !found && policy_reference) rc = TURBO_EBUSY;
   if (rc == TURBO_OK && !found)
@@ -1501,7 +1495,7 @@ int flowie_control_pgsql_command_user_disable(flowie_control_pgsql_command_t *vi
     rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
   update_values[0] = next_text;
   update_values[1] = occurred_at_text;
-  update_values[2] = command->root_group_id;
+  update_values[2] = command->domain_id;
   update_values[3] = command->principal_id;
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_exec(
@@ -1512,7 +1506,7 @@ int flowie_control_pgsql_command_user_disable(flowie_control_pgsql_command_t *vi
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_USER_DISABLE, command->root_group_id, command->principal_id,
+        FLOWIE_CONTROL_PGSQL_OPERATION_USER_DISABLE, command->domain_id, command->principal_id,
         principal_type, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -1543,11 +1537,12 @@ int flowie_control_pgsql_command_group_create(flowie_control_pgsql_command_t *vi
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->group_id, command->actor, command->request_id,
+          command->domain_id, command->group_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
-      !flowie_control_text_valid(command->parent_group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
-      strcmp(command->group_id, command->root_group_id) == 0 ||
-      strcmp(command->group_id, command->parent_group_id) == 0)
+      (command->parent_group_id &&
+       !flowie_control_text_valid(command->parent_group_id, TURBO_FLOW_SECURITY_ID_MAX)) ||
+      strcmp(command->group_id, command->domain_id) == 0 ||
+      (command->parent_group_id && strcmp(command->group_id, command->parent_group_id) == 0))
     return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_session_open(view, &session);
   if (rc != TURBO_OK) return rc;
@@ -1555,24 +1550,33 @@ int flowie_control_pgsql_command_group_create(flowie_control_pgsql_command_t *vi
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
                                              FLOWIE_CONTROL_PGSQL_OPERATION_GROUP_CREATE,
-                                             command->root_group_id, command->group_id,
-                                             command->parent_group_id, result, &found);
+                                             command->domain_id, command->group_id,
+                                             command->parent_group_id
+                                                 ? command->parent_group_id
+                                                 : FLOWIE_CONTROL_PGSQL_TARGET_DOMAIN,
+                                             result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
-  if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_group_lookup(view, &session, command->root_group_id,
+  if (rc == TURBO_OK && !found && command->parent_group_id)
+    rc = flowie_control_pgsql_command_group_lookup(view, &session, command->domain_id,
                                                    command->parent_group_id, &parent_depth,
                                                    &parent_enabled);
-  if (rc == TURBO_OK && !found && !parent_enabled) rc = TURBO_EPERM;
-  if (rc == TURBO_OK && !found && parent_depth >= FLOWIE_CONTROL_GROUP_MAX_DEPTH) rc = TURBO_ENOSPC;
+  if (rc == TURBO_OK && !found && command->parent_group_id && !parent_enabled) rc = TURBO_EPERM;
+  if (rc == TURBO_OK && !found && command->parent_group_id &&
+      parent_depth >= FLOWIE_CONTROL_GROUP_MAX_DEPTH)
+    rc = TURBO_ENOSPC;
+  if (rc == TURBO_OK && !found && !command->parent_group_id)
+    rc = flowie_control_pgsql_command_root_lookup(view, &session, command->domain_id);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_advance(view, &session, current, &next);
-  if (rc == TURBO_OK && !found) rc = flowie_control_pgsql_u64_text(parent_depth + 1u, depth_text);
+  if (rc == TURBO_OK && !found)
+    rc = flowie_control_pgsql_u64_text(command->parent_group_id ? parent_depth + 1u : 0u,
+                                       depth_text);
   if (rc == TURBO_OK && !found) rc = flowie_control_pgsql_u64_text(next, next_text);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
-  values[0] = command->root_group_id;
+  values[0] = command->domain_id;
   values[1] = command->group_id;
   values[2] = command->parent_group_id;
   values[3] = depth_text;
@@ -1587,8 +1591,9 @@ int flowie_control_pgsql_command_group_create(flowie_control_pgsql_command_t *vi
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_GROUP_CREATE, command->root_group_id, command->group_id,
-        command->parent_group_id, next, command->occurred_at);
+        FLOWIE_CONTROL_PGSQL_OPERATION_GROUP_CREATE, command->domain_id, command->group_id,
+        command->parent_group_id ? command->parent_group_id : FLOWIE_CONTROL_PGSQL_TARGET_DOMAIN,
+        next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
     result->replayed = 0;
@@ -1598,14 +1603,12 @@ int flowie_control_pgsql_command_group_create(flowie_control_pgsql_command_t *vi
   return rc;
 }
 
-int flowie_control_pgsql_command_group_disable(
-    flowie_control_pgsql_command_t *view, const flowie_control_group_disable_command_t *command,
+int flowie_control_pgsql_command_group_delete(
+    flowie_control_pgsql_command_t *view, const flowie_control_group_delete_command_t *command,
     flowie_control_command_result_t *result) {
   flowie_control_pgsql_command_session_t session;
-  char next_text[32];
-  char occurred_at_text[32];
-  const char *values[4];
-  PGresult *updated = NULL;
+  const char *values[2];
+  PGresult *deleted = NULL;
   uint64_t current = 0u;
   uint64_t next = 0u;
   uint64_t depth = 0u;
@@ -1619,54 +1622,47 @@ int flowie_control_pgsql_command_group_disable(
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->group_id, command->actor, command->request_id,
+          command->domain_id, command->group_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
-      strcmp(command->group_id, command->root_group_id) == 0)
+      strcmp(command->group_id, command->domain_id) == 0)
     return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_session_open(view, &session);
   if (rc != TURBO_OK) return rc;
   rc = flowie_control_pgsql_command_transaction_begin(&session);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
-                                             FLOWIE_CONTROL_PGSQL_OPERATION_GROUP_DISABLE,
-                                             command->root_group_id, command->group_id,
+                                             FLOWIE_CONTROL_PGSQL_OPERATION_GROUP_DELETE,
+                                             command->domain_id, command->group_id,
                                              FLOWIE_CONTROL_PGSQL_TARGET_GROUP, result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_group_lookup(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_group_lookup(view, &session, command->domain_id,
                                                    command->group_id, &depth, &enabled);
-  if (rc == TURBO_OK && !found && depth == 0u) rc = TURBO_EPERM;
-  if (rc == TURBO_OK && !found && !enabled) rc = TURBO_EALREADY;
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_group_references(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_group_references(view, &session, command->domain_id,
                                                        command->group_id, &referenced);
   if (rc == TURBO_OK && !found && referenced) rc = TURBO_EBUSY;
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_policy_subject_referenced(
-        view, &session, command->root_group_id, TURBO_FLOW_SECURITY_SUBJECT_GROUP,
+        view, &session, command->domain_id, TURBO_FLOW_SECURITY_SUBJECT_GROUP,
         command->group_id, &policy_reference);
   if (rc == TURBO_OK && !found && policy_reference) rc = TURBO_EBUSY;
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_advance(view, &session, current, &next);
-  if (rc == TURBO_OK && !found) rc = flowie_control_pgsql_u64_text(next, next_text);
-  if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
-  values[0] = next_text;
-  values[1] = occurred_at_text;
-  values[2] = command->root_group_id;
-  values[3] = command->group_id;
+  values[0] = command->domain_id;
+  values[1] = command->group_id;
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_exec(
-        &session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_DISABLE], 4, values, &updated);
-  if (rc == TURBO_OK && !found && (PQntuples(updated) != 1 || PQnfields(updated) != 1))
+        &session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_DELETE], 2, values, &deleted);
+  if (rc == TURBO_OK && !found && (PQntuples(deleted) != 1 || PQnfields(deleted) != 1))
     rc = TURBO_EBUSY;
-  if (updated) PQclear(updated);
+  if (deleted) PQclear(deleted);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_GROUP_DISABLE, command->root_group_id, command->group_id,
+        FLOWIE_CONTROL_PGSQL_OPERATION_GROUP_DELETE, command->domain_id, command->group_id,
         FLOWIE_CONTROL_PGSQL_TARGET_GROUP, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -1697,10 +1693,10 @@ int flowie_control_pgsql_command_membership_add(
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->principal_id, command->actor, command->request_id,
+          command->domain_id, command->principal_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
-      strcmp(command->group_id, command->root_group_id) == 0)
+      strcmp(command->group_id, command->domain_id) == 0)
     return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_session_open(view, &session);
   if (rc != TURBO_OK) return rc;
@@ -1708,28 +1704,28 @@ int flowie_control_pgsql_command_membership_add(
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
                                              FLOWIE_CONTROL_PGSQL_OPERATION_MEMBERSHIP_ADD,
-                                             command->root_group_id, command->principal_id,
+                                             command->domain_id, command->principal_id,
                                              command->group_id, result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_credential_state(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_credential_state(view, &session, command->domain_id,
                                                        command->principal_id, &user);
   if (rc == TURBO_OK && !found && !user.user_enabled) rc = TURBO_EPERM;
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_group_lookup(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_group_lookup(view, &session, command->domain_id,
                                                    command->group_id, &depth, &enabled);
-  if (rc == TURBO_OK && !found && (!enabled || depth == 0u)) rc = TURBO_EPERM;
+  if (rc == TURBO_OK && !found && !enabled) rc = TURBO_EPERM;
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_membership_capacity(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_membership_capacity(view, &session, command->domain_id,
                                                           command->principal_id, command->group_id);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_advance(view, &session, current, &next);
   if (rc == TURBO_OK && !found) rc = flowie_control_pgsql_u64_text(next, next_text);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
-  values[0] = command->root_group_id;
+  values[0] = command->domain_id;
   values[1] = command->principal_id;
   values[2] = command->group_id;
   values[3] = next_text;
@@ -1743,7 +1739,7 @@ int flowie_control_pgsql_command_membership_add(
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_MEMBERSHIP_ADD, command->root_group_id,
+        FLOWIE_CONTROL_PGSQL_OPERATION_MEMBERSHIP_ADD, command->domain_id,
         command->principal_id, command->group_id, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -1769,10 +1765,10 @@ int flowie_control_pgsql_command_membership_remove(
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->principal_id, command->actor, command->request_id,
+          command->domain_id, command->principal_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->group_id, TURBO_FLOW_SECURITY_ID_MAX) ||
-      strcmp(command->group_id, command->root_group_id) == 0)
+      strcmp(command->group_id, command->domain_id) == 0)
     return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_session_open(view, &session);
   if (rc != TURBO_OK) return rc;
@@ -1780,12 +1776,12 @@ int flowie_control_pgsql_command_membership_remove(
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
                                              FLOWIE_CONTROL_PGSQL_OPERATION_MEMBERSHIP_REMOVE,
-                                             command->root_group_id, command->principal_id,
+                                             command->domain_id, command->principal_id,
                                              command->group_id, result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
-  values[0] = command->root_group_id;
+  values[0] = command->domain_id;
   values[1] = command->principal_id;
   values[2] = command->group_id;
   if (rc == TURBO_OK && !found)
@@ -1801,7 +1797,7 @@ int flowie_control_pgsql_command_membership_remove(
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_MEMBERSHIP_REMOVE, command->root_group_id,
+        FLOWIE_CONTROL_PGSQL_OPERATION_MEMBERSHIP_REMOVE, command->domain_id,
         command->principal_id, command->group_id, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -1829,7 +1825,7 @@ int flowie_control_pgsql_command_role_create(flowie_control_pgsql_command_t *vie
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->role_id, command->actor, command->request_id,
+          command->domain_id, command->role_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->role_id, TURBO_FLOW_SECURITY_TYPE_MAX))
     return TURBO_EINVAL;
@@ -1839,19 +1835,19 @@ int flowie_control_pgsql_command_role_create(flowie_control_pgsql_command_t *vie
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
                                              FLOWIE_CONTROL_PGSQL_OPERATION_ROLE_CREATE,
-                                             command->root_group_id, command->role_id,
+                                             command->domain_id, command->role_id,
                                              FLOWIE_CONTROL_PGSQL_TARGET_ROLE, result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_root_lookup(view, &session, command->root_group_id);
+    rc = flowie_control_pgsql_command_root_lookup(view, &session, command->domain_id);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_advance(view, &session, current, &next);
   if (rc == TURBO_OK && !found) rc = flowie_control_pgsql_u64_text(next, next_text);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
-  values[0] = command->root_group_id;
+  values[0] = command->domain_id;
   values[1] = command->role_id;
   values[2] = next_text;
   values[3] = occurred_at_text;
@@ -1864,7 +1860,7 @@ int flowie_control_pgsql_command_role_create(flowie_control_pgsql_command_t *vie
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_ROLE_CREATE, command->root_group_id, command->role_id,
+        FLOWIE_CONTROL_PGSQL_OPERATION_ROLE_CREATE, command->domain_id, command->role_id,
         FLOWIE_CONTROL_PGSQL_TARGET_ROLE, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -1894,7 +1890,7 @@ int flowie_control_pgsql_command_role_disable(flowie_control_pgsql_command_t *vi
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->role_id, command->actor, command->request_id,
+          command->domain_id, command->role_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->role_id, TURBO_FLOW_SECURITY_TYPE_MAX))
     return TURBO_EINVAL;
@@ -1904,18 +1900,18 @@ int flowie_control_pgsql_command_role_disable(flowie_control_pgsql_command_t *vi
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
                                              FLOWIE_CONTROL_PGSQL_OPERATION_ROLE_DISABLE,
-                                             command->root_group_id, command->role_id,
+                                             command->domain_id, command->role_id,
                                              FLOWIE_CONTROL_PGSQL_TARGET_ROLE, result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_role_lookup(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_role_lookup(view, &session, command->domain_id,
                                                   command->role_id, &enabled);
   if (rc == TURBO_OK && !found && !enabled) rc = TURBO_EALREADY;
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_policy_subject_referenced(
-        view, &session, command->root_group_id, TURBO_FLOW_SECURITY_SUBJECT_ROLE, command->role_id,
+        view, &session, command->domain_id, TURBO_FLOW_SECURITY_SUBJECT_ROLE, command->role_id,
         &policy_reference);
   if (rc == TURBO_OK && !found && policy_reference) rc = TURBO_EBUSY;
   if (rc == TURBO_OK && !found)
@@ -1925,7 +1921,7 @@ int flowie_control_pgsql_command_role_disable(flowie_control_pgsql_command_t *vi
     rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
   values[0] = next_text;
   values[1] = occurred_at_text;
-  values[2] = command->root_group_id;
+  values[2] = command->domain_id;
   values[3] = command->role_id;
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_exec(
@@ -1936,7 +1932,7 @@ int flowie_control_pgsql_command_role_disable(flowie_control_pgsql_command_t *vi
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_ROLE_DISABLE, command->root_group_id, command->role_id,
+        FLOWIE_CONTROL_PGSQL_OPERATION_ROLE_DISABLE, command->domain_id, command->role_id,
         FLOWIE_CONTROL_PGSQL_TARGET_ROLE, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -1966,7 +1962,7 @@ int flowie_control_pgsql_command_user_role_add(
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->principal_id, command->actor, command->request_id,
+          command->domain_id, command->principal_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->role_id, TURBO_FLOW_SECURITY_TYPE_MAX))
     return TURBO_EINVAL;
@@ -1976,17 +1972,17 @@ int flowie_control_pgsql_command_user_role_add(
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
                                              FLOWIE_CONTROL_PGSQL_OPERATION_USER_ROLE_ADD,
-                                             command->root_group_id, command->principal_id,
+                                             command->domain_id, command->principal_id,
                                              command->role_id, result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_credential_state(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_credential_state(view, &session, command->domain_id,
                                                        command->principal_id, &user);
   if (rc == TURBO_OK && !found && !user.user_enabled) rc = TURBO_EPERM;
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_role_lookup(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_role_lookup(view, &session, command->domain_id,
                                                   command->role_id, &role_enabled);
   if (rc == TURBO_OK && !found && !role_enabled) rc = TURBO_EPERM;
   if (rc == TURBO_OK && !found)
@@ -1994,7 +1990,7 @@ int flowie_control_pgsql_command_user_role_add(
   if (rc == TURBO_OK && !found) rc = flowie_control_pgsql_u64_text(next, next_text);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
-  values[0] = command->root_group_id;
+  values[0] = command->domain_id;
   values[1] = command->principal_id;
   values[2] = command->role_id;
   values[3] = next_text;
@@ -2006,12 +2002,12 @@ int flowie_control_pgsql_command_user_role_add(
     rc = TURBO_EPROTO;
   if (inserted) PQclear(inserted);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_user_role_capacity(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_user_role_capacity(view, &session, command->domain_id,
                                                          command->principal_id);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_USER_ROLE_ADD, command->root_group_id, command->principal_id,
+        FLOWIE_CONTROL_PGSQL_OPERATION_USER_ROLE_ADD, command->domain_id, command->principal_id,
         command->role_id, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -2037,7 +2033,7 @@ int flowie_control_pgsql_command_user_role_remove(
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->principal_id, command->actor, command->request_id,
+          command->domain_id, command->principal_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
       !flowie_control_text_valid(command->role_id, TURBO_FLOW_SECURITY_TYPE_MAX))
     return TURBO_EINVAL;
@@ -2047,12 +2043,12 @@ int flowie_control_pgsql_command_user_role_remove(
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
                                              FLOWIE_CONTROL_PGSQL_OPERATION_USER_ROLE_REMOVE,
-                                             command->root_group_id, command->principal_id,
+                                             command->domain_id, command->principal_id,
                                              command->role_id, result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
-  values[0] = command->root_group_id;
+  values[0] = command->domain_id;
   values[1] = command->principal_id;
   values[2] = command->role_id;
   if (rc == TURBO_OK && !found)
@@ -2068,7 +2064,7 @@ int flowie_control_pgsql_command_user_role_remove(
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_USER_ROLE_REMOVE, command->root_group_id,
+        FLOWIE_CONTROL_PGSQL_OPERATION_USER_ROLE_REMOVE, command->domain_id,
         command->principal_id, command->role_id, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -2099,7 +2095,7 @@ int flowie_control_pgsql_command_policy_rule_put(
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) || command->ordinal >= TURBO_FLOW_SECURITY_MAX_RULES ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->root_group_id, command->actor, command->request_id,
+          command->domain_id, command->domain_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
       !command->rule_line ||
       (line_size = strnlen(command->rule_line, TURBO_FLOW_SECURITY_RULE_LINE_MAX + 1u)) == 0u ||
@@ -2112,20 +2108,20 @@ int flowie_control_pgsql_command_policy_rule_put(
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
                                              FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_RULE_PUT,
-                                             command->root_group_id, target, command->rule_line,
+                                             command->domain_id, target, command->rule_line,
                                              result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_policy_rule_validate(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_policy_rule_validate(view, &session, command->domain_id,
                                                            command->rule_line, line_size, &rule);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_advance(view, &session, current, &next);
   if (rc == TURBO_OK && !found) rc = flowie_control_pgsql_u64_text(next, next_text);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_u64_text(command->occurred_at, occurred_at_text);
-  values[0] = command->root_group_id;
+  values[0] = command->domain_id;
   values[1] = target;
   values[2] = command->rule_line;
   values[3] = next_text;
@@ -2140,7 +2136,7 @@ int flowie_control_pgsql_command_policy_rule_put(
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_RULE_PUT, command->root_group_id, target,
+        FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_RULE_PUT, command->domain_id, target,
         command->rule_line, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -2168,7 +2164,7 @@ int flowie_control_pgsql_command_policy_rule_delete(
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) || command->ordinal >= TURBO_FLOW_SECURITY_MAX_RULES ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->root_group_id, command->actor, command->request_id,
+          command->domain_id, command->domain_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
       flowie_control_pgsql_command_policy_target(command->ordinal, target) != TURBO_OK)
     return TURBO_EINVAL;
@@ -2178,12 +2174,12 @@ int flowie_control_pgsql_command_policy_rule_delete(
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_RULE_DELETE, command->root_group_id, target,
+        FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_RULE_DELETE, command->domain_id, target,
         FLOWIE_CONTROL_PGSQL_TARGET_POLICY_RULE, result, &found);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
-  values[0] = command->root_group_id;
+  values[0] = command->domain_id;
   values[1] = target;
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_exec(
@@ -2198,7 +2194,7 @@ int flowie_control_pgsql_command_policy_rule_delete(
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_RULE_DELETE, command->root_group_id, target,
+        FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_RULE_DELETE, command->domain_id, target,
         FLOWIE_CONTROL_PGSQL_TARGET_POLICY_RULE, next, command->occurred_at);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
@@ -2237,7 +2233,7 @@ int flowie_control_pgsql_command_policy_publish(
   if (!view || !command || command->size < sizeof(*command) || !result ||
       result->size < sizeof(*result) ||
       !flowie_control_pgsql_command_common_valid(
-          command->root_group_id, command->root_group_id, command->actor, command->request_id,
+          command->domain_id, command->domain_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
       command->expires_at > (uint64_t)INT64_MAX ||
       (command->expires_at != 0u && command->expires_at <= command->occurred_at) ||
@@ -2250,7 +2246,7 @@ int flowie_control_pgsql_command_policy_publish(
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_replay(view, &session, command->request_id, command->actor,
                                              FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_PUBLISH,
-                                             command->root_group_id, command->root_group_id,
+                                             command->domain_id, command->domain_id,
                                              publish_detail, &replay, &found);
   if (rc == TURBO_OK && found)
     rc = flowie_control_pgsql_command_publish_replay_version(view, &session, command->request_id,
@@ -2264,24 +2260,24 @@ int flowie_control_pgsql_command_policy_publish(
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_policy_validate(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_policy_validate(view, &session, command->domain_id,
                                                       current, &validation);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_policy_version(view, &session, command->root_group_id,
+    rc = flowie_control_pgsql_command_policy_version(view, &session, command->domain_id,
                                                      &current_policy);
   if (rc == TURBO_OK && !found && current_policy >= (uint64_t)INT64_MAX) rc = TURBO_ERANGE;
   if (rc == TURBO_OK && !found) next_policy = current_policy + 1u;
   if (rc == TURBO_OK && !found) rc = flowie_control_pgsql_u64_text(next_policy, policy_text);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_u64_text(command->expires_at, expires_at_text);
-  root_values[0] = command->root_group_id;
+  root_values[0] = command->domain_id;
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_exec(
         &session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_RULES_DELETE], 1, root_values,
         &deleted);
   if (rc == TURBO_OK && !found && PQnfields(deleted) != 1) rc = TURBO_EPROTO;
   if (deleted) PQclear(deleted);
-  bundle_values[0] = command->root_group_id;
+  bundle_values[0] = command->domain_id;
   bundle_values[1] = policy_text;
   bundle_values[2] = expires_at_text;
   if (rc == TURBO_OK && !found)
@@ -2306,8 +2302,8 @@ int flowie_control_pgsql_command_policy_publish(
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_audit_insert(
         view, &session, command->request_id, command->actor,
-        FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_PUBLISH, command->root_group_id,
-        command->root_group_id, publish_detail, next, command->occurred_at);
+        FLOWIE_CONTROL_PGSQL_OPERATION_POLICY_PUBLISH, command->domain_id,
+        command->domain_id, publish_detail, next, command->occurred_at);
   publish_values[0] = command->request_id;
   publish_values[1] = policy_text;
   if (rc == TURBO_OK && !found)

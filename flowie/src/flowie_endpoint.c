@@ -1250,7 +1250,7 @@ static int flowie_security_principal_same_owner(const turbo_flow_security_princi
                                                 const turbo_flow_security_principal_t *right) {
   return left && right && strcmp(left->principal_id, right->principal_id) == 0 &&
          strcmp(left->principal_type, right->principal_type) == 0 &&
-         strcmp(left->root_group_id, right->root_group_id) == 0;
+         strcmp(left->domain_id, right->domain_id) == 0;
 }
 
 #define FLOWIE_ENDPOINT_RECORD_VERSION 3u
@@ -1494,8 +1494,8 @@ static int flowie_endpoint_record_encode(const flowie_endpoint_t *endpoint,
       rc = flowie_endpoint_record_size_add(&required, length);
     }
     if (rc == TURBO_OK) {
-      (void)flowie_endpoint_record_cstr_size(principal->root_group_id,
-                                             sizeof(principal->root_group_id), 0, &length);
+      (void)flowie_endpoint_record_cstr_size(principal->domain_id,
+                                             sizeof(principal->domain_id), 0, &length);
       rc = flowie_endpoint_record_size_add(&required, length);
     }
     if (rc == TURBO_OK) {
@@ -1548,7 +1548,7 @@ static int flowie_endpoint_record_encode(const flowie_endpoint_t *endpoint,
   } while (0)
     FLOWIE_APPEND_PRINCIPAL_FIELD(4u, principal->principal_id);
     FLOWIE_APPEND_PRINCIPAL_FIELD(5u, principal->principal_type);
-    FLOWIE_APPEND_PRINCIPAL_FIELD(6u, principal->root_group_id);
+    FLOWIE_APPEND_PRINCIPAL_FIELD(6u, principal->domain_id);
     FLOWIE_APPEND_PRINCIPAL_FIELD(7u, principal->auth_method);
     for (uint32_t i = 0u; rc == TURBO_OK && i < principal->role_count; ++i)
       FLOWIE_APPEND_PRINCIPAL_FIELD(8u, principal->roles[i]);
@@ -1690,7 +1690,7 @@ static int flowie_endpoint_record_decode(const flowie_endpoint_t *endpoint,
     } else if (type >= 4u && type <= 7u) {
       char *target = type == 4u   ? principal.principal_id
                      : type == 5u ? principal.principal_type
-                     : type == 6u ? principal.root_group_id
+                     : type == 6u ? principal.domain_id
                                   : principal.auth_method;
       size_t capacity = (type == 4u || type == 6u) ? TURBO_FLOW_SECURITY_ID_MAX + 1u
                                                    : TURBO_FLOW_SECURITY_TYPE_MAX + 1u;
@@ -1850,7 +1850,7 @@ static int flowie_security_authorize(flowie_endpoint_t *endpoint,
   now = flowie_security_now_epoch_seconds();
   if (principal->expires_at != 0u && now == 0u) return TURBO_EIO;
   request.principal = principal;
-  request.root_group_id = principal->root_group_id;
+  request.domain_id = principal->domain_id;
   request.action = action;
   request.resource_type = resource_type;
   request.resource = resource;
@@ -1916,50 +1916,55 @@ flowie_enhanced_auth_request_set_transport(turbo_flow_security_enhanced_auth_req
   request->transport_peer_address = context->transport_peer_address;
 }
 
-static int flowie_security_authenticate_connect(flowie_endpoint_connection_t *connection,
-                                                const flowie_mqtt_connect_view_t *connect,
-                                                turbo_flow_security_principal_t *principal_out,
-                                                uint8_t *reason_code_out) {
+static int flowie_security_authenticate_username(flowie_endpoint_connection_t *connection,
+                                                 flowie_mqtt_version_t version,
+                                                 flowie_mqtt_span_t username,
+                                                 flowie_mqtt_span_t password,
+                                                 turbo_flow_security_principal_t *principal_out,
+                                                 uint8_t *reason_code_out) {
   flowie_endpoint_t *endpoint;
   flowie_transport_auth_context_t transport_context;
   turbo_flow_security_auth_request_t request = TURBO_FLOW_SECURITY_AUTH_REQUEST_INIT;
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   tstr_t identity = NULL;
-  tstr_t client_id = NULL;
   int rc;
-  if (!connection || !(endpoint = connection->endpoint) || !connect || !principal_out ||
-      !reason_code_out || !endpoint->security_enabled)
+  if (!connection || !(endpoint = connection->endpoint) || !principal_out || !reason_code_out ||
+      !endpoint->security_enabled)
     return TURBO_EINVAL;
-  *reason_code_out = connect->version == FLOWIE_MQTT_VERSION_5 ? UINT8_C(0x86) : UINT8_C(0x04);
-  if (!connect->username.data || connect->username.size == 0u) return TURBO_EPERM;
-  identity = tstr_new_len(connect->username.data, connect->username.size);
-  client_id = tstr_new_len(connect->client_id.data, connect->client_id.size);
-  if (!identity || !client_id) {
-    rc = TURBO_ENOMEM;
-    goto done;
-  }
+  *reason_code_out = version == FLOWIE_MQTT_VERSION_5 ? UINT8_C(0x86) : UINT8_C(0x04);
+  if (!username.data || username.size == 0u) return TURBO_EPERM;
+  identity = tstr_new_len(username.data, username.size);
+  if (!identity) return TURBO_ENOMEM;
   request.identity = identity;
   request.method = endpoint->security_auth_method;
-  request.secret = connect->password.data;
-  request.secret_size = connect->password.size;
-  request.protocol = connect->version == FLOWIE_MQTT_VERSION_5     ? "mqtt5"
-                     : connect->version == FLOWIE_MQTT_VERSION_3_1 ? "mqtt3.1"
-                                                                   : "mqtt3.1.1";
+  request.secret = password.data;
+  request.secret_size = password.size;
+  request.protocol = version == FLOWIE_MQTT_VERSION_5     ? "mqtt5"
+                     : version == FLOWIE_MQTT_VERSION_3_1 ? "mqtt3.1"
+                                                          : "mqtt3.1.1";
   rc = flowie_transport_auth_context_init(connection, &transport_context);
   if (rc != TURBO_OK) goto done;
   flowie_auth_request_set_transport(&request, &transport_context);
   rc = turbo_flow_security_authenticate(&endpoint->auth_provider, &request, &principal);
-  if (rc != TURBO_OK) goto done;
-  *reason_code_out = connect->version == FLOWIE_MQTT_VERSION_5 ? UINT8_C(0x87) : UINT8_C(0x05);
-  rc = client_id[0] == '\0'
-           ? TURBO_EPERM
-           : flowie_security_authorize(endpoint, &principal, TURBO_FLOW_SECURITY_ACTION_CONNECT,
-                                       TURBO_FLOW_SECURITY_RESOURCE_GENERIC, client_id, NULL);
   if (rc == TURBO_OK) *principal_out = principal;
 
 done:
   tstr_free(identity);
-  tstr_free(client_id);
+  return rc;
+}
+
+static int flowie_security_authorize_connect_client_id(
+    flowie_endpoint_t *endpoint, const turbo_flow_security_principal_t *principal,
+    flowie_mqtt_span_t client_id) {
+  tstr_t resource;
+  int rc;
+  if (!endpoint || !principal) return TURBO_EINVAL;
+  if (!client_id.data || client_id.size == 0u) return TURBO_EPERM;
+  resource = tstr_new_len(client_id.data, client_id.size);
+  if (!resource) return TURBO_ENOMEM;
+  rc = flowie_security_authorize(endpoint, principal, TURBO_FLOW_SECURITY_ACTION_CONNECT,
+                                 TURBO_FLOW_SECURITY_RESOURCE_GENERIC, resource, NULL);
+  tstr_free(resource);
   return rc;
 }
 
@@ -2247,7 +2252,7 @@ static int flowie_endpoint_persistence_binding_validate(
   size_t required_records;
   size_t required_value_size;
   size_t max_packet_size;
-  uint32_t required = TURBO_FLOW_RECORD_STORE_DURABLE | TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH;
+  uint32_t required = TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH;
   if (!config || !persistence || persistence->size < sizeof(*persistence) ||
       !persistence->store_channel || !persistence->store_channel[0] ||
       !(store = persistence->store) || store->size < sizeof(*store) ||
@@ -6347,7 +6352,6 @@ static int flowie_endpoint_session_prepare(void *ctx, flowie_ingress_t *ingress,
       rc = flowie_auth_properties(&connect.properties, &enhanced_method, &enhanced_data);
       if (rc != TURBO_OK) return rc;
       if (connection->enhanced_auth_complete || enhanced_method.size != 0u) {
-        tstr_t client_id;
         if (connection->enhanced_auth_complete) {
           principal = connection->enhanced_principal;
           connection->enhanced_auth_complete = 0;
@@ -6374,16 +6378,13 @@ static int flowie_endpoint_session_prepare(void *ctx, flowie_ingress_t *ingress,
           free(enhanced_result);
         }
         security_reason = rc == TURBO_ENOTSUP ? UINT8_C(0x8c) : UINT8_C(0x87);
-        if (rc == TURBO_OK) {
-          client_id = tstr_new_len(connect.client_id.data, connect.client_id.size);
-          if (!client_id) return TURBO_ENOMEM;
-          rc = flowie_security_authorize(endpoint, &principal, TURBO_FLOW_SECURITY_ACTION_CONNECT,
-                                         TURBO_FLOW_SECURITY_RESOURCE_GENERIC, client_id, NULL);
-          tstr_free(client_id);
-        }
       } else {
-        rc = flowie_security_authenticate_connect(connection, &connect, &principal,
-                                                  &security_reason);
+        rc = flowie_security_authenticate_username(connection, connect.version, connect.username,
+                                                   connect.password, &principal, &security_reason);
+      }
+      if (rc == TURBO_OK) {
+        security_reason = connect.version == FLOWIE_MQTT_VERSION_5 ? UINT8_C(0x87) : UINT8_C(0x05);
+        rc = flowie_security_authorize_connect_client_id(endpoint, &principal, connect.client_id);
       }
       if (rc == TURBO_OK && connect.will_topic.size != 0u)
         rc = flowie_security_authorize_principal_span(

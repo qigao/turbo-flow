@@ -160,7 +160,7 @@ spec("flowie application bridges") {
     rule.effect = TURBO_FLOW_SECURITY_ALLOW;
     rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
     flowie_copy(rule.subject, sizeof(rule.subject), "writer");
-    flowie_copy(rule.root_group_id, sizeof(rule.root_group_id), "root-a");
+    flowie_copy(rule.domain_id, sizeof(rule.domain_id), "root-a");
     rule.action_mask = TURBO_FLOW_SECURITY_ACTION_PUBLISH | TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE;
     rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     rule.match_kind = TURBO_FLOW_SECURITY_MATCH_ADAPTER;
@@ -176,16 +176,15 @@ spec("flowie application bridges") {
 
     flowie_copy(principal.principal_id, sizeof(principal.principal_id), "device-1");
     flowie_copy(principal.principal_type, sizeof(principal.principal_type), "device");
-    flowie_copy(principal.root_group_id, sizeof(principal.root_group_id), "root-a");
+    flowie_copy(principal.domain_id, sizeof(principal.domain_id), "root-a");
     flowie_copy(principal.auth_method, sizeof(principal.auth_method), "token");
-    principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
-    principal.group_count = 1u;
-    flowie_copy(principal.groups[0], sizeof(principal.groups[0]), "root-a");
+    principal.scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
     principal.role_count = 1u;
     flowie_copy(principal.roles[0], sizeof(principal.roles[0]), "writer");
     principal.policy_version = 3u;
+    check_int_eq(flowie_security_principal_validate(&principal), TURBO_OK);
     request.principal = &principal;
-    request.root_group_id = "root-a";
+    request.domain_id = "root-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/device-1/events/temperature";

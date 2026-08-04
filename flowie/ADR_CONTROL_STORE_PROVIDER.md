@@ -8,7 +8,7 @@ operation table、repository provider 与公开 composition factory 已接入。
 
 ## 背景
 
-`flowie-control` 的用户、credential verifier、Root Group、Group、Role、membership、ACL draft、
+`flowie-control` 的用户、credential verifier、Domain、Group、Role、membership、ACL draft、
 published bundle 和管理审计需要共享同一事务事实。既有实现把领域命令和 SQLite SQL 放在
 `flowie_control_store.c` 中，auth service、management service 与 runtime 因而直接依赖
 `flowie_control_store_t`，无法在不复制上层服务的情况下增加外部数据库。
@@ -21,7 +21,7 @@ FlowStore ADR 也明确排除 ACL/control-plane SQLite。将控制面关系数�
 
 控制面增加内部、版本化的 `flowie_control_repository_t` persistence port。接口按职责拆分为：
 
-- user/root-group；
+- user/domain；
 - authentication snapshot；
 - credential lifecycle；
 - group/membership；
@@ -63,7 +63,7 @@ PostgreSQL provider 必须使用专用关系 schema 和类型化 query，不直�
 
 已完成的基础边界：
 
-- 使用独立 `root_group`、user、credential、group、membership、role、assignment、policy、audit、
+- 使用独立 `domain`、user、credential、group、membership、role、assignment、policy、audit、
   revision 表，不编码为通用 Record；
 - schema version + fingerprint 双重兼容性检查；
 - transaction-scoped advisory migration lock，migration 失败回滚；
@@ -77,17 +77,17 @@ PostgreSQL provider 必须使用专用关系 schema 和类型化 query，不直�
   只读 query view；
 - user/group/role 的 get/list/effective、policy draft validate/list/status 管理查询；所有分页均为有界
   keyset，组合身份和 policy validate 使用 `REPEATABLE READ READ ONLY` 一致性事务；
-- Root Group、user、credential、group/membership、role/assignment 与 policy draft/publish 写命令使用
+- Domain、user、credential、group/membership、role/assignment 与 policy draft/publish 写命令使用
   `SERIALIZABLE` 事务完成 request-id replay、revision CAS、ACL subject 引用检查、领域修改和 audit
   原子提交。
   group 命令同时约束父组状态、树深度、叶节点禁用与 effective-group ABI 容量；role 命令约束
-  Root Group、用户/角色启用状态、ACL subject 引用与 effective-role ABI 容量，容量越界时整笔赋权回滚。
+  Domain、用户/角色启用状态、ACL subject 引用与 effective-role ABI 容量，容量越界时整笔赋权回滚。
   policy rule 写入要求规范规则行、有效主体和合法 MQTT filter；publish 在同一事务重新验证完整非空
   draft、连续编号替换 bundle、独立推进 `policy_version`，并保存可重放的 publish 结果。
   credential KDF 在事务外执行，并在执行前后重新校验 revision、用户与 credential 状态；generate/rotate
   的 secret 只返回一次，重复 request-id 返回 `TURBO_EALREADY`。serialization/deadlock 不在 provider
   内静默重试，而是返回 `TURBO_EBUSY`，由服务边界用同一 request-id 决定重试。若 `COMMIT` 响应不可用，
-  provider 会先归还并清理原租约，再从新租约按 `request_id + actor + operation + root_group_id +
+  provider 会先归还并清理原租约，再从新租约按 `request_id + actor + operation + domain_id +
   target_id + target_detail` 查询事务内 durable audit，并严格比对 revision；匹配才把原命令判定为成功。
   这使 generate/rotate 能在“事务已提交但响应丢失”时仍安全返回本次内存中的一次性 secret。明确收到
   `COMMIT` 成功后，后续连接清理/重连失败只降低连接池健康容量，不得把已提交的业务命令改报失败。
@@ -113,7 +113,7 @@ conninfo password。
 OIDC/JWT、LDAP/AD 和 RADIUS 是 credential/token verifier 与 external-subject mapper，不是 Control Store
 provider。bundled 产品也不把这些 verifier 做成进程内 adapter：它们只能位于第三方 HTTPS 服务内部。
 Repository contract version 2 增加 `external_principal_snapshot`：HTTPS 外部认证成功并完成 subject
-mapping 后，它在一个一致性读事务中检查本地 user enabled 并加载本地 Root Group、Role/Group；不要求
+mapping 后，它在一个一致性读事务中检查本地 user enabled 并加载本地 Domain、Role/Group；不要求
 也不验证本地 credential。外部 assertion revision 只作为该次认证 generation 返回，不能进入本地
 password cache。未配置外部 authenticator 时，Repository credential verifier 是正式的本地 Auth；
 配置外部 authenticator 后，本地 verifier 不参与该次认证，也不作为失败 fallback。Broker 继续只注册
@@ -140,7 +140,7 @@ HTTPS authentication provider；SQLite/PostgreSQL Repository 和 FlowStore 都�
 - `test_flowie_control_pgsql_database` 在没有数据库时覆盖配置边界与 SQLSTATE 映射；
 - `test_flowie_control_pgsql_database_live` 覆盖 migrate 后 validate、连接池清理、完整 repository
   operation table、管理查询契约、commit-result-unknown 的 durable audit 确认身份，以及
-  Root Group/user/credential/group/membership/role/assignment/policy 原子命令的 replay、revision、ACL
+  Domain/user/credential/group/membership/role/assignment/policy 原子命令的 replay、revision、ACL
   引用、层级与容量、规范规则校验、原子 bundle 发布、secret 一次返回、生产本地 Auth/management
   service 组合及 audit 不变量；只有显式打开 `TURBO_FLOW_PGSQL_LIVE_TESTS` 且提供测试 conninfo 才运行。
   2026-07-27 复用既有 PostgreSQL 17 容器的 focused gate 为 14/14 live cases、698 assertions；

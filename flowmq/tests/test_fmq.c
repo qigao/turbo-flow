@@ -1113,7 +1113,7 @@ static int fmq_test_authenticate(void *ctx, const turbo_flow_security_auth_reque
   *principal_out = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   (void)snprintf(principal_out->principal_id, sizeof(principal_out->principal_id), "client-a");
   (void)snprintf(principal_out->principal_type, sizeof(principal_out->principal_type), "service");
-  (void)snprintf(principal_out->root_group_id, sizeof(principal_out->root_group_id), "root-a");
+  (void)snprintf(principal_out->domain_id, sizeof(principal_out->domain_id), "root-a");
   (void)snprintf(principal_out->auth_method, sizeof(principal_out->auth_method), "token");
   principal_out->scope = TURBO_FLOW_SECURITY_SCOPE_SELF;
   principal_out->group_count = 1u;
@@ -6539,7 +6539,7 @@ spec("flow_fmq_network") {
       rules[i].effect = TURBO_FLOW_SECURITY_ALLOW;
       rules[i].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL;
       (void)snprintf(rules[i].subject, sizeof(rules[i].subject), "client-a");
-      (void)snprintf(rules[i].root_group_id, sizeof(rules[i].root_group_id), "root-a");
+      (void)snprintf(rules[i].domain_id, sizeof(rules[i].domain_id), "root-a");
       rules[i].resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
       rules[i].match_kind = TURBO_FLOW_SECURITY_MATCH_EXACT;
     }
@@ -6677,7 +6677,7 @@ spec("flow_fmq_network") {
       rules[i].effect = TURBO_FLOW_SECURITY_ALLOW;
       rules[i].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL;
       (void)snprintf(rules[i].subject, sizeof(rules[i].subject), "client-a");
-      (void)snprintf(rules[i].root_group_id, sizeof(rules[i].root_group_id), "root-a");
+      (void)snprintf(rules[i].domain_id, sizeof(rules[i].domain_id), "root-a");
       rules[i].resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
       rules[i].match_kind = TURBO_FLOW_SECURITY_MATCH_EXACT;
     }
@@ -7433,7 +7433,7 @@ spec("flow_fmq_application") {
       rules[i].effect = TURBO_FLOW_SECURITY_ALLOW;
       rules[i].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL;
       (void)snprintf(rules[i].subject, sizeof(rules[i].subject), "client-a");
-      (void)snprintf(rules[i].root_group_id, sizeof(rules[i].root_group_id), "root-a");
+      (void)snprintf(rules[i].domain_id, sizeof(rules[i].domain_id), "root-a");
       rules[i].resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
     }
     rules[0].action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;

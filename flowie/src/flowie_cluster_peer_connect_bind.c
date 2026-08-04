@@ -51,7 +51,7 @@ flowie_cluster_peer_connect_bind_principal_size(const turbo_flow_security_princi
   } while (0)
   FLOWIE_CONNECT_BIND_ADD_TEXT(principal->principal_id);
   FLOWIE_CONNECT_BIND_ADD_TEXT(principal->principal_type);
-  FLOWIE_CONNECT_BIND_ADD_TEXT(principal->root_group_id);
+  FLOWIE_CONNECT_BIND_ADD_TEXT(principal->domain_id);
   FLOWIE_CONNECT_BIND_ADD_TEXT(principal->auth_method);
   for (uint32_t index = 0u; index < principal->role_count; ++index)
     FLOWIE_CONNECT_BIND_ADD_TEXT(principal->roles[index]);
@@ -87,7 +87,7 @@ flowie_cluster_peer_connect_bind_principal_encode(const turbo_flow_security_prin
   flowie_cluster_peer_wire_write_u64(out + 16u, principal->policy_version);
   flowie_cluster_peer_connect_bind_text_encode(out, &offset, principal->principal_id);
   flowie_cluster_peer_connect_bind_text_encode(out, &offset, principal->principal_type);
-  flowie_cluster_peer_connect_bind_text_encode(out, &offset, principal->root_group_id);
+  flowie_cluster_peer_connect_bind_text_encode(out, &offset, principal->domain_id);
   flowie_cluster_peer_connect_bind_text_encode(out, &offset, principal->auth_method);
   for (uint32_t index = 0u; index < principal->role_count; ++index)
     flowie_cluster_peer_connect_bind_text_encode(out, &offset, principal->roles[index]);
@@ -138,7 +138,7 @@ static int flowie_cluster_peer_connect_bind_principal_decode(const uint8_t *data
         data, data_size, &offset, principal.principal_type, sizeof(principal.principal_type), 1);
   if (rc == TURBO_OK)
     rc = flowie_cluster_peer_connect_bind_text_decode(
-        data, data_size, &offset, principal.root_group_id, sizeof(principal.root_group_id),
+        data, data_size, &offset, principal.domain_id, sizeof(principal.domain_id),
         principal.scope != TURBO_FLOW_SECURITY_SCOPE_SYSTEM);
   if (rc == TURBO_OK)
     rc = flowie_cluster_peer_connect_bind_text_decode(

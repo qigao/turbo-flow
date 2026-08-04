@@ -28,11 +28,11 @@ static uint64_t dashboard_clock(void *ctx) {
   return 5000u;
 }
 
-static int dashboard_login(void *ctx, const char *root_group_id, const char *principal_id,
+static int dashboard_login(void *ctx, const char *domain_id, const char *principal_id,
                            const uint8_t *secret, size_t secret_size, const char *remote_address,
                            char token_out[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u]) {
   (void)ctx;
-  (void)root_group_id;
+  (void)domain_id;
   (void)principal_id;
   (void)secret;
   (void)secret_size;
@@ -71,11 +71,11 @@ typedef struct dashboard_executor_task_s {
 } dashboard_executor_task_t;
 
 static int
-dashboard_executor_login(void *ctx, const char *root_group_id, const char *principal_id,
+dashboard_executor_login(void *ctx, const char *domain_id, const char *principal_id,
                          const uint8_t *secret, size_t secret_size, const char *remote_address,
                          char token_out[FLOWIE_CONTROL_MANAGEMENT_SESSION_TOKEN_SIZE + 1u]) {
   dashboard_executor_fixture_t *fixture = (dashboard_executor_fixture_t *)ctx;
-  if (!fixture || !root_group_id || strcmp(root_group_id, "root-a") != 0 || !principal_id ||
+  if (!fixture || !domain_id || strcmp(domain_id, "root-a") != 0 || !principal_id ||
       strcmp(principal_id, "security-admin") != 0 || !secret || secret_size != 8u ||
       memcmp(secret, "password", 8u) != 0 || !remote_address ||
       strcmp(remote_address, "management-dashboard") != 0 || !token_out)
@@ -115,7 +115,7 @@ dashboard_open_with_options(char **path_out, flowie_control_store_t **store_out,
                             flowie_control_management_caller_t *caller,
                             const dashboard_open_options_t *options) {
   flowie_control_store_config_t store_config = FLOWIE_CONTROL_STORE_CONFIG_INIT;
-  flowie_control_root_group_create_command_t root = FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+  flowie_control_domain_create_command_t root = FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
   flowie_control_command_result_t root_result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   flowie_control_management_service_config_t service_config =
       FLOWIE_CONTROL_MANAGEMENT_SERVICE_CONFIG_INIT;
@@ -126,11 +126,11 @@ dashboard_open_with_options(char **path_out, flowie_control_store_t **store_out,
   check_not_null(*path_out);
   store_config.database_path = *path_out;
   check_int_eq(flowie_control_store_open(&store_config, store_out), TURBO_OK);
-  root.root_group_id = "root-a";
+  root.domain_id = "root-a";
   root.actor = "bootstrap";
   root.request_id = "request-root";
   root.occurred_at = 1000u;
-  check_int_eq(flowie_control_store_root_group_create(*store_out, &root, &root_result), TURBO_OK);
+  check_int_eq(flowie_control_store_domain_create(*store_out, &root, &root_result), TURBO_OK);
   service_config.repository = flowie_control_store_repository(*store_out);
   check_int_eq(flowie_control_management_service_create(&service_config, service_out), TURBO_OK);
   dashboard_config.service = *service_out;
@@ -194,7 +194,7 @@ spec("Flowie ACL dashboard") {
     atomic_init(&fixture.login_count, 0);
     atomic_init(&fixture.logout_count, 0);
     memset(tasks, 0, sizeof(tasks));
-    caller.root_group_id = "root-a";
+    caller.domain_id = "root-a";
     caller.actor = "security-admin";
     caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
     options = (dashboard_open_options_t){
@@ -244,7 +244,7 @@ spec("Flowie ACL dashboard") {
     atomic_init(&fixture.login_count, 0);
     atomic_init(&fixture.logout_count, 0);
     memset(&task, 0, sizeof(task));
-    caller.root_group_id = "root-a";
+    caller.domain_id = "root-a";
     caller.actor = "security-admin";
     caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
     options = (dashboard_open_options_t){
@@ -265,7 +265,7 @@ spec("Flowie ACL dashboard") {
   }
 
   it("parses only canonical independent keyset cursors") {
-    request_item_t items[6] = {{"root_group_id", "root-a"}, {"users_after", "device%3C1%3E"},
+    request_item_t items[6] = {{"domain_id", "root-a"}, {"users_after", "device%3C1%3E"},
                                {"groups_after", "group-1"}, {"roles_after", "role-1"},
                                {"policy_after", "0"},       {"audit_after", "42"}};
     Req request;
@@ -276,7 +276,7 @@ spec("Flowie ACL dashboard") {
     request.query.count = 6;
     request.query.capacity = 6;
     check_int_eq(flowie_control_dashboard_page_parse(&request, &page), TURBO_OK);
-    check_str_eq(page.root_group_id, "root-a");
+    check_str_eq(page.domain_id, "root-a");
     check_str_eq(page.users_after, "device<1>");
     check_str_eq(page.groups_after, "group-1");
     check_str_eq(page.roles_after, "role-1");
@@ -495,11 +495,11 @@ spec("Flowie ACL dashboard") {
     iris_app_t *app = iris_app_create();
 
     check_not_null(app);
-    caller.root_group_id = "root-a";
+    caller.domain_id = "root-a";
     caller.actor = "security-admin";
     caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
     dashboard = dashboard_open(&path, &store, &service, &caller);
-    user.root_group_id = caller.root_group_id;
+    user.domain_id = caller.domain_id;
     user.principal_id = "device<script>";
     user.principal_type = "device";
     user.actor = caller.actor;
@@ -507,9 +507,9 @@ spec("Flowie ACL dashboard") {
     user.expected_revision = 1u;
     user.occurred_at = 2000u;
     check_int_eq(flowie_control_management_user_create(service, &caller, &user, &result), TURBO_OK);
-    group.root_group_id = caller.root_group_id;
+    group.domain_id = caller.domain_id;
     group.group_id = "operators";
-    group.parent_group_id = caller.root_group_id;
+    group.parent_group_id = NULL;
     group.actor = caller.actor;
     group.request_id = "request-group";
     group.expected_revision = 2u;
@@ -523,14 +523,14 @@ spec("Flowie ACL dashboard") {
     group.occurred_at = 2002u;
     check_int_eq(flowie_control_management_group_create(service, &caller, &group, &result),
                  TURBO_OK);
-    role.root_group_id = caller.root_group_id;
+    role.domain_id = caller.domain_id;
     role.role_id = "publisher";
     role.actor = caller.actor;
     role.request_id = "request-role";
     role.expected_revision = 4u;
     role.occurred_at = 2003u;
     check_int_eq(flowie_control_management_role_create(service, &caller, &role, &result), TURBO_OK);
-    rule.root_group_id = caller.root_group_id;
+    rule.domain_id = caller.domain_id;
     rule.ordinal = 10u;
     rule.rule_line = "allow|any|*|root-a|subscribe|mqtt_topic|adapter|root-a/events/#";
     rule.actor = caller.actor;
@@ -551,7 +551,7 @@ spec("Flowie ACL dashboard") {
     check_str_contains(html, "operation\" value=\"group.member.add");
     check_str_contains(html, "operation\" value=\"role.assign");
     check_str_contains(html, "operation\" value=\"policy.rule.delete");
-    check_str_contains(html, "hx-post=\"/v1/management/dashboard/action\"");
+    check_str_contains(html, "hx-post=\"/v2/control/dashboard/action\"");
     check_str_contains(html, "hx-include=\"closest .command\"");
     check_str_contains(html, "hx-target=\"#dashboard\"");
     check_str_contains(html, "aria-label=\"Control sections\"");
@@ -559,13 +559,15 @@ spec("Flowie ACL dashboard") {
     check_false(strstr(html, "href=\"#identity-management\"") != NULL);
     check_false(strstr(html, "href=\"#role-management\"") != NULL);
     check_false(strstr(html, "href=\"#acl-management\"") != NULL);
-    check_str_contains(html, "href=\"/v1/management/dashboard/audit\"");
+    check_str_contains(html, "href=\"/v2/control/dashboard/audit\"");
     check_str_contains(html, "id=\"users\"");
     check_str_contains(html, "id=\"groups\"");
     check_str_contains(html, "id=\"roles\"");
     check_str_contains(html, "id=\"acl-rules\"");
     check_str_contains(html, "aria-label=\"Users pagination\"");
-    check_str_contains(html, "<th>Group tree</th>");
+    check_str_contains(html, "class=\"group-tree\" role=\"tree\"");
+    check_str_contains(html, "class=\"group-tree__node group-tree__node--depth-0\" role=\"treeitem\"");
+    check_str_contains(html, "class=\"group-tree__node group-tree__node--depth-1\" role=\"treeitem\"");
     check_str_contains(html, "aria-label=\"Roles pagination\"");
     check_str_contains(html, "aria-label=\"ACL rules pagination\"");
     check_str_contains(html, "aria-label=\"Audit pagination\"");
@@ -582,19 +584,20 @@ spec("Flowie ACL dashboard") {
     check_str_contains(html, "data-picker-options=\"group-member-picker-options\"");
     check_str_contains(html, "data-picker-options=\"group-parent-picker-options\"");
     check_str_contains(html, "data-picker-options=\"role-picker-options\"");
+    check_str_contains(html, "role=\"option\" aria-selected=\"false\" tabindex=\"-1\"");
     check_str_contains(html, "data-value=\"operators\"");
-    check_str_contains(html, ">-- operators</span>");
+    check_str_contains(html, ">operators</span>");
     check_str_contains(html, "data-value=\"operators-east\"");
-    check_str_contains(html, ">---- operators-east</span>");
+    check_str_contains(html, ">-- operators-east</span>");
     check_str_contains(html, "data-value=\"publisher\"");
     check_str_contains(html, "name=\"parent_group_id\" data-picker-target");
     check_false(strstr(html, "<label>Parent group<input") != NULL);
     check_str_contains(html, "popovertarget=\"group-members-");
     check_str_contains(html, "Add a user to this group");
-    check_false(strstr(html, "popovertarget=\"group-members-1\"") != NULL);
+    check_str_contains(html, "popovertarget=\"group-members-1\"");
     check_str_contains(html, "popovertarget=\"group-members-2\"");
-    check_false(strstr(html, "popovertarget=\"group-delete-2\"") != NULL);
-    check_str_contains(html, "popovertarget=\"group-delete-3\"");
+    check_false(strstr(html, "popovertarget=\"group-delete-1\"") != NULL);
+    check_str_contains(html, "popovertarget=\"group-delete-2\"");
     check_str_contains(html, "data-entity-picker");
     check_str_contains(html, "data-picker-option");
     check_str_contains(html, "data-picker-target");
@@ -626,9 +629,10 @@ spec("Flowie ACL dashboard") {
       check_int_eq(flowie_control_dashboard_render_shell(dashboard, &page, &html, &html_size),
                    TURBO_OK);
     }
-    check_str_contains(html, "src=\"/v1/management/assets/htmx-2.0.9.min.js\"");
-    check_str_contains(html, "src=\"/v1/management/assets/control.js\"");
-    check_str_contains(html, "hx-get=\"/v1/management/dashboard/content\"");
+    check_str_contains(html, "src=\"/v2/control/assets/htmx-2.0.9.min.js\"");
+    check_str_contains(html, "src=\"/v2/control/assets/control.js\"");
+    check_str_contains(html, "class=\"skip-link\" href=\"#dashboard\"");
+    check_str_contains(html, "hx-get=\"/v2/control/dashboard/content\"");
     check_str_contains(html, "hx-trigger=\"load\"");
     check_str_contains(html, "\"allowEval\":false");
     check_str_contains(html, "\"historyEnabled\":false");
@@ -640,7 +644,7 @@ spec("Flowie ACL dashboard") {
     check_int_eq(flowie_control_dashboard_render_login(dashboard, 0, 0, &html, &html_size),
                  TURBO_OK);
     check_str_contains(html, "aria-current=\"page\">System administrator");
-    check_str_contains(html, "name=\"root_group\" value=\"system\"");
+    check_str_contains(html, "name=\"domain\" value=\"system\"");
     check_false(strstr(html, "placeholder=\"root-a\"") != NULL);
     flowie_control_dashboard_html_free(html);
 
@@ -648,8 +652,8 @@ spec("Flowie ACL dashboard") {
     html_size = 0u;
     check_int_eq(flowie_control_dashboard_render_login(dashboard, 1, 1, &html, &html_size),
                  TURBO_OK);
-    check_str_contains(html, "aria-current=\"page\">Root group");
-    check_str_contains(html, "name=\"root_group\" required");
+    check_str_contains(html, "aria-current=\"page\">Domain");
+    check_str_contains(html, "name=\"domain\" required");
     check_str_contains(html, "role=\"alert\"");
     flowie_control_dashboard_html_free(html);
 
@@ -704,18 +708,18 @@ spec("Flowie ACL dashboard") {
     static const char *const names[] = {"users", "groups", "roles", "acls", "audit"};
     static const char *const ids[] = {"users", "groups", "roles", "acl-rules", "audit"};
     static const char *const active_links[] = {
-        "href=\"/v1/management/dashboard/users\" aria-current=\"page\"",
-        "href=\"/v1/management/dashboard/groups\" aria-current=\"page\"",
-        "href=\"/v1/management/dashboard/roles\" aria-current=\"page\"",
-        "href=\"/v1/management/dashboard/acls\" aria-current=\"page\"",
-        "href=\"/v1/management/dashboard/audit\" aria-current=\"page\""};
+        "href=\"/v2/control/dashboard/users\" aria-current=\"page\"",
+        "href=\"/v2/control/dashboard/groups\" aria-current=\"page\"",
+        "href=\"/v2/control/dashboard/roles\" aria-current=\"page\"",
+        "href=\"/v2/control/dashboard/acls\" aria-current=\"page\"",
+        "href=\"/v2/control/dashboard/audit\" aria-current=\"page\""};
     char *path = NULL;
     flowie_control_store_t *store = NULL;
     flowie_control_management_service_t *service = NULL;
     flowie_control_dashboard_t *dashboard = NULL;
     flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
 
-    caller.root_group_id = "root-a";
+    caller.domain_id = "root-a";
     caller.actor = "security-admin";
     caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
     dashboard = dashboard_open(&path, &store, &service, &caller);
@@ -736,6 +740,10 @@ spec("Flowie ACL dashboard") {
       check_str_contains(html, expected_query);
       check_str_contains(html, active_links[index]);
       check_false(strstr(html, "<section id=\"overview\"") != NULL);
+      if (index == 1u) {
+        check_str_contains(html, "class=\"group-tree\" role=\"tree\"");
+        check_false(strstr(html, "<table") != NULL);
+      }
       for (size_t other = 0u; other < sizeof(ids) / sizeof(ids[0]); ++other) {
         if (other == index) continue;
         (void)snprintf(expected_section, sizeof(expected_section), "<section id=\"%s\"",
@@ -752,7 +760,7 @@ spec("Flowie ACL dashboard") {
       check_int_eq(flowie_control_dashboard_render_shell(dashboard, &page, &html, &html_size),
                    TURBO_OK);
       check_str_contains(html, "<title>Users | Flowie Control</title>");
-      check_str_contains(html, "hx-get=\"/v1/management/dashboard/content?section=users\"");
+      check_str_contains(html, "hx-get=\"/v2/control/dashboard/content?section=users\"");
       flowie_control_dashboard_html_free(html);
     }
     dashboard_close(dashboard, service, store, path);
@@ -768,7 +776,7 @@ spec("Flowie ACL dashboard") {
     flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
     flowie_control_dashboard_page_t page = FLOWIE_CONTROL_DASHBOARD_PAGE_INIT;
 
-    caller.root_group_id = "root-a";
+    caller.domain_id = "root-a";
     caller.actor = "user-admin";
     caller.permissions = FLOWIE_CONTROL_MANAGEMENT_USER_ADMIN;
     dashboard = dashboard_open(&path, &store, &service, &caller);
@@ -790,7 +798,7 @@ spec("Flowie ACL dashboard") {
     flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
     flowie_control_dashboard_page_t page = FLOWIE_CONTROL_DASHBOARD_PAGE_INIT;
 
-    caller.root_group_id = "root-a";
+    caller.domain_id = "root-a";
     caller.actor = "user-admin";
     caller.permissions = FLOWIE_CONTROL_MANAGEMENT_VIEWER | FLOWIE_CONTROL_MANAGEMENT_USER_ADMIN;
     dashboard = dashboard_open(&path, &store, &service, &caller);
@@ -802,7 +810,7 @@ spec("Flowie ACL dashboard") {
       (void)snprintf(principal_id, sizeof(principal_id), "device-%03llu",
                      (unsigned long long)index);
       (void)snprintf(request_id, sizeof(request_id), "request-%03llu", (unsigned long long)index);
-      command.root_group_id = caller.root_group_id;
+      command.domain_id = caller.domain_id;
       command.principal_id = principal_id;
       command.principal_type = "device";
       command.actor = caller.actor;
@@ -820,14 +828,14 @@ spec("Flowie ACL dashboard") {
     check_str_contains(html, "device-000");
     check_false(strstr(html, "<tr><td>device-025</td>") != NULL);
     check_str_contains(html, "25 shown");
-    check_str_contains(html, "hx-get=\"/v1/management/dashboard/"
+    check_str_contains(html, "hx-get=\"/v2/control/dashboard/"
                              "content?users_after=device-024&amp;groups_after=root-a\"");
     check_str_contains(html, "hx-select=\"#users\"");
     check_str_contains(html, "hx-target=\"#users\"");
     check_str_contains(html, "hx-swap=\"outerHTML\">Next page");
-    check_str_contains(html, "hx-get=\"/v1/management/dashboard/content?groups_after=root-a\" "
+    check_str_contains(html, "hx-get=\"/v2/control/dashboard/content?groups_after=root-a\" "
                              "hx-include=\"closest .query-panel\" hx-select=\"#users\"");
-    check_str_contains(html, "hx-post=\"/v1/management/dashboard/action?groups_after=root-a\"");
+    check_str_contains(html, "hx-post=\"/v2/control/dashboard/action?groups_after=root-a\"");
     flowie_control_dashboard_html_free(html);
 
     (void)snprintf(page.users_after, sizeof(page.users_after), "%s", "device-024");
@@ -839,7 +847,7 @@ spec("Flowie ACL dashboard") {
     check_str_contains(html, "device-025");
     check_false(strstr(html, "<tr><td>device-000</td>") != NULL);
     check_str_contains(html, "1 shown");
-    check_str_contains(html, "hx-get=\"/v1/management/dashboard/content?groups_after=root-a\"");
+    check_str_contains(html, "hx-get=\"/v2/control/dashboard/content?groups_after=root-a\"");
     check_str_contains(html, "hx-select=\"#users\"");
     check_str_contains(html, "hx-swap=\"outerHTML\">First page");
     flowie_control_dashboard_html_free(html);
@@ -855,22 +863,22 @@ spec("Flowie ACL dashboard") {
     flowie_control_management_service_t *service = NULL;
     flowie_control_dashboard_t *dashboard = NULL;
     flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
-    flowie_control_root_group_create_command_t system_root =
-        FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+    flowie_control_domain_create_command_t system_root =
+        FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
     flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
 
-    caller.root_group_id = "root-a";
+    caller.domain_id = "root-a";
     caller.actor = "system-admin";
     caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN;
     dashboard = dashboard_open(&path, &store, &service, &caller);
-    system_root.root_group_id = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP;
+    system_root.domain_id = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN;
     system_root.actor = "bootstrap";
     system_root.request_id = "request-system-root";
     system_root.expected_revision = 1u;
     system_root.occurred_at = 2000u;
-    check_int_eq(flowie_control_store_root_group_create(store, &system_root, &result), TURBO_OK);
+    check_int_eq(flowie_control_store_domain_create(store, &system_root, &result), TURBO_OK);
 
-    caller.root_group_id = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP;
+    caller.domain_id = FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN;
     check_int_eq(
         flowie_control_dashboard_render(dashboard, &caller, DASHBOARD_CSRF, &html, &html_size),
         TURBO_OK);
@@ -878,7 +886,7 @@ spec("Flowie ACL dashboard") {
     check_false(strstr(html, "id=\"identity-management\"") != NULL);
     check_false(strstr(html, "id=\"role-management\"") != NULL);
     check_false(strstr(html, "id=\"acl-management\"") != NULL);
-    check_str_contains(html, "href=\"/v1/management/dashboard/audit\"");
+    check_str_contains(html, "href=\"/v2/control/dashboard/audit\"");
     check_str_contains(html, "popovertarget=\"users-add\"");
     check_str_contains(html, "popovertarget=\"groups-add\"");
     check_str_contains(html, "popovertarget=\"roles-add\"");
@@ -888,31 +896,31 @@ spec("Flowie ACL dashboard") {
     check_str_contains(html, "operation\" value=\"group.create");
     check_str_contains(html, "operation\" value=\"role.create");
     check_str_contains(html, "operation\" value=\"policy.rule.put");
-    check_str_contains(html, "hx-post=\"/v1/management/dashboard/action\"");
-    check_str_contains(html, "id=\"root-group-scope\"");
-    check_str_contains(html, "hx-trigger=\"change from:#root-group-scope\"");
+    check_str_contains(html, "hx-post=\"/v2/control/dashboard/action\"");
+    check_str_contains(html, "id=\"domain-scope\"");
+    check_str_contains(html, "hx-trigger=\"change from:#domain-scope\"");
     check_false(strstr(html, ">Switch</button>") != NULL);
     flowie_control_dashboard_html_free(html);
     html = NULL;
 
     {
       flowie_control_dashboard_page_t page = FLOWIE_CONTROL_DASHBOARD_PAGE_INIT;
-      memcpy(page.root_group_id, "root-a", sizeof("root-a"));
+      memcpy(page.domain_id, "root-a", sizeof("root-a"));
       page.section = FLOWIE_CONTROL_DASHBOARD_SECTION_USERS;
       check_int_eq(flowie_control_dashboard_render_page(dashboard, &caller, DASHBOARD_CSRF, &page,
                                                         &html, &html_size),
                    TURBO_OK);
-      check_str_contains(html, "Root Group");
+      check_str_contains(html, "Domain");
       check_str_contains(html, "value=\"root-a\"");
-      check_str_contains(html, "href=\"/v1/management/dashboard/groups?root_group_id=root-a\"");
-      check_str_contains(html, "hx-post=\"/v1/management/dashboard/action?root_group_id=root-a");
+      check_str_contains(html, "href=\"/v2/control/dashboard/groups?domain_id=root-a\"");
+      check_str_contains(html, "hx-post=\"/v2/control/dashboard/action?domain_id=root-a");
       flowie_control_dashboard_html_free(html);
     }
 
     dashboard_close(dashboard, service, store, path);
   }
 
-  it("rejects CSRF, unknown fields, and viewer writes without changing revision") {
+  it("rejects CSRF, unknown fields, legacy revision fields, and viewer writes") {
     char *path = NULL;
     char body[1024];
     flowie_control_store_t *store = NULL;
@@ -921,20 +929,20 @@ spec("Flowie ACL dashboard") {
     flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
     uint64_t revision = 0u;
 
-    caller.root_group_id = "root-a";
+    caller.domain_id = "root-a";
     caller.actor = "viewer";
     caller.permissions = FLOWIE_CONTROL_MANAGEMENT_VIEWER;
     dashboard = dashboard_open(&path, &store, &service, &caller);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=user.create&principal_id=device-1&principal_type=device&"
-                   "request_id=request-user&expected_revision=1",
+                   "request_id=request-user",
                    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_EPERM);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=user.create&principal_id=device-1&principal_type=device&"
-                   "request_id=request-user&expected_revision=1&root_group=root-b",
+                   "request_id=request-user&domain=root-b",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
@@ -942,6 +950,13 @@ spec("Flowie ACL dashboard") {
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=user.create&principal_id=device-1&principal_type=device&"
                    "request_id=request-user&expected_revision=1",
+                   DASHBOARD_CSRF);
+    check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
+                                                       strlen(body)),
+                 TURBO_EPROTO);
+    (void)snprintf(body, sizeof(body),
+                   "csrf=%s&operation=user.create&principal_id=device-1&principal_type=device&"
+                   "request_id=request-user",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
@@ -961,13 +976,13 @@ spec("Flowie ACL dashboard") {
     flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
     flowie_control_user_view_t user = FLOWIE_CONTROL_USER_VIEW_INIT;
 
-    caller.root_group_id = "root-a";
+    caller.domain_id = "root-a";
     caller.actor = "user-admin";
     caller.permissions = FLOWIE_CONTROL_MANAGEMENT_VIEWER | FLOWIE_CONTROL_MANAGEMENT_USER_ADMIN;
     dashboard = dashboard_open(&path, &store, &service, &caller);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=user.create&principal_id=device-1&principal_type=device&"
-                   "request_id=request-user&expected_revision=1",
+                   "request_id=request-user",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
@@ -979,7 +994,7 @@ spec("Flowie ACL dashboard") {
     dashboard_close(dashboard, service, store, path);
   }
 
-  it("exposes disable membership assignment and rule deletion through domain commands") {
+  it("exposes group deletion membership assignment and rule deletion through domain commands") {
     char *path = NULL;
     char body[1024];
     flowie_control_store_t *store = NULL;
@@ -992,70 +1007,70 @@ spec("Flowie ACL dashboard") {
     size_t count = 0u;
     int has_more = 0;
 
-    caller.root_group_id = "root-a";
+    caller.domain_id = "root-a";
     caller.actor = "security-admin";
     caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
     dashboard = dashboard_open(&path, &store, &service, &caller);
 
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=user.create&principal_id=device-1&principal_type=device&"
-                   "request_id=request-user-create&expected_revision=1",
+                   "request_id=request-user-create",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_OK);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=group.create&group_id=operators&parent_group_id=root-a&"
-                   "request_id=request-group-create&expected_revision=2",
+                   "request_id=request-group-create",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_OK);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=group.member.add&principal_id=device-1&group_id=operators&"
-                   "request_id=request-member-add&expected_revision=3",
+                   "request_id=request-member-add",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_OK);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=group.member.remove&principal_id=device-1&group_id=operators&"
-                   "request_id=request-member-remove&expected_revision=4",
+                   "request_id=request-member-remove",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_OK);
     (void)snprintf(body, sizeof(body),
-                   "csrf=%s&operation=group.disable&group_id=operators&"
-                   "request_id=request-group-disable&expected_revision=5",
+                   "csrf=%s&operation=group.delete&group_id=operators&"
+                   "request_id=request-group-delete",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_OK);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=role.create&role_id=publisher&"
-                   "request_id=request-role-create&expected_revision=6",
+                   "request_id=request-role-create",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_OK);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=role.assign&principal_id=device-1&role_id=publisher&"
-                   "request_id=request-role-assign&expected_revision=7",
+                   "request_id=request-role-assign",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_OK);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=role.remove&principal_id=device-1&role_id=publisher&"
-                   "request_id=request-role-remove&expected_revision=8",
+                   "request_id=request-role-remove",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_OK);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=role.disable&role_id=publisher&"
-                   "request_id=request-role-disable&expected_revision=9",
+                   "request_id=request-role-disable",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
@@ -1063,21 +1078,21 @@ spec("Flowie ACL dashboard") {
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=policy.rule.put&ordinal=10&"
                    "rule_line=allow|any|*|root-a|subscribe|mqtt_topic|adapter|root-a/events/%%23&"
-                   "request_id=request-rule-put&expected_revision=10",
+                   "request_id=request-rule-put",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_OK);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=policy.rule.delete&ordinal=10&"
-                   "request_id=request-rule-delete&expected_revision=11",
+                   "request_id=request-rule-delete",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_OK);
     (void)snprintf(body, sizeof(body),
                    "csrf=%s&operation=user.disable&principal_id=device-1&"
-                   "request_id=request-user-disable&expected_revision=12",
+                   "request_id=request-user-disable",
                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),

@@ -13,18 +13,18 @@ static void security_copy(char *out, size_t capacity, const char *value) {
   memcpy(out, value, size + 1u);
 }
 
-static turbo_flow_security_principal_t security_principal(const char *root_group,
+static turbo_flow_security_principal_t security_principal(const char *domain,
                                                           uint64_t policy_version) {
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   security_copy(principal.principal_id, sizeof(principal.principal_id), "device-7");
   security_copy(principal.principal_type, sizeof(principal.principal_type), "device");
-  security_copy(principal.root_group_id, sizeof(principal.root_group_id), root_group);
+  security_copy(principal.domain_id, sizeof(principal.domain_id), domain);
   security_copy(principal.auth_method, sizeof(principal.auth_method), "token");
-  principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+  principal.scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
   principal.role_count = 1u;
   security_copy(principal.roles[0], sizeof(principal.roles[0]), "writer");
   principal.group_count = 1u;
-  security_copy(principal.groups[0], sizeof(principal.groups[0]), root_group);
+  security_copy(principal.groups[0], sizeof(principal.groups[0]), domain);
   principal.policy_version = policy_version;
   return principal;
 }
@@ -36,7 +36,7 @@ static turbo_flow_security_rule_t security_rule(turbo_flow_security_effect_t eff
   rule.effect = effect;
   rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
   security_copy(rule.subject, sizeof(rule.subject), "writer");
-  security_copy(rule.root_group_id, sizeof(rule.root_group_id), "root-a");
+  security_copy(rule.domain_id, sizeof(rule.domain_id), "root-a");
   rule.action_mask = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
   rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
   rule.match_kind = match;
@@ -215,7 +215,7 @@ spec("security realm v3") {
     check_int_eq(rule.effect, TURBO_FLOW_SECURITY_ALLOW);
     check_int_eq(rule.subject_kind, TURBO_FLOW_SECURITY_SUBJECT_ROLE);
     check_str_eq(rule.subject, "writer");
-    check_str_eq(rule.root_group_id, "root-a");
+    check_str_eq(rule.domain_id, "root-a");
     check_int_eq(rule.action_mask,
                  TURBO_FLOW_SECURITY_ACTION_PUBLISH | TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE);
     check_int_eq(rule.resource_type, TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC);
@@ -265,7 +265,7 @@ spec("security realm v3") {
     check_int_eq(turbo_flow_security_authenticate(&provider, &request, &principal), TURBO_OK);
     check_int_eq(calls, 1);
     check_str_eq(principal.principal_id, "device-7");
-    check_str_eq(principal.root_group_id, "root-a");
+    check_str_eq(principal.domain_id, "root-a");
     check_str_eq(principal.auth_method, "token");
     request.size = TURBO_FLOW_SECURITY_AUTH_REQUEST_BASE_SIZE;
     principal = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
@@ -344,7 +344,7 @@ spec("security realm v3") {
     turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
 
     request.principal = &principal;
-    request.root_group_id = "root-a";
+    request.domain_id = "root-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/telemetry/value";
@@ -380,7 +380,7 @@ spec("security realm v3") {
     turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
 
     request.principal = &principal;
-    request.root_group_id = "root-a";
+    request.domain_id = "root-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/telemetry/private/value";
@@ -421,7 +421,7 @@ spec("security realm v3") {
     check_size_eq(fixture.candidate_count, 1u);
 
     request.principal = &principal;
-    request.root_group_id = "root-a";
+    request.domain_id = "root-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/device-7";
@@ -479,7 +479,7 @@ spec("security realm v3") {
     check_int_eq(turbo_flow_security_realm_bind_policy_provider(realm, &provider), TURBO_OK);
 
     request.principal = &principal;
-    request.root_group_id = "root-a";
+    request.domain_id = "root-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/telemetry/value";
@@ -506,7 +506,7 @@ spec("security realm v3") {
     security_copy(principal.groups[2], sizeof(principal.groups[2]), "backend");
     realm = security_realm(&rule, 1u);
     request.principal = &principal;
-    request.root_group_id = "root-a";
+    request.domain_id = "root-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "devices/7/events";
@@ -521,23 +521,23 @@ spec("security realm v3") {
     turbo_flow_security_realm_destroy(realm);
   }
 
-  it("rejects root-group escape stale policy and expired principals before rule matching") {
+  it("rejects domain escape stale policy and expired principals before rule matching") {
     turbo_flow_security_rule_t rule =
         security_rule(TURBO_FLOW_SECURITY_ALLOW, TURBO_FLOW_SECURITY_MATCH_PREFIX, "root-b/");
-    security_copy(rule.root_group_id, sizeof(rule.root_group_id), "root-b");
+    security_copy(rule.domain_id, sizeof(rule.domain_id), "root-b");
     turbo_flow_security_realm_t *realm = security_realm(&rule, 1u);
     turbo_flow_security_principal_t principal = security_principal("root-a", 9u);
     turbo_flow_security_request_t request = TURBO_FLOW_SECURITY_REQUEST_INIT;
     turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
 
     request.principal = &principal;
-    request.root_group_id = "root-b";
+    request.domain_id = "root-b";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-b/value";
     check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
                  TURBO_EPERM);
-    check_int_eq(decision.reason, TURBO_FLOW_SECURITY_REASON_ROOT_GROUP_MISMATCH);
+    check_int_eq(decision.reason, TURBO_FLOW_SECURITY_REASON_DOMAIN_MISMATCH);
 
     principal.scope = TURBO_FLOW_SECURITY_SCOPE_SYSTEM;
     principal.policy_version = 8u;

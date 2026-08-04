@@ -79,6 +79,26 @@ spec("flowmq_connect_endpoint owner") {
     flowmq_connect_endpoint_destroy(client);
   }
 
+  it("drains each driven context stop before the next start") {
+    enum { RESTART_ATTEMPTS = 128 };
+    static const uint64_t start_timeout_ns = UINT64_C(200000000);
+    client_event_capture_t capture;
+    flowmq_connect_endpoint_config_t config;
+    flowmq_connect_endpoint_t *client = NULL;
+    memset(&capture, 0, sizeof(capture));
+    config = private_config(&capture);
+    config.context = NULL;
+    config.drive_context = 1;
+    config.own_context = 1;
+    check_int_eq(flowmq_connect_endpoint_create(&config, &client), TURBO_OK);
+    check_not_null(client);
+    for (int attempt = 0; attempt < RESTART_ATTEMPTS; ++attempt) {
+      check_int_ne(flowmq_connect_endpoint_start(client, start_timeout_ns), TURBO_OK);
+    }
+    check_int_eq(atomic_load_explicit(&capture.stopped, memory_order_acquire), RESTART_ATTEMPTS);
+    flowmq_connect_endpoint_destroy(client);
+  }
+
   it("updates an endpoint only while stopped") {
     client_event_capture_t capture;
     flowmq_connect_endpoint_config_t config;

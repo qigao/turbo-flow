@@ -75,7 +75,7 @@ static int auth_endpoint_make_endpoint(flowie_control_auth_iris_adapter_t *adapt
   flowie_control_auth_iris_endpoint_config_t config = FLOWIE_CONTROL_AUTH_IRIS_ENDPOINT_CONFIG_INIT;
   binding.service_id = "broker-main";
   binding.token_ref = "env://FLOWIE_AUTH_SERVICE_TOKEN";
-  binding.root_group_id = "root-a";
+  binding.domain_id = "root-a";
   binding.peer_certificate_sha256 = AUTH_EXECUTOR_CERT;
   credential_config.listener_id = "broker-https";
   credential_config.bindings = &binding;
@@ -109,11 +109,11 @@ static uint64_t auth_executor_clock(void *ctx) {
   return 10000u;
 }
 
-static int auth_executor_policy_version(void *ctx, const char *root_group_id,
+static int auth_executor_policy_version(void *ctx, const char *domain_id,
                                         uint64_t *policy_version_out) {
   (void)ctx;
   if (policy_version_out) *policy_version_out = 0u;
-  if (!root_group_id || strcmp(root_group_id, "root-a") != 0 || !policy_version_out)
+  if (!domain_id || strcmp(domain_id, "root-a") != 0 || !policy_version_out)
     return TURBO_EINVAL;
   *policy_version_out = 1u;
   return TURBO_OK;
@@ -124,7 +124,7 @@ static void auth_executor_fixture_open(auth_executor_fixture_t *fixture,
                                        uint32_t workers, size_t queue_capacity,
                                        uint32_t deadline_ms) {
   flowie_control_store_config_t store_config = FLOWIE_CONTROL_STORE_CONFIG_INIT;
-  flowie_control_root_group_create_command_t root = FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+  flowie_control_domain_create_command_t root = FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
   flowie_control_user_create_command_t user = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
   flowie_control_credential_issue_command_t issue = FLOWIE_CONTROL_CREDENTIAL_ISSUE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
@@ -147,13 +147,13 @@ static void auth_executor_fixture_open(auth_executor_fixture_t *fixture,
   check_int_eq(flowie_control_store_open(&store_config, &fixture->store), TURBO_OK);
   check_not_null(fixture->store);
 
-  root.root_group_id = "root-a";
+  root.domain_id = "root-a";
   root.actor = "bootstrap";
   root.request_id = "executor-root";
   root.occurred_at = 1000u;
-  check_int_eq(flowie_control_store_root_group_create(fixture->store, &root, &result), TURBO_OK);
+  check_int_eq(flowie_control_store_domain_create(fixture->store, &root, &result), TURBO_OK);
 
-  user.root_group_id = "root-a";
+  user.domain_id = "root-a";
   user.principal_id = "device-a";
   user.principal_type = "device";
   user.actor = "bootstrap";
@@ -162,7 +162,7 @@ static void auth_executor_fixture_open(auth_executor_fixture_t *fixture,
   user.occurred_at = 1001u;
   check_int_eq(flowie_control_store_user_create(fixture->store, &user, &result), TURBO_OK);
 
-  issue.root_group_id = "root-a";
+  issue.domain_id = "root-a";
   issue.principal_id = "device-a";
   issue.actor = "bootstrap";
   issue.request_id = "executor-credential";
@@ -185,7 +185,7 @@ static void auth_executor_fixture_open(auth_executor_fixture_t *fixture,
 
   binding.service_id = "broker-main";
   binding.token_ref = "env://FLOWIE_AUTH_SERVICE_TOKEN";
-  binding.root_group_id = "root-a";
+  binding.domain_id = "root-a";
   credential_config.listener_id = "broker-https";
   credential_config.bindings = &binding;
   credential_config.binding_count = 1u;
@@ -225,8 +225,8 @@ auth_executor_request(const auth_executor_fixture_t *fixture) {
   memcpy(request.method, "password", sizeof("password"));
   memcpy(request.protocol, "mqtt", sizeof("mqtt"));
   memcpy(request.remote_address, "192.0.2.10:1883", sizeof("192.0.2.10:1883"));
-  memcpy(request.secret, fixture->credential.secret, fixture->credential.secret_size);
-  request.secret_size = fixture->credential.secret_size;
+  memcpy(request.secret, fixture->credential.token, fixture->credential.token_size);
+  request.secret_size = fixture->credential.token_size;
   return request;
 }
 
@@ -293,11 +293,11 @@ spec("flowie control auth iris adapter") {
     check_mem_eq(&request, &zero, sizeof(request));
   }
 
-  it("rejects caller-supplied root-group fields") {
+  it("rejects caller-supplied domain fields") {
     static const char body[] = "{\"version\":3,\"identity\":\"device-a\",\"method\":\"password\","
                                "\"secret_base64\":\"c2VjcmV0\",\"protocol\":\"mqtt\","
                                "\"remote_address\":\"127.0.0.1\","
-                               "\"peer_certificate_sha256\":\"\",\"root_group\":\"root-a\"}";
+                               "\"peer_certificate_sha256\":\"\",\"domain\":\"root-a\"}";
     flowie_control_auth_http_request_t request;
 
     check_int_eq(flowie_control_auth_http_decode_request(body, sizeof(body) - 1u, 4096u, &request),
@@ -340,11 +340,11 @@ spec("flowie control auth iris adapter") {
 
     memcpy(principal.principal_id, "device-a", sizeof("device-a"));
     memcpy(principal.principal_type, "device", sizeof("device"));
-    memcpy(principal.root_group_id, "root-a", sizeof("root-a"));
+    memcpy(principal.domain_id, "root-a", sizeof("root-a"));
     memcpy(principal.auth_method, "password", sizeof("password"));
-    principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+    principal.scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
     memcpy(principal.roles[0], "mqtt-user", sizeof("mqtt-user"));
-    memcpy(principal.groups[0], "root-a", sizeof("root-a"));
+    memcpy(principal.groups[0], "operators", sizeof("operators"));
     principal.role_count = 1u;
     principal.group_count = 1u;
     principal.expires_at = 100u;
@@ -358,23 +358,23 @@ spec("flowie control auth iris adapter") {
     check_true(turbo_json_bool(turbo_json_object_get(document, "authenticated")));
     principal_json = turbo_json_object_get(document, "principal");
     check_not_null(principal_json);
-    check_str_eq(turbo_json_get_string(principal_json, "root_group"), "root-a");
+    check_str_eq(turbo_json_get_string(principal_json, "domain"), "root-a");
     check_double_eq(turbo_json_number(turbo_json_object_get(principal_json, "policy_version")), 7.0,
                     0.001);
     turbo_free_json(&document);
     turbo_json_serialize_free(body);
   }
 
-  it("rejects a principal with an unterminated root group") {
+  it("rejects a principal with an unterminated domain") {
     turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
     char *body = NULL;
     size_t body_size = 0u;
 
     memcpy(principal.principal_id, "device-a", sizeof("device-a"));
     memcpy(principal.principal_type, "device", sizeof("device"));
-    memset(principal.root_group_id, 'a', sizeof(principal.root_group_id));
+    memset(principal.domain_id, 'a', sizeof(principal.domain_id));
     memcpy(principal.auth_method, "password", sizeof("password"));
-    principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+    principal.scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
     principal.policy_version = 1u;
 
     check_int_eq(flowie_control_auth_http_encode_principal(&principal, &body, &body_size),

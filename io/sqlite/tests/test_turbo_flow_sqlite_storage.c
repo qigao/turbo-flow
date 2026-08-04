@@ -124,6 +124,28 @@ spec("turbo_flow_sqlite_storage_backend") {
     free(path);
   }
 
+  it("keeps process-local records only for the lifetime of one memory store owner") {
+    static const uint8_t key[] = {'m', 'e', 'm'};
+    static const uint8_t value[] = {'v', 'a', 'l', 'u', 'e'};
+    turbo_flow_sqlite_record_store_config_t config = sqlite_test_config(":memory:", "protocol");
+    turbo_flow_record_store_t store = TURBO_FLOW_RECORD_STORE_INIT;
+    sqlite_record_capture_t capture = {key, sizeof(key), value, sizeof(value), 1u, 0u};
+    size_t count = 0u;
+
+    check_int_eq(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
+    check_true((store.capabilities & TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH) != 0u);
+    check_true((store.capabilities & TURBO_FLOW_RECORD_STORE_DURABLE) == 0u);
+    check_int_eq(sqlite_test_put(&store, key, sizeof(key), value, sizeof(value)), TURBO_OK);
+    check_int_eq(store.scan(store.ctx, sqlite_record_capture, &capture), TURBO_OK);
+    check_size_eq(capture.count, 1u);
+    check_int_eq(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
+
+    check_int_eq(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
+    check_int_eq(store.scan(store.ctx, sqlite_record_count, &count), TURBO_OK);
+    check_size_eq(count, 0u);
+    check_int_eq(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
+  }
+
   it("persists a binary record across explicit close and reopen") {
     static const uint8_t key[] = {0u, 'k', 0xffu};
     static const uint8_t value[] = {'v', 0u, 7u, 0xfeu};

@@ -8,7 +8,7 @@
 
 ## 背景
 
-FMQ 需要在 peer admission 前完成身份认证和 root-group-aware authorization，同时保留由宿主可信边界
+FMQ 需要在 peer admission 前完成身份认证和 domain-aware authorization，同时保留由宿主可信边界
 保护的轻量 endpoint。wire 版本必须只有一个事实源，认证失败不得回退匿名模式，否则部署者无法判断
 实际安全边界。
 
@@ -87,7 +87,7 @@ FMQ 需要在 peer admission 前完成身份认证和 root-group-aware authoriza
 
 ## 残余边界
 
-- trusted v3 仍依赖宿主网络/进程隔离，不能宣称跨 Root Group 安全隔离。
+- trusted v3 仍依赖宿主网络/进程隔离，不能宣称跨 Domain 安全隔离。
 - TLS/WSS 具备 exporter channel binding；KCP 具备 PSK transport 认证与 AEAD；TCP/UDP/Pipe/WS
   只提供应用层认证和 ACL，不提供链路保密。
 - secure identity、auth method 和 ACL topic/resource 必须是无内嵌 NUL 的有界文本；credential 仍是

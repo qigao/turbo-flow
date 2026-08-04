@@ -249,9 +249,9 @@ static int flowie_cluster_pgsql_live_bind_payload(tstr_t *out) {
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   (void)strcpy(principal.principal_id, "live-writer");
   (void)strcpy(principal.principal_type, "device");
-  (void)strcpy(principal.root_group_id, "root-a");
+  (void)strcpy(principal.domain_id, "root-a");
   (void)strcpy(principal.auth_method, "token");
-  principal.scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+  principal.scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
   principal.role_count = 1u;
   (void)strcpy(principal.roles[0], "writer");
   principal.group_count = 1u;

@@ -17,7 +17,7 @@ typedef struct flowie_control_management_service_s flowie_control_management_ser
 #define FLOWIE_CONTROL_MANAGEMENT_ROLE_SYSTEM_ADMIN FLOWIE_CONTROL_SYSTEM_ADMIN_ROLE
 #define FLOWIE_CONTROL_MANAGEMENT_ROLE_PASSWORD_CHANGE_REQUIRED                                   \
   FLOWIE_CONTROL_PASSWORD_CHANGE_REQUIRED_ROLE
-#define FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ROOT_GROUP FLOWIE_CONTROL_SYSTEM_ROOT_GROUP
+#define FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN FLOWIE_CONTROL_SYSTEM_DOMAIN
 
 typedef enum flowie_control_management_permission_e {
   FLOWIE_CONTROL_MANAGEMENT_VIEWER = 1u << 0,
@@ -30,7 +30,7 @@ typedef enum flowie_control_management_permission_e {
 
 typedef struct flowie_control_management_caller_s {
   size_t size;
-  const char *root_group_id;
+  const char *domain_id;
   const char *actor;
   uint32_t permissions;
 } flowie_control_management_caller_t;
@@ -71,7 +71,7 @@ typedef enum flowie_control_password_set_mode_e {
 
 typedef struct flowie_control_password_set_command_s {
   size_t size;
-  const char *root_group_id;
+  const char *domain_id;
   const char *principal_id;
   const void *new_password;
   size_t new_password_size;
@@ -100,32 +100,32 @@ int flowie_control_management_authorize(flowie_control_management_service_t *ser
                                         uint32_t required_permission);
 
 /**
- * Resolve an authorized target Root Group into a request-local caller view.
+ * Resolve an authorized target Domain into a request-local caller view.
  *
- * The returned caller borrows `target_root_group_id`. Same-Root access is unchanged; cross-Root
- * access requires a system_admin whose authenticated Root Group is `system`.
+ * The returned caller borrows `target_domain_id`. Same-Root access is unchanged; cross-Root
+ * access requires a system_admin whose authenticated Domain is `system`.
  */
 int flowie_control_management_scope_caller(
     flowie_control_management_service_t *service,
-    const flowie_control_management_caller_t *caller, const char *target_root_group_id,
+    const flowie_control_management_caller_t *caller, const char *target_domain_id,
     flowie_control_management_caller_t *scoped_out);
 
 /** Resolve one enabled local principal and its current effective roles into a borrowed caller. */
 int flowie_control_management_identity_resolve_principal(
-    const flowie_control_repository_t *repository, const char *root_group_id,
+    const flowie_control_repository_t *repository, const char *domain_id,
     const char *principal_id, flowie_control_management_caller_t *caller_out);
 
 int flowie_control_management_system_status(flowie_control_management_service_t *service,
                                             const flowie_control_management_caller_t *caller,
                                             flowie_control_management_status_t *out);
-int flowie_control_management_root_group_create(
+int flowie_control_management_domain_create(
     flowie_control_management_service_t *service, const flowie_control_management_caller_t *caller,
-    const flowie_control_root_group_create_command_t *command,
+    const flowie_control_domain_create_command_t *command,
     flowie_control_command_result_t *result);
-int flowie_control_management_root_group_list(
+int flowie_control_management_domain_list(
     flowie_control_management_service_t *service,
-    const flowie_control_management_caller_t *caller, const char *after_root_group_id,
-    flowie_control_root_group_view_t *items, size_t capacity, size_t *count_out,
+    const flowie_control_management_caller_t *caller, const char *after_domain_id,
+    flowie_control_domain_view_t *items, size_t capacity, size_t *count_out,
     int *has_more_out);
 int flowie_control_management_password_change(
     flowie_control_management_service_t *service, const flowie_control_management_caller_t *caller,
@@ -176,10 +176,10 @@ int flowie_control_management_group_create(flowie_control_management_service_t *
                                            const flowie_control_management_caller_t *caller,
                                            const flowie_control_group_create_command_t *command,
                                            flowie_control_command_result_t *result);
-int flowie_control_management_group_disable(flowie_control_management_service_t *service,
-                                            const flowie_control_management_caller_t *caller,
-                                            const flowie_control_group_disable_command_t *command,
-                                            flowie_control_command_result_t *result);
+int flowie_control_management_group_delete(flowie_control_management_service_t *service,
+                                           const flowie_control_management_caller_t *caller,
+                                           const flowie_control_group_delete_command_t *command,
+                                           flowie_control_command_result_t *result);
 int flowie_control_management_membership_add(flowie_control_management_service_t *service,
                                              const flowie_control_management_caller_t *caller,
                                              const flowie_control_membership_add_command_t *command,

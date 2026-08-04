@@ -56,17 +56,17 @@ static void flowie_control_principal_cache_hash_u64(crypto_blake2b_ctx *ctx, uin
 }
 
 static void flowie_control_principal_cache_digest(
-    const flowie_control_principal_cache_t *cache, const char *root_group_id,
+    const flowie_control_principal_cache_t *cache, const char *domain_id,
     const char *principal_id, uint8_t digest[FLOWIE_CONTROL_PRINCIPAL_CACHE_DIGEST_SIZE]) {
   crypto_blake2b_ctx hash;
-  size_t root_size = strlen(root_group_id);
+  size_t root_size = strlen(domain_id);
   size_t principal_size = strlen(principal_id);
   crypto_blake2b_keyed_init(&hash, FLOWIE_CONTROL_PRINCIPAL_CACHE_DIGEST_SIZE,
                             cache->digest_key, sizeof(cache->digest_key));
   crypto_blake2b_update(&hash, (const uint8_t *)FLOWIE_CONTROL_PRINCIPAL_CACHE_DOMAIN,
                         sizeof(FLOWIE_CONTROL_PRINCIPAL_CACHE_DOMAIN) - 1u);
   flowie_control_principal_cache_hash_u64(&hash, root_size);
-  crypto_blake2b_update(&hash, (const uint8_t *)root_group_id, root_size);
+  crypto_blake2b_update(&hash, (const uint8_t *)domain_id, root_size);
   flowie_control_principal_cache_hash_u64(&hash, principal_size);
   crypto_blake2b_update(&hash, (const uint8_t *)principal_id, principal_size);
   crypto_blake2b_final(&hash, digest);
@@ -178,7 +178,7 @@ void flowie_control_principal_cache_destroy(flowie_control_principal_cache_t *ca
 }
 
 int flowie_control_principal_cache_get(
-    flowie_control_principal_cache_t *cache, const char *root_group_id,
+    flowie_control_principal_cache_t *cache, const char *domain_id,
     const char *principal_id, uint64_t user_revision, uint64_t credential_revision,
     uint64_t store_revision, uint64_t policy_version, flowie_control_principal_snapshot_t *out,
     int *cache_hit_out) {
@@ -188,12 +188,12 @@ int flowie_control_principal_cache_get(
   if (out && out->size >= sizeof(*out))
     *out = (flowie_control_principal_snapshot_t)FLOWIE_CONTROL_PRINCIPAL_SNAPSHOT_INIT;
   if (cache_hit_out) *cache_hit_out = 0;
-  if (!cache || !flowie_control_principal_cache_text_valid(root_group_id) ||
+  if (!cache || !flowie_control_principal_cache_text_valid(domain_id) ||
       !flowie_control_principal_cache_text_valid(principal_id) || user_revision == 0u ||
       credential_revision == 0u || store_revision == 0u || policy_version == 0u || !out ||
       out->size < sizeof(*out) || !cache_hit_out)
     return TURBO_EINVAL;
-  flowie_control_principal_cache_digest(cache, root_group_id, principal_id, digest);
+  flowie_control_principal_cache_digest(cache, domain_id, principal_id, digest);
   now_ms = cache->clock_ms(cache->clock_ctx);
   turbo_mutex_lock(&cache->lock);
   {
@@ -224,12 +224,12 @@ int flowie_control_principal_cache_put(flowie_control_principal_cache_t *cache,
   uint64_t now_ms;
   int rc = TURBO_OK;
   if (!cache || !snapshot || snapshot->size < sizeof(*snapshot) ||
-      !flowie_control_principal_cache_text_valid(snapshot->root_group_id) ||
+      !flowie_control_principal_cache_text_valid(snapshot->domain_id) ||
       !flowie_control_principal_cache_text_valid(snapshot->principal_id) ||
       snapshot->user_revision == 0u || snapshot->credential_revision == 0u || store_revision == 0u ||
       policy_version == 0u)
     return TURBO_EINVAL;
-  flowie_control_principal_cache_digest(cache, snapshot->root_group_id, snapshot->principal_id,
+  flowie_control_principal_cache_digest(cache, snapshot->domain_id, snapshot->principal_id,
                                         digest);
   now_ms = cache->clock_ms(cache->clock_ctx);
   memset(&entry, 0, sizeof(entry));

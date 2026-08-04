@@ -1,4 +1,4 @@
-# Flowie SMB product: protocol state and admitted PUBLISH records are PostgreSQL-backed.
+# Flowie SMB product: protocol state is SQLite `:memory:`; admitted PUBLISH business records use PostgreSQL.
 # QoS 1/2 acknowledgement occurs only after the outbox INSERT transaction commits.
 version: 1
 
@@ -47,7 +47,7 @@ channels:
     kind: record_store
     config:
       backend: sqlite
-      database_path: flowie-smb-protocol.sqlite3
+      database_path: ":memory:"
       namespace_name: mqtt.endpoint
       busy_timeout_ms: 5000
       max_key_size: 65538

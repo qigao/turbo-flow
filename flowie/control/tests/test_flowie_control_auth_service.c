@@ -46,14 +46,14 @@ typedef struct auth_service_external_fixture_s {
   int saw_mapping_context;
 } auth_service_external_fixture_t;
 
-static int auth_service_policy_version(void *ctx, const char *root_group_id,
+static int auth_service_policy_version(void *ctx, const char *domain_id,
                                        uint64_t *policy_version_out) {
   auth_service_policy_fixture_t *fixture = (auth_service_policy_fixture_t *)ctx;
   if (policy_version_out) *policy_version_out = 0u;
-  if (!fixture || !root_group_id || !policy_version_out) return TURBO_EINVAL;
+  if (!fixture || !domain_id || !policy_version_out) return TURBO_EINVAL;
   if (fixture->result != TURBO_OK) return fixture->result;
-  if (strcmp(root_group_id, "root-a") == 0) *policy_version_out = fixture->root_a_version;
-  else if (strcmp(root_group_id, "root-b") == 0) *policy_version_out = fixture->root_b_version;
+  if (strcmp(domain_id, "root-a") == 0) *policy_version_out = fixture->root_a_version;
+  else if (strcmp(domain_id, "root-b") == 0) *policy_version_out = fixture->root_b_version;
   else return TURBO_EPERM;
   return TURBO_OK;
 }
@@ -69,7 +69,7 @@ static int auth_service_external_verify(void *ctx,
       assertion_out->size < sizeof(*assertion_out))
     return TURBO_EINVAL;
   fixture->saw_transport_context =
-      strcmp(request->root_group_id, "root-a") == 0 &&
+      strcmp(request->domain_id, "root-a") == 0 &&
       strcmp(request->presented_identity, "external-device") == 0 &&
       strcmp(request->method, "oidc-token") == 0 && strcmp(request->protocol, "mqtt") == 0 &&
       strcmp(request->remote_address, "192.0.2.10:1883") == 0 && request->peer_certificate_sha256 &&
@@ -102,7 +102,7 @@ static int auth_service_external_map(void *ctx,
       !result_out || result_out->size < sizeof(*result_out))
     return TURBO_EINVAL;
   fixture->saw_mapping_context =
-      strcmp(request->root_group_id, "root-a") == 0 &&
+      strcmp(request->domain_id, "root-a") == 0 &&
       strcmp(request->presented_identity, "external-device") == 0 &&
       strcmp(request->assertion->issuer, "https://idp.example") == 0 &&
       strcmp(request->assertion->subject, "tenant-42/device-a") == 0 &&
@@ -131,24 +131,24 @@ static void auth_service_store_close(flowie_control_store_t *store, char *path) 
   free(path);
 }
 
-static int auth_service_root_create(flowie_control_store_t *store, const char *root_group_id,
+static int auth_service_domain_create(flowie_control_store_t *store, const char *domain_id,
                                     const char *request_id, uint64_t expected_revision) {
-  flowie_control_root_group_create_command_t command =
-      FLOWIE_CONTROL_ROOT_GROUP_CREATE_COMMAND_INIT;
+  flowie_control_domain_create_command_t command =
+      FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = root_group_id;
+  command.domain_id = domain_id;
   command.actor = "admin-1";
   command.request_id = request_id;
   command.expected_revision = expected_revision;
   command.occurred_at = 1000u + expected_revision;
-  return flowie_control_store_root_group_create(store, &command, &result);
+  return flowie_control_store_domain_create(store, &command, &result);
 }
 
-static int auth_service_user_create(flowie_control_store_t *store, const char *root_group_id,
+static int auth_service_user_create(flowie_control_store_t *store, const char *domain_id,
                                     const char *request_id, uint64_t expected_revision) {
   flowie_control_user_create_command_t command = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = root_group_id;
+  command.domain_id = domain_id;
   command.principal_id = "device-a";
   command.principal_type = "device";
   command.actor = "admin-1";
@@ -159,11 +159,11 @@ static int auth_service_user_create(flowie_control_store_t *store, const char *r
 }
 
 static int auth_service_credential_generate(flowie_control_store_t *store,
-                                            const char *root_group_id, const char *request_id,
+                                            const char *domain_id, const char *request_id,
                                             uint64_t expected_revision,
                                             flowie_control_generated_credential_t *generated) {
   flowie_control_credential_issue_command_t command = FLOWIE_CONTROL_CREDENTIAL_ISSUE_COMMAND_INIT;
-  command.root_group_id = root_group_id;
+  command.domain_id = domain_id;
   command.principal_id = "device-a";
   command.actor = "admin-1";
   command.request_id = request_id;
@@ -175,9 +175,9 @@ static int auth_service_credential_generate(flowie_control_store_t *store,
 static int auth_service_group_create(flowie_control_store_t *store, uint64_t expected_revision) {
   flowie_control_group_create_command_t command = FLOWIE_CONTROL_GROUP_CREATE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.group_id = "engineering";
-  command.parent_group_id = "root-a";
+  command.parent_group_id = NULL;
   command.actor = "admin-1";
   command.request_id = "request-group-a";
   command.expected_revision = expected_revision;
@@ -188,7 +188,7 @@ static int auth_service_group_create(flowie_control_store_t *store, uint64_t exp
 static int auth_service_membership_add(flowie_control_store_t *store, uint64_t expected_revision) {
   flowie_control_membership_add_command_t command = FLOWIE_CONTROL_MEMBERSHIP_ADD_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.principal_id = "device-a";
   command.group_id = "engineering";
   command.actor = "admin-1";
@@ -202,9 +202,9 @@ static int auth_service_group_create_named(flowie_control_store_t *store, const 
                                            const char *request_id, uint64_t expected_revision) {
   flowie_control_group_create_command_t command = FLOWIE_CONTROL_GROUP_CREATE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.group_id = group_id;
-  command.parent_group_id = "root-a";
+  command.parent_group_id = NULL;
   command.actor = "admin-1";
   command.request_id = request_id;
   command.expected_revision = expected_revision;
@@ -216,7 +216,7 @@ static int auth_service_membership_add_named(flowie_control_store_t *store, cons
                                              const char *request_id, uint64_t expected_revision) {
   flowie_control_membership_add_command_t command = FLOWIE_CONTROL_MEMBERSHIP_ADD_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.principal_id = "device-a";
   command.group_id = group_id;
   command.actor = "admin-1";
@@ -229,7 +229,7 @@ static int auth_service_membership_add_named(flowie_control_store_t *store, cons
 static int auth_service_role_create(flowie_control_store_t *store, uint64_t expected_revision) {
   flowie_control_role_create_command_t command = FLOWIE_CONTROL_ROLE_CREATE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.role_id = "publisher";
   command.actor = "admin-1";
   command.request_id = "request-role-a";
@@ -241,7 +241,7 @@ static int auth_service_role_create(flowie_control_store_t *store, uint64_t expe
 static int auth_service_role_add(flowie_control_store_t *store, uint64_t expected_revision) {
   flowie_control_user_role_add_command_t command = FLOWIE_CONTROL_USER_ROLE_ADD_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.principal_id = "device-a";
   command.role_id = "publisher";
   command.actor = "admin-1";
@@ -256,7 +256,7 @@ static int auth_service_credential_revoke(flowie_control_store_t *store,
   flowie_control_credential_revoke_command_t command =
       FLOWIE_CONTROL_CREDENTIAL_REVOKE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.principal_id = "device-a";
   command.actor = "admin-1";
   command.request_id = "request-revoke-a";
@@ -268,7 +268,7 @@ static int auth_service_credential_revoke(flowie_control_store_t *store,
 static int auth_service_user_disable(flowie_control_store_t *store, uint64_t expected_revision) {
   flowie_control_user_disable_command_t command = FLOWIE_CONTROL_USER_DISABLE_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
-  command.root_group_id = "root-a";
+  command.domain_id = "root-a";
   command.principal_id = "device-a";
   command.actor = "admin-1";
   command.request_id = "request-disable-external-user";
@@ -307,7 +307,7 @@ spec("Flowie control trusted authentication service") {
     auth_service_store_close(store, path);
   }
 
-  it("authenticates duplicate MQTT identities only inside the service credential Root Group") {
+  it("authenticates duplicate MQTT identities only inside the service credential Domain") {
     char *path = NULL;
     flowie_control_store_t *store = auth_service_store_open(&path);
     flowie_control_generated_credential_t root_a = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
@@ -322,8 +322,8 @@ spec("Flowie control trusted authentication service") {
     turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
     int cache_hit = -1;
 
-    check_int_eq(auth_service_root_create(store, "root-a", "request-root-a", 0u), TURBO_OK);
-    check_int_eq(auth_service_root_create(store, "root-b", "request-root-b", 1u), TURBO_OK);
+    check_int_eq(auth_service_domain_create(store, "root-a", "request-root-a", 0u), TURBO_OK);
+    check_int_eq(auth_service_domain_create(store, "root-b", "request-root-b", 1u), TURBO_OK);
     check_int_eq(auth_service_user_create(store, "root-a", "request-user-a", 2u), TURBO_OK);
     check_int_eq(
         auth_service_credential_generate(store, "root-a", "request-credential-a", 3u, &root_a),
@@ -341,20 +341,19 @@ spec("Flowie control trusted authentication service") {
     request.caller = &caller;
     request.identity = "device-a";
     request.method = "password";
-    request.secret = root_a.secret;
-    request.secret_size = root_a.secret_size;
+    request.secret = (const uint8_t *)root_a.token;
+    request.secret_size = root_a.token_size;
     check_int_eq(
         flowie_control_auth_service_authenticate(service, &request, &principal, &cache_hit),
         TURBO_OK);
     check_false(cache_hit);
     check_str_eq(principal.principal_id, "device-a");
-    check_str_eq(principal.root_group_id, "root-a");
+    check_str_eq(principal.domain_id, "root-a");
     check_str_eq(principal.principal_type, "device");
     check_str_eq(principal.auth_method, "password");
-    check_uint_eq(principal.scope, TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP);
+    check_uint_eq(principal.scope, TURBO_FLOW_SECURITY_SCOPE_DOMAIN);
     check_uint_eq(principal.policy_version, 11u);
     check_uint_eq(principal.expires_at, 10300u);
-    check_true(auth_service_group_present(&principal, "root-a"));
     check_true(auth_service_group_present(&principal, "engineering"));
     check_uint_eq(principal.role_count, 1u);
     check_str_eq(principal.roles[0], "publisher");
@@ -375,28 +374,27 @@ spec("Flowie control trusted authentication service") {
     check_true(auth_service_group_present(&principal, "operations"));
     check_uint_eq(principal.policy_version, 11u);
 
-    request.secret = root_b.secret;
-    request.secret_size = root_b.secret_size;
+    request.secret = (const uint8_t *)root_b.token;
+    request.secret_size = root_b.token_size;
     check_int_eq(
         flowie_control_auth_service_authenticate(service, &request, &principal, &cache_hit),
         TURBO_EPERM);
     check_uint_eq(principal.policy_version, 0u);
-    caller.root_group_id = "root-b";
+    caller.domain_id = "root-b";
     caller.service_id = "broker-b";
     caller.peer_certificate_sha256 = AUTH_SERVICE_CERT_B;
     check_int_eq(
         flowie_control_auth_service_authenticate(service, &request, &principal, &cache_hit),
         TURBO_OK);
-    check_str_eq(principal.root_group_id, "root-b");
-    check_uint_eq(principal.group_count, 1u);
-    check_str_eq(principal.groups[0], "root-b");
+    check_str_eq(principal.domain_id, "root-b");
+    check_uint_eq(principal.group_count, 0u);
     check_uint_eq(principal.policy_version, 12u);
 
-    caller.root_group_id = "";
+    caller.domain_id = "";
     check_int_eq(
         flowie_control_auth_service_authenticate(service, &request, &principal, &cache_hit),
         TURBO_EPERM);
-    caller.root_group_id = "root-b";
+    caller.domain_id = "root-b";
     caller.authenticated = 0;
     check_int_eq(
         flowie_control_auth_service_authenticate(service, &request, &principal, &cache_hit),
@@ -421,7 +419,7 @@ spec("Flowie control trusted authentication service") {
     flowie_control_authenticate_request_t request = FLOWIE_CONTROL_AUTHENTICATE_REQUEST_INIT;
     turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
 
-    check_int_eq(auth_service_root_create(store, "root-a", "request-root-a", 0u), TURBO_OK);
+    check_int_eq(auth_service_domain_create(store, "root-a", "request-root-a", 0u), TURBO_OK);
     check_int_eq(auth_service_user_create(store, "root-a", "request-user-a", 1u), TURBO_OK);
     check_int_eq(
         auth_service_credential_generate(store, "root-a", "request-credential-a", 2u, &generated),
@@ -430,8 +428,8 @@ spec("Flowie control trusted authentication service") {
     request.caller = &caller;
     request.identity = "device-a";
     request.method = "password";
-    request.secret = generated.secret;
-    request.secret_size = generated.secret_size;
+    request.secret = (const uint8_t *)generated.token;
+    request.secret_size = generated.token_size;
 
     check_int_eq(flowie_control_auth_service_authenticate(service, &request, &principal, NULL),
                  TURBO_EIO);
@@ -470,7 +468,7 @@ spec("Flowie control trusted authentication service") {
     uint64_t now_seconds = 10000u;
     int cache_hit = 1;
 
-    check_int_eq(auth_service_root_create(store, "root-a", "external-root", 0u), TURBO_OK);
+    check_int_eq(auth_service_domain_create(store, "root-a", "external-root", 0u), TURBO_OK);
     check_int_eq(auth_service_user_create(store, "root-a", "external-user", 1u), TURBO_OK);
     check_int_eq(auth_service_group_create(store, 2u), TURBO_OK);
     check_int_eq(auth_service_membership_add(store, 3u), TURBO_OK);
@@ -514,7 +512,6 @@ spec("Flowie control trusted authentication service") {
     check_str_eq(principal.principal_id, "device-a");
     check_str_eq(principal.auth_method, "oidc-token");
     check_uint_eq(principal.expires_at, 10120u);
-    check_true(auth_service_group_present(&principal, "root-a"));
     check_true(auth_service_group_present(&principal, "engineering"));
     check_false(auth_service_group_present(&principal, "idp-administrators"));
     check_uint_eq(principal.role_count, 1u);
@@ -561,7 +558,7 @@ spec("Flowie control trusted authentication service") {
     uint64_t now_ms = 100u;
     static const uint8_t wrong_secret[] = "wrong-secret";
 
-    check_int_eq(auth_service_root_create(store, "root-a", "request-rate-root", 0u), TURBO_OK);
+    check_int_eq(auth_service_domain_create(store, "root-a", "request-rate-root", 0u), TURBO_OK);
     check_int_eq(auth_service_user_create(store, "root-a", "request-rate-user", 1u), TURBO_OK);
     check_int_eq(auth_service_credential_generate(store, "root-a", "request-rate-credential", 2u,
                                                   &generated),

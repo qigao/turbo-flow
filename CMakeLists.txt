@@ -173,7 +173,8 @@ if(BUILD_TESTING)
       test_flowie_transport
       test_flowie_mqtt_endurance
       test_flowie_mqtt_soak
-      flowie_server_check_redis_session_store
+      test_flowie_cluster_route_redis_live
+      flowie_server_rejects_redis_protocol_store
       flowie_server_check_https_auth_provider)
   set(_flowie_release_evidence_dependencies)
   foreach(_flowie_release_target IN LISTS _flowie_release_evidence_targets)

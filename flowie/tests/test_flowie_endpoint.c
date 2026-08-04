@@ -36,6 +36,7 @@ typedef struct flowie_security_fixture_s {
   uint64_t policy_version;
   int result;
   int revoked;
+  char username[TURBO_FLOW_SECURITY_ID_MAX + 1u];
   char remote_address[CORO_SOCKET_ADDRESS_TEXT_CAPACITY];
   char transport_peer_address[CORO_SOCKET_ADDRESS_TEXT_CAPACITY];
   char peer_certificate_sha256[CORO_TLS_PEER_CERT_SHA256_CAPACITY];
@@ -306,9 +307,9 @@ static void flowie_test_security_principal(turbo_flow_security_principal_t *prin
   *principal = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   (void)snprintf(principal->principal_id, sizeof(principal->principal_id), "%s", "writer");
   (void)snprintf(principal->principal_type, sizeof(principal->principal_type), "%s", "device");
-  (void)snprintf(principal->root_group_id, sizeof(principal->root_group_id), "%s", "root-a");
+  (void)snprintf(principal->domain_id, sizeof(principal->domain_id), "%s", "root-a");
   (void)snprintf(principal->auth_method, sizeof(principal->auth_method), "%s", method);
-  principal->scope = TURBO_FLOW_SECURITY_SCOPE_ROOT_GROUP;
+  principal->scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
   principal->role_count = 1u;
   (void)snprintf(principal->roles[0], sizeof(principal->roles[0]), "%s", "writer");
   principal->group_count = 1u;
@@ -403,6 +404,8 @@ static int flowie_test_authenticate(void *ctx, const turbo_flow_security_auth_re
   flowie_security_fixture_t *fixture = (flowie_security_fixture_t *)ctx;
   if (!fixture || !request || !principal) return TURBO_EINVAL;
   ++fixture->calls;
+  (void)snprintf(fixture->username, sizeof(fixture->username), "%s",
+                 request->identity ? request->identity : "");
   (void)snprintf(fixture->remote_address, sizeof(fixture->remote_address), "%s",
                  request->remote_address ? request->remote_address : "");
   (void)snprintf(fixture->transport_peer_address, sizeof(fixture->transport_peer_address), "%s",
@@ -1298,7 +1301,7 @@ spec("Flowie MQTT endpoint primitive") {
     rule.effect = TURBO_FLOW_SECURITY_ALLOW;
     rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
     (void)snprintf(rule.subject, sizeof(rule.subject), "%s", "writer");
-    (void)snprintf(rule.root_group_id, sizeof(rule.root_group_id), "%s", "root-a");
+    (void)snprintf(rule.domain_id, sizeof(rule.domain_id), "%s", "root-a");
     rule.action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;
     rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
     rule.match_kind = TURBO_FLOW_SECURITY_MATCH_PREFIX;
@@ -1409,7 +1412,7 @@ spec("Flowie MQTT endpoint primitive") {
       rules[index].effect = TURBO_FLOW_SECURITY_ALLOW;
       rules[index].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
       (void)snprintf(rules[index].subject, sizeof(rules[index].subject), "%s", "writer");
-      (void)snprintf(rules[index].root_group_id, sizeof(rules[index].root_group_id), "%s",
+      (void)snprintf(rules[index].domain_id, sizeof(rules[index].domain_id), "%s",
                      "root-a");
       rules[index].match_kind = TURBO_FLOW_SECURITY_MATCH_PREFIX;
     }
@@ -2083,7 +2086,7 @@ spec("Flowie MQTT endpoint primitive") {
     free(yaml);
   }
 
-  it("MQTT-SEC-005/006 authenticates CONNECT against one dynamic ACL generation") {
+  it("MQTT-SEC-005/006 authenticates Username and authorizes an independent Client ID") {
     static const char yaml[] = "version: 1\n"
                                "channels:\n"
                                "  acl.test:\n"
@@ -2192,7 +2195,7 @@ spec("Flowie MQTT endpoint primitive") {
     policy.rules[0].effect = TURBO_FLOW_SECURITY_ALLOW;
     policy.rules[0].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
     (void)snprintf(policy.rules[0].subject, sizeof(policy.rules[0].subject), "%s", "writer");
-    (void)snprintf(policy.rules[0].root_group_id, sizeof(policy.rules[0].root_group_id), "%s",
+    (void)snprintf(policy.rules[0].domain_id, sizeof(policy.rules[0].domain_id), "%s",
                    "root-a");
     policy.rules[0].action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;
     policy.rules[0].resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
@@ -2202,7 +2205,7 @@ spec("Flowie MQTT endpoint primitive") {
     policy.rules[1].effect = TURBO_FLOW_SECURITY_ALLOW;
     policy.rules[1].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
     (void)snprintf(policy.rules[1].subject, sizeof(policy.rules[1].subject), "%s", "writer");
-    (void)snprintf(policy.rules[1].root_group_id, sizeof(policy.rules[1].root_group_id), "%s",
+    (void)snprintf(policy.rules[1].domain_id, sizeof(policy.rules[1].domain_id), "%s",
                    "root-a");
     policy.rules[1].action_mask =
         TURBO_FLOW_SECURITY_ACTION_PUBLISH | TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE;
@@ -2245,7 +2248,9 @@ spec("Flowie MQTT endpoint primitive") {
 
     connect.version = FLOWIE_MQTT_VERSION_5;
     connect.clean_start = 1u;
-    connect.client_id = (flowie_mqtt_span_t){(const uint8_t *)"secure-1", 8u};
+    connect.client_id =
+        (flowie_mqtt_span_t){(const uint8_t *)"secure-9e107d9d372bb6826bd81d3542a419d6",
+                             sizeof("secure-9e107d9d372bb6826bd81d3542a419d6") - 1u};
     connect.has_username = 1u;
     connect.has_password = 1u;
     connect.username = (flowie_mqtt_span_t){(const uint8_t *)"writer", 6u};
@@ -2348,6 +2353,7 @@ spec("Flowie MQTT endpoint primitive") {
     check_true(flowie_test_socket_readable(legacy_publish, 500u));
     check(flowie_test_recv_exact(legacy_publish, received, 1u) != TURBO_OK);
     check_size_eq(auth.calls, 6u);
+    check_str_eq(auth.username, "writer");
     check_true(strncmp(auth.remote_address, "127.0.0.1:", sizeof("127.0.0.1:") - 1u) == 0);
     check_str_eq(auth.peer_certificate_sha256, "");
 
@@ -2511,7 +2517,7 @@ spec("Flowie MQTT endpoint primitive") {
     rule.effect = TURBO_FLOW_SECURITY_ALLOW;
     rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
     (void)snprintf(rule.subject, sizeof(rule.subject), "%s", "writer");
-    (void)snprintf(rule.root_group_id, sizeof(rule.root_group_id), "%s", "root-a");
+    (void)snprintf(rule.domain_id, sizeof(rule.domain_id), "%s", "root-a");
     rule.action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;
     rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
     rule.match_kind = TURBO_FLOW_SECURITY_MATCH_PREFIX;
@@ -2651,7 +2657,7 @@ spec("Flowie MQTT endpoint primitive") {
     rule.effect = TURBO_FLOW_SECURITY_ALLOW;
     rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
     (void)snprintf(rule.subject, sizeof(rule.subject), "%s", "writer");
-    (void)snprintf(rule.root_group_id, sizeof(rule.root_group_id), "%s", "root-a");
+    (void)snprintf(rule.domain_id, sizeof(rule.domain_id), "%s", "root-a");
     rule.action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;
     rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
     rule.match_kind = TURBO_FLOW_SECURITY_MATCH_PREFIX;
@@ -2772,7 +2778,7 @@ spec("Flowie MQTT endpoint primitive") {
       policy.rules[i].effect = TURBO_FLOW_SECURITY_ALLOW;
       policy.rules[i].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
       (void)snprintf(policy.rules[i].subject, sizeof(policy.rules[i].subject), "%s", "writer");
-      (void)snprintf(policy.rules[i].root_group_id, sizeof(policy.rules[i].root_group_id), "%s",
+      (void)snprintf(policy.rules[i].domain_id, sizeof(policy.rules[i].domain_id), "%s",
                      "root-a");
     }
     policy.rules[0].action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;
@@ -2919,7 +2925,7 @@ spec("Flowie MQTT endpoint primitive") {
     rule.effect = TURBO_FLOW_SECURITY_ALLOW;
     rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
     (void)snprintf(rule.subject, sizeof(rule.subject), "%s", "writer");
-    (void)snprintf(rule.root_group_id, sizeof(rule.root_group_id), "%s", "root-a");
+    (void)snprintf(rule.domain_id, sizeof(rule.domain_id), "%s", "root-a");
     rule.action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;
     rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
     rule.match_kind = TURBO_FLOW_SECURITY_MATCH_PREFIX;
@@ -3066,7 +3072,7 @@ spec("Flowie MQTT endpoint primitive") {
     rule.effect = TURBO_FLOW_SECURITY_ALLOW;
     rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
     (void)snprintf(rule.subject, sizeof(rule.subject), "%s", "writer");
-    (void)snprintf(rule.root_group_id, sizeof(rule.root_group_id), "%s", "root-a");
+    (void)snprintf(rule.domain_id, sizeof(rule.domain_id), "%s", "root-a");
     rule.action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;
     rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
     rule.match_kind = TURBO_FLOW_SECURITY_MATCH_PREFIX;

@@ -1,12 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
-FROM debian:bookworm AS builder
+FROM debian:bookworm AS build_toolchain
 
 ARG CMAKE_VERSION=3.31.0
 ARG CMAKE_SHA256=7cfdf4a411c71d13c027199952fd25e8245d85c932ff452e2b9a9e0f6dfe368a
 ARG VCPKG_REF=b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-ARG SOURCE_REVISION=unknown
-
 ENV DEBIAN_FRONTEND=noninteractive \
     VCPKG_DISABLE_METRICS=1 \
     VCPKG_DEFAULT_BINARY_CACHE=/var/cache/vcpkg
@@ -47,23 +45,42 @@ RUN curl -fsSL \
     && git -C /opt/vcpkg checkout "${VCPKG_REF}" \
     && /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
 
-COPY --from=turbo_utils . /src/turbo-utils
-COPY --from=turbo_net . /src/turbonet
-COPY --from=turbo_http . /src/TurboHTTP
-COPY --from=rules_forge . /src/rulesforge
-
+FROM build_toolchain AS turboutils_builder
 ENV FLOWIE_SDK_ROOT=/opt/flowie-sdk
+COPY --from=turbo_utils . /src/turbo-utils
 
 RUN --mount=type=cache,target=/var/cache/vcpkg,sharing=locked \
     set -eux; \
     parallel="$(nproc)"; \
     cd /src/turbo-utils; \
     cmake --fresh --preset linux-release-user \
-      -DCMAKE_INSTALL_PREFIX="$FLOWIE_SDK_ROOT/turboutils"; \
-    cmake --build --preset linux-release-user --parallel "$parallel"; \
-    cmake --install build/linux-gcc-release
+      -DCMAKE_INSTALL_PREFIX="$FLOWIE_SDK_ROOT/turboutils" \
+      -DBUILD_TESTING=OFF \
+      -DBUILD_TESTS=OFF \
+      -DBUILD_EXAMPLES=OFF; \
+    cmake --build --preset linux-release-user --target install --parallel "$parallel"
 
-COPY . /src/turbo-flow
+FROM turboutils_builder AS turboutils_tool_builder
+
+RUN set -eux; \
+    parallel="$(nproc)"; \
+    cd /src/turbo-utils; \
+    cmake --build --preset linux-release-user --target tbe_compiler --parallel "$parallel"; \
+    install -d "$FLOWIE_SDK_ROOT/turboutils/bin"; \
+    install -m 0755 build/linux-gcc-release/bin/tbe_compiler \
+      "$FLOWIE_SDK_ROOT/turboutils/bin/tbe_compiler"; \
+    cmake -E copy_directory build/linux-gcc-release/bin/templates \
+      "$FLOWIE_SDK_ROOT/turboutils/bin/templates"; \
+    LD_LIBRARY_PATH="$FLOWIE_SDK_ROOT/turboutils/lib" \
+      ldd "$FLOWIE_SDK_ROOT/turboutils/bin/tbe_compiler" \
+      | tee "$FLOWIE_SDK_ROOT/turboutils/tbe-compiler.ldd"; \
+    ! grep -F 'not found' "$FLOWIE_SDK_ROOT/turboutils/tbe-compiler.ldd"
+
+FROM build_toolchain AS turbonet_builder
+ENV FLOWIE_SDK_ROOT=/opt/flowie-sdk
+COPY --from=turboutils_builder /opt/flowie-sdk/turboutils/ /opt/flowie-sdk/turboutils/
+COPY --from=turboutils_builder /src/turbo-utils/vcpkg_installed/ /src/turbo-utils/vcpkg_installed/
+COPY --from=turbo_net . /src/turbonet
 
 RUN --mount=type=cache,target=/var/cache/vcpkg,sharing=locked \
     set -eux; \
@@ -72,9 +89,19 @@ RUN --mount=type=cache,target=/var/cache/vcpkg,sharing=locked \
     cmake --fresh --preset linux-release-user \
       -DTURBO_UTILS_ROOT="$FLOWIE_SDK_ROOT/turboutils" \
       -DCMAKE_PREFIX_PATH="$FLOWIE_SDK_ROOT/turboutils;/src/turbonet/vcpkg_installed/x64-linux" \
-      -DCMAKE_INSTALL_PREFIX="$FLOWIE_SDK_ROOT/turbonet"; \
-    cmake --build --preset linux-release-user --parallel "$parallel"; \
-    cmake --install build/linux-gcc-release
+      -DCMAKE_INSTALL_PREFIX="$FLOWIE_SDK_ROOT/turbonet" \
+      -DBUILD_TESTING=OFF \
+      -DBUILD_TESTS=OFF \
+      -DBUILD_EXAMPLES=OFF; \
+    cmake --build --preset linux-release-user --target install --parallel "$parallel"
+
+FROM build_toolchain AS turbohttp_builder
+ENV FLOWIE_SDK_ROOT=/opt/flowie-sdk
+COPY --from=turboutils_builder /opt/flowie-sdk/turboutils/ /opt/flowie-sdk/turboutils/
+COPY --from=turboutils_builder /src/turbo-utils/vcpkg_installed/ /src/turbo-utils/vcpkg_installed/
+COPY --from=turbonet_builder /opt/flowie-sdk/turbonet/ /opt/flowie-sdk/turbonet/
+COPY --from=turbonet_builder /src/turbonet/vcpkg_installed/ /src/turbonet/vcpkg_installed/
+COPY --from=turbo_http . /src/TurboHTTP
 
 RUN --mount=type=cache,target=/var/cache/vcpkg,sharing=locked \
     set -eux; \
@@ -84,9 +111,17 @@ RUN --mount=type=cache,target=/var/cache/vcpkg,sharing=locked \
       -DTURBO_UTILS_ROOT="$FLOWIE_SDK_ROOT/turboutils" \
       -DTURBO_NET_ROOT="$FLOWIE_SDK_ROOT/turbonet" \
       -DCMAKE_PREFIX_PATH="$FLOWIE_SDK_ROOT/turboutils;$FLOWIE_SDK_ROOT/turbonet;/src/TurboHTTP/vcpkg_installed/x64-linux" \
-      -DCMAKE_INSTALL_PREFIX="$FLOWIE_SDK_ROOT/turbohttp"; \
-    cmake --build --preset linux-release-user --parallel "$parallel"; \
-    cmake --install build/linux-gcc-release
+      -DCMAKE_INSTALL_PREFIX="$FLOWIE_SDK_ROOT/turbohttp" \
+      -DBUILD_TESTING=OFF \
+      -DBUILD_TESTS=OFF \
+      -DBUILD_EXAMPLES=OFF; \
+    cmake --build --preset linux-release-user --target install --parallel "$parallel"
+
+FROM build_toolchain AS rulesforge_builder
+ENV FLOWIE_SDK_ROOT=/opt/flowie-sdk
+COPY --from=turboutils_builder /opt/flowie-sdk/turboutils/ /opt/flowie-sdk/turboutils/
+COPY --from=turboutils_builder /src/turbo-utils/vcpkg_installed/ /src/turbo-utils/vcpkg_installed/
+COPY --from=rules_forge . /src/rulesforge
 
 RUN --mount=type=cache,target=/var/cache/vcpkg,sharing=locked \
     set -eux; \
@@ -95,9 +130,24 @@ RUN --mount=type=cache,target=/var/cache/vcpkg,sharing=locked \
     cmake --fresh --preset linux-release-user \
       -DTURBO_UTILS_ROOT="$FLOWIE_SDK_ROOT/turboutils" \
       -DCMAKE_PREFIX_PATH="$FLOWIE_SDK_ROOT/turboutils;/src/rulesforge/vcpkg_installed/x64-linux" \
-      -DCMAKE_INSTALL_PREFIX="$FLOWIE_SDK_ROOT/rulesforge"; \
-    cmake --build --preset linux-release-user --parallel "$parallel"; \
-    cmake --install build/linux-gcc-release
+      -DCMAKE_INSTALL_PREFIX="$FLOWIE_SDK_ROOT/rulesforge" \
+      -DBUILD_TESTING=OFF \
+      -DBUILD_TESTS=OFF \
+      -DBUILD_EXAMPLES=OFF; \
+    cmake --build --preset linux-release-user --target install --parallel "$parallel"
+
+FROM build_toolchain AS builder
+ARG SOURCE_REVISION=unknown
+ENV FLOWIE_SDK_ROOT=/opt/flowie-sdk
+COPY --from=turboutils_tool_builder /opt/flowie-sdk/turboutils/ /opt/flowie-sdk/turboutils/
+COPY --from=turboutils_builder /src/turbo-utils/vcpkg_installed/ /src/turbo-utils/vcpkg_installed/
+COPY --from=turbonet_builder /opt/flowie-sdk/turbonet/ /opt/flowie-sdk/turbonet/
+COPY --from=turbonet_builder /src/turbonet/vcpkg_installed/ /src/turbonet/vcpkg_installed/
+COPY --from=turbohttp_builder /opt/flowie-sdk/turbohttp/ /opt/flowie-sdk/turbohttp/
+COPY --from=turbohttp_builder /src/TurboHTTP/vcpkg_installed/ /src/TurboHTTP/vcpkg_installed/
+COPY --from=rulesforge_builder /opt/flowie-sdk/rulesforge/ /opt/flowie-sdk/rulesforge/
+COPY --from=rulesforge_builder /src/rulesforge/vcpkg_installed/ /src/rulesforge/vcpkg_installed/
+COPY . /src/turbo-flow
 
 RUN --mount=type=cache,target=/var/cache/vcpkg,sharing=locked \
     set -eux; \
@@ -113,10 +163,11 @@ RUN --mount=type=cache,target=/var/cache/vcpkg,sharing=locked \
       -DENABLE_TESTS=OFF \
       -DBUILD_TESTS=OFF \
       -DBUILD_EXAMPLES=OFF \
+      -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="$FLOWIE_SDK_ROOT/turboutils/bin/tbe_compiler" \
       -DFLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR=/opt/flowie/share/control/dashboard-resources \
       -DFLOWIE_RELEASE_REVISION="${SOURCE_REVISION}"; \
-    cmake --build --preset linux-release-user --parallel "$parallel"; \
-    cmake --install build/linux-gcc-release; \
+    LD_LIBRARY_PATH="$FLOWIE_SDK_ROOT/turboutils/lib" \
+      cmake --build --preset linux-release-user --target install --parallel "$parallel"; \
     install -d /opt/flowie-runtime/bin /opt/flowie-runtime/lib; \
     install -m 0755 "$FLOWIE_SDK_ROOT/turboflow/bin/flowie_server" \
       /opt/flowie-runtime/bin/flowie_server; \
@@ -159,7 +210,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
          --shell /usr/sbin/nologin flowie \
     && install -d -o flowie -g flowie \
          /etc/flowie /etc/flowie/certs /opt/flowie/plugins \
-         /var/lib/flowie/control /var/lib/flowie/protocol
+         /var/lib/flowie/control
 
 COPY --from=builder /opt/flowie-runtime/bin/flowie_server /usr/local/bin/flowie_server
 COPY --from=builder /opt/flowie-runtime/lib/ /usr/local/lib/
@@ -175,7 +226,7 @@ RUN ldconfig \
 ENV FLOWIE_CONFIG=/etc/flowie/flowie.yml \
     FLOWIE_GRAPH=/etc/flowie/flowie.flow \
     FLOWIE_CONTROL_CONFIG=/etc/flowie/control.yml \
-    FLOWIE_PROTOCOL_STORE_PATH=/var/lib/flowie/protocol/flowie-protocol.sqlite3 \
+    FLOWIE_PROTOCOL_STORE_PATH=:memory: \
     FLOWIE_PROFILE=flowie \
     FLOWIE_HEALTH_HOST=127.0.0.1 \
     FLOWIE_HEALTH_PORT=18883

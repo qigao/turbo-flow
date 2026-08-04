@@ -17,7 +17,7 @@ extern "C" {
 typedef struct flowie_control_auth_service_s flowie_control_auth_service_t;
 typedef uint64_t (*flowie_control_auth_clock_fn)(void *ctx);
 
-typedef int (*flowie_control_auth_policy_version_fn)(void *ctx, const char *root_group_id,
+typedef int (*flowie_control_auth_policy_version_fn)(void *ctx, const char *domain_id,
                                                      uint64_t *policy_version_out);
 
 typedef struct flowie_control_auth_policy_version_provider_s {
@@ -63,14 +63,14 @@ typedef struct flowie_control_auth_service_config_s {
 /**
  * Request-local Broker service identity produced by the service-credential resolver.
  *
- * The bearer token selects service_id and root_group_id. peer_certificate_sha256 is present only
+ * The bearer token selects service_id and domain_id. peer_certificate_sha256 is present only
  * when that credential also requires a verified client certificate.
  */
 typedef struct flowie_control_verified_caller_s {
   size_t size;
   const char *listener_id;
   const char *service_id;
-  const char *root_group_id;
+  const char *domain_id;
   const char *peer_certificate_sha256;
   int authenticated;
 } flowie_control_verified_caller_t;
@@ -105,7 +105,7 @@ int flowie_control_auth_service_create(const flowie_control_auth_service_config_
 void flowie_control_auth_service_destroy(flowie_control_auth_service_t *service);
 
 /**
- * Authenticate one request inside the Root Group selected by a verified service credential.
+ * Authenticate one request inside the Domain selected by a verified service credential.
  * Unknown callers and credential failures return TURBO_EPERM without cross-Root probing.
  */
 int flowie_control_auth_service_authenticate(flowie_control_auth_service_t *service,
@@ -114,25 +114,25 @@ int flowie_control_auth_service_authenticate(flowie_control_auth_service_t *serv
                                              int *credential_cache_hit_out);
 
 /**
- * Authenticate a human login inside an explicitly presented Root Group.
+ * Authenticate a human login inside an explicitly presented Domain.
  *
- * The Root Group is untrusted input and never grants authority by itself: the credential or
- * external assertion must resolve to an enabled local principal in that Root Group. caller_scope
+ * The Domain is untrusted input and never grants authority by itself: the credential or
+ * external assertion must resolve to an enabled local principal in that Domain. caller_scope
  * is used only for bounded rate limiting. When require_policy is zero, login does not depend on a
  * published MQTT ACL generation.
  */
 int flowie_control_auth_service_authenticate_root(
-    flowie_control_auth_service_t *service, const char *root_group_id, const char *caller_scope,
+    flowie_control_auth_service_t *service, const char *domain_id, const char *caller_scope,
     const flowie_control_authenticate_request_t *request, int require_policy,
     turbo_flow_security_principal_t *principal_out, int *credential_cache_hit_out);
 
 /**
- * Resolve a verified service caller to its scoped Root Group without authenticating a user
+ * Resolve a verified service caller to its scoped Domain without authenticating a user
  * credential. Used by read-only broker-facing services such as ACL bundle distribution.
  */
-int flowie_control_auth_service_resolve_root_group(
+int flowie_control_auth_service_resolve_domain(
     const flowie_control_auth_service_t *service, const flowie_control_verified_caller_t *caller,
-    char root_group_id_out[TURBO_FLOW_SECURITY_ID_MAX + 1u]);
+    char domain_id_out[TURBO_FLOW_SECURITY_ID_MAX + 1u]);
 
 #ifdef __cplusplus
 }

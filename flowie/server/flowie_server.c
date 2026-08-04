@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
   turbo_cmd_add_string(parser, &control_config_path, "control-config", NULL,
                        "Path to the control runtime configuration file");
   turbo_cmd_add_string(parser, &protocol_store_path, "protocol-store-path", NULL,
-                       "Standalone MQTT protocol SQLite database path");
+                       "Standalone MQTT protocol SQLite path (must be :memory:)");
   turbo_cmd_add_string_list(parser, plugin_paths, &plugin_path_count,
                             FLOWIE_SERVER_STORAGE_BACKEND_PLUGIN_MAX, "storage-backend-plugin",
                             NULL, "Storage backend plugin path (repeatable, max 8)");

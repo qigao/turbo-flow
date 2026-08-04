@@ -1,16 +1,6 @@
 services:
   flowie-server:
-    build:
-      context: ../../..
-      dockerfile: flowie/deploy/server/Dockerfile
-      additional_contexts:
-        turbo_utils: ../../../../turbo-utils
-        turbo_net: ../../../../turbonet
-        turbo_http: ../../../../../TurboHTTP
-        rules_forge: ../../../../../rulesforge
-      args:
-        SOURCE_REVISION: ${FLOWIE_SOURCE_REVISION:-local}
-    image: ${FLOWIE_SERVER_IMAGE:-flowie-server:local}
+    image: ${FLOWIE_SERVER_IMAGE:?set FLOWIE_SERVER_IMAGE to an immutable tag or digest}
     container_name: flowie-server
     network_mode: host
     restart: unless-stopped
@@ -32,6 +22,7 @@ services:
       FLOWIE_PROFILE: ${FLOWIE_PROFILE:-flowie}
       FLOWIE_HEALTH_HOST: ${FLOWIE_HEALTH_HOST:-127.0.0.1}
       FLOWIE_HEALTH_PORT: ${FLOWIE_HEALTH_PORT:-18883}
+      FLOWIE_PROTOCOL_STORE_PATH: ":memory:"
       FLOWIE_STORAGE_BACKEND_PLUGINS: ${FLOWIE_STORAGE_BACKEND_PLUGINS:-}
     volumes:
       - flowie-data:/var/lib/flowie

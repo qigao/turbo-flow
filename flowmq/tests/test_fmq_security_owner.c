@@ -80,7 +80,7 @@ static turbo_flow_security_rule_t fmq_security_test_rule(turbo_flow_security_eff
   rule.effect = effect;
   rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL;
   (void)snprintf(rule.subject, sizeof(rule.subject), "client-a");
-  (void)snprintf(rule.root_group_id, sizeof(rule.root_group_id), "root-a");
+  (void)snprintf(rule.domain_id, sizeof(rule.domain_id), "root-a");
   rule.action_mask = TURBO_FLOW_SECURITY_ACTION_CONNECT;
   rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
   rule.match_kind = TURBO_FLOW_SECURITY_MATCH_EXACT;
@@ -92,7 +92,7 @@ static turbo_flow_security_principal_t fmq_security_test_principal(uint64_t poli
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   (void)snprintf(principal.principal_id, sizeof(principal.principal_id), "client-a");
   (void)snprintf(principal.principal_type, sizeof(principal.principal_type), "service");
-  (void)snprintf(principal.root_group_id, sizeof(principal.root_group_id), "root-a");
+  (void)snprintf(principal.domain_id, sizeof(principal.domain_id), "root-a");
   (void)snprintf(principal.auth_method, sizeof(principal.auth_method), "token");
   principal.scope = TURBO_FLOW_SECURITY_SCOPE_SELF;
   principal.group_count = 1u;
@@ -185,7 +185,7 @@ spec("FlowMQ dynamic security composition") {
                  TURBO_OK);
 
     request.principal = &principal;
-    request.root_group_id = "root-a";
+    request.domain_id = "root-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_CONNECT;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
     request.resource = "fmq:fmq.secure:connection";
