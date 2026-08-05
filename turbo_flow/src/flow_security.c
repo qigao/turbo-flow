@@ -238,7 +238,12 @@ void turbo_flow_security_enhanced_auth_cancel(
 
 static int flow_security_rule_valid(const turbo_flow_security_rule_t *rule,
                                     const turbo_flow_security_matcher_t *matcher) {
-  if (!rule || rule->size < sizeof(*rule) || rule->abi_version != TURBO_FLOW_SECURITY_ABI_V3 ||
+  int allow_empty_pattern;
+  if (!rule) return 0;
+  allow_empty_pattern = rule->action_mask == TURBO_FLOW_SECURITY_ACTION_CONNECT &&
+                        rule->resource_type == TURBO_FLOW_SECURITY_RESOURCE_GENERIC &&
+                        rule->match_kind == TURBO_FLOW_SECURITY_MATCH_PREFIX;
+  if (rule->size < sizeof(*rule) || rule->abi_version != TURBO_FLOW_SECURITY_ABI_V3 ||
       rule->effect < TURBO_FLOW_SECURITY_DENY || rule->effect > TURBO_FLOW_SECURITY_ALLOW ||
       rule->subject_kind < TURBO_FLOW_SECURITY_SUBJECT_ANY ||
       rule->subject_kind > TURBO_FLOW_SECURITY_SUBJECT_GROUP ||
@@ -249,7 +254,7 @@ static int flow_security_rule_valid(const turbo_flow_security_rule_t *rule,
       rule->resource_type > TURBO_FLOW_SECURITY_RESOURCE_SECRET ||
       rule->match_kind < TURBO_FLOW_SECURITY_MATCH_EXACT ||
       rule->match_kind > TURBO_FLOW_SECURITY_MATCH_ADAPTER ||
-      !flow_security_cstr_valid(rule->pattern, sizeof(rule->pattern), 1)) {
+      !flow_security_cstr_valid(rule->pattern, sizeof(rule->pattern), !allow_empty_pattern)) {
     return 0;
   }
   if (rule->subject_kind == TURBO_FLOW_SECURITY_SUBJECT_ANY) {
@@ -560,7 +565,7 @@ flow_security_rule_bucket_pattern(flow_security_rule_bucket_t *bucket, turbo_has
                                   const char *subject, const char *pattern, size_t pattern_size) {
   flow_security_pattern_key_t key;
   flow_security_pattern_index_t **found;
-  if (!bucket || !bucket->initialized || !index || !subject || !pattern || pattern_size == 0u)
+  if (!bucket || !bucket->initialized || !index || !subject || !pattern)
     return NULL;
   if ((subject_mask & (UINT32_C(1) << subject_kind)) == 0u) return NULL;
   key.subject_kind = subject_kind;
@@ -1039,6 +1044,11 @@ static int flow_security_evaluate_subject(turbo_flow_security_realm_t *realm,
   rc = flow_security_evaluate_entries(snapshot, request, candidates, deny_rule, allow_rule);
   if (rc != TURBO_OK) return rc;
   if ((bucket->prefix_subject_mask & (UINT32_C(1) << subject_kind)) != 0u) {
+    candidates = flow_security_rule_bucket_pattern(bucket, &bucket->prefix_index,
+                                                   bucket->prefix_subject_mask, subject_kind,
+                                                   subject, request->resource, 0u);
+    rc = flow_security_evaluate_entries(snapshot, request, candidates, deny_rule, allow_rule);
+    if (rc != TURBO_OK) return rc;
     size_t prefix_limit =
         resource_size < bucket->max_prefix_size ? resource_size : bucket->max_prefix_size;
     for (size_t prefix_size = 1u; prefix_size <= prefix_limit; ++prefix_size) {

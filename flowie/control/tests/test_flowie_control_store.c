@@ -947,18 +947,25 @@ spec("Flowie control SQLite fact store") {
 
   it("validates canonical policy drafts, references, MQTT filters, and bounded listing") {
     static const char valid_rule[] =
-        "allow|any|*|root-a|subscribe|mqtt_topic|adapter|root-a/events/#";
+        "user device-7 allow {\n"
+        "  read topic root-a/groups/operators/devices/%u/event\n"
+        "}";
     char *path = NULL;
     flowie_control_store_t *store = control_store_open(&path);
     flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
     flowie_control_policy_validation_t validation = FLOWIE_CONTROL_POLICY_VALIDATION_INIT;
     flowie_control_policy_rule_view_t rules[1] = {FLOWIE_CONTROL_POLICY_RULE_VIEW_INIT};
+    flowie_control_user_create_command_t user = control_user_create_command("request-user", 1u);
     size_t count = 0u;
     int has_more = 0;
 
-    check_int_eq(control_policy_rule_put(store, 10u, valid_rule, "request-policy-put", 1u, &result),
+    check_int_eq(flowie_control_store_user_create(store, &user, &result), TURBO_OK);
+    check_int_eq(control_group_create(store, "root-a", "operators", NULL, "request-group", 2u,
+                                      &result),
                  TURBO_OK);
-    check_uint_eq(result.revision, 2u);
+    check_int_eq(control_policy_rule_put(store, 10u, valid_rule, "request-policy-put", 3u, &result),
+                 TURBO_OK);
+    check_uint_eq(result.revision, 4u);
     check_int_eq(
         flowie_control_store_policy_rule_list(store, "root-a", 0u, 0, rules, 1u, &count, &has_more),
         TURBO_OK);
@@ -967,39 +974,44 @@ spec("Flowie control SQLite fact store") {
     check_uint_eq(rules[0].ordinal, 10u);
     check_str_eq(rules[0].rule_line, valid_rule);
     check_int_eq(flowie_control_store_policy_validate(store, "root-a", &validation), TURBO_OK);
-    check_size_eq(validation.rule_count, 1u);
+    check_size_eq(validation.rule_count, 2u);
     check_size_eq(validation.deny_rule_count, 0u);
 
     check_int_eq(control_policy_rule_put(
-                     store, 11u, "allow|any|*|root-a|publish,connect|generic|prefix|device-",
-                     "request-policy-noncanonical", 2u, &result),
+                     store, 11u,
+                     "user device-7 allow { write topic root-a/groups/operators/devices/%u/event }",
+                     "request-policy-noncanonical", 4u, &result),
                  TURBO_EPROTO);
     check_int_eq(control_policy_rule_put(
-                     store, 11u, "allow|any|*|root-a|subscribe|mqtt_topic|adapter|root-a/#/tail",
-                     "request-policy-bad-filter", 2u, &result),
+                     store, 11u,
+                     "user device-7 allow {\n  read topic root-a/operators/devices/%u/event\n}",
+                     "request-policy-bad-filter", 4u, &result),
                  TURBO_EPROTO);
     check_int_eq(control_policy_rule_put(
-                     store, 11u, "allow|principal|missing|root-a|connect|generic|exact|client",
-                     "request-policy-missing-principal", 2u, &result),
+                     store, 11u,
+                     "user missing allow {\n  read topic root-a/groups/operators/devices/%u/event\n}",
+                     "request-policy-missing-principal", 4u, &result),
                  TURBO_ENOENT);
     check_int_eq(flowie_control_store_revision(store, &validation.store_revision), TURBO_OK);
-    check_uint_eq(validation.store_revision, 2u);
+    check_uint_eq(validation.store_revision, 4u);
 
     control_store_close(store, path);
   }
 
   it("prevents tombstoning subjects referenced by draft or published policy") {
     static const char principal_rule[] =
-        "allow|principal|device-7|root-a|connect|generic|exact|client";
-    static const char group_rule[] =
-        "allow|group|operators|root-a|subscribe|mqtt_topic|adapter|root-a/events/#";
-    static const char role_rule[] =
-        "allow|role|reader|root-a|publish|mqtt_topic|adapter|root-a/events/#";
+        "user device-7 allow {\n"
+        "  read topic root-a/groups/operators/devices/%u/event\n"
+        "}";
     static const char replacement_rule[] =
-        "deny|any|*|root-a|publish|mqtt_topic|adapter|root-a/private/#";
+        "user device-8 allow {\n"
+        "  write topic root-a/groups/public/devices/%c/event\n"
+        "}";
     char *path = NULL;
     flowie_control_store_t *store = control_store_open(&path);
     flowie_control_user_create_command_t user = control_user_create_command("request-user", 1u);
+    flowie_control_user_create_command_t replacement_user =
+        control_user_create_command("request-replacement-user", 2u);
     flowie_control_user_disable_command_t user_disable = FLOWIE_CONTROL_USER_DISABLE_COMMAND_INIT;
     flowie_control_role_disable_command_t role_disable = FLOWIE_CONTROL_ROLE_DISABLE_COMMAND_INIT;
     flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
@@ -1008,18 +1020,18 @@ spec("Flowie control SQLite fact store") {
     size_t audit_count = 0u;
 
     check_int_eq(flowie_control_store_user_create(store, &user, &result), TURBO_OK);
+    replacement_user.principal_id = "device-8";
+    check_int_eq(flowie_control_store_user_create(store, &replacement_user, &result), TURBO_OK);
     check_int_eq(control_group_create(store, "root-a", "operators", NULL, "request-group",
-                                      2u, &result),
+                                      3u, &result),
                  TURBO_OK);
-    check_int_eq(control_role_create(store, "root-a", "reader", "request-role", 3u, &result),
+    check_int_eq(control_group_create(store, "root-a", "public", NULL, "request-public-group",
+                                      4u, &result),
                  TURBO_OK);
-    check_int_eq(control_policy_rule_put(store, 10u, principal_rule, "request-principal-rule", 4u,
+    check_int_eq(control_role_create(store, "root-a", "reader", "request-role", 5u, &result),
+                 TURBO_OK);
+    check_int_eq(control_policy_rule_put(store, 10u, principal_rule, "request-principal-rule", 6u,
                                          &result),
-                 TURBO_OK);
-    check_int_eq(
-        control_policy_rule_put(store, 20u, group_rule, "request-group-rule", 5u, &result),
-        TURBO_OK);
-    check_int_eq(control_policy_rule_put(store, 30u, role_rule, "request-role-rule", 6u, &result),
                  TURBO_OK);
 
     user_disable.domain_id = "root-a";
@@ -1038,57 +1050,50 @@ spec("Flowie control SQLite fact store") {
     check_int_eq(control_group_delete(store, "root-a", "operators",
                                       "request-delete-group-referenced", 7u, &result),
                  TURBO_EBUSY);
-    check_int_eq(flowie_control_store_role_disable(store, &role_disable, &result), TURBO_EBUSY);
+    check_int_eq(flowie_control_store_role_disable(store, &role_disable, &result), TURBO_OK);
 
-    check_int_eq(control_policy_publish(store, "request-publish-subject-rules", 7u, 20000u,
+    check_int_eq(control_policy_publish(store, "request-publish-subject-rules", 8u, 20000u,
                                         &published),
                  TURBO_OK);
-    check_int_eq(control_policy_rule_delete(store, 10u, "request-delete-principal-rule", 8u,
+    check_int_eq(control_policy_rule_delete(store, 10u, "request-delete-principal-rule", 9u,
                                             &result),
                  TURBO_OK);
-    check_int_eq(
-        control_policy_rule_delete(store, 20u, "request-delete-group-rule", 9u, &result),
-        TURBO_OK);
-    check_int_eq(control_policy_rule_delete(store, 30u, "request-delete-role-rule", 10u, &result),
-                 TURBO_OK);
-    user_disable.expected_revision = 11u;
-    role_disable.expected_revision = 11u;
+    user_disable.expected_revision = 10u;
     check_int_eq(flowie_control_store_user_disable(store, &user_disable, &result), TURBO_EBUSY);
     check_int_eq(control_group_delete(store, "root-a", "operators",
-                                      "request-delete-group-published", 11u, &result),
+                                      "request-delete-group-published", 10u, &result),
                  TURBO_EBUSY);
-    check_int_eq(flowie_control_store_role_disable(store, &role_disable, &result), TURBO_EBUSY);
 
     check_int_eq(control_policy_rule_put(store, 40u, replacement_rule, "request-replacement-rule",
-                                         11u, &result),
+                                         10u, &result),
                  TURBO_OK);
-    check_int_eq(control_policy_publish(store, "request-publish-replacement", 12u, 21000u,
+    check_int_eq(control_policy_publish(store, "request-publish-replacement", 11u, 21000u,
                                         &published),
                  TURBO_OK);
-    check_int_eq(control_group_delete(store, "root-a", "operators", "request-delete-group", 13u,
+    check_int_eq(control_group_delete(store, "root-a", "operators", "request-delete-group", 12u,
                                       &result),
                  TURBO_OK);
-    role_disable.request_id = "request-disable-role";
-    role_disable.expected_revision = 14u;
-    role_disable.occurred_at = 10002u;
-    check_int_eq(flowie_control_store_role_disable(store, &role_disable, &result), TURBO_OK);
     user_disable.request_id = "request-disable-user";
-    user_disable.expected_revision = 15u;
+    user_disable.expected_revision = 13u;
     user_disable.occurred_at = 10003u;
     check_int_eq(flowie_control_store_user_disable(store, &user_disable, &result), TURBO_OK);
     check_int_eq(flowie_control_store_revision(store, &revision), TURBO_OK);
-    check_uint_eq(revision, 16u);
+    check_uint_eq(revision, 14u);
     check_int_eq(flowie_control_store_audit_count(store, &audit_count), TURBO_OK);
-    check_size_eq(audit_count, 16u);
+    check_size_eq(audit_count, 14u);
 
     control_store_close(store, path);
   }
 
   it("publishes an atomic versioned bundle through the repository and legacy SQLite provider") {
     static const char first_rule[] =
-        "deny|any|*|root-a|subscribe|mqtt_topic|adapter|root-a/private/#";
+        "user device-7 allow {\n"
+        "  deny read topic root-a/groups/operators/devices/%u/private\n"
+        "}";
     static const char second_rule[] =
-        "allow|any|*|root-a|subscribe|mqtt_topic|adapter|root-a/events/#";
+        "user device-8 allow {\n"
+        "  read topic root-a/groups/operators/devices/%c/event\n"
+        "}";
     char *path = NULL;
     flowie_control_store_t *store = control_store_open(&path);
     flowie_control_command_result_t put = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
@@ -1100,15 +1105,23 @@ spec("Flowie control SQLite fact store") {
     turbo_flow_security_policy_bundle_t bundle = TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
     turbo_flow_security_policy_bundle_t repository_bundle =
         TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
+    flowie_control_user_create_command_t first_user = control_user_create_command("request-user-7", 1u);
+    flowie_control_user_create_command_t second_user = control_user_create_command("request-user-8", 2u);
 
-    check_int_eq(control_policy_rule_put(store, 20u, first_rule, "request-policy-first", 1u, &put),
+    check_int_eq(flowie_control_store_user_create(store, &first_user, &put), TURBO_OK);
+    second_user.principal_id = "device-8";
+    check_int_eq(flowie_control_store_user_create(store, &second_user, &put), TURBO_OK);
+    check_int_eq(control_group_create(store, "root-a", "operators", NULL, "request-operators", 3u,
+                                      &put),
+                 TURBO_OK);
+    check_int_eq(control_policy_rule_put(store, 20u, first_rule, "request-policy-first", 4u, &put),
                  TURBO_OK);
     check_int_eq(
-        control_policy_rule_put(store, 40u, second_rule, "request-policy-second", 2u, &put),
+        control_policy_rule_put(store, 40u, second_rule, "request-policy-second", 5u, &put),
         TURBO_OK);
-    check_int_eq(control_policy_publish(store, "request-policy-publish", 3u, 20000u, &published),
+    check_int_eq(control_policy_publish(store, "request-policy-publish", 6u, 20000u, &published),
                  TURBO_OK);
-    check_uint_eq(published.revision, 4u);
+    check_uint_eq(published.revision, 7u);
     check_uint_eq(published.policy_version, 1u);
     check_false(published.replayed);
 
@@ -1117,9 +1130,13 @@ spec("Flowie control SQLite fact store") {
                  TURBO_OK);
     check_uint_eq(repository_bundle.policy_version, 1u);
     check_uint_eq(repository_bundle.expires_at, 20000u);
-    check_size_eq(repository_bundle.rule_count, 2u);
-    check_str_eq(repository_bundle.rules[0].pattern, "root-a/private/#");
-    check_str_eq(repository_bundle.rules[1].pattern, "root-a/events/#");
+    check_size_eq(repository_bundle.rule_count, 4u);
+    check_str_eq(repository_bundle.rules[0].pattern, "");
+    check_str_eq(repository_bundle.rules[1].pattern,
+                 "root-a/groups/operators/devices/%u/private");
+    check_str_eq(repository_bundle.rules[2].pattern, "");
+    check_str_eq(repository_bundle.rules[3].pattern,
+                 "root-a/groups/operators/devices/%c/event");
     flowie_control_store_policy_bundle_release(&repository_bundle);
 
     repository_bundle =
@@ -1127,7 +1144,7 @@ spec("Flowie control SQLite fact store") {
     check_int_eq(flowie_control_store_policy_bundle_load(store, "root-a", 1u,
                                                          &repository_bundle),
                  TURBO_OK);
-    check_size_eq(repository_bundle.rule_count, 2u);
+    check_size_eq(repository_bundle.rule_count, 4u);
     flowie_control_store_policy_bundle_release(&repository_bundle);
     check_int_eq(flowie_control_store_policy_bundle_load(store, "root-a", 2u,
                                                          &repository_bundle),
@@ -1141,30 +1158,30 @@ spec("Flowie control SQLite fact store") {
     check_int_eq(interface->load(interface->ctx, 1u, &bundle), TURBO_OK);
     check_uint_eq(bundle.policy_version, 1u);
     check_uint_eq(bundle.expires_at, 20000u);
-    check_size_eq(bundle.rule_count, 2u);
-    check_str_eq(bundle.rules[0].pattern, "root-a/private/#");
-    check_str_eq(bundle.rules[1].pattern, "root-a/events/#");
+    check_size_eq(bundle.rule_count, 4u);
+    check_str_eq(bundle.rules[1].pattern, "root-a/groups/operators/devices/%u/private");
+    check_str_eq(bundle.rules[3].pattern, "root-a/groups/operators/devices/%c/event");
     interface->release(interface->ctx, &bundle);
 
     published = (flowie_control_policy_publish_result_t)FLOWIE_CONTROL_POLICY_PUBLISH_RESULT_INIT;
     check_int_eq(control_policy_publish(store, "request-policy-publish", 0u, 20000u, &published),
                  TURBO_OK);
     check_true(published.replayed);
-    check_uint_eq(published.revision, 4u);
+    check_uint_eq(published.revision, 7u);
     check_uint_eq(published.policy_version, 1u);
     check_int_eq(control_policy_publish(store, "request-policy-publish", 0u, 21000u, &published),
                  TURBO_EBUSY);
-    check_int_eq(control_policy_publish(store, "request-policy-stale", 3u, 21000u, &published),
+    check_int_eq(control_policy_publish(store, "request-policy-stale", 6u, 21000u, &published),
                  TURBO_EBUSY);
     check_int_eq(flowie_control_store_policy_status(store, "root-a", &status), TURBO_OK);
-    check_uint_eq(status.store_revision, 4u);
+    check_uint_eq(status.store_revision, 7u);
     check_uint_eq(status.policy_version, 1u);
     check_size_eq(status.draft_rule_count, 2u);
-    check_size_eq(status.published_rule_count, 2u);
+    check_size_eq(status.published_rule_count, 4u);
 
     bundle = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
     check_int_eq(interface->load(interface->ctx, 1u, &bundle), TURBO_OK);
-    check_size_eq(bundle.rule_count, 2u);
+    check_size_eq(bundle.rule_count, 4u);
     interface->release(interface->ctx, &bundle);
     turbo_flow_security_sqlite_provider_destroy(provider);
     control_store_close(store, path);

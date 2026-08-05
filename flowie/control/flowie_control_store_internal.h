@@ -2,6 +2,7 @@
 #define FLOWIE_CONTROL_STORE_INTERNAL_H
 
 #include "turbo_flow_security.h"
+#include "flowie_control_acl_internal.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -374,7 +375,7 @@ typedef struct flowie_control_policy_status_s {
 typedef struct flowie_control_policy_rule_view_s {
   size_t size;
   uint32_t ordinal;
-  char rule_line[TURBO_FLOW_SECURITY_RULE_LINE_MAX + 1u];
+  char rule_line[FLOWIE_CONTROL_ACL_DOCUMENT_MAX + 1u];
   uint64_t revision;
   uint64_t updated_at;
 } flowie_control_policy_rule_view_t;

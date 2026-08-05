@@ -16,8 +16,8 @@
 
 enum { FLOWIE_CONTROL_OPERATION_MAX = 31, FLOWIE_CONTROL_BUSY_TIMEOUT_MAX_MS = 30000 };
 
-#define FLOWIE_CONTROL_SQLITE_SCHEMA_VERSION 2
-#define FLOWIE_CONTROL_SQLITE_SCHEMA_FINGERPRINT "flowie-control-domain-schema-v2-20260804"
+#define FLOWIE_CONTROL_SQLITE_SCHEMA_VERSION 3
+#define FLOWIE_CONTROL_SQLITE_SCHEMA_FINGERPRINT "flowie-control-acl-document-schema-v3-20260805"
 
 #define FLOWIE_CONTROL_STRINGIFY_VALUE(value) #value
 #define FLOWIE_CONTROL_STRINGIFY(value) FLOWIE_CONTROL_STRINGIFY_VALUE(value)
@@ -48,7 +48,7 @@ static const char FLOWIE_CONTROL_TARGET_POLICY_RULE[] = "policy_rule";
 static const char FLOWIE_CONTROL_POLICY_SCHEMA[] =
     "CREATE TABLE IF NOT EXISTS flowie_control_policy_draft("
     "domain_id TEXT NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal>=0 AND ordinal<4096),"
-    "rule_line TEXT NOT NULL CHECK(length(rule_line)>0 AND length(rule_line)<=2047),"
+    "rule_line TEXT NOT NULL CHECK(length(rule_line)>0 AND length(rule_line)<=16383),"
     "revision INTEGER NOT NULL CHECK(revision>0),updated_at INTEGER NOT NULL CHECK(updated_at>0),"
     "PRIMARY KEY(domain_id,ordinal),"
     "FOREIGN KEY(domain_id) REFERENCES flowie_control_domain(domain_id)) WITHOUT ROWID;"
@@ -538,8 +538,8 @@ static int flowie_control_policy_subject_referenced(sqlite3 *database, const cha
                                                     turbo_flow_security_subject_kind_t subject_kind,
                                                     const char *subject, int *referenced_out) {
   static const char sql[] =
-      "SELECT rule_line FROM flowie_control_policy_draft WHERE domain_id=?1 "
-      "UNION ALL SELECT rule_line FROM turbo_flow_acl_rule_v3 WHERE namespace_name=?1";
+      "SELECT 0,rule_line FROM flowie_control_policy_draft WHERE domain_id=?1 "
+      "UNION ALL SELECT 1,rule_line FROM turbo_flow_acl_rule_v3 WHERE namespace_name=?1";
   sqlite3_stmt *statement = NULL;
   int status;
   int rc;
@@ -554,26 +554,84 @@ static int flowie_control_policy_subject_referenced(sqlite3 *database, const cha
   rc = flowie_control_bind_text(statement, 1, domain_id);
   if (rc != TURBO_OK) goto done;
   while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
-    turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
     const unsigned char *line;
     int line_size;
-    if (sqlite3_column_type(statement, 0) != SQLITE_TEXT) {
+    int published;
+    if (sqlite3_column_type(statement, 0) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement, 1) != SQLITE_TEXT) {
       rc = TURBO_EPROTO;
       goto done;
     }
-    line = sqlite3_column_text(statement, 0);
-    line_size = sqlite3_column_bytes(statement, 0);
-    if (!line || line_size <= 0 || (size_t)line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX ||
-        turbo_flow_security_rule_parse_line((const char *)line, (size_t)line_size, &rule) !=
-            TURBO_OK ||
-        strcmp(rule.domain_id, domain_id) != 0) {
+    published = sqlite3_column_int(statement, 0);
+    line = sqlite3_column_text(statement, 1);
+    line_size = sqlite3_column_bytes(statement, 1);
+    if (!line || line_size <= 0) {
       rc = TURBO_EPROTO;
       goto done;
     }
-    if (rule.subject_kind == subject_kind && strcmp(rule.subject, subject) == 0) {
-      *referenced_out = 1;
-      rc = TURBO_OK;
-      goto done;
+    if (published) {
+      turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
+      if ((size_t)line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX ||
+          turbo_flow_security_rule_parse_line((const char *)line, (size_t)line_size, &rule) !=
+              TURBO_OK ||
+          strcmp(rule.domain_id, domain_id) != 0) {
+        rc = TURBO_EPROTO;
+        goto done;
+      }
+      if (rule.subject_kind == subject_kind && strcmp(rule.subject, subject) == 0) {
+        *referenced_out = 1;
+        rc = TURBO_OK;
+        goto done;
+      }
+      if (subject_kind == TURBO_FLOW_SECURITY_SUBJECT_GROUP &&
+          rule.resource_type == TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC &&
+          rule.match_kind == TURBO_FLOW_SECURITY_MATCH_ADAPTER) {
+        size_t domain_size = strlen(domain_id);
+        const char *cursor = rule.pattern;
+        const char *devices;
+        if (strncmp(cursor, domain_id, domain_size) == 0 &&
+            strncmp(cursor + domain_size, "/groups/", sizeof("/groups/") - 1u) == 0) {
+          cursor += domain_size + sizeof("/groups/") - 1u;
+          devices = strstr(cursor, "/devices/");
+          while (devices && cursor < devices) {
+            const char *slash = strchr(cursor, '/');
+            const char *end = slash && slash < devices ? slash : devices;
+            size_t length = (size_t)(end - cursor);
+            if (strlen(subject) == length && memcmp(cursor, subject, length) == 0) {
+              *referenced_out = 1;
+              rc = TURBO_OK;
+              goto done;
+            }
+            cursor = end < devices ? end + 1u : devices;
+          }
+        }
+      }
+    } else {
+      flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
+      if (flowie_control_acl_parse((const char *)line, (size_t)line_size, &document) != TURBO_OK) {
+        rc = TURBO_EPROTO;
+        goto done;
+      }
+      if (subject_kind == TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL &&
+          strcmp(document.subject, subject) == 0) {
+        *referenced_out = 1;
+        rc = TURBO_OK;
+        goto done;
+      }
+      if (subject_kind == TURBO_FLOW_SECURITY_SUBJECT_GROUP) {
+        for (size_t entry_index = 0u; entry_index < document.entry_count; ++entry_index) {
+          const flowie_control_acl_entry_t *entry = &document.entries[entry_index];
+          for (size_t group_index = 0u; group_index < entry->group_count; ++group_index) {
+            size_t length = entry->group_lengths[group_index];
+            const char *group = entry->topic + entry->group_offsets[group_index];
+            if (strlen(subject) == length && memcmp(group, subject, length) == 0) {
+              *referenced_out = 1;
+              rc = TURBO_OK;
+              goto done;
+            }
+          }
+        }
+      }
     }
   }
   rc = status == SQLITE_DONE ? TURBO_OK : flowie_control_sqlite_status(status);
@@ -836,40 +894,96 @@ static int flowie_control_policy_publish_detail(uint64_t expires_at, char output
   return written > 0 && written < 64 ? TURBO_OK : TURBO_EINVAL;
 }
 
-static int flowie_control_policy_rule_validate(sqlite3 *database, const char *domain_id,
-                                               const char *rule_line, size_t rule_line_size,
-                                               turbo_flow_security_rule_t *rule_out) {
-  turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
-  uint32_t depth = 0u;
+static int flowie_control_acl_group_path_validate(sqlite3 *database, const char *domain_id,
+                                                  const flowie_control_acl_entry_t *entry) {
+  static const char sql[] =
+      "SELECT parent_group_id,depth,enabled FROM flowie_control_group "
+      "WHERE domain_id=?1 AND group_id=?2";
+  sqlite3_stmt *statement = NULL;
+  char previous[TURBO_FLOW_SECURITY_ID_MAX + 1u] = {0};
+  int status;
+  int rc;
+  if (!database || !domain_id || !entry || entry->group_count == 0u ||
+      entry->group_count > TURBO_FLOW_SECURITY_MAX_GROUPS)
+    return TURBO_EINVAL;
+  status = sqlite3_prepare_v2(database, sql, -1, &statement, NULL);
+  if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
+  for (size_t index = 0u; index < entry->group_count; ++index) {
+    char current[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+    size_t topic_size = strlen(entry->topic);
+    size_t offset = entry->group_offsets[index];
+    size_t length = entry->group_lengths[index];
+    if (length == 0u || length > TURBO_FLOW_SECURITY_ID_MAX || offset > topic_size ||
+        length > topic_size - offset) {
+      rc = TURBO_EPROTO;
+      goto done;
+    }
+    memcpy(current, entry->topic + offset, length);
+    current[length] = '\0';
+    (void)sqlite3_reset(statement);
+    (void)sqlite3_clear_bindings(statement);
+    rc = flowie_control_bind_text(statement, 1, domain_id);
+    if (rc == TURBO_OK) rc = flowie_control_bind_text(statement, 2, current);
+    if (rc != TURBO_OK) goto done;
+    status = sqlite3_step(statement);
+    if (status == SQLITE_DONE) {
+      rc = TURBO_ENOENT;
+      goto done;
+    }
+    if (status != SQLITE_ROW || sqlite3_column_type(statement, 1) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement, 2) != SQLITE_INTEGER ||
+        sqlite3_column_int(statement, 1) != (int)index || sqlite3_column_int(statement, 2) != 1 ||
+        (index == 0u && sqlite3_column_type(statement, 0) != SQLITE_NULL) ||
+        (index != 0u &&
+         (sqlite3_column_type(statement, 0) != SQLITE_TEXT ||
+          strcmp((const char *)sqlite3_column_text(statement, 0), previous) != 0))) {
+      rc = TURBO_EPROTO;
+      goto done;
+    }
+    memcpy(previous, current, length + 1u);
+  }
+  rc = TURBO_OK;
+
+done:
+  (void)sqlite3_finalize(statement);
+  return rc;
+}
+
+static int flowie_control_policy_document_validate(
+    sqlite3 *database, const char *domain_id, const char *document_text, size_t document_size,
+    flowie_control_acl_document_t *document_out, size_t *rule_count_out,
+    size_t *deny_rule_count_out) {
+  flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
+  size_t rule_count = 1u;
+  size_t deny_count = 0u;
   int enabled = 0;
   int rc;
-  if (!database) return TURBO_EINVAL;
-  rc = flowie_control_policy_rule_syntax_validate(domain_id, rule_line, rule_line_size, &rule);
+  if (rule_count_out) *rule_count_out = 0u;
+  if (deny_rule_count_out) *deny_rule_count_out = 0u;
+  if (!database || !rule_count_out || !deny_rule_count_out) return TURBO_EINVAL;
+  rc = flowie_control_acl_document_syntax_validate(domain_id, document_text, document_size,
+                                                   &document);
   if (rc != TURBO_OK) return rc;
   rc = flowie_control_domain_exists(database, domain_id);
   if (rc != TURBO_OK) return rc;
-  switch (rule.subject_kind) {
-  case TURBO_FLOW_SECURITY_SUBJECT_ANY:
-    break;
-  case TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL:
-    rc = flowie_control_user_enabled(database, domain_id, rule.subject, &enabled);
+  rc = flowie_control_user_enabled(database, domain_id, document.subject, &enabled);
+  if (rc != TURBO_OK) return rc;
+  if (!enabled) return TURBO_EPERM;
+  if (document.connection_effect == TURBO_FLOW_SECURITY_DENY) deny_count = 1u;
+  for (size_t index = 0u; index < document.entry_count; ++index) {
+    const flowie_control_acl_entry_t *entry = &document.entries[index];
+    rc = flowie_control_acl_group_path_validate(database, domain_id, entry);
     if (rc != TURBO_OK) return rc;
-    if (!enabled) return TURBO_EPERM;
-    break;
-  case TURBO_FLOW_SECURITY_SUBJECT_ROLE:
-    rc = flowie_control_role_enabled(database, domain_id, rule.subject, &enabled);
-    if (rc != TURBO_OK) return rc;
-    if (!enabled) return TURBO_EPERM;
-    break;
-  case TURBO_FLOW_SECURITY_SUBJECT_GROUP:
-    rc = flowie_control_group_lookup(database, domain_id, rule.subject, &depth, &enabled);
-    if (rc != TURBO_OK) return rc;
-    if (!enabled) return TURBO_EPERM;
-    break;
-  default:
-    return TURBO_EPROTO;
+    if (entry->alternative_count == 0u ||
+        rule_count > TURBO_FLOW_SECURITY_MAX_RULES - entry->alternative_count)
+      return TURBO_ENOSPC;
+    rule_count += entry->alternative_count;
+    if (entry->effect == TURBO_FLOW_SECURITY_DENY)
+      deny_count += entry->alternative_count;
   }
-  if (rule_out) *rule_out = rule;
+  if (document_out) *document_out = document;
+  *rule_count_out = rule_count;
+  *deny_rule_count_out = deny_count;
   return TURBO_OK;
 }
 
@@ -877,11 +991,16 @@ static int flowie_control_policy_validate_database(sqlite3 *database, const char
                                                    flowie_control_policy_validation_t *out) {
   flowie_control_policy_validation_t validation = FLOWIE_CONTROL_POLICY_VALIDATION_INIT;
   sqlite3_stmt *statement = NULL;
+  char *subjects = NULL;
+  size_t document_count = 0u;
   int status;
   int rc;
   if (!database || !domain_id || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
   rc = flowie_control_read_revision(database, &validation.store_revision);
   if (rc != TURBO_OK) return rc;
+  subjects = (char *)calloc(TURBO_FLOW_SECURITY_MAX_RULES,
+                            TURBO_FLOW_SECURITY_ID_MAX + 1u);
+  if (!subjects) return TURBO_ENOMEM;
   status = sqlite3_prepare_v2(
       database,
       "SELECT rule_line FROM flowie_control_policy_draft WHERE domain_id=?1 ORDER BY ordinal",
@@ -892,10 +1011,12 @@ static int flowie_control_policy_validate_database(sqlite3 *database, const char
   while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
     const unsigned char *line;
     int line_size;
-    turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
-    if (validation.rule_count >= TURBO_FLOW_SECURITY_MAX_RULES ||
+    flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
+    size_t expanded = 0u;
+    size_t denied = 0u;
+    if (document_count >= TURBO_FLOW_SECURITY_MAX_RULES ||
         sqlite3_column_type(statement, 0) != SQLITE_TEXT) {
-      rc = validation.rule_count >= TURBO_FLOW_SECURITY_MAX_RULES ? TURBO_ENOSPC : TURBO_EPROTO;
+      rc = document_count >= TURBO_FLOW_SECURITY_MAX_RULES ? TURBO_ENOSPC : TURBO_EPROTO;
       goto done;
     }
     line = sqlite3_column_text(statement, 0);
@@ -904,11 +1025,24 @@ static int flowie_control_policy_validate_database(sqlite3 *database, const char
       rc = TURBO_EPROTO;
       goto done;
     }
-    rc = flowie_control_policy_rule_validate(database, domain_id, (const char *)line,
-                                             (size_t)line_size, &rule);
+    rc = flowie_control_policy_document_validate(database, domain_id, (const char *)line,
+                                                 (size_t)line_size, &document, &expanded, &denied);
     if (rc != TURBO_OK) goto done;
-    ++validation.rule_count;
-    if (rule.effect == TURBO_FLOW_SECURITY_DENY) ++validation.deny_rule_count;
+    for (size_t prior = 0u; prior < document_count; ++prior) {
+      if (strcmp(subjects + prior * (TURBO_FLOW_SECURITY_ID_MAX + 1u), document.subject) == 0) {
+        rc = TURBO_EALREADY;
+        goto done;
+      }
+    }
+    memcpy(subjects + document_count * (TURBO_FLOW_SECURITY_ID_MAX + 1u), document.subject,
+           strlen(document.subject) + 1u);
+    ++document_count;
+    if (expanded > TURBO_FLOW_SECURITY_MAX_RULES - validation.rule_count) {
+      rc = TURBO_ENOSPC;
+      goto done;
+    }
+    validation.rule_count += expanded;
+    validation.deny_rule_count += denied;
   }
   if (status != SQLITE_DONE) {
     rc = flowie_control_sqlite_status(status);
@@ -920,6 +1054,45 @@ static int flowie_control_policy_validate_database(sqlite3 *database, const char
   }
   *out = validation;
   rc = TURBO_OK;
+
+done:
+  (void)sqlite3_finalize(statement);
+  free(subjects);
+  return rc;
+}
+
+static int flowie_control_policy_subject_unique(sqlite3 *database, const char *domain_id,
+                                                uint32_t ordinal, const char *subject) {
+  sqlite3_stmt *statement = NULL;
+  int status;
+  int rc;
+  if (!database || !domain_id || !subject) return TURBO_EINVAL;
+  status = sqlite3_prepare_v2(
+      database,
+      "SELECT rule_line FROM flowie_control_policy_draft WHERE domain_id=?1 AND ordinal<>?2",
+      -1, &statement, NULL);
+  if (status != SQLITE_OK) return flowie_control_sqlite_status(status);
+  rc = flowie_control_bind_text(statement, 1, domain_id);
+  if (rc == TURBO_OK && sqlite3_bind_int64(statement, 2, ordinal) != SQLITE_OK)
+    rc = flowie_control_sqlite_status(sqlite3_errcode(database));
+  if (rc != TURBO_OK) goto done;
+  while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
+    const unsigned char *text;
+    int text_size;
+    flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
+    if (sqlite3_column_type(statement, 0) != SQLITE_TEXT ||
+        !(text = sqlite3_column_text(statement, 0)) ||
+        (text_size = sqlite3_column_bytes(statement, 0)) <= 0 ||
+        flowie_control_acl_parse((const char *)text, (size_t)text_size, &document) != TURBO_OK) {
+      rc = TURBO_EPROTO;
+      goto done;
+    }
+    if (strcmp(document.subject, subject) == 0) {
+      rc = TURBO_EALREADY;
+      goto done;
+    }
+  }
+  rc = status == SQLITE_DONE ? TURBO_OK : flowie_control_sqlite_status(status);
 
 done:
   (void)sqlite3_finalize(statement);
@@ -2886,7 +3059,9 @@ int flowie_control_store_policy_rule_put(flowie_control_store_t *store,
                                          flowie_control_command_result_t *result) {
   sqlite3 *database = NULL;
   sqlite3_stmt *statement = NULL;
-  turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
+  flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
+  size_t expanded_rule_count = 0u;
+  size_t deny_rule_count = 0u;
   char target[32];
   size_t line_size;
   uint64_t current = 0u;
@@ -2903,8 +3078,8 @@ int flowie_control_store_policy_rule_put(flowie_control_store_t *store,
                                            command->actor, command->request_id,
                                            command->expected_revision, command->occurred_at) ||
       !command->rule_line ||
-      (line_size = strnlen(command->rule_line, TURBO_FLOW_SECURITY_RULE_LINE_MAX + 1u)) == 0u ||
-      line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX ||
+      (line_size = strnlen(command->rule_line, FLOWIE_CONTROL_ACL_DOCUMENT_MAX + 1u)) == 0u ||
+      line_size > FLOWIE_CONTROL_ACL_DOCUMENT_MAX ||
       flowie_control_policy_target(command->ordinal, target) != TURBO_OK)
     return TURBO_EINVAL;
   rc = flowie_control_open_database(store, &database);
@@ -2926,8 +3101,12 @@ int flowie_control_store_policy_rule_put(flowie_control_store_t *store,
     rc = TURBO_EBUSY;
     goto done;
   }
-  rc = flowie_control_policy_rule_validate(database, command->domain_id, command->rule_line,
-                                           line_size, &rule);
+  rc = flowie_control_policy_document_validate(
+      database, command->domain_id, command->rule_line, line_size, &document,
+      &expanded_rule_count, &deny_rule_count);
+  if (rc != TURBO_OK) goto done;
+  rc = flowie_control_policy_subject_unique(database, command->domain_id, command->ordinal,
+                                            document.subject);
   if (rc != TURBO_OK) goto done;
   if (current >= (uint64_t)INT64_MAX) {
     rc = TURBO_ERANGE;
@@ -3430,6 +3609,7 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
   sqlite3_stmt *statement = NULL;
   sqlite3_stmt *draft = NULL;
   sqlite3_stmt *insert_rule = NULL;
+  turbo_flow_security_rule_t *compiled_rules = NULL;
   uint64_t current = 0u;
   uint64_t next = 0u;
   uint64_t current_policy = 0u;
@@ -3495,6 +3675,12 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
   }
   rc = flowie_control_policy_validate_database(database, command->domain_id, &validation);
   if (rc != TURBO_OK) goto done;
+  compiled_rules = (turbo_flow_security_rule_t *)calloc(validation.rule_count,
+                                                        sizeof(*compiled_rules));
+  if (!compiled_rules) {
+    rc = TURBO_ENOMEM;
+    goto done;
+  }
   status = sqlite3_prepare_v2(
       database, "SELECT policy_version FROM turbo_flow_acl_bundle_v3 WHERE namespace_name=?1", -1,
       &statement, NULL);
@@ -3578,30 +3764,49 @@ int flowie_control_store_policy_publish(flowie_control_store_t *store,
   while ((status = sqlite3_step(draft)) == SQLITE_ROW) {
     const unsigned char *line;
     int line_size;
+    flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
+    size_t compiled_count = 0u;
     if (ordinal >= validation.rule_count || sqlite3_column_type(draft, 0) != SQLITE_TEXT) {
       rc = TURBO_EPROTO;
       goto done;
     }
     line = sqlite3_column_text(draft, 0);
     line_size = sqlite3_column_bytes(draft, 0);
-    if (!line || line_size <= 0) {
+    if (!line || line_size <= 0 ||
+        flowie_control_acl_document_syntax_validate(command->domain_id, (const char *)line,
+                                                    (size_t)line_size, &document) != TURBO_OK) {
       rc = TURBO_EPROTO;
       goto done;
     }
-    (void)sqlite3_reset(insert_rule);
-    (void)sqlite3_clear_bindings(insert_rule);
-    rc = flowie_control_bind_text(insert_rule, 1, command->domain_id);
-    if (rc == TURBO_OK && sqlite3_bind_int64(insert_rule, 2, (sqlite3_int64)ordinal) != SQLITE_OK)
-      rc = flowie_control_sqlite_status(sqlite3_errcode(database));
-    if (rc == TURBO_OK && sqlite3_bind_text(insert_rule, 3, (const char *)line, line_size,
-                                            SQLITE_TRANSIENT) != SQLITE_OK)
-      rc = flowie_control_sqlite_status(sqlite3_errcode(database));
-    if (rc == TURBO_OK) {
-      int insert_status = sqlite3_step(insert_rule);
-      rc = insert_status == SQLITE_DONE ? TURBO_OK : flowie_control_sqlite_status(insert_status);
+    rc = flowie_control_acl_compile(&document, command->domain_id, compiled_rules + ordinal,
+                                    validation.rule_count - ordinal, &compiled_count);
+    if (rc != TURBO_OK || compiled_count == 0u) {
+      rc = rc != TURBO_OK ? rc : TURBO_EPROTO;
+      goto done;
     }
-    if (rc != TURBO_OK) goto done;
-    ++ordinal;
+    for (size_t index = 0u; index < compiled_count; ++index) {
+      char canonical[TURBO_FLOW_SECURITY_RULE_LINE_MAX + 1u];
+      size_t canonical_size = 0u;
+      rc = turbo_flow_security_rule_format_line(&compiled_rules[ordinal + index], canonical,
+                                                sizeof(canonical), &canonical_size);
+      if (rc != TURBO_OK) goto done;
+      (void)sqlite3_reset(insert_rule);
+      (void)sqlite3_clear_bindings(insert_rule);
+      rc = flowie_control_bind_text(insert_rule, 1, command->domain_id);
+      if (rc == TURBO_OK &&
+          sqlite3_bind_int64(insert_rule, 2, (sqlite3_int64)(ordinal + index)) != SQLITE_OK)
+        rc = flowie_control_sqlite_status(sqlite3_errcode(database));
+      if (rc == TURBO_OK &&
+          sqlite3_bind_text(insert_rule, 3, canonical, (int)canonical_size, SQLITE_TRANSIENT) !=
+              SQLITE_OK)
+        rc = flowie_control_sqlite_status(sqlite3_errcode(database));
+      if (rc == TURBO_OK) {
+        int insert_status = sqlite3_step(insert_rule);
+        rc = insert_status == SQLITE_DONE ? TURBO_OK : flowie_control_sqlite_status(insert_status);
+      }
+      if (rc != TURBO_OK) goto done;
+    }
+    ordinal += compiled_count;
   }
   if (status != SQLITE_DONE || ordinal != validation.rule_count) {
     rc = status == SQLITE_DONE ? TURBO_EPROTO : flowie_control_sqlite_status(status);
@@ -3652,6 +3857,7 @@ done:
   if (statement) (void)sqlite3_finalize(statement);
   if (draft) (void)sqlite3_finalize(draft);
   if (insert_rule) (void)sqlite3_finalize(insert_rule);
+  free(compiled_rules);
   if (transaction_started) (void)sqlite3_exec(database, "ROLLBACK", NULL, NULL, NULL);
   (void)sqlite3_close(database);
   if (rc != TURBO_OK)

@@ -25,7 +25,9 @@ static int flowie_control_contract_contains(const char *items, size_t item_size,
 static void
 flowie_control_repository_basic_contract_run(const flowie_control_repository_t *repository) {
   static const char policy_rule[] =
-      "allow|role|reader|root-a|subscribe|mqtt_topic|adapter|root-a/events/#";
+      "user device-a allow {\n"
+      "  read topic root-a/groups/operators/devices/%u/event\n"
+      "}";
   flowie_control_domain_create_command_t root = FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
   flowie_control_user_create_command_t user = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
   flowie_control_group_create_command_t group = FLOWIE_CONTROL_GROUP_CREATE_COMMAND_INIT;
@@ -154,7 +156,7 @@ flowie_control_repository_basic_contract_run(const flowie_control_repository_t *
   check_int_eq(repository->policy->rule_put(repository->ctx, &rule, &result), TURBO_OK);
   check_int_eq(repository->policy->validate(repository->ctx, "root-a", &validation), TURBO_OK);
   check_uint_eq(validation.store_revision, 8u);
-  check_size_eq(validation.rule_count, 1u);
+  check_size_eq(validation.rule_count, 2u);
   check_size_eq(validation.deny_rule_count, 0u);
 
   publish.domain_id = "root-a";
@@ -171,13 +173,14 @@ flowie_control_repository_basic_contract_run(const flowie_control_repository_t *
   check_uint_eq(status.store_revision, 9u);
   check_uint_eq(status.policy_version, 1u);
   check_size_eq(status.draft_rule_count, 1u);
-  check_size_eq(status.published_rule_count, 1u);
+  check_size_eq(status.published_rule_count, 2u);
 
   check_int_eq(repository->policy->bundle_load(repository->ctx, "root-a", 1u, &bundle), TURBO_OK);
   check_uint_eq(bundle.policy_version, 1u);
   check_uint_eq(bundle.expires_at, 20000u);
-  check_size_eq(bundle.rule_count, 1u);
-  check_str_eq(bundle.rules[0].pattern, "root-a/events/#");
+  check_size_eq(bundle.rule_count, 2u);
+  check_str_eq(bundle.rules[0].pattern, "");
+  check_str_eq(bundle.rules[1].pattern, "root-a/groups/operators/devices/%u/event");
   repository->policy->bundle_release(repository->ctx, &bundle);
   bundle = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
   check_int_eq(repository->policy->bundle_load(repository->ctx, "root-a", 2u, &bundle),

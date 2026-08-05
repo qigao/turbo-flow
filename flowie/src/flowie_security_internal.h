@@ -24,7 +24,9 @@ typedef struct flowie_mqtt_validated_security_context_s {
 } flowie_mqtt_validated_security_context_t;
 
 #define FLOWIE_MQTT_VALIDATED_SECURITY_CONTEXT_INIT                                                \
-  {{sizeof(flowie_mqtt_validated_security_context_t), FLOWIE_MQTT_SECURITY_TOPIC},                 \
+  {{sizeof(flowie_mqtt_validated_security_context_t), FLOWIE_MQTT_SECURITY_TOPIC,                  \
+    {NULL, 0u},                                                                                    \
+    {NULL, 0u}},                                                                                   \
    FLOWIE_MQTT_VALIDATED_SECURITY_CONTEXT_ABI_V1,                                                  \
    {NULL, 0u},                                                                                     \
    NULL}

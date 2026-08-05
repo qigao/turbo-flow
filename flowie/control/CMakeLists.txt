@@ -1,6 +1,16 @@
 find_package(SQLite3 REQUIRED)
 
-add_library(flowie_control_core STATIC flowie_control_auth_cache.c
+cmake_add_grammar(FLOWIE_CONTROL_ACL
+  LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/acl_lexer.re
+  GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/acl_grammar.y
+  LEXER_DEPENDS_ON_GRAMMAR
+  FOLDER "flowie/control/acl")
+
+add_library(flowie_control_core STATIC ${FLOWIE_CONTROL_ACL_LEXER_GEN}
+                                        ${FLOWIE_CONTROL_ACL_GRAMMAR_GEN}
+                                        flowie_control_acl.c
+                                        flowie_control_acl_internal.h
+                                        flowie_control_auth_cache.c
                                         flowie_control_auth_cache_internal.h
                                         flowie_control_bootstrap.c
                                         flowie_control_bootstrap_internal.h
@@ -26,8 +36,11 @@ add_library(flowie_control_core STATIC flowie_control_auth_cache.c
                                         flowie_control_validation_internal.h
                                         flowie_control_store.c
                                         flowie_control_store_internal.h)
+add_dependencies(flowie_control_core ${FLOWIE_CONTROL_ACL_LEXER_TARGET}
+                                     ${FLOWIE_CONTROL_ACL_GRAMMAR_TARGET})
 cmake_config_target(flowie_control_core NO_INSTALL FOLDER "flowie/control/internal")
-target_include_directories(flowie_control_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(flowie_control_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
+                                              PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(flowie_control_core
                       PUBLIC TurboFlow::Flow
                       PRIVATE Flowie::Protocol SQLite::SQLite3 TurboUtils::Core monocypher)
@@ -216,6 +229,14 @@ target_link_libraries(flowie_control_startup
     endif()
 
 if(BUILD_TESTS)
+  cmake_add_test(
+    test_flowie_control_acl
+    SOURCES tests/test_flowie_control_acl.c
+    LIBS flowie_control_core TurboUtils::TinyTest
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+    FOLDER "flowie/control/tests")
+  set_tests_properties(test_flowie_control_acl
+                       PROPERTIES LABELS "flowie;control-plane;security-contract;parser")
   cmake_add_test(
     test_flowie_control_bootstrap
     SOURCES tests/test_flowie_control_bootstrap.c

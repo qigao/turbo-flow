@@ -72,7 +72,12 @@ static int flow_security_sqlite_cstr_valid(const char *value, size_t capacity, i
 }
 
 static int flow_security_sqlite_rule_valid(const turbo_flow_security_rule_t *rule) {
-  if (!rule || rule->size < sizeof(*rule) || rule->abi_version != TURBO_FLOW_SECURITY_ABI_V3 ||
+  int allow_empty_pattern;
+  if (!rule) return 0;
+  allow_empty_pattern = rule->action_mask == TURBO_FLOW_SECURITY_ACTION_CONNECT &&
+                        rule->resource_type == TURBO_FLOW_SECURITY_RESOURCE_GENERIC &&
+                        rule->match_kind == TURBO_FLOW_SECURITY_MATCH_PREFIX;
+  if (rule->size < sizeof(*rule) || rule->abi_version != TURBO_FLOW_SECURITY_ABI_V3 ||
       rule->effect < TURBO_FLOW_SECURITY_DENY || rule->effect > TURBO_FLOW_SECURITY_ALLOW ||
       rule->subject_kind < TURBO_FLOW_SECURITY_SUBJECT_ANY ||
       rule->subject_kind > TURBO_FLOW_SECURITY_SUBJECT_GROUP ||
@@ -83,7 +88,8 @@ static int flow_security_sqlite_rule_valid(const turbo_flow_security_rule_t *rul
       rule->resource_type > TURBO_FLOW_SECURITY_RESOURCE_SECRET ||
       rule->match_kind < TURBO_FLOW_SECURITY_MATCH_EXACT ||
       rule->match_kind > TURBO_FLOW_SECURITY_MATCH_ADAPTER ||
-      !flow_security_sqlite_cstr_valid(rule->pattern, sizeof(rule->pattern), 1))
+      !flow_security_sqlite_cstr_valid(rule->pattern, sizeof(rule->pattern),
+                                       !allow_empty_pattern))
     return 0;
   return rule->subject_kind == TURBO_FLOW_SECURITY_SUBJECT_ANY ? rule->subject[0] == '\0'
                                                                : rule->subject[0] != '\0';

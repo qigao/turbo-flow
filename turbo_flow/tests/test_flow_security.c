@@ -250,6 +250,39 @@ spec("security realm v3") {
                  TURBO_EPROTO);
   }
 
+  it("round trips and evaluates an empty prefix only for a connect parent rule") {
+    static const char line[] =
+        "allow|principal|device-7|root-a|connect|generic|prefix|";
+    static const char invalid[] =
+        "allow|principal|device-7|root-a|publish|mqtt_topic|prefix|";
+    turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
+    turbo_flow_security_principal_t principal = security_principal("root-a", 9u);
+    turbo_flow_security_request_t request = TURBO_FLOW_SECURITY_REQUEST_INIT;
+    turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
+    turbo_flow_security_realm_t *realm;
+    char formatted[TURBO_FLOW_SECURITY_RULE_LINE_MAX + 1u] = {0};
+    size_t formatted_size = 0u;
+
+    check_int_eq(turbo_flow_security_rule_parse_line(line, sizeof(line) - 1u, &rule), TURBO_OK);
+    check_int_eq(turbo_flow_security_rule_format_line(&rule, formatted, sizeof(formatted),
+                                                      &formatted_size),
+                 TURBO_OK);
+    check_str_eq(formatted, line);
+    check_int_eq(turbo_flow_security_rule_parse_line(invalid, sizeof(invalid) - 1u, &rule),
+                 TURBO_EPROTO);
+
+    check_int_eq(turbo_flow_security_rule_parse_line(line, sizeof(line) - 1u, &rule), TURBO_OK);
+    realm = security_realm(&rule, 1u);
+    request.principal = &principal;
+    request.domain_id = "root-a";
+    request.action = TURBO_FLOW_SECURITY_ACTION_CONNECT;
+    request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
+    request.resource = "arbitrary-client-id";
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+    turbo_flow_security_realm_destroy(realm);
+  }
+
   it("normalizes provider authentication output without retaining credentials") {
     int calls = 0;
     turbo_flow_security_auth_provider_t provider = {sizeof(provider), &calls,
@@ -517,7 +550,7 @@ spec("security realm v3") {
     principal.group_count = 1u;
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
     check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
-                 TURBO_EINVAL);
+                 TURBO_EPERM);
     turbo_flow_security_realm_destroy(realm);
   }
 

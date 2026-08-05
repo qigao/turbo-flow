@@ -47,7 +47,7 @@ flowie_control_auth_contract_group_present(const turbo_flow_security_principal_t
  */
 static void
 flowie_control_auth_repository_contract_run(const flowie_control_repository_t *repository) {
-  static const char policy_rule[] = "allow|role|publisher|root-a|connect|generic|exact|client";
+  static const char policy_rule[] = "user device-a allow";
   flowie_control_domain_create_command_t root = FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
   flowie_control_user_create_command_t user = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
   flowie_control_group_create_command_t group = FLOWIE_CONTROL_GROUP_CREATE_COMMAND_INIT;

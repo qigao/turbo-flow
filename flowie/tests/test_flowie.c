@@ -285,6 +285,78 @@ spec("flowie application bridges") {
     tstr_freep(&validated_resource);
     turbo_flow_security_realm_destroy(realm);
   }
+
+  it("resolves ACL username and client-id placeholders as exact topic segments") {
+    turbo_flow_security_rule_t rules[2] = {TURBO_FLOW_SECURITY_RULE_INIT,
+                                           TURBO_FLOW_SECURITY_RULE_INIT};
+    turbo_flow_security_matcher_t matcher = TURBO_FLOW_SECURITY_MATCHER_INIT;
+    turbo_flow_security_realm_config_t config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
+    turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
+    turbo_flow_security_request_t request = TURBO_FLOW_SECURITY_REQUEST_INIT;
+    turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
+    flowie_mqtt_security_context_t context = FLOWIE_MQTT_SECURITY_CONTEXT_INIT;
+    turbo_flow_security_realm_t *realm = NULL;
+
+    for (size_t index = 0u; index < 2u; ++index) {
+      rules[index].effect = TURBO_FLOW_SECURITY_ALLOW;
+      rules[index].subject_kind = TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL;
+      flowie_copy(rules[index].subject, sizeof(rules[index].subject), "device-1");
+      flowie_copy(rules[index].domain_id, sizeof(rules[index].domain_id), "root-a");
+      rules[index].resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+      rules[index].match_kind = TURBO_FLOW_SECURITY_MATCH_ADAPTER;
+    }
+    rules[0].action_mask = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
+    flowie_copy(rules[0].pattern, sizeof(rules[0].pattern),
+                "root-a/groups/operators/devices/%u/event");
+    rules[1].action_mask = TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE;
+    flowie_copy(rules[1].pattern, sizeof(rules[1].pattern),
+                "root-a/groups/operators/devices/%c/command");
+    check_int_eq(flowie_mqtt_security_matcher_init(&matcher), TURBO_OK);
+    config.resource_uid = "security:placeholders";
+    config.owner_name = "flowie.security";
+    config.policy_version = 4u;
+    config.rules = rules;
+    config.rule_count = 2u;
+    config.matcher = matcher;
+    check_int_eq(turbo_flow_security_realm_create(&config, &realm), TURBO_OK);
+
+    flowie_copy(principal.principal_id, sizeof(principal.principal_id), "device-1");
+    flowie_copy(principal.principal_type, sizeof(principal.principal_type), "device");
+    flowie_copy(principal.domain_id, sizeof(principal.domain_id), "root-a");
+    flowie_copy(principal.auth_method, sizeof(principal.auth_method), "token");
+    principal.scope = TURBO_FLOW_SECURITY_SCOPE_DOMAIN;
+    principal.policy_version = 4u;
+    context.username = (flowie_mqtt_span_t){(const uint8_t *)"mqtt-user", 9u};
+    context.client_id = (flowie_mqtt_span_t){(const uint8_t *)"client-a", 8u};
+    request.principal = &principal;
+    request.domain_id = "root-a";
+    request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+    request.protocol_context = &context;
+
+    request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
+    request.resource = "root-a/groups/operators/devices/mqtt-user/event";
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 10u, &decision), TURBO_OK);
+    request.resource = "root-a/groups/operators/devices/device-1/event";
+    decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 10u, &decision),
+                 TURBO_EPERM);
+
+    context.kind = FLOWIE_MQTT_SECURITY_TOPIC_FILTER;
+    request.action = TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE;
+    request.resource = "root-a/groups/operators/devices/client-a/command";
+    decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 10u, &decision), TURBO_OK);
+    request.resource = "root-a/groups/operators/devices/+/command";
+    decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 10u, &decision),
+                 TURBO_EPERM);
+    context.client_id = (flowie_mqtt_span_t){NULL, 0u};
+    request.resource = "root-a/groups/operators/devices/client-a/command";
+    decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 10u, &decision),
+                 TURBO_EPERM);
+    turbo_flow_security_realm_destroy(realm);
+  }
 }
 
 static flowie_mqtt_connect_view_t flowie_test_connect(flowie_mqtt_version_t version,

@@ -13,7 +13,7 @@
 #include <string.h>
 
 #define FLOWIE_CONTROL_PGSQL_MIGRATION_LOCK_SEED "194728351"
-#define FLOWIE_CONTROL_PGSQL_SCHEMA_FINGERPRINT "flowie-control-domain-schema-v2-20260804"
+#define FLOWIE_CONTROL_PGSQL_SCHEMA_FINGERPRINT "flowie-control-acl-document-schema-v3-20260805"
 #define FLOWIE_CONTROL_PGSQL_STRINGIFY_VALUE(value) #value
 #define FLOWIE_CONTROL_PGSQL_STRINGIFY(value) FLOWIE_CONTROL_PGSQL_STRINGIFY_VALUE(value)
 
@@ -317,7 +317,7 @@ static tstr_t flowie_control_pgsql_schema_sql(const char *schema) {
   FLOWIE_CONTROL_PGSQL_APPEND(
       "CREATE TABLE IF NOT EXISTS %s.policy_draft("
       "domain_id TEXT NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal>=0 AND ordinal<4096),"
-      "rule_line TEXT NOT NULL CHECK(length(rule_line)>0 AND length(rule_line)<=2047),"
+      "rule_line TEXT NOT NULL CHECK(length(rule_line)>0 AND length(rule_line)<=16383),"
       "revision BIGINT NOT NULL CHECK(revision>0),updated_at BIGINT NOT NULL CHECK(updated_at>0),"
       "PRIMARY KEY(domain_id,ordinal),"
       "FOREIGN KEY(domain_id) REFERENCES %s.domain(domain_id));",

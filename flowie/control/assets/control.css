@@ -17,7 +17,7 @@ body {
   background: #f5f7f8;
 }
 
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 form { margin: 0; }
 a { color: inherit; }
 
@@ -54,7 +54,7 @@ button {
 }
 
 button:hover { background: #115846; }
-button:focus-visible, input:focus-visible, select:focus-visible {
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 3px solid #fff;
   outline-offset: 2px;
   box-shadow: 0 0 0 5px #202a31;
@@ -213,7 +213,7 @@ h3 { margin-bottom: 14px; font-size: 15px; line-height: 1.3; letter-spacing: 0; 
 }
 
 label { display: block; margin-bottom: 10px; color: #475963; font-size: 12px; font-weight: 650; }
-input, select {
+input, select, textarea {
   width: 100%;
   min-height: 36px;
   margin-top: 5px;
@@ -413,49 +413,29 @@ input, select {
   color: #76531c;
   font-size: 12px;
 }
-.resource-tree { display: grid; gap: 5px; }
-.resource-tree__kind {
-  color: #60727f;
-  font-size: 10px;
-  font-weight: 750;
-  text-transform: uppercase;
+.acl-rule-table { min-width: 860px; }
+.acl-rule-row {
+  transition-property: background-color;
+  transition-duration: 100ms;
+  transition-timing-function: ease-out;
 }
-.resource-tree__path {
-  padding-inline-start: 14px;
-  border-inline-start: 2px solid #e0a126;
-  color: #263740;
-}
-.resource-tree details { color: #60727f; font-size: 11px; }
-.resource-tree summary { cursor: pointer; }
-.resource-tree details code { margin-top: 6px; display: block; color: #713d1a; }
+.acl-rule-row > td { vertical-align: middle; }
+.acl-rule__ordinal { font-variant-numeric: tabular-nums; }
+.acl-rule__ordinal,
+.acl-rule__decision,
+.acl-rule__subject,
+.acl-rule__subject code { white-space: nowrap; }
 .acl-builder { display: grid; gap: 14px; }
-.acl-examples {
-  padding: 12px;
-  border: 1px solid #d4dde2;
-  border-radius: 6px;
-  background: #f8fafb;
-}
-.acl-examples h4 { margin: 0 0 9px; }
-.acl-examples__list { display: flex; flex-wrap: wrap; gap: 7px; }
 .acl-builder__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
-.acl-builder__pattern { grid-column: 1 / -1; }
-.acl-actions {
+.acl-builder__entries {
   grid-column: 1 / -1;
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid #cbd6dc;
-  border-radius: 4px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
 }
-.acl-actions legend { padding: 0 5px; color: #415762; font-size: 12px; font-weight: 700; }
-.acl-actions label { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; }
-.acl-actions input { width: auto; }
+.acl-builder__entries textarea { min-height: 160px; resize: vertical; font-family: "Cascadia Code", Consolas, monospace; line-height: 1.5; }
+.acl-builder__entries small { display: block; margin-top: 5px; color: #60727f; font-weight: 500; line-height: 1.45; }
 .acl-preview {
   padding: 10px 12px;
   border-inline-start: 3px solid #176b58;
@@ -469,7 +449,10 @@ input, select {
   font-weight: 750;
   text-transform: uppercase;
 }
-.acl-preview output { color: #244039; overflow-wrap: anywhere; }
+.acl-preview output { color: #244039; overflow-wrap: anywhere; white-space: pre-wrap; font-family: "Cascadia Code", Consolas, monospace; }
+.acl-document { margin-top: 7px; }
+.acl-document summary { color: #176b58; cursor: pointer; font-weight: 650; }
+.acl-document pre { max-width: 560px; margin: 8px 0 0; padding: 10px; overflow: auto; border: 1px solid #d4dde2; border-radius: 4px; background: #f8fafb; font: 12px/1.5 "Cascadia Code", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .table-wrap { width: 100%; overflow-x: auto; border: 1px solid #d4dde2; border-radius: 8px; background: #fff; box-shadow: var(--control-shadow); }
 table { width: 100%; border-collapse: collapse; table-layout: auto; }
 th, td { padding: 10px 12px; border-bottom: 1px solid #e2e8eb; text-align: start; vertical-align: top; font-size: 13px; }
@@ -656,7 +639,7 @@ code { color: #713d1a; font-family: "Cascadia Code", Consolas, monospace; font-s
   .group-tree__node--depth-14 { margin-inline-start: 168px; }
   .group-tree__node--depth-15 { margin-inline-start: 180px; }
   .acl-builder__grid { grid-template-columns: 1fr; }
-  .acl-builder__pattern, .acl-actions { grid-column: auto; }
+  .acl-builder__entries { grid-column: auto; }
   .pager { width: 100%; justify-content: flex-start; }
   .pager__status { width: 100%; }
   .pager button { flex: 1; }
@@ -675,7 +658,7 @@ code { color: #713d1a; font-family: "Cascadia Code", Consolas, monospace; font-s
 }
 
 @media (forced-colors: active) {
-  button:focus-visible, input:focus-visible, select:focus-visible,
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible,
   .dashboard-nav a:focus-visible, .scope-switch a:focus-visible {
     outline: 3px solid Highlight;
     outline-offset: 2px;

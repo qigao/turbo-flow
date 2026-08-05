@@ -292,6 +292,7 @@ struct flowie_endpoint_connection_s {
   flowie_endpoint_session_t *session;
   coro_wait_t *cluster_wait;
   tstr_t cluster_client_id;
+  tstr_t mqtt_username;
   turbo_flow_security_principal_t cluster_principal;
   flowie_endpoint_cluster_command_t cluster_pending_command;
   tstr_t cluster_subscribe_reasons;
@@ -1984,13 +1985,19 @@ static int flowie_security_authorize_span(flowie_endpoint_connection_t *connecti
   connection->session->security_resource = copied;
   rc = flowie_mqtt_validated_security_context_init(&context, kind, copied);
   if (rc != TURBO_OK) return rc;
+  context.public_context.username = (flowie_mqtt_span_t){
+      (const uint8_t *)connection->mqtt_username, tstr_len(connection->mqtt_username)};
+  context.public_context.client_id =
+      (flowie_mqtt_span_t){(const uint8_t *)connection->session->client_id.data,
+                           connection->session->client_id.len};
   return flowie_security_authorize(connection->endpoint, &connection->session->principal, action,
                                    TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC, copied, &context);
 }
 
 static int flowie_security_authorize_principal_span(
     flowie_endpoint_t *endpoint, const turbo_flow_security_principal_t *principal, uint32_t action,
-    flowie_mqtt_span_t resource, flowie_mqtt_security_resource_kind_t kind) {
+    flowie_mqtt_span_t resource, flowie_mqtt_security_resource_kind_t kind,
+    flowie_mqtt_span_t username, flowie_mqtt_span_t client_id) {
   flowie_mqtt_validated_security_context_t context = FLOWIE_MQTT_VALIDATED_SECURITY_CONTEXT_INIT;
   tstr_t copied;
   int rc;
@@ -1999,11 +2006,26 @@ static int flowie_security_authorize_principal_span(
   copied = tstr_new_len(resource.data, resource.size);
   if (!copied) return TURBO_ENOMEM;
   rc = flowie_mqtt_validated_security_context_init(&context, kind, copied);
+  context.public_context.username = username;
+  context.public_context.client_id = client_id;
   if (rc == TURBO_OK)
     rc = flowie_security_authorize(endpoint, principal, action,
                                    TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC, copied, &context);
   tstr_free(copied);
   return rc;
+}
+
+static int flowie_connection_mqtt_username_set(flowie_endpoint_connection_t *connection,
+                                               flowie_mqtt_span_t username) {
+  tstr_t copied = NULL;
+  if (!connection || (username.size != 0u && !username.data)) return TURBO_EINVAL;
+  if (username.size != 0u) {
+    copied = tstr_new_len(username.data, username.size);
+    if (!copied) return TURBO_ENOMEM;
+  }
+  tstr_freep(&connection->mqtt_username);
+  connection->mqtt_username = copied;
+  return TURBO_OK;
 }
 
 static int flowie_session_create(flowie_endpoint_t *endpoint,
@@ -6103,7 +6125,11 @@ static int flowie_endpoint_prepare_cluster_publish(flowie_endpoint_connection_t 
   if (connection->endpoint->security_enabled) {
     rc = flowie_security_authorize_principal_span(
         connection->endpoint, &connection->cluster_principal, TURBO_FLOW_SECURITY_ACTION_PUBLISH,
-        publish.topic, FLOWIE_MQTT_SECURITY_TOPIC);
+        publish.topic, FLOWIE_MQTT_SECURITY_TOPIC,
+        (flowie_mqtt_span_t){(const uint8_t *)connection->mqtt_username,
+                             tstr_len(connection->mqtt_username)},
+        (flowie_mqtt_span_t){(const uint8_t *)connection->cluster_client_id,
+                             tstr_len(connection->cluster_client_id)});
     if (rc == TURBO_EPERM && packet->version == FLOWIE_MQTT_VERSION_5 && publish.qos != 0u) {
       tstr_free(normalized_packet);
       *publish_packet = 0;
@@ -6213,7 +6239,11 @@ static int flowie_endpoint_prepare_cluster_subscribe(flowie_endpoint_connection_
     }
     authorization = flowie_security_authorize_principal_span(
         connection->endpoint, &connection->cluster_principal, TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE,
-        entry.filter, FLOWIE_MQTT_SECURITY_TOPIC_FILTER);
+        entry.filter, FLOWIE_MQTT_SECURITY_TOPIC_FILTER,
+        (flowie_mqtt_span_t){(const uint8_t *)connection->mqtt_username,
+                             tstr_len(connection->mqtt_username)},
+        (flowie_mqtt_span_t){(const uint8_t *)connection->cluster_client_id,
+                             tstr_len(connection->cluster_client_id)});
     if (authorization == TURBO_EPERM) {
       if (packet->version == FLOWIE_MQTT_VERSION_3_1) {
         rc = authorization;
@@ -6326,6 +6356,8 @@ static int flowie_endpoint_session_prepare(void *ctx, flowie_ingress_t *ingress,
     if (rc != FLOWIE_MQTT_PARSE_OK) return TURBO_EPROTO;
     rc = flowie_connection_negotiate_connect(connection, &connect);
     if (rc != TURBO_OK) return rc;
+    rc = flowie_connection_mqtt_username_set(connection, connect.username);
+    if (rc != TURBO_OK) return rc;
     if (connect.client_id.size == 0u && connect.version == FLOWIE_MQTT_VERSION_5) {
       turbo_uuid_t uuid;
       if (!connect.clean_start) {
@@ -6389,7 +6421,7 @@ static int flowie_endpoint_session_prepare(void *ctx, flowie_ingress_t *ingress,
       if (rc == TURBO_OK && connect.will_topic.size != 0u)
         rc = flowie_security_authorize_principal_span(
             endpoint, &principal, TURBO_FLOW_SECURITY_ACTION_PUBLISH, connect.will_topic,
-            FLOWIE_MQTT_SECURITY_TOPIC);
+            FLOWIE_MQTT_SECURITY_TOPIC, connect.username, connect.client_id);
       if (rc != TURBO_OK) {
         if (rc != TURBO_EPERM && rc != TURBO_ENOTSUP) return rc;
         decision.reply.type = FLOWIE_MQTT_PACKET_CONNACK;
@@ -6892,6 +6924,7 @@ done:
     flowie_connection_topic_aliases_destroy(connection);
     flowie_connection_enhanced_auth_clear(connection);
     tstr_freep(&connection->cluster_client_id);
+    tstr_freep(&connection->mqtt_username);
     tstr_freep(&connection->proxy_tlvs);
     if (connection->cluster_wait) {
       (void)coro_wait_destroy(connection->cluster_wait);
@@ -7566,6 +7599,7 @@ static void flowie_endpoint_shutdown(void *ctx) {
       flowie_connection_topic_aliases_destroy(*slot);
       flowie_connection_enhanced_auth_clear(*slot);
       tstr_freep(&(*slot)->cluster_client_id);
+      tstr_freep(&(*slot)->mqtt_username);
       tstr_freep(&(*slot)->proxy_tlvs);
       if ((*slot)->cluster_wait) (void)coro_wait_destroy((*slot)->cluster_wait);
       free(*slot);

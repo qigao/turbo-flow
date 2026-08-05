@@ -531,14 +531,19 @@ typedef enum flowie_mqtt_security_resource_kind_e {
   FLOWIE_MQTT_SECURITY_TOPIC_FILTER
 } flowie_mqtt_security_resource_kind_t;
 
-/** Optional matcher context distinguishing a concrete PUBLISH topic from a SUBSCRIBE filter. */
+/**
+ * Optional matcher context for MQTT resource kind and per-connection ACL placeholders.
+ * username and client_id are borrowed only for the synchronous authorization call.
+ */
 typedef struct flowie_mqtt_security_context_s {
   size_t size;
   flowie_mqtt_security_resource_kind_t kind;
+  flowie_mqtt_span_t username;
+  flowie_mqtt_span_t client_id;
 } flowie_mqtt_security_context_t;
 
 #define FLOWIE_MQTT_SECURITY_CONTEXT_INIT                                                          \
-  {sizeof(flowie_mqtt_security_context_t), FLOWIE_MQTT_SECURITY_TOPIC}
+  {sizeof(flowie_mqtt_security_context_t), FLOWIE_MQTT_SECURITY_TOPIC, {NULL, 0u}, {NULL, 0u}}
 
 /**
  * Initialize a SecurityRealm adapter matcher for MQTT Topic Filters.

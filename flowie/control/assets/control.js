@@ -1,15 +1,6 @@
 (function () {
   "use strict";
 
-  var ACL_ACTION_LABELS = {
-    connect: "Connect",
-    publish: "Publish",
-    subscribe: "Subscribe",
-    read: "Read",
-    write: "Write",
-    execute: "Execute",
-    admin: "Admin"
-  };
   var FOCUSABLE_SELECTOR = [
     "button:not([disabled])",
     "input:not([disabled]):not([type=hidden])",
@@ -177,50 +168,7 @@
     });
   }
 
-  function splitRuleLine(line) {
-    var fields = [];
-    var field = "";
-    var index = 0;
-    var hex;
-    var next;
-
-    while (index < line.length) {
-      if (line[index] === "|") {
-        fields.push(field);
-        field = "";
-        index += 1;
-        continue;
-      }
-      if (line[index] !== "\\") {
-        field += line[index];
-        index += 1;
-        continue;
-      }
-      next = line[index + 1];
-      if (next === "\\" || next === "|") {
-        field += next;
-        index += 2;
-        continue;
-      }
-      hex = line.slice(index + 2, index + 4);
-      if (next !== "x" || !/^[0-9a-fA-F]{2}$/.test(hex)) return null;
-      field += String.fromCharCode(parseInt(hex, 16));
-      index += 4;
-    }
-    fields.push(field);
-    return fields.length === 8 ? fields : null;
-  }
-
-  function escapeRuleField(value) {
-    return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(
-      /[\u0000-\u001f\u007f]/g,
-      function (character) {
-        return "\\x" + character.charCodeAt(0).toString(16).padStart(2, "0");
-      }
-    );
-  }
-
-  function setSelectValue(select, value, label) {
+  function setSelectValue(select, value) {
     var option;
     if (!select) return;
     option = Array.from(select.options).find(function (candidate) {
@@ -229,84 +177,59 @@
     if (!option) {
       option = document.createElement("option");
       option.value = value;
-      option.textContent = label || value;
+      option.textContent = value;
       select.appendChild(option);
     }
     select.value = value;
   }
 
-  function setAclFields(builder, fields) {
-    var actions;
-    var subjectValue;
-    if (!fields) return false;
-    subjectValue = fields[1] + ":" + (fields[1] === "any" ? "*" : fields[2]);
-    setSelectValue(builder.querySelector("[data-acl-effect]"), fields[0]);
-    setSelectValue(builder.querySelector("[data-acl-subject]"), subjectValue,
-                   fields[1] + " · " + fields[2]);
-    actions = fields[4].split(",");
-    builder.querySelectorAll("[data-acl-action]").forEach(function (checkbox) {
-      checkbox.checked = actions.indexOf(checkbox.value) !== -1;
-    });
-    setSelectValue(builder.querySelector("[data-acl-resource]"), fields[5]);
-    setSelectValue(builder.querySelector("[data-acl-match]"), fields[6]);
-    builder.querySelector("[data-acl-pattern]").value = fields[7];
+  function parseAclDocument(text) {
+    var normalized = (text || "").replace(/\r\n?/g, "\n");
+    var match = normalized.match(
+      /^user ([A-Za-z0-9_.:@~-]+) (allow|deny)(?: \{\n([\s\S]*)\n\})?$/
+    );
+    var entries = "";
+    if (!match) return null;
+    if (match[3]) {
+      entries = match[3].split("\n").map(function (line) {
+        return line.slice(0, 2) === "  " ? line.slice(2) : line;
+      }).join("\n");
+    }
+    return {subject: match[1], connection: match[2], entries: entries};
+  }
+
+  function setAclDocument(builder, documentValue) {
+    if (!documentValue) return false;
+    setSelectValue(builder.querySelector("[data-acl-subject]"), documentValue.subject);
+    builder.querySelector("[data-acl-connection]").value = documentValue.connection;
+    builder.querySelector("[data-acl-entries]").value = documentValue.entries;
     return true;
   }
 
-  function applyAclExample(builder, example) {
-    var root = builder.getAttribute("data-domain");
-    var fields = ["allow", "any", "*", root, "subscribe", "mqtt_topic", "adapter",
-                  root + "/events/#"];
-    if (example === "publish-events") {
-      fields[4] = "publish";
-      fields[7] = root + "/+/events/#";
-    } else if (example === "deny-private") {
-      fields[0] = "deny";
-      fields[7] = root + "/private/#";
-    }
-    setAclFields(builder, fields);
-    updateAclRule(builder);
-  }
-
-  function updateAclRule(builder) {
-    var actionLabels = [];
-    var actions = [];
-    var effect = builder.querySelector("[data-acl-effect]").value;
-    var match = builder.querySelector("[data-acl-match]").value;
-    var patternInput = builder.querySelector("[data-acl-pattern]");
-    var resource = builder.querySelector("[data-acl-resource]").value;
-    var root = builder.getAttribute("data-domain");
+  function updateAclDocument(builder) {
+    var connection = builder.querySelector("[data-acl-connection]").value;
+    var entries = builder.querySelector("[data-acl-entries]");
     var ruleInput = builder.querySelector("[data-acl-rule]");
     var subject = builder.querySelector("[data-acl-subject]").value;
-    var subjectSeparator = subject.indexOf(":");
-    var subjectKind = subject.slice(0, subjectSeparator);
-    var subjectValue = subject.slice(subjectSeparator + 1);
     var preview = builder.querySelector("[data-acl-preview]");
+    var lines;
+    var rule;
 
-    builder.querySelectorAll("[data-acl-action]:checked").forEach(function (checkbox) {
-      actions.push(checkbox.value);
-      actionLabels.push(ACL_ACTION_LABELS[checkbox.value] || checkbox.value);
-    });
-    patternInput.setCustomValidity(actions.length ? "" : "Select at least one operation.");
-    if (!actions.length || !patternInput.value) {
+    entries.disabled = connection === "deny";
+    if (!subject) {
       ruleInput.value = "";
-      preview.textContent = actions.length ? "Enter a resource path." : "Select an operation.";
+      preview.textContent = "Select a user.";
       return false;
     }
-    ruleInput.value = [
-      effect,
-      subjectKind,
-      subjectKind === "any" ? "*" : escapeRuleField(subjectValue),
-      escapeRuleField(root),
-      actions.join(","),
-      resource,
-      match,
-      escapeRuleField(patternInput.value)
-    ].join("|");
-    preview.textContent =
-      (effect === "allow" ? "Allow" : "Deny") + " · " +
-      builder.querySelector("[data-acl-subject]").selectedOptions[0].textContent.trim() + " · " +
-      actionLabels.join(", ") + " · " + patternInput.value;
+    lines = entries.value.replace(/\r\n?/g, "\n").split("\n").map(function (line) {
+      return line.trim();
+    }).filter(Boolean);
+    rule = "user " + subject + " " + connection;
+    if (connection === "allow" && lines.length) {
+      rule += " {\n" + lines.map(function (line) { return "  " + line; }).join("\n") + "\n}";
+    }
+    ruleInput.value = rule;
+    preview.textContent = rule;
     return true;
   }
 
@@ -322,11 +245,8 @@
       builder = host.querySelector("[data-acl-builder]");
       builder.setAttribute("data-domain", host.getAttribute("data-domain") || "");
       current = host.getAttribute("data-current-rule");
-      if (!current || !setAclFields(builder, splitRuleLine(current))) {
-        applyAclExample(builder, "subscribe-events");
-      } else {
-        updateAclRule(builder);
-      }
+      if (current) setAclDocument(builder, parseAclDocument(current));
+      updateAclDocument(builder);
     });
   }
 
@@ -343,7 +263,6 @@
   }
 
   document.addEventListener("click", function (event) {
-    var example = event.target.closest("[data-acl-example]");
     var option = event.target.closest("[data-picker-option]");
     var popoverButton = event.target.closest("[popovertarget]");
     var popover;
@@ -358,20 +277,18 @@
       }
     }
     if (option) selectOption(option);
-    if (example) applyAclExample(example.closest("[data-acl-builder]"),
-                                 example.getAttribute("data-acl-example"));
   });
 
   document.addEventListener("input", function (event) {
     var builder = event.target.closest("[data-acl-builder]");
     resetRequestIds(event.target.closest(".command"));
-    if (builder) updateAclRule(builder);
+    if (builder) updateAclDocument(builder);
   });
 
   document.addEventListener("change", function (event) {
     var builder = event.target.closest("[data-acl-builder]");
     resetRequestIds(event.target.closest(".command"));
-    if (builder) updateAclRule(builder);
+    if (builder) updateAclDocument(builder);
   });
 
   document.addEventListener("keydown", function (event) {
@@ -422,8 +339,8 @@
 
     if (!command) return;
     ruleBuilder = command.querySelector("[data-acl-builder]");
-    if (ruleBuilder && !updateAclRule(ruleBuilder)) {
-      ruleBuilder.querySelector("[data-acl-pattern]").reportValidity();
+    if (ruleBuilder && !updateAclDocument(ruleBuilder)) {
+      ruleBuilder.querySelector("[data-acl-subject]").reportValidity();
       event.preventDefault();
       return;
     }

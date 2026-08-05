@@ -54,6 +54,7 @@ typedef enum flowie_control_pgsql_command_sql_e {
   FLOWIE_CONTROL_PGSQL_COMMAND_CREDENTIAL_ROTATE,
   FLOWIE_CONTROL_PGSQL_COMMAND_CREDENTIAL_REVOKE,
   FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_LOOKUP,
+  FLOWIE_CONTROL_PGSQL_COMMAND_ACL_GROUP_LOOKUP,
   FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_INSERT,
   FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_REFERENCES,
   FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_DELETE,
@@ -69,6 +70,7 @@ typedef enum flowie_control_pgsql_command_sql_e {
   FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_DRAFT_UPSERT,
   FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_DRAFT_DELETE,
   FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_DRAFT_LINES,
+  FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_DRAFT_OTHER_LINES,
   FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_BUNDLE_VERSION,
   FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_RULES_DELETE,
   FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_BUNDLE_UPSERT,
@@ -189,8 +191,8 @@ int flowie_control_pgsql_command_create(flowie_control_pgsql_pool_t *pool,
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_SUBJECT_LINES,
-        "SELECT rule_line FROM %s.policy_draft WHERE domain_id=$1 "
-        "UNION ALL SELECT rule_line FROM %s.acl_rule WHERE namespace_name=$1",
+        "SELECT '0',rule_line FROM %s.policy_draft WHERE domain_id=$1 "
+        "UNION ALL SELECT '1',rule_line FROM %s.acl_rule WHERE namespace_name=$1",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
@@ -237,6 +239,12 @@ int flowie_control_pgsql_command_create(flowie_control_pgsql_pool_t *pool,
         command, FLOWIE_CONTROL_PGSQL_COMMAND_GROUP_LOOKUP,
         "SELECT depth::text,CASE WHEN enabled THEN '1' ELSE '0' END "
         "FROM %s.security_group WHERE domain_id=$1 AND group_id=$2",
+        schema);
+  if (rc == TURBO_OK)
+    rc = flowie_control_pgsql_command_sql_set(
+        command, FLOWIE_CONTROL_PGSQL_COMMAND_ACL_GROUP_LOOKUP,
+        "SELECT parent_group_id,depth::text,CASE WHEN enabled THEN '1' ELSE '0' END "
+        "FROM %s.security_group WHERE domain_id=$1 AND group_id=$2 FOR SHARE",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
@@ -341,6 +349,12 @@ int flowie_control_pgsql_command_create(flowie_control_pgsql_pool_t *pool,
         "SELECT rule_line FROM %s.policy_draft WHERE domain_id=$1 ORDER BY ordinal", schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
+        command, FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_DRAFT_OTHER_LINES,
+        "SELECT rule_line FROM %s.policy_draft WHERE domain_id=$1 AND ordinal<>$2::integer "
+        "ORDER BY ordinal FOR SHARE",
+        schema);
+  if (rc == TURBO_OK)
+    rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_BUNDLE_VERSION,
         "SELECT policy_version::text FROM %s.acl_bundle WHERE namespace_name=$1 FOR UPDATE",
         schema);
@@ -360,8 +374,7 @@ int flowie_control_pgsql_command_create(flowie_control_pgsql_pool_t *pool,
     rc = flowie_control_pgsql_command_sql_set(
         command, FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_RULES_COPY,
         "INSERT INTO %s.acl_rule(namespace_name,ordinal,rule_line) "
-        "SELECT $1,(pg_catalog.row_number() OVER (ORDER BY ordinal)-1)::integer,rule_line "
-        "FROM %s.policy_draft WHERE domain_id=$1 RETURNING ordinal::text",
+        "VALUES($1,$2::integer,$3) RETURNING ordinal::text",
         schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_command_sql_set(
@@ -874,25 +887,83 @@ static int flowie_control_pgsql_command_policy_subject_referenced(
   rc = flowie_control_pgsql_command_exec(
       session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_SUBJECT_LINES], 1, values, &lines);
   if (rc != TURBO_OK) return rc;
-  if (PQnfields(lines) != 1) {
+  if (PQnfields(lines) != 2) {
     rc = TURBO_EPROTO;
     goto done;
   }
   for (int row = 0; row < PQntuples(lines); ++row) {
-    turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
-    const char *line;
-    size_t line_size;
-    rc = flowie_control_pgsql_result_text(lines, row, 0, &line, &line_size);
-    if (rc != TURBO_OK || line_size == 0u || line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX ||
-        turbo_flow_security_rule_parse_line(line, line_size, &rule) != TURBO_OK ||
-        strcmp(rule.domain_id, domain_id) != 0) {
+    const char *published_text = NULL;
+    size_t published_size = 0u;
+    const char *line = NULL;
+    size_t line_size = 0u;
+    rc = flowie_control_pgsql_result_text(lines, row, 0, &published_text, &published_size);
+    if (rc == TURBO_OK) rc = flowie_control_pgsql_result_text(lines, row, 1, &line, &line_size);
+    if (rc != TURBO_OK || published_size != 1u ||
+        (published_text[0] != '0' && published_text[0] != '1') || line_size == 0u) {
       rc = TURBO_EPROTO;
       goto done;
     }
-    if (rule.subject_kind == subject_kind && strcmp(rule.subject, subject) == 0) {
-      *referenced_out = 1;
-      break;
+    if (published_text[0] == '1') {
+      turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
+      if (line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX ||
+          turbo_flow_security_rule_parse_line(line, line_size, &rule) != TURBO_OK ||
+          strcmp(rule.domain_id, domain_id) != 0) {
+        rc = TURBO_EPROTO;
+        goto done;
+      }
+      if (rule.subject_kind == subject_kind && strcmp(rule.subject, subject) == 0) {
+        *referenced_out = 1;
+        break;
+      }
+      if (subject_kind == TURBO_FLOW_SECURITY_SUBJECT_GROUP &&
+          rule.resource_type == TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC &&
+          rule.match_kind == TURBO_FLOW_SECURITY_MATCH_ADAPTER) {
+        size_t domain_size = strlen(domain_id);
+        const char *cursor = rule.pattern;
+        const char *devices;
+        if (strncmp(cursor, domain_id, domain_size) == 0 &&
+            strncmp(cursor + domain_size, "/groups/", sizeof("/groups/") - 1u) == 0) {
+          cursor += domain_size + sizeof("/groups/") - 1u;
+          devices = strstr(cursor, "/devices/");
+          while (devices && cursor < devices) {
+            const char *slash = strchr(cursor, '/');
+            const char *end = slash && slash < devices ? slash : devices;
+            size_t length = (size_t)(end - cursor);
+            if (strlen(subject) == length && memcmp(cursor, subject, length) == 0) {
+              *referenced_out = 1;
+              break;
+            }
+            cursor = end < devices ? end + 1u : devices;
+          }
+        }
+      }
+    } else {
+      flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
+      if (flowie_control_acl_parse(line, line_size, &document) != TURBO_OK) {
+        rc = TURBO_EPROTO;
+        goto done;
+      }
+      if (subject_kind == TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL &&
+          strcmp(document.subject, subject) == 0) {
+        *referenced_out = 1;
+        break;
+      }
+      if (subject_kind == TURBO_FLOW_SECURITY_SUBJECT_GROUP) {
+        for (size_t entry_index = 0u; entry_index < document.entry_count; ++entry_index) {
+          const flowie_control_acl_entry_t *entry = &document.entries[entry_index];
+          for (size_t group_index = 0u; group_index < entry->group_count; ++group_index) {
+            size_t length = entry->group_lengths[group_index];
+            const char *group = entry->topic + entry->group_offsets[group_index];
+            if (strlen(subject) == length && memcmp(group, subject, length) == 0) {
+              *referenced_out = 1;
+              break;
+            }
+          }
+          if (*referenced_out) break;
+        }
+      }
     }
+    if (*referenced_out) break;
   }
   rc = TURBO_OK;
 
@@ -953,45 +1024,91 @@ static int flowie_control_pgsql_command_policy_publish_detail(uint64_t expires_a
   return written > 0 && written < 64 ? TURBO_OK : TURBO_EINVAL;
 }
 
-static int flowie_control_pgsql_command_policy_rule_validate(
+static int flowie_control_pgsql_command_acl_group_path_validate(
     flowie_control_pgsql_command_t *view, flowie_control_pgsql_command_session_t *session,
-    const char *domain_id, const char *rule_line, size_t rule_line_size,
-    turbo_flow_security_rule_t *rule_out) {
+    const char *domain_id, const flowie_control_acl_entry_t *entry) {
+  char previous[TURBO_FLOW_SECURITY_ID_MAX + 1u] = {0};
+  int rc = TURBO_OK;
+  if (!view || !session || !domain_id || !entry || entry->group_count == 0u ||
+      entry->group_count > TURBO_FLOW_SECURITY_MAX_GROUPS)
+    return TURBO_EINVAL;
+  for (size_t index = 0u; rc == TURBO_OK && index < entry->group_count; ++index) {
+    char current[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+    const char *values[2] = {domain_id, current};
+    const char *parent = NULL;
+    size_t parent_size = 0u;
+    size_t topic_size = strlen(entry->topic);
+    size_t offset = entry->group_offsets[index];
+    size_t length = entry->group_lengths[index];
+    uint64_t depth = 0u;
+    int enabled = 0;
+    PGresult *result = NULL;
+    if (length == 0u || length > TURBO_FLOW_SECURITY_ID_MAX || offset > topic_size ||
+        length > topic_size - offset)
+      return TURBO_EPROTO;
+    memcpy(current, entry->topic + offset, length);
+    current[length] = '\0';
+    rc = flowie_control_pgsql_command_exec(
+        session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_ACL_GROUP_LOOKUP], 2, values, &result);
+    if (rc == TURBO_OK && PQntuples(result) == 0) rc = TURBO_ENOENT;
+    if (rc == TURBO_OK && (PQntuples(result) != 1 || PQnfields(result) != 3)) rc = TURBO_EPROTO;
+    if (rc == TURBO_OK) rc = flowie_control_pgsql_parse_u64(result, 0, 1, &depth);
+    if (rc == TURBO_OK) rc = flowie_control_pgsql_command_result_bool(result, 0, 2, &enabled);
+    if (rc == TURBO_OK && (!enabled || depth != index))
+      rc = !enabled ? TURBO_EPERM : TURBO_EPROTO;
+    if (rc == TURBO_OK && index == 0u && !PQgetisnull(result, 0, 0)) rc = TURBO_EPROTO;
+    if (rc == TURBO_OK && index != 0u) {
+      if (PQgetisnull(result, 0, 0))
+        rc = TURBO_EPROTO;
+      else
+        rc = flowie_control_pgsql_result_text(result, 0, 0, &parent, &parent_size);
+      if (rc == TURBO_OK &&
+          (strlen(previous) != parent_size || memcmp(previous, parent, parent_size) != 0))
+        rc = TURBO_EPROTO;
+    }
+    if (result) PQclear(result);
+    if (rc == TURBO_OK) memcpy(previous, current, length + 1u);
+  }
+  return rc;
+}
+
+static int flowie_control_pgsql_command_policy_document_validate(
+    flowie_control_pgsql_command_t *view, flowie_control_pgsql_command_session_t *session,
+    const char *domain_id, const char *document_text, size_t document_size,
+    flowie_control_acl_document_t *document_out, size_t *rule_count_out,
+    size_t *deny_rule_count_out) {
   flowie_control_pgsql_credential_state_t user = {0};
-  turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
-  uint64_t depth = 0u;
-  int enabled = 0;
+  flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
+  size_t rule_count = 1u;
+  size_t deny_count = 0u;
   int rc;
-  if (!view || !session) return TURBO_EINVAL;
-  rc = flowie_control_policy_rule_syntax_validate(domain_id, rule_line, rule_line_size, &rule);
+  if (rule_count_out) *rule_count_out = 0u;
+  if (deny_rule_count_out) *deny_rule_count_out = 0u;
+  if (!view || !session || !rule_count_out || !deny_rule_count_out) return TURBO_EINVAL;
+  rc = flowie_control_acl_document_syntax_validate(domain_id, document_text, document_size,
+                                                   &document);
   if (rc != TURBO_OK) return rc;
   rc = flowie_control_pgsql_command_root_lookup(view, session, domain_id);
   if (rc != TURBO_OK) return rc;
-  switch (rule.subject_kind) {
-  case TURBO_FLOW_SECURITY_SUBJECT_ANY:
-    break;
-  case TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL:
-    rc = flowie_control_pgsql_command_credential_state(view, session, domain_id, rule.subject,
-                                                       &user);
+  rc = flowie_control_pgsql_command_credential_state(view, session, domain_id, document.subject,
+                                                     &user);
+  if (rc != TURBO_OK) return rc;
+  if (!user.user_enabled) return TURBO_EPERM;
+  if (document.connection_effect == TURBO_FLOW_SECURITY_DENY) deny_count = 1u;
+  for (size_t index = 0u; index < document.entry_count; ++index) {
+    const flowie_control_acl_entry_t *entry = &document.entries[index];
+    rc = flowie_control_pgsql_command_acl_group_path_validate(view, session, domain_id, entry);
     if (rc != TURBO_OK) return rc;
-    if (!user.user_enabled) return TURBO_EPERM;
-    break;
-  case TURBO_FLOW_SECURITY_SUBJECT_ROLE:
-    rc = flowie_control_pgsql_command_role_lookup(view, session, domain_id, rule.subject,
-                                                  &enabled);
-    if (rc != TURBO_OK) return rc;
-    if (!enabled) return TURBO_EPERM;
-    break;
-  case TURBO_FLOW_SECURITY_SUBJECT_GROUP:
-    rc = flowie_control_pgsql_command_group_lookup(view, session, domain_id, rule.subject,
-                                                   &depth, &enabled);
-    if (rc != TURBO_OK) return rc;
-    if (!enabled) return TURBO_EPERM;
-    break;
-  default:
-    return TURBO_EPROTO;
+    if (entry->alternative_count == 0u ||
+        rule_count > TURBO_FLOW_SECURITY_MAX_RULES - entry->alternative_count)
+      return TURBO_ENOSPC;
+    rule_count += entry->alternative_count;
+    if (entry->effect == TURBO_FLOW_SECURITY_DENY)
+      deny_count += entry->alternative_count;
   }
-  if (rule_out) *rule_out = rule;
+  if (document_out) *document_out = document;
+  *rule_count_out = rule_count;
+  *deny_rule_count_out = deny_count;
   return TURBO_OK;
 }
 
@@ -1001,6 +1118,8 @@ static int flowie_control_pgsql_command_policy_validate(
   const char *values[1] = {domain_id};
   flowie_control_policy_validation_t validation = FLOWIE_CONTROL_POLICY_VALIDATION_INIT;
   PGresult *lines = NULL;
+  char *subjects = NULL;
+  size_t document_count = 0u;
   int rc;
   if (!view || !session || !domain_id || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_exec(
@@ -1010,28 +1129,84 @@ static int flowie_control_pgsql_command_policy_validate(
     rc = TURBO_EPROTO;
     goto done;
   }
+  subjects = (char *)calloc(TURBO_FLOW_SECURITY_MAX_RULES,
+                            TURBO_FLOW_SECURITY_ID_MAX + 1u);
+  if (!subjects) {
+    rc = TURBO_ENOMEM;
+    goto done;
+  }
   validation.store_revision = store_revision;
   for (int row = 0; row < PQntuples(lines); ++row) {
-    turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
+    flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
     const char *line;
     size_t line_size;
-    if (validation.rule_count >= TURBO_FLOW_SECURITY_MAX_RULES) {
+    size_t expanded = 0u;
+    size_t denied = 0u;
+    if (document_count >= TURBO_FLOW_SECURITY_MAX_RULES) {
       rc = TURBO_ENOSPC;
       goto done;
     }
     rc = flowie_control_pgsql_result_text(lines, row, 0, &line, &line_size);
     if (rc != TURBO_OK) goto done;
-    rc = flowie_control_pgsql_command_policy_rule_validate(view, session, domain_id, line,
-                                                           line_size, &rule);
+    rc = flowie_control_pgsql_command_policy_document_validate(
+        view, session, domain_id, line, line_size, &document, &expanded, &denied);
     if (rc != TURBO_OK) goto done;
-    ++validation.rule_count;
-    if (rule.effect == TURBO_FLOW_SECURITY_DENY) ++validation.deny_rule_count;
+    for (size_t prior = 0u; prior < document_count; ++prior)
+      if (strcmp(subjects + prior * (TURBO_FLOW_SECURITY_ID_MAX + 1u), document.subject) == 0) {
+        rc = TURBO_EALREADY;
+        goto done;
+      }
+    memcpy(subjects + document_count * (TURBO_FLOW_SECURITY_ID_MAX + 1u), document.subject,
+           strlen(document.subject) + 1u);
+    ++document_count;
+    if (expanded > TURBO_FLOW_SECURITY_MAX_RULES - validation.rule_count) {
+      rc = TURBO_ENOSPC;
+      goto done;
+    }
+    validation.rule_count += expanded;
+    validation.deny_rule_count += denied;
   }
   if (validation.rule_count == 0u) {
     rc = TURBO_ENOENT;
     goto done;
   }
   *out = validation;
+  rc = TURBO_OK;
+
+done:
+  free(subjects);
+  PQclear(lines);
+  return rc;
+}
+
+static int flowie_control_pgsql_command_policy_subject_unique(
+    flowie_control_pgsql_command_t *view, flowie_control_pgsql_command_session_t *session,
+    const char *domain_id, const char *ordinal, const char *subject) {
+  const char *values[2] = {domain_id, ordinal};
+  PGresult *lines = NULL;
+  int rc;
+  if (!view || !session || !domain_id || !ordinal || !subject) return TURBO_EINVAL;
+  rc = flowie_control_pgsql_command_exec(
+      session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_DRAFT_OTHER_LINES], 2, values, &lines);
+  if (rc != TURBO_OK) return rc;
+  if (PQnfields(lines) != 1) {
+    rc = TURBO_EPROTO;
+    goto done;
+  }
+  for (int row = 0; row < PQntuples(lines); ++row) {
+    const char *text;
+    size_t text_size;
+    flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
+    rc = flowie_control_pgsql_result_text(lines, row, 0, &text, &text_size);
+    if (rc != TURBO_OK || flowie_control_acl_parse(text, text_size, &document) != TURBO_OK) {
+      rc = TURBO_EPROTO;
+      goto done;
+    }
+    if (strcmp(document.subject, subject) == 0) {
+      rc = TURBO_EALREADY;
+      goto done;
+    }
+  }
   rc = TURBO_OK;
 
 done:
@@ -2079,7 +2254,9 @@ int flowie_control_pgsql_command_policy_rule_put(
     flowie_control_pgsql_command_t *view, const flowie_control_policy_rule_put_command_t *command,
     flowie_control_command_result_t *result) {
   flowie_control_pgsql_command_session_t session;
-  turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
+  flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
+  size_t expanded_rule_count = 0u;
+  size_t deny_rule_count = 0u;
   char target[32];
   char next_text[32];
   char occurred_at_text[32];
@@ -2098,8 +2275,8 @@ int flowie_control_pgsql_command_policy_rule_put(
           command->domain_id, command->domain_id, command->actor, command->request_id,
           command->expected_revision, command->occurred_at) ||
       !command->rule_line ||
-      (line_size = strnlen(command->rule_line, TURBO_FLOW_SECURITY_RULE_LINE_MAX + 1u)) == 0u ||
-      line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX ||
+      (line_size = strnlen(command->rule_line, FLOWIE_CONTROL_ACL_DOCUMENT_MAX + 1u)) == 0u ||
+      line_size > FLOWIE_CONTROL_ACL_DOCUMENT_MAX ||
       flowie_control_pgsql_command_policy_target(command->ordinal, target) != TURBO_OK)
     return TURBO_EINVAL;
   rc = flowie_control_pgsql_command_session_open(view, &session);
@@ -2114,8 +2291,12 @@ int flowie_control_pgsql_command_policy_rule_put(
     rc = flowie_control_pgsql_command_revision_lock(view, &session, command->expected_revision,
                                                     &current);
   if (rc == TURBO_OK && !found)
-    rc = flowie_control_pgsql_command_policy_rule_validate(view, &session, command->domain_id,
-                                                           command->rule_line, line_size, &rule);
+    rc = flowie_control_pgsql_command_policy_document_validate(
+        view, &session, command->domain_id, command->rule_line, line_size, &document,
+        &expanded_rule_count, &deny_rule_count);
+  if (rc == TURBO_OK && !found)
+    rc = flowie_control_pgsql_command_policy_subject_unique(view, &session, command->domain_id,
+                                                            target, document.subject);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_advance(view, &session, current, &next);
   if (rc == TURBO_OK && !found) rc = flowie_control_pgsql_u64_text(next, next_text);
@@ -2219,8 +2400,11 @@ int flowie_control_pgsql_command_policy_publish(
   const char *publish_values[2];
   PGresult *deleted = NULL;
   PGresult *bundle = NULL;
+  PGresult *drafts = NULL;
   PGresult *rules = NULL;
   PGresult *published = NULL;
+  turbo_flow_security_rule_t *compiled_rules = NULL;
+  size_t compiled_total = 0u;
   uint64_t current = 0u;
   uint64_t next = 0u;
   uint64_t current_policy = 0u;
@@ -2262,6 +2446,11 @@ int flowie_control_pgsql_command_policy_publish(
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_policy_validate(view, &session, command->domain_id,
                                                       current, &validation);
+  if (rc == TURBO_OK && !found) {
+    compiled_rules = (turbo_flow_security_rule_t *)calloc(validation.rule_count,
+                                                          sizeof(*compiled_rules));
+    if (!compiled_rules) rc = TURBO_ENOMEM;
+  }
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_policy_version(view, &session, command->domain_id,
                                                      &current_policy);
@@ -2291,12 +2480,47 @@ int flowie_control_pgsql_command_policy_publish(
   if (bundle) PQclear(bundle);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_exec(
-        &session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_RULES_COPY], 1, root_values,
-        &rules);
-  if (rc == TURBO_OK && !found &&
-      (PQnfields(rules) != 1 || (size_t)PQntuples(rules) != validation.rule_count))
-    rc = TURBO_EPROTO;
-  if (rules) PQclear(rules);
+        &session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_DRAFT_LINES], 1, root_values,
+        &drafts);
+  if (rc == TURBO_OK && !found && PQnfields(drafts) != 1) rc = TURBO_EPROTO;
+  for (int row = 0; rc == TURBO_OK && !found && row < PQntuples(drafts); ++row) {
+    const char *text;
+    size_t text_size;
+    flowie_control_acl_document_t document = FLOWIE_CONTROL_ACL_DOCUMENT_INIT;
+    size_t compiled_count = 0u;
+    rc = flowie_control_pgsql_result_text(drafts, row, 0, &text, &text_size);
+    if (rc == TURBO_OK)
+      rc = flowie_control_acl_document_syntax_validate(command->domain_id, text, text_size,
+                                                       &document);
+    if (rc == TURBO_OK)
+      rc = flowie_control_acl_compile(&document, command->domain_id,
+                                      compiled_rules + compiled_total,
+                                      validation.rule_count - compiled_total, &compiled_count);
+    if (rc == TURBO_OK && compiled_count == 0u) rc = TURBO_EPROTO;
+    for (size_t index = 0u; rc == TURBO_OK && index < compiled_count; ++index) {
+      char ordinal_text[32];
+      char canonical[TURBO_FLOW_SECURITY_RULE_LINE_MAX + 1u];
+      size_t canonical_size = 0u;
+      const char *insert_values[3] = {command->domain_id, ordinal_text, canonical};
+      rc = flowie_control_pgsql_u64_text(compiled_total + index, ordinal_text);
+      if (rc == TURBO_OK)
+        rc = turbo_flow_security_rule_format_line(&compiled_rules[compiled_total + index],
+                                                  canonical, sizeof(canonical), &canonical_size);
+      if (rc == TURBO_OK) canonical[canonical_size] = '\0';
+      if (rc == TURBO_OK)
+        rc = flowie_control_pgsql_command_exec(
+            &session, view->sql[FLOWIE_CONTROL_PGSQL_COMMAND_POLICY_RULES_COPY], 3,
+            insert_values, &rules);
+      if (rc == TURBO_OK && (PQntuples(rules) != 1 || PQnfields(rules) != 1)) rc = TURBO_EPROTO;
+      if (rules) {
+        PQclear(rules);
+        rules = NULL;
+      }
+    }
+    compiled_total += compiled_count;
+  }
+  if (rc == TURBO_OK && !found && compiled_total != validation.rule_count) rc = TURBO_EPROTO;
+  if (drafts) PQclear(drafts);
   if (rc == TURBO_OK && !found)
     rc = flowie_control_pgsql_command_revision_advance(view, &session, current, &next);
   if (rc == TURBO_OK && !found)
@@ -2313,6 +2537,7 @@ int flowie_control_pgsql_command_policy_publish(
   if (rc == TURBO_OK && !found && (PQntuples(published) != 1 || PQnfields(published) != 1))
     rc = TURBO_EPROTO;
   if (published) PQclear(published);
+  free(compiled_rules);
   if (rc == TURBO_OK && !found) {
     result->revision = next;
     result->policy_version = next_policy;

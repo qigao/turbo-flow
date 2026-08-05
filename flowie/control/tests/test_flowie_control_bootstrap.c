@@ -178,6 +178,8 @@ spec("Flowie controller bootstrap") {
     flowie_control_config_bootstrap_t config = bootstrap_config();
     flowie_control_domain_create_command_t root = FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
     flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
+    flowie_control_domain_view_t domain = FLOWIE_CONTROL_DOMAIN_VIEW_INIT;
+    uint64_t revision = 0u;
 
     check_int_eq(bootstrap_open(&path, &store), TURBO_OK);
     repository = flowie_control_store_repository(store);
@@ -190,6 +192,10 @@ spec("Flowie controller bootstrap") {
     check_int_eq(flowie_control_bootstrap_apply(repository, &config, BOOTSTRAP_PASSWORD,
                                                 strlen(BOOTSTRAP_PASSWORD), 1000u),
                  TURBO_EBUSY);
+    check_int_eq(repository->auth->current_revision(repository->ctx, &revision), TURBO_OK);
+    check_uint_eq(revision, 1u);
+    check_int_eq(repository->user->domain_get(repository->ctx, config.domain_id, &domain),
+                 TURBO_ENOENT);
     bootstrap_close(path, store);
   }
 }

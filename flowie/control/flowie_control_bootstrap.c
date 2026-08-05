@@ -70,6 +70,8 @@ int flowie_control_bootstrap_apply(const flowie_control_repository_t *repository
       FLOWIE_CONTROL_USER_ROLE_ADD_COMMAND_INIT;
   flowie_control_command_result_t result = FLOWIE_CONTROL_COMMAND_RESULT_INIT;
   flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
+  flowie_control_domain_view_t existing_domain = FLOWIE_CONTROL_DOMAIN_VIEW_INIT;
+  uint64_t current_revision = 0u;
   int rc;
   if (flowie_control_repository_validate(repository) != TURBO_OK || !config ||
       !config->domain_id[0] || !config->principal_id[0] || !config->principal_type[0] ||
@@ -77,12 +79,21 @@ int flowie_control_bootstrap_apply(const flowie_control_repository_t *repository
       password_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX || occurred_at == 0u)
     return TURBO_EINVAL;
 
+  rc = repository->auth->current_revision(repository->ctx, &current_revision);
+  if (rc != TURBO_OK) goto done;
+  if (current_revision != FLOWIE_CONTROL_BOOTSTRAP_EMPTY_REVISION) {
+    rc = repository->user->domain_get(repository->ctx, config->domain_id, &existing_domain);
+    if (rc == TURBO_ENOENT) rc = TURBO_EBUSY;
+    if (rc != TURBO_OK) goto done;
+  }
+
   root.domain_id = config->domain_id;
   root.actor = FLOWIE_CONTROL_BOOTSTRAP_ACTOR;
   root.request_id = FLOWIE_CONTROL_BOOTSTRAP_ROOT_REQUEST;
   root.expected_revision = FLOWIE_CONTROL_BOOTSTRAP_EMPTY_REVISION;
   root.occurred_at = occurred_at;
   rc = repository->user->domain_create(repository->ctx, &root, &result);
+  if (rc == TURBO_EALREADY) rc = TURBO_EBUSY;
   rc = flowie_control_bootstrap_result(rc, &result, FLOWIE_CONTROL_BOOTSTRAP_ROOT_REVISION);
   if (rc != TURBO_OK) goto done;
 

@@ -86,6 +86,10 @@ static int flow_security_rule_unescape(flow_security_rule_span_t span, char *out
     output[0] = '\0';
     return TURBO_OK;
   }
+  if (wildcard_empty && span.size == 0u) {
+    output[0] = '\0';
+    return TURBO_OK;
+  }
   while (read < span.size) {
     uint8_t byte = span.data[read++];
     if (byte == '\\') {
@@ -232,7 +236,11 @@ int turbo_flow_security_rule_parse_line(const char *line, size_t line_size,
   else if (token == FLOW_SECURITY_RULE_TOKEN_ADAPTER)
     rule.match_kind = TURBO_FLOW_SECURITY_MATCH_ADAPTER;
   else return TURBO_EPROTO;
-  rc = flow_security_rule_unescape(fields[7], rule.pattern, sizeof(rule.pattern), 0);
+  rc = flow_security_rule_unescape(
+      fields[7], rule.pattern, sizeof(rule.pattern),
+      rule.action_mask == TURBO_FLOW_SECURITY_ACTION_CONNECT &&
+          rule.resource_type == TURBO_FLOW_SECURITY_RESOURCE_GENERIC &&
+          rule.match_kind == TURBO_FLOW_SECURITY_MATCH_PREFIX);
   if (rc != TURBO_OK) return rc;
   *rule_out = rule;
   return TURBO_OK;
@@ -250,11 +258,12 @@ static int flow_security_rule_append(char *output, size_t capacity, size_t *offs
 }
 
 static int flow_security_rule_append_escaped(char *output, size_t capacity, size_t *offset,
-                                             const char *text, size_t text_capacity) {
+                                             const char *text, size_t text_capacity,
+                                             int allow_empty) {
   size_t size;
   if (!output || !offset || !text) return TURBO_EINVAL;
   size = strnlen(text, text_capacity);
-  if (size == 0u || size >= text_capacity) return TURBO_EPROTO;
+  if ((!allow_empty && size == 0u) || size >= text_capacity) return TURBO_EPROTO;
   for (size_t i = 0u; i < size; ++i) {
     char escaped[3] = {'\\', text[i], '\0'};
     if (text[i] == '|' || text[i] == '\\') {
@@ -301,12 +310,12 @@ int turbo_flow_security_rule_format_line(const turbo_flow_security_rule_t *rule,
     rc = rule->subject_kind == TURBO_FLOW_SECURITY_SUBJECT_ANY
              ? flow_security_rule_append(line_out, line_capacity, &offset, "*")
              : flow_security_rule_append_escaped(line_out, line_capacity, &offset, rule->subject,
-                                                 sizeof(rule->subject));
+                                                 sizeof(rule->subject), 0);
   }
   if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
   if (rc == TURBO_OK)
     rc = flow_security_rule_append_escaped(line_out, line_capacity, &offset, rule->domain_id,
-                                           sizeof(rule->domain_id));
+                                           sizeof(rule->domain_id), 0);
   if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
   for (size_t i = 0u; rc == TURBO_OK && i < 7u; ++i) {
     if ((rule->action_mask & (UINT32_C(1) << i)) == 0u) continue;
@@ -326,8 +335,11 @@ int turbo_flow_security_rule_format_line(const turbo_flow_security_rule_t *rule,
                                    match_names[rule->match_kind]);
   if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
   if (rc == TURBO_OK)
-    rc = flow_security_rule_append_escaped(line_out, line_capacity, &offset, rule->pattern,
-                                           sizeof(rule->pattern));
+    rc = flow_security_rule_append_escaped(
+        line_out, line_capacity, &offset, rule->pattern, sizeof(rule->pattern),
+        rule->action_mask == TURBO_FLOW_SECURITY_ACTION_CONNECT &&
+            rule->resource_type == TURBO_FLOW_SECURITY_RESOURCE_GENERIC &&
+            rule->match_kind == TURBO_FLOW_SECURITY_MATCH_PREFIX);
   if (rc == TURBO_OK && offset > TURBO_FLOW_SECURITY_RULE_LINE_MAX) rc = TURBO_EFBIG;
   if (rc != TURBO_OK) {
     memset(line_out, 0, line_capacity);

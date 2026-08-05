@@ -1,8 +1,8 @@
 # Flowie Linux 远程测试 Runbook
 
 本文用于从 Windows 工作站打包当前工作树，将 TurboUtils、TurboNet、TurboHTTP、RulesForge 和
-TurboFlow 上传到 `root@eu:/root/dev`，在隔离目录中构建五个仓库，启动 Redis、PostgreSQL 与固定 Mosquitto Docker
-服务，并运行 Flowie MQTT release/nightly cases。
+TurboFlow 上传到 `root@eu:/root/dev`，在隔离目录中构建五个仓库，从同一份源码构建 Flowie server Docker
+镜像，启动 Redis、PostgreSQL 与固定 Mosquitto Docker 服务，并运行 Flowie MQTT release/nightly cases。
 
 ## 1. 执行边界
 
@@ -14,6 +14,7 @@ TurboFlow 上传到 `root@eu:/root/dev`，在隔离目录中构建五个仓库�
   可选 public broker smoke 默认 Disabled。
 - release 与 nightly 分开：release 使用 GCC；libFuzzer/nightly 使用 Clang 独立构建树。
 - PostgreSQL、Redis 和固定 broker 是独立发布证据；可选 public broker smoke 只验证公网访问能力。
+- Flowie server 镜像必须由本次解包的五个源码目录构建；不得复用宿主机 SDK、预编译二进制或浮动镜像。
   发布证据失败时保留本次 run 目录和日志。
 
 ## 2. Windows：打包并上传当前源码
@@ -111,7 +112,8 @@ Debian/Ubuntu 主机先准备基线工具；`/opt/vcpkg` 必须由运维预装�
 ```bash
 apt-get update
 apt-get install -y build-essential clang cmake ninja-build git curl zip unzip pkg-config \
-  openssl ca-certificates tmux docker.io docker-compose-plugin mosquitto-clients libpq-dev
+  openssl ca-certificates tmux docker.io docker-buildx-plugin docker-compose-plugin \
+  mosquitto-clients libpq-dev
 systemctl start docker
 test -x /opt/vcpkg/vcpkg
 ```
@@ -159,16 +161,89 @@ done
   gcc --version | head -n 1
   clang --version | head -n 1
   docker --version
+  docker buildx version
   docker compose version
   /opt/vcpkg/vcpkg version
   printf 'source_revision=%s\n' "$SOURCE_REVISION"
 } | tee "$ARTIFACT_ROOT/environment.txt"
 ```
 
-必需工具为 CMake、Ninja、GCC/G++、Clang、Docker Compose、OpenSSL、`unzip`、`tmux`、
+必需工具为 CMake、Ninja、GCC/G++、Clang、Docker Buildx、Docker Compose、OpenSSL、`unzip`、`tmux`、
 `mosquitto_pub/sub` 和 `/opt/vcpkg`。缺失时先安装并重新执行本节；不要在工具缺失状态继续。
 
-## 4. 启动 Redis、PostgreSQL 与固定 Mosquitto
+## 4. 从本次源码构建并验证 Flowie server Docker 镜像
+
+本节必须在任何源码目录执行 CMake configure/build 之前完成。Windows 归档已排除各仓库的 `build/` 和
+`vcpkg_installed/`；保持这个顺序可确保 BuildKit named contexts 只包含本次归档源码，不会混入随后在
+Linux 主机生成的 SDK 或编译产物。
+
+本节复用 `flowie/deploy/server/Dockerfile`。named contexts 分别指向本次 run 解包出的五个源码目录；
+Dockerfile 会在独立 stage 中构建并安装四个依赖 SDK，再从 TurboFlow 源码生成仅包含 `flowie_server`、
+运行库和部署资源的非 root runtime 镜像。镜像构建不替代后续 release/nightly 测试 gate。
+
+```bash
+cd "$TURBO_FLOW_SRC"
+
+FLOWIE_SERVER_IMAGE="flowie-server:run-${RUN_ID,,}"
+case "$FLOWIE_SERVER_IMAGE" in
+  flowie-server:run-*) ;;
+  *) echo "invalid Flowie server image tag: $FLOWIE_SERVER_IMAGE" >&2; exit 1 ;;
+esac
+
+docker buildx inspect --bootstrap \
+  2>&1 | tee "$ARTIFACT_ROOT/flowie-server-buildx-builder.txt"
+
+docker buildx build \
+  --file "$TURBO_FLOW_SRC/flowie/deploy/server/Dockerfile" \
+  --build-context "turbo_utils=$TURBO_UTILS_SRC" \
+  --build-context "turbo_net=$TURBO_NET_SRC" \
+  --build-context "turbo_http=$TURBO_HTTP_SRC" \
+  --build-context "rules_forge=$RULES_FORGE_SRC" \
+  --build-arg "SOURCE_REVISION=$SOURCE_REVISION" \
+  --tag "$FLOWIE_SERVER_IMAGE" \
+  --progress=plain \
+  --load \
+  "$TURBO_FLOW_SRC" \
+  2>&1 | tee "$ARTIFACT_ROOT/flowie-server-image-build.log"
+
+IMAGE_REVISION="$(docker image inspect \
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+  "$FLOWIE_SERVER_IMAGE")"
+test "$IMAGE_REVISION" = "$SOURCE_REVISION"
+test "$(docker image inspect --format '{{.Config.User}}' "$FLOWIE_SERVER_IMAGE")" = "10001:10001"
+
+{
+  docker run --rm --entrypoint /bin/sh "$FLOWIE_SERVER_IMAGE" -c '
+    set -eu
+    test "$(id -u)" = 10001
+    test "$(id -g)" = 10001
+    ldd /usr/local/bin/flowie_server > /tmp/flowie-server.ldd
+    cat /tmp/flowie-server.ldd
+    ! grep -F "not found" /tmp/flowie-server.ldd
+  '
+  set +e
+  docker run --rm "$FLOWIE_SERVER_IMAGE" flowie_server --help \
+    > "$ARTIFACT_ROOT/flowie-server-help.txt" 2>&1
+  FLOWIE_HELP_RC=$?
+  set -e
+  test "$FLOWIE_HELP_RC" -eq 1
+  grep -F 'usage: flowie_server [OPTIONS...]' "$ARTIFACT_ROOT/flowie-server-help.txt"
+  printf 'flowie_server_help_exit_code=%s\n' "$FLOWIE_HELP_RC"
+} 2>&1 | tee "$ARTIFACT_ROOT/flowie-server-image-smoke.log"
+
+docker image inspect "$FLOWIE_SERVER_IMAGE" \
+  > "$ARTIFACT_ROOT/flowie-server-image.json"
+printf 'image=%s\nrevision=%s\nimage_id=%s\n' \
+  "$FLOWIE_SERVER_IMAGE" "$IMAGE_REVISION" \
+  "$(docker image inspect --format '{{.Id}}' "$FLOWIE_SERVER_IMAGE")" \
+  | tee "$ARTIFACT_ROOT/flowie-server-image.txt"
+```
+
+这里使用源码归档 SHA-256 作为 `org.opencontainers.image.revision`，因为归档包含未提交工作树，Git commit
+不能唯一表示实际镜像输入。发布 CI 若只接受已提交源码，则应改用实际 TurboFlow commit、将 `--load`
+替换为 `--push`，记录 registry digest，并让部署引用不可变 digest。
+
+## 5. 启动 Redis、PostgreSQL 与固定 Mosquitto
 
 先确认测试端口没有被其他服务占用。发生冲突时停止并确认占用者，不自动复用未知服务。
 
@@ -266,7 +341,7 @@ if [[ "${FLOWIE_RUN_PUBLIC_SMOKE:-0}" == "1" ]]; then
 fi
 ```
 
-## 5. 构建、测试并安装依赖 SDK
+## 6. 构建、测试并安装依赖 SDK
 
 顺序固定为 TurboUtils → TurboNet → TurboHTTP → RulesForge。每个仓库先完成 Linux release CTest，再安装到本次
 run 的私有 SDK 目录。
@@ -327,7 +402,7 @@ export LD_LIBRARY_PATH="$SDK_ROOT/rulesforge/lib:$LD_LIBRARY_PATH"
 `/opt/turboutils`。`LD_LIBRARY_PATH` 必须保持本次 run 的 SDK 在主机系统路径之前，避免
 `/usr/local/lib` 中旧版本库满足同名 SONAME 后造成 ABI 符号错配。
 
-## 6. 配置并构建 TurboFlow release gate
+## 7. 配置并构建 TurboFlow release gate
 
 ```bash
 cd "$TURBO_FLOW_SRC"
@@ -358,7 +433,7 @@ cmake --build --preset linux-release-user --parallel "$(nproc)" \
   2>&1 | tee "$ARTIFACT_ROOT/turboflow-linux-release-build.log"
 ```
 
-## 7. 分层运行 cases
+## 8. 分层运行 cases
 
 以下顺序先验证外部依赖，再运行 Flowie release label、全量 CTest 和 release evidence。任何一步失败即
 停止，不继续用后续结果掩盖失败。
@@ -392,10 +467,10 @@ cp build/linux-gcc-release/flowie-release-evidence.json "$ARTIFACT_ROOT/"
 cmake --install build/linux-gcc-release
 ```
 
-本阶段的 `test_flowie_mqtt_soak` 使用默认短时验证。规定的 30/60 分钟 soak 只由下一节 nightly
+本阶段的 `test_flowie_mqtt_soak` 使用默认短时验证。规定的 30/60 分钟 soak 只由第 9 节 nightly
 evidence 生成。
 
-## 8. Clang sanitizer、fuzz 与 30/60 分钟 nightly
+## 9. Clang sanitizer、fuzz 与 30/60 分钟 nightly
 
 本节约需四小时，应保持在 `tmux` 中。它使用 `linux-dev-user` 的独立构建树，并显式选择 Clang；不能在
 GCC release build 中开启 `FLOWIE_MQTT_FUZZ_TARGETS`。
@@ -432,7 +507,7 @@ cp -a build/linux-gcc-debug/flowie-fuzz-artifacts "$ARTIFACT_ROOT/"
 nightly target 固定要求：同一 `SOURCE_REVISION`、非零 seed、corpus/soak/sanitizer 全部 PASS、六项
 `resource_monotonic_growth=false`。任一条件缺失会由 verifier 直接失败。
 
-## 9. 收集结果并下载
+## 10. 收集结果并下载
 
 ```bash
 cd "$RUN_ROOT"
@@ -467,7 +542,7 @@ try {
 }
 ```
 
-## 10. 精确清理 Docker 资源
+## 11. 精确清理 Docker 资源
 
 只在日志与结果包生成后执行。以下保护确保仅删除本次 run 的容器和 compose project；源码、SDK 和
 证据仍保留在 `$RUN_ROOT`。
@@ -476,13 +551,15 @@ try {
 case "$REDIS_CONTAINER" in flowie-redis-*) ;; *) exit 1 ;; esac
 case "$PG_CONTAINER" in flowie-pg-*) ;; *) exit 1 ;; esac
 case "$COMPOSE_PROJECT_NAME" in flowie*) ;; *) exit 1 ;; esac
+case "$FLOWIE_SERVER_IMAGE" in flowie-server:run-*) ;; *) exit 1 ;; esac
 
 docker compose -f "$TURBO_FLOW_SRC/flowie/interop/mosquitto-2.0.22/compose.yml" \
   down -v
 docker rm -f "$REDIS_CONTAINER" "$PG_CONTAINER"
+docker image rm "$FLOWIE_SERVER_IMAGE"
 ```
 
-## 11. 成功判定
+## 12. 成功判定
 
 一次完整 Linux 结果必须同时满足：
 
@@ -490,6 +567,9 @@ docker rm -f "$REDIS_CONTAINER" "$PG_CONTAINER"
 - 四个 release JUnit 结果无失败，TurboFlow 全量 CTest 不是零用例。
 - Redis live、route projection Redis live、PostgreSQL live、固定 Mosquitto、TLS/WSS/mTLS 均有实际 PASS。
 - `flowie-release-evidence.json` 通过内置 verifier。
+- `flowie/deploy/server/Dockerfile` 从本次五仓库源码构建成功；镜像 revision 等于源码归档 SHA-256，
+  runtime 用户和动态库验证通过；`flowie_server --help` 输出 usage，且符合当前 TurboUtils parser 的
+  退出码 `1` 契约。
 - nightly 的 corpus、六项 30/60 分钟 soak 和 Clang libFuzzer 全部 PASS，且无资源单调增长。
 - 结果记录同一个源码归档 SHA-256；Linux 结果不得从 Windows 结果推定。
 

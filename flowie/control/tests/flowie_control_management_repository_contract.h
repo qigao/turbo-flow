@@ -27,7 +27,9 @@ static int flowie_control_management_contract_contains(const char *items, size_t
 static void
 flowie_control_management_repository_contract_run(const flowie_control_repository_t *repository) {
   static const char policy_rule[] =
-      "allow|role|operator|root-a|subscribe|mqtt_topic|adapter|root-a/events/#";
+      "user device-a allow {\n"
+      "  read topic root-a/groups/operators/devices/%u/event\n"
+      "}";
   flowie_control_domain_create_command_t root = FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
   flowie_control_management_service_config_t config = FLOWIE_CONTROL_MANAGEMENT_SERVICE_CONFIG_INIT;
   flowie_control_management_service_t *service = NULL;
@@ -225,7 +227,7 @@ flowie_control_management_repository_contract_run(const flowie_control_repositor
   check_str_eq(rule_page[0].rule_line, policy_rule);
   check_int_eq(flowie_control_management_policy_validate(service, &viewer, &validation), TURBO_OK);
   check_uint_eq(validation.store_revision, 8u);
-  check_size_eq(validation.rule_count, 1u);
+  check_size_eq(validation.rule_count, 2u);
 
   publish.domain_id = "root-a";
   publish.actor = policy_admin.actor;
@@ -241,7 +243,7 @@ flowie_control_management_repository_contract_run(const flowie_control_repositor
   check_int_eq(flowie_control_management_policy_status(service, &viewer, &policy_status), TURBO_OK);
   check_uint_eq(policy_status.store_revision, 9u);
   check_uint_eq(policy_status.policy_version, 1u);
-  check_size_eq(policy_status.published_rule_count, 1u);
+  check_size_eq(policy_status.published_rule_count, 2u);
   check_int_eq(flowie_control_management_system_status(service, &viewer, &management_status),
                TURBO_OK);
   check_uint_eq(management_status.store_revision, 9u);

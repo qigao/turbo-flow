@@ -507,36 +507,44 @@ spec("Flowie ACL dashboard") {
     user.expected_revision = 1u;
     user.occurred_at = 2000u;
     check_int_eq(flowie_control_management_user_create(service, &caller, &user, &result), TURBO_OK);
+    user.principal_id = "device-1";
+    user.request_id = "request-user-acl";
+    user.expected_revision = 2u;
+    user.occurred_at = 2001u;
+    check_int_eq(flowie_control_management_user_create(service, &caller, &user, &result), TURBO_OK);
     group.domain_id = caller.domain_id;
     group.group_id = "operators";
     group.parent_group_id = NULL;
     group.actor = caller.actor;
     group.request_id = "request-group";
-    group.expected_revision = 2u;
-    group.occurred_at = 2001u;
+    group.expected_revision = 3u;
+    group.occurred_at = 2002u;
     check_int_eq(flowie_control_management_group_create(service, &caller, &group, &result),
                  TURBO_OK);
     group.group_id = "operators-east";
     group.parent_group_id = "operators";
     group.request_id = "request-group-child";
-    group.expected_revision = 3u;
-    group.occurred_at = 2002u;
+    group.expected_revision = 4u;
+    group.occurred_at = 2003u;
     check_int_eq(flowie_control_management_group_create(service, &caller, &group, &result),
                  TURBO_OK);
     role.domain_id = caller.domain_id;
     role.role_id = "publisher";
     role.actor = caller.actor;
     role.request_id = "request-role";
-    role.expected_revision = 4u;
-    role.occurred_at = 2003u;
+    role.expected_revision = 5u;
+    role.occurred_at = 2004u;
     check_int_eq(flowie_control_management_role_create(service, &caller, &role, &result), TURBO_OK);
     rule.domain_id = caller.domain_id;
     rule.ordinal = 10u;
-    rule.rule_line = "allow|any|*|root-a|subscribe|mqtt_topic|adapter|root-a/events/#";
+    rule.rule_line =
+        "user device-1 allow {\n"
+        "  readwrite topic root-a/groups/operators/operators-east/devices/%u/events\n"
+        "}";
     rule.actor = caller.actor;
     rule.request_id = "request-rule";
-    rule.expected_revision = 5u;
-    rule.occurred_at = 2004u;
+    rule.expected_revision = 6u;
+    rule.occurred_at = 2005u;
     check_int_eq(flowie_control_management_policy_rule_put(service, &caller, &rule, &result),
                  TURBO_OK);
 
@@ -569,12 +577,12 @@ spec("Flowie ACL dashboard") {
     check_str_contains(html, "class=\"group-tree__node group-tree__node--depth-0\" role=\"treeitem\"");
     check_str_contains(html, "class=\"group-tree__node group-tree__node--depth-1\" role=\"treeitem\"");
     check_str_contains(html, "aria-label=\"Roles pagination\"");
-    check_str_contains(html, "aria-label=\"ACL rules pagination\"");
+    check_str_contains(html, "aria-label=\"User ACL pagination\"");
     check_str_contains(html, "aria-label=\"Audit pagination\"");
     check_str_contains(html, "aria-label=\"Users tools\"");
     check_str_contains(html, "aria-label=\"Groups tools\"");
     check_str_contains(html, "aria-label=\"Roles tools\"");
-    check_str_contains(html, "aria-label=\"ACL rules tools\"");
+    check_str_contains(html, "aria-label=\"User ACL tools\"");
     check_str_contains(html, "popovertarget=\"users-query\"");
     check_str_contains(html, "popovertarget=\"users-add\"");
     check_str_contains(html, "popovertarget=\"user-access-1\"");
@@ -604,16 +612,23 @@ spec("Flowie ACL dashboard") {
     check_str_contains(html, "data-request-id");
     check_false(strstr(html, "Request ID") != NULL);
     check_str_contains(html, "data-acl-builder-host");
-    check_str_contains(html, "Start from an example");
-    check_str_contains(html, "Allow event subscriptions");
-    check_false(strstr(html, "<label>Canonical rule") != NULL);
-    check_str_contains(html, "root-a / events / #");
+    check_str_contains(html, "Topic permissions<textarea data-acl-entries");
+    check_str_contains(html, "<span>Canonical document</span>");
+    check_false(strstr(html, "data-acl-action") != NULL);
+    check_str_contains(html, "<table class=\"acl-rule-table\"");
+    check_str_contains(html, "<tr class=\"acl-rule-row\"><td class=\"acl-rule__ordinal\">10</td>");
+    check_str_contains(html, "<td class=\"acl-rule__subject\"><code>device-1</code></td>");
+    check_str_contains(html, "<td class=\"acl-rule__decision\">Allow</td>");
+    check_str_contains(html, "1 statements · 1 rules");
+    check_str_contains(html, "<code>%u</code> username");
+    check_false(strstr(html, "class=\"resource-tree\"") != NULL);
+    check_str_contains(html, ">View document</summary>");
     check_false(strstr(html, "user-edit-") != NULL);
     check_false(strstr(html, "group-edit-") != NULL);
     check_false(strstr(html, "role-edit-") != NULL);
     check_str_contains(html, "popovertarget=\"user-delete-1\"");
     check_str_contains(html, "popovertarget=\"acl-edit-1\"");
-    check_str_contains(html, "Edit access rule");
+    check_str_contains(html, "Edit user ACL");
     check_str_contains(html, "popovertarget=\"acl-delete-1\"");
     check_str_contains(html, "class=\"actions-column\">Actions");
     check_false(strstr(html, "<form") != NULL);
@@ -1076,10 +1091,10 @@ spec("Flowie ACL dashboard") {
                                                        strlen(body)),
                  TURBO_OK);
     (void)snprintf(body, sizeof(body),
-                   "csrf=%s&operation=policy.rule.put&ordinal=10&"
-                   "rule_line=allow|any|*|root-a|subscribe|mqtt_topic|adapter|root-a/events/%%23&"
-                   "request_id=request-rule-put",
-                   DASHBOARD_CSRF);
+                    "csrf=%s&operation=policy.rule.put&ordinal=10&"
+                    "rule_line=user%%20device-1%%20allow&"
+                    "request_id=request-rule-put",
+                    DASHBOARD_CSRF);
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_OK);

@@ -423,7 +423,7 @@ static int control_test_seed_store(const char *database_path, char *secret_base6
   if (rc == TURBO_OK) {
     rule.domain_id = "root-a";
     rule.ordinal = 10u;
-    rule.rule_line = "allow|any|*|root-a|subscribe|mqtt_topic|adapter|root-a/events/#";
+    rule.rule_line = "user admin-a allow";
     rule.actor = "bootstrap";
     rule.request_id = "integration-policy-rule";
     rule.expected_revision = revision;
@@ -823,8 +823,7 @@ static void control_test_http_task(coro_t *coroutine, void *arg) {
       response && response->status_code == 200 && response->error_code == HTTP_ERROR_NONE &&
       response->body && strstr(response->body, "\"version\":3") != NULL &&
       strstr(response->body, "\"policy_version\":1") != NULL &&
-      strstr(response->body, "allow|any|*|root-a|subscribe|mqtt_topic|adapter|root-a/events/#") !=
-          NULL;
+      strstr(response->body, "allow|principal|admin-a|root-a|connect|generic|prefix|") != NULL;
   http_response_free(response);
 
   response = control_test_acl_request(state, NULL, NULL,
