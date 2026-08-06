@@ -25,7 +25,7 @@ Graph；`flowie_endpoint_core_*` 直连 endpoint 不创建 Graph。只有调用�
 
 服务端不会从 Broker YAML 中读取 ACL rule body，也不会让 MQTT worker 连接用户认证数据库。生产入口
 使用 `flowie_server --control-config <flowie-control.yml>` 在同一应用生命周期内启动 Control runtime；
-MQTT worker 仍只通过 loopback HTTPS `/v4/authenticate` 和 `/v4/acl` 访问它，不跨层调用 Repository。
+MQTT worker 仍只通过 loopback HTTPS `/v4/authenticate` 和 `/v4/acl/check` 访问它，不跨层调用 Repository。
 Control 可把本地 Auth/ACL/管理事实存入 SQLite 或 PostgreSQL；数据库连接与权限不会进入 MQTT worker。
 独立 `flowie-control` 可执行文件保留为兼容、诊断入口，不是推荐的生产组合入口。
 

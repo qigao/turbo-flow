@@ -57,6 +57,13 @@ static int sqlite_credential_state(void *ctx, const char *domain_id, const char 
                                                principal_id, result);
 }
 
+static int sqlite_credential_resolve(void *ctx, const char *principal_id, const void *secret,
+                                     size_t secret_size,
+                                     flowie_control_credential_resolution_t *result) {
+  return flowie_control_store_credential_resolve((flowie_control_store_t *)ctx, principal_id,
+                                                 secret, secret_size, result);
+}
+
 static int sqlite_current_revision(void *ctx, uint64_t *revision_out) {
   return flowie_control_store_current_revision((flowie_control_store_t *)ctx, revision_out);
 }
@@ -232,7 +239,8 @@ static const flowie_control_repository_user_ops_t SQLITE_USER_OPS = {
     sqlite_user_create,       sqlite_user_disable,  sqlite_user_get,
     sqlite_user_list};
 static const flowie_control_repository_auth_ops_t SQLITE_AUTH_OPS = {
-    sqlite_credential_verify, sqlite_credential_state, sqlite_current_revision,
+    sqlite_credential_verify, sqlite_credential_state, sqlite_credential_resolve,
+    sqlite_current_revision,
     sqlite_principal_snapshot, sqlite_external_principal_snapshot};
 static const flowie_control_repository_credential_ops_t SQLITE_CREDENTIAL_OPS = {
     sqlite_credential_generate, sqlite_credential_rotate, sqlite_credential_revoke};
@@ -262,6 +270,7 @@ int flowie_control_repository_validate(const flowie_control_repository_t *reposi
       !repository->user->domain_list || !repository->user->create ||
       !repository->user->disable || !repository->user->get || !repository->user->list ||
       !repository->auth->credential_verify || !repository->auth->credential_state ||
+      !repository->auth->credential_resolve ||
       !repository->auth->current_revision || !repository->auth->principal_snapshot ||
       !repository->auth->external_principal_snapshot || !repository->credential->generate ||
       !repository->credential->rotate || !repository->credential->revoke ||

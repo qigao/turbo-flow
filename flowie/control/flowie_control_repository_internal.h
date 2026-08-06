@@ -48,6 +48,9 @@ typedef struct flowie_control_repository_auth_ops_s {
                            flowie_control_credential_verify_result_t *result);
   int (*credential_state)(void *ctx, const char *domain_id, const char *principal_id,
                           flowie_control_credential_verify_result_t *result);
+  int (*credential_resolve)(void *ctx, const char *principal_id, const void *secret,
+                            size_t secret_size,
+                            flowie_control_credential_resolution_t *result);
   int (*current_revision)(void *ctx, uint64_t *revision_out);
   int (*principal_snapshot)(void *ctx, const char *domain_id, const char *principal_id,
                             const flowie_control_credential_verify_result_t *expected,

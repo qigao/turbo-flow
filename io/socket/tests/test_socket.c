@@ -1365,7 +1365,12 @@ spec("turbo_flow_coronet") {
     check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
     check_int_eq(turbo_flow_compile(flow), TURBO_OK);
     check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_ETIMEDOUT);
+    /* The TEST-NET sink either hangs until the send deadline (TURBO_ETIMEDOUT)
+     * or fails the connect immediately with a platform-specific connect error.
+     * Either way the payload must not be accepted as delivered. */
+    int publish_rc = turbo_flow_publish(flow, "input", &msg);
+    check_true(publish_rc != TURBO_OK);
+    check_int_ne(publish_rc, TURBO_EBUSY);
 
     turbo_flow_msg_cleanup(&msg);
     check_int_eq(turbo_flow_stop(flow), TURBO_OK);

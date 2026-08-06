@@ -262,10 +262,64 @@
     }).join("");
   }
 
+  function selectCredentialToken(secret) {
+    var token = secret ? secret.querySelector("[data-credential-token]") : null;
+    var selection;
+    var range;
+
+    if (!token) return;
+    token.focus();
+    if (typeof window.getSelection !== "function" || typeof document.createRange !== "function") return;
+    selection = window.getSelection();
+    range = document.createRange();
+    range.selectNodeContents(token);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function focusCredentialSecret(target) {
+    var secret = target ? target.querySelector("[data-credential-secret]") : null;
+    if (!secret) return;
+    deferFocus(function () {
+      if (secret.isConnected) secret.focus();
+    });
+  }
+
   document.addEventListener("click", function (event) {
     var option = event.target.closest("[data-picker-option]");
     var popoverButton = event.target.closest("[popovertarget]");
+    var copyButton = event.target.closest("[data-copy-credential]");
+    var dismissButton = event.target.closest("[data-dismiss-credential]");
+    var secret;
+    var token;
+    var status;
     var popover;
+
+    if (dismissButton) {
+      secret = dismissButton.closest("[data-credential-secret]");
+      token = secret ? secret.querySelector("[data-credential-token]") : null;
+      if (token) token.textContent = "";
+      if (secret) secret.remove();
+      return;
+    }
+    if (copyButton) {
+      secret = copyButton.closest("[data-credential-secret]");
+      token = secret ? secret.querySelector("[data-credential-token]") : null;
+      status = secret ? secret.querySelector("[data-credential-copy-status]") : null;
+      if (!token || !status) return;
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        navigator.clipboard.writeText(token.textContent).then(function () {
+          status.textContent = "Token copied.";
+        }).catch(function () {
+          selectCredentialToken(secret);
+          status.textContent = "Select and copy the token manually.";
+        });
+      } else {
+        selectCredentialToken(secret);
+        status.textContent = "Select and copy the token manually.";
+      }
+      return;
+    }
 
     if (popoverButton) {
       popover = document.getElementById(popoverButton.getAttribute("popovertarget"));
@@ -329,6 +383,10 @@
     if (!activePopover) return;
     restorePopoverState(activePopover, false);
     activePopover = null;
+  });
+
+  document.addEventListener("htmx:afterSwap", function (event) {
+    focusCredentialSecret(event.detail.target);
   });
 
   document.addEventListener("htmx:configRequest", function (event) {

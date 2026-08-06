@@ -11,7 +11,8 @@ extern "C" {
 
 #define TURBO_FLOW_HTTP_AUTH_API_VERSION_V1 1u
 #define TURBO_FLOW_HTTP_AUTH_API_VERSION_V2 2u
-#define TURBO_FLOW_HTTP_AUTH_API_VERSION TURBO_FLOW_HTTP_AUTH_API_VERSION_V2
+#define TURBO_FLOW_HTTP_AUTH_API_VERSION_V3 3u
+#define TURBO_FLOW_HTTP_AUTH_API_VERSION TURBO_FLOW_HTTP_AUTH_API_VERSION_V3
 #define TURBO_FLOW_HTTP_AUTH_BACKEND "https"
 #define TURBO_FLOW_HTTP_AUTH_DEFAULT_TIMEOUT_MS 3000u
 #define TURBO_FLOW_HTTP_AUTH_MAX_TIMEOUT_MS 30000u
@@ -32,6 +33,8 @@ typedef struct turbo_flow_http_auth_provider_config_s {
   uint32_t api_version;
   const char *url;
   const char *method;
+  const char *service_id;
+  const char *service_domain;
   const char *service_token_ref;
   uint32_t timeout_ms;
   size_t max_secret_size;
@@ -42,6 +45,8 @@ typedef struct turbo_flow_http_auth_provider_config_s {
 #define TURBO_FLOW_HTTP_AUTH_PROVIDER_CONFIG_INIT                                                  \
   {sizeof(turbo_flow_http_auth_provider_config_t),                                                 \
    TURBO_FLOW_HTTP_AUTH_API_VERSION,                                                               \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
    NULL,                                                                                           \
    NULL,                                                                                           \
    NULL,                                                                                           \

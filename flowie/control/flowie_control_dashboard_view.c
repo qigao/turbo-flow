@@ -3,6 +3,7 @@
 
 #include "fmt.h"
 #include "http_common.h"
+#include "monocypher.h"
 #include "mustache_json.h"
 #include "turbo_error.h"
 #include "turbo_fs.h"
@@ -638,6 +639,9 @@ static int flowie_control_dashboard_add_users(json_value_t *model,
           flowie_control_dashboard_json_string(item, "principal_type", users[index].principal_type);
     if (rc == TURBO_OK)
       rc = flowie_control_dashboard_json_bool(item, "enabled", users[index].enabled);
+    if (rc == TURBO_OK)
+      rc = flowie_control_dashboard_json_bool(
+          item, "is_service", strcmp(users[index].principal_type, "service") == 0);
     if (rc == TURBO_OK) rc = flowie_control_dashboard_json_array_take(array, item);
     else flowie_control_dashboard_json_free(item);
   }
@@ -929,7 +933,9 @@ int flowie_control_dashboard_view_render_content(
     const flowie_control_management_caller_t *authority_caller,
     const flowie_control_management_caller_t *caller,
     const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u],
-    const flowie_control_dashboard_page_t *page, char **html_out, size_t *html_size_out) {
+    const flowie_control_dashboard_page_t *page,
+    const flowie_control_dashboard_action_result_t *action_result, char **html_out,
+    size_t *html_size_out) {
   flowie_control_management_status_t status = FLOWIE_CONTROL_MANAGEMENT_STATUS_INIT;
   json_value_t *model = NULL;
   char *action_url = NULL;
@@ -940,6 +946,7 @@ int flowie_control_dashboard_view_render_content(
   char *acls_url = NULL;
   char *audit_url = NULL;
   int can_select_root;
+  int can_create_domain;
   int can_user_admin;
   int can_security_admin;
   int can_policy_admin;
@@ -957,6 +964,8 @@ int flowie_control_dashboard_view_render_content(
   can_select_root =
       strcmp(authority_caller->domain_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN) == 0 &&
       (authority_caller->permissions & FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN) != 0u;
+  can_create_domain =
+      can_select_root && strcmp(caller->domain_id, FLOWIE_CONTROL_MANAGEMENT_SYSTEM_DOMAIN) == 0;
   can_user_admin = (caller->permissions & (FLOWIE_CONTROL_MANAGEMENT_USER_ADMIN |
                                            FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN |
                                            FLOWIE_CONTROL_MANAGEMENT_SYSTEM_ADMIN)) != 0u;
@@ -1030,8 +1039,25 @@ int flowie_control_dashboard_view_render_content(
     rc = flowie_control_dashboard_json_bool(model, "can_audit_read", can_audit_read);
   if (rc == TURBO_OK)
     rc = flowie_control_dashboard_json_bool(model, "can_select_root", can_select_root);
+  if (rc == TURBO_OK)
+    rc = flowie_control_dashboard_json_bool(model, "can_create_domain", can_create_domain);
   if (rc == TURBO_OK && can_select_root)
     rc = flowie_control_dashboard_add_domains(model, service, authority_caller, caller);
+  if (rc == TURBO_OK && action_result &&
+      action_result->kind == FLOWIE_CONTROL_DASHBOARD_ACTION_CREDENTIAL_ISSUED) {
+    if (strcmp(action_result->domain_id, caller->domain_id) != 0) rc = TURBO_EPROTO;
+    else {
+      rc = flowie_control_dashboard_json_bool(model, "credential_issued", 1);
+      if (rc == TURBO_OK)
+        rc = flowie_control_dashboard_json_string(model, "credential_domain",
+                                                  action_result->domain_id);
+      if (rc == TURBO_OK)
+        rc = flowie_control_dashboard_json_string(model, "credential_principal",
+                                                  action_result->principal_id);
+      if (rc == TURBO_OK)
+        rc = flowie_control_dashboard_json_string(model, "credential_token", action_result->token);
+    }
+  }
   if (rc == TURBO_OK)
     rc = flowie_control_dashboard_json_bool(model, "show_overview", show_overview);
   if (rc == TURBO_OK) rc = flowie_control_dashboard_json_bool(model, "show_users", show_users);
@@ -1081,8 +1107,13 @@ int flowie_control_dashboard_view_render_content(
     rc = flowie_control_dashboard_add_audits(model, service, caller, page);
   if (rc == TURBO_OK)
     rc = flowie_control_dashboard_render_template(view->content_template, model, html_out,
-                                                  html_size_out);
+                                                   html_size_out);
 done:
+  if (model) {
+    json_value_t *secret = turbo_json_object_get(model, "credential_token");
+    const char *secret_text = secret ? turbo_json_string(secret) : NULL;
+    if (secret_text) crypto_wipe((void *)secret_text, turbo_json_string_len(secret));
+  }
   tstr_free(action_url);
   tstr_free(overview_url);
   tstr_free(users_url);

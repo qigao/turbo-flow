@@ -20,6 +20,9 @@ extern "C" {
 #define FLOWIE_CONTROL_CONFIG_SECRET_REF_MAX 1024u
 #define FLOWIE_CONTROL_CONFIG_ERROR_PATH_MAX 255u
 #define FLOWIE_CONTROL_CONFIG_ERROR_MESSAGE_MAX 255u
+#define FLOWIE_CONTROL_CONFIG_LISTENER_DEFAULT_COROUTINE_STACK_SIZE (256u * 1024u)
+#define FLOWIE_CONTROL_CONFIG_LISTENER_MIN_COROUTINE_STACK_SIZE (256u * 1024u)
+#define FLOWIE_CONTROL_CONFIG_LISTENER_MAX_COROUTINE_STACK_SIZE (2u * 1024u * 1024u)
 #define FLOWIE_CONTROL_CONFIG_SESSION_DEFAULT_CAPACITY 1024u
 #define FLOWIE_CONTROL_CONFIG_SESSION_MAX_CAPACITY 65536u
 #define FLOWIE_CONTROL_CONFIG_SESSION_DEFAULT_MAX_PER_PRINCIPAL 5u
@@ -88,6 +91,7 @@ typedef struct flowie_control_config_limits_s {
 typedef struct flowie_control_config_listener_s {
   char host[FLOWIE_CONTROL_CONFIG_HOST_MAX + 1u];
   uint16_t port;
+  size_t coroutine_stack_size;
   flowie_control_config_tls_t tls;
   flowie_control_config_limits_t limits;
 } flowie_control_config_listener_t;
@@ -138,13 +142,6 @@ typedef struct flowie_control_config_auth_s {
   size_t credential_cache_capacity;
   uint64_t credential_cache_ttl_seconds;
   flowie_control_config_auth_local_executor_t local_executor;
-  size_t service_binding_count;
-  struct {
-    char service_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
-    char token_ref[FLOWIE_CONTROL_CONFIG_SECRET_REF_MAX + 1u];
-    char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
-    char peer_certificate_sha256[FLOWIE_CONTROL_AUTH_CERT_SHA256_TEXT_SIZE + 1u];
-  } service_bindings[FLOWIE_CONTROL_AUTH_MAX_SERVICE_BINDINGS];
   flowie_control_config_external_https_t external_https;
 } flowie_control_config_auth_t;
 
@@ -185,6 +182,7 @@ typedef struct flowie_control_config_s {
     sizeof(flowie_control_config_t), FLOWIE_CONTROL_CONFIG_VERSION,                                \
         {{0},                                                                                      \
          8443u,                                                                                    \
+         FLOWIE_CONTROL_CONFIG_LISTENER_DEFAULT_COROUTINE_STACK_SIZE,                              \
          {{0}, {0}, {0}, {0}, 0},                                                                  \
          {128u, 4096u, 2048u, 128u, 4096u, 32u, 2048u, 65536u, 64}},                               \
         FLOWIE_CONTROL_CONFIG_STORE_SQLITE, {0}, 1000,                                             \
@@ -203,7 +201,7 @@ typedef struct flowie_control_config_s {
           {0, FLOWIE_CONTROL_CONFIG_AUTH_LOCAL_EXECUTOR_DEFAULT_WORKERS,                           \
            FLOWIE_CONTROL_CONFIG_AUTH_LOCAL_EXECUTOR_DEFAULT_QUEUE_CAPACITY,                       \
            FLOWIE_CONTROL_CONFIG_AUTH_LOCAL_EXECUTOR_DEFAULT_DEADLINE_MS},                         \
-          0u, {{0}}, {                                                                             \
+          {                                                                                        \
         0, {0}, {0}, {0}, {0}, FLOWIE_CONTROL_CONFIG_EXTERNAL_HTTPS_DEFAULT_TIMEOUT_MS,            \
             FLOWIE_CONTROL_CONFIG_EXTERNAL_HTTPS_DEFAULT_RESPONSE_SIZE,                            \
             FLOWIE_CONTROL_CONFIG_EXTERNAL_HTTPS_DEFAULT_MAX_IN_FLIGHT, {                          \

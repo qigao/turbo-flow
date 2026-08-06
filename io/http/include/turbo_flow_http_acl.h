@@ -10,7 +10,9 @@ extern "C" {
 
 #define TURBO_FLOW_HTTP_ACL_API_VERSION_V1 1u
 #define TURBO_FLOW_HTTP_ACL_API_VERSION_V2 2u
-#define TURBO_FLOW_HTTP_ACL_API_VERSION TURBO_FLOW_HTTP_ACL_API_VERSION_V2
+#define TURBO_FLOW_HTTP_ACL_API_VERSION_V3 3u
+#define TURBO_FLOW_HTTP_ACL_API_VERSION_V4 4u
+#define TURBO_FLOW_HTTP_ACL_API_VERSION TURBO_FLOW_HTTP_ACL_API_VERSION_V4
 #define TURBO_FLOW_HTTP_ACL_BACKEND "https"
 #define TURBO_FLOW_HTTP_ACL_DEFAULT_TIMEOUT_MS 3000u
 #define TURBO_FLOW_HTTP_ACL_MAX_TIMEOUT_MS 30000u
@@ -23,10 +25,11 @@ typedef struct turbo_flow_http_acl_provider_config_s {
   size_t size;
   uint32_t api_version;
   const char *url;
+  const char *service_id;
+  const char *service_domain;
   const char *service_token_ref;
   uint32_t timeout_ms;
   size_t max_response_size;
-  size_t max_rules;
   turbo_flow_security_key_provider_t key_provider;
   turbo_flow_http_tls_client_config_t tls;
 } turbo_flow_http_acl_provider_config_t;
@@ -36,13 +39,14 @@ typedef struct turbo_flow_http_acl_provider_config_s {
    TURBO_FLOW_HTTP_ACL_API_VERSION,                                                                \
    NULL,                                                                                           \
    NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
    TURBO_FLOW_HTTP_ACL_DEFAULT_TIMEOUT_MS,                                                         \
    TURBO_FLOW_HTTP_ACL_DEFAULT_RESPONSE_LIMIT,                                                     \
-   TURBO_FLOW_SECURITY_MAX_RULES,                                                                  \
    TURBO_FLOW_SECURITY_KEY_PROVIDER_INIT,                                                          \
    TURBO_FLOW_HTTP_TLS_CLIENT_CONFIG_INIT}
 
-/** Create an HTTPS-only, coroutine-driven ACL bundle provider. */
+/** Create an HTTPS-only, coroutine-driven per-request ACL decision provider. */
 CXX_C_API int
 turbo_flow_http_acl_provider_create(const turbo_flow_http_acl_provider_config_t *config,
                                     turbo_flow_http_acl_provider_t **out);
@@ -53,7 +57,7 @@ CXX_C_API int turbo_flow_http_acl_provider_create_resolved(
     const turbo_flow_security_key_provider_t *key_provider, turbo_flow_http_acl_provider_t **out,
     turbo_flow_config_error_t *error);
 
-CXX_C_API const turbo_flow_security_policy_provider_t *
+CXX_C_API const turbo_flow_security_authorization_provider_t *
 turbo_flow_http_acl_provider_interface(const turbo_flow_http_acl_provider_t *provider);
 
 CXX_C_API void turbo_flow_http_acl_provider_destroy(turbo_flow_http_acl_provider_t *provider);

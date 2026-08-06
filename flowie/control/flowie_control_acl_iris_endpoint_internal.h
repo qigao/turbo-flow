@@ -9,8 +9,8 @@
 extern "C" {
 #endif
 
-#define FLOWIE_CONTROL_ACL_HTTP_PATH "/v4/acl"
-#define FLOWIE_CONTROL_ACL_HTTP_PROTOCOL_VERSION 3u
+#define FLOWIE_CONTROL_ACL_HTTP_PATH "/v4/acl/check"
+#define FLOWIE_CONTROL_ACL_HTTP_PROTOCOL_VERSION 4u
 #define FLOWIE_CONTROL_ACL_HTTP_DEFAULT_RESPONSE_MAX (16u * 1024u * 1024u)
 
 typedef struct flowie_control_acl_iris_endpoint_s flowie_control_acl_iris_endpoint_t;

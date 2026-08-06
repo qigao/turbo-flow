@@ -10,7 +10,6 @@
 #include "turbo_error.h"
 #include "turbo_parser.h"
 #include "turbo_str.h"
-#include "turbo_vec.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -19,22 +18,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FLOW_HTTP_ACL_PROTOCOL_VERSION 3u
+#define FLOW_HTTP_ACL_PROTOCOL_VERSION 4u
 #define FLOW_HTTP_ACL_TOKEN_LIMIT 4096u
 
-typedef struct flow_http_acl_loaded_s {
-  turbo_vec_t rules;
-} flow_http_acl_loaded_t;
-
 struct turbo_flow_http_acl_provider_s {
-  turbo_flow_security_policy_provider_t interface;
+  turbo_flow_security_authorization_provider_t interface;
   tstr_t url;
   tstr_t host;
+  tstr_t service_id;
+  tstr_t service_domain;
   tstr_t service_token_ref;
   uint16_t port;
   uint32_t timeout_ms;
   size_t max_response_size;
-  size_t max_rules;
   turbo_flow_security_key_provider_t key_provider;
   flow_http_tls_client_t tls;
 };
@@ -140,83 +136,6 @@ static int flow_http_acl_json_u64(const json_value_t *value, uint64_t *out) {
   return TURBO_OK;
 }
 
-static int flow_http_acl_decode_rule(const json_value_t *value, turbo_flow_security_rule_t *rule) {
-  const char *line;
-  if (!value || turbo_json_type(value) != TURBO_JSON_STRING || !rule) return TURBO_EPROTO;
-  line = turbo_json_string(value);
-  if (!line || turbo_json_string_len(value) == 0u ||
-      turbo_json_string_len(value) > TURBO_FLOW_SECURITY_RULE_LINE_MAX)
-    return TURBO_EPROTO;
-  return turbo_flow_security_rule_parse_line(line, turbo_json_string_len(value), rule);
-}
-
-static void flow_http_acl_loaded_destroy(flow_http_acl_loaded_t *loaded) {
-  if (!loaded) return;
-  turbo_vec_destroy(&loaded->rules);
-  free(loaded);
-}
-
-void flow_http_acl_decoded_cleanup(turbo_flow_security_policy_bundle_t *bundle) {
-  if (!bundle) return;
-  flow_http_acl_loaded_destroy((flow_http_acl_loaded_t *)bundle->provider_bundle);
-  *bundle = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
-}
-
-int flow_http_acl_decode_response(const char *body, size_t body_size, size_t max_rules,
-                                  turbo_flow_security_policy_bundle_t *bundle_out) {
-  static const char *const allowed[] = {"version", "policy_version", "expires_at", "rules"};
-  turbo_json_doc_t *document = NULL;
-  flow_http_acl_loaded_t *loaded = NULL;
-  json_value_t *rules;
-  uint64_t protocol_version;
-  int rc = TURBO_EPROTO;
-  if (!body || body_size == 0u || !bundle_out) return TURBO_EPROTO;
-  *bundle_out = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
-  if (turbo_parse_json((const uint8_t *)body, body_size, &document) != TURBO_OK || !document)
-    return TURBO_EPROTO;
-  if (flow_http_acl_json_fields(document, allowed, sizeof(allowed) / sizeof(allowed[0])) !=
-          TURBO_OK ||
-      flow_http_acl_json_u64(turbo_json_object_get(document, "version"), &protocol_version) !=
-          TURBO_OK ||
-      protocol_version != FLOW_HTTP_ACL_PROTOCOL_VERSION ||
-      flow_http_acl_json_u64(turbo_json_object_get(document, "policy_version"),
-                             &bundle_out->policy_version) != TURBO_OK ||
-      bundle_out->policy_version == 0u ||
-      flow_http_acl_json_u64(turbo_json_object_get(document, "expires_at"),
-                             &bundle_out->expires_at) != TURBO_OK)
-    goto done;
-  rules = turbo_json_object_get(document, "rules");
-  if (!rules || turbo_json_type(rules) != TURBO_JSON_ARRAY || turbo_json_array_size(rules) == 0u ||
-      turbo_json_array_size(rules) > max_rules)
-    goto done;
-  loaded = (flow_http_acl_loaded_t *)calloc(1u, sizeof(*loaded));
-  if (!loaded) {
-    rc = TURBO_ENOMEM;
-    goto done;
-  }
-  rc = turbo_vec_init(&loaded->rules, sizeof(turbo_flow_security_rule_t));
-  if (rc != TURBO_OK) goto done;
-  rc = turbo_vec_reserve(&loaded->rules, turbo_json_array_size(rules));
-  for (size_t i = 0u; rc == TURBO_OK && i < turbo_json_array_size(rules); ++i) {
-    turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
-    rc = flow_http_acl_decode_rule(turbo_json_array_get(rules, i), &rule);
-    if (rc == TURBO_OK) rc = turbo_vec_push(&loaded->rules, &rule);
-  }
-  if (rc != TURBO_OK) goto done;
-  bundle_out->rules = (const turbo_flow_security_rule_t *)loaded->rules.data;
-  bundle_out->rule_count = turbo_vec_size(&loaded->rules);
-  bundle_out->provider_bundle = loaded;
-  loaded = NULL;
-  rc = TURBO_OK;
-
-done:
-  flow_http_acl_loaded_destroy(loaded);
-  turbo_free_json(&document);
-  if (rc != TURBO_OK)
-    *bundle_out = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
-  return rc;
-}
-
 static int flow_http_acl_content_type_json(const char *headers, size_t size) {
   static const char name[] = "content-type:";
   static const char media[] = "application/json";
@@ -249,20 +168,211 @@ static int flow_http_acl_content_type_json(const char *headers, size_t size) {
   return matches == 1;
 }
 
-static int flow_http_acl_load(void *ctx, uint64_t required_version,
-                              turbo_flow_security_policy_bundle_t *bundle_out) {
+static void flow_http_acl_free_json_value(json_value_t *value) {
+  turbo_json_doc_t *owned = (turbo_json_doc_t *)value;
+  if (owned) turbo_free_json(&owned);
+}
+
+static int flow_http_acl_json_add(json_value_t *object, const char *field, json_value_t *value) {
+  if (value && turbo_json_object_add_checked(object, field, value)) return TURBO_OK;
+  flow_http_acl_free_json_value(value);
+  return TURBO_ENOMEM;
+}
+
+static int flow_http_acl_json_array_add(json_value_t *array, json_value_t *value) {
+  if (value && turbo_json_array_add_checked(array, value)) return TURBO_OK;
+  flow_http_acl_free_json_value(value);
+  return TURBO_ENOMEM;
+}
+
+static int flow_http_acl_add_string_array(json_value_t *object, const char *field,
+                                          const char *values, size_t stride, uint32_t count) {
+  json_value_t *array = turbo_json_create_array();
+  int rc = array ? TURBO_OK : TURBO_ENOMEM;
+  for (uint32_t index = 0u; rc == TURBO_OK && index < count; ++index)
+    rc = flow_http_acl_json_array_add(array,
+                                      turbo_json_create_string(values + (size_t)index * stride));
+  if (rc == TURBO_OK) {
+    rc = flow_http_acl_json_add(object, field, array);
+    array = NULL;
+  }
+  if (rc != TURBO_OK) flow_http_acl_free_json_value(array);
+  return rc;
+}
+
+static int flow_http_acl_bounded_string(const uint8_t *value, size_t size, size_t maximum,
+                                        char **out) {
+  char *copy;
+  if (out) *out = NULL;
+  if (!out || size > maximum || (size != 0u && !value) || (value && memchr(value, '\0', size)))
+    return TURBO_EINVAL;
+  copy = (char *)malloc(size + 1u);
+  if (!copy) return TURBO_ENOMEM;
+  if (size != 0u) memcpy(copy, value, size);
+  copy[size] = '\0';
+  *out = copy;
+  return TURBO_OK;
+}
+
+int flow_http_acl_encode_check_request(const turbo_flow_security_request_t *request,
+                                       char **body_out, size_t *body_size_out) {
+  turbo_json_doc_t *document = NULL;
+  json_value_t *principal = NULL;
+  char *username = NULL;
+  char *client_id = NULL;
+  const char *access;
+  int rc = TURBO_ENOMEM;
+  if (body_out) *body_out = NULL;
+  if (body_size_out) *body_size_out = 0u;
+  if (!request || request->size < sizeof(*request) || !request->principal || !request->resource ||
+      !body_out || !body_size_out ||
+      request->principal->size < sizeof(*request->principal) ||
+      request->principal->role_count > TURBO_FLOW_SECURITY_MAX_ROLES ||
+      request->principal->group_count > TURBO_FLOW_SECURITY_MAX_GROUPS ||
+      (request->resource_type != TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC &&
+       request->resource_type != TURBO_FLOW_SECURITY_RESOURCE_GENERIC))
+    return TURBO_EINVAL;
+  access = request->action == TURBO_FLOW_SECURITY_ACTION_SUBSCRIBE
+               ? "read"
+               : (request->action == TURBO_FLOW_SECURITY_ACTION_PUBLISH
+                      ? "write"
+                      : (request->action == TURBO_FLOW_SECURITY_ACTION_CONNECT ? "connect" : NULL));
+  if (!access) return TURBO_EINVAL;
+  rc = flow_http_acl_bounded_string(request->username, request->username_size,
+                                    TURBO_FLOW_SECURITY_ID_MAX, &username);
+  if (rc == TURBO_OK)
+    rc = flow_http_acl_bounded_string(request->client_id, request->client_id_size,
+                                      TURBO_FLOW_SECURITY_ID_MAX, &client_id);
+  if (rc != TURBO_OK) goto done;
+  document = (turbo_json_doc_t *)turbo_json_create_object();
+  principal = turbo_json_create_object();
+  if (!document || !principal) {
+    rc = TURBO_ENOMEM;
+    goto done;
+  }
+  if (flow_http_acl_json_add(principal, "id",
+                             turbo_json_create_string(request->principal->principal_id)) !=
+          TURBO_OK ||
+      flow_http_acl_json_add(principal, "type",
+                             turbo_json_create_string(request->principal->principal_type)) !=
+          TURBO_OK ||
+      flow_http_acl_json_add(principal, "domain",
+                             turbo_json_create_string(request->principal->domain_id)) != TURBO_OK ||
+      flow_http_acl_json_add(principal, "expires_at",
+                             turbo_json_create_uint64(request->principal->expires_at)) != TURBO_OK ||
+      flow_http_acl_json_add(principal, "policy_version",
+                             turbo_json_create_uint64(request->principal->policy_version)) !=
+          TURBO_OK ||
+      flow_http_acl_add_string_array(principal, "roles", (const char *)request->principal->roles,
+                                     sizeof(request->principal->roles[0]),
+                                     request->principal->role_count) != TURBO_OK ||
+      flow_http_acl_add_string_array(principal, "groups", (const char *)request->principal->groups,
+                                     sizeof(request->principal->groups[0]),
+                                     request->principal->group_count) != TURBO_OK ||
+      flow_http_acl_json_add(document, "version",
+                             turbo_json_create_uint64(FLOW_HTTP_ACL_PROTOCOL_VERSION)) != TURBO_OK ||
+      flow_http_acl_json_add(document, "access", turbo_json_create_string(access)) != TURBO_OK ||
+      flow_http_acl_json_add(document, "topic",
+                             turbo_json_create_string(request->resource)) != TURBO_OK ||
+      flow_http_acl_json_add(document, "username", turbo_json_create_string(username)) !=
+          TURBO_OK ||
+      flow_http_acl_json_add(document, "client_id", turbo_json_create_string(client_id)) !=
+          TURBO_OK) {
+    rc = TURBO_ENOMEM;
+    goto done;
+  }
+  rc = flow_http_acl_json_add(document, "principal", principal);
+  principal = NULL;
+  if (rc != TURBO_OK) goto done;
+  *body_out = turbo_json_serialize(document, body_size_out);
+  rc = *body_out ? TURBO_OK : TURBO_ENOMEM;
+
+done:
+  flow_http_acl_free_json_value(principal);
+  turbo_free_json(&document);
+  free(username);
+  free(client_id);
+  return rc;
+}
+
+static int flow_http_acl_reason(const char *value,
+                                turbo_flow_security_decision_reason_t *reason_out) {
+  if (!value || !reason_out) return TURBO_EPROTO;
+  if (strcmp(value, "allow_rule") == 0) *reason_out = TURBO_FLOW_SECURITY_REASON_ALLOW_RULE;
+  else if (strcmp(value, "deny_rule") == 0) *reason_out = TURBO_FLOW_SECURITY_REASON_DENY_RULE;
+  else if (strcmp(value, "default_deny") == 0)
+    *reason_out = TURBO_FLOW_SECURITY_REASON_DEFAULT_DENY;
+  else if (strcmp(value, "domain_mismatch") == 0)
+    *reason_out = TURBO_FLOW_SECURITY_REASON_DOMAIN_MISMATCH;
+  else if (strcmp(value, "principal_expired") == 0)
+    *reason_out = TURBO_FLOW_SECURITY_REASON_PRINCIPAL_EXPIRED;
+  else if (strcmp(value, "policy_version_mismatch") == 0)
+    *reason_out = TURBO_FLOW_SECURITY_REASON_POLICY_VERSION_MISMATCH;
+  else return TURBO_EPROTO;
+  return TURBO_OK;
+}
+
+int flow_http_acl_decode_check_response(const char *body, size_t body_size,
+                                        turbo_flow_security_decision_t *decision_out) {
+  static const char *const allowed[] = {"version", "allowed", "reason", "policy_version"};
+  turbo_json_doc_t *document = NULL;
+  json_value_t *allowed_value;
+  json_value_t *reason;
+  uint64_t version = 0u;
+  int rc = TURBO_EPROTO;
+  if (!body || body_size == 0u || !decision_out || decision_out->size < sizeof(*decision_out))
+    return TURBO_EINVAL;
+  *decision_out = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+  if (turbo_parse_json((const uint8_t *)body, body_size, &document) != TURBO_OK || !document)
+    return TURBO_EPROTO;
+  allowed_value = turbo_json_object_get(document, "allowed");
+  reason = turbo_json_object_get(document, "reason");
+  if (turbo_json_object_size(document) != sizeof(allowed) / sizeof(allowed[0]) ||
+      flow_http_acl_json_fields(document, allowed, sizeof(allowed) / sizeof(allowed[0])) !=
+          TURBO_OK ||
+      flow_http_acl_json_u64(turbo_json_object_get(document, "version"), &version) != TURBO_OK ||
+      version != FLOW_HTTP_ACL_PROTOCOL_VERSION || !allowed_value ||
+      turbo_json_type(allowed_value) != TURBO_JSON_BOOL || !reason ||
+      turbo_json_type(reason) != TURBO_JSON_STRING ||
+      flow_http_acl_reason(turbo_json_string(reason), &decision_out->reason) != TURBO_OK ||
+      flow_http_acl_json_u64(turbo_json_object_get(document, "policy_version"),
+                             &decision_out->policy_version) != TURBO_OK ||
+      decision_out->policy_version == 0u)
+    goto done;
+  decision_out->effect = turbo_json_bool(allowed_value) ? TURBO_FLOW_SECURITY_ALLOW
+                                                        : TURBO_FLOW_SECURITY_DENY;
+  if ((decision_out->effect == TURBO_FLOW_SECURITY_ALLOW &&
+       decision_out->reason != TURBO_FLOW_SECURITY_REASON_ALLOW_RULE) ||
+      (decision_out->effect == TURBO_FLOW_SECURITY_DENY &&
+       decision_out->reason == TURBO_FLOW_SECURITY_REASON_ALLOW_RULE))
+    goto done;
+  rc = TURBO_OK;
+done:
+  turbo_free_json(&document);
+  if (rc != TURBO_OK)
+    *decision_out = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+  return rc;
+}
+
+static int flow_http_acl_authorize(void *ctx, const turbo_flow_security_request_t *request,
+                                   uint64_t now_epoch_seconds,
+                                   turbo_flow_security_decision_t *decision_out) {
   turbo_flow_http_acl_provider_t *provider = (turbo_flow_http_acl_provider_t *)ctx;
   turbo_flow_security_secret_lease_t lease = TURBO_FLOW_SECURITY_SECRET_LEASE_INIT;
   http_client_t *client = NULL;
   http_response_t *response = NULL;
-  char version_header[64];
   char *authorization = NULL;
-  const char *headers[3];
+  char *body = NULL;
+  size_t body_size = 0u;
+  char service_id_header[sizeof("X-Flowie-Service-Id: ") + TURBO_FLOW_SECURITY_ID_MAX];
+  char service_domain_header[sizeof("X-Flowie-Service-Domain: ") + TURBO_FLOW_SECURITY_ID_MAX];
+  const char *headers[5];
   size_t token_size = 0u;
-  int header_count = 2;
   int rc;
-  if (!provider || !bundle_out || bundle_out->size < sizeof(*bundle_out)) return TURBO_EINVAL;
-  *bundle_out = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
+  (void)now_epoch_seconds;
+  if (!provider || !request || !decision_out || decision_out->size < sizeof(*decision_out))
+    return TURBO_EINVAL;
+  *decision_out = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
   if (!coro_running() || !coro_context_current()) return TURBO_ENOTSUP;
   rc = turbo_flow_security_secret_acquire(&provider->key_provider, provider->service_token_ref,
                                           &lease);
@@ -282,6 +392,15 @@ static int flow_http_acl_load(void *ctx, uint64_t required_version,
   memcpy(authorization, "Authorization: Bearer ", sizeof("Authorization: Bearer ") - 1u);
   memcpy(authorization + sizeof("Authorization: Bearer ") - 1u, lease.bytes, token_size);
   authorization[sizeof("Authorization: Bearer ") - 1u + token_size] = '\0';
+  if (snprintf(service_id_header, sizeof(service_id_header), "X-Flowie-Service-Id: %s",
+               provider->service_id) <= 0 ||
+      snprintf(service_domain_header, sizeof(service_domain_header),
+               "X-Flowie-Service-Domain: %s", provider->service_domain) <= 0) {
+    rc = TURBO_ERANGE;
+    goto done;
+  }
+  rc = flow_http_acl_encode_check_request(request, &body, &body_size);
+  if (rc != TURBO_OK) goto done;
   client = http_client_create(provider->url);
   if (!client) {
     rc = TURBO_EIO;
@@ -300,30 +419,18 @@ static int flow_http_acl_load(void *ctx, uint64_t required_version,
     rc = TURBO_EIO;
     goto done;
   }
-  headers[0] = "Accept: application/json";
-  headers[1] = authorization;
-  if (required_version != 0u) {
-    int written =
-        snprintf(version_header, sizeof(version_header), "X-TurboFlow-Policy-Version: %llu",
-                 (unsigned long long)required_version);
-    if (written < 0 || (size_t)written >= sizeof(version_header)) {
-      rc = TURBO_ERANGE;
-      goto done;
-    }
-    headers[2] = version_header;
-    header_count = 3;
-  }
-  response = http_request(client, HTTP_GET, provider->url, headers, header_count, NULL, 0u);
+  headers[0] = "Content-Type: application/json";
+  headers[1] = "Accept: application/json";
+  headers[2] = authorization;
+  headers[3] = service_id_header;
+  headers[4] = service_domain_header;
+  response = http_request(client, HTTP_POST, provider->url, headers, 5, body, body_size);
   if (!response) {
     rc = TURBO_EIO;
     goto done;
   }
   if (response->status_code == 401 || response->status_code == 403) {
     rc = TURBO_EPERM;
-    goto done;
-  }
-  if (response->status_code == 404) {
-    rc = TURBO_ENOENT;
     goto done;
   }
   if (response->status_code == 429) {
@@ -335,27 +442,18 @@ static int flow_http_acl_load(void *ctx, uint64_t required_version,
     rc = TURBO_EIO;
     goto done;
   }
-  rc = flow_http_acl_decode_response(response->body, response->body_len, provider->max_rules,
-                                     bundle_out);
-  if (rc == TURBO_OK && required_version != 0u && bundle_out->policy_version != required_version) {
-    flow_http_acl_decoded_cleanup(bundle_out);
-    rc = TURBO_EPROTO;
-  }
+  rc = flow_http_acl_decode_check_response(response->body, response->body_len, decision_out);
 
 done:
   if (response) http_response_free(response);
   if (client) http_client_destroy(client);
+  if (body) turbo_json_serialize_free(body);
   if (authorization) {
     crypto_wipe(authorization, sizeof("Authorization: Bearer ") + token_size);
     free(authorization);
   }
   turbo_flow_security_secret_release(&provider->key_provider, &lease);
   return rc;
-}
-
-static void flow_http_acl_release(void *ctx, turbo_flow_security_policy_bundle_t *bundle) {
-  (void)ctx;
-  flow_http_acl_decoded_cleanup(bundle);
 }
 
 int turbo_flow_http_acl_provider_create(const turbo_flow_http_acl_provider_config_t *config,
@@ -365,29 +463,30 @@ int turbo_flow_http_acl_provider_create(const turbo_flow_http_acl_provider_confi
   turbo_flow_security_secret_lease_t lease = TURBO_FLOW_SECURITY_SECRET_LEASE_INIT;
   int rc;
   if (out) *out = NULL;
-  if (!config ||
-      !((config->api_version == TURBO_FLOW_HTTP_ACL_API_VERSION_V1 &&
-         config->size == offsetof(turbo_flow_http_acl_provider_config_t, tls)) ||
-        (config->api_version == TURBO_FLOW_HTTP_ACL_API_VERSION_V2 &&
-         config->size >= sizeof(*config))) ||
-      !out || !config->url || !config->service_token_ref || !config->service_token_ref[0] ||
+  if (!config || config->api_version != TURBO_FLOW_HTTP_ACL_API_VERSION_V4 ||
+      config->size < sizeof(*config) || !out || !config->url || !config->service_id ||
+      !config->service_id[0] || strlen(config->service_id) > TURBO_FLOW_SECURITY_ID_MAX ||
+      !config->service_domain || !config->service_domain[0] ||
+      strlen(config->service_domain) > TURBO_FLOW_SECURITY_ID_MAX ||
+      !config->service_token_ref || !config->service_token_ref[0] ||
       config->timeout_ms == 0u || config->timeout_ms > TURBO_FLOW_HTTP_ACL_MAX_TIMEOUT_MS ||
       config->max_response_size == 0u ||
       config->max_response_size > TURBO_FLOW_HTTP_ACL_MAX_RESPONSE_LIMIT ||
-      config->max_rules == 0u || config->max_rules > TURBO_FLOW_SECURITY_MAX_RULES ||
       config->key_provider.size < sizeof(config->key_provider) || !config->key_provider.acquire ||
       !config->key_provider.release)
     return TURBO_EINVAL;
-  if (config->api_version == TURBO_FLOW_HTTP_ACL_API_VERSION_V2) tls_config = &config->tls;
+  tls_config = &config->tls;
   provider = (turbo_flow_http_acl_provider_t *)calloc(1u, sizeof(*provider));
   if (!provider) return TURBO_ENOMEM;
   provider->url = tstr_dup(config->url);
+  provider->service_id = tstr_dup(config->service_id);
+  provider->service_domain = tstr_dup(config->service_domain);
   provider->service_token_ref = tstr_dup(config->service_token_ref);
   provider->timeout_ms = config->timeout_ms;
   provider->max_response_size = config->max_response_size;
-  provider->max_rules = config->max_rules;
   provider->key_provider = config->key_provider;
-  if (!provider->url || !provider->service_token_ref) {
+  if (!provider->url || !provider->service_id || !provider->service_domain ||
+      !provider->service_token_ref) {
     rc = TURBO_ENOMEM;
     goto fail;
   }
@@ -407,11 +506,10 @@ int turbo_flow_http_acl_provider_create(const turbo_flow_http_acl_provider_confi
   turbo_flow_security_secret_release(&provider->key_provider, &lease);
   rc = flow_http_tls_client_probe_secret(&provider->tls, &provider->key_provider);
   if (rc != TURBO_OK) goto fail;
-  provider->interface =
-      (turbo_flow_security_policy_provider_t)TURBO_FLOW_SECURITY_POLICY_PROVIDER_INIT;
+  provider->interface = (turbo_flow_security_authorization_provider_t)
+      TURBO_FLOW_SECURITY_AUTHORIZATION_PROVIDER_INIT;
   provider->interface.ctx = provider;
-  provider->interface.load = flow_http_acl_load;
-  provider->interface.release = flow_http_acl_release;
+  provider->interface.authorize = flow_http_acl_authorize;
   *out = provider;
   return TURBO_OK;
 
@@ -433,7 +531,8 @@ int turbo_flow_http_acl_provider_create_resolved(
     const turbo_flow_security_key_provider_t *key_provider, turbo_flow_http_acl_provider_t **out,
     turbo_flow_config_error_t *error) {
   static const char *const allowed[] = {
-      "backend", "url", "service_token_ref", "timeout_ms", "max_response_size", "max_rules", "tls"};
+      "backend", "url", "service_id", "service_domain", "service_token_ref", "timeout_ms",
+      "max_response_size", "tls"};
   turbo_flow_http_acl_provider_config_t config = TURBO_FLOW_HTTP_ACL_PROVIDER_CONFIG_INIT;
   turbo_json_doc_t *document = NULL;
   json_value_t *channels;
@@ -477,6 +576,8 @@ int turbo_flow_http_acl_provider_create_resolved(
     }
   }
   config.url = turbo_json_get_string(fields, "url");
+  config.service_id = turbo_json_get_string(fields, "service_id");
+  config.service_domain = turbo_json_get_string(fields, "service_domain");
   config.service_token_ref = turbo_json_get_string(fields, "service_token_ref");
   rc = flow_http_tls_client_parse_json(turbo_json_object_get(fields, "tls"), &config.tls,
                                        &tls_detail);
@@ -485,11 +586,14 @@ int turbo_flow_http_acl_provider_create_resolved(
     goto done;
   }
   value = turbo_json_object_get(fields, "backend");
-  if (!config.url || !config.url[0] || !config.service_token_ref || !config.service_token_ref[0] ||
+  if (!config.url || !config.url[0] || !config.service_id || !config.service_id[0] ||
+      !config.service_domain || !config.service_domain[0] || !config.service_token_ref ||
+      !config.service_token_ref[0] ||
       !value || turbo_json_type(value) != TURBO_JSON_STRING ||
       strcmp(turbo_json_string(value), TURBO_FLOW_HTTP_ACL_BACKEND) != 0) {
     rc = flow_http_acl_config_error(error, TURBO_EINVAL, channel_name, NULL,
-                                    "backend=https, url, and service_token_ref are required");
+                                    "backend=https, url, service_id, service_domain, and "
+                                    "service_token_ref are required");
     goto done;
   }
   value = turbo_json_object_get(fields, "timeout_ms");
@@ -512,16 +616,6 @@ int turbo_flow_http_acl_provider_create_resolved(
     }
     config.max_response_size = (size_t)number;
   }
-  value = turbo_json_object_get(fields, "max_rules");
-  if (value) {
-    if (flow_http_acl_json_u64(value, &number) != TURBO_OK || number == 0u ||
-        number > TURBO_FLOW_SECURITY_MAX_RULES) {
-      rc = flow_http_acl_config_error(error, TURBO_ERANGE, channel_name, "max_rules",
-                                      "max_rules must be between 1 and 4096");
-      goto done;
-    }
-    config.max_rules = (size_t)number;
-  }
   config.key_provider = *key_provider;
   rc = turbo_flow_http_acl_provider_create(&config, out);
   if (rc != TURBO_OK)
@@ -533,7 +627,7 @@ done:
   return rc;
 }
 
-const turbo_flow_security_policy_provider_t *
+const turbo_flow_security_authorization_provider_t *
 turbo_flow_http_acl_provider_interface(const turbo_flow_http_acl_provider_t *provider) {
   return provider ? &provider->interface : NULL;
 }
@@ -542,6 +636,8 @@ void turbo_flow_http_acl_provider_destroy(turbo_flow_http_acl_provider_t *provid
   if (!provider) return;
   tstr_freep(&provider->url);
   tstr_freep(&provider->host);
+  tstr_freep(&provider->service_id);
+  tstr_freep(&provider->service_domain);
   tstr_freep(&provider->service_token_ref);
   flow_http_tls_client_cleanup(&provider->tls);
   crypto_wipe(&provider->key_provider, sizeof(provider->key_provider));
@@ -565,7 +661,7 @@ static int flow_http_acl_factory_create(void *ctx, const turbo_flow_resolved_con
                                                     error);
   if (rc != TURBO_OK) return rc;
   owner_out->backend = TURBO_FLOW_HTTP_ACL_BACKEND;
-  owner_out->provider = &provider->interface;
+  owner_out->authorization_provider = &provider->interface;
   owner_out->owner = provider;
   owner_out->destroy = flow_http_acl_owner_destroy;
   return TURBO_OK;

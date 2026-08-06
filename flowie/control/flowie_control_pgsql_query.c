@@ -14,6 +14,7 @@
 
 typedef enum flowie_control_pgsql_query_sql_e {
   FLOWIE_CONTROL_PGSQL_QUERY_CREDENTIAL = 0,
+  FLOWIE_CONTROL_PGSQL_QUERY_CREDENTIAL_DOMAIN,
   FLOWIE_CONTROL_PGSQL_QUERY_REVISION,
   FLOWIE_CONTROL_PGSQL_QUERY_DOMAIN_GET,
   FLOWIE_CONTROL_PGSQL_QUERY_DOMAIN_LIST,
@@ -104,6 +105,14 @@ int flowie_control_pgsql_query_create(flowie_control_pgsql_pool_t *pool,
       "ON c.domain_id=u.domain_id AND c.principal_id=u.principal_id "
       "WHERE u.domain_id=$1 AND u.principal_id=$2",
       schema);
+  if (rc == TURBO_OK)
+    rc = flowie_control_pgsql_query_sql_set(
+        query, FLOWIE_CONTROL_PGSQL_QUERY_CREDENTIAL_DOMAIN,
+        "SELECT u.domain_id FROM %s.user_account u JOIN %s.credential c "
+        "ON c.domain_id=u.domain_id AND c.principal_id=u.principal_id "
+        "WHERE u.principal_id=$1 AND u.enabled AND c.enabled "
+        "ORDER BY u.domain_id LIMIT 2",
+        schema);
   if (rc == TURBO_OK)
     rc = flowie_control_pgsql_query_sql_set(query, FLOWIE_CONTROL_PGSQL_QUERY_REVISION,
                                             "SELECT revision::text FROM %s.meta WHERE singleton=1",
@@ -830,6 +839,49 @@ int flowie_control_pgsql_query_credential_verify(
   if (rc != TURBO_OK)
     *result =
         (flowie_control_credential_verify_result_t)FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+  return rc;
+}
+
+int flowie_control_pgsql_query_credential_resolve(
+    flowie_control_pgsql_query_t *query, const char *principal_id, const void *secret,
+    size_t secret_size, flowie_control_credential_resolution_t *result) {
+  flowie_control_credential_resolution_t resolved = FLOWIE_CONTROL_CREDENTIAL_RESOLUTION_INIT;
+  flowie_control_pgsql_query_session_t session;
+  const char *values[1] = {principal_id};
+  PGresult *rows = NULL;
+  int row_count = 0;
+  int rc;
+  if (result && result->size >= sizeof(*result)) *result = resolved;
+  if (!query || !flowie_control_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX) || !secret ||
+      secret_size == 0u || secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX || !result ||
+      result->size < sizeof(*result))
+    return TURBO_EINVAL;
+  rc = flowie_control_pgsql_query_session_open(query, &session);
+  if (rc != TURBO_OK) return rc;
+  rc = flowie_control_pgsql_query_exec(
+      &session, query->sql[FLOWIE_CONTROL_PGSQL_QUERY_CREDENTIAL_DOMAIN], 1, values, &rows);
+  if (rc == TURBO_OK) {
+    row_count = PQntuples(rows);
+    if (row_count == 1 && PQnfields(rows) == 1 && !PQgetisnull(rows, 0, 0) &&
+        flowie_control_text_valid(PQgetvalue(rows, 0, 0), TURBO_FLOW_SECURITY_ID_MAX)) {
+      memcpy(resolved.domain_id, PQgetvalue(rows, 0, 0),
+             strlen(PQgetvalue(rows, 0, 0)) + 1u);
+    } else if (row_count == 1) {
+      rc = TURBO_EPROTO;
+    }
+  }
+  if (rows) PQclear(rows);
+  rc = flowie_control_pgsql_query_session_close(&session, 0, rc);
+  if (rc != TURBO_OK) return rc;
+  if (row_count != 1) {
+    flowie_control_credential_verify_result_t dummy = FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+    (void)flowie_control_pgsql_query_credential_verify(
+        query, "__unresolved__", principal_id, secret, secret_size, &dummy);
+    return TURBO_EPERM;
+  }
+  rc = flowie_control_pgsql_query_credential_verify(
+      query, resolved.domain_id, principal_id, secret, secret_size, &resolved.verified);
+  if (rc == TURBO_OK) *result = resolved;
   return rc;
 }
 

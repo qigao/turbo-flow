@@ -23,6 +23,7 @@ extern "C" {
 typedef struct turbo_flow_security_realm_s turbo_flow_security_realm_t;
 typedef struct turbo_flow_security_policy_provider_owner_s
     turbo_flow_security_policy_provider_owner_t;
+typedef struct turbo_flow_security_decision_s turbo_flow_security_decision_t;
 
 typedef enum turbo_flow_security_scope_e {
   TURBO_FLOW_SECURITY_SCOPE_SELF = 1,
@@ -284,9 +285,15 @@ typedef struct turbo_flow_security_request_s {
   const char *resource;
   /** Protocol-owner facts available to an injected matcher; Core never dereferences it. */
   const void *protocol_context;
+  /** Optional bounded MQTT identity facts forwarded to centralized authorization providers. */
+  const uint8_t *username;
+  size_t username_size;
+  const uint8_t *client_id;
+  size_t client_id_size;
 } turbo_flow_security_request_t;
 
-#define TURBO_FLOW_SECURITY_REQUEST_INIT {sizeof(turbo_flow_security_request_t)}
+#define TURBO_FLOW_SECURITY_REQUEST_INIT                                                            \
+  {sizeof(turbo_flow_security_request_t), NULL, NULL, 0u, 0, NULL, NULL, NULL, 0u, NULL, 0u}
 
 /**
  * Immutable adapter leaf input borrowed only for compile_leaf(). Candidate indices are ordered
@@ -342,17 +349,31 @@ typedef enum turbo_flow_security_decision_reason_e {
   TURBO_FLOW_SECURITY_REASON_POLICY_VERSION_MISMATCH
 } turbo_flow_security_decision_reason_t;
 
-typedef struct turbo_flow_security_decision_s {
+struct turbo_flow_security_decision_s {
   size_t size;
   turbo_flow_security_effect_t effect;
   turbo_flow_security_decision_reason_t reason;
   size_t matched_rule;
   uint64_t policy_version;
-} turbo_flow_security_decision_t;
+};
 
 #define TURBO_FLOW_SECURITY_DECISION_INIT                                                          \
   {sizeof(turbo_flow_security_decision_t), TURBO_FLOW_SECURITY_DENY,                               \
    TURBO_FLOW_SECURITY_REASON_DEFAULT_DENY, SIZE_MAX, 0u}
+
+/** Remote or otherwise centralized per-request authorization decision provider. */
+typedef int (*turbo_flow_security_authorize_fn)(
+    void *ctx, const turbo_flow_security_request_t *request, uint64_t now_epoch_seconds,
+    turbo_flow_security_decision_t *decision_out);
+
+typedef struct turbo_flow_security_authorization_provider_s {
+  size_t size;
+  void *ctx;
+  turbo_flow_security_authorize_fn authorize;
+} turbo_flow_security_authorization_provider_t;
+
+#define TURBO_FLOW_SECURITY_AUTHORIZATION_PROVIDER_INIT                                           \
+  {sizeof(turbo_flow_security_authorization_provider_t), NULL, NULL}
 
 typedef struct turbo_flow_security_realm_config_s {
   size_t size;
@@ -394,6 +415,11 @@ turbo_flow_security_realm_policy_source(const turbo_flow_security_realm_t *realm
 /** Bind one borrowed provider before the realm becomes reachable by protocol adapters. */
 CXX_C_API int turbo_flow_security_realm_bind_policy_provider(
     turbo_flow_security_realm_t *realm, const turbo_flow_security_policy_provider_t *provider);
+
+/** Bind one per-request decision provider instead of a policy-bundle provider. */
+CXX_C_API int turbo_flow_security_realm_bind_authorization_provider(
+    turbo_flow_security_realm_t *realm,
+    const turbo_flow_security_authorization_provider_t *provider);
 
 /** Fetch, validate, copy, and atomically install one exact generation. */
 CXX_C_API int turbo_flow_security_realm_refresh(turbo_flow_security_realm_t *realm,
@@ -527,6 +553,7 @@ struct turbo_flow_security_policy_provider_owner_s {
   uint32_t abi_version;
   const char *backend;
   const turbo_flow_security_policy_provider_t *provider;
+  const turbo_flow_security_authorization_provider_t *authorization_provider;
   void *owner;
   turbo_flow_security_policy_provider_owner_destroy_fn destroy;
 };
@@ -534,6 +561,7 @@ struct turbo_flow_security_policy_provider_owner_s {
 #define TURBO_FLOW_SECURITY_POLICY_PROVIDER_OWNER_INIT                                             \
   {sizeof(turbo_flow_security_policy_provider_owner_t),                                            \
    TURBO_FLOW_SECURITY_ABI_V3,                                                                     \
+   NULL,                                                                                           \
    NULL,                                                                                           \
    NULL,                                                                                           \
    NULL,                                                                                           \

@@ -257,7 +257,7 @@ static int control_config_parse_limits(const json_value_t *limits, flowie_contro
 static int control_config_parse_listener(const json_value_t *listener,
                                          flowie_control_config_t *config,
                                          flowie_control_config_error_t *error) {
-  static const char *const keys[] = {"host", "port", "tls", "limits"};
+  static const char *const keys[] = {"host", "port", "coroutine_stack_size", "tls", "limits"};
   uint64_t port;
   int rc =
       control_config_object(listener, "$.listener", keys, sizeof(keys) / sizeof(keys[0]), error);
@@ -271,6 +271,12 @@ static int control_config_parse_listener(const json_value_t *listener,
                                 65535u, &port, error);
     if (rc == TURBO_OK) config->listener.port = (uint16_t)port;
   }
+  if (rc == TURBO_OK)
+    rc = control_config_limit(
+        listener, "coroutine_stack_size", "$.listener.coroutine_stack_size",
+        FLOWIE_CONTROL_CONFIG_LISTENER_MIN_COROUTINE_STACK_SIZE,
+        FLOWIE_CONTROL_CONFIG_LISTENER_MAX_COROUTINE_STACK_SIZE,
+        &config->listener.coroutine_stack_size, error);
   if (rc == TURBO_OK)
     rc = control_config_parse_tls(turbo_json_object_get(listener, "tls"), config, error);
   if (rc == TURBO_OK && turbo_json_object_get(listener, "limits"))
@@ -477,79 +483,6 @@ static int control_config_parse_management(const json_value_t *management,
   return rc;
 }
 
-static int control_config_parse_auth_service_bindings(const json_value_t *bindings,
-                                                      flowie_control_config_t *config,
-                                                      flowie_control_config_error_t *error) {
-  static const char *const keys[] = {"service_id", "token_ref", "domain",
-                                     "peer_certificate_sha256"};
-  size_t count;
-  if (!bindings || turbo_json_type(bindings) != TURBO_JSON_ARRAY)
-    return control_config_error(error, TURBO_EINVAL, "$.auth.service_bindings",
-                                "expected sequence");
-  count = turbo_json_array_size(bindings);
-  if (count == 0u || count > FLOWIE_CONTROL_AUTH_MAX_SERVICE_BINDINGS)
-    return control_config_error(error, TURBO_ERANGE, "$.auth.service_bindings",
-                                "binding count is outside supported range");
-  for (size_t index = 0u; index < count; ++index) {
-    json_value_t *entry = turbo_json_array_get(bindings, index);
-    json_value_t *fingerprint;
-    char path[FLOWIE_CONTROL_CONFIG_ERROR_PATH_MAX + 1u];
-    char field[FLOWIE_CONTROL_CONFIG_ERROR_PATH_MAX + 1u];
-    int rc;
-    (void)snprintf(path, sizeof(path), "$.auth.service_bindings[%zu]", index);
-    rc = control_config_object(entry, path, keys, sizeof(keys) / sizeof(keys[0]), error);
-    (void)snprintf(field, sizeof(field), "%s.service_id", path);
-    if (rc == TURBO_OK)
-      rc = control_config_text(turbo_json_object_get(entry, keys[0]), field,
-                               config->auth.service_bindings[index].service_id,
-                               sizeof(config->auth.service_bindings[index].service_id), 1, error);
-    (void)snprintf(field, sizeof(field), "%s.token_ref", path);
-    if (rc == TURBO_OK)
-      rc = control_config_text(turbo_json_object_get(entry, keys[1]), field,
-                               config->auth.service_bindings[index].token_ref,
-                               sizeof(config->auth.service_bindings[index].token_ref), 1, error);
-    if (rc == TURBO_OK &&
-        !control_config_secret_ref_valid(config->auth.service_bindings[index].token_ref))
-      rc = control_config_error(error, TURBO_EINVAL, field,
-                                "only env:// secret references are accepted");
-    (void)snprintf(field, sizeof(field), "%s.domain", path);
-    if (rc == TURBO_OK)
-      rc = control_config_text(turbo_json_object_get(entry, keys[2]), field,
-                               config->auth.service_bindings[index].domain_id,
-                               sizeof(config->auth.service_bindings[index].domain_id), 1,
-                               error);
-    fingerprint = turbo_json_object_get(entry, keys[3]);
-    (void)snprintf(field, sizeof(field), "%s.peer_certificate_sha256", path);
-    if (rc == TURBO_OK)
-      rc = control_config_text(fingerprint, field,
-                               config->auth.service_bindings[index].peer_certificate_sha256,
-                               sizeof(config->auth.service_bindings[index]
-                                          .peer_certificate_sha256),
-                               0, error);
-    if (rc == TURBO_OK && fingerprint &&
-        !control_config_fingerprint_valid(
-            config->auth.service_bindings[index].peer_certificate_sha256))
-      rc = control_config_error(error, TURBO_EINVAL, field,
-                                "expected canonical lowercase sha256 fingerprint");
-    if (rc == TURBO_OK && fingerprint && !config->listener.tls.client_auth_required)
-      rc = control_config_error(error, TURBO_EINVAL, field,
-                                "certificate binding requires listener.tls.client_auth: required");
-    if (rc != TURBO_OK) return rc;
-    for (size_t prior = 0u; prior < index; ++prior) {
-      if (strcmp(config->auth.service_bindings[prior].service_id,
-                 config->auth.service_bindings[index].service_id) == 0)
-        return control_config_error(error, TURBO_EALREADY, path,
-                                    "service_id is bound more than once");
-      if (strcmp(config->auth.service_bindings[prior].token_ref,
-                 config->auth.service_bindings[index].token_ref) == 0)
-        return control_config_error(error, TURBO_EALREADY, path,
-                                    "token_ref is bound more than once");
-    }
-  }
-  config->auth.service_binding_count = count;
-  return TURBO_OK;
-}
-
 static int control_config_parse_external_https_tls(const json_value_t *tls,
                                                    flowie_control_config_t *config,
                                                    flowie_control_config_error_t *error) {
@@ -693,7 +626,6 @@ static int control_config_parse_auth(const json_value_t *auth, flowie_control_co
                                      "credential_cache_capacity",
                                      "credential_cache_ttl_seconds",
                                      "local_executor",
-                                     "service_bindings",
                                      "external_https"};
   json_value_t *external;
   uint64_t number;
@@ -737,9 +669,6 @@ static int control_config_parse_auth(const json_value_t *auth, flowie_control_co
   if (rc == TURBO_OK)
     rc = control_config_parse_auth_local_executor(turbo_json_object_get(auth, "local_executor"),
                                                   config, error);
-  if (rc == TURBO_OK)
-    rc = control_config_parse_auth_service_bindings(
-        turbo_json_object_get(auth, "service_bindings"), config, error);
   external = turbo_json_object_get(auth, "external_https");
   if (rc == TURBO_OK && external && config->auth.local_executor.configured)
     rc = control_config_error(error, TURBO_EINVAL, "$.auth.local_executor",

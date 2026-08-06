@@ -286,7 +286,7 @@ spec("Flowie controller runtime") {
     tls_test_remove_file(cert_file);
   }
 
-  it("owns the Dashboard and external HTTPS provider for the complete runtime lifecycle") {
+  it("rejects external HTTPS auth during runtime composition") {
     char cert_file[512] = {0};
     char key_file[512] = {0};
     control_runtime_fixture_t fixture = runtime_fixture_open();
@@ -303,7 +303,6 @@ spec("Flowie controller runtime") {
     fixture.store = NULL;
     check_int_eq(
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
-    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_AUTH_TOKEN", "inbound-token"), 0);
     check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_EXTERNAL_TOKEN", "outbound-token"), 0);
     (void)snprintf(config.management.rpc_path, sizeof(config.management.rpc_path), "%s",
                    "/v2/control/rpc");
@@ -317,14 +316,6 @@ spec("Flowie controller runtime") {
     (void)snprintf(config.auth.listener_id, sizeof(config.auth.listener_id), "%s",
                    "flowie-control-auth");
     (void)snprintf(config.auth.method, sizeof(config.auth.method), "%s", "bearer");
-    config.auth.service_binding_count = 1u;
-    (void)snprintf(config.auth.service_bindings[0].service_id,
-                   sizeof(config.auth.service_bindings[0].service_id), "%s", "broker-main");
-    (void)snprintf(config.auth.service_bindings[0].token_ref,
-                   sizeof(config.auth.service_bindings[0].token_ref), "%s",
-                   "env://FLOWIE_RUNTIME_AUTH_TOKEN");
-    (void)snprintf(config.auth.service_bindings[0].domain_id,
-                   sizeof(config.auth.service_bindings[0].domain_id), "%s", "root-a");
     config.auth.external_https.enabled = 1;
     (void)snprintf(config.auth.external_https.url, sizeof(config.auth.external_https.url), "%s",
                    "https://localhost/v1/assert");
@@ -343,12 +334,10 @@ spec("Flowie controller runtime") {
     (void)snprintf(config.auth.external_https.tls.client_key_file,
                    sizeof(config.auth.external_https.tls.client_key_file), "%s", key_file);
 
-    check_int_eq(flowie_control_runtime_create(&config, &runtime), TURBO_OK);
-    check_not_null(runtime);
-    check_int_eq(flowie_control_runtime_destroy(runtime), TURBO_OK);
+    check_int_eq(flowie_control_runtime_create(&config, &runtime), TURBO_ENOTSUP);
+    check_null(runtime);
 
     check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_EXTERNAL_TOKEN", NULL), 0);
-    check_int_eq(runtime_test_set_env("FLOWIE_RUNTIME_AUTH_TOKEN", NULL), 0);
     tls_test_remove_file(key_file);
     tls_test_remove_file(cert_file);
     runtime_fixture_close(&fixture);

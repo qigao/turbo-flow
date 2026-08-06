@@ -77,6 +77,7 @@ struct turbo_flow_security_realm_s {
   turbo_mutex_t snapshot_lock;
   flow_security_policy_snapshot_t *active;
   const turbo_flow_security_policy_provider_t *policy_provider;
+  const turbo_flow_security_authorization_provider_t *authorization_provider;
   atomic_uint_fast64_t evaluations;
   atomic_uint_fast64_t allowed;
   atomic_uint_fast64_t denied;
@@ -807,6 +808,7 @@ void turbo_flow_security_realm_destroy(turbo_flow_security_realm_t *realm) {
   active = realm->active;
   realm->active = NULL;
   realm->policy_provider = NULL;
+  realm->authorization_provider = NULL;
   turbo_mutex_unlock(&realm->snapshot_lock);
   flow_security_policy_snapshot_release(active);
   turbo_mutex_destroy(&realm->snapshot_lock);
@@ -827,9 +829,29 @@ int turbo_flow_security_realm_bind_policy_provider(
       !provider->load || !provider->release)
     return TURBO_EINVAL;
   turbo_mutex_lock(&realm->snapshot_lock);
-  if (realm->policy_provider)
+  if (realm->authorization_provider)
+    rc = TURBO_EBUSY;
+  else if (realm->policy_provider)
     rc = realm->policy_provider == provider ? TURBO_EALREADY : TURBO_EBUSY;
   else realm->policy_provider = provider;
+  turbo_mutex_unlock(&realm->snapshot_lock);
+  return rc;
+}
+
+int turbo_flow_security_realm_bind_authorization_provider(
+    turbo_flow_security_realm_t *realm,
+    const turbo_flow_security_authorization_provider_t *provider) {
+  int rc = TURBO_OK;
+  if (!realm || !realm->policy_source || !provider || provider->size < sizeof(*provider) ||
+      !provider->authorize)
+    return TURBO_EINVAL;
+  turbo_mutex_lock(&realm->snapshot_lock);
+  if (realm->policy_provider)
+    rc = TURBO_EBUSY;
+  else if (realm->authorization_provider)
+    rc = realm->authorization_provider == provider ? TURBO_EALREADY : TURBO_EBUSY;
+  else
+    realm->authorization_provider = provider;
   turbo_mutex_unlock(&realm->snapshot_lock);
   return rc;
 }
@@ -1176,9 +1198,33 @@ int turbo_flow_security_realm_authorize(turbo_flow_security_realm_t *realm,
                                         uint64_t now_epoch_seconds,
                                         turbo_flow_security_decision_t *decision) {
   flow_security_policy_snapshot_t *snapshot;
+  const turbo_flow_security_authorization_provider_t *authorization_provider;
   int needs_refresh = 0;
   int rc;
   if (!flow_security_request_valid(realm, request, decision)) return TURBO_EINVAL;
+  turbo_mutex_lock(&realm->snapshot_lock);
+  authorization_provider = realm->authorization_provider;
+  turbo_mutex_unlock(&realm->snapshot_lock);
+  if (authorization_provider) {
+    turbo_flow_security_decision_t remote = TURBO_FLOW_SECURITY_DECISION_INIT;
+    rc = authorization_provider->authorize(authorization_provider->ctx, request,
+                                           now_epoch_seconds, &remote);
+    if (rc == TURBO_OK &&
+        ((remote.effect != TURBO_FLOW_SECURITY_ALLOW &&
+          remote.effect != TURBO_FLOW_SECURITY_DENY) ||
+         remote.policy_version != request->principal->policy_version ||
+         (remote.reason != TURBO_FLOW_SECURITY_REASON_ALLOW_RULE &&
+          remote.reason != TURBO_FLOW_SECURITY_REASON_DENY_RULE &&
+          remote.reason != TURBO_FLOW_SECURITY_REASON_DEFAULT_DENY &&
+          remote.reason != TURBO_FLOW_SECURITY_REASON_DOMAIN_MISMATCH &&
+          remote.reason != TURBO_FLOW_SECURITY_REASON_PRINCIPAL_EXPIRED &&
+          remote.reason != TURBO_FLOW_SECURITY_REASON_POLICY_VERSION_MISMATCH)))
+      rc = TURBO_EPROTO;
+    if (rc != TURBO_OK) remote = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+    flow_security_record(realm, rc, &remote);
+    *decision = remote;
+    return rc == TURBO_OK && remote.effect == TURBO_FLOW_SECURITY_DENY ? TURBO_EPERM : rc;
+  }
   if (realm->policy_source) {
     snapshot = flow_security_policy_snapshot_acquire(realm);
     needs_refresh = !snapshot || snapshot->policy_version != request->principal->policy_version ||
@@ -1538,9 +1584,14 @@ int turbo_flow_security_policy_provider_owner_create_resolved(
     return rc;
   }
   if (owner.size < sizeof(owner) || owner.abi_version != TURBO_FLOW_SECURITY_ABI_V3 ||
-      !owner.backend || strcmp(owner.backend, factory->backend) != 0 || !owner.provider ||
-      owner.provider->size < sizeof(*owner.provider) || !owner.provider->load ||
-      !owner.provider->release || !owner.owner || !owner.destroy) {
+      !owner.backend || strcmp(owner.backend, factory->backend) != 0 ||
+      (!!owner.provider == !!owner.authorization_provider) ||
+      (owner.provider && (owner.provider->size < sizeof(*owner.provider) ||
+                          !owner.provider->load || !owner.provider->release)) ||
+      (owner.authorization_provider &&
+       (owner.authorization_provider->size < sizeof(*owner.authorization_provider) ||
+        !owner.authorization_provider->authorize)) ||
+      !owner.owner || !owner.destroy) {
     if (owner.owner && owner.destroy) owner.destroy(owner.owner);
     return TURBO_EPROTO;
   }

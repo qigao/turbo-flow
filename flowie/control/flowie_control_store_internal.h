@@ -121,6 +121,16 @@ typedef struct flowie_control_credential_verify_result_s {
 #define FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT                                               \
   {sizeof(flowie_control_credential_verify_result_t), 0u, 0u}
 
+typedef struct flowie_control_credential_resolution_s {
+  size_t size;
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  flowie_control_credential_verify_result_t verified;
+} flowie_control_credential_resolution_t;
+
+#define FLOWIE_CONTROL_CREDENTIAL_RESOLUTION_INIT                                                  \
+  {sizeof(flowie_control_credential_resolution_t), {0},                                            \
+   FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT}
+
 typedef struct flowie_control_credential_revoke_command_s {
   size_t size;
   const char *domain_id;
@@ -469,6 +479,11 @@ int flowie_control_store_credential_verify(flowie_control_store_t *store, const 
                                            const char *principal_id, const void *secret,
                                            size_t secret_size,
                                            flowie_control_credential_verify_result_t *result);
+
+/** Resolve one globally unique enabled principal ID and verify its credential. */
+int flowie_control_store_credential_resolve(
+    flowie_control_store_t *store, const char *principal_id, const void *secret,
+    size_t secret_size, flowie_control_credential_resolution_t *result);
 
 /** Read active user and credential revisions without evaluating the credential KDF. */
 int flowie_control_store_credential_state(flowie_control_store_t *store, const char *domain_id,

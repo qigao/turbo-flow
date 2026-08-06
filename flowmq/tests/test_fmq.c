@@ -6736,6 +6736,7 @@ spec("flow_fmq_network") {
                  0);
     check_int_eq(atomic_load_explicit(&server_events.authorization_denied, memory_order_acquire),
                  0);
+    fmq_wait_event_count(&server_events.peer_connected, 1);
     check_int_eq(atomic_load_explicit(&server_events.peer_connected, memory_order_acquire), 1);
     check_int_eq(atomic_load_explicit(&client_events.last_status, memory_order_acquire), TURBO_OK);
     check_int_eq(start_rc, TURBO_OK);

@@ -667,8 +667,12 @@ int flowie_worker_runtime_create(const flowie_worker_runtime_config_t *config,
       failure_operation = "create ACL policy provider";
       goto fail;
     }
-    rc = turbo_flow_security_realm_bind_policy_provider(runtime->security_realm,
-                                                        runtime->policy_provider.provider);
+    if (runtime->policy_provider.authorization_provider)
+      rc = turbo_flow_security_realm_bind_authorization_provider(
+          runtime->security_realm, runtime->policy_provider.authorization_provider);
+    else
+      rc = turbo_flow_security_realm_bind_policy_provider(runtime->security_realm,
+                                                          runtime->policy_provider.provider);
     if (rc != TURBO_OK) {
       failure_operation = "bind ACL policy provider";
       goto fail;

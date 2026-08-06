@@ -3,6 +3,7 @@
 
 #include "platform.h"
 #include "CoroNet/turbo_coro_context.h"
+#include "CoroNet/turbo_coro_object_pool.h"
 #include "CoroNet/turbo_coro_socket.h"
 #include "flowie_control_acl_iris_endpoint_internal.h"
 #include "flowie_control_auth_iris_adapter_internal.h"
@@ -180,6 +181,19 @@ static int flowie_control_runtime_tls_config(const flowie_control_config_t *conf
   return TURBO_OK;
 }
 
+static coro_context_t *
+flowie_control_runtime_listener_context_create(const flowie_control_config_t *config) {
+  coro_object_pool_config_t pool = CORO_OBJECT_POOL_CONFIG_DEFAULT;
+  if (!config ||
+      config->listener.coroutine_stack_size <
+          FLOWIE_CONTROL_CONFIG_LISTENER_MIN_COROUTINE_STACK_SIZE ||
+      config->listener.coroutine_stack_size >
+          FLOWIE_CONTROL_CONFIG_LISTENER_MAX_COROUTINE_STACK_SIZE)
+    return NULL;
+  pool.stack_size = config->listener.coroutine_stack_size;
+  return coro_context_create_ex(NULL, &pool);
+}
+
 static int flowie_control_runtime_validate_store(const flowie_control_config_t *config) {
   const char *password = NULL;
   int rc;
@@ -213,6 +227,11 @@ int flowie_control_runtime_validate(const flowie_control_config_t *config) {
   coro_socket_t *socket = NULL;
   int rc;
   if (!flowie_control_runtime_routes_valid(config)) return TURBO_EINVAL;
+  if (config->listener.coroutine_stack_size <
+          FLOWIE_CONTROL_CONFIG_LISTENER_MIN_COROUTINE_STACK_SIZE ||
+      config->listener.coroutine_stack_size >
+          FLOWIE_CONTROL_CONFIG_LISTENER_MAX_COROUTINE_STACK_SIZE)
+    return TURBO_EINVAL;
   if (config->dashboard_enabled && config->listener.tls.client_auth_required) return TURBO_EINVAL;
   if ((config->auth.external_https.enabled &&
        config->management.login_executor_configured) ||
@@ -252,7 +271,7 @@ int flowie_control_runtime_validate(const flowie_control_config_t *config) {
   if (rc != TURBO_OK) return rc;
   rc = flowie_control_runtime_tls_config(config, &tls);
   if (rc != TURBO_OK) return rc;
-  context = coro_context_create(NULL);
+  context = flowie_control_runtime_listener_context_create(config);
   if (!context) return TURBO_ENOMEM;
   socket = coro_socket_create(context, CORO_SOCKET_TLS);
   if (!socket) {
@@ -552,8 +571,6 @@ static int flowie_control_runtime_create_management_sessions(
 }
 
 static int flowie_control_runtime_create_auth(flowie_control_runtime_t *runtime) {
-  flowie_control_service_credential_binding_t
-      bindings[FLOWIE_CONTROL_AUTH_MAX_SERVICE_BINDINGS];
   flowie_control_service_credential_config_t credential_config =
       FLOWIE_CONTROL_SERVICE_CREDENTIAL_CONFIG_INIT;
   flowie_control_auth_service_config_t service_config = FLOWIE_CONTROL_AUTH_SERVICE_CONFIG_INIT;
@@ -565,22 +582,6 @@ static int flowie_control_runtime_create_auth(flowie_control_runtime_t *runtime)
       FLOWIE_CONTROL_ACL_IRIS_ENDPOINT_CONFIG_INIT;
   int rc;
   if (!runtime->config.auth.enabled) return TURBO_OK;
-  memset(bindings, 0, sizeof(bindings));
-  for (size_t index = 0u; index < runtime->config.auth.service_binding_count; ++index) {
-    flowie_control_policy_status_t status = FLOWIE_CONTROL_POLICY_STATUS_INIT;
-    bindings[index] = (flowie_control_service_credential_binding_t)
-        FLOWIE_CONTROL_SERVICE_CREDENTIAL_BINDING_INIT;
-    bindings[index].service_id = runtime->config.auth.service_bindings[index].service_id;
-    bindings[index].token_ref = runtime->config.auth.service_bindings[index].token_ref;
-    bindings[index].domain_id = runtime->config.auth.service_bindings[index].domain_id;
-    bindings[index].peer_certificate_sha256 =
-        runtime->config.auth.service_bindings[index].peer_certificate_sha256[0]
-            ? runtime->config.auth.service_bindings[index].peer_certificate_sha256
-            : NULL;
-    rc = runtime->repository->policy->status(runtime->repository->ctx,
-                                             bindings[index].domain_id, &status);
-    if (rc != TURBO_OK) return rc;
-  }
   service_config.repository = runtime->repository;
   service_config.method = runtime->config.auth.method;
   service_config.principal_ttl_seconds = runtime->config.auth.principal_ttl_seconds;
@@ -600,9 +601,7 @@ static int flowie_control_runtime_create_auth(flowie_control_runtime_t *runtime)
   rc = flowie_control_auth_service_create(&service_config, &runtime->auth_service);
   if (rc != TURBO_OK) return rc;
   credential_config.listener_id = runtime->config.auth.listener_id;
-  credential_config.bindings = bindings;
-  credential_config.binding_count = runtime->config.auth.service_binding_count;
-  credential_config.key_provider = flowie_control_runtime_key_provider(runtime);
+  credential_config.repository = runtime->repository;
   rc = flowie_control_service_credential_resolver_create(
       &credential_config, &runtime->service_credentials);
   if (rc != TURBO_OK) return rc;
@@ -797,7 +796,7 @@ int flowie_control_runtime_start(flowie_control_runtime_t *runtime) {
     return TURBO_EINVAL;
   rc = flowie_control_runtime_tls_config(&runtime->config, &tls);
   if (rc != TURBO_OK) return rc;
-  runtime->listener_context = coro_context_create(NULL);
+  runtime->listener_context = flowie_control_runtime_listener_context_create(&runtime->config);
   if (!runtime->listener_context) return TURBO_ENOMEM;
   runtime->listener = iris_server_start_tls_on(
       runtime->app, runtime->listener_context, runtime->config.listener.host,

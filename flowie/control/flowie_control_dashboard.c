@@ -312,14 +312,39 @@ int flowie_control_dashboard_render_password(
                                                        html_size_out);
 }
 
-int flowie_control_dashboard_render_page(
+void flowie_control_dashboard_action_result_clear(
+    flowie_control_dashboard_action_result_t *result) {
+  if (!result || result->size < sizeof(*result)) return;
+  crypto_wipe(result->domain_id, sizeof(result->domain_id));
+  crypto_wipe(result->principal_id, sizeof(result->principal_id));
+  crypto_wipe(result->token, sizeof(result->token));
+  result->kind = FLOWIE_CONTROL_DASHBOARD_ACTION_NONE;
+  result->token_size = 0u;
+}
+
+static int flowie_control_dashboard_action_result_valid(
+    const flowie_control_dashboard_action_result_t *result) {
+  if (!result) return 1;
+  if (result->size < sizeof(*result)) return 0;
+  if (result->kind == FLOWIE_CONTROL_DASHBOARD_ACTION_NONE)
+    return result->token_size == 0u;
+  return result->kind == FLOWIE_CONTROL_DASHBOARD_ACTION_CREDENTIAL_ISSUED &&
+         result->domain_id[0] != '\0' && result->principal_id[0] != '\0' &&
+         result->token_size == FLOWIE_CONTROL_CREDENTIAL_TOKEN_SIZE &&
+         result->token[result->token_size] == '\0';
+}
+
+int flowie_control_dashboard_render_page_result(
     flowie_control_dashboard_t *dashboard, const flowie_control_management_caller_t *caller,
     const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u],
-    const flowie_control_dashboard_page_t *page, char **html_out, size_t *html_size_out) {
+    const flowie_control_dashboard_page_t *page,
+    const flowie_control_dashboard_action_result_t *action_result, char **html_out,
+    size_t *html_size_out) {
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   const char *target_domain_id;
   int rc;
   if (!dashboard || !caller || !flowie_control_dashboard_page_valid(page) ||
+      !flowie_control_dashboard_action_result_valid(action_result) ||
       !flowie_control_dashboard_csrf_valid(csrf_token))
     return TURBO_EINVAL;
   target_domain_id =
@@ -328,8 +353,16 @@ int flowie_control_dashboard_render_page(
                                               &scoped);
   if (rc != TURBO_OK) return rc;
   return flowie_control_dashboard_view_render_content(
-      dashboard->view, dashboard->service, caller, &scoped, csrf_token, page, html_out,
-      html_size_out);
+      dashboard->view, dashboard->service, caller, &scoped, csrf_token, page, action_result,
+      html_out, html_size_out);
+}
+
+int flowie_control_dashboard_render_page(
+    flowie_control_dashboard_t *dashboard, const flowie_control_management_caller_t *caller,
+    const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u],
+    const flowie_control_dashboard_page_t *page, char **html_out, size_t *html_size_out) {
+  return flowie_control_dashboard_render_page_result(dashboard, caller, csrf_token, page, NULL,
+                                                      html_out, html_size_out);
 }
 
 int flowie_control_dashboard_render(flowie_control_dashboard_t *dashboard,
@@ -523,12 +556,13 @@ static int flowie_control_dashboard_command_text(const char *text, size_t maximu
   return size > 0u && size <= maximum;
 }
 
-int flowie_control_dashboard_process_form(
+int flowie_control_dashboard_process_form_result(
     flowie_control_dashboard_t *dashboard, const flowie_control_management_caller_t *caller,
     const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u], const char *body,
-    size_t body_size) {
+    size_t body_size, flowie_control_dashboard_action_result_t *result_out) {
+  static const char *const domain_keys[] = {"csrf", "operation", "domain_id", "request_id"};
   static const char *const user_keys[] = {"csrf", "operation", "principal_id",
-                                          "principal_type", "request_id"};
+                                           "principal_type", "request_id"};
   static const char *const user_disable_keys[] = {"csrf", "operation", "principal_id",
                                                   "request_id"};
   static const char *const group_keys[] = {
@@ -538,7 +572,9 @@ int flowie_control_dashboard_process_form(
                                                 "request_id"};
   static const char *const role_keys[] = {"csrf", "operation", "role_id", "request_id"};
   static const char *const assignment_keys[] = {"csrf", "operation", "principal_id", "role_id",
-                                                "request_id"};
+                                                 "request_id"};
+  static const char *const credential_keys[] = {"csrf", "operation", "principal_id",
+                                                 "request_id"};
   static const char *const rule_keys[] = {"csrf", "operation", "ordinal", "rule_line",
                                           "request_id"};
   static const char *const rule_delete_keys[] = {"csrf", "operation", "ordinal", "request_id"};
@@ -550,8 +586,10 @@ int flowie_control_dashboard_process_form(
   const char *request_id;
   uint64_t occurred_at;
   int rc;
-  if (!dashboard || !caller || !flowie_control_dashboard_csrf_valid(csrf_token))
+  if (!dashboard || !caller || !result_out || result_out->size < sizeof(*result_out) ||
+      !flowie_control_dashboard_csrf_valid(csrf_token))
     return TURBO_EINVAL;
+  flowie_control_dashboard_action_result_clear(result_out);
   rc = flowie_control_dashboard_form_parse(body, body_size, &form);
   if (rc != TURBO_OK) return rc;
   submitted_csrf = flowie_control_dashboard_form_get(&form, "csrf");
@@ -569,7 +607,19 @@ int flowie_control_dashboard_process_form(
     rc = TURBO_EIO;
     goto done;
   }
-  if (strcmp(operation, "user.create") == 0) {
+  if (strcmp(operation, "domain.create") == 0) {
+    flowie_control_domain_create_command_t command = FLOWIE_CONTROL_DOMAIN_CREATE_COMMAND_INIT;
+    if (!flowie_control_dashboard_form_exact(&form, domain_keys,
+                                             sizeof(domain_keys) / sizeof(domain_keys[0]))) {
+      rc = TURBO_EPROTO;
+      goto done;
+    }
+    command.domain_id = flowie_control_dashboard_form_get(&form, "domain_id");
+    command.actor = caller->actor;
+    command.request_id = request_id;
+    command.occurred_at = occurred_at;
+    rc = flowie_control_management_domain_create(dashboard->service, caller, &command, &result);
+  } else if (strcmp(operation, "user.create") == 0) {
     flowie_control_user_create_command_t command = FLOWIE_CONTROL_USER_CREATE_COMMAND_INIT;
     if (!flowie_control_dashboard_form_exact(&form, user_keys,
                                              sizeof(user_keys) / sizeof(user_keys[0]))) {
@@ -596,6 +646,56 @@ int flowie_control_dashboard_process_form(
     command.request_id = request_id;
     command.occurred_at = occurred_at;
     rc = flowie_control_management_user_disable(dashboard->service, caller, &command, &result);
+  } else if (strcmp(operation, "credential.issue") == 0) {
+    flowie_control_credential_issue_command_t command =
+        FLOWIE_CONTROL_CREDENTIAL_ISSUE_COMMAND_INIT;
+    flowie_control_generated_credential_t generated = FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
+    const char *principal_id;
+    if (!flowie_control_dashboard_form_exact(
+            &form, credential_keys, sizeof(credential_keys) / sizeof(credential_keys[0]))) {
+      rc = TURBO_EPROTO;
+      goto done;
+    }
+    principal_id = flowie_control_dashboard_form_get(&form, "principal_id");
+    command.domain_id = caller->domain_id;
+    command.principal_id = principal_id;
+    command.actor = caller->actor;
+    command.request_id = request_id;
+    command.occurred_at = occurred_at;
+    rc = flowie_control_management_credential_generate(dashboard->service, caller, &command,
+                                                       &generated);
+    if (rc == TURBO_EALREADY) {
+      flowie_control_generated_credential_wipe(&generated);
+      generated = (flowie_control_generated_credential_t)FLOWIE_CONTROL_GENERATED_CREDENTIAL_INIT;
+      rc = flowie_control_management_credential_rotate(dashboard->service, caller, &command,
+                                                       &generated);
+    }
+    if (rc == TURBO_OK &&
+        (generated.token_size != FLOWIE_CONTROL_CREDENTIAL_TOKEN_SIZE ||
+         generated.token[generated.token_size] != '\0'))
+      rc = TURBO_EIO;
+    if (rc == TURBO_OK) {
+      result_out->kind = FLOWIE_CONTROL_DASHBOARD_ACTION_CREDENTIAL_ISSUED;
+      result_out->token_size = generated.token_size;
+      memcpy(result_out->domain_id, caller->domain_id, strlen(caller->domain_id) + 1u);
+      memcpy(result_out->principal_id, principal_id, strlen(principal_id) + 1u);
+      memcpy(result_out->token, generated.token, generated.token_size + 1u);
+    }
+    flowie_control_generated_credential_wipe(&generated);
+  } else if (strcmp(operation, "credential.revoke") == 0) {
+    flowie_control_credential_revoke_command_t command =
+        FLOWIE_CONTROL_CREDENTIAL_REVOKE_COMMAND_INIT;
+    if (!flowie_control_dashboard_form_exact(
+            &form, credential_keys, sizeof(credential_keys) / sizeof(credential_keys[0]))) {
+      rc = TURBO_EPROTO;
+      goto done;
+    }
+    command.domain_id = caller->domain_id;
+    command.principal_id = flowie_control_dashboard_form_get(&form, "principal_id");
+    command.actor = caller->actor;
+    command.request_id = request_id;
+    command.occurred_at = occurred_at;
+    rc = flowie_control_management_credential_revoke(dashboard->service, caller, &command, &result);
   } else if (strcmp(operation, "group.create") == 0) {
     flowie_control_group_create_command_t command = FLOWIE_CONTROL_GROUP_CREATE_COMMAND_INIT;
     const char *parent_group_id;
@@ -771,6 +871,17 @@ int flowie_control_dashboard_process_form(
 
 done:
   flowie_control_dashboard_form_destroy(&form);
+  return rc;
+}
+
+int flowie_control_dashboard_process_form(
+    flowie_control_dashboard_t *dashboard, const flowie_control_management_caller_t *caller,
+    const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u], const char *body,
+    size_t body_size) {
+  flowie_control_dashboard_action_result_t result = FLOWIE_CONTROL_DASHBOARD_ACTION_RESULT_INIT;
+  int rc = flowie_control_dashboard_process_form_result(dashboard, caller, csrf_token, body,
+                                                        body_size, &result);
+  flowie_control_dashboard_action_result_clear(&result);
   return rc;
 }
 
@@ -950,11 +1061,14 @@ static void flowie_control_dashboard_post_handler(Req *request, Res *response) {
   flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   flowie_control_management_caller_t scoped = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
   flowie_control_dashboard_page_t page = FLOWIE_CONTROL_DASHBOARD_PAGE_INIT;
+  flowie_control_dashboard_action_result_t action_result =
+      FLOWIE_CONTROL_DASHBOARD_ACTION_RESULT_INIT;
   char csrf[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u] = {0};
   char *html = NULL;
   size_t html_size = 0u;
   const char *content_type;
   int rc;
+  int has_secret = 0;
   flowie_control_dashboard_headers(response);
   if (!dashboard || !request->security || !request->security->authenticated) {
     flowie_control_dashboard_auth_required(response, 1);
@@ -977,16 +1091,20 @@ static void flowie_control_dashboard_post_handler(Req *request, Res *response) {
         dashboard->service, &caller,
         page.domain_id[0] ? page.domain_id : caller.domain_id, &scoped);
   if (rc == TURBO_OK)
-    rc = flowie_control_dashboard_process_form(dashboard, &scoped, csrf, request->body,
-                                               request->body_len);
+    rc = flowie_control_dashboard_process_form_result(
+        dashboard, &scoped, csrf, request->body, request->body_len, &action_result);
   if (rc == TURBO_OK)
-    rc = flowie_control_dashboard_render_page(dashboard, &caller, csrf, &page, &html, &html_size);
+    rc = flowie_control_dashboard_render_page_result(dashboard, &caller, csrf, &page,
+                                                      &action_result, &html, &html_size);
+  has_secret = action_result.kind == FLOWIE_CONTROL_DASHBOARD_ACTION_CREDENTIAL_ISSUED;
+  flowie_control_dashboard_action_result_clear(&action_result);
   crypto_wipe(csrf, sizeof(csrf));
   if (rc != TURBO_OK) {
     flowie_control_dashboard_send_error(dashboard, response, rc);
     return;
   }
   reply(response, OK, "text/html; charset=utf-8", html, html_size);
+  if (has_secret) crypto_wipe(html, html_size);
   flowie_control_dashboard_html_free(html);
 }
 

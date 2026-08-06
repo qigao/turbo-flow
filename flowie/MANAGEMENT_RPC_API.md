@@ -21,8 +21,9 @@ schema discovery or version negotiation. Deployments may change the path with
   Do not put them in logs, URLs, request IDs, or error telemetry.
 
 The generated token returned by `control.credential.generate` or
-`control.credential.rotate` is a principal credential for authentication services. It is not a
-Management RPC bearer token and cannot authenticate this endpoint.
+`control.credential.rotate` is an opaque principal credential. It can be provisioned as an MQTT
+password or as a Broker-facing service credential according to the principal's purpose and Roles.
+It is not a Management RPC bearer token and cannot authenticate this endpoint.
 
 ## Endpoint configuration
 
@@ -115,10 +116,12 @@ For example, a Domain-scoped read-only integration normally receives `viewer`; G
 receives `viewer` plus `user_admin`; policy maintenance receives `viewer` plus `policy_admin`.
 Grant `security_admin` only when the platform owns all administration inside that Domain.
 
-`auth.service_bindings` bearer tokens protect Broker calls to `/v4/authenticate` and `/v4/acl`.
-Generated principal credentials authenticate protocol identities. Neither credential class is a
-Management RPC bearer token. The current Management RPC has no durable client-credentials grant;
-an integration that requires one must not emulate it by reusing either token class.
+Database-backed service principals with `flowie_auth_client` or `flowie_acl_client` protect Broker
+calls to `/v4/authenticate` and `/v4/acl/check`. Their generated credentials are not Management RPC
+bearer tokens. The current Management RPC has no durable client-credentials grant; an integration
+that requires one must not emulate it by reusing a service or MQTT credential. See
+[THIRD_PARTY_INTEGRATION.md](THIRD_PARTY_INTEGRATION.md) for the complete credential boundaries and
+onboarding flow.
 
 Because the login route requires an exact same-origin request and the session cookie is
 `SameSite=Strict`, a third-party browser application must use its own backend as a BFF. Flowie does
@@ -331,6 +334,9 @@ When enabled, `control.auth.external_https.stats` returns:
 ```
 
 Counters are process-lifetime aggregate snapshots, not windowed rates or SLO calculations.
+The current composition root rejects `auth.external_https` with `TURBO_ENOTSUP`, so deployed
+instances report `{"enabled":false}`. The expanded counter shape is reserved for a future runtime
+that explicitly enables the provider; clients must not infer availability from schema presence.
 
 ### Users, passwords, and credentials
 
@@ -347,13 +353,24 @@ Counters are process-lifetime aggregate snapshots, not windowed rates or SLO cal
 | `control.credential.revoke` | `security_admin` | `domain_id?`, `principal_id`, `write` | Command result; removes credential validity without deleting history. |
 
 `token` is printable ASCII in the form `flw_mqtt_v1_<Base64URL-no-padding>` and is returned only
-on the successful, non-replayed generate/rotate response. Configure it as `FLOWIE_DEVICE_TOKEN`
-and send its bytes unchanged as the MQTT Password. The MQTT User Name is configured separately as
-`FLOWIE_MQTT_USERNAME` and maps to the authenticated `principal_id`; the MQTT Client Identifier is
-configured separately as `FLOWIE_MQTT_CLIENT_ID` and is the session/takeover/routing key. Client ID
-has no credential meaning and is not derived from User Name. Clients must not Base64-decode the token.
-`control.password.set` does not return the password and does not silently switch between create
-and replace modes.
+on the successful, non-replayed generate/rotate response. The prefix identifies the credential
+format; it does not by itself select MQTT or service use. Never Base64-decode the token.
+
+For an MQTT principal, send the token bytes unchanged as the MQTT Password. The MQTT User Name maps
+to `principal_id`; the MQTT Client Identifier is a separate session/takeover/routing key and has no
+credential meaning. Local Auth resolves the User Name across all Domains and accepts only one unique
+enabled match. Duplicate User Names in different Domains fail closed, so integrations should allocate
+globally unique names.
+
+For a service principal, store the token in the secret provider and send it with
+`X-Flowie-Service-Domain` and `X-Flowie-Service-Id`. Exact Role `flowie_auth_client` permits
+`POST /v4/authenticate`; exact Role `flowie_acl_client` permits `POST /v4/acl/check`. These are
+Broker-facing endpoint Roles and grant no Management RPC permission. `service_domain` locates the
+service credential only; it does not constrain the business Domain returned for an MQTT principal.
+Provisioning examples are in [THIRD_PARTY_INTEGRATION.md](THIRD_PARTY_INTEGRATION.md).
+
+`control.password.set` does not return the password and does not silently switch between create and
+replace modes.
 
 ### Groups and membership
 
@@ -388,27 +405,28 @@ Authorization Roles grant Management RPC permissions; other roles remain applica
 | --- | --- | --- | --- |
 | `control.policy.status` | `viewer` | `domain_id?` | `{policy_version, expires_at, draft_rules, published_rules}`. |
 | `control.policy.rule.list` | `viewer` | `domain_id?`, `after_ordinal?`, `limit?` | Page of `{ordinal, rule_line, updated_at}` ordered by ordinal. |
-| `control.policy.rule.put` | `policy_admin` | `domain_id?`, `ordinal`, `rule_line`, `write` | Command result. Inserts or replaces the stable ordinal. |
-| `control.policy.rule.delete` | `policy_admin` | `domain_id?`, `ordinal`, `write` | Command result. Other ordinals are not renumbered. |
+| `control.policy.rule.put` | `policy_admin` | `domain_id?`, `ordinal`, `rule_line`, `request_id` | Command result. Inserts or replaces the stable ordinal. |
+| `control.policy.rule.delete` | `policy_admin` | `domain_id?`, `ordinal`, `request_id` | Command result. Other ordinals are not renumbered. |
 | `control.policy.validate` | `viewer` | `domain_id?` | `{rule_count, deny_rule_count}` without modifying state. |
 | `control.policy.publish` | `policy_admin` | `domain_id?`, `request_id`, `expires_at?` | `{policy_version, replayed}`. Publishes an immutable generation atomically. |
 
-`ordinal` is `0..4095`. `rule_line` is at most 2047 bytes and must already be in canonical form:
+`ordinal` is `0..4095`. Despite its historical name, `rule_line` now contains one complete canonical
+user ACL document, not one pipe-delimited internal rule. The Management JSON-RPC boundary accepts at
+most 2047 bytes. For example:
 
 ```text
-effect|subject_kind|subject|domain|actions|resource_type|match_kind|pattern
+user device-7 allow {
+  write topic root-a/groups/operators/devices/%u/{event,heartbeat}
+  read topic root-a/groups/operators/devices/%c/command
+  deny readwrite topic root-a/groups/operators/devices/%u/private
+}
 ```
 
-For example:
-
-```text
-allow|role|writer|root-a|publish,subscribe|mqtt_topic|adapter|root-a/events/#
-```
-
-The rule's embedded Domain must match the selected RPC Domain. Canonical escaping and token
-semantics are defined by `turbo_flow_security_rule_parse_line()` and
-`turbo_flow_security_rule_format_line()` in
-[turbo_flow_security.h](../turbo_flow/include/turbo_flow_security.h).
+Each enabled user may have only one draft ACL document in a Domain. The document's embedded Domain
+must match the selected RPC Domain, and all named groups must form an existing enabled parent chain.
+`read` authorizes SUBSCRIBE, `write` authorizes PUBLISH, `%u` matches the MQTT username, and `%c`
+matches the MQTT client ID. See [ACL_GRAMMAR.md](ACL_GRAMMAR.md) for the complete grammar, canonical
+format, topic tree, limits, deny precedence, and UI/RPC publishing workflow.
 
 ### Audit
 

@@ -47,10 +47,6 @@ static const char valid_external_https_config[] =
     "  enabled: true\n"
     "  listener_id: flowie-control-auth\n"
     "  method: bearer\n"
-    "  service_bindings:\n"
-    "    - service_id: broker-main\n"
-    "      token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN\n"
-    "      domain: root-a\n"
     "  external_https:\n"
     "    url: https://auth.example/v1/assert\n"
     "    service_token_ref: env://FLOWIE_THIRD_PARTY_AUTH_TOKEN\n"
@@ -132,6 +128,24 @@ static int parse_session_principal_limit(const char *limit, flowie_control_confi
   return parse_config(yaml, config, error);
 }
 
+static int parse_listener_stack_size(const char *stack_size, flowie_control_config_t *config,
+                                     flowie_control_config_error_t *error) {
+  char yaml[512];
+  int size = snprintf(yaml, sizeof(yaml),
+                      "version: 1\n"
+                      "listener:\n"
+                      "  coroutine_stack_size: %s\n"
+                      "  tls:\n"
+                      "    cert_file: cert.pem\n"
+                      "    key_file: key.pem\n"
+                      "storage:\n"
+                      "  sqlite:\n"
+                      "    path: control.db\n",
+                      stack_size);
+  if (size <= 0 || (size_t)size >= sizeof(yaml)) return TURBO_ENOMEM;
+  return flowie_control_config_parse_yaml(yaml, (size_t)size, config, error);
+}
+
 spec("Flowie controller configuration") {
   static flowie_control_config_t config;
   static flowie_control_config_error_t error;
@@ -146,6 +160,8 @@ spec("Flowie controller configuration") {
     check_int_eq(flowie_control_config_load(FLOWIE_CONTROL_TEST_CONFIG_PATH, &config, &error),
                  TURBO_OK);
     check_str_eq(config.listener.host, "127.0.0.1");
+    check_size_eq(config.listener.coroutine_stack_size,
+                  FLOWIE_CONTROL_CONFIG_LISTENER_DEFAULT_COROUTINE_STACK_SIZE);
     check_size_eq(config.management.session_capacity, 1024u);
     check_size_eq(config.management.session_max_sessions_per_principal, 5u);
   }
@@ -155,6 +171,8 @@ spec("Flowie controller configuration") {
     check_int_eq(parse_config(valid_config, &config, &error), TURBO_OK);
     check_str_eq(config.listener.host, "127.0.0.1");
     check_int_eq(config.listener.port, 8443);
+    check_size_eq(config.listener.coroutine_stack_size,
+                  FLOWIE_CONTROL_CONFIG_LISTENER_DEFAULT_COROUTINE_STACK_SIZE);
     check_str_eq(config.management.rpc_path, "/v2/control/rpc");
     check_size_eq(config.management.session_capacity, 512u);
     check_size_eq(config.management.session_max_sessions_per_principal, 7u);
@@ -179,6 +197,16 @@ spec("Flowie controller configuration") {
   it("defaults each principal to five concurrent management sessions") {
     check_int_eq(parse_config(valid_postgresql_config, &config, &error), TURBO_OK);
     check_size_eq(config.management.session_max_sessions_per_principal, 5u);
+  }
+
+  it("rejects a listener coroutine stack below the safe minimum") {
+    check_int_eq(parse_listener_stack_size("262143", &config, &error), TURBO_ERANGE);
+    check_str_eq(error.path, "$.listener.coroutine_stack_size");
+  }
+
+  it("rejects a listener coroutine stack above the supported maximum") {
+    check_int_eq(parse_listener_stack_size("2097153", &config, &error), TURBO_ERANGE);
+    check_str_eq(error.path, "$.listener.coroutine_stack_size");
   }
 
   it("rejects a zero per-principal management session limit") {
@@ -277,7 +305,7 @@ spec("Flowie controller configuration") {
     check_str_eq(error.path, "$.listener.tls.key_password_ref");
   }
 
-  it("rejects duplicate scoped service identifiers") {
+  it("rejects the removed static service binding configuration") {
     static const char yaml[] = "version: 1\n"
                                "listener:\n"
                                "  tls:\n"
@@ -294,13 +322,11 @@ spec("Flowie controller configuration") {
                                "  listener_id: auth-listener\n"
                                "  method: password\n"
                                "  service_bindings:\n"
-                               "    - service_id: broker-a\n"
+                               "    - service_id: broker-main\n"
                                "      token_ref: env://FLOWIE_BROKER_A_TOKEN\n"
-                               "      domain: root-a\n"
-                               "    - service_id: broker-a\n"
-                               "      token_ref: env://FLOWIE_BROKER_B_TOKEN\n"
-                               "      domain: root-b\n";
-    check_int_eq(parse_config(yaml, &config, &error), TURBO_EALREADY);
+                               "      domain: root-a\n";
+    check_int_eq(parse_config(yaml, &config, &error), TURBO_EINVAL);
+    check_str_eq(error.path, "$.auth.service_bindings");
   }
 
   it("requires the listener body limit to cover the RPC limit") {
@@ -339,11 +365,7 @@ spec("Flowie controller configuration") {
                                "  local_executor:\n"
                                "    workers: 6\n"
                                "    queue_capacity: 256\n"
-                               "    deadline_ms: 12000\n"
-                               "  service_bindings:\n"
-                               "    - service_id: broker-main\n"
-                               "      token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN\n"
-                               "      domain: root-a\n";
+                               "    deadline_ms: 12000\n";
     check_int_eq(parse_config(yaml, &config, &error), TURBO_OK);
     check_true(config.auth.enabled);
     check_false(config.auth.external_https.enabled);
@@ -405,11 +427,7 @@ spec("Flowie controller configuration") {
                                "  listener_id: flowie-control-auth\n"
                                "  method: password\n"
                                "  local_executor:\n"
-                               "    deadline_ms: 60001\n"
-                               "  service_bindings:\n"
-                               "    - service_id: broker-main\n"
-                               "      token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN\n"
-                               "      domain: root-a\n";
+                               "    deadline_ms: 60001\n";
     check_int_eq(parse_config(yaml, &config, &error), TURBO_ERANGE);
     check_str_eq(error.path, "$.auth.local_executor.deadline_ms");
   }

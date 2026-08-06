@@ -2,7 +2,7 @@
 
 #include "flow_connection.h"
 #include "flow_timer.h"
-#include "http/http_client.h"
+#include "turbo_http.h"
 #include "rpc_client.h"
 #include "turbo_error.h"
 #include "turbo_str.h"
@@ -21,8 +21,8 @@ typedef struct flow_rpc_client_adapter_s {
   tstr_t bearer_token;
   tstr_t poll_params;
   uint32_t poll_interval_ms;
-  http_client_t *http_client;
-  int owns_http_client;
+  turbo_http_t *facade;
+  int owns_facade;
   rpc_client_t *rpc_client;
   atomic_int started;
   tf_connection_state_t connection;
@@ -289,7 +289,7 @@ static void flow_rpc_client_shutdown(void *ctx) {
     adapter->wait_timer_initialized = 0;
   }
   rpc_client_destroy(adapter->rpc_client);
-  if (adapter->owns_http_client) http_client_destroy(adapter->http_client);
+  if (adapter->owns_facade) turbo_http_destroy(adapter->facade);
   if (adapter->lock_initialized) turbo_mutex_destroy(&adapter->lock);
   tstr_freep(&adapter->url);
   tstr_freep(&adapter->method);
@@ -337,23 +337,35 @@ int turbo_flow_rpc_register_client_adapter_ex(
     flow_rpc_client_shutdown(adapter);
     return TURBO_ENOMEM;
   }
-  adapter->http_client = binding ? binding->client : http_client_create(NULL);
-  adapter->owns_http_client = binding ? binding->take_ownership != 0 : 1;
-  if (!adapter->http_client) {
+  if (binding) {
+    adapter->facade = binding->client;
+    adapter->owns_facade = binding->take_ownership != 0;
+  } else {
+    turbo_http_options_t options;
+    rc = turbo_http_options_init(&options, sizeof(options));
+    if (rc == TURBO_OK) options.transport = TURBO_HTTP_TRANSPORT_H1;
+    if (rc == TURBO_OK && config->timeout_ms > 0) options.timeout_ms = config->timeout_ms;
+    if (rc == TURBO_OK) rc = turbo_http_create_sync(&options, &adapter->facade);
+    if (rc == TURBO_OK) adapter->owns_facade = 1;
+  }
+  if (!adapter->facade) {
     flow_rpc_client_shutdown(adapter);
     return TURBO_ENOMEM;
+  }
+  if (adapter->bearer_token) {
+    rc = turbo_http_set_bearer_token(adapter->facade, adapter->bearer_token);
+    if (rc != TURBO_OK) {
+      flow_rpc_client_shutdown(adapter);
+      return rc;
+    }
   }
   if (tf_timer_init(&adapter->wait_timer) != TURBO_OK) {
     flow_rpc_client_shutdown(adapter);
     return TURBO_ENOMEM;
   }
   adapter->wait_timer_initialized = 1;
-  if (config->timeout_ms > 0) http_client_set_timeout(adapter->http_client, config->timeout_ms);
-  if (adapter->bearer_token) {
-    http_client_set_bearer_token(adapter->http_client, adapter->bearer_token);
-  }
   rpc_config.url = adapter->url;
-  rpc_config.http_client = adapter->http_client;
+  rpc_config.facade_client = adapter->facade;
   adapter->rpc_client = rpc_client_create(&rpc_config);
   if (!adapter->rpc_client) {
     flow_rpc_client_shutdown(adapter);

@@ -69,6 +69,24 @@ typedef struct flowie_control_dashboard_page_s {
    0,                                                                                              \
    FLOWIE_CONTROL_DASHBOARD_SECTION_ALL}
 
+typedef enum flowie_control_dashboard_action_kind_e {
+  FLOWIE_CONTROL_DASHBOARD_ACTION_NONE = 0,
+  FLOWIE_CONTROL_DASHBOARD_ACTION_CREDENTIAL_ISSUED
+} flowie_control_dashboard_action_kind_t;
+
+typedef struct flowie_control_dashboard_action_result_s {
+  size_t size;
+  flowie_control_dashboard_action_kind_t kind;
+  char domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char principal_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char token[FLOWIE_CONTROL_CREDENTIAL_TOKEN_CAPACITY];
+  size_t token_size;
+} flowie_control_dashboard_action_result_t;
+
+#define FLOWIE_CONTROL_DASHBOARD_ACTION_RESULT_INIT                                                \
+  {sizeof(flowie_control_dashboard_action_result_t), FLOWIE_CONTROL_DASHBOARD_ACTION_NONE, {0},    \
+   {0}, {0}, 0u}
+
 typedef int (*flowie_control_dashboard_resolve_session_fn)(
     void *ctx, const Req *request, flowie_control_management_caller_t *caller_out,
     char csrf_token_out[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u]);
@@ -150,6 +168,12 @@ int flowie_control_dashboard_render_page(
     flowie_control_dashboard_t *dashboard, const flowie_control_management_caller_t *caller,
     const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u],
     const flowie_control_dashboard_page_t *page, char **html_out, size_t *html_size_out);
+int flowie_control_dashboard_render_page_result(
+    flowie_control_dashboard_t *dashboard, const flowie_control_management_caller_t *caller,
+    const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u],
+    const flowie_control_dashboard_page_t *page,
+    const flowie_control_dashboard_action_result_t *action_result, char **html_out,
+    size_t *html_size_out);
 void flowie_control_dashboard_html_free(char *html);
 
 /** Parse the exact, canonical dashboard cursor query into caller-owned storage. */
@@ -166,6 +190,12 @@ int flowie_control_dashboard_process_form(
     flowie_control_dashboard_t *dashboard, const flowie_control_management_caller_t *caller,
     const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u], const char *body,
     size_t body_size);
+int flowie_control_dashboard_process_form_result(
+    flowie_control_dashboard_t *dashboard, const flowie_control_management_caller_t *caller,
+    const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u], const char *body,
+    size_t body_size, flowie_control_dashboard_action_result_t *result_out);
+void flowie_control_dashboard_action_result_clear(
+    flowie_control_dashboard_action_result_t *result);
 
 #ifdef __cplusplus
 }

@@ -131,8 +131,13 @@ int turbo_flow_fmq_security_owner_create_resolved(
       config->policy_provider_factories, config->policy_provider_factory_count, resolved,
       policy_source, config->key_provider, &owner->policy_provider, error);
   if (rc != TURBO_OK) goto fail;
-  rc =
-      turbo_flow_security_realm_bind_policy_provider(owner->realm, owner->policy_provider.provider);
+  if (owner->policy_provider.provider) {
+    rc = turbo_flow_security_realm_bind_policy_provider(owner->realm,
+                                                        owner->policy_provider.provider);
+  } else {
+    rc = turbo_flow_security_realm_bind_authorization_provider(
+        owner->realm, owner->policy_provider.authorization_provider);
+  }
   if (rc != TURBO_OK) {
     flow_fmq_security_owner_error(error, rc, adapter_name, "security_realm",
                                   "failed to bind ACL provider to realm");

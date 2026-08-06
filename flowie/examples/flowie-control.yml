@@ -3,6 +3,7 @@ version: 1
 listener:
   host: 127.0.0.1
   port: 8443
+  coroutine_stack_size: 262144
   tls:
     cert_file: certs/flowie-control-server-chain.pem
     key_file: certs/flowie-control-server-key.pem
@@ -62,7 +63,7 @@ dashboard:
 auth:
   enabled: false
   # Set enabled=true and configure the common fields below to use local Auth.
-  # Add external_https only when third-party HTTPS Auth must replace the local verifier.
+  # external_https remains schema-reserved; current runtime composition rejects it.
   # listener_id: flowie-control-auth
   # method: bearer
   # principal_ttl_seconds: 300
@@ -70,13 +71,8 @@ auth:
   #   workers: 4
   #   queue_capacity: 128
   #   deadline_ms: 10000
-  # service_bindings:
-  #   - service_id: broker-main
-  #     token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
-  #     domain: root-a
-  #     # Optional second factor. This additionally requires listener.tls.client_auth: required,
-  #     # a client_ca_file, and dashboard.enabled: false.
-  #     # peer_certificate_sha256: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  # Broker callers are Repository service principals with flowie_auth_client and/or
+  # flowie_acl_client Roles. Their generated credentials are not stored in this YAML.
   # external_https: # mutually exclusive with an explicit local_executor block
   #   url: https://third-party-auth.internal/v2/assert
   #   service_token_ref: env://FLOWIE_THIRD_PARTY_AUTH_TOKEN

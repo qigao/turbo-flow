@@ -298,7 +298,7 @@ static int flowie_control_management_session_authenticate(
   request.remote_address = remote_address;
   rc = flowie_control_auth_service_authenticate_root(
       store->auth_service, domain_id, FLOWIE_CONTROL_MANAGEMENT_SESSION_SCOPE, &request, 0,
-      &principal, NULL);
+      NULL, &principal, NULL);
   if (rc != TURBO_OK) goto done;
   rc = flowie_control_management_identity_resolve_principal(
       &store->repository, principal.domain_id, principal.principal_id, &caller);

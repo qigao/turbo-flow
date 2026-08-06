@@ -171,8 +171,10 @@ static void flow_http_server_handler(Req *req, Res *res) {
   {
     const char *content_type = get_headers(req, "Content-Type");
     const turbo_flow_content_descriptor_t *descriptor = NULL;
-    if (content_type) {
-      rc = flow_http_content_cache_get(&adapter->content_cache, content_type, &descriptor);
+    if (content_type || req->body_len > 0u) {
+      rc = flow_http_content_cache_get(&adapter->content_cache,
+                                       content_type ? content_type : FLOW_HTTP_DEFAULT_CONTENT_TYPE,
+                                       &descriptor);
       if (rc != TURBO_OK && rc != TURBO_ENOENT) {
         turbo_flow_msg_cleanup(&msg);
         atomic_store_explicit(&adapter->connection.last_status, rc, memory_order_relaxed);

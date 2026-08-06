@@ -17,6 +17,11 @@ extern "C" {
 typedef struct flowie_control_auth_service_s flowie_control_auth_service_t;
 typedef uint64_t (*flowie_control_auth_clock_fn)(void *ctx);
 
+typedef enum flowie_control_service_permission_e {
+  FLOWIE_CONTROL_SERVICE_AUTHENTICATE = 1u << 0,
+  FLOWIE_CONTROL_SERVICE_ACL_CHECK = 1u << 1
+} flowie_control_service_permission_t;
+
 typedef int (*flowie_control_auth_policy_version_fn)(void *ctx, const char *domain_id,
                                                      uint64_t *policy_version_out);
 
@@ -72,11 +77,15 @@ typedef struct flowie_control_verified_caller_s {
   const char *service_id;
   const char *domain_id;
   const char *peer_certificate_sha256;
+  uint32_t permissions;
   int authenticated;
+  char resolved_listener_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char resolved_service_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
+  char resolved_domain_id[TURBO_FLOW_SECURITY_ID_MAX + 1u];
 } flowie_control_verified_caller_t;
 
 #define FLOWIE_CONTROL_VERIFIED_CALLER_INIT                                                        \
-  {sizeof(flowie_control_verified_caller_t), NULL, NULL, NULL, NULL, 0}
+  {sizeof(flowie_control_verified_caller_t), NULL, NULL, NULL, NULL, 0u, 0, {0}, {0}, {0}}
 
 typedef struct flowie_control_authenticate_request_s {
   size_t size;
@@ -124,6 +133,7 @@ int flowie_control_auth_service_authenticate(flowie_control_auth_service_t *serv
 int flowie_control_auth_service_authenticate_root(
     flowie_control_auth_service_t *service, const char *domain_id, const char *caller_scope,
     const flowie_control_authenticate_request_t *request, int require_policy,
+    const flowie_control_credential_resolution_t *resolved_credential,
     turbo_flow_security_principal_t *principal_out, int *credential_cache_hit_out);
 
 /**

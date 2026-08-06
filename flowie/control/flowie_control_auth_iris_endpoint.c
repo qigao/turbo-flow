@@ -445,24 +445,31 @@ static void flowie_control_auth_http_wipe_header(Req *req, const char *name) {
 
 static int flowie_control_auth_http_resolve_caller(
     flowie_control_auth_iris_endpoint_t *endpoint, const Req *req,
-    const char *verified_peer_certificate_sha256, flowie_control_verified_caller_t *caller_out) {
+    flowie_control_verified_caller_t *caller_out) {
   static const char prefix[] = "Bearer ";
   const char *authorization = NULL;
+  const char *service_domain = NULL;
+  const char *service_id = NULL;
   size_t authorization_size;
   int rc;
 
   if (!endpoint || !caller_out || caller_out->size < sizeof(*caller_out)) return TURBO_EINVAL;
   rc = flowie_control_auth_http_header(req, "Authorization", &authorization);
   if (rc != TURBO_OK) return TURBO_EPERM;
+  if (flowie_control_auth_http_header(req, "X-Flowie-Service-Domain", &service_domain) !=
+          TURBO_OK ||
+      flowie_control_auth_http_header(req, "X-Flowie-Service-Id", &service_id) != TURBO_OK)
+    return TURBO_EPERM;
   authorization_size = strnlen(authorization, FLOWIE_CONTROL_AUTH_HTTP_AUTHORIZATION_MAX + 1u);
   if (authorization_size <= sizeof(prefix) - 1u ||
       authorization_size > FLOWIE_CONTROL_AUTH_HTTP_AUTHORIZATION_MAX ||
       memcmp(authorization, prefix, sizeof(prefix) - 1u) != 0)
     return TURBO_EPERM;
   return flowie_control_service_credential_resolve(
-      endpoint->service_credentials,
+      endpoint->service_credentials, service_domain, service_id,
       (const uint8_t *)authorization + sizeof(prefix) - 1u,
-      authorization_size - (sizeof(prefix) - 1u), verified_peer_certificate_sha256, caller_out);
+      authorization_size - (sizeof(prefix) - 1u), FLOWIE_CONTROL_SERVICE_AUTHENTICATE,
+      caller_out);
 }
 
 static int flowie_control_auth_http_response_status(int rc) {
@@ -530,6 +537,7 @@ int flowie_control_auth_iris_endpoint_authenticate_verified(
   job->caller.domain_id = job->domain_id;
   job->caller.peer_certificate_sha256 =
       job->peer_certificate_sha256[0] ? job->peer_certificate_sha256 : NULL;
+  job->caller.permissions = caller->permissions;
   job->caller.authenticated = caller->authenticated;
   job->request = *request;
   flowie_control_auth_principal_init(&job->principal);
@@ -602,8 +610,7 @@ int flowie_control_auth_iris_endpoint_process(flowie_control_auth_iris_endpoint_
     status = flowie_control_auth_http_response_status(rc);
     goto done;
   }
-  rc = flowie_control_auth_http_resolve_caller(
-      endpoint, req, peer_certificate_sha256[0] ? peer_certificate_sha256 : NULL, &caller);
+  rc = flowie_control_auth_http_resolve_caller(endpoint, req, &caller);
   if (rc != TURBO_OK) {
     status = flowie_control_auth_http_response_status(rc);
     goto done;

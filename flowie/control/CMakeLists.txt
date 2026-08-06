@@ -130,7 +130,7 @@ target_link_libraries(flowie_control_startup
     PRIVATE FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR="${FLOWIE_CONTROL_DASHBOARD_RESOURCE_DIR}")
   target_link_libraries(flowie_control_iris_adapter
                         PUBLIC flowie_control_core TurboHttp::Iris
-                        PRIVATE TurboHttp::HttpClient TurboNet::CoroNet TurboUtils::Core
+                        PRIVATE flowie Flowie::Protocol TurboHttp::HttpClient TurboNet::CoroNet TurboUtils::Core
                                 TurboUtils::Mustache TurboUtils::Parser monocypher)
 
     add_library(flowie_control_runtime STATIC flowie_control_runtime.c

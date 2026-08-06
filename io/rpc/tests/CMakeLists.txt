@@ -1,7 +1,7 @@
 cmake_add_test(
   test_turbo_flow_rpc
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_turbo_flow_rpc.c
-  LIBS TurboFlow::RPC TurboFlow::Flow TurboHttp::HttpClient TurboUtils::TinyTest
+  LIBS TurboFlow::RPC TurboFlow::Flow TurboHttp::TurboHttp TurboUtils::TinyTest
   FOLDER "io/rpc/tests")
 
 set_tests_properties(test_turbo_flow_rpc PROPERTIES LABELS "fmq-release;fmq-chaos")
@@ -11,6 +11,6 @@ if(WIN32)
   set_tests_properties(
     test_turbo_flow_rpc
     PROPERTIES ENVIRONMENT_MODIFICATION
-               "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::HttpClient>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::Iris>")
+               "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::TurboHttp>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboHttp::Iris>")
 endif()
 

@@ -1,7 +1,7 @@
 # Flowie Control 部署与配置指南
 
 Control runtime 独立于 MQTT 数据面，组合本地授权事实源、JSON-RPC、HTMX Dashboard，以及可选的
-`/v4/authenticate` 与 `/v4/acl` 服务。推荐生产入口是 `flowie_server --control-config`，由 Server
+`/v4/authenticate` 与 `/v4/acl/check` 服务。推荐生产入口是 `flowie_server --control-config`，由 Server
 Application 统一启动和关闭 Control 与 MQTT；`flowie-control` 独立可执行文件保留用于兼容和诊断。
 Auth 可选择本地 Repository verifier，
 或只通过 HTTPS 调用一个第三方认证系统；Flowie Broker 不直连身份/ACL 数据库或目录。
@@ -24,7 +24,7 @@ build\Msvc-Release\bin\flowie-control.exe --check `
 ```
 
 真实 listener/Auth/ACL gate 使用临时证书、SQLite 和子进程，覆盖本地 credential 成功/拒绝、
-登录会话、完整 ACL bundle、版本不存在、作用域 service token，以及客户端证书不能代替管理登录；
+登录会话、逐请求 ACL decision、策略版本不匹配、Repository service credential，以及客户端证书不能代替管理登录；
 测试不修改源码树中的部署文件：
 
 ```powershell
@@ -67,8 +67,9 @@ peer，显式启用 trusted PROXY v1/v2 的 TLS/WSS endpoint 则使用已验证 
 单独保留 direct transport peer。Pipe 使用 `local`。Flowie 不读取 `X-Forwarded-For` 或其他 HTTP
 代理 header。`peer_certificate_sha256` 仅在 MQTT TLS/WSS endpoint 配置
 `tls_client_ca_file`、CoroNet 已验证客户端证书后出现；否则是空字符串。该 MQTT 客户证书只描述
-MQTT client；Broker 调用 `flowie-control` 的 Domain 来自作用域 service binding。若 binding
-额外配置 Broker 客户证书指纹，它也是另一条独立信任链上的第二因子。
+MQTT client。Broker 使用 Repository 中具有精确 endpoint Role 的 service principal 调用 Control；
+Auth 成功响应中的用户 Domain 才决定后续 ACL policy，Broker service principal 的 Domain 不会成为
+业务 Domain，也不会加入 topic。
 
 第三方 HTTPS assertion contract 为严格 version 2，并接收相同的直接 peer address 与可选 MQTT 客户
 证书指纹。第三方系统可据此组合自身账户认证，但返回的 external groups/claims 仍必须经过本地
@@ -99,6 +100,7 @@ principal 映射；ACL 始终只来自 control Repository。
 | `version` | 当前只接受 `1` |
 | `listener.host` | 默认 `127.0.0.1`；生产应显式配置 loopback 或管理网地址 |
 | `listener.port` | `1..65535`，默认 `8443` |
+| `listener.coroutine_stack_size` | Control listener 每个协程的栈字节数，默认且最小 `262144`，最大 `2097152`；修改后需重启 |
 | `listener.tls.cert_file` | 必填，PEM server certificate chain |
 | `listener.tls.key_file` | 必填，PEM private key |
 | `listener.tls.key_password_ref` | 可选，只接受 `env://UPPER_CASE_NAME`，不接受 literal |
@@ -119,8 +121,7 @@ principal 映射；ACL 始终只来自 control Repository。
 | `management.session.ttl_seconds` | 会话上限，默认 `3600`，最大 `86400`；不会超过认证 principal expiry |
 | `management.login_executor.*` | 本地管理登录的 `workers/queue_capacity/deadline_ms`，默认 `4/128/10000`；外部 HTTPS Auth 时禁止显式配置 |
 | `dashboard.enabled` | 是否注册固定 HTMX Dashboard 路由 |
-| `auth.enabled` | 是否注册 `/v4/authenticate` 与 `/v4/acl`；默认关闭 |
-| `auth.service_bindings` | `service_id`、`token_ref`、`domain` 的唯一绑定，最多 32 个 |
+| `auth.enabled` | 是否注册 `/v4/authenticate` 与 `/v4/acl/check`；默认关闭 |
 | `auth.local_executor.workers` | 本地 Auth 同步 verifier worker 数，`1..64`，默认 `4` |
 | `auth.local_executor.queue_capacity` | 本地 Auth 等待队列容量，`1..4096`，默认 `128`；满载返回 429 |
 | `auth.local_executor.deadline_ms` | 本地 Auth HTTP 等待上限，`1..60000`，默认 `10000`；到期返回 503 |
@@ -134,9 +135,9 @@ principal 映射；ACL 始终只来自 control Repository。
 | `auth.external_https.max_in_flight` | `1..1024`，默认 `64`；满载时在读取 token 和发起网络请求前返回 busy |
 | `auth.external_https.tls.*` | 可选私有 CA；client certificate/key 必须成对出现，密码只接受 `env://...` |
 
-当 `auth.enabled: true` 时还必须设置 `listener_id`、`method` 和非空 `service_bindings`。每个
-`token_ref` 只接受独立 `env://...`，`service_id` 与 `token_ref` 都不得重复；auth cache 容量最大
-4096，TTL 最大 60 秒，
+当 `auth.enabled: true` 时还必须设置 `listener_id` 和 `method`。Broker caller 必须是 Repository 中
+enabled 的 service principal，持有 generated credential，并按 endpoint 分配 `flowie_auth_client` 或
+`flowie_acl_client`；Control YAML 不保存 service binding 或 token。auth cache 容量最大 4096，TTL 最大 60 秒，
 同一组容量/TTL 限制同时约束 positive credential cache 与 principal snapshot cache。principal cache
 命中仍会复核 user/credential revision、全局 store revision 与 policy version，任一事实源不可用时
 fail closed。
@@ -233,9 +234,10 @@ service credential。
 `viewer`，Group 管理使用 `viewer + user_admin`，ACL 管理使用 `viewer + policy_admin`；只有确实负责
 整个 Domain 的平台才使用 `security_admin`。
 
-此处的 management session 与下面两类 credential 相互独立：`auth.service_bindings` token 只保护
-Broker 到 `/v4/authenticate`、`/v4/acl` 的调用，`control.credential.generate/rotate` 生成的 principal
-credential 只用于协议身份认证。二者都不能作为 `/v2/control/rpc` 的 Bearer token，也不得相互复用。
+此处的 management session 与 generated credential 相互独立。Repository service principal 的
+generated credential 只保护 Broker 到 `/v4/authenticate`、`/v4/acl/check` 的调用；MQTT principal 的
+generated credential 可作为 MQTT password。两者都不能作为 `/v2/control/rpc` 的 Bearer token，
+也不得相互复用。
 session 在过期或 Flowie 重启后由第三方后端重新登录获取；禁用 principal 或撤销管理角色会使现有
 session 的后续请求立即失去权限。
 
@@ -270,10 +272,6 @@ auth:
     workers: 4
     queue_capacity: 128
     deadline_ms: 10000
-  service_bindings:
-    - service_id: broker-main
-      token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
-      domain: root-a
 ```
 
 第三方 Auth 在同一块增加：
@@ -283,10 +281,6 @@ auth:
   enabled: true
   listener_id: flowie-control-auth
   method: bearer
-  service_bindings:
-    - service_id: broker-main
-      token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
-      domain: root-a
   external_https:
     url: https://third-party-auth.internal/v2/assert
     service_token_ref: env://FLOWIE_THIRD_PARTY_AUTH_TOKEN
@@ -302,13 +296,15 @@ auth:
       client_key_password_ref: env://FLOWIE_THIRD_PARTY_AUTH_KEY_PASSWORD
 ```
 
-外层 `auth.service_bindings[].token_ref` 保护 Broker 到 `/v4/authenticate` 和 `/v4/acl` 的请求；内层
-`auth.external_https.service_token_ref` 保护 `flowie-control` 到第三方断言服务的请求。两个 token
-具有不同的信任方向、权限和轮换周期，不能复用。
+Broker 请求同时发送 generated service token、`X-Flowie-Service-Id` 与
+`X-Flowie-Service-Domain`；Control 从 Repository 校验 principal、credential 和 endpoint Role。
+`auth.external_https.service_token_ref` 则保护 `flowie-control` 到第三方断言服务的请求，两类 token
+具有不同的信任方向、权限和轮换周期，不能复用。当前 runtime composition 明确拒绝启用
+`external_https`（`TURBO_ENOTSUP`）；该配置只保留 schema 预检，不能用于部署。
 
-`GET /v4/acl` 只接受受信 service bearer。Domain 由命中的 service binding 解析，客户端不能通过
-path、query 或普通 header 指定。binding 可配置证书指纹作为第二因子，但 bearer 仍不可省略。
-可选 `X-TurboFlow-Policy-Version` 请求精确版本；响应始终是完整 v3 bundle，而不是逐条规则查询。
+`POST /v4/acl/check` 只接受具有 `flowie_acl_client` Role 的受信 service bearer。请求 body 的
+principal Domain 来自 Broker 先前获得的 Auth principal；MQTT 客户端不能通过 path、query、header
+或自定义 JSON 指定 Domain。响应是 version 4 的单次 allow/deny decision，不返回 ACL bundle。
 
 第三方成功断言的 `issuer` 和 `subject_type` 必须精确匹配配置，稳定 `subject` 被解释为当前 Domain
 中的本地 `principal_id`。Repository 随后重新检查该 principal 存在且 enabled，并只从本地事实源加载
@@ -316,9 +312,9 @@ Role/Group；第三方 groups 只是有界映射输入，不会自动获得本�
 主体不存在或本地用户禁用都 fail closed，且不回退到本地密码。并发达到 `max_in_flight` 时返回 busy，
 不会先读取 service token，也不会建立额外连接。
 
-service token 每次请求都从 secret provider 重新获取，可在不重启 Flowie 的情况下轮换。CA、client
-certificate 与 private key 在 provider 创建时加载，当前不支持原地热重载；证书文件替换后应通过受控
-进程重启重建 provider，健康检查通过后再切流，失败则回滚到仍持有旧证书的实例。
+Broker service token 每次请求都从其 secret provider 获取，可独立轮换。Control 验证的 service
+credential、principal enabled 状态和 endpoint Role 以 Repository 为事实源；rotate/revoke 或 Role
+移除后请求 fail closed。
 
 HTTPS adapter 内部提供不含 identity、credential、token、URL 或响应内容的统计快照，字段包括
 `started_requests`、`in_flight`、`succeeded`、`denied`、`local_overload`、`remote_overload`、
@@ -347,6 +343,17 @@ JSON-RPC `-32602`。响应继承管理 RPC 的 `Cache-Control: no-store`、禁�
 `DISCONNECT 0x87` 再关闭，MQTT 3.x 直接关闭。MQTT 5 客户端必须在到期前发起 Enhanced AUTH
 re-authentication；成功提交的新 principal 会原子替换旧 expiry deadline。禁用用户、轮换或撤销
 credential 仍不会建立控制面到 Broker 的即时 push 通道，最坏传播时间由当前 principal TTL 决定。
+
+## ACL 文法与发布
+
+当前 ACL 以“每个用户一份文档”的形式维护。顶层 `allow`/`deny` 控制 MQTT CONNECT，文档中的
+`read`、`write`、`readwrite` 分别控制 SUBSCRIBE、PUBLISH 或两者；topic 使用固定的
+`<domain>/groups/<group-path>/devices/<device>/<leaf>` 树，并支持 `%u` username、`%c` client ID、
+MQTT `+`/`#` wildcard 和末尾 leaf alternatives。
+
+完整 grammar、canonical 格式、group 多层树约束、容量限制，以及 Control UI/Management RPC 的
+draft、validate、publish 流程见 [ACL_GRAMMAR.md](ACL_GRAMMAR.md)。旧的 pipe-delimited internal rule
+不是 Control ACL 输入格式。
 
 ## 登录会话与管理权限
 
@@ -419,6 +426,12 @@ Dashboard 入口为 `/v2/control/dashboard`，只显示状态概览；管理数�
 数据集。`system/system_admin` 会看到 Domain 选择器：它提示 `control.domain.list` 返回的前
 100 个 Root，也接受手工输入其他已存在 Root；当前 `domain_id` 会保留在页面导航、查询、keyset
 分页和所有 HTMX CRUD 中。普通 Root 管理员不显示该选择器，手工构造跨 Root query/form 仍返回 403。
+在 `system` scope 的 Overview 中，`system_admin` 可通过 **Add domain** 创建新 Domain；切换到目标
+Domain 后，Users 页面可创建 `principal_type: service` 的用户。拥有当前 Domain `security_admin`
+权限的 caller 可在该 service 用户行签发或撤销 token：首次签发调用 generate，已有 credential 时同一
+操作调用 rotate 并立即使旧 token 失效。明文 token 只出现在该次成功 POST 的 HTML 结果中，不进入
+session、URL、审计或持久化明文；页面刷新、关闭提示或响应丢失后无法恢复，只能用新的 request ID 再次
+签发。关闭提示前会先清空 DOM 中的 token；服务端在发送响应后擦除包含 token 的 HTML buffer。
 用户的 Group membership 在 Users 页面的 Access 操作中维护：add/remove 都从当前 Root 的 Group 树选择，
 选项按 parent/depth 深度优先排列；Root 节点不能成为 membership。创建 Group 时也从同一树选择
 enabled 且未达到最大深度的 parent。Groups 页面只管理树节点本身的创建与禁用，不再提供第二套

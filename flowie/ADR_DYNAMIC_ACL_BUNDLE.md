@@ -2,7 +2,8 @@
 
 ## 状态
 
-已采纳，适用于 TurboFlow SecurityRealm 与 bundled `flowie_server`。
+已被 [ADR_HTTPS_AUTH_SERVICE.md](ADR_HTTPS_AUTH_SERVICE.md) 取代。以下内容只记录旧 bundle
+方案，不是当前 Broker/Control 接口契约；现行实现使用 `POST /v4/acl/check` 返回逐请求 decision。
 
 ## 背景
 

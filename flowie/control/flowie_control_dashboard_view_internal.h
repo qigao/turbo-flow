@@ -30,7 +30,9 @@ int flowie_control_dashboard_view_render_content(
     const flowie_control_management_caller_t *authority_caller,
     const flowie_control_management_caller_t *scoped_caller,
     const char csrf_token[FLOWIE_CONTROL_DASHBOARD_CSRF_SIZE + 1u],
-    const flowie_control_dashboard_page_t *page, char **html_out, size_t *html_size_out);
+    const flowie_control_dashboard_page_t *page,
+    const flowie_control_dashboard_action_result_t *action_result, char **html_out,
+    size_t *html_size_out);
 int flowie_control_dashboard_view_render_error(flowie_control_dashboard_view_t *view,
                                                const char *message, char **html_out,
                                                size_t *html_size_out);

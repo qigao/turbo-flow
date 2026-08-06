@@ -21,6 +21,13 @@
     <datalist id="domains">{{#domains}}<option value="{{domain_id}}"></option>{{/domains}}</datalist>
   </form>{{/can_select_root}}
   <div id="dashboard-feedback" class="feedback" aria-live="polite"></div>
+  {{#credential_issued}}<section class="credential-secret" data-credential-secret tabindex="-1" aria-labelledby="credential-secret-title" aria-describedby="credential-secret-guidance">
+    <div class="credential-secret__heading"><div><p class="eyebrow">Service credential</p><h2 id="credential-secret-title">New token ready</h2></div><button type="button" class="button--quiet" data-dismiss-credential>Dismiss token</button></div>
+    <dl class="credential-secret__identity"><div><dt>Domain</dt><dd>{{credential_domain}}</dd></div><div><dt>Service ID</dt><dd>{{credential_principal}}</dd></div></dl>
+    <p id="credential-secret-guidance">Copy this token now. It will not be shown again. Issuing another token immediately invalidates this one.</p>
+    <div class="credential-secret__value"><code data-credential-token tabindex="0">{{credential_token}}</code><button type="button" data-copy-credential>Copy token</button></div>
+    <output class="credential-secret__status" data-credential-copy-status aria-live="polite"></output>
+  </section>{{/credential_issued}}
   <template id="user-picker-options">{{#user_options}}<button type="button" class="entity-picker__option" data-picker-option data-value="{{principal_id}}" role="option" aria-selected="false" tabindex="-1"{{^enabled}} disabled{{/enabled}}><span>{{principal_id}}</span><small>{{principal_type}}</small></button>{{/user_options}}{{^user_options}}<p class="empty">No users yet. Create a user to assign access.</p>{{/user_options}}</template>
   <template id="group-picker-options">{{#group_options}}<button type="button" class="entity-picker__option entity-picker__option--tree" data-picker-option data-value="{{group_id}}" role="option" aria-selected="false" tabindex="-1"{{^enabled}} disabled{{/enabled}}><span>{{tree_label}}</span><small>Group</small></button>{{/group_options}}{{^group_options}}<p class="empty">No groups yet. Create a group to organize access.</p>{{/group_options}}</template>
   <template id="group-member-picker-options">{{#group_options}}<button type="button" class="entity-picker__option entity-picker__option--tree" data-picker-option data-value="{{group_id}}" role="option" aria-selected="false" tabindex="-1"{{#add_disabled}} disabled{{/add_disabled}}><span>{{tree_label}}</span><small>Group</small></button>{{/group_options}}{{^group_options}}<p class="empty">No groups available for membership.</p>{{/group_options}}</template>
@@ -41,8 +48,21 @@
   {{#show_overview}}<section id="overview" class="summary" aria-labelledby="summary-title">
     <div class="section-heading">
       <div><p class="eyebrow">Current state</p><h2 id="summary-title">Policy overview</h2></div>
-      <span class="scope">Domain: {{domain_id}} · User: {{actor}}</span>
+      <div class="dataset-toolbar">
+        <span class="scope">Domain: {{domain_id}} · User: {{actor}}</span>
+        {{#can_create_domain}}<button type="button" popovertarget="domain-add">Add domain</button>{{/can_create_domain}}
+      </div>
     </div>
+    {{#can_create_domain}}<div id="domain-add" class="control-popover" popover>
+      <div class="popover-heading"><div><p class="eyebrow">Domains</p><h3>Create a domain</h3></div><button type="button" class="button--close" popovertarget="domain-add" popovertargetaction="hide" aria-label="Close" title="Close"></button></div>
+      <p class="task-hint">Create the isolation boundary first, then switch to it to add service or human users.</p>
+      <div class="command command--compact">
+        <input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="domain.create">
+        <label>Domain ID<input name="domain_id" required maxlength="255" autocomplete="off"></label>
+        <input type="hidden" name="request_id" data-request-id>
+        <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Create domain</button>
+      </div>
+    </div>{{/can_create_domain}}
     <dl class="metrics">
       <div><dt>Policy version</dt><dd>{{policy_version}}</dd></div>
       <div><dt>Draft rules</dt><dd>{{draft_rule_count}}</dd></div>
@@ -71,7 +91,8 @@
       <div class="command command--compact">
         <input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="user.create">
         <label>User ID<input name="principal_id" required maxlength="255"></label>
-        <label>Type<input name="principal_type" required maxlength="63"></label>
+        <label>Type<input name="principal_type" list="principal-types" required maxlength="63" placeholder="service"></label>
+        <datalist id="principal-types"><option value="service"></option><option value="device"></option><option value="human"></option></datalist>
         <input type="hidden" name="request_id" data-request-id>
         <button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this">Add user</button>
       </div>
@@ -79,6 +100,7 @@
     {{/can_user_admin}}
     <div class="table-wrap"><table><thead><tr><th>ID</th><th>Type</th><th>Status</th><th class="actions-column">Actions</th></tr></thead><tbody>
       {{#users}}<tr><td>{{principal_id}}</td><td>{{principal_type}}</td><td>{{#enabled}}Enabled{{/enabled}}{{^enabled}}Disabled{{/enabled}}</td><td class="table-actions">
+        {{#can_security_admin}}{{#is_service}}{{#enabled}}<button type="button" class="button--quiet" popovertarget="service-token-{{row_index}}">Issue token</button><button type="button" class="button--quiet button--danger-text" popovertarget="service-token-revoke-{{row_index}}">Revoke token</button>{{/enabled}}{{/is_service}}{{/can_security_admin}}
         {{#can_manage_access}}<button type="button" class="button--quiet" popovertarget="user-access-{{row_index}}">Manage access</button>{{/can_manage_access}}
         {{#can_user_admin}}{{#enabled}}<button type="button" class="button--quiet button--danger-text" popovertarget="user-delete-{{row_index}}">Delete</button>{{/enabled}}{{^enabled}}<button type="button" class="button--quiet" disabled>Delete</button>{{/enabled}}{{/can_user_admin}}
         {{^can_manage_access}}{{^can_user_admin}}<span class="muted">View only</span>{{/can_user_admin}}{{/can_manage_access}}
@@ -92,6 +114,7 @@
           </div>
         </div>
         {{/can_manage_access}}
+        {{#can_security_admin}}{{#is_service}}{{#enabled}}<div id="service-token-{{row_index}}" class="control-popover" popover><div class="popover-heading"><div><p class="eyebrow">{{principal_id}}</p><h3>Issue service token</h3></div><button type="button" class="button--close" popovertarget="service-token-{{row_index}}" popovertargetaction="hide" aria-label="Close" title="Close"></button></div><p class="task-hint">The new token replaces any existing token immediately and is shown only once.</p><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="credential.issue"><input type="hidden" name="principal_id" value="{{principal_id}}"><input type="hidden" name="request_id" data-request-id><button type="button" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Issue a new token and invalidate any existing token?">Issue new token</button></div></div><div id="service-token-revoke-{{row_index}}" class="control-popover control-popover--danger" popover><div class="popover-heading"><div><p class="eyebrow">{{principal_id}}</p><h3>Revoke service token</h3></div><button type="button" class="button--close" popovertarget="service-token-revoke-{{row_index}}" popovertargetaction="hide" aria-label="Close" title="Close"></button></div><p class="task-hint">The service will be unable to authenticate until a new token is issued.</p><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="credential.revoke"><input type="hidden" name="principal_id" value="{{principal_id}}"><input type="hidden" name="request_id" data-request-id><button type="button" class="button--danger" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Revoke this service token now?">Revoke token</button></div></div>{{/enabled}}{{/is_service}}{{/can_security_admin}}
         {{#can_user_admin}}{{#enabled}}<div id="user-delete-{{row_index}}" class="control-popover control-popover--danger" popover><div class="popover-heading"><div><p class="eyebrow">{{principal_id}}</p><h3>Delete user</h3></div><button type="button" class="button--close" popovertarget="user-delete-{{row_index}}" popovertargetaction="hide" aria-label="Close" title="Close">x</button></div><p class="muted">This disables sign-in while retaining audit history.</p><div class="command command--compact"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="operation" value="user.disable"><input type="hidden" name="principal_id" value="{{principal_id}}"><input type="hidden" name="request_id" data-request-id><button type="button" class="button--danger" hx-post="{{action_url}}" hx-include="closest .command" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="this" hx-confirm="Disable this user?">Disable user</button></div></div>{{/enabled}}{{/can_user_admin}}
       </td></tr>{{/users}}
       {{^users}}<tr><td colspan="4" class="empty">No users yet.{{#can_user_admin}} Use Add to create the first user.{{/can_user_admin}}</td></tr>{{/users}}

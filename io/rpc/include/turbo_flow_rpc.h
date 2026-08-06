@@ -23,7 +23,7 @@ extern "C" {
 
 typedef struct coro_context_s coro_context_t;
 typedef struct iris_app iris_app_t;
-typedef struct http_client_s http_client_t;
+typedef struct turbo_http_s turbo_http_t;
 
 typedef struct turbo_flow_rpc_server_config_s {
   uint16_t port;
@@ -49,8 +49,8 @@ typedef struct turbo_flow_rpc_client_config_s {
 
 typedef struct turbo_flow_rpc_http_client_binding_s {
   size_t size;
-  /** Required injected TurboHTTP provider. */
-  http_client_t *client;
+  /** Required injected standard TurboHTTP sync facade (turbo_http_create_sync). */
+  turbo_http_t *client;
   /** Non-zero transfers destruction ownership to the RPC adapter. */
   int take_ownership;
 } turbo_flow_rpc_http_client_binding_t;
@@ -65,19 +65,20 @@ CXX_C_API int turbo_flow_rpc_register_server_adapter(turbo_flow_t *flow, const c
 /**
  * Register a JSON-RPC client transform or periodic source.
  *
- * This compatibility entry creates and owns a private TurboHTTP client.
+ * This entry creates and owns a private synchronous TurboHTTP facade (H1).
  */
 CXX_C_API int turbo_flow_rpc_register_client_adapter(turbo_flow_t *flow, const char *name,
                                                      const turbo_flow_rpc_client_config_t *config);
 
 /**
- * Register with an injected TurboHTTP provider.
+ * Register with an injected synchronous TurboHTTP facade provider.
  *
  * The RPC wrapper borrows the provider. Adapter shutdown destroys the wrapper
  * first, then destroys the provider only when ownership was transferred.
  * A borrowed provider must outlive the adapter and may not be concurrently
- * driven by another adapter. Non-zero timeout and configured bearer credentials
- * are applied to the injected provider during registration.
+ * driven by another adapter. The provider must be created with
+ * turbo_http_create_sync() and keeps its own timeout; configured bearer
+ * credentials are applied to it during registration.
  */
 CXX_C_API int turbo_flow_rpc_register_client_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_rpc_client_config_t *config,

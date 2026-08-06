@@ -2151,6 +2151,78 @@ done:
   return rc;
 }
 
+int flowie_control_store_credential_resolve(
+    flowie_control_store_t *store, const char *principal_id, const void *secret,
+    size_t secret_size, flowie_control_credential_resolution_t *result) {
+  static const char sql[] =
+      "SELECT u.domain_id FROM flowie_control_user u "
+      "JOIN flowie_control_credential c ON c.domain_id=u.domain_id "
+      "AND c.principal_id=u.principal_id "
+      "WHERE u.principal_id=?1 AND u.enabled=1 AND c.enabled=1 "
+      "ORDER BY u.domain_id LIMIT 2";
+  flowie_control_credential_resolution_t resolved = FLOWIE_CONTROL_CREDENTIAL_RESOLUTION_INIT;
+  sqlite3 *database = NULL;
+  sqlite3_stmt *statement = NULL;
+  size_t match_count = 0u;
+  int status;
+  int rc;
+  if (result && result->size >= sizeof(*result)) *result = resolved;
+  if (!store || !flowie_control_text_valid(principal_id, TURBO_FLOW_SECURITY_ID_MAX) || !secret ||
+      secret_size == 0u || secret_size > FLOWIE_CONTROL_CREDENTIAL_SECRET_MAX || !result ||
+      result->size < sizeof(*result))
+    return TURBO_EINVAL;
+  rc = flowie_control_open_database(store, &database);
+  if (rc != TURBO_OK) return rc;
+  status = sqlite3_prepare_v2(database, sql, -1, &statement, NULL);
+  if (status == SQLITE_OK)
+    status = sqlite3_bind_text(statement, 1, principal_id, -1, SQLITE_TRANSIENT);
+  if (status != SQLITE_OK) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
+    const unsigned char *domain;
+    int domain_size;
+    if (sqlite3_column_type(statement, 0) != SQLITE_TEXT ||
+        !(domain = sqlite3_column_text(statement, 0)) ||
+        (domain_size = sqlite3_column_bytes(statement, 0)) <= 0 ||
+        (size_t)domain_size > TURBO_FLOW_SECURITY_ID_MAX) {
+      rc = TURBO_EPROTO;
+      goto done;
+    }
+    if (match_count == 0u) {
+      memcpy(resolved.domain_id, domain, (size_t)domain_size);
+      resolved.domain_id[domain_size] = '\0';
+    }
+    ++match_count;
+  }
+  if (status != SQLITE_DONE) {
+    rc = flowie_control_sqlite_status(status);
+    goto done;
+  }
+  (void)sqlite3_finalize(statement);
+  statement = NULL;
+  (void)sqlite3_close(database);
+  database = NULL;
+  if (match_count != 1u) {
+    flowie_control_credential_verify_result_t dummy = FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+    (void)flowie_control_store_credential_verify(store, "__unresolved__", principal_id, secret,
+                                                 secret_size, &dummy);
+    rc = TURBO_EPERM;
+    goto done;
+  }
+  rc = flowie_control_store_credential_verify(store, resolved.domain_id, principal_id, secret,
+                                               secret_size, &resolved.verified);
+  if (rc == TURBO_OK) *result = resolved;
+
+done:
+  if (statement) (void)sqlite3_finalize(statement);
+  if (database) (void)sqlite3_close(database);
+  if (rc != TURBO_OK) *result = (flowie_control_credential_resolution_t)
+      FLOWIE_CONTROL_CREDENTIAL_RESOLUTION_INIT;
+  return rc;
+}
+
 int flowie_control_store_credential_state(flowie_control_store_t *store, const char *domain_id,
                                           const char *principal_id,
                                           flowie_control_credential_verify_result_t *result) {

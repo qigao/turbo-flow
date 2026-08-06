@@ -65,7 +65,8 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
   flowie_control_auth_service_t *service = NULL;
   flowie_control_verified_caller_t caller = {sizeof(flowie_control_verified_caller_t), "listener-a",
                                              "broker-a", "root-a",
-                                             FLOWIE_CONTROL_AUTH_CONTRACT_CERT, 1};
+                                             FLOWIE_CONTROL_AUTH_CONTRACT_CERT,
+                                             FLOWIE_CONTROL_SERVICE_AUTHENTICATE, 1};
   flowie_control_authenticate_request_t request = FLOWIE_CONTROL_AUTHENTICATE_REQUEST_INIT;
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   uint64_t now_seconds = 10000u;
@@ -180,7 +181,7 @@ flowie_control_auth_repository_contract_run(const flowie_control_repository_t *r
 
   check_int_eq(flowie_control_auth_service_authenticate(service, &request, &principal, &cache_hit),
                TURBO_OK);
-  check_true(cache_hit);
+  check_false(cache_hit);
 
   revoke.domain_id = "root-a";
   revoke.principal_id = "device-a";

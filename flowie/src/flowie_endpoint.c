@@ -1856,6 +1856,15 @@ static int flowie_security_authorize(flowie_endpoint_t *endpoint,
   request.resource_type = resource_type;
   request.resource = resource;
   request.protocol_context = protocol_context;
+  if (resource_type == TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC && protocol_context) {
+    const flowie_mqtt_security_context_t *mqtt =
+        (const flowie_mqtt_security_context_t *)protocol_context;
+    if (mqtt->size < sizeof(*mqtt)) return TURBO_EPROTO;
+    request.username = mqtt->username.data;
+    request.username_size = mqtt->username.size;
+    request.client_id = mqtt->client_id.data;
+    request.client_id_size = mqtt->client_id.size;
+  }
   return turbo_flow_security_realm_authorize(endpoint->security_realm, &request, now, &decision);
 }
 

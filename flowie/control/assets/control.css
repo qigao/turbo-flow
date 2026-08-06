@@ -475,6 +475,48 @@ code { color: #713d1a; font-family: "Cascadia Code", Consolas, monospace; font-s
 .feedback:empty { display: none; }
 .feedback { margin-bottom: 14px; }
 .notice { display: flex; gap: 10px; padding: 11px 13px; border-inline-start: 4px solid #a43b3b; color: #632323; background: #faeaea; }
+.credential-secret {
+  margin-bottom: 24px;
+  padding: 18px;
+  border: 1px solid #8cb8ab;
+  border-inline-start: 4px solid #176b58;
+  border-radius: 8px;
+  background: #f1f8f5;
+  box-shadow: 0 1px 2px rgba(32, 42, 49, .06);
+}
+.credential-secret:focus { outline: 3px solid #202a31; outline-offset: 3px; }
+.credential-secret__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.credential-secret__heading h2 { font-size: 17px; }
+.credential-secret__identity {
+  margin: 16px 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 24px;
+}
+.credential-secret__identity div { min-width: 0; }
+.credential-secret__identity dt { color: #60727f; font-size: 11px; font-weight: 700; }
+.credential-secret__identity dd { margin: 4px 0 0; font-weight: 650; overflow-wrap: anywhere; }
+.credential-secret__value { display: flex; align-items: stretch; gap: 10px; }
+.credential-secret__value code {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 10px 12px;
+  border: 1px solid #aeb9c1;
+  border-radius: 6px;
+  color: #172127;
+  background: #fff;
+  font-family: "Cascadia Code", Consolas, monospace;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.credential-secret__value code:focus-visible { outline: 3px solid #202a31; outline-offset: 2px; }
+.credential-secret__status { min-height: 20px; margin-top: 8px; display: block; color: #315f53; font-size: 12px; }
 .htmx-indicator { display: none; }
 .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline-block; }
 .htmx-request { cursor: wait; }
@@ -617,7 +659,7 @@ code { color: #713d1a; font-family: "Cascadia Code", Consolas, monospace; font-s
   .metrics div:nth-child(-n+2) { border-bottom: 1px solid #e0e6e9; }
   .dataset-toolbar { width: 100%; justify-content: flex-start; }
   .root-scope { align-items: stretch; flex-direction: column; gap: 7px; }
-  .root-scope input { min-width: 0; }
+  .root-scope input { min-width: 0; flex: 0 0 auto; }
   .command-grid { grid-template-columns: 1fr; }
   .command-grid .command + .command { padding-top: 16px; padding-inline-start: 0; border-top: 1px solid #d7dfe3; border-inline-start: 0; }
   .entity-picker { grid-template-columns: 1fr; }
@@ -644,6 +686,10 @@ code { color: #713d1a; font-family: "Cascadia Code", Consolas, monospace; font-s
   .pager__status { width: 100%; }
   .pager button { flex: 1; }
   .table-wrap { margin-inline: 0; }
+  .credential-secret__heading, .credential-secret__value { align-items: stretch; flex-direction: column; }
+  .credential-secret__heading button, .credential-secret__value button { align-self: flex-start; }
+  .credential-secret__identity { grid-template-columns: minmax(0, 1fr); }
+  #users th:first-child, #users td:first-child { min-width: 140px; }
   table { min-width: 620px; }
   .auth-shell { padding: 20px 14px; }
   .auth-panel { padding: 24px 20px; }

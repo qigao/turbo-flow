@@ -41,6 +41,9 @@ int flowie_control_pgsql_query_credential_verify(flowie_control_pgsql_query_t *q
                                                  const char *principal_id, const void *secret,
                                                  size_t secret_size,
                                                  flowie_control_credential_verify_result_t *result);
+int flowie_control_pgsql_query_credential_resolve(
+    flowie_control_pgsql_query_t *query, const char *principal_id, const void *secret,
+    size_t secret_size, flowie_control_credential_resolution_t *result);
 int flowie_control_pgsql_query_credential_state(flowie_control_pgsql_query_t *query,
                                                 const char *domain_id, const char *principal_id,
                                                 flowie_control_credential_verify_result_t *result);

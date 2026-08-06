@@ -27,6 +27,8 @@ struct turbo_flow_http_auth_provider_s {
   tstr_t url;
   tstr_t host;
   tstr_t method;
+  tstr_t service_id;
+  tstr_t service_domain;
   tstr_t service_token_ref;
   uint16_t port;
   uint32_t timeout_ms;
@@ -388,7 +390,9 @@ static int flow_http_authenticate(void *ctx, const turbo_flow_security_auth_requ
   char *authorization = NULL;
   char *body = NULL;
   size_t body_size = 0u;
-  const char *headers[3];
+  const char *headers[5];
+  char service_id_header[sizeof("X-Flowie-Service-Id: ") + TURBO_FLOW_SECURITY_ID_MAX];
+  char service_domain_header[sizeof("X-Flowie-Service-Domain: ") + TURBO_FLOW_SECURITY_ID_MAX];
   const char *peer_certificate_sha256;
   size_t identity_size;
   size_t token_size;
@@ -426,6 +430,13 @@ static int flow_http_authenticate(void *ctx, const turbo_flow_security_auth_requ
   memcpy(authorization, "Authorization: Bearer ", sizeof("Authorization: Bearer ") - 1u);
   memcpy(authorization + sizeof("Authorization: Bearer ") - 1u, lease.bytes, token_size);
   authorization[sizeof("Authorization: Bearer ") - 1u + token_size] = '\0';
+  if (snprintf(service_id_header, sizeof(service_id_header), "X-Flowie-Service-Id: %s",
+               provider->service_id) <= 0 ||
+      snprintf(service_domain_header, sizeof(service_domain_header),
+               "X-Flowie-Service-Domain: %s", provider->service_domain) <= 0) {
+    rc = TURBO_ERANGE;
+    goto done;
+  }
   rc = flow_http_auth_encode_request(request, &body, &body_size);
   if (rc != TURBO_OK) goto done;
   client = http_client_create(provider->url);
@@ -449,7 +460,9 @@ static int flow_http_authenticate(void *ctx, const turbo_flow_security_auth_requ
   headers[0] = "Content-Type: application/json";
   headers[1] = "Accept: application/json";
   headers[2] = authorization;
-  response = http_request(client, HTTP_POST, provider->url, headers, 3, body, body_size);
+  headers[3] = service_id_header;
+  headers[4] = service_domain_header;
+  response = http_request(client, HTTP_POST, provider->url, headers, 5, body, body_size);
   if (!response) {
     rc = TURBO_EIO;
     goto done;
@@ -564,19 +577,18 @@ int turbo_flow_http_auth_provider_create(const turbo_flow_http_auth_provider_con
   size_t secret_limit;
   int rc;
   if (out) *out = NULL;
-  if (!config ||
-      !((config->api_version == TURBO_FLOW_HTTP_AUTH_API_VERSION_V1 &&
-         config->size == offsetof(turbo_flow_http_auth_provider_config_t, tls)) ||
-        (config->api_version == TURBO_FLOW_HTTP_AUTH_API_VERSION_V2 &&
-         config->size >= sizeof(*config))) ||
+  if (!config || config->api_version != TURBO_FLOW_HTTP_AUTH_API_VERSION_V3 ||
+      config->size < sizeof(*config) ||
       !out || !config->url || !config->method ||
       !flow_http_auth_string_valid(config->method, TURBO_FLOW_SECURITY_TYPE_MAX, 1) ||
+      !flow_http_auth_string_valid(config->service_id, TURBO_FLOW_SECURITY_ID_MAX, 1) ||
+      !flow_http_auth_string_valid(config->service_domain, TURBO_FLOW_SECURITY_ID_MAX, 1) ||
       !config->service_token_ref || !config->service_token_ref[0] || config->timeout_ms == 0u ||
       config->timeout_ms > TURBO_FLOW_HTTP_AUTH_MAX_TIMEOUT_MS ||
       config->key_provider.size < sizeof(config->key_provider) || !config->key_provider.acquire ||
       !config->key_provider.release)
     return TURBO_EINVAL;
-  if (config->api_version == TURBO_FLOW_HTTP_AUTH_API_VERSION_V2) tls_config = &config->tls;
+  tls_config = &config->tls;
   secret_limit = config->max_secret_size ? config->max_secret_size
                                          : TURBO_FLOW_HTTP_AUTH_DEFAULT_MAX_SECRET_SIZE;
   if (secret_limit == 0u || secret_limit > TURBO_FLOW_HTTP_AUTH_DEFAULT_MAX_SECRET_SIZE)
@@ -585,11 +597,14 @@ int turbo_flow_http_auth_provider_create(const turbo_flow_http_auth_provider_con
   if (!provider) return TURBO_ENOMEM;
   provider->url = tstr_dup(config->url);
   provider->method = tstr_dup(config->method);
+  provider->service_id = tstr_dup(config->service_id);
+  provider->service_domain = tstr_dup(config->service_domain);
   provider->service_token_ref = tstr_dup(config->service_token_ref);
   provider->timeout_ms = config->timeout_ms;
   provider->max_secret_size = secret_limit;
   provider->key_provider = config->key_provider;
-  if (!provider->url || !provider->method || !provider->service_token_ref) {
+  if (!provider->url || !provider->method || !provider->service_id ||
+      !provider->service_domain || !provider->service_token_ref) {
     rc = TURBO_ENOMEM;
     goto fail;
   }
@@ -640,7 +655,8 @@ int turbo_flow_http_auth_provider_create_resolved(
     const turbo_flow_security_key_provider_t *key_provider, turbo_flow_http_auth_provider_t **out,
     turbo_flow_config_error_t *error) {
   static const char *const allowed[] = {
-      "backend", "url", "method", "service_token_ref", "timeout_ms", "max_secret_size", "tls"};
+      "backend", "url", "method", "service_id", "service_domain", "service_token_ref",
+      "timeout_ms", "max_secret_size", "tls"};
   turbo_flow_http_auth_provider_config_t config = TURBO_FLOW_HTTP_AUTH_PROVIDER_CONFIG_INIT;
   turbo_json_doc_t *document = NULL;
   json_value_t *channels;
@@ -689,6 +705,8 @@ int turbo_flow_http_auth_provider_create_resolved(
   }
   config.url = turbo_json_get_string(fields, "url");
   config.method = turbo_json_get_string(fields, "method");
+  config.service_id = turbo_json_get_string(fields, "service_id");
+  config.service_domain = turbo_json_get_string(fields, "service_domain");
   config.service_token_ref = turbo_json_get_string(fields, "service_token_ref");
   rc = flow_http_tls_client_parse_json(turbo_json_object_get(fields, "tls"), &config.tls,
                                        &tls_detail);
@@ -697,9 +715,12 @@ int turbo_flow_http_auth_provider_create_resolved(
     goto done;
   }
   if (!config.url || !config.url[0] || !config.method || !config.method[0] ||
+      !config.service_id || !config.service_id[0] ||
+      !config.service_domain || !config.service_domain[0] ||
       !config.service_token_ref || !config.service_token_ref[0]) {
     rc = flow_http_auth_config_error(error, TURBO_EINVAL, channel_name, NULL,
-                                     "url, method, and service_token_ref are required strings");
+                                     "url, method, service_id, service_domain, and "
+                                     "service_token_ref are required strings");
     goto done;
   }
   value = turbo_json_object_get(fields, "backend");
@@ -759,6 +780,8 @@ void turbo_flow_http_auth_provider_destroy(turbo_flow_http_auth_provider_t *prov
   tstr_freep(&provider->url);
   tstr_freep(&provider->host);
   tstr_freep(&provider->method);
+  tstr_freep(&provider->service_id);
+  tstr_freep(&provider->service_domain);
   tstr_freep(&provider->service_token_ref);
   flow_http_tls_client_cleanup(&provider->tls);
   crypto_wipe(&provider->key_provider, sizeof(provider->key_provider));

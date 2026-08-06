@@ -872,6 +872,7 @@ spec("Flowie ACL dashboard") {
 
   it("renders HTMX CRUD controls for the system administrator") {
     char *path = NULL;
+    char body[1024];
     char *html = NULL;
     size_t html_size = 0u;
     flowie_control_store_t *store = NULL;
@@ -907,6 +908,8 @@ spec("Flowie ACL dashboard") {
     check_str_contains(html, "popovertarget=\"roles-add\"");
     check_str_contains(html, "popovertarget=\"acl-add\"");
     check_str_contains(html, "popovertarget=\"acl-publish\"");
+    check_str_contains(html, "popovertarget=\"domain-add\"");
+    check_str_contains(html, "operation\" value=\"domain.create");
     check_str_contains(html, "operation\" value=\"user.create");
     check_str_contains(html, "operation\" value=\"group.create");
     check_str_contains(html, "operation\" value=\"role.create");
@@ -917,6 +920,13 @@ spec("Flowie ACL dashboard") {
     check_false(strstr(html, ">Switch</button>") != NULL);
     flowie_control_dashboard_html_free(html);
     html = NULL;
+
+    (void)snprintf(body, sizeof(body),
+                   "csrf=%s&operation=domain.create&domain_id=root-b&request_id=request-root-b",
+                   DASHBOARD_CSRF);
+    check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
+                                                       strlen(body)),
+                 TURBO_OK);
 
     {
       flowie_control_dashboard_page_t page = FLOWIE_CONTROL_DASHBOARD_PAGE_INIT;
@@ -929,6 +939,7 @@ spec("Flowie ACL dashboard") {
       check_str_contains(html, "value=\"root-a\"");
       check_str_contains(html, "href=\"/v2/control/dashboard/groups?domain_id=root-a\"");
       check_str_contains(html, "hx-post=\"/v2/control/dashboard/action?domain_id=root-a");
+      check_false(strstr(html, "popovertarget=\"domain-add\"") != NULL);
       flowie_control_dashboard_html_free(html);
     }
 
@@ -976,6 +987,12 @@ spec("Flowie ACL dashboard") {
     check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
                                                        strlen(body)),
                  TURBO_EPERM);
+    (void)snprintf(body, sizeof(body),
+                   "csrf=%s&operation=domain.create&domain_id=root-b&request_id=request-root-b",
+                   DASHBOARD_CSRF);
+    check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
+                                                       strlen(body)),
+                 TURBO_EPERM);
     check_int_eq(flowie_control_store_revision(store, &revision), TURBO_OK);
     check_uint_eq(revision, 1u);
 
@@ -1006,6 +1023,127 @@ spec("Flowie ACL dashboard") {
     check_str_eq(user.principal_id, "device-1");
     check_uint_eq(user.revision, 2u);
 
+    dashboard_close(dashboard, service, store, path);
+  }
+
+  it("shows service credentials once and rotates and revokes them") {
+    char *path = NULL;
+    char body[1024];
+    char old_token[FLOWIE_CONTROL_CREDENTIAL_TOKEN_CAPACITY] = {0};
+    char zeros[FLOWIE_CONTROL_CREDENTIAL_TOKEN_CAPACITY] = {0};
+    char *html = NULL;
+    size_t html_size = 0u;
+    flowie_control_store_t *store = NULL;
+    flowie_control_management_service_t *service = NULL;
+    flowie_control_dashboard_t *dashboard = NULL;
+    flowie_control_management_caller_t caller = FLOWIE_CONTROL_MANAGEMENT_CALLER_INIT;
+    flowie_control_dashboard_page_t page = FLOWIE_CONTROL_DASHBOARD_PAGE_INIT;
+    flowie_control_dashboard_action_result_t action =
+        FLOWIE_CONTROL_DASHBOARD_ACTION_RESULT_INIT;
+    flowie_control_credential_verify_result_t verified =
+        FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+
+    caller.domain_id = "root-a";
+    caller.actor = "security-admin";
+    caller.permissions = FLOWIE_CONTROL_MANAGEMENT_SECURITY_ADMIN;
+    dashboard = dashboard_open(&path, &store, &service, &caller);
+    (void)snprintf(body, sizeof(body),
+                   "csrf=%s&operation=user.create&principal_id=device-1&principal_type=device&"
+                   "request_id=request-device",
+                   DASHBOARD_CSRF);
+    check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
+                                                       strlen(body)),
+                 TURBO_OK);
+    (void)snprintf(body, sizeof(body),
+                   "csrf=%s&operation=user.create&principal_id=service-api&principal_type=service&"
+                   "request_id=request-service",
+                   DASHBOARD_CSRF);
+    check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
+                                                       strlen(body)),
+                 TURBO_OK);
+
+    page.section = FLOWIE_CONTROL_DASHBOARD_SECTION_USERS;
+    check_int_eq(flowie_control_dashboard_render_page(dashboard, &caller, DASHBOARD_CSRF, &page,
+                                                      &html, &html_size),
+                 TURBO_OK);
+    check_str_contains(html, "popovertarget=\"service-token-2\"");
+    check_str_contains(html, "operation\" value=\"credential.issue");
+    check_str_contains(html, "operation\" value=\"credential.revoke");
+    check_false(strstr(html, "popovertarget=\"service-token-1\"") != NULL);
+    flowie_control_dashboard_html_free(html);
+    html = NULL;
+
+    (void)snprintf(body, sizeof(body),
+                   "csrf=%s&operation=credential.issue&principal_id=service-api&"
+                   "request_id=request-token-1",
+                   DASHBOARD_CSRF);
+    check_int_eq(flowie_control_dashboard_process_form_result(
+                     dashboard, &caller, DASHBOARD_CSRF, body, strlen(body), &action),
+                 TURBO_OK);
+    check_int_eq(action.kind, FLOWIE_CONTROL_DASHBOARD_ACTION_CREDENTIAL_ISSUED);
+    check_size_eq(action.token_size, FLOWIE_CONTROL_CREDENTIAL_TOKEN_SIZE);
+    check_str_eq(action.domain_id, "root-a");
+    check_str_eq(action.principal_id, "service-api");
+    memcpy(old_token, action.token, action.token_size + 1u);
+    check_int_eq(flowie_control_store_credential_verify(store, "root-a", "service-api",
+                                                        action.token, action.token_size, &verified),
+                 TURBO_OK);
+    check_int_eq(flowie_control_dashboard_render_page_result(
+                     dashboard, &caller, DASHBOARD_CSRF, &page, &action, &html, &html_size),
+                 TURBO_OK);
+    check_str_contains(html, "data-credential-secret");
+    check_str_contains(html, "service-api");
+    check_str_contains(html, action.token);
+    flowie_control_dashboard_html_free(html);
+    html = NULL;
+    flowie_control_dashboard_action_result_clear(&action);
+    check_int_eq(action.kind, FLOWIE_CONTROL_DASHBOARD_ACTION_NONE);
+    check_size_eq(action.token_size, 0u);
+    check_mem_eq(action.token, zeros, sizeof(action.token));
+
+    check_int_eq(flowie_control_dashboard_render_page(dashboard, &caller, DASHBOARD_CSRF, &page,
+                                                      &html, &html_size),
+                 TURBO_OK);
+    check_false(strstr(html, old_token) != NULL);
+    check_false(strstr(html, "data-credential-secret") != NULL);
+    flowie_control_dashboard_html_free(html);
+    html = NULL;
+
+    action = (flowie_control_dashboard_action_result_t)
+        FLOWIE_CONTROL_DASHBOARD_ACTION_RESULT_INIT;
+    (void)snprintf(body, sizeof(body),
+                   "csrf=%s&operation=credential.issue&principal_id=service-api&"
+                   "request_id=request-token-2",
+                   DASHBOARD_CSRF);
+    check_int_eq(flowie_control_dashboard_process_form_result(
+                     dashboard, &caller, DASHBOARD_CSRF, body, strlen(body), &action),
+                 TURBO_OK);
+    check_mem_ne(action.token, old_token, FLOWIE_CONTROL_CREDENTIAL_TOKEN_SIZE);
+    verified = (flowie_control_credential_verify_result_t)
+        FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+    check_int_eq(flowie_control_store_credential_verify(store, "root-a", "service-api", old_token,
+                                                        strlen(old_token), &verified),
+                 TURBO_EPERM);
+    verified = (flowie_control_credential_verify_result_t)
+        FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+    check_int_eq(flowie_control_store_credential_verify(store, "root-a", "service-api",
+                                                        action.token, action.token_size, &verified),
+                 TURBO_OK);
+
+    (void)snprintf(body, sizeof(body),
+                   "csrf=%s&operation=credential.revoke&principal_id=service-api&"
+                   "request_id=request-token-revoke",
+                   DASHBOARD_CSRF);
+    check_int_eq(flowie_control_dashboard_process_form(dashboard, &caller, DASHBOARD_CSRF, body,
+                                                       strlen(body)),
+                 TURBO_OK);
+    verified = (flowie_control_credential_verify_result_t)
+        FLOWIE_CONTROL_CREDENTIAL_VERIFY_RESULT_INIT;
+    check_int_eq(flowie_control_store_credential_verify(store, "root-a", "service-api",
+                                                        action.token, action.token_size, &verified),
+                 TURBO_EPERM);
+
+    flowie_control_dashboard_action_result_clear(&action);
     dashboard_close(dashboard, service, store, path);
   }
 

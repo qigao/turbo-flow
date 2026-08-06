@@ -79,6 +79,13 @@ static int pgsql_credential_state(void *ctx, const char *domain_id, const char *
                                                      domain_id, principal_id, result);
 }
 
+static int pgsql_credential_resolve(void *ctx, const char *principal_id, const void *secret,
+                                    size_t secret_size,
+                                    flowie_control_credential_resolution_t *result) {
+  return flowie_control_pgsql_query_credential_resolve(flowie_control_pgsql_provider(ctx)->query,
+                                                       principal_id, secret, secret_size, result);
+}
+
 static int pgsql_current_revision(void *ctx, uint64_t *revision_out) {
   return flowie_control_pgsql_query_current_revision(flowie_control_pgsql_provider(ctx)->query,
                                                      revision_out);
@@ -267,7 +274,8 @@ static const flowie_control_repository_user_ops_t PGSQL_USER_OPS = {
     pgsql_user_create,       pgsql_user_disable,  pgsql_user_get,
     pgsql_user_list};
 static const flowie_control_repository_auth_ops_t PGSQL_AUTH_OPS = {
-    pgsql_credential_verify, pgsql_credential_state, pgsql_current_revision,
+    pgsql_credential_verify, pgsql_credential_state, pgsql_credential_resolve,
+    pgsql_current_revision,
     pgsql_principal_snapshot, pgsql_external_principal_snapshot};
 static const flowie_control_repository_credential_ops_t PGSQL_CREDENTIAL_OPS = {
     pgsql_credential_generate, pgsql_credential_rotate, pgsql_credential_revoke};

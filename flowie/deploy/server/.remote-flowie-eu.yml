@@ -18,6 +18,8 @@ channels:
       backend: https
       url: https://127.0.0.1:8443/v4/authenticate
       method: password
+      service_id: broker-main
+      service_domain: platform-services
       service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
       timeout_ms: 3000
       max_secret_size: 4096
@@ -27,11 +29,12 @@ channels:
     kind: acl_provider
     config:
       backend: https
-      url: https://127.0.0.1:8443/v4/acl
+      url: https://127.0.0.1:8443/v4/acl/check
+      service_id: broker-main
+      service_domain: platform-services
       service_token_ref: env://FLOWIE_AUTH_SERVICE_TOKEN
       timeout_ms: 3000
-      max_response_size: 4194304
-      max_rules: 4096
+      max_response_size: 65536
       tls:
         ca_file: /etc/flowie/certs/control-ca.crt
   mqtt.security:

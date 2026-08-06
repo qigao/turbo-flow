@@ -1,6 +1,6 @@
 #include "turbo_flow_rpc.h"
 
-#include "http/http_client.h"
+#include "turbo_http.h"
 #include "tinytest.h"
 #include "turbo_thread.h"
 
@@ -159,18 +159,21 @@ spec("turbo_flow_rpc") {
     turbo_flow_destroy(flow);
   }
 
-  it("borrows an injected HTTP client without destroying it") {
-    http_client_t *http_client = http_client_create(NULL);
+  it("borrows an injected sync facade without destroying it") {
+    turbo_http_options_t options;
+    turbo_http_t *facade = NULL;
     turbo_flow_rpc_client_config_t config;
     turbo_flow_rpc_http_client_binding_t binding = TURBO_FLOW_RPC_HTTP_CLIENT_BINDING_INIT;
     turbo_flow_t *flow = turbo_flow_create();
 
-    check_not_null(http_client);
+    check_int_eq(turbo_http_options_init(&options, sizeof(options)), TURBO_OK);
+    check_int_eq(turbo_http_create_sync(&options, &facade), TURBO_OK);
+    check_not_null(facade);
     check_not_null(flow);
     memset(&config, 0, sizeof(config));
     config.url = "http://127.0.0.1:1/rpc";
     config.method = "echo";
-    binding.client = http_client;
+    binding.client = facade;
     binding.size = sizeof(binding) - 1u;
     check_int_eq(
         turbo_flow_rpc_register_client_adapter_ex(flow, "rpc.borrowed", &config, &binding),
@@ -180,8 +183,8 @@ spec("turbo_flow_rpc") {
         turbo_flow_rpc_register_client_adapter_ex(flow, "rpc.borrowed", &config, &binding),
         TURBO_OK);
     turbo_flow_destroy(flow);
-    check_not_null(http_client_get_context(http_client));
-    http_client_destroy(http_client);
+    check_not_null(turbo_http_get_context(facade));
+    turbo_http_destroy(facade);
   }
 
   it("rejects negative client timeouts at registration") {
