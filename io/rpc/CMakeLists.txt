@@ -19,7 +19,7 @@ target_include_directories(
 target_link_libraries(
   ${TARGET_NAME}
   PUBLIC TurboFlow::Flow
-  PRIVATE TurboHttp::RPCClient TurboHttp::HttpClient TurboHttp::Iris
+  PRIVATE TurboHttp::TurboHttp TurboHttp::HttpClient TurboHttp::Iris
           tf_executor_common TurboNet::CoroNet TurboUtils::Core)
 install(FILES ${TURBO_FLOW_RPC_HEADERS} DESTINATION include)
 
