@@ -430,19 +430,28 @@ coro_socket_t *tf_coronet_create_server_socket(coro_context_t *ctx,
 
 int tf_coronet_connect_socket(coro_socket_t *socket, tf_coronet_transport_t transport,
                               const char *host, int port, const char *path) {
+  return tf_coronet_connect_socket_ex(socket, transport, host, port, path, host);
+}
+
+int tf_coronet_connect_socket_ex(coro_socket_t *socket, tf_coronet_transport_t transport,
+                                 const char *connect_host, int port, const char *path,
+                                 const char *request_host) {
   if (!socket) return TURBO_EINVAL;
   switch (transport) {
   case TF_CORONET_TRANSPORT_TCP:
   case TF_CORONET_TRANSPORT_UDP:
   case TF_CORONET_TRANSPORT_KCP:
+    return coro_socket_connect(socket, connect_host, port);
   case TF_CORONET_TRANSPORT_TLS:
-    return coro_socket_connect(socket, host, port);
+    return coro_socket_connect_host_ex(socket, connect_host, port, request_host);
   case TF_CORONET_TRANSPORT_PIPE:
-    return coro_socket_connect_pipe(socket, tf_coronet_endpoint(host, path));
+    return coro_socket_connect_pipe(socket, tf_coronet_endpoint(connect_host, path));
   case TF_CORONET_TRANSPORT_WS:
-    return coro_socket_connect_ws(socket, host, port, tf_coronet_ws_path(path), 0);
+    return coro_socket_connect_ws_host_ex(socket, connect_host, port, request_host,
+                                          tf_coronet_ws_path(path), 0, NULL);
   case TF_CORONET_TRANSPORT_WSS:
-    return coro_socket_connect_ws(socket, host, port, tf_coronet_ws_path(path), 1);
+    return coro_socket_connect_ws_host_ex(socket, connect_host, port, request_host,
+                                          tf_coronet_ws_path(path), 1, NULL);
   default:
     return TURBO_ENOTSUP;
   }

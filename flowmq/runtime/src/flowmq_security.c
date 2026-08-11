@@ -57,8 +57,13 @@ static int flowmq_security_binding_validate(turbo_flow_fmq_endpoint_mode_t mode,
         strlen(binding->realm_channel) > TURBO_FLOW_RESOURCE_UID_MAX || !binding->auth_provider ||
         binding->auth_provider->size < sizeof(*binding->auth_provider) ||
         !binding->auth_provider->authenticate || !binding->realm || binding->key_provider ||
-        binding->secret_reference) {
+        binding->secret_reference ||
+        (!binding->verify_peer_certificate_identity && binding->peer_certificate_identity_ctx)) {
       return TURBO_EINVAL;
+    }
+    if (binding->verify_peer_certificate_identity &&
+        transport != TURBO_FLOW_FMQ_TLS && transport != TURBO_FLOW_FMQ_WSS) {
+      return TURBO_ENOTSUP;
     }
     return TURBO_OK;
   }
@@ -67,7 +72,9 @@ static int flowmq_security_binding_validate(turbo_flow_fmq_endpoint_mode_t mode,
         !binding->key_provider || binding->key_provider->size < sizeof(*binding->key_provider) ||
         !binding->key_provider->acquire || !binding->key_provider->release ||
         !binding->secret_reference || binding->secret_reference[0] == '\0' ||
-        strlen(binding->secret_reference) > TURBO_FLOW_SECURITY_SECRET_REF_MAX) {
+        strlen(binding->secret_reference) > TURBO_FLOW_SECURITY_SECRET_REF_MAX ||
+        binding->verify_peer_certificate_identity ||
+        binding->peer_certificate_identity_ctx) {
       return TURBO_EINVAL;
     }
     return TURBO_OK;
@@ -97,6 +104,10 @@ int flowmq_security_binding_init(flowmq_security_binding_runtime_t *runtime,
   runtime->mode = mode;
   runtime->transport = transport;
   runtime->realm = binding->realm;
+  runtime->verify_peer_certificate_identity =
+      binding->verify_peer_certificate_identity;
+  runtime->peer_certificate_identity_ctx =
+      binding->peer_certificate_identity_ctx;
   if (binding->auth_provider) runtime->auth_provider = *binding->auth_provider;
   if (binding->key_provider) runtime->key_provider = *binding->key_provider;
   runtime->enabled = 1;
@@ -210,6 +221,7 @@ int flowmq_security_server_authenticate(flowmq_security_binding_runtime_t *runti
   turbo_flow_security_auth_request_t request = TURBO_FLOW_SECURITY_AUTH_REQUEST_INIT;
   turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
   uint8_t binding[CORO_TLS_CHANNEL_BINDING_SIZE];
+  char certificate_sha256[CORO_TLS_PEER_CERT_SHA256_CAPACITY] = {0};
   tstr_v binding_view;
   tstr_t identity = NULL;
   int rc;
@@ -235,6 +247,17 @@ int flowmq_security_server_authenticate(flowmq_security_binding_runtime_t *runti
     rc = TURBO_ENOMEM;
     goto done;
   }
+  if (runtime->verify_peer_certificate_identity) {
+    rc = coro_socket_tls_get_verified_peer_certificate_sha256(
+        socket, certificate_sha256);
+    if (rc != TURBO_OK) goto done;
+    rc = runtime->verify_peer_certificate_identity(
+        runtime->peer_certificate_identity_ctx, certificate_sha256, identity);
+    if (rc != TURBO_OK) {
+      rc = TURBO_EPERM;
+      goto done;
+    }
+  }
   request.identity = identity;
   request.method = runtime->auth_method;
   request.secret = (const uint8_t *)security.secret.data;
@@ -252,6 +275,7 @@ int flowmq_security_server_authenticate(flowmq_security_binding_runtime_t *runti
 
 done:
   tstr_free(identity);
+  flowmq_security_clear(certificate_sha256, sizeof(certificate_sha256));
   flowmq_security_clear(binding, sizeof(binding));
   return rc;
 }

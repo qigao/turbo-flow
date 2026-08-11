@@ -51,6 +51,8 @@ typedef int fmq_test_socket_t;
 
 static const char FMQ_TEST_KCP_PSK[] =
     "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+static const char FMQ_TEST_CERTIFICATE_SHA256[] =
+    "sha256:ebd76f304bc43bc2be697fca2f054206978c0558931529a7c1b2bb7d82a7a3c4";
 
 typedef struct fmq_capture_state_s {
   char payload[128];
@@ -237,6 +239,12 @@ typedef struct fmq_event_state_s {
   atomic_size_t last_peer_identity_len;
   atomic_int contract_valid;
 } fmq_event_state_t;
+
+typedef struct fmq_certificate_identity_state_s {
+  const char *expected_fingerprint;
+  const char *expected_identity;
+  atomic_int calls;
+} fmq_certificate_identity_state_t;
 
 typedef struct fmq_batch_route_gate_s {
   turbo_flow_fmq_app_t *disconnect_app;
@@ -1119,6 +1127,19 @@ static int fmq_test_authenticate(void *ctx, const turbo_flow_security_auth_reque
   principal_out->group_count = 1u;
   (void)snprintf(principal_out->groups[0], sizeof(principal_out->groups[0]), "root-a");
   principal_out->policy_version = 1u;
+  return TURBO_OK;
+}
+
+static int fmq_test_verify_certificate_identity(void *ctx, const char *certificate_sha256,
+                                                const char *claimed_identity) {
+  fmq_certificate_identity_state_t *state = (fmq_certificate_identity_state_t *)ctx;
+  if (!state || !certificate_sha256 || !claimed_identity) return TURBO_EINVAL;
+  atomic_fetch_add_explicit(&state->calls, 1, memory_order_acq_rel);
+  if (!state->expected_fingerprint || !state->expected_identity ||
+      strcmp(certificate_sha256, state->expected_fingerprint) != 0 ||
+      strcmp(claimed_identity, state->expected_identity) != 0) {
+    return TURBO_EPERM;
+  }
   return TURBO_OK;
 }
 
@@ -2505,6 +2526,213 @@ spec("flow_fmq_config") {
     check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
     config.size = sizeof(config);
     check_int_eq(TURBO_FLOW_FMQ_WIRE_VERSION, 3u);
+  }
+
+  it("accepts scheme-prefixed endpoint hosts and resolves the transport") {
+    turbo_flow_fmq_config_t config;
+
+    /* tcp:// with embedded port and transport unset */
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.host = "tcp://127.0.0.1:7001";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
+
+    /* tls:// / wss:// select the secure transport; material is enforced at
+       endpoint creation, matching the existing WSS-without-tls validation */
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.host = "tls://127.0.0.1:7002";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_SUB;
+    config.mode = TURBO_FLOW_FMQ_CONNECT;
+    config.host = "wss://127.0.0.1:7003";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
+
+    /* ws:// without an embedded port falls back to config->port */
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_SUB;
+    config.mode = TURBO_FLOW_FMQ_CONNECT;
+    config.host = "ws://127.0.0.1";
+    config.port = 7004;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
+
+    /* kcp:// (psk required by kcp resolution) */
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.host = "kcp://127.0.0.1:7005";
+    config.kcp_pre_shared_key = FMQ_TEST_KCP_PSK;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
+
+    /* bracketed IPv6 */
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.host = "tcp://[::1]:7006";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
+
+    /* explicit transport matching the prefix is accepted */
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.transport = TURBO_FLOW_FMQ_TCP;
+    config.host = "tcp://127.0.0.1:7007";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
+
+    /* conflicts and malformed inputs fail fast */
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.transport = TURBO_FLOW_FMQ_TLS;
+    config.host = "tcp://127.0.0.1:7008";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.host = "tcp://127.0.0.1:7008";
+    config.port = 7009;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.host = "http://127.0.0.1:7010";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.host = "tls://";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.host = "tls://127.0.0.1:abc";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.host = "tls://:7011";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.host = "tls://127.0.0.1/path";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+  }
+
+  it("binds a scheme-prefixed tcp endpoint and reports the resolved snapshot") {
+    unsigned short port = fmq_test_port();
+    turbo_flow_fmq_config_t config;
+    turbo_flow_t *flow;
+    turbo_flow_connection_snapshot_t snapshot;
+    char host[64];
+
+    check_int_gt(port, 0);
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    (void)snprintf(host, sizeof(host), "tcp://127.0.0.1:%u", port);
+    config.host = host;
+    config.port = 0; /* port comes from the prefix */
+    config.timeout_ms = 2000;
+    flow = fmq_make_sink_flow("fmq.output", &config);
+    check_not_null(flow);
+    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    memset(&snapshot, 0, sizeof(snapshot));
+    check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0, &snapshot), TURBO_OK);
+    check_int_eq(snapshot.state, TURBO_FLOW_CONNECTION_READY);
+    {
+      char expected[64];
+      (void)snprintf(expected, sizeof(expected), "tcp://127.0.0.1:%u", port);
+      check_str_eq(snapshot.endpoint, expected);
+    }
+    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("rejects a tls-prefixed endpoint without tls material") {
+    turbo_flow_fmq_config_t config;
+    config = (turbo_flow_fmq_config_t)TURBO_FLOW_FMQ_CONFIG_INIT;
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.host = "tls://127.0.0.1:7020";
+    config.timeout_ms = 2000;
+    check_null(fmq_make_sink_flow("fmq.output", &config));
+  }
+
+  it("validates object-level TLS configuration and rejects insecure secure endpoints") {
+    turbo_flow_fmq_config_t config;
+    turbo_flow_fmq_tls_config_t tls = TURBO_FLOW_FMQ_TLS_CONFIG_INIT;
+    turbo_flow_fmq_security_binding_t security = TURBO_FLOW_FMQ_SECURITY_BINDING_INIT;
+    turbo_flow_t *flow;
+
+    fmq_config(&config, TURBO_FLOW_FMQ_PUB, TURBO_FLOW_FMQ_BIND, 7001u);
+    config.transport = TURBO_FLOW_FMQ_TLS;
+    tls.cert_file = "server.crt";
+    tls.key_file = "server.key";
+    tls.rotation_generation = 1u;
+    config.tls = &tls;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
+
+    tls.size -= 1u;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+    tls.size = sizeof(tls);
+    config.transport = TURBO_FLOW_FMQ_TCP;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_ENOTSUP);
+    config.transport = TURBO_FLOW_FMQ_TLS;
+
+    tls.key_file = NULL;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+    tls.key_file = "server.key";
+    tls.require_client_certificate = 1;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+    tls.ca_file = "clients-ca.pem";
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
+    tls.require_client_certificate = 0;
+    tls.rotation_generation = 0u;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+
+    tls = (turbo_flow_fmq_tls_config_t)TURBO_FLOW_FMQ_TLS_CONFIG_INIT;
+    tls.ca_file = "servers-ca.pem";
+    tls.server_name = "fmq.example.test";
+    tls.rotation_generation = 2u;
+    config.pattern = TURBO_FLOW_FMQ_SUB;
+    config.mode = TURBO_FLOW_FMQ_CONNECT;
+    config.host = "127.0.0.1";
+    config.topic = "secure";
+    config.tls = &tls;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_OK);
+    tls.server_name = NULL;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+    tls.server_name = "fmq.example.test";
+    tls.verify_peer = 0;
+    check_int_eq(flow_fmq_config_validate(&config), TURBO_EINVAL);
+
+    config.pattern = TURBO_FLOW_FMQ_PUB;
+    config.mode = TURBO_FLOW_FMQ_BIND;
+    config.transport = TURBO_FLOW_FMQ_TLS;
+    config.topic = NULL;
+    config.tls = NULL;
+    flow = turbo_flow_create();
+    check_not_null(flow);
+    check_int_eq(fmq_register_private_secure_adapter(flow, "fmq.secure", &config, &security),
+                 TURBO_EINVAL);
+    turbo_flow_destroy(flow);
+    config.transport = TURBO_FLOW_FMQ_WSS;
+    config.path = "/fmq-secure";
+    flow = turbo_flow_create();
+    check_not_null(flow);
+    check_int_eq(fmq_register_private_secure_adapter(flow, "fmq.secure", &config, &security),
+                 TURBO_EINVAL);
+    turbo_flow_destroy(flow);
   }
 
   it("validates TCP-backed OS socket buffer requests") {
@@ -6527,12 +6755,20 @@ spec("flow_fmq_network") {
     turbo_flow_security_key_provider_t key_provider = TURBO_FLOW_SECURITY_KEY_PROVIDER_INIT;
     turbo_flow_fmq_security_binding_t server_security = TURBO_FLOW_FMQ_SECURITY_BINDING_INIT;
     turbo_flow_fmq_security_binding_t client_security = TURBO_FLOW_FMQ_SECURITY_BINDING_INIT;
+    turbo_flow_fmq_tls_config_t server_tls = TURBO_FLOW_FMQ_TLS_CONFIG_INIT;
+    turbo_flow_fmq_tls_config_t client_tls = TURBO_FLOW_FMQ_TLS_CONFIG_INIT;
 
     check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
     check_int_eq(
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
     check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
     check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
+    server_tls.cert_file = cert_file;
+    server_tls.key_file = key_file;
+    server_tls.rotation_generation = 1u;
+    client_tls.ca_file = ca_file;
+    client_tls.server_name = "localhost";
+    client_tls.rotation_generation = 1u;
     memset(rules, 0, sizeof(rules));
     for (size_t i = 0u; i < 3u; ++i) {
       rules[i] = (turbo_flow_security_rule_t)TURBO_FLOW_SECURITY_RULE_INIT;
@@ -6602,6 +6838,11 @@ spec("flow_fmq_network") {
       sub_config.path = cases[i].path;
       sub_config.identity = "client-a";
       sub_config.reconnect_initial_ms = TURBO_FLOW_FMQ_RECONNECT_DISABLED;
+      if (cases[i].transport == TURBO_FLOW_FMQ_TLS ||
+          cases[i].transport == TURBO_FLOW_FMQ_WSS) {
+        pub_config.tls = &server_tls;
+        sub_config.tls = &client_tls;
+      }
       if (cases[i].transport == TURBO_FLOW_FMQ_PIPE) {
         check_int_gt(
             snprintf(pipe_path, sizeof(pipe_path), "pipe://turbo_flow_fmq_secure_%u", port), 0);
@@ -6653,13 +6894,18 @@ spec("flow_fmq_network") {
     turbo_flow_security_key_provider_t key_provider = TURBO_FLOW_SECURITY_KEY_PROVIDER_INIT;
     turbo_flow_fmq_security_binding_t server_security = TURBO_FLOW_FMQ_SECURITY_BINDING_INIT;
     turbo_flow_fmq_security_binding_t client_security = TURBO_FLOW_FMQ_SECURITY_BINDING_INIT;
+    turbo_flow_fmq_tls_config_t server_tls = TURBO_FLOW_FMQ_TLS_CONFIG_INIT;
+    turbo_flow_fmq_tls_config_t client_tls = TURBO_FLOW_FMQ_TLS_CONFIG_INIT;
     turbo_flow_fmq_config_t pub_config;
     turbo_flow_fmq_config_t sub_config;
     fmq_capture_state_t capture;
     fmq_event_state_t server_events;
     fmq_event_state_t client_events;
+    fmq_certificate_identity_state_t certificate_identity;
     turbo_flow_t *publisher;
     turbo_flow_t *subscriber;
+    turbo_flow_t *certificate_denied;
+    turbo_flow_t *identity_denied;
     turbo_flow_t *auth_denied;
     turbo_flow_t *denied;
     int start_rc;
@@ -6670,6 +6916,19 @@ spec("flow_fmq_network") {
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
     check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
     check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
+    server_tls.cert_file = cert_file;
+    server_tls.key_file = key_file;
+    server_tls.ca_file = ca_file;
+    server_tls.require_client_certificate = 1;
+    server_tls.rotation_generation = 1u;
+    client_tls.ca_file = ca_file;
+    client_tls.cert_file = cert_file;
+    client_tls.key_file = key_file;
+    client_tls.server_name = "localhost";
+    client_tls.rotation_generation = 1u;
+    certificate_identity.expected_fingerprint = FMQ_TEST_CERTIFICATE_SHA256;
+    certificate_identity.expected_identity = "client-a";
+    atomic_init(&certificate_identity.calls, 0);
 
     memset(rules, 0, sizeof(rules));
     for (size_t i = 0u; i < 3u; ++i) {
@@ -6704,6 +6963,8 @@ spec("flow_fmq_network") {
     server_security.auth_method = "token";
     server_security.auth_provider = &auth_provider;
     server_security.realm = realm;
+    server_security.verify_peer_certificate_identity = fmq_test_verify_certificate_identity;
+    server_security.peer_certificate_identity_ctx = &certificate_identity;
     client_security.auth_method = "token";
     client_security.key_provider = &key_provider;
     client_security.secret_reference = "secret/fmq-client";
@@ -6714,10 +6975,12 @@ spec("flow_fmq_network") {
     fmq_config(&pub_config, TURBO_FLOW_FMQ_PUB, TURBO_FLOW_FMQ_BIND, port);
     fmq_config(&sub_config, TURBO_FLOW_FMQ_SUB, TURBO_FLOW_FMQ_CONNECT, port);
     pub_config.transport = TURBO_FLOW_FMQ_TLS;
+    pub_config.tls = &server_tls;
     pub_config.topic = "secure";
     pub_config.event_callback = fmq_event_capture;
     pub_config.event_ctx = &server_events;
     sub_config.transport = TURBO_FLOW_FMQ_TLS;
+    sub_config.tls = &client_tls;
     sub_config.host = "localhost";
     sub_config.topic = "secure";
     sub_config.identity = "client-a";
@@ -6745,6 +7008,27 @@ spec("flow_fmq_network") {
     check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
     check_int_eq(turbo_flow_stop(subscriber), TURBO_OK);
     turbo_flow_destroy(subscriber);
+    check_int_eq(atomic_load_explicit(&certificate_identity.calls, memory_order_acquire), 1);
+
+    certificate_identity.expected_fingerprint =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    certificate_denied =
+        fmq_make_source_flow_with_security("fmq.input", &sub_config, &capture, &client_security);
+    check_not_null(certificate_denied);
+    check_true(turbo_flow_start(certificate_denied) != TURBO_OK);
+    turbo_flow_destroy(certificate_denied);
+    check_int_ge(atomic_load_explicit(&certificate_identity.calls, memory_order_acquire), 2);
+    certificate_identity.expected_fingerprint = FMQ_TEST_CERTIFICATE_SHA256;
+
+    sub_config.identity = "client-b";
+    identity_denied =
+        fmq_make_source_flow_with_security("fmq.input", &sub_config, &capture, &client_security);
+    check_not_null(identity_denied);
+    check_true(turbo_flow_start(identity_denied) != TURBO_OK);
+    turbo_flow_destroy(identity_denied);
+    check_int_ge(atomic_load_explicit(&certificate_identity.calls, memory_order_acquire), 3);
+    sub_config.identity = "client-a";
+
     key_provider.ctx = (void *)"wrong-secret";
     auth_denied =
         fmq_make_source_flow_with_security("fmq.input", &sub_config, &capture, &client_security);

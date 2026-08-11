@@ -24,7 +24,7 @@ spec("flowmq_coronet_transport") {
     check_int_eq(flowmq_coronet_transport_apply(NULL, FLOWMQ_TRANSPORT_TCP, NULL, 0, &options),
                  TURBO_EINVAL);
     check_int_eq(flowmq_coronet_transport_connect(NULL, FLOWMQ_TRANSPORT_TCP, "127.0.0.1", 7001,
-                                                  NULL, &timeouts, &udp),
+                                                  NULL, NULL, &timeouts, &udp),
                  TURBO_EINVAL);
     check_int_eq(flowmq_coronet_transport_send(NULL, FLOWMQ_TRANSPORT_TCP, &timeouts, "x", 1u),
                  TURBO_EINVAL);

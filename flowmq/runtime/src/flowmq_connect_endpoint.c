@@ -326,10 +326,19 @@ static void flowmq_connect_endpoint_connect_task(coro_t *co, void *arg) {
         endpoint->socket, endpoint->config.transport,
         &endpoint->config.kcp_config, endpoint->config.kcp_configured,
         &endpoint->config.socket_options);
+    if (rc == TURBO_OK && endpoint->config.tls) {
+      const turbo_flow_fmq_tls_config_t *tls = endpoint->config.tls;
+      const turbo_tls_client_config_t client = {
+          tls->ca_file, tls->cert_file, tls->key_file, tls->key_password, NULL,
+          tls->verify_peer};
+      rc = coro_socket_set_tls_client_config(endpoint->socket, &client);
+    }
     if (rc == TURBO_OK) {
       rc = flowmq_coronet_transport_connect(
           endpoint->socket, endpoint->config.transport, endpoint->host, endpoint->config.port,
-          endpoint->path, &endpoint->config.timeouts, &endpoint->config.udp_options);
+          endpoint->path,
+          endpoint->config.tls ? endpoint->config.tls->server_name : NULL,
+          &endpoint->config.timeouts, &endpoint->config.udp_options);
     }
     if (rc == TURBO_OK) rc = flowmq_connect_endpoint_send_hello(endpoint);
     if (rc == TURBO_OK)

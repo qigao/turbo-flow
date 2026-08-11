@@ -1,11 +1,14 @@
 #include "fmq_protocol.h"
+#include "flow_fmq_internal.h"
 
 #include "CoroNet/turbo_kcp.h"
 #include "flowmq_coronet_transport.h"
 #include "flow_coronet_runtime.h"
 #include "turbo_error.h"
 
+#include <errno.h>
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define FLOW_FMQ_DEFAULT_TIMEOUT_MS 1000u
@@ -163,7 +166,185 @@ static int flow_fmq_heartbeat_config_validate(const turbo_flow_fmq_config_t *con
   return config->heartbeat_timeout_ms < config->heartbeat_interval_ms ? TURBO_ERANGE : TURBO_OK;
 }
 
+static int flow_fmq_tls_config_validate(const turbo_flow_fmq_config_t *config) {
+  const turbo_flow_fmq_tls_config_t *tls;
+  if (!config || !config->tls) return TURBO_OK;
+  tls = config->tls;
+  if (tls->size != sizeof(*tls) ||
+      (tls->verify_peer != 0 && tls->verify_peer != 1) ||
+      (tls->require_client_certificate != 0 && tls->require_client_certificate != 1) ||
+      tls->rotation_generation == 0u) {
+    return TURBO_EINVAL;
+  }
+  if (config->transport != TURBO_FLOW_FMQ_TLS && config->transport != TURBO_FLOW_FMQ_WSS) {
+    return TURBO_ENOTSUP;
+  }
+  if ((tls->cert_file && !tls->key_file) || (!tls->cert_file && tls->key_file) ||
+      (tls->key_password && !tls->key_file)) {
+    return TURBO_EINVAL;
+  }
+  if (config->mode == TURBO_FLOW_FMQ_CONNECT) {
+    if (!tls->verify_peer || !tls->server_name || !tls->server_name[0] ||
+        tls->require_client_certificate) {
+      return TURBO_EINVAL;
+    }
+  } else if (!tls->cert_file || !tls->cert_file[0] || !tls->key_file ||
+             !tls->key_file[0] || tls->server_name ||
+             (tls->require_client_certificate && (!tls->ca_file || !tls->ca_file[0]))) {
+    return TURBO_EINVAL;
+  }
+  return TURBO_OK;
+}
+
+static int flow_fmq_scheme_lookup(const char *scheme, size_t len,
+                                  turbo_flow_fmq_transport_t *out) {
+  static const struct {
+    const char *name;
+    turbo_flow_fmq_transport_t transport;
+  } kSchemes[] = {
+      {"tcp", TURBO_FLOW_FMQ_TCP},
+      {"tls", TURBO_FLOW_FMQ_TLS},
+      {"udp", TURBO_FLOW_FMQ_UDP},
+      {"kcp", TURBO_FLOW_FMQ_KCP},
+      {"ws", TURBO_FLOW_FMQ_WS},
+      {"wss", TURBO_FLOW_FMQ_WSS},
+  };
+  size_t i;
+  for (i = 0u; i < sizeof(kSchemes) / sizeof(kSchemes[0]); ++i) {
+    size_t name_len = strlen(kSchemes[i].name);
+    if (name_len == len && memcmp(scheme, kSchemes[i].name, len) == 0) {
+      *out = kSchemes[i].transport;
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int flow_fmq_port_parse(const char *text, int *out) {
+  long value;
+  char *end = NULL;
+  if (!text || text[0] == '\0') return 0;
+  errno = 0;
+  value = strtol(text, &end, 10);
+  if (errno != 0 || !end || *end != '\0' || value < 1 || value > 65535) return 0;
+  *out = (int)value;
+  return 1;
+}
+
+int flow_fmq_endpoint_effective(const turbo_flow_fmq_config_t *config,
+                                char *host_buf, size_t host_cap,
+                                flow_fmq_endpoint_effective_t *out) {
+  const char *host;
+  const char *rest;
+  const char *colon;
+  const char *scheme_end;
+  turbo_flow_fmq_transport_t scheme_transport;
+  size_t scheme_len;
+  size_t host_len;
+  size_t i;
+  int embedded_port = 0;
+  int has_embedded_port = 0;
+  if (!config || !host_buf || host_cap == 0u || !out) return TURBO_EINVAL;
+  out->host = NULL;
+  out->port = config->port;
+  out->scheme_used = 0;
+  host = config->host;
+  if (!host || host[0] == '\0') {
+    out->transport = config->transport;
+    out->host = host ? host : "";
+    return TURBO_OK;
+  }
+  scheme_end = strstr(host, "://");
+  if (!scheme_end) {
+    out->transport = config->transport;
+    out->host = host;
+    return TURBO_OK;
+  }
+  scheme_len = (size_t)(scheme_end - host);
+  if (scheme_len == 0u || !flow_fmq_scheme_lookup(host, scheme_len, &scheme_transport)) {
+    return TURBO_EINVAL; /* unknown/empty scheme: fail fast, never guess */
+  }
+  rest = scheme_end + 3u;
+  if (rest[0] == '\0') return TURBO_EINVAL;
+  if (rest[0] == '[') {
+    const char *close = strchr(rest + 1, ']');
+    if (!close || close == rest + 1) return TURBO_EINVAL;
+    host = rest + 1;
+    host_len = (size_t)(close - host);
+    if (close[1] != '\0') {
+      if (close[1] != ':' || !flow_fmq_port_parse(close + 2, &embedded_port)) {
+        return TURBO_EINVAL;
+      }
+      has_embedded_port = 1;
+    }
+  } else {
+    size_t colon_count = 0u;
+    for (i = 0u; rest[i] != '\0'; ++i) {
+      if (rest[i] == ':') colon_count++;
+    }
+    if (colon_count == 0u) {
+      host = rest;
+      host_len = strlen(rest);
+    } else if (colon_count == 1u) {
+      colon = strchr(rest, ':');
+      host = rest;
+      host_len = (size_t)(colon - rest);
+      if (host_len == 0u || !flow_fmq_port_parse(colon + 1, &embedded_port)) {
+        return TURBO_EINVAL;
+      }
+      has_embedded_port = 1;
+    } else {
+      /* unbracketed IPv6 literal: the whole remainder is the host */
+      host = rest;
+      host_len = strlen(rest);
+    }
+  }
+  if (host_len == 0u) return TURBO_EINVAL;
+  for (i = 0u; i < host_len; ++i) {
+    char c = host[i];
+    if (c == '/' || c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+      return TURBO_EINVAL;
+    }
+  }
+  if (host_len >= host_cap) return TURBO_ENAMETOOLONG;
+  memcpy(host_buf, host, host_len);
+  host_buf[host_len] = '\0';
+  if (has_embedded_port) {
+    if (config->port != 0 && config->port != embedded_port) return TURBO_EINVAL;
+    out->port = embedded_port;
+  } else {
+    out->port = config->port;
+  }
+  if (config->transport != 0 && config->transport != scheme_transport) {
+    return TURBO_EINVAL; /* explicit transport conflicts with the scheme prefix */
+  }
+  out->transport = scheme_transport;
+  out->host = host_buf;
+  out->scheme_used = 1;
+  return TURBO_OK;
+}
+
+static int flow_fmq_config_validate_impl(const turbo_flow_fmq_config_t *config);
+
 int flow_fmq_config_validate(const turbo_flow_fmq_config_t *config) {
+  turbo_flow_fmq_config_t normalized;
+  flow_fmq_endpoint_effective_t effective;
+  char host_buf[FLOW_FMQ_ENDPOINT_HOST_MAX + 1u];
+  int rc;
+
+  if (!config || config->size != sizeof(*config)) return TURBO_EINVAL;
+  /* Normalize an optional "<scheme>://" prefix on host so every downstream
+     check observes the effective transport/host/port. */
+  rc = flow_fmq_endpoint_effective(config, host_buf, sizeof(host_buf), &effective);
+  if (rc != TURBO_OK) return rc;
+  normalized = *config;
+  normalized.transport = effective.transport;
+  normalized.host = effective.host;
+  normalized.port = effective.port;
+  return flow_fmq_config_validate_impl(&normalized);
+}
+
+static int flow_fmq_config_validate_impl(const turbo_flow_fmq_config_t *config) {
   tf_coronet_socket_timeout_config_t timeouts;
   uint64_t connection_timeout_ms;
   size_t max_frame_size;
@@ -203,6 +384,8 @@ int flow_fmq_config_validate(const turbo_flow_fmq_config_t *config) {
   rc = flow_fmq_frame_hwm_validate(config);
   if (rc != TURBO_OK) return rc;
   rc = flow_fmq_heartbeat_config_validate(config);
+  if (rc != TURBO_OK) return rc;
+  rc = flow_fmq_tls_config_validate(config);
   if (rc != TURBO_OK) return rc;
   if ((config->pattern == TURBO_FLOW_FMQ_PUB || config->pattern == TURBO_FLOW_FMQ_PUSH ||
        config->pattern == TURBO_FLOW_FMQ_ROUTER || config->pattern == TURBO_FLOW_FMQ_REP ||

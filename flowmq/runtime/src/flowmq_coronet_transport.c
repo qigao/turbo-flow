@@ -61,6 +61,7 @@ int flowmq_coronet_transport_apply(coro_socket_t *socket, flowmq_coronet_transpo
 
 int flowmq_coronet_transport_connect(coro_socket_t *socket, flowmq_coronet_transport_t transport,
                                      const char *host, int port, const char *path,
+                                     const char *server_name,
                                      const tf_coronet_socket_timeout_config_t *timeouts,
                                      const tf_coronet_udp_options_t *udp_options) {
   tf_coronet_transport_t coronet = flowmq_coronet_transport_coronet(transport);
@@ -71,7 +72,8 @@ int flowmq_coronet_transport_connect(coro_socket_t *socket, flowmq_coronet_trans
   rc = tf_coronet_connection_timeout_resolve(coronet, timeouts, &timeout_ms);
   if (rc != TURBO_OK) return rc;
   (void)coro_socket_set_timeout(socket, timeout_ms);
-  rc = tf_coronet_connect_socket(socket, coronet, host, port, path);
+  rc = tf_coronet_connect_socket_ex(socket, coronet, host, port, path,
+                                    server_name ? server_name : host);
   if (rc != TURBO_OK) return rc;
   rc = tf_coronet_apply_udp_options(socket, coronet, udp_options);
   if (rc != TURBO_OK) return rc;

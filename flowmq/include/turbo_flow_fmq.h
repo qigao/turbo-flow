@@ -58,6 +58,22 @@ typedef enum turbo_flow_fmq_transport_e {
   TURBO_FLOW_FMQ_WSS
 } turbo_flow_fmq_transport_t;
 
+/** Per-endpoint TLS material copied by the FMQ facade during create. */
+typedef struct turbo_flow_fmq_tls_config_s {
+  size_t size;
+  const char *ca_file;
+  const char *cert_file;
+  const char *key_file;
+  const char *key_password;
+  const char *server_name;
+  int verify_peer;
+  int require_client_certificate;
+  uint64_t rotation_generation;
+} turbo_flow_fmq_tls_config_t;
+
+#define TURBO_FLOW_FMQ_TLS_CONFIG_INIT \
+  {sizeof(turbo_flow_fmq_tls_config_t), NULL, NULL, NULL, NULL, NULL, 1, 0, 0u}
+
 typedef enum turbo_flow_fmq_metadata_policy_e {
   TURBO_FLOW_FMQ_METADATA_STATIC = 1,
   TURBO_FLOW_FMQ_METADATA_INHERIT,
@@ -118,7 +134,13 @@ typedef struct turbo_flow_fmq_config_s {
   turbo_flow_fmq_pattern_t pattern;
   turbo_flow_fmq_endpoint_mode_t mode;
   turbo_flow_fmq_transport_t transport;
-  /** Bind address or remote host. */
+  /**
+   * Bind address or remote host. May carry a scheme prefix ("tcp://",
+   * "tls://", "udp://", "kcp://", "ws://", "wss://") that selects the
+   * transport and may embed the port (e.g. "tls://192.168.2.1:5000"); an
+   * embedded port must match transport-unset or equal config.port, and a
+   * scheme that conflicts with an explicit config.transport is rejected.
+   */
   const char *host;
   int port;
   /**
@@ -169,6 +191,8 @@ typedef struct turbo_flow_fmq_config_s {
   turbo_flow_fmq_metadata_policy_t identity_policy;
   /** Pipe endpoint for PIPE; WebSocket request path for WS/WSS, default "/". */
   const char *path;
+  /** Optional object-level TLS client/server material for TLS/WSS. */
+  const turbo_flow_fmq_tls_config_t *tls;
   /** Required 64-character hexadecimal PSK when transport is KCP. */
   const char *kcp_pre_shared_key;
   uint32_t kcp_mtu;
@@ -258,10 +282,20 @@ typedef struct turbo_flow_fmq_security_binding_s {
   turbo_flow_security_realm_t *realm;
   const turbo_flow_security_key_provider_t *key_provider;
   const char *secret_reference;
+  /**
+   * Optional BIND-side mTLS identity verifier. The fingerprint is the
+   * canonical verified `sha256:<64 lowercase hex>` peer certificate identity;
+   * claimed_identity is the FMQ HELLO identity. Both are borrowed for the
+   * callback only. The callback context must outlive the adapter.
+   */
+  int (*verify_peer_certificate_identity)(void *ctx,
+                                          const char *certificate_sha256,
+                                          const char *claimed_identity);
+  void *peer_certificate_identity_ctx;
 } turbo_flow_fmq_security_binding_t;
 
 #define TURBO_FLOW_FMQ_SECURITY_BINDING_INIT                                                      \
-  {sizeof(turbo_flow_fmq_security_binding_t), NULL, NULL, NULL, NULL, NULL, NULL}
+  {sizeof(turbo_flow_fmq_security_binding_t), NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 
 typedef enum turbo_flow_fmq_slow_peer_policy_e {
   TURBO_FLOW_FMQ_SLOW_PEER_FAIL = 1,

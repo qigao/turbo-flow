@@ -28,6 +28,7 @@ int flowmq_coronet_transport_apply(coro_socket_t *socket, flowmq_coronet_transpo
                                    const tf_coronet_socket_options_t *socket_options);
 int flowmq_coronet_transport_connect(coro_socket_t *socket, flowmq_coronet_transport_t transport,
                                      const char *host, int port, const char *path,
+                                     const char *server_name,
                                      const tf_coronet_socket_timeout_config_t *timeouts,
                                      const tf_coronet_udp_options_t *udp_options);
 int flowmq_coronet_transport_listen(coro_socket_t *socket, flowmq_coronet_transport_t transport,

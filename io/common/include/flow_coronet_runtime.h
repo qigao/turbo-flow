@@ -141,6 +141,9 @@ coro_socket_t *tf_coronet_create_server_socket(coro_context_t *ctx,
                                                tf_coronet_transport_t transport);
 int tf_coronet_connect_socket(coro_socket_t *socket, tf_coronet_transport_t transport,
                               const char *host, int port, const char *path);
+int tf_coronet_connect_socket_ex(coro_socket_t *socket, tf_coronet_transport_t transport,
+                                 const char *connect_host, int port, const char *path,
+                                 const char *request_host);
 int tf_coronet_listen_socket(coro_socket_t *socket, tf_coronet_transport_t transport,
                              const char *host, int port, const char *path, coro_handler_fn handler,
                              void *arg);

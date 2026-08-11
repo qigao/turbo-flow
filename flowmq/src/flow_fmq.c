@@ -26,6 +26,7 @@
 #include "turbo_thread.h"
 #include "turbo_vec.h"
 
+#include <errno.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1155,6 +1156,12 @@ struct flow_fmq_adapter_s {
   tstr_t protocol_uid;
   tstr_t udp_multicast_group;
   tstr_t udp_multicast_interface;
+  tstr_t tls_ca_file;
+  tstr_t tls_cert_file;
+  tstr_t tls_key_file;
+  tstr_t tls_key_password;
+  tstr_t tls_server_name;
+  turbo_flow_fmq_tls_config_t tls;
   turbo_flow_fmq_pattern_t pattern;
   turbo_flow_fmq_endpoint_mode_t mode;
   turbo_flow_fmq_transport_t transport;
@@ -1182,6 +1189,7 @@ struct flow_fmq_adapter_s {
   int kcp_configured;
   int initial_subscription_configured;
   int reuse_port;
+  int tls_configured;
   int start_refs;
   atomic_int started;
   atomic_int connect_status;
@@ -2119,6 +2127,26 @@ static int flow_fmq_start_bind(flow_fmq_adapter_t *adapter) {
     coro_socket_destroy(adapter->server);
     adapter->server = NULL;
     return rc;
+  }
+  if (adapter->tls_configured) {
+    const turbo_tls_server_config_t tls = {
+        sizeof(tls),
+        adapter->tls.cert_file,
+        adapter->tls.key_file,
+        adapter->tls.key_password,
+        adapter->tls.ca_file,
+        NULL,
+        adapter->tls.require_client_certificate
+            ? TURBO_TLS_CLIENT_AUTH_REQUIRED
+            : TURBO_TLS_CLIENT_AUTH_NONE,
+        NULL,
+        0u};
+    rc = coro_socket_set_tls_server_config(adapter->server, &tls);
+    if (rc != TURBO_OK) {
+      coro_socket_destroy(adapter->server);
+      adapter->server = NULL;
+      return rc;
+    }
   }
   rc = flowmq_coronet_transport_listen(
       adapter->server, (flowmq_coronet_transport_t)adapter->transport, adapter->host, adapter->port,
@@ -5250,6 +5278,11 @@ static void flow_fmq_shutdown(void *ctx) {
   tstr_freep(&adapter->protocol_uid);
   tstr_freep(&adapter->udp_multicast_group);
   tstr_freep(&adapter->udp_multicast_interface);
+  tstr_freep(&adapter->tls_ca_file);
+  tstr_freep(&adapter->tls_cert_file);
+  tstr_freep(&adapter->tls_key_file);
+  tstr_freep(&adapter->tls_key_password);
+  tstr_freep(&adapter->tls_server_name);
   turbo_kcp_config_wipe(&adapter->kcp_config);
   free(adapter);
 }
@@ -5431,10 +5464,24 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
   size_t operation_count;
   uint32_t roles;
   int rc;
+  char host_buf[FLOW_FMQ_ENDPOINT_HOST_MAX + 1u];
+  flow_fmq_endpoint_effective_t endpoint_effective;
+  turbo_flow_fmq_config_t normalized;
   if (direct_out) *direct_out = NULL;
   if ((!flow && !direct_out) || (flow && direct_out) || !name || name[0] == '\0')
     return TURBO_EINVAL;
   if (!config) return TURBO_EINVAL;
+  /* A "<scheme>://" prefix on config->host selects the transport and may carry
+     the port. Resolve it once so validation, security checks and the adapter
+     all observe the same effective transport/host/port. */
+  rc = flow_fmq_endpoint_effective(config, host_buf, sizeof(host_buf),
+                                   &endpoint_effective);
+  if (rc != TURBO_OK) return rc;
+  normalized = *config;
+  normalized.transport = endpoint_effective.transport;
+  normalized.host = endpoint_effective.host;
+  normalized.port = endpoint_effective.port;
+  config = &normalized;
   rc = turbo_flow_coronet_execution_binding_validate(execution);
   if (rc != TURBO_OK) return rc;
   rc = flow_fmq_config_validate(config);
@@ -5444,6 +5491,17 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
     return TURBO_ENOTSUP;
   if (security && config->mode == TURBO_FLOW_FMQ_CONNECT &&
       (!config->identity || config->identity[0] == '\0')) {
+    return TURBO_EINVAL;
+  }
+  if ((security || endpoint_effective.scheme_used) &&
+      (config->transport == TURBO_FLOW_FMQ_TLS ||
+       config->transport == TURBO_FLOW_FMQ_WSS) &&
+      !config->tls) {
+    return TURBO_EINVAL;
+  }
+  if (security && security->verify_peer_certificate_identity &&
+      (config->mode != TURBO_FLOW_FMQ_BIND || !config->tls ||
+       !config->tls->require_client_certificate)) {
     return TURBO_EINVAL;
   }
   if (fanout) {
@@ -5514,6 +5572,30 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
   adapter->path = config->path ? tstr_dup(config->path) : tstr_new();
   adapter->topic = config->topic ? tstr_dup(config->topic) : tstr_new();
   adapter->identity = config->identity ? tstr_dup(config->identity) : tstr_new();
+  if (config->tls) {
+    adapter->tls_ca_file = config->tls->ca_file ? tstr_dup(config->tls->ca_file) : NULL;
+    adapter->tls_cert_file = config->tls->cert_file ? tstr_dup(config->tls->cert_file) : NULL;
+    adapter->tls_key_file = config->tls->key_file ? tstr_dup(config->tls->key_file) : NULL;
+    adapter->tls_key_password =
+        config->tls->key_password ? tstr_dup(config->tls->key_password) : NULL;
+    adapter->tls_server_name =
+        config->tls->server_name ? tstr_dup(config->tls->server_name) : NULL;
+    if ((config->tls->ca_file && !adapter->tls_ca_file) ||
+        (config->tls->cert_file && !adapter->tls_cert_file) ||
+        (config->tls->key_file && !adapter->tls_key_file) ||
+        (config->tls->key_password && !adapter->tls_key_password) ||
+        (config->tls->server_name && !adapter->tls_server_name)) {
+      flow_fmq_shutdown(adapter);
+      return TURBO_ENOMEM;
+    }
+    adapter->tls = *config->tls;
+    adapter->tls.ca_file = adapter->tls_ca_file;
+    adapter->tls.cert_file = adapter->tls_cert_file;
+    adapter->tls.key_file = adapter->tls_key_file;
+    adapter->tls.key_password = adapter->tls_key_password;
+    adapter->tls.server_name = adapter->tls_server_name;
+    adapter->tls_configured = 1;
+  }
   adapter->resource_owner = tstr_dup(name);
   adapter->connection_uid = tstr_format("fmq:{}:connection", name);
   adapter->queue_uid = tstr_format("fmq:{}:queue", name);
@@ -5636,6 +5718,7 @@ flow_fmq_register_adapter_internal(turbo_flow_t *flow, const char *name,
     endpoint_config.path = adapter->path;
     endpoint_config.topic = adapter->topic;
     endpoint_config.identity = adapter->identity;
+    endpoint_config.tls = adapter->tls_configured ? &adapter->tls : NULL;
     endpoint_config.port = adapter->port;
     endpoint_config.max_frame_size = adapter->max_frame_size;
     endpoint_config.stream_recv_buffer_bytes = adapter->stream_recv_buffer_bytes;

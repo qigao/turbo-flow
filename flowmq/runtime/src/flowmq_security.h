@@ -15,6 +15,10 @@ typedef struct flowmq_security_binding_runtime_s {
   turbo_flow_security_auth_provider_t auth_provider;
   turbo_flow_security_key_provider_t key_provider;
   turbo_flow_security_realm_t *realm;
+  int (*verify_peer_certificate_identity)(void *ctx,
+                                          const char *certificate_sha256,
+                                          const char *claimed_identity);
+  void *peer_certificate_identity_ctx;
 } flowmq_security_binding_runtime_t;
 
 int flowmq_security_binding_init(flowmq_security_binding_runtime_t *runtime,

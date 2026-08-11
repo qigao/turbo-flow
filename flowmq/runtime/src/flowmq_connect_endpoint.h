@@ -6,6 +6,7 @@
 #include "flowmq_peer_session.h"
 #include "flowmq_protocol.h"
 #include "flowmq_security.h"
+#include "turbo_flow_fmq.h"
 
 typedef struct flowmq_connect_endpoint_s flowmq_connect_endpoint_t;
 
@@ -49,6 +50,7 @@ typedef struct flowmq_connect_endpoint_config_s {
   const char *path;
   const char *topic;
   const char *identity;
+  const turbo_flow_fmq_tls_config_t *tls;
   int port;
   size_t max_frame_size;
   size_t stream_recv_buffer_bytes;
