@@ -16,7 +16,7 @@ target_include_directories(
                         $<INSTALL_INTERFACE:include>)
 target_link_libraries(${TARGET_NAME}
   PUBLIC TurboFlow::Flow
-  PRIVATE SQLite::SQLite3 TurboUtils::Core TurboUtils::Parser)
+  PRIVATE SQLite::SQLite3 TurboUtils::Core TurboParser::Parser)
 install(FILES include/turbo_flow_security_sqlite.h DESTINATION include)
 
 if(BUILD_TESTS)

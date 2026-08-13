@@ -10,7 +10,7 @@ cmake_add_test(
   FOLDER
   "io/socket/tests")
 
-set_tests_properties(test_socket PROPERTIES LABELS "fmq-release;fmq-chaos")
+set_tests_properties(test_socket PROPERTIES LABELS "graph;core")
 
 find_package(OpenSSL REQUIRED)
 target_link_libraries(test_socket PRIVATE OpenSSL::SSL

@@ -9,7 +9,7 @@ static uint32_t flow_settlement_action_flag(turbo_flow_settlement_action_t actio
   case TURBO_FLOW_SETTLEMENT_ACTION_REQUEUE: return TURBO_FLOW_SETTLEMENT_REQUEUE;
   case TURBO_FLOW_SETTLEMENT_ACTION_DEAD_LETTER: return TURBO_FLOW_SETTLEMENT_DEAD_LETTER;
   case TURBO_FLOW_SETTLEMENT_ACTION_CANCELED: return TURBO_FLOW_SETTLEMENT_CANCELED;
-  case TURBO_FLOW_SETTLEMENT_ACTION_PROTOCOL_ACK: return TURBO_FLOW_SETTLEMENT_PROTOCOL_ACK;
+  case TURBO_FLOW_SETTLEMENT_ACTION_ACKNOWLEDGE: return TURBO_FLOW_SETTLEMENT_ACKNOWLEDGE;
   default: return 0u;
   }
 }
@@ -18,12 +18,12 @@ static int flow_settlement_result_valid(const turbo_flow_settlement_result_t *re
   if (!result || result->size < sizeof(*result) || flow_settlement_action_flag(result->action) == 0u)
     return 0;
   if ((result->action == TURBO_FLOW_SETTLEMENT_ACTION_COMPLETE ||
-       result->action == TURBO_FLOW_SETTLEMENT_ACTION_PROTOCOL_ACK) &&
+       result->action == TURBO_FLOW_SETTLEMENT_ACTION_ACKNOWLEDGE) &&
       result->status != TURBO_OK) {
     return 0;
   }
   if (result->action != TURBO_FLOW_SETTLEMENT_ACTION_COMPLETE &&
-      result->action != TURBO_FLOW_SETTLEMENT_ACTION_PROTOCOL_ACK &&
+      result->action != TURBO_FLOW_SETTLEMENT_ACTION_ACKNOWLEDGE &&
       result->status == TURBO_OK) {
     return 0;
   }
@@ -112,6 +112,6 @@ int flow_adapter_apply_settlement(turbo_flow_t *flow, const flow_stage_plan_impl
   completion->settlement = *result;
   completion->settlement_reported = 1;
   completion->terminal = result->action != TURBO_FLOW_SETTLEMENT_ACTION_COMPLETE &&
-                         result->action != TURBO_FLOW_SETTLEMENT_ACTION_PROTOCOL_ACK;
+                         result->action != TURBO_FLOW_SETTLEMENT_ACTION_ACKNOWLEDGE;
   return callback_status;
 }

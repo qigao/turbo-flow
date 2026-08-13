@@ -4,7 +4,7 @@ cmake_add_test(
   LIBS TurboFlow::RPC TurboFlow::Flow TurboHttp::TurboHttp TurboUtils::TinyTest
   FOLDER "io/rpc/tests")
 
-set_tests_properties(test_turbo_flow_rpc PROPERTIES LABELS "fmq-release;fmq-chaos")
+set_tests_properties(test_turbo_flow_rpc PROPERTIES LABELS "graph;core")
 
 if(WIN32)
   target_link_libraries(test_turbo_flow_rpc PRIVATE ws2_32)

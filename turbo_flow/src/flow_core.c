@@ -250,7 +250,6 @@ void flow_clear_registry(turbo_flow_t *flow) {
   }
   turbo_vec_clear(&flow->adapters);
   flow_expr_projection_clear(flow);
-  turbo_hash_map_clear(&flow->protocol_route_owners);
 }
 
 int flow_find_stage_view(const turbo_flow_t *flow, tstr_v name) {
@@ -362,9 +361,7 @@ turbo_flow_t *turbo_flow_create(void) {
       turbo_vec_init(&flow->resource_command_history, sizeof(flow_resource_command_record_t)) !=
           TURBO_OK ||
       turbo_vec_init(&flow->event_observers, sizeof(flow_event_observer_registration_t)) !=
-          TURBO_OK ||
-      turbo_hash_map_init(&flow->protocol_route_owners, sizeof(flow_protocol_route_owner_key_t),
-                          sizeof(flow_protocol_route_owner_t), NULL, NULL, NULL) != TURBO_OK) {
+          TURBO_OK) {
     turbo_flow_destroy(flow);
     return NULL;
   }
@@ -405,7 +402,6 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   turbo_vec_destroy(&flow->pool_records);
   turbo_vec_destroy(&flow->resource_command_history);
   turbo_vec_destroy(&flow->event_observers);
-  turbo_hash_map_destroy(&flow->protocol_route_owners);
   if (flow->observer_ops.flow_destroyed) {
     flow->observer_ops.flow_destroyed(flow->observer_ctx);
   }

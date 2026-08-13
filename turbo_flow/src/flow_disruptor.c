@@ -634,11 +634,6 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
     }
   }
 
-  {
-    const turbo_flow_protocol_settlement_envelope_t *settlement =
-        turbo_flow_msg_protocol_settlement(&entry->message);
-    if (settlement) result->protocol_settlement = settlement->settled_point;
-  }
   turbo_flow_msg_cleanup(&entry->message);
   entry->header = (flow_entry_header_t)FLOW_ENTRY_HEADER_INIT;
 

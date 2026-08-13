@@ -1963,7 +1963,7 @@ suite("Turbo Flow Domain Contracts") {
 
       memset(&adapter_ops, 0, sizeof(adapter_ops));
       adapter_ops.consume = domain_noop_consume;
-      work.runtime.settlement = TURBO_FLOW_SETTLEMENT_PROTOCOL_ACK;
+      work.runtime.settlement = TURBO_FLOW_SETTLEMENT_ACKNOWLEDGE;
       check_not_null(flow);
       check_int_eq(turbo_flow_register_adapter(flow, "owner", &adapter_ops, NULL), TURBO_OK);
       check_int_eq(turbo_flow_register_operation(flow, &input), TURBO_OK);
@@ -1984,7 +1984,7 @@ suite("Turbo Flow Domain Contracts") {
                                "  input -> work -> sink\n"
                                "}\n";
       const turbo_flow_settlement_action_t actions[] = {
-          TURBO_FLOW_SETTLEMENT_ACTION_COMPLETE, TURBO_FLOW_SETTLEMENT_ACTION_PROTOCOL_ACK};
+          TURBO_FLOW_SETTLEMENT_ACTION_COMPLETE, TURBO_FLOW_SETTLEMENT_ACTION_ACKNOWLEDGE};
 
       for (size_t action_index = 0; action_index < 2u; ++action_index) {
         turbo_flow_t *flow = turbo_flow_create();
@@ -2005,7 +2005,7 @@ suite("Turbo Flow Domain Contracts") {
         adapter_ops.consume = action_index == 0u ? domain_noop_consume : domain_settlement_consume;
         owner_ops.apply = domain_settlement_apply;
         work.runtime.settlement = action_index == 0u ? TURBO_FLOW_SETTLEMENT_COMPLETE
-                                                     : TURBO_FLOW_SETTLEMENT_PROTOCOL_ACK;
+                                                     : TURBO_FLOW_SETTLEMENT_ACKNOWLEDGE;
         probe.report_action = actions[action_index];
         probe.report_status = TURBO_OK;
         check_not_null(flow);

@@ -35,8 +35,7 @@ CPU/memory/load into caller-owned storage. Serialize graph pulls with
 parse/compile/start/stop/reset/destroy; message, pool, and connection counters
 remain safe to update while a pull is in progress. Adapter connection details
 are available with `turbo_flow_adapter_connection_snapshot_at()`. Unsupported
-adapters return `TURBO_ENOTSUP`; FMQ currently provides endpoint, state,
-connection limit, in-flight frames/bytes, and last status.
+adapters return `TURBO_ENOTSUP`.
 
 `turbo_flow_observe_control_facts()` captures the same traffic, OS, and graph
 aggregates into caller-owned backing storage and returns a typed fact provider
@@ -83,11 +82,6 @@ External adapters can report connection/control-plane events with
 counters: peer connect/disconnect, reconnect scheduled/succeeded/failed,
 heartbeat timeout, frame sent, high-water mark reached, frame dropped, non-OK
 control event count, and the last status/value pair.
-
-FMQ uses a local `event_callback` hook rather than depending on Observe. Hosts
-that want FMQ metrics should map `turbo_flow_fmq_event_t` to
-`turbo_flow_observe_control_event_t` in that callback and call
-`turbo_flow_observe_record_control_event()`.
 
 Observe also keeps a caller-configured bounded event history. When full, the oldest record is
 discarded and `turbo_flow_observe_dropped_event_count()` advances. Command results are recorded

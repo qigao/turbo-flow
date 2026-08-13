@@ -448,7 +448,6 @@ Implemented modules:
 | `TurboFlow::Email` | SMTP sink, POP3 source, and MIME parse/extract/encode transforms |
 | `TurboFlow::PostgreSQL` | Parameterized sink and query/rowset source |
 | `TurboFlow::Redis` | Redis Stream source/sink and Redis Hash record store |
-| `TurboFlow::FMQ` | CoroNet PUB/SUB, XPUB/XSUB, PUSH/PULL, ROUTER/DEALER, REQ/REP, and PAIR |
 | `TurboFlow::Observe` | Opt-in message/stage/adapter metrics and bounded summary sink |
 | `TurboFlow::Schedule` | Interval, one-shot, bounded-repeat, and local-time cron sources |
 
@@ -473,23 +472,16 @@ registrations. A module declares its version, capabilities, primitive type and
 operation exports, plus already-registered dependency ranges. Typed operation
 providers and native adapters can be bound to the module that owns the exported operation. The
 catalog is validation and read-only discovery metadata: it is not a loader,
-resource factory, or Graph DSL construct. Production registrations now include
-TurboFlow Policy, native HTTP/RPC client/server, FMQ pattern operations, and Flowie MQTT
-ingress/egress. FlowStore remains a typed fact-store subsystem rather than an adapter operation.
-
-FMQ uses a bounded versioned TurboFlow protocol over CoroNet TCP/TLS. It is
-ZeroMQ-like at the messaging-pattern level but is not ZeroMQ wire compatible.
-Its dotted primitive bindings and strict endpoint pairings are documented in
-`flowmq/README.md`. Payload codec and DataBind processing remains in
-explicit graph stages.
+resource factory, or Graph DSL construct. Production registrations include
+TurboFlow Policy and native HTTP/RPC client/server operations. FlowStore remains
+a typed fact-store subsystem rather than an adapter operation.
 
 ## Build Components
 
-TurboFlow is configured and installed as one complete product. Flowie,
+TurboFlow is configured and installed as a graph data-processing product.
 FlowStore, gateways, security, codecs, network and persistence adapters,
-FlowMQ, observation, scheduling, and the MIR JIT backend are always present in
-the build graph. Product feature selection is not a supported CMake
-configuration boundary.
+observation, scheduling, and the MIR JIT backend form its repository-owned
+build graph. External protocol products are not producer-side components.
 
 TurboUtils, TurboNet, Threads, TurboHTTP, PostgreSQL, RulesForge, and the other
 declared dependencies are therefore required by every product build.
@@ -505,7 +497,7 @@ ABI with atomic aggregate counters and bounded per-stage series; its explicit
 summary sink defaults to payload redaction. Ownership and logging behavior are
 documented in `observe/README.md`.
 
-`TurboFlow::FlowStore` keeps typed fact state outside core and outside Flowie. State and Index use
+`TurboFlow::FlowStore` keeps typed fact state outside core. State and Index use
 bounded HashMap-backed ownership; Log and TimeSeries use bounded ordered storage. The routing
 policy selects local, Redis, or PostgreSQL from explicit capacity, frequency, retention, and durability
 requirements and fails when the selected backend or model capability is unavailable. `tf_local_storage`
@@ -588,12 +580,9 @@ retry policy determines whether that external message is retried.
 ## Adapter Control Commands
 
 `turbo_flow_adapter_command()` routes desired-state commands by adapter binding
-name to the adapter owner. FMQ implements idempotent quiesce/resume and
-structured endpoint replacement. Quiesce stops CoroNet resources without
-releasing the flow lifecycle reference. Replacement validates and copies the
-new endpoint before changing owner state; active resources are restarted, and
-a failed restart restores the old endpoint and ready resources. Snapshot data
-is observed state and is never mutated by Observe.
+name to the adapter owner. An adapter may implement idempotent quiesce/resume
+and structured endpoint replacement. Snapshot data is observed state and is
+never mutated by Observe.
 
 Hosts serialize adapter commands with lifecycle/configuration calls. For sink
 endpoint replacement, first pause and drain core publication so no consume call

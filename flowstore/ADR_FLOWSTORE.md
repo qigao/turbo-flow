@@ -10,28 +10,27 @@
 `FlowStorage` 又单独提供文件、目录、append-log 与 SQLite sink。这两个模块没有形成统一的
 数据所有权、容量和查询契约。新设计删除两个旧模块，不保留其 API、配置或行为兼容性。
 
-FlowStore 独立于 Flowie。Flowie 只依赖类型化存储契约，不拥有具体 HashTable、Redis 命令或
+FlowStore 独立于外部协议产品。调用方只依赖类型化存储契约，不拥有具体 HashTable、Redis 命令或
 CRoaring 实现。
 
 Record 的公共契约位于基础 `turbo_flow/include/turbo_flow_record_store.h`，因为它是
 Flow/TurboFlow 的稳定数据边界；它不反向依赖 FlowStore。FlowStore 提供 State/Index/Log/
-Series facade，具体 backend 实现则由 `io/common/storage` 的 `StorageBackend` registry 按
-model 单独装配；local 的实现位于同级 `tf_local_storage` shared library，而不是 Flowie 内部
+Series facade，具体 backend 实现则由 `flowstore/backend` 的 `StorageBackend` registry 按
+model 单独装配；local 的实现位于同级 `tf_local_storage` shared library，而不是协议产品内部
 direct-factory。
 
-Flowie 的 MQTT 协议事实不属于 FlowStore 业务领域。Flowie 通过自身的 opaque
-`flowie_protocol_store_t` 借用 registry 提供的 Record service；endpoint 不得直接调用 Record
-callback。`turbo_flow_mqtt_store_t` 仅作为旧 ABI 兼容层保留，新 Flowie 代码不再依赖它。
+协议 session、subscription、inflight、retained、Will、presence 和 route projection 不属于
+FlowStore 业务领域。外部协议 owner 可借用 registry 提供的 Record service，但 endpoint 不得
+绕过自身状态边界直接推进 Record callback。
 
 ### 业务事实与协议事实不变量
 
 FlowStore 只拥有 Graph 显式写入的业务事实。session、subscription、inflight、retained、Will、
-presence 和 route projection 是 MQTT 协议事实，由 Flowie ProtocolStore 管理。Flowie owner 内的
+presence 和 route projection 是协议事实，由外部协议 owner 管理。owner 内的
 session/vector、topic trie、member map 和 retained map 只能作为从 ProtocolStore 重建的单 owner
 cache；每次状态迁移必须先完成协议 CAS/atomic batch，再交换 cache owner，失败不得推进 cache。
 业务 Store 与 ProtocolStore 即使使用同一种 backend，也必须使用独立 namespace、连接 owner、
-容量和 migration，且禁止 fallback 或同步双写。完整决策见
-[`flowie/ADR_PROTOCOL_BUSINESS_STORAGE.md`](../flowie/ADR_PROTOCOL_BUSINESS_STORAGE.md)。
+容量和 migration，且禁止 fallback 或同步双写。
 
 连接对象、解析缓冲、发送队列、CoroNet lane 状态和 ACL/control-plane SQLite 不属于 MQTT
 业务事实：前者是传输运行时状态，后者是独立管理面，均不通过 FlowStore 承载。
@@ -40,13 +39,13 @@ cache；每次状态迁移必须先完成协议 CAS/atomic batch，再交换 cac
 
 FlowStore 及其 Record contract 分为五种不能互换的数据模型：
 
-| 模型 | 事实语义 | local backend | Redis backend | PostgreSQL backend |
-|---|---|---|---|---|
-| Record | 带 revision 的批量 CAS 记录 | volatile linked store（atomic，不 durable） | Hash/Lua | transaction table |
-| State | 带 revision 的最新键值状态 | TurboUtils Hash Map | Hash | - |
-| Index | 无序成员集合和映射查询 | TurboUtils Hash Map/Set | Set 或 Sorted Set | - |
-| Log | 带单调 cursor 的有序事件历史 | 有界分段日志 | Stream | - |
-| TimeSeries | 按时间排序的标量采样 | 有界有序 chunk | -（未声明 Series capability） | - |
+| 模型 | 事实语义 | local backend | Redis backend | SQLite backend | PostgreSQL backend |
+|---|---|---|---|---|---|
+| Record | 带 revision 的批量 CAS 记录 | volatile linked store（atomic，不 durable） | Hash/Lua | 固定 Record 表 + transaction | 固定 Record 表 + transaction |
+| State | 带 revision 的最新键值状态 | TurboUtils Hash Map | Hash | - | - |
+| Index | 无序成员集合和映射查询 | TurboUtils Hash Map/Set | Set 或 Sorted Set | - | - |
+| Log | 带单调 cursor 的有序事件历史 | 有界分段日志 | Stream | - | - |
+| TimeSeries | 按时间排序的标量采样 | 有界有序 chunk | -（未声明 Series capability） | - | - |
 
 CRoaring 不保存事实数据。它封装在有硬容量上限的 `turbo_flow_bitmap_index_t` 中，只允许作为
 可从 IndexStore 重建的派生加速索引，并且必须由代表性 benchmark 证明其相对 HashTable 的收益。
@@ -56,16 +55,67 @@ CRoaring 不保存事实数据。它封装在有硬容量上限的 `turbo_flow_b
 进程内、非 durable 事实源；要求 durable 或跨进程共享时选择 Redis/PostgreSQL，并由 storage
 backend capability 明确拒绝不支持的模型，不自动静默退回 local。
 
-`io/local`、`io/redis` 和 `io/pgsql` 是同级 backend 模块，只通过 StorageBackend 的
-`open()/close()` function table 暴露 provider-neutral service。Flowie 启动时先创建 registry、
-注册三个可用 API，再由 owner 创建并持有 service；Flowie 不直接调用 local 容器或远程数据库的
+`flowstore/backends/{local,redis,sqlite,pgsql}` 是同级 backend 模块，只通过 StorageBackend 的
+`open()/close()` function table 暴露 provider-neutral service。宿主启动时先创建 registry、
+注册可用 API，再由 owner 创建并持有 service；调用方不直接调用 local 容器或远程数据库的
 `create_*`/`destroy_*` 函数。当前 `tf_redis` 不声明 Series capability，TimeSeries 路由必须
 在 `open()` 前被拒绝，而不是退回 Stream、Sorted Set 或 local。
+
+### FlowStore：Record 事实源与可选 schema adapter
+
+`FlowStore` 是一个 namespace-bound RecordStore 的唯一业务 facade，不是关系型 ORM。它直接拥有
+`put/get/delete/scan/commit` 的二进制 Record 操作；Record 是 `key + revision + binary value`。DataBind
+是可选 schema adapter，既不拥有 FlowStore，也不决定 Redis、SQLite 或 PostgreSQL 的 value 格式：
+
+```text
+DataBindRecord (optional)
+    -- DataBind binary --> FlowStore Record value
+Opaque/protobuf/custom binary
+    -------------------> FlowStore Record value
+```
+
+核心 API 是二进制 `put/delete/scan/commit`；调用者不写 SQL、Redis command 或 backend 分支。`put`
+仍要求调用者给出 `expected_revision` 与 `next_revision`，由 RecordStore 保持 CAS 和 atomic batch 的
+既有语义。业务 key（如 `order/42`）由调用者决定；FlowStore 和 DataBind 都不推断 key。
+
+FlowStore 接受任意二进制 value，并原样交给 backend。启用 DataBind adapter 时，adapter 固定
+schema/type identity，并只对自己写入或读取的 DataBind binary 执行编解码、schema validation 与
+QueryVM 字段解析。adapter 不提供 CSV、JSON、YAML 或 XML 的存储导入导出，也不自动转换格式；无法
+按该 schema 解码的 value 返回明确协议错误，不能猜测格式、忽略字段或切换 schema。
+
+SQLite 和 PostgreSQL 的物理存储仍使用一张固定的 Record 表：
+
+```text
+namespace_name | record_key | revision | value(BLOB/BYTEA)
+```
+
+这里的一行只是完整 Record value 的持久化载体，不是 `Order`、`User` 等业务对象的 SQL 行模型。
+SQLite/PG provider 内部用固定、参数绑定的 SQL 执行 schema 创建、snapshot scan、CAS put/delete 和
+transaction；这些语句不按 DataBind schema 或业务字段动态生成。Redis 则以等价的 Hash/Lua 原子
+操作承载同一 Record contract。于是业务层的事实模型始终是 `key -> revision + value`，而不是
+“C struct 映射到 SQL 表/列”。
+
+`FlowStoreDataBind::query` 仅接收已经编译并验证的 QueryVM bytecode；它在 FlowStore snapshot 上依次
+解码 DataBind binary，并以 canonical top-level schema field 作为 QueryVM operand 解析来源。它不接收
+SQL 文本，也不会把 `status == "open"` 翻译为 `WHERE status = ...`。因此其时间复杂度是
+`O(candidate_records × predicate_steps)`；QueryVM 的 instruction/operand/regex/step 上限必须在 scan
+之前验证。`uint64/int64` 字段必须使用精确整数 operand 比较，禁止降级为 `double`。
+
+需要高效字段查询时，业务必须维护明确、可从 Record 事实源重建的 IndexStore 派生索引，先取得
+候选 key，再由 QueryVM 作精确过滤。未来如需 SQLite/PG 的 SQL 下推，只能作为显式、关系后端专用的
+查询 provider：它必须定义支持的 schema field、操作符、索引、方言、事务快照与 fallback-free 的
+失败语义；不得扩展 RecordStore 或伪装为 Redis 同构功能。
+
+FlowStore 与其可选 DataBind adapter 都不负责 DataBind schema 到表/列/foreign key 的映射、DDL
+migration、Join、关联加载、自动 dirty tracking、级联写入或跨实体事务。这些能力属于独立的
+relational ORM 设计，不能混入当前跨后端 Record contract。
 
 ## 公共协议
 
 ### 数据单元
 
+- Record 是 `binary key -> { revision, binary value }`；一个 value 是不可拆分的领域事实单元。
+  value 可为 DataBind、protobuf 或应用私有 binary；它不是文本格式、CSV 行或 SQL 列集合。
 - State key/value、Index name/member 和 Log payload 是二进制安全字节序列。
 - TimeSeries key 是二进制安全字节序列，sample 是 `timestamp_ms + typed scalar`。
 - State revision、Log cursor 均从 1 开始，0 表示“未指定/不存在”。
@@ -150,7 +200,7 @@ Bitmap 只适合整数成员集合或离散布尔时间槽。它不承载任意 
 2026-07-23 的 Windows ASan Debug 基线使用 10,000 个 `uint64` 成员并逐样本执行 4,096 次
 membership 查询：通用 FlowStore HashMap 为约 2.31M ops/s，FlowStore BitmapIndex/CRoaring64
 为约 5.45M ops/s。
-因此整数集合的派生查询允许保留 bitmap；Flowie 通过 FlowStore 的 BitmapIndex API 使用它，不再
+因此整数集合的派生查询允许保留 bitmap；调用方通过 FlowStore 的 BitmapIndex API 使用它，不再
 直接依赖 CRoaring。任意二进制 key/value、payload 与时间序列事实仍由
 HashMap、Log 或 TimeSeries 承载。该数字只用于数据结构分工，不作为 Release 性能承诺。
 
@@ -189,7 +239,7 @@ cursor，TRIM_OLDEST/retention 只删除已规划的前缀；已裁剪 cursor �
 - 删除 `flowqueue/`、`TurboFlow::FlowQueue`、`TURBO_FLOW_BUILD_QUEUE` 及其文档和测试。
 - 新增 `flowstore/` 和 `TurboFlow::FlowStore`；FlowStore 属于完整产品构建图，
   不提供独立 feature option。
-- Flowie 按 Session/Inflight/Will、subscription index、Retained、PUBLISH Log/Series 的顺序迁移。
+- 外部调用方按自身事实边界迁移到 Record/Index/Log/Series，不在 FlowStore 内复制协议状态机。
 
 ## 验证
 

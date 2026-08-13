@@ -146,7 +146,7 @@ typedef enum turbo_flow_settlement_flags_e {
   TURBO_FLOW_SETTLEMENT_RETRY = 1u << 1,
   TURBO_FLOW_SETTLEMENT_REQUEUE = 1u << 2,
   TURBO_FLOW_SETTLEMENT_DEAD_LETTER = 1u << 3,
-  TURBO_FLOW_SETTLEMENT_PROTOCOL_ACK = 1u << 4,
+  TURBO_FLOW_SETTLEMENT_ACKNOWLEDGE = 1u << 4,
   TURBO_FLOW_SETTLEMENT_CANCELED = 1u << 5
 } turbo_flow_settlement_flags_t;
 

@@ -2,19 +2,19 @@
 
 ## 背景
 
-Flowie 是 MQTT 业务处理层，其 MQTT 业务事实由 FlowStore 管理。新增
+外部 MQTT owner 是 MQTT 业务处理层，其 MQTT 业务事实由 FlowStore 管理。新增
 MQTT-SN、CoAP、LwM2M、OCPP、GB/T 32960 和 JT/T 808 时，需要避免：
 
-- Flowie 直接依赖六种线协议及其会话状态；
+- 外部 MQTT owner 直接依赖六种线协议及其会话状态；
 - 六个 DLL 各自维护另一份 MQTT publish/session 事实；
 - 插件跨 ABI 暴露解析器内部结构或 allocator-owned buffer；
 - 网络关闭、MQTT 提交和协议 acknowledgement 形成不明确的双重提交。
 
 ## 候选方案
 
-1. 每种协议直接注册为 Flowie endpoint。
+1. 每种协议直接注册为 external MQTT endpoint。
    - 优点：路径短。
-   - 缺点：穿透 MQTT endpoint 边界，Flowie 必须理解六种协议，状态归属
+   - 缺点：穿透 MQTT endpoint 边界，外部 MQTT owner 必须理解六种协议，状态归属
      分裂。
 2. 每个 DLL 内置 MQTT client 并自行发布。
    - 优点：部署独立。
@@ -38,7 +38,7 @@ provider-neutral gateway。数据路径只通过 `turbo_flow_gateway_ingress()` 
 - protocol parser：对应 gateway DLL；
 - network/session/backpressure：公共 `TurboFlow::GatewayCoroNet` 宿主；
 - topic mapping 与 ABI/lifetime fence：`TurboFlow::Gateway`；
-- MQTT connection、publish、subscription：宿主/Flowie MQTT owner；
+- MQTT connection、publish、subscription：宿主/external MQTT owner；
 - MQTT session、retained、QoS、offline delivery 等业务事实：FlowStore。
 
 ## 失败和提交顺序
@@ -47,19 +47,19 @@ provider-neutral gateway。数据路径只通过 `turbo_flow_gateway_ingress()` 
 按原协议 settlement policy 回应设备。transport owner 保证每 session 最多
 一个待 settlement，并在 pending 时暂停读取；原始请求和 socket 一直保留到
 settlement response 同步发送完成。响应发送失败使该 session terminal，不会把
-Flowie 已提交与设备已收到响应混为同一个事实。
+MQTT owner 已提交与设备已收到响应混为同一个事实。
 
 下行在 topic、协议、设备和 operation 一致性验证完成前不会生成线协议帧。
 任何验证失败均 fail fast，不做格式修复或 fallback。
 
 ## 兼容性、迁移与回滚
 
-该能力是 TurboFlow 完整产品构建图的一部分，不修改现有 Flowie endpoint、
-`turbo_flow_protocol_id_t` 或产品配置格式。构建系统不提供关闭 gateway
+该能力是 TurboFlow 完整产品构建图的一部分，不修改现有 external MQTT endpoint、
+Graph message ABI 或产品配置格式。构建系统不提供关闭 gateway
 能力的 feature option。
 
 ABI 使用 major/minor 和每个结构的 `size`。未来只可在结构末尾追加字段；
-破坏性变更提升 major。回滚时移除 gateway 配置与 DLL，Flowie/FlowStore
+破坏性变更提升 major。回滚时移除 gateway 配置与 DLL，MQTT owner/FlowStore
 数据格式无需迁移。
 
 ## Transport 与关闭决策
@@ -84,7 +84,7 @@ task。这一顺序同时避免等待闭环和“先释放 socket、后生成响
 DLL 的 canonical export 仍只有 identity/capability 与 `open`/`close`；
 `open` 返回 opaque business service。宿主只调用两个 provider-neutral 入口：
 
-- `turbo_flow_gateway_business_consume_committed()`：消费 Flowie/FlowStore
+- `turbo_flow_gateway_business_consume_committed()`：消费 MQTT owner/FlowStore
   已成功提交后的不可变上行事件；
 - `turbo_flow_gateway_business_prepare_command()`：校验业务 action 与 payload，
   生成调用方持有的 protocol-neutral command，再交给

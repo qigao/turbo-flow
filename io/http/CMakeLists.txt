@@ -35,7 +35,7 @@ add_library(tf_http_client SHARED
     tf_http_client
     PUBLIC TurboFlow::Flow
     PRIVATE tf_http_content tf_executor_common TurboHttp::HttpClient TurboNet::CoroNet
-            TurboUtils::Core TurboUtils::Parser monocypher)
+            TurboUtils::Core TurboParser::Parser monocypher)
 list(APPEND TURBO_FLOW_HTTP_TARGETS tf_http_client)
 
 add_library(tf_http_server SHARED

@@ -23,8 +23,8 @@ flow pause
 flow resume
 flow drain timeout 5000
 pool transform thread resize 4 timeout 5000
-adapter fmq.input quiesce
-adapter fmq.input replace host "127.0.0.1" port 9000 path "/"
+adapter socket.input quiesce
+adapter socket.input replace host "127.0.0.1" port 9000 path "/"
 when pool.transform.thread.saturated then pool transform thread resize 8 timeout 5000
 if traffic.message_errors > 0 then flow pause
 when system.load.one_minute > 4.0 then flow pause
@@ -199,26 +199,6 @@ This includes `route`, `when`, and `reject`: they retain keyword meaning in
 statements but are ordinary segments after `adapter`, `operation`, or
 `resource`. In particular, `when` starts expression capture only after an arrow
 on the same route line, so bindings such as `rules.when` remain unambiguous.
-
-FMQ primitives use this same binding grammar; `pub`, `sub`, `push`, `pull`,
-`router`, `dealer`, and `pair` are registry name segments, not lexer keywords:
-
-```flow
-source events adapter fmq.sub
-stage publish adapter fmq.pub
-source jobs adapter fmq.pull
-stage dispatch adapter fmq.push
-source requests adapter fmq.router
-stage reply adapter fmq.router
-source responses adapter fmq.dealer
-stage request adapter fmq.dealer
-source peer_in adapter fmq.pair
-stage peer_out adapter fmq.pair
-```
-
-The host registration determines each binding's primitive and endpoint mode.
-Compile rejects a source/sink declaration that is incompatible with the
-registered FMQ adapter schema.
 
 Supported stage options:
 

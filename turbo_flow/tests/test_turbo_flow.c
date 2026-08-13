@@ -1343,7 +1343,7 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
-    it("compiles FMQ proxy device templates as stage compositions") {
+    it("compiles message-bus routing templates as stage compositions") {
       static const char *src = "stage pubsub_proxy {\n"
                                "  in frames\n"
                                "  out routed\n"
@@ -1376,18 +1376,18 @@ suite("Turbo Flow") {
                                "  subscriptions -> sub_filter -> upstream\n"
                                "  publications -> downstream\n"
                                "}\n"
-                               "source orders_in adapter fmq.orders.sub\n"
-                               "source jobs_in adapter fmq.jobs.pull\n"
-                               "source front_in adapter fmq.router\n"
-                               "source back_in adapter fmq.dealer\n"
-                               "source xsub_in adapter fmq.xsub\n"
-                               "source xpub_in adapter fmq.xpub\n"
-                               "stage orders_out adapter fmq.orders.pub\n"
-                               "stage jobs_out adapter fmq.jobs.push\n"
-                               "stage back_out adapter fmq.dealer\n"
-                               "stage front_out adapter fmq.router\n"
-                               "stage xsub_out adapter fmq.xsub\n"
-                               "stage xpub_out adapter fmq.xpub\n"
+                               "source orders_in adapter bus.orders.sub\n"
+                               "source jobs_in adapter bus.jobs.pull\n"
+                               "source front_in adapter bus.router\n"
+                               "source back_in adapter bus.dealer\n"
+                               "source xsub_in adapter bus.xsub\n"
+                               "source xpub_in adapter bus.xpub\n"
+                               "stage orders_out adapter bus.orders.pub\n"
+                               "stage jobs_out adapter bus.jobs.push\n"
+                               "stage back_out adapter bus.dealer\n"
+                               "stage front_out adapter bus.router\n"
+                               "stage xsub_out adapter bus.xsub\n"
+                               "stage xpub_out adapter bus.xpub\n"
                                "stage main {\n"
                                "  use pubsub = pubsub_proxy\n"
                                "  use queue = queue_proxy\n"
@@ -1408,24 +1408,24 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      register_schema_adapter(flow, "fmq.orders.sub", TURBO_FLOW_ADAPTER_KIND_FMQ,
+      register_schema_adapter(flow, "bus.orders.sub", TURBO_FLOW_ADAPTER_KIND_MESSAGE_BUS,
                               TURBO_FLOW_ADAPTER_SOURCE, TURBO_FLOW_ADAPTER_INPUT);
-      register_schema_adapter(flow, "fmq.orders.pub", TURBO_FLOW_ADAPTER_KIND_FMQ,
+      register_schema_adapter(flow, "bus.orders.pub", TURBO_FLOW_ADAPTER_KIND_MESSAGE_BUS,
                               TURBO_FLOW_ADAPTER_SINK, TURBO_FLOW_ADAPTER_OUTPUT);
-      register_schema_adapter(flow, "fmq.jobs.pull", TURBO_FLOW_ADAPTER_KIND_FMQ,
+      register_schema_adapter(flow, "bus.jobs.pull", TURBO_FLOW_ADAPTER_KIND_MESSAGE_BUS,
                               TURBO_FLOW_ADAPTER_SOURCE, TURBO_FLOW_ADAPTER_INPUT);
-      register_schema_adapter(flow, "fmq.jobs.push", TURBO_FLOW_ADAPTER_KIND_FMQ,
+      register_schema_adapter(flow, "bus.jobs.push", TURBO_FLOW_ADAPTER_KIND_MESSAGE_BUS,
                               TURBO_FLOW_ADAPTER_SINK, TURBO_FLOW_ADAPTER_OUTPUT);
-      register_schema_adapter(flow, "fmq.router", TURBO_FLOW_ADAPTER_KIND_FMQ,
+      register_schema_adapter(flow, "bus.router", TURBO_FLOW_ADAPTER_KIND_MESSAGE_BUS,
                               TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK,
                               TURBO_FLOW_ADAPTER_BIDIRECTIONAL);
-      register_schema_adapter(flow, "fmq.dealer", TURBO_FLOW_ADAPTER_KIND_FMQ,
+      register_schema_adapter(flow, "bus.dealer", TURBO_FLOW_ADAPTER_KIND_MESSAGE_BUS,
                               TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK,
                               TURBO_FLOW_ADAPTER_BIDIRECTIONAL);
-      register_schema_adapter(flow, "fmq.xsub", TURBO_FLOW_ADAPTER_KIND_CUSTOM,
+      register_schema_adapter(flow, "bus.xsub", TURBO_FLOW_ADAPTER_KIND_CUSTOM,
                               TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK,
                               TURBO_FLOW_ADAPTER_BIDIRECTIONAL);
-      register_schema_adapter(flow, "fmq.xpub", TURBO_FLOW_ADAPTER_KIND_CUSTOM,
+      register_schema_adapter(flow, "bus.xpub", TURBO_FLOW_ADAPTER_KIND_CUSTOM,
                               TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK,
                               TURBO_FLOW_ADAPTER_BIDIRECTIONAL);
       register_schema_adapter(flow, "codec.json.in", TURBO_FLOW_ADAPTER_KIND_CODEC,
@@ -4784,7 +4784,7 @@ suite("Turbo Flow") {
 
     it("accepts route keywords in dotted adapter bindings") {
       static const char *src =
-          "stage sink adapter flowmq.route operation rules.when resource channel.reject\n";
+          "stage sink adapter bus.route operation rules.when resource channel.reject\n";
       turbo_flow_t *flow = turbo_flow_create();
       const turbo_flow_stage_plan_t *stage;
 
@@ -4793,7 +4793,7 @@ suite("Turbo Flow") {
       check_size_eq(turbo_flow_stage_count(flow), 1u);
       stage = turbo_flow_stage_at(flow, 0u);
       check_not_null(stage);
-      check_str_eq(stage->adapter_name, "flowmq.route");
+      check_str_eq(stage->adapter_name, "bus.route");
       check_str_eq(stage->operation_name, "rules.when");
       check_str_eq(stage->resource_name, "channel.reject");
 

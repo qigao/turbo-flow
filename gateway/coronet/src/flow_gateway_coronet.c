@@ -291,7 +291,7 @@ static void flow_gateway_coronet_handler(coro_socket_t *client, void *arg) {
     char *data = NULL;
     size_t size = 0u;
     /*
-     * A pending Flowie/FlowStore settlement owns both the runtime frame and the
+     * A pending adapter/storage settlement owns both the runtime frame and the
      * transport needed to emit its protocol reply. Stopping closes admission,
      * but must not let the accepted handler release that transport first.
      */

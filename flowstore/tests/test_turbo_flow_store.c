@@ -6,12 +6,13 @@
 #include "turbo_flow_index_store_provider.h"
 #include "turbo_flow_log_store.h"
 #include "turbo_flow_log_store_provider.h"
-#include "turbo_flow_mqtt_store.h"
+#include "turbo_flow_databind_store.h"
 #include "turbo_flow_series_store.h"
 #include "turbo_flow_series_store_provider.h"
 #include "turbo_flow_state_store.h"
 #include "turbo_flow_store_policy.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static turbo_flow_store_bytes_t test_bytes(const char *text) {
@@ -21,74 +22,371 @@ static turbo_flow_store_bytes_t test_bytes(const char *text) {
   return bytes;
 }
 
-typedef struct mqtt_store_test_backend_s {
-  int scan_calls;
-  int commit_calls;
-  turbo_flow_record_mutation_t last_mutation;
-} mqtt_store_test_backend_t;
+typedef struct binding_test_entry_s {
+  uint8_t key[32];
+  size_t key_size;
+  uint8_t value[256];
+  size_t value_size;
+  uint64_t revision;
+  int present;
+} binding_test_entry_t;
 
-static int mqtt_store_test_scan(void *ctx, turbo_flow_record_visit_fn visit, void *visit_ctx) {
-  mqtt_store_test_backend_t *backend = (mqtt_store_test_backend_t *)ctx;
-  turbo_flow_record_view_t record = TURBO_FLOW_RECORD_VIEW_INIT;
+typedef struct binding_test_backend_s {
+  binding_test_entry_t entries[4];
+  size_t scan_calls;
+} binding_test_backend_t;
+
+static int binding_test_scan(void *ctx, turbo_flow_record_visit_fn visit, void *visit_ctx) {
+  binding_test_backend_t *backend = (binding_test_backend_t *)ctx;
   if (!backend || !visit) return TURBO_EINVAL;
-  backend->scan_calls += 1;
-  record.key = (const uint8_t *)"session";
-  record.key_size = 7u;
-  record.revision = 1u;
-  record.value = (const uint8_t *)"fact";
-  record.value_size = 4u;
-  return visit(visit_ctx, &record);
+  backend->scan_calls += 1u;
+  for (size_t i = 0u; i < 4u; ++i) {
+    turbo_flow_record_view_t record = TURBO_FLOW_RECORD_VIEW_INIT;
+    binding_test_entry_t *entry = &backend->entries[i];
+    int rc;
+    if (!entry->present) continue;
+    record.key = entry->key;
+    record.key_size = entry->key_size;
+    record.revision = entry->revision;
+    record.value = entry->value;
+    record.value_size = entry->value_size;
+    rc = visit(visit_ctx, &record);
+    if (rc != TURBO_OK) return rc;
+  }
+  return TURBO_OK;
 }
 
-static int mqtt_store_test_commit(void *ctx, const turbo_flow_record_mutation_t *mutations,
+static int binding_test_commit(void *ctx, const turbo_flow_record_mutation_t *mutations,
                                   size_t mutation_count) {
-  mqtt_store_test_backend_t *backend = (mqtt_store_test_backend_t *)ctx;
+  binding_test_backend_t *backend = (binding_test_backend_t *)ctx;
+  binding_test_entry_t *entry = NULL;
   if (!backend || !mutations || mutation_count != 1u) return TURBO_EINVAL;
-  backend->commit_calls += 1;
-  backend->last_mutation = mutations[0];
+  for (size_t i = 0u; i < 4u; ++i) {
+    if (backend->entries[i].present && backend->entries[i].key_size == mutations[0].key_size &&
+        memcmp(backend->entries[i].key, mutations[0].key, mutations[0].key_size) == 0) {
+      entry = &backend->entries[i];
+      break;
+    }
+  }
+  if (!entry) {
+    for (size_t i = 0u; i < 4u; ++i) {
+      if (!backend->entries[i].present) {
+        entry = &backend->entries[i];
+        break;
+      }
+    }
+  }
+  if (!entry || mutations[0].expected_revision !=
+                    (entry->present ? entry->revision : TURBO_FLOW_RECORD_REVISION_ABSENT))
+    return TURBO_EBUSY;
+  if (mutations[0].kind == TURBO_FLOW_RECORD_DELETE) {
+    if (!entry->present) return TURBO_EBUSY;
+    memset(entry, 0, sizeof(*entry));
+    return TURBO_OK;
+  }
+  if (mutations[0].kind != TURBO_FLOW_RECORD_PUT || mutations[0].key_size > sizeof(entry->key) ||
+      mutations[0].value_size > sizeof(entry->value))
+    return TURBO_EINVAL;
+  memcpy(entry->key, mutations[0].key, mutations[0].key_size);
+  if (mutations[0].value_size != 0u)
+    memcpy(entry->value, mutations[0].value, mutations[0].value_size);
+  entry->key_size = mutations[0].key_size;
+  entry->value_size = mutations[0].value_size;
+  entry->revision = mutations[0].next_revision;
+  entry->present = 1;
   return TURBO_OK;
 }
 
-static int mqtt_store_test_visit(void *ctx, const turbo_flow_record_view_t *record) {
-  size_t *count = (size_t *)ctx;
-  if (!record || !count) return TURBO_EINVAL;
-  *count += 1u;
+static turbo_flow_record_store_t binding_test_store(binding_test_backend_t *backend) {
+  turbo_flow_record_store_t store = TURBO_FLOW_RECORD_STORE_INIT;
+  store.capabilities = TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH;
+  store.max_key_size = 32u;
+  store.max_value_size = 256u;
+  store.max_batch_size = 1u;
+  store.max_records = 4u;
+  store.ctx = backend;
+  store.scan = binding_test_scan;
+  store.commit = binding_test_commit;
+  return store;
+}
+
+static DataBindRecord *binding_test_record(DataBind *codec, uint64_t id, const char *status,
+                                              uint32_t amount) {
+  char json[256];
+  DataBindRecord *record = NULL;
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  int written = snprintf(json, sizeof(json), "{\"id\":%llu,\"status\":\"%s\",\"amount\":%u}",
+                         (unsigned long long)id, status, (unsigned int)amount);
+  if (written < 0 || (size_t)written >= sizeof(json)) return NULL;
+  if (data_bind_record_from_json(codec, "Order", json, (size_t)written, &record, &error) !=
+      DATA_BIND_OK)
+    return NULL;
+  return record;
+}
+
+typedef struct binding_test_capture_s {
+  size_t count;
+  uint64_t last_id;
+} binding_test_capture_t;
+
+static int binding_test_capture(void *ctx, const turbo_flow_databind_view_t *view) {
+  binding_test_capture_t *capture = (binding_test_capture_t *)ctx;
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  if (!capture || !view || !view->record) return TURBO_EINVAL;
+  if (data_bind_record_get_u64(view->record, "id", &capture->last_id, &error) != DATA_BIND_OK)
+    return TURBO_EPROTO;
+  ++capture->count;
   return TURBO_OK;
 }
 
-spec("turbo_flow_mqtt_store") {
-  it("owns the MQTT fact boundary while borrowing backend storage") {
-    mqtt_store_test_backend_t backend_context = {0};
-    turbo_flow_record_store_t backend = TURBO_FLOW_RECORD_STORE_INIT;
-    turbo_flow_mqtt_store_t *store = NULL;
-    turbo_flow_record_mutation_t mutation = TURBO_FLOW_RECORD_MUTATION_INIT;
-    size_t visited = 0u;
+spec("turbo_flow_store_record") {
+  it("owns opaque binary Record values without a codec") {
+    static const uint8_t key[] = {'r', 'a', 'w'};
+    static const uint8_t value[] = {0u, 0xffu, 0x7fu};
+    binding_test_backend_t backend = {0};
+    turbo_flow_record_store_t backend_store = binding_test_store(&backend);
+    turbo_flow_store_config_t config = TURBO_FLOW_STORE_CONFIG_INIT;
+    turbo_flow_store_t *store = NULL;
+    turbo_flow_store_record_t record = TURBO_FLOW_STORE_RECORD_INIT;
 
-    backend.capabilities = TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH;
-    backend.max_key_size = 128u;
-    backend.max_value_size = 1024u;
-    backend.max_batch_size = 4u;
-    backend.max_records = 8u;
-    backend.ctx = &backend_context;
-    backend.scan = mqtt_store_test_scan;
-    backend.commit = mqtt_store_test_commit;
-    check_int_eq(turbo_flow_mqtt_store_create(&backend, &store), TURBO_OK);
-    check_not_null(store);
-    check_size_eq(turbo_flow_mqtt_store_max_key_size(store), 128u);
-    check_uint_eq(turbo_flow_mqtt_store_capabilities(store),
-                  TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH);
-    check_int_eq(turbo_flow_mqtt_store_scan(store, mqtt_store_test_visit, &visited), TURBO_OK);
-    check_size_eq(visited, 1u);
-    check_int_eq(backend_context.scan_calls, 1);
-    mutation.key = (const uint8_t *)"session";
-    mutation.key_size = 7u;
-    mutation.next_revision = 2u;
-    mutation.value = (const uint8_t *)"next";
-    mutation.value_size = 4u;
-    check_int_eq(turbo_flow_mqtt_store_commit(store, &mutation, 1u), TURBO_OK);
-    check_int_eq(backend_context.commit_calls, 1);
-    check_uint_eq(backend_context.last_mutation.next_revision, 2u);
-    turbo_flow_mqtt_store_destroy(store);
+    config.backend = &backend_store;
+    check_int_eq(turbo_flow_store_create(&config, &store), TURBO_OK);
+    if (store) {
+      check_int_eq(turbo_flow_store_put(store, key, sizeof(key), 0u, 1u, value, sizeof(value)),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_store_get(store, key, sizeof(key), &record), TURBO_OK);
+      check_uint_eq(record.revision, 1u);
+      check_size_eq(record.value_size, sizeof(value));
+      check_mem_eq(record.value, value, sizeof(value));
+      turbo_flow_store_record_clear(&record);
+      check_int_eq(turbo_flow_store_delete(store, key, sizeof(key), 1u), TURBO_OK);
+      check_int_eq(turbo_flow_store_get(store, key, sizeof(key), &record), TURBO_ENOENT);
+    }
+    turbo_flow_store_record_clear(&record);
+    turbo_flow_store_destroy(store);
+  }
+}
+
+spec("turbo_flow_databind") {
+  it("serializes DataBind records through RecordStore and returns an owned typed record") {
+    static const char schema[] =
+        "message Order { uint64 id; string status; uint32 amount; }";
+    static const uint8_t key[] = {'o', 'r', 'd', 'e', 'r', '-', '1'};
+    binding_test_backend_t backend = {0};
+    turbo_flow_record_store_t store = binding_test_store(&backend);
+    turbo_flow_store_config_t store_config = TURBO_FLOW_STORE_CONFIG_INIT;
+    turbo_flow_store_t *flow_store = NULL;
+    turbo_flow_databind_binding_config_t config = TURBO_FLOW_DATABIND_BINDING_CONFIG_INIT;
+    turbo_flow_databind_binding_t *binding = NULL;
+    DataBind *codec = NULL;
+    DataBindRecord *source = NULL;
+    DataBindRecord *decoded = NULL;
+    DataBindError error = DATA_BIND_ERROR_INIT;
+    uint64_t id = 0u;
+    uint64_t revision = 0u;
+
+    store_config.backend = &store;
+    check_int_eq(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
+    config.schema_text = schema;
+    config.schema_size = sizeof(schema) - 1u;
+    config.type_name = "Order";
+    check_int_eq(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
+    check_not_null(binding);
+    check_int_eq(data_bind_create_from_text(schema, sizeof(schema) - 1u, &codec, &error),
+                 DATA_BIND_OK);
+    source = binding_test_record(codec, UINT64_C(9007199254740993), "open", 125u);
+    check_not_null(source);
+    if (flow_store && binding && source) {
+      check_int_eq(turbo_flow_databind_put(flow_store, binding, key, sizeof(key),
+                                                     TURBO_FLOW_RECORD_REVISION_ABSENT, 1u, source),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_databind_get(flow_store, binding, key, sizeof(key), &decoded,
+                                                     &revision),
+                   TURBO_OK);
+      check_uint_eq(revision, 1u);
+      check_int_eq(data_bind_record_get_u64(decoded, "id", &id, &error), DATA_BIND_OK);
+      check_hex64_eq(id, UINT64_C(9007199254740993));
+      data_bind_record_free(decoded);
+      decoded = NULL;
+      check_int_eq(turbo_flow_store_delete(flow_store, key, sizeof(key), 1u),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_databind_get(flow_store, binding, key, sizeof(key), &decoded,
+                                                     &revision),
+                   TURBO_ENOENT);
+      check_null(decoded);
+      check_uint_eq(revision, TURBO_FLOW_RECORD_REVISION_ABSENT);
+    }
+    data_bind_record_free(decoded);
+    data_bind_record_free(source);
+    data_bind_free(codec);
+    turbo_flow_databind_binding_destroy(binding);
+    turbo_flow_store_destroy(flow_store);
+  }
+
+  it("filters DataBind records with exact uint64 QueryVM comparisons") {
+    static const char schema[] =
+        "message Order { uint64 id; string status; uint32 amount; }";
+    static const uint8_t first_key[] = {'o', 'r', 'd', 'e', 'r', '-', '1'};
+    static const uint8_t second_key[] = {'o', 'r', 'd', 'e', 'r', '-', '2'};
+    binding_test_backend_t backend = {0};
+    turbo_flow_record_store_t store = binding_test_store(&backend);
+    turbo_flow_store_config_t store_config = TURBO_FLOW_STORE_CONFIG_INIT;
+    turbo_flow_store_t *flow_store = NULL;
+    turbo_flow_databind_binding_config_t config = TURBO_FLOW_DATABIND_BINDING_CONFIG_INIT;
+    turbo_flow_databind_binding_t *binding = NULL;
+    turbo_flow_databind_operand_t operands[2] = {
+        TURBO_FLOW_DATABIND_OPERAND_INIT,
+        TURBO_FLOW_DATABIND_OPERAND_INIT};
+    qvm_instruction_t instructions[] = {
+        {QVM_OP_LOAD_PATH, 0u, 1u, 0u, 0u, 0u},
+        {QVM_OP_LOAD_CONST, 0u, 2u, 0u, 1u, 0u},
+        {QVM_OP_CMP, 0u, 0u, TURBO_FLOW_DATABIND_COMPARE_GE, 1u, 2u}};
+    turbo_flow_databind_query_t query = TURBO_FLOW_DATABIND_QUERY_INIT;
+    binding_test_capture_t capture = {0};
+    DataBind *codec = NULL;
+    DataBindRecord *first = NULL;
+    DataBindRecord *second = NULL;
+    DataBindError error = DATA_BIND_ERROR_INIT;
+    size_t matched = 0u;
+
+    store_config.backend = &store;
+    check_int_eq(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
+    config.schema_text = schema;
+    config.schema_size = sizeof(schema) - 1u;
+    config.type_name = "Order";
+    check_int_eq(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
+    check_int_eq(data_bind_create_from_text(schema, sizeof(schema) - 1u, &codec, &error),
+                 DATA_BIND_OK);
+    first = binding_test_record(codec, UINT64_C(9007199254740993), "open", 125u);
+    second = binding_test_record(codec, UINT64_C(9007199254740994), "closed", 50u);
+    check_not_null(first);
+    check_not_null(second);
+    if (flow_store && binding && first && second) {
+      check_int_eq(turbo_flow_databind_put(flow_store, binding, first_key, sizeof(first_key), 0u,
+                                                     1u, first),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_databind_put(flow_store, binding, second_key, sizeof(second_key),
+                                                     0u, 1u, second),
+                   TURBO_OK);
+      operands[0].kind = TURBO_FLOW_DATABIND_OPERAND_FIELD;
+      operands[0].value.field_name = "id";
+      operands[1].kind = TURBO_FLOW_DATABIND_OPERAND_UINT64;
+      operands[1].value.uinteger = UINT64_C(9007199254740994);
+      query.instructions = instructions;
+      query.instruction_count = sizeof(instructions) / sizeof(instructions[0]);
+      query.length = query.instruction_count;
+      query.operands = operands;
+      query.operand_count = sizeof(operands) / sizeof(operands[0]);
+      check_int_eq(turbo_flow_databind_query(flow_store, binding, &query, binding_test_capture,
+                                                       &capture, &matched),
+                   TURBO_OK);
+      check_size_eq(matched, 1u);
+      check_size_eq(capture.count, 1u);
+      check_hex64_eq(capture.last_id, UINT64_C(9007199254740994));
+    }
+    data_bind_record_free(second);
+    data_bind_record_free(first);
+    data_bind_free(codec);
+    turbo_flow_databind_binding_destroy(binding);
+    turbo_flow_store_destroy(flow_store);
+  }
+
+  it("round-trips an empty DataBind binary message") {
+    static const char schema[] = "message Empty {}";
+    static const uint8_t key[] = {'e', 'm', 'p', 't', 'y'};
+    binding_test_backend_t backend = {0};
+    turbo_flow_record_store_t store = binding_test_store(&backend);
+    turbo_flow_store_config_t store_config = TURBO_FLOW_STORE_CONFIG_INIT;
+    turbo_flow_store_t *flow_store = NULL;
+    turbo_flow_databind_binding_config_t config = TURBO_FLOW_DATABIND_BINDING_CONFIG_INIT;
+    turbo_flow_databind_binding_t *binding = NULL;
+    DataBind *codec = NULL;
+    DataBindRecord *source = NULL;
+    DataBindRecord *decoded = NULL;
+    DataBindError error = DATA_BIND_ERROR_INIT;
+    uint64_t revision = 0u;
+
+    store_config.backend = &store;
+    check_int_eq(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
+    config.schema_text = schema;
+    config.schema_size = sizeof(schema) - 1u;
+    config.type_name = "Empty";
+    check_int_eq(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
+    check_int_eq(data_bind_create_from_text(schema, sizeof(schema) - 1u, &codec, &error),
+                 DATA_BIND_OK);
+    if (codec)
+      check_int_eq(data_bind_record_from_json(codec, "Empty", "{}", 2u, &source, &error),
+                   DATA_BIND_OK);
+    if (flow_store && binding && source) {
+      check_int_eq(turbo_flow_databind_put(flow_store, binding, key, sizeof(key), 0u, 1u, source),
+                   TURBO_OK);
+      check_int_eq(turbo_flow_databind_get(flow_store, binding, key, sizeof(key), &decoded,
+                                                     &revision),
+                   TURBO_OK);
+      check_uint_eq(revision, 1u);
+      check_str_eq(data_bind_record_type_name(decoded), "Empty");
+    }
+    data_bind_record_free(decoded);
+    data_bind_record_free(source);
+    data_bind_free(codec);
+    turbo_flow_databind_binding_destroy(binding);
+    turbo_flow_store_destroy(flow_store);
+  }
+
+  it("rejects unsupported verified QueryVM opcodes before scanning") {
+    static const char schema[] = "message Order { uint64 id; }";
+    binding_test_backend_t backend = {0};
+    turbo_flow_record_store_t store = binding_test_store(&backend);
+    turbo_flow_store_config_t store_config = TURBO_FLOW_STORE_CONFIG_INIT;
+    turbo_flow_store_t *flow_store = NULL;
+    turbo_flow_databind_binding_config_t config = TURBO_FLOW_DATABIND_BINDING_CONFIG_INIT;
+    turbo_flow_databind_binding_t *binding = NULL;
+    turbo_flow_databind_operand_t operands[2] = {
+        TURBO_FLOW_DATABIND_OPERAND_INIT,
+        TURBO_FLOW_DATABIND_OPERAND_INIT};
+    qvm_instruction_t instructions[] = {
+        {QVM_OP_LOAD_CONST, 0u, 1u, 0u, 0u, 0u},
+        {QVM_OP_LOAD_CONST, 0u, 2u, 0u, 1u, 0u},
+        {QVM_OP_ADD, 0u, 0u, 0u, 1u, 2u}};
+    turbo_flow_databind_query_t query = TURBO_FLOW_DATABIND_QUERY_INIT;
+    binding_test_capture_t capture = {0};
+
+    store_config.backend = &store;
+    check_int_eq(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
+    config.schema_text = schema;
+    config.schema_size = sizeof(schema) - 1u;
+    config.type_name = "Order";
+    check_int_eq(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
+    operands[0].kind = TURBO_FLOW_DATABIND_OPERAND_UINT64;
+    operands[0].value.uinteger = 1u;
+    operands[1].kind = TURBO_FLOW_DATABIND_OPERAND_UINT64;
+    operands[1].value.uinteger = 2u;
+    query.instructions = instructions;
+    query.instruction_count = sizeof(instructions) / sizeof(instructions[0]);
+    query.length = query.instruction_count;
+    query.operands = operands;
+    query.operand_count = sizeof(operands) / sizeof(operands[0]);
+    if (flow_store && binding) {
+      check_int_eq(turbo_flow_databind_query(flow_store, binding, &query, binding_test_capture,
+                                                       &capture, NULL),
+                   TURBO_ENOTSUP);
+      check_size_eq(backend.scan_calls, 0u);
+    }
+    turbo_flow_databind_binding_destroy(binding);
+    turbo_flow_store_destroy(flow_store);
+  }
+
+  it("requires atomic batch commits at FlowStore creation") {
+    static const char schema[] = "message Order { uint64 id; }";
+    binding_test_backend_t backend = {0};
+    turbo_flow_record_store_t store = binding_test_store(&backend);
+    turbo_flow_store_config_t config = TURBO_FLOW_STORE_CONFIG_INIT;
+    turbo_flow_store_t *flow_store = NULL;
+
+    store.capabilities = 0u;
+    config.backend = &store;
+    check_int_eq(turbo_flow_store_create(&config, &flow_store), TURBO_EINVAL);
+    check_null(flow_store);
   }
 }
 

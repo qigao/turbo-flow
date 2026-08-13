@@ -729,11 +729,6 @@ int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t sou
   event.edge_kind = -1;
   event.duration_ns = observe_start != 0u ? turbo_hrtime() - observe_start : 0u;
   flow_observer_emit(flow, &event);
-  {
-    const turbo_flow_protocol_settlement_envelope_t *settlement =
-        turbo_flow_msg_protocol_settlement(local);
-    if (settlement) result->protocol_settlement = settlement->settled_point;
-  }
   result->status = rc;
   return rc;
 }

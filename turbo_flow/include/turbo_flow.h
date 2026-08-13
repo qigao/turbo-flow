@@ -5,8 +5,8 @@
 #include "turbo_buffer.h"
 #include "turbo_error.h"
 #include "turbo_flow_domain.h"
+#include "turbo_flow_config_limits.h"
 #include "turbo_flow_record_store.h"
-#include "turbo_flow_protocol.h"
 #include "turbo_str.h"
 #include "turbo_str_view.h"
 
@@ -670,14 +670,14 @@ typedef enum turbo_flow_settlement_action_e {
   TURBO_FLOW_SETTLEMENT_ACTION_REQUEUE,
   TURBO_FLOW_SETTLEMENT_ACTION_DEAD_LETTER,
   TURBO_FLOW_SETTLEMENT_ACTION_CANCELED,
-  TURBO_FLOW_SETTLEMENT_ACTION_PROTOCOL_ACK
+  TURBO_FLOW_SETTLEMENT_ACTION_ACKNOWLEDGE
 } turbo_flow_settlement_action_t;
 
 /** One immutable data-attempt decision delivered synchronously to its state owner. */
 typedef struct turbo_flow_settlement_result_s {
   size_t size;
   turbo_flow_settlement_action_t action;
-  /** TURBO_OK for COMPLETE/PROTOCOL_ACK; the classified cause for terminal actions. */
+  /** TURBO_OK for COMPLETE/ACKNOWLEDGE; the classified cause for terminal actions. */
   int status;
   uint32_t attempt;
   uint64_t message_id;
@@ -721,7 +721,7 @@ typedef enum turbo_flow_adapter_kind_e {
   TURBO_FLOW_ADAPTER_KIND_DATABIND,
   TURBO_FLOW_ADAPTER_KIND_RPC,
   TURBO_FLOW_ADAPTER_KIND_S3,
-  TURBO_FLOW_ADAPTER_KIND_FMQ,
+  TURBO_FLOW_ADAPTER_KIND_MESSAGE_BUS,
   TURBO_FLOW_ADAPTER_KIND_OBSERVE,
   TURBO_FLOW_ADAPTER_KIND_SCHEDULE,
   TURBO_FLOW_ADAPTER_KIND_QUEUE,
@@ -1034,27 +1034,6 @@ typedef struct turbo_flow_settlement_owner_ops_s {
 } turbo_flow_settlement_owner_ops_t;
 
 #define TURBO_FLOW_SETTLEMENT_OWNER_OPS_INIT {sizeof(turbo_flow_settlement_owner_ops_t), NULL}
-
-typedef int (*turbo_flow_protocol_route_settle_fn)(
-    void *ctx, const turbo_flow_protocol_route_t *route,
-    const turbo_flow_protocol_settlement_request_t *request);
-
-/**
- * Immutable process-local owner selected by `{protocol, owner_instance_id}`.
- *
- * `settle` may be called from any configured stage execution lane while the
- * flow is STARTED. The callback must obey its owner's affinity contract; an
- * event-loop owner should enqueue a bounded command instead of mutating its
- * state or socket on the caller's lane. TURBO_OK means that command was
- * accepted, not that a later external send completed.
- */
-typedef struct turbo_flow_protocol_route_owner_ops_s {
-  size_t size;
-  turbo_flow_protocol_route_settle_fn settle;
-} turbo_flow_protocol_route_owner_ops_t;
-
-#define TURBO_FLOW_PROTOCOL_ROUTE_OWNER_OPS_INIT                                                   \
-  {sizeof(turbo_flow_protocol_route_owner_ops_t), NULL}
 
 /**
  * Thin binding for an already-claimed storage record.
@@ -1457,7 +1436,7 @@ typedef struct turbo_flow_operation_provider_registration_s {
  *
  * The operation must use direct inline execution, declare no settlement, and
  * have PURE or DATA_MUTATION authority. Emitted messages must be self-contained
- * and may not carry transport or protocol-settlement capabilities. Callback
+ * and may not carry transport capabilities. Callback
  * failure commits no outputs. Once a successful batch enters downstream,
  * later downstream failures do not roll back earlier external side effects.
  *
@@ -1801,17 +1780,14 @@ CXX_C_API int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_na
 typedef struct turbo_flow_publish_result_s {
   size_t size;
   int status;
-  /** Zero when no protocol settlement boundary accepted responsibility. */
-  turbo_flow_protocol_settlement_point_t protocol_settlement;
 } turbo_flow_publish_result_t;
 
-#define TURBO_FLOW_PUBLISH_RESULT_INIT                                                             \
-  {sizeof(turbo_flow_publish_result_t), TURBO_OK, (turbo_flow_protocol_settlement_point_t)0}
+#define TURBO_FLOW_PUBLISH_RESULT_INIT {sizeof(turbo_flow_publish_result_t), TURBO_OK}
 
-#define TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS 1u
-#define TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY 1024u
-#define TURBO_FLOW_ASYNC_INGRESS_MAX_WORKERS 256u
-#define TURBO_FLOW_ASYNC_INGRESS_MAX_CAPACITY 1048576u
+#define TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS TURBO_FLOW_CONFIG_INGRESS_DEFAULT_WORKERS
+#define TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY TURBO_FLOW_CONFIG_INGRESS_DEFAULT_CAPACITY
+#define TURBO_FLOW_ASYNC_INGRESS_MAX_WORKERS TURBO_FLOW_CONFIG_INGRESS_MAX_WORKERS
+#define TURBO_FLOW_ASYNC_INGRESS_MAX_CAPACITY TURBO_FLOW_CONFIG_INGRESS_MAX_CAPACITY
 
 /** Flow-owned bounded source ingress used by non-blocking producers. */
 typedef struct turbo_flow_async_ingress_config_s {
@@ -1857,48 +1833,16 @@ CXX_C_API int turbo_flow_publish_async(turbo_flow_t *flow, const char *source_na
                                        turbo_flow_publish_completion_fn completion, void *ctx);
 
 /**
- * Publish synchronously and report the exact protocol settlement reached.
+ * Publish synchronously and report graph execution status.
  *
  * `result` is caller-owned and must use TURBO_FLOW_PUBLISH_RESULT_INIT. On
- * return, `result->status` equals the function status. `protocol_settlement`
- * remains zero unless one matching primitive committed and completed the
- * message's one-shot envelope. Graph success alone never populates it.
+ * return, `result->status` equals the function status.
  * Returns TURBO_EINVAL for invalid ABI/source/message input, lifecycle or
  * stage errors from the graph, or the primitive/owner callback status.
  */
 CXX_C_API int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name,
                                     const turbo_flow_msg_t *msg,
                                     turbo_flow_publish_result_t *result);
-
-/**
- * Register one immutable routed protocol owner while the flow is not STARTED.
- *
- * The copied operations and borrowed `ctx` remain registered until explicit
- * unregister or flow reset/destroy. A duplicate key returns TURBO_EALREADY;
- * invalid ABI/key returns TURBO_EINVAL; mutation after STARTED returns
- * TURBO_EBUSY. Adapter start callbacks may register before start publishes the
- * STARTED state.
- */
-CXX_C_API int turbo_flow_register_protocol_route_owner(
-    turbo_flow_t *flow, turbo_flow_protocol_id_t protocol, uint64_t owner_instance_id,
-    const turbo_flow_protocol_route_owner_ops_t *ops, void *ctx);
-
-/** Remove an exact owner registration while the flow is not STARTED. */
-CXX_C_API int turbo_flow_unregister_protocol_route_owner(turbo_flow_t *flow,
-                                                         turbo_flow_protocol_id_t protocol,
-                                                         uint64_t owner_instance_id);
-
-/**
- * Dispatch one settlement to the generation-fenced route owner.
- *
- * The request and route are borrowed for the callback duration. Validation
- * failure returns TURBO_EINVAL/TURBO_EPROTO, a missing owner TURBO_ENOENT, and
- * otherwise the callback status. The call does not retry or fall back to a
- * different owner.
- */
-CXX_C_API int
-turbo_flow_protocol_route_settle(turbo_flow_t *flow, const turbo_flow_protocol_route_t *route,
-                                 const turbo_flow_protocol_settlement_request_t *request);
 
 CXX_C_API int turbo_flow_register_stage_ex(turbo_flow_t *flow, const char *name,
                                            turbo_flow_stage_fn fn, void *ctx,
@@ -2225,61 +2169,6 @@ turbo_flow_msg_content_descriptor(const turbo_flow_msg_t *msg);
 
 /** Return non-zero only when the descriptor storage belongs to the message. */
 CXX_C_API int turbo_flow_msg_content_descriptor_owned(const turbo_flow_msg_t *msg);
-
-/**
- * Attach a pointer-free, process-local protocol route to an owned message.
- *
- * The route is copied by clone/move/fan-out and is independent of borrowed
- * `transport_context`. Routes are live-session capabilities and must not be
- * serialized into durable storage or reused after their protocol owner stops.
- */
-CXX_C_API int turbo_flow_msg_set_protocol_route(turbo_flow_msg_t *msg,
-                                                const turbo_flow_protocol_route_t *route);
-
-/** Return the message-owned route, or NULL when no route is attached. */
-CXX_C_API const turbo_flow_protocol_route_t *
-turbo_flow_msg_protocol_route(const turbo_flow_msg_t *msg);
-
-/** Remove the process-local route and its dependent settlement envelope; content is preserved. */
-CXX_C_API void turbo_flow_msg_clear_protocol_route(turbo_flow_msg_t *msg);
-
-/** Attach one copied, serializable protocol origin without a live route capability. */
-CXX_C_API int turbo_flow_msg_set_protocol_origin(turbo_flow_msg_t *msg,
-                                                 const turbo_flow_protocol_origin_t *origin);
-
-/** Return the durable protocol origin, or NULL when none is attached. */
-CXX_C_API const turbo_flow_protocol_origin_t *
-turbo_flow_msg_protocol_origin(const turbo_flow_msg_t *msg);
-
-/** Remove only the durable protocol origin. */
-CXX_C_API void turbo_flow_msg_clear_protocol_origin(turbo_flow_msg_t *msg);
-
-/**
- * Attach one copied, message-owned primitive settlement envelope.
- *
- * A matching process-local route must already be attached. Clone/move/fan-out
- * copies the envelope; a second attachment returns TURBO_EALREADY. Invalid ABI
- * or point returns TURBO_EINVAL and route/message mismatch returns TURBO_EPROTO.
- */
-CXX_C_API int
-turbo_flow_msg_set_protocol_settlement(turbo_flow_msg_t *msg,
-                                       const turbo_flow_protocol_settlement_envelope_t *envelope);
-
-/** Return the message-owned settlement envelope, or NULL. */
-CXX_C_API const turbo_flow_protocol_settlement_envelope_t *
-turbo_flow_msg_protocol_settlement(const turbo_flow_msg_t *msg);
-
-/**
- * Mark the exact requested point once after its primitive boundary commits.
- * Returns TURBO_EINVAL for no/mismatched envelope and TURBO_EALREADY after a
- * prior completion. This function does not contact the protocol owner.
- */
-CXX_C_API int
-turbo_flow_msg_complete_protocol_settlement(turbo_flow_msg_t *msg,
-                                            turbo_flow_protocol_settlement_point_t point);
-
-/** Remove only the protocol settlement envelope. */
-CXX_C_API void turbo_flow_msg_clear_protocol_settlement(turbo_flow_msg_t *msg);
 
 /** Explicit host-owned trusted schema registry; no process-global registry is created. */
 CXX_C_API turbo_flow_schema_registry_t *turbo_flow_schema_registry_create(void);

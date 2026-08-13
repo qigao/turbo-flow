@@ -49,7 +49,7 @@ static int http_auth_secret_acquire(void *ctx, const char *reference,
                                     turbo_flow_security_secret_lease_t *lease) {
   static const uint8_t token[] = "service-token";
   http_auth_secret_fixture_t *fixture = (http_auth_secret_fixture_t *)ctx;
-  if (!fixture || !reference || strcmp(reference, "env://FLOWIE_AUTH_TOKEN") != 0 || !lease)
+  if (!fixture || !reference || strcmp(reference, "env://TURBO_FLOW_AUTH_TOKEN") != 0 || !lease)
     return TURBO_ENOENT;
   ++fixture->acquire_calls;
   lease->bytes = token;
@@ -123,7 +123,7 @@ static int http_auth_run_response_case_delayed(const uint8_t *response, size_t r
   config.method = "password";
   config.service_id = "broker-main";
   config.service_domain = "root-a";
-  config.service_token_ref = "env://FLOWIE_AUTH_TOKEN";
+  config.service_token_ref = "env://TURBO_FLOW_AUTH_TOKEN";
   config.timeout_ms = 250u;
   config.key_provider =
       (turbo_flow_security_key_provider_t){sizeof(turbo_flow_security_key_provider_t), &fixture,
@@ -373,7 +373,7 @@ spec("turbo_flow_http") {
         "version: 1\nchannels:\n  mqtt.auth-service:\n    kind: auth_provider\n    config:\n"
         "      backend: https\n      url: https://auth.internal.example/v4/authenticate\n"
         "      method: password\n      service_id: broker-main\n"
-        "      service_domain: root-a\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+        "      service_domain: root-a\n      service_token_ref: env://TURBO_FLOW_AUTH_TOKEN\n"
         "      timeout_ms: 2500\n      max_secret_size: 2048\nadapters: {}\n";
     http_auth_secret_fixture_t fixture = {0};
     turbo_flow_security_key_provider_t keys = {sizeof(keys), &fixture, http_auth_secret_acquire,
@@ -451,7 +451,7 @@ spec("turbo_flow_http") {
                        "      backend: https\n      url: https://localhost:%u/v4/authenticate\n"
                        "      method: password\n      service_id: broker-main\n"
                        "      service_domain: root-a\n"
-                       "      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+                       "      service_token_ref: env://TURBO_FLOW_AUTH_TOKEN\n"
                        "      timeout_ms: 5000\n      tls:\n        ca_file: %s\n"
                        "        client_cert_file: %s\n        client_key_file: %s\nadapters: {}\n",
                        server.port, ca_file, cert_file, key_file);
@@ -603,19 +603,19 @@ spec("turbo_flow_http") {
         "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
         "      backend: https\n      url: http://auth.internal/v4/authenticate\n"
         "      method: password\n      service_id: broker-main\n"
-        "      service_domain: root-a\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+        "      service_domain: root-a\n      service_token_ref: env://TURBO_FLOW_AUTH_TOKEN\n"
         "adapters: {}\n";
     static const char database_yaml[] =
         "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
         "      backend: https\n      url: https://auth.internal/v4/authenticate\n"
         "      method: password\n      service_id: broker-main\n"
-        "      service_domain: root-a\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+        "      service_domain: root-a\n      service_token_ref: env://TURBO_FLOW_AUTH_TOKEN\n"
         "      database: 3\nadapters: {}\n";
     static const char invalid_tls_yaml[] =
         "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
         "      backend: https\n      url: https://auth.internal/v4/authenticate\n"
         "      method: password\n      service_id: broker-main\n"
-        "      service_domain: root-a\n      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+        "      service_domain: root-a\n      service_token_ref: env://TURBO_FLOW_AUTH_TOKEN\n"
         "      tls:\n        client_cert_file: client.pem\n"
         "        client_key_file: false\nadapters: {}\n";
     http_auth_secret_fixture_t fixture = {0};
@@ -662,7 +662,7 @@ spec("turbo_flow_http") {
         "version: 1\nchannels:\n  acl:\n    kind: acl_provider\n    config:\n"
         "      backend: https\n      url: https://auth.internal/v4/acl/check\n"
         "      service_id: broker-main\n      service_domain: root-a\n"
-        "      service_token_ref: env://FLOWIE_AUTH_TOKEN\n"
+        "      service_token_ref: env://TURBO_FLOW_AUTH_TOKEN\n"
         "      timeout_ms: 2500\n      max_response_size: 4194304\nadapters: {}\n";
     http_auth_secret_fixture_t fixture = {0};
     turbo_flow_security_key_provider_t keys = {sizeof(keys), &fixture, http_auth_secret_acquire,
@@ -736,7 +736,7 @@ spec("turbo_flow_http") {
                        "version: 1\nchannels:\n  acl:\n    kind: acl_provider\n    config:\n"
                        "      backend: https\n      url: https://localhost:%u/v4/acl/check\n"
                        "      service_id: broker-main\n      service_domain: root-a\n"
-                       "      service_token_ref: env://FLOWIE_AUTH_TOKEN\n      timeout_ms: 5000\n"
+                       "      service_token_ref: env://TURBO_FLOW_AUTH_TOKEN\n      timeout_ms: 5000\n"
                        "      max_response_size: 4194304\n      tls:\n"
                        "        ca_file: %s\n        client_cert_file: %s\n"
                        "        client_key_file: %s\nadapters: {}\n",

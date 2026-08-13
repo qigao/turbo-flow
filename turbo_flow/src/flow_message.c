@@ -15,17 +15,10 @@ typedef struct flow_msg_projection_s {
   void *ctx;
   turbo_flow_content_descriptor_t owned_descriptor;
   int owns_descriptor;
-  turbo_flow_protocol_route_t route;
-  int has_route;
-  turbo_flow_protocol_origin_t protocol_origin;
-  int has_protocol_origin;
-  turbo_flow_protocol_settlement_envelope_t protocol_settlement;
-  int has_protocol_settlement;
 } flow_msg_projection_t;
 
 static int flow_msg_projection_empty(const flow_msg_projection_t *projection) {
-  return projection && !projection->descriptor && !projection->value && !projection->has_route &&
-         !projection->has_protocol_origin && !projection->has_protocol_settlement;
+  return projection && !projection->descriptor && !projection->value;
 }
 
 static void flow_msg_projection_destroy(void *ptr, void *ctx) {
@@ -388,135 +381,4 @@ turbo_flow_msg_content_descriptor(const turbo_flow_msg_t *msg) {
 int turbo_flow_msg_content_descriptor_owned(const turbo_flow_msg_t *msg) {
   const flow_msg_projection_t *binding = flow_msg_projection(msg);
   return binding && binding->descriptor && binding->owns_descriptor;
-}
-
-int turbo_flow_msg_set_protocol_route(turbo_flow_msg_t *msg,
-                                      const turbo_flow_protocol_route_t *route) {
-  flow_msg_projection_t *binding;
-  if (!msg || !route || route->size < sizeof(*route) ||
-      route->contract_version != TURBO_FLOW_PROTOCOL_CONTRACT_VERSION ||
-      route->protocol < TURBO_FLOW_PROTOCOL_FMQ || route->protocol > TURBO_FLOW_PROTOCOL_MQTT ||
-      route->reserved != 0u || route->owner_instance_id == 0u || route->session_id == 0u ||
-      route->session_generation == 0u) {
-    return TURBO_EINVAL;
-  }
-  binding = (flow_msg_projection_t *)flow_msg_projection(msg);
-  if (binding && binding->has_protocol_settlement &&
-      (binding->protocol_settlement.message.protocol != route->protocol ||
-       binding->protocol_settlement.message.session_generation != route->session_generation))
-    return TURBO_EPROTO;
-  if (!binding) {
-    binding = (flow_msg_projection_t *)calloc(1, sizeof(*binding));
-    if (!binding) return TURBO_ENOMEM;
-    binding->magic = FLOW_MSG_PROJECTION_MAGIC;
-    msg->_content_handle = binding;
-  }
-  binding->route = *route;
-  binding->route.size = sizeof(binding->route);
-  binding->has_route = 1;
-  return TURBO_OK;
-}
-
-const turbo_flow_protocol_route_t *turbo_flow_msg_protocol_route(const turbo_flow_msg_t *msg) {
-  const flow_msg_projection_t *binding = flow_msg_projection(msg);
-  return binding && binding->has_route ? &binding->route : NULL;
-}
-
-void turbo_flow_msg_clear_protocol_route(turbo_flow_msg_t *msg) {
-  flow_msg_projection_t *binding = (flow_msg_projection_t *)flow_msg_projection(msg);
-  if (!binding || !binding->has_route) return;
-  memset(&binding->protocol_settlement, 0, sizeof(binding->protocol_settlement));
-  binding->has_protocol_settlement = 0;
-  memset(&binding->route, 0, sizeof(binding->route));
-  binding->has_route = 0;
-  if (flow_msg_projection_empty(binding)) {
-    free(binding);
-    msg->_content_handle = NULL;
-  }
-}
-
-int turbo_flow_msg_set_protocol_origin(turbo_flow_msg_t *msg,
-                                       const turbo_flow_protocol_origin_t *origin) {
-  flow_msg_projection_t *binding;
-  if (!msg || turbo_flow_protocol_origin_validate(origin) != TURBO_OK) return TURBO_EINVAL;
-  binding = (flow_msg_projection_t *)flow_msg_projection(msg);
-  if (binding && binding->has_protocol_origin) return TURBO_EALREADY;
-  if (!binding) {
-    binding = (flow_msg_projection_t *)calloc(1, sizeof(*binding));
-    if (!binding) return TURBO_ENOMEM;
-    binding->magic = FLOW_MSG_PROJECTION_MAGIC;
-    msg->_content_handle = binding;
-  }
-  binding->protocol_origin = *origin;
-  binding->protocol_origin.size = sizeof(binding->protocol_origin);
-  binding->has_protocol_origin = 1;
-  return TURBO_OK;
-}
-
-const turbo_flow_protocol_origin_t *turbo_flow_msg_protocol_origin(const turbo_flow_msg_t *msg) {
-  const flow_msg_projection_t *binding = flow_msg_projection(msg);
-  return binding && binding->has_protocol_origin ? &binding->protocol_origin : NULL;
-}
-
-void turbo_flow_msg_clear_protocol_origin(turbo_flow_msg_t *msg) {
-  flow_msg_projection_t *binding = (flow_msg_projection_t *)flow_msg_projection(msg);
-  if (!binding || !binding->has_protocol_origin) return;
-  memset(&binding->protocol_origin, 0, sizeof(binding->protocol_origin));
-  binding->has_protocol_origin = 0;
-  if (flow_msg_projection_empty(binding)) {
-    free(binding);
-    msg->_content_handle = NULL;
-  }
-}
-
-int turbo_flow_msg_set_protocol_settlement(
-    turbo_flow_msg_t *msg, const turbo_flow_protocol_settlement_envelope_t *envelope) {
-  flow_msg_projection_t *binding;
-  const turbo_flow_protocol_route_t *route;
-  if (!msg || !envelope || envelope->size < sizeof(*envelope) ||
-      envelope->contract_version != TURBO_FLOW_PROTOCOL_CONTRACT_VERSION ||
-      turbo_flow_protocol_message_validate(&envelope->message) != TURBO_OK ||
-      envelope->requested_point < TURBO_FLOW_PROTOCOL_SETTLE_RECEIVED ||
-      envelope->requested_point > TURBO_FLOW_PROTOCOL_SETTLE_DURABLE ||
-      envelope->settled_point != 0) {
-    return TURBO_EINVAL;
-  }
-  binding = (flow_msg_projection_t *)flow_msg_projection(msg);
-  route = binding && binding->has_route ? &binding->route : NULL;
-  if (!route || route->protocol != envelope->message.protocol ||
-      route->session_generation != envelope->message.session_generation)
-    return TURBO_EPROTO;
-  if (binding->has_protocol_settlement) return TURBO_EALREADY;
-  binding->protocol_settlement = *envelope;
-  binding->protocol_settlement.size = sizeof(binding->protocol_settlement);
-  binding->has_protocol_settlement = 1;
-  return TURBO_OK;
-}
-
-const turbo_flow_protocol_settlement_envelope_t *
-turbo_flow_msg_protocol_settlement(const turbo_flow_msg_t *msg) {
-  const flow_msg_projection_t *binding = flow_msg_projection(msg);
-  return binding && binding->has_protocol_settlement ? &binding->protocol_settlement : NULL;
-}
-
-int turbo_flow_msg_complete_protocol_settlement(turbo_flow_msg_t *msg,
-                                                turbo_flow_protocol_settlement_point_t point) {
-  flow_msg_projection_t *binding = (flow_msg_projection_t *)flow_msg_projection(msg);
-  if (!binding || !binding->has_protocol_settlement || point == 0 ||
-      point != binding->protocol_settlement.requested_point)
-    return TURBO_EINVAL;
-  if (binding->protocol_settlement.settled_point != 0) return TURBO_EALREADY;
-  binding->protocol_settlement.settled_point = point;
-  return TURBO_OK;
-}
-
-void turbo_flow_msg_clear_protocol_settlement(turbo_flow_msg_t *msg) {
-  flow_msg_projection_t *binding = (flow_msg_projection_t *)flow_msg_projection(msg);
-  if (!binding || !binding->has_protocol_settlement) return;
-  memset(&binding->protocol_settlement, 0, sizeof(binding->protocol_settlement));
-  binding->has_protocol_settlement = 0;
-  if (flow_msg_projection_empty(binding)) {
-    free(binding);
-    msg->_content_handle = NULL;
-  }
 }

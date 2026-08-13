@@ -34,6 +34,8 @@
             "cacheVariables": { 
                 "CMAKE_MAKE_PROGRAM": "$env{NINJA_ROOT}/ninja.exe",
                 "TURBO_UTILS_ROOT": "C:/projects/cpp/external/pkgs/turboutils",
+                "TURBOPARSER_ROOT": "C:/projects/cpp/external/pkgs/turboparser",
+                "TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE": "$env{PROJECT_ROOT}/turbonet/turbo-parser/build/Msvc-Release/bin/tbe_compiler.exe",
                 "TURBO_NET_ROOT": "C:/projects/cpp/external/pkgs/turbonet",
                 "TURBO_HTTP_ROOT": "C:/projects/cpp/external/pkgs/turbohttp",
                 "RulesForge_ROOT": "c:/projects/cpp/external/pkgs/rules_forge",
@@ -51,6 +53,7 @@
             "hidden": true,
             "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser",
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboutils",
                 "CMAKE_MAKE_PROGRAM": "/usr/bin/ninja",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",

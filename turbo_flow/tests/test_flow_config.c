@@ -134,7 +134,7 @@ spec("flow_config") {
     static const char yaml[] = "version: 1\n"
                                "profiles:\n"
                                "  ingress:\n"
-                               "    endpoint: fmq.in\n"
+                               "    endpoint: stream.in\n"
                                "    policy: routing\n"
                                "channels:\n"
                                "  routing:\n"
@@ -148,8 +148,8 @@ spec("flow_config") {
                                "      host: 127.0.0.1\n"
                                "      port: 7001\n"
                                "adapters:\n"
-                               "  fmq.in:\n"
-                               "    kind: fmq\n"
+                               "  stream.in:\n"
+                               "    kind: stream\n"
                                "    fragments:\n"
                                "      connection: local\n"
                                "    config:\n"
@@ -173,12 +173,12 @@ spec("flow_config") {
     check_int_eq(
         turbo_flow_resolved_config_profile_adapter(config, "ingress", "endpoint", &adapter_name),
         TURBO_OK);
-    check_str_eq(adapter_name, "fmq.in");
+    check_str_eq(adapter_name, "stream.in");
     adapter_name = NULL;
     check_int_eq(turbo_flow_resolved_config_profile_adapter_optional(config, "ingress", "endpoint",
                                                                      &adapter_name),
                  TURBO_OK);
-    check_str_eq(adapter_name, "fmq.in");
+    check_str_eq(adapter_name, "stream.in");
     adapter_name = (const char *)1;
     check_int_eq(turbo_flow_resolved_config_profile_adapter_optional(
                      config, "ingress", "optional_sink", &adapter_name),

@@ -372,17 +372,6 @@ typedef struct flow_resource_command_record_s {
   turbo_flow_resource_command_result_t result;
 } flow_resource_command_record_t;
 
-typedef struct flow_protocol_route_owner_key_s {
-  uint64_t owner_instance_id;
-  uint32_t protocol;
-  uint32_t reserved;
-} flow_protocol_route_owner_key_t;
-
-typedef struct flow_protocol_route_owner_s {
-  turbo_flow_protocol_route_owner_ops_t ops;
-  void *ctx;
-} flow_protocol_route_owner_t;
-
 typedef enum flow_admission_state_e {
   FLOW_ADMISSION_CLOSED = 0,
   FLOW_ADMISSION_OPEN,
@@ -439,7 +428,6 @@ struct turbo_flow_s {
   turbo_vec_t pool_records;
   turbo_vec_t resource_command_history;
   turbo_vec_t event_observers;
-  turbo_hash_map_t protocol_route_owners;
   uint64_t runtime_generation;
   atomic_uint_fast64_t next_sequence;
   atomic_uint_fast64_t observer_failures;

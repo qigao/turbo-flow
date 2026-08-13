@@ -26,7 +26,7 @@ target_include_directories(
 
 target_link_libraries(
   ${TARGET_NAME} PUBLIC TurboFlow::Flow TurboNet::CoroNet TurboUtils::Core
-                        TurboUtils::DataBind
+                        TurboParser::DataBind
                  PRIVATE tf_executor_common)
 
 install(FILES ${TURBO_FLOW_SOCKET_HEADERS} DESTINATION include)

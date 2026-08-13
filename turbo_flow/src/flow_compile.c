@@ -684,7 +684,7 @@ static int compile_validate_operation_runtime(turbo_flow_t *flow,
   const turbo_flow_operation_runtime_contract_t *runtime = &operation->runtime;
   const uint32_t owner_settlement =
       TURBO_FLOW_SETTLEMENT_COMPLETE | TURBO_FLOW_SETTLEMENT_REQUEUE |
-      TURBO_FLOW_SETTLEMENT_DEAD_LETTER | TURBO_FLOW_SETTLEMENT_PROTOCOL_ACK |
+      TURBO_FLOW_SETTLEMENT_DEAD_LETTER | TURBO_FLOW_SETTLEMENT_ACKNOWLEDGE |
       TURBO_FLOW_SETTLEMENT_CANCELED;
   const flow_adapter_registration_t *adapter = flow_adapter_for_stage(flow, stage);
 

@@ -150,7 +150,7 @@ int turbo_flow_register_primitive(turbo_flow_t *flow,
 static int flow_runtime_contract_valid(const turbo_flow_operation_runtime_contract_t *runtime) {
   const uint32_t valid_settlement =
       TURBO_FLOW_SETTLEMENT_COMPLETE | TURBO_FLOW_SETTLEMENT_RETRY | TURBO_FLOW_SETTLEMENT_REQUEUE |
-      TURBO_FLOW_SETTLEMENT_DEAD_LETTER | TURBO_FLOW_SETTLEMENT_PROTOCOL_ACK |
+      TURBO_FLOW_SETTLEMENT_DEAD_LETTER | TURBO_FLOW_SETTLEMENT_ACKNOWLEDGE |
       TURBO_FLOW_SETTLEMENT_CANCELED;
   if (!runtime || runtime->handoff < TURBO_FLOW_HANDOFF_DIRECT ||
       runtime->handoff > TURBO_FLOW_HANDOFF_BOUNDED ||

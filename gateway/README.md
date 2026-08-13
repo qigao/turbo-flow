@@ -1,6 +1,6 @@
 # TurboFlow MQTT Gateways
 
-该目录提供六个同级动态库，将设备协议帧映射到 MQTT，而不改变 Flowie 的
+该目录提供六个同级动态库，将设备协议帧映射到 MQTT，而不改变 外部 MQTT owner 的
 MQTT broker 职责：
 
 | DLL target | 首阶段协议基线 | MQTT protocol segment |
@@ -15,13 +15,13 @@ MQTT broker 职责：
 协议 DLL 是 codec/mapping boundary，不创建监听 socket，也不拥有 MQTT
 client。公共 `TurboFlow::GatewayCoroNet` 宿主负责 UDP、TCP、TLS、WS、WSS
 监听，把帧送入有界 session runtime；映射后的 topic/payload 仍由调用方交给
-Flowie/MQTT owner。下行既可用 `turbo_flow_gateway_egress()` 恢复经过校验的
+external MQTT owner。下行既可用 `turbo_flow_gateway_egress()` 恢复经过校验的
 完整原始帧，也可用 `turbo_flow_gateway_encode()` 编码受支持的类型化命令。
-`turbo_flow_gateway_reply()` 只在 Flowie/FlowStore settlement 终结后生成协议
+`turbo_flow_gateway_reply()` 只在 MQTT owner/FlowStore settlement 终结后生成协议
 响应；runtime 会保留原始请求与 transport 所有权到响应同步发送完成。
 
 公开插件只导出 `turbo_flow_gateway_plugin_get_api`，其 function table
-只有 `open`/`close`。协议解析器、状态和具体实现不进入 Flowie，也不暴露为
+只有 `open`/`close`。协议解析器、状态和具体实现不进入 外部 MQTT owner，也不暴露为
 公共函数。
 
 ## 网络传输矩阵

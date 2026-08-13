@@ -21,7 +21,7 @@ Control DSL -> parser -> typed facts evaluation -> resource command / reconcile 
   domain/type、source/stage role、resource compatibility、executor scope、worker capacity、
   retry/reject/reorder 和 settlement 边界。
 - `module + primitive + operation + executable binding` 作为统一业务契约目前是**部分落地**：
-  module catalog/依赖校验、TurboFlow Policy typed provider，以及 HTTP/RPC/FMQ/Flowie/Queue/Storage
+  module catalog/依赖校验、TurboFlow Policy typed provider，以及 HTTP/RPC/Queue/Storage
   typed native adapter 已实现；
   大多数 IO、协议、队列和存储模块仍以 `adapter + resource provider + core.* implicit
   operation` 接入 graph。
@@ -136,18 +136,16 @@ owner。
 |---|---|---|---|---|---|
 | Data | Message、ContentDescriptor、Schema、Batch、Decision | keyed state/window store、schema registry | decode、validate、transform、filter、route、emit、keyed update、window close | message/processor/schema owner | graph/core、codec、Policy、keyed/window 已有实现 |
 | Execution | Task、ExecutionPlan、Completion、OrderingKey | thread/coro pool、Disruptor segment、runtime | submit、yield、cancel、wait、drain、resize、reorder | flow runtime/executor owner | 已有 executor、segment plan、pool status/resize |
-| IO/Transport | EndpointSpec、ConnectionView、StreamChunk | endpoint、connection、CoroNet execution binding | listen、connect、read、write、interrupt、quiesce、resume | adapter/CoroNet context owner | socket、HTTP、FMQ、Flowie endpoint 已接入 |
-| Protocol/Pattern | Frame、RouteToken、Correlation、Subscription、DeliveryAttempt | ProtocolSession、route/session aggregate、broker pattern state | parse、encode、publish、request/reply、subscribe、settle | 协议 owner | FMQ、MQTT/Flowie、HTTP/RPC、email、Redis protocol paths |
+| IO/Transport | EndpointSpec、ConnectionView、StreamChunk | endpoint、connection、CoroNet execution binding | listen、connect、read、write、interrupt、quiesce、resume | adapter/CoroNet context owner | socket、HTTP endpoint 已接入 |
+| Protocol/Pattern | Frame、RouteToken、Correlation、Subscription、DeliveryAttempt | ProtocolSession、route/session aggregate、broker pattern state | parse、encode、publish、request/reply、subscribe、settle | 外部协议 owner | HTTP/RPC、email、Redis protocol paths |
 | Buffer/Persistence | Record、Claim、Checkpoint、Blob | Queue、SQLite/Redis record/blob store、file/object storage | enqueue、claim/reserve、ack、requeue、drop、recover、commit | queue/storage owner | queue、storage、Redis、PgSQL、S3 已有 owner API |
 | Rules | FactsSnapshot、Decision、Action | RuleSet、SecurityRealm | compile、evaluate、authorize proposal | rules/security owner | `rules.apply` 已显式 primitive + operation |
 | Management | ResourceRef、Spec、Status、Condition、Command、Event | runtime/pool/segment/connection/queue/protocol/storage/rule resource records | observe、diff、reconcile、apply command | host reconciler + target owner | resource metadata/document、pool status、control/observe 已有实现 |
 
 Domain 不是目录归属。一个模块可以跨多个 domain，但每个状态必须只有一个 owner。例如：
 
-- FMQ 同时跨 IO/Transport、Protocol/Pattern、Buffer/Persistence；其 socket、pattern、队列和
-  management state 不能合成一个 FMQ 万能 primitive。
-- Flowie 的 MQTT endpoint 在 IO/Transport 和 Protocol/Pattern 之间做 bridge；topic、session、
-  QoS、membership 和 route 状态仍由 Flowie owner 独占。
+- 外部消息产品可以同时跨 IO/Transport、Protocol/Pattern、Buffer/Persistence；其 socket、pattern、
+  队列和 management state 不能合成一个万能 primitive，也不能由 Graph Core 接管。
 - Policy 的输入输出属于 Data，但 RuleSet 属于 Rules；`rules.apply` 是显式跨 domain
   operation，不能把规则资源变成 Data 的普通 map。
 
@@ -163,11 +161,9 @@ Domain 不是目录归属。一个模块可以跨多个 domain，但每个状态
 | `io/socket` | IO/Transport | CoroNet socket adapter | `io.socket` 导出 `SocketEndpoint` 与 `socket.receive/send`，绑定实际 endpoint owner | `implemented` | graph operation 只表达 ingress/egress；connect/listen/close 仍是 CoroNet owner lifecycle |
 | `io/http` | IO/Transport + Protocol/Pattern | native TurboHTTP/Iris client/server adapter | `io.http.client` 的 request/poll 绑定 `HttpClientConnection`；`io.http.server` 的 request/reply 绑定 `HttpServerEndpoint` | `implemented` | 保留 native endpoint/adapter；resource catalog 不迁移 I/O |
 | `io/rpc` | IO/Transport + Protocol/Pattern | native RPC client/server adapter | call/poll 绑定 `RpcClientConnection`；request/reply 绑定 `RpcServerEndpoint` | `implemented` | 保留 native RPC/Iris owner；RPC resource 不冒充 HTTP/Socket operation |
-| `flowmq` | Product + IO/Transport + Protocol/Pattern + Buffer/Persistence | FlowMQ pattern/proxy/control/management owner | 兼容 module id `io.fmq` 按 PUB/SUB、PUSH/PULL、REQ/REP、ROUTER/DEALER、PAIR、XPUB/XSUB 分别导出 source/stage operations | `implemented` | 顶层 broker 产品；pattern FSM 不被压缩成万能 send/receive contract |
-| `io/redis` | Protocol/Pattern + Buffer/Persistence | Redis data/stream adapter | stream/blob/record owner 有；DSL operation 未统一 | `adapter-only` | claim/settlement 与 blob commit 必须分成两类 operation |
-| `io/pgsql`、`io/s3` | Buffer/Persistence | query/object source/sink | content/resource schema 有；显式 operation 未统一 | `adapter-only` | query/result/object 的 content type 要留在 domain schema |
+| `flowstore/backends/redis` | Protocol/Pattern + Buffer/Persistence | Redis data/stream adapter | stream/blob/record owner 有；DSL operation 未统一 | `adapter-only` | claim/settlement 与 blob commit 必须分成两类 operation |
+| `flowstore/backends/pgsql`、`io/s3` | Buffer/Persistence | query/object source/sink | content/resource schema 有；显式 operation 未统一 | `adapter-only` | query/result/object 的 content type 要留在 domain schema |
 | `io/email` | Protocol/Pattern | SMTP/POP3/MIME adapter/example | MIME schema 有；显式 operation 未统一 | `adapter-only` | parse/encode 与 SMTP/POP3 owner 不应混为一个 primitive |
-| `flowie` | IO/Transport + Protocol/Pattern + Buffer/Persistence | MQTT endpoint + graph | `protocol.mqtt.server` 导出 PUBLISH ingress 与 packet egress，绑定同一 endpoint owner | `implemented` | control packet/session FSM 仍在 protocol owner 内，不伪装为 graph operation |
 | `schedule` | Execution + Management（建议归类） | schedule source adapter | 尚未看到统一 domain operation descriptor | `adapter-only` | 需要先固化 timer/trigger owner 语义再注册 |
 | `observe` | Management + Execution | observe callback/summary sink | 只读 snapshot/derived metric | `owner-api` | 不应成为 payload mutation operation |
 | `security` | Rules + Management | security realm/resource API | Resource metadata 有；不进 payload graph | `owner-api` | 命令授权与数据规则要保持两个边界 |
@@ -185,7 +181,7 @@ catalog。
 `turbo_flow_register_module_adapter()` 原子注册 `(module, operation, adapter)` 关联。Cataloged
 operation 若实际解析到 legacy stage callback、未绑定 adapter 或错误 module owner，compiler 会
 fail fast；resource-owned operation 进一步要求 typed native adapter 固定绑定实际 primitive。
-Socket、HTTP/RPC、FMQ、Flowie、Queue 和 Storage 已使用该路径；其他 domain adapter 仍需增量接入。
+Socket、HTTP/RPC、Queue 和 Storage 已使用该路径；其他 domain adapter 仍需增量接入。
 
 影响：未 catalog 的旧 DSL 仍只能得到 `core.*` contract、adapter schema 与模块自有测试的保证；
 它不会被错误地计入 module-level executable proof，但能力发现与跨模块组合仍不完整。
@@ -204,7 +200,7 @@ kind/domain/type 之后校验 inclusive range。`max=0` 表示无上界；V1 des
 
 ### MED：其余 adapter 的能力宣称仍需显式契约证据
 
-TurboFlow Policy、Socket、HTTP、RPC、FMQ、Flowie、Queue 和 Storage 已完成 catalog + executable
+TurboFlow Policy、Socket、HTTP、RPC、Queue 和 Storage 已完成 catalog + executable
 binding；codec、Redis、PgSQL、S3、Email 与 Schedule 仍主要通过 legacy adapter 路径工作。即使 DSL
 手工绑定 operation，只要执行实现没有 typed binding，仍不能计入 operation-level proof。
 
@@ -232,7 +228,7 @@ provider registry 本身仍未声明其 primitive type，因此其他模块若�
 `publish`、`send`、`ack`、`retry`、`commit` 在 transport、protocol、queue、storage 中的
 事实源和失败语义不同。可复用的是 pattern algorithm 或 bridge 机制，不是一个跨域 vtable。
 
-建议使用 domain namespace，例如 `fmq.publish`、`mqtt.publish`、`queue.claim`、
+建议使用 domain namespace，例如 `message.publish`、`queue.claim`、
 `redis.stream.ack`、`storage.commit`，并显式声明它们的 settlement owner。
 
 ### MED：exactly-once 不能由 graph/Disruptor 单独推出
@@ -256,9 +252,8 @@ Module catalog 是注册/校验层，不是 loader、plugin system、资源工�
 - `turbo_flow_module_count/at/find()`、`turbo_flow_operation_provider_module()` 和
   `turbo_flow_adapter_operation_module()` 提供只读查询；
   `reset(..., 1)` 保留目录，registry-clearing reset/destroy 释放它；
-- 生产 catalog 包括 `rules.policy`、`io.socket`、HTTP/RPC client/server、`io.fmq`、
-  `protocol.mqtt.server`、`buffer.queue` 和 `buffer.storage`。HTTP/RPC 仍保留 native endpoint；
-  FMQ/Flowie 仍保留各自 CoroNet/protocol owner；catalog 不替换运行时。
+- 生产 catalog 包括 `rules.policy`、`io.socket`、HTTP/RPC client/server、
+  `buffer.queue` 和 `buffer.storage`。HTTP/RPC 仍保留 native endpoint；catalog 不替换运行时。
 
 人写配置仍为 YAML。YAML 选择 named resource/adapter/operation，host 在解析/构图前注册可信 module
 catalog；不能从不可信 YAML 动态声明 provider 身份或 native function。

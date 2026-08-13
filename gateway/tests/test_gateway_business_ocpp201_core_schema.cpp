@@ -1,10 +1,10 @@
 #include "ocpp201_core.h"
 #include "tinytest.h"
 
-#include <cstring>
-
 spec("OCPP 2.0.1 Core generated DataBind ABI") {
-  it("publishes the additive schema revision") { check_int_eq(Ocpp201Core_SCHEMA_VERSION, 5); }
+  it("publishes the additive schema revision") {
+    check_str_contains(Ocpp201Core_schema_text(), "version(5)");
+  }
 
   it("publishes the complete TransactionEvent required enum sets") {
     check_size_eq(TransactionEventType_count(), 3u);

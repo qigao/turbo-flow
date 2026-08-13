@@ -1,9 +1,11 @@
 set(TARGET_NAME tf_flow_store)
 
+add_subdirectory(backend)
+
 add_library(
   ${TARGET_NAME} SHARED
   src/flow_store_common.c
-  src/flow_mqtt_store.c
+  src/flow_record_store.c
   src/flow_store_policy.c
   src/flow_bitmap_index.c
   src/flow_state_store_provider.c
@@ -33,7 +35,6 @@ target_link_libraries(${TARGET_NAME}
 
 install(
   FILES include/turbo_flow_store.h
-        include/turbo_flow_mqtt_store.h
         include/turbo_flow_bitmap_index.h
         include/turbo_flow_store_policy.h
         include/turbo_flow_state_store.h
@@ -45,6 +46,9 @@ install(
         include/turbo_flow_series_store.h
         include/turbo_flow_series_store_provider.h
   DESTINATION include)
+
+add_subdirectory(databind)
+add_subdirectory(backends)
 
 if(BUILD_TESTS)
   add_subdirectory(tests)

@@ -194,7 +194,7 @@ typedef struct turbo_flow_gateway_command_view_s {
    NULL, 0u, NULL, 0u}
 
 /**
- * Build the protocol response that becomes legal after Flowie/FlowStore
+ * Build the protocol response that becomes legal after adapter/storage
  * settlement. A successful call may return data_size == 0 when the protocol
  * message does not require a response.
  *

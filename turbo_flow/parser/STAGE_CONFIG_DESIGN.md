@@ -26,7 +26,7 @@ accepted by the parser.
   `.flow`.
 - Do not add unbounded loops, recursion, dynamic stage generation, or runtime
   topology mutation.
-- Do not make FMQ, broker, codec, DataBind, database, or HTTP behavior grammar
+- Do not make message-bus, broker, codec, DataBind, database, or HTTP behavior grammar
   keywords.
 
 ## File Roles
@@ -65,7 +65,7 @@ stage order_pipeline(bind_adapter, store_adapter) {
 }
 
 stage main {
-  source orders adapter fmq.orders.in
+  source orders adapter bus.orders.in
   step dead adapter sqlite.dead
 
   use us = order_pipeline with orders_us
@@ -100,7 +100,7 @@ sources are lifecycle owners and should live in the root stage:
 
 ```flow
 stage main {
-  source inbound adapter fmq.orders.in
+  source inbound adapter bus.orders.in
   use pipe = order_pipeline with orders_us
 
   inbound -> pipe.input
@@ -151,8 +151,8 @@ channels:
       full_policy: fail
 
 adapters:
-  fmq.orders.in:
-    kind: fmq
+  bus.orders.in:
+    kind: custom
     fragments:
       connection: local_tls
     config:
@@ -313,76 +313,6 @@ max_expanded_edges    262144
 
 These limits are compile-time limits. Runtime sources may still process an
 unbounded stream of messages while the topology remains finite.
-
-## Broker And Custom Pattern Semantics
-
-Broker-specific behavior should stay in adapter config and metadata. FMQ
-primitive endpoints can be composed into broker shapes by preserving selected
-metadata across stages:
-
-```yaml
-version: 1
-adapters:
-  fmq.orders.in:
-    kind: fmq
-    config:
-      pattern: sub
-      mode: connect
-      transport: tcp
-      host: 127.0.0.1
-      port: 7001
-      topic: orders.
-  fmq.orders.out:
-    kind: fmq
-    config:
-      pattern: pub
-      mode: bind
-      transport: tcp
-      host: 0.0.0.0
-      port: 7002
-      topic_policy: inherit
-```
-
-The stage composes broker steps:
-
-```flow
-stage broker_ingress {
-  in frames
-  out routed
-  out rejected
-
-  step decode adapter fmq.frame.decode
-  step route adapter databind.order.route
-  step encode adapter fmq.frame.encode
-
-  frames -> decode -> route -> encode -> routed
-  reject unroutable route -> rejected
-}
-
-stage main {
-  source inbound adapter fmq.orders.in
-  stage outbound adapter fmq.orders.out
-
-  use broker = broker_ingress
-
-  inbound -> broker.frames
-  broker.routed -> outbound
-}
-```
-
-This avoids adding broker pattern keywords to the grammar while still allowing
-custom patterns through typed adapter config and host-owned callbacks. Metadata
-inheritance is only valid during synchronous dispatch of an FMQ-originated
-message; if no FMQ metadata is available, the adapter fails rather than
-silently publishing with an empty or unrelated route key.
-
-Reusable proxy devices follow the same rule. `pubsub_proxy`, `queue_proxy`,
-`router_dealer_proxy`, and future `xpub_xsub_proxy` are ordinary `stage`
-templates expanded with `use`, not DSL keywords. Their concrete behavior comes
-from adapter schemas and runtime adapter configs: FMQ owns message patterns and
-routing metadata, queue owns buffering/balancing policy, codec/DataBind own
-payload parsing and validation, and Observe receives only generic control
-events.
 
 ## Large Pipelines
 

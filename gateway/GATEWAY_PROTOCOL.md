@@ -153,4 +153,4 @@ server_create -> server_start -> session_open/feed*
 OCPP payload schema/transaction domain state、LwM2M bootstrap/Observe/
 Blockwise、DTLS/OSCORE、GB/T 32960 与 JT/T 808 全量命令体领域模型及设备
 重连策略不由当前 codec 冒充实现。后续 conformance 模块必须复用本文件的
-数据与关闭协议，不得在 Flowie 内建立第二份 MQTT 业务事实。
+数据与关闭协议，不得在 外部 MQTT owner 内建立第二份 MQTT 业务事实。

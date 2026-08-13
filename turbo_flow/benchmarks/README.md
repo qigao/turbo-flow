@@ -86,5 +86,5 @@ reference Windows Release run sustained approximately 1.46-1.70M decisions/s for
 0.69-0.71M decisions/s for prefix, and 1.48-1.58M decisions/s for a compiled adapter across 64, 512,
 and 4096 rules. Adapter rules are compiled once per immutable subject leaf; authorization emits
 leaf-local positions that Core bounds-checks before applying deny precedence and original rule
-ordering. Flowie's production matcher uses its MQTT trie while preserving distinct topic-match and
+ordering. External protocol products may use their own trie while preserving distinct topic-match and
 filter-containment semantics.

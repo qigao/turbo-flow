@@ -428,7 +428,7 @@ projection。Core 只保存可信 schema identity、opaque projection pointer �
 不依赖 DataBind 类型或 JIT。`turbo_flow_msg_clear_projection()` 只删除派生 projection，不修改
 原始 payload。
 
-Descriptor 与 projection 的 domain 可以不同：例如 HTTP/FMQ descriptor 描述协议入口，DataBind
+Descriptor 与 projection 的 domain 可以不同：例如 HTTP 或外部协议 descriptor 描述协议入口，DataBind
 projection 使用 Data domain 描述解析结果。跨 domain 不代表存在两份 payload identity；只要 descriptor
 声明了 schema，projection 的 encoding、schema name、type name 与 version 就必须完全一致。无论先附加
 descriptor 还是先绑定 projection，冲突都返回 `TURBO_EPROTO`，失败不接管调用方 projection。
@@ -451,7 +451,7 @@ projection type；`schema_text` 必须为 NULL，schema 文本加载/编译属�
 registry。解析键为 `(domain, profile, media type, schema name/type/version)`；未声明 schema 时只允许
 保持 opaque 并返回 `TURBO_ENOENT`，不得根据唯一候选猜测 schema。
 
-HTTP、S3、Database 和 FMQ adapter 只负责把协议元数据归一化为 lookup key。未知 media type 且
+HTTP、S3、Database 和外部协议 adapter 只负责把协议元数据归一化为 lookup key。未知 media type 且
 没有显式 binding 时保持 opaque；binding 不完整、已声明 schema 不匹配或 registry 冲突时 fail
 fast。S3 sink 使用配置的 PUT Content-Type，并在外部请求前校验 payload；S3 source 先从
 StatObject/HEAD 读取对象实际 Content-Type，再为本次 GetObject message 构造 descriptor，不能用 PUT

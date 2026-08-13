@@ -34,7 +34,7 @@ turbo_flow_add_gateway(
   tf_gateway_lwm2m GatewayLwm2m lwm2m/flow_gateway_lwm2m.c)
 turbo_flow_add_gateway(
   tf_gateway_ocpp GatewayOcpp ocpp/flow_gateway_ocpp.c)
-target_link_libraries(tf_gateway_ocpp PRIVATE TurboUtils::Parser)
+target_link_libraries(tf_gateway_ocpp PRIVATE TurboParser::Parser)
 if(NOT WIN32)
   target_link_libraries(tf_gateway_ocpp PRIVATE m)
 endif()

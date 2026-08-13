@@ -364,8 +364,8 @@ static int flow_http_acl_authorize(void *ctx, const turbo_flow_security_request_
   char *authorization = NULL;
   char *body = NULL;
   size_t body_size = 0u;
-  char service_id_header[sizeof("X-Flowie-Service-Id: ") + TURBO_FLOW_SECURITY_ID_MAX];
-  char service_domain_header[sizeof("X-Flowie-Service-Domain: ") + TURBO_FLOW_SECURITY_ID_MAX];
+  char service_id_header[sizeof("X-TurboFlow-Service-Id: ") + TURBO_FLOW_SECURITY_ID_MAX];
+  char service_domain_header[sizeof("X-TurboFlow-Service-Domain: ") + TURBO_FLOW_SECURITY_ID_MAX];
   const char *headers[5];
   size_t token_size = 0u;
   int rc;
@@ -392,10 +392,10 @@ static int flow_http_acl_authorize(void *ctx, const turbo_flow_security_request_
   memcpy(authorization, "Authorization: Bearer ", sizeof("Authorization: Bearer ") - 1u);
   memcpy(authorization + sizeof("Authorization: Bearer ") - 1u, lease.bytes, token_size);
   authorization[sizeof("Authorization: Bearer ") - 1u + token_size] = '\0';
-  if (snprintf(service_id_header, sizeof(service_id_header), "X-Flowie-Service-Id: %s",
+  if (snprintf(service_id_header, sizeof(service_id_header), "X-TurboFlow-Service-Id: %s",
                provider->service_id) <= 0 ||
       snprintf(service_domain_header, sizeof(service_domain_header),
-               "X-Flowie-Service-Domain: %s", provider->service_domain) <= 0) {
+               "X-TurboFlow-Service-Domain: %s", provider->service_domain) <= 0) {
     rc = TURBO_ERANGE;
     goto done;
   }

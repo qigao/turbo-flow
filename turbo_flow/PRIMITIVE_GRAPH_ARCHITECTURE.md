@@ -30,7 +30,7 @@ Data plane
   Input -> Disruptor segment -> Processor/Route/Buffer/Batch -> Settlement -> Output
 
 Protocol and message-pattern plane
-  MQTT/FMQ/HTTP/SMTP/POP3/Redis parser、session、FSM、correlation、ACK、retry boundary
+  external protocol parser、session、FSM、correlation、ACK、retry boundary
 
 Transport plane
   CoroNet context 和 TCP/TLS/WS/Pipe/UDP/KCP byte transport
@@ -139,7 +139,7 @@ Operation 不能因为被 graph 调度而获得额外状态权限。
 | Rules | RuleProgram、FactsSnapshot、Decision | compile、evaluate | rules owner；evaluation 无副作用 |
 | Management | ResourceRef、Spec、Status、Condition、Command | observe、diff、reconcile、apply command | host reconciler + target owner |
 
-HTTP、SMTP、MQTT、FMQ、Redis 等协议可以各自形成 protocol subdomain，并按各自实现需要复用
+HTTP、SMTP、MQTT、Redis 及外部协议可以各自形成 protocol subdomain，并按各自实现需要复用
 IO/Transport primitives。复用 connection/endpoint 不代表共享协议 FSM、options 或 transport
 实现。HTTP 已有 TurboHTTP/Iris native endpoint/adapter，保持该 owner 与 IO 路径，不迁移为
 `io/socket` primitive。`io.socket` 将 CoroNet endpoint 注册为 `SocketEndpoint`；
@@ -149,13 +149,6 @@ module-adapter-resource 校验机制，不共享协议 FSM、连接池或 native
 RPC client 可由可信 host 通过 versioned binding 显式注入 borrowed/owned `http_client_t`，使其复用既有
 TurboHTTP provider 配置；未注入时仍创建私有 client。Borrowed client 必须比 RPC adapter
 活得更久，且不能被另一个 adapter 并发驱动。该 host object 不可由 YAML 构造。
-
-`turbo_flow_protocol` 还提供一个不拥有候选对象的 pattern core：role compatibility、fan-out/
-round-robin candidate iteration、generation-fenced route matching，以及单 correlation 的同步
-exchange 状态。它不解析 wire frame，不保存 topic/filter、peer、payload、queue、socket 或 ACK。
-FMQ 将 PUB/SUB、PUSH/PULL、REQ/REP、ROUTER/DEALER 映射到这些机制；Flowie 只复用候选迭代和
-route matching，MQTT wildcard/shared-subscription、CRoaring membership、QoS 与 session 状态仍由
-Flowie owner 独占。这样共享的是可复验的选择/关联算法，不是协议状态或第二套 runtime。
 
 `MessageEnvelope` 同时承载 schema-bound 和 opaque data。Payload bytes 是唯一内容事实源；
 schema-bound 只表示 envelope 上附加了可选派生 projection，不要求所有 ingress 预先知道格式。
@@ -233,10 +226,8 @@ provider 返回的值在本次 `rules.apply` 调用期间保持只读有效，Po
 规则会在注册时 fail fast，provider 的运行时错误则原样沿 operation error boundary
 传播。
 
-Native adapter catalog 已覆盖 HTTP、RPC、FMQ、Flowie MQTT server、Queue 与 Storage。HTTP/RPC
-只描述既有 native client/server 边界；FMQ 按每个 messaging pattern 分开 operation；Flowie 只将
-application PUBLISH ingress 和 encoded packet egress 暴露给 graph，CONNECT/SUBSCRIBE/QoS FSM
-仍由 session owner 消费。Queue/Storage operation 使用 `RESOURCE_OWNER` scope，并通过
+Native adapter catalog 已覆盖 HTTP、RPC、Queue 与 Storage。HTTP/RPC
+只描述既有 native client/server 边界。Queue/Storage operation 使用 `RESOURCE_OWNER` scope，并通过
 `operation_resource_names + primitives` 把 adapter 实现固定到实际 `QueueBuffer` 或
 `StorageResource`，而不是将共享/持久化状态误报为 adapter-private state。
 
@@ -367,7 +358,7 @@ HTTP/socket/SMTP/POP3/Redis/MQTT 可复用 connection、endpoint、deadline、ad
 和 CoroNet execution primitives。协议 options 留在 typed protocol schema，因为它们的状态机
 和 settlement 语义不同。Queue 是 Buffer/Settlement resource，不是 IO connection。
 
-PostgreSQL outbox 同样是 Buffer/Persistence primitive，而不是 FMQ、Flowie 或 graph runtime
+PostgreSQL outbox 同样是 Buffer/Persistence primitive，而不是外部协议产品或 graph runtime
 内部的特殊 queue。`.yml` named channel 独占 `conninfo/outbox_name/capacity/payload bound/poll`
 持久化契约，source/sink adapter 只声明同一 channel 与 role。Sink 在 transaction advisory lock
 保护的容量检查与 INSERT 完成 COMMIT 后才可上报 `DURABLE`；source 以 session advisory row lock
@@ -398,28 +389,6 @@ Status。data action 不包含 callback/context，经 runtime-owned decision sid
 provider 只负责外部数据到 typed facts 的显式边界，不能改变规则 program 或直接执行副作用。
 control action 只返回 resource command proposal，经 host authority/observed-generation 校验后
 才可交给 owner dispatcher。
-
-## 9. MQTT/Flowie 映射示例
-
-```text
-CoroNet TCP/TLS/WS
-  -> MQTT protocol owner（parse、session、subscription、QoS FSM）
-  -> Input/PUBLISH envelope
-  -> Disruptor segment
-  -> decode -> Policy -> route -> batch/processor
-  -> Output delivery attempt
-  -> Settlement result
-  -> MQTT owner command/event（在已声明边界发送 PUBACK/PUBREC/PUBREL/PUBCOMP）
-```
-
-Flowie 是独立应用，只选择性迁移并重命名 TurboMQTT 的 parser 与必要协议基础实现；不链接或
-复制其 I/O、queue、processor、sink、worker 与 plugin runtime。Flowie protocol owner 仍是
-client/session、subscription、retained、will 和 QoS inflight 的唯一事实源。TurboFlow 只拥有
-graph execution 和 delivery processing。Flowie 当前按 QoS 配置 `received`、`accepted`、
-`processed` 或 `durable` settlement point；默认值保持 `received`。需要延迟 ACK 时，message-owned
-protocol settlement envelope 把请求交给 graph/Queue/durable owner，完成结果必须精确匹配请求
-point，且 generation-fenced route 防止 stale reply。迁移来源、兼容性边界与回滚策略见
-`../flowie/ARCHITECTURE.md`。
 
 ## 10. 候选方案比较
 
@@ -477,4 +446,4 @@ reconcile convergence/failure、rule quota 和 protocol settlement integration�
 - `src/flow_disruptor.c`：bounded worker/broadcast Disruptor publish path；
 - `../observe/include/turbo_flow_observe.h`：graph snapshot 和 host-owned pool reconcile；
 - `include/turbo_flow_policy.h`：compiled ordered rule processor；
-- 对应 core、Observe、policy、control 和 FMQ tests。
+- 对应 core、Observe、policy 和 control tests。

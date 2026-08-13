@@ -8,7 +8,7 @@ cmake_add_test(
 cmake_add_test(
   test_flow_resource_document
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_resource_document.c
-  LIBS TurboFlow::Flow TurboUtils::DataBind TurboUtils::TinyTest
+  LIBS TurboFlow::Flow TurboParser::DataBind TurboUtils::TinyTest
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
@@ -58,12 +58,6 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
-  test_flow_protocol
-  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_protocol.c
-  LIBS TurboFlow::Flow TurboUtils::TinyTest
-  FOLDER "turbo_flow/tests")
-
-cmake_add_test(
   test_flow_discovery
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_discovery.c
   LIBS TurboFlow::Flow TurboUtils::TinyTest
@@ -72,16 +66,29 @@ cmake_add_test(
 cmake_add_test(
   test_flow_config
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_config.c
+  LIBS TurboFlow::Product TurboUtils::TinyTest
+  FOLDER "turbo_flow/tests")
+
+cmake_add_test(
+  test_flow_compat_boundary
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_compat_boundary.c
   LIBS TurboFlow::Flow TurboUtils::TinyTest
   FOLDER "turbo_flow/tests")
 
+cmake_add_test(
+  test_resolved_config_boundary
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_resolved_config_boundary.c
+  LIBS TurboFlow::Config TurboUtils::TinyTest
+  FOLDER "turbo_flow/tests")
+
 set_tests_properties(
-  test_turbo_flow test_flow_resource_document test_flow_config
-  PROPERTIES LABELS "fmq-release;fmq-chaos")
+  test_turbo_flow test_flow_resource_document test_flow_config test_flow_compat_boundary
+  test_resolved_config_boundary
+  PROPERTIES LABELS "graph;core")
 
 if(WIN32)
   set_tests_properties(
-    test_flow_config
+    test_flow_config test_flow_compat_boundary test_resolved_config_boundary
     PROPERTIES ENVIRONMENT_MODIFICATION
-               "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboUtils::Core>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboUtils::Parser>")
+               "PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboUtils::Core>;PATH=path_list_prepend:$<TARGET_FILE_DIR:TurboParser::Parser>")
 endif()

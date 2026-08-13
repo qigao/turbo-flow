@@ -27,8 +27,7 @@ static int flow_emitter_output_validate(const turbo_flow_msg_t *output) {
                                   mem_buffer_used(output->buffer))))) {
     return TURBO_EINVAL;
   }
-  if (output->transport_context || turbo_flow_msg_protocol_route(output) ||
-      turbo_flow_msg_protocol_settlement(output)) {
+  if (output->transport_context) {
     return TURBO_ENOTSUP;
   }
   return TURBO_OK;

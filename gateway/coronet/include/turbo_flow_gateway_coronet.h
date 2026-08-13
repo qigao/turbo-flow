@@ -161,7 +161,7 @@ typedef struct turbo_flow_gateway_coronet_snapshot_s {
  * cfg.transport = TURBO_FLOW_GATEWAY_CORONET_UDP;
  * cfg.host = "0.0.0.0";
  * cfg.port = 1884;
- * cfg.runtime_ops.publish = publish_to_flowie;
+ * cfg.runtime_ops.publish = publish_to_graph;
  * cfg.resolve_identity = resolve_authenticated_device;
  * turbo_flow_gateway_coronet_server_create(&cfg, &server);
  * turbo_flow_gateway_coronet_server_start(server);

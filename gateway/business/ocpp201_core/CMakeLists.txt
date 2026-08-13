@@ -32,7 +32,7 @@ target_include_directories(
   tf_gateway_business_ocpp201_core_schema
   PUBLIC "${_ocpp201_core_generated_dir}")
 target_link_libraries(tf_gateway_business_ocpp201_core_schema
-                      PUBLIC TurboUtils::DataBind)
+                      PUBLIC TurboParser::DataBind)
 
 add_library(tf_gateway_business_ocpp201_core SHARED
             flow_gateway_business_ocpp201_core.c)
@@ -49,7 +49,7 @@ target_link_libraries(
   PRIVATE tf_gateway_business_ocpp201_core_schema
           tf_gateway_plugin_support
           TurboFlow::Gateway
-          TurboUtils::Parser)
+          TurboParser::Parser)
 
 if(BUILD_TESTS)
   add_library(tf_gateway_business_ocpp201_core_schema_shared SHARED
@@ -61,7 +61,7 @@ if(BUILD_TESTS)
     tf_gateway_business_ocpp201_core_schema_shared
     PUBLIC "${_ocpp201_core_generated_dir}")
   target_link_libraries(tf_gateway_business_ocpp201_core_schema_shared
-                        PUBLIC TurboUtils::DataBind)
+                        PUBLIC TurboParser::DataBind)
   cmake_config_target(
     tf_gateway_business_ocpp201_core_schema_shared
     FOLDER "gateway/business/tests")

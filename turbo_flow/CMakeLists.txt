@@ -1,4 +1,11 @@
-set(TARGET_NAME turbo_flow)
+set(TARGET_NAME turbo_flow_graph)
+# RulesForge 0.9 still names the DataBind target from its former package.
+# Keep the compatibility alias at the dependency boundary; TurboFlow code uses TurboParser directly.
+if(TARGET TurboParser::DataBind AND NOT TARGET TurboUtils::DataBind)
+  add_library(TurboUtils::DataBind INTERFACE IMPORTED)
+  set_target_properties(TurboUtils::DataBind PROPERTIES
+                        INTERFACE_LINK_LIBRARIES TurboParser::DataBind)
+endif()
 find_package(RulesForge 0.9 CONFIG REQUIRED PATHS "${RulesForge_ROOT}")
 cmake_add_grammar(TURBO_FLOW
   LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/flow_lexer.re
@@ -26,6 +33,9 @@ if(MSVC)
 endif()
 
 file(GLOB TURBO_FLOW_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
+list(REMOVE_ITEM TURBO_FLOW_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c)
 set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_record_store.h
@@ -34,10 +44,29 @@ set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_expr.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_rulesforge.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_policy.h)
-list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_protocol.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_discovery.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config_limits.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resolved_config.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_security.h)
+
+add_library(turbo_flow_config SHARED
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resolved_config.h)
+cmake_config_target(
+  turbo_flow_config
+  ALIAS TurboFlow::Config
+  FOLDER "turbo_flow/config"
+  EXPORT_NAME Config)
+target_compile_definitions(turbo_flow_config PRIVATE SHARED_CXX)
+target_include_directories(
+  turbo_flow_config
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:include>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(turbo_flow_config PUBLIC TurboUtils::Core
+                                        PRIVATE TurboParser::Parser)
 
 add_library(${TARGET_NAME} SHARED
   ${TURBO_FLOW_SOURCES}
@@ -62,9 +91,9 @@ add_dependencies(${TARGET_NAME} ${TURBO_FLOW_SECURITY_RULE_LEXER_TARGET})
 
 cmake_config_target(
   ${TARGET_NAME}
-  ALIAS TurboFlow::Flow
+  ALIAS TurboFlow::Graph
   FOLDER "turbo_flow"
-  EXPORT_NAME Flow)
+  EXPORT_NAME Graph)
 
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_EXPR_ENABLE_JIT=1)
@@ -79,8 +108,65 @@ target_include_directories(
           ${PROJECT_SOURCE_DIR}/vendor/mir)
 
 target_link_libraries(${TARGET_NAME} PUBLIC 
-  TurboUtils::Core RulesForge::rules_forge
-  PRIVATE TurboUtils::Parser mir_static)
+  TurboFlow::Config TurboUtils::Core RulesForge::rules_forge
+  PRIVATE TurboParser::Parser mir_static)
+
+add_library(turbo_flow_product SHARED
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config.h)
+cmake_config_target(
+  turbo_flow_product
+  ALIAS TurboFlow::Product
+  FOLDER "turbo_flow/product"
+  EXPORT_NAME Product)
+target_compile_definitions(turbo_flow_product PRIVATE SHARED_CXX)
+target_include_directories(
+  turbo_flow_product
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:include>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(turbo_flow_product PUBLIC TurboFlow::Graph TurboFlow::Config
+                                        PRIVATE TurboParser::Parser)
+
+# Binary compatibility surface: keep the historical turbo_flow library and
+# its exported symbols while new consumers move to the smaller targets above.
+add_library(turbo_flow SHARED
+  ${TURBO_FLOW_SOURCES}
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
+  ${TURBO_FLOW_LEXER_GEN}
+  ${TURBO_FLOW_GRAMMAR_GEN}
+  ${TURBO_FLOW_EXPR_LEXER_GEN}
+  ${TURBO_FLOW_EXPR_GRAMMAR_GEN}
+  ${TURBO_FLOW_CONTROL_LEXER_GEN}
+  ${TURBO_FLOW_CONTROL_GRAMMAR_GEN}
+  ${TURBO_FLOW_SECURITY_RULE_LEXER_GEN}
+  ${TURBO_FLOW_HEADERS})
+add_dependencies(turbo_flow
+  ${TURBO_FLOW_LEXER_TARGET}
+  ${TURBO_FLOW_GRAMMAR_TARGET}
+  ${TURBO_FLOW_EXPR_LEXER_TARGET}
+  ${TURBO_FLOW_EXPR_GRAMMAR_TARGET}
+  ${TURBO_FLOW_CONTROL_LEXER_TARGET}
+  ${TURBO_FLOW_CONTROL_GRAMMAR_TARGET}
+  ${TURBO_FLOW_SECURITY_RULE_LEXER_TARGET})
+cmake_config_target(
+  turbo_flow
+  ALIAS TurboFlow::Flow
+  FOLDER "turbo_flow/compat"
+  EXPORT_NAME Flow)
+target_compile_definitions(turbo_flow PRIVATE SHARED_CXX TURBO_FLOW_EXPR_ENABLE_JIT=1)
+target_include_directories(
+  turbo_flow
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:include>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+          ${CMAKE_CURRENT_SOURCE_DIR}/parser
+          ${CMAKE_CURRENT_BINARY_DIR}
+          ${PROJECT_SOURCE_DIR}/vendor/mir)
+target_link_libraries(turbo_flow PUBLIC TurboUtils::Core RulesForge::rules_forge
+                               PRIVATE TurboParser::Parser mir_static)
 
 install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)
 
