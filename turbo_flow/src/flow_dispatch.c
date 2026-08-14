@@ -258,7 +258,7 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
   }
 
   if (executor->emit_fn || executor->keyed_emit_fn || executor->window_fn) {
-    if (!emitter || msg->transport_context) {
+    if (!emitter || flow_msg_transport_context_is_borrowed(msg)) {
       status = TURBO_ENOTSUP;
     } else {
       status = flow_emitter_init(emitter, executor->max_outputs);

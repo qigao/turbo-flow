@@ -1,0 +1,61 @@
+# TurboFlow Protocol Ingress
+
+`ingress/protocol` 是 TurboFlow 的可选协议前端层。它通过
+CoroNet 接收设备连接，完成协议分帧、校验、身份提取和响应编码，然后把中立消息
+投递给 `TurboFlow::Graph`。
+
+```text
+Socket/CoroNet
+  -> protocol codec/session
+  -> payload + protocol metadata
+  -> TurboFlow::ProtocolIngressGraph
+  -> TurboFlow::Graph
+  -> optional sinks (MQTT, HTTP, storage, ...)
+```
+
+MQTT 不是内部中间格式。协议 runtime 调用 `turbo_flow_protocol_decode()`，输出原始
+payload 与 `turbo_flow_protocol_metadata_t`；`TurboFlow::ProtocolIngressGraph` 将二者放入
+同一个 message-owned `mem_buffer_t` 后调用 `turbo_flow_publish()`。Graph stage 可通过
+`turbo_flow_protocol_graph_metadata()` 读取 metadata。只有明确选择 MQTT Sink 的调用方
+才链接 `TurboFlow::MqttSink` 并调用 `turbo_flow_mqtt_sink_map_batch()`。Sink 只处理
+调用方持有的有界 batch；MQTT client、数据库 connection、事务与重试由独立 I/O adapter
+拥有。
+
+## 协议与传输
+
+| 协议前端 | CoroNet transport | 设备身份 |
+| --- | --- | --- |
+| CoAP | UDP | transport identity resolver |
+| LwM2M | UDP NoSec（必须显式允许） | transport identity resolver |
+| OCPP 1.6J / 2.0.1 | WS / WSS | resolver；WSS 可绑定已验证证书 |
+| GB/T 32960 | TCP / TLS | 帧内 VIN |
+| JT/T 808 | TCP / TLS | 帧内终端号 |
+| MQTT-SN 1.2 | UDP | transport identity resolver |
+
+MQTT-SN 是设备侧 wire protocol，不等同于可选的 MQTT Sink。协议插件不创建 MQTT
+client，不保存 broker session、QoS、retained 或离线消息状态。
+
+## 所有权与反压
+
+- Protocol runtime 拥有分帧缓冲、session、pending delivery 与协议响应顺序。
+- CoroNet owner 拥有 socket、event loop、TLS 身份和关闭栅栏。
+- Graph 拥有已接纳的 `turbo_flow_msg_t`，但不拥有 socket 或协议 session。
+- 同步 Graph bridge 成功后返回 `SETTLED`；自定义异步 Sink 必须先有界复制，再返回
+  `PENDING`，并最终调用 `settle()`。
+- 一个 session 同时最多有一个 pending delivery；满额返回反压，不静默丢弃。
+- 关闭顺序为：关闭 listener admission → drain 已接纳消息 → 发送合法协议响应 →
+  等待 handler 退出 → 销毁 listener/execution。
+
+## 构建与测试
+
+所有选项只在仓库根 `CMakeOptions.cmake` 声明。scheduled transport soak 通过
+`TURBO_FLOW_PROTOCOL_TRANSPORT_SOAK_TESTS=ON` 启用。常规验证使用仓库 presets：
+
+```powershell
+cmake --fresh --preset win-release-user
+cmake --build --preset win-release-user --parallel
+ctest --preset win-release-user -L protocol-ingress --output-on-failure
+```
+
+具体生命周期与错误契约见 [PROTOCOL_INGRESS.md](PROTOCOL_INGRESS.md)，架构决策见
+[ADR_PROTOCOL_INGRESS_ABI.md](ADR_PROTOCOL_INGRESS_ABI.md)。

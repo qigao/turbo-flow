@@ -1,3 +1,2 @@
-add_subdirectory(croar) 
-add_subdirectory(monocypher)  
+add_subdirectory(croar)  
 add_subdirectory(mir)

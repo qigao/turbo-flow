@@ -20,7 +20,13 @@ option(TURBO_FLOW_REDIS_LIVE_TESTS
        "Enable Redis integration tests against 127.0.0.1:6379" OFF)
 option(TURBO_FLOW_PGSQL_LIVE_TESTS
        "Enable PostgreSQL integration tests using TURBO_FLOW_PGSQL_TEST_CONNINFO" OFF)
-option(GATEWAY_TRANSPORT_SOAK_TESTS
-       "Register scheduled gateway CoroNet transport soak tests" OFF)
+option(TURBO_FLOW_PROTOCOL_TRANSPORT_SOAK_TESTS
+       "Register scheduled protocol-ingress CoroNet transport soak tests" OFF)
+
+option(ENABLE_SANITIZER_ADDRESS "Enable AddressSanitizer" OFF)
+option(ENABLE_SANITIZER_UNDEFINED "Enable UndefinedBehaviorSanitizer" OFF)
+option(ENABLE_SANITIZER_LEAK "Enable LeakSanitizer" OFF)
+option(ENABLE_SANITIZER_THREAD "Enable ThreadSanitizer" OFF)
+option(ENABLE_SANITIZER_MEMORY "Enable MemorySanitizer (Clang only)" OFF)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)

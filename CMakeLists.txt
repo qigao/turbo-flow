@@ -116,7 +116,8 @@ add_subdirectory(turbo_flow)
   add_subdirectory(observe)
   add_subdirectory(schedule)
   add_subdirectory(io)
-  add_subdirectory(gateway)
+  add_subdirectory(ingress/protocol)
+  add_subdirectory(sink/mqtt)
 
 set(TURBO_FLOW_EXPORT_TARGETS)
 foreach(
@@ -126,14 +127,17 @@ foreach(
      turbo_flow_graph
      turbo_flow_product
      turbo_flow
-     tf_gateway
-     tf_gateway_mqtt_sn
-     tf_gateway_coap
-     tf_gateway_lwm2m
-     tf_gateway_ocpp
-     tf_gateway_gbt32960
-     tf_gateway_jtt808
-     tf_gateway_business_ocpp201_core
+     tf_protocol
+     tf_protocol_graph
+     tf_protocol_coronet
+     tf_protocol_mqtt_sn
+     tf_protocol_coap
+     tf_protocol_lwm2m
+     tf_protocol_ocpp
+     tf_protocol_gbt32960
+     tf_protocol_jtt808
+     tf_protocol_business_ocpp201_core
+     tf_mqtt_sink
      tf_storage_backend
      tf_flow_store
      tf_local_storage

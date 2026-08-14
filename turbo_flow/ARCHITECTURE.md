@@ -399,7 +399,7 @@ provider bytes/frame/view
   -> provider sink or owner settlement
 ```
 
-The graph does not become the owner of a protocol session, socket, MQTT ACK, Redis consumer group,
+The graph does not become the owner of a protocol session, socket, protocol ACK, Redis consumer group,
 or database transaction. Those owners expose typed operations and explicit commit results. A graph
 stage may filter, transform, route, delay, or persist the message only within its registered
 operation contract. FlowStore owns typed Record, State, Index, Log, and TimeSeries facts outside the
@@ -479,7 +479,7 @@ a typed fact-store subsystem rather than an adapter operation.
 ## Build Components
 
 TurboFlow is configured and installed as a graph data-processing product.
-FlowStore, gateways, security, codecs, network and persistence adapters,
+FlowStore, protocol, security, codecs, network and persistence adapters,
 observation, scheduling, and the MIR JIT backend form its repository-owned
 build graph. External protocol products are not producer-side components.
 

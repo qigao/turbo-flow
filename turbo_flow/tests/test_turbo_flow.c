@@ -2433,7 +2433,7 @@ suite("Turbo Flow") {
       *value = 19;
       check_int_eq(turbo_flow_content_descriptor_init(
                        &descriptor, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
-                       TURBO_FLOW_CONTENT_PROFILE_FMQ_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
+                       TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
                        "application/json", "orders.created"),
                    TURBO_OK);
       check_int_eq(turbo_flow_content_descriptor_declare_schema(
@@ -2473,7 +2473,7 @@ suite("Turbo Flow") {
       check_not_null(buffer);
       check_int_eq(turbo_flow_content_descriptor_init(
                        &descriptor, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
-                       TURBO_FLOW_CONTENT_PROFILE_FMQ_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
+                       TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
                        "application/json", "orders.created"),
                    TURBO_OK);
       turbo_flow_msg_init(&src);
@@ -2539,7 +2539,7 @@ suite("Turbo Flow") {
       *matching_value = 3;
       check_int_eq(turbo_flow_content_descriptor_init(
                        &matching_descriptor, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
-                       TURBO_FLOW_CONTENT_PROFILE_FMQ_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
+                       TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
                        "application/json", "orders.created"),
                    TURBO_OK);
       check_int_eq(turbo_flow_content_descriptor_declare_schema(

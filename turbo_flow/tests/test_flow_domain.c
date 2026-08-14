@@ -90,10 +90,15 @@ static int domain_emitting_stage(const turbo_flow_msg_t *input, turbo_flow_emitt
   for (uint32_t i = 0u; i < probe->output_count; ++i) {
     turbo_flow_msg_t output;
     int rc;
-    turbo_flow_msg_init(&output);
+    if (probe->attach_transport_context == 2) {
+      rc = turbo_flow_msg_clone(&output, input);
+      if (rc != TURBO_OK) return rc;
+    } else {
+      turbo_flow_msg_init(&output);
+    }
     output.id = input->id * 10u + i;
     output.type = i;
-    if (probe->attach_transport_context) output.transport_context = &transport_marker;
+    if (probe->attach_transport_context == 1) output.transport_context = &transport_marker;
     rc = turbo_flow_emitter_emit_move(emitter, &output);
     turbo_flow_msg_cleanup(&output);
     if (rc != TURBO_OK && rc != TURBO_ENOSPC) return rc;
@@ -1311,6 +1316,38 @@ suite("Turbo Flow Domain Contracts") {
       turbo_flow_msg_init(&message);
       check_int_eq(turbo_flow_publish(flow, "input", &message), TURBO_ENOTSUP);
       check_uint_eq(probe.sink_count, 0u);
+      turbo_flow_msg_cleanup(&message);
+      check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+      turbo_flow_destroy(flow);
+    }
+
+    it("preserves buffer-owned transport metadata in emitted outputs") {
+      struct owned_message_s {
+        uint8_t payload[3];
+        int transport_marker;
+      } owned = {{1u, 2u, 3u}, 17};
+      turbo_flow_t *flow = turbo_flow_create();
+      emission_probe_t probe;
+      turbo_flow_msg_t message;
+
+      memset(&probe, 0, sizeof(probe));
+      probe.output_count = 1u;
+      probe.attach_transport_context = 2;
+      check_not_null(flow);
+      check_int_eq(register_emitting_graph(flow, &probe, 1u, linear_dsl), TURBO_OK);
+      check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+      check_int_eq(turbo_flow_start(flow), TURBO_OK);
+      turbo_flow_msg_init(&message);
+      message.id = 9u;
+      message.buffer = mem_wrap_external(&owned, sizeof(owned), NULL, NULL);
+      check_not_null(message.buffer);
+      message.payload =
+          tstr_v_from_buf((const char *)owned.payload, sizeof(owned.payload));
+      message.transport_context = &owned.transport_marker;
+      check_int_eq(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+      check_int_eq(probe.emitter_called, 1);
+      check_uint_eq(probe.sink_count, 1u);
+      check_uint_eq(probe.sink_ids[0], 90u);
       turbo_flow_msg_cleanup(&message);
       check_int_eq(turbo_flow_stop(flow), TURBO_OK);
       turbo_flow_destroy(flow);

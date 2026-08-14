@@ -12,6 +12,10 @@
 
 ## 决策
 
+设备协议前端归属仓库可选的 `ingress/protocol` 集成层。它依赖 CoroNet 与
+`TurboFlow::Graph`，且不把 MQTT 作为固定中间格式；MQTT 仅可作为
+Graph 后的可选 Sink。
+
 依赖保持单向：
 
 ```text

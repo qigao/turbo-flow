@@ -170,8 +170,8 @@ static int flow_content_profile_domain_valid(turbo_flow_domain_t domain,
   case TURBO_FLOW_CONTENT_PROFILE_DATABASE_ROWSET:
   case TURBO_FLOW_CONTENT_PROFILE_DATABASE_COMMAND_RESULT:
     return domain == TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE;
-  case TURBO_FLOW_CONTENT_PROFILE_FMQ_DATA:
-  case TURBO_FLOW_CONTENT_PROFILE_FMQ_CONTROL:
+  case TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA:
+  case TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_CONTROL:
   case TURBO_FLOW_CONTENT_PROFILE_MQTT_APPLICATION:
   case TURBO_FLOW_CONTENT_PROFILE_MQTT_CONTROL:
     return domain == TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN;
@@ -209,7 +209,7 @@ int turbo_flow_content_descriptor_check(const turbo_flow_content_descriptor_t *d
     return TURBO_EINVAL;
   }
   if ((descriptor->flags & TURBO_FLOW_CONTENT_PROTOCOL_CONTROL) != 0u &&
-      descriptor->profile != TURBO_FLOW_CONTENT_PROFILE_FMQ_CONTROL &&
+      descriptor->profile != TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_CONTROL &&
       descriptor->profile != TURBO_FLOW_CONTENT_PROFILE_MQTT_CONTROL) {
     return TURBO_EINVAL;
   }

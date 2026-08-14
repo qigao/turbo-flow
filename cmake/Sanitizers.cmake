@@ -1,13 +1,6 @@
 # Sanitizer configuration module
 # Supports: AddressSanitizer, UndefinedBehaviorSanitizer, ThreadSanitizer, LeakSanitizer, MemorySanitizer
 
-# Options for enabling sanitizers
-option(ENABLE_SANITIZER_ADDRESS "Enable AddressSanitizer" OFF)
-option(ENABLE_SANITIZER_UNDEFINED "Enable UndefinedBehaviorSanitizer" OFF)
-option(ENABLE_SANITIZER_LEAK "Enable LeakSanitizer" OFF)
-option(ENABLE_SANITIZER_THREAD "Enable ThreadSanitizer" OFF)
-option(ENABLE_SANITIZER_MEMORY "Enable MemorySanitizer (Clang only)" OFF)
-
 # Global sanitizer setup (applies to all targets)
 if(ENABLE_SANITIZER_ADDRESS OR ENABLE_SANITIZER_UNDEFINED OR ENABLE_SANITIZER_LEAK OR 
    ENABLE_SANITIZER_THREAD OR ENABLE_SANITIZER_MEMORY)

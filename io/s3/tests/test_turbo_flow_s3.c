@@ -373,7 +373,7 @@ spec("turbo_flow_s3") {
                  TURBO_OK);
     check_int_eq(turbo_flow_content_descriptor_init(
                      &incompatible_descriptor, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
-                     TURBO_FLOW_CONTENT_PROFILE_FMQ_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
+                     TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
                      "application/json", "orders.created"),
                  TURBO_OK);
     turbo_flow_msg_init(&incompatible_msg);
