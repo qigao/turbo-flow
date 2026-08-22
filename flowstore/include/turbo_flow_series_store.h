@@ -56,26 +56,26 @@ typedef struct turbo_flow_series_config_s {
   {sizeof(turbo_flow_series_config_t), TURBO_FLOW_STORE_ABI_VERSION, TURBO_FLOW_STORE_LIMITS_INIT, \
    TURBO_FLOW_SERIES_DUPLICATE_REJECT}
 
-CXX_C_API int turbo_flow_series_store_create_memory(const turbo_flow_series_config_t *config,
+TURBO_FLOW_C_API int turbo_flow_series_store_create_memory(const turbo_flow_series_config_t *config,
                                                     turbo_flow_series_store_t **out);
-CXX_C_API int turbo_flow_series_store_close(turbo_flow_series_store_t *store);
-CXX_C_API void turbo_flow_series_store_destroy(turbo_flow_series_store_t *store);
-CXX_C_API int turbo_flow_series_store_append(turbo_flow_series_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_series_store_close(turbo_flow_series_store_t *store);
+TURBO_FLOW_C_API void turbo_flow_series_store_destroy(turbo_flow_series_store_t *store);
+TURBO_FLOW_C_API int turbo_flow_series_store_append(turbo_flow_series_store_t *store,
                                              turbo_flow_store_bytes_t series,
                                              const turbo_flow_series_sample_t *sample);
-CXX_C_API int turbo_flow_series_store_range(turbo_flow_series_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_series_store_range(turbo_flow_series_store_t *store,
                                             turbo_flow_store_bytes_t series, uint64_t start_ms,
                                             uint64_t end_ms, turbo_flow_series_sample_t *samples,
                                             size_t capacity, size_t *count);
-CXX_C_API int turbo_flow_series_store_aggregate(turbo_flow_series_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_series_store_aggregate(turbo_flow_series_store_t *store,
                                                 turbo_flow_store_bytes_t series, uint64_t start_ms,
                                                 uint64_t end_ms,
                                                 turbo_flow_series_aggregate_t aggregate,
                                                 double *value, size_t *sample_count);
-CXX_C_API int turbo_flow_series_store_trim_before(turbo_flow_series_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_series_store_trim_before(turbo_flow_series_store_t *store,
                                                   turbo_flow_store_bytes_t series,
                                                   uint64_t timestamp_ms, size_t *trimmed);
-CXX_C_API int turbo_flow_series_store_stats(const turbo_flow_series_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_series_store_stats(const turbo_flow_series_store_t *store,
                                             turbo_flow_store_stats_t *out);
 
 #ifdef __cplusplus

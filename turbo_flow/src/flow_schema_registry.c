@@ -1,7 +1,7 @@
 #include "turbo_flow.h"
 
 #include "turbo_thread.h"
-#include "turbo_vec.h"
+#include "turbo_flow_stl_adapter.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -138,9 +138,9 @@ int turbo_flow_content_descriptor_declare_schema(turbo_flow_content_descriptor_t
 typedef struct flow_schema_registry_entry_s {
   turbo_flow_content_descriptor_t match;
   turbo_flow_data_schema_t schema;
-  tstr_t schema_name;
-  tstr_t type_name;
-  tstr_t projection_type;
+  tstr schema_name;
+  tstr type_name;
+  tstr projection_type;
 } flow_schema_registry_entry_t;
 
 struct turbo_flow_schema_registry_s {

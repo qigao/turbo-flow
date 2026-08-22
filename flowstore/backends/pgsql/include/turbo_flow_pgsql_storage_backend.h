@@ -22,7 +22,7 @@ typedef struct turbo_flow_pgsql_storage_backend_options_s {
    TURBO_FLOW_PGSQL_STORAGE_BACKEND_OPTIONS_VERSION, NULL}
 
 /** Return PostgreSQL's limited RECORD storage backend function table. */
-CXX_C_API const turbo_flow_storage_backend_plugin_api_t *
+TURBO_FLOW_C_API const turbo_flow_storage_backend_plugin_api_t *
 turbo_flow_pgsql_storage_backend_api(void);
 
 #ifdef __cplusplus

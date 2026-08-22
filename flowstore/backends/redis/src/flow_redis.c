@@ -6,10 +6,8 @@
 #include "flow_connection.h"
 #include "flow_timer.h"
 #include "redis_client.h"
-#include "turbo_hash.h"
-#include "turbo_heap.h"
+#include "turbo_flow_stl_adapter.h"
 #include "turbo_thread.h"
-#include "turbo_vec.h"
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -37,12 +35,12 @@ typedef enum flow_redis_transport_mode_e {
 } flow_redis_transport_mode_t;
 
 typedef struct flow_redis_adapter_s {
-  tstr_t stream;
-  tstr_t field;
-  tstr_t group;
-  tstr_t consumer;
-  tstr_t group_start_id;
-  tstr_t key;
+  tstr stream;
+  tstr field;
+  tstr group;
+  tstr consumer;
+  tstr group_start_id;
+  tstr key;
   flow_redis_adapter_mode_t mode;
   size_t max_value_size;
   size_t record_max_key_size;
@@ -71,7 +69,7 @@ typedef struct flow_redis_adapter_s {
   atomic_int quiesced;
   tf_connection_state_t connection;
   turbo_flow_t *flow;
-  tstr_t source_name;
+  tstr source_name;
 } flow_redis_adapter_t;
 
 typedef struct flow_redis_claim_record_s {
@@ -80,8 +78,8 @@ typedef struct flow_redis_claim_record_s {
   int ambiguous_ack;
   uint64_t token;
   uint64_t order;
-  tstr_t id;
-  tstr_t payload;
+  tstr id;
+  tstr payload;
 } flow_redis_claim_record_t;
 
 static int flow_redis_claim_order_compare(const void *left, const void *right, void *ctx) {
@@ -95,10 +93,10 @@ static int flow_redis_claim_order_compare(const void *left, const void *right, v
   return 0;
 }
 
-TURBO_VEC_DEFINE(flow_redis_claim_records, flow_redis_claim_record_t)
-TURBO_VEC_DEFINE(flow_redis_claim_slots, size_t)
-TURBO_HASH_MAP_DEFINE(flow_redis_claim_index, uint64_t, size_t)
-TURBO_HEAP_DEFINE(flow_redis_requeued, flow_redis_claim_record_t *, flow_redis_claim_order_compare)
+TURBO_FLOW_VEC_DEFINE(flow_redis_claim_records, flow_redis_claim_record_t)
+TURBO_FLOW_VEC_DEFINE(flow_redis_claim_slots, size_t)
+TURBO_FLOW_HASH_MAP_DEFINE(flow_redis_claim_index, uint64_t, size_t)
+TURBO_FLOW_HEAP_DEFINE(flow_redis_requeued, flow_redis_claim_record_t *, flow_redis_claim_order_compare)
 
 struct turbo_flow_redis_stream_owner_s {
   flow_redis_adapter_t *adapter;
@@ -106,7 +104,7 @@ struct turbo_flow_redis_stream_owner_s {
   flow_redis_claim_slots free_slots;
   flow_redis_claim_index claim_index;
   flow_redis_requeued requeued;
-  tstr_t replay_cursor;
+  tstr replay_cursor;
   size_t max_active_claims;
   size_t active_claims;
   uint64_t claim_generation;
@@ -159,7 +157,7 @@ typedef struct flow_redis_task_s {
   void *command_apply_ctx;
   redis_stream_result_t *results;
   size_t result_count;
-  tstr_t response;
+  tstr response;
   redis_command_outcome_t outcome;
   redis_server_error_t server_error;
   int present;
@@ -694,7 +692,7 @@ static int flow_redis_publish_results(flow_redis_adapter_t *adapter, flow_redis_
           rc = TURBO_ENOMEM;
           break;
         }
-        msg.payload = tstr_v_from_buf(payload, payload_len);
+        msg.payload = vstr_from_buf(payload, payload_len);
       }
       rc = turbo_flow_publish(adapter->flow, adapter->source_name, &msg);
       turbo_flow_msg_cleanup(&msg);
@@ -1224,7 +1222,7 @@ int turbo_flow_redis_stream_owner_claim(turbo_flow_redis_stream_owner_t *owner,
     if (slot >= owner->max_active_claims || !record->occupied || record->active)
       return TURBO_EPROTO;
   } else {
-    tstr_t next_cursor = NULL;
+    tstr next_cursor = NULL;
     if (!flow_redis_claim_slots_pop(&owner->free_slots, &slot)) return TURBO_EPROTO;
     record = flow_redis_claim_records_at(&owner->records, slot);
     if (!record || record->occupied) {
@@ -1716,7 +1714,7 @@ void turbo_flow_redis_blob_store_destroy(turbo_flow_blob_store_t *store) {
 }
 
 static size_t flow_redis_record_key_hash(const void *key, size_t key_size, void *ctx) {
-  const tstr_v *view = (const tstr_v *)key;
+  const vstr *view = (const vstr *)key;
   (void)key_size;
   (void)ctx;
   return turbo_hash_bytes(view->data, view->len, NULL);
@@ -1724,8 +1722,8 @@ static size_t flow_redis_record_key_hash(const void *key, size_t key_size, void 
 
 static bool flow_redis_record_key_equal(const void *left, const void *right, size_t key_size,
                                         void *ctx) {
-  const tstr_v *a = (const tstr_v *)left;
-  const tstr_v *b = (const tstr_v *)right;
+  const vstr *a = (const vstr *)left;
+  const vstr *b = (const vstr *)right;
   (void)key_size;
   (void)ctx;
   return a->len == b->len && (a->len == 0u || memcmp(a->data, b->data, a->len) == 0);
@@ -1741,7 +1739,7 @@ static int flow_redis_record_mutations_validate(flow_redis_adapter_t *adapter,
   turbo_hash_map_clear(&adapter->record_mutation_keys);
   for (size_t i = 0u; i < mutation_count; ++i) {
     const turbo_flow_record_mutation_t *mutation = &mutations[i];
-    tstr_v key;
+    vstr key;
     int rc;
     if (mutation->size < sizeof(*mutation) || !mutation->key || mutation->key_size == 0u ||
         mutation->key_size > adapter->record_max_key_size ||
@@ -1761,7 +1759,7 @@ static int flow_redis_record_mutations_validate(flow_redis_adapter_t *adapter,
     } else {
       return TURBO_EINVAL;
     }
-    key = tstr_v_from_buf((const char *)mutation->key, mutation->key_size);
+    key = vstr_from_buf((const char *)mutation->key, mutation->key_size);
     if (turbo_hash_map_contains(&adapter->record_mutation_keys, &key)) return TURBO_EINVAL;
     rc = turbo_hash_map_put(&adapter->record_mutation_keys, &key, &present);
     if (rc != TURBO_OK) return rc;
@@ -1916,7 +1914,7 @@ int flow_redis_record_store_create(const turbo_flow_redis_record_store_config_t 
   adapter->max_value_size = max_value_size;
   adapter->record_max_batch_size = max_batch_size;
   adapter->record_max_records = config->max_records;
-  rc = turbo_hash_map_init(&adapter->record_mutation_keys, sizeof(tstr_v), sizeof(uint8_t),
+  rc = turbo_hash_map_init(&adapter->record_mutation_keys, sizeof(vstr), sizeof(uint8_t),
                            flow_redis_record_key_hash, flow_redis_record_key_equal, NULL);
   if (rc == TURBO_OK) {
     adapter->record_mutation_keys_initialized = 1;

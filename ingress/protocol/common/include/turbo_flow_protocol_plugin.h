@@ -47,13 +47,13 @@ typedef struct turbo_flow_protocol_codec_ops_s {
  * retains borrowed ctx until destroy. Concurrent ingress/egress is supported when inspect is
  * thread-safe. destroy must not race with a data-path call.
  */
-CXX_C_API int turbo_flow_protocol_create(
+TURBO_FLOW_C_API int turbo_flow_protocol_create(
     const turbo_flow_protocol_open_request_t *request, const char *protocol_name,
     const char *default_protocol_version,
     turbo_flow_protocol_capabilities_t capabilities,
     const turbo_flow_protocol_codec_ops_t *ops, void *ctx,
     turbo_flow_protocol_t **out);
-CXX_C_API void turbo_flow_protocol_destroy(turbo_flow_protocol_t *protocol);
+TURBO_FLOW_C_API void turbo_flow_protocol_destroy(turbo_flow_protocol_t *protocol);
 
 #ifdef __cplusplus
 }

@@ -46,7 +46,7 @@ typedef struct turbo_flow_s3_config_s {
  * Sink mode validates input content before uploading it with PutObject. Periodic source mode
  * obtains actual object Content-Type with StatObject, then downloads and publishes the bytes.
  */
-CXX_C_API int turbo_flow_s3_register_client_adapter(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_s3_register_client_adapter(turbo_flow_t *flow, const char *name,
                                                     const turbo_flow_s3_config_t *config);
 
 #ifdef __cplusplus

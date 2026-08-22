@@ -60,7 +60,7 @@ static int s3_capture(turbo_flow_msg_t *msg, void *ctx) {
 
 static int s3_static_response(turbo_flow_msg_t *msg, void *ctx) {
   const char *body = (const char *)ctx;
-  tstr_t payload;
+  tstr payload;
   if (!msg || !body) return TURBO_EINVAL;
   payload = tstr_dup(body);
   if (!payload) return TURBO_ENOMEM;
@@ -133,44 +133,44 @@ spec("turbo_flow_s3") {
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBind *codec = NULL;
     DataBindValue *value = NULL;
-    tstr_t payload = NULL;
+    tstr payload = NULL;
     int32_t last_status = 0;
     turbo_flow_t *flow = turbo_flow_create();
 
     check_not_null(flow);
-    check_int_eq(turbo_flow_s3_register_client_adapter(flow, "s3.private", &config), TURBO_OK);
-    check_size_eq(turbo_flow_resource_metadata_count(flow), 1u);
-    check_int_eq(turbo_flow_resource_metadata_at(flow, 0u, &before), TURBO_OK);
-    check_str_eq(before.uid, "s3:s3.private");
-    check_str_eq(before.owner_name, "s3.private");
-    check_int_eq(before.domain, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE);
-    check_int_eq(before.kind, TURBO_FLOW_RESOURCE_CONNECTION);
-    check_int_eq(turbo_flow_resource_document_at(
+    check_equal(turbo_flow_s3_register_client_adapter(flow, "s3.private", &config), TURBO_OK);
+    check_equal(turbo_flow_resource_metadata_count(flow), 1u);
+    check_equal(turbo_flow_resource_metadata_at(flow, 0u, &before), TURBO_OK);
+    check_equal(before.uid, "s3:s3.private");
+    check_equal(before.owner_name, "s3.private");
+    check_equal(before.domain, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE);
+    check_equal(before.kind, TURBO_FLOW_RESOURCE_CONNECTION);
+    check_equal(turbo_flow_resource_document_at(
                      flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
                  TURBO_OK);
-    check_str_eq(document.schema->schema_name, "TurboFlowS3Resource");
-    check_str_eq(document.schema->type_name, "S3ClientStatus");
-    check_uint_eq(document.schema->schema_id, 201u);
-    check_uint_eq(document.schema->schema_version, 1u);
-    check_int_eq(turbo_flow_resource_document_validate(&document, document.schema), TURBO_OK);
+    check_equal(document.schema->schema_name, "TurboFlowS3Resource");
+    check_equal(document.schema->type_name, "S3ClientStatus");
+    check_equal(document.schema->schema_id, 201u);
+    check_equal(document.schema->schema_version, 1u);
+    check_equal(turbo_flow_resource_document_validate(&document, document.schema), TURBO_OK);
     {
       turbo_flow_resource_schema_t unknown = *document.schema;
       unknown.schema_id = 999u;
-      check_int_eq(turbo_flow_resource_document_validate(&document, &unknown), TURBO_EPROTO);
+      check_equal(turbo_flow_resource_document_validate(&document, &unknown), TURBO_EPROTO);
     }
-    check_int_eq(data_bind_create_from_text(document.schema->schema_text,
+    check_equal(data_bind_create_from_text(document.schema->schema_text,
                                             strlen(document.schema->schema_text), &codec, &error),
                  DATA_BIND_OK);
-    check_int_eq(data_bind_parse_json(codec, document.schema->type_name,
+    check_equal(data_bind_parse_json(codec, document.schema->type_name,
                                       mem_buffer_const_data(document.payload),
                                       mem_buffer_used(document.payload), &value, &error),
                  DATA_BIND_OK);
-    check_int_eq(data_bind_validate_json(
+    check_equal(data_bind_validate_json(
                      codec, document.schema->type_name,
                      "{\"state\":0,\"last_status\":-1}",
                      sizeof("{\"state\":0,\"last_status\":-1}") - 1u, &error),
                  DATA_BIND_ERR_TYPE_MISMATCH);
-    check_int_eq(data_bind_validate_json(
+    check_equal(data_bind_validate_json(
                      codec, document.schema->type_name,
                      "{\"state\":\"bad\",\"last_status\":-1,"
                      "\"connections_current\":\"0\",\"connection_limit\":\"1\","
@@ -181,10 +181,10 @@ spec("turbo_flow_s3") {
                          1u,
                      &error),
                  DATA_BIND_ERR_TYPE_MISMATCH);
-    check_int_eq(data_bind_value_get_int32(data_bind_value_get(value, "last_status"),
+    check_equal(data_bind_value_get_int32(data_bind_value_get(value, "last_status"),
                                            &last_status),
                  DATA_BIND_OK);
-    check_int_eq(last_status, TURBO_ENOTCONN);
+    check_equal(last_status, TURBO_ENOTCONN);
     payload = tstr_new_len(mem_buffer_const_data(document.payload),
                            mem_buffer_used(document.payload));
     check_not_null(payload);
@@ -192,9 +192,9 @@ spec("turbo_flow_s3") {
     check_null(strstr(payload, config.secret_key));
     check_null(strstr(payload, config.bucket));
     check_null(strstr(payload, config.object));
-    check_int_eq(turbo_flow_resource_metadata_at(flow, 0u, &after), TURBO_OK);
-    check_size_eq(after.generation, before.generation);
-    check_size_eq(after.observed_generation, before.observed_generation);
+    check_equal(turbo_flow_resource_metadata_at(flow, 0u, &after), TURBO_OK);
+    check_equal(after.generation, before.generation);
+    check_equal(after.observed_generation, before.observed_generation);
 
     tstr_freep(&payload);
     data_bind_value_free(value);
@@ -208,20 +208,20 @@ spec("turbo_flow_s3") {
     turbo_flow_s3_config_t config = s3_test_config();
     const turbo_flow_adapter_schema_t *schema;
     check_not_null(flow);
-    check_int_eq(turbo_flow_s3_register_client_adapter(flow, "store", &config), TURBO_OK);
+    check_equal(turbo_flow_s3_register_client_adapter(flow, "store", &config), TURBO_OK);
     schema = turbo_flow_find_adapter_schema(flow, "store");
     check_not_null(schema);
-    check_int_eq(schema->kind, TURBO_FLOW_ADAPTER_KIND_S3);
-    check_int_eq(schema->roles, TURBO_FLOW_ADAPTER_SINK);
-    check_int_eq(schema->direction, TURBO_FLOW_ADAPTER_OUTPUT);
+    check_equal(schema->kind, TURBO_FLOW_ADAPTER_KIND_S3);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SINK);
+    check_equal(schema->direction, TURBO_FLOW_ADAPTER_OUTPUT);
     {
       turbo_flow_connection_snapshot_t connection;
-      check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0u, &connection), TURBO_OK);
-      check_str_eq(connection.adapter_name, "store");
-      check_str_eq(connection.endpoint, "http://127.0.0.1:9000/flow-test/message.bin");
-      check_int_eq(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-      check_uint_eq(connection.connections_current, 0u);
-      check_uint_eq(connection.connection_limit, 1u);
+      check_equal(turbo_flow_adapter_connection_snapshot_at(flow, 0u, &connection), TURBO_OK);
+      check_equal(connection.adapter_name, "store");
+      check_equal(connection.endpoint, "http://127.0.0.1:9000/flow-test/message.bin");
+      check_equal(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+      check_equal(connection.connections_current, 0u);
+      check_equal(connection.connection_limit, 1u);
     }
     turbo_flow_destroy(flow);
   }
@@ -237,14 +237,14 @@ spec("turbo_flow_s3") {
     const turbo_flow_adapter_schema_t *schema;
     check_not_null(flow);
     config.poll_interval_ms = 100;
-    check_int_eq(turbo_flow_s3_register_client_adapter(flow, "s3.client.poll", &config), TURBO_OK);
+    check_equal(turbo_flow_s3_register_client_adapter(flow, "s3.client.poll", &config), TURBO_OK);
     schema = turbo_flow_find_adapter_schema(flow, "s3.client.poll");
     check_not_null(schema);
-    check_int_eq(schema->roles, TURBO_FLOW_ADAPTER_SOURCE);
-    check_int_eq(schema->direction, TURBO_FLOW_ADAPTER_INPUT);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "capture", s3_noop, NULL, NULL), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SOURCE);
+    check_equal(schema->direction, TURBO_FLOW_ADAPTER_INPUT);
+    check_equal(turbo_flow_register_stage_ex(flow, "capture", s3_noop, NULL, NULL), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -260,7 +260,7 @@ spec("turbo_flow_s3") {
     config.content_binding = &binding;
     flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_s3_register_client_adapter(flow, "s3.opaque", &config), TURBO_OK);
+    check_equal(turbo_flow_s3_register_client_adapter(flow, "s3.opaque", &config), TURBO_OK);
     turbo_flow_destroy(flow);
 
     binding.schema.schema_name = "s3.objects";
@@ -268,7 +268,7 @@ spec("turbo_flow_s3") {
     binding.schema.schema_version = 1u;
     flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_s3_register_client_adapter(flow, "s3.declared", &config), TURBO_EPROTO);
+    check_equal(turbo_flow_s3_register_client_adapter(flow, "s3.declared", &config), TURBO_EPROTO);
     turbo_flow_destroy(flow);
     turbo_flow_schema_registry_destroy(registry);
   }
@@ -278,7 +278,7 @@ spec("turbo_flow_s3") {
     turbo_flow_s3_config_t config = s3_test_config();
     check_not_null(flow);
     config.secret_key = NULL;
-    check_int_eq(turbo_flow_s3_register_client_adapter(flow, "store", &config), TURBO_EINVAL);
+    check_equal(turbo_flow_s3_register_client_adapter(flow, "store", &config), TURBO_EINVAL);
     turbo_flow_destroy(flow);
   }
 
@@ -289,15 +289,15 @@ spec("turbo_flow_s3") {
     turbo_flow_connection_snapshot_t connection;
     check_not_null(flow);
     config.use_https = 1;
-    check_int_eq(turbo_flow_s3_register_client_adapter(flow, "secure", &config), TURBO_OK);
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0u, &connection), TURBO_OK);
-    check_str_eq(connection.endpoint, "https://127.0.0.1:9000/flow-test/message.bin");
+    check_equal(turbo_flow_s3_register_client_adapter(flow, "secure", &config), TURBO_OK);
+    check_equal(turbo_flow_adapter_connection_snapshot_at(flow, 0u, &connection), TURBO_OK);
+    check_equal(connection.endpoint, "https://127.0.0.1:9000/flow-test/message.bin");
     check_false(strstr(connection.endpoint, config.access_key) != NULL);
     check_false(strstr(connection.endpoint, config.secret_key) != NULL);
     memset(oversized_object, 'x', sizeof(oversized_object) - 1u);
     oversized_object[sizeof(oversized_object) - 1u] = '\0';
     config.object = oversized_object;
-    check_int_eq(turbo_flow_s3_register_client_adapter(flow, "oversized", &config), TURBO_ENOSPC);
+    check_equal(turbo_flow_s3_register_client_adapter(flow, "oversized", &config), TURBO_ENOSPC);
     turbo_flow_destroy(flow);
   }
 
@@ -329,7 +329,7 @@ spec("turbo_flow_s3") {
     turbo_flow_error_t error;
     s3_capture_t capture;
 
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     check_not_null(observe);
     memset(&capture, 0, sizeof(capture));
     atomic_init(&capture.called, 0);
@@ -337,26 +337,26 @@ spec("turbo_flow_s3") {
     server_config.port = port;
     server_config.route = "/flow-test/message.bin";
     server_config.method = TURBO_FLOW_HTTP_PUT;
-    check_int_eq(turbo_flow_http_register_server_adapter(server_flow, "api", &server_config),
+    check_equal(turbo_flow_http_register_server_adapter(server_flow, "api", &server_config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(server_flow, "capture", s3_capture, &capture, NULL),
+    check_equal(turbo_flow_register_stage_ex(server_flow, "capture", s3_capture, &capture, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(server_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(server_flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(server_flow), TURBO_OK);
+    check_equal(turbo_flow_start(server_flow), TURBO_OK);
 
     config.port = port;
-    check_int_eq(turbo_flow_s3_register_client_adapter(client_flow, "s3.client.put", &config),
+    check_equal(turbo_flow_s3_register_client_adapter(client_flow, "s3.client.put", &config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_observe_attach(observe, client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_observe_graph_snapshot(observe, &graph), TURBO_OK);
-    check_uint_eq(graph.connection_providers, 1u);
-    check_uint_eq(graph.connections_current, 0u);
-    check_int_eq(turbo_flow_observe_control_facts(observe, &facts_snapshot, &facts), TURBO_OK);
-    check_int_eq(turbo_flow_control_ex(
+    check_equal(turbo_flow_observe_attach(observe, client_flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(client_flow), TURBO_OK);
+    check_equal(turbo_flow_start(client_flow), TURBO_OK);
+    check_equal(turbo_flow_observe_graph_snapshot(observe, &graph), TURBO_OK);
+    check_equal(graph.connection_providers, 1u);
+    check_equal(graph.connections_current, 0u);
+    check_equal(turbo_flow_observe_control_facts(observe, &facts_snapshot, &facts), TURBO_OK);
+    check_equal(turbo_flow_control_ex(
                      client_flow,
                      "when graph.connection_providers == 1 then adapter s3.client.put quiesce",
                      sizeof("when graph.connection_providers == 1 then adapter "
@@ -367,11 +367,11 @@ spec("turbo_flow_s3") {
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup(body);
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_publish(client_flow, "input", &msg), TURBO_EBUSY);
-    check_int_eq(turbo_flow_control(client_flow, "adapter s3.client.put resume",
+    check_equal(turbo_flow_publish(client_flow, "input", &msg), TURBO_EBUSY);
+    check_equal(turbo_flow_control(client_flow, "adapter s3.client.put resume",
                                     sizeof("adapter s3.client.put resume") - 1u),
                  TURBO_OK);
-    check_int_eq(turbo_flow_content_descriptor_init(
+    check_equal(turbo_flow_content_descriptor_init(
                      &incompatible_descriptor, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
                      TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
                      "application/json", "orders.created"),
@@ -379,43 +379,43 @@ spec("turbo_flow_s3") {
     turbo_flow_msg_init(&incompatible_msg);
     incompatible_msg.owned_payload = tstr_dup("{}");
     incompatible_msg.payload = tstr_to_v(incompatible_msg.owned_payload);
-    check_int_eq(turbo_flow_msg_set_content_descriptor(&incompatible_msg, &incompatible_descriptor),
+    check_equal(turbo_flow_msg_set_content_descriptor(&incompatible_msg, &incompatible_descriptor),
                  TURBO_OK);
-    check_int_eq(turbo_flow_publish(client_flow, "input", &incompatible_msg), TURBO_EPROTO);
-    check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 0);
+    check_equal(turbo_flow_publish(client_flow, "input", &incompatible_msg), TURBO_EPROTO);
+    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 0);
     turbo_flow_msg_cleanup(&incompatible_msg);
 
-    check_int_eq(turbo_flow_publish(client_flow, "input", &msg), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
-    check_size_eq(capture.payload_len, sizeof(body) - 1);
-    check_mem_eq(capture.payload, body, sizeof(body) - 1);
-    check_int_eq(capture.profile, TURBO_FLOW_CONTENT_PROFILE_HTTP_REQUEST_BODY);
-    check_int_eq(capture.encoding, TURBO_FLOW_DATA_ENCODING_OPAQUE);
-    check_str_eq(capture.identity, "/flow-test/message.bin");
+    check_equal(turbo_flow_publish(client_flow, "input", &msg), TURBO_OK);
+    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
+    check_equal(capture.payload_len, sizeof(body) - 1);
+    check_equal(capture.payload, body, sizeof(body) - 1);
+    check_equal(capture.profile, TURBO_FLOW_CONTENT_PROFILE_HTTP_REQUEST_BODY);
+    check_equal(capture.encoding, TURBO_FLOW_DATA_ENCODING_OPAQUE);
+    check_equal(capture.identity, "/flow-test/message.bin");
     {
       turbo_flow_connection_snapshot_t connection;
-      check_int_eq(turbo_flow_adapter_connection_snapshot_at(client_flow, 0u, &connection),
+      check_equal(turbo_flow_adapter_connection_snapshot_at(client_flow, 0u, &connection),
                    TURBO_OK);
-      check_int_eq(connection.state, TURBO_FLOW_CONNECTION_READY);
-      check_uint_eq(connection.connections_current, 0u);
-      check_uint_eq(connection.in_flight_messages, 0u);
-      check_uint_eq(connection.in_flight_bytes, 0u);
-      check_int_eq(connection.last_status, TURBO_OK);
+      check_equal(connection.state, TURBO_FLOW_CONNECTION_READY);
+      check_equal(connection.connections_current, 0u);
+      check_equal(connection.in_flight_messages, 0u);
+      check_equal(connection.in_flight_bytes, 0u);
+      check_equal(connection.last_status, TURBO_OK);
     }
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(client_flow), TURBO_OK);
+    check_equal(turbo_flow_stop(client_flow), TURBO_OK);
     {
       turbo_flow_connection_snapshot_t connection;
-      check_int_eq(turbo_flow_adapter_connection_snapshot_at(client_flow, 0u, &connection),
+      check_equal(turbo_flow_adapter_connection_snapshot_at(client_flow, 0u, &connection),
                    TURBO_OK);
-      check_int_eq(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-      check_int_eq(connection.last_status, TURBO_ESHUTDOWN);
+      check_equal(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+      check_equal(connection.last_status, TURBO_ESHUTDOWN);
     }
-    check_int_eq(turbo_flow_stop(server_flow), TURBO_OK);
-    check_int_eq(turbo_flow_observe_detach(observe), TURBO_OK);
+    check_equal(turbo_flow_stop(server_flow), TURBO_OK);
+    check_equal(turbo_flow_observe_detach(observe), TURBO_OK);
     turbo_flow_destroy(client_flow);
     turbo_flow_destroy(server_flow);
-    check_int_eq(turbo_flow_observe_destroy(observe), TURBO_OK);
+    check_equal(turbo_flow_observe_destroy(observe), TURBO_OK);
   }
 
   it("publishes periodic GetObject responses") {
@@ -451,7 +451,7 @@ spec("turbo_flow_s3") {
     s3_capture_t capture;
     iris_app_t *app = iris_app_create();
 
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     check_not_null(registry);
     check_not_null(app);
     memset(&capture, 0, sizeof(capture));
@@ -463,50 +463,50 @@ spec("turbo_flow_s3") {
     server_config.app = app;
     server_config.take_app_ownership = 1;
     iris_app_route(app, "HEAD", server_config.route, NO_MW, s3_stat_response);
-    check_int_eq(turbo_flow_http_register_server_adapter(server_flow, "api", &server_config),
+    check_equal(turbo_flow_http_register_server_adapter(server_flow, "api", &server_config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(server_flow, "provide", s3_static_response,
+    check_equal(turbo_flow_register_stage_ex(server_flow, "provide", s3_static_response,
                                               (void *)body, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(server_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(server_flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(server_flow), TURBO_OK);
+    check_equal(turbo_flow_start(server_flow), TURBO_OK);
 
     config.port = port;
     config.poll_interval_ms = 20;
     config.content_type = "application/octet-stream";
-    check_int_eq(turbo_flow_content_descriptor_init(&match, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE,
+    check_equal(turbo_flow_content_descriptor_init(&match, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE,
                                                     TURBO_FLOW_CONTENT_PROFILE_S3_OBJECT,
                                                     TURBO_FLOW_DATA_ENCODING_JSON,
                                                     "application/json", NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_schema_registry_register(registry, &match, &schema), TURBO_OK);
+    check_equal(turbo_flow_schema_registry_register(registry, &match, &schema), TURBO_OK);
     binding.registry = registry;
     binding.schema.schema_name = schema.schema_name;
     binding.schema.type_name = schema.type_name;
     binding.schema.schema_version = schema.schema_version;
     config.content_binding = &binding;
-    check_int_eq(turbo_flow_s3_register_client_adapter(client_flow, "s3.client.poll", &config),
+    check_equal(turbo_flow_s3_register_client_adapter(client_flow, "s3.client.poll", &config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(client_flow, "capture", s3_capture, &capture, NULL),
+    check_equal(turbo_flow_register_stage_ex(client_flow, "capture", s3_capture, &capture, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(client_flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(client_flow), TURBO_OK);
+    check_equal(turbo_flow_start(client_flow), TURBO_OK);
     for (int i = 0; i < 200 && atomic_load_explicit(&capture.called, memory_order_acquire) == 0;
          ++i) {
       turbo_sleep_ms(10);
     }
-    check_int_gt(atomic_load_explicit(&capture.called, memory_order_acquire), 0);
-    check_size_eq(capture.payload_len, sizeof(body) - 1);
-    check_mem_eq(capture.payload, body, sizeof(body) - 1);
-    check_int_eq(capture.profile, TURBO_FLOW_CONTENT_PROFILE_S3_OBJECT);
-    check_int_eq(capture.encoding, TURBO_FLOW_DATA_ENCODING_JSON);
-    check_str_eq(capture.identity, "flow-test/message.bin");
-    check_str_eq(capture.schema_name, "s3.objects");
-    check_uint_eq(capture.schema_version, 2u);
-    check_int_eq(turbo_flow_stop(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_stop(server_flow), TURBO_OK);
+    check_greater(atomic_load_explicit(&capture.called, memory_order_acquire), 0);
+    check_equal(capture.payload_len, sizeof(body) - 1);
+    check_equal(capture.payload, body, sizeof(body) - 1);
+    check_equal(capture.profile, TURBO_FLOW_CONTENT_PROFILE_S3_OBJECT);
+    check_equal(capture.encoding, TURBO_FLOW_DATA_ENCODING_JSON);
+    check_equal(capture.identity, "flow-test/message.bin");
+    check_equal(capture.schema_name, "s3.objects");
+    check_equal(capture.schema_version, 2u);
+    check_equal(turbo_flow_stop(client_flow), TURBO_OK);
+    check_equal(turbo_flow_stop(server_flow), TURBO_OK);
     turbo_flow_destroy(client_flow);
     turbo_flow_destroy(server_flow);
     turbo_flow_schema_registry_destroy(registry);

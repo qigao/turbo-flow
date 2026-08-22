@@ -158,8 +158,8 @@ static int flow_pgsql_csv_column_names_valid(const PGresult *result, int fields)
   return 1;
 }
 
-static int flow_pgsql_csv_append_raw(tstr_t *csv, const char *data, size_t len, size_t max_bytes) {
-  tstr_t next;
+static int flow_pgsql_csv_append_raw(tstr *csv, const char *data, size_t len, size_t max_bytes) {
+  tstr next;
   if (!csv || !*csv || (!data && len > 0u)) return TURBO_EINVAL;
   if (tstr_len(*csv) > max_bytes || len > max_bytes - tstr_len(*csv)) return TURBO_EFBIG;
   next = tstr_cat_len(*csv, data ? data : "", len);
@@ -168,7 +168,7 @@ static int flow_pgsql_csv_append_raw(tstr_t *csv, const char *data, size_t len, 
   return TURBO_OK;
 }
 
-static int flow_pgsql_csv_append_cell(tstr_t *csv, const char *data, size_t len, size_t max_bytes) {
+static int flow_pgsql_csv_append_cell(tstr *csv, const char *data, size_t len, size_t max_bytes) {
   int quote = 0;
   if (!csv || !*csv || (!data && len > 0u)) return TURBO_EINVAL;
   for (size_t i = 0; i < len; ++i) {
@@ -192,10 +192,10 @@ static int flow_pgsql_csv_append_cell(tstr_t *csv, const char *data, size_t len,
 }
 
 static int flow_pgsql_result_to_csv(PGresult *result, size_t max_rows, size_t max_result_bytes,
-                                    tstr_t *out) {
+                                    tstr *out) {
   int rows = PQntuples(result);
   int fields = PQnfields(result);
-  tstr_t csv;
+  tstr csv;
   int rc = TURBO_OK;
   if (rows < 0 || fields <= 0 || fields > FLOW_PGSQL_MAX_COLUMNS || (size_t)rows > max_rows) {
     return fields > FLOW_PGSQL_MAX_COLUMNS || (size_t)rows > max_rows ? TURBO_ENOSPC : TURBO_EPROTO;
@@ -315,7 +315,7 @@ int flow_pgsql_result_to_message(PGresult *result, const char *statement_name, s
   const char *media_type = NULL;
   char *json = NULL;
   size_t len = 0;
-  tstr_t payload = NULL;
+  tstr payload = NULL;
   int rc;
   if (!result || !statement_name || !statement_name[0] || !rowset_descriptor ||
       !command_descriptor || !msg || max_rows == 0u || max_result_bytes == 0u ||

@@ -27,7 +27,7 @@ add_library(tf_http_client SHARED
     ALIAS TurboFlow::HttpClient
     FOLDER "io/http/client"
     EXPORT_NAME HttpClient)
-  target_compile_definitions(tf_http_client PRIVATE SHARED_CXX)
+  target_compile_definitions(tf_http_client PRIVATE TURBO_FLOW_BUILD)
   target_include_directories(
     tf_http_client PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                           $<INSTALL_INTERFACE:include>)
@@ -35,7 +35,7 @@ add_library(tf_http_client SHARED
     tf_http_client
     PUBLIC TurboFlow::Flow
     PRIVATE tf_http_content tf_executor_common TurboHttp::HttpClient TurboNet::CoroNet
-            TurboUtils::Core TurboParser::Parser monocypher)
+            TurboNet::Crypto TurboUtils::Core TurboParser::Parser)
 list(APPEND TURBO_FLOW_HTTP_TARGETS tf_http_client)
 
 add_library(tf_http_server SHARED
@@ -46,7 +46,7 @@ add_library(tf_http_server SHARED
     ALIAS TurboFlow::HttpServer
     FOLDER "io/http/server"
     EXPORT_NAME HttpServer)
-  target_compile_definitions(tf_http_server PRIVATE SHARED_CXX)
+  target_compile_definitions(tf_http_server PRIVATE TURBO_FLOW_BUILD)
   target_include_directories(
     tf_http_server PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                           $<INSTALL_INTERFACE:include>)

@@ -167,7 +167,7 @@ typedef struct turbo_flow_protocol_coronet_snapshot_s {
  * turbo_flow_protocol_coronet_server_start(server);
  * @endcode
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_coronet_server_create(const turbo_flow_protocol_coronet_config_t *config,
                                          turbo_flow_protocol_coronet_server_t **out);
 
@@ -177,7 +177,7 @@ turbo_flow_protocol_coronet_server_create(const turbo_flow_protocol_coronet_conf
  * @param server Owned server returned by create.
  * @return TURBO_OK, TURBO_EALREADY, or a bind/TLS/transport error.
  */
-CXX_C_API int turbo_flow_protocol_coronet_server_start(turbo_flow_protocol_coronet_server_t *server);
+TURBO_FLOW_C_API int turbo_flow_protocol_coronet_server_start(turbo_flow_protocol_coronet_server_t *server);
 
 /**
  * Close network admission while preserving admitted graph/sink settlement.
@@ -185,7 +185,7 @@ CXX_C_API int turbo_flow_protocol_coronet_server_start(turbo_flow_protocol_coron
  * @param server Started server.
  * @return TURBO_OK or an execution/transport error.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_coronet_server_begin_shutdown(turbo_flow_protocol_coronet_server_t *server);
 
 /**
@@ -198,7 +198,7 @@ turbo_flow_protocol_coronet_server_begin_shutdown(turbo_flow_protocol_coronet_se
  * @param timeout_ms Positive wait bound.
  * @return TURBO_OK, TURBO_ETIMEDOUT, or an execution/runtime error.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_coronet_server_wait_shutdown(turbo_flow_protocol_coronet_server_t *server,
                                                 uint64_t timeout_ms);
 
@@ -210,7 +210,7 @@ turbo_flow_protocol_coronet_server_wait_shutdown(turbo_flow_protocol_coronet_ser
  * @param timeout_ms Positive wait bound.
  * @return TURBO_OK, TURBO_ETIMEDOUT, or an execution/runtime error.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_coronet_server_force_shutdown(turbo_flow_protocol_coronet_server_t *server,
                                                  int status, uint64_t timeout_ms);
 
@@ -224,7 +224,7 @@ turbo_flow_protocol_coronet_server_force_shutdown(turbo_flow_protocol_coronet_se
  * @return TURBO_OK, TURBO_ENOENT for a stale delivery, or an execution/runtime
  *         error.
  */
-CXX_C_API int turbo_flow_protocol_coronet_server_settle(turbo_flow_protocol_coronet_server_t *server,
+TURBO_FLOW_C_API int turbo_flow_protocol_coronet_server_settle(turbo_flow_protocol_coronet_server_t *server,
                                                        uint64_t delivery_id, int status,
                                                        turbo_flow_protocol_feed_result_t *result);
 
@@ -235,7 +235,7 @@ CXX_C_API int turbo_flow_protocol_coronet_server_settle(turbo_flow_protocol_coro
  * @param out Caller-initialized snapshot receiving the copy.
  * @return TURBO_OK or TURBO_EINVAL/execution error.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_coronet_server_snapshot(turbo_flow_protocol_coronet_server_t *server,
                                            turbo_flow_protocol_coronet_snapshot_t *out);
 
@@ -246,7 +246,7 @@ turbo_flow_protocol_coronet_server_snapshot(turbo_flow_protocol_coronet_server_t
  * @param server Owned server, or NULL.
  * @return TURBO_OK or TURBO_EBUSY.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_coronet_server_destroy(turbo_flow_protocol_coronet_server_t *server);
 
 #ifdef __cplusplus

@@ -151,15 +151,15 @@ typedef struct turbo_flow_security_enhanced_auth_provider_s {
 #define TURBO_FLOW_SECURITY_ENHANCED_AUTH_PROVIDER_INIT                                            \
   {sizeof(turbo_flow_security_enhanced_auth_provider_t), NULL, NULL, NULL, NULL}
 
-CXX_C_API int turbo_flow_security_enhanced_auth_begin(
+TURBO_FLOW_C_API int turbo_flow_security_enhanced_auth_begin(
     const turbo_flow_security_enhanced_auth_provider_t *provider,
     const turbo_flow_security_enhanced_auth_request_t *request, void **exchange_out,
     turbo_flow_security_enhanced_auth_result_t *result_out);
-CXX_C_API int turbo_flow_security_enhanced_auth_continue(
+TURBO_FLOW_C_API int turbo_flow_security_enhanced_auth_continue(
     const turbo_flow_security_enhanced_auth_provider_t *provider, void *exchange,
     const turbo_flow_security_enhanced_auth_request_t *request,
     turbo_flow_security_enhanced_auth_result_t *result_out);
-CXX_C_API void turbo_flow_security_enhanced_auth_cancel(
+TURBO_FLOW_C_API void turbo_flow_security_enhanced_auth_cancel(
     const turbo_flow_security_enhanced_auth_provider_t *provider, void *exchange);
 
 typedef enum turbo_flow_security_action_e {
@@ -228,14 +228,14 @@ typedef struct turbo_flow_security_rule_s {
  * The parser copies into `rule_out`, performs no allocation, and returns TURBO_OK,
  * TURBO_EINVAL for invalid pointers/capacities, or TURBO_EPROTO for invalid syntax.
  */
-CXX_C_API int turbo_flow_security_rule_parse_line(const char *line, size_t line_size,
+TURBO_FLOW_C_API int turbo_flow_security_rule_parse_line(const char *line, size_t line_size,
                                                   turbo_flow_security_rule_t *rule_out);
 /**
  * Serialize one validated rule to the canonical line representation.
  * `line_out` is not NUL-terminated by contract; `line_size_out` receives its byte count.
  * Returns TURBO_OK, TURBO_EINVAL for invalid input, or TURBO_ENOSPC for insufficient capacity.
  */
-CXX_C_API int turbo_flow_security_rule_format_line(const turbo_flow_security_rule_t *rule,
+TURBO_FLOW_C_API int turbo_flow_security_rule_format_line(const turbo_flow_security_rule_t *rule,
                                                    char *line_out, size_t line_capacity,
                                                    size_t *line_size_out);
 
@@ -400,53 +400,53 @@ typedef struct turbo_flow_security_realm_config_s {
    NULL}
 
 /** Validate provider output and authenticate without retaining credential bytes. */
-CXX_C_API int turbo_flow_security_authenticate(const turbo_flow_security_auth_provider_t *provider,
+TURBO_FLOW_C_API int turbo_flow_security_authenticate(const turbo_flow_security_auth_provider_t *provider,
                                                const turbo_flow_security_auth_request_t *request,
                                                turbo_flow_security_principal_t *principal_out);
 
-CXX_C_API int turbo_flow_security_realm_create(const turbo_flow_security_realm_config_t *config,
+TURBO_FLOW_C_API int turbo_flow_security_realm_create(const turbo_flow_security_realm_config_t *config,
                                                turbo_flow_security_realm_t **out);
-CXX_C_API void turbo_flow_security_realm_destroy(turbo_flow_security_realm_t *realm);
+TURBO_FLOW_C_API void turbo_flow_security_realm_destroy(turbo_flow_security_realm_t *realm);
 
 /** Borrowed configured source channel name, or NULL for a programmatic static realm. */
-CXX_C_API const char *
+TURBO_FLOW_C_API const char *
 turbo_flow_security_realm_policy_source(const turbo_flow_security_realm_t *realm);
 
 /** Bind one borrowed provider before the realm becomes reachable by protocol adapters. */
-CXX_C_API int turbo_flow_security_realm_bind_policy_provider(
+TURBO_FLOW_C_API int turbo_flow_security_realm_bind_policy_provider(
     turbo_flow_security_realm_t *realm, const turbo_flow_security_policy_provider_t *provider);
 
 /** Bind one per-request decision provider instead of a policy-bundle provider. */
-CXX_C_API int turbo_flow_security_realm_bind_authorization_provider(
+TURBO_FLOW_C_API int turbo_flow_security_realm_bind_authorization_provider(
     turbo_flow_security_realm_t *realm,
     const turbo_flow_security_authorization_provider_t *provider);
 
 /** Fetch, validate, copy, and atomically install one exact generation. */
-CXX_C_API int turbo_flow_security_realm_refresh(turbo_flow_security_realm_t *realm,
+TURBO_FLOW_C_API int turbo_flow_security_realm_refresh(turbo_flow_security_realm_t *realm,
                                                 uint64_t required_version,
                                                 uint64_t now_epoch_seconds);
 
 /** Complete one deterministic decision. Deny is a valid result and returns TURBO_OK. */
-CXX_C_API int turbo_flow_security_realm_evaluate(turbo_flow_security_realm_t *realm,
+TURBO_FLOW_C_API int turbo_flow_security_realm_evaluate(turbo_flow_security_realm_t *realm,
                                                  const turbo_flow_security_request_t *request,
                                                  uint64_t now_epoch_seconds,
                                                  turbo_flow_security_decision_t *decision);
 
 /** Evaluate and map a deny decision to TURBO_EPERM for protocol-owner boundaries. */
-CXX_C_API int turbo_flow_security_realm_authorize(turbo_flow_security_realm_t *realm,
+TURBO_FLOW_C_API int turbo_flow_security_realm_authorize(turbo_flow_security_realm_t *realm,
                                                   const turbo_flow_security_request_t *request,
                                                   uint64_t now_epoch_seconds,
                                                   turbo_flow_security_decision_t *decision);
 
 /** Register the realm as a borrowed, independently addressable SECURITY_REALM resource. */
-CXX_C_API int turbo_flow_security_realm_register(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_security_realm_register(turbo_flow_t *flow,
                                                  turbo_flow_security_realm_t *realm);
 
 /**
  * Create a fail-closed realm from strict YAML metadata and a policy_source reference.
  * ACL rule bodies and policy versions are rejected in YAML.
  */
-CXX_C_API int turbo_flow_security_realm_create_resolved(
+TURBO_FLOW_C_API int turbo_flow_security_realm_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     const turbo_flow_security_matcher_t *matcher, turbo_flow_security_realm_t **out,
     turbo_flow_config_error_t *error);
@@ -521,28 +521,28 @@ typedef struct turbo_flow_security_auth_provider_factory_s {
   {sizeof(turbo_flow_security_auth_provider_factory_t), TURBO_FLOW_SECURITY_ABI_V3, NULL, NULL,    \
    NULL}
 
-CXX_C_API int turbo_flow_security_secret_acquire(const turbo_flow_security_key_provider_t *provider,
+TURBO_FLOW_C_API int turbo_flow_security_secret_acquire(const turbo_flow_security_key_provider_t *provider,
                                                  const char *reference,
                                                  turbo_flow_security_secret_lease_t *lease_out);
-CXX_C_API void
+TURBO_FLOW_C_API void
 turbo_flow_security_secret_release(const turbo_flow_security_key_provider_t *provider,
                                    turbo_flow_security_secret_lease_t *lease);
 
 /** Invoke one exact backend factory and validate its lifecycle envelope. */
-CXX_C_API int turbo_flow_security_auth_provider_owner_create_resolved(
+TURBO_FLOW_C_API int turbo_flow_security_auth_provider_owner_create_resolved(
     const turbo_flow_security_auth_provider_factory_t *factory,
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     const turbo_flow_security_key_provider_t *key_provider,
     turbo_flow_security_auth_provider_owner_t *owner_out, turbo_flow_config_error_t *error);
 
 /** Select exactly one registered backend from an `auth_provider` channel. */
-CXX_C_API int turbo_flow_security_auth_provider_owner_create_registered(
+TURBO_FLOW_C_API int turbo_flow_security_auth_provider_owner_create_registered(
     const turbo_flow_security_auth_provider_factory_t *const *factories, size_t factory_count,
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     const turbo_flow_security_key_provider_t *key_provider,
     turbo_flow_security_auth_provider_owner_t *owner_out, turbo_flow_config_error_t *error);
 
-CXX_C_API void
+TURBO_FLOW_C_API void
 turbo_flow_security_auth_provider_owner_destroy(turbo_flow_security_auth_provider_owner_t *owner);
 
 typedef void (*turbo_flow_security_policy_provider_owner_destroy_fn)(void *owner);
@@ -584,20 +584,20 @@ typedef struct turbo_flow_security_policy_provider_factory_s {
   {sizeof(turbo_flow_security_policy_provider_factory_t), TURBO_FLOW_SECURITY_ABI_V3, NULL, NULL,  \
    NULL}
 
-CXX_C_API int turbo_flow_security_policy_provider_owner_create_resolved(
+TURBO_FLOW_C_API int turbo_flow_security_policy_provider_owner_create_resolved(
     const turbo_flow_security_policy_provider_factory_t *factory,
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     const turbo_flow_security_key_provider_t *key_provider,
     turbo_flow_security_policy_provider_owner_t *owner_out, turbo_flow_config_error_t *error);
 
 /** Select exactly one registered backend from an `acl_provider` channel. */
-CXX_C_API int turbo_flow_security_policy_provider_owner_create_registered(
+TURBO_FLOW_C_API int turbo_flow_security_policy_provider_owner_create_registered(
     const turbo_flow_security_policy_provider_factory_t *const *factories, size_t factory_count,
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     const turbo_flow_security_key_provider_t *key_provider,
     turbo_flow_security_policy_provider_owner_t *owner_out, turbo_flow_config_error_t *error);
 
-CXX_C_API void turbo_flow_security_policy_provider_owner_destroy(
+TURBO_FLOW_C_API void turbo_flow_security_policy_provider_owner_destroy(
     turbo_flow_security_policy_provider_owner_t *owner);
 
 #ifdef __cplusplus

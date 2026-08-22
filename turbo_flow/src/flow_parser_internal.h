@@ -24,8 +24,8 @@ typedef struct flow_token_s {
 } flow_token_t;
 
 typedef struct flow_node_ref_s {
-  tstr_v first;
-  tstr_v second;
+  vstr first;
+  vstr second;
   uint32_t line;
   uint32_t column;
   int qualified;
@@ -52,15 +52,15 @@ typedef struct flow_stage_spec_s {
   uint32_t data_pool_capacity;
   int has_worker;
   int has_data_pool;
-  tstr_v adapter_name;
+  vstr adapter_name;
   uint32_t adapter_line;
   uint32_t adapter_column;
   int has_adapter;
-  tstr_v operation_name;
+  vstr operation_name;
   uint32_t operation_line;
   uint32_t operation_column;
   int has_operation;
-  tstr_v resource_name;
+  vstr resource_name;
   uint32_t resource_line;
   uint32_t resource_column;
   int has_resource;
@@ -76,8 +76,8 @@ typedef struct flow_parse_ctx_s {
   turbo_flow_t *flow;
   turbo_vec_t node_refs;
   turbo_vec_t stage_templates;
-  tstr_t root_stage_name;
-  tstr_v current_stage_template;
+  tstr root_stage_name;
+  vstr current_stage_template;
   size_t current_stage_template_index;
   int has_root_stage;
   int in_root_stage;

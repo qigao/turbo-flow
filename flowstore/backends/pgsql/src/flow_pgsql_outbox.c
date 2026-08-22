@@ -21,10 +21,10 @@
 #define FLOW_PGSQL_OUTBOX_STATE_ARCHIVED "archived"
 
 typedef struct flow_pgsql_outbox_adapter_s {
-  tstr_t resource_uid;
-  tstr_t resource_owner;
-  tstr_t conninfo;
-  tstr_t outbox_name;
+  tstr resource_uid;
+  tstr resource_owner;
+  tstr conninfo;
+  tstr outbox_name;
   turbo_flow_pgsql_outbox_role_t role;
   size_t capacity;
   size_t max_payload_size;
@@ -50,12 +50,12 @@ typedef struct flow_pgsql_outbox_adapter_s {
   atomic_uint_fast64_t requeued;
   atomic_uint_fast64_t failures;
   turbo_flow_t *flow;
-  tstr_t source_name;
+  tstr source_name;
 } flow_pgsql_outbox_adapter_t;
 
 typedef struct flow_pgsql_outbox_record_s {
-  tstr_t row_id;
-  tstr_t payload;
+  tstr row_id;
+  tstr payload;
   uint32_t message_type;
   uint32_t message_flags;
   uint32_t delivery_attempts;
@@ -757,7 +757,7 @@ static int flow_pgsql_outbox_resource_document(void *ctx,
                                                turbo_flow_resource_document_t *out) {
   flow_pgsql_outbox_adapter_t *adapter = (flow_pgsql_outbox_adapter_t *)ctx;
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
-  tstr_t payload;
+  tstr payload;
   int rc;
   if (!adapter || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
   if (document_kind != TURBO_FLOW_RESOURCE_DOCUMENT_STATUS) return TURBO_ENOTSUP;

@@ -150,17 +150,17 @@ spec("turbo_flow_store_record") {
     turbo_flow_store_record_t record = TURBO_FLOW_STORE_RECORD_INIT;
 
     config.backend = &backend_store;
-    check_int_eq(turbo_flow_store_create(&config, &store), TURBO_OK);
+    check_equal(turbo_flow_store_create(&config, &store), TURBO_OK);
     if (store) {
-      check_int_eq(turbo_flow_store_put(store, key, sizeof(key), 0u, 1u, value, sizeof(value)),
+      check_equal(turbo_flow_store_put(store, key, sizeof(key), 0u, 1u, value, sizeof(value)),
                    TURBO_OK);
-      check_int_eq(turbo_flow_store_get(store, key, sizeof(key), &record), TURBO_OK);
-      check_uint_eq(record.revision, 1u);
-      check_size_eq(record.value_size, sizeof(value));
-      check_mem_eq(record.value, value, sizeof(value));
+      check_equal(turbo_flow_store_get(store, key, sizeof(key), &record), TURBO_OK);
+      check_equal(record.revision, 1u);
+      check_equal(record.value_size, sizeof(value));
+      check_equal(record.value, value, sizeof(value));
       turbo_flow_store_record_clear(&record);
-      check_int_eq(turbo_flow_store_delete(store, key, sizeof(key), 1u), TURBO_OK);
-      check_int_eq(turbo_flow_store_get(store, key, sizeof(key), &record), TURBO_ENOENT);
+      check_equal(turbo_flow_store_delete(store, key, sizeof(key), 1u), TURBO_OK);
+      check_equal(turbo_flow_store_get(store, key, sizeof(key), &record), TURBO_ENOENT);
     }
     turbo_flow_store_record_clear(&record);
     turbo_flow_store_destroy(store);
@@ -186,35 +186,35 @@ spec("turbo_flow_databind") {
     uint64_t revision = 0u;
 
     store_config.backend = &store;
-    check_int_eq(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
+    check_equal(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
     config.schema_text = schema;
     config.schema_size = sizeof(schema) - 1u;
     config.type_name = "Order";
-    check_int_eq(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
+    check_equal(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
     check_not_null(binding);
-    check_int_eq(data_bind_create_from_text(schema, sizeof(schema) - 1u, &codec, &error),
+    check_equal(data_bind_create_from_text(schema, sizeof(schema) - 1u, &codec, &error),
                  DATA_BIND_OK);
     source = binding_test_record(codec, UINT64_C(9007199254740993), "open", 125u);
     check_not_null(source);
     if (flow_store && binding && source) {
-      check_int_eq(turbo_flow_databind_put(flow_store, binding, key, sizeof(key),
+      check_equal(turbo_flow_databind_put(flow_store, binding, key, sizeof(key),
                                                      TURBO_FLOW_RECORD_REVISION_ABSENT, 1u, source),
                    TURBO_OK);
-      check_int_eq(turbo_flow_databind_get(flow_store, binding, key, sizeof(key), &decoded,
+      check_equal(turbo_flow_databind_get(flow_store, binding, key, sizeof(key), &decoded,
                                                      &revision),
                    TURBO_OK);
-      check_uint_eq(revision, 1u);
-      check_int_eq(data_bind_record_get_u64(decoded, "id", &id, &error), DATA_BIND_OK);
-      check_hex64_eq(id, UINT64_C(9007199254740993));
+      check_equal(revision, 1u);
+      check_equal(data_bind_record_get_u64(decoded, "id", &id, &error), DATA_BIND_OK);
+      check_equal(id, UINT64_C(9007199254740993));
       data_bind_record_free(decoded);
       decoded = NULL;
-      check_int_eq(turbo_flow_store_delete(flow_store, key, sizeof(key), 1u),
+      check_equal(turbo_flow_store_delete(flow_store, key, sizeof(key), 1u),
                    TURBO_OK);
-      check_int_eq(turbo_flow_databind_get(flow_store, binding, key, sizeof(key), &decoded,
+      check_equal(turbo_flow_databind_get(flow_store, binding, key, sizeof(key), &decoded,
                                                      &revision),
                    TURBO_ENOENT);
       check_null(decoded);
-      check_uint_eq(revision, TURBO_FLOW_RECORD_REVISION_ABSENT);
+      check_equal(revision, TURBO_FLOW_RECORD_REVISION_ABSENT);
     }
     data_bind_record_free(decoded);
     data_bind_record_free(source);
@@ -250,22 +250,22 @@ spec("turbo_flow_databind") {
     size_t matched = 0u;
 
     store_config.backend = &store;
-    check_int_eq(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
+    check_equal(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
     config.schema_text = schema;
     config.schema_size = sizeof(schema) - 1u;
     config.type_name = "Order";
-    check_int_eq(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
-    check_int_eq(data_bind_create_from_text(schema, sizeof(schema) - 1u, &codec, &error),
+    check_equal(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
+    check_equal(data_bind_create_from_text(schema, sizeof(schema) - 1u, &codec, &error),
                  DATA_BIND_OK);
     first = binding_test_record(codec, UINT64_C(9007199254740993), "open", 125u);
     second = binding_test_record(codec, UINT64_C(9007199254740994), "closed", 50u);
     check_not_null(first);
     check_not_null(second);
     if (flow_store && binding && first && second) {
-      check_int_eq(turbo_flow_databind_put(flow_store, binding, first_key, sizeof(first_key), 0u,
+      check_equal(turbo_flow_databind_put(flow_store, binding, first_key, sizeof(first_key), 0u,
                                                      1u, first),
                    TURBO_OK);
-      check_int_eq(turbo_flow_databind_put(flow_store, binding, second_key, sizeof(second_key),
+      check_equal(turbo_flow_databind_put(flow_store, binding, second_key, sizeof(second_key),
                                                      0u, 1u, second),
                    TURBO_OK);
       operands[0].kind = TURBO_FLOW_DATABIND_OPERAND_FIELD;
@@ -277,12 +277,12 @@ spec("turbo_flow_databind") {
       query.length = query.instruction_count;
       query.operands = operands;
       query.operand_count = sizeof(operands) / sizeof(operands[0]);
-      check_int_eq(turbo_flow_databind_query(flow_store, binding, &query, binding_test_capture,
+      check_equal(turbo_flow_databind_query(flow_store, binding, &query, binding_test_capture,
                                                        &capture, &matched),
                    TURBO_OK);
-      check_size_eq(matched, 1u);
-      check_size_eq(capture.count, 1u);
-      check_hex64_eq(capture.last_id, UINT64_C(9007199254740994));
+      check_equal(matched, 1u);
+      check_equal(capture.count, 1u);
+      check_equal(capture.last_id, UINT64_C(9007199254740994));
     }
     data_bind_record_free(second);
     data_bind_record_free(first);
@@ -307,24 +307,24 @@ spec("turbo_flow_databind") {
     uint64_t revision = 0u;
 
     store_config.backend = &store;
-    check_int_eq(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
+    check_equal(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
     config.schema_text = schema;
     config.schema_size = sizeof(schema) - 1u;
     config.type_name = "Empty";
-    check_int_eq(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
-    check_int_eq(data_bind_create_from_text(schema, sizeof(schema) - 1u, &codec, &error),
+    check_equal(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
+    check_equal(data_bind_create_from_text(schema, sizeof(schema) - 1u, &codec, &error),
                  DATA_BIND_OK);
     if (codec)
-      check_int_eq(data_bind_record_from_json(codec, "Empty", "{}", 2u, &source, &error),
+      check_equal(data_bind_record_from_json(codec, "Empty", "{}", 2u, &source, &error),
                    DATA_BIND_OK);
     if (flow_store && binding && source) {
-      check_int_eq(turbo_flow_databind_put(flow_store, binding, key, sizeof(key), 0u, 1u, source),
+      check_equal(turbo_flow_databind_put(flow_store, binding, key, sizeof(key), 0u, 1u, source),
                    TURBO_OK);
-      check_int_eq(turbo_flow_databind_get(flow_store, binding, key, sizeof(key), &decoded,
+      check_equal(turbo_flow_databind_get(flow_store, binding, key, sizeof(key), &decoded,
                                                      &revision),
                    TURBO_OK);
-      check_uint_eq(revision, 1u);
-      check_str_eq(data_bind_record_type_name(decoded), "Empty");
+      check_equal(revision, 1u);
+      check_equal(data_bind_record_type_name(decoded), "Empty");
     }
     data_bind_record_free(decoded);
     data_bind_record_free(source);
@@ -352,11 +352,11 @@ spec("turbo_flow_databind") {
     binding_test_capture_t capture = {0};
 
     store_config.backend = &store;
-    check_int_eq(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
+    check_equal(turbo_flow_store_create(&store_config, &flow_store), TURBO_OK);
     config.schema_text = schema;
     config.schema_size = sizeof(schema) - 1u;
     config.type_name = "Order";
-    check_int_eq(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
+    check_equal(turbo_flow_databind_binding_create(&config, &binding), TURBO_OK);
     operands[0].kind = TURBO_FLOW_DATABIND_OPERAND_UINT64;
     operands[0].value.uinteger = 1u;
     operands[1].kind = TURBO_FLOW_DATABIND_OPERAND_UINT64;
@@ -367,10 +367,10 @@ spec("turbo_flow_databind") {
     query.operands = operands;
     query.operand_count = sizeof(operands) / sizeof(operands[0]);
     if (flow_store && binding) {
-      check_int_eq(turbo_flow_databind_query(flow_store, binding, &query, binding_test_capture,
+      check_equal(turbo_flow_databind_query(flow_store, binding, &query, binding_test_capture,
                                                        &capture, NULL),
                    TURBO_ENOTSUP);
-      check_size_eq(backend.scan_calls, 0u);
+      check_equal(backend.scan_calls, 0u);
     }
     turbo_flow_databind_binding_destroy(binding);
     turbo_flow_store_destroy(flow_store);
@@ -385,7 +385,7 @@ spec("turbo_flow_databind") {
 
     store.capabilities = 0u;
     config.backend = &store;
-    check_int_eq(turbo_flow_store_create(&config, &flow_store), TURBO_EINVAL);
+    check_equal(turbo_flow_store_create(&config, &flow_store), TURBO_EINVAL);
     check_null(flow_store);
   }
 }
@@ -396,14 +396,14 @@ spec("turbo_flow_store_provider_abi") {
     turbo_flow_log_store_provider_ops_t log_ops = TURBO_FLOW_LOG_STORE_PROVIDER_OPS_INIT;
     turbo_flow_series_store_provider_ops_t series_ops = TURBO_FLOW_SERIES_STORE_PROVIDER_OPS_INIT;
 
-    check_size_eq(index_ops.size, sizeof(index_ops));
-    check_uint_eq(index_ops.api_version, TURBO_FLOW_INDEX_STORE_PROVIDER_API_VERSION);
+    check_equal(index_ops.size, sizeof(index_ops));
+    check_equal(index_ops.api_version, TURBO_FLOW_INDEX_STORE_PROVIDER_API_VERSION);
     check_true(index_ops.close == NULL && index_ops.destroy == NULL && index_ops.stats == NULL);
-    check_size_eq(log_ops.size, sizeof(log_ops));
-    check_uint_eq(log_ops.api_version, TURBO_FLOW_LOG_STORE_PROVIDER_API_VERSION);
+    check_equal(log_ops.size, sizeof(log_ops));
+    check_equal(log_ops.api_version, TURBO_FLOW_LOG_STORE_PROVIDER_API_VERSION);
     check_true(log_ops.close == NULL && log_ops.destroy == NULL && log_ops.stats == NULL);
-    check_size_eq(series_ops.size, sizeof(series_ops));
-    check_uint_eq(series_ops.api_version, TURBO_FLOW_SERIES_STORE_PROVIDER_API_VERSION);
+    check_equal(series_ops.size, sizeof(series_ops));
+    check_equal(series_ops.api_version, TURBO_FLOW_SERIES_STORE_PROVIDER_API_VERSION);
     check_true(series_ops.close == NULL && series_ops.destroy == NULL && series_ops.stats == NULL);
   }
 }
@@ -415,20 +415,20 @@ spec("turbo_flow_bitmap_index") {
     uint64_t member = 0u;
     int present = 0;
 
-    check_int_eq(turbo_flow_bitmap_index_create(2u, &index), TURBO_OK);
-    check_int_eq(turbo_flow_bitmap_index_add(index, 42u), TURBO_OK);
-    check_int_eq(turbo_flow_bitmap_index_add(index, 7u), TURBO_OK);
-    check_int_eq(turbo_flow_bitmap_index_add(index, 42u), TURBO_OK);
-    check_int_eq(turbo_flow_bitmap_index_add(index, 99u), TURBO_ENOSPC);
-    check_int_eq(turbo_flow_bitmap_index_contains(index, 42u, &present), TURBO_OK);
-    check_int_eq(present, 1);
-    check_int_eq(turbo_flow_bitmap_index_count(index, &count), TURBO_OK);
-    check_size_eq(count, 2u);
-    check_int_eq(turbo_flow_bitmap_index_select(index, 0u, &member), TURBO_OK);
-    check_uint_eq(member, 7u);
-    check_int_eq(turbo_flow_bitmap_index_select(index, 2u, &member), TURBO_ERANGE);
-    check_int_eq(turbo_flow_bitmap_index_remove(index, 7u), TURBO_OK);
-    check_int_eq(turbo_flow_bitmap_index_add(index, 99u), TURBO_OK);
+    check_equal(turbo_flow_bitmap_index_create(2u, &index), TURBO_OK);
+    check_equal(turbo_flow_bitmap_index_add(index, 42u), TURBO_OK);
+    check_equal(turbo_flow_bitmap_index_add(index, 7u), TURBO_OK);
+    check_equal(turbo_flow_bitmap_index_add(index, 42u), TURBO_OK);
+    check_equal(turbo_flow_bitmap_index_add(index, 99u), TURBO_ENOSPC);
+    check_equal(turbo_flow_bitmap_index_contains(index, 42u, &present), TURBO_OK);
+    check_equal(present, 1);
+    check_equal(turbo_flow_bitmap_index_count(index, &count), TURBO_OK);
+    check_equal(count, 2u);
+    check_equal(turbo_flow_bitmap_index_select(index, 0u, &member), TURBO_OK);
+    check_equal(member, 7u);
+    check_equal(turbo_flow_bitmap_index_select(index, 2u, &member), TURBO_ERANGE);
+    check_equal(turbo_flow_bitmap_index_remove(index, 7u), TURBO_OK);
+    check_equal(turbo_flow_bitmap_index_add(index, 99u), TURBO_OK);
     turbo_flow_bitmap_index_destroy(index);
   }
 }
@@ -464,20 +464,20 @@ spec("turbo_flow_store_policy") {
     requirements.max_item_bytes = 64u;
     requirements.writes_per_second = 10u;
     requirements.retention_ms = 1000u;
-    check_int_eq(turbo_flow_store_route(&policy, &requirements, &decision), TURBO_OK);
-    check_int_eq(decision.model, TURBO_FLOW_STORE_MODEL_STATE);
-    check_int_eq(decision.placement, TURBO_FLOW_STORE_PLACEMENT_MEMORY);
+    check_equal(turbo_flow_store_route(&policy, &requirements, &decision), TURBO_OK);
+    check_equal(decision.model, TURBO_FLOW_STORE_MODEL_STATE);
+    check_equal(decision.placement, TURBO_FLOW_STORE_PLACEMENT_MEMORY);
 
     requirements.data_class = TURBO_FLOW_STORE_DATA_EVENT;
     requirements.writes_per_second = 1001u;
-    check_int_eq(turbo_flow_store_route(&policy, &requirements, &decision), TURBO_OK);
-    check_int_eq(decision.model, TURBO_FLOW_STORE_MODEL_LOG);
-    check_int_eq(decision.placement, TURBO_FLOW_STORE_PLACEMENT_REDIS);
+    check_equal(turbo_flow_store_route(&policy, &requirements, &decision), TURBO_OK);
+    check_equal(decision.model, TURBO_FLOW_STORE_MODEL_LOG);
+    check_equal(decision.placement, TURBO_FLOW_STORE_PLACEMENT_REDIS);
 
     requirements.data_class = TURBO_FLOW_STORE_DATA_METRIC;
     requirements.writes_per_second = 10u;
     requirements.durable = 1;
-    check_int_eq(turbo_flow_store_route(&policy, &requirements, &decision), TURBO_ENOTSUP);
+    check_equal(turbo_flow_store_route(&policy, &requirements, &decision), TURBO_ENOTSUP);
   }
 }
 
@@ -490,34 +490,34 @@ spec("turbo_flow_state_store") {
     uint64_t revision = 0u;
     char mutable_value[] = "on";
 
-    check_int_eq(turbo_flow_state_store_create_memory(&limits, &store), TURBO_OK);
+    check_equal(turbo_flow_state_store_create_memory(&limits, &store), TURBO_OK);
     check_not_null(store);
-    check_int_eq(turbo_flow_state_store_put(store, test_bytes("device:1"),
+    check_equal(turbo_flow_state_store_put(store, test_bytes("device:1"),
                                             test_bytes(mutable_value), 0u, &revision),
                  TURBO_OK);
-    check_uint_eq(revision, 1u);
+    check_equal(revision, 1u);
     mutable_value[0] = 'x';
-    check_int_eq(turbo_flow_state_store_get(store, test_bytes("device:1"), &record), TURBO_OK);
-    check_uint_eq(record.revision, 1u);
-    check_mem_eq(mem_buffer_const_data(record.value), "on", 2u);
+    check_equal(turbo_flow_state_store_get(store, test_bytes("device:1"), &record), TURBO_OK);
+    check_equal(record.revision, 1u);
+    check_equal(mem_buffer_const_data(record.value), "on", 2u);
     turbo_flow_state_record_cleanup(&record);
 
-    check_int_eq(
+    check_equal(
         turbo_flow_state_store_put(store, test_bytes("device:1"), test_bytes("off"), 9u, &revision),
         TURBO_EBUSY);
-    check_int_eq(
+    check_equal(
         turbo_flow_state_store_put(store, test_bytes("device:1"), test_bytes("off"), 1u, &revision),
         TURBO_OK);
-    check_uint_eq(revision, 2u);
-    check_int_eq(turbo_flow_state_store_stats(store, &stats), TURBO_OK);
-    check_size_eq(stats.records, 1u);
-    check_size_eq(stats.bytes, strlen("device:1") + strlen("off"));
-    check_uint_eq(stats.conflicts, 1u);
-    check_int_eq(turbo_flow_state_store_close(store), TURBO_OK);
-    check_int_eq(turbo_flow_state_store_get(store, test_bytes("device:1"), &record),
+    check_equal(revision, 2u);
+    check_equal(turbo_flow_state_store_stats(store, &stats), TURBO_OK);
+    check_equal(stats.records, 1u);
+    check_equal(stats.bytes, strlen("device:1") + strlen("off"));
+    check_equal(stats.conflicts, 1u);
+    check_equal(turbo_flow_state_store_close(store), TURBO_OK);
+    check_equal(turbo_flow_state_store_get(store, test_bytes("device:1"), &record),
                  TURBO_ESHUTDOWN);
-    check_int_eq(turbo_flow_state_store_stats(store, &stats), TURBO_ESHUTDOWN);
-    check_int_eq(
+    check_equal(turbo_flow_state_store_stats(store, &stats), TURBO_ESHUTDOWN);
+    check_equal(
         turbo_flow_state_store_put(store, test_bytes("device:2"), test_bytes("on"), 0u, &revision),
         TURBO_ESHUTDOWN);
     turbo_flow_state_store_destroy(store);
@@ -532,23 +532,23 @@ spec("turbo_flow_index_store") {
     size_t count = 0u;
     int present = 0;
 
-    check_int_eq(turbo_flow_index_store_create_memory(&limits, &store), TURBO_OK);
-    check_int_eq(turbo_flow_index_store_add(store, names[0], test_bytes("device:1")), TURBO_OK);
-    check_int_eq(turbo_flow_index_store_add(store, names[0], test_bytes("device:2")), TURBO_OK);
-    check_int_eq(turbo_flow_index_store_add(store, names[1], test_bytes("device:2")), TURBO_OK);
-    check_int_eq(turbo_flow_index_store_add(store, names[1], test_bytes("device:3")), TURBO_OK);
-    check_int_eq(turbo_flow_index_store_add(store, names[0], test_bytes("device:1")),
+    check_equal(turbo_flow_index_store_create_memory(&limits, &store), TURBO_OK);
+    check_equal(turbo_flow_index_store_add(store, names[0], test_bytes("device:1")), TURBO_OK);
+    check_equal(turbo_flow_index_store_add(store, names[0], test_bytes("device:2")), TURBO_OK);
+    check_equal(turbo_flow_index_store_add(store, names[1], test_bytes("device:2")), TURBO_OK);
+    check_equal(turbo_flow_index_store_add(store, names[1], test_bytes("device:3")), TURBO_OK);
+    check_equal(turbo_flow_index_store_add(store, names[0], test_bytes("device:1")),
                  TURBO_EALREADY);
-    check_int_eq(turbo_flow_index_store_contains(store, names[0], test_bytes("device:2"), &present),
+    check_equal(turbo_flow_index_store_contains(store, names[0], test_bytes("device:2"), &present),
                  TURBO_OK);
-    check_int_eq(present, 1);
-    check_int_eq(turbo_flow_index_store_intersection_count(store, names, 2u, &count), TURBO_OK);
-    check_size_eq(count, 1u);
-    check_int_eq(turbo_flow_index_store_remove(store, names[0], test_bytes("device:2")), TURBO_OK);
-    check_int_eq(turbo_flow_index_store_intersection_count(store, names, 2u, &count), TURBO_OK);
-    check_size_eq(count, 0u);
-    check_int_eq(turbo_flow_index_store_close(store), TURBO_OK);
-    check_int_eq(turbo_flow_index_store_contains(store, names[0], test_bytes("device:1"),
+    check_equal(present, 1);
+    check_equal(turbo_flow_index_store_intersection_count(store, names, 2u, &count), TURBO_OK);
+    check_equal(count, 1u);
+    check_equal(turbo_flow_index_store_remove(store, names[0], test_bytes("device:2")), TURBO_OK);
+    check_equal(turbo_flow_index_store_intersection_count(store, names, 2u, &count), TURBO_OK);
+    check_equal(count, 0u);
+    check_equal(turbo_flow_index_store_close(store), TURBO_OK);
+    check_equal(turbo_flow_index_store_contains(store, names[0], test_bytes("device:1"),
                                                  &present),
                  TURBO_ESHUTDOWN);
     turbo_flow_index_store_destroy(store);
@@ -565,29 +565,29 @@ spec("turbo_flow_log_store") {
     uint64_t head = 0u;
     uint64_t tail = 0u;
 
-    check_int_eq(turbo_flow_log_store_create_memory(&limits, &store), TURBO_OK);
-    check_int_eq(turbo_flow_log_store_append(store, 10u, test_bytes("a"), &cursor), TURBO_OK);
-    check_uint_eq(cursor, 1u);
-    check_int_eq(turbo_flow_log_store_append(store, 20u, test_bytes("bb"), &cursor), TURBO_OK);
-    check_int_eq(turbo_flow_log_store_append(store, 30u, test_bytes("ccc"), &cursor), TURBO_OK);
-    check_int_eq(turbo_flow_log_store_bounds(store, &head, &tail), TURBO_OK);
-    check_uint_eq(head, 2u);
-    check_uint_eq(tail, 3u);
-    check_int_eq(turbo_flow_log_store_read(store, 1u, records, 2u, &count), TURBO_ERANGE);
-    check_int_eq(turbo_flow_log_store_read(store, 0u, records, 2u, &count), TURBO_OK);
-    check_size_eq(count, 2u);
-    check_uint_eq(records[0].cursor, 2u);
-    check_mem_eq(mem_buffer_const_data(records[1].payload), "ccc", 3u);
+    check_equal(turbo_flow_log_store_create_memory(&limits, &store), TURBO_OK);
+    check_equal(turbo_flow_log_store_append(store, 10u, test_bytes("a"), &cursor), TURBO_OK);
+    check_equal(cursor, 1u);
+    check_equal(turbo_flow_log_store_append(store, 20u, test_bytes("bb"), &cursor), TURBO_OK);
+    check_equal(turbo_flow_log_store_append(store, 30u, test_bytes("ccc"), &cursor), TURBO_OK);
+    check_equal(turbo_flow_log_store_bounds(store, &head, &tail), TURBO_OK);
+    check_equal(head, 2u);
+    check_equal(tail, 3u);
+    check_equal(turbo_flow_log_store_read(store, 1u, records, 2u, &count), TURBO_ERANGE);
+    check_equal(turbo_flow_log_store_read(store, 0u, records, 2u, &count), TURBO_OK);
+    check_equal(count, 2u);
+    check_equal(records[0].cursor, 2u);
+    check_equal(mem_buffer_const_data(records[1].payload), "ccc", 3u);
     turbo_flow_log_record_cleanup(&records[0]);
     turbo_flow_log_record_cleanup(&records[1]);
-    check_int_eq(turbo_flow_log_store_append(store, 29u, test_bytes("late"), &cursor),
+    check_equal(turbo_flow_log_store_append(store, 29u, test_bytes("late"), &cursor),
                  TURBO_ERANGE);
-    check_int_eq(turbo_flow_log_store_trim_before_cursor(store, 4u, &count), TURBO_OK);
-    check_size_eq(count, 2u);
-    check_int_eq(turbo_flow_log_store_append(store, 29u, test_bytes("late"), &cursor),
+    check_equal(turbo_flow_log_store_trim_before_cursor(store, 4u, &count), TURBO_OK);
+    check_equal(count, 2u);
+    check_equal(turbo_flow_log_store_append(store, 29u, test_bytes("late"), &cursor),
                  TURBO_ERANGE);
-    check_int_eq(turbo_flow_log_store_close(store), TURBO_OK);
-    check_int_eq(turbo_flow_log_store_read(store, 0u, records, 2u, &count),
+    check_equal(turbo_flow_log_store_close(store), TURBO_OK);
+    check_equal(turbo_flow_log_store_read(store, 0u, records, 2u, &count),
                  TURBO_ESHUTDOWN);
     turbo_flow_log_store_destroy(store);
   }
@@ -604,33 +604,33 @@ spec("turbo_flow_series_store") {
 
     config.limits = test_limits(4u, 256u, TURBO_FLOW_STORE_FULL_REJECT);
     config.duplicate_policy = TURBO_FLOW_SERIES_DUPLICATE_KEEP_LAST;
-    check_int_eq(turbo_flow_series_store_create_memory(&config, &store), TURBO_OK);
+    check_equal(turbo_flow_series_store_create_memory(&config, &store), TURBO_OK);
     sample.value.kind = TURBO_FLOW_SERIES_INT64;
     sample.timestamp_ms = 100u;
     sample.value.as.integer = 2;
-    check_int_eq(turbo_flow_series_store_append(store, test_bytes("temp"), &sample), TURBO_OK);
+    check_equal(turbo_flow_series_store_append(store, test_bytes("temp"), &sample), TURBO_OK);
     sample.timestamp_ms = 200u;
     sample.value.as.integer = 4;
-    check_int_eq(turbo_flow_series_store_append(store, test_bytes("temp"), &sample), TURBO_OK);
+    check_equal(turbo_flow_series_store_append(store, test_bytes("temp"), &sample), TURBO_OK);
     sample.value.as.integer = 6;
-    check_int_eq(turbo_flow_series_store_append(store, test_bytes("temp"), &sample), TURBO_OK);
+    check_equal(turbo_flow_series_store_append(store, test_bytes("temp"), &sample), TURBO_OK);
     sample.timestamp_ms = 300u;
     sample.value.as.integer = 8;
-    check_int_eq(turbo_flow_series_store_append(store, test_bytes("temp"), &sample), TURBO_OK);
-    check_int_eq(
+    check_equal(turbo_flow_series_store_append(store, test_bytes("temp"), &sample), TURBO_OK);
+    check_equal(
         turbo_flow_series_store_range(store, test_bytes("temp"), 150u, 300u, range, 3u, &count),
         TURBO_OK);
-    check_size_eq(count, 2u);
-    check_uint_eq(range[0].value.as.integer, 6u);
-    check_int_eq(turbo_flow_series_store_aggregate(store, test_bytes("temp"), 100u, 300u,
+    check_equal(count, 2u);
+    check_equal(range[0].value.as.integer, 6u);
+    check_equal(turbo_flow_series_store_aggregate(store, test_bytes("temp"), 100u, 300u,
                                                    TURBO_FLOW_SERIES_AGGREGATE_AVG, &value, &count),
                  TURBO_OK);
-    check_size_eq(count, 3u);
-    check_double_eq(value, 16.0 / 3.0, 0.000001);
+    check_equal(count, 3u);
+    check_within(value, 16.0 / 3.0, 0.000001);
     sample.timestamp_ms = 250u;
-    check_int_eq(turbo_flow_series_store_append(store, test_bytes("temp"), &sample), TURBO_ERANGE);
-    check_int_eq(turbo_flow_series_store_close(store), TURBO_OK);
-    check_int_eq(
+    check_equal(turbo_flow_series_store_append(store, test_bytes("temp"), &sample), TURBO_ERANGE);
+    check_equal(turbo_flow_series_store_close(store), TURBO_OK);
+    check_equal(
         turbo_flow_series_store_range(store, test_bytes("temp"), 100u, 300u, range, 3u, &count),
         TURBO_ESHUTDOWN);
     turbo_flow_series_store_destroy(store);

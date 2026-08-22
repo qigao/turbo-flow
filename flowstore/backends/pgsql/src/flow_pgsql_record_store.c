@@ -2,7 +2,7 @@
 
 #include "libpq-fe.h"
 #include "turbo_error.h"
-#include "turbo_hash.h"
+#include "turbo_flow_stl_adapter.h"
 #include "turbo_str.h"
 
 #include <errno.h>
@@ -21,8 +21,8 @@
 
 typedef struct flow_pgsql_record_store_s {
   PGconn *connection;
-  tstr_t conninfo;
-  tstr_t namespace_name;
+  tstr conninfo;
+  tstr namespace_name;
   size_t max_key_size;
   size_t max_value_size;
   size_t max_batch_size;
@@ -89,7 +89,7 @@ static int flow_pgsql_record_parse_count(const char *text, size_t text_size, siz
 }
 
 static size_t flow_pgsql_record_key_hash(const void *key, size_t key_size, void *ctx) {
-  const tstr_v *view = (const tstr_v *)key;
+  const vstr *view = (const vstr *)key;
   (void)key_size;
   (void)ctx;
   return turbo_hash_bytes(view->data, view->len, NULL);
@@ -97,8 +97,8 @@ static size_t flow_pgsql_record_key_hash(const void *key, size_t key_size, void 
 
 static bool flow_pgsql_record_key_equal(const void *left, const void *right, size_t key_size,
                                         void *ctx) {
-  const tstr_v *a = (const tstr_v *)left;
-  const tstr_v *b = (const tstr_v *)right;
+  const vstr *a = (const vstr *)left;
+  const vstr *b = (const vstr *)right;
   (void)key_size;
   (void)ctx;
   return a->len == b->len && (a->len == 0u || memcmp(a->data, b->data, a->len) == 0);
@@ -113,7 +113,7 @@ static int flow_pgsql_record_mutations_validate(flow_pgsql_record_store_t *store
   turbo_hash_map_clear(&store->mutation_keys);
   for (size_t i = 0u; i < mutation_count; ++i) {
     const turbo_flow_record_mutation_t *mutation = &mutations[i];
-    tstr_v key;
+    vstr key;
     int rc;
     if (mutation->size < sizeof(*mutation) || !mutation->key || mutation->key_size == 0u ||
         mutation->key_size > store->max_key_size ||
@@ -133,7 +133,7 @@ static int flow_pgsql_record_mutations_validate(flow_pgsql_record_store_t *store
     } else {
       return TURBO_EINVAL;
     }
-    key = tstr_v_from_buf((const char *)mutation->key, mutation->key_size);
+    key = vstr_from_buf((const char *)mutation->key, mutation->key_size);
     if (turbo_hash_map_contains(&store->mutation_keys, &key)) return TURBO_EINVAL;
     rc = turbo_hash_map_put(&store->mutation_keys, &key, &present);
     if (rc != TURBO_OK) return rc;
@@ -396,7 +396,7 @@ int flow_pgsql_record_store_create(const turbo_flow_pgsql_record_store_config_t 
   store->max_value_size = max_value_size;
   store->max_batch_size = max_batch_size;
   store->max_records = config->max_records;
-  rc = turbo_hash_map_init(&store->mutation_keys, sizeof(tstr_v), sizeof(uint8_t),
+  rc = turbo_hash_map_init(&store->mutation_keys, sizeof(vstr), sizeof(uint8_t),
                            flow_pgsql_record_key_hash, flow_pgsql_record_key_equal, NULL);
   if (rc == TURBO_OK) {
     store->mutation_keys_initialized = 1;

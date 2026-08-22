@@ -17,7 +17,7 @@ cmake_config_target(
   EXPORT_NAME
   Socket)
 
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_BUILD)
 
 target_include_directories(
   ${TARGET_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

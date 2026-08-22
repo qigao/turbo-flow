@@ -12,7 +12,7 @@ cmake_config_target(
   ALIAS TurboFlow::S3
   FOLDER "io/s3"
   EXPORT_NAME S3)
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_BUILD)
 target_include_directories(
   ${TARGET_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                         $<INSTALL_INTERFACE:include>)

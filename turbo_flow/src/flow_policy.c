@@ -5,7 +5,7 @@
 #include "turbo_error.h"
 #include "turbo_parser.h"
 #include "turbo_str.h"
-#include "turbo_vec.h"
+#include "turbo_flow_stl_adapter.h"
 
 #include <limits.h>
 #include <math.h>
@@ -230,8 +230,8 @@ typedef struct flow_compiled_rule_s {
 struct turbo_flow_rule_processor_s {
   turbo_vec_t rules;
   turbo_vec_t schema_fields;
-  tstr_t resource_uid;
-  tstr_t owner_name;
+  tstr resource_uid;
+  tstr owner_name;
   turbo_flow_rule_facts_provider_fn facts_provider;
   void *facts_provider_ctx;
   turbo_flow_rule_domain_t domain;

@@ -67,12 +67,12 @@ int flow_error_code(const turbo_flow_t *flow) {
   return flow->last_error.code;
 }
 
-int flow_view_eq_cstr(tstr_v view, const char *text) {
+int flow_view_eq_cstr(vstr view, const char *text) {
   size_t len = text ? strlen(text) : 0;
   return view.len == len && (len == 0 || memcmp(view.data, text, len) == 0);
 }
 
-static int flow_name_eq_cstr(const tstr_t name, const char *text) {
+static int flow_name_eq_cstr(const tstr name, const char *text) {
   return name && text && strcmp(name, text) == 0;
 }
 
@@ -112,7 +112,7 @@ void flow_operation_provider_registration_destroy(
 }
 
 static void flow_schema_string_free(const char *value) {
-  tstr_t owned = (tstr_t)value;
+  tstr owned = (tstr)value;
   if (!value) return;
   tstr_freep(&owned);
 }
@@ -252,7 +252,7 @@ void flow_clear_registry(turbo_flow_t *flow) {
   flow_expr_projection_clear(flow);
 }
 
-int flow_find_stage_view(const turbo_flow_t *flow, tstr_v name) {
+int flow_find_stage_view(const turbo_flow_t *flow, vstr name) {
   size_t i;
 
   if (!flow || !name.data || name.len == 0) return -1;
@@ -923,8 +923,8 @@ static int flow_module_exports_primitive(const flow_module_registration_t *modul
   size_t i;
   if (!module || !type_name) return 0;
   for (i = 0; i < turbo_vec_size(&module->primitive_types); ++i) {
-    const tstr_t *current =
-        (const tstr_t *)turbo_vec_at_const(&module->primitive_types, i);
+    const tstr *current =
+        (const tstr *)turbo_vec_at_const(&module->primitive_types, i);
     if (current && *current && strcmp(*current, type_name) == 0) return 1;
   }
   return 0;
@@ -1618,7 +1618,7 @@ const turbo_flow_operation_descriptor_t *turbo_flow_stage_operation_at(const tur
 }
 
 int turbo_flow_find_stage(const turbo_flow_t *flow, const char *name) {
-  return flow && name ? flow_find_stage_view(flow, tstr_v_from_cstr(name)) : -1;
+  return flow && name ? flow_find_stage_view(flow, vstr_from_cstr(name)) : -1;
 }
 
 size_t turbo_flow_edge_count(const turbo_flow_t *flow) {

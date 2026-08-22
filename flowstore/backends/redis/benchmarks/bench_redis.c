@@ -184,12 +184,12 @@ static void redis_bench_stream_source(void) {
   for (size_t sample = 0u; sample < REDIS_BENCH_SAMPLES && rc == TURBO_OK; ++sample) {
     rc = redis_bench_source_sample(sample, &elapsed[sample], &bytes[sample]);
   }
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc == TURBO_OK) {
     const size_t median = REDIS_BENCH_SAMPLES / 2u;
     qsort(elapsed, REDIS_BENCH_SAMPLES, sizeof(elapsed[0]), redis_bench_u64_compare);
     qsort(bytes, REDIS_BENCH_SAMPLES, sizeof(bytes[0]), redis_bench_u64_compare);
-    check_uint_eq(bytes[median],
+    check_equal(bytes[median],
                   (uint64_t)REDIS_BENCH_ENTRIES * (uint64_t)REDIS_BENCH_PAYLOAD_BYTES);
     printf("REDIS_BENCH_RESULT operation=stream_source samples=%u entries=%u read_count=%u "
            "payload_bytes=%u median_ns=%" PRIu64 " throughput_msg_s=%.2f throughput_mib_s=%.2f\n",

@@ -33,11 +33,11 @@ typedef struct flow_http_client_task_s {
 
 struct flow_http_client_adapter_s {
   turbo_flow_t *flow;
-  tstr_t source_name;
-  tstr_t resource_uid;
-  tstr_t resource_owner;
-  tstr_t url;
-  tstr_t bearer_token;
+  tstr source_name;
+  tstr resource_uid;
+  tstr resource_owner;
+  tstr url;
+  tstr bearer_token;
   char **headers;
   size_t header_count;
   turbo_flow_http_method_t method;
@@ -145,7 +145,7 @@ static int flow_http_client_adopt_response_payload(turbo_flow_msg_t *msg,
                                                    http_response_t **response_ptr) {
   http_response_t *response;
   mem_buffer_t *buffer = NULL;
-  tstr_t payload = NULL;
+  tstr payload = NULL;
   if (!msg || !response_ptr || !*response_ptr) return TURBO_EINVAL;
   response = *response_ptr;
   if (response->body_len > 0u && !response->body) return TURBO_EINVAL;
@@ -162,7 +162,7 @@ static int flow_http_client_adopt_response_payload(turbo_flow_msg_t *msg,
   mem_buffer_release(msg->buffer);
   msg->buffer = buffer;
   msg->owned_payload = payload;
-  msg->payload = buffer ? tstr_v_from_buf(response->body, response->body_len) : tstr_to_v(payload);
+  msg->payload = buffer ? vstr_from_buf(response->body, response->body_len) : tstr_to_v(payload);
   if (buffer) *response_ptr = NULL;
   return TURBO_OK;
 }

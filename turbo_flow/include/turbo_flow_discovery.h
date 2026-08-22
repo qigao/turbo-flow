@@ -81,12 +81,12 @@ typedef struct turbo_flow_discovery_source_s {
  * Create a controller for a STARTED flow and quiesce every configured adapter slot.
  * On failure, already-quiesced slots are resumed before returning.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_discovery_controller_create(const turbo_flow_discovery_controller_config_t *config,
                                        turbo_flow_discovery_controller_t **out);
 
 /** Destroy controller metadata without changing the last committed adapter state. */
-CXX_C_API void
+TURBO_FLOW_C_API void
 turbo_flow_discovery_controller_destroy(turbo_flow_discovery_controller_t *controller);
 
 /**
@@ -98,7 +98,7 @@ turbo_flow_discovery_controller_destroy(turbo_flow_discovery_controller_t *contr
  * commands begin. A failed command rolls applied slots back to the prior set.
  * Calls on one controller must be serialized by the host.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_discovery_replace_peer_list(turbo_flow_discovery_controller_t *controller,
                                        const turbo_flow_discovery_peer_list_t *peer_list,
                                        turbo_flow_discovery_replace_result_t *result);
@@ -107,13 +107,13 @@ turbo_flow_discovery_replace_peer_list(turbo_flow_discovery_controller_t *contro
  * Fetch one registry snapshot and reconcile it; fetch failure leaves adapters unchanged.
  * Calls on one controller must be serialized by the host.
  */
-CXX_C_API int turbo_flow_discovery_poll(turbo_flow_discovery_controller_t *controller,
+TURBO_FLOW_C_API int turbo_flow_discovery_poll(turbo_flow_discovery_controller_t *controller,
                                         const turbo_flow_discovery_source_t *source,
                                         turbo_flow_discovery_replace_result_t *result);
 
-CXX_C_API uint64_t
+TURBO_FLOW_C_API uint64_t
 turbo_flow_discovery_registry_version(const turbo_flow_discovery_controller_t *controller);
-CXX_C_API size_t
+TURBO_FLOW_C_API size_t
 turbo_flow_discovery_active_peer_count(const turbo_flow_discovery_controller_t *controller);
 
 #ifdef __cplusplus

@@ -51,12 +51,12 @@ spec("protocol graph bridge") {
 
     check_not_null(flow);
     turbo_flow_msg_init(&probe.retained);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "inspect", graph_probe_stage,
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "inspect", graph_probe_stage,
                                               &probe, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
 
     message.payload = (uint8_t *)payload;
     message.payload_capacity = sizeof(payload);
@@ -73,23 +73,23 @@ spec("protocol graph bridge") {
     sink.flow = flow;
     sink.source_name = "protocol_in";
 
-    check_int_eq(turbo_flow_protocol_graph_publish(&sink, &request,
+    check_equal(turbo_flow_protocol_graph_publish(&sink, &request,
                                                   &disposition),
                  TURBO_OK);
-    check_int_eq(disposition, TURBO_FLOW_PROTOCOL_PUBLISH_SETTLED);
-    check_size_eq(probe.calls, 1u);
-    check_uint_eq(probe.message_id, 42u);
-    check_uint_eq(probe.message_type, 17u);
-    check_str_eq(probe.operation, "Heartbeat");
-    check_size_eq(probe.payload_size, sizeof(payload));
-    check_mem_eq(probe.payload, payload, sizeof(payload));
+    check_equal(disposition, TURBO_FLOW_PROTOCOL_PUBLISH_SETTLED);
+    check_equal(probe.calls, 1u);
+    check_equal(probe.message_id, 42u);
+    check_equal(probe.message_type, 17u);
+    check_equal(probe.operation, "Heartbeat");
+    check_equal(probe.payload_size, sizeof(payload));
+    check_equal(probe.payload, payload, sizeof(payload));
     retained_metadata = turbo_flow_protocol_graph_metadata(&probe.retained);
     check_not_null(retained_metadata);
-    check_str_eq(retained_metadata->operation, "Heartbeat");
-    check_size_eq(probe.retained.payload.len, sizeof(payload));
-    check_mem_eq(probe.retained.payload.data, payload, sizeof(payload));
+    check_equal(retained_metadata->operation, "Heartbeat");
+    check_equal(probe.retained.payload.len, sizeof(payload));
+    check_equal(probe.retained.payload.data, payload, sizeof(payload));
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_msg_cleanup(&probe.retained);
     turbo_flow_destroy(flow);
   }

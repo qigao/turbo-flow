@@ -37,6 +37,7 @@ list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c)
 set(TURBO_FLOW_HEADERS
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_export.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_record_store.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_domain.h
@@ -59,7 +60,7 @@ cmake_config_target(
   ALIAS TurboFlow::Config
   FOLDER "turbo_flow/config"
   EXPORT_NAME Config)
-target_compile_definitions(turbo_flow_config PRIVATE SHARED_CXX)
+target_compile_definitions(turbo_flow_config PRIVATE TURBO_FLOW_BUILD)
 target_include_directories(
   turbo_flow_config
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -95,7 +96,7 @@ cmake_config_target(
   FOLDER "turbo_flow"
   EXPORT_NAME Graph)
 
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_BUILD)
 target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_EXPR_ENABLE_JIT=1)
 
 target_include_directories(
@@ -108,7 +109,7 @@ target_include_directories(
           ${PROJECT_SOURCE_DIR}/vendor/mir)
 
 target_link_libraries(${TARGET_NAME} PUBLIC 
-  TurboFlow::Config TurboUtils::Core RulesForge::rules_forge
+  TurboFlow::Config TurboUtils::Core TurboUtils::STL RulesForge::rules_forge
   PRIVATE TurboParser::Parser mir_static)
 
 add_library(turbo_flow_product SHARED
@@ -120,7 +121,7 @@ cmake_config_target(
   ALIAS TurboFlow::Product
   FOLDER "turbo_flow/product"
   EXPORT_NAME Product)
-target_compile_definitions(turbo_flow_product PRIVATE SHARED_CXX)
+target_compile_definitions(turbo_flow_product PRIVATE TURBO_FLOW_BUILD)
 target_include_directories(
   turbo_flow_product
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -156,7 +157,7 @@ cmake_config_target(
   ALIAS TurboFlow::Flow
   FOLDER "turbo_flow/compat"
   EXPORT_NAME Flow)
-target_compile_definitions(turbo_flow PRIVATE SHARED_CXX TURBO_FLOW_EXPR_ENABLE_JIT=1)
+target_compile_definitions(turbo_flow PRIVATE TURBO_FLOW_BUILD TURBO_FLOW_EXPR_ENABLE_JIT=1)
 target_include_directories(
   turbo_flow
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -165,7 +166,7 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/parser
           ${CMAKE_CURRENT_BINARY_DIR}
           ${PROJECT_SOURCE_DIR}/vendor/mir)
-target_link_libraries(turbo_flow PUBLIC TurboUtils::Core RulesForge::rules_forge
+target_link_libraries(turbo_flow PUBLIC TurboUtils::Core TurboUtils::STL RulesForge::rules_forge
                                PRIVATE TurboParser::Parser mir_static)
 
 install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)

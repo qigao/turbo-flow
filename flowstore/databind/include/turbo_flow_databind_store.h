@@ -96,25 +96,25 @@ typedef struct turbo_flow_databind_query_s {
 
 #define TURBO_FLOW_DATABIND_QUERY_INIT {sizeof(turbo_flow_databind_query_t), NULL, 0u, 0u, 0u, NULL, 0u, 0u}
 
-CXX_C_API int turbo_flow_databind_binding_create(
+TURBO_FLOW_C_API int turbo_flow_databind_binding_create(
     const turbo_flow_databind_binding_config_t *config, turbo_flow_databind_binding_t **out);
-CXX_C_API void turbo_flow_databind_binding_destroy(turbo_flow_databind_binding_t *binding);
+TURBO_FLOW_C_API void turbo_flow_databind_binding_destroy(turbo_flow_databind_binding_t *binding);
 
 /** Serialize a matching DataBind record then atomically write its binary Record representation. */
-CXX_C_API int turbo_flow_databind_put(turbo_flow_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_databind_put(turbo_flow_store_t *store,
                                       turbo_flow_databind_binding_t *binding,
                                       const uint8_t *key, size_t key_size,
                                       uint64_t expected_revision, uint64_t next_revision,
                                       const DataBindRecord *record);
 
 /** Decode one binary Record into a caller-owned DataBind record. */
-CXX_C_API int turbo_flow_databind_get(turbo_flow_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_databind_get(turbo_flow_store_t *store,
                                       turbo_flow_databind_binding_t *binding,
                                       const uint8_t *key, size_t key_size,
                                       DataBindRecord **out, uint64_t *revision);
 
 /** Decode and visit all binary Records in the FlowStore snapshot. */
-CXX_C_API int turbo_flow_databind_scan(turbo_flow_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_databind_scan(turbo_flow_store_t *store,
                                        turbo_flow_databind_binding_t *binding,
                                        turbo_flow_databind_visit_fn visit, void *ctx);
 
@@ -123,7 +123,7 @@ CXX_C_API int turbo_flow_databind_scan(turbo_flow_store_t *store,
  * LOAD_INVALID, EXISTS, NOT_EXISTS, LENGTH, COUNT, CMP, NOT, forward JMP variants, TRUE, FALSE,
  * and SELECT are accepted; other valid VM opcodes return TURBO_ENOTSUP before scanning.
  */
-CXX_C_API int turbo_flow_databind_query(turbo_flow_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_databind_query(turbo_flow_store_t *store,
                                         turbo_flow_databind_binding_t *binding,
                                         const turbo_flow_databind_query_t *query,
                                         turbo_flow_databind_visit_fn visit, void *ctx,

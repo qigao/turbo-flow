@@ -425,7 +425,7 @@ static int flow_rulesforge_execute_json(turbo_flow_msg_t *message, void *ctx) {
       (const turbo_flow_rulesforge_json_provider_t *)ctx;
   ruleforge_stateful_session_t session = NULL;
   ruleforge_data_bind_stream_t stream = NULL;
-  tstr_v payload = {0};
+  vstr payload = {0};
   ruleforge_status_t status;
   int loaded = 0;
   int fired = 0;

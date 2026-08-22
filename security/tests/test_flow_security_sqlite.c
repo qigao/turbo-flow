@@ -56,19 +56,19 @@ spec("SQLite ACL control store") {
     check_not_null(path);
     sqlite_config.database_path = path;
     sqlite_config.namespace_name = "mqtt";
-    check_int_eq(turbo_flow_security_sqlite_provider_create(&sqlite_config, &provider), TURBO_OK);
+    check_equal(turbo_flow_security_sqlite_provider_create(&sqlite_config, &provider), TURBO_OK);
     check_not_null(provider);
     bundle.policy_version = 1u;
     bundle.rules = &first;
     bundle.rule_count = 1u;
-    check_int_eq(turbo_flow_security_sqlite_provider_publish(provider, &bundle), TURBO_OK);
-    check_int_eq(turbo_flow_security_sqlite_provider_publish(provider, &bundle), TURBO_EBUSY);
+    check_equal(turbo_flow_security_sqlite_provider_publish(provider, &bundle), TURBO_OK);
+    check_equal(turbo_flow_security_sqlite_provider_publish(provider, &bundle), TURBO_EBUSY);
 
     realm_config.resource_uid = "security:mqtt";
     realm_config.owner_name = "security.mqtt";
     realm_config.policy_source = "acl.sqlite";
-    check_int_eq(turbo_flow_security_realm_create(&realm_config, &realm), TURBO_OK);
-    check_int_eq(turbo_flow_security_realm_bind_policy_provider(
+    check_equal(turbo_flow_security_realm_create(&realm_config, &realm), TURBO_OK);
+    check_equal(turbo_flow_security_realm_bind_policy_provider(
                      realm, turbo_flow_security_sqlite_provider_interface(provider)),
                  TURBO_OK);
     request.principal = &principal;
@@ -76,23 +76,23 @@ spec("SQLite ACL control store") {
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/telemetry/value";
-    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
 
     bundle.policy_version = 2u;
     bundle.rules = &second;
-    check_int_eq(turbo_flow_security_sqlite_provider_publish(provider, &bundle), TURBO_OK);
+    check_equal(turbo_flow_security_sqlite_provider_publish(provider, &bundle), TURBO_OK);
     principal.policy_version = 2u;
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
-    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
+    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
                  TURBO_EPERM);
-    check_uint_eq(decision.policy_version, 2u);
+    check_equal(decision.policy_version, 2u);
     request.resource = "root-a/new/value";
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
-    check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
 
     turbo_flow_security_realm_destroy(realm);
     turbo_flow_security_sqlite_provider_destroy(provider);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(tt_remove_file(path), 0);
     free(path);
   }
 
@@ -111,24 +111,24 @@ spec("SQLite ACL control store") {
     turbo_flow_security_realm_t *realm = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
 
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_security_realm_create_resolved(resolved, "security.main", NULL, &realm, &error),
         TURBO_OK);
-    check_str_eq(turbo_flow_security_realm_policy_source(realm), "acl.sqlite");
+    check_equal(turbo_flow_security_realm_policy_source(realm), "acl.sqlite");
     turbo_flow_security_realm_destroy(realm);
     turbo_flow_resolved_config_destroy(resolved);
 
     resolved = NULL;
     realm = NULL;
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(bad_yaml, sizeof(bad_yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(bad_yaml, sizeof(bad_yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_security_realm_create_resolved(resolved, "security.main", NULL, &realm, &error),
         TURBO_EINVAL);
-    check_str_contains(error.path, "rules");
+    check_contains(error.path, "rules");
     turbo_flow_resolved_config_destroy(resolved);
   }
 
@@ -150,9 +150,9 @@ spec("SQLite ACL control store") {
     first_config.namespace_name = "mqtt-first";
     second_config.database_path = path;
     second_config.namespace_name = "mqtt-second";
-    check_int_eq(turbo_flow_security_sqlite_provider_create(&first_config, &first_provider),
+    check_equal(turbo_flow_security_sqlite_provider_create(&first_config, &first_provider),
                  TURBO_OK);
-    check_int_eq(turbo_flow_security_sqlite_provider_create(&second_config, &second_provider),
+    check_equal(turbo_flow_security_sqlite_provider_create(&second_config, &second_provider),
                  TURBO_OK);
 
     first_bundle.policy_version = 1u;
@@ -161,35 +161,35 @@ spec("SQLite ACL control store") {
     second_bundle.policy_version = 7u;
     second_bundle.rules = &second_rule;
     second_bundle.rule_count = 1u;
-    check_int_eq(turbo_flow_security_sqlite_provider_publish(first_provider, &first_bundle),
+    check_equal(turbo_flow_security_sqlite_provider_publish(first_provider, &first_bundle),
                  TURBO_OK);
-    check_int_eq(turbo_flow_security_sqlite_provider_publish(second_provider, &second_bundle),
+    check_equal(turbo_flow_security_sqlite_provider_publish(second_provider, &second_bundle),
                  TURBO_OK);
 
     interface = turbo_flow_security_sqlite_provider_interface(first_provider);
     check_not_null(interface);
-    check_int_eq(interface->load(interface->ctx, 1u, &loaded), TURBO_OK);
-    check_uint_eq(loaded.policy_version, 1u);
-    check_uint_eq(loaded.rule_count, 1u);
-    check_str_eq(loaded.rules[0].pattern, "root-a/first/");
+    check_equal(interface->load(interface->ctx, 1u, &loaded), TURBO_OK);
+    check_equal(loaded.policy_version, 1u);
+    check_equal(loaded.rule_count, 1u);
+    check_equal(loaded.rules[0].pattern, "root-a/first/");
     interface->release(interface->ctx, &loaded);
 
     interface = turbo_flow_security_sqlite_provider_interface(second_provider);
     loaded = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
-    check_int_eq(interface->load(interface->ctx, 7u, &loaded), TURBO_OK);
-    check_uint_eq(loaded.policy_version, 7u);
-    check_uint_eq(loaded.rule_count, 1u);
-    check_str_eq(loaded.rules[0].pattern, "root-a/second/");
+    check_equal(interface->load(interface->ctx, 7u, &loaded), TURBO_OK);
+    check_equal(loaded.policy_version, 7u);
+    check_equal(loaded.rule_count, 1u);
+    check_equal(loaded.rules[0].pattern, "root-a/second/");
     interface->release(interface->ctx, &loaded);
 
     turbo_flow_security_sqlite_provider_destroy(second_provider);
     turbo_flow_security_sqlite_provider_destroy(first_provider);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(tt_remove_file(path), 0);
     free(path);
 
     first_config.database_path = ":memory:";
     first_provider = NULL;
-    check_int_eq(turbo_flow_security_sqlite_provider_create(&first_config, &first_provider),
+    check_equal(turbo_flow_security_sqlite_provider_create(&first_config, &first_provider),
                  TURBO_EINVAL);
     check_null(first_provider);
   }

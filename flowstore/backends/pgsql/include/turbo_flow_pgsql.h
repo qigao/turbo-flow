@@ -21,7 +21,7 @@ typedef struct turbo_flow_pgsql_sink_config_s {
   const turbo_flow_content_binding_t *parameter_content_binding;
 } turbo_flow_pgsql_sink_config_t;
 
-CXX_C_API int turbo_flow_pgsql_register_sink_adapter(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_pgsql_register_sink_adapter(turbo_flow_t *flow, const char *name,
                                                      const turbo_flow_pgsql_sink_config_t *config);
 
 #define TURBO_FLOW_PGSQL_DEFAULT_MAX_ROWS 10000u
@@ -68,16 +68,16 @@ typedef struct turbo_flow_pgsql_row_mapper_s {
   void *ctx;
 } turbo_flow_pgsql_row_mapper_t;
 
-CXX_C_API size_t turbo_flow_pgsql_row_count(const turbo_flow_pgsql_rowset_view_t *rows);
-CXX_C_API size_t turbo_flow_pgsql_column_count(const turbo_flow_pgsql_rowset_view_t *rows);
-CXX_C_API const char *turbo_flow_pgsql_column_name(const turbo_flow_pgsql_rowset_view_t *rows,
+TURBO_FLOW_C_API size_t turbo_flow_pgsql_row_count(const turbo_flow_pgsql_rowset_view_t *rows);
+TURBO_FLOW_C_API size_t turbo_flow_pgsql_column_count(const turbo_flow_pgsql_rowset_view_t *rows);
+TURBO_FLOW_C_API const char *turbo_flow_pgsql_column_name(const turbo_flow_pgsql_rowset_view_t *rows,
                                                    size_t column);
-CXX_C_API uint32_t turbo_flow_pgsql_column_oid(const turbo_flow_pgsql_rowset_view_t *rows,
+TURBO_FLOW_C_API uint32_t turbo_flow_pgsql_column_oid(const turbo_flow_pgsql_rowset_view_t *rows,
                                                size_t column);
-CXX_C_API int turbo_flow_pgsql_column_format(const turbo_flow_pgsql_rowset_view_t *rows,
+TURBO_FLOW_C_API int turbo_flow_pgsql_column_format(const turbo_flow_pgsql_rowset_view_t *rows,
                                              size_t column);
 /** Borrowed cell bytes valid only during the mapper callback. */
-CXX_C_API int turbo_flow_pgsql_cell(const turbo_flow_pgsql_rowset_view_t *rows, size_t row,
+TURBO_FLOW_C_API int turbo_flow_pgsql_cell(const turbo_flow_pgsql_rowset_view_t *rows, size_t row,
                                     size_t column, const char **data, size_t *len, int *is_null);
 
 /**
@@ -87,7 +87,7 @@ CXX_C_API int turbo_flow_pgsql_cell(const turbo_flow_pgsql_rowset_view_t *rows, 
  * strict DataBind CSV, according to `result_format`. Command-only results become a
  * `DatabaseCommandResult`. PGresult never crosses the adapter boundary.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_pgsql_register_query_adapter(turbo_flow_t *flow, const char *name,
                                         const turbo_flow_pgsql_query_config_t *config);
 
@@ -165,7 +165,7 @@ typedef struct turbo_flow_pgsql_outbox_config_s {
    0u}
 
 /** Register one source or sink against the fixed PostgreSQL outbox schema. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_pgsql_register_outbox_adapter(turbo_flow_t *flow, const char *name,
                                          const turbo_flow_pgsql_outbox_config_t *config);
 
@@ -176,7 +176,7 @@ turbo_flow_pgsql_register_outbox_adapter(turbo_flow_t *flow, const char *name,
  * must be `kind: outbox`, `backend: postgresql`; unknown or cross-role fields
  * fail before adapter registration.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_pgsql_register_resolved_outbox_adapter(turbo_flow_t *flow, const char *name,
                                                   const turbo_flow_resolved_config_t *resolved,
                                                   turbo_flow_config_error_t *error);

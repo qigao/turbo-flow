@@ -206,30 +206,30 @@ typedef struct turbo_flow_observe_log_config_s {
   void *write_ctx;
 } turbo_flow_observe_log_config_t;
 
-CXX_C_API turbo_flow_observe_t *
+TURBO_FLOW_C_API turbo_flow_observe_t *
 turbo_flow_observe_create(const turbo_flow_observe_config_t *config);
 
 /** Returns TURBO_EBUSY while still attached to a flow. */
-CXX_C_API int turbo_flow_observe_destroy(turbo_flow_observe_t *observe);
+TURBO_FLOW_C_API int turbo_flow_observe_destroy(turbo_flow_observe_t *observe);
 
 /** Attach before start. One Observe object can be attached to one flow. */
-CXX_C_API int turbo_flow_observe_attach(turbo_flow_observe_t *observe, turbo_flow_t *flow);
-CXX_C_API int turbo_flow_observe_detach(turbo_flow_observe_t *observe);
+TURBO_FLOW_C_API int turbo_flow_observe_attach(turbo_flow_observe_t *observe, turbo_flow_t *flow);
+TURBO_FLOW_C_API int turbo_flow_observe_detach(turbo_flow_observe_t *observe);
 
-CXX_C_API int turbo_flow_observe_snapshot(const turbo_flow_observe_t *observe,
+TURBO_FLOW_C_API int turbo_flow_observe_snapshot(const turbo_flow_observe_t *observe,
                                           turbo_flow_observe_snapshot_t *out);
 /**
  * Pull one control-plane view. The host must serialize this call with flow
  * lifecycle/configuration operations; message counters may change during the pull.
  * Pool details remain available via core pool snapshots.
  */
-CXX_C_API int turbo_flow_observe_graph_snapshot(const turbo_flow_observe_t *observe,
+TURBO_FLOW_C_API int turbo_flow_observe_graph_snapshot(const turbo_flow_observe_t *observe,
                                                 turbo_flow_observe_graph_snapshot_t *out);
 /**
  * Capture traffic, system, and aggregate graph facts for the control DSL.
  * The snapshot must outlive evaluation through facts; both are caller-owned.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_observe_control_facts(const turbo_flow_observe_t *observe,
                                  turbo_flow_observe_control_facts_snapshot_t *snapshot,
                                  turbo_flow_control_facts_t *facts);
@@ -237,41 +237,41 @@ turbo_flow_observe_control_facts(const turbo_flow_observe_t *observe,
  * Run one host-owned reconcile tick. The caller owns scheduling and state and
  * serializes this call with flow lifecycle/configuration operations.
  */
-CXX_C_API int turbo_flow_observe_reconcile_pool(turbo_flow_observe_t *observe,
+TURBO_FLOW_C_API int turbo_flow_observe_reconcile_pool(turbo_flow_observe_t *observe,
                                                 const turbo_flow_observe_pool_policy_t *policy,
                                                 turbo_flow_observe_reconcile_state_t *state,
                                                 uint64_t now_ns,
                                                 turbo_flow_observe_reconcile_result_t *out);
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_observe_record_control_event(turbo_flow_observe_t *observe,
                                         const turbo_flow_observe_control_event_t *event);
-CXX_C_API size_t turbo_flow_observe_event_count(const turbo_flow_observe_t *observe);
-CXX_C_API uint64_t turbo_flow_observe_dropped_event_count(const turbo_flow_observe_t *observe);
-CXX_C_API int turbo_flow_observe_event_at(const turbo_flow_observe_t *observe, size_t index,
+TURBO_FLOW_C_API size_t turbo_flow_observe_event_count(const turbo_flow_observe_t *observe);
+TURBO_FLOW_C_API uint64_t turbo_flow_observe_dropped_event_count(const turbo_flow_observe_t *observe);
+TURBO_FLOW_C_API int turbo_flow_observe_event_at(const turbo_flow_observe_t *observe, size_t index,
                                           turbo_flow_observe_event_record_t *out);
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_observe_record_command_result(turbo_flow_observe_t *observe, const char *target_uid,
                                          const turbo_flow_resource_command_result_t *result);
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_observe_last_command_result(const turbo_flow_observe_t *observe,
                                        char target_uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u],
                                        turbo_flow_resource_command_result_t *out);
-CXX_C_API size_t turbo_flow_observe_resource_count(const turbo_flow_observe_t *observe);
-CXX_C_API int turbo_flow_observe_resource_at(const turbo_flow_observe_t *observe, size_t index,
+TURBO_FLOW_C_API size_t turbo_flow_observe_resource_count(const turbo_flow_observe_t *observe);
+TURBO_FLOW_C_API int turbo_flow_observe_resource_at(const turbo_flow_observe_t *observe, size_t index,
                                              turbo_flow_observe_resource_view_t *out);
 /** Prometheus text exposition; resource identity is label-escaped and payload is never queried. */
-CXX_C_API int turbo_flow_observe_export_prometheus(const turbo_flow_observe_t *observe,
+TURBO_FLOW_C_API int turbo_flow_observe_export_prometheus(const turbo_flow_observe_t *observe,
                                                    turbo_flow_observe_write_fn write, void *ctx);
 /** Exporter-neutral OpenTelemetry bridge; the callback maps samples to its selected SDK. */
-CXX_C_API int turbo_flow_observe_export_opentelemetry(const turbo_flow_observe_t *observe,
+TURBO_FLOW_C_API int turbo_flow_observe_export_opentelemetry(const turbo_flow_observe_t *observe,
                                                       turbo_flow_observe_metric_fn emit, void *ctx);
-CXX_C_API size_t turbo_flow_observe_stage_count(const turbo_flow_observe_t *observe);
-CXX_C_API int turbo_flow_observe_stage_snapshot_at(const turbo_flow_observe_t *observe,
+TURBO_FLOW_C_API size_t turbo_flow_observe_stage_count(const turbo_flow_observe_t *observe);
+TURBO_FLOW_C_API int turbo_flow_observe_stage_snapshot_at(const turbo_flow_observe_t *observe,
                                                    size_t index,
                                                    turbo_flow_observe_stage_snapshot_t *out);
 
 /** Register an explicit terminal summary sink. The host callback owns logging policy. */
-CXX_C_API int turbo_flow_observe_register_log_sink(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_observe_register_log_sink(turbo_flow_t *flow, const char *name,
                                                    const turbo_flow_observe_log_config_t *config);
 
 #ifdef __cplusplus

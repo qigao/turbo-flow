@@ -118,7 +118,7 @@ FLOW_DEFINE_GOVERNANCE_SCHEMA(FLOW_SECURITY_REALM_GOVERNANCE, TURBO_FLOW_DOMAIN_
 
 static void flow_resource_document_payload_free(void *data, void *ctx) {
   (void)ctx;
-  tstr_free((tstr_t)data);
+  tstr_free((tstr)data);
 }
 
 static int flow_resource_document_kind_valid(turbo_flow_resource_document_kind_t kind) {
@@ -206,7 +206,7 @@ static int flow_resource_governance_document(const turbo_flow_resource_metadata_
                                              turbo_flow_resource_document_kind_t document_kind,
                                              turbo_flow_resource_document_t *out) {
   const turbo_flow_resource_schema_t *schema;
-  tstr_t payload = NULL;
+  tstr payload = NULL;
   int ready;
   int accepting;
   int drained;
@@ -272,7 +272,7 @@ int turbo_flow_resource_document_set_payload_copy(turbo_flow_resource_document_t
                                                   const turbo_flow_resource_schema_t *schema,
                                                   const void *payload, size_t payload_size) {
   turbo_flow_resource_document_t result = TURBO_FLOW_RESOURCE_DOCUMENT_INIT;
-  tstr_t copy;
+  tstr copy;
   int written;
   if (!document || document->size < sizeof(*document) || document->payload ||
       !flow_resource_metadata_valid(metadata) || !flow_resource_schema_valid(schema) ||

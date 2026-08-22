@@ -138,11 +138,11 @@ static void http_bench_round_trip(void) {
   memset(&client_config, 0, sizeof(client_config));
   capture.expected_size = HTTP_BENCH_PAYLOAD_BYTES;
   rc = http_bench_platform_init();
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) return;
   platform_started = 1;
   port = http_bench_pick_port();
-  check_int_gt((int)port, 0);
+  check_greater((int)port, 0);
   if (port == 0u) goto done;
 
   server_flow = turbo_flow_create();
@@ -160,7 +160,7 @@ static void http_bench_round_trip(void) {
     rc = turbo_flow_parse_string(server_flow, server_graph, sizeof(server_graph) - 1u);
   if (rc == TURBO_OK) rc = turbo_flow_compile(server_flow);
   if (rc == TURBO_OK) rc = turbo_flow_start(server_flow);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto done;
   server_started = 1;
 
@@ -177,7 +177,7 @@ static void http_bench_round_trip(void) {
     rc = turbo_flow_parse_string(client_flow, client_graph, sizeof(client_graph) - 1u);
   if (rc == TURBO_OK) rc = turbo_flow_compile(client_flow);
   if (rc == TURBO_OK) rc = turbo_flow_start(client_flow);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto done;
   client_started = 1;
 
@@ -187,7 +187,7 @@ static void http_bench_round_trip(void) {
   memset(message.owned_payload, 0x48, HTTP_BENCH_PAYLOAD_BYTES);
   message.payload = tstr_to_v(message.owned_payload);
   rc = turbo_flow_publish(client_flow, "input", &message);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto done;
 
   for (size_t sample = 0u; sample < HTTP_BENCH_SAMPLES && rc == TURBO_OK; ++sample) {
@@ -198,12 +198,12 @@ static void http_bench_round_trip(void) {
     }
     elapsed[sample] = turbo_hrtime() - begin;
   }
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc == TURBO_OK) {
     const size_t median = HTTP_BENCH_SAMPLES / 2u;
     const size_t expected_calls = 1u + HTTP_BENCH_SAMPLES * HTTP_BENCH_REQUESTS;
     qsort(elapsed, HTTP_BENCH_SAMPLES, sizeof(elapsed[0]), http_bench_u64_compare);
-    check_size_eq(capture.calls, expected_calls);
+    check_equal(capture.calls, expected_calls);
     printf("HTTP_BENCH_RESULT operation=echo_round_trip samples=%u requests=%u payload_bytes=%u "
            "median_ns=%" PRIu64 " throughput_req_s=%.2f throughput_mib_s=%.2f\n",
            HTTP_BENCH_SAMPLES, HTTP_BENCH_REQUESTS, HTTP_BENCH_PAYLOAD_BYTES, elapsed[median],
@@ -218,8 +218,8 @@ static void http_bench_round_trip(void) {
 
 done:
   turbo_flow_msg_cleanup(&message);
-  if (client_started) check_int_eq(turbo_flow_stop(client_flow), TURBO_OK);
-  if (server_started) check_int_eq(turbo_flow_stop(server_flow), TURBO_OK);
+  if (client_started) check_equal(turbo_flow_stop(client_flow), TURBO_OK);
+  if (server_started) check_equal(turbo_flow_stop(server_flow), TURBO_OK);
   turbo_flow_destroy(client_flow);
   turbo_flow_destroy(server_flow);
   if (platform_started) http_bench_platform_cleanup();

@@ -175,11 +175,11 @@ static void socket_bench_tcp_source(void) {
   atomic_init(&state.messages, 0u);
   memset(&config, 0, sizeof(config));
   rc = socket_bench_platform_init();
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) return;
   platform_started = 1;
   port = socket_bench_pick_port();
-  check_int_gt((int)port, 0);
+  check_greater((int)port, 0);
   if (port == 0u) goto done;
 
   flow = turbo_flow_create();
@@ -196,13 +196,13 @@ static void socket_bench_tcp_source(void) {
   if (rc == TURBO_OK) rc = turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u);
   if (rc == TURBO_OK) rc = turbo_flow_compile(flow);
   if (rc == TURBO_OK) rc = turbo_flow_start(flow);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto done;
   flow_started = 1;
 
   rc = socket_bench_send_bytes(port, SOCKET_BENCH_WARMUP_BYTES);
   if (rc == TURBO_OK) rc = socket_bench_wait_bytes(&state, SOCKET_BENCH_WARMUP_BYTES);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto done;
 
   for (size_t sample = 0u; sample < SOCKET_BENCH_SAMPLES; ++sample) {
@@ -216,7 +216,7 @@ static void socket_bench_tcp_source(void) {
     messages[sample] = atomic_load_explicit(&state.messages, memory_order_acquire);
     if (rc != TURBO_OK) break;
   }
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc == TURBO_OK) {
     const size_t median = SOCKET_BENCH_SAMPLES / 2u;
     qsort(elapsed, SOCKET_BENCH_SAMPLES, sizeof(elapsed[0]), socket_bench_u64_compare);
@@ -233,7 +233,7 @@ static void socket_bench_tcp_source(void) {
   }
 
 done:
-  if (flow && flow_started) check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+  if (flow && flow_started) check_equal(turbo_flow_stop(flow), TURBO_OK);
   turbo_flow_destroy(flow);
   if (platform_started) socket_bench_platform_cleanup();
 }

@@ -123,7 +123,7 @@ uint32_t flow_expr_push_f64(flow_expr_parse_ctx_t *ctx, flow_expr_token_t token)
 
 uint32_t flow_expr_push_string(flow_expr_parse_ctx_t *ctx, flow_expr_token_t token) {
   flow_expr_node_t node = flow_expr_node(FLOW_EXPR_STRING, token);
-  tstr_t decoded = tstr_new_len("", 0);
+  tstr decoded = tstr_new_len("", 0);
   if (token.length > FLOW_EXPR_MAX_TEXT) {
     flow_expr_set_error(ctx, TURBO_ENOSPC, token.line, token.column,
                         "expression string limit exceeded");
@@ -173,7 +173,7 @@ uint32_t flow_expr_push_string(flow_expr_parse_ctx_t *ctx, flow_expr_token_t tok
       }
     }
     {
-      tstr_t next = tstr_cat_len(decoded, &value, 1);
+      tstr next = tstr_cat_len(decoded, &value, 1);
       if (!next) {
         tstr_freep(&decoded);
         flow_expr_set_error(ctx, TURBO_ENOMEM, token.line, token.column,
@@ -205,7 +205,7 @@ uint32_t flow_expr_push_field(flow_expr_parse_ctx_t *ctx, flow_expr_token_t toke
 uint32_t flow_expr_append_field(flow_expr_parse_ctx_t *ctx, uint32_t field,
                                 flow_expr_token_t member) {
   flow_expr_node_t *node;
-  tstr_t next;
+  tstr next;
   if (!ctx || !ctx->ast || field == FLOW_EXPR_INVALID_NODE || ctx->failed) {
     return FLOW_EXPR_INVALID_NODE;
   }

@@ -63,7 +63,7 @@ int turbo_flow_protocol_graph_publish(
   message.id = request->delivery_id;
   message.type = input->metadata.message_type;
   message.buffer = buffer;
-  message.payload = tstr_v_from_buf((const char *)storage, input->payload_size);
+  message.payload = vstr_from_buf((const char *)storage, input->payload_size);
   message.transport_context = metadata;
   rc = turbo_flow_publish(sink->flow, sink->source_name, &message);
   turbo_flow_msg_cleanup(&message);

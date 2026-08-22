@@ -63,20 +63,20 @@ typedef struct turbo_flow_sqlite_storage_backend_options_s {
  * through that owner, is destroyed on close, and does not advertise the durable capability.
  * File paths remain durable. Keys and values are binary-safe.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_sqlite_record_store_create(const turbo_flow_sqlite_record_store_config_t *config,
                                       turbo_flow_record_store_t *out);
 
 /** Create from one strict `kind: record_store`, `backend: sqlite` resolved YAML channel. */
-CXX_C_API int turbo_flow_sqlite_record_store_create_resolved(
+TURBO_FLOW_C_API int turbo_flow_sqlite_record_store_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     turbo_flow_record_store_t *out, turbo_flow_config_error_t *error);
 
 /** Close the owned SQLite connection and reset the RecordStore view. */
-CXX_C_API int turbo_flow_sqlite_record_store_close(turbo_flow_record_store_t *store);
+TURBO_FLOW_C_API int turbo_flow_sqlite_record_store_close(turbo_flow_record_store_t *store);
 
 /** Return the builtin SQLite RECORD storage backend function table. */
-CXX_C_API const turbo_flow_storage_backend_plugin_api_t *
+TURBO_FLOW_C_API const turbo_flow_storage_backend_plugin_api_t *
 turbo_flow_sqlite_storage_backend_api(void);
 
 #ifdef __cplusplus

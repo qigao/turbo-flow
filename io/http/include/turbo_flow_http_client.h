@@ -47,7 +47,7 @@ typedef struct turbo_flow_http_client_config_s {
  * only transport I/O and pump timeout failures are retried. POST, PATCH, HTTP
  * status failures, and polling-source retries remain adapter/config specific.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_http_register_client_adapter(turbo_flow_t *flow, const char *name,
                                         const turbo_flow_http_client_config_t *config);
 
@@ -55,7 +55,7 @@ turbo_flow_http_register_client_adapter(turbo_flow_t *flow, const char *name,
  * Register an owned HTTP client from adapter kind `http` in a resolved YAML snapshot.
  * Host objects (`client` and `content_binding`) are not accepted from YAML.
  */
-CXX_C_API int turbo_flow_http_register_client_resolved_adapter(
+TURBO_FLOW_C_API int turbo_flow_http_register_client_resolved_adapter(
     turbo_flow_t *flow, const turbo_flow_resolved_config_t *resolved, const char *adapter_name);
 
 #ifdef __cplusplus

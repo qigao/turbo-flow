@@ -349,7 +349,7 @@ static void redis_run_stream_source_case(int stage_result, int expect_ack) {
   int saw_ack = 0;
   check_not_null(flow);
   check_true(port > 0);
-  check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server), TURBO_OK);
+  check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server), TURBO_OK);
   memset(&capture, 0, sizeof(capture));
   atomic_init(&capture.called, 0);
   capture.result = stage_result;
@@ -358,19 +358,19 @@ static void redis_run_stream_source_case(int stage_result, int expect_ack) {
   config.group = "workers";
   config.consumer = expect_ack ? "success" : "failure";
   config.block_ms = 1000u;
-  check_int_eq(turbo_flow_redis_register_stream_adapter(flow, "redis.in", &config), TURBO_OK);
-  check_int_eq(turbo_flow_register_stage_ex(flow, "capture", redis_capture, &capture, NULL),
+  check_equal(turbo_flow_redis_register_stream_adapter(flow, "redis.in", &config), TURBO_OK);
+  check_equal(turbo_flow_register_stage_ex(flow, "capture", redis_capture, &capture, NULL),
                TURBO_OK);
-  check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-  check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-  check_int_eq(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+  check_equal(turbo_flow_compile(flow), TURBO_OK);
+  check_equal(turbo_flow_start(flow), TURBO_OK);
   for (int i = 0; i < REDIS_TEST_WAIT_ITERATIONS; ++i) {
     if (atomic_load_explicit(&capture.called, memory_order_acquire) > 0) break;
     turbo_sleep_ms(5);
   }
-  check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
-  check_size_eq(capture.payload_len, 5u);
-  check_str_eq(capture.payload, "hello");
+  check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
+  check_equal(capture.payload_len, 5u);
+  check_equal(capture.payload, "hello");
   for (int i = 0; i < REDIS_TEST_WAIT_ITERATIONS; ++i) {
     if (atomic_load_explicit(&server.saw_xack, memory_order_acquire)) {
       saw_ack = 1;
@@ -378,12 +378,12 @@ static void redis_run_stream_source_case(int stage_result, int expect_ack) {
     }
     turbo_sleep_ms(1);
   }
-  check_int_eq(saw_ack, expect_ack);
-  check_int_eq(turbo_flow_stop(flow), TURBO_OK);
-  check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
-  check_int_eq(atomic_load_explicit(&server.saw_xreadgroup, memory_order_acquire), 1);
-  check_int_eq(atomic_load_explicit(&server.client_closed, memory_order_acquire), 1);
-  check_int_eq(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
+  check_equal(saw_ack, expect_ack);
+  check_equal(turbo_flow_stop(flow), TURBO_OK);
+  check_equal(turbo_thread_join(&server_thread), TURBO_OK);
+  check_equal(atomic_load_explicit(&server.saw_xreadgroup, memory_order_acquire), 1);
+  check_equal(atomic_load_explicit(&server.client_closed, memory_order_acquire), 1);
+  check_equal(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
   redis_test_close_socket(server.listener);
   turbo_flow_destroy(flow);
 #ifdef _WIN32
@@ -401,26 +401,26 @@ static void redis_run_lost_xack_case(redis_runtime_server_mode_t mode, int expec
   unsigned short port = redis_runtime_server_open(&server, mode);
   int rc;
   check_true(port > 0);
-  check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server), TURBO_OK);
+  check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server), TURBO_OK);
   config.port = port;
   config.group = "workers";
   config.consumer = "reply-lost";
   config.block_ms = 10u;
-  check_int_eq(turbo_flow_redis_stream_owner_create(&config, &owner), TURBO_OK);
-  check_int_eq(turbo_flow_redis_stream_owner_claim(owner, &claim), TURBO_OK);
+  check_equal(turbo_flow_redis_stream_owner_create(&config, &owner), TURBO_OK);
+  check_equal(turbo_flow_redis_stream_owner_claim(owner, &claim), TURBO_OK);
   check_true(claim.token != 0u);
   rc = turbo_flow_redis_stream_owner_ack(owner, claim.token);
   check_true(rc != TURBO_OK);
-  check_int_eq(atomic_load_explicit(&server.saw_xack, memory_order_acquire), 1);
-  check_int_eq(turbo_flow_redis_stream_owner_ack(owner, claim.token), expected_retry_status);
-  check_int_eq(atomic_load_explicit(&server.saw_xpending, memory_order_acquire), 1);
-  check_int_eq(atomic_load_explicit(&server.xack_count, memory_order_acquire), expected_xack_count);
+  check_equal(atomic_load_explicit(&server.saw_xack, memory_order_acquire), 1);
+  check_equal(turbo_flow_redis_stream_owner_ack(owner, claim.token), expected_retry_status);
+  check_equal(atomic_load_explicit(&server.saw_xpending, memory_order_acquire), 1);
+  check_equal(atomic_load_explicit(&server.xack_count, memory_order_acquire), expected_xack_count);
   if (expected_retry_status == TURBO_OK)
-    check_int_eq(turbo_flow_redis_stream_owner_ack(owner, claim.token), TURBO_EALREADY);
-  else check_int_eq(turbo_flow_redis_stream_owner_requeue(owner, claim.token), TURBO_EBUSY);
+    check_equal(turbo_flow_redis_stream_owner_ack(owner, claim.token), TURBO_EALREADY);
+  else check_equal(turbo_flow_redis_stream_owner_requeue(owner, claim.token), TURBO_EBUSY);
   turbo_flow_redis_stream_owner_destroy(owner);
-  check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
-  check_int_eq(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
+  check_equal(turbo_thread_join(&server_thread), TURBO_OK);
+  check_equal(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
   redis_test_close_socket(server.listener);
 #ifdef _WIN32
   WSACleanup();
@@ -443,9 +443,9 @@ spec("turbo_flow_redis") {
     limits.max_records = 2u;
     limits.max_bytes = 64u;
     limits.max_item_bytes = 32u;
-    check_int_eq(redis_test_state_store_open(&config, &limits, &store), TURBO_OK);
+    check_equal(redis_test_state_store_open(&config, &limits, &store), TURBO_OK);
     check_not_null(store);
-    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+    check_equal(redis_test_storage_destroy(store), TURBO_OK);
   }
 
   it("accepts documented Redis IndexStore defaults without connecting eagerly") {
@@ -462,9 +462,9 @@ spec("turbo_flow_redis") {
     limits.max_records = 2u;
     limits.max_bytes = 64u;
     limits.max_item_bytes = 32u;
-    check_int_eq(redis_test_index_store_open(&config, &limits, &store), TURBO_OK);
+    check_equal(redis_test_index_store_open(&config, &limits, &store), TURBO_OK);
     check_not_null(store);
-    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+    check_equal(redis_test_storage_destroy(store), TURBO_OK);
   }
 
   it("accepts Redis Cluster StateStore configuration without connecting eagerly") {
@@ -486,15 +486,15 @@ spec("turbo_flow_redis") {
     limits.max_records = 2u;
     limits.max_bytes = 64u;
     limits.max_item_bytes = 32u;
-    check_int_eq(redis_test_state_store_open(&config, &limits, &store), TURBO_OK);
+    check_equal(redis_test_state_store_open(&config, &limits, &store), TURBO_OK);
     check_not_null(store);
-    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+    check_equal(redis_test_storage_destroy(store), TURBO_OK);
 
     config.connection.database = 1;
-    check_int_eq(redis_test_state_store_open(&config, &limits, &store), TURBO_EINVAL);
+    check_equal(redis_test_state_store_open(&config, &limits, &store), TURBO_EINVAL);
     config.connection.database = 0;
     config.key = "turboflow:state-cluster:records";
-    check_int_eq(redis_test_state_store_open(&config, &limits, &store), TURBO_EINVAL);
+    check_equal(redis_test_state_store_open(&config, &limits, &store), TURBO_EINVAL);
   }
 
   it("accepts Redis Sentinel IndexStore configuration without connecting eagerly") {
@@ -516,11 +516,11 @@ spec("turbo_flow_redis") {
     limits.max_records = 2u;
     limits.max_bytes = 64u;
     limits.max_item_bytes = 32u;
-    check_int_eq(redis_test_index_store_open(&config, &limits, &store), TURBO_OK);
+    check_equal(redis_test_index_store_open(&config, &limits, &store), TURBO_OK);
     check_not_null(store);
-    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+    check_equal(redis_test_storage_destroy(store), TURBO_OK);
     config.connection.service_name = NULL;
-    check_int_eq(redis_test_index_store_open(&config, &limits, &store), TURBO_EINVAL);
+    check_equal(redis_test_index_store_open(&config, &limits, &store), TURBO_EINVAL);
   }
 
   it("executes StateStore mutations through one Lua CAS command without a pre-scan") {
@@ -538,7 +538,7 @@ spec("turbo_flow_redis") {
     unsigned short port = redis_runtime_server_open(&server, REDIS_RUNTIME_STATE_STORE);
 
     check_true(port > 0u);
-    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+    check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
                  TURBO_OK);
     memset(&config, 0, sizeof(config));
     config.host = "127.0.0.1";
@@ -554,18 +554,18 @@ spec("turbo_flow_redis") {
     limits.max_bytes = 16u;
     limits.max_item_bytes = 16u;
 
-    check_int_eq(redis_test_state_store_open(&config, &limits, &store), TURBO_OK);
-    check_int_eq(turbo_flow_state_store_put(store, key, value, 0u, &revision), TURBO_OK);
-    check_uint_eq(revision, 1u);
-    check_int_eq(turbo_flow_state_store_get(store, key, &record), TURBO_OK);
-    check_uint_eq(record.revision, 1u);
-    check_mem_eq(mem_buffer_const_data(record.value), value_bytes, sizeof(value_bytes));
+    check_equal(redis_test_state_store_open(&config, &limits, &store), TURBO_OK);
+    check_equal(turbo_flow_state_store_put(store, key, value, 0u, &revision), TURBO_OK);
+    check_equal(revision, 1u);
+    check_equal(turbo_flow_state_store_get(store, key, &record), TURBO_OK);
+    check_equal(record.revision, 1u);
+    check_equal(mem_buffer_const_data(record.value), value_bytes, sizeof(value_bytes));
     turbo_flow_state_record_cleanup(&record);
-    check_int_eq(turbo_flow_state_store_remove(store, key, 1u), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&server.eval_count, memory_order_acquire), 2);
-    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
-    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
+    check_equal(turbo_flow_state_store_remove(store, key, 1u), TURBO_OK);
+    check_equal(atomic_load_explicit(&server.eval_count, memory_order_acquire), 2);
+    check_equal(redis_test_storage_destroy(store), TURBO_OK);
+    check_equal(turbo_thread_join(&server_thread), TURBO_OK);
+    check_equal(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
     redis_test_close_socket(server.listener);
 #ifdef _WIN32
     WSACleanup();
@@ -587,12 +587,12 @@ spec("turbo_flow_redis") {
     limits.max_bytes = 64u;
     limits.max_item_bytes = 32u;
     limits.full_policy = TURBO_FLOW_STORE_FULL_TRIM_OLDEST;
-    check_int_eq(redis_test_log_store_open(&config, &limits, &store), TURBO_OK);
+    check_equal(redis_test_log_store_open(&config, &limits, &store), TURBO_OK);
     check_not_null(store);
-    check_int_eq(redis_test_storage_destroy(store), TURBO_OK);
+    check_equal(redis_test_storage_destroy(store), TURBO_OK);
 
     config.max_operation_records = 1u;
-    check_int_eq(redis_test_log_store_open(&config, &limits, &store), TURBO_EINVAL);
+    check_equal(redis_test_log_store_open(&config, &limits, &store), TURBO_EINVAL);
   }
 
   it("propagates Redis Stream errors instead of reporting an empty queue") {
@@ -603,17 +603,17 @@ spec("turbo_flow_redis") {
     turbo_flow_redis_stream_claim_t claim = TURBO_FLOW_REDIS_STREAM_CLAIM_INIT;
     unsigned short port = redis_runtime_server_open(&server, REDIS_RUNTIME_XREADGROUP_ERROR);
     check_true(port > 0);
-    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+    check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
                  TURBO_OK);
     config.port = port;
     config.group = "missing";
     config.consumer = "worker";
     config.block_ms = 10u;
-    check_int_eq(turbo_flow_redis_stream_owner_create(&config, &owner), TURBO_OK);
-    check_int_eq(turbo_flow_redis_stream_owner_claim(owner, &claim), TURBO_EIO);
+    check_equal(turbo_flow_redis_stream_owner_create(&config, &owner), TURBO_OK);
+    check_equal(turbo_flow_redis_stream_owner_claim(owner, &claim), TURBO_EIO);
     turbo_flow_redis_stream_owner_destroy(owner);
-    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&server.saw_xreadgroup, memory_order_acquire), 1);
+    check_equal(turbo_thread_join(&server_thread), TURBO_OK);
+    check_equal(atomic_load_explicit(&server.saw_xreadgroup, memory_order_acquire), 1);
     redis_test_close_socket(server.listener);
 #ifdef _WIN32
     WSACleanup();
@@ -627,15 +627,15 @@ spec("turbo_flow_redis") {
     turbo_flow_redis_stream_owner_t *owner = NULL;
     unsigned short port = redis_runtime_server_open(&server, REDIS_RUNTIME_XGROUP_BUSY);
     check_true(port > 0);
-    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+    check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
                  TURBO_OK);
     config.port = port;
     config.group = "existing";
     config.consumer = "worker";
     config.create_group = 1;
-    check_int_eq(turbo_flow_redis_stream_owner_create(&config, &owner), TURBO_OK);
+    check_equal(turbo_flow_redis_stream_owner_create(&config, &owner), TURBO_OK);
     turbo_flow_redis_stream_owner_destroy(owner);
-    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
+    check_equal(turbo_thread_join(&server_thread), TURBO_OK);
     redis_test_close_socket(server.listener);
 #ifdef _WIN32
     WSACleanup();
@@ -667,35 +667,35 @@ spec("turbo_flow_redis") {
     (void)snprintf(path, sizeof(path), "%s/examples/redis.yml", TURBO_FLOW_REDIS_SOURCE_DIR);
     yaml = tt_read_file(path, &yaml_len);
     check_not_null(yaml);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, yaml_len, &resolved, &error), TURBO_OK);
-    check_int_eq(
+    check_equal(turbo_flow_config_resolve_yaml(yaml, yaml_len, &resolved, &error), TURBO_OK);
+    check_equal(
         turbo_flow_redis_register_resolved_adapter(flow, "redis.events.in", resolved, &error),
         TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_redis_register_resolved_adapter(flow, "redis.events.out", resolved, &error),
         TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_redis_register_resolved_adapter(flow, "redis.checkpoint.set", resolved, &error),
         TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_redis_register_resolved_adapter(flow, "redis.checkpoint.get", resolved, &error),
         TURBO_OK);
     schema = turbo_flow_find_adapter_schema(flow, "redis.events.in");
     check_not_null(schema);
-    check_int_eq(schema->roles, TURBO_FLOW_ADAPTER_SOURCE);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SOURCE);
     schema = turbo_flow_find_adapter_schema(flow, "redis.events.out");
     check_not_null(schema);
-    check_int_eq(schema->roles, TURBO_FLOW_ADAPTER_SINK);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SINK);
     schema = turbo_flow_find_adapter_schema(flow, "redis.checkpoint.set");
     check_not_null(schema);
-    check_int_eq(schema->roles, TURBO_FLOW_ADAPTER_SINK);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SINK);
     schema = turbo_flow_find_adapter_schema(flow, "redis.checkpoint.get");
     check_not_null(schema);
-    check_int_eq(schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
-    check_int_eq(
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
+    check_equal(
         turbo_flow_resolved_config_profile_adapter(resolved, "worker", "events_in", &adapter_name),
         TURBO_OK);
-    check_str_eq(adapter_name, "redis.events.in");
+    check_equal(adapter_name, "redis.events.in");
     turbo_flow_destroy(flow);
     turbo_flow_resolved_config_destroy(resolved);
     free(yaml);
@@ -709,11 +709,11 @@ spec("turbo_flow_redis") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_t *flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_redis_register_resolved_adapter(flow, "redis.bad", resolved, &error),
+    check_equal(turbo_flow_redis_register_resolved_adapter(flow, "redis.bad", resolved, &error),
                  TURBO_EINVAL);
-    check_str_eq(error.path, "$.adapters.redis.bad.config.stream");
+    check_equal(error.path, "$.adapters.redis.bad.config.stream");
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_destroy(flow);
   }
@@ -724,16 +724,16 @@ spec("turbo_flow_redis") {
     const turbo_flow_adapter_schema_t *schema;
     turbo_flow_connection_snapshot_t connection;
     check_not_null(flow);
-    check_int_eq(turbo_flow_redis_register_stream_adapter(flow, "redis.out", &config), TURBO_OK);
+    check_equal(turbo_flow_redis_register_stream_adapter(flow, "redis.out", &config), TURBO_OK);
     schema = turbo_flow_find_adapter_schema(flow, "redis.out");
     check_not_null(schema);
-    check_int_eq(schema->kind, TURBO_FLOW_ADAPTER_KIND_REDIS);
-    check_int_eq(schema->roles, TURBO_FLOW_ADAPTER_SINK);
-    check_int_eq(schema->direction, TURBO_FLOW_ADAPTER_OUTPUT);
+    check_equal(schema->kind, TURBO_FLOW_ADAPTER_KIND_REDIS);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SINK);
+    check_equal(schema->direction, TURBO_FLOW_ADAPTER_OUTPUT);
     memset(&connection, 0, sizeof(connection));
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
-    check_int_eq(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_str_eq(connection.endpoint, "redis://127.0.0.1:6379/0");
+    check_equal(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
+    check_equal(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(connection.endpoint, "redis://127.0.0.1:6379/0");
     turbo_flow_destroy(flow);
   }
 
@@ -750,14 +750,14 @@ spec("turbo_flow_redis") {
     config.group = "workers";
     config.consumer = "test-1";
     check_not_null(flow);
-    check_int_eq(turbo_flow_redis_register_stream_adapter(flow, "redis.in", &config), TURBO_OK);
+    check_equal(turbo_flow_redis_register_stream_adapter(flow, "redis.in", &config), TURBO_OK);
     schema = turbo_flow_find_adapter_schema(flow, "redis.in");
     check_not_null(schema);
-    check_int_eq(schema->roles, TURBO_FLOW_ADAPTER_SOURCE);
-    check_int_eq(schema->direction, TURBO_FLOW_ADAPTER_INPUT);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "capture", redis_noop, NULL, NULL), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SOURCE);
+    check_equal(schema->direction, TURBO_FLOW_ADAPTER_INPUT);
+    check_equal(turbo_flow_register_stage_ex(flow, "capture", redis_noop, NULL, NULL), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -766,7 +766,7 @@ spec("turbo_flow_redis") {
     turbo_flow_redis_stream_config_t config = redis_config();
     config.poll_interval_ms = 10;
     check_not_null(flow);
-    check_int_eq(turbo_flow_redis_register_stream_adapter(flow, "redis.in", &config), TURBO_EINVAL);
+    check_equal(turbo_flow_redis_register_stream_adapter(flow, "redis.in", &config), TURBO_EINVAL);
     turbo_flow_destroy(flow);
   }
 
@@ -783,19 +783,19 @@ spec("turbo_flow_redis") {
     unsigned short port = redis_runtime_server_open(&server, REDIS_RUNTIME_XADD);
     check_not_null(flow);
     check_true(port > 0);
-    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+    check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
                  TURBO_OK);
     config.port = port;
-    check_int_eq(turbo_flow_redis_register_stream_adapter(flow, "redis.out", &config), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(redis_publish_payload(flow, "hello"), TURBO_OK);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
-    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&server.saw_xadd, memory_order_acquire), 1);
-    check_int_eq(atomic_load_explicit(&server.payload_matched, memory_order_acquire), 1);
-    check_int_eq(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
+    check_equal(turbo_flow_redis_register_stream_adapter(flow, "redis.out", &config), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(redis_publish_payload(flow, "hello"), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_thread_join(&server_thread), TURBO_OK);
+    check_equal(atomic_load_explicit(&server.saw_xadd, memory_order_acquire), 1);
+    check_equal(atomic_load_explicit(&server.payload_matched, memory_order_acquire), 1);
+    check_equal(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
     redis_test_close_socket(server.listener);
     turbo_flow_destroy(flow);
 #ifdef _WIN32
@@ -811,7 +811,7 @@ spec("turbo_flow_redis") {
     turbo_flow_redis_stream_publisher_t *publisher = NULL;
     unsigned short port = redis_runtime_server_open(&server, REDIS_RUNTIME_XADD);
     check_true(port > 0);
-    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+    check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
                  TURBO_OK);
     config.host = "127.0.0.1";
     config.port = port;
@@ -821,15 +821,15 @@ spec("turbo_flow_redis") {
     config.field = "payload";
     config.maxlen = 128u;
     config.max_payload_size = 5u;
-    check_int_eq(turbo_flow_redis_stream_publisher_create(&config, &publisher), TURBO_OK);
+    check_equal(turbo_flow_redis_stream_publisher_create(&config, &publisher), TURBO_OK);
     check_not_null(publisher);
-    check_int_eq(turbo_flow_redis_stream_publisher_publish(publisher, "hello", 5u), TURBO_OK);
-    check_int_eq(turbo_flow_redis_stream_publisher_append(publisher, "longer", 6u), TURBO_EMSGSIZE);
+    check_equal(turbo_flow_redis_stream_publisher_publish(publisher, "hello", 5u), TURBO_OK);
+    check_equal(turbo_flow_redis_stream_publisher_append(publisher, "longer", 6u), TURBO_EMSGSIZE);
     turbo_flow_redis_stream_publisher_destroy(publisher);
-    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&server.saw_xadd, memory_order_acquire), 1);
-    check_int_eq(atomic_load_explicit(&server.payload_matched, memory_order_acquire), 1);
-    check_int_eq(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
+    check_equal(turbo_thread_join(&server_thread), TURBO_OK);
+    check_equal(atomic_load_explicit(&server.saw_xadd, memory_order_acquire), 1);
+    check_equal(atomic_load_explicit(&server.payload_matched, memory_order_acquire), 1);
+    check_equal(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
     redis_test_close_socket(server.listener);
 #ifdef _WIN32
     WSACleanup();
@@ -874,16 +874,16 @@ spec("turbo_flow_redis") {
     check_true(port > 0);
     check_not_null(flow);
     config.port = port;
-    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+    check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
                  TURBO_OK);
-    check_int_eq(turbo_flow_redis_register_data_adapter(flow, "redis.data", &config), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, set_dsl, strlen(set_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(redis_publish_payload(flow, "hello"), TURBO_OK);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
-    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&server.payload_matched, memory_order_acquire), 1);
+    check_equal(turbo_flow_redis_register_data_adapter(flow, "redis.data", &config), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, set_dsl, strlen(set_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(redis_publish_payload(flow, "hello"), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_thread_join(&server_thread), TURBO_OK);
+    check_equal(atomic_load_explicit(&server.payload_matched, memory_order_acquire), 1);
     redis_test_close_socket(server.listener);
     turbo_flow_destroy(flow);
 #ifdef _WIN32
@@ -899,19 +899,19 @@ spec("turbo_flow_redis") {
     memset(&capture, 0, sizeof(capture));
     atomic_init(&capture.called, 0);
     capture.result = TURBO_OK;
-    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+    check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
                  TURBO_OK);
-    check_int_eq(turbo_flow_redis_register_data_adapter(flow, "redis.data", &config), TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "capture", redis_capture, &capture, NULL),
+    check_equal(turbo_flow_redis_register_data_adapter(flow, "redis.data", &config), TURBO_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "capture", redis_capture, &capture, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, get_dsl, strlen(get_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(redis_publish_payload(flow, "trigger"), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
-    check_str_eq(capture.payload, "hello");
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
-    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, get_dsl, strlen(get_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(redis_publish_payload(flow, "trigger"), TURBO_OK);
+    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
+    check_equal(capture.payload, "hello");
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_thread_join(&server_thread), TURBO_OK);
     redis_test_close_socket(server.listener);
     turbo_flow_destroy(flow);
 #ifdef _WIN32
@@ -949,19 +949,19 @@ spec("turbo_flow_redis") {
                         "      key: graph:management:test\n      max_value_size: 8\n"
                         "adapters: {}\n",
                         (unsigned int)port) > 0);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), TURBO_OK);
-    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), TURBO_OK);
+    check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
                  TURBO_OK);
-    check_int_eq(turbo_flow_redis_blob_store_create_resolved(
+    check_equal(turbo_flow_redis_blob_store_create_resolved(
                      resolved, "operations", &store, resolved_key, sizeof(resolved_key), &error),
                  TURBO_OK);
-    check_str_eq(resolved_key, config.key);
+    check_equal(resolved_key, config.key);
     turbo_flow_resolved_config_destroy(resolved);
-    check_int_eq(store.commit(store.ctx, resolved_key, (const uint8_t *)"hello", 5u), TURBO_OK);
-    check_int_eq(store.commit(store.ctx, "wrong-key", (const uint8_t *)"hello", 5u), TURBO_EINVAL);
+    check_equal(store.commit(store.ctx, resolved_key, (const uint8_t *)"hello", 5u), TURBO_OK);
+    check_equal(store.commit(store.ctx, "wrong-key", (const uint8_t *)"hello", 5u), TURBO_EINVAL);
     turbo_flow_redis_blob_store_destroy(&store);
-    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&server.payload_matched, memory_order_acquire), 1);
+    check_equal(turbo_thread_join(&server_thread), TURBO_OK);
+    check_equal(atomic_load_explicit(&server.payload_matched, memory_order_acquire), 1);
     redis_test_close_socket(server.listener);
 #ifdef _WIN32
     WSACleanup();
@@ -970,14 +970,14 @@ spec("turbo_flow_redis") {
     port = redis_runtime_server_open(&server, REDIS_RUNTIME_GET);
     check_true(port > 0);
     config.port = port;
-    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+    check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
                  TURBO_OK);
-    check_int_eq(turbo_flow_redis_blob_store_create(&config, &store), TURBO_OK);
-    check_int_eq(store.load(store.ctx, config.key, loaded, sizeof(loaded), &loaded_size), TURBO_OK);
-    check_size_eq(loaded_size, 5u);
-    check_mem_eq(loaded, "hello", 5u);
+    check_equal(turbo_flow_redis_blob_store_create(&config, &store), TURBO_OK);
+    check_equal(store.load(store.ctx, config.key, loaded, sizeof(loaded), &loaded_size), TURBO_OK);
+    check_equal(loaded_size, 5u);
+    check_equal(loaded, "hello", 5u);
     turbo_flow_redis_blob_store_destroy(&store);
-    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
+    check_equal(turbo_thread_join(&server_thread), TURBO_OK);
     redis_test_close_socket(server.listener);
 #ifdef _WIN32
     WSACleanup();
@@ -993,12 +993,12 @@ spec("turbo_flow_redis") {
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
 
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         redis_test_record_store_open_resolved_ex(resolved, "mqtt.sessions", &store, &error),
         TURBO_ENOTSUP);
-    check_str_eq(error.path, "$.channels.mqtt.sessions.config.backend");
+    check_equal(error.path, "$.channels.mqtt.sessions.config.backend");
     check_null(store.ctx);
     turbo_flow_resolved_config_destroy(resolved);
   }
@@ -1025,15 +1025,15 @@ spec("turbo_flow_redis") {
     config.port = 6379u;
     config.key = "flow:data";
     config.operation = (turbo_flow_redis_data_operation_t)0;
-    check_int_eq(turbo_flow_redis_register_data_adapter(flow, "redis.data", &config), TURBO_EINVAL);
+    check_equal(turbo_flow_redis_register_data_adapter(flow, "redis.data", &config), TURBO_EINVAL);
     config.operation = TURBO_FLOW_REDIS_DATA_SET;
     config.max_value_size = 3u;
-    check_int_eq(turbo_flow_redis_register_data_adapter(flow, "redis.data", &config), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, set_dsl, strlen(set_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(redis_publish_payload(flow, "large"), TURBO_EMSGSIZE);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_redis_register_data_adapter(flow, "redis.data", &config), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, set_dsl, strlen(set_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(redis_publish_payload(flow, "large"), TURBO_EMSGSIZE);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
 
     port = redis_runtime_server_open(&server, REDIS_RUNTIME_GET_MISSING);
@@ -1043,15 +1043,15 @@ spec("turbo_flow_redis") {
     config.port = port;
     config.operation = TURBO_FLOW_REDIS_DATA_GET;
     config.max_value_size = 64u;
-    check_int_eq(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
+    check_equal(turbo_thread_create(&server_thread, redis_runtime_server_thread, &server),
                  TURBO_OK);
-    check_int_eq(turbo_flow_redis_register_data_adapter(flow, "redis.data", &config), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, get_dsl, strlen(get_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(redis_publish_payload(flow, "trigger"), TURBO_ENOENT);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
-    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
+    check_equal(turbo_flow_redis_register_data_adapter(flow, "redis.data", &config), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, get_dsl, strlen(get_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(redis_publish_payload(flow, "trigger"), TURBO_ENOENT);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_thread_join(&server_thread), TURBO_OK);
     redis_test_close_socket(server.listener);
     turbo_flow_destroy(flow);
 #ifdef _WIN32
@@ -1075,18 +1075,18 @@ spec("turbo_flow_redis") {
     int saw_block = 0;
     check_not_null(flow);
     check_true(port > 0);
-    check_int_eq(turbo_thread_create(&server_thread, redis_block_server_thread, &server), TURBO_OK);
+    check_equal(turbo_thread_create(&server_thread, redis_block_server_thread, &server), TURBO_OK);
     config.port = port;
     config.timeout_ms = 5000;
     config.poll_interval_ms = 1;
     config.group = "workers";
     config.consumer = "stop-test";
     config.block_ms = 60000;
-    check_int_eq(turbo_flow_redis_register_stream_adapter(flow, "redis.in", &config), TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "capture", redis_noop, NULL, NULL), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_redis_register_stream_adapter(flow, "redis.in", &config), TURBO_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "capture", redis_noop, NULL, NULL), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     for (int i = 0; i < REDIS_TEST_WAIT_ITERATIONS; ++i) {
       if (atomic_load_explicit(&server.saw_xreadgroup, memory_order_acquire)) {
         saw_block = 1;
@@ -1094,17 +1094,17 @@ spec("turbo_flow_redis") {
       }
       turbo_sleep_ms(5);
     }
-    check_int_eq(saw_block, 1);
+    check_equal(saw_block, 1);
     stop_started_ns = turbo_hrtime();
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     check_true(turbo_hrtime() - stop_started_ns < REDIS_TEST_STOP_LIMIT_NS);
     memset(&connection, 0, sizeof(connection));
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
-    check_int_eq(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_int_eq(connection.last_status, TURBO_ESHUTDOWN);
-    check_int_eq(turbo_thread_join(&server_thread), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&server.client_closed, memory_order_acquire), 1);
-    check_int_eq(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
+    check_equal(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
+    check_equal(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(connection.last_status, TURBO_ESHUTDOWN);
+    check_equal(turbo_thread_join(&server_thread), TURBO_OK);
+    check_equal(atomic_load_explicit(&server.client_closed, memory_order_acquire), 1);
+    check_equal(atomic_load_explicit(&server.status, memory_order_acquire), TURBO_OK);
     redis_test_close_socket(server.listener);
     turbo_flow_destroy(flow);
 #ifdef _WIN32

@@ -1,6 +1,7 @@
 #ifndef TURBO_FLOW_DOMAIN_H
 #define TURBO_FLOW_DOMAIN_H
 
+#include "turbo_flow_export.h"
 #include "platform.h"
 
 #include <stddef.h>
@@ -251,7 +252,7 @@ typedef struct turbo_flow_module_descriptor_s {
  * Returns TURBO_OK, TURBO_EINVAL for an invalid descriptor, TURBO_EALREADY for
  * a duplicate name, TURBO_EBUSY after compile/start, or TURBO_ENOMEM.
  */
-CXX_C_API int turbo_flow_register_primitive(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_register_primitive(turbo_flow_t *flow,
                                             const turbo_flow_primitive_descriptor_t *descriptor);
 
 /**
@@ -262,7 +263,7 @@ CXX_C_API int turbo_flow_register_primitive(turbo_flow_t *flow,
  * state requires a typed module-adapter binding when compiled. Returns the same
  * registration errors as turbo_flow_register_primitive().
  */
-CXX_C_API int turbo_flow_register_operation(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_register_operation(turbo_flow_t *flow,
                                             const turbo_flow_operation_descriptor_t *descriptor);
 
 /**
@@ -274,7 +275,7 @@ CXX_C_API int turbo_flow_register_operation(turbo_flow_t *flow,
  * incompatible dependency contract, in addition to the normal registration
  * errors.
  */
-CXX_C_API int turbo_flow_register_module(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_register_module(turbo_flow_t *flow,
                                          const turbo_flow_module_descriptor_t *descriptor);
 
 /**
@@ -282,7 +283,7 @@ CXX_C_API int turbo_flow_register_module(turbo_flow_t *flow,
  * Existing entries must be exactly compatible. Newly appended operations are
  * rolled back if module registration fails.
  */
-CXX_C_API int turbo_flow_register_module_contract(
+TURBO_FLOW_C_API int turbo_flow_register_module_contract(
     turbo_flow_t *flow, const turbo_flow_module_descriptor_t *module,
     const turbo_flow_operation_descriptor_t *operations, size_t operation_count);
 
@@ -293,27 +294,27 @@ CXX_C_API int turbo_flow_register_module_contract(
  * exported by the module. The association is immutable and borrowed query
  * results remain valid until registry-clearing reset or flow destruction.
  */
-CXX_C_API int turbo_flow_bind_operation_provider_module(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_bind_operation_provider_module(turbo_flow_t *flow,
                                                         const char *module_name,
                                                         const char *operation_name,
                                                         const char *resource_name);
 
-CXX_C_API size_t turbo_flow_primitive_count(const turbo_flow_t *flow);
-CXX_C_API size_t turbo_flow_operation_count(const turbo_flow_t *flow);
-CXX_C_API size_t turbo_flow_module_count(const turbo_flow_t *flow);
-CXX_C_API const turbo_flow_primitive_descriptor_t *turbo_flow_primitive_at(const turbo_flow_t *flow,
+TURBO_FLOW_C_API size_t turbo_flow_primitive_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API size_t turbo_flow_operation_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API size_t turbo_flow_module_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API const turbo_flow_primitive_descriptor_t *turbo_flow_primitive_at(const turbo_flow_t *flow,
                                                                            size_t index);
-CXX_C_API const turbo_flow_operation_descriptor_t *turbo_flow_operation_at(const turbo_flow_t *flow,
+TURBO_FLOW_C_API const turbo_flow_operation_descriptor_t *turbo_flow_operation_at(const turbo_flow_t *flow,
                                                                            size_t index);
-CXX_C_API const turbo_flow_module_descriptor_t *turbo_flow_module_at(const turbo_flow_t *flow,
+TURBO_FLOW_C_API const turbo_flow_module_descriptor_t *turbo_flow_module_at(const turbo_flow_t *flow,
                                                                      size_t index);
-CXX_C_API const turbo_flow_primitive_descriptor_t *
+TURBO_FLOW_C_API const turbo_flow_primitive_descriptor_t *
 turbo_flow_find_primitive(const turbo_flow_t *flow, const char *name);
-CXX_C_API const turbo_flow_operation_descriptor_t *
+TURBO_FLOW_C_API const turbo_flow_operation_descriptor_t *
 turbo_flow_find_operation(const turbo_flow_t *flow, const char *name);
-CXX_C_API const turbo_flow_module_descriptor_t *turbo_flow_find_module(const turbo_flow_t *flow,
+TURBO_FLOW_C_API const turbo_flow_module_descriptor_t *turbo_flow_find_module(const turbo_flow_t *flow,
                                                                        const char *name);
-CXX_C_API const char *turbo_flow_operation_provider_module(const turbo_flow_t *flow,
+TURBO_FLOW_C_API const char *turbo_flow_operation_provider_module(const turbo_flow_t *flow,
                                                            const char *operation_name,
                                                            const char *resource_name);
 

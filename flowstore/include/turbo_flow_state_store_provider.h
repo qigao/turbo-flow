@@ -38,7 +38,7 @@ typedef struct turbo_flow_state_store_provider_ops_s {
  * Bind an initialized provider context to the public StateStore facade.
  * Ownership of ctx transfers only on success; destroy is called exactly once by store destroy.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_state_store_create_provider(const turbo_flow_state_store_provider_ops_t *ops, void *ctx,
                                        turbo_flow_state_store_t **out);
 

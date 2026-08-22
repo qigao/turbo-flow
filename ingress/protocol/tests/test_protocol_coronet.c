@@ -772,16 +772,16 @@ spec("protocol CoroNet transport owner") {
     turbo_flow_protocol_coronet_server_t *server = NULL;
     turbo_flow_protocol_coronet_config_t config;
     protocol_coronet_probe_init(&probe);
-    check_int_eq(protocol_coronet_plugin_open(FLOW_PROTOCOL_LWM2M_MODULE, "lwm2m",
+    check_equal(protocol_coronet_plugin_open(FLOW_PROTOCOL_LWM2M_MODULE, "lwm2m",
                                              TURBO_FLOW_PROTOCOL_LWM2M, "1.2.2", &registry,
                                              &owner, &protocol),
                  TURBO_OK);
     protocol_coronet_config_init(&config, protocol, TURBO_FLOW_PROTOCOL_CORONET_UDP, 0, &probe);
-    check_int_eq(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_EPERM);
+    check_equal(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_EPERM);
     check_null(server);
     config.allow_insecure_lwm2m = 1u;
-    check_int_eq(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
     protocol_coronet_plugin_close(registry, owner);
   }
 
@@ -799,16 +799,16 @@ spec("protocol CoroNet transport owner") {
     int shutdown_rc;
     protocol_coronet_probe_init(&probe);
     check_true(port != 0u);
-    check_int_eq(protocol_coronet_plugin_open(FLOW_PROTOCOL_COAP_MODULE, "coap",
+    check_equal(protocol_coronet_plugin_open(FLOW_PROTOCOL_COAP_MODULE, "coap",
                                              TURBO_FLOW_PROTOCOL_COAP, "RFC7252", &registry,
                                              &owner, &protocol),
                  TURBO_OK);
     protocol_coronet_config_init(&config, protocol, TURBO_FLOW_PROTOCOL_CORONET_UDP, port, &probe);
-    check_int_eq(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_start(server), TURBO_OK);
-    check_int_eq(protocol_test_send_udp(port, frame, sizeof(frame)), TURBO_OK);
-    check_int_eq(protocol_test_wait_publishes(&probe, 1), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_begin_shutdown(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_start(server), TURBO_OK);
+    check_equal(protocol_test_send_udp(port, frame, sizeof(frame)), TURBO_OK);
+    check_equal(protocol_test_wait_publishes(&probe, 1), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_begin_shutdown(server), TURBO_OK);
     shutdown_rc =
         turbo_flow_protocol_coronet_server_wait_shutdown(server,
                                                         PROTOCOL_TEST_WAIT_MS);
@@ -823,13 +823,13 @@ spec("protocol CoroNet transport owner") {
               snapshot.runtime.active_sessions,
               snapshot.runtime.pending_settlements,
               snapshot.runtime.buffered_bytes, snapshot.network_stopped);
-    check_int_eq(shutdown_rc, TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
+    check_equal(shutdown_rc, TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
     protocol_coronet_plugin_close(registry, owner);
   }
 
   it("keeps the event loop live until a pending TCP publication settles") {
-    check_int_eq(protocol_test_tcp_settlement_shutdown_trace(), TURBO_OK);
+    check_equal(protocol_test_tcp_settlement_shutdown_trace(), TURBO_OK);
   }
 
   it("enforces the OCPP path and subprotocol on WebSocket ingress") {
@@ -845,25 +845,25 @@ spec("protocol CoroNet transport owner") {
     protocol_coronet_probe_init(&probe);
     memset(&client, 0, sizeof(client));
     check_true(port != 0u);
-    check_int_eq(protocol_coronet_plugin_open(FLOW_PROTOCOL_OCPP_MODULE, "ocpp",
+    check_equal(protocol_coronet_plugin_open(FLOW_PROTOCOL_OCPP_MODULE, "ocpp",
                                              TURBO_FLOW_PROTOCOL_OCPP, "2.0.1", &registry,
                                              &owner, &protocol),
                  TURBO_OK);
     protocol_coronet_config_init(&config, protocol, TURBO_FLOW_PROTOCOL_CORONET_WS, port, &probe);
     config.path = "/ocpp";
     config.subprotocol = "ocpp2.0.1";
-    check_int_eq(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_start(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_start(server), TURBO_OK);
     client.port = port;
     client.payload = payload;
-    check_int_eq(protocol_test_run_coronet_client(&client), TURBO_OK);
+    check_equal(protocol_test_run_coronet_client(&client), TURBO_OK);
     check_true(client.done);
-    check_int_eq(client.status, TURBO_OK);
-    check_int_eq(protocol_test_wait_publishes(&probe, 1), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_begin_shutdown(server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_wait_shutdown(server, PROTOCOL_TEST_WAIT_MS),
+    check_equal(client.status, TURBO_OK);
+    check_equal(protocol_test_wait_publishes(&probe, 1), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_begin_shutdown(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_wait_shutdown(server, PROTOCOL_TEST_WAIT_MS),
                  TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
     protocol_coronet_plugin_close(registry, owner);
   }
 
@@ -883,10 +883,10 @@ spec("protocol CoroNet transport owner") {
     protocol_coronet_probe_init(&probe);
     memset(&client, 0, sizeof(client));
     check_true(port != 0u);
-    check_int_eq(
+    check_equal(
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)),
         TURBO_OK);
-    check_int_eq(protocol_coronet_plugin_open(FLOW_PROTOCOL_GBT32960_MODULE, "gbt32960",
+    check_equal(protocol_coronet_plugin_open(FLOW_PROTOCOL_GBT32960_MODULE, "gbt32960",
                                              TURBO_FLOW_PROTOCOL_GBT_32960, "2025",
                                              &registry, &owner, &protocol),
                  TURBO_OK);
@@ -895,22 +895,22 @@ spec("protocol CoroNet transport owner") {
     config.identity_ctx = NULL;
     config.tls.cert_file = cert_file;
     config.tls.key_file = key_file;
-    check_int_eq(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_start(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_start(server), TURBO_OK);
     client.port = port;
     client.payload = (const char *)frame;
     client.payload_size = sizeof(frame);
     client.secure = 1;
     client.direct_tls = 1;
     client.ca_file = cert_file;
-    check_int_eq(protocol_test_run_coronet_client(&client), TURBO_OK);
+    check_equal(protocol_test_run_coronet_client(&client), TURBO_OK);
     check_true(client.done);
-    check_int_eq(client.status, TURBO_OK);
-    check_int_eq(protocol_test_wait_publishes(&probe, 1), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_begin_shutdown(server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_wait_shutdown(server, PROTOCOL_TEST_WAIT_MS),
+    check_equal(client.status, TURBO_OK);
+    check_equal(protocol_test_wait_publishes(&probe, 1), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_begin_shutdown(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_wait_shutdown(server, PROTOCOL_TEST_WAIT_MS),
                  TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
     protocol_coronet_plugin_close(registry, owner);
     tls_test_remove_file(key_file);
     tls_test_remove_file(cert_file);
@@ -930,10 +930,10 @@ spec("protocol CoroNet transport owner") {
     protocol_test_gbt_frame(frame);
     protocol_coronet_probe_init(&probe);
     check_true(port != 0u);
-    check_int_eq(
+    check_equal(
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)),
         TURBO_OK);
-    check_int_eq(protocol_coronet_plugin_open(FLOW_PROTOCOL_GBT32960_MODULE, "gbt32960",
+    check_equal(protocol_coronet_plugin_open(FLOW_PROTOCOL_GBT32960_MODULE, "gbt32960",
                                              TURBO_FLOW_PROTOCOL_GBT_32960, "2025",
                                              &registry, &owner, &protocol),
                  TURBO_OK);
@@ -942,8 +942,8 @@ spec("protocol CoroNet transport owner") {
     config.identity_ctx = NULL;
     config.tls.cert_file = cert_file;
     config.tls.key_file = key_file;
-    check_int_eq(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_start(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_start(server), TURBO_OK);
     for (int iteration = 0; iteration < PROTOCOL_TEST_RECONNECT_ITERATIONS; ++iteration) {
       protocol_ws_client_t client;
       turbo_flow_protocol_coronet_snapshot_t snapshot = TURBO_FLOW_PROTOCOL_CORONET_SNAPSHOT_INIT;
@@ -954,23 +954,23 @@ spec("protocol CoroNet transport owner") {
       client.secure = 1;
       client.direct_tls = 1;
       client.ca_file = cert_file;
-      check_int_eq(protocol_test_run_coronet_client(&client), TURBO_OK);
+      check_equal(protocol_test_run_coronet_client(&client), TURBO_OK);
       check_true(client.done);
-      check_int_eq(client.status, TURBO_OK);
-      check_int_eq(protocol_test_wait_publishes(&probe, iteration + 1), TURBO_OK);
-      check_int_eq(protocol_test_wait_quiescent(server, &snapshot), TURBO_OK);
-      check_size_eq(snapshot.active_handlers, 0u);
-      check_size_eq(snapshot.runtime.active_sessions, 0u);
-      check_size_eq(snapshot.runtime.pending_settlements, 0u);
-      check_size_eq(snapshot.runtime.buffered_bytes, 0u);
+      check_equal(client.status, TURBO_OK);
+      check_equal(protocol_test_wait_publishes(&probe, iteration + 1), TURBO_OK);
+      check_equal(protocol_test_wait_quiescent(server, &snapshot), TURBO_OK);
+      check_equal(snapshot.active_handlers, 0u);
+      check_equal(snapshot.runtime.active_sessions, 0u);
+      check_equal(snapshot.runtime.pending_settlements, 0u);
+      check_equal(snapshot.runtime.buffered_bytes, 0u);
       check_true(snapshot.runtime.accepting);
     }
-    check_int_eq(atomic_load_explicit(&probe.publishes, memory_order_acquire),
+    check_equal(atomic_load_explicit(&probe.publishes, memory_order_acquire),
                  PROTOCOL_TEST_RECONNECT_ITERATIONS);
-    check_int_eq(turbo_flow_protocol_coronet_server_begin_shutdown(server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_wait_shutdown(server, PROTOCOL_TEST_WAIT_MS),
+    check_equal(turbo_flow_protocol_coronet_server_begin_shutdown(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_wait_shutdown(server, PROTOCOL_TEST_WAIT_MS),
                  TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
     protocol_coronet_plugin_close(registry, owner);
     tls_test_remove_file(key_file);
     tls_test_remove_file(cert_file);
@@ -989,11 +989,11 @@ spec("protocol CoroNet transport owner") {
     unsigned short port = protocol_test_pick_port(0);
     protocol_coronet_probe_init(&probe);
     check_true(port != 0u);
-    check_int_eq(tls_test_write_temp_file(cert_file, sizeof(cert_file), "bad-crt", malformed_pem),
+    check_equal(tls_test_write_temp_file(cert_file, sizeof(cert_file), "bad-crt", malformed_pem),
                  TURBO_OK);
-    check_int_eq(tls_test_write_temp_file(key_file, sizeof(key_file), "bad-key", malformed_pem),
+    check_equal(tls_test_write_temp_file(key_file, sizeof(key_file), "bad-key", malformed_pem),
                  TURBO_OK);
-    check_int_eq(protocol_coronet_plugin_open(FLOW_PROTOCOL_GBT32960_MODULE, "gbt32960",
+    check_equal(protocol_coronet_plugin_open(FLOW_PROTOCOL_GBT32960_MODULE, "gbt32960",
                                              TURBO_FLOW_PROTOCOL_GBT_32960, "2025",
                                              &registry, &owner, &protocol),
                  TURBO_OK);
@@ -1002,38 +1002,38 @@ spec("protocol CoroNet transport owner") {
     config.identity_ctx = NULL;
     config.tls.cert_file = cert_file;
     config.tls.key_file = key_file;
-    check_int_eq(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_start(server), TURBO_EIO);
-    check_int_eq(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_start(server), TURBO_EIO);
+    check_equal(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
     tls_test_remove_file(key_file);
     tls_test_remove_file(cert_file);
-    check_int_eq(
+    check_equal(
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)),
         TURBO_OK);
     config.tls.cert_file = cert_file;
     config.tls.key_file = key_file;
     server = NULL;
-    check_int_eq(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_start(server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_begin_shutdown(server), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_wait_shutdown(server, PROTOCOL_TEST_WAIT_MS),
+    check_equal(turbo_flow_protocol_coronet_server_create(&config, &server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_start(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_begin_shutdown(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_wait_shutdown(server, PROTOCOL_TEST_WAIT_MS),
                  TURBO_OK);
-    check_int_eq(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
+    check_equal(turbo_flow_protocol_coronet_server_destroy(server), TURBO_OK);
     protocol_coronet_plugin_close(registry, owner);
     tls_test_remove_file(key_file);
     tls_test_remove_file(cert_file);
   }
 
   it("requires a verified client certificate before WSS identity admission") {
-    check_int_eq(protocol_test_wss_mtls_identity_trace(PROTOCOL_TEST_MTLS_NO_FAULT), TURBO_OK);
+    check_equal(protocol_test_wss_mtls_identity_trace(PROTOCOL_TEST_MTLS_NO_FAULT), TURBO_OK);
   }
 
   it("releases WSS plugin ownership when the identity trace aborts after open") {
-    check_int_eq(protocol_test_wss_mtls_identity_trace(PROTOCOL_TEST_MTLS_FAIL_AFTER_PLUGIN_OPEN),
+    check_equal(protocol_test_wss_mtls_identity_trace(PROTOCOL_TEST_MTLS_FAIL_AFTER_PLUGIN_OPEN),
                  TURBO_ECANCELED);
   }
 
   it("reconnects authenticated WSS clients without retaining session resources") {
-    check_int_eq(protocol_test_wss_mtls_reconnect_trace(), TURBO_OK);
+    check_equal(protocol_test_wss_mtls_reconnect_trace(), TURBO_OK);
   }
 }

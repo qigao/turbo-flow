@@ -65,10 +65,10 @@ static turbo_flow_operation_descriptor_t watermark_operation(const char *name, u
   return operation;
 }
 
-static int watermark_select_key(const turbo_flow_msg_t *message, tstr_v *key, void *ctx) {
+static int watermark_select_key(const turbo_flow_msg_t *message, vstr *key, void *ctx) {
   (void)ctx;
   if (!message || !key) return TURBO_EINVAL;
-  *key = tstr_v_from_buf((const char *)&message->id, sizeof(message->id));
+  *key = vstr_from_buf((const char *)&message->id, sizeof(message->id));
   return TURBO_OK;
 }
 
@@ -83,7 +83,7 @@ static int watermark_accumulate(const turbo_flow_msg_t *message,
     memcpy(&count, window->aggregate.data, sizeof(count));
   }
   count += 1u;
-  return turbo_flow_keyed_state_put(state, tstr_v_from_buf((const char *)&count, sizeof(count)));
+  return turbo_flow_keyed_state_put(state, vstr_from_buf((const char *)&count, sizeof(count)));
 }
 
 static int watermark_close(const turbo_flow_event_time_window_t *window,
@@ -203,30 +203,30 @@ spec("event-time watermark owner") {
     tf_event_time_watermark_snapshot_t snapshot = TF_EVENT_TIME_WATERMARK_SNAPSHOT_INIT;
     tf_event_time_watermark_config_t invalid = TF_EVENT_TIME_WATERMARK_CONFIG_INIT;
     check_null(tf_event_time_watermark_owner_create(&invalid));
-    check_int_eq(watermark_fixture_init(&fixture, 10u, 5u), TURBO_OK);
-    check_int_eq(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_ENOENT);
-    check_int_eq(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
-    check_int_eq(snapshot.state, TF_EVENT_TIME_WATERMARK_STOPPED);
+    check_equal(watermark_fixture_init(&fixture, 10u, 5u), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_ENOENT);
+    check_equal(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
+    check_equal(snapshot.state, TF_EVENT_TIME_WATERMARK_STOPPED);
     check_false(snapshot.event_time_observed);
-    check_uint_eq(snapshot.advance_attempt_count, 0u);
+    check_equal(snapshot.advance_attempt_count, 0u);
     watermark_fixture_cleanup(&fixture);
   }
 
   it("publishes before observing and advances a bounded watermark") {
     watermark_fixture_t fixture;
     tf_event_time_watermark_snapshot_t snapshot = TF_EVENT_TIME_WATERMARK_SNAPSHOT_INIT;
-    check_int_eq(watermark_fixture_init(&fixture, 10u, 5u), TURBO_OK);
-    check_int_eq(watermark_publish(&fixture, 1u, 4u), TURBO_OK);
-    check_int_eq(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_OK);
-    check_int_eq(watermark_publish(&fixture, 2u, 15u), TURBO_OK);
-    check_int_eq(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_OK);
-    check_uint_eq(atomic_load_explicit(&fixture.probe.sink_count, memory_order_relaxed), 1u);
-    check_int_eq(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
-    check_uint_eq(snapshot.max_observed_event_time_ns, 15u);
-    check_uint_eq(snapshot.last_successful_watermark_ns, 10u);
-    check_uint_eq(snapshot.observed_event_count, 2u);
-    check_uint_eq(snapshot.advance_success_count, 2u);
-    check_uint_eq(snapshot.closed_window_count, 1u);
+    check_equal(watermark_fixture_init(&fixture, 10u, 5u), TURBO_OK);
+    check_equal(watermark_publish(&fixture, 1u, 4u), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_OK);
+    check_equal(watermark_publish(&fixture, 2u, 15u), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_OK);
+    check_equal(atomic_load_explicit(&fixture.probe.sink_count, memory_order_relaxed), 1u);
+    check_equal(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
+    check_equal(snapshot.max_observed_event_time_ns, 15u);
+    check_equal(snapshot.last_successful_watermark_ns, 10u);
+    check_equal(snapshot.observed_event_count, 2u);
+    check_equal(snapshot.advance_success_count, 2u);
+    check_equal(snapshot.closed_window_count, 1u);
     watermark_fixture_cleanup(&fixture);
   }
 
@@ -234,15 +234,15 @@ spec("event-time watermark owner") {
     watermark_fixture_t fixture;
     tf_event_time_watermark_snapshot_t snapshot = TF_EVENT_TIME_WATERMARK_SNAPSHOT_INIT;
     turbo_flow_msg_t message;
-    check_int_eq(watermark_fixture_init(&fixture, 10u, 0u), TURBO_OK);
+    check_equal(watermark_fixture_init(&fixture, 10u, 0u), TURBO_OK);
     turbo_flow_msg_init(&message);
     message.ts_ns = 99u;
-    check_int_eq(tf_event_time_watermark_owner_publish(fixture.owner, "missing", &message),
+    check_equal(tf_event_time_watermark_owner_publish(fixture.owner, "missing", &message),
                  TURBO_EINVAL);
     turbo_flow_msg_cleanup(&message);
-    check_int_eq(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
     check_false(snapshot.event_time_observed);
-    check_uint_eq(snapshot.observed_event_count, 0u);
+    check_equal(snapshot.observed_event_count, 0u);
     watermark_fixture_cleanup(&fixture);
   }
 
@@ -251,7 +251,7 @@ spec("event-time watermark owner") {
     tf_event_time_watermark_snapshot_t snapshot = TF_EVENT_TIME_WATERMARK_SNAPSHOT_INIT;
     watermark_observe_thread_t observations[2];
     turbo_thread_t threads[2] = {NULL, NULL};
-    check_int_eq(watermark_fixture_init(&fixture, 10u, 0u), TURBO_OK);
+    check_equal(watermark_fixture_init(&fixture, 10u, 0u), TURBO_OK);
     memset(observations, 0, sizeof(observations));
     for (uint32_t index = 0u; index < 2u; ++index) {
       observations[index].owner = fixture.owner;
@@ -259,46 +259,46 @@ spec("event-time watermark owner") {
       observations[index].event_time_step_ns = 2u;
       observations[index].count = 1000u;
       atomic_init(&observations[index].status, TURBO_EIO);
-      check_int_eq(
+      check_equal(
           turbo_thread_create(&threads[index], watermark_observe_thread, &observations[index]),
           TURBO_OK);
     }
     for (uint32_t index = 0u; index < 2u; ++index) {
-      check_int_eq(turbo_thread_join(&threads[index]), TURBO_OK);
-      check_int_eq(atomic_load_explicit(&observations[index].status, memory_order_acquire),
+      check_equal(turbo_thread_join(&threads[index]), TURBO_OK);
+      check_equal(atomic_load_explicit(&observations[index].status, memory_order_acquire),
                    TURBO_OK);
     }
-    check_int_eq(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
-    check_uint_eq(snapshot.max_observed_event_time_ns, 2000u);
-    check_uint_eq(snapshot.observed_event_count, 2000u);
+    check_equal(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
+    check_equal(snapshot.max_observed_event_time_ns, 2000u);
+    check_equal(snapshot.observed_event_count, 2000u);
     watermark_fixture_cleanup(&fixture);
   }
 
   it("fails fast and permits an equal-watermark retry after reset") {
     watermark_fixture_t fixture;
     tf_event_time_watermark_snapshot_t snapshot = TF_EVENT_TIME_WATERMARK_SNAPSHOT_INIT;
-    check_int_eq(watermark_fixture_init(&fixture, 10u, 0u), TURBO_OK);
-    check_int_eq(watermark_publish(&fixture, 1u, 4u), TURBO_OK);
-    check_int_eq(watermark_publish(&fixture, 2u, 10u), TURBO_OK);
+    check_equal(watermark_fixture_init(&fixture, 10u, 0u), TURBO_OK);
+    check_equal(watermark_publish(&fixture, 1u, 4u), TURBO_OK);
+    check_equal(watermark_publish(&fixture, 2u, 10u), TURBO_OK);
     atomic_store_explicit(&fixture.probe.fail_close, 1, memory_order_release);
-    check_int_eq(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_EIO);
-    check_int_eq(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
-    check_int_eq(snapshot.state, TF_EVENT_TIME_WATERMARK_FAILED);
-    check_int_eq(snapshot.last_status, TURBO_EIO);
-    check_uint_eq(snapshot.last_attempted_watermark_ns, 10u);
-    check_uint_eq(snapshot.advance_success_count, 0u);
-    check_uint_eq(snapshot.closed_window_count, 0u);
-    check_int_eq(watermark_publish(&fixture, 3u, 20u), TURBO_EBUSY);
-    check_int_eq(tf_event_time_watermark_owner_stop(fixture.owner), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_EIO);
+    check_equal(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
+    check_equal(snapshot.state, TF_EVENT_TIME_WATERMARK_FAILED);
+    check_equal(snapshot.last_status, TURBO_EIO);
+    check_equal(snapshot.last_attempted_watermark_ns, 10u);
+    check_equal(snapshot.advance_success_count, 0u);
+    check_equal(snapshot.closed_window_count, 0u);
+    check_equal(watermark_publish(&fixture, 3u, 20u), TURBO_EBUSY);
+    check_equal(tf_event_time_watermark_owner_stop(fixture.owner), TURBO_OK);
     atomic_store_explicit(&fixture.probe.fail_close, 0, memory_order_release);
-    check_int_eq(tf_event_time_watermark_owner_reset(fixture.owner), TURBO_OK);
-    check_int_eq(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_OK);
-    check_uint_eq(atomic_load_explicit(&fixture.probe.sink_count, memory_order_relaxed), 1u);
-    check_int_eq(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
-    check_int_eq(snapshot.state, TF_EVENT_TIME_WATERMARK_STOPPED);
-    check_uint_eq(snapshot.last_successful_watermark_ns, 10u);
-    check_uint_eq(snapshot.advance_attempt_count, 2u);
-    check_uint_eq(snapshot.closed_window_count, 1u);
+    check_equal(tf_event_time_watermark_owner_reset(fixture.owner), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_OK);
+    check_equal(atomic_load_explicit(&fixture.probe.sink_count, memory_order_relaxed), 1u);
+    check_equal(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
+    check_equal(snapshot.state, TF_EVENT_TIME_WATERMARK_STOPPED);
+    check_equal(snapshot.last_successful_watermark_ns, 10u);
+    check_equal(snapshot.advance_attempt_count, 2u);
+    check_equal(snapshot.closed_window_count, 1u);
     watermark_fixture_cleanup(&fixture);
   }
 
@@ -306,21 +306,21 @@ spec("event-time watermark owner") {
     watermark_fixture_t fixture;
     tf_event_time_watermark_snapshot_t snapshot = TF_EVENT_TIME_WATERMARK_SNAPSHOT_INIT;
     uint64_t deadline;
-    check_int_eq(watermark_fixture_init(&fixture, 5u, 5u), TURBO_OK);
-    check_int_eq(watermark_publish(&fixture, 1u, 4u), TURBO_OK);
-    check_int_eq(watermark_publish(&fixture, 2u, 15u), TURBO_OK);
-    check_int_eq(tf_event_time_watermark_owner_start(fixture.owner), TURBO_OK);
+    check_equal(watermark_fixture_init(&fixture, 5u, 5u), TURBO_OK);
+    check_equal(watermark_publish(&fixture, 1u, 4u), TURBO_OK);
+    check_equal(watermark_publish(&fixture, 2u, 15u), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_start(fixture.owner), TURBO_OK);
     deadline = turbo_hrtime() + UINT64_C(1000000000);
     while (atomic_load_explicit(&fixture.probe.sink_count, memory_order_acquire) == 0u &&
            turbo_hrtime() < deadline) {
       turbo_sleep_ms(1u);
     }
-    check_uint_eq(atomic_load_explicit(&fixture.probe.sink_count, memory_order_acquire), 1u);
-    check_int_eq(tf_event_time_watermark_owner_stop(fixture.owner), TURBO_OK);
-    check_int_eq(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
-    check_int_eq(snapshot.state, TF_EVENT_TIME_WATERMARK_STOPPED);
-    check_uint_eq(snapshot.last_successful_watermark_ns, 10u);
-    check_uint_eq(snapshot.closed_window_count, 1u);
+    check_equal(atomic_load_explicit(&fixture.probe.sink_count, memory_order_acquire), 1u);
+    check_equal(tf_event_time_watermark_owner_stop(fixture.owner), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
+    check_equal(snapshot.state, TF_EVENT_TIME_WATERMARK_STOPPED);
+    check_equal(snapshot.last_successful_watermark_ns, 10u);
+    check_equal(snapshot.closed_window_count, 1u);
     watermark_fixture_cleanup(&fixture);
   }
 
@@ -329,28 +329,28 @@ spec("event-time watermark owner") {
     tf_event_time_watermark_snapshot_t snapshot = TF_EVENT_TIME_WATERMARK_SNAPSHOT_INIT;
     uint64_t deadline;
     uint64_t attempts_after_failure;
-    check_int_eq(watermark_fixture_init(&fixture, 2u, 0u), TURBO_OK);
-    check_int_eq(watermark_publish(&fixture, 1u, 4u), TURBO_OK);
-    check_int_eq(watermark_publish(&fixture, 2u, 10u), TURBO_OK);
+    check_equal(watermark_fixture_init(&fixture, 2u, 0u), TURBO_OK);
+    check_equal(watermark_publish(&fixture, 1u, 4u), TURBO_OK);
+    check_equal(watermark_publish(&fixture, 2u, 10u), TURBO_OK);
     atomic_store_explicit(&fixture.probe.fail_close, 1, memory_order_release);
-    check_int_eq(tf_event_time_watermark_owner_start(fixture.owner), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_start(fixture.owner), TURBO_OK);
     deadline = turbo_hrtime() + UINT64_C(1000000000);
     do {
-      check_int_eq(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
+      check_equal(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
       if (snapshot.state == TF_EVENT_TIME_WATERMARK_FAILED) break;
       turbo_sleep_ms(1u);
     } while (turbo_hrtime() < deadline);
-    check_int_eq(snapshot.state, TF_EVENT_TIME_WATERMARK_FAILED);
-    check_int_eq(snapshot.last_status, TURBO_EIO);
+    check_equal(snapshot.state, TF_EVENT_TIME_WATERMARK_FAILED);
+    check_equal(snapshot.last_status, TURBO_EIO);
     attempts_after_failure = snapshot.advance_attempt_count;
     turbo_sleep_ms(20u);
-    check_int_eq(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
-    check_uint_eq(snapshot.advance_attempt_count, attempts_after_failure);
-    check_int_eq(tf_event_time_watermark_owner_reset(fixture.owner), TURBO_EBUSY);
-    check_int_eq(tf_event_time_watermark_owner_stop(fixture.owner), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_snapshot(fixture.owner, &snapshot), TURBO_OK);
+    check_equal(snapshot.advance_attempt_count, attempts_after_failure);
+    check_equal(tf_event_time_watermark_owner_reset(fixture.owner), TURBO_EBUSY);
+    check_equal(tf_event_time_watermark_owner_stop(fixture.owner), TURBO_OK);
     atomic_store_explicit(&fixture.probe.fail_close, 0, memory_order_release);
-    check_int_eq(tf_event_time_watermark_owner_reset(fixture.owner), TURBO_OK);
-    check_int_eq(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_reset(fixture.owner), TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_tick(fixture.owner), TURBO_OK);
     watermark_fixture_cleanup(&fixture);
   }
 }

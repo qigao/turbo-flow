@@ -2,7 +2,18 @@
 #define TURBO_FLOW_RULESFORGE_H
 
 #include "turbo_flow.h"
+
+/* RulesForge 0.9 still consumes TurboUtils' removed compatibility marker.
+ * Keep the shim scoped to its header until that package owns its API macro. */
+#ifndef CXX_C_API
+#define CXX_C_API TURBO_C_API
+#define TURBO_FLOW_UNDEF_RULESFORGE_CXX_C_API
+#endif
 #include "rules_forge.h"
+#ifdef TURBO_FLOW_UNDEF_RULESFORGE_CXX_C_API
+#undef TURBO_FLOW_UNDEF_RULESFORGE_CXX_C_API
+#undef CXX_C_API
+#endif
 
 #include <stddef.h>
 
@@ -51,7 +62,7 @@ typedef struct turbo_flow_rulesforge_data_operation_registration_s {
         {TURBO_FLOW_STAGE_MUTATES_PRIVATE, TURBO_FLOW_STAGE_EFFECT_NONE}                           \
   }
 
-CXX_C_API int turbo_flow_rulesforge_register_data_operation(
+TURBO_FLOW_C_API int turbo_flow_rulesforge_register_data_operation(
     turbo_flow_t *flow, const turbo_flow_rulesforge_data_operation_registration_t *registration);
 
 /**
@@ -61,7 +72,7 @@ CXX_C_API int turbo_flow_rulesforge_register_data_operation(
  * requires `match_count == 0` and records EVALUATION_ERROR. The runtime assigns the producing
  * stage index after a successful callback.
  */
-CXX_C_API int turbo_flow_rulesforge_set_result(turbo_flow_msg_t *message, uint32_t match_count,
+TURBO_FLOW_C_API int turbo_flow_rulesforge_set_result(turbo_flow_msg_t *message, uint32_t match_count,
                                                int status);
 
 /**
@@ -104,7 +115,7 @@ typedef struct turbo_flow_rulesforge_databind_provider_s {
  * name. On success the message owns `object`; on failure ownership remains with
  * the caller. Clone and destroy operations use the matching RulesForge C API.
  */
-CXX_C_API int turbo_flow_rulesforge_bind_databind_object(
+TURBO_FLOW_C_API int turbo_flow_rulesforge_bind_databind_object(
     turbo_flow_msg_t *message, const turbo_flow_data_schema_t *schema,
     ruleforge_data_bind_object_t object);
 
@@ -115,7 +126,7 @@ CXX_C_API int turbo_flow_rulesforge_bind_databind_object(
  * responsibilities. `resource_name` and `provider` are borrowed and must outlive
  * the flow registry entry.
  */
-CXX_C_API int turbo_flow_rulesforge_register_databind_provider(
+TURBO_FLOW_C_API int turbo_flow_rulesforge_register_databind_provider(
     turbo_flow_t *flow, const char *resource_name,
     const turbo_flow_rulesforge_databind_provider_t *provider);
 
@@ -126,7 +137,7 @@ CXX_C_API int turbo_flow_rulesforge_register_databind_provider(
  * A NULL callback makes the provider consume `message->payload` directly.
  */
 typedef int (*turbo_flow_rulesforge_payload_view_fn)(const turbo_flow_msg_t *message,
-                                                    tstr_v *payload_out, void *ctx);
+                                                    vstr *payload_out, void *ctx);
 
 /**
  * Per-message RulesForge provider for one schema-bound JSON object.
@@ -160,7 +171,7 @@ typedef struct turbo_flow_rulesforge_json_provider_s {
 /**
  * Register a schema-bound JSON provider for one `rulesforge.apply` resource.
  */
-CXX_C_API int turbo_flow_rulesforge_register_json_provider(
+TURBO_FLOW_C_API int turbo_flow_rulesforge_register_json_provider(
     turbo_flow_t *flow, const char *resource_name,
     const turbo_flow_rulesforge_json_provider_t *provider);
 

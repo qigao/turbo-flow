@@ -3,7 +3,7 @@
 #include "turbo_error.h"
 #include "turbo_parser.h"
 #include "turbo_str.h"
-#include "turbo_vec.h"
+#include "turbo_flow_stl_adapter.h"
 
 #include <limits.h>
 #include <math.h>
@@ -30,8 +30,8 @@ typedef struct flow_security_sqlite_loaded_s {
 } flow_security_sqlite_loaded_t;
 
 struct turbo_flow_security_sqlite_provider_s {
-  tstr_t database_path;
-  tstr_t namespace_name;
+  tstr database_path;
+  tstr namespace_name;
   int busy_timeout_ms;
   size_t max_rules;
   turbo_flow_security_policy_provider_t interface;

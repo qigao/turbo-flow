@@ -10,16 +10,16 @@ void TurboFlowParseFree(void *parser, void (*freeProc)(void *));
 void TurboFlowParse(void *parser, int token_id, flow_token_t token, flow_parse_ctx_t *ctx);
 
 typedef struct flow_stage_template_decl_s {
-  tstr_t name;
-  tstr_t first_input;
-  tstr_t first_output;
+  tstr name;
+  tstr first_input;
+  tstr first_output;
   uint32_t line;
   uint32_t column;
   uint32_t input_count;
   uint32_t output_count;
 } flow_stage_template_decl_t;
 
-static tstr_v token_view(flow_token_t token) { return tstr_v_from_buf(token.value, token.length); }
+static vstr token_view(flow_token_t token) { return vstr_from_buf(token.value, token.length); }
 
 static int parse_fail(flow_parse_ctx_t *ctx, int code, uint32_t line, uint32_t column,
                       const char *message) {
@@ -346,8 +346,8 @@ int flow_parse_set_exec(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_exe
   return TURBO_OK;
 }
 
-static tstr_t make_scoped_name(flow_parse_ctx_t *ctx, tstr_v name) {
-  tstr_t full;
+static tstr make_scoped_name(flow_parse_ctx_t *ctx, vstr name) {
+  tstr full;
 
   if (!ctx->in_stage_template) return tstr_from_v(name);
 
@@ -359,7 +359,7 @@ static tstr_t make_scoped_name(flow_parse_ctx_t *ctx, tstr_v name) {
   return full;
 }
 
-static int find_stage_template_view(const flow_parse_ctx_t *ctx, tstr_v name) {
+static int find_stage_template_view(const flow_parse_ctx_t *ctx, vstr name) {
   size_t i;
 
   for (i = 0; i < turbo_vec_size(&ctx->stage_templates); ++i) {
@@ -371,30 +371,30 @@ static int find_stage_template_view(const flow_parse_ctx_t *ctx, tstr_v name) {
   return -1;
 }
 
-static int name_has_scoped_prefix(tstr_v name, tstr_v prefix) {
+static int name_has_scoped_prefix(vstr name, vstr prefix) {
   if (!name.data || !prefix.data) return 0;
   if (name.len <= prefix.len) return 0;
   if (memcmp(name.data, prefix.data, prefix.len) != 0) return 0;
   return name.data[prefix.len] == '.';
 }
 
-static tstr_t replace_scoped_prefix(tstr_v name, tstr_v prefix, tstr_v replacement) {
-  tstr_t out;
+static tstr replace_scoped_prefix(vstr name, vstr prefix, vstr replacement) {
+  tstr out;
 
   if (!name_has_scoped_prefix(name, prefix)) return NULL;
   out = tstr_from_v(replacement);
   if (!out) return NULL;
-  out = tstr_cat_v(out, tstr_v_from_buf(name.data + prefix.len, name.len - prefix.len));
+  out = tstr_cat_v(out, vstr_from_buf(name.data + prefix.len, name.len - prefix.len));
   return out;
 }
 
-static int clone_tstr(tstr_t *dst, tstr_t src) {
+static int clone_tstr(tstr *dst, tstr src) {
   if (!src) return TURBO_OK;
   *dst = tstr_from_v(tstr_to_v(src));
   return *dst ? TURBO_OK : TURBO_ENOMEM;
 }
 
-static int push_stage_template_copy(flow_parse_ctx_t *ctx, tstr_v name,
+static int push_stage_template_copy(flow_parse_ctx_t *ctx, vstr name,
                                     const flow_stage_template_decl_t *source, uint32_t line,
                                     uint32_t column) {
   flow_stage_template_decl_t stage_template;
@@ -428,7 +428,7 @@ static int push_stage_template_copy(flow_parse_ctx_t *ctx, tstr_v name,
 }
 
 static int copy_stage_with_prefix(flow_parse_ctx_t *ctx, const flow_stage_plan_impl_t *source,
-                                  tstr_v target_prefix, tstr_v alias_prefix, uint32_t line,
+                                  vstr target_prefix, vstr alias_prefix, uint32_t line,
                                   uint32_t column) {
   flow_stage_plan_impl_t stage;
 
@@ -468,7 +468,7 @@ static int copy_stage_with_prefix(flow_parse_ctx_t *ctx, const flow_stage_plan_i
 }
 
 static int copy_edge_with_prefix(flow_parse_ctx_t *ctx, const flow_edge_plan_impl_t *source,
-                                 tstr_v target_prefix, tstr_v alias_prefix, uint32_t line,
+                                 vstr target_prefix, vstr alias_prefix, uint32_t line,
                                  uint32_t column) {
   flow_edge_plan_impl_t edge;
 
@@ -498,7 +498,7 @@ static int copy_edge_with_prefix(flow_parse_ctx_t *ctx, const flow_edge_plan_imp
   return TURBO_OK;
 }
 
-static int stage_plan_add(flow_parse_ctx_t *ctx, tstr_v name, int is_source, int is_port,
+static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int is_port,
                           int is_port_output, flow_stage_spec_t spec, uint32_t line,
                           uint32_t column) {
   flow_stage_plan_impl_t stage;
@@ -571,7 +571,7 @@ int flow_parse_add_source(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_s
 }
 
 int flow_parse_add_stage(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec) {
-  tstr_t scoped = make_scoped_name(ctx, token_view(name));
+  tstr scoped = make_scoped_name(ctx, token_view(name));
   int rc;
 
   if (spec.has_data_pool && !spec.has_worker) {
@@ -590,7 +590,7 @@ int flow_parse_add_stage(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_sp
 }
 
 int flow_parse_add_port(flow_parse_ctx_t *ctx, flow_token_t name, int is_output) {
-  tstr_t scoped;
+  tstr scoped;
   flow_stage_spec_t spec = flow_stage_spec_default();
   flow_stage_template_decl_t *stage_template;
   int rc;
@@ -632,9 +632,9 @@ int flow_parse_add_port(flow_parse_ctx_t *ctx, flow_token_t name, int is_output)
 }
 
 int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t target) {
-  tstr_t alias_name;
-  tstr_v alias_view;
-  tstr_v target_view = token_view(target);
+  tstr alias_name;
+  vstr alias_view;
+  vstr target_view = token_view(target);
   const flow_stage_template_decl_t *target_template;
   size_t stage_count;
   size_t edge_count;
@@ -679,7 +679,7 @@ int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t
   for (i = 0; i < template_count; ++i) {
     const flow_stage_template_decl_t *nested =
         (const flow_stage_template_decl_t *)turbo_vec_at_const(&ctx->stage_templates, i);
-    tstr_t nested_name;
+    tstr nested_name;
 
     if (!nested || !nested->name || !name_has_scoped_prefix(tstr_to_v(nested->name), target_view)) {
       continue;
@@ -787,7 +787,7 @@ int flow_parse_enter_stage_template(flow_parse_ctx_t *ctx, flow_token_t name) {
 
 void flow_parse_leave_stage_template(flow_parse_ctx_t *ctx) {
   if (!ctx) return;
-  ctx->current_stage_template = tstr_v_from_buf(NULL, 0);
+  ctx->current_stage_template = vstr_from_buf(NULL, 0);
   ctx->current_stage_template_index = SIZE_MAX;
   ctx->in_stage_template = 0;
 }
@@ -839,11 +839,11 @@ flow_node_list_t flow_parse_node_list_append(flow_node_list_t left, flow_node_li
   return out;
 }
 
-static tstr_t make_stage_template_port_name(flow_parse_ctx_t *ctx,
+static tstr make_stage_template_port_name(flow_parse_ctx_t *ctx,
                                             const flow_stage_template_decl_t *stage_template,
                                             const flow_node_ref_t *ref, int use_output) {
-  tstr_t name;
-  const tstr_t port = use_output ? stage_template->first_output : stage_template->first_input;
+  tstr name;
+  const tstr port = use_output ? stage_template->first_output : stage_template->first_input;
   uint32_t port_count = use_output ? stage_template->output_count : stage_template->input_count;
 
   if (port_count != 1u || !port) {
@@ -860,8 +860,8 @@ static tstr_t make_stage_template_port_name(flow_parse_ctx_t *ctx,
   return name;
 }
 
-static tstr_t resolve_node_name(flow_parse_ctx_t *ctx, const flow_node_ref_t *ref, int use_output) {
-  tstr_t name;
+static tstr resolve_node_name(flow_parse_ctx_t *ctx, const flow_node_ref_t *ref, int use_output) {
+  tstr name;
   int template_index;
 
   if (ref->qualified) {
@@ -871,7 +871,7 @@ static tstr_t resolve_node_name(flow_parse_ctx_t *ctx, const flow_node_ref_t *re
     if (!name) return NULL;
     name = tstr_cat_v(name, ref->second);
     if (ctx->in_stage_template) {
-      tstr_t scoped = make_scoped_name(ctx, tstr_to_v(name));
+      tstr scoped = make_scoped_name(ctx, tstr_to_v(name));
       tstr_freep(&name);
       return scoped;
     }
@@ -965,7 +965,7 @@ int flow_parse_add_conditional_edge(flow_parse_ctx_t *ctx, flow_node_list_t from
   memset(&edge, 0, sizeof(edge));
   edge.from_name = resolve_node_name(ctx, from_ref, 1);
   edge.to_name = resolve_node_name(ctx, to_ref, 0);
-  edge.condition = tstr_from_v(tstr_v_from_buf(condition.value, condition.length));
+  edge.condition = tstr_from_v(vstr_from_buf(condition.value, condition.length));
   if (!edge.from_name || !edge.to_name || !edge.condition) {
     flow_edge_impl_destroy(&edge);
     if (ctx->error) return ctx->flow->last_error.code;
@@ -1004,7 +1004,7 @@ int flow_parse_add_reject_edge(flow_parse_ctx_t *ctx, flow_token_t name, flow_no
   memset(&edge, 0, sizeof(edge));
   edge.from_name = resolve_node_name(ctx, from_ref, 1);
   edge.to_name = resolve_node_name(ctx, to_ref, 0);
-  edge.name = tstr_from_v(tstr_v_from_buf(name.value, name.length));
+  edge.name = tstr_from_v(vstr_from_buf(name.value, name.length));
   if (!edge.from_name || !edge.to_name || !edge.name) {
     flow_edge_impl_destroy(&edge);
     if (ctx->error) return ctx->flow->last_error.code;

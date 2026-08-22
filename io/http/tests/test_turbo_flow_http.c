@@ -293,46 +293,46 @@ spec("turbo_flow_http") {
 
     check_not_null(flow);
     check_not_null(observe);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_http_register_client_resolved_adapter(flow, resolved, "http.client"),
+    check_equal(turbo_flow_http_register_client_resolved_adapter(flow, resolved, "http.client"),
                  TURBO_OK);
-    check_int_eq(turbo_flow_http_register_server_resolved_adapter(flow, resolved, "http.server"),
+    check_equal(turbo_flow_http_register_server_resolved_adapter(flow, resolved, "http.server"),
                  TURBO_OK);
     client_schema = turbo_flow_find_adapter_schema(flow, "http.client");
     server_schema = turbo_flow_find_adapter_schema(flow, "http.server");
     check_not_null(client_schema);
     check_not_null(server_schema);
-    check_uint_eq(client_schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
-    check_uint_eq(server_schema->roles, TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK);
-    check_str_eq(turbo_flow_adapter_operation_module(flow, "http.client",
+    check_equal(client_schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
+    check_equal(server_schema->roles, TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK);
+    check_equal(turbo_flow_adapter_operation_module(flow, "http.client",
                                                      TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
                  TURBO_FLOW_HTTP_CLIENT_MODULE);
-    check_str_eq(turbo_flow_adapter_operation_resource(flow, "http.client",
+    check_equal(turbo_flow_adapter_operation_resource(flow, "http.client",
                                                        TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
                  "http.client");
-    check_str_eq(turbo_flow_adapter_operation_module(flow, "http.server",
+    check_equal(turbo_flow_adapter_operation_module(flow, "http.server",
                                                      TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
                  TURBO_FLOW_HTTP_SERVER_MODULE);
-    check_str_eq(turbo_flow_adapter_operation_module(flow, "http.server",
+    check_equal(turbo_flow_adapter_operation_module(flow, "http.server",
                                                      TURBO_FLOW_HTTP_SERVER_REPLY_OPERATION),
                  TURBO_FLOW_HTTP_SERVER_MODULE);
-    check_str_eq(turbo_flow_adapter_operation_resource(flow, "http.server",
+    check_equal(turbo_flow_adapter_operation_resource(flow, "http.server",
                                                        TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
                  "http.server");
-    check_str_eq(turbo_flow_find_primitive(flow, "http.client")->type_name,
+    check_equal(turbo_flow_find_primitive(flow, "http.client")->type_name,
                  TURBO_FLOW_HTTP_CLIENT_PRIMITIVE_TYPE);
-    check_str_eq(turbo_flow_find_primitive(flow, "http.server")->type_name,
+    check_equal(turbo_flow_find_primitive(flow, "http.server")->type_name,
                  TURBO_FLOW_HTTP_SERVER_PRIMITIVE_TYPE);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, sizeof(dsl) - 1u), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_observe_attach(observe, flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, sizeof(dsl) - 1u), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_observe_attach(observe, flow), TURBO_OK);
     memset(&graph, 0, sizeof(graph));
-    check_int_eq(turbo_flow_observe_graph_snapshot(observe, &graph), TURBO_OK);
-    check_size_eq(graph.runtime.adapter_count, 2u);
-    check_size_eq(graph.resource_providers, 3u);
-    check_int_eq(turbo_flow_observe_detach(observe), TURBO_OK);
-    check_int_eq(turbo_flow_observe_destroy(observe), TURBO_OK);
+    check_equal(turbo_flow_observe_graph_snapshot(observe, &graph), TURBO_OK);
+    check_equal(graph.runtime.adapter_count, 2u);
+    check_equal(graph.resource_providers, 3u);
+    check_equal(turbo_flow_observe_detach(observe), TURBO_OK);
+    check_equal(turbo_flow_observe_destroy(observe), TURBO_OK);
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_destroy(flow);
   }
@@ -345,11 +345,11 @@ spec("turbo_flow_http") {
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_http_register_client_resolved_adapter(flow, resolved, "http.client"),
+    check_equal(turbo_flow_http_register_client_resolved_adapter(flow, resolved, "http.client"),
                  TURBO_EINVAL);
-    check_size_eq(turbo_flow_adapter_count(flow), 0u);
+    check_equal(turbo_flow_adapter_count(flow), 0u);
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_destroy(flow);
   }
@@ -363,7 +363,7 @@ spec("turbo_flow_http") {
     config.url = "http://127.0.0.1:1";
     config.method = TURBO_FLOW_HTTP_GET;
     config.timeout_ms = -1;
-    check_int_eq(turbo_flow_http_register_client_adapter(flow, "http.invalid", &config),
+    check_equal(turbo_flow_http_register_client_adapter(flow, "http.invalid", &config),
                  TURBO_EINVAL);
     turbo_flow_destroy(flow);
   }
@@ -384,29 +384,29 @@ spec("turbo_flow_http") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_resolved_config_t *resolved = NULL;
 
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_security_auth_provider_owner_create_resolved(
+    check_equal(turbo_flow_security_auth_provider_owner_create_resolved(
                      turbo_flow_http_auth_provider_factory(), resolved, "mqtt.auth-service", &keys,
                      &owner, &error),
                  TURBO_OK);
-    check_str_eq(owner.backend, "https");
-    check_str_eq(owner.method, "password");
+    check_equal(owner.backend, "https");
+    check_equal(owner.method, "password");
     check_not_null(owner.enhanced_provider);
-    check_ptr_eq(owner.enhanced_provider,
-                 turbo_flow_http_enhanced_auth_provider_interface(
-                     (const turbo_flow_http_auth_provider_t *)owner.owner));
-    check_int_eq(fixture.acquire_calls, 1);
-    check_int_eq(fixture.release_calls, 1);
+    check_equal((const void *)owner.enhanced_provider,
+                (const void *)turbo_flow_http_enhanced_auth_provider_interface(
+                    (const turbo_flow_http_auth_provider_t *)owner.owner));
+    check_equal(fixture.acquire_calls, 1);
+    check_equal(fixture.release_calls, 1);
 
     request.identity = "device-a";
     request.method = "password";
     request.secret = (const uint8_t *)"secret";
     request.secret_size = sizeof("secret") - 1u;
     request.protocol = "mqtt5";
-    check_int_eq(turbo_flow_security_authenticate(owner.provider, &request, &principal),
+    check_equal(turbo_flow_security_authenticate(owner.provider, &request, &principal),
                  TURBO_ENOTSUP);
-    check_int_eq(fixture.acquire_calls, 1);
+    check_equal(fixture.acquire_calls, 1);
     turbo_flow_security_auth_provider_owner_destroy(&owner);
     turbo_flow_resolved_config_destroy(resolved);
   }
@@ -436,15 +436,15 @@ spec("turbo_flow_http") {
     memset(&task, 0, sizeof(task));
     atomic_init(&task.done, 0);
     task.status = TURBO_EBUSY;
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
     written = snprintf(response, sizeof(response),
                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                        "Content-Length: %zu\r\nConnection: close\r\n\r\n%s",
                        sizeof(body) - 1u, body);
     check_true(written > 0 && (size_t)written < sizeof(response));
-    check_int_eq(flow_mtls_test_server_start(&server, (const uint8_t *)response, (size_t)written),
+    check_equal(flow_mtls_test_server_start(&server, (const uint8_t *)response, (size_t)written),
                  0);
     written = snprintf(yaml, sizeof(yaml),
                        "version: 1\nchannels:\n  auth:\n    kind: auth_provider\n    config:\n"
@@ -456,9 +456,9 @@ spec("turbo_flow_http") {
                        "        client_cert_file: %s\n        client_key_file: %s\nadapters: {}\n",
                        server.port, ca_file, cert_file, key_file);
     check_true(written > 0 && (size_t)written < sizeof(yaml));
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, (size_t)written, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)written, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_security_auth_provider_owner_create_resolved(
             turbo_flow_http_auth_provider_factory(), resolved, "auth", &keys, &owner, &error),
         TURBO_OK);
@@ -475,14 +475,14 @@ spec("turbo_flow_http") {
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     context = coro_context_create(NULL);
     check_not_null(context);
-    check_int_eq(coro_context_spawn(context, http_mtls_authenticate_task, &task), TURBO_OK);
+    check_equal(coro_context_spawn(context, http_mtls_authenticate_task, &task), TURBO_OK);
     while (!atomic_load_explicit(&task.done, memory_order_acquire))
-      check_int_eq(coro_context_run(context, TURBO_RUN_ONCE), TURBO_OK);
+      check_equal(coro_context_run(context, TURBO_RUN_ONCE), TURBO_OK);
     flow_mtls_test_server_join(&server);
-    check_int_eq(server.status, 0);
+    check_equal(server.status, 0);
     check_true(server.peer_verified);
-    check_int_eq(task.status, TURBO_OK);
-    check_str_eq(task.principal.principal_id, "device-a");
+    check_equal(task.status, TURBO_OK);
+    check_equal(task.principal.principal_id, "device-a");
     coro_context_destroy(context);
     turbo_flow_security_auth_provider_owner_destroy(&owner);
     turbo_flow_resolved_config_destroy(resolved);
@@ -523,16 +523,16 @@ spec("turbo_flow_http") {
     char *oversized = NULL;
     size_t oversized_header;
     size_t oversized_size;
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
       turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
-      check_int_eq(http_auth_run_response_case(cases[i].bytes, cases[i].size, ca_file, cert_file,
+      check_equal(http_auth_run_response_case(cases[i].bytes, cases[i].size, ca_file, cert_file,
                                                key_file, &principal),
                    cases[i].expected);
-      check_str_eq(principal.principal_id, "");
-      check_uint_eq(principal.policy_version, 0u);
+      check_equal(principal.principal_id, "");
+      check_equal(principal.policy_version, 0u);
     }
     oversized_size = TURBO_FLOW_HTTP_AUTH_RESPONSE_LIMIT + 1u;
     oversized = (char *)malloc(oversized_size + 256u);
@@ -546,32 +546,32 @@ spec("turbo_flow_http") {
       check_true(written > 0);
       oversized_header = written > 0 ? (size_t)written : 0u;
       memset(oversized + oversized_header, 'x', oversized_size);
-      check_int_eq(http_auth_run_response_case((const uint8_t *)oversized,
+      check_equal(http_auth_run_response_case((const uint8_t *)oversized,
                                                oversized_header + oversized_size, ca_file,
                                                cert_file, key_file, &principal),
                    TURBO_EIO);
-      check_str_eq(principal.principal_id, "");
+      check_equal(principal.principal_id, "");
       free(oversized);
     }
     {
       turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
-      check_int_eq(http_auth_run_response_case_delayed((const uint8_t *)server_error,
+      check_equal(http_auth_run_response_case_delayed((const uint8_t *)server_error,
                                                        sizeof(server_error) - 1u, 500u, ca_file,
                                                        cert_file, key_file, &principal),
                    TURBO_EIO);
-      check_str_eq(principal.principal_id, "");
+      check_equal(principal.principal_id, "");
     }
-    check_int_eq(tls_test_write_self_signed_files(wrong_ca_file, sizeof(wrong_ca_file),
+    check_equal(tls_test_write_self_signed_files(wrong_ca_file, sizeof(wrong_ca_file),
                                                   wrong_ca_key_file, sizeof(wrong_ca_key_file),
                                                   "untrusted-ca", 1),
                  0);
     {
       turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
-      check_int_eq(http_auth_run_response_case((const uint8_t *)server_error,
+      check_equal(http_auth_run_response_case((const uint8_t *)server_error,
                                                sizeof(server_error) - 1u, wrong_ca_file, cert_file,
                                                key_file, &principal),
                    TURBO_EIO);
-      check_str_eq(principal.principal_id, "");
+      check_equal(principal.principal_id, "");
     }
     tls_test_remove_file(wrong_ca_key_file);
     tls_test_remove_file(wrong_ca_file);
@@ -588,14 +588,14 @@ spec("turbo_flow_http") {
         "\"auth_method\":\"certificate\",\"scope\":\"domain\",\"roles\":[],"
         "\"groups\":[\"root-a\"],\"expires_at\":0,\"policy_version\":7}}";
     turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
-    check_int_eq(flow_http_auth_decode_response(wrong_version, sizeof(wrong_version) - 1u,
+    check_equal(flow_http_auth_decode_response(wrong_version, sizeof(wrong_version) - 1u,
                                                 "password", &principal),
                  TURBO_EPROTO);
-    check_str_eq(principal.principal_id, "");
-    check_int_eq(flow_http_auth_decode_response(wrong_principal, sizeof(wrong_principal) - 1u,
+    check_equal(principal.principal_id, "");
+    check_equal(flow_http_auth_decode_response(wrong_principal, sizeof(wrong_principal) - 1u,
                                                 "password", &principal),
                  TURBO_EPROTO);
-    check_str_eq(principal.principal_id, "");
+    check_equal(principal.principal_id, "");
   }
 
   it("rejects plaintext HTTP and database fields in authentication provider config") {
@@ -625,34 +625,34 @@ spec("turbo_flow_http") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_resolved_config_t *resolved = NULL;
 
-    check_int_eq(turbo_flow_config_resolve_yaml(insecure_yaml, sizeof(insecure_yaml) - 1u,
+    check_equal(turbo_flow_config_resolve_yaml(insecure_yaml, sizeof(insecure_yaml) - 1u,
                                                 &resolved, &error),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_http_auth_provider_create_resolved(resolved, "auth", &keys, &provider, &error),
         TURBO_EINVAL);
     check_null(provider);
     turbo_flow_resolved_config_destroy(resolved);
     resolved = NULL;
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(database_yaml, sizeof(database_yaml) - 1u,
+    check_equal(turbo_flow_config_resolve_yaml(database_yaml, sizeof(database_yaml) - 1u,
                                                 &resolved, &error),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_http_auth_provider_create_resolved(resolved, "auth", &keys, &provider, &error),
         TURBO_EINVAL);
-    check_str_contains(error.path, "database");
+    check_contains(error.path, "database");
     check_null(provider);
     turbo_flow_resolved_config_destroy(resolved);
     resolved = NULL;
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(invalid_tls_yaml, sizeof(invalid_tls_yaml) - 1u,
+    check_equal(turbo_flow_config_resolve_yaml(invalid_tls_yaml, sizeof(invalid_tls_yaml) - 1u,
                                                 &resolved, &error),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_http_auth_provider_create_resolved(resolved, "auth", &keys, &provider, &error),
         TURBO_EINVAL);
-    check_str_contains(error.path, "tls");
+    check_contains(error.path, "tls");
     check_null(provider);
     turbo_flow_resolved_config_destroy(resolved);
   }
@@ -675,13 +675,13 @@ spec("turbo_flow_http") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_resolved_config_t *resolved = NULL;
 
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_security_policy_provider_owner_create_resolved(
             turbo_flow_http_acl_provider_factory(), resolved, "acl", &keys, &owner, &error),
         TURBO_OK);
-    check_str_eq(owner.backend, "https");
+    check_equal(owner.backend, "https");
     check_null(owner.provider);
     check_not_null(owner.authorization_provider);
     request.principal = &principal;
@@ -689,7 +689,7 @@ spec("turbo_flow_http") {
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/groups/ops/device-a?event";
-    check_int_eq(owner.authorization_provider->authorize(owner.authorization_provider->ctx,
+    check_equal(owner.authorization_provider->authorize(owner.authorization_provider->ctx,
                                                          &request, 1000u, &decision),
                  TURBO_ENOTSUP);
     turbo_flow_security_policy_provider_owner_destroy(&owner);
@@ -722,15 +722,15 @@ spec("turbo_flow_http") {
     task.decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
     atomic_init(&task.done, 0);
     task.status = TURBO_EBUSY;
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
     written = snprintf(response, sizeof(response),
                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                        "Content-Length: %zu\r\nConnection: close\r\n\r\n%s",
                        sizeof(body) - 1u, body);
     check_true(written > 0 && (size_t)written < sizeof(response));
-    check_int_eq(flow_mtls_test_server_start(&server, (const uint8_t *)response, (size_t)written),
+    check_equal(flow_mtls_test_server_start(&server, (const uint8_t *)response, (size_t)written),
                  0);
     written = snprintf(yaml, sizeof(yaml),
                        "version: 1\nchannels:\n  acl:\n    kind: acl_provider\n    config:\n"
@@ -742,9 +742,9 @@ spec("turbo_flow_http") {
                        "        client_key_file: %s\nadapters: {}\n",
                        server.port, ca_file, cert_file, key_file);
     check_true(written > 0 && (size_t)written < sizeof(yaml));
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, (size_t)written, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)written, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_security_policy_provider_owner_create_resolved(
             turbo_flow_http_acl_provider_factory(), resolved, "acl", &keys, &owner, &error),
         TURBO_OK);
@@ -768,16 +768,16 @@ spec("turbo_flow_http") {
     task.request.client_id_size = sizeof("client-a") - 1u;
     context = coro_context_create(NULL);
     check_not_null(context);
-    check_int_eq(coro_context_spawn(context, http_mtls_acl_load_task, &task), TURBO_OK);
+    check_equal(coro_context_spawn(context, http_mtls_acl_load_task, &task), TURBO_OK);
     while (!atomic_load_explicit(&task.done, memory_order_acquire))
-      check_int_eq(coro_context_run(context, TURBO_RUN_ONCE), TURBO_OK);
+      check_equal(coro_context_run(context, TURBO_RUN_ONCE), TURBO_OK);
     flow_mtls_test_server_join(&server);
-    check_int_eq(server.status, 0);
+    check_equal(server.status, 0);
     check_true(server.peer_verified);
-    check_int_eq(task.status, TURBO_OK);
-    check_int_eq(task.decision.effect, TURBO_FLOW_SECURITY_ALLOW);
-    check_int_eq(task.decision.reason, TURBO_FLOW_SECURITY_REASON_ALLOW_RULE);
-    check_uint_eq(task.decision.policy_version, 7u);
+    check_equal(task.status, TURBO_OK);
+    check_equal(task.decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+    check_equal(task.decision.reason, TURBO_FLOW_SECURITY_REASON_ALLOW_RULE);
+    check_equal(task.decision.policy_version, 7u);
     coro_context_destroy(context);
     turbo_flow_security_policy_provider_owner_destroy(&owner);
     turbo_flow_resolved_config_destroy(resolved);
@@ -798,19 +798,19 @@ spec("turbo_flow_http") {
         "{\"version\":3,\"allowed\":true,\"reason\":\"allow_rule\",\"policy_version\":7}";
     turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
 
-    check_int_eq(flow_http_acl_decode_check_response(success, sizeof(success) - 1u, &decision),
+    check_equal(flow_http_acl_decode_check_response(success, sizeof(success) - 1u, &decision),
                  TURBO_OK);
-    check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
-    check_int_eq(decision.reason, TURBO_FLOW_SECURITY_REASON_ALLOW_RULE);
-    check_uint_eq(decision.policy_version, 7u);
-    check_int_eq(flow_http_acl_decode_check_response(extra, sizeof(extra) - 1u, &decision),
+    check_equal(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+    check_equal(decision.reason, TURBO_FLOW_SECURITY_REASON_ALLOW_RULE);
+    check_equal(decision.policy_version, 7u);
+    check_equal(flow_http_acl_decode_check_response(extra, sizeof(extra) - 1u, &decision),
                  TURBO_EPROTO);
-    check_int_eq(flow_http_acl_decode_check_response(inconsistent, sizeof(inconsistent) - 1u,
+    check_equal(flow_http_acl_decode_check_response(inconsistent, sizeof(inconsistent) - 1u,
                                                      &decision),
                  TURBO_EPROTO);
-    check_int_eq(flow_http_acl_decode_check_response(legacy, sizeof(legacy) - 1u, &decision),
+    check_equal(flow_http_acl_decode_check_response(legacy, sizeof(legacy) - 1u, &decision),
                  TURBO_EPROTO);
-    check_uint_eq(decision.policy_version, 0u);
+    check_equal(decision.policy_version, 0u);
   }
 
   it("strictly decodes the versioned authentication-service response") {
@@ -839,28 +839,28 @@ spec("turbo_flow_http") {
         "\"groups\":[],\"expires_at\":0,\"policy_version\":7}}";
     turbo_flow_security_principal_t principal = TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
 
-    check_int_eq(
+    check_equal(
         flow_http_auth_decode_response(success, sizeof(success) - 1u, "password", &principal),
         TURBO_OK);
-    check_str_eq(principal.principal_id, "device-a");
-    check_str_eq(principal.principal_type, "device");
-    check_str_eq(principal.domain_id, "root-a");
-    check_str_eq(principal.roles[0], "mqtt-user");
-    check_str_eq(principal.groups[0], "backend");
-    check_uint_eq(principal.policy_version, 7u);
+    check_equal(principal.principal_id, "device-a");
+    check_equal(principal.principal_type, "device");
+    check_equal(principal.domain_id, "root-a");
+    check_equal(principal.roles[0], "mqtt-user");
+    check_equal(principal.groups[0], "backend");
+    check_equal(principal.policy_version, 7u);
     principal = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
-    check_int_eq(flow_http_auth_decode_response(success, sizeof(success) - 1u, "token", &principal),
+    check_equal(flow_http_auth_decode_response(success, sizeof(success) - 1u, "token", &principal),
                  TURBO_EPROTO);
-    check_int_eq(flow_http_auth_decode_response(extra_field, sizeof(extra_field) - 1u, "password",
+    check_equal(flow_http_auth_decode_response(extra_field, sizeof(extra_field) - 1u, "password",
                                                 &principal),
                  TURBO_EPROTO);
-    check_int_eq(
+    check_equal(
         flow_http_auth_decode_response(legacy, sizeof(legacy) - 1u, "password", &principal),
         TURBO_EPROTO);
-    check_int_eq(flow_http_auth_decode_response(no_groups, sizeof(no_groups) - 1u, "password",
+    check_equal(flow_http_auth_decode_response(no_groups, sizeof(no_groups) - 1u, "password",
                                                 &principal),
                  TURBO_OK);
-    check_int_eq(flow_http_auth_decode_response(missing_domain, sizeof(missing_domain) - 1u,
+    check_equal(flow_http_auth_decode_response(missing_domain, sizeof(missing_domain) - 1u,
                                                 "password", &principal),
                  TURBO_EPROTO);
   }
@@ -873,7 +873,7 @@ spec("turbo_flow_http") {
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBind *codec = NULL;
     DataBindValue *value = NULL;
-    tstr_t payload = NULL;
+    tstr payload = NULL;
     int32_t last_status = 0;
     turbo_flow_t *flow = turbo_flow_create();
 
@@ -882,38 +882,38 @@ spec("turbo_flow_http") {
     config.url = "http://127.0.0.1:1/private?token=url-secret";
     config.method = TURBO_FLOW_HTTP_POST;
     config.bearer_token = "bearer-secret";
-    check_int_eq(turbo_flow_http_register_client_adapter(flow, "http.private", &config), TURBO_OK);
-    check_size_eq(turbo_flow_resource_metadata_count(flow), 1u);
-    check_int_eq(turbo_flow_resource_metadata_at(flow, 0u, &before), TURBO_OK);
-    check_str_eq(before.uid, "http:http.private");
-    check_str_eq(before.owner_name, "http.private");
-    check_int_eq(before.domain, TURBO_FLOW_DOMAIN_IO_TRANSPORT);
-    check_int_eq(before.kind, TURBO_FLOW_RESOURCE_CONNECTION);
-    check_int_eq(
+    check_equal(turbo_flow_http_register_client_adapter(flow, "http.private", &config), TURBO_OK);
+    check_equal(turbo_flow_resource_metadata_count(flow), 1u);
+    check_equal(turbo_flow_resource_metadata_at(flow, 0u, &before), TURBO_OK);
+    check_equal(before.uid, "http:http.private");
+    check_equal(before.owner_name, "http.private");
+    check_equal(before.domain, TURBO_FLOW_DOMAIN_IO_TRANSPORT);
+    check_equal(before.kind, TURBO_FLOW_RESOURCE_CONNECTION);
+    check_equal(
         turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
         TURBO_OK);
-    check_str_eq(document.schema->schema_name, "TurboFlowHttpResource");
-    check_str_eq(document.schema->type_name, "HttpClientStatus");
-    check_uint_eq(document.schema->schema_id, 101u);
-    check_uint_eq(document.schema->schema_version, 1u);
-    check_int_eq(turbo_flow_resource_document_validate(&document, document.schema), TURBO_OK);
+    check_equal(document.schema->schema_name, "TurboFlowHttpResource");
+    check_equal(document.schema->type_name, "HttpClientStatus");
+    check_equal(document.schema->schema_id, 101u);
+    check_equal(document.schema->schema_version, 1u);
+    check_equal(turbo_flow_resource_document_validate(&document, document.schema), TURBO_OK);
     {
       turbo_flow_resource_schema_t unknown = *document.schema;
       unknown.schema_version = 2u;
-      check_int_eq(turbo_flow_resource_document_validate(&document, &unknown), TURBO_EPROTO);
+      check_equal(turbo_flow_resource_document_validate(&document, &unknown), TURBO_EPROTO);
     }
-    check_int_eq(data_bind_create_from_text(document.schema->schema_text,
+    check_equal(data_bind_create_from_text(document.schema->schema_text,
                                             strlen(document.schema->schema_text), &codec, &error),
                  DATA_BIND_OK);
-    check_int_eq(data_bind_parse_json(codec, document.schema->type_name,
+    check_equal(data_bind_parse_json(codec, document.schema->type_name,
                                       mem_buffer_const_data(document.payload),
                                       mem_buffer_used(document.payload), &value, &error),
                  DATA_BIND_OK);
-    check_int_eq(data_bind_validate_json(codec, document.schema->type_name,
+    check_equal(data_bind_validate_json(codec, document.schema->type_name,
                                          "{\"state\":0,\"last_status\":-1}",
                                          sizeof("{\"state\":0,\"last_status\":-1}") - 1u, &error),
                  DATA_BIND_ERR_TYPE_MISMATCH);
-    check_int_eq(
+    check_equal(
         data_bind_validate_json(codec, document.schema->type_name,
                                 "{\"state\":\"bad\",\"last_status\":-1,"
                                 "\"connections_current\":\"0\",\"connection_limit\":\"1\","
@@ -924,18 +924,18 @@ spec("turbo_flow_http") {
                                     1u,
                                 &error),
         DATA_BIND_ERR_TYPE_MISMATCH);
-    check_int_eq(data_bind_value_get_int32(data_bind_value_get(value, "last_status"), &last_status),
+    check_equal(data_bind_value_get_int32(data_bind_value_get(value, "last_status"), &last_status),
                  DATA_BIND_OK);
-    check_int_eq(last_status, TURBO_ENOTCONN);
+    check_equal(last_status, TURBO_ENOTCONN);
     payload =
         tstr_new_len(mem_buffer_const_data(document.payload), mem_buffer_used(document.payload));
     check_not_null(payload);
     check_null(strstr(payload, "url-secret"));
     check_null(strstr(payload, "bearer-secret"));
     check_null(strstr(payload, "/private"));
-    check_int_eq(turbo_flow_resource_metadata_at(flow, 0u, &after), TURBO_OK);
-    check_size_eq(after.generation, before.generation);
-    check_size_eq(after.observed_generation, before.observed_generation);
+    check_equal(turbo_flow_resource_metadata_at(flow, 0u, &after), TURBO_OK);
+    check_equal(after.generation, before.generation);
+    check_equal(after.observed_generation, before.observed_generation);
 
     tstr_freep(&payload);
     data_bind_value_free(value);
@@ -955,7 +955,7 @@ spec("turbo_flow_http") {
     config.route = "/orders";
     config.method = TURBO_FLOW_HTTP_POST;
     config.content_binding = &binding;
-    check_int_eq(turbo_flow_http_register_server_adapter(flow, "http.orders", &config),
+    check_equal(turbo_flow_http_register_server_adapter(flow, "http.orders", &config),
                  TURBO_EINVAL);
     turbo_flow_destroy(flow);
   }
@@ -990,7 +990,7 @@ spec("turbo_flow_http") {
     turbo_flow_connection_snapshot_t client_connection;
     http_capture_t capture;
 
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     check_not_null(server_flow);
     check_not_null(client_flow);
     check_not_null(observe);
@@ -999,25 +999,25 @@ spec("turbo_flow_http") {
     server_config.route = "/echo";
     server_config.method = TURBO_FLOW_HTTP_POST;
     server_config.response_content_type = "application/octet-stream";
-    check_int_eq(
+    check_equal(
         turbo_flow_http_register_server_adapter(server_flow, "http.server.echo", &server_config),
         TURBO_OK);
-    check_str_eq(turbo_flow_adapter_operation_module(server_flow, "http.server.echo",
+    check_equal(turbo_flow_adapter_operation_module(server_flow, "http.server.echo",
                                                      TURBO_FLOW_HTTP_SERVER_REQUEST_OPERATION),
                  TURBO_FLOW_HTTP_SERVER_MODULE);
     memset(&server_connection, 0, sizeof(server_connection));
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
+    check_equal(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
                  TURBO_OK);
-    check_int_eq(server_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_int_eq(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(server_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(server_flow), TURBO_OK);
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
+    check_equal(server_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(server_flow), TURBO_OK);
+    check_equal(turbo_flow_start(server_flow), TURBO_OK);
+    check_equal(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
                  TURBO_OK);
-    check_int_eq(server_connection.state, TURBO_FLOW_CONNECTION_READY);
-    check_size_eq(server_connection.connections_current, 1);
-    check_int_gt(snprintf(url, sizeof(url), "http://0.0.0.0:%u/echo", (unsigned)port), 0);
-    check_str_eq(server_connection.endpoint, url);
+    check_equal(server_connection.state, TURBO_FLOW_CONNECTION_READY);
+    check_equal(server_connection.connections_current, 1);
+    check_greater(snprintf(url, sizeof(url), "http://0.0.0.0:%u/echo", (unsigned)port), 0);
+    check_equal(server_connection.endpoint, url);
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/echo", (unsigned)port);
     memset(&client_config, 0, sizeof(client_config));
@@ -1027,24 +1027,24 @@ spec("turbo_flow_http") {
     client_config.max_pump_iterations = 20000;
     memset(&capture, 0, sizeof(capture));
     atomic_init(&capture.called, 0);
-    check_int_eq(
+    check_equal(
         turbo_flow_http_register_client_adapter(client_flow, "http.client.once", &client_config),
         TURBO_OK);
-    check_str_eq(turbo_flow_adapter_operation_module(client_flow, "http.client.once",
+    check_equal(turbo_flow_adapter_operation_module(client_flow, "http.client.once",
                                                      TURBO_FLOW_HTTP_CLIENT_REQUEST_OPERATION),
                  TURBO_FLOW_HTTP_CLIENT_MODULE);
     memset(&client_connection, 0, sizeof(client_connection));
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
+    check_equal(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
                  TURBO_OK);
-    check_int_eq(client_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_str_eq(client_connection.endpoint, url);
-    check_int_eq(
+    check_equal(client_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(client_connection.endpoint, url);
+    check_equal(
         turbo_flow_register_stage_ex(client_flow, "capture", capture_response, &capture, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_observe_attach(observe, client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(client_flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(client_flow), TURBO_OK);
+    check_equal(turbo_flow_observe_attach(observe, client_flow), TURBO_OK);
+    check_equal(turbo_flow_start(client_flow), TURBO_OK);
 
     {
       static const char rule[] =
@@ -1052,13 +1052,13 @@ spec("turbo_flow_http") {
       turbo_flow_observe_graph_snapshot_t graph;
       turbo_flow_observe_control_facts_snapshot_t facts_snapshot;
       turbo_flow_control_facts_t facts = TURBO_FLOW_CONTROL_FACTS_INIT;
-      check_int_eq(turbo_flow_observe_graph_snapshot(observe, &graph), TURBO_OK);
-      check_size_eq(graph.connection_providers, 1);
-      check_size_eq(graph.connections_current, 0);
-      check_int_eq(turbo_flow_observe_control_facts(observe, &facts_snapshot, &facts), TURBO_OK);
-      check_int_eq(turbo_flow_control_ex(client_flow, rule, sizeof(rule) - 1u, &facts, NULL),
+      check_equal(turbo_flow_observe_graph_snapshot(observe, &graph), TURBO_OK);
+      check_equal(graph.connection_providers, 1);
+      check_equal(graph.connections_current, 0);
+      check_equal(turbo_flow_observe_control_facts(observe, &facts_snapshot, &facts), TURBO_OK);
+      check_equal(turbo_flow_control_ex(client_flow, rule, sizeof(rule) - 1u, &facts, NULL),
                    TURBO_OK);
-      check_int_eq(turbo_flow_control(client_flow, "adapter http.client.once resume",
+      check_equal(turbo_flow_control(client_flow, "adapter http.client.once resume",
                                       sizeof("adapter http.client.once resume") - 1u),
                    TURBO_OK);
     }
@@ -1066,42 +1066,42 @@ spec("turbo_flow_http") {
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup("round-trip");
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_content_descriptor_from_media(&input_descriptor, TURBO_FLOW_DOMAIN_DATA,
+    check_equal(turbo_flow_content_descriptor_from_media(&input_descriptor, TURBO_FLOW_DOMAIN_DATA,
                                                           TURBO_FLOW_CONTENT_PROFILE_GENERIC,
                                                           "application/json", "request-body", NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_msg_set_content_descriptor(&msg, &input_descriptor), TURBO_OK);
-    check_int_eq(turbo_flow_publish(client_flow, "input", &msg), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
-    check_size_eq(capture.payload_len, 10);
-    check_mem_eq(capture.payload, "round-trip", 10);
-    check_int_eq(capture.profile, TURBO_FLOW_CONTENT_PROFILE_HTTP_RESPONSE_BODY);
-    check_int_eq(capture.encoding, TURBO_FLOW_DATA_ENCODING_OPAQUE);
-    check_str_eq(capture.media_type, "application/octet-stream");
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
+    check_equal(turbo_flow_msg_set_content_descriptor(&msg, &input_descriptor), TURBO_OK);
+    check_equal(turbo_flow_publish(client_flow, "input", &msg), TURBO_OK);
+    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
+    check_equal(capture.payload_len, 10);
+    check_equal(capture.payload, "round-trip", 10);
+    check_equal(capture.profile, TURBO_FLOW_CONTENT_PROFILE_HTTP_RESPONSE_BODY);
+    check_equal(capture.encoding, TURBO_FLOW_DATA_ENCODING_OPAQUE);
+    check_equal(capture.media_type, "application/octet-stream");
+    check_equal(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
                  TURBO_OK);
-    check_int_eq(client_connection.state, TURBO_FLOW_CONNECTION_READY);
-    check_size_eq(client_connection.connections_current, 0);
-    check_size_eq(client_connection.in_flight_messages, 0);
-    check_size_eq(client_connection.in_flight_bytes, 0);
-    check_int_eq(http_wait_connection_drained(server_flow, 0u, &server_connection), TURBO_OK);
-    check_size_eq(server_connection.in_flight_messages, 0);
-    check_size_eq(server_connection.in_flight_bytes, 0);
+    check_equal(client_connection.state, TURBO_FLOW_CONNECTION_READY);
+    check_equal(client_connection.connections_current, 0);
+    check_equal(client_connection.in_flight_messages, 0);
+    check_equal(client_connection.in_flight_bytes, 0);
+    check_equal(http_wait_connection_drained(server_flow, 0u, &server_connection), TURBO_OK);
+    check_equal(server_connection.in_flight_messages, 0);
+    check_equal(server_connection.in_flight_bytes, 0);
 
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_stop(server_flow), TURBO_OK);
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
+    check_equal(turbo_flow_stop(client_flow), TURBO_OK);
+    check_equal(turbo_flow_stop(server_flow), TURBO_OK);
+    check_equal(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
                  TURBO_OK);
-    check_int_eq(client_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_int_eq(client_connection.last_status, TURBO_ESHUTDOWN);
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
+    check_equal(client_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(client_connection.last_status, TURBO_ESHUTDOWN);
+    check_equal(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
                  TURBO_OK);
-    check_int_eq(server_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_int_eq(server_connection.last_status, TURBO_ESHUTDOWN);
+    check_equal(server_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(server_connection.last_status, TURBO_ESHUTDOWN);
     turbo_flow_destroy(client_flow);
     turbo_flow_destroy(server_flow);
-    check_int_eq(turbo_flow_observe_destroy(observe), TURBO_OK);
+    check_equal(turbo_flow_observe_destroy(observe), TURBO_OK);
   }
 
   it("publishes periodic GET responses as source messages") {
@@ -1128,19 +1128,19 @@ spec("turbo_flow_http") {
     turbo_flow_t *client_flow = turbo_flow_create();
     http_capture_t capture;
 
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     check_not_null(server_flow);
     check_not_null(client_flow);
     memset(&server_config, 0, sizeof(server_config));
     server_config.port = port;
     server_config.route = "/poll";
     server_config.method = TURBO_FLOW_HTTP_GET;
-    check_int_eq(
+    check_equal(
         turbo_flow_http_register_server_adapter(server_flow, "http.server.poll", &server_config),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(server_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(server_flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(server_flow), TURBO_OK);
+    check_equal(turbo_flow_start(server_flow), TURBO_OK);
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/poll", (unsigned)port);
     memset(&client_config, 0, sizeof(client_config));
@@ -1150,22 +1150,22 @@ spec("turbo_flow_http") {
     client_config.poll_interval_ms = 20;
     memset(&capture, 0, sizeof(capture));
     atomic_init(&capture.called, 0);
-    check_int_eq(
+    check_equal(
         turbo_flow_http_register_client_adapter(client_flow, "http.client.poll", &client_config),
         TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_register_stage_ex(client_flow, "capture", capture_response, &capture, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(client_flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(client_flow), TURBO_OK);
+    check_equal(turbo_flow_start(client_flow), TURBO_OK);
     for (int i = 0; i < 200 && atomic_load_explicit(&capture.called, memory_order_acquire) == 0;
          ++i) {
       turbo_sleep_ms(10);
     }
-    check_int_gt(atomic_load_explicit(&capture.called, memory_order_acquire), 0);
-    check_int_eq(turbo_flow_stop(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_stop(server_flow), TURBO_OK);
+    check_greater(atomic_load_explicit(&capture.called, memory_order_acquire), 0);
+    check_equal(turbo_flow_stop(client_flow), TURBO_OK);
+    check_equal(turbo_flow_stop(server_flow), TURBO_OK);
     turbo_flow_destroy(client_flow);
     turbo_flow_destroy(server_flow);
   }
@@ -1190,17 +1190,17 @@ spec("turbo_flow_http") {
     memset(&config, 0, sizeof(config));
     config.url = "http://127.0.0.1:1/retry";
     config.method = TURBO_FLOW_HTTP_GET;
-    check_int_eq(turbo_flow_http_register_client_adapter(get_flow, "http.client.get", &config),
+    check_equal(turbo_flow_http_register_client_adapter(get_flow, "http.client.get", &config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(get_flow, get_dsl, strlen(get_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(get_flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(get_flow, get_dsl, strlen(get_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(get_flow), TURBO_OK);
 
     config.method = TURBO_FLOW_HTTP_POST;
-    check_int_eq(turbo_flow_http_register_client_adapter(post_flow, "http.client.post", &config),
+    check_equal(turbo_flow_http_register_client_adapter(post_flow, "http.client.post", &config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(post_flow, post_dsl, strlen(post_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(post_flow), TURBO_ENOTSUP);
-    check_str_contains(turbo_flow_last_error(post_flow)->message, "adapter retry callback");
+    check_equal(turbo_flow_parse_string(post_flow, post_dsl, strlen(post_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(post_flow), TURBO_ENOTSUP);
+    check_contains(turbo_flow_last_error(post_flow)->message, "adapter retry callback");
 
     turbo_flow_destroy(get_flow);
     turbo_flow_destroy(post_flow);

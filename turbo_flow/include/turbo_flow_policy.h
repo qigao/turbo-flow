@@ -117,7 +117,7 @@ typedef struct turbo_flow_rule_projection_provider_s {
   {sizeof(turbo_flow_rule_projection_provider_t), NULL, NULL}
 
 /** Standard facts provider that reads a message's attached projection through the adapter. */
-CXX_C_API int turbo_flow_rule_projection_facts_provider(
+TURBO_FLOW_C_API int turbo_flow_rule_projection_facts_provider(
     const turbo_flow_msg_t *message, const turbo_flow_expr_schema_t *schema,
     const turbo_flow_expr_value_t **values_out, size_t *value_count_out, void *ctx);
 
@@ -187,10 +187,10 @@ typedef struct turbo_flow_rule_authority_s {
 #define TURBO_FLOW_RULE_AUTHORITY_INIT                                                            \
   {sizeof(turbo_flow_rule_authority_t), 0u, 0u, {0}}
 
-CXX_C_API int turbo_flow_rule_processor_create(const turbo_flow_rule_processor_config_t *config,
+TURBO_FLOW_C_API int turbo_flow_rule_processor_create(const turbo_flow_rule_processor_config_t *config,
                                                turbo_flow_rule_processor_t **out,
                                                turbo_flow_error_t *error);
-CXX_C_API void turbo_flow_rule_processor_destroy(turbo_flow_rule_processor_t *processor);
+TURBO_FLOW_C_API void turbo_flow_rule_processor_destroy(turbo_flow_rule_processor_t *processor);
 
 /**
  * Create one data RuleSet from strict `channels.<name>.kind: rule_set` YAML.
@@ -199,27 +199,27 @@ CXX_C_API void turbo_flow_rule_processor_destroy(turbo_flow_rule_processor_t *pr
  * `{when, action}` plus the fields required by that action. The supplied schema and facts provider
  * remain caller-owned under the same contract as turbo_flow_rule_processor_create().
  */
-CXX_C_API int turbo_flow_rule_processor_create_resolved(
+TURBO_FLOW_C_API int turbo_flow_rule_processor_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     const turbo_flow_expr_schema_t *schema, turbo_flow_rule_facts_provider_fn facts_provider,
     void *facts_provider_ctx, turbo_flow_rule_processor_t **out,
     turbo_flow_config_error_t *error);
 
 /** Evaluate immutable facts and emit caller-owned actions without changing runtime state. */
-CXX_C_API int turbo_flow_rule_processor_evaluate(const turbo_flow_rule_processor_t *processor,
+TURBO_FLOW_C_API int turbo_flow_rule_processor_evaluate(const turbo_flow_rule_processor_t *processor,
                                                  const turbo_flow_rule_facts_t *facts,
                                                  turbo_flow_rule_action_t *actions,
                                                  size_t action_capacity,
                                                  turbo_flow_rule_result_t *result);
 
 /** Validate and atomically apply data actions to one private message copy and decision. */
-CXX_C_API int turbo_flow_rule_apply_data_actions(turbo_flow_msg_t *message,
+TURBO_FLOW_C_API int turbo_flow_rule_apply_data_actions(turbo_flow_msg_t *message,
                                                  const turbo_flow_rule_action_t *actions,
                                                  size_t action_count,
                                                  turbo_flow_rule_data_decision_t *decision);
 
 /** Register an inline data-rule stage. The caller retains immutable program ownership. */
-CXX_C_API int turbo_flow_rule_register_data_stage(turbo_flow_t *flow, const char *stage_name,
+TURBO_FLOW_C_API int turbo_flow_rule_register_data_stage(turbo_flow_t *flow, const char *stage_name,
                                                   turbo_flow_rule_processor_t *processor,
                                                   const turbo_flow_stage_options_t *options);
 
@@ -233,11 +233,11 @@ CXX_C_API int turbo_flow_rule_register_data_stage(turbo_flow_t *flow, const char
  * may continue to supply an already materialized `turbo_flow_rule_facts_t` instead.
  * The caller retains immutable processor ownership for the lifetime of the flow.
  */
-CXX_C_API int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *resource_name,
+TURBO_FLOW_C_API int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *resource_name,
                                                        turbo_flow_rule_processor_t *processor);
 
 /** Authorize one control proposal. This function never dispatches the owner command. */
-CXX_C_API int turbo_flow_rule_authorize_command(const turbo_flow_rule_action_t *proposal,
+TURBO_FLOW_C_API int turbo_flow_rule_authorize_command(const turbo_flow_rule_action_t *proposal,
                                                 const turbo_flow_rule_authority_t *authority,
                                                 turbo_flow_resource_command_t *command_out);
 

@@ -29,11 +29,11 @@ typedef struct turbo_flow_protocol_business_ops_s {
  * The implementation copies the function table and identity strings. ctx is
  * borrowed until destroy. Calls are synchronous and caller-serialized.
  */
-CXX_C_API int turbo_flow_protocol_business_create(
+TURBO_FLOW_C_API int turbo_flow_protocol_business_create(
     const char *business_name, turbo_flow_protocol_kind_t protocol, const char *profile,
     size_t max_payload_size, turbo_flow_protocol_business_capabilities_t capabilities,
     const turbo_flow_protocol_business_ops_t *ops, void *ctx, turbo_flow_protocol_business_t **out);
-CXX_C_API void turbo_flow_protocol_business_destroy(turbo_flow_protocol_business_t *business);
+TURBO_FLOW_C_API void turbo_flow_protocol_business_destroy(turbo_flow_protocol_business_t *business);
 
 #ifdef __cplusplus
 }

@@ -77,7 +77,7 @@ typedef struct turbo_flow_store_decision_s {
    TURBO_FLOW_STORE_MODEL_STATE, TURBO_FLOW_STORE_PLACEMENT_MEMORY}
 
 /** Pure routing decision. It does not allocate, connect, or silently fall back. */
-CXX_C_API int turbo_flow_store_route(const turbo_flow_store_policy_t *policy,
+TURBO_FLOW_C_API int turbo_flow_store_route(const turbo_flow_store_policy_t *policy,
                                      const turbo_flow_store_requirements_t *requirements,
                                      turbo_flow_store_decision_t *decision);
 

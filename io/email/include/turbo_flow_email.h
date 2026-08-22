@@ -159,7 +159,7 @@ typedef struct turbo_flow_email_mime_entity_s turbo_flow_email_mime_entity_t;
  * retry delivery, manage queues, map arbitrary headers, or own product-level
  * email workflow semantics.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_email_register_smtp_sink_adapter(turbo_flow_t *flow, const char *name,
                                             const turbo_flow_email_smtp_config_t *config);
 
@@ -170,54 +170,54 @@ turbo_flow_email_register_smtp_sink_adapter(turbo_flow_t *flow, const char *name
  * deletes server messages; UIDL de-duplication is local to the adapter
  * lifetime and resets when the adapter is recreated.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_email_register_pop3_source_adapter(turbo_flow_t *flow, const char *name,
                                               const turbo_flow_email_pop3_config_t *config);
 
 /** Register an RFC MIME callback transform backed by TurboNet::MimeParser. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_email_register_mime_parser_adapter(turbo_flow_t *flow, const char *name,
                                               const turbo_flow_email_mime_config_t *config);
 
 /** Register an owned RFC MIME decode/extract transform backed by TurboNet::MimeParser. */
-CXX_C_API int turbo_flow_email_register_mime_extract_adapter(
+TURBO_FLOW_C_API int turbo_flow_email_register_mime_extract_adapter(
     turbo_flow_t *flow, const char *name, const turbo_flow_email_mime_extract_config_t *config);
 
 /** Register a payload-to-RFC-2822/MIME transform backed by TurboNet::Email. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_email_register_mime_encode_adapter(turbo_flow_t *flow, const char *name,
                                               const turbo_flow_email_mime_encode_config_t *config);
 
 /** Register a payload-to-RFC-2557-MHTML transform backed by TurboNet::MimeParser. */
-CXX_C_API int turbo_flow_email_register_mhtml_encode_adapter(
+TURBO_FLOW_C_API int turbo_flow_email_register_mhtml_encode_adapter(
     turbo_flow_t *flow, const char *name, const turbo_flow_email_mhtml_encode_config_t *config);
 
 /** Return the message-owned MIME projection, or NULL for another/opaque content representation. */
-CXX_C_API const turbo_flow_email_mime_message_t *
+TURBO_FLOW_C_API const turbo_flow_email_mime_message_t *
 turbo_flow_email_msg_mime(const turbo_flow_msg_t *msg);
 
-CXX_C_API const turbo_flow_email_mime_entity_t *
+TURBO_FLOW_C_API const turbo_flow_email_mime_entity_t *
 turbo_flow_email_mime_root(const turbo_flow_email_mime_message_t *message);
-CXX_C_API size_t turbo_flow_email_mime_part_count(const turbo_flow_email_mime_message_t *message);
-CXX_C_API const turbo_flow_email_mime_entity_t *
+TURBO_FLOW_C_API size_t turbo_flow_email_mime_part_count(const turbo_flow_email_mime_message_t *message);
+TURBO_FLOW_C_API const turbo_flow_email_mime_entity_t *
 turbo_flow_email_mime_part_at(const turbo_flow_email_mime_message_t *message, size_t index);
 
-CXX_C_API size_t
+TURBO_FLOW_C_API size_t
 turbo_flow_email_mime_entity_header_count(const turbo_flow_email_mime_entity_t *entity);
-CXX_C_API tstr_v turbo_flow_email_mime_entity_header_name(
+TURBO_FLOW_C_API vstr turbo_flow_email_mime_entity_header_name(
     const turbo_flow_email_mime_entity_t *entity, size_t index);
-CXX_C_API tstr_v turbo_flow_email_mime_entity_header_value(
+TURBO_FLOW_C_API vstr turbo_flow_email_mime_entity_header_value(
     const turbo_flow_email_mime_entity_t *entity, size_t index);
-CXX_C_API tstr_v
+TURBO_FLOW_C_API vstr
 turbo_flow_email_mime_entity_content_type(const turbo_flow_email_mime_entity_t *entity);
-CXX_C_API tstr_v turbo_flow_email_mime_entity_charset(const turbo_flow_email_mime_entity_t *entity);
-CXX_C_API mime_encoding_t
+TURBO_FLOW_C_API vstr turbo_flow_email_mime_entity_charset(const turbo_flow_email_mime_entity_t *entity);
+TURBO_FLOW_C_API mime_encoding_t
 turbo_flow_email_mime_entity_encoding(const turbo_flow_email_mime_entity_t *entity);
-CXX_C_API mime_disposition_type_t
+TURBO_FLOW_C_API mime_disposition_type_t
 turbo_flow_email_mime_entity_disposition(const turbo_flow_email_mime_entity_t *entity);
-CXX_C_API tstr_v
+TURBO_FLOW_C_API vstr
 turbo_flow_email_mime_entity_filename(const turbo_flow_email_mime_entity_t *entity);
-CXX_C_API tstr_v turbo_flow_email_mime_entity_body(const turbo_flow_email_mime_entity_t *entity);
+TURBO_FLOW_C_API vstr turbo_flow_email_mime_entity_body(const turbo_flow_email_mime_entity_t *entity);
 
 #ifdef __cplusplus
 }

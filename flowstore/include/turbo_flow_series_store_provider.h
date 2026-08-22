@@ -36,7 +36,7 @@ typedef struct turbo_flow_series_store_provider_ops_s {
    NULL,                                                                                           \
    NULL}
 
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_series_store_create_provider(const turbo_flow_series_store_provider_ops_t *ops,
                                         void *ctx, turbo_flow_series_store_t **out);
 

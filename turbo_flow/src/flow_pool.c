@@ -252,8 +252,8 @@ int turbo_flow_pool_status_document_at(const turbo_flow_t *flow, size_t index,
                                        turbo_flow_resource_document_t *out) {
   turbo_flow_pool_resource_status_t status = TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
   turbo_flow_resource_document_t document = TURBO_FLOW_RESOURCE_DOCUMENT_INIT;
-  tstr_t payload = NULL;
-  tstr_t formatted;
+  tstr payload = NULL;
+  tstr formatted;
   int rc;
 
   if (!flow || !out || out->size < sizeof(*out) || out->payload) return TURBO_EINVAL;

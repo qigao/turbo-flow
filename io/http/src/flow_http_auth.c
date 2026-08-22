@@ -6,7 +6,7 @@
 #include "CoroNet/turbo_coro_context.h"
 #include "base64_utils.h"
 #include "http_client.h"
-#include "monocypher.h"
+#include "turbo_crypto.h"
 #include "turbo_coro.h"
 #include "turbo_error.h"
 #include "turbo_parser.h"
@@ -24,12 +24,12 @@
 struct turbo_flow_http_auth_provider_s {
   turbo_flow_security_auth_provider_t interface;
   turbo_flow_security_enhanced_auth_provider_t enhanced_interface;
-  tstr_t url;
-  tstr_t host;
-  tstr_t method;
-  tstr_t service_id;
-  tstr_t service_domain;
-  tstr_t service_token_ref;
+  tstr url;
+  tstr host;
+  tstr method;
+  tstr service_id;
+  tstr service_domain;
+  tstr service_token_ref;
   uint16_t port;
   uint32_t timeout_ms;
   size_t max_secret_size;
@@ -340,7 +340,7 @@ static int flow_http_auth_encode_request(const turbo_flow_security_auth_request_
 
 done:
   if (secret_base64) {
-    crypto_wipe(secret_base64, strlen(secret_base64));
+    turbo_crypto_wipe(secret_base64, strlen(secret_base64));
     free(secret_base64);
   }
   turbo_free_json(&document);
@@ -487,11 +487,11 @@ done:
   if (response) http_response_free(response);
   if (client) http_client_destroy(client);
   if (body) {
-    crypto_wipe(body, body_size);
+    turbo_crypto_wipe(body, body_size);
     turbo_json_serialize_free(body);
   }
   if (authorization) {
-    crypto_wipe(authorization, sizeof("Authorization: Bearer ") + token_size);
+    turbo_crypto_wipe(authorization, sizeof("Authorization: Bearer ") + token_size);
     free(authorization);
   }
   turbo_flow_security_secret_release(&provider->key_provider, &lease);
@@ -536,7 +536,7 @@ static void flow_http_enhanced_auth_cancel(void *ctx, void *exchange) {
   (void)exchange;
 }
 
-static int flow_http_auth_validate_url(const char *url, tstr_t *host_out, uint16_t *port_out) {
+static int flow_http_auth_validate_url(const char *url, tstr *host_out, uint16_t *port_out) {
   uri_t *uri = NULL;
   const char *scheme;
   const char *host;
@@ -784,7 +784,7 @@ void turbo_flow_http_auth_provider_destroy(turbo_flow_http_auth_provider_t *prov
   tstr_freep(&provider->service_domain);
   tstr_freep(&provider->service_token_ref);
   flow_http_tls_client_cleanup(&provider->tls);
-  crypto_wipe(&provider->key_provider, sizeof(provider->key_provider));
+  turbo_crypto_wipe(&provider->key_provider, sizeof(provider->key_provider));
   free(provider);
 }
 

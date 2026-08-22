@@ -1,7 +1,7 @@
 #include "turbo_flow_codec.h"
 
 #include "turbo_parser.h"
-#include "turbo_vec.h"
+#include "turbo_flow_stl_adapter.h"
 
 #include "turbo_error.h"
 #include "turbo_str.h"
@@ -98,12 +98,12 @@ typedef struct flow_codec_adapter_s {
   size_t max_row_size;
   char csv_delimiter;
   char csv_quote;
-  tstr_t output_source;
-  tstr_t schema_path;
-  tstr_t schema_text;
-  tstr_t schema_name;
-  tstr_t type_name;
-  tstr_t xml_xpath;
+  tstr output_source;
+  tstr schema_path;
+  tstr schema_text;
+  tstr schema_name;
+  tstr type_name;
+  tstr xml_xpath;
   turbo_flow_data_schema_t data_schema;
   DataBind *databind;
   turbo_mutex_t databind_lock;
@@ -127,7 +127,7 @@ const DataBindValue *turbo_flow_codec_msg_databind_value(const turbo_flow_msg_t 
   return (const DataBindValue *)projection;
 }
 
-static int flow_codec_dup_opt(tstr_t *dst, const char *src, size_t len) {
+static int flow_codec_dup_opt(tstr *dst, const char *src, size_t len) {
   if (!dst) return TURBO_EINVAL;
   if (!src) return TURBO_OK;
   if (len == 0) len = strlen(src);
@@ -174,7 +174,7 @@ static int flow_codec_check_payload(const flow_codec_adapter_t *adapter,
 }
 
 static int flow_codec_replace_payload(turbo_flow_msg_t *msg, const char *data, size_t len) {
-  tstr_t owned;
+  tstr owned;
 
   if (!msg || (len > 0 && !data)) return TURBO_EINVAL;
   owned = tstr_new_len(data ? data : "", len);
@@ -406,7 +406,7 @@ static int flow_codec_transform_databind(flow_codec_adapter_t *adapter, turbo_fl
   return rc;
 }
 
-static int flow_codec_csv_append_cell(tstr_t *row, const char *value, char delimiter, char quote) {
+static int flow_codec_csv_append_cell(tstr *row, const char *value, char delimiter, char quote) {
   int quoted = 0;
   if (!row || !value) return TURBO_EINVAL;
   for (const char *p = value; *p; ++p) {
@@ -424,7 +424,7 @@ static int flow_codec_csv_append_cell(tstr_t *row, const char *value, char delim
   return TURBO_OK;
 }
 
-static int flow_codec_csv_append_record(tstr_t *payload, const turbo_csv_doc_t *doc,
+static int flow_codec_csv_append_record(tstr *payload, const turbo_csv_doc_t *doc,
                                         size_t row_index, char delimiter, char quote) {
   size_t columns = turbo_csv_column_count(doc);
   for (size_t column = 0; column < columns; ++column) {

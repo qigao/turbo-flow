@@ -25,7 +25,7 @@ typedef struct flow_s3_task_s {
   flow_s3_adapter_t *adapter;
   const char *data;
   size_t len;
-  tstr_t result;
+  tstr result;
   s3_stat_object_response_t stat;
   turbo_flow_content_descriptor_t content_descriptor;
   s3_error_t error;
@@ -37,15 +37,15 @@ typedef struct flow_s3_task_s {
 
 struct flow_s3_adapter_s {
   turbo_flow_t *flow;
-  tstr_t source_name;
-  tstr_t resource_uid;
-  tstr_t resource_owner;
-  tstr_t host;
-  tstr_t region;
-  tstr_t bucket;
-  tstr_t object;
-  tstr_t content_type;
-  tstr_t content_identity;
+  tstr source_name;
+  tstr resource_uid;
+  tstr resource_owner;
+  tstr host;
+  tstr region;
+  tstr bucket;
+  tstr object;
+  tstr content_type;
+  tstr content_identity;
   turbo_flow_content_binding_t content_binding;
   char content_schema_name[TURBO_FLOW_CONTENT_SCHEMA_NAME_MAX + 1u];
   char content_type_name[TURBO_FLOW_CONTENT_TYPE_NAME_MAX + 1u];
@@ -132,7 +132,7 @@ static const turbo_flow_resource_schema_t FLOW_S3_RESOURCE_STATUS_SCHEMA = {
 
 static int flow_s3_collect(const char *data, size_t len, void *userdata) {
   flow_s3_task_t *task = (flow_s3_task_t *)userdata;
-  tstr_t next;
+  tstr next;
   if (!task || (len > 0 && !data)) return TURBO_EINVAL;
   next = tstr_cat_len(task->result, data ? data : "", len);
   if (!next) return TURBO_ENOMEM;
@@ -487,7 +487,7 @@ int turbo_flow_s3_register_client_adapter(turbo_flow_t *flow, const char *name,
   turbo_flow_resource_provider_registration_t resource =
       TURBO_FLOW_RESOURCE_PROVIDER_REGISTRATION_INIT;
   s3_base_url_t base_url;
-  tstr_t endpoint = NULL;
+  tstr endpoint = NULL;
   int rc;
   if (!flow || !name || name[0] == '\0' || !config || !config->host || config->host[0] == '\0' ||
       config->port == 0 || !config->region || config->region[0] == '\0' || !config->bucket ||

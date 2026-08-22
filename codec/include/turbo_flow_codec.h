@@ -86,7 +86,7 @@ typedef struct turbo_flow_codec_csv_split_config_s {
  * message, so payloads containing more than one complete frame return
  * TURBO_ENOTSUP instead of silently dropping trailing records.
  */
-CXX_C_API int turbo_flow_codec_register_line_adapter(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_codec_register_line_adapter(turbo_flow_t *flow, const char *name,
                                                      const turbo_flow_codec_line_config_t *config);
 
 /**
@@ -95,7 +95,7 @@ CXX_C_API int turbo_flow_codec_register_line_adapter(turbo_flow_t *flow, const c
  * The adapter strips a single configured length prefix and replaces the payload
  * with that one frame body. Partial frames return TURBO_EPROTO.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_codec_register_length_adapter(turbo_flow_t *flow, const char *name,
                                          const turbo_flow_codec_length_config_t *config);
 
@@ -109,7 +109,7 @@ turbo_flow_codec_register_length_adapter(turbo_flow_t *flow, const char *name,
  * and other ownership boundaries use DataBind's deep-clone API, so each cloned
  * envelope owns an independent value tree.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_codec_register_databind_adapter(turbo_flow_t *flow, const char *name,
                                            const turbo_flow_codec_databind_config_t *config);
 
@@ -122,12 +122,12 @@ turbo_flow_codec_register_databind_adapter(turbo_flow_t *flow, const char *name,
  * Emission is ordered but non-atomic: when publication fails, the already
  * published prefix remains committed and the input operation returns that error.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_codec_register_csv_splitter_adapter(turbo_flow_t *flow, const char *name,
                                                const turbo_flow_codec_csv_split_config_t *config);
 
 /** Return the DataBindValue projection attached by this module, or NULL for opaque content. */
-CXX_C_API const DataBindValue *turbo_flow_codec_msg_databind_value(const turbo_flow_msg_t *msg);
+TURBO_FLOW_C_API const DataBindValue *turbo_flow_codec_msg_databind_value(const turbo_flow_msg_t *msg);
 
 #ifdef __cplusplus
 }

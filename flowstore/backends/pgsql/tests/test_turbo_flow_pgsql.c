@@ -77,7 +77,7 @@ spec("turbo_flow_pgsql") {
     turbo_flow_pgsql_outbox_config_t config = TURBO_FLOW_PGSQL_OUTBOX_CONFIG_INIT;
     turbo_flow_resource_document_t document = TURBO_FLOW_RESOURCE_DOCUMENT_INIT;
     const turbo_flow_adapter_schema_t *schema;
-    tstr_t payload;
+    tstr payload;
     turbo_flow_t *flow = turbo_flow_create();
 
     check_not_null(flow);
@@ -88,36 +88,36 @@ spec("turbo_flow_pgsql") {
     config.poll_interval_ms = 50u;
     config.claim_scan_limit = 64u;
     config.create_table = 1;
-    check_int_eq(turbo_flow_pgsql_register_outbox_adapter(flow, "pg.outbox.sink", &config),
+    check_equal(turbo_flow_pgsql_register_outbox_adapter(flow, "pg.outbox.sink", &config),
                  TURBO_OK);
     config.role = TURBO_FLOW_PGSQL_OUTBOX_SOURCE;
-    check_int_eq(turbo_flow_pgsql_register_outbox_adapter(flow, "pg.outbox.source", &config),
+    check_equal(turbo_flow_pgsql_register_outbox_adapter(flow, "pg.outbox.source", &config),
                  TURBO_OK);
-    check_size_eq(turbo_flow_resource_metadata_count(flow), 2u);
+    check_equal(turbo_flow_resource_metadata_count(flow), 2u);
     schema = turbo_flow_find_adapter_schema(flow, "pg.outbox.sink");
     check_not_null(schema);
-    check_int_eq(schema->kind, TURBO_FLOW_ADAPTER_KIND_POSTGRESQL);
-    check_int_eq(schema->roles, TURBO_FLOW_ADAPTER_SINK);
+    check_equal(schema->kind, TURBO_FLOW_ADAPTER_KIND_POSTGRESQL);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SINK);
     schema = turbo_flow_find_adapter_schema(flow, "pg.outbox.source");
     check_not_null(schema);
-    check_int_eq(schema->roles, TURBO_FLOW_ADAPTER_SOURCE);
-    check_int_eq(
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SOURCE);
+    check_equal(
         turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
         TURBO_OK);
-    check_uint_eq(document.schema->schema_id, 303u);
-    check_str_eq(document.schema->type_name, "PostgreSqlOutboxStatus");
-    check_int_eq(turbo_flow_resource_document_validate(&document, document.schema), TURBO_OK);
+    check_equal(document.schema->schema_id, 303u);
+    check_equal(document.schema->type_name, "PostgreSqlOutboxStatus");
+    check_equal(turbo_flow_resource_document_validate(&document, document.schema), TURBO_OK);
     payload =
         tstr_new_len(mem_buffer_const_data(document.payload), mem_buffer_used(document.payload));
     check_not_null(payload);
-    check_str_contains(payload, "\"started\":false");
-    check_str_contains(payload, "\"accepted\":\"0\"");
+    check_contains(payload, "\"started\":false");
+    check_contains(payload, "\"accepted\":\"0\"");
     check_null(strstr(payload, "outbox-secret"));
     check_null(strstr(payload, "orders"));
     tstr_freep(&payload);
     turbo_flow_resource_document_cleanup(&document);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -155,12 +155,12 @@ spec("turbo_flow_pgsql") {
     turbo_flow_t *flow = turbo_flow_create();
 
     check_not_null(flow);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_pgsql_register_resolved_outbox_adapter(flow, "pg.orders.sink", resolved, &error),
         TURBO_OK);
-    check_int_eq(turbo_flow_pgsql_register_resolved_outbox_adapter(flow, "pg.orders.source",
+    check_equal(turbo_flow_pgsql_register_resolved_outbox_adapter(flow, "pg.orders.source",
                                                                    resolved, &error),
                  TURBO_OK);
     turbo_flow_destroy(flow);
@@ -181,15 +181,15 @@ spec("turbo_flow_pgsql") {
                    TURBO_FLOW_PGSQL_SOURCE_DIR);
     yaml = tt_read_file(example_path, &yaml_size);
     check_not_null(yaml);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, yaml_size, &resolved, &error), TURBO_OK);
-    check_int_eq(
+    check_equal(turbo_flow_config_resolve_yaml(yaml, yaml_size, &resolved, &error), TURBO_OK);
+    check_equal(
         turbo_flow_resolved_config_profile_adapter(resolved, "orders", "enqueue", &adapter_name),
         TURBO_OK);
-    check_str_eq(adapter_name, "pg.orders.sink");
-    check_int_eq(
+    check_equal(adapter_name, "pg.orders.sink");
+    check_equal(
         turbo_flow_pgsql_register_resolved_outbox_adapter(flow, "pg.orders.sink", resolved, &error),
         TURBO_OK);
-    check_int_eq(turbo_flow_pgsql_register_resolved_outbox_adapter(flow, "pg.orders.source",
+    check_equal(turbo_flow_pgsql_register_resolved_outbox_adapter(flow, "pg.orders.source",
                                                                    resolved, &error),
                  TURBO_OK);
     turbo_flow_destroy(flow);
@@ -238,11 +238,11 @@ spec("turbo_flow_pgsql") {
       check_not_null(flow);
       (void)snprintf(yaml, sizeof(yaml), yaml_template, cases[i].kind, cases[i].backend,
                      cases[i].capacity, cases[i].extra, cases[i].role);
-      check_int_eq(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), TURBO_OK);
-      check_int_eq(
+      check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), TURBO_OK);
+      check_equal(
           turbo_flow_pgsql_register_resolved_outbox_adapter(flow, "pg.out", resolved, &error),
           cases[i].expected);
-      check_str_eq(error.path, cases[i].path);
+      check_equal(error.path, cases[i].path);
       turbo_flow_destroy(flow);
       turbo_flow_resolved_config_destroy(resolved);
     }
@@ -250,7 +250,7 @@ spec("turbo_flow_pgsql") {
       turbo_flow_t *flow = turbo_flow_create();
       check_not_null(flow);
       direct.version++;
-      check_int_eq(turbo_flow_pgsql_register_outbox_adapter(flow, "pg.invalid", &direct),
+      check_equal(turbo_flow_pgsql_register_outbox_adapter(flow, "pg.invalid", &direct),
                    TURBO_EINVAL);
       turbo_flow_destroy(flow);
     }
@@ -260,7 +260,7 @@ spec("turbo_flow_pgsql") {
       direct.version = TURBO_FLOW_PGSQL_OUTBOX_API_VERSION;
       direct.max_delivery_attempts = 3u;
       direct.retry_delay_ms = 0u;
-      check_int_eq(turbo_flow_pgsql_register_outbox_adapter(flow, "pg.invalid", &direct),
+      check_equal(turbo_flow_pgsql_register_outbox_adapter(flow, "pg.invalid", &direct),
                    TURBO_EINVAL);
       turbo_flow_destroy(flow);
     }
@@ -276,7 +276,7 @@ spec("turbo_flow_pgsql") {
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBind *codec = NULL;
     DataBindValue *value = NULL;
-    tstr_t payload = NULL;
+    tstr payload = NULL;
     int32_t mode = -1;
     int started = -1;
     turbo_flow_t *flow = turbo_flow_create();
@@ -287,46 +287,46 @@ spec("turbo_flow_pgsql") {
     query_config.statement = "select secret_column from private_events";
     query_config.statement_name = "private.events.read";
     query_config.result_format = TURBO_FLOW_PGSQL_RESULT_ROWSET_JSON;
-    check_int_eq(turbo_flow_pgsql_register_sink_adapter(flow, "pg.sink", &sink_config), TURBO_OK);
-    check_int_eq(turbo_flow_pgsql_register_query_adapter(flow, "pg.query", &query_config),
+    check_equal(turbo_flow_pgsql_register_sink_adapter(flow, "pg.sink", &sink_config), TURBO_OK);
+    check_equal(turbo_flow_pgsql_register_query_adapter(flow, "pg.query", &query_config),
                  TURBO_OK);
-    check_size_eq(turbo_flow_resource_metadata_count(flow), 2u);
+    check_equal(turbo_flow_resource_metadata_count(flow), 2u);
 
-    check_int_eq(turbo_flow_resource_metadata_at(flow, 0u, &metadata), TURBO_OK);
-    check_str_eq(metadata.uid, "postgresql:pg.sink");
-    check_int_eq(metadata.kind, TURBO_FLOW_RESOURCE_STORAGE);
-    check_int_eq(
+    check_equal(turbo_flow_resource_metadata_at(flow, 0u, &metadata), TURBO_OK);
+    check_equal(metadata.uid, "postgresql:pg.sink");
+    check_equal(metadata.kind, TURBO_FLOW_RESOURCE_STORAGE);
+    check_equal(
         turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
         TURBO_OK);
-    check_str_eq(document.schema->schema_name, "TurboFlowDatabaseResource");
-    check_str_eq(document.schema->type_name, "PostgreSqlSinkStatus");
-    check_uint_eq(document.schema->schema_id, 301u);
-    check_int_eq(turbo_flow_resource_document_validate(&document, document.schema), TURBO_OK);
+    check_equal(document.schema->schema_name, "TurboFlowDatabaseResource");
+    check_equal(document.schema->type_name, "PostgreSqlSinkStatus");
+    check_equal(document.schema->schema_id, 301u);
+    check_equal(turbo_flow_resource_document_validate(&document, document.schema), TURBO_OK);
     {
       turbo_flow_resource_schema_t unknown = *document.schema;
       unknown.type_name = "UnknownStatus";
-      check_int_eq(turbo_flow_resource_document_validate(&document, &unknown), TURBO_EPROTO);
+      check_equal(turbo_flow_resource_document_validate(&document, &unknown), TURBO_EPROTO);
     }
-    check_int_eq(data_bind_create_from_text(document.schema->schema_text,
+    check_equal(data_bind_create_from_text(document.schema->schema_text,
                                             strlen(document.schema->schema_text), &codec, &error),
                  DATA_BIND_OK);
-    check_int_eq(data_bind_parse_json(codec, document.schema->type_name,
+    check_equal(data_bind_parse_json(codec, document.schema->type_name,
                                       mem_buffer_const_data(document.payload),
                                       mem_buffer_used(document.payload), &value, &error),
                  DATA_BIND_OK);
-    check_int_eq(data_bind_validate_json(codec, document.schema->type_name, "{\"started\":false}",
+    check_equal(data_bind_validate_json(codec, document.schema->type_name, "{\"started\":false}",
                                          sizeof("{\"started\":false}") - 1u, &error),
                  DATA_BIND_ERR_TYPE_MISMATCH);
-    check_int_eq(data_bind_validate_json(codec, document.schema->type_name,
+    check_equal(data_bind_validate_json(codec, document.schema->type_name,
                                          "{\"started\":{},\"mode\":0}",
                                          sizeof("{\"started\":{},\"mode\":0}") - 1u, &error),
                  DATA_BIND_ERR_TYPE_MISMATCH);
-    check_int_eq(data_bind_value_get_bool(data_bind_value_get(value, "started"), &started),
+    check_equal(data_bind_value_get_bool(data_bind_value_get(value, "started"), &started),
                  DATA_BIND_OK);
-    check_int_eq(data_bind_value_get_int32(data_bind_value_get(value, "mode"), &mode),
+    check_equal(data_bind_value_get_int32(data_bind_value_get(value, "mode"), &mode),
                  DATA_BIND_OK);
-    check_int_eq(started, 0);
-    check_int_eq(mode, 0);
+    check_equal(started, 0);
+    check_equal(mode, 0);
     payload =
         tstr_new_len(mem_buffer_const_data(document.payload), mem_buffer_used(document.payload));
     check_not_null(payload);
@@ -340,26 +340,26 @@ spec("turbo_flow_pgsql") {
     turbo_flow_resource_document_cleanup(&document);
 
     metadata = (turbo_flow_resource_metadata_t)TURBO_FLOW_RESOURCE_METADATA_INIT;
-    check_int_eq(turbo_flow_resource_metadata_at(flow, 1u, &metadata), TURBO_OK);
-    check_str_eq(metadata.uid, "postgresql:pg.query");
-    check_int_eq(
+    check_equal(turbo_flow_resource_metadata_at(flow, 1u, &metadata), TURBO_OK);
+    check_equal(metadata.uid, "postgresql:pg.query");
+    check_equal(
         turbo_flow_resource_document_at(flow, 1u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
         TURBO_OK);
-    check_str_eq(document.schema->type_name, "PostgreSqlQueryStatus");
-    check_uint_eq(document.schema->schema_id, 302u);
-    check_int_eq(data_bind_create_from_text(document.schema->schema_text,
+    check_equal(document.schema->type_name, "PostgreSqlQueryStatus");
+    check_equal(document.schema->schema_id, 302u);
+    check_equal(data_bind_create_from_text(document.schema->schema_text,
                                             strlen(document.schema->schema_text), &codec, &error),
                  DATA_BIND_OK);
-    check_int_eq(data_bind_parse_json(codec, document.schema->type_name,
+    check_equal(data_bind_parse_json(codec, document.schema->type_name,
                                       mem_buffer_const_data(document.payload),
                                       mem_buffer_used(document.payload), &value, &error),
                  DATA_BIND_OK);
-    check_int_eq(data_bind_value_get_bool(data_bind_value_get(value, "started"), &started),
+    check_equal(data_bind_value_get_bool(data_bind_value_get(value, "started"), &started),
                  DATA_BIND_OK);
-    check_int_eq(data_bind_value_get_int32(data_bind_value_get(value, "mode"), &mode),
+    check_equal(data_bind_value_get_int32(data_bind_value_get(value, "mode"), &mode),
                  DATA_BIND_OK);
-    check_int_eq(started, 0);
-    check_int_eq(mode, 1);
+    check_equal(started, 0);
+    check_equal(mode, 1);
     payload =
         tstr_new_len(mem_buffer_const_data(document.payload), mem_buffer_used(document.payload));
     check_not_null(payload);
@@ -385,13 +385,13 @@ spec("turbo_flow_pgsql") {
     turbo_flow_t *flow = turbo_flow_create();
     const turbo_flow_adapter_schema_t *schema;
     check_not_null(flow);
-    check_int_eq(turbo_flow_pgsql_register_sink_adapter(flow, "pg.out", &config), TURBO_OK);
+    check_equal(turbo_flow_pgsql_register_sink_adapter(flow, "pg.out", &config), TURBO_OK);
     schema = turbo_flow_find_adapter_schema(flow, "pg.out");
     check_not_null(schema);
-    check_int_eq(schema->kind, TURBO_FLOW_ADAPTER_KIND_POSTGRESQL);
-    check_int_eq(schema->roles, TURBO_FLOW_ADAPTER_SINK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(schema->kind, TURBO_FLOW_ADAPTER_KIND_POSTGRESQL);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SINK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -399,7 +399,7 @@ spec("turbo_flow_pgsql") {
     turbo_flow_pgsql_sink_config_t config = {"host=127.0.0.1", "select 1", 0};
     turbo_flow_t *flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_pgsql_register_sink_adapter(flow, "pg.out", &config), TURBO_EINVAL);
+    check_equal(turbo_flow_pgsql_register_sink_adapter(flow, "pg.out", &config), TURBO_EINVAL);
     turbo_flow_destroy(flow);
   }
 
@@ -424,14 +424,14 @@ spec("turbo_flow_pgsql") {
     config.parameter_content_type = "application/x-postgresql-opaque";
     flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_pgsql_register_sink_adapter(flow, "pg.opaque", &config), TURBO_OK);
+    check_equal(turbo_flow_pgsql_register_sink_adapter(flow, "pg.opaque", &config), TURBO_OK);
     turbo_flow_destroy(flow);
 
     binding.registry = registry;
     config.parameter_content_binding = &binding;
     flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_pgsql_register_sink_adapter(flow, "pg.registry-only", &config),
+    check_equal(turbo_flow_pgsql_register_sink_adapter(flow, "pg.registry-only", &config),
                  TURBO_OK);
     turbo_flow_destroy(flow);
 
@@ -439,28 +439,28 @@ spec("turbo_flow_pgsql") {
     binding.schema.schema_name = schema.schema_name;
     flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_pgsql_register_sink_adapter(flow, "pg.incomplete", &config),
+    check_equal(turbo_flow_pgsql_register_sink_adapter(flow, "pg.incomplete", &config),
                  TURBO_EINVAL);
     turbo_flow_destroy(flow);
 
-    check_int_eq(turbo_flow_content_descriptor_init(&match, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE,
+    check_equal(turbo_flow_content_descriptor_init(&match, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE,
                                                     TURBO_FLOW_CONTENT_PROFILE_DATABASE_PARAMETERS,
                                                     TURBO_FLOW_DATA_ENCODING_JSON,
                                                     "application/json", NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_schema_registry_register(registry, &match, &schema), TURBO_OK);
+    check_equal(turbo_flow_schema_registry_register(registry, &match, &schema), TURBO_OK);
     binding.registry = registry;
     binding.schema.type_name = schema.type_name;
     binding.schema.schema_version = schema.schema_version;
     flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_pgsql_register_sink_adapter(flow, "pg.typed", &config), TURBO_OK);
+    check_equal(turbo_flow_pgsql_register_sink_adapter(flow, "pg.typed", &config), TURBO_OK);
     turbo_flow_destroy(flow);
 
     binding.schema.schema_version = 2u;
     flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_pgsql_register_sink_adapter(flow, "pg.mismatch", &config),
+    check_equal(turbo_flow_pgsql_register_sink_adapter(flow, "pg.mismatch", &config),
                  TURBO_EPROTO);
     turbo_flow_destroy(flow);
     turbo_flow_schema_registry_destroy(registry);
@@ -476,17 +476,17 @@ spec("turbo_flow_pgsql") {
     PGresult *result = pgsql_make_result(names, oids, formats, 2u, cells, 2u);
     check_not_null(result);
     turbo_flow_msg_init(&msg);
-    check_int_eq(pgsql_result_to_message(result, "orders.list", 10u, 1024u,
+    check_equal(pgsql_result_to_message(result, "orders.list", 10u, 1024u,
                                          TURBO_FLOW_PGSQL_RESULT_DATABIND_CSV, &msg),
                  TURBO_OK);
-    check_str_eq(msg.owned_payload, "id,symbol\n11,\"A,B\"\n12,\"A\"\"B\"\n");
+    check_equal(msg.owned_payload, "id,symbol\n11,\"A,B\"\n12,\"A\"\"B\"\n");
     descriptor = turbo_flow_msg_content_descriptor(&msg);
     check_not_null(descriptor);
-    check_int_eq(descriptor->profile, TURBO_FLOW_CONTENT_PROFILE_DATABASE_ROWSET);
-    check_int_eq(descriptor->encoding, TURBO_FLOW_DATA_ENCODING_CSV);
+    check_equal(descriptor->profile, TURBO_FLOW_CONTENT_PROFILE_DATABASE_ROWSET);
+    check_equal(descriptor->encoding, TURBO_FLOW_DATA_ENCODING_CSV);
     check_bits(descriptor->flags, TURBO_FLOW_CONTENT_BATCH);
-    check_str_eq(descriptor->media_type, "text/csv");
-    check_str_eq(descriptor->identity, "orders.list");
+    check_equal(descriptor->media_type, "text/csv");
+    check_equal(descriptor->identity, "orders.list");
     turbo_flow_msg_cleanup(&msg);
     PQclear(result);
   }
@@ -504,20 +504,20 @@ spec("turbo_flow_pgsql") {
     PGresult *result = pgsql_make_result(names, oids, formats, 2u, cells, 2u);
     check_not_null(result);
     turbo_flow_msg_init(&msg);
-    check_int_eq(pgsql_result_to_message(result, "orders.list", 10u, 1024u,
+    check_equal(pgsql_result_to_message(result, "orders.list", 10u, 1024u,
                                          TURBO_FLOW_PGSQL_RESULT_DATABIND_CSV, &msg),
                  TURBO_OK);
-    check_int_eq(data_bind_create_from_text(schema, strlen(schema), &databind, &error),
+    check_equal(data_bind_create_from_text(schema, strlen(schema), &databind, &error),
                  DATA_BIND_OK);
-    check_int_eq(data_bind_parse_csv_all(databind, "Order", msg.payload.data, msg.payload.len,
+    check_equal(data_bind_parse_csv_all(databind, "Order", msg.payload.data, msg.payload.len,
                                          &batch, &error),
                  DATA_BIND_OK);
     check_not_null(batch);
-    check_int_eq(data_bind_value_kind(batch), DATA_BIND_VALUE_LIST);
-    check_size_eq(data_bind_value_count(batch), 2u);
-    check_int_eq(data_bind_value_as_int(data_bind_value_get(data_bind_value_at(batch, 0u), "id")),
+    check_equal(data_bind_value_kind(batch), DATA_BIND_VALUE_LIST);
+    check_equal(data_bind_value_count(batch), 2u);
+    check_equal(data_bind_value_as_int(data_bind_value_get(data_bind_value_at(batch, 0u), "id")),
                  11);
-    check_str_eq(
+    check_equal(
         data_bind_value_as_string(data_bind_value_get(data_bind_value_at(batch, 1u), "symbol")),
         "EFGH");
     data_bind_value_free(batch);
@@ -536,19 +536,19 @@ spec("turbo_flow_pgsql") {
     PGresult *result = pgsql_make_result(names, oids, formats, 2u, cells, 1u);
     check_not_null(result);
     turbo_flow_msg_init(&msg);
-    check_int_eq(pgsql_result_to_message(result, "orders.raw", 10u, 2048u,
+    check_equal(pgsql_result_to_message(result, "orders.raw", 10u, 2048u,
                                          TURBO_FLOW_PGSQL_RESULT_ROWSET_JSON, &msg),
                  TURBO_OK);
-    check_str_contains(msg.owned_payload,
+    check_contains(msg.owned_payload,
                        "\"columns\":[{\"name\":\"value\",\"oid\":\"23\",\"format\":0}");
-    check_str_contains(msg.owned_payload, "{\"name\":\"value\",\"oid\":\"25\",\"format\":0}");
-    check_str_contains(msg.owned_payload, "\"rows\":[[\"11\",null]]");
+    check_contains(msg.owned_payload, "{\"name\":\"value\",\"oid\":\"25\",\"format\":0}");
+    check_contains(msg.owned_payload, "\"rows\":[[\"11\",null]]");
     descriptor = turbo_flow_msg_content_descriptor(&msg);
     check_not_null(descriptor);
-    check_int_eq(descriptor->profile, TURBO_FLOW_CONTENT_PROFILE_DATABASE_ROWSET);
-    check_int_eq(descriptor->encoding, TURBO_FLOW_DATA_ENCODING_JSON);
+    check_equal(descriptor->profile, TURBO_FLOW_CONTENT_PROFILE_DATABASE_ROWSET);
+    check_equal(descriptor->encoding, TURBO_FLOW_DATA_ENCODING_JSON);
     check_bits(descriptor->flags, TURBO_FLOW_CONTENT_BATCH);
-    check_str_eq(descriptor->media_type, "application/vnd.turboflow.pg-rowset+json");
+    check_equal(descriptor->media_type, "application/vnd.turboflow.pg-rowset+json");
     turbo_flow_msg_cleanup(&msg);
     PQclear(result);
   }
@@ -567,21 +567,21 @@ spec("turbo_flow_pgsql") {
     turbo_flow_msg_init(&msg);
     result = pgsql_make_result(names, oids, text_formats, 2u, cells_with_null, 1u);
     check_not_null(result);
-    check_int_eq(pgsql_result_to_message(result, "orders.list", 10u, 1024u,
+    check_equal(pgsql_result_to_message(result, "orders.list", 10u, 1024u,
                                          TURBO_FLOW_PGSQL_RESULT_DATABIND_CSV, &msg),
                  TURBO_ENOTSUP);
     PQclear(result);
 
     result = pgsql_make_result(duplicate_names, oids, text_formats, 2u, cells, 1u);
     check_not_null(result);
-    check_int_eq(pgsql_result_to_message(result, "orders.list", 10u, 1024u,
+    check_equal(pgsql_result_to_message(result, "orders.list", 10u, 1024u,
                                          TURBO_FLOW_PGSQL_RESULT_DATABIND_CSV, &msg),
                  TURBO_ENOTSUP);
     PQclear(result);
 
     result = pgsql_make_result(names, oids, binary_formats, 2u, cells, 1u);
     check_not_null(result);
-    check_int_eq(pgsql_result_to_message(result, "orders.list", 10u, 1024u,
+    check_equal(pgsql_result_to_message(result, "orders.list", 10u, 1024u,
                                          TURBO_FLOW_PGSQL_RESULT_DATABIND_CSV, &msg),
                  TURBO_ENOTSUP);
     PQclear(result);
@@ -597,10 +597,10 @@ spec("turbo_flow_pgsql") {
     PGresult *result = pgsql_make_result(names, oids, formats, 1u, cells, 2u);
     check_not_null(result);
     turbo_flow_msg_init(&msg);
-    check_int_eq(pgsql_result_to_message(result, "orders.list", 1u, 1024u,
+    check_equal(pgsql_result_to_message(result, "orders.list", 1u, 1024u,
                                          TURBO_FLOW_PGSQL_RESULT_DATABIND_CSV, &msg),
                  TURBO_ENOSPC);
-    check_int_eq(pgsql_result_to_message(result, "orders.list", 10u, 8u,
+    check_equal(pgsql_result_to_message(result, "orders.list", 10u, 8u,
                                          TURBO_FLOW_PGSQL_RESULT_DATABIND_CSV, &msg),
                  TURBO_EFBIG);
     turbo_flow_msg_cleanup(&msg);
@@ -622,15 +622,15 @@ spec("turbo_flow_pgsql") {
     config.namespace_name = "mqtt.sessions";
     config.max_records = 1u;
     pgsql_test_storage_t storage = {0};
-    check_int_eq(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, &error),
+    check_equal(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, &error),
                  TURBO_EINVAL);
     check_null(store.ctx);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(pgsql_test_record_store_open(NULL, resolved, "mqtt.sessions", &store, &storage,
+    check_equal(pgsql_test_record_store_open(NULL, resolved, "mqtt.sessions", &store, &storage,
                                               &error),
                  TURBO_ENOTSUP);
-    check_str_contains(error.path, "backend");
+    check_contains(error.path, "backend");
     turbo_flow_resolved_config_destroy(resolved);
   }
 }

@@ -70,19 +70,19 @@ typedef struct turbo_flow_redis_stream_publisher_config_s {
    0u}
 
 /** Create one mutex-serialized, binary-safe XADD publisher with explicit hard bounds. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_redis_stream_publisher_create(const turbo_flow_redis_stream_publisher_config_t *config,
                                          turbo_flow_redis_stream_publisher_t **out);
-CXX_C_API void
+TURBO_FLOW_C_API void
 turbo_flow_redis_stream_publisher_destroy(turbo_flow_redis_stream_publisher_t *publisher);
 /** OK means Redis returned the new stream ID; the ID remains transport metadata and is discarded.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_redis_stream_publisher_append(turbo_flow_redis_stream_publisher_t *publisher,
                                          const void *payload, size_t payload_size);
 
 /** Type-erased append port for embedding the publisher in a transport-neutral dispatcher. */
-CXX_C_API int turbo_flow_redis_stream_publisher_publish(void *publisher, const void *payload,
+TURBO_FLOW_C_API int turbo_flow_redis_stream_publisher_publish(void *publisher, const void *payload,
                                                         size_t payload_size);
 
 typedef struct turbo_flow_redis_stream_claim_s {
@@ -91,7 +91,7 @@ typedef struct turbo_flow_redis_stream_claim_s {
   /** Borrowed Redis entry ID, valid until this token is acked/requeued or owner is destroyed. */
   const char *entry_id;
   /** Borrowed binary payload with the same lifetime as entry_id. */
-  tstr_v payload;
+  vstr payload;
 } turbo_flow_redis_stream_claim_t;
 
 #define TURBO_FLOW_REDIS_STREAM_CLAIM_INIT                                                         \
@@ -111,7 +111,7 @@ typedef struct turbo_flow_redis_stream_claim_owner_config_s {
  * Register a Redis Streams input or output adapter backed by TurboNet::Redis.
  * XREADGROUP source entries are acknowledged only after successful publication.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_redis_register_stream_adapter(turbo_flow_t *flow, const char *name,
                                          const turbo_flow_redis_stream_config_t *config);
 
@@ -121,23 +121,23 @@ turbo_flow_redis_register_stream_adapter(turbo_flow_t *flow, const char *name,
  * `stream`, `group`, and stable `consumer` are required. If `create_group` is set, BUSYGROUP is
  * idempotent. The owner first replays this consumer's PEL before reading new `>` entries.
  */
-CXX_C_API int turbo_flow_redis_stream_owner_create(const turbo_flow_redis_stream_config_t *config,
+TURBO_FLOW_C_API int turbo_flow_redis_stream_owner_create(const turbo_flow_redis_stream_config_t *config,
                                                    turbo_flow_redis_stream_owner_t **out);
 
 /** Additive bounded multi-claim constructor; the legacy constructor keeps a bound of one. */
-CXX_C_API int turbo_flow_redis_stream_owner_create_ex(
+TURBO_FLOW_C_API int turbo_flow_redis_stream_owner_create_ex(
     const turbo_flow_redis_stream_config_t *config,
     const turbo_flow_redis_stream_claim_owner_config_t *claim_config,
     turbo_flow_redis_stream_owner_t **out);
 
 /** Destroy the owner. An active unacked entry remains in the Redis PEL. */
-CXX_C_API void turbo_flow_redis_stream_owner_destroy(turbo_flow_redis_stream_owner_t *owner);
+TURBO_FLOW_C_API void turbo_flow_redis_stream_owner_destroy(turbo_flow_redis_stream_owner_t *owner);
 
 /**
  * Claim one entry with XREADGROUP. TURBO_ENOENT means no entry was available during block_ms;
  * TURBO_EBUSY means the configured active-claim bound has been reached.
  */
-CXX_C_API int turbo_flow_redis_stream_owner_claim(turbo_flow_redis_stream_owner_t *owner,
+TURBO_FLOW_C_API int turbo_flow_redis_stream_owner_claim(turbo_flow_redis_stream_owner_t *owner,
                                                   turbo_flow_redis_stream_claim_t *claim);
 
 /**
@@ -147,19 +147,19 @@ CXX_C_API int turbo_flow_redis_stream_owner_claim(turbo_flow_redis_stream_owner_
  * group PEL: absence completes the prior XACK, same-consumer ownership retries it, and ownership
  * by another consumer returns TURBO_EBUSY without acknowledging that consumer's claim.
  */
-CXX_C_API int turbo_flow_redis_stream_owner_ack(turbo_flow_redis_stream_owner_t *owner,
+TURBO_FLOW_C_API int turbo_flow_redis_stream_owner_ack(turbo_flow_redis_stream_owner_t *owner,
                                                 uint64_t token);
 
 /** Leave the entry in the PEL and make it the next pending replay candidate. */
-CXX_C_API int turbo_flow_redis_stream_owner_requeue(turbo_flow_redis_stream_owner_t *owner,
+TURBO_FLOW_C_API int turbo_flow_redis_stream_owner_requeue(turbo_flow_redis_stream_owner_t *owner,
                                                     uint64_t token);
 
 /** Terminally XACK a failed entry without classifying it as worker completion. */
-CXX_C_API int turbo_flow_redis_stream_owner_drop(turbo_flow_redis_stream_owner_t *owner,
+TURBO_FLOW_C_API int turbo_flow_redis_stream_owner_drop(turbo_flow_redis_stream_owner_t *owner,
                                                  uint64_t token);
 
 /** Export a borrowed thin settler binding for a credit/delayed-reply coordinator. */
-CXX_C_API int turbo_flow_redis_stream_owner_settler(turbo_flow_redis_stream_owner_t *owner,
+TURBO_FLOW_C_API int turbo_flow_redis_stream_owner_settler(turbo_flow_redis_stream_owner_t *owner,
                                                     turbo_flow_claim_settler_t *out);
 
 #define TURBO_FLOW_REDIS_DEFAULT_MAX_VALUE_SIZE (16u * 1024u * 1024u)
@@ -271,7 +271,7 @@ typedef struct turbo_flow_redis_record_store_config_s {
 } turbo_flow_redis_record_store_config_t;
 
 /** Create a mutex-serialized Redis state store for rebuildable projections. */
-CXX_C_API int turbo_flow_redis_state_store_create(
+TURBO_FLOW_C_API int turbo_flow_redis_state_store_create(
     const turbo_flow_redis_record_store_config_t *config,
     const turbo_flow_store_limits_t *limits, turbo_flow_state_store_t **out);
 
@@ -282,7 +282,7 @@ CXX_C_API int turbo_flow_redis_state_store_create(
  * keep it alive while an owner borrows it and later call
  * turbo_flow_redis_blob_store_destroy().
  */
-CXX_C_API int turbo_flow_redis_blob_store_create(const turbo_flow_redis_blob_store_config_t *config,
+TURBO_FLOW_C_API int turbo_flow_redis_blob_store_create(const turbo_flow_redis_blob_store_config_t *config,
                                                  turbo_flow_blob_store_t *out);
 
 /**
@@ -290,18 +290,18 @@ CXX_C_API int turbo_flow_redis_blob_store_create(const turbo_flow_redis_blob_sto
  * channel in an immutable YAML projection. The configured key is copied into
  * `key`; callers pass that key when binding the store to an owner.
  */
-CXX_C_API int turbo_flow_redis_blob_store_create_resolved(
+TURBO_FLOW_C_API int turbo_flow_redis_blob_store_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     turbo_flow_blob_store_t *out, char *key, size_t key_capacity, turbo_flow_config_error_t *error);
 
-CXX_C_API void turbo_flow_redis_blob_store_destroy(turbo_flow_blob_store_t *store);
+TURBO_FLOW_C_API void turbo_flow_redis_blob_store_destroy(turbo_flow_blob_store_t *store);
 
 /**
  * Register a fixed-key Redis data adapter backed by TurboNet::Redis.
  * SET is a sink. GET is a transform and returns TURBO_ENOENT for a missing key
  * without changing the input message. Values are binary-safe and bounded.
  */
-CXX_C_API int turbo_flow_redis_register_data_adapter(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_redis_register_data_adapter(turbo_flow_t *flow, const char *name,
                                                      const turbo_flow_redis_data_config_t *config);
 
 /**
@@ -311,7 +311,7 @@ CXX_C_API int turbo_flow_redis_register_data_adapter(turbo_flow_t *flow, const c
  * requires an explicit `operation: set|get`. Pattern-specific fields are
  * rejected outside their owning contract.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_redis_register_resolved_adapter(turbo_flow_t *flow, const char *name,
                                            const turbo_flow_resolved_config_t *resolved,
                                            turbo_flow_config_error_t *error);

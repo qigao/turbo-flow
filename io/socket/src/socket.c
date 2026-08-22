@@ -114,11 +114,11 @@ typedef struct flow_coronet_socket_adapter_s {
   turbo_flow_t *flow;
   tf_coronet_execution_t execution;
   coro_context_t *ctx;
-  tstr_t host;
-  tstr_t path;
-  tstr_t source_name;
-  tstr_t udp_multicast_group;
-  tstr_t udp_multicast_interface;
+  tstr host;
+  tstr path;
+  tstr source_name;
+  tstr udp_multicast_group;
+  tstr udp_multicast_interface;
   coro_socket_t *server;
   int port;
   turbo_flow_coronet_socket_role_t role;
@@ -144,7 +144,7 @@ typedef struct flow_coronet_socket_adapter_s {
 typedef struct flow_coronet_send_task_s {
   flow_coronet_socket_adapter_t *adapter;
   struct flow_coronet_send_task_s *next;
-  tstr_t payload;
+  tstr payload;
   coro_socket_t *socket;
   atomic_int refs;
   turbo_mutex_t mutex;
@@ -592,7 +592,7 @@ static int flow_coronet_source_publish_received(flow_coronet_socket_adapter_t *a
     coro_socket_free_recv(data);
     return TURBO_ENOMEM;
   }
-  msg.payload = tstr_v_from_buf(data, len);
+  msg.payload = vstr_from_buf(data, len);
 
   rc = turbo_flow_publish(adapter->flow, adapter->source_name, &msg);
   turbo_flow_msg_cleanup(&msg);

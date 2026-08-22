@@ -47,22 +47,22 @@ typedef struct turbo_flow_http_acl_provider_config_s {
    TURBO_FLOW_HTTP_TLS_CLIENT_CONFIG_INIT}
 
 /** Create an HTTPS-only, coroutine-driven per-request ACL decision provider. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_http_acl_provider_create(const turbo_flow_http_acl_provider_config_t *config,
                                     turbo_flow_http_acl_provider_t **out);
 
 /** Create from one strict `kind: acl_provider`, `backend: https` channel. */
-CXX_C_API int turbo_flow_http_acl_provider_create_resolved(
+TURBO_FLOW_C_API int turbo_flow_http_acl_provider_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     const turbo_flow_security_key_provider_t *key_provider, turbo_flow_http_acl_provider_t **out,
     turbo_flow_config_error_t *error);
 
-CXX_C_API const turbo_flow_security_authorization_provider_t *
+TURBO_FLOW_C_API const turbo_flow_security_authorization_provider_t *
 turbo_flow_http_acl_provider_interface(const turbo_flow_http_acl_provider_t *provider);
 
-CXX_C_API void turbo_flow_http_acl_provider_destroy(turbo_flow_http_acl_provider_t *provider);
+TURBO_FLOW_C_API void turbo_flow_http_acl_provider_destroy(turbo_flow_http_acl_provider_t *provider);
 
-CXX_C_API const turbo_flow_security_policy_provider_factory_t *
+TURBO_FLOW_C_API const turbo_flow_security_policy_provider_factory_t *
 turbo_flow_http_acl_provider_factory(void);
 
 #ifdef __cplusplus

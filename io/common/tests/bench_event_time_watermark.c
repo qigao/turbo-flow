@@ -37,10 +37,10 @@ spec("event-time watermark owner benchmark") {
                   WATERMARK_OBSERVE_BENCH_ITERS, 1u) {
       status = tf_event_time_watermark_owner_observe(owner, ++event_time_ns);
     }
-    check_int_eq(status, TURBO_OK);
-    check_int_eq(tf_event_time_watermark_owner_snapshot(owner, &snapshot), TURBO_OK);
-    check_uint_eq(snapshot.max_observed_event_time_ns, WATERMARK_OBSERVE_BENCH_ITERS);
-    check_uint_eq(snapshot.observed_event_count, WATERMARK_OBSERVE_BENCH_ITERS);
+    check_equal(status, TURBO_OK);
+    check_equal(tf_event_time_watermark_owner_snapshot(owner, &snapshot), TURBO_OK);
+    check_equal(snapshot.max_observed_event_time_ns, WATERMARK_OBSERVE_BENCH_ITERS);
+    check_equal(snapshot.observed_event_count, WATERMARK_OBSERVE_BENCH_ITERS);
 
     tf_event_time_watermark_owner_destroy(owner);
     turbo_flow_destroy(flow);

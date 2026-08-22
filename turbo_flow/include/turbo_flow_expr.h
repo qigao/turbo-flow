@@ -48,7 +48,7 @@ typedef struct turbo_flow_expr_value_s {
     int boolean;
     int64_t i64;
     double f64;
-    tstr_v string;
+    vstr string;
   } as;
 } turbo_flow_expr_value_t;
 
@@ -133,7 +133,7 @@ typedef struct turbo_flow_expr_compile_options_s {
  * `keep_registry != 0` and removed by reset without registry preservation or
  * flow destruction.
  */
-CXX_C_API int turbo_flow_register_expr_projection(
+TURBO_FLOW_C_API int turbo_flow_register_expr_projection(
     turbo_flow_t *flow, const turbo_flow_expr_projection_registration_t *registration);
 
 /**
@@ -149,29 +149,29 @@ CXX_C_API int turbo_flow_register_expr_projection(
  * Returns TURBO_OK on success. Parse/type/schema errors return their Turbo
  * error code and set `*out` to NULL. `error` may be NULL.
  */
-CXX_C_API int turbo_flow_expr_compile(const char *text, size_t len,
+TURBO_FLOW_C_API int turbo_flow_expr_compile(const char *text, size_t len,
                                       const turbo_flow_expr_schema_t *schema,
                                       turbo_flow_expr_t **out, turbo_flow_error_t *error);
 
 /** Compile and finalize one expression for a selected MIR backend. */
-CXX_C_API int turbo_flow_expr_compile_ex(const char *text, size_t len,
+TURBO_FLOW_C_API int turbo_flow_expr_compile_ex(const char *text, size_t len,
                                          const turbo_flow_expr_schema_t *schema,
                                          const turbo_flow_expr_compile_options_t *options,
                                          turbo_flow_expr_t **out, turbo_flow_error_t *error);
 
-CXX_C_API void turbo_flow_expr_destroy(turbo_flow_expr_t *expr);
+TURBO_FLOW_C_API void turbo_flow_expr_destroy(turbo_flow_expr_t *expr);
 
 /** Return the type of the compiled root expression. */
-CXX_C_API turbo_flow_expr_value_type_t turbo_flow_expr_result_type(const turbo_flow_expr_t *expr);
+TURBO_FLOW_C_API turbo_flow_expr_value_type_t turbo_flow_expr_result_type(const turbo_flow_expr_t *expr);
 
 /** Return the resolved backend; AUTO is never returned by a compiled object. */
-CXX_C_API turbo_flow_expr_backend_t turbo_flow_expr_backend(const turbo_flow_expr_t *expr);
+TURBO_FLOW_C_API turbo_flow_expr_backend_t turbo_flow_expr_backend(const turbo_flow_expr_t *expr);
 
 /** Return non-zero when this build/platform supports the MIR JIT backend. */
-CXX_C_API int turbo_flow_expr_jit_available(void);
+TURBO_FLOW_C_API int turbo_flow_expr_jit_available(void);
 
 /** Evaluate the finalized MIR function without compiling or heap allocation. */
-CXX_C_API int turbo_flow_expr_evaluate(const turbo_flow_expr_t *expr,
+TURBO_FLOW_C_API int turbo_flow_expr_evaluate(const turbo_flow_expr_t *expr,
                                        const turbo_flow_expr_eval_context_t *context,
                                        turbo_flow_expr_value_t *out);
 
@@ -182,7 +182,7 @@ CXX_C_API int turbo_flow_expr_evaluate(const turbo_flow_expr_t *expr,
  * to `read_schema_field`. Returned string values are borrowed and valid only as
  * long as their message/schema backing storage remains valid.
  */
-CXX_C_API int turbo_flow_expr_read_field(const turbo_flow_expr_eval_context_t *context,
+TURBO_FLOW_C_API int turbo_flow_expr_read_field(const turbo_flow_expr_eval_context_t *context,
                                          turbo_flow_expr_field_scope_t scope, uint32_t field_id,
                                          turbo_flow_expr_value_t *out);
 

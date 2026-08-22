@@ -66,7 +66,7 @@ typedef struct turbo_flow_redis_storage_backend_options_s {
    TURBO_FLOW_REDIS_STORAGE_BACKEND_OPTIONS_VERSION, NULL, 0u, NULL}
 
 /** Return Redis's limited RECORD|STATE|INDEX|LOG storage backend function table. */
-CXX_C_API const turbo_flow_storage_backend_plugin_api_t *turbo_flow_redis_storage_backend_api(void);
+TURBO_FLOW_C_API const turbo_flow_storage_backend_plugin_api_t *turbo_flow_redis_storage_backend_api(void);
 
 #ifdef __cplusplus
 }

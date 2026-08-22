@@ -1,10 +1,9 @@
 #include "turbo_flow_observe.h"
 
-#include "turbo_deque.h"
+#include "turbo_flow_stl_adapter.h"
 #include "turbo_error.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
-#include "turbo_vec.h"
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -27,7 +26,7 @@ static const turbo_flow_option_field_t FLOW_OBSERVE_LOG_FIELDS[] = {
      0}};
 
 typedef struct flow_observe_stage_entry_s {
-  tstr_t name;
+  tstr name;
   uint64_t calls;
   uint64_t errors;
   uint64_t latency_ns_total;

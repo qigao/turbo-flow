@@ -103,24 +103,24 @@ spec("turbo_flow_sqlite_storage_backend") {
     options.config = &config;
     request.options = &options;
     request.options_size = sizeof(options);
-    check_str_eq(turbo_flow_sqlite_storage_backend_api()->backend, "sqlite");
-    check_int_eq(turbo_flow_storage_backend_registry_create(1u, &registry), TURBO_OK);
-    check_int_eq(turbo_flow_storage_backend_registry_register(
+    check_equal(turbo_flow_sqlite_storage_backend_api()->backend, "sqlite");
+    check_equal(turbo_flow_storage_backend_registry_create(1u, &registry), TURBO_OK);
+    check_equal(turbo_flow_storage_backend_registry_register(
                      registry, turbo_flow_sqlite_storage_backend_api()),
                  TURBO_OK);
-    check_int_eq(turbo_flow_storage_backend_owner_create_registered(registry, "sqlite", &request,
+    check_equal(turbo_flow_storage_backend_owner_create_registered(registry, "sqlite", &request,
                                                                     &owner, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_storage_backend_owner_service(owner, TURBO_FLOW_STORAGE_MODEL_RECORD,
+    check_equal(turbo_flow_storage_backend_owner_service(owner, TURBO_FLOW_STORAGE_MODEL_RECORD,
                                                           (void **)&store),
                  TURBO_OK);
     check_true((store->capabilities & TURBO_FLOW_RECORD_STORE_DURABLE) != 0u);
     check_true((store->capabilities & TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH) != 0u);
-    check_int_eq(turbo_flow_test_record_store_contract_run(store, &result), TURBO_OK);
+    check_equal(turbo_flow_test_record_store_contract_run(store, &result), TURBO_OK);
     check_true(result.binary_wire_equal);
     turbo_flow_storage_backend_owner_destroy(owner);
-    check_int_eq(turbo_flow_storage_backend_registry_destroy(registry), TURBO_OK);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(turbo_flow_storage_backend_registry_destroy(registry), TURBO_OK);
+    check_equal(tt_remove_file(path), 0);
     free(path);
   }
 
@@ -132,18 +132,18 @@ spec("turbo_flow_sqlite_storage_backend") {
     sqlite_record_capture_t capture = {key, sizeof(key), value, sizeof(value), 1u, 0u};
     size_t count = 0u;
 
-    check_int_eq(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
+    check_equal(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
     check_true((store.capabilities & TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH) != 0u);
     check_true((store.capabilities & TURBO_FLOW_RECORD_STORE_DURABLE) == 0u);
-    check_int_eq(sqlite_test_put(&store, key, sizeof(key), value, sizeof(value)), TURBO_OK);
-    check_int_eq(store.scan(store.ctx, sqlite_record_capture, &capture), TURBO_OK);
-    check_size_eq(capture.count, 1u);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
+    check_equal(sqlite_test_put(&store, key, sizeof(key), value, sizeof(value)), TURBO_OK);
+    check_equal(store.scan(store.ctx, sqlite_record_capture, &capture), TURBO_OK);
+    check_equal(capture.count, 1u);
+    check_equal(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
 
-    check_int_eq(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
-    check_int_eq(store.scan(store.ctx, sqlite_record_count, &count), TURBO_OK);
-    check_size_eq(count, 0u);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
+    check_equal(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
+    check_equal(store.scan(store.ctx, sqlite_record_count, &count), TURBO_OK);
+    check_equal(count, 0u);
+    check_equal(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
   }
 
   it("persists a binary record across explicit close and reopen") {
@@ -155,17 +155,17 @@ spec("turbo_flow_sqlite_storage_backend") {
     sqlite_record_capture_t capture = {key, sizeof(key), value, sizeof(value), 1u, 0u};
 
     check_not_null(path);
-    check_int_eq(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
-    check_int_eq(sqlite_test_put(&store, key, sizeof(key), value, sizeof(value)), TURBO_OK);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
+    check_equal(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
+    check_equal(sqlite_test_put(&store, key, sizeof(key), value, sizeof(value)), TURBO_OK);
+    check_equal(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
     check_null(store.ctx);
     check_null(store.scan);
-    check_int_eq(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
-    check_int_eq(store.scan(store.ctx, sqlite_record_capture, &capture), TURBO_OK);
-    check_size_eq(capture.count, 1u);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&store), TURBO_EINVAL);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
+    check_equal(store.scan(store.ctx, sqlite_record_capture, &capture), TURBO_OK);
+    check_equal(capture.count, 1u);
+    check_equal(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
+    check_equal(turbo_flow_sqlite_record_store_close(&store), TURBO_EINVAL);
+    check_equal(tt_remove_file(path), 0);
     free(path);
   }
 
@@ -177,12 +177,12 @@ spec("turbo_flow_sqlite_storage_backend") {
     sqlite_record_capture_t capture = {key, sizeof(key), NULL, 0u, 1u, 0u};
 
     check_not_null(path);
-    check_int_eq(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
-    check_int_eq(sqlite_test_put(&store, key, sizeof(key), NULL, 0u), TURBO_OK);
-    check_int_eq(store.scan(store.ctx, sqlite_record_capture, &capture), TURBO_OK);
-    check_size_eq(capture.count, 1u);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
+    check_equal(sqlite_test_put(&store, key, sizeof(key), NULL, 0u), TURBO_OK);
+    check_equal(store.scan(store.ctx, sqlite_record_capture, &capture), TURBO_OK);
+    check_equal(capture.count, 1u);
+    check_equal(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
+    check_equal(tt_remove_file(path), 0);
     free(path);
   }
 
@@ -193,10 +193,10 @@ spec("turbo_flow_sqlite_storage_backend") {
     turbo_flow_record_store_t store = TURBO_FLOW_RECORD_STORE_INIT;
 
     check_not_null(path);
-    check_int_eq(tt_write_file(path, invalid_database, sizeof(invalid_database) - 1u), 0);
-    check_int_eq(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_EIO);
+    check_equal(tt_write_file(path, invalid_database, sizeof(invalid_database) - 1u), 0);
+    check_equal(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_EIO);
     check_null(store.ctx);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(tt_remove_file(path), 0);
     free(path);
   }
 
@@ -213,8 +213,8 @@ spec("turbo_flow_sqlite_storage_backend") {
     sqlite_record_capture_t capture = {key_a, sizeof(key_a), value_one, sizeof(value_one), 1u, 0u};
 
     check_not_null(path);
-    check_int_eq(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
-    check_int_eq(sqlite_test_put(&store, key_a, sizeof(key_a), value_one, sizeof(value_one)),
+    check_equal(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
+    check_equal(sqlite_test_put(&store, key_a, sizeof(key_a), value_one, sizeof(value_one)),
                  TURBO_OK);
     mutations[0].key = key_a;
     mutations[0].key_size = sizeof(key_a);
@@ -226,11 +226,11 @@ spec("turbo_flow_sqlite_storage_backend") {
     mutations[1].key = key_b;
     mutations[1].key_size = sizeof(key_b);
     mutations[1].expected_revision = 1u;
-    check_int_eq(store.commit(store.ctx, mutations, 2u), TURBO_EBUSY);
-    check_int_eq(store.scan(store.ctx, sqlite_record_capture, &capture), TURBO_OK);
-    check_size_eq(capture.count, 1u);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(store.commit(store.ctx, mutations, 2u), TURBO_EBUSY);
+    check_equal(store.scan(store.ctx, sqlite_record_capture, &capture), TURBO_OK);
+    check_equal(capture.count, 1u);
+    check_equal(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
+    check_equal(tt_remove_file(path), 0);
     free(path);
   }
 
@@ -255,7 +255,7 @@ spec("turbo_flow_sqlite_storage_backend") {
     config.max_key_size = 2u;
     config.max_value_size = 2u;
     config.max_batch_size = 2u;
-    check_int_eq(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
+    check_equal(turbo_flow_sqlite_record_store_create(&config, &store), TURBO_OK);
     for (size_t i = 0u; i < 2u; ++i) {
       mutations[i].key = i == 0u ? key_a : key_b;
       mutations[i].key_size = 1u;
@@ -263,26 +263,26 @@ spec("turbo_flow_sqlite_storage_backend") {
       mutations[i].value = value;
       mutations[i].value_size = sizeof(value);
     }
-    check_int_eq(store.commit(store.ctx, mutations, 2u), TURBO_ENOSPC);
-    check_int_eq(store.scan(store.ctx, sqlite_record_count, &count), TURBO_OK);
-    check_size_eq(count, 0u);
+    check_equal(store.commit(store.ctx, mutations, 2u), TURBO_ENOSPC);
+    check_equal(store.scan(store.ctx, sqlite_record_count, &count), TURBO_OK);
+    check_equal(count, 0u);
     mutations[0].key = key_long;
     mutations[0].key_size = sizeof(key_long);
-    check_int_eq(store.commit(store.ctx, mutations, 1u), TURBO_EINVAL);
+    check_equal(store.commit(store.ctx, mutations, 1u), TURBO_EINVAL);
     mutations[0].key = key_a;
     mutations[0].key_size = sizeof(key_a);
     mutations[0].value = value_long;
     mutations[0].value_size = sizeof(value_long);
-    check_int_eq(store.commit(store.ctx, mutations, 1u), TURBO_EINVAL);
+    check_equal(store.commit(store.ctx, mutations, 1u), TURBO_EINVAL);
     mutations[0].value = value;
     mutations[0].value_size = sizeof(value);
     mutations[2] = mutations[0];
     mutations[2].key = key_b;
-    check_int_eq(store.commit(store.ctx, mutations, 3u), TURBO_EINVAL);
+    check_equal(store.commit(store.ctx, mutations, 3u), TURBO_EINVAL);
     mutations[1] = mutations[0];
-    check_int_eq(store.commit(store.ctx, mutations, 2u), TURBO_EINVAL);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(store.commit(store.ctx, mutations, 2u), TURBO_EINVAL);
+    check_equal(turbo_flow_sqlite_record_store_close(&store), TURBO_OK);
+    check_equal(tt_remove_file(path), 0);
     free(path);
   }
 
@@ -298,17 +298,17 @@ spec("turbo_flow_sqlite_storage_backend") {
     size_t final_count = 0u;
 
     check_not_null(path);
-    check_int_eq(turbo_flow_sqlite_record_store_create(&first_config, &first), TURBO_OK);
-    check_int_eq(turbo_flow_sqlite_record_store_create(&second_config, &second), TURBO_OK);
-    check_int_eq(sqlite_test_put(&first, key, sizeof(key), value, sizeof(value)), TURBO_OK);
-    check_int_eq(first.scan(first.ctx, sqlite_snapshot_visit, &snapshot), TURBO_OK);
-    check_int_eq(snapshot.write_status, TURBO_OK);
-    check_size_eq(snapshot.count, 1u);
-    check_int_eq(first.scan(first.ctx, sqlite_record_count, &final_count), TURBO_OK);
-    check_size_eq(final_count, 2u);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&second), TURBO_OK);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&first), TURBO_OK);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(turbo_flow_sqlite_record_store_create(&first_config, &first), TURBO_OK);
+    check_equal(turbo_flow_sqlite_record_store_create(&second_config, &second), TURBO_OK);
+    check_equal(sqlite_test_put(&first, key, sizeof(key), value, sizeof(value)), TURBO_OK);
+    check_equal(first.scan(first.ctx, sqlite_snapshot_visit, &snapshot), TURBO_OK);
+    check_equal(snapshot.write_status, TURBO_OK);
+    check_equal(snapshot.count, 1u);
+    check_equal(first.scan(first.ctx, sqlite_record_count, &final_count), TURBO_OK);
+    check_equal(final_count, 2u);
+    check_equal(turbo_flow_sqlite_record_store_close(&second), TURBO_OK);
+    check_equal(turbo_flow_sqlite_record_store_close(&first), TURBO_OK);
+    check_equal(tt_remove_file(path), 0);
     free(path);
   }
 
@@ -327,25 +327,25 @@ spec("turbo_flow_sqlite_storage_backend") {
         key, sizeof(key), business_value, sizeof(business_value), 1u, 0u};
 
     check_not_null(path);
-    check_int_eq(turbo_flow_sqlite_record_store_create(&protocol_config, &protocol_store),
+    check_equal(turbo_flow_sqlite_record_store_create(&protocol_config, &protocol_store),
                  TURBO_OK);
-    check_int_eq(turbo_flow_sqlite_record_store_create(&business_config, &business_store),
+    check_equal(turbo_flow_sqlite_record_store_create(&business_config, &business_store),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         sqlite_test_put(&protocol_store, key, sizeof(key), protocol_value, sizeof(protocol_value)),
         TURBO_OK);
-    check_int_eq(
+    check_equal(
         sqlite_test_put(&business_store, key, sizeof(key), business_value, sizeof(business_value)),
         TURBO_OK);
-    check_int_eq(protocol_store.scan(protocol_store.ctx, sqlite_record_capture, &protocol_capture),
+    check_equal(protocol_store.scan(protocol_store.ctx, sqlite_record_capture, &protocol_capture),
                  TURBO_OK);
-    check_int_eq(business_store.scan(business_store.ctx, sqlite_record_capture, &business_capture),
+    check_equal(business_store.scan(business_store.ctx, sqlite_record_capture, &business_capture),
                  TURBO_OK);
-    check_size_eq(protocol_capture.count, 1u);
-    check_size_eq(business_capture.count, 1u);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&business_store), TURBO_OK);
-    check_int_eq(turbo_flow_sqlite_record_store_close(&protocol_store), TURBO_OK);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(protocol_capture.count, 1u);
+    check_equal(business_capture.count, 1u);
+    check_equal(turbo_flow_sqlite_record_store_close(&business_store), TURBO_OK);
+    check_equal(turbo_flow_sqlite_record_store_close(&protocol_store), TURBO_OK);
+    check_equal(tt_remove_file(path), 0);
     free(path);
   }
 
@@ -372,27 +372,27 @@ spec("turbo_flow_sqlite_storage_backend") {
                  "      max_key_size: 32\n      max_value_size: 96\n      max_batch_size: 4\n"
                  "adapters: {}\n",
                  path);
-    check_int_gt(yaml_size, 0);
+    check_greater(yaml_size, 0);
     check_true((size_t)yaml_size < sizeof(yaml));
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, (size_t)yaml_size, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)yaml_size, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_storage_backend_registry_create(1u, &registry), TURBO_OK);
-    check_int_eq(turbo_flow_storage_backend_registry_register(
+    check_equal(turbo_flow_storage_backend_registry_create(1u, &registry), TURBO_OK);
+    check_equal(turbo_flow_storage_backend_registry_register(
                      registry, turbo_flow_sqlite_storage_backend_api()),
                  TURBO_OK);
     request.resolved = resolved;
     request.channel_name = "mqtt.sessions";
-    check_int_eq(turbo_flow_storage_backend_owner_create_registered(registry, "sqlite", &request,
+    check_equal(turbo_flow_storage_backend_owner_create_registered(registry, "sqlite", &request,
                                                                     &owner, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_storage_backend_owner_service(owner, TURBO_FLOW_STORAGE_MODEL_RECORD,
+    check_equal(turbo_flow_storage_backend_owner_service(owner, TURBO_FLOW_STORAGE_MODEL_RECORD,
                                                           (void **)&store),
                  TURBO_OK);
-    check_int_eq(turbo_flow_test_record_store_contract_run(store, &result), TURBO_OK);
+    check_equal(turbo_flow_test_record_store_contract_run(store, &result), TURBO_OK);
     turbo_flow_storage_backend_owner_destroy(owner);
-    check_int_eq(turbo_flow_storage_backend_registry_destroy(registry), TURBO_OK);
+    check_equal(turbo_flow_storage_backend_registry_destroy(registry), TURBO_OK);
     turbo_flow_resolved_config_destroy(resolved);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(tt_remove_file(path), 0);
     free(path);
   }
 }

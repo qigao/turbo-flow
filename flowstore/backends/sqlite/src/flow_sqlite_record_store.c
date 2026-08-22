@@ -1,7 +1,7 @@
 #include "flow_sqlite_storage_internal.h"
 
 #include "turbo_error.h"
-#include "turbo_hash.h"
+#include "turbo_flow_stl_adapter.h"
 #include "turbo_str.h"
 
 #include <limits.h>
@@ -27,8 +27,8 @@ static const char FLOW_SQLITE_RECORD_SCHEMA[] =
 
 typedef struct flow_sqlite_record_store_s {
   sqlite3 *database;
-  tstr_t database_path;
-  tstr_t namespace_name;
+  tstr database_path;
+  tstr namespace_name;
   size_t max_records;
   size_t max_bytes;
   size_t max_item_bytes;
@@ -79,7 +79,7 @@ static int flow_sqlite_size_add(size_t left, size_t right, size_t *out) {
 }
 
 static size_t flow_sqlite_record_key_hash(const void *key, size_t key_size, void *ctx) {
-  const tstr_v *view = (const tstr_v *)key;
+  const vstr *view = (const vstr *)key;
   (void)key_size;
   (void)ctx;
   return turbo_hash_bytes(view->data, view->len, NULL);
@@ -87,8 +87,8 @@ static size_t flow_sqlite_record_key_hash(const void *key, size_t key_size, void
 
 static bool flow_sqlite_record_key_equal(const void *left, const void *right, size_t key_size,
                                          void *ctx) {
-  const tstr_v *a = (const tstr_v *)left;
-  const tstr_v *b = (const tstr_v *)right;
+  const vstr *a = (const vstr *)left;
+  const vstr *b = (const vstr *)right;
   (void)key_size;
   (void)ctx;
   return a->len == b->len && (a->len == 0u || memcmp(a->data, b->data, a->len) == 0);
@@ -103,7 +103,7 @@ static int flow_sqlite_record_validate_mutations(flow_sqlite_record_store_t *sto
   turbo_hash_map_clear(&store->mutation_keys);
   for (size_t i = 0u; i < mutation_count; ++i) {
     const turbo_flow_record_mutation_t *mutation = &mutations[i];
-    tstr_v key;
+    vstr key;
     size_t item_bytes = 0u;
     int rc;
     if (mutation->size < sizeof(*mutation) || !mutation->key || mutation->key_size == 0u ||
@@ -126,7 +126,7 @@ static int flow_sqlite_record_validate_mutations(flow_sqlite_record_store_t *sto
     } else {
       return TURBO_EINVAL;
     }
-    key = tstr_v_from_buf((const char *)mutation->key, mutation->key_size);
+    key = vstr_from_buf((const char *)mutation->key, mutation->key_size);
     if (turbo_hash_map_contains(&store->mutation_keys, &key)) return TURBO_EINVAL;
     rc = turbo_hash_map_put(&store->mutation_keys, &key, &present);
     if (rc != TURBO_OK) return rc;
@@ -473,7 +473,7 @@ int turbo_flow_sqlite_record_store_create(const turbo_flow_sqlite_record_store_c
     rc = TURBO_ENOMEM;
     goto fail;
   }
-  rc = turbo_hash_map_init(&store->mutation_keys, sizeof(tstr_v), sizeof(uint8_t),
+  rc = turbo_hash_map_init(&store->mutation_keys, sizeof(vstr), sizeof(uint8_t),
                            flow_sqlite_record_key_hash, flow_sqlite_record_key_equal, NULL);
   if (rc != TURBO_OK) goto fail;
   store->mutation_keys_initialized = 1;

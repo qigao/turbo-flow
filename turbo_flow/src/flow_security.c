@@ -1,11 +1,10 @@
 #include "turbo_flow_security.h"
 
 #include "turbo_error.h"
-#include "turbo_hash.h"
+#include "turbo_flow_stl_adapter.h"
 #include "turbo_parser.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
-#include "turbo_vec.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -36,7 +35,7 @@ typedef struct flow_security_rule_bucket_s {
 
 typedef struct flow_security_subject_key_s {
   turbo_flow_security_subject_kind_t kind;
-  tstr_v subject;
+  vstr subject;
 } flow_security_subject_key_t;
 
 typedef struct flow_security_subject_index_s {
@@ -46,8 +45,8 @@ typedef struct flow_security_subject_index_s {
 
 typedef struct flow_security_pattern_key_s {
   turbo_flow_security_subject_kind_t subject_kind;
-  tstr_v subject;
-  tstr_v pattern;
+  vstr subject;
+  vstr pattern;
 } flow_security_pattern_key_t;
 
 typedef struct flow_security_pattern_index_s {
@@ -70,9 +69,9 @@ typedef struct flow_security_policy_snapshot_s {
 } flow_security_policy_snapshot_t;
 
 struct turbo_flow_security_realm_s {
-  tstr_t resource_uid;
-  tstr_t owner_name;
-  tstr_t policy_source;
+  tstr resource_uid;
+  tstr owner_name;
+  tstr policy_source;
   turbo_flow_security_matcher_t matcher;
   turbo_mutex_t snapshot_lock;
   flow_security_policy_snapshot_t *active;
@@ -302,7 +301,7 @@ static int flow_security_realm_config_valid(const turbo_flow_security_realm_conf
 }
 
 static size_t flow_security_root_hash(const void *key, size_t key_size, void *ctx) {
-  const tstr_v *value = (const tstr_v *)key;
+  const vstr *value = (const vstr *)key;
   (void)key_size;
   (void)ctx;
   return turbo_hash_bytes(value->data, value->len, NULL);
@@ -310,8 +309,8 @@ static size_t flow_security_root_hash(const void *key, size_t key_size, void *ct
 
 static bool flow_security_root_equal(const void *left, const void *right, size_t key_size,
                                      void *ctx) {
-  const tstr_v *a = (const tstr_v *)left;
-  const tstr_v *b = (const tstr_v *)right;
+  const vstr *a = (const vstr *)left;
+  const vstr *b = (const vstr *)right;
   (void)key_size;
   (void)ctx;
   return a->len == b->len && (a->len == 0u || memcmp(a->data, b->data, a->len) == 0);
@@ -477,8 +476,8 @@ static int flow_security_rule_bucket_insert_pattern(turbo_hash_map_t *index, tur
   int rc;
   if (!index || !patterns || !subject_mask || !rule) return TURBO_EINVAL;
   key.subject_kind = rule->subject_kind;
-  key.subject = tstr_v_from_buf(rule->subject, strlen(rule->subject));
-  key.pattern = tstr_v_from_buf(rule->pattern, strlen(rule->pattern));
+  key.subject = vstr_from_buf(rule->subject, strlen(rule->subject));
+  key.pattern = vstr_from_buf(rule->pattern, strlen(rule->pattern));
   found = (flow_security_pattern_index_t **)turbo_hash_map_get(index, &key);
   if (found && *found) return turbo_vec_push(&(*found)->entries, &rule_index);
   pattern = (flow_security_pattern_index_t *)calloc(1u, sizeof(*pattern));
@@ -524,7 +523,7 @@ static int flow_security_rule_bucket_insert(flow_security_rule_bucket_t *bucket,
   if (rule->subject_kind == TURBO_FLOW_SECURITY_SUBJECT_ANY)
     return turbo_vec_push(&bucket->any_adapter.entries, &rule_index);
   key.kind = rule->subject_kind;
-  key.subject = tstr_v_from_buf(rule->subject, strlen(rule->subject));
+  key.subject = vstr_from_buf(rule->subject, strlen(rule->subject));
   found = (flow_security_subject_index_t **)turbo_hash_map_get(&bucket->subject_index, &key);
   if (found && *found) return turbo_vec_push(&(*found)->adapter.entries, &rule_index);
   subject = (flow_security_subject_index_t *)calloc(1u, sizeof(*subject));
@@ -554,7 +553,7 @@ flow_security_rule_bucket_subject(flow_security_rule_bucket_t *bucket,
   if (!bucket || !bucket->initialized || !subject || !subject[0]) return NULL;
   if ((bucket->candidate_subject_mask & (UINT32_C(1) << kind)) == 0u) return NULL;
   key.kind = kind;
-  key.subject = tstr_v_from_buf(subject, strlen(subject));
+  key.subject = vstr_from_buf(subject, strlen(subject));
   found = (flow_security_subject_index_t **)turbo_hash_map_get(&bucket->subject_index, &key);
   return found && *found ? &(*found)->adapter : NULL;
 }
@@ -570,8 +569,8 @@ flow_security_rule_bucket_pattern(flow_security_rule_bucket_t *bucket, turbo_has
     return NULL;
   if ((subject_mask & (UINT32_C(1) << subject_kind)) == 0u) return NULL;
   key.subject_kind = subject_kind;
-  key.subject = tstr_v_from_buf(subject, strlen(subject));
-  key.pattern = tstr_v_from_buf(pattern, pattern_size);
+  key.subject = vstr_from_buf(subject, strlen(subject));
+  key.pattern = vstr_from_buf(pattern, pattern_size);
   found = (flow_security_pattern_index_t **)turbo_hash_map_get(index, &key);
   return found && *found ? &(*found)->entries : NULL;
 }
@@ -631,12 +630,12 @@ static void flow_security_root_index_destroy(flow_security_root_index_t *root) {
 static int flow_security_snapshot_root(flow_security_policy_snapshot_t *snapshot,
                                        const char *domain_id,
                                        flow_security_root_index_t **root_out) {
-  tstr_v key;
+  vstr key;
   flow_security_root_index_t **found;
   flow_security_root_index_t *root;
   if (!snapshot || !domain_id || !root_out) return TURBO_EINVAL;
   *root_out = NULL;
-  key = tstr_v_from_buf(domain_id, strlen(domain_id));
+  key = vstr_from_buf(domain_id, strlen(domain_id));
   found = (flow_security_root_index_t **)turbo_hash_map_get(&snapshot->root_index, &key);
   if (found && *found) {
     *root_out = *found;
@@ -649,7 +648,7 @@ static int flow_security_snapshot_root(flow_security_policy_snapshot_t *snapshot
     flow_security_root_index_destroy(root);
     return TURBO_ENOMEM;
   }
-  key = tstr_v_from_buf(root->domain_id, strlen(root->domain_id));
+  key = vstr_from_buf(root->domain_id, strlen(root->domain_id));
   if (turbo_hash_map_put(&snapshot->root_index, &key, &root) != TURBO_OK) {
     size_t last = turbo_vec_size(&snapshot->roots) - 1u;
     (void)turbo_vec_swap_remove(&snapshot->roots, last, NULL);
@@ -702,7 +701,7 @@ static int flow_security_policy_snapshot_create(uint64_t policy_version, uint64_
     free(snapshot);
     return rc;
   }
-  rc = turbo_hash_map_init(&snapshot->root_index, sizeof(tstr_v),
+  rc = turbo_hash_map_init(&snapshot->root_index, sizeof(vstr),
                            sizeof(flow_security_root_index_t *), flow_security_root_hash,
                            flow_security_root_equal, NULL);
   if (rc != TURBO_OK) {
@@ -1137,7 +1136,7 @@ static int flow_security_realm_evaluate_validated(turbo_flow_security_realm_t *r
     goto complete;
   }
   {
-    tstr_v root_key = tstr_v_from_buf(request->domain_id, strlen(request->domain_id));
+    vstr root_key = vstr_from_buf(request->domain_id, strlen(request->domain_id));
     flow_security_root_index_t **root =
         (flow_security_root_index_t **)turbo_hash_map_get(&snapshot->root_index, &root_key);
     flow_security_rule_bucket_t *bucket =

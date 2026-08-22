@@ -2,7 +2,7 @@
 #define TURBO_FLOW_EXPR_INTERNAL_H
 
 #include "turbo_flow_expr.h"
-#include "turbo_vec.h"
+#include "turbo_flow_stl_adapter.h"
 
 #include <stdint.h>
 
@@ -80,7 +80,7 @@ typedef struct flow_expr_node_s {
   int64_t i64;
   double f64;
   int boolean;
-  tstr_t text;
+  tstr text;
 } flow_expr_node_t;
 
 typedef int (*flow_expr_resolve_field_fn)(void *ctx, const char *path, size_t path_len,
@@ -123,17 +123,17 @@ typedef struct flow_expr_parse_ctx_s {
   int code;
 } flow_expr_parse_ctx_t;
 
-CXX_C_API int flow_expr_parse(const char *text, size_t len, flow_expr_ast_t *ast,
+TURBO_FLOW_C_API int flow_expr_parse(const char *text, size_t len, flow_expr_ast_t *ast,
                               turbo_flow_error_t *error);
-CXX_C_API void flow_expr_ast_destroy(flow_expr_ast_t *ast);
-CXX_C_API size_t flow_expr_ast_node_count(const flow_expr_ast_t *ast);
-CXX_C_API const flow_expr_node_t *flow_expr_ast_node_at(const flow_expr_ast_t *ast, uint32_t index);
-CXX_C_API int flow_expr_type_check(flow_expr_ast_t *ast, const flow_expr_resolver_t *resolver,
+TURBO_FLOW_C_API void flow_expr_ast_destroy(flow_expr_ast_t *ast);
+TURBO_FLOW_C_API size_t flow_expr_ast_node_count(const flow_expr_ast_t *ast);
+TURBO_FLOW_C_API const flow_expr_node_t *flow_expr_ast_node_at(const flow_expr_ast_t *ast, uint32_t index);
+TURBO_FLOW_C_API int flow_expr_type_check(flow_expr_ast_t *ast, const flow_expr_resolver_t *resolver,
                                    turbo_flow_error_t *error);
-CXX_C_API int flow_expr_mir_compile(turbo_flow_expr_t *expr, turbo_flow_expr_backend_t requested,
+TURBO_FLOW_C_API int flow_expr_mir_compile(turbo_flow_expr_t *expr, turbo_flow_expr_backend_t requested,
                                     turbo_flow_error_t *error);
-CXX_C_API void flow_expr_mir_destroy(flow_expr_mir_program_t *program);
-CXX_C_API int flow_expr_mir_evaluate(const turbo_flow_expr_t *expr,
+TURBO_FLOW_C_API void flow_expr_mir_destroy(flow_expr_mir_program_t *program);
+TURBO_FLOW_C_API int flow_expr_mir_evaluate(const turbo_flow_expr_t *expr,
                                      const turbo_flow_expr_eval_context_t *context,
                                      turbo_flow_expr_value_t *out);
 

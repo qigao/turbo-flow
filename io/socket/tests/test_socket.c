@@ -316,7 +316,7 @@ static socket_timeout_result_t run_ws_handshake_timeout_case(void) {
   config.path = "/";
   config.handshake_timeout_ms = 50;
   config.max_pump_iterations = 20000;
-  msg.payload = tstr_v_from_buf(payload, sizeof(payload) - 1u);
+  msg.payload = vstr_from_buf(payload, sizeof(payload) - 1u);
   result.setup_rc = turbo_flow_coronet_register_socket_adapter(flow, "socket.timeout.ws", &config);
   if (result.setup_rc == TURBO_OK)
     result.setup_rc = turbo_flow_parse_string(flow, src, strlen(src));
@@ -855,18 +855,18 @@ static void tcp_sink_server_handler(coro_socket_t *client, void *arg) {
 spec("turbo_flow_coronet") {
   it("times out a silent TCP receive operation") {
     socket_timeout_result_t result = run_tcp_recv_timeout_case();
-    check_int_eq(result.setup_rc, TURBO_OK);
-    check_int_eq(result.connect_rc, TURBO_OK);
-    check_int_eq(result.operation_rc, TURBO_ETIMEDOUT);
-    check_int_eq(result.peer_rc, TURBO_OK);
+    check_equal(result.setup_rc, TURBO_OK);
+    check_equal(result.connect_rc, TURBO_OK);
+    check_equal(result.operation_rc, TURBO_ETIMEDOUT);
+    check_equal(result.peer_rc, TURBO_OK);
   }
 
   it("times out a silent WebSocket upgrade with the handshake deadline") {
     socket_timeout_result_t result = run_ws_handshake_timeout_case();
-    check_int_eq(result.setup_rc, TURBO_OK);
-    check_int_eq(result.connect_rc, TURBO_OK);
-    check_int_eq(result.operation_rc, TURBO_ETIMEDOUT);
-    check_int_eq(result.peer_rc, TURBO_OK);
+    check_equal(result.setup_rc, TURBO_OK);
+    check_equal(result.connect_rc, TURBO_OK);
+    check_equal(result.operation_rc, TURBO_ETIMEDOUT);
+    check_equal(result.peer_rc, TURBO_OK);
   }
 
   it("registers a generic socket adapter for inline owner stages") {
@@ -888,26 +888,26 @@ spec("turbo_flow_coronet") {
     check_not_null(buffer);
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
-    msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.tcp", NULL), TURBO_OK);
-    check_str_eq(turbo_flow_adapter_operation_module(
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.tcp", NULL), TURBO_OK);
+    check_equal(turbo_flow_adapter_operation_module(
                      flow, "socket.tcp", TURBO_FLOW_SOCKET_SEND_OPERATION),
                  TURBO_FLOW_SOCKET_MODULE);
-    check_str_eq(turbo_flow_adapter_operation_resource(
+    check_equal(turbo_flow_adapter_operation_resource(
                      flow, "socket.tcp", TURBO_FLOW_SOCKET_SEND_OPERATION),
                  "socket.tcp");
-    check_str_eq(turbo_flow_find_primitive(flow, "socket.tcp")->type_name,
+    check_equal(turbo_flow_find_primitive(flow, "socket.tcp")->type_name,
                  TURBO_FLOW_SOCKET_PRIMITIVE_TYPE);
     schema = turbo_flow_find_adapter_schema(flow, "socket.tcp");
     check_not_null(schema);
-    check_int_eq(schema->kind, TURBO_FLOW_ADAPTER_KIND_SOCKET);
-    check_uint_eq(schema->roles, TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK);
+    check_equal(schema->kind, TURBO_FLOW_ADAPTER_KIND_SOCKET);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK);
     memset(&connection, 0, sizeof(connection));
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
-    check_int_eq(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_str_eq(connection.endpoint, "tcp://:0");
-    check_size_eq(schema->field_count, 39);
+    check_equal(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
+    check_equal(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(connection.endpoint, "tcp://:0");
+    check_equal(schema->field_count, 39);
     const turbo_flow_option_field_t *kcp_pre_shared_key = NULL;
     const turbo_flow_option_field_t *kcp_mtu = NULL;
     const turbo_flow_option_field_t *kcp_send_window = NULL;
@@ -1026,19 +1026,19 @@ spec("turbo_flow_coronet") {
     check_not_null(udp_multicast_loop);
     check_not_null(udp_multicast_ttl);
     check_not_null(udp_broadcast);
-    check_size_eq(transport->enum_value_count, 7);
-    check_str_eq(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_TCP], "tcp");
-    check_str_eq(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_UDP], "udp");
-    check_str_eq(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_KCP], "kcp");
-    check_str_eq(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_TLS], "tls");
-    check_str_eq(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_WS], "ws");
-    check_str_eq(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_WSS], "wss");
-    check_str_eq(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_PIPE], "pipe");
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_ENOTSUP);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(transport->enum_value_count, 7);
+    check_equal(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_TCP], "tcp");
+    check_equal(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_UDP], "udp");
+    check_equal(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_KCP], "kcp");
+    check_equal(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_TLS], "tls");
+    check_equal(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_WS], "ws");
+    check_equal(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_WSS], "wss");
+    check_equal(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_PIPE], "pipe");
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_ENOTSUP);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_msg_cleanup(&msg);
     turbo_flow_destroy(flow);
@@ -1054,26 +1054,26 @@ spec("turbo_flow_coronet") {
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
     config.host = "127.0.0.1";
     config.port = 7001;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
 
     config.connect_timeout_ms = TURBO_FLOW_CORONET_SOCKET_TIMEOUT_DISABLED;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
     config.connect_timeout_ms = 0;
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TLS;
     config.connect_timeout_ms = 250;
     config.handshake_timeout_ms = 500;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.handshake_timeout_ms = 250;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
     config.connect_timeout_ms = 0;
     config.handshake_timeout_ms = 500;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_ENOTSUP);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_ENOTSUP);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.handshake_timeout_ms = 0;
 
     config.tcp_keepalive = 1;
@@ -1083,7 +1083,7 @@ spec("turbo_flow_coronet") {
     config.linger = 1;
     config.linger_ms = 250;
     config.send_hwm_bytes = 8192;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
     config.tcp_keepalive = 0;
     config.tcp_keepalive_idle_ms = 0;
     config.tcp_keepalive_interval_ms = 0;
@@ -1094,9 +1094,9 @@ spec("turbo_flow_coronet") {
 
     config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
     config.reuse_port = 1;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_UDP;
@@ -1106,11 +1106,11 @@ spec("turbo_flow_coronet") {
     config.udp_multicast_loop = 1;
     config.udp_multicast_ttl = 1;
     config.udp_broadcast = 1;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
     config.udp_multicast_group = "239.255.0.1";
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
     config.udp_multicast_group = NULL;
     config.udp_option_flags = 0;
@@ -1119,31 +1119,31 @@ spec("turbo_flow_coronet") {
     config.udp_broadcast = 0;
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_KCP;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.kcp_pre_shared_key = KCP_PSK;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TLS;
     config.kcp_pre_shared_key = NULL;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_WS;
     config.path = "/";
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_WSS;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_PIPE;
     config.host = NULL;
     config.port = 0;
     config.path = "pipe://turbo_flow_socket_config";
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.reuse_port = 0;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
 
     config.send_hwm_bytes = 4096;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_OK);
   }
 
   it("registers socket configuration from shared resolved YAML fragments") {
@@ -1178,16 +1178,16 @@ spec("turbo_flow_coronet") {
     const turbo_flow_adapter_schema_t *schema;
 
     check_not_null(flow);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_coronet_register_socket_resolved_adapter(flow, resolved, "socket.out"),
+    check_equal(turbo_flow_coronet_register_socket_resolved_adapter(flow, resolved, "socket.out"),
                  TURBO_OK);
     schema = turbo_flow_find_adapter_schema(flow, "socket.out");
     check_not_null(schema);
-    check_uint_eq(schema->roles, TURBO_FLOW_ADAPTER_SINK);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SINK);
     memset(&connection, 0, sizeof(connection));
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0u, &connection), TURBO_OK);
-    check_str_eq(connection.endpoint, "tcp://127.0.0.1:7001");
+    check_equal(turbo_flow_adapter_connection_snapshot_at(flow, 0u, &connection), TURBO_OK);
+    check_equal(connection.endpoint, "tcp://127.0.0.1:7001");
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_destroy(flow);
   }
@@ -1211,9 +1211,9 @@ spec("turbo_flow_coronet") {
       turbo_flow_resolved_config_t *resolved = NULL;
       turbo_flow_t *flow = turbo_flow_create();
       check_not_null(flow);
-      check_int_eq(turbo_flow_config_resolve_yaml(documents[i], lengths[i], &resolved, &error),
+      check_equal(turbo_flow_config_resolve_yaml(documents[i], lengths[i], &resolved, &error),
                    TURBO_OK);
-      check_int_eq(
+      check_equal(
           turbo_flow_coronet_register_socket_resolved_adapter(flow, resolved, "socket.out"),
           TURBO_EINVAL);
       turbo_flow_resolved_config_destroy(resolved);
@@ -1229,24 +1229,24 @@ spec("turbo_flow_coronet") {
     memset(&config, 0, sizeof(config));
     check_not_null(flow);
 
-    check_int_eq(turbo_flow_coronet_socket_config_validate(NULL), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(NULL), TURBO_EINVAL);
 
     config.role = TURBO_FLOW_CORONET_SOCKET_UNCONFIGURED;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
     config.host = "127.0.0.1";
     config.port = 7001;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
 
     config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
     config.transport = (turbo_flow_coronet_transport_t)99;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
     config.kcp_pre_shared_key = KCP_PSK;
     config.kcp_fec_data_shards = 4;
     config.kcp_fec_parity_shards = 2;
     config.kcp_fec_max_payload_size = 1200;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.kcp_pre_shared_key = NULL;
     config.kcp_fec_data_shards = 0;
     config.kcp_fec_parity_shards = 0;
@@ -1254,46 +1254,46 @@ spec("turbo_flow_coronet") {
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_UDP;
     config.tcp_keepalive = 1;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.tcp_keepalive = 0;
 
     config.udp_option_flags = TURBO_FLOW_CORONET_UDP_OPTION_MULTICAST_TTL;
     config.udp_multicast_ttl = 256;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_ERANGE);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_ERANGE);
     config.udp_multicast_ttl = 1;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.udp_option_flags = 0;
     config.udp_multicast_ttl = 0;
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
     config.tcp_keepalive_idle_ms = 30000;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.tcp_keepalive_idle_ms = 0;
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_KCP;
     config.send_hwm_bytes = 4096;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.send_hwm_bytes = 0;
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_PIPE;
     config.linger = 1;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     config.linger = 0;
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
     config.host = NULL;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
 
     config.host = "127.0.0.1";
     config.port = 0;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
 
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_PIPE;
     config.host = NULL;
     config.path = NULL;
-    check_int_eq(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.invalid", &config),
+    check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.invalid", &config),
                  TURBO_EINVAL);
 
     turbo_flow_destroy(flow);
@@ -1318,11 +1318,11 @@ spec("turbo_flow_coronet") {
     config.host = "203.0.113.1";
     config.port = 9;
     config.timeout_ms = 50;
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.borrowed", &config),
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.borrowed", &config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_ETIMEDOUT);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_ETIMEDOUT);
 
     (void)coro_context_run(ctx, TURBO_RUN_ONCE);
     turbo_flow_destroy(flow);
@@ -1348,7 +1348,7 @@ spec("turbo_flow_coronet") {
     check_not_null(ctx);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
     config.host = "203.0.113.1";
@@ -1358,22 +1358,22 @@ spec("turbo_flow_coronet") {
 
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
-    msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.pending", &config),
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.pending", &config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     /* The TEST-NET sink either hangs until the send deadline (TURBO_ETIMEDOUT)
      * or fails the connect immediately with a platform-specific connect error.
      * Either way the payload must not be accepted as delivered. */
     int publish_rc = turbo_flow_publish(flow, "input", &msg);
     check_true(publish_rc != TURBO_OK);
-    check_int_ne(publish_rc, TURBO_EBUSY);
+    check_not_equal(publish_rc, TURBO_EBUSY);
 
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     socket_test_context_stop(ctx);
     turbo_flow_destroy(flow);
     coro_context_destroy(ctx);
@@ -1400,7 +1400,7 @@ spec("turbo_flow_coronet") {
     check_not_null(buffer);
     check_not_null(ctx);
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
     config.host = "203.0.113.1";
@@ -1409,21 +1409,21 @@ spec("turbo_flow_coronet") {
     config.max_pump_iterations = 1;
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
-    msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.control", &config),
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.control", &config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_control_ex(flow, quiesce, strlen(quiesce), NULL, NULL), TURBO_OK);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_EBUSY);
-    check_int_eq(turbo_flow_control_ex(flow, resume, strlen(resume), NULL, NULL), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_control_ex(flow, quiesce, strlen(quiesce), NULL, NULL), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EBUSY);
+    check_equal(turbo_flow_control_ex(flow, resume, strlen(resume), NULL, NULL), TURBO_OK);
     resumed_rc = turbo_flow_publish(flow, "input", &msg);
-    check_int_ne(resumed_rc, TURBO_EBUSY);
+    check_not_equal(resumed_rc, TURBO_EBUSY);
 
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     socket_test_context_stop(ctx);
     turbo_flow_destroy(flow);
     coro_context_destroy(ctx);
@@ -1452,14 +1452,14 @@ spec("turbo_flow_coronet") {
     check_not_null(ctx);
 
     port = test_pick_loopback_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     server = coro_socket_create_tcpv4(ctx);
     check_not_null(server);
-    check_int_eq(coro_socket_listen_on(server, "127.0.0.1", port, tcp_sink_server_handler, &state),
+    check_equal(coro_socket_listen_on(server, "127.0.0.1", port, tcp_sink_server_handler, &state),
                  TURBO_OK);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
     config.host = "127.0.0.1";
@@ -1469,23 +1469,23 @@ spec("turbo_flow_coronet") {
 
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
-    msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.tcp", &config), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.tcp", &config), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
 
     for (int i = 0; i < 1000 && !state.handler_called; ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(state.handler_called, 1);
-    check_int_eq(state.recv_rc, TURBO_OK);
-    check_size_eq(state.received_len, sizeof(raw) - 1);
-    check_mem_eq(state.received, raw, sizeof(raw) - 1);
+    check_equal(state.handler_called, 1);
+    check_equal(state.recv_rc, TURBO_OK);
+    check_equal(state.received_len, sizeof(raw) - 1);
+    check_equal(state.received, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_msg_cleanup(&msg);
     turbo_flow_destroy(flow);
@@ -1517,14 +1517,14 @@ spec("turbo_flow_coronet") {
     check_not_null(ctx);
 
     port = test_pick_loopback_udp_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     server = coro_socket_create_udpv4(ctx);
     check_not_null(server);
-    check_int_eq(coro_socket_listen_on(server, "127.0.0.1", port, tcp_sink_server_handler, &state),
+    check_equal(coro_socket_listen_on(server, "127.0.0.1", port, tcp_sink_server_handler, &state),
                  TURBO_OK);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_UDP;
     config.host = "127.0.0.1";
@@ -1534,23 +1534,23 @@ spec("turbo_flow_coronet") {
 
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
-    msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.udp", &config), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.udp", &config), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
 
     for (int i = 0; i < 1000 && !state.handler_called; ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(state.handler_called, 1);
-    check_int_eq(state.recv_rc, TURBO_OK);
-    check_size_eq(state.received_len, sizeof(raw) - 1);
-    check_mem_eq(state.received, raw, sizeof(raw) - 1);
+    check_equal(state.handler_called, 1);
+    check_equal(state.recv_rc, TURBO_OK);
+    check_equal(state.received_len, sizeof(raw) - 1);
+    check_equal(state.received, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_msg_cleanup(&msg);
     turbo_flow_destroy(flow);
@@ -1582,16 +1582,16 @@ spec("turbo_flow_coronet") {
     check_not_null(ctx);
 
     port = test_pick_loopback_udp_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     server = coro_socket_create_kcp(ctx);
     check_not_null(server);
-    check_int_eq(socket_test_apply_kcp_config(server), TURBO_OK);
-    check_int_eq(
+    check_equal(socket_test_apply_kcp_config(server), TURBO_OK);
+    check_equal(
         coro_socket_listen_on(server, "127.0.0.1", (int)port, tcp_sink_server_handler, &state),
         TURBO_OK);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_KCP;
     config.host = "127.0.0.1";
@@ -1602,23 +1602,23 @@ spec("turbo_flow_coronet") {
 
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
-    msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.kcp", &config), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.kcp", &config), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
 
     for (int i = 0; i < 1000 && !state.handler_called; ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(state.handler_called, 1);
-    check_int_eq(state.recv_rc, TURBO_OK);
-    check_size_eq(state.received_len, sizeof(raw) - 1);
-    check_mem_eq(state.received, raw, sizeof(raw) - 1);
+    check_equal(state.handler_called, 1);
+    check_equal(state.recv_rc, TURBO_OK);
+    check_equal(state.received_len, sizeof(raw) - 1);
+    check_equal(state.received, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_msg_cleanup(&msg);
     turbo_flow_destroy(flow);
@@ -1652,15 +1652,15 @@ spec("turbo_flow_coronet") {
     check_not_null(buffer);
     check_not_null(ctx);
     port = test_pick_loopback_port();
-    check_int_gt(port, 0);
-    check_int_gt(snprintf(path, sizeof(path), "pipe://turbo_flow_socket_kcp_%u", port), 0);
+    check_greater(port, 0);
+    check_greater(snprintf(path, sizeof(path), "pipe://turbo_flow_socket_kcp_%u", port), 0);
 
     server = coro_socket_create_pipe(ctx);
     check_not_null(server);
-    check_int_eq(coro_socket_listen_on(server, path, 0, tcp_sink_server_handler, &state), TURBO_OK);
+    check_equal(coro_socket_listen_on(server, path, 0, tcp_sink_server_handler, &state), TURBO_OK);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_PIPE;
     config.path = path;
@@ -1669,24 +1669,24 @@ spec("turbo_flow_coronet") {
 
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
-    msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.pipe", &config),
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.pipe", &config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
 
     for (int i = 0; i < 1000 && !state.handler_called; ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(state.handler_called, 1);
-    check_int_eq(state.recv_rc, TURBO_OK);
-    check_size_eq(state.received_len, sizeof(raw) - 1);
-    check_mem_eq(state.received, raw, sizeof(raw) - 1);
+    check_equal(state.handler_called, 1);
+    check_equal(state.recv_rc, TURBO_OK);
+    check_equal(state.received_len, sizeof(raw) - 1);
+    check_equal(state.received, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_msg_cleanup(&msg);
     turbo_flow_destroy(flow);
@@ -1719,15 +1719,15 @@ spec("turbo_flow_coronet") {
     check_not_null(ctx);
 
     port = test_pick_loopback_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     server = coro_socket_create_tcpv4(ctx);
     check_not_null(server);
-    check_int_eq(
+    check_equal(
         coro_socket_listen_ws(server, "127.0.0.1", port, 0, tcp_sink_server_handler, &state),
         TURBO_OK);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_WS;
     config.host = "127.0.0.1";
@@ -1738,23 +1738,23 @@ spec("turbo_flow_coronet") {
 
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
-    msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.ws", &config), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.ws", &config), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
 
     for (int i = 0; i < 1000 && !state.handler_called; ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(state.handler_called, 1);
-    check_int_eq(state.recv_rc, TURBO_OK);
-    check_size_eq(state.received_len, sizeof(raw) - 1);
-    check_mem_eq(state.received, raw, sizeof(raw) - 1);
+    check_equal(state.handler_called, 1);
+    check_equal(state.recv_rc, TURBO_OK);
+    check_equal(state.received_len, sizeof(raw) - 1);
+    check_equal(state.received, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_msg_cleanup(&msg);
     turbo_flow_destroy(flow);
@@ -1791,21 +1791,21 @@ spec("turbo_flow_coronet") {
     check_not_null(buffer);
     check_not_null(ctx);
 
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
-    check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
-    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+    check_equal(tls_test_set_ca_file_env(ca_file), 0);
+    check_equal(tls_test_set_server_env(cert_file, key_file), 0);
 
     port = test_pick_loopback_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     server = coro_socket_create(ctx, CORO_SOCKET_TLS);
     check_not_null(server);
-    check_int_eq(coro_socket_listen_on(server, "127.0.0.1", port, tcp_sink_server_handler, &state),
+    check_equal(coro_socket_listen_on(server, "127.0.0.1", port, tcp_sink_server_handler, &state),
                  TURBO_OK);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TLS;
     config.host = "localhost";
@@ -1815,23 +1815,23 @@ spec("turbo_flow_coronet") {
 
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
-    msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.tls", &config), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.tls", &config), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
 
     for (int i = 0; i < 1000 && !state.handler_called; ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(state.handler_called, 1);
-    check_int_eq(state.recv_rc, TURBO_OK);
-    check_size_eq(state.received_len, sizeof(raw) - 1);
-    check_mem_eq(state.received, raw, sizeof(raw) - 1);
+    check_equal(state.handler_called, 1);
+    check_equal(state.recv_rc, TURBO_OK);
+    check_equal(state.received_len, sizeof(raw) - 1);
+    check_equal(state.received, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_msg_cleanup(&msg);
     turbo_flow_destroy(flow);
@@ -1873,22 +1873,22 @@ spec("turbo_flow_coronet") {
     check_not_null(buffer);
     check_not_null(ctx);
 
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
-    check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
-    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+    check_equal(tls_test_set_ca_file_env(ca_file), 0);
+    check_equal(tls_test_set_server_env(cert_file, key_file), 0);
 
     port = test_pick_loopback_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     server = coro_socket_create_tcpv4(ctx);
     check_not_null(server);
-    check_int_eq(
+    check_equal(
         coro_socket_listen_ws(server, "127.0.0.1", port, 1, tcp_sink_server_handler, &state),
         TURBO_OK);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_WSS;
     config.host = "localhost";
@@ -1899,23 +1899,23 @@ spec("turbo_flow_coronet") {
 
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
-    msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.wss", &config), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.wss", &config), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
 
     for (int i = 0; i < 1000 && !state.handler_called; ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(state.handler_called, 1);
-    check_int_eq(state.recv_rc, TURBO_OK);
-    check_size_eq(state.received_len, sizeof(raw) - 1);
-    check_mem_eq(state.received, raw, sizeof(raw) - 1);
+    check_equal(state.handler_called, 1);
+    check_equal(state.recv_rc, TURBO_OK);
+    check_equal(state.received_len, sizeof(raw) - 1);
+    check_equal(state.received, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_msg_cleanup(&msg);
     turbo_flow_destroy(flow);
@@ -1948,32 +1948,32 @@ spec("turbo_flow_coronet") {
     check_not_null(ctx);
 
     port = test_pick_loopback_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
     config.host = "127.0.0.1";
     config.port = (int)port;
     config.timeout_ms = 1000;
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.tcp", &config), TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.tcp", &config), TURBO_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(test_send_loopback_payload(port, raw, sizeof(raw) - 1), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(test_send_loopback_payload(port, raw, sizeof(raw) - 1), TURBO_OK);
 
     for (int i = 0; i < 2000 && !state.called; ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(state.called, 1);
-    check_size_eq(state.payload_len, sizeof(raw) - 1);
-    check_mem_eq(state.payload, raw, sizeof(raw) - 1);
+    check_equal(state.called, 1);
+    check_equal(state.payload_len, sizeof(raw) - 1);
+    check_equal(state.payload, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     socket_test_context_stop(ctx);
     turbo_flow_destroy(flow);
@@ -2006,17 +2006,17 @@ spec("turbo_flow_coronet") {
     check_not_null(flow);
     check_not_null(ctx);
 
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(
         tls_test_write_server_files(cert_file, sizeof(cert_file), key_file, sizeof(key_file)), 0);
-    check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
-    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+    check_equal(tls_test_set_ca_file_env(ca_file), 0);
+    check_equal(tls_test_set_server_env(cert_file, key_file), 0);
 
     port = test_pick_loopback_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_TLS;
     config.host = "127.0.0.1";
@@ -2029,24 +2029,24 @@ spec("turbo_flow_coronet") {
     client_state.len = sizeof(raw) - 1;
     client_state.rc = TURBO_EBUSY;
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.tls", &config), TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.tls", &config), TURBO_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(socket_test_context_spawn(ctx, tls_source_client_task, &client_state), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(socket_test_context_spawn(ctx, tls_source_client_task, &client_state), TURBO_OK);
 
     for (int i = 0; i < 3000 && (!state.called || !client_state.done); ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(client_state.done, 1);
-    check_int_eq(client_state.rc, TURBO_OK);
-    check_int_eq(state.called, 1);
-    check_size_eq(state.payload_len, sizeof(raw) - 1);
-    check_mem_eq(state.payload, raw, sizeof(raw) - 1);
+    check_equal(client_state.done, 1);
+    check_equal(client_state.rc, TURBO_OK);
+    check_equal(state.called, 1);
+    check_equal(state.payload_len, sizeof(raw) - 1);
+    check_equal(state.payload, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     socket_test_context_stop(ctx);
     turbo_flow_destroy(flow);
@@ -2081,7 +2081,7 @@ spec("turbo_flow_coronet") {
     check_not_null(bootstrap_ctx);
 
     port = test_pick_loopback_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     coro_context_destroy(bootstrap_ctx);
 
     config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
@@ -2090,14 +2090,14 @@ spec("turbo_flow_coronet") {
     config.port = (int)port;
     config.timeout_ms = 1000;
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.tcp", &config), TURBO_OK);
-    check_int_eq(
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.tcp", &config), TURBO_OK);
+    check_equal(
         turbo_flow_register_stage_ex(flow, "record", flow_threaded_record_stage, &state, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(test_send_loopback_payload(port, raw, sizeof(raw) - 1), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(test_send_loopback_payload(port, raw, sizeof(raw) - 1), TURBO_OK);
 
     for (int i = 0; i < 200 && !flow_threaded_record_called(&state); ++i) {
       turbo_sleep_ms(5);
@@ -2108,11 +2108,11 @@ spec("turbo_flow_coronet") {
     memcpy(payload, state.payload, payload_len);
     turbo_mutex_unlock(&state.mutex);
 
-    check_int_eq(flow_threaded_record_called(&state), 1);
-    check_size_eq(payload_len, sizeof(raw) - 1);
-    check_mem_eq(payload, raw, sizeof(raw) - 1);
+    check_equal(flow_threaded_record_called(&state), 1);
+    check_equal(payload_len, sizeof(raw) - 1);
+    check_equal(payload, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_destroy(flow);
     turbo_mutex_destroy(&state.mutex);
@@ -2141,7 +2141,7 @@ spec("turbo_flow_coronet") {
     turbo_mutex_init(&state.mutex);
     check_not_null(owned_ctx);
     check_not_null(flow);
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     execution.size = sizeof(execution);
     execution.kind = TURBO_FLOW_CORONET_EXECUTION_OWNED_CONTEXT;
     execution.context = owned_ctx;
@@ -2151,16 +2151,16 @@ spec("turbo_flow_coronet") {
     config.port = (int)port;
     config.timeout_ms = 1000;
 
-    check_int_eq(
+    check_equal(
         turbo_flow_coronet_register_socket_adapter_ex(flow, "socket.owned", &config, &execution),
         TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_register_stage_ex(flow, "record", flow_threaded_record_stage, &state, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(test_send_loopback_payload(port, raw, sizeof(raw) - 1), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(test_send_loopback_payload(port, raw, sizeof(raw) - 1), TURBO_OK);
 
     for (int i = 0; i < 200 && !flow_threaded_record_called(&state); ++i) {
       turbo_sleep_ms(5);
@@ -2169,10 +2169,10 @@ spec("turbo_flow_coronet") {
     payload_len = state.payload_len;
     memcpy(payload, state.payload, payload_len);
     turbo_mutex_unlock(&state.mutex);
-    check_int_eq(flow_threaded_record_called(&state), 1);
-    check_size_eq(payload_len, sizeof(raw) - 1);
-    check_mem_eq(payload, raw, sizeof(raw) - 1);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(flow_threaded_record_called(&state), 1);
+    check_equal(payload_len, sizeof(raw) - 1);
+    check_equal(payload, raw, sizeof(raw) - 1);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_destroy(flow);
     turbo_mutex_destroy(&state.mutex);
@@ -2196,7 +2196,7 @@ spec("turbo_flow_coronet") {
     memset(&state, 0, sizeof(state));
     check_not_null(pool);
     check_not_null(flow);
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     execution.size = sizeof(execution);
     execution.kind = TURBO_FLOW_CORONET_EXECUTION_POOL_LANE;
     execution.pool = pool;
@@ -2207,19 +2207,19 @@ spec("turbo_flow_coronet") {
     config.port = (int)port;
     config.timeout_ms = 1000;
 
-    check_int_eq(turbo_flow_coronet_execution_binding_validate(&execution), TURBO_OK);
+    check_equal(turbo_flow_coronet_execution_binding_validate(&execution), TURBO_OK);
     execution.lane = 1;
-    check_int_eq(turbo_flow_coronet_execution_binding_validate(&execution), TURBO_ERANGE);
+    check_equal(turbo_flow_coronet_execution_binding_validate(&execution), TURBO_ERANGE);
     execution.lane = 0;
-    check_int_eq(
+    check_equal(
         turbo_flow_coronet_register_socket_adapter_ex(flow, "socket.pool", &config, &execution),
         TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
+    check_equal(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_destroy(flow);
     coro_thread_pool_destroy(pool);
@@ -2244,10 +2244,10 @@ spec("turbo_flow_coronet") {
     check_not_null(ctx);
 
     port = test_pick_loopback_udp_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_UDP;
     config.host = "127.0.0.1";
@@ -2261,22 +2261,22 @@ spec("turbo_flow_coronet") {
     config.udp_multicast_ttl = 1;
     config.udp_broadcast = 1;
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.udp", &config), TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.udp", &config), TURBO_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(test_send_loopback_udp_payload(port, raw, sizeof(raw) - 1), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(test_send_loopback_udp_payload(port, raw, sizeof(raw) - 1), TURBO_OK);
 
     for (int i = 0; i < 2000 && !state.called; ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(state.called, 1);
-    check_size_eq(state.payload_len, sizeof(raw) - 1);
-    check_mem_eq(state.payload, raw, sizeof(raw) - 1);
+    check_equal(state.called, 1);
+    check_equal(state.payload_len, sizeof(raw) - 1);
+    check_equal(state.payload, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     socket_test_context_stop(ctx);
     turbo_flow_destroy(flow);
@@ -2304,10 +2304,10 @@ spec("turbo_flow_coronet") {
     check_not_null(ctx);
 
     port = test_pick_loopback_udp_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_KCP;
     config.host = "127.0.0.1";
@@ -2321,24 +2321,24 @@ spec("turbo_flow_coronet") {
     client_state.len = sizeof(raw) - 1;
     client_state.rc = TURBO_EBUSY;
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.kcp", &config), TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.kcp", &config), TURBO_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(socket_test_context_spawn(ctx, kcp_source_client_task, &client_state), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(socket_test_context_spawn(ctx, kcp_source_client_task, &client_state), TURBO_OK);
 
     for (int i = 0; i < 3000 && (!state.called || !client_state.done); ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(client_state.done, 1);
-    check_int_eq(client_state.rc, TURBO_OK);
-    check_int_eq(state.called, 1);
-    check_size_eq(state.payload_len, sizeof(raw) - 1);
-    check_mem_eq(state.payload, raw, sizeof(raw) - 1);
+    check_equal(client_state.done, 1);
+    check_equal(client_state.rc, TURBO_OK);
+    check_equal(state.called, 1);
+    check_equal(state.payload_len, sizeof(raw) - 1);
+    check_equal(state.payload, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     socket_test_context_stop(ctx);
     turbo_flow_destroy(flow);
@@ -2368,11 +2368,11 @@ spec("turbo_flow_coronet") {
     check_not_null(flow);
     check_not_null(ctx);
     port = test_pick_loopback_port();
-    check_int_gt(port, 0);
-    check_int_gt(snprintf(path, sizeof(path), "pipe://turbo_flow_socket_kcp_%u", port), 0);
+    check_greater(port, 0);
+    check_greater(snprintf(path, sizeof(path), "pipe://turbo_flow_socket_kcp_%u", port), 0);
 
     config.context = ctx;
-    check_int_eq(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
     config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
     config.transport = TURBO_FLOW_CORONET_TRANSPORT_PIPE;
     config.path = path;
@@ -2384,25 +2384,25 @@ spec("turbo_flow_coronet") {
     client_state.len = sizeof(raw) - 1;
     client_state.rc = TURBO_EBUSY;
 
-    check_int_eq(turbo_flow_coronet_register_socket_adapter(flow, "socket.pipe", &config),
+    check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.pipe", &config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
+    check_equal(turbo_flow_register_stage_ex(flow, "record", flow_record_stage, &state, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(socket_test_context_spawn(ctx, pipe_source_client_task, &client_state), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(socket_test_context_spawn(ctx, pipe_source_client_task, &client_state), TURBO_OK);
 
     for (int i = 0; i < 3000 && (!state.called || !client_state.done); ++i) {
       turbo_sleep_ms(1);
     }
-    check_int_eq(client_state.done, 1);
-    check_int_eq(client_state.rc, TURBO_OK);
-    check_int_eq(state.called, 1);
-    check_size_eq(state.payload_len, sizeof(raw) - 1);
-    check_mem_eq(state.payload, raw, sizeof(raw) - 1);
+    check_equal(client_state.done, 1);
+    check_equal(client_state.rc, TURBO_OK);
+    check_equal(state.called, 1);
+    check_equal(state.payload_len, sizeof(raw) - 1);
+    check_equal(state.payload, raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     socket_test_context_stop(ctx);
     turbo_flow_destroy(flow);
@@ -2414,25 +2414,25 @@ spec("turbo_flow_coronet") {
     const char raw[] = "ws-frame";
     ws_source_case_result_t result = run_ws_source_case(0);
 
-    check_int_eq(result.setup_rc, TURBO_OK);
-    check_int_eq(result.stop_rc, TURBO_OK);
-    check_int_eq(result.client_done, 1);
-    check_int_eq(result.client_rc, TURBO_OK);
-    check_int_eq(result.record_called, 1);
-    check_size_eq(result.payload_len, sizeof(raw) - 1u);
-    check_mem_eq(result.payload, raw, sizeof(raw) - 1u);
+    check_equal(result.setup_rc, TURBO_OK);
+    check_equal(result.stop_rc, TURBO_OK);
+    check_equal(result.client_done, 1);
+    check_equal(result.client_rc, TURBO_OK);
+    check_equal(result.record_called, 1);
+    check_equal(result.payload_len, sizeof(raw) - 1u);
+    check_equal(result.payload, raw, sizeof(raw) - 1u);
   }
 
   it("publishes secure WebSocket source frames into the flow graph") {
     const char raw[] = "wss-frame";
     ws_source_case_result_t result = run_ws_source_case(1);
 
-    check_int_eq(result.setup_rc, TURBO_OK);
-    check_int_eq(result.stop_rc, TURBO_OK);
-    check_int_eq(result.client_done, 1);
-    check_int_eq(result.client_rc, TURBO_OK);
-    check_int_eq(result.record_called, 1);
-    check_size_eq(result.payload_len, sizeof(raw) - 1u);
-    check_mem_eq(result.payload, raw, sizeof(raw) - 1u);
+    check_equal(result.setup_rc, TURBO_OK);
+    check_equal(result.stop_rc, TURBO_OK);
+    check_equal(result.client_done, 1);
+    check_equal(result.client_rc, TURBO_OK);
+    check_equal(result.record_called, 1);
+    check_equal(result.payload_len, sizeof(raw) - 1u);
+    check_equal(result.payload, raw, sizeof(raw) - 1u);
   }
 }

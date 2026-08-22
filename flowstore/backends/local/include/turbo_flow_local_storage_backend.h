@@ -32,7 +32,7 @@ typedef struct turbo_flow_local_storage_backend_options_s {
  * The backend owns process-local state through the common storage owner ABI. Its Record service is
  * atomic but not durable and must not be used for a durable external session-store binding.
  */
-CXX_C_API const turbo_flow_storage_backend_plugin_api_t *
+TURBO_FLOW_C_API const turbo_flow_storage_backend_plugin_api_t *
 turbo_flow_local_storage_backend_api(void);
 
 #ifdef __cplusplus

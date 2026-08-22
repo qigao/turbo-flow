@@ -93,7 +93,7 @@ typedef struct turbo_flow_mqtt_sink_batch_s {
  * consumed. A caller may pass the mapped publications to an independently
  * owned MQTT writer, database writer, or another batch adapter.
  */
-CXX_C_API int turbo_flow_mqtt_sink_map_batch(const turbo_flow_mqtt_sink_config_t *config,
+TURBO_FLOW_C_API int turbo_flow_mqtt_sink_map_batch(const turbo_flow_mqtt_sink_config_t *config,
                                              const turbo_flow_mqtt_sink_batch_t *batch,
                                              size_t *mapped);
 
@@ -107,7 +107,7 @@ CXX_C_API int turbo_flow_mqtt_sink_map_batch(const turbo_flow_mqtt_sink_config_t
  * This compatibility helper delegates to a one-message batch; new sink paths
  * should use turbo_flow_mqtt_sink_map_batch().
  */
-CXX_C_API int turbo_flow_mqtt_sink_map(const turbo_flow_mqtt_sink_config_t *config,
+TURBO_FLOW_C_API int turbo_flow_mqtt_sink_map(const turbo_flow_mqtt_sink_config_t *config,
                                        const turbo_flow_protocol_message_output_t *input,
                                        turbo_flow_mqtt_sink_message_t *output);
 

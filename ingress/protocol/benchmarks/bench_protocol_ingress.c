@@ -279,15 +279,15 @@ static void protocol_bench_socket_to_graph(void) {
   atomic_init(&receiver.stopping, 0);
   atomic_init(&receiver.status, TURBO_OK);
   rc = protocol_bench_platform_init();
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) return;
   platform_started = 1;
   port = protocol_bench_pick_port();
-  check_int_gt((int)port, 0);
+  check_greater((int)port, 0);
   if (port == 0u) goto done;
 
   rc = protocol_bench_plugin_open(&registry, &owner, &protocol);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto done;
   flow = turbo_flow_create();
   check_not_null(flow);
@@ -297,7 +297,7 @@ static void protocol_bench_socket_to_graph(void) {
     rc = turbo_flow_register_stage_ex(flow, "capture", protocol_bench_capture, &capture, NULL);
   if (rc == TURBO_OK) rc = turbo_flow_compile(flow);
   if (rc == TURBO_OK) rc = turbo_flow_start(flow);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto done;
   flow_started = 1;
 
@@ -313,7 +313,7 @@ static void protocol_bench_socket_to_graph(void) {
   config.resolve_identity = NULL;
   rc = turbo_flow_protocol_coronet_server_create(&config, &server);
   if (rc == TURBO_OK) rc = turbo_flow_protocol_coronet_server_start(server);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto done;
 
   client = protocol_bench_connect(port);
@@ -321,7 +321,7 @@ static void protocol_bench_socket_to_graph(void) {
   if (client == PROTOCOL_BENCH_INVALID_SOCKET) goto done;
   receiver.socket_handle = client;
   rc = turbo_thread_create(&receiver_thread, protocol_bench_receiver_thread, &receiver);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto done;
   receiver_started = 1;
 
@@ -336,7 +336,7 @@ static void protocol_bench_socket_to_graph(void) {
                                (size_t)PROTOCOL_BENCH_WARMUP_MESSAGES * sizeof(frame));
   expected_messages += PROTOCOL_BENCH_WARMUP_MESSAGES;
   if (rc == TURBO_OK) rc = protocol_bench_wait_messages(&capture, &receiver, expected_messages);
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK) goto done;
 
   for (size_t sample = 0u; sample < PROTOCOL_BENCH_SAMPLES; ++sample) {
@@ -347,8 +347,8 @@ static void protocol_bench_socket_to_graph(void) {
     elapsed[sample] = turbo_hrtime() - begin;
     if (rc != TURBO_OK) break;
   }
-  check_int_eq(rc, TURBO_OK);
-  check_int_eq(atomic_load_explicit(&receiver.status, memory_order_acquire), TURBO_OK);
+  check_equal(rc, TURBO_OK);
+  check_equal(atomic_load_explicit(&receiver.status, memory_order_acquire), TURBO_OK);
   if (rc == TURBO_OK) {
     const size_t median = PROTOCOL_BENCH_SAMPLES / 2u;
     qsort(elapsed, PROTOCOL_BENCH_SAMPLES, sizeof(elapsed[0]), protocol_bench_u64_compare);
@@ -369,14 +369,14 @@ done:
   if (receiver_started) {
     atomic_store_explicit(&receiver.stopping, 1, memory_order_release);
     protocol_bench_socket_shutdown(client);
-    check_int_eq(turbo_thread_join(&receiver_thread), TURBO_OK);
+    check_equal(turbo_thread_join(&receiver_thread), TURBO_OK);
   }
   protocol_bench_socket_close(client);
-  check_int_eq(protocol_bench_server_cleanup(server), TURBO_OK);
-  if (flow && flow_started) check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+  check_equal(protocol_bench_server_cleanup(server), TURBO_OK);
+  if (flow && flow_started) check_equal(turbo_flow_stop(flow), TURBO_OK);
   turbo_flow_destroy(flow);
   turbo_flow_protocol_owner_destroy(owner);
-  if (registry) check_int_eq(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
+  if (registry) check_equal(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
   if (platform_started) protocol_bench_platform_cleanup();
 }
 

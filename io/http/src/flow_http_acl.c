@@ -5,7 +5,7 @@
 
 #include "CoroNet/turbo_coro_context.h"
 #include "http_client.h"
-#include "monocypher.h"
+#include "turbo_crypto.h"
 #include "turbo_coro.h"
 #include "turbo_error.h"
 #include "turbo_parser.h"
@@ -23,11 +23,11 @@
 
 struct turbo_flow_http_acl_provider_s {
   turbo_flow_security_authorization_provider_t interface;
-  tstr_t url;
-  tstr_t host;
-  tstr_t service_id;
-  tstr_t service_domain;
-  tstr_t service_token_ref;
+  tstr url;
+  tstr host;
+  tstr service_id;
+  tstr service_domain;
+  tstr service_token_ref;
   uint16_t port;
   uint32_t timeout_ms;
   size_t max_response_size;
@@ -71,7 +71,7 @@ static int flow_http_acl_connect_policy(const char *scheme, const char *hostname
              : -1;
 }
 
-static int flow_http_acl_validate_url(const char *url, tstr_t *host_out, uint16_t *port_out) {
+static int flow_http_acl_validate_url(const char *url, tstr *host_out, uint16_t *port_out) {
   uri_t *uri = NULL;
   const char *scheme;
   const char *host;
@@ -449,7 +449,7 @@ done:
   if (client) http_client_destroy(client);
   if (body) turbo_json_serialize_free(body);
   if (authorization) {
-    crypto_wipe(authorization, sizeof("Authorization: Bearer ") + token_size);
+    turbo_crypto_wipe(authorization, sizeof("Authorization: Bearer ") + token_size);
     free(authorization);
   }
   turbo_flow_security_secret_release(&provider->key_provider, &lease);
@@ -640,7 +640,7 @@ void turbo_flow_http_acl_provider_destroy(turbo_flow_http_acl_provider_t *provid
   tstr_freep(&provider->service_domain);
   tstr_freep(&provider->service_token_ref);
   flow_http_tls_client_cleanup(&provider->tls);
-  crypto_wipe(&provider->key_provider, sizeof(provider->key_provider));
+  turbo_crypto_wipe(&provider->key_provider, sizeof(provider->key_provider));
   free(provider);
 }
 

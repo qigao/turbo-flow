@@ -15,11 +15,11 @@
 
 typedef struct flow_rpc_client_adapter_s {
   turbo_flow_t *flow;
-  tstr_t source_name;
-  tstr_t url;
-  tstr_t method;
-  tstr_t bearer_token;
-  tstr_t poll_params;
+  tstr source_name;
+  tstr url;
+  tstr method;
+  tstr bearer_token;
+  tstr poll_params;
   uint32_t poll_interval_ms;
   turbo_http_t *facade;
   int owns_facade;
@@ -117,7 +117,7 @@ static const turbo_flow_adapter_schema_t FLOW_RPC_POLL_SCHEMA = {
     sizeof(FLOW_RPC_CLIENT_FIELDS) / sizeof(FLOW_RPC_CLIENT_FIELDS[0])};
 
 static int flow_rpc_client_replace_payload(turbo_flow_msg_t *msg, const char *data, size_t len) {
-  tstr_t payload;
+  tstr payload;
   if (!msg || (len > 0 && !data)) return TURBO_EINVAL;
   payload = tstr_new_len(data ? data : "", len);
   if (!payload) return TURBO_ENOMEM;

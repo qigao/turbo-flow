@@ -6,7 +6,7 @@ cmake_config_target(${TARGET_NAME}
                     ALIAS TurboFlow::FlowStoreDataBind
                     FOLDER "flowstore/databind"
                     EXPORT_NAME FlowStoreDataBind)
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_BUILD)
 target_include_directories(${TARGET_NAME}
                            PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                                   $<INSTALL_INTERFACE:include>

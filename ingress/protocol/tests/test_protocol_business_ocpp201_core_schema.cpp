@@ -1,18 +1,18 @@
 #include "ocpp201_core.h"
-#include "tinytest.h"
+#include "tinytest.hpp"
 
 spec("OCPP 2.0.1 Core generated DataBind ABI") {
   it("publishes the additive schema revision") {
-    check_str_contains(Ocpp201Core_schema_text(), "version(5)");
+    check_contains(Ocpp201Core_schema_text(), "version(5)");
   }
 
   it("publishes the complete TransactionEvent required enum sets") {
-    check_size_eq(TransactionEventType_count(), 3u);
-    check_size_eq(TriggerReason_count(), 21u);
-    check_size_eq(IdTokenType_count(), 8u);
-    check_str_eq(TransactionEventType_to_string(TransactionEventType_Updated), "Updated");
-    check_str_eq(TriggerReason_to_string(TriggerReason_ResetCommand), "ResetCommand");
-    check_str_eq(IdTokenType_to_string(IdTokenType_NoAuthorization), "NoAuthorization");
+    check_equal(TransactionEventType_count(), 3u);
+    check_equal(TriggerReason_count(), 21u);
+    check_equal(IdTokenType_count(), 8u);
+    check_equal(TransactionEventType_to_string(TransactionEventType_Updated), "Updated");
+    check_equal(TriggerReason_to_string(TriggerReason_ResetCommand), "ResetCommand");
+    check_equal(IdTokenType_to_string(IdTokenType_NoAuthorization), "NoAuthorization");
   }
 
   it("binds BootNotification typed units into owning C fields") {
@@ -23,18 +23,18 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     ChargingStation_t station;
     BootNotificationReason_t reason;
 
-    check_int_eq(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
+    check_equal(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
     ChargingStation_init(&station);
     BootNotificationReason_init(&reason);
-    check_int_eq(
+    check_equal(
         ChargingStation_from_json(codec, &station, station_json, sizeof(station_json) - 1u, &error),
         DATA_BIND_OK);
-    check_int_eq(BootNotificationReason_from_json(codec, &reason, reason_json,
+    check_equal(BootNotificationReason_from_json(codec, &reason, reason_json,
                                                   sizeof(reason_json) - 1u, &error),
                  DATA_BIND_OK);
-    check_size_eq(tstr_len(station.model), sizeof("Model-A") - 1u);
-    check_size_eq(tstr_len(station.vendorName), sizeof("Vendor-A") - 1u);
-    check_int_eq(reason.reason, BootReason_PowerUp);
+    check_equal(tstr_len(station.model), sizeof("Model-A") - 1u);
+    check_equal(tstr_len(station.vendorName), sizeof("Vendor-A") - 1u);
+    check_equal(reason.reason, BootReason_PowerUp);
 
     BootNotificationReason_clear(&reason);
     ChargingStation_clear(&station);
@@ -49,15 +49,15 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     DataBind *codec = nullptr;
     StatusNotificationRequest_t notification;
 
-    check_int_eq(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
+    check_equal(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
     StatusNotificationRequest_init(&notification);
-    check_int_eq(
+    check_equal(
         StatusNotificationRequest_from_json(codec, &notification, json, sizeof(json) - 1u, &error),
         DATA_BIND_OK);
-    check_size_eq(tstr_len(notification.timestamp), sizeof("2026-07-27T10:15:30Z") - 1u);
-    check_int_eq(notification.connectorStatus, ConnectorStatus_Faulted);
-    check_int_eq(notification.evseId, 3);
-    check_int_eq(notification.connectorId, 2);
+    check_equal(tstr_len(notification.timestamp), sizeof("2026-07-27T10:15:30Z") - 1u);
+    check_equal(notification.connectorStatus, ConnectorStatus_Faulted);
+    check_equal(notification.evseId, 3);
+    check_equal(notification.connectorId, 2);
 
     StatusNotificationRequest_clear(&notification);
     data_bind_free(codec);
@@ -73,20 +73,20 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     TransactionEventRequired_t event;
     TransactionInfoRequired_t transaction;
 
-    check_int_eq(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
+    check_equal(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
     TransactionEventRequired_init(&event);
     TransactionInfoRequired_init(&transaction);
-    check_int_eq(TransactionEventRequired_from_json(codec, &event, event_json,
+    check_equal(TransactionEventRequired_from_json(codec, &event, event_json,
                                                     sizeof(event_json) - 1u, &error),
                  DATA_BIND_OK);
-    check_int_eq(TransactionInfoRequired_from_json(codec, &transaction, transaction_json,
+    check_equal(TransactionInfoRequired_from_json(codec, &transaction, transaction_json,
                                                    sizeof(transaction_json) - 1u, &error),
                  DATA_BIND_OK);
-    check_int_eq(event.eventType, TransactionEventType_Started);
-    check_int_eq(event.triggerReason, TriggerReason_Authorized);
-    check_int_eq(event.seqNo, 0);
-    check_size_eq(tstr_len(event.timestamp), sizeof("2026-07-27T10:16:00Z") - 1u);
-    check_size_eq(tstr_len(transaction.transactionId), sizeof("transaction-42") - 1u);
+    check_equal(event.eventType, TransactionEventType_Started);
+    check_equal(event.triggerReason, TriggerReason_Authorized);
+    check_equal(event.seqNo, 0);
+    check_equal(tstr_len(event.timestamp), sizeof("2026-07-27T10:16:00Z") - 1u);
+    check_equal(tstr_len(transaction.transactionId), sizeof("transaction-42") - 1u);
 
     TransactionInfoRequired_clear(&transaction);
     TransactionEventRequired_clear(&event);
@@ -111,39 +111,39 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     TransactionEvseFacts_t evse_without_connector;
     TransactionIdToken_t id_token;
 
-    check_int_eq(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
+    check_equal(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
     TransactionEventFacts_init(&event);
     TransactionEventFacts_init(&event_without_offline);
     TransactionEvseFacts_init(&evse);
     TransactionEvseFacts_init(&evse_without_connector);
     TransactionIdToken_init(&id_token);
-    check_int_eq(TransactionEventFacts_from_json(codec, &event, event_json,
+    check_equal(TransactionEventFacts_from_json(codec, &event, event_json,
                                                  sizeof(event_json) - 1u, &error),
                  DATA_BIND_OK);
-    check_int_eq(TransactionEventFacts_from_json(
+    check_equal(TransactionEventFacts_from_json(
                      codec, &event_without_offline, event_without_offline_json,
                      sizeof(event_without_offline_json) - 1u, &error),
                  DATA_BIND_OK);
-    check_int_eq(TransactionEvseFacts_from_json(codec, &evse, evse_json,
+    check_equal(TransactionEvseFacts_from_json(codec, &evse, evse_json,
                                                 sizeof(evse_json) - 1u, &error),
                  DATA_BIND_OK);
-    check_int_eq(TransactionEvseFacts_from_json(
+    check_equal(TransactionEvseFacts_from_json(
                      codec, &evse_without_connector, evse_without_connector_json,
                      sizeof(evse_without_connector_json) - 1u, &error),
                  DATA_BIND_OK);
-    check_int_eq(TransactionIdToken_from_json(codec, &id_token, id_token_json,
+    check_equal(TransactionIdToken_from_json(codec, &id_token, id_token_json,
                                               sizeof(id_token_json) - 1u, &error),
                  DATA_BIND_OK);
-    check_uint_eq(event._presence[0], 1u << TransactionEventFacts_OPTIONAL_offline);
+    check_equal(event._presence[0], 1u << TransactionEventFacts_OPTIONAL_offline);
     check_false(event.offline);
-    check_uint_eq(event_without_offline._presence[0], 0u);
-    check_int_eq(evse.id, 1);
-    check_uint_eq(evse._presence[0], 1u << TransactionEvseFacts_OPTIONAL_connectorId);
-    check_int_eq(evse.connectorId, 2);
-    check_int_eq(evse_without_connector.id, 2);
-    check_uint_eq(evse_without_connector._presence[0], 0u);
-    check_size_eq(tstr_len(id_token.idToken), sizeof("04AABBCCDD") - 1u);
-    check_int_eq(id_token.type, IdTokenType_ISO14443);
+    check_equal(event_without_offline._presence[0], 0u);
+    check_equal(evse.id, 1);
+    check_equal(evse._presence[0], 1u << TransactionEvseFacts_OPTIONAL_connectorId);
+    check_equal(evse.connectorId, 2);
+    check_equal(evse_without_connector.id, 2);
+    check_equal(evse_without_connector._presence[0], 0u);
+    check_equal(tstr_len(id_token.idToken), sizeof("04AABBCCDD") - 1u);
+    check_equal(id_token.type, IdTokenType_ISO14443);
 
     TransactionIdToken_clear(&id_token);
     TransactionEvseFacts_clear(&evse_without_connector);
@@ -162,15 +162,15 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     char *encoded = nullptr;
     size_t encoded_size = 0u;
 
-    check_int_eq(data_bind_abi_version(), DATA_BIND_ABI_VERSION);
-    check_int_eq(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
+    check_equal(data_bind_abi_version(), DATA_BIND_ABI_VERSION);
+    check_equal(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
     ResetRequest_init(&request);
-    check_int_eq(ResetRequest_from_json(codec, &request, json, sizeof(json) - 1u, &error),
+    check_equal(ResetRequest_from_json(codec, &request, json, sizeof(json) - 1u, &error),
                  DATA_BIND_OK);
-    check_int_eq(ResetRequest_to_json(codec, &request, &encoded, &encoded_size, &error),
+    check_equal(ResetRequest_to_json(codec, &request, &encoded, &encoded_size, &error),
                  DATA_BIND_OK);
-    check_size_eq(encoded_size, sizeof(encoded_json) - 1u);
-    check_mem_eq(encoded, encoded_json, encoded_size);
+    check_equal(encoded_size, sizeof(encoded_json) - 1u);
+    check_equal(encoded, encoded_json, encoded_size);
 
     tbe_typed_serialized_free(encoded);
     ResetRequest_clear(&request);
@@ -185,16 +185,16 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     char *encoded = nullptr;
     size_t encoded_size = 0u;
 
-    check_int_eq(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
+    check_equal(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
     UnlockConnectorRequest_init(&request);
-    check_int_eq(UnlockConnectorRequest_from_json(codec, &request, json, sizeof(json) - 1u, &error),
+    check_equal(UnlockConnectorRequest_from_json(codec, &request, json, sizeof(json) - 1u, &error),
                  DATA_BIND_OK);
-    check_int_eq(request.evseId, 1);
-    check_int_eq(request.connectorId, 2);
-    check_int_eq(UnlockConnectorRequest_to_json(codec, &request, &encoded, &encoded_size, &error),
+    check_equal(request.evseId, 1);
+    check_equal(request.connectorId, 2);
+    check_equal(UnlockConnectorRequest_to_json(codec, &request, &encoded, &encoded_size, &error),
                  DATA_BIND_OK);
-    check_size_eq(encoded_size, sizeof(json) - 1u);
-    check_mem_eq(encoded, json, encoded_size);
+    check_equal(encoded_size, sizeof(json) - 1u);
+    check_equal(encoded, json, encoded_size);
 
     tbe_typed_serialized_free(encoded);
     UnlockConnectorRequest_clear(&request);

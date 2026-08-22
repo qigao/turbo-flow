@@ -14,6 +14,7 @@ cmake_config_target(
 target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/turbo_flow/include>
          $<INSTALL_INTERFACE:include>)
 target_link_libraries(${TARGET_NAME} PUBLIC TurboUtils::Core PRIVATE ${CMAKE_DL_LIBS})
 

@@ -83,46 +83,46 @@ spec("flow_coronet_actor") {
 
     check_true(context != NULL);
     state.expected_context = context;
-    check_int_eq(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
-    check_int_eq(tf_coronet_actor_init(&actor, &execution, flow_actor_test_handler, &state, 1u,
+    check_equal(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
+    check_equal(tf_coronet_actor_init(&actor, &execution, flow_actor_test_handler, &state, 1u,
                                        sizeof(command)),
                  TURBO_OK);
-    check_int_eq(tf_coronet_actor_submit(&actor, &command, sizeof(command), UINT64_MAX, &reply),
+    check_equal(tf_coronet_actor_submit(&actor, &command, sizeof(command), UINT64_MAX, &reply),
                  TURBO_OK);
     check_true(reply != NULL);
-    check_uint_eq(tf_coronet_actor_reply_command_id(reply), 1u);
+    check_equal(tf_coronet_actor_reply_command_id(reply), 1u);
     command.value = 99u;
-    check_int_eq(tf_coronet_actor_reply_poll(reply, &status), TURBO_EBUSY);
-    check_int_eq(tf_coronet_actor_submit(&actor, &command, sizeof(command), UINT64_MAX, &rejected),
+    check_equal(tf_coronet_actor_reply_poll(reply, &status), TURBO_EBUSY);
+    check_equal(tf_coronet_actor_submit(&actor, &command, sizeof(command), UINT64_MAX, &rejected),
                  TURBO_ENOSPC);
     check_true(rejected == NULL);
-    check_int_eq(tf_coronet_actor_drain(&actor, 0u), TURBO_ETIMEDOUT);
+    check_equal(tf_coronet_actor_drain(&actor, 0u), TURBO_ETIMEDOUT);
 
-    check_int_eq(coro_context_run(context, TURBO_RUN_NOWAIT), TURBO_OK);
-    check_int_eq(tf_coronet_actor_reply_wait(reply, 0u, &status), TURBO_OK);
-    check_int_eq(status, 17);
-    check_uint_eq(state.calls, 1u);
-    check_uint_eq(state.last_value, 17u);
-    check_uint_eq(state.last_command_id, 1u);
+    check_equal(coro_context_run(context, TURBO_RUN_NOWAIT), TURBO_OK);
+    check_equal(tf_coronet_actor_reply_wait(reply, 0u, &status), TURBO_OK);
+    check_equal(status, 17);
+    check_equal(state.calls, 1u);
+    check_equal(state.last_value, 17u);
+    check_equal(state.last_command_id, 1u);
     tf_coronet_actor_reply_destroy(reply);
 
     command.value = 23u;
-    check_int_eq(tf_coronet_actor_submit(&actor, &command, sizeof(command),
+    check_equal(tf_coronet_actor_submit(&actor, &command, sizeof(command),
                                          turbo_hrtime() + UINT64_C(1000000), &reply),
                  TURBO_OK);
     turbo_sleep_ms(5u);
-    check_int_eq(coro_context_run(context, TURBO_RUN_NOWAIT), TURBO_OK);
-    check_int_eq(tf_coronet_actor_reply_wait(reply, 0u, &status), TURBO_OK);
-    check_int_eq(status, TURBO_ETIMEDOUT);
-    check_uint_eq(state.calls, 1u);
+    check_equal(coro_context_run(context, TURBO_RUN_NOWAIT), TURBO_OK);
+    check_equal(tf_coronet_actor_reply_wait(reply, 0u, &status), TURBO_OK);
+    check_equal(status, TURBO_ETIMEDOUT);
+    check_equal(state.calls, 1u);
     tf_coronet_actor_reply_destroy(reply);
 
-    check_int_eq(tf_coronet_actor_destroy(&actor), TURBO_EBUSY);
+    check_equal(tf_coronet_actor_destroy(&actor), TURBO_EBUSY);
     tf_coronet_actor_close(&actor);
-    check_int_eq(tf_coronet_actor_submit(&actor, &command, sizeof(command), UINT64_MAX, &rejected),
+    check_equal(tf_coronet_actor_submit(&actor, &command, sizeof(command), UINT64_MAX, &rejected),
                  TURBO_ESHUTDOWN);
-    check_int_eq(tf_coronet_actor_drain(&actor, 0u), TURBO_OK);
-    check_int_eq(tf_coronet_actor_destroy(&actor), TURBO_OK);
+    check_equal(tf_coronet_actor_drain(&actor, 0u), TURBO_OK);
+    check_equal(tf_coronet_actor_destroy(&actor), TURBO_OK);
     tf_coronet_execution_destroy(&execution);
     coro_context_destroy(context);
   }
@@ -136,24 +136,24 @@ spec("flow_coronet_actor") {
     flow_actor_test_command_t command = {31u};
     int status = TURBO_EALREADY;
 
-    check_int_eq(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
+    check_equal(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
     state.expected_context = execution.context;
     state.delay_ms = 25u;
-    check_int_eq(tf_coronet_actor_init(&actor, &execution, flow_actor_test_handler, &state, 4u,
+    check_equal(tf_coronet_actor_init(&actor, &execution, flow_actor_test_handler, &state, 4u,
                                        sizeof(command)),
                  TURBO_OK);
-    check_int_eq(tf_coronet_execution_start(&execution), TURBO_OK);
-    check_int_eq(tf_coronet_actor_submit(&actor, &command, sizeof(command), UINT64_MAX, &reply),
+    check_equal(tf_coronet_execution_start(&execution), TURBO_OK);
+    check_equal(tf_coronet_actor_submit(&actor, &command, sizeof(command), UINT64_MAX, &reply),
                  TURBO_OK);
-    check_int_eq(tf_coronet_actor_reply_wait(reply, UINT64_C(1000000), &status), TURBO_ETIMEDOUT);
-    check_int_eq(tf_coronet_actor_reply_wait(reply, UINT64_C(500000000), &status), TURBO_OK);
-    check_int_eq(status, 31);
-    check_uint_eq(state.calls, 1u);
+    check_equal(tf_coronet_actor_reply_wait(reply, UINT64_C(1000000), &status), TURBO_ETIMEDOUT);
+    check_equal(tf_coronet_actor_reply_wait(reply, UINT64_C(500000000), &status), TURBO_OK);
+    check_equal(status, 31);
+    check_equal(state.calls, 1u);
     tf_coronet_actor_reply_destroy(reply);
 
     tf_coronet_actor_close(&actor);
-    check_int_eq(tf_coronet_actor_drain(&actor, UINT64_C(500000000)), TURBO_OK);
-    check_int_eq(tf_coronet_actor_destroy(&actor), TURBO_OK);
+    check_equal(tf_coronet_actor_drain(&actor, UINT64_C(500000000)), TURBO_OK);
+    check_equal(tf_coronet_actor_destroy(&actor), TURBO_OK);
     tf_coronet_execution_stop(&execution);
     tf_coronet_execution_destroy(&execution);
   }
@@ -165,19 +165,19 @@ spec("flow_coronet_actor") {
     flow_actor_test_state_t state = {0};
     flow_actor_test_command_t command = {41u};
 
-    check_int_eq(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
+    check_equal(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
     state.expected_context = execution.context;
     state.delay_ms = 10u;
-    check_int_eq(tf_coronet_actor_init(&actor, &execution, flow_actor_test_handler, &state, 2u,
+    check_equal(tf_coronet_actor_init(&actor, &execution, flow_actor_test_handler, &state, 2u,
                                        sizeof(command)),
                  TURBO_OK);
-    check_int_eq(tf_coronet_execution_start(&execution), TURBO_OK);
-    check_int_eq(tf_coronet_actor_call(&actor, &command, sizeof(command), UINT64_C(500000000)), 41);
-    check_uint_eq(state.calls, 1u);
+    check_equal(tf_coronet_execution_start(&execution), TURBO_OK);
+    check_equal(tf_coronet_actor_call(&actor, &command, sizeof(command), UINT64_C(500000000)), 41);
+    check_equal(state.calls, 1u);
 
     tf_coronet_actor_close(&actor);
-    check_int_eq(tf_coronet_actor_drain(&actor, 0u), TURBO_OK);
-    check_int_eq(tf_coronet_actor_destroy(&actor), TURBO_OK);
+    check_equal(tf_coronet_actor_drain(&actor, 0u), TURBO_OK);
+    check_equal(tf_coronet_actor_destroy(&actor), TURBO_OK);
     tf_coronet_execution_stop(&execution);
     tf_coronet_execution_destroy(&execution);
   }
@@ -188,10 +188,10 @@ spec("flow_coronet_actor") {
     tf_coronet_execution_t execution;
     flow_execution_coro_state_t state = {0};
 
-    check_int_eq(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
+    check_equal(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
     state.expected_context = execution.context;
-    check_int_eq(tf_coronet_execution_start(&execution), TURBO_OK);
-    check_int_eq(tf_coronet_execution_call_coro(
+    check_equal(tf_coronet_execution_start(&execution), TURBO_OK);
+    check_equal(tf_coronet_execution_call_coro(
                      &execution, flow_execution_yielding_call, &state,
                      UINT64_C(500000000)),
                  47);
@@ -209,20 +209,20 @@ spec("flow_coronet_actor") {
     turbo_flow_coronet_execution_binding_t binding = flow_actor_private_binding();
     tf_coronet_execution_t execution;
 
-    check_int_eq(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
+    check_equal(tf_coronet_execution_init(&execution, &binding), TURBO_OK);
     for (size_t cycle = 0u; cycle < EXECUTION_RESTART_CYCLES; ++cycle) {
       uint64_t started_at;
       uint64_t elapsed;
 
-      check_int_eq(tf_coronet_execution_start(&execution), TURBO_OK);
-      check_int_eq(tf_coronet_execution_call(&execution, flow_actor_execution_ping,
+      check_equal(tf_coronet_execution_start(&execution), TURBO_OK);
+      check_equal(tf_coronet_execution_call(&execution, flow_actor_execution_ping,
                                              execution.context, UINT64_C(500000000)),
                    TURBO_OK);
       started_at = turbo_monotonic_ms();
       tf_coronet_execution_stop(&execution);
       elapsed = turbo_monotonic_ms() - started_at;
       info("cycle=%zu stop_elapsed_ms=%llu", cycle, (unsigned long long)elapsed);
-      check_size_le((size_t)elapsed, (size_t)EXECUTION_STOP_MAX_MS);
+      check_less_equal((size_t)elapsed, (size_t)EXECUTION_STOP_MAX_MS);
     }
     tf_coronet_execution_destroy(&execution);
   }

@@ -164,7 +164,7 @@ int flow_native_resource_document_at(const turbo_flow_t *flow, size_t index,
                                      turbo_flow_resource_document_t *out) {
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
   const turbo_flow_resource_schema_t *schema;
-  tstr_t payload;
+  tstr payload;
   int rc;
   if (!out || out->size < sizeof(*out) || out->payload) return TURBO_EINVAL;
   if (document_kind != TURBO_FLOW_RESOURCE_DOCUMENT_STATUS) return TURBO_ENOTSUP;

@@ -111,18 +111,18 @@ spec("turbo_flow_rpc") {
     const turbo_flow_adapter_schema_t *server_schema;
 
     check_not_null(flow);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_rpc_register_client_resolved_adapter(flow, resolved, "rpc.client"),
+    check_equal(turbo_flow_rpc_register_client_resolved_adapter(flow, resolved, "rpc.client"),
                  TURBO_OK);
-    check_int_eq(turbo_flow_rpc_register_server_resolved_adapter(flow, resolved, "rpc.server"),
+    check_equal(turbo_flow_rpc_register_server_resolved_adapter(flow, resolved, "rpc.server"),
                  TURBO_OK);
     client_schema = turbo_flow_find_adapter_schema(flow, "rpc.client");
     server_schema = turbo_flow_find_adapter_schema(flow, "rpc.server");
     check_not_null(client_schema);
     check_not_null(server_schema);
-    check_uint_eq(client_schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
-    check_uint_eq(server_schema->roles, TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK);
+    check_equal(client_schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
+    check_equal(server_schema->roles, TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK);
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_destroy(flow);
   }
@@ -134,9 +134,9 @@ spec("turbo_flow_rpc") {
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_rpc_register_server_resolved_adapter(flow, resolved, "rpc.server"),
+    check_equal(turbo_flow_rpc_register_server_resolved_adapter(flow, resolved, "rpc.server"),
                  TURBO_EINVAL);
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_destroy(flow);
@@ -151,9 +151,9 @@ spec("turbo_flow_rpc") {
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_rpc_register_client_resolved_adapter(flow, resolved, "rpc.client"),
+    check_equal(turbo_flow_rpc_register_client_resolved_adapter(flow, resolved, "rpc.client"),
                  TURBO_EINVAL);
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_destroy(flow);
@@ -166,8 +166,8 @@ spec("turbo_flow_rpc") {
     turbo_flow_rpc_http_client_binding_t binding = TURBO_FLOW_RPC_HTTP_CLIENT_BINDING_INIT;
     turbo_flow_t *flow = turbo_flow_create();
 
-    check_int_eq(turbo_http_options_init(&options, sizeof(options)), TURBO_OK);
-    check_int_eq(turbo_http_create_sync(&options, &facade), TURBO_OK);
+    check_equal(turbo_http_options_init(&options, sizeof(options)), TURBO_OK);
+    check_equal(turbo_http_create_sync(&options, &facade), TURBO_OK);
     check_not_null(facade);
     check_not_null(flow);
     memset(&config, 0, sizeof(config));
@@ -175,11 +175,11 @@ spec("turbo_flow_rpc") {
     config.method = "echo";
     binding.client = facade;
     binding.size = sizeof(binding) - 1u;
-    check_int_eq(
+    check_equal(
         turbo_flow_rpc_register_client_adapter_ex(flow, "rpc.borrowed", &config, &binding),
         TURBO_EINVAL);
     binding.size = sizeof(binding);
-    check_int_eq(
+    check_equal(
         turbo_flow_rpc_register_client_adapter_ex(flow, "rpc.borrowed", &config, &binding),
         TURBO_OK);
     turbo_flow_destroy(flow);
@@ -196,7 +196,7 @@ spec("turbo_flow_rpc") {
     config.url = "http://127.0.0.1:1/rpc";
     config.method = "echo";
     config.timeout_ms = -1;
-    check_int_eq(turbo_flow_rpc_register_client_adapter(flow, "rpc.invalid", &config),
+    check_equal(turbo_flow_rpc_register_client_adapter(flow, "rpc.invalid", &config),
                  TURBO_EINVAL);
     turbo_flow_destroy(flow);
   }
@@ -233,7 +233,7 @@ spec("turbo_flow_rpc") {
     turbo_flow_connection_snapshot_t client_connection;
     rpc_test_state_t state;
 
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     check_not_null(server_flow);
     check_not_null(client_flow);
     memset(&state, 0, sizeof(state));
@@ -243,95 +243,95 @@ spec("turbo_flow_rpc") {
     server_config.port = port;
     server_config.endpoint = "/rpc";
     server_config.max_request_size = 4096;
-    check_int_eq(
+    check_equal(
         turbo_flow_rpc_register_server_adapter(server_flow, "rpc.server.echo", &server_config),
         TURBO_OK);
-    check_str_eq(turbo_flow_adapter_operation_module(
+    check_equal(turbo_flow_adapter_operation_module(
                      server_flow, "rpc.server.echo", TURBO_FLOW_RPC_SERVER_REQUEST_OPERATION),
                  TURBO_FLOW_RPC_SERVER_MODULE);
-    check_str_eq(turbo_flow_adapter_operation_resource(
+    check_equal(turbo_flow_adapter_operation_resource(
                      server_flow, "rpc.server.echo", TURBO_FLOW_RPC_SERVER_REQUEST_OPERATION),
                  "rpc.server.echo");
     memset(&server_connection, 0, sizeof(server_connection));
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
+    check_equal(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
                  TURBO_OK);
-    check_int_eq(server_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_int_eq(
+    check_equal(server_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(
         turbo_flow_register_stage_ex(server_flow, "handler", rpc_echo_handler, &state, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(server_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(server_flow), TURBO_OK);
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
+    check_equal(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(server_flow), TURBO_OK);
+    check_equal(turbo_flow_start(server_flow), TURBO_OK);
+    check_equal(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
                  TURBO_OK);
-    check_int_eq(server_connection.state, TURBO_FLOW_CONNECTION_READY);
-    check_size_eq(server_connection.connections_current, 1);
-    check_int_gt(snprintf(url, sizeof(url), "rpc://0.0.0.0:%u/rpc", (unsigned)port), 0);
-    check_str_eq(server_connection.endpoint, url);
+    check_equal(server_connection.state, TURBO_FLOW_CONNECTION_READY);
+    check_equal(server_connection.connections_current, 1);
+    check_greater(snprintf(url, sizeof(url), "rpc://0.0.0.0:%u/rpc", (unsigned)port), 0);
+    check_equal(server_connection.endpoint, url);
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/rpc", (unsigned)port);
     memset(&client_config, 0, sizeof(client_config));
     client_config.url = url;
     client_config.method = "echo";
     client_config.timeout_ms = 2000;
-    check_int_eq(
+    check_equal(
         turbo_flow_rpc_register_client_adapter(client_flow, "rpc.client.once", &client_config),
         TURBO_OK);
-    check_str_eq(turbo_flow_adapter_operation_module(
+    check_equal(turbo_flow_adapter_operation_module(
                      client_flow, "rpc.client.once", TURBO_FLOW_RPC_CLIENT_CALL_OPERATION),
                  TURBO_FLOW_RPC_CLIENT_MODULE);
-    check_str_eq(turbo_flow_adapter_operation_resource(
+    check_equal(turbo_flow_adapter_operation_resource(
                      client_flow, "rpc.client.once", TURBO_FLOW_RPC_CLIENT_CALL_OPERATION),
                  "rpc.client.once");
-    check_str_eq(turbo_flow_find_primitive(client_flow, "rpc.client.once")->type_name,
+    check_equal(turbo_flow_find_primitive(client_flow, "rpc.client.once")->type_name,
                  TURBO_FLOW_RPC_CLIENT_PRIMITIVE_TYPE);
     memset(&client_connection, 0, sizeof(client_connection));
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
+    check_equal(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
                  TURBO_OK);
-    check_int_eq(client_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_str_eq(client_connection.endpoint, url);
-    check_int_eq(turbo_flow_register_stage_ex(client_flow, "capture", rpc_capture, &state, NULL),
+    check_equal(client_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(client_connection.endpoint, url);
+    check_equal(turbo_flow_register_stage_ex(client_flow, "capture", rpc_capture, &state, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(client_flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(client_flow), TURBO_OK);
+    check_equal(turbo_flow_start(client_flow), TURBO_OK);
 
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup(params);
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_content_descriptor_from_media(&input_descriptor, TURBO_FLOW_DOMAIN_DATA,
+    check_equal(turbo_flow_content_descriptor_from_media(&input_descriptor, TURBO_FLOW_DOMAIN_DATA,
                                                           TURBO_FLOW_CONTENT_PROFILE_GENERIC,
                                                           "application/json", "rpc-request", NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_msg_set_content_descriptor(&msg, &input_descriptor), TURBO_OK);
-    check_int_eq(turbo_flow_publish(client_flow, "input", &msg), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&state.handler_called, memory_order_acquire), 1);
-    check_int_eq(atomic_load_explicit(&state.capture_called, memory_order_acquire), 1);
-    check_size_eq(state.payload_len, sizeof(params) - 1);
-    check_mem_eq(state.payload, params, sizeof(params) - 1);
-    check_int_eq(state.captured_content, 0);
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
+    check_equal(turbo_flow_msg_set_content_descriptor(&msg, &input_descriptor), TURBO_OK);
+    check_equal(turbo_flow_publish(client_flow, "input", &msg), TURBO_OK);
+    check_equal(atomic_load_explicit(&state.handler_called, memory_order_acquire), 1);
+    check_equal(atomic_load_explicit(&state.capture_called, memory_order_acquire), 1);
+    check_equal(state.payload_len, sizeof(params) - 1);
+    check_equal(state.payload, params, sizeof(params) - 1);
+    check_equal(state.captured_content, 0);
+    check_equal(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
                  TURBO_OK);
-    check_int_eq(client_connection.state, TURBO_FLOW_CONNECTION_READY);
-    check_size_eq(client_connection.connections_current, 0);
-    check_size_eq(client_connection.in_flight_messages, 0);
-    check_size_eq(client_connection.in_flight_bytes, 0);
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
+    check_equal(client_connection.state, TURBO_FLOW_CONNECTION_READY);
+    check_equal(client_connection.connections_current, 0);
+    check_equal(client_connection.in_flight_messages, 0);
+    check_equal(client_connection.in_flight_bytes, 0);
+    check_equal(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
                  TURBO_OK);
-    check_size_eq(server_connection.in_flight_messages, 0);
-    check_size_eq(server_connection.in_flight_bytes, 0);
+    check_equal(server_connection.in_flight_messages, 0);
+    check_equal(server_connection.in_flight_bytes, 0);
 
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_stop(server_flow), TURBO_OK);
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
+    check_equal(turbo_flow_stop(client_flow), TURBO_OK);
+    check_equal(turbo_flow_stop(server_flow), TURBO_OK);
+    check_equal(turbo_flow_adapter_connection_snapshot_at(client_flow, 0, &client_connection),
                  TURBO_OK);
-    check_int_eq(client_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_int_eq(client_connection.last_status, TURBO_ESHUTDOWN);
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
+    check_equal(client_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(client_connection.last_status, TURBO_ESHUTDOWN);
+    check_equal(turbo_flow_adapter_connection_snapshot_at(server_flow, 0, &server_connection),
                  TURBO_OK);
-    check_int_eq(server_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_int_eq(server_connection.last_status, TURBO_ESHUTDOWN);
+    check_equal(server_connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(server_connection.last_status, TURBO_ESHUTDOWN);
     turbo_flow_destroy(client_flow);
     turbo_flow_destroy(server_flow);
   }
@@ -363,7 +363,7 @@ spec("turbo_flow_rpc") {
     turbo_flow_t *client_flow = turbo_flow_create();
     rpc_test_state_t state;
 
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     check_not_null(server_flow);
     check_not_null(client_flow);
     memset(&state, 0, sizeof(state));
@@ -372,15 +372,15 @@ spec("turbo_flow_rpc") {
     memset(&server_config, 0, sizeof(server_config));
     server_config.port = port;
     server_config.endpoint = "/rpc-poll";
-    check_int_eq(
+    check_equal(
         turbo_flow_rpc_register_server_adapter(server_flow, "rpc.server.poll", &server_config),
         TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_register_stage_ex(server_flow, "handler", rpc_echo_handler, &state, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(server_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(server_flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(server_flow, server_dsl, strlen(server_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(server_flow), TURBO_OK);
+    check_equal(turbo_flow_start(server_flow), TURBO_OK);
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/rpc-poll", (unsigned)port);
     memset(&client_config, 0, sizeof(client_config));
@@ -389,24 +389,24 @@ spec("turbo_flow_rpc") {
     client_config.timeout_ms = 2000;
     client_config.poll_params = params;
     client_config.poll_interval_ms = 20;
-    check_int_eq(
+    check_equal(
         turbo_flow_rpc_register_client_adapter(client_flow, "rpc.client.poll", &client_config),
         TURBO_OK);
-    check_int_eq(turbo_flow_register_stage_ex(client_flow, "capture", rpc_capture, &state, NULL),
+    check_equal(turbo_flow_register_stage_ex(client_flow, "capture", rpc_capture, &state, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(client_flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(client_flow, client_dsl, strlen(client_dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(client_flow), TURBO_OK);
+    check_equal(turbo_flow_start(client_flow), TURBO_OK);
     for (int i = 0;
          i < 200 && atomic_load_explicit(&state.capture_called, memory_order_acquire) == 0; ++i) {
       turbo_sleep_ms(10);
     }
-    check_int_gt(atomic_load_explicit(&state.handler_called, memory_order_acquire), 0);
-    check_int_gt(atomic_load_explicit(&state.capture_called, memory_order_acquire), 0);
-    check_size_eq(state.payload_len, sizeof(params) - 1);
-    check_mem_eq(state.payload, params, sizeof(params) - 1);
-    check_int_eq(turbo_flow_stop(client_flow), TURBO_OK);
-    check_int_eq(turbo_flow_stop(server_flow), TURBO_OK);
+    check_greater(atomic_load_explicit(&state.handler_called, memory_order_acquire), 0);
+    check_greater(atomic_load_explicit(&state.capture_called, memory_order_acquire), 0);
+    check_equal(state.payload_len, sizeof(params) - 1);
+    check_equal(state.payload, params, sizeof(params) - 1);
+    check_equal(turbo_flow_stop(client_flow), TURBO_OK);
+    check_equal(turbo_flow_stop(server_flow), TURBO_OK);
     turbo_flow_destroy(client_flow);
     turbo_flow_destroy(server_flow);
   }

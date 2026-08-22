@@ -168,20 +168,20 @@ typedef struct turbo_flow_protocol_business_info_s {
    {0},                                                                                            \
    {0}}
 
-CXX_C_API int turbo_flow_protocol_business_consume_committed(
+TURBO_FLOW_C_API int turbo_flow_protocol_business_consume_committed(
     turbo_flow_protocol_business_t *business, const turbo_flow_protocol_business_event_view_t *event);
 
-CXX_C_API int turbo_flow_protocol_business_prepare_command(
+TURBO_FLOW_C_API int turbo_flow_protocol_business_prepare_command(
     turbo_flow_protocol_business_t *business,
     const turbo_flow_protocol_business_command_request_t *request,
     turbo_flow_protocol_business_command_output_t *output);
 
 /** Create a borrowed protocol command view over a validated command output. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_business_command_view(const turbo_flow_protocol_business_command_output_t *output,
                                          turbo_flow_protocol_command_view_t *view);
 
-CXX_C_API int turbo_flow_protocol_business_get_info(const turbo_flow_protocol_business_t *business,
+TURBO_FLOW_C_API int turbo_flow_protocol_business_get_info(const turbo_flow_protocol_business_t *business,
                                                    turbo_flow_protocol_business_info_t *out);
 
 typedef struct turbo_flow_protocol_business_open_request_s {
@@ -241,33 +241,33 @@ typedef struct turbo_flow_protocol_business_plugin_api_s {
 typedef const turbo_flow_protocol_business_plugin_api_t *(
     *turbo_flow_protocol_business_plugin_get_api_fn)(void);
 
-CXX_C_API const turbo_flow_protocol_business_plugin_api_t *
+TURBO_FLOW_C_API const turbo_flow_protocol_business_plugin_api_t *
 turbo_flow_protocol_business_plugin_get_api(void);
 
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_business_registry_create(size_t capacity,
                                             turbo_flow_protocol_business_registry_t **out);
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_business_registry_destroy(turbo_flow_protocol_business_registry_t *registry);
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_business_registry_register(turbo_flow_protocol_business_registry_t *registry,
                                               const turbo_flow_protocol_business_plugin_api_t *api);
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_business_registry_load(turbo_flow_protocol_business_registry_t *registry,
                                           const char *path, char *reason, size_t reason_size);
-CXX_C_API const turbo_flow_protocol_business_plugin_api_t *
+TURBO_FLOW_C_API const turbo_flow_protocol_business_plugin_api_t *
 turbo_flow_protocol_business_registry_find(const turbo_flow_protocol_business_registry_t *registry,
                                           const char *business);
 
-CXX_C_API int turbo_flow_protocol_business_owner_create_registered(
+TURBO_FLOW_C_API int turbo_flow_protocol_business_owner_create_registered(
     turbo_flow_protocol_business_registry_t *registry, const char *business,
     const turbo_flow_protocol_business_open_request_t *request,
     turbo_flow_protocol_business_owner_t **out);
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_business_owner_instance(const turbo_flow_protocol_business_owner_t *owner,
                                            turbo_flow_protocol_kind_t expected_protocol,
                                            turbo_flow_protocol_business_t **out);
-CXX_C_API void
+TURBO_FLOW_C_API void
 turbo_flow_protocol_business_owner_destroy(turbo_flow_protocol_business_owner_t *owner);
 
 #ifdef __cplusplus

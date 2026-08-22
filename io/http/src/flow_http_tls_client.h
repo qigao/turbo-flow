@@ -8,10 +8,10 @@
 #include "turbo_str.h"
 
 typedef struct flow_http_tls_client_s {
-  tstr_t ca_file;
-  tstr_t client_cert_file;
-  tstr_t client_key_file;
-  tstr_t client_key_password_ref;
+  tstr ca_file;
+  tstr client_cert_file;
+  tstr client_key_file;
+  tstr client_key_password_ref;
 } flow_http_tls_client_t;
 
 int flow_http_tls_client_init(flow_http_tls_client_t *tls,

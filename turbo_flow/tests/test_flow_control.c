@@ -101,17 +101,17 @@ static turbo_flow_t *control_started_flow_ex(control_adapter_t *adapter,
     resource.ops.metadata = control_adapter_resource_metadata;
     resource.ops.command = control_adapter_resource_command;
     resource.ctx = adapter;
-    check_int_eq(turbo_flow_register_adapter_with_resources(flow, "mock", &ops, adapter, &schema,
+    check_equal(turbo_flow_register_adapter_with_resources(flow, "mock", &ops, adapter, &schema,
                                                             &resource, 1u),
                  TURBO_OK);
   } else {
-    check_int_eq(turbo_flow_register_adapter_ex(flow, "mock", &ops, adapter, &schema), TURBO_OK);
+    check_equal(turbo_flow_register_adapter_ex(flow, "mock", &ops, adapter, &schema), TURBO_OK);
   }
-  check_int_eq(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-  check_int_eq(turbo_flow_register_stage_ex(flow, "transform", control_noop_stage, NULL, NULL),
+  check_equal(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
+  check_equal(turbo_flow_register_stage_ex(flow, "transform", control_noop_stage, NULL, NULL),
                TURBO_OK);
-  check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-  check_int_eq(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_compile(flow), TURBO_OK);
+  check_equal(turbo_flow_start(flow), TURBO_OK);
   return flow;
 }
 
@@ -125,20 +125,20 @@ spec("control_dsl") {
     turbo_flow_error_t error;
     const char *resize = "pool transform thread resize 4 timeout 5000";
     const char *conditional = "when pool.transform.thread.parallelism == 2 then flow pause";
-    check_int_eq(turbo_flow_control_parse(resize, strlen(resize), &command, &error), TURBO_OK);
-    check_int_eq(command.kind, TURBO_FLOW_CONTROL_RESIZE_POOL);
-    check_str_eq(command.target, "transform");
-    check_uint_eq(command.parallelism, 4u);
-    check_size_eq(command.timeout_ms, 5000u);
-    check_int_eq(turbo_flow_control_parse(conditional, strlen(conditional), &command, &error),
+    check_equal(turbo_flow_control_parse(resize, strlen(resize), &command, &error), TURBO_OK);
+    check_equal(command.kind, TURBO_FLOW_CONTROL_RESIZE_POOL);
+    check_equal(command.target, "transform");
+    check_equal(command.parallelism, 4u);
+    check_equal(command.timeout_ms, 5000u);
+    check_equal(turbo_flow_control_parse(conditional, strlen(conditional), &command, &error),
                  TURBO_OK);
-    check_int_eq(command.kind, TURBO_FLOW_CONTROL_PAUSE);
-    check_str_eq(command.condition, "pool.transform.thread.parallelism == 2");
-    check_int_eq(turbo_flow_control_parse("adapter host.path quiesce",
+    check_equal(command.kind, TURBO_FLOW_CONTROL_PAUSE);
+    check_equal(command.condition, "pool.transform.thread.parallelism == 2");
+    check_equal(turbo_flow_control_parse("adapter host.path quiesce",
                                           sizeof("adapter host.path quiesce") - 1u, &command,
                                           &error),
                  TURBO_OK);
-    check_str_eq(command.target, "host.path");
+    check_equal(command.target, "host.path");
   }
 
   it("executes one action only when core snapshot facts match") {
@@ -147,11 +147,11 @@ spec("control_dsl") {
     turbo_flow_error_t error;
     const char *false_rule = "if runtime.active_publishes > 0 then flow pause";
     const char *true_rule = "when pool.transform.thread.parallelism == 2 then adapter mock quiesce";
-    check_int_eq(turbo_flow_control_ex(flow, false_rule, strlen(false_rule), NULL, &error),
+    check_equal(turbo_flow_control_ex(flow, false_rule, strlen(false_rule), NULL, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_control(flow, true_rule, strlen(true_rule)), TURBO_OK);
-    check_int_eq(adapter.commands, 1);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_control(flow, true_rule, strlen(true_rule)), TURBO_OK);
+    check_equal(adapter.commands, 1);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -159,12 +159,12 @@ spec("control_dsl") {
     control_adapter_t adapter = {0};
     turbo_flow_t *flow = control_started_flow_ex(&adapter, 1);
     const char *command = "adapter mock quiesce";
-    check_int_eq(turbo_flow_control(flow, command, strlen(command)), TURBO_OK);
-    check_int_eq(adapter.commands, 0);
-    check_int_eq(adapter.resource_commands, 1);
-    check_int_eq(adapter.last_resource_command, TURBO_FLOW_RESOURCE_COMMAND_QUIESCE);
-    check_size_eq(adapter.generation, 2u);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_control(flow, command, strlen(command)), TURBO_OK);
+    check_equal(adapter.commands, 0);
+    check_equal(adapter.resource_commands, 1);
+    check_equal(adapter.last_resource_command, TURBO_FLOW_RESOURCE_COMMAND_QUIESCE);
+    check_equal(adapter.generation, 2u);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -173,11 +173,11 @@ spec("control_dsl") {
     turbo_flow_t *flow = control_started_flow(&adapter);
     turbo_flow_pool_snapshot_t pool;
     const char *command = "pool transform thread resize 3 timeout 5000";
-    check_int_eq(turbo_flow_control(flow, command, strlen(command)), TURBO_OK);
-    check_int_eq(turbo_flow_pool_snapshot_at(flow, 0u, &pool), TURBO_OK);
-    check_int_eq(pool.kind, TURBO_FLOW_POOL_THREAD);
-    check_uint_eq(pool.parallelism, 3u);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_control(flow, command, strlen(command)), TURBO_OK);
+    check_equal(turbo_flow_pool_snapshot_at(flow, 0u, &pool), TURBO_OK);
+    check_equal(pool.kind, TURBO_FLOW_POOL_THREAD);
+    check_equal(pool.parallelism, 3u);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -187,12 +187,12 @@ spec("control_dsl") {
     turbo_flow_t *flow = control_started_flow(&adapter);
     const char *unknown = "if system.missing > 0 then flow pause";
     const char *wrong_type = "if runtime.stage_count then flow pause";
-    check_int_eq(turbo_flow_control_ex(flow, unknown, strlen(unknown), NULL, &error), TURBO_ENOENT);
-    check_str_contains(error.message, "unknown external field");
-    check_int_eq(turbo_flow_control_ex(flow, wrong_type, strlen(wrong_type), NULL, &error),
+    check_equal(turbo_flow_control_ex(flow, unknown, strlen(unknown), NULL, &error), TURBO_ENOENT);
+    check_contains(error.message, "unknown external field");
+    check_equal(turbo_flow_control_ex(flow, wrong_type, strlen(wrong_type), NULL, &error),
                  TURBO_EINVAL);
-    check_str_contains(error.message, "BOOL");
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_contains(error.message, "BOOL");
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -209,12 +209,12 @@ spec("control_dsl") {
     facts.schema = &schema;
     facts.read_field = control_external_read;
     facts.ctx = &invalid_type;
-    check_int_eq(turbo_flow_control_ex(flow, rule, strlen(rule), &facts, &error), TURBO_OK);
-    check_int_eq(adapter.commands, 1);
+    check_equal(turbo_flow_control_ex(flow, rule, strlen(rule), &facts, &error), TURBO_OK);
+    check_equal(adapter.commands, 1);
     invalid_type = 1;
-    check_int_eq(turbo_flow_control_ex(flow, rule, strlen(rule), &facts, &error), TURBO_EPROTO);
-    check_int_eq(adapter.commands, 1);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_control_ex(flow, rule, strlen(rule), &facts, &error), TURBO_EPROTO);
+    check_equal(adapter.commands, 1);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -224,11 +224,11 @@ spec("control_dsl") {
     turbo_flow_t *flow = control_started_flow_ex(&adapter, 1);
     const char *command = "adapter mock resume";
     adapter.result = TURBO_EIO;
-    check_int_eq(turbo_flow_control_ex(flow, command, strlen(command), NULL, &error), TURBO_EIO);
-    check_int_eq(adapter.commands, 0);
-    check_int_eq(adapter.resource_commands, 1);
-    check_str_contains(error.message, "command failed");
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_control_ex(flow, command, strlen(command), NULL, &error), TURBO_EIO);
+    check_equal(adapter.commands, 0);
+    check_equal(adapter.resource_commands, 1);
+    check_contains(error.message, "command failed");
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -243,21 +243,21 @@ spec("control_dsl") {
     command.size = sizeof(command);
     command.kind = TURBO_FLOW_CONTROL_PAUSE;
     memset(command.condition, 'x', sizeof(command.condition));
-    check_int_eq(turbo_flow_control_execute_ex(flow, &command, NULL, &error), TURBO_EINVAL);
-    check_str_contains(error.message, "invalid");
+    check_equal(turbo_flow_control_execute_ex(flow, &command, NULL, &error), TURBO_EINVAL);
+    check_contains(error.message, "invalid");
 
-    check_int_eq(turbo_flow_control_parse("when runtime.accepting then flow pause",
+    check_equal(turbo_flow_control_parse("when runtime.accepting then flow pause",
                                           sizeof("when runtime.accepting then flow pause") - 1u,
                                           &command, &error),
                  TURBO_OK);
     facts.schema = &missing_fields;
     facts.read_field = control_external_read;
     facts.ctx = &adapter.result;
-    check_int_eq(turbo_flow_control_execute_ex(flow, &command, &facts, &error), TURBO_EINVAL);
-    check_str_contains(error.message, "collect control facts");
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
-    check_int_eq(turbo_flow_control_execute_ex(flow, &command, NULL, &error), TURBO_EINVAL);
-    check_str_contains(error.message, "started flow");
+    check_equal(turbo_flow_control_execute_ex(flow, &command, &facts, &error), TURBO_EINVAL);
+    check_contains(error.message, "collect control facts");
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_control_execute_ex(flow, &command, NULL, &error), TURBO_EINVAL);
+    check_contains(error.message, "started flow");
     turbo_flow_destroy(flow);
   }
 }

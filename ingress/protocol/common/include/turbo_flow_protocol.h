@@ -1,6 +1,7 @@
 #ifndef TURBO_FLOW_PROTOCOL_H
 #define TURBO_FLOW_PROTOCOL_H
 
+#include "turbo_flow_export.h"
 #include "platform.h"
 
 #include <stddef.h>
@@ -181,7 +182,7 @@ typedef struct turbo_flow_protocol_command_view_s {
  * status is TURBO_OK for successful settlement, otherwise the terminal
  * settlement error that the codec maps to a protocol-defined rejection.
  */
-CXX_C_API int turbo_flow_protocol_reply(
+TURBO_FLOW_C_API int turbo_flow_protocol_reply(
     turbo_flow_protocol_t *protocol,
     const turbo_flow_protocol_frame_view_t *request, int status,
     turbo_flow_protocol_frame_output_t *output);
@@ -193,7 +194,7 @@ CXX_C_API int turbo_flow_protocol_reply(
  * must choose semantic encoding explicitly; malformed raw frames never fall
  * back to a different interpretation.
  */
-CXX_C_API int turbo_flow_protocol_encode(
+TURBO_FLOW_C_API int turbo_flow_protocol_encode(
     turbo_flow_protocol_t *protocol,
     const turbo_flow_protocol_command_view_t *command,
     turbo_flow_protocol_frame_output_t *output);
@@ -205,17 +206,17 @@ CXX_C_API int turbo_flow_protocol_encode(
  * sequence and correlation data are returned separately in metadata. No MQTT
  * topic, QoS, retain flag, broker state or product session enters this boundary.
  */
-CXX_C_API int turbo_flow_protocol_decode(
+TURBO_FLOW_C_API int turbo_flow_protocol_decode(
     turbo_flow_protocol_t *protocol,
     const turbo_flow_protocol_frame_view_t *frame,
     turbo_flow_protocol_message_output_t *output);
 
 /** Return the stable lowercase name of a protocol kind, or NULL if invalid. */
-CXX_C_API const char *
+TURBO_FLOW_C_API const char *
 turbo_flow_protocol_kind_name(turbo_flow_protocol_kind_t protocol);
 
 /** Copy immutable identity, capability, version, and frame-limit metadata. */
-CXX_C_API int turbo_flow_protocol_get_info(
+TURBO_FLOW_C_API int turbo_flow_protocol_get_info(
     const turbo_flow_protocol_t *protocol, turbo_flow_protocol_info_t *out);
 
 typedef struct turbo_flow_protocol_service_s {
@@ -259,7 +260,7 @@ typedef struct turbo_flow_protocol_plugin_api_s {
 typedef const turbo_flow_protocol_plugin_api_t *
 (*turbo_flow_protocol_plugin_get_api_fn)(void);
 
-CXX_C_API const turbo_flow_protocol_plugin_api_t *
+TURBO_FLOW_C_API const turbo_flow_protocol_plugin_api_t *
 turbo_flow_protocol_plugin_get_api(void);
 
 /**
@@ -268,33 +269,33 @@ turbo_flow_protocol_plugin_get_api(void);
  * Direct registrations are borrowed. Dynamically loaded modules are owned by
  * the registry and remain loaded while an owner exists.
  */
-CXX_C_API int turbo_flow_protocol_registry_create(
+TURBO_FLOW_C_API int turbo_flow_protocol_registry_create(
     size_t capacity, turbo_flow_protocol_registry_t **out);
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_protocol_registry_destroy(turbo_flow_protocol_registry_t *registry);
-CXX_C_API int turbo_flow_protocol_registry_register(
+TURBO_FLOW_C_API int turbo_flow_protocol_registry_register(
     turbo_flow_protocol_registry_t *registry,
     const turbo_flow_protocol_plugin_api_t *api);
-CXX_C_API int turbo_flow_protocol_registry_load(
+TURBO_FLOW_C_API int turbo_flow_protocol_registry_load(
     turbo_flow_protocol_registry_t *registry, const char *path, char *reason,
     size_t reason_size);
-CXX_C_API const turbo_flow_protocol_plugin_api_t *
+TURBO_FLOW_C_API const turbo_flow_protocol_plugin_api_t *
 turbo_flow_protocol_registry_find(const turbo_flow_protocol_registry_t *registry,
                                  const char *name);
 
-CXX_C_API int turbo_flow_protocol_owner_create_registered(
+TURBO_FLOW_C_API int turbo_flow_protocol_owner_create_registered(
     turbo_flow_protocol_registry_t *registry, const char *name,
     const turbo_flow_protocol_open_request_t *request,
     turbo_flow_protocol_owner_t **out);
-CXX_C_API int turbo_flow_protocol_owner_instance(
+TURBO_FLOW_C_API int turbo_flow_protocol_owner_instance(
     const turbo_flow_protocol_owner_t *owner,
     turbo_flow_protocol_kind_t expected_protocol,
     turbo_flow_protocol_t **out);
-CXX_C_API const char *
+TURBO_FLOW_C_API const char *
 turbo_flow_protocol_owner_name(const turbo_flow_protocol_owner_t *owner);
-CXX_C_API turbo_flow_protocol_kind_t
+TURBO_FLOW_C_API turbo_flow_protocol_kind_t
 turbo_flow_protocol_owner_protocol(const turbo_flow_protocol_owner_t *owner);
-CXX_C_API void turbo_flow_protocol_owner_destroy(
+TURBO_FLOW_C_API void turbo_flow_protocol_owner_destroy(
     turbo_flow_protocol_owner_t *owner);
 
 #ifdef __cplusplus

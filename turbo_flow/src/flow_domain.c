@@ -27,18 +27,18 @@ void flow_module_registration_destroy(flow_module_registration_t *module) {
   if (!module) return;
   tstr_freep(&module->name);
   for (i = 0; i < turbo_vec_size(&module->primitive_types); ++i) {
-    tstr_t *value = (tstr_t *)turbo_vec_at(&module->primitive_types, i);
+    tstr *value = (tstr *)turbo_vec_at(&module->primitive_types, i);
     if (value) tstr_freep(value);
   }
   for (i = 0; i < turbo_vec_size(&module->operation_names); ++i) {
-    tstr_t *value = (tstr_t *)turbo_vec_at(&module->operation_names, i);
+    tstr *value = (tstr *)turbo_vec_at(&module->operation_names, i);
     if (value) tstr_freep(value);
   }
   for (i = 0; i < turbo_vec_size(&module->requirements); ++i) {
     turbo_flow_module_requirement_t *requirement =
         (turbo_flow_module_requirement_t *)turbo_vec_at(&module->requirements, i);
     if (requirement && requirement->module_name) {
-      tstr_t owned_name = (tstr_t)requirement->module_name;
+      tstr owned_name = (tstr)requirement->module_name;
       tstr_freep(&owned_name);
       requirement->module_name = NULL;
     }
@@ -91,7 +91,7 @@ int flow_find_operation_export_module(const turbo_flow_t *flow, const char *oper
     size_t j;
     if (!module) continue;
     for (j = 0; j < turbo_vec_size(&module->operation_names); ++j) {
-      const tstr_t *name = (const tstr_t *)turbo_vec_at_const(&module->operation_names, j);
+      const tstr *name = (const tstr *)turbo_vec_at_const(&module->operation_names, j);
       if (name && *name && strcmp(*name, operation_name) == 0) return (int)i;
     }
   }
@@ -311,7 +311,7 @@ static int flow_module_exports_operation(const flow_module_registration_t *modul
   size_t i;
   if (!module || !operation_name) return 0;
   for (i = 0; i < turbo_vec_size(&module->operation_names); ++i) {
-    const tstr_t *name = (const tstr_t *)turbo_vec_at_const(&module->operation_names, i);
+    const tstr *name = (const tstr *)turbo_vec_at_const(&module->operation_names, i);
     if (name && *name && strcmp(*name, operation_name) == 0) return 1;
   }
   return 0;
@@ -322,7 +322,7 @@ static int flow_module_exports_primitive_type(const flow_module_registration_t *
   size_t i;
   if (!module || !type_name) return 0;
   for (i = 0; i < turbo_vec_size(&module->primitive_types); ++i) {
-    const tstr_t *name = (const tstr_t *)turbo_vec_at_const(&module->primitive_types, i);
+    const tstr *name = (const tstr *)turbo_vec_at_const(&module->primitive_types, i);
     if (name && *name && strcmp(*name, type_name) == 0) return 1;
   }
   return 0;
@@ -333,7 +333,7 @@ static int flow_module_copy_string_array(turbo_vec_t *target, const char *const 
   size_t i;
   if (count != 0u && turbo_vec_reserve(target, count) != TURBO_OK) return TURBO_ENOMEM;
   for (i = 0; i < count; ++i) {
-    tstr_t value = tstr_dup(values[i]);
+    tstr value = tstr_dup(values[i]);
     if (!value) return TURBO_ENOMEM;
     if (turbo_vec_push(target, &value) != TURBO_OK) {
       tstr_freep(&value);
@@ -415,8 +415,8 @@ int turbo_flow_register_module(turbo_flow_t *flow,
   }
 
   memset(&module, 0, sizeof(module));
-  if (turbo_vec_init(&module.primitive_types, sizeof(tstr_t)) != TURBO_OK ||
-      turbo_vec_init(&module.operation_names, sizeof(tstr_t)) != TURBO_OK ||
+  if (turbo_vec_init(&module.primitive_types, sizeof(tstr)) != TURBO_OK ||
+      turbo_vec_init(&module.operation_names, sizeof(tstr)) != TURBO_OK ||
       turbo_vec_init(&module.requirements, sizeof(turbo_flow_module_requirement_t)) != TURBO_OK) {
     flow_module_registration_destroy(&module);
     return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
@@ -437,7 +437,7 @@ int turbo_flow_register_module(turbo_flow_t *flow,
     requirement.module_name = tstr_dup(descriptor->requirements[i].module_name);
     if (!requirement.module_name || turbo_vec_push(&module.requirements, &requirement) != TURBO_OK) {
       if (requirement.module_name) {
-        tstr_t owned_name = (tstr_t)requirement.module_name;
+        tstr owned_name = (tstr)requirement.module_name;
         tstr_freep(&owned_name);
       }
       rc = TURBO_ENOMEM;

@@ -145,25 +145,25 @@ typedef struct turbo_flow_protocol_runtime_snapshot_s {
  * must not re-enter this runtime. All mutating APIs must be called by the same
  * serialized transport/event-loop owner.
  */
-CXX_C_API int turbo_flow_protocol_runtime_create(
+TURBO_FLOW_C_API int turbo_flow_protocol_runtime_create(
     turbo_flow_protocol_t *protocol,
     const turbo_flow_protocol_runtime_config_t *config,
     const turbo_flow_protocol_runtime_ops_t *ops, void *ctx,
     turbo_flow_protocol_runtime_t **out);
-CXX_C_API int turbo_flow_protocol_runtime_destroy(
+TURBO_FLOW_C_API int turbo_flow_protocol_runtime_destroy(
     turbo_flow_protocol_runtime_t *runtime);
 
-CXX_C_API int turbo_flow_protocol_runtime_session_open(
+TURBO_FLOW_C_API int turbo_flow_protocol_runtime_session_open(
     turbo_flow_protocol_runtime_t *runtime,
     const turbo_flow_protocol_session_open_request_t *request);
-CXX_C_API int turbo_flow_protocol_runtime_session_feed(
+TURBO_FLOW_C_API int turbo_flow_protocol_runtime_session_feed(
     turbo_flow_protocol_runtime_t *runtime, uint64_t session_id,
     uint64_t generation, const uint8_t *data, size_t size,
     turbo_flow_protocol_feed_result_t *result);
-CXX_C_API int turbo_flow_protocol_runtime_settle(
+TURBO_FLOW_C_API int turbo_flow_protocol_runtime_settle(
     turbo_flow_protocol_runtime_t *runtime, uint64_t delivery_id, int status,
     turbo_flow_protocol_feed_result_t *result);
-CXX_C_API int turbo_flow_protocol_runtime_session_close(
+TURBO_FLOW_C_API int turbo_flow_protocol_runtime_session_close(
     turbo_flow_protocol_runtime_t *runtime, uint64_t session_id,
     uint64_t generation, int status);
 
@@ -173,14 +173,14 @@ CXX_C_API int turbo_flow_protocol_runtime_session_close(
  * Sessions without pending settlement close immediately. Pending sessions
  * remain DRAINING until settle(). No new session/feed is admitted.
  */
-CXX_C_API int turbo_flow_protocol_runtime_begin_shutdown(
+TURBO_FLOW_C_API int turbo_flow_protocol_runtime_begin_shutdown(
     turbo_flow_protocol_runtime_t *runtime);
 
 /** Cancel all pending ownership and close every session deterministically. */
-CXX_C_API int turbo_flow_protocol_runtime_force_shutdown(
+TURBO_FLOW_C_API int turbo_flow_protocol_runtime_force_shutdown(
     turbo_flow_protocol_runtime_t *runtime, int status);
 
-CXX_C_API int turbo_flow_protocol_runtime_snapshot(
+TURBO_FLOW_C_API int turbo_flow_protocol_runtime_snapshot(
     const turbo_flow_protocol_runtime_t *runtime,
     turbo_flow_protocol_runtime_snapshot_t *out);
 

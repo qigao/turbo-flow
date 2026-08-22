@@ -121,7 +121,7 @@ spec("flow_discovery") {
     config.flow = flow;
     config.adapter_names = adapter_names;
     config.adapter_count = 2u;
-    check_int_eq(turbo_flow_discovery_controller_create(&config, &controller), TURBO_OK);
+    check_equal(turbo_flow_discovery_controller_create(&config, &controller), TURBO_OK);
     check_not_null(controller);
     check_false(first.active);
     check_false(second.active);
@@ -130,47 +130,47 @@ spec("flow_discovery") {
     list.registry_version = 1u;
     list.peers = peers;
     list.peer_count = 1u;
-    check_int_eq(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
-    check_uint_eq(result.added, 1u);
-    check_uint_eq(turbo_flow_discovery_registry_version(controller), 1u);
-    check_uint_eq(turbo_flow_discovery_active_peer_count(controller), 1u);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
+    check_equal(result.added, 1u);
+    check_equal(turbo_flow_discovery_registry_version(controller), 1u);
+    check_equal(turbo_flow_discovery_active_peer_count(controller), 1u);
     check_true(first.active);
-    check_str_eq(first.host, "127.0.0.1");
-    check_int_eq(first.port, 7101);
+    check_equal(first.host, "127.0.0.1");
+    check_equal(first.port, 7101);
 
     commands_before = first.command_count + second.command_count;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_int_eq(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
-    check_uint_eq(result.unchanged, 1u);
-    check_int_eq(first.command_count + second.command_count, commands_before);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
+    check_equal(result.unchanged, 1u);
+    check_equal(first.command_count + second.command_count, commands_before);
 
     peers[0] = discovery_peer("peer-a", "127.0.0.1", 7199);
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_int_eq(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_EPROTO);
-    check_int_eq(first.port, 7101);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_EPROTO);
+    check_equal(first.port, 7101);
 
     peers[0] = discovery_peer("peer-a", "127.0.0.1", 7201);
     peers[1] = discovery_peer("peer-b", "127.0.0.1", 7202);
     list.registry_version = 2u;
     list.peer_count = 2u;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_int_eq(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
-    check_uint_eq(result.updated, 1u);
-    check_uint_eq(result.added, 1u);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
+    check_equal(result.updated, 1u);
+    check_equal(result.added, 1u);
     check_true(second.active);
 
     list.registry_version = 1u;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_int_eq(turbo_flow_discovery_replace_peer_list(controller, &list, &result),
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result),
                  TURBO_EALREADY);
-    check_uint_eq(turbo_flow_discovery_registry_version(controller), 2u);
+    check_equal(turbo_flow_discovery_registry_version(controller), 2u);
 
     peers[0] = discovery_peer("peer-b", "127.0.0.1", 7202);
     list.registry_version = 3u;
     list.peer_count = 1u;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_int_eq(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
-    check_uint_eq(result.removed, 1u);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
+    check_equal(result.removed, 1u);
     check_false(first.active);
     check_true(second.active);
 
@@ -178,10 +178,10 @@ spec("flow_discovery") {
     source.ctx = &source_probe;
     commands_before = first.command_count + second.command_count;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_int_eq(turbo_flow_discovery_poll(controller, &source, &result), TURBO_EIO);
-    check_int_eq(source_probe.calls, 1);
-    check_int_eq(first.command_count + second.command_count, commands_before);
-    check_uint_eq(turbo_flow_discovery_registry_version(controller), 3u);
+    check_equal(turbo_flow_discovery_poll(controller, &source, &result), TURBO_EIO);
+    check_equal(source_probe.calls, 1);
+    check_equal(first.command_count + second.command_count, commands_before);
+    check_equal(turbo_flow_discovery_registry_version(controller), 3u);
 
     peers[0] = discovery_peer("peer-c", "127.0.0.1", 7401);
     peers[1] = discovery_peer("peer-b", "127.0.0.1", 7402);
@@ -189,17 +189,17 @@ spec("flow_discovery") {
     list.peer_count = 2u;
     second.fail_next_replace = 1;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_int_eq(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_EIO);
-    check_int_eq(result.status, TURBO_EIO);
-    check_int_eq(result.rollback_status, TURBO_OK);
-    check_uint_eq(turbo_flow_discovery_registry_version(controller), 3u);
-    check_uint_eq(turbo_flow_discovery_active_peer_count(controller), 1u);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_EIO);
+    check_equal(result.status, TURBO_EIO);
+    check_equal(result.rollback_status, TURBO_OK);
+    check_equal(turbo_flow_discovery_registry_version(controller), 3u);
+    check_equal(turbo_flow_discovery_active_peer_count(controller), 1u);
     check_false(first.active);
     check_true(second.active);
-    check_int_eq(second.port, 7202);
+    check_equal(second.port, 7202);
 
     turbo_flow_discovery_controller_destroy(controller);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 }

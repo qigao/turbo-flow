@@ -59,7 +59,7 @@ typedef struct turbo_flow_rpc_http_client_binding_s {
   {sizeof(turbo_flow_rpc_http_client_binding_t), NULL, 0}
 
 /** Register a JSON-RPC server boundary used by one source and one terminal reply stage. */
-CXX_C_API int turbo_flow_rpc_register_server_adapter(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_rpc_register_server_adapter(turbo_flow_t *flow, const char *name,
                                                      const turbo_flow_rpc_server_config_t *config);
 
 /**
@@ -67,7 +67,7 @@ CXX_C_API int turbo_flow_rpc_register_server_adapter(turbo_flow_t *flow, const c
  *
  * This entry creates and owns a private synchronous TurboHTTP facade (H1).
  */
-CXX_C_API int turbo_flow_rpc_register_client_adapter(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_rpc_register_client_adapter(turbo_flow_t *flow, const char *name,
                                                      const turbo_flow_rpc_client_config_t *config);
 
 /**
@@ -80,23 +80,23 @@ CXX_C_API int turbo_flow_rpc_register_client_adapter(turbo_flow_t *flow, const c
  * turbo_http_create_sync() and keeps its own timeout; configured bearer
  * credentials are applied to it during registration.
  */
-CXX_C_API int turbo_flow_rpc_register_client_adapter_ex(
+TURBO_FLOW_C_API int turbo_flow_rpc_register_client_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_rpc_client_config_t *config,
     const turbo_flow_rpc_http_client_binding_t *binding);
 
 /** Register an owned RPC server from adapter kind `rpc` in a resolved YAML snapshot. */
-CXX_C_API int turbo_flow_rpc_register_server_resolved_adapter(
+TURBO_FLOW_C_API int turbo_flow_rpc_register_server_resolved_adapter(
     turbo_flow_t *flow, const turbo_flow_resolved_config_t *resolved, const char *adapter_name);
 
 /**
  * Register an owned RPC client from adapter kind `rpc` in a resolved YAML snapshot.
  * Host object field http_client is not accepted from YAML.
  */
-CXX_C_API int turbo_flow_rpc_register_client_resolved_adapter(
+TURBO_FLOW_C_API int turbo_flow_rpc_register_client_resolved_adapter(
     turbo_flow_t *flow, const turbo_flow_resolved_config_t *resolved, const char *adapter_name);
 
 /** Return the current server request method, or NULL outside an RPC server dispatch. */
-CXX_C_API const char *turbo_flow_rpc_request_method(const turbo_flow_msg_t *msg);
+TURBO_FLOW_C_API const char *turbo_flow_rpc_request_method(const turbo_flow_msg_t *msg);
 
 #ifdef __cplusplus
 }

@@ -25,13 +25,13 @@ typedef struct turbo_flow_control_facts_s {
   {sizeof(turbo_flow_control_facts_t), NULL, NULL, NULL}
 
 /** Execute a parsed command with optional host-owned typed snapshot facts. */
-CXX_C_API int turbo_flow_control_execute_ex(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_control_execute_ex(turbo_flow_t *flow,
                                             const turbo_flow_control_command_t *command,
                                             const turbo_flow_control_facts_t *facts,
                                             turbo_flow_error_t *error);
 
 /** Parse and execute one command with optional host-owned typed snapshot facts. */
-CXX_C_API int turbo_flow_control_ex(turbo_flow_t *flow, const char *text, size_t len,
+TURBO_FLOW_C_API int turbo_flow_control_ex(turbo_flow_t *flow, const char *text, size_t len,
                                     const turbo_flow_control_facts_t *facts,
                                     turbo_flow_error_t *error);
 

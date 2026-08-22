@@ -97,21 +97,21 @@ static unsigned short test_pick_loopback_port(void) {
   return port;
 }
 
-static int smtp_buffer_pop_line(tstr_t *buffer, char *line, size_t line_cap) {
+static int smtp_buffer_pop_line(tstr *buffer, char *line, size_t line_cap) {
   size_t pos;
   size_t line_len;
-  tstr_t rest;
+  tstr rest;
 
   if (!buffer || !*buffer || !line || line_cap == 0) return 0;
   pos = tstr_find_char(*buffer, '\n');
-  if (pos == TSTR_V_NPOS) return 0;
+  if (pos == VSTR_NPOS) return 0;
 
   line_len = pos + 1u;
   if (line_len >= line_cap) line_len = line_cap - 1u;
   memcpy(line, *buffer, line_len);
   line[line_len] = '\0';
 
-  rest = tstr_from_v(tstr_v_from_buf(*buffer + pos + 1u, tstr_len(*buffer) - pos - 1u));
+  rest = tstr_from_v(vstr_from_buf(*buffer + pos + 1u, tstr_len(*buffer) - pos - 1u));
   tstr_freep(buffer);
   *buffer = rest;
   return *buffer ? 1 : 0;
@@ -131,7 +131,7 @@ static void smtp_capture_line(char *dst, size_t dst_cap, const char *line) {
 
 static void smtp_server_handler(coro_socket_t *client, void *arg) {
   smtp_server_state_t *state = (smtp_server_state_t *)arg;
-  tstr_t buffer = tstr_new();
+  tstr buffer = tstr_new();
   int in_data = 0;
 
   if (!client || !state || !buffer) return;
@@ -154,15 +154,15 @@ static void smtp_server_handler(coro_socket_t *client, void *arg) {
 
     while (buffer && tstr_len(buffer) > 0) {
       if (in_data) {
-        size_t end = tstr_find_v(buffer, tstr_v_from_buf("\r\n.\r\n", 5));
-        tstr_t rest;
+        size_t end = tstr_find_v(buffer, vstr_from_buf("\r\n.\r\n", 5));
+        tstr rest;
 
-        if (end == TSTR_V_NPOS) break;
+        if (end == VSTR_NPOS) break;
         state->data_len = end < sizeof(state->data) - 1u ? end : sizeof(state->data) - 1u;
         memcpy(state->data, buffer, state->data_len);
         state->data[state->data_len] = '\0';
         state->data_seen = 1;
-        rest = tstr_from_v(tstr_v_from_buf(buffer + end + 5u, tstr_len(buffer) - end - 5u));
+        rest = tstr_from_v(vstr_from_buf(buffer + end + 5u, tstr_len(buffer) - end - 5u));
         tstr_freep(&buffer);
         buffer = rest;
         in_data = 0;
@@ -235,7 +235,7 @@ typedef struct mime_extract_capture_s {
 
 typedef struct email_payload_capture_s {
   int calls;
-  tstr_t payload;
+  tstr payload;
 } email_payload_capture_t;
 
 static int email_payload_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
@@ -248,7 +248,7 @@ static int email_payload_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   return TURBO_OK;
 }
 
-static void mime_copy_view(char *dst, size_t dst_size, tstr_v view) {
+static void mime_copy_view(char *dst, size_t dst_size, vstr view) {
   size_t len;
   if (!dst || dst_size == 0) return;
   len = view.len < dst_size - 1u ? view.len : dst_size - 1u;
@@ -261,7 +261,7 @@ static int mime_extract_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   const turbo_flow_email_mime_message_t *message = turbo_flow_email_msg_mime(msg);
   const turbo_flow_email_mime_entity_t *root;
   const turbo_flow_email_mime_entity_t *part;
-  tstr_v body;
+  vstr body;
   if (!capture || !message) return TURBO_EINVAL;
   root = turbo_flow_email_mime_root(message);
   if (!root) return TURBO_EINVAL;
@@ -330,32 +330,32 @@ spec("turbo_flow_email") {
     smtp.port = 65536;
     smtp.from_email = "sender@example.com";
     smtp.to_email = "recipient@example.com";
-    check_int_eq(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp.invalid", &smtp),
+    check_equal(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp.invalid", &smtp),
                  TURBO_EINVAL);
     smtp.port = 25;
     smtp.timeout_ms = -1;
-    check_int_eq(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp.invalid", &smtp),
+    check_equal(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp.invalid", &smtp),
                  TURBO_EINVAL);
     smtp.timeout_ms = 0;
     smtp.auth_method = SMTP_AUTH_CRAM_MD5 + 1;
-    check_int_eq(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp.invalid", &smtp),
+    check_equal(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp.invalid", &smtp),
                  TURBO_EINVAL);
     smtp.auth_method = SMTP_AUTH_NONE;
     smtp.use_tls = 1;
     smtp.use_starttls = 1;
-    check_int_eq(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp.invalid", &smtp),
+    check_equal(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp.invalid", &smtp),
                  TURBO_EINVAL);
 
     pop3.host = "127.0.0.1";
     pop3.port = 110;
     pop3.poll_interval_ms = 1;
     pop3.timeout_ms = -1;
-    check_int_eq(turbo_flow_email_register_pop3_source_adapter(flow, "pop3.invalid", &pop3),
+    check_equal(turbo_flow_email_register_pop3_source_adapter(flow, "pop3.invalid", &pop3),
                  TURBO_EINVAL);
     pop3.timeout_ms = 0;
     pop3.use_tls = 1;
     pop3.use_stls = 1;
-    check_int_eq(turbo_flow_email_register_pop3_source_adapter(flow, "pop3.invalid", &pop3),
+    check_equal(turbo_flow_email_register_pop3_source_adapter(flow, "pop3.invalid", &pop3),
                  TURBO_EINVAL);
 
     turbo_flow_destroy(flow);
@@ -379,45 +379,45 @@ spec("turbo_flow_email") {
     char endpoint[128];
 
     check_not_null(flow);
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     stall.ctx = coro_context_create(NULL);
     atomic_init(&stall.accepted, 0);
     check_not_null(stall.ctx);
     server = coro_socket_create_tcpv4(stall.ctx);
     check_not_null(server);
-    check_int_eq(coro_socket_listen_on(server, "127.0.0.1", port, pop3_stall_handler, &stall),
+    check_equal(coro_socket_listen_on(server, "127.0.0.1", port, pop3_stall_handler, &stall),
                  TURBO_OK);
-    check_int_eq(turbo_thread_create(&server_thread, pop3_stall_server_thread, &stall), TURBO_OK);
+    check_equal(turbo_thread_create(&server_thread, pop3_stall_server_thread, &stall), TURBO_OK);
 
     config.host = "127.0.0.1";
     config.port = (int)port;
     config.timeout_ms = 30000;
     config.poll_interval_ms = 1000;
-    check_int_eq(turbo_flow_email_register_pop3_source_adapter(flow, "pop3.pending", &config),
+    check_equal(turbo_flow_email_register_pop3_source_adapter(flow, "pop3.pending", &config),
                  TURBO_OK);
     memset(&connection, 0, sizeof(connection));
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
-    check_int_gt(snprintf(endpoint, sizeof(endpoint), "pop3://127.0.0.1:%u",
+    check_equal(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
+    check_greater(snprintf(endpoint, sizeof(endpoint), "pop3://127.0.0.1:%u",
                           (unsigned int)port), 0);
-    check_str_eq(connection.endpoint, endpoint);
-    check_int_eq(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_int_eq(
+    check_equal(connection.endpoint, endpoint);
+    check_equal(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_equal(
         turbo_flow_register_stage_ex(flow, "capture", email_payload_capture_stage, &capture, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     while (!atomic_load_explicit(&stall.accepted, memory_order_acquire)) turbo_thread_yield();
-    check_int_eq(turbo_flow_control(flow, "adapter pop3.pending quiesce",
+    check_equal(turbo_flow_control(flow, "adapter pop3.pending quiesce",
                                     sizeof("adapter pop3.pending quiesce") - 1u),
                  TURBO_OK);
-    check_int_eq(turbo_flow_control(flow, "adapter pop3.pending resume",
+    check_equal(turbo_flow_control(flow, "adapter pop3.pending resume",
                                     sizeof("adapter pop3.pending resume") - 1u),
                  TURBO_OK);
     started = turbo_hrtime();
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     check_true(turbo_hrtime() - started < UINT64_C(500000000));
-    check_int_eq(capture.calls, 0);
+    check_equal(capture.calls, 0);
     turbo_flow_destroy(flow);
     coro_context_stop(stall.ctx);
     (void)turbo_thread_join(&server_thread);
@@ -442,10 +442,10 @@ spec("turbo_flow_email") {
     memset(&config, 0, sizeof(config));
     check_not_null(flow);
     check_not_null(ctx);
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     server = coro_socket_create_tcpv4(ctx);
     check_not_null(server);
-    check_int_eq(coro_socket_listen_on(server, "127.0.0.1", port, smtp_stall_server_handler,
+    check_equal(coro_socket_listen_on(server, "127.0.0.1", port, smtp_stall_server_handler,
                                        &server_called),
                  TURBO_OK);
     config.context = ctx;
@@ -455,21 +455,21 @@ spec("turbo_flow_email") {
     config.to_email = "recipient@example.com";
     config.timeout_ms = 100;
     config.max_pump_iterations = 1;
-    check_int_eq(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp.pending", &config),
+    check_equal(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp.pending", &config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup("pending body");
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_ETIMEDOUT);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_ETIMEDOUT);
     for (int i = 0; i < 1000 && !server_called; ++i) {
       (void)coro_context_run(ctx, TURBO_RUN_ONCE);
     }
-    check_int_eq(server_called, 1);
+    check_equal(server_called, 1);
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
     coro_socket_destroy(server);
     coro_context_destroy(ctx);
@@ -503,10 +503,10 @@ spec("turbo_flow_email") {
     check_not_null(ctx);
 
     port = test_pick_loopback_port();
-    check_int_gt(port, 0);
+    check_greater(port, 0);
     server = coro_socket_create_tcpv4(ctx);
     check_not_null(server);
-    check_int_eq(
+    check_equal(
         coro_socket_listen_on(server, "127.0.0.1", port, smtp_server_handler, &server_state),
         TURBO_OK);
 
@@ -522,45 +522,45 @@ spec("turbo_flow_email") {
 
     turbo_flow_msg_init(&msg);
     msg.buffer = buffer;
-    msg.payload = tstr_v_from_buf(raw, sizeof(raw) - 1);
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-    check_int_eq(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp", &config), TURBO_OK);
+    check_equal(turbo_flow_email_register_smtp_sink_adapter(flow, "smtp", &config), TURBO_OK);
     adapter_schema = turbo_flow_find_adapter_schema(flow, "smtp");
     check_not_null(adapter_schema);
-    check_int_eq(adapter_schema->kind, TURBO_FLOW_ADAPTER_KIND_EMAIL);
-    check_uint_eq(adapter_schema->roles, TURBO_FLOW_ADAPTER_SINK);
+    check_equal(adapter_schema->kind, TURBO_FLOW_ADAPTER_KIND_EMAIL);
+    check_equal(adapter_schema->roles, TURBO_FLOW_ADAPTER_SINK);
     for (option_index = 0; option_index < adapter_schema->field_count; ++option_index) {
       if (strcmp(adapter_schema->fields[option_index].name, "password") == 0) {
         password_is_secret =
             (adapter_schema->fields[option_index].flags & TURBO_FLOW_OPTION_SECRET_VALUE) != 0;
       }
     }
-    check_int_eq(password_is_secret, 1);
+    check_equal(password_is_secret, 1);
     memset(&connection, 0, sizeof(connection));
-    check_int_eq(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
-    check_int_eq(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
-    check_int_gt(snprintf(expected_endpoint, sizeof(expected_endpoint), "smtp://127.0.0.1:%u",
+    check_equal(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
+    check_equal(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
+    check_greater(snprintf(expected_endpoint, sizeof(expected_endpoint), "smtp://127.0.0.1:%u",
                           (unsigned int)port), 0);
-    check_str_eq(connection.endpoint, expected_endpoint);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(connection.endpoint, expected_endpoint);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
 
     for (int i = 0; i < 1000 && !server_state.quit_seen; ++i) {
       (void)coro_context_run(ctx, TURBO_RUN_ONCE);
     }
 
-    check_int_eq(server_state.handler_called, 1);
-    check_int_eq(server_state.mail_seen, 1);
-    check_int_eq(server_state.rcpt_seen, 1);
-    check_int_eq(server_state.data_seen, 1);
-    check_str_contains(server_state.mail_from, "sender@example.com");
-    check_str_contains(server_state.rcpt_to, "recipient@example.com");
-    check_str_contains(server_state.data, "Subject: Flow SMTP");
-    check_str_contains(server_state.data, "flow payload body");
+    check_equal(server_state.handler_called, 1);
+    check_equal(server_state.mail_seen, 1);
+    check_equal(server_state.rcpt_seen, 1);
+    check_equal(server_state.data_seen, 1);
+    check_contains(server_state.mail_from, "sender@example.com");
+    check_contains(server_state.rcpt_to, "recipient@example.com");
+    check_contains(server_state.data, "Subject: Flow SMTP");
+    check_contains(server_state.data, "flow payload body");
 
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     turbo_flow_msg_cleanup(&msg);
     turbo_flow_destroy(flow);
@@ -586,20 +586,20 @@ spec("turbo_flow_email") {
     config.settings.on_message_complete = mime_complete;
     config.user_data = &capture;
     check_not_null(flow);
-    check_int_eq(turbo_flow_email_register_mime_parser_adapter(flow, "mime.parse", &config),
+    check_equal(turbo_flow_email_register_mime_parser_adapter(flow, "mime.parse", &config),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup(message);
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-    check_int_eq(capture.headers, 4);
-    check_int_eq(capture.bodies, 1);
-    check_int_eq(capture.complete, 1);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(capture.headers, 4);
+    check_equal(capture.bodies, 1);
+    check_equal(capture.complete, 1);
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -618,28 +618,28 @@ spec("turbo_flow_email") {
     turbo_flow_msg_t msg;
     turbo_flow_t *flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_email_register_mime_extract_adapter(flow, "mime.extract", NULL),
+    check_equal(turbo_flow_email_register_mime_extract_adapter(flow, "mime.extract", NULL),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_register_stage_ex(flow, "capture", mime_extract_capture_stage, &capture, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup(message);
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-    check_int_eq(capture.calls, 1);
-    check_uint_eq(capture.root_headers, 3);
-    check_uint_eq(capture.part_count, 0);
-    check_int_eq(capture.root_encoding, MIME_ENCODING_BASE64);
-    check_str_eq(capture.root_content_type, "text/plain; charset=utf-8");
-    check_str_eq(capture.root_charset, "utf-8");
-    check_uint_eq(capture.root_body_len, 6);
-    check_str_eq(capture.root_body, "Hello!");
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(capture.calls, 1);
+    check_equal(capture.root_headers, 3);
+    check_equal(capture.part_count, 0);
+    check_equal(capture.root_encoding, MIME_ENCODING_BASE64);
+    check_equal(capture.root_content_type, "text/plain; charset=utf-8");
+    check_equal(capture.root_charset, "utf-8");
+    check_equal(capture.root_body_len, 6);
+    check_equal(capture.root_body, "Hello!");
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -663,28 +663,28 @@ spec("turbo_flow_email") {
     turbo_flow_msg_t msg;
     turbo_flow_t *flow = turbo_flow_create();
     check_not_null(flow);
-    check_int_eq(turbo_flow_email_register_mime_extract_adapter(flow, "mime.extract", NULL),
+    check_equal(turbo_flow_email_register_mime_extract_adapter(flow, "mime.extract", NULL),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_register_stage_ex(flow, "capture", mime_extract_capture_stage, &capture, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup(message);
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-    check_int_eq(capture.calls, 1);
-    check_uint_eq(capture.part_count, 2);
-    check_str_eq(capture.first_body, "Hello World");
-    check_uint_eq(capture.first_body_len, 11);
-    check_uint_eq(capture.second_body_len, sizeof(expected_binary));
-    check_int_eq(memcmp(capture.second_body, expected_binary, sizeof(expected_binary)), 0);
-    check_int_eq(capture.second_disposition, MIME_DISPOSITION_ATTACHMENT);
-    check_str_eq(capture.second_filename, "sample.bin");
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(capture.calls, 1);
+    check_equal(capture.part_count, 2);
+    check_equal(capture.first_body, "Hello World");
+    check_equal(capture.first_body_len, 11);
+    check_equal(capture.second_body_len, sizeof(expected_binary));
+    check_equal(memcmp(capture.second_body, expected_binary, sizeof(expected_binary)), 0);
+    check_equal(capture.second_disposition, MIME_DISPOSITION_ATTACHMENT);
+    check_equal(capture.second_filename, "sample.bin");
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -702,21 +702,21 @@ spec("turbo_flow_email") {
     turbo_flow_t *flow = turbo_flow_create();
     config.max_headers = 1;
     check_not_null(flow);
-    check_int_eq(turbo_flow_email_register_mime_extract_adapter(flow, "mime.extract", &config),
+    check_equal(turbo_flow_email_register_mime_extract_adapter(flow, "mime.extract", &config),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_register_stage_ex(flow, "capture", mime_extract_capture_stage, &capture, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup(message);
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_EFBIG);
-    check_int_eq(capture.calls, 0);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EFBIG);
+    check_equal(capture.calls, 0);
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -734,21 +734,21 @@ spec("turbo_flow_email") {
     turbo_flow_t *flow = turbo_flow_create();
     config.max_decoded_bytes = 5;
     check_not_null(flow);
-    check_int_eq(turbo_flow_email_register_mime_extract_adapter(flow, "mime.extract", &config),
+    check_equal(turbo_flow_email_register_mime_extract_adapter(flow, "mime.extract", &config),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_register_stage_ex(flow, "capture", mime_extract_capture_stage, &capture, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup(message);
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_EFBIG);
-    check_int_eq(capture.calls, 0);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EFBIG);
+    check_equal(capture.calls, 0);
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -778,31 +778,31 @@ spec("turbo_flow_email") {
     config.attachments = &attachment;
     config.attachment_count = 1;
     check_not_null(flow);
-    check_int_eq(turbo_flow_email_register_mime_encode_adapter(flow, "mime.encode", &config),
+    check_equal(turbo_flow_email_register_mime_encode_adapter(flow, "mime.encode", &config),
                  TURBO_OK);
     filename[0] = 'X';
     attachment_data[0] = 'z';
-    check_int_eq(
+    check_equal(
         turbo_flow_register_stage_ex(flow, "capture", email_payload_capture_stage, &capture, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup("message body");
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-    check_int_eq(capture.calls, 1);
-    check_str_contains(capture.payload, "From: \"Flow Sender\" <sender@example.com>\r\n");
-    check_str_contains(capture.payload, "To: \"Flow Receiver\" <receiver@example.com>\r\n");
-    check_str_contains(capture.payload, "Subject: Encoded Flow\r\n");
-    check_str_contains(capture.payload, "Content-Type: multipart/mixed;");
-    check_str_contains(capture.payload, "filename=\"note.bin\"");
-    check_str_contains(capture.payload, "YWJj\r\n");
-    check_str_contains(capture.payload, "message body");
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(capture.calls, 1);
+    check_contains(capture.payload, "From: \"Flow Sender\" <sender@example.com>\r\n");
+    check_contains(capture.payload, "To: \"Flow Receiver\" <receiver@example.com>\r\n");
+    check_contains(capture.payload, "Subject: Encoded Flow\r\n");
+    check_contains(capture.payload, "Content-Type: multipart/mixed;");
+    check_contains(capture.payload, "filename=\"note.bin\"");
+    check_contains(capture.payload, "YWJj\r\n");
+    check_contains(capture.payload, "message body");
     turbo_flow_msg_cleanup(&msg);
     tstr_freep(&capture.payload);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -828,30 +828,30 @@ spec("turbo_flow_email") {
     config.resources = &resource;
     config.resource_count = 1;
     check_not_null(flow);
-    check_int_eq(turbo_flow_email_register_mhtml_encode_adapter(flow, "mhtml.encode", &config),
+    check_equal(turbo_flow_email_register_mhtml_encode_adapter(flow, "mhtml.encode", &config),
                  TURBO_OK);
     location[0] = 'X';
     resource_data[1] = 0x7f;
-    check_int_eq(
+    check_equal(
         turbo_flow_register_stage_ex(flow, "capture", email_payload_capture_stage, &capture, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup("<html><body>page</body></html>");
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-    check_int_eq(capture.calls, 1);
-    check_str_contains(capture.payload, "MIME-Version: 1.0\r\n");
-    check_str_contains(capture.payload, "Content-Type: multipart/related; type=\"text/html\";");
-    check_str_contains(capture.payload, "Content-Type: text/html; charset=utf-8\r\n");
-    check_str_contains(capture.payload, "Content-Location: asset.bin\r\n");
-    check_str_contains(capture.payload, "AAH+/w==\r\n");
-    check_str_contains(capture.payload, "<html><body>page</body></html>");
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+    check_equal(capture.calls, 1);
+    check_contains(capture.payload, "MIME-Version: 1.0\r\n");
+    check_contains(capture.payload, "Content-Type: multipart/related; type=\"text/html\";");
+    check_contains(capture.payload, "Content-Type: text/html; charset=utf-8\r\n");
+    check_contains(capture.payload, "Content-Location: asset.bin\r\n");
+    check_contains(capture.payload, "AAH+/w==\r\n");
+    check_contains(capture.payload, "<html><body>page</body></html>");
     turbo_flow_msg_cleanup(&msg);
     tstr_freep(&capture.payload);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -870,21 +870,21 @@ spec("turbo_flow_email") {
     config.to_email = "receiver@example.com";
     config.max_output_size = 32;
     check_not_null(flow);
-    check_int_eq(turbo_flow_email_register_mime_encode_adapter(flow, "mime.encode", &config),
+    check_equal(turbo_flow_email_register_mime_encode_adapter(flow, "mime.encode", &config),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_flow_register_stage_ex(flow, "capture", email_payload_capture_stage, &capture, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup("body");
     msg.payload = tstr_to_v(msg.owned_payload);
-    check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_EFBIG);
-    check_int_eq(capture.calls, 0);
+    check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EFBIG);
+    check_equal(capture.calls, 0);
     turbo_flow_msg_cleanup(&msg);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 }

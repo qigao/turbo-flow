@@ -1,6 +1,6 @@
 #include "flow_http_tls_client.h"
 
-#include "monocypher.h"
+#include "turbo_crypto.h"
 #include "turbo_error.h"
 
 #include <stdlib.h>
@@ -103,7 +103,7 @@ int flow_http_tls_client_apply(const flow_http_tls_client_t *tls,
 
 done:
   if (password) {
-    crypto_wipe(password, lease.byte_count);
+    turbo_crypto_wipe(password, lease.byte_count);
     free(password);
   }
   turbo_flow_security_secret_release(key_provider, &lease);

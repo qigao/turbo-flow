@@ -47,13 +47,13 @@ typedef struct turbo_flow_schedule_snapshot_s {
 } turbo_flow_schedule_snapshot_t;
 
 /** Register one source adapter and optionally return its borrowed runtime handle. */
-CXX_C_API int turbo_flow_schedule_register_adapter(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_schedule_register_adapter(turbo_flow_t *flow, const char *name,
                                                    const turbo_flow_schedule_config_t *config,
                                                    turbo_flow_schedule_t **out_schedule);
 
 /** Deterministically advance a manual cron source to a local wall-clock time. */
-CXX_C_API int turbo_flow_schedule_advance(turbo_flow_schedule_t *schedule, time_t now);
-CXX_C_API int turbo_flow_schedule_snapshot(const turbo_flow_schedule_t *schedule,
+TURBO_FLOW_C_API int turbo_flow_schedule_advance(turbo_flow_schedule_t *schedule, time_t now);
+TURBO_FLOW_C_API int turbo_flow_schedule_snapshot(const turbo_flow_schedule_t *schedule,
                                            turbo_flow_schedule_snapshot_t *out);
 
 #ifdef __cplusplus

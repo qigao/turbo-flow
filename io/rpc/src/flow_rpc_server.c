@@ -31,9 +31,9 @@ typedef struct flow_rpc_request_context_s {
 
 struct flow_rpc_server_s {
   turbo_flow_t *flow;
-  tstr_t name;
-  tstr_t source_name;
-  tstr_t endpoint;
+  tstr name;
+  tstr source_name;
+  tstr endpoint;
   uint16_t port;
   size_t max_request_size;
   coro_context_t *context;

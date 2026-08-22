@@ -114,7 +114,7 @@ static int flow_expr_mir_i64_mul(int64_t left, int64_t right, int64_t *out) {
   return TURBO_OK;
 }
 
-static int flow_expr_mir_string_compare(tstr_v left, tstr_v right) {
+static int flow_expr_mir_string_compare(vstr left, vstr right) {
   size_t common = left.len < right.len ? left.len : right.len;
   int result = common > 0 ? memcmp(left.data, right.data, common) : 0;
   if (result != 0) return result;

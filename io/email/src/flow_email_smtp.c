@@ -44,14 +44,14 @@ static const turbo_flow_adapter_schema_t FLOW_EMAIL_SMTP_SCHEMA = {
 
 typedef struct flow_email_smtp_adapter_s {
   coro_context_t *ctx;
-  tstr_t host;
-  tstr_t username;
-  tstr_t password;
-  tstr_t from_name;
-  tstr_t from_email;
-  tstr_t to_name;
-  tstr_t to_email;
-  tstr_t subject;
+  tstr host;
+  tstr username;
+  tstr password;
+  tstr from_name;
+  tstr from_email;
+  tstr to_name;
+  tstr to_email;
+  tstr subject;
   int port;
   int use_tls;
   int use_starttls;
@@ -73,7 +73,7 @@ typedef struct flow_email_smtp_adapter_s {
 typedef struct flow_email_send_task_s {
   flow_email_smtp_adapter_t *adapter;
   struct flow_email_send_task_s *next;
-  tstr_t payload;
+  tstr payload;
   smtp_client_t *smtp;
   atomic_int refs;
   atomic_int done;
@@ -112,14 +112,14 @@ static int flow_email_smtp_is_configured(const flow_email_smtp_adapter_t *adapte
          adapter->to_email && adapter->to_email[0] != '\0';
 }
 
-static int flow_email_dup_opt(tstr_t *dst, const char *src) {
+static int flow_email_dup_opt(tstr *dst, const char *src) {
   if (!dst) return TURBO_EINVAL;
   if (!src) return TURBO_OK;
   *dst = tstr_dup(src);
   return *dst ? TURBO_OK : TURBO_ENOMEM;
 }
 
-static int flow_email_payload_to_cstr(const char *data, size_t len, tstr_t *out) {
+static int flow_email_payload_to_cstr(const char *data, size_t len, tstr *out) {
   if (!out) return TURBO_EINVAL;
   if (len > 0 && !data) return TURBO_EINVAL;
   *out = tstr_new_len(data ? data : "", len);
@@ -132,7 +132,7 @@ static int flow_email_send_message(flow_email_send_task_t *task) {
   smtp_client_t *smtp = NULL;
   mem_pool_t pool;
   email_message_t *msg = NULL;
-  tstr_t body = NULL;
+  tstr body = NULL;
   int rc = TURBO_EINVAL;
 
   if (!task || !flow_email_smtp_is_configured(adapter)) return TURBO_ENOTSUP;

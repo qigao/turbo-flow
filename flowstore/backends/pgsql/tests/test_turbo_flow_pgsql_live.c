@@ -203,16 +203,16 @@ spec("turbo_flow_pgsql_live") {
     config.max_batch_size = 2u;
     config.max_records = 4u;
     config.create_table = 1;
-    check_int_eq(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
+    check_equal(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_test_record_store_contract_run(&store, &result), TURBO_OK);
-    check_size_eq(result.restored_count, 1u);
-    check_uint_eq(result.restored_revision, 2u);
-    check_int_eq(result.duplicate_create_status, TURBO_EBUSY);
-    check_int_eq(result.stale_update_status, TURBO_EBUSY);
-    check_int_eq(result.stale_delete_status, TURBO_EBUSY);
+    check_equal(turbo_flow_test_record_store_contract_run(&store, &result), TURBO_OK);
+    check_equal(result.restored_count, 1u);
+    check_equal(result.restored_revision, 2u);
+    check_equal(result.duplicate_create_status, TURBO_EBUSY);
+    check_equal(result.stale_update_status, TURBO_EBUSY);
+    check_equal(result.stale_delete_status, TURBO_EBUSY);
     check_true(result.empty_after_delete);
-    check_size_eq(result.binary_wire_size, 12u);
+    check_equal(result.binary_wire_size, 12u);
     check_true(result.binary_wire_equal);
     pgsql_test_record_store_close(&storage);
   }
@@ -235,13 +235,13 @@ spec("turbo_flow_pgsql_live") {
     config.max_batch_size = TURBO_FLOW_TEST_RECORD_ENDURANCE_BATCH_SIZE;
     config.max_records = TURBO_FLOW_TEST_RECORD_ENDURANCE_RECORDS;
     config.create_table = 1;
-    check_int_eq(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
+    check_equal(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_test_record_store_endurance_run(&store, &result), TURBO_OK);
-    check_size_eq(result.successful_commits, 40u);
-    check_size_eq(result.scans, 39u);
-    check_size_eq(result.conflicts, 4u);
-    check_size_eq(result.final_count, 0u);
+    check_equal(turbo_flow_test_record_store_endurance_run(&store, &result), TURBO_OK);
+    check_equal(result.successful_commits, 40u);
+    check_equal(result.scans, 39u);
+    check_equal(result.conflicts, 4u);
+    check_equal(result.final_count, 0u);
     check_true(result.durable);
     pgsql_test_record_store_close(&storage);
   }
@@ -266,20 +266,20 @@ spec("turbo_flow_pgsql_live") {
     config.max_batch_size = 1u;
     config.max_records = 2u;
     config.create_table = 1;
-    check_int_eq(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
+    check_equal(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
                  TURBO_EIO);
     check_null(store.ctx);
 
     config.conninfo = conninfo;
-    check_int_eq(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
+    check_equal(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
                  TURBO_OK);
-    check_int_eq(turbo_flow_test_record_store_recovery_contract_run(&store, &recovery), TURBO_OK);
-    check_int_eq(recovery.timeout_status, TURBO_ETIMEDOUT);
-    check_int_eq(recovery.lost_reply_status, TURBO_EIO);
-    check_int_eq(recovery.retry_status, TURBO_EBUSY);
-    check_uint_eq(recovery.revision_after_timeout, 1u);
-    check_uint_eq(recovery.revision_after_lost_reply, 2u);
-    check_uint_eq(recovery.revision_after_recovery, 3u);
+    check_equal(turbo_flow_test_record_store_recovery_contract_run(&store, &recovery), TURBO_OK);
+    check_equal(recovery.timeout_status, TURBO_ETIMEDOUT);
+    check_equal(recovery.lost_reply_status, TURBO_EIO);
+    check_equal(recovery.retry_status, TURBO_EBUSY);
+    check_equal(recovery.revision_after_timeout, 1u);
+    check_equal(recovery.revision_after_lost_reply, 2u);
+    check_equal(recovery.revision_after_recovery, 3u);
     pgsql_test_record_store_close(&storage);
   }
 
@@ -309,21 +309,21 @@ spec("turbo_flow_pgsql_live") {
     config.max_batch_size = 2u;
     config.max_records = 2u;
     config.create_table = 1;
-    check_int_eq(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
+    check_equal(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
                  TURBO_OK);
     check_bits(store.capabilities, TURBO_FLOW_RECORD_STORE_DURABLE);
     check_bits(store.capabilities, TURBO_FLOW_RECORD_STORE_ATOMIC_BATCH);
     memset(&capture, 0, sizeof(capture));
-    check_int_eq(store.scan(store.ctx, pgsql_live_record_visit, &capture), TURBO_OK);
-    check_size_eq(capture.count, 0u);
+    check_equal(store.scan(store.ctx, pgsql_live_record_visit, &capture), TURBO_OK);
+    check_equal(capture.count, 0u);
 
     mutations[0].key = key_one;
     mutations[0].key_size = sizeof(key_one);
     mutations[0].next_revision = 1u;
     mutations[0].value = value_one;
     mutations[0].value_size = sizeof(value_one);
-    check_int_eq(store.commit(store.ctx, mutations, 1u), TURBO_OK);
-    check_int_eq(store.commit(store.ctx, mutations, 1u), TURBO_EBUSY);
+    check_equal(store.commit(store.ctx, mutations, 1u), TURBO_OK);
+    check_equal(store.commit(store.ctx, mutations, 1u), TURBO_EBUSY);
 
     mutations[0].expected_revision = 1u;
     mutations[0].next_revision = 2u;
@@ -334,7 +334,7 @@ spec("turbo_flow_pgsql_live") {
     mutations[1].next_revision = 1u;
     mutations[1].value = value_one;
     mutations[1].value_size = sizeof(value_one);
-    check_int_eq(store.commit(store.ctx, mutations, 2u), TURBO_OK);
+    check_equal(store.commit(store.ctx, mutations, 2u), TURBO_OK);
 
     mutations[0] = (turbo_flow_record_mutation_t)TURBO_FLOW_RECORD_MUTATION_INIT;
     mutations[0].key = key_three;
@@ -342,12 +342,12 @@ spec("turbo_flow_pgsql_live") {
     mutations[0].next_revision = 1u;
     mutations[0].value = value_one;
     mutations[0].value_size = sizeof(value_one);
-    check_int_eq(store.commit(store.ctx, mutations, 1u), TURBO_ENOSPC);
+    check_equal(store.commit(store.ctx, mutations, 1u), TURBO_ENOSPC);
     memset(&capture, 0, sizeof(capture));
-    check_int_eq(store.scan(store.ctx, pgsql_live_record_visit, &capture), TURBO_OK);
-    check_size_eq(capture.count, 2u);
-    check_uint_eq(capture.revisions[0], 2u);
-    check_uint_eq(capture.revisions[1], 1u);
+    check_equal(store.scan(store.ctx, pgsql_live_record_visit, &capture), TURBO_OK);
+    check_equal(capture.count, 2u);
+    check_equal(capture.revisions[0], 2u);
+    check_equal(capture.revisions[1], 1u);
 
     mutations[0] = (turbo_flow_record_mutation_t)TURBO_FLOW_RECORD_MUTATION_INIT;
     mutations[0].kind = TURBO_FLOW_RECORD_DELETE;
@@ -359,15 +359,15 @@ spec("turbo_flow_pgsql_live") {
     mutations[1].key = key_two;
     mutations[1].key_size = sizeof(key_two);
     mutations[1].expected_revision = 1u;
-    check_int_eq(store.commit(store.ctx, mutations, 2u), TURBO_OK);
+    check_equal(store.commit(store.ctx, mutations, 2u), TURBO_OK);
     pgsql_test_record_store_close(&storage);
 
     config.create_table = 0;
-    check_int_eq(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
+    check_equal(pgsql_test_record_store_open(&config, NULL, NULL, &store, &storage, NULL),
                  TURBO_OK);
     memset(&capture, 0, sizeof(capture));
-    check_int_eq(store.scan(store.ctx, pgsql_live_record_visit, &capture), TURBO_OK);
-    check_size_eq(capture.count, 0u);
+    check_equal(store.scan(store.ctx, pgsql_live_record_visit, &capture), TURBO_OK);
+    check_equal(capture.count, 0u);
     pgsql_test_record_store_close(&storage);
   }
 
@@ -400,12 +400,12 @@ spec("turbo_flow_pgsql_live") {
     config.create_table = 1;
     sink = pgsql_live_sink_flow(&config);
     check_not_null(sink);
-    check_int_eq(turbo_flow_start(sink), TURBO_OK);
-    check_int_eq(pgsql_live_publish(sink, first_payload, sizeof(first_payload), &publish_result),
+    check_equal(turbo_flow_start(sink), TURBO_OK);
+    check_equal(pgsql_live_publish(sink, first_payload, sizeof(first_payload), &publish_result),
                  TURBO_OK);
-    check_int_eq(pgsql_live_publish(sink, second_payload, sizeof(second_payload), &publish_result),
+    check_equal(pgsql_live_publish(sink, second_payload, sizeof(second_payload), &publish_result),
                  TURBO_ENOSPC);
-    check_int_eq(turbo_flow_stop(sink), TURBO_OK);
+    check_equal(turbo_flow_stop(sink), TURBO_OK);
     turbo_flow_destroy(sink);
 
     memset(&failed, 0, sizeof(failed));
@@ -414,12 +414,12 @@ spec("turbo_flow_pgsql_live") {
     config.role = TURBO_FLOW_PGSQL_OUTBOX_SOURCE;
     source = pgsql_live_source_flow(&config, "pg.failed", &failed);
     check_not_null(source);
-    check_int_eq(turbo_flow_start(source), TURBO_OK);
-    check_int_eq(pgsql_live_wait_total(&failed, NULL, 1), TURBO_OK);
-    check_int_eq(turbo_flow_stop(source), TURBO_OK);
+    check_equal(turbo_flow_start(source), TURBO_OK);
+    check_equal(pgsql_live_wait_total(&failed, NULL, 1), TURBO_OK);
+    check_equal(turbo_flow_stop(source), TURBO_OK);
     turbo_flow_destroy(source);
-    check_int_eq(pgsql_live_count(conninfo, outbox_name, &depth), TURBO_OK);
-    check_size_eq(depth, 1u);
+    check_equal(pgsql_live_count(conninfo, outbox_name, &depth), TURBO_OK);
+    check_equal(depth, 1u);
 
     memset(&first, 0, sizeof(first));
     memset(&second, 0, sizeof(second));
@@ -431,30 +431,30 @@ spec("turbo_flow_pgsql_live") {
     source_second = pgsql_live_source_flow(&config, "pg.source.second", &second);
     check_not_null(source_first);
     check_not_null(source_second);
-    check_int_eq(turbo_flow_start(source_first), TURBO_OK);
-    check_int_eq(turbo_flow_start(source_second), TURBO_OK);
-    check_int_eq(pgsql_live_wait_total(&first, &second, 1), TURBO_OK);
+    check_equal(turbo_flow_start(source_first), TURBO_OK);
+    check_equal(turbo_flow_start(source_second), TURBO_OK);
+    check_equal(pgsql_live_wait_total(&first, &second, 1), TURBO_OK);
     turbo_sleep_ms(50u);
-    check_int_eq(atomic_load_explicit(&first.called, memory_order_acquire) +
+    check_equal(atomic_load_explicit(&first.called, memory_order_acquire) +
                      atomic_load_explicit(&second.called, memory_order_acquire),
                  1);
     if (atomic_load_explicit(&first.called, memory_order_acquire) == 1) {
-      check_size_eq(first.payload_size, sizeof(first_payload));
-      check_mem_eq(first.payload, first_payload, sizeof(first_payload));
-      check_uint_eq(first.message_type, PGSQL_LIVE_MESSAGE_TYPE);
-      check_uint_eq(first.message_flags, PGSQL_LIVE_MESSAGE_FLAGS);
+      check_equal(first.payload_size, sizeof(first_payload));
+      check_equal(first.payload, first_payload, sizeof(first_payload));
+      check_equal(first.message_type, PGSQL_LIVE_MESSAGE_TYPE);
+      check_equal(first.message_flags, PGSQL_LIVE_MESSAGE_FLAGS);
     } else {
-      check_size_eq(second.payload_size, sizeof(first_payload));
-      check_mem_eq(second.payload, first_payload, sizeof(first_payload));
-      check_uint_eq(second.message_type, PGSQL_LIVE_MESSAGE_TYPE);
-      check_uint_eq(second.message_flags, PGSQL_LIVE_MESSAGE_FLAGS);
+      check_equal(second.payload_size, sizeof(first_payload));
+      check_equal(second.payload, first_payload, sizeof(first_payload));
+      check_equal(second.message_type, PGSQL_LIVE_MESSAGE_TYPE);
+      check_equal(second.message_flags, PGSQL_LIVE_MESSAGE_FLAGS);
     }
-    check_int_eq(turbo_flow_stop(source_second), TURBO_OK);
-    check_int_eq(turbo_flow_stop(source_first), TURBO_OK);
+    check_equal(turbo_flow_stop(source_second), TURBO_OK);
+    check_equal(turbo_flow_stop(source_first), TURBO_OK);
     turbo_flow_destroy(source_second);
     turbo_flow_destroy(source_first);
-    check_int_eq(pgsql_live_count(conninfo, outbox_name, &depth), TURBO_OK);
-    check_size_eq(depth, 0u);
+    check_equal(pgsql_live_count(conninfo, outbox_name, &depth), TURBO_OK);
+    check_equal(depth, 0u);
   }
 
   it("persists retry, dead-letter, and archive lifecycle states") {
@@ -485,10 +485,10 @@ spec("turbo_flow_pgsql_live") {
 
     flow = pgsql_live_sink_flow(&config);
     check_not_null(flow);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(pgsql_live_publish(flow, failed_payload, sizeof(failed_payload), &publish_result),
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(pgsql_live_publish(flow, failed_payload, sizeof(failed_payload), &publish_result),
                  TURBO_OK);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
 
     memset(&capture, 0, sizeof(capture));
@@ -497,21 +497,21 @@ spec("turbo_flow_pgsql_live") {
     config.role = TURBO_FLOW_PGSQL_OUTBOX_SOURCE;
     flow = pgsql_live_source_flow(&config, "pg.lifecycle.failed", &capture);
     check_not_null(flow);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(pgsql_live_wait_total(&capture, NULL, 2), TURBO_OK);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(pgsql_live_wait_total(&capture, NULL, 2), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
-    check_int_eq(pgsql_live_count_state(conninfo, outbox_name, "dead_letter", &count), TURBO_OK);
-    check_size_eq(count, 1u);
+    check_equal(pgsql_live_count_state(conninfo, outbox_name, "dead_letter", &count), TURBO_OK);
+    check_equal(count, 1u);
 
     config.role = TURBO_FLOW_PGSQL_OUTBOX_SINK;
     flow = pgsql_live_sink_flow(&config);
     check_not_null(flow);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(pgsql_live_publish(flow, archived_payload, sizeof(archived_payload),
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(pgsql_live_publish(flow, archived_payload, sizeof(archived_payload),
                                     &publish_result),
                  TURBO_OK);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
 
     memset(&capture, 0, sizeof(capture));
@@ -520,11 +520,11 @@ spec("turbo_flow_pgsql_live") {
     config.role = TURBO_FLOW_PGSQL_OUTBOX_SOURCE;
     flow = pgsql_live_source_flow(&config, "pg.lifecycle.archived", &capture);
     check_not_null(flow);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(pgsql_live_wait_total(&capture, NULL, 1), TURBO_OK);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(pgsql_live_wait_total(&capture, NULL, 1), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
-    check_int_eq(pgsql_live_count_state(conninfo, outbox_name, "archived", &count), TURBO_OK);
-    check_size_eq(count, 1u);
+    check_equal(pgsql_live_count_state(conninfo, outbox_name, "archived", &count), TURBO_OK);
+    check_equal(count, 1u);
   }
 }

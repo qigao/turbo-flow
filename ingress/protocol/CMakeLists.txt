@@ -20,7 +20,7 @@ function(turbo_flow_add_protocol target_name export_name source_file)
     ${target_name}
     FOLDER "ingress/protocol/plugins"
     EXPORT_NAME ${export_name})
-  target_compile_definitions(${target_name} PRIVATE SHARED_CXX)
+  target_compile_definitions(${target_name} PRIVATE TURBO_FLOW_BUILD)
   target_include_directories(${target_name}
                              PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(${target_name}

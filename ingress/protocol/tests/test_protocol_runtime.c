@@ -153,16 +153,16 @@ spec("protocol session runtime") {
     turbo_flow_protocol_runtime_t *runtime = NULL;
     turbo_flow_protocol_runtime_config_t config = TURBO_FLOW_PROTOCOL_RUNTIME_CONFIG_INIT;
     turbo_flow_protocol_runtime_ops_t ops = TURBO_FLOW_PROTOCOL_RUNTIME_OPS_INIT;
-    check_int_eq(runtime_protocol_create(TURBO_FLOW_PROTOCOL_COAP, &protocol), TURBO_OK);
+    check_equal(runtime_protocol_create(TURBO_FLOW_PROTOCOL_COAP, &protocol), TURBO_OK);
     config.max_sessions = 1u;
     config.max_frame_size = 64u;
     config.max_buffered_bytes = 128u;
     ops.size = offsetof(turbo_flow_protocol_runtime_ops_t, reply);
     ops.publish = runtime_publish;
-    check_int_eq(turbo_flow_protocol_runtime_create(protocol, &config, &ops, &probe, &runtime),
+    check_equal(turbo_flow_protocol_runtime_create(protocol, &config, &ops, &probe, &runtime),
                  TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
+    check_equal(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_OK);
+    check_equal(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
     turbo_flow_protocol_destroy(protocol);
   }
 
@@ -172,24 +172,24 @@ spec("protocol session runtime") {
     turbo_flow_protocol_t *protocol = NULL;
     turbo_flow_protocol_runtime_t *runtime = NULL;
     turbo_flow_protocol_feed_result_t result = TURBO_FLOW_PROTOCOL_FEED_RESULT_INIT;
-    check_int_eq(runtime_protocol_create(TURBO_FLOW_PROTOCOL_COAP, &protocol), TURBO_OK);
-    check_int_eq(runtime_create(protocol, &probe, 2u, &runtime), TURBO_OK);
-    check_int_eq(runtime_session_open(runtime, 1u, "sensor-1"), TURBO_OK);
-    check_int_eq(
+    check_equal(runtime_protocol_create(TURBO_FLOW_PROTOCOL_COAP, &protocol), TURBO_OK);
+    check_equal(runtime_create(protocol, &probe, 2u, &runtime), TURBO_OK);
+    check_equal(runtime_session_open(runtime, 1u, "sensor-1"), TURBO_OK);
+    check_equal(
         turbo_flow_protocol_runtime_session_feed(runtime, 1u, 1u, frame, sizeof(frame), &result),
         TURBO_OK);
-    check_size_eq(result.accepted_size, sizeof(frame));
-    check_size_eq(result.frames_dispatched, 1u);
-    check_size_eq(probe.publishes, 1u);
-    check_size_eq(probe.settlements, 1u);
-    check_size_eq(probe.replies, 1u);
-    check_size_eq(probe.last_reply_size, 2u);
-    check_uint_eq(probe.last_reply[1], 0u);
-    check_str_eq(probe.last_operation, "frame");
-    check_size_eq(probe.last_payload_size, sizeof(frame));
-    check_mem_eq(probe.last_payload, frame, sizeof(frame));
-    check_int_eq(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
+    check_equal(result.accepted_size, sizeof(frame));
+    check_equal(result.frames_dispatched, 1u);
+    check_equal(probe.publishes, 1u);
+    check_equal(probe.settlements, 1u);
+    check_equal(probe.replies, 1u);
+    check_equal(probe.last_reply_size, 2u);
+    check_equal(probe.last_reply[1], 0u);
+    check_equal(probe.last_operation, "frame");
+    check_equal(probe.last_payload_size, sizeof(frame));
+    check_equal(probe.last_payload, frame, sizeof(frame));
+    check_equal(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_OK);
+    check_equal(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
     turbo_flow_protocol_destroy(protocol);
   }
 
@@ -201,19 +201,19 @@ spec("protocol session runtime") {
     turbo_flow_protocol_feed_result_t first = TURBO_FLOW_PROTOCOL_FEED_RESULT_INIT;
     turbo_flow_protocol_feed_result_t second = TURBO_FLOW_PROTOCOL_FEED_RESULT_INIT;
     runtime_gbt_frame(frame, 0x11u);
-    check_int_eq(runtime_protocol_create(TURBO_FLOW_PROTOCOL_GBT_32960, &protocol), TURBO_OK);
-    check_int_eq(runtime_create(protocol, &probe, 1u, &runtime), TURBO_OK);
-    check_int_eq(runtime_session_open(runtime, 2u, NULL), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_session_feed(runtime, 2u, 1u, frame, 10u, &first),
+    check_equal(runtime_protocol_create(TURBO_FLOW_PROTOCOL_GBT_32960, &protocol), TURBO_OK);
+    check_equal(runtime_create(protocol, &probe, 1u, &runtime), TURBO_OK);
+    check_equal(runtime_session_open(runtime, 2u, NULL), TURBO_OK);
+    check_equal(turbo_flow_protocol_runtime_session_feed(runtime, 2u, 1u, frame, 10u, &first),
                  TURBO_OK);
-    check_size_eq(first.frames_dispatched, 0u);
-    check_int_eq(turbo_flow_protocol_runtime_session_feed(runtime, 2u, 1u, frame + 10u,
+    check_equal(first.frames_dispatched, 0u);
+    check_equal(turbo_flow_protocol_runtime_session_feed(runtime, 2u, 1u, frame + 10u,
                                                           sizeof(frame) - 10u, &second),
                  TURBO_OK);
-    check_size_eq(second.frames_dispatched, 1u);
-    check_size_eq(probe.publishes, 1u);
-    check_int_eq(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
+    check_equal(second.frames_dispatched, 1u);
+    check_equal(probe.publishes, 1u);
+    check_equal(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_OK);
+    check_equal(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
     turbo_flow_protocol_destroy(protocol);
   }
 
@@ -226,23 +226,23 @@ spec("protocol session runtime") {
     turbo_flow_protocol_feed_result_t second = TURBO_FLOW_PROTOCOL_FEED_RESULT_INIT;
     runtime_gbt_frame(frames, 0x11u);
     runtime_gbt_frame(frames + 25u, 0x22u);
-    check_int_eq(runtime_protocol_create(TURBO_FLOW_PROTOCOL_GBT_32960, &protocol), TURBO_OK);
-    check_int_eq(runtime_create(protocol, &probe, 1u, &runtime), TURBO_OK);
-    check_int_eq(runtime_session_open(runtime, 8u, NULL), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_session_feed(runtime, 8u, 1u, frames, 40u, &first),
+    check_equal(runtime_protocol_create(TURBO_FLOW_PROTOCOL_GBT_32960, &protocol), TURBO_OK);
+    check_equal(runtime_create(protocol, &probe, 1u, &runtime), TURBO_OK);
+    check_equal(runtime_session_open(runtime, 8u, NULL), TURBO_OK);
+    check_equal(turbo_flow_protocol_runtime_session_feed(runtime, 8u, 1u, frames, 40u, &first),
                  TURBO_OK);
-    check_size_eq(first.frames_dispatched, 1u);
-    check_size_eq(first.accepted_size, 40u);
-    check_int_eq(
+    check_equal(first.frames_dispatched, 1u);
+    check_equal(first.accepted_size, 40u);
+    check_equal(
         turbo_flow_protocol_runtime_session_feed(runtime, 8u, 1u, frames + 40u, 10u, &second),
         TURBO_OK);
-    check_size_eq(second.frames_dispatched, 1u);
-    check_size_eq(second.accepted_size, 10u);
-    check_size_eq(probe.publishes, 2u);
-    check_size_eq(probe.settlements, 2u);
-    check_uint_eq(probe.last_payload[24], frames[49]);
-    check_int_eq(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
+    check_equal(second.frames_dispatched, 1u);
+    check_equal(second.accepted_size, 10u);
+    check_equal(probe.publishes, 2u);
+    check_equal(probe.settlements, 2u);
+    check_equal(probe.last_payload[24], frames[49]);
+    check_equal(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_OK);
+    check_equal(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
     turbo_flow_protocol_destroy(protocol);
   }
 
@@ -257,29 +257,29 @@ spec("protocol session runtime") {
     runtime_gbt_frame(frames, 0x11u);
     runtime_gbt_frame(frames + 25u, 0x22u);
     probe.pending_publish = 1u;
-    check_int_eq(runtime_protocol_create(TURBO_FLOW_PROTOCOL_GBT_32960, &protocol), TURBO_OK);
-    check_int_eq(runtime_create(protocol, &probe, 1u, &runtime), TURBO_OK);
-    check_int_eq(runtime_session_open(runtime, 3u, NULL), TURBO_OK);
-    check_int_eq(
+    check_equal(runtime_protocol_create(TURBO_FLOW_PROTOCOL_GBT_32960, &protocol), TURBO_OK);
+    check_equal(runtime_create(protocol, &probe, 1u, &runtime), TURBO_OK);
+    check_equal(runtime_session_open(runtime, 3u, NULL), TURBO_OK);
+    check_equal(
         turbo_flow_protocol_runtime_session_feed(runtime, 3u, 1u, frames, sizeof(frames), &feed),
         TURBO_OK);
-    check_size_eq(feed.frames_dispatched, 1u);
+    check_equal(feed.frames_dispatched, 1u);
     check_true(feed.backpressured);
-    check_uint_eq(feed.pending_delivery_id, 1u);
-    check_size_eq(probe.replies, 0u);
-    check_int_eq(turbo_flow_protocol_runtime_snapshot(runtime, &snapshot), TURBO_OK);
-    check_size_eq(snapshot.pending_settlements, 1u);
-    check_size_eq(snapshot.buffered_bytes, sizeof(frames));
-    check_int_eq(turbo_flow_protocol_runtime_settle(runtime, 1u, TURBO_OK, &settle), TURBO_OK);
-    check_size_eq(settle.frames_dispatched, 1u);
-    check_size_eq(probe.publishes, 2u);
-    check_size_eq(probe.replies, 2u);
+    check_equal(feed.pending_delivery_id, 1u);
+    check_equal(probe.replies, 0u);
+    check_equal(turbo_flow_protocol_runtime_snapshot(runtime, &snapshot), TURBO_OK);
+    check_equal(snapshot.pending_settlements, 1u);
+    check_equal(snapshot.buffered_bytes, sizeof(frames));
+    check_equal(turbo_flow_protocol_runtime_settle(runtime, 1u, TURBO_OK, &settle), TURBO_OK);
+    check_equal(settle.frames_dispatched, 1u);
+    check_equal(probe.publishes, 2u);
+    check_equal(probe.replies, 2u);
     snapshot = (turbo_flow_protocol_runtime_snapshot_t)TURBO_FLOW_PROTOCOL_RUNTIME_SNAPSHOT_INIT;
-    check_int_eq(turbo_flow_protocol_runtime_snapshot(runtime, &snapshot), TURBO_OK);
-    check_size_eq(snapshot.pending_settlements, 0u);
-    check_size_eq(snapshot.buffered_bytes, 0u);
-    check_int_eq(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
+    check_equal(turbo_flow_protocol_runtime_snapshot(runtime, &snapshot), TURBO_OK);
+    check_equal(snapshot.pending_settlements, 0u);
+    check_equal(snapshot.buffered_bytes, 0u);
+    check_equal(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_OK);
+    check_equal(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
     turbo_flow_protocol_destroy(protocol);
   }
 
@@ -292,24 +292,24 @@ spec("protocol session runtime") {
     turbo_flow_protocol_feed_result_t settle = TURBO_FLOW_PROTOCOL_FEED_RESULT_INIT;
     turbo_flow_protocol_runtime_snapshot_t snapshot = TURBO_FLOW_PROTOCOL_RUNTIME_SNAPSHOT_INIT;
     probe.pending_publish = 1u;
-    check_int_eq(runtime_protocol_create(TURBO_FLOW_PROTOCOL_COAP, &protocol), TURBO_OK);
-    check_int_eq(runtime_create(protocol, &probe, 1u, &runtime), TURBO_OK);
-    check_int_eq(runtime_session_open(runtime, 4u, "sensor-4"), TURBO_OK);
-    check_int_eq(
+    check_equal(runtime_protocol_create(TURBO_FLOW_PROTOCOL_COAP, &protocol), TURBO_OK);
+    check_equal(runtime_create(protocol, &probe, 1u, &runtime), TURBO_OK);
+    check_equal(runtime_session_open(runtime, 4u, "sensor-4"), TURBO_OK);
+    check_equal(
         turbo_flow_protocol_runtime_session_feed(runtime, 4u, 1u, frame, sizeof(frame), &feed),
         TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_EBUSY);
-    check_int_eq(runtime_session_open(runtime, 5u, "sensor-5"), TURBO_ESHUTDOWN);
-    check_int_eq(
+    check_equal(turbo_flow_protocol_runtime_begin_shutdown(runtime), TURBO_EBUSY);
+    check_equal(runtime_session_open(runtime, 5u, "sensor-5"), TURBO_ESHUTDOWN);
+    check_equal(
         turbo_flow_protocol_runtime_settle(runtime, feed.pending_delivery_id, TURBO_OK, &settle),
         TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_snapshot(runtime, &snapshot), TURBO_OK);
-    check_size_eq(snapshot.active_sessions, 0u);
-    check_size_eq(snapshot.pending_settlements, 0u);
+    check_equal(turbo_flow_protocol_runtime_snapshot(runtime, &snapshot), TURBO_OK);
+    check_equal(snapshot.active_sessions, 0u);
+    check_equal(snapshot.pending_settlements, 0u);
     check_false(snapshot.accepting);
-    check_size_eq(probe.closes, 1u);
-    check_int_eq(probe.last_close_status, TURBO_ESHUTDOWN);
-    check_int_eq(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
+    check_equal(probe.closes, 1u);
+    check_equal(probe.last_close_status, TURBO_ESHUTDOWN);
+    check_equal(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
     turbo_flow_protocol_destroy(protocol);
   }
 
@@ -323,15 +323,15 @@ spec("protocol session runtime") {
     invalid.max_sessions = 2u;
     invalid.max_frame_size = 64u;
     invalid.max_buffered_bytes = 64u;
-    check_int_eq(runtime_protocol_create(TURBO_FLOW_PROTOCOL_COAP, &protocol), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_create(protocol, &invalid, &ops, &probe, &runtime),
+    check_equal(runtime_protocol_create(TURBO_FLOW_PROTOCOL_COAP, &protocol), TURBO_OK);
+    check_equal(turbo_flow_protocol_runtime_create(protocol, &invalid, &ops, &probe, &runtime),
                  TURBO_ENOSPC);
     check_null(runtime);
-    check_int_eq(runtime_create(protocol, &probe, 1u, &runtime), TURBO_OK);
-    check_int_eq(runtime_session_open(runtime, 6u, "sensor-6"), TURBO_OK);
-    check_int_eq(runtime_session_open(runtime, 7u, "sensor-7"), TURBO_ENOSPC);
-    check_int_eq(turbo_flow_protocol_runtime_force_shutdown(runtime, TURBO_ECANCELED), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
+    check_equal(runtime_create(protocol, &probe, 1u, &runtime), TURBO_OK);
+    check_equal(runtime_session_open(runtime, 6u, "sensor-6"), TURBO_OK);
+    check_equal(runtime_session_open(runtime, 7u, "sensor-7"), TURBO_ENOSPC);
+    check_equal(turbo_flow_protocol_runtime_force_shutdown(runtime, TURBO_ECANCELED), TURBO_OK);
+    check_equal(turbo_flow_protocol_runtime_destroy(runtime), TURBO_OK);
     turbo_flow_protocol_destroy(protocol);
   }
 }

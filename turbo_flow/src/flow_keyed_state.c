@@ -1,6 +1,6 @@
 #include "flow_internal.h"
 
-#include "turbo_hash.h"
+#include "turbo_flow_stl_adapter.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -57,27 +57,27 @@ struct turbo_flow_keyed_state_s {
 
 #define FLOW_EVENT_TIME_KEY_PREFIX_SIZE sizeof(uint64_t)
 
-static tstr_v flow_keyed_buffer_view(const mem_buffer_t *buffer) {
-  if (!buffer) return tstr_v_from_buf(NULL, 0u);
-  return tstr_v_from_buf(mem_buffer_const_data(buffer), mem_buffer_used(buffer));
+static vstr flow_keyed_buffer_view(const mem_buffer_t *buffer) {
+  if (!buffer) return vstr_from_buf(NULL, 0u);
+  return vstr_from_buf(mem_buffer_const_data(buffer), mem_buffer_used(buffer));
 }
 
 static size_t flow_keyed_hash(const void *key, size_t key_size, void *ctx) {
-  const tstr_v *view = (const tstr_v *)key;
+  const vstr *view = (const vstr *)key;
   (void)key_size;
   (void)ctx;
   return turbo_hash_bytes(view->data, view->len, NULL);
 }
 
 static bool flow_keyed_equal(const void *left, const void *right, size_t key_size, void *ctx) {
-  const tstr_v *lhs = (const tstr_v *)left;
-  const tstr_v *rhs = (const tstr_v *)right;
+  const vstr *lhs = (const vstr *)left;
+  const vstr *rhs = (const vstr *)right;
   (void)key_size;
   (void)ctx;
   return lhs->len == rhs->len && memcmp(lhs->data, rhs->data, lhs->len) == 0;
 }
 
-static mem_buffer_t *flow_keyed_copy(tstr_v value) {
+static mem_buffer_t *flow_keyed_copy(vstr value) {
   mem_buffer_t *buffer;
   const size_t allocation_size = value.len == 0u ? 1u : value.len;
 
@@ -113,7 +113,7 @@ turbo_flow_keyed_state_store_t *turbo_flow_keyed_state_store_create(
   if (!flow_keyed_config_valid(config)) return NULL;
   store = (turbo_flow_keyed_state_store_t *)calloc(1u, sizeof(*store));
   if (!store) return NULL;
-  rc = turbo_hash_map_init(&store->entries, sizeof(tstr_v), sizeof(flow_keyed_state_entry_t),
+  rc = turbo_hash_map_init(&store->entries, sizeof(vstr), sizeof(flow_keyed_state_entry_t),
                            flow_keyed_hash, flow_keyed_equal, NULL);
   if (rc != TURBO_OK) {
     free(store);
@@ -246,20 +246,20 @@ void flow_keyed_state_store_reset(turbo_flow_keyed_state_store_t *store) {
   store->watermark_advancing = 0;
 }
 
-tstr_v turbo_flow_keyed_state_key(const turbo_flow_keyed_state_t *state) {
-  tstr_v key;
-  if (!state || !state->active) return tstr_v_from_buf(NULL, 0u);
+vstr turbo_flow_keyed_state_key(const turbo_flow_keyed_state_t *state) {
+  vstr key;
+  if (!state || !state->active) return vstr_from_buf(NULL, 0u);
   key = flow_keyed_buffer_view(state->key);
-  if (state->key_prefix_size > key.len) return tstr_v_from_buf(NULL, 0u);
-  return tstr_v_from_buf(key.data + state->key_prefix_size, key.len - state->key_prefix_size);
+  if (state->key_prefix_size > key.len) return vstr_from_buf(NULL, 0u);
+  return vstr_from_buf(key.data + state->key_prefix_size, key.len - state->key_prefix_size);
 }
 
-int turbo_flow_keyed_state_get(const turbo_flow_keyed_state_t *state, tstr_v *value,
+int turbo_flow_keyed_state_get(const turbo_flow_keyed_state_t *state, vstr *value,
                                uint64_t *revision) {
   const mem_buffer_t *buffer;
 
   if (!value) return TURBO_EINVAL;
-  *value = tstr_v_from_buf(NULL, 0u);
+  *value = vstr_from_buf(NULL, 0u);
   if (!state || !state->active) return TURBO_EBUSY;
   if (state->mutation == FLOW_KEYED_STATE_MUTATION_DELETE ||
       (state->mutation == FLOW_KEYED_STATE_MUTATION_NONE && !state->present)) {
@@ -272,7 +272,7 @@ int turbo_flow_keyed_state_get(const turbo_flow_keyed_state_t *state, tstr_v *va
   return TURBO_OK;
 }
 
-int turbo_flow_keyed_state_put(turbo_flow_keyed_state_t *state, tstr_v value) {
+int turbo_flow_keyed_state_put(turbo_flow_keyed_state_t *state, vstr value) {
   mem_buffer_t *pending;
 
   if (!state || !state->active) return TURBO_EBUSY;
@@ -311,7 +311,7 @@ int turbo_flow_keyed_state_delete(turbo_flow_keyed_state_t *state) {
 }
 
 static int flow_keyed_snapshot(turbo_flow_keyed_state_t *state) {
-  tstr_v key = flow_keyed_buffer_view(state->key);
+  vstr key = flow_keyed_buffer_view(state->key);
   flow_keyed_state_entry_t *entry;
 
   turbo_mutex_lock(&state->store->mutex);
@@ -343,7 +343,7 @@ static int flow_keyed_event_time_gate_locked(const turbo_flow_keyed_state_t *sta
 
 static int flow_keyed_commit_put(turbo_flow_keyed_state_t *state) {
   turbo_flow_keyed_state_store_t *store = state->store;
-  tstr_v key = flow_keyed_buffer_view(state->key);
+  vstr key = flow_keyed_buffer_view(state->key);
   flow_keyed_state_entry_t replacement;
   flow_keyed_state_entry_t *entry;
   mem_buffer_t *prepared_key = mem_buffer_retain(state->key);
@@ -416,7 +416,7 @@ unlock:
 
 static int flow_keyed_commit_delete(turbo_flow_keyed_state_t *state) {
   turbo_flow_keyed_state_store_t *store = state->store;
-  tstr_v key = flow_keyed_buffer_view(state->key);
+  vstr key = flow_keyed_buffer_view(state->key);
   flow_keyed_state_entry_t replacement;
   flow_keyed_state_entry_t *entry;
   mem_buffer_t *old_value = NULL;
@@ -458,7 +458,7 @@ unlock:
 }
 
 static int flow_keyed_validate_snapshot(const turbo_flow_keyed_state_t *state) {
-  tstr_v key = flow_keyed_buffer_view(state->key);
+  vstr key = flow_keyed_buffer_view(state->key);
   flow_keyed_state_entry_t *entry;
   int rc;
 
@@ -489,7 +489,7 @@ static int flow_keyed_state_open(turbo_flow_keyed_state_store_t *store,
                                  turbo_flow_key_selector_fn key_selector, void *key_ctx,
                                  const turbo_flow_msg_t *message,
                                  turbo_flow_keyed_state_t *state) {
-  tstr_v selected = tstr_v_from_buf(NULL, 0u);
+  vstr selected = vstr_from_buf(NULL, 0u);
   int rc;
 
   if (!store || !store->initialized || !key_selector || !message || !state) return TURBO_EINVAL;
@@ -577,7 +577,7 @@ static int flow_event_time_bounds(const turbo_flow_keyed_state_store_t *store,
   return TURBO_OK;
 }
 
-static mem_buffer_t *flow_event_time_key_copy(uint64_t start_ns, tstr_v application_key) {
+static mem_buffer_t *flow_event_time_key_copy(uint64_t start_ns, vstr application_key) {
   mem_buffer_t *key;
   size_t size;
 
@@ -601,7 +601,7 @@ int flow_event_time_window_execute(turbo_flow_event_time_window_store_t *store,
                                    const turbo_flow_msg_t *message) {
   turbo_flow_keyed_state_t state;
   turbo_flow_event_time_window_t window = TURBO_FLOW_EVENT_TIME_WINDOW_INIT;
-  tstr_v selected = tstr_v_from_buf(NULL, 0u);
+  vstr selected = vstr_from_buf(NULL, 0u);
   uint64_t close_at_ns;
   int rc;
 
@@ -639,15 +639,15 @@ int flow_event_time_window_execute(turbo_flow_event_time_window_store_t *store,
   state.active = 1;
   window.key = selected;
   window.aggregate = state.present ? flow_keyed_buffer_view(state.snapshot)
-                                   : tstr_v_from_buf(NULL, 0u);
+                                   : vstr_from_buf(NULL, 0u);
   return flow_keyed_state_close(&state, fn(message, &window, &state, ctx));
 }
 
 static int flow_event_time_candidate_compare(const void *left, const void *right) {
   const flow_event_time_candidate_t *lhs = (const flow_event_time_candidate_t *)left;
   const flow_event_time_candidate_t *rhs = (const flow_event_time_candidate_t *)right;
-  tstr_v lhs_key;
-  tstr_v rhs_key;
+  vstr lhs_key;
+  vstr rhs_key;
   size_t common;
   int compared;
 
@@ -683,7 +683,7 @@ static int flow_event_time_close_candidate(
   turbo_flow_event_time_window_t window = TURBO_FLOW_EVENT_TIME_WINDOW_INIT;
   turbo_flow_keyed_state_t state;
   turbo_flow_emitter_t emitter;
-  tstr_v full_key;
+  vstr full_key;
   uint64_t close_at_ns;
   int rc;
 
@@ -695,7 +695,7 @@ static int flow_event_time_close_candidate(
   (void)close_at_ns;
   full_key = flow_keyed_buffer_view(candidate->key);
   if (full_key.len <= FLOW_EVENT_TIME_KEY_PREFIX_SIZE) return TURBO_EPROTO;
-  window.key = tstr_v_from_buf(full_key.data + FLOW_EVENT_TIME_KEY_PREFIX_SIZE,
+  window.key = vstr_from_buf(full_key.data + FLOW_EVENT_TIME_KEY_PREFIX_SIZE,
                                full_key.len - FLOW_EVENT_TIME_KEY_PREFIX_SIZE);
   window.aggregate = flow_keyed_buffer_view(candidate->value);
 
@@ -770,7 +770,7 @@ int flow_event_time_window_advance(turbo_flow_t *flow, uint32_t stage_index,
     flow_keyed_state_entry_t *entry =
         (flow_keyed_state_entry_t *)turbo_hash_map_value_at(&store->entries, slot);
     flow_event_time_candidate_t candidate;
-    tstr_v key;
+    vstr key;
     uint64_t start_ns;
     uint64_t end_ns;
     uint64_t close_at_ns;

@@ -207,18 +207,18 @@ spec("protocol plugin conformance") {
          jtt808, jtt808_size}};
     turbo_flow_protocol_registry_t *registry = NULL;
     char reason[256];
-    check_size_eq(gbt32960_size, 25u);
+    check_equal(gbt32960_size, 25u);
     check_true(jtt808_size > 0u);
-    check_int_eq(turbo_flow_protocol_registry_create(
+    check_equal(turbo_flow_protocol_registry_create(
                      sizeof(cases) / sizeof(cases[0]), &registry),
                  TURBO_OK);
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-      check_int_eq(turbo_flow_protocol_registry_load(
+      check_equal(turbo_flow_protocol_registry_load(
                        registry, cases[i].module, reason, sizeof(reason)),
                    TURBO_OK);
-      check_int_eq(protocol_roundtrip(registry, &cases[i]), TURBO_OK);
+      check_equal(protocol_roundtrip(registry, &cases[i]), TURBO_OK);
     }
-    check_int_eq(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
   }
 
   it("rejects an unsupported negotiated protocol version before opening") {
@@ -229,16 +229,16 @@ spec("protocol plugin conformance") {
     char reason[256];
     request.protocol = TURBO_FLOW_PROTOCOL_OCPP;
     request.protocol_version = "2.1";
-    check_int_eq(turbo_flow_protocol_registry_create(1u, &registry), TURBO_OK);
-    check_int_eq(turbo_flow_protocol_registry_load(
+    check_equal(turbo_flow_protocol_registry_create(1u, &registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_load(
                      registry, FLOW_PROTOCOL_OCPP_MODULE, reason,
                      sizeof(reason)),
                  TURBO_OK);
-    check_int_eq(turbo_flow_protocol_owner_create_registered(
+    check_equal(turbo_flow_protocol_owner_create_registered(
                      registry, "ocpp", &request, &owner),
                  TURBO_ENOTSUP);
     check_null(owner);
-    check_int_eq(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
   }
 
   it("rejects malformed frames at every protocol boundary") {
@@ -268,7 +268,7 @@ spec("protocol plugin conformance") {
          bad_jtt808, 0u}};
     turbo_flow_protocol_registry_t *registry = NULL;
     char reason[256];
-    check_size_eq(protocol_gbt32960_frame(bad_gbt32960,
+    check_equal(protocol_gbt32960_frame(bad_gbt32960,
                                          sizeof(bad_gbt32960)),
                   sizeof(bad_gbt32960));
     bad_gbt32960[24] ^= 0x01u;
@@ -276,18 +276,18 @@ spec("protocol plugin conformance") {
         protocol_jtt808_frame(bad_jtt808, sizeof(bad_jtt808));
     check_true(cases[5].frame_size > 3u);
     bad_jtt808[cases[5].frame_size - 2u] ^= 0x01u;
-    check_int_eq(turbo_flow_protocol_registry_create(
+    check_equal(turbo_flow_protocol_registry_create(
                      sizeof(cases) / sizeof(cases[0]), &registry),
                  TURBO_OK);
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-      check_int_eq(turbo_flow_protocol_registry_load(
+      check_equal(turbo_flow_protocol_registry_load(
                        registry, cases[i].module, reason, sizeof(reason)),
                    TURBO_OK);
-      check_int_eq(protocol_reject_frame(registry, &cases[i], cases[i].frame,
+      check_equal(protocol_reject_frame(registry, &cases[i], cases[i].frame,
                                         cases[i].frame_size),
                    TURBO_EPROTO);
     }
-    check_int_eq(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
   }
 
   it("emits protocol responses only after an explicit settlement result") {
@@ -317,7 +317,7 @@ spec("protocol plugin conformance") {
     output.data = response;
     output.capacity = sizeof(response);
 
-    check_int_eq(protocol_open_one(
+    check_equal(protocol_open_one(
                      FLOW_PROTOCOL_MQTT_SN_MODULE, "mqtt-sn",
                      TURBO_FLOW_PROTOCOL_MQTT_SN, "1.2", &registry,
                      &owner, &protocol),
@@ -326,11 +326,11 @@ spec("protocol plugin conformance") {
     request.data_size = sizeof(mqtt_sn);
     request.device_id = "sensor-1";
     request.protocol_version = "1.2";
-    check_int_eq(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
                                           &output),
                  TURBO_OK);
-    check_size_eq(output.data_size, sizeof(mqtt_sn_ack));
-    check_mem_eq(output.data, mqtt_sn_ack, sizeof(mqtt_sn_ack));
+    check_equal(output.data_size, sizeof(mqtt_sn_ack));
+    check_equal(output.data, mqtt_sn_ack, sizeof(mqtt_sn_ack));
     protocol_close_one(registry, owner);
 
     registry = NULL;
@@ -340,7 +340,7 @@ spec("protocol plugin conformance") {
         TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
     output.data = response;
     output.capacity = sizeof(response);
-    check_int_eq(protocol_open_one(
+    check_equal(protocol_open_one(
                      FLOW_PROTOCOL_COAP_MODULE, "coap",
                      TURBO_FLOW_PROTOCOL_COAP, "RFC7252", &registry,
                      &owner, &protocol),
@@ -351,11 +351,11 @@ spec("protocol plugin conformance") {
     request.data_size = sizeof(coap);
     request.device_id = "sensor-2";
     request.protocol_version = "RFC7252";
-    check_int_eq(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
                                           &output),
                  TURBO_OK);
-    check_size_eq(output.data_size, sizeof(coap_ack));
-    check_mem_eq(output.data, coap_ack, sizeof(coap_ack));
+    check_equal(output.data_size, sizeof(coap_ack));
+    check_equal(output.data, coap_ack, sizeof(coap_ack));
     protocol_close_one(registry, owner);
 
     registry = NULL;
@@ -365,7 +365,7 @@ spec("protocol plugin conformance") {
         TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
     output.data = response;
     output.capacity = sizeof(response);
-    check_int_eq(protocol_open_one(
+    check_equal(protocol_open_one(
                      FLOW_PROTOCOL_LWM2M_MODULE, "lwm2m",
                      TURBO_FLOW_PROTOCOL_LWM2M, "1.2.2", &registry,
                      &owner, &protocol),
@@ -376,11 +376,11 @@ spec("protocol plugin conformance") {
     request.data_size = sizeof(lwm2m);
     request.device_id = "device-3";
     request.protocol_version = "1.2.2";
-    check_int_eq(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
                                           &output),
                  TURBO_OK);
-    check_size_eq(output.data_size, sizeof(lwm2m_ack));
-    check_mem_eq(output.data, lwm2m_ack, sizeof(lwm2m_ack));
+    check_equal(output.data_size, sizeof(lwm2m_ack));
+    check_equal(output.data, lwm2m_ack, sizeof(lwm2m_ack));
     protocol_close_one(registry, owner);
 
     registry = NULL;
@@ -390,7 +390,7 @@ spec("protocol plugin conformance") {
         TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
     output.data = response;
     output.capacity = sizeof(response);
-    check_int_eq(protocol_open_one(
+    check_equal(protocol_open_one(
                      FLOW_PROTOCOL_OCPP_MODULE, "ocpp",
                      TURBO_FLOW_PROTOCOL_OCPP, "1.6J", &registry,
                      &owner, &protocol),
@@ -401,14 +401,14 @@ spec("protocol plugin conformance") {
     request.data_size = sizeof(ocpp) - 1u;
     request.device_id = "charger-4";
     request.protocol_version = "1.6J";
-    check_int_eq(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
                                           &output),
                  TURBO_OK);
-    check_size_eq(output.data_size, sizeof(ocpp_result) - 1u);
-    check_mem_eq(output.data, ocpp_result, sizeof(ocpp_result) - 1u);
+    check_equal(output.data_size, sizeof(ocpp_result) - 1u);
+    check_equal(output.data, ocpp_result, sizeof(ocpp_result) - 1u);
     protocol_close_one(registry, owner);
 
-    check_size_eq(protocol_gbt32960_frame(gbt32960, sizeof(gbt32960)),
+    check_equal(protocol_gbt32960_frame(gbt32960, sizeof(gbt32960)),
                   sizeof(gbt32960));
     registry = NULL;
     owner = NULL;
@@ -417,7 +417,7 @@ spec("protocol plugin conformance") {
         TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
     output.data = response;
     output.capacity = sizeof(response);
-    check_int_eq(protocol_open_one(
+    check_equal(protocol_open_one(
                      FLOW_PROTOCOL_GBT32960_MODULE, "gbt32960",
                      TURBO_FLOW_PROTOCOL_GBT_32960, "2025",
                      &registry, &owner, &protocol),
@@ -427,11 +427,11 @@ spec("protocol plugin conformance") {
     request.data = gbt32960;
     request.data_size = sizeof(gbt32960);
     request.protocol_version = "2025";
-    check_int_eq(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
                                           &output),
                  TURBO_OK);
-    check_size_eq(output.data_size, 25u);
-    check_uint_eq(output.data[3], 0x01u);
+    check_equal(output.data_size, 25u);
+    check_equal(output.data[3], 0x01u);
     protocol_close_one(registry, owner);
 
     check_true(protocol_jtt808_frame(jtt808, sizeof(jtt808)) > 0u);
@@ -442,7 +442,7 @@ spec("protocol plugin conformance") {
         TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
     output.data = response;
     output.capacity = sizeof(response);
-    check_int_eq(protocol_open_one(
+    check_equal(protocol_open_one(
                      FLOW_PROTOCOL_JTT808_MODULE, "jtt808",
                      TURBO_FLOW_PROTOCOL_JTT_808, "2019-A1",
                      &registry, &owner, &protocol),
@@ -452,11 +452,11 @@ spec("protocol plugin conformance") {
     request.data = jtt808;
     request.data_size = protocol_jtt808_frame(jtt808, sizeof(jtt808));
     request.protocol_version = "2019-A1";
-    check_int_eq(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
                                           &output),
                  TURBO_OK);
     check_true(output.data_size > 0u);
-    check_str_eq(output.metadata.operation, "platform-ack");
+    check_equal(output.metadata.operation, "platform-ack");
     protocol_close_one(registry, owner);
   }
 
@@ -505,7 +505,7 @@ spec("protocol plugin conformance") {
       turbo_flow_protocol_frame_output_t output =
           TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
       uint8_t frame[512];
-      check_int_eq(protocol_open_one(
+      check_equal(protocol_open_one(
                        cases[i].module, cases[i].name, cases[i].protocol,
                        cases[i].version, &registry, &owner, &protocol),
                    TURBO_OK);
@@ -518,11 +518,11 @@ spec("protocol plugin conformance") {
       command.payload_size = cases[i].payload_size;
       output.data = frame;
       output.capacity = sizeof(frame);
-      check_int_eq(turbo_flow_protocol_encode(protocol, &command, &output),
+      check_equal(turbo_flow_protocol_encode(protocol, &command, &output),
                    TURBO_OK);
       check_true(output.data_size > 0u);
-      check_str_eq(output.metadata.operation, cases[i].operation);
-      check_str_eq(output.metadata.device_id, cases[i].device_id);
+      check_equal(output.metadata.operation, cases[i].operation);
+      check_equal(output.metadata.device_id, cases[i].device_id);
       protocol_close_one(registry, owner);
     }
   }

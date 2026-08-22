@@ -31,8 +31,8 @@ static const turbo_flow_option_field_t FLOW_SCHEDULE_FIELDS[] = {
 
 struct turbo_flow_schedule_s {
   turbo_flow_t *flow;
-  tstr_t source_name;
-  tstr_t payload;
+  tstr source_name;
+  tstr payload;
   turbo_flow_schedule_mode_t mode;
   turbo_cron_expr_t cron_expr;
   uint64_t delay_ms;

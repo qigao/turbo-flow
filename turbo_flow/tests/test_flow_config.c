@@ -64,36 +64,36 @@ spec("flow_config") {
     turbo_flow_async_ingress_config_t ingress = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
     const char *json;
 
-    check_int_eq(
+    check_equal(
         turbo_flow_config_resolve_yaml(defaults_yaml, sizeof(defaults_yaml) - 1u, &config, &error),
         TURBO_OK);
-    check_int_eq(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
-    check_uint_eq(ingress.workers, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS);
-    check_size_eq(ingress.queue_capacity, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY);
+    check_equal(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
+    check_equal(ingress.workers, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS);
+    check_equal(ingress.queue_capacity, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY);
     json = turbo_flow_resolved_config_json(config, NULL);
-    check_str_contains(json, "\"runtime\":{\"ingress\":{\"workers\":1,\"capacity\":1024}}");
+    check_contains(json, "\"runtime\":{\"ingress\":{\"workers\":1,\"capacity\":1024}}");
     turbo_flow_resolved_config_destroy(config);
 
     config = NULL;
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     ingress = (turbo_flow_async_ingress_config_t)TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
-    check_int_eq(
+    check_equal(
         turbo_flow_config_resolve_yaml(explicit_yaml, sizeof(explicit_yaml) - 1u, &config, &error),
         TURBO_OK);
-    check_int_eq(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
-    check_uint_eq(ingress.workers, 3u);
-    check_size_eq(ingress.queue_capacity, 17u);
+    check_equal(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
+    check_equal(ingress.workers, 3u);
+    check_equal(ingress.queue_capacity, 17u);
     turbo_flow_resolved_config_destroy(config);
 
     config = NULL;
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     ingress = (turbo_flow_async_ingress_config_t)TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
-    check_int_eq(
+    check_equal(
         turbo_flow_config_resolve_yaml(partial_yaml, sizeof(partial_yaml) - 1u, &config, &error),
         TURBO_OK);
-    check_int_eq(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
-    check_uint_eq(ingress.workers, 2u);
-    check_size_eq(ingress.queue_capacity, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY);
+    check_equal(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
+    check_equal(ingress.workers, 2u);
+    check_equal(ingress.queue_capacity, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY);
     turbo_flow_resolved_config_destroy(config);
   }
 
@@ -109,24 +109,24 @@ spec("flow_config") {
     turbo_flow_resolved_config_t *config = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
 
-    check_int_eq(turbo_flow_config_resolve_yaml(unknown, sizeof(unknown) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(unknown, sizeof(unknown) - 1u, &config, &error),
                  TURBO_EINVAL);
-    check_str_eq(error.path, "$.runtime.ingress.blocking");
+    check_equal(error.path, "$.runtime.ingress.blocking");
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(
+    check_equal(
         turbo_flow_config_resolve_yaml(wrong_type, sizeof(wrong_type) - 1u, &config, &error),
         TURBO_EINVAL);
-    check_str_eq(error.path, "$.runtime.ingress.workers");
+    check_equal(error.path, "$.runtime.ingress.workers");
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(
+    check_equal(
         turbo_flow_config_resolve_yaml(fractional, sizeof(fractional) - 1u, &config, &error),
         TURBO_EINVAL);
-    check_str_eq(error.path, "$.runtime.ingress.capacity");
+    check_equal(error.path, "$.runtime.ingress.capacity");
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(too_many_workers, sizeof(too_many_workers) - 1u,
+    check_equal(turbo_flow_config_resolve_yaml(too_many_workers, sizeof(too_many_workers) - 1u,
                                                 &config, &error),
                  TURBO_ERANGE);
-    check_str_eq(error.path, "$.runtime.ingress.workers");
+    check_equal(error.path, "$.runtime.ingress.workers");
     check_null(config);
   }
 
@@ -160,62 +160,62 @@ spec("flow_config") {
     const char *adapter_name = NULL;
     const char *channel_name = NULL;
     size_t len = 0u;
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
                  TURBO_OK);
     check_not_null(config);
     json = turbo_flow_resolved_config_json(config, &len);
     check_not_null(json);
-    check_size_eq(strlen(json), len);
-    check_str_contains(json, "\"host\":\"127.0.0.1\"");
-    check_str_contains(json, "\"host\":\"fragment.connection.local\"");
-    check_str_contains(json, "\"pattern\":\"adapter.config\"");
+    check_equal(strlen(json), len);
+    check_contains(json, "\"host\":\"127.0.0.1\"");
+    check_contains(json, "\"host\":\"fragment.connection.local\"");
+    check_contains(json, "\"pattern\":\"adapter.config\"");
     check_null(strstr(json, "fragments"));
-    check_int_eq(
+    check_equal(
         turbo_flow_resolved_config_profile_adapter(config, "ingress", "endpoint", &adapter_name),
         TURBO_OK);
-    check_str_eq(adapter_name, "stream.in");
+    check_equal(adapter_name, "stream.in");
     adapter_name = NULL;
-    check_int_eq(turbo_flow_resolved_config_profile_adapter_optional(config, "ingress", "endpoint",
+    check_equal(turbo_flow_resolved_config_profile_adapter_optional(config, "ingress", "endpoint",
                                                                      &adapter_name),
                  TURBO_OK);
-    check_str_eq(adapter_name, "stream.in");
+    check_equal(adapter_name, "stream.in");
     adapter_name = (const char *)1;
-    check_int_eq(turbo_flow_resolved_config_profile_adapter_optional(
+    check_equal(turbo_flow_resolved_config_profile_adapter_optional(
                      config, "ingress", "optional_sink", &adapter_name),
                  TURBO_OK);
     check_null(adapter_name);
-    check_int_eq(turbo_flow_resolved_config_profile_adapter_optional(config, "ingress", "policy",
+    check_equal(turbo_flow_resolved_config_profile_adapter_optional(config, "ingress", "policy",
                                                                      &adapter_name),
                  TURBO_EINVAL);
     check_null(adapter_name);
-    check_int_eq(turbo_flow_resolved_config_profile_adapter_optional(config, "missing", "endpoint",
+    check_equal(turbo_flow_resolved_config_profile_adapter_optional(config, "missing", "endpoint",
                                                                      &adapter_name),
                  TURBO_ENOENT);
-    check_int_eq(
+    check_equal(
         turbo_flow_resolved_config_profile_channel(config, "ingress", "policy", &channel_name),
         TURBO_OK);
-    check_str_eq(channel_name, "routing");
+    check_equal(channel_name, "routing");
     channel_name = NULL;
-    check_int_eq(turbo_flow_resolved_config_profile_channel_optional(config, "ingress", "policy",
+    check_equal(turbo_flow_resolved_config_profile_channel_optional(config, "ingress", "policy",
                                                                      &channel_name),
                  TURBO_OK);
-    check_str_eq(channel_name, "routing");
+    check_equal(channel_name, "routing");
     channel_name = (const char *)1;
-    check_int_eq(turbo_flow_resolved_config_profile_channel_optional(
+    check_equal(turbo_flow_resolved_config_profile_channel_optional(
                      config, "ingress", "optional_policy", &channel_name),
                  TURBO_OK);
     check_null(channel_name);
-    check_int_eq(turbo_flow_resolved_config_profile_channel_optional(config, "ingress", "endpoint",
+    check_equal(turbo_flow_resolved_config_profile_channel_optional(config, "ingress", "endpoint",
                                                                      &channel_name),
                  TURBO_EINVAL);
     check_null(channel_name);
-    check_int_eq(turbo_flow_resolved_config_profile_channel_optional(config, "missing", "policy",
+    check_equal(turbo_flow_resolved_config_profile_channel_optional(config, "missing", "policy",
                                                                      &channel_name),
                  TURBO_ENOENT);
-    check_int_eq(
+    check_equal(
         turbo_flow_resolved_config_profile_adapter(config, "ingress", "policy", &adapter_name),
         TURBO_ENOENT);
-    check_int_eq(
+    check_equal(
         turbo_flow_resolved_config_profile_adapter(config, "missing", "endpoint", &adapter_name),
         TURBO_ENOENT);
     turbo_flow_resolved_config_destroy(config);
@@ -238,16 +238,16 @@ spec("flow_config") {
     uint64_t u64 = 0u;
     int64_t i64 = 0;
 
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_resolved_config_adapter(config, "limits", &view), TURBO_OK);
-    check_int_eq(turbo_flow_resolved_adapter_get_u64(&view, "max_u64", &u64), TURBO_OK);
-    check_uint_eq(u64, UINT64_MAX);
-    check_int_eq(turbo_flow_resolved_adapter_get_i64(&view, "min_i64", &i64), TURBO_OK);
+    check_equal(turbo_flow_resolved_config_adapter(config, "limits", &view), TURBO_OK);
+    check_equal(turbo_flow_resolved_adapter_get_u64(&view, "max_u64", &u64), TURBO_OK);
+    check_equal(u64, UINT64_MAX);
+    check_equal(turbo_flow_resolved_adapter_get_i64(&view, "min_i64", &i64), TURBO_OK);
     check_true(i64 == INT64_MIN);
-    check_int_eq(turbo_flow_resolved_adapter_get_u64(&view, "safe_u64", &u64), TURBO_OK);
+    check_equal(turbo_flow_resolved_adapter_get_u64(&view, "safe_u64", &u64), TURBO_OK);
     check_true(u64 == UINT64_C(9007199254740991));
-    check_int_eq(turbo_flow_resolved_adapter_get_u64(&view, "invalid_u64", &u64),
+    check_equal(turbo_flow_resolved_adapter_get_u64(&view, "invalid_u64", &u64),
                  TURBO_EINVAL);
 
     turbo_flow_resolved_config_destroy(config);
@@ -269,27 +269,27 @@ spec("flow_config") {
         "adapters:\n  same:\n    kind: socket\n    config:\n      role: sink\n";
     turbo_flow_resolved_config_t *config = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(unknown, sizeof(unknown) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(unknown, sizeof(unknown) - 1u, &config, &error),
                  TURBO_EINVAL);
-    check_str_eq(error.path, "$.extra");
+    check_equal(error.path, "$.extra");
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(
+    check_equal(
         turbo_flow_config_resolve_yaml(unresolved, sizeof(unresolved) - 1u, &config, &error),
         TURBO_ENOENT);
-    check_str_contains(error.path, "profiles.p.output");
+    check_contains(error.path, "profiles.p.output");
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(conflict, sizeof(conflict) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(conflict, sizeof(conflict) - 1u, &config, &error),
                  TURBO_EALREADY);
-    check_str_contains(error.path, "timeout_ms");
+    check_contains(error.path, "timeout_ms");
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(malformed_fragment, sizeof(malformed_fragment) - 1u,
+    check_equal(turbo_flow_config_resolve_yaml(malformed_fragment, sizeof(malformed_fragment) - 1u,
                                                 &config, &error),
                  TURBO_EINVAL);
-    check_str_contains(error.path, "fragments.connection.unused");
+    check_contains(error.path, "fragments.connection.unused");
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(ambiguous, sizeof(ambiguous) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(ambiguous, sizeof(ambiguous) - 1u, &config, &error),
                  TURBO_EALREADY);
-    check_str_eq(error.path, "$.profiles.p.output");
+    check_equal(error.path, "$.profiles.p.output");
     check_null(config);
   }
 
@@ -308,19 +308,19 @@ spec("flow_config") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     const char *json;
     size_t len = 0u;
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
                  TURBO_OK);
     json = turbo_flow_resolved_config_json(config, &len);
     check_not_null(json);
-    check_str_contains(json, "\"channels\":{\"orders\"");
-    check_str_contains(json, "\"pattern\":\"push_pull\"");
+    check_contains(json, "\"channels\":{\"orders\"");
+    check_contains(json, "\"pattern\":\"push_pull\"");
     turbo_flow_resolved_config_destroy(config);
 
     config = NULL;
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(malformed, sizeof(malformed) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(malformed, sizeof(malformed) - 1u, &config, &error),
                  TURBO_EINVAL);
-    check_str_contains(error.path, "channels.orders");
+    check_contains(error.path, "channels.orders");
     check_null(config);
   }
 
@@ -350,34 +350,34 @@ spec("flow_config") {
     int enabled = 0;
     size_t count = 0u;
 
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_resolved_config_adapter(config, "socket.in", &view), TURBO_OK);
-    check_str_eq(view.name, "socket.in");
-    check_str_eq(view.kind, "socket");
-    check_size_eq(turbo_flow_resolved_adapter_field_count(&view), 5u);
+    check_equal(turbo_flow_resolved_config_adapter(config, "socket.in", &view), TURBO_OK);
+    check_equal(view.name, "socket.in");
+    check_equal(view.kind, "socket");
+    check_equal(turbo_flow_resolved_adapter_field_count(&view), 5u);
     check_not_null(turbo_flow_resolved_adapter_field_name(&view, 0u));
     check_null(turbo_flow_resolved_adapter_field_name(&view, 5u));
-    check_int_eq(turbo_flow_resolved_adapter_field_type(&view, "topics", &type), TURBO_OK);
-    check_int_eq(type, TURBO_FLOW_CONFIG_ARRAY);
-    check_int_eq(turbo_flow_resolved_adapter_get_string(&view, "host", &value), TURBO_OK);
-    check_str_eq(value, "127.0.0.1");
-    check_int_eq(turbo_flow_resolved_adapter_get_u64(&view, "port", &port), TURBO_OK);
-    check_uint_eq(port, 7001u);
-    check_int_eq(turbo_flow_resolved_adapter_get_i64(&view, "offset", &offset), TURBO_OK);
-    check_int_eq(offset, -2);
-    check_int_eq(turbo_flow_resolved_adapter_get_bool(&view, "enabled", &enabled), TURBO_OK);
+    check_equal(turbo_flow_resolved_adapter_field_type(&view, "topics", &type), TURBO_OK);
+    check_equal(type, TURBO_FLOW_CONFIG_ARRAY);
+    check_equal(turbo_flow_resolved_adapter_get_string(&view, "host", &value), TURBO_OK);
+    check_equal(value, "127.0.0.1");
+    check_equal(turbo_flow_resolved_adapter_get_u64(&view, "port", &port), TURBO_OK);
+    check_equal(port, 7001u);
+    check_equal(turbo_flow_resolved_adapter_get_i64(&view, "offset", &offset), TURBO_OK);
+    check_equal(offset, -2);
+    check_equal(turbo_flow_resolved_adapter_get_bool(&view, "enabled", &enabled), TURBO_OK);
     check_true(enabled);
-    check_int_eq(turbo_flow_resolved_adapter_array_size(&view, "topics", &count), TURBO_OK);
-    check_size_eq(count, 2u);
-    check_int_eq(turbo_flow_resolved_adapter_array_string_at(&view, "topics", 1u, &value),
+    check_equal(turbo_flow_resolved_adapter_array_size(&view, "topics", &count), TURBO_OK);
+    check_equal(count, 2u);
+    check_equal(turbo_flow_resolved_adapter_array_string_at(&view, "topics", 1u, &value),
                  TURBO_OK);
-    check_str_eq(value, "invoices");
-    check_int_eq(turbo_flow_resolved_adapter_get_string(&view, "missing", &value), TURBO_ENOENT);
-    check_int_eq(turbo_flow_resolved_adapter_get_string(&view, "port", &value), TURBO_EINVAL);
-    check_int_eq(turbo_flow_resolved_adapter_array_string_at(&view, "topics", 2u, &value),
+    check_equal(value, "invoices");
+    check_equal(turbo_flow_resolved_adapter_get_string(&view, "missing", &value), TURBO_ENOENT);
+    check_equal(turbo_flow_resolved_adapter_get_string(&view, "port", &value), TURBO_EINVAL);
+    check_equal(turbo_flow_resolved_adapter_array_string_at(&view, "topics", 2u, &value),
                  TURBO_ENOENT);
-    check_int_eq(turbo_flow_resolved_config_adapter(config, "missing", &view), TURBO_ENOENT);
+    check_equal(turbo_flow_resolved_config_adapter(config, "missing", &view), TURBO_ENOENT);
     turbo_flow_resolved_config_destroy(config);
   }
 
@@ -395,15 +395,15 @@ spec("flow_config") {
     turbo_flow_resolved_channel_view_t view = TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT;
     const char *value = NULL;
 
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_resolved_config_channel(config, "mqtt.auth", &view), TURBO_OK);
-    check_str_eq(view.name, "mqtt.auth");
-    check_str_eq(view.kind, "auth_provider");
-    check_int_eq(turbo_flow_resolved_channel_get_string(&view, "backend", &value), TURBO_OK);
-    check_str_eq(value, "https");
-    check_int_eq(turbo_flow_resolved_channel_get_string(&view, "missing", &value), TURBO_ENOENT);
-    check_int_eq(turbo_flow_resolved_config_channel(config, "missing", &view), TURBO_ENOENT);
+    check_equal(turbo_flow_resolved_config_channel(config, "mqtt.auth", &view), TURBO_OK);
+    check_equal(view.name, "mqtt.auth");
+    check_equal(view.kind, "auth_provider");
+    check_equal(turbo_flow_resolved_channel_get_string(&view, "backend", &value), TURBO_OK);
+    check_equal(value, "https");
+    check_equal(turbo_flow_resolved_channel_get_string(&view, "missing", &value), TURBO_ENOENT);
+    check_equal(turbo_flow_resolved_config_channel(config, "missing", &view), TURBO_ENOENT);
     turbo_flow_resolved_config_destroy(config);
   }
 
@@ -422,15 +422,15 @@ spec("flow_config") {
     static const char *const both[] = {"socket", "rpc"};
     turbo_flow_resolved_config_t *config = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_resolved_config_preflight_adapter_kinds(
+    check_equal(turbo_flow_resolved_config_preflight_adapter_kinds(
                      config, socket_only, sizeof(socket_only) / sizeof(socket_only[0]), &error),
                  TURBO_ENOTSUP);
-    check_str_eq(error.path, "$.adapters.rpc.out.kind");
-    check_str_contains(error.message, "disabled");
+    check_equal(error.path, "$.adapters.rpc.out.kind");
+    check_contains(error.message, "disabled");
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_resolved_config_preflight_adapter_kinds(
+    check_equal(turbo_flow_resolved_config_preflight_adapter_kinds(
                      config, both, sizeof(both) / sizeof(both[0]), &error),
                  TURBO_OK);
     turbo_flow_resolved_config_destroy(config);
@@ -476,20 +476,20 @@ spec("flow_config") {
     registry.resource_provider_count = 1u;
 
     check_not_null(flow);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_product_preflight(config, &registry, &error), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), TURBO_OK);
+    check_equal(turbo_flow_product_preflight(config, &registry, &error), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), TURBO_OK);
     {
       int rc = turbo_flow_product_assemble_graph(flow, config, &registry, &error);
       info("assembly status=%d state=%d path=%s message=%s", rc, (int)turbo_flow_state(flow),
            error.path, error.message);
-      check_int_eq(rc, TURBO_OK);
+      check_equal(rc, TURBO_OK);
     }
-    check_int_eq(probe.resource_calls, 1);
-    check_int_eq(probe.adapter_calls, 2);
-    check_str_eq(probe.order, "RAA");
-    check_size_eq(turbo_flow_adapter_count(flow), 2u);
+    check_equal(probe.resource_calls, 1);
+    check_equal(probe.adapter_calls, 2);
+    check_equal(probe.order, "RAA");
+    check_equal(turbo_flow_adapter_count(flow), 2u);
 
     turbo_flow_destroy(flow);
     turbo_flow_resolved_config_destroy(config);
@@ -513,18 +513,18 @@ spec("flow_config") {
     providers[0].ctx = &probe;
     registry.adapter_providers = providers;
     registry.adapter_provider_count = 1u;
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_product_preflight(config, &registry, &error), TURBO_ENOTSUP);
-    check_str_eq(error.path, "$.adapters.rpc.out.kind");
-    check_int_eq(probe.adapter_calls, 0);
+    check_equal(turbo_flow_product_preflight(config, &registry, &error), TURBO_ENOTSUP);
+    check_equal(error.path, "$.adapters.rpc.out.kind");
+    check_equal(probe.adapter_calls, 0);
 
     providers[1] = providers[0];
     registry.adapter_provider_count = 2u;
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_int_eq(turbo_flow_product_preflight(config, &registry, &error), TURBO_EALREADY);
-    check_str_eq(error.path, "$.providers.adapters");
-    check_int_eq(probe.adapter_calls, 0);
+    check_equal(turbo_flow_product_preflight(config, &registry, &error), TURBO_EALREADY);
+    check_equal(error.path, "$.providers.adapters");
+    check_equal(probe.adapter_calls, 0);
     turbo_flow_resolved_config_destroy(config);
   }
 
@@ -553,17 +553,17 @@ spec("flow_config") {
     registry.adapter_providers = &adapter;
     registry.adapter_provider_count = 1u;
     check_not_null(flow);
-    check_int_eq(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
                  TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), TURBO_OK);
     {
       int rc = turbo_flow_product_assemble_graph(flow, config, &registry, &error);
       info("assembly status=%d state=%d path=%s message=%s", rc, (int)turbo_flow_state(flow),
            error.path, error.message);
-      check_int_eq(rc, TURBO_EIO);
+      check_equal(rc, TURBO_EIO);
     }
-    check_str_eq(error.path, "$.adapters.socket.out");
-    check_int_eq(probe.adapter_calls, 1);
+    check_equal(error.path, "$.adapters.socket.out");
+    check_equal(probe.adapter_calls, 1);
 
     turbo_flow_destroy(flow);
     turbo_flow_resolved_config_destroy(config);

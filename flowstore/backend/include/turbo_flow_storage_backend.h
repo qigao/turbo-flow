@@ -1,6 +1,7 @@
 #ifndef TURBO_FLOW_STORAGE_BACKEND_H
 #define TURBO_FLOW_STORAGE_BACKEND_H
 
+#include "turbo_flow_export.h"
 #include "platform.h"
 
 #include <stddef.h>
@@ -89,7 +90,7 @@ typedef const turbo_flow_storage_backend_plugin_api_t *
 (*turbo_flow_storage_backend_plugin_get_api_fn)(void);
 
 /** Canonical symbol exported by dynamically loaded storage backend modules. */
-CXX_C_API const turbo_flow_storage_backend_plugin_api_t *
+TURBO_FLOW_C_API const turbo_flow_storage_backend_plugin_api_t *
 turbo_flow_storage_backend_plugin_get_api(void);
 
 typedef struct turbo_flow_storage_backend_registry_s turbo_flow_storage_backend_registry_t;
@@ -101,22 +102,22 @@ typedef struct turbo_flow_storage_backend_owner_s turbo_flow_storage_backend_own
  * The registry borrows directly registered APIs and owns dynamically loaded modules. Destroy
  * returns TURBO_EBUSY while any owner is alive.
  */
-CXX_C_API int turbo_flow_storage_backend_registry_create(
+TURBO_FLOW_C_API int turbo_flow_storage_backend_registry_create(
     size_t capacity, turbo_flow_storage_backend_registry_t **out);
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_storage_backend_registry_destroy(turbo_flow_storage_backend_registry_t *registry);
 
 /** Register one static API. Duplicate backend identifiers return TURBO_EALREADY. */
-CXX_C_API int turbo_flow_storage_backend_registry_register(
+TURBO_FLOW_C_API int turbo_flow_storage_backend_registry_register(
     turbo_flow_storage_backend_registry_t *registry,
     const turbo_flow_storage_backend_plugin_api_t *api);
 
 /** Load the canonical API from one module and register it atomically. */
-CXX_C_API int turbo_flow_storage_backend_registry_load(
+TURBO_FLOW_C_API int turbo_flow_storage_backend_registry_load(
     turbo_flow_storage_backend_registry_t *registry, const char *path, char *reason,
     size_t reason_size);
 
-CXX_C_API const turbo_flow_storage_backend_plugin_api_t *
+TURBO_FLOW_C_API const turbo_flow_storage_backend_plugin_api_t *
 turbo_flow_storage_backend_registry_find(const turbo_flow_storage_backend_registry_t *registry,
                                          const char *backend);
 
@@ -126,18 +127,18 @@ turbo_flow_storage_backend_registry_find(const turbo_flow_storage_backend_regist
  * The returned owner is the only mutable lifecycle owner. The service pointer is borrowed and
  * must not be freed or retained after owner destruction.
  */
-CXX_C_API int turbo_flow_storage_backend_owner_create_registered(
+TURBO_FLOW_C_API int turbo_flow_storage_backend_owner_create_registered(
     turbo_flow_storage_backend_registry_t *registry, const char *backend,
     const turbo_flow_storage_backend_open_request_t *request,
     turbo_flow_storage_backend_owner_t **out, turbo_flow_config_error_t *error);
-CXX_C_API int turbo_flow_storage_backend_owner_service(
+TURBO_FLOW_C_API int turbo_flow_storage_backend_owner_service(
     const turbo_flow_storage_backend_owner_t *owner, turbo_flow_storage_model_t expected_model,
     void **out);
-CXX_C_API const char *
+TURBO_FLOW_C_API const char *
 turbo_flow_storage_backend_owner_backend(const turbo_flow_storage_backend_owner_t *owner);
-CXX_C_API turbo_flow_storage_model_t
+TURBO_FLOW_C_API turbo_flow_storage_model_t
 turbo_flow_storage_backend_owner_model(const turbo_flow_storage_backend_owner_t *owner);
-CXX_C_API void
+TURBO_FLOW_C_API void
 turbo_flow_storage_backend_owner_destroy(turbo_flow_storage_backend_owner_t *owner);
 
 #ifdef __cplusplus

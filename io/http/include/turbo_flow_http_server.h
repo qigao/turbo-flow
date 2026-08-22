@@ -40,7 +40,7 @@ typedef struct turbo_flow_http_server_config_s {
  * Request bodies enter through the source; the terminal stage payload becomes
  * the HTTP response body.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_http_register_server_adapter(turbo_flow_t *flow, const char *name,
                                         const turbo_flow_http_server_config_t *config);
 
@@ -48,7 +48,7 @@ turbo_flow_http_register_server_adapter(turbo_flow_t *flow, const char *name,
  * Register an owned Iris boundary from adapter kind `http` in a resolved YAML snapshot.
  * CoroNet context, Iris app, content registry, and ownership remain host-only state.
  */
-CXX_C_API int turbo_flow_http_register_server_resolved_adapter(
+TURBO_FLOW_C_API int turbo_flow_http_register_server_resolved_adapter(
     turbo_flow_t *flow, const turbo_flow_resolved_config_t *resolved, const char *adapter_name);
 
 #ifdef __cplusplus

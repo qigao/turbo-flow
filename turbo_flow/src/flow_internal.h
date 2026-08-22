@@ -7,9 +7,8 @@
 #include "disruptor.h"
 #include "turbo_coro.h"
 #include "turbo_coro_pool.h"
-#include "turbo_set.h"
+#include "turbo_flow_stl_adapter.h"
 #include "turbo_thread.h"
-#include "turbo_vec.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -20,15 +19,15 @@
 #define FLOW_WORKER_POOL_MAX_CAPACITY 1048576u
 
 typedef struct flow_stage_plan_impl_s {
-  tstr_t name;
+  tstr name;
   uint32_t line;
   uint32_t column;
   int is_source;
   int is_port;
   int is_port_output;
-  tstr_t adapter_name;
-  tstr_t operation_name;
-  tstr_t resource_name;
+  tstr adapter_name;
+  tstr operation_name;
+  tstr resource_name;
   turbo_flow_operation_descriptor_t resolved_operation;
   int operation_resolved;
   turbo_flow_data_strategy_t data_strategy;
@@ -53,16 +52,16 @@ typedef struct flow_stage_plan_impl_s {
 } flow_stage_plan_impl_t;
 
 typedef struct flow_stage_registration_s {
-  tstr_t name;
+  tstr name;
   turbo_flow_stage_fn fn;
   void *ctx;
   turbo_flow_stage_options_t options;
 } flow_stage_registration_t;
 
 typedef struct flow_operation_provider_registration_s {
-  tstr_t operation_name;
-  tstr_t resource_name;
-  tstr_t module_name;
+  tstr operation_name;
+  tstr resource_name;
+  tstr module_name;
   turbo_flow_stage_fn fn;
   turbo_flow_emitting_stage_fn emit_fn;
   turbo_flow_key_selector_fn key_selector;
@@ -78,13 +77,13 @@ typedef struct flow_operation_provider_registration_s {
 } flow_operation_provider_registration_t;
 
 typedef struct flow_adapter_operation_binding_s {
-  tstr_t operation_name;
-  tstr_t module_name;
-  tstr_t resource_name;
+  tstr operation_name;
+  tstr module_name;
+  tstr resource_name;
 } flow_adapter_operation_binding_t;
 
 typedef struct flow_adapter_registration_s {
-  tstr_t name;
+  tstr name;
   turbo_flow_adapter_ops_t ops;
   turbo_flow_adapter_consume_batch_fn consume_batch;
   void *ctx;
@@ -96,28 +95,28 @@ typedef struct flow_adapter_registration_s {
 } flow_adapter_registration_t;
 
 typedef struct flow_resource_registration_s {
-  tstr_t owner_name;
+  tstr owner_name;
   turbo_flow_resource_provider_ops_t ops;
   void *ctx;
 } flow_resource_registration_t;
 
 typedef struct flow_primitive_registration_s {
   turbo_flow_primitive_descriptor_t descriptor;
-  tstr_t name;
-  tstr_t type_name;
+  tstr name;
+  tstr type_name;
 } flow_primitive_registration_t;
 
 typedef struct flow_operation_registration_s {
   turbo_flow_operation_descriptor_t descriptor;
-  tstr_t name;
-  tstr_t input_type;
-  tstr_t output_type;
-  tstr_t resource_type;
+  tstr name;
+  tstr input_type;
+  tstr output_type;
+  tstr resource_type;
 } flow_operation_registration_t;
 
 typedef struct flow_module_registration_s {
   turbo_flow_module_descriptor_t descriptor;
-  tstr_t name;
+  tstr name;
   turbo_vec_t primitive_types;
   turbo_vec_t operation_names;
   turbo_vec_t requirements;
@@ -129,30 +128,30 @@ typedef struct flow_active_adapter_s {
 } flow_active_adapter_t;
 
 typedef struct flow_edge_plan_impl_s {
-  tstr_t from_name;
-  tstr_t to_name;
+  tstr from_name;
+  tstr to_name;
   uint32_t from_stage;
   uint32_t to_stage;
   uint32_t line;
   uint32_t column;
   int is_stage_internal;
   turbo_flow_edge_kind_t kind;
-  tstr_t condition;
-  tstr_t name;
+  tstr condition;
+  tstr name;
   turbo_flow_expr_t *predicate;
 } flow_edge_plan_impl_t;
 
 typedef struct flow_expr_projection_field_s {
-  tstr_t path;
+  tstr path;
   turbo_flow_expr_value_type_t type;
   uint32_t field_id;
 } flow_expr_projection_field_t;
 
 typedef struct flow_expr_projection_registration_s {
   turbo_flow_data_schema_t schema;
-  tstr_t schema_name;
-  tstr_t type_name;
-  tstr_t projection_type;
+  tstr schema_name;
+  tstr type_name;
+  tstr projection_type;
   flow_expr_projection_field_t *fields;
   size_t field_count;
   turbo_flow_expr_projection_field_fn read_field;
@@ -387,7 +386,7 @@ typedef struct flow_reorder_state_s {
   uint32_t waiting;
   uint64_t issued_sequence;
   uint64_t next_sequence;
-  turbo_set_t canceled_sequences;
+  turbo_hash_set_t canceled_sequences;
   int canceled_sequences_initialized;
   int active;
   int stopping;
@@ -396,7 +395,7 @@ typedef struct flow_reorder_state_s {
 } flow_reorder_state_t;
 
 typedef struct flow_event_observer_registration_s {
-  tstr_t name;
+  tstr name;
   turbo_flow_event_observer_ops_t ops;
   void *ctx;
 } flow_event_observer_registration_t;
@@ -466,8 +465,8 @@ int flow_entry_header_init(const turbo_flow_t *flow, flow_entry_header_t *header
 int flow_entry_header_validate(const turbo_flow_t *flow, const flow_entry_header_t *header,
                                const turbo_flow_msg_t *message);
 
-int flow_view_eq_cstr(tstr_v view, const char *text);
-int flow_find_stage_view(const turbo_flow_t *flow, tstr_v name);
+int flow_view_eq_cstr(vstr view, const char *text);
+int flow_find_stage_view(const turbo_flow_t *flow, vstr name);
 int flow_find_registration(const turbo_flow_t *flow, const char *name);
 int flow_find_operation_provider(const turbo_flow_t *flow, const char *operation_name,
                                  const char *resource_name);
@@ -558,27 +557,27 @@ flow_data_segment_plan_t *flow_worker_pool_segment_for_stage(turbo_flow_t *flow,
 const flow_threadpool_adapter_t *flow_threadpool_adapter_for_stage(const turbo_flow_t *flow,
                                                                    uint32_t stage_index);
 flow_coro_adapter_t *flow_coro_adapter_for_stage(turbo_flow_t *flow, uint32_t stage_index);
-CXX_C_API flow_worker_pool_adapter_t *flow_worker_pool_adapter_for_stage(turbo_flow_t *flow,
+TURBO_FLOW_C_API flow_worker_pool_adapter_t *flow_worker_pool_adapter_for_stage(turbo_flow_t *flow,
                                                                          uint32_t stage_index);
-CXX_C_API int flow_worker_pool_submit(flow_worker_pool_adapter_t *adapter, turbo_flow_msg_t *msg,
+TURBO_FLOW_C_API int flow_worker_pool_submit(flow_worker_pool_adapter_t *adapter, turbo_flow_msg_t *msg,
                                       flow_stage_completion_t *completion);
-CXX_C_API int flow_execution_task_init(flow_execution_task_t *task,
+TURBO_FLOW_C_API int flow_execution_task_init(flow_execution_task_t *task,
                                        flow_execution_backend_t backend, turbo_flow_stage_fn fn,
                                        void *ctx, turbo_flow_msg_t *msg,
                                        const flow_stage_completion_t *completion,
                                        uint64_t deadline_ms);
-CXX_C_API void flow_execution_task_run(flow_execution_task_t *task);
-CXX_C_API void flow_execution_task_fail(flow_execution_task_t *task, int status);
-CXX_C_API int flow_execution_task_wait(flow_execution_task_t *task, turbo_flow_msg_t *msg,
+TURBO_FLOW_C_API void flow_execution_task_run(flow_execution_task_t *task);
+TURBO_FLOW_C_API void flow_execution_task_fail(flow_execution_task_t *task, int status);
+TURBO_FLOW_C_API int flow_execution_task_wait(flow_execution_task_t *task, turbo_flow_msg_t *msg,
                                        flow_stage_completion_t *completion);
-CXX_C_API void flow_execution_task_mark_accounting_done(flow_execution_task_t *task);
-CXX_C_API void flow_execution_task_wait_accounting(flow_execution_task_t *task);
-CXX_C_API int flow_execution_task_abort(flow_execution_task_t *task);
-CXX_C_API void flow_execution_task_discard(flow_execution_task_t *task);
-CXX_C_API int flow_execution_yield(void);
-CXX_C_API int flow_execution_cancel_requested(void);
-CXX_C_API flow_execution_state_t flow_execution_task_state(const flow_execution_task_t *task);
-CXX_C_API void flow_execution_task_cleanup(flow_execution_task_t *task);
+TURBO_FLOW_C_API void flow_execution_task_mark_accounting_done(flow_execution_task_t *task);
+TURBO_FLOW_C_API void flow_execution_task_wait_accounting(flow_execution_task_t *task);
+TURBO_FLOW_C_API int flow_execution_task_abort(flow_execution_task_t *task);
+TURBO_FLOW_C_API void flow_execution_task_discard(flow_execution_task_t *task);
+TURBO_FLOW_C_API int flow_execution_yield(void);
+TURBO_FLOW_C_API int flow_execution_cancel_requested(void);
+TURBO_FLOW_C_API flow_execution_state_t flow_execution_task_state(const flow_execution_task_t *task);
+TURBO_FLOW_C_API void flow_execution_task_cleanup(flow_execution_task_t *task);
 const turbo_flow_operation_runtime_contract_t *
 flow_stage_operation_runtime(const turbo_flow_t *flow, const flow_stage_plan_impl_t *stage);
 const turbo_flow_operation_descriptor_t *
@@ -634,12 +633,12 @@ int flow_apply_completion(turbo_flow_t *flow, const flow_stage_completion_t *com
                           turbo_flow_msg_t *msg, uint8_t *done, const uint8_t *reachable,
                           uint32_t *remaining, uint32_t *activated, uint32_t *queue,
                           size_t queue_cap, size_t *tail);
-CXX_C_API int flow_start_reorder_states(turbo_flow_t *flow);
-CXX_C_API void flow_stop_reorder_states(turbo_flow_t *flow);
-CXX_C_API void flow_clear_reorder_states(turbo_flow_t *flow);
-CXX_C_API int flow_reorder_reserve(turbo_flow_t *flow, uint32_t stage_index, uint64_t *sequence);
-CXX_C_API int flow_reorder_cancel(turbo_flow_t *flow, uint32_t stage_index, uint64_t sequence);
-CXX_C_API int flow_reorder_enter(turbo_flow_t *flow, uint32_t stage_index, uint64_t sequence);
-CXX_C_API void flow_reorder_leave(turbo_flow_t *flow, uint32_t stage_index, uint64_t sequence);
+TURBO_FLOW_C_API int flow_start_reorder_states(turbo_flow_t *flow);
+TURBO_FLOW_C_API void flow_stop_reorder_states(turbo_flow_t *flow);
+TURBO_FLOW_C_API void flow_clear_reorder_states(turbo_flow_t *flow);
+TURBO_FLOW_C_API int flow_reorder_reserve(turbo_flow_t *flow, uint32_t stage_index, uint64_t *sequence);
+TURBO_FLOW_C_API int flow_reorder_cancel(turbo_flow_t *flow, uint32_t stage_index, uint64_t sequence);
+TURBO_FLOW_C_API int flow_reorder_enter(turbo_flow_t *flow, uint32_t stage_index, uint64_t sequence);
+TURBO_FLOW_C_API void flow_reorder_leave(turbo_flow_t *flow, uint32_t stage_index, uint64_t sequence);
 
 #endif /* TURBO_FLOW_INTERNAL_H */

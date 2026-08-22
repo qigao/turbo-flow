@@ -44,7 +44,7 @@ int tf_connection_status_document(const tf_connection_state_t *connection, const
                                   turbo_flow_resource_document_t *out) {
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
   turbo_flow_connection_snapshot_t snapshot;
-  tstr_t payload;
+  tstr payload;
   int rc;
   if (document_kind != TURBO_FLOW_RESOURCE_DOCUMENT_STATUS) return TURBO_ENOTSUP;
   rc = tf_connection_resource_metadata(connection, uid, owner_name, domain, &metadata);

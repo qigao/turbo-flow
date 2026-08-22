@@ -1,6 +1,7 @@
 #ifndef TURBO_FLOW_H
 #define TURBO_FLOW_H
 
+#include "turbo_flow_export.h"
 #include "platform.h"
 #include "turbo_buffer.h"
 #include "turbo_error.h"
@@ -8,7 +9,7 @@
 #include "turbo_flow_config_limits.h"
 #include "turbo_flow_record_store.h"
 #include "turbo_str.h"
-#include "turbo_str_view.h"
+#include "turbo_vstr.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -240,47 +241,47 @@ typedef struct turbo_flow_content_binding_s {
    TURBO_FLOW_CONTENT_PROFILE_GENERIC, TURBO_FLOW_DATA_ENCODING_OPAQUE}
 
 /** Initialize and checked-copy one domain content identity. */
-CXX_C_API int turbo_flow_content_descriptor_init(turbo_flow_content_descriptor_t *descriptor,
+TURBO_FLOW_C_API int turbo_flow_content_descriptor_init(turbo_flow_content_descriptor_t *descriptor,
                                                  turbo_flow_domain_t domain,
                                                  turbo_flow_content_profile_t profile,
                                                  turbo_flow_data_encoding_t encoding,
                                                  const char *media_type, const char *identity);
 
 /** Validate descriptor structure, profile/domain scope, flags, and schema declaration coherence. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_content_descriptor_check(const turbo_flow_content_descriptor_t *descriptor);
 
 /** Declare a trusted registry key on an initialized descriptor. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_content_descriptor_declare_schema(turbo_flow_content_descriptor_t *descriptor,
                                              const char *schema_name, const char *type_name,
                                              uint32_t schema_version);
 
 /** Normalize a recognized media type to one stable registry key. */
-CXX_C_API int turbo_flow_content_media_type_normalize(const char *media_type,
+TURBO_FLOW_C_API int turbo_flow_content_media_type_normalize(const char *media_type,
                                                       turbo_flow_data_encoding_t *encoding_out,
                                                       const char **normalized_media_type_out);
 
 /** Resolve and declare a trusted schema while the owner may still mutate the descriptor. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_content_descriptor_resolve(turbo_flow_content_descriptor_t *descriptor,
                                       const turbo_flow_schema_registry_t *registry,
                                       const turbo_flow_content_schema_ref_t *selector);
 
 /** Normalize domain metadata, initialize a descriptor, and apply one host binding. */
-CXX_C_API int turbo_flow_content_descriptor_from_media(turbo_flow_content_descriptor_t *descriptor,
+TURBO_FLOW_C_API int turbo_flow_content_descriptor_from_media(turbo_flow_content_descriptor_t *descriptor,
                                                        turbo_flow_domain_t domain,
                                                        turbo_flow_content_profile_t profile,
                                                        const char *media_type, const char *identity,
                                                        const turbo_flow_content_binding_t *binding);
 
 /** Validate exact registry-key and declared-schema compatibility. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_content_descriptor_validate(const turbo_flow_content_descriptor_t *expected,
                                        const turbo_flow_content_descriptor_t *actual);
 
 /** Validate payload media/encoding and any schema declared by `expected`, across domains. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_content_descriptor_validate_payload(const turbo_flow_content_descriptor_t *expected,
                                                const turbo_flow_content_descriptor_t *actual);
 
@@ -350,12 +351,12 @@ typedef struct turbo_flow_resource_document_s {
    TURBO_FLOW_RESOURCE_DOCUMENT_STATUS}
 
 /** Build an owned immutable resource document by copying one bounded payload. */
-CXX_C_API int turbo_flow_resource_document_set_payload_copy(
+TURBO_FLOW_C_API int turbo_flow_resource_document_set_payload_copy(
     turbo_flow_resource_document_t *document, const turbo_flow_resource_metadata_t *metadata,
     const turbo_flow_resource_schema_t *schema, const void *payload, size_t payload_size);
 
 /** Validate one document against an exact trusted schema identity without parsing its payload. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_resource_document_validate(const turbo_flow_resource_document_t *document,
                                       const turbo_flow_resource_schema_t *expected_schema);
 
@@ -423,11 +424,11 @@ typedef enum turbo_flow_content_state_e {
 
 typedef struct turbo_flow_failure_s {
   /** Owned stage name; NULL when the message has no captured failure. */
-  tstr_t stage_name;
+  tstr stage_name;
   /** Owned adapter name; NULL for callback-only stages. */
-  tstr_t adapter_name;
+  tstr adapter_name;
   /** Owned name of the reject route that handled the failure. */
-  tstr_t route_name;
+  tstr route_name;
   int code;
   /** First execution attempt is 1; retry policies increment this value. */
   uint32_t attempt;
@@ -467,8 +468,8 @@ typedef struct turbo_flow_msg_s {
   uint32_t type;
   uint32_t flags;
   mem_buffer_t *buffer;
-  tstr_v payload;
-  tstr_t owned_payload;
+  vstr payload;
+  tstr owned_payload;
   /**
    * Adapter context. An address inside `buffer` is message-owned and follows
    * that buffer across clone/move and asynchronous graph boundaries. Any other
@@ -533,7 +534,7 @@ typedef int (*turbo_flow_emitting_stage_fn)(const turbo_flow_msg_t *input,
  * process-local capability, TURBO_EINVAL for invalid backing, or TURBO_ENOMEM.
  * The first failure is sticky and makes the whole callback batch fail.
  */
-CXX_C_API int turbo_flow_emitter_emit_clone(turbo_flow_emitter_t *emitter,
+TURBO_FLOW_C_API int turbo_flow_emitter_emit_clone(turbo_flow_emitter_t *emitter,
                                             const turbo_flow_msg_t *output);
 
 /**
@@ -541,10 +542,10 @@ CXX_C_API int turbo_flow_emitter_emit_clone(turbo_flow_emitter_t *emitter,
  * `output` is reset only after the batch accepts it. Returns the same errors as
  * turbo_flow_emitter_emit_clone().
  */
-CXX_C_API int turbo_flow_emitter_emit_move(turbo_flow_emitter_t *emitter, turbo_flow_msg_t *output);
+TURBO_FLOW_C_API int turbo_flow_emitter_emit_move(turbo_flow_emitter_t *emitter, turbo_flow_msg_t *output);
 
 /** Return the number of outputs accepted so far, or zero outside an active callback. */
-CXX_C_API size_t turbo_flow_emitter_count(const turbo_flow_emitter_t *emitter);
+TURBO_FLOW_C_API size_t turbo_flow_emitter_count(const turbo_flow_emitter_t *emitter);
 
 #define TURBO_FLOW_KEYED_STATE_MAX_ENTRIES 1048576u
 #define TURBO_FLOW_KEYED_STATE_MAX_KEY_SIZE 1048576u
@@ -573,17 +574,17 @@ typedef struct turbo_flow_keyed_state_store_config_s {
  * insert-delete ABA conflicts remain visible.
  * Returns NULL for invalid bounds or allocation failure.
  */
-CXX_C_API turbo_flow_keyed_state_store_t *
+TURBO_FLOW_C_API turbo_flow_keyed_state_store_t *
 turbo_flow_keyed_state_store_create(const turbo_flow_keyed_state_store_config_t *config);
 
 /** Destroy a store after all borrowing flows have stopped and been reset/destroyed. */
-CXX_C_API void turbo_flow_keyed_state_store_destroy(turbo_flow_keyed_state_store_t *store);
+TURBO_FLOW_C_API void turbo_flow_keyed_state_store_destroy(turbo_flow_keyed_state_store_t *store);
 
 /** Return the current number of present keys; serialize with store destruction. */
-CXX_C_API size_t turbo_flow_keyed_state_store_size(const turbo_flow_keyed_state_store_t *store);
+TURBO_FLOW_C_API size_t turbo_flow_keyed_state_store_size(const turbo_flow_keyed_state_store_t *store);
 
 /** Return the immutable key selected for the current callback, or an empty view. */
-CXX_C_API tstr_v turbo_flow_keyed_state_key(const turbo_flow_keyed_state_t *state);
+TURBO_FLOW_C_API vstr turbo_flow_keyed_state_key(const turbo_flow_keyed_state_t *state);
 
 /**
  * Read the callback-local value snapshot or pending PUT value.
@@ -592,7 +593,7 @@ CXX_C_API tstr_v turbo_flow_keyed_state_key(const turbo_flow_keyed_state_t *stat
  * `revision` may be NULL. Returns TURBO_ENOENT when the key is absent/deleted,
  * TURBO_EBUSY outside an active callback, or TURBO_EINVAL for invalid output.
  */
-CXX_C_API int turbo_flow_keyed_state_get(const turbo_flow_keyed_state_t *state, tstr_v *value,
+TURBO_FLOW_C_API int turbo_flow_keyed_state_get(const turbo_flow_keyed_state_t *state, vstr *value,
                                          uint64_t *revision);
 
 /**
@@ -600,10 +601,10 @@ CXX_C_API int turbo_flow_keyed_state_get(const turbo_flow_keyed_state_t *state, 
  * Returns TURBO_OK, TURBO_ENOSPC for configured bounds, TURBO_ENOMEM, or
  * TURBO_EBUSY outside an active callback. The first PUT failure is sticky.
  */
-CXX_C_API int turbo_flow_keyed_state_put(turbo_flow_keyed_state_t *state, tstr_v value);
+TURBO_FLOW_C_API int turbo_flow_keyed_state_put(turbo_flow_keyed_state_t *state, vstr value);
 
 /** Stage deletion of an existing key; returns TURBO_ENOENT when absent. */
-CXX_C_API int turbo_flow_keyed_state_delete(turbo_flow_keyed_state_t *state);
+TURBO_FLOW_C_API int turbo_flow_keyed_state_delete(turbo_flow_keyed_state_t *state);
 
 /** One bounded event-time tumbling-window store; keys and values are copied. */
 typedef struct turbo_flow_event_time_window_store_config_s {
@@ -630,29 +631,29 @@ typedef struct turbo_flow_event_time_window_store_config_s {
 /** Borrowed immutable view valid only for the current event/close callback. */
 typedef struct turbo_flow_event_time_window_s {
   size_t size;
-  tstr_v key;
+  vstr key;
   uint64_t start_ns;
   uint64_t end_ns;
   /** Current aggregate before the event, or the final aggregate during close. */
-  tstr_v aggregate;
+  vstr aggregate;
 } turbo_flow_event_time_window_t;
 
 #define TURBO_FLOW_EVENT_TIME_WINDOW_INIT                                                          \
   {sizeof(turbo_flow_event_time_window_t), {NULL, 0u}, 0u, 0u, {NULL, 0u}}
 
 /** Create a runtime-generation event-time store with fixed tumbling-window bounds. */
-CXX_C_API turbo_flow_event_time_window_store_t *turbo_flow_event_time_window_store_create(
+TURBO_FLOW_C_API turbo_flow_event_time_window_store_t *turbo_flow_event_time_window_store_create(
     const turbo_flow_event_time_window_store_config_t *config);
 
 /** Destroy an unbound, stopped event-time store. */
-CXX_C_API void
+TURBO_FLOW_C_API void
 turbo_flow_event_time_window_store_destroy(turbo_flow_event_time_window_store_t *store);
 
 /** Return the committed watermark, or zero and initialized=0 before its first advance. */
-CXX_C_API uint64_t turbo_flow_event_time_window_watermark(
+TURBO_FLOW_C_API uint64_t turbo_flow_event_time_window_watermark(
     const turbo_flow_event_time_window_store_t *store, int *initialized);
 
-typedef int (*turbo_flow_key_selector_fn)(const turbo_flow_msg_t *message, tstr_v *key, void *ctx);
+typedef int (*turbo_flow_key_selector_fn)(const turbo_flow_msg_t *message, vstr *key, void *ctx);
 typedef int (*turbo_flow_keyed_stage_fn)(turbo_flow_msg_t *message, turbo_flow_keyed_state_t *state,
                                          void *ctx);
 typedef int (*turbo_flow_keyed_emitting_stage_fn)(const turbo_flow_msg_t *input,
@@ -693,7 +694,7 @@ typedef struct turbo_flow_settlement_result_s {
  * The runtime validates the action against the registered operation contract
  * after the callback returns. The report is copied and owns no pointers.
  */
-CXX_C_API int turbo_flow_settlement_report(const turbo_flow_settlement_result_t *result);
+TURBO_FLOW_C_API int turbo_flow_settlement_report(const turbo_flow_settlement_result_t *result);
 
 /**
  * Cooperatively yield the current stage task.
@@ -703,13 +704,13 @@ CXX_C_API int turbo_flow_settlement_report(const turbo_flow_settlement_result_t 
  * TURBO_ECANCELED when cancellation was requested, or TURBO_ETIMEDOUT when the
  * bound operation deadline expires.
  */
-CXX_C_API int turbo_flow_execution_yield(void);
+TURBO_FLOW_C_API int turbo_flow_execution_yield(void);
 
 /** Request cooperative cancellation of the current stage task. */
-CXX_C_API int turbo_flow_execution_abort(void);
+TURBO_FLOW_C_API int turbo_flow_execution_abort(void);
 
 /** Return nonzero when the current stage task has a cooperative cancel request. */
-CXX_C_API int turbo_flow_execution_cancel_requested(void);
+TURBO_FLOW_C_API int turbo_flow_execution_cancel_requested(void);
 
 typedef enum turbo_flow_adapter_kind_e {
   TURBO_FLOW_ADAPTER_KIND_CUSTOM = 0,
@@ -1629,8 +1630,8 @@ typedef struct turbo_flow_control_command_s {
 
 #define TURBO_FLOW_CONTROL_COMMAND_INIT {sizeof(turbo_flow_control_command_t), 0}
 
-CXX_C_API turbo_flow_t *turbo_flow_create(void);
-CXX_C_API void turbo_flow_destroy(turbo_flow_t *flow);
+TURBO_FLOW_C_API turbo_flow_t *turbo_flow_create(void);
+TURBO_FLOW_C_API void turbo_flow_destroy(turbo_flow_t *flow);
 
 /**
  * Clear parsed/compiled stage plan state.
@@ -1639,9 +1640,9 @@ CXX_C_API void turbo_flow_destroy(turbo_flow_t *flow);
  * registered stage callbacks and adapters remain available for the next
  * parse/compile cycle. When zero, the flow returns to an empty NEW state.
  */
-CXX_C_API int turbo_flow_reset(turbo_flow_t *flow, int keep_registry);
+TURBO_FLOW_C_API int turbo_flow_reset(turbo_flow_t *flow, int keep_registry);
 
-CXX_C_API int turbo_flow_parse_string(turbo_flow_t *flow, const char *text, size_t len);
+TURBO_FLOW_C_API int turbo_flow_parse_string(turbo_flow_t *flow, const char *text, size_t len);
 
 /**
  * Validate the parsed stage plan and build runtime plans. Topology remains
@@ -1651,7 +1652,7 @@ CXX_C_API int turbo_flow_parse_string(turbo_flow_t *flow, const char *text, size
  * A flow may be compiled from PARSED or recompiled from STOPPED. Compile errors
  * move the flow to FAILED; call turbo_flow_reset() before parsing again.
  */
-CXX_C_API int turbo_flow_compile(turbo_flow_t *flow);
+TURBO_FLOW_C_API int turbo_flow_compile(turbo_flow_t *flow);
 
 /**
  * Start runtime data planes and executor adapters.
@@ -1659,20 +1660,20 @@ CXX_C_API int turbo_flow_compile(turbo_flow_t *flow);
  * Valid from COMPILED and STOPPED. Starting a STOPPED flow reuses the compiled
  * stage plan and recreates runtime rings/adapters.
  */
-CXX_C_API int turbo_flow_start(turbo_flow_t *flow);
+TURBO_FLOW_C_API int turbo_flow_start(turbo_flow_t *flow);
 
 /** Idempotently stop accepting new publishes while keeping runtime resources started. */
-CXX_C_API int turbo_flow_pause(turbo_flow_t *flow);
+TURBO_FLOW_C_API int turbo_flow_pause(turbo_flow_t *flow);
 
 /** Idempotently reopen publish admission for a paused STARTED flow. */
-CXX_C_API int turbo_flow_resume(turbo_flow_t *flow);
+TURBO_FLOW_C_API int turbo_flow_resume(turbo_flow_t *flow);
 
 /**
  * Pause admission and wait for accepted publishes to complete. A zero timeout
  * performs a non-blocking check; UINT64_MAX waits without a deadline. The flow
  * remains paused after success or timeout.
  */
-CXX_C_API int turbo_flow_drain(turbo_flow_t *flow, uint64_t timeout_ms);
+TURBO_FLOW_C_API int turbo_flow_drain(turbo_flow_t *flow, uint64_t timeout_ms);
 
 /**
  * Drain admission and atomically rebuild runtime-owned pool resources.
@@ -1682,18 +1683,18 @@ CXX_C_API int turbo_flow_drain(turbo_flow_t *flow, uint64_t timeout_ms);
  * resize. A rebuild failure restores the previous configuration and resources;
  * a drain timeout leaves the flow paused without changing pool configuration.
  */
-CXX_C_API int turbo_flow_resize_pool(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_resize_pool(turbo_flow_t *flow,
                                      const turbo_flow_pool_resize_command_t *command);
 
 /** Parse exactly one side-effect-free control DSL command into caller-owned storage. */
-CXX_C_API int turbo_flow_control_parse(const char *text, size_t len,
+TURBO_FLOW_C_API int turbo_flow_control_parse(const char *text, size_t len,
                                        turbo_flow_control_command_t *out,
                                        turbo_flow_error_t *error);
 /** Execute a previously parsed control command on a STARTED flow. */
-CXX_C_API int turbo_flow_control_execute(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_control_execute(turbo_flow_t *flow,
                                          const turbo_flow_control_command_t *command);
 /** Convenience parse-and-execute entry point for exactly one command. */
-CXX_C_API int turbo_flow_control(turbo_flow_t *flow, const char *text, size_t len);
+TURBO_FLOW_C_API int turbo_flow_control(turbo_flow_t *flow, const char *text, size_t len);
 
 /**
  * Stop a STARTED flow and release runtime-only rings/adapters.
@@ -1701,7 +1702,7 @@ CXX_C_API int turbo_flow_control(turbo_flow_t *flow, const char *text, size_t le
  * The compiled stage plan and registries remain available, so the flow can be
  * started again or reset for another parse/compile cycle.
  */
-CXX_C_API int turbo_flow_stop(turbo_flow_t *flow);
+TURBO_FLOW_C_API int turbo_flow_stop(turbo_flow_t *flow);
 
 /**
  * Publish one message through a STARTED flow source.
@@ -1710,7 +1711,7 @@ CXX_C_API int turbo_flow_stop(turbo_flow_t *flow);
  * messages are cloned before entering the runtime. Schema projections without
  * a clone hook are rejected.
  */
-CXX_C_API int turbo_flow_publish(turbo_flow_t *flow, const char *source_name,
+TURBO_FLOW_C_API int turbo_flow_publish(turbo_flow_t *flow, const char *source_name,
                                  const turbo_flow_msg_t *msg);
 
 /**
@@ -1773,7 +1774,7 @@ typedef struct turbo_flow_publish_batch_config_s {
  * The callback and `ctx` are borrowed for the duration of this synchronous call.
  * The config fields are snapshotted before the first callback.
  */
-CXX_C_API int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
+TURBO_FLOW_C_API int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
                                        const turbo_flow_publish_batch_config_t *config,
                                        size_t *published);
 
@@ -1817,7 +1818,7 @@ typedef void (*turbo_flow_publish_completion_fn)(void *ctx,
  * flow is not STARTED. Capacity exhaustion is reported by publish_async as
  * TURBO_ENOSPC; submissions never block waiting for queue space.
  */
-CXX_C_API int turbo_flow_configure_async_ingress(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_configure_async_ingress(turbo_flow_t *flow,
                                                  const turbo_flow_async_ingress_config_t *config);
 
 /**
@@ -1828,7 +1829,7 @@ CXX_C_API int turbo_flow_configure_async_ingress(turbo_flow_t *flow,
  * returned directly, and a full bounded ingress returns TURBO_ENOSPC. The
  * producer thread never executes graph stages.
  */
-CXX_C_API int turbo_flow_publish_async(turbo_flow_t *flow, const char *source_name,
+TURBO_FLOW_C_API int turbo_flow_publish_async(turbo_flow_t *flow, const char *source_name,
                                        const turbo_flow_msg_t *msg,
                                        turbo_flow_publish_completion_fn completion, void *ctx);
 
@@ -1840,11 +1841,11 @@ CXX_C_API int turbo_flow_publish_async(turbo_flow_t *flow, const char *source_na
  * Returns TURBO_EINVAL for invalid ABI/source/message input, lifecycle or
  * stage errors from the graph, or the primitive/owner callback status.
  */
-CXX_C_API int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name,
+TURBO_FLOW_C_API int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name,
                                     const turbo_flow_msg_t *msg,
                                     turbo_flow_publish_result_t *result);
 
-CXX_C_API int turbo_flow_register_stage_ex(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_register_stage_ex(turbo_flow_t *flow, const char *name,
                                            turbo_flow_stage_fn fn, void *ctx,
                                            const turbo_flow_stage_options_t *options);
 
@@ -1855,7 +1856,7 @@ CXX_C_API int turbo_flow_register_stage_ex(turbo_flow_t *flow, const char *name,
  * `resource_name` is NULL only for a stateless operation. The descriptor must
  * be registered separately with turbo_flow_register_operation().
  */
-CXX_C_API int turbo_flow_register_operation_provider(
+TURBO_FLOW_C_API int turbo_flow_register_operation_provider(
     turbo_flow_t *flow, const turbo_flow_operation_provider_registration_t *registration);
 
 /**
@@ -1868,7 +1869,7 @@ CXX_C_API int turbo_flow_register_operation_provider(
  * operation contract, executor, retry policy, or downstream topology cannot
  * provide the documented emission semantics.
  */
-CXX_C_API int turbo_flow_register_emitting_operation_provider(
+TURBO_FLOW_C_API int turbo_flow_register_emitting_operation_provider(
     turbo_flow_t *flow, const turbo_flow_emitting_operation_provider_registration_t *registration);
 
 /**
@@ -1876,16 +1877,16 @@ CXX_C_API int turbo_flow_register_emitting_operation_provider(
  * store are borrowed. Returns standard provider registration errors and
  * TURBO_EALREADY when the store already has an owner binding.
  */
-CXX_C_API int turbo_flow_register_keyed_operation_provider(
+TURBO_FLOW_C_API int turbo_flow_register_keyed_operation_provider(
     turbo_flow_t *flow, const turbo_flow_keyed_operation_provider_registration_t *registration);
 
 /** Register one bounded stateful 0..N processor; callback contexts and store are borrowed. */
-CXX_C_API int turbo_flow_register_keyed_emitting_operation_provider(
+TURBO_FLOW_C_API int turbo_flow_register_keyed_emitting_operation_provider(
     turbo_flow_t *flow,
     const turbo_flow_keyed_emitting_operation_provider_registration_t *registration);
 
 /** Register one bounded event-time tumbling-window provider. */
-CXX_C_API int turbo_flow_register_event_time_window_provider(
+TURBO_FLOW_C_API int turbo_flow_register_event_time_window_provider(
     turbo_flow_t *flow, const turbo_flow_event_time_window_provider_registration_t *registration);
 
 /**
@@ -1896,13 +1897,13 @@ CXX_C_API int turbo_flow_register_event_time_window_provider(
  * this call. Events for already-closed time ranges fail with TURBO_ETIMEDOUT. One advance uses
  * O(W + C log C) time and O(W) temporary references for W active and C closable windows.
  */
-CXX_C_API int turbo_flow_advance_event_time_watermark(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_advance_event_time_watermark(turbo_flow_t *flow,
                                                       turbo_flow_event_time_window_store_t *store,
                                                       uint64_t watermark_ns,
                                                       size_t *closed_windows);
 
 /** Atomically register one stage callback and zero or more independently addressable resources. */
-CXX_C_API int turbo_flow_register_stage_with_resources(
+TURBO_FLOW_C_API int turbo_flow_register_stage_with_resources(
     turbo_flow_t *flow, const char *name, turbo_flow_stage_fn fn, void *ctx,
     const turbo_flow_stage_options_t *options,
     const turbo_flow_resource_provider_registration_t *resources, size_t resource_count);
@@ -1913,11 +1914,11 @@ CXX_C_API int turbo_flow_register_stage_with_resources(
  * `ops` may be NULL for hosts that only validate topology or bind adapter
  * behavior outside turbo_flow. Registration must happen before compile/start.
  */
-CXX_C_API int turbo_flow_register_adapter(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_register_adapter(turbo_flow_t *flow, const char *name,
                                           const turbo_flow_adapter_ops_t *ops, void *ctx);
 
 /** Attach an explicit settlement owner to an existing adapter before compile. */
-CXX_C_API int turbo_flow_register_adapter_settlement(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_register_adapter_settlement(turbo_flow_t *flow, const char *name,
                                                      const turbo_flow_settlement_owner_ops_t *ops,
                                                      void *ctx);
 
@@ -1927,7 +1928,7 @@ CXX_C_API int turbo_flow_register_adapter_settlement(turbo_flow_t *flow, const c
  * `owner_name` and the UID returned by `ops->metadata` must be stable and
  * unique within the flow. Registration is rejected after the flow starts.
  */
-CXX_C_API int turbo_flow_register_resource_provider(turbo_flow_t *flow, const char *owner_name,
+TURBO_FLOW_C_API int turbo_flow_register_resource_provider(turbo_flow_t *flow, const char *owner_name,
                                                     const turbo_flow_resource_provider_ops_t *ops,
                                                     void *ctx);
 
@@ -1939,18 +1940,18 @@ CXX_C_API int turbo_flow_register_resource_provider(turbo_flow_t *flow, const ch
  * sink-only stages must be terminal. Concrete adapter config structs remain
  * the runtime value source and are validated by their owning adapter module.
  */
-CXX_C_API int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
                                              const turbo_flow_adapter_ops_t *ops, void *ctx,
                                              const turbo_flow_adapter_schema_t *schema);
 
 /** Atomically register one adapter and zero or more independently addressable resources. */
-CXX_C_API int turbo_flow_register_adapter_with_resources(
+TURBO_FLOW_C_API int turbo_flow_register_adapter_with_resources(
     turbo_flow_t *flow, const char *name, const turbo_flow_adapter_ops_t *ops, void *ctx,
     const turbo_flow_adapter_schema_t *schema,
     const turbo_flow_resource_provider_registration_t *resources, size_t resource_count);
 
 /** Atomically register a module-owned native adapter and its typed operations. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_register_module_adapter(turbo_flow_t *flow,
                                    const turbo_flow_module_adapter_registration_t *registration);
 
@@ -1958,17 +1959,17 @@ turbo_flow_register_module_adapter(turbo_flow_t *flow,
  * Return the module owning an adapter's executable operation association.
  * The borrowed string remains valid until registry-clearing reset or destroy.
  */
-CXX_C_API const char *turbo_flow_adapter_operation_module(const turbo_flow_t *flow,
+TURBO_FLOW_C_API const char *turbo_flow_adapter_operation_module(const turbo_flow_t *flow,
                                                           const char *adapter_name,
                                                           const char *operation_name);
 
 /** Return the primitive binding for one typed adapter operation, or NULL when adapter-owned. */
-CXX_C_API const char *turbo_flow_adapter_operation_resource(const turbo_flow_t *flow,
+TURBO_FLOW_C_API const char *turbo_flow_adapter_operation_resource(const turbo_flow_t *flow,
                                                             const char *adapter_name,
                                                             const char *operation_name);
 
 /** Attach or clear one host-owned observer. Rejected while the flow is started. */
-CXX_C_API int turbo_flow_set_observer(turbo_flow_t *flow, const turbo_flow_observer_ops_t *ops,
+TURBO_FLOW_C_API int turbo_flow_set_observer(turbo_flow_t *flow, const turbo_flow_observer_ops_t *ops,
                                       void *ctx);
 
 /**
@@ -1977,31 +1978,31 @@ CXX_C_API int turbo_flow_set_observer(turbo_flow_t *flow, const turbo_flow_obser
  * Registration is rejected while started, on duplicate names, or after the
  * bounded observer limit is reached. The registration remains across reset.
  */
-CXX_C_API int turbo_flow_register_observer(turbo_flow_t *flow, const char *name,
+TURBO_FLOW_C_API int turbo_flow_register_observer(turbo_flow_t *flow, const char *name,
                                            const turbo_flow_event_observer_ops_t *ops, void *ctx);
 /** Unregister and destroy one Observer. Rejected while the flow is started. */
-CXX_C_API int turbo_flow_unregister_observer(turbo_flow_t *flow, const char *name);
-CXX_C_API size_t turbo_flow_observer_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API int turbo_flow_unregister_observer(turbo_flow_t *flow, const char *name);
+TURBO_FLOW_C_API size_t turbo_flow_observer_count(const turbo_flow_t *flow);
 /** Return the aggregate count of non-OK structured Observer callback results. */
-CXX_C_API uint64_t turbo_flow_observer_failure_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API uint64_t turbo_flow_observer_failure_count(const turbo_flow_t *flow);
 
-CXX_C_API size_t turbo_flow_adapter_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API size_t turbo_flow_adapter_count(const turbo_flow_t *flow);
 /**
  * Query one registered adapter. Returns TURBO_ENOTSUP when it has no provider.
  * Serialize with registry reset/destroy; the provider synchronizes live fields.
  */
-CXX_C_API int turbo_flow_adapter_connection_snapshot_at(const turbo_flow_t *flow, size_t index,
+TURBO_FLOW_C_API int turbo_flow_adapter_connection_snapshot_at(const turbo_flow_t *flow, size_t index,
                                                         turbo_flow_connection_snapshot_t *out);
 /** Enumerate registered resource providers with snapshots followed by runtime pools. */
-CXX_C_API size_t turbo_flow_resource_count(const turbo_flow_t *flow);
-CXX_C_API int turbo_flow_resource_snapshot_at(const turbo_flow_t *flow, size_t index,
+TURBO_FLOW_C_API size_t turbo_flow_resource_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API int turbo_flow_resource_snapshot_at(const turbo_flow_t *flow, size_t index,
                                               turbo_flow_resource_snapshot_t *out);
 /** Enumerate explicitly stable adapter resources followed by runtime-owned pools. */
-CXX_C_API size_t turbo_flow_resource_metadata_count(const turbo_flow_t *flow);
-CXX_C_API int turbo_flow_resource_metadata_at(const turbo_flow_t *flow, size_t index,
+TURBO_FLOW_C_API size_t turbo_flow_resource_metadata_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API int turbo_flow_resource_metadata_at(const turbo_flow_t *flow, size_t index,
                                               turbo_flow_resource_metadata_t *out);
 /** Query one stable resource through its owner-specific schema-backed document provider. */
-CXX_C_API int turbo_flow_resource_document_at(const turbo_flow_t *flow, size_t index,
+TURBO_FLOW_C_API int turbo_flow_resource_document_at(const turbo_flow_t *flow, size_t index,
                                               turbo_flow_resource_document_kind_t document_kind,
                                               turbo_flow_resource_document_t *out);
 
@@ -2012,28 +2013,28 @@ CXX_C_API int turbo_flow_resource_document_at(const turbo_flow_t *flow, size_t i
  * operation rather than a synthesized document. NULL means the pair or document kind is not
  * part of the common governance contract.
  */
-CXX_C_API const turbo_flow_resource_schema_t *
+TURBO_FLOW_C_API const turbo_flow_resource_schema_t *
 turbo_flow_resource_governance_schema(turbo_flow_domain_t domain,
                                       turbo_flow_resource_kind_t resource_kind,
                                       turbo_flow_resource_document_kind_t document_kind);
 /** Execute one generation-checked idempotent resource command. Hosts serialize lifecycle calls. */
-CXX_C_API int turbo_flow_resource_command(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_resource_command(turbo_flow_t *flow,
                                           const turbo_flow_resource_command_t *command,
                                           turbo_flow_resource_command_result_t *result);
 /** Compare one immutable observation and issue at most one generation-checked owner command. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_resource_reconcile_tick(turbo_flow_t *flow,
                                    const turbo_flow_resource_reconcile_request_t *request,
                                    turbo_flow_resource_reconcile_result_t *result);
 /** Initialize caller-owned state for a quiesce -> drain -> resize -> resume workflow. */
-CXX_C_API int turbo_flow_resize_workflow_init(const turbo_flow_resize_workflow_spec_t *spec,
+TURBO_FLOW_C_API int turbo_flow_resize_workflow_init(const turbo_flow_resize_workflow_spec_t *spec,
                                               turbo_flow_resize_workflow_state_t *state);
 /** Advance at most one owner operation. No controller thread or hidden scheduling is created. */
-CXX_C_API int turbo_flow_resize_workflow_tick(turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_resize_workflow_tick(turbo_flow_t *flow,
                                               turbo_flow_resize_workflow_state_t *state,
                                               turbo_flow_resize_workflow_result_t *result);
 /** Retry the explicitly failed step with a new idempotency attempt. */
-CXX_C_API int turbo_flow_resize_workflow_retry(turbo_flow_resize_workflow_state_t *state);
+TURBO_FLOW_C_API int turbo_flow_resize_workflow_retry(turbo_flow_resize_workflow_state_t *state);
 /**
  * Execute one adapter-owned command by registry binding name on a STARTED flow.
  *
@@ -2042,40 +2043,40 @@ CXX_C_API int turbo_flow_resize_workflow_retry(turbo_flow_resize_workflow_state_
  * turbo_flow_resource_command_t through turbo_flow_resource_command(). This
  * entry point remains available for source and ABI compatibility.
  */
-CXX_C_API TURBO_FLOW_DEPRECATED(
+TURBO_FLOW_C_API TURBO_FLOW_DEPRECATED(
     "use turbo_flow_resource_command() with a stable resource "
     "provider") int turbo_flow_adapter_command(turbo_flow_t *flow, const char *adapter_name,
                                                const turbo_flow_adapter_command_t *command);
 
 /** Return registry-owned metadata valid until reset without keep_registry or destroy. */
-CXX_C_API const turbo_flow_adapter_schema_t *turbo_flow_adapter_schema_at(const turbo_flow_t *flow,
+TURBO_FLOW_C_API const turbo_flow_adapter_schema_t *turbo_flow_adapter_schema_at(const turbo_flow_t *flow,
                                                                           size_t index);
 
-CXX_C_API const turbo_flow_adapter_schema_t *
+TURBO_FLOW_C_API const turbo_flow_adapter_schema_t *
 turbo_flow_find_adapter_schema(const turbo_flow_t *flow, const char *name);
 
-CXX_C_API turbo_flow_state_t turbo_flow_state(const turbo_flow_t *flow);
+TURBO_FLOW_C_API turbo_flow_state_t turbo_flow_state(const turbo_flow_t *flow);
 /**
  * Copy runtime admission and topology counters into caller-owned storage.
  * The host must serialize this call with parse/compile/start/stop/reset/destroy.
  * Concurrent publish admission and completion are synchronized internally.
  */
-CXX_C_API int turbo_flow_runtime_snapshot(const turbo_flow_t *flow,
+TURBO_FLOW_C_API int turbo_flow_runtime_snapshot(const turbo_flow_t *flow,
                                           turbo_flow_runtime_snapshot_t *out);
-CXX_C_API const turbo_flow_error_t *turbo_flow_last_error(const turbo_flow_t *flow);
+TURBO_FLOW_C_API const turbo_flow_error_t *turbo_flow_last_error(const turbo_flow_t *flow);
 
 /** Runtime pool records remain queryable after stop and reset on the next start. */
-CXX_C_API size_t turbo_flow_pool_count(const turbo_flow_t *flow);
-CXX_C_API int turbo_flow_pool_snapshot_at(const turbo_flow_t *flow, size_t index,
+TURBO_FLOW_C_API size_t turbo_flow_pool_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API int turbo_flow_pool_snapshot_at(const turbo_flow_t *flow, size_t index,
                                           turbo_flow_pool_snapshot_t *out);
-CXX_C_API int turbo_flow_pool_resource_status_at(const turbo_flow_t *flow, size_t index,
+TURBO_FLOW_C_API int turbo_flow_pool_resource_status_at(const turbo_flow_t *flow, size_t index,
                                                  turbo_flow_pool_resource_status_t *out);
 /**
  * Return the process-lifetime schema descriptor for pool Status documents.
  *
  * The returned pointer is borrowed, immutable, and never NULL.
  */
-CXX_C_API const turbo_flow_resource_schema_t *turbo_flow_pool_status_schema(void);
+TURBO_FLOW_C_API const turbo_flow_resource_schema_t *turbo_flow_pool_status_schema(void);
 /**
  * Capture one runtime pool as an owned, schema-backed Status document.
  *
@@ -2089,42 +2090,42 @@ CXX_C_API const turbo_flow_resource_schema_t *turbo_flow_pool_status_schema(void
  * On success `out->payload` is immutable and remains valid independently of later pool changes.
  * Call turbo_flow_resource_document_cleanup() before reusing or discarding `out`.
  */
-CXX_C_API int turbo_flow_pool_status_document_at(const turbo_flow_t *flow, size_t index,
+TURBO_FLOW_C_API int turbo_flow_pool_status_document_at(const turbo_flow_t *flow, size_t index,
                                                  turbo_flow_resource_document_t *out);
 /**
  * Release a document payload and restore TURBO_FLOW_RESOURCE_DOCUMENT_INIT state.
  *
  * @param document Document to release; NULL and repeated cleanup are accepted.
  */
-CXX_C_API void turbo_flow_resource_document_cleanup(turbo_flow_resource_document_t *document);
-CXX_C_API int turbo_flow_pool_accepting(const turbo_flow_pool_snapshot_t *snapshot);
-CXX_C_API int turbo_flow_pool_drained(const turbo_flow_pool_snapshot_t *snapshot);
-CXX_C_API int turbo_flow_pool_saturated(const turbo_flow_pool_snapshot_t *snapshot);
+TURBO_FLOW_C_API void turbo_flow_resource_document_cleanup(turbo_flow_resource_document_t *document);
+TURBO_FLOW_C_API int turbo_flow_pool_accepting(const turbo_flow_pool_snapshot_t *snapshot);
+TURBO_FLOW_C_API int turbo_flow_pool_drained(const turbo_flow_pool_snapshot_t *snapshot);
+TURBO_FLOW_C_API int turbo_flow_pool_saturated(const turbo_flow_pool_snapshot_t *snapshot);
 
-CXX_C_API size_t turbo_flow_stage_count(const turbo_flow_t *flow);
-CXX_C_API const turbo_flow_stage_plan_t *turbo_flow_stage_at(const turbo_flow_t *flow,
+TURBO_FLOW_C_API size_t turbo_flow_stage_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API const turbo_flow_stage_plan_t *turbo_flow_stage_at(const turbo_flow_t *flow,
                                                              size_t index);
 /** Return the complete resolved operation contract after compile, or NULL before resolution. */
-CXX_C_API const turbo_flow_operation_descriptor_t *
+TURBO_FLOW_C_API const turbo_flow_operation_descriptor_t *
 turbo_flow_stage_operation_at(const turbo_flow_t *flow, size_t index);
-CXX_C_API int turbo_flow_find_stage(const turbo_flow_t *flow, const char *name);
+TURBO_FLOW_C_API int turbo_flow_find_stage(const turbo_flow_t *flow, const char *name);
 
-CXX_C_API size_t turbo_flow_edge_count(const turbo_flow_t *flow);
-CXX_C_API const turbo_flow_edge_plan_t *turbo_flow_edge_at(const turbo_flow_t *flow, size_t index);
+TURBO_FLOW_C_API size_t turbo_flow_edge_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API const turbo_flow_edge_plan_t *turbo_flow_edge_at(const turbo_flow_t *flow, size_t index);
 
 /** Compiled, read-only runtime segment metadata. Available after successful compile. */
-CXX_C_API size_t turbo_flow_segment_count(const turbo_flow_t *flow);
-CXX_C_API int turbo_flow_segment_plan_at(const turbo_flow_t *flow, size_t index,
+TURBO_FLOW_C_API size_t turbo_flow_segment_count(const turbo_flow_t *flow);
+TURBO_FLOW_C_API int turbo_flow_segment_plan_at(const turbo_flow_t *flow, size_t index,
                                          turbo_flow_segment_plan_t *out);
 
-CXX_C_API void turbo_flow_msg_init(turbo_flow_msg_t *msg);
-CXX_C_API void turbo_flow_msg_cleanup(turbo_flow_msg_t *msg);
-CXX_C_API int turbo_flow_msg_retain_view(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src);
-CXX_C_API int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src);
-CXX_C_API int turbo_flow_msg_move(turbo_flow_msg_t *dst, turbo_flow_msg_t *src);
+TURBO_FLOW_C_API void turbo_flow_msg_init(turbo_flow_msg_t *msg);
+TURBO_FLOW_C_API void turbo_flow_msg_cleanup(turbo_flow_msg_t *msg);
+TURBO_FLOW_C_API int turbo_flow_msg_retain_view(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src);
+TURBO_FLOW_C_API int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src);
+TURBO_FLOW_C_API int turbo_flow_msg_move(turbo_flow_msg_t *dst, turbo_flow_msg_t *src);
 
 /** Return whether the message has an attached schema-bound projection. */
-CXX_C_API turbo_flow_content_state_t turbo_flow_msg_content_state(const turbo_flow_msg_t *msg);
+TURBO_FLOW_C_API turbo_flow_content_state_t turbo_flow_msg_content_state(const turbo_flow_msg_t *msg);
 
 /**
  * Attach an owned derived projection without changing the original payload.
@@ -2135,44 +2136,44 @@ CXX_C_API turbo_flow_content_state_t turbo_flow_msg_content_state(const turbo_fl
  * message descriptor declares a schema, projection encoding and schema
  * name/type/version must match it exactly.
  */
-CXX_C_API int turbo_flow_msg_bind_projection(turbo_flow_msg_t *msg,
+TURBO_FLOW_C_API int turbo_flow_msg_bind_projection(turbo_flow_msg_t *msg,
                                              const turbo_flow_data_schema_t *schema,
                                              void *projection, turbo_flow_projection_clone_fn clone,
                                              turbo_flow_destroy_fn destroy, void *ctx);
 
 /** Return the attached schema projection, or NULL for opaque content. */
-CXX_C_API const void *turbo_flow_msg_projection(const turbo_flow_msg_t *msg,
+TURBO_FLOW_C_API const void *turbo_flow_msg_projection(const turbo_flow_msg_t *msg,
                                                 const turbo_flow_data_schema_t **schema_out);
 
 /** Remove and destroy only a schema-bound projection; an attached descriptor is preserved. */
-CXX_C_API void turbo_flow_msg_clear_projection(turbo_flow_msg_t *msg);
+TURBO_FLOW_C_API void turbo_flow_msg_clear_projection(turbo_flow_msg_t *msg);
 /** Remove the descriptor and destroy any schema-bound projection. Payload bytes are preserved. */
-CXX_C_API void turbo_flow_msg_clear_content(turbo_flow_msg_t *msg);
+TURBO_FLOW_C_API void turbo_flow_msg_clear_content(turbo_flow_msg_t *msg);
 
 /**
  * Borrow an immutable descriptor without changing payload bytes.
  * The descriptor owner must outlive the message and all of its clones.
  * A descriptor declaring a schema must match any existing projection.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_msg_set_content_descriptor(turbo_flow_msg_t *msg,
                                       const turbo_flow_content_descriptor_t *descriptor);
 
 /** Copy a descriptor into message-owned storage for asynchronous propagation. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_msg_copy_content_descriptor(turbo_flow_msg_t *msg,
                                        const turbo_flow_content_descriptor_t *descriptor);
 
 /** Return the immutable borrowed or message-owned descriptor, or NULL. */
-CXX_C_API const turbo_flow_content_descriptor_t *
+TURBO_FLOW_C_API const turbo_flow_content_descriptor_t *
 turbo_flow_msg_content_descriptor(const turbo_flow_msg_t *msg);
 
 /** Return non-zero only when the descriptor storage belongs to the message. */
-CXX_C_API int turbo_flow_msg_content_descriptor_owned(const turbo_flow_msg_t *msg);
+TURBO_FLOW_C_API int turbo_flow_msg_content_descriptor_owned(const turbo_flow_msg_t *msg);
 
 /** Explicit host-owned trusted schema registry; no process-global registry is created. */
-CXX_C_API turbo_flow_schema_registry_t *turbo_flow_schema_registry_create(void);
-CXX_C_API void turbo_flow_schema_registry_destroy(turbo_flow_schema_registry_t *registry);
+TURBO_FLOW_C_API turbo_flow_schema_registry_t *turbo_flow_schema_registry_create(void);
+TURBO_FLOW_C_API void turbo_flow_schema_registry_destroy(turbo_flow_schema_registry_t *registry);
 
 /**
  * Register one exact content match and a copied trusted schema descriptor.
@@ -2180,7 +2181,7 @@ CXX_C_API void turbo_flow_schema_registry_destroy(turbo_flow_schema_registry_t *
  * Runtime schema text is rejected; providers must compile/load schemas outside
  * this identity registry and register a descriptor with `schema_text == NULL`.
  */
-CXX_C_API int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
+TURBO_FLOW_C_API int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
                                                   const turbo_flow_content_descriptor_t *match,
                                                   const turbo_flow_data_schema_t *schema);
 
@@ -2189,17 +2190,17 @@ CXX_C_API int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *
  * The pointer remains valid until the host destroys the registry; destruction
  * must be serialized after all adapters and callers stop using it.
  */
-CXX_C_API int turbo_flow_schema_registry_resolve(const turbo_flow_schema_registry_t *registry,
+TURBO_FLOW_C_API int turbo_flow_schema_registry_resolve(const turbo_flow_schema_registry_t *registry,
                                                  const turbo_flow_content_descriptor_t *descriptor,
                                                  const turbo_flow_data_schema_t **schema_out);
 
 /** Resolve the current message descriptor through a trusted registry. */
-CXX_C_API int turbo_flow_msg_resolve_schema(const turbo_flow_msg_t *msg,
+TURBO_FLOW_C_API int turbo_flow_msg_resolve_schema(const turbo_flow_msg_t *msg,
                                             const turbo_flow_schema_registry_t *registry,
                                             const turbo_flow_data_schema_t **schema_out);
 
 /** Execute an explicit bounded adapter retry policy with isolated per-attempt messages. */
-CXX_C_API int turbo_flow_retry_execute(const turbo_flow_retry_policy_t *policy,
+TURBO_FLOW_C_API int turbo_flow_retry_execute(const turbo_flow_retry_policy_t *policy,
                                        turbo_flow_msg_t *msg, const turbo_flow_retry_ops_t *ops,
                                        void *ctx);
 

@@ -30,10 +30,10 @@ typedef struct flow_http_request_context_s {
 
 struct flow_http_server_adapter_s {
   turbo_flow_t *flow;
-  tstr_t name;
-  tstr_t source_name;
-  tstr_t route;
-  tstr_t response_content_type;
+  tstr name;
+  tstr source_name;
+  tstr route;
+  tstr response_content_type;
   uint16_t port;
   size_t max_body_size;
   int response_status;

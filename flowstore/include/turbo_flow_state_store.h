@@ -27,30 +27,30 @@ typedef struct turbo_flow_state_record_s {
 typedef int (*turbo_flow_state_visit_fn)(void *ctx, turbo_flow_store_bytes_t key,
                                          turbo_flow_store_bytes_t value, uint64_t revision);
 
-CXX_C_API int turbo_flow_state_store_create_memory(const turbo_flow_store_limits_t *limits,
+TURBO_FLOW_C_API int turbo_flow_state_store_create_memory(const turbo_flow_store_limits_t *limits,
                                                    turbo_flow_state_store_t **out);
-CXX_C_API int turbo_flow_state_store_close(turbo_flow_state_store_t *store);
-CXX_C_API void turbo_flow_state_store_destroy(turbo_flow_state_store_t *store);
+TURBO_FLOW_C_API int turbo_flow_state_store_close(turbo_flow_state_store_t *store);
+TURBO_FLOW_C_API void turbo_flow_state_store_destroy(turbo_flow_state_store_t *store);
 
 /**
  * expected_revision == 0 creates an absent key; otherwise it must equal the current revision.
  * Revision mismatch returns TURBO_EBUSY without changing state.
  */
-CXX_C_API int turbo_flow_state_store_put(turbo_flow_state_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_state_store_put(turbo_flow_state_store_t *store,
                                          turbo_flow_store_bytes_t key,
                                          turbo_flow_store_bytes_t value, uint64_t expected_revision,
                                          uint64_t *new_revision);
-CXX_C_API int turbo_flow_state_store_get(turbo_flow_state_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_state_store_get(turbo_flow_state_store_t *store,
                                          turbo_flow_store_bytes_t key,
                                          turbo_flow_state_record_t *out);
-CXX_C_API int turbo_flow_state_store_remove(turbo_flow_state_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_state_store_remove(turbo_flow_state_store_t *store,
                                             turbo_flow_store_bytes_t key,
                                             uint64_t expected_revision);
-CXX_C_API int turbo_flow_state_store_visit(turbo_flow_state_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_state_store_visit(turbo_flow_state_store_t *store,
                                            turbo_flow_state_visit_fn visit, void *ctx);
-CXX_C_API int turbo_flow_state_store_stats(const turbo_flow_state_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_state_store_stats(const turbo_flow_state_store_t *store,
                                            turbo_flow_store_stats_t *out);
-CXX_C_API void turbo_flow_state_record_cleanup(turbo_flow_state_record_t *record);
+TURBO_FLOW_C_API void turbo_flow_state_record_cleanup(turbo_flow_state_record_t *record);
 
 #ifdef __cplusplus
 }

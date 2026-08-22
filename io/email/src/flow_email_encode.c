@@ -2,7 +2,7 @@
 
 #include "email/email_message.h"
 #include "mime_mhtml.h"
-#include "turbo_vec.h"
+#include "turbo_flow_stl_adapter.h"
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -14,20 +14,20 @@
 #define FLOW_EMAIL_ENCODE_MAX_ITEMS 1024u
 
 typedef struct flow_email_attachment_s {
-  tstr_t filename;
-  tstr_t content_type;
-  tstr_t data;
+  tstr filename;
+  tstr content_type;
+  tstr data;
   int inline_attachment;
-  tstr_t content_id;
+  tstr content_id;
 } flow_email_attachment_t;
 
 typedef struct flow_email_mime_encode_s {
-  tstr_t from_name;
-  tstr_t from_email;
-  tstr_t to_name;
-  tstr_t to_email;
-  tstr_t subject;
-  tstr_t alternative_text;
+  tstr from_name;
+  tstr from_email;
+  tstr to_name;
+  tstr to_email;
+  tstr subject;
+  tstr alternative_text;
   int html_body;
   int priority;
   turbo_vec_t attachments;
@@ -37,14 +37,14 @@ typedef struct flow_email_mime_encode_s {
 } flow_email_mime_encode_t;
 
 typedef struct flow_email_mhtml_resource_s {
-  tstr_t content_type;
-  tstr_t content_location;
-  tstr_t content_id;
-  tstr_t data;
+  tstr content_type;
+  tstr content_location;
+  tstr content_id;
+  tstr data;
 } flow_email_mhtml_resource_t;
 
 typedef struct flow_email_mhtml_encode_s {
-  tstr_t charset;
+  tstr charset;
   turbo_vec_t resources;
   size_t max_payload_size;
   size_t max_output_size;
@@ -93,7 +93,7 @@ static const turbo_flow_adapter_schema_t FLOW_EMAIL_MHTML_ENCODE_SCHEMA = {
     FLOW_EMAIL_MHTML_ENCODE_FIELDS,
     sizeof(FLOW_EMAIL_MHTML_ENCODE_FIELDS) / sizeof(FLOW_EMAIL_MHTML_ENCODE_FIELDS[0])};
 
-static int flow_email_encode_copy(tstr_t *dst, const char *src, size_t len) {
+static int flow_email_encode_copy(tstr *dst, const char *src, size_t len) {
   if (!dst || (len > 0 && !src)) return TURBO_EINVAL;
   if (!src) return TURBO_OK;
   *dst = tstr_new_len(src, len ? len : strlen(src));
@@ -141,7 +141,7 @@ static int flow_email_encode_add_size(size_t *total, size_t value, size_t limit)
   return TURBO_OK;
 }
 
-static void flow_email_encode_adopt_payload(turbo_flow_msg_t *msg, tstr_t payload) {
+static void flow_email_encode_adopt_payload(turbo_flow_msg_t *msg, tstr payload) {
   turbo_flow_msg_clear_content(msg);
   tstr_freep(&msg->owned_payload);
   mem_buffer_release(msg->buffer);
@@ -182,8 +182,8 @@ static int flow_email_mime_encode_consume(void *ctx, turbo_flow_t *flow,
   flow_email_mime_encode_t *adapter = (flow_email_mime_encode_t *)ctx;
   email_message_t *email;
   mem_pool_t pool;
-  tstr_t body = NULL;
-  tstr_t output = NULL;
+  tstr body = NULL;
+  tstr output = NULL;
   size_t i;
   int rc = TURBO_ENOMEM;
   (void)flow;
@@ -300,7 +300,7 @@ static int flow_email_mhtml_encode_consume(void *ctx, turbo_flow_t *flow,
   mime_mhtml_document_t *document = NULL;
   mem_pool_t pool;
   char *serialized = NULL;
-  tstr_t output = NULL;
+  tstr output = NULL;
   size_t output_len = 0;
   size_t i;
   int rc = TURBO_ENOMEM;

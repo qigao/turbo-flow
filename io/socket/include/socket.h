@@ -130,7 +130,7 @@ typedef enum turbo_flow_coronet_transport_e {
  * the current flow message payload. Register a distinct adapter name for each
  * endpoint binding that needs independent configuration.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_coronet_register_socket_adapter(turbo_flow_t *flow, const char *name,
                                            const turbo_flow_coronet_socket_config_t *config);
 
@@ -139,7 +139,7 @@ turbo_flow_coronet_register_socket_adapter(turbo_flow_t *flow, const char *name,
  * config's legacy context fields must be zero. Returns TURBO_OK or a concrete
  * validation, allocation, lane-resolution, or adapter-registration error.
  */
-CXX_C_API int turbo_flow_coronet_register_socket_adapter_ex(
+TURBO_FLOW_C_API int turbo_flow_coronet_register_socket_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_coronet_socket_config_t *config,
     const turbo_flow_coronet_execution_binding_t *execution);
 
@@ -150,16 +150,16 @@ CXX_C_API int turbo_flow_coronet_register_socket_adapter_ex(
  * deliberately excluded from YAML; the event-loop binding remains an explicit
  * host responsibility. Unknown or mistyped fields fail before registration.
  */
-CXX_C_API int turbo_flow_coronet_register_socket_resolved_adapter_ex(
+TURBO_FLOW_C_API int turbo_flow_coronet_register_socket_resolved_adapter_ex(
     turbo_flow_t *flow, const turbo_flow_resolved_config_t *resolved, const char *adapter_name,
     const turbo_flow_coronet_execution_binding_t *execution);
 
 /** Register a resolved socket adapter with a private CoroNet execution context. */
-CXX_C_API int turbo_flow_coronet_register_socket_resolved_adapter(
+TURBO_FLOW_C_API int turbo_flow_coronet_register_socket_resolved_adapter(
     turbo_flow_t *flow, const turbo_flow_resolved_config_t *resolved, const char *adapter_name);
 
 /** Validate a concrete socket adapter endpoint config before registration. */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_coronet_socket_config_validate(const turbo_flow_coronet_socket_config_t *config);
 
 #ifdef __cplusplus

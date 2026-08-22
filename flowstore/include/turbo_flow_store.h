@@ -1,6 +1,7 @@
 #ifndef TURBO_FLOW_STORE_H
 #define TURBO_FLOW_STORE_H
 
+#include "turbo_flow_export.h"
 #include "platform.h"
 #include "turbo_error.h"
 #include "turbo_flow_record_store.h"
@@ -86,21 +87,21 @@ typedef struct turbo_flow_store_stats_s {
 #define TURBO_FLOW_STORE_STATS_INIT {sizeof(turbo_flow_store_stats_t), TURBO_FLOW_STORE_ABI_VERSION}
 
 /** Validate common limits. State/Index callers must use FULL_REJECT. */
-CXX_C_API int turbo_flow_store_limits_validate(const turbo_flow_store_limits_t *limits,
+TURBO_FLOW_C_API int turbo_flow_store_limits_validate(const turbo_flow_store_limits_t *limits,
                                                int allow_trim);
 
 /** Create the owning binary Record facade. Data format interpretation is intentionally external. */
-CXX_C_API int turbo_flow_store_create(const turbo_flow_store_config_t *config,
+TURBO_FLOW_C_API int turbo_flow_store_create(const turbo_flow_store_config_t *config,
                                       turbo_flow_store_t **out);
-CXX_C_API void turbo_flow_store_destroy(turbo_flow_store_t *store);
+TURBO_FLOW_C_API void turbo_flow_store_destroy(turbo_flow_store_t *store);
 
 /** Commit a caller-owned atomic batch of binary Record mutations. */
-CXX_C_API int turbo_flow_store_commit(turbo_flow_store_t *store,
+TURBO_FLOW_C_API int turbo_flow_store_commit(turbo_flow_store_t *store,
                                       const turbo_flow_record_mutation_t *mutations,
                                       size_t mutation_count);
 
 /** Commit one binary Record PUT. Value may be empty but is never interpreted by FlowStore. */
-CXX_C_API int turbo_flow_store_put(turbo_flow_store_t *store, const uint8_t *key, size_t key_size,
+TURBO_FLOW_C_API int turbo_flow_store_put(turbo_flow_store_t *store, const uint8_t *key, size_t key_size,
                                    uint64_t expected_revision, uint64_t next_revision,
                                    const uint8_t *value, size_t value_size);
 
@@ -108,16 +109,16 @@ CXX_C_API int turbo_flow_store_put(turbo_flow_store_t *store, const uint8_t *key
  * Copy one binary Record value into caller-owned output. TURBO_ENOENT means no matching key.
  * Call turbo_flow_store_record_clear() on every initialized output before reuse or release.
  */
-CXX_C_API int turbo_flow_store_get(turbo_flow_store_t *store, const uint8_t *key, size_t key_size,
+TURBO_FLOW_C_API int turbo_flow_store_get(turbo_flow_store_t *store, const uint8_t *key, size_t key_size,
                                    turbo_flow_store_record_t *out);
-CXX_C_API void turbo_flow_store_record_clear(turbo_flow_store_record_t *record);
+TURBO_FLOW_C_API void turbo_flow_store_record_clear(turbo_flow_store_record_t *record);
 
 /** Commit one binary Record DELETE at an existing revision. */
-CXX_C_API int turbo_flow_store_delete(turbo_flow_store_t *store, const uint8_t *key,
+TURBO_FLOW_C_API int turbo_flow_store_delete(turbo_flow_store_t *store, const uint8_t *key,
                                       size_t key_size, uint64_t expected_revision);
 
 /** Visit the backend's stable binary Record snapshot. Views are borrowed for each callback. */
-CXX_C_API int turbo_flow_store_scan(turbo_flow_store_t *store, turbo_flow_record_visit_fn visit,
+TURBO_FLOW_C_API int turbo_flow_store_scan(turbo_flow_store_t *store, turbo_flow_record_visit_fn visit,
                                     void *ctx);
 
 #ifdef __cplusplus

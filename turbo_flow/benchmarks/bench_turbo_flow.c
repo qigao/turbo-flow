@@ -187,7 +187,7 @@ static turbo_flow_security_realm_t *bench_security_realm(size_t rule_count,
     config.matcher.evaluate_leaf = bench_security_adapter_evaluate;
     config.matcher.destroy_leaf = bench_security_adapter_destroy;
   }
-  check_int_eq(turbo_flow_security_realm_create(&config, &realm), TURBO_OK);
+  check_equal(turbo_flow_security_realm_create(&config, &realm), TURBO_OK);
   check_not_null(realm);
   *rules_out = rules;
   return realm;
@@ -288,15 +288,15 @@ static int bench_emitter_sink(turbo_flow_msg_t *msg, void *ctx) {
   return TURBO_OK;
 }
 
-static int bench_keyed_select(const turbo_flow_msg_t *msg, tstr_v *key, void *ctx) {
+static int bench_keyed_select(const turbo_flow_msg_t *msg, vstr *key, void *ctx) {
   (void)ctx;
-  *key = tstr_v_from_buf((const char *)&msg->id, sizeof(msg->id));
+  *key = vstr_from_buf((const char *)&msg->id, sizeof(msg->id));
   return TURBO_OK;
 }
 
 static int bench_keyed_increment(turbo_flow_msg_t *msg, turbo_flow_keyed_state_t *state,
                                  void *ctx) {
-  tstr_v value;
+  vstr value;
   uint64_t count = 0u;
   int rc = turbo_flow_keyed_state_get(state, &value, NULL);
   (void)ctx;
@@ -308,7 +308,7 @@ static int bench_keyed_increment(turbo_flow_msg_t *msg, turbo_flow_keyed_state_t
   }
   count += 1u;
   msg->type = (uint32_t)count;
-  return turbo_flow_keyed_state_put(state, tstr_v_from_buf((const char *)&count, sizeof(count)));
+  return turbo_flow_keyed_state_put(state, vstr_from_buf((const char *)&count, sizeof(count)));
 }
 
 static int bench_keyed_baseline_stage(turbo_flow_msg_t *msg, void *ctx) {
@@ -320,7 +320,7 @@ static int bench_keyed_baseline_stage(turbo_flow_msg_t *msg, void *ctx) {
 static int bench_keyed_window(const turbo_flow_msg_t *msg, turbo_flow_keyed_state_t *state,
                               turbo_flow_emitter_t *emitter, void *ctx) {
   flow_bench_keyed_t *bench = (flow_bench_keyed_t *)ctx;
-  tstr_v value;
+  vstr value;
   uint64_t count = 0u;
   int rc = turbo_flow_keyed_state_get(state, &value, NULL);
 
@@ -332,7 +332,7 @@ static int bench_keyed_window(const turbo_flow_msg_t *msg, turbo_flow_keyed_stat
   }
   count += 1u;
   if (count < bench->window_size) {
-    return turbo_flow_keyed_state_put(state, tstr_v_from_buf((const char *)&count, sizeof(count)));
+    return turbo_flow_keyed_state_put(state, vstr_from_buf((const char *)&count, sizeof(count)));
   }
   rc = turbo_flow_keyed_state_delete(state);
   if (rc != TURBO_OK) return rc;
@@ -365,7 +365,7 @@ static int bench_event_window_accumulate(const turbo_flow_msg_t *msg,
     memcpy(&count, window->aggregate.data, sizeof(count));
   }
   count += 1u;
-  return turbo_flow_keyed_state_put(state, tstr_v_from_buf((const char *)&count, sizeof(count)));
+  return turbo_flow_keyed_state_put(state, vstr_from_buf((const char *)&count, sizeof(count)));
 }
 
 static int bench_event_window_close(const turbo_flow_event_time_window_t *window,
@@ -390,7 +390,7 @@ static int bench_event_window_close(const turbo_flow_event_time_window_t *window
 }
 
 static void bench_register_stage(turbo_flow_t *flow, const char *name) {
-  check_int_eq(
+  check_equal(
       turbo_flow_register_stage_ex(flow, name, bench_stage, (void *)&g_flow_bench_count, NULL),
       TURBO_OK);
 }
@@ -473,19 +473,19 @@ static void bench_report_concurrent_publish(turbo_flow_t *flow, const char *stag
     contexts[i].ready = &ready;
     contexts[i].start = &start;
     contexts[i].status = TURBO_EBUSY;
-    check_int_eq(turbo_thread_create(&threads[i], bench_publish_worker, &contexts[i]), TURBO_OK);
+    check_equal(turbo_thread_create(&threads[i], bench_publish_worker, &contexts[i]), TURBO_OK);
   }
   while (atomic_load_explicit(&ready, memory_order_acquire) != producers)
     turbo_thread_yield();
   total_start = turbo_hrtime();
   atomic_store_explicit(&start, 1, memory_order_release);
   for (uint32_t i = 0; i < producers; ++i) {
-    check_int_eq(turbo_thread_join(&threads[i]), TURBO_OK);
-    check_int_eq(contexts[i].status, TURBO_OK);
+    check_equal(turbo_thread_join(&threads[i]), TURBO_OK);
+    check_equal(contexts[i].status, TURBO_OK);
     completed += contexts[i].completed;
   }
   total_elapsed = turbo_hrtime() - total_start;
-  check_size_eq(completed, iterations);
+  check_equal(completed, iterations);
   if (completed == 0u) goto cleanup;
 
   qsort(latencies, completed, sizeof(*latencies), bench_u64_compare);
@@ -530,7 +530,7 @@ static void bench_report_publish(turbo_flow_t *flow, const char *stage_plan, con
     rc = turbo_flow_publish(flow, "input", &msg);
     if (rc != TURBO_OK) break;
   }
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
 
   total_start = turbo_hrtime();
   for (size_t i = 0; i < iterations && rc == TURBO_OK; ++i) {
@@ -540,7 +540,7 @@ static void bench_report_publish(turbo_flow_t *flow, const char *stage_plan, con
     if (rc == TURBO_OK) completed += 1u;
   }
   total_elapsed = turbo_hrtime() - total_start;
-  check_int_eq(rc, TURBO_OK);
+  check_equal(rc, TURBO_OK);
   if (rc != TURBO_OK || completed == 0) {
     turbo_flow_msg_cleanup(&msg);
     free(latencies);
@@ -612,10 +612,10 @@ static turbo_flow_t *bench_create_executor_flow(const char *exec_spec) {
                      "}\n",
                      exec_spec ? exec_spec : "");
   check_true(written > 0 && (size_t)written < sizeof(src));
-  check_int_eq(turbo_flow_parse_string(flow, src, (size_t)written), TURBO_OK);
+  check_equal(turbo_flow_parse_string(flow, src, (size_t)written), TURBO_OK);
   bench_register_stage(flow, "work");
-  check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-  check_int_eq(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_compile(flow), TURBO_OK);
+  check_equal(turbo_flow_start(flow), TURBO_OK);
   return flow;
 }
 
@@ -623,12 +623,12 @@ static turbo_flow_t *bench_create_started_flow(const char *src, const char *cons
                                                size_t stage_count) {
   turbo_flow_t *flow = turbo_flow_create();
   check_not_null(flow);
-  check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
   for (size_t i = 0; i < stage_count; ++i) {
     bench_register_stage(flow, stage_names[i]);
   }
-  check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-  check_int_eq(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_compile(flow), TURBO_OK);
+  check_equal(turbo_flow_start(flow), TURBO_OK);
   return flow;
 }
 
@@ -669,14 +669,14 @@ static turbo_flow_t *bench_create_emitting_flow(flow_bench_emitter_t *bench) {
   provider.max_outputs = bench->output_count;
 
   check_not_null(flow);
-  check_int_eq(turbo_flow_register_operation(flow, &input), TURBO_OK);
-  check_int_eq(turbo_flow_register_operation(flow, &expand), TURBO_OK);
-  check_int_eq(turbo_flow_register_emitting_operation_provider(flow, &provider), TURBO_OK);
-  check_int_eq(turbo_flow_register_stage_ex(flow, "sink", bench_emitter_sink, bench, NULL),
+  check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
+  check_equal(turbo_flow_register_operation(flow, &expand), TURBO_OK);
+  check_equal(turbo_flow_register_emitting_operation_provider(flow, &provider), TURBO_OK);
+  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_emitter_sink, bench, NULL),
                TURBO_OK);
-  check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-  check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-  check_int_eq(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+  check_equal(turbo_flow_compile(flow), TURBO_OK);
+  check_equal(turbo_flow_start(flow), TURBO_OK);
   return flow;
 }
 
@@ -725,8 +725,8 @@ static turbo_flow_t *bench_create_keyed_flow(flow_bench_keyed_t *bench, size_t m
   count.flags = TURBO_FLOW_OPERATION_STAGE;
   check_not_null(flow);
   check_not_null(bench->store);
-  check_int_eq(turbo_flow_register_operation(flow, &input), TURBO_OK);
-  check_int_eq(turbo_flow_register_operation(flow, &count), TURBO_OK);
+  check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
+  check_equal(turbo_flow_register_operation(flow, &count), TURBO_OK);
   if (emitting) {
     emitting_provider.operation_name = count.name;
     emitting_provider.key_selector = bench_keyed_select;
@@ -734,7 +734,7 @@ static turbo_flow_t *bench_create_keyed_flow(flow_bench_keyed_t *bench, size_t m
     emitting_provider.ctx = bench;
     emitting_provider.store = bench->store;
     emitting_provider.max_outputs = 1u;
-    check_int_eq(turbo_flow_register_keyed_emitting_operation_provider(flow, &emitting_provider),
+    check_equal(turbo_flow_register_keyed_emitting_operation_provider(flow, &emitting_provider),
                  TURBO_OK);
   } else {
     provider.operation_name = count.name;
@@ -742,12 +742,12 @@ static turbo_flow_t *bench_create_keyed_flow(flow_bench_keyed_t *bench, size_t m
     provider.fn = bench_keyed_increment;
     provider.ctx = bench;
     provider.store = bench->store;
-    check_int_eq(turbo_flow_register_keyed_operation_provider(flow, &provider), TURBO_OK);
+    check_equal(turbo_flow_register_keyed_operation_provider(flow, &provider), TURBO_OK);
   }
-  check_int_eq(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), TURBO_OK);
-  check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-  check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-  check_int_eq(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), TURBO_OK);
+  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+  check_equal(turbo_flow_compile(flow), TURBO_OK);
+  check_equal(turbo_flow_start(flow), TURBO_OK);
   return flow;
 }
 
@@ -804,13 +804,13 @@ static turbo_flow_t *bench_create_event_window_flow(flow_bench_keyed_t *bench, s
   provider.max_outputs = 1u;
   check_not_null(flow);
   check_not_null(bench->store);
-  check_int_eq(turbo_flow_register_operation(flow, &input), TURBO_OK);
-  check_int_eq(turbo_flow_register_operation(flow, &window), TURBO_OK);
-  check_int_eq(turbo_flow_register_event_time_window_provider(flow, &provider), TURBO_OK);
-  check_int_eq(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), TURBO_OK);
-  check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-  check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-  check_int_eq(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
+  check_equal(turbo_flow_register_operation(flow, &window), TURBO_OK);
+  check_equal(turbo_flow_register_event_time_window_provider(flow, &provider), TURBO_OK);
+  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), TURBO_OK);
+  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+  check_equal(turbo_flow_compile(flow), TURBO_OK);
+  check_equal(turbo_flow_start(flow), TURBO_OK);
   return flow;
 }
 
@@ -823,23 +823,23 @@ static turbo_flow_t *bench_create_keyed_baseline_flow(flow_bench_keyed_t *bench)
                            "}\n";
   turbo_flow_t *flow = turbo_flow_create();
   check_not_null(flow);
-  check_int_eq(turbo_flow_register_stage_ex(flow, "count", bench_keyed_baseline_stage, bench, NULL),
+  check_equal(turbo_flow_register_stage_ex(flow, "count", bench_keyed_baseline_stage, bench, NULL),
                TURBO_OK);
-  check_int_eq(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), TURBO_OK);
-  check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-  check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-  check_int_eq(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), TURBO_OK);
+  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+  check_equal(turbo_flow_compile(flow), TURBO_OK);
+  check_equal(turbo_flow_start(flow), TURBO_OK);
   return flow;
 }
 
 static void bench_destroy_started_flow(turbo_flow_t *flow) {
-  check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+  check_equal(turbo_flow_stop(flow), TURBO_OK);
   turbo_flow_destroy(flow);
 }
 
 static void bench_publish_message(turbo_flow_t *flow, const char *source_name,
                                   turbo_flow_msg_t *msg) {
-  check_int_eq(turbo_flow_publish(flow, source_name, msg), TURBO_OK);
+  check_equal(turbo_flow_publish(flow, source_name, msg), TURBO_OK);
 }
 
 spec("Turbo Flow Bench") {
@@ -856,11 +856,11 @@ spec("Turbo Flow Bench") {
               FLOW_BENCH_COMPILE_ITERS, 1) {
       turbo_flow_t *flow = turbo_flow_create();
       check_not_null(flow);
-      check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
       bench_register_stage(flow, "parse");
       bench_register_stage(flow, "validate");
       bench_register_stage(flow, "sink");
-      check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_compile(flow), TURBO_OK);
       turbo_flow_destroy(flow);
     }
   }
@@ -955,8 +955,8 @@ spec("Turbo Flow Bench") {
           FLOW_BENCH_EXECUTOR_ITERS, 1u) {
         publish_status = turbo_flow_publish(flow, "input", &msg);
       }
-      check_int_eq(publish_status, TURBO_OK);
-      check_size_eq(baseline.sink_count, FLOW_BENCH_EXECUTOR_ITERS);
+      check_equal(publish_status, TURBO_OK);
+      check_equal(baseline.sink_count, FLOW_BENCH_EXECUTOR_ITERS);
       bench_destroy_started_flow(flow);
     }
 
@@ -969,8 +969,8 @@ spec("Turbo Flow Bench") {
                     FLOW_BENCH_EXECUTOR_ITERS, 1u) {
         publish_status = turbo_flow_publish(flow, "input", &msg);
       }
-      check_int_eq(publish_status, TURBO_OK);
-      check_size_eq(keyed.sink_count, FLOW_BENCH_EXECUTOR_ITERS);
+      check_equal(publish_status, TURBO_OK);
+      check_equal(keyed.sink_count, FLOW_BENCH_EXECUTOR_ITERS);
       bench_destroy_started_flow(flow);
       turbo_flow_keyed_state_store_destroy(keyed.store);
     }
@@ -986,9 +986,9 @@ spec("Turbo Flow Bench") {
         msg.id = next_key++ % FLOW_BENCH_KEY_COUNT;
         publish_status = turbo_flow_publish(flow, "input", &msg);
       }
-      check_int_eq(publish_status, TURBO_OK);
-      check_size_eq(keyed.sink_count, FLOW_BENCH_EXECUTOR_ITERS);
-      check_size_eq(turbo_flow_keyed_state_store_size(keyed.store), FLOW_BENCH_KEY_COUNT);
+      check_equal(publish_status, TURBO_OK);
+      check_equal(keyed.sink_count, FLOW_BENCH_EXECUTOR_ITERS);
+      check_equal(turbo_flow_keyed_state_store_size(keyed.store), FLOW_BENCH_KEY_COUNT);
       bench_destroy_started_flow(flow);
       turbo_flow_keyed_state_store_destroy(keyed.store);
     }
@@ -1003,8 +1003,8 @@ spec("Turbo Flow Bench") {
           FLOW_BENCH_EXECUTOR_ITERS, 1u) {
         publish_status = turbo_flow_publish(flow, "input", &msg);
       }
-      check_int_eq(publish_status, TURBO_OK);
-      check_size_eq(window.sink_count, FLOW_BENCH_EXECUTOR_ITERS / window.window_size);
+      check_equal(publish_status, TURBO_OK);
+      check_equal(window.sink_count, FLOW_BENCH_EXECUTOR_ITERS / window.window_size);
       bench_destroy_started_flow(flow);
       turbo_flow_keyed_state_store_destroy(window.store);
     }
@@ -1020,8 +1020,8 @@ spec("Turbo Flow Bench") {
                     FLOW_BENCH_EXECUTOR_ITERS, 1u) {
         publish_status = turbo_flow_publish(flow, "input", &msg);
       }
-      check_int_eq(publish_status, TURBO_OK);
-      check_size_eq(turbo_flow_keyed_state_store_size(window.store), 1u);
+      check_equal(publish_status, TURBO_OK);
+      check_equal(turbo_flow_keyed_state_store_size(window.store), 1u);
       bench_destroy_started_flow(flow);
       turbo_flow_event_time_window_store_destroy(window.store);
     }
@@ -1036,7 +1036,7 @@ spec("Turbo Flow Bench") {
       msg.id = 1u;
       for (size_t index = 0u; index < FLOW_BENCH_EVENT_WINDOWS; ++index) {
         msg.ts_ns = index * 10u;
-        check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+        check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
       }
       benchmark_ops("stage_plan=event-time-tumbling-window windows=1024 keys=1 executor=inline "
                     "close-one-watermark",
@@ -1045,9 +1045,9 @@ spec("Turbo Flow Bench") {
         watermark_status =
             turbo_flow_advance_event_time_watermark(flow, window.store, next_window * 10u, &closed);
       }
-      check_int_eq(watermark_status, TURBO_OK);
-      check_size_eq(window.sink_count, FLOW_BENCH_EVENT_WINDOWS);
-      check_size_eq(turbo_flow_keyed_state_store_size(window.store), 0u);
+      check_equal(watermark_status, TURBO_OK);
+      check_equal(window.sink_count, FLOW_BENCH_EVENT_WINDOWS);
+      check_equal(turbo_flow_keyed_state_store_size(window.store), 0u);
       bench_destroy_started_flow(flow);
       turbo_flow_event_time_window_store_destroy(window.store);
     }
@@ -1071,11 +1071,11 @@ spec("Turbo Flow Bench") {
     atomic_init(&completion.completed, 0u);
     atomic_init(&completion.status, TURBO_OK);
     check_not_null(flow);
-    check_int_eq(turbo_flow_configure_async_ingress(flow, &ingress), TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_configure_async_ingress(flow, &ingress), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
     bench_register_stage(flow, "sink");
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup("payload");
     msg.payload = tstr_to_v(msg.owned_payload);
@@ -1086,15 +1086,15 @@ spec("Turbo Flow Bench") {
       submit_status =
           turbo_flow_publish_async(flow, "input", &msg, bench_async_publish_complete, &completion);
     }
-    check_int_eq(submit_status, TURBO_OK);
+    check_equal(submit_status, TURBO_OK);
     while (atomic_load_explicit(&completion.completed, memory_order_acquire) <
            FLOW_BENCH_ASYNC_INGRESS_ITERS) {
       turbo_thread_yield();
     }
-    check_int_eq(atomic_load_explicit(&completion.status, memory_order_acquire), TURBO_OK);
-    check_size_eq(atomic_load_explicit(&completion.completed, memory_order_acquire),
+    check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), TURBO_OK);
+    check_equal(atomic_load_explicit(&completion.completed, memory_order_acquire),
                   FLOW_BENCH_ASYNC_INGRESS_ITERS);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_msg_cleanup(&msg);
     turbo_flow_destroy(flow);
   }
@@ -1168,7 +1168,7 @@ spec("Turbo Flow Bench") {
       turbo_flow_msg_init(&msg);
       msg.owned_payload = tstr_dup("payload");
       msg.payload = tstr_to_v(msg.owned_payload);
-      check_int_eq(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
       turbo_flow_msg_cleanup(&msg);
       bench_destroy_started_flow(flow);
     }
@@ -1186,13 +1186,13 @@ spec("Turbo Flow Bench") {
       atomic_init(&jobs.completed, 0u);
       check_not_null(adapter);
       for (uint32_t i = 0; i < 4; ++i)
-        check_int_eq(turbo_threadpool_submit(adapter->pool, bench_live_job, &jobs), TURBO_OK);
+        check_equal(turbo_threadpool_submit(adapter->pool, bench_live_job, &jobs), TURBO_OK);
       while (atomic_load_explicit(&jobs.started, memory_order_acquire) == 0u)
         turbo_sleep_ms(1);
-      check_int_eq(turbo_thread_create(&releaser, bench_release_live_jobs, &jobs), TURBO_OK);
+      check_equal(turbo_thread_create(&releaser, bench_release_live_jobs, &jobs), TURBO_OK);
       bench_destroy_started_flow(flow);
-      check_int_eq(turbo_thread_join(&releaser), TURBO_OK);
-      check_int_eq(atomic_load_explicit(&jobs.completed, memory_order_acquire), 4);
+      check_equal(turbo_thread_join(&releaser), TURBO_OK);
+      check_equal(atomic_load_explicit(&jobs.completed, memory_order_acquire), 4);
     }
   }
 
@@ -1205,8 +1205,8 @@ spec("Turbo Flow Bench") {
               FLOW_BENCH_EXPR_COMPILE_ITERS, 1) {
       flow_expr_ast_t ast;
       turbo_flow_error_t error;
-      check_int_eq(flow_expr_parse(expression, strlen(expression), &ast, &error), TURBO_OK);
-      check_int_eq(flow_expr_type_check(&ast, NULL, &error), TURBO_OK);
+      check_equal(flow_expr_parse(expression, strlen(expression), &ast, &error), TURBO_OK);
+      check_equal(flow_expr_type_check(&ast, NULL, &error), TURBO_OK);
       flow_expr_ast_destroy(&ast);
     }
 
@@ -1215,7 +1215,7 @@ spec("Turbo Flow Bench") {
               FLOW_BENCH_EXPR_COMPILE_ITERS, 1) {
       turbo_flow_expr_t *expr = NULL;
       turbo_flow_error_t error;
-      check_int_eq(
+      check_equal(
           turbo_flow_expr_compile_ex(expression, strlen(expression), NULL, &options, &expr, &error),
           TURBO_OK);
       turbo_flow_expr_destroy(expr);
@@ -1227,7 +1227,7 @@ spec("Turbo Flow Bench") {
                 FLOW_BENCH_EXPR_COMPILE_ITERS, 1) {
         turbo_flow_expr_t *expr = NULL;
         turbo_flow_error_t error;
-        check_int_eq(turbo_flow_expr_compile_ex(expression, strlen(expression), NULL, &options,
+        check_equal(turbo_flow_expr_compile_ex(expression, strlen(expression), NULL, &options,
                                                 &expr, &error),
                      TURBO_OK);
         turbo_flow_expr_destroy(expr);
@@ -1249,22 +1249,22 @@ spec("Turbo Flow Bench") {
       msg.owned_payload = tstr_dup("payload");
       msg.payload = tstr_to_v(msg.owned_payload);
       context.message = &msg;
-      check_int_eq(
+      check_equal(
           turbo_flow_expr_compile_ex(expression, strlen(expression), NULL, &options, &expr, &error),
           TURBO_OK);
       if (backend == TURBO_FLOW_EXPR_MIR_INTERP) {
         benchmark("expr=typed-ir nodes=fields-arithmetic-logic backend=mir-interp evaluate",
                   FLOW_BENCH_EXPR_EVAL_ITERS, 1) {
-          check_int_eq(turbo_flow_expr_evaluate(expr, &context, &value), TURBO_OK);
+          check_equal(turbo_flow_expr_evaluate(expr, &context, &value), TURBO_OK);
         }
       } else {
         benchmark("expr=typed-ir nodes=fields-arithmetic-logic backend=mir-jit evaluate",
                   FLOW_BENCH_EXPR_EVAL_ITERS, 1) {
-          check_int_eq(turbo_flow_expr_evaluate(expr, &context, &value), TURBO_OK);
+          check_equal(turbo_flow_expr_evaluate(expr, &context, &value), TURBO_OK);
         }
       }
-      check_int_eq(value.type, TURBO_FLOW_EXPR_TYPE_BOOL);
-      check_int_eq(value.as.boolean, 1);
+      check_equal(value.type, TURBO_FLOW_EXPR_TYPE_BOOL);
+      check_equal(value.as.boolean, 1);
       turbo_flow_expr_destroy(expr);
       turbo_flow_msg_cleanup(&msg);
     }
@@ -1305,10 +1305,10 @@ spec("Turbo Flow Bench") {
                                                               : FLOW_BENCH_SECURITY_CANDIDATE_ITERS,
                       1u) {
           decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
-          check_int_eq(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
+          check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
                        TURBO_OK);
         }
-        check_int_eq(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
+        check_equal(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
         turbo_flow_security_realm_destroy(realm);
         free(rules);
       }

@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-static int flow_emitter_view_within(const tstr_v *view, const void *base, size_t size) {
+static int flow_emitter_view_within(const vstr *view, const void *base, size_t size) {
   uintptr_t data_address;
   uintptr_t base_address;
   size_t offset;

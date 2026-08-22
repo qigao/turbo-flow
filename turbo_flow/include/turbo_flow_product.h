@@ -52,7 +52,7 @@ typedef struct turbo_flow_product_provider_registry_s {
  * Copy the resolver-expanded bounded Graph ingress configuration.
  * @return TURBO_OK, TURBO_EINVAL for invalid arguments, or TURBO_EPROTO for a corrupt snapshot.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_resolved_config_runtime_ingress(const turbo_flow_resolved_config_t *config,
                                            turbo_flow_async_ingress_config_t *ingress);
 
@@ -60,7 +60,7 @@ turbo_flow_resolved_config_runtime_ingress(const turbo_flow_resolved_config_t *c
  * Validate provider availability without mutating a Graph.
  * @return TURBO_OK or a structured registry/configuration error.
  */
-CXX_C_API int turbo_flow_product_preflight(const turbo_flow_resolved_config_t *config,
+TURBO_FLOW_C_API int turbo_flow_product_preflight(const turbo_flow_resolved_config_t *config,
                                            const turbo_flow_product_provider_registry_t *registry,
                                            turbo_flow_config_error_t *error);
 
@@ -70,7 +70,7 @@ CXX_C_API int turbo_flow_product_preflight(const turbo_flow_resolved_config_t *c
  * provider-owned resources; this function does not attempt partial rollback.
  * @return TURBO_OK, the exact provider error, or a structured binding error.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_product_assemble_graph(turbo_flow_t *flow, const turbo_flow_resolved_config_t *config,
                                   const turbo_flow_product_provider_registry_t *registry,
                                   turbo_flow_config_error_t *error);

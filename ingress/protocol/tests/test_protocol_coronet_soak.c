@@ -374,6 +374,6 @@ static int protocol_soak_run_series(void) {
 
 spec("Protocol CoroNet scheduled transport soak") {
   it("PROTOCOL-SOAK-001 preserves transport lifecycle and parent resources") {
-    check_int_eq(protocol_soak_run_series(), TURBO_OK);
+    check_equal(protocol_soak_run_series(), TURBO_OK);
   }
 }

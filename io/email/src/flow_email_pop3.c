@@ -31,11 +31,11 @@ static const turbo_flow_adapter_schema_t FLOW_EMAIL_POP3_SCHEMA = {
     sizeof(FLOW_EMAIL_POP3_OPTION_FIELDS) / sizeof(FLOW_EMAIL_POP3_OPTION_FIELDS[0])};
 
 typedef struct flow_email_pop3_adapter_s {
-  tstr_t host;
-  tstr_t username;
-  tstr_t password;
-  tstr_t source_name;
-  tstr_t last_uidl;
+  tstr host;
+  tstr username;
+  tstr password;
+  tstr source_name;
+  tstr last_uidl;
   int port;
   int use_tls;
   int use_stls;
@@ -61,10 +61,10 @@ typedef struct flow_email_pop3_poll_s {
   int status;
   char *raw;
   size_t raw_len;
-  tstr_t uidl;
+  tstr uidl;
 } flow_email_pop3_poll_t;
 
-static int flow_email_pop3_dup(tstr_t *out, const char *value) {
+static int flow_email_pop3_dup(tstr *out, const char *value) {
   if (!out) return TURBO_EINVAL;
   if (!value) return TURBO_OK;
   *out = tstr_dup(value);

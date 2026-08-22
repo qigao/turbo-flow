@@ -61,33 +61,33 @@ typedef struct turbo_flow_http_auth_provider_config_s {
  * Authentication must be invoked from a running CoroNet coroutine. Network I/O yields to the
  * owner event loop; calling it outside a coroutine fails with TURBO_ENOTSUP.
  */
-CXX_C_API int
+TURBO_FLOW_C_API int
 turbo_flow_http_auth_provider_create(const turbo_flow_http_auth_provider_config_t *config,
                                      turbo_flow_http_auth_provider_t **out);
 
 /** Create from one strict `kind: auth_provider`, `backend: https` channel. */
-CXX_C_API int turbo_flow_http_auth_provider_create_resolved(
+TURBO_FLOW_C_API int turbo_flow_http_auth_provider_create_resolved(
     const turbo_flow_resolved_config_t *resolved, const char *channel_name,
     const turbo_flow_security_key_provider_t *key_provider, turbo_flow_http_auth_provider_t **out,
     turbo_flow_config_error_t *error);
 
 /** Borrowed interface valid until provider destruction. */
-CXX_C_API const turbo_flow_security_auth_provider_t *
+TURBO_FLOW_C_API const turbo_flow_security_auth_provider_t *
 turbo_flow_http_auth_provider_interface(const turbo_flow_http_auth_provider_t *provider);
 
 /** One-step MQTT enhanced authentication; Authentication Data is the HTTPS credential. */
-CXX_C_API const turbo_flow_security_enhanced_auth_provider_t *
+TURBO_FLOW_C_API const turbo_flow_security_enhanced_auth_provider_t *
 turbo_flow_http_enhanced_auth_provider_interface(
     const turbo_flow_http_auth_provider_t *provider);
 
 /** Borrowed configured authentication method. */
-CXX_C_API const char *
+TURBO_FLOW_C_API const char *
 turbo_flow_http_auth_provider_method(const turbo_flow_http_auth_provider_t *provider);
 
-CXX_C_API void turbo_flow_http_auth_provider_destroy(turbo_flow_http_auth_provider_t *provider);
+TURBO_FLOW_C_API void turbo_flow_http_auth_provider_destroy(turbo_flow_http_auth_provider_t *provider);
 
 /** Factory registered by a product composition root under the exact `https` backend. */
-CXX_C_API const turbo_flow_security_auth_provider_factory_t *
+TURBO_FLOW_C_API const turbo_flow_security_auth_provider_factory_t *
 turbo_flow_http_auth_provider_factory(void);
 
 #ifdef __cplusplus

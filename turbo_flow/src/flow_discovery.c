@@ -2,16 +2,16 @@
 
 #include "turbo_error.h"
 #include "turbo_str.h"
-#include "turbo_vec.h"
+#include "turbo_flow_stl_adapter.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 typedef struct flow_discovery_slot_s {
-  tstr_t adapter_name;
-  tstr_t peer_id;
-  tstr_t host;
-  tstr_t path;
+  tstr adapter_name;
+  tstr peer_id;
+  tstr host;
+  tstr path;
   int port;
   int active;
 } flow_discovery_slot_t;
@@ -25,16 +25,16 @@ typedef enum flow_discovery_action_e {
 
 typedef struct flow_discovery_target_s {
   int assigned;
-  tstr_t peer_id;
-  tstr_t host;
-  tstr_t path;
+  tstr peer_id;
+  tstr host;
+  tstr path;
   int port;
   flow_discovery_action_t action;
 } flow_discovery_target_t;
 
-TURBO_VEC_DEFINE(flow_discovery_slots, flow_discovery_slot_t)
-TURBO_VEC_DEFINE(flow_discovery_targets, flow_discovery_target_t)
-TURBO_VEC_DEFINE(flow_discovery_peers, turbo_flow_discovery_peer_t)
+TURBO_FLOW_VEC_DEFINE(flow_discovery_slots, flow_discovery_slot_t)
+TURBO_FLOW_VEC_DEFINE(flow_discovery_targets, flow_discovery_target_t)
+TURBO_FLOW_VEC_DEFINE(flow_discovery_peers, turbo_flow_discovery_peer_t)
 
 struct turbo_flow_discovery_controller_s {
   turbo_flow_t *flow;

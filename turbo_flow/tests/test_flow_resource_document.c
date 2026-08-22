@@ -158,21 +158,21 @@ spec("Turbo Flow resource document") {
     fixture.metadata.observed_generation = 7u;
     generation = fixture.metadata.generation;
     check_not_null(flow);
-    check_int_eq(resource_fixture_register(flow, &fixture, 1, 0), TURBO_OK);
-    check_int_eq(
+    check_equal(resource_fixture_register(flow, &fixture, 1, 0), TURBO_OK);
+    check_equal(
         turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
         TURBO_OK);
-    check_str_eq(document.uid, "queue:orders");
-    check_str_eq(document.schema->type_name, "QueueStatus");
-    check_size_eq(fixture.metadata.generation, generation);
-    check_int_eq(fixture.calls, 2);
-    check_int_eq(fixture.document_calls, 1);
+    check_equal(document.uid, "queue:orders");
+    check_equal(document.schema->type_name, "QueueStatus");
+    check_equal(fixture.metadata.generation, generation);
+    check_equal(fixture.calls, 2);
+    check_equal(fixture.document_calls, 1);
     turbo_flow_resource_document_cleanup(&document);
-    check_int_eq(
+    check_equal(
         turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_SPEC, &document),
         TURBO_OK);
-    check_str_eq(document.schema->type_name, "QueueSpec");
-    check_size_eq(fixture.metadata.generation, generation);
+    check_equal(document.schema->type_name, "QueueSpec");
+    check_equal(fixture.metadata.generation, generation);
     turbo_flow_resource_document_cleanup(&document);
     turbo_flow_destroy(flow);
   }
@@ -221,7 +221,7 @@ spec("Turbo Flow resource document") {
       uid_written = snprintf(fixtures[i].metadata.owner_name,
                              sizeof(fixtures[i].metadata.owner_name), "%s-owner", cases[i].name);
       check(uid_written > 0 && (size_t)uid_written < sizeof(fixtures[i].metadata.owner_name));
-      check_int_eq(resource_fixture_register(flow, &fixtures[i], 0, 0), TURBO_OK);
+      check_equal(resource_fixture_register(flow, &fixtures[i], 0, 0), TURBO_OK);
     }
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
@@ -235,41 +235,41 @@ spec("Turbo Flow resource document") {
         int32_t number = 0;
 
         check_not_null(schema);
-        check_uint_eq(schema->schema_id, cases[i].schema_id);
-        check_int_eq(turbo_flow_resource_document_at(flow, i, document_kinds[j], &document),
+        check_equal(schema->schema_id, cases[i].schema_id);
+        check_equal(turbo_flow_resource_document_at(flow, i, document_kinds[j], &document),
                      TURBO_OK);
         check(document.schema == schema);
-        check_int_eq(turbo_flow_resource_document_validate(&document, schema), TURBO_OK);
-        check_int_eq(data_bind_create_from_text(schema->schema_text, strlen(schema->schema_text),
+        check_equal(turbo_flow_resource_document_validate(&document, schema), TURBO_OK);
+        check_equal(data_bind_create_from_text(schema->schema_text, strlen(schema->schema_text),
                                                 &codec, &error),
                      DATA_BIND_OK);
-        check_int_eq(data_bind_parse_json(codec, schema->type_name,
+        check_equal(data_bind_parse_json(codec, schema->type_name,
                                           mem_buffer_const_data(document.payload),
                                           mem_buffer_used(document.payload), &value, &error),
                      DATA_BIND_OK);
         check_not_null(value);
         if (i == 1u && document_kinds[j] == TURBO_FLOW_RESOURCE_DOCUMENT_CONDITIONS) {
-          check_int_eq(
+          check_equal(
               data_bind_value_get_int32(data_bind_value_get(value, "ready_status"), &number),
               DATA_BIND_OK);
-          check_int_eq(number, TURBO_FLOW_CONDITION_TRUE);
-          check_int_eq(
+          check_equal(number, TURBO_FLOW_CONDITION_TRUE);
+          check_equal(
               data_bind_value_get_int32(data_bind_value_get(value, "accepting_reason"), &number),
               DATA_BIND_OK);
-          check_int_eq(number, TURBO_FLOW_RESOURCE_REASON_NOT_ACCEPTING);
-          check_int_eq(
+          check_equal(number, TURBO_FLOW_RESOURCE_REASON_NOT_ACCEPTING);
+          check_equal(
               data_bind_value_get_int32(data_bind_value_get(value, "saturated_reason"), &number),
               DATA_BIND_OK);
-          check_int_eq(number, TURBO_FLOW_RESOURCE_REASON_CAPACITY_EXHAUSTED);
+          check_equal(number, TURBO_FLOW_RESOURCE_REASON_CAPACITY_EXHAUSTED);
         }
         if (document_kinds[j] == TURBO_FLOW_RESOURCE_DOCUMENT_EVENT) {
           int gap = 0;
-          check_int_eq(data_bind_value_get_bool(data_bind_value_get(value, "gap"), &gap),
+          check_equal(data_bind_value_get_bool(data_bind_value_get(value, "gap"), &gap),
                        DATA_BIND_OK);
-          check_int_eq(gap, i == 5u);
-          check_int_eq(data_bind_value_get_int32(data_bind_value_get(value, "reason"), &number),
+          check_equal(gap, i == 5u);
+          check_equal(data_bind_value_get_int32(data_bind_value_get(value, "reason"), &number),
                        DATA_BIND_OK);
-          check_int_eq(number, i == 7u   ? TURBO_FLOW_RESOURCE_REASON_OWNER_ERROR
+          check_equal(number, i == 7u   ? TURBO_FLOW_RESOURCE_REASON_OWNER_ERROR
                                : i == 5u ? TURBO_FLOW_RESOURCE_REASON_OBSERVATION_LAGGING
                                          : TURBO_FLOW_RESOURCE_REASON_OBSERVATION_CURRENT);
         }
@@ -288,17 +288,17 @@ spec("Turbo Flow resource document") {
     {
       turbo_flow_resource_document_t first = TURBO_FLOW_RESOURCE_DOCUMENT_INIT;
       turbo_flow_resource_document_t second = TURBO_FLOW_RESOURCE_DOCUMENT_INIT;
-      check_int_eq(
+      check_equal(
           turbo_flow_resource_document_at(flow, 5u, TURBO_FLOW_RESOURCE_DOCUMENT_EVENT, &first),
           TURBO_OK);
-      check_int_eq(
+      check_equal(
           turbo_flow_resource_document_at(flow, 5u, TURBO_FLOW_RESOURCE_DOCUMENT_EVENT, &second),
           TURBO_OK);
-      check_size_eq(mem_buffer_used(first.payload), mem_buffer_used(second.payload));
+      check_equal(mem_buffer_used(first.payload), mem_buffer_used(second.payload));
       check(memcmp(mem_buffer_const_data(first.payload), mem_buffer_const_data(second.payload),
                    mem_buffer_used(first.payload)) == 0);
-      check_size_eq(first.generation, second.generation);
-      check_size_eq(first.observed_generation, second.observed_generation);
+      check_equal(first.generation, second.generation);
+      check_equal(first.observed_generation, second.observed_generation);
       turbo_flow_resource_document_cleanup(&first);
       turbo_flow_resource_document_cleanup(&second);
     }
@@ -320,16 +320,16 @@ spec("Turbo Flow resource document") {
     fixture.metadata.generation = 1u;
     fixture.metadata.observed_generation = 1u;
     check_not_null(flow);
-    check_int_eq(resource_fixture_register(flow, &fixture, 1, 0), TURBO_OK);
+    check_equal(resource_fixture_register(flow, &fixture, 1, 0), TURBO_OK);
     fixture.document_payload = &byte;
     fixture.document_payload_size = TURBO_FLOW_RESOURCE_DOCUMENT_MAX_BYTES + 1u;
-    check_int_eq(
+    check_equal(
         turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
         TURBO_EINVAL);
     fixture.document_payload = NULL;
     fixture.document_payload_size = 0u;
     fixture.corrupt_document_uid = 1;
-    check_int_eq(
+    check_equal(
         turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
         TURBO_EPROTO);
     check_null(document.payload);
@@ -347,19 +347,19 @@ spec("Turbo Flow resource document") {
     memcpy(metadata.owner_name, "orders", sizeof("orders"));
     metadata.generation = 1u;
     metadata.observed_generation = 1u;
-    check_int_eq(turbo_flow_resource_document_set_payload_copy(
+    check_equal(turbo_flow_resource_document_set_payload_copy(
                      &document, &metadata, &RESOURCE_FIXTURE_SCHEMA, "{\"ready\":true}",
                      sizeof("{\"ready\":true}") - 1u),
                  TURBO_OK);
-    check_int_eq(turbo_flow_resource_document_validate(&document, &expected), TURBO_OK);
+    check_equal(turbo_flow_resource_document_validate(&document, &expected), TURBO_OK);
     expected.schema_version = 2u;
-    check_int_eq(turbo_flow_resource_document_validate(&document, &expected), TURBO_EPROTO);
+    check_equal(turbo_flow_resource_document_validate(&document, &expected), TURBO_EPROTO);
     expected = RESOURCE_FIXTURE_SCHEMA;
     expected.type_name = "OtherStatus";
-    check_int_eq(turbo_flow_resource_document_validate(&document, &expected), TURBO_EPROTO);
+    check_equal(turbo_flow_resource_document_validate(&document, &expected), TURBO_EPROTO);
     expected = RESOURCE_FIXTURE_SCHEMA;
     expected.schema_id = 0u;
-    check_int_eq(turbo_flow_resource_document_validate(&document, &expected), TURBO_EINVAL);
+    check_equal(turbo_flow_resource_document_validate(&document, &expected), TURBO_EINVAL);
     turbo_flow_resource_document_cleanup(&document);
   }
 
@@ -382,79 +382,79 @@ spec("Turbo Flow resource document") {
     turbo_flow_t *flow = turbo_flow_create();
 
     check_not_null(flow);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(
         turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     document.size = sizeof(document) - 1u;
-    check_int_eq(turbo_flow_pool_status_document_at(flow, 0, &document), TURBO_EINVAL);
+    check_equal(turbo_flow_pool_status_document_at(flow, 0, &document), TURBO_EINVAL);
     document = (turbo_flow_resource_document_t)TURBO_FLOW_RESOURCE_DOCUMENT_INIT;
-    check_int_eq(turbo_flow_pool_status_document_at(flow, 0, &document), TURBO_OK);
-    check_int_eq(document.domain, TURBO_FLOW_DOMAIN_EXECUTION);
-    check_int_eq(document.resource_kind, TURBO_FLOW_RESOURCE_POOL);
-    check_int_eq(document.document_kind, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS);
-    check_str_eq(document.uid, "pool:2:transform");
-    check_str_eq(document.owner_name, "transform");
-    check_int_eq(turbo_flow_pool_resource_status_at(flow, 0u, &pool_status), TURBO_OK);
-    check_size_eq(document.generation, pool_status.generation);
-    check_size_eq(document.observed_generation, document.generation);
+    check_equal(turbo_flow_pool_status_document_at(flow, 0, &document), TURBO_OK);
+    check_equal(document.domain, TURBO_FLOW_DOMAIN_EXECUTION);
+    check_equal(document.resource_kind, TURBO_FLOW_RESOURCE_POOL);
+    check_equal(document.document_kind, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS);
+    check_equal(document.uid, "pool:2:transform");
+    check_equal(document.owner_name, "transform");
+    check_equal(turbo_flow_pool_resource_status_at(flow, 0u, &pool_status), TURBO_OK);
+    check_equal(document.generation, pool_status.generation);
+    check_equal(document.observed_generation, document.generation);
     check_not_null(document.schema);
-    check_str_eq(document.schema->schema_name, "TurboFlowResource");
-    check_str_eq(document.schema->type_name, "PoolStatus");
-    check_uint_eq(document.schema->schema_id, 1u);
-    check_uint_eq(document.schema->schema_version, 1u);
-    check_int_eq(document.schema->encoding, TURBO_FLOW_RESOURCE_DOCUMENT_JSON);
+    check_equal(document.schema->schema_name, "TurboFlowResource");
+    check_equal(document.schema->type_name, "PoolStatus");
+    check_equal(document.schema->schema_id, 1u);
+    check_equal(document.schema->schema_version, 1u);
+    check_equal(document.schema->encoding, TURBO_FLOW_RESOURCE_DOCUMENT_JSON);
     check_not_null(document.payload);
 
-    check_int_eq(data_bind_create_from_text(document.schema->schema_text,
+    check_equal(data_bind_create_from_text(document.schema->schema_text,
                                             strlen(document.schema->schema_text), &codec, &error),
                  DATA_BIND_OK);
     check_not_null(codec);
-    check_str_eq(data_bind_schema_name(codec), document.schema->schema_name);
-    check_str_eq(data_bind_schema_attribute_get(codec, "id"), "1");
-    check_str_eq(data_bind_schema_attribute_get(codec, "version"), "1");
-    check_int_eq(data_bind_parse_json(codec, document.schema->type_name,
+    check_equal(data_bind_schema_name(codec), document.schema->schema_name);
+    check_equal(data_bind_schema_attribute_get(codec, "id"), "1");
+    check_equal(data_bind_schema_attribute_get(codec, "version"), "1");
+    check_equal(data_bind_parse_json(codec, document.schema->type_name,
                                       mem_buffer_const_data(document.payload),
                                       mem_buffer_used(document.payload), &value, &error),
                  DATA_BIND_OK);
     check_not_null(value);
-    check_int_eq(data_bind_value_get_int32(data_bind_value_get(value, "parallelism"), &parallelism),
+    check_equal(data_bind_value_get_int32(data_bind_value_get(value, "parallelism"), &parallelism),
                  DATA_BIND_OK);
-    check_int_eq(parallelism, 2);
+    check_equal(parallelism, 2);
     field = data_bind_value_get(value, "queue_capacity");
-    check_int_eq(data_bind_value_get_string(field, &text, &text_len), DATA_BIND_OK);
-    check_size_eq(text_len, 2u);
+    check_equal(data_bind_value_get_string(field, &text, &text_len), DATA_BIND_OK);
+    check_equal(text_len, 2u);
     check(strncmp(text, "16", text_len) == 0);
-    check_int_eq(data_bind_value_get_bool(data_bind_value_get(value, "accepting"), &accepting),
+    check_equal(data_bind_value_get_bool(data_bind_value_get(value, "accepting"), &accepting),
                  DATA_BIND_OK);
-    check_int_eq(accepting, 1);
+    check_equal(accepting, 1);
 
     data_bind_value_free(value);
     data_bind_free(codec);
-    check_int_eq(turbo_flow_pool_status_document_at(flow, 0, &document), TURBO_EINVAL);
+    check_equal(turbo_flow_pool_status_document_at(flow, 0, &document), TURBO_EINVAL);
     turbo_flow_resource_document_cleanup(&document);
     check_null(document.payload);
-    check_int_eq(turbo_flow_pool_status_document_at(flow, 0, &document), TURBO_OK);
+    check_equal(turbo_flow_pool_status_document_at(flow, 0, &document), TURBO_OK);
     turbo_flow_resource_document_cleanup(&document);
-    check_int_eq(
+    check_equal(
         turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_SPEC, &document),
         TURBO_OK);
-    check_str_eq(document.schema->type_name, "RuntimeSpec");
+    check_equal(document.schema->type_name, "RuntimeSpec");
     turbo_flow_resource_document_cleanup(&document);
-    check_int_eq(
+    check_equal(
         turbo_flow_resource_document_at(flow, 1u, TURBO_FLOW_RESOURCE_DOCUMENT_EVENT, &document),
         TURBO_OK);
-    check_str_eq(document.schema->type_name, "SegmentEvent");
+    check_equal(document.schema->type_name, "SegmentEvent");
     turbo_flow_resource_document_cleanup(&document);
-    check_int_eq(
+    check_equal(
         turbo_flow_resource_document_at(flow, turbo_flow_resource_metadata_count(flow) - 1u,
                                         TURBO_FLOW_RESOURCE_DOCUMENT_CONDITIONS, &document),
         TURBO_OK);
-    check_str_eq(document.schema->type_name, "PoolConditions");
+    check_equal(document.schema->type_name, "PoolConditions");
     turbo_flow_resource_document_cleanup(&document);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -478,44 +478,44 @@ spec("Turbo Flow resource document") {
     fixture.metadata.generation = 7u;
     fixture.metadata.observed_generation = 7u;
     check_not_null(flow);
-    check_int_eq(turbo_flow_register_adapter(flow, "plain", NULL, NULL), TURBO_OK);
-    check_size_eq(turbo_flow_resource_metadata_count(flow), 0u);
-    check_int_eq(resource_fixture_register(flow, &fixture, 0, 0), TURBO_OK);
-    check_size_eq(turbo_flow_resource_metadata_count(flow), 1u);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(
+    check_equal(turbo_flow_register_adapter(flow, "plain", NULL, NULL), TURBO_OK);
+    check_equal(turbo_flow_resource_metadata_count(flow), 0u);
+    check_equal(resource_fixture_register(flow, &fixture, 0, 0), TURBO_OK);
+    check_equal(turbo_flow_resource_metadata_count(flow), 1u);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(
         turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_size_eq(turbo_flow_resource_metadata_count(flow), 5u);
-    check_int_eq(turbo_flow_resource_metadata_at(flow, 0u, &metadata), TURBO_OK);
-    check_str_eq(metadata.uid, "queue:orders");
-    check_str_eq(metadata.owner_name, "orders");
-    check_size_eq(metadata.generation, 7u);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_resource_metadata_count(flow), 5u);
+    check_equal(turbo_flow_resource_metadata_at(flow, 0u, &metadata), TURBO_OK);
+    check_equal(metadata.uid, "queue:orders");
+    check_equal(metadata.owner_name, "orders");
+    check_equal(metadata.generation, 7u);
     check_true(fixture.calls >= 2);
 
     metadata = (turbo_flow_resource_metadata_t)TURBO_FLOW_RESOURCE_METADATA_INIT;
-    check_int_eq(resource_metadata_find(flow, TURBO_FLOW_RESOURCE_RUNTIME, "graph", &metadata),
+    check_equal(resource_metadata_find(flow, TURBO_FLOW_RESOURCE_RUNTIME, "graph", &metadata),
                  TURBO_OK);
-    check_str_eq(metadata.uid, "runtime:graph");
+    check_equal(metadata.uid, "runtime:graph");
 
     metadata = (turbo_flow_resource_metadata_t)TURBO_FLOW_RESOURCE_METADATA_INIT;
-    check_int_eq(resource_metadata_find(flow, TURBO_FLOW_RESOURCE_SEGMENT, "transform", &metadata),
+    check_equal(resource_metadata_find(flow, TURBO_FLOW_RESOURCE_SEGMENT, "transform", &metadata),
                  TURBO_OK);
     check_true(strncmp(metadata.uid, "segment:", sizeof("segment:") - 1u) == 0);
 
     metadata = (turbo_flow_resource_metadata_t)TURBO_FLOW_RESOURCE_METADATA_INIT;
-    check_int_eq(resource_metadata_find(flow, TURBO_FLOW_RESOURCE_POOL, "transform", &metadata),
+    check_equal(resource_metadata_find(flow, TURBO_FLOW_RESOURCE_POOL, "transform", &metadata),
                  TURBO_OK);
-    check_int_eq(metadata.domain, TURBO_FLOW_DOMAIN_EXECUTION);
-    check_int_eq(metadata.kind, TURBO_FLOW_RESOURCE_POOL);
-    check_int_eq(turbo_flow_pool_resource_status_at(flow, 0u, &pool), TURBO_OK);
-    check_str_eq(metadata.uid, pool.uid);
-    check_str_eq(metadata.owner_name, pool.owner_name);
-    check_size_eq(metadata.generation, pool.generation);
-    check_size_eq(metadata.observed_generation, pool.observed_generation);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(metadata.domain, TURBO_FLOW_DOMAIN_EXECUTION);
+    check_equal(metadata.kind, TURBO_FLOW_RESOURCE_POOL);
+    check_equal(turbo_flow_pool_resource_status_at(flow, 0u, &pool), TURBO_OK);
+    check_equal(metadata.uid, pool.uid);
+    check_equal(metadata.owner_name, pool.owner_name);
+    check_equal(metadata.generation, pool.generation);
+    check_equal(metadata.observed_generation, pool.observed_generation);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -532,12 +532,12 @@ spec("Turbo Flow resource document") {
     fixture.metadata.generation = 2u;
     fixture.metadata.observed_generation = 3u;
     check_not_null(flow);
-    check_int_eq(resource_fixture_register(flow, &fixture, 0, 0), TURBO_EPROTO);
+    check_equal(resource_fixture_register(flow, &fixture, 0, 0), TURBO_EPROTO);
     fixture.metadata.observed_generation = 2u;
     fixture.metadata.uid[0] = '\0';
-    check_int_eq(resource_fixture_register(flow, &fixture, 0, 0), TURBO_EPROTO);
+    check_equal(resource_fixture_register(flow, &fixture, 0, 0), TURBO_EPROTO);
     memset(fixture.metadata.uid, 'x', sizeof(fixture.metadata.uid));
-    check_int_eq(resource_fixture_register(flow, &fixture, 0, 0), TURBO_EPROTO);
+    check_equal(resource_fixture_register(flow, &fixture, 0, 0), TURBO_EPROTO);
     turbo_flow_destroy(flow);
   }
 
@@ -556,57 +556,57 @@ spec("Turbo Flow resource document") {
     fixture.metadata.generation = 4u;
     fixture.metadata.observed_generation = 4u;
     check_not_null(flow);
-    check_int_eq(resource_fixture_register(flow, &fixture, 0, 1), TURBO_OK);
+    check_equal(resource_fixture_register(flow, &fixture, 0, 1), TURBO_OK);
 
     command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
     memcpy(command.target_uid, fixture.metadata.uid, sizeof("connection:test"));
     memcpy(command.idempotency_key, "quiesce-1", sizeof("quiesce-1"));
     command.expected_generation = 4u;
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_OK);
-    check_int_eq(result.replayed, 0);
-    check_size_eq(result.generation_before, 4u);
-    check_size_eq(result.generation_after, 5u);
-    check_int_eq(fixture.command_calls, 1);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_OK);
+    check_equal(result.replayed, 0);
+    check_equal(result.generation_before, 4u);
+    check_equal(result.generation_after, 5u);
+    check_equal(fixture.command_calls, 1);
 
     result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_OK);
-    check_int_eq(result.replayed, 1);
-    check_int_eq(fixture.command_calls, 1);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_OK);
+    check_equal(result.replayed, 1);
+    check_equal(fixture.command_calls, 1);
     command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_EPROTO);
-    check_int_eq(fixture.command_calls, 1);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_EPROTO);
+    check_equal(fixture.command_calls, 1);
 
     command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
     command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
     memcpy(command.target_uid, fixture.metadata.uid, sizeof("connection:test"));
     memcpy(command.idempotency_key, "resume-stale", sizeof("resume-stale"));
     command.expected_generation = 4u;
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_EBUSY);
-    check_int_eq(fixture.command_calls, 1);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_EBUSY);
+    check_equal(fixture.command_calls, 1);
 
     command.expected_generation = 5u;
     command.deadline_ns = turbo_hrtime();
     memcpy(command.idempotency_key, "resume-expired", sizeof("resume-expired"));
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_ETIMEDOUT);
-    check_int_eq(fixture.command_calls, 1);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_ETIMEDOUT);
+    check_equal(fixture.command_calls, 1);
 
     command.deadline_ns = UINT64_MAX;
     memcpy(command.idempotency_key, "resume-fails", sizeof("resume-fails"));
     fixture.command_status = TURBO_EIO;
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_EIO);
-    check_int_eq(fixture.command_calls, 2);
-    check_size_eq(fixture.metadata.generation, 5u);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_EIO);
+    check_equal(fixture.command_calls, 2);
+    check_equal(fixture.metadata.generation, 5u);
     result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_EIO);
-    check_int_eq(result.replayed, 1);
-    check_int_eq(fixture.command_calls, 2);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_EIO);
+    check_equal(result.replayed, 1);
+    check_equal(fixture.command_calls, 2);
 
     command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
     command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
     memset(command.target_uid, 'x', sizeof(command.target_uid));
     memcpy(command.idempotency_key, "unterminated-target", sizeof("unterminated-target"));
     command.expected_generation = 5u;
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_EINVAL);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_EINVAL);
     turbo_flow_destroy(flow);
   }
 
@@ -623,13 +623,13 @@ spec("Turbo Flow resource document") {
     turbo_flow_pool_snapshot_t snapshot;
 
     check_not_null(flow);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(
         turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(resource_metadata_find(flow, TURBO_FLOW_RESOURCE_POOL, "transform", &metadata),
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(resource_metadata_find(flow, TURBO_FLOW_RESOURCE_POOL, "transform", &metadata),
                  TURBO_OK);
     command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL;
     memcpy(command.target_uid, metadata.uid, strlen(metadata.uid) + 1u);
@@ -637,12 +637,12 @@ spec("Turbo Flow resource document") {
     command.expected_generation = metadata.generation;
     command.deadline_ns = turbo_hrtime() + UINT64_C(1000000000);
     command.parallelism = 2u;
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_OK);
-    check_size_eq(result.generation_before, metadata.generation);
-    check_size_eq(result.generation_after, metadata.generation + 1u);
-    check_int_eq(turbo_flow_pool_snapshot_at(flow, 0u, &snapshot), TURBO_OK);
-    check_uint_eq(snapshot.parallelism, 2u);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_OK);
+    check_equal(result.generation_before, metadata.generation);
+    check_equal(result.generation_after, metadata.generation + 1u);
+    check_equal(turbo_flow_pool_snapshot_at(flow, 0u, &snapshot), TURBO_OK);
+    check_equal(snapshot.parallelism, 2u);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -664,15 +664,15 @@ spec("Turbo Flow resource document") {
     size_t segment_index = SIZE_MAX;
 
     check_not_null(flow);
-    check_size_eq(turbo_flow_resource_metadata_count(flow), 0u);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(
+    check_equal(turbo_flow_resource_metadata_count(flow), 0u);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(
         turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
     for (size_t i = 0; i < turbo_flow_resource_metadata_count(flow); ++i) {
       turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
-      check_int_eq(turbo_flow_resource_metadata_at(flow, i, &metadata), TURBO_OK);
+      check_equal(turbo_flow_resource_metadata_at(flow, i, &metadata), TURBO_OK);
       if (metadata.kind == TURBO_FLOW_RESOURCE_RUNTIME) {
         runtime = metadata;
         runtime_index = i;
@@ -681,34 +681,34 @@ spec("Turbo Flow resource document") {
         segment_index = i;
       }
     }
-    check_size_ne(runtime_index, SIZE_MAX);
-    check_size_ne(segment_index, SIZE_MAX);
-    check_str_eq(runtime.uid, "runtime:graph");
+    check_not_equal(runtime_index, SIZE_MAX);
+    check_not_equal(segment_index, SIZE_MAX);
+    check_equal(runtime.uid, "runtime:graph");
     check_true(strncmp(segment.uid, "segment:", sizeof("segment:") - 1u) == 0);
-    check_int_eq(turbo_flow_resource_document_at(flow, runtime_index,
+    check_equal(turbo_flow_resource_document_at(flow, runtime_index,
                                                  TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
                  TURBO_OK);
-    check_str_eq(document.schema->type_name, "RuntimeStatus");
+    check_equal(document.schema->type_name, "RuntimeStatus");
     turbo_flow_resource_document_cleanup(&document);
-    check_int_eq(turbo_flow_resource_document_at(flow, segment_index,
+    check_equal(turbo_flow_resource_document_at(flow, segment_index,
                                                  TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
                  TURBO_OK);
-    check_str_eq(document.schema->type_name, "SegmentStatus");
+    check_equal(document.schema->type_name, "SegmentStatus");
     turbo_flow_resource_document_cleanup(&document);
-    check_int_eq(turbo_flow_resource_metadata_at(flow, runtime_index, &queried), TURBO_OK);
-    check_size_eq(queried.generation, runtime.generation);
+    check_equal(turbo_flow_resource_metadata_at(flow, runtime_index, &queried), TURBO_OK);
+    check_equal(queried.generation, runtime.generation);
 
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
     runtime = (turbo_flow_resource_metadata_t)TURBO_FLOW_RESOURCE_METADATA_INIT;
-    check_int_eq(resource_metadata_find(flow, TURBO_FLOW_RESOURCE_RUNTIME, "graph", &runtime),
+    check_equal(resource_metadata_find(flow, TURBO_FLOW_RESOURCE_RUNTIME, "graph", &runtime),
                  TURBO_OK);
     command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
     memcpy(command.target_uid, runtime.uid, strlen(runtime.uid) + 1u);
     memcpy(command.idempotency_key, "runtime-quiesce", sizeof("runtime-quiesce"));
     command.expected_generation = runtime.generation;
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_OK);
-    check_size_eq(result.generation_after, runtime.generation + 1u);
-    check_int_eq(turbo_flow_runtime_snapshot(flow, &runtime_snapshot), TURBO_OK);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_OK);
+    check_equal(result.generation_after, runtime.generation + 1u);
+    check_equal(turbo_flow_runtime_snapshot(flow, &runtime_snapshot), TURBO_OK);
     check_false(runtime_snapshot.accepting_publishes);
 
     command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
@@ -717,11 +717,11 @@ spec("Turbo Flow resource document") {
     memcpy(command.target_uid, runtime.uid, strlen(runtime.uid) + 1u);
     memcpy(command.idempotency_key, "runtime-resume-stale", sizeof("runtime-resume-stale"));
     command.expected_generation = runtime.generation;
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_EBUSY);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_EBUSY);
     command.expected_generation = runtime.generation + 1u;
     memcpy(command.idempotency_key, "runtime-resume", sizeof("runtime-resume"));
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_OK);
-    check_int_eq(turbo_flow_runtime_snapshot(flow, &runtime_snapshot), TURBO_OK);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_OK);
+    check_equal(turbo_flow_runtime_snapshot(flow, &runtime_snapshot), TURBO_OK);
     check_true(runtime_snapshot.accepting_publishes);
 
     command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
@@ -730,8 +730,8 @@ spec("Turbo Flow resource document") {
     memcpy(command.target_uid, segment.uid, strlen(segment.uid) + 1u);
     memcpy(command.idempotency_key, "segment-quiesce", sizeof("segment-quiesce"));
     command.expected_generation = runtime.generation + 2u;
-    check_int_eq(turbo_flow_resource_command(flow, &command, &result), TURBO_ENOTSUP);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_resource_command(flow, &command, &result), TURBO_ENOTSUP);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -750,7 +750,7 @@ spec("Turbo Flow resource document") {
     fixture.metadata.generation = 3u;
     fixture.metadata.observed_generation = 3u;
     check_not_null(flow);
-    check_int_eq(resource_fixture_register(flow, &fixture, 0, 1), TURBO_OK);
+    check_equal(resource_fixture_register(flow, &fixture, 0, 1), TURBO_OK);
 
     request.metadata = fixture.metadata;
     request.observed_value = 7u;
@@ -764,26 +764,26 @@ spec("Turbo Flow resource document") {
     request.command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
     memcpy(request.command.target_uid, fixture.metadata.uid, strlen(fixture.metadata.uid) + 1u);
     memcpy(request.command.idempotency_key, "reconcile-ready", sizeof("reconcile-ready"));
-    check_int_eq(turbo_flow_resource_reconcile_tick(flow, &request, &result), TURBO_OK);
-    check_int_eq(result.action, TURBO_FLOW_RESOURCE_RECONCILE_CONVERGED);
+    check_equal(turbo_flow_resource_reconcile_tick(flow, &request, &result), TURBO_OK);
+    check_equal(result.action, TURBO_FLOW_RESOURCE_RECONCILE_CONVERGED);
     check_true(result.value_matches);
-    check_uint_eq(result.matched_condition_count, 1u);
-    check_int_eq(fixture.command_calls, 0);
+    check_equal(result.matched_condition_count, 1u);
+    check_equal(fixture.command_calls, 0);
 
     request.metadata.observed_generation = 2u;
     request.desired_value = 8u;
     result = (turbo_flow_resource_reconcile_result_t)TURBO_FLOW_RESOURCE_RECONCILE_RESULT_INIT;
-    check_int_eq(turbo_flow_resource_reconcile_tick(flow, &request, &result), TURBO_OK);
-    check_int_eq(result.action, TURBO_FLOW_RESOURCE_RECONCILE_OBSERVING);
-    check_int_eq(fixture.command_calls, 0);
+    check_equal(turbo_flow_resource_reconcile_tick(flow, &request, &result), TURBO_OK);
+    check_equal(result.action, TURBO_FLOW_RESOURCE_RECONCILE_OBSERVING);
+    check_equal(fixture.command_calls, 0);
 
     request.metadata.observed_generation = 3u;
     result = (turbo_flow_resource_reconcile_result_t)TURBO_FLOW_RESOURCE_RECONCILE_RESULT_INIT;
-    check_int_eq(turbo_flow_resource_reconcile_tick(flow, &request, &result), TURBO_OK);
-    check_int_eq(result.action, TURBO_FLOW_RESOURCE_RECONCILE_COMMAND_APPLIED);
-    check_size_eq(result.command_result.generation_before, 3u);
-    check_size_eq(result.command_result.generation_after, 4u);
-    check_int_eq(fixture.command_calls, 1);
+    check_equal(turbo_flow_resource_reconcile_tick(flow, &request, &result), TURBO_OK);
+    check_equal(result.action, TURBO_FLOW_RESOURCE_RECONCILE_COMMAND_APPLIED);
+    check_equal(result.command_result.generation_before, 3u);
+    check_equal(result.command_result.generation_after, 4u);
+    check_equal(fixture.command_calls, 1);
 
     turbo_flow_destroy(flow);
   }
@@ -812,14 +812,14 @@ spec("Turbo Flow resource document") {
     fixture.metadata.generation = 1u;
     fixture.metadata.observed_generation = 1u;
     check_not_null(flow);
-    check_int_eq(resource_fixture_register(flow, &fixture, 0, 1), TURBO_OK);
-    check_int_eq(
+    check_equal(resource_fixture_register(flow, &fixture, 0, 1), TURBO_OK);
+    check_equal(
         turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(
         resource_metadata_find(flow, TURBO_FLOW_RESOURCE_POOL, "transform", &pool_metadata),
         TURBO_OK);
 
@@ -829,37 +829,37 @@ spec("Turbo Flow resource document") {
     workflow.ingress_generation = fixture.metadata.generation;
     workflow.pool_generation = pool_metadata.generation;
     workflow.parallelism = 3u;
-    check_int_eq(turbo_flow_resize_workflow_init(&workflow, &state), TURBO_OK);
+    check_equal(turbo_flow_resize_workflow_init(&workflow, &state), TURBO_OK);
 
-    check_int_eq(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
-    check_int_eq(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_DRAIN_GRAPH);
-    check_int_eq(fixture.command_calls, 1);
-    check_int_eq(fixture.command_kinds[0], TURBO_FLOW_RESOURCE_COMMAND_QUIESCE);
+    check_equal(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
+    check_equal(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_DRAIN_GRAPH);
+    check_equal(fixture.command_calls, 1);
+    check_equal(fixture.command_kinds[0], TURBO_FLOW_RESOURCE_COMMAND_QUIESCE);
     result = (turbo_flow_resize_workflow_result_t)TURBO_FLOW_RESIZE_WORKFLOW_RESULT_INIT;
-    check_int_eq(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
-    check_int_eq(result.action, TURBO_FLOW_RESIZE_WORKFLOW_GRAPH_DRAINED);
-    check_int_eq(turbo_flow_runtime_snapshot(flow, &runtime), TURBO_OK);
+    check_equal(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
+    check_equal(result.action, TURBO_FLOW_RESIZE_WORKFLOW_GRAPH_DRAINED);
+    check_equal(turbo_flow_runtime_snapshot(flow, &runtime), TURBO_OK);
     check_false(runtime.accepting_publishes);
-    check_int_eq(fixture.command_calls, 1);
+    check_equal(fixture.command_calls, 1);
     result = (turbo_flow_resize_workflow_result_t)TURBO_FLOW_RESIZE_WORKFLOW_RESULT_INIT;
-    check_int_eq(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
-    check_int_eq(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_RESUME_GRAPH);
-    check_uint_eq(state.commands_applied, 2u);
-    check_int_eq(turbo_flow_pool_snapshot_at(flow, 0u, &pool), TURBO_OK);
-    check_uint_eq(pool.parallelism, 3u);
+    check_equal(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
+    check_equal(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_RESUME_GRAPH);
+    check_equal(state.commands_applied, 2u);
+    check_equal(turbo_flow_pool_snapshot_at(flow, 0u, &pool), TURBO_OK);
+    check_equal(pool.parallelism, 3u);
     result = (turbo_flow_resize_workflow_result_t)TURBO_FLOW_RESIZE_WORKFLOW_RESULT_INIT;
-    check_int_eq(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
-    check_int_eq(result.action, TURBO_FLOW_RESIZE_WORKFLOW_GRAPH_RESUMED);
-    check_int_eq(turbo_flow_runtime_snapshot(flow, &runtime), TURBO_OK);
+    check_equal(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
+    check_equal(result.action, TURBO_FLOW_RESIZE_WORKFLOW_GRAPH_RESUMED);
+    check_equal(turbo_flow_runtime_snapshot(flow, &runtime), TURBO_OK);
     check_true(runtime.accepting_publishes);
-    check_int_eq(fixture.command_calls, 1);
+    check_equal(fixture.command_calls, 1);
     result = (turbo_flow_resize_workflow_result_t)TURBO_FLOW_RESIZE_WORKFLOW_RESULT_INIT;
-    check_int_eq(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
-    check_int_eq(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_DONE);
-    check_uint_eq(state.commands_applied, 3u);
-    check_int_eq(fixture.command_calls, 2);
-    check_int_eq(fixture.command_kinds[1], TURBO_FLOW_RESOURCE_COMMAND_RESUME);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
+    check_equal(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_DONE);
+    check_equal(state.commands_applied, 3u);
+    check_equal(fixture.command_calls, 2);
+    check_equal(fixture.command_kinds[1], TURBO_FLOW_RESOURCE_COMMAND_RESUME);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -887,14 +887,14 @@ spec("Turbo Flow resource document") {
     fixture.command_status = TURBO_EIO;
     fixture.command_fail_kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
     check_not_null(flow);
-    check_int_eq(resource_fixture_register(flow, &fixture, 0, 1), TURBO_OK);
-    check_int_eq(
+    check_equal(resource_fixture_register(flow, &fixture, 0, 1), TURBO_OK);
+    check_equal(
         turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
         TURBO_OK);
-    check_int_eq(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_int_eq(turbo_flow_compile(flow), TURBO_OK);
-    check_int_eq(turbo_flow_start(flow), TURBO_OK);
-    check_int_eq(
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(
         resource_metadata_find(flow, TURBO_FLOW_RESOURCE_POOL, "transform", &pool_metadata),
         TURBO_OK);
     memcpy(workflow.workflow_id, "retry-resume", sizeof("retry-resume"));
@@ -903,25 +903,25 @@ spec("Turbo Flow resource document") {
     workflow.ingress_generation = 1u;
     workflow.pool_generation = pool_metadata.generation;
     workflow.parallelism = 2u;
-    check_int_eq(turbo_flow_resize_workflow_init(&workflow, &state), TURBO_OK);
+    check_equal(turbo_flow_resize_workflow_init(&workflow, &state), TURBO_OK);
     for (int i = 0; i < 4; ++i) {
       result = (turbo_flow_resize_workflow_result_t)TURBO_FLOW_RESIZE_WORKFLOW_RESULT_INIT;
-      check_int_eq(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
+      check_equal(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
     }
     result = (turbo_flow_resize_workflow_result_t)TURBO_FLOW_RESIZE_WORKFLOW_RESULT_INIT;
-    check_int_eq(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_EIO);
-    check_int_eq(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_FAILED);
-    check_int_eq(state.failed_phase, TURBO_FLOW_RESIZE_WORKFLOW_RESUME_INGRESS);
-    check_uint_eq(state.commands_applied, 2u);
+    check_equal(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_EIO);
+    check_equal(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_FAILED);
+    check_equal(state.failed_phase, TURBO_FLOW_RESIZE_WORKFLOW_RESUME_INGRESS);
+    check_equal(state.commands_applied, 2u);
     fixture.command_status = TURBO_OK;
-    check_int_eq(turbo_flow_resize_workflow_retry(&state), TURBO_OK);
-    check_uint_eq(state.attempt, 1u);
+    check_equal(turbo_flow_resize_workflow_retry(&state), TURBO_OK);
+    check_equal(state.attempt, 1u);
     result = (turbo_flow_resize_workflow_result_t)TURBO_FLOW_RESIZE_WORKFLOW_RESULT_INIT;
-    check_int_eq(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
-    check_int_eq(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_DONE);
-    check_uint_eq(state.commands_applied, 3u);
-    check_int_eq(fixture.command_calls, 3);
-    check_int_eq(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_OK);
+    check_equal(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_DONE);
+    check_equal(state.commands_applied, 3u);
+    check_equal(fixture.command_calls, 3);
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -941,23 +941,23 @@ spec("Turbo Flow resource document") {
     fixture.metadata.generation = 2u;
     fixture.metadata.observed_generation = 2u;
     check_not_null(flow);
-    check_int_eq(resource_fixture_register(flow, &fixture, 0, 1), TURBO_OK);
+    check_equal(resource_fixture_register(flow, &fixture, 0, 1), TURBO_OK);
     memcpy(workflow.workflow_id, "stale-workflow", sizeof("stale-workflow"));
     memcpy(workflow.ingress_uid, fixture.metadata.uid, strlen(fixture.metadata.uid) + 1u);
     memcpy(workflow.pool_uid, "pool:unused", sizeof("pool:unused"));
     workflow.ingress_generation = 1u;
     workflow.pool_generation = 1u;
     workflow.parallelism = 2u;
-    check_int_eq(turbo_flow_resize_workflow_init(&workflow, &state), TURBO_OK);
-    check_int_eq(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_EBUSY);
-    check_int_eq(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_FAILED);
-    check_size_eq(state.ingress_generation, 1u);
-    check_int_eq(fixture.command_calls, 0);
-    check_int_eq(turbo_flow_resize_workflow_retry(&state), TURBO_OK);
+    check_equal(turbo_flow_resize_workflow_init(&workflow, &state), TURBO_OK);
+    check_equal(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_EBUSY);
+    check_equal(state.phase, TURBO_FLOW_RESIZE_WORKFLOW_FAILED);
+    check_equal(state.ingress_generation, 1u);
+    check_equal(fixture.command_calls, 0);
+    check_equal(turbo_flow_resize_workflow_retry(&state), TURBO_OK);
     result = (turbo_flow_resize_workflow_result_t)TURBO_FLOW_RESIZE_WORKFLOW_RESULT_INIT;
-    check_int_eq(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_EBUSY);
-    check_size_eq(state.ingress_generation, 1u);
-    check_int_eq(fixture.command_calls, 0);
+    check_equal(turbo_flow_resize_workflow_tick(flow, &state, &result), TURBO_EBUSY);
+    check_equal(state.ingress_generation, 1u);
+    check_equal(fixture.command_calls, 0);
     turbo_flow_destroy(flow);
   }
 
@@ -971,10 +971,10 @@ spec("Turbo Flow resource document") {
     workflow.ingress_generation = 1u;
     workflow.pool_generation = 1u;
     workflow.parallelism = 2u;
-    check_int_eq(turbo_flow_resize_workflow_init(&workflow, &state), TURBO_EINVAL);
+    check_equal(turbo_flow_resize_workflow_init(&workflow, &state), TURBO_EINVAL);
 
     memcpy(workflow.pool_uid, "pool:other", sizeof("pool:other"));
     memset(workflow.workflow_id, 'x', sizeof(workflow.workflow_id));
-    check_int_eq(turbo_flow_resize_workflow_init(&workflow, &state), TURBO_EINVAL);
+    check_equal(turbo_flow_resize_workflow_init(&workflow, &state), TURBO_EINVAL);
   }
 }

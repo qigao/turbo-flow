@@ -225,7 +225,7 @@ int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src) {
         turbo_flow_msg_cleanup(dst);
         return TURBO_EINVAL;
       }
-      dst->payload = tstr_v_from_buf(dst->owned_payload + offset, src->payload.len);
+      dst->payload = vstr_from_buf(dst->owned_payload + offset, src->payload.len);
     } else {
       dst->payload = tstr_to_v(dst->owned_payload);
     }

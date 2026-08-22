@@ -12,10 +12,10 @@
 #include <string.h>
 
 typedef struct flow_pgsql_sink_s {
-  tstr_t resource_uid;
-  tstr_t resource_owner;
-  tstr_t conninfo;
-  tstr_t statement;
+  tstr resource_uid;
+  tstr resource_owner;
+  tstr conninfo;
+  tstr statement;
   int binary_payload;
   PGconn *connection;
   turbo_mutex_t lock;
@@ -26,13 +26,13 @@ typedef struct flow_pgsql_sink_s {
 } flow_pgsql_sink_t;
 
 typedef struct flow_pgsql_query_s {
-  tstr_t resource_uid;
-  tstr_t resource_owner;
-  tstr_t conninfo;
-  tstr_t statement;
-  tstr_t statement_name;
-  tstr_t result_schema_name;
-  tstr_t result_type_name;
+  tstr resource_uid;
+  tstr resource_owner;
+  tstr conninfo;
+  tstr statement;
+  tstr statement_name;
+  tstr result_schema_name;
+  tstr result_type_name;
   int bind_payload;
   int binary_payload;
   turbo_flow_pgsql_result_format_t result_format;
@@ -206,7 +206,7 @@ static int flow_pgsql_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_st
   int formats[1];
   PGresult *result;
   ExecStatusType status;
-  tstr_t text_payload = NULL;
+  tstr text_payload = NULL;
   int rc;
   (void)flow;
   (void)stage;
@@ -347,7 +347,7 @@ static int flow_pgsql_query_consume(void *ctx, turbo_flow_t *flow,
   const char *values[1];
   int lengths[1];
   int formats[1];
-  tstr_t text_payload = NULL;
+  tstr text_payload = NULL;
   PGresult *result = NULL;
   int rc;
   (void)flow;

@@ -31,7 +31,7 @@ typedef struct turbo_flow_protocol_graph_sink_s {
  * mem_buffer_t. On success it returns SETTLED because turbo_flow_publish() is a
  * synchronous graph boundary. Graph errors are returned unchanged.
  */
-CXX_C_API int turbo_flow_protocol_graph_publish(
+TURBO_FLOW_C_API int turbo_flow_protocol_graph_publish(
     void *ctx, const turbo_flow_protocol_publish_request_t *request,
     turbo_flow_protocol_publish_disposition_t *disposition);
 
@@ -39,7 +39,7 @@ CXX_C_API int turbo_flow_protocol_graph_publish(
  * Return message-owned protocol metadata, or NULL for a non-protocol message.
  * The returned view has the same lifetime as msg->buffer and must not be freed.
  */
-CXX_C_API const turbo_flow_protocol_metadata_t *
+TURBO_FLOW_C_API const turbo_flow_protocol_metadata_t *
 turbo_flow_protocol_graph_metadata(const turbo_flow_msg_t *msg);
 
 #ifdef __cplusplus
