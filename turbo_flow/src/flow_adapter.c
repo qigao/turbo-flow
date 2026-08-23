@@ -26,7 +26,7 @@ const flow_adapter_registration_t *flow_adapter_for_stage(const turbo_flow_t *fl
   if (!flow || !stage || !stage->adapter_name) return NULL;
   adapter_index = flow_find_adapter(flow, stage->adapter_name);
   if (adapter_index < 0) return NULL;
-  return (const flow_adapter_registration_t *)turbo_vec_at_const(&flow->adapters,
+  return (const flow_adapter_registration_t *)vec_at_const(&flow->adapters,
                                                                  (size_t)adapter_index);
 }
 
@@ -57,7 +57,7 @@ void flow_stop_adapters(turbo_flow_t *flow) {
 
   if (!flow) return;
 
-  count = turbo_vec_size(&flow->active_adapters);
+  count = vec_size(&flow->active_adapters);
   while (count > 0) {
     flow_active_adapter_t *active;
     flow_adapter_registration_t *adapter;
@@ -65,11 +65,11 @@ void flow_stop_adapters(turbo_flow_t *flow) {
     turbo_flow_stage_plan_t view;
 
     --count;
-    active = (flow_active_adapter_t *)turbo_vec_at(&flow->active_adapters, count);
+    active = (flow_active_adapter_t *)vec_at(&flow->active_adapters, count);
     if (!active) continue;
 
-    adapter = (flow_adapter_registration_t *)turbo_vec_at(&flow->adapters, active->adapter_index);
-    stage = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, active->stage_index);
+    adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, active->adapter_index);
+    stage = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, active->stage_index);
     if (!adapter || !stage) continue;
 
     if (adapter->ops.stop) {
@@ -94,18 +94,18 @@ void flow_stop_adapters(turbo_flow_t *flow) {
     }
   }
 
-  turbo_vec_clear(&flow->active_adapters);
+  turbo_flow_stl_error(vec_clear(&flow->active_adapters));
 }
 
 int flow_start_adapters(turbo_flow_t *flow) {
   int rc = TURBO_OK;
 
   if (!flow) return TURBO_EINVAL;
-  turbo_vec_clear(&flow->active_adapters);
+  turbo_flow_stl_error(vec_clear(&flow->active_adapters));
 
-  for (size_t stage_index = 0; stage_index < turbo_vec_size(&flow->stages); ++stage_index) {
+  for (size_t stage_index = 0; stage_index < vec_size(&flow->stages); ++stage_index) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
     int adapter_index;
     flow_adapter_registration_t *adapter;
     flow_active_adapter_t active;
@@ -120,7 +120,7 @@ int flow_start_adapters(turbo_flow_t *flow) {
       goto fail;
     }
 
-    adapter = (flow_adapter_registration_t *)turbo_vec_at(&flow->adapters, (size_t)adapter_index);
+    adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, (size_t)adapter_index);
     if (!adapter) {
       rc = flow_set_error_keep_state(flow, TURBO_EINVAL, stage->line, stage->column,
                                      "adapter registry entry is invalid");
@@ -159,7 +159,7 @@ int flow_start_adapters(turbo_flow_t *flow) {
       memset(&active, 0, sizeof(active));
       active.stage_index = (uint32_t)stage_index;
       active.adapter_index = (size_t)adapter_index;
-      if (turbo_vec_push(&flow->active_adapters, &active) != TURBO_OK) {
+      if (turbo_flow_stl_error(vec_push(&flow->active_adapters, &active)) != TURBO_OK) {
         rc = flow_set_error_keep_state(flow, TURBO_ENOMEM, stage->line, stage->column,
                                        "out of memory");
         goto fail;

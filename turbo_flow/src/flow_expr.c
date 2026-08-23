@@ -29,14 +29,14 @@ static void flow_expr_set_error(flow_expr_parse_ctx_t *ctx, int code, uint32_t l
 static uint32_t flow_expr_push_node(flow_expr_parse_ctx_t *ctx, flow_expr_node_t *node) {
   size_t index;
   if (!ctx || !ctx->ast || !node || ctx->failed) return FLOW_EXPR_INVALID_NODE;
-  index = turbo_vec_size(&ctx->ast->nodes);
+  index = vec_size(&ctx->ast->nodes);
   if (index >= FLOW_EXPR_MAX_NODES) {
     tstr_freep(&node->text);
     flow_expr_set_error(ctx, TURBO_ENOSPC, node->line, node->column,
                         "expression node limit exceeded");
     return FLOW_EXPR_INVALID_NODE;
   }
-  if (turbo_vec_push(&ctx->ast->nodes, node) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->ast->nodes, node)) != TURBO_OK) {
     tstr_freep(&node->text);
     flow_expr_set_error(ctx, TURBO_ENOMEM, node->line, node->column,
                         "out of memory building expression");
@@ -209,7 +209,7 @@ uint32_t flow_expr_append_field(flow_expr_parse_ctx_t *ctx, uint32_t field,
   if (!ctx || !ctx->ast || field == FLOW_EXPR_INVALID_NODE || ctx->failed) {
     return FLOW_EXPR_INVALID_NODE;
   }
-  node = (flow_expr_node_t *)turbo_vec_at(&ctx->ast->nodes, field);
+  node = (flow_expr_node_t *)vec_at(&ctx->ast->nodes, field);
   if (!node || node->kind != FLOW_EXPR_FIELD || !node->text) {
     flow_expr_set_error(ctx, TURBO_EINVAL, member.line, member.column, "invalid field reference");
     return FLOW_EXPR_INVALID_NODE;
@@ -263,21 +263,21 @@ void flow_expr_syntax_error(flow_expr_parse_ctx_t *ctx, flow_expr_token_t token)
 
 void flow_expr_ast_destroy(flow_expr_ast_t *ast) {
   if (!ast) return;
-  for (size_t i = 0; i < turbo_vec_size(&ast->nodes); ++i) {
-    flow_expr_node_t *node = (flow_expr_node_t *)turbo_vec_at(&ast->nodes, i);
+  for (size_t i = 0; i < vec_size(&ast->nodes); ++i) {
+    flow_expr_node_t *node = (flow_expr_node_t *)vec_at(&ast->nodes, i);
     if (node) tstr_freep(&node->text);
   }
-  turbo_vec_destroy(&ast->nodes);
+  vec_destroy(&ast->nodes);
   ast->root = FLOW_EXPR_INVALID_NODE;
 }
 
 size_t flow_expr_ast_node_count(const flow_expr_ast_t *ast) {
-  return ast ? turbo_vec_size(&ast->nodes) : 0;
+  return ast ? vec_size(&ast->nodes) : 0;
 }
 
 const flow_expr_node_t *flow_expr_ast_node_at(const flow_expr_ast_t *ast, uint32_t index) {
   if (!ast) return NULL;
-  return (const flow_expr_node_t *)turbo_vec_at_const(&ast->nodes, index);
+  return (const flow_expr_node_t *)vec_at_const(&ast->nodes, index);
 }
 
 static int flow_expr_type_error(turbo_flow_error_t *error, const flow_expr_node_t *node, int code,
@@ -365,19 +365,19 @@ static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_re
   size_t i;
   if (error) memset(error, 0, sizeof(*error));
   if (!ast) return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression AST is null");
-  count = turbo_vec_size(&ast->nodes);
+  count = vec_size(&ast->nodes);
   if (count == 0 || ast->root >= count) {
     return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression AST has an invalid root");
   }
   for (i = 0; i < count; ++i) {
-    flow_expr_node_t *node = (flow_expr_node_t *)turbo_vec_at(&ast->nodes, i);
+    flow_expr_node_t *node = (flow_expr_node_t *)vec_at(&ast->nodes, i);
     if (!node) return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression AST is invalid");
     node->value_type = FLOW_EXPR_TYPE_UNRESOLVED;
     node->field_id = FLOW_EXPR_FIELD_EXTERNAL;
     node->field_scope = FLOW_EXPR_FIELD_SCOPE_NONE;
   }
   for (i = 0; i < count; ++i) {
-    flow_expr_node_t *node = (flow_expr_node_t *)turbo_vec_at(&ast->nodes, i);
+    flow_expr_node_t *node = (flow_expr_node_t *)vec_at(&ast->nodes, i);
     flow_expr_node_t *left = NULL;
     flow_expr_node_t *right = NULL;
     if (!node) return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression AST is invalid");
@@ -386,14 +386,14 @@ static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_re
         return flow_expr_type_error(error, node, TURBO_EINVAL,
                                     "expression AST child order is invalid");
       }
-      left = (flow_expr_node_t *)turbo_vec_at(&ast->nodes, node->left);
+      left = (flow_expr_node_t *)vec_at(&ast->nodes, node->left);
     }
     if (node->right != FLOW_EXPR_INVALID_NODE) {
       if (node->right >= i) {
         return flow_expr_type_error(error, node, TURBO_EINVAL,
                                     "expression AST child order is invalid");
       }
-      right = (flow_expr_node_t *)turbo_vec_at(&ast->nodes, node->right);
+      right = (flow_expr_node_t *)vec_at(&ast->nodes, node->right);
     }
     switch (node->kind) {
     case FLOW_EXPR_NULL:
@@ -500,15 +500,15 @@ int flow_expr_type_check(flow_expr_ast_t *ast, const flow_expr_resolver_t *resol
   if (!ast) return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression AST is null");
   memset(&pending, 0, sizeof(pending));
   pending.root = ast->root;
-  count = turbo_vec_size(&ast->nodes);
-  if (turbo_vec_init(&pending.nodes, sizeof(flow_expr_node_t)) != TURBO_OK) {
+  count = vec_size(&ast->nodes);
+  if (turbo_flow_stl_error(vec_init_bytes(&pending.nodes, sizeof(flow_expr_node_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
     return flow_expr_type_error(error, NULL, TURBO_ENOMEM,
                                 "out of memory checking expression types");
   }
   for (i = 0; i < count; ++i) {
-    const flow_expr_node_t *node = (const flow_expr_node_t *)turbo_vec_at_const(&ast->nodes, i);
-    if (!node || turbo_vec_push(&pending.nodes, node) != TURBO_OK) {
-      turbo_vec_destroy(&pending.nodes);
+    const flow_expr_node_t *node = (const flow_expr_node_t *)vec_at_const(&ast->nodes, i);
+    if (!node || turbo_flow_stl_error(vec_push(&pending.nodes, node)) != TURBO_OK) {
+      vec_destroy(&pending.nodes);
       return flow_expr_type_error(error, NULL, node ? TURBO_ENOMEM : TURBO_EINVAL,
                                   node ? "out of memory checking expression types"
                                        : "expression AST is invalid");
@@ -517,15 +517,15 @@ int flow_expr_type_check(flow_expr_ast_t *ast, const flow_expr_resolver_t *resol
   rc = flow_expr_type_check_inplace(&pending, resolver, error);
   if (rc == TURBO_OK) {
     for (i = 0; i < count; ++i) {
-      flow_expr_node_t *node = (flow_expr_node_t *)turbo_vec_at(&ast->nodes, i);
+      flow_expr_node_t *node = (flow_expr_node_t *)vec_at(&ast->nodes, i);
       const flow_expr_node_t *resolved =
-          (const flow_expr_node_t *)turbo_vec_at_const(&pending.nodes, i);
+          (const flow_expr_node_t *)vec_at_const(&pending.nodes, i);
       node->value_type = resolved->value_type;
       node->field_id = resolved->field_id;
       node->field_scope = resolved->field_scope;
     }
   }
-  turbo_vec_destroy(&pending.nodes);
+  vec_destroy(&pending.nodes);
   return rc;
 }
 
@@ -539,7 +539,7 @@ int flow_expr_parse(const char *text, size_t len, flow_expr_ast_t *ast, turbo_fl
   memset(ast, 0, sizeof(*ast));
   ast->root = FLOW_EXPR_INVALID_NODE;
   if (error) memset(error, 0, sizeof(*error));
-  if (turbo_vec_init(&ast->nodes, sizeof(flow_expr_node_t)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(&ast->nodes, sizeof(flow_expr_node_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
     return TURBO_ENOMEM;
   }
   memset(&ctx, 0, sizeof(ctx));

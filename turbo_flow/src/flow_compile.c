@@ -6,8 +6,8 @@
 static int compile_validate_edges(turbo_flow_t *flow) {
   size_t i;
 
-  for (i = 0; i < turbo_vec_size(&flow->edges); ++i) {
-    flow_edge_plan_impl_t *edge = (flow_edge_plan_impl_t *)turbo_vec_at(&flow->edges, i);
+  for (i = 0; i < vec_size(&flow->edges); ++i) {
+    flow_edge_plan_impl_t *edge = (flow_edge_plan_impl_t *)vec_at(&flow->edges, i);
     int from_stage = flow_find_stage_view(flow, tstr_to_v(edge->from_name));
     int to_stage = flow_find_stage_view(flow, tstr_to_v(edge->to_name));
     if (from_stage < 0 || to_stage < 0) {
@@ -39,20 +39,20 @@ static int compile_validate_edges(turbo_flow_t *flow) {
 }
 
 static int compile_validate_reject_edges(turbo_flow_t *flow) {
-  for (size_t i = 0; i < turbo_vec_size(&flow->edges); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->edges); ++i) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, i);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, i);
     const flow_stage_plan_impl_t *from;
 
     if (!edge || edge->kind != TURBO_FLOW_EDGE_REJECT) continue;
-    from = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->from_stage);
+    from = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->from_stage);
     if (!from || from->is_source || from->is_port) {
       return flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
                             "reject route source must be an executable stage");
     }
-    for (size_t j = i + 1; j < turbo_vec_size(&flow->edges); ++j) {
+    for (size_t j = i + 1; j < vec_size(&flow->edges); ++j) {
       const flow_edge_plan_impl_t *other =
-          (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, j);
+          (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, j);
       if (!other || other->kind != TURBO_FLOW_EDGE_REJECT) continue;
       if (strcmp(edge->name, other->name) == 0) {
         return flow_set_error(flow, TURBO_EALREADY, other->line, other->column,
@@ -70,9 +70,9 @@ static int compile_validate_reject_edges(turbo_flow_t *flow) {
 static int compile_validate_sources(turbo_flow_t *flow) {
   size_t i;
 
-  for (i = 0; i < turbo_vec_size(&flow->stages); ++i) {
+  for (i = 0; i < vec_size(&flow->stages); ++i) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, i);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
     if (stage->is_source) return TURBO_OK;
   }
 
@@ -146,15 +146,15 @@ static int composite_prefix_is_active(const turbo_flow_t *flow, const char *pref
                                       size_t prefix_len) {
   size_t edge_index;
 
-  for (edge_index = 0; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+  for (edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
     const flow_stage_plan_impl_t *from;
     const flow_stage_plan_impl_t *to;
 
     if (!edge || edge->is_stage_internal) continue;
-    from = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->from_stage);
-    to = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->to_stage);
+    from = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->from_stage);
+    to = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->to_stage);
     if (stage_matches_composite_prefix(from, prefix, prefix_len) ||
         stage_matches_composite_prefix(to, prefix, prefix_len)) {
       return 1;
@@ -175,13 +175,13 @@ static int stage_in_inactive_template(const turbo_flow_t *flow,
 static int compile_validate_composite_stage_boundaries(turbo_flow_t *flow) {
   size_t i;
 
-  for (i = 0; i < turbo_vec_size(&flow->edges); ++i) {
+  for (i = 0; i < vec_size(&flow->edges); ++i) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, i);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, i);
     const flow_stage_plan_impl_t *from =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->from_stage);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->from_stage);
     const flow_stage_plan_impl_t *to =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->to_stage);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->to_stage);
 
     if (edge->is_stage_internal) {
       if (!same_composite_prefix(from, to)) {
@@ -217,13 +217,13 @@ static int compile_validate_duplicate_edges(turbo_flow_t *flow) {
   size_t i;
   size_t j;
 
-  for (i = 0; i < turbo_vec_size(&flow->edges); ++i) {
+  for (i = 0; i < vec_size(&flow->edges); ++i) {
     const flow_edge_plan_impl_t *left =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, i);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, i);
 
-    for (j = i + 1; j < turbo_vec_size(&flow->edges); ++j) {
+    for (j = i + 1; j < vec_size(&flow->edges); ++j) {
       const flow_edge_plan_impl_t *right =
-          (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, j);
+          (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, j);
       if (left->from_stage == right->from_stage && left->to_stage == right->to_stage &&
           left->kind == right->kind) {
         return flow_set_error(flow, TURBO_EALREADY, right->line, right->column,
@@ -240,15 +240,15 @@ static void mark_reachable_from_stage(const turbo_flow_t *flow, uint8_t *reachab
   if (reachable[stage]) return;
   reachable[stage] = 1;
 
-  for (size_t edge_index = 0; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+  for (size_t edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
     if (edge->from_stage == stage) mark_reachable_from_stage(flow, reachable, edge->to_stage);
   }
 }
 
 static int compile_validate_source_reachability(turbo_flow_t *flow) {
-  size_t stage_count = turbo_vec_size(&flow->stages);
+  size_t stage_count = vec_size(&flow->stages);
   uint8_t *reachable = NULL;
   int rc = TURBO_OK;
 
@@ -259,13 +259,13 @@ static int compile_validate_source_reachability(turbo_flow_t *flow) {
 
   for (size_t stage_index = 0; stage_index < stage_count; ++stage_index) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
     if (stage->is_source) mark_reachable_from_stage(flow, reachable, (uint32_t)stage_index);
   }
 
   for (size_t stage_index = 0; stage_index < stage_count; ++stage_index) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
     if (!reachable[stage_index] && !stage_in_inactive_template(flow, stage)) {
       rc = flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
                           "stage is not reachable from any source");
@@ -281,20 +281,20 @@ cleanup:
 static int composite_stage_reaches_input_reverse(turbo_flow_t *flow, uint32_t stage_index,
                                                  uint8_t *seen) {
   const flow_stage_plan_impl_t *stage =
-      (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+      (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
 
   if (seen[stage_index]) return 0;
   seen[stage_index] = 1;
 
   if (stage->is_port && !stage->is_port_output) return 1;
 
-  for (size_t edge_index = 0; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+  for (size_t edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
     const flow_stage_plan_impl_t *from;
 
     if (!edge->is_stage_internal || edge->to_stage != stage_index) continue;
-    from = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->from_stage);
+    from = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->from_stage);
     if (!same_composite_prefix(stage, from)) continue;
     if (composite_stage_reaches_input_reverse(flow, edge->from_stage, seen)) return 1;
   }
@@ -303,7 +303,7 @@ static int composite_stage_reaches_input_reverse(turbo_flow_t *flow, uint32_t st
 }
 
 static int compile_validate_composite_stage_reachability(turbo_flow_t *flow) {
-  size_t stage_count = turbo_vec_size(&flow->stages);
+  size_t stage_count = vec_size(&flow->stages);
   uint8_t *seen = NULL;
   int rc = TURBO_OK;
 
@@ -314,7 +314,7 @@ static int compile_validate_composite_stage_reachability(turbo_flow_t *flow) {
 
   for (size_t stage_index = 0; stage_index < stage_count; ++stage_index) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
 
     if (!stage->is_port || !stage->is_port_output) continue;
     if (stage_in_inactive_template(flow, stage)) continue;
@@ -334,8 +334,8 @@ cleanup:
 static int compile_validate_registrations(turbo_flow_t *flow) {
   size_t i;
 
-  for (i = 0; i < turbo_vec_size(&flow->stages); ++i) {
-    flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)turbo_vec_at(&flow->stages, i);
+  for (i = 0; i < vec_size(&flow->stages); ++i) {
+    flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, i);
     int reg_index = flow_find_registration(flow, stage->name);
     int provider_index = stage->operation_name
                              ? flow_find_operation_provider(flow, stage->operation_name,
@@ -370,9 +370,9 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
         if (!stage->is_source && !stage->is_port && (roles & TURBO_FLOW_ADAPTER_SINK) &&
             !(roles & TURBO_FLOW_ADAPTER_TRANSFORM)) {
           size_t edge_index;
-          for (edge_index = 0; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+          for (edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
             const flow_edge_plan_impl_t *edge =
-                (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+                (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
             if (edge && edge->from_stage == (uint32_t)i && edge->kind != TURBO_FLOW_EDGE_REJECT) {
               return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
                                     "sink adapter stage must be terminal");
@@ -395,11 +395,11 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
 
     if (module_index >= 0) {
       const flow_module_registration_t *module =
-          (const flow_module_registration_t *)turbo_vec_at_const(&flow->modules,
+          (const flow_module_registration_t *)vec_at_const(&flow->modules,
                                                                  (size_t)module_index);
       if (provider_index >= 0) {
         const flow_operation_provider_registration_t *provider =
-            (const flow_operation_provider_registration_t *)turbo_vec_at_const(
+            (const flow_operation_provider_registration_t *)vec_at_const(
                 &flow->operation_providers, (size_t)provider_index);
         if (!provider || !provider->module_name || !module || !module->name ||
             strcmp(provider->module_name, module->name) != 0) {
@@ -451,10 +451,10 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
       const flow_stage_registration_t *reg = NULL;
       const flow_operation_provider_registration_t *provider = NULL;
       if (provider_index >= 0) {
-        provider = (const flow_operation_provider_registration_t *)turbo_vec_at_const(
+        provider = (const flow_operation_provider_registration_t *)vec_at_const(
             &flow->operation_providers, (size_t)provider_index);
       } else {
-        reg = (const flow_stage_registration_t *)turbo_vec_at_const(&flow->registrations,
+        reg = (const flow_stage_registration_t *)vec_at_const(&flow->registrations,
                                                                     (size_t)reg_index);
       }
       stage->mutability = provider ? provider->options.mutability : reg->options.mutability;
@@ -599,16 +599,16 @@ static int flow_port_bind_type(turbo_flow_t *flow, flow_stage_plan_impl_t *port,
 }
 
 static int compile_resolve_port_types(turbo_flow_t *flow) {
-  size_t stage_count = turbo_vec_size(&flow->stages);
+  size_t stage_count = vec_size(&flow->stages);
   for (size_t pass = 0u; pass < stage_count; ++pass) {
     int changed = 0;
-    for (size_t i = 0u; i < turbo_vec_size(&flow->edges); ++i) {
+    for (size_t i = 0u; i < vec_size(&flow->edges); ++i) {
       const flow_edge_plan_impl_t *edge =
-          (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, i);
+          (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, i);
       flow_stage_plan_impl_t *from =
-          (flow_stage_plan_impl_t *)turbo_vec_at(&flow->stages, edge->from_stage);
+          (flow_stage_plan_impl_t *)vec_at(&flow->stages, edge->from_stage);
       flow_stage_plan_impl_t *to =
-          (flow_stage_plan_impl_t *)turbo_vec_at(&flow->stages, edge->to_stage);
+          (flow_stage_plan_impl_t *)vec_at(&flow->stages, edge->to_stage);
       const turbo_flow_operation_descriptor_t *from_operation;
       const turbo_flow_operation_descriptor_t *to_operation;
       int rc;
@@ -634,7 +634,7 @@ static int compile_resolve_port_types(turbo_flow_t *flow) {
   }
   for (size_t i = 0u; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, i);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
     if (stage && stage->is_port && !stage_in_inactive_template(flow, stage) &&
         !stage->resolved_operation.input_type) {
       return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
@@ -645,8 +645,8 @@ static int compile_resolve_port_types(turbo_flow_t *flow) {
 }
 
 static int compile_resolve_operations(turbo_flow_t *flow) {
-  for (size_t i = 0u; i < turbo_vec_size(&flow->stages); ++i) {
-    flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)turbo_vec_at(&flow->stages, i);
+  for (size_t i = 0u; i < vec_size(&flow->stages); ++i) {
+    flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, i);
     const turbo_flow_operation_descriptor_t *registered;
     if (!stage) return TURBO_EINVAL;
     memset(&stage->resolved_operation, 0, sizeof(stage->resolved_operation));
@@ -669,9 +669,9 @@ static int compile_resolve_operations(turbo_flow_t *flow) {
 
 static int stage_has_reject_edge(const turbo_flow_t *flow, uint32_t stage_index) {
   size_t i;
-  for (i = 0; i < turbo_vec_size(&flow->edges); ++i) {
+  for (i = 0; i < vec_size(&flow->edges); ++i) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, i);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, i);
     if (edge && edge->from_stage == stage_index && edge->kind == TURBO_FLOW_EDGE_REJECT) return 1;
   }
   return 0;
@@ -757,9 +757,9 @@ static int compile_validate_operation_runtime(turbo_flow_t *flow,
 static int compile_validate_operation_bindings(turbo_flow_t *flow) {
   size_t i;
 
-  for (i = 0; i < turbo_vec_size(&flow->stages); ++i) {
+  for (i = 0; i < vec_size(&flow->stages); ++i) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, i);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
     const turbo_flow_operation_descriptor_t *operation;
     const turbo_flow_primitive_descriptor_t *resource = NULL;
     const flow_adapter_registration_t *adapter = NULL;
@@ -856,11 +856,11 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
 }
 
 static int compile_validate_emitting_operations(turbo_flow_t *flow) {
-  const size_t stage_count = turbo_vec_size(&flow->stages);
+  const size_t stage_count = vec_size(&flow->stages);
 
   for (size_t stage_index = 0u; stage_index < stage_count; ++stage_index) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
     const turbo_flow_operation_descriptor_t *operation;
     uint8_t *descendants;
     int changed;
@@ -887,9 +887,9 @@ static int compile_validate_emitting_operations(turbo_flow_t *flow) {
     descendants[stage_index] = 1u;
     do {
       changed = 0;
-      for (size_t edge_index = 0u; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+      for (size_t edge_index = 0u; edge_index < vec_size(&flow->edges); ++edge_index) {
         const flow_edge_plan_impl_t *edge =
-            (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+            (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
         if (edge && descendants[edge->from_stage] && !descendants[edge->to_stage]) {
           descendants[edge->to_stage] = 1u;
           changed = 1;
@@ -897,9 +897,9 @@ static int compile_validate_emitting_operations(turbo_flow_t *flow) {
       }
     } while (changed);
 
-    for (size_t edge_index = 0u; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+    for (size_t edge_index = 0u; edge_index < vec_size(&flow->edges); ++edge_index) {
       const flow_edge_plan_impl_t *edge =
-          (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+          (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
       if (edge && edge->to_stage != stage_index && descendants[edge->to_stage] &&
           !descendants[edge->from_stage]) {
         free(descendants);
@@ -913,11 +913,11 @@ static int compile_validate_emitting_operations(turbo_flow_t *flow) {
 }
 
 static int compile_validate_keyed_operations(turbo_flow_t *flow) {
-  const size_t stage_count = turbo_vec_size(&flow->stages);
+  const size_t stage_count = vec_size(&flow->stages);
 
   for (size_t stage_index = 0u; stage_index < stage_count; ++stage_index) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
     const turbo_flow_operation_descriptor_t *operation;
 
     if (!stage || (!stage->keyed_fn && !stage->keyed_emit_fn && !stage->window_fn)) continue;
@@ -956,7 +956,7 @@ static int compile_validate_keyed_operations(turbo_flow_t *flow) {
     }
     for (size_t prior_index = 0u; prior_index < stage_index; ++prior_index) {
       const flow_stage_plan_impl_t *prior =
-          (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, prior_index);
+          (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, prior_index);
       if (prior && prior->keyed_store == stage->keyed_store) {
         return flow_set_error(flow, TURBO_EALREADY, stage->line, stage->column,
                               "keyed state store may bind only one runtime node");
@@ -975,17 +975,17 @@ static int operation_types_equal(turbo_flow_domain_t left_domain, const char *le
 static int compile_validate_operation_edges(turbo_flow_t *flow) {
   size_t i;
 
-  for (i = 0; i < turbo_vec_size(&flow->edges); ++i) {
+  for (i = 0; i < vec_size(&flow->edges); ++i) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, i);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, i);
     const flow_stage_plan_impl_t *from;
     const flow_stage_plan_impl_t *to;
     const turbo_flow_operation_descriptor_t *from_operation;
     const turbo_flow_operation_descriptor_t *to_operation;
 
     if (!edge || edge->from_stage == UINT32_MAX || edge->to_stage == UINT32_MAX) continue;
-    from = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->from_stage);
-    to = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->to_stage);
+    from = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->from_stage);
+    to = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->to_stage);
     if (!from || !to || stage_in_inactive_template(flow, from) ||
         stage_in_inactive_template(flow, to)) {
       continue;
@@ -1022,7 +1022,7 @@ static int branch_contains_unordered_before_fanin(turbo_flow_t *flow,
                                                   const uint32_t *incoming_counts,
                                                   uint32_t stage_index, uint8_t *visiting) {
   const flow_stage_plan_impl_t *stage =
-      (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+      (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
 
   if (visiting[stage_index]) return 0;
   visiting[stage_index] = 1;
@@ -1031,9 +1031,9 @@ static int branch_contains_unordered_before_fanin(turbo_flow_t *flow,
   if (stage_output_is_unordered(stage)) return 1;
   if (incoming_counts[stage_index] > 1) return 0;
 
-  for (size_t edge_index = 0; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+  for (size_t edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
     if (edge->to_stage != stage_index) continue;
     if (branch_contains_unordered_before_fanin(flow, incoming_counts, edge->from_stage, visiting)) {
       return 1;
@@ -1044,7 +1044,7 @@ static int branch_contains_unordered_before_fanin(turbo_flow_t *flow,
 }
 
 static int compile_validate_unordered_fanin(turbo_flow_t *flow) {
-  size_t stage_count = turbo_vec_size(&flow->stages);
+  size_t stage_count = vec_size(&flow->stages);
   uint32_t *incoming_counts = NULL;
   uint8_t *visiting = NULL;
   int rc = TURBO_OK;
@@ -1056,15 +1056,15 @@ static int compile_validate_unordered_fanin(turbo_flow_t *flow) {
     goto cleanup;
   }
 
-  for (size_t edge_index = 0; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+  for (size_t edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
     incoming_counts[edge->to_stage] += 1u;
   }
 
-  for (size_t edge_index = 0; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+  for (size_t edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
     if (incoming_counts[edge->to_stage] <= 1u) continue;
 
     memset(visiting, 0, stage_count * sizeof(uint8_t));
@@ -1085,7 +1085,7 @@ cleanup:
 static int fanout_branch_contains_mutable(turbo_flow_t *flow, const uint32_t *incoming_counts,
                                           uint32_t stage_index, uint8_t *visiting) {
   const flow_stage_plan_impl_t *stage =
-      (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+      (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
 
   if (visiting[stage_index]) return 0;
   visiting[stage_index] = 1;
@@ -1094,9 +1094,9 @@ static int fanout_branch_contains_mutable(turbo_flow_t *flow, const uint32_t *in
     return 1;
   }
 
-  for (size_t edge_index = 0; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+  for (size_t edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
     if (edge->from_stage != stage_index) continue;
     if (incoming_counts[edge->to_stage] > 1) continue;
     if (fanout_branch_contains_mutable(flow, incoming_counts, edge->to_stage, visiting)) return 1;
@@ -1106,7 +1106,7 @@ static int fanout_branch_contains_mutable(turbo_flow_t *flow, const uint32_t *in
 }
 
 static int compile_validate_fanout_mutability(turbo_flow_t *flow) {
-  size_t stage_count = turbo_vec_size(&flow->stages);
+  size_t stage_count = vec_size(&flow->stages);
   uint32_t *incoming_counts = NULL;
   uint8_t *visiting = NULL;
   int rc = TURBO_OK;
@@ -1118,18 +1118,18 @@ static int compile_validate_fanout_mutability(turbo_flow_t *flow) {
     goto cleanup;
   }
 
-  for (size_t edge_index = 0; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+  for (size_t edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
     incoming_counts[edge->to_stage] += 1;
   }
 
   for (size_t stage_index = 0; stage_index < stage_count; ++stage_index) {
     uint32_t outgoing_count = 0;
 
-    for (size_t edge_index = 0; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+    for (size_t edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
       const flow_edge_plan_impl_t *edge =
-          (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+          (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
       if (edge->from_stage == (uint32_t)stage_index && edge->kind != TURBO_FLOW_EDGE_REJECT) {
         ++outgoing_count;
       }
@@ -1137,9 +1137,9 @@ static int compile_validate_fanout_mutability(turbo_flow_t *flow) {
 
     if (outgoing_count <= 1) continue;
 
-    for (size_t edge_index = 0; edge_index < turbo_vec_size(&flow->edges); ++edge_index) {
+    for (size_t edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
       const flow_edge_plan_impl_t *edge =
-          (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, edge_index);
+          (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
 
       if (edge->from_stage != (uint32_t)stage_index) continue;
       memset(visiting, 0, stage_count * sizeof(uint8_t));
@@ -1161,9 +1161,9 @@ static int dfs_cycle(const turbo_flow_t *flow, uint8_t *state, uint32_t node) {
   size_t i;
 
   state[node] = 1;
-  for (i = 0; i < turbo_vec_size(&flow->edges); ++i) {
+  for (i = 0; i < vec_size(&flow->edges); ++i) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&flow->edges, i);
+        (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, i);
     if (edge->from_stage != node) continue;
     if (state[edge->to_stage] == 1) return 1;
     if (state[edge->to_stage] == 0 && dfs_cycle(flow, state, edge->to_stage)) return 1;
@@ -1173,7 +1173,7 @@ static int dfs_cycle(const turbo_flow_t *flow, uint8_t *state, uint32_t node) {
 }
 
 static int compile_validate_cycles(turbo_flow_t *flow) {
-  size_t count = turbo_vec_size(&flow->stages);
+  size_t count = vec_size(&flow->stages);
   uint8_t *state;
   size_t i;
 

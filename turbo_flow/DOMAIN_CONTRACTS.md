@@ -153,14 +153,14 @@ output bound 超限或 state conflict 都会丢弃整个输出批次且不提交
 #include <stdint.h>
 #include <string.h>
 
-static int select_client(const turbo_flow_msg_t *msg, tstr_v *key, void *ctx) {
+static int select_client(const turbo_flow_msg_t *msg, vstr *key, void *ctx) {
   (void)ctx;
   *key = tstr_v_from_buf((const char *)&msg->id, sizeof(msg->id));
   return TURBO_OK;
 }
 
 static int increment(turbo_flow_msg_t *msg, turbo_flow_keyed_state_t *state, void *ctx) {
-  tstr_v value;
+  vstr value;
   uint64_t count = 0;
   int rc = turbo_flow_keyed_state_get(state, &value, NULL);
   (void)ctx;

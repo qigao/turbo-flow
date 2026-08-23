@@ -41,11 +41,11 @@ int flow_parse_ctx_init(flow_parse_ctx_t *ctx, turbo_flow_t *flow) {
   memset(ctx, 0, sizeof(*ctx));
   ctx->flow = flow;
   ctx->current_stage_template_index = SIZE_MAX;
-  if (turbo_vec_init(&ctx->node_refs, sizeof(flow_node_ref_t)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(&ctx->node_refs, sizeof(flow_node_ref_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
     return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
   }
-  if (turbo_vec_init(&ctx->stage_templates, sizeof(flow_stage_template_decl_t)) != TURBO_OK) {
-    turbo_vec_destroy(&ctx->node_refs);
+  if (turbo_flow_stl_error(vec_init_bytes(&ctx->stage_templates, sizeof(flow_stage_template_decl_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
+    vec_destroy(&ctx->node_refs);
     return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
   }
   return TURBO_OK;
@@ -55,17 +55,17 @@ void flow_parse_ctx_destroy(flow_parse_ctx_t *ctx) {
   size_t i;
 
   if (!ctx) return;
-  for (i = 0; i < turbo_vec_size(&ctx->stage_templates); ++i) {
+  for (i = 0; i < vec_size(&ctx->stage_templates); ++i) {
     flow_stage_template_decl_t *stage_template =
-        (flow_stage_template_decl_t *)turbo_vec_at(&ctx->stage_templates, i);
+        (flow_stage_template_decl_t *)vec_at(&ctx->stage_templates, i);
     if (!stage_template) continue;
     tstr_freep(&stage_template->name);
     tstr_freep(&stage_template->first_input);
     tstr_freep(&stage_template->first_output);
   }
   tstr_freep(&ctx->root_stage_name);
-  turbo_vec_destroy(&ctx->stage_templates);
-  turbo_vec_destroy(&ctx->node_refs);
+  vec_destroy(&ctx->stage_templates);
+  vec_destroy(&ctx->node_refs);
 }
 
 flow_stage_spec_t flow_stage_spec_default(void) {
@@ -362,9 +362,9 @@ static tstr make_scoped_name(flow_parse_ctx_t *ctx, vstr name) {
 static int find_stage_template_view(const flow_parse_ctx_t *ctx, vstr name) {
   size_t i;
 
-  for (i = 0; i < turbo_vec_size(&ctx->stage_templates); ++i) {
+  for (i = 0; i < vec_size(&ctx->stage_templates); ++i) {
     const flow_stage_template_decl_t *stage_template =
-        (const flow_stage_template_decl_t *)turbo_vec_at_const(&ctx->stage_templates, i);
+        (const flow_stage_template_decl_t *)vec_at_const(&ctx->stage_templates, i);
     if (!stage_template || !stage_template->name) continue;
     if (tstr_eq_v(stage_template->name, name)) return (int)i;
   }
@@ -418,7 +418,7 @@ static int push_stage_template_copy(flow_parse_ctx_t *ctx, vstr name,
   stage_template.input_count = source->input_count;
   stage_template.output_count = source->output_count;
 
-  if (turbo_vec_push(&ctx->stage_templates, &stage_template) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->stage_templates, &stage_template)) != TURBO_OK) {
     tstr_freep(&stage_template.name);
     tstr_freep(&stage_template.first_input);
     tstr_freep(&stage_template.first_output);
@@ -460,7 +460,7 @@ static int copy_stage_with_prefix(flow_parse_ctx_t *ctx, const flow_stage_plan_i
     return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
   }
 
-  if (turbo_vec_push(&ctx->flow->stages, &stage) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->flow->stages, &stage)) != TURBO_OK) {
     flow_stage_impl_destroy(&stage);
     return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
   }
@@ -491,7 +491,7 @@ static int copy_edge_with_prefix(flow_parse_ctx_t *ctx, const flow_edge_plan_imp
     return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
   }
 
-  if (turbo_vec_push(&ctx->flow->edges, &edge) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != TURBO_OK) {
     flow_edge_impl_destroy(&edge);
     return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
   }
@@ -546,7 +546,7 @@ static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int i
                         "out of memory");
     }
   }
-  if (turbo_vec_push(&ctx->flow->stages, &stage) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->flow->stages, &stage)) != TURBO_OK) {
     flow_stage_impl_destroy(&stage);
     return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
   }
@@ -604,7 +604,7 @@ int flow_parse_add_port(flow_parse_ctx_t *ctx, flow_token_t name, int is_output)
   if (!scoped) return parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
   rc = stage_plan_add(ctx, tstr_to_v(scoped), 0, 1, is_output, spec, name.line, name.column);
   if (rc == TURBO_OK) {
-    stage_template = (flow_stage_template_decl_t *)turbo_vec_at(&ctx->stage_templates,
+    stage_template = (flow_stage_template_decl_t *)vec_at(&ctx->stage_templates,
                                                                 ctx->current_stage_template_index);
     if (!stage_template) {
       rc = parse_fail(ctx, TURBO_EINVAL, name.line, name.column,
@@ -658,7 +658,7 @@ int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t
     return parse_fail(ctx, TURBO_EINVAL, target.line, target.column, "stage cannot use itself");
   }
 
-  target_template = (const flow_stage_template_decl_t *)turbo_vec_at_const(&ctx->stage_templates,
+  target_template = (const flow_stage_template_decl_t *)vec_at_const(&ctx->stage_templates,
                                                                            (size_t)target_index);
   if (!target_template) {
     return parse_fail(ctx, TURBO_EINVAL, target.line, target.column,
@@ -669,16 +669,16 @@ int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t
   if (!alias_name) return parse_fail(ctx, TURBO_ENOMEM, alias.line, alias.column, "out of memory");
   alias_view = tstr_to_v(alias_name);
 
-  stage_count = turbo_vec_size(&ctx->flow->stages);
-  edge_count = turbo_vec_size(&ctx->flow->edges);
-  template_count = turbo_vec_size(&ctx->stage_templates);
+  stage_count = vec_size(&ctx->flow->stages);
+  edge_count = vec_size(&ctx->flow->edges);
+  template_count = vec_size(&ctx->stage_templates);
 
   rc = push_stage_template_copy(ctx, alias_view, target_template, alias.line, alias.column);
   if (rc != TURBO_OK) goto cleanup;
 
   for (i = 0; i < template_count; ++i) {
     const flow_stage_template_decl_t *nested =
-        (const flow_stage_template_decl_t *)turbo_vec_at_const(&ctx->stage_templates, i);
+        (const flow_stage_template_decl_t *)vec_at_const(&ctx->stage_templates, i);
     tstr nested_name;
 
     if (!nested || !nested->name || !name_has_scoped_prefix(tstr_to_v(nested->name), target_view)) {
@@ -696,7 +696,7 @@ int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t
 
   for (i = 0; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&ctx->flow->stages, i);
+        (const flow_stage_plan_impl_t *)vec_at_const(&ctx->flow->stages, i);
 
     if (!stage || !stage->name || !name_has_scoped_prefix(tstr_to_v(stage->name), target_view)) {
       continue;
@@ -707,7 +707,7 @@ int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t
 
   for (i = 0; i < edge_count; ++i) {
     const flow_edge_plan_impl_t *edge =
-        (const flow_edge_plan_impl_t *)turbo_vec_at_const(&ctx->flow->edges, i);
+        (const flow_edge_plan_impl_t *)vec_at_const(&ctx->flow->edges, i);
 
     if (!edge || !edge->is_stage_internal || !edge->from_name || !edge->to_name ||
         !name_has_scoped_prefix(tstr_to_v(edge->from_name), target_view) ||
@@ -773,8 +773,8 @@ int flow_parse_enter_stage_template(flow_parse_ctx_t *ctx, flow_token_t name) {
   stage_template.line = name.line;
   stage_template.column = name.column;
 
-  index = turbo_vec_size(&ctx->stage_templates);
-  if (turbo_vec_push(&ctx->stage_templates, &stage_template) != TURBO_OK) {
+  index = vec_size(&ctx->stage_templates);
+  if (turbo_flow_stl_error(vec_push(&ctx->stage_templates, &stage_template)) != TURBO_OK) {
     tstr_freep(&stage_template.name);
     return parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
   }
@@ -802,9 +802,9 @@ flow_node_list_t flow_parse_node(flow_parse_ctx_t *ctx, flow_token_t name) {
   ref.line = name.line;
   ref.column = name.column;
 
-  list.start = turbo_vec_size(&ctx->node_refs);
+  list.start = vec_size(&ctx->node_refs);
   list.count = 1;
-  if (turbo_vec_push(&ctx->node_refs, &ref) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->node_refs, &ref)) != TURBO_OK) {
     parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
     list.count = 0;
   }
@@ -824,9 +824,9 @@ flow_node_list_t flow_parse_qualified_node(flow_parse_ctx_t *ctx, flow_token_t f
   ref.column = first.column;
   ref.qualified = 1;
 
-  list.start = turbo_vec_size(&ctx->node_refs);
+  list.start = vec_size(&ctx->node_refs);
   list.count = 1;
-  if (turbo_vec_push(&ctx->node_refs, &ref) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->node_refs, &ref)) != TURBO_OK) {
     parse_fail(ctx, TURBO_ENOMEM, first.line, first.column, "out of memory");
     list.count = 0;
   }
@@ -884,7 +884,7 @@ static tstr resolve_node_name(flow_parse_ctx_t *ctx, const flow_node_ref_t *ref,
     template_index = find_stage_template_view(ctx, tstr_to_v(name));
     if (template_index >= 0 && flow_find_stage_view(ctx->flow, tstr_to_v(name)) < 0) {
       const flow_stage_template_decl_t *stage_template =
-          (const flow_stage_template_decl_t *)turbo_vec_at_const(&ctx->stage_templates,
+          (const flow_stage_template_decl_t *)vec_at_const(&ctx->stage_templates,
                                                                  (size_t)template_index);
       tstr_freep(&name);
       return make_stage_template_port_name(ctx, stage_template, ref, use_output);
@@ -895,7 +895,7 @@ static tstr resolve_node_name(flow_parse_ctx_t *ctx, const flow_node_ref_t *ref,
   template_index = find_stage_template_view(ctx, ref->first);
   if (template_index >= 0 && flow_find_stage_view(ctx->flow, ref->first) < 0) {
     const flow_stage_template_decl_t *stage_template =
-        (const flow_stage_template_decl_t *)turbo_vec_at_const(&ctx->stage_templates,
+        (const flow_stage_template_decl_t *)vec_at_const(&ctx->stage_templates,
                                                                (size_t)template_index);
     return make_stage_template_port_name(ctx, stage_template, ref, use_output);
   }
@@ -912,11 +912,11 @@ int flow_parse_add_edges(flow_parse_ctx_t *ctx, flow_node_list_t from, flow_node
 
   for (i = 0; i < from.count; ++i) {
     const flow_node_ref_t *from_ref =
-        (const flow_node_ref_t *)turbo_vec_at_const(&ctx->node_refs, from.start + i);
+        (const flow_node_ref_t *)vec_at_const(&ctx->node_refs, from.start + i);
 
     for (j = 0; j < to.count; ++j) {
       const flow_node_ref_t *to_ref =
-          (const flow_node_ref_t *)turbo_vec_at_const(&ctx->node_refs, to.start + j);
+          (const flow_node_ref_t *)vec_at_const(&ctx->node_refs, to.start + j);
       flow_edge_plan_impl_t edge;
 
       memset(&edge, 0, sizeof(edge));
@@ -933,7 +933,7 @@ int flow_parse_add_edges(flow_parse_ctx_t *ctx, flow_node_list_t from, flow_node
       edge.column = arrow.column;
       edge.is_stage_internal = ctx->in_stage_template;
 
-      if (turbo_vec_push(&ctx->flow->edges, &edge) != TURBO_OK) {
+      if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != TURBO_OK) {
         flow_edge_impl_destroy(&edge);
         return parse_fail(ctx, TURBO_ENOMEM, arrow.line, arrow.column, "out of memory");
       }
@@ -955,8 +955,8 @@ int flow_parse_add_conditional_edge(flow_parse_ctx_t *ctx, flow_node_list_t from
     return parse_fail(ctx, TURBO_EINVAL, arrow.line, arrow.column,
                       "conditional route requires one flow-level source and destination");
   }
-  from_ref = (const flow_node_ref_t *)turbo_vec_at_const(&ctx->node_refs, from.start);
-  to_ref = (const flow_node_ref_t *)turbo_vec_at_const(&ctx->node_refs, to.start);
+  from_ref = (const flow_node_ref_t *)vec_at_const(&ctx->node_refs, from.start);
+  to_ref = (const flow_node_ref_t *)vec_at_const(&ctx->node_refs, to.start);
   if (!from_ref || !to_ref) {
     return parse_fail(ctx, TURBO_EINVAL, arrow.line, arrow.column,
                       "conditional route contains an invalid node");
@@ -976,7 +976,7 @@ int flow_parse_add_conditional_edge(flow_parse_ctx_t *ctx, flow_node_list_t from
   edge.line = arrow.line;
   edge.column = arrow.column;
   edge.kind = TURBO_FLOW_EDGE_CONDITIONAL;
-  if (turbo_vec_push(&ctx->flow->edges, &edge) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != TURBO_OK) {
     flow_edge_impl_destroy(&edge);
     return parse_fail(ctx, TURBO_ENOMEM, arrow.line, arrow.column, "out of memory");
   }
@@ -994,8 +994,8 @@ int flow_parse_add_reject_edge(flow_parse_ctx_t *ctx, flow_token_t name, flow_no
     return parse_fail(ctx, TURBO_EINVAL, arrow.line, arrow.column,
                       "reject route requires a name and one flow-level source and destination");
   }
-  from_ref = (const flow_node_ref_t *)turbo_vec_at_const(&ctx->node_refs, from.start);
-  to_ref = (const flow_node_ref_t *)turbo_vec_at_const(&ctx->node_refs, to.start);
+  from_ref = (const flow_node_ref_t *)vec_at_const(&ctx->node_refs, from.start);
+  to_ref = (const flow_node_ref_t *)vec_at_const(&ctx->node_refs, to.start);
   if (!from_ref || !to_ref) {
     return parse_fail(ctx, TURBO_EINVAL, arrow.line, arrow.column,
                       "reject route contains an invalid node");
@@ -1015,7 +1015,7 @@ int flow_parse_add_reject_edge(flow_parse_ctx_t *ctx, flow_token_t name, flow_no
   edge.line = arrow.line;
   edge.column = arrow.column;
   edge.kind = TURBO_FLOW_EDGE_REJECT;
-  if (turbo_vec_push(&ctx->flow->edges, &edge) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != TURBO_OK) {
     flow_edge_impl_destroy(&edge);
     return parse_fail(ctx, TURBO_ENOMEM, arrow.line, arrow.column, "out of memory");
   }

@@ -1,6 +1,6 @@
 #include "flow_internal.h"
 
-#include "turbo_flow_stl_adapter.h"
+#include "turbo_flow_stl_error_internal.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -20,7 +20,7 @@ typedef enum flow_keyed_state_mutation_e {
 } flow_keyed_state_mutation_t;
 
 struct turbo_flow_keyed_state_store_s {
-  turbo_hash_map_t entries;
+  hash_map_t entries;
   turbo_mutex_t mutex;
   size_t max_entries;
   size_t max_key_size;
@@ -66,7 +66,7 @@ static size_t flow_keyed_hash(const void *key, size_t key_size, void *ctx) {
   const vstr *view = (const vstr *)key;
   (void)key_size;
   (void)ctx;
-  return turbo_hash_bytes(view->data, view->len, NULL);
+  return hash_bytes(view->data, view->len, NULL);
 }
 
 static bool flow_keyed_equal(const void *left, const void *right, size_t key_size, void *ctx) {
@@ -113,15 +113,14 @@ turbo_flow_keyed_state_store_t *turbo_flow_keyed_state_store_create(
   if (!flow_keyed_config_valid(config)) return NULL;
   store = (turbo_flow_keyed_state_store_t *)calloc(1u, sizeof(*store));
   if (!store) return NULL;
-  rc = turbo_hash_map_init(&store->entries, sizeof(vstr), sizeof(flow_keyed_state_entry_t),
-                           flow_keyed_hash, flow_keyed_equal, NULL);
+  rc = turbo_flow_stl_error(hash_map_init_bytes(&store->entries, sizeof(vstr), _Alignof(turbo_flow_max_align_t), sizeof(flow_keyed_state_entry_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX, ((flow_keyed_hash) ? (flow_keyed_hash) : hash_bytes), ((flow_keyed_equal) ? (flow_keyed_equal) : hash_key_equal), NULL));
   if (rc != TURBO_OK) {
     free(store);
     return NULL;
   }
-  rc = turbo_hash_map_reserve(&store->entries, config->max_entries);
+  rc = turbo_flow_stl_error(hash_map_reserve(&store->entries, config->max_entries));
   if (rc != TURBO_OK) {
-    turbo_hash_map_destroy(&store->entries);
+    hash_map_destroy(&store->entries);
     free(store);
     return NULL;
   }
@@ -182,14 +181,14 @@ void turbo_flow_keyed_state_store_destroy(turbo_flow_keyed_state_store_t *store)
 
   if (!store) return;
   if (store->initialized) {
-    for (slot = 0u; slot < turbo_hash_map_capacity(&store->entries); ++slot) {
+    for (slot = 0u; slot < hash_map_capacity(&store->entries); ++slot) {
       flow_keyed_state_entry_t *entry =
-          (flow_keyed_state_entry_t *)turbo_hash_map_value_at(&store->entries, slot);
+          (flow_keyed_state_entry_t *)hash_map_value_at(&store->entries, slot);
       if (!entry) continue;
       mem_buffer_release(entry->value);
       mem_buffer_release(entry->key);
     }
-    turbo_hash_map_destroy(&store->entries);
+    hash_map_destroy(&store->entries);
     turbo_mutex_destroy(&store->mutex);
   }
   free(store);
@@ -231,14 +230,14 @@ void flow_keyed_state_store_reset(turbo_flow_keyed_state_store_t *store) {
 
   if (!store || !store->initialized) return;
   /* Runtime generation changes occur only while publish admission is closed. */
-  for (slot = 0u; slot < turbo_hash_map_capacity(&store->entries); ++slot) {
+  for (slot = 0u; slot < hash_map_capacity(&store->entries); ++slot) {
     flow_keyed_state_entry_t *entry =
-        (flow_keyed_state_entry_t *)turbo_hash_map_value_at(&store->entries, slot);
+        (flow_keyed_state_entry_t *)hash_map_value_at(&store->entries, slot);
     if (!entry) continue;
     mem_buffer_release(entry->value);
     mem_buffer_release(entry->key);
   }
-  turbo_hash_map_clear(&store->entries);
+  hash_map_clear(&store->entries);
   store->current_bytes = 0u;
   store->present_count = 0u;
   store->watermark_ns = 0u;
@@ -315,7 +314,7 @@ static int flow_keyed_snapshot(turbo_flow_keyed_state_t *state) {
   flow_keyed_state_entry_t *entry;
 
   turbo_mutex_lock(&state->store->mutex);
-  entry = (flow_keyed_state_entry_t *)turbo_hash_map_get(&state->store->entries, &key);
+  entry = (flow_keyed_state_entry_t *)hash_map_get(&state->store->entries, &key);
   if (entry) {
     state->had_slot = 1;
     state->present = entry->present;
@@ -363,12 +362,12 @@ static int flow_keyed_commit_put(turbo_flow_keyed_state_t *state) {
   turbo_mutex_lock(&store->mutex);
   rc = flow_keyed_event_time_gate_locked(state);
   if (rc != TURBO_OK) goto unlock;
-  entry = (flow_keyed_state_entry_t *)turbo_hash_map_get(&store->entries, &key);
+  entry = (flow_keyed_state_entry_t *)hash_map_get(&store->entries, &key);
   if (flow_keyed_conflict(state, entry)) {
     rc = TURBO_EBUSY;
     goto unlock;
   }
-  if ((!entry && turbo_hash_map_size(&store->entries) >= store->max_entries) ||
+  if ((!entry && hash_map_size(&store->entries) >= store->max_entries) ||
       (entry && entry->revision == UINT64_MAX)) {
     rc = entry ? TURBO_ERANGE : TURBO_ENOSPC;
     goto unlock;
@@ -398,7 +397,7 @@ static int flow_keyed_commit_put(turbo_flow_keyed_state_t *state) {
   replacement.value = prepared_value;
   replacement.revision = entry ? entry->revision + 1u : 1u;
   replacement.present = 1;
-  rc = turbo_hash_map_put(&store->entries, &key, &replacement);
+  rc = turbo_flow_stl_error(hash_map_put(&store->entries, &key, &replacement));
   if (rc != TURBO_OK) goto unlock;
   old_value = previous_value;
   if (!entry) prepared_key = NULL;
@@ -425,7 +424,7 @@ static int flow_keyed_commit_delete(turbo_flow_keyed_state_t *state) {
   turbo_mutex_lock(&store->mutex);
   rc = flow_keyed_event_time_gate_locked(state);
   if (rc != TURBO_OK) goto unlock;
-  entry = (flow_keyed_state_entry_t *)turbo_hash_map_get(&store->entries, &key);
+  entry = (flow_keyed_state_entry_t *)hash_map_get(&store->entries, &key);
   if (flow_keyed_conflict(state, entry)) {
     rc = TURBO_EBUSY;
     goto unlock;
@@ -443,7 +442,7 @@ static int flow_keyed_commit_delete(turbo_flow_keyed_state_t *state) {
   replacement.revision += 1u;
   replacement.present = 0;
   old_value = entry->value;
-  rc = turbo_hash_map_put(&store->entries, &key, &replacement);
+  rc = turbo_flow_stl_error(hash_map_put(&store->entries, &key, &replacement));
   if (rc != TURBO_OK) {
     old_value = NULL;
     goto unlock;
@@ -465,7 +464,7 @@ static int flow_keyed_validate_snapshot(const turbo_flow_keyed_state_t *state) {
   turbo_mutex_lock(&state->store->mutex);
   rc = flow_keyed_event_time_gate_locked(state);
   if (rc == TURBO_OK) {
-    entry = (flow_keyed_state_entry_t *)turbo_hash_map_get(&state->store->entries, &key);
+    entry = (flow_keyed_state_entry_t *)hash_map_get(&state->store->entries, &key);
     rc = flow_keyed_conflict(state, entry) ? TURBO_EBUSY : TURBO_OK;
   }
   turbo_mutex_unlock(&state->store->mutex);
@@ -665,15 +664,15 @@ static int flow_event_time_candidate_compare(const void *left, const void *right
   return lhs_key.len < rhs_key.len ? -1 : lhs_key.len > rhs_key.len ? 1 : 0;
 }
 
-static void flow_event_time_candidates_cleanup(turbo_vec_t *candidates) {
-  for (size_t index = 0u; index < turbo_vec_size(candidates); ++index) {
+static void flow_event_time_candidates_cleanup(vec_t *candidates) {
+  for (size_t index = 0u; index < vec_size(candidates); ++index) {
     flow_event_time_candidate_t *candidate =
-        (flow_event_time_candidate_t *)turbo_vec_at(candidates, index);
+        (flow_event_time_candidate_t *)vec_at(candidates, index);
     if (!candidate) continue;
     mem_buffer_release(candidate->value);
     mem_buffer_release(candidate->key);
   }
-  turbo_vec_destroy(candidates);
+  vec_destroy(candidates);
 }
 
 static int flow_event_time_close_candidate(
@@ -721,8 +720,8 @@ static int flow_event_time_close_candidate(
   flow_emitter_close(&emitter);
   if (rc == TURBO_OK) {
     if (committed) *committed = 1;
-    for (size_t index = 0u; index < turbo_vec_size(&emitter.outputs); ++index) {
-      turbo_flow_msg_t *output = (turbo_flow_msg_t *)turbo_vec_at(&emitter.outputs, index);
+    for (size_t index = 0u; index < vec_size(&emitter.outputs); ++index) {
+      turbo_flow_msg_t *output = (turbo_flow_msg_t *)vec_at(&emitter.outputs, index);
       rc = flow_run_message_from_stage(flow, stage_index, output);
       if (rc != TURBO_OK) break;
     }
@@ -736,7 +735,7 @@ int flow_event_time_window_advance(turbo_flow_t *flow, uint32_t stage_index,
                                    turbo_flow_event_time_window_close_fn close_fn, void *ctx,
                                    uint32_t max_outputs, uint64_t watermark_ns,
                                    size_t *closed_windows) {
-  turbo_vec_t candidates;
+  vec_t candidates = {0};
   int candidates_initialized = 0;
   int advancing = 0;
   int rc;
@@ -757,18 +756,18 @@ int flow_event_time_window_advance(turbo_flow_t *flow, uint32_t stage_index,
   turbo_mutex_unlock(&store->mutex);
   if (rc != TURBO_OK) return rc;
 
-  rc = turbo_vec_init(&candidates, sizeof(flow_event_time_candidate_t));
+  rc = turbo_flow_stl_error(vec_init_bytes(&candidates, sizeof(flow_event_time_candidate_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc != TURBO_OK) goto cleanup;
   candidates_initialized = 1;
-  rc = turbo_vec_reserve(&candidates, store->max_entries);
+  rc = turbo_flow_stl_error(vec_reserve(&candidates, store->max_entries));
   if (rc != TURBO_OK) goto cleanup;
 
   turbo_mutex_lock(&store->mutex);
   store->watermark_ns = watermark_ns;
   store->watermark_initialized = 1;
-  for (size_t slot = 0u; slot < turbo_hash_map_capacity(&store->entries); ++slot) {
+  for (size_t slot = 0u; slot < hash_map_capacity(&store->entries); ++slot) {
     flow_keyed_state_entry_t *entry =
-        (flow_keyed_state_entry_t *)turbo_hash_map_value_at(&store->entries, slot);
+        (flow_keyed_state_entry_t *)hash_map_value_at(&store->entries, slot);
     flow_event_time_candidate_t candidate;
     vstr key;
     uint64_t start_ns;
@@ -791,7 +790,7 @@ int flow_event_time_window_advance(turbo_flow_t *flow, uint32_t stage_index,
     candidate.revision = entry->revision;
     candidate.start_ns = start_ns;
     if (!candidate.key || !candidate.value ||
-        turbo_vec_push(&candidates, &candidate) != TURBO_OK) {
+        turbo_flow_stl_error(vec_push(&candidates, &candidate)) != TURBO_OK) {
       mem_buffer_release(candidate.value);
       mem_buffer_release(candidate.key);
       rc = TURBO_ENOMEM;
@@ -801,13 +800,13 @@ int flow_event_time_window_advance(turbo_flow_t *flow, uint32_t stage_index,
   turbo_mutex_unlock(&store->mutex);
   if (rc != TURBO_OK) goto cleanup;
 
-  if (turbo_vec_size(&candidates) > 1u) {
-    qsort(turbo_vec_data(&candidates), turbo_vec_size(&candidates),
+  if (vec_size(&candidates) > 1u) {
+    qsort(vec_data(&candidates), vec_size(&candidates),
           sizeof(flow_event_time_candidate_t), flow_event_time_candidate_compare);
   }
-  for (size_t index = 0u; index < turbo_vec_size(&candidates); ++index) {
+  for (size_t index = 0u; index < vec_size(&candidates); ++index) {
     flow_event_time_candidate_t *candidate =
-        (flow_event_time_candidate_t *)turbo_vec_at(&candidates, index);
+        (flow_event_time_candidate_t *)vec_at(&candidates, index);
     int committed = 0;
     rc = flow_event_time_close_candidate(flow, stage_index, store, close_fn, ctx, max_outputs,
                                          candidate, &committed);

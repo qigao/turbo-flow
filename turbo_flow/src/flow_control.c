@@ -558,9 +558,9 @@ static int flow_control_find_adapter_resource(turbo_flow_t *flow, const char *ad
                                               turbo_flow_resource_metadata_t *metadata) {
   int found = 0;
   if (!flow || !adapter_name || !metadata) return TURBO_EINVAL;
-  for (size_t i = 0u; i < turbo_vec_size(&flow->resources); ++i) {
+  for (size_t i = 0u; i < vec_size(&flow->resources); ++i) {
     const flow_resource_registration_t *resource =
-        (const flow_resource_registration_t *)turbo_vec_at_const(&flow->resources, i);
+        (const flow_resource_registration_t *)vec_at_const(&flow->resources, i);
     turbo_flow_resource_metadata_t current = TURBO_FLOW_RESOURCE_METADATA_INIT;
     int rc;
     if (!resource || !resource->ops.command) continue;

@@ -35,7 +35,7 @@
 ### Task 3: Move containers to TurboUtils::STL
 
 **Files:**
-- Create: `turbo_flow/include/turbo_flow_stl_adapter.h`
+- Create: `turbo_flow/include/turbo_flow_stl_error_internal.h`
 - Modify: sources/headers that include old container headers or initialize raw containers
 - Modify: owning component `CMakeLists.txt` files
 

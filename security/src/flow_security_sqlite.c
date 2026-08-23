@@ -3,7 +3,7 @@
 #include "turbo_error.h"
 #include "turbo_parser.h"
 #include "turbo_str.h"
-#include "turbo_flow_stl_adapter.h"
+#include "turbo_flow_stl_error_internal.h"
 
 #include <limits.h>
 #include <math.h>
@@ -26,7 +26,7 @@ static const char FLOW_SECURITY_SQLITE_SCHEMA[] =
     " ON DELETE CASCADE) WITHOUT ROWID;";
 
 typedef struct flow_security_sqlite_loaded_s {
-  turbo_vec_t rules;
+  vec_t rules;
 } flow_security_sqlite_loaded_t;
 
 struct turbo_flow_security_sqlite_provider_s {
@@ -97,7 +97,7 @@ static int flow_security_sqlite_rule_valid(const turbo_flow_security_rule_t *rul
 
 static void flow_security_sqlite_loaded_destroy(flow_security_sqlite_loaded_t *loaded) {
   if (!loaded) return;
-  turbo_vec_destroy(&loaded->rules);
+  vec_destroy(&loaded->rules);
   free(loaded);
 }
 
@@ -155,9 +155,9 @@ static int flow_security_sqlite_load(void *ctx, uint64_t required_version,
     rc = TURBO_ENOMEM;
     goto rollback;
   }
-  rc = turbo_vec_init(&loaded->rules, sizeof(turbo_flow_security_rule_t));
+  rc = turbo_flow_stl_error(vec_init_bytes(&loaded->rules, sizeof(turbo_flow_security_rule_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc != TURBO_OK) goto rollback;
-  rc = turbo_vec_reserve(&loaded->rules, provider->max_rules);
+  rc = turbo_flow_stl_error(vec_reserve(&loaded->rules, provider->max_rules));
   if (rc != TURBO_OK) goto rollback;
   status = sqlite3_prepare_v2(
       database,
@@ -199,7 +199,7 @@ static int flow_security_sqlite_load(void *ctx, uint64_t required_version,
       rc = TURBO_EPROTO;
       goto rollback;
     }
-    rc = turbo_vec_push(&loaded->rules, &rule);
+    rc = turbo_flow_stl_error(vec_push(&loaded->rules, &rule));
     if (rc != TURBO_OK) goto rollback;
     ++expected_ordinal;
   }
@@ -217,7 +217,7 @@ static int flow_security_sqlite_load(void *ctx, uint64_t required_version,
   bundle_out->policy_version = policy_version;
   bundle_out->expires_at = expires_at;
   bundle_out->rules = (const turbo_flow_security_rule_t *)loaded->rules.data;
-  bundle_out->rule_count = turbo_vec_size(&loaded->rules);
+  bundle_out->rule_count = vec_size(&loaded->rules);
   bundle_out->provider_bundle = loaded;
   loaded = NULL;
   rc = TURBO_OK;

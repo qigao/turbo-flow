@@ -26,35 +26,35 @@ void flow_module_registration_destroy(flow_module_registration_t *module) {
   size_t i;
   if (!module) return;
   tstr_freep(&module->name);
-  for (i = 0; i < turbo_vec_size(&module->primitive_types); ++i) {
-    tstr *value = (tstr *)turbo_vec_at(&module->primitive_types, i);
+  for (i = 0; i < vec_size(&module->primitive_types); ++i) {
+    tstr *value = (tstr *)vec_at(&module->primitive_types, i);
     if (value) tstr_freep(value);
   }
-  for (i = 0; i < turbo_vec_size(&module->operation_names); ++i) {
-    tstr *value = (tstr *)turbo_vec_at(&module->operation_names, i);
+  for (i = 0; i < vec_size(&module->operation_names); ++i) {
+    tstr *value = (tstr *)vec_at(&module->operation_names, i);
     if (value) tstr_freep(value);
   }
-  for (i = 0; i < turbo_vec_size(&module->requirements); ++i) {
+  for (i = 0; i < vec_size(&module->requirements); ++i) {
     turbo_flow_module_requirement_t *requirement =
-        (turbo_flow_module_requirement_t *)turbo_vec_at(&module->requirements, i);
+        (turbo_flow_module_requirement_t *)vec_at(&module->requirements, i);
     if (requirement && requirement->module_name) {
       tstr owned_name = (tstr)requirement->module_name;
       tstr_freep(&owned_name);
       requirement->module_name = NULL;
     }
   }
-  turbo_vec_destroy(&module->primitive_types);
-  turbo_vec_destroy(&module->operation_names);
-  turbo_vec_destroy(&module->requirements);
+  vec_destroy(&module->primitive_types);
+  vec_destroy(&module->operation_names);
+  vec_destroy(&module->requirements);
   memset(&module->descriptor, 0, sizeof(module->descriptor));
 }
 
 int flow_find_primitive_index(const turbo_flow_t *flow, const char *name) {
   size_t i;
   if (!flow || !name) return -1;
-  for (i = 0; i < turbo_vec_size(&flow->primitives); ++i) {
+  for (i = 0; i < vec_size(&flow->primitives); ++i) {
     const flow_primitive_registration_t *primitive =
-        (const flow_primitive_registration_t *)turbo_vec_at_const(&flow->primitives, i);
+        (const flow_primitive_registration_t *)vec_at_const(&flow->primitives, i);
     if (primitive && primitive->name && strcmp(primitive->name, name) == 0) return (int)i;
   }
   return -1;
@@ -63,9 +63,9 @@ int flow_find_primitive_index(const turbo_flow_t *flow, const char *name) {
 int flow_find_operation_index(const turbo_flow_t *flow, const char *name) {
   size_t i;
   if (!flow || !name) return -1;
-  for (i = 0; i < turbo_vec_size(&flow->operations); ++i) {
+  for (i = 0; i < vec_size(&flow->operations); ++i) {
     const flow_operation_registration_t *operation =
-        (const flow_operation_registration_t *)turbo_vec_at_const(&flow->operations, i);
+        (const flow_operation_registration_t *)vec_at_const(&flow->operations, i);
     if (operation && operation->name && strcmp(operation->name, name) == 0) return (int)i;
   }
   return -1;
@@ -74,9 +74,9 @@ int flow_find_operation_index(const turbo_flow_t *flow, const char *name) {
 int flow_find_module_index(const turbo_flow_t *flow, const char *name) {
   size_t i;
   if (!flow || !name) return -1;
-  for (i = 0; i < turbo_vec_size(&flow->modules); ++i) {
+  for (i = 0; i < vec_size(&flow->modules); ++i) {
     const flow_module_registration_t *module =
-        (const flow_module_registration_t *)turbo_vec_at_const(&flow->modules, i);
+        (const flow_module_registration_t *)vec_at_const(&flow->modules, i);
     if (module && module->name && strcmp(module->name, name) == 0) return (int)i;
   }
   return -1;
@@ -85,13 +85,13 @@ int flow_find_module_index(const turbo_flow_t *flow, const char *name) {
 int flow_find_operation_export_module(const turbo_flow_t *flow, const char *operation_name) {
   size_t i;
   if (!flow || !operation_name) return -1;
-  for (i = 0; i < turbo_vec_size(&flow->modules); ++i) {
+  for (i = 0; i < vec_size(&flow->modules); ++i) {
     const flow_module_registration_t *module =
-        (const flow_module_registration_t *)turbo_vec_at_const(&flow->modules, i);
+        (const flow_module_registration_t *)vec_at_const(&flow->modules, i);
     size_t j;
     if (!module) continue;
-    for (j = 0; j < turbo_vec_size(&module->operation_names); ++j) {
-      const tstr *name = (const tstr *)turbo_vec_at_const(&module->operation_names, j);
+    for (j = 0; j < vec_size(&module->operation_names); ++j) {
+      const tstr *name = (const tstr *)vec_at_const(&module->operation_names, j);
       if (name && *name && strcmp(*name, operation_name) == 0) return (int)i;
     }
   }
@@ -140,7 +140,7 @@ int turbo_flow_register_primitive(turbo_flow_t *flow,
   primitive.descriptor = *descriptor;
   primitive.descriptor.name = primitive.name;
   primitive.descriptor.type_name = primitive.type_name;
-  if (turbo_vec_push(&flow->primitives, &primitive) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&flow->primitives, &primitive)) != TURBO_OK) {
     flow_primitive_registration_destroy(&primitive);
     return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
   }
@@ -286,7 +286,7 @@ int turbo_flow_register_operation(turbo_flow_t *flow,
   operation.descriptor.input_type = operation.input_type;
   operation.descriptor.output_type = operation.output_type;
   operation.descriptor.resource_type = operation.resource_type;
-  if (turbo_vec_push(&flow->operations, &operation) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&flow->operations, &operation)) != TURBO_OK) {
     flow_operation_registration_destroy(&operation);
     return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
   }
@@ -310,8 +310,8 @@ static int flow_module_exports_operation(const flow_module_registration_t *modul
                                          const char *operation_name) {
   size_t i;
   if (!module || !operation_name) return 0;
-  for (i = 0; i < turbo_vec_size(&module->operation_names); ++i) {
-    const tstr *name = (const tstr *)turbo_vec_at_const(&module->operation_names, i);
+  for (i = 0; i < vec_size(&module->operation_names); ++i) {
+    const tstr *name = (const tstr *)vec_at_const(&module->operation_names, i);
     if (name && *name && strcmp(*name, operation_name) == 0) return 1;
   }
   return 0;
@@ -321,21 +321,21 @@ static int flow_module_exports_primitive_type(const flow_module_registration_t *
                                               const char *type_name) {
   size_t i;
   if (!module || !type_name) return 0;
-  for (i = 0; i < turbo_vec_size(&module->primitive_types); ++i) {
-    const tstr *name = (const tstr *)turbo_vec_at_const(&module->primitive_types, i);
+  for (i = 0; i < vec_size(&module->primitive_types); ++i) {
+    const tstr *name = (const tstr *)vec_at_const(&module->primitive_types, i);
     if (name && *name && strcmp(*name, type_name) == 0) return 1;
   }
   return 0;
 }
 
-static int flow_module_copy_string_array(turbo_vec_t *target, const char *const *values,
+static int flow_module_copy_string_array(vec_t *target, const char *const *values,
                                          size_t count) {
   size_t i;
-  if (count != 0u && turbo_vec_reserve(target, count) != TURBO_OK) return TURBO_ENOMEM;
+  if (count != 0u && turbo_flow_stl_error(vec_reserve(target, count)) != TURBO_OK) return TURBO_ENOMEM;
   for (i = 0; i < count; ++i) {
     tstr value = tstr_dup(values[i]);
     if (!value) return TURBO_ENOMEM;
-    if (turbo_vec_push(target, &value) != TURBO_OK) {
+    if (turbo_flow_stl_error(vec_push(target, &value)) != TURBO_OK) {
       tstr_freep(&value);
       return TURBO_ENOMEM;
     }
@@ -415,9 +415,9 @@ int turbo_flow_register_module(turbo_flow_t *flow,
   }
 
   memset(&module, 0, sizeof(module));
-  if (turbo_vec_init(&module.primitive_types, sizeof(tstr)) != TURBO_OK ||
-      turbo_vec_init(&module.operation_names, sizeof(tstr)) != TURBO_OK ||
-      turbo_vec_init(&module.requirements, sizeof(turbo_flow_module_requirement_t)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(&module.primitive_types, sizeof(tstr), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&module.operation_names, sizeof(tstr), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&module.requirements, sizeof(turbo_flow_module_requirement_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
     flow_module_registration_destroy(&module);
     return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
   }
@@ -435,7 +435,7 @@ int turbo_flow_register_module(turbo_flow_t *flow,
   for (i = 0; rc == TURBO_OK && i < descriptor->requirement_count; ++i) {
     turbo_flow_module_requirement_t requirement = descriptor->requirements[i];
     requirement.module_name = tstr_dup(descriptor->requirements[i].module_name);
-    if (!requirement.module_name || turbo_vec_push(&module.requirements, &requirement) != TURBO_OK) {
+    if (!requirement.module_name || turbo_flow_stl_error(vec_push(&module.requirements, &requirement)) != TURBO_OK) {
       if (requirement.module_name) {
         tstr owned_name = (tstr)requirement.module_name;
         tstr_freep(&owned_name);
@@ -450,12 +450,12 @@ int turbo_flow_register_module(turbo_flow_t *flow,
   module.descriptor = *descriptor;
   module.descriptor.name = module.name;
   module.descriptor.primitive_types =
-      (const char *const *)turbo_vec_data_const(&module.primitive_types);
+      (const char *const *)vec_data_const(&module.primitive_types);
   module.descriptor.operation_names =
-      (const char *const *)turbo_vec_data_const(&module.operation_names);
-  module.descriptor.requirements = (const turbo_flow_module_requirement_t *)turbo_vec_data_const(
+      (const char *const *)vec_data_const(&module.operation_names);
+  module.descriptor.requirements = (const turbo_flow_module_requirement_t *)vec_data_const(
       &module.requirements);
-  if (turbo_vec_push(&flow->modules, &module) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&flow->modules, &module)) != TURBO_OK) {
     flow_module_registration_destroy(&module);
     return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
   }
@@ -527,12 +527,12 @@ static int flow_module_contract_compatible(const turbo_flow_module_descriptor_t 
 }
 
 static void flow_operation_registry_rollback(turbo_flow_t *flow, size_t operation_count) {
-  while (turbo_vec_size(&flow->operations) > operation_count) {
-    size_t last = turbo_vec_size(&flow->operations) - 1u;
+  while (vec_size(&flow->operations) > operation_count) {
+    size_t last = vec_size(&flow->operations) - 1u;
     flow_operation_registration_t *operation =
-        (flow_operation_registration_t *)turbo_vec_at(&flow->operations, last);
+        (flow_operation_registration_t *)vec_at(&flow->operations, last);
     flow_operation_registration_destroy(operation);
-    (void)turbo_vec_resize(&flow->operations, last);
+    (void)turbo_flow_stl_error(vec_resize(&flow->operations, last));
   }
 }
 
@@ -573,7 +573,7 @@ int turbo_flow_register_module_contract(
                                        "module operation already has another owner");
     }
   }
-  operations_before = turbo_vec_size(&flow->operations);
+  operations_before = vec_size(&flow->operations);
   for (i = 0; i < operation_count; ++i) {
     if (turbo_flow_find_operation(flow, operations[i].name)) continue;
     rc = turbo_flow_register_operation(flow, &operations[i]);
@@ -606,7 +606,7 @@ int turbo_flow_bind_operation_provider_module(turbo_flow_t *flow, const char *mo
   if (module_index < 0) {
     return flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0, "module is not registered");
   }
-  module = (flow_module_registration_t *)turbo_vec_at(&flow->modules, (size_t)module_index);
+  module = (flow_module_registration_t *)vec_at(&flow->modules, (size_t)module_index);
   if (!flow_module_exports_operation(module, operation_name)) {
     return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
                                      "operation is not exported by module");
@@ -616,7 +616,7 @@ int turbo_flow_bind_operation_provider_module(turbo_flow_t *flow, const char *mo
     return flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0,
                                      "operation provider is not registered");
   }
-  provider = (flow_operation_provider_registration_t *)turbo_vec_at(
+  provider = (flow_operation_provider_registration_t *)vec_at(
       &flow->operation_providers, (size_t)provider_index);
   if (provider->module_name) {
     return flow_set_error_keep_state(flow,
@@ -642,22 +642,22 @@ int turbo_flow_bind_operation_provider_module(turbo_flow_t *flow, const char *mo
 }
 
 size_t turbo_flow_primitive_count(const turbo_flow_t *flow) {
-  return flow ? turbo_vec_size(&flow->primitives) : 0;
+  return flow ? vec_size(&flow->primitives) : 0;
 }
 
 size_t turbo_flow_operation_count(const turbo_flow_t *flow) {
-  return flow ? turbo_vec_size(&flow->operations) : 0;
+  return flow ? vec_size(&flow->operations) : 0;
 }
 
 size_t turbo_flow_module_count(const turbo_flow_t *flow) {
-  return flow ? turbo_vec_size(&flow->modules) : 0;
+  return flow ? vec_size(&flow->modules) : 0;
 }
 
 const turbo_flow_primitive_descriptor_t *turbo_flow_primitive_at(const turbo_flow_t *flow,
                                                                  size_t index) {
   const flow_primitive_registration_t *primitive;
   if (!flow) return NULL;
-  primitive = (const flow_primitive_registration_t *)turbo_vec_at_const(&flow->primitives, index);
+  primitive = (const flow_primitive_registration_t *)vec_at_const(&flow->primitives, index);
   return primitive ? &primitive->descriptor : NULL;
 }
 
@@ -665,7 +665,7 @@ const turbo_flow_operation_descriptor_t *turbo_flow_operation_at(const turbo_flo
                                                                  size_t index) {
   const flow_operation_registration_t *operation;
   if (!flow) return NULL;
-  operation = (const flow_operation_registration_t *)turbo_vec_at_const(&flow->operations, index);
+  operation = (const flow_operation_registration_t *)vec_at_const(&flow->operations, index);
   return operation ? &operation->descriptor : NULL;
 }
 
@@ -673,7 +673,7 @@ const turbo_flow_module_descriptor_t *turbo_flow_module_at(const turbo_flow_t *f
                                                            size_t index) {
   const flow_module_registration_t *module;
   if (!flow) return NULL;
-  module = (const flow_module_registration_t *)turbo_vec_at_const(&flow->modules, index);
+  module = (const flow_module_registration_t *)vec_at_const(&flow->modules, index);
   return module ? &module->descriptor : NULL;
 }
 
@@ -701,7 +701,7 @@ const char *turbo_flow_operation_provider_module(const turbo_flow_t *flow,
   int index = flow_find_operation_provider(flow, operation_name, resource_name);
   const flow_operation_provider_registration_t *provider;
   if (index < 0) return NULL;
-  provider = (const flow_operation_provider_registration_t *)turbo_vec_at_const(
+  provider = (const flow_operation_provider_registration_t *)vec_at_const(
       &flow->operation_providers, (size_t)index);
   return provider ? provider->module_name : NULL;
 }

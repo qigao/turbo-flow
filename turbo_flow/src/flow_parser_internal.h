@@ -74,8 +74,8 @@ typedef struct flow_stage_spec_s {
 
 typedef struct flow_parse_ctx_s {
   turbo_flow_t *flow;
-  turbo_vec_t node_refs;
-  turbo_vec_t stage_templates;
+  vec_t node_refs;
+  vec_t stage_templates;
   tstr root_stage_name;
   vstr current_stage_template;
   size_t current_stage_template_index;

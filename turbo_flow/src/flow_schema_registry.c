@@ -1,7 +1,7 @@
 #include "turbo_flow.h"
 
 #include "turbo_thread.h"
-#include "turbo_flow_stl_adapter.h"
+#include "turbo_flow_stl_error_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -144,7 +144,7 @@ typedef struct flow_schema_registry_entry_s {
 } flow_schema_registry_entry_t;
 
 struct turbo_flow_schema_registry_s {
-  turbo_vec_t entries;
+  vec_t entries;
   turbo_mutex_t lock;
   int lock_initialized;
 };
@@ -267,7 +267,7 @@ turbo_flow_schema_registry_t *turbo_flow_schema_registry_create(void) {
   turbo_flow_schema_registry_t *registry =
       (turbo_flow_schema_registry_t *)calloc(1, sizeof(*registry));
   if (!registry) return NULL;
-  if (turbo_vec_init(&registry->entries, sizeof(flow_schema_registry_entry_t *)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(&registry->entries, sizeof(flow_schema_registry_entry_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
     free(registry);
     return NULL;
   }
@@ -279,12 +279,12 @@ turbo_flow_schema_registry_t *turbo_flow_schema_registry_create(void) {
 void turbo_flow_schema_registry_destroy(turbo_flow_schema_registry_t *registry) {
   if (!registry) return;
   if (registry->lock_initialized) turbo_mutex_lock(&registry->lock);
-  for (size_t i = 0; i < turbo_vec_size(&registry->entries); ++i) {
+  for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
     flow_schema_registry_entry_t **entry =
-        (flow_schema_registry_entry_t **)turbo_vec_at(&registry->entries, i);
+        (flow_schema_registry_entry_t **)vec_at(&registry->entries, i);
     if (entry) flow_schema_registry_entry_destroy(*entry);
   }
-  turbo_vec_destroy(&registry->entries);
+  vec_destroy(&registry->entries);
   if (registry->lock_initialized) {
     turbo_mutex_unlock(&registry->lock);
     turbo_mutex_destroy(&registry->lock);
@@ -311,9 +311,9 @@ int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
     return TURBO_EPROTO;
   }
   turbo_mutex_lock(&registry->lock);
-  for (size_t i = 0; i < turbo_vec_size(&registry->entries); ++i) {
+  for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
     flow_schema_registry_entry_t *const *current =
-        (flow_schema_registry_entry_t *const *)turbo_vec_at_const(&registry->entries, i);
+        (flow_schema_registry_entry_t *const *)vec_at_const(&registry->entries, i);
     if (current && flow_schema_registry_key_equal(*current, match, schema)) {
       rc = flow_schema_registry_definition_equal(*current, schema) ? TURBO_EALREADY : TURBO_EPROTO;
       turbo_mutex_unlock(&registry->lock);
@@ -341,7 +341,7 @@ int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
   entry->schema.type_name = entry->type_name;
   entry->schema.projection_type = entry->projection_type;
   entry->schema.schema_text = NULL;
-  rc = turbo_vec_push(&registry->entries, &entry);
+  rc = turbo_flow_stl_error(vec_push(&registry->entries, &entry));
   if (rc != TURBO_OK) flow_schema_registry_entry_destroy(entry);
   turbo_mutex_unlock(&registry->lock);
   return rc;
@@ -357,9 +357,9 @@ int turbo_flow_schema_registry_resolve(const turbo_flow_schema_registry_t *regis
   }
   const turbo_flow_data_schema_t *resolved = NULL;
   turbo_mutex_lock(&mutable_registry->lock);
-  for (size_t i = 0; i < turbo_vec_size(&registry->entries); ++i) {
+  for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
     flow_schema_registry_entry_t *const *entry =
-        (flow_schema_registry_entry_t *const *)turbo_vec_at_const(&registry->entries, i);
+        (flow_schema_registry_entry_t *const *)vec_at_const(&registry->entries, i);
     if (entry && flow_schema_registry_matches(*entry, descriptor)) {
       resolved = &(*entry)->schema;
     }

@@ -2,7 +2,7 @@
 
 #include "email/email_message.h"
 #include "mime_mhtml.h"
-#include "turbo_flow_stl_adapter.h"
+#include "turbo_flow_stl_error_internal.h"
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -30,7 +30,7 @@ typedef struct flow_email_mime_encode_s {
   tstr alternative_text;
   int html_body;
   int priority;
-  turbo_vec_t attachments;
+  vec_t attachments;
   size_t max_payload_size;
   size_t max_output_size;
   size_t pool_size;
@@ -45,7 +45,7 @@ typedef struct flow_email_mhtml_resource_s {
 
 typedef struct flow_email_mhtml_encode_s {
   tstr charset;
-  turbo_vec_t resources;
+  vec_t resources;
   size_t max_payload_size;
   size_t max_output_size;
   size_t pool_size;
@@ -162,11 +162,11 @@ static void flow_email_mime_encode_shutdown(void *ctx) {
   flow_email_mime_encode_t *adapter = (flow_email_mime_encode_t *)ctx;
   size_t i;
   if (!adapter) return;
-  for (i = 0; i < turbo_vec_size(&adapter->attachments); ++i) {
+  for (i = 0; i < vec_size(&adapter->attachments); ++i) {
     flow_email_attachment_cleanup(
-        (flow_email_attachment_t *)turbo_vec_at(&adapter->attachments, i));
+        (flow_email_attachment_t *)vec_at(&adapter->attachments, i));
   }
-  turbo_vec_destroy(&adapter->attachments);
+  vec_destroy(&adapter->attachments);
   tstr_freep(&adapter->from_name);
   tstr_freep(&adapter->from_email);
   tstr_freep(&adapter->to_name);
@@ -210,9 +210,9 @@ static int flow_email_mime_encode_consume(void *ctx, turbo_flow_t *flow,
     goto cleanup_email;
   }
   email_message_set_priority(email, (email_priority_t)adapter->priority);
-  for (i = 0; i < turbo_vec_size(&adapter->attachments); ++i) {
+  for (i = 0; i < vec_size(&adapter->attachments); ++i) {
     const flow_email_attachment_t *attachment =
-        (const flow_email_attachment_t *)turbo_vec_at_const(&adapter->attachments, i);
+        (const flow_email_attachment_t *)vec_at_const(&adapter->attachments, i);
     int add_rc =
         attachment->inline_attachment
             ? email_message_add_inline_attachment(email, attachment->content_id,
@@ -267,7 +267,7 @@ static int flow_email_copy_attachment(flow_email_mime_encode_t *adapter,
     rc = flow_email_encode_copy(&dst.data, src->data ? src->data : "", src->data_len);
   if (rc == TURBO_OK && src->content_id)
     rc = flow_email_encode_copy(&dst.content_id, src->content_id, 0);
-  if (rc == TURBO_OK) rc = turbo_vec_push(&adapter->attachments, &dst);
+  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(&adapter->attachments, &dst));
   if (rc != TURBO_OK) flow_email_attachment_cleanup(&dst);
   return rc;
 }
@@ -284,11 +284,11 @@ static void flow_email_mhtml_encode_shutdown(void *ctx) {
   flow_email_mhtml_encode_t *adapter = (flow_email_mhtml_encode_t *)ctx;
   size_t i;
   if (!adapter) return;
-  for (i = 0; i < turbo_vec_size(&adapter->resources); ++i) {
+  for (i = 0; i < vec_size(&adapter->resources); ++i) {
     flow_email_mhtml_resource_cleanup(
-        (flow_email_mhtml_resource_t *)turbo_vec_at(&adapter->resources, i));
+        (flow_email_mhtml_resource_t *)vec_at(&adapter->resources, i));
   }
-  turbo_vec_destroy(&adapter->resources);
+  vec_destroy(&adapter->resources);
   tstr_freep(&adapter->charset);
   free(adapter);
 }
@@ -316,9 +316,9 @@ static int flow_email_mhtml_encode_consume(void *ctx, turbo_flow_t *flow,
                                        msg->payload.len, adapter->charset) != 0) {
     goto cleanup;
   }
-  for (i = 0; i < turbo_vec_size(&adapter->resources); ++i) {
+  for (i = 0; i < vec_size(&adapter->resources); ++i) {
     const flow_email_mhtml_resource_t *resource =
-        (const flow_email_mhtml_resource_t *)turbo_vec_at_const(&adapter->resources, i);
+        (const flow_email_mhtml_resource_t *)vec_at_const(&adapter->resources, i);
     if (mime_mhtml_add_resource(document, resource->content_type, resource->content_location,
                                 resource->content_id, resource->data, tstr_len(resource->data),
                                 0) != 0) {
@@ -366,7 +366,7 @@ static int flow_email_copy_mhtml_resource(flow_email_mhtml_encode_t *adapter,
     rc = flow_email_encode_copy(&dst.content_id, src->content_id, 0);
   if (rc == TURBO_OK)
     rc = flow_email_encode_copy(&dst.data, src->data ? src->data : "", src->data_len);
-  if (rc == TURBO_OK) rc = turbo_vec_push(&adapter->resources, &dst);
+  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(&adapter->resources, &dst));
   if (rc != TURBO_OK) flow_email_mhtml_resource_cleanup(&dst);
   return rc;
 }
@@ -397,7 +397,7 @@ int turbo_flow_email_register_mime_encode_adapter(
   adapter->pool_size = config->pool_size ? config->pool_size : FLOW_EMAIL_ENCODE_DEFAULT_POOL_SIZE;
   adapter->html_body = config->html_body != 0;
   adapter->priority = config->priority;
-  rc = turbo_vec_init(&adapter->attachments, sizeof(flow_email_attachment_t));
+  rc = turbo_flow_stl_error(vec_init_bytes(&adapter->attachments, sizeof(flow_email_attachment_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc == TURBO_OK && config->from_name)
     rc = flow_email_encode_copy(&adapter->from_name, config->from_name, 0);
   if (rc == TURBO_OK) rc = flow_email_encode_copy(&adapter->from_email, config->from_email, 0);
@@ -446,7 +446,7 @@ int turbo_flow_email_register_mhtml_encode_adapter(
   adapter->max_output_size =
       config->max_output_size ? config->max_output_size : FLOW_EMAIL_ENCODE_DEFAULT_MAX_OUTPUT;
   adapter->pool_size = config->pool_size ? config->pool_size : FLOW_EMAIL_ENCODE_DEFAULT_POOL_SIZE;
-  rc = turbo_vec_init(&adapter->resources, sizeof(flow_email_mhtml_resource_t));
+  rc = turbo_flow_stl_error(vec_init_bytes(&adapter->resources, sizeof(flow_email_mhtml_resource_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc == TURBO_OK) {
     rc = flow_email_encode_copy(&adapter->charset, config->charset ? config->charset : "utf-8", 0);
   }

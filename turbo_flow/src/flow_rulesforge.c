@@ -282,33 +282,33 @@ static void flow_rulesforge_rollback_operation_registration(turbo_flow_t *flow, 
                                                           size_t modules_before,
                                                           size_t primitives_before,
                                                           size_t operations_before) {
-  while (turbo_vec_size(&flow->operation_providers) > providers_before) {
-    size_t index = turbo_vec_size(&flow->operation_providers) - 1u;
+  while (vec_size(&flow->operation_providers) > providers_before) {
+    size_t index = vec_size(&flow->operation_providers) - 1u;
     flow_operation_provider_registration_t *provider =
-        (flow_operation_provider_registration_t *)turbo_vec_at(&flow->operation_providers, index);
+        (flow_operation_provider_registration_t *)vec_at(&flow->operation_providers, index);
     flow_operation_provider_registration_destroy(provider);
-    (void)turbo_vec_resize(&flow->operation_providers, index);
+    (void)turbo_flow_stl_error(vec_resize(&flow->operation_providers, index));
   }
-  while (turbo_vec_size(&flow->modules) > modules_before) {
-    size_t index = turbo_vec_size(&flow->modules) - 1u;
+  while (vec_size(&flow->modules) > modules_before) {
+    size_t index = vec_size(&flow->modules) - 1u;
     flow_module_registration_t *module =
-        (flow_module_registration_t *)turbo_vec_at(&flow->modules, index);
+        (flow_module_registration_t *)vec_at(&flow->modules, index);
     flow_module_registration_destroy(module);
-    (void)turbo_vec_resize(&flow->modules, index);
+    (void)turbo_flow_stl_error(vec_resize(&flow->modules, index));
   }
-  while (turbo_vec_size(&flow->primitives) > primitives_before) {
-    size_t index = turbo_vec_size(&flow->primitives) - 1u;
+  while (vec_size(&flow->primitives) > primitives_before) {
+    size_t index = vec_size(&flow->primitives) - 1u;
     flow_primitive_registration_t *primitive =
-        (flow_primitive_registration_t *)turbo_vec_at(&flow->primitives, index);
+        (flow_primitive_registration_t *)vec_at(&flow->primitives, index);
     flow_primitive_registration_destroy(primitive);
-    (void)turbo_vec_resize(&flow->primitives, index);
+    (void)turbo_flow_stl_error(vec_resize(&flow->primitives, index));
   }
-  while (turbo_vec_size(&flow->operations) > operations_before) {
-    size_t index = turbo_vec_size(&flow->operations) - 1u;
+  while (vec_size(&flow->operations) > operations_before) {
+    size_t index = vec_size(&flow->operations) - 1u;
     flow_operation_registration_t *operation =
-        (flow_operation_registration_t *)turbo_vec_at(&flow->operations, index);
+        (flow_operation_registration_t *)vec_at(&flow->operations, index);
     flow_operation_registration_destroy(operation);
-    (void)turbo_vec_resize(&flow->operations, index);
+    (void)turbo_flow_stl_error(vec_resize(&flow->operations, index));
   }
 }
 
@@ -327,10 +327,10 @@ static int flow_rulesforge_register_provider(turbo_flow_t *flow, const char *res
     return TURBO_EINVAL;
   }
 
-  providers_before = turbo_vec_size(&flow->operation_providers);
-  modules_before = turbo_vec_size(&flow->modules);
-  primitives_before = turbo_vec_size(&flow->primitives);
-  operations_before = turbo_vec_size(&flow->operations);
+  providers_before = vec_size(&flow->operation_providers);
+  modules_before = vec_size(&flow->modules);
+  primitives_before = vec_size(&flow->primitives);
+  operations_before = vec_size(&flow->operations);
 
   rc = flow_rulesforge_register_apply_contract(flow, resource_name);
   if (rc != TURBO_OK) {

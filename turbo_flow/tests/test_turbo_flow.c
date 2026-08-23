@@ -988,7 +988,7 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, worker_first, strlen(worker_first)), TURBO_OK);
-      stage = (const flow_stage_plan_impl_t *)turbo_vec_at_const(
+      stage = (const flow_stage_plan_impl_t *)vec_at_const(
           &flow->stages, (size_t)turbo_flow_find_stage(flow, "enrich"));
       check_not_null(stage);
       check_equal(stage->data_worker_count, 4);
@@ -996,7 +996,7 @@ suite("Turbo Flow") {
 
       check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
       check_equal(turbo_flow_parse_string(flow, capacity_first, strlen(capacity_first)), TURBO_OK);
-      stage = (const flow_stage_plan_impl_t *)turbo_vec_at_const(
+      stage = (const flow_stage_plan_impl_t *)vec_at_const(
           &flow->stages, (size_t)turbo_flow_find_stage(flow, "enrich"));
       check_not_null(stage);
       check_equal(stage->data_worker_count, 2);
@@ -3791,9 +3791,9 @@ suite("Turbo Flow") {
 
       stage_index = (uint32_t)turbo_flow_find_stage(flow, "transform");
       adapter = NULL;
-      for (size_t i = 0; i < turbo_vec_size(&flow->coro_adapters); ++i) {
+      for (size_t i = 0; i < vec_size(&flow->coro_adapters); ++i) {
         flow_coro_adapter_t *candidate =
-            (flow_coro_adapter_t *)turbo_vec_at(&flow->coro_adapters, i);
+            (flow_coro_adapter_t *)vec_at(&flow->coro_adapters, i);
         if (candidate && candidate->stage_index == stage_index) {
           adapter = candidate;
           break;

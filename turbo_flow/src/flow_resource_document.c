@@ -357,9 +357,9 @@ int turbo_flow_resource_document_at(const turbo_flow_t *flow, size_t index,
       !flow_resource_document_kind_valid(document_kind)) {
     return TURBO_EINVAL;
   }
-  for (size_t i = 0; i < turbo_vec_size(&flow->resources); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->resources); ++i) {
     const flow_resource_registration_t *resource =
-        (const flow_resource_registration_t *)turbo_vec_at_const(&flow->resources, i);
+        (const flow_resource_registration_t *)vec_at_const(&flow->resources, i);
     int rc;
     if (index != 0u) {
       --index;
@@ -410,9 +410,9 @@ int turbo_flow_resource_document_at(const turbo_flow_t *flow, size_t index,
     int uid_written;
     int owner_written;
     int rc;
-    for (size_t i = 0; i < turbo_vec_size(&flow->resources); ++i) {
+    for (size_t i = 0; i < vec_size(&flow->resources); ++i) {
       const flow_resource_registration_t *resource =
-          (const flow_resource_registration_t *)turbo_vec_at_const(&flow->resources, i);
+          (const flow_resource_registration_t *)vec_at_const(&flow->resources, i);
       if (resource && resource->ops.snapshot) ++snapshot_index;
     }
     rc = turbo_flow_resource_snapshot_at(flow, snapshot_index, &snapshot);

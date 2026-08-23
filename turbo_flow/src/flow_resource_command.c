@@ -42,9 +42,9 @@ static int flow_resource_command_same(const turbo_flow_resource_command_t *left,
 static int flow_resource_command_lookup(turbo_flow_t *flow,
                                         const turbo_flow_resource_command_t *command,
                                         turbo_flow_resource_command_result_t *result) {
-  for (size_t i = 0; i < turbo_vec_size(&flow->resource_command_history); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->resource_command_history); ++i) {
     const flow_resource_command_record_t *record =
-        (const flow_resource_command_record_t *)turbo_vec_at_const(&flow->resource_command_history,
+        (const flow_resource_command_record_t *)vec_at_const(&flow->resource_command_history,
                                                                    i);
     if (!record || strcmp(record->command.idempotency_key, command->idempotency_key) != 0) continue;
     if (!flow_resource_command_same(&record->command, command)) return TURBO_EPROTO;
@@ -59,7 +59,7 @@ static int flow_resource_command_record(turbo_flow_t *flow,
                                         const turbo_flow_resource_command_t *command,
                                         const turbo_flow_resource_command_result_t *result) {
   flow_resource_command_record_t record;
-  if (turbo_vec_size(&flow->resource_command_history) >=
+  if (vec_size(&flow->resource_command_history) >=
       TURBO_FLOW_RESOURCE_COMMAND_HISTORY_MAX) {
     return TURBO_ENOSPC;
   }
@@ -68,7 +68,7 @@ static int flow_resource_command_record(turbo_flow_t *flow,
   record.command.size = sizeof(record.command);
   record.result = *result;
   record.result.size = sizeof(record.result);
-  return turbo_vec_push(&flow->resource_command_history, &record);
+  return turbo_flow_stl_error(vec_push(&flow->resource_command_history, &record));
 }
 
 static int flow_resource_metadata_find(const turbo_flow_t *flow, const char *uid, size_t *index,
@@ -90,7 +90,7 @@ static int flow_resource_metadata_find(const turbo_flow_t *flow, const char *uid
 static int flow_resource_apply_registered(turbo_flow_t *flow, size_t metadata_index,
                                           const turbo_flow_resource_command_t *command) {
   flow_resource_registration_t *resource =
-      (flow_resource_registration_t *)turbo_vec_at(&flow->resources, metadata_index);
+      (flow_resource_registration_t *)vec_at(&flow->resources, metadata_index);
   if (!resource) return TURBO_ENOENT;
   if (!resource->ops.command) return TURBO_ENOTSUP;
   return resource->ops.command(resource->ctx, flow, command);
@@ -104,7 +104,7 @@ static int flow_resource_apply_pool(turbo_flow_t *flow, size_t metadata_index,
   uint64_t remaining_ms;
   uint64_t now;
   int rc;
-  size_t provider_count = turbo_vec_size(&flow->resources);
+  size_t provider_count = vec_size(&flow->resources);
   size_t native_count = flow_native_resource_count(flow);
   if (metadata_index < provider_count + native_count ||
       command->kind != TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL)
@@ -148,7 +148,7 @@ int turbo_flow_resource_command(turbo_flow_t *flow,
     *out = result;
     return rc;
   }
-  if (turbo_vec_size(&flow->resource_command_history) >= TURBO_FLOW_RESOURCE_COMMAND_HISTORY_MAX)
+  if (vec_size(&flow->resource_command_history) >= TURBO_FLOW_RESOURCE_COMMAND_HISTORY_MAX)
     return TURBO_ENOSPC;
   if (command->deadline_ns != UINT64_MAX && turbo_hrtime() >= command->deadline_ns) {
     rc = TURBO_ETIMEDOUT;
@@ -163,11 +163,11 @@ int turbo_flow_resource_command(turbo_flow_t *flow,
     rc = TURBO_EBUSY;
     goto record;
   }
-  if (metadata_index < turbo_vec_size(&flow->resources)) {
+  if (metadata_index < vec_size(&flow->resources)) {
     rc = flow_resource_apply_registered(flow, metadata_index, command);
-  } else if (metadata_index < turbo_vec_size(&flow->resources) +
+  } else if (metadata_index < vec_size(&flow->resources) +
                                   flow_native_resource_count(flow)) {
-    rc = flow_native_resource_command(flow, metadata_index - turbo_vec_size(&flow->resources),
+    rc = flow_native_resource_command(flow, metadata_index - vec_size(&flow->resources),
                                       command);
   } else if (metadata.kind == TURBO_FLOW_RESOURCE_POOL) {
     rc = flow_resource_apply_pool(flow, metadata_index, &metadata, command);

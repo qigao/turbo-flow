@@ -40,13 +40,13 @@ static void flow_expr_projection_registration_destroy(
 void flow_expr_projection_clear(turbo_flow_t *flow) {
   size_t i;
   if (!flow) return;
-  for (i = 0; i < turbo_vec_size(&flow->expr_projection_registrations); ++i) {
+  for (i = 0; i < vec_size(&flow->expr_projection_registrations); ++i) {
     flow_expr_projection_registration_t *registration =
-        (flow_expr_projection_registration_t *)turbo_vec_at(
+        (flow_expr_projection_registration_t *)vec_at(
             &flow->expr_projection_registrations, i);
     flow_expr_projection_registration_destroy(registration);
   }
-  turbo_vec_clear(&flow->expr_projection_registrations);
+  turbo_flow_stl_error(vec_clear(&flow->expr_projection_registrations));
 }
 
 static int flow_expr_projection_fields_compatible(
@@ -56,10 +56,10 @@ static int flow_expr_projection_fields_compatible(
   for (field_index = 0; field_index < schema->field_count; ++field_index) {
     const turbo_flow_expr_schema_field_t *candidate = &schema->fields[field_index];
     for (registration_index = 0;
-         registration_index < turbo_vec_size(&flow->expr_projection_registrations);
+         registration_index < vec_size(&flow->expr_projection_registrations);
          ++registration_index) {
       const flow_expr_projection_registration_t *registration =
-          (const flow_expr_projection_registration_t *)turbo_vec_at_const(
+          (const flow_expr_projection_registration_t *)vec_at_const(
               &flow->expr_projection_registrations, registration_index);
       size_t existing_index;
       for (existing_index = 0; existing_index < registration->field_count; ++existing_index) {
@@ -127,9 +127,9 @@ int turbo_flow_register_expr_projection(
     return flow_set_error_keep_state(flow, TURBO_EBUSY, 0u, 0u,
                                      "cannot register expression projection after compile");
   }
-  for (i = 0; i < turbo_vec_size(&flow->expr_projection_registrations); ++i) {
+  for (i = 0; i < vec_size(&flow->expr_projection_registrations); ++i) {
     const flow_expr_projection_registration_t *existing =
-        (const flow_expr_projection_registration_t *)turbo_vec_at_const(
+        (const flow_expr_projection_registration_t *)vec_at_const(
             &flow->expr_projection_registrations, i);
     if (flow_expr_projection_schema_equal(&existing->schema, registration->projection_schema)) {
       return flow_set_error_keep_state(flow, TURBO_EALREADY, 0u, 0u,
@@ -150,7 +150,7 @@ int turbo_flow_register_expr_projection(
   }
   rc = flow_expr_projection_copy_registration(&copy, registration);
   if (rc != TURBO_OK) return flow_set_error(flow, rc, 0u, 0u, "out of memory");
-  if (turbo_vec_push(&flow->expr_projection_registrations, &copy) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&flow->expr_projection_registrations, &copy)) != TURBO_OK) {
     flow_expr_projection_registration_destroy(&copy);
     return flow_set_error(flow, TURBO_ENOMEM, 0u, 0u, "out of memory");
   }
@@ -167,10 +167,10 @@ static int flow_expr_projection_schema_fields(
   *fields_out = NULL;
   *count_out = 0u;
   for (registration_index = 0;
-       registration_index < turbo_vec_size(&flow->expr_projection_registrations);
+       registration_index < vec_size(&flow->expr_projection_registrations);
        ++registration_index) {
     const flow_expr_projection_registration_t *registration =
-        (const flow_expr_projection_registration_t *)turbo_vec_at_const(
+        (const flow_expr_projection_registration_t *)vec_at_const(
             &flow->expr_projection_registrations, registration_index);
     if (registration->field_count > SIZE_MAX - capacity) return TURBO_ERANGE;
     capacity += registration->field_count;
@@ -179,10 +179,10 @@ static int flow_expr_projection_schema_fields(
   fields = (turbo_flow_expr_schema_field_t *)calloc(capacity, sizeof(*fields));
   if (!fields) return TURBO_ENOMEM;
   for (registration_index = 0;
-       registration_index < turbo_vec_size(&flow->expr_projection_registrations);
+       registration_index < vec_size(&flow->expr_projection_registrations);
        ++registration_index) {
     const flow_expr_projection_registration_t *registration =
-        (const flow_expr_projection_registration_t *)turbo_vec_at_const(
+        (const flow_expr_projection_registration_t *)vec_at_const(
             &flow->expr_projection_registrations, registration_index);
     size_t field_index;
     for (field_index = 0; field_index < registration->field_count; ++field_index) {
@@ -247,9 +247,9 @@ void flow_expr_projection_bind_eval(
   if (!flow || !msg) return;
   projection = turbo_flow_msg_projection(msg, &schema);
   if (!projection || !schema) return;
-  for (i = 0; i < turbo_vec_size(&flow->expr_projection_registrations); ++i) {
+  for (i = 0; i < vec_size(&flow->expr_projection_registrations); ++i) {
     const flow_expr_projection_registration_t *registration =
-        (const flow_expr_projection_registration_t *)turbo_vec_at_const(
+        (const flow_expr_projection_registration_t *)vec_at_const(
             &flow->expr_projection_registrations, i);
     if (!flow_expr_projection_schema_equal(&registration->schema, schema)) continue;
     binding->registration = registration;

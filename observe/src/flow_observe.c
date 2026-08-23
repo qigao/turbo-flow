@@ -1,6 +1,6 @@
 #include "turbo_flow_observe.h"
 
-#include "turbo_flow_stl_adapter.h"
+#include "turbo_flow_stl_error_internal.h"
 #include "turbo_error.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
@@ -42,10 +42,10 @@ typedef struct flow_observe_log_sink_s {
 
 struct turbo_flow_observe_s {
   turbo_flow_t *flow;
-  turbo_vec_t stages;
+  vec_t stages;
   turbo_mutex_t stage_mutex;
   turbo_mutex_t export_mutex;
-  turbo_deque_t events;
+  deque_t events;
   size_t max_stages;
   size_t max_events;
   uint64_t next_event_sequence;
@@ -108,9 +108,9 @@ static void flow_observe_message_complete(void *ctx, const char *source_name,
 static flow_observe_stage_entry_t *flow_observe_find_stage(turbo_flow_observe_t *observe,
                                                            const char *stage_name) {
   /* Bounded O(max_stages); default 256 keeps opt-in update cost predictable. */
-  for (size_t i = 0; i < turbo_vec_size(&observe->stages); ++i) {
+  for (size_t i = 0; i < vec_size(&observe->stages); ++i) {
     flow_observe_stage_entry_t *entry =
-        (flow_observe_stage_entry_t *)turbo_vec_at(&observe->stages, i);
+        (flow_observe_stage_entry_t *)vec_at(&observe->stages, i);
     if (entry && strcmp(entry->name, stage_name) == 0) return entry;
   }
   return NULL;
@@ -135,13 +135,13 @@ static void flow_observe_stage_complete(void *ctx, const char *stage_name, const
 
   turbo_mutex_lock(&observe->stage_mutex);
   entry = flow_observe_find_stage(observe, stage_name);
-  if (!entry && turbo_vec_size(&observe->stages) < observe->max_stages) {
+  if (!entry && vec_size(&observe->stages) < observe->max_stages) {
     flow_observe_stage_entry_t added;
     memset(&added, 0, sizeof(added));
     added.name = tstr_dup(stage_name);
-    if (added.name && turbo_vec_push(&observe->stages, &added) == TURBO_OK) {
-      entry = (flow_observe_stage_entry_t *)turbo_vec_at(&observe->stages,
-                                                         turbo_vec_size(&observe->stages) - 1u);
+    if (added.name && turbo_flow_stl_error(vec_push(&observe->stages, &added)) == TURBO_OK) {
+      entry = (flow_observe_stage_entry_t *)vec_at(&observe->stages,
+                                                         vec_size(&observe->stages) - 1u);
     } else {
       tstr_freep(&added.name);
     }
@@ -189,14 +189,14 @@ turbo_flow_observe_t *turbo_flow_observe_create(const turbo_flow_observe_config_
     return NULL;
   observe = (turbo_flow_observe_t *)calloc(1, sizeof(*observe));
   if (!observe) return NULL;
-  if (turbo_vec_init(&observe->stages, sizeof(flow_observe_stage_entry_t)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(&observe->stages, sizeof(flow_observe_stage_entry_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
     free(observe);
     return NULL;
   }
-  if (turbo_deque_init(&observe->events, sizeof(turbo_flow_observe_event_record_t)) != TURBO_OK ||
-      turbo_deque_reserve(&observe->events, max_events) != TURBO_OK) {
-    turbo_deque_destroy(&observe->events);
-    turbo_vec_destroy(&observe->stages);
+  if (turbo_flow_stl_error(deque_init_bytes(&observe->events, sizeof(turbo_flow_observe_event_record_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
+      turbo_flow_stl_error(deque_reserve(&observe->events, max_events)) != TURBO_OK) {
+    deque_destroy(&observe->events);
+    vec_destroy(&observe->stages);
     free(observe);
     return NULL;
   }
@@ -237,14 +237,14 @@ turbo_flow_observe_t *turbo_flow_observe_create(const turbo_flow_observe_config_
 int turbo_flow_observe_destroy(turbo_flow_observe_t *observe) {
   if (!observe) return TURBO_EINVAL;
   if (observe->flow) return TURBO_EBUSY;
-  for (size_t i = 0; i < turbo_vec_size(&observe->stages); ++i) {
+  for (size_t i = 0; i < vec_size(&observe->stages); ++i) {
     flow_observe_stage_entry_t *entry =
-        (flow_observe_stage_entry_t *)turbo_vec_at(&observe->stages, i);
+        (flow_observe_stage_entry_t *)vec_at(&observe->stages, i);
     if (entry) tstr_freep(&entry->name);
   }
-  turbo_vec_destroy(&observe->stages);
+  vec_destroy(&observe->stages);
   turbo_mutex_destroy(&observe->stage_mutex);
-  turbo_deque_destroy(&observe->events);
+  deque_destroy(&observe->events);
   turbo_mutex_destroy(&observe->export_mutex);
   free(observe);
   return TURBO_OK;
@@ -868,13 +868,13 @@ int turbo_flow_observe_record_control_event(turbo_flow_observe_t *observe,
     record.event = *event;
     turbo_mutex_lock(&observe->export_mutex);
     record.sequence = ++observe->next_event_sequence;
-    if (turbo_deque_size(&observe->events) == observe->max_events) {
+    if (deque_size(&observe->events) == observe->max_events) {
       turbo_flow_observe_event_record_t discarded;
-      if (turbo_deque_pop_front(&observe->events, &discarded) == TURBO_OK) {
+      if (turbo_flow_stl_error(deque_pop_front(&observe->events, &discarded)) == TURBO_OK) {
         ++observe->dropped_events;
       }
     }
-    if (turbo_deque_push_back(&observe->events, &record) != TURBO_OK) {
+    if (turbo_flow_stl_error(deque_push_back(&observe->events, &record)) != TURBO_OK) {
       turbo_mutex_unlock(&observe->export_mutex);
       return TURBO_ENOMEM;
     }
@@ -887,7 +887,7 @@ size_t turbo_flow_observe_event_count(const turbo_flow_observe_t *observe) {
   size_t count;
   if (!observe) return 0u;
   turbo_mutex_lock((turbo_mutex_t *)&observe->export_mutex);
-  count = turbo_deque_size(&observe->events);
+  count = deque_size(&observe->events);
   turbo_mutex_unlock((turbo_mutex_t *)&observe->export_mutex);
   return count;
 }
@@ -906,7 +906,7 @@ int turbo_flow_observe_event_at(const turbo_flow_observe_t *observe, size_t inde
   const turbo_flow_observe_event_record_t *event;
   if (!observe || !out) return TURBO_EINVAL;
   turbo_mutex_lock((turbo_mutex_t *)&observe->export_mutex);
-  event = (const turbo_flow_observe_event_record_t *)turbo_deque_at_const(&observe->events, index);
+  event = (const turbo_flow_observe_event_record_t *)deque_at_const(&observe->events, index);
   if (!event) {
     turbo_mutex_unlock((turbo_mutex_t *)&observe->export_mutex);
     return TURBO_ENOENT;
@@ -994,7 +994,7 @@ size_t turbo_flow_observe_stage_count(const turbo_flow_observe_t *observe) {
   size_t count;
   if (!observe) return 0;
   turbo_mutex_lock((turbo_mutex_t *)&observe->stage_mutex);
-  count = turbo_vec_size(&observe->stages);
+  count = vec_size(&observe->stages);
   turbo_mutex_unlock((turbo_mutex_t *)&observe->stage_mutex);
   return count;
 }
@@ -1005,7 +1005,7 @@ int turbo_flow_observe_stage_snapshot_at(const turbo_flow_observe_t *observe, si
   size_t name_len;
   if (!observe || !out) return TURBO_EINVAL;
   turbo_mutex_lock((turbo_mutex_t *)&observe->stage_mutex);
-  entry = (const flow_observe_stage_entry_t *)turbo_vec_at_const(&observe->stages, index);
+  entry = (const flow_observe_stage_entry_t *)vec_at_const(&observe->stages, index);
   if (!entry) {
     turbo_mutex_unlock((turbo_mutex_t *)&observe->stage_mutex);
     return TURBO_ENOENT;

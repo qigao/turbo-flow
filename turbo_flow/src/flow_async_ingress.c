@@ -123,7 +123,7 @@ int turbo_flow_publish_async(turbo_flow_t *flow, const char *source_name,
     rc = flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0, "async publish source is unknown");
     goto cleanup;
   }
-  source = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, (size_t)source_index);
+  source = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, (size_t)source_index);
   if (!source || !source->is_source) {
     rc = flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
                                    "async publish target must be a source");

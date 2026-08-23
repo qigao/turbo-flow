@@ -1,7 +1,7 @@
 #include "turbo_flow_codec.h"
 
 #include "turbo_parser.h"
-#include "turbo_flow_stl_adapter.h"
+#include "turbo_flow_stl_error_internal.h"
 
 #include "turbo_error.h"
 #include "turbo_str.h"
@@ -490,29 +490,29 @@ static int flow_codec_transform_csv_split(flow_codec_adapter_t *adapter, turbo_f
 
 static int flow_codec_csv_source_reaches_stage(turbo_flow_t *flow, uint32_t source_index,
                                                uint32_t target_index) {
-  turbo_vec_t reachable;
+  vec_t reachable = {0};
   int changed = 1;
-  if (turbo_vec_init(&reachable, sizeof(uint8_t)) != TURBO_OK) return -1;
-  if (turbo_vec_resize(&reachable, turbo_flow_stage_count(flow)) != TURBO_OK) {
-    turbo_vec_destroy(&reachable);
+  if (turbo_flow_stl_error(vec_init_bytes(&reachable, sizeof(uint8_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) return -1;
+  if (turbo_flow_stl_error(vec_resize(&reachable, turbo_flow_stage_count(flow))) != TURBO_OK) {
+    vec_destroy(&reachable);
     return -1;
   }
-  memset(turbo_vec_data(&reachable), 0, turbo_vec_size(&reachable));
-  *(uint8_t *)turbo_vec_at(&reachable, source_index) = 1;
+  memset(vec_data(&reachable), 0, vec_size(&reachable));
+  *(uint8_t *)vec_at(&reachable, source_index) = 1;
   while (changed) {
     changed = 0;
     for (size_t i = 0; i < turbo_flow_edge_count(flow); ++i) {
       const turbo_flow_edge_plan_t *edge = turbo_flow_edge_at(flow, i);
-      uint8_t *from = (uint8_t *)turbo_vec_at(&reachable, edge->from_stage);
-      uint8_t *to = (uint8_t *)turbo_vec_at(&reachable, edge->to_stage);
+      uint8_t *from = (uint8_t *)vec_at(&reachable, edge->from_stage);
+      uint8_t *to = (uint8_t *)vec_at(&reachable, edge->to_stage);
       if (*from && !*to) {
         *to = 1;
         changed = 1;
       }
     }
   }
-  changed = *(uint8_t *)turbo_vec_at(&reachable, target_index) != 0;
-  turbo_vec_destroy(&reachable);
+  changed = *(uint8_t *)vec_at(&reachable, target_index) != 0;
+  vec_destroy(&reachable);
   return changed;
 }
 

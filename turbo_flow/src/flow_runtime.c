@@ -131,38 +131,38 @@ int turbo_flow_start(turbo_flow_t *flow) {
     return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
                                      "flow must be compiled before start");
   }
-  if (turbo_vec_size(&flow->runtime_nodes) != turbo_vec_size(&flow->stages)) {
+  if (vec_size(&flow->runtime_nodes) != vec_size(&flow->stages)) {
     return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
                                      "compiled runtime plan is not available");
   }
-  if (turbo_vec_empty(&flow->data_segments) && !turbo_vec_empty(&flow->runtime_edges)) {
+  if (vec_empty(&flow->data_segments) && !vec_empty(&flow->runtime_edges)) {
     return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
                                      "compiled data plan is not available");
   }
   if (flow_runtime_generation_can_advance(flow) != TURBO_OK) {
     return flow_set_error_keep_state(flow, TURBO_ERANGE, 0, 0, "runtime generation is exhausted");
   }
-  turbo_vec_clear(&flow->pool_records);
+  turbo_flow_stl_error(vec_clear(&flow->pool_records));
   if (flow_start_data_planes(flow) != TURBO_OK) {
-    turbo_vec_clear(&flow->pool_records);
+    turbo_flow_stl_error(vec_clear(&flow->pool_records));
     return flow->last_error.code;
   }
   if (flow_start_reorder_states(flow) != TURBO_OK) {
     flow_stop_data_planes(flow);
-    turbo_vec_clear(&flow->pool_records);
+    turbo_flow_stl_error(vec_clear(&flow->pool_records));
     return flow->last_error.code;
   }
   if (flow_start_executor_adapters(flow) != TURBO_OK) {
     flow_stop_reorder_states(flow);
     flow_stop_data_planes(flow);
-    turbo_vec_clear(&flow->pool_records);
+    turbo_flow_stl_error(vec_clear(&flow->pool_records));
     return flow->last_error.code;
   }
   if (flow_start_adapters(flow) != TURBO_OK) {
     flow_stop_executor_adapters(flow);
     flow_stop_reorder_states(flow);
     flow_stop_data_planes(flow);
-    turbo_vec_clear(&flow->pool_records);
+    turbo_flow_stl_error(vec_clear(&flow->pool_records));
     return flow->last_error.code;
   }
   flow_runtime_generation_commit(flow);
@@ -275,12 +275,12 @@ static int flow_find_pool_resize_target(turbo_flow_t *flow,
   memset(target, 0, sizeof(*target));
   stage_index = turbo_flow_find_stage(flow, command->stage_name);
   if (stage_index < 0) return TURBO_ENOENT;
-  target->stage = (flow_stage_plan_impl_t *)turbo_vec_at(&flow->stages, (size_t)stage_index);
+  target->stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, (size_t)stage_index);
   if (!target->stage) return TURBO_EINVAL;
 
-  for (size_t i = 0; i < turbo_vec_size(&flow->pool_records); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->pool_records); ++i) {
     const flow_pool_record_t *record =
-        (const flow_pool_record_t *)turbo_vec_at_const(&flow->pool_records, i);
+        (const flow_pool_record_t *)vec_at_const(&flow->pool_records, i);
     if (record && record->stage_index == (uint32_t)stage_index && record->kind == command->kind) {
       found = 1;
       break;
@@ -326,7 +326,7 @@ static void flow_apply_pool_parallelism(flow_pool_resize_target_t *target,
 static int flow_rebuild_pool_resources(turbo_flow_t *flow) {
   flow_stop_data_planes(flow);
   flow_stop_runtime_executor_adapters(flow);
-  turbo_vec_clear(&flow->pool_records);
+  turbo_flow_stl_error(vec_clear(&flow->pool_records));
   if (flow_start_data_planes(flow) != TURBO_OK) return flow->last_error.code;
   if (flow_start_executor_adapters(flow) != TURBO_OK) {
     flow_stop_data_planes(flow);
@@ -509,9 +509,9 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   flow_stage_completion_t completion = {0};
   uint64_t sequence;
 
-  if (!flow || !message || origin_stage >= turbo_vec_size(&flow->stages)) return TURBO_EINVAL;
+  if (!flow || !message || origin_stage >= vec_size(&flow->stages)) return TURBO_EINVAL;
 
-  stage_count = turbo_vec_size(&flow->stages);
+  stage_count = vec_size(&flow->stages);
   rc = flow_runtime_workspace_init(&workspace, &stack_workspace, stage_count);
   if (rc != TURBO_OK)
     return flow_set_error_keep_state(flow, rc, 0, 0,
@@ -527,7 +527,7 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   flow_mark_reachable_from_stage(flow, reachable, origin_stage);
   for (size_t i = 0; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, i);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
     if (!reachable[i] || i == origin_stage || stage->is_source || stage->is_port) continue;
     rc = flow_dispatch_validate_stage(flow, (uint32_t)i);
     if (rc != TURBO_OK) goto cleanup;
@@ -537,7 +537,7 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   sequence = atomic_fetch_add_explicit(&flow->next_sequence, 1u, memory_order_relaxed) + 1u;
   for (size_t i = 0; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, i);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
     if (!reachable[i] || i == origin_stage || stage->is_source || stage->is_port) continue;
     stage_sequences[i] = sequence;
     if (stage->reorder.capacity > 0u) {
@@ -552,9 +552,9 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   turbo_mutex_unlock(&flow->runtime_mutex);
   if (rc != TURBO_OK) goto cleanup;
 
-  for (size_t i = 0; i < turbo_vec_size(&flow->runtime_edges); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->runtime_edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, i);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, i);
     if (reachable[edge->from_stage] && reachable[edge->to_stage]) {
       remaining[edge->to_stage] += 1;
     }
@@ -573,7 +573,7 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   while (head < tail) {
     uint32_t stage_index = queue[head++];
     flow_stage_plan_impl_t *stage =
-        (flow_stage_plan_impl_t *)turbo_vec_at(&flow->stages, (size_t)stage_index);
+        (flow_stage_plan_impl_t *)vec_at(&flow->stages, (size_t)stage_index);
 
     if (done[stage_index]) continue;
     if (stage->is_port) {
@@ -598,10 +598,10 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
         rc = flow_cancel_emission_descendant_reorders(flow, stage_index, stage_sequences,
                                                       stage_count);
         if (rc == TURBO_OK) {
-          for (size_t output_index = 0u; output_index < turbo_vec_size(&emitter.outputs);
+          for (size_t output_index = 0u; output_index < vec_size(&emitter.outputs);
                ++output_index) {
             turbo_flow_msg_t *output =
-                (turbo_flow_msg_t *)turbo_vec_at(&emitter.outputs, output_index);
+                (turbo_flow_msg_t *)vec_at(&emitter.outputs, output_index);
             rc = flow_run_message_from_stage(flow, stage_index, output);
             if (rc != TURBO_OK) break;
           }
@@ -662,9 +662,9 @@ int turbo_flow_advance_event_time_watermark(turbo_flow_t *flow,
   entered = 1;
   flow_clear_error(flow);
 
-  for (size_t index = 0u; index < turbo_vec_size(&flow->executor_plans); ++index) {
+  for (size_t index = 0u; index < vec_size(&flow->executor_plans); ++index) {
     const flow_executor_plan_t *executor =
-        (const flow_executor_plan_t *)turbo_vec_at_const(&flow->executor_plans, index);
+        (const flow_executor_plan_t *)vec_at_const(&flow->executor_plans, index);
     if (executor && executor->window_fn && executor->keyed_store == store) {
       window_executor = executor;
       break;
@@ -744,7 +744,7 @@ static int flow_publish_source_index(turbo_flow_t *flow, const char *source_name
     return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
                                      "publish source is unknown");
   }
-  source = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages,
+  source = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages,
                                                               (size_t)found_index);
   if (!source->is_source) {
     return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
@@ -900,20 +900,20 @@ static const flow_adapter_registration_t *flow_publish_batch_direct_adapter(
   if (!flow || !out_stage || flow->broadcast_ring || flow_observer_has_handlers(flow)) {
     return NULL;
   }
-  for (size_t i = 0u; i < turbo_vec_size(&flow->runtime_edges); ++i) {
+  for (size_t i = 0u; i < vec_size(&flow->runtime_edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, i);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, i);
     if (!edge || edge->from_stage != source_index) continue;
     if (source_edge || edge->kind != TURBO_FLOW_EDGE_UNCONDITIONAL || edge->predicate) return NULL;
     source_edge = edge;
   }
   if (!source_edge) return NULL;
-  for (size_t i = 0u; i < turbo_vec_size(&flow->runtime_edges); ++i) {
+  for (size_t i = 0u; i < vec_size(&flow->runtime_edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, i);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, i);
     if (edge && edge->from_stage == source_edge->to_stage) return NULL;
   }
-  stage = (const flow_stage_plan_impl_t *)turbo_vec_at_const(
+  stage = (const flow_stage_plan_impl_t *)vec_at_const(
       &flow->stages, (size_t)source_edge->to_stage);
   executor = flow_executor_plan_for_stage(flow, source_edge->to_stage);
   if (!stage || !executor || stage->is_source || stage->is_port ||

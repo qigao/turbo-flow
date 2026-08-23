@@ -5,7 +5,7 @@
 #include "turbo_error.h"
 #include "turbo_parser.h"
 #include "turbo_str.h"
-#include "turbo_flow_stl_adapter.h"
+#include "turbo_flow_stl_error_internal.h"
 
 #include <limits.h>
 #include <math.h>
@@ -183,40 +183,40 @@ static void flow_rule_rollback_operation_registration(turbo_flow_t *flow, size_t
                                                       size_t modules_before,
                                                       size_t primitives_before,
                                                       size_t operations_before) {
-  while (turbo_vec_size(&flow->operation_providers) > providers_before) {
-    size_t index = turbo_vec_size(&flow->operation_providers) - 1u;
+  while (vec_size(&flow->operation_providers) > providers_before) {
+    size_t index = vec_size(&flow->operation_providers) - 1u;
     flow_operation_provider_registration_t *provider =
-        (flow_operation_provider_registration_t *)turbo_vec_at(&flow->operation_providers, index);
+        (flow_operation_provider_registration_t *)vec_at(&flow->operation_providers, index);
     flow_operation_provider_registration_destroy(provider);
-    (void)turbo_vec_resize(&flow->operation_providers, index);
+    (void)turbo_flow_stl_error(vec_resize(&flow->operation_providers, index));
   }
-  while (turbo_vec_size(&flow->resources) > resources_before) {
-    size_t index = turbo_vec_size(&flow->resources) - 1u;
+  while (vec_size(&flow->resources) > resources_before) {
+    size_t index = vec_size(&flow->resources) - 1u;
     flow_resource_registration_t *resource =
-        (flow_resource_registration_t *)turbo_vec_at(&flow->resources, index);
+        (flow_resource_registration_t *)vec_at(&flow->resources, index);
     flow_resource_registration_destroy(resource);
-    (void)turbo_vec_resize(&flow->resources, index);
+    (void)turbo_flow_stl_error(vec_resize(&flow->resources, index));
   }
-  while (turbo_vec_size(&flow->modules) > modules_before) {
-    size_t index = turbo_vec_size(&flow->modules) - 1u;
+  while (vec_size(&flow->modules) > modules_before) {
+    size_t index = vec_size(&flow->modules) - 1u;
     flow_module_registration_t *module =
-        (flow_module_registration_t *)turbo_vec_at(&flow->modules, index);
+        (flow_module_registration_t *)vec_at(&flow->modules, index);
     flow_module_registration_destroy(module);
-    (void)turbo_vec_resize(&flow->modules, index);
+    (void)turbo_flow_stl_error(vec_resize(&flow->modules, index));
   }
-  while (turbo_vec_size(&flow->primitives) > primitives_before) {
-    size_t index = turbo_vec_size(&flow->primitives) - 1u;
+  while (vec_size(&flow->primitives) > primitives_before) {
+    size_t index = vec_size(&flow->primitives) - 1u;
     flow_primitive_registration_t *primitive =
-        (flow_primitive_registration_t *)turbo_vec_at(&flow->primitives, index);
+        (flow_primitive_registration_t *)vec_at(&flow->primitives, index);
     flow_primitive_registration_destroy(primitive);
-    (void)turbo_vec_resize(&flow->primitives, index);
+    (void)turbo_flow_stl_error(vec_resize(&flow->primitives, index));
   }
-  while (turbo_vec_size(&flow->operations) > operations_before) {
-    size_t index = turbo_vec_size(&flow->operations) - 1u;
+  while (vec_size(&flow->operations) > operations_before) {
+    size_t index = vec_size(&flow->operations) - 1u;
     flow_operation_registration_t *operation =
-        (flow_operation_registration_t *)turbo_vec_at(&flow->operations, index);
+        (flow_operation_registration_t *)vec_at(&flow->operations, index);
     flow_operation_registration_destroy(operation);
-    (void)turbo_vec_resize(&flow->operations, index);
+    (void)turbo_flow_stl_error(vec_resize(&flow->operations, index));
   }
 }
 
@@ -228,8 +228,8 @@ typedef struct flow_compiled_rule_s {
 } flow_compiled_rule_t;
 
 struct turbo_flow_rule_processor_s {
-  turbo_vec_t rules;
-  turbo_vec_t schema_fields;
+  vec_t rules;
+  vec_t schema_fields;
   tstr resource_uid;
   tstr owner_name;
   turbo_flow_rule_facts_provider_fn facts_provider;
@@ -367,12 +367,12 @@ static int flow_rule_facts_valid(const turbo_flow_rule_facts_t *facts) {
 
 static void flow_rule_schema_destroy(turbo_flow_rule_processor_t *processor) {
   if (!processor) return;
-  for (size_t i = 0; i < turbo_vec_size(&processor->schema_fields); ++i) {
+  for (size_t i = 0; i < vec_size(&processor->schema_fields); ++i) {
     turbo_flow_expr_schema_field_t *field =
-        (turbo_flow_expr_schema_field_t *)turbo_vec_at(&processor->schema_fields, i);
+        (turbo_flow_expr_schema_field_t *)vec_at(&processor->schema_fields, i);
     if (field) free((void *)field->path);
   }
-  turbo_vec_destroy(&processor->schema_fields);
+  vec_destroy(&processor->schema_fields);
 }
 
 static int flow_rule_schema_copy(turbo_flow_rule_processor_t *processor,
@@ -390,7 +390,7 @@ static int flow_rule_schema_copy(turbo_flow_rule_processor_t *processor,
   if (descriptor_bytes > processor->limits.max_memory_bytes - processor->memory_bytes) {
     return TURBO_ENOSPC;
   }
-  if (turbo_vec_reserve(&processor->schema_fields, schema->field_count) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_reserve(&processor->schema_fields, schema->field_count)) != TURBO_OK) {
     return TURBO_ENOMEM;
   }
   processor->memory_bytes += descriptor_bytes;
@@ -410,7 +410,7 @@ static int flow_rule_schema_copy(turbo_flow_rule_processor_t *processor,
     if (!path) return TURBO_ENOMEM;
     memcpy(path, copy.path, length + 1u);
     copy.path = path;
-    if (turbo_vec_push(&processor->schema_fields, &copy) != TURBO_OK) {
+    if (turbo_flow_stl_error(vec_push(&processor->schema_fields, &copy)) != TURBO_OK) {
       free(path);
       return TURBO_ENOMEM;
     }
@@ -423,22 +423,22 @@ static turbo_flow_expr_schema_t
 flow_rule_schema_view(const turbo_flow_rule_processor_t *processor) {
   turbo_flow_expr_schema_t schema = {0};
   if (!processor) return schema;
-  schema.field_count = turbo_vec_size(&processor->schema_fields);
+  schema.field_count = vec_size(&processor->schema_fields);
   if (schema.field_count > 0u) {
     schema.fields =
-        (const turbo_flow_expr_schema_field_t *)turbo_vec_at_const(&processor->schema_fields, 0u);
+        (const turbo_flow_expr_schema_field_t *)vec_at_const(&processor->schema_fields, 0u);
   }
   return schema;
 }
 
 static int flow_rule_facts_match_program(const turbo_flow_rule_processor_t *processor,
                                          const turbo_flow_rule_facts_t *facts) {
-  size_t count = turbo_vec_size(&processor->schema_fields);
+  size_t count = vec_size(&processor->schema_fields);
   if (count == 0u) return facts->schema == NULL || facts->schema->field_count == 0u;
   if (!facts->schema || facts->schema->field_count != count) return 0;
   for (size_t i = 0; i < count; ++i) {
     const turbo_flow_expr_schema_field_t *expected =
-        (const turbo_flow_expr_schema_field_t *)turbo_vec_at_const(&processor->schema_fields, i);
+        (const turbo_flow_expr_schema_field_t *)vec_at_const(&processor->schema_fields, i);
     const turbo_flow_expr_schema_field_t *actual = &facts->schema->fields[i];
     if (!expected || !actual->path || expected->type != actual->type ||
         expected->field_id != actual->field_id || strcmp(expected->path, actual->path) != 0) {
@@ -450,11 +450,11 @@ static int flow_rule_facts_match_program(const turbo_flow_rule_processor_t *proc
 
 void turbo_flow_rule_processor_destroy(turbo_flow_rule_processor_t *processor) {
   if (!processor) return;
-  for (size_t i = 0; i < turbo_vec_size(&processor->rules); ++i) {
-    flow_compiled_rule_t *rule = (flow_compiled_rule_t *)turbo_vec_at(&processor->rules, i);
+  for (size_t i = 0; i < vec_size(&processor->rules); ++i) {
+    flow_compiled_rule_t *rule = (flow_compiled_rule_t *)vec_at(&processor->rules, i);
     if (rule) turbo_flow_expr_destroy(rule->predicate);
   }
-  turbo_vec_destroy(&processor->rules);
+  vec_destroy(&processor->rules);
   flow_rule_schema_destroy(processor);
   tstr_freep(&processor->resource_uid);
   tstr_freep(&processor->owner_name);
@@ -470,14 +470,14 @@ int turbo_flow_rule_processor_create(const turbo_flow_rule_processor_config_t *c
   if (!flow_rule_config_valid(config)) return TURBO_EINVAL;
   processor = (turbo_flow_rule_processor_t *)calloc(1, sizeof(*processor));
   if (!processor) return TURBO_ENOMEM;
-  rc = turbo_vec_init(&processor->rules, sizeof(flow_compiled_rule_t));
+  rc = turbo_flow_stl_error(vec_init_bytes(&processor->rules, sizeof(flow_compiled_rule_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc != TURBO_OK) {
     free(processor);
     return rc;
   }
-  rc = turbo_vec_init(&processor->schema_fields, sizeof(turbo_flow_expr_schema_field_t));
+  rc = turbo_flow_stl_error(vec_init_bytes(&processor->schema_fields, sizeof(turbo_flow_expr_schema_field_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc != TURBO_OK) {
-    turbo_vec_destroy(&processor->rules);
+    vec_destroy(&processor->rules);
     free(processor);
     return rc;
   }
@@ -501,7 +501,7 @@ int turbo_flow_rule_processor_create(const turbo_flow_rule_processor_config_t *c
     rc = TURBO_ENOSPC;
     goto fail;
   }
-  rc = turbo_vec_reserve(&processor->rules, config->rule_count);
+  rc = turbo_flow_stl_error(vec_reserve(&processor->rules, config->rule_count));
   if (rc != TURBO_OK) goto fail;
   if (config->rule_count >
       (config->limits.max_memory_bytes - processor->memory_bytes) / sizeof(flow_compiled_rule_t)) {
@@ -540,7 +540,7 @@ int turbo_flow_rule_processor_create(const turbo_flow_rule_processor_config_t *c
     rule.action = input->action;
     processor->instructions += rule.instructions;
     processor->memory_bytes += rule.memory_bytes;
-    rc = turbo_vec_push(&processor->rules, &rule);
+    rc = turbo_flow_stl_error(vec_push(&processor->rules, &rule));
     if (rc != TURBO_OK) {
       turbo_flow_expr_destroy(rule.predicate);
       goto fail;
@@ -763,7 +763,7 @@ int turbo_flow_rule_processor_create_resolved(
   turbo_flow_rule_processor_config_t config = TURBO_FLOW_RULE_PROCESSOR_CONFIG_INIT;
   turbo_flow_error_t expression_error = {0};
   turbo_json_doc_t *document = NULL;
-  turbo_vec_t rules;
+  vec_t rules = {0};
   json_value_t *channels;
   json_value_t *channel;
   json_value_t *kind;
@@ -857,19 +857,19 @@ int turbo_flow_rule_processor_create_resolved(
                                   "rules must be a non-empty bounded array");
     goto done;
   }
-  rc = turbo_vec_init(&rules, sizeof(turbo_flow_rule_t));
+  rc = turbo_flow_stl_error(vec_init_bytes(&rules, sizeof(turbo_flow_rule_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc != TURBO_OK) goto done;
   rules_initialized = 1;
-  rc = turbo_vec_reserve(&rules, turbo_json_array_size(rules_value));
+  rc = turbo_flow_stl_error(vec_reserve(&rules, turbo_json_array_size(rules_value)));
   for (size_t i = 0u; rc == TURBO_OK && i < turbo_json_array_size(rules_value); ++i) {
     turbo_flow_rule_t rule;
     rc = flow_rule_resolved_parse_rule(turbo_json_array_get(rules_value, i), channel_name, i, &rule,
                                        error);
-    if (rc == TURBO_OK) rc = turbo_vec_push(&rules, &rule);
+    if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(&rules, &rule));
   }
   if (rc != TURBO_OK) goto done;
   config.rules = (const turbo_flow_rule_t *)rules.data;
-  config.rule_count = turbo_vec_size(&rules);
+  config.rule_count = vec_size(&rules);
   rc = turbo_flow_rule_processor_create(&config, out, &expression_error);
   if (rc != TURBO_OK) {
     const char *message =
@@ -878,7 +878,7 @@ int turbo_flow_rule_processor_create_resolved(
   }
 
 done:
-  if (rules_initialized) turbo_vec_destroy(&rules);
+  if (rules_initialized) vec_destroy(&rules);
   turbo_free_json(&document);
   return rc;
 }
@@ -905,9 +905,9 @@ int turbo_flow_rule_processor_evaluate(const turbo_flow_rule_processor_t *proces
   local.instructions = processor->instructions;
   local.memory_bytes = processor->memory_bytes;
   started_at = turbo_hrtime();
-  for (size_t i = 0; i < turbo_vec_size(&processor->rules); ++i) {
+  for (size_t i = 0; i < vec_size(&processor->rules); ++i) {
     const flow_compiled_rule_t *rule =
-        (const flow_compiled_rule_t *)turbo_vec_at_const(&processor->rules, i);
+        (const flow_compiled_rule_t *)vec_at_const(&processor->rules, i);
     turbo_flow_expr_value_t value;
     memset(&value, 0, sizeof(value));
     rc = turbo_flow_expr_evaluate(rule->predicate, &context, &value);
@@ -1014,7 +1014,7 @@ static int flow_rule_resource_document(void *ctx, turbo_flow_resource_document_k
                      "\"evaluations\":\"%llu\",\"matches\":\"%llu\",\"failures\":\"%llu\","
                      "\"last_status\":%d}",
                      (unsigned)processor->domain, (unsigned)processor->mode,
-                     (unsigned long long)turbo_vec_size(&processor->rules),
+                     (unsigned long long)vec_size(&processor->rules),
                      (unsigned long long)processor->instructions,
                      (unsigned long long)processor->memory_bytes, (unsigned long long)evaluations,
                      (unsigned long long)matches, (unsigned long long)failures, last_status);
@@ -1120,7 +1120,7 @@ static int flow_rule_data_stage(turbo_flow_msg_t *message, void *ctx) {
     facts.value_count = value_count;
   }
   capacity = processor->limits.max_output_actions;
-  if (capacity > turbo_vec_size(&processor->rules)) capacity = turbo_vec_size(&processor->rules);
+  if (capacity > vec_size(&processor->rules)) capacity = vec_size(&processor->rules);
   if (capacity == 0u || capacity > FLOW_RULE_STAGE_MAX_ACTIONS) return TURBO_ENOSPC;
   /* Rule actions include a large command envelope; keep bounded ingress coroutine stacks small. */
   rc = turbo_flow_rule_processor_evaluate(processor, &facts, actions, capacity, &result);
@@ -1141,7 +1141,7 @@ int turbo_flow_rule_register_data_stage(turbo_flow_t *flow, const char *stage_na
       TURBO_FLOW_RESOURCE_PROVIDER_REGISTRATION_INIT;
   if (!flow || !stage_name || stage_name[0] == '\0' || !processor ||
       processor->domain != TURBO_FLOW_RULE_DATA ||
-      turbo_vec_size(&processor->schema_fields) != 0u ||
+      vec_size(&processor->schema_fields) != 0u ||
       processor->limits.max_output_actions > FLOW_RULE_STAGE_MAX_ACTIONS) {
     return TURBO_EINVAL;
   }
@@ -1172,16 +1172,16 @@ int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *reso
 
   if (!flow || !resource_name || resource_name[0] == '\0' || !processor ||
       processor->domain != TURBO_FLOW_RULE_DATA ||
-      (turbo_vec_size(&processor->schema_fields) > 0u && !processor->facts_provider) ||
+      (vec_size(&processor->schema_fields) > 0u && !processor->facts_provider) ||
       processor->limits.max_output_actions > FLOW_RULE_STAGE_MAX_ACTIONS) {
     return TURBO_EINVAL;
   }
 
-  resources_before = turbo_vec_size(&flow->resources);
-  providers_before = turbo_vec_size(&flow->operation_providers);
-  modules_before = turbo_vec_size(&flow->modules);
-  primitives_before = turbo_vec_size(&flow->primitives);
-  operations_before = turbo_vec_size(&flow->operations);
+  resources_before = vec_size(&flow->resources);
+  providers_before = vec_size(&flow->operation_providers);
+  modules_before = vec_size(&flow->modules);
+  primitives_before = vec_size(&flow->primitives);
+  operations_before = vec_size(&flow->operations);
 
   rc = flow_rule_register_apply_contract(flow, resource_name);
   if (rc != TURBO_OK) {

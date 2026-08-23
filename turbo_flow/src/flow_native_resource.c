@@ -65,7 +65,7 @@ static int flow_native_identity(turbo_flow_resource_metadata_t *metadata, const 
 }
 
 size_t flow_native_resource_count(const turbo_flow_t *flow) {
-  return flow_native_available(flow) ? 1u + turbo_vec_size(&flow->data_segments) : 0u;
+  return flow_native_available(flow) ? 1u + vec_size(&flow->data_segments) : 0u;
 }
 
 int flow_native_resource_metadata_at(const turbo_flow_t *flow, size_t index,
@@ -87,9 +87,9 @@ int flow_native_resource_metadata_at(const turbo_flow_t *flow, size_t index,
     char uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u];
     int written;
     --index;
-    segment = (const flow_data_segment_plan_t *)turbo_vec_at_const(&flow->data_segments, index);
+    segment = (const flow_data_segment_plan_t *)vec_at_const(&flow->data_segments, index);
     if (!segment) return TURBO_ENOENT;
-    stage = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages,
+    stage = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages,
                                                                segment->stage_index);
     if (!stage || !stage->name) return TURBO_EPROTO;
     metadata.domain = TURBO_FLOW_DOMAIN_EXECUTION;
@@ -151,7 +151,7 @@ int flow_native_resource_snapshot_at(const turbo_flow_t *flow, size_t index,
   }
   {
     const flow_data_segment_plan_t *segment =
-        (const flow_data_segment_plan_t *)turbo_vec_at_const(&flow->data_segments, index - 1u);
+        (const flow_data_segment_plan_t *)vec_at_const(&flow->data_segments, index - 1u);
     if (!segment) return TURBO_ENOENT;
     rc = flow_segment_load(flow, segment, &out->load, &out->capacity, &out->saturated);
     out->last_status = rc;
@@ -183,7 +183,7 @@ int flow_native_resource_document_at(const turbo_flow_t *flow, size_t index,
         runtime.stage_count, runtime.edge_count, runtime.adapter_count, runtime.pool_count);
   } else {
     const flow_data_segment_plan_t *segment =
-        (const flow_data_segment_plan_t *)turbo_vec_at_const(&flow->data_segments, index - 1u);
+        (const flow_data_segment_plan_t *)vec_at_const(&flow->data_segments, index - 1u);
     uint64_t load;
     uint64_t capacity;
     int saturated;

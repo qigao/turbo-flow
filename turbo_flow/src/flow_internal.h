@@ -7,7 +7,7 @@
 #include "disruptor.h"
 #include "turbo_coro.h"
 #include "turbo_coro_pool.h"
-#include "turbo_flow_stl_adapter.h"
+#include "turbo_flow_stl_error_internal.h"
 #include "turbo_thread.h"
 
 #include <stdbool.h>
@@ -91,7 +91,7 @@ typedef struct flow_adapter_registration_s {
   void *settlement_ctx;
   turbo_flow_adapter_schema_t schema;
   turbo_flow_option_field_t *schema_fields;
-  turbo_vec_t operation_bindings;
+  vec_t operation_bindings;
 } flow_adapter_registration_t;
 
 typedef struct flow_resource_registration_s {
@@ -117,9 +117,9 @@ typedef struct flow_operation_registration_s {
 typedef struct flow_module_registration_s {
   turbo_flow_module_descriptor_t descriptor;
   tstr name;
-  turbo_vec_t primitive_types;
-  turbo_vec_t operation_names;
-  turbo_vec_t requirements;
+  vec_t primitive_types;
+  vec_t operation_names;
+  vec_t requirements;
 } flow_module_registration_t;
 
 typedef struct flow_active_adapter_s {
@@ -222,7 +222,7 @@ typedef struct flow_executor_plan_s {
 } flow_executor_plan_t;
 
 struct turbo_flow_emitter_s {
-  turbo_vec_t outputs;
+  vec_t outputs;
   uint32_t max_outputs;
   int active;
   int status;
@@ -386,7 +386,7 @@ typedef struct flow_reorder_state_s {
   uint32_t waiting;
   uint64_t issued_sequence;
   uint64_t next_sequence;
-  turbo_hash_set_t canceled_sequences;
+  hash_set_t canceled_sequences;
   int canceled_sequences_initialized;
   int active;
   int stopping;
@@ -402,31 +402,31 @@ typedef struct flow_event_observer_registration_s {
 
 struct turbo_flow_s {
   turbo_flow_state_t state;
-  turbo_vec_t stages;
-  turbo_vec_t edges;
-  turbo_vec_t runtime_nodes;
-  turbo_vec_t runtime_edges;
-  turbo_vec_t data_segments;
-  turbo_vec_t executor_plans;
-  turbo_vec_t threadpool_adapters;
-  turbo_vec_t coro_adapters;
-  turbo_vec_t broadcast_consumers;
-  turbo_vec_t worker_pool_adapters;
-  turbo_vec_t reorder_states;
+  vec_t stages;
+  vec_t edges;
+  vec_t runtime_nodes;
+  vec_t runtime_edges;
+  vec_t data_segments;
+  vec_t executor_plans;
+  vec_t threadpool_adapters;
+  vec_t coro_adapters;
+  vec_t broadcast_consumers;
+  vec_t worker_pool_adapters;
+  vec_t reorder_states;
   disruptor_t *broadcast_ring;
   disruptor_topology_t *broadcast_topology;
-  turbo_vec_t registrations;
-  turbo_vec_t operation_providers;
-  turbo_vec_t primitives;
-  turbo_vec_t operations;
-  turbo_vec_t modules;
-  turbo_vec_t adapters;
-  turbo_vec_t resources;
-  turbo_vec_t expr_projection_registrations;
-  turbo_vec_t active_adapters;
-  turbo_vec_t pool_records;
-  turbo_vec_t resource_command_history;
-  turbo_vec_t event_observers;
+  vec_t registrations;
+  vec_t operation_providers;
+  vec_t primitives;
+  vec_t operations;
+  vec_t modules;
+  vec_t adapters;
+  vec_t resources;
+  vec_t expr_projection_registrations;
+  vec_t active_adapters;
+  vec_t pool_records;
+  vec_t resource_command_history;
+  vec_t event_observers;
   uint64_t runtime_generation;
   atomic_uint_fast64_t next_sequence;
   atomic_uint_fast64_t observer_failures;

@@ -7,7 +7,6 @@
 #include "turbo_error.h"
 #include "turbo_flow_domain.h"
 #include "turbo_flow_config_limits.h"
-#include "turbo_flow_record_store.h"
 #include "turbo_str.h"
 #include "turbo_vstr.h"
 
@@ -114,28 +113,6 @@ typedef struct turbo_flow_pool_resize_command_s {
 #define TURBO_FLOW_RESOURCE_COMMAND_KEY_MAX 127u
 #define TURBO_FLOW_RESOURCE_COMMAND_HISTORY_MAX 256u
 #define TURBO_FLOW_RESOURCE_DOCUMENT_MAX_BYTES 1048576u
-
-/**
- * Atomic opaque snapshot store used at persistence composition boundaries.
- *
- * The caller owns the store and serializes calls unless the provider documents
- * stronger concurrency. `commit` must replace one key atomically: success is
- * the durable accept ACK, while any error leaves the previous value readable.
- * `load` returns TURBO_ENOENT for an absent key and TURBO_ENOSPC with the
- * required size when the caller buffer is too small. No provider may silently
- * fall back to volatile memory.
- */
-typedef struct turbo_flow_blob_store_s {
-  /** Set to sizeof(turbo_flow_blob_store_t). */
-  size_t size;
-  /** Hard value bound advertised by the provider. */
-  size_t max_value_size;
-  void *ctx;
-  int (*load)(void *ctx, const char *key, uint8_t *out, size_t capacity, size_t *out_size);
-  int (*commit)(void *ctx, const char *key, const uint8_t *data, size_t data_size);
-} turbo_flow_blob_store_t;
-
-#define TURBO_FLOW_BLOB_STORE_INIT {sizeof(turbo_flow_blob_store_t), 0u, NULL, NULL, NULL}
 
 /** Stable management identity; unlike resource_snapshot.identity this survives enumeration. */
 typedef struct turbo_flow_resource_metadata_s {

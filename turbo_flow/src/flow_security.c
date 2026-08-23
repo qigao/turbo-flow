@@ -1,7 +1,7 @@
 #include "turbo_flow_security.h"
 
 #include "turbo_error.h"
-#include "turbo_flow_stl_adapter.h"
+#include "turbo_flow_stl_error_internal.h"
 #include "turbo_parser.h"
 #include "turbo_str.h"
 #include "turbo_thread.h"
@@ -12,7 +12,7 @@
 #include <string.h>
 
 typedef struct flow_security_adapter_leaf_s {
-  turbo_vec_t entries;
+  vec_t entries;
   void *compiled;
   void *matcher_ctx;
   turbo_flow_security_match_destroy_leaf_fn destroy;
@@ -20,12 +20,12 @@ typedef struct flow_security_adapter_leaf_s {
 
 typedef struct flow_security_rule_bucket_s {
   flow_security_adapter_leaf_t any_adapter;
-  turbo_vec_t subjects;
-  turbo_vec_t exact_patterns;
-  turbo_vec_t prefix_patterns;
-  turbo_hash_map_t subject_index;
-  turbo_hash_map_t exact_index;
-  turbo_hash_map_t prefix_index;
+  vec_t subjects;
+  vec_t exact_patterns;
+  vec_t prefix_patterns;
+  hash_map_t subject_index;
+  hash_map_t exact_index;
+  hash_map_t prefix_index;
   uint32_t candidate_subject_mask;
   uint32_t exact_subject_mask;
   uint32_t prefix_subject_mask;
@@ -51,7 +51,7 @@ typedef struct flow_security_pattern_key_s {
 
 typedef struct flow_security_pattern_index_s {
   flow_security_pattern_key_t key;
-  turbo_vec_t entries;
+  vec_t entries;
 } flow_security_pattern_index_t;
 
 typedef struct flow_security_root_index_s {
@@ -63,9 +63,9 @@ typedef struct flow_security_policy_snapshot_s {
   atomic_uint_fast64_t references;
   uint64_t policy_version;
   uint64_t expires_at;
-  turbo_vec_t rules;
-  turbo_vec_t roots;
-  turbo_hash_map_t root_index;
+  vec_t rules;
+  vec_t roots;
+  hash_map_t root_index;
 } flow_security_policy_snapshot_t;
 
 struct turbo_flow_security_realm_s {
@@ -304,7 +304,7 @@ static size_t flow_security_root_hash(const void *key, size_t key_size, void *ct
   const vstr *value = (const vstr *)key;
   (void)key_size;
   (void)ctx;
-  return turbo_hash_bytes(value->data, value->len, NULL);
+  return hash_bytes(value->data, value->len, NULL);
 }
 
 static bool flow_security_root_equal(const void *left, const void *right, size_t key_size,
@@ -318,7 +318,7 @@ static bool flow_security_root_equal(const void *left, const void *right, size_t
 
 static size_t flow_security_subject_hash(const void *key, size_t key_size, void *ctx) {
   const flow_security_subject_key_t *value = (const flow_security_subject_key_t *)key;
-  size_t hash = turbo_hash_bytes(value->subject.data, value->subject.len, NULL);
+  size_t hash = hash_bytes(value->subject.data, value->subject.len, NULL);
   (void)key_size;
   (void)ctx;
   return hash ^ ((size_t)value->kind * (size_t)UINT32_C(0x9e3779b1));
@@ -336,8 +336,8 @@ static bool flow_security_subject_equal(const void *left, const void *right, siz
 
 static size_t flow_security_exact_hash(const void *key, size_t key_size, void *ctx) {
   const flow_security_pattern_key_t *value = (const flow_security_pattern_key_t *)key;
-  size_t subject_hash = turbo_hash_bytes(value->subject.data, value->subject.len, NULL);
-  size_t pattern_hash = turbo_hash_bytes(value->pattern.data, value->pattern.len, NULL);
+  size_t subject_hash = hash_bytes(value->subject.data, value->subject.len, NULL);
+  size_t pattern_hash = hash_bytes(value->pattern.data, value->pattern.len, NULL);
   (void)key_size;
   (void)ctx;
   return pattern_hash ^ (subject_hash * (size_t)UINT32_C(0x9e3779b1)) ^
@@ -359,48 +359,48 @@ static bool flow_security_exact_equal(const void *left, const void *right, size_
 static int flow_security_adapter_leaf_init(flow_security_adapter_leaf_t *leaf) {
   if (!leaf) return TURBO_EINVAL;
   memset(leaf, 0, sizeof(*leaf));
-  return turbo_vec_init(&leaf->entries, sizeof(size_t));
+  return turbo_flow_stl_error(vec_init_bytes(&leaf->entries, sizeof(size_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
 }
 
 static void flow_security_adapter_leaf_destroy(flow_security_adapter_leaf_t *leaf) {
   if (!leaf) return;
   if (leaf->compiled && leaf->destroy) leaf->destroy(leaf->matcher_ctx, leaf->compiled);
-  turbo_vec_destroy(&leaf->entries);
+  vec_destroy(&leaf->entries);
   memset(leaf, 0, sizeof(*leaf));
 }
 
 static void flow_security_rule_bucket_destroy(flow_security_rule_bucket_t *bucket) {
   if (!bucket || !bucket->initialized) return;
-  turbo_hash_map_destroy(&bucket->prefix_index);
-  for (size_t i = 0u; i < turbo_vec_size(&bucket->prefix_patterns); ++i) {
+  hash_map_destroy(&bucket->prefix_index);
+  for (size_t i = 0u; i < vec_size(&bucket->prefix_patterns); ++i) {
     flow_security_pattern_index_t **pattern =
-        (flow_security_pattern_index_t **)turbo_vec_at(&bucket->prefix_patterns, i);
+        (flow_security_pattern_index_t **)vec_at(&bucket->prefix_patterns, i);
     if (pattern && *pattern) {
-      turbo_vec_destroy(&(*pattern)->entries);
+      vec_destroy(&(*pattern)->entries);
       free(*pattern);
     }
   }
-  turbo_hash_map_destroy(&bucket->exact_index);
-  for (size_t i = 0u; i < turbo_vec_size(&bucket->exact_patterns); ++i) {
+  hash_map_destroy(&bucket->exact_index);
+  for (size_t i = 0u; i < vec_size(&bucket->exact_patterns); ++i) {
     flow_security_pattern_index_t **exact =
-        (flow_security_pattern_index_t **)turbo_vec_at(&bucket->exact_patterns, i);
+        (flow_security_pattern_index_t **)vec_at(&bucket->exact_patterns, i);
     if (exact && *exact) {
-      turbo_vec_destroy(&(*exact)->entries);
+      vec_destroy(&(*exact)->entries);
       free(*exact);
     }
   }
-  turbo_hash_map_destroy(&bucket->subject_index);
-  for (size_t i = 0u; i < turbo_vec_size(&bucket->subjects); ++i) {
+  hash_map_destroy(&bucket->subject_index);
+  for (size_t i = 0u; i < vec_size(&bucket->subjects); ++i) {
     flow_security_subject_index_t **subject =
-        (flow_security_subject_index_t **)turbo_vec_at(&bucket->subjects, i);
+        (flow_security_subject_index_t **)vec_at(&bucket->subjects, i);
     if (subject && *subject) {
       flow_security_adapter_leaf_destroy(&(*subject)->adapter);
       free(*subject);
     }
   }
-  turbo_vec_destroy(&bucket->prefix_patterns);
-  turbo_vec_destroy(&bucket->exact_patterns);
-  turbo_vec_destroy(&bucket->subjects);
+  vec_destroy(&bucket->prefix_patterns);
+  vec_destroy(&bucket->exact_patterns);
+  vec_destroy(&bucket->subjects);
   flow_security_adapter_leaf_destroy(&bucket->any_adapter);
   memset(bucket, 0, sizeof(*bucket));
 }
@@ -411,54 +411,48 @@ static int flow_security_rule_bucket_init(flow_security_rule_bucket_t *bucket) {
   if (bucket->initialized) return TURBO_OK;
   rc = flow_security_adapter_leaf_init(&bucket->any_adapter);
   if (rc != TURBO_OK) return rc;
-  rc = turbo_vec_init(&bucket->subjects, sizeof(flow_security_subject_index_t *));
+  rc = turbo_flow_stl_error(vec_init_bytes(&bucket->subjects, sizeof(flow_security_subject_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc != TURBO_OK) {
     flow_security_adapter_leaf_destroy(&bucket->any_adapter);
     return rc;
   }
-  rc = turbo_vec_init(&bucket->exact_patterns, sizeof(flow_security_pattern_index_t *));
+  rc = turbo_flow_stl_error(vec_init_bytes(&bucket->exact_patterns, sizeof(flow_security_pattern_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc != TURBO_OK) {
-    turbo_vec_destroy(&bucket->subjects);
+    vec_destroy(&bucket->subjects);
     flow_security_adapter_leaf_destroy(&bucket->any_adapter);
     return rc;
   }
-  rc = turbo_vec_init(&bucket->prefix_patterns, sizeof(flow_security_pattern_index_t *));
+  rc = turbo_flow_stl_error(vec_init_bytes(&bucket->prefix_patterns, sizeof(flow_security_pattern_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc != TURBO_OK) {
-    turbo_vec_destroy(&bucket->exact_patterns);
-    turbo_vec_destroy(&bucket->subjects);
+    vec_destroy(&bucket->exact_patterns);
+    vec_destroy(&bucket->subjects);
     flow_security_adapter_leaf_destroy(&bucket->any_adapter);
     return rc;
   }
-  rc = turbo_hash_map_init(&bucket->subject_index, sizeof(flow_security_subject_key_t),
-                           sizeof(flow_security_subject_index_t *), flow_security_subject_hash,
-                           flow_security_subject_equal, NULL);
+  rc = turbo_flow_stl_error(hash_map_init_bytes(&bucket->subject_index, sizeof(flow_security_subject_key_t), _Alignof(turbo_flow_max_align_t), sizeof(flow_security_subject_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX, ((flow_security_subject_hash) ? (flow_security_subject_hash) : hash_bytes), ((flow_security_subject_equal) ? (flow_security_subject_equal) : hash_key_equal), NULL));
   if (rc != TURBO_OK) {
-    turbo_vec_destroy(&bucket->prefix_patterns);
-    turbo_vec_destroy(&bucket->exact_patterns);
-    turbo_vec_destroy(&bucket->subjects);
+    vec_destroy(&bucket->prefix_patterns);
+    vec_destroy(&bucket->exact_patterns);
+    vec_destroy(&bucket->subjects);
     flow_security_adapter_leaf_destroy(&bucket->any_adapter);
     return rc;
   }
-  rc = turbo_hash_map_init(&bucket->exact_index, sizeof(flow_security_pattern_key_t),
-                           sizeof(flow_security_pattern_index_t *), flow_security_exact_hash,
-                           flow_security_exact_equal, NULL);
+  rc = turbo_flow_stl_error(hash_map_init_bytes(&bucket->exact_index, sizeof(flow_security_pattern_key_t), _Alignof(turbo_flow_max_align_t), sizeof(flow_security_pattern_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX, ((flow_security_exact_hash) ? (flow_security_exact_hash) : hash_bytes), ((flow_security_exact_equal) ? (flow_security_exact_equal) : hash_key_equal), NULL));
   if (rc != TURBO_OK) {
-    turbo_hash_map_destroy(&bucket->subject_index);
-    turbo_vec_destroy(&bucket->prefix_patterns);
-    turbo_vec_destroy(&bucket->exact_patterns);
-    turbo_vec_destroy(&bucket->subjects);
+    hash_map_destroy(&bucket->subject_index);
+    vec_destroy(&bucket->prefix_patterns);
+    vec_destroy(&bucket->exact_patterns);
+    vec_destroy(&bucket->subjects);
     flow_security_adapter_leaf_destroy(&bucket->any_adapter);
     return rc;
   }
-  rc = turbo_hash_map_init(&bucket->prefix_index, sizeof(flow_security_pattern_key_t),
-                           sizeof(flow_security_pattern_index_t *), flow_security_exact_hash,
-                           flow_security_exact_equal, NULL);
+  rc = turbo_flow_stl_error(hash_map_init_bytes(&bucket->prefix_index, sizeof(flow_security_pattern_key_t), _Alignof(turbo_flow_max_align_t), sizeof(flow_security_pattern_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX, ((flow_security_exact_hash) ? (flow_security_exact_hash) : hash_bytes), ((flow_security_exact_equal) ? (flow_security_exact_equal) : hash_key_equal), NULL));
   if (rc != TURBO_OK) {
-    turbo_hash_map_destroy(&bucket->exact_index);
-    turbo_hash_map_destroy(&bucket->subject_index);
-    turbo_vec_destroy(&bucket->prefix_patterns);
-    turbo_vec_destroy(&bucket->exact_patterns);
-    turbo_vec_destroy(&bucket->subjects);
+    hash_map_destroy(&bucket->exact_index);
+    hash_map_destroy(&bucket->subject_index);
+    vec_destroy(&bucket->prefix_patterns);
+    vec_destroy(&bucket->exact_patterns);
+    vec_destroy(&bucket->subjects);
     flow_security_adapter_leaf_destroy(&bucket->any_adapter);
     return rc;
   }
@@ -466,7 +460,7 @@ static int flow_security_rule_bucket_init(flow_security_rule_bucket_t *bucket) {
   return TURBO_OK;
 }
 
-static int flow_security_rule_bucket_insert_pattern(turbo_hash_map_t *index, turbo_vec_t *patterns,
+static int flow_security_rule_bucket_insert_pattern(hash_map_t *index, vec_t *patterns,
                                                     uint32_t *subject_mask,
                                                     const turbo_flow_security_rule_t *rule,
                                                     size_t rule_index) {
@@ -478,23 +472,23 @@ static int flow_security_rule_bucket_insert_pattern(turbo_hash_map_t *index, tur
   key.subject_kind = rule->subject_kind;
   key.subject = vstr_from_buf(rule->subject, strlen(rule->subject));
   key.pattern = vstr_from_buf(rule->pattern, strlen(rule->pattern));
-  found = (flow_security_pattern_index_t **)turbo_hash_map_get(index, &key);
-  if (found && *found) return turbo_vec_push(&(*found)->entries, &rule_index);
+  found = (flow_security_pattern_index_t **)hash_map_get(index, &key);
+  if (found && *found) return turbo_flow_stl_error(vec_push(&(*found)->entries, &rule_index));
   pattern = (flow_security_pattern_index_t *)calloc(1u, sizeof(*pattern));
   if (!pattern) return TURBO_ENOMEM;
   pattern->key = key;
-  rc = turbo_vec_init(&pattern->entries, sizeof(size_t));
-  if (rc == TURBO_OK) rc = turbo_vec_push(&pattern->entries, &rule_index);
-  if (rc == TURBO_OK) rc = turbo_vec_push(patterns, &pattern);
-  if (rc == TURBO_OK) rc = turbo_hash_map_put(index, &pattern->key, &pattern);
+  rc = turbo_flow_stl_error(vec_init_bytes(&pattern->entries, sizeof(size_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
+  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(&pattern->entries, &rule_index));
+  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(patterns, &pattern));
+  if (rc == TURBO_OK) rc = turbo_flow_stl_error(hash_map_put(index, &pattern->key, &pattern));
   if (rc == TURBO_OK) *subject_mask |= UINT32_C(1) << rule->subject_kind;
   if (rc != TURBO_OK) {
-    if (turbo_vec_size(patterns) > 0u) {
+    if (vec_size(patterns) > 0u) {
       flow_security_pattern_index_t **last =
-          (flow_security_pattern_index_t **)turbo_vec_at(patterns, turbo_vec_size(patterns) - 1u);
-      if (last && *last == pattern) (void)turbo_vec_pop(patterns, NULL);
+          (flow_security_pattern_index_t **)vec_at(patterns, vec_size(patterns) - 1u);
+      if (last && *last == pattern) (void)turbo_flow_stl_error(vec_pop(patterns, NULL));
     }
-    turbo_vec_destroy(&pattern->entries);
+    vec_destroy(&pattern->entries);
     free(pattern);
   }
   return rc;
@@ -521,23 +515,23 @@ static int flow_security_rule_bucket_insert(flow_security_rule_bucket_t *bucket,
   }
   bucket->candidate_subject_mask |= UINT32_C(1) << rule->subject_kind;
   if (rule->subject_kind == TURBO_FLOW_SECURITY_SUBJECT_ANY)
-    return turbo_vec_push(&bucket->any_adapter.entries, &rule_index);
+    return turbo_flow_stl_error(vec_push(&bucket->any_adapter.entries, &rule_index));
   key.kind = rule->subject_kind;
   key.subject = vstr_from_buf(rule->subject, strlen(rule->subject));
-  found = (flow_security_subject_index_t **)turbo_hash_map_get(&bucket->subject_index, &key);
-  if (found && *found) return turbo_vec_push(&(*found)->adapter.entries, &rule_index);
+  found = (flow_security_subject_index_t **)hash_map_get(&bucket->subject_index, &key);
+  if (found && *found) return turbo_flow_stl_error(vec_push(&(*found)->adapter.entries, &rule_index));
   subject = (flow_security_subject_index_t *)calloc(1u, sizeof(*subject));
   if (!subject) return TURBO_ENOMEM;
   subject->key = key;
   rc = flow_security_adapter_leaf_init(&subject->adapter);
-  if (rc == TURBO_OK) rc = turbo_vec_push(&subject->adapter.entries, &rule_index);
-  if (rc == TURBO_OK) rc = turbo_vec_push(&bucket->subjects, &subject);
-  if (rc == TURBO_OK) rc = turbo_hash_map_put(&bucket->subject_index, &subject->key, &subject);
+  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(&subject->adapter.entries, &rule_index));
+  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(&bucket->subjects, &subject));
+  if (rc == TURBO_OK) rc = turbo_flow_stl_error(hash_map_put(&bucket->subject_index, &subject->key, &subject));
   if (rc != TURBO_OK) {
-    if (turbo_vec_size(&bucket->subjects) > 0u) {
-      flow_security_subject_index_t **last = (flow_security_subject_index_t **)turbo_vec_at(
-          &bucket->subjects, turbo_vec_size(&bucket->subjects) - 1u);
-      if (last && *last == subject) (void)turbo_vec_pop(&bucket->subjects, NULL);
+    if (vec_size(&bucket->subjects) > 0u) {
+      flow_security_subject_index_t **last = (flow_security_subject_index_t **)vec_at(
+          &bucket->subjects, vec_size(&bucket->subjects) - 1u);
+      if (last && *last == subject) (void)turbo_flow_stl_error(vec_pop(&bucket->subjects, NULL));
     }
     flow_security_adapter_leaf_destroy(&subject->adapter);
     free(subject);
@@ -554,12 +548,12 @@ flow_security_rule_bucket_subject(flow_security_rule_bucket_t *bucket,
   if ((bucket->candidate_subject_mask & (UINT32_C(1) << kind)) == 0u) return NULL;
   key.kind = kind;
   key.subject = vstr_from_buf(subject, strlen(subject));
-  found = (flow_security_subject_index_t **)turbo_hash_map_get(&bucket->subject_index, &key);
+  found = (flow_security_subject_index_t **)hash_map_get(&bucket->subject_index, &key);
   return found && *found ? &(*found)->adapter : NULL;
 }
 
-static const turbo_vec_t *
-flow_security_rule_bucket_pattern(flow_security_rule_bucket_t *bucket, turbo_hash_map_t *index,
+static const vec_t *
+flow_security_rule_bucket_pattern(flow_security_rule_bucket_t *bucket, hash_map_t *index,
                                   uint32_t subject_mask,
                                   turbo_flow_security_subject_kind_t subject_kind,
                                   const char *subject, const char *pattern, size_t pattern_size) {
@@ -571,25 +565,25 @@ flow_security_rule_bucket_pattern(flow_security_rule_bucket_t *bucket, turbo_has
   key.subject_kind = subject_kind;
   key.subject = vstr_from_buf(subject, strlen(subject));
   key.pattern = vstr_from_buf(pattern, pattern_size);
-  found = (flow_security_pattern_index_t **)turbo_hash_map_get(index, &key);
+  found = (flow_security_pattern_index_t **)hash_map_get(index, &key);
   return found && *found ? &(*found)->entries : NULL;
 }
 
 static int flow_security_adapter_leaf_compile(flow_security_adapter_leaf_t *leaf,
-                                              const turbo_vec_t *rules,
+                                              const vec_t *rules,
                                               const turbo_flow_security_matcher_t *matcher) {
   turbo_flow_security_matcher_leaf_t input = TURBO_FLOW_SECURITY_MATCHER_LEAF_INIT;
   void *compiled = NULL;
   int rc;
   if (!leaf || !rules) return TURBO_EINVAL;
-  if (turbo_vec_empty(&leaf->entries)) return TURBO_OK;
+  if (vec_empty(&leaf->entries)) return TURBO_OK;
   if (!matcher || !matcher->compile_leaf || !matcher->evaluate_leaf || !matcher->destroy_leaf)
     return TURBO_EINVAL;
   if (leaf->compiled) return TURBO_EALREADY;
-  input.rules = (const turbo_flow_security_rule_t *)turbo_vec_data_const(rules);
-  input.rule_count = turbo_vec_size(rules);
-  input.candidate_rule_indices = (const size_t *)turbo_vec_data_const(&leaf->entries);
-  input.candidate_count = turbo_vec_size(&leaf->entries);
+  input.rules = (const turbo_flow_security_rule_t *)vec_data_const(rules);
+  input.rule_count = vec_size(rules);
+  input.candidate_rule_indices = (const size_t *)vec_data_const(&leaf->entries);
+  input.candidate_count = vec_size(&leaf->entries);
   if (!input.rules || !input.candidate_rule_indices) return TURBO_EPROTO;
   rc = matcher->compile_leaf(matcher->ctx, &input, &compiled);
   if (rc != TURBO_OK || !compiled) {
@@ -603,15 +597,15 @@ static int flow_security_adapter_leaf_compile(flow_security_adapter_leaf_t *leaf
 }
 
 static int flow_security_rule_bucket_compile(flow_security_rule_bucket_t *bucket,
-                                             const turbo_vec_t *rules,
+                                             const vec_t *rules,
                                              const turbo_flow_security_matcher_t *matcher) {
   int rc;
   if (!bucket || !bucket->initialized) return TURBO_OK;
   rc = flow_security_adapter_leaf_compile(&bucket->any_adapter, rules, matcher);
   if (rc != TURBO_OK) return rc;
-  for (size_t i = 0u; i < turbo_vec_size(&bucket->subjects); ++i) {
+  for (size_t i = 0u; i < vec_size(&bucket->subjects); ++i) {
     flow_security_subject_index_t **subject =
-        (flow_security_subject_index_t **)turbo_vec_at(&bucket->subjects, i);
+        (flow_security_subject_index_t **)vec_at(&bucket->subjects, i);
     if (!subject || !*subject) return TURBO_EPROTO;
     rc = flow_security_adapter_leaf_compile(&(*subject)->adapter, rules, matcher);
     if (rc != TURBO_OK) return rc;
@@ -636,7 +630,7 @@ static int flow_security_snapshot_root(flow_security_policy_snapshot_t *snapshot
   if (!snapshot || !domain_id || !root_out) return TURBO_EINVAL;
   *root_out = NULL;
   key = vstr_from_buf(domain_id, strlen(domain_id));
-  found = (flow_security_root_index_t **)turbo_hash_map_get(&snapshot->root_index, &key);
+  found = (flow_security_root_index_t **)hash_map_get(&snapshot->root_index, &key);
   if (found && *found) {
     *root_out = *found;
     return TURBO_OK;
@@ -644,14 +638,14 @@ static int flow_security_snapshot_root(flow_security_policy_snapshot_t *snapshot
   root = (flow_security_root_index_t *)calloc(1u, sizeof(*root));
   if (!root) return TURBO_ENOMEM;
   memcpy(root->domain_id, domain_id, strlen(domain_id) + 1u);
-  if (turbo_vec_push(&snapshot->roots, &root) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&snapshot->roots, &root)) != TURBO_OK) {
     flow_security_root_index_destroy(root);
     return TURBO_ENOMEM;
   }
   key = vstr_from_buf(root->domain_id, strlen(root->domain_id));
-  if (turbo_hash_map_put(&snapshot->root_index, &key, &root) != TURBO_OK) {
-    size_t last = turbo_vec_size(&snapshot->roots) - 1u;
-    (void)turbo_vec_swap_remove(&snapshot->roots, last, NULL);
+  if (turbo_flow_stl_error(hash_map_put(&snapshot->root_index, &key, &root)) != TURBO_OK) {
+    size_t last = vec_size(&snapshot->roots) - 1u;
+    (void)turbo_flow_stl_error(vec_swap_remove(&snapshot->roots, last, NULL));
     flow_security_root_index_destroy(root);
     return TURBO_ENOMEM;
   }
@@ -662,14 +656,14 @@ static int flow_security_snapshot_root(flow_security_policy_snapshot_t *snapshot
 static void flow_security_policy_snapshot_release(flow_security_policy_snapshot_t *snapshot) {
   if (!snapshot) return;
   if (atomic_fetch_sub_explicit(&snapshot->references, 1u, memory_order_acq_rel) == 1u) {
-    turbo_hash_map_destroy(&snapshot->root_index);
-    for (size_t i = 0u; i < turbo_vec_size(&snapshot->roots); ++i) {
+    hash_map_destroy(&snapshot->root_index);
+    for (size_t i = 0u; i < vec_size(&snapshot->roots); ++i) {
       flow_security_root_index_t **root =
-          (flow_security_root_index_t **)turbo_vec_at(&snapshot->roots, i);
+          (flow_security_root_index_t **)vec_at(&snapshot->roots, i);
       if (root) flow_security_root_index_destroy(*root);
     }
-    turbo_vec_destroy(&snapshot->roots);
-    turbo_vec_destroy(&snapshot->rules);
+    vec_destroy(&snapshot->roots);
+    vec_destroy(&snapshot->rules);
     free(snapshot);
   }
 }
@@ -690,33 +684,31 @@ static int flow_security_policy_snapshot_create(uint64_t policy_version, uint64_
   snapshot = (flow_security_policy_snapshot_t *)calloc(1u, sizeof(*snapshot));
   if (!snapshot) return TURBO_ENOMEM;
   atomic_init(&snapshot->references, 1u);
-  rc = turbo_vec_init(&snapshot->rules, sizeof(turbo_flow_security_rule_t));
+  rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->rules, sizeof(turbo_flow_security_rule_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc != TURBO_OK) {
     free(snapshot);
     return rc;
   }
-  rc = turbo_vec_init(&snapshot->roots, sizeof(flow_security_root_index_t *));
+  rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->roots, sizeof(flow_security_root_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
   if (rc != TURBO_OK) {
-    turbo_vec_destroy(&snapshot->rules);
+    vec_destroy(&snapshot->rules);
     free(snapshot);
     return rc;
   }
-  rc = turbo_hash_map_init(&snapshot->root_index, sizeof(vstr),
-                           sizeof(flow_security_root_index_t *), flow_security_root_hash,
-                           flow_security_root_equal, NULL);
+  rc = turbo_flow_stl_error(hash_map_init_bytes(&snapshot->root_index, sizeof(vstr), _Alignof(turbo_flow_max_align_t), sizeof(flow_security_root_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX, ((flow_security_root_hash) ? (flow_security_root_hash) : hash_bytes), ((flow_security_root_equal) ? (flow_security_root_equal) : hash_key_equal), NULL));
   if (rc != TURBO_OK) {
-    turbo_vec_destroy(&snapshot->roots);
-    turbo_vec_destroy(&snapshot->rules);
+    vec_destroy(&snapshot->roots);
+    vec_destroy(&snapshot->rules);
     free(snapshot);
     return rc;
   }
-  rc = turbo_vec_reserve(&snapshot->rules, rule_count);
+  rc = turbo_flow_stl_error(vec_reserve(&snapshot->rules, rule_count));
   for (size_t i = 0u; rc == TURBO_OK && i < rule_count; ++i) {
     const turbo_flow_security_rule_t *compiled_rule;
     flow_security_root_index_t *root = NULL;
-    rc = turbo_vec_push(&snapshot->rules, &rules[i]);
+    rc = turbo_flow_stl_error(vec_push(&snapshot->rules, &rules[i]));
     if (rc != TURBO_OK) break;
-    compiled_rule = (const turbo_flow_security_rule_t *)turbo_vec_at_const(&snapshot->rules, i);
+    compiled_rule = (const turbo_flow_security_rule_t *)vec_at_const(&snapshot->rules, i);
     if (!compiled_rule) {
       rc = TURBO_EPROTO;
       break;
@@ -730,10 +722,10 @@ static int flow_security_policy_snapshot_create(uint64_t policy_version, uint64_
       if (rc != TURBO_OK) break;
     }
   }
-  for (size_t root_index = 0u; rc == TURBO_OK && root_index < turbo_vec_size(&snapshot->roots);
+  for (size_t root_index = 0u; rc == TURBO_OK && root_index < vec_size(&snapshot->roots);
        ++root_index) {
     flow_security_root_index_t **root =
-        (flow_security_root_index_t **)turbo_vec_at(&snapshot->roots, root_index);
+        (flow_security_root_index_t **)vec_at(&snapshot->roots, root_index);
     if (!root || !*root) {
       rc = TURBO_EPROTO;
       break;
@@ -972,14 +964,14 @@ static size_t flow_security_action_index(uint32_t action) {
  */
 static int flow_security_evaluate_entries(flow_security_policy_snapshot_t *snapshot,
                                           const turbo_flow_security_request_t *request,
-                                          const turbo_vec_t *entries, size_t *deny_rule,
+                                          const vec_t *entries, size_t *deny_rule,
                                           size_t *allow_rule) {
   if (!entries) return TURBO_OK;
-  for (size_t position = 0u; position < turbo_vec_size(entries); ++position) {
-    const size_t *rule_index = (const size_t *)turbo_vec_at_const(entries, position);
+  for (size_t position = 0u; position < vec_size(entries); ++position) {
+    const size_t *rule_index = (const size_t *)vec_at_const(entries, position);
     const turbo_flow_security_rule_t *rule =
         rule_index
-            ? (const turbo_flow_security_rule_t *)turbo_vec_at_const(&snapshot->rules, *rule_index)
+            ? (const turbo_flow_security_rule_t *)vec_at_const(&snapshot->rules, *rule_index)
             : NULL;
     int matched = 0;
     int rc;
@@ -1009,12 +1001,12 @@ static int flow_security_adapter_emit(void *ctx, size_t candidate_position) {
   const size_t *rule_index;
   const turbo_flow_security_rule_t *rule;
   if (!emit || !emit->snapshot || !emit->leaf || !emit->deny_rule || !emit->allow_rule ||
-      emit->status != TURBO_OK || candidate_position >= turbo_vec_size(&emit->leaf->entries)) {
+      emit->status != TURBO_OK || candidate_position >= vec_size(&emit->leaf->entries)) {
     if (emit) emit->status = TURBO_EPROTO;
     return TURBO_EPROTO;
   }
-  rule_index = (const size_t *)turbo_vec_at_const(&emit->leaf->entries, candidate_position);
-  rule = rule_index ? (const turbo_flow_security_rule_t *)turbo_vec_at_const(&emit->snapshot->rules,
+  rule_index = (const size_t *)vec_at_const(&emit->leaf->entries, candidate_position);
+  rule = rule_index ? (const turbo_flow_security_rule_t *)vec_at_const(&emit->snapshot->rules,
                                                                              *rule_index)
                     : NULL;
   if (!rule || rule->match_kind != TURBO_FLOW_SECURITY_MATCH_ADAPTER) {
@@ -1037,7 +1029,7 @@ static int flow_security_evaluate_adapter_leaf(const turbo_flow_security_matcher
                                                size_t *deny_rule, size_t *allow_rule) {
   flow_security_adapter_emit_context_t emit;
   int rc;
-  if (!leaf || turbo_vec_empty(&leaf->entries)) return TURBO_OK;
+  if (!leaf || vec_empty(&leaf->entries)) return TURBO_OK;
   if (!matcher || !matcher->evaluate_leaf || !leaf->compiled) return TURBO_EPROTO;
   emit.snapshot = snapshot;
   emit.leaf = leaf;
@@ -1056,7 +1048,7 @@ static int flow_security_evaluate_subject(turbo_flow_security_realm_t *realm,
                                           turbo_flow_security_subject_kind_t subject_kind,
                                           const char *subject, size_t resource_size,
                                           size_t *deny_rule, size_t *allow_rule) {
-  const turbo_vec_t *candidates;
+  const vec_t *candidates;
   flow_security_adapter_leaf_t *adapter;
   int rc;
   candidates =
@@ -1138,7 +1130,7 @@ static int flow_security_realm_evaluate_validated(turbo_flow_security_realm_t *r
   {
     vstr root_key = vstr_from_buf(request->domain_id, strlen(request->domain_id));
     flow_security_root_index_t **root =
-        (flow_security_root_index_t **)turbo_hash_map_get(&snapshot->root_index, &root_key);
+        (flow_security_root_index_t **)hash_map_get(&snapshot->root_index, &root_key);
     flow_security_rule_bucket_t *bucket =
         root && *root ? &(*root)->buckets[flow_security_action_index(request->action)]
                                          [request->resource_type - 1u]
@@ -1302,7 +1294,7 @@ static int flow_security_resource_document(void *ctx,
                "\"evaluations\":\"%llu\",\"allowed\":\"%llu\",\"denied\":\"%llu\","
                "\"failures\":\"%llu\",\"last_status\":%d}",
                (unsigned long long)(snapshot ? snapshot->policy_version : 0u),
-               (unsigned long long)(snapshot ? turbo_vec_size(&snapshot->rules) : 0u),
+               (unsigned long long)(snapshot ? vec_size(&snapshot->rules) : 0u),
                (unsigned long long)atomic_load_explicit(&realm->evaluations, memory_order_relaxed),
                (unsigned long long)atomic_load_explicit(&realm->allowed, memory_order_relaxed),
                (unsigned long long)atomic_load_explicit(&realm->denied, memory_order_relaxed),

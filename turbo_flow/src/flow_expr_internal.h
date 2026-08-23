@@ -2,7 +2,7 @@
 #define TURBO_FLOW_EXPR_INTERNAL_H
 
 #include "turbo_flow_expr.h"
-#include "turbo_flow_stl_adapter.h"
+#include "turbo_flow_stl_error_internal.h"
 
 #include <stdint.h>
 
@@ -92,7 +92,7 @@ typedef struct flow_expr_resolver_s {
 } flow_expr_resolver_t;
 
 typedef struct flow_expr_ast_s {
-  turbo_vec_t nodes;
+  vec_t nodes;
   uint32_t root;
 } flow_expr_ast_t;
 

@@ -1,7 +1,7 @@
 #include "turbo_flow_email.h"
 
 #include "turbo_buffer.h"
-#include "turbo_flow_stl_adapter.h"
+#include "turbo_flow_stl_error_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -31,7 +31,7 @@ typedef struct flow_email_mime_header_s {
 } flow_email_mime_header_t;
 
 struct turbo_flow_email_mime_entity_s {
-  turbo_vec_t headers;
+  vec_t headers;
   tstr body;
   tstr content_type;
   tstr charset;
@@ -42,7 +42,7 @@ struct turbo_flow_email_mime_entity_s {
 
 struct turbo_flow_email_mime_message_s {
   turbo_flow_email_mime_entity_t root;
-  turbo_vec_t parts;
+  vec_t parts;
 };
 
 typedef struct flow_email_mime_extract_s {
@@ -93,15 +93,15 @@ static vstr flow_email_mime_empty_view(void) { return vstr_from_buf("", 0); }
 static void flow_email_mime_entity_cleanup(turbo_flow_email_mime_entity_t *entity) {
   size_t i;
   if (!entity) return;
-  for (i = 0; i < turbo_vec_size(&entity->headers); ++i) {
+  for (i = 0; i < vec_size(&entity->headers); ++i) {
     flow_email_mime_header_t *header =
-        (flow_email_mime_header_t *)turbo_vec_at(&entity->headers, i);
+        (flow_email_mime_header_t *)vec_at(&entity->headers, i);
     if (header) {
       tstr_freep(&header->name);
       tstr_freep(&header->value);
     }
   }
-  turbo_vec_destroy(&entity->headers);
+  vec_destroy(&entity->headers);
   tstr_freep(&entity->body);
   tstr_freep(&entity->content_type);
   tstr_freep(&entity->charset);
@@ -114,7 +114,7 @@ static int flow_email_mime_entity_init(turbo_flow_email_mime_entity_t *entity) {
   memset(entity, 0, sizeof(*entity));
   entity->encoding = MIME_ENCODING_7BIT;
   entity->disposition = MIME_DISPOSITION_UNKNOWN;
-  return turbo_vec_init(&entity->headers, sizeof(flow_email_mime_header_t));
+  return turbo_flow_stl_error(vec_init_bytes(&entity->headers, sizeof(flow_email_mime_header_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
 }
 
 static void flow_email_mime_message_destroy(void *ptr, void *ctx) {
@@ -123,11 +123,11 @@ static void flow_email_mime_message_destroy(void *ptr, void *ctx) {
   (void)ctx;
   if (!message) return;
   flow_email_mime_entity_cleanup(&message->root);
-  for (i = 0; i < turbo_vec_size(&message->parts); ++i) {
+  for (i = 0; i < vec_size(&message->parts); ++i) {
     flow_email_mime_entity_cleanup(
-        (turbo_flow_email_mime_entity_t *)turbo_vec_at(&message->parts, i));
+        (turbo_flow_email_mime_entity_t *)vec_at(&message->parts, i));
   }
-  turbo_vec_destroy(&message->parts);
+  vec_destroy(&message->parts);
   free(message);
 }
 
@@ -136,7 +136,7 @@ static turbo_flow_email_mime_message_t *flow_email_mime_message_create(void) {
       (turbo_flow_email_mime_message_t *)calloc(1, sizeof(*message));
   if (!message) return NULL;
   if (flow_email_mime_entity_init(&message->root) != TURBO_OK ||
-      turbo_vec_init(&message->parts, sizeof(turbo_flow_email_mime_entity_t)) != TURBO_OK) {
+      turbo_flow_stl_error(vec_init_bytes(&message->parts, sizeof(turbo_flow_email_mime_entity_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
     flow_email_mime_message_destroy(message, NULL);
     return NULL;
   }
@@ -147,7 +147,7 @@ static turbo_flow_email_mime_entity_t *
 flow_email_mime_current_entity(flow_email_mime_build_t *build) {
   if (!build || !build->message) return NULL;
   if (build->current_part == SIZE_MAX) return &build->message->root;
-  return (turbo_flow_email_mime_entity_t *)turbo_vec_at(&build->message->parts,
+  return (turbo_flow_email_mime_entity_t *)vec_at(&build->message->parts,
                                                         build->current_part);
 }
 
@@ -236,7 +236,7 @@ static int flow_email_mime_on_header_value(mime_parser_t *parser, const char *da
     return -1;
   }
   rc = flow_email_mime_apply_header(parser, entity, &header);
-  if (rc == TURBO_OK) rc = turbo_vec_push(&entity->headers, &header);
+  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(&entity->headers, &header));
   if (rc != TURBO_OK) {
     tstr_freep(&header.name);
     tstr_freep(&header.value);
@@ -252,18 +252,18 @@ static int flow_email_mime_on_part_begin(mime_parser_t *parser) {
   turbo_flow_email_mime_entity_t entity;
   int rc;
   if (!build || build->status != TURBO_OK) return -1;
-  if (turbo_vec_size(&build->message->parts) >= build->max_parts) {
+  if (vec_size(&build->message->parts) >= build->max_parts) {
     build->status = TURBO_EFBIG;
     return -1;
   }
   rc = flow_email_mime_entity_init(&entity);
-  if (rc == TURBO_OK) rc = turbo_vec_push(&build->message->parts, &entity);
+  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(&build->message->parts, &entity));
   if (rc != TURBO_OK) {
     flow_email_mime_entity_cleanup(&entity);
     build->status = rc;
     return -1;
   }
-  build->current_part = turbo_vec_size(&build->message->parts) - 1u;
+  build->current_part = vec_size(&build->message->parts) - 1u;
   return 0;
 }
 
@@ -333,9 +333,9 @@ static int flow_email_mime_decode_message(turbo_flow_email_mime_message_t *messa
   int rc = flow_email_mime_decode_entity(&message->root, adapter->pool_size,
                                          adapter->max_decoded_bytes, &decoded_total);
   if (rc != TURBO_OK) return rc;
-  for (i = 0; i < turbo_vec_size(&message->parts); ++i) {
+  for (i = 0; i < vec_size(&message->parts); ++i) {
     rc = flow_email_mime_decode_entity(
-        (turbo_flow_email_mime_entity_t *)turbo_vec_at(&message->parts, i), adapter->pool_size,
+        (turbo_flow_email_mime_entity_t *)vec_at(&message->parts, i), adapter->pool_size,
         adapter->max_decoded_bytes, &decoded_total);
     if (rc != TURBO_OK) return rc;
   }
@@ -480,31 +480,31 @@ turbo_flow_email_mime_root(const turbo_flow_email_mime_message_t *message) {
 }
 
 size_t turbo_flow_email_mime_part_count(const turbo_flow_email_mime_message_t *message) {
-  return message ? turbo_vec_size(&message->parts) : 0u;
+  return message ? vec_size(&message->parts) : 0u;
 }
 
 const turbo_flow_email_mime_entity_t *
 turbo_flow_email_mime_part_at(const turbo_flow_email_mime_message_t *message, size_t index) {
   return message
-             ? (const turbo_flow_email_mime_entity_t *)turbo_vec_at_const(&message->parts, index)
+             ? (const turbo_flow_email_mime_entity_t *)vec_at_const(&message->parts, index)
              : NULL;
 }
 
 size_t turbo_flow_email_mime_entity_header_count(const turbo_flow_email_mime_entity_t *entity) {
-  return entity ? turbo_vec_size(&entity->headers) : 0u;
+  return entity ? vec_size(&entity->headers) : 0u;
 }
 
 vstr turbo_flow_email_mime_entity_header_name(const turbo_flow_email_mime_entity_t *entity,
                                                 size_t index) {
   const flow_email_mime_header_t *header =
-      entity ? (const flow_email_mime_header_t *)turbo_vec_at_const(&entity->headers, index) : NULL;
+      entity ? (const flow_email_mime_header_t *)vec_at_const(&entity->headers, index) : NULL;
   return header && header->name ? tstr_to_v(header->name) : flow_email_mime_empty_view();
 }
 
 vstr turbo_flow_email_mime_entity_header_value(const turbo_flow_email_mime_entity_t *entity,
                                                  size_t index) {
   const flow_email_mime_header_t *header =
-      entity ? (const flow_email_mime_header_t *)turbo_vec_at_const(&entity->headers, index) : NULL;
+      entity ? (const flow_email_mime_header_t *)vec_at_const(&entity->headers, index) : NULL;
   return header && header->value ? tstr_to_v(header->value) : flow_email_mime_empty_view();
 }
 

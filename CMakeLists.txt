@@ -48,7 +48,6 @@ include(CmakeUtils)
 
 find_package(TurboUtils REQUIRED PATHS ${TURBO_UTILS_ROOT})
 find_package(TurboParser CONFIG REQUIRED PATHS "${TURBOPARSER_ROOT}")
-find_package(PostgreSQL REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 
 # TurboNet's exported targets reference these dependency targets.
@@ -110,7 +109,6 @@ include(FindTools)
 add_subdirectory(vendor)
 
 add_subdirectory(turbo_flow)
-  add_subdirectory(flowstore)
   add_subdirectory(security)
   add_subdirectory(codec)
   add_subdirectory(observe)
@@ -138,9 +136,6 @@ foreach(
      tf_protocol_jtt808
      tf_protocol_business_ocpp201_core
      tf_mqtt_sink
-     tf_storage_backend
-     tf_flow_store
-     tf_local_storage
      tf_security_sqlite
      tf_codec
      tf_observe
@@ -151,9 +146,6 @@ foreach(
      tf_http
      tf_rpc
      tf_s3
-     tf_redis
-     tf_pgsql
-     tf_sqlite_storage
      tf_email)
   if(TARGET ${target_name})
     list(APPEND TURBO_FLOW_EXPORT_TARGETS ${target_name})

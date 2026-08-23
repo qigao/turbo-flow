@@ -50,7 +50,7 @@ int flow_pool_record_add(turbo_flow_t *flow, turbo_flow_pool_kind_t kind, uint32
   flow_pool_record_t record;
   int rc;
 
-  if (!flow || !index || stage_index >= turbo_vec_size(&flow->stages) || parallelism == 0u) {
+  if (!flow || !index || stage_index >= vec_size(&flow->stages) || parallelism == 0u) {
     return TURBO_EINVAL;
   }
   memset(&record, 0, sizeof(record));
@@ -70,9 +70,9 @@ int flow_pool_record_add(turbo_flow_t *flow, turbo_flow_pool_kind_t kind, uint32
   atomic_init(&record.rejected, 0u);
   atomic_init(&record.queued, 0u);
   atomic_init(&record.active, 0u);
-  rc = turbo_vec_push(&flow->pool_records, &record);
+  rc = turbo_flow_stl_error(vec_push(&flow->pool_records, &record));
   if (rc != TURBO_OK) return rc;
-  *index = turbo_vec_size(&flow->pool_records) - 1u;
+  *index = vec_size(&flow->pool_records) - 1u;
   return TURBO_OK;
 }
 
@@ -82,16 +82,16 @@ int flow_runtime_generation_can_advance(const turbo_flow_t *flow) {
 
 void flow_runtime_generation_commit(turbo_flow_t *flow) {
   if (!flow || flow->runtime_generation == UINT64_MAX) return;
-  for (size_t index = 0u; index < turbo_vec_size(&flow->executor_plans); ++index) {
+  for (size_t index = 0u; index < vec_size(&flow->executor_plans); ++index) {
     const flow_executor_plan_t *executor =
-        (const flow_executor_plan_t *)turbo_vec_at_const(&flow->executor_plans, index);
+        (const flow_executor_plan_t *)vec_at_const(&flow->executor_plans, index);
     if (executor && executor->keyed_store) flow_keyed_state_store_reset(executor->keyed_store);
   }
   ++flow->runtime_generation;
 }
 
 flow_pool_record_t *flow_pool_record_at(turbo_flow_t *flow, size_t index) {
-  return flow ? (flow_pool_record_t *)turbo_vec_at(&flow->pool_records, index) : NULL;
+  return flow ? (flow_pool_record_t *)vec_at(&flow->pool_records, index) : NULL;
 }
 
 void flow_pool_record_set_state(flow_pool_record_t *record, turbo_flow_pool_state_t state) {
@@ -148,7 +148,7 @@ void flow_pool_record_canceled_unqueued(flow_pool_record_t *record) {
 }
 
 size_t turbo_flow_pool_count(const turbo_flow_t *flow) {
-  return flow ? turbo_vec_size(&flow->pool_records) : 0u;
+  return flow ? vec_size(&flow->pool_records) : 0u;
 }
 
 int turbo_flow_pool_snapshot_at(const turbo_flow_t *flow, size_t index,
@@ -157,9 +157,9 @@ int turbo_flow_pool_snapshot_at(const turbo_flow_t *flow, size_t index,
   const flow_stage_plan_impl_t *stage;
 
   if (!flow || !out) return TURBO_EINVAL;
-  record = (const flow_pool_record_t *)turbo_vec_at_const(&flow->pool_records, index);
+  record = (const flow_pool_record_t *)vec_at_const(&flow->pool_records, index);
   if (!record) return TURBO_EINVAL;
-  stage = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, record->stage_index);
+  stage = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, record->stage_index);
   if (!stage) return TURBO_EINVAL;
 
   memset(out, 0, sizeof(*out));
@@ -211,7 +211,7 @@ int turbo_flow_pool_resource_status_at(const turbo_flow_t *flow, size_t index,
   int rc;
 
   if (!flow || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
-  record = (const flow_pool_record_t *)turbo_vec_at_const(&flow->pool_records, index);
+  record = (const flow_pool_record_t *)vec_at_const(&flow->pool_records, index);
   if (!record) return TURBO_ENOENT;
   rc = turbo_flow_pool_snapshot_at(flow, index, &status.snapshot);
   if (rc != TURBO_OK) return rc;

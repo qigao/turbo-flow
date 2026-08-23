@@ -137,9 +137,9 @@ static int flow_coro_adapter_reset_lane(flow_coro_adapter_t *adapter, uint32_t l
 void flow_stop_runtime_executor_adapters(turbo_flow_t *flow) {
   if (!flow) return;
 
-  for (size_t i = 0; i < turbo_vec_size(&flow->threadpool_adapters); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->threadpool_adapters); ++i) {
     flow_threadpool_adapter_t *adapter =
-        (flow_threadpool_adapter_t *)turbo_vec_at(&flow->threadpool_adapters, i);
+        (flow_threadpool_adapter_t *)vec_at(&flow->threadpool_adapters, i);
     flow_pool_record_t *record = flow_pool_record_at(flow, adapter->pool_record_index);
     flow_pool_record_set_state(record, TURBO_FLOW_POOL_DRAINING);
     if (adapter->pool) {
@@ -148,16 +148,16 @@ void flow_stop_runtime_executor_adapters(turbo_flow_t *flow) {
     }
     flow_pool_record_set_state(record, TURBO_FLOW_POOL_STOPPED);
   }
-  turbo_vec_clear(&flow->threadpool_adapters);
+  turbo_flow_stl_error(vec_clear(&flow->threadpool_adapters));
 
-  for (size_t i = 0; i < turbo_vec_size(&flow->coro_adapters); ++i) {
-    flow_coro_adapter_t *adapter = (flow_coro_adapter_t *)turbo_vec_at(&flow->coro_adapters, i);
+  for (size_t i = 0; i < vec_size(&flow->coro_adapters); ++i) {
+    flow_coro_adapter_t *adapter = (flow_coro_adapter_t *)vec_at(&flow->coro_adapters, i);
     flow_pool_record_t *record = flow_pool_record_at(flow, adapter->pool_record_index);
     flow_pool_record_set_state(record, TURBO_FLOW_POOL_DRAINING);
     flow_coro_adapter_destroy(adapter);
     flow_pool_record_set_state(record, TURBO_FLOW_POOL_STOPPED);
   }
-  turbo_vec_clear(&flow->coro_adapters);
+  turbo_flow_stl_error(vec_clear(&flow->coro_adapters));
 }
 
 void flow_stop_executor_adapters(turbo_flow_t *flow) {
@@ -170,9 +170,9 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
 
   flow_stop_runtime_executor_adapters(flow);
 
-  for (size_t i = 0; i < turbo_vec_size(&flow->executor_plans); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->executor_plans); ++i) {
     const flow_executor_plan_t *executor =
-        (const flow_executor_plan_t *)turbo_vec_at_const(&flow->executor_plans, i);
+        (const flow_executor_plan_t *)vec_at_const(&flow->executor_plans, i);
     flow_threadpool_adapter_t adapter;
     flow_coro_adapter_t coro_adapter;
 
@@ -193,7 +193,7 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
         return flow_set_error_keep_state(flow, rc, 0, 0,
                                          "failed to create coro pool state");
       }
-      if (turbo_vec_push(&flow->coro_adapters, &coro_adapter) != TURBO_OK) {
+      if (turbo_flow_stl_error(vec_push(&flow->coro_adapters, &coro_adapter)) != TURBO_OK) {
         flow_pool_record_set_state(
             flow_pool_record_at(flow, coro_adapter.pool_record_index), TURBO_FLOW_POOL_FAILED);
         flow_coro_adapter_destroy(&coro_adapter);
@@ -232,7 +232,7 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
                                          "failed to create thread pool state");
       }
     }
-    if (turbo_vec_push(&flow->threadpool_adapters, &adapter) != TURBO_OK) {
+    if (turbo_flow_stl_error(vec_push(&flow->threadpool_adapters, &adapter)) != TURBO_OK) {
       flow_pool_record_set_state(flow_pool_record_at(flow, adapter.pool_record_index),
                                  TURBO_FLOW_POOL_FAILED);
       turbo_threadpool_destroy(adapter.pool);
@@ -249,9 +249,9 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
 const flow_threadpool_adapter_t *flow_threadpool_adapter_for_stage(const turbo_flow_t *flow,
                                                                    uint32_t stage_index) {
   if (!flow) return NULL;
-  for (size_t i = 0; i < turbo_vec_size(&flow->threadpool_adapters); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->threadpool_adapters); ++i) {
     const flow_threadpool_adapter_t *adapter =
-        (const flow_threadpool_adapter_t *)turbo_vec_at_const(&flow->threadpool_adapters, i);
+        (const flow_threadpool_adapter_t *)vec_at_const(&flow->threadpool_adapters, i);
     if (adapter->stage_index == stage_index) return adapter;
   }
   return NULL;
@@ -259,8 +259,8 @@ const flow_threadpool_adapter_t *flow_threadpool_adapter_for_stage(const turbo_f
 
 flow_coro_adapter_t *flow_coro_adapter_for_stage(turbo_flow_t *flow, uint32_t stage_index) {
   if (!flow) return NULL;
-  for (size_t i = 0; i < turbo_vec_size(&flow->coro_adapters); ++i) {
-    flow_coro_adapter_t *adapter = (flow_coro_adapter_t *)turbo_vec_at(&flow->coro_adapters, i);
+  for (size_t i = 0; i < vec_size(&flow->coro_adapters); ++i) {
+    flow_coro_adapter_t *adapter = (flow_coro_adapter_t *)vec_at(&flow->coro_adapters, i);
     if (adapter->stage_index == stage_index) return adapter;
   }
   return NULL;

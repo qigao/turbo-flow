@@ -7,9 +7,9 @@ void flow_mark_reachable_from_stage(const turbo_flow_t *flow, uint8_t *reachable
   if (reachable[stage_index]) return;
   reachable[stage_index] = 1;
 
-  for (size_t i = 0; i < turbo_vec_size(&flow->runtime_edges); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->runtime_edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, i);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, i);
     if (edge->from_stage == stage_index) {
       flow_mark_reachable_from_stage(flow, reachable, edge->to_stage);
     }
@@ -25,9 +25,9 @@ static int flow_enqueue_ready(uint32_t *queue, size_t queue_cap, size_t *tail, u
 
 static const flow_runtime_edge_plan_t *flow_reject_edge_for_stage(const turbo_flow_t *flow,
                                                                   uint32_t stage_index) {
-  for (size_t i = 0; i < turbo_vec_size(&flow->runtime_edges); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->runtime_edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, i);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, i);
     if (edge && edge->from_stage == stage_index && edge->kind == TURBO_FLOW_EDGE_REJECT) {
       return edge;
     }
@@ -52,7 +52,7 @@ static int flow_route_edge_active(turbo_flow_t *flow, const flow_runtime_edge_pl
   if (msg->data_decision.stage_index == edge->from_stage &&
       msg->data_decision.route[0] != '\0') {
     const flow_stage_plan_impl_t *target =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->to_stage);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->to_stage);
     if (!target) return TURBO_EINVAL;
     *active = strcmp(target->name, msg->data_decision.route) == 0;
     return TURBO_OK;
@@ -84,12 +84,12 @@ static int flow_route_edge_active(turbo_flow_t *flow, const flow_runtime_edge_pl
 static int flow_data_route_exists(const turbo_flow_t *flow, uint32_t stage_index,
                                   const char *route) {
   if (!flow || !route || route[0] == '\0') return 0;
-  for (size_t i = 0; i < turbo_vec_size(&flow->runtime_edges); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->runtime_edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, i);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, i);
     const flow_stage_plan_impl_t *target;
     if (!edge || edge->from_stage != stage_index || edge->kind == TURBO_FLOW_EDGE_REJECT) continue;
-    target = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->to_stage);
+    target = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->to_stage);
     if (target && strcmp(target->name, route) == 0) return 1;
   }
   return 0;
@@ -101,9 +101,9 @@ static int flow_release_downstream(turbo_flow_t *flow, uint32_t stage_index,
                                    uint32_t *remaining, uint32_t *activated, uint32_t *queue,
                                    size_t queue_cap, size_t *tail) {
   int has_downstream = 0;
-  for (size_t i = 0; i < turbo_vec_size(&flow->runtime_edges); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->runtime_edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, i);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, i);
     int active = 0;
     int rc;
 
@@ -114,9 +114,9 @@ static int flow_release_downstream(turbo_flow_t *flow, uint32_t stage_index,
       rc = flow_route_edge_active(flow, edge, msg, stage_status, &active);
       {
         const flow_stage_plan_impl_t *from =
-            (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->from_stage);
+            (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->from_stage);
         const flow_stage_plan_impl_t *to =
-            (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, edge->to_stage);
+            (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->to_stage);
         turbo_flow_observe_event_t event;
         memset(&event, 0, sizeof(event));
         event.kind = TURBO_FLOW_OBSERVE_ROUTE_EVALUATED;
@@ -149,7 +149,7 @@ static int flow_release_downstream(turbo_flow_t *flow, uint32_t stage_index,
 
   if (stage_selected && !has_downstream) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
     turbo_flow_observe_event_t event;
     memset(&event, 0, sizeof(event));
     event.kind = TURBO_FLOW_OBSERVE_SINK_COMPLETE;
@@ -175,7 +175,7 @@ int flow_apply_completion(turbo_flow_t *flow, const flow_stage_completion_t *com
       !tail) {
     return TURBO_EINVAL;
   }
-  if (completion->entry.stage_index >= turbo_vec_size(&flow->runtime_nodes)) return TURBO_EINVAL;
+  if (completion->entry.stage_index >= vec_size(&flow->runtime_nodes)) return TURBO_EINVAL;
   if (msg->data_decision.stage_index == completion->entry.stage_index &&
       msg->data_decision.route[0] != '\0' &&
       !flow_data_route_exists(flow, completion->entry.stage_index, msg->data_decision.route)) {
@@ -194,7 +194,7 @@ int flow_apply_completion(turbo_flow_t *flow, const flow_stage_completion_t *com
   }
   if (completion->terminal) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages,
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages,
                                                            completion->entry.stage_index);
     turbo_flow_observe_event_t event;
     if (done[completion->entry.stage_index]) return TURBO_OK;
@@ -221,7 +221,7 @@ int flow_apply_completion(turbo_flow_t *flow, const flow_stage_completion_t *com
 
     if (!reject) return completion->status;
     stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages,
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages,
                                                           completion->entry.stage_index);
     if (!stage) return TURBO_EINVAL;
     rc = flow_msg_set_failure(msg, stage->name, stage->adapter_name, reject->name,

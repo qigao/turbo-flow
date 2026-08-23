@@ -402,8 +402,8 @@ provider bytes/frame/view
 The graph does not become the owner of a protocol session, socket, protocol ACK, Redis consumer group,
 or database transaction. Those owners expose typed operations and explicit commit results. A graph
 stage may filter, transform, route, delay, or persist the message only within its registered
-operation contract. FlowStore owns typed Record, State, Index, Log, and TimeSeries facts outside the
-graph; asynchronous delivery remains a provider/executor responsibility rather than a hidden
+operation contract. Typed durable facts remain in product-owned TurboDB ORM repositories outside
+the graph; asynchronous delivery remains a provider/executor responsibility rather than a hidden
 second source of truth.
 
 ## Product Assembly
@@ -438,7 +438,6 @@ Implemented modules:
 
 | Module | Current behavior |
 | --- | --- |
-| `TurboFlow::FlowStore` | Provider-neutral Record/State/Index/Log/TimeSeries facades; local/Redis/PG backends are assembled through StorageBackend |
 | `TurboFlow::Codec` | Line/length framing and DataBind for TBE, JSON, CSV, XML |
 | `TurboFlow::Socket` | TCP, UDP, TLS, WS, WSS source/sink |
 | `TurboFlow::HttpClient` | HTTP transform and periodic GET source |
@@ -446,8 +445,6 @@ Implemented modules:
 | `TurboFlow::RPC` | JSON-RPC client/server and periodic client source |
 | `TurboFlow::S3` | PutObject sink and periodic GetObject source |
 | `TurboFlow::Email` | SMTP sink, POP3 source, and MIME parse/extract/encode transforms |
-| `TurboFlow::PostgreSQL` | Parameterized sink and query/rowset source |
-| `TurboFlow::Redis` | Redis Stream source/sink and Redis Hash record store |
 | `TurboFlow::Observe` | Opt-in message/stage/adapter metrics and bounded summary sink |
 | `TurboFlow::Schedule` | Interval, one-shot, bounded-repeat, and local-time cron sources |
 
@@ -473,17 +470,17 @@ operation exports, plus already-registered dependency ranges. Typed operation
 providers and native adapters can be bound to the module that owns the exported operation. The
 catalog is validation and read-only discovery metadata: it is not a loader,
 resource factory, or Graph DSL construct. Production registrations include
-TurboFlow Policy and native HTTP/RPC client/server operations. FlowStore remains
-a typed fact-store subsystem rather than an adapter operation.
+TurboFlow Policy and native HTTP/RPC client/server operations. Durable repositories are composed
+by the product through TurboDB ORM and do not become Graph adapter operations.
 
 ## Build Components
 
 TurboFlow is configured and installed as a graph data-processing product.
-FlowStore, protocol, security, codecs, network and persistence adapters,
-observation, scheduling, and the MIR JIT backend form its repository-owned
-build graph. External protocol products are not producer-side components.
+Protocol, security, codecs, network adapters, observation, scheduling, and the MIR JIT backend form
+its repository-owned build graph. External protocol products and TurboDB persistence repositories
+are not producer-side components.
 
-TurboUtils, TurboNet, Threads, TurboHTTP, PostgreSQL, RulesForge, and the other
+TurboUtils, TurboNet, Threads, TurboHTTP, RulesForge, and the other
 declared dependencies are therefore required by every product build.
 `find_package(TurboFlow COMPONENTS ...)` remains a consumer-side target
 availability check; it does not select or remove producer-side features.
@@ -496,12 +493,6 @@ callbacks are skipped when it is empty. `TurboFlow::Observe` implements that
 ABI with atomic aggregate counters and bounded per-stage series; its explicit
 summary sink defaults to payload redaction. Ownership and logging behavior are
 documented in `observe/README.md`.
-
-`TurboFlow::FlowStore` keeps typed fact state outside core. State and Index use
-bounded HashMap-backed ownership; Log and TimeSeries use bounded ordered storage. The routing
-policy selects local, Redis, or PostgreSQL from explicit capacity, frequency, retention, and durability
-requirements and fails when the selected backend or model capability is unavailable. `tf_local_storage`
-is volatile process-local data even though it is delivered as a shared library.
 
 TurboNet exports `TurboNet::MimeParser`, backed by `turbonet/email/mime_parser`.
 `TurboFlow::Email` reuses it through registered MIME parser, owned-extract, and

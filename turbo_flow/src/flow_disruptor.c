@@ -152,9 +152,9 @@ static int flow_worker_pool_start(flow_worker_pool_adapter_t *adapter) {
 }
 
 static int flow_stage_has_worker_pool(const turbo_flow_t *flow) {
-  for (size_t i = 0; i < turbo_vec_size(&flow->stages); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->stages); ++i) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, i);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
     if (stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) return 1;
   }
   return 0;
@@ -163,9 +163,9 @@ static int flow_stage_has_worker_pool(const turbo_flow_t *flow) {
 static size_t flow_source_count(const turbo_flow_t *flow) {
   size_t count = 0;
 
-  for (size_t i = 0; i < turbo_vec_size(&flow->stages); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->stages); ++i) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, i);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
     if (stage->is_source) ++count;
   }
   return count;
@@ -174,9 +174,9 @@ static size_t flow_source_count(const turbo_flow_t *flow) {
 static size_t flow_broadcast_consumer_count(const turbo_flow_t *flow) {
   size_t count = 0;
 
-  for (size_t i = 0; i < turbo_vec_size(&flow->stages); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->stages); ++i) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, i);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
     if (!stage->is_source) ++count;
   }
   return count;
@@ -184,43 +184,43 @@ static size_t flow_broadcast_consumer_count(const turbo_flow_t *flow) {
 
 static flow_broadcast_consumer_t *flow_broadcast_consumer_for_stage(turbo_flow_t *flow,
                                                                     uint32_t stage_index) {
-  for (size_t i = 0; i < turbo_vec_size(&flow->broadcast_consumers); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->broadcast_consumers); ++i) {
     flow_broadcast_consumer_t *consumer =
-        (flow_broadcast_consumer_t *)turbo_vec_at(&flow->broadcast_consumers, i);
+        (flow_broadcast_consumer_t *)vec_at(&flow->broadcast_consumers, i);
     if (consumer->stage_index == stage_index) return consumer;
   }
   return NULL;
 }
 
 static int flow_has_dynamic_edges(const turbo_flow_t *flow) {
-  for (size_t i = 0; i < turbo_vec_size(&flow->runtime_edges); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->runtime_edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, i);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, i);
     if (edge && edge->kind != TURBO_FLOW_EDGE_UNCONDITIONAL) return 1;
   }
   return 0;
 }
 
 static int flow_has_reorder_stage(const turbo_flow_t *flow) {
-  for (size_t i = 0; i < turbo_vec_size(&flow->stages); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->stages); ++i) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, i);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
     if (stage && stage->reorder.capacity > 0u) return 1;
   }
   return 0;
 }
 
 static int flow_requires_executor_data_path(const turbo_flow_t *flow) {
-  for (size_t i = 0; i < turbo_vec_size(&flow->executor_plans); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->executor_plans); ++i) {
     const flow_executor_plan_t *executor =
-        (const flow_executor_plan_t *)turbo_vec_at_const(&flow->executor_plans, i);
+        (const flow_executor_plan_t *)vec_at_const(&flow->executor_plans, i);
     const flow_stage_plan_impl_t *stage;
     if (!executor || executor->exec.kind != TURBO_FLOW_EXEC_INLINE || executor->emit_fn ||
         executor->keyed_fn || executor->keyed_emit_fn || executor->window_fn) {
       return 1;
     }
     stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, executor->stage_index);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, executor->stage_index);
     if (stage && (stage->effects & TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u) return 1;
     if (stage && flow_adapter_for_stage(flow, stage)) return 1;
   }
@@ -229,9 +229,9 @@ static int flow_requires_executor_data_path(const turbo_flow_t *flow) {
 
 static void flow_release_broadcast_remaining(turbo_flow_t *flow, const uint8_t *reachable,
                                              uint8_t *done) {
-  for (size_t i = 0; i < turbo_vec_size(&flow->broadcast_consumers); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->broadcast_consumers); ++i) {
     flow_broadcast_consumer_t *consumer =
-        (flow_broadcast_consumer_t *)turbo_vec_at(&flow->broadcast_consumers, i);
+        (flow_broadcast_consumer_t *)vec_at(&flow->broadcast_consumers, i);
     disruptor_cursor_t cursor;
 
     if (!reachable[consumer->stage_index] || done[consumer->stage_index]) continue;
@@ -254,14 +254,14 @@ void flow_stop_data_planes(turbo_flow_t *flow) {
     disruptor_destroy(flow->broadcast_ring);
     flow->broadcast_ring = NULL;
   }
-  turbo_vec_clear(&flow->broadcast_consumers);
+  turbo_flow_stl_error(vec_clear(&flow->broadcast_consumers));
 
-  for (size_t i = 0; i < turbo_vec_size(&flow->worker_pool_adapters); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->worker_pool_adapters); ++i) {
     flow_worker_pool_adapter_t *adapter =
-        (flow_worker_pool_adapter_t *)turbo_vec_at(&flow->worker_pool_adapters, i);
+        (flow_worker_pool_adapter_t *)vec_at(&flow->worker_pool_adapters, i);
     flow_worker_pool_stop(adapter);
   }
-  turbo_vec_clear(&flow->worker_pool_adapters);
+  turbo_flow_stl_error(vec_clear(&flow->worker_pool_adapters));
 }
 
 int flow_start_data_planes(turbo_flow_t *flow) {
@@ -272,9 +272,9 @@ int flow_start_data_planes(turbo_flow_t *flow) {
 
   flow_stop_data_planes(flow);
 
-  for (size_t stage_index = 0; stage_index < turbo_vec_size(&flow->stages); ++stage_index) {
+  for (size_t stage_index = 0; stage_index < vec_size(&flow->stages); ++stage_index) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
     flow_data_segment_plan_t *segment;
     flow_worker_pool_adapter_t adapter;
 
@@ -311,7 +311,7 @@ int flow_start_data_planes(turbo_flow_t *flow) {
         flow_pool_record_add(flow, TURBO_FLOW_POOL_DISRUPTOR, adapter.stage_index, adapter.width,
                              adapter.capacity, adapter.capacity,
                              &adapter.pool_record_index) != TURBO_OK ||
-        turbo_vec_push(&flow->worker_pool_adapters, &adapter) != TURBO_OK) {
+        turbo_flow_stl_error(vec_push(&flow->worker_pool_adapters, &adapter)) != TURBO_OK) {
       if (adapter.ring) disruptor_destroy(adapter.ring);
       flow_stop_data_planes(flow);
       return flow_set_error_keep_state(flow, TURBO_ENOMEM, stage->line, stage->column,
@@ -319,13 +319,13 @@ int flow_start_data_planes(turbo_flow_t *flow) {
     }
   }
 
-  for (size_t i = 0; i < turbo_vec_size(&flow->worker_pool_adapters); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->worker_pool_adapters); ++i) {
     flow_worker_pool_adapter_t *adapter =
-        (flow_worker_pool_adapter_t *)turbo_vec_at(&flow->worker_pool_adapters, i);
+        (flow_worker_pool_adapter_t *)vec_at(&flow->worker_pool_adapters, i);
     int start_rc = flow_worker_pool_start(adapter);
     if (start_rc != TURBO_OK) {
       const flow_stage_plan_impl_t *stage =
-          (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, adapter->stage_index);
+          (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, adapter->stage_index);
       flow_stop_data_planes(flow);
       return flow_set_error_keep_state(flow, start_rc, stage ? stage->line : 0,
                                        stage ? stage->column : 0,
@@ -365,9 +365,9 @@ int flow_start_data_planes(turbo_flow_t *flow) {
                                      "failed to create broadcast topology");
   }
 
-  for (size_t stage_index = 0; stage_index < turbo_vec_size(&flow->stages); ++stage_index) {
+  for (size_t stage_index = 0; stage_index < vec_size(&flow->stages); ++stage_index) {
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
     flow_broadcast_consumer_t consumer;
 
     if (stage->is_source) continue;
@@ -378,16 +378,16 @@ int flow_start_data_planes(turbo_flow_t *flow) {
     consumer.topology_stage =
         disruptor_topology_stage(flow->broadcast_topology, stage->name, &consumer.consumer);
     if (consumer.topology_stage == DISRUPTOR_STAGE_INVALID ||
-        turbo_vec_push(&flow->broadcast_consumers, &consumer) != TURBO_OK) {
+        turbo_flow_stl_error(vec_push(&flow->broadcast_consumers, &consumer)) != TURBO_OK) {
       flow_stop_data_planes(flow);
       return flow_set_error_keep_state(flow, TURBO_ENOMEM, stage->line, stage->column,
                                        "failed to register broadcast stage");
     }
   }
 
-  for (size_t edge_index = 0; edge_index < turbo_vec_size(&flow->runtime_edges); ++edge_index) {
+  for (size_t edge_index = 0; edge_index < vec_size(&flow->runtime_edges); ++edge_index) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)turbo_vec_at_const(&flow->runtime_edges, edge_index);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, edge_index);
     flow_broadcast_consumer_t *to = flow_broadcast_consumer_for_stage(flow, edge->to_stage);
     flow_broadcast_consumer_t *from = flow_broadcast_consumer_for_stage(flow, edge->from_stage);
 
@@ -411,9 +411,9 @@ int flow_start_data_planes(turbo_flow_t *flow) {
 flow_worker_pool_adapter_t *flow_worker_pool_adapter_for_stage(turbo_flow_t *flow,
                                                                uint32_t stage_index) {
   if (!flow) return NULL;
-  for (size_t i = 0; i < turbo_vec_size(&flow->worker_pool_adapters); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->worker_pool_adapters); ++i) {
     flow_worker_pool_adapter_t *adapter =
-        (flow_worker_pool_adapter_t *)turbo_vec_at(&flow->worker_pool_adapters, i);
+        (flow_worker_pool_adapter_t *)vec_at(&flow->worker_pool_adapters, i);
     if (adapter->stage_index == stage_index) return adapter;
   }
   return NULL;
@@ -542,7 +542,7 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
                               sequence, msg->id, FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE, NULL);
   if (rc != TURBO_OK) return rc;
 
-  stage_count = turbo_vec_size(&flow->stages);
+  stage_count = vec_size(&flow->stages);
   reachable = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
   done = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
   if (!reachable || !done) {
@@ -551,11 +551,11 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
   }
 
   flow_mark_reachable_from_stage(flow, reachable, source_index);
-  for (size_t i = 0; i < turbo_vec_size(&flow->broadcast_consumers); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->broadcast_consumers); ++i) {
     flow_broadcast_consumer_t *consumer =
-        (flow_broadcast_consumer_t *)turbo_vec_at(&flow->broadcast_consumers, i);
+        (flow_broadcast_consumer_t *)vec_at(&flow->broadcast_consumers, i);
     const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, consumer->stage_index);
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, consumer->stage_index);
 
     if (!reachable[consumer->stage_index]) continue;
     pending += 1u;
@@ -578,11 +578,11 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
   while (pending > 0) {
     int progressed = 0;
 
-    for (size_t i = 0; i < turbo_vec_size(&flow->broadcast_consumers); ++i) {
+    for (size_t i = 0; i < vec_size(&flow->broadcast_consumers); ++i) {
       flow_broadcast_consumer_t *consumer =
-          (flow_broadcast_consumer_t *)turbo_vec_at(&flow->broadcast_consumers, i);
+          (flow_broadcast_consumer_t *)vec_at(&flow->broadcast_consumers, i);
       flow_stage_plan_impl_t *stage =
-          (flow_stage_plan_impl_t *)turbo_vec_at(&flow->stages, consumer->stage_index);
+          (flow_stage_plan_impl_t *)vec_at(&flow->stages, consumer->stage_index);
       disruptor_cursor_t cursor;
 
       if (!reachable[consumer->stage_index] || done[consumer->stage_index]) continue;

@@ -7,7 +7,7 @@ int flow_entry_header_init(const turbo_flow_t *flow, flow_entry_header_t *header
                            uint64_t ordering_key, uint64_t sequence, uint64_t message_id,
                            flow_entry_ownership_t ownership,
                            flow_stage_completion_t *completion_handle) {
-  if (!flow || !header || stage_index >= turbo_vec_size(&flow->stages) ||
+  if (!flow || !header || stage_index >= vec_size(&flow->stages) ||
       segment_kind < FLOW_DATA_SEGMENT_DIRECT || segment_kind > FLOW_DATA_SEGMENT_FANIN_GATE ||
       ownership < FLOW_ENTRY_OWNERSHIP_BORROWED || ownership > FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE) {
     return TURBO_EINVAL;
@@ -28,7 +28,7 @@ int flow_entry_header_validate(const turbo_flow_t *flow, const flow_entry_header
                                const turbo_flow_msg_t *message) {
   if (!flow || !header || header->size < sizeof(*header) || header->runtime_generation == 0u ||
       header->runtime_generation != flow->runtime_generation ||
-      header->stage_index >= turbo_vec_size(&flow->stages) ||
+      header->stage_index >= vec_size(&flow->stages) ||
       header->segment_kind < FLOW_DATA_SEGMENT_DIRECT ||
       header->segment_kind > FLOW_DATA_SEGMENT_FANIN_GATE ||
       header->ownership != FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE || !message ||
@@ -163,9 +163,9 @@ int flow_dispatch_validate_stage(turbo_flow_t *flow, uint32_t stage_index) {
   const flow_stage_plan_impl_t *stage;
   const flow_executor_plan_t *executor;
 
-  if (!flow || stage_index >= turbo_vec_size(&flow->stages)) return TURBO_EINVAL;
+  if (!flow || stage_index >= vec_size(&flow->stages)) return TURBO_EINVAL;
 
-  stage = (const flow_stage_plan_impl_t *)turbo_vec_at_const(&flow->stages, stage_index);
+  stage = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
   executor = flow_executor_plan_for_stage(flow, stage_index);
   if (!stage || !executor) {
     return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
@@ -211,11 +211,11 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
   int result;
   uint64_t observe_start = 0;
 
-  if (!flow || !msg || !completion || stage_index >= turbo_vec_size(&flow->stages)) {
+  if (!flow || !msg || !completion || stage_index >= vec_size(&flow->stages)) {
     return TURBO_EINVAL;
   }
 
-  stage = (flow_stage_plan_impl_t *)turbo_vec_at(&flow->stages, (size_t)stage_index);
+  stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, (size_t)stage_index);
   if (flow->observer_ops.stage_complete ||
       flow_observer_event_enabled(flow, TURBO_FLOW_OBSERVE_STAGE_END)) {
     observe_start = turbo_hrtime();

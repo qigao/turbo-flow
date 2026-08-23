@@ -161,8 +161,7 @@ Domain 不是目录归属。一个模块可以跨多个 domain，但每个状态
 | `io/socket` | IO/Transport | CoroNet socket adapter | `io.socket` 导出 `SocketEndpoint` 与 `socket.receive/send`，绑定实际 endpoint owner | `implemented` | graph operation 只表达 ingress/egress；connect/listen/close 仍是 CoroNet owner lifecycle |
 | `io/http` | IO/Transport + Protocol/Pattern | native TurboHTTP/Iris client/server adapter | `io.http.client` 的 request/poll 绑定 `HttpClientConnection`；`io.http.server` 的 request/reply 绑定 `HttpServerEndpoint` | `implemented` | 保留 native endpoint/adapter；resource catalog 不迁移 I/O |
 | `io/rpc` | IO/Transport + Protocol/Pattern | native RPC client/server adapter | call/poll 绑定 `RpcClientConnection`；request/reply 绑定 `RpcServerEndpoint` | `implemented` | 保留 native RPC/Iris owner；RPC resource 不冒充 HTTP/Socket operation |
-| `flowstore/backends/redis` | Protocol/Pattern + Buffer/Persistence | Redis data/stream adapter | stream/blob/record owner 有；DSL operation 未统一 | `adapter-only` | claim/settlement 与 blob commit 必须分成两类 operation |
-| `flowstore/backends/pgsql`、`io/s3` | Buffer/Persistence | query/object source/sink | content/resource schema 有；显式 operation 未统一 | `adapter-only` | query/result/object 的 content type 要留在 domain schema |
+| TurboDB ORM、`io/s3` | Buffer/Persistence | typed repository/object source/sink | ORM transaction 与 object operation 显式分层 | `adapter-only` | query/result/object 的 content type 要留在 domain schema |
 | `io/email` | Protocol/Pattern | SMTP/POP3/MIME adapter/example | MIME schema 有；显式 operation 未统一 | `adapter-only` | parse/encode 与 SMTP/POP3 owner 不应混为一个 primitive |
 | `schedule` | Execution + Management（建议归类） | schedule source adapter | 尚未看到统一 domain operation descriptor | `adapter-only` | 需要先固化 timer/trigger owner 语义再注册 |
 | `observe` | Management + Execution | observe callback/summary sink | 只读 snapshot/derived metric | `owner-api` | 不应成为 payload mutation operation |

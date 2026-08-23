@@ -251,9 +251,9 @@ static void bench_release_live_jobs(void *arg) {
 
 static const flow_threadpool_adapter_t *bench_threadpool_adapter(const turbo_flow_t *flow,
                                                                  uint32_t stage_index) {
-  for (size_t i = 0; i < turbo_vec_size(&flow->threadpool_adapters); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->threadpool_adapters); ++i) {
     const flow_threadpool_adapter_t *adapter =
-        (const flow_threadpool_adapter_t *)turbo_vec_at_const(&flow->threadpool_adapters, i);
+        (const flow_threadpool_adapter_t *)vec_at_const(&flow->threadpool_adapters, i);
     if (adapter && adapter->stage_index == stage_index) return adapter;
   }
   return NULL;
