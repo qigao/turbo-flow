@@ -147,8 +147,9 @@ Supporting theorem `named_route_prioritizes_target_match` 与 `initial_valid` �
 形式化目录完成后使用：
 
 ```powershell
-lake --dir formal build
+lake --dir formal build TurboFlow.ModelProofs
 lake --dir formal env lean formal/TurboFlow/ModelProofs.lean
+lake --dir formal build
 ```
 
 Lean 工具链固定为本机已验证版本 `v4.33.1`，不引入 Mathlib 或网络依赖。

@@ -10,12 +10,13 @@
 
 ```powershell
 lean --version
-lake --dir formal build
+lake --dir formal build TurboFlow.ModelProofs
 lake --dir formal env lean formal/TurboFlow/ModelProofs.lean
+lake --dir formal build
 rg.exe -n "\bsorry\b|\badmit\b|axiom" formal -g "*.lean"
 ```
 
-预期：`lean --version` 显示 `v4.33.1`；Lake build 与 proof 文件的 kernel check 均以 exit code 0 完成；最后的扫描无输出且以 exit code 1 完成，表示没有匹配到占位证明。扫描的 exit code 1 是预期成功，不是失败。
+预期：`lean --version` 显示 `v4.33.1`；最小 `TurboFlow.ModelProofs` target、直接 proof 文件的 kernel check 与完整 Lake package build 均以 exit code 0 完成；最后的扫描无输出且以 exit code 1 完成，表示没有匹配到占位证明。扫描的 exit code 1 是预期成功，不是失败。先构建最小 target，确保干净 checkout 所需的 imported `.olean` 已生成，再直接检查 proof 文件，最后构建完整 package。
 
 ## 已检查定理与 C 映射
 

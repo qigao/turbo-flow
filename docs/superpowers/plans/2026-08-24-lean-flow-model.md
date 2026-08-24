@@ -336,12 +336,13 @@ git commit -m "proof: verify TurboFlow fan-in gate invariants"
 `formal/README.md` 必须列出八个 theorem 名称、对应 C 函数/行号、下列命令及预期结果：
 
 ```powershell
-lake --dir formal build
+lake --dir formal build TurboFlow.ModelProofs
 lake --dir formal env lean formal/TurboFlow/ModelProofs.lean
+lake --dir formal build
 rg.exe -n "\bsorry\b|\badmit\b|axiom" formal -g "*.lean"
 ```
 
-前两条预期 exit code 0；最后一条预期无输出且 exit code 1（表示未匹配占位证明）。
+前三条预期 exit code 0；最后一条预期无输出且 exit code 1（表示未匹配占位证明）。
 
 - [ ] **Step 2: 在根 README 增加最小入口**
 
@@ -353,12 +354,13 @@ Run:
 
 ```powershell
 lean --version
-lake --dir formal build
+lake --dir formal build TurboFlow.ModelProofs
 lake --dir formal env lean formal/TurboFlow/ModelProofs.lean
+lake --dir formal build
 rg.exe -n "\bsorry\b|\badmit\b|axiom" formal -g "*.lean"
 ```
 
-Expected: Lean `4.33.1`；两次构建/检查成功；placeholder scan 无匹配。
+Expected: Lean `4.33.1`；最小 target 构建、直接 proof 文件检查与完整 package 构建均成功；placeholder scan 无匹配。
 
 - [ ] **Step 4: 复核模型映射和残余风险**
 
