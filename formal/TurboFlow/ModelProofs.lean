@@ -1,4 +1,5 @@
 import TurboFlow.Model
+import TurboFlow.FanIn
 
 namespace TurboFlow
 
@@ -37,5 +38,10 @@ theorem task_terminal_is_absorbing (state : TaskState) (event : TaskEvent)
     (h : state = .completed ∨ state = .canceled) :
     nextTaskState state event = none := by
   rcases h with rfl | rfl <;> cases event <;> rfl
+
+example (gate : FanInGate) (selected : Bool) (next : FanInGate)
+    (valid : gate.Valid) (resolved : gate.resolve selected = some next) :
+    next.Valid := by
+  exact resolve_preserves_valid gate selected next valid resolved
 
 end TurboFlow
