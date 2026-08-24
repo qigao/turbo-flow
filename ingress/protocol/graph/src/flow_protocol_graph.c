@@ -3,7 +3,31 @@
 #include "turbo_error.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+
+typedef struct flow_protocol_graph_completion_ctx_s {
+  turbo_flow_protocol_graph_completion_fn completion;
+  void *completion_ctx;
+  uint64_t delivery_id;
+  uint64_t session_id;
+  uint64_t session_generation;
+} flow_protocol_graph_completion_ctx_t;
+
+static void flow_protocol_graph_complete(void *ctx,
+                                         const turbo_flow_publish_result_t *result) {
+  flow_protocol_graph_completion_ctx_t *completion_ctx =
+      (flow_protocol_graph_completion_ctx_t *)ctx;
+  turbo_flow_protocol_graph_completion_t completion =
+      TURBO_FLOW_PROTOCOL_GRAPH_COMPLETION_INIT;
+  if (!completion_ctx) return;
+  completion.delivery_id = completion_ctx->delivery_id;
+  completion.session_id = completion_ctx->session_id;
+  completion.session_generation = completion_ctx->session_generation;
+  completion.status = result ? result->status : TURBO_EPROTO;
+  completion_ctx->completion(completion_ctx->completion_ctx, &completion);
+  free(completion_ctx);
+}
 
 static int flow_protocol_graph_layout(size_t payload_size, size_t *metadata_offset,
                                      size_t *total_size) {
@@ -30,9 +54,16 @@ int turbo_flow_protocol_graph_publish(
   size_t metadata_offset;
   size_t total_size;
   uint8_t *storage;
+  turbo_flow_source_handoff_mode_t source_handoff =
+      TURBO_FLOW_SOURCE_HANDOFF_INLINE;
+  turbo_flow_protocol_graph_completion_fn completion = NULL;
+  void *completion_user_ctx = NULL;
+  flow_protocol_graph_completion_ctx_t *completion_ctx = NULL;
   int rc;
 
-  if (!sink || sink->size < sizeof(*sink) ||
+  if (!sink || sink->size < TURBO_FLOW_PROTOCOL_GRAPH_SINK_V1_SIZE ||
+      (sink->size > TURBO_FLOW_PROTOCOL_GRAPH_SINK_V1_SIZE &&
+       sink->size < sizeof(*sink)) ||
       sink->abi_version != TURBO_FLOW_PROTOCOL_GRAPH_ABI_VERSION || !sink->flow ||
       !sink->source_name || !sink->source_name[0] || !request ||
       request->size < sizeof(*request) ||
@@ -46,6 +77,16 @@ int turbo_flow_protocol_graph_publish(
       input->payload_size > input->payload_capacity ||
       input->metadata.size < sizeof(input->metadata) ||
       input->metadata.abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION)
+    return TURBO_EINVAL;
+  if (sink->size >= sizeof(*sink)) {
+    source_handoff = sink->source_handoff;
+    completion = sink->completion;
+    completion_user_ctx = sink->completion_ctx;
+  }
+  if (source_handoff != TURBO_FLOW_SOURCE_HANDOFF_INLINE &&
+      source_handoff != TURBO_FLOW_SOURCE_HANDOFF_ASYNC_BOUNDED)
+    return TURBO_EINVAL;
+  if (source_handoff == TURBO_FLOW_SOURCE_HANDOFF_ASYNC_BOUNDED && !completion)
     return TURBO_EINVAL;
   rc = flow_protocol_graph_layout(input->payload_size, &metadata_offset,
                                  &total_size);
@@ -65,10 +106,30 @@ int turbo_flow_protocol_graph_publish(
   message.buffer = buffer;
   message.payload = vstr_from_buf((const char *)storage, input->payload_size);
   message.transport_context = metadata;
-  rc = turbo_flow_publish(sink->flow, sink->source_name, &message);
+  if (source_handoff == TURBO_FLOW_SOURCE_HANDOFF_INLINE) {
+    rc = turbo_flow_publish(sink->flow, sink->source_name, &message);
+  } else {
+    completion_ctx = (flow_protocol_graph_completion_ctx_t *)calloc(1, sizeof(*completion_ctx));
+    if (!completion_ctx) {
+      turbo_flow_msg_cleanup(&message);
+      return TURBO_ENOMEM;
+    }
+    completion_ctx->completion = completion;
+    completion_ctx->completion_ctx = completion_user_ctx;
+    completion_ctx->delivery_id = request->delivery_id;
+    completion_ctx->session_id = request->session_id;
+    completion_ctx->session_generation = request->session_generation;
+    rc = turbo_flow_publish_async(sink->flow, sink->source_name, &message,
+                                  flow_protocol_graph_complete, completion_ctx);
+  }
   turbo_flow_msg_cleanup(&message);
-  if (rc != TURBO_OK) return rc;
-  *disposition = TURBO_FLOW_PROTOCOL_PUBLISH_SETTLED;
+  if (rc != TURBO_OK) {
+    free(completion_ctx);
+    return rc;
+  }
+  *disposition = source_handoff == TURBO_FLOW_SOURCE_HANDOFF_INLINE
+                     ? TURBO_FLOW_PROTOCOL_PUBLISH_SETTLED
+                     : TURBO_FLOW_PROTOCOL_PUBLISH_PENDING;
   return TURBO_OK;
 }
 

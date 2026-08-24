@@ -1038,6 +1038,9 @@ int turbo_flow_rule_apply_data_actions(turbo_flow_msg_t *message,
   uint32_t type;
   uint32_t flags;
   int status;
+  int route_set = 0;
+  int batch_key_set = 0;
+  int retry_class_set = 0;
   int rc;
   if (!message || !decision || decision->size < sizeof(*decision) ||
       (action_count > 0u && !actions)) {
@@ -1064,19 +1067,25 @@ int turbo_flow_rule_apply_data_actions(turbo_flow_msg_t *message,
       }
       break;
     case TURBO_FLOW_RULE_ACTION_ROUTE:
+      if (route_set) return TURBO_EPROTO;
       rc = flow_rule_copy_key(pending.route, action->key);
       if (rc != TURBO_OK) return rc;
+      route_set = 1;
       break;
     case TURBO_FLOW_RULE_ACTION_DROP:
       pending.dropped = 1;
       break;
     case TURBO_FLOW_RULE_ACTION_BATCH_KEY:
+      if (batch_key_set) return TURBO_EPROTO;
       rc = flow_rule_copy_key(pending.batch_key, action->key);
       if (rc != TURBO_OK) return rc;
+      batch_key_set = 1;
       break;
     case TURBO_FLOW_RULE_ACTION_RETRY_CLASS:
+      if (retry_class_set) return TURBO_EPROTO;
       rc = flow_rule_copy_key(pending.retry_class, action->key);
       if (rc != TURBO_OK) return rc;
+      retry_class_set = 1;
       break;
     case TURBO_FLOW_RULE_ACTION_DEAD_LETTER:
       pending.dead_letter = 1;

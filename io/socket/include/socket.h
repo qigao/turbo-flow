@@ -117,6 +117,19 @@ typedef enum turbo_flow_coronet_transport_e {
   TURBO_FLOW_CORONET_TRANSPORT_PIPE
 } turbo_flow_coronet_transport_t;
 
+#define TURBO_FLOW_CORONET_SOCKET_SOURCE_OPTIONS_ABI_VERSION 1u
+
+/** Versioned SOURCE-to-Graph handoff settings; the adapter copies this value. */
+typedef struct turbo_flow_coronet_socket_source_options_s {
+  size_t size;
+  uint32_t abi_version;
+  turbo_flow_source_handoff_mode_t handoff;
+} turbo_flow_coronet_socket_source_options_t;
+
+#define TURBO_FLOW_CORONET_SOCKET_SOURCE_OPTIONS_INIT                                           \
+  {sizeof(turbo_flow_coronet_socket_source_options_t),                                         \
+   TURBO_FLOW_CORONET_SOCKET_SOURCE_OPTIONS_ABI_VERSION, TURBO_FLOW_SOURCE_HANDOFF_INLINE}
+
 /**
  * Register a generic CoroNet socket adapter for DSL `adapter "<name>"`.
  *
@@ -125,10 +138,11 @@ typedef enum turbo_flow_coronet_transport_e {
  * it does not implement SOCKS5 proxying, peer discovery, retry policy, routing,
  * message broker semantics, or product-level protocol ownership.
  *
- * SOURCE adapters listen on `host:port` and call `turbo_flow_publish()` for each
- * received payload. SINK adapters connect to `host:port` and synchronously send
- * the current flow message payload. Register a distinct adapter name for each
- * endpoint binding that needs independent configuration.
+ * SOURCE adapters listen on `host:port` and use the compatibility-default
+ * inline handoff for each received payload. SINK adapters connect to
+ * `host:port` and synchronously send the current flow message payload. Register
+ * a distinct adapter name for each endpoint binding that needs independent
+ * configuration.
  */
 TURBO_FLOW_C_API int
 turbo_flow_coronet_register_socket_adapter(turbo_flow_t *flow, const char *name,
@@ -142,6 +156,19 @@ turbo_flow_coronet_register_socket_adapter(turbo_flow_t *flow, const char *name,
 TURBO_FLOW_C_API int turbo_flow_coronet_register_socket_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_coronet_socket_config_t *config,
     const turbo_flow_coronet_execution_binding_t *execution);
+
+/**
+ * Register a socket adapter with an explicit SOURCE handoff policy.
+ *
+ * ASYNC_BOUNDED reuses Flow's configured async ingress. A full queue or byte
+ * budget fails the current receive with TURBO_ENOSPC; no hidden queue, retry,
+ * or fallback to inline execution is performed. Accepted graph completion is
+ * observable through Flow observers.
+ */
+TURBO_FLOW_C_API int turbo_flow_coronet_register_socket_adapter_with_source_options(
+    turbo_flow_t *flow, const char *name, const turbo_flow_coronet_socket_config_t *config,
+    const turbo_flow_coronet_execution_binding_t *execution,
+    const turbo_flow_coronet_socket_source_options_t *source_options);
 
 /**
  * Register `adapter_name` from one immutable resolved YAML snapshot.

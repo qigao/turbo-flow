@@ -88,7 +88,6 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
   for (size_t edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
     const flow_edge_plan_impl_t *edge =
         (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
-    flow_runtime_edge_plan_t runtime_edge;
     flow_runtime_node_plan_t *from_node =
         (flow_runtime_node_plan_t *)vec_at(&flow->runtime_nodes, edge->from_stage);
     flow_runtime_node_plan_t *to_node =
@@ -96,21 +95,6 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
     const flow_stage_plan_impl_t *to =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->to_stage);
 
-    memset(&runtime_edge, 0, sizeof(runtime_edge));
-    runtime_edge.from_stage = edge->from_stage;
-    runtime_edge.to_stage = edge->to_stage;
-    runtime_edge.line = edge->line;
-    runtime_edge.column = edge->column;
-    runtime_edge.is_stage_internal = edge->is_stage_internal;
-    runtime_edge.kind = edge->kind;
-    runtime_edge.name = edge->name;
-    runtime_edge.predicate = edge->predicate;
-
-    rc = turbo_flow_stl_error(vec_push(&flow->runtime_edges, &runtime_edge));
-    if (rc != TURBO_OK) {
-      flow_clear_runtime_plan(flow);
-      return flow_set_error(flow, rc, 0, 0, "out of memory");
-    }
     rc = flow_push_data_segment(flow, FLOW_DATA_SEGMENT_DIRECT, edge->from_stage,
                                 (uint32_t)edge_index, 1u, 0u,
                                 flow_direct_operation_contract(flow, to));
@@ -121,6 +105,52 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
 
     from_node->outgoing_count += 1u;
     to_node->incoming_count += 1u;
+  }
+
+  {
+    uint32_t *write_offsets;
+    uint32_t outgoing_begin = 0u;
+    const size_t edge_count = vec_size(&flow->edges);
+
+    if (edge_count > UINT32_MAX) {
+      flow_clear_runtime_plan(flow);
+      return flow_set_error(flow, TURBO_ERANGE, 0, 0, "runtime graph has too many edges");
+    }
+    for (size_t stage_index = 0; stage_index < stage_count; ++stage_index) {
+      flow_runtime_node_plan_t *node =
+          (flow_runtime_node_plan_t *)vec_at(&flow->runtime_nodes, stage_index);
+      node->outgoing_begin = outgoing_begin;
+      outgoing_begin += node->outgoing_count;
+    }
+    rc = turbo_flow_stl_error(vec_resize(&flow->runtime_edges, edge_count));
+    if (rc != TURBO_OK) {
+      flow_clear_runtime_plan(flow);
+      return flow_set_error(flow, rc, 0, 0, "out of memory");
+    }
+    write_offsets = stage_count > 0u ? (uint32_t *)calloc(stage_count, sizeof(*write_offsets)) : NULL;
+    if (stage_count > 0u && !write_offsets) {
+      flow_clear_runtime_plan(flow);
+      return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    }
+    for (size_t edge_index = 0; edge_index < edge_count; ++edge_index) {
+      const flow_edge_plan_impl_t *edge =
+          (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
+      const flow_runtime_node_plan_t *node =
+          (const flow_runtime_node_plan_t *)vec_at_const(&flow->runtime_nodes, edge->from_stage);
+      flow_runtime_edge_plan_t *runtime_edge = (flow_runtime_edge_plan_t *)vec_at(
+          &flow->runtime_edges, node->outgoing_begin + write_offsets[edge->from_stage]++);
+
+      memset(runtime_edge, 0, sizeof(*runtime_edge));
+      runtime_edge->from_stage = edge->from_stage;
+      runtime_edge->to_stage = edge->to_stage;
+      runtime_edge->line = edge->line;
+      runtime_edge->column = edge->column;
+      runtime_edge->is_stage_internal = edge->is_stage_internal;
+      runtime_edge->kind = edge->kind;
+      runtime_edge->name = edge->name;
+      runtime_edge->predicate = edge->predicate;
+    }
+    free(write_offsets);
   }
 
   for (size_t stage_index = 0; stage_index < stage_count; ++stage_index) {

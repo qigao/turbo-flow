@@ -11,7 +11,9 @@ stage-global route mode 的输入域约束见 [路由 mode 修正规范](../docs
 - `TurboFlow.Model`、`TurboFlow.FanIn`：单步 lifecycle、路由与 fan-in 抽象；
 - `TurboFlow.ModelProofs`：单步模型的 required 与 supporting theorem；
 - `TurboFlow.Trace`：通用 `runTrace`、路径证据及 Flow/task/fan-in/route 的可执行 wrapper；
-- `TurboFlow.TraceProofs`：通用与领域轨迹定理，以及由 Lean kernel 归约的可计算示例。
+- `TurboFlow.TraceProofs`：通用与领域轨迹定理，以及由 Lean kernel 归约的可计算示例；
+- `TurboFlow.DataPlane`：payload backing、ingress byte budget、单值规则与 settlement；
+- `TurboFlow.Reachability`：迭代与递归分层可达展开的等价性。
 
 ## 可复验检查
 
@@ -52,6 +54,10 @@ Package 提交了无外部依赖的 `lake-manifest.json`，因此执行上述检
 | `named_route_prioritizes_target_match` | `turbo_flow/src/flow_completion.c:52-58` | 当外层已保证当前 source stage 同源且 route 非空时，named route 按 target name 匹配，优先于 unconditional/conditional。 |
 | `initial_valid` | `turbo_flow/src/flow_runtime.c:495-566` | 可达子图的 potential 由 runtime edge 计数初始化；正 potential 的抽象初始 gate 满足不变量。 |
 | `accepted_complete_reaches_completed` | `turbo_flow/src/flow_execution.c:28-43,126-128` | `flow_execution_task_fail()` 可在 task 运行前通过 `flow_execution_task_complete()` 从 ACCEPTED 进入 COMPLETED。 |
+
+`TurboFlow.DataPlane` 与 `TurboFlow.Reachability` 另行检查 payload 边界、单消息/总在途字节预算、
+重复单值 rule 的拒绝与无部分提交、一次性 settlement，以及迭代 worklist 的抽象等价性。
+这些证明扩展数据平面边界，但仍不覆盖 C11 并发内存模型、allocator/refcount 或跨线程 owner 投递。
 
 ## 可执行轨迹定理
 

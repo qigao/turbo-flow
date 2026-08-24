@@ -39,13 +39,24 @@ int turbo_flow_resolved_config_runtime_ingress(const turbo_flow_resolved_config_
   json_value_t *ingress_value;
   json_value_t *workers;
   json_value_t *capacity;
+  json_value_t *max_message_bytes;
+  json_value_t *max_inflight_bytes;
+  size_t output_size;
   size_t value;
-  if (!config || !config->document || !ingress || ingress->size < sizeof(*ingress))
+  if (!config || !config->document || !ingress ||
+      ingress->size < TURBO_FLOW_ASYNC_INGRESS_CONFIG_V1_SIZE ||
+      (ingress->size > TURBO_FLOW_ASYNC_INGRESS_CONFIG_V1_SIZE &&
+       ingress->size < sizeof(*ingress)))
     return TURBO_EINVAL;
+  output_size = ingress->size;
   runtime = turbo_json_object_get(config->document, "runtime");
   ingress_value = runtime ? turbo_json_object_get(runtime, "ingress") : NULL;
   workers = ingress_value ? turbo_json_object_get(ingress_value, "workers") : NULL;
   capacity = ingress_value ? turbo_json_object_get(ingress_value, "capacity") : NULL;
+  max_message_bytes =
+      ingress_value ? turbo_json_object_get(ingress_value, "max_message_bytes") : NULL;
+  max_inflight_bytes =
+      ingress_value ? turbo_json_object_get(ingress_value, "max_inflight_bytes") : NULL;
   if (!runtime || turbo_json_type(runtime) != TURBO_JSON_OBJECT || !ingress_value ||
       turbo_json_type(ingress_value) != TURBO_JSON_OBJECT ||
       flow_product_runtime_integer(workers, TURBO_FLOW_ASYNC_INGRESS_MAX_WORKERS, &value) !=
@@ -56,7 +67,21 @@ int turbo_flow_resolved_config_runtime_ingress(const turbo_flow_resolved_config_
       TURBO_OK)
     return TURBO_EPROTO;
   resolved.queue_capacity = value;
-  *ingress = resolved;
+  if (flow_product_runtime_integer(max_message_bytes,
+                                   TURBO_FLOW_ASYNC_INGRESS_MAX_MESSAGE_BYTES, &value) != TURBO_OK)
+    return TURBO_EPROTO;
+  resolved.max_message_bytes = value;
+  if (flow_product_runtime_integer(max_inflight_bytes,
+                                   TURBO_FLOW_ASYNC_INGRESS_MAX_INFLIGHT_BYTES, &value) != TURBO_OK)
+    return TURBO_EPROTO;
+  resolved.max_inflight_bytes = value;
+  if (resolved.max_message_bytes > resolved.max_inflight_bytes) return TURBO_EPROTO;
+  if (output_size >= sizeof(*ingress)) {
+    *ingress = resolved;
+  } else {
+    ingress->workers = resolved.workers;
+    ingress->queue_capacity = resolved.queue_capacity;
+  }
   return TURBO_OK;
 }
 

@@ -53,6 +53,8 @@ spec("flow_config") {
                                         "  ingress:\n"
                                         "    workers: 3\n"
                                         "    capacity: 17\n"
+                                        "    max_message_bytes: 4096\n"
+                                        "    max_inflight_bytes: 8192\n"
                                         "adapters: {}\n";
     static const char partial_yaml[] = "version: 1\n"
                                        "runtime:\n"
@@ -70,8 +72,14 @@ spec("flow_config") {
     check_equal(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
     check_equal(ingress.workers, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS);
     check_equal(ingress.queue_capacity, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY);
+    check_equal(ingress.max_message_bytes,
+                TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_MESSAGE_BYTES);
+    check_equal(ingress.max_inflight_bytes,
+                TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES);
     json = turbo_flow_resolved_config_json(config, NULL);
-    check_contains(json, "\"runtime\":{\"ingress\":{\"workers\":1,\"capacity\":1024}}");
+    check_contains(json,
+                   "\"runtime\":{\"ingress\":{\"workers\":1,\"capacity\":1024,"
+                   "\"max_message_bytes\":16777216,\"max_inflight_bytes\":67108864}}");
     turbo_flow_resolved_config_destroy(config);
 
     config = NULL;
@@ -83,6 +91,8 @@ spec("flow_config") {
     check_equal(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
     check_equal(ingress.workers, 3u);
     check_equal(ingress.queue_capacity, 17u);
+    check_equal(ingress.max_message_bytes, 4096u);
+    check_equal(ingress.max_inflight_bytes, 8192u);
     turbo_flow_resolved_config_destroy(config);
 
     config = NULL;
@@ -94,6 +104,10 @@ spec("flow_config") {
     check_equal(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
     check_equal(ingress.workers, 2u);
     check_equal(ingress.queue_capacity, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY);
+    check_equal(ingress.max_message_bytes,
+                TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_MESSAGE_BYTES);
+    check_equal(ingress.max_inflight_bytes,
+                TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES);
     turbo_flow_resolved_config_destroy(config);
   }
 
@@ -106,6 +120,9 @@ spec("flow_config") {
         "version: 1\nruntime:\n  ingress:\n    capacity: 1.5\nadapters: {}\n";
     static const char too_many_workers[] =
         "version: 1\nruntime:\n  ingress:\n    workers: 257\nadapters: {}\n";
+    static const char inconsistent_bytes[] =
+        "version: 1\nruntime:\n  ingress:\n    max_message_bytes: 65\n"
+        "    max_inflight_bytes: 64\nadapters: {}\n";
     turbo_flow_resolved_config_t *config = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
 
@@ -127,6 +144,11 @@ spec("flow_config") {
                                                 &config, &error),
                  TURBO_ERANGE);
     check_equal(error.path, "$.runtime.ingress.workers");
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_equal(turbo_flow_config_resolve_yaml(inconsistent_bytes,
+                                                sizeof(inconsistent_bytes) - 1u, &config, &error),
+                TURBO_ERANGE);
+    check_equal(error.path, "$.runtime.ingress.max_message_bytes");
     check_null(config);
   }
 

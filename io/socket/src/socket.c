@@ -14,10 +14,12 @@
 #include <string.h>
 
 static const char *const FLOW_SOCKET_ROLE_VALUES[] = {"source", "sink"};
+static const char *const FLOW_SOCKET_SOURCE_HANDOFF_VALUES[] = {"inline", "async_bounded"};
 static const turbo_flow_option_field_t FLOW_SOCKET_OPTION_FIELDS[] = {
     {"role", TURBO_FLOW_OPTION_ENUM, TURBO_FLOW_OPTION_REQUIRED, 0, 0, FLOW_SOCKET_ROLE_VALUES, 2},
     {"transport", TURBO_FLOW_OPTION_ENUM, TURBO_FLOW_OPTION_REQUIRED, 0, 0,
      TF_CORONET_TRANSPORT_VALUES, TF_CORONET_TRANSPORT_VALUE_COUNT},
+    {"source_handoff", TURBO_FLOW_OPTION_ENUM, 0, 0, 0, FLOW_SOCKET_SOURCE_HANDOFF_VALUES, 2},
     {"kcp_pre_shared_key", TURBO_FLOW_OPTION_STRING, 0, 0, 0, NULL, 0},
     {"kcp_mtu", TURBO_FLOW_OPTION_U32, TURBO_FLOW_OPTION_HAS_MIN | TURBO_FLOW_OPTION_HAS_MAX, 576,
      UINT16_MAX, NULL, 0},
@@ -123,6 +125,7 @@ typedef struct flow_coronet_socket_adapter_s {
   int port;
   turbo_flow_coronet_socket_role_t role;
   turbo_flow_coronet_transport_t transport;
+  turbo_flow_source_handoff_mode_t source_handoff;
   tf_coronet_socket_timeout_config_t timeouts;
   tf_coronet_socket_options_t socket_options;
   tf_coronet_udp_options_t udp_options;
@@ -425,13 +428,17 @@ static int flow_socket_resolved_assign(const turbo_flow_resolved_adapter_view_t 
 
 static int flow_socket_config_from_resolved(const turbo_flow_resolved_config_t *resolved,
                                             const char *adapter_name,
-                                            turbo_flow_coronet_socket_config_t *config) {
+                                            turbo_flow_coronet_socket_config_t *config,
+                                            turbo_flow_coronet_socket_source_options_t
+                                                *source_options) {
   turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
   int have_role = 0;
   int have_transport = 0;
   int rc;
-  if (!config) return TURBO_EINVAL;
+  if (!config || !source_options) return TURBO_EINVAL;
   memset(config, 0, sizeof(*config));
+  *source_options = (turbo_flow_coronet_socket_source_options_t)
+      TURBO_FLOW_CORONET_SOCKET_SOURCE_OPTIONS_INIT;
   rc = turbo_flow_resolved_config_adapter(resolved, adapter_name, &view);
   if (rc != TURBO_OK) return rc;
   if (strcmp(view.kind, "socket") != 0) return TURBO_EINVAL;
@@ -452,6 +459,16 @@ static int flow_socket_config_from_resolved(const turbo_flow_resolved_config_t *
       rc = flow_socket_resolved_enum(&view, name, TF_CORONET_TRANSPORT_VALUES,
                                      TF_CORONET_TRANSPORT_VALUE_COUNT, &config->transport);
       have_transport = rc == TURBO_OK;
+      matched = 1;
+    } else if (strcmp(name, "source_handoff") == 0) {
+      int handoff = 0;
+      rc = flow_socket_resolved_enum(
+          &view, name, FLOW_SOCKET_SOURCE_HANDOFF_VALUES,
+          sizeof(FLOW_SOCKET_SOURCE_HANDOFF_VALUES) /
+              sizeof(FLOW_SOCKET_SOURCE_HANDOFF_VALUES[0]),
+          &handoff);
+      if (rc == TURBO_OK)
+        source_options->handoff = (turbo_flow_source_handoff_mode_t)handoff;
       matched = 1;
     } else {
       rc = TURBO_EINVAL;
@@ -594,7 +611,9 @@ static int flow_coronet_source_publish_received(flow_coronet_socket_adapter_t *a
   }
   msg.payload = vstr_from_buf(data, len);
 
-  rc = turbo_flow_publish(adapter->flow, adapter->source_name, &msg);
+  rc = adapter->source_handoff == TURBO_FLOW_SOURCE_HANDOFF_ASYNC_BOUNDED
+           ? turbo_flow_publish_async(adapter->flow, adapter->source_name, &msg, NULL, NULL)
+           : turbo_flow_publish(adapter->flow, adapter->source_name, &msg);
   turbo_flow_msg_cleanup(&msg);
   return rc;
 }
@@ -995,9 +1014,10 @@ static int flow_socket_register_contract(turbo_flow_t *flow) {
   return turbo_flow_register_module_contract(flow, &module, operations, 2u);
 }
 
-int turbo_flow_coronet_register_socket_adapter_ex(
+int turbo_flow_coronet_register_socket_adapter_with_source_options(
     turbo_flow_t *flow, const char *name, const turbo_flow_coronet_socket_config_t *config,
-    const turbo_flow_coronet_execution_binding_t *execution) {
+    const turbo_flow_coronet_execution_binding_t *execution,
+    const turbo_flow_coronet_socket_source_options_t *source_options) {
   flow_coronet_socket_adapter_t *adapter;
   turbo_flow_adapter_ops_t ops;
   turbo_flow_adapter_schema_t schema;
@@ -1009,13 +1029,23 @@ int turbo_flow_coronet_register_socket_adapter_ex(
   size_t operation_count;
   int rc;
 
-  if (!flow || !name || name[0] == '\0' || !execution) return TURBO_EINVAL;
+  if (!flow || !name || name[0] == '\0' || !execution || !source_options ||
+      source_options->size < sizeof(*source_options) ||
+      source_options->abi_version != TURBO_FLOW_CORONET_SOCKET_SOURCE_OPTIONS_ABI_VERSION ||
+      (source_options->handoff != TURBO_FLOW_SOURCE_HANDOFF_INLINE &&
+       source_options->handoff != TURBO_FLOW_SOURCE_HANDOFF_ASYNC_BOUNDED))
+    return TURBO_EINVAL;
   rc = turbo_flow_coronet_execution_binding_validate(execution);
   if (rc != TURBO_OK) return rc;
   if (config) {
     if (config->context || config->take_context_ownership) return TURBO_EINVAL;
     rc = turbo_flow_coronet_socket_config_validate(config);
     if (rc != TURBO_OK) return rc;
+    if (config->role != TURBO_FLOW_CORONET_SOCKET_SOURCE &&
+        source_options->handoff != TURBO_FLOW_SOURCE_HANDOFF_INLINE)
+      return TURBO_EINVAL;
+  } else if (source_options->handoff != TURBO_FLOW_SOURCE_HANDOFF_INLINE) {
+    return TURBO_EINVAL;
   }
   rc = flow_socket_register_contract(flow);
   if (rc != TURBO_OK) return rc;
@@ -1031,6 +1061,7 @@ int turbo_flow_coronet_register_socket_adapter_ex(
   adapter->request_sync_initialized = 1;
   atomic_init(&adapter->started, 0);
   atomic_init(&adapter->quiesced, 0);
+  adapter->source_handoff = source_options->handoff;
 
   rc = tf_coronet_execution_init(&adapter->execution, execution);
   adapter->ctx = adapter->execution.context;
@@ -1181,6 +1212,15 @@ int turbo_flow_coronet_register_socket_adapter_ex(
   return TURBO_OK;
 }
 
+int turbo_flow_coronet_register_socket_adapter_ex(
+    turbo_flow_t *flow, const char *name, const turbo_flow_coronet_socket_config_t *config,
+    const turbo_flow_coronet_execution_binding_t *execution) {
+  const turbo_flow_coronet_socket_source_options_t source_options =
+      TURBO_FLOW_CORONET_SOCKET_SOURCE_OPTIONS_INIT;
+  return turbo_flow_coronet_register_socket_adapter_with_source_options(
+      flow, name, config, execution, &source_options);
+}
+
 int turbo_flow_coronet_register_socket_adapter(turbo_flow_t *flow, const char *name,
                                                const turbo_flow_coronet_socket_config_t *config) {
   turbo_flow_coronet_execution_binding_t execution;
@@ -1210,11 +1250,13 @@ int turbo_flow_coronet_register_socket_resolved_adapter_ex(
     turbo_flow_t *flow, const turbo_flow_resolved_config_t *resolved, const char *adapter_name,
     const turbo_flow_coronet_execution_binding_t *execution) {
   turbo_flow_coronet_socket_config_t config;
+  turbo_flow_coronet_socket_source_options_t source_options;
   int rc;
   if (!flow || !execution) return TURBO_EINVAL;
-  rc = flow_socket_config_from_resolved(resolved, adapter_name, &config);
+  rc = flow_socket_config_from_resolved(resolved, adapter_name, &config, &source_options);
   if (rc != TURBO_OK) return rc;
-  return turbo_flow_coronet_register_socket_adapter_ex(flow, adapter_name, &config, execution);
+  return turbo_flow_coronet_register_socket_adapter_with_source_options(
+      flow, adapter_name, &config, execution, &source_options);
 }
 
 int turbo_flow_coronet_register_socket_resolved_adapter(

@@ -29,6 +29,7 @@
 #define FLOW_BENCH_ASYNC_INGRESS_ITERS 10000
 #define FLOW_BENCH_SECURITY_EVAL_ITERS 100000
 #define FLOW_BENCH_SECURITY_CANDIDATE_ITERS 10000
+#define FLOW_BENCH_REACHABILITY_ITERS 500
 
 static atomic_size_t g_flow_bench_count = 0;
 
@@ -843,6 +844,54 @@ static void bench_publish_message(turbo_flow_t *flow, const char *source_name,
 }
 
 spec("Turbo Flow Bench") {
+  bench("reachability") {
+    enum { FLOW_BENCH_REACHABILITY_STAGES = 512 };
+    turbo_flow_t *flow = turbo_flow_create();
+    uint8_t *reachable =
+        (uint8_t *)calloc(FLOW_BENCH_REACHABILITY_STAGES, sizeof(*reachable));
+    uint32_t *worklist =
+        (uint32_t *)calloc(FLOW_BENCH_REACHABILITY_STAGES, sizeof(*worklist));
+    int reachability_status = TURBO_OK;
+
+    check_not_null(flow);
+    check_not_null(reachable);
+    check_not_null(worklist);
+    check_equal(turbo_flow_stl_error(vec_resize(&flow->runtime_nodes,
+                                                 FLOW_BENCH_REACHABILITY_STAGES)),
+                TURBO_OK);
+    check_equal(turbo_flow_stl_error(vec_resize(&flow->runtime_edges,
+                                                 FLOW_BENCH_REACHABILITY_STAGES - 1u)),
+                TURBO_OK);
+    for (uint32_t stage = 0u; stage < FLOW_BENCH_REACHABILITY_STAGES; ++stage) {
+      flow_runtime_node_plan_t *node =
+          (flow_runtime_node_plan_t *)vec_at(&flow->runtime_nodes, stage);
+      memset(node, 0, sizeof(*node));
+      node->stage_index = stage;
+      node->incoming_count = stage == 0u ? 0u : 1u;
+      node->outgoing_begin = stage;
+      node->outgoing_count = stage + 1u < FLOW_BENCH_REACHABILITY_STAGES ? 1u : 0u;
+      if (stage + 1u < FLOW_BENCH_REACHABILITY_STAGES) {
+        flow_runtime_edge_plan_t *edge =
+            (flow_runtime_edge_plan_t *)vec_at(&flow->runtime_edges, stage);
+        memset(edge, 0, sizeof(*edge));
+        edge->from_stage = stage;
+        edge->to_stage = stage + 1u;
+      }
+    }
+
+    benchmark_ops("topology=linear stages=512 edges=511 mark-reachable",
+                  FLOW_BENCH_REACHABILITY_ITERS, 1u) {
+      memset(reachable, 0, FLOW_BENCH_REACHABILITY_STAGES * sizeof(*reachable));
+      reachability_status = flow_mark_reachable_from_stage(
+          flow, reachable, worklist, FLOW_BENCH_REACHABILITY_STAGES, 0u);
+    }
+    check_equal(reachability_status, TURBO_OK);
+    check_equal(reachable[FLOW_BENCH_REACHABILITY_STAGES - 1u], 1u);
+    free(worklist);
+    free(reachable);
+    turbo_flow_destroy(flow);
+  }
+
   bench("compile") {
     static const char *src = "source input\n"
                              "stage parse\n"

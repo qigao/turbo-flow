@@ -123,6 +123,8 @@ runtime:
   ingress:
     workers: 1
     capacity: 1024
+    max_message_bytes: 16777216
+    max_inflight_bytes: 67108864
 profiles:
   orders_us:
     bind_adapter: databind.order

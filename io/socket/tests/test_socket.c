@@ -357,6 +357,12 @@ typedef struct flow_record_state_s {
   int called;
 } flow_record_state_t;
 
+typedef struct flow_async_source_gate_s {
+  atomic_int entered;
+  atomic_int allow_exit;
+  atomic_int completed;
+} flow_async_source_gate_t;
+
 typedef struct ws_source_client_state_s {
   coro_context_t *ctx;
   const char *data;
@@ -413,6 +419,22 @@ static int flow_record_stage(turbo_flow_msg_t *msg, void *ctx) {
       msg->payload.len < sizeof(state->payload) ? msg->payload.len : sizeof(state->payload);
   if (state->payload_len > 0) memcpy(state->payload, msg->payload.data, state->payload_len);
   return TURBO_OK;
+}
+
+static int flow_async_source_gate_stage(turbo_flow_msg_t *msg, void *ctx) {
+  flow_async_source_gate_t *gate = (flow_async_source_gate_t *)ctx;
+  if (!gate || !msg) return TURBO_EINVAL;
+  atomic_store_explicit(&gate->entered, 1, memory_order_release);
+  while (!atomic_load_explicit(&gate->allow_exit, memory_order_acquire))
+    turbo_sleep_ms(1);
+  atomic_store_explicit(&gate->completed, 1, memory_order_release);
+  return TURBO_OK;
+}
+
+static void socket_test_mark_post(void *arg1, void *arg2) {
+  atomic_int *called = (atomic_int *)arg1;
+  (void)arg2;
+  atomic_store_explicit(called, 1, memory_order_release);
 }
 
 static int flow_threaded_record_stage(turbo_flow_msg_t *msg, void *ctx) {
@@ -907,7 +929,7 @@ spec("turbo_flow_coronet") {
     check_equal(turbo_flow_adapter_connection_snapshot_at(flow, 0, &connection), TURBO_OK);
     check_equal(connection.state, TURBO_FLOW_CONNECTION_STOPPED);
     check_equal(connection.endpoint, "tcp://:0");
-    check_equal(schema->field_count, 39);
+    check_equal(schema->field_count, 40);
     const turbo_flow_option_field_t *kcp_pre_shared_key = NULL;
     const turbo_flow_option_field_t *kcp_mtu = NULL;
     const turbo_flow_option_field_t *kcp_send_window = NULL;
@@ -932,6 +954,7 @@ spec("turbo_flow_coronet") {
     const turbo_flow_option_field_t *linger = NULL;
     const turbo_flow_option_field_t *linger_ms = NULL;
     const turbo_flow_option_field_t *send_hwm_bytes = NULL;
+    const turbo_flow_option_field_t *source_handoff = NULL;
     const turbo_flow_option_field_t *udp_multicast_group = NULL;
     const turbo_flow_option_field_t *udp_multicast_interface = NULL;
     const turbo_flow_option_field_t *udp_option_flags = NULL;
@@ -983,6 +1006,8 @@ spec("turbo_flow_coronet") {
       if (strcmp(schema->fields[i].name, "linger_ms") == 0) linger_ms = &schema->fields[i];
       if (strcmp(schema->fields[i].name, "send_hwm_bytes") == 0)
         send_hwm_bytes = &schema->fields[i];
+      if (strcmp(schema->fields[i].name, "source_handoff") == 0)
+        source_handoff = &schema->fields[i];
       if (strcmp(schema->fields[i].name, "udp_multicast_group") == 0)
         udp_multicast_group = &schema->fields[i];
       if (strcmp(schema->fields[i].name, "udp_multicast_interface") == 0)
@@ -1020,6 +1045,7 @@ spec("turbo_flow_coronet") {
     check_not_null(linger);
     check_not_null(linger_ms);
     check_not_null(send_hwm_bytes);
+    check_not_null(source_handoff);
     check_not_null(udp_multicast_group);
     check_not_null(udp_multicast_interface);
     check_not_null(udp_option_flags);
@@ -1034,6 +1060,10 @@ spec("turbo_flow_coronet") {
     check_equal(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_WS], "ws");
     check_equal(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_WSS], "wss");
     check_equal(transport->enum_values[TURBO_FLOW_CORONET_TRANSPORT_PIPE], "pipe");
+    check_equal(source_handoff->enum_value_count, 2u);
+    check_equal(source_handoff->enum_values[TURBO_FLOW_SOURCE_HANDOFF_INLINE], "inline");
+    check_equal(source_handoff->enum_values[TURBO_FLOW_SOURCE_HANDOFF_ASYNC_BOUNDED],
+                "async_bounded");
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
     check_equal(turbo_flow_compile(flow), TURBO_OK);
     check_equal(turbo_flow_start(flow), TURBO_OK);
@@ -1192,6 +1222,35 @@ spec("turbo_flow_coronet") {
     turbo_flow_destroy(flow);
   }
 
+  it("registers async bounded socket source handoff from resolved YAML") {
+    static const char yaml[] =
+        "version: 1\n"
+        "adapters:\n"
+        "  socket.in:\n"
+        "    kind: socket\n"
+        "    config:\n"
+        "      role: source\n"
+        "      transport: tcp\n"
+        "      host: 127.0.0.1\n"
+        "      port: 7002\n"
+        "      source_handoff: async_bounded\n";
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_config_t *resolved = NULL;
+    turbo_flow_t *flow = turbo_flow_create();
+    const turbo_flow_adapter_schema_t *schema;
+
+    check_not_null(flow);
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+                TURBO_OK);
+    check_equal(turbo_flow_coronet_register_socket_resolved_adapter(flow, resolved, "socket.in"),
+                TURBO_OK);
+    schema = turbo_flow_find_adapter_schema(flow, "socket.in");
+    check_not_null(schema);
+    check_equal(schema->roles, TURBO_FLOW_ADAPTER_SOURCE);
+    turbo_flow_resolved_config_destroy(resolved);
+    turbo_flow_destroy(flow);
+  }
+
   it("fails resolved socket registration for unknown mistyped and host-only fields") {
     static const char unknown[] =
         "version: 1\nadapters:\n  socket.out:\n    kind: socket\n    config:\n"
@@ -1295,6 +1354,53 @@ spec("turbo_flow_coronet") {
     check_equal(turbo_flow_coronet_socket_config_validate(&config), TURBO_EINVAL);
     check_equal(turbo_flow_coronet_register_socket_adapter(flow, "socket.invalid", &config),
                  TURBO_EINVAL);
+
+    turbo_flow_destroy(flow);
+  }
+
+  it("rejects invalid socket source handoff profiles") {
+    turbo_flow_coronet_execution_binding_t execution;
+    turbo_flow_coronet_socket_source_options_t source_options =
+        TURBO_FLOW_CORONET_SOCKET_SOURCE_OPTIONS_INIT;
+    turbo_flow_coronet_socket_config_t config;
+    turbo_flow_t *flow = turbo_flow_create();
+
+    memset(&execution, 0, sizeof(execution));
+    memset(&config, 0, sizeof(config));
+    check_not_null(flow);
+    execution.size = sizeof(execution);
+    execution.kind = TURBO_FLOW_CORONET_EXECUTION_PRIVATE;
+    config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
+    config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
+    config.host = "127.0.0.1";
+    config.port = 7003;
+
+    source_options.size = sizeof(source_options) - 1u;
+    check_equal(turbo_flow_coronet_register_socket_adapter_with_source_options(
+                    flow, "socket.bad-size", &config, &execution, &source_options),
+                TURBO_EINVAL);
+    source_options = (turbo_flow_coronet_socket_source_options_t)
+        TURBO_FLOW_CORONET_SOCKET_SOURCE_OPTIONS_INIT;
+    source_options.abi_version += 1u;
+    check_equal(turbo_flow_coronet_register_socket_adapter_with_source_options(
+                    flow, "socket.bad-abi", &config, &execution, &source_options),
+                TURBO_EINVAL);
+    source_options = (turbo_flow_coronet_socket_source_options_t)
+        TURBO_FLOW_CORONET_SOCKET_SOURCE_OPTIONS_INIT;
+    source_options.handoff = (turbo_flow_source_handoff_mode_t)99;
+    check_equal(turbo_flow_coronet_register_socket_adapter_with_source_options(
+                    flow, "socket.bad-mode", &config, &execution, &source_options),
+                TURBO_EINVAL);
+    source_options = (turbo_flow_coronet_socket_source_options_t)
+        TURBO_FLOW_CORONET_SOCKET_SOURCE_OPTIONS_INIT;
+    source_options.handoff = TURBO_FLOW_SOURCE_HANDOFF_ASYNC_BOUNDED;
+    config.role = TURBO_FLOW_CORONET_SOCKET_SINK;
+    check_equal(turbo_flow_coronet_register_socket_adapter_with_source_options(
+                    flow, "socket.bad-role", &config, &execution, &source_options),
+                TURBO_EINVAL);
+    check_equal(turbo_flow_coronet_register_socket_adapter_with_source_options(
+                    flow, "socket.no-config", NULL, &execution, &source_options),
+                TURBO_EINVAL);
 
     turbo_flow_destroy(flow);
   }
@@ -1973,6 +2079,80 @@ spec("turbo_flow_coronet") {
     check_equal(state.payload_len, sizeof(raw) - 1);
     check_equal(state.payload, raw, sizeof(raw) - 1);
 
+    check_equal(turbo_flow_stop(flow), TURBO_OK);
+
+    socket_test_context_stop(ctx);
+    turbo_flow_destroy(flow);
+    coro_context_destroy(ctx);
+  }
+
+  it("keeps the CoroNet owner responsive during async bounded source handoff") {
+    static const char *src = "source socket_in adapter \"socket.tcp\"\n"
+                             "stage gate\n"
+                             "stage main {\n"
+                             "  socket_in -> gate\n"
+                             "}\n";
+    const char raw[] = "async-inbound";
+    coro_context_t *ctx = coro_context_create(NULL);
+    turbo_flow_async_ingress_config_t ingress = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
+    turbo_flow_coronet_execution_binding_t execution;
+    turbo_flow_coronet_socket_source_options_t source_options =
+        TURBO_FLOW_CORONET_SOCKET_SOURCE_OPTIONS_INIT;
+    turbo_flow_coronet_socket_config_t config;
+    flow_async_source_gate_t gate;
+    atomic_int owner_posted;
+    turbo_flow_t *flow = turbo_flow_create();
+    unsigned short port = test_pick_loopback_port();
+    int post_rc;
+    int owner_responsive;
+
+    memset(&execution, 0, sizeof(execution));
+    memset(&config, 0, sizeof(config));
+    atomic_init(&gate.entered, 0);
+    atomic_init(&gate.allow_exit, 0);
+    atomic_init(&gate.completed, 0);
+    atomic_init(&owner_posted, 0);
+    check_not_null(ctx);
+    check_not_null(flow);
+    check_greater(port, 0);
+    ingress.workers = 1u;
+    ingress.queue_capacity = 2u;
+    execution.size = sizeof(execution);
+    execution.kind = TURBO_FLOW_CORONET_EXECUTION_BORROWED_CONTEXT;
+    execution.context = ctx;
+    config.role = TURBO_FLOW_CORONET_SOCKET_SOURCE;
+    config.transport = TURBO_FLOW_CORONET_TRANSPORT_TCP;
+    config.host = "127.0.0.1";
+    config.port = (int)port;
+    config.timeout_ms = 1000u;
+    source_options.handoff = TURBO_FLOW_SOURCE_HANDOFF_ASYNC_BOUNDED;
+
+    check_equal(socket_test_context_start(ctx), TURBO_OK);
+    check_equal(turbo_flow_configure_async_ingress(flow, &ingress), TURBO_OK);
+    check_equal(turbo_flow_coronet_register_socket_adapter_with_source_options(
+                    flow, "socket.tcp", &config, &execution, &source_options),
+                TURBO_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "gate", flow_async_source_gate_stage, &gate,
+                                              NULL),
+                TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(test_send_loopback_payload(port, raw, sizeof(raw) - 1u), TURBO_OK);
+
+    for (int i = 0; i < 1000 && !atomic_load_explicit(&gate.entered, memory_order_acquire); ++i)
+      turbo_sleep_ms(1);
+    post_rc = coro_post(ctx, socket_test_mark_post, (void *)&owner_posted, NULL);
+    for (int i = 0; i < 200 && !atomic_load_explicit(&owner_posted, memory_order_acquire); ++i)
+      turbo_sleep_ms(1);
+    owner_responsive = atomic_load_explicit(&owner_posted, memory_order_acquire);
+    atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
+    for (int i = 0; i < 1000 && !atomic_load_explicit(&gate.completed, memory_order_acquire); ++i)
+      turbo_sleep_ms(1);
+
+    check_equal(post_rc, TURBO_OK);
+    check_equal(owner_responsive, 1);
+    check_equal(atomic_load_explicit(&gate.completed, memory_order_acquire), 1);
     check_equal(turbo_flow_stop(flow), TURBO_OK);
 
     socket_test_context_stop(ctx);

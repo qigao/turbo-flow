@@ -53,6 +53,9 @@ FIFO 是容器的出队顺序；Round Robin 是从一组候选目标中选择下
 - data program 只返回 mutate-private、route、drop、batch-key、retry-class、dead-letter。
   `turbo_flow_rule_register_data_stage()` 把纯 evaluator 注册成 inline stage，runtime 验证 action，
   并通过 message-owned typed decision sidecar 驱动 route/terminal completion。
+- route、batch-key 和 retry-class 是单值决策；同一次 `ALL_MATCHES` 产生重复单值
+  action 时返回 `TURBO_EPROTO`，message 和 decision 保持不变，不使用隐式的
+  last-write-wins 规则。
 - `turbo_flow_rule_register_data_operation()` 注册标准 `rules.apply` operation 和 `RuleSet`
   resource，使规则节点可以在满足 Message 类型契约的 DAG 位置复用；schema-backed operation
   要求 facts provider，provider 错误沿 operation boundary 传播。已有 message projection

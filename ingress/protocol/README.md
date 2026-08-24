@@ -15,7 +15,8 @@ Socket/CoroNet
 
 MQTT 不是内部中间格式。协议 runtime 调用 `turbo_flow_protocol_decode()`，输出原始
 payload 与 `turbo_flow_protocol_metadata_t`；`TurboFlow::ProtocolIngressGraph` 将二者放入
-同一个 message-owned `mem_buffer_t` 后调用 `turbo_flow_publish()`。Graph stage 可通过
+同一个 message-owned `mem_buffer_t` 后，按 `source_handoff` 调用同步
+`turbo_flow_publish()` 或有界 `turbo_flow_publish_async()`。Graph stage 可通过
 `turbo_flow_protocol_graph_metadata()` 读取 metadata。只有明确选择 MQTT Sink 的调用方
 才链接 `TurboFlow::MqttSink` 并调用 `turbo_flow_mqtt_sink_map_batch()`。Sink 只处理
 调用方持有的有界 batch；MQTT client、数据库 connection、事务与重试由独立 I/O adapter
@@ -40,8 +41,12 @@ client，不保存 broker session、QoS、retained 或离线消息状态。
 - Protocol runtime 拥有分帧缓冲、session、pending delivery 与协议响应顺序。
 - CoroNet owner 拥有 socket、event loop、TLS 身份和关闭栅栏。
 - Graph 拥有已接纳的 `turbo_flow_msg_t`，但不拥有 socket 或协议 session。
-- 同步 Graph bridge 成功后返回 `SETTLED`；自定义异步 Sink 必须先有界复制，再返回
-  `PENDING`，并最终调用 `settle()`。
+- `inline` 是兼容默认值，Graph bridge 成功后返回 `SETTLED`。
+- `async_bounded` 只在 Flow 的队列、单消息字节和总在途字节预算内接纳；成功后返回
+  `PENDING`，worker completion 恰好回调一次。宿主必须把 completion 投递回 CoroNet
+  owner，并在原 publish callback 返回后调用 server/runtime `settle()`；worker 不得直接
+  重入单 owner protocol runtime。
+- 有界接纳失败立即返回具体错误，不产生 completion，也不回退到同步执行。
 - 一个 session 同时最多有一个 pending delivery；满额返回反压，不静默丢弃。
 - 关闭顺序为：关闭 listener admission → drain 已接纳消息 → 发送合法协议响应 →
   等待 handler 退出 → 销毁 listener/execution。

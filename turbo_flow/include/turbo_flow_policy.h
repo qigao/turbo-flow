@@ -212,7 +212,12 @@ TURBO_FLOW_C_API int turbo_flow_rule_processor_evaluate(const turbo_flow_rule_pr
                                                  size_t action_capacity,
                                                  turbo_flow_rule_result_t *result);
 
-/** Validate and atomically apply data actions to one private message copy and decision. */
+/**
+ * Validate and atomically apply data actions to one private message copy and decision.
+ *
+ * Route, batch-key, and retry-class are single-valued decisions. Repeating one of these action
+ * kinds returns TURBO_EPROTO and leaves both outputs unchanged.
+ */
 TURBO_FLOW_C_API int turbo_flow_rule_apply_data_actions(turbo_flow_msg_t *message,
                                                  const turbo_flow_rule_action_t *actions,
                                                  size_t action_count,

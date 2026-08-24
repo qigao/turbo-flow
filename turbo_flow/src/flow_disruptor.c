@@ -526,6 +526,7 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
                                       turbo_flow_publish_result_t *result) {
   uint8_t *reachable = NULL;
   uint8_t *done = NULL;
+  uint32_t *worklist = NULL;
   size_t stage_count;
   size_t pending = 0;
   disruptor_cursor_t publish_cursor;
@@ -545,12 +546,17 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
   stage_count = vec_size(&flow->stages);
   reachable = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
   done = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
-  if (!reachable || !done) {
+  worklist = (uint32_t *)calloc(stage_count, sizeof(uint32_t));
+  if (!reachable || !done || !worklist) {
     rc = flow_set_error_keep_state(flow, TURBO_ENOMEM, 0, 0, "out of memory");
     goto cleanup;
   }
 
-  flow_mark_reachable_from_stage(flow, reachable, source_index);
+  rc = flow_mark_reachable_from_stage(flow, reachable, worklist, stage_count, source_index);
+  if (rc != TURBO_OK) {
+    rc = flow_set_error_keep_state(flow, rc, 0, 0, "broadcast runtime topology is invalid");
+    goto cleanup;
+  }
   for (size_t i = 0; i < vec_size(&flow->broadcast_consumers); ++i) {
     flow_broadcast_consumer_t *consumer =
         (flow_broadcast_consumer_t *)vec_at(&flow->broadcast_consumers, i);
@@ -638,6 +644,7 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
   entry->header = (flow_entry_header_t)FLOW_ENTRY_HEADER_INIT;
 
 cleanup:
+  free(worklist);
   free(reachable);
   free(done);
   return rc;

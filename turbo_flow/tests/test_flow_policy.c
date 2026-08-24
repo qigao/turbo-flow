@@ -351,6 +351,32 @@ spec("versioned rule program") {
     check_equal(message.flags, 13u);
   }
 
+  it("rejects conflicting single-valued data decisions atomically") {
+    turbo_flow_msg_t message;
+    turbo_flow_rule_data_decision_t decision = TURBO_FLOW_RULE_DATA_DECISION_INIT;
+    const turbo_flow_rule_action_t route_conflict[] = {
+        data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "primary"),
+        data_action(TURBO_FLOW_RULE_ACTION_ROUTE, "secondary")};
+    const turbo_flow_rule_action_t batch_conflict[] = {
+        data_action(TURBO_FLOW_RULE_ACTION_BATCH_KEY, "first"),
+        data_action(TURBO_FLOW_RULE_ACTION_BATCH_KEY, "second")};
+    const turbo_flow_rule_action_t retry_conflict[] = {
+        data_action(TURBO_FLOW_RULE_ACTION_RETRY_CLASS, "fast"),
+        data_action(TURBO_FLOW_RULE_ACTION_RETRY_CLASS, "slow")};
+
+    turbo_flow_msg_init(&message);
+    message.flags = 17u;
+    memcpy(decision.route, "stable", sizeof("stable"));
+    check_equal(turbo_flow_rule_apply_data_actions(&message, route_conflict, 2u, &decision),
+                TURBO_EPROTO);
+    check_equal(turbo_flow_rule_apply_data_actions(&message, batch_conflict, 2u, &decision),
+                TURBO_EPROTO);
+    check_equal(turbo_flow_rule_apply_data_actions(&message, retry_conflict, 2u, &decision),
+                TURBO_EPROTO);
+    check_equal(message.flags, 17u);
+    check_equal(decision.route, "stable");
+  }
+
   it("routes graph fan-out through the typed data-rule stage") {
     static const char source[] = "source input\n"
                                  "stage rules\n"

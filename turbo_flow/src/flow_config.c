@@ -13,6 +13,8 @@
 typedef struct flow_config_ingress_s {
   uint32_t workers;
   size_t queue_capacity;
+  size_t max_message_bytes;
+  size_t max_inflight_bytes;
 } flow_config_ingress_t;
 
 static int flow_config_error(turbo_flow_config_error_t *error, int status, const char *path,
@@ -195,10 +197,13 @@ static int flow_config_validate_runtime(const json_value_t *runtime,
                                         flow_config_ingress_t *async_ingress,
                                         turbo_flow_config_error_t *error) {
   static const char *const runtime_keys[] = {"ingress"};
-  static const char *const ingress_keys[] = {"workers", "capacity"};
+  static const char *const ingress_keys[] = {"workers", "capacity", "max_message_bytes",
+                                             "max_inflight_bytes"};
   json_value_t *ingress;
   json_value_t *workers;
   json_value_t *capacity;
+  json_value_t *max_message_bytes;
+  json_value_t *max_inflight_bytes;
   size_t value;
   int rc;
   if (!async_ingress) return TURBO_EINVAL;
@@ -213,6 +218,8 @@ static int flow_config_validate_runtime(const json_value_t *runtime,
   if (rc != TURBO_OK) return rc;
   workers = turbo_json_object_get(ingress, "workers");
   capacity = turbo_json_object_get(ingress, "capacity");
+  max_message_bytes = turbo_json_object_get(ingress, "max_message_bytes");
+  max_inflight_bytes = turbo_json_object_get(ingress, "max_inflight_bytes");
   if (workers) {
     rc = flow_config_read_runtime_integer(workers, "$.runtime.ingress.workers",
                                           TURBO_FLOW_CONFIG_INGRESS_MAX_WORKERS, &value, error);
@@ -224,6 +231,26 @@ static int flow_config_validate_runtime(const json_value_t *runtime,
                                           TURBO_FLOW_CONFIG_INGRESS_MAX_CAPACITY, &value, error);
     if (rc != TURBO_OK) return rc;
     async_ingress->queue_capacity = value;
+  }
+  if (max_message_bytes) {
+    rc = flow_config_read_runtime_integer(max_message_bytes,
+                                          "$.runtime.ingress.max_message_bytes",
+                                          TURBO_FLOW_CONFIG_INGRESS_MAX_MESSAGE_BYTES, &value,
+                                          error);
+    if (rc != TURBO_OK) return rc;
+    async_ingress->max_message_bytes = value;
+  }
+  if (max_inflight_bytes) {
+    rc = flow_config_read_runtime_integer(max_inflight_bytes,
+                                          "$.runtime.ingress.max_inflight_bytes",
+                                          TURBO_FLOW_CONFIG_INGRESS_MAX_INFLIGHT_BYTES, &value,
+                                          error);
+    if (rc != TURBO_OK) return rc;
+    async_ingress->max_inflight_bytes = value;
+  }
+  if (async_ingress->max_message_bytes > async_ingress->max_inflight_bytes) {
+    return flow_config_error(error, TURBO_ERANGE, "$.runtime.ingress.max_message_bytes",
+                             "max_message_bytes must not exceed max_inflight_bytes");
   }
   return TURBO_OK;
 }
@@ -240,6 +267,10 @@ flow_config_add_resolved_runtime(json_value_t *resolved,
   if (!runtime || !ingress) goto done;
   turbo_json_object_set_number(ingress, "workers", (double)async_ingress->workers);
   turbo_json_object_set_number(ingress, "capacity", (double)async_ingress->queue_capacity);
+  turbo_json_object_set_number(ingress, "max_message_bytes",
+                               (double)async_ingress->max_message_bytes);
+  turbo_json_object_set_number(ingress, "max_inflight_bytes",
+                               (double)async_ingress->max_inflight_bytes);
   if (!turbo_json_object_add_checked(runtime, "ingress", ingress)) goto done;
   ingress = NULL;
   if (!turbo_json_object_add_checked(resolved, "runtime", runtime)) goto done;
@@ -343,8 +374,10 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   json_value_t *fragments;
   json_value_t *channels;
   json_value_t *adapters;
-  flow_config_ingress_t async_ingress = {TURBO_FLOW_CONFIG_INGRESS_DEFAULT_WORKERS,
-                                         TURBO_FLOW_CONFIG_INGRESS_DEFAULT_CAPACITY};
+  flow_config_ingress_t async_ingress = {
+      TURBO_FLOW_CONFIG_INGRESS_DEFAULT_WORKERS, TURBO_FLOW_CONFIG_INGRESS_DEFAULT_CAPACITY,
+      TURBO_FLOW_CONFIG_INGRESS_DEFAULT_MAX_MESSAGE_BYTES,
+      TURBO_FLOW_CONFIG_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES};
   int rc;
   if (out) *out = NULL;
   if (!yaml || yaml_len == 0u || !out || !error || error->size < sizeof(*error))

@@ -1766,17 +1766,30 @@ typedef struct turbo_flow_publish_result_s {
 #define TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY TURBO_FLOW_CONFIG_INGRESS_DEFAULT_CAPACITY
 #define TURBO_FLOW_ASYNC_INGRESS_MAX_WORKERS TURBO_FLOW_CONFIG_INGRESS_MAX_WORKERS
 #define TURBO_FLOW_ASYNC_INGRESS_MAX_CAPACITY TURBO_FLOW_CONFIG_INGRESS_MAX_CAPACITY
+#define TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_MESSAGE_BYTES                                         \
+  TURBO_FLOW_CONFIG_INGRESS_DEFAULT_MAX_MESSAGE_BYTES
+#define TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES                                        \
+  TURBO_FLOW_CONFIG_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES
+#define TURBO_FLOW_ASYNC_INGRESS_MAX_MESSAGE_BYTES TURBO_FLOW_CONFIG_INGRESS_MAX_MESSAGE_BYTES
+#define TURBO_FLOW_ASYNC_INGRESS_MAX_INFLIGHT_BYTES TURBO_FLOW_CONFIG_INGRESS_MAX_INFLIGHT_BYTES
 
 /** Flow-owned bounded source ingress used by non-blocking producers. */
 typedef struct turbo_flow_async_ingress_config_s {
   size_t size;
   uint32_t workers;
   size_t queue_capacity;
+  /** Maximum bytes retained by one accepted task across all payload backing stores. */
+  size_t max_message_bytes;
+  /** Maximum aggregate retained payload bytes across accepted async tasks. */
+  size_t max_inflight_bytes;
 } turbo_flow_async_ingress_config_t;
 
+#define TURBO_FLOW_ASYNC_INGRESS_CONFIG_V1_SIZE                                                    \
+  offsetof(turbo_flow_async_ingress_config_t, max_message_bytes)
 #define TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT                                                       \
   {sizeof(turbo_flow_async_ingress_config_t), TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS,            \
-   TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY}
+   TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_MESSAGE_BYTES,  \
+   TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES}
 
 /**
  * Completion invoked on a Flow ingress worker after graph execution.
@@ -1788,12 +1801,22 @@ typedef struct turbo_flow_async_ingress_config_s {
 typedef void (*turbo_flow_publish_completion_fn)(void *ctx,
                                                  const turbo_flow_publish_result_t *result);
 
+/** External source-to-Graph handoff policy. */
+typedef enum turbo_flow_source_handoff_mode_e {
+  /** Execute graph admission and stages on the producer thread before returning. */
+  TURBO_FLOW_SOURCE_HANDOFF_INLINE = 0,
+  /** Retain ownership and try-admit through the configured bounded async ingress. */
+  TURBO_FLOW_SOURCE_HANDOFF_ASYNC_BOUNDED
+} turbo_flow_source_handoff_mode_t;
+
 /**
  * Configure the lazily-created bounded async source ingress.
  *
  * The configuration is copied and survives stop/start. Call only while the
- * flow is not STARTED. Capacity exhaustion is reported by publish_async as
- * TURBO_ENOSPC; submissions never block waiting for queue space.
+ * flow is not STARTED. Queue, per-message byte, or aggregate in-flight byte
+ * exhaustion is reported by publish_async as TURBO_ENOSPC; submissions never
+ * block waiting for capacity. A V1-sized configuration remains accepted and
+ * receives the current byte-budget defaults.
  */
 TURBO_FLOW_C_API int turbo_flow_configure_async_ingress(turbo_flow_t *flow,
                                                  const turbo_flow_async_ingress_config_t *config);

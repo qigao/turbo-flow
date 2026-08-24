@@ -10,12 +10,6 @@
       "name": "boringssl"
     },
     {
-      "name": "libpq"
-    },
-    {
-      "name": "llhttp"
-    },
-    {
       "name": "pkgconf"
     },
     {

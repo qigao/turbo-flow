@@ -8,7 +8,9 @@
 1. Flow 与 execution task 只发生允许的生命周期迁移；
 2. 成功、失败、条件与 reject edge 的选择互斥且符合运行时定义；
 3. fan-in 只有在所有潜在前驱都已决议后才会 ready 或 filtered；
-4. 一个 fan-in gate 不会重复产生 ready 事件，因而每个 message/node 至多进入 ready queue 一次。
+4. 一个 fan-in gate 不会重复产生 ready 事件，因而每个 message/node 至多进入 ready queue 一次；
+5. payload、async ingress、规则决策与 settlement 满足显式的数据平面边界；
+6. 迭代可达展开与对应的递归分层定义等价。
 
 这里的“证明”指 Lean kernel 检查过的抽象模型定理，不等同于对 C 源码、编译器输出或并发内存模型的自动验证。
 
@@ -26,6 +28,10 @@
 | `turbo_flow/src/flow_internal.h:284` | `TaskState` | NEW/ACCEPTED/RUNNING/COMPLETED/CANCELED 生命周期 |
 | `turbo_flow/src/flow_execution.c:28,126` | `TaskState.accepted + TaskEvent.complete` | `flow_execution_task_fail()` 可在 task 运行前通过 `flow_execution_task_complete()` 从 ACCEPTED 进入 COMPLETED |
 | `turbo_flow/src/flow_execution.c:28` | task terminal 规则 | COMPLETED/CANCELED 不再被 completion 改写 |
+| `turbo_flow/src/flow_message.c` | `PayloadView.Valid` | 非空 payload view 必须位于 owned payload 或 buffer 的有效范围内 |
+| `turbo_flow/src/flow_async_ingress.c` | `IngressBudget` | 单消息与总在途字节预算在接纳时同时成立，清理时释放 |
+| `turbo_flow/src/flow_policy.c` | `DataDecision.applyActions` | route、batch-key、retry-class 为单值决策，冲突时整组失败 |
+| `turbo_flow/src/flow_completion.c` | `iterativeReach`、`SettlementState` | runtime 可达传播使用显式 worklist；pending settlement 只结算一次 |
 
 ## 抽象边界
 
@@ -35,14 +41,18 @@
 - stage callback 的结果被视为 `ok` 或 `failed` 输入；
 - conditional predicate 的成功布尔结果；
 - fan-in 的 remaining/activated/ready/filtered 状态；
-- public Flow lifecycle 与内部 execution task lifecycle 的合法迁移关系。
+- public Flow lifecycle 与内部 execution task lifecycle 的合法迁移关系；
+- payload view 的 backing 边界、async ingress 字节预算；
+- 单值规则决策的冲突拒绝与原子提交；
+- 迭代可达展开和 pending/settled 的单步状态机。
 
 ### 明确不纳入证明
 
 - C11 atomic/mutex/condition variable 的 happens-before 正确性；
 - allocator、`vec_t`、Disruptor、thread/coroutine backend 的实现正确性；
 - predicate evaluator、用户 callback、adapter 或 settlement owner 自身正确性；
-- payload ownership、clone/move、reorder buffer、deadline 时钟与 retry 的端到端正确性；
+- payload allocator/refcount、clone/move、reorder buffer、deadline 时钟与 retry 的端到端正确性；
+- protocol owner 与 async worker 之间的实际跨线程 settlement 投递；
 - Lean 模型与 C 源码之间的自动 refinement proof。
 
 这些边界意味着 Lean 结果能证明“给定模型前提，调度规则满足不变量”，不能证明任意 C 执行都满足前提。
@@ -115,21 +125,27 @@ Supporting theorem `named_route_prioritizes_target_match`、`initial_valid` 与
 `accepted_complete_reaches_completed` 分别检查命名路由匹配优先级、正 potential 初始 gate 的不变量，
 以及 task 运行前的 ACCEPTED → COMPLETED 路径；三者不计入上述八个 required theorem。
 
+数据平面扩展还检查：`valid_has_backing_or_is_empty`；`reserve_preserves_valid`、
+`reserve_enforces_message_limit`、`reserve_then_release`；三种 `duplicate_*_rejected` 与
+`failed_apply_has_no_commit`；`iterative_reachability_equivalent`；以及
+`pending_settles_once`、`settled_cannot_settle_again`。这些定理只证明模型中的边界条件，
+不替代 C 的并发、所有权和错误路径测试。
+
 ## 审查发现
 
-### HIGH：递归图遍历没有可执行深度上限
+### MED：compile 阶段的递归图遍历仍没有可执行深度上限
 
 - `事实`：compile reachability 使用递归 `mark_reachable_from_stage()`；cycle 校验使用递归
-  `dfs_cycle()`；runtime reachability 和 filtered downstream propagation 也递归调用，分别见
-  `turbo_flow/src/flow_compile.c:238`、`turbo_flow/src/flow_compile.c:1160`、
-  `turbo_flow/src/flow_completion.c:5` 与 `turbo_flow/src/flow_completion.c:98`。
+  `dfs_cycle()`，见 `turbo_flow/src/flow_compile.c`。
+- `事实`：runtime reachability 与 filtered downstream propagation 已改为 caller-owned 的有界
+  worklist；深链 publish 回归覆盖该路径。
 - `事实`：stage/edge 容器以 `SIZE_MAX` 初始化，当前未检索到 graph stage/depth 的显式配置上限。
-- `推论`：足够深且合法的外部 Graph DSL 可在 compile 或每条 message 的 reachability/filtered
-  propagation 中耗尽 C 栈并使进程崩溃；实际阈值依平台栈大小与编译优化而异。
-- `影响`：Graph 编译、同步 publish、异步 ingress 最终都可能受影响；Lean 的逻辑终止性不能消除
-  C 调用栈风险。
-- `最小修复方向`：将三处 DFS/propagation 改为复用有界 workspace 的显式栈/队列，或在 parser/
-  compiler 入口强制并文档化最大 stage 数与最大 graph 深度；加入深链 compile/publish 回归测试。
+- `推论`：足够深且合法的外部 Graph DSL 仍可能在 compile 阶段耗尽 C 栈；实际阈值依平台栈大小
+  与编译优化而异。
+- `影响`：风险已限定在 Graph 编译；sync/async publish 的 runtime 可达与 filtered propagation
+  不再依赖 C 调用栈。
+- `最小修复方向`：将剩余 compile DFS 改为有界 workspace 的显式栈/队列，或在 parser/compiler
+  入口强制并文档化最大 stage 数与最大 graph 深度；加入深链 compile 回归测试。
 
 ### MED：形式化前提尚未成为 C/Lean 间的可检查契约
 

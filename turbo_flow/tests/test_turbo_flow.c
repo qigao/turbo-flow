@@ -101,6 +101,13 @@ typedef struct batch_prepare_probe_s {
   int fail_status;
 } batch_prepare_probe_t;
 
+typedef struct invalid_batch_payload_ctx_s {
+  mem_buffer_t *buffer;
+  const char *payload;
+  size_t payload_len;
+  size_t calls;
+} invalid_batch_payload_ctx_t;
+
 typedef struct payload_check_ctx_s {
   const char *expected;
   int called;
@@ -363,6 +370,16 @@ static int batch_prepare_message(void *ctx, size_t index, turbo_flow_msg_t *mess
   if (index == probe->fail_index) return probe->fail_status;
   message->id = index + 1u;
   return TURBO_OK;
+}
+
+static int batch_prepare_invalid_payload(void *ctx, size_t index, turbo_flow_msg_t *message) {
+  invalid_batch_payload_ctx_t *invalid = (invalid_batch_payload_ctx_t *)ctx;
+  (void)index;
+  if (!invalid || !message) return TURBO_EINVAL;
+  invalid->calls += 1u;
+  message->buffer = mem_buffer_retain(invalid->buffer);
+  message->payload = vstr_from_buf(invalid->payload, invalid->payload_len);
+  return message->buffer ? TURBO_OK : TURBO_ENOMEM;
 }
 
 static int set_flags_stage(turbo_flow_msg_t *msg, void *ctx) {
@@ -1285,6 +1302,41 @@ suite("Turbo Flow") {
   }
 
   group("compile validation") {
+    it("compiles runtime edges into contiguous per-stage adjacency") {
+      static const char *src = "source input\n"
+                               "stage left\n"
+                               "stage right\n"
+                               "stage sink\n"
+                               "stage main {\n"
+                               "  input -> [left, right] -> sink\n"
+                               "}\n";
+      turbo_flow_t *flow = turbo_flow_create();
+      size_t next_edge = 0u;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "left", noop_stage, NULL, NULL), TURBO_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "right", noop_stage, NULL, NULL), TURBO_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
+      check_equal(turbo_flow_compile(flow), TURBO_OK);
+
+      for (size_t stage_index = 0u; stage_index < vec_size(&flow->runtime_nodes); ++stage_index) {
+        const flow_runtime_node_plan_t *node =
+            (const flow_runtime_node_plan_t *)vec_at_const(&flow->runtime_nodes, stage_index);
+        check_not_null(node);
+        check_equal(node->outgoing_begin, next_edge);
+        for (size_t offset = 0u; offset < node->outgoing_count; ++offset) {
+          const flow_runtime_edge_plan_t *edge = (const flow_runtime_edge_plan_t *)vec_at_const(
+              &flow->runtime_edges, node->outgoing_begin + offset);
+          check_not_null(edge);
+          check_equal(edge->from_stage, stage_index);
+        }
+        next_edge += node->outgoing_count;
+      }
+      check_equal(next_edge, vec_size(&flow->runtime_edges));
+      turbo_flow_destroy(flow);
+    }
+
     it("compiles use aliases without treating source templates as runtime stages") {
       static const char *src = "stage cleanse {\n"
                                "  in raw\n"
@@ -2867,6 +2919,32 @@ suite("Turbo Flow") {
 
       turbo_flow_msg_cleanup(&src);
     }
+
+    it("rejects borrowed payload views outside their declared backing buffer") {
+      char backing[] = "backing";
+      char outside[] = "outside";
+      mem_buffer_t *buffer = mem_wrap_external(backing, sizeof(backing) - 1u, NULL, NULL);
+      turbo_flow_msg_t src;
+      turbo_flow_msg_t dst;
+
+      check_not_null(buffer);
+      turbo_flow_msg_init(&src);
+      src.buffer = buffer;
+      src.payload = vstr_from_buf(outside, sizeof(outside) - 1u);
+
+      turbo_flow_msg_init(&dst);
+      check_equal(turbo_flow_msg_retain_view(&dst, &src), TURBO_EINVAL);
+      turbo_flow_msg_cleanup(&dst);
+      turbo_flow_msg_init(&dst);
+      check_equal(turbo_flow_msg_clone(&dst, &src), TURBO_EINVAL);
+      turbo_flow_msg_cleanup(&dst);
+
+      src.payload = vstr_from_buf(backing + 3u, sizeof(backing));
+      turbo_flow_msg_init(&dst);
+      check_equal(turbo_flow_msg_retain_view(&dst, &src), TURBO_EINVAL);
+      turbo_flow_msg_cleanup(&dst);
+      turbo_flow_msg_cleanup(&src);
+    }
   }
 
   group("inline runtime") {
@@ -2994,8 +3072,8 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
-    it("runs a graph larger than the stack workspace through pooled scratch storage") {
-      enum { LARGE_GRAPH_STAGE_COUNT = 65, LARGE_GRAPH_SOURCE_CAPACITY = 8192 };
+    it("runs a deep graph through bounded iterative scratch storage") {
+      enum { LARGE_GRAPH_STAGE_COUNT = 1024, LARGE_GRAPH_SOURCE_CAPACITY = 65536 };
       char source[LARGE_GRAPH_SOURCE_CAPACITY];
       char stage_name[32];
       size_t used = 0u;
@@ -3345,6 +3423,106 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "backing");
 
+      turbo_flow_msg_cleanup(&msg);
+      turbo_flow_destroy(flow);
+    }
+
+    it("rejects publish payload views outside their declared backing buffer") {
+      static const char *src = "source input\n"
+                               "stage sink\n"
+                               "stage main {\n"
+                               "  input -> sink\n"
+                               "}\n";
+      char backing[] = "backing";
+      char outside[] = "outside";
+      turbo_flow_msg_t msg;
+      turbo_flow_t *flow = turbo_flow_create();
+
+      check_not_null(flow);
+      turbo_flow_msg_init(&msg);
+      msg.buffer = mem_wrap_external(backing, sizeof(backing) - 1u, NULL, NULL);
+      check_not_null(msg.buffer);
+      msg.payload = vstr_from_buf(outside, sizeof(outside) - 1u);
+
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
+      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EINVAL);
+      check_contains(turbo_flow_last_error(flow)->message, "payload");
+
+      turbo_flow_msg_cleanup(&msg);
+      turbo_flow_destroy(flow);
+    }
+
+    it("rejects batch payload views outside their declared backing buffer") {
+      static const char *src = "source input\n"
+                               "stage sink\n"
+                               "stage main {\n"
+                               "  input -> sink\n"
+                               "}\n";
+      char backing[] = "backing";
+      char outside[] = "outside";
+      batch_publish_probe_t sink = {{0}, 0u, 0u, TURBO_EPROTO};
+      invalid_batch_payload_ctx_t invalid = {0};
+      turbo_flow_publish_batch_config_t batch = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
+      turbo_flow_t *flow = turbo_flow_create();
+      size_t published = SIZE_MAX;
+
+      check_not_null(flow);
+      invalid.buffer = mem_wrap_external(backing, sizeof(backing) - 1u, NULL, NULL);
+      invalid.payload = outside;
+      invalid.payload_len = sizeof(outside) - 1u;
+      check_not_null(invalid.buffer);
+      batch.message_count = 1u;
+      batch.prepare = batch_prepare_invalid_payload;
+      batch.ctx = &invalid;
+
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", batch_publish_probe_stage, &sink,
+                                                NULL),
+                   TURBO_OK);
+      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(turbo_flow_publish_batch(flow, "input", &batch, &published), TURBO_EINVAL);
+      check_equal(published, 0u);
+      check_equal(invalid.calls, 1u);
+      check_equal(sink.calls, 0u);
+      check_equal(mem_buffer_ref_count(invalid.buffer), 1u);
+
+      mem_buffer_release(invalid.buffer);
+      turbo_flow_destroy(flow);
+    }
+
+    it("rejects async payload views outside their declared backing buffer") {
+      static const char *src = "source input\n"
+                               "stage sink\n"
+                               "stage main {\n"
+                               "  input -> sink\n"
+                               "}\n";
+      char backing[] = "backing";
+      char outside[] = "outside";
+      async_completion_ctx_t completion;
+      turbo_flow_msg_t msg;
+      turbo_flow_t *flow = turbo_flow_create();
+
+      atomic_init(&completion.called, 0);
+      atomic_init(&completion.last_status, TURBO_EBUSY);
+      check_not_null(flow);
+      turbo_flow_msg_init(&msg);
+      msg.buffer = mem_wrap_external(backing, sizeof(backing) - 1u, NULL, NULL);
+      check_not_null(msg.buffer);
+      msg.payload = vstr_from_buf(outside, sizeof(outside) - 1u);
+
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
+      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(turbo_flow_publish_async(flow, "input", &msg, async_publish_complete, &completion),
+                   TURBO_EINVAL);
+      check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 0);
+
+      check_equal(turbo_flow_stop(flow), TURBO_OK);
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
     }
@@ -3987,6 +4165,122 @@ suite("Turbo Flow") {
       check_equal(atomic_load_explicit(&completion.last_status, memory_order_acquire), TURBO_OK);
       check_equal(atomic_load_explicit(&gate.calls, memory_order_acquire), 1);
       check_equal(turbo_flow_stop(flow), TURBO_OK);
+      turbo_flow_destroy(flow);
+    }
+
+    it("accepts the legacy async ingress ABI with bounded current defaults") {
+      typedef struct legacy_async_ingress_config_s {
+        size_t size;
+        uint32_t workers;
+        size_t queue_capacity;
+      } legacy_async_ingress_config_t;
+      legacy_async_ingress_config_t legacy = {sizeof(legacy), 2u, 7u};
+      turbo_flow_t *flow = turbo_flow_create();
+
+      check_not_null(flow);
+      check_equal(turbo_flow_configure_async_ingress(
+                      flow, (const turbo_flow_async_ingress_config_t *)&legacy),
+                  TURBO_OK);
+      check_equal(flow->async_ingress_config.workers, 2u);
+      check_equal(flow->async_ingress_config.queue_capacity, 7u);
+      check_equal(flow->async_ingress_config.max_message_bytes,
+                  TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_MESSAGE_BYTES);
+      check_equal(flow->async_ingress_config.max_inflight_bytes,
+                  TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES);
+      turbo_flow_destroy(flow);
+    }
+
+    it("bounds retained async message bytes and releases the reservation after completion") {
+      static const char *src = "source input\n"
+                               "stage transform\n"
+                               "stage main {\n"
+                               "  input -> transform\n"
+                               "}\n";
+      turbo_flow_async_ingress_config_t ingress = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
+      async_completion_ctx_t completion;
+      async_gate_ctx_t gate;
+      turbo_flow_msg_t first;
+      turbo_flow_msg_t second;
+      turbo_flow_msg_t oversized;
+      turbo_flow_msg_t pinned_buffer;
+      char pinned_storage[9] = {0};
+      turbo_flow_t *flow = turbo_flow_create();
+
+      ingress.workers = 1u;
+      ingress.queue_capacity = 4u;
+      ingress.max_message_bytes = 8u;
+      ingress.max_inflight_bytes = 10u;
+      atomic_init(&completion.called, 0);
+      atomic_init(&completion.last_status, TURBO_EBUSY);
+      atomic_init(&gate.entered, 0);
+      atomic_init(&gate.allow_exit, 0);
+      atomic_init(&gate.calls, 0);
+      atomic_init(&gate.ran_off_submitter, 0);
+      check_not_null(flow);
+      check_equal(turbo_flow_configure_async_ingress(flow, &ingress), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "transform", async_gate_stage, &gate, NULL),
+                  TURBO_OK);
+      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_start(flow), TURBO_OK);
+
+      turbo_flow_msg_init(&first);
+      first.owned_payload = tstr_dup("12345678");
+      first.payload = tstr_to_v(first.owned_payload);
+      turbo_flow_msg_init(&second);
+      second.owned_payload = tstr_dup("12345");
+      second.payload = tstr_to_v(second.owned_payload);
+      turbo_flow_msg_init(&oversized);
+      oversized.owned_payload = tstr_dup("123456789");
+      oversized.payload = tstr_to_v(oversized.owned_payload);
+      turbo_flow_msg_init(&pinned_buffer);
+      pinned_buffer.buffer =
+          mem_wrap_external(pinned_storage, sizeof(pinned_storage), NULL, NULL);
+      pinned_buffer.payload = vstr_from_buf(pinned_storage, 1u);
+
+      check_equal(
+          turbo_flow_publish_async(flow, "input", &first, async_publish_complete, &completion),
+          TURBO_OK);
+      for (int wait = 0; wait < 2000 && !atomic_load_explicit(&gate.entered, memory_order_acquire);
+           ++wait) {
+        turbo_sleep_ms(1);
+      }
+      check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
+      check_equal(
+          turbo_flow_publish_async(flow, "input", &second, async_publish_complete, &completion),
+          TURBO_ENOSPC);
+      check_equal(
+          turbo_flow_publish_async(flow, "input", &oversized, async_publish_complete, &completion),
+          TURBO_ENOSPC);
+      check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 0);
+
+      atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
+      for (int wait = 0;
+           wait < 2000 && atomic_load_explicit(&completion.called, memory_order_acquire) < 1;
+           ++wait) {
+        turbo_sleep_ms(1);
+      }
+      check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 1);
+      check_equal(flow->async_ingress_inflight_bytes, 0u);
+      check_equal(turbo_flow_publish_async(flow, "input", &pinned_buffer,
+                                           async_publish_complete, &completion),
+                  TURBO_ENOSPC);
+      check_equal(
+          turbo_flow_publish_async(flow, "input", &second, async_publish_complete, &completion),
+          TURBO_OK);
+      for (int wait = 0;
+           wait < 2000 && atomic_load_explicit(&completion.called, memory_order_acquire) < 2;
+           ++wait) {
+        turbo_sleep_ms(1);
+      }
+      check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 2);
+      check_equal(flow->async_ingress_inflight_bytes, 0u);
+
+      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      turbo_flow_msg_cleanup(&pinned_buffer);
+      turbo_flow_msg_cleanup(&oversized);
+      turbo_flow_msg_cleanup(&second);
+      turbo_flow_msg_cleanup(&first);
       turbo_flow_destroy(flow);
     }
 

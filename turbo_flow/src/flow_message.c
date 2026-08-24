@@ -105,6 +105,33 @@ nomem:
   return TURBO_ENOMEM;
 }
 
+static int flow_msg_view_within(const vstr *view, const void *base, size_t size) {
+  uintptr_t data_address;
+  uintptr_t base_address;
+  size_t offset;
+
+  if (!view || !base || !view->data) return 0;
+  data_address = (uintptr_t)view->data;
+  base_address = (uintptr_t)base;
+  if (data_address < base_address) return 0;
+  offset = (size_t)(data_address - base_address);
+  return offset <= size && view->len <= size - offset;
+}
+
+int flow_msg_payload_validate(const turbo_flow_msg_t *msg) {
+  if (!msg || (!msg->payload.data && msg->payload.len != 0u)) return TURBO_EINVAL;
+  if (!msg->payload.data) return TURBO_OK;
+  if (msg->owned_payload &&
+      flow_msg_view_within(&msg->payload, msg->owned_payload, tstr_len(msg->owned_payload))) {
+    return TURBO_OK;
+  }
+  if (msg->buffer && flow_msg_view_within(&msg->payload, mem_buffer_const_data(msg->buffer),
+                                          mem_buffer_used(msg->buffer))) {
+    return TURBO_OK;
+  }
+  return TURBO_EINVAL;
+}
+
 int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg) {
   uintptr_t context_address;
   uintptr_t buffer_address;
@@ -163,7 +190,7 @@ int turbo_flow_msg_retain_view(turbo_flow_msg_t *dst, const turbo_flow_msg_t *sr
   const flow_msg_projection_t *source_binding;
   flow_msg_projection_t *binding_copy = NULL;
 
-  if (!dst || !src) return TURBO_EINVAL;
+  if (!dst || !src || flow_msg_payload_validate(src) != TURBO_OK) return TURBO_EINVAL;
   source_binding = flow_msg_projection(src);
   if (src->owned_payload || (source_binding && source_binding->value)) {
     return TURBO_EINVAL;
@@ -192,9 +219,13 @@ int turbo_flow_msg_retain_view(turbo_flow_msg_t *dst, const turbo_flow_msg_t *sr
 
 int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src) {
   int has_projection;
+  int payload_in_owned;
 
-  if (!dst || !src) return TURBO_EINVAL;
+  if (!dst || !src || flow_msg_payload_validate(src) != TURBO_OK) return TURBO_EINVAL;
   has_projection = flow_msg_projection(src) != NULL;
+  payload_in_owned = src->owned_payload && src->payload.data &&
+                     flow_msg_view_within(&src->payload, src->owned_payload,
+                                          tstr_len(src->owned_payload));
   turbo_flow_msg_init(dst);
   *dst = *src;
   dst->buffer = mem_buffer_retain(src->buffer);
@@ -208,25 +239,16 @@ int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src) {
   }
 
   if (src->owned_payload) {
-    uintptr_t payload_addr = (uintptr_t)src->payload.data;
-    uintptr_t owned_start = (uintptr_t)src->owned_payload;
-    uintptr_t owned_end = owned_start + tstr_len(src->owned_payload);
-
     dst->owned_payload = tstr_from_v(tstr_to_v(src->owned_payload));
     if (!dst->owned_payload) {
       mem_buffer_release(dst->buffer);
       turbo_flow_msg_init(dst);
       return TURBO_ENOMEM;
     }
-    if (payload_addr >= owned_start && payload_addr <= owned_end) {
-      size_t offset = (size_t)(payload_addr - owned_start);
-      size_t owned_len = tstr_len(dst->owned_payload);
-      if (offset > owned_len || src->payload.len > owned_len - offset) {
-        turbo_flow_msg_cleanup(dst);
-        return TURBO_EINVAL;
-      }
+    if (payload_in_owned) {
+      size_t offset = (size_t)((uintptr_t)src->payload.data - (uintptr_t)src->owned_payload);
       dst->payload = vstr_from_buf(dst->owned_payload + offset, src->payload.len);
-    } else {
+    } else if (!src->payload.data) {
       dst->payload = tstr_to_v(dst->owned_payload);
     }
   }

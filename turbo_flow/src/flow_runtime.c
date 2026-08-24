@@ -13,6 +13,7 @@ typedef struct flow_runtime_stack_workspace_s {
   uint32_t remaining[FLOW_RUNTIME_STACK_STAGE_CAPACITY];
   uint32_t activated[FLOW_RUNTIME_STACK_STAGE_CAPACITY];
   uint32_t queue[FLOW_RUNTIME_STACK_STAGE_CAPACITY];
+  uint32_t skipped_queue[FLOW_RUNTIME_STACK_STAGE_CAPACITY];
   uint64_t stage_sequences[FLOW_RUNTIME_STACK_STAGE_CAPACITY];
 } flow_runtime_stack_workspace_t;
 
@@ -22,6 +23,7 @@ typedef struct flow_runtime_workspace_s {
   uint32_t *remaining;
   uint32_t *activated;
   uint32_t *queue;
+  uint32_t *skipped_queue;
   uint64_t *stage_sequences;
   void *pooled_storage;
 } flow_runtime_workspace_t;
@@ -33,7 +35,7 @@ static size_t flow_runtime_align_offset(size_t offset, size_t alignment) {
 static int flow_runtime_workspace_init(flow_runtime_workspace_t *workspace,
                                        flow_runtime_stack_workspace_t *stack_workspace,
                                        size_t stage_count) {
-  const size_t bytes_per_stage = sizeof(uint8_t) * 2u + sizeof(uint32_t) * 3u + sizeof(uint64_t);
+  const size_t bytes_per_stage = sizeof(uint8_t) * 2u + sizeof(uint32_t) * 4u + sizeof(uint64_t);
   const size_t alignment_slack = sizeof(uint32_t) - 1u + sizeof(uint64_t) - 1u;
   unsigned char *storage;
   size_t offset = 0u;
@@ -47,6 +49,8 @@ static int flow_runtime_workspace_init(flow_runtime_workspace_t *workspace,
     memset(stack_workspace->remaining, 0, stage_count * sizeof(*stack_workspace->remaining));
     memset(stack_workspace->activated, 0, stage_count * sizeof(*stack_workspace->activated));
     memset(stack_workspace->queue, 0, stage_count * sizeof(*stack_workspace->queue));
+    memset(stack_workspace->skipped_queue, 0,
+           stage_count * sizeof(*stack_workspace->skipped_queue));
     memset(stack_workspace->stage_sequences, 0,
            stage_count * sizeof(*stack_workspace->stage_sequences));
     workspace->reachable = stack_workspace->reachable;
@@ -54,6 +58,7 @@ static int flow_runtime_workspace_init(flow_runtime_workspace_t *workspace,
     workspace->remaining = stack_workspace->remaining;
     workspace->activated = stack_workspace->activated;
     workspace->queue = stack_workspace->queue;
+    workspace->skipped_queue = stack_workspace->skipped_queue;
     workspace->stage_sequences = stack_workspace->stage_sequences;
     return TURBO_OK;
   }
@@ -74,6 +79,8 @@ static int flow_runtime_workspace_init(flow_runtime_workspace_t *workspace,
   offset += stage_count * sizeof(*workspace->activated);
   workspace->queue = (uint32_t *)(void *)(storage + offset);
   offset += stage_count * sizeof(*workspace->queue);
+  workspace->skipped_queue = (uint32_t *)(void *)(storage + offset);
+  offset += stage_count * sizeof(*workspace->skipped_queue);
   offset = flow_runtime_align_offset(offset, sizeof(uint64_t));
   workspace->stage_sequences = (uint64_t *)(void *)(storage + offset);
   return TURBO_OK;
@@ -470,17 +477,26 @@ int turbo_flow_stop(turbo_flow_t *flow) {
 static int flow_cancel_emission_descendant_reorders(turbo_flow_t *flow, uint32_t stage_index,
                                                     uint64_t *stage_sequences, size_t stage_count) {
   uint8_t stack_reachable[FLOW_RUNTIME_STACK_STAGE_CAPACITY] = {0};
+  uint32_t stack_worklist[FLOW_RUNTIME_STACK_STAGE_CAPACITY] = {0};
   uint8_t *reachable = stack_reachable;
+  uint32_t *worklist = stack_worklist;
   int pooled = 0;
   int rc = TURBO_OK;
 
   if (stage_count > FLOW_RUNTIME_STACK_STAGE_CAPACITY) {
+    if (stage_count > SIZE_MAX / sizeof(*worklist)) return TURBO_ERANGE;
     reachable = (uint8_t *)mem_alloc(mem_global(), stage_count);
-    if (!reachable) return TURBO_ENOMEM;
+    worklist = (uint32_t *)mem_alloc(mem_global(), stage_count * sizeof(*worklist));
+    if (!reachable || !worklist) {
+      mem_free(mem_global(), reachable);
+      mem_free(mem_global(), worklist);
+      return TURBO_ENOMEM;
+    }
     memset(reachable, 0, stage_count);
     pooled = 1;
   }
-  flow_mark_reachable_from_stage(flow, reachable, stage_index);
+  rc = flow_mark_reachable_from_stage(flow, reachable, worklist, stage_count, stage_index);
+  if (rc != TURBO_OK) goto cleanup;
   for (size_t i = 0u; i < stage_count; ++i) {
     int cancel_rc;
     if (i == stage_index || !reachable[i] || stage_sequences[i] == 0u) continue;
@@ -488,7 +504,11 @@ static int flow_cancel_emission_descendant_reorders(turbo_flow_t *flow, uint32_t
     if (rc == TURBO_OK && cancel_rc != TURBO_OK) rc = cancel_rc;
     stage_sequences[i] = 0u;
   }
-  if (pooled) mem_free(mem_global(), reachable);
+cleanup:
+  if (pooled) {
+    mem_free(mem_global(), worklist);
+    mem_free(mem_global(), reachable);
+  }
   return rc;
 }
 
@@ -501,6 +521,7 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   uint32_t *remaining;
   uint32_t *activated;
   uint32_t *queue;
+  uint32_t *skipped_queue;
   uint64_t *stage_sequences;
   size_t head = 0;
   size_t tail = 0;
@@ -522,9 +543,11 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   remaining = workspace.remaining;
   activated = workspace.activated;
   queue = workspace.queue;
+  skipped_queue = workspace.skipped_queue;
   stage_sequences = workspace.stage_sequences;
 
-  flow_mark_reachable_from_stage(flow, reachable, origin_stage);
+  rc = flow_mark_reachable_from_stage(flow, reachable, queue, stage_count, origin_stage);
+  if (rc != TURBO_OK) goto cleanup;
   for (size_t i = 0; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
@@ -567,7 +590,7 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   if (rc != TURBO_OK) goto cleanup;
   completion.status = TURBO_OK;
   rc = flow_apply_completion(flow, &completion, message, done, reachable, remaining, activated,
-                             queue, stage_count, &tail);
+                             queue, stage_count, &tail, skipped_queue, stage_count);
   if (rc != TURBO_OK) goto cleanup;
 
   while (head < tail) {
@@ -584,7 +607,7 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
       if (rc != TURBO_OK) goto cleanup;
       completion.status = TURBO_OK;
       rc = flow_apply_completion(flow, &completion, message, done, reachable, remaining, activated,
-                                 queue, stage_count, &tail);
+                                 queue, stage_count, &tail, skipped_queue, stage_count);
       if (rc != TURBO_OK) goto cleanup;
       continue;
     }
@@ -618,13 +641,13 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
     }
     if (rc != TURBO_OK) {
       rc = flow_apply_completion(flow, &completion, message, done, reachable, remaining, activated,
-                                 queue, stage_count, &tail);
+                                 queue, stage_count, &tail, skipped_queue, stage_count);
       if (rc != TURBO_OK) goto cleanup;
       flow_clear_error(flow);
       continue;
     }
     rc = flow_apply_completion(flow, &completion, message, done, reachable, remaining, activated,
-                               queue, stage_count, &tail);
+                               queue, stage_count, &tail, skipped_queue, stage_count);
     if (rc != TURBO_OK) goto cleanup;
   }
 
@@ -766,9 +789,9 @@ static int flow_publish_message_entered(turbo_flow_t *flow, const char *source_n
 
   if (flow_observer_has_handlers(flow)) observe_start = turbo_hrtime();
   flow_clear_error(flow);
-  if (!msg->buffer && !msg->owned_payload && msg->payload.data) {
+  if (flow_msg_payload_validate(msg) != TURBO_OK) {
     rc = flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
-                                   "publish payload requires a backing buffer or owned payload");
+                                   "publish payload must be within its backing buffer or owned payload");
     goto cleanup;
   }
   if (resolved_source_index < 0) {
@@ -863,11 +886,11 @@ static int flow_publish_batch_next(void *ctx, size_t index, turbo_flow_msg_t *me
                                    "batch message preparation failed");
     goto cleanup;
   }
-  if (!prepared.buffer && !prepared.owned_payload && prepared.payload.data) {
+  if (flow_msg_payload_validate(&prepared) != TURBO_OK) {
     next->failed = 1;
     rc = flow_set_error_keep_state(
         next->flow, TURBO_EINVAL, 0, 0,
-        "publish payload requires a backing buffer or owned payload");
+        "publish payload must be within its backing buffer or owned payload");
     goto cleanup;
   }
   rc = prepared.owned_payload || prepared._content_handle

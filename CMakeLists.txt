@@ -46,16 +46,34 @@ include(CMakeOptions.cmake)
 include(Sanitizers)
 include(CmakeUtils)
 
-find_package(TurboUtils REQUIRED PATHS ${TURBO_UTILS_ROOT})
-find_package(TurboParser CONFIG REQUIRED PATHS "${TURBOPARSER_ROOT}")
+foreach(_turbo_flow_dependency_root IN ITEMS
+        TURBOUTILS_ROOT TURBOPARSER_ROOT TURBONET_ROOT TURBOHTTP_ROOT
+        RULES_FORGE_ROOT)
+  if(NOT DEFINED ENV{${_turbo_flow_dependency_root}} OR
+     "$ENV{${_turbo_flow_dependency_root}}" STREQUAL "")
+    message(FATAL_ERROR
+            "Required dependency root is not defined: ${_turbo_flow_dependency_root}")
+  endif()
+  if(NOT IS_DIRECTORY "$ENV{${_turbo_flow_dependency_root}}")
+    message(FATAL_ERROR
+            "${_turbo_flow_dependency_root} is not a directory: $ENV{${_turbo_flow_dependency_root}}")
+  endif()
+endforeach()
+
+find_package(TurboUtils CONFIG REQUIRED
+             PATHS "$ENV{TURBOUTILS_ROOT}" NO_DEFAULT_PATH)
+find_package(TurboParser CONFIG REQUIRED
+             PATHS "$ENV{TURBOPARSER_ROOT}" NO_DEFAULT_PATH)
 find_package(xxHash CONFIG REQUIRED)
 
 # TurboNet's exported targets reference these dependency targets.
 find_package(Threads REQUIRED)
-find_package(OpenSSL REQUIRED)
-find_package(TurboNet REQUIRED PATHS ${TURBO_NET_ROOT})
+find_package(OpenSSL CONFIG REQUIRED)
+find_package(TurboNet CONFIG REQUIRED
+             PATHS "$ENV{TURBONET_ROOT}" NO_DEFAULT_PATH)
 
-find_package(TurboHttp REQUIRED PATHS ${TURBO_HTTP_ROOT})
+find_package(TurboHttp CONFIG REQUIRED
+             PATHS "$ENV{TURBOHTTP_ROOT}" NO_DEFAULT_PATH)
 
 if(WIN32)
   find_program(
@@ -64,11 +82,11 @@ if(WIN32)
     REQUIRED)
 
   set(TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS
-      "${TURBO_UTILS_ROOT}"
-      "${TURBOPARSER_ROOT}"
-      "${RulesForge_ROOT}"
-      "${TURBO_NET_ROOT}"
-      "${TURBO_HTTP_ROOT}")
+      "$ENV{TURBOUTILS_ROOT}"
+      "$ENV{TURBOPARSER_ROOT}"
+      "$ENV{RULES_FORGE_ROOT}"
+      "$ENV{TURBONET_ROOT}"
+      "$ENV{TURBOHTTP_ROOT}")
   list(REMOVE_DUPLICATES TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS)
 
   set(TURBO_FLOW_RUNTIME_COPY_COMMANDS)

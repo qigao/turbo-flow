@@ -174,6 +174,7 @@ typedef enum flow_runtime_node_flags_e {
 typedef struct flow_runtime_node_plan_s {
   uint32_t stage_index;
   uint32_t incoming_count;
+  uint32_t outgoing_begin;
   uint32_t outgoing_count;
   uint32_t flags;
 } flow_runtime_node_plan_t;
@@ -436,6 +437,7 @@ struct turbo_flow_s {
   turbo_mutex_t async_ingress_mutex;
   turbo_threadpool_t *async_ingress_pool;
   turbo_flow_async_ingress_config_t async_ingress_config;
+  size_t async_ingress_inflight_bytes;
   uint32_t active_publishes;
   flow_admission_state_t admission_state;
   int runtime_sync_initialized;
@@ -509,6 +511,7 @@ void flow_module_registration_destroy(flow_module_registration_t *module);
 void flow_edge_impl_destroy(flow_edge_plan_impl_t *edge);
 int flow_msg_set_failure(turbo_flow_msg_t *msg, const char *stage_name, const char *adapter_name,
                          const char *route_name, int code, uint32_t attempt);
+int flow_msg_payload_validate(const turbo_flow_msg_t *msg);
 int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg);
 void flow_clear_runtime_plan(turbo_flow_t *flow);
 void flow_clear_plan(turbo_flow_t *flow);
@@ -591,8 +594,9 @@ int flow_execute_threadpool_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *st
 int flow_execute_coro_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *stage,
                             const flow_executor_plan_t *executor, uint32_t stage_index,
                             turbo_flow_msg_t *msg, flow_stage_completion_t *completion);
-void flow_mark_reachable_from_stage(const turbo_flow_t *flow, uint8_t *reachable,
-                                    uint32_t stage_index);
+TURBO_FLOW_C_API int flow_mark_reachable_from_stage(const turbo_flow_t *flow, uint8_t *reachable,
+                                                    uint32_t *worklist, size_t worklist_cap,
+                                                    uint32_t stage_index);
 int flow_dispatch_validate_stage(turbo_flow_t *flow, uint32_t stage_index);
 int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg_t *msg,
                         uint64_t sequence, uint64_t msg_id, flow_stage_completion_t *completion,
@@ -632,7 +636,8 @@ void flow_keyed_state_store_reset(turbo_flow_keyed_state_store_t *store);
 int flow_apply_completion(turbo_flow_t *flow, const flow_stage_completion_t *completion,
                           turbo_flow_msg_t *msg, uint8_t *done, const uint8_t *reachable,
                           uint32_t *remaining, uint32_t *activated, uint32_t *queue,
-                          size_t queue_cap, size_t *tail);
+                          size_t queue_cap, size_t *tail, uint32_t *skipped_queue,
+                          size_t skipped_queue_cap);
 TURBO_FLOW_C_API int flow_start_reorder_states(turbo_flow_t *flow);
 TURBO_FLOW_C_API void flow_stop_reorder_states(turbo_flow_t *flow);
 TURBO_FLOW_C_API void flow_clear_reorder_states(turbo_flow_t *flow);

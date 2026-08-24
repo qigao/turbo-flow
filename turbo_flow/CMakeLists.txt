@@ -6,7 +6,8 @@ if(TARGET TurboParser::DataBind AND NOT TARGET TurboUtils::DataBind)
   set_target_properties(TurboUtils::DataBind PROPERTIES
                         INTERFACE_LINK_LIBRARIES TurboParser::DataBind)
 endif()
-find_package(RulesForge 0.9 CONFIG REQUIRED PATHS "${RulesForge_ROOT}")
+find_package(RulesForge 0.9 CONFIG REQUIRED
+             PATHS "$ENV{RULES_FORGE_ROOT}" NO_DEFAULT_PATH)
 cmake_add_grammar(TURBO_FLOW
   LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/flow_lexer.re
   GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/flow_grammar.y

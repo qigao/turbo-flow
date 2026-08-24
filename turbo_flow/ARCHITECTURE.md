@@ -354,11 +354,23 @@ a narrow cursor lock. Non-blocking producers use `turbo_flow_publish_async()`:
 the Flow clones or retains the message, admits it to a lazily-created bounded
 ingress thread pool, and reports graph completion on an ingress worker. This
 handoff does not replace the stage executor selected by the DSL; it only keeps
-source-owned timer or I/O threads out of graph execution. Queue exhaustion
-fails immediately with `TURBO_ENOSPC`. Human YAML configures this one handoff
-through process-level `runtime.ingress.workers` and `runtime.ingress.capacity`;
-the resolver expands omitted values to the public defaults before a host
-configures its Flow.
+source-owned timer or I/O threads out of graph execution. Queue, retained
+per-message byte, and aggregate in-flight byte exhaustion fail immediately with
+`TURBO_ENOSPC`. A retained buffer is charged by capacity, so a small view cannot
+pin a large allocation outside the budget. Human YAML configures this one
+handoff through process-level `runtime.ingress.workers`, `capacity`,
+`max_message_bytes`, and `max_inflight_bytes`; the resolver expands omitted
+values to the public defaults before a host configures its Flow. Every accepted
+task owns one byte reservation and releases it after message cleanup, before
+its completion callback.
+
+Socket and protocol ingress expose this source boundary as two explicit
+profiles. `inline` remains the compatibility default and executes Graph on the
+producer/owner thread. `async_bounded` retains the message into the same Flow
+async ingress; it never creates an adapter-local queue and never falls back to
+inline execution. Socket queue/byte rejection fails the current receive.
+Protocol Graph admission returns `PENDING`, invokes one worker completion, and
+requires the host to marshal settlement back to the serialized protocol owner.
 
 Stop first closes publish admission, asks adapters to
 interrupt pending work, drains all already accepted calls, and only then

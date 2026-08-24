@@ -2,31 +2,9 @@
 
 #include <string.h>
 
-static int flow_emitter_view_within(const vstr *view, const void *base, size_t size) {
-  uintptr_t data_address;
-  uintptr_t base_address;
-  size_t offset;
-
-  if (!view || !base || !view->data) return 0;
-  data_address = (uintptr_t)view->data;
-  base_address = (uintptr_t)base;
-  if (data_address < base_address) return 0;
-  offset = (size_t)(data_address - base_address);
-  return offset <= size && view->len <= size - offset;
-}
-
 static int flow_emitter_output_validate(const turbo_flow_msg_t *output) {
   if (!output) return TURBO_EINVAL;
-  if ((!output->payload.data && output->payload.len != 0u) ||
-      (output->payload.data &&
-       !(output->owned_payload &&
-         flow_emitter_view_within(&output->payload, output->owned_payload,
-                                  tstr_len(output->owned_payload))) &&
-       !(output->buffer &&
-         flow_emitter_view_within(&output->payload, mem_buffer_const_data(output->buffer),
-                                  mem_buffer_used(output->buffer))))) {
-    return TURBO_EINVAL;
-  }
+  if (flow_msg_payload_validate(output) != TURBO_OK) return TURBO_EINVAL;
   if (flow_msg_transport_context_is_borrowed(output)) {
     return TURBO_ENOTSUP;
   }
