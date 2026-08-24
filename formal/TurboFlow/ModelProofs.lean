@@ -2,11 +2,17 @@ import TurboFlow.Model
 
 namespace TurboFlow
 
-theorem reject_inactive_on_success :
-    edgeActive .ok .reject = false := rfl
+theorem reject_inactive_on_success (decision : RouteDecision) :
+    edgeActive .ok decision .reject = false := by
+  cases decision <;> rfl
 
-theorem only_reject_active_on_failure (edge : EdgeKind)
-    (h : edgeActive .failed edge = true) : edge = .reject := by
+theorem only_reject_active_on_failure (decision : RouteDecision) (edge : EdgeKind)
+    (h : edgeActive .failed decision edge = true) : edge = .reject := by
+  cases decision <;> cases edge <;> simp [edgeActive] at h ⊢
+
+theorem named_route_prioritizes_target_match (matchesCurrentTarget : Bool) (edge : EdgeKind)
+    (h : edge ≠ .reject) :
+    edgeActive .ok (.namedRoute matchesCurrentTarget) edge = matchesCurrentTarget := by
   cases edge <;> simp [edgeActive] at h ⊢
 
 theorem flow_transition_preserves_allowed (state next : FlowState) (event : FlowEvent)

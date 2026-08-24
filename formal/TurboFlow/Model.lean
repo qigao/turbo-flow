@@ -11,12 +11,18 @@ inductive StageResult where
   | failed
   deriving DecidableEq, Repr
 
-def edgeActive : StageResult → EdgeKind → Bool
-  | .ok, .unconditional => true
-  | .ok, .conditional selected => selected
-  | .ok, .reject => false
-  | .failed, .reject => true
-  | .failed, _ => false
+inductive RouteDecision where
+  | noNamedRoute
+  | namedRoute (matchesCurrentTarget : Bool)
+  deriving DecidableEq, Repr
+
+def edgeActive : StageResult → RouteDecision → EdgeKind → Bool
+  | .failed, _, .reject => true
+  | .failed, _, _ => false
+  | .ok, _, .reject => false
+  | .ok, .namedRoute matchesCurrentTarget, _ => matchesCurrentTarget
+  | .ok, .noNamedRoute, .unconditional => true
+  | .ok, .noNamedRoute, .conditional selected => selected
 
 inductive FlowState where
   | new | parsed | compiled | started | stopped | failed
