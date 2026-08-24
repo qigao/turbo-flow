@@ -1,3 +1,6 @@
+import TurboFlow.Model
+import TurboFlow.FanIn
+
 namespace TurboFlow
 
 universe u v
@@ -67,5 +70,23 @@ theorem runTrace_preserves_invariant {State : Type u} {Event : Type v}
           have tail : runTrace step next events = some final := by
             simpa [runTrace, transition] using completed
           exact ih nextValid tail
+
+structure RouteObservation where
+  result : StageResult
+  decision : RouteDecision
+  edges : List EdgeKind
+  deriving DecidableEq, Repr
+
+def routeMask (observation : RouteObservation) : List Bool :=
+  observation.edges.map (edgeActive observation.result observation.decision)
+
+def runFlowTrace : FlowState → List FlowEvent → Option FlowState :=
+  runTrace nextFlowState
+
+def runTaskTrace : TaskState → List TaskEvent → Option TaskState :=
+  runTrace nextTaskState
+
+def runGateTrace : FanInGate → List Bool → Option FanInGate :=
+  runTrace FanInGate.resolve
 
 end TurboFlow

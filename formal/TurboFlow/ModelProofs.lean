@@ -43,6 +43,19 @@ theorem accepted_complete_reaches_completed :
     nextTaskState .accepted .complete = some .completed := by
   rfl
 
+theorem task_transition_preserves_allowed (state next : TaskState) (event : TaskEvent)
+    (h : nextTaskState state event = some next) :
+    AllowedTaskTransition state next := by
+  cases state <;> cases event <;> simp [nextTaskState] at h
+  all_goals subst next
+  all_goals first
+    | exact .acceptNew
+    | exact .runAccepted
+    | exact .completeAccepted
+    | exact .cancelAccepted
+    | exact .completeRunning
+    | exact .cancelRunning
+
 example (gate : FanInGate) (selected : Bool) (next : FanInGate)
     (valid : gate.Valid) (resolved : gate.resolve selected = some next) :
     next.Valid := by

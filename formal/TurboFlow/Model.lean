@@ -80,4 +80,12 @@ def nextTaskState : TaskState → TaskEvent → Option TaskState
   | .running, .cancel => some .canceled
   | _, _ => none
 
+inductive AllowedTaskTransition : TaskState → TaskState → Prop where
+  | acceptNew : AllowedTaskTransition .new .accepted
+  | runAccepted : AllowedTaskTransition .accepted .running
+  | completeAccepted : AllowedTaskTransition .accepted .completed
+  | cancelAccepted : AllowedTaskTransition .accepted .canceled
+  | completeRunning : AllowedTaskTransition .running .completed
+  | cancelRunning : AllowedTaskTransition .running .canceled
+
 end TurboFlow
