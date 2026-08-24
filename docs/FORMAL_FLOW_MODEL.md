@@ -132,14 +132,9 @@ Supporting theorem `named_route_prioritizes_target_match`、`initial_valid` 与
 
 ### MED：形式化前提尚未成为 C/Lean 间的可检查契约
 
-- `事实`：现有测试覆盖 cycle、失败停止、conditional no-match、conditional fan-in 与 task cancel，
-  见 `turbo_flow/tests/test_turbo_flow.c:1869`、`:3251`、`:4806`、`:4830`、`:5536`。
-- `事实`：仓库在本变更前没有 `.lean` 或 `lakefile.toml`；当前仍没有 C/Lean refinement
-  proof 或 trace checker。
-- `推论`：即使抽象定理通过，未来 C 调度修改仍可能偏离 Lean 模型而不触发失败。
-- `影响`：证明主要防止模型层设计错误，不能单独充当 C 回归测试。
-- `最小修复方向`：在 Lean README 中维护逐函数映射；后续可让 C 测试导出小图 trace，再由
-  Lean reference evaluator 或共享生成的 truth table 做差分验证。
+- `事实`：Lean 已提供 route/lifecycle/fan-in 的可执行 reference evaluator 和多步保持定理；当前仍没有版本化 C trace exporter、序列化契约或自动差分 runner。
+- `影响`：模型能检查手工/生成的 Lean 输入，但 C 调度变化仍不会自动触发 Lean 差分失败。
+- `下一最小边界`：由 C 测试导出不含 payload 的版本化 observation trace，并在 CI 中比较最终状态与 route mask。
 
 ### LOW：运行时索引的宽度前提没有显式写入公开 graph contract
 

@@ -2,7 +2,15 @@
 
 此 Lake package 用 Lean 4 对 TurboFlow 单条 message 的路由、fan-in 与生命周期控制规则建立可执行的抽象模型。Lean kernel 检查的是该模型及其前提；它不是 C 源码、编译器输出或 C11 并发内存模型的 refinement proof。
 
-完整模型边界、前提、C 映射与审查风险见 [形式化模型规范](../docs/FORMAL_FLOW_MODEL.md)。
+完整模型边界、前提、C 映射与审查风险见 [形式化模型规范](../docs/FORMAL_FLOW_MODEL.md)；
+事件序列解释器的输入、定理与差分边界见 [可执行轨迹模型规范](../docs/FORMAL_FLOW_TRACE_MODEL.md)。
+
+## 模块
+
+- `TurboFlow.Model`、`TurboFlow.FanIn`：单步 lifecycle、路由与 fan-in 抽象；
+- `TurboFlow.ModelProofs`：单步模型的 required 与 supporting theorem；
+- `TurboFlow.Trace`：通用 `runTrace`、路径证据及 Flow/task/fan-in/route 的可执行 wrapper；
+- `TurboFlow.TraceProofs`：通用与领域轨迹定理，以及由 Lean kernel 归约的可计算示例。
 
 ## 可复验检查
 
@@ -10,13 +18,13 @@
 
 ```powershell
 lean --version
-lake --dir formal build TurboFlow.ModelProofs
-lake --dir formal env lean formal/TurboFlow/ModelProofs.lean
+lake --dir formal build TurboFlow.TraceProofs
+lake --dir formal env lean formal/TurboFlow/TraceProofs.lean
 lake --dir formal build
-rg.exe -n "\bsorry\b|\badmit\b|axiom" formal -g "*.lean"
+rg.exe -n "\b(sorry|admit|axiom)\b" formal -g "*.lean"
 ```
 
-预期：`lean --version` 显示 `v4.33.1`；最小 `TurboFlow.ModelProofs` target、直接 proof 文件的 kernel check 与完整 Lake package build 均以 exit code 0 完成；最后的扫描无输出且以 exit code 1 完成，表示没有匹配到占位证明。扫描的 exit code 1 是预期成功，不是失败。先构建最小 target，确保干净 checkout 所需的 imported `.olean` 已生成，再直接检查 proof 文件，最后构建完整 package。
+预期：`lean --version` 显示 `v4.33.1`；最小 `TurboFlow.TraceProofs` target、直接 proof 文件的 kernel check 与完整 Lake package build 均以 exit code 0 完成；最后的扫描无输出且以 exit code 1 完成，表示没有匹配到占位证明。扫描的 exit code 1 是预期成功，不是失败。先构建最小 target，确保干净 checkout 所需的 imported `.olean` 已生成，再直接检查 proof 文件，最后构建完整 package。
 
 Package 提交了无外部依赖的 `lake-manifest.json`，因此执行上述检查不会在干净 checkout 中
 新增 lockfile。
@@ -43,6 +51,22 @@ Package 提交了无外部依赖的 `lake-manifest.json`，因此执行上述检
 | `named_route_prioritizes_target_match` | `turbo_flow/src/flow_completion.c:52-58` | 当外层已保证当前 source stage 同源且 route 非空时，named route 按 target name 匹配，优先于 unconditional/conditional。 |
 | `initial_valid` | `turbo_flow/src/flow_runtime.c:495-566` | 可达子图的 potential 由 runtime edge 计数初始化；正 potential 的抽象初始 gate 满足不变量。 |
 | `accepted_complete_reaches_completed` | `turbo_flow/src/flow_execution.c:28-43,126-128` | `flow_execution_task_fail()` 可在 task 运行前通过 `flow_execution_task_complete()` 从 ACCEPTED 进入 COMPLETED。 |
+
+## 可执行轨迹定理
+
+`TurboFlow.Trace`/`TurboFlow.TraceProofs` 在已有单步事实源上提供以下九个 trace theorem：
+
+1. `runTrace_append`：分段执行等价于拼接后一次执行；
+2. `runTrace_builds_path`：成功执行产生逐步 relation path；
+3. `runTrace_preserves_invariant`：单步保持的不变量保持到成功轨迹终点；
+4. `task_transition_preserves_allowed`：成功 task 单步属于 `AllowedTaskTransition`；
+5. `flow_trace_preserves_allowed_path`：成功 Flow 轨迹仅含允许迁移；
+6. `task_trace_preserves_allowed_path`：成功 task 轨迹仅含允许迁移；
+7. `gate_trace_preserves_valid`：有效 fan-in gate 的成功多步 resolution 保持有效；
+8. `gate_trace_rejects_extra_resolution`：terminal gate 后追加 resolution 被拒绝；
+9. `routeMask_length`：route mask 与输入 edge 列表长度相同。
+
+`runFlowTrace`、`runTaskTrace`、`runGateTrace` 与 `routeMask` 是可执行 reference evaluator：它们可以检查手工或生成的 Lean 事件列表。它们不是 C/Lean refinement proof。C observer exporter、trace 格式和自动差分 runner 仍不在当前证明范围。
 
 ## 生命周期抽象边界
 
