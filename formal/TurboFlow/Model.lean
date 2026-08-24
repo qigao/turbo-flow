@@ -74,6 +74,7 @@ inductive TaskEvent where
 def nextTaskState : TaskState → TaskEvent → Option TaskState
   | .new, .accept => some .accepted
   | .accepted, .run => some .running
+  | .accepted, .complete => some .completed
   | .accepted, .cancel => some .canceled
   | .running, .complete => some .completed
   | .running, .cancel => some .canceled

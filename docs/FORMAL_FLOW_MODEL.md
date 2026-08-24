@@ -2,7 +2,8 @@
 
 ## 目标
 
-用 Lean 4 建立一个可执行、可检查的 TurboFlow 核心抽象模型，并证明与当前 C 实现最关键的控制语义一致：
+用 Lean 4 建立一个参考当前 C 控制语义的 TurboFlow 核心可执行抽象模型，并证明该抽象
+模型的关键性质：
 
 1. Flow 与 execution task 只发生允许的生命周期迁移；
 2. 成功、失败、条件与 reject edge 的选择互斥且符合运行时定义；
@@ -23,6 +24,7 @@
 | `turbo_flow/src/flow_completion.c:137` | `GateOutcome` | remaining=0 且 activated>0 才 ready，否则 filtered |
 | `turbo_flow/src/flow_completion.c:170` | completion 幂等前提 | done stage 的重复 completion 不再次释放下游 |
 | `turbo_flow/src/flow_internal.h:284` | `TaskState` | NEW/ACCEPTED/RUNNING/COMPLETED/CANCELED 生命周期 |
+| `turbo_flow/src/flow_execution.c:28,126` | `TaskState.accepted + TaskEvent.complete` | `flow_execution_task_fail()` 可在 task 运行前通过 `flow_execution_task_complete()` 从 ACCEPTED 进入 COMPLETED |
 | `turbo_flow/src/flow_execution.c:28` | task terminal 规则 | COMPLETED/CANCELED 不再被 completion 改写 |
 
 ## 抽象边界
@@ -88,9 +90,14 @@ filtered -> processed = potential and activated = 0
 
 ### Lifecycle
 
-Flow 与 task 分开建模。错误事件是否把 Flow 置为 FAILED 取决于 C API 使用
-`flow_set_error()` 还是 `flow_set_error_keep_state()`；第一版只证明成功路径和显式 reset/stop，
-避免把不同错误边界合并成一个不真实的迁移。
+Flow 与 task 分开建模。`FlowEvent.fail` 是一个已选择调用 `flow_set_error()` 并将 Flow 置为
+FAILED 的抽象边界，不代表任意 C 错误。使用 `flow_set_error_keep_state()` 的错误保留原 Flow
+状态，不产生 `.fail` 事件。`flow_transition_preserves_allowed` 因此证明成功、stop、reset 以及该
+显式失败边界的模型迁移性质，不将 keep-state 错误合并到 FAILED。
+
+Task 的 `.complete` 同时建模 RUNNING → COMPLETED 与 ACCEPTED → COMPLETED。后者对应
+`flow_execution_task_fail()` 在 task 运行前调用 `flow_execution_task_complete()` 的路径；例如 executor
+检查到任务 header 无效时，不会先进入 RUNNING。
 
 ## 必须由 Lean 检查的定理
 
@@ -103,8 +110,9 @@ Flow 与 task 分开建模。错误事件是否把 Flow 置为 FAILED 取决于 
 7. `flow_transition_preserves_allowed`：`nextFlowState` 返回的每个迁移都属于公开允许关系。
 8. `task_terminal_is_absorbing`：completed/canceled task 不再迁移。
 
-Supporting theorem `named_route_prioritizes_target_match` 与 `initial_valid` 分别检查命名路由匹配
-优先级和正 potential 初始 gate 的不变量；二者不计入上述八个 required theorem。
+Supporting theorem `named_route_prioritizes_target_match`、`initial_valid` 与
+`accepted_complete_reaches_completed` 分别检查命名路由匹配优先级、正 potential 初始 gate 的不变量，
+以及 task 运行前的 ACCEPTED → COMPLETED 路径；三者不计入上述八个 required theorem。
 
 ## 审查发现
 
@@ -126,7 +134,8 @@ Supporting theorem `named_route_prioritizes_target_match` 与 `initial_valid` �
 
 - `事实`：现有测试覆盖 cycle、失败停止、conditional no-match、conditional fan-in 与 task cancel，
   见 `turbo_flow/tests/test_turbo_flow.c:1869`、`:3251`、`:4806`、`:4830`、`:5536`。
-- `事实`：仓库当前没有 `.lean`、`lakefile.toml` 或 refinement/trace checker。
+- `事实`：仓库在本变更前没有 `.lean` 或 `lakefile.toml`；当前仍没有 C/Lean refinement
+  proof 或 trace checker。
 - `推论`：即使抽象定理通过，未来 C 调度修改仍可能偏离 Lean 模型而不触发失败。
 - `影响`：证明主要防止模型层设计错误，不能单独充当 C 回归测试。
 - `最小修复方向`：在 Lean README 中维护逐函数映射；后续可让 C 测试导出小图 trace，再由

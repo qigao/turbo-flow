@@ -39,6 +39,10 @@ theorem task_terminal_is_absorbing (state : TaskState) (event : TaskEvent)
     nextTaskState state event = none := by
   rcases h with rfl | rfl <;> cases event <;> rfl
 
+theorem accepted_complete_reaches_completed :
+    nextTaskState .accepted .complete = some .completed := by
+  rfl
+
 example (gate : FanInGate) (selected : Bool) (next : FanInGate)
     (valid : gate.Valid) (resolved : gate.resolve selected = some next) :
     next.Valid := by

@@ -18,6 +18,9 @@ rg.exe -n "\bsorry\b|\badmit\b|axiom" formal -g "*.lean"
 
 预期：`lean --version` 显示 `v4.33.1`；最小 `TurboFlow.ModelProofs` target、直接 proof 文件的 kernel check 与完整 Lake package build 均以 exit code 0 完成；最后的扫描无输出且以 exit code 1 完成，表示没有匹配到占位证明。扫描的 exit code 1 是预期成功，不是失败。先构建最小 target，确保干净 checkout 所需的 imported `.olean` 已生成，再直接检查 proof 文件，最后构建完整 package。
 
+Package 提交了无外部依赖的 `lake-manifest.json`，因此执行上述检查不会在干净 checkout 中
+新增 lockfile。
+
 ## 已检查定理与 C 映射
 
 下列八项是本模型的 required theorem；行号对应当前工作树。
@@ -26,7 +29,7 @@ rg.exe -n "\bsorry\b|\badmit\b|axiom" formal -g "*.lean"
 | --- | --- | --- |
 | `reject_inactive_on_success` | `turbo_flow/src/flow_completion.c:38-51` | 成功 completion 不激活 reject edge。 |
 | `only_reject_active_on_failure` | `turbo_flow/src/flow_completion.c:45-51` | 失败 completion 只可能激活 reject edge。 |
-| `flow_transition_preserves_allowed` | `turbo_flow/include/turbo_flow.h:1327-1334`；`src/flow_parser.c:1088-1108`；`src/flow_compile.c:1195-1249`；`src/flow_runtime.c:128-173,442-467`；`src/flow_core.c:18-27,418-429` | `nextFlowState` 的成功、停止、重置与显式失败迁移都属于允许关系。 |
+| `flow_transition_preserves_allowed` | `turbo_flow/include/turbo_flow.h:1327-1334`；`src/flow_parser.c:1088-1108`；`src/flow_compile.c:1195-1249`；`src/flow_runtime.c:128-173,442-467`；`src/flow_core.c:17-39,418-429` | `nextFlowState` 的成功、停止、重置与显式失败迁移都属于允许关系；`.fail` 仅表示已选择 `flow_set_error()` 的边界。 |
 | `task_terminal_is_absorbing` | `turbo_flow/src/flow_internal.h:284-290`；`src/flow_execution.c:28-43` | completed/canceled execution task 不会再被 completion 改写。 |
 | `resolve_preserves_valid` | `turbo_flow/src/flow_completion.c:98-145` | 每个潜在前驱决议一次时，remaining/activated 的 gate 不变量保持。 |
 | `ready_requires_all_processed` | `turbo_flow/src/flow_completion.c:135-140` | 仅在所有潜在前驱已处理且至少一条 active 时入 ready queue。 |
@@ -39,6 +42,16 @@ rg.exe -n "\bsorry\b|\badmit\b|axiom" formal -g "*.lean"
 | --- | --- | --- |
 | `named_route_prioritizes_target_match` | `turbo_flow/src/flow_completion.c:52-58` | 当外层已保证当前 source stage 同源且 route 非空时，named route 按 target name 匹配，优先于 unconditional/conditional。 |
 | `initial_valid` | `turbo_flow/src/flow_runtime.c:495-566` | 可达子图的 potential 由 runtime edge 计数初始化；正 potential 的抽象初始 gate 满足不变量。 |
+| `accepted_complete_reaches_completed` | `turbo_flow/src/flow_execution.c:28-43,126-128` | `flow_execution_task_fail()` 可在 task 运行前通过 `flow_execution_task_complete()` 从 ACCEPTED 进入 COMPLETED。 |
+
+## 生命周期抽象边界
+
+`FlowEvent.fail` 仅表示错误边界已选择 `flow_set_error()`，该 C 函数会将 Flow 置为 FAILED。
+通过 `flow_set_error_keep_state()` 记录但保留 Flow 状态的错误不产生 `.fail` 事件。
+
+Task 的 `.complete` 既可表示已运行 task 的 RUNNING → COMPLETED，也可表示运行前失败的
+ACCEPTED → COMPLETED。后者由 `accepted_complete_reaches_completed` 检查，不改变
+`task_terminal_is_absorbing` 对 COMPLETED/CANCELED 的 terminal 性质。
 
 ## 路由与完成边界
 
