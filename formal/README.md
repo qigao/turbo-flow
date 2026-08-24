@@ -3,7 +3,8 @@
 此 Lake package 用 Lean 4 对 TurboFlow 单条 message 的路由、fan-in 与生命周期控制规则建立可执行的抽象模型。Lean kernel 检查的是该模型及其前提；它不是 C 源码、编译器输出或 C11 并发内存模型的 refinement proof。
 
 完整模型边界、前提、C 映射与审查风险见 [形式化模型规范](../docs/FORMAL_FLOW_MODEL.md)；
-事件序列解释器的输入、定理与差分边界见 [可执行轨迹模型规范](../docs/FORMAL_FLOW_TRACE_MODEL.md)。
+事件序列解释器的输入、定理与差分边界见 [可执行轨迹模型规范](../docs/FORMAL_FLOW_TRACE_MODEL.md)；
+stage-global route mode 的输入域约束见 [路由 mode 修正规范](../docs/FORMAL_FLOW_ROUTE_MODE.md)。
 
 ## 模块
 
@@ -54,7 +55,7 @@ Package 提交了无外部依赖的 `lake-manifest.json`，因此执行上述检
 
 ## 可执行轨迹定理
 
-`TurboFlow.Trace`/`TurboFlow.TraceProofs` 在已有单步事实源上提供以下十个 trace theorem：
+`TurboFlow.Trace`/`TurboFlow.TraceProofs` 在已有单步事实源上提供以下十二个 trace theorem：
 
 1. `runTrace_append`：分段执行等价于拼接后一次执行；
 2. `runTrace_builds_path`：成功执行产生逐步 relation path；
@@ -65,7 +66,9 @@ Package 提交了无外部依赖的 `lake-manifest.json`，因此执行上述检
 7. `gate_trace_preserves_valid`：有效 fan-in gate 的成功多步 resolution 保持有效；
 8. `gate_trace_rejects_extra_resolution`：terminal gate 后追加 resolution 被拒绝；
 9. `routeMask_length`：route mask 与输入 edge observation 列表长度相同；
-10. `routeMask_pointwise`：每个 mask 索引等于同索引 edge 自己的 route decision 结果。
+10. `routeMask_pointwise`：每个 mask 索引等于将 observation 的全局 mode 与同索引 edge 的 target match 组合后所得的 `edgeActive` 结果；
+11. `routeMask_named_pointwise`：named mode 下每个 mask 索引使用同索引 edge 的 target match 构造 named decision；
+12. `routeMask_no_named_pointwise`：no-named mode 下每个 mask 索引使用 `.noNamedRoute`，忽略 edge 的 target match。
 
 `runFlowTrace`、`runTaskTrace`、`runGateTrace` 与 `routeMask` 是可执行 reference evaluator：它们可以检查手工或生成的 Lean 事件列表。它们不是 C/Lean refinement proof。C observer exporter、trace 格式和自动差分 runner 仍不在当前证明范围。
 
@@ -80,6 +83,6 @@ ACCEPTED → COMPLETED。后者由 `accepted_complete_reaches_completed` 检查�
 
 ## 路由与完成边界
 
-`RouteDecision.namedRoute` 不试图在 Lean 中表示字符串或图查询。它的构造前提是外层已验证：route 属于当前 source stage，且 route 非空；C 对应的拒绝路径是 `flow_data_route_exists()` 与 `flow_apply_completion()`（`turbo_flow/src/flow_completion.c:84-96,179-183`）。`RouteEdgeObservation` 将 edge kind 与该 target 自己的 match decision 绑定，因而双 target named fan-out 可以产生 `[true, false]`；对应的 C 回归场景是 `turbo_flow/tests/test_flow_policy.c:354-386`。在此前提下，`edgeActive` 按 C 的优先级求值：失败 → reject；成功 → reject 禁用 → named route target match → unconditional → conditional predicate。predicate 的求值、错误和类型检查仍在模型边界之外（`turbo_flow/src/flow_completion.c:60-80`）。
+`RouteDecision.namedRoute` 不试图在 Lean 中表示字符串或图查询。它的构造前提是外层已验证：route 属于当前 source stage，且 route 非空；C 对应的拒绝路径是 `flow_data_route_exists()` 与 `flow_apply_completion()`（`turbo_flow/src/flow_completion.c:84-96,179-183`）。`RouteObservation.mode` 是一次 completion 的全局 mode；每条 `RouteEdgeObservation` 只保存 edge kind 与该 target 的 `matchesCurrentTarget`。因此 named 双 target fan-out 产生 `[true, false]`，而相同两条 unconditional edge 在 no-named mode 下产生 `[true, true]`；对应的 C 回归场景是 `turbo_flow/tests/test_flow_policy.c:354-386`。在此前提下，`edgeActive` 按 C 的优先级求值：失败 → reject；成功 → reject 禁用 → named route target match → unconditional → conditional predicate。predicate 的求值、错误和类型检查仍在模型边界之外（`turbo_flow/src/flow_completion.c:60-80`）。
 
 `FanInGate.resolve` 只表示单个 target 的计数语义。它不覆盖 C 的递归 filtered-downstream propagation、队列容量错误、observer 副作用或并发交错；这些路径仍由 `flow_release_downstream()` 和 `flow_apply_completion()` 管理。

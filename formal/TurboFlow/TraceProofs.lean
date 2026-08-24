@@ -17,11 +17,21 @@ example : runGateTrace (FanInGate.initial 2) [true, false, true] = none := by de
 
 example : routeMask {
     result := .ok
+    mode := .namedRoute
     edges := [
-      { kind := .unconditional, decision := .namedRoute true },
-      { kind := .unconditional, decision := .namedRoute false }
+      { kind := .unconditional, matchesCurrentTarget := true },
+      { kind := .unconditional, matchesCurrentTarget := false }
     ]
   } = [true, false] := by decide
+
+example : routeMask {
+    result := .ok
+    mode := .noNamedRoute
+    edges := [
+      { kind := .unconditional, matchesCurrentTarget := true },
+      { kind := .unconditional, matchesCurrentTarget := false }
+    ]
+  } = [true, true] := by decide
 
 theorem routeMask_length (observation : RouteObservation) :
     (routeMask observation).length = observation.edges.length := by
@@ -30,8 +40,23 @@ theorem routeMask_length (observation : RouteObservation) :
 theorem routeMask_pointwise (observation : RouteObservation) (index : Nat) :
     (routeMask observation)[index]? =
       observation.edges[index]?.map fun edge =>
-        edgeActive observation.result edge.decision edge.kind := by
+        edgeActive observation.result
+          (observation.mode.decision edge.matchesCurrentTarget) edge.kind := by
   simp [routeMask]
+
+theorem routeMask_named_pointwise (result : StageResult)
+    (edges : List RouteEdgeObservation) (index : Nat) :
+    (routeMask { result := result, mode := .namedRoute, edges := edges })[index]? =
+      edges[index]?.map fun edge =>
+        edgeActive result (.namedRoute edge.matchesCurrentTarget) edge.kind := by
+  simp [routeMask, RouteMode.decision]
+
+theorem routeMask_no_named_pointwise (result : StageResult)
+    (edges : List RouteEdgeObservation) (index : Nat) :
+    (routeMask { result := result, mode := .noNamedRoute, edges := edges })[index]? =
+      edges[index]?.map fun edge =>
+        edgeActive result .noNamedRoute edge.kind := by
+  simp [routeMask, RouteMode.decision]
 
 theorem flow_trace_preserves_allowed_path (state final : FlowState)
     (events : List FlowEvent) (completed : runFlowTrace state events = some final) :

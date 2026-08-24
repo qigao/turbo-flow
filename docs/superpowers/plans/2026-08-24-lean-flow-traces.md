@@ -4,7 +4,7 @@
 
 **Goal:** 在现有 TurboFlow Lean 单步模型上增加可执行事件序列解释器，并证明 Flow、task 与 fan-in 的多步轨迹保持既有语义约束。
 
-**Architecture:** 新增一个无领域假设的 `runTrace` 核心，再用薄 wrapper 绑定现有 `nextFlowState`、`nextTaskState`、`FanInGate.resolve` 与 `edgeActive`。每条 route observation 将 edge kind 与该 edge 自己的 decision 绑定，避免 named fan-out 广播单个 target match。证明分为通用序列定理和 TurboFlow 领域定理；C 代码、CMake 与公开 ABI 保持不变。
+**Architecture:** 新增一个无领域假设的 `runTrace` 核心，再用薄 wrapper 绑定现有 `nextFlowState`、`nextTaskState`、`FanInGate.resolve` 与 `edgeActive`。`RouteObservation` 持有一次 completion 的全局 route mode，每条 edge 只保留 edge kind 与其 target match，避免 mixed named/no-named 输入并保留 named fan-out 的逐 target 语义。证明分为通用序列定理和 TurboFlow 领域定理；C 代码、CMake 与公开 ABI 保持不变。
 
 **Tech Stack:** Lean 4.33.1、Lake、Lean Std；无 Mathlib、无网络依赖、无 C/C++ 生成代码。
 
@@ -170,9 +170,9 @@ git commit -m "proof: add executable trace kernel"
 
 **Interfaces:**
 - Consumes: Task 1 的 `runTrace`/`TransitionPath` 和既有单步模型。
-- Produces: `AllowedTaskTransition`、`RouteEdgeObservation`、`RouteObservation`、`routeMask`、三个领域 trace wrapper，以及规范列出的领域多步 theorem。
+- Produces: `AllowedTaskTransition`、`RouteMode`、`RouteEdgeObservation`、`RouteObservation`、`routeMask`、三个领域 trace wrapper，以及规范列出的领域多步 theorem。
 
-- [ ] **Step 1: 先写五个可计算领域 example 并确认 RED**
+- [ ] **Step 1: 先写六个可计算领域 example 并确认 RED**
 
 将 `formal/TurboFlow/TraceProofs.lean` 的 import 改为：
 
@@ -191,16 +191,25 @@ example : runGateTrace (FanInGate.initial 2) [true, false] =
 example : runGateTrace (FanInGate.initial 2) [true, false, true] = none := by decide
 example : routeMask {
     result := .ok
+    mode := .namedRoute
     edges := [
-      { kind := .unconditional, decision := .namedRoute true },
-      { kind := .unconditional, decision := .namedRoute false }
+      { kind := .unconditional, matchesCurrentTarget := true },
+      { kind := .unconditional, matchesCurrentTarget := false }
     ]
   } = [true, false] := by decide
+example : routeMask {
+    result := .ok
+    mode := .noNamedRoute
+    edges := [
+      { kind := .unconditional, matchesCurrentTarget := true },
+      { kind := .unconditional, matchesCurrentTarget := false }
+    ]
+  } = [true, true] := by decide
 ```
 
 Run: `lake --dir formal build TurboFlow.TraceProofs`
 
-Expected: FAIL，错误只指出 `runFlowTrace`、`runTaskTrace`、`runGateTrace` 或 per-edge route observation 尚未定义。
+Expected: FAIL，错误只指出 `runFlowTrace`、`runTaskTrace`、`runGateTrace` 或 stage-global route observation 尚未定义。
 
 - [ ] **Step 2: 增加 task 合法单步关系和 soundness theorem**
 
@@ -249,19 +258,31 @@ import TurboFlow.FanIn
 在通用定理后加入：
 
 ```lean
+inductive RouteMode where
+  | noNamedRoute
+  | namedRoute
+  deriving DecidableEq, Repr
+
+def RouteMode.decision (mode : RouteMode) (matchesCurrentTarget : Bool) : RouteDecision :=
+  match mode with
+  | .noNamedRoute => .noNamedRoute
+  | .namedRoute => .namedRoute matchesCurrentTarget
+
 structure RouteEdgeObservation where
   kind : EdgeKind
-  decision : RouteDecision
+  matchesCurrentTarget : Bool
   deriving DecidableEq, Repr
 
 structure RouteObservation where
   result : StageResult
+  mode : RouteMode
   edges : List RouteEdgeObservation
   deriving DecidableEq, Repr
 
 def routeMask (observation : RouteObservation) : List Bool :=
   observation.edges.map fun edge =>
-    edgeActive observation.result edge.decision edge.kind
+    edgeActive observation.result
+      (observation.mode.decision edge.matchesCurrentTarget) edge.kind
 
 def runFlowTrace : FlowState → List FlowEvent → Option FlowState :=
   runTrace nextFlowState
@@ -275,7 +296,7 @@ def runGateTrace : FanInGate → List Bool → Option FanInGate :=
 
 Run: `lake --dir formal build TurboFlow.TraceProofs`
 
-Expected: 五个领域 example 全部 PASS。
+Expected: 六个领域 example 全部 PASS。
 
 - [ ] **Step 4: 证明领域多步性质**
 
@@ -289,8 +310,23 @@ theorem routeMask_length (observation : RouteObservation) :
 theorem routeMask_pointwise (observation : RouteObservation) (index : Nat) :
     (routeMask observation)[index]? =
       observation.edges[index]?.map fun edge =>
-        edgeActive observation.result edge.decision edge.kind := by
+        edgeActive observation.result
+          (observation.mode.decision edge.matchesCurrentTarget) edge.kind := by
   simp [routeMask]
+
+theorem routeMask_named_pointwise (result : StageResult)
+    (edges : List RouteEdgeObservation) (index : Nat) :
+    (routeMask { result := result, mode := .namedRoute, edges := edges })[index]? =
+      edges[index]?.map fun edge =>
+        edgeActive result (.namedRoute edge.matchesCurrentTarget) edge.kind := by
+  simp [routeMask, RouteMode.decision]
+
+theorem routeMask_no_named_pointwise (result : StageResult)
+    (edges : List RouteEdgeObservation) (index : Nat) :
+    (routeMask { result := result, mode := .noNamedRoute, edges := edges })[index]? =
+      edges[index]?.map fun edge =>
+        edgeActive result .noNamedRoute edge.kind := by
+  simp [routeMask, RouteMode.decision]
 
 theorem flow_trace_preserves_allowed_path (state final : FlowState)
     (events : List FlowEvent) (completed : runFlowTrace state events = some final) :
@@ -415,7 +451,7 @@ git commit -m "docs: specify executable Lean flow traces"
 
 ## Self-Review
 
-- Spec coverage：通用 trace、Flow/task path、fan-in 多步不变量、terminal 拒绝、per-edge route mask、pointwise theorem 和文档边界均有对应任务。
+- Spec coverage：通用 trace、Flow/task path、fan-in 多步不变量、terminal 拒绝、stage-global route mask、pointwise theorem 和文档边界均有对应任务。
 - Placeholder scan：计划没有实现性占位；所有新增接口、theorem statement、验证命令和预期失败原因均已给出。
-- Type consistency：三个 wrapper 都采用 `State → List Event → Option State`；`TransitionPath` 保留事件列表索引；`AllowedTaskTransition` 与 `nextTaskState` 的六条成功分支一一对应；每个 `RouteEdgeObservation` 内聚 edge kind 与其 decision，不存在平行列表长度错配。
+- Type consistency：三个 wrapper 都采用 `State → List Event → Option State`；`TransitionPath` 保留事件列表索引；`AllowedTaskTransition` 与 `nextTaskState` 的六条成功分支一一对应；`RouteObservation` 持有全局 mode，`RouteEdgeObservation` 内聚 edge kind 与 target match，不存在 mixed-mode 或平行列表长度错配。
 - Compatibility：不修改现有 theorem，不修改 C/CMake/vcpkg，不引入 I/O、JSON、Mathlib 或 C refinement 声明。
