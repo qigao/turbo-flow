@@ -37,8 +37,8 @@ Package 提交了无外部依赖的 `lake-manifest.json`，因此执行上述检
 | --- | --- | --- |
 | `reject_inactive_on_success` | `turbo_flow/src/flow_completion.c:38-51` | 成功 completion 不激活 reject edge。 |
 | `only_reject_active_on_failure` | `turbo_flow/src/flow_completion.c:45-51` | 失败 completion 只可能激活 reject edge。 |
-| `flow_transition_preserves_allowed` | `turbo_flow/include/turbo_flow.h:1327-1334`；`src/flow_parser.c:1088-1108`；`src/flow_compile.c:1195-1249`；`src/flow_runtime.c:128-173,442-467`；`src/flow_core.c:17-39,418-429` | `nextFlowState` 的成功、停止、重置与显式失败迁移都属于允许关系；`.fail` 仅表示已选择 `flow_set_error()` 的边界。 |
-| `task_terminal_is_absorbing` | `turbo_flow/src/flow_internal.h:284-290`；`src/flow_execution.c:28-43` | completed/canceled execution task 不会再被 completion 改写。 |
+| `flow_transition_preserves_allowed` | `turbo_flow/include/turbo_flow.h:1327-1334`；`turbo_flow/src/flow_parser.c:1088-1108`；`turbo_flow/src/flow_compile.c:1195-1249`；`turbo_flow/src/flow_runtime.c:128-173,442-467`；`turbo_flow/src/flow_core.c:17-39,418-429` | `nextFlowState` 的成功、停止、重置与显式失败迁移都属于允许关系；`.fail` 仅表示已选择 `flow_set_error()` 的边界。 |
+| `task_terminal_is_absorbing` | `turbo_flow/src/flow_internal.h:284-290`；`turbo_flow/src/flow_execution.c:28-43` | completed/canceled execution task 不会再被 completion 改写。 |
 | `resolve_preserves_valid` | `turbo_flow/src/flow_completion.c:98-145` | 每个潜在前驱决议一次时，remaining/activated 的 gate 不变量保持。 |
 | `ready_requires_all_processed` | `turbo_flow/src/flow_completion.c:135-140` | 仅在所有潜在前驱已处理且至少一条 active 时入 ready queue。 |
 | `filtered_requires_all_processed` | `turbo_flow/src/flow_completion.c:135-146` | 所有潜在前驱已处理且没有 active edge 时，target 被 filtered。 |
@@ -54,7 +54,7 @@ Package 提交了无外部依赖的 `lake-manifest.json`，因此执行上述检
 
 ## 可执行轨迹定理
 
-`TurboFlow.Trace`/`TurboFlow.TraceProofs` 在已有单步事实源上提供以下九个 trace theorem：
+`TurboFlow.Trace`/`TurboFlow.TraceProofs` 在已有单步事实源上提供以下十个 trace theorem：
 
 1. `runTrace_append`：分段执行等价于拼接后一次执行；
 2. `runTrace_builds_path`：成功执行产生逐步 relation path；
@@ -64,7 +64,8 @@ Package 提交了无外部依赖的 `lake-manifest.json`，因此执行上述检
 6. `task_trace_preserves_allowed_path`：成功 task 轨迹仅含允许迁移；
 7. `gate_trace_preserves_valid`：有效 fan-in gate 的成功多步 resolution 保持有效；
 8. `gate_trace_rejects_extra_resolution`：terminal gate 后追加 resolution 被拒绝；
-9. `routeMask_length`：route mask 与输入 edge 列表长度相同。
+9. `routeMask_length`：route mask 与输入 edge observation 列表长度相同；
+10. `routeMask_pointwise`：每个 mask 索引等于同索引 edge 自己的 route decision 结果。
 
 `runFlowTrace`、`runTaskTrace`、`runGateTrace` 与 `routeMask` 是可执行 reference evaluator：它们可以检查手工或生成的 Lean 事件列表。它们不是 C/Lean refinement proof。C observer exporter、trace 格式和自动差分 runner 仍不在当前证明范围。
 
@@ -79,6 +80,6 @@ ACCEPTED → COMPLETED。后者由 `accepted_complete_reaches_completed` 检查�
 
 ## 路由与完成边界
 
-`RouteDecision.namedRoute` 不试图在 Lean 中表示字符串或图查询。它的构造前提是外层已验证：route 属于当前 source stage，且 route 非空；C 对应的拒绝路径是 `flow_data_route_exists()` 与 `flow_apply_completion()`（`turbo_flow/src/flow_completion.c:84-96,170-183`）。在此前提下，`edgeActive` 按 C 的优先级求值：失败 → reject；成功 → reject 禁用 → named route target match → unconditional → conditional predicate。predicate 的求值、错误和类型检查仍在模型边界之外（`turbo_flow/src/flow_completion.c:60-80`）。
+`RouteDecision.namedRoute` 不试图在 Lean 中表示字符串或图查询。它的构造前提是外层已验证：route 属于当前 source stage，且 route 非空；C 对应的拒绝路径是 `flow_data_route_exists()` 与 `flow_apply_completion()`（`turbo_flow/src/flow_completion.c:84-96,179-183`）。`RouteEdgeObservation` 将 edge kind 与该 target 自己的 match decision 绑定，因而双 target named fan-out 可以产生 `[true, false]`；对应的 C 回归场景是 `turbo_flow/tests/test_flow_policy.c:354-386`。在此前提下，`edgeActive` 按 C 的优先级求值：失败 → reject；成功 → reject 禁用 → named route target match → unconditional → conditional predicate。predicate 的求值、错误和类型检查仍在模型边界之外（`turbo_flow/src/flow_completion.c:60-80`）。
 
 `FanInGate.resolve` 只表示单个 target 的计数语义。它不覆盖 C 的递归 filtered-downstream propagation、队列容量错误、observer 副作用或并发交错；这些路径仍由 `flow_release_downstream()` 和 `flow_apply_completion()` 管理。

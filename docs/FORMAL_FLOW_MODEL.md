@@ -22,7 +22,7 @@
 | `turbo_flow/src/flow_completion.c:38` | `edgeActive` 与 `RouteDecision` | 失败/reject/named/unconditional/conditional 的优先级；成功时 reject 不激活，失败时只激活 reject |
 | `turbo_flow/src/flow_completion.c:98` | `FanInGate.resolve` | 每条潜在入边决议一次，递减 remaining，累计 activated |
 | `turbo_flow/src/flow_completion.c:137` | `GateOutcome` | remaining=0 且 activated>0 才 ready，否则 filtered |
-| `turbo_flow/src/flow_completion.c:170` | completion 幂等前提 | done stage 的重复 completion 不再次释放下游 |
+| `turbo_flow/src/flow_completion.c:190-214,235-240` | completion 幂等前提 | done stage 的重复 completion 不再次释放下游 |
 | `turbo_flow/src/flow_internal.h:284` | `TaskState` | NEW/ACCEPTED/RUNNING/COMPLETED/CANCELED 生命周期 |
 | `turbo_flow/src/flow_execution.c:28,126` | `TaskState.accepted + TaskEvent.complete` | `flow_execution_task_fail()` 可在 task 运行前通过 `flow_execution_task_complete()` 从 ACCEPTED 进入 COMPLETED |
 | `turbo_flow/src/flow_execution.c:28` | task terminal 规则 | COMPLETED/CANCELED 不再被 completion 改写 |
@@ -63,10 +63,11 @@
 `EdgeKind` 包含 unconditional、conditional(predicate result) 与 reject；`StageResult` 包含 ok/failed。
 `RouteDecision` 区分没有命名路由与 `.namedRoute matchesCurrentTarget`。`.namedRoute` 由模型外层
 保证 route 非空且属于当前 source stage；C 的对应校验在 `flow_data_route_exists()` 与
-`flow_apply_completion()`（`turbo_flow/src/flow_completion.c:84-96,170-183`）。在此前提下，
+`flow_apply_completion()`（`turbo_flow/src/flow_completion.c:84-96,179-183`）。在此前提下，
 `edgeActive` 直接编码 `flow_route_edge_active()` 的优先级：失败时仅 reject；成功时 reject 不激活，
 随后依次处理 named route target match、unconditional 和 conditional predicate。predicate 求值失败或
-结果非 BOOL 会返回错误，不被模型伪装为 false。
+结果非 BOOL 会返回错误，不被模型伪装为 false。轨迹层的 `RouteEdgeObservation` 为每条 edge 单独
+携带该 target 的 match 结果，避免在多 target fan-out 上广播单个 named-route decision。
 
 ### Fan-in gate
 

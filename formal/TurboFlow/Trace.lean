@@ -71,14 +71,19 @@ theorem runTrace_preserves_invariant {State : Type u} {Event : Type v}
             simpa [runTrace, transition] using completed
           exact ih nextValid tail
 
+structure RouteEdgeObservation where
+  kind : EdgeKind
+  decision : RouteDecision
+  deriving DecidableEq, Repr
+
 structure RouteObservation where
   result : StageResult
-  decision : RouteDecision
-  edges : List EdgeKind
+  edges : List RouteEdgeObservation
   deriving DecidableEq, Repr
 
 def routeMask (observation : RouteObservation) : List Bool :=
-  observation.edges.map (edgeActive observation.result observation.decision)
+  observation.edges.map fun edge =>
+    edgeActive observation.result edge.decision edge.kind
 
 def runFlowTrace : FlowState → List FlowEvent → Option FlowState :=
   runTrace nextFlowState

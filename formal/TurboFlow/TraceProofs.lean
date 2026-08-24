@@ -15,8 +15,22 @@ example : runGateTrace (FanInGate.initial 2) [true, false] =
     some { potential := 2, processed := 2, activated := 1, outcome := .ready } := by decide
 example : runGateTrace (FanInGate.initial 2) [true, false, true] = none := by decide
 
+example : routeMask {
+    result := .ok
+    edges := [
+      { kind := .unconditional, decision := .namedRoute true },
+      { kind := .unconditional, decision := .namedRoute false }
+    ]
+  } = [true, false] := by decide
+
 theorem routeMask_length (observation : RouteObservation) :
     (routeMask observation).length = observation.edges.length := by
+  simp [routeMask]
+
+theorem routeMask_pointwise (observation : RouteObservation) (index : Nat) :
+    (routeMask observation)[index]? =
+      observation.edges[index]?.map fun edge =>
+        edgeActive observation.result edge.decision edge.kind := by
   simp [routeMask]
 
 theorem flow_trace_preserves_allowed_path (state final : FlowState)
