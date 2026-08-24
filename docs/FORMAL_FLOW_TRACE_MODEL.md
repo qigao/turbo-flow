@@ -20,7 +20,8 @@ lifecycle、edge route 和 fan-in resolution 都能由同一 reference evaluator
 | --- | --- | --- |
 | `turbo_flow/src/flow_completion.c:38-81` | `RouteObservation` | failure/reject/named/unconditional/conditional 的单 edge 判定顺序 |
 | `turbo_flow/src/flow_completion.c:98-151` | `List Bool` | 每个潜在前驱产生一次 selected 决议，最后一个决议产生 ready 或 filtered |
-| `turbo_flow/src/flow_completion.c:170-183` | terminal gate 前提 | 已完成 stage 不重复释放下游 |
+| `turbo_flow/src/flow_completion.c:112-145` | terminal gate 前提 | `remaining == 0` 时拒绝重复 resolution；最后一次决议产生 ready 或 filtered |
+| `turbo_flow/src/flow_completion.c:190-214,235-240` | stage `done` 前提 | 已完成 stage 不重复释放下游 |
 | `turbo_flow/src/flow_execution.c:28-128` | `List TaskEvent` | accept/run/complete/cancel 以及执行前 fail-complete 路径 |
 | `turbo_flow/src/flow_parser.c:1088-1108`、`flow_compile.c:1195-1249`、`flow_runtime.c:128-173,442-467`、`flow_core.c:17-39,418-429` | `List FlowEvent` | public Flow lifecycle 与显式 FAILED 边界 |
 | `turbo_flow/tests/test_turbo_flow.c:4806,4830,4917,4969,5536` | 可执行示例 | conditional filtered、fan-in、reject route 与 task cancel 的既有回归场景 |
