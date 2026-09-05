@@ -188,3 +188,22 @@ install(
   FILE TurboFlowTargets.cmake
   NAMESPACE TurboFlow::
   DESTINATION "lib/cmake/TurboFlow")
+
+if(BUILD_TESTING AND BUILD_TESTS)
+  add_test(
+    NAME test_turbo_flow_install_consumer
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DTURBO_FLOW_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+      "-DTURBO_FLOW_BINARY_DIR=${CMAKE_BINARY_DIR}"
+      "-DTURBO_FLOW_GENERATOR=${CMAKE_GENERATOR}"
+      "-DTURBO_FLOW_CONFIG=$<CONFIG>"
+      "-DTURBO_FLOW_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+      "-DTURBO_FLOW_SALTS_ROOT=$ENV{SALTS_ROOT}"
+      "-DTURBO_FLOW_SALTS_UTILS_ROOT=$ENV{SALTS_UTILS_ROOT}"
+      "-DTURBO_FLOW_RULES_FORGE_ROOT=$ENV{RULES_FORGE_ROOT}"
+      -P "${CMAKE_SOURCE_DIR}/tests/install_consumer/run.cmake")
+  set_tests_properties(
+    test_turbo_flow_install_consumer
+    PROPERTIES LABELS "install;package" RUN_SERIAL TRUE TIMEOUT 120)
+endif()

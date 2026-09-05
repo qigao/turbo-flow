@@ -238,20 +238,12 @@ downstream failure 不恢复窗口，也不会在相同 watermark 上重复输�
 瓶颈，再以预留 timer heap/index 替换扫描，并保留当前 revision/失败语义作为对照基线。
 
 该切片只定义 fixed tumbling、event-time、watermark trigger 和 allowed-lateness eviction。
-核心仍不读取 processing time。`io/common` 提供可选的
-`tf_event_time_watermark_owner_t`：adapter 在事件被 `turbo_flow_publish()` 成功接受后记录
-`max(event.ts_ns)`，owner 的 interruptible timer 周期提交
-`max_event_time - max_out_of_orderness`（下溢饱和为 0）。推荐使用
-`tf_event_time_watermark_owner_publish()` 保证 publish-before-observe；直接 `observe()` 只用于
-已有等价 admission 边界的 adapter。多 source 若需要 min/idle-source 合并，仍应由更高层 owner
-先合并，不能把各 source 的 max 直接混为同一个 watermark。
-
-周期 owner 的线程、timer 和失败状态属于 adapter/I/O 层，不进入 flow runtime。Advance 失败时
-owner fail fast 进入 `FAILED` 并停止周期推进；stop/reset 保留已观察最大时间和最后成功
-watermark，使 close callback 失败后可用相同 watermark 重试。Snapshot 公开单调计数；生命周期
-命令由 host 串行化，`observe()` 使用 allocation-free atomic max，tick 之间由 mutex 串行化，且
-锁内不会等待 timer。已处于 `FAILED` 时 publish wrapper 会在 admission 前拒绝；若外部 adapter
-已经接受事件，直接 `observe()` 仍会记录 timestamp，避免把已发生的 admission 伪装成失败。
+核心仍不读取 processing time，只接受 host 对
+`turbo_flow_advance_event_time_watermark()` 的显式调用。本仓库不再提供周期 watermark owner。
+外部 CNet/CHTTP adapter 如需自动推进，必须在事件被 `turbo_flow_publish()` 成功接受后更新其
+单一事实源，再提交 `max_event_time - max_out_of_orderness`（下溢饱和为 0）。多 source 的
+min/idle-source 合并、timer、失败状态、snapshot 和 stop/reset 生命周期均由该外部 owner
+负责；缺少 owner 时 fail fast，不回退到 Graph 内部时钟。
 
 尚未包含 sliding/session window、early/late trigger、side output、durable checkpoint 或
 exactly-once sink transaction。Store 与 watermark 都属于 runtime generation，stop 后下一次

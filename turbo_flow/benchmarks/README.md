@@ -18,20 +18,10 @@ build\Msvc-Release\bin\bench_turbo_flow.exe --filter "expression"
 build\Msvc-Release\bin\bench_turbo_flow.exe --filter "security"
 ```
 
-The I/O-layer event-time owner has a separate hot-path benchmark:
-
-```powershell
-cmake --build --preset win-release-user --target bench_event_time_watermark
-build\Msvc-Release\bin\bench_event_time_watermark.exe
-```
-
-It measures the allocation-free atomic maximum update performed after an event has been accepted;
-periodic timer latency and the core window scan remain outside that per-event measurement.
-
 Executor metrics warm up 1000 messages and measure 10000 messages with a
 256-byte payload. Each `BENCH_RESULT` line identifies the `stage_plan`,
 executor, worker/lane count, payload size, iterations, throughput, and
-P50/P95/P99 single-publish latency. `turbo_hrtime()` supplies monotonic nanoseconds. The
+P50/P95/P99 single-publish latency. `salts_hrtime()` supplies monotonic nanoseconds. The
 per-message latency includes two clock reads; throughput uses one outer elapsed
 interval and is the better metric for comparing total work.
 

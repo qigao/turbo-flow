@@ -1,43 +1,18 @@
-# I/O 与内容规则原语
+# Graph 与内容规则原语
 
 ## 决策背景
 
-TurboFlow 已经分别拥有有界 Queue、adapter HWM、条件 route、adapter retry、executor
-placement 和资源 snapshot。它们解决的是不同维度的问题，但局部实现若继续复制，会让
-message/byte 计数、停止唤醒和目标选择产生不同错误语义。
+TurboFlow 已经分别拥有有界 Queue、条件 route、adapter retry、executor placement 和资源
+snapshot。它们解决的是不同维度的问题，但局部实现若继续复制，会让停止唤醒、状态迁移和
+目标选择产生不同错误语义。
 
-本决策影响 `turbo_flow`、`io/common`、I/O adapters 和 Queue，因此明确采用分层策略，而不增加一个
-同时管理队列、连接、路由和执行器的万能 policy vtable。
+本决策只约束 Graph 与内容规则。外部 CNet/CHTTP adapter 独立拥有连接、传输准入、HWM 与
+协议状态；本仓库不提供共享 I/O policy 实现，也不增加同时管理队列、连接、路由和执行器的
+万能 policy vtable。
 
 ## 选择
 
-### 1. Admission/budget
-
-`tf_io_budget_t` 是 `io/common` 内部原语，唯一拥有一组已接受工作的 message/byte 计数。
-一次 acquire 在同一临界区同时检查并提交两个计数，避免 count 已增加但 byte reservation
-失败后再回滚的可观察中间态。
-
-- `TF_IO_ADMISSION_FAIL`：容量不足立即返回 `SALTS_ENOSPC`。
-- `TF_IO_ADMISSION_BLOCK`：等待容量；owner close 后返回 `SALTS_ESHUTDOWN`；有限 deadline
-  到期返回 `SALTS_ETIMEDOUT`。
-- `close` 只关闭新准入并唤醒等待者，不伪造已接受工作的完成。
-- `release` 由实际持有 request/frame 的 owner 调用；计数不足返回 `SALTS_ERANGE`。
-- `drain` 只等待计数归零，不关闭 transport，也不释放 payload。
-
-`drop_oldest` 不属于 budget。它必须由拥有消息容器与析构责任的 Queue/adapter memory queue
-实现，否则一个纯计数器无法安全选择和销毁被丢弃对象。
-
-### 2. Ordering 与 selection
-
-FIFO 是容器的出队顺序；Round Robin 是从一组候选目标中选择下一个目标。两者不是同类
-策略，也不共享枚举。
-
-- Queue 继续通过 `push_back/pop_front` 保证 FIFO，并拥有 requeue/drop 的消息生命周期。
-- `tf_round_robin_t` 只产生 `[0, candidate_count)` 索引，不拥有 peer vector，不决定候选是否
-  healthy，也不改变连接状态。
-- 候选集合与 eligibility 仍由外部 session owner 管理。
-
-### 3. Versioned rule program
+### Versioned rule program
 
 `turbo_flow_rule_processor_t` 复用已编译的 TurboFlow expression，不引入第二套 DSL。processor
 深拷贝 schema identity，编译 predicate，并深拷贝 pointer-free action template。
@@ -150,27 +125,20 @@ if (rc == SALTS_OK) {
 
 ## 性能与复杂度
 
-- budget acquire/release：时间 `O(1)`、空间 `O(1)`；第一版用一个 mutex 保证复合计数正确性。
-  在 profiling 证明竞争占总耗时超过 20% 前，不改成多原子补偿或无锁状态机。
-- Round Robin：时间 `O(1)`、空间 `O(1)`。
 - rule evaluate：`n` 为 rule 数，最坏时间 `O(n)`；output 使用 caller-owned bounded array，
   graph stage 使用 64-entry 固定栈数组，不在消息热路径分配。
 
 ## 迁移、兼容与回滚
 
-- adapter 的默认 HWM、linger 配置与 `SALTS_ENOSPC` 行为不变；内部计数与 drain 改由 budget
-  提供，connection snapshot 从同一 budget 读取。新增显式 `block` admission 与 deadline；
-  deadline 到期以 `SALTS_ETIMEDOUT` 发出 HWM event，stop 通过 close 唤醒等待者。
-- 外部消息 adapter 的 peer 集合与 wire protocol 由其 owner 保持，不进入 Graph Core。
+- 外部消息 adapter 的 peer 集合、wire protocol、HWM、drain 与 deadline 由其 CNet/CHTTP
+  owner 保持，不进入 Graph Core；缺少所需 owner 时 fail fast，不回退到仓库内实现。
 - Queue API 与 FIFO/full policy 不变。
 - 旧 rule action callback/context API 已删除；rule 用户必须迁移为 typed action template。
   普通 graph stage callback 和 conditional route 不受影响。
-- 若外部 adapter 接入出现回归，可只回滚其对 common primitive 的调用，不改变公开配置或 wire
-  format；processor 也是独立新增文件，不影响未注册它的 graph。
+- processor 是独立能力，不影响未注册它的 graph。
 
 ## 验证范围
 
-- common：message/byte 原子提交、BLOCK close interruption、Round Robin 序列。
 - processor：FIRST/ALL、固定 facts、schema identity/type、五类 quota、data stage route/drop、
   unknown route、control authorization/stale generation。
-- 外部 adapter：由其仓库覆盖 HWM、linger、selection 与 connection snapshot 回归。
+- 外部 adapter：由 #5、#6、#7 对应实现覆盖 HWM、drain、selection 与 connection snapshot。

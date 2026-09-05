@@ -443,8 +443,8 @@ started adapters when option validation fails.
   untrusted network input.
 - External protocol header mapping and file path mapping require
   explicit allowlists.
-- Fallback defaults must not silently disable TLS, authentication, size limits,
-  schema validation, or payload bounds.
+- Missing TLS, authentication, size-limit, schema-validation, or payload-bound
+  configuration fails validation; the adapter boundary does not supply fallback defaults.
 
 ## Documentation Update Rules
 

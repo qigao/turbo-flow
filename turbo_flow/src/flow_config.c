@@ -64,6 +64,30 @@ static int flow_config_add_clone(json_value_t *object, const char *key, const js
   return SALTS_OK;
 }
 
+static int flow_config_add_string(json_value_t *object, const char *key, const char *value) {
+  json_value_t *child;
+  if (!object || !key || !value) return SALTS_EINVAL;
+  child = json_create_string(value);
+  if (!child) return SALTS_ENOMEM;
+  if (!json_object_add_checked(object, key, child)) {
+    json_free(child);
+    return SALTS_ENOMEM;
+  }
+  return SALTS_OK;
+}
+
+static int flow_config_add_number(json_value_t *object, const char *key, double value) {
+  json_value_t *child;
+  if (!object || !key) return SALTS_EINVAL;
+  child = json_create_number(value);
+  if (!child) return SALTS_ENOMEM;
+  if (!json_object_add_checked(object, key, child)) {
+    json_free(child);
+    return SALTS_ENOMEM;
+  }
+  return SALTS_OK;
+}
+
 static int flow_config_merge(json_value_t *merged, json_value_t *sources,
                              const json_value_t *fields, const char *source, const char *path,
                              turbo_flow_config_error_t *error) {
@@ -79,7 +103,7 @@ static int flow_config_merge(json_value_t *merged, json_value_t *sources,
       return flow_config_error(error, SALTS_EALREADY, field_path, "field has more than one source");
     }
     if (flow_config_add_clone(merged, key, value) != SALTS_OK) return SALTS_ENOMEM;
-    json_object_set_string(sources, key, source);
+    if (flow_config_add_string(sources, key, source) != SALTS_OK) return SALTS_ENOMEM;
   }
   return SALTS_OK;
 }
@@ -267,12 +291,16 @@ flow_config_add_resolved_runtime(json_value_t *resolved,
   runtime = json_create_object();
   ingress = json_create_object();
   if (!runtime || !ingress) goto done;
-  json_object_set_number(ingress, "workers", (double)async_ingress->workers);
-  json_object_set_number(ingress, "capacity", (double)async_ingress->queue_capacity);
-  json_object_set_number(ingress, "max_message_bytes",
-                               (double)async_ingress->max_message_bytes);
-  json_object_set_number(ingress, "max_inflight_bytes",
-                               (double)async_ingress->max_inflight_bytes);
+  rc = flow_config_add_number(ingress, "workers", (double)async_ingress->workers);
+  if (rc != SALTS_OK) goto done;
+  rc = flow_config_add_number(ingress, "capacity", (double)async_ingress->queue_capacity);
+  if (rc != SALTS_OK) goto done;
+  rc = flow_config_add_number(ingress, "max_message_bytes",
+                              (double)async_ingress->max_message_bytes);
+  if (rc != SALTS_OK) goto done;
+  rc = flow_config_add_number(ingress, "max_inflight_bytes",
+                              (double)async_ingress->max_inflight_bytes);
+  if (rc != SALTS_OK) goto done;
   if (!json_object_add_checked(runtime, "ingress", ingress)) goto done;
   ingress = NULL;
   if (!json_object_add_checked(resolved, "runtime", runtime)) goto done;
@@ -343,13 +371,19 @@ static int flow_config_resolve_adapters(const json_value_t *input_adapters,
     if (rc == SALTS_OK && !local && !refs)
       rc = flow_config_error(error, SALTS_EINVAL, path, "config or fragments is required");
     if (rc == SALTS_OK) {
-      json_object_set_string(resolved, "kind", json_string(kind));
-      json_object_add(resolved, "config", merged);
-      json_object_add(resolved, "sources", sources);
-      merged = NULL;
-      sources = NULL;
-      if (!json_object_add_checked(output, name, resolved)) rc = SALTS_ENOMEM;
-      else resolved = NULL;
+      rc = flow_config_add_string(resolved, "kind", json_string(kind));
+      if (rc == SALTS_OK) {
+        if (json_object_add_checked(resolved, "config", merged)) merged = NULL;
+        else rc = SALTS_ENOMEM;
+      }
+      if (rc == SALTS_OK) {
+        if (json_object_add_checked(resolved, "sources", sources)) sources = NULL;
+        else rc = SALTS_ENOMEM;
+      }
+      if (rc == SALTS_OK) {
+        if (json_object_add_checked(output, name, resolved)) resolved = NULL;
+        else rc = SALTS_ENOMEM;
+      }
     }
     if (resolved) json_free(resolved);
     if (merged) json_free(merged);
@@ -417,7 +451,8 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
     rc = SALTS_ENOMEM;
     goto done;
   }
-  json_object_set_number(resolved, "version", 1.0);
+  rc = flow_config_add_number(resolved, "version", 1.0);
+  if (rc != SALTS_OK) goto done;
   rc = flow_config_add_resolved_runtime(resolved, &async_ingress);
   if (rc != SALTS_OK) goto done;
   if (profiles && flow_config_add_clone(resolved, "profiles", profiles) != SALTS_OK) {
@@ -432,7 +467,10 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   if (rc != SALTS_OK) goto done;
   rc = flow_config_validate_profiles(profiles, resolved_adapters, channels, error);
   if (rc != SALTS_OK) goto done;
-  json_object_add(resolved, "adapters", resolved_adapters);
+  if (!json_object_add_checked(resolved, "adapters", resolved_adapters)) {
+    rc = SALTS_ENOMEM;
+    goto done;
+  }
   resolved_adapters = NULL;
   config = (turbo_flow_resolved_config_t *)calloc(1, sizeof(*config));
   if (!config) {
