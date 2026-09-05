@@ -61,7 +61,7 @@ typedef struct turbo_flow_rule_action_s {
 
 #define TURBO_FLOW_RULE_ACTION_INIT                                                               \
   {sizeof(turbo_flow_rule_action_t), TURBO_FLOW_RULE_ACTION_ABI_V1, 0, 0, 0u, UINT64_MAX,         \
-   TURBO_OK, {0}, TURBO_FLOW_RESOURCE_COMMAND_INIT}
+   SALTS_OK, {0}, TURBO_FLOW_RESOURCE_COMMAND_INIT}
 
 typedef struct turbo_flow_rule_s {
   /** Borrowed only while the immutable program is compiled. */
@@ -216,7 +216,7 @@ TURBO_FLOW_C_API int turbo_flow_rule_processor_evaluate(const turbo_flow_rule_pr
  * Validate and atomically apply data actions to one private message copy and decision.
  *
  * Route, batch-key, and retry-class are single-valued decisions. Repeating one of these action
- * kinds returns TURBO_EPROTO and leaves both outputs unchanged.
+ * kinds returns SALTS_EPROTO and leaves both outputs unchanged.
  */
 TURBO_FLOW_C_API int turbo_flow_rule_apply_data_actions(turbo_flow_msg_t *message,
                                                  const turbo_flow_rule_action_t *actions,

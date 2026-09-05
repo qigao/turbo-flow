@@ -1,7 +1,7 @@
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 #include "turbo_flow_protocol_graph.h"
-#include "turbo_thread.h"
+#include "salts_thread.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -40,11 +40,11 @@ typedef struct graph_publish_thread_s {
 
 static int graph_async_gate_stage(turbo_flow_msg_t *message, void *ctx) {
   graph_async_gate_t *gate = (graph_async_gate_t *)ctx;
-  if (!gate || !message) return TURBO_EINVAL;
+  if (!gate || !message) return SALTS_EINVAL;
   atomic_store_explicit(&gate->entered, 1, memory_order_release);
   while (!atomic_load_explicit(&gate->allow_exit, memory_order_acquire))
-    turbo_sleep_ms(1);
-  return TURBO_OK;
+    salts_sleep_ms(1);
+  return SALTS_OK;
 }
 
 static void graph_completion_record(
@@ -77,7 +77,7 @@ static int graph_probe_stage(turbo_flow_msg_t *message, void *ctx) {
       turbo_flow_protocol_graph_metadata(message);
   if (!probe || !message || !metadata ||
       message->payload.len > sizeof(probe->payload))
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   probe->calls++;
   probe->message_id = message->id;
   probe->message_type = message->type;
@@ -108,12 +108,12 @@ spec("protocol graph bridge") {
 
     check_not_null(flow);
     turbo_flow_msg_init(&probe.retained);
-    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "inspect", graph_probe_stage,
                                               &probe, NULL),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
 
     message.payload = (uint8_t *)payload;
     message.payload_capacity = sizeof(payload);
@@ -132,7 +132,7 @@ spec("protocol graph bridge") {
 
     check_equal(turbo_flow_protocol_graph_publish(&sink, &request,
                                                   &disposition),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(disposition, TURBO_FLOW_PROTOCOL_PUBLISH_SETTLED);
     check_equal(probe.calls, 1u);
     check_equal(probe.message_id, 42u);
@@ -146,7 +146,7 @@ spec("protocol graph bridge") {
     check_equal(probe.retained.payload.len, sizeof(payload));
     check_equal(probe.retained.payload.data, payload, sizeof(payload));
 
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&probe.retained);
     turbo_flow_destroy(flow);
   }
@@ -165,7 +165,7 @@ spec("protocol graph bridge") {
     graph_async_gate_t gate;
     graph_completion_probe_t completion;
     graph_publish_thread_t publish;
-    turbo_thread_t thread;
+    salts_thread_t thread;
     turbo_flow_t *flow = turbo_flow_create();
     int returned_before_release;
 
@@ -174,7 +174,7 @@ spec("protocol graph bridge") {
     atomic_init(&gate.allow_exit, 0);
     atomic_init(&completion.calls, 0);
     atomic_init(&completion.valid_contract, 0);
-    atomic_init(&completion.status, TURBO_EBUSY);
+    atomic_init(&completion.status, SALTS_EBUSY);
     atomic_init(&completion.delivery_id, 0u);
     atomic_init(&completion.session_id, 0u);
     atomic_init(&completion.session_generation, 0u);
@@ -182,12 +182,12 @@ spec("protocol graph bridge") {
     ingress.workers = 1u;
     ingress.queue_capacity = 2u;
     check_not_null(flow);
-    check_equal(turbo_flow_configure_async_ingress(flow, &ingress), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "gate", graph_async_gate_stage, &gate, NULL),
-                TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
 
     message.payload = (uint8_t *)payload;
     message.payload_capacity = sizeof(payload);
@@ -206,28 +206,28 @@ spec("protocol graph bridge") {
     sink.completion_ctx = &completion;
     publish.sink = &sink;
     publish.request = &request;
-    publish.status = TURBO_EBUSY;
+    publish.status = SALTS_EBUSY;
 
-    check_equal(turbo_thread_create(&thread, graph_publish_thread_run, &publish), TURBO_OK);
+    check_equal(salts_thread_create(&thread, graph_publish_thread_run, &publish), SALTS_OK);
     for (int i = 0; i < 1000 && !atomic_load_explicit(&gate.entered, memory_order_acquire); ++i)
-      turbo_sleep_ms(1);
+      salts_sleep_ms(1);
     returned_before_release = atomic_load_explicit(&publish.returned, memory_order_acquire);
     atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
-    check_equal(turbo_thread_join(&thread), TURBO_OK);
+    check_equal(salts_thread_join(&thread), SALTS_OK);
     for (int i = 0; i < 1000 && !atomic_load_explicit(&completion.calls, memory_order_acquire); ++i)
-      turbo_sleep_ms(1);
+      salts_sleep_ms(1);
 
     check_equal(returned_before_release, 1);
-    check_equal(publish.status, TURBO_OK);
+    check_equal(publish.status, SALTS_OK);
     check_equal(publish.disposition, TURBO_FLOW_PROTOCOL_PUBLISH_PENDING);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), 1);
     check_equal(atomic_load_explicit(&completion.valid_contract, memory_order_relaxed), 1);
-    check_equal(atomic_load_explicit(&completion.status, memory_order_relaxed), TURBO_OK);
+    check_equal(atomic_load_explicit(&completion.status, memory_order_relaxed), SALTS_OK);
     check_equal(atomic_load_explicit(&completion.delivery_id, memory_order_relaxed), 99u);
     check_equal(atomic_load_explicit(&completion.session_id, memory_order_relaxed), 8u);
     check_equal(atomic_load_explicit(&completion.session_generation, memory_order_relaxed), 3u);
 
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -266,17 +266,17 @@ spec("protocol graph bridge") {
     request.session_id = 1u;
     request.session_generation = 1u;
     request.message = &message;
-    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "inspect", graph_probe_stage, &probe, NULL),
-                TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_protocol_graph_publish(
                     &legacy, &request, &disposition),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(disposition, TURBO_FLOW_PROTOCOL_PUBLISH_SETTLED);
     check_equal(probe.calls, 1u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&probe.retained);
     turbo_flow_destroy(flow);
   }
@@ -300,7 +300,7 @@ spec("protocol graph bridge") {
 
     atomic_init(&completion.calls, 0);
     atomic_init(&completion.valid_contract, 0);
-    atomic_init(&completion.status, TURBO_EBUSY);
+    atomic_init(&completion.status, SALTS_EBUSY);
     atomic_init(&completion.delivery_id, 0u);
     atomic_init(&completion.session_id, 0u);
     atomic_init(&completion.session_generation, 0u);
@@ -310,12 +310,12 @@ spec("protocol graph bridge") {
     ingress.max_message_bytes = 1u;
     ingress.max_inflight_bytes = 1u;
     check_not_null(flow);
-    check_equal(turbo_flow_configure_async_ingress(flow, &ingress), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+    check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "inspect", graph_probe_stage, &probe, NULL),
-                TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
 
     message.payload = (uint8_t *)payload;
     message.payload_capacity = sizeof(payload);
@@ -334,11 +334,11 @@ spec("protocol graph bridge") {
     sink.completion_ctx = &completion;
 
     check_equal(turbo_flow_protocol_graph_publish(&sink, &request, &disposition),
-                TURBO_ENOSPC);
+                SALTS_ENOSPC);
     check_equal(disposition, (turbo_flow_protocol_publish_disposition_t)0);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), 0);
     check_equal(probe.calls, 0u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&probe.retained);
     turbo_flow_destroy(flow);
   }

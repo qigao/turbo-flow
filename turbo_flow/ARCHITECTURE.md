@@ -16,7 +16,7 @@ retry, and reject requirements bind to the existing reorder, adapter retry, and
 reject-edge mechanisms. Operation execution deadlines are enforced at their
 selected runtime boundary. Generic and protocol settlement actions execute only
 through an explicitly registered settlement owner; a missing owner or unsupported
-action fails compile with `TURBO_ENOTSUP`.
+action fails compile with `SALTS_ENOTSUP`.
 Every runtime node has a complete resolved operation contract. DSL nodes without
 a domain-specific binding resolve to typed `core.source` or `core.stage.*`
 contracts derived from their selected executor/handoff; direct inline paths do
@@ -27,7 +27,7 @@ documented in `DOMAIN_CONTRACTS.md`.
 All resource owners expose generation-aware metadata and snapshots. A stable
 owner-scoped UID identifies connection, queue, pool, runtime, segment,
 protocol, storage, and rule-set resources. Resize commands carry the observed
-generation so stale reconcile decisions fail with `TURBO_EBUSY`; a UID is only
+generation so stale reconcile decisions fail with `SALTS_EBUSY`; a UID is only
 as durable as its owner contract and is not implicitly a cross-deployment ID.
 
 Domain-specific management data can be projected through a schema-backed
@@ -62,8 +62,8 @@ TurboFlow is an embeddable C data/message graph runtime. The core owns:
 - Graph validation and immutable topology plans; pool parallelism is changed
   only by the serialized runtime resize command.
 - Broadcast and worker-pool data strategies.
-- Inline, thread-pool, and coroutine-pool compute executors; adapter-owned
-  CoroNet placement remains an I/O ownership boundary, while host extensions use
+- Inline, thread-pool, and coroutine-pool compute executors; network placement
+  remains an external CNet/CHTTP ownership boundary, while host extensions use
   typed operations or adapters rather than a custom executor.
 - Message ownership, stage dispatch, lifecycle, and structured errors.
 - Backend-neutral expression parsing, schema-backed type checking, and private
@@ -71,9 +71,9 @@ TurboFlow is an embeddable C data/message graph runtime. The core owns:
   conditional routes evaluate the current successful upstream output, while
   RulesForge-backed operations own multi-rule schema data decisions.
 
-Network protocols, storage, codecs, and email live in adapter modules. The core
-does not own broker discovery, distributed routing, databases, UI, group ownership,
-secrets management, or job-runner behavior.
+Protocol codecs, storage, and codecs live in adapter modules. Network endpoints,
+email transports, broker discovery, distributed routing, databases, UI, group
+ownership, secrets management, and job-runner behavior are outside the core.
 
 ## Runtime Observation
 
@@ -145,7 +145,7 @@ dead-letter boundaries to retain the failure context safely.
 Adapter stages may declare an explicit bounded policy:
 
 ```flow
-stage fetch adapter http.client retry attempts 3 delay 100
+stage fetch adapter service.fetch retry attempts 3 delay 100
 reject fetch_dead fetch -> dead_letter
 ```
 
@@ -158,19 +158,14 @@ failed mutations are released and only a successful result moves back. On
 exhaustion the original payload reaches the named reject/dead-letter sink with
 the final attempt count in message-owned failure metadata.
 
-HTTP transform adapters expose this capability only for GET, PUT, and DELETE.
-Only transport I/O and pump timeout errors retry; POST, PATCH, HTTP status
-errors, and polling sources do not silently retry.
-
 The accepted executor spellings are exactly:
 
 ```text
 inline | thread | coro
 ```
 
-The removed spellings `socket`, `io`, `custom`, `threadpool`, `thread_pool`,
-`coro_pool`, `coronet`, and `socks` are rejected. See `parser/GRAMMARS.md` for
-the complete grammar.
+Former I/O placement and executor aliases are rejected. See `parser/GRAMMARS.md`
+for the complete grammar.
 
 Example:
 
@@ -178,7 +173,7 @@ Example:
 source input
 stage decode adapter "codec.length"
 stage process worker 4 capacity 64 exec thread workers 4
-stage output adapter "socket.tcp"
+stage output adapter "output.sink"
 
 stage main {
   input -> decode -> process -> output
@@ -191,9 +186,9 @@ Data strategy and execution strategy are independent:
   ring. It is a data handoff/consumer lane, not a fourth compute executor.
   Capacity defaults to 1024 and must be a power of two.
 - `exec thread workers N` selects the thread executor.
-- `exec coro lanes N pool N` selects the TurboUtils coroutine scheduler.
-- Adapter-owned CoroNet placement is not an executor. An adapter-backed stage
-  remains `inline`; the adapter owner enters and serializes its CoroNet context.
+- `exec coro lanes N pool N` selects the Salts coroutine scheduler.
+- Adapter-owned CNet/CHTTP placement is not an executor. An adapter-backed stage
+  remains `inline`; the external adapter owner serializes its network context.
 - TurboFlow Policy expression evaluation is an inline pure operation. A graph node
   may explicitly choose the common thread or coroutine pool for parallel evaluation.
 - Executor-specific counts are fail-fast: other executor/count combinations are
@@ -250,7 +245,7 @@ A schema-bound message keeps the same bytes as its source of truth and attaches
 an optional provider-owned `turbo_flow_data_schema_t` identity plus a derived
 projection. Clearing that projection returns the message to opaque state without
 changing the payload. Projection clone/destroy behavior belongs to its provider;
-clone, retry, and fan-out fail with `TURBO_ENOTSUP` when no clone hook exists.
+clone, retry, and fan-out fail with `SALTS_ENOTSUP` when no clone hook exists.
 The Codec DataBind provider registers `data_bind_value_clone`, so its cloned
 messages own independent value trees; this does not weaken the generic fail-fast
 contract for other providers.
@@ -261,7 +256,7 @@ Descriptor and projection domains may differ because they describe separate
 boundaries, such as an HTTP ingress and its DataBind projection. They still refer
 to one payload identity: once a descriptor declares a schema, projection encoding,
 schema name, type, and version must match in either binding order. A mismatch fails
-with `TURBO_EPROTO` and does not consume a caller-owned projection.
+with `SALTS_EPROTO` and does not consume a caller-owned projection.
 
 The host explicitly creates and destroys the content schema registry. Registration
 deep-copies schema identity and projection-type strings, but rejects runtime schema
@@ -292,8 +287,8 @@ bounded ring, and synchronously waits for the selected consumer to return the
 message and stage status. The disruptor owns admission and worker selection;
 graph dependency release remains on the publishing path. An implicit DSL worker
 uses blocking admission. An explicit operation contract may instead select
-fail-fast admission (`TURBO_ENOSPC`) or drop-newest admission
-(`TURBO_ECANCELED`); `drop-oldest` is rejected during compile. Every policy keeps
+fail-fast admission (`SALTS_ENOSPC`) or drop-newest admission
+(`SALTS_ECANCELED`); `drop-oldest` is rejected during compile. Every policy keeps
 memory bounded and is validated against the worker capacity.
 Worker claims briefly spin for handoff latency, then park inside Disruptor.
 Publish wakes parked workers only when waiters exist. Stop changes the runtime
@@ -326,8 +321,8 @@ query points. No thread or coroutine is forcibly terminated.
 
 An operation deadline starts when its callback enters `RUNNING`; queue and ring
 admission time remains a separate backpressure concern. Thread, coroutine, and
-Disruptor tasks observe expiry cooperatively and return `TURBO_ETIMEDOUT` rather
-than `TURBO_ECANCELED`. Inline and adapter callbacks are checked after
+Disruptor tasks observe expiry cooperatively and return `SALTS_ETIMEDOUT` rather
+than `SALTS_ECANCELED`. Inline and adapter callbacks are checked after
 they return because arbitrary C callbacks cannot be safely preempted. A source
 deadline still fails compile until its adapter defines a per-message owner contract.
 
@@ -356,7 +351,7 @@ ingress thread pool, and reports graph completion on an ingress worker. This
 handoff does not replace the stage executor selected by the DSL; it only keeps
 source-owned timer or I/O threads out of graph execution. Queue, retained
 per-message byte, and aggregate in-flight byte exhaustion fail immediately with
-`TURBO_ENOSPC`. A retained buffer is charged by capacity, so a small view cannot
+`SALTS_ENOSPC`. A retained buffer is charged by capacity, so a small view cannot
 pin a large allocation outside the budget. Human YAML configures this one
 handoff through process-level `runtime.ingress.workers`, `capacity`,
 `max_message_bytes`, and `max_inflight_bytes`; the resolver expands omitted
@@ -375,7 +370,7 @@ requires the host to marshal settlement back to the serialized protocol owner.
 Stop first closes publish admission, asks adapters to
 interrupt pending work, drains all already accepted calls, and only then
 destroys async ingress, data planes, and executors; a new call after admission
-closes returns `TURBO_ESHUTDOWN`.
+closes returns `SALTS_ESHUTDOWN`.
 
 Reorder boundaries issue their own contiguous tickets only for publications
 that can reach that boundary. A publication that is filtered, fails upstream,
@@ -451,30 +446,13 @@ Implemented modules:
 | Module | Current behavior |
 | --- | --- |
 | `TurboFlow::Codec` | Line/length framing and DataBind for TBE, JSON, CSV, XML |
-| `TurboFlow::Socket` | TCP, UDP, TLS, WS, WSS source/sink |
-| `TurboFlow::HttpClient` | HTTP transform and periodic GET source |
-| `TurboFlow::HttpServer` | Iris request source and terminal reply sink |
-| `TurboFlow::RPC` | JSON-RPC client/server and periodic client source |
-| `TurboFlow::S3` | PutObject sink and periodic GetObject source |
-| `TurboFlow::Email` | SMTP sink, POP3 source, and MIME parse/extract/encode transforms |
 | `TurboFlow::Observe` | Opt-in message/stage/adapter metrics and bounded summary sink |
 | `TurboFlow::Schedule` | Interval, one-shot, bounded-repeat, and local-time cron sources |
 
-`TurboFlow::Http` remains a compatibility aggregate for the split HTTP client
-and server targets. HTTP continues to use the existing TurboHTTP/Iris native
-endpoint and adapter implementation; it is not migrated onto the generic socket
-primitive. `io.socket` binds receive/send to its own `SocketEndpoint`;
-`io.http.client` and `io.http.server` bind request/poll and request/reply to
-their actual `HttpClientConnection` or `HttpServerEndpoint`. RPC uses distinct
-client/server resources. These catalogs validate ownership without replacing
-any native transport owner.
-
-Trusted host code may use a versioned binding to inject a borrowed or ownership-transferred
-`http_client_t` into an RPC client adapter. The RPC wrapper never owns that
-HTTP client itself; adapter shutdown destroys the wrapper first and then
-destroys the HTTP client only when ownership was transferred. YAML cannot
-construct this host object, and a borrowed client may not be concurrently
-driven by another adapter.
+Socket, HTTP, RPC, S3, and email transport targets and their compatibility
+aggregates have been removed. New network integration must be supplied by a
+separate host adapter over CNet/CHTTP; TurboFlow does not provide an in-tree
+fallback implementation.
 
 Core also provides an opt-in module catalog above primitive/operation
 registrations. A module declares its version, capabilities, primitive type and
@@ -482,21 +460,21 @@ operation exports, plus already-registered dependency ranges. Typed operation
 providers and native adapters can be bound to the module that owns the exported operation. The
 catalog is validation and read-only discovery metadata: it is not a loader,
 resource factory, or Graph DSL construct. Production registrations include
-TurboFlow Policy and native HTTP/RPC client/server operations. Durable repositories are composed
-by the product through TurboDB ORM and do not become Graph adapter operations.
+TurboFlow Policy operations. Durable repositories are composed by the product
+through TurboDB ORM and do not become Graph adapter operations.
 
 ## Build Components
 
 TurboFlow is configured and installed as a graph data-processing product.
-Protocol, security, codecs, network adapters, observation, scheduling, and the MIR JIT backend form
-its repository-owned build graph. External protocol products and TurboDB persistence repositories
-are not producer-side components.
+Protocol codecs, security, codecs, observation, scheduling, and the MIR JIT backend form its
+repository-owned build graph. Network adapters, external protocol products, and TurboDB
+persistence repositories are not producer-side components.
 
-TurboUtils, TurboNet, Threads, TurboHTTP, RulesForge, and the other
-declared dependencies are therefore required by every product build.
+Salts, SaltsUtils, RulesForge, and the other declared dependencies are required
+by every product build.
 `find_package(TurboFlow COMPONENTS ...)` remains a consumer-side target
 availability check; it does not select or remove producer-side features.
-`TurboFlow::Flow` publicly links only `TurboUtils::Core` and privately embeds
+`TurboFlow::Flow` publicly links Salts foundation targets and privately embeds
 the repository `vendor/mir` static target; no MIR type enters the installed
 public headers.
 
@@ -506,27 +484,14 @@ ABI with atomic aggregate counters and bounded per-stage series; its explicit
 summary sink defaults to payload redaction. Ownership and logging behavior are
 documented in `observe/README.md`.
 
-TurboNet exports `TurboNet::MimeParser`, backed by `turbonet/email/mime_parser`.
-`TurboFlow::Email` reuses it through registered MIME parser, owned-extract, and
-encode transform adapters. The callback parser exposes views only during
-`consume`; the extract adapter copies selected data into an owned typed
-projection. TurboFlow does not maintain a second MIME implementation.
-
 ## Polling Decision
 
-Protocol clients may own protocol-specific polling when `poll_interval_ms` is
-non-zero:
-
-- HTTP repeatedly performs a configured GET.
-- RPC repeatedly invokes a configured method and params value.
-- S3 repeatedly performs GetObject for a configured bucket/key.
-
-These adapters register as sources in polling mode. `TurboFlow::Schedule` is
-limited to generic ticks, one-shot delays, bounded repeats, and cron triggers.
-It reuses the `TurboUtils::Cron` five-field parser and local wall-clock
-calculation. The schedule module does not add a second HTTP/RPC/S3 polling
-implementation or duplicate protocol error policy. Catch-up is explicitly
-bounded, and stop interrupts waits and joins the adapter worker before return.
+TurboFlow contains no protocol-client polling implementation. External CNet/CHTTP
+adapters own protocol-specific polling and connection state. `TurboFlow::Schedule`
+is limited to generic ticks, one-shot delays, bounded repeats, and cron triggers.
+It reuses the `Salts::Cron` five-field parser and local wall-clock calculation.
+Catch-up is explicitly bounded, and stop interrupts waits and joins the adapter
+worker before return.
 
 ## Error Semantics
 
@@ -554,8 +519,8 @@ cross-ring worker handoff, event-time processing, and teardown scenarios; see
 Pool snapshots and resource status are observed state only. A host control loop
 issues `turbo_flow_resize_pool()` with a stage name, pool kind, desired
 parallelism, drain deadline, and the status `observed_generation`. A zero
-generation or truncated command fails with `TURBO_EINVAL`; a stale generation
-fails with `TURBO_EBUSY`. The
+generation or truncated command fails with `SALTS_EINVAL`; a stale generation
+fails with `SALTS_EBUSY`. The
 runtime owner closes admission, drains accepted
 publishes, updates the compiled stage/executor configuration, and rebuilds all
 runtime-owned Disruptor, thread, and coroutine pool resources as one generation.
@@ -577,7 +542,7 @@ snapshot and sends one checked command; it does not create a controller thread.
 Pool resize does not implicitly quiesce source adapters. Hosts can use the
 separate adapter owner command before resizing: quiesce ingress, drain core
 publication, resize pools, then resume ingress. A source adapter publish racing
-closed admission still receives `TURBO_ESHUTDOWN`; adapter-owned retention or
+closed admission still receives `SALTS_ESHUTDOWN`; adapter-owned retention or
 retry policy determines whether that external message is retried.
 
 ## Adapter Control Commands

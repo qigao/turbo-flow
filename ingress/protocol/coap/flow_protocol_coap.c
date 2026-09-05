@@ -1,6 +1,6 @@
 #include "flow_protocol_plugin_support.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdatomic.h>
 
@@ -21,7 +21,7 @@ static int flow_coap_reply(
     turbo_flow_protocol_frame_output_t *output) {
   unsigned next;
   (void)configured_version;
-  if (!ctx) return TURBO_EINVAL;
+  if (!ctx) return SALTS_EINVAL;
   next = atomic_fetch_add_explicit((atomic_uint *)ctx, 1u,
                                    memory_order_relaxed) +
          1u;

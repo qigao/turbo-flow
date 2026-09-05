@@ -1,8 +1,8 @@
 #ifndef TURBO_FLOW_EXPORT_H
 #define TURBO_FLOW_EXPORT_H
 
-/* TurboFlow owns its ABI marker. TurboUtils' TURBO_API only describes
- * TurboUtils::Core and must not leak its producer/consumer state here. */
+/* TurboFlow owns its ABI marker. Salts' SALTS_API only describes Salts
+ * libraries and must not leak their producer/consumer state here. */
 #ifndef TURBO_FLOW_API
 #  if defined(_WIN32) && defined(TURBO_FLOW_BUILD)
 #    define TURBO_FLOW_API __declspec(dllexport)

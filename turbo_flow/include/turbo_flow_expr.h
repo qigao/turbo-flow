@@ -146,7 +146,7 @@ TURBO_FLOW_C_API int turbo_flow_register_expr_projection(
  * Standard predicates include `has_flag(integer_value, positive_literal_mask)`.
  * It returns true only when every bit in the non-zero mask is present.
  *
- * Returns TURBO_OK on success. Parse/type/schema errors return their Turbo
+ * Returns SALTS_OK on success. Parse/type/schema errors return their Turbo
  * error code and set `*out` to NULL. `error` may be NULL.
  */
 TURBO_FLOW_C_API int turbo_flow_expr_compile(const char *text, size_t len,

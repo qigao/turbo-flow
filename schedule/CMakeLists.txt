@@ -14,7 +14,7 @@ target_include_directories(
   ${TARGET_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                         $<INSTALL_INTERFACE:include>)
 target_link_libraries(
-  ${TARGET_NAME} PUBLIC TurboFlow::Flow TurboUtils::Core TurboParser::Cron)
+  ${TARGET_NAME} PUBLIC TurboFlow::Flow Salts::Core Salts::Cron)
 install(FILES ${TURBO_FLOW_SCHEDULE_HEADERS} DESTINATION include)
 
 if(BUILD_TESTS)

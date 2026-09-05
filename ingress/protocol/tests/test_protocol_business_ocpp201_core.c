@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 #include "turbo_flow_protocol.h"
 #include "turbo_flow_protocol_business.h"
 
@@ -19,7 +19,7 @@ static int ocpp201_core_business_open(turbo_flow_protocol_business_registry_t **
   char reason[256];
   int rc;
 
-  if (!out_registry || !out_owner || !out_business) return TURBO_EINVAL;
+  if (!out_registry || !out_owner || !out_business) return SALTS_EINVAL;
   *out_registry = NULL;
   *out_owner = NULL;
   *out_business = NULL;
@@ -28,29 +28,29 @@ static int ocpp201_core_business_open(turbo_flow_protocol_business_registry_t **
   request.max_payload_size = 4096u;
 
   rc = turbo_flow_protocol_business_registry_create(1u, &registry);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_protocol_business_registry_load(
       registry, FLOW_PROTOCOL_BUSINESS_OCPP201_CORE_MODULE, reason, sizeof(reason));
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = turbo_flow_protocol_business_owner_create_registered(registry, OCPP201_CORE_BUSINESS,
                                                              &request, &owner);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = turbo_flow_protocol_business_owner_instance(owner, TURBO_FLOW_PROTOCOL_OCPP,
                                                     out_business);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     turbo_flow_protocol_business_owner_destroy(owner);
     (void)turbo_flow_protocol_business_registry_destroy(registry);
     return rc;
   }
   *out_registry = registry;
   *out_owner = owner;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void ocpp201_core_business_close(turbo_flow_protocol_business_registry_t *registry,
                                         turbo_flow_protocol_business_owner_t *owner) {
   turbo_flow_protocol_business_owner_destroy(owner);
-  check_equal(turbo_flow_protocol_business_registry_destroy(registry), TURBO_OK);
+  check_equal(turbo_flow_protocol_business_registry_destroy(registry), SALTS_OK);
 }
 
 static turbo_flow_protocol_business_event_view_t
@@ -85,7 +85,7 @@ static int ocpp201_core_protocol_open(turbo_flow_protocol_registry_t **out_regis
   char reason[256];
   int rc;
 
-  if (!out_registry || !out_owner || !out_protocol) return TURBO_EINVAL;
+  if (!out_registry || !out_owner || !out_protocol) return SALTS_EINVAL;
   *out_registry = NULL;
   *out_owner = NULL;
   *out_protocol = NULL;
@@ -93,20 +93,20 @@ static int ocpp201_core_protocol_open(turbo_flow_protocol_registry_t **out_regis
   request.protocol_version = "2.0.1";
 
   rc = turbo_flow_protocol_registry_create(1u, &registry);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_protocol_registry_load(registry, FLOW_PROTOCOL_OCPP_MODULE, reason, sizeof(reason));
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = turbo_flow_protocol_owner_create_registered(registry, "ocpp", &request, &owner);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = turbo_flow_protocol_owner_instance(owner, TURBO_FLOW_PROTOCOL_OCPP, out_protocol);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     turbo_flow_protocol_owner_destroy(owner);
     (void)turbo_flow_protocol_registry_destroy(registry);
     return rc;
   }
   *out_registry = registry;
   *out_owner = owner;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 spec("OCPP 2.0.1 Core DataBind business provider") {
@@ -120,15 +120,15 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     request.protocol = TURBO_FLOW_PROTOCOL_OCPP;
     request.profile = "ocpp-2.0.1-full";
     request.max_payload_size = 4096u;
-    check_equal(turbo_flow_protocol_business_registry_create(1u, &registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_business_registry_create(1u, &registry), SALTS_OK);
     check_equal(turbo_flow_protocol_business_registry_load(
                      registry, FLOW_PROTOCOL_BUSINESS_OCPP201_CORE_MODULE, reason, sizeof(reason)),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(turbo_flow_protocol_business_owner_create_registered(
                      registry, OCPP201_CORE_BUSINESS, &request, &owner),
-                 TURBO_ENOTSUP);
+                 SALTS_ENOTSUP);
     check_null(owner);
-    check_equal(turbo_flow_protocol_business_registry_destroy(registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_business_registry_destroy(registry), SALTS_OK);
   }
 
   it("accepts a committed typed BootNotification body") {
@@ -141,8 +141,8 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_event_view_t event =
         ocpp201_core_event(1u, frame, sizeof(frame) - 1u, "BootNotification", "boot-1");
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_OK);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -156,8 +156,8 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_event_view_t event =
         ocpp201_core_event(2u, frame, sizeof(frame) - 1u, "BootNotification", "boot-2");
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -170,10 +170,10 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_event_view_t event =
         ocpp201_core_event(3u, valid, sizeof(valid) - 1u, "Heartbeat", "hb-1");
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_OK);
     event = ocpp201_core_event(4u, invalid, sizeof(invalid) - 1u, "Heartbeat", "hb-2");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -187,8 +187,8 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_event_view_t event =
         ocpp201_core_event(5u, frame, sizeof(frame) - 1u, "Authorize", "auth-1");
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_OK);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -206,16 +206,16 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_t *business = NULL;
     turbo_flow_protocol_business_event_view_t event;
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
     event = ocpp201_core_event(6u, unsupported_field, sizeof(unsupported_field) - 1u,
                                "Authorize", "auth-2");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event =
         ocpp201_core_event(7u, invalid_type, sizeof(invalid_type) - 1u, "Authorize", "auth-3");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event = ocpp201_core_event(8u, missing_token, sizeof(missing_token) - 1u, "Authorize",
                                "auth-4");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -230,8 +230,8 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_event_view_t event =
         ocpp201_core_event(9u, frame, sizeof(frame) - 1u, "StatusNotification", "status-1");
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_OK);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -257,19 +257,19 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_t *business = NULL;
     turbo_flow_protocol_business_event_view_t event;
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
     event = ocpp201_core_event(6u, invalid_timestamp, sizeof(invalid_timestamp) - 1u,
                                "StatusNotification", "status-2");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event = ocpp201_core_event(7u, invalid_status, sizeof(invalid_status) - 1u,
                                "StatusNotification", "status-3");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event = ocpp201_core_event(8u, invalid_identity, sizeof(invalid_identity) - 1u,
                                "StatusNotification", "status-4");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event = ocpp201_core_event(9u, invalid_calendar, sizeof(invalid_calendar) - 1u,
                                "StatusNotification", "status-5");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -285,8 +285,8 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_event_view_t event =
         ocpp201_core_event(10u, frame, sizeof(frame) - 1u, "TransactionEvent", "tx-1");
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_OK);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -311,16 +311,16 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_t *business = NULL;
     turbo_flow_protocol_business_event_view_t event;
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
     event = ocpp201_core_event(11u, invalid_trigger, sizeof(invalid_trigger) - 1u,
                                "TransactionEvent", "tx-2");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event = ocpp201_core_event(12u, invalid_sequence, sizeof(invalid_sequence) - 1u,
                                "TransactionEvent", "tx-3");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event = ocpp201_core_event(13u, long_transaction_id, sizeof(long_transaction_id) - 1u,
                                "TransactionEvent", "tx-4");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -338,8 +338,8 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_event_view_t event =
         ocpp201_core_event(14u, frame, sizeof(frame) - 1u, "TransactionEvent", "tx-5");
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_OK);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -356,8 +356,8 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_event_view_t event =
         ocpp201_core_event(15u, frame, sizeof(frame) - 1u, "TransactionEvent", "tx-6");
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_OK);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -397,22 +397,22 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_t *business = NULL;
     turbo_flow_protocol_business_event_view_t event;
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
     event = ocpp201_core_event(16u, invalid_evse, sizeof(invalid_evse) - 1u, "TransactionEvent",
                                "tx-7");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event = ocpp201_core_event(17u, invalid_evse_shape, sizeof(invalid_evse_shape) - 1u,
                                "TransactionEvent", "tx-7b");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event = ocpp201_core_event(18u, invalid_id_token, sizeof(invalid_id_token) - 1u,
                                "TransactionEvent", "tx-8");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event = ocpp201_core_event(19u, empty_id_token, sizeof(empty_id_token) - 1u, "TransactionEvent",
                                "tx-8b");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event = ocpp201_core_event(20u, invalid_offline, sizeof(invalid_offline) - 1u,
                                "TransactionEvent", "tx-8c");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -430,8 +430,8 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_event_view_t event =
         ocpp201_core_event(21u, frame, sizeof(frame) - 1u, "TransactionEvent", "tx-9");
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -444,10 +444,10 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_event_view_t event =
         ocpp201_core_event(22u, mismatch, sizeof(mismatch) - 1u, "Heartbeat", "auth-1");
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EPROTO);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EPROTO);
     event = ocpp201_core_event(23u, unsupported, sizeof(unsupported) - 1u, "GetVariables", "vars-1");
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_ENOTSUP);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_ENOTSUP);
     ocpp201_core_business_close(registry, owner);
   }
 
@@ -469,8 +469,8 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_frame_output_t encoded = TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
 
     check_equal(ocpp201_core_business_open(&business_registry, &business_owner, &business),
-                 TURBO_OK);
-    check_equal(ocpp201_core_protocol_open(&protocol_registry, &protocol_owner, &protocol), TURBO_OK);
+                 SALTS_OK);
+    check_equal(ocpp201_core_protocol_open(&protocol_registry, &protocol_owner, &protocol), SALTS_OK);
     request.command_id = 11u;
     request.protocol = TURBO_FLOW_PROTOCOL_OCPP;
     request.tenant = "fleet-a";
@@ -487,21 +487,21 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     output.payload_capacity = sizeof(command_payload);
 
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(output.device_id, "charger-1");
     check_equal(output.operation, "Reset");
     check_equal(output.correlation_id, "cmd-11");
     check_equal(output.payload_size, sizeof(request_json) - 1u);
     check_equal(output.payload, request_json, output.payload_size);
-    check_equal(turbo_flow_protocol_business_command_view(&output, &command), TURBO_OK);
+    check_equal(turbo_flow_protocol_business_command_view(&output, &command), SALTS_OK);
     encoded.data = frame;
     encoded.capacity = sizeof(frame);
-    check_equal(turbo_flow_protocol_encode(protocol, &command, &encoded), TURBO_OK);
+    check_equal(turbo_flow_protocol_encode(protocol, &command, &encoded), SALTS_OK);
     frame[encoded.data_size] = '\0';
     check_equal((const char *)frame, "[2,\"cmd-11\",\"Reset\",{\"type\":\"Immediate\"}]");
 
     turbo_flow_protocol_owner_destroy(protocol_owner);
-    check_equal(turbo_flow_protocol_registry_destroy(protocol_registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_destroy(protocol_registry), SALTS_OK);
     ocpp201_core_business_close(business_registry, business_owner);
   }
 
@@ -523,8 +523,8 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_frame_output_t encoded = TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
 
     check_equal(ocpp201_core_business_open(&business_registry, &business_owner, &business),
-                 TURBO_OK);
-    check_equal(ocpp201_core_protocol_open(&protocol_registry, &protocol_owner, &protocol), TURBO_OK);
+                 SALTS_OK);
+    check_equal(ocpp201_core_protocol_open(&protocol_registry, &protocol_owner, &protocol), SALTS_OK);
     request.command_id = 13u;
     request.protocol = TURBO_FLOW_PROTOCOL_OCPP;
     request.tenant = "fleet-a";
@@ -541,22 +541,22 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     output.payload_capacity = sizeof(command_payload);
 
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(output.device_id, "charger-1");
     check_equal(output.operation, "UnlockConnector");
     check_equal(output.correlation_id, "cmd-13");
     check_equal(output.payload_size, sizeof(request_json) - 1u);
     check_equal(output.payload, request_json, output.payload_size);
-    check_equal(turbo_flow_protocol_business_command_view(&output, &command), TURBO_OK);
+    check_equal(turbo_flow_protocol_business_command_view(&output, &command), SALTS_OK);
     encoded.data = frame;
     encoded.capacity = sizeof(frame);
-    check_equal(turbo_flow_protocol_encode(protocol, &command, &encoded), TURBO_OK);
+    check_equal(turbo_flow_protocol_encode(protocol, &command, &encoded), SALTS_OK);
     frame[encoded.data_size] = '\0';
     check_equal((const char *)frame,
                  "[2,\"cmd-13\",\"UnlockConnector\",{\"evseId\":1,\"connectorId\":2}]");
 
     turbo_flow_protocol_owner_destroy(protocol_owner);
-    check_equal(turbo_flow_protocol_registry_destroy(protocol_registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_destroy(protocol_registry), SALTS_OK);
     ocpp201_core_business_close(business_registry, business_owner);
   }
 
@@ -572,7 +572,7 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_command_output_t output =
         TURBO_FLOW_PROTOCOL_BUSINESS_COMMAND_OUTPUT_INIT;
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
     request.command_id = 14u;
     request.protocol = TURBO_FLOW_PROTOCOL_OCPP;
     request.tenant = "fleet-a";
@@ -588,12 +588,12 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     output.payload_capacity = sizeof(payload);
 
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(output.payload_size, 0u);
     request.content.data = fractional_connector;
     request.content.data_size = sizeof(fractional_connector) - 1u;
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(output.payload_size, 0u);
     ocpp201_core_business_close(registry, owner);
   }
@@ -611,7 +611,7 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     turbo_flow_protocol_business_command_output_t output =
         TURBO_FLOW_PROTOCOL_BUSINESS_COMMAND_OUTPUT_INIT;
 
-    check_equal(ocpp201_core_business_open(&registry, &owner, &business), TURBO_OK);
+    check_equal(ocpp201_core_business_open(&registry, &owner, &business), SALTS_OK);
     request.command_id = 12u;
     request.protocol = TURBO_FLOW_PROTOCOL_OCPP;
     request.tenant = "fleet-a";
@@ -626,23 +626,23 @@ spec("OCPP 2.0.1 Core DataBind business provider") {
     output.payload = payload;
     output.payload_capacity = sizeof(payload);
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 TURBO_EMSGSIZE);
+                 SALTS_EMSGSIZE);
     check_equal(output.payload_size, 0u);
     output.payload_capacity = sizeof(payload);
     request.content.schema_id = "OtherSchema";
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 TURBO_EINVAL);
+                 SALTS_EINVAL);
     check_equal(output.payload_size, 0u);
     request.content.schema_id = OCPP201_CORE_SCHEMA_ID;
     request.content.data = invalid_enum;
     request.content.data_size = sizeof(invalid_enum) - 1u;
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(output.payload_size, 0u);
     request.content.data = numeric_enum;
     request.content.data_size = sizeof(numeric_enum) - 1u;
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(output.payload_size, 0u);
     ocpp201_core_business_close(registry, owner);
   }

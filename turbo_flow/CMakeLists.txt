@@ -1,11 +1,4 @@
 set(TARGET_NAME turbo_flow_graph)
-# RulesForge 0.9 still names the DataBind target from its former package.
-# Keep the compatibility alias at the dependency boundary; TurboFlow code uses TurboParser directly.
-if(TARGET TurboParser::DataBind AND NOT TARGET TurboUtils::DataBind)
-  add_library(TurboUtils::DataBind INTERFACE IMPORTED)
-  set_target_properties(TurboUtils::DataBind PROPERTIES
-                        INTERFACE_LINK_LIBRARIES TurboParser::DataBind)
-endif()
 find_package(RulesForge 0.9 CONFIG REQUIRED
              PATHS "$ENV{RULES_FORGE_ROOT}" NO_DEFAULT_PATH)
 cmake_add_grammar(TURBO_FLOW
@@ -66,8 +59,8 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(turbo_flow_config PUBLIC TurboUtils::Core
-                                        PRIVATE TurboParser::Parser)
+target_link_libraries(turbo_flow_config PUBLIC Salts::Core
+                                        PRIVATE Salts::CYamlJsonAdapter)
 
 add_library(${TARGET_NAME} SHARED
   ${TURBO_FLOW_SOURCES}
@@ -109,8 +102,8 @@ target_include_directories(
           ${PROJECT_SOURCE_DIR}/vendor/mir)
 
 target_link_libraries(${TARGET_NAME} PUBLIC 
-  TurboFlow::Config TurboUtils::Core TurboUtils::STL RulesForge::rules_forge
-  PRIVATE TurboParser::Parser mir_static)
+  TurboFlow::Config Salts::Core Salts::CSTL RulesForge::RulesForge
+  PRIVATE Salts::DataBind Salts::JsonParser mir_static)
 
 add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
@@ -128,7 +121,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(turbo_flow_product PUBLIC TurboFlow::Graph TurboFlow::Config
-                                        PRIVATE TurboParser::Parser)
+                                        PRIVATE Salts::JsonParser)
 
 # Binary compatibility surface: keep the historical turbo_flow library and
 # its exported symbols while new consumers move to the smaller targets above.
@@ -166,8 +159,9 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/parser
           ${CMAKE_CURRENT_BINARY_DIR}
           ${PROJECT_SOURCE_DIR}/vendor/mir)
-target_link_libraries(turbo_flow PUBLIC TurboUtils::Core TurboUtils::STL RulesForge::rules_forge
-                               PRIVATE TurboParser::Parser mir_static)
+target_link_libraries(turbo_flow PUBLIC Salts::Core Salts::CSTL RulesForge::RulesForge
+                               PRIVATE Salts::CYamlJsonAdapter Salts::DataBind
+                                       Salts::JsonParser mir_static)
 
 install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)
 

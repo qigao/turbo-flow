@@ -209,7 +209,7 @@ typedef struct turbo_flow_observe_log_config_s {
 TURBO_FLOW_C_API turbo_flow_observe_t *
 turbo_flow_observe_create(const turbo_flow_observe_config_t *config);
 
-/** Returns TURBO_EBUSY while still attached to a flow. */
+/** Returns SALTS_EBUSY while still attached to a flow. */
 TURBO_FLOW_C_API int turbo_flow_observe_destroy(turbo_flow_observe_t *observe);
 
 /** Attach before start. One Observe object can be attached to one flow. */

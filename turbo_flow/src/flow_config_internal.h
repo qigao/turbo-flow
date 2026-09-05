@@ -3,10 +3,10 @@
 
 #include "turbo_flow_resolved_config.h"
 
-#include "turbo_parser.h"
+#include <json_parser.h>
 
 struct turbo_flow_resolved_config_s {
-  turbo_json_doc_t *document;
+  json_value_t *document;
   char *json;
   size_t json_len;
 };

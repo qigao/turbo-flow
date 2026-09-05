@@ -1,8 +1,8 @@
 #include "turbo_flow_schedule.h"
 
 #include "tinytest.h"
-#include "turbo_error.h"
-#include "turbo_thread.h"
+#include "salts_error.h"
+#include "salts_thread.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -21,7 +21,7 @@ static int schedule_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   schedule_capture_t *capture = (schedule_capture_t *)ctx;
   int active;
   int observed_max;
-  if (!capture || !msg || msg->payload.len > sizeof(capture->payload)) return TURBO_EINVAL;
+  if (!capture || !msg || msg->payload.len > sizeof(capture->payload)) return SALTS_EINVAL;
   active = atomic_fetch_add_explicit(&capture->active, 1, memory_order_acq_rel) + 1;
   observed_max = atomic_load_explicit(&capture->max_active, memory_order_acquire);
   while (active > observed_max &&
@@ -31,10 +31,10 @@ static int schedule_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   if (msg->payload.len > 0) memcpy(capture->payload, msg->payload.data, msg->payload.len);
   capture->payload_len = msg->payload.len;
   capture->last_ts_ns = msg->ts_ns;
-  if (capture->callback_delay_ms > 0) turbo_sleep_ms(capture->callback_delay_ms);
+  if (capture->callback_delay_ms > 0) salts_sleep_ms(capture->callback_delay_ms);
   atomic_fetch_add_explicit(&capture->called, 1, memory_order_release);
   atomic_fetch_sub_explicit(&capture->active, 1, memory_order_release);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void schedule_capture_init(schedule_capture_t *capture) {
@@ -47,7 +47,7 @@ static void schedule_capture_init(schedule_capture_t *capture) {
 static void schedule_wait_called(schedule_capture_t *capture, int expected) {
   for (int i = 0;
        i < 200 && atomic_load_explicit(&capture->called, memory_order_acquire) < expected; ++i) {
-    turbo_sleep_ms(5);
+    salts_sleep_ms(5);
   }
 }
 
@@ -62,11 +62,11 @@ static turbo_flow_t *schedule_make_flow(const turbo_flow_schedule_config_t *conf
   turbo_flow_t *flow = turbo_flow_create();
   if (!flow ||
       turbo_flow_schedule_register_adapter(flow, "schedule.test", config, out_schedule) !=
-          TURBO_OK ||
+          SALTS_OK ||
       turbo_flow_register_stage_ex(flow, "capture", schedule_capture_stage, capture, NULL) !=
-          TURBO_OK ||
-      turbo_flow_parse_string(flow, dsl, strlen(dsl)) != TURBO_OK ||
-      turbo_flow_compile(flow) != TURBO_OK) {
+          SALTS_OK ||
+      turbo_flow_parse_string(flow, dsl, strlen(dsl)) != SALTS_OK ||
+      turbo_flow_compile(flow) != SALTS_OK) {
     turbo_flow_destroy(flow);
     return NULL;
   }
@@ -110,17 +110,17 @@ spec("turbo_flow_schedule") {
     check_equal(schema->roles, TURBO_FLOW_ADAPTER_SOURCE);
     check_equal(schema->direction, TURBO_FLOW_ADAPTER_INPUT);
     check_equal(schema->field_count, 8);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     schedule_wait_called(&capture, 3);
     check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 3);
     check_equal(capture.payload_len, sizeof(payload) - 1u);
     check_equal(memcmp(capture.payload, payload, sizeof(payload) - 1u), 0);
-    check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), TURBO_OK);
+    check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), SALTS_OK);
     check_equal(snapshot.fired, 3);
     check_equal(snapshot.catch_up_truncations, 0);
-    check_equal(snapshot.last_status, TURBO_OK);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
-    turbo_sleep_ms(30);
+    check_equal(snapshot.last_status, SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    salts_sleep_ms(30);
     check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 3);
     turbo_flow_destroy(flow);
   }
@@ -136,11 +136,11 @@ spec("turbo_flow_schedule") {
     schedule_capture_init(&capture);
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     schedule_wait_called(&capture, 1);
-    turbo_sleep_ms(30);
+    salts_sleep_ms(30);
     check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -155,9 +155,9 @@ spec("turbo_flow_schedule") {
     schedule_capture_init(&capture);
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
-    turbo_sleep_ms(120);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    salts_sleep_ms(120);
     check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 0);
     turbo_flow_destroy(flow);
   }
@@ -175,11 +175,11 @@ spec("turbo_flow_schedule") {
     capture.callback_delay_ms = 10;
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     schedule_wait_called(&capture, 3);
     check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 3);
     check_equal(atomic_load_explicit(&capture.max_active, memory_order_acquire), 1);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -196,15 +196,15 @@ spec("turbo_flow_schedule") {
     schedule_capture_init(&capture);
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     schedule_wait_called(&capture, 2);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 2);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     schedule_wait_called(&capture, 4);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 4);
-    check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), TURBO_OK);
+    check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), SALTS_OK);
     check_equal(snapshot.fired, 4);
     turbo_flow_destroy(flow);
   }
@@ -220,10 +220,10 @@ spec("turbo_flow_schedule") {
     schedule_capture_init(&capture);
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    turbo_sleep_ms(20);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    salts_sleep_ms(20);
     check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 0);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -243,17 +243,17 @@ spec("turbo_flow_schedule") {
     schedule_capture_init(&capture);
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_schedule_advance(schedule, first + 5), 1);
     check_equal(turbo_flow_schedule_advance(schedule, first + 50), 0);
     check_equal(turbo_flow_schedule_advance(schedule, first + 5 * 60 + 5), 3);
     check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 4);
-    check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), TURBO_OK);
+    check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), SALTS_OK);
     check_equal(snapshot.fired, 4);
     check_equal(snapshot.catch_up_truncations, 1);
     check_equal(capture.last_ts_ns, (uint64_t)(first + 3 * 60) * UINT64_C(1000000000));
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
-    check_equal(turbo_flow_schedule_advance(schedule, first + 6 * 60), TURBO_EINVAL);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(turbo_flow_schedule_advance(schedule, first + 6 * 60), SALTS_EINVAL);
     check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 4);
     turbo_flow_destroy(flow);
   }
@@ -264,21 +264,21 @@ spec("turbo_flow_schedule") {
     check_not_null(flow);
     memset(&config, 0, sizeof(config));
     config.mode = TURBO_FLOW_SCHEDULE_INTERVAL;
-    check_equal(turbo_flow_schedule_register_adapter(flow, "zero", &config, NULL), TURBO_EINVAL);
+    check_equal(turbo_flow_schedule_register_adapter(flow, "zero", &config, NULL), SALTS_EINVAL);
     config.delay_ms = TURBO_FLOW_SCHEDULE_MAX_DELAY_MS + UINT64_C(1);
     check_equal(turbo_flow_schedule_register_adapter(flow, "overflow", &config, NULL),
-                 TURBO_EINVAL);
+                 SALTS_EINVAL);
     memset(&config, 0, sizeof(config));
     config.mode = TURBO_FLOW_SCHEDULE_ONE_SHOT;
     config.delay_ms = 1;
     config.repeat_limit = 2;
-    check_equal(turbo_flow_schedule_register_adapter(flow, "repeat", &config, NULL), TURBO_EINVAL);
+    check_equal(turbo_flow_schedule_register_adapter(flow, "repeat", &config, NULL), SALTS_EINVAL);
     memset(&config, 0, sizeof(config));
     config.mode = TURBO_FLOW_SCHEDULE_CRON;
     config.cron_expression = "*/0 * * * *";
     config.manual_clock = 1;
     check_equal(turbo_flow_schedule_register_adapter(flow, "bad-cron", &config, NULL),
-                 TURBO_EINVAL);
+                 SALTS_EINVAL);
     turbo_flow_destroy(flow);
   }
 }

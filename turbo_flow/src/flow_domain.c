@@ -120,14 +120,14 @@ int turbo_flow_register_primitive(turbo_flow_t *flow,
       descriptor->version == 0 || !flow_domain_valid(descriptor->domain) ||
       descriptor->kind < TURBO_FLOW_PRIMITIVE_VALUE ||
       descriptor->kind > TURBO_FLOW_PRIMITIVE_RESOURCE) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "cannot register primitive after compile");
   }
   if (flow_find_primitive_index(flow, descriptor->name) >= 0) {
-    return flow_set_error_keep_state(flow, TURBO_EALREADY, 0, 0, "duplicate primitive");
+    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "duplicate primitive");
   }
 
   memset(&primitive, 0, sizeof(primitive));
@@ -135,16 +135,16 @@ int turbo_flow_register_primitive(turbo_flow_t *flow,
   primitive.type_name = tstr_dup(descriptor->type_name);
   if (!primitive.name || !primitive.type_name) {
     flow_primitive_registration_destroy(&primitive);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
   primitive.descriptor = *descriptor;
   primitive.descriptor.name = primitive.name;
   primitive.descriptor.type_name = primitive.type_name;
-  if (turbo_flow_stl_error(vec_push(&flow->primitives, &primitive)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&flow->primitives, &primitive)) != SALTS_OK) {
     flow_primitive_registration_destroy(&primitive);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_runtime_contract_valid(const turbo_flow_operation_runtime_contract_t *runtime) {
@@ -256,19 +256,19 @@ int turbo_flow_register_operation(turbo_flow_t *flow,
   turbo_flow_operation_descriptor_t normalized;
 
   if (!flow || !descriptor || descriptor->size < TURBO_FLOW_OPERATION_DESCRIPTOR_V1_SIZE) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(&normalized, 0, sizeof(normalized));
   memcpy(&normalized, descriptor,
          descriptor->size < sizeof(normalized) ? descriptor->size : sizeof(normalized));
   normalized.size = sizeof(normalized);
-  if (!flow_operation_descriptor_valid(&normalized)) return TURBO_EINVAL;
+  if (!flow_operation_descriptor_valid(&normalized)) return SALTS_EINVAL;
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "cannot register operation after compile");
   }
   if (flow_find_operation_index(flow, normalized.name) >= 0) {
-    return flow_set_error_keep_state(flow, TURBO_EALREADY, 0, 0, "duplicate operation");
+    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "duplicate operation");
   }
   memset(&operation, 0, sizeof(operation));
   operation.name = tstr_dup(normalized.name);
@@ -279,18 +279,18 @@ int turbo_flow_register_operation(turbo_flow_t *flow,
       (normalized.output_type && !operation.output_type) ||
       (normalized.resource_type && !operation.resource_type)) {
     flow_operation_registration_destroy(&operation);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
   operation.descriptor = normalized;
   operation.descriptor.name = operation.name;
   operation.descriptor.input_type = operation.input_type;
   operation.descriptor.output_type = operation.output_type;
   operation.descriptor.resource_type = operation.resource_type;
-  if (turbo_flow_stl_error(vec_push(&flow->operations, &operation)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&flow->operations, &operation)) != SALTS_OK) {
     flow_operation_registration_destroy(&operation);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_module_string_array_valid(const char *const *values, size_t count) {
@@ -331,16 +331,16 @@ static int flow_module_exports_primitive_type(const flow_module_registration_t *
 static int flow_module_copy_string_array(vec_t *target, const char *const *values,
                                          size_t count) {
   size_t i;
-  if (count != 0u && turbo_flow_stl_error(vec_reserve(target, count)) != TURBO_OK) return TURBO_ENOMEM;
+  if (count != 0u && turbo_flow_stl_error(vec_reserve(target, count)) != SALTS_OK) return SALTS_ENOMEM;
   for (i = 0; i < count; ++i) {
     tstr value = tstr_dup(values[i]);
-    if (!value) return TURBO_ENOMEM;
-    if (turbo_flow_stl_error(vec_push(target, &value)) != TURBO_OK) {
+    if (!value) return SALTS_ENOMEM;
+    if (turbo_flow_stl_error(vec_push(target, &value)) != SALTS_OK) {
       tstr_freep(&value);
-      return TURBO_ENOMEM;
+      return SALTS_ENOMEM;
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_register_module(turbo_flow_t *flow,
@@ -364,22 +364,22 @@ int turbo_flow_register_module(turbo_flow_t *flow,
        (descriptor->operation_count != 0u)) ||
       ((descriptor->capability_flags & TURBO_FLOW_MODULE_MANAGED_RESOURCES) != 0u &&
        descriptor->primitive_type_count == 0u)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "cannot register module after compile");
   }
   if (flow_find_module_index(flow, descriptor->name) >= 0) {
-    return flow_set_error_keep_state(flow, TURBO_EALREADY, 0, 0, "duplicate module");
+    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "duplicate module");
   }
   for (i = 0; i < descriptor->operation_count; ++i) {
     if (flow_find_operation_index(flow, descriptor->operation_names[i]) < 0) {
-      return flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_ENOENT, 0, 0,
                                        "module operation export is not registered");
     }
     if (flow_find_operation_export_module(flow, descriptor->operation_names[i]) >= 0) {
-      return flow_set_error_keep_state(flow, TURBO_EALREADY, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0,
                                        "operation already has a module owner");
     }
   }
@@ -393,57 +393,57 @@ int turbo_flow_register_module(turbo_flow_t *flow,
          requirement->max_version < requirement->min_version) ||
         (requirement->capability_flags & ~valid_capabilities) != 0u ||
         strcmp(requirement->module_name, descriptor->name) == 0) {
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
     for (j = 0; j < i; ++j) {
       if (strcmp(requirement->module_name, descriptor->requirements[j].module_name) == 0) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
       }
     }
     dependency = turbo_flow_find_module(flow, requirement->module_name);
     if (!dependency) {
-      return flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_ENOENT, 0, 0,
                                        "required module is not registered");
     }
     if (dependency->version < requirement->min_version ||
         (requirement->max_version != 0u && dependency->version > requirement->max_version) ||
         (dependency->capability_flags & requirement->capability_flags) !=
             requirement->capability_flags) {
-      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                        "required module contract is incompatible");
     }
   }
 
   memset(&module, 0, sizeof(module));
-  if (turbo_flow_stl_error(vec_init_bytes(&module.primitive_types, sizeof(tstr), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&module.operation_names, sizeof(tstr), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&module.requirements, sizeof(turbo_flow_module_requirement_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(&module.primitive_types, sizeof(tstr), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&module.operation_names, sizeof(tstr), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&module.requirements, sizeof(turbo_flow_module_requirement_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
     flow_module_registration_destroy(&module);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
   module.name = tstr_dup(descriptor->name);
   if (!module.name) {
     flow_module_registration_destroy(&module);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
   rc = flow_module_copy_string_array(&module.primitive_types, descriptor->primitive_types,
                                      descriptor->primitive_type_count);
-  if (rc == TURBO_OK) {
+  if (rc == SALTS_OK) {
     rc = flow_module_copy_string_array(&module.operation_names, descriptor->operation_names,
                                        descriptor->operation_count);
   }
-  for (i = 0; rc == TURBO_OK && i < descriptor->requirement_count; ++i) {
+  for (i = 0; rc == SALTS_OK && i < descriptor->requirement_count; ++i) {
     turbo_flow_module_requirement_t requirement = descriptor->requirements[i];
     requirement.module_name = tstr_dup(descriptor->requirements[i].module_name);
-    if (!requirement.module_name || turbo_flow_stl_error(vec_push(&module.requirements, &requirement)) != TURBO_OK) {
+    if (!requirement.module_name || turbo_flow_stl_error(vec_push(&module.requirements, &requirement)) != SALTS_OK) {
       if (requirement.module_name) {
         tstr owned_name = (tstr)requirement.module_name;
         tstr_freep(&owned_name);
       }
-      rc = TURBO_ENOMEM;
+      rc = SALTS_ENOMEM;
     }
   }
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_module_registration_destroy(&module);
     return flow_set_error(flow, rc, 0, 0, "out of memory");
   }
@@ -455,11 +455,11 @@ int turbo_flow_register_module(turbo_flow_t *flow,
       (const char *const *)vec_data_const(&module.operation_names);
   module.descriptor.requirements = (const turbo_flow_module_requirement_t *)vec_data_const(
       &module.requirements);
-  if (turbo_flow_stl_error(vec_push(&flow->modules, &module)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&flow->modules, &module)) != SALTS_OK) {
     flow_module_registration_destroy(&module);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_optional_string_equal(const char *left, const char *right) {
@@ -546,30 +546,30 @@ int turbo_flow_register_module_contract(
   if (!flow || !module || module->size < sizeof(*module) || !operations ||
       operation_count == 0u || module->operation_count != operation_count ||
       !module->operation_names) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   for (i = 0; i < operation_count; ++i) {
     const turbo_flow_operation_descriptor_t *current;
     if (!operations[i].name || strcmp(module->operation_names[i], operations[i].name) != 0) {
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
     current = turbo_flow_find_operation(flow, operations[i].name);
     if (current && !flow_operation_contract_compatible(current, &operations[i])) {
-      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                        "module operation contract is incompatible");
     }
   }
   current_module = turbo_flow_find_module(flow, module->name);
   if (current_module) {
     if (!flow_module_contract_compatible(current_module, module)) {
-      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                        "module contract is incompatible");
     }
-    return TURBO_OK;
+    return SALTS_OK;
   }
   for (i = 0; i < operation_count; ++i) {
     if (flow_find_operation_export_module(flow, operations[i].name) >= 0) {
-      return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                        "module operation already has another owner");
     }
   }
@@ -577,13 +577,13 @@ int turbo_flow_register_module_contract(
   for (i = 0; i < operation_count; ++i) {
     if (turbo_flow_find_operation(flow, operations[i].name)) continue;
     rc = turbo_flow_register_operation(flow, &operations[i]);
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       flow_operation_registry_rollback(flow, operations_before);
       return rc;
     }
   }
   rc = turbo_flow_register_module(flow, module);
-  if (rc != TURBO_OK) flow_operation_registry_rollback(flow, operations_before);
+  if (rc != SALTS_OK) flow_operation_registry_rollback(flow, operations_before);
   return rc;
 }
 
@@ -596,24 +596,24 @@ int turbo_flow_bind_operation_provider_module(turbo_flow_t *flow, const char *mo
   int provider_index;
   if (!flow || !module_name || module_name[0] == '\0' || !operation_name ||
       operation_name[0] == '\0' || (resource_name && resource_name[0] == '\0')) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "cannot bind provider module after compile");
   }
   module_index = flow_find_module_index(flow, module_name);
   if (module_index < 0) {
-    return flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0, "module is not registered");
+    return flow_set_error_keep_state(flow, SALTS_ENOENT, 0, 0, "module is not registered");
   }
   module = (flow_module_registration_t *)vec_at(&flow->modules, (size_t)module_index);
   if (!flow_module_exports_operation(module, operation_name)) {
-    return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                      "operation is not exported by module");
   }
   provider_index = flow_find_operation_provider(flow, operation_name, resource_name);
   if (provider_index < 0) {
-    return flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_ENOENT, 0, 0,
                                      "operation provider is not registered");
   }
   provider = (flow_operation_provider_registration_t *)vec_at(
@@ -621,24 +621,24 @@ int turbo_flow_bind_operation_provider_module(turbo_flow_t *flow, const char *mo
   if (provider->module_name) {
     return flow_set_error_keep_state(flow,
                                      strcmp(provider->module_name, module_name) == 0
-                                         ? TURBO_EALREADY
-                                         : TURBO_EBUSY,
+                                         ? SALTS_EALREADY
+                                         : SALTS_EBUSY,
                                      0, 0, "operation provider already has a module owner");
   }
   if (resource_name) {
     const turbo_flow_primitive_descriptor_t *primitive = turbo_flow_find_primitive(flow, resource_name);
     if (!primitive) {
-      return flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_ENOENT, 0, 0,
                                        "provider resource primitive is not registered");
     }
     if (!flow_module_exports_primitive_type(module, primitive->type_name)) {
-      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                        "provider resource type is not exported by module");
     }
   }
   provider->module_name = tstr_dup(module_name);
-  if (!provider->module_name) return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
-  return TURBO_OK;
+  if (!provider->module_name) return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
+  return SALTS_OK;
 }
 
 size_t turbo_flow_primitive_count(const turbo_flow_t *flow) {

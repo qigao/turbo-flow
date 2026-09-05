@@ -1,8 +1,8 @@
 #include "turbo_flow_security_sqlite.h"
 
-#include "turbo_error.h"
-#include "turbo_parser.h"
-#include "turbo_str.h"
+#include "salts_error.h"
+#include <json_parser.h>
+#include "salts_str.h"
 #include "turbo_flow_stl_error_internal.h"
 
 #include <limits.h>
@@ -38,11 +38,11 @@ struct turbo_flow_security_sqlite_provider_s {
 };
 
 static int flow_security_sqlite_status(int status) {
-  if (status == SQLITE_BUSY || status == SQLITE_LOCKED) return TURBO_EBUSY;
-  if (status == SQLITE_NOMEM) return TURBO_ENOMEM;
+  if (status == SQLITE_BUSY || status == SQLITE_LOCKED) return SALTS_EBUSY;
+  if (status == SQLITE_NOMEM) return SALTS_ENOMEM;
   if (status == SQLITE_CONSTRAINT || status == SQLITE_MISMATCH || status == SQLITE_RANGE)
-    return TURBO_EINVAL;
-  return TURBO_EIO;
+    return SALTS_EINVAL;
+  return SALTS_EIO;
 }
 
 static int flow_security_sqlite_open(const turbo_flow_security_sqlite_provider_t *provider,
@@ -50,7 +50,7 @@ static int flow_security_sqlite_open(const turbo_flow_security_sqlite_provider_t
   sqlite3 *database = NULL;
   int status;
   if (out) *out = NULL;
-  if (!provider || !out) return TURBO_EINVAL;
+  if (!provider || !out) return SALTS_EINVAL;
   status =
       sqlite3_open_v2(provider->database_path, &database,
                       SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, NULL);
@@ -61,7 +61,7 @@ static int flow_security_sqlite_open(const turbo_flow_security_sqlite_provider_t
     return flow_security_sqlite_status(status);
   }
   *out = database;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_security_sqlite_cstr_valid(const char *value, size_t capacity, int required) {
@@ -113,10 +113,10 @@ static int flow_security_sqlite_load(void *ctx, uint64_t required_version,
   size_t expected_ordinal = 0u;
   int status;
   int rc;
-  if (!provider || !bundle_out || bundle_out->size < sizeof(*bundle_out)) return TURBO_EINVAL;
+  if (!provider || !bundle_out || bundle_out->size < sizeof(*bundle_out)) return SALTS_EINVAL;
   *bundle_out = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
   rc = flow_security_sqlite_open(provider, &database);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   status = sqlite3_exec(database, "BEGIN", NULL, NULL, NULL);
   if (status != SQLITE_OK) {
     rc = flow_security_sqlite_status(status);
@@ -133,32 +133,32 @@ static int flow_security_sqlite_load(void *ctx, uint64_t required_version,
   }
   status = sqlite3_step(metadata);
   if (status == SQLITE_DONE) {
-    rc = TURBO_ENOENT;
+    rc = SALTS_ENOENT;
     goto rollback;
   }
   if (status != SQLITE_ROW || sqlite3_column_type(metadata, 0) != SQLITE_INTEGER ||
       sqlite3_column_type(metadata, 1) != SQLITE_INTEGER ||
       sqlite3_column_int64(metadata, 0) <= 0 || sqlite3_column_int64(metadata, 1) < 0) {
-    rc = status == SQLITE_ROW ? TURBO_EPROTO : flow_security_sqlite_status(status);
+    rc = status == SQLITE_ROW ? SALTS_EPROTO : flow_security_sqlite_status(status);
     goto rollback;
   }
   policy_version = (uint64_t)sqlite3_column_int64(metadata, 0);
   expires_at = (uint64_t)sqlite3_column_int64(metadata, 1);
   if (required_version != 0u && required_version != policy_version) {
-    rc = TURBO_ENOENT;
+    rc = SALTS_ENOENT;
     goto rollback;
   }
   (void)sqlite3_finalize(metadata);
   metadata = NULL;
   loaded = (flow_security_sqlite_loaded_t *)calloc(1u, sizeof(*loaded));
   if (!loaded) {
-    rc = TURBO_ENOMEM;
+    rc = SALTS_ENOMEM;
     goto rollback;
   }
   rc = turbo_flow_stl_error(vec_init_bytes(&loaded->rules, sizeof(turbo_flow_security_rule_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
-  if (rc != TURBO_OK) goto rollback;
+  if (rc != SALTS_OK) goto rollback;
   rc = turbo_flow_stl_error(vec_reserve(&loaded->rules, provider->max_rules));
-  if (rc != TURBO_OK) goto rollback;
+  if (rc != SALTS_OK) goto rollback;
   status = sqlite3_prepare_v2(
       database,
       "SELECT ordinal,rule_line FROM turbo_flow_acl_rule_v3 "
@@ -177,12 +177,12 @@ static int flow_security_sqlite_load(void *ctx, uint64_t required_version,
     if (expected_ordinal >= provider->max_rules ||
         sqlite3_column_type(rules, 0) != SQLITE_INTEGER ||
         sqlite3_column_type(rules, 1) != SQLITE_TEXT) {
-      rc = expected_ordinal >= provider->max_rules ? TURBO_ENOSPC : TURBO_EPROTO;
+      rc = expected_ordinal >= provider->max_rules ? SALTS_ENOSPC : SALTS_EPROTO;
       goto rollback;
     }
     ordinal = sqlite3_column_int64(rules, 0);
     if (ordinal < 0 || (uint64_t)ordinal != (uint64_t)expected_ordinal) {
-      rc = TURBO_EPROTO;
+      rc = SALTS_EPROTO;
       goto rollback;
     }
     rule_line = sqlite3_column_text(rules, 1);
@@ -190,21 +190,21 @@ static int flow_security_sqlite_load(void *ctx, uint64_t required_version,
     if (!rule_line || rule_line_size <= 0 ||
         (size_t)rule_line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX ||
         memchr(rule_line, '\0', (size_t)rule_line_size)) {
-      rc = TURBO_EPROTO;
+      rc = SALTS_EPROTO;
       goto rollback;
     }
     rc = turbo_flow_security_rule_parse_line((const char *)rule_line,
                                              (size_t)rule_line_size, &rule);
-    if (rc != TURBO_OK || !flow_security_sqlite_rule_valid(&rule)) {
-      rc = TURBO_EPROTO;
+    if (rc != SALTS_OK || !flow_security_sqlite_rule_valid(&rule)) {
+      rc = SALTS_EPROTO;
       goto rollback;
     }
     rc = turbo_flow_stl_error(vec_push(&loaded->rules, &rule));
-    if (rc != TURBO_OK) goto rollback;
+    if (rc != SALTS_OK) goto rollback;
     ++expected_ordinal;
   }
   if (status != SQLITE_DONE || expected_ordinal == 0u) {
-    rc = status == SQLITE_DONE ? TURBO_EPROTO : flow_security_sqlite_status(status);
+    rc = status == SQLITE_DONE ? SALTS_EPROTO : flow_security_sqlite_status(status);
     goto rollback;
   }
   (void)sqlite3_finalize(rules);
@@ -220,7 +220,7 @@ static int flow_security_sqlite_load(void *ctx, uint64_t required_version,
   bundle_out->rule_count = vec_size(&loaded->rules);
   bundle_out->provider_bundle = loaded;
   loaded = NULL;
-  rc = TURBO_OK;
+  rc = SALTS_OK;
   goto done;
 
 rollback:
@@ -253,11 +253,11 @@ int turbo_flow_security_sqlite_provider_publish(turbo_flow_security_sqlite_provi
       bundle->abi_version != TURBO_FLOW_SECURITY_ABI_V3 || bundle->policy_version == 0u ||
       bundle->policy_version > INT64_MAX || bundle->expires_at > INT64_MAX || !bundle->rules ||
       bundle->rule_count == 0u || bundle->rule_count > provider->max_rules)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   for (size_t i = 0u; i < bundle->rule_count; ++i)
-    if (!flow_security_sqlite_rule_valid(&bundle->rules[i])) return TURBO_EINVAL;
+    if (!flow_security_sqlite_rule_valid(&bundle->rules[i])) return SALTS_EINVAL;
   rc = flow_security_sqlite_open(provider, &database);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   status =
       sqlite3_exec(database, "PRAGMA foreign_keys=ON;BEGIN IMMEDIATE;PRAGMA defer_foreign_keys=ON",
                    NULL, NULL, NULL);
@@ -277,11 +277,11 @@ int turbo_flow_security_sqlite_provider_publish(turbo_flow_security_sqlite_provi
   if (status == SQLITE_ROW) {
     if (sqlite3_column_type(current, 0) != SQLITE_INTEGER ||
         sqlite3_column_int64(current, 0) <= 0) {
-      rc = TURBO_EPROTO;
+      rc = SALTS_EPROTO;
       goto rollback;
     }
     if (bundle->policy_version <= (uint64_t)sqlite3_column_int64(current, 0)) {
-      rc = TURBO_EBUSY;
+      rc = SALTS_EBUSY;
       goto rollback;
     }
   } else if (status != SQLITE_DONE) {
@@ -316,7 +316,7 @@ int turbo_flow_security_sqlite_provider_publish(turbo_flow_security_sqlite_provi
     size_t rule_line_size = 0u;
     rc = turbo_flow_security_rule_format_line(rule, rule_line, sizeof(rule_line),
                                               &rule_line_size);
-    if (rc != TURBO_OK) goto rollback;
+    if (rc != SALTS_OK) goto rollback;
     sqlite3_reset(insert_rule);
     sqlite3_clear_bindings(insert_rule);
     if (sqlite3_bind_text(insert_rule, 1, provider->namespace_name, -1, SQLITE_STATIC) !=
@@ -349,7 +349,7 @@ int turbo_flow_security_sqlite_provider_publish(turbo_flow_security_sqlite_provi
   (void)sqlite3_finalize(upsert_bundle);
   upsert_bundle = NULL;
   status = sqlite3_exec(database, "COMMIT", NULL, NULL, NULL);
-  rc = status == SQLITE_OK ? TURBO_OK : flow_security_sqlite_status(status);
+  rc = status == SQLITE_OK ? SALTS_OK : flow_security_sqlite_status(status);
   goto done;
 
 rollback:
@@ -377,19 +377,19 @@ int turbo_flow_security_sqlite_provider_create(const turbo_flow_security_sqlite_
       strlen(config->namespace_name) > TURBO_FLOW_SECURITY_SQLITE_NAMESPACE_MAX ||
       config->busy_timeout_ms < 0 || config->max_rules == 0u ||
       config->max_rules > TURBO_FLOW_SECURITY_MAX_RULES)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   provider = (turbo_flow_security_sqlite_provider_t *)calloc(1u, sizeof(*provider));
-  if (!provider) return TURBO_ENOMEM;
+  if (!provider) return SALTS_ENOMEM;
   provider->database_path = tstr_dup(config->database_path);
   provider->namespace_name = tstr_dup(config->namespace_name);
   provider->busy_timeout_ms = config->busy_timeout_ms;
   provider->max_rules = config->max_rules;
   if (!provider->database_path || !provider->namespace_name) {
-    rc = TURBO_ENOMEM;
+    rc = SALTS_ENOMEM;
     goto fail;
   }
   rc = flow_security_sqlite_open(provider, &database);
-  if (rc != TURBO_OK) goto fail;
+  if (rc != SALTS_OK) goto fail;
   status = sqlite3_exec(database, FLOW_SECURITY_SQLITE_SCHEMA, NULL, NULL, NULL);
   if (status != SQLITE_OK) {
     rc = flow_security_sqlite_status(status);
@@ -403,7 +403,7 @@ int turbo_flow_security_sqlite_provider_create(const turbo_flow_security_sqlite_
   provider->interface.load = flow_security_sqlite_load;
   provider->interface.release = flow_security_sqlite_release;
   *out = provider;
-  return TURBO_OK;
+  return SALTS_OK;
 
 fail:
   if (database) (void)sqlite3_close(database);
@@ -426,13 +426,13 @@ static int flow_security_sqlite_config_error(turbo_flow_config_error_t *error, i
 
 static int flow_security_sqlite_json_u64(const json_value_t *value, uint64_t *out) {
   double number;
-  if (!value || turbo_json_type(value) != TURBO_JSON_NUMBER || !out) return TURBO_EINVAL;
-  number = turbo_json_number(value);
+  if (!value || json_type(value) != JSON_NUMBER || !out) return SALTS_EINVAL;
+  number = json_number(value);
   if (!isfinite(number) || number < 0.0 || number > 9007199254740991.0 ||
       (double)(uint64_t)number != number)
-    return TURBO_ERANGE;
+    return SALTS_ERANGE;
   *out = (uint64_t)number;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_security_sqlite_provider_create_resolved(
@@ -441,7 +441,7 @@ int turbo_flow_security_sqlite_provider_create_resolved(
   static const char *const allowed[] = {"backend", "database_path", "namespace_name",
                                         "busy_timeout_ms", "max_rules"};
   turbo_flow_security_sqlite_config_t config = TURBO_FLOW_SECURITY_SQLITE_CONFIG_INIT;
-  turbo_json_doc_t *document = NULL;
+  json_value_t *document = NULL;
   json_value_t *channels;
   json_value_t *channel;
   json_value_t *kind;
@@ -450,81 +450,81 @@ int turbo_flow_security_sqlite_provider_create_resolved(
   const char *json;
   size_t json_size = 0u;
   uint64_t number;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
   if (out) *out = NULL;
   if (!resolved || !channel_name || !channel_name[0] || !out || !error ||
       error->size < sizeof(*error))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
   json = turbo_flow_resolved_config_json(resolved, &json_size);
-  if (!json || turbo_parse_json((const uint8_t *)json, json_size, &document) != TURBO_OK ||
-      !document)
-    return flow_security_sqlite_config_error(error, TURBO_EINVAL, channel_name, NULL,
+  if (json) document = json_parse(json, json_size);
+  if (!document)
+    return flow_security_sqlite_config_error(error, SALTS_EINVAL, channel_name, NULL,
                                              "invalid resolved configuration snapshot");
-  channels = turbo_json_object_get(document, "channels");
-  channel = channels ? turbo_json_object_get(channels, channel_name) : NULL;
-  kind = channel ? turbo_json_object_get(channel, "kind") : NULL;
-  fields = channel ? turbo_json_object_get(channel, "config") : NULL;
-  if (!channel || turbo_json_type(channel) != TURBO_JSON_OBJECT || !kind ||
-      turbo_json_type(kind) != TURBO_JSON_STRING ||
-      strcmp(turbo_json_string(kind), "acl_provider") != 0 || !fields ||
-      turbo_json_type(fields) != TURBO_JSON_OBJECT) {
-    rc = flow_security_sqlite_config_error(error, TURBO_EINVAL, channel_name, NULL,
+  channels = json_object_get(document, "channels");
+  channel = channels ? json_object_get(channels, channel_name) : NULL;
+  kind = channel ? json_object_get(channel, "kind") : NULL;
+  fields = channel ? json_object_get(channel, "config") : NULL;
+  if (!channel || json_type(channel) != JSON_OBJECT || !kind ||
+      json_type(kind) != JSON_STRING ||
+      strcmp(json_string(kind), "acl_provider") != 0 || !fields ||
+      json_type(fields) != JSON_OBJECT) {
+    rc = flow_security_sqlite_config_error(error, SALTS_EINVAL, channel_name, NULL,
                                            "channel must be kind acl_provider with config");
     goto done;
   }
-  for (size_t i = 0u; i < turbo_json_object_size(fields); ++i) {
-    const char *field = turbo_json_object_key(fields, i);
+  for (size_t i = 0u; i < json_object_size(fields); ++i) {
+    const char *field = json_object_key(fields, i);
     int known = 0;
     for (size_t j = 0u; j < sizeof(allowed) / sizeof(allowed[0]); ++j)
       if (field && strcmp(field, allowed[j]) == 0) known = 1;
     if (!known) {
-      rc = flow_security_sqlite_config_error(error, TURBO_EINVAL, channel_name, field,
+      rc = flow_security_sqlite_config_error(error, SALTS_EINVAL, channel_name, field,
                                              "unknown SQLite ACL provider field");
       goto done;
     }
   }
-  config.database_path = turbo_json_get_string(fields, "database_path");
-  config.namespace_name = turbo_json_get_string(fields, "namespace_name");
+  config.database_path = json_get_string(fields, "database_path");
+  config.namespace_name = json_get_string(fields, "namespace_name");
   if (!config.database_path || !config.database_path[0] || !config.namespace_name ||
       !config.namespace_name[0]) {
-    rc = flow_security_sqlite_config_error(error, TURBO_EINVAL, channel_name, NULL,
+    rc = flow_security_sqlite_config_error(error, SALTS_EINVAL, channel_name, NULL,
                                            "database_path and namespace_name are required");
     goto done;
   }
-  value = turbo_json_object_get(fields, "backend");
-  if (!value || turbo_json_type(value) != TURBO_JSON_STRING ||
-      strcmp(turbo_json_string(value), TURBO_FLOW_SECURITY_SQLITE_BACKEND) != 0) {
-    rc = flow_security_sqlite_config_error(error, TURBO_EINVAL, channel_name, "backend",
+  value = json_object_get(fields, "backend");
+  if (!value || json_type(value) != JSON_STRING ||
+      strcmp(json_string(value), TURBO_FLOW_SECURITY_SQLITE_BACKEND) != 0) {
+    rc = flow_security_sqlite_config_error(error, SALTS_EINVAL, channel_name, "backend",
                                            "backend must be exactly sqlite");
     goto done;
   }
-  value = turbo_json_object_get(fields, "busy_timeout_ms");
+  value = json_object_get(fields, "busy_timeout_ms");
   if (value) {
-    if (flow_security_sqlite_json_u64(value, &number) != TURBO_OK || number > INT_MAX) {
-      rc = flow_security_sqlite_config_error(error, TURBO_ERANGE, channel_name, "busy_timeout_ms",
+    if (flow_security_sqlite_json_u64(value, &number) != SALTS_OK || number > INT_MAX) {
+      rc = flow_security_sqlite_config_error(error, SALTS_ERANGE, channel_name, "busy_timeout_ms",
                                              "busy_timeout_ms is out of range");
       goto done;
     }
     config.busy_timeout_ms = (int)number;
   }
-  value = turbo_json_object_get(fields, "max_rules");
+  value = json_object_get(fields, "max_rules");
   if (value) {
-    if (flow_security_sqlite_json_u64(value, &number) != TURBO_OK || number == 0u ||
+    if (flow_security_sqlite_json_u64(value, &number) != SALTS_OK || number == 0u ||
         number > TURBO_FLOW_SECURITY_MAX_RULES) {
-      rc = flow_security_sqlite_config_error(error, TURBO_ERANGE, channel_name, "max_rules",
+      rc = flow_security_sqlite_config_error(error, SALTS_ERANGE, channel_name, "max_rules",
                                              "max_rules must be between 1 and 4096");
       goto done;
     }
     config.max_rules = (size_t)number;
   }
   rc = turbo_flow_security_sqlite_provider_create(&config, out);
-  if (rc != TURBO_OK)
+  if (rc != SALTS_OK)
     rc = flow_security_sqlite_config_error(error, rc, channel_name, NULL,
                                            "SQLite ACL provider creation failed");
 
 done:
-  turbo_free_json(&document);
+  json_free(document);
   return rc;
 }
 
@@ -552,15 +552,15 @@ static int flow_security_sqlite_factory_create(
   int rc;
   (void)ctx;
   (void)key_provider;
-  if (!owner_out || owner_out->size < sizeof(*owner_out)) return TURBO_EINVAL;
+  if (!owner_out || owner_out->size < sizeof(*owner_out)) return SALTS_EINVAL;
   rc =
       turbo_flow_security_sqlite_provider_create_resolved(resolved, channel_name, &provider, error);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   owner_out->backend = TURBO_FLOW_SECURITY_SQLITE_BACKEND;
   owner_out->provider = &provider->interface;
   owner_out->owner = provider;
   owner_out->destroy = flow_security_sqlite_owner_destroy;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const turbo_flow_security_policy_provider_factory_t *

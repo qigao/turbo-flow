@@ -194,7 +194,7 @@ static int flow_resource_snapshot_matches(const turbo_flow_resource_snapshot_t *
 
 static turbo_flow_resource_condition_reason_t
 flow_resource_event_reason(const turbo_flow_resource_snapshot_t *snapshot) {
-  if (snapshot->last_status != TURBO_OK) return TURBO_FLOW_RESOURCE_REASON_OWNER_ERROR;
+  if (snapshot->last_status != SALTS_OK) return TURBO_FLOW_RESOURCE_REASON_OWNER_ERROR;
   if (snapshot->observed_generation < snapshot->generation) {
     return TURBO_FLOW_RESOURCE_REASON_OBSERVATION_LAGGING;
   }
@@ -214,14 +214,14 @@ static int flow_resource_governance_document(const turbo_flow_resource_metadata_
   int rc;
   if (!flow_resource_metadata_valid(metadata) ||
       !flow_resource_snapshot_matches(snapshot, metadata)) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   schema = turbo_flow_resource_governance_schema(metadata->domain, metadata->kind, document_kind);
   if (!schema) {
-    return flow_governance_schema_for_kind(metadata->kind, document_kind) ? TURBO_EPROTO
-                                                                          : TURBO_ENOTSUP;
+    return flow_governance_schema_for_kind(metadata->kind, document_kind) ? SALTS_EPROTO
+                                                                          : SALTS_ENOTSUP;
   }
-  ready = snapshot->last_status == TURBO_OK;
+  ready = snapshot->last_status == SALTS_OK;
   saturated = snapshot->saturated != 0;
   accepting = ready && !saturated;
   drained = snapshot->load == 0u;
@@ -254,7 +254,7 @@ static int flow_resource_governance_document(const turbo_flow_resource_metadata_
                           snapshot->observed_generation < snapshot->generation ? "true" : "false",
                           snapshot->last_status, (unsigned)flow_resource_event_reason(snapshot));
   }
-  if (!payload) return TURBO_ENOMEM;
+  if (!payload) return SALTS_ENOMEM;
   rc = turbo_flow_resource_document_set_payload_copy(out, metadata, schema, payload,
                                                      tstr_len(payload));
   tstr_free(payload);
@@ -278,14 +278,14 @@ int turbo_flow_resource_document_set_payload_copy(turbo_flow_resource_document_t
       !flow_resource_metadata_valid(metadata) || !flow_resource_schema_valid(schema) ||
       schema->domain != metadata->domain || schema->resource_kind != metadata->kind ||
       payload_size > TURBO_FLOW_RESOURCE_DOCUMENT_MAX_BYTES || (payload_size > 0u && !payload)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   copy = tstr_new_len(payload ? payload : "", payload_size);
-  if (!copy) return TURBO_ENOMEM;
+  if (!copy) return SALTS_ENOMEM;
   result.payload = mem_wrap_external(copy, payload_size, flow_resource_document_payload_free, NULL);
   if (!result.payload) {
     tstr_free(copy);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   result.domain = metadata->domain;
   result.resource_kind = metadata->kind;
@@ -296,15 +296,15 @@ int turbo_flow_resource_document_set_payload_copy(turbo_flow_resource_document_t
   written = snprintf(result.uid, sizeof(result.uid), "%s", metadata->uid);
   if (written < 0 || (size_t)written >= sizeof(result.uid)) {
     turbo_flow_resource_document_cleanup(&result);
-    return TURBO_ENAMETOOLONG;
+    return SALTS_ENAMETOOLONG;
   }
   written = snprintf(result.owner_name, sizeof(result.owner_name), "%s", metadata->owner_name);
   if (written < 0 || (size_t)written >= sizeof(result.owner_name)) {
     turbo_flow_resource_document_cleanup(&result);
-    return TURBO_ENAMETOOLONG;
+    return SALTS_ENAMETOOLONG;
   }
   memcpy(document, &result, sizeof(result));
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_resource_document_validate(const turbo_flow_resource_document_t *document,
@@ -313,7 +313,7 @@ int turbo_flow_resource_document_validate(const turbo_flow_resource_document_t *
   if (!document || document->size < sizeof(*document) || !document->payload ||
       mem_buffer_used(document->payload) > TURBO_FLOW_RESOURCE_DOCUMENT_MAX_BYTES ||
       !flow_resource_schema_valid(expected_schema)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   actual = document->schema;
   if (!flow_resource_schema_valid(actual) || document->domain != expected_schema->domain ||
@@ -327,9 +327,9 @@ int turbo_flow_resource_document_validate(const turbo_flow_resource_document_t *
       actual->schema_version != expected_schema->schema_version ||
       strcmp(actual->schema_name, expected_schema->schema_name) != 0 ||
       strcmp(actual->type_name, expected_schema->type_name) != 0) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_resource_document_matches(const turbo_flow_resource_document_t *document,
@@ -355,7 +355,7 @@ int turbo_flow_resource_document_at(const turbo_flow_t *flow, size_t index,
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
   if (!flow || !out || out->size < sizeof(*out) || out->payload ||
       !flow_resource_document_kind_valid(document_kind)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   for (size_t i = 0; i < vec_size(&flow->resources); ++i) {
     const flow_resource_registration_t *resource =
@@ -365,39 +365,39 @@ int turbo_flow_resource_document_at(const turbo_flow_t *flow, size_t index,
       --index;
       continue;
     }
-    if (!resource) return TURBO_EPROTO;
+    if (!resource) return SALTS_EPROTO;
     rc = resource->ops.metadata(resource->ctx, &metadata);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     if (!flow_resource_metadata_valid(&metadata) ||
         strcmp(metadata.owner_name, resource->owner_name) != 0) {
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     }
     if (resource->ops.document) {
       rc = resource->ops.document(resource->ctx, document_kind, out);
-      if (rc == TURBO_OK) {
-        if (flow_resource_document_matches(out, &metadata, document_kind)) return TURBO_OK;
+      if (rc == SALTS_OK) {
+        if (flow_resource_document_matches(out, &metadata, document_kind)) return SALTS_OK;
         turbo_flow_resource_document_cleanup(out);
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
       }
       turbo_flow_resource_document_cleanup(out);
-      if (rc != TURBO_ENOTSUP) return rc;
+      if (rc != SALTS_ENOTSUP) return rc;
     }
-    if (!resource->ops.snapshot) return TURBO_ENOTSUP;
+    if (!resource->ops.snapshot) return SALTS_ENOTSUP;
     {
       turbo_flow_resource_snapshot_t snapshot = TURBO_FLOW_RESOURCE_SNAPSHOT_INIT;
       rc = resource->ops.snapshot(resource->ctx, &snapshot);
-      if (rc != TURBO_OK) return rc;
+      if (rc != SALTS_OK) return rc;
       return flow_resource_governance_document(&metadata, &snapshot, document_kind, out);
     }
   }
   if (index < flow_native_resource_count(flow)) {
     turbo_flow_resource_snapshot_t snapshot = TURBO_FLOW_RESOURCE_SNAPSHOT_INIT;
     int rc = flow_native_resource_document_at(flow, index, document_kind, out);
-    if (rc != TURBO_ENOTSUP) return rc;
+    if (rc != SALTS_ENOTSUP) return rc;
     rc = flow_native_resource_metadata_at(flow, index, &metadata);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     rc = flow_native_resource_snapshot_at(flow, index, &snapshot);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     return flow_resource_governance_document(&metadata, &snapshot, document_kind, out);
   }
   index -= flow_native_resource_count(flow);
@@ -416,7 +416,7 @@ int turbo_flow_resource_document_at(const turbo_flow_t *flow, size_t index,
       if (resource && resource->ops.snapshot) ++snapshot_index;
     }
     rc = turbo_flow_resource_snapshot_at(flow, snapshot_index, &snapshot);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     metadata.domain = snapshot.domain;
     metadata.kind = snapshot.kind;
     metadata.generation = snapshot.generation;
@@ -426,7 +426,7 @@ int turbo_flow_resource_document_at(const turbo_flow_t *flow, size_t index,
         snprintf(metadata.owner_name, sizeof(metadata.owner_name), "%s", snapshot.owner_name);
     if (uid_written < 0 || (size_t)uid_written >= sizeof(metadata.uid) || owner_written < 0 ||
         (size_t)owner_written >= sizeof(metadata.owner_name))
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     return flow_resource_governance_document(&metadata, &snapshot, document_kind, out);
   }
 }

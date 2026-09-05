@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 #include "turbo_flow_protocol.h"
 
 #include <stdio.h>
@@ -74,9 +74,9 @@ static int protocol_roundtrip(turbo_flow_protocol_registry_t *registry,
   request.protocol_version = test_case->version;
   rc = turbo_flow_protocol_owner_create_registered(
       registry, test_case->name, &request, &owner);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_protocol_owner_instance(owner, test_case->protocol, &protocol);
-  if (rc != TURBO_OK) goto done;
+  if (rc != SALTS_OK) goto done;
   frame.data = test_case->frame;
   frame.data_size = test_case->frame_size;
   frame.device_id = test_case->device_id;
@@ -84,13 +84,13 @@ static int protocol_roundtrip(turbo_flow_protocol_registry_t *registry,
   decoded.payload = payload;
   decoded.payload_capacity = sizeof(payload);
   rc = turbo_flow_protocol_decode(protocol, &frame, &decoded);
-  if (rc != TURBO_OK) goto done;
+  if (rc != SALTS_OK) goto done;
   if (decoded.payload_size != test_case->frame_size ||
       memcmp(decoded.payload, test_case->frame, test_case->frame_size) != 0 ||
       strcmp(decoded.metadata.operation, test_case->operation) != 0 ||
       (test_case->device_id &&
        strcmp(decoded.metadata.device_id, test_case->device_id) != 0))
-    rc = TURBO_EPROTO;
+    rc = SALTS_EPROTO;
 
 done:
   turbo_flow_protocol_owner_destroy(owner);
@@ -115,9 +115,9 @@ static int protocol_reject_frame(turbo_flow_protocol_registry_t *registry,
   request.protocol_version = test_case->version;
   rc = turbo_flow_protocol_owner_create_registered(
       registry, test_case->name, &request, &owner);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_protocol_owner_instance(owner, test_case->protocol, &protocol);
-  if (rc != TURBO_OK) goto done;
+  if (rc != SALTS_OK) goto done;
   frame.data = frame_data;
   frame.data_size = frame_size;
   frame.device_id = test_case->device_id;
@@ -149,22 +149,22 @@ static int protocol_open_one(
   request.protocol = protocol;
   request.protocol_version = version;
   rc = turbo_flow_protocol_registry_create(1u, &registry);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = turbo_flow_protocol_registry_load(registry, module, reason,
                                           sizeof(reason));
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = turbo_flow_protocol_owner_create_registered(
         registry, name, &request, &owner);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = turbo_flow_protocol_owner_instance(owner, protocol, protocol_out);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     turbo_flow_protocol_owner_destroy(owner);
     if (registry) (void)turbo_flow_protocol_registry_destroy(registry);
     return rc;
   }
   *registry_out = registry;
   *owner_out = owner;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void protocol_close_one(turbo_flow_protocol_registry_t *registry,
@@ -211,14 +211,14 @@ spec("protocol plugin conformance") {
     check_true(jtt808_size > 0u);
     check_equal(turbo_flow_protocol_registry_create(
                      sizeof(cases) / sizeof(cases[0]), &registry),
-                 TURBO_OK);
+                 SALTS_OK);
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
       check_equal(turbo_flow_protocol_registry_load(
                        registry, cases[i].module, reason, sizeof(reason)),
-                   TURBO_OK);
-      check_equal(protocol_roundtrip(registry, &cases[i]), TURBO_OK);
+                   SALTS_OK);
+      check_equal(protocol_roundtrip(registry, &cases[i]), SALTS_OK);
     }
-    check_equal(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_destroy(registry), SALTS_OK);
   }
 
   it("rejects an unsupported negotiated protocol version before opening") {
@@ -229,16 +229,16 @@ spec("protocol plugin conformance") {
     char reason[256];
     request.protocol = TURBO_FLOW_PROTOCOL_OCPP;
     request.protocol_version = "2.1";
-    check_equal(turbo_flow_protocol_registry_create(1u, &registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_create(1u, &registry), SALTS_OK);
     check_equal(turbo_flow_protocol_registry_load(
                      registry, FLOW_PROTOCOL_OCPP_MODULE, reason,
                      sizeof(reason)),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(turbo_flow_protocol_owner_create_registered(
                      registry, "ocpp", &request, &owner),
-                 TURBO_ENOTSUP);
+                 SALTS_ENOTSUP);
     check_null(owner);
-    check_equal(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_destroy(registry), SALTS_OK);
   }
 
   it("rejects malformed frames at every protocol boundary") {
@@ -278,16 +278,16 @@ spec("protocol plugin conformance") {
     bad_jtt808[cases[5].frame_size - 2u] ^= 0x01u;
     check_equal(turbo_flow_protocol_registry_create(
                      sizeof(cases) / sizeof(cases[0]), &registry),
-                 TURBO_OK);
+                 SALTS_OK);
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
       check_equal(turbo_flow_protocol_registry_load(
                        registry, cases[i].module, reason, sizeof(reason)),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(protocol_reject_frame(registry, &cases[i], cases[i].frame,
                                         cases[i].frame_size),
-                   TURBO_EPROTO);
+                   SALTS_EPROTO);
     }
-    check_equal(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_destroy(registry), SALTS_OK);
   }
 
   it("emits protocol responses only after an explicit settlement result") {
@@ -321,14 +321,14 @@ spec("protocol plugin conformance") {
                      FLOW_PROTOCOL_MQTT_SN_MODULE, "mqtt-sn",
                      TURBO_FLOW_PROTOCOL_MQTT_SN, "1.2", &registry,
                      &owner, &protocol),
-                 TURBO_OK);
+                 SALTS_OK);
     request.data = mqtt_sn;
     request.data_size = sizeof(mqtt_sn);
     request.device_id = "sensor-1";
     request.protocol_version = "1.2";
-    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, SALTS_OK,
                                           &output),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(output.data_size, sizeof(mqtt_sn_ack));
     check_equal(output.data, mqtt_sn_ack, sizeof(mqtt_sn_ack));
     protocol_close_one(registry, owner);
@@ -344,16 +344,16 @@ spec("protocol plugin conformance") {
                      FLOW_PROTOCOL_COAP_MODULE, "coap",
                      TURBO_FLOW_PROTOCOL_COAP, "RFC7252", &registry,
                      &owner, &protocol),
-                 TURBO_OK);
+                 SALTS_OK);
     request = (turbo_flow_protocol_frame_view_t)
         TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
     request.data = coap;
     request.data_size = sizeof(coap);
     request.device_id = "sensor-2";
     request.protocol_version = "RFC7252";
-    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, SALTS_OK,
                                           &output),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(output.data_size, sizeof(coap_ack));
     check_equal(output.data, coap_ack, sizeof(coap_ack));
     protocol_close_one(registry, owner);
@@ -369,16 +369,16 @@ spec("protocol plugin conformance") {
                      FLOW_PROTOCOL_LWM2M_MODULE, "lwm2m",
                      TURBO_FLOW_PROTOCOL_LWM2M, "1.2.2", &registry,
                      &owner, &protocol),
-                 TURBO_OK);
+                 SALTS_OK);
     request = (turbo_flow_protocol_frame_view_t)
         TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
     request.data = lwm2m;
     request.data_size = sizeof(lwm2m);
     request.device_id = "device-3";
     request.protocol_version = "1.2.2";
-    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, SALTS_OK,
                                           &output),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(output.data_size, sizeof(lwm2m_ack));
     check_equal(output.data, lwm2m_ack, sizeof(lwm2m_ack));
     protocol_close_one(registry, owner);
@@ -394,16 +394,16 @@ spec("protocol plugin conformance") {
                      FLOW_PROTOCOL_OCPP_MODULE, "ocpp",
                      TURBO_FLOW_PROTOCOL_OCPP, "1.6J", &registry,
                      &owner, &protocol),
-                 TURBO_OK);
+                 SALTS_OK);
     request = (turbo_flow_protocol_frame_view_t)
         TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
     request.data = ocpp;
     request.data_size = sizeof(ocpp) - 1u;
     request.device_id = "charger-4";
     request.protocol_version = "1.6J";
-    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, SALTS_OK,
                                           &output),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(output.data_size, sizeof(ocpp_result) - 1u);
     check_equal(output.data, ocpp_result, sizeof(ocpp_result) - 1u);
     protocol_close_one(registry, owner);
@@ -421,15 +421,15 @@ spec("protocol plugin conformance") {
                      FLOW_PROTOCOL_GBT32960_MODULE, "gbt32960",
                      TURBO_FLOW_PROTOCOL_GBT_32960, "2025",
                      &registry, &owner, &protocol),
-                 TURBO_OK);
+                 SALTS_OK);
     request = (turbo_flow_protocol_frame_view_t)
         TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
     request.data = gbt32960;
     request.data_size = sizeof(gbt32960);
     request.protocol_version = "2025";
-    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, SALTS_OK,
                                           &output),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(output.data_size, 25u);
     check_equal(output.data[3], 0x01u);
     protocol_close_one(registry, owner);
@@ -446,15 +446,15 @@ spec("protocol plugin conformance") {
                      FLOW_PROTOCOL_JTT808_MODULE, "jtt808",
                      TURBO_FLOW_PROTOCOL_JTT_808, "2019-A1",
                      &registry, &owner, &protocol),
-                 TURBO_OK);
+                 SALTS_OK);
     request = (turbo_flow_protocol_frame_view_t)
         TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
     request.data = jtt808;
     request.data_size = protocol_jtt808_frame(jtt808, sizeof(jtt808));
     request.protocol_version = "2019-A1";
-    check_equal(turbo_flow_protocol_reply(protocol, &request, TURBO_OK,
+    check_equal(turbo_flow_protocol_reply(protocol, &request, SALTS_OK,
                                           &output),
-                 TURBO_OK);
+                 SALTS_OK);
     check_true(output.data_size > 0u);
     check_equal(output.metadata.operation, "platform-ack");
     protocol_close_one(registry, owner);
@@ -508,7 +508,7 @@ spec("protocol plugin conformance") {
       check_equal(protocol_open_one(
                        cases[i].module, cases[i].name, cases[i].protocol,
                        cases[i].version, &registry, &owner, &protocol),
-                   TURBO_OK);
+                   SALTS_OK);
       command.device_id = cases[i].device_id;
       command.operation = cases[i].operation;
       command.resource = cases[i].resource;
@@ -519,7 +519,7 @@ spec("protocol plugin conformance") {
       output.data = frame;
       output.capacity = sizeof(frame);
       check_equal(turbo_flow_protocol_encode(protocol, &command, &output),
-                   TURBO_OK);
+                   SALTS_OK);
       check_true(output.data_size > 0u);
       check_equal(output.metadata.operation, cases[i].operation);
       check_equal(output.metadata.device_id, cases[i].device_id);

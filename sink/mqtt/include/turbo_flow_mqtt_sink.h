@@ -102,8 +102,8 @@ TURBO_FLOW_C_API int turbo_flow_mqtt_sink_map_batch(const turbo_flow_mqtt_sink_c
  *
  * The topic format is
  * `{route_prefix}/{protocol}/{tenant}/{device}/{up|down}/{operation}`.
- * Returns TURBO_EINVAL for an invalid ABI/argument, TURBO_EPROTO for invalid
- * metadata, or TURBO_EMSGSIZE when the caller-owned topic buffer is too small.
+ * Returns SALTS_EINVAL for an invalid ABI/argument, SALTS_EPROTO for invalid
+ * metadata, or SALTS_EMSGSIZE when the caller-owned topic buffer is too small.
  * This compatibility helper delegates to a one-message batch; new sink paths
  * should use turbo_flow_mqtt_sink_map_batch().
  */

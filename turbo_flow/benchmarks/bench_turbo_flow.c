@@ -5,7 +5,7 @@
 #include "turbo_flow.h"
 #include "turbo_flow_expr.h"
 #include "turbo_flow_security.h"
-#include "turbo_thread.h"
+#include "salts_thread.h"
 
 #include <inttypes.h>
 #include <stdatomic.h>
@@ -70,14 +70,14 @@ static int bench_security_adapter_compile(void *ctx,
   if (compiled_leaf_out) *compiled_leaf_out = NULL;
   if (!input || input->size < sizeof(*input) || !input->rules || !input->candidate_rule_indices ||
       input->candidate_count == 0u || !compiled_leaf_out)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   leaf = (bench_security_adapter_leaf_t *)calloc(1u, sizeof(*leaf));
-  if (!leaf) return TURBO_ENOMEM;
+  if (!leaf) return SALTS_ENOMEM;
   leaf->entries =
       (bench_security_adapter_entry_t *)calloc(input->candidate_count, sizeof(*leaf->entries));
   if (!leaf->entries) {
     free(leaf);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   leaf->entry_count = input->candidate_count;
   for (size_t i = 0u; i < input->candidate_count; ++i) {
@@ -85,14 +85,14 @@ static int bench_security_adapter_compile(void *ctx,
     if (rule_index >= input->rule_count) {
       free(leaf->entries);
       free(leaf);
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     }
     leaf->entries[i].pattern = input->rules[rule_index].pattern;
     leaf->entries[i].candidate_position = i;
   }
   qsort(leaf->entries, leaf->entry_count, sizeof(*leaf->entries), bench_security_adapter_compare);
   *compiled_leaf_out = leaf;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int bench_security_adapter_evaluate(void *ctx, const void *compiled_leaf,
@@ -102,7 +102,7 @@ static int bench_security_adapter_evaluate(void *ctx, const void *compiled_leaf,
   size_t first = 0u;
   size_t count;
   (void)ctx;
-  if (!leaf || !request || !request->resource || !emit) return TURBO_EINVAL;
+  if (!leaf || !request || !request->resource || !emit) return SALTS_EINVAL;
   count = leaf->entry_count;
   while (first < count) {
     size_t middle = first + (count - first) / 2u;
@@ -112,10 +112,10 @@ static int bench_security_adapter_evaluate(void *ctx, const void *compiled_leaf,
   while (first < leaf->entry_count &&
          strcmp(leaf->entries[first].pattern, request->resource) == 0) {
     int rc = emit(emit_ctx, leaf->entries[first].candidate_position);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     ++first;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void bench_security_adapter_destroy(void *ctx, void *compiled_leaf) {
@@ -188,7 +188,7 @@ static turbo_flow_security_realm_t *bench_security_realm(size_t rule_count,
     config.matcher.evaluate_leaf = bench_security_adapter_evaluate;
     config.matcher.destroy_leaf = bench_security_adapter_destroy;
   }
-  check_equal(turbo_flow_security_realm_create(&config, &realm), TURBO_OK);
+  check_equal(turbo_flow_security_realm_create(&config, &realm), SALTS_OK);
   check_not_null(realm);
   *rules_out = rules;
   return realm;
@@ -229,8 +229,8 @@ typedef struct flow_bench_async_completion_s {
 
 static void bench_async_publish_complete(void *ctx, const turbo_flow_publish_result_t *result) {
   flow_bench_async_completion_t *completion = (flow_bench_async_completion_t *)ctx;
-  if (!result || result->status != TURBO_OK) {
-    atomic_store_explicit(&completion->status, result ? result->status : TURBO_EINVAL,
+  if (!result || result->status != SALTS_OK) {
+    atomic_store_explicit(&completion->status, result ? result->status : SALTS_EINVAL,
                           memory_order_release);
   }
   atomic_fetch_add_explicit(&completion->completed, 1u, memory_order_acq_rel);
@@ -240,13 +240,13 @@ static void bench_live_job(void *arg) {
   flow_bench_live_jobs_t *jobs = (flow_bench_live_jobs_t *)arg;
   atomic_fetch_add_explicit(&jobs->started, 1u, memory_order_release);
   while (!atomic_load_explicit(&jobs->release, memory_order_acquire))
-    turbo_sleep_ms(1);
+    salts_sleep_ms(1);
   atomic_fetch_add_explicit(&jobs->completed, 1u, memory_order_release);
 }
 
 static void bench_release_live_jobs(void *arg) {
   flow_bench_live_jobs_t *jobs = (flow_bench_live_jobs_t *)arg;
-  turbo_sleep_ms(1);
+  salts_sleep_ms(1);
   atomic_store_explicit(&jobs->release, 1, memory_order_release);
 }
 
@@ -264,7 +264,7 @@ static int bench_stage(turbo_flow_msg_t *msg, void *ctx) {
   atomic_size_t *count = (atomic_size_t *)ctx;
   (void)msg;
   atomic_fetch_add_explicit(count, 1u, memory_order_relaxed);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int bench_emitting_stage(const turbo_flow_msg_t *input, turbo_flow_emitter_t *emitter,
@@ -277,22 +277,22 @@ static int bench_emitting_stage(const turbo_flow_msg_t *input, turbo_flow_emitte
     output.id = input->id + i;
     rc = turbo_flow_emitter_emit_move(emitter, &output);
     turbo_flow_msg_cleanup(&output);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int bench_emitter_sink(turbo_flow_msg_t *msg, void *ctx) {
   flow_bench_emitter_t *bench = (flow_bench_emitter_t *)ctx;
   (void)msg;
   bench->sink_count += 1u;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int bench_keyed_select(const turbo_flow_msg_t *msg, vstr *key, void *ctx) {
   (void)ctx;
   *key = vstr_from_buf((const char *)&msg->id, sizeof(msg->id));
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int bench_keyed_increment(turbo_flow_msg_t *msg, turbo_flow_keyed_state_t *state,
@@ -301,10 +301,10 @@ static int bench_keyed_increment(turbo_flow_msg_t *msg, turbo_flow_keyed_state_t
   uint64_t count = 0u;
   int rc = turbo_flow_keyed_state_get(state, &value, NULL);
   (void)ctx;
-  if (rc == TURBO_OK) {
-    if (value.len != sizeof(count)) return TURBO_EPROTO;
+  if (rc == SALTS_OK) {
+    if (value.len != sizeof(count)) return SALTS_EPROTO;
     memcpy(&count, value.data, sizeof(count));
-  } else if (rc != TURBO_ENOENT) {
+  } else if (rc != SALTS_ENOENT) {
     return rc;
   }
   count += 1u;
@@ -315,7 +315,7 @@ static int bench_keyed_increment(turbo_flow_msg_t *msg, turbo_flow_keyed_state_t
 static int bench_keyed_baseline_stage(turbo_flow_msg_t *msg, void *ctx) {
   (void)msg;
   (void)ctx;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int bench_keyed_window(const turbo_flow_msg_t *msg, turbo_flow_keyed_state_t *state,
@@ -325,10 +325,10 @@ static int bench_keyed_window(const turbo_flow_msg_t *msg, turbo_flow_keyed_stat
   uint64_t count = 0u;
   int rc = turbo_flow_keyed_state_get(state, &value, NULL);
 
-  if (rc == TURBO_OK) {
-    if (value.len != sizeof(count)) return TURBO_EPROTO;
+  if (rc == SALTS_OK) {
+    if (value.len != sizeof(count)) return SALTS_EPROTO;
     memcpy(&count, value.data, sizeof(count));
-  } else if (rc != TURBO_ENOENT) {
+  } else if (rc != SALTS_ENOENT) {
     return rc;
   }
   count += 1u;
@@ -336,7 +336,7 @@ static int bench_keyed_window(const turbo_flow_msg_t *msg, turbo_flow_keyed_stat
     return turbo_flow_keyed_state_put(state, vstr_from_buf((const char *)&count, sizeof(count)));
   }
   rc = turbo_flow_keyed_state_delete(state);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   {
     turbo_flow_msg_t output;
     turbo_flow_msg_init(&output);
@@ -352,7 +352,7 @@ static int bench_keyed_sink(turbo_flow_msg_t *msg, void *ctx) {
   flow_bench_keyed_t *bench = (flow_bench_keyed_t *)ctx;
   (void)msg;
   bench->sink_count += 1u;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int bench_event_window_accumulate(const turbo_flow_msg_t *msg,
@@ -362,7 +362,7 @@ static int bench_event_window_accumulate(const turbo_flow_msg_t *msg,
   (void)msg;
   (void)ctx;
   if (window->aggregate.len > 0u) {
-    if (window->aggregate.len != sizeof(count)) return TURBO_EPROTO;
+    if (window->aggregate.len != sizeof(count)) return SALTS_EPROTO;
     memcpy(&count, window->aggregate.data, sizeof(count));
   }
   count += 1u;
@@ -377,7 +377,7 @@ static int bench_event_window_close(const turbo_flow_event_time_window_t *window
   int rc;
   (void)ctx;
   if (window->key.len != sizeof(key) || window->aggregate.len != sizeof(count)) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   memcpy(&key, window->key.data, sizeof(key));
   memcpy(&count, window->aggregate.data, sizeof(count));
@@ -393,7 +393,7 @@ static int bench_event_window_close(const turbo_flow_event_time_window_t *window
 static void bench_register_stage(turbo_flow_t *flow, const char *name) {
   check_equal(
       turbo_flow_register_stage_ex(flow, name, bench_stage, (void *)&g_flow_bench_count, NULL),
-      TURBO_OK);
+      SALTS_OK);
 }
 
 static int bench_u64_compare(const void *lhs, const void *rhs) {
@@ -416,22 +416,22 @@ static void bench_publish_worker(void *arg) {
   turbo_flow_msg_init(&msg);
   msg.owned_payload = tstr_new_len(NULL, worker->payload_size);
   if (!msg.owned_payload) {
-    worker->status = TURBO_ENOMEM;
+    worker->status = SALTS_ENOMEM;
     atomic_fetch_add_explicit(worker->ready, 1u, memory_order_release);
     return;
   }
   memset(msg.owned_payload, 'x', worker->payload_size);
   msg.payload = tstr_to_v(msg.owned_payload);
-  worker->status = TURBO_OK;
+  worker->status = SALTS_OK;
   atomic_fetch_add_explicit(worker->ready, 1u, memory_order_release);
   while (!atomic_load_explicit(worker->start, memory_order_acquire))
-    turbo_thread_yield();
+    salts_thread_yield();
 
   for (size_t i = 0; i < worker->iterations; ++i) {
-    uint64_t begin = turbo_hrtime();
+    uint64_t begin = salts_hrtime();
     int rc = turbo_flow_publish(worker->flow, "input", &msg);
-    worker->latencies[i] = turbo_hrtime() - begin;
-    if (rc != TURBO_OK) {
+    worker->latencies[i] = salts_hrtime() - begin;
+    if (rc != SALTS_OK) {
       worker->status = rc;
       break;
     }
@@ -445,7 +445,7 @@ static void bench_report_concurrent_publish(turbo_flow_t *flow, const char *stag
                                             uint32_t producers, size_t payload_size,
                                             size_t iterations) {
   flow_bench_publish_worker_t *contexts;
-  turbo_thread_t *threads;
+  salts_thread_t *threads;
   uint64_t *latencies;
   atomic_uint ready;
   atomic_int start;
@@ -455,7 +455,7 @@ static void bench_report_concurrent_publish(turbo_flow_t *flow, const char *stag
   double throughput;
 
   contexts = (flow_bench_publish_worker_t *)calloc(producers, sizeof(*contexts));
-  threads = (turbo_thread_t *)calloc(producers, sizeof(*threads));
+  threads = (salts_thread_t *)calloc(producers, sizeof(*threads));
   latencies = (uint64_t *)calloc(iterations, sizeof(*latencies));
   check_not_null(contexts);
   check_not_null(threads);
@@ -473,19 +473,19 @@ static void bench_report_concurrent_publish(turbo_flow_t *flow, const char *stag
     contexts[i].latencies = latencies + begin;
     contexts[i].ready = &ready;
     contexts[i].start = &start;
-    contexts[i].status = TURBO_EBUSY;
-    check_equal(turbo_thread_create(&threads[i], bench_publish_worker, &contexts[i]), TURBO_OK);
+    contexts[i].status = SALTS_EBUSY;
+    check_equal(salts_thread_create(&threads[i], bench_publish_worker, &contexts[i]), SALTS_OK);
   }
   while (atomic_load_explicit(&ready, memory_order_acquire) != producers)
-    turbo_thread_yield();
-  total_start = turbo_hrtime();
+    salts_thread_yield();
+  total_start = salts_hrtime();
   atomic_store_explicit(&start, 1, memory_order_release);
   for (uint32_t i = 0; i < producers; ++i) {
-    check_equal(turbo_thread_join(&threads[i]), TURBO_OK);
-    check_equal(contexts[i].status, TURBO_OK);
+    check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+    check_equal(contexts[i].status, SALTS_OK);
     completed += contexts[i].completed;
   }
-  total_elapsed = turbo_hrtime() - total_start;
+  total_elapsed = salts_hrtime() - total_start;
   check_equal(completed, iterations);
   if (completed == 0u) goto cleanup;
 
@@ -512,7 +512,7 @@ static void bench_report_publish(turbo_flow_t *flow, const char *stage_plan, con
   uint64_t total_elapsed;
   size_t completed = 0;
   double throughput;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
 
   latencies = (uint64_t *)calloc(iterations, sizeof(*latencies));
   check_not_null(latencies);
@@ -529,20 +529,20 @@ static void bench_report_publish(turbo_flow_t *flow, const char *stage_plan, con
 
   for (size_t i = 0; i < FLOW_BENCH_WARMUP_ITERS; ++i) {
     rc = turbo_flow_publish(flow, "input", &msg);
-    if (rc != TURBO_OK) break;
+    if (rc != SALTS_OK) break;
   }
-  check_equal(rc, TURBO_OK);
+  check_equal(rc, SALTS_OK);
 
-  total_start = turbo_hrtime();
-  for (size_t i = 0; i < iterations && rc == TURBO_OK; ++i) {
-    uint64_t start = turbo_hrtime();
+  total_start = salts_hrtime();
+  for (size_t i = 0; i < iterations && rc == SALTS_OK; ++i) {
+    uint64_t start = salts_hrtime();
     rc = turbo_flow_publish(flow, "input", &msg);
-    latencies[i] = turbo_hrtime() - start;
-    if (rc == TURBO_OK) completed += 1u;
+    latencies[i] = salts_hrtime() - start;
+    if (rc == SALTS_OK) completed += 1u;
   }
-  total_elapsed = turbo_hrtime() - total_start;
-  check_equal(rc, TURBO_OK);
-  if (rc != TURBO_OK || completed == 0) {
+  total_elapsed = salts_hrtime() - total_start;
+  check_equal(rc, SALTS_OK);
+  if (rc != SALTS_OK || completed == 0) {
     turbo_flow_msg_cleanup(&msg);
     free(latencies);
     return;
@@ -583,14 +583,14 @@ static uint64_t bench_process_cpu_ns(void) {
 
 static void bench_report_idle_cpu(turbo_flow_t *flow, const char *stage_plan, const char *executor,
                                   uint32_t workers) {
-  uint64_t wall_start = turbo_hrtime();
+  uint64_t wall_start = salts_hrtime();
   uint64_t cpu_start = bench_process_cpu_ns();
   double wall_ms;
   double cpu_ms;
   double cpu_wall_ratio;
 
-  turbo_sleep_ms(FLOW_BENCH_IDLE_WAIT_MS);
-  wall_ms = (double)(turbo_hrtime() - wall_start) / 1000000.0;
+  salts_sleep_ms(FLOW_BENCH_IDLE_WAIT_MS);
+  wall_ms = (double)(salts_hrtime() - wall_start) / 1000000.0;
   cpu_ms = (double)(bench_process_cpu_ns() - cpu_start) / 1000000.0;
   cpu_wall_ratio = wall_ms > 0.0 ? cpu_ms / wall_ms : 0.0;
   printf("BENCH_IDLE stage_plan=%s executor=%s workers=%" PRIu32
@@ -613,10 +613,10 @@ static turbo_flow_t *bench_create_executor_flow(const char *exec_spec) {
                      "}\n",
                      exec_spec ? exec_spec : "");
   check_true(written > 0 && (size_t)written < sizeof(src));
-  check_equal(turbo_flow_parse_string(flow, src, (size_t)written), TURBO_OK);
+  check_equal(turbo_flow_parse_string(flow, src, (size_t)written), SALTS_OK);
   bench_register_stage(flow, "work");
-  check_equal(turbo_flow_compile(flow), TURBO_OK);
-  check_equal(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_compile(flow), SALTS_OK);
+  check_equal(turbo_flow_start(flow), SALTS_OK);
   return flow;
 }
 
@@ -624,12 +624,12 @@ static turbo_flow_t *bench_create_started_flow(const char *src, const char *cons
                                                size_t stage_count) {
   turbo_flow_t *flow = turbo_flow_create();
   check_not_null(flow);
-  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
   for (size_t i = 0; i < stage_count; ++i) {
     bench_register_stage(flow, stage_names[i]);
   }
-  check_equal(turbo_flow_compile(flow), TURBO_OK);
-  check_equal(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_compile(flow), SALTS_OK);
+  check_equal(turbo_flow_start(flow), SALTS_OK);
   return flow;
 }
 
@@ -670,14 +670,14 @@ static turbo_flow_t *bench_create_emitting_flow(flow_bench_emitter_t *bench) {
   provider.max_outputs = bench->output_count;
 
   check_not_null(flow);
-  check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-  check_equal(turbo_flow_register_operation(flow, &expand), TURBO_OK);
-  check_equal(turbo_flow_register_emitting_operation_provider(flow, &provider), TURBO_OK);
+  check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+  check_equal(turbo_flow_register_operation(flow, &expand), SALTS_OK);
+  check_equal(turbo_flow_register_emitting_operation_provider(flow, &provider), SALTS_OK);
   check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_emitter_sink, bench, NULL),
-               TURBO_OK);
-  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-  check_equal(turbo_flow_compile(flow), TURBO_OK);
-  check_equal(turbo_flow_start(flow), TURBO_OK);
+               SALTS_OK);
+  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+  check_equal(turbo_flow_compile(flow), SALTS_OK);
+  check_equal(turbo_flow_start(flow), SALTS_OK);
   return flow;
 }
 
@@ -726,8 +726,8 @@ static turbo_flow_t *bench_create_keyed_flow(flow_bench_keyed_t *bench, size_t m
   count.flags = TURBO_FLOW_OPERATION_STAGE;
   check_not_null(flow);
   check_not_null(bench->store);
-  check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-  check_equal(turbo_flow_register_operation(flow, &count), TURBO_OK);
+  check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+  check_equal(turbo_flow_register_operation(flow, &count), SALTS_OK);
   if (emitting) {
     emitting_provider.operation_name = count.name;
     emitting_provider.key_selector = bench_keyed_select;
@@ -736,19 +736,19 @@ static turbo_flow_t *bench_create_keyed_flow(flow_bench_keyed_t *bench, size_t m
     emitting_provider.store = bench->store;
     emitting_provider.max_outputs = 1u;
     check_equal(turbo_flow_register_keyed_emitting_operation_provider(flow, &emitting_provider),
-                 TURBO_OK);
+                 SALTS_OK);
   } else {
     provider.operation_name = count.name;
     provider.key_selector = bench_keyed_select;
     provider.fn = bench_keyed_increment;
     provider.ctx = bench;
     provider.store = bench->store;
-    check_equal(turbo_flow_register_keyed_operation_provider(flow, &provider), TURBO_OK);
+    check_equal(turbo_flow_register_keyed_operation_provider(flow, &provider), SALTS_OK);
   }
-  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), TURBO_OK);
-  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-  check_equal(turbo_flow_compile(flow), TURBO_OK);
-  check_equal(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), SALTS_OK);
+  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+  check_equal(turbo_flow_compile(flow), SALTS_OK);
+  check_equal(turbo_flow_start(flow), SALTS_OK);
   return flow;
 }
 
@@ -805,13 +805,13 @@ static turbo_flow_t *bench_create_event_window_flow(flow_bench_keyed_t *bench, s
   provider.max_outputs = 1u;
   check_not_null(flow);
   check_not_null(bench->store);
-  check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-  check_equal(turbo_flow_register_operation(flow, &window), TURBO_OK);
-  check_equal(turbo_flow_register_event_time_window_provider(flow, &provider), TURBO_OK);
-  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), TURBO_OK);
-  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-  check_equal(turbo_flow_compile(flow), TURBO_OK);
-  check_equal(turbo_flow_start(flow), TURBO_OK);
+  check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+  check_equal(turbo_flow_register_operation(flow, &window), SALTS_OK);
+  check_equal(turbo_flow_register_event_time_window_provider(flow, &provider), SALTS_OK);
+  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), SALTS_OK);
+  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+  check_equal(turbo_flow_compile(flow), SALTS_OK);
+  check_equal(turbo_flow_start(flow), SALTS_OK);
   return flow;
 }
 
@@ -825,22 +825,22 @@ static turbo_flow_t *bench_create_keyed_baseline_flow(flow_bench_keyed_t *bench)
   turbo_flow_t *flow = turbo_flow_create();
   check_not_null(flow);
   check_equal(turbo_flow_register_stage_ex(flow, "count", bench_keyed_baseline_stage, bench, NULL),
-               TURBO_OK);
-  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), TURBO_OK);
-  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-  check_equal(turbo_flow_compile(flow), TURBO_OK);
-  check_equal(turbo_flow_start(flow), TURBO_OK);
+               SALTS_OK);
+  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), SALTS_OK);
+  check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+  check_equal(turbo_flow_compile(flow), SALTS_OK);
+  check_equal(turbo_flow_start(flow), SALTS_OK);
   return flow;
 }
 
 static void bench_destroy_started_flow(turbo_flow_t *flow) {
-  check_equal(turbo_flow_stop(flow), TURBO_OK);
+  check_equal(turbo_flow_stop(flow), SALTS_OK);
   turbo_flow_destroy(flow);
 }
 
 static void bench_publish_message(turbo_flow_t *flow, const char *source_name,
                                   turbo_flow_msg_t *msg) {
-  check_equal(turbo_flow_publish(flow, source_name, msg), TURBO_OK);
+  check_equal(turbo_flow_publish(flow, source_name, msg), SALTS_OK);
 }
 
 spec("Turbo Flow Bench") {
@@ -851,17 +851,17 @@ spec("Turbo Flow Bench") {
         (uint8_t *)calloc(FLOW_BENCH_REACHABILITY_STAGES, sizeof(*reachable));
     uint32_t *worklist =
         (uint32_t *)calloc(FLOW_BENCH_REACHABILITY_STAGES, sizeof(*worklist));
-    int reachability_status = TURBO_OK;
+    int reachability_status = SALTS_OK;
 
     check_not_null(flow);
     check_not_null(reachable);
     check_not_null(worklist);
     check_equal(turbo_flow_stl_error(vec_resize(&flow->runtime_nodes,
                                                  FLOW_BENCH_REACHABILITY_STAGES)),
-                TURBO_OK);
+                SALTS_OK);
     check_equal(turbo_flow_stl_error(vec_resize(&flow->runtime_edges,
                                                  FLOW_BENCH_REACHABILITY_STAGES - 1u)),
-                TURBO_OK);
+                SALTS_OK);
     for (uint32_t stage = 0u; stage < FLOW_BENCH_REACHABILITY_STAGES; ++stage) {
       flow_runtime_node_plan_t *node =
           (flow_runtime_node_plan_t *)vec_at(&flow->runtime_nodes, stage);
@@ -885,7 +885,7 @@ spec("Turbo Flow Bench") {
       reachability_status = flow_mark_reachable_from_stage(
           flow, reachable, worklist, FLOW_BENCH_REACHABILITY_STAGES, 0u);
     }
-    check_equal(reachability_status, TURBO_OK);
+    check_equal(reachability_status, SALTS_OK);
     check_equal(reachable[FLOW_BENCH_REACHABILITY_STAGES - 1u], 1u);
     free(worklist);
     free(reachable);
@@ -905,11 +905,11 @@ spec("Turbo Flow Bench") {
               FLOW_BENCH_COMPILE_ITERS, 1) {
       turbo_flow_t *flow = turbo_flow_create();
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       bench_register_stage(flow, "parse");
       bench_register_stage(flow, "validate");
       bench_register_stage(flow, "sink");
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
   }
@@ -997,14 +997,14 @@ spec("Turbo Flow Bench") {
     {
       flow_bench_keyed_t baseline = {NULL, 0u, 0u};
       turbo_flow_t *flow = bench_create_keyed_baseline_flow(&baseline);
-      int publish_status = TURBO_OK;
+      int publish_status = SALTS_OK;
       msg.id = 1u;
       benchmark_ops(
           "stage_plan=keyed-count-baseline state=none executor=inline payload_bytes=7 publish",
           FLOW_BENCH_EXECUTOR_ITERS, 1u) {
         publish_status = turbo_flow_publish(flow, "input", &msg);
       }
-      check_equal(publish_status, TURBO_OK);
+      check_equal(publish_status, SALTS_OK);
       check_equal(baseline.sink_count, FLOW_BENCH_EXECUTOR_ITERS);
       bench_destroy_started_flow(flow);
     }
@@ -1012,13 +1012,13 @@ spec("Turbo Flow Bench") {
     {
       flow_bench_keyed_t keyed = {NULL, 0u, 0u};
       turbo_flow_t *flow = bench_create_keyed_flow(&keyed, 1u, 0);
-      int publish_status = TURBO_OK;
+      int publish_status = SALTS_OK;
       msg.id = 1u;
       benchmark_ops("stage_plan=keyed-count keys=1 executor=inline payload_bytes=7 publish",
                     FLOW_BENCH_EXECUTOR_ITERS, 1u) {
         publish_status = turbo_flow_publish(flow, "input", &msg);
       }
-      check_equal(publish_status, TURBO_OK);
+      check_equal(publish_status, SALTS_OK);
       check_equal(keyed.sink_count, FLOW_BENCH_EXECUTOR_ITERS);
       bench_destroy_started_flow(flow);
       turbo_flow_keyed_state_store_destroy(keyed.store);
@@ -1029,13 +1029,13 @@ spec("Turbo Flow Bench") {
       flow_bench_keyed_t keyed = {NULL, 0u, 0u};
       turbo_flow_t *flow = bench_create_keyed_flow(&keyed, FLOW_BENCH_KEY_COUNT, 0);
       size_t next_key = 0u;
-      int publish_status = TURBO_OK;
+      int publish_status = SALTS_OK;
       benchmark_ops("stage_plan=keyed-count keys=1024 executor=inline payload_bytes=7 publish",
                     FLOW_BENCH_EXECUTOR_ITERS, 1u) {
         msg.id = next_key++ % FLOW_BENCH_KEY_COUNT;
         publish_status = turbo_flow_publish(flow, "input", &msg);
       }
-      check_equal(publish_status, TURBO_OK);
+      check_equal(publish_status, SALTS_OK);
       check_equal(keyed.sink_count, FLOW_BENCH_EXECUTOR_ITERS);
       check_equal(turbo_flow_keyed_state_store_size(keyed.store), FLOW_BENCH_KEY_COUNT);
       bench_destroy_started_flow(flow);
@@ -1045,14 +1045,14 @@ spec("Turbo Flow Bench") {
     {
       flow_bench_keyed_t window = {NULL, 0u, 100u};
       turbo_flow_t *flow = bench_create_keyed_flow(&window, 1u, 1);
-      int publish_status = TURBO_OK;
+      int publish_status = SALTS_OK;
       msg.id = 1u;
       benchmark_ops(
           "stage_plan=keyed-window window=count-100 keys=1 executor=inline payload_bytes=7 publish",
           FLOW_BENCH_EXECUTOR_ITERS, 1u) {
         publish_status = turbo_flow_publish(flow, "input", &msg);
       }
-      check_equal(publish_status, TURBO_OK);
+      check_equal(publish_status, SALTS_OK);
       check_equal(window.sink_count, FLOW_BENCH_EXECUTOR_ITERS / window.window_size);
       bench_destroy_started_flow(flow);
       turbo_flow_keyed_state_store_destroy(window.store);
@@ -1061,7 +1061,7 @@ spec("Turbo Flow Bench") {
     {
       flow_bench_keyed_t window = {NULL, 0u, 0u};
       turbo_flow_t *flow = bench_create_event_window_flow(&window, 1u, UINT64_C(1000000000));
-      int publish_status = TURBO_OK;
+      int publish_status = SALTS_OK;
       msg.id = 1u;
       msg.ts_ns = 1u;
       benchmark_ops("stage_plan=event-time-tumbling-window windows=1 keys=1 executor=inline "
@@ -1069,7 +1069,7 @@ spec("Turbo Flow Bench") {
                     FLOW_BENCH_EXECUTOR_ITERS, 1u) {
         publish_status = turbo_flow_publish(flow, "input", &msg);
       }
-      check_equal(publish_status, TURBO_OK);
+      check_equal(publish_status, SALTS_OK);
       check_equal(turbo_flow_keyed_state_store_size(window.store), 1u);
       bench_destroy_started_flow(flow);
       turbo_flow_event_time_window_store_destroy(window.store);
@@ -1081,11 +1081,11 @@ spec("Turbo Flow Bench") {
       turbo_flow_t *flow = bench_create_event_window_flow(&window, FLOW_BENCH_EVENT_WINDOWS, 10u);
       size_t next_window = 0u;
       size_t closed = 0u;
-      int watermark_status = TURBO_OK;
+      int watermark_status = SALTS_OK;
       msg.id = 1u;
       for (size_t index = 0u; index < FLOW_BENCH_EVENT_WINDOWS; ++index) {
         msg.ts_ns = index * 10u;
-        check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+        check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       }
       benchmark_ops("stage_plan=event-time-tumbling-window windows=1024 keys=1 executor=inline "
                     "close-one-watermark",
@@ -1094,7 +1094,7 @@ spec("Turbo Flow Bench") {
         watermark_status =
             turbo_flow_advance_event_time_watermark(flow, window.store, next_window * 10u, &closed);
       }
-      check_equal(watermark_status, TURBO_OK);
+      check_equal(watermark_status, SALTS_OK);
       check_equal(window.sink_count, FLOW_BENCH_EVENT_WINDOWS);
       check_equal(turbo_flow_keyed_state_store_size(window.store), 0u);
       bench_destroy_started_flow(flow);
@@ -1114,17 +1114,17 @@ spec("Turbo Flow Bench") {
     flow_bench_async_completion_t completion;
     turbo_flow_msg_t msg;
     turbo_flow_t *flow = turbo_flow_create();
-    int submit_status = TURBO_OK;
+    int submit_status = SALTS_OK;
 
     ingress.queue_capacity = 16384u;
     atomic_init(&completion.completed, 0u);
-    atomic_init(&completion.status, TURBO_OK);
+    atomic_init(&completion.status, SALTS_OK);
     check_not_null(flow);
-    check_equal(turbo_flow_configure_async_ingress(flow, &ingress), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+    check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     bench_register_stage(flow, "sink");
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&msg);
     msg.owned_payload = tstr_dup("payload");
     msg.payload = tstr_to_v(msg.owned_payload);
@@ -1135,15 +1135,15 @@ spec("Turbo Flow Bench") {
       submit_status =
           turbo_flow_publish_async(flow, "input", &msg, bench_async_publish_complete, &completion);
     }
-    check_equal(submit_status, TURBO_OK);
+    check_equal(submit_status, SALTS_OK);
     while (atomic_load_explicit(&completion.completed, memory_order_acquire) <
            FLOW_BENCH_ASYNC_INGRESS_ITERS) {
-      turbo_thread_yield();
+      salts_thread_yield();
     }
-    check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), TURBO_OK);
+    check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_OK);
     check_equal(atomic_load_explicit(&completion.completed, memory_order_acquire),
                   FLOW_BENCH_ASYNC_INGRESS_ITERS);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&msg);
     turbo_flow_destroy(flow);
   }
@@ -1217,7 +1217,7 @@ spec("Turbo Flow Bench") {
       turbo_flow_msg_init(&msg);
       msg.owned_payload = tstr_dup("payload");
       msg.payload = tstr_to_v(msg.owned_payload);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       turbo_flow_msg_cleanup(&msg);
       bench_destroy_started_flow(flow);
     }
@@ -1229,18 +1229,18 @@ spec("Turbo Flow Bench") {
       uint32_t stage_index = (uint32_t)turbo_flow_find_stage(flow, "work");
       const flow_threadpool_adapter_t *adapter = bench_threadpool_adapter(flow, stage_index);
       flow_bench_live_jobs_t jobs;
-      turbo_thread_t releaser;
+      salts_thread_t releaser;
       atomic_init(&jobs.release, 0);
       atomic_init(&jobs.started, 0u);
       atomic_init(&jobs.completed, 0u);
       check_not_null(adapter);
       for (uint32_t i = 0; i < 4; ++i)
-        check_equal(turbo_threadpool_submit(adapter->pool, bench_live_job, &jobs), TURBO_OK);
+        check_equal(salts_threadpool_submit(adapter->pool, bench_live_job, &jobs), SALTS_OK);
       while (atomic_load_explicit(&jobs.started, memory_order_acquire) == 0u)
-        turbo_sleep_ms(1);
-      check_equal(turbo_thread_create(&releaser, bench_release_live_jobs, &jobs), TURBO_OK);
+        salts_sleep_ms(1);
+      check_equal(salts_thread_create(&releaser, bench_release_live_jobs, &jobs), SALTS_OK);
       bench_destroy_started_flow(flow);
-      check_equal(turbo_thread_join(&releaser), TURBO_OK);
+      check_equal(salts_thread_join(&releaser), SALTS_OK);
       check_equal(atomic_load_explicit(&jobs.completed, memory_order_acquire), 4);
     }
   }
@@ -1254,8 +1254,8 @@ spec("Turbo Flow Bench") {
               FLOW_BENCH_EXPR_COMPILE_ITERS, 1) {
       flow_expr_ast_t ast;
       turbo_flow_error_t error;
-      check_equal(flow_expr_parse(expression, strlen(expression), &ast, &error), TURBO_OK);
-      check_equal(flow_expr_type_check(&ast, NULL, &error), TURBO_OK);
+      check_equal(flow_expr_parse(expression, strlen(expression), &ast, &error), SALTS_OK);
+      check_equal(flow_expr_type_check(&ast, NULL, &error), SALTS_OK);
       flow_expr_ast_destroy(&ast);
     }
 
@@ -1266,7 +1266,7 @@ spec("Turbo Flow Bench") {
       turbo_flow_error_t error;
       check_equal(
           turbo_flow_expr_compile_ex(expression, strlen(expression), NULL, &options, &expr, &error),
-          TURBO_OK);
+          SALTS_OK);
       turbo_flow_expr_destroy(expr);
     }
 
@@ -1278,7 +1278,7 @@ spec("Turbo Flow Bench") {
         turbo_flow_error_t error;
         check_equal(turbo_flow_expr_compile_ex(expression, strlen(expression), NULL, &options,
                                                 &expr, &error),
-                     TURBO_OK);
+                     SALTS_OK);
         turbo_flow_expr_destroy(expr);
       }
     }
@@ -1300,16 +1300,16 @@ spec("Turbo Flow Bench") {
       context.message = &msg;
       check_equal(
           turbo_flow_expr_compile_ex(expression, strlen(expression), NULL, &options, &expr, &error),
-          TURBO_OK);
+          SALTS_OK);
       if (backend == TURBO_FLOW_EXPR_MIR_INTERP) {
         benchmark("expr=typed-ir nodes=fields-arithmetic-logic backend=mir-interp evaluate",
                   FLOW_BENCH_EXPR_EVAL_ITERS, 1) {
-          check_equal(turbo_flow_expr_evaluate(expr, &context, &value), TURBO_OK);
+          check_equal(turbo_flow_expr_evaluate(expr, &context, &value), SALTS_OK);
         }
       } else {
         benchmark("expr=typed-ir nodes=fields-arithmetic-logic backend=mir-jit evaluate",
                   FLOW_BENCH_EXPR_EVAL_ITERS, 1) {
-          check_equal(turbo_flow_expr_evaluate(expr, &context, &value), TURBO_OK);
+          check_equal(turbo_flow_expr_evaluate(expr, &context, &value), SALTS_OK);
         }
       }
       check_equal(value.type, TURBO_FLOW_EXPR_TYPE_BOOL);
@@ -1355,7 +1355,7 @@ spec("Turbo Flow Bench") {
                       1u) {
           decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
           check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
-                       TURBO_OK);
+                       SALTS_OK);
         }
         check_equal(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
         turbo_flow_security_realm_destroy(realm);

@@ -1,6 +1,6 @@
 #include "flow_protocol_plugin_support.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -29,21 +29,21 @@ static int flow_mqtt_sn_header(
   size_t declared_size;
   if (!frame || !frame->data || !type_offset || !type ||
       frame->data_size < 2u)
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   if (frame->data[0] == 1u) {
-    if (frame->data_size < 4u) return TURBO_EPROTO;
+    if (frame->data_size < 4u) return SALTS_EPROTO;
     declared_size = ((size_t)frame->data[1] << 8u) | frame->data[2];
     *type_offset = 3u;
-    if (declared_size < 256u) return TURBO_EPROTO;
+    if (declared_size < 256u) return SALTS_EPROTO;
   } else {
     declared_size = frame->data[0];
     *type_offset = 1u;
   }
   if (declared_size != frame->data_size ||
       *type_offset >= frame->data_size)
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   *type = frame->data[*type_offset];
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_mqtt_sn_inspect(
@@ -56,8 +56,8 @@ static int flow_mqtt_sn_inspect(
   (void)ctx;
   (void)configured_version;
   if (!metadata ||
-      flow_mqtt_sn_header(frame, &type_offset, &type) != TURBO_OK)
-    return TURBO_EPROTO;
+      flow_mqtt_sn_header(frame, &type_offset, &type) != SALTS_OK)
+    return SALTS_EPROTO;
   switch (type) {
   case 0x04u:
     operation = "connect";
@@ -79,77 +79,77 @@ static int flow_mqtt_sn_inspect(
     break;
   case 0x0au:
     operation = "register";
-    if (frame->data_size < type_offset + 5u) return TURBO_EPROTO;
+    if (frame->data_size < type_offset + 5u) return SALTS_EPROTO;
     metadata->sequence =
         ((uint64_t)frame->data[type_offset + 3u] << 8u) |
         frame->data[type_offset + 4u];
     break;
   case 0x0bu:
     operation = "register-ack";
-    if (frame->data_size != type_offset + 6u) return TURBO_EPROTO;
+    if (frame->data_size != type_offset + 6u) return SALTS_EPROTO;
     metadata->sequence =
         ((uint64_t)frame->data[type_offset + 3u] << 8u) |
         frame->data[type_offset + 4u];
     break;
   case 0x0cu:
     operation = "publish";
-    if (frame->data_size < type_offset + 6u) return TURBO_EPROTO;
+    if (frame->data_size < type_offset + 6u) return SALTS_EPROTO;
     metadata->sequence =
         ((uint64_t)frame->data[type_offset + 4u] << 8u) |
         frame->data[type_offset + 5u];
     break;
   case 0x0du:
     operation = "puback";
-    if (frame->data_size != type_offset + 6u) return TURBO_EPROTO;
+    if (frame->data_size != type_offset + 6u) return SALTS_EPROTO;
     metadata->sequence =
         ((uint64_t)frame->data[type_offset + 3u] << 8u) |
         frame->data[type_offset + 4u];
     break;
   case 0x0eu:
     operation = "pubcomp";
-    if (frame->data_size != type_offset + 3u) return TURBO_EPROTO;
+    if (frame->data_size != type_offset + 3u) return SALTS_EPROTO;
     metadata->sequence =
         ((uint64_t)frame->data[type_offset + 1u] << 8u) |
         frame->data[type_offset + 2u];
     break;
   case 0x0fu:
     operation = "pubrec";
-    if (frame->data_size != type_offset + 3u) return TURBO_EPROTO;
+    if (frame->data_size != type_offset + 3u) return SALTS_EPROTO;
     metadata->sequence =
         ((uint64_t)frame->data[type_offset + 1u] << 8u) |
         frame->data[type_offset + 2u];
     break;
   case 0x10u:
     operation = "pubrel";
-    if (frame->data_size != type_offset + 3u) return TURBO_EPROTO;
+    if (frame->data_size != type_offset + 3u) return SALTS_EPROTO;
     metadata->sequence =
         ((uint64_t)frame->data[type_offset + 1u] << 8u) |
         frame->data[type_offset + 2u];
     break;
   case 0x12u:
     operation = "subscribe";
-    if (frame->data_size < type_offset + 5u) return TURBO_EPROTO;
+    if (frame->data_size < type_offset + 5u) return SALTS_EPROTO;
     metadata->sequence =
         ((uint64_t)frame->data[type_offset + 2u] << 8u) |
         frame->data[type_offset + 3u];
     break;
   case 0x13u:
     operation = "suback";
-    if (frame->data_size != type_offset + 7u) return TURBO_EPROTO;
+    if (frame->data_size != type_offset + 7u) return SALTS_EPROTO;
     metadata->sequence =
         ((uint64_t)frame->data[type_offset + 4u] << 8u) |
         frame->data[type_offset + 5u];
     break;
   case 0x14u:
     operation = "unsubscribe";
-    if (frame->data_size < type_offset + 5u) return TURBO_EPROTO;
+    if (frame->data_size < type_offset + 5u) return SALTS_EPROTO;
     metadata->sequence =
         ((uint64_t)frame->data[type_offset + 2u] << 8u) |
         frame->data[type_offset + 3u];
     break;
   case 0x15u:
     operation = "unsuback";
-    if (frame->data_size != type_offset + 3u) return TURBO_EPROTO;
+    if (frame->data_size != type_offset + 3u) return SALTS_EPROTO;
     metadata->sequence =
         ((uint64_t)frame->data[type_offset + 1u] << 8u) |
         frame->data[type_offset + 2u];
@@ -189,11 +189,11 @@ static int flow_mqtt_sn_inspect(
 }
 
 static uint8_t flow_mqtt_sn_return_code(int status) {
-  if (status == TURBO_OK) return 0u;
-  if (status == TURBO_EBUSY || status == TURBO_ENOSPC ||
-      status == TURBO_ENOBUFS)
+  if (status == SALTS_OK) return 0u;
+  if (status == SALTS_EBUSY || status == SALTS_ENOSPC ||
+      status == SALTS_ENOBUFS)
     return 1u;
-  if (status == TURBO_ENOTSUP) return 3u;
+  if (status == SALTS_ENOTSUP) return 3u;
   return 2u;
 }
 
@@ -208,14 +208,14 @@ static int flow_mqtt_sn_reply(
   uint8_t flags;
   (void)configured_version;
   if (!ctx || !output || !output->data ||
-      flow_mqtt_sn_header(request, &type_offset, &type) != TURBO_OK)
-    return TURBO_EINVAL;
+      flow_mqtt_sn_header(request, &type_offset, &type) != SALTS_OK)
+    return SALTS_EINVAL;
   switch (type) {
   case 0x04u:
     if (request->data_size < type_offset + 6u ||
         request->data[type_offset + 2u] != 1u)
-      return TURBO_EPROTO;
-    if (output->capacity < 3u) return TURBO_EMSGSIZE;
+      return SALTS_EPROTO;
+    if (output->capacity < 3u) return SALTS_EMSGSIZE;
     output->data[0] = 3u;
     output->data[1] =
         (request->data[type_offset + 1u] & UINT8_C(0x08)) != 0u
@@ -225,23 +225,23 @@ static int flow_mqtt_sn_reply(
     output->data_size =
         output->data[1] == UINT8_C(0x06) ? 2u : 3u;
     output->data[0] = (uint8_t)output->data_size;
-    return TURBO_OK;
+    return SALTS_OK;
   case 0x07u:
-    if (output->capacity < 2u) return TURBO_EMSGSIZE;
+    if (output->capacity < 2u) return SALTS_EMSGSIZE;
     output->data[0] = 2u;
     output->data[1] = UINT8_C(0x08);
     output->data_size = 2u;
-    return TURBO_OK;
+    return SALTS_OK;
   case 0x09u:
-    if (output->capacity < 3u) return TURBO_EMSGSIZE;
+    if (output->capacity < 3u) return SALTS_EMSGSIZE;
     output->data[0] = 3u;
     output->data[1] = UINT8_C(0x05);
     output->data[2] = return_code;
     output->data_size = 3u;
-    return TURBO_OK;
+    return SALTS_OK;
   case 0x0au:
-    if (request->data_size < type_offset + 5u) return TURBO_EPROTO;
-    if (output->capacity < 7u) return TURBO_EMSGSIZE;
+    if (request->data_size < type_offset + 5u) return SALTS_EPROTO;
+    if (output->capacity < 7u) return SALTS_EMSGSIZE;
     topic_id = ((uint16_t)request->data[type_offset + 1u] << 8u) |
                request->data[type_offset + 2u];
     if (topic_id == 0u && return_code == 0u) {
@@ -255,48 +255,48 @@ static int flow_mqtt_sn_reply(
     output->data[5] = request->data[type_offset + 4u];
     output->data[6] = return_code;
     output->data_size = 7u;
-    return TURBO_OK;
+    return SALTS_OK;
   case 0x0cu:
-    if (request->data_size < type_offset + 6u) return TURBO_EPROTO;
+    if (request->data_size < type_offset + 6u) return SALTS_EPROTO;
     flags = request->data[type_offset + 1u];
     if (((flags >> 5u) & 0x03u) == 0u && return_code == 0u) {
       output->data_size = 0u;
-      return TURBO_OK;
+      return SALTS_OK;
     }
     if (((flags >> 5u) & 0x03u) == 2u && return_code == 0u) {
-      if (output->capacity < 4u) return TURBO_EMSGSIZE;
+      if (output->capacity < 4u) return SALTS_EMSGSIZE;
       output->data[0] = 4u;
       output->data[1] = UINT8_C(0x0f);
       output->data[2] = request->data[type_offset + 4u];
       output->data[3] = request->data[type_offset + 5u];
       output->data_size = 4u;
-      return TURBO_OK;
+      return SALTS_OK;
     }
-    if (output->capacity < 7u) return TURBO_EMSGSIZE;
+    if (output->capacity < 7u) return SALTS_EMSGSIZE;
     output->data[0] = 7u;
     output->data[1] = UINT8_C(0x0d);
     memcpy(output->data + 2u, request->data + type_offset + 2u, 4u);
     output->data[6] = return_code;
     output->data_size = 7u;
-    return TURBO_OK;
+    return SALTS_OK;
   case 0x10u:
-    if (request->data_size != type_offset + 3u) return TURBO_EPROTO;
-    if (output->capacity < 4u) return TURBO_EMSGSIZE;
+    if (request->data_size != type_offset + 3u) return SALTS_EPROTO;
+    if (output->capacity < 4u) return SALTS_EMSGSIZE;
     output->data[0] = 4u;
     output->data[1] = UINT8_C(0x0e);
     output->data[2] = request->data[type_offset + 1u];
     output->data[3] = request->data[type_offset + 2u];
     output->data_size = 4u;
-    return TURBO_OK;
+    return SALTS_OK;
   case 0x12u:
-    if (request->data_size < type_offset + 5u) return TURBO_EPROTO;
-    if (output->capacity < 8u) return TURBO_EMSGSIZE;
+    if (request->data_size < type_offset + 5u) return SALTS_EPROTO;
+    if (output->capacity < 8u) return SALTS_EMSGSIZE;
     flags = request->data[type_offset + 1u];
     topic_id = flow_mqtt_sn_next_topic_id((atomic_uint *)ctx);
     if ((flags & 0x03u) != 0u && request->data_size >= type_offset + 6u)
       topic_id = ((uint16_t)request->data[type_offset + 4u] << 8u) |
                  request->data[type_offset + 5u];
-    if (topic_id == 0u || topic_id == UINT16_MAX) return TURBO_ERANGE;
+    if (topic_id == 0u || topic_id == UINT16_MAX) return SALTS_ERANGE;
     output->data[0] = 8u;
     output->data[1] = UINT8_C(0x13);
     output->data[2] = flags & UINT8_C(0x60);
@@ -306,52 +306,52 @@ static int flow_mqtt_sn_reply(
     output->data[6] = request->data[type_offset + 3u];
     output->data[7] = return_code;
     output->data_size = 8u;
-    return TURBO_OK;
+    return SALTS_OK;
   case 0x14u:
-    if (request->data_size < type_offset + 5u) return TURBO_EPROTO;
-    if (output->capacity < 4u) return TURBO_EMSGSIZE;
+    if (request->data_size < type_offset + 5u) return SALTS_EPROTO;
+    if (output->capacity < 4u) return SALTS_EMSGSIZE;
     output->data[0] = 4u;
     output->data[1] = UINT8_C(0x15);
     output->data[2] = request->data[type_offset + 2u];
     output->data[3] = request->data[type_offset + 3u];
     output->data_size = 4u;
-    return TURBO_OK;
+    return SALTS_OK;
   case 0x16u:
-    if (output->capacity < 2u) return TURBO_EMSGSIZE;
+    if (output->capacity < 2u) return SALTS_EMSGSIZE;
     output->data[0] = 2u;
     output->data[1] = UINT8_C(0x17);
     output->data_size = 2u;
-    return TURBO_OK;
+    return SALTS_OK;
   case 0x18u:
-    if (output->capacity < 2u) return TURBO_EMSGSIZE;
+    if (output->capacity < 2u) return SALTS_EMSGSIZE;
     output->data[0] = 2u;
     output->data[1] = UINT8_C(0x18);
     output->data_size = 2u;
-    return TURBO_OK;
+    return SALTS_OK;
   case 0x1au:
   case 0x1cu:
-    if (output->capacity < 3u) return TURBO_EMSGSIZE;
+    if (output->capacity < 3u) return SALTS_EMSGSIZE;
     output->data[0] = 3u;
     output->data[1] =
         type == UINT8_C(0x1a) ? UINT8_C(0x1b) : UINT8_C(0x1d);
     output->data[2] = return_code;
     output->data_size = 3u;
-    return TURBO_OK;
+    return SALTS_OK;
   default:
     output->data_size = 0u;
-    return TURBO_OK;
+    return SALTS_OK;
   }
 }
 
 static int flow_mqtt_sn_topic_id(const char *text, uint16_t *out) {
   char *end = NULL;
   unsigned long value;
-  if (!text || !text[0] || !out) return TURBO_EINVAL;
+  if (!text || !text[0] || !out) return SALTS_EINVAL;
   value = strtoul(text, &end, 10);
   if (!end || *end != '\0' || value == 0ul || value >= UINT16_MAX)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   *out = (uint16_t)value;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_mqtt_sn_encode(
@@ -363,15 +363,15 @@ static int flow_mqtt_sn_encode(
   size_t frame_size;
   (void)ctx;
   (void)configured_version;
-  if (!command || !output || !output->data) return TURBO_EINVAL;
+  if (!command || !output || !output->data) return SALTS_EINVAL;
   if (strcmp(command->operation, "publish") == 0) {
-    if (flow_mqtt_sn_topic_id(command->resource, &topic_id) != TURBO_OK ||
+    if (flow_mqtt_sn_topic_id(command->resource, &topic_id) != SALTS_OK ||
         command->sequence == 0u || command->sequence > UINT16_MAX)
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     message_id = (uint16_t)command->sequence;
     frame_size = 7u + command->payload_size;
     if (frame_size > UINT8_MAX || frame_size > output->capacity)
-      return TURBO_EMSGSIZE;
+      return SALTS_EMSGSIZE;
     output->data[0] = (uint8_t)frame_size;
     output->data[1] = UINT8_C(0x0c);
     output->data[2] = UINT8_C(0x20); /* QoS 1, normal topic id */
@@ -382,19 +382,19 @@ static int flow_mqtt_sn_encode(
     if (command->payload_size > 0u)
       memcpy(output->data + 7u, command->payload, command->payload_size);
     output->data_size = frame_size;
-    return TURBO_OK;
+    return SALTS_OK;
   }
   if (strcmp(command->operation, "pingreq") == 0 ||
       strcmp(command->operation, "disconnect") == 0) {
-    if (output->capacity < 2u) return TURBO_EMSGSIZE;
+    if (output->capacity < 2u) return SALTS_EMSGSIZE;
     output->data[0] = 2u;
     output->data[1] =
         strcmp(command->operation, "pingreq") == 0 ? UINT8_C(0x16)
                                                     : UINT8_C(0x18);
     output->data_size = 2u;
-    return TURBO_OK;
+    return SALTS_OK;
   }
-  return TURBO_ENOTSUP;
+  return SALTS_ENOTSUP;
 }
 
 static const char *const FLOW_MQTT_SN_VERSIONS[] = {"1.2"};

@@ -84,7 +84,7 @@ typedef struct turbo_flow_codec_csv_split_config_s {
  *
  * The current turbo_flow stage contract is one input message to one downstream
  * message, so payloads containing more than one complete frame return
- * TURBO_ENOTSUP instead of silently dropping trailing records.
+ * SALTS_ENOTSUP instead of silently dropping trailing records.
  */
 TURBO_FLOW_C_API int turbo_flow_codec_register_line_adapter(turbo_flow_t *flow, const char *name,
                                                      const turbo_flow_codec_line_config_t *config);
@@ -93,7 +93,7 @@ TURBO_FLOW_C_API int turbo_flow_codec_register_line_adapter(turbo_flow_t *flow, 
  * Register a length-prefixed framing adapter for DSL `stage <name> adapter "<adapter>"`.
  *
  * The adapter strips a single configured length prefix and replaces the payload
- * with that one frame body. Partial frames return TURBO_EPROTO.
+ * with that one frame body. Partial frames return SALTS_EPROTO.
  */
 TURBO_FLOW_C_API int
 turbo_flow_codec_register_length_adapter(turbo_flow_t *flow, const char *name,
@@ -118,7 +118,7 @@ turbo_flow_codec_register_databind_adapter(turbo_flow_t *flow, const char *name,
  *
  * Every parsed data row is normalized to a two-line CSV payload containing the
  * original header and that row, then published through `output_source`. The
- * current TurboUtils CSV DOM accepts comma delimiters and double-quote escaping.
+ * current Salts DataBind CSV DOM accepts comma delimiters and double-quote escaping.
  * Emission is ordered but non-atomic: when publication fails, the already
  * published prefix remains committed and the input operation returns that error.
  */

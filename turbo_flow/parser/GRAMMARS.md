@@ -147,9 +147,9 @@ use
 
 `inline`, `thread`, and `coro` are the only executor keywords. The removed
 spellings `socket`, `io`, `custom`, `threadpool`, `thread_pool`, `coro_pool`,
-`coronet`, and `socks` are not reserved and are rejected after `exec` as unknown
-executor names. Network placement belongs to an adapter owner and is not an
-executor class.
+former I/O placement names are not reserved and are rejected after `exec` as
+unknown executor names. Network placement belongs to an adapter owner and is
+not an executor class.
 
 ## Top-Level Grammar
 
@@ -232,13 +232,13 @@ bound to payload graph nodes.
 The registered operation runtime contract is also checked against DSL execution
 options. A bounded operation requires a worker stage with the same capacity.
 Explicit operation contracts support blocking, fail-fast, and drop-newest
-backpressure; drop-oldest returns `TURBO_ENOTSUP` because an active sequence
+backpressure; drop-oldest returns `SALTS_ENOTSUP` because an active sequence
 cannot be reclaimed safely. Preserve-input worker operations require `reorder`;
 reject/retry error modes require a reject edge or retry policy. Operation
 execution deadlines are enforced by the selected stage runtime; source deadlines
 remain unsupported until an adapter owns a per-message contract. Settlement
 requirements must be supported by the operation and an explicitly registered
-settlement owner, otherwise compile returns `TURBO_ENOTSUP`. Truncated operation
+settlement owner, otherwise compile returns `SALTS_ENOTSUP`. Truncated operation
 descriptors are rejected, so a worker node with an explicit operation must
 register the complete current bounded contract. A worker without an explicit
 binding receives a concrete bounded/block core operation with the node's exact
@@ -264,8 +264,8 @@ attempt.
 `reorder capacity N timeout MS` creates an explicit ordered boundary. `N` must
 be between 1 and 1048576 and `MS` between 1 and 3600000. Executions arriving
 after a missing sequence wait at the boundary; capacity overflow fails with
-`TURBO_ENOSPC`, a missing sequence fails with `TURBO_ETIMEDOUT`, and stop wakes
-waiters with `TURBO_ESHUTDOWN`. An unordered worker/thread branch may enter an
+`SALTS_ENOSPC`, a missing sequence fails with `SALTS_ETIMEDOUT`, and stop wakes
+waiters with `SALTS_ESHUTDOWN`. An unordered worker/thread branch may enter an
 ordered fan-in only after crossing such a boundary.
 
 ## Executor Grammar

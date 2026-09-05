@@ -249,8 +249,8 @@ typedef struct turbo_flow_module_descriptor_s {
 /**
  * Register one immutable primitive contract before compile.
  *
- * Returns TURBO_OK, TURBO_EINVAL for an invalid descriptor, TURBO_EALREADY for
- * a duplicate name, TURBO_EBUSY after compile/start, or TURBO_ENOMEM.
+ * Returns SALTS_OK, SALTS_EINVAL for an invalid descriptor, SALTS_EALREADY for
+ * a duplicate name, SALTS_EBUSY after compile/start, or SALTS_ENOMEM.
  */
 TURBO_FLOW_C_API int turbo_flow_register_primitive(turbo_flow_t *flow,
                                             const turbo_flow_primitive_descriptor_t *descriptor);
@@ -271,7 +271,7 @@ TURBO_FLOW_C_API int turbo_flow_register_operation(turbo_flow_t *flow,
  *
  * Exported operation names and dependencies are validated against registrations
  * already present in `flow`. One operation has one module owner. Returns
- * TURBO_ENOENT for a missing export/dependency and TURBO_EPROTO for an
+ * SALTS_ENOENT for a missing export/dependency and SALTS_EPROTO for an
  * incompatible dependency contract, in addition to the normal registration
  * errors.
  */

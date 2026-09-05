@@ -1,6 +1,6 @@
 #include "tinytest.h"
 #include "turbo_flow.h"
-#include "turbo_thread.h"
+#include "salts_thread.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -80,9 +80,9 @@ static turbo_flow_operation_descriptor_t keyed_operation_descriptor(const char *
 
 static int keyed_select_id(const turbo_flow_msg_t *message, vstr *key, void *ctx) {
   (void)ctx;
-  if (!message || !key) return TURBO_EINVAL;
+  if (!message || !key) return SALTS_EINVAL;
   *key = vstr_from_buf((const char *)&message->id, sizeof(message->id));
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int keyed_count_stage(turbo_flow_msg_t *message, turbo_flow_keyed_state_t *state,
@@ -92,33 +92,33 @@ static int keyed_count_stage(turbo_flow_msg_t *message, turbo_flow_keyed_state_t
   uint64_t count = 0u;
   int rc = turbo_flow_keyed_state_get(state, &value, NULL);
 
-  if (rc == TURBO_OK) {
-    if (value.len != sizeof(count)) return TURBO_EPROTO;
+  if (rc == SALTS_OK) {
+    if (value.len != sizeof(count)) return SALTS_EPROTO;
     memcpy(&count, value.data, sizeof(count));
-  } else if (rc != TURBO_ENOENT) {
+  } else if (rc != SALTS_ENOENT) {
     return rc;
   }
   count += 1u;
   message->type = (uint32_t)count;
   rc = turbo_flow_keyed_state_put(state, vstr_from_buf((const char *)&count, sizeof(count)));
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   atomic_fetch_add_explicit(&probe->callback_count, 1u, memory_order_relaxed);
   if (probe->synchronize_callbacks) {
     atomic_fetch_add_explicit(&probe->barrier_count, 1u, memory_order_acq_rel);
     while (atomic_load_explicit(&probe->barrier_count, memory_order_acquire) < 2u) {
-      turbo_thread_yield();
+      salts_thread_yield();
     }
   }
-  return probe->fail_after_put ? TURBO_EIO : TURBO_OK;
+  return probe->fail_after_put ? SALTS_EIO : SALTS_OK;
 }
 
 static int keyed_sink(turbo_flow_msg_t *message, void *ctx) {
   keyed_probe_t *probe = (keyed_probe_t *)ctx;
   unsigned int index = atomic_fetch_add_explicit(&probe->sink_count, 1u, memory_order_relaxed);
-  if (index >= sizeof(probe->sink_ids) / sizeof(probe->sink_ids[0])) return TURBO_ENOSPC;
+  if (index >= sizeof(probe->sink_ids) / sizeof(probe->sink_ids[0])) return SALTS_ENOSPC;
   probe->sink_ids[index] = message->id;
   probe->sink_values[index] = message->type;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int keyed_window_stage(const turbo_flow_msg_t *message,
@@ -129,10 +129,10 @@ static int keyed_window_stage(const turbo_flow_msg_t *message,
   uint64_t count = 0u;
   int rc = turbo_flow_keyed_state_get(state, &value, NULL);
 
-  if (rc == TURBO_OK) {
-    if (value.len != sizeof(count)) return TURBO_EPROTO;
+  if (rc == SALTS_OK) {
+    if (value.len != sizeof(count)) return SALTS_EPROTO;
     memcpy(&count, value.data, sizeof(count));
-  } else if (rc != TURBO_ENOENT) {
+  } else if (rc != SALTS_ENOENT) {
     return rc;
   }
   count += 1u;
@@ -141,8 +141,8 @@ static int keyed_window_stage(const turbo_flow_msg_t *message,
         state, vstr_from_buf((const char *)&count, sizeof(count)));
   }
   rc = turbo_flow_keyed_state_delete(state);
-  if (rc == TURBO_ENOENT) rc = TURBO_OK;
-  if (rc != TURBO_OK) return rc;
+  if (rc == SALTS_ENOENT) rc = SALTS_OK;
+  if (rc != SALTS_OK) return rc;
   for (uint32_t output_index = 0u; output_index < probe->emit_count; ++output_index) {
     turbo_flow_msg_t output;
     turbo_flow_msg_init(&output);
@@ -150,24 +150,24 @@ static int keyed_window_stage(const turbo_flow_msg_t *message,
     output.type = (uint32_t)count;
     rc = turbo_flow_emitter_emit_move(emitter, &output);
     turbo_flow_msg_cleanup(&output);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
   if (probe->synchronize_callbacks) {
     atomic_fetch_add_explicit(&probe->barrier_count, 1u, memory_order_acq_rel);
     while (atomic_load_explicit(&probe->barrier_count, memory_order_acquire) < 2u) {
-      turbo_thread_yield();
+      salts_thread_yield();
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int keyed_window_sink(turbo_flow_msg_t *message, void *ctx) {
   keyed_window_probe_t *probe = (keyed_window_probe_t *)ctx;
   unsigned int index = atomic_fetch_add_explicit(&probe->sink_count, 1u, memory_order_relaxed);
-  if (index >= sizeof(probe->sink_ids) / sizeof(probe->sink_ids[0])) return TURBO_ENOSPC;
+  if (index >= sizeof(probe->sink_ids) / sizeof(probe->sink_ids[0])) return SALTS_ENOSPC;
   probe->sink_ids[index] = message->id;
   probe->sink_values[index] = message->type;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int event_window_accumulate(const turbo_flow_msg_t *message,
@@ -177,7 +177,7 @@ static int event_window_accumulate(const turbo_flow_msg_t *message,
   uint64_t count = 0u;
   (void)message;
   if (window->aggregate.len > 0u) {
-    if (window->aggregate.len != sizeof(count)) return TURBO_EPROTO;
+    if (window->aggregate.len != sizeof(count)) return SALTS_EPROTO;
     memcpy(&count, window->aggregate.data, sizeof(count));
   }
   count += 1u;
@@ -185,15 +185,15 @@ static int event_window_accumulate(const turbo_flow_msg_t *message,
   {
     int rc = turbo_flow_keyed_state_put(
         state, vstr_from_buf((const char *)&count, sizeof(count)));
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
   if (probe->synchronize_event) {
     atomic_store_explicit(&probe->event_entered, 1u, memory_order_release);
     while (!atomic_load_explicit(&probe->event_release, memory_order_acquire)) {
-      turbo_thread_yield();
+      salts_thread_yield();
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int event_window_close(const turbo_flow_event_time_window_t *window,
@@ -204,9 +204,9 @@ static int event_window_close(const turbo_flow_event_time_window_t *window,
   int rc;
 
   atomic_fetch_add_explicit(&probe->close_count, 1u, memory_order_relaxed);
-  if (probe->fail_close) return TURBO_EIO;
+  if (probe->fail_close) return SALTS_EIO;
   if (window->key.len != sizeof(key) || window->aggregate.len != sizeof(count)) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   memcpy(&key, window->key.data, sizeof(key));
   memcpy(&count, window->aggregate.data, sizeof(count));
@@ -218,19 +218,19 @@ static int event_window_close(const turbo_flow_event_time_window_t *window,
     output.type = (uint32_t)count;
     rc = turbo_flow_emitter_emit_move(emitter, &output);
     turbo_flow_msg_cleanup(&output);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int event_window_sink(turbo_flow_msg_t *message, void *ctx) {
   event_window_probe_t *probe = (event_window_probe_t *)ctx;
   unsigned int index = atomic_fetch_add_explicit(&probe->sink_count, 1u, memory_order_relaxed);
-  if (index >= sizeof(probe->sink_ids) / sizeof(probe->sink_ids[0])) return TURBO_ENOSPC;
+  if (index >= sizeof(probe->sink_ids) / sizeof(probe->sink_ids[0])) return SALTS_ENOSPC;
   probe->sink_ids[index] = message->id;
   probe->sink_timestamps[index] = message->ts_ns;
   probe->sink_values[index] = message->type;
-  return probe->fail_sink ? TURBO_EIO : TURBO_OK;
+  return probe->fail_sink ? SALTS_EIO : SALTS_OK;
 }
 
 static void event_window_publish_thread(void *ctx) {
@@ -270,13 +270,13 @@ static int register_keyed_graph(turbo_flow_t *flow, turbo_flow_keyed_state_store
   provider.ctx = probe;
   provider.store = store;
   rc = turbo_flow_register_operation(flow, &input);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_operation(flow, &count);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_keyed_operation_provider(flow, &provider);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_stage_ex(flow, "sink", keyed_sink, probe, NULL);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   return turbo_flow_parse_string(flow, dsl, strlen(dsl));
 }
 
@@ -302,13 +302,13 @@ static int register_keyed_window_graph(turbo_flow_t *flow,
   provider.store = store;
   provider.max_outputs = max_outputs;
   rc = turbo_flow_register_operation(flow, &input);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_operation(flow, &window);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_keyed_emitting_operation_provider(flow, &provider);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_stage_ex(flow, "sink", keyed_window_sink, probe, NULL);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   return turbo_flow_parse_string(flow, dsl, strlen(dsl));
 }
 
@@ -335,13 +335,13 @@ static int register_event_window_graph(turbo_flow_t *flow,
   provider.store = store;
   provider.max_outputs = max_outputs;
   rc = turbo_flow_register_operation(flow, &input);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_operation(flow, &window);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_event_time_window_provider(flow, &provider);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_stage_ex(flow, "sink", event_window_sink, probe, NULL);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   return turbo_flow_parse_string(flow, dsl, strlen(dsl));
 }
 
@@ -405,23 +405,23 @@ suite("Turbo Flow keyed state") {
     check_not_null(flow);
     check_equal(register_keyed_graph(flow, store, &probe, TURBO_FLOW_STATE_SCOPE_NODE,
                                       linear_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_id(flow, 1u), TURBO_OK);
-    check_equal(publish_id(flow, 2u), TURBO_OK);
-    check_equal(publish_id(flow, 1u), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_id(flow, 1u), SALTS_OK);
+    check_equal(publish_id(flow, 2u), SALTS_OK);
+    check_equal(publish_id(flow, 1u), SALTS_OK);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 3u);
     check_equal(probe.sink_values[0], 1u);
     check_equal(probe.sink_values[1], 1u);
     check_equal(probe.sink_values[2], 2u);
     check_equal(turbo_flow_keyed_state_store_size(store), 2u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_keyed_state_store_size(store), 0u);
-    check_equal(publish_id(flow, 1u), TURBO_OK);
+    check_equal(publish_id(flow, 1u), SALTS_OK);
     check_equal(probe.sink_values[3], 1u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_keyed_state_store_destroy(store);
   }
@@ -436,17 +436,17 @@ suite("Turbo Flow keyed state") {
     check_not_null(flow);
     check_equal(register_keyed_graph(flow, store, &probe, TURBO_FLOW_STATE_SCOPE_NODE,
                                       linear_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_id(flow, 7u), TURBO_EIO);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_id(flow, 7u), SALTS_EIO);
     check_equal(turbo_flow_keyed_state_store_size(store), 0u);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 0u);
     probe.fail_after_put = 0;
-    check_equal(publish_id(flow, 7u), TURBO_OK);
+    check_equal(publish_id(flow, 7u), SALTS_OK);
     check_equal(probe.sink_values[0], 1u);
     check_equal(turbo_flow_keyed_state_store_size(store), 1u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_keyed_state_store_destroy(store);
   }
@@ -460,18 +460,18 @@ suite("Turbo Flow keyed state") {
     check_not_null(flow);
     check_equal(register_keyed_graph(flow, store, &probe, TURBO_FLOW_STATE_SCOPE_NODE,
                                       linear_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_id(flow, 1u), TURBO_OK);
-    check_equal(publish_id(flow, 2u), TURBO_ENOSPC);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_id(flow, 1u), SALTS_OK);
+    check_equal(publish_id(flow, 2u), SALTS_ENOSPC);
     check_equal(turbo_flow_keyed_state_store_size(store), 1u);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 1u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_id(flow, 2u), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_id(flow, 2u), SALTS_OK);
     check_equal(turbo_flow_keyed_state_store_size(store), 1u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_keyed_state_store_destroy(store);
   }
@@ -481,7 +481,7 @@ suite("Turbo Flow keyed state") {
     turbo_flow_t *flow = turbo_flow_create();
     keyed_probe_t probe;
     keyed_publish_t publishes[2];
-    turbo_thread_t threads[2] = {NULL, NULL};
+    salts_thread_t threads[2] = {NULL, NULL};
     int first_status;
     int second_status;
     memset(&probe, 0, sizeof(probe));
@@ -490,29 +490,29 @@ suite("Turbo Flow keyed state") {
     check_not_null(flow);
     check_equal(register_keyed_graph(flow, store, &probe, TURBO_FLOW_STATE_SCOPE_NODE,
                                       linear_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     for (size_t index = 0u; index < 2u; ++index) {
       publishes[index].flow = flow;
       publishes[index].id = 9u;
-      atomic_init(&publishes[index].status, TURBO_EIO);
-      check_equal(turbo_thread_create(&threads[index], keyed_publish_thread, &publishes[index]),
-                   TURBO_OK);
+      atomic_init(&publishes[index].status, SALTS_EIO);
+      check_equal(salts_thread_create(&threads[index], keyed_publish_thread, &publishes[index]),
+                   SALTS_OK);
     }
     for (size_t index = 0u; index < 2u; ++index) {
-      check_equal(turbo_thread_join(&threads[index]), TURBO_OK);
+      check_equal(salts_thread_join(&threads[index]), SALTS_OK);
     }
     first_status = atomic_load_explicit(&publishes[0].status, memory_order_acquire);
     second_status = atomic_load_explicit(&publishes[1].status, memory_order_acquire);
-    check_true((first_status == TURBO_OK && second_status == TURBO_EBUSY) ||
-               (first_status == TURBO_EBUSY && second_status == TURBO_OK));
+    check_true((first_status == SALTS_OK && second_status == SALTS_EBUSY) ||
+               (first_status == SALTS_EBUSY && second_status == SALTS_OK));
     check_equal(turbo_flow_keyed_state_store_size(store), 1u);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 1u);
     probe.synchronize_callbacks = 0;
-    check_equal(publish_id(flow, 9u), TURBO_OK);
+    check_equal(publish_id(flow, 9u), SALTS_OK);
     check_equal(probe.sink_values[1], 2u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_keyed_state_store_destroy(store);
   }
@@ -535,13 +535,13 @@ suite("Turbo Flow keyed state") {
     memset(&duplicate_probe, 0, sizeof(duplicate_probe));
     check_equal(register_keyed_graph(scope_flow, scope_store, &scope_probe,
                                       TURBO_FLOW_STATE_SCOPE_PRIVATE, linear_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(scope_flow), TURBO_ENOTSUP);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(scope_flow), SALTS_ENOTSUP);
     check_contains(turbo_flow_last_error(scope_flow)->message, "node-local");
     check_equal(register_keyed_graph(duplicate_flow, duplicate_store, &duplicate_probe,
                                       TURBO_FLOW_STATE_SCOPE_NODE, duplicate_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(duplicate_flow), TURBO_EALREADY);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(duplicate_flow), SALTS_EALREADY);
     check_contains(turbo_flow_last_error(duplicate_flow)->message, "one runtime node");
     turbo_flow_destroy(scope_flow);
     turbo_flow_destroy(duplicate_flow);
@@ -559,17 +559,17 @@ suite("Turbo Flow keyed state") {
     memset(&second_probe, 0, sizeof(second_probe));
     check_equal(register_keyed_graph(first, store, &first_probe, TURBO_FLOW_STATE_SCOPE_NODE,
                                       linear_dsl),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(register_keyed_graph(second, store, &second_probe, TURBO_FLOW_STATE_SCOPE_NODE,
                                       linear_dsl),
-                 TURBO_EALREADY);
+                 SALTS_EALREADY);
     turbo_flow_destroy(first);
     turbo_flow_destroy(second);
 
     second = turbo_flow_create();
     check_equal(register_keyed_graph(second, store, &second_probe, TURBO_FLOW_STATE_SCOPE_NODE,
                                       linear_dsl),
-                 TURBO_OK);
+                 SALTS_OK);
     turbo_flow_destroy(second);
     turbo_flow_keyed_state_store_destroy(store);
   }
@@ -590,22 +590,22 @@ suite("Turbo Flow keyed emitting state") {
     memset(&probe, 0, sizeof(probe));
     probe.window_size = 3u;
     probe.emit_count = 1u;
-    check_equal(register_keyed_window_graph(flow, store, &probe, 1u, window_dsl), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_id(flow, 1u), TURBO_OK);
-    check_equal(publish_id(flow, 2u), TURBO_OK);
-    check_equal(publish_id(flow, 1u), TURBO_OK);
-    check_equal(publish_id(flow, 1u), TURBO_OK);
-    check_equal(publish_id(flow, 2u), TURBO_OK);
-    check_equal(publish_id(flow, 2u), TURBO_OK);
+    check_equal(register_keyed_window_graph(flow, store, &probe, 1u, window_dsl), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_id(flow, 1u), SALTS_OK);
+    check_equal(publish_id(flow, 2u), SALTS_OK);
+    check_equal(publish_id(flow, 1u), SALTS_OK);
+    check_equal(publish_id(flow, 1u), SALTS_OK);
+    check_equal(publish_id(flow, 2u), SALTS_OK);
+    check_equal(publish_id(flow, 2u), SALTS_OK);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 2u);
     check_equal(probe.sink_ids[0], 1u);
     check_equal(probe.sink_ids[1], 2u);
     check_equal(probe.sink_values[0], 3u);
     check_equal(probe.sink_values[1], 3u);
     check_equal(turbo_flow_keyed_state_store_size(store), 0u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_keyed_state_store_destroy(store);
   }
@@ -617,19 +617,19 @@ suite("Turbo Flow keyed emitting state") {
     memset(&probe, 0, sizeof(probe));
     probe.window_size = 2u;
     probe.emit_count = 2u;
-    check_equal(register_keyed_window_graph(flow, store, &probe, 1u, window_dsl), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_id(flow, 5u), TURBO_OK);
-    check_equal(publish_id(flow, 5u), TURBO_ENOSPC);
+    check_equal(register_keyed_window_graph(flow, store, &probe, 1u, window_dsl), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_id(flow, 5u), SALTS_OK);
+    check_equal(publish_id(flow, 5u), SALTS_ENOSPC);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 0u);
     check_equal(turbo_flow_keyed_state_store_size(store), 1u);
     probe.emit_count = 1u;
-    check_equal(publish_id(flow, 5u), TURBO_OK);
+    check_equal(publish_id(flow, 5u), SALTS_OK);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 1u);
     check_equal(probe.sink_values[0], 2u);
     check_equal(turbo_flow_keyed_state_store_size(store), 0u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_keyed_state_store_destroy(store);
   }
@@ -639,34 +639,34 @@ suite("Turbo Flow keyed emitting state") {
     turbo_flow_t *flow = turbo_flow_create();
     keyed_window_probe_t probe;
     keyed_publish_t publishes[2];
-    turbo_thread_t threads[2] = {NULL, NULL};
+    salts_thread_t threads[2] = {NULL, NULL};
     int first_status;
     int second_status;
     memset(&probe, 0, sizeof(probe));
     probe.window_size = 2u;
     probe.emit_count = 1u;
-    check_equal(register_keyed_window_graph(flow, store, &probe, 1u, window_dsl), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_id(flow, 8u), TURBO_OK);
+    check_equal(register_keyed_window_graph(flow, store, &probe, 1u, window_dsl), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_id(flow, 8u), SALTS_OK);
     probe.synchronize_callbacks = 1;
     for (size_t index = 0u; index < 2u; ++index) {
       publishes[index].flow = flow;
       publishes[index].id = 8u;
-      atomic_init(&publishes[index].status, TURBO_EIO);
-      check_equal(turbo_thread_create(&threads[index], keyed_publish_thread, &publishes[index]),
-                   TURBO_OK);
+      atomic_init(&publishes[index].status, SALTS_EIO);
+      check_equal(salts_thread_create(&threads[index], keyed_publish_thread, &publishes[index]),
+                   SALTS_OK);
     }
     for (size_t index = 0u; index < 2u; ++index) {
-      check_equal(turbo_thread_join(&threads[index]), TURBO_OK);
+      check_equal(salts_thread_join(&threads[index]), SALTS_OK);
     }
     first_status = atomic_load_explicit(&publishes[0].status, memory_order_acquire);
     second_status = atomic_load_explicit(&publishes[1].status, memory_order_acquire);
-    check_true((first_status == TURBO_OK && second_status == TURBO_EBUSY) ||
-               (first_status == TURBO_EBUSY && second_status == TURBO_OK));
+    check_true((first_status == SALTS_OK && second_status == SALTS_EBUSY) ||
+               (first_status == SALTS_EBUSY && second_status == SALTS_OK));
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 1u);
     check_equal(turbo_flow_keyed_state_store_size(store), 0u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_keyed_state_store_destroy(store);
   }
@@ -701,10 +701,10 @@ suite("Turbo Flow event-time tumbling windows") {
     check_null(turbo_flow_event_time_window_store_create(&invalid));
     check_equal(register_event_window_graph(event_flow, keyed_store, &event_probe, 1u,
                                              event_window_dsl),
-                 TURBO_EINVAL);
+                 SALTS_EINVAL);
     check_equal(register_keyed_graph(keyed_flow, event_store, &keyed_probe,
                                       TURBO_FLOW_STATE_SCOPE_NODE, keyed_dsl),
-                 TURBO_EINVAL);
+                 SALTS_EINVAL);
     turbo_flow_destroy(event_flow);
     turbo_flow_destroy(keyed_flow);
     turbo_flow_keyed_state_store_destroy(keyed_store);
@@ -722,18 +722,18 @@ suite("Turbo Flow event-time tumbling windows") {
     check_not_null(store);
     check_not_null(flow);
     check_equal(register_event_window_graph(flow, store, &probe, 1u, event_window_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_event(flow, 2u, 3u), TURBO_OK);
-    check_equal(publish_event(flow, 1u, 8u), TURBO_OK);
-    check_equal(publish_event(flow, 1u, 1u), TURBO_OK);
-    check_equal(publish_event(flow, 1u, 12u), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_event(flow, 2u, 3u), SALTS_OK);
+    check_equal(publish_event(flow, 1u, 8u), SALTS_OK);
+    check_equal(publish_event(flow, 1u, 1u), SALTS_OK);
+    check_equal(publish_event(flow, 1u, 12u), SALTS_OK);
     check_equal(turbo_flow_keyed_state_store_size(store), 3u);
-    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 14u, &closed), TURBO_OK);
+    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 14u, &closed), SALTS_OK);
     check_equal(closed, 0u);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 0u);
-    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 15u, &closed), TURBO_OK);
+    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 15u, &closed), SALTS_OK);
     check_equal(closed, 2u);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 2u);
     check_equal(probe.sink_ids[0], 1u);
@@ -742,18 +742,18 @@ suite("Turbo Flow event-time tumbling windows") {
     check_equal(probe.sink_values[1], 1u);
     check_equal(probe.sink_timestamps[0], 0u);
     check_equal(probe.sink_timestamps[1], 0u);
-    check_equal(publish_event(flow, 3u, 9u), TURBO_ETIMEDOUT);
+    check_equal(publish_event(flow, 3u, 9u), SALTS_ETIMEDOUT);
     check_equal(turbo_flow_keyed_state_store_size(store), 1u);
-    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 25u, &closed), TURBO_OK);
+    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 25u, &closed), SALTS_OK);
     check_equal(closed, 1u);
     check_equal(probe.sink_ids[2], 1u);
     check_equal(probe.sink_timestamps[2], 10u);
     check_equal(probe.sink_values[2], 1u);
     check_equal(turbo_flow_advance_event_time_watermark(flow, store, 24u, &closed),
-                 TURBO_EINVAL);
+                 SALTS_EINVAL);
     check_equal(turbo_flow_event_time_window_watermark(store, &initialized), 25u);
     check_equal(initialized, 1);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_event_time_window_store_destroy(store);
   }
@@ -767,21 +767,21 @@ suite("Turbo Flow event-time tumbling windows") {
     probe.close_emit_count = 1u;
     probe.fail_close = 1;
     check_equal(register_event_window_graph(flow, store, &probe, 1u, event_window_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_event(flow, 7u, 4u), TURBO_OK);
-    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), TURBO_EIO);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_event(flow, 7u, 4u), SALTS_OK);
+    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), SALTS_EIO);
     check_equal(closed, 0u);
     check_equal(turbo_flow_keyed_state_store_size(store), 1u);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 0u);
-    check_equal(publish_event(flow, 7u, 4u), TURBO_ETIMEDOUT);
+    check_equal(publish_event(flow, 7u, 4u), SALTS_ETIMEDOUT);
     probe.fail_close = 0;
-    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), TURBO_OK);
+    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), SALTS_OK);
     check_equal(closed, 1u);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 1u);
     check_equal(turbo_flow_keyed_state_store_size(store), 0u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_event_time_window_store_destroy(store);
   }
@@ -794,20 +794,20 @@ suite("Turbo Flow event-time tumbling windows") {
     memset(&probe, 0, sizeof(probe));
     probe.close_emit_count = 2u;
     check_equal(register_event_window_graph(flow, store, &probe, 1u, event_window_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_event(flow, 4u, 2u), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_event(flow, 4u, 2u), SALTS_OK);
     check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed),
-                 TURBO_ENOSPC);
+                 SALTS_ENOSPC);
     check_equal(closed, 0u);
     check_equal(turbo_flow_keyed_state_store_size(store), 1u);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 0u);
     probe.close_emit_count = 1u;
-    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), TURBO_OK);
+    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), SALTS_OK);
     check_equal(closed, 1u);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 1u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_event_time_window_store_destroy(store);
   }
@@ -817,7 +817,7 @@ suite("Turbo Flow event-time tumbling windows") {
     turbo_flow_t *flow = turbo_flow_create();
     event_window_probe_t probe;
     event_window_publish_t publish;
-    turbo_thread_t thread = NULL;
+    salts_thread_t thread = NULL;
     size_t closed = 0u;
     memset(&probe, 0, sizeof(probe));
     memset(&publish, 0, sizeof(publish));
@@ -826,23 +826,23 @@ suite("Turbo Flow event-time tumbling windows") {
     publish.flow = flow;
     publish.id = 6u;
     publish.timestamp_ns = 2u;
-    atomic_init(&publish.status, TURBO_EIO);
+    atomic_init(&publish.status, SALTS_EIO);
     check_equal(register_event_window_graph(flow, store, &probe, 1u, event_window_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(turbo_thread_create(&thread, event_window_publish_thread, &publish), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(salts_thread_create(&thread, event_window_publish_thread, &publish), SALTS_OK);
     while (!atomic_load_explicit(&probe.event_entered, memory_order_acquire)) {
-      turbo_thread_yield();
+      salts_thread_yield();
     }
-    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), TURBO_OK);
+    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), SALTS_OK);
     check_equal(closed, 0u);
     atomic_store_explicit(&probe.event_release, 1u, memory_order_release);
-    check_equal(turbo_thread_join(&thread), TURBO_OK);
-    check_equal(atomic_load_explicit(&publish.status, memory_order_acquire), TURBO_ETIMEDOUT);
+    check_equal(salts_thread_join(&thread), SALTS_OK);
+    check_equal(atomic_load_explicit(&publish.status, memory_order_acquire), SALTS_ETIMEDOUT);
     check_equal(turbo_flow_keyed_state_store_size(store), 0u);
     check_equal(atomic_load_explicit(&probe.close_count, memory_order_relaxed), 0u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_event_time_window_store_destroy(store);
   }
@@ -856,19 +856,19 @@ suite("Turbo Flow event-time tumbling windows") {
     probe.close_emit_count = 1u;
     probe.fail_sink = 1;
     check_equal(register_event_window_graph(flow, store, &probe, 1u, event_window_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_event(flow, 3u, 5u), TURBO_OK);
-    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), TURBO_EIO);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_event(flow, 3u, 5u), SALTS_OK);
+    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), SALTS_EIO);
     check_equal(closed, 1u);
     check_equal(turbo_flow_keyed_state_store_size(store), 0u);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 1u);
     probe.fail_sink = 0;
-    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), TURBO_OK);
+    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), SALTS_OK);
     check_equal(closed, 0u);
     check_equal(atomic_load_explicit(&probe.sink_count, memory_order_relaxed), 1u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_event_time_window_store_destroy(store);
   }
@@ -882,18 +882,18 @@ suite("Turbo Flow event-time tumbling windows") {
     memset(&probe, 0, sizeof(probe));
     probe.close_emit_count = 1u;
     check_equal(register_event_window_graph(flow, store, &probe, 1u, event_window_dsl),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    check_equal(publish_event(flow, 9u, 3u), TURBO_OK);
-    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), TURBO_OK);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(publish_event(flow, 9u, 3u), SALTS_OK);
+    check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_event_time_window_watermark(store, &initialized), 0u);
     check_equal(initialized, 0);
-    check_equal(publish_event(flow, 9u, 3u), TURBO_OK);
+    check_equal(publish_event(flow, 9u, 3u), SALTS_OK);
     check_equal(turbo_flow_keyed_state_store_size(store), 1u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
     turbo_flow_event_time_window_store_destroy(store);
   }

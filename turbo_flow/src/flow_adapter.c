@@ -35,16 +35,16 @@ int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t 
   const flow_adapter_registration_t *adapter = flow_adapter_for_stage(flow, stage);
   turbo_flow_stage_plan_t view;
 
-  if (!flow || !stage || !msg) return TURBO_EINVAL;
+  if (!flow || !stage || !msg) return SALTS_EINVAL;
   if (!adapter || !adapter->ops.consume) {
-    return flow_set_error_keep_state(flow, TURBO_ENOTSUP, stage->line, stage->column,
+    return flow_set_error_keep_state(flow, SALTS_ENOTSUP, stage->line, stage->column,
                                      "adapter consume callback is not configured");
   }
 
   flow_make_stage_view(stage, &view);
   if (stage->retry.max_attempts > 1u) {
     if (!adapter->ops.consume_retry) {
-      return flow_set_error_keep_state(flow, TURBO_ENOTSUP, stage->line, stage->column,
+      return flow_set_error_keep_state(flow, SALTS_ENOTSUP, stage->line, stage->column,
                                        "adapter retry callback is not configured");
     }
     return adapter->ops.consume_retry(adapter->ctx, flow, &view, msg, &stage->retry);
@@ -78,7 +78,7 @@ void flow_stop_adapters(turbo_flow_t *flow) {
     }
     if (flow->observer_ops.adapter_event) {
       flow->observer_ops.adapter_event(flow->observer_ctx, stage->name, adapter->name,
-                                       TURBO_FLOW_ADAPTER_EVENT_STOP, TURBO_OK);
+                                       TURBO_FLOW_ADAPTER_EVENT_STOP, SALTS_OK);
     }
     {
       turbo_flow_observe_event_t event;
@@ -87,7 +87,7 @@ void flow_stop_adapters(turbo_flow_t *flow) {
       event.stage_name = stage->name;
       event.adapter_name = adapter->name;
       event.operation_name = stage->operation_name;
-      event.status = TURBO_OK;
+      event.status = SALTS_OK;
       event.selected = -1;
       event.edge_kind = -1;
       flow_observer_emit(flow, &event);
@@ -98,9 +98,9 @@ void flow_stop_adapters(turbo_flow_t *flow) {
 }
 
 int flow_start_adapters(turbo_flow_t *flow) {
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
 
-  if (!flow) return TURBO_EINVAL;
+  if (!flow) return SALTS_EINVAL;
   turbo_flow_stl_error(vec_clear(&flow->active_adapters));
 
   for (size_t stage_index = 0; stage_index < vec_size(&flow->stages); ++stage_index) {
@@ -115,14 +115,14 @@ int flow_start_adapters(turbo_flow_t *flow) {
 
     adapter_index = flow_find_adapter(flow, stage->adapter_name);
     if (adapter_index < 0) {
-      rc = flow_set_error_keep_state(flow, TURBO_EINVAL, stage->line, stage->column,
+      rc = flow_set_error_keep_state(flow, SALTS_EINVAL, stage->line, stage->column,
                                      "stage or source adapter is not registered");
       goto fail;
     }
 
     adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, (size_t)adapter_index);
     if (!adapter) {
-      rc = flow_set_error_keep_state(flow, TURBO_EINVAL, stage->line, stage->column,
+      rc = flow_set_error_keep_state(flow, SALTS_EINVAL, stage->line, stage->column,
                                      "adapter registry entry is invalid");
       goto fail;
     }
@@ -146,8 +146,8 @@ int flow_start_adapters(turbo_flow_t *flow) {
         event.edge_kind = -1;
         flow_observer_emit(flow, &event);
       }
-      if (rc != TURBO_OK) {
-        if (flow->last_error.code == TURBO_OK) {
+      if (rc != SALTS_OK) {
+        if (flow->last_error.code == SALTS_OK) {
           (void)flow_set_error_keep_state(flow, rc, stage->line, stage->column,
                                           "adapter start failed");
         }
@@ -159,15 +159,15 @@ int flow_start_adapters(turbo_flow_t *flow) {
       memset(&active, 0, sizeof(active));
       active.stage_index = (uint32_t)stage_index;
       active.adapter_index = (size_t)adapter_index;
-      if (turbo_flow_stl_error(vec_push(&flow->active_adapters, &active)) != TURBO_OK) {
-        rc = flow_set_error_keep_state(flow, TURBO_ENOMEM, stage->line, stage->column,
+      if (turbo_flow_stl_error(vec_push(&flow->active_adapters, &active)) != SALTS_OK) {
+        rc = flow_set_error_keep_state(flow, SALTS_ENOMEM, stage->line, stage->column,
                                        "out of memory");
         goto fail;
       }
     }
   }
 
-  return TURBO_OK;
+  return SALTS_OK;
 
 fail:
   flow_stop_adapters(flow);

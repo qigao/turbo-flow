@@ -9,8 +9,8 @@ spec("flow_compat_boundary") {
     turbo_flow_async_ingress_config_t ingress = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
 
     check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
-                 TURBO_OK);
-    check_equal(turbo_flow_resolved_config_runtime_ingress(config, &ingress), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_resolved_config_runtime_ingress(config, &ingress), SALTS_OK);
     check_equal(ingress.workers, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS);
     turbo_flow_resolved_config_destroy(config);
   }

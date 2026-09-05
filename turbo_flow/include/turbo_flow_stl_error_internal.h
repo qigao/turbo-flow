@@ -1,13 +1,13 @@
 #ifndef TURBO_FLOW_STL_ERROR_INTERNAL_H
 #define TURBO_FLOW_STL_ERROR_INTERNAL_H
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
-#include <turbostl/deque.h>
-#include <turbostl/hash_map.h>
-#include <turbostl/hash_set.h>
-#include <turbostl/status.h>
-#include <turbostl/vec.h>
+#include <cstl/deque.h>
+#include <cstl/hash_map.h>
+#include <cstl/hash_set.h>
+#include <cstl/status.h>
+#include <cstl/vec.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -21,20 +21,20 @@ typedef union turbo_flow_max_align_u {
 static inline int turbo_flow_stl_error(stl_status status) {
   switch (status) {
   case STL_OK:
-    return TURBO_OK;
+    return SALTS_OK;
   case STL_INVALID_ARGUMENT:
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   case STL_OUT_OF_MEMORY:
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   case STL_CAPACITY_EXCEEDED:
-    return TURBO_ENOSPC;
+    return SALTS_ENOSPC;
   case STL_EMPTY:
   case STL_NOT_FOUND:
-    return TURBO_ENOENT;
+    return SALTS_ENOENT;
   case STL_TYPE_MISMATCH:
   case STL_TRAIT_MISSING:
   default:
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
 }
 

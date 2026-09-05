@@ -1,7 +1,7 @@
 #include "turbo_flow_discovery.h"
 
-#include "turbo_error.h"
-#include "turbo_str.h"
+#include "salts_error.h"
+#include "salts_str.h"
 #include "turbo_flow_stl_error_internal.h"
 
 #include <stdlib.h>
@@ -65,7 +65,7 @@ static int flow_discovery_command(turbo_flow_discovery_controller_t *controller,
   command.size = sizeof(command);
   command.kind = kind;
   if (kind == TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT) {
-    if (!target) return TURBO_EINVAL;
+    if (!target) return SALTS_EINVAL;
     command.endpoint.host = target->host;
     command.endpoint.path = target->path;
     command.endpoint.port = target->port;
@@ -108,17 +108,17 @@ static int flow_discovery_find_active_peer(const turbo_flow_discovery_controller
 
 static int flow_discovery_target_set(flow_discovery_target_t *target,
                                      const turbo_flow_discovery_peer_t *peer) {
-  if (!target || target->assigned) return TURBO_EINVAL;
+  if (!target || target->assigned) return SALTS_EINVAL;
   target->peer_id = tstr_dup(peer->peer_id);
   target->host = tstr_dup(peer->host);
   target->path = tstr_dup(peer->path);
   if (!target->peer_id || !target->host || !target->path) {
     flow_discovery_target_cleanup(target);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   target->port = peer->port;
   target->assigned = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_discovery_build_targets(turbo_flow_discovery_controller_t *controller,
@@ -130,26 +130,26 @@ static int flow_discovery_build_targets(turbo_flow_discovery_controller_t *contr
       peer_list->peer_count > slot_count ||
       peer_list->peer_count > TURBO_FLOW_DISCOVERY_MAX_PEERS ||
       (peer_list->peer_count > 0u && !peer_list->peers)) {
-    return peer_list && peer_list->peer_count > slot_count ? TURBO_ENOSPC : TURBO_EINVAL;
+    return peer_list && peer_list->peer_count > slot_count ? SALTS_ENOSPC : SALTS_EINVAL;
   }
   if (turbo_flow_stl_error(vec_init_bytes(targets, sizeof(flow_discovery_target_t),
-                                          _Alignof(flow_discovery_target_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_resize(targets, slot_count)) != TURBO_OK) {
+                                          _Alignof(flow_discovery_target_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_resize(targets, slot_count)) != SALTS_OK) {
     vec_destroy(targets);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   for (size_t i = 0; i < peer_list->peer_count; ++i) {
     const turbo_flow_discovery_peer_t *peer = &peer_list->peers[i];
     int slot_index;
-    if (!flow_discovery_peer_valid(peer)) return TURBO_EINVAL;
+    if (!flow_discovery_peer_valid(peer)) return SALTS_EINVAL;
     for (size_t prior = 0; prior < i; ++prior) {
-      if (strcmp(peer_list->peers[prior].peer_id, peer->peer_id) == 0) return TURBO_EPROTO;
+      if (strcmp(peer_list->peers[prior].peer_id, peer->peer_id) == 0) return SALTS_EPROTO;
     }
     slot_index = flow_discovery_find_active_peer(controller, peer->peer_id);
     if (slot_index >= 0) {
       rc = flow_discovery_target_set(
           (flow_discovery_target_t *)vec_at(targets, (size_t)slot_index), peer);
-      if (rc != TURBO_OK) return rc;
+      if (rc != SALTS_OK) return rc;
     }
   }
   for (size_t i = 0; i < peer_list->peer_count; ++i) {
@@ -177,11 +177,11 @@ static int flow_discovery_build_targets(turbo_flow_discovery_controller_t *contr
         }
       }
     }
-    if (selected == slot_count) return TURBO_ENOSPC;
+    if (selected == slot_count) return SALTS_ENOSPC;
     rc = flow_discovery_target_set((flow_discovery_target_t *)vec_at(targets, selected), peer);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void flow_discovery_targets_cleanup(vec_t *targets) {
@@ -207,7 +207,7 @@ static int flow_discovery_targets_equal(const turbo_flow_discovery_controller_t 
 
 static int flow_discovery_rollback(turbo_flow_discovery_controller_t *controller,
                                    vec_t *targets) {
-  int first_error = TURBO_OK;
+  int first_error = SALTS_OK;
 
   /* Remove commands are applied after every add/replace command. Undo them first. */
   for (size_t i = vec_size(targets); i > 0u; --i) {
@@ -215,10 +215,10 @@ static int flow_discovery_rollback(turbo_flow_discovery_controller_t *controller
         (flow_discovery_target_t *)vec_at(targets, i - 1u);
     flow_discovery_slot_t *slot =
         (flow_discovery_slot_t *)vec_at(&controller->slots, i - 1u);
-    int rc = TURBO_OK;
+    int rc = SALTS_OK;
     if (!target || !slot || target->action != FLOW_DISCOVERY_ACTION_REMOVE) continue;
     rc = flow_discovery_command(controller, slot, TURBO_FLOW_ADAPTER_RESUME, NULL);
-    if (rc != TURBO_OK && first_error == TURBO_OK) first_error = rc;
+    if (rc != SALTS_OK && first_error == SALTS_OK) first_error = rc;
   }
 
   for (size_t i = vec_size(targets); i > 0u; --i) {
@@ -226,7 +226,7 @@ static int flow_discovery_rollback(turbo_flow_discovery_controller_t *controller
         (flow_discovery_target_t *)vec_at(targets, i - 1u);
     flow_discovery_slot_t *slot =
         (flow_discovery_slot_t *)vec_at(&controller->slots, i - 1u);
-    int rc = TURBO_OK;
+    int rc = SALTS_OK;
     if (!target || !slot) continue;
     switch (target->action) {
     case FLOW_DISCOVERY_ACTION_ADD:
@@ -245,7 +245,7 @@ static int flow_discovery_rollback(turbo_flow_discovery_controller_t *controller
     default:
       break;
     }
-    if (rc != TURBO_OK && first_error == TURBO_OK) first_error = rc;
+    if (rc != SALTS_OK && first_error == SALTS_OK) first_error = rc;
   }
   return first_error;
 }
@@ -289,56 +289,56 @@ int turbo_flow_discovery_controller_create(const turbo_flow_discovery_controller
                                            turbo_flow_discovery_controller_t **out) {
   turbo_flow_discovery_controller_t *controller;
   size_t quiesced = 0u;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
   if (out) *out = NULL;
   if (!config || config->size < sizeof(*config) || !out || !config->flow ||
       !config->adapter_names || config->adapter_count == 0u ||
       config->adapter_count > TURBO_FLOW_DISCOVERY_MAX_PEERS ||
       turbo_flow_state(config->flow) != TURBO_FLOW_STATE_STARTED) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   controller = (turbo_flow_discovery_controller_t *)calloc(1, sizeof(*controller));
-  if (!controller) return TURBO_ENOMEM;
+  if (!controller) return SALTS_ENOMEM;
   if (turbo_flow_stl_error(vec_init_bytes(&controller->slots, sizeof(flow_discovery_slot_t),
-                                          _Alignof(flow_discovery_slot_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_reserve(&controller->slots, config->adapter_count)) != TURBO_OK) {
+                                          _Alignof(flow_discovery_slot_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_reserve(&controller->slots, config->adapter_count)) != SALTS_OK) {
     vec_destroy(&controller->slots);
     free(controller);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   controller->flow = config->flow;
   controller->consistent = 1;
   for (size_t i = 0; i < config->adapter_count; ++i) {
     flow_discovery_slot_t slot;
     if (!config->adapter_names[i] || !config->adapter_names[i][0]) {
-      rc = TURBO_EINVAL;
+      rc = SALTS_EINVAL;
       break;
     }
     for (size_t prior = 0; prior < i; ++prior) {
       if (strcmp(config->adapter_names[prior], config->adapter_names[i]) == 0) {
-        rc = TURBO_EPROTO;
+        rc = SALTS_EPROTO;
         break;
       }
     }
-    if (rc != TURBO_OK) break;
+    if (rc != SALTS_OK) break;
     memset(&slot, 0, sizeof(slot));
     slot.adapter_name = tstr_dup(config->adapter_names[i]);
     if (!slot.adapter_name ||
-        turbo_flow_stl_error(vec_push(&controller->slots, &slot)) != TURBO_OK) {
+        turbo_flow_stl_error(vec_push(&controller->slots, &slot)) != SALTS_OK) {
       tstr_freep(&slot.adapter_name);
-      rc = TURBO_ENOMEM;
+      rc = SALTS_ENOMEM;
       break;
     }
   }
-  if (rc == TURBO_OK) {
+  if (rc == SALTS_OK) {
     for (; quiesced < vec_size(&controller->slots); ++quiesced) {
       flow_discovery_slot_t *slot =
           (flow_discovery_slot_t *)vec_at(&controller->slots, quiesced);
       rc = flow_discovery_command(controller, slot, TURBO_FLOW_ADAPTER_QUIESCE, NULL);
-      if (rc != TURBO_OK) break;
+      if (rc != SALTS_OK) break;
     }
   }
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     while (quiesced > 0u) {
       flow_discovery_slot_t *slot =
           (flow_discovery_slot_t *)vec_at(&controller->slots, --quiesced);
@@ -348,7 +348,7 @@ int turbo_flow_discovery_controller_create(const turbo_flow_discovery_controller
     return rc;
   }
   *out = controller;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void turbo_flow_discovery_controller_destroy(turbo_flow_discovery_controller_t *controller) {
@@ -365,22 +365,22 @@ int turbo_flow_discovery_replace_peer_list(turbo_flow_discovery_controller_t *co
                                            turbo_flow_discovery_replace_result_t *result) {
   vec_t targets = {0};
   int rc;
-  int rollback_rc = TURBO_OK;
+  int rollback_rc = SALTS_OK;
   if (!controller || !controller->consistent || !result || result->size < sizeof(*result)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   *result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
   result->version_before = controller->registry_version;
   result->version_after = controller->registry_version;
   rc = flow_discovery_build_targets(controller, peer_list, &targets);
-  if (rc != TURBO_OK) goto done;
+  if (rc != SALTS_OK) goto done;
   if (peer_list->registry_version < controller->registry_version) {
-    rc = TURBO_EALREADY;
+    rc = SALTS_EALREADY;
     goto done;
   }
   if (peer_list->registry_version == controller->registry_version) {
-    rc = flow_discovery_targets_equal(controller, &targets) ? TURBO_OK : TURBO_EPROTO;
-    if (rc == TURBO_OK) result->unchanged = peer_list->peer_count;
+    rc = flow_discovery_targets_equal(controller, &targets) ? SALTS_OK : SALTS_EPROTO;
+    if (rc == SALTS_OK) result->unchanged = peer_list->peer_count;
     goto done;
   }
   for (size_t i = 0; i < vec_size(&targets); ++i) {
@@ -389,11 +389,11 @@ int turbo_flow_discovery_replace_peer_list(turbo_flow_discovery_controller_t *co
     if (!slot || !target || !target->assigned || flow_discovery_slot_endpoint_equal(slot, target))
       continue;
     rc = flow_discovery_command(controller, slot, TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT, target);
-    if (rc != TURBO_OK) goto rollback;
+    if (rc != SALTS_OK) goto rollback;
     target->action = slot->active ? FLOW_DISCOVERY_ACTION_REPLACE : FLOW_DISCOVERY_ACTION_ADD;
     if (!slot->active) {
       rc = flow_discovery_command(controller, slot, TURBO_FLOW_ADAPTER_RESUME, NULL);
-      if (rc != TURBO_OK) goto rollback;
+      if (rc != SALTS_OK) goto rollback;
     }
   }
   for (size_t i = 0; i < vec_size(&targets); ++i) {
@@ -401,24 +401,24 @@ int turbo_flow_discovery_replace_peer_list(turbo_flow_discovery_controller_t *co
     flow_discovery_target_t *target = (flow_discovery_target_t *)vec_at(&targets, i);
     if (!slot || !target || target->assigned || !slot->active) continue;
     rc = flow_discovery_command(controller, slot, TURBO_FLOW_ADAPTER_QUIESCE, NULL);
-    if (rc != TURBO_OK) goto rollback;
+    if (rc != SALTS_OK) goto rollback;
     target->action = FLOW_DISCOVERY_ACTION_REMOVE;
   }
   flow_discovery_commit(controller, &targets, result);
   controller->registry_version = peer_list->registry_version;
   result->version_after = controller->registry_version;
-  rc = TURBO_OK;
+  rc = SALTS_OK;
   goto done;
 
 rollback:
   rollback_rc = flow_discovery_rollback(controller, &targets);
-  if (rollback_rc != TURBO_OK) controller->consistent = 0;
+  if (rollback_rc != SALTS_OK) controller->consistent = 0;
 
 done:
   result->status = rc;
   result->rollback_status = rollback_rc;
   flow_discovery_targets_cleanup(&targets);
-  return rollback_rc == TURBO_OK ? rc : rollback_rc;
+  return rollback_rc == SALTS_OK ? rc : rollback_rc;
 }
 
 int turbo_flow_discovery_poll(turbo_flow_discovery_controller_t *controller,
@@ -432,18 +432,18 @@ int turbo_flow_discovery_poll(turbo_flow_discovery_controller_t *controller,
   int rc;
   if (!controller || !source || source->size < sizeof(*source) || !source->fetch || !result ||
       result->size < sizeof(*result)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   *result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
   result->version_before = controller->registry_version;
   result->version_after = controller->registry_version;
   capacity = vec_size(&controller->slots);
   if (turbo_flow_stl_error(vec_init_bytes(&peers, sizeof(turbo_flow_discovery_peer_t),
-                                          _Alignof(turbo_flow_discovery_peer_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_resize(&peers, capacity)) != TURBO_OK) {
+                                          _Alignof(turbo_flow_discovery_peer_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_resize(&peers, capacity)) != SALTS_OK) {
     vec_destroy(&peers);
-    result->status = TURBO_ENOMEM;
-    return TURBO_ENOMEM;
+    result->status = SALTS_ENOMEM;
+    return SALTS_ENOMEM;
   }
   for (size_t i = 0; i < capacity; ++i) {
     turbo_flow_discovery_peer_t *peer =
@@ -452,15 +452,15 @@ int turbo_flow_discovery_poll(turbo_flow_discovery_controller_t *controller,
   }
   rc = source->fetch(source->ctx, &version,
                      (turbo_flow_discovery_peer_t *)vec_data(&peers), capacity, &count);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     result->status = rc;
     vec_destroy(&peers);
     return rc;
   }
   if (count > capacity) {
-    result->status = TURBO_ENOSPC;
+    result->status = SALTS_ENOSPC;
     vec_destroy(&peers);
-    return TURBO_ENOSPC;
+    return SALTS_ENOSPC;
   }
   peer_list.registry_version = version;
   peer_list.peers = (const turbo_flow_discovery_peer_t *)vec_data_const(&peers);

@@ -103,11 +103,11 @@ static int flow_expr_projection_copy_registration(
   out->schema.schema_text = NULL;
   out->read_field = source->read_field;
   out->ctx = source->ctx;
-  return TURBO_OK;
+  return SALTS_OK;
 
 nomem:
   flow_expr_projection_registration_destroy(out);
-  return TURBO_ENOMEM;
+  return SALTS_ENOMEM;
 }
 
 int turbo_flow_register_expr_projection(
@@ -121,10 +121,10 @@ int turbo_flow_register_expr_projection(
       !flow_expr_projection_schema_valid(registration->projection_schema) ||
       !registration->expr_schema || !registration->expr_schema->fields ||
       registration->expr_schema->field_count == 0u || !registration->read_field) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0u, 0u,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0u, 0u,
                                      "cannot register expression projection after compile");
   }
   for (i = 0; i < vec_size(&flow->expr_projection_registrations); ++i) {
@@ -132,29 +132,29 @@ int turbo_flow_register_expr_projection(
         (const flow_expr_projection_registration_t *)vec_at_const(
             &flow->expr_projection_registrations, i);
     if (flow_expr_projection_schema_equal(&existing->schema, registration->projection_schema)) {
-      return flow_set_error_keep_state(flow, TURBO_EALREADY, 0u, 0u,
+      return flow_set_error_keep_state(flow, SALTS_EALREADY, 0u, 0u,
                                        "duplicate expression projection schema");
     }
   }
   memset(&error, 0, sizeof(error));
   rc = turbo_flow_expr_compile("true", 4u, registration->expr_schema, &validation, &error);
   turbo_flow_expr_destroy(validation);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     return flow_set_error_keep_state(flow, rc, 0u, 0u,
                                      error.message[0] ? error.message
                                                       : "invalid expression projection schema");
   }
   if (!flow_expr_projection_fields_compatible(flow, registration->expr_schema)) {
-    return flow_set_error_keep_state(flow, TURBO_EPROTO, 0u, 0u,
+    return flow_set_error_keep_state(flow, SALTS_EPROTO, 0u, 0u,
                                      "conflicting expression projection field");
   }
   rc = flow_expr_projection_copy_registration(&copy, registration);
-  if (rc != TURBO_OK) return flow_set_error(flow, rc, 0u, 0u, "out of memory");
-  if (turbo_flow_stl_error(vec_push(&flow->expr_projection_registrations, &copy)) != TURBO_OK) {
+  if (rc != SALTS_OK) return flow_set_error(flow, rc, 0u, 0u, "out of memory");
+  if (turbo_flow_stl_error(vec_push(&flow->expr_projection_registrations, &copy)) != SALTS_OK) {
     flow_expr_projection_registration_destroy(&copy);
-    return flow_set_error(flow, TURBO_ENOMEM, 0u, 0u, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0u, 0u, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_expr_projection_schema_fields(
@@ -163,7 +163,7 @@ static int flow_expr_projection_schema_fields(
   size_t capacity = 0u;
   size_t count = 0u;
   size_t registration_index;
-  if (!flow || !fields_out || !count_out) return TURBO_EINVAL;
+  if (!flow || !fields_out || !count_out) return SALTS_EINVAL;
   *fields_out = NULL;
   *count_out = 0u;
   for (registration_index = 0;
@@ -172,12 +172,12 @@ static int flow_expr_projection_schema_fields(
     const flow_expr_projection_registration_t *registration =
         (const flow_expr_projection_registration_t *)vec_at_const(
             &flow->expr_projection_registrations, registration_index);
-    if (registration->field_count > SIZE_MAX - capacity) return TURBO_ERANGE;
+    if (registration->field_count > SIZE_MAX - capacity) return SALTS_ERANGE;
     capacity += registration->field_count;
   }
-  if (capacity == 0u) return TURBO_OK;
+  if (capacity == 0u) return SALTS_OK;
   fields = (turbo_flow_expr_schema_field_t *)calloc(capacity, sizeof(*fields));
-  if (!fields) return TURBO_ENOMEM;
+  if (!fields) return SALTS_ENOMEM;
   for (registration_index = 0;
        registration_index < vec_size(&flow->expr_projection_registrations);
        ++registration_index) {
@@ -200,7 +200,7 @@ static int flow_expr_projection_schema_fields(
   }
   *fields_out = fields;
   *count_out = count;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_expr_projection_compile(turbo_flow_t *flow, const char *text, size_t len,
@@ -209,14 +209,14 @@ int flow_expr_projection_compile(turbo_flow_t *flow, const char *text, size_t le
   turbo_flow_expr_schema_t schema;
   size_t field_count = 0u;
   int rc;
-  if (!flow) return TURBO_EINVAL;
+  if (!flow) return SALTS_EINVAL;
   rc = flow_expr_projection_schema_fields(flow, &fields, &field_count);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     if (error) {
       memset(error, 0, sizeof(*error));
       error->code = rc;
       snprintf(error->message, sizeof(error->message), "%s",
-               rc == TURBO_ENOMEM ? "out of memory" : "expression projection schema is too large");
+               rc == SALTS_ENOMEM ? "out of memory" : "expression projection schema is too large");
     }
     if (out) *out = NULL;
     return rc;
@@ -231,7 +231,7 @@ int flow_expr_projection_compile(turbo_flow_t *flow, const char *text, size_t le
 static int flow_expr_projection_read(void *ctx, uint32_t field_id,
                                      turbo_flow_expr_value_t *out) {
   flow_expr_projection_eval_binding_t *binding = (flow_expr_projection_eval_binding_t *)ctx;
-  if (!binding || !binding->registration || !binding->projection || !out) return TURBO_EINVAL;
+  if (!binding || !binding->registration || !binding->projection || !out) return SALTS_EINVAL;
   return binding->registration->read_field(binding->projection, field_id, out,
                                            binding->registration->ctx);
 }

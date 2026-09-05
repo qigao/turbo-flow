@@ -3,7 +3,7 @@
 
 #include "turbo_flow_export.h"
 #include "platform.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 #include "turbo_flow_config_limits.h"
 
 #include <stddef.h>
@@ -55,7 +55,7 @@ typedef struct turbo_flow_config_error_s {
   char message[TURBO_FLOW_CONFIG_MESSAGE_MAX + 1u];
 } turbo_flow_config_error_t;
 
-#define TURBO_FLOW_CONFIG_ERROR_INIT {sizeof(turbo_flow_config_error_t), TURBO_OK, {0}, {0}}
+#define TURBO_FLOW_CONFIG_ERROR_INIT {sizeof(turbo_flow_config_error_t), SALTS_OK, {0}, {0}}
 
 /**
  * Resolve one YAML document into a canonical immutable configuration snapshot.
@@ -63,7 +63,7 @@ typedef struct turbo_flow_config_error_s {
  * @param yaml_len Byte length of `yaml`.
  * @param out Receives an owned snapshot destroyed by turbo_flow_resolved_config_destroy().
  * @param error Receives a structured path and reason on validation failure.
- * @return TURBO_OK, a parse/validation error, or TURBO_ENOMEM.
+ * @return SALTS_OK, a parse/validation error, or SALTS_ENOMEM.
  */
 TURBO_FLOW_C_API int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
                                              turbo_flow_resolved_config_t **out,
@@ -92,7 +92,7 @@ TURBO_FLOW_C_API int turbo_flow_resolved_config_profile_channel_optional(
     const turbo_flow_resolved_config_t *config, const char *profile, const char *parameter,
     const char **channel_name);
 
-/** Project a borrowed named channel; returns TURBO_ENOENT when absent. */
+/** Project a borrowed named channel; returns SALTS_ENOENT when absent. */
 TURBO_FLOW_C_API int turbo_flow_resolved_config_channel(const turbo_flow_resolved_config_t *config,
                                                  const char *name,
                                                  turbo_flow_resolved_channel_view_t *view);
@@ -103,7 +103,7 @@ TURBO_FLOW_C_API int turbo_flow_resolved_config_preflight_adapter_kinds(
     const turbo_flow_resolved_config_t *config, const char *const *enabled_kinds,
     size_t enabled_kind_count, turbo_flow_config_error_t *error);
 
-/** Project a borrowed named adapter; returns TURBO_ENOENT when absent. */
+/** Project a borrowed named adapter; returns SALTS_ENOENT when absent. */
 TURBO_FLOW_C_API int turbo_flow_resolved_config_adapter(const turbo_flow_resolved_config_t *config,
                                                  const char *adapter_name,
                                                  turbo_flow_resolved_adapter_view_t *view);

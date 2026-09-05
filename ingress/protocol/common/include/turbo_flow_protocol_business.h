@@ -122,7 +122,7 @@ typedef struct turbo_flow_protocol_business_command_request_s {
  *
  * The provider writes only fixed-size fields and payload. payload must point to
  * caller memory and is never retained. prepare_command fails with
- * TURBO_EMSGSIZE rather than returning partial output.
+ * SALTS_EMSGSIZE rather than returning partial output.
  */
 typedef struct turbo_flow_protocol_business_command_output_s {
   size_t size;

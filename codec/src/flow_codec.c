@@ -1,11 +1,11 @@
 #include "turbo_flow_codec.h"
 
-#include "turbo_parser.h"
 #include "turbo_flow_stl_error_internal.h"
 
-#include "turbo_error.h"
-#include "turbo_str.h"
-#include "turbo_thread.h"
+#include <csv_parser.h>
+#include "salts_error.h"
+#include "salts_str.h"
+#include "salts_thread.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -15,7 +15,7 @@
 static const char *const FLOW_CODEC_DELIMITER_VALUES[] = {"lf", "crlf"};
 static const char *const FLOW_CODEC_PREFIX_VALUES[] = {"le32", "le64", "be32", "be64"};
 static const char *const FLOW_DATABIND_INPUT_VALUES[] = {"bin", "json", "csv", "xml"};
-static const char FLOW_DATABIND_PROJECTION_TYPE[] = "TurboUtils.DataBindValue";
+static const char FLOW_DATABIND_PROJECTION_TYPE[] = "Salts.DataBindValue";
 
 static const turbo_flow_option_field_t FLOW_CODEC_LINE_FIELDS[] = {
     {"max_frame_size", TURBO_FLOW_OPTION_SIZE, 0, 0, 0, NULL, 0},
@@ -106,7 +106,7 @@ typedef struct flow_codec_adapter_s {
   tstr xml_xpath;
   turbo_flow_data_schema_t data_schema;
   DataBind *databind;
-  turbo_mutex_t databind_lock;
+  salts_mutex_t databind_lock;
   int databind_lock_initialized;
   atomic_int started;
 } flow_codec_adapter_t;
@@ -128,11 +128,11 @@ const DataBindValue *turbo_flow_codec_msg_databind_value(const turbo_flow_msg_t 
 }
 
 static int flow_codec_dup_opt(tstr *dst, const char *src, size_t len) {
-  if (!dst) return TURBO_EINVAL;
-  if (!src) return TURBO_OK;
+  if (!dst) return SALTS_EINVAL;
+  if (!src) return SALTS_OK;
   if (len == 0) len = strlen(src);
   *dst = tstr_new_len(src, len);
-  return *dst ? TURBO_OK : TURBO_ENOMEM;
+  return *dst ? SALTS_OK : SALTS_ENOMEM;
 }
 
 static int flow_codec_valid_line_delimiter(int delimiter) {
@@ -169,16 +169,16 @@ static turbo_flow_data_encoding_t flow_codec_databind_encoding(int input_format)
 
 static int flow_codec_check_payload(const flow_codec_adapter_t *adapter,
                                     const turbo_flow_msg_t *msg) {
-  if (!adapter || !msg || (msg->payload.len > 0 && !msg->payload.data)) return TURBO_EINVAL;
-  return TURBO_OK;
+  if (!adapter || !msg || (msg->payload.len > 0 && !msg->payload.data)) return SALTS_EINVAL;
+  return SALTS_OK;
 }
 
 static int flow_codec_replace_payload(turbo_flow_msg_t *msg, const char *data, size_t len) {
   tstr owned;
 
-  if (!msg || (len > 0 && !data)) return TURBO_EINVAL;
+  if (!msg || (len > 0 && !data)) return SALTS_EINVAL;
   owned = tstr_new_len(data ? data : "", len);
-  if (!owned) return TURBO_ENOMEM;
+  if (!owned) return SALTS_ENOMEM;
 
   turbo_flow_msg_clear_content(msg);
   tstr_freep(&msg->owned_payload);
@@ -186,7 +186,7 @@ static int flow_codec_replace_payload(turbo_flow_msg_t *msg, const char *data, s
   msg->buffer = NULL;
   msg->owned_payload = owned;
   msg->payload = tstr_to_v(msg->owned_payload);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_codec_transform_line(flow_codec_adapter_t *adapter, turbo_flow_msg_t *msg) {
@@ -196,7 +196,7 @@ static int flow_codec_transform_line(flow_codec_adapter_t *adapter, turbo_flow_m
   size_t delim_len = 0;
   int found = 0;
 
-  if (!adapter || !msg) return TURBO_EINVAL;
+  if (!adapter || !msg) return SALTS_EINVAL;
   data = msg->payload.data;
   len = msg->payload.len;
 
@@ -220,11 +220,11 @@ static int flow_codec_transform_line(flow_codec_adapter_t *adapter, turbo_flow_m
     }
   }
 
-  if (!found) return TURBO_EPROTO;
+  if (!found) return SALTS_EPROTO;
   if (adapter->strip_delimiter == 0) frame_len += delim_len;
-  if (frame_len > len) return TURBO_EINVAL;
-  if (adapter->max_payload_size > 0 && frame_len > adapter->max_payload_size) return TURBO_EFBIG;
-  if (len > frame_len + (adapter->strip_delimiter ? delim_len : 0u)) return TURBO_ENOTSUP;
+  if (frame_len > len) return SALTS_EINVAL;
+  if (adapter->max_payload_size > 0 && frame_len > adapter->max_payload_size) return SALTS_EFBIG;
+  if (len > frame_len + (adapter->strip_delimiter ? delim_len : 0u)) return SALTS_ENOTSUP;
   return flow_codec_replace_payload(msg, data, frame_len);
 }
 
@@ -248,44 +248,44 @@ static int flow_codec_transform_length(flow_codec_adapter_t *adapter, turbo_flow
   uint64_t frame_len64;
   size_t frame_len;
 
-  if (!adapter || !msg) return TURBO_EINVAL;
+  if (!adapter || !msg) return SALTS_EINVAL;
   data = (const unsigned char *)msg->payload.data;
   prefix_size = (adapter->prefix == TURBO_FLOW_CODEC_LENGTH_PREFIX_LE64 ||
                  adapter->prefix == TURBO_FLOW_CODEC_LENGTH_PREFIX_BE64)
                     ? 8u
                     : 4u;
-  if (msg->payload.len < prefix_size) return TURBO_EPROTO;
+  if (msg->payload.len < prefix_size) return SALTS_EPROTO;
 
   frame_len64 = (adapter->prefix == TURBO_FLOW_CODEC_LENGTH_PREFIX_BE32 ||
                  adapter->prefix == TURBO_FLOW_CODEC_LENGTH_PREFIX_BE64)
                     ? flow_codec_load_be(data, prefix_size)
                     : flow_codec_load_le(data, prefix_size);
-  if (frame_len64 > (uint64_t)((size_t)-1)) return TURBO_ERANGE;
+  if (frame_len64 > (uint64_t)((size_t)-1)) return SALTS_ERANGE;
   frame_len = (size_t)frame_len64;
-  if (adapter->max_payload_size > 0 && frame_len > adapter->max_payload_size) return TURBO_EFBIG;
-  if (msg->payload.len < prefix_size + frame_len) return TURBO_EPROTO;
-  if (msg->payload.len > prefix_size + frame_len) return TURBO_ENOTSUP;
+  if (adapter->max_payload_size > 0 && frame_len > adapter->max_payload_size) return SALTS_EFBIG;
+  if (msg->payload.len < prefix_size + frame_len) return SALTS_EPROTO;
+  if (msg->payload.len > prefix_size + frame_len) return SALTS_ENOTSUP;
   return flow_codec_replace_payload(msg, (const char *)data + prefix_size, frame_len);
 }
 
 static int flow_codec_databind_status_to_turbo(DataBindStatus status) {
   switch (status) {
   case DATA_BIND_OK:
-    return TURBO_OK;
+    return SALTS_OK;
   case DATA_BIND_ERR_INVALID_ARG:
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   case DATA_BIND_ERR_IO:
-    return TURBO_EIO;
+    return SALTS_EIO;
   case DATA_BIND_ERR_TYPE_NOT_FOUND:
-    return TURBO_ENOENT;
+    return SALTS_ENOENT;
   case DATA_BIND_ERR_OOM:
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   case DATA_BIND_ERR_PARSE:
   case DATA_BIND_ERR_SCHEMA:
   case DATA_BIND_ERR_TYPE_MISMATCH:
   case DATA_BIND_ERR_RUNTIME:
   default:
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
 }
 
@@ -294,20 +294,20 @@ static int flow_codec_databind_value_clone(const void *value, void *ctx, void **
   DataBindStatus status;
 
   (void)ctx;
-  if (!value || !out) return TURBO_EINVAL;
+  if (!value || !out) return SALTS_EINVAL;
   *out = NULL;
   status = data_bind_value_clone((const DataBindValue *)value, &copy);
   if (status != DATA_BIND_OK) return flow_codec_databind_status_to_turbo(status);
-  if (!copy) return TURBO_EPROTO;
+  if (!copy) return SALTS_EPROTO;
   *out = copy;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_codec_databind_validate(flow_codec_adapter_t *adapter, turbo_flow_msg_t *msg) {
   DataBindError error = DATA_BIND_ERROR_INIT;
   DataBindStatus status;
 
-  if (!adapter || !adapter->databind || !adapter->type_name || !msg) return TURBO_EINVAL;
+  if (!adapter || !adapter->databind || !adapter->type_name || !msg) return SALTS_EINVAL;
   switch (adapter->input_format) {
   case TURBO_FLOW_CODEC_DATABIND_JSON:
     status = data_bind_validate_json(adapter->databind, adapter->type_name, msg->payload.data,
@@ -341,7 +341,7 @@ static int flow_codec_databind_parse(flow_codec_adapter_t *adapter, turbo_flow_m
   DataBindStatus status;
   int rc;
 
-  if (!adapter || !adapter->databind || !adapter->type_name || !msg) return TURBO_EINVAL;
+  if (!adapter || !adapter->databind || !adapter->type_name || !msg) return SALTS_EINVAL;
   switch (adapter->input_format) {
   case TURBO_FLOW_CODEC_DATABIND_BIN:
     status = data_bind_parse(adapter->databind, adapter->type_name,
@@ -377,69 +377,69 @@ static int flow_codec_databind_parse(flow_codec_adapter_t *adapter, turbo_flow_m
   }
 
   rc = flow_codec_databind_status_to_turbo(status);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     data_bind_value_free(value);
     return rc;
   }
-  if (!value) return TURBO_EPROTO;
+  if (!value) return SALTS_EPROTO;
   turbo_flow_msg_clear_content(msg);
   rc = turbo_flow_msg_bind_projection(msg, &adapter->data_schema, value,
                                       flow_codec_databind_value_clone,
                                       flow_codec_databind_value_destroy, NULL);
-  if (rc != TURBO_OK) data_bind_value_free(value);
+  if (rc != SALTS_OK) data_bind_value_free(value);
   return rc;
 }
 
 static int flow_codec_transform_databind(flow_codec_adapter_t *adapter, turbo_flow_msg_t *msg) {
   int rc;
 
-  if (!adapter || !msg) return TURBO_EINVAL;
-  if (!adapter->databind || !adapter->type_name) return TURBO_ENOTSUP;
+  if (!adapter || !msg) return SALTS_EINVAL;
+  if (!adapter->databind || !adapter->type_name) return SALTS_ENOTSUP;
   if (adapter->max_payload_size > 0 && msg->payload.len > adapter->max_payload_size) {
-    return TURBO_EFBIG;
+    return SALTS_EFBIG;
   }
 
-  turbo_mutex_lock(&adapter->databind_lock);
+  salts_mutex_lock(&adapter->databind_lock);
   rc = adapter->validate_only ? flow_codec_databind_validate(adapter, msg)
                               : flow_codec_databind_parse(adapter, msg);
-  turbo_mutex_unlock(&adapter->databind_lock);
+  salts_mutex_unlock(&adapter->databind_lock);
   return rc;
 }
 
 static int flow_codec_csv_append_cell(tstr *row, const char *value, char delimiter, char quote) {
   int quoted = 0;
-  if (!row || !value) return TURBO_EINVAL;
+  if (!row || !value) return SALTS_EINVAL;
   for (const char *p = value; *p; ++p) {
     if (*p == delimiter || *p == quote || *p == '\r' || *p == '\n') {
       quoted = 1;
       break;
     }
   }
-  if (quoted && !(*row = tstr_cat_len(*row, &quote, 1))) return TURBO_ENOMEM;
+  if (quoted && !(*row = tstr_cat_len(*row, &quote, 1))) return SALTS_ENOMEM;
   for (const char *p = value; *p; ++p) {
-    if (*p == quote && !(*row = tstr_cat_len(*row, &quote, 1))) return TURBO_ENOMEM;
-    if (!(*row = tstr_cat_len(*row, p, 1))) return TURBO_ENOMEM;
+    if (*p == quote && !(*row = tstr_cat_len(*row, &quote, 1))) return SALTS_ENOMEM;
+    if (!(*row = tstr_cat_len(*row, p, 1))) return SALTS_ENOMEM;
   }
-  if (quoted && !(*row = tstr_cat_len(*row, &quote, 1))) return TURBO_ENOMEM;
-  return TURBO_OK;
+  if (quoted && !(*row = tstr_cat_len(*row, &quote, 1))) return SALTS_ENOMEM;
+  return SALTS_OK;
 }
 
-static int flow_codec_csv_append_record(tstr *payload, const turbo_csv_doc_t *doc,
+static int flow_codec_csv_append_record(tstr *payload, const csv_doc_t *doc,
                                         size_t row_index, char delimiter, char quote) {
-  size_t columns = turbo_csv_column_count(doc);
+  size_t columns = csv_column_count(doc);
   for (size_t column = 0; column < columns; ++column) {
-    const char *value = turbo_csv_get(doc, row_index, column);
+    const char *value = csv_get(doc, row_index, column);
     int rc;
-    if (column > 0 && !(*payload = tstr_cat_len(*payload, &delimiter, 1))) return TURBO_ENOMEM;
+    if (column > 0 && !(*payload = tstr_cat_len(*payload, &delimiter, 1))) return SALTS_ENOMEM;
     rc = flow_codec_csv_append_cell(payload, value ? value : "", delimiter, quote);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  if (!(*payload = tstr_cat_len(*payload, "\n", 1))) return TURBO_ENOMEM;
-  return TURBO_OK;
+  if (!(*payload = tstr_cat_len(*payload, "\n", 1))) return SALTS_ENOMEM;
+  return SALTS_OK;
 }
 
 static int flow_codec_csv_emit_row(flow_codec_adapter_t *adapter, turbo_flow_t *flow,
-                                   const turbo_flow_msg_t *input, const turbo_csv_doc_t *doc,
+                                   const turbo_flow_msg_t *input, const csv_doc_t *doc,
                                    size_t row_index) {
   turbo_flow_msg_t output;
   int rc;
@@ -450,14 +450,14 @@ static int flow_codec_csv_emit_row(flow_codec_adapter_t *adapter, turbo_flow_t *
   output.flags = input->flags;
   output.status = input->status;
   output.owned_payload = tstr_new_len(NULL, 0);
-  if (!output.owned_payload) return TURBO_ENOMEM;
+  if (!output.owned_payload) return SALTS_ENOMEM;
   rc = flow_codec_csv_append_record(&output.owned_payload, doc, 0, adapter->csv_delimiter,
                                     adapter->csv_quote);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = flow_codec_csv_append_record(&output.owned_payload, doc, row_index, adapter->csv_delimiter,
                                       adapter->csv_quote);
-  if (rc == TURBO_OK && tstr_len(output.owned_payload) > adapter->max_row_size) rc = TURBO_EFBIG;
-  if (rc == TURBO_OK) {
+  if (rc == SALTS_OK && tstr_len(output.owned_payload) > adapter->max_row_size) rc = SALTS_EFBIG;
+  if (rc == SALTS_OK) {
     output.payload = tstr_to_v(output.owned_payload);
     rc = turbo_flow_publish(flow, adapter->output_source, &output);
   }
@@ -467,24 +467,23 @@ static int flow_codec_csv_emit_row(flow_codec_adapter_t *adapter, turbo_flow_t *
 
 static int flow_codec_transform_csv_split(flow_codec_adapter_t *adapter, turbo_flow_t *flow,
                                           turbo_flow_msg_t *msg) {
-  turbo_csv_options_t options = {false, adapter->csv_delimiter, adapter->csv_quote, true};
-  turbo_csv_doc_t *doc = NULL;
+  csv_options_t options = {false, adapter->csv_delimiter, adapter->csv_quote, true};
+  csv_doc_t *doc;
   size_t rows;
   int rc;
-  if (msg->payload.len > adapter->max_payload_size) return TURBO_EFBIG;
-  if (turbo_parse_csv_opts((const uint8_t *)msg->payload.data, msg->payload.len, &options, &doc) !=
-      0)
-    return TURBO_EPROTO;
-  rows = turbo_csv_row_count(doc);
+  if (msg->payload.len > adapter->max_payload_size) return SALTS_EFBIG;
+  doc = csv_parse_opts(msg->payload.data, msg->payload.len, &options);
+  if (!doc) return SALTS_EPROTO;
+  rows = csv_row_count(doc);
   if (rows > 0) --rows;
   if (rows > adapter->max_rows) {
-    turbo_free_csv(&doc);
-    return TURBO_ENOSPC;
+    csv_free(doc);
+    return SALTS_ENOSPC;
   }
-  rc = TURBO_OK;
-  for (size_t row = 1; row <= rows && rc == TURBO_OK; ++row)
+  rc = SALTS_OK;
+  for (size_t row = 1; row <= rows && rc == SALTS_OK; ++row)
     rc = flow_codec_csv_emit_row(adapter, flow, msg, doc, row);
-  turbo_free_csv(&doc);
+  csv_free(doc);
   return rc;
 }
 
@@ -492,8 +491,8 @@ static int flow_codec_csv_source_reaches_stage(turbo_flow_t *flow, uint32_t sour
                                                uint32_t target_index) {
   vec_t reachable = {0};
   int changed = 1;
-  if (turbo_flow_stl_error(vec_init_bytes(&reachable, sizeof(uint8_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) return -1;
-  if (turbo_flow_stl_error(vec_resize(&reachable, turbo_flow_stage_count(flow))) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(&reachable, sizeof(uint8_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) return -1;
+  if (turbo_flow_stl_error(vec_resize(&reachable, turbo_flow_stage_count(flow))) != SALTS_OK) {
     vec_destroy(&reachable);
     return -1;
   }
@@ -520,24 +519,24 @@ static int flow_codec_start(void *ctx, turbo_flow_t *flow, const turbo_flow_stag
   flow_codec_adapter_t *adapter = (flow_codec_adapter_t *)ctx;
 
   (void)flow;
-  if (!adapter || !stage) return TURBO_EINVAL;
-  if (stage->is_source) return TURBO_EINVAL;
+  if (!adapter || !stage) return SALTS_EINVAL;
+  if (stage->is_source) return SALTS_EINVAL;
 
   switch (adapter->kind) {
   case FLOW_CODEC_LINE:
-    if (!flow_codec_valid_line_delimiter(adapter->delimiter)) return TURBO_EINVAL;
+    if (!flow_codec_valid_line_delimiter(adapter->delimiter)) return SALTS_EINVAL;
     break;
   case FLOW_CODEC_LENGTH:
-    if (!flow_codec_valid_length_prefix(adapter->prefix)) return TURBO_EINVAL;
+    if (!flow_codec_valid_length_prefix(adapter->prefix)) return SALTS_EINVAL;
     break;
   case FLOW_CODEC_DATABIND:
-    if (!flow_codec_valid_databind_input(adapter->input_format)) return TURBO_EINVAL;
+    if (!flow_codec_valid_databind_input(adapter->input_format)) return SALTS_EINVAL;
     if (!adapter->databind || !adapter->type_name || adapter->type_name[0] == '\0') {
-      return TURBO_ENOTSUP;
+      return SALTS_ENOTSUP;
     }
     if (!data_bind_schema_find_type(adapter->databind, adapter->type_name,
                                     &(DataBindSchemaType)DATA_BIND_SCHEMA_TYPE_INIT)) {
-      return TURBO_ENOENT;
+      return SALTS_ENOENT;
     }
     break;
   case FLOW_CODEC_CSV_SPLIT: {
@@ -545,21 +544,21 @@ static int flow_codec_start(void *ctx, turbo_flow_t *flow, const turbo_flow_stag
     int stage_index = turbo_flow_find_stage(flow, stage->name);
     const turbo_flow_stage_plan_t *source;
     int reaches;
-    if (source_index < 0 || stage_index < 0) return TURBO_ENOENT;
+    if (source_index < 0 || stage_index < 0) return SALTS_ENOENT;
     source = turbo_flow_stage_at(flow, (size_t)source_index);
-    if (!source || !source->is_source) return TURBO_EINVAL;
+    if (!source || !source->is_source) return SALTS_EINVAL;
     reaches =
         flow_codec_csv_source_reaches_stage(flow, (uint32_t)source_index, (uint32_t)stage_index);
-    if (reaches < 0) return TURBO_ENOMEM;
-    if (reaches) return TURBO_ELOOP;
+    if (reaches < 0) return SALTS_ENOMEM;
+    if (reaches) return SALTS_ELOOP;
     break;
   }
   default:
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
 
   atomic_store_explicit(&adapter->started, 1, memory_order_release);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_codec_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
@@ -569,10 +568,10 @@ static int flow_codec_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_st
 
   (void)flow;
   (void)stage;
-  if (!adapter) return TURBO_EINVAL;
-  if (!atomic_load_explicit(&adapter->started, memory_order_acquire)) return TURBO_EINVAL;
+  if (!adapter) return SALTS_EINVAL;
+  if (!atomic_load_explicit(&adapter->started, memory_order_acquire)) return SALTS_EINVAL;
   rc = flow_codec_check_payload(adapter, msg);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
 
   switch (adapter->kind) {
   case FLOW_CODEC_LINE:
@@ -584,7 +583,7 @@ static int flow_codec_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_st
   case FLOW_CODEC_CSV_SPLIT:
     return flow_codec_transform_csv_split(adapter, flow, msg);
   default:
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
 }
 
@@ -603,7 +602,7 @@ static void flow_codec_shutdown(void *ctx) {
   if (!adapter) return;
   atomic_store_explicit(&adapter->started, 0, memory_order_release);
   data_bind_free(adapter->databind);
-  if (adapter->databind_lock_initialized) turbo_mutex_destroy(&adapter->databind_lock);
+  if (adapter->databind_lock_initialized) salts_mutex_destroy(&adapter->databind_lock);
   tstr_freep(&adapter->schema_path);
   tstr_freep(&adapter->schema_text);
   tstr_freep(&adapter->schema_name);
@@ -619,7 +618,7 @@ static int flow_codec_register_adapter(turbo_flow_t *flow, const char *name,
   turbo_flow_adapter_ops_t ops;
   int rc;
 
-  if (!flow || !name || name[0] == '\0' || !adapter) return TURBO_EINVAL;
+  if (!flow || !name || name[0] == '\0' || !adapter) return SALTS_EINVAL;
   memset(&ops, 0, sizeof(ops));
   ops.start = flow_codec_start;
   ops.consume = flow_codec_consume;
@@ -627,20 +626,20 @@ static int flow_codec_register_adapter(turbo_flow_t *flow, const char *name,
   ops.shutdown = flow_codec_shutdown;
 
   rc = turbo_flow_register_adapter_ex(flow, name, &ops, adapter, schema);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_codec_shutdown(adapter);
     return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_codec_register_line_adapter(turbo_flow_t *flow, const char *name,
                                            const turbo_flow_codec_line_config_t *config) {
   flow_codec_adapter_t *adapter;
 
-  if (!flow || !name || name[0] == '\0') return TURBO_EINVAL;
+  if (!flow || !name || name[0] == '\0') return SALTS_EINVAL;
   adapter = (flow_codec_adapter_t *)calloc(1, sizeof(*adapter));
-  if (!adapter) return TURBO_ENOMEM;
+  if (!adapter) return SALTS_ENOMEM;
   atomic_init(&adapter->started, 0);
   adapter->kind = FLOW_CODEC_LINE;
   adapter->delimiter = TURBO_FLOW_CODEC_LINE_LF;
@@ -657,9 +656,9 @@ int turbo_flow_codec_register_length_adapter(turbo_flow_t *flow, const char *nam
                                              const turbo_flow_codec_length_config_t *config) {
   flow_codec_adapter_t *adapter;
 
-  if (!flow || !name || name[0] == '\0') return TURBO_EINVAL;
+  if (!flow || !name || name[0] == '\0') return SALTS_EINVAL;
   adapter = (flow_codec_adapter_t *)calloc(1, sizeof(*adapter));
-  if (!adapter) return TURBO_ENOMEM;
+  if (!adapter) return SALTS_ENOMEM;
   atomic_init(&adapter->started, 0);
   adapter->kind = FLOW_CODEC_LENGTH;
   adapter->prefix = TURBO_FLOW_CODEC_LENGTH_PREFIX_LE32;
@@ -677,13 +676,13 @@ int turbo_flow_codec_register_databind_adapter(turbo_flow_t *flow, const char *n
   DataBindStatus status;
   int rc;
 
-  if (!flow || !name || name[0] == '\0') return TURBO_EINVAL;
+  if (!flow || !name || name[0] == '\0') return SALTS_EINVAL;
   adapter = (flow_codec_adapter_t *)calloc(1, sizeof(*adapter));
-  if (!adapter) return TURBO_ENOMEM;
+  if (!adapter) return SALTS_ENOMEM;
   atomic_init(&adapter->started, 0);
   adapter->kind = FLOW_CODEC_DATABIND;
   adapter->input_format = TURBO_FLOW_CODEC_DATABIND_BIN;
-  turbo_mutex_init(&adapter->databind_lock);
+  salts_mutex_init(&adapter->databind_lock);
   adapter->databind_lock_initialized = 1;
 
   if (config) {
@@ -691,7 +690,7 @@ int turbo_flow_codec_register_databind_adapter(turbo_flow_t *flow, const char *n
     int schema_text_set = config->schema_text && config->schema_text[0] != '\0';
     if (schema_path_set == schema_text_set) {
       flow_codec_shutdown(adapter);
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
     adapter->max_payload_size = config->max_payload_size;
     adapter->input_format = config->input_format;
@@ -701,15 +700,15 @@ int turbo_flow_codec_register_databind_adapter(turbo_flow_t *flow, const char *n
     if (adapter->input_format == TURBO_FLOW_CODEC_DATABIND_XML && !adapter->validate_only &&
         !adapter->bind_all && config->xml_xpath && config->xml_xpath[0] != '\0') {
       flow_codec_shutdown(adapter);
-      return TURBO_ENOTSUP;
+      return SALTS_ENOTSUP;
     }
     rc = flow_codec_dup_opt(&adapter->schema_path, config->schema_path, 0);
-    if (rc == TURBO_OK) {
+    if (rc == SALTS_OK) {
       rc = flow_codec_dup_opt(&adapter->schema_text, config->schema_text, config->schema_text_len);
     }
-    if (rc == TURBO_OK) rc = flow_codec_dup_opt(&adapter->type_name, config->type_name, 0);
-    if (rc == TURBO_OK) rc = flow_codec_dup_opt(&adapter->xml_xpath, config->xml_xpath, 0);
-    if (rc != TURBO_OK) {
+    if (rc == SALTS_OK) rc = flow_codec_dup_opt(&adapter->type_name, config->type_name, 0);
+    if (rc == SALTS_OK) rc = flow_codec_dup_opt(&adapter->xml_xpath, config->xml_xpath, 0);
+    if (rc != SALTS_OK) {
       flow_codec_shutdown(adapter);
       return rc;
     }
@@ -720,7 +719,7 @@ int turbo_flow_codec_register_databind_adapter(turbo_flow_t *flow, const char *n
                                           &adapter->databind, &error);
     }
     rc = flow_codec_databind_status_to_turbo(status);
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       flow_codec_shutdown(adapter);
       return rc;
     }
@@ -730,7 +729,7 @@ int turbo_flow_codec_register_databind_adapter(turbo_flow_t *flow, const char *n
         schema_name = schema_path_set ? adapter->schema_path : adapter->type_name;
       }
       rc = flow_codec_dup_opt(&adapter->schema_name, schema_name, 0);
-      if (rc != TURBO_OK) {
+      if (rc != SALTS_OK) {
         flow_codec_shutdown(adapter);
         return rc;
       }
@@ -753,9 +752,9 @@ int turbo_flow_codec_register_csv_splitter_adapter(
   flow_codec_adapter_t *adapter;
   int rc;
   if (!flow || !name || !*name || !config || !config->output_source || !*config->output_source)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   adapter = (flow_codec_adapter_t *)calloc(1, sizeof(*adapter));
-  if (!adapter) return TURBO_ENOMEM;
+  if (!adapter) return SALTS_ENOMEM;
   atomic_init(&adapter->started, 0);
   adapter->kind = FLOW_CODEC_CSV_SPLIT;
   adapter->csv_delimiter = ',';
@@ -766,7 +765,7 @@ int turbo_flow_codec_register_csv_splitter_adapter(
   adapter->max_row_size =
       config->max_row_size ? config->max_row_size : FLOW_CODEC_CSV_DEFAULT_MAX_ROW;
   rc = flow_codec_dup_opt(&adapter->output_source, config->output_source, 0);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_codec_shutdown(adapter);
     return rc;
   }

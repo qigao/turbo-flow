@@ -1,8 +1,0 @@
-schema PublicTodo [id(301), version(1), byte_order(little)];
-
-message Todo {
-  int64 userId;
-  int64 id;
-  string title;
-  bool completed;
-}

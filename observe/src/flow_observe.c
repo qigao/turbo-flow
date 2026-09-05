@@ -1,9 +1,9 @@
 #include "turbo_flow_observe.h"
 
 #include "turbo_flow_stl_error_internal.h"
-#include "turbo_error.h"
-#include "turbo_str.h"
-#include "turbo_thread.h"
+#include "salts_error.h"
+#include "salts_str.h"
+#include "salts_thread.h"
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -43,8 +43,8 @@ typedef struct flow_observe_log_sink_s {
 struct turbo_flow_observe_s {
   turbo_flow_t *flow;
   vec_t stages;
-  turbo_mutex_t stage_mutex;
-  turbo_mutex_t export_mutex;
+  salts_mutex_t stage_mutex;
+  salts_mutex_t export_mutex;
   deque_t events;
   size_t max_stages;
   size_t max_events;
@@ -98,7 +98,7 @@ static void flow_observe_message_complete(void *ctx, const char *source_name,
   atomic_fetch_add_explicit(&observe->messages, 1, memory_order_relaxed);
   atomic_fetch_add_explicit(&observe->payload_bytes, msg ? msg->payload.len : 0u,
                             memory_order_relaxed);
-  if (status != TURBO_OK) {
+  if (status != SALTS_OK) {
     atomic_fetch_add_explicit(&observe->message_errors, 1, memory_order_relaxed);
   }
   atomic_fetch_add_explicit(&observe->message_latency_ns_total, duration_ns, memory_order_relaxed);
@@ -124,7 +124,7 @@ static void flow_observe_stage_complete(void *ctx, const char *stage_name, const
   (void)msg;
   if (!observe || !stage_name) return;
   atomic_fetch_add_explicit(&observe->stage_calls, 1, memory_order_relaxed);
-  if (status != TURBO_OK) {
+  if (status != SALTS_OK) {
     atomic_fetch_add_explicit(&observe->stage_errors, 1, memory_order_relaxed);
     if (adapter_name) {
       atomic_fetch_add_explicit(&observe->adapter_errors, 1, memory_order_relaxed);
@@ -133,13 +133,13 @@ static void flow_observe_stage_complete(void *ctx, const char *stage_name, const
   atomic_fetch_add_explicit(&observe->stage_latency_ns_total, duration_ns, memory_order_relaxed);
   flow_observe_atomic_max(&observe->stage_latency_ns_max, duration_ns);
 
-  turbo_mutex_lock(&observe->stage_mutex);
+  salts_mutex_lock(&observe->stage_mutex);
   entry = flow_observe_find_stage(observe, stage_name);
   if (!entry && vec_size(&observe->stages) < observe->max_stages) {
     flow_observe_stage_entry_t added;
     memset(&added, 0, sizeof(added));
     added.name = tstr_dup(stage_name);
-    if (added.name && turbo_flow_stl_error(vec_push(&observe->stages, &added)) == TURBO_OK) {
+    if (added.name && turbo_flow_stl_error(vec_push(&observe->stages, &added)) == SALTS_OK) {
       entry = (flow_observe_stage_entry_t *)vec_at(&observe->stages,
                                                          vec_size(&observe->stages) - 1u);
     } else {
@@ -148,13 +148,13 @@ static void flow_observe_stage_complete(void *ctx, const char *stage_name, const
   }
   if (entry) {
     entry->calls += 1u;
-    if (status != TURBO_OK) entry->errors += 1u;
+    if (status != SALTS_OK) entry->errors += 1u;
     entry->latency_ns_total += duration_ns;
     if (duration_ns > entry->latency_ns_max) entry->latency_ns_max = duration_ns;
   } else {
     atomic_fetch_add_explicit(&observe->dropped_stage_series, 1, memory_order_relaxed);
   }
-  turbo_mutex_unlock(&observe->stage_mutex);
+  salts_mutex_unlock(&observe->stage_mutex);
 }
 
 static void flow_observe_adapter_event(void *ctx, const char *stage_name, const char *adapter_name,
@@ -165,7 +165,7 @@ static void flow_observe_adapter_event(void *ctx, const char *stage_name, const 
   if (!observe) return;
   if (event == TURBO_FLOW_ADAPTER_EVENT_START) {
     atomic_fetch_add_explicit(&observe->adapter_starts, 1, memory_order_relaxed);
-    if (status != TURBO_OK) {
+    if (status != SALTS_OK) {
       atomic_fetch_add_explicit(&observe->adapter_errors, 1, memory_order_relaxed);
     }
   } else if (event == TURBO_FLOW_ADAPTER_EVENT_STOP) {
@@ -189,19 +189,19 @@ turbo_flow_observe_t *turbo_flow_observe_create(const turbo_flow_observe_config_
     return NULL;
   observe = (turbo_flow_observe_t *)calloc(1, sizeof(*observe));
   if (!observe) return NULL;
-  if (turbo_flow_stl_error(vec_init_bytes(&observe->stages, sizeof(flow_observe_stage_entry_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(&observe->stages, sizeof(flow_observe_stage_entry_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
     free(observe);
     return NULL;
   }
-  if (turbo_flow_stl_error(deque_init_bytes(&observe->events, sizeof(turbo_flow_observe_event_record_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(deque_reserve(&observe->events, max_events)) != TURBO_OK) {
+  if (turbo_flow_stl_error(deque_init_bytes(&observe->events, sizeof(turbo_flow_observe_event_record_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(deque_reserve(&observe->events, max_events)) != SALTS_OK) {
     deque_destroy(&observe->events);
     vec_destroy(&observe->stages);
     free(observe);
     return NULL;
   }
-  turbo_mutex_init(&observe->stage_mutex);
-  turbo_mutex_init(&observe->export_mutex);
+  salts_mutex_init(&observe->stage_mutex);
+  salts_mutex_init(&observe->export_mutex);
   observe->max_stages = max_stages;
   observe->max_events = max_events;
   observe->command_result =
@@ -229,31 +229,31 @@ turbo_flow_observe_t *turbo_flow_observe_create(const turbo_flow_observe_config_
   atomic_init(&observe->control_hwm_reached, 0);
   atomic_init(&observe->control_frame_dropped, 0);
   atomic_init(&observe->control_errors, 0);
-  atomic_init(&observe->control_last_status, TURBO_OK);
+  atomic_init(&observe->control_last_status, SALTS_OK);
   atomic_init(&observe->control_last_value, 0);
   return observe;
 }
 
 int turbo_flow_observe_destroy(turbo_flow_observe_t *observe) {
-  if (!observe) return TURBO_EINVAL;
-  if (observe->flow) return TURBO_EBUSY;
+  if (!observe) return SALTS_EINVAL;
+  if (observe->flow) return SALTS_EBUSY;
   for (size_t i = 0; i < vec_size(&observe->stages); ++i) {
     flow_observe_stage_entry_t *entry =
         (flow_observe_stage_entry_t *)vec_at(&observe->stages, i);
     if (entry) tstr_freep(&entry->name);
   }
   vec_destroy(&observe->stages);
-  turbo_mutex_destroy(&observe->stage_mutex);
+  salts_mutex_destroy(&observe->stage_mutex);
   deque_destroy(&observe->events);
-  turbo_mutex_destroy(&observe->export_mutex);
+  salts_mutex_destroy(&observe->export_mutex);
   free(observe);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_observe_attach(turbo_flow_observe_t *observe, turbo_flow_t *flow) {
   turbo_flow_observer_ops_t ops;
   int rc;
-  if (!observe || !flow || observe->flow) return TURBO_EINVAL;
+  if (!observe || !flow || observe->flow) return SALTS_EINVAL;
   memset(&ops, 0, sizeof(ops));
   ops.size = sizeof(ops);
   ops.message_complete = flow_observe_message_complete;
@@ -261,21 +261,21 @@ int turbo_flow_observe_attach(turbo_flow_observe_t *observe, turbo_flow_t *flow)
   ops.adapter_event = flow_observe_adapter_event;
   ops.flow_destroyed = flow_observe_flow_destroyed;
   rc = turbo_flow_set_observer(flow, &ops, observe);
-  if (rc == TURBO_OK) observe->flow = flow;
+  if (rc == SALTS_OK) observe->flow = flow;
   return rc;
 }
 
 int turbo_flow_observe_detach(turbo_flow_observe_t *observe) {
   int rc;
-  if (!observe || !observe->flow) return TURBO_EINVAL;
+  if (!observe || !observe->flow) return SALTS_EINVAL;
   rc = turbo_flow_set_observer(observe->flow, NULL, NULL);
-  if (rc == TURBO_OK) observe->flow = NULL;
+  if (rc == SALTS_OK) observe->flow = NULL;
   return rc;
 }
 
 int turbo_flow_observe_snapshot(const turbo_flow_observe_t *observe,
                                 turbo_flow_observe_snapshot_t *out) {
-  if (!observe || !out) return TURBO_EINVAL;
+  if (!observe || !out) return SALTS_EINVAL;
   out->messages = atomic_load_explicit(&observe->messages, memory_order_relaxed);
   out->payload_bytes = atomic_load_explicit(&observe->payload_bytes, memory_order_relaxed);
   out->message_errors = atomic_load_explicit(&observe->message_errors, memory_order_relaxed);
@@ -317,24 +317,24 @@ int turbo_flow_observe_snapshot(const turbo_flow_observe_t *observe,
       atomic_load_explicit(&observe->control_last_status, memory_order_relaxed);
   out->control_last_value =
       atomic_load_explicit(&observe->control_last_value, memory_order_relaxed);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_observe_graph_snapshot(const turbo_flow_observe_t *observe,
                                       turbo_flow_observe_graph_snapshot_t *out) {
-  turbo_platform_cpu_info_t cpu;
-  turbo_platform_memory_info_t memory;
-  turbo_platform_load_average_t load;
+  salts_platform_cpu_info_t cpu;
+  salts_platform_memory_info_t memory;
+  salts_platform_load_average_t load;
   size_t pool_count;
   size_t resource_count;
   int rc;
 
-  if (!observe || !out || !observe->flow) return TURBO_EINVAL;
+  if (!observe || !out || !observe->flow) return SALTS_EINVAL;
   memset(out, 0, sizeof(*out));
   rc = turbo_flow_runtime_snapshot(observe->flow, &out->runtime);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_observe_snapshot(observe, &out->traffic);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
 
   out->connections_total = out->traffic.control_peer_connected;
   out->disconnections_total = out->traffic.control_peer_disconnected;
@@ -344,7 +344,7 @@ int turbo_flow_observe_graph_snapshot(const turbo_flow_observe_t *observe,
 
   for (size_t i = 0; i < out->runtime.adapter_count; ++i) {
     turbo_flow_connection_snapshot_t connection;
-    if (turbo_flow_adapter_connection_snapshot_at(observe->flow, i, &connection) == TURBO_OK) {
+    if (turbo_flow_adapter_connection_snapshot_at(observe->flow, i, &connection) == SALTS_OK) {
       if (out->connection_providers == 0u) out->connections_current = 0u;
       ++out->connection_providers;
       out->connections_current += connection.connections_current;
@@ -354,7 +354,7 @@ int turbo_flow_observe_graph_snapshot(const turbo_flow_observe_t *observe,
   pool_count = turbo_flow_pool_count(observe->flow);
   for (size_t i = 0; i < pool_count; ++i) {
     turbo_flow_pool_snapshot_t pool;
-    if (turbo_flow_pool_snapshot_at(observe->flow, i, &pool) == TURBO_OK &&
+    if (turbo_flow_pool_snapshot_at(observe->flow, i, &pool) == SALTS_OK &&
         turbo_flow_pool_saturated(&pool)) {
       ++out->saturated_pools;
     }
@@ -363,7 +363,7 @@ int turbo_flow_observe_graph_snapshot(const turbo_flow_observe_t *observe,
   resource_count = turbo_flow_resource_count(observe->flow);
   for (size_t i = 0; i < resource_count; ++i) {
     turbo_flow_resource_snapshot_t resource = TURBO_FLOW_RESOURCE_SNAPSHOT_INIT;
-    if (turbo_flow_resource_snapshot_at(observe->flow, i, &resource) != TURBO_OK) continue;
+    if (turbo_flow_resource_snapshot_at(observe->flow, i, &resource) != SALTS_OK) continue;
     ++out->resource_providers;
     if (resource.kind != TURBO_FLOW_RESOURCE_SEGMENT) {
       out->resource_load = flow_observe_add_saturated(out->resource_load, resource.load);
@@ -403,20 +403,20 @@ int turbo_flow_observe_graph_snapshot(const turbo_flow_observe_t *observe,
       break;
     }
   }
-  if (turbo_platform_cpu_info(&cpu) == TURBO_OK) {
+  if (salts_platform_cpu_info(&cpu) == SALTS_OK) {
     out->system.cpu_cores = cpu.core_count;
     out->system.cpu_speed_mhz = cpu.speed_mhz;
   }
-  if (turbo_platform_memory_info(&memory) == TURBO_OK) {
+  if (salts_platform_memory_info(&memory) == SALTS_OK) {
     out->system.total_memory_bytes = memory.total_memory;
     out->system.available_memory_bytes = memory.available_memory;
   }
-  if (turbo_platform_load_average(&load) == TURBO_OK) {
+  if (salts_platform_load_average(&load) == SALTS_OK) {
     out->system.load_1m = load.one_minute;
     out->system.load_5m = load.five_minutes;
     out->system.load_15m = load.fifteen_minutes;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 typedef enum flow_observe_control_fact_id_e {
@@ -533,10 +533,10 @@ static const turbo_flow_expr_schema_field_t FLOW_OBSERVE_CONTROL_FIELDS[] = {
 #undef OBSERVE_F64
 
 static int flow_observe_fact_u64(turbo_flow_expr_value_t *out, uint64_t value) {
-  if (value > INT64_MAX) return TURBO_ERANGE;
+  if (value > INT64_MAX) return SALTS_ERANGE;
   out->type = TURBO_FLOW_EXPR_TYPE_I64;
   out->as.i64 = (int64_t)value;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_observe_control_read(void *ctx, uint32_t field_id, turbo_flow_expr_value_t *out) {
@@ -544,7 +544,7 @@ static int flow_observe_control_read(void *ctx, uint32_t field_id, turbo_flow_ex
       (const turbo_flow_observe_control_facts_snapshot_t *)ctx;
   const turbo_flow_observe_snapshot_t *traffic;
   const turbo_flow_observe_system_snapshot_t *system;
-  if (!snapshot || !out) return TURBO_EINVAL;
+  if (!snapshot || !out) return SALTS_EINVAL;
   traffic = &snapshot->graph.traffic;
   system = &snapshot->graph.system;
   memset(out, 0, sizeof(*out));
@@ -581,31 +581,31 @@ static int flow_observe_control_read(void *ctx, uint32_t field_id, turbo_flow_ex
   case FLOW_OBSERVE_FACT_TRAFFIC_CONTROL_LAST_STATUS:
     out->type = TURBO_FLOW_EXPR_TYPE_I64;
     out->as.i64 = traffic->control_last_status;
-    return TURBO_OK;
+    return SALTS_OK;
     U64_CASE(FLOW_OBSERVE_FACT_TRAFFIC_CONTROL_LAST_VALUE, traffic->control_last_value);
     U64_CASE(FLOW_OBSERVE_FACT_TRAFFIC_PAYLOAD_BYTES, traffic->payload_bytes);
   case FLOW_OBSERVE_FACT_SYSTEM_CPU_CORES:
     out->type = TURBO_FLOW_EXPR_TYPE_I64;
     out->as.i64 = system->cpu_cores;
-    return TURBO_OK;
+    return SALTS_OK;
   case FLOW_OBSERVE_FACT_SYSTEM_CPU_SPEED_MHZ:
     out->type = TURBO_FLOW_EXPR_TYPE_F64;
     out->as.f64 = system->cpu_speed_mhz;
-    return TURBO_OK;
+    return SALTS_OK;
     U64_CASE(FLOW_OBSERVE_FACT_SYSTEM_TOTAL_MEMORY_BYTES, system->total_memory_bytes);
     U64_CASE(FLOW_OBSERVE_FACT_SYSTEM_AVAILABLE_MEMORY_BYTES, system->available_memory_bytes);
   case FLOW_OBSERVE_FACT_SYSTEM_LOAD_1M:
     out->type = TURBO_FLOW_EXPR_TYPE_F64;
     out->as.f64 = system->load_1m;
-    return TURBO_OK;
+    return SALTS_OK;
   case FLOW_OBSERVE_FACT_SYSTEM_LOAD_5M:
     out->type = TURBO_FLOW_EXPR_TYPE_F64;
     out->as.f64 = system->load_5m;
-    return TURBO_OK;
+    return SALTS_OK;
   case FLOW_OBSERVE_FACT_SYSTEM_LOAD_15M:
     out->type = TURBO_FLOW_EXPR_TYPE_F64;
     out->as.f64 = system->load_15m;
-    return TURBO_OK;
+    return SALTS_OK;
     U64_CASE(FLOW_OBSERVE_FACT_GRAPH_CONNECTIONS_CURRENT, snapshot->graph.connections_current);
     U64_CASE(FLOW_OBSERVE_FACT_GRAPH_CONNECTIONS_TOTAL, snapshot->graph.connections_total);
     U64_CASE(FLOW_OBSERVE_FACT_GRAPH_DISCONNECTIONS_TOTAL, snapshot->graph.disconnections_total);
@@ -625,7 +625,7 @@ static int flow_observe_control_read(void *ctx, uint32_t field_id, turbo_flow_ex
     U64_CASE(FLOW_OBSERVE_FACT_GRAPH_RESOURCE_LOAD, snapshot->graph.resource_load);
     U64_CASE(FLOW_OBSERVE_FACT_GRAPH_RESOURCE_CAPACITY, snapshot->graph.resource_capacity);
   default:
-    return TURBO_ENOENT;
+    return SALTS_ENOENT;
   }
 #undef U64_CASE
 }
@@ -637,16 +637,16 @@ int turbo_flow_observe_control_facts(const turbo_flow_observe_t *observe,
                                                   sizeof(FLOW_OBSERVE_CONTROL_FIELDS) /
                                                       sizeof(FLOW_OBSERVE_CONTROL_FIELDS[0])};
   int rc;
-  if (!snapshot || !facts) return TURBO_EINVAL;
+  if (!snapshot || !facts) return SALTS_EINVAL;
   memset(snapshot, 0, sizeof(*snapshot));
   memset(facts, 0, sizeof(*facts));
   rc = turbo_flow_observe_graph_snapshot(observe, &snapshot->graph);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   facts->size = sizeof(*facts);
   facts->schema = &schema;
   facts->read_field = flow_observe_control_read;
   facts->ctx = snapshot;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static uint32_t flow_observe_ratio_bps(uint64_t value, uint64_t capacity) {
@@ -664,14 +664,14 @@ static int flow_observe_find_pool(const turbo_flow_observe_t *observe,
   size_t count = turbo_flow_pool_count(observe->flow);
   for (size_t i = 0; i < count; ++i) {
     turbo_flow_pool_resource_status_t status = TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
-    if (turbo_flow_pool_resource_status_at(observe->flow, i, &status) == TURBO_OK &&
+    if (turbo_flow_pool_resource_status_at(observe->flow, i, &status) == SALTS_OK &&
         status.snapshot.kind == policy->kind &&
         strcmp(status.owner_name, policy->stage_name) == 0) {
       *out = status;
-      return TURBO_OK;
+      return SALTS_OK;
     }
   }
-  return TURBO_ENOENT;
+  return SALTS_ENOENT;
 }
 
 int turbo_flow_observe_reconcile_pool(turbo_flow_observe_t *observe,
@@ -699,14 +699,14 @@ int turbo_flow_observe_reconcile_pool(turbo_flow_observe_t *observe,
       policy->low_utilization_bps >= policy->high_utilization_bps ||
       policy->high_utilization_bps > TURBO_FLOW_OBSERVE_UTILIZATION_BPS ||
       policy->high_observations == 0u || policy->low_observations == 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(out, 0, sizeof(*out));
   rc = turbo_flow_observe_graph_snapshot(observe, &graph);
-  if (rc != TURBO_OK) return rc;
-  if (graph.runtime.state != TURBO_FLOW_STATE_STARTED) return TURBO_EINVAL;
+  if (rc != SALTS_OK) return rc;
+  if (graph.runtime.state != TURBO_FLOW_STATE_STARTED) return SALTS_EINVAL;
   rc = flow_observe_find_pool(observe, policy, &pool_status);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   pool = &pool_status.snapshot;
 
   capacity = pool->resource_capacity;
@@ -725,7 +725,7 @@ int turbo_flow_observe_reconcile_pool(turbo_flow_observe_t *observe,
   }
   out->previous_parallelism = pool->parallelism;
   out->desired_parallelism = pool->parallelism;
-  out->command_status = TURBO_OK;
+  out->command_status = SALTS_OK;
 
   desired = pool->parallelism;
   if (desired < policy->min_parallelism) {
@@ -738,7 +738,7 @@ int turbo_flow_observe_reconcile_pool(turbo_flow_observe_t *observe,
     if (state->high_observations < UINT32_MAX) ++state->high_observations;
     if (state->high_observations < policy->high_observations) {
       out->action = TURBO_FLOW_OBSERVE_RECONCILE_HYSTERESIS;
-      return TURBO_OK;
+      return SALTS_OK;
     }
     desired = policy->scale_up_step > policy->max_parallelism - pool->parallelism
                   ? policy->max_parallelism
@@ -749,7 +749,7 @@ int turbo_flow_observe_reconcile_pool(turbo_flow_observe_t *observe,
     if (state->low_observations < UINT32_MAX) ++state->low_observations;
     if (state->low_observations < policy->low_observations) {
       out->action = TURBO_FLOW_OBSERVE_RECONCILE_HYSTERESIS;
-      return TURBO_OK;
+      return SALTS_OK;
     }
     desired = pool->parallelism > policy->scale_down_step
                   ? pool->parallelism - policy->scale_down_step
@@ -759,7 +759,7 @@ int turbo_flow_observe_reconcile_pool(turbo_flow_observe_t *observe,
     state->high_observations = 0u;
     state->low_observations = 0u;
     out->action = TURBO_FLOW_OBSERVE_RECONCILE_STABLE;
-    return TURBO_OK;
+    return SALTS_OK;
   }
 
   out->desired_parallelism = desired;
@@ -767,7 +767,7 @@ int turbo_flow_observe_reconcile_pool(turbo_flow_observe_t *observe,
     state->high_observations = 0u;
     state->low_observations = 0u;
     out->action = TURBO_FLOW_OBSERVE_RECONCILE_STABLE;
-    return TURBO_OK;
+    return SALTS_OK;
   }
   cooldown_ns = policy->cooldown_ms > UINT64_MAX / UINT64_C(1000000)
                     ? UINT64_MAX
@@ -775,12 +775,12 @@ int turbo_flow_observe_reconcile_pool(turbo_flow_observe_t *observe,
   elapsed_ns = now_ns >= state->last_resize_ns ? now_ns - state->last_resize_ns : 0u;
   if (state->last_resize_ns != 0u && elapsed_ns < cooldown_ns) {
     out->action = TURBO_FLOW_OBSERVE_RECONCILE_COOLDOWN;
-    return TURBO_OK;
+    return SALTS_OK;
   }
   if (upscale && policy->max_system_load_per_core_bps > 0u &&
       out->system_load_per_core_bps >= policy->max_system_load_per_core_bps) {
     out->action = TURBO_FLOW_OBSERVE_RECONCILE_SYSTEM_LIMIT;
-    return TURBO_OK;
+    return SALTS_OK;
   }
 
   request.metadata.domain = TURBO_FLOW_DOMAIN_EXECUTION;
@@ -788,42 +788,42 @@ int turbo_flow_observe_reconcile_pool(turbo_flow_observe_t *observe,
   request.metadata.generation = pool_status.generation;
   request.metadata.observed_generation = pool_status.observed_generation;
   written = snprintf(request.metadata.uid, sizeof(request.metadata.uid), "%s", pool_status.uid);
-  if (written < 0 || (size_t)written >= sizeof(request.metadata.uid)) return TURBO_ENAMETOOLONG;
+  if (written < 0 || (size_t)written >= sizeof(request.metadata.uid)) return SALTS_ENAMETOOLONG;
   written = snprintf(request.metadata.owner_name, sizeof(request.metadata.owner_name), "%s",
                      pool_status.owner_name);
   if (written < 0 || (size_t)written >= sizeof(request.metadata.owner_name))
-    return TURBO_ENAMETOOLONG;
+    return SALTS_ENAMETOOLONG;
   request.observed_value = pool->parallelism;
   request.desired_value = desired;
   request.command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL;
   written = snprintf(request.command.target_uid, sizeof(request.command.target_uid), "%s",
                      pool_status.uid);
   if (written < 0 || (size_t)written >= sizeof(request.command.target_uid))
-    return TURBO_ENAMETOOLONG;
+    return SALTS_ENAMETOOLONG;
   written = snprintf(request.command.idempotency_key, sizeof(request.command.idempotency_key),
                      "reconcile:%s:%llu:%u:%llu", pool_status.uid,
                      (unsigned long long)pool_status.observed_generation, (unsigned)desired,
                      (unsigned long long)now_ns);
   if (written < 0 || (size_t)written >= sizeof(request.command.idempotency_key))
-    return TURBO_ENAMETOOLONG;
+    return SALTS_ENAMETOOLONG;
   request.command.parallelism = desired;
   request.command.drain_timeout_ms = policy->drain_timeout_ms;
   request.command.deadline_ns = UINT64_MAX;
   rc = turbo_flow_resource_reconcile_tick(observe->flow, &request, &reconcile);
   out->command_status = rc;
-  if (rc != TURBO_OK) return rc;
-  if (reconcile.action != TURBO_FLOW_RESOURCE_RECONCILE_COMMAND_APPLIED) return TURBO_EPROTO;
+  if (rc != SALTS_OK) return rc;
+  if (reconcile.action != TURBO_FLOW_RESOURCE_RECONCILE_COMMAND_APPLIED) return SALTS_EPROTO;
   state->last_resize_ns = now_ns ? now_ns : 1u;
   state->high_observations = 0u;
   state->low_observations = 0u;
   out->action = TURBO_FLOW_OBSERVE_RECONCILE_RESIZED;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_observe_record_control_event(turbo_flow_observe_t *observe,
                                             const turbo_flow_observe_control_event_t *event) {
   atomic_uint_fast64_t *counter = NULL;
-  if (!observe || !event) return TURBO_EINVAL;
+  if (!observe || !event) return SALTS_EINVAL;
   switch (event->kind) {
   case TURBO_FLOW_OBSERVE_CONTROL_PEER_CONNECTED:
     counter = &observe->control_peer_connected;
@@ -853,10 +853,10 @@ int turbo_flow_observe_record_control_event(turbo_flow_observe_t *observe,
     counter = &observe->control_frame_dropped;
     break;
   default:
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
-  if (event->status != TURBO_OK) {
+  if (event->status != SALTS_OK) {
     atomic_fetch_add_explicit(&observe->control_errors, 1, memory_order_relaxed);
   }
   atomic_store_explicit(&observe->control_last_status, event->status, memory_order_relaxed);
@@ -864,87 +864,87 @@ int turbo_flow_observe_record_control_event(turbo_flow_observe_t *observe,
   {
     turbo_flow_observe_event_record_t record;
     memset(&record, 0, sizeof(record));
-    record.timestamp_ns = turbo_hrtime();
+    record.timestamp_ns = salts_hrtime();
     record.event = *event;
-    turbo_mutex_lock(&observe->export_mutex);
+    salts_mutex_lock(&observe->export_mutex);
     record.sequence = ++observe->next_event_sequence;
     if (deque_size(&observe->events) == observe->max_events) {
       turbo_flow_observe_event_record_t discarded;
-      if (turbo_flow_stl_error(deque_pop_front(&observe->events, &discarded)) == TURBO_OK) {
+      if (turbo_flow_stl_error(deque_pop_front(&observe->events, &discarded)) == SALTS_OK) {
         ++observe->dropped_events;
       }
     }
-    if (turbo_flow_stl_error(deque_push_back(&observe->events, &record)) != TURBO_OK) {
-      turbo_mutex_unlock(&observe->export_mutex);
-      return TURBO_ENOMEM;
+    if (turbo_flow_stl_error(deque_push_back(&observe->events, &record)) != SALTS_OK) {
+      salts_mutex_unlock(&observe->export_mutex);
+      return SALTS_ENOMEM;
     }
-    turbo_mutex_unlock(&observe->export_mutex);
+    salts_mutex_unlock(&observe->export_mutex);
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 size_t turbo_flow_observe_event_count(const turbo_flow_observe_t *observe) {
   size_t count;
   if (!observe) return 0u;
-  turbo_mutex_lock((turbo_mutex_t *)&observe->export_mutex);
+  salts_mutex_lock((salts_mutex_t *)&observe->export_mutex);
   count = deque_size(&observe->events);
-  turbo_mutex_unlock((turbo_mutex_t *)&observe->export_mutex);
+  salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
   return count;
 }
 
 uint64_t turbo_flow_observe_dropped_event_count(const turbo_flow_observe_t *observe) {
   uint64_t count;
   if (!observe) return 0u;
-  turbo_mutex_lock((turbo_mutex_t *)&observe->export_mutex);
+  salts_mutex_lock((salts_mutex_t *)&observe->export_mutex);
   count = observe->dropped_events;
-  turbo_mutex_unlock((turbo_mutex_t *)&observe->export_mutex);
+  salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
   return count;
 }
 
 int turbo_flow_observe_event_at(const turbo_flow_observe_t *observe, size_t index,
                                 turbo_flow_observe_event_record_t *out) {
   const turbo_flow_observe_event_record_t *event;
-  if (!observe || !out) return TURBO_EINVAL;
-  turbo_mutex_lock((turbo_mutex_t *)&observe->export_mutex);
+  if (!observe || !out) return SALTS_EINVAL;
+  salts_mutex_lock((salts_mutex_t *)&observe->export_mutex);
   event = (const turbo_flow_observe_event_record_t *)deque_at_const(&observe->events, index);
   if (!event) {
-    turbo_mutex_unlock((turbo_mutex_t *)&observe->export_mutex);
-    return TURBO_ENOENT;
+    salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
+    return SALTS_ENOENT;
   }
   *out = *event;
-  turbo_mutex_unlock((turbo_mutex_t *)&observe->export_mutex);
-  return TURBO_OK;
+  salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
+  return SALTS_OK;
 }
 
 int turbo_flow_observe_record_command_result(turbo_flow_observe_t *observe, const char *target_uid,
                                              const turbo_flow_resource_command_result_t *result) {
   size_t length;
   if (!observe || !target_uid || !*target_uid || !result || result->size < sizeof(*result))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   length = strlen(target_uid);
-  if (length > TURBO_FLOW_RESOURCE_UID_MAX) return TURBO_ENAMETOOLONG;
-  turbo_mutex_lock(&observe->export_mutex);
+  if (length > TURBO_FLOW_RESOURCE_UID_MAX) return SALTS_ENAMETOOLONG;
+  salts_mutex_lock(&observe->export_mutex);
   memcpy(observe->command_target_uid, target_uid, length + 1u);
   observe->command_result = *result;
   observe->command_result.size = sizeof(observe->command_result);
   observe->has_command_result = 1;
-  turbo_mutex_unlock(&observe->export_mutex);
-  return TURBO_OK;
+  salts_mutex_unlock(&observe->export_mutex);
+  return SALTS_OK;
 }
 
 int turbo_flow_observe_last_command_result(const turbo_flow_observe_t *observe,
                                            char target_uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u],
                                            turbo_flow_resource_command_result_t *out) {
-  if (!observe || !target_uid || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
-  turbo_mutex_lock((turbo_mutex_t *)&observe->export_mutex);
+  if (!observe || !target_uid || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  salts_mutex_lock((salts_mutex_t *)&observe->export_mutex);
   if (!observe->has_command_result) {
-    turbo_mutex_unlock((turbo_mutex_t *)&observe->export_mutex);
-    return TURBO_ENOENT;
+    salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
+    return SALTS_ENOENT;
   }
   memcpy(target_uid, observe->command_target_uid, sizeof(observe->command_target_uid));
   *out = observe->command_result;
-  turbo_mutex_unlock((turbo_mutex_t *)&observe->export_mutex);
-  return TURBO_OK;
+  salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
+  return SALTS_OK;
 }
 
 size_t turbo_flow_observe_resource_count(const turbo_flow_observe_t *observe) {
@@ -954,24 +954,24 @@ size_t turbo_flow_observe_resource_count(const turbo_flow_observe_t *observe) {
 int turbo_flow_observe_resource_at(const turbo_flow_observe_t *observe, size_t index,
                                    turbo_flow_observe_resource_view_t *out) {
   int accepting;
-  if (!observe || !observe->flow || !out) return TURBO_EINVAL;
+  if (!observe || !observe->flow || !out) return SALTS_EINVAL;
   memset(out, 0, sizeof(*out));
   out->snapshot = (turbo_flow_resource_snapshot_t)TURBO_FLOW_RESOURCE_SNAPSHOT_INIT;
-  if (turbo_flow_resource_snapshot_at(observe->flow, index, &out->snapshot) != TURBO_OK)
-    return TURBO_ENOENT;
+  if (turbo_flow_resource_snapshot_at(observe->flow, index, &out->snapshot) != SALTS_OK)
+    return SALTS_ENOENT;
   accepting = !out->snapshot.saturated;
   if (out->snapshot.kind == TURBO_FLOW_RESOURCE_RUNTIME) {
     turbo_flow_runtime_snapshot_t runtime;
     int rc = turbo_flow_runtime_snapshot(observe->flow, &runtime);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     accepting = runtime.accepting_publishes;
   }
   out->condition_count = TURBO_FLOW_RESOURCE_CONDITION_MAX;
   out->conditions[0] = (turbo_flow_resource_condition_t){
       TURBO_FLOW_RESOURCE_CONDITION_READY,
-      out->snapshot.last_status == TURBO_OK ? TURBO_FLOW_CONDITION_TRUE
+      out->snapshot.last_status == SALTS_OK ? TURBO_FLOW_CONDITION_TRUE
                                             : TURBO_FLOW_CONDITION_FALSE,
-      out->snapshot.last_status == TURBO_OK ? TURBO_FLOW_RESOURCE_REASON_RUNNING
+      out->snapshot.last_status == SALTS_OK ? TURBO_FLOW_RESOURCE_REASON_RUNNING
                                             : TURBO_FLOW_RESOURCE_REASON_NOT_RUNNING};
   out->conditions[1] = (turbo_flow_resource_condition_t){
       TURBO_FLOW_RESOURCE_CONDITION_ACCEPTING,
@@ -987,15 +987,15 @@ int turbo_flow_observe_resource_at(const turbo_flow_observe_t *observe, size_t i
       out->snapshot.saturated ? TURBO_FLOW_CONDITION_TRUE : TURBO_FLOW_CONDITION_FALSE,
       out->snapshot.saturated ? TURBO_FLOW_RESOURCE_REASON_CAPACITY_EXHAUSTED
                               : TURBO_FLOW_RESOURCE_REASON_CAPACITY_AVAILABLE};
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 size_t turbo_flow_observe_stage_count(const turbo_flow_observe_t *observe) {
   size_t count;
   if (!observe) return 0;
-  turbo_mutex_lock((turbo_mutex_t *)&observe->stage_mutex);
+  salts_mutex_lock((salts_mutex_t *)&observe->stage_mutex);
   count = vec_size(&observe->stages);
-  turbo_mutex_unlock((turbo_mutex_t *)&observe->stage_mutex);
+  salts_mutex_unlock((salts_mutex_t *)&observe->stage_mutex);
   return count;
 }
 
@@ -1003,12 +1003,12 @@ int turbo_flow_observe_stage_snapshot_at(const turbo_flow_observe_t *observe, si
                                          turbo_flow_observe_stage_snapshot_t *out) {
   const flow_observe_stage_entry_t *entry;
   size_t name_len;
-  if (!observe || !out) return TURBO_EINVAL;
-  turbo_mutex_lock((turbo_mutex_t *)&observe->stage_mutex);
+  if (!observe || !out) return SALTS_EINVAL;
+  salts_mutex_lock((salts_mutex_t *)&observe->stage_mutex);
   entry = (const flow_observe_stage_entry_t *)vec_at_const(&observe->stages, index);
   if (!entry) {
-    turbo_mutex_unlock((turbo_mutex_t *)&observe->stage_mutex);
-    return TURBO_ENOENT;
+    salts_mutex_unlock((salts_mutex_t *)&observe->stage_mutex);
+    return SALTS_ENOENT;
   }
   memset(out, 0, sizeof(*out));
   name_len = tstr_len(entry->name);
@@ -1020,8 +1020,8 @@ int turbo_flow_observe_stage_snapshot_at(const turbo_flow_observe_t *observe, si
   out->errors = entry->errors;
   out->latency_ns_total = entry->latency_ns_total;
   out->latency_ns_max = entry->latency_ns_max;
-  turbo_mutex_unlock((turbo_mutex_t *)&observe->stage_mutex);
-  return TURBO_OK;
+  salts_mutex_unlock((salts_mutex_t *)&observe->stage_mutex);
+  return SALTS_OK;
 }
 
 static int flow_observe_log_consume(void *ctx, turbo_flow_t *flow,
@@ -1033,7 +1033,7 @@ static int flow_observe_log_consume(void *ctx, turbo_flow_t *flow,
   size_t preview_bytes = 0;
   (void)flow;
   if (!sink || !stage || !msg || !sink->write || (msg->payload.len > 0 && !msg->payload.data))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   memset(&summary, 0, sizeof(summary));
   preview[0] = '\0';
   if (sink->include_payload_preview) {
@@ -1054,7 +1054,7 @@ static int flow_observe_log_consume(void *ctx, turbo_flow_t *flow,
   summary.preview_bytes = preview_bytes;
   summary.payload_redacted = sink->include_payload_preview ? 0 : 1;
   sink->write(sink->write_ctx, &summary);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void flow_observe_log_shutdown(void *ctx) { free(ctx); }
@@ -1067,10 +1067,10 @@ int turbo_flow_observe_register_log_sink(turbo_flow_t *flow, const char *name,
   int rc;
   if (!flow || !name || name[0] == '\0' || !config || !config->write ||
       config->max_preview_bytes > TURBO_FLOW_OBSERVE_MAX_PREVIEW_BYTES) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   sink = (flow_observe_log_sink_t *)calloc(1, sizeof(*sink));
-  if (!sink) return TURBO_ENOMEM;
+  if (!sink) return SALTS_ENOMEM;
   sink->max_preview_bytes = config->max_preview_bytes;
   sink->include_payload_preview = config->include_payload_preview ? 1 : 0;
   sink->write = config->write;
@@ -1085,6 +1085,6 @@ int turbo_flow_observe_register_log_sink(turbo_flow_t *flow, const char *name,
   schema.fields = FLOW_OBSERVE_LOG_FIELDS;
   schema.field_count = sizeof(FLOW_OBSERVE_LOG_FIELDS) / sizeof(FLOW_OBSERVE_LOG_FIELDS[0]);
   rc = turbo_flow_register_adapter_ex(flow, name, &ops, sink, &schema);
-  if (rc != TURBO_OK) free(sink);
+  if (rc != SALTS_OK) free(sink);
   return rc;
 }

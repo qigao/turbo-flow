@@ -27,11 +27,11 @@
 
 Primitive registration 返回：
 
-- `TURBO_OK`：注册成功；
-- `TURBO_EINVAL`：字段、domain、kind 或 version 无效；
-- `TURBO_EALREADY`：binding name 重复；
-- `TURBO_EBUSY`：flow 已 compile/start；
-- `TURBO_ENOMEM`：复制 descriptor 失败。
+- `SALTS_OK`：注册成功；
+- `SALTS_EINVAL`：字段、domain、kind 或 version 无效；
+- `SALTS_EALREADY`：binding name 重复；
+- `SALTS_EBUSY`：flow 已 compile/start；
+- `SALTS_ENOMEM`：复制 descriptor 失败。
 
 ## 3. Operation descriptor
 
@@ -43,8 +43,8 @@ Primitive registration 返回：
 - required resource domain/type；stateless operation 两者均为空；
 - data、state、lifetime、concurrency、authority 五维 scope；
 - source/stage/bridge role；
-- 允许的 inline/thread/coro execution mask；worker 是独立的 bounded handoff，CoroNet 是
-  adapter-owned I/O placement，两者都不属于 execution mask；
+- 允许的 inline/thread/coro execution mask；worker 是独立的 bounded handoff，CNet/CHTTP 是
+  外部 adapter-owned I/O placement，两者都不属于 execution mask；
 - handoff、ordering、backpressure、cancellation、error、deadline 和 settlement runtime contract。
 
 跨 domain input/output 必须声明 `TURBO_FLOW_OPERATION_BRIDGE`。`RESOURCE_OWNER` 或
@@ -52,7 +52,7 @@ Primitive registration 返回：
 Management domain，且不能绑定到 payload graph node。
 
 `size` 必须覆盖当前完整 descriptor，registry 校验完整 runtime contract。截断的旧 descriptor
-直接返回 `TURBO_EINVAL`，不再隐式补成 direct contract；registry query 返回深拷贝后的当前结构。
+直接返回 `SALTS_EINVAL`，不再隐式补成 direct contract；registry query 返回深拷贝后的当前结构。
 
 Runtime contract 不创建 executor 或 ring。它声明 operation 正确执行所需的边界，compiler
 再与 DSL 已选择的 worker/reorder/retry/reject 配置核对。两者不一致时 fail fast。
@@ -103,8 +103,8 @@ turbo_flow_operation_descriptor_t publish_in = {
 };
 
 int rc = turbo_flow_register_primitive(flow, &session);
-if (rc == TURBO_OK) rc = turbo_flow_register_operation(flow, &publish_in);
-if (rc != TURBO_OK) {
+if (rc == SALTS_OK) rc = turbo_flow_register_operation(flow, &publish_in);
+if (rc != SALTS_OK) {
   turbo_flow_destroy(flow);
   return rc;
 }
@@ -139,8 +139,8 @@ adapter owner 满足。DSL 不能修改 `publish_in` 的 session authority 或 o
 Store 是 caller-owned opaque owner，一个 store 同时只能绑定一个 provider 和一个 runtime
 node。`key_selector` 返回 callback 当次借用的二进制 view；runtime 在返回后立即复制 key。
 Processor 通过 callback-local `turbo_flow_keyed_state_get/put/delete()` 操作同一个 key。
-PUT/DELETE 先暂存，只有 callback 返回 `TURBO_OK` 且 revision 未变化才原子提交；同 key 并发
-更新返回 `TURBO_EBUSY`，runtime 不自动重放可能带外部副作用的 callback。
+PUT/DELETE 先暂存，只有 callback 返回 `SALTS_OK` 且 revision 未变化才原子提交；同 key 并发
+更新返回 `SALTS_EBUSY`，runtime 不自动重放可能带外部副作用的 callback。
 
 需要 0..N 输出时使用
 `turbo_flow_register_keyed_emitting_operation_provider()`。其 input 为 const，processor 在同一
@@ -156,7 +156,7 @@ output bound 超限或 state conflict 都会丢弃整个输出批次且不提交
 static int select_client(const turbo_flow_msg_t *msg, vstr *key, void *ctx) {
   (void)ctx;
   *key = tstr_v_from_buf((const char *)&msg->id, sizeof(msg->id));
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int increment(turbo_flow_msg_t *msg, turbo_flow_keyed_state_t *state, void *ctx) {
@@ -164,10 +164,10 @@ static int increment(turbo_flow_msg_t *msg, turbo_flow_keyed_state_t *state, voi
   uint64_t count = 0;
   int rc = turbo_flow_keyed_state_get(state, &value, NULL);
   (void)ctx;
-  if (rc == TURBO_OK) {
-    if (value.len != sizeof(count)) return TURBO_EPROTO;
+  if (rc == SALTS_OK) {
+    if (value.len != sizeof(count)) return SALTS_EPROTO;
     memcpy(&count, value.data, sizeof(count));
-  } else if (rc != TURBO_ENOENT) {
+  } else if (rc != SALTS_ENOENT) {
     return rc;
   }
   ++count;
@@ -185,7 +185,7 @@ config.max_total_bytes = 4096 * sizeof(uint64_t) * 2;
 
 turbo_flow_keyed_state_store_t *store =
     turbo_flow_keyed_state_store_create(&config);
-if (!store) return TURBO_ENOMEM;
+if (!store) return SALTS_ENOMEM;
 
 turbo_flow_keyed_operation_provider_registration_t provider =
     TURBO_FLOW_KEYED_OPERATION_PROVIDER_REGISTRATION_INIT;
@@ -196,7 +196,7 @@ provider.store = store;
 
 int rc = turbo_flow_register_keyed_operation_provider(flow, &provider);
 /* Register/parse/compile/start the matching descriptor and graph here. */
-if (rc != TURBO_OK) {
+if (rc != SALTS_OK) {
   turbo_flow_keyed_state_store_destroy(store);
   return rc;
 }
@@ -228,7 +228,7 @@ min/idle-source 规则仍由该 owner 负责。达到 `window.end_ns + allowed_l
 按 `(window_start, binary key)` 排序调用 `on_close`，并使用 bounded emitter 产生 0..N 输出。
 
 Watermark 在扫描前提交，因此并发的迟到事件会在 state commit 点返回
-`TURBO_ETIMEDOUT`。Close callback、emitter bound 或 revision 校验失败时 accumulator 保留；
+`SALTS_ETIMEDOUT`。Close callback、emitter bound 或 revision 校验失败时 accumulator 保留；
 caller 可用相同 watermark 重试。Close 成功时先删除 accumulator，再执行 downstream；后续
 downstream failure 不恢复窗口，也不会在相同 watermark 上重复输出。`closed_windows` 统计
 本次已经删除的窗口，即使其某个 downstream 随后失败。
@@ -238,20 +238,12 @@ downstream failure 不恢复窗口，也不会在相同 watermark 上重复输�
 瓶颈，再以预留 timer heap/index 替换扫描，并保留当前 revision/失败语义作为对照基线。
 
 该切片只定义 fixed tumbling、event-time、watermark trigger 和 allowed-lateness eviction。
-核心仍不读取 processing time。`io/common` 提供可选的
-`tf_event_time_watermark_owner_t`：adapter 在事件被 `turbo_flow_publish()` 成功接受后记录
-`max(event.ts_ns)`，owner 的 interruptible timer 周期提交
-`max_event_time - max_out_of_orderness`（下溢饱和为 0）。推荐使用
-`tf_event_time_watermark_owner_publish()` 保证 publish-before-observe；直接 `observe()` 只用于
-已有等价 admission 边界的 adapter。多 source 若需要 min/idle-source 合并，仍应由更高层 owner
-先合并，不能把各 source 的 max 直接混为同一个 watermark。
-
-周期 owner 的线程、timer 和失败状态属于 adapter/I/O 层，不进入 flow runtime。Advance 失败时
-owner fail fast 进入 `FAILED` 并停止周期推进；stop/reset 保留已观察最大时间和最后成功
-watermark，使 close callback 失败后可用相同 watermark 重试。Snapshot 公开单调计数；生命周期
-命令由 host 串行化，`observe()` 使用 allocation-free atomic max，tick 之间由 mutex 串行化，且
-锁内不会等待 timer。已处于 `FAILED` 时 publish wrapper 会在 admission 前拒绝；若外部 adapter
-已经接受事件，直接 `observe()` 仍会记录 timestamp，避免把已发生的 admission 伪装成失败。
+核心仍不读取 processing time，只接受 host 对
+`turbo_flow_advance_event_time_watermark()` 的显式调用。本仓库不再提供周期 watermark owner。
+外部 CNet/CHTTP adapter 如需自动推进，必须在事件被 `turbo_flow_publish()` 成功接受后更新其
+单一事实源，再提交 `max_event_time - max_out_of_orderness`（下溢饱和为 0）。多 source 的
+min/idle-source 合并、timer、失败状态、snapshot 和 stop/reset 生命周期均由该外部 owner
+负责；缺少 owner 时 fail fast，不回退到 Graph 内部时钟。
 
 尚未包含 sliding/session window、early/late trigger、side output、durable checkpoint 或
 exactly-once sink transaction。Store 与 watermark 都属于 runtime generation，stop 后下一次
@@ -273,7 +265,7 @@ Compiler 对显式 operation node 执行：
 8. bounded handoff 只绑定现有 worker Disruptor，且 capacity 必须与 DSL worker capacity 一致；
 9. preserve-input worker 必须有 reorder boundary，reject/retry error mode 必须分别有 reject edge
    或 retry policy；
-10. runtime 尚无 owner 的能力返回 `TURBO_ENOTSUP`，不只记录 metadata 后继续运行。
+10. runtime 尚无 owner 的能力返回 `SALTS_ENOTSUP`，不只记录 metadata 后继续运行。
 
 跨 domain 转换发生在单个 bridge operation 内。Graph edge 本身不做隐式转换，也不会根据
 字符串相似度推断兼容类型。
@@ -307,13 +299,13 @@ Compiler 对显式 operation node 执行：
 fan-out、fan-in plan 是 lowering metadata，不表示每个逻辑 edge 都拥有独立 ring。
 
 worker backpressure 当前支持 `block`、`fail` 和 `drop-newest`；`drop-oldest` 仍明确返回
-`TURBO_ENOTSUP`，因为 active sequence 完成前没有可安全回收的旧 entry。generic
+`SALTS_ENOTSUP`，因为 active sequence 完成前没有可安全回收的旧 entry。generic
 complete/requeue/dead-letter settlement、protocol ACK settlement 和 `SETTLE` error mode 只通过
 显式 runtime owner callback 执行，不能由 adapter 私下从字符串 option 推断。
 
 内建计算 executor 只有 `inline`、thread pool 和 coroutine pool。TurboFlow Policy expression evaluate
 是 inline pure evaluator，不创建独立 pool。Disruptor worker 是 bounded data handoff/consumer
-lane，CoroNet context 是 adapter-owned IO placement；两者都不是新的计算 executor 类别。
+lane，CNet/CHTTP context 是外部 adapter-owned IO placement；两者都不是新的计算 executor 类别。
 旧 `socket`、`io` 和 `custom` executor 已删除；扩展行为必须建模为 typed operation、adapter
 owner 或公共 executor 上的 stage，不再绕过统一执行语义。
 
@@ -331,7 +323,7 @@ Runtime-owned Disruptor、thread 和 coroutine pool 是首个落地 Management r
 - 从该 snapshot 一次性推导的 READY、ACCEPTING、DRAINED、SATURATED typed conditions。
 
 调用方必须用 `TURBO_FLOW_POOL_RESOURCE_STATUS_INIT` 初始化 status。小于当前结构大小的 caller
-返回 `TURBO_EINVAL`；更大的 future structure 可被接受，当前实现写入当前版本结构并将 `size`
+返回 `SALTS_EINVAL`；更大的 future structure 可被接受，当前实现写入当前版本结构并将 `size`
 报告为当前结构大小，不读取或承诺保留未知尾部。
 
 `runtime_generation` 由 flow runtime owner 单独维护。成功 start/restart、成功 resize，以及
@@ -340,7 +332,7 @@ resize 失败后成功恢复旧配置的 rebuild 都会替换底层 pool 实例�
 只在该代 runtime 全部创建成功后提交为当前 generation。
 
 `turbo_flow_pool_resize_command_t` 必须携带非零 `expected_generation`，且必须等于当前 runtime
-generation；否则分别返回 `TURBO_EINVAL` 或 `TURBO_EBUSY`。旧的截断 command 和 unchecked
+generation；否则分别返回 `SALTS_EINVAL` 或 `SALTS_EBUSY`。旧的截断 command 和 unchecked
 调用语义已删除。Observe pool reconcile 从同一个 status
 读取 load/capacity 和 observed generation，再发送 checked command；Observe 不修改 Status，也
 不拥有 controller thread。
@@ -393,7 +385,7 @@ Core 为九种 canonical domain/resource pair 注册独立的 common-governance 
 Connection、Queue、Pool、Runtime、Segment、Protocol、Storage 和 RuleSet。公开
 `turbo_flow_resource_governance_schema()` 仅返回匹配 domain/kind 的 Spec、Conditions 或 Event
 schema；Status 始终优先使用 owner-native document，Command 仍走强类型 owner dispatcher。
-owner 若提供同类文档则其结果优先；只有 callback 缺失或明确返回 `TURBO_ENOTSUP` 时，core 才从
+owner 若提供同类文档则其结果优先；只有 callback 缺失或明确返回 `SALTS_ENOTSUP` 时，core 才从
 同一次 metadata/snapshot 生成 common document，其他 owner 错误不被 fallback 掩盖。
 
 Common Spec 的 `capacity` 是 owner snapshot 声明的容量契约，使用十进制 string；零表示该资源
@@ -418,7 +410,7 @@ Observe exporter 继续只从 owner snapshot/document 导出派生指标，不�
 业务消息与 management resource document 使用不同的 schema identity。业务消息使用
 `turbo_flow_data_schema_t`，不携带 resource kind、document kind、UID 或 generation；resource
 document 继续使用 `turbo_flow_resource_schema_t`。Data schema 同时区分业务 `type_name` 与稳定
-`projection_type`，例如 `Order` 与 `TurboUtils.DataBindValue`，consumer 必须校验 provider value
+`projection_type`，例如 `Order` 与 `Salts.DataBindValue`，consumer 必须校验 provider value
 type 后才能强转 projection。两种 schema identity 不能混用，因为生命周期、权限和错误语义
 不同。
 
@@ -431,10 +423,10 @@ projection。Core 只保存可信 schema identity、opaque projection pointer �
 Descriptor 与 projection 的 domain 可以不同：例如 HTTP 或外部协议 descriptor 描述协议入口，DataBind
 projection 使用 Data domain 描述解析结果。跨 domain 不代表存在两份 payload identity；只要 descriptor
 声明了 schema，projection 的 encoding、schema name、type name 与 version 就必须完全一致。无论先附加
-descriptor 还是先绑定 projection，冲突都返回 `TURBO_EPROTO`，失败不接管调用方 projection。
+descriptor 还是先绑定 projection，冲突都返回 `SALTS_EPROTO`，失败不接管调用方 projection。
 
 Projection clone 是 provider capability，不是 Core 对未知对象的推测。提供 clone hook 时，
-message clone 得到独立 projection；未提供时，clone/retry/fan-out 返回 `TURBO_ENOTSUP`。DataBind
+message clone 得到独立 projection；未提供时，clone/retry/fan-out 返回 `SALTS_ENOTSUP`。DataBind
 adapter 使用 DataBind owner 模块公开的 `data_bind_value_clone()` 注册 clone hook，因此 cloned
 message 拥有独立值树；TurboFlow 不遍历或序列化绕过 DataBind 私有值树。其他 provider 未提供
 clone hook 时仍按 generic contract fail fast。
@@ -449,7 +441,7 @@ identity 分开，identity 只用于诊断，不参与 schema lookup。
 Content registry 由 host 显式 create/destroy，不使用 singleton。注册项深拷贝 schema identity 与
 projection type；`schema_text` 必须为 NULL，schema 文本加载/编译属于可信 provider，而不是运行时
 registry。解析键为 `(domain, profile, media type, schema name/type/version)`；未声明 schema 时只允许
-保持 opaque 并返回 `TURBO_ENOENT`，不得根据唯一候选猜测 schema。
+保持 opaque 并返回 `SALTS_ENOENT`，不得根据唯一候选猜测 schema。
 
 HTTP、S3、Database 和外部协议 adapter 只负责把协议元数据归一化为 lookup key。未知 media type 且
 没有显式 binding 时保持 opaque；binding 不完整、已声明 schema 不匹配或 registry 冲突时 fail

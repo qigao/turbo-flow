@@ -34,7 +34,7 @@ static int flow_worker_request_run(turbo_flow_msg_t *msg, void *ctx) {
   flow_publish_error_context_begin(adapter->flow);
   rc = flow_dispatch_call_executor(adapter->flow, adapter->stage, adapter->executor,
                                    adapter->stage_index, msg, &request->execution.completion);
-  if (rc != TURBO_OK && turbo_flow_last_error(adapter->flow)) {
+  if (rc != SALTS_OK && turbo_flow_last_error(adapter->flow)) {
     request->error = *turbo_flow_last_error(adapter->flow);
   }
   flow_publish_error_context_end(adapter->flow);
@@ -80,12 +80,12 @@ static void flow_worker_pool_run(void *arg) {
     request->execution.completion.entry.worker_lane = context->lane;
     flow_pool_record_started(flow_pool_record_at(adapter->flow, adapter->pool_record_index));
     if (flow_entry_header_validate(adapter->flow, &entry->header, &request->execution.msg) !=
-            TURBO_OK ||
+            SALTS_OK ||
         entry->header.stage_index != adapter->stage_index ||
         entry->header.segment_kind != FLOW_DATA_SEGMENT_WORKER_POOL ||
         entry->header.completion_handle != &request->execution.completion ||
         entry->header.cancel_handle != &request->execution.cancel_requested) {
-      flow_execution_task_fail(&request->execution, TURBO_EPROTO);
+      flow_execution_task_fail(&request->execution, SALTS_EPROTO);
     } else {
       flow_execution_task_run(&request->execution);
     }
@@ -109,7 +109,7 @@ static void flow_worker_pool_stop(flow_worker_pool_adapter_t *adapter) {
   if (adapter->ring) disruptor_worker_wake_all(adapter->ring);
   if (adapter->workers) {
     for (uint32_t i = 0; i < adapter->width; ++i) {
-      if (adapter->workers[i]) (void)turbo_thread_join(&adapter->workers[i]);
+      if (adapter->workers[i]) (void)salts_thread_join(&adapter->workers[i]);
     }
     free(adapter->workers);
     adapter->workers = NULL;
@@ -125,14 +125,14 @@ static void flow_worker_pool_stop(flow_worker_pool_adapter_t *adapter) {
 
 static int flow_worker_pool_start(flow_worker_pool_adapter_t *adapter) {
   flow_worker_context_t *contexts;
-  if (!adapter || !adapter->ring || adapter->width == 0u) return TURBO_EINVAL;
-  adapter->workers = (turbo_thread_t *)calloc(adapter->width, sizeof(*adapter->workers));
+  if (!adapter || !adapter->ring || adapter->width == 0u) return SALTS_EINVAL;
+  adapter->workers = (salts_thread_t *)calloc(adapter->width, sizeof(*adapter->workers));
   contexts = (flow_worker_context_t *)calloc(adapter->width, sizeof(*contexts));
   if (!adapter->workers || !contexts) {
     free(adapter->workers);
     free(contexts);
     adapter->workers = NULL;
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   adapter->worker_contexts = contexts;
   atomic_store_explicit(&adapter->running, 1, memory_order_release);
@@ -140,15 +140,15 @@ static int flow_worker_pool_start(flow_worker_pool_adapter_t *adapter) {
   for (uint32_t i = 0; i < adapter->width; ++i) {
     contexts[i].adapter = adapter;
     contexts[i].lane = i;
-    if (turbo_thread_create(&adapter->workers[i], flow_worker_pool_run, &contexts[i]) != TURBO_OK) {
+    if (salts_thread_create(&adapter->workers[i], flow_worker_pool_run, &contexts[i]) != SALTS_OK) {
       adapter->width = i;
       flow_worker_pool_stop(adapter);
-      return TURBO_ENOMEM;
+      return SALTS_ENOMEM;
     }
   }
   flow_pool_record_set_state(flow_pool_record_at(adapter->flow, adapter->pool_record_index),
                              TURBO_FLOW_POOL_RUNNING);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_stage_has_worker_pool(const turbo_flow_t *flow) {
@@ -268,7 +268,7 @@ int flow_start_data_planes(turbo_flow_t *flow) {
   disruptor_config_t config;
   size_t consumer_count;
 
-  if (!flow) return TURBO_EINVAL;
+  if (!flow) return SALTS_EINVAL;
 
   flow_stop_data_planes(flow);
 
@@ -280,12 +280,12 @@ int flow_start_data_planes(turbo_flow_t *flow) {
 
     if (stage->data_strategy != TURBO_FLOW_DATA_WORKER_POOL) continue;
     if (stage->data_worker_count == 0u) {
-      return flow_set_error_keep_state(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error_keep_state(flow, SALTS_EINVAL, stage->line, stage->column,
                                        "worker-pool width must be greater than zero");
     }
     segment = flow_worker_pool_segment_for_stage(flow, (uint32_t)stage_index);
     if (!segment || segment->capacity == 0u) {
-      return flow_set_error_keep_state(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error_keep_state(flow, SALTS_EINVAL, stage->line, stage->column,
                                        "worker-pool capacity is not available");
     }
 
@@ -310,11 +310,11 @@ int flow_start_data_planes(turbo_flow_t *flow) {
     if (!adapter.ring || !adapter.executor ||
         flow_pool_record_add(flow, TURBO_FLOW_POOL_DISRUPTOR, adapter.stage_index, adapter.width,
                              adapter.capacity, adapter.capacity,
-                             &adapter.pool_record_index) != TURBO_OK ||
-        turbo_flow_stl_error(vec_push(&flow->worker_pool_adapters, &adapter)) != TURBO_OK) {
+                             &adapter.pool_record_index) != SALTS_OK ||
+        turbo_flow_stl_error(vec_push(&flow->worker_pool_adapters, &adapter)) != SALTS_OK) {
       if (adapter.ring) disruptor_destroy(adapter.ring);
       flow_stop_data_planes(flow);
-      return flow_set_error_keep_state(flow, TURBO_ENOMEM, stage->line, stage->column,
+      return flow_set_error_keep_state(flow, SALTS_ENOMEM, stage->line, stage->column,
                                        "failed to create worker-pool data plane");
     }
   }
@@ -323,7 +323,7 @@ int flow_start_data_planes(turbo_flow_t *flow) {
     flow_worker_pool_adapter_t *adapter =
         (flow_worker_pool_adapter_t *)vec_at(&flow->worker_pool_adapters, i);
     int start_rc = flow_worker_pool_start(adapter);
-    if (start_rc != TURBO_OK) {
+    if (start_rc != SALTS_OK) {
       const flow_stage_plan_impl_t *stage =
           (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, adapter->stage_index);
       flow_stop_data_planes(flow);
@@ -336,13 +336,13 @@ int flow_start_data_planes(turbo_flow_t *flow) {
   if (flow_stage_has_worker_pool(flow) || flow_source_count(flow) != 1u ||
       flow_has_dynamic_edges(flow) || flow_has_reorder_stage(flow) ||
       flow_requires_executor_data_path(flow)) {
-    return TURBO_OK;
+    return SALTS_OK;
   }
 
   consumer_count = flow_broadcast_consumer_count(flow);
-  if (consumer_count == 0) return TURBO_OK;
+  if (consumer_count == 0) return SALTS_OK;
   if (consumer_count > UINT32_MAX) {
-    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "broadcast consumer count is too large");
   }
 
@@ -354,14 +354,14 @@ int flow_start_data_planes(turbo_flow_t *flow) {
 
   flow->broadcast_ring = disruptor_create(&config);
   if (!flow->broadcast_ring) {
-    return flow_set_error_keep_state(flow, TURBO_ENOMEM, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0,
                                      "failed to create broadcast data plane");
   }
 
   flow->broadcast_topology = disruptor_topology_create(flow->broadcast_ring);
   if (!flow->broadcast_topology) {
     flow_stop_data_planes(flow);
-    return flow_set_error_keep_state(flow, TURBO_ENOMEM, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0,
                                      "failed to create broadcast topology");
   }
 
@@ -378,9 +378,9 @@ int flow_start_data_planes(turbo_flow_t *flow) {
     consumer.topology_stage =
         disruptor_topology_stage(flow->broadcast_topology, stage->name, &consumer.consumer);
     if (consumer.topology_stage == DISRUPTOR_STAGE_INVALID ||
-        turbo_flow_stl_error(vec_push(&flow->broadcast_consumers, &consumer)) != TURBO_OK) {
+        turbo_flow_stl_error(vec_push(&flow->broadcast_consumers, &consumer)) != SALTS_OK) {
       flow_stop_data_planes(flow);
-      return flow_set_error_keep_state(flow, TURBO_ENOMEM, stage->line, stage->column,
+      return flow_set_error_keep_state(flow, SALTS_ENOMEM, stage->line, stage->column,
                                        "failed to register broadcast stage");
     }
   }
@@ -395,17 +395,17 @@ int flow_start_data_planes(turbo_flow_t *flow) {
     if (!disruptor_topology_after(flow->broadcast_topology, to->topology_stage,
                                   from->topology_stage)) {
       flow_stop_data_planes(flow);
-      return flow_set_error_keep_state(flow, TURBO_EINVAL, edge->line, edge->column,
+      return flow_set_error_keep_state(flow, SALTS_EINVAL, edge->line, edge->column,
                                        "failed to link broadcast topology");
     }
   }
 
   if (!disruptor_topology_commit(flow->broadcast_topology)) {
     flow_stop_data_planes(flow);
-    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0, "broadcast topology is invalid");
+    return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0, "broadcast topology is invalid");
   }
 
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 flow_worker_pool_adapter_t *flow_worker_pool_adapter_for_stage(turbo_flow_t *flow,
@@ -424,13 +424,13 @@ static int flow_worker_pool_claim(flow_worker_pool_adapter_t *adapter,
                                   disruptor_cursor_t *cursor) {
   if (policy == TURBO_FLOW_BACKPRESSURE_BLOCK) {
     disruptor_publisher_next_entry_blocking(adapter->ring, cursor);
-    return cursor->sequence != 0u ? TURBO_OK : TURBO_EINVAL;
+    return cursor->sequence != 0u ? SALTS_OK : SALTS_EINVAL;
   }
   if (policy == TURBO_FLOW_BACKPRESSURE_FAIL || policy == TURBO_FLOW_BACKPRESSURE_DROP_NEWEST) {
-    if (disruptor_publisher_try_claim(adapter->ring, cursor)) return TURBO_OK;
-    return policy == TURBO_FLOW_BACKPRESSURE_FAIL ? TURBO_ENOSPC : TURBO_ECANCELED;
+    if (disruptor_publisher_try_claim(adapter->ring, cursor)) return SALTS_OK;
+    return policy == TURBO_FLOW_BACKPRESSURE_FAIL ? SALTS_ENOSPC : SALTS_ECANCELED;
   }
-  return TURBO_ENOTSUP;
+  return SALTS_ENOTSUP;
 }
 
 int flow_worker_pool_submit(flow_worker_pool_adapter_t *adapter, turbo_flow_msg_t *msg,
@@ -443,14 +443,14 @@ int flow_worker_pool_submit(flow_worker_pool_adapter_t *adapter, turbo_flow_msg_
   const turbo_flow_operation_runtime_contract_t *runtime;
   flow_pool_record_t *record;
 
-  if (!adapter || !adapter->ring || !msg || !completion) return TURBO_EINVAL;
-  if (!atomic_load_explicit(&adapter->accepting, memory_order_acquire)) return TURBO_ESHUTDOWN;
+  if (!adapter || !adapter->ring || !msg || !completion) return SALTS_EINVAL;
+  if (!atomic_load_explicit(&adapter->accepting, memory_order_acquire)) return SALTS_ESHUTDOWN;
   atomic_fetch_add_explicit(&adapter->submitters, 1u, memory_order_acq_rel);
   submitter_registered = 1;
   if (!atomic_load_explicit(&adapter->accepting, memory_order_acquire)) {
     atomic_fetch_sub_explicit(&adapter->submitters, 1u, memory_order_acq_rel);
     submitter_registered = 0;
-    return TURBO_ESHUTDOWN;
+    return SALTS_ESHUTDOWN;
   }
 
   memset(&request, 0, sizeof(request));
@@ -464,13 +464,13 @@ int flow_worker_pool_submit(flow_worker_pool_adapter_t *adapter, turbo_flow_msg_
               adapter->executor->exec.kind != TURBO_FLOW_EXEC_CORO_POOL
           ? runtime->deadline_ms
           : 0u);
-  if (rc != TURBO_OK) goto cleanup;
+  if (rc != SALTS_OK) goto cleanup;
   flow_pool_record_attempted(record);
 
   rc = flow_worker_pool_claim(
       adapter, runtime ? runtime->backpressure : TURBO_FLOW_BACKPRESSURE_BLOCK, &cursor);
-  if (rc != TURBO_OK) {
-    if (rc == TURBO_ECANCELED) {
+  if (rc != SALTS_OK) {
+    if (rc == SALTS_ECANCELED) {
       flow_pool_record_canceled_unqueued(record);
     } else {
       flow_pool_record_rejected_unqueued(record);
@@ -489,7 +489,7 @@ int flow_worker_pool_submit(flow_worker_pool_adapter_t *adapter, turbo_flow_msg_
 
   rc = flow_execution_task_wait(&request.execution, msg, completion);
   flow_execution_task_wait_accounting(&request.execution);
-  if (rc != TURBO_OK && request.error.code != TURBO_OK) {
+  if (rc != SALTS_OK && request.error.code != SALTS_OK) {
     rc = flow_set_error_keep_state(adapter->flow, request.error.code, request.error.line,
                                    request.error.column, request.error.message);
   }
@@ -501,19 +501,19 @@ restore:
   }
   if (flow_execution_task_state(&request.execution) == FLOW_EXECUTION_ACCEPTED) {
     int move_rc = turbo_flow_msg_move(msg, &request.execution.msg);
-    if (move_rc != TURBO_OK) rc = move_rc;
+    if (move_rc != SALTS_OK) rc = move_rc;
   }
 cleanup:
   if (submitter_registered) {
     atomic_fetch_sub_explicit(&adapter->submitters, 1u, memory_order_acq_rel);
   }
   flow_execution_task_cleanup(&request.execution);
-  if (rc == TURBO_ENOSPC) {
+  if (rc == SALTS_ENOSPC) {
     return flow_set_error_keep_state(adapter->flow, rc, adapter->stage->line,
                                      adapter->stage->column,
                                      "worker-pool admission capacity is exhausted");
   }
-  if (rc == TURBO_ECANCELED) {
+  if (rc == SALTS_ECANCELED) {
     return flow_set_error_keep_state(adapter->flow, rc, adapter->stage->line,
                                      adapter->stage->column,
                                      "worker-pool newest request was dropped");
@@ -532,28 +532,28 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
   disruptor_cursor_t publish_cursor;
   flow_broadcast_entry_t *entry = NULL;
   flow_entry_header_t header = FLOW_ENTRY_HEADER_INIT;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
 
-  if (!flow || !flow->broadcast_ring || !msg || !result) return TURBO_ENOTSUP;
+  if (!flow || !flow->broadcast_ring || !msg || !result) return SALTS_ENOTSUP;
   if (flow_msg_transport_context_is_borrowed(msg)) {
-    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "broadcast data plane rejects borrowed transport context");
   }
   rc = flow_entry_header_init(flow, &header, source_index, FLOW_DATA_SEGMENT_BROADCAST_FANOUT, 0u,
                               sequence, msg->id, FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE, NULL);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
 
   stage_count = vec_size(&flow->stages);
   reachable = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
   done = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
   worklist = (uint32_t *)calloc(stage_count, sizeof(uint32_t));
   if (!reachable || !done || !worklist) {
-    rc = flow_set_error_keep_state(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    rc = flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0, "out of memory");
     goto cleanup;
   }
 
   rc = flow_mark_reachable_from_stage(flow, reachable, worklist, stage_count, source_index);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     rc = flow_set_error_keep_state(flow, rc, 0, 0, "broadcast runtime topology is invalid");
     goto cleanup;
   }
@@ -567,11 +567,11 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
     pending += 1u;
     if (stage->is_port) continue;
     rc = flow_dispatch_validate_stage(flow, consumer->stage_index);
-    if (rc != TURBO_OK) goto cleanup;
+    if (rc != SALTS_OK) goto cleanup;
   }
 
   if (!disruptor_publisher_try_claim(flow->broadcast_ring, &publish_cursor)) {
-    rc = flow_set_error_keep_state(flow, TURBO_ENOSPC, 0, 0, "broadcast data plane is full");
+    rc = flow_set_error_keep_state(flow, SALTS_ENOSPC, 0, 0, "broadcast data plane is full");
     goto cleanup;
   }
 
@@ -601,13 +601,13 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
 
       cursor.sequence = consumer->next_sequence;
       rc = flow_entry_header_validate(flow, &entry->header, &entry->message);
-      if (rc != TURBO_OK || entry->header.stage_index != source_index ||
+      if (rc != SALTS_OK || entry->header.stage_index != source_index ||
           entry->header.segment_kind != FLOW_DATA_SEGMENT_BROADCAST_FANOUT ||
           entry->header.sequence != sequence) {
         flow_release_broadcast_remaining(flow, reachable, done);
         turbo_flow_msg_cleanup(&entry->message);
         entry->header = (flow_entry_header_t)FLOW_ENTRY_HEADER_INIT;
-        rc = flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+        rc = flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                        "broadcast data plane entry header is invalid");
         goto cleanup;
       }
@@ -615,7 +615,7 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
         flow_stage_completion_t completion = {0};
         rc = flow_dispatch_stage(flow, consumer->stage_index, &entry->message, sequence,
                                  entry->message.id, &completion, NULL);
-        if (rc != TURBO_OK) {
+        if (rc != SALTS_OK) {
           flow_release_broadcast_remaining(flow, reachable, done);
           turbo_flow_msg_cleanup(&entry->message);
           entry->header = (flow_entry_header_t)FLOW_ENTRY_HEADER_INIT;
@@ -634,7 +634,7 @@ int flow_publish_broadcast_data_plane(turbo_flow_t *flow, uint32_t source_index,
       flow_release_broadcast_remaining(flow, reachable, done);
       turbo_flow_msg_cleanup(&entry->message);
       entry->header = (flow_entry_header_t)FLOW_ENTRY_HEADER_INIT;
-      rc = flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+      rc = flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "broadcast topology made no progress");
       goto cleanup;
     }

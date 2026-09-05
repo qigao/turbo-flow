@@ -19,7 +19,7 @@ turbo_flow_observe_destroy(observe);
 One flow accepts one observer. Callbacks receive const message views and must
 not re-enter the same flow. With no observer attached, timing is skipped. With
 Observe attached, aggregate counters are atomic; per-stage series use one
-TurboUtils vector protected by one mutex and are bounded by `max_stages`
+CSTL vector protected by one Salts mutex and are bounded by `max_stages`
 (default 256, hard limit 4096). Series beyond the bound increment
 `dropped_stage_series` rather than allocating without limit.
 
@@ -30,12 +30,12 @@ executor/adapter dispatch, including thread handoff or coroutine ticks.
 ## Graph Snapshot And Control
 
 `turbo_flow_observe_graph_snapshot()` combines runtime admission/topology,
-traffic, pool saturation, typed adapter connection gauges, and TurboUtils OS
+traffic, pool saturation, typed adapter connection gauges, and Salts OS
 CPU/memory/load into caller-owned storage. Serialize graph pulls with
 parse/compile/start/stop/reset/destroy; message, pool, and connection counters
 remain safe to update while a pull is in progress. Adapter connection details
 are available with `turbo_flow_adapter_connection_snapshot_at()`. Unsupported
-adapters return `TURBO_ENOTSUP`.
+adapters return `SALTS_ENOTSUP`.
 
 `turbo_flow_observe_control_facts()` captures the same traffic, OS, and graph
 aggregates into caller-owned backing storage and returns a typed fact provider
@@ -72,7 +72,7 @@ resume, and ingress resume. A failed phase remains explicit until the caller
 requests a retry; Observe does not own or schedule that workflow.
 
 Pool resize closes core publish admission but does not pause source adapters.
-An adapter that publishes during the resize window receives `TURBO_ESHUTDOWN`
+An adapter that publishes during the resize window receives `SALTS_ESHUTDOWN`
 and remains responsible for its documented retry or message-retention policy.
 
 ## Control Events

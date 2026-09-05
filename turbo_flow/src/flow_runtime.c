@@ -1,6 +1,6 @@
 #include "flow_internal.h"
 
-#include "turbo_buffer.h"
+#include "salts_buffer.h"
 
 #include <limits.h>
 #include <string.h>
@@ -41,7 +41,7 @@ static int flow_runtime_workspace_init(flow_runtime_workspace_t *workspace,
   size_t offset = 0u;
   size_t allocation_size;
 
-  if (!workspace || !stack_workspace || stage_count == 0u) return TURBO_EINVAL;
+  if (!workspace || !stack_workspace || stage_count == 0u) return SALTS_EINVAL;
   memset(workspace, 0, sizeof(*workspace));
   if (stage_count <= FLOW_RUNTIME_STACK_STAGE_CAPACITY) {
     memset(stack_workspace->reachable, 0, stage_count * sizeof(*stack_workspace->reachable));
@@ -60,12 +60,12 @@ static int flow_runtime_workspace_init(flow_runtime_workspace_t *workspace,
     workspace->queue = stack_workspace->queue;
     workspace->skipped_queue = stack_workspace->skipped_queue;
     workspace->stage_sequences = stack_workspace->stage_sequences;
-    return TURBO_OK;
+    return SALTS_OK;
   }
-  if (stage_count > (SIZE_MAX - alignment_slack) / bytes_per_stage) return TURBO_ERANGE;
+  if (stage_count > (SIZE_MAX - alignment_slack) / bytes_per_stage) return SALTS_ERANGE;
   allocation_size = stage_count * bytes_per_stage + alignment_slack;
   storage = (unsigned char *)mem_alloc(mem_global(), allocation_size);
-  if (!storage) return TURBO_ENOMEM;
+  if (!storage) return SALTS_ENOMEM;
   memset(storage, 0, allocation_size);
   workspace->pooled_storage = storage;
   workspace->reachable = storage + offset;
@@ -83,7 +83,7 @@ static int flow_runtime_workspace_init(flow_runtime_workspace_t *workspace,
   offset += stage_count * sizeof(*workspace->skipped_queue);
   offset = flow_runtime_align_offset(offset, sizeof(uint64_t));
   workspace->stage_sequences = (uint64_t *)(void *)(storage + offset);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void flow_runtime_workspace_cleanup(flow_runtime_workspace_t *workspace) {
@@ -93,79 +93,79 @@ static void flow_runtime_workspace_cleanup(flow_runtime_workspace_t *workspace) 
 }
 
 int flow_publish_enter(turbo_flow_t *flow) {
-  int rc = TURBO_EINVAL;
+  int rc = SALTS_EINVAL;
 
-  turbo_mutex_lock(&flow->runtime_mutex);
+  salts_mutex_lock(&flow->runtime_mutex);
   if (flow->state == TURBO_FLOW_STATE_STARTED && flow->admission_state == FLOW_ADMISSION_OPEN) {
     ++flow->active_publishes;
-    rc = TURBO_OK;
+    rc = SALTS_OK;
   } else if (flow->state == TURBO_FLOW_STATE_STARTED) {
-    rc = TURBO_ESHUTDOWN;
+    rc = SALTS_ESHUTDOWN;
   }
-  turbo_mutex_unlock(&flow->runtime_mutex);
+  salts_mutex_unlock(&flow->runtime_mutex);
   return rc;
 }
 
 void flow_publish_leave(turbo_flow_t *flow) {
-  turbo_mutex_lock(&flow->runtime_mutex);
+  salts_mutex_lock(&flow->runtime_mutex);
   if (flow->active_publishes > 0u) --flow->active_publishes;
-  if (flow->active_publishes == 0u) turbo_cond_broadcast(&flow->runtime_cond);
-  turbo_mutex_unlock(&flow->runtime_mutex);
+  if (flow->active_publishes == 0u) salts_cond_broadcast(&flow->runtime_cond);
+  salts_mutex_unlock(&flow->runtime_mutex);
 }
 
 void flow_close_publish_admission(turbo_flow_t *flow) {
   if (!flow || !flow->runtime_sync_initialized) return;
 
-  turbo_mutex_lock(&flow->runtime_mutex);
+  salts_mutex_lock(&flow->runtime_mutex);
   flow->admission_state = FLOW_ADMISSION_STOPPING;
-  turbo_cond_broadcast(&flow->runtime_cond);
-  turbo_mutex_unlock(&flow->runtime_mutex);
+  salts_cond_broadcast(&flow->runtime_cond);
+  salts_mutex_unlock(&flow->runtime_mutex);
 }
 
 void flow_wait_for_publishes(turbo_flow_t *flow) {
   if (!flow || !flow->runtime_sync_initialized) return;
 
-  turbo_mutex_lock(&flow->runtime_mutex);
+  salts_mutex_lock(&flow->runtime_mutex);
   while (flow->active_publishes > 0u) {
-    turbo_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
+    salts_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
   }
-  turbo_mutex_unlock(&flow->runtime_mutex);
+  salts_mutex_unlock(&flow->runtime_mutex);
 }
 
 int turbo_flow_start(turbo_flow_t *flow) {
-  if (!flow) return TURBO_EINVAL;
+  if (!flow) return SALTS_EINVAL;
   if (flow->state != TURBO_FLOW_STATE_COMPILED && flow->state != TURBO_FLOW_STATE_STOPPED) {
-    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "flow must be compiled before start");
   }
   if (vec_size(&flow->runtime_nodes) != vec_size(&flow->stages)) {
-    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "compiled runtime plan is not available");
   }
   if (vec_empty(&flow->data_segments) && !vec_empty(&flow->runtime_edges)) {
-    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "compiled data plan is not available");
   }
-  if (flow_runtime_generation_can_advance(flow) != TURBO_OK) {
-    return flow_set_error_keep_state(flow, TURBO_ERANGE, 0, 0, "runtime generation is exhausted");
+  if (flow_runtime_generation_can_advance(flow) != SALTS_OK) {
+    return flow_set_error_keep_state(flow, SALTS_ERANGE, 0, 0, "runtime generation is exhausted");
   }
   turbo_flow_stl_error(vec_clear(&flow->pool_records));
-  if (flow_start_data_planes(flow) != TURBO_OK) {
+  if (flow_start_data_planes(flow) != SALTS_OK) {
     turbo_flow_stl_error(vec_clear(&flow->pool_records));
     return flow->last_error.code;
   }
-  if (flow_start_reorder_states(flow) != TURBO_OK) {
+  if (flow_start_reorder_states(flow) != SALTS_OK) {
     flow_stop_data_planes(flow);
     turbo_flow_stl_error(vec_clear(&flow->pool_records));
     return flow->last_error.code;
   }
-  if (flow_start_executor_adapters(flow) != TURBO_OK) {
+  if (flow_start_executor_adapters(flow) != SALTS_OK) {
     flow_stop_reorder_states(flow);
     flow_stop_data_planes(flow);
     turbo_flow_stl_error(vec_clear(&flow->pool_records));
     return flow->last_error.code;
   }
-  if (flow_start_adapters(flow) != TURBO_OK) {
+  if (flow_start_adapters(flow) != SALTS_OK) {
     flow_stop_executor_adapters(flow);
     flow_stop_reorder_states(flow);
     flow_stop_data_planes(flow);
@@ -173,96 +173,96 @@ int turbo_flow_start(turbo_flow_t *flow) {
     return flow->last_error.code;
   }
   flow_runtime_generation_commit(flow);
-  turbo_mutex_lock(&flow->runtime_mutex);
+  salts_mutex_lock(&flow->runtime_mutex);
   flow->state = TURBO_FLOW_STATE_STARTED;
   flow->admission_state = FLOW_ADMISSION_OPEN;
-  turbo_mutex_unlock(&flow->runtime_mutex);
-  return TURBO_OK;
+  salts_mutex_unlock(&flow->runtime_mutex);
+  return SALTS_OK;
 }
 
 int turbo_flow_pause(turbo_flow_t *flow) {
-  int rc = TURBO_OK;
-  if (!flow) return TURBO_EINVAL;
-  turbo_mutex_lock(&flow->runtime_mutex);
+  int rc = SALTS_OK;
+  if (!flow) return SALTS_EINVAL;
+  salts_mutex_lock(&flow->runtime_mutex);
   if (flow->state != TURBO_FLOW_STATE_STARTED) {
-    rc = TURBO_EINVAL;
+    rc = SALTS_EINVAL;
   } else if (flow->admission_state == FLOW_ADMISSION_OPEN) {
     flow->admission_state = FLOW_ADMISSION_PAUSED;
   } else if (flow->admission_state == FLOW_ADMISSION_RESIZING) {
-    rc = TURBO_EBUSY;
+    rc = SALTS_EBUSY;
   } else if (flow->admission_state == FLOW_ADMISSION_STOPPING) {
-    rc = TURBO_ESHUTDOWN;
+    rc = SALTS_ESHUTDOWN;
   }
-  turbo_mutex_unlock(&flow->runtime_mutex);
+  salts_mutex_unlock(&flow->runtime_mutex);
   return rc;
 }
 
 int turbo_flow_resume(turbo_flow_t *flow) {
-  int rc = TURBO_OK;
-  if (!flow) return TURBO_EINVAL;
-  turbo_mutex_lock(&flow->runtime_mutex);
+  int rc = SALTS_OK;
+  if (!flow) return SALTS_EINVAL;
+  salts_mutex_lock(&flow->runtime_mutex);
   if (flow->state != TURBO_FLOW_STATE_STARTED) {
-    rc = TURBO_EINVAL;
+    rc = SALTS_EINVAL;
   } else if (flow->admission_state == FLOW_ADMISSION_PAUSED) {
     flow->admission_state = FLOW_ADMISSION_OPEN;
   } else if (flow->admission_state == FLOW_ADMISSION_RESIZING) {
-    rc = TURBO_EBUSY;
+    rc = SALTS_EBUSY;
   } else if (flow->admission_state == FLOW_ADMISSION_STOPPING) {
-    rc = TURBO_ESHUTDOWN;
+    rc = SALTS_ESHUTDOWN;
   }
-  turbo_mutex_unlock(&flow->runtime_mutex);
+  salts_mutex_unlock(&flow->runtime_mutex);
   return rc;
 }
 
 int turbo_flow_drain(turbo_flow_t *flow, uint64_t timeout_ms) {
   uint64_t started_at;
   uint64_t timeout_ns;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
 
-  if (!flow) return TURBO_EINVAL;
-  started_at = turbo_hrtime();
+  if (!flow) return SALTS_EINVAL;
+  started_at = salts_hrtime();
   timeout_ns = timeout_ms == UINT64_MAX || timeout_ms > UINT64_MAX / UINT64_C(1000000)
                    ? UINT64_MAX
                    : timeout_ms * UINT64_C(1000000);
 
-  turbo_mutex_lock(&flow->runtime_mutex);
+  salts_mutex_lock(&flow->runtime_mutex);
   if (flow->state != TURBO_FLOW_STATE_STARTED) {
-    rc = TURBO_EINVAL;
+    rc = SALTS_EINVAL;
     goto done;
   }
   if (flow->admission_state == FLOW_ADMISSION_STOPPING) {
-    rc = TURBO_ESHUTDOWN;
+    rc = SALTS_ESHUTDOWN;
     goto done;
   }
   if (flow->admission_state == FLOW_ADMISSION_RESIZING) {
-    rc = TURBO_EBUSY;
+    rc = SALTS_EBUSY;
     goto done;
   }
   flow->admission_state = FLOW_ADMISSION_PAUSED;
   while (flow->active_publishes > 0u) {
     uint64_t elapsed;
     if (flow->admission_state == FLOW_ADMISSION_STOPPING) {
-      rc = TURBO_ESHUTDOWN;
+      rc = SALTS_ESHUTDOWN;
       break;
     }
     if (timeout_ns == UINT64_MAX) {
-      turbo_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
+      salts_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
       continue;
     }
-    elapsed = turbo_hrtime() - started_at;
+    elapsed = salts_hrtime() - started_at;
     if (elapsed >= timeout_ns) {
-      rc = TURBO_ETIMEDOUT;
+      rc = SALTS_ETIMEDOUT;
       break;
     }
-    if (turbo_cond_timedwait(&flow->runtime_cond, &flow->runtime_mutex, timeout_ns - elapsed) !=
+    if (salts_cond_timedwait(&flow->runtime_cond, &flow->runtime_mutex, timeout_ns - elapsed) !=
             0 &&
-        turbo_hrtime() - started_at >= timeout_ns) {
-      rc = TURBO_ETIMEDOUT;
+        salts_hrtime() - started_at >= timeout_ns) {
+      rc = SALTS_ETIMEDOUT;
       break;
     }
   }
 done:
-  turbo_mutex_unlock(&flow->runtime_mutex);
+  salts_mutex_unlock(&flow->runtime_mutex);
   return rc;
 }
 
@@ -281,9 +281,9 @@ static int flow_find_pool_resize_target(turbo_flow_t *flow,
 
   memset(target, 0, sizeof(*target));
   stage_index = turbo_flow_find_stage(flow, command->stage_name);
-  if (stage_index < 0) return TURBO_ENOENT;
+  if (stage_index < 0) return SALTS_ENOENT;
   target->stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, (size_t)stage_index);
-  if (!target->stage) return TURBO_EINVAL;
+  if (!target->stage) return SALTS_EINVAL;
 
   for (size_t i = 0; i < vec_size(&flow->pool_records); ++i) {
     const flow_pool_record_t *record =
@@ -293,16 +293,16 @@ static int flow_find_pool_resize_target(turbo_flow_t *flow,
       break;
     }
   }
-  if (!found) return TURBO_ENOENT;
+  if (!found) return SALTS_ENOENT;
 
   if (command->kind == TURBO_FLOW_POOL_DISRUPTOR) {
     target->segment = flow_worker_pool_segment_for_stage(flow, (uint32_t)stage_index);
-    if (!target->segment) return TURBO_EINVAL;
+    if (!target->segment) return SALTS_EINVAL;
     target->previous_parallelism = target->stage->data_worker_count;
   } else {
     target->executor =
         (flow_executor_plan_t *)flow_executor_plan_for_stage(flow, (uint32_t)stage_index);
-    if (!target->executor) return TURBO_EINVAL;
+    if (!target->executor) return SALTS_EINVAL;
     if (command->kind == TURBO_FLOW_POOL_THREAD &&
         target->executor->exec.kind == TURBO_FLOW_EXEC_THREAD_POOL) {
       target->previous_parallelism = target->executor->exec.workers;
@@ -310,10 +310,10 @@ static int flow_find_pool_resize_target(turbo_flow_t *flow,
                target->executor->exec.kind == TURBO_FLOW_EXEC_CORO_POOL) {
       target->previous_parallelism = target->executor->exec.lanes;
     } else {
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void flow_apply_pool_parallelism(flow_pool_resize_target_t *target,
@@ -334,12 +334,12 @@ static int flow_rebuild_pool_resources(turbo_flow_t *flow) {
   flow_stop_data_planes(flow);
   flow_stop_runtime_executor_adapters(flow);
   turbo_flow_stl_error(vec_clear(&flow->pool_records));
-  if (flow_start_data_planes(flow) != TURBO_OK) return flow->last_error.code;
-  if (flow_start_executor_adapters(flow) != TURBO_OK) {
+  if (flow_start_data_planes(flow) != SALTS_OK) return flow->last_error.code;
+  if (flow_start_executor_adapters(flow) != SALTS_OK) {
     flow_stop_data_planes(flow);
     return flow->last_error.code;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_resize_pool(turbo_flow_t *flow, const turbo_flow_pool_resize_command_t *command) {
@@ -353,113 +353,113 @@ int turbo_flow_resize_pool(turbo_flow_t *flow, const turbo_flow_pool_resize_comm
   if (!flow || !command || command->size < sizeof(*command) || !command->stage_name ||
       command->parallelism == 0u || command->expected_generation == 0u ||
       command->kind < TURBO_FLOW_POOL_THREAD || command->kind > TURBO_FLOW_POOL_DISRUPTOR) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (command->kind == TURBO_FLOW_POOL_THREAD && command->parallelism > (uint32_t)INT_MAX) {
-    return TURBO_ERANGE;
+    return SALTS_ERANGE;
   }
   rc = flow_find_pool_resize_target(flow, command, &target);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     return flow_set_error_keep_state(flow, rc, 0, 0, "resize target pool was not found");
   }
 
-  started_at = turbo_hrtime();
+  started_at = salts_hrtime();
   timeout_ns = command->drain_timeout_ms == UINT64_MAX ||
                        command->drain_timeout_ms > UINT64_MAX / UINT64_C(1000000)
                    ? UINT64_MAX
                    : command->drain_timeout_ms * UINT64_C(1000000);
-  turbo_mutex_lock(&flow->runtime_mutex);
+  salts_mutex_lock(&flow->runtime_mutex);
   if (flow->state != TURBO_FLOW_STATE_STARTED) {
-    turbo_mutex_unlock(&flow->runtime_mutex);
-    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+    salts_mutex_unlock(&flow->runtime_mutex);
+    return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "pool resize requires a started flow");
   }
   if (flow->admission_state == FLOW_ADMISSION_STOPPING) {
-    turbo_mutex_unlock(&flow->runtime_mutex);
-    return TURBO_ESHUTDOWN;
+    salts_mutex_unlock(&flow->runtime_mutex);
+    return SALTS_ESHUTDOWN;
   }
   if (flow->admission_state == FLOW_ADMISSION_RESIZING) {
-    turbo_mutex_unlock(&flow->runtime_mutex);
-    return TURBO_EBUSY;
+    salts_mutex_unlock(&flow->runtime_mutex);
+    return SALTS_EBUSY;
   }
   if (command->expected_generation != flow->runtime_generation) {
-    turbo_mutex_unlock(&flow->runtime_mutex);
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0, "pool resource generation conflict");
+    salts_mutex_unlock(&flow->runtime_mutex);
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0, "pool resource generation conflict");
   }
   if (target.previous_parallelism == command->parallelism) {
-    turbo_mutex_unlock(&flow->runtime_mutex);
-    return TURBO_OK;
+    salts_mutex_unlock(&flow->runtime_mutex);
+    return SALTS_OK;
   }
-  if (flow_runtime_generation_can_advance(flow) != TURBO_OK) {
-    turbo_mutex_unlock(&flow->runtime_mutex);
-    return TURBO_ERANGE;
+  if (flow_runtime_generation_can_advance(flow) != SALTS_OK) {
+    salts_mutex_unlock(&flow->runtime_mutex);
+    return SALTS_ERANGE;
   }
   previous_admission = flow->admission_state;
   flow->admission_state = FLOW_ADMISSION_RESIZING;
   while (flow->active_publishes > 0u) {
     uint64_t elapsed;
     if (timeout_ns == UINT64_MAX) {
-      turbo_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
+      salts_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
       continue;
     }
-    elapsed = turbo_hrtime() - started_at;
-    if (elapsed >= timeout_ns || (turbo_cond_timedwait(&flow->runtime_cond, &flow->runtime_mutex,
+    elapsed = salts_hrtime() - started_at;
+    if (elapsed >= timeout_ns || (salts_cond_timedwait(&flow->runtime_cond, &flow->runtime_mutex,
                                                        timeout_ns - elapsed) != 0 &&
-                                  turbo_hrtime() - started_at >= timeout_ns)) {
+                                  salts_hrtime() - started_at >= timeout_ns)) {
       flow->admission_state = FLOW_ADMISSION_PAUSED;
-      turbo_mutex_unlock(&flow->runtime_mutex);
-      return TURBO_ETIMEDOUT;
+      salts_mutex_unlock(&flow->runtime_mutex);
+      return SALTS_ETIMEDOUT;
     }
   }
-  turbo_mutex_unlock(&flow->runtime_mutex);
+  salts_mutex_unlock(&flow->runtime_mutex);
 
   flow_apply_pool_parallelism(&target, command->kind, command->parallelism);
   resize_rc = flow_rebuild_pool_resources(flow);
-  if (resize_rc != TURBO_OK) {
+  if (resize_rc != SALTS_OK) {
     flow_apply_pool_parallelism(&target, command->kind, target.previous_parallelism);
     rc = flow_rebuild_pool_resources(flow);
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       flow_stop_adapters(flow);
       flow_stop_data_planes(flow);
       flow_stop_reorder_states(flow);
       flow_stop_executor_adapters(flow);
-      turbo_mutex_lock(&flow->runtime_mutex);
+      salts_mutex_lock(&flow->runtime_mutex);
       flow->state = TURBO_FLOW_STATE_FAILED;
       flow->admission_state = FLOW_ADMISSION_CLOSED;
-      turbo_mutex_unlock(&flow->runtime_mutex);
+      salts_mutex_unlock(&flow->runtime_mutex);
       return flow_set_error_keep_state(flow, rc, 0, 0, "pool resize and rollback both failed");
     }
     flow_runtime_generation_commit(flow);
-    turbo_mutex_lock(&flow->runtime_mutex);
+    salts_mutex_lock(&flow->runtime_mutex);
     flow->admission_state = previous_admission;
-    turbo_mutex_unlock(&flow->runtime_mutex);
+    salts_mutex_unlock(&flow->runtime_mutex);
     return flow_set_error_keep_state(flow, resize_rc, 0, 0,
                                      "pool resize failed; previous configuration restored");
   }
 
   flow_runtime_generation_commit(flow);
 
-  turbo_mutex_lock(&flow->runtime_mutex);
+  salts_mutex_lock(&flow->runtime_mutex);
   flow->admission_state = previous_admission;
-  turbo_mutex_unlock(&flow->runtime_mutex);
+  salts_mutex_unlock(&flow->runtime_mutex);
   flow_clear_error(flow);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_stop(turbo_flow_t *flow) {
-  if (!flow) return TURBO_EINVAL;
-  turbo_mutex_lock(&flow->runtime_mutex);
+  if (!flow) return SALTS_EINVAL;
+  salts_mutex_lock(&flow->runtime_mutex);
   if (flow->state != TURBO_FLOW_STATE_STARTED || flow->admission_state == FLOW_ADMISSION_STOPPING) {
-    turbo_mutex_unlock(&flow->runtime_mutex);
-    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0, "flow is not started");
+    salts_mutex_unlock(&flow->runtime_mutex);
+    return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0, "flow is not started");
   }
   if (flow->admission_state == FLOW_ADMISSION_RESIZING) {
-    turbo_mutex_unlock(&flow->runtime_mutex);
-    return TURBO_EBUSY;
+    salts_mutex_unlock(&flow->runtime_mutex);
+    return SALTS_EBUSY;
   }
   flow->admission_state = FLOW_ADMISSION_STOPPING;
-  turbo_cond_broadcast(&flow->runtime_cond);
-  turbo_mutex_unlock(&flow->runtime_mutex);
+  salts_cond_broadcast(&flow->runtime_cond);
+  salts_mutex_unlock(&flow->runtime_mutex);
 
   flow_stop_adapters(flow);
   flow_wait_for_publishes(flow);
@@ -467,11 +467,11 @@ int turbo_flow_stop(turbo_flow_t *flow) {
   flow_stop_data_planes(flow);
   flow_stop_reorder_states(flow);
   flow_stop_executor_adapters(flow);
-  turbo_mutex_lock(&flow->runtime_mutex);
+  salts_mutex_lock(&flow->runtime_mutex);
   flow->state = TURBO_FLOW_STATE_STOPPED;
   flow->admission_state = FLOW_ADMISSION_CLOSED;
-  turbo_mutex_unlock(&flow->runtime_mutex);
-  return TURBO_OK;
+  salts_mutex_unlock(&flow->runtime_mutex);
+  return SALTS_OK;
 }
 
 static int flow_cancel_emission_descendant_reorders(turbo_flow_t *flow, uint32_t stage_index,
@@ -481,27 +481,27 @@ static int flow_cancel_emission_descendant_reorders(turbo_flow_t *flow, uint32_t
   uint8_t *reachable = stack_reachable;
   uint32_t *worklist = stack_worklist;
   int pooled = 0;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
 
   if (stage_count > FLOW_RUNTIME_STACK_STAGE_CAPACITY) {
-    if (stage_count > SIZE_MAX / sizeof(*worklist)) return TURBO_ERANGE;
+    if (stage_count > SIZE_MAX / sizeof(*worklist)) return SALTS_ERANGE;
     reachable = (uint8_t *)mem_alloc(mem_global(), stage_count);
     worklist = (uint32_t *)mem_alloc(mem_global(), stage_count * sizeof(*worklist));
     if (!reachable || !worklist) {
       mem_free(mem_global(), reachable);
       mem_free(mem_global(), worklist);
-      return TURBO_ENOMEM;
+      return SALTS_ENOMEM;
     }
     memset(reachable, 0, stage_count);
     pooled = 1;
   }
   rc = flow_mark_reachable_from_stage(flow, reachable, worklist, stage_count, stage_index);
-  if (rc != TURBO_OK) goto cleanup;
+  if (rc != SALTS_OK) goto cleanup;
   for (size_t i = 0u; i < stage_count; ++i) {
     int cancel_rc;
     if (i == stage_index || !reachable[i] || stage_sequences[i] == 0u) continue;
     cancel_rc = flow_reorder_cancel(flow, (uint32_t)i, stage_sequences[i]);
-    if (rc == TURBO_OK && cancel_rc != TURBO_OK) rc = cancel_rc;
+    if (rc == SALTS_OK && cancel_rc != SALTS_OK) rc = cancel_rc;
     stage_sequences[i] = 0u;
   }
 cleanup:
@@ -526,17 +526,17 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   size_t head = 0;
   size_t tail = 0;
   size_t stage_count = 0;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
   flow_stage_completion_t completion = {0};
   uint64_t sequence;
 
-  if (!flow || !message || origin_stage >= vec_size(&flow->stages)) return TURBO_EINVAL;
+  if (!flow || !message || origin_stage >= vec_size(&flow->stages)) return SALTS_EINVAL;
 
   stage_count = vec_size(&flow->stages);
   rc = flow_runtime_workspace_init(&workspace, &stack_workspace, stage_count);
-  if (rc != TURBO_OK)
+  if (rc != SALTS_OK)
     return flow_set_error_keep_state(flow, rc, 0, 0,
-                                     rc == TURBO_ERANGE ? "flow graph workspace is too large"
+                                     rc == SALTS_ERANGE ? "flow graph workspace is too large"
                                                        : "out of memory");
   reachable = workspace.reachable;
   done = workspace.done;
@@ -547,16 +547,16 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   stage_sequences = workspace.stage_sequences;
 
   rc = flow_mark_reachable_from_stage(flow, reachable, queue, stage_count, origin_stage);
-  if (rc != TURBO_OK) goto cleanup;
+  if (rc != SALTS_OK) goto cleanup;
   for (size_t i = 0; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
     if (!reachable[i] || i == origin_stage || stage->is_source || stage->is_port) continue;
     rc = flow_dispatch_validate_stage(flow, (uint32_t)i);
-    if (rc != TURBO_OK) goto cleanup;
+    if (rc != SALTS_OK) goto cleanup;
   }
 
-  turbo_mutex_lock(&flow->runtime_mutex);
+  salts_mutex_lock(&flow->runtime_mutex);
   sequence = atomic_fetch_add_explicit(&flow->next_sequence, 1u, memory_order_relaxed) + 1u;
   for (size_t i = 0; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
@@ -565,15 +565,15 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
     stage_sequences[i] = sequence;
     if (stage->reorder.capacity > 0u) {
       rc = flow_reorder_reserve(flow, (uint32_t)i, &stage_sequences[i]);
-      if (rc != TURBO_OK) {
+      if (rc != SALTS_OK) {
         rc = flow_set_error_keep_state(flow, rc, stage->line, stage->column,
                                        "reorder boundary is not accepting publications");
         break;
       }
     }
   }
-  turbo_mutex_unlock(&flow->runtime_mutex);
-  if (rc != TURBO_OK) goto cleanup;
+  salts_mutex_unlock(&flow->runtime_mutex);
+  if (rc != SALTS_OK) goto cleanup;
 
   for (size_t i = 0; i < vec_size(&flow->runtime_edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
@@ -587,11 +587,11 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   rc = flow_entry_header_init(flow, &completion.entry, origin_stage, FLOW_DATA_SEGMENT_DIRECT, 0u,
                               sequence, message->id, FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE,
                               &completion);
-  if (rc != TURBO_OK) goto cleanup;
-  completion.status = TURBO_OK;
+  if (rc != SALTS_OK) goto cleanup;
+  completion.status = SALTS_OK;
   rc = flow_apply_completion(flow, &completion, message, done, reachable, remaining, activated,
                              queue, stage_count, &tail, skipped_queue, stage_count);
-  if (rc != TURBO_OK) goto cleanup;
+  if (rc != SALTS_OK) goto cleanup;
 
   while (head < tail) {
     uint32_t stage_index = queue[head++];
@@ -604,11 +604,11 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
       rc = flow_entry_header_init(flow, &completion.entry, stage_index, FLOW_DATA_SEGMENT_DIRECT,
                                   0u, sequence, message->id, FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE,
                                   &completion);
-      if (rc != TURBO_OK) goto cleanup;
-      completion.status = TURBO_OK;
+      if (rc != SALTS_OK) goto cleanup;
+      completion.status = SALTS_OK;
       rc = flow_apply_completion(flow, &completion, message, done, reachable, remaining, activated,
                                  queue, stage_count, &tail, skipped_queue, stage_count);
-      if (rc != TURBO_OK) goto cleanup;
+      if (rc != SALTS_OK) goto cleanup;
       continue;
     }
 
@@ -617,38 +617,38 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
       memset(&emitter, 0, sizeof(emitter));
       rc = flow_dispatch_stage(flow, stage_index, message, stage_sequences[stage_index],
                                message->id, &completion, &emitter);
-      if (rc == TURBO_OK && (stage->emit_fn || stage->keyed_emit_fn || stage->window_fn)) {
+      if (rc == SALTS_OK && (stage->emit_fn || stage->keyed_emit_fn || stage->window_fn)) {
         rc = flow_cancel_emission_descendant_reorders(flow, stage_index, stage_sequences,
                                                       stage_count);
-        if (rc == TURBO_OK) {
+        if (rc == SALTS_OK) {
           for (size_t output_index = 0u; output_index < vec_size(&emitter.outputs);
                ++output_index) {
             turbo_flow_msg_t *output =
                 (turbo_flow_msg_t *)vec_at(&emitter.outputs, output_index);
             rc = flow_run_message_from_stage(flow, stage_index, output);
-            if (rc != TURBO_OK) break;
+            if (rc != SALTS_OK) break;
           }
         }
-        completion.terminal = rc == TURBO_OK;
+        completion.terminal = rc == SALTS_OK;
       }
       if (stage->emit_fn || stage->keyed_emit_fn || stage->window_fn) {
         flow_emitter_cleanup(&emitter);
       }
     }
-    if (rc != TURBO_OK && (stage->emit_fn || stage->keyed_emit_fn || stage->window_fn) &&
-        completion.status == TURBO_OK) {
+    if (rc != SALTS_OK && (stage->emit_fn || stage->keyed_emit_fn || stage->window_fn) &&
+        completion.status == SALTS_OK) {
       goto cleanup;
     }
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       rc = flow_apply_completion(flow, &completion, message, done, reachable, remaining, activated,
                                  queue, stage_count, &tail, skipped_queue, stage_count);
-      if (rc != TURBO_OK) goto cleanup;
+      if (rc != SALTS_OK) goto cleanup;
       flow_clear_error(flow);
       continue;
     }
     rc = flow_apply_completion(flow, &completion, message, done, reachable, remaining, activated,
                                queue, stage_count, &tail, skipped_queue, stage_count);
-    if (rc != TURBO_OK) goto cleanup;
+    if (rc != SALTS_OK) goto cleanup;
   }
 
 cleanup:
@@ -656,7 +656,7 @@ cleanup:
     for (size_t i = 0; i < stage_count; ++i) {
       if (stage_sequences[i] != 0u) {
         int cancel_rc = flow_reorder_cancel(flow, (uint32_t)i, stage_sequences[i]);
-        if (rc == TURBO_OK && cancel_rc != TURBO_OK) rc = cancel_rc;
+        if (rc == SALTS_OK && cancel_rc != SALTS_OK) rc = cancel_rc;
       }
     }
   }
@@ -672,12 +672,12 @@ int turbo_flow_advance_event_time_watermark(turbo_flow_t *flow,
   int rc;
 
   if (closed_windows) *closed_windows = 0u;
-  if (!flow || !store) return TURBO_EINVAL;
+  if (!flow || !store) return SALTS_EINVAL;
   flow_publish_error_context_begin(flow);
   rc = flow_publish_enter(flow);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     rc = flow_set_error_keep_state(flow, rc, 0, 0,
-                                   rc == TURBO_ESHUTDOWN
+                                   rc == SALTS_ESHUTDOWN
                                        ? "flow is not accepting watermark advancement"
                                        : "flow must be started before watermark advancement");
     goto cleanup_watermark;
@@ -694,7 +694,7 @@ int turbo_flow_advance_event_time_watermark(turbo_flow_t *flow,
     }
   }
   if (!window_executor) {
-    rc = flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0,
+    rc = flow_set_error_keep_state(flow, SALTS_ENOENT, 0, 0,
                                    "event-time window store is not bound to this flow");
     goto cleanup_watermark;
   }
@@ -702,7 +702,7 @@ int turbo_flow_advance_event_time_watermark(turbo_flow_t *flow,
   rc = flow_event_time_window_advance(flow, window_executor->stage_index, store,
                                       window_executor->window_close_fn, window_executor->ctx,
                                       window_executor->max_outputs, watermark_ns, closed_windows);
-  if (rc != TURBO_OK && flow_error_code(flow) != rc) {
+  if (rc != SALTS_OK && flow_error_code(flow) != rc) {
     rc = flow_set_error_keep_state(flow, rc, 0, 0, "event-time watermark advancement failed");
   }
 
@@ -722,26 +722,26 @@ int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t sou
   event.kind = TURBO_FLOW_OBSERVE_SOURCE_RECEIVED;
   event.source_name = source_name;
   event.msg = local;
-  event.status = TURBO_OK;
+  event.status = SALTS_OK;
   event.selected = -1;
   event.edge_kind = -1;
   flow_observer_emit(flow, &event);
 
   if (flow->broadcast_ring && !flow_msg_transport_context_is_borrowed(local)) {
     uint64_t sequence;
-    turbo_mutex_lock(&flow->runtime_mutex);
+    salts_mutex_lock(&flow->runtime_mutex);
     sequence = atomic_fetch_add_explicit(&flow->next_sequence, 1u, memory_order_relaxed) + 1u;
-    turbo_mutex_unlock(&flow->runtime_mutex);
-    turbo_mutex_lock(&flow->broadcast_mutex);
+    salts_mutex_unlock(&flow->runtime_mutex);
+    salts_mutex_lock(&flow->broadcast_mutex);
     rc = flow_publish_broadcast_data_plane(flow, source_index, local, sequence, result);
-    turbo_mutex_unlock(&flow->broadcast_mutex);
+    salts_mutex_unlock(&flow->broadcast_mutex);
   } else {
     rc = flow_run_message_from_stage(flow, source_index, local);
   }
 
   if (flow->observer_ops.message_complete) {
     flow->observer_ops.message_complete(flow->observer_ctx, source_name, local,
-                                        turbo_hrtime() - observe_start, rc);
+                                        salts_hrtime() - observe_start, rc);
   }
   memset(&event, 0, sizeof(event));
   event.kind = TURBO_FLOW_OBSERVE_FLOW_COMPLETE;
@@ -750,7 +750,7 @@ int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t sou
   event.status = rc;
   event.selected = -1;
   event.edge_kind = -1;
-  event.duration_ns = observe_start != 0u ? turbo_hrtime() - observe_start : 0u;
+  event.duration_ns = observe_start != 0u ? salts_hrtime() - observe_start : 0u;
   flow_observer_emit(flow, &event);
   result->status = rc;
   return rc;
@@ -761,20 +761,20 @@ static int flow_publish_source_index(turbo_flow_t *flow, const char *source_name
   int found_index;
   const flow_stage_plan_impl_t *source;
 
-  if (!flow || !source_name || !source_index) return TURBO_EINVAL;
+  if (!flow || !source_name || !source_index) return SALTS_EINVAL;
   found_index = turbo_flow_find_stage(flow, source_name);
   if (found_index < 0) {
-    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "publish source is unknown");
   }
   source = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages,
                                                               (size_t)found_index);
   if (!source->is_source) {
-    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "publish target must be a source");
   }
   *source_index = (uint32_t)found_index;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_publish_message_entered(turbo_flow_t *flow, const char *source_name,
@@ -787,16 +787,16 @@ static int flow_publish_message_entered(turbo_flow_t *flow, const char *source_n
   int local_initialized = 0;
   int rc;
 
-  if (flow_observer_has_handlers(flow)) observe_start = turbo_hrtime();
+  if (flow_observer_has_handlers(flow)) observe_start = salts_hrtime();
   flow_clear_error(flow);
-  if (flow_msg_payload_validate(msg) != TURBO_OK) {
-    rc = flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0,
+  if (flow_msg_payload_validate(msg) != SALTS_OK) {
+    rc = flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                    "publish payload must be within its backing buffer or owned payload");
     goto cleanup;
   }
   if (resolved_source_index < 0) {
     rc = flow_publish_source_index(flow, source_name, &source_index);
-    if (rc != TURBO_OK) goto cleanup;
+    if (rc != SALTS_OK) goto cleanup;
   } else {
     source_index = (uint32_t)resolved_source_index;
   }
@@ -806,8 +806,8 @@ static int flow_publish_message_entered(turbo_flow_t *flow, const char *source_n
   } else {
     rc = turbo_flow_msg_retain_view(&local, msg);
   }
-  if (rc != TURBO_OK) {
-    const char *error_message = rc == TURBO_ENOTSUP ? "publish cannot clone the schema projection"
+  if (rc != SALTS_OK) {
+    const char *error_message = rc == SALTS_ENOTSUP ? "publish cannot clone the schema projection"
                                                     : "publish requires a cloneable payload view";
     rc = flow_set_error_keep_state(flow, rc, 0, 0, error_message);
     goto cleanup;
@@ -823,18 +823,18 @@ cleanup:
 
 int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name, const turbo_flow_msg_t *msg,
                           turbo_flow_publish_result_t *result) {
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
   int publish_entered = 0;
 
   if (!flow || !source_name || !msg || !result || result->size < sizeof(*result)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   *result = (turbo_flow_publish_result_t)TURBO_FLOW_PUBLISH_RESULT_INIT;
   flow_publish_error_context_begin(flow);
   rc = flow_publish_enter(flow);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     rc = flow_set_error_keep_state(flow, rc, 0, 0,
-                                   rc == TURBO_ESHUTDOWN ? "flow is not accepting publications"
+                                   rc == SALTS_ESHUTDOWN ? "flow is not accepting publications"
                                                          : "flow must be started before publish");
     goto cleanup;
   }
@@ -870,37 +870,37 @@ static int flow_publish_batch_next(void *ctx, size_t index, turbo_flow_msg_t *me
 
   if (message) turbo_flow_msg_init(message);
   if (!next || !next->flow || !next->prepare || !message) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (next->failed || index != next->next_index || index >= next->message_count) {
     next->protocol_error = 1;
-    return flow_set_error_keep_state(next->flow, TURBO_EPROTO, 0, 0,
+    return flow_set_error_keep_state(next->flow, SALTS_EPROTO, 0, 0,
                                      "adapter batch iterator order is invalid");
   }
   turbo_flow_msg_init(&prepared);
   flow_clear_error(next->flow);
   rc = next->prepare(next->prepare_ctx, index, &prepared);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     next->failed = 1;
     rc = flow_set_error_keep_state(next->flow, rc, 0, 0,
                                    "batch message preparation failed");
     goto cleanup;
   }
-  if (flow_msg_payload_validate(&prepared) != TURBO_OK) {
+  if (flow_msg_payload_validate(&prepared) != SALTS_OK) {
     next->failed = 1;
     rc = flow_set_error_keep_state(
-        next->flow, TURBO_EINVAL, 0, 0,
+        next->flow, SALTS_EINVAL, 0, 0,
         "publish payload must be within its backing buffer or owned payload");
     goto cleanup;
   }
   rc = prepared.owned_payload || prepared._content_handle
            ? turbo_flow_msg_clone(message, &prepared)
            : turbo_flow_msg_retain_view(message, &prepared);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     next->failed = 1;
     rc = flow_set_error_keep_state(
         next->flow, rc, 0, 0,
-        rc == TURBO_ENOTSUP ? "publish cannot clone the schema projection"
+        rc == SALTS_ENOTSUP ? "publish cannot clone the schema projection"
                             : "publish requires a cloneable payload view");
   } else {
     next->next_index += 1u;
@@ -971,16 +971,16 @@ int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
   if (published) *published = 0u;
   if (!flow || !source_name || !config || config->size < sizeof(*config) ||
       config->message_count == 0u || !config->prepare) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   message_count = config->message_count;
   prepare = config->prepare;
   prepare_ctx = config->ctx;
   flow_publish_error_context_begin(flow);
   rc = flow_publish_enter(flow);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     rc = flow_set_error_keep_state(flow, rc, 0, 0,
-                                   rc == TURBO_ESHUTDOWN
+                                   rc == SALTS_ESHUTDOWN
                                        ? "flow is not accepting publications"
                                        : "flow must be started before publish");
     goto cleanup;
@@ -988,7 +988,7 @@ int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
   publish_entered = 1;
   flow_clear_error(flow);
   rc = flow_publish_source_index(flow, source_name, &source_index);
-  if (rc != TURBO_OK) goto cleanup;
+  if (rc != SALTS_OK) goto cleanup;
 
   {
     const flow_stage_plan_impl_t *batch_stage = NULL;
@@ -1008,17 +1008,17 @@ int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
                                         &consumed);
       if (next_context.protocol_error || consumed > message_count ||
           consumed > next_context.next_index ||
-          (rc == TURBO_OK &&
+          (rc == SALTS_OK &&
            (next_context.failed || consumed != message_count ||
             next_context.next_index != message_count)) ||
-          (rc != TURBO_OK &&
+          (rc != SALTS_OK &&
            ((next_context.failed && consumed != next_context.next_index) ||
             (!next_context.failed &&
              next_context.next_index - consumed > 1u)))) {
-        rc = flow_set_error_keep_state(flow, TURBO_EPROTO, batch_stage->line,
+        rc = flow_set_error_keep_state(flow, SALTS_EPROTO, batch_stage->line,
                                        batch_stage->column,
                                        "adapter batch completion count is invalid");
-      } else if (rc != TURBO_OK && flow_error_code(flow) == TURBO_OK) {
+      } else if (rc != SALTS_OK && flow_error_code(flow) == SALTS_OK) {
         rc = flow_set_error_keep_state(flow, rc, batch_stage->line, batch_stage->column,
                                        "adapter batch consume failed");
       }
@@ -1032,7 +1032,7 @@ int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
     turbo_flow_publish_result_t result = TURBO_FLOW_PUBLISH_RESULT_INIT;
     turbo_flow_msg_init(&message);
     rc = prepare(prepare_ctx, index, &message);
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       rc = flow_set_error_keep_state(flow, rc, 0, 0,
                                      "batch message preparation failed");
       turbo_flow_msg_cleanup(&message);
@@ -1041,7 +1041,7 @@ int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
     rc = flow_publish_message_entered(flow, source_name, (int)source_index, &message,
                                       &result);
     turbo_flow_msg_cleanup(&message);
-    if (rc != TURBO_OK) break;
+    if (rc != SALTS_OK) break;
     if (published) *published = index + 1u;
   }
 

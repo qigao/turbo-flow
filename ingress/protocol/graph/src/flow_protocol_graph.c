@@ -1,6 +1,6 @@
 #include "turbo_flow_protocol_graph.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -24,7 +24,7 @@ static void flow_protocol_graph_complete(void *ctx,
   completion.delivery_id = completion_ctx->delivery_id;
   completion.session_id = completion_ctx->session_id;
   completion.session_generation = completion_ctx->session_generation;
-  completion.status = result ? result->status : TURBO_EPROTO;
+  completion.status = result ? result->status : SALTS_EPROTO;
   completion_ctx->completion(completion_ctx->completion_ctx, &completion);
   free(completion_ctx);
 }
@@ -33,13 +33,13 @@ static int flow_protocol_graph_layout(size_t payload_size, size_t *metadata_offs
                                      size_t *total_size) {
   const size_t alignment = _Alignof(turbo_flow_protocol_metadata_t);
   size_t offset;
-  if (!metadata_offset || !total_size || alignment == 0u) return TURBO_EINVAL;
-  if (payload_size > SIZE_MAX - (alignment - 1u)) return TURBO_ERANGE;
+  if (!metadata_offset || !total_size || alignment == 0u) return SALTS_EINVAL;
+  if (payload_size > SIZE_MAX - (alignment - 1u)) return SALTS_ERANGE;
   offset = (payload_size + alignment - 1u) & ~(alignment - 1u);
-  if (offset > SIZE_MAX - sizeof(turbo_flow_protocol_metadata_t)) return TURBO_ERANGE;
+  if (offset > SIZE_MAX - sizeof(turbo_flow_protocol_metadata_t)) return SALTS_ERANGE;
   *metadata_offset = offset;
   *total_size = offset + sizeof(turbo_flow_protocol_metadata_t);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_graph_publish(
@@ -69,7 +69,7 @@ int turbo_flow_protocol_graph_publish(
       request->size < sizeof(*request) ||
       request->abi_version != TURBO_FLOW_PROTOCOL_RUNTIME_ABI_VERSION ||
       request->delivery_id == 0u || !request->message || !disposition)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   input = request->message;
   if (input->size < sizeof(*input) ||
       input->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION ||
@@ -77,7 +77,7 @@ int turbo_flow_protocol_graph_publish(
       input->payload_size > input->payload_capacity ||
       input->metadata.size < sizeof(input->metadata) ||
       input->metadata.abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   if (sink->size >= sizeof(*sink)) {
     source_handoff = sink->source_handoff;
     completion = sink->completion;
@@ -85,14 +85,14 @@ int turbo_flow_protocol_graph_publish(
   }
   if (source_handoff != TURBO_FLOW_SOURCE_HANDOFF_INLINE &&
       source_handoff != TURBO_FLOW_SOURCE_HANDOFF_ASYNC_BOUNDED)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   if (source_handoff == TURBO_FLOW_SOURCE_HANDOFF_ASYNC_BOUNDED && !completion)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   rc = flow_protocol_graph_layout(input->payload_size, &metadata_offset,
                                  &total_size);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   buffer = mem_get_buffer(mem_global(), total_size);
-  if (!buffer) return TURBO_ENOMEM;
+  if (!buffer) return SALTS_ENOMEM;
   storage = (uint8_t *)mem_buffer_data(buffer);
   if (input->payload_size > 0u)
     memcpy(storage, input->payload, input->payload_size);
@@ -112,7 +112,7 @@ int turbo_flow_protocol_graph_publish(
     completion_ctx = (flow_protocol_graph_completion_ctx_t *)calloc(1, sizeof(*completion_ctx));
     if (!completion_ctx) {
       turbo_flow_msg_cleanup(&message);
-      return TURBO_ENOMEM;
+      return SALTS_ENOMEM;
     }
     completion_ctx->completion = completion;
     completion_ctx->completion_ctx = completion_user_ctx;
@@ -123,14 +123,14 @@ int turbo_flow_protocol_graph_publish(
                                   flow_protocol_graph_complete, completion_ctx);
   }
   turbo_flow_msg_cleanup(&message);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     free(completion_ctx);
     return rc;
   }
   *disposition = source_handoff == TURBO_FLOW_SOURCE_HANDOFF_INLINE
                      ? TURBO_FLOW_PROTOCOL_PUBLISH_SETTLED
                      : TURBO_FLOW_PROTOCOL_PUBLISH_PENDING;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const turbo_flow_protocol_metadata_t *

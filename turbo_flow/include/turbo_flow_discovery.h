@@ -59,7 +59,7 @@ typedef struct turbo_flow_discovery_replace_result_s {
 } turbo_flow_discovery_replace_result_t;
 
 #define TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT                                                   \
-  {sizeof(turbo_flow_discovery_replace_result_t), TURBO_OK, TURBO_OK, 0u, 0u, 0u, 0u, 0u, 0u}
+  {sizeof(turbo_flow_discovery_replace_result_t), SALTS_OK, SALTS_OK, 0u, 0u, 0u, 0u, 0u, 0u}
 
 /**
  * Fill caller-owned peer storage and return one immutable registry version.
@@ -93,8 +93,8 @@ turbo_flow_discovery_controller_destroy(turbo_flow_discovery_controller_t *contr
  * Replace the complete desired peer set.
  *
  * Versions must increase. Replaying an identical current version is an idempotent
- * success; conflicting data at the same version returns TURBO_EPROTO and older
- * versions return TURBO_EALREADY. All input is validated and copied before owner
+ * success; conflicting data at the same version returns SALTS_EPROTO and older
+ * versions return SALTS_EALREADY. All input is validated and copied before owner
  * commands begin. A failed command rolls applied slots back to the prior set.
  * Calls on one controller must be serialized by the host.
  */

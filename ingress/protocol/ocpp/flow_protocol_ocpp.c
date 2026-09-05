@@ -1,7 +1,7 @@
 #include "flow_protocol_plugin_support.h"
 
-#include "turbo_error.h"
-#include "turbo_parser.h"
+#include "salts_error.h"
+#include <json_parser.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -119,74 +119,73 @@ static int flow_ocpp_action_supported(const char *version, const char *action, s
 static int flow_ocpp_inspect(void *ctx, const char *configured_version,
                              const turbo_flow_protocol_frame_view_t *frame,
                              turbo_flow_protocol_metadata_t *metadata) {
-  turbo_json_doc_t *document = NULL;
+  json_value_t *document = NULL;
   json_value_t *message_type_value;
   json_value_t *correlation_value;
   json_value_t *operation_value = NULL;
   double message_type_number;
   unsigned message_type;
   const char *operation;
-  int rc = TURBO_EPROTO;
+  int rc = SALTS_EPROTO;
   (void)ctx;
-  if (!frame || !metadata ||
-      turbo_parse_json(frame->data, frame->data_size, &document) != TURBO_OK || !document ||
-      turbo_json_type(document) != TURBO_JSON_ARRAY)
+  if (!frame || !metadata) goto done;
+  document = json_parse((const char *)frame->data, frame->data_size);
+  if (!document || json_type(document) != JSON_ARRAY) goto done;
+  if (json_array_size(document) < 3u) goto done;
+  message_type_value = json_array_get(document, 0u);
+  correlation_value = json_array_get(document, 1u);
+  if (!message_type_value || json_type(message_type_value) != JSON_NUMBER ||
+      !correlation_value || json_type(correlation_value) != JSON_STRING)
     goto done;
-  if (turbo_json_array_size(document) < 3u) goto done;
-  message_type_value = turbo_json_array_get(document, 0u);
-  correlation_value = turbo_json_array_get(document, 1u);
-  if (!message_type_value || turbo_json_type(message_type_value) != TURBO_JSON_NUMBER ||
-      !correlation_value || turbo_json_type(correlation_value) != TURBO_JSON_STRING)
-    goto done;
-  message_type_number = turbo_json_number(message_type_value);
+  message_type_number = json_number(message_type_value);
   if (!isfinite(message_type_number) || message_type_number != floor(message_type_number) ||
       message_type_number < 2.0 || message_type_number > 4.0)
     goto done;
   message_type = (unsigned)message_type_number;
-  if (turbo_json_string_len(correlation_value) == 0u ||
-      turbo_json_string_len(correlation_value) > TURBO_FLOW_PROTOCOL_CORRELATION_MAX)
+  if (json_string_len(correlation_value) == 0u ||
+      json_string_len(correlation_value) > TURBO_FLOW_PROTOCOL_CORRELATION_MAX)
     goto done;
   if (flow_protocol_metadata_text_n(metadata->correlation_id, sizeof(metadata->correlation_id),
-                                   turbo_json_string(correlation_value),
-                                   turbo_json_string_len(correlation_value)) != TURBO_OK)
+                                   json_string(correlation_value),
+                                   json_string_len(correlation_value)) != SALTS_OK)
     goto done;
   if (message_type == 2u) {
-    if (turbo_json_array_size(document) != 4u) goto done;
-    operation_value = turbo_json_array_get(document, 2u);
-    if (!operation_value || turbo_json_type(operation_value) != TURBO_JSON_STRING ||
-        turbo_json_string_len(operation_value) == 0u ||
-        turbo_json_string_len(operation_value) > TURBO_FLOW_PROTOCOL_OPERATION_MAX)
+    if (json_array_size(document) != 4u) goto done;
+    operation_value = json_array_get(document, 2u);
+    if (!operation_value || json_type(operation_value) != JSON_STRING ||
+        json_string_len(operation_value) == 0u ||
+        json_string_len(operation_value) > TURBO_FLOW_PROTOCOL_OPERATION_MAX)
       goto done;
-    if (!flow_ocpp_action_supported(configured_version, turbo_json_string(operation_value),
-                                    turbo_json_string_len(operation_value)))
+    if (!flow_ocpp_action_supported(configured_version, json_string(operation_value),
+                                    json_string_len(operation_value)))
       goto done;
-    if (!turbo_json_array_get(document, 3u) ||
-        turbo_json_type(turbo_json_array_get(document, 3u)) != TURBO_JSON_OBJECT)
+    if (!json_array_get(document, 3u) ||
+        json_type(json_array_get(document, 3u)) != JSON_OBJECT)
       goto done;
-    operation = turbo_json_string(operation_value);
+    operation = json_string(operation_value);
   } else if (message_type == 3u) {
-    if (turbo_json_array_size(document) != 3u || !turbo_json_array_get(document, 2u) ||
-        turbo_json_type(turbo_json_array_get(document, 2u)) != TURBO_JSON_OBJECT)
+    if (json_array_size(document) != 3u || !json_array_get(document, 2u) ||
+        json_type(json_array_get(document, 2u)) != JSON_OBJECT)
       goto done;
     operation = "call-result";
   } else {
-    if (turbo_json_array_size(document) != 5u || !turbo_json_array_get(document, 2u) ||
-        turbo_json_type(turbo_json_array_get(document, 2u)) != TURBO_JSON_STRING ||
-        !turbo_json_array_get(document, 3u) ||
-        turbo_json_type(turbo_json_array_get(document, 3u)) != TURBO_JSON_STRING ||
-        !turbo_json_array_get(document, 4u) ||
-        turbo_json_type(turbo_json_array_get(document, 4u)) != TURBO_JSON_OBJECT)
+    if (json_array_size(document) != 5u || !json_array_get(document, 2u) ||
+        json_type(json_array_get(document, 2u)) != JSON_STRING ||
+        !json_array_get(document, 3u) ||
+        json_type(json_array_get(document, 3u)) != JSON_STRING ||
+        !json_array_get(document, 4u) ||
+        json_type(json_array_get(document, 4u)) != JSON_OBJECT)
       goto done;
     operation = message_type == 3u ? "call-result" : "call-error";
   }
   metadata->message_type = message_type;
   if (message_type == 2u)
     rc = flow_protocol_metadata_text_n(metadata->operation, sizeof(metadata->operation), operation,
-                                      turbo_json_string_len(operation_value));
+                                      json_string_len(operation_value));
   else rc = flow_protocol_metadata_text(metadata->operation, sizeof(metadata->operation), operation);
 
 done:
-  turbo_free_json(&document);
+  if (document) json_free(document);
   return rc;
 }
 
@@ -197,17 +196,17 @@ typedef struct flow_ocpp_writer_s {
 } flow_ocpp_writer_t;
 
 static int flow_ocpp_write(flow_ocpp_writer_t *writer, const void *data, size_t size) {
-  if (!writer || (!data && size != 0u)) return TURBO_EINVAL;
-  if (size > writer->capacity - writer->size) return TURBO_EMSGSIZE;
+  if (!writer || (!data && size != 0u)) return SALTS_EINVAL;
+  if (size > writer->capacity - writer->size) return SALTS_EMSGSIZE;
   if (size > 0u) memcpy(writer->data + writer->size, data, size);
   writer->size += size;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_ocpp_write_string(flow_ocpp_writer_t *writer, const char *text, size_t size) {
   static const char quote = '"';
   int rc = flow_ocpp_write(writer, &quote, 1u);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   for (size_t i = 0u; i < size; ++i) {
     const unsigned char value = (unsigned char)text[i];
     const char *escape = NULL;
@@ -247,19 +246,19 @@ static int flow_ocpp_write_string(flow_ocpp_writer_t *writer, const char *text, 
     } else {
       rc = flow_ocpp_write(writer, text + i, 1u);
     }
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
   return flow_ocpp_write(writer, &quote, 1u);
 }
 
 static int flow_ocpp_payload_validate(const uint8_t *payload, size_t payload_size) {
-  turbo_json_doc_t *document = NULL;
-  int rc = TURBO_EPROTO;
-  if (!payload || payload_size == 0u) return TURBO_EINVAL;
-  if (turbo_parse_json(payload, payload_size, &document) == TURBO_OK && document &&
-      turbo_json_type(document) == TURBO_JSON_OBJECT)
-    rc = TURBO_OK;
-  turbo_free_json(&document);
+  json_value_t *document = NULL;
+  int rc = SALTS_EPROTO;
+  if (!payload || payload_size == 0u) return SALTS_EINVAL;
+  document = json_parse((const char *)payload, payload_size);
+  if (document && json_type(document) == JSON_OBJECT)
+    rc = SALTS_OK;
+  if (document) json_free(document);
   return rc;
 }
 
@@ -269,9 +268,9 @@ static int flow_ocpp_encode_envelope(unsigned message_type, const char *correlat
                                      turbo_flow_protocol_frame_output_t *output) {
   flow_ocpp_writer_t writer;
   int rc;
-  if (!correlation_id || !correlation_id[0] || !output || !output->data) return TURBO_EINVAL;
+  if (!correlation_id || !correlation_id[0] || !output || !output->data) return SALTS_EINVAL;
   rc = flow_ocpp_payload_validate(payload, payload_size);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   writer.data = output->data;
   writer.capacity = output->capacity;
   writer.size = 0u;
@@ -280,58 +279,57 @@ static int flow_ocpp_encode_envelope(unsigned message_type, const char *correlat
                        : message_type == 3u ? "[3,"
                                             : "[4,",
                        3u);
-  if (rc == TURBO_OK) rc = flow_ocpp_write_string(&writer, correlation_id, strlen(correlation_id));
-  if (rc == TURBO_OK && message_type == 2u) {
+  if (rc == SALTS_OK) rc = flow_ocpp_write_string(&writer, correlation_id, strlen(correlation_id));
+  if (rc == SALTS_OK && message_type == 2u) {
     rc = flow_ocpp_write(&writer, ",", 1u);
-    if (rc == TURBO_OK) rc = flow_ocpp_write_string(&writer, operation, strlen(operation));
-  } else if (rc == TURBO_OK && message_type == 4u) {
+    if (rc == SALTS_OK) rc = flow_ocpp_write_string(&writer, operation, strlen(operation));
+  } else if (rc == SALTS_OK && message_type == 4u) {
     rc = flow_ocpp_write(&writer, ",", 1u);
-    if (rc == TURBO_OK) rc = flow_ocpp_write_string(&writer, operation, strlen(operation));
-    if (rc == TURBO_OK) rc = flow_ocpp_write(&writer, ",", 1u);
-    if (rc == TURBO_OK)
+    if (rc == SALTS_OK) rc = flow_ocpp_write_string(&writer, operation, strlen(operation));
+    if (rc == SALTS_OK) rc = flow_ocpp_write(&writer, ",", 1u);
+    if (rc == SALTS_OK)
       rc = flow_ocpp_write_string(&writer, error_description ? error_description : "",
                                   error_description ? strlen(error_description) : 0u);
   }
-  if (rc == TURBO_OK) rc = flow_ocpp_write(&writer, ",", 1u);
-  if (rc == TURBO_OK) rc = flow_ocpp_write(&writer, payload, payload_size);
-  if (rc == TURBO_OK) rc = flow_ocpp_write(&writer, "]", 1u);
-  if (rc != TURBO_OK) return rc;
+  if (rc == SALTS_OK) rc = flow_ocpp_write(&writer, ",", 1u);
+  if (rc == SALTS_OK) rc = flow_ocpp_write(&writer, payload, payload_size);
+  if (rc == SALTS_OK) rc = flow_ocpp_write(&writer, "]", 1u);
+  if (rc != SALTS_OK) return rc;
   output->data_size = writer.size;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_ocpp_reply(void *ctx, const char *configured_version,
                            const turbo_flow_protocol_frame_view_t *request, int status,
                            turbo_flow_protocol_frame_output_t *output) {
   static const uint8_t empty_object[] = "{}";
-  turbo_json_doc_t *document = NULL;
+  json_value_t *document = NULL;
   json_value_t *type_value;
   json_value_t *correlation;
   double type_number;
-  int rc = TURBO_EPROTO;
+  int rc = SALTS_EPROTO;
   (void)ctx;
   (void)configured_version;
-  if (!request || !output ||
-      turbo_parse_json(request->data, request->data_size, &document) != TURBO_OK || !document ||
-      turbo_json_type(document) != TURBO_JSON_ARRAY)
+  if (!request || !output) goto done;
+  document = json_parse((const char *)request->data, request->data_size);
+  if (!document || json_type(document) != JSON_ARRAY) goto done;
+  type_value = json_array_get(document, 0u);
+  correlation = json_array_get(document, 1u);
+  if (!type_value || json_type(type_value) != JSON_NUMBER || !correlation ||
+      json_type(correlation) != JSON_STRING)
     goto done;
-  type_value = turbo_json_array_get(document, 0u);
-  correlation = turbo_json_array_get(document, 1u);
-  if (!type_value || turbo_json_type(type_value) != TURBO_JSON_NUMBER || !correlation ||
-      turbo_json_type(correlation) != TURBO_JSON_STRING)
-    goto done;
-  type_number = turbo_json_number(type_value);
+  type_number = json_number(type_value);
   if (type_number != 2.0) {
     output->data_size = 0u;
-    rc = TURBO_OK;
+    rc = SALTS_OK;
     goto done;
   }
-  rc = flow_ocpp_encode_envelope(status == TURBO_OK ? 3u : 4u, turbo_json_string(correlation),
-                                 status == TURBO_OK ? NULL : "InternalError",
-                                 status == TURBO_OK ? NULL : "Flow settlement failed", empty_object,
+  rc = flow_ocpp_encode_envelope(status == SALTS_OK ? 3u : 4u, json_string(correlation),
+                                 status == SALTS_OK ? NULL : "InternalError",
+                                 status == SALTS_OK ? NULL : "Flow settlement failed", empty_object,
                                  sizeof(empty_object) - 1u, output);
 done:
-  turbo_free_json(&document);
+  if (document) json_free(document);
   return rc;
 }
 
@@ -341,7 +339,7 @@ static int flow_ocpp_encode(void *ctx, const char *configured_version,
   unsigned message_type = 2u;
   const char *wire_operation;
   (void)ctx;
-  if (!command || !command->correlation_id) return TURBO_EINVAL;
+  if (!command || !command->correlation_id) return SALTS_EINVAL;
   if (strcmp(command->operation, "call-result") == 0) {
     message_type = 3u;
     wire_operation = NULL;
@@ -351,7 +349,7 @@ static int flow_ocpp_encode(void *ctx, const char *configured_version,
   } else {
     wire_operation = command->operation;
     if (!flow_ocpp_action_supported(configured_version, wire_operation, strlen(wire_operation)))
-      return TURBO_ENOTSUP;
+      return SALTS_ENOTSUP;
   }
   return flow_ocpp_encode_envelope(message_type, command->correlation_id, wire_operation,
                                    message_type == 4u ? "Command rejected" : NULL, command->payload,

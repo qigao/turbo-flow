@@ -26,7 +26,7 @@ static int discovery_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_sta
   (void)flow;
   (void)stage;
   (void)msg;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int discovery_adapter_command(void *ctx, turbo_flow_t *flow,
@@ -37,24 +37,24 @@ static int discovery_adapter_command(void *ctx, turbo_flow_t *flow,
   switch (command->kind) {
   case TURBO_FLOW_ADAPTER_QUIESCE:
     adapter->active = 0;
-    return TURBO_OK;
+    return SALTS_OK;
   case TURBO_FLOW_ADAPTER_RESUME:
     adapter->active = 1;
-    return TURBO_OK;
+    return SALTS_OK;
   case TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT:
     adapter->replace_count += 1;
     if (adapter->fail_next_replace) {
       adapter->fail_next_replace = 0;
-      return TURBO_EIO;
+      return SALTS_EIO;
     }
     if (snprintf(adapter->host, sizeof(adapter->host), "%s", command->endpoint.host) < 0 ||
         snprintf(adapter->path, sizeof(adapter->path), "%s", command->endpoint.path) < 0) {
-      return TURBO_EIO;
+      return SALTS_EIO;
     }
     adapter->port = command->endpoint.port;
-    return TURBO_OK;
+    return SALTS_OK;
   default:
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
 }
 
@@ -72,10 +72,10 @@ static turbo_flow_t *discovery_started_flow(discovery_adapter_t *first,
   memset(&ops, 0, sizeof(ops));
   ops.consume = discovery_consume;
   ops.command = discovery_adapter_command;
-  if (!flow || turbo_flow_register_adapter(flow, "slot.first", &ops, first) != TURBO_OK ||
-      turbo_flow_register_adapter(flow, "slot.second", &ops, second) != TURBO_OK ||
-      turbo_flow_parse_string(flow, dsl, sizeof(dsl) - 1u) != TURBO_OK ||
-      turbo_flow_compile(flow) != TURBO_OK || turbo_flow_start(flow) != TURBO_OK) {
+  if (!flow || turbo_flow_register_adapter(flow, "slot.first", &ops, first) != SALTS_OK ||
+      turbo_flow_register_adapter(flow, "slot.second", &ops, second) != SALTS_OK ||
+      turbo_flow_parse_string(flow, dsl, sizeof(dsl) - 1u) != SALTS_OK ||
+      turbo_flow_compile(flow) != SALTS_OK || turbo_flow_start(flow) != SALTS_OK) {
     turbo_flow_destroy(flow);
     return NULL;
   }
@@ -112,7 +112,7 @@ spec("flow_discovery") {
     turbo_flow_discovery_replace_result_t result = TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
     turbo_flow_discovery_peer_t peers[2];
     turbo_flow_discovery_peer_list_t list = TURBO_FLOW_DISCOVERY_PEER_LIST_INIT;
-    discovery_source_probe_t source_probe = {TURBO_EIO, 0};
+    discovery_source_probe_t source_probe = {SALTS_EIO, 0};
     turbo_flow_discovery_source_t source = TURBO_FLOW_DISCOVERY_SOURCE_INIT;
     turbo_flow_t *flow = discovery_started_flow(&first, &second);
     int commands_before;
@@ -121,7 +121,7 @@ spec("flow_discovery") {
     config.flow = flow;
     config.adapter_names = adapter_names;
     config.adapter_count = 2u;
-    check_equal(turbo_flow_discovery_controller_create(&config, &controller), TURBO_OK);
+    check_equal(turbo_flow_discovery_controller_create(&config, &controller), SALTS_OK);
     check_not_null(controller);
     check_false(first.active);
     check_false(second.active);
@@ -130,7 +130,7 @@ spec("flow_discovery") {
     list.registry_version = 1u;
     list.peers = peers;
     list.peer_count = 1u;
-    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), SALTS_OK);
     check_equal(result.added, 1u);
     check_equal(turbo_flow_discovery_registry_version(controller), 1u);
     check_equal(turbo_flow_discovery_active_peer_count(controller), 1u);
@@ -140,13 +140,13 @@ spec("flow_discovery") {
 
     commands_before = first.command_count + second.command_count;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), SALTS_OK);
     check_equal(result.unchanged, 1u);
     check_equal(first.command_count + second.command_count, commands_before);
 
     peers[0] = discovery_peer("peer-a", "127.0.0.1", 7199);
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_EPROTO);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), SALTS_EPROTO);
     check_equal(first.port, 7101);
 
     peers[0] = discovery_peer("peer-a", "127.0.0.1", 7201);
@@ -154,7 +154,7 @@ spec("flow_discovery") {
     list.registry_version = 2u;
     list.peer_count = 2u;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), SALTS_OK);
     check_equal(result.updated, 1u);
     check_equal(result.added, 1u);
     check_true(second.active);
@@ -162,14 +162,14 @@ spec("flow_discovery") {
     list.registry_version = 1u;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
     check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result),
-                 TURBO_EALREADY);
+                 SALTS_EALREADY);
     check_equal(turbo_flow_discovery_registry_version(controller), 2u);
 
     peers[0] = discovery_peer("peer-b", "127.0.0.1", 7202);
     list.registry_version = 3u;
     list.peer_count = 1u;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_OK);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), SALTS_OK);
     check_equal(result.removed, 1u);
     check_false(first.active);
     check_true(second.active);
@@ -178,7 +178,7 @@ spec("flow_discovery") {
     source.ctx = &source_probe;
     commands_before = first.command_count + second.command_count;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_equal(turbo_flow_discovery_poll(controller, &source, &result), TURBO_EIO);
+    check_equal(turbo_flow_discovery_poll(controller, &source, &result), SALTS_EIO);
     check_equal(source_probe.calls, 1);
     check_equal(first.command_count + second.command_count, commands_before);
     check_equal(turbo_flow_discovery_registry_version(controller), 3u);
@@ -189,9 +189,9 @@ spec("flow_discovery") {
     list.peer_count = 2u;
     second.fail_next_replace = 1;
     result = (turbo_flow_discovery_replace_result_t)TURBO_FLOW_DISCOVERY_REPLACE_RESULT_INIT;
-    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), TURBO_EIO);
-    check_equal(result.status, TURBO_EIO);
-    check_equal(result.rollback_status, TURBO_OK);
+    check_equal(turbo_flow_discovery_replace_peer_list(controller, &list, &result), SALTS_EIO);
+    check_equal(result.status, SALTS_EIO);
+    check_equal(result.rollback_status, SALTS_OK);
     check_equal(turbo_flow_discovery_registry_version(controller), 3u);
     check_equal(turbo_flow_discovery_active_peer_count(controller), 1u);
     check_false(first.active);
@@ -199,7 +199,7 @@ spec("flow_discovery") {
     check_equal(second.port, 7202);
 
     turbo_flow_discovery_controller_destroy(controller);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 }

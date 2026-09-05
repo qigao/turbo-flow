@@ -9,23 +9,23 @@ static const uint32_t FLOW_RULEFORGE_MODULE_VERSION = 1u;
 static int flow_rulesforge_status(ruleforge_status_t status) {
   switch (status) {
   case RULES_FORGE_OK:
-    return TURBO_OK;
+    return SALTS_OK;
   case RULES_FORGE_ERROR_INVALID_ARGUMENT:
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   case RULES_FORGE_ERROR_MEMORY_ALLOCATION:
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   case RULES_FORGE_ERROR_RESOURCE_LIMIT:
-    return TURBO_ENOSPC;
+    return SALTS_ENOSPC;
   case RULES_FORGE_ERROR_COMPILATION_FAILED:
   case RULES_FORGE_ERROR_FACT_INSERTION_FAILED:
   case RULES_FORGE_ERROR_SESSION_INCONSISTENT:
   case RULES_FORGE_STATUS_END_OF_STREAM:
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   case RULES_FORGE_ERROR_GENERIC:
   case RULES_FORGE_ERROR_SESSION_CREATION_FAILED:
   case RULES_FORGE_ERROR_QUERY_FAILED:
   default:
-    return TURBO_EIO;
+    return SALTS_EIO;
   }
 }
 
@@ -33,12 +33,12 @@ static int flow_rulesforge_databind_clone(const void *value, void *ctx, void **o
   ruleforge_data_bind_object_t clone = NULL;
   ruleforge_status_t status;
   (void)ctx;
-  if (!value || !out) return TURBO_EINVAL;
+  if (!value || !out) return SALTS_EINVAL;
   *out = NULL;
   status = ruleforge_data_bind_object_clone((ruleforge_data_bind_object_t)value, &clone);
   if (status != RULES_FORGE_OK) return flow_rulesforge_status(status);
   *out = clone;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void flow_rulesforge_databind_destroy(void *value, void *ctx) {
@@ -48,8 +48,8 @@ static void flow_rulesforge_databind_destroy(void *value, void *ctx) {
 
 int turbo_flow_rulesforge_set_result(turbo_flow_msg_t *message, uint32_t match_count, int status) {
   turbo_flow_data_decision_t decision = TURBO_FLOW_DATA_DECISION_INIT;
-  if (!message || (status != TURBO_OK && match_count != 0u)) return TURBO_EINVAL;
-  if (status == TURBO_OK) {
+  if (!message || (status != SALTS_OK && match_count != 0u)) return SALTS_EINVAL;
+  if (status == SALTS_OK) {
     decision.evaluation_status =
         match_count > 0u ? TURBO_FLOW_DATA_MATCHED : TURBO_FLOW_DATA_NOT_MATCHED;
   } else {
@@ -58,7 +58,7 @@ int turbo_flow_rulesforge_set_result(turbo_flow_msg_t *message, uint32_t match_c
   }
   decision.match_count = match_count;
   message->data_decision = decision;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_rulesforge_execute(turbo_flow_msg_t *message, void *ctx) {
@@ -67,10 +67,10 @@ static int flow_rulesforge_execute(turbo_flow_msg_t *message, void *ctx) {
   int rc;
   if (!message || !registration || registration->size < sizeof(*registration) || !registration->fn ||
       !registration->resource_name || registration->resource_name[0] == '\0') {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   rc = registration->fn(message, registration->resource_name, registration->callback_ctx);
-  if (rc != TURBO_OK &&
+  if (rc != SALTS_OK &&
       message->data_decision.evaluation_status == TURBO_FLOW_DATA_NOT_EVALUATED) {
     (void)turbo_flow_rulesforge_set_result(message, 0u, rc);
   }
@@ -81,12 +81,12 @@ static int flow_rulesforge_finish_databind(
     turbo_flow_msg_t *message, const turbo_flow_rulesforge_databind_provider_t *provider,
     int fired, int rc) {
   int result_rc;
-  if (!message || !provider || fired < 0) return TURBO_EINVAL;
+  if (!message || !provider || fired < 0) return SALTS_EINVAL;
   message->flags &= ~provider->matched_flag;
   result_rc = turbo_flow_rulesforge_set_result(
-      message, rc == TURBO_OK ? (uint32_t)fired : 0u, rc);
-  if (result_rc != TURBO_OK) return result_rc;
-  if (rc == TURBO_OK && fired > 0) message->flags |= provider->matched_flag;
+      message, rc == SALTS_OK ? (uint32_t)fired : 0u, rc);
+  if (result_rc != SALTS_OK) return result_rc;
+  if (rc == SALTS_OK && fired > 0) message->flags |= provider->matched_flag;
   return rc;
 }
 
@@ -102,13 +102,13 @@ static int flow_rulesforge_execute_databind(turbo_flow_msg_t *message, void *ctx
 
   if (!message || !provider || provider->size < sizeof(*provider) || !provider->knowledge_base ||
       provider->matched_flag == 0u || provider->max_rules <= 0) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   projection = turbo_flow_msg_projection(message, &schema);
   if (!projection || !schema || schema->size < sizeof(*schema) ||
       schema->domain != TURBO_FLOW_DOMAIN_DATA || !schema->projection_type ||
       !schema->type_name) {
-    return flow_rulesforge_finish_databind(message, provider, 0, TURBO_EPROTO);
+    return flow_rulesforge_finish_databind(message, provider, 0, SALTS_EPROTO);
   }
 
   status = ruleforge_session_create(provider->knowledge_base, &session);
@@ -125,7 +125,7 @@ static int flow_rulesforge_execute_databind(turbo_flow_msg_t *message, void *ctx
     if (schema->encoding != TURBO_FLOW_DATA_ENCODING_TBE || !object_type ||
         strcmp(object_type, schema->type_name) != 0) {
       (void)ruleforge_session_destroy(session);
-      return flow_rulesforge_finish_databind(message, provider, 0, TURBO_EPROTO);
+      return flow_rulesforge_finish_databind(message, provider, 0, SALTS_EPROTO);
     }
     status = ruleforge_session_add_data_bind_object(session, object, NULL);
   } else if (strcmp(
@@ -135,14 +135,14 @@ static int flow_rulesforge_execute_databind(turbo_flow_msg_t *message, void *ctx
         session, schema->type_name, (const DataBindValue *)projection, NULL);
   } else {
     (void)ruleforge_session_destroy(session);
-    return flow_rulesforge_finish_databind(message, provider, 0, TURBO_EPROTO);
+    return flow_rulesforge_finish_databind(message, provider, 0, SALTS_EPROTO);
   }
   if (status == RULES_FORGE_OK) {
     status = ruleforge_session_fire_all_rules(session, provider->max_rules, &fired);
   }
   rc = flow_rulesforge_status(status);
   status = ruleforge_session_destroy(session);
-  if (rc == TURBO_OK && status != RULES_FORGE_OK) rc = flow_rulesforge_status(status);
+  if (rc == SALTS_OK && status != RULES_FORGE_OK) rc = flow_rulesforge_status(status);
   return flow_rulesforge_finish_databind(message, provider, fired, rc);
 }
 
@@ -229,20 +229,20 @@ static int flow_rulesforge_register_apply_contract(turbo_flow_t *flow, const cha
 
   existing_primitive = turbo_flow_find_primitive(flow, resource_name);
   if (existing_primitive) {
-    if (!flow_rulesforge_primitive_compatible(existing_primitive, &primitive)) return TURBO_EPROTO;
+    if (!flow_rulesforge_primitive_compatible(existing_primitive, &primitive)) return SALTS_EPROTO;
   } else {
     rc = turbo_flow_register_primitive(flow, &primitive);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
 
   existing_operation = turbo_flow_find_operation(flow, TURBO_FLOW_RULEFORGE_APPLY_OPERATION);
   if (existing_operation) {
-    if (!flow_rulesforge_operation_compatible(existing_operation, &operation)) return TURBO_EPROTO;
+    if (!flow_rulesforge_operation_compatible(existing_operation, &operation)) return SALTS_EPROTO;
   } else {
     rc = turbo_flow_register_operation(flow, &operation);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_rulesforge_register_module_contract(turbo_flow_t *flow) {
@@ -261,9 +261,9 @@ static int flow_rulesforge_register_module_contract(turbo_flow_t *flow) {
         existing->requirement_count != 0u ||
         strcmp(existing->primitive_types[0], TURBO_FLOW_RULEFORGE_RESOURCE_TYPE) != 0 ||
         strcmp(existing->operation_names[0], TURBO_FLOW_RULEFORGE_APPLY_OPERATION) != 0) {
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     }
-    return TURBO_OK;
+    return SALTS_OK;
   }
   descriptor.size = sizeof(descriptor);
   descriptor.name = TURBO_FLOW_RULEFORGE_MODULE;
@@ -324,7 +324,7 @@ static int flow_rulesforge_register_provider(turbo_flow_t *flow, const char *res
   int rc;
 
   if (!flow || !resource_name || resource_name[0] == '\0' || !fn) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
 
   providers_before = vec_size(&flow->operation_providers);
@@ -333,13 +333,13 @@ static int flow_rulesforge_register_provider(turbo_flow_t *flow, const char *res
   operations_before = vec_size(&flow->operations);
 
   rc = flow_rulesforge_register_apply_contract(flow, resource_name);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_rulesforge_rollback_operation_registration(flow, providers_before, modules_before,
                                                     primitives_before, operations_before);
     return rc;
   }
   rc = flow_rulesforge_register_module_contract(flow);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_rulesforge_rollback_operation_registration(flow, providers_before, modules_before,
                                                     primitives_before, operations_before);
     return rc;
@@ -351,7 +351,7 @@ static int flow_rulesforge_register_provider(turbo_flow_t *flow, const char *res
   provider.ctx = ctx;
   provider.options = options;
   rc = turbo_flow_register_operation_provider(flow, &provider);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_rulesforge_rollback_operation_registration(flow, providers_before, modules_before,
                                                     primitives_before, operations_before);
     return rc;
@@ -359,12 +359,12 @@ static int flow_rulesforge_register_provider(turbo_flow_t *flow, const char *res
   rc = turbo_flow_bind_operation_provider_module(
       flow, TURBO_FLOW_RULEFORGE_MODULE, TURBO_FLOW_RULEFORGE_APPLY_OPERATION,
       resource_name);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_rulesforge_rollback_operation_registration(flow, providers_before, modules_before,
                                                     primitives_before, operations_before);
     return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_rulesforge_register_data_operation(
@@ -372,7 +372,7 @@ int turbo_flow_rulesforge_register_data_operation(
     const turbo_flow_rulesforge_data_operation_registration_t *registration) {
   if (!registration || registration->size < sizeof(*registration) ||
       !registration->resource_name || registration->resource_name[0] == '\0' || !registration->fn) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   return flow_rulesforge_register_provider(flow, registration->resource_name,
                                            flow_rulesforge_execute, (void *)registration,
@@ -388,10 +388,10 @@ int turbo_flow_rulesforge_bind_databind_object(turbo_flow_msg_t *message,
       !schema->projection_type ||
       strcmp(schema->projection_type, TURBO_FLOW_RULEFORGE_DATABIND_PROJECTION_TYPE) != 0 ||
       !schema->type_name) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   object_type = ruleforge_data_bind_object_get_type_name(object);
-  if (!object_type || strcmp(object_type, schema->type_name) != 0) return TURBO_EPROTO;
+  if (!object_type || strcmp(object_type, schema->type_name) != 0) return SALTS_EPROTO;
   return turbo_flow_msg_bind_projection(message, schema, object, flow_rulesforge_databind_clone,
                                         flow_rulesforge_databind_destroy, NULL);
 }
@@ -404,20 +404,20 @@ static int flow_rulesforge_finish_json(
 
   if (stream) {
     status = ruleforge_data_bind_stream_destroy(stream);
-    if (rc == TURBO_OK && status != RULES_FORGE_OK) rc = flow_rulesforge_status(status);
+    if (rc == SALTS_OK && status != RULES_FORGE_OK) rc = flow_rulesforge_status(status);
   }
   if (session) {
     status = ruleforge_session_destroy(session);
-    if (rc == TURBO_OK && status != RULES_FORGE_OK) rc = flow_rulesforge_status(status);
+    if (rc == SALTS_OK && status != RULES_FORGE_OK) rc = flow_rulesforge_status(status);
   }
-  if (rc != TURBO_OK) fired = 0;
+  if (rc != SALTS_OK) fired = 0;
   if (fired > 0)
     message->flags |= provider->matched_flag;
   else
     message->flags &= ~provider->matched_flag;
   result_rc =
       turbo_flow_rulesforge_set_result(message, fired > 0 ? (uint32_t)fired : 0u, rc);
-  return rc != TURBO_OK ? rc : result_rc;
+  return rc != SALTS_OK ? rc : result_rc;
 }
 
 static int flow_rulesforge_execute_json(turbo_flow_msg_t *message, void *ctx) {
@@ -431,17 +431,17 @@ static int flow_rulesforge_execute_json(turbo_flow_msg_t *message, void *ctx) {
   int fired = 0;
   int rc;
 
-  if (!message || !provider) return TURBO_EINVAL;
+  if (!message || !provider) return SALTS_EINVAL;
   message->flags &= ~provider->matched_flag;
   if (provider->payload_view) {
     rc = provider->payload_view(message, &payload, provider->payload_ctx);
-    if (rc != TURBO_OK)
+    if (rc != SALTS_OK)
       return flow_rulesforge_finish_json(message, provider, NULL, NULL, 0, rc);
   } else {
     payload = message->payload;
   }
   if (!payload.data || payload.len == 0u)
-    return flow_rulesforge_finish_json(message, provider, NULL, NULL, 0, TURBO_EPROTO);
+    return flow_rulesforge_finish_json(message, provider, NULL, NULL, 0, SALTS_EPROTO);
 
   status = ruleforge_session_create(provider->knowledge_base, &session);
   if (status != RULES_FORGE_OK)
@@ -465,7 +465,7 @@ static int flow_rulesforge_execute_json(turbo_flow_msg_t *message, void *ctx) {
     return flow_rulesforge_finish_json(message, provider, session, NULL, 0,
                                        flow_rulesforge_status(status));
   if (loaded != 1)
-    return flow_rulesforge_finish_json(message, provider, session, NULL, 0, TURBO_EPROTO);
+    return flow_rulesforge_finish_json(message, provider, session, NULL, 0, SALTS_EPROTO);
 
   status =
       ruleforge_session_fire_all_rules(session, provider->max_rules, &fired);
@@ -480,7 +480,7 @@ int turbo_flow_rulesforge_register_json_provider(
       provider->size < sizeof(*provider) || !provider->knowledge_base || !provider->fact_type ||
       provider->fact_type[0] == '\0' || provider->matched_flag == 0u ||
       provider->max_rules <= 0) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   return flow_rulesforge_register_provider(flow, resource_name, flow_rulesforge_execute_json,
                                            (void *)provider, provider->options);
@@ -491,7 +491,7 @@ int turbo_flow_rulesforge_register_databind_provider(
     const turbo_flow_rulesforge_databind_provider_t *provider) {
   if (!provider || provider->size < sizeof(*provider) || !provider->knowledge_base ||
       provider->matched_flag == 0u || provider->max_rules <= 0) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   return flow_rulesforge_register_provider(flow, resource_name, flow_rulesforge_execute_databind,
                                            (void *)provider, provider->options);

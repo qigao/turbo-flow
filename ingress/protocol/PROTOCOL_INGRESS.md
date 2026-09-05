@@ -47,18 +47,18 @@ registry_load/register
 
 | 错误 | 含义 |
 | --- | --- |
-| `TURBO_EINVAL` | ABI、配置、指针或消息 shape 非法 |
-| `TURBO_ENOTSUP` | 协议、版本、transport 或 command 未实现 |
-| `TURBO_EPROTO` | 分帧、校验和、身份或协议字段不一致 |
-| `TURBO_EMSGSIZE` | 帧、session 缓冲或调用方输出容量不足 |
-| `TURBO_EBUSY` / `TURBO_ENOSPC` | admission 关闭或有界资源已满 |
-| `TURBO_EPERM` | transport 身份不足或不安全模式未显式授权 |
-| `TURBO_ETIMEDOUT` | 网络任务或 settlement 未在时限内完成 |
+| `SALTS_EINVAL` | ABI、配置、指针或消息 shape 非法 |
+| `SALTS_ENOTSUP` | 协议、版本、transport 或 command 未实现 |
+| `SALTS_EPROTO` | 分帧、校验和、身份或协议字段不一致 |
+| `SALTS_EMSGSIZE` | 帧、session 缓冲或调用方输出容量不足 |
+| `SALTS_EBUSY` / `SALTS_ENOSPC` | admission 关闭或有界资源已满 |
+| `SALTS_EPERM` | transport 身份不足或不安全模式未显式授权 |
+| `SALTS_ETIMEDOUT` | 网络任务或 settlement 未在时限内完成 |
 
 ## 状态事实源
 
 - Wire/session/ACK 状态：Protocol runtime。
-- Socket/TLS/handler 状态：CoroNet owner。
+- 连接/TLS/handler 状态：仓库外的 CNet/CHTTP 宿主 owner。
 - Graph 执行状态：TurboFlow runtime。
 - MQTT broker/session、数据库 connection 与重试状态：产品注入的独立 I/O adapter。
 - MQTT topic/QoS/retain 映射策略：无连接、同步批处理的可选 MQTT Sink。
