@@ -71,6 +71,7 @@ Thumbs.db
 .env
  
 # agents
+.worktrees/
 .codex-*
 .claude
 .agent
