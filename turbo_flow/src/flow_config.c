@@ -332,7 +332,12 @@ static int flow_config_resolve_adapters(const json_value_t *input_adapters,
     char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
     int rc;
     (void)snprintf(path, sizeof(path), "$.adapters.%s", name ? name : "?");
-    if (!resolved || !merged || !sources) return SALTS_ENOMEM;
+    if (!resolved || !merged || !sources) {
+      if (resolved) json_free(resolved);
+      if (merged) json_free(merged);
+      if (sources) json_free(sources);
+      return SALTS_ENOMEM;
+    }
     rc = name && name[0]
              ? flow_config_object_keys(adapter, path, adapter_keys,
                                        sizeof(adapter_keys) / sizeof(adapter_keys[0]), error)
