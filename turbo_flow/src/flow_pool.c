@@ -51,12 +51,12 @@ int flow_pool_record_add(turbo_flow_t *flow, turbo_flow_pool_kind_t kind, uint32
   int rc;
 
   if (!flow || !index || stage_index >= vec_size(&flow->stages) || parallelism == 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(&record, 0, sizeof(record));
   record.kind = kind;
   record.stage_index = stage_index;
-  if (flow->runtime_generation == UINT64_MAX) return TURBO_ERANGE;
+  if (flow->runtime_generation == UINT64_MAX) return SALTS_ERANGE;
   record.generation = flow->runtime_generation + 1u;
   record.parallelism = parallelism;
   record.queue_capacity = queue_capacity;
@@ -71,13 +71,13 @@ int flow_pool_record_add(turbo_flow_t *flow, turbo_flow_pool_kind_t kind, uint32
   atomic_init(&record.queued, 0u);
   atomic_init(&record.active, 0u);
   rc = turbo_flow_stl_error(vec_push(&flow->pool_records, &record));
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   *index = vec_size(&flow->pool_records) - 1u;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_runtime_generation_can_advance(const turbo_flow_t *flow) {
-  return flow && flow->runtime_generation != UINT64_MAX ? TURBO_OK : TURBO_ERANGE;
+  return flow && flow->runtime_generation != UINT64_MAX ? SALTS_OK : SALTS_ERANGE;
 }
 
 void flow_runtime_generation_commit(turbo_flow_t *flow) {
@@ -122,9 +122,9 @@ void flow_pool_record_started(flow_pool_record_t *record) {
 void flow_pool_record_finished(flow_pool_record_t *record, int status) {
   if (!record) return;
   atomic_fetch_sub_explicit(&record->active, 1u, memory_order_acq_rel);
-  if (status == TURBO_ECANCELED || status == TURBO_ESHUTDOWN) {
+  if (status == SALTS_ECANCELED || status == SALTS_ESHUTDOWN) {
     atomic_fetch_add_explicit(&record->canceled, 1u, memory_order_acq_rel);
-  } else if (status == TURBO_OK) {
+  } else if (status == SALTS_OK) {
     atomic_fetch_add_explicit(&record->completed, 1u, memory_order_acq_rel);
   } else {
     atomic_fetch_add_explicit(&record->failed, 1u, memory_order_acq_rel);
@@ -156,11 +156,11 @@ int turbo_flow_pool_snapshot_at(const turbo_flow_t *flow, size_t index,
   const flow_pool_record_t *record;
   const flow_stage_plan_impl_t *stage;
 
-  if (!flow || !out) return TURBO_EINVAL;
+  if (!flow || !out) return SALTS_EINVAL;
   record = (const flow_pool_record_t *)vec_at_const(&flow->pool_records, index);
-  if (!record) return TURBO_EINVAL;
+  if (!record) return SALTS_EINVAL;
   stage = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, record->stage_index);
-  if (!stage) return TURBO_EINVAL;
+  if (!stage) return SALTS_EINVAL;
 
   memset(out, 0, sizeof(*out));
   out->kind = record->kind;
@@ -183,15 +183,15 @@ int turbo_flow_pool_snapshot_at(const turbo_flow_t *flow, size_t index,
     const flow_threadpool_adapter_t *adapter =
         flow_threadpool_adapter_for_stage(flow, record->stage_index);
     if (adapter && adapter->pool) {
-      turbo_threadpool_stats_t stats;
+      salts_threadpool_stats_t stats;
       memset(&stats, 0, sizeof(stats));
-      turbo_threadpool_get_stats(adapter->pool, &stats);
+      salts_threadpool_get_stats(adapter->pool, &stats);
       out->queue_capacity = stats.queue_capacity;
       out->queued = stats.queued_tasks > 0 ? (uint64_t)stats.queued_tasks : 0u;
       out->active = stats.active_tasks > 0 ? (uint64_t)stats.active_tasks : 0u;
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void flow_pool_condition(turbo_flow_resource_condition_t *condition,
@@ -210,19 +210,19 @@ int turbo_flow_pool_resource_status_at(const turbo_flow_t *flow, size_t index,
   int written;
   int rc;
 
-  if (!flow || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
+  if (!flow || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
   record = (const flow_pool_record_t *)vec_at_const(&flow->pool_records, index);
-  if (!record) return TURBO_ENOENT;
+  if (!record) return SALTS_ENOENT;
   rc = turbo_flow_pool_snapshot_at(flow, index, &status.snapshot);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
 
   status.resource_kind = TURBO_FLOW_RESOURCE_POOL;
   written = snprintf(status.uid, sizeof(status.uid), "pool:%u:%s", (unsigned)record->kind,
                      status.snapshot.stage_name);
-  if (written < 0 || (size_t)written >= sizeof(status.uid)) return TURBO_ENAMETOOLONG;
+  if (written < 0 || (size_t)written >= sizeof(status.uid)) return SALTS_ENAMETOOLONG;
   written =
       snprintf(status.owner_name, sizeof(status.owner_name), "%s", status.snapshot.stage_name);
-  if (written < 0 || (size_t)written >= sizeof(status.owner_name)) return TURBO_ENAMETOOLONG;
+  if (written < 0 || (size_t)written >= sizeof(status.owner_name)) return SALTS_ENAMETOOLONG;
   status.generation = record->generation;
   status.observed_generation = record->generation;
   status.condition_count = TURBO_FLOW_RESOURCE_CONDITION_MAX;
@@ -241,7 +241,7 @@ int turbo_flow_pool_resource_status_at(const turbo_flow_t *flow, size_t index,
                       TURBO_FLOW_RESOURCE_REASON_CAPACITY_EXHAUSTED,
                       TURBO_FLOW_RESOURCE_REASON_CAPACITY_AVAILABLE);
   memcpy(out, &status, sizeof(status));
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const turbo_flow_resource_schema_t *turbo_flow_pool_status_schema(void) {
@@ -256,12 +256,12 @@ int turbo_flow_pool_status_document_at(const turbo_flow_t *flow, size_t index,
   tstr formatted;
   int rc;
 
-  if (!flow || !out || out->size < sizeof(*out) || out->payload) return TURBO_EINVAL;
+  if (!flow || !out || out->size < sizeof(*out) || out->payload) return SALTS_EINVAL;
   rc = turbo_flow_pool_resource_status_at(flow, index, &status);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
 
   payload = tstr_new();
-  if (!payload) return TURBO_ENOMEM;
+  if (!payload) return SALTS_ENOMEM;
   formatted = tstr_cat_fmt(
       payload,
       "{\"kind\":%u,\"state\":%u,\"stage_index\":%u,\"parallelism\":%u,"
@@ -283,7 +283,7 @@ int turbo_flow_pool_status_document_at(const turbo_flow_t *flow, size_t index,
       turbo_flow_pool_saturated(&status.snapshot) ? "true" : "false");
   if (!formatted) {
     tstr_free(payload);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   payload = formatted;
   {
@@ -294,21 +294,21 @@ int turbo_flow_pool_status_document_at(const turbo_flow_t *flow, size_t index,
     metadata.observed_generation = status.observed_generation;
     rc = snprintf(metadata.uid, sizeof(metadata.uid), "%s", status.uid);
     if (rc < 0 || (size_t)rc >= sizeof(metadata.uid)) {
-      rc = TURBO_ENAMETOOLONG;
+      rc = SALTS_ENAMETOOLONG;
       goto cleanup;
     }
     rc = snprintf(metadata.owner_name, sizeof(metadata.owner_name), "%s", status.owner_name);
     if (rc < 0 || (size_t)rc >= sizeof(metadata.owner_name)) {
-      rc = TURBO_ENAMETOOLONG;
+      rc = SALTS_ENAMETOOLONG;
       goto cleanup;
     }
     rc = turbo_flow_resource_document_set_payload_copy(
         &document, &metadata, &FLOW_POOL_STATUS_SCHEMA, payload, tstr_len(payload));
-    if (rc != TURBO_OK) goto cleanup;
+    if (rc != SALTS_OK) goto cleanup;
   }
   memcpy(out, &document, sizeof(document));
   tstr_free(payload);
-  return TURBO_OK;
+  return SALTS_OK;
 
 cleanup:
   tstr_free(payload);

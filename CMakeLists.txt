@@ -47,8 +47,7 @@ include(Sanitizers)
 include(CmakeUtils)
 
 foreach(_turbo_flow_dependency_root IN ITEMS
-        TURBOUTILS_ROOT TURBOPARSER_ROOT TURBONET_ROOT TURBOHTTP_ROOT
-        RULES_FORGE_ROOT)
+        SALTS_ROOT SALTS_UTILS_ROOT RULES_FORGE_ROOT)
   if(NOT DEFINED ENV{${_turbo_flow_dependency_root}} OR
      "$ENV{${_turbo_flow_dependency_root}}" STREQUAL "")
     message(FATAL_ERROR
@@ -60,20 +59,11 @@ foreach(_turbo_flow_dependency_root IN ITEMS
   endif()
 endforeach()
 
-find_package(TurboUtils CONFIG REQUIRED
-             PATHS "$ENV{TURBOUTILS_ROOT}" NO_DEFAULT_PATH)
-find_package(TurboParser CONFIG REQUIRED
-             PATHS "$ENV{TURBOPARSER_ROOT}" NO_DEFAULT_PATH)
+find_package(Salts CONFIG REQUIRED
+             PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
+find_package(SaltsUtils CONFIG REQUIRED
+             PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
 find_package(xxHash CONFIG REQUIRED)
-
-# TurboNet's exported targets reference these dependency targets.
-find_package(Threads REQUIRED)
-find_package(OpenSSL CONFIG REQUIRED)
-find_package(TurboNet CONFIG REQUIRED
-             PATHS "$ENV{TURBONET_ROOT}" NO_DEFAULT_PATH)
-
-find_package(TurboHttp CONFIG REQUIRED
-             PATHS "$ENV{TURBOHTTP_ROOT}" NO_DEFAULT_PATH)
 
 if(WIN32)
   find_program(
@@ -82,11 +72,9 @@ if(WIN32)
     REQUIRED)
 
   set(TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS
-      "$ENV{TURBOUTILS_ROOT}"
-      "$ENV{TURBOPARSER_ROOT}"
-      "$ENV{RULES_FORGE_ROOT}"
-      "$ENV{TURBONET_ROOT}"
-      "$ENV{TURBOHTTP_ROOT}")
+      "$ENV{SALTS_ROOT}"
+      "$ENV{SALTS_UTILS_ROOT}"
+      "$ENV{RULES_FORGE_ROOT}")
   list(REMOVE_DUPLICATES TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS)
 
   set(TURBO_FLOW_RUNTIME_COPY_COMMANDS)
@@ -131,7 +119,6 @@ add_subdirectory(turbo_flow)
   add_subdirectory(codec)
   add_subdirectory(observe)
   add_subdirectory(schedule)
-  add_subdirectory(io)
   add_subdirectory(ingress/protocol)
   add_subdirectory(sink/mqtt)
 
@@ -145,7 +132,6 @@ foreach(
      turbo_flow
      tf_protocol
      tf_protocol_graph
-     tf_protocol_coronet
      tf_protocol_mqtt_sn
      tf_protocol_coap
      tf_protocol_lwm2m
@@ -157,14 +143,7 @@ foreach(
      tf_security_sqlite
      tf_codec
      tf_observe
-     tf_schedule
-     tf_socket
-     tf_http_client
-     tf_http_server
-     tf_http
-     tf_rpc
-     tf_s3
-     tf_email)
+     tf_schedule)
   if(TARGET ${target_name})
     list(APPEND TURBO_FLOW_EXPORT_TARGETS ${target_name})
   endif()

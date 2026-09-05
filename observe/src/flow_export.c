@@ -1,6 +1,6 @@
 #include "turbo_flow_observe.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -12,7 +12,7 @@ static int flow_export_write(turbo_flow_observe_write_fn write, void *ctx,
 
 static int flow_export_prometheus_escape(const char *input, char *out, size_t out_size) {
   size_t used = 0u;
-  if (!input || !out || out_size == 0u) return TURBO_EINVAL;
+  if (!input || !out || out_size == 0u) return SALTS_EINVAL;
   for (size_t i = 0; input[i] != '\0'; ++i) {
     const char *replacement = NULL;
     size_t replacement_len = 0u;
@@ -27,16 +27,16 @@ static int flow_export_prometheus_escape(const char *input, char *out, size_t ou
       replacement_len = 2u;
     }
     if (replacement) {
-      if (replacement_len >= out_size - used) return TURBO_ENAMETOOLONG;
+      if (replacement_len >= out_size - used) return SALTS_ENAMETOOLONG;
       memcpy(out + used, replacement, replacement_len);
       used += replacement_len;
     } else {
-      if (used + 1u >= out_size) return TURBO_ENAMETOOLONG;
+      if (used + 1u >= out_size) return SALTS_ENAMETOOLONG;
       out[used++] = input[i];
     }
   }
   out[used] = '\0';
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_export_prometheus_resource(turbo_flow_observe_write_fn write, void *ctx,
@@ -52,9 +52,9 @@ static int flow_export_prometheus_resource(turbo_flow_observe_write_fn write, vo
                        resource->generation, resource->observed_generation,
                        (uint64_t)(int64_t)resource->last_status};
   int rc = flow_export_prometheus_escape(resource->uid, uid, sizeof(uid));
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flow_export_prometheus_escape(resource->owner_name, owner, sizeof(owner));
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
     int written;
     if (i == 5u) {
@@ -66,11 +66,11 @@ static int flow_export_prometheus_resource(turbo_flow_observe_write_fn write, vo
                          "%s{uid=\"%s\",owner=\"%s\",kind=\"%u\"} %llu\n", names[i], uid,
                          owner, (unsigned)resource->kind, (unsigned long long)values[i]);
     }
-    if (written < 0 || (size_t)written >= sizeof(line)) return TURBO_ENAMETOOLONG;
+    if (written < 0 || (size_t)written >= sizeof(line)) return SALTS_ENAMETOOLONG;
     rc = flow_export_write(write, ctx, line, (size_t)written);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_observe_export_prometheus(const turbo_flow_observe_t *observe,
@@ -79,27 +79,27 @@ int turbo_flow_observe_export_prometheus(const turbo_flow_observe_t *observe,
   char line[128];
   int written;
   int rc;
-  if (!observe || !write) return TURBO_EINVAL;
+  if (!observe || !write) return SALTS_EINVAL;
   rc = turbo_flow_observe_snapshot(observe, &traffic);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   written = snprintf(line, sizeof(line), "turbo_flow_messages_total %llu\n",
                      (unsigned long long)traffic.messages);
-  if (written < 0 || (size_t)written >= sizeof(line)) return TURBO_ERANGE;
+  if (written < 0 || (size_t)written >= sizeof(line)) return SALTS_ERANGE;
   rc = flow_export_write(write, ctx, line, (size_t)written);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   written = snprintf(line, sizeof(line), "turbo_flow_message_errors_total %llu\n",
                      (unsigned long long)traffic.message_errors);
-  if (written < 0 || (size_t)written >= sizeof(line)) return TURBO_ERANGE;
+  if (written < 0 || (size_t)written >= sizeof(line)) return SALTS_ERANGE;
   rc = flow_export_write(write, ctx, line, (size_t)written);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   for (size_t i = 0; i < turbo_flow_observe_resource_count(observe); ++i) {
     turbo_flow_observe_resource_view_t resource;
     rc = turbo_flow_observe_resource_at(observe, i, &resource);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     rc = flow_export_prometheus_resource(write, ctx, &resource.snapshot);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_export_emit(turbo_flow_observe_metric_fn emit, void *ctx, const char *name,
@@ -120,27 +120,27 @@ int turbo_flow_observe_export_opentelemetry(const turbo_flow_observe_t *observe,
                                             turbo_flow_observe_metric_fn emit, void *ctx) {
   turbo_flow_observe_snapshot_t traffic;
   int rc;
-  if (!observe || !emit) return TURBO_EINVAL;
+  if (!observe || !emit) return SALTS_EINVAL;
   rc = turbo_flow_observe_snapshot(observe, &traffic);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flow_export_emit(emit, ctx, "turbo.flow.messages", (double)traffic.messages, NULL);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flow_export_emit(emit, ctx, "turbo.flow.message.errors",
                         (double)traffic.message_errors, NULL);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   for (size_t i = 0; i < turbo_flow_observe_resource_count(observe); ++i) {
     turbo_flow_observe_resource_view_t view;
     rc = turbo_flow_observe_resource_at(observe, i, &view);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     rc = flow_export_emit(emit, ctx, "turbo.flow.resource.load", (double)view.snapshot.load,
                           &view.snapshot);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     rc = flow_export_emit(emit, ctx, "turbo.flow.resource.capacity",
                           (double)view.snapshot.capacity, &view.snapshot);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     rc = flow_export_emit(emit, ctx, "turbo.flow.resource.saturated",
                           view.snapshot.saturated ? 1.0 : 0.0, &view.snapshot);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }

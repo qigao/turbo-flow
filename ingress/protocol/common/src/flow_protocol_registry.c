@@ -1,7 +1,7 @@
 #include "turbo_flow_protocol.h"
 #include "turbo_flow_protocol_business.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,8 +60,8 @@ flow_protocol_api_validate(const turbo_flow_protocol_plugin_api_t *api) {
       api->protocol < TURBO_FLOW_PROTOCOL_MQTT_SN ||
       api->protocol > TURBO_FLOW_PROTOCOL_JTT_808 ||
       (api->capabilities & required) != required || !api->open || !api->close)
-    return TURBO_EINVAL;
-  return TURBO_OK;
+    return SALTS_EINVAL;
+  return SALTS_OK;
 }
 
 static int flow_protocol_request_validate(
@@ -71,8 +71,8 @@ static int flow_protocol_request_validate(
       request->protocol < TURBO_FLOW_PROTOCOL_MQTT_SN ||
       request->protocol > TURBO_FLOW_PROTOCOL_JTT_808 ||
       request->max_frame_size == 0u)
-    return TURBO_EINVAL;
-  return TURBO_OK;
+    return SALTS_EINVAL;
+  return SALTS_OK;
 }
 
 static flow_protocol_entry_t *flow_protocol_registry_entry(
@@ -154,27 +154,27 @@ int turbo_flow_protocol_registry_create(
   turbo_flow_protocol_registry_t *registry;
   if (!out || capacity == 0u ||
       capacity > SIZE_MAX / sizeof(flow_protocol_entry_t))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   *out = NULL;
   registry =
       (turbo_flow_protocol_registry_t *)calloc(1u, sizeof(*registry));
-  if (!registry) return TURBO_ENOMEM;
+  if (!registry) return SALTS_ENOMEM;
   registry->entries =
       (flow_protocol_entry_t *)calloc(capacity, sizeof(*registry->entries));
   if (!registry->entries) {
     free(registry);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   registry->capacity = capacity;
   *out = registry;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_registry_destroy(
     turbo_flow_protocol_registry_t *registry) {
-  if (!registry) return TURBO_OK;
+  if (!registry) return SALTS_OK;
   for (size_t i = 0u; i < registry->count; ++i) {
-    if (registry->entries[i].active_owners != 0u) return TURBO_EBUSY;
+    if (registry->entries[i].active_owners != 0u) return SALTS_EBUSY;
   }
   while (registry->count > 0u) {
     flow_protocol_entry_t *entry = &registry->entries[--registry->count];
@@ -183,7 +183,7 @@ int turbo_flow_protocol_registry_destroy(
   }
   free(registry->entries);
   free(registry);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_registry_register(
@@ -191,13 +191,13 @@ int turbo_flow_protocol_registry_register(
     const turbo_flow_protocol_plugin_api_t *api) {
   flow_protocol_entry_t *entry;
   const int rc = flow_protocol_api_validate(api);
-  if (rc != TURBO_OK || !registry) return TURBO_EINVAL;
+  if (rc != SALTS_OK || !registry) return SALTS_EINVAL;
   if (flow_protocol_registry_entry(registry, api->name))
-    return TURBO_EALREADY;
-  if (registry->count >= registry->capacity) return TURBO_ENOSPC;
+    return SALTS_EALREADY;
+  if (registry->count >= registry->capacity) return SALTS_ENOSPC;
   entry = &registry->entries[registry->count++];
   entry->api = api;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_registry_load(
@@ -210,13 +210,13 @@ int turbo_flow_protocol_registry_load(
   void *symbol;
   int rc;
   if (reason && reason_size > 0u) reason[0] = '\0';
-  if (!registry || !path || !path[0]) return TURBO_EINVAL;
+  if (!registry || !path || !path[0]) return SALTS_EINVAL;
   module = flow_protocol_module_open(path);
   if (!module) {
     flow_protocol_reason_write(
         reason, reason_size, "failed to load protocol module: %s",
         flow_protocol_module_error(module_error, sizeof(module_error)));
-    return TURBO_ENOENT;
+    return SALTS_ENOENT;
   }
   symbol =
       flow_protocol_module_symbol(module, TURBO_FLOW_PROTOCOL_PLUGIN_EXPORT_SYMBOL);
@@ -225,26 +225,26 @@ int turbo_flow_protocol_registry_load(
         reason, reason_size, "missing canonical protocol symbol: %s",
         flow_protocol_module_error(module_error, sizeof(module_error)));
     flow_protocol_module_close(module);
-    return TURBO_ENOENT;
+    return SALTS_ENOENT;
   }
   memcpy(&get_api, &symbol, sizeof(get_api));
   api = get_api();
   rc = flow_protocol_api_validate(api);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_protocol_reason_write(reason, reason_size,
                               "invalid protocol API: %s", path);
     flow_protocol_module_close(module);
     return rc;
   }
   rc = turbo_flow_protocol_registry_register(registry, api);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_protocol_reason_write(reason, reason_size,
                               "failed to register protocol: %s", api->name);
     flow_protocol_module_close(module);
     return rc;
   }
   registry->entries[registry->count - 1u].module = module;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const turbo_flow_protocol_plugin_api_t *turbo_flow_protocol_registry_find(
@@ -267,14 +267,14 @@ int turbo_flow_protocol_owner_create_registered(
   int rc;
   if (out) *out = NULL;
   rc = flow_protocol_request_validate(request);
-  if (rc != TURBO_OK || !registry || !name || !name[0] || !out)
-    return TURBO_EINVAL;
+  if (rc != SALTS_OK || !registry || !name || !name[0] || !out)
+    return SALTS_EINVAL;
   entry = flow_protocol_registry_entry(registry, name);
-  if (!entry) return TURBO_ENOTSUP;
-  if (entry->api->protocol != request->protocol) return TURBO_ENOTSUP;
+  if (!entry) return SALTS_ENOTSUP;
+  if (entry->api->protocol != request->protocol) return SALTS_ENOTSUP;
   service.protocol = request->protocol;
   rc = entry->api->open(entry->api->ctx, request, &service);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_protocol_service_cleanup(entry, &service);
     return rc;
   }
@@ -283,18 +283,18 @@ int turbo_flow_protocol_owner_create_registered(
       service.protocol != request->protocol || !service.instance ||
       !service.owner) {
     flow_protocol_service_cleanup(entry, &service);
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   owner = (turbo_flow_protocol_owner_t *)calloc(1u, sizeof(*owner));
   if (!owner) {
     flow_protocol_service_cleanup(entry, &service);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   owner->entry = entry;
   owner->service = service;
   entry->active_owners++;
   *out = owner;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_owner_instance(
@@ -305,9 +305,9 @@ int turbo_flow_protocol_owner_instance(
   if (!owner || !owner->entry || !out ||
       expected_protocol != owner->service.protocol ||
       !owner->service.instance)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   *out = owner->service.instance;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const char *
@@ -344,8 +344,8 @@ static int flow_protocol_business_api_validate(
       api->protocol > TURBO_FLOW_PROTOCOL_JTT_808 ||
       api->capabilities == 0u || (api->capabilities & ~known) != 0u ||
       !api->open || !api->close)
-    return TURBO_EINVAL;
-  return TURBO_OK;
+    return SALTS_EINVAL;
+  return SALTS_OK;
 }
 
 static int flow_protocol_business_open_request_validate(
@@ -358,7 +358,7 @@ static int flow_protocol_business_open_request_validate(
       request->protocol > TURBO_FLOW_PROTOCOL_JTT_808 ||
       !request->tenant || !request->profile ||
       request->max_payload_size == 0u)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   while (tenant_size <= TURBO_FLOW_PROTOCOL_TENANT_MAX &&
          request->tenant[tenant_size] != '\0')
     tenant_size++;
@@ -368,17 +368,17 @@ static int flow_protocol_business_open_request_validate(
   if (tenant_size == 0u || tenant_size > TURBO_FLOW_PROTOCOL_TENANT_MAX ||
       profile_size == 0u ||
       profile_size > TURBO_FLOW_PROTOCOL_BUSINESS_PROFILE_MAX)
-    return TURBO_EMSGSIZE;
+    return SALTS_EMSGSIZE;
   for (size_t i = 0u; i < tenant_size; ++i) {
     const unsigned char ch = (unsigned char)request->tenant[i];
     if (ch <= 0x20u || ch >= 0x7fu || ch == '/' || ch == '+' || ch == '#')
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
   }
   for (size_t i = 0u; i < profile_size; ++i) {
     const unsigned char ch = (unsigned char)request->profile[i];
-    if (ch < 0x20u || ch == 0x7fu) return TURBO_EINVAL;
+    if (ch < 0x20u || ch == 0x7fu) return SALTS_EINVAL;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static flow_protocol_business_entry_t *flow_protocol_business_registry_entry(
@@ -406,27 +406,27 @@ int turbo_flow_protocol_business_registry_create(
   turbo_flow_protocol_business_registry_t *registry;
   if (!out || capacity == 0u ||
       capacity > SIZE_MAX / sizeof(flow_protocol_business_entry_t))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   *out = NULL;
   registry = (turbo_flow_protocol_business_registry_t *)calloc(
       1u, sizeof(*registry));
-  if (!registry) return TURBO_ENOMEM;
+  if (!registry) return SALTS_ENOMEM;
   registry->entries = (flow_protocol_business_entry_t *)calloc(
       capacity, sizeof(*registry->entries));
   if (!registry->entries) {
     free(registry);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   registry->capacity = capacity;
   *out = registry;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_business_registry_destroy(
     turbo_flow_protocol_business_registry_t *registry) {
-  if (!registry) return TURBO_OK;
+  if (!registry) return SALTS_OK;
   for (size_t i = 0u; i < registry->count; ++i) {
-    if (registry->entries[i].active_owners != 0u) return TURBO_EBUSY;
+    if (registry->entries[i].active_owners != 0u) return SALTS_EBUSY;
   }
   while (registry->count > 0u) {
     flow_protocol_business_entry_t *entry =
@@ -436,7 +436,7 @@ int turbo_flow_protocol_business_registry_destroy(
   }
   free(registry->entries);
   free(registry);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_business_registry_register(
@@ -444,13 +444,13 @@ int turbo_flow_protocol_business_registry_register(
     const turbo_flow_protocol_business_plugin_api_t *api) {
   flow_protocol_business_entry_t *entry;
   const int rc = flow_protocol_business_api_validate(api);
-  if (rc != TURBO_OK || !registry) return TURBO_EINVAL;
+  if (rc != SALTS_OK || !registry) return SALTS_EINVAL;
   if (flow_protocol_business_registry_entry(registry, api->business))
-    return TURBO_EALREADY;
-  if (registry->count >= registry->capacity) return TURBO_ENOSPC;
+    return SALTS_EALREADY;
+  if (registry->count >= registry->capacity) return SALTS_ENOSPC;
   entry = &registry->entries[registry->count++];
   entry->api = api;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_business_registry_load(
@@ -463,13 +463,13 @@ int turbo_flow_protocol_business_registry_load(
   void *symbol;
   int rc;
   if (reason && reason_size > 0u) reason[0] = '\0';
-  if (!registry || !path || !path[0]) return TURBO_EINVAL;
+  if (!registry || !path || !path[0]) return SALTS_EINVAL;
   module = flow_protocol_module_open(path);
   if (!module) {
     flow_protocol_reason_write(
         reason, reason_size, "failed to load business module: %s",
         flow_protocol_module_error(module_error, sizeof(module_error)));
-    return TURBO_ENOENT;
+    return SALTS_ENOENT;
   }
   symbol = flow_protocol_module_symbol(
       module, TURBO_FLOW_PROTOCOL_BUSINESS_PLUGIN_EXPORT_SYMBOL);
@@ -478,19 +478,19 @@ int turbo_flow_protocol_business_registry_load(
         reason, reason_size, "missing canonical business symbol: %s",
         flow_protocol_module_error(module_error, sizeof(module_error)));
     flow_protocol_module_close(module);
-    return TURBO_ENOENT;
+    return SALTS_ENOENT;
   }
   memcpy(&get_api, &symbol, sizeof(get_api));
   api = get_api();
   rc = flow_protocol_business_api_validate(api);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_protocol_reason_write(reason, reason_size,
                               "invalid business API: %s", path);
     flow_protocol_module_close(module);
     return rc;
   }
   rc = turbo_flow_protocol_business_registry_register(registry, api);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_protocol_reason_write(reason, reason_size,
                               "failed to register business: %s",
                               api->business);
@@ -498,7 +498,7 @@ int turbo_flow_protocol_business_registry_load(
     return rc;
   }
   registry->entries[registry->count - 1u].module = module;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const turbo_flow_protocol_business_plugin_api_t *
@@ -526,14 +526,14 @@ int turbo_flow_protocol_business_owner_create_registered(
   int rc;
   if (out) *out = NULL;
   rc = flow_protocol_business_open_request_validate(request);
-  if (rc != TURBO_OK || !registry || !business || !business[0] || !out)
-    return rc != TURBO_OK ? rc : TURBO_EINVAL;
+  if (rc != SALTS_OK || !registry || !business || !business[0] || !out)
+    return rc != SALTS_OK ? rc : SALTS_EINVAL;
   entry = flow_protocol_business_registry_entry(registry, business);
-  if (!entry) return TURBO_ENOTSUP;
-  if (entry->api->protocol != request->protocol) return TURBO_ENOTSUP;
+  if (!entry) return SALTS_ENOTSUP;
+  if (entry->api->protocol != request->protocol) return SALTS_ENOTSUP;
   service.protocol = request->protocol;
   rc = entry->api->open(entry->api->ctx, request, &service);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_protocol_business_service_cleanup(entry, &service);
     return rc;
   }
@@ -542,27 +542,27 @@ int turbo_flow_protocol_business_owner_create_registered(
       service.protocol != request->protocol || !service.instance ||
       !service.owner) {
     flow_protocol_business_service_cleanup(entry, &service);
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   rc = turbo_flow_protocol_business_get_info(service.instance, &info);
-  if (rc != TURBO_OK || info.protocol != request->protocol ||
+  if (rc != SALTS_OK || info.protocol != request->protocol ||
       info.capabilities != entry->api->capabilities ||
       strcmp(info.business, entry->api->business) != 0 ||
       info.max_payload_size > request->max_payload_size) {
     flow_protocol_business_service_cleanup(entry, &service);
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   owner =
       (turbo_flow_protocol_business_owner_t *)calloc(1u, sizeof(*owner));
   if (!owner) {
     flow_protocol_business_service_cleanup(entry, &service);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   owner->entry = entry;
   owner->service = service;
   entry->active_owners++;
   *out = owner;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_business_owner_instance(
@@ -573,9 +573,9 @@ int turbo_flow_protocol_business_owner_instance(
   if (!owner || !owner->entry || !out ||
       expected_protocol != owner->service.protocol ||
       !owner->service.instance)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   *out = owner->service.instance;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void turbo_flow_protocol_business_owner_destroy(

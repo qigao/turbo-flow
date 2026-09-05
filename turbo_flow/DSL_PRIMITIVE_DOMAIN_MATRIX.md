@@ -123,7 +123,7 @@ Control DSL 的 parser、facts evaluation、idempotency、UID/generation 和 own
 | `FANIN_GATE` | 一个 node 有多个 incoming edge | 等待可达输入；条件 fan-in 由 direct scheduler 处理 |
 | reorder boundary | 显式 `reorder` | 将 unordered branch 转成可验证的 preserve-input 边界 |
 
-`Disruptor` 是 data handoff，不是业务 primitive；CoroNet context 是 IO owner placement，不是
+`Disruptor` 是 data handoff，不是业务 primitive；CNet/CHTTP context 是外部 IO owner placement，不是
 新的业务 executor。当前完整的 operation runtime contract 可查询，但并不自动创建 ring、资源或
 owner。
 
@@ -136,8 +136,8 @@ owner。
 |---|---|---|---|---|---|
 | Data | Message、ContentDescriptor、Schema、Batch、Decision | keyed state/window store、schema registry | decode、validate、transform、filter、route、emit、keyed update、window close | message/processor/schema owner | graph/core、codec、Policy、keyed/window 已有实现 |
 | Execution | Task、ExecutionPlan、Completion、OrderingKey | thread/coro pool、Disruptor segment、runtime | submit、yield、cancel、wait、drain、resize、reorder | flow runtime/executor owner | 已有 executor、segment plan、pool status/resize |
-| IO/Transport | EndpointSpec、ConnectionView、StreamChunk | endpoint、connection、CoroNet execution binding | listen、connect、read、write、interrupt、quiesce、resume | adapter/CoroNet context owner | socket、HTTP endpoint 已接入 |
-| Protocol/Pattern | Frame、RouteToken、Correlation、Subscription、DeliveryAttempt | ProtocolSession、route/session aggregate、broker pattern state | parse、encode、publish、request/reply、subscribe、settle | 外部协议 owner | HTTP/RPC、email、Redis protocol paths |
+| IO/Transport | EndpointSpec、ConnectionView、StreamChunk | endpoint、connection、CNet/CHTTP execution binding | listen、connect、read、write、interrupt、quiesce、resume | 外部 adapter context owner | 本仓库未接入 endpoint；由 #5、#6、#7 跟踪 |
+| Protocol/Pattern | Frame、RouteToken、Correlation、Subscription、DeliveryAttempt | ProtocolSession、route/session aggregate、broker pattern state | parse、encode、publish、request/reply、subscribe、settle | 外部协议 owner | 本仓库保留设备协议 codec/runtime |
 | Buffer/Persistence | Record、Claim、Checkpoint、Blob | Queue、SQLite/Redis record/blob store、file/object storage | enqueue、claim/reserve、ack、requeue、drop、recover、commit | queue/storage owner | queue、storage、Redis、PgSQL、S3 已有 owner API |
 | Rules | FactsSnapshot、Decision、Action | RuleSet、SecurityRealm | compile、evaluate、authorize proposal | rules/security owner | `rules.apply` 已显式 primitive + operation |
 | Management | ResourceRef、Spec、Status、Condition、Command、Event | runtime/pool/segment/connection/queue/protocol/storage/rule resource records | observe、diff、reconcile、apply command | host reconciler + target owner | resource metadata/document、pool status、control/observe 已有实现 |
@@ -158,11 +158,8 @@ Domain 不是目录归属。一个模块可以跨多个 domain，但每个状态
 | `codec` | Data | line/length/databind/csv adapter | 未发现生产 `register_primitive/operation` 路径 | `adapter-only` | 需要补 Data operation catalog |
 | `queue` | Buffer/Persistence | source/sink adapter + claim settlement | `buffer.queue` 导出 `QueueBuffer`、`queue.dequeue/enqueue`；adapter operation 固定绑定实际 Queue primitive | `implemented` | Queue 状态仍由共享 queue owner 独占，不归 adapter |
 | `storage` | Buffer/Persistence | file/directory/sqlite source/sink | `buffer.storage` 导出 `StorageResource` 与 file/directory/append/sqlite operations，绑定实际 storage primitive | `implemented` | source/read 与各 sink commit 保持不同 operation |
-| `io/socket` | IO/Transport | CoroNet socket adapter | `io.socket` 导出 `SocketEndpoint` 与 `socket.receive/send`，绑定实际 endpoint owner | `implemented` | graph operation 只表达 ingress/egress；connect/listen/close 仍是 CoroNet owner lifecycle |
-| `io/http` | IO/Transport + Protocol/Pattern | native TurboHTTP/Iris client/server adapter | `io.http.client` 的 request/poll 绑定 `HttpClientConnection`；`io.http.server` 的 request/reply 绑定 `HttpServerEndpoint` | `implemented` | 保留 native endpoint/adapter；resource catalog 不迁移 I/O |
-| `io/rpc` | IO/Transport + Protocol/Pattern | native RPC client/server adapter | call/poll 绑定 `RpcClientConnection`；request/reply 绑定 `RpcServerEndpoint` | `implemented` | 保留 native RPC/Iris owner；RPC resource 不冒充 HTTP/Socket operation |
-| TurboDB ORM、`io/s3` | Buffer/Persistence | typed repository/object source/sink | ORM transaction 与 object operation 显式分层 | `adapter-only` | query/result/object 的 content type 要留在 domain schema |
-| `io/email` | Protocol/Pattern | SMTP/POP3/MIME adapter/example | MIME schema 有；显式 operation 未统一 | `adapter-only` | parse/encode 与 SMTP/POP3 owner 不应混为一个 primitive |
+| 外部 CNet/CHTTP adapter | IO/Transport + Protocol/Pattern | 本仓库无实现 | 必须注册实际 endpoint/connection owner 的 typed operation | `planned` | 不提供本地 transport fallback |
+| TurboDB ORM | Buffer/Persistence | typed repository/object source/sink | ORM transaction 与 object operation 显式分层 | `planned` | query/result/object 的 content type 要留在 domain schema |
 | `schedule` | Execution + Management（建议归类） | schedule source adapter | 尚未看到统一 domain operation descriptor | `adapter-only` | 需要先固化 timer/trigger owner 语义再注册 |
 | `observe` | Management + Execution | observe callback/summary sink | 只读 snapshot/derived metric | `owner-api` | 不应成为 payload mutation operation |
 | `security` | Rules + Management | security realm/resource API | Resource metadata 有；不进 payload graph | `owner-api` | 命令授权与数据规则要保持两个边界 |
@@ -251,8 +248,8 @@ Module catalog 是注册/校验层，不是 loader、plugin system、资源工�
 - `turbo_flow_module_count/at/find()`、`turbo_flow_operation_provider_module()` 和
   `turbo_flow_adapter_operation_module()` 提供只读查询；
   `reset(..., 1)` 保留目录，registry-clearing reset/destroy 释放它；
-- 生产 catalog 包括 `rules.policy`、`io.socket`、HTTP/RPC client/server、
-  `buffer.queue` 和 `buffer.storage`。HTTP/RPC 仍保留 native endpoint；catalog 不替换运行时。
+- 生产 catalog 包括 `rules.policy`、`buffer.queue` 和 `buffer.storage`；
+  网络 endpoint catalog 由后续 CNet/CHTTP 宿主适配层注册，catalog 不替换运行时 owner。
 
 人写配置仍为 YAML。YAML 选择 named resource/adapter/operation，host 在解析/构图前注册可信 module
 catalog；不能从不可信 YAML 动态声明 provider 身份或 native function。
@@ -290,7 +287,7 @@ operation exports、dependency version range、provider/native-adapter owner 与
 - `owner-api`：owner/runtime API 已存在并有测试，但尚未进入显式 domain operation catalog；
 - `contract-only`：descriptor 或设计文档存在，但 runtime owner 未完成；
 - `adapter-only`：能通过 adapter+graph 工作，但还没有显式 domain operation proof；
-- `unsupported`：compiler/runtime 明确返回 `TURBO_ENOTSUP`；
+- `unsupported`：compiler/runtime 明确返回 `SALTS_ENOTSUP`；
 - `deprecated`：仅用于兼容，不再新增依赖。
 
 禁止用“代码存在”代替 `implemented`；尤其要检查错误、容量、stop、ownership、retry 和

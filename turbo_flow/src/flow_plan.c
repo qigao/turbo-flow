@@ -37,13 +37,13 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
   size_t stage_count;
   int rc;
 
-  if (!flow) return TURBO_EINVAL;
+  if (!flow) return SALTS_EINVAL;
 
   flow_clear_runtime_plan(flow);
   stage_count = vec_size(&flow->stages);
 
   rc = turbo_flow_stl_error(vec_resize(&flow->runtime_nodes, stage_count));
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     return flow_set_error(flow, rc, 0, 0, "out of memory");
   }
   memset(vec_data(&flow->runtime_nodes), 0, stage_count * sizeof(flow_runtime_node_plan_t));
@@ -78,7 +78,7 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
       executor.max_outputs = stage->max_outputs;
       executor.ctx = stage->ctx;
       rc = turbo_flow_stl_error(vec_push(&flow->executor_plans, &executor));
-      if (rc != TURBO_OK) {
+      if (rc != SALTS_OK) {
         flow_clear_runtime_plan(flow);
         return flow_set_error(flow, rc, 0, 0, "out of memory");
       }
@@ -98,7 +98,7 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
     rc = flow_push_data_segment(flow, FLOW_DATA_SEGMENT_DIRECT, edge->from_stage,
                                 (uint32_t)edge_index, 1u, 0u,
                                 flow_direct_operation_contract(flow, to));
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       flow_clear_runtime_plan(flow);
       return flow_set_error(flow, rc, 0, 0, "out of memory");
     }
@@ -114,7 +114,7 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
 
     if (edge_count > UINT32_MAX) {
       flow_clear_runtime_plan(flow);
-      return flow_set_error(flow, TURBO_ERANGE, 0, 0, "runtime graph has too many edges");
+      return flow_set_error(flow, SALTS_ERANGE, 0, 0, "runtime graph has too many edges");
     }
     for (size_t stage_index = 0; stage_index < stage_count; ++stage_index) {
       flow_runtime_node_plan_t *node =
@@ -123,14 +123,14 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
       outgoing_begin += node->outgoing_count;
     }
     rc = turbo_flow_stl_error(vec_resize(&flow->runtime_edges, edge_count));
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       flow_clear_runtime_plan(flow);
       return flow_set_error(flow, rc, 0, 0, "out of memory");
     }
     write_offsets = stage_count > 0u ? (uint32_t *)calloc(stage_count, sizeof(*write_offsets)) : NULL;
     if (stage_count > 0u && !write_offsets) {
       flow_clear_runtime_plan(flow);
-      return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+      return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
     }
     for (size_t edge_index = 0; edge_index < edge_count; ++edge_index) {
       const flow_edge_plan_impl_t *edge =
@@ -162,7 +162,7 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
       rc = flow_push_data_segment(flow, FLOW_DATA_SEGMENT_WORKER_POOL, (uint32_t)stage_index,
                                   UINT32_MAX, stage->data_worker_count, stage->data_pool_capacity,
                                   flow_stage_operation_runtime(flow, stage));
-      if (rc != TURBO_OK) {
+      if (rc != SALTS_OK) {
         flow_clear_runtime_plan(flow);
         return flow_set_error(flow, rc, 0, 0, "out of memory");
       }
@@ -171,7 +171,7 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
       node->flags |= FLOW_RUNTIME_NODE_FANOUT;
       rc = flow_push_data_segment(flow, FLOW_DATA_SEGMENT_BROADCAST_FANOUT, (uint32_t)stage_index,
                                   UINT32_MAX, node->outgoing_count, 0u, NULL);
-      if (rc != TURBO_OK) {
+      if (rc != SALTS_OK) {
         flow_clear_runtime_plan(flow);
         return flow_set_error(flow, rc, 0, 0, "out of memory");
       }
@@ -180,14 +180,14 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
       node->flags |= FLOW_RUNTIME_NODE_FANIN;
       rc = flow_push_data_segment(flow, FLOW_DATA_SEGMENT_FANIN_GATE, (uint32_t)stage_index,
                                   UINT32_MAX, node->incoming_count, 0u, NULL);
-      if (rc != TURBO_OK) {
+      if (rc != SALTS_OK) {
         flow_clear_runtime_plan(flow);
         return flow_set_error(flow, rc, 0, 0, "out of memory");
       }
     }
   }
 
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 size_t turbo_flow_segment_count(const turbo_flow_t *flow) {
@@ -204,10 +204,10 @@ int turbo_flow_segment_plan_at(const turbo_flow_t *flow, size_t index,
   if (!flow || !out ||
       (flow->state != TURBO_FLOW_STATE_COMPILED && flow->state != TURBO_FLOW_STATE_STARTED &&
        flow->state != TURBO_FLOW_STATE_STOPPED)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   segment = (const flow_data_segment_plan_t *)vec_at_const(&flow->data_segments, index);
-  if (!segment) return TURBO_ENOENT;
+  if (!segment) return SALTS_ENOENT;
   memset(out, 0, sizeof(*out));
   out->kind = (turbo_flow_segment_kind_t)segment->kind;
   out->stage_index = segment->stage_index;
@@ -215,7 +215,7 @@ int turbo_flow_segment_plan_at(const turbo_flow_t *flow, size_t index,
   out->width = segment->width;
   out->capacity = segment->capacity;
   out->operation = segment->operation;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const flow_executor_plan_t *flow_executor_plan_for_stage(const turbo_flow_t *flow,

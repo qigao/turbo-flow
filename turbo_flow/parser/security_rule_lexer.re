@@ -1,7 +1,7 @@
 // re2c $INPUT -o $OUTPUT
 #include "turbo_flow_security.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -81,40 +81,40 @@ static int flow_security_rule_unescape(flow_security_rule_span_t span, char *out
                                        size_t capacity, int wildcard_empty) {
   size_t read = 0u;
   size_t written = 0u;
-  if (!output || capacity == 0u) return TURBO_EINVAL;
+  if (!output || capacity == 0u) return SALTS_EINVAL;
   if (wildcard_empty && span.size == 1u && span.data[0] == '*') {
     output[0] = '\0';
-    return TURBO_OK;
+    return SALTS_OK;
   }
   if (wildcard_empty && span.size == 0u) {
     output[0] = '\0';
-    return TURBO_OK;
+    return SALTS_OK;
   }
   while (read < span.size) {
     uint8_t byte = span.data[read++];
     if (byte == '\\') {
       int high;
       int low;
-      if (read >= span.size) return TURBO_EPROTO;
+      if (read >= span.size) return SALTS_EPROTO;
       byte = span.data[read++];
       if (byte == '\\' || byte == '|') {
         /* Canonical single-byte escape. */
       } else if (byte == 'x') {
         if (read + 2u > span.size || (high = flow_security_rule_hex(span.data[read])) < 0 ||
             (low = flow_security_rule_hex(span.data[read + 1u])) < 0)
-          return TURBO_EPROTO;
+          return SALTS_EPROTO;
         byte = (uint8_t)((high << 4) | low);
         read += 2u;
       } else {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
       }
     }
-    if (byte == 0u || written + 1u >= capacity) return TURBO_EPROTO;
+    if (byte == 0u || written + 1u >= capacity) return SALTS_EPROTO;
     output[written++] = (char)byte;
   }
-  if (written == 0u) return TURBO_EPROTO;
+  if (written == 0u) return SALTS_EPROTO;
   output[written] = '\0';
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_security_rule_split(const uint8_t *line, size_t size,
@@ -124,9 +124,9 @@ static int flow_security_rule_split(const uint8_t *line, size_t size,
   size_t cursor = 0u;
   while (cursor < size) {
     if (line[cursor] == '\\') {
-      if (++cursor >= size) return TURBO_EPROTO;
+      if (++cursor >= size) return SALTS_EPROTO;
       if (line[cursor] == 'x') {
-        if (cursor + 2u >= size) return TURBO_EPROTO;
+        if (cursor + 2u >= size) return SALTS_EPROTO;
         cursor += 3u;
       } else {
         ++cursor;
@@ -134,28 +134,28 @@ static int flow_security_rule_split(const uint8_t *line, size_t size,
       continue;
     }
     if (line[cursor] == '|') {
-      if (field >= 7u) return TURBO_EPROTO;
+      if (field >= 7u) return SALTS_EPROTO;
       fields[field++] = (flow_security_rule_span_t){line + start, cursor - start};
       start = ++cursor;
       continue;
     }
     ++cursor;
   }
-  if (field != 7u) return TURBO_EPROTO;
+  if (field != 7u) return SALTS_EPROTO;
   fields[field] = (flow_security_rule_span_t){line + start, size - start};
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_security_rule_actions(flow_security_rule_span_t span, uint32_t *mask_out) {
   size_t start = 0u;
   uint32_t mask = 0u;
-  if (!mask_out || span.size == 0u) return TURBO_EPROTO;
+  if (!mask_out || span.size == 0u) return SALTS_EPROTO;
   while (start < span.size) {
     size_t end = start;
     uint32_t action = 0u;
     flow_security_rule_token_t token;
     while (end < span.size && span.data[end] != ',') ++end;
-    if (end == start) return TURBO_EPROTO;
+    if (end == start) return SALTS_EPROTO;
     token = flow_security_rule_keyword(
         (flow_security_rule_span_t){span.data + start, end - start});
     switch (token) {
@@ -166,14 +166,14 @@ static int flow_security_rule_actions(flow_security_rule_span_t span, uint32_t *
     case FLOW_SECURITY_RULE_TOKEN_WRITE: action = TURBO_FLOW_SECURITY_ACTION_WRITE; break;
     case FLOW_SECURITY_RULE_TOKEN_EXECUTE: action = TURBO_FLOW_SECURITY_ACTION_EXECUTE; break;
     case FLOW_SECURITY_RULE_TOKEN_ADMIN: action = TURBO_FLOW_SECURITY_ACTION_ADMIN; break;
-    default: return TURBO_EPROTO;
+    default: return SALTS_EPROTO;
     }
-    if ((mask & action) != 0u) return TURBO_EPROTO;
+    if ((mask & action) != 0u) return SALTS_EPROTO;
     mask |= action;
     start = end + 1u;
   }
   *mask_out = mask;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_security_rule_parse_line(const char *line, size_t line_size,
@@ -184,16 +184,16 @@ int turbo_flow_security_rule_parse_line(const char *line, size_t line_size,
   int rc;
   if (!rule_out || rule_out->size < sizeof(*rule_out) || !line || line_size == 0u ||
       line_size > TURBO_FLOW_SECURITY_RULE_LINE_MAX)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   while (line_size > 0u && (line[line_size - 1u] == '\n' || line[line_size - 1u] == '\r'))
     --line_size;
-  if (line_size == 0u) return TURBO_EPROTO;
+  if (line_size == 0u) return SALTS_EPROTO;
   rc = flow_security_rule_split((const uint8_t *)line, line_size, fields);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
 
   token = flow_security_rule_keyword(fields[0]);
   if (token == FLOW_SECURITY_RULE_TOKEN_ALLOW) rule.effect = TURBO_FLOW_SECURITY_ALLOW;
-  else if (token != FLOW_SECURITY_RULE_TOKEN_DENY) return TURBO_EPROTO;
+  else if (token != FLOW_SECURITY_RULE_TOKEN_DENY) return SALTS_EPROTO;
 
   token = flow_security_rule_keyword(fields[1]);
   if (token == FLOW_SECURITY_RULE_TOKEN_ANY) rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ANY;
@@ -203,18 +203,18 @@ int turbo_flow_security_rule_parse_line(const char *line, size_t line_size,
     rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_ROLE;
   else if (token == FLOW_SECURITY_RULE_TOKEN_GROUP)
     rule.subject_kind = TURBO_FLOW_SECURITY_SUBJECT_GROUP;
-  else return TURBO_EPROTO;
+  else return SALTS_EPROTO;
 
   rc = flow_security_rule_unescape(fields[2], rule.subject, sizeof(rule.subject),
                                    rule.subject_kind == TURBO_FLOW_SECURITY_SUBJECT_ANY);
-  if (rc != TURBO_OK ||
+  if (rc != SALTS_OK ||
       (rule.subject_kind == TURBO_FLOW_SECURITY_SUBJECT_ANY && fields[2].size != 1u))
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   rc = flow_security_rule_unescape(fields[3], rule.domain_id,
                                    sizeof(rule.domain_id), 0);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flow_security_rule_actions(fields[4], &rule.action_mask);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
 
   token = flow_security_rule_keyword(fields[5]);
   if (token == FLOW_SECURITY_RULE_TOKEN_GENERIC)
@@ -227,7 +227,7 @@ int turbo_flow_security_rule_parse_line(const char *line, size_t line_size,
     rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_SQL_OBJECT;
   else if (token == FLOW_SECURITY_RULE_TOKEN_SECRET)
     rule.resource_type = TURBO_FLOW_SECURITY_RESOURCE_SECRET;
-  else return TURBO_EPROTO;
+  else return SALTS_EPROTO;
 
   token = flow_security_rule_keyword(fields[6]);
   if (token == FLOW_SECURITY_RULE_TOKEN_EXACT) rule.match_kind = TURBO_FLOW_SECURITY_MATCH_EXACT;
@@ -235,47 +235,47 @@ int turbo_flow_security_rule_parse_line(const char *line, size_t line_size,
     rule.match_kind = TURBO_FLOW_SECURITY_MATCH_PREFIX;
   else if (token == FLOW_SECURITY_RULE_TOKEN_ADAPTER)
     rule.match_kind = TURBO_FLOW_SECURITY_MATCH_ADAPTER;
-  else return TURBO_EPROTO;
+  else return SALTS_EPROTO;
   rc = flow_security_rule_unescape(
       fields[7], rule.pattern, sizeof(rule.pattern),
       rule.action_mask == TURBO_FLOW_SECURITY_ACTION_CONNECT &&
           rule.resource_type == TURBO_FLOW_SECURITY_RESOURCE_GENERIC &&
           rule.match_kind == TURBO_FLOW_SECURITY_MATCH_PREFIX);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   *rule_out = rule;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_security_rule_append(char *output, size_t capacity, size_t *offset,
                                      const char *text) {
   size_t size;
-  if (!output || !offset || !text) return TURBO_EINVAL;
+  if (!output || !offset || !text) return SALTS_EINVAL;
   size = strlen(text);
-  if (*offset > capacity || size > capacity - *offset) return TURBO_ENOSPC;
+  if (*offset > capacity || size > capacity - *offset) return SALTS_ENOSPC;
   memcpy(output + *offset, text, size);
   *offset += size;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_security_rule_append_escaped(char *output, size_t capacity, size_t *offset,
                                              const char *text, size_t text_capacity,
                                              int allow_empty) {
   size_t size;
-  if (!output || !offset || !text) return TURBO_EINVAL;
+  if (!output || !offset || !text) return SALTS_EINVAL;
   size = strnlen(text, text_capacity);
-  if ((!allow_empty && size == 0u) || size >= text_capacity) return TURBO_EPROTO;
+  if ((!allow_empty && size == 0u) || size >= text_capacity) return SALTS_EPROTO;
   for (size_t i = 0u; i < size; ++i) {
     char escaped[3] = {'\\', text[i], '\0'};
     if (text[i] == '|' || text[i] == '\\') {
       int rc = flow_security_rule_append(output, capacity, offset, escaped);
-      if (rc != TURBO_OK) return rc;
+      if (rc != SALTS_OK) return rc;
     } else {
       char single[2] = {text[i], '\0'};
       int rc = flow_security_rule_append(output, capacity, offset, single);
-      if (rc != TURBO_OK) return rc;
+      if (rc != SALTS_OK) return rc;
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static const char *flow_security_rule_action_name(size_t index) {
@@ -299,52 +299,52 @@ int turbo_flow_security_rule_format_line(const turbo_flow_security_rule_t *rule,
       rule->resource_type < TURBO_FLOW_SECURITY_RESOURCE_GENERIC ||
       rule->resource_type > TURBO_FLOW_SECURITY_RESOURCE_SECRET || rule->match_kind >= 3u ||
       rule->action_mask == 0u || (rule->action_mask & ~TURBO_FLOW_SECURITY_ACTION_ALL) != 0u)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   rc = flow_security_rule_append(line_out, line_capacity,
                                  &offset, rule->effect == TURBO_FLOW_SECURITY_ALLOW ? "allow|"
                                                                                       : "deny|");
-  if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset,
+  if (rc == SALTS_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset,
                                                       subject_names[rule->subject_kind]);
-  if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
-  if (rc == TURBO_OK) {
+  if (rc == SALTS_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
+  if (rc == SALTS_OK) {
     rc = rule->subject_kind == TURBO_FLOW_SECURITY_SUBJECT_ANY
              ? flow_security_rule_append(line_out, line_capacity, &offset, "*")
              : flow_security_rule_append_escaped(line_out, line_capacity, &offset, rule->subject,
                                                  sizeof(rule->subject), 0);
   }
-  if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
+  if (rc == SALTS_OK)
     rc = flow_security_rule_append_escaped(line_out, line_capacity, &offset, rule->domain_id,
                                            sizeof(rule->domain_id), 0);
-  if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
-  for (size_t i = 0u; rc == TURBO_OK && i < 7u; ++i) {
+  if (rc == SALTS_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
+  for (size_t i = 0u; rc == SALTS_OK && i < 7u; ++i) {
     if ((rule->action_mask & (UINT32_C(1) << i)) == 0u) continue;
     if (offset != 0u && line_out[offset - 1u] != '|')
       rc = flow_security_rule_append(line_out, line_capacity, &offset, ",");
-    if (rc == TURBO_OK)
+    if (rc == SALTS_OK)
       rc = flow_security_rule_append(line_out, line_capacity, &offset,
                                      flow_security_rule_action_name(i));
   }
-  if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
+  if (rc == SALTS_OK)
     rc = flow_security_rule_append(line_out, line_capacity, &offset,
                                    resource_names[rule->resource_type - 1u]);
-  if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
+  if (rc == SALTS_OK)
     rc = flow_security_rule_append(line_out, line_capacity, &offset,
                                    match_names[rule->match_kind]);
-  if (rc == TURBO_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK) rc = flow_security_rule_append(line_out, line_capacity, &offset, "|");
+  if (rc == SALTS_OK)
     rc = flow_security_rule_append_escaped(
         line_out, line_capacity, &offset, rule->pattern, sizeof(rule->pattern),
         rule->action_mask == TURBO_FLOW_SECURITY_ACTION_CONNECT &&
             rule->resource_type == TURBO_FLOW_SECURITY_RESOURCE_GENERIC &&
             rule->match_kind == TURBO_FLOW_SECURITY_MATCH_PREFIX);
-  if (rc == TURBO_OK && offset > TURBO_FLOW_SECURITY_RULE_LINE_MAX) rc = TURBO_EFBIG;
-  if (rc != TURBO_OK) {
+  if (rc == SALTS_OK && offset > TURBO_FLOW_SECURITY_RULE_LINE_MAX) rc = SALTS_EFBIG;
+  if (rc != SALTS_OK) {
     memset(line_out, 0, line_capacity);
     return rc;
   }
   *line_size_out = offset;
-  return TURBO_OK;
+  return SALTS_OK;
 }

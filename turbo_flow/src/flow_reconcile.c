@@ -43,12 +43,12 @@ int turbo_flow_resource_reconcile_tick(
       !flow_conditions_valid(request->conditions, request->condition_count) ||
       !flow_conditions_valid(request->desired_conditions, request->desired_condition_count) ||
       strcmp(request->command.target_uid, request->metadata.uid) != 0) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   command = request->command;
   command.size = sizeof(command);
   command.expected_generation = request->metadata.observed_generation;
-  if (!flow_resource_command_valid(&command)) return TURBO_EINVAL;
+  if (!flow_resource_command_valid(&command)) return SALTS_EINVAL;
 
   result.value_matches = request->observed_value == request->desired_value;
   for (uint32_t i = 0u; i < request->desired_condition_count; ++i) {
@@ -62,17 +62,17 @@ int turbo_flow_resource_reconcile_tick(
   if (result.value_matches &&
       result.matched_condition_count == request->desired_condition_count) {
     *out = result;
-    return TURBO_OK;
+    return SALTS_OK;
   }
   if (request->metadata.observed_generation != request->metadata.generation) {
     result.action = TURBO_FLOW_RESOURCE_RECONCILE_OBSERVING;
     *out = result;
-    return TURBO_OK;
+    return SALTS_OK;
   }
 
   rc = turbo_flow_resource_command(flow, &command, &result.command_result);
   result.status = rc;
-  result.action = rc == TURBO_OK ? TURBO_FLOW_RESOURCE_RECONCILE_COMMAND_APPLIED
+  result.action = rc == SALTS_OK ? TURBO_FLOW_RESOURCE_RECONCILE_COMMAND_APPLIED
                                  : TURBO_FLOW_RESOURCE_RECONCILE_COMMAND_FAILED;
   *out = result;
   return rc;
@@ -100,11 +100,11 @@ static int flow_resize_workflow_command(turbo_flow_t *flow,
 
   command.kind = kind;
   written = snprintf(command.target_uid, sizeof(command.target_uid), "%s", uid);
-  if (written < 0 || (size_t)written >= sizeof(command.target_uid)) return TURBO_ENAMETOOLONG;
+  if (written < 0 || (size_t)written >= sizeof(command.target_uid)) return SALTS_ENAMETOOLONG;
   written = snprintf(command.idempotency_key, sizeof(command.idempotency_key), "%s:%u:%u",
                      spec->workflow_id, (unsigned)state->phase, (unsigned)state->attempt);
   if (written < 0 || (size_t)written >= sizeof(command.idempotency_key))
-    return TURBO_ENAMETOOLONG;
+    return SALTS_ENAMETOOLONG;
   command.expected_generation = generation;
   command.deadline_ns = spec->deadline_ns;
   command.parallelism = parallelism;
@@ -116,7 +116,7 @@ static uint64_t flow_resize_workflow_drain_timeout(const turbo_flow_resize_workf
   uint64_t now;
   uint64_t remaining_ms;
   if (spec->deadline_ns == UINT64_MAX) return spec->drain_timeout_ms;
-  now = turbo_hrtime();
+  now = salts_hrtime();
   if (now >= spec->deadline_ns) return 0u;
   remaining_ms = (spec->deadline_ns - now + UINT64_C(999999)) / UINT64_C(1000000);
   return spec->drain_timeout_ms < remaining_ms ? spec->drain_timeout_ms : remaining_ms;
@@ -125,7 +125,7 @@ static uint64_t flow_resize_workflow_drain_timeout(const turbo_flow_resize_workf
 int turbo_flow_resize_workflow_init(const turbo_flow_resize_workflow_spec_t *spec,
                                     turbo_flow_resize_workflow_state_t *state) {
   if (!flow_resize_workflow_spec_valid(spec) || !state || state->size < sizeof(*state))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   memset(state, 0, sizeof(*state));
   state->size = sizeof(*state);
   state->spec = *spec;
@@ -134,8 +134,8 @@ int turbo_flow_resize_workflow_init(const turbo_flow_resize_workflow_spec_t *spe
   state->failed_phase = TURBO_FLOW_RESIZE_WORKFLOW_QUIESCE_INGRESS;
   state->ingress_generation = spec->ingress_generation;
   state->pool_generation = spec->pool_generation;
-  state->last_status = TURBO_OK;
-  return TURBO_OK;
+  state->last_status = SALTS_OK;
+  return SALTS_OK;
 }
 
 static int flow_resize_workflow_fail(turbo_flow_resize_workflow_state_t *state,
@@ -159,10 +159,10 @@ int turbo_flow_resize_workflow_tick(turbo_flow_t *flow,
   if (!flow || !state || state->size < sizeof(*state) || !out || out->size < sizeof(*out) ||
       state->phase < TURBO_FLOW_RESIZE_WORKFLOW_QUIESCE_INGRESS ||
       state->phase > TURBO_FLOW_RESIZE_WORKFLOW_FAILED) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   spec = &state->spec;
-  if (!flow_resize_workflow_spec_valid(spec)) return TURBO_EINVAL;
+  if (!flow_resize_workflow_spec_valid(spec)) return SALTS_EINVAL;
   result.phase_before = state->phase;
   result.phase_after = state->phase;
   if (state->phase == TURBO_FLOW_RESIZE_WORKFLOW_DONE ||
@@ -171,8 +171,8 @@ int turbo_flow_resize_workflow_tick(turbo_flow_t *flow,
     *out = result;
     return state->last_status;
   }
-  if (spec->deadline_ns != UINT64_MAX && turbo_hrtime() >= spec->deadline_ns) {
-    rc = flow_resize_workflow_fail(state, &result, TURBO_ETIMEDOUT);
+  if (spec->deadline_ns != UINT64_MAX && salts_hrtime() >= spec->deadline_ns) {
+    rc = flow_resize_workflow_fail(state, &result, SALTS_ETIMEDOUT);
     *out = result;
     return rc;
   }
@@ -185,14 +185,14 @@ int turbo_flow_resize_workflow_tick(turbo_flow_t *flow,
       if (result.command_result.generation_before == state->ingress_generation &&
           result.command_result.generation_after != 0u)
         state->ingress_generation = result.command_result.generation_after;
-      if (rc != TURBO_OK) break;
+      if (rc != SALTS_OK) break;
       state->phase = TURBO_FLOW_RESIZE_WORKFLOW_DRAIN_GRAPH;
       ++state->commands_applied;
       result.action = TURBO_FLOW_RESIZE_WORKFLOW_COMMAND_APPLIED;
       break;
     case TURBO_FLOW_RESIZE_WORKFLOW_DRAIN_GRAPH:
       rc = turbo_flow_drain(flow, flow_resize_workflow_drain_timeout(spec));
-      if (rc != TURBO_OK) break;
+      if (rc != SALTS_OK) break;
       state->phase = TURBO_FLOW_RESIZE_WORKFLOW_RESIZE_POOL;
       result.action = TURBO_FLOW_RESIZE_WORKFLOW_GRAPH_DRAINED;
       break;
@@ -204,14 +204,14 @@ int turbo_flow_resize_workflow_tick(turbo_flow_t *flow,
       if (result.command_result.generation_before == state->pool_generation &&
           result.command_result.generation_after != 0u)
         state->pool_generation = result.command_result.generation_after;
-      if (rc != TURBO_OK) break;
+      if (rc != SALTS_OK) break;
       state->phase = TURBO_FLOW_RESIZE_WORKFLOW_RESUME_GRAPH;
       ++state->commands_applied;
       result.action = TURBO_FLOW_RESIZE_WORKFLOW_COMMAND_APPLIED;
       break;
     case TURBO_FLOW_RESIZE_WORKFLOW_RESUME_GRAPH:
       rc = turbo_flow_resume(flow);
-      if (rc != TURBO_OK) break;
+      if (rc != SALTS_OK) break;
       state->phase = TURBO_FLOW_RESIZE_WORKFLOW_RESUME_INGRESS;
       result.action = TURBO_FLOW_RESIZE_WORKFLOW_GRAPH_RESUMED;
       break;
@@ -222,19 +222,19 @@ int turbo_flow_resize_workflow_tick(turbo_flow_t *flow,
       if (result.command_result.generation_before == state->ingress_generation &&
           result.command_result.generation_after != 0u)
         state->ingress_generation = result.command_result.generation_after;
-      if (rc != TURBO_OK) break;
+      if (rc != SALTS_OK) break;
       state->phase = TURBO_FLOW_RESIZE_WORKFLOW_DONE;
       ++state->commands_applied;
       result.action = TURBO_FLOW_RESIZE_WORKFLOW_COMMAND_APPLIED;
       break;
     default:
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
   }
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     rc = flow_resize_workflow_fail(state, &result, rc);
   } else {
-    state->last_status = TURBO_OK;
-    result.status = TURBO_OK;
+    state->last_status = SALTS_OK;
+    result.status = SALTS_OK;
     result.phase_after = state->phase;
   }
   *out = result;
@@ -245,10 +245,10 @@ int turbo_flow_resize_workflow_retry(turbo_flow_resize_workflow_state_t *state) 
   if (!state || state->size < sizeof(*state) ||
       state->phase != TURBO_FLOW_RESIZE_WORKFLOW_FAILED ||
       state->failed_phase >= TURBO_FLOW_RESIZE_WORKFLOW_DONE || state->attempt == UINT32_MAX) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   ++state->attempt;
   state->phase = state->failed_phase;
-  state->last_status = TURBO_OK;
-  return TURBO_OK;
+  state->last_status = SALTS_OK;
+  return SALTS_OK;
 }

@@ -4,9 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-static TURBO_THREAD_LOCAL turbo_flow_t *flow_active_error_owner;
-static TURBO_THREAD_LOCAL turbo_flow_t *flow_last_publish_error_owner;
-static TURBO_THREAD_LOCAL turbo_flow_error_t flow_publish_error;
+static SALTS_THREAD_LOCAL turbo_flow_t *flow_active_error_owner;
+static SALTS_THREAD_LOCAL turbo_flow_t *flow_last_publish_error_owner;
+static SALTS_THREAD_LOCAL turbo_flow_error_t flow_publish_error;
 
 static turbo_flow_error_t *flow_error_target(turbo_flow_t *flow) {
   if (flow && flow_active_error_owner == flow) return &flow_publish_error;
@@ -22,7 +22,7 @@ int flow_set_error(turbo_flow_t *flow, int code, uint32_t line, uint32_t column,
   error->code = code;
   error->line = line;
   error->column = column;
-  snprintf(error->message, sizeof(error->message), "%s", message ? message : turbo_strerror(code));
+  snprintf(error->message, sizeof(error->message), "%s", message ? message : salts_strerror(code));
   flow->state = TURBO_FLOW_STATE_FAILED;
   return code;
 }
@@ -35,7 +35,7 @@ int flow_set_error_keep_state(turbo_flow_t *flow, int code, uint32_t line, uint3
   error->code = code;
   error->line = line;
   error->column = column;
-  snprintf(error->message, sizeof(error->message), "%s", message ? message : turbo_strerror(code));
+  snprintf(error->message, sizeof(error->message), "%s", message ? message : salts_strerror(code));
   return code;
 }
 
@@ -43,7 +43,7 @@ void flow_clear_error(turbo_flow_t *flow) {
   turbo_flow_error_t *error;
   if (!flow) return;
   error = flow_error_target(flow);
-  error->code = TURBO_OK;
+  error->code = SALTS_OK;
   error->line = 0;
   error->column = 0;
   error->message[0] = '\0';
@@ -60,7 +60,7 @@ void flow_publish_error_context_end(turbo_flow_t *flow) {
 }
 
 int flow_error_code(const turbo_flow_t *flow) {
-  if (!flow) return TURBO_EINVAL;
+  if (!flow) return SALTS_EINVAL;
   if (flow_active_error_owner == flow || flow_last_publish_error_owner == flow) {
     return flow_publish_error.code;
   }
@@ -317,16 +317,16 @@ turbo_flow_t *turbo_flow_create(void) {
   turbo_flow_t *flow = (turbo_flow_t *)calloc(1, sizeof(turbo_flow_t));
   if (!flow) return NULL;
 
-  turbo_mutex_init(&flow->runtime_mutex);
-  turbo_cond_init(&flow->runtime_cond);
-  turbo_mutex_init(&flow->broadcast_mutex);
-  turbo_mutex_init(&flow->async_ingress_mutex);
+  salts_mutex_init(&flow->runtime_mutex);
+  salts_cond_init(&flow->runtime_cond);
+  salts_mutex_init(&flow->broadcast_mutex);
+  salts_mutex_init(&flow->async_ingress_mutex);
   if (!flow->runtime_mutex || !flow->runtime_cond || !flow->broadcast_mutex ||
       !flow->async_ingress_mutex) {
-    turbo_cond_destroy(&flow->runtime_cond);
-    turbo_mutex_destroy(&flow->async_ingress_mutex);
-    turbo_mutex_destroy(&flow->broadcast_mutex);
-    turbo_mutex_destroy(&flow->runtime_mutex);
+    salts_cond_destroy(&flow->runtime_cond);
+    salts_mutex_destroy(&flow->async_ingress_mutex);
+    salts_mutex_destroy(&flow->broadcast_mutex);
+    salts_mutex_destroy(&flow->runtime_mutex);
     free(flow);
     return NULL;
   }
@@ -335,32 +335,32 @@ turbo_flow_t *turbo_flow_create(void) {
       (turbo_flow_async_ingress_config_t)TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
   atomic_init(&flow->next_sequence, 0u);
 
-  if (turbo_flow_stl_error(vec_init_bytes(&flow->stages, sizeof(flow_stage_plan_impl_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->edges, sizeof(flow_edge_plan_impl_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->runtime_nodes, sizeof(flow_runtime_node_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->runtime_edges, sizeof(flow_runtime_edge_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->data_segments, sizeof(flow_data_segment_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->executor_plans, sizeof(flow_executor_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->threadpool_adapters, sizeof(flow_threadpool_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->coro_adapters, sizeof(flow_coro_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->broadcast_consumers, sizeof(flow_broadcast_consumer_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->worker_pool_adapters, sizeof(flow_worker_pool_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->reorder_states, sizeof(flow_reorder_state_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->registrations, sizeof(flow_stage_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
+  if (turbo_flow_stl_error(vec_init_bytes(&flow->stages, sizeof(flow_stage_plan_impl_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->edges, sizeof(flow_edge_plan_impl_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->runtime_nodes, sizeof(flow_runtime_node_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->runtime_edges, sizeof(flow_runtime_edge_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->data_segments, sizeof(flow_data_segment_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->executor_plans, sizeof(flow_executor_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->threadpool_adapters, sizeof(flow_threadpool_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->coro_adapters, sizeof(flow_coro_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->broadcast_consumers, sizeof(flow_broadcast_consumer_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->worker_pool_adapters, sizeof(flow_worker_pool_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->reorder_states, sizeof(flow_reorder_state_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->registrations, sizeof(flow_stage_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(vec_init_bytes(&flow->operation_providers, sizeof(flow_operation_provider_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
-          TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->primitives, sizeof(flow_primitive_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->operations, sizeof(flow_operation_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->modules, sizeof(flow_module_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->adapters, sizeof(flow_adapter_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->resources, sizeof(flow_resource_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->expr_projection_registrations, sizeof(flow_expr_projection_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->active_adapters, sizeof(flow_active_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->pool_records, sizeof(flow_pool_record_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
+          SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->primitives, sizeof(flow_primitive_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->operations, sizeof(flow_operation_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->modules, sizeof(flow_module_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->adapters, sizeof(flow_adapter_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->resources, sizeof(flow_resource_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->expr_projection_registrations, sizeof(flow_expr_projection_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->active_adapters, sizeof(flow_active_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->pool_records, sizeof(flow_pool_record_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(vec_init_bytes(&flow->resource_command_history, sizeof(flow_resource_command_record_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
-          TURBO_OK ||
+          SALTS_OK ||
       turbo_flow_stl_error(vec_init_bytes(&flow->event_observers, sizeof(flow_event_observer_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
-          TURBO_OK) {
+          SALTS_OK) {
     turbo_flow_destroy(flow);
     return NULL;
   }
@@ -405,10 +405,10 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
     flow->observer_ops.flow_destroyed(flow->observer_ctx);
   }
   if (flow->runtime_sync_initialized) {
-    turbo_cond_destroy(&flow->runtime_cond);
-    turbo_mutex_destroy(&flow->async_ingress_mutex);
-    turbo_mutex_destroy(&flow->broadcast_mutex);
-    turbo_mutex_destroy(&flow->runtime_mutex);
+    salts_cond_destroy(&flow->runtime_cond);
+    salts_mutex_destroy(&flow->async_ingress_mutex);
+    salts_mutex_destroy(&flow->broadcast_mutex);
+    salts_mutex_destroy(&flow->runtime_mutex);
   }
   if (flow_active_error_owner == flow) flow_active_error_owner = NULL;
   if (flow_last_publish_error_owner == flow) flow_last_publish_error_owner = NULL;
@@ -416,9 +416,9 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
 }
 
 int turbo_flow_reset(turbo_flow_t *flow, int keep_registry) {
-  if (!flow) return TURBO_EINVAL;
+  if (!flow) return SALTS_EINVAL;
   if (flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0, "cannot reset a started flow");
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0, "cannot reset a started flow");
   }
   flow_clear_plan(flow);
   turbo_flow_stl_error(vec_clear(&flow->resource_command_history));
@@ -426,7 +426,7 @@ int turbo_flow_reset(turbo_flow_t *flow, int keep_registry) {
   atomic_store_explicit(&flow->next_sequence, 0u, memory_order_release);
   flow->state = TURBO_FLOW_STATE_NEW;
   flow_clear_error(flow);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_register_stage_ex(turbo_flow_t *flow, const char *name, turbo_flow_stage_fn fn,
@@ -437,30 +437,30 @@ int turbo_flow_register_stage_ex(turbo_flow_t *flow, const char *name, turbo_flo
       (options && (options->mutability < TURBO_FLOW_STAGE_READONLY ||
                    options->mutability > TURBO_FLOW_STAGE_MUTATES_IN_PLACE ||
                    (options->effects & ~TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u))) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "cannot register stage after compile");
   }
   if (flow_find_registration(flow, name) >= 0) {
-    return flow_set_error_keep_state(flow, TURBO_EALREADY, 0, 0, "duplicate stage registration");
+    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "duplicate stage registration");
   }
 
   memset(&reg, 0, sizeof(reg));
   reg.name = tstr_dup(name);
-  if (!reg.name) return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+  if (!reg.name) return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   reg.fn = fn;
   reg.ctx = ctx;
   if (options) reg.options = *options;
   else reg.options.mutability = TURBO_FLOW_STAGE_READONLY;
 
-  if (turbo_flow_stl_error(vec_push(&flow->registrations, &reg)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&flow->registrations, &reg)) != SALTS_OK) {
     flow_registration_destroy(&reg);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
 
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_register_operation_provider_impl(turbo_flow_t *flow, const char *operation_name,
@@ -469,17 +469,17 @@ static int flow_register_operation_provider_impl(turbo_flow_t *flow, const char 
   int rc;
 
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "cannot register operation provider after compile");
   }
   if (flow_find_operation_provider(flow, operation_name, resource_name) >= 0) {
-    return flow_set_error_keep_state(flow, TURBO_EALREADY, 0, 0, "duplicate operation provider");
+    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "duplicate operation provider");
   }
   if (provider->keyed_store) {
     rc = flow_keyed_state_store_bind(provider->keyed_store);
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       return flow_set_error_keep_state(flow, rc, 0, 0,
-                                       rc == TURBO_EALREADY
+                                       rc == SALTS_EALREADY
                                            ? "keyed state store already has a provider owner"
                                            : "keyed state store is invalid");
     }
@@ -489,13 +489,13 @@ static int flow_register_operation_provider_impl(turbo_flow_t *flow, const char 
   if (resource_name) provider->resource_name = tstr_dup(resource_name);
   if (!provider->operation_name || (resource_name && !provider->resource_name)) {
     flow_operation_provider_registration_destroy(provider);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  if (turbo_flow_stl_error(vec_push(&flow->operation_providers, provider)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&flow->operation_providers, provider)) != SALTS_OK) {
     flow_operation_provider_registration_destroy(provider);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_register_operation_provider(
@@ -508,7 +508,7 @@ int turbo_flow_register_operation_provider(
       !registration->fn || registration->options.mutability < TURBO_FLOW_STAGE_READONLY ||
       registration->options.mutability > TURBO_FLOW_STAGE_MUTATES_IN_PLACE ||
       (registration->options.effects & ~TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(&provider, 0, sizeof(provider));
   provider.fn = registration->fn;
@@ -529,7 +529,7 @@ int turbo_flow_register_emitting_operation_provider(
       registration->max_outputs > TURBO_FLOW_EMITTER_MAX_OUTPUTS ||
       registration->options.mutability != TURBO_FLOW_STAGE_READONLY ||
       registration->options.effects != TURBO_FLOW_STAGE_EFFECT_NONE) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(&provider, 0, sizeof(provider));
   provider.emit_fn = registration->fn;
@@ -552,7 +552,7 @@ int turbo_flow_register_keyed_operation_provider(
       flow_keyed_state_store_is_event_time(registration->store) ||
       registration->options.mutability != TURBO_FLOW_STAGE_MUTATES_IN_PLACE ||
       (registration->options.effects & ~TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(&provider, 0, sizeof(provider));
   provider.keyed_store = registration->store;
@@ -579,7 +579,7 @@ int turbo_flow_register_keyed_emitting_operation_provider(
       registration->max_outputs > TURBO_FLOW_EMITTER_MAX_OUTPUTS ||
       registration->options.mutability != TURBO_FLOW_STAGE_READONLY ||
       (registration->options.effects & ~TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(&provider, 0, sizeof(provider));
   provider.key_selector = registration->key_selector;
@@ -607,7 +607,7 @@ int turbo_flow_register_event_time_window_provider(
       registration->max_outputs > TURBO_FLOW_EMITTER_MAX_OUTPUTS ||
       registration->options.mutability != TURBO_FLOW_STAGE_READONLY ||
       (registration->options.effects & ~TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(&provider, 0, sizeof(provider));
   provider.key_selector = registration->key_selector;
@@ -630,21 +630,21 @@ int turbo_flow_register_stage_with_resources(
   size_t resources_before;
   size_t registrations_before;
   int rc;
-  if (!flow || (resource_count > 0u && !resources)) return TURBO_EINVAL;
+  if (!flow || (resource_count > 0u && !resources)) return SALTS_EINVAL;
   for (size_t i = 0; i < resource_count; ++i) {
     if (resources[i].size < sizeof(resources[i]) || !resources[i].owner_name ||
         resources[i].owner_name[0] == '\0') {
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
   }
   resources_before = vec_size(&flow->resources);
   registrations_before = vec_size(&flow->registrations);
   rc = turbo_flow_register_stage_ex(flow, name, fn, ctx, options);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   for (size_t i = 0; i < resource_count; ++i) {
     rc = turbo_flow_register_resource_provider(flow, resources[i].owner_name, &resources[i].ops,
                                                resources[i].ctx);
-    if (rc == TURBO_OK) continue;
+    if (rc == SALTS_OK) continue;
     while (vec_size(&flow->resources) > resources_before) {
       size_t last = vec_size(&flow->resources) - 1u;
       flow_resource_registration_t *resource =
@@ -661,7 +661,7 @@ int turbo_flow_register_stage_with_resources(
     }
     return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_register_adapter(turbo_flow_t *flow, const char *name,
@@ -674,20 +674,20 @@ int turbo_flow_register_adapter_settlement(turbo_flow_t *flow, const char *name,
                                            void *ctx) {
   int index;
   flow_adapter_registration_t *adapter;
-  if (!flow || !name || !ops || ops->size < sizeof(*ops) || !ops->apply) return TURBO_EINVAL;
+  if (!flow || !name || !ops || ops->size < sizeof(*ops) || !ops->apply) return SALTS_EINVAL;
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "cannot register settlement owner after compile");
   }
   index = flow_find_adapter(flow, name);
-  if (index < 0) return TURBO_ENOENT;
+  if (index < 0) return SALTS_ENOENT;
   adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, (size_t)index);
-  if (!adapter) return TURBO_ENOENT;
-  if (adapter->settlement_ops.apply) return TURBO_EALREADY;
+  if (!adapter) return SALTS_ENOENT;
+  if (adapter->settlement_ops.apply) return SALTS_EALREADY;
   adapter->settlement_ops = *ops;
   adapter->settlement_ops.size = sizeof(adapter->settlement_ops);
   adapter->settlement_ctx = ctx;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_register_resource_provider(turbo_flow_t *flow, const char *owner_name,
@@ -697,44 +697,44 @@ int turbo_flow_register_resource_provider(turbo_flow_t *flow, const char *owner_
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
   if (!flow || !owner_name || owner_name[0] == '\0' || !ops || ops->size < sizeof(*ops) ||
       !ops->metadata) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "cannot register resource provider after compile");
   }
-  if (ops->metadata(ctx, &metadata) != TURBO_OK || !flow_resource_metadata_valid(&metadata) ||
+  if (ops->metadata(ctx, &metadata) != SALTS_OK || !flow_resource_metadata_valid(&metadata) ||
       strcmp(metadata.owner_name, owner_name) != 0) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   for (size_t i = 0; i < vec_size(&flow->resources); ++i) {
     const flow_resource_registration_t *existing =
         (const flow_resource_registration_t *)vec_at_const(&flow->resources, i);
     turbo_flow_resource_metadata_t current = TURBO_FLOW_RESOURCE_METADATA_INIT;
-    if (!existing || existing->ops.metadata(existing->ctx, &current) != TURBO_OK ||
+    if (!existing || existing->ops.metadata(existing->ctx, &current) != SALTS_OK ||
         !flow_resource_metadata_valid(&current)) {
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     }
-    if (strcmp(current.uid, metadata.uid) == 0) return TURBO_EALREADY;
+    if (strcmp(current.uid, metadata.uid) == 0) return SALTS_EALREADY;
   }
   memset(&resource, 0, sizeof(resource));
   resource.owner_name = tstr_dup(owner_name);
-  if (!resource.owner_name) return TURBO_ENOMEM;
+  if (!resource.owner_name) return SALTS_ENOMEM;
   resource.ops = *ops;
   resource.ops.size = sizeof(resource.ops);
   resource.ctx = ctx;
-  if (turbo_flow_stl_error(vec_push(&flow->resources, &resource)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&flow->resources, &resource)) != SALTS_OK) {
     flow_resource_registration_destroy(&resource);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_adapter_schema_copy(flow_adapter_registration_t *adapter,
                                     const turbo_flow_adapter_schema_t *schema) {
   size_t i;
 
-  if (!schema) return TURBO_OK;
+  if (!schema) return SALTS_OK;
   if (schema->kind < TURBO_FLOW_ADAPTER_KIND_CUSTOM ||
       schema->kind > TURBO_FLOW_ADAPTER_KIND_SQLITE || schema->roles == 0 ||
       (schema->roles & ~(uint32_t)(TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK |
@@ -742,17 +742,17 @@ static int flow_adapter_schema_copy(flow_adapter_registration_t *adapter,
       schema->direction < TURBO_FLOW_ADAPTER_INPUT ||
       schema->direction > TURBO_FLOW_ADAPTER_BIDIRECTIONAL ||
       (schema->field_count > 0 && !schema->fields)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
 
   adapter->schema = *schema;
   adapter->schema.binding_name = adapter->name;
   adapter->schema.fields = NULL;
-  if (schema->field_count == 0) return TURBO_OK;
+  if (schema->field_count == 0) return SALTS_OK;
 
   adapter->schema_fields =
       (turbo_flow_option_field_t *)calloc(schema->field_count, sizeof(*adapter->schema_fields));
-  if (!adapter->schema_fields) return TURBO_ENOMEM;
+  if (!adapter->schema_fields) return SALTS_ENOMEM;
   adapter->schema.fields = adapter->schema_fields;
 
   for (i = 0; i < schema->field_count; ++i) {
@@ -774,22 +774,22 @@ static int flow_adapter_schema_copy(flow_adapter_registration_t *adapter,
         (src->enum_value_count > 0 && !src->enum_values) ||
         (src->type == TURBO_FLOW_OPTION_HOST_OBJECT &&
          !(src->flags & TURBO_FLOW_OPTION_NOT_SERIALIZABLE))) {
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
     *dst = *src;
     dst->name = tstr_dup(src->name);
     dst->enum_values = NULL;
-    if (!dst->name) return TURBO_ENOMEM;
+    if (!dst->name) return SALTS_ENOMEM;
     if (src->enum_value_count == 0) continue;
     dst->enum_values = (const char *const *)calloc(src->enum_value_count, sizeof(char *));
-    if (!dst->enum_values) return TURBO_ENOMEM;
+    if (!dst->enum_values) return SALTS_ENOMEM;
     for (j = 0; j < src->enum_value_count; ++j) {
-      if (!src->enum_values[j] || src->enum_values[j][0] == '\0') return TURBO_EINVAL;
+      if (!src->enum_values[j] || src->enum_values[j][0] == '\0') return SALTS_EINVAL;
       ((const char **)dst->enum_values)[j] = tstr_dup(src->enum_values[j]);
-      if (!dst->enum_values[j]) return TURBO_ENOMEM;
+      if (!dst->enum_values[j]) return SALTS_ENOMEM;
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
@@ -798,43 +798,43 @@ int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
   flow_adapter_registration_t adapter;
   int rc;
 
-  if (!flow || !name || name[0] == '\0') return TURBO_EINVAL;
+  if (!flow || !name || name[0] == '\0') return SALTS_EINVAL;
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "cannot register adapter after compile");
   }
   if (flow_find_adapter(flow, name) >= 0) {
-    return flow_set_error_keep_state(flow, TURBO_EALREADY, 0, 0, "duplicate adapter");
+    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "duplicate adapter");
   }
 
   memset(&adapter, 0, sizeof(adapter));
-  if (turbo_flow_stl_error(vec_init_bytes(&adapter.operation_bindings, sizeof(flow_adapter_operation_binding_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+  if (turbo_flow_stl_error(vec_init_bytes(&adapter.operation_bindings, sizeof(flow_adapter_operation_binding_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
   adapter.name = tstr_dup(name);
   if (!adapter.name) {
     vec_destroy(&adapter.operation_bindings);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
   rc = flow_adapter_schema_copy(&adapter, schema);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_adapter_schema_destroy(&adapter);
     tstr_freep(&adapter.name);
     vec_destroy(&adapter.operation_bindings);
     return flow_set_error_keep_state(
-        flow, rc, 0, 0, rc == TURBO_ENOMEM ? "out of memory" : "invalid adapter option schema");
+        flow, rc, 0, 0, rc == SALTS_ENOMEM ? "out of memory" : "invalid adapter option schema");
   }
   adapter.ctx = ctx;
   if (ops) {
     adapter.ops = *ops;
   }
-  if (turbo_flow_stl_error(vec_push(&flow->adapters, &adapter)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&flow->adapters, &adapter)) != SALTS_OK) {
     flow_adapter_schema_destroy(&adapter);
     tstr_freep(&adapter.name);
     vec_destroy(&adapter.operation_bindings);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_register_adapter_with_resources(
@@ -844,21 +844,21 @@ int turbo_flow_register_adapter_with_resources(
   size_t resources_before;
   size_t adapters_before;
   int rc;
-  if (!flow || (resource_count > 0u && !resources)) return TURBO_EINVAL;
+  if (!flow || (resource_count > 0u && !resources)) return SALTS_EINVAL;
   for (size_t i = 0; i < resource_count; ++i) {
     if (resources[i].size < sizeof(resources[i]) || !resources[i].owner_name ||
         resources[i].owner_name[0] == '\0') {
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
   }
   resources_before = vec_size(&flow->resources);
   adapters_before = vec_size(&flow->adapters);
   rc = turbo_flow_register_adapter_ex(flow, name, ops, ctx, schema);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   for (size_t i = 0; i < resource_count; ++i) {
     rc = turbo_flow_register_resource_provider(flow, resources[i].owner_name, &resources[i].ops,
                                                resources[i].ctx);
-    if (rc == TURBO_OK) continue;
+    if (rc == SALTS_OK) continue;
     while (vec_size(&flow->resources) > resources_before) {
       size_t last = vec_size(&flow->resources) - 1u;
       flow_resource_registration_t *resource =
@@ -875,7 +875,7 @@ int turbo_flow_register_adapter_with_resources(
     }
     return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const flow_adapter_operation_binding_t *flow_find_adapter_operation_binding(
@@ -1004,7 +1004,7 @@ int turbo_flow_register_module_adapter(
 
   if (!flow || !registration ||
       registration->size < TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_V1_SIZE) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memcpy(&normalized, registration,
          registration->size < sizeof(normalized) ? registration->size : sizeof(normalized));
@@ -1016,11 +1016,11 @@ int turbo_flow_register_module_adapter(
       registration->operation_count == 0u ||
       (registration->resource_count != 0u && !registration->resources) ||
       (registration->primitive_count != 0u && !registration->primitives)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   module_index = flow_find_module_index(flow, registration->module_name);
   if (module_index < 0) {
-    return flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_ENOENT, 0, 0,
                                      "adapter module is not registered");
   }
   module = (const flow_module_registration_t *)vec_at_const(&flow->modules,
@@ -1034,33 +1034,33 @@ int turbo_flow_register_module_adapter(
     int export_index;
     size_t j;
     if (!registration->operation_names[i] || registration->operation_names[i][0] == '\0') {
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
     for (j = 0; j < i; ++j) {
       if (strcmp(registration->operation_names[i], registration->operation_names[j]) == 0) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
       }
     }
     operation = turbo_flow_find_operation(flow, registration->operation_names[i]);
     export_index = flow_find_operation_export_module(flow, registration->operation_names[i]);
     if (!operation || export_index < 0) {
-      return flow_set_error_keep_state(flow, TURBO_ENOENT, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_ENOENT, 0, 0,
                                        "adapter operation is not exported by a module");
     }
     if ((size_t)export_index != (size_t)module_index || !module ||
         !flow_module_adapter_operation_valid(registration, operation)) {
-      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                        "adapter operation is incompatible with its module owner");
     }
     if (operation->scope.state == TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER &&
         operation->resource_type) {
-      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                        "adapter-owner operation cannot require a resource primitive");
     }
     if (operation->resource_type) {
       if (!resource_name || resource_name[0] == '\0' ||
           !flow_module_exports_primitive(module, operation->resource_type)) {
-        return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+        return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                          "adapter operation resource is not exported by its module");
       }
       primitive = turbo_flow_find_primitive(flow, resource_name);
@@ -1068,11 +1068,11 @@ int turbo_flow_register_module_adapter(
         primitive = flow_module_adapter_pending_primitive(registration, resource_name);
       }
       if (!flow_module_adapter_primitive_compatible(primitive, operation)) {
-        return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+        return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                          "adapter operation resource primitive is incompatible");
       }
     } else if (resource_name) {
-      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                        "adapter-owned operation cannot bind a resource primitive");
     }
   }
@@ -1087,24 +1087,24 @@ int turbo_flow_register_module_adapter(
         primitive->domain < TURBO_FLOW_DOMAIN_DATA ||
         primitive->domain > TURBO_FLOW_DOMAIN_MANAGEMENT ||
         primitive->kind != TURBO_FLOW_PRIMITIVE_RESOURCE) {
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
     for (j = 0; j < i; ++j) {
-      if (strcmp(primitive->name, registration->primitives[j].name) == 0) return TURBO_EINVAL;
+      if (strcmp(primitive->name, registration->primitives[j].name) == 0) return SALTS_EINVAL;
     }
     current = turbo_flow_find_primitive(flow, primitive->name);
     if (current &&
         (current->version != primitive->version || current->domain != primitive->domain ||
          current->kind != primitive->kind || strcmp(current->type_name, primitive->type_name) != 0)) {
-      return flow_set_error_keep_state(flow, TURBO_EPROTO, 0, 0,
+      return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
                                        "adapter primitive contract is incompatible");
     }
   }
 
-  if (turbo_flow_stl_error(vec_init_bytes(&bindings, sizeof(flow_adapter_operation_binding_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK ||
-      turbo_flow_stl_error(vec_reserve(&bindings, registration->operation_count)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(&bindings, sizeof(flow_adapter_operation_binding_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_reserve(&bindings, registration->operation_count)) != SALTS_OK) {
     flow_module_adapter_bindings_destroy(&bindings);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
   for (i = 0; i < registration->operation_count; ++i) {
     flow_adapter_operation_binding_t binding;
@@ -1117,12 +1117,12 @@ int turbo_flow_register_module_adapter(
     if (!binding.operation_name || !binding.module_name ||
         (registration->operation_resource_names && registration->operation_resource_names[i] &&
          !binding.resource_name) ||
-        turbo_flow_stl_error(vec_push(&bindings, &binding)) != TURBO_OK) {
+        turbo_flow_stl_error(vec_push(&bindings, &binding)) != SALTS_OK) {
       tstr_freep(&binding.operation_name);
       tstr_freep(&binding.module_name);
       tstr_freep(&binding.resource_name);
       flow_module_adapter_bindings_destroy(&bindings);
-      return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+      return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
     }
   }
 
@@ -1132,7 +1132,7 @@ int turbo_flow_register_module_adapter(
   for (i = 0; i < registration->primitive_count; ++i) {
     if (turbo_flow_find_primitive(flow, registration->primitives[i].name)) continue;
     rc = turbo_flow_register_primitive(flow, &registration->primitives[i]);
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       flow_module_adapter_registry_rollback(flow, resources_before, primitives_before);
       flow_module_adapter_bindings_destroy(&bindings);
       return rc;
@@ -1144,11 +1144,11 @@ int turbo_flow_register_module_adapter(
         resource->owner_name[0] == '\0') {
       flow_module_adapter_registry_rollback(flow, resources_before, primitives_before);
       flow_module_adapter_bindings_destroy(&bindings);
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
     rc = turbo_flow_register_resource_provider(flow, resource->owner_name, &resource->ops,
                                                resource->ctx);
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       flow_module_adapter_registry_rollback(flow, resources_before, primitives_before);
       flow_module_adapter_bindings_destroy(&bindings);
       return rc;
@@ -1156,7 +1156,7 @@ int turbo_flow_register_module_adapter(
   }
   rc = turbo_flow_register_adapter_ex(flow, registration->adapter_name, registration->ops,
                                       registration->ctx, registration->schema);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_module_adapter_registry_rollback(flow, resources_before, primitives_before);
     flow_module_adapter_bindings_destroy(&bindings);
     return rc;
@@ -1165,7 +1165,7 @@ int turbo_flow_register_module_adapter(
   adapter->consume_batch = registration->consume_batch;
   vec_destroy(&adapter->operation_bindings);
   adapter->operation_bindings = bindings;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const char *turbo_flow_adapter_operation_module(const turbo_flow_t *flow,
@@ -1199,23 +1199,23 @@ const char *turbo_flow_adapter_operation_resource(const turbo_flow_t *flow,
 }
 
 int turbo_flow_set_observer(turbo_flow_t *flow, const turbo_flow_observer_ops_t *ops, void *ctx) {
-  if (!flow) return TURBO_EINVAL;
+  if (!flow) return SALTS_EINVAL;
   if (flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "observer cannot change while flow is started");
   }
   if (ops && (flow->observer_ops.message_complete || flow->observer_ops.stage_complete ||
               flow->observer_ops.adapter_event || flow->observer_ops.flow_destroyed)) {
-    return flow_set_error_keep_state(flow, TURBO_EALREADY, 0, 0, "flow already has an observer");
+    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "flow already has an observer");
   }
   if (ops && (ops->size < sizeof(*ops) || (!ops->message_complete && !ops->stage_complete &&
                                            !ops->adapter_event && !ops->flow_destroyed))) {
-    return flow_set_error_keep_state(flow, TURBO_EINVAL, 0, 0, "observer callbacks are invalid");
+    return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0, "observer callbacks are invalid");
   }
   if (ops) flow->observer_ops = *ops;
   else memset(&flow->observer_ops, 0, sizeof(flow->observer_ops));
   flow->observer_ctx = ops ? ctx : NULL;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_find_event_observer(const turbo_flow_t *flow, const char *name) {
@@ -1264,12 +1264,12 @@ void flow_observer_emit(turbo_flow_t *flow, const turbo_flow_observe_event_t *ev
   mask = TURBO_FLOW_OBSERVE_EVENT_MASK(event->kind);
   view = *event;
   view.size = sizeof(view);
-  if (view.timestamp_ns == 0u) view.timestamp_ns = turbo_hrtime();
+  if (view.timestamp_ns == 0u) view.timestamp_ns = salts_hrtime();
   for (size_t i = 0u; i < vec_size(&flow->event_observers); ++i) {
     const flow_event_observer_registration_t *observer =
         (const flow_event_observer_registration_t *)vec_at_const(&flow->event_observers, i);
     if (!observer || !observer->ops.on_event || (observer->ops.event_mask & mask) == 0u) continue;
-    if (observer->ops.on_event(observer->ctx, &view) != TURBO_OK) {
+    if (observer->ops.on_event(observer->ctx, &view) != SALTS_OK) {
       atomic_fetch_add_explicit(&flow->observer_failures, 1u, memory_order_relaxed);
     }
   }
@@ -1291,43 +1291,43 @@ int turbo_flow_register_observer(turbo_flow_t *flow, const char *name,
   int rc;
   if (!flow || !name || name[0] == '\0' || !ops || ops->size < sizeof(*ops) || !ops->on_event ||
       ops->event_mask == 0u || (ops->event_mask & ~TURBO_FLOW_OBSERVE_ALL_EVENTS) != 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "observer cannot register while flow is started");
   }
   if (flow_find_event_observer(flow, name) >= 0) {
-    return flow_set_error_keep_state(flow, TURBO_EALREADY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0,
                                      "observer name is already registered");
   }
   if (vec_size(&flow->event_observers) >= TURBO_FLOW_MAX_EVENT_OBSERVERS) {
-    return flow_set_error_keep_state(flow, TURBO_ENOSPC, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_ENOSPC, 0, 0,
                                      "observer registration limit reached");
   }
   memset(&observer, 0, sizeof(observer));
   observer.name = tstr_dup(name);
-  if (!observer.name) return TURBO_ENOMEM;
+  if (!observer.name) return SALTS_ENOMEM;
   observer.ops = *ops;
   observer.ctx = ctx;
   rc = turbo_flow_stl_error(vec_push(&flow->event_observers, &observer));
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     tstr_freep(&observer.name);
     return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_unregister_observer(turbo_flow_t *flow, const char *name) {
   int index;
   flow_event_observer_registration_t *observer;
-  if (!flow || !name || name[0] == '\0') return TURBO_EINVAL;
+  if (!flow || !name || name[0] == '\0') return SALTS_EINVAL;
   if (flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0,
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "observer cannot unregister while flow is started");
   }
   index = flow_find_event_observer(flow, name);
-  if (index < 0) return TURBO_ENOENT;
+  if (index < 0) return SALTS_ENOENT;
   observer =
       (flow_event_observer_registration_t *)vec_at(&flow->event_observers, (size_t)index);
   flow_event_observer_destroy(observer);
@@ -1350,17 +1350,17 @@ int turbo_flow_adapter_connection_snapshot_at(const turbo_flow_t *flow, size_t i
                                               turbo_flow_connection_snapshot_t *out) {
   const flow_adapter_registration_t *adapter;
   int rc;
-  if (!flow || !out) return TURBO_EINVAL;
+  if (!flow || !out) return SALTS_EINVAL;
   adapter = (const flow_adapter_registration_t *)vec_at_const(&flow->adapters, index);
-  if (!adapter) return TURBO_EINVAL;
-  if (!adapter->ops.connection_snapshot) return TURBO_ENOTSUP;
+  if (!adapter) return SALTS_EINVAL;
+  if (!adapter->ops.connection_snapshot) return SALTS_ENOTSUP;
   memset(out, 0, sizeof(*out));
   rc = adapter->ops.connection_snapshot(adapter->ctx, out);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   out->adapter_name = adapter->name;
   out->adapter_kind = adapter->schema.kind;
   out->direction = adapter->schema.direction;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 size_t turbo_flow_resource_count(const turbo_flow_t *flow) {
@@ -1380,7 +1380,7 @@ int turbo_flow_resource_snapshot_at(const turbo_flow_t *flow, size_t index,
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
   int rc;
 
-  if (!flow || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
+  if (!flow || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
   for (size_t i = 0; i < vec_size(&flow->resources); ++i) {
     const flow_resource_registration_t *resource =
         (const flow_resource_registration_t *)vec_at_const(&flow->resources, i);
@@ -1391,18 +1391,18 @@ int turbo_flow_resource_snapshot_at(const turbo_flow_t *flow, size_t index,
     }
     *out = (turbo_flow_resource_snapshot_t)TURBO_FLOW_RESOURCE_SNAPSHOT_INIT;
     rc = resource->ops.snapshot(resource->ctx, out);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     rc = resource->ops.metadata(resource->ctx, &metadata);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     if (!flow_resource_metadata_valid(&metadata) || out->size < sizeof(*out) ||
         out->domain != metadata.domain || out->kind != metadata.kind ||
         strcmp(out->uid, metadata.uid) != 0 || strcmp(out->owner_name, metadata.owner_name) != 0 ||
         out->generation != metadata.generation ||
         out->observed_generation != metadata.observed_generation ||
         out->observed_generation > out->generation) {
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     }
-    return TURBO_OK;
+    return SALTS_OK;
   }
 
   if (index < flow_native_resource_count(flow)) {
@@ -1411,7 +1411,7 @@ int turbo_flow_resource_snapshot_at(const turbo_flow_t *flow, size_t index,
   index -= flow_native_resource_count(flow);
 
   rc = turbo_flow_pool_snapshot_at(flow, index, &pool);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   *out = (turbo_flow_resource_snapshot_t)TURBO_FLOW_RESOURCE_SNAPSHOT_INIT;
   out->domain = TURBO_FLOW_DOMAIN_EXECUTION;
   out->kind = TURBO_FLOW_RESOURCE_POOL;
@@ -1420,12 +1420,12 @@ int turbo_flow_resource_snapshot_at(const turbo_flow_t *flow, size_t index,
     int uid_written;
     int owner_written;
     rc = turbo_flow_pool_resource_status_at(flow, index, &status);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     uid_written = snprintf(out->uid, sizeof(out->uid), "%s", status.uid);
     owner_written = snprintf(out->owner_name, sizeof(out->owner_name), "%s", status.owner_name);
     if (uid_written < 0 || (size_t)uid_written >= sizeof(out->uid) || owner_written < 0 ||
         (size_t)owner_written >= sizeof(out->owner_name)) {
-      return TURBO_ENAMETOOLONG;
+      return SALTS_ENAMETOOLONG;
     }
     out->generation = status.generation;
     out->observed_generation = status.observed_generation;
@@ -1438,7 +1438,7 @@ int turbo_flow_resource_snapshot_at(const turbo_flow_t *flow, size_t index,
                         : pool.queue_capacity + pool.parallelism;
   }
   out->saturated = turbo_flow_pool_saturated(&pool);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_resource_metadata_valid(const turbo_flow_resource_metadata_t *metadata) {
@@ -1462,7 +1462,7 @@ size_t turbo_flow_resource_metadata_count(const turbo_flow_t *flow) {
 int turbo_flow_resource_metadata_at(const turbo_flow_t *flow, size_t index,
                                     turbo_flow_resource_metadata_t *out) {
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
-  if (!flow || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
+  if (!flow || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
   for (size_t i = 0; i < vec_size(&flow->resources); ++i) {
     const flow_resource_registration_t *resource =
         (const flow_resource_registration_t *)vec_at_const(&flow->resources, i);
@@ -1471,15 +1471,15 @@ int turbo_flow_resource_metadata_at(const turbo_flow_t *flow, size_t index,
       --index;
       continue;
     }
-    if (!resource) return TURBO_EPROTO;
+    if (!resource) return SALTS_EPROTO;
     rc = resource->ops.metadata(resource->ctx, &metadata);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     if (!flow_resource_metadata_valid(&metadata) ||
         strcmp(metadata.owner_name, resource->owner_name) != 0) {
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     }
     memcpy(out, &metadata, sizeof(metadata));
-    return TURBO_OK;
+    return SALTS_OK;
   }
   if (index < flow_native_resource_count(flow)) {
     return flow_native_resource_metadata_at(flow, index, out);
@@ -1489,17 +1489,17 @@ int turbo_flow_resource_metadata_at(const turbo_flow_t *flow, size_t index,
     turbo_flow_pool_resource_status_t status = TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
     int rc = turbo_flow_pool_resource_status_at(flow, index, &status);
     int written;
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     metadata.domain = TURBO_FLOW_DOMAIN_EXECUTION;
     metadata.kind = TURBO_FLOW_RESOURCE_POOL;
     metadata.generation = status.generation;
     metadata.observed_generation = status.observed_generation;
     written = snprintf(metadata.uid, sizeof(metadata.uid), "%s", status.uid);
-    if (written < 0 || (size_t)written >= sizeof(metadata.uid)) return TURBO_ENAMETOOLONG;
+    if (written < 0 || (size_t)written >= sizeof(metadata.uid)) return SALTS_ENAMETOOLONG;
     written = snprintf(metadata.owner_name, sizeof(metadata.owner_name), "%s", status.owner_name);
-    if (written < 0 || (size_t)written >= sizeof(metadata.owner_name)) return TURBO_ENAMETOOLONG;
+    if (written < 0 || (size_t)written >= sizeof(metadata.owner_name)) return SALTS_ENAMETOOLONG;
     memcpy(out, &metadata, sizeof(metadata));
-    return TURBO_OK;
+    return SALTS_OK;
   }
 }
 
@@ -1512,27 +1512,27 @@ int turbo_flow_adapter_command(turbo_flow_t *flow, const char *adapter_name,
   if (!flow || !adapter_name || adapter_name[0] == '\0' || !command ||
       command->size < sizeof(*command) || command->kind < TURBO_FLOW_ADAPTER_QUIESCE ||
       command->kind > TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
-  turbo_mutex_lock(&flow->runtime_mutex);
+  salts_mutex_lock(&flow->runtime_mutex);
   if (flow->state != TURBO_FLOW_STATE_STARTED || flow->admission_state == FLOW_ADMISSION_STOPPING ||
       flow->admission_state == FLOW_ADMISSION_RESIZING) {
-    rc = flow->state == TURBO_FLOW_STATE_STARTED ? TURBO_EBUSY : TURBO_EINVAL;
-    turbo_mutex_unlock(&flow->runtime_mutex);
+    rc = flow->state == TURBO_FLOW_STATE_STARTED ? SALTS_EBUSY : SALTS_EINVAL;
+    salts_mutex_unlock(&flow->runtime_mutex);
     return rc;
   }
-  turbo_mutex_unlock(&flow->runtime_mutex);
+  salts_mutex_unlock(&flow->runtime_mutex);
 
   index = flow_find_adapter(flow, adapter_name);
-  if (index < 0) return TURBO_ENOENT;
+  if (index < 0) return SALTS_ENOENT;
   adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, (size_t)index);
-  if (!adapter || !adapter->ops.command) return TURBO_ENOTSUP;
+  if (!adapter || !adapter->ops.command) return SALTS_ENOTSUP;
   rc = adapter->ops.command(adapter->ctx, flow, command);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     return flow_set_error_keep_state(flow, rc, 0, 0, "adapter command failed");
   }
   flow_clear_error(flow);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const turbo_flow_adapter_schema_t *turbo_flow_adapter_schema_at(const turbo_flow_t *flow,
@@ -1557,8 +1557,8 @@ turbo_flow_state_t turbo_flow_state(const turbo_flow_t *flow) {
 }
 
 int turbo_flow_runtime_snapshot(const turbo_flow_t *flow, turbo_flow_runtime_snapshot_t *out) {
-  if (!flow || !out || !flow->runtime_sync_initialized) return TURBO_EINVAL;
-  turbo_mutex_lock((turbo_mutex_t *)&flow->runtime_mutex);
+  if (!flow || !out || !flow->runtime_sync_initialized) return SALTS_EINVAL;
+  salts_mutex_lock((salts_mutex_t *)&flow->runtime_mutex);
   memset(out, 0, sizeof(*out));
   out->state = flow->state;
   out->accepting_publishes = flow->admission_state == FLOW_ADMISSION_OPEN;
@@ -1567,8 +1567,8 @@ int turbo_flow_runtime_snapshot(const turbo_flow_t *flow, turbo_flow_runtime_sna
   out->edge_count = vec_size(&flow->edges);
   out->adapter_count = vec_size(&flow->adapters);
   out->pool_count = vec_size(&flow->pool_records);
-  turbo_mutex_unlock((turbo_mutex_t *)&flow->runtime_mutex);
-  return TURBO_OK;
+  salts_mutex_unlock((salts_mutex_t *)&flow->runtime_mutex);
+  return SALTS_OK;
 }
 
 const turbo_flow_error_t *turbo_flow_last_error(const turbo_flow_t *flow) {
@@ -1584,7 +1584,7 @@ size_t turbo_flow_stage_count(const turbo_flow_t *flow) {
 }
 
 const turbo_flow_stage_plan_t *turbo_flow_stage_at(const turbo_flow_t *flow, size_t index) {
-  static TURBO_THREAD_LOCAL turbo_flow_stage_plan_t view;
+  static SALTS_THREAD_LOCAL turbo_flow_stage_plan_t view;
   const flow_stage_plan_impl_t *stage;
 
   if (!flow) return NULL;
@@ -1624,7 +1624,7 @@ size_t turbo_flow_edge_count(const turbo_flow_t *flow) {
 }
 
 const turbo_flow_edge_plan_t *turbo_flow_edge_at(const turbo_flow_t *flow, size_t index) {
-  static TURBO_THREAD_LOCAL turbo_flow_edge_plan_t view;
+  static SALTS_THREAD_LOCAL turbo_flow_edge_plan_t view;
   const flow_edge_plan_impl_t *edge;
 
   if (!flow) return NULL;

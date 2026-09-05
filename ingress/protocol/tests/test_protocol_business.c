@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 #include "turbo_flow_protocol_business.h"
 #include "turbo_flow_protocol_business_plugin.h"
 
@@ -27,7 +27,7 @@ static int business_probe_prepare(void *ctx,
                                   const turbo_flow_protocol_business_command_request_t *request,
                                   turbo_flow_protocol_business_command_output_t *output) {
   business_probe_t *probe = (business_probe_t *)ctx;
-  if (request->content.data_size > output->payload_capacity) return TURBO_EMSGSIZE;
+  if (request->content.data_size > output->payload_capacity) return SALTS_EMSGSIZE;
   probe->commands++;
   memcpy(probe->last_action, request->action, strlen(request->action) + 1u);
   memcpy(output->device_id, request->device_id, strlen(request->device_id) + 1u);
@@ -40,7 +40,7 @@ static int business_probe_prepare(void *ctx,
   if (request->content.data_size > 0u)
     memcpy(output->payload, request->content.data, request->content.data_size);
   output->payload_size = request->content.data_size;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int business_probe_open(void *ctx, const turbo_flow_protocol_business_open_request_t *request,
@@ -56,12 +56,12 @@ static int business_probe_open(void *ctx, const turbo_flow_protocol_business_ope
                                           TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT |
                                               TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND,
                                           &ops, probe, &business);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   probe->opens++;
   service->protocol = request->protocol;
   service->instance = business;
   service->owner = business;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void business_probe_close(void *ctx, turbo_flow_protocol_business_service_t *service) {
@@ -100,23 +100,23 @@ spec("protocol business service") {
     request.protocol = TURBO_FLOW_PROTOCOL_OCPP;
     request.profile = "ocpp-2.0.1-core";
     request.max_payload_size = 128u;
-    check_equal(turbo_flow_protocol_business_registry_create(1u, &registry), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_registry_register(registry, &api), TURBO_OK);
-    check_equal(turbo_flow_protocol_business_registry_register(registry, &api), TURBO_EALREADY);
+    check_equal(turbo_flow_protocol_business_registry_create(1u, &registry), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_registry_register(registry, &api), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_registry_register(registry, &api), SALTS_EALREADY);
     check_equal(turbo_flow_protocol_business_owner_create_registered(registry, "probe-biz",
                                                                      &request, &owner),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(turbo_flow_protocol_business_owner_instance(owner, TURBO_FLOW_PROTOCOL_OCPP,
                                                             &business),
-                 TURBO_OK);
-    check_equal(turbo_flow_protocol_business_get_info(business, &info), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_protocol_business_get_info(business, &info), SALTS_OK);
     check_equal(info.business, "probe-biz");
     check_equal(info.profile, "ocpp-2.0.1-core");
-    check_equal(turbo_flow_protocol_business_registry_destroy(registry), TURBO_EBUSY);
+    check_equal(turbo_flow_protocol_business_registry_destroy(registry), SALTS_EBUSY);
     turbo_flow_protocol_business_owner_destroy(owner);
     check_equal(probe.opens, 1u);
     check_equal(probe.closes, 1u);
-    check_equal(turbo_flow_protocol_business_registry_destroy(registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_business_registry_destroy(registry), SALTS_OK);
   }
 
   it("delivers only a borrowed post-commit schema identity") {
@@ -129,7 +129,7 @@ spec("protocol business service") {
     check_equal(turbo_flow_protocol_business_create(
                      "event-probe", TURBO_FLOW_PROTOCOL_OCPP, "ocpp-2.0.1-core", 128u,
                      TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT, &ops, &probe, &business),
-                 TURBO_OK);
+                 SALTS_OK);
     event.delivery_id = 41u;
     event.session_id = 7u;
     event.session_generation = 2u;
@@ -144,15 +144,15 @@ spec("protocol business service") {
     event.content.media_type = "application/json";
     event.content.schema_id = "ocpp-2.0.1";
     event.content.type_name = "HeartbeatRequest";
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_OK);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_OK);
     check_equal(probe.events, 1u);
     check_equal(probe.last_delivery_id, 41u);
     event.content.type_name = NULL;
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EINVAL);
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EINVAL);
     check_equal(probe.events, 1u);
     event.content.type_name = "HeartbeatRequest";
-    probe.event_status = TURBO_EBUSY;
-    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), TURBO_EBUSY);
+    probe.event_status = SALTS_EBUSY;
+    check_equal(turbo_flow_protocol_business_consume_committed(business, &event), SALTS_EBUSY);
     check_equal(probe.events, 2u);
     turbo_flow_protocol_business_destroy(business);
   }
@@ -172,7 +172,7 @@ spec("protocol business service") {
     check_equal(turbo_flow_protocol_business_create(
                      "command-probe", TURBO_FLOW_PROTOCOL_JTT_808, "jtt808-2019", 64u,
                      TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND, &ops, &probe, &business),
-                 TURBO_OK);
+                 SALTS_OK);
     request.command_id = 9u;
     request.protocol = TURBO_FLOW_PROTOCOL_JTT_808;
     request.tenant = "fleet-a";
@@ -187,13 +187,13 @@ spec("protocol business service") {
     output.payload = output_payload;
     output.payload_capacity = sizeof(output_payload);
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(probe.commands, 1u);
     check_equal(probe.last_action, "set-terminal-parameters");
     check_equal(output.device_id, "013800138000");
     check_equal(output.operation, "write");
     check_equal(output.payload_size, sizeof(payload));
-    check_equal(turbo_flow_protocol_business_command_view(&output, &command), TURBO_OK);
+    check_equal(turbo_flow_protocol_business_command_view(&output, &command), SALTS_OK);
     check_equal(command.device_id, "013800138000");
     check_equal(command.operation, "write");
     check_equal(command.resource, "0x8103");
@@ -203,7 +203,7 @@ spec("protocol business service") {
     check_equal(command.payload[2], 0x03u);
     output.payload_capacity = sizeof(payload) - 1u;
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 TURBO_EMSGSIZE);
+                 SALTS_EMSGSIZE);
     check_equal(output.payload_size, 0u);
     turbo_flow_protocol_business_destroy(business);
   }

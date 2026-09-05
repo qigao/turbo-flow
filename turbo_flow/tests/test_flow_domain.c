@@ -71,14 +71,14 @@ typedef struct domain_batch_prepare_probe_s {
 static int domain_noop_stage(turbo_flow_msg_t *message, void *ctx) {
   (void)message;
   (void)ctx;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int domain_count_stage(turbo_flow_msg_t *message, void *ctx) {
   int *called = (int *)ctx;
   (void)message;
   *called += 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int domain_emitting_stage(const turbo_flow_msg_t *input, turbo_flow_emitter_t *emitter,
@@ -92,7 +92,7 @@ static int domain_emitting_stage(const turbo_flow_msg_t *input, turbo_flow_emitt
     int rc;
     if (probe->attach_transport_context == 2) {
       rc = turbo_flow_msg_clone(&output, input);
-      if (rc != TURBO_OK) return rc;
+      if (rc != SALTS_OK) return rc;
     } else {
       turbo_flow_msg_init(&output);
     }
@@ -101,7 +101,7 @@ static int domain_emitting_stage(const turbo_flow_msg_t *input, turbo_flow_emitt
     if (probe->attach_transport_context == 1) output.transport_context = &transport_marker;
     rc = turbo_flow_emitter_emit_move(emitter, &output);
     turbo_flow_msg_cleanup(&output);
-    if (rc != TURBO_OK && rc != TURBO_ENOSPC) return rc;
+    if (rc != SALTS_OK && rc != SALTS_ENOSPC) return rc;
   }
   return probe->callback_status;
 }
@@ -109,19 +109,19 @@ static int domain_emitting_stage(const turbo_flow_msg_t *input, turbo_flow_emitt
 static int domain_emission_sink(turbo_flow_msg_t *message, void *ctx) {
   emission_probe_t *probe = (emission_probe_t *)ctx;
   if (probe->sink_count >= sizeof(probe->sink_ids) / sizeof(probe->sink_ids[0])) {
-    return TURBO_ENOSPC;
+    return SALTS_ENOSPC;
   }
   probe->sink_ids[probe->sink_count++] = message->id;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int domain_slow_inline_stage(turbo_flow_msg_t *message, void *ctx) {
   deadline_probe_t *probe = (deadline_probe_t *)ctx;
   (void)message;
   probe->called += 1;
-  turbo_sleep_ms(15u);
-  probe->terminal_status = TURBO_OK;
-  return TURBO_OK;
+  salts_sleep_ms(15u);
+  probe->terminal_status = SALTS_OK;
+  return SALTS_OK;
 }
 
 static int domain_deadline_yield_stage(turbo_flow_msg_t *message, void *ctx) {
@@ -130,7 +130,7 @@ static int domain_deadline_yield_stage(turbo_flow_msg_t *message, void *ctx) {
   probe->called += 1;
   for (;;) {
     int status = turbo_flow_execution_yield();
-    if (status != TURBO_OK) {
+    if (status != SALTS_OK) {
       probe->terminal_status = status;
       return status;
     }
@@ -141,8 +141,8 @@ static int domain_blocking_stage(turbo_flow_msg_t *message, void *ctx) {
   admission_probe_t *probe = (admission_probe_t *)ctx;
   (void)message;
   atomic_fetch_add_explicit(&probe->entered, 1, memory_order_acq_rel);
-  while (!atomic_load_explicit(&probe->release, memory_order_acquire)) turbo_thread_yield();
-  return TURBO_OK;
+  while (!atomic_load_explicit(&probe->release, memory_order_acquire)) salts_thread_yield();
+  return SALTS_OK;
 }
 
 static void domain_publish_thread(void *ctx) {
@@ -162,11 +162,11 @@ static int domain_settlement_stage(turbo_flow_msg_t *message, void *ctx) {
   probe->stage_called += 1;
   result.action = probe->report_action;
   result.status = probe->report_status;
-  if (turbo_flow_settlement_report(&result) != TURBO_OK) return TURBO_EPROTO;
-  if (probe->report_twice && turbo_flow_settlement_report(&result) != TURBO_EALREADY) {
-    return TURBO_EPROTO;
+  if (turbo_flow_settlement_report(&result) != SALTS_OK) return SALTS_EPROTO;
+  if (probe->report_twice && turbo_flow_settlement_report(&result) != SALTS_EALREADY) {
+    return SALTS_EPROTO;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int domain_settlement_consume(void *ctx, turbo_flow_t *flow,
@@ -184,7 +184,7 @@ static int domain_settlement_apply(void *ctx, turbo_flow_t *flow,
   settlement_probe_t *probe = (settlement_probe_t *)ctx;
   (void)flow;
   (void)message;
-  if (!stage || !result) return TURBO_EINVAL;
+  if (!stage || !result) return SALTS_EINVAL;
   probe->owner_called += 1;
   probe->observed = *result;
   return probe->owner_status;
@@ -197,7 +197,7 @@ static int domain_noop_retry(void *ctx, turbo_flow_t *flow, const turbo_flow_sta
   (void)stage;
   (void)message;
   (void)policy;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int domain_noop_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
@@ -206,7 +206,7 @@ static int domain_noop_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_s
   (void)flow;
   (void)stage;
   (void)message;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int domain_batch_consume(void *ctx, turbo_flow_t *flow,
@@ -215,12 +215,12 @@ static int domain_batch_consume(void *ctx, turbo_flow_t *flow,
   domain_batch_probe_t *probe = (domain_batch_probe_t *)ctx;
   (void)flow;
   (void)stage;
-  if (!probe || !message) return TURBO_EINVAL;
+  if (!probe || !message) return SALTS_EINVAL;
   probe->scalar_calls += 1u;
   if (probe->observed_count < sizeof(probe->observed_ids) / sizeof(probe->observed_ids[0])) {
     probe->observed_ids[probe->observed_count++] = message->id;
   }
-  return message->id == probe->fail_id ? probe->fail_status : TURBO_OK;
+  return message->id == probe->fail_id ? probe->fail_status : SALTS_OK;
 }
 
 static int domain_batch_consume_native(void *ctx, turbo_flow_t *flow,
@@ -229,10 +229,10 @@ static int domain_batch_consume_native(void *ctx, turbo_flow_t *flow,
                                        size_t *consumed) {
   domain_batch_probe_t *probe = (domain_batch_probe_t *)ctx;
   size_t limit;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
   (void)flow;
   (void)stage;
-  if (!probe || !batch || !batch->next || !consumed) return TURBO_EINVAL;
+  if (!probe || !batch || !batch->next || !consumed) return SALTS_EINVAL;
   *consumed = 0u;
   probe->batch_calls += 1u;
   if (probe->mode == DOMAIN_BATCH_PROBE_OUT_OF_ORDER) {
@@ -251,7 +251,7 @@ static int domain_batch_consume_native(void *ctx, turbo_flow_t *flow,
     turbo_flow_msg_init(&message);
     probe->next_calls += 1u;
     rc = batch->next(batch->ctx, index, &message);
-    if (rc == TURBO_OK) {
+    if (rc == SALTS_OK) {
       if (probe->observed_count <
           sizeof(probe->observed_ids) / sizeof(probe->observed_ids[0])) {
         probe->observed_ids[probe->observed_count++] = message.id;
@@ -263,18 +263,18 @@ static int domain_batch_consume_native(void *ctx, turbo_flow_t *flow,
       }
     }
     turbo_flow_msg_cleanup(&message);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int domain_batch_prepare(void *ctx, size_t index, turbo_flow_msg_t *message) {
   domain_batch_prepare_probe_t *probe = (domain_batch_prepare_probe_t *)ctx;
-  if (!probe || !message) return TURBO_EINVAL;
+  if (!probe || !message) return SALTS_EINVAL;
   probe->calls += 1u;
   if (index == probe->fail_index) return probe->fail_status;
   message->id = index + 1u;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void domain_batch_message_observed(void *ctx, const char *source_name,
@@ -292,7 +292,7 @@ static int domain_noop_adapter_start(void *ctx, turbo_flow_t *flow,
   (void)ctx;
   (void)flow;
   (void)stage;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void domain_count_shutdown(void *ctx) {
@@ -382,11 +382,11 @@ static int register_domain_batch_graph(turbo_flow_t *flow, domain_batch_probe_t 
   adapter.consume_batch = domain_batch_consume_native;
 
   rc = turbo_flow_register_module_contract(flow, &module, &operation, 1u);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_module_adapter(flow, &adapter);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_parse_string(flow, dsl, strlen(dsl));
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   return turbo_flow_compile(flow);
 }
 
@@ -424,13 +424,13 @@ static int register_emitting_graph(turbo_flow_t *flow, emission_probe_t *probe,
   provider.ctx = probe;
   provider.max_outputs = max_outputs;
   rc = turbo_flow_register_operation(flow, &input);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_operation(flow, &expand);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_emitting_operation_provider(flow, &provider);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_stage_ex(flow, "sink", domain_emission_sink, probe, NULL);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   return turbo_flow_parse_string(flow, dsl, strlen(dsl));
 }
 
@@ -451,8 +451,8 @@ suite("Turbo Flow Domain Contracts") {
 
       require_resource(&operation, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, "Queue");
       check_not_null(flow);
-      check_equal(turbo_flow_register_primitive(flow, &primitive), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_OK);
+      check_equal(turbo_flow_register_primitive(flow, &primitive), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
       primitive_name[0] = 'x';
       operation_name[0] = 'x';
 
@@ -474,7 +474,7 @@ suite("Turbo Flow Domain Contracts") {
           TURBO_FLOW_DOMAIN_DATA, "Message", TURBO_FLOW_OPERATION_STAGE);
       operation.size = offsetof(turbo_flow_operation_descriptor_t, runtime);
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_EINVAL);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_EINVAL);
       turbo_flow_destroy(flow);
     }
 
@@ -488,11 +488,11 @@ suite("Turbo Flow Domain Contracts") {
       operation.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
       operation.runtime.capacity = 3u;
       operation.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_EINVAL);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_EINVAL);
 
       operation.runtime.capacity = 64u;
       operation.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_NONE;
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_EINVAL);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_EINVAL);
       turbo_flow_destroy(flow);
     }
 
@@ -503,7 +503,7 @@ suite("Turbo Flow Domain Contracts") {
           "PublishFrame", TURBO_FLOW_DOMAIN_DATA, "Message", TURBO_FLOW_OPERATION_STAGE);
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_EINVAL);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_EINVAL);
       turbo_flow_destroy(flow);
     }
 
@@ -517,7 +517,7 @@ suite("Turbo Flow Domain Contracts") {
       operation.scope.state = TURBO_FLOW_STATE_SCOPE_RESOURCE_OWNER;
       operation.scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_EINVAL);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_EINVAL);
       turbo_flow_destroy(flow);
     }
 
@@ -540,12 +540,12 @@ suite("Turbo Flow Domain Contracts") {
       require_resource(&invalid, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, "Queue");
       invalid.resource_max_version = 2u;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &legacy), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &legacy), SALTS_OK);
       stored = turbo_flow_find_operation(flow, "queue.legacy");
       check_not_null(stored);
       check_equal(stored->resource_min_version, 0u);
       check_equal(stored->resource_max_version, 0u);
-      check_equal(turbo_flow_register_operation(flow, &invalid), TURBO_EINVAL);
+      check_equal(turbo_flow_register_operation(flow, &invalid), SALTS_EINVAL);
       turbo_flow_destroy(flow);
     }
 
@@ -558,12 +558,12 @@ suite("Turbo Flow Domain Contracts") {
           TURBO_FLOW_DOMAIN_DATA, "Message", TURBO_FLOW_OPERATION_STAGE);
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_primitive(flow, &primitive), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_OK);
-      check_equal(turbo_flow_reset(flow, 1), TURBO_OK);
+      check_equal(turbo_flow_register_primitive(flow, &primitive), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
+      check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
       check_equal(turbo_flow_primitive_count(flow), 1);
       check_equal(turbo_flow_operation_count(flow), 1);
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_equal(turbo_flow_primitive_count(flow), 0);
       check_equal(turbo_flow_operation_count(flow), 0);
       check_equal(turbo_flow_module_count(flow), 0);
@@ -588,9 +588,9 @@ suite("Turbo Flow Domain Contracts") {
       native_module.name = native_name;
       native_module.version = 2u;
       native_module.capability_flags = TURBO_FLOW_MODULE_NATIVE_API;
-      check_equal(turbo_flow_register_module(flow, &native_module), TURBO_OK);
+      check_equal(turbo_flow_register_module(flow, &native_module), SALTS_OK);
 
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
       requirement.size = sizeof(requirement);
       requirement.module_name = native_name;
       requirement.min_version = 3u;
@@ -603,10 +603,10 @@ suite("Turbo Flow Domain Contracts") {
       graph_module.operation_count = 1u;
       graph_module.requirements = &requirement;
       graph_module.requirement_count = 1u;
-      check_equal(turbo_flow_register_module(flow, &graph_module), TURBO_EPROTO);
+      check_equal(turbo_flow_register_module(flow, &graph_module), SALTS_EPROTO);
 
       requirement.min_version = 2u;
-      check_equal(turbo_flow_register_module(flow, &graph_module), TURBO_OK);
+      check_equal(turbo_flow_register_module(flow, &graph_module), SALTS_OK);
       native_name[0] = 'x';
       operation_name[0] = 'x';
       stored = turbo_flow_find_module(flow, "data.validation");
@@ -614,9 +614,9 @@ suite("Turbo Flow Domain Contracts") {
       check_equal(stored->operation_names[0], "data.validate");
       check_equal(stored->requirements[0].module_name, "io.native");
       check_equal(turbo_flow_module_count(flow), 2u);
-      check_equal(turbo_flow_reset(flow, 1), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
       check_equal(turbo_flow_module_count(flow), 2u);
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_equal(turbo_flow_module_count(flow), 0u);
       turbo_flow_destroy(flow);
     }
@@ -636,13 +636,13 @@ suite("Turbo Flow Domain Contracts") {
       module.operation_names = operation_names;
       module.operation_count = 1u;
       check_not_null(flow);
-      check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u), TURBO_OK);
-      check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u), TURBO_OK);
+      check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u), SALTS_OK);
+      check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u), SALTS_OK);
       check_equal(turbo_flow_operation_count(flow), 1u);
       check_equal(turbo_flow_module_count(flow), 1u);
       operation.version = 2u;
       check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u),
-                   TURBO_EPROTO);
+                   SALTS_EPROTO);
       turbo_flow_destroy(flow);
     }
 
@@ -676,14 +676,14 @@ suite("Turbo Flow Domain Contracts") {
       provider.fn = domain_noop_stage;
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_primitive(flow, &primitive), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_OK);
-      check_equal(turbo_flow_register_module(flow, &module), TURBO_OK);
-      check_equal(turbo_flow_register_operation_provider(flow, &provider), TURBO_OK);
+      check_equal(turbo_flow_register_primitive(flow, &primitive), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
+      check_equal(turbo_flow_register_module(flow, &module), SALTS_OK);
+      check_equal(turbo_flow_register_operation_provider(flow, &provider), SALTS_OK);
       check_null(turbo_flow_operation_provider_module(flow, "queue.enqueue", "queue.jobs"));
       check_equal(turbo_flow_bind_operation_provider_module(
                        flow, "queue.core", "queue.enqueue", "queue.jobs"),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_operation_provider_module(flow, "queue.enqueue", "queue.jobs"),
                    "queue.core");
       turbo_flow_destroy(flow);
@@ -727,23 +727,23 @@ suite("Turbo Flow Domain Contracts") {
       adapter.operation_count = 1u;
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_OK);
-      check_equal(turbo_flow_register_module(flow, &module), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
+      check_equal(turbo_flow_register_module(flow, &module), SALTS_OK);
       schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
-      check_equal(turbo_flow_register_module_adapter(flow, &adapter), TURBO_EPROTO);
+      check_equal(turbo_flow_register_module_adapter(flow, &adapter), SALTS_EPROTO);
       check_equal(turbo_flow_adapter_count(flow), 0u);
       check_equal(shutdown_count, 0);
       schema.roles = TURBO_FLOW_ADAPTER_TRANSFORM;
-      check_equal(turbo_flow_register_module_adapter(flow, &adapter), TURBO_OK);
+      check_equal(turbo_flow_register_module_adapter(flow, &adapter), SALTS_OK);
       check_equal(turbo_flow_adapter_operation_module(
                        flow, "native.instance", "native.transform"),
                    "native.protocol");
-      check_equal(turbo_flow_reset(flow, 1), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
       check_equal(turbo_flow_adapter_operation_module(
                        flow, "native.instance", "native.transform"),
                    "native.protocol");
       check_equal(shutdown_count, 0);
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_null(turbo_flow_adapter_operation_module(
           flow, "native.instance", "native.transform"));
       check_equal(shutdown_count, 1);
@@ -754,22 +754,22 @@ suite("Turbo Flow Domain Contracts") {
   group("Native adapter batches") {
     it("uses one native callback, preserves first-error counts, and rejects incomplete success") {
       domain_batch_probe_t probe = {0};
-      domain_batch_prepare_probe_t prepare_probe = {0u, SIZE_MAX, TURBO_EIO};
+      domain_batch_prepare_probe_t prepare_probe = {0u, SIZE_MAX, SALTS_EIO};
       turbo_flow_publish_batch_config_t config = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
       turbo_flow_t *flow = turbo_flow_create();
       size_t published = SIZE_MAX;
 
       check_not_null(flow);
-      probe.fail_status = TURBO_EIO;
+      probe.fail_status = SALTS_EIO;
       config.message_count = 4u;
       config.prepare = domain_batch_prepare;
       config.ctx = &prepare_probe;
       check_equal(register_domain_batch_graph(flow, &probe, sizeof(
                                                         turbo_flow_module_adapter_registration_t)),
-                   TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
 
-      check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_OK);
+      check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), SALTS_OK);
       check_equal(published, 4u);
       check_equal(probe.batch_calls, 1u);
       check_equal(probe.scalar_calls, 0u);
@@ -781,7 +781,7 @@ suite("Turbo Flow Domain Contracts") {
 
       probe.observed_count = 0u;
       probe.fail_id = 3u;
-      check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_EIO);
+      check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), SALTS_EIO);
       check_equal(published, 2u);
       check_equal(probe.batch_calls, 2u);
       check_equal(probe.scalar_calls, 0u);
@@ -791,7 +791,7 @@ suite("Turbo Flow Domain Contracts") {
       probe.observed_count = 0u;
       probe.fail_id = 0u;
       prepare_probe.fail_index = 2u;
-      check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_EIO);
+      check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), SALTS_EIO);
       check_equal(published, 2u);
       check_equal(probe.batch_calls, 3u);
       check_equal(probe.scalar_calls, 0u);
@@ -800,23 +800,23 @@ suite("Turbo Flow Domain Contracts") {
 
       probe.mode = DOMAIN_BATCH_PROBE_INCOMPLETE_SUCCESS;
       prepare_probe.fail_index = SIZE_MAX;
-      check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_EPROTO);
+      check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), SALTS_EPROTO);
       check_equal(published, 2u);
-      check_equal(turbo_flow_last_error(flow)->code, TURBO_EPROTO);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_EPROTO);
 
       probe.mode = DOMAIN_BATCH_PROBE_OUT_OF_ORDER;
-      check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_EPROTO);
+      check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), SALTS_EPROTO);
       check_equal(published, 0u);
-      check_equal(turbo_flow_last_error(flow)->code, TURBO_EPROTO);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_EPROTO);
 
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
     it("falls back to scalar delivery for observers and older adapter registrations") {
       for (size_t variant = 0u; variant < 2u; ++variant) {
         domain_batch_probe_t probe = {0};
-        domain_batch_prepare_probe_t prepare_probe = {0u, SIZE_MAX, TURBO_EIO};
+        domain_batch_prepare_probe_t prepare_probe = {0u, SIZE_MAX, SALTS_EIO};
         turbo_flow_publish_batch_config_t config = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
         turbo_flow_observer_ops_t observer = {0};
         turbo_flow_t *flow = turbo_flow_create();
@@ -826,23 +826,23 @@ suite("Turbo Flow Domain Contracts") {
         size_t published = SIZE_MAX;
 
         check_not_null(flow);
-        probe.fail_status = TURBO_EIO;
+        probe.fail_status = SALTS_EIO;
         config.message_count = 4u;
         config.prepare = domain_batch_prepare;
         config.ctx = &prepare_probe;
-        check_equal(register_domain_batch_graph(flow, &probe, registration_size), TURBO_OK);
+        check_equal(register_domain_batch_graph(flow, &probe, registration_size), SALTS_OK);
         if (variant == 0u) {
           observer.size = sizeof(observer);
           observer.message_complete = domain_batch_message_observed;
-          check_equal(turbo_flow_set_observer(flow, &observer, NULL), TURBO_OK);
+          check_equal(turbo_flow_set_observer(flow, &observer, NULL), SALTS_OK);
         }
-        check_equal(turbo_flow_start(flow), TURBO_OK);
-        check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), TURBO_OK);
+        check_equal(turbo_flow_start(flow), SALTS_OK);
+        check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), SALTS_OK);
         check_equal(published, 4u);
         check_equal(probe.batch_calls, 0u);
         check_equal(probe.scalar_calls, 4u);
         check_equal(probe.observed_count, 4u);
-        check_equal(turbo_flow_stop(flow), TURBO_OK);
+        check_equal(turbo_flow_stop(flow), SALTS_OK);
         turbo_flow_destroy(flow);
       }
     }
@@ -873,11 +873,11 @@ suite("Turbo Flow Domain Contracts") {
       provider.operation_name = "data.validate";
       provider.fn = domain_noop_stage;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_OK);
-      check_equal(turbo_flow_register_module(flow, &module), TURBO_OK);
-      check_equal(turbo_flow_register_operation_provider(flow, &provider), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EPROTO);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
+      check_equal(turbo_flow_register_module(flow, &module), SALTS_OK);
+      check_equal(turbo_flow_register_operation_provider(flow, &provider), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EPROTO);
       check_contains(turbo_flow_last_error(flow)->message, "not bound to its module owner");
       turbo_flow_destroy(flow);
     }
@@ -915,13 +915,13 @@ suite("Turbo Flow Domain Contracts") {
       schema.direction = TURBO_FLOW_ADAPTER_BIDIRECTIONAL;
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_OK);
-      check_equal(turbo_flow_register_module(flow, &module), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
+      check_equal(turbo_flow_register_module(flow, &module), SALTS_OK);
       check_equal(turbo_flow_register_adapter_ex(
                        flow, "native.instance", &ops, NULL, &schema),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EPROTO);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EPROTO);
       check_contains(turbo_flow_last_error(flow)->message,
                          "not bound to its module owner");
       turbo_flow_destroy(flow);
@@ -980,11 +980,11 @@ suite("Turbo Flow Domain Contracts") {
       adapter.primitive_count = 1u;
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u), TURBO_OK);
-      check_equal(turbo_flow_register_module_adapter(flow, &adapter), TURBO_OK);
-      check_equal(turbo_flow_register_primitive(flow, &primitives[1]), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EPROTO);
+      check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u), SALTS_OK);
+      check_equal(turbo_flow_register_module_adapter(flow, &adapter), SALTS_OK);
+      check_equal(turbo_flow_register_primitive(flow, &primitives[1]), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EPROTO);
       check_contains(turbo_flow_last_error(flow)->message, "another resource primitive");
       turbo_flow_destroy(flow);
     }
@@ -1012,14 +1012,14 @@ suite("Turbo Flow Domain Contracts") {
       input.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
       input.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
       check_not_null(flow);
-      check_equal(turbo_flow_register_adapter(flow, "mqtt.server", NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_register_primitive(flow, &session), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &validate), TURBO_OK);
+      check_equal(turbo_flow_register_adapter(flow, "mqtt.server", NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_register_primitive(flow, &session), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &validate), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "validate", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       source_plan = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "ingress"));
       check_not_null(source_plan);
@@ -1047,13 +1047,13 @@ suite("Turbo Flow Domain Contracts") {
 
       require_resource(&input, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN, "MqttSession");
       check_not_null(flow);
-      check_equal(turbo_flow_register_primitive(flow, &queue), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &validate), TURBO_OK);
+      check_equal(turbo_flow_register_primitive(flow, &queue), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &validate), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "validate", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message,
                          "resource primitive does not satisfy");
       turbo_flow_destroy(flow);
@@ -1067,7 +1067,7 @@ suite("Turbo Flow Domain Contracts") {
           "  ingress -> validate\n"
           "}\n";
       const uint32_t versions[] = {2u, 1u};
-      const int expected[] = {TURBO_OK, TURBO_EPROTO};
+      const int expected[] = {SALTS_OK, SALTS_EPROTO};
       for (size_t scenario = 0; scenario < 2u; ++scenario) {
         turbo_flow_t *flow = turbo_flow_create();
         turbo_flow_primitive_descriptor_t queue =
@@ -1085,13 +1085,13 @@ suite("Turbo Flow Domain Contracts") {
         input.resource_min_version = 2u;
         input.resource_max_version = 3u;
         check_not_null(flow);
-        check_equal(turbo_flow_register_primitive(flow, &queue), TURBO_OK);
-        check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-        check_equal(turbo_flow_register_operation(flow, &validate), TURBO_OK);
+        check_equal(turbo_flow_register_primitive(flow, &queue), SALTS_OK);
+        check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+        check_equal(turbo_flow_register_operation(flow, &validate), SALTS_OK);
         check_equal(
             turbo_flow_register_stage_ex(flow, "validate", domain_noop_stage, NULL, NULL),
-            TURBO_OK);
-        check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
+            SALTS_OK);
+        check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
         check_equal(turbo_flow_compile(flow), expected[scenario]);
         if (scenario == 1u) {
           check_contains(turbo_flow_last_error(flow)->message,
@@ -1122,13 +1122,13 @@ suite("Turbo Flow Domain Contracts") {
       input.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
       input.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
       check_not_null(flow);
-      check_equal(turbo_flow_register_primitive(flow, &session), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &validate), TURBO_OK);
+      check_equal(turbo_flow_register_primitive(flow, &session), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &validate), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "validate", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "requires an adapter owner");
       turbo_flow_destroy(flow);
     }
@@ -1148,12 +1148,12 @@ suite("Turbo Flow Domain Contracts") {
           TURBO_FLOW_DOMAIN_DATA, "Event", TURBO_FLOW_OPERATION_STAGE);
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &validate), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &validate), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "validate", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "domain or type is incompatible");
       turbo_flow_destroy(flow);
     }
@@ -1182,20 +1182,20 @@ suite("Turbo Flow Domain Contracts") {
       command.scope.authority = TURBO_FLOW_AUTHORITY_OWNER_COMMAND;
       check_not_null(management_flow);
       check_not_null(worker_flow);
-      check_equal(turbo_flow_register_operation(management_flow, &command), TURBO_OK);
+      check_equal(turbo_flow_register_operation(management_flow, &command), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(management_flow, "command", domain_noop_stage, NULL, NULL),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(turbo_flow_parse_string(management_flow, management_dsl, strlen(management_dsl)),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(management_flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(management_flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(management_flow)->message, "management command");
 
-      check_equal(turbo_flow_register_operation(worker_flow, &validate), TURBO_OK);
+      check_equal(turbo_flow_register_operation(worker_flow, &validate), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(worker_flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(worker_flow, worker_dsl, strlen(worker_dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(worker_flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(worker_flow, worker_dsl, strlen(worker_dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(worker_flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(worker_flow)->message, "worker segment");
       turbo_flow_destroy(management_flow);
       turbo_flow_destroy(worker_flow);
@@ -1216,11 +1216,11 @@ suite("Turbo Flow Domain Contracts") {
       operation.execution_mask |= TURBO_FLOW_OPERATION_EXEC_THREAD |
                                   TURBO_FLOW_OPERATION_EXEC_CORO;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &operation), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "pool-scoped operation");
       turbo_flow_destroy(flow);
     }
@@ -1245,19 +1245,19 @@ suite("Turbo Flow Domain Contracts") {
         memset(&probe, 0, sizeof(probe));
         probe.output_count = output_counts[scenario];
         check_not_null(flow);
-        check_equal(register_emitting_graph(flow, &probe, 3u, linear_dsl), TURBO_OK);
-        check_equal(turbo_flow_compile(flow), TURBO_OK);
-        check_equal(turbo_flow_start(flow), TURBO_OK);
+        check_equal(register_emitting_graph(flow, &probe, 3u, linear_dsl), SALTS_OK);
+        check_equal(turbo_flow_compile(flow), SALTS_OK);
+        check_equal(turbo_flow_start(flow), SALTS_OK);
         turbo_flow_msg_init(&message);
         message.id = 7u;
-        check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+        check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
         check_equal(probe.emitter_called, 1);
         check_equal(probe.sink_count, output_counts[scenario]);
         for (uint32_t i = 0u; i < probe.sink_count; ++i) {
           check_equal(probe.sink_ids[i], 70u + i);
         }
         turbo_flow_msg_cleanup(&message);
-        check_equal(turbo_flow_stop(flow), TURBO_OK);
+        check_equal(turbo_flow_stop(flow), SALTS_OK);
         turbo_flow_destroy(flow);
       }
     }
@@ -1269,16 +1269,16 @@ suite("Turbo Flow Domain Contracts") {
 
       memset(&probe, 0, sizeof(probe));
       probe.output_count = 2u;
-      probe.callback_status = TURBO_EIO;
+      probe.callback_status = SALTS_EIO;
       check_not_null(flow);
-      check_equal(register_emitting_graph(flow, &probe, 2u, linear_dsl), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(register_emitting_graph(flow, &probe, 2u, linear_dsl), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_msg_init(&message);
-      check_equal(turbo_flow_publish(flow, "input", &message), TURBO_EIO);
+      check_equal(turbo_flow_publish(flow, "input", &message), SALTS_EIO);
       check_equal(probe.sink_count, 0u);
       turbo_flow_msg_cleanup(&message);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -1290,14 +1290,14 @@ suite("Turbo Flow Domain Contracts") {
       memset(&probe, 0, sizeof(probe));
       probe.output_count = 3u;
       check_not_null(flow);
-      check_equal(register_emitting_graph(flow, &probe, 2u, linear_dsl), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(register_emitting_graph(flow, &probe, 2u, linear_dsl), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_msg_init(&message);
-      check_equal(turbo_flow_publish(flow, "input", &message), TURBO_ENOSPC);
+      check_equal(turbo_flow_publish(flow, "input", &message), SALTS_ENOSPC);
       check_equal(probe.sink_count, 0u);
       turbo_flow_msg_cleanup(&message);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -1310,14 +1310,14 @@ suite("Turbo Flow Domain Contracts") {
       probe.output_count = 1u;
       probe.attach_transport_context = 1;
       check_not_null(flow);
-      check_equal(register_emitting_graph(flow, &probe, 1u, linear_dsl), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(register_emitting_graph(flow, &probe, 1u, linear_dsl), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_msg_init(&message);
-      check_equal(turbo_flow_publish(flow, "input", &message), TURBO_ENOTSUP);
+      check_equal(turbo_flow_publish(flow, "input", &message), SALTS_ENOTSUP);
       check_equal(probe.sink_count, 0u);
       turbo_flow_msg_cleanup(&message);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -1334,9 +1334,9 @@ suite("Turbo Flow Domain Contracts") {
       probe.output_count = 1u;
       probe.attach_transport_context = 2;
       check_not_null(flow);
-      check_equal(register_emitting_graph(flow, &probe, 1u, linear_dsl), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(register_emitting_graph(flow, &probe, 1u, linear_dsl), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_msg_init(&message);
       message.id = 9u;
       message.buffer = mem_wrap_external(&owned, sizeof(owned), NULL, NULL);
@@ -1344,12 +1344,12 @@ suite("Turbo Flow Domain Contracts") {
       message.payload =
           vstr_from_buf((const char *)owned.payload, sizeof(owned.payload));
       message.transport_context = &owned.transport_marker;
-      check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
       check_equal(probe.emitter_called, 1);
       check_equal(probe.sink_count, 1u);
       check_equal(probe.sink_ids[0], 90u);
       turbo_flow_msg_cleanup(&message);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -1367,10 +1367,10 @@ suite("Turbo Flow Domain Contracts") {
 
       memset(&probe, 0, sizeof(probe));
       check_not_null(flow);
-      check_equal(register_emitting_graph(flow, &probe, 1u, dsl), TURBO_OK);
+      check_equal(register_emitting_graph(flow, &probe, 1u, dsl), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "other", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_ENOTSUP);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
       check_contains(turbo_flow_last_error(flow)->message, "external branch");
       turbo_flow_destroy(flow);
     }
@@ -1396,10 +1396,10 @@ suite("Turbo Flow Domain Contracts") {
       for (size_t i = 1u; i < sizeof(stage_names) / sizeof(stage_names[0]); ++i) {
         check_equal(turbo_flow_register_stage_ex(flow, stage_names[i], domain_noop_stage, NULL,
                                                   NULL),
-                     TURBO_OK);
+                     SALTS_OK);
       }
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
       for (size_t i = 0u; i < sizeof(stage_names) / sizeof(stage_names[0]); ++i) {
         int stage_index = turbo_flow_find_stage(flow, stage_names[i]);
         const turbo_flow_stage_plan_t *stage;
@@ -1446,9 +1446,9 @@ suite("Turbo Flow Domain Contracts") {
 
       check_not_null(flow);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
       input_port = turbo_flow_find_stage(flow, "pass.value");
       output_port = turbo_flow_find_stage(flow, "pass.result");
       check_greater_equal(input_port, 0);
@@ -1484,15 +1484,15 @@ suite("Turbo Flow Domain Contracts") {
 
       require_worker_handoff(&work, 64u);
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       for (size_t i = 0; i < turbo_flow_segment_count(flow); ++i) {
-        check_equal(turbo_flow_segment_plan_at(flow, i, &segment), TURBO_OK);
+        check_equal(turbo_flow_segment_plan_at(flow, i, &segment), SALTS_OK);
         if (segment.kind != TURBO_FLOW_SEGMENT_WORKER_POOL) continue;
         found_worker = 1;
         check_equal(segment.width, 2u);
@@ -1521,12 +1521,12 @@ suite("Turbo Flow Domain Contracts") {
 
       require_worker_handoff(&work, 128u);
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "does not match worker capacity");
       turbo_flow_destroy(flow);
     }
@@ -1548,23 +1548,23 @@ suite("Turbo Flow Domain Contracts") {
       require_worker_handoff(&work, 64u);
       work.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_FAIL;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       turbo_flow_destroy(flow);
       flow = turbo_flow_create();
       work.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_DROP_NEWEST;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -1585,12 +1585,12 @@ suite("Turbo Flow Domain Contracts") {
       require_worker_handoff(&work, 64u);
       work.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_DROP_OLDEST;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_ENOTSUP);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
       check_contains(turbo_flow_last_error(flow)->message, "cannot drop an older entry");
       turbo_flow_destroy(flow);
     }
@@ -1604,7 +1604,7 @@ suite("Turbo Flow Domain Contracts") {
                                "}\n";
       const turbo_flow_backpressure_kind_t policies[] = {TURBO_FLOW_BACKPRESSURE_FAIL,
                                                           TURBO_FLOW_BACKPRESSURE_DROP_NEWEST};
-      const int expected[] = {TURBO_ENOSPC, TURBO_ECANCELED};
+      const int expected[] = {SALTS_ENOSPC, SALTS_ECANCELED};
 
       for (size_t policy_index = 0; policy_index < 2u; ++policy_index) {
         turbo_flow_t *flow = turbo_flow_create();
@@ -1617,7 +1617,7 @@ suite("Turbo Flow Domain Contracts") {
             TURBO_FLOW_DOMAIN_DATA, "Message", TURBO_FLOW_OPERATION_STAGE);
         admission_probe_t probe;
         domain_publish_t publishes[DOMAIN_ADMISSION_PUBLISHER_COUNT];
-        turbo_thread_t threads[DOMAIN_ADMISSION_PUBLISHER_COUNT] = {NULL};
+        salts_thread_t threads[DOMAIN_ADMISSION_PUBLISHER_COUNT] = {NULL};
         turbo_flow_pool_snapshot_t snapshot;
         turbo_flow_msg_t overflow;
         int snapshot_status;
@@ -1628,33 +1628,33 @@ suite("Turbo Flow Domain Contracts") {
         atomic_init(&probe.entered, 0);
         atomic_init(&probe.release, 0);
         check_not_null(flow);
-        check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-        check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+        check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+        check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
         check_equal(turbo_flow_register_stage_ex(flow, "work", domain_blocking_stage, &probe,
                                                   NULL),
-                     TURBO_OK);
-        check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-        check_equal(turbo_flow_compile(flow), TURBO_OK);
-        check_equal(turbo_flow_start(flow), TURBO_OK);
+                     SALTS_OK);
+        check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+        check_equal(turbo_flow_compile(flow), SALTS_OK);
+        check_equal(turbo_flow_start(flow), SALTS_OK);
 
         for (size_t i = 0; i < DOMAIN_ADMISSION_PUBLISHER_COUNT; ++i) {
           publishes[i].flow = flow;
-          atomic_init(&publishes[i].result, TURBO_EBUSY);
-          check_equal(turbo_thread_create(&threads[i], domain_publish_thread, &publishes[i]),
-                       TURBO_OK);
+          atomic_init(&publishes[i].result, SALTS_EBUSY);
+          check_equal(salts_thread_create(&threads[i], domain_publish_thread, &publishes[i]),
+                       SALTS_OK);
           if (i == 0u) {
             while (atomic_load_explicit(&probe.entered, memory_order_acquire) != 1)
-              turbo_thread_yield();
+              salts_thread_yield();
           }
         }
-        wait_deadline = turbo_hrtime() + UINT64_C(1000000000);
+        wait_deadline = salts_hrtime() + UINT64_C(1000000000);
         do {
           snapshot_status = turbo_flow_pool_snapshot_at(flow, 0u, &snapshot);
-          if (snapshot_status != TURBO_OK) break;
-          if (snapshot.queued != DOMAIN_ADMISSION_EXPECTED_QUEUED) turbo_thread_yield();
+          if (snapshot_status != SALTS_OK) break;
+          if (snapshot.queued != DOMAIN_ADMISSION_EXPECTED_QUEUED) salts_thread_yield();
         } while (snapshot.queued != DOMAIN_ADMISSION_EXPECTED_QUEUED &&
-                 turbo_hrtime() < wait_deadline);
-        check_equal(snapshot_status, TURBO_OK);
+                 salts_hrtime() < wait_deadline);
+        check_equal(snapshot_status, SALTS_OK);
         check_equal(snapshot.queued, DOMAIN_ADMISSION_EXPECTED_QUEUED);
 
         turbo_flow_msg_init(&overflow);
@@ -1662,12 +1662,12 @@ suite("Turbo Flow Domain Contracts") {
         turbo_flow_msg_cleanup(&overflow);
         atomic_store_explicit(&probe.release, 1, memory_order_release);
         for (size_t i = 0; i < DOMAIN_ADMISSION_PUBLISHER_COUNT; ++i) {
-          check_equal(turbo_thread_join(&threads[i]), TURBO_OK);
-          check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), TURBO_OK);
+          check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+          check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), SALTS_OK);
         }
         check_equal(atomic_load_explicit(&probe.entered, memory_order_acquire),
                      DOMAIN_ADMISSION_PUBLISHER_COUNT);
-        check_equal(turbo_flow_pool_snapshot_at(flow, 0u, &snapshot), TURBO_OK);
+        check_equal(turbo_flow_pool_snapshot_at(flow, 0u, &snapshot), SALTS_OK);
         check_equal(snapshot.submitted, DOMAIN_ADMISSION_TOTAL_SUBMISSIONS);
         check_equal(snapshot.started, DOMAIN_ADMISSION_PUBLISHER_COUNT);
         check_equal(snapshot.completed, DOMAIN_ADMISSION_PUBLISHER_COUNT);
@@ -1675,7 +1675,7 @@ suite("Turbo Flow Domain Contracts") {
         check_equal(snapshot.canceled, policy_index == 1u ? 1u : 0u);
         check_equal(snapshot.queued, 0u);
         check_equal(snapshot.active, 0u);
-        check_equal(turbo_flow_stop(flow), TURBO_OK);
+        check_equal(turbo_flow_stop(flow), SALTS_OK);
         turbo_flow_destroy(flow);
       }
     }
@@ -1697,12 +1697,12 @@ suite("Turbo Flow Domain Contracts") {
       require_worker_handoff(&work, 64u);
       work.runtime.ordering = TURBO_FLOW_ORDERING_PRESERVE_INPUT;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "requires a reorder boundary");
       turbo_flow_destroy(flow);
     }
@@ -1725,12 +1725,12 @@ suite("Turbo Flow Domain Contracts") {
       require_worker_handoff(&work, 64u);
       work.runtime.ordering = TURBO_FLOW_ORDERING_PRESERVE_INPUT;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -1750,12 +1750,12 @@ suite("Turbo Flow Domain Contracts") {
 
       work.runtime.deadline_ms = 1000u;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -1768,9 +1768,9 @@ suite("Turbo Flow Domain Contracts") {
 
       input.runtime.deadline_ms = 10u;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_ENOTSUP);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
       check_contains(turbo_flow_last_error(flow)->message, "source operation deadline");
       turbo_flow_destroy(flow);
     }
@@ -1796,21 +1796,21 @@ suite("Turbo Flow Domain Contracts") {
       work.runtime.deadline_ms = 5u;
       turbo_flow_msg_init(&message);
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_slow_inline_stage, &probe,
                                                 NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", domain_count_stage, &sink_called,
                                                 NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &message), TURBO_ETIMEDOUT);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &message), SALTS_ETIMEDOUT);
       check_equal(probe.called, 1);
       check_equal(sink_called, 0);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_msg_cleanup(&message);
       turbo_flow_destroy(flow);
     }
@@ -1854,18 +1854,18 @@ suite("Turbo Flow Domain Contracts") {
         if (i == 2u) require_worker_handoff(&work, 8u);
         turbo_flow_msg_init(&message);
         check_not_null(flow);
-        check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-        check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+        check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+        check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
         check_equal(turbo_flow_register_stage_ex(flow, "work", domain_deadline_yield_stage,
                                                   &probe, NULL),
-                     TURBO_OK);
-        check_equal(turbo_flow_parse_string(flow, dsls[i], strlen(dsls[i])), TURBO_OK);
-        check_equal(turbo_flow_compile(flow), TURBO_OK);
-        check_equal(turbo_flow_start(flow), TURBO_OK);
-        check_equal(turbo_flow_publish(flow, "input", &message), TURBO_ETIMEDOUT);
+                     SALTS_OK);
+        check_equal(turbo_flow_parse_string(flow, dsls[i], strlen(dsls[i])), SALTS_OK);
+        check_equal(turbo_flow_compile(flow), SALTS_OK);
+        check_equal(turbo_flow_start(flow), SALTS_OK);
+        check_equal(turbo_flow_publish(flow, "input", &message), SALTS_ETIMEDOUT);
         check_equal(probe.called, 1);
-        check_equal(probe.terminal_status, TURBO_ETIMEDOUT);
-        check_equal(turbo_flow_stop(flow), TURBO_OK);
+        check_equal(probe.terminal_status, SALTS_ETIMEDOUT);
+        check_equal(turbo_flow_stop(flow), SALTS_OK);
         turbo_flow_msg_cleanup(&message);
         turbo_flow_destroy(flow);
       }
@@ -1887,12 +1887,12 @@ suite("Turbo Flow Domain Contracts") {
 
       work.runtime.error_mode = TURBO_FLOW_ERROR_REJECT;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "requires a reject edge");
       turbo_flow_destroy(flow);
     }
@@ -1915,14 +1915,14 @@ suite("Turbo Flow Domain Contracts") {
 
       work.runtime.error_mode = TURBO_FLOW_ERROR_REJECT;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "rejected", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -1943,12 +1943,12 @@ suite("Turbo Flow Domain Contracts") {
       work.runtime.error_mode = TURBO_FLOW_ERROR_RETRY;
       work.runtime.settlement = TURBO_FLOW_SETTLEMENT_RETRY;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "requires a retry policy");
       turbo_flow_destroy(flow);
     }
@@ -1975,11 +1975,11 @@ suite("Turbo Flow Domain Contracts") {
       work.runtime.error_mode = TURBO_FLOW_ERROR_RETRY;
       work.runtime.settlement = TURBO_FLOW_SETTLEMENT_RETRY;
       check_not_null(flow);
-      check_equal(turbo_flow_register_adapter(flow, "retryable", &adapter_ops, NULL), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_register_adapter(flow, "retryable", &adapter_ops, NULL), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -2002,13 +2002,13 @@ suite("Turbo Flow Domain Contracts") {
       adapter_ops.consume = domain_noop_consume;
       work.runtime.settlement = TURBO_FLOW_SETTLEMENT_ACKNOWLEDGE;
       check_not_null(flow);
-      check_equal(turbo_flow_register_adapter(flow, "owner", &adapter_ops, NULL), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+      check_equal(turbo_flow_register_adapter(flow, "owner", &adapter_ops, NULL), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_ENOTSUP);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
       check_contains(turbo_flow_last_error(flow)->message, "settlement owner");
       turbo_flow_destroy(flow);
     }
@@ -2044,33 +2044,33 @@ suite("Turbo Flow Domain Contracts") {
         work.runtime.settlement = action_index == 0u ? TURBO_FLOW_SETTLEMENT_COMPLETE
                                                      : TURBO_FLOW_SETTLEMENT_ACKNOWLEDGE;
         probe.report_action = actions[action_index];
-        probe.report_status = TURBO_OK;
+        probe.report_status = SALTS_OK;
         check_not_null(flow);
-        check_equal(turbo_flow_register_adapter(flow, "owner", &adapter_ops, &probe), TURBO_OK);
+        check_equal(turbo_flow_register_adapter(flow, "owner", &adapter_ops, &probe), SALTS_OK);
         check_equal(turbo_flow_register_adapter_settlement(flow, "owner", &owner_ops, &probe),
-                     TURBO_OK);
-        check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-        check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+                     SALTS_OK);
+        check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+        check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
         if (action_index == 0u) {
           check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                       TURBO_OK);
+                       SALTS_OK);
         }
         check_equal(turbo_flow_register_stage_ex(flow, "sink", domain_count_stage, &sink_called,
                                                   NULL),
-                     TURBO_OK);
-        check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-        check_equal(turbo_flow_compile(flow), TURBO_OK);
-        check_equal(turbo_flow_start(flow), TURBO_OK);
+                     SALTS_OK);
+        check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+        check_equal(turbo_flow_compile(flow), SALTS_OK);
+        check_equal(turbo_flow_start(flow), SALTS_OK);
         turbo_flow_msg_init(&message);
         message.id = 42u + action_index;
-        check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+        check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
         check_equal(probe.owner_called, 1);
         check_equal(probe.observed.action, actions[action_index]);
         check_equal(probe.observed.message_id, message.id);
         check_equal(probe.observed.attempt, 1u);
         check_equal(sink_called, 1);
         turbo_flow_msg_cleanup(&message);
-        check_equal(turbo_flow_stop(flow), TURBO_OK);
+        check_equal(turbo_flow_stop(flow), SALTS_OK);
         turbo_flow_destroy(flow);
       }
     }
@@ -2085,7 +2085,7 @@ suite("Turbo Flow Domain Contracts") {
       const turbo_flow_settlement_action_t actions[] = {
           TURBO_FLOW_SETTLEMENT_ACTION_REQUEUE, TURBO_FLOW_SETTLEMENT_ACTION_DEAD_LETTER,
           TURBO_FLOW_SETTLEMENT_ACTION_CANCELED};
-      const int statuses[] = {TURBO_EBUSY, TURBO_EIO, TURBO_ECANCELED};
+      const int statuses[] = {SALTS_EBUSY, SALTS_EIO, SALTS_ECANCELED};
       turbo_flow_t *flow = turbo_flow_create();
       turbo_flow_adapter_ops_t adapter_ops;
       turbo_flow_settlement_owner_ops_t owner_ops = TURBO_FLOW_SETTLEMENT_OWNER_OPS_INIT;
@@ -2107,23 +2107,23 @@ suite("Turbo Flow Domain Contracts") {
                                 TURBO_FLOW_SETTLEMENT_DEAD_LETTER |
                                 TURBO_FLOW_SETTLEMENT_CANCELED;
       check_not_null(flow);
-      check_equal(turbo_flow_register_adapter(flow, "owner", &adapter_ops, &probe), TURBO_OK);
+      check_equal(turbo_flow_register_adapter(flow, "owner", &adapter_ops, &probe), SALTS_OK);
       check_equal(turbo_flow_register_adapter_settlement(flow, "owner", &owner_ops, &probe),
-                   TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-      check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", domain_count_stage, &sink_called,
                                                 NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       for (size_t i = 0; i < 3u; ++i) {
         turbo_flow_msg_t message;
         probe.report_action = actions[i];
         probe.report_status = statuses[i];
         turbo_flow_msg_init(&message);
-        check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+        check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
         turbo_flow_msg_cleanup(&message);
         check_equal(probe.stage_called, (int)i + 1);
         check_equal(probe.owner_called, (int)i + 1);
@@ -2132,7 +2132,7 @@ suite("Turbo Flow Domain Contracts") {
       }
       check_equal(probe.owner_called, 3);
       check_equal(sink_called, 0);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -2174,30 +2174,30 @@ suite("Turbo Flow Domain Contracts") {
         work.runtime.error_mode = TURBO_FLOW_ERROR_SETTLE;
         work.runtime.settlement = TURBO_FLOW_SETTLEMENT_REQUEUE;
         probe.report_action = TURBO_FLOW_SETTLEMENT_ACTION_REQUEUE;
-        probe.report_status = TURBO_EBUSY;
+        probe.report_status = SALTS_EBUSY;
         if (path == 1u || path == 2u || path == 3u) {
           work.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
         }
         if (path == 3u) require_worker_handoff(&work, 8u);
         check_not_null(flow);
-        check_equal(turbo_flow_register_adapter(flow, "owner", &adapter_ops, NULL), TURBO_OK);
+        check_equal(turbo_flow_register_adapter(flow, "owner", &adapter_ops, NULL), SALTS_OK);
         check_equal(turbo_flow_register_adapter_settlement(flow, "owner", &owner_ops, &probe),
-                     TURBO_OK);
-        check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-        check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
+                     SALTS_OK);
+        check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+        check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
         check_equal(turbo_flow_register_stage_ex(flow, "work", domain_settlement_stage, &probe,
                                                   NULL),
-                     TURBO_OK);
-        check_equal(turbo_flow_parse_string(flow, dsls[path], strlen(dsls[path])), TURBO_OK);
-        check_equal(turbo_flow_compile(flow), TURBO_OK);
-        check_equal(turbo_flow_start(flow), TURBO_OK);
+                     SALTS_OK);
+        check_equal(turbo_flow_parse_string(flow, dsls[path], strlen(dsls[path])), SALTS_OK);
+        check_equal(turbo_flow_compile(flow), SALTS_OK);
+        check_equal(turbo_flow_start(flow), SALTS_OK);
         turbo_flow_msg_init(&message);
-        check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+        check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
         check_equal(probe.stage_called, 1);
         check_equal(probe.owner_called, 1);
         check_equal(probe.observed.action, TURBO_FLOW_SETTLEMENT_ACTION_REQUEUE);
         turbo_flow_msg_cleanup(&message);
-        check_equal(turbo_flow_stop(flow), TURBO_OK);
+        check_equal(turbo_flow_stop(flow), SALTS_OK);
         turbo_flow_destroy(flow);
       }
     }
@@ -2208,9 +2208,9 @@ suite("Turbo Flow Domain Contracts") {
                                "stage main {\n"
                                "  input -> work\n"
                                "}\n";
-      const int expected[] = {TURBO_EALREADY, TURBO_EPROTO, TURBO_EIO};
+      const int expected[] = {SALTS_EALREADY, SALTS_EPROTO, SALTS_EIO};
 
-      check_equal(turbo_flow_settlement_report(NULL), TURBO_EINVAL);
+      check_equal(turbo_flow_settlement_report(NULL), SALTS_EINVAL);
       for (size_t scenario = 0; scenario < 3u; ++scenario) {
         turbo_flow_t *flow = turbo_flow_create();
         turbo_flow_adapter_ops_t adapter_ops;
@@ -2232,23 +2232,23 @@ suite("Turbo Flow Domain Contracts") {
         work.runtime.settlement = TURBO_FLOW_SETTLEMENT_REQUEUE;
         probe.report_action = scenario == 1u ? TURBO_FLOW_SETTLEMENT_ACTION_DEAD_LETTER
                                              : TURBO_FLOW_SETTLEMENT_ACTION_REQUEUE;
-        probe.report_status = TURBO_EBUSY;
+        probe.report_status = SALTS_EBUSY;
         probe.report_twice = scenario == 0u;
-        probe.owner_status = scenario == 2u ? TURBO_EIO : TURBO_OK;
+        probe.owner_status = scenario == 2u ? SALTS_EIO : SALTS_OK;
         check_not_null(flow);
-        check_equal(turbo_flow_register_adapter(flow, "owner", &adapter_ops, &probe), TURBO_OK);
+        check_equal(turbo_flow_register_adapter(flow, "owner", &adapter_ops, &probe), SALTS_OK);
         check_equal(turbo_flow_register_adapter_settlement(flow, "owner", &owner_ops, &probe),
-                     TURBO_OK);
-        check_equal(turbo_flow_register_operation(flow, &input), TURBO_OK);
-        check_equal(turbo_flow_register_operation(flow, &work), TURBO_OK);
-        check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-        check_equal(turbo_flow_compile(flow), TURBO_OK);
-        check_equal(turbo_flow_start(flow), TURBO_OK);
+                     SALTS_OK);
+        check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+        check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
+        check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+        check_equal(turbo_flow_compile(flow), SALTS_OK);
+        check_equal(turbo_flow_start(flow), SALTS_OK);
         turbo_flow_msg_init(&message);
         check_equal(turbo_flow_publish(flow, "input", &message), expected[scenario]);
         check_equal(probe.owner_called, scenario == 2u ? 1 : 0);
         turbo_flow_msg_cleanup(&message);
-        check_equal(turbo_flow_stop(flow), TURBO_OK);
+        check_equal(turbo_flow_stop(flow), SALTS_OK);
         turbo_flow_destroy(flow);
       }
     }

@@ -44,14 +44,14 @@ static const flow_msg_projection_t *flow_msg_projection(const turbo_flow_msg_t *
 static int flow_msg_descriptor_accepts_schema(const turbo_flow_content_descriptor_t *descriptor,
                                               const turbo_flow_data_schema_t *schema) {
   if (!descriptor || !schema || (descriptor->flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) == 0u) {
-    return TURBO_OK;
+    return SALTS_OK;
   }
   return descriptor->encoding == schema->encoding &&
                  descriptor->schema_version == schema->schema_version &&
                  strcmp(descriptor->schema_name, schema->schema_name) == 0 &&
                  strcmp(descriptor->type_name, schema->type_name) == 0
-             ? TURBO_OK
-             : TURBO_EPROTO;
+             ? SALTS_OK
+             : SALTS_EPROTO;
 }
 
 static int flow_msg_projection_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src) {
@@ -60,23 +60,23 @@ static int flow_msg_projection_clone(turbo_flow_msg_t *dst, const turbo_flow_msg
   void *value = NULL;
   int rc;
 
-  if (!source) return TURBO_EINVAL;
+  if (!source) return SALTS_EINVAL;
   if (source->value) {
-    if (!source->clone) return TURBO_ENOTSUP;
+    if (!source->clone) return SALTS_ENOTSUP;
     rc = source->clone(source->value, source->ctx, &value);
-    if (rc != TURBO_OK) return rc;
-    if (!value) return TURBO_EPROTO;
+    if (rc != SALTS_OK) return rc;
+    if (!value) return SALTS_EPROTO;
   }
   copy = (flow_msg_projection_t *)calloc(1, sizeof(*copy));
   if (!copy) {
     if (value) source->destroy(value, source->ctx);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   *copy = *source;
   if (copy->owns_descriptor) copy->descriptor = &copy->owned_descriptor;
   copy->value = value;
   dst->_content_handle = copy;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void flow_msg_failure_cleanup(turbo_flow_failure_t *failure) {
@@ -84,12 +84,12 @@ static void flow_msg_failure_cleanup(turbo_flow_failure_t *failure) {
   tstr_freep(&failure->stage_name);
   tstr_freep(&failure->adapter_name);
   tstr_freep(&failure->route_name);
-  failure->code = TURBO_OK;
+  failure->code = SALTS_OK;
   failure->attempt = 0;
 }
 
 static int flow_msg_failure_copy(turbo_flow_failure_t *dst, const turbo_flow_failure_t *src) {
-  if (!dst || !src) return TURBO_EINVAL;
+  if (!dst || !src) return SALTS_EINVAL;
   memset(dst, 0, sizeof(*dst));
   if (src->stage_name && !(dst->stage_name = tstr_from_v(tstr_to_v(src->stage_name)))) goto nomem;
   if (src->adapter_name && !(dst->adapter_name = tstr_from_v(tstr_to_v(src->adapter_name)))) {
@@ -98,11 +98,11 @@ static int flow_msg_failure_copy(turbo_flow_failure_t *dst, const turbo_flow_fai
   if (src->route_name && !(dst->route_name = tstr_from_v(tstr_to_v(src->route_name)))) goto nomem;
   dst->code = src->code;
   dst->attempt = src->attempt;
-  return TURBO_OK;
+  return SALTS_OK;
 
 nomem:
   flow_msg_failure_cleanup(dst);
-  return TURBO_ENOMEM;
+  return SALTS_ENOMEM;
 }
 
 static int flow_msg_view_within(const vstr *view, const void *base, size_t size) {
@@ -119,17 +119,17 @@ static int flow_msg_view_within(const vstr *view, const void *base, size_t size)
 }
 
 int flow_msg_payload_validate(const turbo_flow_msg_t *msg) {
-  if (!msg || (!msg->payload.data && msg->payload.len != 0u)) return TURBO_EINVAL;
-  if (!msg->payload.data) return TURBO_OK;
+  if (!msg || (!msg->payload.data && msg->payload.len != 0u)) return SALTS_EINVAL;
+  if (!msg->payload.data) return SALTS_OK;
   if (msg->owned_payload &&
       flow_msg_view_within(&msg->payload, msg->owned_payload, tstr_len(msg->owned_payload))) {
-    return TURBO_OK;
+    return SALTS_OK;
   }
   if (msg->buffer && flow_msg_view_within(&msg->payload, mem_buffer_const_data(msg->buffer),
                                           mem_buffer_used(msg->buffer))) {
-    return TURBO_OK;
+    return SALTS_OK;
   }
-  return TURBO_EINVAL;
+  return SALTS_EINVAL;
 }
 
 int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg) {
@@ -153,8 +153,8 @@ int flow_msg_set_failure(turbo_flow_msg_t *msg, const char *stage_name, const ch
                          const char *route_name, int code, uint32_t attempt) {
   turbo_flow_failure_t failure;
 
-  if (!msg || !stage_name || !route_name || code == TURBO_OK || attempt == 0u) {
-    return TURBO_EINVAL;
+  if (!msg || !stage_name || !route_name || code == SALTS_OK || attempt == 0u) {
+    return SALTS_EINVAL;
   }
   memset(&failure, 0, sizeof(failure));
   failure.stage_name = tstr_dup(stage_name);
@@ -162,13 +162,13 @@ int flow_msg_set_failure(turbo_flow_msg_t *msg, const char *stage_name, const ch
   if (adapter_name) failure.adapter_name = tstr_dup(adapter_name);
   if (!failure.stage_name || !failure.route_name || (adapter_name && !failure.adapter_name)) {
     flow_msg_failure_cleanup(&failure);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   failure.code = code;
   failure.attempt = attempt;
   flow_msg_failure_cleanup(&msg->failure);
   msg->failure = failure;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void turbo_flow_msg_init(turbo_flow_msg_t *msg) {
@@ -190,14 +190,14 @@ int turbo_flow_msg_retain_view(turbo_flow_msg_t *dst, const turbo_flow_msg_t *sr
   const flow_msg_projection_t *source_binding;
   flow_msg_projection_t *binding_copy = NULL;
 
-  if (!dst || !src || flow_msg_payload_validate(src) != TURBO_OK) return TURBO_EINVAL;
+  if (!dst || !src || flow_msg_payload_validate(src) != SALTS_OK) return SALTS_EINVAL;
   source_binding = flow_msg_projection(src);
   if (src->owned_payload || (source_binding && source_binding->value)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (source_binding) {
     binding_copy = (flow_msg_projection_t *)calloc(1, sizeof(*binding_copy));
-    if (!binding_copy) return TURBO_ENOMEM;
+    if (!binding_copy) return SALTS_ENOMEM;
     *binding_copy = *source_binding;
     if (binding_copy->owns_descriptor) binding_copy->descriptor = &binding_copy->owned_descriptor;
   }
@@ -208,20 +208,20 @@ int turbo_flow_msg_retain_view(turbo_flow_msg_t *dst, const turbo_flow_msg_t *sr
   dst->owned_payload = NULL;
   dst->_content_handle = binding_copy;
   memset(&dst->failure, 0, sizeof(dst->failure));
-  if (flow_msg_failure_copy(&dst->failure, &src->failure) != TURBO_OK) {
+  if (flow_msg_failure_copy(&dst->failure, &src->failure) != SALTS_OK) {
     mem_buffer_release(dst->buffer);
     free(binding_copy);
     turbo_flow_msg_init(dst);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src) {
   int has_projection;
   int payload_in_owned;
 
-  if (!dst || !src || flow_msg_payload_validate(src) != TURBO_OK) return TURBO_EINVAL;
+  if (!dst || !src || flow_msg_payload_validate(src) != SALTS_OK) return SALTS_EINVAL;
   has_projection = flow_msg_projection(src) != NULL;
   payload_in_owned = src->owned_payload && src->payload.data &&
                      flow_msg_view_within(&src->payload, src->owned_payload,
@@ -232,10 +232,10 @@ int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src) {
   dst->owned_payload = NULL;
   dst->_content_handle = NULL;
   memset(&dst->failure, 0, sizeof(dst->failure));
-  if (flow_msg_failure_copy(&dst->failure, &src->failure) != TURBO_OK) {
+  if (flow_msg_failure_copy(&dst->failure, &src->failure) != SALTS_OK) {
     mem_buffer_release(dst->buffer);
     turbo_flow_msg_init(dst);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
 
   if (src->owned_payload) {
@@ -243,7 +243,7 @@ int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src) {
     if (!dst->owned_payload) {
       mem_buffer_release(dst->buffer);
       turbo_flow_msg_init(dst);
-      return TURBO_ENOMEM;
+      return SALTS_ENOMEM;
     }
     if (payload_in_owned) {
       size_t offset = (size_t)((uintptr_t)src->payload.data - (uintptr_t)src->owned_payload);
@@ -255,21 +255,21 @@ int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src) {
 
   if (has_projection) {
     int rc = flow_msg_projection_clone(dst, src);
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       turbo_flow_msg_cleanup(dst);
       return rc;
     }
   }
 
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_msg_move(turbo_flow_msg_t *dst, turbo_flow_msg_t *src) {
-  if (!dst || !src) return TURBO_EINVAL;
+  if (!dst || !src) return SALTS_EINVAL;
   turbo_flow_msg_init(dst);
   *dst = *src;
   turbo_flow_msg_init(src);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 turbo_flow_content_state_t turbo_flow_msg_content_state(const turbo_flow_msg_t *msg) {
@@ -289,16 +289,16 @@ int turbo_flow_msg_bind_projection(turbo_flow_msg_t *msg, const turbo_flow_data_
       !schema->projection_type || schema->projection_type[0] == '\0' ||
       schema->schema_version == 0u || schema->encoding < TURBO_FLOW_DATA_ENCODING_TBE ||
       schema->encoding > TURBO_FLOW_DATA_ENCODING_OPAQUE || !projection || !destroy) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   binding = (flow_msg_projection_t *)flow_msg_projection(msg);
-  if (binding && binding->value) return TURBO_EBUSY;
-  if (binding && flow_msg_descriptor_accepts_schema(binding->descriptor, schema) != TURBO_OK) {
-    return TURBO_EPROTO;
+  if (binding && binding->value) return SALTS_EBUSY;
+  if (binding && flow_msg_descriptor_accepts_schema(binding->descriptor, schema) != SALTS_OK) {
+    return SALTS_EPROTO;
   }
   if (!binding) {
     binding = (flow_msg_projection_t *)calloc(1, sizeof(*binding));
-    if (!binding) return TURBO_ENOMEM;
+    if (!binding) return SALTS_ENOMEM;
     binding->magic = FLOW_MSG_PROJECTION_MAGIC;
   }
   binding->schema = schema;
@@ -307,7 +307,7 @@ int turbo_flow_msg_bind_projection(turbo_flow_msg_t *msg, const turbo_flow_data_
   binding->destroy = destroy;
   binding->ctx = ctx;
   msg->_content_handle = binding;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const void *turbo_flow_msg_projection(const turbo_flow_msg_t *msg,
@@ -358,40 +358,40 @@ void turbo_flow_msg_clear_content(turbo_flow_msg_t *msg) {
 int turbo_flow_msg_set_content_descriptor(turbo_flow_msg_t *msg,
                                           const turbo_flow_content_descriptor_t *descriptor) {
   flow_msg_projection_t *binding;
-  if (!msg || turbo_flow_content_descriptor_check(descriptor) != TURBO_OK) {
-    return TURBO_EINVAL;
+  if (!msg || turbo_flow_content_descriptor_check(descriptor) != SALTS_OK) {
+    return SALTS_EINVAL;
   }
   binding = (flow_msg_projection_t *)flow_msg_projection(msg);
   if (binding && binding->schema &&
-      flow_msg_descriptor_accepts_schema(descriptor, binding->schema) != TURBO_OK) {
-    return TURBO_EPROTO;
+      flow_msg_descriptor_accepts_schema(descriptor, binding->schema) != SALTS_OK) {
+    return SALTS_EPROTO;
   }
   if (binding && binding->descriptor &&
-      turbo_flow_content_descriptor_validate(binding->descriptor, descriptor) != TURBO_OK) {
-    return TURBO_EPROTO;
+      turbo_flow_content_descriptor_validate(binding->descriptor, descriptor) != SALTS_OK) {
+    return SALTS_EPROTO;
   }
   if (!binding) {
     binding = (flow_msg_projection_t *)calloc(1, sizeof(*binding));
-    if (!binding) return TURBO_ENOMEM;
+    if (!binding) return SALTS_ENOMEM;
     binding->magic = FLOW_MSG_PROJECTION_MAGIC;
     msg->_content_handle = binding;
   }
   binding->descriptor = descriptor;
   binding->owns_descriptor = 0;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_msg_copy_content_descriptor(turbo_flow_msg_t *msg,
                                            const turbo_flow_content_descriptor_t *descriptor) {
   flow_msg_projection_t *binding;
   int rc = turbo_flow_msg_set_content_descriptor(msg, descriptor);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   binding = (flow_msg_projection_t *)flow_msg_projection(msg);
   binding->owned_descriptor = *descriptor;
   binding->owned_descriptor.size = sizeof(binding->owned_descriptor);
   binding->descriptor = &binding->owned_descriptor;
   binding->owns_descriptor = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 const turbo_flow_content_descriptor_t *

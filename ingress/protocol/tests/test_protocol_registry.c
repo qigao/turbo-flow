@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 #include "turbo_flow_protocol.h"
 #include "turbo_flow_protocol_plugin.h"
 
@@ -17,10 +17,10 @@ static int protocol_probe_inspect(
   (void)ctx;
   (void)configured_version;
   if (!frame || frame->data_size != 1u || frame->data[0] != 0x42u)
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   metadata->message_type = frame->data[0];
   memcpy(metadata->operation, "probe", sizeof("probe"));
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int protocol_probe_open(
@@ -36,12 +36,12 @@ static int protocol_probe_open(
                                      TURBO_FLOW_PROTOCOL_CAP_EGRESS |
                                      TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE,
       &ops, NULL, &protocol);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   probe->opens++;
   service->protocol = request->protocol;
   service->instance = protocol;
   service->owner = protocol;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void protocol_probe_close(void *ctx,
@@ -75,22 +75,22 @@ spec("protocol registry") {
     request.protocol = TURBO_FLOW_PROTOCOL_COAP;
     request.protocol_version = "1";
 
-    check_equal(turbo_flow_protocol_registry_create(1u, &registry), TURBO_OK);
-    check_equal(turbo_flow_protocol_registry_register(registry, &api), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_create(1u, &registry), SALTS_OK);
+    check_equal(turbo_flow_protocol_registry_register(registry, &api), SALTS_OK);
     check_equal(turbo_flow_protocol_registry_register(registry, &api),
-                 TURBO_EALREADY);
+                 SALTS_EALREADY);
     check_equal(turbo_flow_protocol_owner_create_registered(
                      registry, "probe", &request, &owner),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(turbo_flow_protocol_owner_instance(
                      owner, TURBO_FLOW_PROTOCOL_COAP, &protocol),
-                 TURBO_OK);
+                 SALTS_OK);
     check_not_null(protocol);
-    check_equal(turbo_flow_protocol_registry_destroy(registry), TURBO_EBUSY);
+    check_equal(turbo_flow_protocol_registry_destroy(registry), SALTS_EBUSY);
     turbo_flow_protocol_owner_destroy(owner);
     check_equal(probe.opens, 1u);
     check_equal(probe.closes, 1u);
-    check_equal(turbo_flow_protocol_registry_destroy(registry), TURBO_OK);
+    check_equal(turbo_flow_protocol_registry_destroy(registry), SALTS_OK);
   }
 
   it("decodes into caller-owned bounded buffers without partial output") {
@@ -114,18 +114,18 @@ spec("protocol registry") {
                          TURBO_FLOW_PROTOCOL_CAP_EGRESS |
                          TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE,
                      &ops, &probe, &protocol),
-                 TURBO_OK);
+                 SALTS_OK);
     frame.data = frame_data;
     frame.data_size = sizeof(frame_data);
     frame.device_id = "device-1";
     output.payload = payload;
     output.payload_capacity = 0u;
     check_equal(turbo_flow_protocol_decode(protocol, &frame, &output),
-                 TURBO_EMSGSIZE);
+                 SALTS_EMSGSIZE);
     check_equal(output.payload_size, 0u);
     output.payload_capacity = sizeof(payload);
     check_equal(turbo_flow_protocol_decode(protocol, &frame, &output),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(output.metadata.device_id, "device-1");
     check_equal(output.metadata.operation, "probe");
     check_equal(output.payload_size, sizeof(frame_data));

@@ -1,6 +1,6 @@
 #include "flow_protocol_plugin_support.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -22,25 +22,25 @@ static int flow_gbt32960_inspect(
   if (!frame || !metadata ||
       frame->data_size < FLOW_GBT32960_FRAME_OVERHEAD ||
       frame->data[0] != 0x23u || frame->data[1] != 0x23u)
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   if (frame->data[3] != 0x01u && frame->data[3] != 0x02u &&
       frame->data[3] != 0x03u && frame->data[3] != 0xfeu)
-    return TURBO_EPROTO;
-  if (frame->data[21] == 0u) return TURBO_EPROTO;
+    return SALTS_EPROTO;
+  if (frame->data[21] == 0u) return SALTS_EPROTO;
   body_size = ((size_t)frame->data[22] << 8u) | frame->data[23];
   if (body_size > SIZE_MAX - FLOW_GBT32960_FRAME_OVERHEAD)
-    return TURBO_EMSGSIZE;
+    return SALTS_EMSGSIZE;
   expected_size = body_size + FLOW_GBT32960_FRAME_OVERHEAD;
-  if (frame->data_size != expected_size) return TURBO_EPROTO;
+  if (frame->data_size != expected_size) return SALTS_EPROTO;
   for (size_t i = 2u; i + 1u < frame->data_size; ++i)
     checksum ^= frame->data[i];
   if (checksum != frame->data[frame->data_size - 1u])
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   for (size_t i = 0u; i < 17u; ++i) {
     const uint8_t value = frame->data[4u + i];
     if (value <= 0x20u || value >= 0x7fu || value == '/' || value == '+' ||
         value == '#')
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     metadata->device_id[i] = (char)value;
   }
   metadata->device_id[17] = '\0';
@@ -85,8 +85,8 @@ static int flow_gbt32960_inspect(
 }
 
 static uint8_t flow_gbt32960_response(int status) {
-  if (status == TURBO_OK) return UINT8_C(0x01);
-  if (status == TURBO_EALREADY) return UINT8_C(0x03);
+  if (status == SALTS_OK) return UINT8_C(0x01);
+  if (status == SALTS_EALREADY) return UINT8_C(0x03);
   return UINT8_C(0x02);
 }
 
@@ -98,10 +98,10 @@ static int flow_gbt32960_frame_write(
   uint8_t checksum = 0u;
   if (!device_id || strlen(device_id) != 17u || !output || !output->data ||
       (!body && body_size != 0u))
-    return TURBO_EINVAL;
-  if (body_size > UINT16_MAX) return TURBO_EMSGSIZE;
+    return SALTS_EINVAL;
+  if (body_size > UINT16_MAX) return SALTS_EMSGSIZE;
   frame_size = FLOW_GBT32960_FRAME_OVERHEAD + body_size;
-  if (frame_size > output->capacity) return TURBO_EMSGSIZE;
+  if (frame_size > output->capacity) return SALTS_EMSGSIZE;
   output->data[0] = UINT8_C(0x23);
   output->data[1] = UINT8_C(0x23);
   output->data[2] = command;
@@ -115,7 +115,7 @@ static int flow_gbt32960_frame_write(
     checksum ^= output->data[i];
   output->data[frame_size - 1u] = checksum;
   output->data_size = frame_size;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_gbt32960_reply(
@@ -127,7 +127,7 @@ static int flow_gbt32960_reply(
   (void)configured_version;
   if (!request || !request->data ||
       request->data_size < FLOW_GBT32960_FRAME_OVERHEAD)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   memcpy(device_id, request->data + 4u, 17u);
   device_id[17] = '\0';
   return flow_gbt32960_frame_write(
@@ -136,7 +136,7 @@ static int flow_gbt32960_reply(
 }
 
 static int flow_gbt32960_command(const char *operation, uint8_t *out) {
-  if (!operation || !out) return TURBO_EINVAL;
+  if (!operation || !out) return SALTS_EINVAL;
   if (strcmp(operation, "vehicle-login") == 0)
     *out = UINT8_C(0x01);
   else if (strcmp(operation, "realtime-data") == 0)
@@ -154,8 +154,8 @@ static int flow_gbt32960_command(const char *operation, uint8_t *out) {
   else if (strcmp(operation, "time-sync") == 0)
     *out = UINT8_C(0x08);
   else
-    return TURBO_ENOTSUP;
-  return TURBO_OK;
+    return SALTS_ENOTSUP;
+  return SALTS_OK;
 }
 
 static int flow_gbt32960_encode(
@@ -166,9 +166,9 @@ static int flow_gbt32960_encode(
   int rc;
   (void)ctx;
   (void)configured_version;
-  if (!command) return TURBO_EINVAL;
+  if (!command) return SALTS_EINVAL;
   rc = flow_gbt32960_command(command->operation, &command_id);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   return flow_gbt32960_frame_write(
       command_id, UINT8_C(0xfe), command->device_id, command->payload,
       command->payload_size, output);

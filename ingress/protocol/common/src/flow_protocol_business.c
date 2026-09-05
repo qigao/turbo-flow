@@ -1,6 +1,6 @@
 #include "turbo_flow_protocol_business_plugin.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -21,15 +21,15 @@ static size_t flow_protocol_business_bounded_length(const char *text, size_t cap
 
 static int flow_protocol_business_text_valid(const char *text, size_t max_size, int optional) {
   size_t size;
-  if (!text) return optional ? TURBO_OK : TURBO_EINVAL;
+  if (!text) return optional ? SALTS_OK : SALTS_EINVAL;
   size = flow_protocol_business_bounded_length(text, max_size + 1u);
-  if (size == 0u) return TURBO_EINVAL;
-  if (size > max_size) return TURBO_EMSGSIZE;
+  if (size == 0u) return SALTS_EINVAL;
+  if (size > max_size) return SALTS_EMSGSIZE;
   for (size_t i = 0u; i < size; ++i) {
     const unsigned char ch = (unsigned char)text[i];
-    if (ch < 0x20u || ch == 0x7fu) return TURBO_EINVAL;
+    if (ch < 0x20u || ch == 0x7fu) return SALTS_EINVAL;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_protocol_business_protocol_valid(turbo_flow_protocol_kind_t protocol) {
@@ -39,13 +39,13 @@ static int flow_protocol_business_protocol_valid(turbo_flow_protocol_kind_t prot
 
 static int flow_protocol_business_segment_valid(const char *text, size_t max_size) {
   size_t size;
-  if (flow_protocol_business_text_valid(text, max_size, 0) != TURBO_OK) return TURBO_EINVAL;
+  if (flow_protocol_business_text_valid(text, max_size, 0) != SALTS_OK) return SALTS_EINVAL;
   size = flow_protocol_business_bounded_length(text, max_size + 1u);
   for (size_t i = 0u; i < size; ++i) {
     const unsigned char ch = (unsigned char)text[i];
-    if (ch <= 0x20u || ch >= 0x7fu || ch == '/' || ch == '+' || ch == '#') return TURBO_EINVAL;
+    if (ch <= 0x20u || ch >= 0x7fu || ch == '/' || ch == '+' || ch == '#') return SALTS_EINVAL;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int
@@ -55,14 +55,14 @@ flow_protocol_business_content_validate(const turbo_flow_protocol_business_conte
   if (!content || content->size < sizeof(*content) ||
       content->abi_version != TURBO_FLOW_PROTOCOL_BUSINESS_ABI_VERSION ||
       (!content->data && content->data_size != 0u) || content->data_size > max_payload_size)
-    return content && content->data_size > max_payload_size ? TURBO_EMSGSIZE : TURBO_EINVAL;
+    return content && content->data_size > max_payload_size ? SALTS_EMSGSIZE : SALTS_EINVAL;
   rc = flow_protocol_business_text_valid(content->media_type,
                                         TURBO_FLOW_PROTOCOL_BUSINESS_MEDIA_TYPE_MAX, 0);
-  if (rc != TURBO_OK) return rc;
-  if ((content->schema_id == NULL) != (content->type_name == NULL)) return TURBO_EINVAL;
+  if (rc != SALTS_OK) return rc;
+  if ((content->schema_id == NULL) != (content->type_name == NULL)) return SALTS_EINVAL;
   rc = flow_protocol_business_text_valid(content->schema_id,
                                         TURBO_FLOW_PROTOCOL_BUSINESS_SCHEMA_ID_MAX, 1);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   return flow_protocol_business_text_valid(content->type_name,
                                           TURBO_FLOW_PROTOCOL_BUSINESS_TYPE_NAME_MAX, 1);
 }
@@ -75,11 +75,11 @@ flow_protocol_business_metadata_validate(const turbo_flow_protocol_metadata_t *m
       metadata->protocol != expected_protocol ||
       metadata->direction != TURBO_FLOW_PROTOCOL_DIRECTION_UP ||
       flow_protocol_business_segment_valid(metadata->device_id, TURBO_FLOW_PROTOCOL_DEVICE_ID_MAX) !=
-          TURBO_OK ||
+          SALTS_OK ||
       flow_protocol_business_segment_valid(metadata->operation, TURBO_FLOW_PROTOCOL_OPERATION_MAX) !=
-          TURBO_OK)
-    return TURBO_EINVAL;
-  return TURBO_OK;
+          SALTS_OK)
+    return SALTS_EINVAL;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_business_create(const char *business_name,
@@ -92,24 +92,24 @@ int turbo_flow_protocol_business_create(const char *business_name,
   int rc;
   if (out) *out = NULL;
   rc = flow_protocol_business_text_valid(business_name, TURBO_FLOW_PROTOCOL_BUSINESS_NAME_MAX, 0);
-  if (rc != TURBO_OK || !flow_protocol_business_protocol_valid(protocol) || !profile ||
+  if (rc != SALTS_OK || !flow_protocol_business_protocol_valid(protocol) || !profile ||
       max_payload_size == 0u || !ops || ops->size < sizeof(*ops) ||
       ops->abi_version != TURBO_FLOW_PROTOCOL_BUSINESS_ABI_VERSION || !out)
-    return rc != TURBO_OK ? rc : TURBO_EINVAL;
+    return rc != SALTS_OK ? rc : SALTS_EINVAL;
   rc = flow_protocol_business_text_valid(profile, TURBO_FLOW_PROTOCOL_BUSINESS_PROFILE_MAX, 0);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if ((capabilities & TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT) != 0u &&
       !ops->consume_committed)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   if ((capabilities & TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND) != 0u &&
       !ops->prepare_command)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   if ((capabilities & ~(TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT |
                         TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND)) != 0u ||
       capabilities == 0u)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   business = (turbo_flow_protocol_business_t *)calloc(1u, sizeof(*business));
-  if (!business) return TURBO_ENOMEM;
+  if (!business) return SALTS_ENOMEM;
   business->info = (turbo_flow_protocol_business_info_t)TURBO_FLOW_PROTOCOL_BUSINESS_INFO_INIT;
   business->info.protocol = protocol;
   business->info.capabilities = capabilities;
@@ -119,7 +119,7 @@ int turbo_flow_protocol_business_create(const char *business_name,
   business->ops = *ops;
   business->ctx = ctx;
   *out = business;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void turbo_flow_protocol_business_destroy(turbo_flow_protocol_business_t *business) {
@@ -134,14 +134,14 @@ int turbo_flow_protocol_business_consume_committed(
       event->abi_version != TURBO_FLOW_PROTOCOL_BUSINESS_ABI_VERSION || event->delivery_id == 0u ||
       !event->route || event->route_size == 0u ||
       event->route_size > TURBO_FLOW_PROTOCOL_BUSINESS_ROUTE_MAX)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   if ((business->info.capabilities & TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT) == 0u ||
       !business->ops.consume_committed)
-    return TURBO_ENOTSUP;
+    return SALTS_ENOTSUP;
   rc = flow_protocol_business_metadata_validate(&event->metadata, business->info.protocol);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flow_protocol_business_content_validate(&event->content, business->info.max_payload_size);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   return business->ops.consume_committed(business->ctx, event);
 }
 
@@ -156,23 +156,23 @@ int turbo_flow_protocol_business_prepare_command(
       output->size < sizeof(*output) ||
       output->abi_version != TURBO_FLOW_PROTOCOL_BUSINESS_ABI_VERSION ||
       (!output->payload && output->payload_capacity != 0u))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   if ((business->info.capabilities & TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND) == 0u ||
       !business->ops.prepare_command)
-    return TURBO_ENOTSUP;
+    return SALTS_ENOTSUP;
   rc = flow_protocol_business_segment_valid(request->tenant, TURBO_FLOW_PROTOCOL_TENANT_MAX);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = flow_protocol_business_segment_valid(request->device_id, TURBO_FLOW_PROTOCOL_DEVICE_ID_MAX);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = flow_protocol_business_text_valid(request->action, TURBO_FLOW_PROTOCOL_OPERATION_MAX, 0);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = flow_protocol_business_text_valid(request->resource, TURBO_FLOW_PROTOCOL_RESOURCE_MAX, 1);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = flow_protocol_business_text_valid(request->correlation_id,
                                           TURBO_FLOW_PROTOCOL_CORRELATION_MAX, 1);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = flow_protocol_business_content_validate(&request->content, business->info.max_payload_size);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   memset(output->device_id, 0, sizeof(output->device_id));
   memset(output->operation, 0, sizeof(output->operation));
   memset(output->resource, 0, sizeof(output->resource));
@@ -180,14 +180,14 @@ int turbo_flow_protocol_business_prepare_command(
   output->sequence = 0u;
   output->payload_size = 0u;
   rc = business->ops.prepare_command(business->ctx, request, output);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     output->payload_size = 0u;
     return rc;
   }
   if (output->payload_size > output->payload_capacity ||
       output->payload_size > business->info.max_payload_size) {
     output->payload_size = 0u;
-    return TURBO_EMSGSIZE;
+    return SALTS_EMSGSIZE;
   }
   if (flow_protocol_business_bounded_length(output->device_id, sizeof(output->device_id)) >=
           sizeof(output->device_id) ||
@@ -200,19 +200,19 @@ int turbo_flow_protocol_business_prepare_command(
           sizeof(output->correlation_id) ||
       output->device_id[0] == '\0' || output->operation[0] == '\0') {
     output->payload_size = 0u;
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   if (flow_protocol_business_segment_valid(output->device_id, TURBO_FLOW_PROTOCOL_DEVICE_ID_MAX) !=
-          TURBO_OK ||
+          SALTS_OK ||
       flow_protocol_business_segment_valid(output->operation, TURBO_FLOW_PROTOCOL_OPERATION_MAX) !=
-          TURBO_OK ||
+          SALTS_OK ||
       (output->correlation_id[0] != '\0' &&
        flow_protocol_business_segment_valid(output->correlation_id,
-                                           TURBO_FLOW_PROTOCOL_CORRELATION_MAX) != TURBO_OK)) {
+                                           TURBO_FLOW_PROTOCOL_CORRELATION_MAX) != SALTS_OK)) {
     output->payload_size = 0u;
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_business_command_view(
@@ -224,7 +224,7 @@ int turbo_flow_protocol_business_command_view(
       (!output->payload && output->payload_size != 0u) ||
       output->payload_size > output->payload_capacity || !view || view->size < sizeof(*view) ||
       view->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   view->device_id = output->device_id;
   view->operation = output->operation;
   view->resource = output->resource[0] != '\0' ? output->resource : NULL;
@@ -232,14 +232,14 @@ int turbo_flow_protocol_business_command_view(
   view->sequence = output->sequence;
   view->payload = output->payload;
   view->payload_size = output->payload_size;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_business_get_info(const turbo_flow_protocol_business_t *business,
                                          turbo_flow_protocol_business_info_t *out) {
   if (!business || !out || out->size < sizeof(*out) ||
       out->abi_version != TURBO_FLOW_PROTOCOL_BUSINESS_ABI_VERSION)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   *out = business->info;
-  return TURBO_OK;
+  return SALTS_OK;
 }

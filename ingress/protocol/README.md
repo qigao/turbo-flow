@@ -1,11 +1,11 @@
 # TurboFlow Protocol Ingress
 
-`ingress/protocol` 是 TurboFlow 的可选协议前端层。它通过
-CoroNet 接收设备连接，完成协议分帧、校验、身份提取和响应编码，然后把中立消息
-投递给 `TurboFlow::Graph`。
+`ingress/protocol` 是 TurboFlow 的可选协议 codec/runtime 层。它完成协议分帧、校验、
+身份提取和响应编码，然后把中立消息投递给 `TurboFlow::Graph`。连接监听、TLS/WS、
+HTTP endpoint 和 event-loop 生命周期由仓库外的 CNet/CHTTP 宿主适配层拥有。
 
 ```text
-Socket/CoroNet
+CNet/CHTTP host adapter
   -> protocol codec/session
   -> payload + protocol metadata
   -> TurboFlow::ProtocolIngressGraph
@@ -24,7 +24,7 @@ payload 与 `turbo_flow_protocol_metadata_t`；`TurboFlow::ProtocolIngressGraph`
 
 ## 协议与传输
 
-| 协议前端 | CoroNet transport | 设备身份 |
+| 协议前端 | 预期宿主 transport | 设备身份 |
 | --- | --- | --- |
 | CoAP | UDP | transport identity resolver |
 | LwM2M | UDP NoSec（必须显式允许） | transport identity resolver |
@@ -39,11 +39,11 @@ client，不保存 broker session、QoS、retained 或离线消息状态。
 ## 所有权与反压
 
 - Protocol runtime 拥有分帧缓冲、session、pending delivery 与协议响应顺序。
-- CoroNet owner 拥有 socket、event loop、TLS 身份和关闭栅栏。
+- CNet/CHTTP 宿主 owner 拥有连接、event loop、TLS 身份和关闭栅栏。
 - Graph 拥有已接纳的 `turbo_flow_msg_t`，但不拥有 socket 或协议 session。
 - `inline` 是兼容默认值，Graph bridge 成功后返回 `SETTLED`。
 - `async_bounded` 只在 Flow 的队列、单消息字节和总在途字节预算内接纳；成功后返回
-  `PENDING`，worker completion 恰好回调一次。宿主必须把 completion 投递回 CoroNet
+  `PENDING`，worker completion 恰好回调一次。宿主必须把 completion 投递回网络
   owner，并在原 publish callback 返回后调用 server/runtime `settle()`；worker 不得直接
   重入单 owner protocol runtime。
 - 有界接纳失败立即返回具体错误，不产生 completion，也不回退到同步执行。
@@ -53,8 +53,8 @@ client，不保存 broker session、QoS、retained 或离线消息状态。
 
 ## 构建与测试
 
-所有选项只在仓库根 `CMakeOptions.cmake` 声明。scheduled transport soak 通过
-`TURBO_FLOW_PROTOCOL_TRANSPORT_SOAK_TESTS=ON` 启用。常规验证使用仓库 presets：
+所有选项只在仓库根 `CMakeOptions.cmake` 声明。当前仓库不构建 transport soak；
+常规验证使用仓库 presets：
 
 ```powershell
 cmake --fresh --preset win-release-user

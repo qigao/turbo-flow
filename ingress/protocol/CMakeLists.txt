@@ -1,5 +1,4 @@
 add_subdirectory(common)
-add_subdirectory(coronet)
 add_subdirectory(graph)
 
 add_library(
@@ -35,7 +34,7 @@ turbo_flow_add_protocol(
   tf_protocol_lwm2m ProtocolLwm2m lwm2m/flow_protocol_lwm2m.c)
 turbo_flow_add_protocol(
   tf_protocol_ocpp ProtocolOcpp ocpp/flow_protocol_ocpp.c)
-target_link_libraries(tf_protocol_ocpp PRIVATE TurboParser::Parser)
+target_link_libraries(tf_protocol_ocpp PRIVATE Salts::JsonParser)
 if(NOT WIN32)
   target_link_libraries(tf_protocol_ocpp PRIVATE m)
 endif()
@@ -48,8 +47,4 @@ add_subdirectory(business)
 
 if(BUILD_TESTS)
   add_subdirectory(tests)
-endif()
-
-if(BUILD_BENCHMARKS)
-  add_subdirectory(benchmarks)
 endif()

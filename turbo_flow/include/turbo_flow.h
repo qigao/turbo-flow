@@ -3,12 +3,13 @@
 
 #include "turbo_flow_export.h"
 #include "platform.h"
-#include "turbo_buffer.h"
-#include "turbo_error.h"
+#include <salts/clock.h>
+#include "salts_buffer.h"
+#include "salts_error.h"
 #include "turbo_flow_domain.h"
 #include "turbo_flow_config_limits.h"
-#include "turbo_str.h"
-#include "turbo_vstr.h"
+#include "salts_str.h"
+#include "salts_vstr.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -275,7 +276,7 @@ typedef struct turbo_flow_data_schema_s {
   turbo_flow_data_encoding_t encoding;
   const char *schema_name;
   const char *type_name;
-  /** Stable provider value type, for example `TurboUtils.DataBindValue`. */
+  /** Stable provider value type, for example `Salts.DataBindValue`. */
   const char *projection_type;
   uint32_t schema_id;
   uint32_t schema_version;
@@ -436,8 +437,8 @@ typedef struct turbo_flow_data_decision_s {
 } turbo_flow_data_decision_t;
 
 #define TURBO_FLOW_DATA_DECISION_INIT                                                              \
-  {sizeof(turbo_flow_data_decision_t), UINT32_MAX, TURBO_FLOW_DATA_NOT_EVALUATED, 0u, TURBO_OK,    \
-   0, 0, TURBO_OK, {0}, {0}, {0}}
+  {sizeof(turbo_flow_data_decision_t), UINT32_MAX, TURBO_FLOW_DATA_NOT_EVALUATED, 0u, SALTS_OK,    \
+   0, 0, SALTS_OK, {0}, {0}, {0}}
 
 typedef struct turbo_flow_msg_s {
   uint64_t id;
@@ -475,14 +476,14 @@ typedef struct turbo_flow_retry_policy_s {
 typedef struct turbo_flow_reorder_config_s {
   /** Maximum number of out-of-order executions waiting at this boundary. */
   uint32_t capacity;
-  /** Maximum wait for a missing sequence before failing with TURBO_ETIMEDOUT. */
+  /** Maximum wait for a missing sequence before failing with SALTS_ETIMEDOUT. */
   uint32_t timeout_ms;
 } turbo_flow_reorder_config_t;
 
 typedef int (*turbo_flow_retry_attempt_fn)(void *ctx, turbo_flow_msg_t *attempt_msg,
                                            uint32_t attempt);
 typedef int (*turbo_flow_retryable_fn)(void *ctx, int status);
-/** Return TURBO_OK after the delay or TURBO_ESHUTDOWN/TURBO_ECANCELED when stopping. */
+/** Return SALTS_OK after the delay or SALTS_ESHUTDOWN/SALTS_ECANCELED when stopping. */
 typedef int (*turbo_flow_retry_wait_fn)(void *ctx, uint32_t delay_ms);
 
 typedef struct turbo_flow_retry_ops_s {
@@ -498,7 +499,7 @@ typedef int (*turbo_flow_const_stage_fn)(const turbo_flow_msg_t *msg, void *ctx)
 /**
  * Produce zero or more owned output messages from one immutable input.
  *
- * Outputs remain private to the runtime until the callback returns TURBO_OK.
+ * Outputs remain private to the runtime until the callback returns SALTS_OK.
  * The emitter is valid only for the callback duration and enforces the bound
  * declared by its provider registration.
  */
@@ -507,8 +508,8 @@ typedef int (*turbo_flow_emitting_stage_fn)(const turbo_flow_msg_t *input,
 
 /**
  * Clone one self-contained output into the current bounded emission batch.
- * Returns TURBO_OK, TURBO_ENOSPC at the declared bound, TURBO_ENOTSUP for a
- * process-local capability, TURBO_EINVAL for invalid backing, or TURBO_ENOMEM.
+ * Returns SALTS_OK, SALTS_ENOSPC at the declared bound, SALTS_ENOTSUP for a
+ * process-local capability, SALTS_EINVAL for invalid backing, or SALTS_ENOMEM.
  * The first failure is sticky and makes the whole callback batch fail.
  */
 TURBO_FLOW_C_API int turbo_flow_emitter_emit_clone(turbo_flow_emitter_t *emitter,
@@ -567,20 +568,20 @@ TURBO_FLOW_C_API vstr turbo_flow_keyed_state_key(const turbo_flow_keyed_state_t 
  * Read the callback-local value snapshot or pending PUT value.
  *
  * The returned view is borrowed until the next PUT/DELETE or callback return.
- * `revision` may be NULL. Returns TURBO_ENOENT when the key is absent/deleted,
- * TURBO_EBUSY outside an active callback, or TURBO_EINVAL for invalid output.
+ * `revision` may be NULL. Returns SALTS_ENOENT when the key is absent/deleted,
+ * SALTS_EBUSY outside an active callback, or SALTS_EINVAL for invalid output.
  */
 TURBO_FLOW_C_API int turbo_flow_keyed_state_get(const turbo_flow_keyed_state_t *state, vstr *value,
                                          uint64_t *revision);
 
 /**
  * Stage a copied value for atomic commit after callback success.
- * Returns TURBO_OK, TURBO_ENOSPC for configured bounds, TURBO_ENOMEM, or
- * TURBO_EBUSY outside an active callback. The first PUT failure is sticky.
+ * Returns SALTS_OK, SALTS_ENOSPC for configured bounds, SALTS_ENOMEM, or
+ * SALTS_EBUSY outside an active callback. The first PUT failure is sticky.
  */
 TURBO_FLOW_C_API int turbo_flow_keyed_state_put(turbo_flow_keyed_state_t *state, vstr value);
 
-/** Stage deletion of an existing key; returns TURBO_ENOENT when absent. */
+/** Stage deletion of an existing key; returns SALTS_ENOENT when absent. */
 TURBO_FLOW_C_API int turbo_flow_keyed_state_delete(turbo_flow_keyed_state_t *state);
 
 /** One bounded event-time tumbling-window store; keys and values are copied. */
@@ -655,7 +656,7 @@ typedef enum turbo_flow_settlement_action_e {
 typedef struct turbo_flow_settlement_result_s {
   size_t size;
   turbo_flow_settlement_action_t action;
-  /** TURBO_OK for COMPLETE/ACKNOWLEDGE; the classified cause for terminal actions. */
+  /** SALTS_OK for COMPLETE/ACKNOWLEDGE; the classified cause for terminal actions. */
   int status;
   uint32_t attempt;
   uint64_t message_id;
@@ -663,7 +664,7 @@ typedef struct turbo_flow_settlement_result_s {
 } turbo_flow_settlement_result_t;
 
 #define TURBO_FLOW_SETTLEMENT_RESULT_INIT                                                          \
-  {sizeof(turbo_flow_settlement_result_t), 0, TURBO_OK, 0u, 0u, 0u}
+  {sizeof(turbo_flow_settlement_result_t), 0, SALTS_OK, 0u, 0u, 0u}
 
 /**
  * Report exactly one settlement decision from the current stage callback.
@@ -677,8 +678,8 @@ TURBO_FLOW_C_API int turbo_flow_settlement_report(const turbo_flow_settlement_re
  * Cooperatively yield the current stage task.
  *
  * Thread/disruptor tasks yield their OS time slice. Coroutine tasks suspend to
- * their scheduler. Returns TURBO_EINVAL outside an executor-owned stage task,
- * TURBO_ECANCELED when cancellation was requested, or TURBO_ETIMEDOUT when the
+ * their scheduler. Returns SALTS_EINVAL outside an executor-owned stage task,
+ * SALTS_ECANCELED when cancellation was requested, or SALTS_ETIMEDOUT when the
  * bound operation deadline expires.
  */
 TURBO_FLOW_C_API int turbo_flow_execution_yield(void);
@@ -809,7 +810,7 @@ typedef struct turbo_flow_resource_command_s {
   char target_uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u];
   char idempotency_key[TURBO_FLOW_RESOURCE_COMMAND_KEY_MAX + 1u];
   uint64_t expected_generation;
-  /** Absolute turbo_hrtime() deadline; UINT64_MAX means no deadline. */
+  /** Absolute salts_hrtime() deadline; UINT64_MAX means no deadline. */
   uint64_t deadline_ns;
   uint32_t parallelism;
   /** Resize-only owner drain budget; UINT64_MAX waits without a drain deadline. */
@@ -832,7 +833,7 @@ typedef struct turbo_flow_resource_command_result_s {
 } turbo_flow_resource_command_result_t;
 
 #define TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT                                                    \
-  {sizeof(turbo_flow_resource_command_result_t), TURBO_OK, 0, 0u, 0u, 0u}
+  {sizeof(turbo_flow_resource_command_result_t), SALTS_OK, 0, 0u, 0u, 0u}
 
 typedef enum turbo_flow_resource_reconcile_action_e {
   TURBO_FLOW_RESOURCE_RECONCILE_CONVERGED = 0,
@@ -883,7 +884,7 @@ typedef struct turbo_flow_resource_reconcile_result_s {
 #define TURBO_FLOW_RESOURCE_RECONCILE_RESULT_INIT                                                  \
   {sizeof(turbo_flow_resource_reconcile_result_t),                                                 \
    TURBO_FLOW_RESOURCE_RECONCILE_CONVERGED,                                                        \
-   TURBO_OK,                                                                                       \
+   SALTS_OK,                                                                                       \
    0,                                                                                              \
    0u,                                                                                             \
    TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT}
@@ -911,7 +912,7 @@ typedef struct turbo_flow_resize_workflow_spec_s {
   uint64_t pool_generation;
   uint32_t parallelism;
   uint64_t drain_timeout_ms;
-  /** Absolute turbo_hrtime() deadline; UINT64_MAX means no deadline. */
+  /** Absolute salts_hrtime() deadline; UINT64_MAX means no deadline. */
   uint64_t deadline_ns;
 } turbo_flow_resize_workflow_spec_t;
 
@@ -940,7 +941,7 @@ typedef struct turbo_flow_resize_workflow_state_s {
    0u,                                                                                             \
    0u,                                                                                             \
    0u,                                                                                             \
-   TURBO_OK}
+   SALTS_OK}
 
 typedef enum turbo_flow_resize_workflow_action_e {
   TURBO_FLOW_RESIZE_WORKFLOW_NOOP = 0,
@@ -964,7 +965,7 @@ typedef struct turbo_flow_resize_workflow_result_s {
    TURBO_FLOW_RESIZE_WORKFLOW_NOOP,                                                                \
    TURBO_FLOW_RESIZE_WORKFLOW_QUIESCE_INGRESS,                                                     \
    TURBO_FLOW_RESIZE_WORKFLOW_QUIESCE_INGRESS,                                                     \
-   TURBO_OK,                                                                                       \
+   SALTS_OK,                                                                                       \
    TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT}
 
 typedef int (*turbo_flow_resource_command_apply_fn)(void *ctx, turbo_flow_t *flow,
@@ -1031,7 +1032,7 @@ typedef enum turbo_flow_claim_commit_action_e {
 /**
  * Load one owner-local durable state snapshot.
  *
- * TURBO_ENOENT means the key does not exist. TURBO_ENOSPC reports the required
+ * SALTS_ENOENT means the key does not exist. SALTS_ENOSPC reports the required
  * size through `out_size`. The returned bytes are opaque to the claim owner.
  */
 typedef int (*turbo_flow_claim_state_load_fn)(void *ctx, const char *key, uint8_t *out,
@@ -1101,7 +1102,7 @@ typedef struct turbo_flow_adapter_ops_s {
  * Core-owned iterator for one native adapter batch.
  *
  * The adapter calls next exactly once for each index in ascending order. On
- * TURBO_OK, message owns an independent clone/retained view and must be cleaned
+ * SALTS_OK, message owns an independent clone/retained view and must be cleaned
  * with turbo_flow_msg_cleanup() before requesting the next item. On failure,
  * message is initialized but empty and the batch must stop at that index.
  */
@@ -1353,7 +1354,7 @@ typedef enum turbo_flow_exec_kind_e {
   TURBO_FLOW_EXEC_INLINE = 0,
   /** Submit to a runtime-owned OS thread pool. */
   TURBO_FLOW_EXEC_THREAD_POOL,
-  /** Submit to a runtime-owned TurboUtils coroutine pool. */
+  /** Submit to a runtime-owned Salts coroutine pool. */
   TURBO_FLOW_EXEC_CORO_POOL
 } turbo_flow_exec_kind_t;
 
@@ -1455,7 +1456,7 @@ typedef struct turbo_flow_emitting_operation_provider_registration_s {
  * DATA_MUTATION authority, direct inline execution, and no settlement/deadline.
  * One store may bind only one provider/node. Callback PUT/DELETE changes commit
  * only after callback success and per-key revision validation. A concurrent
- * conflicting commit returns TURBO_EBUSY; the runtime does not retry callbacks
+ * conflicting commit returns SALTS_EBUSY; the runtime does not retry callbacks
  * because their external side effects cannot be assumed idempotent.
  */
 typedef struct turbo_flow_keyed_operation_provider_registration_s {
@@ -1695,7 +1696,7 @@ TURBO_FLOW_C_API int turbo_flow_publish(turbo_flow_t *flow, const char *source_n
  * Prepare one transient message for an ordered synchronous batch.
  *
  * Core initializes `message` before the callback and always cleans it after the
- * callback/publish attempt. On TURBO_OK, ownership of all fields transfers to
+ * callback/publish attempt. On SALTS_OK, ownership of all fields transfers to
  * core for that attempt. On failure, core still cleans any fields already set.
  * The callback must not retain `message` or synchronously stop, drain, reset, or
  * destroy the same flow.
@@ -1723,8 +1724,8 @@ typedef struct turbo_flow_publish_batch_config_s {
  * clone/retain rules match `turbo_flow_publish()`. A concurrent stop waits for
  * the accepted batch to return.
  *
- * Returns TURBO_EINVAL for invalid ABI/source/config input or an unknown/non-source
- * stage, TURBO_ESHUTDOWN when publication admission is closed, or the first prepare,
+ * Returns SALTS_EINVAL for invalid ABI/source/config input or an unknown/non-source
+ * stage, SALTS_ESHUTDOWN when publication admission is closed, or the first prepare,
  * graph, primitive, or owner callback failure.
  *
  * Example (the flow must already be compiled and started):
@@ -1736,7 +1737,7 @@ typedef struct turbo_flow_publish_batch_config_s {
  * static int prepare_id(void *ctx, size_t index, turbo_flow_msg_t *message) {
  *   const publish_ids_t *ids = (const publish_ids_t *)ctx;
  *   message->id = ids->first_id + index;
- *   return TURBO_OK;
+ *   return SALTS_OK;
  * }
  *
  * publish_ids_t ids = {1000u};
@@ -1760,7 +1761,7 @@ typedef struct turbo_flow_publish_result_s {
   int status;
 } turbo_flow_publish_result_t;
 
-#define TURBO_FLOW_PUBLISH_RESULT_INIT {sizeof(turbo_flow_publish_result_t), TURBO_OK}
+#define TURBO_FLOW_PUBLISH_RESULT_INIT {sizeof(turbo_flow_publish_result_t), SALTS_OK}
 
 #define TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS TURBO_FLOW_CONFIG_INGRESS_DEFAULT_WORKERS
 #define TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY TURBO_FLOW_CONFIG_INGRESS_DEFAULT_CAPACITY
@@ -1814,7 +1815,7 @@ typedef enum turbo_flow_source_handoff_mode_e {
  *
  * The configuration is copied and survives stop/start. Call only while the
  * flow is not STARTED. Queue, per-message byte, or aggregate in-flight byte
- * exhaustion is reported by publish_async as TURBO_ENOSPC; submissions never
+ * exhaustion is reported by publish_async as SALTS_ENOSPC; submissions never
  * block waiting for capacity. A V1-sized configuration remains accepted and
  * receives the current byte-budget defaults.
  */
@@ -1824,9 +1825,9 @@ TURBO_FLOW_C_API int turbo_flow_configure_async_ingress(turbo_flow_t *flow,
 /**
  * Clone/retain one message and enqueue it for source publication.
  *
- * TURBO_OK means the Flow owns the accepted message; graph completion is
+ * SALTS_OK means the Flow owns the accepted message; graph completion is
  * reported later through `completion`. Invalid input/lifecycle errors are
- * returned directly, and a full bounded ingress returns TURBO_ENOSPC. The
+ * returned directly, and a full bounded ingress returns SALTS_ENOSPC. The
  * producer thread never executes graph stages.
  */
 TURBO_FLOW_C_API int turbo_flow_publish_async(turbo_flow_t *flow, const char *source_name,
@@ -1838,7 +1839,7 @@ TURBO_FLOW_C_API int turbo_flow_publish_async(turbo_flow_t *flow, const char *so
  *
  * `result` is caller-owned and must use TURBO_FLOW_PUBLISH_RESULT_INIT. On
  * return, `result->status` equals the function status.
- * Returns TURBO_EINVAL for invalid ABI/source/message input, lifecycle or
+ * Returns SALTS_EINVAL for invalid ABI/source/message input, lifecycle or
  * stage errors from the graph, or the primitive/owner callback status.
  */
 TURBO_FLOW_C_API int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name,
@@ -1863,9 +1864,9 @@ TURBO_FLOW_C_API int turbo_flow_register_operation_provider(
  * Register one bounded 0..N implementation for a domain data operation.
  *
  * The flow copies registration metadata and borrows ctx until reset/destroy.
- * Returns TURBO_OK, TURBO_EINVAL for an invalid ABI/options/bound,
- * TURBO_EALREADY for a duplicate operation/resource pair, TURBO_EBUSY after
- * compile/start, or TURBO_ENOMEM. Compile may return TURBO_ENOTSUP when the
+ * Returns SALTS_OK, SALTS_EINVAL for an invalid ABI/options/bound,
+ * SALTS_EALREADY for a duplicate operation/resource pair, SALTS_EBUSY after
+ * compile/start, or SALTS_ENOMEM. Compile may return SALTS_ENOTSUP when the
  * operation contract, executor, retry policy, or downstream topology cannot
  * provide the documented emission semantics.
  */
@@ -1875,7 +1876,7 @@ TURBO_FLOW_C_API int turbo_flow_register_emitting_operation_provider(
 /**
  * Register one keyed-state processor. Metadata is copied; callback contexts and
  * store are borrowed. Returns standard provider registration errors and
- * TURBO_EALREADY when the store already has an owner binding.
+ * SALTS_EALREADY when the store already has an owner binding.
  */
 TURBO_FLOW_C_API int turbo_flow_register_keyed_operation_provider(
     turbo_flow_t *flow, const turbo_flow_keyed_operation_provider_registration_t *registration);
@@ -1894,7 +1895,7 @@ TURBO_FLOW_C_API int turbo_flow_register_event_time_window_provider(
  *
  * The caller owns multi-source watermark merging. Equal watermarks are accepted so a failed
  * close can be retried. `closed_windows` may be NULL and counts state deletions completed by
- * this call. Events for already-closed time ranges fail with TURBO_ETIMEDOUT. One advance uses
+ * this call. Events for already-closed time ranges fail with SALTS_ETIMEDOUT. One advance uses
  * O(W + C log C) time and O(W) temporary references for W active and C closable windows.
  */
 TURBO_FLOW_C_API int turbo_flow_advance_event_time_watermark(turbo_flow_t *flow,
@@ -1988,7 +1989,7 @@ TURBO_FLOW_C_API uint64_t turbo_flow_observer_failure_count(const turbo_flow_t *
 
 TURBO_FLOW_C_API size_t turbo_flow_adapter_count(const turbo_flow_t *flow);
 /**
- * Query one registered adapter. Returns TURBO_ENOTSUP when it has no provider.
+ * Query one registered adapter. Returns SALTS_ENOTSUP when it has no provider.
  * Serialize with registry reset/destroy; the provider synchronizes live fields.
  */
 TURBO_FLOW_C_API int turbo_flow_adapter_connection_snapshot_at(const turbo_flow_t *flow, size_t index,
@@ -2083,8 +2084,8 @@ TURBO_FLOW_C_API const turbo_flow_resource_schema_t *turbo_flow_pool_status_sche
  * @param flow Flow whose lifecycle and pool vectors are serialized by the host.
  * @param index Pool index in the current runtime generation.
  * @param out Caller-owned output initialized with TURBO_FLOW_RESOURCE_DOCUMENT_INIT.
- * @return TURBO_OK on success; TURBO_EINVAL for invalid/uninitialized or still-owned output,
- *         TURBO_ENOENT when the pool does not exist, TURBO_ENOMEM on allocation failure, or a
+ * @return SALTS_OK on success; SALTS_EINVAL for invalid/uninitialized or still-owned output,
+ *         SALTS_ENOENT when the pool does not exist, SALTS_ENOMEM on allocation failure, or a
  *         snapshot/identity error from the pool owner.
  *
  * On success `out->payload` is immutable and remains valid independently of later pool changes.
@@ -2131,7 +2132,7 @@ TURBO_FLOW_C_API turbo_flow_content_state_t turbo_flow_msg_content_state(const t
  * Attach an owned derived projection without changing the original payload.
  *
  * `destroy` is required and receives `ctx`. `clone` is optional; message clone,
- * retry, and fan-out return TURBO_ENOTSUP when it is absent. Existing parsed
+ * retry, and fan-out return SALTS_ENOTSUP when it is absent. Existing parsed
  * data must be cleared by its owner before binding a projection. When the
  * message descriptor declares a schema, projection encoding and schema
  * name/type/version must match it exactly.
@@ -2186,7 +2187,7 @@ TURBO_FLOW_C_API int turbo_flow_schema_registry_register(turbo_flow_schema_regis
                                                   const turbo_flow_data_schema_t *schema);
 
 /**
- * Return a registry-owned stable schema pointer, or TURBO_ENOENT.
+ * Return a registry-owned stable schema pointer, or SALTS_ENOENT.
  * The pointer remains valid until the host destroys the registry; destruction
  * must be serialized after all adapters and callers stop using it.
  */

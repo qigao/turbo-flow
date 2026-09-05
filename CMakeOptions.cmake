@@ -18,9 +18,6 @@ option(BUILD_BENCHMARKS "Build benchmark suite" ON)
 
 option(TURBO_FLOW_REDIS_LIVE_TESTS
        "Enable Redis integration tests against 127.0.0.1:6379" OFF)
-option(TURBO_FLOW_PROTOCOL_TRANSPORT_SOAK_TESTS
-       "Register scheduled protocol-ingress CoroNet transport soak tests" OFF)
-
 option(ENABLE_SANITIZER_ADDRESS "Enable AddressSanitizer" OFF)
 option(ENABLE_SANITIZER_UNDEFINED "Enable UndefinedBehaviorSanitizer" OFF)
 option(ENABLE_SANITIZER_LEAK "Enable LeakSanitizer" OFF)

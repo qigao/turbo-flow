@@ -1,13 +1,14 @@
 # TurboFlow
 
 TurboFlow 是基于有向 graph 的可配置数据处理器。仓库只拥有 Graph DSL、编译与执行、配置解析、
-typed projection、调度、可观测性，以及可选的通用存储和网络 adapter。
+typed projection、调度、可观测性，以及可选的通用存储 adapter。
 
 消息队列等完整产品及其控制面、业务 session、peer 和重连事实不属于本仓库。
 这些产品可以调用 TurboFlow，但 TurboFlow 不反向依赖它们。
 
-`ingress/protocol` 是独立于产品的可选协议前端：OCPP、JT/T 808、GB/T 32960、CoAP
-等协议通过 CoroNet 完成分帧与校验后直接进入 Graph。MQTT 只是可选 Sink，不是内部消息格式。
+`ingress/protocol` 提供独立于产品的协议 codec/runtime：OCPP、JT/T 808、GB/T 32960、CoAP
+等协议完成分帧与校验后可直接进入 Graph。连接监听、HTTP endpoint 与网络生命周期不在本仓库；
+后续集成只允许通过 CNet/CHTTP 的宿主适配层进入。MQTT 只是可选 Sink，不是内部消息格式。
 
 ## 构建边界
 
@@ -19,7 +20,6 @@ typed projection、调度、可观测性，以及可选的通用存储和网络 
 | `TurboFlow::Flow` | 兼容聚合 target；新代码优先链接最小 target |
 | `TurboFlow::ProtocolIngress` | 可选 protocol codec/runtime，不依赖 MQTT broker |
 | `TurboFlow::ProtocolIngressGraph` | 将中立协议消息投递到 `TurboFlow::Graph` |
-| `TurboFlow::ProtocolIngressCoroNet` | 可选 Socket/TLS/WS 协议监听与有界 session runtime |
 | `TurboFlow::MqttSink` | 批量映射中立消息；不拥有 codec/session 或任何 I/O connection |
 
 所有构建开关只在 `CMakeOptions.cmake` 声明。不得在子目录新增隐藏 option，也不得把外部产品源码、

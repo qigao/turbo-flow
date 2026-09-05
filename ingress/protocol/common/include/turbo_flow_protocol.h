@@ -179,7 +179,7 @@ typedef struct turbo_flow_protocol_command_view_s {
  * message does not require a response.
  *
  * request is the complete original ingress frame and remains caller-owned.
- * status is TURBO_OK for successful settlement, otherwise the terminal
+ * status is SALTS_OK for successful settlement, otherwise the terminal
  * settlement error that the codec maps to a protocol-defined rejection.
  */
 TURBO_FLOW_C_API int turbo_flow_protocol_reply(

@@ -1,7 +1,7 @@
 #include "turbo_flow_protocol.h"
 #include "turbo_flow_protocol_plugin.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -51,13 +51,13 @@ const char *turbo_flow_protocol_kind_name(turbo_flow_protocol_kind_t protocol) {
 static int flow_protocol_text_copy(char *out, size_t capacity,
                                   const char *text) {
   size_t length;
-  if (!out || capacity == 0u || !text) return TURBO_EINVAL;
+  if (!out || capacity == 0u || !text) return SALTS_EINVAL;
   for (length = 0u; length < capacity && text[length] != '\0'; ++length) {
   }
-  if (length == 0u) return TURBO_EINVAL;
-  if (length >= capacity) return TURBO_EMSGSIZE;
+  if (length == 0u) return SALTS_EINVAL;
+  if (length >= capacity) return SALTS_EMSGSIZE;
   memcpy(out, text, length + 1u);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_protocol_segment_valid(const char *text, size_t length) {
@@ -82,16 +82,16 @@ static int flow_protocol_frame_validate(const turbo_flow_protocol_t *protocol,
   if (!protocol || !frame || frame->size < sizeof(*frame) ||
       frame->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION || !frame->data ||
       frame->data_size == 0u)
-    return TURBO_EINVAL;
-  if (frame->data_size > protocol->max_frame_size) return TURBO_EMSGSIZE;
+    return SALTS_EINVAL;
+  if (frame->data_size > protocol->max_frame_size) return SALTS_EMSGSIZE;
   if (frame->protocol_version && frame->protocol_version[0] != '\0' &&
       strcmp(frame->protocol_version, protocol->protocol_version) != 0)
-    return TURBO_ENOTSUP;
+    return SALTS_ENOTSUP;
   if (frame->device_id && frame->device_id[0] != '\0' &&
       !flow_protocol_cstr_segment_valid(frame->device_id,
                                        TURBO_FLOW_PROTOCOL_DEVICE_ID_MAX))
-    return TURBO_EINVAL;
-  return TURBO_OK;
+    return SALTS_EINVAL;
+  return SALTS_OK;
 }
 
 static int flow_protocol_inspect(turbo_flow_protocol_t *protocol,
@@ -100,38 +100,38 @@ static int flow_protocol_inspect(turbo_flow_protocol_t *protocol,
                                 turbo_flow_protocol_metadata_t *metadata) {
   turbo_flow_protocol_metadata_t inspected = TURBO_FLOW_PROTOCOL_METADATA_INIT;
   int rc = flow_protocol_frame_validate(protocol, frame);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (atomic_load_explicit(&protocol->state, memory_order_acquire) !=
       FLOW_PROTOCOL_STATE_OPEN)
-    return TURBO_EBUSY;
+    return SALTS_EBUSY;
   rc = protocol->ops.inspect(protocol->codec_ctx, protocol->protocol_version,
                             frame, &inspected);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (inspected.size < sizeof(inspected) ||
       inspected.abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION ||
       !flow_protocol_cstr_segment_valid(inspected.operation,
                                        TURBO_FLOW_PROTOCOL_OPERATION_MAX))
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   if (inspected.device_id[0] == '\0') {
-    if (!frame->device_id || frame->device_id[0] == '\0') return TURBO_EPROTO;
+    if (!frame->device_id || frame->device_id[0] == '\0') return SALTS_EPROTO;
     rc = flow_protocol_text_copy(inspected.device_id,
                                 sizeof(inspected.device_id), frame->device_id);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   } else if (frame->device_id && frame->device_id[0] != '\0' &&
              strcmp(inspected.device_id, frame->device_id) != 0) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   if (!flow_protocol_cstr_segment_valid(inspected.device_id,
                                        TURBO_FLOW_PROTOCOL_DEVICE_ID_MAX))
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   inspected.protocol = protocol->protocol;
   inspected.direction = direction;
   rc = flow_protocol_text_copy(inspected.protocol_version,
                               sizeof(inspected.protocol_version),
                               protocol->protocol_version);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   *metadata = inspected;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_create(
@@ -155,15 +155,15 @@ int turbo_flow_protocol_create(
       !ops || ops->size < offsetof(turbo_flow_protocol_codec_ops_t, reply) ||
       ops->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION || !ops->inspect ||
       !out)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   if (!flow_protocol_cstr_segment_valid(name,
                                        TURBO_FLOW_PROTOCOL_OPERATION_MAX))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   version = request->protocol_version && request->protocol_version[0] != '\0'
                 ? request->protocol_version
                 : default_protocol_version;
   protocol = (turbo_flow_protocol_t *)calloc(1u, sizeof(*protocol));
-  if (!protocol) return TURBO_ENOMEM;
+  if (!protocol) return SALTS_ENOMEM;
   protocol->protocol = request->protocol;
   protocol->capabilities = capabilities;
   protocol->max_frame_size = request->max_frame_size;
@@ -172,16 +172,16 @@ int turbo_flow_protocol_create(
          ops->size < sizeof(protocol->ops) ? ops->size : sizeof(protocol->ops));
   protocol->codec_ctx = ctx;
   rc = flow_protocol_text_copy(protocol->name, sizeof(protocol->name), name);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = flow_protocol_text_copy(protocol->protocol_version,
                                 sizeof(protocol->protocol_version), version);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     free(protocol);
     return rc;
   }
   atomic_init(&protocol->state, FLOW_PROTOCOL_STATE_OPEN);
   *out = protocol;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void turbo_flow_protocol_destroy(turbo_flow_protocol_t *protocol) {
@@ -198,18 +198,18 @@ int turbo_flow_protocol_decode(turbo_flow_protocol_t *protocol,
   int rc;
   if (!output || output->size < sizeof(*output) ||
       output->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION || !output->payload)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   output->payload_size = 0u;
   output->metadata =
       (turbo_flow_protocol_metadata_t)TURBO_FLOW_PROTOCOL_METADATA_INIT;
   rc = flow_protocol_inspect(protocol, frame, TURBO_FLOW_PROTOCOL_DIRECTION_UP,
                             &metadata);
-  if (rc != TURBO_OK) return rc;
-  if (frame->data_size > output->payload_capacity) return TURBO_EMSGSIZE;
+  if (rc != SALTS_OK) return rc;
+  if (frame->data_size > output->payload_capacity) return SALTS_EMSGSIZE;
   memmove(output->payload, frame->data, frame->data_size);
   output->payload_size = frame->data_size;
   output->metadata = metadata;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_protocol_frame_output_validate(
@@ -217,11 +217,11 @@ static int flow_protocol_frame_output_validate(
   if (!output || output->size < sizeof(*output) ||
       output->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION ||
       !output->data || output->capacity == 0u)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   output->data_size = 0u;
   output->metadata = (turbo_flow_protocol_metadata_t)
       TURBO_FLOW_PROTOCOL_METADATA_INIT;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_protocol_generated_frame_validate(
@@ -231,22 +231,22 @@ static int flow_protocol_generated_frame_validate(
       TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
   turbo_flow_protocol_metadata_t metadata = TURBO_FLOW_PROTOCOL_METADATA_INIT;
   int rc;
-  if (output->data_size == 0u) return TURBO_OK;
+  if (output->data_size == 0u) return SALTS_OK;
   if (output->data_size > output->capacity ||
       output->data_size > protocol->max_frame_size)
-    return TURBO_EMSGSIZE;
+    return SALTS_EMSGSIZE;
   generated.data = output->data;
   generated.data_size = output->data_size;
   generated.device_id = device_id;
   generated.protocol_version = protocol->protocol_version;
   rc = flow_protocol_inspect(protocol, &generated,
                             TURBO_FLOW_PROTOCOL_DIRECTION_DOWN, &metadata);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     output->data_size = 0u;
     return rc;
   }
   output->metadata = metadata;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_reply(
@@ -256,24 +256,24 @@ int turbo_flow_protocol_reply(
   turbo_flow_protocol_metadata_t request_metadata =
       TURBO_FLOW_PROTOCOL_METADATA_INIT;
   int rc = flow_protocol_frame_output_validate(output);
-  if (rc != TURBO_OK || !protocol) return TURBO_EINVAL;
+  if (rc != SALTS_OK || !protocol) return SALTS_EINVAL;
   if (!protocol->ops.reply ||
       (protocol->capabilities & TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY) == 0u)
-    return TURBO_ENOTSUP;
+    return SALTS_ENOTSUP;
   rc = flow_protocol_inspect(protocol, request,
                             TURBO_FLOW_PROTOCOL_DIRECTION_UP,
                             &request_metadata);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = protocol->ops.reply(protocol->codec_ctx, protocol->protocol_version,
                           request, status, output);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     output->data_size = 0u;
     return rc;
   }
   if (output->data_size == 0u) {
     request_metadata.direction = TURBO_FLOW_PROTOCOL_DIRECTION_DOWN;
     output->metadata = request_metadata;
-    return TURBO_OK;
+    return SALTS_OK;
   }
   return flow_protocol_generated_frame_validate(
       protocol, request_metadata.device_id, output);
@@ -290,21 +290,21 @@ static int flow_protocol_command_validate(
           command->operation, TURBO_FLOW_PROTOCOL_OPERATION_MAX) ||
       (!command->payload && command->payload_size != 0u) ||
       command->payload_size > protocol->max_frame_size)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   if (command->resource) {
     size_t resource_size = 0u;
     while (resource_size <= TURBO_FLOW_PROTOCOL_RESOURCE_MAX &&
            command->resource[resource_size] != '\0')
       resource_size++;
     if (resource_size > TURBO_FLOW_PROTOCOL_RESOURCE_MAX)
-      return TURBO_EMSGSIZE;
+      return SALTS_EMSGSIZE;
   }
   if (command->correlation_id &&
       command->correlation_id[0] != '\0' &&
       !flow_protocol_cstr_segment_valid(
           command->correlation_id, TURBO_FLOW_PROTOCOL_CORRELATION_MAX))
-    return TURBO_EINVAL;
-  return TURBO_OK;
+    return SALTS_EINVAL;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_encode(
@@ -312,28 +312,28 @@ int turbo_flow_protocol_encode(
     const turbo_flow_protocol_command_view_t *command,
     turbo_flow_protocol_frame_output_t *output) {
   int rc = flow_protocol_frame_output_validate(output);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flow_protocol_command_validate(protocol, command);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (!protocol->ops.encode ||
       (protocol->capabilities & TURBO_FLOW_PROTOCOL_CAP_COMMAND_ENCODE) == 0u)
-    return TURBO_ENOTSUP;
+    return SALTS_ENOTSUP;
   rc = protocol->ops.encode(protocol->codec_ctx, protocol->protocol_version,
                            command, output);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     output->data_size = 0u;
     return rc;
   }
   rc = flow_protocol_generated_frame_validate(
       protocol, command->device_id, output);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (strcmp(output->metadata.operation, command->operation) != 0) {
     output->data_size = 0u;
     output->metadata = (turbo_flow_protocol_metadata_t)
         TURBO_FLOW_PROTOCOL_METADATA_INIT;
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_protocol_get_info(const turbo_flow_protocol_t *protocol,
@@ -341,10 +341,10 @@ int turbo_flow_protocol_get_info(const turbo_flow_protocol_t *protocol,
   turbo_flow_protocol_info_t info = TURBO_FLOW_PROTOCOL_INFO_INIT;
   if (!protocol || !out || out->size < sizeof(*out) ||
       out->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   if (atomic_load_explicit(&protocol->state, memory_order_acquire) !=
       FLOW_PROTOCOL_STATE_OPEN)
-    return TURBO_EBUSY;
+    return SALTS_EBUSY;
   info.protocol = protocol->protocol;
   info.capabilities = protocol->capabilities;
   info.max_frame_size = protocol->max_frame_size;
@@ -352,5 +352,5 @@ int turbo_flow_protocol_get_info(const turbo_flow_protocol_t *protocol,
   memcpy(info.protocol_version, protocol->protocol_version,
          strlen(protocol->protocol_version) + 1u);
   *out = info;
-  return TURBO_OK;
+  return SALTS_OK;
 }

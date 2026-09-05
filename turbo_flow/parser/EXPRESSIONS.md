@@ -192,8 +192,8 @@ interpreter and JIT backends. It contains:
 
 `turbo_flow_expr_read_field()` reads built-in `msg.*` fields directly and
 delegates schema field IDs to the callback. Returned strings are borrowed views.
-Message IDs and timestamps outside signed I64 range fail with `TURBO_ERANGE`;
-schema callbacks returning invalid types or views fail with `TURBO_EPROTO`.
+Message IDs and timestamps outside signed I64 range fail with `SALTS_ERANGE`;
+schema callbacks returning invalid types or views fail with `SALTS_EPROTO`.
 Neither the context nor returned values may be retained by an evaluator.
 
 ## MIR Execution
@@ -216,7 +216,7 @@ code is finalized and released before destroying its MIR context. Lowering,
 linking, JIT generation, and interpreter instruction generation all finish in
 `turbo_flow_expr_compile_ex()`. Evaluation uses a fixed 256-slot stack frame;
 expressions exceeding that evaluation depth fail during compile. Interpreter
-calls for one compiled expression are serialized by a TurboUtils mutex because
+calls for one compiled expression are serialized by a Salts mutex because
 the MIR interpreter context is mutable. Generated JIT code is called directly.
 
 ## Error Semantics
@@ -252,10 +252,10 @@ TurboFlow uses the repository-owned `vendor/mir` sources directly through the
 private `mir_static` target. MIR headers, objects, lifecycle types, and error
 details do not cross the installed TurboFlow ABI. This keeps the expression
 contract backend-neutral while avoiding a dependency on an unavailable
-`TurboUtils::MIR` export.
+external MIR export.
 
 `TURBO_FLOW_EXPR_ENABLE_JIT=OFF` removes JIT selection while retaining the MIR
 interpreter. In that build, `AUTO` selects the interpreter and an explicit JIT
-request fails with `TURBO_ENOTSUP`; it never silently changes an explicit host
+request fails with `SALTS_ENOTSUP`; it never silently changes an explicit host
 policy. Re-enabling JIT is a configure-time rollback and does not change the
 expression syntax or serialized data.

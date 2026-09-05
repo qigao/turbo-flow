@@ -1,8 +1,8 @@
 #include "turbo_flow_policy.h"
 
 #include "tinytest.h"
-#include "turbo_error.h"
-#include "turbo_str.h"
+#include "salts_error.h"
+#include "salts_str.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -48,7 +48,7 @@ static int count_stage(turbo_flow_msg_t *message, void *ctx) {
   int *count = (int *)ctx;
   (void)message;
   *count += 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 typedef struct rule_operation_probe_s {
@@ -60,7 +60,7 @@ static int observe_rule_operation(turbo_flow_msg_t *message, void *ctx) {
   rule_operation_probe_t *probe = (rule_operation_probe_t *)ctx;
   probe->count += 1;
   probe->flags = message->flags;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 typedef struct rule_facts_provider_probe_s {
@@ -81,14 +81,14 @@ static int provide_rule_facts(const turbo_flow_msg_t *message,
       strcmp(schema->fields[0].path, "group.level") != 0 ||
       schema->fields[0].type != TURBO_FLOW_EXPR_TYPE_I64 || !values_out || !value_count_out ||
       !probe) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   probe->calls += 1;
   probe->values[0].type = TURBO_FLOW_EXPR_TYPE_I64;
   probe->values[0].as.i64 = (int64_t)message->flags;
   *values_out = probe->values;
   *value_count_out = 1u;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int provide_invalid_rule_facts(const turbo_flow_msg_t *message,
@@ -100,7 +100,7 @@ static int provide_invalid_rule_facts(const turbo_flow_msg_t *message,
   (void)values_out;
   (void)value_count_out;
   (void)ctx;
-  return TURBO_EPROTO;
+  return SALTS_EPROTO;
 }
 
 typedef struct rule_projection_value_s {
@@ -130,12 +130,12 @@ static void destroy_rule_projection(void *ptr, void *ctx) {
 static int clone_rule_projection(const void *value, void *ctx, void **out) {
   rule_projection_value_t *copy;
   (void)ctx;
-  if (!value || !out) return TURBO_EINVAL;
+  if (!value || !out) return SALTS_EINVAL;
   copy = (rule_projection_value_t *)malloc(sizeof(*copy));
-  if (!copy) return TURBO_ENOMEM;
+  if (!copy) return SALTS_ENOMEM;
   *copy = *(const rule_projection_value_t *)value;
   *out = copy;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int materialize_rule_projection(const void *projection,
@@ -152,14 +152,14 @@ static int materialize_rule_projection(const void *projection,
       strcmp(rule_schema->fields[0].path, "group.level") != 0 ||
       rule_schema->fields[0].type != TURBO_FLOW_EXPR_TYPE_I64 || !values_out || !value_count_out ||
       !probe) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   probe->calls += 1;
   probe->values[0].type = TURBO_FLOW_EXPR_TYPE_I64;
   probe->values[0].as.i64 = value->group_level;
   *values_out = probe->values;
   *value_count_out = 1u;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 spec("versioned rule program") {
@@ -178,14 +178,14 @@ spec("versioned rule program") {
     turbo_flow_msg_t message;
 
     config.schema = &schema;
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     turbo_flow_msg_init(&message);
     facts.message = &message;
     facts.schema = &schema;
     facts.values = &value;
     facts.value_count = 1u;
     check_equal(turbo_flow_rule_processor_evaluate(processor, &facts, &action, 1u, &result),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(result.emitted, 1u);
     check_equal(action.kind, TURBO_FLOW_RULE_ACTION_DROP);
     turbo_flow_msg_cleanup(&message);
@@ -199,9 +199,9 @@ spec("versioned rule program") {
 
     config.rules = &rule;
     config.rule_count = 1u;
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_EINVAL);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_EINVAL);
     config.resource_uid = "rule-set:test";
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_EINVAL);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_EINVAL);
     check_null(processor);
   }
 
@@ -236,11 +236,11 @@ spec("versioned rule program") {
     rule_facts_provider_probe_t probe = {0};
 
     check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &config_error),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(turbo_flow_rule_processor_create_resolved(
                      resolved, "routing", &RULE_PROVIDER_SCHEMA, provide_rule_facts, &probe,
                      &processor, &config_error),
-                 TURBO_OK);
+                 SALTS_OK);
     turbo_flow_msg_init(&message);
     values[0].type = TURBO_FLOW_EXPR_TYPE_I64;
     values[0].as.i64 = 3;
@@ -249,7 +249,7 @@ spec("versioned rule program") {
     facts.values = values;
     facts.value_count = 1u;
     check_equal(turbo_flow_rule_processor_evaluate(processor, &facts, actions, 2u, &result),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(result.emitted, 1u);
     check_equal(actions[0].kind, TURBO_FLOW_RULE_ACTION_ROUTE);
     check_equal(actions[0].key, "elevated");
@@ -276,10 +276,10 @@ spec("versioned rule program") {
       turbo_flow_rule_processor_t *processor = NULL;
       check_equal(
           turbo_flow_config_resolve_yaml(documents[i], lengths[i], &resolved, &config_error),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(turbo_flow_rule_processor_create_resolved(resolved, "routing", NULL, NULL, NULL,
                                                              &processor, &config_error),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
       check_null(processor);
       check_contains(config_error.path, "$.channels.routing.config");
       turbo_flow_resolved_config_destroy(resolved);
@@ -302,12 +302,12 @@ spec("versioned rule program") {
     turbo_flow_msg_init(&message);
     message.type = 7u;
     facts.message = &message;
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_not_null(processor);
     check_equal(turbo_flow_rule_processor_evaluate(processor, &facts, actions, 2u, &first),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(turbo_flow_rule_processor_evaluate(processor, &facts, actions, 2u, &second),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(first.evaluated, 2u);
     check_equal(first.matched, 2u);
     check_equal(first.emitted, 2u);
@@ -333,21 +333,21 @@ spec("versioned rule program") {
     turbo_flow_rule_action_t conflict[] = {data_action(TURBO_FLOW_RULE_ACTION_DROP, NULL),
                                            data_action(TURBO_FLOW_RULE_ACTION_DEAD_LETTER, NULL)};
 
-    conflict[1].status = TURBO_EIO;
+    conflict[1].status = SALTS_EIO;
     status_action.private_field = TURBO_FLOW_RULE_PRIVATE_MSG_STATUS;
-    status_action.status = TURBO_EIO;
+    status_action.status = SALTS_EIO;
     turbo_flow_msg_init(&message);
     message.flags = 8u;
-    check_equal(turbo_flow_rule_apply_data_actions(&message, actions, 4u, &decision), TURBO_OK);
+    check_equal(turbo_flow_rule_apply_data_actions(&message, actions, 4u, &decision), SALTS_OK);
     check_equal(message.flags, 13u);
     check_equal(decision.route, "priority");
     check_equal(decision.batch_key, "group-7");
     check_equal(decision.retry_class, "transient");
     check_equal(turbo_flow_rule_apply_data_actions(&message, &status_action, 1u, &decision),
-                 TURBO_OK);
-    check_equal(message.status, TURBO_EIO);
+                 SALTS_OK);
+    check_equal(message.status, SALTS_EIO);
     check_equal(turbo_flow_rule_apply_data_actions(&message, conflict, 2u, &decision),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(message.flags, 13u);
   }
 
@@ -368,11 +368,11 @@ spec("versioned rule program") {
     message.flags = 17u;
     memcpy(decision.route, "stable", sizeof("stable"));
     check_equal(turbo_flow_rule_apply_data_actions(&message, route_conflict, 2u, &decision),
-                TURBO_EPROTO);
+                SALTS_EPROTO);
     check_equal(turbo_flow_rule_apply_data_actions(&message, batch_conflict, 2u, &decision),
-                TURBO_EPROTO);
+                SALTS_EPROTO);
     check_equal(turbo_flow_rule_apply_data_actions(&message, retry_conflict, 2u, &decision),
-                TURBO_EPROTO);
+                SALTS_EPROTO);
     check_equal(message.flags, 17u);
     check_equal(decision.route, "stable");
   }
@@ -395,19 +395,19 @@ spec("versioned rule program") {
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     check_not_null(flow);
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), SALTS_OK);
     check_equal(turbo_flow_resource_metadata_count(flow), 1u);
     check_equal(turbo_flow_register_stage_ex(flow, "selected", count_stage, &selected, NULL),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "skipped", count_stage, &skipped, NULL),
-                 TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);
     message.type = 9u;
-    check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
     check_equal(selected, 1);
     check_equal(skipped, 0);
     check_equal(message.data_decision.route, "");
@@ -415,14 +415,14 @@ spec("versioned rule program") {
       turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
       turbo_flow_resource_document_t document = TURBO_FLOW_RESOURCE_DOCUMENT_INIT;
       tstr json;
-      check_equal(turbo_flow_resource_metadata_at(flow, 0u, &metadata), TURBO_OK);
+      check_equal(turbo_flow_resource_metadata_at(flow, 0u, &metadata), SALTS_OK);
       check_equal(metadata.domain, TURBO_FLOW_DOMAIN_RULES);
       check_equal(metadata.kind, TURBO_FLOW_RESOURCE_RULE_SET);
       check_equal(metadata.uid, config.resource_uid);
       check_equal(metadata.owner_name, config.owner_name);
       check_equal(
           turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(document.schema->type_name, "RuleSetStatus");
       json =
           tstr_new_len(mem_buffer_const_data(document.payload), mem_buffer_used(document.payload));
@@ -433,7 +433,7 @@ spec("versioned rule program") {
       tstr_free(json);
       turbo_flow_resource_document_cleanup(&document);
     }
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     turbo_flow_destroy(flow);
     turbo_flow_rule_processor_destroy(processor);
@@ -456,18 +456,18 @@ spec("versioned rule program") {
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     check_not_null(flow);
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "sink", observe_rule_operation, &probe, NULL),
-                 TURBO_OK);
+                 SALTS_OK);
     check_not_null(turbo_flow_find_primitive(flow, "rules.test"));
     check_not_null(turbo_flow_find_operation(flow, TURBO_FLOW_RULE_APPLY_OPERATION));
     check_not_null(turbo_flow_find_module(flow, TURBO_FLOW_RULE_MODULE));
     check_equal(
         turbo_flow_operation_provider_module(flow, TURBO_FLOW_RULE_APPLY_OPERATION, "rules.test"),
         TURBO_FLOW_RULE_MODULE);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
 
     stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "apply"));
     operation = turbo_flow_stage_operation_at(flow, (size_t)turbo_flow_find_stage(flow, "apply"));
@@ -481,13 +481,13 @@ spec("versioned rule program") {
     check_equal(stage->mutability, TURBO_FLOW_STAGE_MUTATES_PRIVATE);
     check_true((stage->effects & TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u);
 
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);
     message.type = 7u;
-    check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
     check_equal(probe.count, 1);
     check_equal(probe.flags, 4u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     turbo_flow_destroy(flow);
     turbo_flow_rule_processor_destroy(processor);
@@ -514,21 +514,21 @@ spec("versioned rule program") {
     config.facts_provider = provide_rule_facts;
     config.facts_provider_ctx = &facts_probe;
     check_not_null(flow);
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "sink", observe_rule_operation, &operation_probe, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);
     message.flags = 7u;
-    check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
     check_equal(facts_probe.calls, 1);
     check_equal(operation_probe.count, 1);
     check_equal(operation_probe.flags, 15u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     turbo_flow_destroy(flow);
     turbo_flow_rule_processor_destroy(processor);
@@ -562,25 +562,25 @@ spec("versioned rule program") {
     config.facts_provider = turbo_flow_rule_projection_facts_provider;
     config.facts_provider_ctx = &projection_provider;
     check_not_null(flow);
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "sink", observe_rule_operation, &operation_probe, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);
     check_equal(turbo_flow_msg_bind_projection(&message, &RULE_PROJECTION_SCHEMA, projection,
                                                 clone_rule_projection, destroy_rule_projection,
                                                 NULL),
-                 TURBO_OK);
+                 SALTS_OK);
     projection = NULL;
-    check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
     check_equal(materializer_probe.calls, 1);
     check_equal(operation_probe.count, 1);
     check_equal(operation_probe.flags, 8u);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     turbo_flow_destroy(flow);
     turbo_flow_rule_processor_destroy(processor);
@@ -602,7 +602,7 @@ spec("versioned rule program") {
     turbo_flow_msg_init(&message);
     check_equal(turbo_flow_rule_projection_facts_provider(&message, &schema, &values, &value_count,
                                                            &projection_provider),
-                 TURBO_ENOENT);
+                 SALTS_ENOENT);
     check_null(values);
     check_equal(value_count, 0u);
     check_equal(materializer_probe.calls, 0);
@@ -619,9 +619,9 @@ spec("versioned rule program") {
 
     config.schema = &schema;
     check_not_null(flow);
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor),
-                 TURBO_EINVAL);
+                 SALTS_EINVAL);
     check_equal(turbo_flow_primitive_count(flow), 0u);
     check_equal(turbo_flow_operation_count(flow), 0u);
     turbo_flow_destroy(flow);
@@ -645,15 +645,15 @@ spec("versioned rule program") {
     config.schema = &schema;
     config.facts_provider = provide_invalid_rule_facts;
     check_not_null(flow);
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);
     message.flags = 7u;
-    check_equal(turbo_flow_publish(flow, "input", &message), TURBO_EPROTO);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_EPROTO);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     turbo_flow_destroy(flow);
     turbo_flow_rule_processor_destroy(processor);
@@ -674,16 +674,16 @@ spec("versioned rule program") {
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     check_not_null(flow);
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), TURBO_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", count_stage, &sink, NULL), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "sink", count_stage, &sink, NULL), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);
-    check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
     check_equal(sink, 0);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     turbo_flow_destroy(flow);
     turbo_flow_rule_processor_destroy(processor);
@@ -705,17 +705,17 @@ spec("versioned rule program") {
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     check_not_null(flow);
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), TURBO_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", count_stage, &sink, NULL), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "sink", count_stage, &sink, NULL), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);
-    check_equal(turbo_flow_publish(flow, "input", &message), TURBO_EPROTO);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_EPROTO);
     check_equal(sink, 0);
     check_contains(turbo_flow_last_error(flow)->message, "unknown downstream route");
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     turbo_flow_destroy(flow);
     turbo_flow_rule_processor_destroy(processor);
@@ -733,10 +733,10 @@ spec("versioned rule program") {
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     check_not_null(flow);
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), TURBO_OK);
-    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
     check_contains(turbo_flow_last_error(flow)->message, "inline executor");
     turbo_flow_destroy(flow);
     turbo_flow_rule_processor_destroy(processor);
@@ -759,15 +759,15 @@ spec("versioned rule program") {
 
     memset(&error, 0, sizeof(error));
     config.schema = &schema;
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, &error), TURBO_ENOENT);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, &error), SALTS_ENOENT);
     check_null(processor);
     config.rules = &typed;
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, &error), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, &error), SALTS_OK);
     memset(&value, 0, sizeof(value));
     value.type = TURBO_FLOW_EXPR_TYPE_STRING;
     value.as.string = vstr_from_cstr("wrong");
     check_equal(turbo_flow_rule_processor_evaluate(processor, &facts, &action, 1u, &result),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(result.evaluated, 1u);
     turbo_flow_rule_processor_destroy(processor);
   }
@@ -786,12 +786,12 @@ spec("versioned rule program") {
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     config.schema = &compiled_schema;
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_rule_processor_evaluate(processor, &facts, &action, 1u, NULL),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     facts.schema = &compiled_schema;
     check_equal(turbo_flow_rule_processor_evaluate(processor, &facts, &action, 1u, NULL),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(action.key, "high");
     turbo_flow_rule_processor_destroy(processor);
   }
@@ -807,24 +807,24 @@ spec("versioned rule program") {
     turbo_flow_rule_processor_config_t config = data_config(rules, 2u);
 
     config.limits.max_instructions = 1u;
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_ENOSPC);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_ENOSPC);
     config.limits = (turbo_flow_rule_limits_t)TURBO_FLOW_RULE_LIMITS_DEFAULT;
     config.limits.max_memory_bytes = sizeof(turbo_flow_rule_processor_config_t);
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_ENOSPC);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_ENOSPC);
     config.limits = (turbo_flow_rule_limits_t)TURBO_FLOW_RULE_LIMITS_DEFAULT;
     config.limits.max_output_actions = 1u;
     config.mode = TURBO_FLOW_RULE_ALL_MATCHES;
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_rule_processor_evaluate(processor, &facts, actions, 2u, &result),
-                 TURBO_ENOSPC);
+                 SALTS_ENOSPC);
     check_equal(result.emitted, 1u);
     turbo_flow_rule_processor_destroy(processor);
     processor = NULL;
     config.limits = (turbo_flow_rule_limits_t)TURBO_FLOW_RULE_LIMITS_DEFAULT;
     config.limits.max_time_ns = 1u;
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_rule_processor_evaluate(processor, &facts, actions, 2u, &result),
-                 TURBO_ETIMEDOUT);
+                 SALTS_ETIMEDOUT);
     turbo_flow_rule_processor_destroy(processor);
   }
 
@@ -840,18 +840,18 @@ spec("versioned rule program") {
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
     config.domain = TURBO_FLOW_RULE_CONTROL;
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_OK);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_rule_processor_evaluate(processor, &facts, &proposal, 1u, &result),
-                 TURBO_OK);
+                 SALTS_OK);
     authority.allowed_command_mask = UINT32_C(1) << TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL;
     authority.observed_generation = 11u;
     memcpy(authority.target_uid, uid, sizeof(uid));
-    check_equal(turbo_flow_rule_authorize_command(&proposal, &authority, &command), TURBO_EBUSY);
+    check_equal(turbo_flow_rule_authorize_command(&proposal, &authority, &command), SALTS_EBUSY);
     authority.observed_generation = 12u;
     authority.allowed_command_mask = 0u;
-    check_equal(turbo_flow_rule_authorize_command(&proposal, &authority, &command), TURBO_EPERM);
+    check_equal(turbo_flow_rule_authorize_command(&proposal, &authority, &command), SALTS_EPERM);
     authority.allowed_command_mask = UINT32_C(1) << TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL;
-    check_equal(turbo_flow_rule_authorize_command(&proposal, &authority, &command), TURBO_OK);
+    check_equal(turbo_flow_rule_authorize_command(&proposal, &authority, &command), SALTS_OK);
     check_equal(command.kind, TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL);
     check_equal(command.target_uid, uid);
     check_equal(command.expected_generation, 12u);
@@ -864,10 +864,10 @@ spec("versioned rule program") {
     turbo_flow_rule_t rule = {"true", 0u, proposal};
     turbo_flow_rule_processor_config_t config = data_config(&rule, 1u);
 
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_EINVAL);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_EINVAL);
     config.domain = TURBO_FLOW_RULE_CONTROL;
     rule.action.abi_version = 0u;
-    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), TURBO_EINVAL);
+    check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_EINVAL);
     check_null(processor);
   }
 }

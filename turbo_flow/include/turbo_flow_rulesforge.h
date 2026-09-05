@@ -3,17 +3,7 @@
 
 #include "turbo_flow.h"
 
-/* RulesForge 0.9 still consumes TurboUtils' removed compatibility marker.
- * Keep the shim scoped to its header until that package owns its API macro. */
-#ifndef CXX_C_API
-#define CXX_C_API TURBO_C_API
-#define TURBO_FLOW_UNDEF_RULESFORGE_CXX_C_API
-#endif
 #include "rules_forge.h"
-#ifdef TURBO_FLOW_UNDEF_RULESFORGE_CXX_C_API
-#undef TURBO_FLOW_UNDEF_RULESFORGE_CXX_C_API
-#undef CXX_C_API
-#endif
 
 #include <stddef.h>
 
@@ -25,7 +15,7 @@ extern "C" {
 #define TURBO_FLOW_RULEFORGE_APPLY_OPERATION "rulesforge.apply"
 #define TURBO_FLOW_RULEFORGE_RESOURCE_TYPE "RuleForgeResource"
 #define TURBO_FLOW_RULEFORGE_DATABIND_PROJECTION_TYPE "RulesForge.DataBindObject"
-#define TURBO_FLOW_RULEFORGE_DATABIND_VALUE_PROJECTION_TYPE "TurboUtils.DataBindValue"
+#define TURBO_FLOW_RULEFORGE_DATABIND_VALUE_PROJECTION_TYPE "Salts.DataBindValue"
 #define TURBO_FLOW_RULEFORGE_DEFAULT_MAX_RULES 1024
 
 typedef int (*turbo_flow_rulesforge_data_fn)(turbo_flow_msg_t *message, const char *resource_name,
@@ -35,7 +25,7 @@ typedef int (*turbo_flow_rulesforge_data_fn)(turbo_flow_msg_t *message, const ch
  * RulesForge-backed data operation registration.
  *
  * The callback receives the mutable message and must return TurboFlow status code.
- * A RulesForge no-match is a successful evaluation and must return TURBO_OK.
+ * A RulesForge no-match is a successful evaluation and must return SALTS_OK.
  * To filter data, record the match result in the stage's working message and select
  * downstream stages with a conditional graph route, for example:
  *
@@ -68,7 +58,7 @@ TURBO_FLOW_C_API int turbo_flow_rulesforge_register_data_operation(
 /**
  * Replace the message's current data-rule decision with one RulesForge evaluation result.
  *
- * `status == TURBO_OK` records MATCHED or NOT_MATCHED from `match_count`. A failure status
+ * `status == SALTS_OK` records MATCHED or NOT_MATCHED from `match_count`. A failure status
  * requires `match_count == 0` and records EVALUATION_ERROR. The runtime assigns the producing
  * stage index after a successful callback.
  */
@@ -81,7 +71,7 @@ TURBO_FLOW_C_API int turbo_flow_rulesforge_set_result(turbo_flow_msg_t *message,
  * The knowledge base is borrowed and must outlive the provider registration and
  * flow. Each invocation creates a fresh stateful session, copies one message
  * projection, fires at most `max_rules`, and destroys the session. Supported
- * projection types are RulesForge.DataBindObject and TurboUtils.DataBindValue.
+ * projection types are RulesForge.DataBindObject and Salts.DataBindValue.
  * This provides
  * deterministic message isolation and permits worker-pool execution without
  * sharing mutable RulesForge session state.

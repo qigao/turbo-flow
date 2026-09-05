@@ -8,23 +8,23 @@ adapter bindings. It is a schema design document, not a generated source input.
 `.flow` owns topology:
 
 ```flow
-source http_in adapter "http.server"
+source input adapter "host.input"
 stage decode adapter "codec.length"
 stage bind adapter "databind.order"
-stage email_out adapter "smtp"
+stage output adapter "host.output"
 
 stage main {
-  http_in -> decode -> bind -> email_out
+  input -> decode -> bind -> output
 }
 ```
 
 The host owns typed configuration for each adapter name:
 
 ```text
-"http.server"    -> HTTP source adapter options
+"host.input"     -> host source adapter options
 "codec.length"   -> length-prefix codec options
 "databind.order" -> DataBind schema options
-"smtp"           -> SMTP sink adapter options
+"host.output"    -> host sink adapter options
 ```
 
 This keeps secrets, deployment-specific endpoints, TLS material, and large
@@ -34,9 +34,9 @@ referenced adapter has a registered schema and runtime binding.
 Binding names may be quoted or written as adjacent dotted segments:
 
 ```flow
-source events adapter http.client.poll
+source events adapter host.events
 stage decode adapter codec.json.in
-stage store adapter "s3.archive.prod"
+stage store adapter "storage.archive.prod"
 ```
 
 These are registry binding names, not inline protocol configuration.
@@ -46,7 +46,7 @@ These are registry binding names, not inline protocol configuration.
 Executor:
 
 - Selects one of the three core compute executors: inline, thread, or coro.
-- Worker handoff and adapter-owned socket/CoroNet placement are separate runtime
+- Worker handoff and external CNet/CHTTP adapter placement are separate runtime
   contracts, not additional executor kinds.
 - Does not define HTTP, socket, email, codec, or DataBind behavior.
 
@@ -74,7 +74,8 @@ Each registered adapter option schema should describe:
 
 ```text
 name              stable adapter binding name used in `.flow`
-kind              socket | http | rpc | s3 | email | file | sqlite | codec | databind | custom
+kind              one `turbo_flow_adapter_kind_t` value; in-tree modules use file, sqlite, codec,
+                  databind, observe, schedule, and custom
 role              source | sink | transform
 direction         input | output | bidirectional
 required_options  fields required before compile/start
@@ -148,331 +149,28 @@ Transform stage:
 Recommended explicit stage plan:
 
 ```flow
-source socket_in adapter "socket.tcp.in"
+source input adapter "host.input"
 stage frame_in adapter "codec.length.in"
 stage bind_order adapter "databind.order.in"
 stage encode_out adapter "codec.length.out"
-stage socket_out adapter "socket.tcp.out"
+stage output adapter "host.output"
 
 stage main {
-  socket_in -> frame_in -> bind_order -> encode_out -> socket_out
+  input -> frame_in -> bind_order -> encode_out -> output
 }
 ```
 
-This stage plan is more debuggable than hiding all processing inside the socket
-adapter, and it keeps codec/DataBind errors attached to clear stages.
+This stage plan keeps codec/DataBind errors attached to clear stages instead of
+hiding processing inside a host adapter.
 
-## Socket Adapter Schema
+## Network Adapter Boundary
 
-Current implemented socket adapter fields come from
-`turbo_flow_coronet_socket_config_t`.
+Socket, HTTP, RPC, S3, and email transport schemas are not part of this package.
+A host that integrates network I/O must register typed adapters backed by CNet/CHTTP
+and must own connection, protocol, credential, backpressure, and shutdown state.
+TurboFlow provides no in-tree transport fallback.
 
-Kind:
-
-```text
-kind: socket
-role: source | sink
-```
-
-Common options:
-
-```text
-role                  enum(source, sink), required
-transport             enum(tcp, udp, kcp, tls, ws, wss, pipe), required
-kcp_fec               bool, optional, KCP only
-kcp_fec_backend       enum(none, wirehair), optional, required when kcp_fec is true
-kcp_fec_data_shards   u32, KCP FEC only, min 1, max 256
-kcp_fec_parity_shards u32, KCP FEC only, min 1, max 256
-kcp_fec_max_payload_size u32, KCP FEC only, min 1, max 65535
-host                  string, required for tcp/udp/kcp/tls/ws/wss
-port                  u32, required for tcp/udp/kcp/tls/ws/wss, min 1, max 65535
-path                  string, optional, WS/WSS sink path or Pipe endpoint, default "/"
-timeout_ms            duration_ms, optional
-connect_timeout_ms    duration_ms, optional, falls back to timeout_ms when unset
-send_timeout_ms       duration_ms, optional, falls back to timeout_ms when unset
-recv_timeout_ms       duration_ms, optional, falls back to timeout_ms when unset
-handshake_timeout_ms  duration_ms, optional, falls back to timeout_ms when unset (WS/TLS)
-reuse_port            bool, source/listener only
-tcp_keepalive         bool, optional, TCP/TLS/WS/WSS only
-tcp_keepalive_idle_ms duration_ms, optional, requires tcp_keepalive
-tcp_keepalive_interval_ms duration_ms, optional, requires tcp_keepalive
-tcp_keepalive_count   u32, optional, requires tcp_keepalive
-linger                bool, optional, TCP/TLS/WS/WSS only
-linger_ms             duration_ms, optional, requires linger; 0 means abortive close
-send_hwm_bytes        size, optional, TCP/TLS/WS/WSS/Pipe only
-udp_multicast_group   string, optional, UDP source only; joined after bind
-udp_multicast_interface string, optional, requires udp_multicast_group
-udp_option_flags      u32, optional, explicit loop/TTL/broadcast presence bits
-udp_multicast_loop    bool, optional, UDP only, requires loop presence bit
-udp_multicast_ttl     u32, optional, UDP only, min 0, max 255, requires TTL presence bit
-udp_broadcast         bool, optional, IPv4 UDP only, requires broadcast presence bit
-max_pump_iterations   u32, optional
-context               host object, optional, not serializable
-take_context_ownership bool, optional
-```
-
-Source behavior:
-
-- Listens on `host:port`, or on the configured Pipe endpoint for `pipe`.
-- Publishes received bytes as flow messages.
-- May own and drive a CoroNet context when the host does not supply one.
-
-Sink behavior:
-
-- Connects to `host:port`, or to the configured Pipe endpoint for `pipe`.
-- Sends the current message payload.
-- Requires `consume` behavior; missing consume support is a compile/start error.
-
-Codec/DataBind integration:
-
-- Prefer explicit codec/DataBind stages after socket sources and before socket
-  sinks.
-- Embedded input/output codec chains are allowed only as host-side expansion
-  into equivalent stages or as adapter-owned behavior with identical error
-  semantics.
-
-## HTTP Adapter Schema
-
-`TurboFlow::HttpServer` implements HTTP servers with Iris and
-`TurboFlow::HttpClient` implements clients with TurboHTTP. `TurboFlow::Http`
-remains a compatibility aggregate linking both components. The server is one
-source/reply-sink boundary. The client is a transform or a periodic source.
-
-HTTP server options:
-
-```text
-port                  u32, required, min 1, max 65535
-route                 string, required
-method                enum(GET, POST, PUT, PATCH, DELETE), required
-max_body_size         size, optional
-response_status       u32, optional, default 200
-response_content_type string, optional
-context               host object, optional, not serializable
-app                   host object, optional, not serializable
-```
-
-HTTP client options:
-
-```text
-client                host object (http_client_t), optional, not serializable
-url                   string, required
-method                enum(GET, POST, PUT, PATCH, DELETE), required
-headers               string-list, optional
-bearer_token          secret, optional
-timeout_ms            duration_ms, optional
-max_response_size     size, optional
-success_status_min    u32, optional, default 200
-success_status_max    u32, optional, default 299
-max_pump_iterations   u32, optional
-poll_interval_ms      duration_ms, optional
-```
-
-With `poll_interval_ms == 0`, input payload becomes the request body and a
-successful response body replaces it. With a non-zero interval, only GET is
-accepted and each response is published as a source message. Transport and
-status failures publish an empty message with a non-success `msg.status`.
-When `client` is supplied, the adapter uses that TurboHTTP client directly;
-ownership transfer is controlled by the C config and polling requires exclusive
-context driving while the adapter is running. No standalone coroutine context
-is part of the HTTP client adapter contract.
-Authentication values are secret. Codec/DataBind processing remains explicit
-before or after the adapter.
-
-## RPC Adapter Schema
-
-`TurboFlow::RPC` uses TurboHTTP JSON-RPC and Iris. The client fields are:
-
-```text
-url                   string, required
-method                string, required
-bearer_token          secret, optional
-timeout_ms            duration_ms, optional
-poll_params           string (JSON), optional, default null
-poll_interval_ms      duration_ms, optional
-```
-
-Without polling, input is params JSON and output is result JSON. With polling,
-the configured params are sent repeatedly and every result is published by a
-source adapter.
-
-## S3 Adapter Schema
-
-`TurboFlow::S3` is a fixed-object TurboHTTP S3 client:
-
-```text
-host                  string, required
-port                  u32, required, min 1, max 65535
-use_https             bool, optional
-region                string, required
-virtual_style         bool, optional
-bucket                string, required
-object                string, required
-content_type          string, optional, default application/octet-stream
-credentials           enum(static, aws_env, minio_env), required
-access_key            secret, required for static credentials
-secret_key            secret, required for static credentials
-session_token         secret, optional
-max_pump_iterations   u32, optional
-poll_interval_ms      duration_ms, optional
-```
-
-Without polling, it is a PutObject output sink. With polling, it repeatedly
-downloads the configured object and publishes an input message. TLS, region,
-and URL style are explicit and never silently changed. Credential providers are
-owned and destroyed by the adapter.
-
-## Email Adapter Schema
-
-Current implemented email adapter is an SMTP sink.
-
-Kind:
-
-```text
-kind: email
-role: sink
-```
-
-SMTP sink options:
-
-```text
-host                  string, required
-port                  u32, required, min 1, max 65535
-use_tls               bool, optional
-use_starttls          bool, optional
-auth_method           enum(none, plain, login, cram_md5), optional
-username              string, optional
-password              secret, optional
-timeout_ms            duration_ms, optional
-from_name             string, optional
-from_email            string, required
-to_name               string, optional
-to_email              string, required
-subject               string, optional
-html_body             bool, optional
-max_pump_iterations   u32, optional
-context               host object, optional, not serializable
-take_context_ownership bool, optional
-```
-
-MIME callback transform options:
-
-```text
-callbacks             host object, required, not serializable
-pool_size             size, optional
-```
-
-MIME owned extract transform options:
-
-```text
-max_payload_size      size, optional, default 16 MiB
-max_headers           size, optional, default 1024, total across root and parts
-max_parts             size, optional, default 256
-max_decoded_bytes     size, optional, default 32 MiB, combined root and parts
-pool_size             size, optional, default 16 KiB
-```
-
-The extract transform preserves the raw payload and installs an opaque,
-message-owned parsed result. Header names/values, metadata, and transfer-decoded
-bodies are copied out of the parser pool. Downstream stages read them through
-the `turbo_flow_email_mime_*` accessors; those views remain valid only while the
-flow message is alive. Parse, decode, and quota failures do not replace an
-existing parsed result.
-
-RFC 2822/MIME encode transform options:
-
-```text
-from_name             string, optional
-from_email            string, required
-to_name               string, optional
-to_email              string, required
-subject               string, optional
-html_body             bool, optional
-alternative_text      string, optional, valid only with html_body
-priority              u32, optional, 0 normal, 1 high, 2 low
-attachments           host object, optional, not serializable
-attachment_count      size, optional, max 1024
-max_payload_size      size, optional, default 16 MiB
-max_output_size       size, optional, default 64 MiB
-pool_size             size, optional, default 16 KiB
-```
-
-RFC 2557 MHTML encode transform options:
-
-```text
-charset               string, optional, default utf-8
-resources             host object, optional, not serializable
-resource_count        size, optional, max 1024
-max_payload_size      size, optional, default 16 MiB
-max_output_size       size, optional, default 64 MiB
-pool_size             size, optional, default 16 KiB
-```
-
-The MIME encoder maps payload to an explicitly selected plain-text or HTML
-body. The MHTML encoder maps payload to the root HTML entity. Attachment and
-resource descriptors are deep-copied during adapter registration; their data,
-media type, filename/location, and content ID are never inferred from arbitrary
-parsed/DataBind fields. Both transforms replace payload only after successful,
-bounded serialization.
-
-Email input:
-
-- POP3/IMAP are polling client sources, not email servers.
-- They use separate configured client adapters under the `email` kind.
-- Mailbox polling, durable cursors, deletion policy, and retry policy belong to
-  the adapter/product layer.
-- Raw messages should enter an explicit MIME codec stage backed by
-  `TurboNet::MimeParser`; TurboFlow must not implement a second MIME parser.
-- The owned MIME extract adapter copies selected parser data into a typed schema projection before
-  returning; core releases it through the projection ownership contract. The lower-level callback adapter
-  still exposes views only during `consume`.
-
-POP3 source options:
-
-```text
-host                  string, required
-port                  u32, required, min 1, max 65535
-use_tls               bool, optional
-use_stls              bool, optional
-username              string, required
-password              secret, required
-timeout_ms            duration_ms, optional
-poll_interval_ms      duration_ms, optional
-max_messages          size, optional
-delete_after_fetch    bool, optional
-max_pump_iterations   u32, optional
-context               host object, optional, not serializable
-take_context_ownership bool, optional
-```
-
-IMAP source options:
-
-```text
-host                  string, required
-port                  u32, required, min 1, max 65535
-use_tls               bool, optional
-use_starttls          bool, optional
-username              string, required
-password              secret, required
-mailbox               string, optional, default INBOX
-search_query          string, optional, default ALL
-use_uid               bool, optional
-timeout_ms            duration_ms, optional
-poll_interval_ms      duration_ms, optional
-max_messages          size, optional
-max_pump_iterations   u32, optional
-context               host object, optional, not serializable
-take_context_ownership bool, optional
-```
-
-Codec/DataBind integration:
-
-- SMTP sink default output is message payload as body.
-- Structured MIME/MHTML output reuses the existing TurboNet Email and
-  `TurboNet::MimeParser` builder APIs.
-- Structured email construction from DataBind fields should be explicit adapter
-  mapping, for example body field, subject field, and recipient field.
-- Do not infer email headers from arbitrary parsed data without a configured
-  allowlist.
+The planned CNet/CHTTP integration is tracked by GitHub issues #5, #6, and #7.
 
 ## Codec Adapter Schemas
 
@@ -684,10 +382,10 @@ typedef enum turbo_flow_adapter_role_e {
 } turbo_flow_adapter_role_t;
 ```
 
-Socket, HTTP, RPC, S3, SMTP/POP3/IMAP email, file, directory, SQLite, line
-codec, length codec, and DataBind registrations publish schema metadata while
-continuing to use concrete config structs for runtime setup. The registry
-deep-copies field names and enum values.
+File, directory, SQLite, line codec, length codec, DataBind, observe, and schedule
+registrations publish schema metadata while continuing to use concrete config
+structs for runtime setup. External adapters may publish their own typed schema;
+the registry deep-copies field names and enum values.
 
 Compile validation should check:
 
@@ -705,7 +403,7 @@ Do not add inline options to `.flow` as the first step. Keep this as the stable
 form:
 
 ```flow
-stage out adapter "smtp"
+stage out adapter "host.output"
 ```
 
 Config profiles are resolved by the external YAML v1 configuration layer and
@@ -715,10 +413,10 @@ profile directly from `.flow` requires the proposed parameterized-stage and
 `with` expansion. A possible future syntax is:
 
 ```flow
-stage out adapter "smtp" with "prod.smtp"
+stage out adapter "host.output" with "prod.output"
 ```
 
-Here `prod.smtp` would name a host config profile, not embed secrets in the DSL.
+Here `prod.output` would name a host config profile, not embed secrets in the DSL.
 The resolver may use that profile to select a named adapter config; it must not
 merge profile fields into the adapter config. Hosts needing deployment-specific
 values must resolve them into a concrete adapter entry before registration.
@@ -743,7 +441,7 @@ started adapters when option validation fails.
 - Secret fields must be redacted before logging or diagnostics.
 - Schema text and external schema paths are trusted host configuration, not
   untrusted network input.
-- HTTP header mapping, email header mapping, and file path mapping require
+- External protocol header mapping and file path mapping require
   explicit allowlists.
 - Fallback defaults must not silently disable TLS, authentication, size limits,
   schema validation, or payload bounds.

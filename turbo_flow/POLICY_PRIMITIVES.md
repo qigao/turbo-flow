@@ -17,11 +17,11 @@ message/byte 计数、停止唤醒和目标选择产生不同错误语义。
 一次 acquire 在同一临界区同时检查并提交两个计数，避免 count 已增加但 byte reservation
 失败后再回滚的可观察中间态。
 
-- `TF_IO_ADMISSION_FAIL`：容量不足立即返回 `TURBO_ENOSPC`。
-- `TF_IO_ADMISSION_BLOCK`：等待容量；owner close 后返回 `TURBO_ESHUTDOWN`；有限 deadline
-  到期返回 `TURBO_ETIMEDOUT`。
+- `TF_IO_ADMISSION_FAIL`：容量不足立即返回 `SALTS_ENOSPC`。
+- `TF_IO_ADMISSION_BLOCK`：等待容量；owner close 后返回 `SALTS_ESHUTDOWN`；有限 deadline
+  到期返回 `SALTS_ETIMEDOUT`。
 - `close` 只关闭新准入并唤醒等待者，不伪造已接受工作的完成。
-- `release` 由实际持有 request/frame 的 owner 调用；计数不足返回 `TURBO_ERANGE`。
+- `release` 由实际持有 request/frame 的 owner 调用；计数不足返回 `SALTS_ERANGE`。
 - `drain` 只等待计数归零，不关闭 transport，也不释放 payload。
 
 `drop_oldest` 不属于 budget。它必须由拥有消息容器与析构责任的 Queue/adapter memory queue
@@ -54,7 +54,7 @@ FIFO 是容器的出队顺序；Round Robin 是从一组候选目标中选择下
   `turbo_flow_rule_register_data_stage()` 把纯 evaluator 注册成 inline stage，runtime 验证 action，
   并通过 message-owned typed decision sidecar 驱动 route/terminal completion。
 - route、batch-key 和 retry-class 是单值决策；同一次 `ALL_MATCHES` 产生重复单值
-  action 时返回 `TURBO_EPROTO`，message 和 decision 保持不变，不使用隐式的
+  action 时返回 `SALTS_EPROTO`，message 和 decision 保持不变，不使用隐式的
   last-write-wins 规则。
 - `turbo_flow_rule_register_data_operation()` 注册标准 `rules.apply` operation 和 `RuleSet`
   resource，使规则节点可以在满足 Message 类型契约的 DAG 位置复用；schema-backed operation
@@ -133,7 +133,7 @@ cfg.rule_count = 1;
 
 turbo_flow_rule_processor_t *processor = NULL;
 int rc = turbo_flow_rule_processor_create(&cfg, &processor, NULL);
-if (rc == TURBO_OK) {
+if (rc == SALTS_OK) {
   rc = turbo_flow_rule_register_data_stage(flow, "classify", processor, NULL);
 }
 /* stop/destroy flow before destroying processor */
@@ -158,9 +158,9 @@ if (rc == TURBO_OK) {
 
 ## 迁移、兼容与回滚
 
-- adapter 的默认 HWM、linger 配置与 `TURBO_ENOSPC` 行为不变；内部计数与 drain 改由 budget
+- adapter 的默认 HWM、linger 配置与 `SALTS_ENOSPC` 行为不变；内部计数与 drain 改由 budget
   提供，connection snapshot 从同一 budget 读取。新增显式 `block` admission 与 deadline；
-  deadline 到期以 `TURBO_ETIMEDOUT` 发出 HWM event，stop 通过 close 唤醒等待者。
+  deadline 到期以 `SALTS_ETIMEDOUT` 发出 HWM event，stop 通过 close 唤醒等待者。
 - 外部消息 adapter 的 peer 集合与 wire protocol 由其 owner 保持，不进入 Graph Core。
 - Queue API 与 FIFO/full policy 不变。
 - 旧 rule action callback/context API 已删除；rule 用户必须迁移为 typed action template。

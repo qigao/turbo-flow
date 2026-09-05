@@ -11,7 +11,7 @@ static int compile_validate_edges(turbo_flow_t *flow) {
     int from_stage = flow_find_stage_view(flow, tstr_to_v(edge->from_name));
     int to_stage = flow_find_stage_view(flow, tstr_to_v(edge->to_name));
     if (from_stage < 0 || to_stage < 0) {
-      return flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+      return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                             "edge references an unknown stage");
     }
     edge->from_stage = (uint32_t)from_stage;
@@ -24,18 +24,18 @@ static int compile_validate_edges(turbo_flow_t *flow) {
       edge->predicate = NULL;
       rc = flow_expr_projection_compile(flow, edge->condition, tstr_len(edge->condition),
                                         &edge->predicate, &error);
-      if (rc != TURBO_OK) {
+      if (rc != SALTS_OK) {
         return flow_set_error(flow, rc, edge->line, edge->column, error.message);
       }
       if (turbo_flow_expr_result_type(edge->predicate) != TURBO_FLOW_EXPR_TYPE_BOOL) {
         turbo_flow_expr_destroy(edge->predicate);
         edge->predicate = NULL;
-        return flow_set_error(flow, TURBO_EPROTO, edge->line, edge->column,
+        return flow_set_error(flow, SALTS_EPROTO, edge->line, edge->column,
                               "conditional route expression must return BOOL");
       }
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int compile_validate_reject_edges(turbo_flow_t *flow) {
@@ -47,7 +47,7 @@ static int compile_validate_reject_edges(turbo_flow_t *flow) {
     if (!edge || edge->kind != TURBO_FLOW_EDGE_REJECT) continue;
     from = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->from_stage);
     if (!from || from->is_source || from->is_port) {
-      return flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+      return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                             "reject route source must be an executable stage");
     }
     for (size_t j = i + 1; j < vec_size(&flow->edges); ++j) {
@@ -55,16 +55,16 @@ static int compile_validate_reject_edges(turbo_flow_t *flow) {
           (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, j);
       if (!other || other->kind != TURBO_FLOW_EDGE_REJECT) continue;
       if (strcmp(edge->name, other->name) == 0) {
-        return flow_set_error(flow, TURBO_EALREADY, other->line, other->column,
+        return flow_set_error(flow, SALTS_EALREADY, other->line, other->column,
                               "duplicate reject route name");
       }
       if (edge->from_stage == other->from_stage) {
-        return flow_set_error(flow, TURBO_EALREADY, other->line, other->column,
+        return flow_set_error(flow, SALTS_EALREADY, other->line, other->column,
                               "stage has more than one reject route");
       }
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int compile_validate_sources(turbo_flow_t *flow) {
@@ -73,10 +73,10 @@ static int compile_validate_sources(turbo_flow_t *flow) {
   for (i = 0; i < vec_size(&flow->stages); ++i) {
     const flow_stage_plan_impl_t *stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
-    if (stage->is_source) return TURBO_OK;
+    if (stage->is_source) return SALTS_OK;
   }
 
-  return flow_set_error(flow, TURBO_EINVAL, 0, 0, "stage plan requires at least one source");
+  return flow_set_error(flow, SALTS_EINVAL, 0, 0, "stage plan requires at least one source");
 }
 
 static int stage_composite_prefix(const flow_stage_plan_impl_t *stage, const char **prefix,
@@ -185,32 +185,32 @@ static int compile_validate_composite_stage_boundaries(turbo_flow_t *flow) {
 
     if (edge->is_stage_internal) {
       if (!same_composite_prefix(from, to)) {
-        return flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+        return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                               "stage internal edges must stay inside the same composite stage");
       }
       if (from->is_port && from->is_port_output && same_direct_composite_prefix(from, to)) {
-        return flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+        return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                               "stage internal edges may not leave output ports");
       }
       if (to->is_port && !to->is_port_output && same_direct_composite_prefix(from, to)) {
-        return flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+        return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                               "stage internal edges may not enter input ports");
       }
       continue;
     }
 
     if (stage_composite_prefix(from, NULL, NULL) && (!from->is_port || !from->is_port_output)) {
-      return flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+      return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                             "external edges may only leave composite stage output ports");
     }
 
     if (stage_composite_prefix(to, NULL, NULL) && (!to->is_port || to->is_port_output)) {
-      return flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+      return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                             "external edges may only enter composite stage input ports");
     }
   }
 
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int compile_validate_duplicate_edges(turbo_flow_t *flow) {
@@ -226,13 +226,13 @@ static int compile_validate_duplicate_edges(turbo_flow_t *flow) {
           (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, j);
       if (left->from_stage == right->from_stage && left->to_stage == right->to_stage &&
           left->kind == right->kind) {
-        return flow_set_error(flow, TURBO_EALREADY, right->line, right->column,
+        return flow_set_error(flow, SALTS_EALREADY, right->line, right->column,
                               "duplicate stage edge");
       }
     }
   }
 
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void mark_reachable_from_stage(const turbo_flow_t *flow, uint8_t *reachable,
@@ -250,12 +250,12 @@ static void mark_reachable_from_stage(const turbo_flow_t *flow, uint8_t *reachab
 static int compile_validate_source_reachability(turbo_flow_t *flow) {
   size_t stage_count = vec_size(&flow->stages);
   uint8_t *reachable = NULL;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
 
-  if (stage_count == 0) return TURBO_OK;
+  if (stage_count == 0) return SALTS_OK;
 
   reachable = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
-  if (!reachable) return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+  if (!reachable) return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
 
   for (size_t stage_index = 0; stage_index < stage_count; ++stage_index) {
     const flow_stage_plan_impl_t *stage =
@@ -267,7 +267,7 @@ static int compile_validate_source_reachability(turbo_flow_t *flow) {
     const flow_stage_plan_impl_t *stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
     if (!reachable[stage_index] && !stage_in_inactive_template(flow, stage)) {
-      rc = flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      rc = flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                           "stage is not reachable from any source");
       goto cleanup;
     }
@@ -305,12 +305,12 @@ static int composite_stage_reaches_input_reverse(turbo_flow_t *flow, uint32_t st
 static int compile_validate_composite_stage_reachability(turbo_flow_t *flow) {
   size_t stage_count = vec_size(&flow->stages);
   uint8_t *seen = NULL;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
 
-  if (stage_count == 0) return TURBO_OK;
+  if (stage_count == 0) return SALTS_OK;
 
   seen = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
-  if (!seen) return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+  if (!seen) return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
 
   for (size_t stage_index = 0; stage_index < stage_count; ++stage_index) {
     const flow_stage_plan_impl_t *stage =
@@ -320,7 +320,7 @@ static int compile_validate_composite_stage_reachability(turbo_flow_t *flow) {
     if (stage_in_inactive_template(flow, stage)) continue;
     memset(seen, 0, stage_count * sizeof(uint8_t));
     if (!composite_stage_reaches_input_reverse(flow, (uint32_t)stage_index, seen)) {
-      rc = flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      rc = flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                           "stage output port is not reachable from an input port");
       goto cleanup;
     }
@@ -353,18 +353,18 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
     if (stage->adapter_name) {
       adapter = flow_adapter_for_stage(flow, stage);
       if (!adapter) {
-        return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "stage or source adapter is not registered");
       }
       if (adapter->schema.roles != 0) {
         uint32_t roles = adapter->schema.roles;
         if (stage->is_source && !(roles & TURBO_FLOW_ADAPTER_SOURCE)) {
-          return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+          return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                                 "adapter schema does not allow source usage");
         }
         if (!stage->is_source && !stage->is_port &&
             !(roles & (TURBO_FLOW_ADAPTER_SINK | TURBO_FLOW_ADAPTER_TRANSFORM))) {
-          return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+          return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                                 "adapter schema does not allow stage usage");
         }
         if (!stage->is_source && !stage->is_port && (roles & TURBO_FLOW_ADAPTER_SINK) &&
@@ -374,7 +374,7 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
             const flow_edge_plan_impl_t *edge =
                 (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
             if (edge && edge->from_stage == (uint32_t)i && edge->kind != TURBO_FLOW_EDGE_REJECT) {
-              return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+              return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                                     "sink adapter stage must be terminal");
             }
           }
@@ -384,11 +384,11 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
 
     if (stage->retry.max_attempts > 1u) {
       if (!adapter || !adapter->ops.consume_retry) {
-        return flow_set_error(flow, TURBO_ENOTSUP, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                               "retry requires an adapter retry callback");
       }
       if (reg_index >= 0 || provider_index >= 0) {
-        return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "retry adapter stage may not override consume with a callback");
       }
     }
@@ -403,48 +403,48 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
                 &flow->operation_providers, (size_t)provider_index);
         if (!provider || !provider->module_name || !module || !module->name ||
             strcmp(provider->module_name, module->name) != 0) {
-          return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+          return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                                 "cataloged operation provider is not bound to its module owner");
         }
       } else if (reg_index >= 0) {
-        return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                               "legacy stage callback cannot implement a cataloged operation");
       } else if (adapter) {
         const flow_adapter_operation_binding_t *binding =
             flow_find_adapter_operation_binding(adapter, stage->operation_name);
         if (!binding || !binding->module_name || !module || !module->name ||
             strcmp(binding->module_name, module->name) != 0) {
-          return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+          return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                                 "cataloged adapter operation is not bound to its module owner");
         }
         if (operation && operation->resource_type &&
             (!binding->resource_name || !stage->resource_name ||
              strcmp(binding->resource_name, stage->resource_name) != 0)) {
-          return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+          return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                                 "cataloged adapter operation is bound to another resource primitive");
         }
         if (stage->is_source && !adapter->ops.start) {
-          return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+          return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                                 "cataloged source adapter operation has no start callback");
         }
       } else if (operation &&
                  operation->scope.state == TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER) {
-        return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                               "adapter-owner operation requires a typed adapter binding");
       }
     } else if (operation && operation->scope.state == TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER) {
-      return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                             "adapter-owner operation requires a module owner");
     }
 
     if (!stage->is_source && !stage->is_port && reg_index < 0 && provider_index < 0 &&
         (!adapter || !adapter->ops.consume)) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "stage callback, operation provider, or adapter consume callback is not registered");
     }
     if (!stage->is_source && !stage->is_port && reg_index < 0 && provider_index < 0 && adapter &&
         adapter->ops.consume && stage->exec.kind != TURBO_FLOW_EXEC_INLINE) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "adapter-owned consume requires the inline executor");
     }
     if (!stage->is_source && !stage->is_port && (reg_index >= 0 || provider_index >= 0)) {
@@ -461,7 +461,7 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
       stage->effects = provider ? provider->options.effects : reg->options.effects;
       if ((stage->effects & TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u &&
           stage->exec.kind != TURBO_FLOW_EXEC_INLINE) {
-        return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "dynamic decision stage requires the inline executor");
       }
       stage->fn = provider ? provider->fn : reg->fn;
@@ -477,7 +477,7 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
       stage->ctx = provider ? provider->ctx : reg->ctx;
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static uint32_t operation_exec_bit(turbo_flow_exec_kind_t kind) {
@@ -580,7 +580,7 @@ static int flow_port_bind_type(turbo_flow_t *flow, flow_stage_plan_impl_t *port,
                                uint32_t column, int *changed) {
   turbo_flow_operation_descriptor_t *operation;
   if (!port || !port->is_port || !type || domain == TURBO_FLOW_DOMAIN_NONE || !changed)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   operation = &port->resolved_operation;
   if (!operation->input_type) {
     operation->domain = domain;
@@ -589,13 +589,13 @@ static int flow_port_bind_type(turbo_flow_t *flow, flow_stage_plan_impl_t *port,
     operation->output_domain = domain;
     operation->output_type = type;
     *changed = 1;
-    return TURBO_OK;
+    return SALTS_OK;
   }
   if (operation->input_domain != domain || strcmp(operation->input_type, type) != 0) {
-    return flow_set_error(flow, TURBO_EINVAL, line, column,
+    return flow_set_error(flow, SALTS_EINVAL, line, column,
                           "composite port connects incompatible operation types");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int compile_resolve_port_types(turbo_flow_t *flow) {
@@ -618,16 +618,16 @@ static int compile_resolve_port_types(turbo_flow_t *flow) {
       }
       from_operation = flow_stage_operation_descriptor(from);
       to_operation = flow_stage_operation_descriptor(to);
-      if (!from_operation || !to_operation) return TURBO_EPROTO;
+      if (!from_operation || !to_operation) return SALTS_EPROTO;
       if (to->is_port && from_operation->output_type) {
         rc = flow_port_bind_type(flow, to, from_operation->output_domain,
                                  from_operation->output_type, edge->line, edge->column, &changed);
-        if (rc != TURBO_OK) return rc;
+        if (rc != SALTS_OK) return rc;
       }
       if (from->is_port && to_operation->input_type) {
         rc = flow_port_bind_type(flow, from, to_operation->input_domain, to_operation->input_type,
                                  edge->line, edge->column, &changed);
-        if (rc != TURBO_OK) return rc;
+        if (rc != SALTS_OK) return rc;
       }
     }
     if (!changed) break;
@@ -637,18 +637,18 @@ static int compile_resolve_port_types(turbo_flow_t *flow) {
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
     if (stage && stage->is_port && !stage_in_inactive_template(flow, stage) &&
         !stage->resolved_operation.input_type) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "composite port type cannot be resolved from operation edges");
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int compile_resolve_operations(turbo_flow_t *flow) {
   for (size_t i = 0u; i < vec_size(&flow->stages); ++i) {
     flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, i);
     const turbo_flow_operation_descriptor_t *registered;
-    if (!stage) return TURBO_EINVAL;
+    if (!stage) return SALTS_EINVAL;
     memset(&stage->resolved_operation, 0, sizeof(stage->resolved_operation));
     stage->operation_resolved = 0;
     if (stage_in_inactive_template(flow, stage)) continue;
@@ -658,13 +658,13 @@ static int compile_resolve_operations(turbo_flow_t *flow) {
     }
     registered = turbo_flow_find_operation(flow, stage->operation_name);
     if (!registered) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "stage or source operation is not registered");
     }
     stage->resolved_operation = *registered;
     stage->operation_resolved = 1;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int stage_has_reject_edge(const turbo_flow_t *flow, uint32_t stage_index) {
@@ -689,69 +689,69 @@ static int compile_validate_operation_runtime(turbo_flow_t *flow,
   const flow_adapter_registration_t *adapter = flow_adapter_for_stage(flow, stage);
 
   if (stage->is_source && runtime->deadline_ms != 0u) {
-    return flow_set_error(flow, TURBO_ENOTSUP, stage->line, stage->column,
+    return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                           "source operation deadline requires an adapter owner contract");
   }
   if (stage->is_source && runtime->settlement != 0u) {
-    return flow_set_error(flow, TURBO_ENOTSUP, stage->line, stage->column,
+    return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                           "source settlement requires an ingress owner completion contract");
   }
   if (((runtime->settlement & owner_settlement) != 0 ||
        runtime->error_mode == TURBO_FLOW_ERROR_SETTLE) &&
       (!adapter || !adapter->settlement_ops.apply)) {
-    return flow_set_error(flow, TURBO_ENOTSUP, stage->line, stage->column,
+    return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                           "operation settlement owner is not configured");
   }
   if (runtime->handoff == TURBO_FLOW_HANDOFF_BOUNDED) {
     if (stage->is_source || stage->data_strategy != TURBO_FLOW_DATA_WORKER_POOL) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "bounded operation handoff requires a worker segment");
     }
     if (runtime->capacity != stage->data_pool_capacity) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "operation capacity does not match worker capacity");
     }
     if (runtime->backpressure == TURBO_FLOW_BACKPRESSURE_DROP_OLDEST) {
-      return flow_set_error(flow, TURBO_ENOTSUP, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                             "worker Disruptor cannot drop an older entry before active sequences complete");
     }
     if (runtime->backpressure != TURBO_FLOW_BACKPRESSURE_BLOCK &&
         runtime->backpressure != TURBO_FLOW_BACKPRESSURE_FAIL &&
         runtime->backpressure != TURBO_FLOW_BACKPRESSURE_DROP_NEWEST) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "bounded operation backpressure policy is invalid");
     }
   } else if (stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) {
-    return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+    return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                           "worker segment requires a bounded operation handoff");
   }
   if (runtime->ordering == TURBO_FLOW_ORDERING_PRESERVE_INPUT &&
       stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL && stage->reorder.capacity == 0) {
-    return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+    return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                           "ordered worker operation requires a reorder boundary");
   }
   if (runtime->cancellation == TURBO_FLOW_CANCELLATION_COOPERATIVE &&
       (stage->is_source || (stage->data_strategy != TURBO_FLOW_DATA_WORKER_POOL &&
                             stage->exec.kind != TURBO_FLOW_EXEC_THREAD_POOL &&
                             stage->exec.kind != TURBO_FLOW_EXEC_CORO_POOL))) {
-    return flow_set_error(flow, TURBO_ENOTSUP, stage->line, stage->column,
+    return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                           "cooperative cancellation requires a task executor");
   }
   if (runtime->error_mode == TURBO_FLOW_ERROR_REJECT && !stage_has_reject_edge(flow, stage_index)) {
-    return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+    return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                           "reject error mode requires a reject edge");
   }
   if (runtime->error_mode == TURBO_FLOW_ERROR_RETRY) {
     if (stage->retry.max_attempts <= 1u) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "retry error mode requires a retry policy");
     }
     if ((runtime->settlement & TURBO_FLOW_SETTLEMENT_RETRY) == 0) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "retry error mode requires retry settlement");
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int compile_validate_operation_bindings(turbo_flow_t *flow) {
@@ -769,60 +769,60 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
     if (!stage || stage_in_inactive_template(flow, stage) || stage->is_port) continue;
     operation = flow_stage_operation_descriptor(stage);
     if (!operation) {
-      return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                             "runtime node has no resolved operation contract");
     }
     adapter = flow_adapter_for_stage(flow, stage);
     required_role = stage->is_source ? TURBO_FLOW_OPERATION_SOURCE : TURBO_FLOW_OPERATION_STAGE;
     if (!(operation->flags & required_role)) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             stage->is_source ? "operation does not allow source usage"
                                              : "operation does not allow stage usage");
     }
     if (stage->is_source && (operation->input_type || !operation->output_type)) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "source operation must have no graph input and one output");
     }
     if (!stage->is_source && !operation->input_type) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "stage operation must declare an input type");
     }
     if (operation->scope.authority == TURBO_FLOW_AUTHORITY_OWNER_COMMAND ||
         operation->domain == TURBO_FLOW_DOMAIN_MANAGEMENT) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "management command operation cannot bind to a payload graph node");
     }
     if (operation->resource_type) {
       if (!stage->resource_name) {
-        return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "operation requires a resource primitive binding");
       }
       resource = turbo_flow_find_primitive(flow, stage->resource_name);
       if (!resource) {
-        return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "resource primitive is not registered");
       }
       if (resource->kind != TURBO_FLOW_PRIMITIVE_RESOURCE ||
           resource->domain != operation->resource_domain ||
           strcmp(resource->type_name, operation->resource_type) != 0) {
-        return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "resource primitive does not satisfy operation contract");
       }
       if (operation->resource_min_version != 0u &&
           (resource->version < operation->resource_min_version ||
            (operation->resource_max_version != 0u &&
             resource->version > operation->resource_max_version))) {
-        return flow_set_error(flow, TURBO_EPROTO, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                               "resource primitive version is incompatible with operation contract");
       }
     } else if (stage->resource_name) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "stateless operation cannot bind a resource primitive");
     }
     if (!stage->is_source) {
       exec_bit = operation_exec_bit(stage->exec.kind);
       if (exec_bit == 0 || !(operation->execution_mask & exec_bit)) {
-        return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "operation scope does not allow the selected executor");
       }
     }
@@ -830,7 +830,7 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
         ((stage->is_source && !stage->adapter_name) ||
          (!stage->is_source &&
           (!adapter || !adapter->ops.consume || stage->exec.kind != TURBO_FLOW_EXEC_INLINE)))) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             stage->is_source
                                 ? "owner-context source operation requires an adapter owner"
                                 : "owner-context stage operation requires an inline adapter owner");
@@ -839,20 +839,20 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
         stage->data_strategy != TURBO_FLOW_DATA_WORKER_POOL &&
         stage->exec.kind != TURBO_FLOW_EXEC_THREAD_POOL &&
         stage->exec.kind != TURBO_FLOW_EXEC_CORO_POOL) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "pool-scoped operation requires a pooled executor or worker segment");
     }
     if (operation->scope.concurrency == TURBO_FLOW_CONCURRENCY_LOCK_FREE_SNAPSHOT &&
         operation->scope.authority != TURBO_FLOW_AUTHORITY_OBSERVE_ONLY) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "lock-free snapshot scope requires observe-only authority");
     }
     {
       int runtime_rc = compile_validate_operation_runtime(flow, stage, (uint32_t)i, operation);
-      if (runtime_rc != TURBO_OK) return runtime_rc;
+      if (runtime_rc != SALTS_OK) return runtime_rc;
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int compile_validate_emitting_operations(turbo_flow_t *flow) {
@@ -867,10 +867,10 @@ static int compile_validate_emitting_operations(turbo_flow_t *flow) {
 
     if (!stage || (!stage->emit_fn && !stage->keyed_emit_fn && !stage->window_fn)) continue;
     operation = flow_stage_operation_descriptor(stage);
-    if (!operation) return TURBO_EINVAL;
+    if (!operation) return SALTS_EINVAL;
     if (stage->exec.kind != TURBO_FLOW_EXEC_INLINE ||
         stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL || stage->retry.max_attempts > 1u) {
-      return flow_set_error(flow, TURBO_ENOTSUP, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                             "emitting operation requires direct inline execution without retry");
     }
     if ((operation->scope.authority != TURBO_FLOW_AUTHORITY_PURE &&
@@ -878,12 +878,12 @@ static int compile_validate_emitting_operations(turbo_flow_t *flow) {
         operation->runtime.handoff != TURBO_FLOW_HANDOFF_DIRECT ||
         operation->runtime.settlement != 0u || operation->runtime.deadline_ms != 0u ||
         (operation->execution_mask & TURBO_FLOW_OPERATION_EXEC_INLINE) == 0u) {
-      return flow_set_error(flow, TURBO_ENOTSUP, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                             "emitting operation must be an inline direct pure-data contract without settlement");
     }
 
     descendants = (uint8_t *)calloc(stage_count, sizeof(*descendants));
-    if (!descendants) return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    if (!descendants) return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
     descendants[stage_index] = 1u;
     do {
       changed = 0;
@@ -903,13 +903,13 @@ static int compile_validate_emitting_operations(turbo_flow_t *flow) {
       if (edge && edge->to_stage != stage_index && descendants[edge->to_stage] &&
           !descendants[edge->from_stage]) {
         free(descendants);
-        return flow_set_error(flow, TURBO_ENOTSUP, edge->line, edge->column,
+        return flow_set_error(flow, SALTS_ENOTSUP, edge->line, edge->column,
                               "emitting operation downstream may not merge an external branch");
       }
     }
     free(descendants);
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int compile_validate_keyed_operations(turbo_flow_t *flow) {
@@ -922,7 +922,7 @@ static int compile_validate_keyed_operations(turbo_flow_t *flow) {
 
     if (!stage || (!stage->keyed_fn && !stage->keyed_emit_fn && !stage->window_fn)) continue;
     operation = flow_stage_operation_descriptor(stage);
-    if (!operation) return TURBO_EINVAL;
+    if (!operation) return SALTS_EINVAL;
     if (!stage->key_selector || !stage->keyed_store || stage->fn || stage->emit_fn ||
         ((stage->keyed_fn != NULL) + (stage->keyed_emit_fn != NULL) +
              (stage->window_fn != NULL) !=
@@ -930,7 +930,7 @@ static int compile_validate_keyed_operations(turbo_flow_t *flow) {
         ((stage->window_fn != NULL) != (stage->window_close_fn != NULL)) ||
         stage->exec.kind != TURBO_FLOW_EXEC_INLINE ||
         stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL || stage->retry.max_attempts > 1u) {
-      return flow_set_error(flow, TURBO_ENOTSUP, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                             "keyed operation requires one direct inline keyed provider without retry");
     }
     if ((stage->keyed_fn && stage->mutability != TURBO_FLOW_STAGE_MUTATES_IN_PLACE) ||
@@ -938,7 +938,7 @@ static int compile_validate_keyed_operations(turbo_flow_t *flow) {
          (stage->mutability != TURBO_FLOW_STAGE_READONLY || stage->max_outputs == 0u ||
           stage->max_outputs > TURBO_FLOW_EMITTER_MAX_OUTPUTS ||
           (stage->effects & TURBO_FLOW_STAGE_EFFECT_EMITS) == 0u))) {
-      return flow_set_error(flow, TURBO_EINVAL, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "keyed provider mutability or output bound is invalid");
     }
     if (operation->scope.data != TURBO_FLOW_DATA_SCOPE_MESSAGE ||
@@ -951,19 +951,19 @@ static int compile_validate_keyed_operations(turbo_flow_t *flow) {
         (operation->runtime.error_mode != TURBO_FLOW_ERROR_PROPAGATE &&
          operation->runtime.error_mode != TURBO_FLOW_ERROR_REJECT) ||
         (operation->execution_mask & TURBO_FLOW_OPERATION_EXEC_INLINE) == 0u) {
-      return flow_set_error(flow, TURBO_ENOTSUP, stage->line, stage->column,
+      return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                             "keyed operation contract must own node-local runtime-generation state");
     }
     for (size_t prior_index = 0u; prior_index < stage_index; ++prior_index) {
       const flow_stage_plan_impl_t *prior =
           (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, prior_index);
       if (prior && prior->keyed_store == stage->keyed_store) {
-        return flow_set_error(flow, TURBO_EALREADY, stage->line, stage->column,
+        return flow_set_error(flow, SALTS_EALREADY, stage->line, stage->column,
                               "keyed state store may bind only one runtime node");
       }
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int operation_types_equal(turbo_flow_domain_t left_domain, const char *left_type,
@@ -993,24 +993,24 @@ static int compile_validate_operation_edges(turbo_flow_t *flow) {
     from_operation = flow_stage_operation_descriptor(from);
     to_operation = flow_stage_operation_descriptor(to);
     if (!from_operation || !to_operation) {
-      return flow_set_error(flow, TURBO_EPROTO, edge->line, edge->column,
+      return flow_set_error(flow, SALTS_EPROTO, edge->line, edge->column,
                             "runtime edge endpoint has no resolved operation contract");
     }
     if (!from_operation->output_type) {
-      return flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+      return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                             "operation without output cannot have a downstream edge");
     }
     if (!to_operation->input_type) {
-      return flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+      return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                             "operation without input cannot have an upstream edge");
     }
     if (!operation_types_equal(from_operation->output_domain, from_operation->output_type,
                                to_operation->input_domain, to_operation->input_type)) {
-      return flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+      return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                             "operation edge domain or type is incompatible");
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int stage_output_is_unordered(const flow_stage_plan_impl_t *stage) {
@@ -1047,12 +1047,12 @@ static int compile_validate_unordered_fanin(turbo_flow_t *flow) {
   size_t stage_count = vec_size(&flow->stages);
   uint32_t *incoming_counts = NULL;
   uint8_t *visiting = NULL;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
 
   incoming_counts = (uint32_t *)calloc(stage_count, sizeof(uint32_t));
   visiting = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
   if (!incoming_counts || !visiting) {
-    rc = flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    rc = flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
     goto cleanup;
   }
 
@@ -1069,7 +1069,7 @@ static int compile_validate_unordered_fanin(turbo_flow_t *flow) {
 
     memset(visiting, 0, stage_count * sizeof(uint8_t));
     if (branch_contains_unordered_before_fanin(flow, incoming_counts, edge->from_stage, visiting)) {
-      rc = flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+      rc = flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                           "unordered worker-pool or thread executor branch cannot fan-in without a "
                           "reorder strategy");
       goto cleanup;
@@ -1109,12 +1109,12 @@ static int compile_validate_fanout_mutability(turbo_flow_t *flow) {
   size_t stage_count = vec_size(&flow->stages);
   uint32_t *incoming_counts = NULL;
   uint8_t *visiting = NULL;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
 
   incoming_counts = (uint32_t *)calloc(stage_count, sizeof(uint32_t));
   visiting = (uint8_t *)calloc(stage_count, sizeof(uint8_t));
   if (!incoming_counts || !visiting) {
-    rc = flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    rc = flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
     goto cleanup;
   }
 
@@ -1144,7 +1144,7 @@ static int compile_validate_fanout_mutability(turbo_flow_t *flow) {
       if (edge->from_stage != (uint32_t)stage_index) continue;
       memset(visiting, 0, stage_count * sizeof(uint8_t));
       if (fanout_branch_contains_mutable(flow, incoming_counts, edge->to_stage, visiting)) {
-        rc = flow_set_error(flow, TURBO_EINVAL, edge->line, edge->column,
+        rc = flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                             "mutable stage is not allowed on broadcast fan-out");
         goto cleanup;
       }
@@ -1177,74 +1177,74 @@ static int compile_validate_cycles(turbo_flow_t *flow) {
   uint8_t *state;
   size_t i;
 
-  if (count == 0) return TURBO_OK;
+  if (count == 0) return SALTS_OK;
   state = (uint8_t *)calloc(count, sizeof(uint8_t));
-  if (!state) return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+  if (!state) return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
 
   for (i = 0; i < count; ++i) {
     if (state[i] == 0 && dfs_cycle(flow, state, (uint32_t)i)) {
       free(state);
-      return flow_set_error(flow, TURBO_EINVAL, 0, 0, "stage plan contains a cycle");
+      return flow_set_error(flow, SALTS_EINVAL, 0, 0, "stage plan contains a cycle");
     }
   }
 
   free(state);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_compile(turbo_flow_t *flow) {
   int rc;
 
-  if (!flow) return TURBO_EINVAL;
+  if (!flow) return SALTS_EINVAL;
   if (flow->state != TURBO_FLOW_STATE_PARSED && flow->state != TURBO_FLOW_STATE_STOPPED) {
-    return flow_set_error(flow, TURBO_EINVAL, 0, 0, "stage plan must be parsed before compile");
+    return flow_set_error(flow, SALTS_EINVAL, 0, 0, "stage plan must be parsed before compile");
   }
 
   flow_clear_error(flow);
   rc = compile_validate_sources(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_edges(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_reject_edges(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_composite_stage_boundaries(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_composite_stage_reachability(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_duplicate_edges(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_source_reachability(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_cycles(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_registrations(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_resolve_operations(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_resolve_port_types(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_operation_bindings(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_operation_edges(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_emitting_operations(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_keyed_operations(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_unordered_fanin(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_fanout_mutability(flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flow_build_runtime_plan(flow);
-  if (rc != TURBO_OK) return rc;
-  turbo_mutex_lock(&flow->runtime_mutex);
+  if (rc != SALTS_OK) return rc;
+  salts_mutex_lock(&flow->runtime_mutex);
   if (flow->runtime_generation == UINT64_MAX) {
-    turbo_mutex_unlock(&flow->runtime_mutex);
+    salts_mutex_unlock(&flow->runtime_mutex);
     flow_clear_runtime_plan(flow);
-    return flow_set_error(flow, TURBO_ERANGE, 0, 0, "runtime generation is exhausted");
+    return flow_set_error(flow, SALTS_ERANGE, 0, 0, "runtime generation is exhausted");
   }
   ++flow->runtime_generation;
   flow->state = TURBO_FLOW_STATE_COMPILED;
-  turbo_mutex_unlock(&flow->runtime_mutex);
-  return TURBO_OK;
+  salts_mutex_unlock(&flow->runtime_mutex);
+  return SALTS_OK;
 }

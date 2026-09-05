@@ -1,6 +1,0 @@
-add_subdirectory(common)
-add_subdirectory(http)
-add_subdirectory(rpc)
-add_subdirectory(s3)
-add_subdirectory(socket)
-add_subdirectory(email)

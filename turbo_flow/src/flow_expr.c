@@ -32,13 +32,13 @@ static uint32_t flow_expr_push_node(flow_expr_parse_ctx_t *ctx, flow_expr_node_t
   index = vec_size(&ctx->ast->nodes);
   if (index >= FLOW_EXPR_MAX_NODES) {
     tstr_freep(&node->text);
-    flow_expr_set_error(ctx, TURBO_ENOSPC, node->line, node->column,
+    flow_expr_set_error(ctx, SALTS_ENOSPC, node->line, node->column,
                         "expression node limit exceeded");
     return FLOW_EXPR_INVALID_NODE;
   }
-  if (turbo_flow_stl_error(vec_push(&ctx->ast->nodes, node)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->ast->nodes, node)) != SALTS_OK) {
     tstr_freep(&node->text);
-    flow_expr_set_error(ctx, TURBO_ENOMEM, node->line, node->column,
+    flow_expr_set_error(ctx, SALTS_ENOMEM, node->line, node->column,
                         "out of memory building expression");
     return FLOW_EXPR_INVALID_NODE;
   }
@@ -82,7 +82,7 @@ uint32_t flow_expr_push_i64(flow_expr_parse_ctx_t *ctx, flow_expr_token_t token)
   char *end = NULL;
   long long value;
   if (!text) {
-    flow_expr_set_error(ctx, TURBO_ENOMEM, token.line, token.column,
+    flow_expr_set_error(ctx, SALTS_ENOMEM, token.line, token.column,
                         "out of memory parsing integer");
     return FLOW_EXPR_INVALID_NODE;
   }
@@ -90,7 +90,7 @@ uint32_t flow_expr_push_i64(flow_expr_parse_ctx_t *ctx, flow_expr_token_t token)
   value = strtoll(text, &end, 10);
   if (errno == ERANGE || !end || *end != '\0') {
     free(text);
-    flow_expr_set_error(ctx, TURBO_ERANGE, token.line, token.column,
+    flow_expr_set_error(ctx, SALTS_ERANGE, token.line, token.column,
                         "integer literal is out of range");
     return FLOW_EXPR_INVALID_NODE;
   }
@@ -105,14 +105,14 @@ uint32_t flow_expr_push_f64(flow_expr_parse_ctx_t *ctx, flow_expr_token_t token)
   char *end = NULL;
   double value;
   if (!text) {
-    flow_expr_set_error(ctx, TURBO_ENOMEM, token.line, token.column, "out of memory parsing float");
+    flow_expr_set_error(ctx, SALTS_ENOMEM, token.line, token.column, "out of memory parsing float");
     return FLOW_EXPR_INVALID_NODE;
   }
   errno = 0;
   value = strtod(text, &end);
   if (errno == ERANGE || !end || *end != '\0') {
     free(text);
-    flow_expr_set_error(ctx, TURBO_ERANGE, token.line, token.column,
+    flow_expr_set_error(ctx, SALTS_ERANGE, token.line, token.column,
                         "floating literal is out of range");
     return FLOW_EXPR_INVALID_NODE;
   }
@@ -125,12 +125,12 @@ uint32_t flow_expr_push_string(flow_expr_parse_ctx_t *ctx, flow_expr_token_t tok
   flow_expr_node_t node = flow_expr_node(FLOW_EXPR_STRING, token);
   tstr decoded = tstr_new_len("", 0);
   if (token.length > FLOW_EXPR_MAX_TEXT) {
-    flow_expr_set_error(ctx, TURBO_ENOSPC, token.line, token.column,
+    flow_expr_set_error(ctx, SALTS_ENOSPC, token.line, token.column,
                         "expression string limit exceeded");
     return FLOW_EXPR_INVALID_NODE;
   }
   if (!decoded) {
-    flow_expr_set_error(ctx, TURBO_ENOMEM, token.line, token.column,
+    flow_expr_set_error(ctx, SALTS_ENOMEM, token.line, token.column,
                         "out of memory parsing string");
     return FLOW_EXPR_INVALID_NODE;
   }
@@ -139,7 +139,7 @@ uint32_t flow_expr_push_string(flow_expr_parse_ctx_t *ctx, flow_expr_token_t tok
     if (value == '\\') {
       if (++i >= token.length) {
         tstr_freep(&decoded);
-        flow_expr_set_error(ctx, TURBO_EINVAL, token.line, token.column,
+        flow_expr_set_error(ctx, SALTS_EINVAL, token.line, token.column,
                             "unterminated string escape");
         return FLOW_EXPR_INVALID_NODE;
       }
@@ -167,7 +167,7 @@ uint32_t flow_expr_push_string(flow_expr_parse_ctx_t *ctx, flow_expr_token_t tok
         break;
       default:
         tstr_freep(&decoded);
-        flow_expr_set_error(ctx, TURBO_EINVAL, token.line, token.column,
+        flow_expr_set_error(ctx, SALTS_EINVAL, token.line, token.column,
                             "unsupported string escape");
         return FLOW_EXPR_INVALID_NODE;
       }
@@ -176,7 +176,7 @@ uint32_t flow_expr_push_string(flow_expr_parse_ctx_t *ctx, flow_expr_token_t tok
       tstr next = tstr_cat_len(decoded, &value, 1);
       if (!next) {
         tstr_freep(&decoded);
-        flow_expr_set_error(ctx, TURBO_ENOMEM, token.line, token.column,
+        flow_expr_set_error(ctx, SALTS_ENOMEM, token.line, token.column,
                             "out of memory parsing string");
         return FLOW_EXPR_INVALID_NODE;
       }
@@ -190,13 +190,13 @@ uint32_t flow_expr_push_string(flow_expr_parse_ctx_t *ctx, flow_expr_token_t tok
 uint32_t flow_expr_push_field(flow_expr_parse_ctx_t *ctx, flow_expr_token_t token) {
   flow_expr_node_t node = flow_expr_node(FLOW_EXPR_FIELD, token);
   if (token.length > FLOW_EXPR_MAX_TEXT) {
-    flow_expr_set_error(ctx, TURBO_ENOSPC, token.line, token.column,
+    flow_expr_set_error(ctx, SALTS_ENOSPC, token.line, token.column,
                         "expression field limit exceeded");
     return FLOW_EXPR_INVALID_NODE;
   }
   node.text = tstr_new_len(token.value, token.length);
   if (!node.text) {
-    flow_expr_set_error(ctx, TURBO_ENOMEM, token.line, token.column, "out of memory parsing field");
+    flow_expr_set_error(ctx, SALTS_ENOMEM, token.line, token.column, "out of memory parsing field");
     return FLOW_EXPR_INVALID_NODE;
   }
   return flow_expr_push_node(ctx, &node);
@@ -211,25 +211,25 @@ uint32_t flow_expr_append_field(flow_expr_parse_ctx_t *ctx, uint32_t field,
   }
   node = (flow_expr_node_t *)vec_at(&ctx->ast->nodes, field);
   if (!node || node->kind != FLOW_EXPR_FIELD || !node->text) {
-    flow_expr_set_error(ctx, TURBO_EINVAL, member.line, member.column, "invalid field reference");
+    flow_expr_set_error(ctx, SALTS_EINVAL, member.line, member.column, "invalid field reference");
     return FLOW_EXPR_INVALID_NODE;
   }
   if (member.length >= FLOW_EXPR_MAX_TEXT ||
       tstr_len(node->text) > FLOW_EXPR_MAX_TEXT - member.length - 1) {
-    flow_expr_set_error(ctx, TURBO_ENOSPC, member.line, member.column,
+    flow_expr_set_error(ctx, SALTS_ENOSPC, member.line, member.column,
                         "expression field limit exceeded");
     return FLOW_EXPR_INVALID_NODE;
   }
   next = tstr_cat_len(node->text, ".", 1);
   if (!next) {
-    flow_expr_set_error(ctx, TURBO_ENOMEM, member.line, member.column,
+    flow_expr_set_error(ctx, SALTS_ENOMEM, member.line, member.column,
                         "out of memory parsing field");
     return FLOW_EXPR_INVALID_NODE;
   }
   node->text = next;
   next = tstr_cat_len(node->text, member.value, member.length);
   if (!next) {
-    flow_expr_set_error(ctx, TURBO_ENOMEM, member.line, member.column,
+    flow_expr_set_error(ctx, SALTS_ENOMEM, member.line, member.column,
                         "out of memory parsing field");
     return FLOW_EXPR_INVALID_NODE;
   }
@@ -257,7 +257,7 @@ uint32_t flow_expr_push_binary(flow_expr_parse_ctx_t *ctx, flow_expr_node_kind_t
 }
 
 void flow_expr_syntax_error(flow_expr_parse_ctx_t *ctx, flow_expr_token_t token) {
-  flow_expr_set_error(ctx, TURBO_EINVAL, token.line, token.column,
+  flow_expr_set_error(ctx, SALTS_EINVAL, token.line, token.column,
                       token.value ? "expression syntax error" : "unexpected end of expression");
 }
 
@@ -326,37 +326,37 @@ static int flow_expr_resolve_builtin(flow_expr_node_t *node) {
       node->value_type = fields[i].type;
       node->field_id = fields[i].id;
       node->field_scope = FLOW_EXPR_FIELD_SCOPE_BUILTIN;
-      return TURBO_OK;
+      return SALTS_OK;
     }
   }
-  return TURBO_EINVAL;
+  return SALTS_EINVAL;
 }
 
 static int flow_expr_resolve_field(flow_expr_node_t *node, const flow_expr_resolver_t *resolver,
                                    turbo_flow_error_t *error) {
   int rc;
   if (strncmp(node->text, "msg.", 4) == 0) {
-    if (flow_expr_resolve_builtin(node) == TURBO_OK) return TURBO_OK;
-    return flow_expr_type_error(error, node, TURBO_EINVAL, "unknown message field");
+    if (flow_expr_resolve_builtin(node) == SALTS_OK) return SALTS_OK;
+    return flow_expr_type_error(error, node, SALTS_EINVAL, "unknown message field");
   }
   if (!resolver || !resolver->resolve) {
-    return flow_expr_type_error(error, node, TURBO_EINVAL,
+    return flow_expr_type_error(error, node, SALTS_EINVAL,
                                 "external field requires a schema resolver");
   }
   rc = resolver->resolve(resolver->ctx, node->text, tstr_len(node->text), &node->value_type,
                          &node->field_id);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     node->value_type = FLOW_EXPR_TYPE_UNRESOLVED;
     node->field_id = FLOW_EXPR_FIELD_EXTERNAL;
     node->field_scope = FLOW_EXPR_FIELD_SCOPE_NONE;
     return flow_expr_type_error(error, node, rc, "unknown external field");
   }
   if (node->value_type <= FLOW_EXPR_TYPE_UNRESOLVED || node->value_type > FLOW_EXPR_TYPE_STRING) {
-    return flow_expr_type_error(error, node, TURBO_EINVAL,
+    return flow_expr_type_error(error, node, SALTS_EINVAL,
                                 "schema resolver returned an invalid field type");
   }
   node->field_scope = FLOW_EXPR_FIELD_SCOPE_EXTERNAL;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_resolver_t *resolver,
@@ -364,14 +364,14 @@ static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_re
   size_t count;
   size_t i;
   if (error) memset(error, 0, sizeof(*error));
-  if (!ast) return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression AST is null");
+  if (!ast) return flow_expr_type_error(error, NULL, SALTS_EINVAL, "expression AST is null");
   count = vec_size(&ast->nodes);
   if (count == 0 || ast->root >= count) {
-    return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression AST has an invalid root");
+    return flow_expr_type_error(error, NULL, SALTS_EINVAL, "expression AST has an invalid root");
   }
   for (i = 0; i < count; ++i) {
     flow_expr_node_t *node = (flow_expr_node_t *)vec_at(&ast->nodes, i);
-    if (!node) return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression AST is invalid");
+    if (!node) return flow_expr_type_error(error, NULL, SALTS_EINVAL, "expression AST is invalid");
     node->value_type = FLOW_EXPR_TYPE_UNRESOLVED;
     node->field_id = FLOW_EXPR_FIELD_EXTERNAL;
     node->field_scope = FLOW_EXPR_FIELD_SCOPE_NONE;
@@ -380,17 +380,17 @@ static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_re
     flow_expr_node_t *node = (flow_expr_node_t *)vec_at(&ast->nodes, i);
     flow_expr_node_t *left = NULL;
     flow_expr_node_t *right = NULL;
-    if (!node) return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression AST is invalid");
+    if (!node) return flow_expr_type_error(error, NULL, SALTS_EINVAL, "expression AST is invalid");
     if (node->left != FLOW_EXPR_INVALID_NODE) {
       if (node->left >= i) {
-        return flow_expr_type_error(error, node, TURBO_EINVAL,
+        return flow_expr_type_error(error, node, SALTS_EINVAL,
                                     "expression AST child order is invalid");
       }
       left = (flow_expr_node_t *)vec_at(&ast->nodes, node->left);
     }
     if (node->right != FLOW_EXPR_INVALID_NODE) {
       if (node->right >= i) {
-        return flow_expr_type_error(error, node, TURBO_EINVAL,
+        return flow_expr_type_error(error, node, SALTS_EINVAL,
                                     "expression AST child order is invalid");
       }
       right = (flow_expr_node_t *)vec_at(&ast->nodes, node->right);
@@ -413,18 +413,18 @@ static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_re
       break;
     case FLOW_EXPR_FIELD: {
       int rc = flow_expr_resolve_field(node, resolver, error);
-      if (rc != TURBO_OK) return rc;
+      if (rc != SALTS_OK) return rc;
       break;
     }
     case FLOW_EXPR_NOT:
       if (!left || left->value_type != FLOW_EXPR_TYPE_BOOL)
-        return flow_expr_type_error(error, node, TURBO_EINVAL, "not requires a boolean operand");
+        return flow_expr_type_error(error, node, SALTS_EINVAL, "not requires a boolean operand");
       node->value_type = FLOW_EXPR_TYPE_BOOL;
       break;
     case FLOW_EXPR_POS:
     case FLOW_EXPR_NEG:
       if (!left || !flow_expr_is_numeric(left->value_type))
-        return flow_expr_type_error(error, node, TURBO_EINVAL,
+        return flow_expr_type_error(error, node, SALTS_EINVAL,
                                     "numeric unary operator requires a numeric operand");
       node->value_type = left->value_type;
       break;
@@ -434,14 +434,14 @@ static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_re
     case FLOW_EXPR_DIV:
       if (!left || !right || !flow_expr_is_numeric(left->value_type) ||
           !flow_expr_is_numeric(right->value_type))
-        return flow_expr_type_error(error, node, TURBO_EINVAL,
+        return flow_expr_type_error(error, node, SALTS_EINVAL,
                                     "arithmetic operator requires numeric operands");
       node->value_type = flow_expr_numeric_result(left->value_type, right->value_type);
       break;
     case FLOW_EXPR_MOD:
       if (!left || !right || left->value_type != FLOW_EXPR_TYPE_I64 ||
           right->value_type != FLOW_EXPR_TYPE_I64)
-        return flow_expr_type_error(error, node, TURBO_EINVAL, "modulo requires integer operands");
+        return flow_expr_type_error(error, node, SALTS_EINVAL, "modulo requires integer operands");
       node->value_type = FLOW_EXPR_TYPE_I64;
       break;
     case FLOW_EXPR_EQ:
@@ -450,7 +450,7 @@ static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_re
           !(left->value_type == right->value_type ||
             (flow_expr_is_numeric(left->value_type) && flow_expr_is_numeric(right->value_type)) ||
             left->value_type == FLOW_EXPR_TYPE_NULL || right->value_type == FLOW_EXPR_TYPE_NULL))
-        return flow_expr_type_error(error, node, TURBO_EINVAL,
+        return flow_expr_type_error(error, node, SALTS_EINVAL,
                                     "equality operands have incompatible types");
       node->value_type = FLOW_EXPR_TYPE_BOOL;
       break;
@@ -462,7 +462,7 @@ static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_re
           !((flow_expr_is_numeric(left->value_type) && flow_expr_is_numeric(right->value_type)) ||
             (left->value_type == FLOW_EXPR_TYPE_STRING &&
              right->value_type == FLOW_EXPR_TYPE_STRING)))
-        return flow_expr_type_error(error, node, TURBO_EINVAL,
+        return flow_expr_type_error(error, node, SALTS_EINVAL,
                                     "ordering operands have incompatible types");
       node->value_type = FLOW_EXPR_TYPE_BOOL;
       break;
@@ -470,7 +470,7 @@ static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_re
       if (!left || !right || left->value_type != FLOW_EXPR_TYPE_I64 ||
           right->value_type != FLOW_EXPR_TYPE_I64 || right->kind != FLOW_EXPR_I64 ||
           right->i64 <= 0)
-        return flow_expr_type_error(error, node, TURBO_EINVAL,
+        return flow_expr_type_error(error, node, SALTS_EINVAL,
                                     "has_flag requires an integer value and a positive literal mask");
       node->value_type = FLOW_EXPR_TYPE_BOOL;
       break;
@@ -478,16 +478,16 @@ static int flow_expr_type_check_inplace(flow_expr_ast_t *ast, const flow_expr_re
     case FLOW_EXPR_OR:
       if (!left || !right || left->value_type != FLOW_EXPR_TYPE_BOOL ||
           right->value_type != FLOW_EXPR_TYPE_BOOL)
-        return flow_expr_type_error(error, node, TURBO_EINVAL,
+        return flow_expr_type_error(error, node, SALTS_EINVAL,
                                     "logical operator requires boolean operands");
       node->value_type = FLOW_EXPR_TYPE_BOOL;
       break;
     default:
-      return flow_expr_type_error(error, node, TURBO_EINVAL,
+      return flow_expr_type_error(error, node, SALTS_EINVAL,
                                   "expression AST contains an unknown operation");
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_expr_type_check(flow_expr_ast_t *ast, const flow_expr_resolver_t *resolver,
@@ -497,25 +497,25 @@ int flow_expr_type_check(flow_expr_ast_t *ast, const flow_expr_resolver_t *resol
   size_t i;
   int rc;
 
-  if (!ast) return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression AST is null");
+  if (!ast) return flow_expr_type_error(error, NULL, SALTS_EINVAL, "expression AST is null");
   memset(&pending, 0, sizeof(pending));
   pending.root = ast->root;
   count = vec_size(&ast->nodes);
-  if (turbo_flow_stl_error(vec_init_bytes(&pending.nodes, sizeof(flow_expr_node_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
-    return flow_expr_type_error(error, NULL, TURBO_ENOMEM,
+  if (turbo_flow_stl_error(vec_init_bytes(&pending.nodes, sizeof(flow_expr_node_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
+    return flow_expr_type_error(error, NULL, SALTS_ENOMEM,
                                 "out of memory checking expression types");
   }
   for (i = 0; i < count; ++i) {
     const flow_expr_node_t *node = (const flow_expr_node_t *)vec_at_const(&ast->nodes, i);
-    if (!node || turbo_flow_stl_error(vec_push(&pending.nodes, node)) != TURBO_OK) {
+    if (!node || turbo_flow_stl_error(vec_push(&pending.nodes, node)) != SALTS_OK) {
       vec_destroy(&pending.nodes);
-      return flow_expr_type_error(error, NULL, node ? TURBO_ENOMEM : TURBO_EINVAL,
+      return flow_expr_type_error(error, NULL, node ? SALTS_ENOMEM : SALTS_EINVAL,
                                   node ? "out of memory checking expression types"
                                        : "expression AST is invalid");
     }
   }
   rc = flow_expr_type_check_inplace(&pending, resolver, error);
-  if (rc == TURBO_OK) {
+  if (rc == SALTS_OK) {
     for (i = 0; i < count; ++i) {
       flow_expr_node_t *node = (flow_expr_node_t *)vec_at(&ast->nodes, i);
       const flow_expr_node_t *resolved =
@@ -535,12 +535,12 @@ int flow_expr_parse(const char *text, size_t len, flow_expr_ast_t *ast, turbo_fl
   flow_expr_token_t token;
   void *parser;
   int token_id;
-  if (!ast || !text || len == 0) return TURBO_EINVAL;
+  if (!ast || !text || len == 0) return SALTS_EINVAL;
   memset(ast, 0, sizeof(*ast));
   ast->root = FLOW_EXPR_INVALID_NODE;
   if (error) memset(error, 0, sizeof(*error));
-  if (turbo_flow_stl_error(vec_init_bytes(&ast->nodes, sizeof(flow_expr_node_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
-    return TURBO_ENOMEM;
+  if (turbo_flow_stl_error(vec_init_bytes(&ast->nodes, sizeof(flow_expr_node_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
+    return SALTS_ENOMEM;
   }
   memset(&ctx, 0, sizeof(ctx));
   ctx.ast = ast;
@@ -548,12 +548,12 @@ int flow_expr_parse(const char *text, size_t len, flow_expr_ast_t *ast, turbo_fl
   parser = TurboFlowExprParseAlloc(malloc);
   if (!parser) {
     flow_expr_ast_destroy(ast);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   flow_expr_lexer_init(&lexer, text, len);
   while ((token_id = flow_expr_lexer_next(&lexer, &token)) != 0) {
     if (token_id < 0) {
-      flow_expr_set_error(&ctx, TURBO_EINVAL, token.line, token.column,
+      flow_expr_set_error(&ctx, SALTS_EINVAL, token.line, token.column,
                           "unexpected character in expression");
       break;
     }
@@ -568,11 +568,11 @@ int flow_expr_parse(const char *text, size_t len, flow_expr_ast_t *ast, turbo_fl
   }
   TurboFlowExprParseFree(parser, free);
   if (ctx.failed || ast->root == FLOW_EXPR_INVALID_NODE) {
-    int rc = ctx.code ? ctx.code : TURBO_EINVAL;
+    int rc = ctx.code ? ctx.code : SALTS_EINVAL;
     flow_expr_ast_destroy(ast);
     return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 typedef struct flow_expr_public_schema_ctx_s {
@@ -584,7 +584,7 @@ static int flow_expr_public_schema_resolve(void *ctx, const char *path, size_t p
   const flow_expr_public_schema_ctx_t *schema_ctx = (const flow_expr_public_schema_ctx_t *)ctx;
   size_t i;
   if (!schema_ctx || !schema_ctx->schema || !path || !type || !field_id) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   for (i = 0; i < schema_ctx->schema->field_count; ++i) {
     const turbo_flow_expr_schema_field_t *field = &schema_ctx->schema->fields[i];
@@ -592,47 +592,47 @@ static int flow_expr_public_schema_resolve(void *ctx, const char *path, size_t p
     if (field_len == path_len && memcmp(field->path, path, path_len) == 0) {
       *type = (flow_expr_value_type_t)((int)field->type + 1);
       *field_id = field->field_id;
-      return TURBO_OK;
+      return SALTS_OK;
     }
   }
-  return TURBO_ENOENT;
+  return SALTS_ENOENT;
 }
 
 static int flow_expr_validate_public_schema(const turbo_flow_expr_schema_t *schema,
                                             turbo_flow_error_t *error) {
   size_t i;
   size_t j;
-  if (!schema) return TURBO_OK;
+  if (!schema) return SALTS_OK;
   if (schema->field_count > TURBO_FLOW_EXPR_MAX_SCHEMA_FIELDS) {
-    return flow_expr_type_error(error, NULL, TURBO_ENOSPC,
+    return flow_expr_type_error(error, NULL, SALTS_ENOSPC,
                                 "expression schema field limit exceeded");
   }
   if (schema->field_count > 0 && !schema->fields) {
-    return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression schema fields are null");
+    return flow_expr_type_error(error, NULL, SALTS_EINVAL, "expression schema fields are null");
   }
   for (i = 0; i < schema->field_count; ++i) {
     const turbo_flow_expr_schema_field_t *field = &schema->fields[i];
     if (!field->path || !strchr(field->path, '.') || field->path[0] == '.' ||
         strncmp(field->path, "msg.", 4) == 0) {
-      return flow_expr_type_error(error, NULL, TURBO_EINVAL,
+      return flow_expr_type_error(error, NULL, SALTS_EINVAL,
                                   "schema field must use a non-msg namespace");
     }
     if (field->type < TURBO_FLOW_EXPR_TYPE_BOOL || field->type > TURBO_FLOW_EXPR_TYPE_STRING) {
-      return flow_expr_type_error(error, NULL, TURBO_EINVAL,
+      return flow_expr_type_error(error, NULL, SALTS_EINVAL,
                                   "expression schema field type is invalid");
     }
     for (j = 0; j < i; ++j) {
       if (strcmp(field->path, schema->fields[j].path) == 0) {
-        return flow_expr_type_error(error, NULL, TURBO_EALREADY,
+        return flow_expr_type_error(error, NULL, SALTS_EALREADY,
                                     "duplicate expression schema field path");
       }
       if (field->field_id == schema->fields[j].field_id) {
-        return flow_expr_type_error(error, NULL, TURBO_EALREADY,
+        return flow_expr_type_error(error, NULL, SALTS_EALREADY,
                                     "duplicate expression schema field id");
       }
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_expr_compile(const char *text, size_t len, const turbo_flow_expr_schema_t *schema,
@@ -649,24 +649,24 @@ int turbo_flow_expr_compile_ex(const char *text, size_t len, const turbo_flow_ex
   flow_expr_resolver_t resolver;
   int rc;
   if (!out)
-    return flow_expr_type_error(error, NULL, TURBO_EINVAL, "compiled expression output is null");
+    return flow_expr_type_error(error, NULL, SALTS_EINVAL, "compiled expression output is null");
   *out = NULL;
   if (!options || options->size < sizeof(*options) ||
       options->backend < TURBO_FLOW_EXPR_MIR_INTERP || options->backend > TURBO_FLOW_EXPR_AUTO) {
-    return flow_expr_type_error(error, NULL, TURBO_EINVAL,
+    return flow_expr_type_error(error, NULL, SALTS_EINVAL,
                                 "expression compile options are invalid");
   }
   if (!text || len == 0) {
-    return flow_expr_type_error(error, NULL, TURBO_EINVAL, "expression text is empty");
+    return flow_expr_type_error(error, NULL, SALTS_EINVAL, "expression text is empty");
   }
   rc = flow_expr_validate_public_schema(schema, error);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   expr = (turbo_flow_expr_t *)calloc(1, sizeof(*expr));
   if (!expr) {
-    return flow_expr_type_error(error, NULL, TURBO_ENOMEM, "out of memory compiling expression");
+    return flow_expr_type_error(error, NULL, SALTS_ENOMEM, "out of memory compiling expression");
   }
   rc = flow_expr_parse(text, len, &expr->ast, error);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     free(expr);
     return rc;
   }
@@ -678,19 +678,19 @@ int turbo_flow_expr_compile_ex(const char *text, size_t len, const turbo_flow_ex
     resolver.ctx = &schema_ctx;
   }
   rc = flow_expr_type_check(&expr->ast, schema ? &resolver : NULL, error);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_expr_ast_destroy(&expr->ast);
     free(expr);
     return rc;
   }
   rc = flow_expr_mir_compile(expr, options->backend, error);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_expr_ast_destroy(&expr->ast);
     free(expr);
     return rc;
   }
   *out = expr;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void turbo_flow_expr_destroy(turbo_flow_expr_t *expr) {
@@ -724,14 +724,14 @@ turbo_flow_expr_value_type_t turbo_flow_expr_result_type(const turbo_flow_expr_t
 static int flow_expr_validate_read_value(turbo_flow_expr_value_t *value) {
   if (!value || value->type < TURBO_FLOW_EXPR_TYPE_NULL ||
       value->type > TURBO_FLOW_EXPR_TYPE_STRING) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   if (value->type == TURBO_FLOW_EXPR_TYPE_STRING && value->as.string.len > 0 &&
       !value->as.string.data) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   if (value->type == TURBO_FLOW_EXPR_TYPE_BOOL) value->as.boolean = value->as.boolean != 0;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_expr_read_field(const turbo_flow_expr_eval_context_t *context,
@@ -740,26 +740,26 @@ int turbo_flow_expr_read_field(const turbo_flow_expr_eval_context_t *context,
   const turbo_flow_msg_t *msg;
   int rc;
   if (!context || context->size < sizeof(*context) || !out) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(out, 0, sizeof(*out));
   if (scope == TURBO_FLOW_EXPR_FIELD_SCHEMA) {
-    if (!context->read_schema_field) return TURBO_ENOTSUP;
+    if (!context->read_schema_field) return SALTS_ENOTSUP;
     rc = context->read_schema_field(context->schema_ctx, field_id, out);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     return flow_expr_validate_read_value(out);
   }
-  if (scope != TURBO_FLOW_EXPR_FIELD_BUILTIN) return TURBO_EINVAL;
-  if (!context->message) return TURBO_EINVAL;
+  if (scope != TURBO_FLOW_EXPR_FIELD_BUILTIN) return SALTS_EINVAL;
+  if (!context->message) return SALTS_EINVAL;
   msg = context->message;
   switch (field_id) {
   case TURBO_FLOW_EXPR_FIELD_MSG_ID:
-    if (msg->id > INT64_MAX) return TURBO_ERANGE;
+    if (msg->id > INT64_MAX) return SALTS_ERANGE;
     out->type = TURBO_FLOW_EXPR_TYPE_I64;
     out->as.i64 = (int64_t)msg->id;
     break;
   case TURBO_FLOW_EXPR_FIELD_MSG_TS_NS:
-    if (msg->ts_ns > INT64_MAX) return TURBO_ERANGE;
+    if (msg->ts_ns > INT64_MAX) return SALTS_ERANGE;
     out->type = TURBO_FLOW_EXPR_TYPE_I64;
     out->as.i64 = (int64_t)msg->ts_ns;
     break;
@@ -797,7 +797,7 @@ int turbo_flow_expr_read_field(const turbo_flow_expr_eval_context_t *context,
     out->as.i64 = (int64_t)msg->data_decision.evaluation_error;
     break;
   default:
-    return TURBO_ENOENT;
+    return SALTS_ENOENT;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }

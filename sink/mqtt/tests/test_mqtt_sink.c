@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "turbo_error.h"
+#include "salts_error.h"
 #include "turbo_flow_mqtt_sink.h"
 
 #include <string.h>
@@ -32,7 +32,7 @@ spec("mqtt sink") {
     batch.outputs = outputs;
     batch.message_count = 2u;
 
-    check_equal(turbo_flow_mqtt_sink_map_batch(&config, &batch, &mapped), TURBO_OK);
+    check_equal(turbo_flow_mqtt_sink_map_batch(&config, &batch, &mapped), SALTS_OK);
     check_equal(mapped, 2u);
     check_equal(outputs[0].topic, "ingress/ocpp/default/charger-1/up/Heartbeat");
     check_equal(outputs[1].topic, "ingress/ocpp/default/charger-2/up/Heartbeat");
@@ -70,7 +70,7 @@ spec("mqtt sink") {
     batch.outputs = outputs;
     batch.message_count = 3u;
 
-    check_equal(turbo_flow_mqtt_sink_map_batch(&config, &batch, &mapped), TURBO_EPROTO);
+    check_equal(turbo_flow_mqtt_sink_map_batch(&config, &batch, &mapped), SALTS_EPROTO);
     check_equal(mapped, 1u);
     check_equal(outputs[0].topic, "ingress/coap/default/sensor-1/down/update");
     check_equal(outputs[1].topic_size, 0u);
@@ -106,7 +106,7 @@ spec("mqtt sink") {
     batch.outputs = outputs;
     batch.message_count = 2u;
 
-    check_equal(turbo_flow_mqtt_sink_map_batch(&config, &batch, &mapped), TURBO_EMSGSIZE);
+    check_equal(turbo_flow_mqtt_sink_map_batch(&config, &batch, &mapped), SALTS_EMSGSIZE);
     check_equal(mapped, 0u);
     check_equal(outputs[0].topic_size, 0u);
     check_null(outputs[0].payload);
@@ -131,7 +131,7 @@ spec("mqtt sink") {
     output.topic = topic;
     output.topic_capacity = sizeof(topic);
 
-    check_equal(turbo_flow_mqtt_sink_map(&config, &input, &output), TURBO_OK);
+    check_equal(turbo_flow_mqtt_sink_map(&config, &input, &output), SALTS_OK);
     check_equal(output.topic, "ingress/ocpp/default/charger-1/up/Heartbeat");
     check_equal((const void *)output.payload, (const void *)payload);
   }

@@ -1,5 +1,5 @@
 cmake_add_test(
   test_flow_security_sqlite
   SOURCES test_flow_security_sqlite.c
-  LIBS TurboFlow::SecuritySQLite TurboFlow::Flow TurboUtils::TinyTest
+  LIBS TurboFlow::SecuritySQLite TurboFlow::Flow Salts::TinyTest
   FOLDER "security/tests")

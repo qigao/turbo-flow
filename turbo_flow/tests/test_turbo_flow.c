@@ -1,8 +1,8 @@
 #include "flow_internal.h"
 #include "tinytest.h"
-#include "turbo_coro.h"
+#include "salts_coro.h"
 #include "turbo_flow.h"
-#include "turbo_thread.h"
+#include "salts_thread.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -11,7 +11,7 @@
 static int noop_stage(turbo_flow_msg_t *msg, void *ctx) {
   (void)msg;
   (void)ctx;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static const turbo_flow_data_schema_t TEST_DATA_SCHEMA = {sizeof(turbo_flow_data_schema_t),
@@ -44,12 +44,12 @@ static int clone_owned_projection(const void *value, void *ctx, void **out) {
   int *copy;
 
   (void)ctx;
-  if (!value || !out) return TURBO_EINVAL;
+  if (!value || !out) return SALTS_EINVAL;
   copy = (int *)malloc(sizeof(*copy));
-  if (!copy) return TURBO_ENOMEM;
+  if (!copy) return SALTS_ENOMEM;
   *copy = *(const int *)value;
   *out = copy;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 typedef struct publish_trace_s {
@@ -74,7 +74,7 @@ static int observer_probe_on_event(void *ctx, const turbo_flow_observe_event_t *
   if (event->kind == TURBO_FLOW_OBSERVE_ROUTE_EVALUATED && event->selected == 1) {
     probe->selected_routes += 1u;
   }
-  return event->kind == probe->fail_kind ? TURBO_EIO : TURBO_OK;
+  return event->kind == probe->fail_kind ? SALTS_EIO : SALTS_OK;
 }
 
 static void observer_probe_destroy(void *ctx) {
@@ -206,7 +206,7 @@ typedef struct async_gate_ctx_s {
   atomic_int ran_off_submitter;
 } async_gate_ctx_t;
 
-static TURBO_THREAD_LOCAL int worker_submitter_thread;
+static SALTS_THREAD_LOCAL int worker_submitter_thread;
 
 static int async_gate_stage(turbo_flow_msg_t *msg, void *ctx) {
   async_gate_ctx_t *gate = (async_gate_ctx_t *)ctx;
@@ -216,14 +216,14 @@ static int async_gate_stage(turbo_flow_msg_t *msg, void *ctx) {
   }
   atomic_fetch_add_explicit(&gate->entered, 1, memory_order_acq_rel);
   while (!atomic_load_explicit(&gate->allow_exit, memory_order_acquire))
-    turbo_thread_yield();
+    salts_thread_yield();
   atomic_fetch_add_explicit(&gate->calls, 1, memory_order_acq_rel);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void async_publish_complete(void *ctx, const turbo_flow_publish_result_t *result) {
   async_completion_ctx_t *completion = (async_completion_ctx_t *)ctx;
-  atomic_store_explicit(&completion->last_status, result ? result->status : TURBO_EINVAL,
+  atomic_store_explicit(&completion->last_status, result ? result->status : SALTS_EINVAL,
                         memory_order_release);
   atomic_fetch_add_explicit(&completion->called, 1, memory_order_acq_rel);
 }
@@ -234,38 +234,33 @@ static int execution_yield_stage(turbo_flow_msg_t *msg, void *ctx) {
   atomic_store_explicit(&probe->entered, 1, memory_order_release);
   for (int i = 0; i < probe->yields; ++i) {
     int rc = turbo_flow_execution_yield();
-    if (rc == TURBO_ECANCELED) {
+    if (rc == SALTS_ECANCELED) {
       atomic_store_explicit(&probe->saw_cancel, 1, memory_order_release);
       return rc;
     }
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
   while (!atomic_load_explicit(&probe->allow_exit, memory_order_acquire)) {
     int rc = turbo_flow_execution_yield();
-    if (rc == TURBO_ECANCELED) {
+    if (rc == SALTS_ECANCELED) {
       atomic_store_explicit(&probe->saw_cancel, 1, memory_order_release);
       return rc;
     }
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int execution_self_abort_stage(turbo_flow_msg_t *msg, void *ctx) {
   int *called = (int *)ctx;
   (void)msg;
   *called += 1;
-  if (turbo_flow_execution_abort() != TURBO_OK) return TURBO_EINVAL;
-  if (!turbo_flow_execution_cancel_requested()) return TURBO_EINVAL;
+  if (turbo_flow_execution_abort() != SALTS_OK) return SALTS_EINVAL;
+  if (!turbo_flow_execution_cancel_requested()) return SALTS_EINVAL;
   return turbo_flow_execution_yield();
 }
 
 static void execution_task_thread(void *arg) {
-  flow_execution_task_run((flow_execution_task_t *)arg);
-}
-
-static void execution_task_coro(coro_t *co, void *arg) {
-  (void)co;
   flow_execution_task_run((flow_execution_task_t *)arg);
 }
 
@@ -284,10 +279,10 @@ static int worker_probe_stage(turbo_flow_msg_t *msg, void *ctx) {
          !atomic_compare_exchange_weak_explicit(&probe->peak, &peak, active, memory_order_acq_rel,
                                                 memory_order_acquire)) {
   }
-  turbo_sleep_ms(25);
+  salts_sleep_ms(25);
   atomic_fetch_sub_explicit(&probe->active, 1, memory_order_acq_rel);
   atomic_fetch_add_explicit(&probe->calls, 1, memory_order_acq_rel);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void worker_submit_thread(void *arg) {
@@ -323,10 +318,10 @@ static void concurrent_publish_thread(void *arg) {
   msg.id = publish->msg_id;
   atomic_fetch_add_explicit(publish->ready, 1, memory_order_acq_rel);
   while (!atomic_load_explicit(publish->go, memory_order_acquire))
-    turbo_thread_yield();
+    salts_thread_yield();
   rc = turbo_flow_publish(publish->flow, publish->source_name, &msg);
   error = turbo_flow_last_error(publish->flow);
-  publish->error_code = error ? error->code : TURBO_EINVAL;
+  publish->error_code = error ? error->code : SALTS_EINVAL;
   snprintf(publish->error_message, sizeof(publish->error_message), "%s",
            error ? error->message : "missing error");
   atomic_store_explicit(&publish->result, rc, memory_order_release);
@@ -340,8 +335,8 @@ static void stop_flow_thread(void *arg) {
 
 static int fail_by_message_id_stage(turbo_flow_msg_t *msg, void *ctx) {
   (void)ctx;
-  turbo_sleep_ms(10);
-  return msg->id == 1u ? TURBO_EIO : TURBO_EPROTO;
+  salts_sleep_ms(10);
+  return msg->id == 1u ? SALTS_EIO : SALTS_EPROTO;
 }
 
 static int record_stage(turbo_flow_msg_t *msg, void *ctx) {
@@ -355,36 +350,36 @@ static int record_stage(turbo_flow_msg_t *msg, void *ctx) {
 
 static int batch_publish_probe_stage(turbo_flow_msg_t *msg, void *ctx) {
   batch_publish_probe_t *probe = (batch_publish_probe_t *)ctx;
-  if (!probe || !msg) return TURBO_EINVAL;
+  if (!probe || !msg) return SALTS_EINVAL;
   if (probe->calls < sizeof(probe->ids) / sizeof(probe->ids[0])) {
     probe->ids[probe->calls] = msg->id;
   }
   probe->calls += 1u;
-  return probe->fail_id != 0u && msg->id == probe->fail_id ? probe->fail_status : TURBO_OK;
+  return probe->fail_id != 0u && msg->id == probe->fail_id ? probe->fail_status : SALTS_OK;
 }
 
 static int batch_prepare_message(void *ctx, size_t index, turbo_flow_msg_t *message) {
   batch_prepare_probe_t *probe = (batch_prepare_probe_t *)ctx;
-  if (!probe || !message) return TURBO_EINVAL;
+  if (!probe || !message) return SALTS_EINVAL;
   probe->calls += 1u;
   if (index == probe->fail_index) return probe->fail_status;
   message->id = index + 1u;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int batch_prepare_invalid_payload(void *ctx, size_t index, turbo_flow_msg_t *message) {
   invalid_batch_payload_ctx_t *invalid = (invalid_batch_payload_ctx_t *)ctx;
   (void)index;
-  if (!invalid || !message) return TURBO_EINVAL;
+  if (!invalid || !message) return SALTS_EINVAL;
   invalid->calls += 1u;
   message->buffer = mem_buffer_retain(invalid->buffer);
   message->payload = vstr_from_buf(invalid->payload, invalid->payload_len);
-  return message->buffer ? TURBO_OK : TURBO_ENOMEM;
+  return message->buffer ? SALTS_OK : SALTS_ENOMEM;
 }
 
 static int set_flags_stage(turbo_flow_msg_t *msg, void *ctx) {
   msg->flags = *(const uint32_t *)ctx;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int check_failure_stage(turbo_flow_msg_t *msg, void *ctx) {
@@ -400,20 +395,20 @@ static int check_failure_stage(turbo_flow_msg_t *msg, void *ctx) {
   check_equal(msg->failure.attempt, check->expected_attempt > 0u ? check->expected_attempt : 1u);
   check_equal(msg->status, check->code);
   if (check->expected_payload) check_equal(msg->payload.data, check->expected_payload);
-  if (check->snapshot) check_equal(turbo_flow_msg_clone(check->snapshot, msg), TURBO_OK);
+  if (check->snapshot) check_equal(turbo_flow_msg_clone(check->snapshot, msg), SALTS_OK);
   check->called += 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int retry_replace_payload(turbo_flow_msg_t *msg, const char *text) {
   tstr payload = tstr_dup(text);
-  if (!payload) return TURBO_ENOMEM;
+  if (!payload) return SALTS_ENOMEM;
   tstr_freep(&msg->owned_payload);
   mem_buffer_release(msg->buffer);
   msg->buffer = NULL;
   msg->owned_payload = payload;
   msg->payload = tstr_to_v(payload);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int retry_adapter_attempt(void *ctx, turbo_flow_msg_t *msg, uint32_t attempt) {
@@ -424,7 +419,7 @@ static int retry_adapter_attempt(void *ctx, turbo_flow_msg_t *msg, uint32_t atte
   if (retry->succeed_on > 0u && attempt == retry->succeed_on) {
     return retry_replace_payload(msg, "success");
   }
-  check_equal(retry_replace_payload(msg, "failed-attempt"), TURBO_OK);
+  check_equal(retry_replace_payload(msg, "failed-attempt"), SALTS_OK);
   return retry->failure_status;
 }
 
@@ -475,7 +470,7 @@ static int check_payload_stage(turbo_flow_msg_t *msg, void *ctx) {
   payload_check_ctx_t *check = (payload_check_ctx_t *)ctx;
   check->called += 1;
   check_equal(msg->payload.data, check->expected);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int replace_payload_stage(turbo_flow_msg_t *msg, void *ctx) {
@@ -489,43 +484,39 @@ static int replace_payload_stage(turbo_flow_msg_t *msg, void *ctx) {
   msg->owned_payload = owned;
   msg->payload = tstr_to_v(msg->owned_payload);
   replace->called += 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int coro_check_stage(turbo_flow_msg_t *msg, void *ctx) {
   coro_check_ctx_t *check = (coro_check_ctx_t *)ctx;
   (void)msg;
-  check_not_null(coro_current_scheduler());
   check->entered += 1;
-  check_equal(coro_yield(), 0);
-  check_not_null(coro_current_scheduler());
+  check_equal(turbo_flow_execution_yield(), SALTS_OK);
   check->resumed += 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int coro_wait_once_stage(turbo_flow_msg_t *msg, void *ctx) {
   coro_wait_ctx_t *wait = (coro_wait_ctx_t *)ctx;
   (void)msg;
 
-  check_not_null(coro_current_scheduler());
   wait->calls += 1;
   if (wait->calls == 1) {
-    coro_set_waiting_for_io(coro_running(), 1);
-    check_equal(coro_yield(), 0);
+    check_equal(flow_execution_suspend_for_io(), SALTS_OK);
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int set_msg_status_stage(turbo_flow_msg_t *msg, void *ctx) {
   int *status = (int *)ctx;
   msg->status = *status;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int check_msg_status_stage(turbo_flow_msg_t *msg, void *ctx) {
   int *expected = (int *)ctx;
   check_equal(msg->status, *expected);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int test_adapter_start(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage) {
@@ -534,12 +525,12 @@ static int test_adapter_start(void *ctx, turbo_flow_t *flow, const turbo_flow_st
 
   check_not_null(stage);
   check_not_null(stage->adapter_name);
-  if (adapter->fail_status != TURBO_OK) return adapter->fail_status;
+  if (adapter->fail_status != SALTS_OK) return adapter->fail_status;
 
   adapter->start_count += 1;
   if (stage->is_source) adapter->source_start_count += 1;
   else adapter->stage_start_count += 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int test_adapter_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
@@ -551,10 +542,10 @@ static int test_adapter_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_
   check_false(stage->is_source);
   check_not_null(msg);
   if (adapter->expected_payload) check_equal(msg->payload.data, adapter->expected_payload);
-  if (adapter->fail_status != TURBO_OK) return adapter->fail_status;
+  if (adapter->fail_status != SALTS_OK) return adapter->fail_status;
 
   adapter->consume_count += 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void test_adapter_stop(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage) {
@@ -580,7 +571,7 @@ static int test_adapter_command(void *ctx, turbo_flow_t *flow,
 
 static void register_stage_names(turbo_flow_t *flow, const char *const *names, size_t count) {
   for (size_t i = 0; i < count; ++i) {
-    check_equal(turbo_flow_register_stage_ex(flow, names[i], noop_stage, NULL, NULL), TURBO_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, names[i], noop_stage, NULL, NULL), SALTS_OK);
   }
 }
 
@@ -595,7 +586,7 @@ static void register_schema_adapter(turbo_flow_t *flow, const char *name,
   schema.kind = kind;
   schema.roles = roles;
   schema.direction = direction;
-  check_equal(turbo_flow_register_adapter_ex(flow, name, &ops, NULL, &schema), TURBO_OK);
+  check_equal(turbo_flow_register_adapter_ex(flow, name, &ops, NULL, &schema), SALTS_OK);
 }
 
 typedef struct reorder_wait_s {
@@ -612,7 +603,7 @@ static void reorder_wait_thread(void *arg) {
   atomic_store_explicit(&wait->started, 1, memory_order_release);
   int rc = flow_reorder_enter(wait->flow, wait->stage_index, wait->sequence);
   atomic_store_explicit(&wait->result, rc, memory_order_release);
-  if (rc == TURBO_OK && wait->leave_on_success)
+  if (rc == SALTS_OK && wait->leave_on_success)
     flow_reorder_leave(wait->flow, wait->stage_index, wait->sequence);
 }
 
@@ -625,9 +616,9 @@ static turbo_flow_t *reorder_test_flow(uint32_t capacity, uint32_t timeout_ms,
                "source input\nstage ordered reorder capacity %u timeout %u\n"
                "stage main {\n  input -> ordered\n}\n",
                capacity, timeout_ms) < 0 ||
-      turbo_flow_parse_string(flow, source, strlen(source)) != TURBO_OK ||
-      turbo_flow_register_stage_ex(flow, "ordered", noop_stage, NULL, NULL) != TURBO_OK ||
-      turbo_flow_compile(flow) != TURBO_OK || turbo_flow_start(flow) != TURBO_OK) {
+      turbo_flow_parse_string(flow, source, strlen(source)) != SALTS_OK ||
+      turbo_flow_register_stage_ex(flow, "ordered", noop_stage, NULL, NULL) != SALTS_OK ||
+      turbo_flow_compile(flow) != SALTS_OK || turbo_flow_start(flow) != SALTS_OK) {
     turbo_flow_destroy(flow);
     return NULL;
   }
@@ -652,7 +643,7 @@ suite("Turbo Flow") {
       const turbo_flow_edge_plan_t *edge = NULL;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_PARSED);
       check_equal(turbo_flow_stage_count(flow), 5);
       check_equal(turbo_flow_edge_count(flow), 5);
@@ -704,11 +695,11 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, graph_src, strlen(graph_src)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, graph_src, strlen(graph_src)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "syntax");
-      check_equal(turbo_flow_parse_string(flow, subgraph_src, strlen(subgraph_src)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, subgraph_src, strlen(subgraph_src)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "syntax");
-      check_equal(turbo_flow_parse_string(flow, flow_src, strlen(flow_src)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, flow_src, strlen(flow_src)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "syntax");
 
       turbo_flow_destroy(flow);
@@ -723,7 +714,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_stage_count(flow), 2);
       check_equal(turbo_flow_edge_count(flow), 1);
       check_true(
@@ -748,7 +739,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_stage_count(flow), 5);
       check_equal(turbo_flow_edge_count(flow), 4);
       check_true(turbo_flow_find_stage(flow, "clean.input") >= 0);
@@ -769,7 +760,7 @@ suite("Turbo Flow") {
       const turbo_flow_stage_plan_t *record = NULL;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_stage_count(flow), 3);
       check_equal(turbo_flow_edge_count(flow), 2);
       check_true(turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "raw"))->is_source);
@@ -796,7 +787,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_stage_count(flow), 5);
       check_equal(turbo_flow_edge_count(flow), 4);
       check_true(turbo_flow_find_stage(flow, "cleanse.raw") >= 0);
@@ -822,7 +813,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_stage_count(flow), 8);
       check_equal(turbo_flow_edge_count(flow), 6);
       check_true(turbo_flow_find_stage(flow, "cleanse.trim") >= 0);
@@ -848,7 +839,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "syntax");
 
       turbo_flow_destroy(flow);
@@ -877,7 +868,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_stage_count(flow), 17);
       check_equal(turbo_flow_edge_count(flow), 14);
       check_true(turbo_flow_find_stage(flow, "pipeline.c.trim") >= 0);
@@ -897,7 +888,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "unknown reusable stage");
 
       turbo_flow_destroy(flow);
@@ -917,7 +908,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_EALREADY);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate");
 
       turbo_flow_destroy(flow);
@@ -933,7 +924,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "syntax");
 
       turbo_flow_destroy(flow);
@@ -951,13 +942,13 @@ suite("Turbo Flow") {
                                      "}\n";
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, bad_exec, strlen(bad_exec)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, bad_exec, strlen(bad_exec)), SALTS_EINVAL);
       err = turbo_flow_last_error(flow);
       check_not_null(err);
       check_equal(err->line, 1);
       check_contains(err->message, "unknown executor");
 
-      check_equal(turbo_flow_parse_string(flow, bad_group, strlen(bad_group)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, bad_group, strlen(bad_group)), SALTS_EINVAL);
       err = turbo_flow_last_error(flow);
       check_not_null(err);
       check_equal(err->line, 5);
@@ -974,7 +965,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "root block");
 
       turbo_flow_destroy(flow);
@@ -986,7 +977,7 @@ suite("Turbo Flow") {
       const turbo_flow_stage_plan_t *stage = NULL;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "async"));
       check_not_null(stage);
       check_equal(stage->exec.kind, TURBO_FLOW_EXEC_CORO_POOL);
@@ -1004,15 +995,15 @@ suite("Turbo Flow") {
       const flow_stage_plan_impl_t *stage;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, worker_first, strlen(worker_first)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, worker_first, strlen(worker_first)), SALTS_OK);
       stage = (const flow_stage_plan_impl_t *)vec_at_const(
           &flow->stages, (size_t)turbo_flow_find_stage(flow, "enrich"));
       check_not_null(stage);
       check_equal(stage->data_worker_count, 4);
       check_equal(stage->data_pool_capacity, 64);
 
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, capacity_first, strlen(capacity_first)), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, capacity_first, strlen(capacity_first)), SALTS_OK);
       stage = (const flow_stage_plan_impl_t *)vec_at_const(
           &flow->stages, (size_t)turbo_flow_find_stage(flow, "enrich"));
       check_not_null(stage);
@@ -1030,7 +1021,7 @@ suite("Turbo Flow") {
       const turbo_flow_stage_plan_t *stage = NULL;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
 
       stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "cpu"));
       check_not_null(stage);
@@ -1054,7 +1045,7 @@ suite("Turbo Flow") {
       static const char *legacy_threadpool = "stage cpu exec threadpool\n";
       static const char *legacy_thread_pool = "stage cpu exec thread_pool\n";
       static const char *legacy_coro_pool = "stage async exec coro_pool\n";
-      static const char *legacy_coronet = "stage proxy exec coronet\n";
+      static const char *removed_io_executor = "stage proxy exec coronet\n";
       static const char *legacy_socks = "stage proxy exec socks\n";
       static const char *removed_socket = "stage proxy exec socket\n";
       static const char *removed_io = "stage proxy exec io\n";
@@ -1063,19 +1054,19 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, legacy_threadpool, strlen(legacy_threadpool)),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
       check_equal(turbo_flow_parse_string(flow, legacy_thread_pool, strlen(legacy_thread_pool)),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
       check_equal(turbo_flow_parse_string(flow, legacy_coro_pool, strlen(legacy_coro_pool)),
-                   TURBO_EINVAL);
-      check_equal(turbo_flow_parse_string(flow, legacy_coronet, strlen(legacy_coronet)),
-                   TURBO_EINVAL);
-      check_equal(turbo_flow_parse_string(flow, legacy_socks, strlen(legacy_socks)), TURBO_EINVAL);
+                   SALTS_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, removed_io_executor, strlen(removed_io_executor)),
+                   SALTS_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, legacy_socks, strlen(legacy_socks)), SALTS_EINVAL);
       check_equal(turbo_flow_parse_string(flow, removed_socket, strlen(removed_socket)),
-                   TURBO_EINVAL);
-      check_equal(turbo_flow_parse_string(flow, removed_io, strlen(removed_io)), TURBO_EINVAL);
+                   SALTS_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, removed_io, strlen(removed_io)), SALTS_EINVAL);
       check_equal(turbo_flow_parse_string(flow, removed_custom, strlen(removed_custom)),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
 
       turbo_flow_destroy(flow);
     }
@@ -1091,7 +1082,7 @@ suite("Turbo Flow") {
       const turbo_flow_stage_plan_t *stage = NULL;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
 
       stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "http_in"));
       check_not_null(stage);
@@ -1120,7 +1111,7 @@ suite("Turbo Flow") {
       const turbo_flow_stage_plan_t *stage;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "input"));
       check_not_null(stage);
       check_equal(stage->adapter_name, "http.client.poll");
@@ -1142,28 +1133,28 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, bad_dotted, strlen(bad_dotted)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, bad_dotted, strlen(bad_dotted)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "whitespace");
       check_equal(turbo_flow_parse_string(flow, duplicate_adapter, strlen(duplicate_adapter)),
-                   TURBO_EALREADY);
+                   SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate adapter");
       check_equal(turbo_flow_parse_string(flow, duplicate_worker, strlen(duplicate_worker)),
-                   TURBO_EALREADY);
+                   SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate worker");
       check_equal(turbo_flow_parse_string(flow, duplicate_capacity, strlen(duplicate_capacity)),
-                   TURBO_EALREADY);
+                   SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate data pool");
       check_equal(turbo_flow_parse_string(flow, duplicate_exec, strlen(duplicate_exec)),
-                   TURBO_EALREADY);
+                   SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate exec");
       check_equal(turbo_flow_parse_string(flow, duplicate_workers, strlen(duplicate_workers)),
-                   TURBO_EALREADY);
+                   SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate workers");
       check_equal(turbo_flow_parse_string(flow, duplicate_lanes, strlen(duplicate_lanes)),
-                   TURBO_EALREADY);
+                   SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate lanes");
       check_equal(turbo_flow_parse_string(flow, duplicate_pool, strlen(duplicate_pool)),
-                   TURBO_EALREADY);
+                   SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate pool");
 
       turbo_flow_destroy(flow);
@@ -1177,17 +1168,17 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, bad_worker, strlen(bad_worker)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, bad_worker, strlen(bad_worker)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "greater than zero");
       check_equal(turbo_flow_parse_string(flow, bad_exec_workers, strlen(bad_exec_workers)),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "greater than zero");
       check_equal(turbo_flow_parse_string(flow, bad_coro_lanes, strlen(bad_coro_lanes)),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "greater than zero");
       check_equal(
           turbo_flow_parse_string(flow, bad_coro_pool_capacity, strlen(bad_coro_pool_capacity)),
-          TURBO_EINVAL);
+          SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "greater than zero");
 
       turbo_flow_destroy(flow);
@@ -1201,15 +1192,15 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, zero, strlen(zero)), TURBO_ERANGE);
+      check_equal(turbo_flow_parse_string(flow, zero, strlen(zero)), SALTS_ERANGE);
       check_contains(turbo_flow_last_error(flow)->message, "power of two");
       check_equal(turbo_flow_parse_string(flow, not_power_of_two, strlen(not_power_of_two)),
-                   TURBO_ERANGE);
+                   SALTS_ERANGE);
       check_contains(turbo_flow_last_error(flow)->message, "power of two");
-      check_equal(turbo_flow_parse_string(flow, too_large, strlen(too_large)), TURBO_ERANGE);
+      check_equal(turbo_flow_parse_string(flow, too_large, strlen(too_large)), SALTS_ERANGE);
       check_contains(turbo_flow_last_error(flow)->message, "1048576");
       check_equal(turbo_flow_parse_string(flow, without_worker, strlen(without_worker)),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "requires a worker");
 
       turbo_flow_destroy(flow);
@@ -1224,13 +1215,13 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, inline_workers, strlen(inline_workers)),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "does not accept");
-      check_equal(turbo_flow_parse_string(flow, thread_lanes, strlen(thread_lanes)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, thread_lanes, strlen(thread_lanes)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "only accepts workers");
-      check_equal(turbo_flow_parse_string(flow, thread_pool, strlen(thread_pool)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, thread_pool, strlen(thread_pool)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "only accepts workers");
-      check_equal(turbo_flow_parse_string(flow, coro_workers, strlen(coro_workers)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, coro_workers, strlen(coro_workers)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "lanes and pool");
       turbo_flow_destroy(flow);
     }
@@ -1255,7 +1246,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_edge_count(flow), 4);
       check_true(turbo_flow_find_stage(flow, "clean.input") >= 0);
       check_true(turbo_flow_find_stage(flow, "clean.output") >= 0);
@@ -1275,7 +1266,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_EALREADY);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "only one root stage");
       check_equal(turbo_flow_last_error(flow)->line, 6);
 
@@ -1293,7 +1284,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_EALREADY);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate");
       check_equal(turbo_flow_last_error(flow)->line, 7);
 
@@ -1314,11 +1305,11 @@ suite("Turbo Flow") {
       size_t next_edge = 0u;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "left", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "right", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "left", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "right", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       for (size_t stage_index = 0u; stage_index < vec_size(&flow->runtime_nodes); ++stage_index) {
         const flow_runtime_node_plan_t *node =
@@ -1353,10 +1344,10 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "c.trim", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "load", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "c.trim", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "load", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       turbo_flow_destroy(flow);
     }
@@ -1384,13 +1375,13 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "p.c.trim", noop_stage, NULL, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "p.encode", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       turbo_flow_destroy(flow);
     }
@@ -1459,7 +1450,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       register_schema_adapter(flow, "bus.orders.sub", TURBO_FLOW_ADAPTER_KIND_MESSAGE_BUS,
                               TURBO_FLOW_ADAPTER_SOURCE, TURBO_FLOW_ADAPTER_INPUT);
       register_schema_adapter(flow, "bus.orders.pub", TURBO_FLOW_ADAPTER_KIND_MESSAGE_BUS,
@@ -1495,10 +1486,10 @@ suite("Turbo Flow") {
 
       {
         int rc = turbo_flow_compile(flow);
-        if (rc != TURBO_OK && turbo_flow_last_error(flow)) {
+        if (rc != SALTS_OK && turbo_flow_last_error(flow)) {
           info("compile error: %s", turbo_flow_last_error(flow)->message);
         }
-        check_equal(rc, TURBO_OK);
+        check_equal(rc, SALTS_OK);
       }
       check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_COMPILED);
       check_true(turbo_flow_find_stage(flow, "pubsub.filter") >= 0);
@@ -1522,9 +1513,9 @@ suite("Turbo Flow") {
       const turbo_flow_edge_plan_t *edge = NULL;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       register_stage_names(flow, names, sizeof(names) / sizeof(names[0]));
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_COMPILED);
 
       edge = turbo_flow_edge_at(flow, 0);
@@ -1532,12 +1523,12 @@ suite("Turbo Flow") {
       check_equal(edge->from_stage, (uint32_t)turbo_flow_find_stage(flow, "input"));
       check_equal(edge->to_stage, (uint32_t)turbo_flow_find_stage(flow, "parse"));
 
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
-      check_equal(turbo_flow_reset(flow, 1), TURBO_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       turbo_flow_destroy(flow);
     }
@@ -1554,15 +1545,15 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, source_adapter, strlen(source_adapter)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, source_adapter, strlen(source_adapter)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "adapter");
       check_equal(turbo_flow_last_error(flow)->line, 1);
 
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, sink_adapter, strlen(sink_adapter)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, sink_adapter, strlen(sink_adapter)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "adapter");
       check_equal(turbo_flow_last_error(flow)->line, 2);
 
@@ -1588,7 +1579,7 @@ suite("Turbo Flow") {
       const turbo_flow_adapter_schema_t *registered;
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_adapter_ex(flow, "mail", NULL, NULL, &schema), TURBO_OK);
+      check_equal(turbo_flow_register_adapter_ex(flow, "mail", NULL, NULL, &schema), SALTS_OK);
       field_name[0] = 'x';
       enum_value[0] = 'x';
 
@@ -1619,18 +1610,18 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_register_adapter_ex(flow, "invalid", NULL, NULL, &schema),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
       check_equal(turbo_flow_adapter_count(flow), 0);
 
       field.type = TURBO_FLOW_OPTION_STRING;
       field.flags = TURBO_FLOW_OPTION_HAS_MIN;
       check_equal(turbo_flow_register_adapter_ex(flow, "invalid", NULL, NULL, &schema),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
 
       field.type = TURBO_FLOW_OPTION_HOST_OBJECT;
       field.flags = 0;
       check_equal(turbo_flow_register_adapter_ex(flow, "invalid", NULL, NULL, &schema),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
 
       turbo_flow_destroy(flow);
     }
@@ -1659,17 +1650,17 @@ suite("Turbo Flow") {
       ops.consume = test_adapter_consume;
       check_not_null(flow);
       check_equal(turbo_flow_register_adapter_ex(flow, "mail", &ops, &adapter_ctx, &sink_schema),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, source_mismatch, strlen(source_mismatch)),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "source usage");
 
-      check_equal(turbo_flow_reset(flow, 1), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, nonterminal_sink, strlen(nonterminal_sink)),
-                   TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "tail", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "tail", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "terminal");
 
       turbo_flow_destroy(flow);
@@ -1691,33 +1682,33 @@ suite("Turbo Flow") {
       ops.shutdown = test_adapter_shutdown;
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_adapter(flow, "http.server", &ops, &adapter_ctx), TURBO_OK);
-      check_equal(turbo_flow_register_adapter(flow, "smtp", &ops, &adapter_ctx), TURBO_OK);
-      check_equal(turbo_flow_register_adapter(flow, "smtp", &ops, &adapter_ctx), TURBO_EALREADY);
+      check_equal(turbo_flow_register_adapter(flow, "http.server", &ops, &adapter_ctx), SALTS_OK);
+      check_equal(turbo_flow_register_adapter(flow, "smtp", &ops, &adapter_ctx), SALTS_OK);
+      check_equal(turbo_flow_register_adapter(flow, "smtp", &ops, &adapter_ctx), SALTS_EALREADY);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "email_out", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_register_adapter(flow, "late", &ops, &adapter_ctx), TURBO_EBUSY);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_register_adapter(flow, "late", &ops, &adapter_ctx), SALTS_EBUSY);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(adapter_ctx.start_count, 2);
       check_equal(adapter_ctx.source_start_count, 1);
       check_equal(adapter_ctx.stage_start_count, 1);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       check_equal(adapter_ctx.stop_count, 2);
       check_equal(adapter_ctx.shutdown_count, 0);
 
-      check_equal(turbo_flow_reset(flow, 1), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       check_equal(adapter_ctx.start_count, 4);
       check_equal(adapter_ctx.stop_count, 4);
       check_equal(adapter_ctx.shutdown_count, 0);
 
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_equal(adapter_ctx.shutdown_count, 2);
 
       turbo_flow_destroy(flow);
@@ -1746,13 +1737,13 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_register_adapter(flow, "smtp", &ops, &adapter_ctx), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_register_adapter(flow, "smtp", &ops, &adapter_ctx), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(adapter_ctx.consume_count, 1);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -1776,12 +1767,12 @@ suite("Turbo Flow") {
       memset(&ops, 0, sizeof(ops));
       ops.consume = test_adapter_consume;
       check_not_null(flow);
-      check_equal(turbo_flow_register_adapter(flow, "smtp", &ops, &adapter_ctx), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, thread_src, strlen(thread_src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_register_adapter(flow, "smtp", &ops, &adapter_ctx), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, thread_src, strlen(thread_src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "inline executor");
-      check_equal(turbo_flow_parse_string(flow, coro_src, strlen(coro_src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, coro_src, strlen(coro_src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "inline executor");
       turbo_flow_destroy(flow);
     }
@@ -1804,23 +1795,23 @@ suite("Turbo Flow") {
       command.size = sizeof(command);
       command.kind = TURBO_FLOW_ADAPTER_QUIESCE;
       check_not_null(flow);
-      check_equal(turbo_flow_register_adapter(flow, "controlled", &ops, &adapter_ctx), TURBO_OK);
-      check_equal(turbo_flow_register_adapter(flow, "unmanaged", NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), TURBO_EINVAL);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_adapter_command(flow, "missing", &command), TURBO_ENOENT);
-      check_equal(turbo_flow_adapter_command(flow, "unmanaged", &command), TURBO_ENOTSUP);
-      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), TURBO_OK);
+      check_equal(turbo_flow_register_adapter(flow, "controlled", &ops, &adapter_ctx), SALTS_OK);
+      check_equal(turbo_flow_register_adapter(flow, "unmanaged", NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), SALTS_EINVAL);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_adapter_command(flow, "missing", &command), SALTS_ENOENT);
+      check_equal(turbo_flow_adapter_command(flow, "unmanaged", &command), SALTS_ENOTSUP);
+      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), SALTS_OK);
       check_equal(adapter_ctx.command_count, 1);
       check_equal(adapter_ctx.last_command, TURBO_FLOW_ADAPTER_QUIESCE);
-      adapter_ctx.fail_status = TURBO_EIO;
+      adapter_ctx.fail_status = SALTS_EIO;
       command.kind = TURBO_FLOW_ADAPTER_RESUME;
-      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), TURBO_EIO);
+      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), SALTS_EIO);
       check_equal(adapter_ctx.command_count, 2);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
-      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), TURBO_EINVAL);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), SALTS_EINVAL);
       turbo_flow_destroy(flow);
     }
 
@@ -1848,16 +1839,16 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_register_adapter(flow, "socket.tcp", &ops, &adapter_ctx), TURBO_OK);
+      check_equal(turbo_flow_register_adapter(flow, "socket.tcp", &ops, &adapter_ctx), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(adapter_ctx.source_start_count, 1);
-      check_equal(turbo_flow_publish(flow, "socket_in", &msg), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "socket_in", &msg), SALTS_OK);
       check_equal(sink_ctx.called, 1);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       check_equal(adapter_ctx.stop_count, 1);
 
       turbo_flow_msg_cleanup(&msg);
@@ -1887,13 +1878,13 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_register_adapter(flow, "socket.tcp", &ops, &adapter_ctx), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_register_adapter(flow, "socket.tcp", &ops, &adapter_ctx), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(adapter_ctx.consume_count, 1);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -1906,13 +1897,13 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, "", 0), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, "", 0), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "source");
 
-      check_equal(turbo_flow_parse_string(flow, stage_only, strlen(stage_only)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, stage_only, strlen(stage_only)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "source");
 
       turbo_flow_destroy(flow);
@@ -1941,20 +1932,20 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, missing_cb, strlen(missing_cb)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, missing_cb, strlen(missing_cb)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "callback");
       check_equal(turbo_flow_last_error(flow)->line, 2);
       check_equal(turbo_flow_last_error(flow)->column, 7);
 
-      check_equal(turbo_flow_parse_string(flow, unknown_stage, strlen(unknown_stage)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, unknown_stage, strlen(unknown_stage)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "unknown stage");
 
-      check_equal(turbo_flow_parse_string(flow, cycle, strlen(cycle)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, cycle, strlen(cycle)), SALTS_OK);
       register_stage_names(flow, cycle_names, sizeof(cycle_names) / sizeof(cycle_names[0]));
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "cycle");
 
       turbo_flow_destroy(flow);
@@ -1972,8 +1963,8 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "cycle");
 
       turbo_flow_destroy(flow);
@@ -1989,9 +1980,9 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EALREADY);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate stage edge");
       check_equal(turbo_flow_last_error(flow)->line, 5);
 
@@ -2009,9 +2000,9 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       register_stage_names(flow, names, sizeof(names) / sizeof(names[0]));
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "not reachable");
       check_equal(turbo_flow_last_error(flow)->line, 3);
 
@@ -2032,15 +2023,15 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, bad_src, strlen(bad_src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, bad_src, strlen(bad_src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_FAILED);
       check_contains(turbo_flow_last_error(flow)->message, "unknown stage");
 
-      check_equal(turbo_flow_parse_string(flow, ok_src, strlen(ok_src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, ok_src, strlen(ok_src)), SALTS_OK);
       check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_PARSED);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       turbo_flow_destroy(flow);
     }
@@ -2057,12 +2048,12 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "validate", noop_stage, NULL, &mutates),
-                   TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "enrich", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "enrich", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "mutable");
       check_equal(turbo_flow_last_error(flow)->line, 6);
 
@@ -2093,26 +2084,26 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, bad_src, strlen(bad_src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, bad_src, strlen(bad_src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "validate", noop_stage, NULL, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "mutate", noop_stage, NULL, &mutates),
-                   TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "metrics", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "metrics", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "mutable");
 
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, ok_src, strlen(ok_src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, ok_src, strlen(ok_src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "validate", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "metrics", noop_stage, NULL, NULL), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "metrics", noop_stage, NULL, NULL), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, &mutates),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       turbo_flow_destroy(flow);
     }
@@ -2129,9 +2120,9 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       register_stage_names(flow, names, sizeof(names) / sizeof(names[0]));
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "worker-pool");
       check_contains(turbo_flow_last_error(flow)->message, "reorder");
 
@@ -2150,9 +2141,9 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       register_stage_names(flow, names, sizeof(names) / sizeof(names[0]));
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "thread executor");
       check_contains(turbo_flow_last_error(flow)->message, "reorder");
 
@@ -2168,13 +2159,13 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL),
-                   TURBO_EALREADY);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_EALREADY);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "other", noop_stage, NULL, NULL),
-                   TURBO_EBUSY);
+                   SALTS_EBUSY);
 
       turbo_flow_destroy(flow);
     }
@@ -2193,8 +2184,8 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "composite stage input");
 
       turbo_flow_destroy(flow);
@@ -2226,19 +2217,19 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, to_output, strlen(to_output)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "persist", noop_stage, NULL, NULL), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, to_output, strlen(to_output)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "persist", noop_stage, NULL, NULL), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "enrich.fetch", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "composite stage input");
 
-      check_equal(turbo_flow_parse_string(flow, from_input, strlen(from_input)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, from_input, strlen(from_input)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "persist", noop_stage, NULL, NULL),
-                   TURBO_EALREADY);
+                   SALTS_EALREADY);
       check_equal(turbo_flow_register_stage_ex(flow, "enrich.fetch", noop_stage, NULL, NULL),
-                   TURBO_EALREADY);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_EALREADY);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "composite stage output");
 
       turbo_flow_destroy(flow);
@@ -2260,8 +2251,8 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "not reachable");
       check_equal(turbo_flow_last_error(flow)->line, 5);
 
@@ -2292,12 +2283,12 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, from_output, strlen(from_output)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, from_output, strlen(from_output)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "output ports");
 
-      check_equal(turbo_flow_parse_string(flow, to_input, strlen(to_input)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, to_input, strlen(to_input)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "input ports");
 
       turbo_flow_destroy(flow);
@@ -2318,7 +2309,7 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "exactly one input");
 
       turbo_flow_destroy(flow);
@@ -2333,21 +2324,21 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "callback");
 
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_reset(flow, 1), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       turbo_flow_destroy(flow);
     }
@@ -2366,8 +2357,8 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_msg_content_state(&src), TURBO_FLOW_CONTENT_OPAQUE);
       src.buffer = buffer;
       src.payload = vstr_from_buf(raw, sizeof(raw) - 1u);
-      check_equal(turbo_flow_msg_retain_view(&retained, &src), TURBO_OK);
-      check_equal(turbo_flow_msg_clone(&cloned, &src), TURBO_OK);
+      check_equal(turbo_flow_msg_retain_view(&retained, &src), SALTS_OK);
+      check_equal(turbo_flow_msg_clone(&cloned, &src), SALTS_OK);
       check_equal(turbo_flow_msg_content_state(&retained), TURBO_FLOW_CONTENT_OPAQUE);
       check_equal(turbo_flow_msg_content_state(&cloned), TURBO_FLOW_CONTENT_OPAQUE);
       check_equal(cloned.payload.data, raw, sizeof(raw) - 1u);
@@ -2390,7 +2381,7 @@ suite("Turbo Flow") {
       msg.payload = tstr_to_v(msg.owned_payload);
       check_equal(turbo_flow_msg_bind_projection(&msg, &TEST_DATA_SCHEMA, value, NULL,
                                                   destroy_owned_projection, &destroy_count),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_msg_content_state(&msg), TURBO_FLOW_CONTENT_SCHEMA_BOUND);
       check_equal((const void *)turbo_flow_msg_projection(&msg, &schema), (const void *)value);
       check_equal((const void *)schema, (const void *)&TEST_DATA_SCHEMA);
@@ -2420,8 +2411,8 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_msg_bind_projection(&src, &TEST_DATA_SCHEMA, value,
                                                   clone_owned_projection, destroy_owned_projection,
                                                   &destroy_count),
-                   TURBO_OK);
-      check_equal(turbo_flow_msg_clone(&dst, &src), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_msg_clone(&dst, &src), SALTS_OK);
       copy = (const int *)turbo_flow_msg_projection(&dst, NULL);
       check_not_null(copy);
       check_equal(*copy, 73);
@@ -2445,8 +2436,8 @@ suite("Turbo Flow") {
       turbo_flow_msg_init(&src);
       check_equal(turbo_flow_msg_bind_projection(&src, &TEST_DATA_SCHEMA, value, NULL,
                                                   destroy_owned_projection, &destroy_count),
-                   TURBO_OK);
-      check_equal(turbo_flow_msg_clone(&dst, &src), TURBO_ENOTSUP);
+                   SALTS_OK);
+      check_equal(turbo_flow_msg_clone(&dst, &src), SALTS_ENOTSUP);
       check_equal(destroy_count, 0);
       check_equal(*(const int *)turbo_flow_msg_projection(&src, NULL), 9);
       turbo_flow_msg_cleanup(&src);
@@ -2464,8 +2455,8 @@ suite("Turbo Flow") {
       turbo_flow_msg_init(&src);
       check_equal(turbo_flow_msg_bind_projection(&src, &TEST_DATA_SCHEMA, value, NULL,
                                                   destroy_owned_projection, &destroy_count),
-                   TURBO_OK);
-      check_equal(turbo_flow_msg_move(&dst, &src), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_msg_move(&dst, &src), SALTS_OK);
       check_equal(turbo_flow_msg_content_state(&src), TURBO_FLOW_CONTENT_OPAQUE);
       check_equal(turbo_flow_msg_content_state(&dst), TURBO_FLOW_CONTENT_SCHEMA_BOUND);
       turbo_flow_msg_cleanup(&src);
@@ -2488,18 +2479,18 @@ suite("Turbo Flow") {
                        &descriptor, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
                        TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
                        "application/json", "orders.created"),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_content_descriptor_declare_schema(
                        &descriptor, TEST_DATA_SCHEMA.schema_name, TEST_DATA_SCHEMA.type_name,
                        TEST_DATA_SCHEMA.schema_version),
-                   TURBO_OK);
+                   SALTS_OK);
       turbo_flow_msg_init(&src);
-      check_equal(turbo_flow_msg_set_content_descriptor(&src, &descriptor), TURBO_OK);
+      check_equal(turbo_flow_msg_set_content_descriptor(&src, &descriptor), SALTS_OK);
       check_equal(turbo_flow_msg_bind_projection(&src, &TEST_DATA_SCHEMA, value,
                                                   clone_owned_projection, destroy_owned_projection,
                                                   &destroy_count),
-                   TURBO_OK);
-      check_equal(turbo_flow_msg_clone(&dst, &src), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_msg_clone(&dst, &src), SALTS_OK);
       actual = turbo_flow_msg_content_descriptor(&dst);
       check_not_null(actual);
       check_equal((const void *)actual, (const void *)&descriptor);
@@ -2528,12 +2519,12 @@ suite("Turbo Flow") {
                        &descriptor, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
                        TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
                        "application/json", "orders.created"),
-                   TURBO_OK);
+                   SALTS_OK);
       turbo_flow_msg_init(&src);
       src.buffer = buffer;
       src.payload = vstr_from_buf(raw, sizeof(raw) - 1u);
-      check_equal(turbo_flow_msg_set_content_descriptor(&src, &descriptor), TURBO_OK);
-      check_equal(turbo_flow_msg_retain_view(&retained, &src), TURBO_OK);
+      check_equal(turbo_flow_msg_set_content_descriptor(&src, &descriptor), SALTS_OK);
+      check_equal(turbo_flow_msg_retain_view(&retained, &src), SALTS_OK);
       check_equal((const void *)turbo_flow_msg_content_descriptor(&retained),
                   (const void *)&descriptor);
       check_equal(mem_buffer_ref_count(buffer), 2u);
@@ -2551,17 +2542,17 @@ suite("Turbo Flow") {
                                                       TURBO_FLOW_CONTENT_PROFILE_HTTP_REQUEST_BODY,
                                                       TURBO_FLOW_DATA_ENCODING_JSON,
                                                       "application/json", "/orders"),
-                   TURBO_OK);
+                   SALTS_OK);
       descriptor.encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
-      check_equal(turbo_flow_content_descriptor_check(&descriptor), TURBO_EINVAL);
+      check_equal(turbo_flow_content_descriptor_check(&descriptor), SALTS_EINVAL);
 
       descriptor.encoding = TURBO_FLOW_DATA_ENCODING_JSON;
       descriptor.domain = TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN;
-      check_equal(turbo_flow_content_descriptor_check(&descriptor), TURBO_EINVAL);
+      check_equal(turbo_flow_content_descriptor_check(&descriptor), SALTS_EINVAL);
 
       descriptor.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
       descriptor.flags = TURBO_FLOW_CONTENT_PROTOCOL_CONTROL;
-      check_equal(turbo_flow_content_descriptor_check(&descriptor), TURBO_EINVAL);
+      check_equal(turbo_flow_content_descriptor_check(&descriptor), SALTS_EINVAL);
     }
 
     it("enforces one declared schema identity across descriptor and projection binding") {
@@ -2596,11 +2587,11 @@ suite("Turbo Flow") {
                        &matching_descriptor, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
                        TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
                        "application/json", "orders.created"),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_content_descriptor_declare_schema(
                        &matching_descriptor, TEST_DATA_SCHEMA.schema_name,
                        TEST_DATA_SCHEMA.type_name, TEST_DATA_SCHEMA.schema_version),
-                   TURBO_OK);
+                   SALTS_OK);
       conflicting_descriptor = matching_descriptor;
       memcpy(conflicting_descriptor.schema_name, conflicting_schema.schema_name,
              strlen(conflicting_schema.schema_name) + 1u);
@@ -2609,11 +2600,11 @@ suite("Turbo Flow") {
 
       turbo_flow_msg_init(&descriptor_first);
       check_equal(turbo_flow_msg_set_content_descriptor(&descriptor_first, &matching_descriptor),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_msg_bind_projection(
                        &descriptor_first, &conflicting_schema, descriptor_first_value, NULL,
                        destroy_owned_projection, &descriptor_first_destroy_count),
-                   TURBO_EPROTO);
+                   SALTS_EPROTO);
       check_equal(descriptor_first_destroy_count, 0);
       free(descriptor_first_value);
       turbo_flow_msg_cleanup(&descriptor_first);
@@ -2622,10 +2613,10 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_msg_bind_projection(
                        &projection_first, &TEST_DATA_SCHEMA, projection_first_value, NULL,
                        destroy_owned_projection, &projection_first_destroy_count),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(
           turbo_flow_msg_set_content_descriptor(&projection_first, &conflicting_descriptor),
-          TURBO_EPROTO);
+          SALTS_EPROTO);
       check_equal(projection_first_destroy_count, 0);
       turbo_flow_msg_cleanup(&projection_first);
       check_equal(projection_first_destroy_count, 1);
@@ -2634,9 +2625,9 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_msg_bind_projection(&matching, &TEST_DATA_SCHEMA, matching_value,
                                                   NULL, destroy_owned_projection,
                                                   &matching_destroy_count),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_msg_set_content_descriptor(&matching, &matching_descriptor),
-                   TURBO_OK);
+                   SALTS_OK);
       turbo_flow_msg_cleanup(&matching);
       check_equal(matching_destroy_count, 1);
     }
@@ -2663,30 +2654,30 @@ suite("Turbo Flow") {
                        &application, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
                        TURBO_FLOW_CONTENT_PROFILE_MQTT_APPLICATION, TURBO_FLOW_DATA_ENCODING_JSON,
                        "application/json", "sensors/temperature"),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_schema_registry_register(registry, &application, &mqtt_schema),
-                   TURBO_OK);
+                   SALTS_OK);
       selector.schema_name = mqtt_schema.schema_name;
       selector.type_name = mqtt_schema.type_name;
       selector.schema_version = mqtt_schema.schema_version;
       check_equal(turbo_flow_content_descriptor_resolve(&application, registry, &selector),
-                   TURBO_OK);
-      check_equal(turbo_flow_schema_registry_resolve(registry, &application, &resolved), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_schema_registry_resolve(registry, &application, &resolved), SALTS_OK);
       check_equal(resolved->schema_name, mqtt_schema.schema_name);
 
       wrong_domain = application;
       wrong_domain.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
-      check_equal(turbo_flow_content_descriptor_check(&wrong_domain), TURBO_EINVAL);
+      check_equal(turbo_flow_content_descriptor_check(&wrong_domain), SALTS_EINVAL);
       application.flags |= TURBO_FLOW_CONTENT_PROTOCOL_CONTROL;
-      check_equal(turbo_flow_content_descriptor_check(&application), TURBO_EINVAL);
+      check_equal(turbo_flow_content_descriptor_check(&application), SALTS_EINVAL);
 
       check_equal(turbo_flow_content_descriptor_init(&control, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
                                                       TURBO_FLOW_CONTENT_PROFILE_MQTT_CONTROL,
                                                       TURBO_FLOW_DATA_ENCODING_OPAQUE,
                                                       "application/octet-stream", "$SYS/control"),
-                   TURBO_OK);
+                   SALTS_OK);
       control.flags |= TURBO_FLOW_CONTENT_PROTOCOL_CONTROL;
-      check_equal(turbo_flow_content_descriptor_check(&control), TURBO_OK);
+      check_equal(turbo_flow_content_descriptor_check(&control), SALTS_OK);
       turbo_flow_schema_registry_destroy(registry);
     }
 
@@ -2699,35 +2690,35 @@ suite("Turbo Flow") {
       check_not_null(registry);
       check_equal(turbo_flow_content_media_type_normalize("Application/JSON; charset=utf-8",
                                                            &encoding, &media_type),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(encoding, TURBO_FLOW_DATA_ENCODING_JSON);
       check_equal(media_type, "application/json");
       check_equal(turbo_flow_content_descriptor_init(&descriptor, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
                                                       TURBO_FLOW_CONTENT_PROFILE_HTTP_REQUEST_BODY,
                                                       encoding, media_type, "/orders"),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(
           turbo_flow_schema_registry_register(registry, &descriptor, &TEST_HTTP_DATA_SCHEMA),
-          TURBO_OK);
+          SALTS_OK);
       selector.schema_name = TEST_HTTP_DATA_SCHEMA.schema_name;
       selector.type_name = TEST_HTTP_DATA_SCHEMA.type_name;
       selector.schema_version = TEST_HTTP_DATA_SCHEMA.schema_version;
       check_equal(turbo_flow_content_descriptor_resolve(&descriptor, registry, &selector),
-                   TURBO_OK);
+                   SALTS_OK);
       check_bits(descriptor.flags, TURBO_FLOW_CONTENT_SCHEMA_DECLARED);
       check_equal(descriptor.schema_name, TEST_HTTP_DATA_SCHEMA.schema_name);
       check_equal(turbo_flow_content_descriptor_declare_schema(&descriptor, "wrong.schema",
                                                                 "WrongType", 9u),
-                   TURBO_EPROTO);
+                   SALTS_EPROTO);
       {
         turbo_flow_content_descriptor_t wrong_profile = descriptor;
         wrong_profile.profile = TURBO_FLOW_CONTENT_PROFILE_HTTP_RESPONSE_BODY;
         check_equal(turbo_flow_content_descriptor_validate(&descriptor, &wrong_profile),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
       }
       check_equal(
           turbo_flow_content_media_type_normalize("application/x-unknown", &encoding, &media_type),
-          TURBO_ENOENT);
+          SALTS_ENOENT);
       turbo_flow_schema_registry_destroy(registry);
     }
 
@@ -2743,29 +2734,29 @@ suite("Turbo Flow") {
                                                       TURBO_FLOW_CONTENT_PROFILE_HTTP_REQUEST_BODY,
                                                       TURBO_FLOW_DATA_ENCODING_JSON,
                                                       "application/json", NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_schema_registry_register(registry, &match, &TEST_HTTP_DATA_SCHEMA),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_schema_registry_register(registry, &match, &TEST_HTTP_DATA_SCHEMA),
-                   TURBO_EALREADY);
-      check_equal(turbo_flow_schema_registry_resolve(registry, &match, &resolved), TURBO_ENOENT);
+                   SALTS_EALREADY);
+      check_equal(turbo_flow_schema_registry_resolve(registry, &match, &resolved), SALTS_ENOENT);
       declared = match;
       check_equal(turbo_flow_content_descriptor_declare_schema(
                        &declared, TEST_HTTP_DATA_SCHEMA.schema_name,
                        TEST_HTTP_DATA_SCHEMA.type_name, TEST_HTTP_DATA_SCHEMA.schema_version),
-                   TURBO_OK);
-      check_equal(turbo_flow_schema_registry_resolve(registry, &declared, &resolved), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_schema_registry_resolve(registry, &declared, &resolved), SALTS_OK);
       check_not_null(resolved);
       check_equal(resolved->projection_type, "test.int");
 
       turbo_flow_msg_init(&msg);
-      check_equal(turbo_flow_msg_set_content_descriptor(&msg, &declared), TURBO_OK);
+      check_equal(turbo_flow_msg_set_content_descriptor(&msg, &declared), SALTS_OK);
       resolved = NULL;
-      check_equal(turbo_flow_msg_resolve_schema(&msg, registry, &resolved), TURBO_OK);
+      check_equal(turbo_flow_msg_resolve_schema(&msg, registry, &resolved), SALTS_OK);
       check_not_null(resolved);
       declared.schema_version = 3u;
       check_equal(turbo_flow_schema_registry_resolve(registry, &declared, &resolved),
-                   TURBO_ENOENT);
+                   SALTS_ENOENT);
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_schema_registry_destroy(registry);
     }
@@ -2794,14 +2785,14 @@ suite("Turbo Flow") {
                                                       TURBO_FLOW_CONTENT_PROFILE_HTTP_RESPONSE_BODY,
                                                       TURBO_FLOW_DATA_ENCODING_JSON,
                                                       "application/json", NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       schema.schema_text = "message MutableOrder { uint32 id; }";
-      check_equal(turbo_flow_schema_registry_register(registry, &match, &schema), TURBO_EINVAL);
+      check_equal(turbo_flow_schema_registry_register(registry, &match, &schema), SALTS_EINVAL);
       schema.schema_text = NULL;
-      check_equal(turbo_flow_schema_registry_register(registry, &match, &schema), TURBO_OK);
+      check_equal(turbo_flow_schema_registry_register(registry, &match, &schema), SALTS_OK);
       conflicting.schema_id = 20u;
       check_equal(turbo_flow_schema_registry_register(registry, &match, &conflicting),
-                   TURBO_EPROTO);
+                   SALTS_EPROTO);
 
       schema_name[0] = 'X';
       type_name[0] = 'X';
@@ -2809,8 +2800,8 @@ suite("Turbo Flow") {
       declared = match;
       check_equal(turbo_flow_content_descriptor_declare_schema(&declared, "test.http.mutable",
                                                                 "MutableOrder", 2u),
-                   TURBO_OK);
-      check_equal(turbo_flow_schema_registry_resolve(registry, &declared, &resolved), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_schema_registry_resolve(registry, &declared, &resolved), SALTS_OK);
       check_not_null(resolved);
       check_equal(resolved->schema_name, "test.http.mutable");
       check_equal(resolved->type_name, "MutableOrder");
@@ -2830,7 +2821,7 @@ suite("Turbo Flow") {
       src.payload = vstr_from_buf(raw, sizeof(raw) - 1);
       check_equal(mem_buffer_ref_count(buffer), 1);
 
-      check_equal(turbo_flow_msg_retain_view(&dst, &src), TURBO_OK);
+      check_equal(turbo_flow_msg_retain_view(&dst, &src), SALTS_OK);
       check_equal((const void *)dst.buffer, (const void *)src.buffer);
       check_equal(mem_buffer_ref_count(buffer), 2);
       check_equal(dst.payload.data, "payload");
@@ -2850,8 +2841,8 @@ suite("Turbo Flow") {
       src.transport_context = &transport_marker;
       check_equal(turbo_flow_msg_content_state(&src), TURBO_FLOW_CONTENT_OPAQUE);
       turbo_flow_msg_clear_projection(&src);
-      check_equal(turbo_flow_msg_retain_view(&retained, &src), TURBO_OK);
-      check_equal(turbo_flow_msg_clone(&cloned, &src), TURBO_OK);
+      check_equal(turbo_flow_msg_retain_view(&retained, &src), SALTS_OK);
+      check_equal(turbo_flow_msg_clone(&cloned, &src), SALTS_OK);
       check_equal((const void *)retained.transport_context, (const void *)&transport_marker);
       check_equal((const void *)cloned.transport_context, (const void *)&transport_marker);
 
@@ -2867,8 +2858,8 @@ suite("Turbo Flow") {
       src.owned_payload = tstr_dup("owned");
       src.payload = tstr_to_v(src.owned_payload);
 
-      check_equal(turbo_flow_msg_retain_view(&dst, &src), TURBO_EINVAL);
-      check_equal(turbo_flow_msg_move(&dst, &src), TURBO_OK);
+      check_equal(turbo_flow_msg_retain_view(&dst, &src), SALTS_EINVAL);
+      check_equal(turbo_flow_msg_move(&dst, &src), SALTS_OK);
       check_null(src.owned_payload);
       check_equal(dst.owned_payload, "owned");
 
@@ -2890,7 +2881,7 @@ suite("Turbo Flow") {
       src.payload = vstr_from_buf(src.owned_payload + strlen("prefix-"), strlen("owned"));
       check_equal(mem_buffer_ref_count(buffer), 1);
 
-      check_equal(turbo_flow_msg_clone(&dst, &src), TURBO_OK);
+      check_equal(turbo_flow_msg_clone(&dst, &src), SALTS_OK);
       check_equal(mem_buffer_ref_count(buffer), 2);
       check_equal(dst.id, 42);
       check_equal(dst.owned_payload, "prefix-owned");
@@ -2915,7 +2906,7 @@ suite("Turbo Flow") {
       src.owned_payload = tstr_dup("owned");
       src.payload = vstr_from_buf(src.owned_payload + 3, 8);
 
-      check_equal(turbo_flow_msg_clone(&dst, &src), TURBO_EINVAL);
+      check_equal(turbo_flow_msg_clone(&dst, &src), SALTS_EINVAL);
 
       turbo_flow_msg_cleanup(&src);
     }
@@ -2933,15 +2924,15 @@ suite("Turbo Flow") {
       src.payload = vstr_from_buf(outside, sizeof(outside) - 1u);
 
       turbo_flow_msg_init(&dst);
-      check_equal(turbo_flow_msg_retain_view(&dst, &src), TURBO_EINVAL);
+      check_equal(turbo_flow_msg_retain_view(&dst, &src), SALTS_EINVAL);
       turbo_flow_msg_cleanup(&dst);
       turbo_flow_msg_init(&dst);
-      check_equal(turbo_flow_msg_clone(&dst, &src), TURBO_EINVAL);
+      check_equal(turbo_flow_msg_clone(&dst, &src), SALTS_EINVAL);
       turbo_flow_msg_cleanup(&dst);
 
       src.payload = vstr_from_buf(backing + 3u, sizeof(backing));
       turbo_flow_msg_init(&dst);
-      check_equal(turbo_flow_msg_retain_view(&dst, &src), TURBO_EINVAL);
+      check_equal(turbo_flow_msg_retain_view(&dst, &src), SALTS_EINVAL);
       turbo_flow_msg_cleanup(&dst);
       turbo_flow_msg_cleanup(&src);
     }
@@ -2959,8 +2950,8 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       mem_buffer_t *buffer = mem_wrap_external(raw, sizeof(raw) - 1, NULL, NULL);
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t parse_ctx = {&trace, 1, TURBO_OK};
-      publish_stage_ctx_t validate_ctx = {&trace, 2, TURBO_OK};
+      publish_stage_ctx_t parse_ctx = {&trace, 1, SALTS_OK};
+      publish_stage_ctx_t validate_ctx = {&trace, 2, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
@@ -2969,35 +2960,35 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "validate", record_stage, &validate_ctx, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EINVAL);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EINVAL);
       check_equal(trace.count, 0);
 
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(mem_buffer_ref_count(buffer), 1);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(mem_buffer_ref_count(buffer), 1);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 1);
       check_equal(trace.order[1], 2);
 
       trace.count = 0;
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(mem_buffer_ref_count(buffer), 1);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 1);
       check_equal(trace.order[1], 2);
 
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       trace.count = 0;
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(mem_buffer_ref_count(buffer), 1);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 1);
@@ -3013,8 +3004,8 @@ suite("Turbo Flow") {
                                "stage main {\n"
                                "  input -> sink\n"
                                "}\n";
-      batch_publish_probe_t probe = {{0}, 0u, 0u, TURBO_EPROTO};
-      batch_prepare_probe_t prepare_probe = {0u, SIZE_MAX, TURBO_EIO};
+      batch_publish_probe_t probe = {{0}, 0u, 0u, SALTS_EPROTO};
+      batch_prepare_probe_t prepare_probe = {0u, SIZE_MAX, SALTS_EIO};
       turbo_flow_publish_batch_config_t batch_config = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
       turbo_flow_t *flow = turbo_flow_create();
       size_t published = SIZE_MAX;
@@ -3023,24 +3014,24 @@ suite("Turbo Flow") {
       batch_config.message_count = 4u;
       batch_config.prepare = batch_prepare_message;
       batch_config.ctx = &prepare_probe;
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", batch_publish_probe_stage,
                                                 &probe, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       check_equal(turbo_flow_publish_batch(flow, "input", &batch_config, &published),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
       check_equal(published, 0u);
       check_equal(probe.calls, 0u);
 
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish_batch(flow, "missing", &batch_config, &published),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
       check_equal(published, 0u);
       check_equal(probe.calls, 0u);
 
-      check_equal(turbo_flow_publish_batch(flow, "input", &batch_config, &published), TURBO_OK);
+      check_equal(turbo_flow_publish_batch(flow, "input", &batch_config, &published), SALTS_OK);
       check_equal(published, 4u);
       check_equal(probe.calls, 4u);
       for (size_t index = 0u; index < 4u; ++index)
@@ -3050,24 +3041,24 @@ suite("Turbo Flow") {
       probe.calls = 0u;
       probe.fail_id = 3u;
       check_equal(turbo_flow_publish_batch(flow, "input", &batch_config, &published),
-                   TURBO_EPROTO);
+                   SALTS_EPROTO);
       check_equal(published, 2u);
       check_equal(probe.calls, 3u);
       check_equal(probe.ids[0], 1u);
       check_equal(probe.ids[1], 2u);
       check_equal(probe.ids[2], 3u);
-      check_equal(turbo_flow_last_error(flow)->code, TURBO_EPROTO);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_EPROTO);
 
       memset(probe.ids, 0, sizeof(probe.ids));
       probe.calls = 0u;
       probe.fail_id = 0u;
       prepare_probe.calls = 0u;
       prepare_probe.fail_index = 2u;
-      check_equal(turbo_flow_publish_batch(flow, "input", &batch_config, &published), TURBO_EIO);
+      check_equal(turbo_flow_publish_batch(flow, "input", &batch_config, &published), SALTS_EIO);
       check_equal(published, 2u);
       check_equal(prepare_probe.calls, 3u);
       check_equal(probe.calls, 2u);
-      check_equal(turbo_flow_last_error(flow)->code, TURBO_EIO);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_EIO);
 
       turbo_flow_destroy(flow);
     }
@@ -3102,18 +3093,18 @@ suite("Turbo Flow") {
       check_true(written > 0 && (size_t)written < sizeof(source) - used);
       used += (size_t)written;
 
-      check_equal(turbo_flow_parse_string(flow, source, used), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, source, used), SALTS_OK);
       for (unsigned i = 0u; i < LARGE_GRAPH_STAGE_COUNT; ++i) {
         written = snprintf(stage_name, sizeof(stage_name), "node_%u", i);
         check_true(written > 0 && (size_t)written < sizeof(stage_name));
         check_equal(turbo_flow_register_stage_ex(flow, stage_name, noop_stage, NULL, NULL),
-                     TURBO_OK);
+                     SALTS_OK);
       }
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_msg_init(&msg);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -3132,10 +3123,10 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       mem_buffer_t *buffer = mem_wrap_external(raw, sizeof(raw) - 1, NULL, NULL);
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t parse_ctx = {&trace, 1, TURBO_OK};
-      publish_stage_ctx_t validate_ctx = {&trace, 2, TURBO_OK};
-      publish_stage_ctx_t enrich_ctx = {&trace, 3, TURBO_OK};
-      publish_stage_ctx_t sink_ctx = {&trace, 4, TURBO_OK};
+      publish_stage_ctx_t parse_ctx = {&trace, 1, SALTS_OK};
+      publish_stage_ctx_t validate_ctx = {&trace, 2, SALTS_OK};
+      publish_stage_ctx_t enrich_ctx = {&trace, 3, SALTS_OK};
+      publish_stage_ctx_t sink_ctx = {&trace, 4, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
@@ -3144,19 +3135,19 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "validate", record_stage, &validate_ctx, NULL),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "enrich", record_stage, &enrich_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
 
       check_equal(trace.count, 4);
       check_equal(trace.order[0], 1);
@@ -3182,9 +3173,9 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       mem_buffer_t *buffer = mem_wrap_external(raw, sizeof(raw) - 1, NULL, NULL);
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t order_ctx = {&trace, 1, TURBO_OK};
-      publish_stage_ctx_t refund_ctx = {&trace, 2, TURBO_OK};
-      publish_stage_ctx_t audit_ctx = {&trace, 3, TURBO_OK};
+      publish_stage_ctx_t order_ctx = {&trace, 1, SALTS_OK};
+      publish_stage_ctx_t refund_ctx = {&trace, 2, SALTS_OK};
+      publish_stage_ctx_t audit_ctx = {&trace, 3, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
@@ -3193,25 +3184,25 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "parse_order", record_stage, &order_ctx, NULL),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "parse_refund", record_stage, &refund_ctx, NULL),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "audit", record_stage, &audit_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
 
-      check_equal(turbo_flow_publish(flow, "orders", &msg), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "orders", &msg), SALTS_OK);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 1);
       check_equal(trace.order[1], 3);
 
       trace.count = 0;
-      check_equal(turbo_flow_publish(flow, "refunds", &msg), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "refunds", &msg), SALTS_OK);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 2);
       check_equal(trace.order[1], 3);
@@ -3239,10 +3230,10 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       mem_buffer_t *buffer = mem_wrap_external(raw, sizeof(raw) - 1, NULL, NULL);
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t validate_ctx = {&trace, 1, TURBO_OK};
-      publish_stage_ctx_t fetch_ctx = {&trace, 2, TURBO_OK};
-      publish_stage_ctx_t normalize_ctx = {&trace, 3, TURBO_OK};
-      publish_stage_ctx_t persist_ctx = {&trace, 4, TURBO_OK};
+      publish_stage_ctx_t validate_ctx = {&trace, 1, SALTS_OK};
+      publish_stage_ctx_t fetch_ctx = {&trace, 2, SALTS_OK};
+      publish_stage_ctx_t normalize_ctx = {&trace, 3, SALTS_OK};
+      publish_stage_ctx_t persist_ctx = {&trace, 4, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
@@ -3251,7 +3242,7 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_stage_count(flow), 7);
       check_equal(turbo_flow_edge_count(flow), 6);
       check_true(turbo_flow_find_stage(flow, "enrich.input") >= 0);
@@ -3259,18 +3250,18 @@ suite("Turbo Flow") {
 
       check_equal(
           turbo_flow_register_stage_ex(flow, "validate", record_stage, &validate_ctx, NULL),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "enrich.fetch", record_stage, &fetch_ctx, NULL),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "enrich.normalize", record_stage,
                                                 &normalize_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
 
       check_equal(trace.count, 4);
       check_equal(trace.order[0], 1);
@@ -3298,8 +3289,8 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       mem_buffer_t *buffer = mem_wrap_external(raw, sizeof(raw) - 1, NULL, NULL);
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t fetch_ctx = {&trace, 1, TURBO_OK};
-      publish_stage_ctx_t persist_ctx = {&trace, 2, TURBO_OK};
+      publish_stage_ctx_t fetch_ctx = {&trace, 1, SALTS_OK};
+      publish_stage_ctx_t persist_ctx = {&trace, 2, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
@@ -3308,15 +3299,15 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "enrich.fetch", record_stage, &fetch_ctx, NULL),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
 
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 1);
@@ -3337,8 +3328,8 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       mem_buffer_t *buffer = mem_wrap_external(raw, sizeof(raw) - 1, NULL, NULL);
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t parse_ctx = {&trace, 1, TURBO_EPROTO};
-      publish_stage_ctx_t sink_ctx = {&trace, 2, TURBO_OK};
+      publish_stage_ctx_t parse_ctx = {&trace, 1, SALTS_EPROTO};
+      publish_stage_ctx_t sink_ctx = {&trace, 2, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
@@ -3347,25 +3338,25 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EPROTO);
-      check_equal(turbo_flow_last_error(flow)->code, TURBO_EPROTO);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EPROTO);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_EPROTO);
       check_equal(turbo_flow_last_error(flow)->line, 2);
       check_equal(turbo_flow_last_error(flow)->column, 7);
       check_contains(turbo_flow_last_error(flow)->message, "stage callback");
       check_equal(trace.count, 1);
       check_equal(trace.order[0], 1);
 
-      parse_ctx.fail_status = TURBO_OK;
+      parse_ctx.fail_status = SALTS_OK;
       trace.count = 0;
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-      check_equal(turbo_flow_last_error(flow)->code, TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_OK);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 1);
       check_equal(trace.order[1], 2);
@@ -3389,12 +3380,12 @@ suite("Turbo Flow") {
       msg.owned_payload = tstr_dup("owned-payload");
       msg.payload = tstr_to_v(msg.owned_payload);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(sink_ctx.called, 1);
       check_equal(msg.owned_payload, "owned-payload");
 
@@ -3416,11 +3407,11 @@ suite("Turbo Flow") {
       turbo_flow_msg_init(&msg);
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "backing");
 
       turbo_flow_msg_cleanup(&msg);
@@ -3444,11 +3435,11 @@ suite("Turbo Flow") {
       check_not_null(msg.buffer);
       msg.payload = vstr_from_buf(outside, sizeof(outside) - 1u);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "payload");
 
       turbo_flow_msg_cleanup(&msg);
@@ -3463,7 +3454,7 @@ suite("Turbo Flow") {
                                "}\n";
       char backing[] = "backing";
       char outside[] = "outside";
-      batch_publish_probe_t sink = {{0}, 0u, 0u, TURBO_EPROTO};
+      batch_publish_probe_t sink = {{0}, 0u, 0u, SALTS_EPROTO};
       invalid_batch_payload_ctx_t invalid = {0};
       turbo_flow_publish_batch_config_t batch = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
       turbo_flow_t *flow = turbo_flow_create();
@@ -3478,13 +3469,13 @@ suite("Turbo Flow") {
       batch.prepare = batch_prepare_invalid_payload;
       batch.ctx = &invalid;
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", batch_publish_probe_stage, &sink,
                                                 NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish_batch(flow, "input", &batch, &published), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish_batch(flow, "input", &batch, &published), SALTS_EINVAL);
       check_equal(published, 0u);
       check_equal(invalid.calls, 1u);
       check_equal(sink.calls, 0u);
@@ -3507,22 +3498,22 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       atomic_init(&completion.called, 0);
-      atomic_init(&completion.last_status, TURBO_EBUSY);
+      atomic_init(&completion.last_status, SALTS_EBUSY);
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
       msg.buffer = mem_wrap_external(backing, sizeof(backing) - 1u, NULL, NULL);
       check_not_null(msg.buffer);
       msg.payload = vstr_from_buf(outside, sizeof(outside) - 1u);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish_async(flow, "input", &msg, async_publish_complete, &completion),
-                   TURBO_EINVAL);
+                   SALTS_EINVAL);
       check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 0);
 
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
     }
@@ -3544,10 +3535,10 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       mem_buffer_t *buffer = mem_wrap_external(raw, sizeof(raw) - 1, NULL, NULL);
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t enrich_ctx = {&trace, 1, TURBO_OK};
-      publish_stage_ctx_t persist_ctx = {&trace, 2, TURBO_OK};
-      publish_stage_ctx_t parse_ctx = {&trace, 3, TURBO_OK};
-      publish_stage_ctx_t sink_ctx = {&trace, 4, TURBO_OK};
+      publish_stage_ctx_t enrich_ctx = {&trace, 1, SALTS_OK};
+      publish_stage_ctx_t persist_ctx = {&trace, 2, SALTS_OK};
+      publish_stage_ctx_t parse_ctx = {&trace, 3, SALTS_OK};
+      publish_stage_ctx_t sink_ctx = {&trace, 4, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
@@ -3556,16 +3547,16 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, worker_src, strlen(worker_src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, worker_src, strlen(worker_src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "enrich", record_stage, &enrich_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(trace.count, 6);
       check_equal(trace.order[0], 1);
       check_equal(trace.order[1], 2);
@@ -3573,30 +3564,30 @@ suite("Turbo Flow") {
       check_equal(trace.order[3], 2);
       check_equal(trace.order[4], 1);
       check_equal(trace.order[5], 2);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       trace.count = 0;
-      check_equal(turbo_flow_parse_string(flow, thread_src, strlen(thread_src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, thread_src, strlen(thread_src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 3);
       check_equal(trace.order[1], 4);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       trace.count = 0;
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 3);
       check_equal(trace.order[1], 4);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -3622,26 +3613,26 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "async", coro_check_stage, &async_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(async_ctx.entered, 2);
       check_equal(async_ctx.resumed, 2);
       check_equal(sink_ctx.called, 2);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(async_ctx.entered, 3);
       check_equal(async_ctx.resumed, 3);
       check_equal(sink_ctx.called, 3);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -3664,8 +3655,8 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       mem_buffer_t *buffer = mem_wrap_external(raw, sizeof(raw) - 1, NULL, NULL);
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t parse_ctx = {&trace, 1, TURBO_OK};
-      publish_stage_ctx_t sink_ctx = {&trace, 2, TURBO_OK};
+      publish_stage_ctx_t parse_ctx = {&trace, 1, SALTS_OK};
+      publish_stage_ctx_t sink_ctx = {&trace, 2, SALTS_OK};
       coro_check_ctx_t async_ctx = {0, 0};
       payload_check_ctx_t coro_sink_ctx = {"abc", 0};
       turbo_flow_t *flow = turbo_flow_create();
@@ -3676,33 +3667,33 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, thread_src, strlen(thread_src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, thread_src, strlen(thread_src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 1);
       check_equal(trace.order[1], 2);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, coro_src, strlen(coro_src)), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, coro_src, strlen(coro_src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "async", coro_check_stage, &async_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &coro_sink_ctx, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(async_ctx.entered, 1);
       check_equal(async_ctx.resumed, 1);
       check_equal(coro_sink_ctx.called, 1);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -3728,22 +3719,22 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "async", coro_wait_once_stage, &async_ctx, NULL),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_ENOTSUP);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_ENOTSUP);
       check_contains(turbo_flow_last_error(flow)->message, "suspended");
       check_equal(sink_ctx.called, 0);
 
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(async_ctx.calls, 2);
       check_equal(sink_ctx.called, 1);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -3770,19 +3761,19 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
       check_equal(mem_buffer_ref_count(buffer), 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "transform", replace_payload_stage,
                                                 &transform_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(transform_ctx.called, 1);
       check_equal(sink_ctx.called, 1);
       check_equal(mem_buffer_ref_count(buffer), 1);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -3796,7 +3787,7 @@ suite("Turbo Flow") {
                                "}\n";
       worker_probe_ctx_t probe;
       worker_submit_ctx_t submits[2];
-      turbo_thread_t threads[2] = {0};
+      salts_thread_t threads[2] = {0};
       turbo_flow_t *flow = turbo_flow_create();
       flow_worker_pool_adapter_t *adapter;
       uint32_t stage_index;
@@ -3806,12 +3797,12 @@ suite("Turbo Flow") {
       atomic_init(&probe.calls, 0);
       atomic_init(&probe.ran_off_submitter, 0);
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "transform", worker_probe_stage, &probe, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
 
       stage_index = (uint32_t)turbo_flow_find_stage(flow, "transform");
       adapter = flow_worker_pool_adapter_for_stage(flow, stage_index);
@@ -3821,18 +3812,18 @@ suite("Turbo Flow") {
       check_equal(disruptor_capacity(adapter->ring), 64);
       for (size_t i = 0; i < 2; ++i) {
         submits[i].adapter = adapter;
-        atomic_init(&submits[i].result, TURBO_EALREADY);
-        check_equal(turbo_thread_create(&threads[i], worker_submit_thread, &submits[i]), TURBO_OK);
+        atomic_init(&submits[i].result, SALTS_EALREADY);
+        check_equal(salts_thread_create(&threads[i], worker_submit_thread, &submits[i]), SALTS_OK);
       }
       for (size_t i = 0; i < 2; ++i) {
-        check_equal(turbo_thread_join(&threads[i]), TURBO_OK);
-        check_equal(atomic_load_explicit(&submits[i].result, memory_order_acquire), TURBO_OK);
+        check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+        check_equal(atomic_load_explicit(&submits[i].result, memory_order_acquire), SALTS_OK);
       }
 
       check_equal(atomic_load_explicit(&probe.calls, memory_order_acquire), 2);
       check_equal(atomic_load_explicit(&probe.ran_off_submitter, memory_order_acquire), 1);
       check_greater_equal(atomic_load_explicit(&probe.peak, memory_order_acquire), 2);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -3844,7 +3835,7 @@ suite("Turbo Flow") {
                                "}\n";
       worker_probe_ctx_t probe;
       concurrent_publish_t publishes[2];
-      turbo_thread_t threads[2] = {0};
+      salts_thread_t threads[2] = {0};
       atomic_int ready;
       atomic_int go;
       turbo_flow_t *flow = turbo_flow_create();
@@ -3856,12 +3847,12 @@ suite("Turbo Flow") {
       atomic_init(&ready, 0);
       atomic_init(&go, 0);
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "transform", worker_probe_stage, &probe, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
 
       for (size_t i = 0; i < 2; ++i) {
         memset(&publishes[i], 0, sizeof(publishes[i]));
@@ -3870,20 +3861,20 @@ suite("Turbo Flow") {
         publishes[i].msg_id = i + 1u;
         publishes[i].ready = &ready;
         publishes[i].go = &go;
-        atomic_init(&publishes[i].result, TURBO_EBUSY);
-        check_equal(turbo_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
-                     TURBO_OK);
+        atomic_init(&publishes[i].result, SALTS_EBUSY);
+        check_equal(salts_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
+                     SALTS_OK);
       }
       while (atomic_load_explicit(&ready, memory_order_acquire) != 2)
-        turbo_thread_yield();
+        salts_thread_yield();
       atomic_store_explicit(&go, 1, memory_order_release);
       for (size_t i = 0; i < 2; ++i) {
-        check_equal(turbo_thread_join(&threads[i]), TURBO_OK);
-        check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), TURBO_OK);
-        check_equal(publishes[i].error_code, TURBO_OK);
+        check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+        check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), SALTS_OK);
+        check_equal(publishes[i].error_code, SALTS_OK);
       }
       check_greater_equal(atomic_load_explicit(&probe.peak, memory_order_acquire), 2);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -3896,7 +3887,7 @@ suite("Turbo Flow") {
       enum { PRODUCERS = 8 };
       worker_probe_ctx_t probe;
       concurrent_publish_t publishes[PRODUCERS];
-      turbo_thread_t threads[PRODUCERS] = {0};
+      salts_thread_t threads[PRODUCERS] = {0};
       atomic_int ready;
       atomic_int go;
       turbo_flow_t *flow = turbo_flow_create();
@@ -3908,12 +3899,12 @@ suite("Turbo Flow") {
       atomic_init(&ready, 0);
       atomic_init(&go, 0);
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "transform", worker_probe_stage, &probe, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
 
       for (size_t i = 0; i < PRODUCERS; ++i) {
         memset(&publishes[i], 0, sizeof(publishes[i]));
@@ -3922,19 +3913,19 @@ suite("Turbo Flow") {
         publishes[i].msg_id = i + 1u;
         publishes[i].ready = &ready;
         publishes[i].go = &go;
-        atomic_init(&publishes[i].result, TURBO_EBUSY);
-        check_equal(turbo_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
-                     TURBO_OK);
+        atomic_init(&publishes[i].result, SALTS_EBUSY);
+        check_equal(salts_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
+                     SALTS_OK);
       }
       while (atomic_load_explicit(&ready, memory_order_acquire) != PRODUCERS)
-        turbo_thread_yield();
+        salts_thread_yield();
       atomic_store_explicit(&go, 1, memory_order_release);
       for (size_t i = 0; i < PRODUCERS; ++i) {
-        check_equal(turbo_thread_join(&threads[i]), TURBO_OK);
-        check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), TURBO_OK);
+        check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+        check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), SALTS_OK);
       }
       check_equal(atomic_load_explicit(&probe.calls, memory_order_acquire), PRODUCERS);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -3946,7 +3937,7 @@ suite("Turbo Flow") {
                                "}\n";
       worker_probe_ctx_t probe;
       concurrent_publish_t publishes[2];
-      turbo_thread_t threads[2] = {0};
+      salts_thread_t threads[2] = {0};
       atomic_int ready;
       atomic_int go;
       turbo_flow_t *flow = turbo_flow_create();
@@ -3960,12 +3951,12 @@ suite("Turbo Flow") {
       atomic_init(&ready, 0);
       atomic_init(&go, 0);
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "transform", worker_probe_stage, &probe, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
 
       stage_index = (uint32_t)turbo_flow_find_stage(flow, "transform");
       adapter = NULL;
@@ -3981,26 +3972,26 @@ suite("Turbo Flow") {
       check_equal(adapter->lanes, 2);
       for (size_t i = 0; i < 2; ++i) {
         check_not_null(adapter->pools[i]);
-        check_equal(turbo_coro_pool_capacity(adapter->pools[i]), 8);
+        check_equal(salts_coro_pool_capacity(adapter->pools[i]), 8);
         memset(&publishes[i], 0, sizeof(publishes[i]));
         publishes[i].flow = flow;
         publishes[i].source_name = "input";
         publishes[i].msg_id = i + 1u;
         publishes[i].ready = &ready;
         publishes[i].go = &go;
-        atomic_init(&publishes[i].result, TURBO_EBUSY);
-        check_equal(turbo_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
-                     TURBO_OK);
+        atomic_init(&publishes[i].result, SALTS_EBUSY);
+        check_equal(salts_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
+                     SALTS_OK);
       }
       while (atomic_load_explicit(&ready, memory_order_acquire) != 2)
-        turbo_thread_yield();
+        salts_thread_yield();
       atomic_store_explicit(&go, 1, memory_order_release);
       for (size_t i = 0; i < 2; ++i) {
-        check_equal(turbo_thread_join(&threads[i]), TURBO_OK);
-        check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), TURBO_OK);
+        check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+        check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), SALTS_OK);
       }
       check_greater_equal(atomic_load_explicit(&probe.peak, memory_order_acquire), 2);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -4011,7 +4002,7 @@ suite("Turbo Flow") {
                                "  input -> transform\n"
                                "}\n";
       concurrent_publish_t publishes[2];
-      turbo_thread_t threads[2] = {0};
+      salts_thread_t threads[2] = {0};
       atomic_int ready;
       atomic_int go;
       turbo_flow_t *flow = turbo_flow_create();
@@ -4019,12 +4010,12 @@ suite("Turbo Flow") {
       atomic_init(&ready, 0);
       atomic_init(&go, 0);
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "transform", fail_by_message_id_stage, NULL, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       for (size_t i = 0; i < 2; ++i) {
         memset(&publishes[i], 0, sizeof(publishes[i]));
         publishes[i].flow = flow;
@@ -4032,22 +4023,22 @@ suite("Turbo Flow") {
         publishes[i].msg_id = i + 1u;
         publishes[i].ready = &ready;
         publishes[i].go = &go;
-        atomic_init(&publishes[i].result, TURBO_EBUSY);
-        check_equal(turbo_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
-                     TURBO_OK);
+        atomic_init(&publishes[i].result, SALTS_EBUSY);
+        check_equal(salts_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
+                     SALTS_OK);
       }
       while (atomic_load_explicit(&ready, memory_order_acquire) != 2)
-        turbo_thread_yield();
+        salts_thread_yield();
       atomic_store_explicit(&go, 1, memory_order_release);
       for (size_t i = 0; i < 2; ++i)
-        check_equal(turbo_thread_join(&threads[i]), TURBO_OK);
-      check_equal(atomic_load_explicit(&publishes[0].result, memory_order_acquire), TURBO_EIO);
-      check_equal(publishes[0].error_code, TURBO_EIO);
-      check_equal(atomic_load_explicit(&publishes[1].result, memory_order_acquire), TURBO_EPROTO);
-      check_equal(publishes[1].error_code, TURBO_EPROTO);
+        check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+      check_equal(atomic_load_explicit(&publishes[0].result, memory_order_acquire), SALTS_EIO);
+      check_equal(publishes[0].error_code, SALTS_EIO);
+      check_equal(atomic_load_explicit(&publishes[1].result, memory_order_acquire), SALTS_EPROTO);
+      check_equal(publishes[1].error_code, SALTS_EPROTO);
       check_contains(publishes[0].error_message, "stage callback");
       check_contains(publishes[1].error_message, "stage callback");
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -4060,8 +4051,8 @@ suite("Turbo Flow") {
       execution_probe_ctx_t probe;
       concurrent_publish_t publish;
       stop_flow_ctx_t stop;
-      turbo_thread_t publish_thread = NULL;
-      turbo_thread_t stop_thread = NULL;
+      salts_thread_t publish_thread = NULL;
+      salts_thread_t stop_thread = NULL;
       atomic_int ready;
       atomic_int go;
       turbo_flow_msg_t rejected;
@@ -4075,41 +4066,41 @@ suite("Turbo Flow") {
       atomic_init(&ready, 0);
       atomic_init(&go, 1);
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "transform", execution_yield_stage, &probe, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
 
       memset(&publish, 0, sizeof(publish));
       publish.flow = flow;
       publish.source_name = "input";
       publish.ready = &ready;
       publish.go = &go;
-      atomic_init(&publish.result, TURBO_EBUSY);
-      check_equal(turbo_thread_create(&publish_thread, concurrent_publish_thread, &publish),
-                   TURBO_OK);
+      atomic_init(&publish.result, SALTS_EBUSY);
+      check_equal(salts_thread_create(&publish_thread, concurrent_publish_thread, &publish),
+                   SALTS_OK);
       while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
-        turbo_thread_yield();
+        salts_thread_yield();
 
       stop.flow = flow;
-      atomic_init(&stop.result, TURBO_EBUSY);
-      check_equal(turbo_thread_create(&stop_thread, stop_flow_thread, &stop), TURBO_OK);
+      atomic_init(&stop.result, SALTS_EBUSY);
+      check_equal(salts_thread_create(&stop_thread, stop_flow_thread, &stop), SALTS_OK);
       while (accepting) {
-        turbo_mutex_lock(&flow->runtime_mutex);
+        salts_mutex_lock(&flow->runtime_mutex);
         accepting = flow->admission_state == FLOW_ADMISSION_OPEN;
-        turbo_mutex_unlock(&flow->runtime_mutex);
-        turbo_thread_yield();
+        salts_mutex_unlock(&flow->runtime_mutex);
+        salts_thread_yield();
       }
       turbo_flow_msg_init(&rejected);
-      check_equal(turbo_flow_publish(flow, "input", &rejected), TURBO_ESHUTDOWN);
+      check_equal(turbo_flow_publish(flow, "input", &rejected), SALTS_ESHUTDOWN);
       turbo_flow_msg_cleanup(&rejected);
       atomic_store_explicit(&probe.allow_exit, 1, memory_order_release);
-      check_equal(turbo_thread_join(&publish_thread), TURBO_OK);
-      check_equal(turbo_thread_join(&stop_thread), TURBO_OK);
-      check_equal(atomic_load_explicit(&publish.result, memory_order_acquire), TURBO_OK);
-      check_equal(atomic_load_explicit(&stop.result, memory_order_acquire), TURBO_OK);
+      check_equal(salts_thread_join(&publish_thread), SALTS_OK);
+      check_equal(salts_thread_join(&stop_thread), SALTS_OK);
+      check_equal(atomic_load_explicit(&publish.result, memory_order_acquire), SALTS_OK);
+      check_equal(atomic_load_explicit(&stop.result, memory_order_acquire), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -4126,19 +4117,19 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       atomic_init(&completion.called, 0);
-      atomic_init(&completion.last_status, TURBO_EBUSY);
+      atomic_init(&completion.last_status, SALTS_EBUSY);
       atomic_init(&gate.entered, 0);
       atomic_init(&gate.allow_exit, 0);
       atomic_init(&gate.calls, 0);
       atomic_init(&gate.ran_off_submitter, 0);
       check_not_null(flow);
-      check_equal(turbo_flow_configure_async_ingress(flow, &ingress), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "transform", async_gate_stage, &gate, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_configure_async_ingress(flow, &ingress), TURBO_EBUSY);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_EBUSY);
 
       turbo_flow_msg_init(&msg);
       msg.owned_payload = tstr_dup("async-owned");
@@ -4146,12 +4137,12 @@ suite("Turbo Flow") {
       worker_submitter_thread = 1;
       check_equal(
           turbo_flow_publish_async(flow, "input", &msg, async_publish_complete, &completion),
-          TURBO_OK);
+          SALTS_OK);
       worker_submitter_thread = 0;
       turbo_flow_msg_cleanup(&msg);
       for (int wait = 0; wait < 2000 && !atomic_load_explicit(&gate.entered, memory_order_acquire);
            ++wait) {
-        turbo_sleep_ms(1);
+        salts_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
       check_equal(atomic_load_explicit(&gate.ran_off_submitter, memory_order_acquire), 1);
@@ -4159,12 +4150,12 @@ suite("Turbo Flow") {
       atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
       for (int wait = 0;
            wait < 2000 && !atomic_load_explicit(&completion.called, memory_order_acquire); ++wait) {
-        turbo_sleep_ms(1);
+        salts_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 1);
-      check_equal(atomic_load_explicit(&completion.last_status, memory_order_acquire), TURBO_OK);
+      check_equal(atomic_load_explicit(&completion.last_status, memory_order_acquire), SALTS_OK);
       check_equal(atomic_load_explicit(&gate.calls, memory_order_acquire), 1);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -4180,7 +4171,7 @@ suite("Turbo Flow") {
       check_not_null(flow);
       check_equal(turbo_flow_configure_async_ingress(
                       flow, (const turbo_flow_async_ingress_config_t *)&legacy),
-                  TURBO_OK);
+                  SALTS_OK);
       check_equal(flow->async_ingress_config.workers, 2u);
       check_equal(flow->async_ingress_config.queue_capacity, 7u);
       check_equal(flow->async_ingress_config.max_message_bytes,
@@ -4211,18 +4202,18 @@ suite("Turbo Flow") {
       ingress.max_message_bytes = 8u;
       ingress.max_inflight_bytes = 10u;
       atomic_init(&completion.called, 0);
-      atomic_init(&completion.last_status, TURBO_EBUSY);
+      atomic_init(&completion.last_status, SALTS_EBUSY);
       atomic_init(&gate.entered, 0);
       atomic_init(&gate.allow_exit, 0);
       atomic_init(&gate.calls, 0);
       atomic_init(&gate.ran_off_submitter, 0);
       check_not_null(flow);
-      check_equal(turbo_flow_configure_async_ingress(flow, &ingress), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "transform", async_gate_stage, &gate, NULL),
-                  TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                  SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
 
       turbo_flow_msg_init(&first);
       first.owned_payload = tstr_dup("12345678");
@@ -4240,43 +4231,43 @@ suite("Turbo Flow") {
 
       check_equal(
           turbo_flow_publish_async(flow, "input", &first, async_publish_complete, &completion),
-          TURBO_OK);
+          SALTS_OK);
       for (int wait = 0; wait < 2000 && !atomic_load_explicit(&gate.entered, memory_order_acquire);
            ++wait) {
-        turbo_sleep_ms(1);
+        salts_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
       check_equal(
           turbo_flow_publish_async(flow, "input", &second, async_publish_complete, &completion),
-          TURBO_ENOSPC);
+          SALTS_ENOSPC);
       check_equal(
           turbo_flow_publish_async(flow, "input", &oversized, async_publish_complete, &completion),
-          TURBO_ENOSPC);
+          SALTS_ENOSPC);
       check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 0);
 
       atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
       for (int wait = 0;
            wait < 2000 && atomic_load_explicit(&completion.called, memory_order_acquire) < 1;
            ++wait) {
-        turbo_sleep_ms(1);
+        salts_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 1);
       check_equal(flow->async_ingress_inflight_bytes, 0u);
       check_equal(turbo_flow_publish_async(flow, "input", &pinned_buffer,
                                            async_publish_complete, &completion),
-                  TURBO_ENOSPC);
+                  SALTS_ENOSPC);
       check_equal(
           turbo_flow_publish_async(flow, "input", &second, async_publish_complete, &completion),
-          TURBO_OK);
+          SALTS_OK);
       for (int wait = 0;
            wait < 2000 && atomic_load_explicit(&completion.called, memory_order_acquire) < 2;
            ++wait) {
-        turbo_sleep_ms(1);
+        salts_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 2);
       check_equal(flow->async_ingress_inflight_bytes, 0u);
 
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_msg_cleanup(&pinned_buffer);
       turbo_flow_msg_cleanup(&oversized);
       turbo_flow_msg_cleanup(&second);
@@ -4294,7 +4285,7 @@ suite("Turbo Flow") {
       async_completion_ctx_t completion;
       async_gate_ctx_t gate;
       stop_flow_ctx_t stop;
-      turbo_thread_t stop_thread = NULL;
+      salts_thread_t stop_thread = NULL;
       turbo_flow_msg_t msg;
       turbo_flow_t *flow = turbo_flow_create();
       int accepting = 1;
@@ -4302,52 +4293,52 @@ suite("Turbo Flow") {
       ingress.workers = 1u;
       ingress.queue_capacity = 1u;
       atomic_init(&completion.called, 0);
-      atomic_init(&completion.last_status, TURBO_EBUSY);
+      atomic_init(&completion.last_status, SALTS_EBUSY);
       atomic_init(&gate.entered, 0);
       atomic_init(&gate.allow_exit, 0);
       atomic_init(&gate.calls, 0);
       atomic_init(&gate.ran_off_submitter, 0);
       check_not_null(flow);
-      check_equal(turbo_flow_configure_async_ingress(flow, &ingress), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "transform", async_gate_stage, &gate, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_msg_init(&msg);
 
       check_equal(
           turbo_flow_publish_async(flow, "input", &msg, async_publish_complete, &completion),
-          TURBO_OK);
+          SALTS_OK);
       for (int wait = 0; wait < 2000 && !atomic_load_explicit(&gate.entered, memory_order_acquire);
            ++wait) {
-        turbo_sleep_ms(1);
+        salts_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
       check_equal(
           turbo_flow_publish_async(flow, "input", &msg, async_publish_complete, &completion),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(
           turbo_flow_publish_async(flow, "input", &msg, async_publish_complete, &completion),
-          TURBO_ENOSPC);
+          SALTS_ENOSPC);
 
       stop.flow = flow;
-      atomic_init(&stop.result, TURBO_EBUSY);
-      check_equal(turbo_thread_create(&stop_thread, stop_flow_thread, &stop), TURBO_OK);
+      atomic_init(&stop.result, SALTS_EBUSY);
+      check_equal(salts_thread_create(&stop_thread, stop_flow_thread, &stop), SALTS_OK);
       while (accepting) {
-        turbo_mutex_lock(&flow->runtime_mutex);
+        salts_mutex_lock(&flow->runtime_mutex);
         accepting = flow->admission_state == FLOW_ADMISSION_OPEN;
-        turbo_mutex_unlock(&flow->runtime_mutex);
-        turbo_thread_yield();
+        salts_mutex_unlock(&flow->runtime_mutex);
+        salts_thread_yield();
       }
       check_equal(
           turbo_flow_publish_async(flow, "input", &msg, async_publish_complete, &completion),
-          TURBO_ESHUTDOWN);
+          SALTS_ESHUTDOWN);
       atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
-      check_equal(turbo_thread_join(&stop_thread), TURBO_OK);
-      check_equal(atomic_load_explicit(&stop.result, memory_order_acquire), TURBO_OK);
+      check_equal(salts_thread_join(&stop_thread), SALTS_OK);
+      check_equal(atomic_load_explicit(&stop.result, memory_order_acquire), SALTS_OK);
       check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 2);
-      check_equal(atomic_load_explicit(&completion.last_status, memory_order_acquire), TURBO_OK);
+      check_equal(atomic_load_explicit(&completion.last_status, memory_order_acquire), SALTS_OK);
       check_equal(atomic_load_explicit(&gate.calls, memory_order_acquire), 2);
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -4363,21 +4354,21 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_pause(flow), TURBO_OK);
-      check_equal(turbo_flow_pause(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_pause(flow), SALTS_OK);
+      check_equal(turbo_flow_pause(flow), SALTS_OK);
       turbo_flow_msg_init(&msg);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_ESHUTDOWN);
-      check_equal(turbo_flow_resume(flow), TURBO_OK);
-      check_equal(turbo_flow_resume(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-      check_equal(turbo_flow_pause(flow), TURBO_OK);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
-      check_equal(turbo_flow_resume(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_ESHUTDOWN);
+      check_equal(turbo_flow_resume(flow), SALTS_OK);
+      check_equal(turbo_flow_resume(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_pause(flow), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(turbo_flow_resume(flow), SALTS_EINVAL);
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
     }
@@ -4393,38 +4384,38 @@ suite("Turbo Flow") {
       turbo_flow_pool_snapshot_t pool;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_pool_count(flow), 1);
-      check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), TURBO_OK);
+      check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), SALTS_OK);
       check_equal(pool.kind, TURBO_FLOW_POOL_DISRUPTOR);
       check_equal(pool.state, TURBO_FLOW_POOL_RUNNING);
       check_equal(pool.parallelism, 4);
       check_equal(pool.queue_capacity, 16);
       check_equal(pool.queued, 0);
       check_equal(pool.active, 0);
-      turbo_sleep_ms(20);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
-      check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), TURBO_OK);
+      salts_sleep_ms(20);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), SALTS_OK);
       check_equal(pool.state, TURBO_FLOW_POOL_STOPPED);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_pool_count(flow), 1);
-      check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), TURBO_OK);
+      check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), SALTS_OK);
       check_equal(pool.submitted, 0);
       check_equal(pool.completed, 0);
       turbo_flow_msg_init(&msg);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-      check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), SALTS_OK);
       check_equal(pool.submitted, 1);
       check_equal(pool.started, 1);
       check_equal(pool.completed, 1);
       check_equal(pool.failed, 0);
       check_equal(pool.queued, 0);
       check_equal(pool.active, 0);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
     }
@@ -4440,15 +4431,15 @@ suite("Turbo Flow") {
       uint64_t started_generation;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       status.size = sizeof(status) - 1u;
-      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &status), TURBO_EINVAL);
+      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &status), SALTS_EINVAL);
       status = (turbo_flow_pool_resource_status_t)TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
-      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &status), TURBO_OK);
+      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &status), SALTS_OK);
       check_equal(status.resource_kind, TURBO_FLOW_RESOURCE_POOL);
       check_equal(status.uid, "pool:2:transform");
       check_equal(status.owner_name, "transform");
@@ -4466,23 +4457,23 @@ suite("Turbo Flow") {
       check_equal(status.conditions[3].status, TURBO_FLOW_CONDITION_FALSE);
       check_equal(status.conditions[3].reason, TURBO_FLOW_RESOURCE_REASON_CAPACITY_AVAILABLE);
 
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       status = (turbo_flow_pool_resource_status_t)TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
-      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &status), TURBO_OK);
+      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &status), SALTS_OK);
       check_equal(status.generation, started_generation);
       check_equal(status.conditions[0].status, TURBO_FLOW_CONDITION_FALSE);
       check_equal(status.conditions[0].reason, TURBO_FLOW_RESOURCE_REASON_NOT_RUNNING);
       check_equal(status.conditions[1].status, TURBO_FLOW_CONDITION_FALSE);
       check_equal(status.conditions[2].status, TURBO_FLOW_CONDITION_TRUE);
 
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       status = (turbo_flow_pool_resource_status_t)TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
-      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &status), TURBO_OK);
+      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &status), SALTS_OK);
       check_equal(status.uid, "pool:2:transform");
       check_equal(status.generation, started_generation + 1u);
       check_equal(status.observed_generation, status.generation);
       check_equal(status.conditions[0].status, TURBO_FLOW_CONDITION_TRUE);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -4498,12 +4489,12 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &before), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &before), SALTS_OK);
       memset(&command, 0, sizeof(command));
       command.size = sizeof(command);
       command.stage_name = "transform";
@@ -4511,20 +4502,20 @@ suite("Turbo Flow") {
       command.parallelism = 3u;
       command.drain_timeout_ms = UINT64_MAX;
       command.expected_generation = before.observed_generation;
-      check_equal(turbo_flow_resize_pool(flow, &command), TURBO_OK);
-      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &after), TURBO_OK);
+      check_equal(turbo_flow_resize_pool(flow, &command), SALTS_OK);
+      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &after), SALTS_OK);
       check_equal(after.uid, before.uid);
       check_equal(after.generation, before.generation + 1u);
       check_equal(after.snapshot.parallelism, 3u);
 
       command.parallelism = 4u;
-      check_equal(turbo_flow_resize_pool(flow, &command), TURBO_EBUSY);
+      check_equal(turbo_flow_resize_pool(flow, &command), SALTS_EBUSY);
       check_contains(turbo_flow_last_error(flow)->message, "generation conflict");
       after = (turbo_flow_pool_resource_status_t)TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
-      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &after), TURBO_OK);
+      check_equal(turbo_flow_pool_resource_status_at(flow, 0, &after), SALTS_OK);
       check_equal(after.snapshot.parallelism, 3u);
       check_equal(after.generation, before.generation + 1u);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -4538,22 +4529,22 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       memset(&command, 0, sizeof(command));
       command.size = offsetof(turbo_flow_pool_resize_command_t, expected_generation);
       command.stage_name = "transform";
       command.kind = TURBO_FLOW_POOL_DISRUPTOR;
       command.parallelism = 3u;
       command.drain_timeout_ms = UINT64_MAX;
-      check_equal(turbo_flow_resize_pool(flow, &command), TURBO_EINVAL);
+      check_equal(turbo_flow_resize_pool(flow, &command), SALTS_EINVAL);
       command.size = sizeof(command);
       command.expected_generation = 0u;
-      check_equal(turbo_flow_resize_pool(flow, &command), TURBO_EINVAL);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_resize_pool(flow, &command), SALTS_EINVAL);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -4585,38 +4576,38 @@ suite("Turbo Flow") {
         turbo_flow_t *flow = turbo_flow_create();
 
         check_not_null(flow);
-        check_equal(turbo_flow_parse_string(flow, sources[i], strlen(sources[i])), TURBO_OK);
+        check_equal(turbo_flow_parse_string(flow, sources[i], strlen(sources[i])), SALTS_OK);
         check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                     TURBO_OK);
-        check_equal(turbo_flow_compile(flow), TURBO_OK);
-        check_equal(turbo_flow_start(flow), TURBO_OK);
+                     SALTS_OK);
+        check_equal(turbo_flow_compile(flow), SALTS_OK);
+        check_equal(turbo_flow_start(flow), SALTS_OK);
         memset(&command, 0, sizeof(command));
         command.size = sizeof(command);
         command.stage_name = "transform";
         command.kind = kinds[i];
         command.parallelism = 3;
         command.drain_timeout_ms = UINT64_MAX;
-        check_equal(turbo_flow_pool_resource_status_at(flow, 0u, &status), TURBO_OK);
+        check_equal(turbo_flow_pool_resource_status_at(flow, 0u, &status), SALTS_OK);
         command.expected_generation = status.observed_generation;
-        if (i == 0) check_equal(turbo_flow_pause(flow), TURBO_OK);
-        check_equal(turbo_flow_resize_pool(flow, &command), TURBO_OK);
+        if (i == 0) check_equal(turbo_flow_pause(flow), SALTS_OK);
+        check_equal(turbo_flow_resize_pool(flow, &command), SALTS_OK);
         check_equal(turbo_flow_pool_count(flow), 1);
-        check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), TURBO_OK);
+        check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), SALTS_OK);
         check_equal(pool.kind, kinds[i]);
         check_equal(pool.parallelism, 3);
         check_equal(pool.state, TURBO_FLOW_POOL_RUNNING);
         check_equal(pool.submitted, 0);
         turbo_flow_msg_init(&msg);
         if (i == 0) {
-          check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_ESHUTDOWN);
-          check_equal(turbo_flow_resume(flow), TURBO_OK);
+          check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_ESHUTDOWN);
+          check_equal(turbo_flow_resume(flow), SALTS_OK);
         }
-        check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-        check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), TURBO_OK);
+        check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+        check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), SALTS_OK);
         check_equal(pool.submitted, 1);
         check_equal(pool.completed, 1);
-        check_equal(turbo_flow_stop(flow), TURBO_OK);
-        check_equal(turbo_flow_resize_pool(flow, &command), TURBO_EINVAL);
+        check_equal(turbo_flow_stop(flow), SALTS_OK);
+        check_equal(turbo_flow_resize_pool(flow, &command), SALTS_EINVAL);
         turbo_flow_msg_cleanup(&msg);
         turbo_flow_destroy(flow);
       }
@@ -4630,7 +4621,7 @@ suite("Turbo Flow") {
                                "}\n";
       execution_probe_ctx_t probe;
       concurrent_publish_t publish;
-      turbo_thread_t publish_thread = NULL;
+      salts_thread_t publish_thread = NULL;
       atomic_int ready;
       atomic_int go;
       turbo_flow_pool_resize_command_t command;
@@ -4645,21 +4636,21 @@ suite("Turbo Flow") {
       atomic_init(&ready, 0);
       atomic_init(&go, 1);
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "transform", execution_yield_stage, &probe, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       memset(&command, 0, sizeof(command));
       command.size = sizeof(command);
       command.stage_name = "missing";
       command.kind = TURBO_FLOW_POOL_DISRUPTOR;
       command.parallelism = 2;
       command.expected_generation = 1u;
-      check_equal(turbo_flow_resize_pool(flow, &command), TURBO_ENOENT);
+      check_equal(turbo_flow_resize_pool(flow, &command), SALTS_ENOENT);
       command.stage_name = "transform";
-      check_equal(turbo_flow_pool_resource_status_at(flow, 0u, &status), TURBO_OK);
+      check_equal(turbo_flow_pool_resource_status_at(flow, 0u, &status), SALTS_OK);
       command.expected_generation = status.observed_generation;
 
       memset(&publish, 0, sizeof(publish));
@@ -4667,19 +4658,19 @@ suite("Turbo Flow") {
       publish.source_name = "input";
       publish.ready = &ready;
       publish.go = &go;
-      atomic_init(&publish.result, TURBO_EBUSY);
-      check_equal(turbo_thread_create(&publish_thread, concurrent_publish_thread, &publish),
-                   TURBO_OK);
+      atomic_init(&publish.result, SALTS_EBUSY);
+      check_equal(salts_thread_create(&publish_thread, concurrent_publish_thread, &publish),
+                   SALTS_OK);
       while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
-        turbo_thread_yield();
-      check_equal(turbo_flow_resize_pool(flow, &command), TURBO_ETIMEDOUT);
+        salts_thread_yield();
+      check_equal(turbo_flow_resize_pool(flow, &command), SALTS_ETIMEDOUT);
       turbo_flow_msg_init(&rejected);
-      check_equal(turbo_flow_publish(flow, "input", &rejected), TURBO_ESHUTDOWN);
+      check_equal(turbo_flow_publish(flow, "input", &rejected), SALTS_ESHUTDOWN);
       atomic_store_explicit(&probe.allow_exit, 1, memory_order_release);
-      check_equal(turbo_thread_join(&publish_thread), TURBO_OK);
-      check_equal(atomic_load_explicit(&publish.result, memory_order_acquire), TURBO_OK);
-      check_equal(turbo_flow_resume(flow), TURBO_OK);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(salts_thread_join(&publish_thread), SALTS_OK);
+      check_equal(atomic_load_explicit(&publish.result, memory_order_acquire), SALTS_OK);
+      check_equal(turbo_flow_resume(flow), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_msg_cleanup(&rejected);
       turbo_flow_destroy(flow);
     }
@@ -4692,7 +4683,7 @@ suite("Turbo Flow") {
                                "}\n";
       execution_probe_ctx_t probe;
       concurrent_publish_t publish;
-      turbo_thread_t publish_thread = NULL;
+      salts_thread_t publish_thread = NULL;
       atomic_int ready;
       atomic_int go;
       turbo_flow_msg_t rejected;
@@ -4705,34 +4696,34 @@ suite("Turbo Flow") {
       atomic_init(&ready, 0);
       atomic_init(&go, 1);
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "transform", execution_yield_stage, &probe, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
 
       memset(&publish, 0, sizeof(publish));
       publish.flow = flow;
       publish.source_name = "input";
       publish.ready = &ready;
       publish.go = &go;
-      atomic_init(&publish.result, TURBO_EBUSY);
-      check_equal(turbo_thread_create(&publish_thread, concurrent_publish_thread, &publish),
-                   TURBO_OK);
+      atomic_init(&publish.result, SALTS_EBUSY);
+      check_equal(salts_thread_create(&publish_thread, concurrent_publish_thread, &publish),
+                   SALTS_OK);
       while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
-        turbo_thread_yield();
+        salts_thread_yield();
 
-      check_equal(turbo_flow_drain(flow, 0), TURBO_ETIMEDOUT);
+      check_equal(turbo_flow_drain(flow, 0), SALTS_ETIMEDOUT);
       turbo_flow_msg_init(&rejected);
-      check_equal(turbo_flow_publish(flow, "input", &rejected), TURBO_ESHUTDOWN);
+      check_equal(turbo_flow_publish(flow, "input", &rejected), SALTS_ESHUTDOWN);
       atomic_store_explicit(&probe.allow_exit, 1, memory_order_release);
-      check_equal(turbo_thread_join(&publish_thread), TURBO_OK);
-      check_equal(turbo_flow_drain(flow, 100), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &rejected), TURBO_ESHUTDOWN);
-      check_equal(turbo_flow_resume(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &rejected), TURBO_OK);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(salts_thread_join(&publish_thread), SALTS_OK);
+      check_equal(turbo_flow_drain(flow, 100), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &rejected), SALTS_ESHUTDOWN);
+      check_equal(turbo_flow_resume(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &rejected), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&rejected);
       turbo_flow_destroy(flow);
@@ -4745,7 +4736,7 @@ suite("Turbo Flow") {
                                "  input -> transform\n"
                                "}\n";
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t stage_ctx = {&trace, 7, TURBO_EIO};
+      publish_stage_ctx_t stage_ctx = {&trace, 7, SALTS_EIO};
       turbo_flow_t *flow = turbo_flow_create();
       flow_worker_pool_adapter_t *adapter;
       flow_stage_completion_t completion = {0};
@@ -4753,11 +4744,11 @@ suite("Turbo Flow") {
       uint32_t stage_index;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "transform", record_stage, &stage_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
 
       stage_index = (uint32_t)turbo_flow_find_stage(flow, "transform");
       adapter = flow_worker_pool_adapter_for_stage(flow, stage_index);
@@ -4772,30 +4763,30 @@ suite("Turbo Flow") {
       completion.entry.sequence = 1u;
       completion.entry.message_id = msg.id;
       completion.entry.completion_handle = &completion;
-      check_equal(flow_worker_pool_submit(adapter, &msg, &completion), TURBO_EIO);
-      check_equal(completion.status, TURBO_EIO);
+      check_equal(flow_worker_pool_submit(adapter, &msg, &completion), SALTS_EIO);
+      check_equal(completion.status, SALTS_EIO);
       check_less((int)completion.entry.worker_lane, (int)adapter->width);
       check_null(completion.entry.cancel_handle);
       check_equal(trace.count, 1);
 
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       check_null(flow_worker_pool_adapter_for_stage(flow, stage_index));
-      stage_ctx.fail_status = TURBO_OK;
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+      stage_ctx.fail_status = SALTS_OK;
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       adapter = flow_worker_pool_adapter_for_stage(flow, stage_index);
       check_not_null(adapter);
-      check_equal(flow_worker_pool_submit(adapter, &msg, &completion), TURBO_EPROTO);
+      check_equal(flow_worker_pool_submit(adapter, &msg, &completion), SALTS_EPROTO);
       check_equal((const void *)completion.entry.completion_handle, (const void *)&completion);
       check_equal(trace.count, 1);
       completion.entry.runtime_generation = flow->runtime_generation;
       completion.entry.completion_handle = &completion;
-      completion.status = TURBO_OK;
-      check_equal(flow_worker_pool_submit(adapter, &msg, &completion), TURBO_OK);
-      check_equal(completion.status, TURBO_OK);
+      completion.status = SALTS_OK;
+      check_equal(flow_worker_pool_submit(adapter, &msg, &completion), SALTS_OK);
+      check_equal(completion.status, SALTS_OK);
       check_less((int)completion.entry.worker_lane, (int)adapter->width);
       check_null(completion.entry.cancel_handle);
       check_equal(trace.count, 2);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -4827,7 +4818,7 @@ suite("Turbo Flow") {
 
       for (size_t i = 0; i < sizeof(plans) / sizeof(plans[0]); ++i) {
         publish_trace_t trace = {{0}, 0};
-        publish_stage_ctx_t sink_ctx = {&trace, 1, TURBO_OK};
+        publish_stage_ctx_t sink_ctx = {&trace, 1, SALTS_OK};
         turbo_flow_msg_t msg;
         turbo_flow_t *flow = turbo_flow_create();
 
@@ -4835,16 +4826,16 @@ suite("Turbo Flow") {
         turbo_flow_msg_init(&msg);
         msg.id = 100u + i;
         msg.transport_context = &transport_marker;
-        check_equal(turbo_flow_parse_string(flow, plans[i], strlen(plans[i])), TURBO_OK);
+        check_equal(turbo_flow_parse_string(flow, plans[i], strlen(plans[i])), SALTS_OK);
         check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                     TURBO_OK);
-        check_equal(turbo_flow_compile(flow), TURBO_OK);
-        check_equal(turbo_flow_start(flow), TURBO_OK);
-        check_equal(turbo_flow_publish(flow, "input", &msg), i == 0u ? TURBO_OK : TURBO_EINVAL);
+                     SALTS_OK);
+        check_equal(turbo_flow_compile(flow), SALTS_OK);
+        check_equal(turbo_flow_start(flow), SALTS_OK);
+        check_equal(turbo_flow_publish(flow, "input", &msg), i == 0u ? SALTS_OK : SALTS_EINVAL);
         check_equal((const void *)msg.transport_context, (const void *)&transport_marker);
         check_equal(msg.id, 100u + i);
         check_equal(trace.count, i == 0u ? 1u : 0u);
-        check_equal(turbo_flow_stop(flow), TURBO_OK);
+        check_equal(turbo_flow_stop(flow), SALTS_OK);
 
         turbo_flow_msg_cleanup(&msg);
         turbo_flow_destroy(flow);
@@ -4880,7 +4871,7 @@ suite("Turbo Flow") {
 
       for (size_t i = 0; i < sizeof(plans) / sizeof(plans[0]); ++i) {
         publish_trace_t trace = {{0}, 0};
-        publish_stage_ctx_t sink_ctx = {&trace, 1, TURBO_OK};
+        publish_stage_ctx_t sink_ctx = {&trace, 1, SALTS_OK};
         turbo_flow_msg_t msg;
         turbo_flow_t *flow = turbo_flow_create();
 
@@ -4891,16 +4882,16 @@ suite("Turbo Flow") {
         check_not_null(msg.buffer);
         msg.payload = vstr_from_buf(owned.payload, sizeof(owned.payload));
         msg.transport_context = &owned.transport_marker;
-        check_equal(turbo_flow_parse_string(flow, plans[i], strlen(plans[i])), TURBO_OK);
+        check_equal(turbo_flow_parse_string(flow, plans[i], strlen(plans[i])), SALTS_OK);
         check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                     TURBO_OK);
-        check_equal(turbo_flow_compile(flow), TURBO_OK);
-        check_equal(turbo_flow_start(flow), TURBO_OK);
-        check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                     SALTS_OK);
+        check_equal(turbo_flow_compile(flow), SALTS_OK);
+        check_equal(turbo_flow_start(flow), SALTS_OK);
+        check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
         check_equal((const void *)msg.transport_context, (const void *)&owned.transport_marker);
         check_equal(msg.id, 200u + i);
         check_equal(trace.count, 1u);
-        check_equal(turbo_flow_stop(flow), TURBO_OK);
+        check_equal(turbo_flow_stop(flow), SALTS_OK);
 
         turbo_flow_msg_cleanup(&msg);
         turbo_flow_destroy(flow);
@@ -4926,17 +4917,17 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "parse", set_msg_status_stage, &expected_status, NULL),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", check_msg_status_stage,
                                                 &expected_status, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -4953,8 +4944,8 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       mem_buffer_t *buffer = mem_wrap_external(raw, sizeof(raw) - 1, NULL, NULL);
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t parse_ctx = {&trace, 1, TURBO_EPROTO};
-      publish_stage_ctx_t sink_ctx = {&trace, 2, TURBO_OK};
+      publish_stage_ctx_t parse_ctx = {&trace, 1, SALTS_EPROTO};
+      publish_stage_ctx_t sink_ctx = {&trace, 2, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
@@ -4963,27 +4954,27 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EPROTO);
-      check_equal(turbo_flow_last_error(flow)->code, TURBO_EPROTO);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EPROTO);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_EPROTO);
       check_contains(turbo_flow_last_error(flow)->message, "stage callback");
       check_equal(trace.count, 1);
       check_equal(trace.order[0], 1);
 
-      parse_ctx.fail_status = TURBO_OK;
+      parse_ctx.fail_status = SALTS_OK;
       trace.count = 0;
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-      check_equal(turbo_flow_last_error(flow)->code, TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_OK);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 1);
       check_equal(trace.order[1], 2);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -5000,8 +4991,8 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       mem_buffer_t *buffer = mem_wrap_external(raw, sizeof(raw) - 1, NULL, NULL);
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t enrich_ctx = {&trace, 1, TURBO_EPROTO};
-      publish_stage_ctx_t persist_ctx = {&trace, 2, TURBO_OK};
+      publish_stage_ctx_t enrich_ctx = {&trace, 1, SALTS_EPROTO};
+      publish_stage_ctx_t persist_ctx = {&trace, 2, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
@@ -5010,27 +5001,27 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "enrich", record_stage, &enrich_ctx, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist_ctx, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EPROTO);
-      check_equal(turbo_flow_last_error(flow)->code, TURBO_EPROTO);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EPROTO);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_EPROTO);
       check_contains(turbo_flow_last_error(flow)->message, "stage callback");
       check_equal(trace.count, 1);
       check_equal(trace.order[0], 1);
 
-      enrich_ctx.fail_status = TURBO_OK;
+      enrich_ctx.fail_status = SALTS_OK;
       trace.count = 0;
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-      check_equal(turbo_flow_last_error(flow)->code, TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_OK);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 1);
       check_equal(trace.order[1], 2);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
 
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
@@ -5049,29 +5040,29 @@ suite("Turbo Flow") {
       uint32_t validated_flags = 7;
       turbo_flow_msg_t msg;
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t accepted = {&trace, 1, TURBO_OK};
-      publish_stage_ctx_t rejected = {&trace, 2, TURBO_OK};
+      publish_stage_ctx_t accepted = {&trace, 1, SALTS_OK};
+      publish_stage_ctx_t rejected = {&trace, 2, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
       const turbo_flow_edge_plan_t *edge;
 
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "validate", set_flags_stage, &validated_flags, NULL),
-          TURBO_OK);
+          SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "accepted", record_stage, &accepted, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "rejected", record_stage, &rejected, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_edge_count(flow), 3);
       edge = turbo_flow_edge_at(flow, 1);
       check_not_null(edge);
       check_equal(edge->kind, TURBO_FLOW_EDGE_CONDITIONAL);
       check_equal(edge->condition, "msg.flags == 7");
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(trace.count, 1);
       check_equal(trace.order[0], 1);
 
@@ -5086,7 +5077,7 @@ suite("Turbo Flow") {
       const turbo_flow_stage_plan_t *stage;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_stage_count(flow), 1u);
       stage = turbo_flow_stage_at(flow, 0u);
       check_not_null(stage);
@@ -5105,16 +5096,16 @@ suite("Turbo Flow") {
                                "}\n";
       turbo_flow_msg_t msg;
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t sink = {&trace, 1, TURBO_OK};
+      publish_stage_ctx_t sink = {&trace, 1, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(trace.count, 0);
 
       turbo_flow_msg_cleanup(&msg);
@@ -5133,22 +5124,22 @@ suite("Turbo Flow") {
                                "}\n";
       turbo_flow_msg_t msg;
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t left = {&trace, 1, TURBO_OK};
-      publish_stage_ctx_t right = {&trace, 2, TURBO_OK};
-      publish_stage_ctx_t sink = {&trace, 3, TURBO_OK};
+      publish_stage_ctx_t left = {&trace, 1, SALTS_OK};
+      publish_stage_ctx_t right = {&trace, 2, SALTS_OK};
+      publish_stage_ctx_t sink = {&trace, 3, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
       msg.flags = 1;
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "left", record_stage, &left, NULL), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "left", record_stage, &left, NULL), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "right", record_stage, &right, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(trace.count, 3);
       check_equal(trace.order[0], 1);
       check_equal(trace.order[1], 2);
@@ -5172,13 +5163,13 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, non_bool, strlen(non_bool)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EPROTO);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, non_bool, strlen(non_bool)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EPROTO);
       check_contains(turbo_flow_last_error(flow)->message, "BOOL");
-      check_equal(turbo_flow_reset(flow, 1), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, unknown, strlen(unknown)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+      check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, unknown, strlen(unknown)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "schema resolver");
 
       turbo_flow_destroy(flow);
@@ -5197,11 +5188,11 @@ suite("Turbo Flow") {
       turbo_flow_msg_init(&msg);
       msg.flags = 1;
       msg.status = 0;
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_EINVAL);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "route evaluation");
 
       turbo_flow_msg_cleanup(&msg);
@@ -5221,39 +5212,39 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       turbo_flow_msg_t snapshot;
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t validate = {&trace, 1, TURBO_EPROTO};
-      publish_stage_ctx_t persist = {&trace, 2, TURBO_OK};
+      publish_stage_ctx_t validate = {&trace, 1, SALTS_EPROTO};
+      publish_stage_ctx_t persist = {&trace, 2, SALTS_OK};
       failure_check_ctx_t rejected = {"validate",   NULL, "validation_failed",
-                                      TURBO_EPROTO, 0,    &snapshot};
+                                      SALTS_EPROTO, 0,    &snapshot};
       turbo_flow_t *flow = turbo_flow_create();
       const turbo_flow_edge_plan_t *edge;
 
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
       turbo_flow_msg_init(&snapshot);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       edge = turbo_flow_edge_at(flow, 2);
       check_not_null(edge);
       check_equal(edge->kind, TURBO_FLOW_EDGE_REJECT);
       check_equal(edge->name, "validation_failed");
       check_null(edge->condition);
       check_equal(turbo_flow_register_stage_ex(flow, "validate", record_stage, &validate, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "rejected", check_failure_stage, &rejected, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
-      check_equal(turbo_flow_last_error(flow)->code, TURBO_OK);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_OK);
       check_equal(trace.count, 1);
       check_equal(trace.order[0], 1);
       check_equal(rejected.called, 1);
       check_equal(snapshot.failure.stage_name, "validate");
       check_equal(snapshot.failure.route_name, "validation_failed");
-      check_equal(snapshot.failure.code, TURBO_EPROTO);
+      check_equal(snapshot.failure.code, SALTS_EPROTO);
 
       turbo_flow_msg_cleanup(&snapshot);
       turbo_flow_msg_cleanup(&msg);
@@ -5272,23 +5263,23 @@ suite("Turbo Flow") {
                                "}\n";
       turbo_flow_msg_t msg;
       publish_trace_t trace = {{0}, 0};
-      publish_stage_ctx_t validate = {&trace, 1, TURBO_OK};
-      publish_stage_ctx_t persist = {&trace, 2, TURBO_OK};
-      publish_stage_ctx_t rejected = {&trace, 3, TURBO_OK};
+      publish_stage_ctx_t validate = {&trace, 1, SALTS_OK};
+      publish_stage_ctx_t persist = {&trace, 2, SALTS_OK};
+      publish_stage_ctx_t rejected = {&trace, 3, SALTS_OK};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "validate", record_stage, &validate, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "rejected", record_stage, &rejected, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 1);
       check_equal(trace.order[1], 2);
@@ -5308,22 +5299,22 @@ suite("Turbo Flow") {
       turbo_flow_msg_t msg;
       adapter_ctx_t adapter = {0};
       turbo_flow_adapter_ops_t ops;
-      failure_check_ctx_t rejected = {"deliver", "failing", "delivery_failed", TURBO_EIO, 0, NULL};
+      failure_check_ctx_t rejected = {"deliver", "failing", "delivery_failed", SALTS_EIO, 0, NULL};
       turbo_flow_t *flow = turbo_flow_create();
 
       memset(&ops, 0, sizeof(ops));
       ops.consume = test_adapter_consume;
-      adapter.fail_status = TURBO_EIO;
+      adapter.fail_status = SALTS_EIO;
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
-      check_equal(turbo_flow_register_adapter(flow, "failing", &ops, &adapter), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_register_adapter(flow, "failing", &ops, &adapter), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(
           turbo_flow_register_stage_ex(flow, "rejected", check_failure_stage, &rejected, NULL),
-          TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(rejected.called, 1);
 
       turbo_flow_msg_cleanup(&msg);
@@ -5359,25 +5350,25 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       register_stage_names(flow, names, 3);
-      check_equal(turbo_flow_parse_string(flow, duplicate_name, strlen(duplicate_name)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EALREADY);
+      check_equal(turbo_flow_parse_string(flow, duplicate_name, strlen(duplicate_name)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate reject route name");
 
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, multiple, strlen(multiple)), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", noop_stage, NULL, NULL), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, multiple, strlen(multiple)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "work", noop_stage, NULL, NULL), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "first_reject", noop_stage, NULL, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "second_reject", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EALREADY);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "more than one reject route");
 
-      check_equal(turbo_flow_reset(flow, 0), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, source_reject, strlen(source_reject)), TURBO_OK);
+      check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, source_reject, strlen(source_reject)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "rejected", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_EINVAL);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "executable stage");
 
       turbo_flow_destroy(flow);
@@ -5401,23 +5392,23 @@ suite("Turbo Flow") {
       ops.consume = retry_adapter_consume;
       ops.consume_retry = retry_adapter_consume_retry;
       retry.succeed_on = 3u;
-      retry.failure_status = TURBO_EIO;
-      retry.wait_status = TURBO_OK;
+      retry.failure_status = SALTS_EIO;
+      retry.wait_status = SALTS_OK;
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
       msg.owned_payload = tstr_dup("original");
       msg.payload = tstr_to_v(msg.owned_payload);
-      check_equal(turbo_flow_register_adapter(flow, "retryable", &ops, &retry), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_register_adapter(flow, "retryable", &ops, &retry), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "remote"));
       check_not_null(stage);
       check_equal(stage->retry.max_attempts, 3u);
       check_equal(stage->retry.delay_ms, 1u);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(retry.attempts, 3u);
       check_equal(retry.waits, 2u);
       check_equal(sink.called, 1);
@@ -5440,7 +5431,7 @@ suite("Turbo Flow") {
       failure_check_ctx_t dead = {.stage_name = "remote",
                                   .adapter_name = "retryable",
                                   .route_name = "remote_dead",
-                                  .code = TURBO_EIO,
+                                  .code = SALTS_EIO,
                                   .expected_payload = "original",
                                   .expected_attempt = 3u};
       turbo_flow_adapter_ops_t retry_ops;
@@ -5452,18 +5443,18 @@ suite("Turbo Flow") {
       retry_ops.consume_retry = retry_adapter_consume_retry;
       memset(&dead_ops, 0, sizeof(dead_ops));
       dead_ops.consume = failure_adapter_consume;
-      retry.failure_status = TURBO_EIO;
-      retry.wait_status = TURBO_OK;
+      retry.failure_status = SALTS_EIO;
+      retry.wait_status = SALTS_OK;
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
       msg.owned_payload = tstr_dup("original");
       msg.payload = tstr_to_v(msg.owned_payload);
-      check_equal(turbo_flow_register_adapter(flow, "retryable", &retry_ops, &retry), TURBO_OK);
-      check_equal(turbo_flow_register_adapter(flow, "deadletter", &dead_ops, &dead), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_register_adapter(flow, "retryable", &retry_ops, &retry), SALTS_OK);
+      check_equal(turbo_flow_register_adapter(flow, "deadletter", &dead_ops, &dead), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(retry.attempts, 3u);
       check_equal(retry.waits, 0u);
       check_equal(dead.called, 1);
@@ -5486,17 +5477,17 @@ suite("Turbo Flow") {
       memset(&ops, 0, sizeof(ops));
       ops.consume = retry_adapter_consume;
       ops.consume_retry = retry_adapter_consume_retry;
-      retry.failure_status = TURBO_EIO;
-      retry.wait_status = TURBO_ESHUTDOWN;
+      retry.failure_status = SALTS_EIO;
+      retry.wait_status = SALTS_ESHUTDOWN;
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
       msg.owned_payload = tstr_dup("original");
       msg.payload = tstr_to_v(msg.owned_payload);
-      check_equal(turbo_flow_register_adapter(flow, "retryable", &ops, &retry), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_ESHUTDOWN);
+      check_equal(turbo_flow_register_adapter(flow, "retryable", &ops, &retry), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_ESHUTDOWN);
       check_equal(retry.attempts, 1u);
       check_equal(retry.waits, 1u);
       check_equal(msg.payload.data, "original");
@@ -5520,14 +5511,14 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, too_few, strlen(too_few)), TURBO_ERANGE);
-      check_equal(turbo_flow_parse_string(flow, too_many, strlen(too_many)), TURBO_ERANGE);
-      check_equal(turbo_flow_parse_string(flow, too_long, strlen(too_long)), TURBO_ERANGE);
+      check_equal(turbo_flow_parse_string(flow, too_few, strlen(too_few)), SALTS_ERANGE);
+      check_equal(turbo_flow_parse_string(flow, too_many, strlen(too_many)), SALTS_ERANGE);
+      check_equal(turbo_flow_parse_string(flow, too_long, strlen(too_long)), SALTS_ERANGE);
       memset(&ops, 0, sizeof(ops));
       ops.consume = test_adapter_consume;
-      check_equal(turbo_flow_register_adapter(flow, "normal", &ops, &adapter), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, unsupported, strlen(unsupported)), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_ENOTSUP);
+      check_equal(turbo_flow_register_adapter(flow, "normal", &ops, &adapter), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, unsupported, strlen(unsupported)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
       check_contains(turbo_flow_last_error(flow)->message, "adapter retry callback");
 
       turbo_flow_destroy(flow);
@@ -5549,9 +5540,9 @@ suite("Turbo Flow") {
       const turbo_flow_stage_plan_t *ordered;
 
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       register_stage_names(flow, names, sizeof(names) / sizeof(names[0]));
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
       ordered = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "ordered"));
       check_not_null(ordered);
       check_equal(ordered->reorder.capacity, 32);
@@ -5578,17 +5569,17 @@ suite("Turbo Flow") {
       atomic_init(&probe.calls, 0);
       atomic_init(&probe.ran_off_submitter, 0);
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "before", worker_probe_stage, &probe, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "ordered", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "other", noop_stage, NULL, NULL), TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
+                   SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "ordered", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "other", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_msg_init(&msg);
-      check_equal(turbo_flow_publish(flow, "other_input", &msg), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "ordered_input", &msg), TURBO_OK);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "other_input", &msg), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "ordered_input", &msg), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
     }
@@ -5606,9 +5597,9 @@ suite("Turbo Flow") {
                                       "}\n";
       turbo_flow_t *flow = turbo_flow_create();
       check_not_null(flow);
-      check_equal(turbo_flow_parse_string(flow, zero, strlen(zero)), TURBO_ERANGE);
-      check_equal(turbo_flow_reset(flow, 1), TURBO_OK);
-      check_equal(turbo_flow_parse_string(flow, no_timeout, strlen(no_timeout)), TURBO_ERANGE);
+      check_equal(turbo_flow_parse_string(flow, zero, strlen(zero)), SALTS_ERANGE);
+      check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, no_timeout, strlen(no_timeout)), SALTS_ERANGE);
       turbo_flow_destroy(flow);
     }
 
@@ -5616,24 +5607,24 @@ suite("Turbo Flow") {
       uint32_t stage_index = 0;
       turbo_flow_t *flow = reorder_test_flow(2, 1000, &stage_index);
       reorder_wait_t wait = {0};
-      turbo_thread_t thread;
+      salts_thread_t thread;
       check_not_null(flow);
       wait.flow = flow;
       wait.stage_index = stage_index;
       wait.sequence = 2;
       wait.leave_on_success = 1;
       atomic_init(&wait.started, 0);
-      atomic_init(&wait.result, TURBO_EBUSY);
-      check_equal(turbo_thread_create(&thread, reorder_wait_thread, &wait), TURBO_OK);
+      atomic_init(&wait.result, SALTS_EBUSY);
+      check_equal(salts_thread_create(&thread, reorder_wait_thread, &wait), SALTS_OK);
       while (!atomic_load_explicit(&wait.started, memory_order_acquire))
-        turbo_sleep_ms(1);
-      turbo_sleep_ms(10);
-      check_equal(atomic_load_explicit(&wait.result, memory_order_acquire), TURBO_EBUSY);
-      check_equal(flow_reorder_enter(flow, stage_index, 1), TURBO_OK);
+        salts_sleep_ms(1);
+      salts_sleep_ms(10);
+      check_equal(atomic_load_explicit(&wait.result, memory_order_acquire), SALTS_EBUSY);
+      check_equal(flow_reorder_enter(flow, stage_index, 1), SALTS_OK);
       flow_reorder_leave(flow, stage_index, 1);
-      check_equal(turbo_thread_join(&thread), TURBO_OK);
-      check_equal(atomic_load_explicit(&wait.result, memory_order_acquire), TURBO_OK);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(salts_thread_join(&thread), SALTS_OK);
+      check_equal(atomic_load_explicit(&wait.result, memory_order_acquire), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -5641,29 +5632,29 @@ suite("Turbo Flow") {
       uint32_t stage_index = 0;
       turbo_flow_t *flow = reorder_test_flow(1, 25, &stage_index);
       check_not_null(flow);
-      check_equal(flow_reorder_enter(flow, stage_index, 2), TURBO_ETIMEDOUT);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(flow_reorder_enter(flow, stage_index, 2), SALTS_ETIMEDOUT);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
 
       flow = reorder_test_flow(1, 1000, &stage_index);
       check_not_null(flow);
-      check_equal(flow_reorder_enter(flow, stage_index, 1), TURBO_OK);
+      check_equal(flow_reorder_enter(flow, stage_index, 1), SALTS_OK);
       reorder_wait_t wait = {0};
-      turbo_thread_t thread;
+      salts_thread_t thread;
       wait.flow = flow;
       wait.stage_index = stage_index;
       wait.sequence = 2;
       wait.leave_on_success = 1;
       atomic_init(&wait.started, 0);
-      atomic_init(&wait.result, TURBO_EBUSY);
-      check_equal(turbo_thread_create(&thread, reorder_wait_thread, &wait), TURBO_OK);
+      atomic_init(&wait.result, SALTS_EBUSY);
+      check_equal(salts_thread_create(&thread, reorder_wait_thread, &wait), SALTS_OK);
       while (!atomic_load_explicit(&wait.started, memory_order_acquire))
-        turbo_sleep_ms(1);
-      turbo_sleep_ms(5);
-      check_equal(flow_reorder_enter(flow, stage_index, 3), TURBO_ENOSPC);
+        salts_sleep_ms(1);
+      salts_sleep_ms(5);
+      check_equal(flow_reorder_enter(flow, stage_index, 3), SALTS_ENOSPC);
       flow_reorder_leave(flow, stage_index, 1);
-      check_equal(turbo_thread_join(&thread), TURBO_OK);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(salts_thread_join(&thread), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -5675,19 +5666,19 @@ suite("Turbo Flow") {
       turbo_flow_t *flow = reorder_test_flow(1, 1000, &stage_index);
 
       check_not_null(flow);
-      check_equal(flow_reorder_reserve(flow, stage_index, &first), TURBO_OK);
+      check_equal(flow_reorder_reserve(flow, stage_index, &first), SALTS_OK);
       check_equal(first, 1);
-      check_equal(flow_reorder_reserve(flow, stage_index, &second), TURBO_OK);
+      check_equal(flow_reorder_reserve(flow, stage_index, &second), SALTS_OK);
       check_equal(second, 2);
-      check_equal(flow_reorder_reserve(flow, stage_index, &third), TURBO_ENOSPC);
-      check_equal(flow_reorder_cancel(flow, stage_index, first), TURBO_OK);
-      check_equal(flow_reorder_reserve(flow, stage_index, &third), TURBO_OK);
+      check_equal(flow_reorder_reserve(flow, stage_index, &third), SALTS_ENOSPC);
+      check_equal(flow_reorder_cancel(flow, stage_index, first), SALTS_OK);
+      check_equal(flow_reorder_reserve(flow, stage_index, &third), SALTS_OK);
       check_equal(third, 3);
-      check_equal(flow_reorder_enter(flow, stage_index, second), TURBO_OK);
+      check_equal(flow_reorder_enter(flow, stage_index, second), SALTS_OK);
       flow_reorder_leave(flow, stage_index, second);
-      check_equal(flow_reorder_enter(flow, stage_index, third), TURBO_OK);
+      check_equal(flow_reorder_enter(flow, stage_index, third), SALTS_OK);
       flow_reorder_leave(flow, stage_index, third);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
 
@@ -5695,20 +5686,20 @@ suite("Turbo Flow") {
       uint32_t stage_index = 0;
       turbo_flow_t *flow = reorder_test_flow(1, 1000, &stage_index);
       reorder_wait_t wait = {0};
-      turbo_thread_t thread;
+      salts_thread_t thread;
       check_not_null(flow);
       wait.flow = flow;
       wait.stage_index = stage_index;
       wait.sequence = 2;
       atomic_init(&wait.started, 0);
-      atomic_init(&wait.result, TURBO_EBUSY);
-      check_equal(turbo_thread_create(&thread, reorder_wait_thread, &wait), TURBO_OK);
+      atomic_init(&wait.result, SALTS_EBUSY);
+      check_equal(salts_thread_create(&thread, reorder_wait_thread, &wait), SALTS_OK);
       while (!atomic_load_explicit(&wait.started, memory_order_acquire))
-        turbo_sleep_ms(1);
+        salts_sleep_ms(1);
       flow_stop_reorder_states(flow);
-      check_equal(turbo_thread_join(&thread), TURBO_OK);
-      check_equal(atomic_load_explicit(&wait.result, memory_order_acquire), TURBO_ESHUTDOWN);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(salts_thread_join(&thread), SALTS_OK);
+      check_equal(atomic_load_explicit(&wait.result, memory_order_acquire), SALTS_ESHUTDOWN);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
   }
@@ -5735,23 +5726,23 @@ suite("Turbo Flow") {
       ops.destroy = observer_probe_destroy;
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_observer(flow, "probe", &ops, &probe), TURBO_OK);
-      check_equal(turbo_flow_register_observer(flow, "probe", &ops, &probe), TURBO_EALREADY);
+      check_equal(turbo_flow_register_observer(flow, "probe", &ops, &probe), SALTS_OK);
+      check_equal(turbo_flow_register_observer(flow, "probe", &ops, &probe), SALTS_EALREADY);
       check_equal(turbo_flow_observer_count(flow), 1u);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "validate", noop_stage, NULL, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "accepted", noop_stage, NULL, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "rejected", noop_stage, NULL, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_unregister_observer(flow, "probe"), TURBO_EBUSY);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_unregister_observer(flow, "probe"), SALTS_EBUSY);
 
       turbo_flow_msg_init(&msg);
       msg.flags = 1u;
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(probe.event_counts[TURBO_FLOW_OBSERVE_SOURCE_RECEIVED], 1u);
       check_equal(probe.event_counts[TURBO_FLOW_OBSERVE_FLOW_COMPLETE], 1u);
       check_equal(probe.event_counts[TURBO_FLOW_OBSERVE_STAGE_BEGIN], 2u);
@@ -5761,8 +5752,8 @@ suite("Turbo Flow") {
       check_equal(probe.selected_routes, 2u);
       check_true(turbo_flow_observer_failure_count(flow) >= 1u);
 
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
-      check_equal(turbo_flow_unregister_observer(flow, "probe"), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(turbo_flow_unregister_observer(flow, "probe"), SALTS_OK);
       check_equal(probe.destroy_count, 1);
       check_equal(turbo_flow_observer_count(flow), 0u);
 
@@ -5778,7 +5769,7 @@ suite("Turbo Flow") {
       execution_probe_ctx_t probe;
       turbo_flow_msg_t input;
       turbo_flow_msg_t output;
-      turbo_thread_t thread = NULL;
+      salts_thread_t thread = NULL;
 
       atomic_init(&probe.entered, 0);
       atomic_init(&probe.allow_exit, 1);
@@ -5788,11 +5779,11 @@ suite("Turbo Flow") {
       turbo_flow_msg_init(&output);
       check_equal(flow_execution_task_init(&task, FLOW_EXECUTION_THREAD, execution_yield_stage,
                                             &probe, &input, &completion, 0u),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(flow_execution_task_state(&task), FLOW_EXECUTION_ACCEPTED);
-      check_equal(turbo_thread_create(&thread, execution_task_thread, &task), TURBO_OK);
-      check_equal(flow_execution_task_wait(&task, &output, &completion), TURBO_OK);
-      check_equal(turbo_thread_join(&thread), TURBO_OK);
+      check_equal(salts_thread_create(&thread, execution_task_thread, &task), SALTS_OK);
+      check_equal(flow_execution_task_wait(&task, &output, &completion), SALTS_OK);
+      check_equal(salts_thread_join(&thread), SALTS_OK);
       check_equal(flow_execution_task_state(&task), FLOW_EXECUTION_COMPLETED);
       check_equal(atomic_load_explicit(&probe.entered, memory_order_acquire), 1);
       flow_execution_task_cleanup(&task);
@@ -5805,7 +5796,7 @@ suite("Turbo Flow") {
       execution_probe_ctx_t probe;
       turbo_flow_msg_t input;
       turbo_flow_msg_t output;
-      turbo_thread_t thread = NULL;
+      salts_thread_t thread = NULL;
 
       atomic_init(&probe.entered, 0);
       atomic_init(&probe.allow_exit, 0);
@@ -5815,12 +5806,12 @@ suite("Turbo Flow") {
       turbo_flow_msg_init(&output);
       check_equal(flow_execution_task_init(&task, FLOW_EXECUTION_THREAD, execution_yield_stage,
                                             &probe, &input, &completion, 5u),
-                   TURBO_OK);
-      check_equal(turbo_thread_create(&thread, execution_task_thread, &task), TURBO_OK);
-      check_equal(flow_execution_task_wait(&task, &output, &completion), TURBO_ETIMEDOUT);
-      check_equal(turbo_thread_join(&thread), TURBO_OK);
+                   SALTS_OK);
+      check_equal(salts_thread_create(&thread, execution_task_thread, &task), SALTS_OK);
+      check_equal(flow_execution_task_wait(&task, &output, &completion), SALTS_ETIMEDOUT);
+      check_equal(salts_thread_join(&thread), SALTS_OK);
       check_equal(flow_execution_task_state(&task), FLOW_EXECUTION_COMPLETED);
-      check_equal(completion.status, TURBO_ETIMEDOUT);
+      check_equal(completion.status, SALTS_ETIMEDOUT);
       check_equal(atomic_load_explicit(&probe.entered, memory_order_acquire), 1);
       check_equal(atomic_load_explicit(&probe.saw_cancel, memory_order_acquire), 0);
       flow_execution_task_cleanup(&task);
@@ -5834,7 +5825,7 @@ suite("Turbo Flow") {
       execution_probe_ctx_t probe;
       turbo_flow_msg_t input;
       turbo_flow_msg_t output;
-      turbo_thread_t thread = NULL;
+      salts_thread_t thread = NULL;
 
       atomic_init(&probe.entered, 0);
       atomic_init(&probe.allow_exit, 0);
@@ -5844,9 +5835,9 @@ suite("Turbo Flow") {
       turbo_flow_msg_init(&output);
       check_equal(flow_execution_task_init(&accepted, FLOW_EXECUTION_THREAD, execution_yield_stage,
                                             &probe, &input, &completion, 0u),
-                   TURBO_OK);
-      check_equal(flow_execution_task_abort(&accepted), TURBO_OK);
-      check_equal(flow_execution_task_wait(&accepted, &output, &completion), TURBO_ECANCELED);
+                   SALTS_OK);
+      check_equal(flow_execution_task_abort(&accepted), SALTS_OK);
+      check_equal(flow_execution_task_wait(&accepted, &output, &completion), SALTS_ECANCELED);
       check_equal(flow_execution_task_state(&accepted), FLOW_EXECUTION_CANCELED);
       flow_execution_task_cleanup(&accepted);
       turbo_flow_msg_cleanup(&output);
@@ -5855,44 +5846,16 @@ suite("Turbo Flow") {
       turbo_flow_msg_init(&output);
       check_equal(flow_execution_task_init(&running, FLOW_EXECUTION_THREAD, execution_yield_stage,
                                             &probe, &input, &completion, 0u),
-                   TURBO_OK);
-      check_equal(turbo_thread_create(&thread, execution_task_thread, &running), TURBO_OK);
+                   SALTS_OK);
+      check_equal(salts_thread_create(&thread, execution_task_thread, &running), SALTS_OK);
       while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
-        turbo_thread_yield();
-      check_equal(flow_execution_task_abort(&running), TURBO_OK);
-      check_equal(flow_execution_task_wait(&running, &output, &completion), TURBO_ECANCELED);
-      check_equal(turbo_thread_join(&thread), TURBO_OK);
+        salts_thread_yield();
+      check_equal(flow_execution_task_abort(&running), SALTS_OK);
+      check_equal(flow_execution_task_wait(&running, &output, &completion), SALTS_ECANCELED);
+      check_equal(salts_thread_join(&thread), SALTS_OK);
       check_equal(atomic_load_explicit(&probe.saw_cancel, memory_order_acquire), 1);
       flow_execution_task_cleanup(&running);
       turbo_flow_msg_cleanup(&output);
-    }
-
-    it("yields through the coroutine backend") {
-      flow_execution_task_t task;
-      flow_stage_completion_t completion = {0};
-      execution_probe_ctx_t probe;
-      turbo_flow_msg_t input;
-      turbo_flow_msg_t output;
-      coro_scheduler_t *scheduler = coro_scheduler_create();
-
-      atomic_init(&probe.entered, 0);
-      atomic_init(&probe.allow_exit, 1);
-      atomic_init(&probe.saw_cancel, 0);
-      probe.yields = 2;
-      turbo_flow_msg_init(&input);
-      turbo_flow_msg_init(&output);
-      check_not_null(scheduler);
-      check_equal(flow_execution_task_init(&task, FLOW_EXECUTION_CORO, execution_yield_stage,
-                                            &probe, &input, &completion, 0u),
-                   TURBO_OK);
-      check_not_null(coro_spawn(scheduler, execution_task_coro, &task, NULL));
-      coro_scheduler_run(scheduler);
-      check_equal(flow_execution_task_wait(&task, &output, &completion), TURBO_OK);
-      check_equal(flow_execution_task_state(&task), FLOW_EXECUTION_COMPLETED);
-      check_equal(atomic_load_explicit(&probe.entered, memory_order_acquire), 1);
-      flow_execution_task_cleanup(&task);
-      turbo_flow_msg_cleanup(&output);
-      coro_scheduler_destroy(scheduler);
     }
 
     it("exposes cooperative abort controls to DSL stage callbacks") {
@@ -5914,18 +5877,18 @@ suite("Turbo Flow") {
       turbo_flow_msg_init(&msg);
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "cancel", execution_self_abort_stage,
                                                 &cancel_called, NULL),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink, NULL),
-                   TURBO_OK);
-      check_equal(turbo_flow_compile(flow), TURBO_OK);
-      check_equal(turbo_flow_start(flow), TURBO_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), TURBO_ECANCELED);
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_ECANCELED);
       check_equal(cancel_called, 1);
       check_equal(sink.called, 0);
-      check_equal(turbo_flow_stop(flow), TURBO_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_destroy(flow);
     }

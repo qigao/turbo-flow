@@ -12,7 +12,7 @@ spec("resolved_config_boundary") {
     const char *json;
 
     check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
-                 TURBO_OK);
+                 SALTS_OK);
     json = turbo_flow_resolved_config_json(config, &json_len);
     check_not_null(json);
     check_true(json_len > 0u);

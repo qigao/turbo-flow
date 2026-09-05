@@ -21,7 +21,7 @@ typedef struct turbo_flow_protocol_graph_completion_s {
 
 #define TURBO_FLOW_PROTOCOL_GRAPH_COMPLETION_INIT                                               \
   {sizeof(turbo_flow_protocol_graph_completion_t), TURBO_FLOW_PROTOCOL_GRAPH_ABI_VERSION,       \
-   0u, 0u, 0u, TURBO_OK}
+   0u, 0u, 0u, SALTS_OK}
 
 /**
  * Completion for one successfully admitted async protocol publication.

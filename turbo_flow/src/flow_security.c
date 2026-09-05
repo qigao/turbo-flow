@@ -1,10 +1,10 @@
 #include "turbo_flow_security.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 #include "turbo_flow_stl_error_internal.h"
-#include "turbo_parser.h"
-#include "turbo_str.h"
-#include "turbo_thread.h"
+#include <json_parser.h>
+#include "salts_str.h"
+#include "salts_thread.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -73,7 +73,7 @@ struct turbo_flow_security_realm_s {
   tstr owner_name;
   tstr policy_source;
   turbo_flow_security_matcher_t matcher;
-  turbo_mutex_t snapshot_lock;
+  salts_mutex_t snapshot_lock;
   flow_security_policy_snapshot_t *active;
   const turbo_flow_security_policy_provider_t *policy_provider;
   const turbo_flow_security_authorization_provider_t *authorization_provider;
@@ -153,13 +153,13 @@ int turbo_flow_security_authenticate(const turbo_flow_security_auth_provider_t *
       !request->identity[0] || !request->method || !request->method[0] ||
       (request->secret_size > 0u && !request->secret) || !principal_out ||
       principal_out->size < sizeof(*principal_out)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   rc = provider->authenticate(provider->ctx, request, &principal);
-  if (rc != TURBO_OK) return rc;
-  if (!flow_security_principal_valid(&principal)) return TURBO_EPROTO;
+  if (rc != SALTS_OK) return rc;
+  if (!flow_security_principal_valid(&principal)) return SALTS_EPROTO;
   *principal_out = principal;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int
@@ -168,10 +168,10 @@ flow_security_enhanced_result_validate(const turbo_flow_security_enhanced_auth_r
   if (!result || result->size < sizeof(*result) || (result->data_size != 0u && !result->data) ||
       (result->status != TURBO_FLOW_SECURITY_ENHANCED_AUTH_CONTINUE &&
        result->status != TURBO_FLOW_SECURITY_ENHANCED_AUTH_SUCCESS))
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   if (result->status == TURBO_FLOW_SECURITY_ENHANCED_AUTH_CONTINUE)
-    return exchange ? TURBO_OK : TURBO_EPROTO;
-  return flow_security_principal_valid(&result->principal) ? TURBO_OK : TURBO_EPROTO;
+    return exchange ? SALTS_OK : SALTS_EPROTO;
+  return flow_security_principal_valid(&result->principal) ? SALTS_OK : SALTS_EPROTO;
 }
 
 static int
@@ -191,25 +191,25 @@ int turbo_flow_security_enhanced_auth_begin(
       !provider->continue_exchange || !provider->cancel ||
       !flow_security_enhanced_request_valid(request) || !exchange_out || !result_out ||
       result_out->size < sizeof(*result_out))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   *exchange_out = NULL;
   rc = provider->begin(provider->ctx, request, &exchange, &result);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     if (exchange) provider->cancel(provider->ctx, exchange);
     return rc;
   }
   rc = flow_security_enhanced_result_validate(&result, exchange);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     if (exchange) provider->cancel(provider->ctx, exchange);
     return rc;
   }
   if (result.status == TURBO_FLOW_SECURITY_ENHANCED_AUTH_SUCCESS && exchange) {
     provider->cancel(provider->ctx, exchange);
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   *exchange_out = exchange;
   *result_out = result;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_security_enhanced_auth_continue(
@@ -221,13 +221,13 @@ int turbo_flow_security_enhanced_auth_continue(
   if (!provider || provider->size < sizeof(*provider) || !provider->continue_exchange ||
       !provider->cancel || !exchange || !flow_security_enhanced_request_valid(request) ||
       !result_out || result_out->size < sizeof(*result_out))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   rc = provider->continue_exchange(provider->ctx, exchange, request, &result);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flow_security_enhanced_result_validate(&result, exchange);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   *result_out = result;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void turbo_flow_security_enhanced_auth_cancel(
@@ -357,7 +357,7 @@ static bool flow_security_exact_equal(const void *left, const void *right, size_
 }
 
 static int flow_security_adapter_leaf_init(flow_security_adapter_leaf_t *leaf) {
-  if (!leaf) return TURBO_EINVAL;
+  if (!leaf) return SALTS_EINVAL;
   memset(leaf, 0, sizeof(*leaf));
   return turbo_flow_stl_error(vec_init_bytes(&leaf->entries, sizeof(size_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
 }
@@ -407,30 +407,30 @@ static void flow_security_rule_bucket_destroy(flow_security_rule_bucket_t *bucke
 
 static int flow_security_rule_bucket_init(flow_security_rule_bucket_t *bucket) {
   int rc;
-  if (!bucket) return TURBO_EINVAL;
-  if (bucket->initialized) return TURBO_OK;
+  if (!bucket) return SALTS_EINVAL;
+  if (bucket->initialized) return SALTS_OK;
   rc = flow_security_adapter_leaf_init(&bucket->any_adapter);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_stl_error(vec_init_bytes(&bucket->subjects, sizeof(flow_security_subject_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_security_adapter_leaf_destroy(&bucket->any_adapter);
     return rc;
   }
   rc = turbo_flow_stl_error(vec_init_bytes(&bucket->exact_patterns, sizeof(flow_security_pattern_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     vec_destroy(&bucket->subjects);
     flow_security_adapter_leaf_destroy(&bucket->any_adapter);
     return rc;
   }
   rc = turbo_flow_stl_error(vec_init_bytes(&bucket->prefix_patterns, sizeof(flow_security_pattern_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     vec_destroy(&bucket->exact_patterns);
     vec_destroy(&bucket->subjects);
     flow_security_adapter_leaf_destroy(&bucket->any_adapter);
     return rc;
   }
   rc = turbo_flow_stl_error(hash_map_init_bytes(&bucket->subject_index, sizeof(flow_security_subject_key_t), _Alignof(turbo_flow_max_align_t), sizeof(flow_security_subject_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX, ((flow_security_subject_hash) ? (flow_security_subject_hash) : hash_bytes), ((flow_security_subject_equal) ? (flow_security_subject_equal) : hash_key_equal), NULL));
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     vec_destroy(&bucket->prefix_patterns);
     vec_destroy(&bucket->exact_patterns);
     vec_destroy(&bucket->subjects);
@@ -438,7 +438,7 @@ static int flow_security_rule_bucket_init(flow_security_rule_bucket_t *bucket) {
     return rc;
   }
   rc = turbo_flow_stl_error(hash_map_init_bytes(&bucket->exact_index, sizeof(flow_security_pattern_key_t), _Alignof(turbo_flow_max_align_t), sizeof(flow_security_pattern_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX, ((flow_security_exact_hash) ? (flow_security_exact_hash) : hash_bytes), ((flow_security_exact_equal) ? (flow_security_exact_equal) : hash_key_equal), NULL));
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     hash_map_destroy(&bucket->subject_index);
     vec_destroy(&bucket->prefix_patterns);
     vec_destroy(&bucket->exact_patterns);
@@ -447,7 +447,7 @@ static int flow_security_rule_bucket_init(flow_security_rule_bucket_t *bucket) {
     return rc;
   }
   rc = turbo_flow_stl_error(hash_map_init_bytes(&bucket->prefix_index, sizeof(flow_security_pattern_key_t), _Alignof(turbo_flow_max_align_t), sizeof(flow_security_pattern_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX, ((flow_security_exact_hash) ? (flow_security_exact_hash) : hash_bytes), ((flow_security_exact_equal) ? (flow_security_exact_equal) : hash_key_equal), NULL));
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     hash_map_destroy(&bucket->exact_index);
     hash_map_destroy(&bucket->subject_index);
     vec_destroy(&bucket->prefix_patterns);
@@ -457,7 +457,7 @@ static int flow_security_rule_bucket_init(flow_security_rule_bucket_t *bucket) {
     return rc;
   }
   bucket->initialized = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_security_rule_bucket_insert_pattern(hash_map_t *index, vec_t *patterns,
@@ -468,21 +468,21 @@ static int flow_security_rule_bucket_insert_pattern(hash_map_t *index, vec_t *pa
   flow_security_pattern_index_t **found;
   flow_security_pattern_index_t *pattern;
   int rc;
-  if (!index || !patterns || !subject_mask || !rule) return TURBO_EINVAL;
+  if (!index || !patterns || !subject_mask || !rule) return SALTS_EINVAL;
   key.subject_kind = rule->subject_kind;
   key.subject = vstr_from_buf(rule->subject, strlen(rule->subject));
   key.pattern = vstr_from_buf(rule->pattern, strlen(rule->pattern));
   found = (flow_security_pattern_index_t **)hash_map_get(index, &key);
   if (found && *found) return turbo_flow_stl_error(vec_push(&(*found)->entries, &rule_index));
   pattern = (flow_security_pattern_index_t *)calloc(1u, sizeof(*pattern));
-  if (!pattern) return TURBO_ENOMEM;
+  if (!pattern) return SALTS_ENOMEM;
   pattern->key = key;
   rc = turbo_flow_stl_error(vec_init_bytes(&pattern->entries, sizeof(size_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
-  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(&pattern->entries, &rule_index));
-  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(patterns, &pattern));
-  if (rc == TURBO_OK) rc = turbo_flow_stl_error(hash_map_put(index, &pattern->key, &pattern));
-  if (rc == TURBO_OK) *subject_mask |= UINT32_C(1) << rule->subject_kind;
-  if (rc != TURBO_OK) {
+  if (rc == SALTS_OK) rc = turbo_flow_stl_error(vec_push(&pattern->entries, &rule_index));
+  if (rc == SALTS_OK) rc = turbo_flow_stl_error(vec_push(patterns, &pattern));
+  if (rc == SALTS_OK) rc = turbo_flow_stl_error(hash_map_put(index, &pattern->key, &pattern));
+  if (rc == SALTS_OK) *subject_mask |= UINT32_C(1) << rule->subject_kind;
+  if (rc != SALTS_OK) {
     if (vec_size(patterns) > 0u) {
       flow_security_pattern_index_t **last =
           (flow_security_pattern_index_t **)vec_at(patterns, vec_size(patterns) - 1u);
@@ -501,7 +501,7 @@ static int flow_security_rule_bucket_insert(flow_security_rule_bucket_t *bucket,
   flow_security_subject_index_t **found;
   flow_security_subject_index_t *subject;
   int rc = flow_security_rule_bucket_init(bucket);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (rule->match_kind == TURBO_FLOW_SECURITY_MATCH_EXACT)
     return flow_security_rule_bucket_insert_pattern(&bucket->exact_index, &bucket->exact_patterns,
                                                     &bucket->exact_subject_mask, rule, rule_index);
@@ -509,7 +509,7 @@ static int flow_security_rule_bucket_insert(flow_security_rule_bucket_t *bucket,
     size_t pattern_size = strlen(rule->pattern);
     rc = flow_security_rule_bucket_insert_pattern(&bucket->prefix_index, &bucket->prefix_patterns,
                                                   &bucket->prefix_subject_mask, rule, rule_index);
-    if (rc == TURBO_OK && pattern_size > bucket->max_prefix_size)
+    if (rc == SALTS_OK && pattern_size > bucket->max_prefix_size)
       bucket->max_prefix_size = pattern_size;
     return rc;
   }
@@ -521,13 +521,13 @@ static int flow_security_rule_bucket_insert(flow_security_rule_bucket_t *bucket,
   found = (flow_security_subject_index_t **)hash_map_get(&bucket->subject_index, &key);
   if (found && *found) return turbo_flow_stl_error(vec_push(&(*found)->adapter.entries, &rule_index));
   subject = (flow_security_subject_index_t *)calloc(1u, sizeof(*subject));
-  if (!subject) return TURBO_ENOMEM;
+  if (!subject) return SALTS_ENOMEM;
   subject->key = key;
   rc = flow_security_adapter_leaf_init(&subject->adapter);
-  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(&subject->adapter.entries, &rule_index));
-  if (rc == TURBO_OK) rc = turbo_flow_stl_error(vec_push(&bucket->subjects, &subject));
-  if (rc == TURBO_OK) rc = turbo_flow_stl_error(hash_map_put(&bucket->subject_index, &subject->key, &subject));
-  if (rc != TURBO_OK) {
+  if (rc == SALTS_OK) rc = turbo_flow_stl_error(vec_push(&subject->adapter.entries, &rule_index));
+  if (rc == SALTS_OK) rc = turbo_flow_stl_error(vec_push(&bucket->subjects, &subject));
+  if (rc == SALTS_OK) rc = turbo_flow_stl_error(hash_map_put(&bucket->subject_index, &subject->key, &subject));
+  if (rc != SALTS_OK) {
     if (vec_size(&bucket->subjects) > 0u) {
       flow_security_subject_index_t **last = (flow_security_subject_index_t **)vec_at(
           &bucket->subjects, vec_size(&bucket->subjects) - 1u);
@@ -575,42 +575,42 @@ static int flow_security_adapter_leaf_compile(flow_security_adapter_leaf_t *leaf
   turbo_flow_security_matcher_leaf_t input = TURBO_FLOW_SECURITY_MATCHER_LEAF_INIT;
   void *compiled = NULL;
   int rc;
-  if (!leaf || !rules) return TURBO_EINVAL;
-  if (vec_empty(&leaf->entries)) return TURBO_OK;
+  if (!leaf || !rules) return SALTS_EINVAL;
+  if (vec_empty(&leaf->entries)) return SALTS_OK;
   if (!matcher || !matcher->compile_leaf || !matcher->evaluate_leaf || !matcher->destroy_leaf)
-    return TURBO_EINVAL;
-  if (leaf->compiled) return TURBO_EALREADY;
+    return SALTS_EINVAL;
+  if (leaf->compiled) return SALTS_EALREADY;
   input.rules = (const turbo_flow_security_rule_t *)vec_data_const(rules);
   input.rule_count = vec_size(rules);
   input.candidate_rule_indices = (const size_t *)vec_data_const(&leaf->entries);
   input.candidate_count = vec_size(&leaf->entries);
-  if (!input.rules || !input.candidate_rule_indices) return TURBO_EPROTO;
+  if (!input.rules || !input.candidate_rule_indices) return SALTS_EPROTO;
   rc = matcher->compile_leaf(matcher->ctx, &input, &compiled);
-  if (rc != TURBO_OK || !compiled) {
+  if (rc != SALTS_OK || !compiled) {
     if (compiled) matcher->destroy_leaf(matcher->ctx, compiled);
-    return rc != TURBO_OK ? rc : TURBO_EPROTO;
+    return rc != SALTS_OK ? rc : SALTS_EPROTO;
   }
   leaf->compiled = compiled;
   leaf->matcher_ctx = matcher->ctx;
   leaf->destroy = matcher->destroy_leaf;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_security_rule_bucket_compile(flow_security_rule_bucket_t *bucket,
                                              const vec_t *rules,
                                              const turbo_flow_security_matcher_t *matcher) {
   int rc;
-  if (!bucket || !bucket->initialized) return TURBO_OK;
+  if (!bucket || !bucket->initialized) return SALTS_OK;
   rc = flow_security_adapter_leaf_compile(&bucket->any_adapter, rules, matcher);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   for (size_t i = 0u; i < vec_size(&bucket->subjects); ++i) {
     flow_security_subject_index_t **subject =
         (flow_security_subject_index_t **)vec_at(&bucket->subjects, i);
-    if (!subject || !*subject) return TURBO_EPROTO;
+    if (!subject || !*subject) return SALTS_EPROTO;
     rc = flow_security_adapter_leaf_compile(&(*subject)->adapter, rules, matcher);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void flow_security_root_index_destroy(flow_security_root_index_t *root) {
@@ -627,30 +627,30 @@ static int flow_security_snapshot_root(flow_security_policy_snapshot_t *snapshot
   vstr key;
   flow_security_root_index_t **found;
   flow_security_root_index_t *root;
-  if (!snapshot || !domain_id || !root_out) return TURBO_EINVAL;
+  if (!snapshot || !domain_id || !root_out) return SALTS_EINVAL;
   *root_out = NULL;
   key = vstr_from_buf(domain_id, strlen(domain_id));
   found = (flow_security_root_index_t **)hash_map_get(&snapshot->root_index, &key);
   if (found && *found) {
     *root_out = *found;
-    return TURBO_OK;
+    return SALTS_OK;
   }
   root = (flow_security_root_index_t *)calloc(1u, sizeof(*root));
-  if (!root) return TURBO_ENOMEM;
+  if (!root) return SALTS_ENOMEM;
   memcpy(root->domain_id, domain_id, strlen(domain_id) + 1u);
-  if (turbo_flow_stl_error(vec_push(&snapshot->roots, &root)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&snapshot->roots, &root)) != SALTS_OK) {
     flow_security_root_index_destroy(root);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   key = vstr_from_buf(root->domain_id, strlen(root->domain_id));
-  if (turbo_flow_stl_error(hash_map_put(&snapshot->root_index, &key, &root)) != TURBO_OK) {
+  if (turbo_flow_stl_error(hash_map_put(&snapshot->root_index, &key, &root)) != SALTS_OK) {
     size_t last = vec_size(&snapshot->roots) - 1u;
     (void)turbo_flow_stl_error(vec_swap_remove(&snapshot->roots, last, NULL));
     flow_security_root_index_destroy(root);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   *root_out = root;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void flow_security_policy_snapshot_release(flow_security_policy_snapshot_t *snapshot) {
@@ -678,81 +678,81 @@ static int flow_security_policy_snapshot_create(uint64_t policy_version, uint64_
   if (out) *out = NULL;
   if (!out || policy_version == 0u || !rules || rule_count == 0u ||
       rule_count > TURBO_FLOW_SECURITY_MAX_RULES)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   for (size_t i = 0u; i < rule_count; ++i)
-    if (!flow_security_rule_valid(&rules[i], matcher)) return TURBO_EINVAL;
+    if (!flow_security_rule_valid(&rules[i], matcher)) return SALTS_EINVAL;
   snapshot = (flow_security_policy_snapshot_t *)calloc(1u, sizeof(*snapshot));
-  if (!snapshot) return TURBO_ENOMEM;
+  if (!snapshot) return SALTS_ENOMEM;
   atomic_init(&snapshot->references, 1u);
   rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->rules, sizeof(turbo_flow_security_rule_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     free(snapshot);
     return rc;
   }
   rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->roots, sizeof(flow_security_root_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX));
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     vec_destroy(&snapshot->rules);
     free(snapshot);
     return rc;
   }
   rc = turbo_flow_stl_error(hash_map_init_bytes(&snapshot->root_index, sizeof(vstr), _Alignof(turbo_flow_max_align_t), sizeof(flow_security_root_index_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX, ((flow_security_root_hash) ? (flow_security_root_hash) : hash_bytes), ((flow_security_root_equal) ? (flow_security_root_equal) : hash_key_equal), NULL));
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     vec_destroy(&snapshot->roots);
     vec_destroy(&snapshot->rules);
     free(snapshot);
     return rc;
   }
   rc = turbo_flow_stl_error(vec_reserve(&snapshot->rules, rule_count));
-  for (size_t i = 0u; rc == TURBO_OK && i < rule_count; ++i) {
+  for (size_t i = 0u; rc == SALTS_OK && i < rule_count; ++i) {
     const turbo_flow_security_rule_t *compiled_rule;
     flow_security_root_index_t *root = NULL;
     rc = turbo_flow_stl_error(vec_push(&snapshot->rules, &rules[i]));
-    if (rc != TURBO_OK) break;
+    if (rc != SALTS_OK) break;
     compiled_rule = (const turbo_flow_security_rule_t *)vec_at_const(&snapshot->rules, i);
     if (!compiled_rule) {
-      rc = TURBO_EPROTO;
+      rc = SALTS_EPROTO;
       break;
     }
     rc = flow_security_snapshot_root(snapshot, compiled_rule->domain_id, &root);
-    if (rc != TURBO_OK) break;
+    if (rc != SALTS_OK) break;
     for (size_t action = 0u; action < 7u; ++action) {
       if ((compiled_rule->action_mask & (UINT32_C(1) << action)) == 0u) continue;
       rc = flow_security_rule_bucket_insert(
           &root->buckets[action][compiled_rule->resource_type - 1u], compiled_rule, i);
-      if (rc != TURBO_OK) break;
+      if (rc != SALTS_OK) break;
     }
   }
-  for (size_t root_index = 0u; rc == TURBO_OK && root_index < vec_size(&snapshot->roots);
+  for (size_t root_index = 0u; rc == SALTS_OK && root_index < vec_size(&snapshot->roots);
        ++root_index) {
     flow_security_root_index_t **root =
         (flow_security_root_index_t **)vec_at(&snapshot->roots, root_index);
     if (!root || !*root) {
-      rc = TURBO_EPROTO;
+      rc = SALTS_EPROTO;
       break;
     }
-    for (size_t action = 0u; rc == TURBO_OK && action < 7u; ++action) {
-      for (size_t resource = 0u; rc == TURBO_OK && resource < 5u; ++resource)
+    for (size_t action = 0u; rc == SALTS_OK && action < 7u; ++action) {
+      for (size_t resource = 0u; rc == SALTS_OK && resource < 5u; ++resource)
         rc = flow_security_rule_bucket_compile(&(*root)->buckets[action][resource],
                                                &snapshot->rules, matcher);
     }
   }
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     flow_security_policy_snapshot_release(snapshot);
     return rc;
   }
   snapshot->policy_version = policy_version;
   snapshot->expires_at = expires_at;
   *out = snapshot;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static flow_security_policy_snapshot_t *
 flow_security_policy_snapshot_acquire(turbo_flow_security_realm_t *realm) {
   flow_security_policy_snapshot_t *snapshot;
-  turbo_mutex_lock(&realm->snapshot_lock);
+  salts_mutex_lock(&realm->snapshot_lock);
   snapshot = realm->active;
   if (snapshot) (void)atomic_fetch_add_explicit(&snapshot->references, 1u, memory_order_relaxed);
-  turbo_mutex_unlock(&realm->snapshot_lock);
+  salts_mutex_unlock(&realm->snapshot_lock);
   return snapshot;
 }
 
@@ -762,10 +762,10 @@ int turbo_flow_security_realm_create(const turbo_flow_security_realm_config_t *c
   const char *policy_source;
   int rc;
   if (out) *out = NULL;
-  if (!out || !flow_security_realm_config_valid(config)) return TURBO_EINVAL;
+  if (!out || !flow_security_realm_config_valid(config)) return SALTS_EINVAL;
   realm = (turbo_flow_security_realm_t *)calloc(1u, sizeof(*realm));
-  if (!realm) return TURBO_ENOMEM;
-  turbo_mutex_init(&realm->snapshot_lock);
+  if (!realm) return SALTS_ENOMEM;
+  salts_mutex_init(&realm->snapshot_lock);
   policy_source = config->size >= sizeof(*config) ? config->policy_source : NULL;
   realm->resource_uid = tstr_dup(config->resource_uid);
   realm->owner_name = tstr_dup(config->owner_name);
@@ -773,12 +773,12 @@ int turbo_flow_security_realm_create(const turbo_flow_security_realm_config_t *c
   realm->matcher = config->matcher;
   if (!realm->resource_uid || !realm->owner_name || (policy_source && !realm->policy_source)) {
     turbo_flow_security_realm_destroy(realm);
-    return TURBO_ENOMEM;
+    return SALTS_ENOMEM;
   }
   if (config->policy_version != 0u) {
     rc = flow_security_policy_snapshot_create(config->policy_version, 0u, config->rules,
                                               config->rule_count, &realm->matcher, &realm->active);
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       turbo_flow_security_realm_destroy(realm);
       return rc;
     }
@@ -787,22 +787,22 @@ int turbo_flow_security_realm_create(const turbo_flow_security_realm_config_t *c
   atomic_init(&realm->allowed, 0u);
   atomic_init(&realm->denied, 0u);
   atomic_init(&realm->failures, 0u);
-  atomic_init(&realm->last_status, TURBO_OK);
+  atomic_init(&realm->last_status, SALTS_OK);
   *out = realm;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void turbo_flow_security_realm_destroy(turbo_flow_security_realm_t *realm) {
   flow_security_policy_snapshot_t *active;
   if (!realm) return;
-  turbo_mutex_lock(&realm->snapshot_lock);
+  salts_mutex_lock(&realm->snapshot_lock);
   active = realm->active;
   realm->active = NULL;
   realm->policy_provider = NULL;
   realm->authorization_provider = NULL;
-  turbo_mutex_unlock(&realm->snapshot_lock);
+  salts_mutex_unlock(&realm->snapshot_lock);
   flow_security_policy_snapshot_release(active);
-  turbo_mutex_destroy(&realm->snapshot_lock);
+  salts_mutex_destroy(&realm->snapshot_lock);
   tstr_freep(&realm->resource_uid);
   tstr_freep(&realm->owner_name);
   tstr_freep(&realm->policy_source);
@@ -815,35 +815,35 @@ const char *turbo_flow_security_realm_policy_source(const turbo_flow_security_re
 
 int turbo_flow_security_realm_bind_policy_provider(
     turbo_flow_security_realm_t *realm, const turbo_flow_security_policy_provider_t *provider) {
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
   if (!realm || !realm->policy_source || !provider || provider->size < sizeof(*provider) ||
       !provider->load || !provider->release)
-    return TURBO_EINVAL;
-  turbo_mutex_lock(&realm->snapshot_lock);
+    return SALTS_EINVAL;
+  salts_mutex_lock(&realm->snapshot_lock);
   if (realm->authorization_provider)
-    rc = TURBO_EBUSY;
+    rc = SALTS_EBUSY;
   else if (realm->policy_provider)
-    rc = realm->policy_provider == provider ? TURBO_EALREADY : TURBO_EBUSY;
+    rc = realm->policy_provider == provider ? SALTS_EALREADY : SALTS_EBUSY;
   else realm->policy_provider = provider;
-  turbo_mutex_unlock(&realm->snapshot_lock);
+  salts_mutex_unlock(&realm->snapshot_lock);
   return rc;
 }
 
 int turbo_flow_security_realm_bind_authorization_provider(
     turbo_flow_security_realm_t *realm,
     const turbo_flow_security_authorization_provider_t *provider) {
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
   if (!realm || !realm->policy_source || !provider || provider->size < sizeof(*provider) ||
       !provider->authorize)
-    return TURBO_EINVAL;
-  turbo_mutex_lock(&realm->snapshot_lock);
+    return SALTS_EINVAL;
+  salts_mutex_lock(&realm->snapshot_lock);
   if (realm->policy_provider)
-    rc = TURBO_EBUSY;
+    rc = SALTS_EBUSY;
   else if (realm->authorization_provider)
-    rc = realm->authorization_provider == provider ? TURBO_EALREADY : TURBO_EBUSY;
+    rc = realm->authorization_provider == provider ? SALTS_EALREADY : SALTS_EBUSY;
   else
     realm->authorization_provider = provider;
-  turbo_mutex_unlock(&realm->snapshot_lock);
+  salts_mutex_unlock(&realm->snapshot_lock);
   return rc;
 }
 
@@ -856,14 +856,14 @@ int turbo_flow_security_realm_refresh(turbo_flow_security_realm_t *realm, uint64
   uint64_t active_version = 0u;
   int bundle_loaded = 0;
   int rc;
-  if (!realm || !realm->policy_source) return TURBO_EINVAL;
-  turbo_mutex_lock(&realm->snapshot_lock);
+  if (!realm || !realm->policy_source) return SALTS_EINVAL;
+  salts_mutex_lock(&realm->snapshot_lock);
   provider = realm->policy_provider;
   if (realm->active) active_version = realm->active->policy_version;
-  turbo_mutex_unlock(&realm->snapshot_lock);
-  if (!provider) return TURBO_ENOTSUP;
+  salts_mutex_unlock(&realm->snapshot_lock);
+  if (!provider) return SALTS_ENOTSUP;
   rc = provider->load(provider->ctx, required_version, &bundle);
-  if (rc != TURBO_OK) goto done;
+  if (rc != SALTS_OK) goto done;
   bundle_loaded = 1;
   if (bundle.size < sizeof(bundle) || bundle.abi_version != TURBO_FLOW_SECURITY_ABI_V3 ||
       bundle.policy_version == 0u ||
@@ -872,26 +872,26 @@ int turbo_flow_security_realm_refresh(turbo_flow_security_realm_t *realm, uint64
       bundle.rule_count > TURBO_FLOW_SECURITY_MAX_RULES ||
       (bundle.expires_at != 0u &&
        (now_epoch_seconds == 0u || now_epoch_seconds >= bundle.expires_at))) {
-    rc = TURBO_EPROTO;
+    rc = SALTS_EPROTO;
     goto done;
   }
   rc = flow_security_policy_snapshot_create(bundle.policy_version, bundle.expires_at, bundle.rules,
                                             bundle.rule_count, &realm->matcher, &replacement);
-  if (rc != TURBO_OK) goto done;
-  turbo_mutex_lock(&realm->snapshot_lock);
+  if (rc != SALTS_OK) goto done;
+  salts_mutex_lock(&realm->snapshot_lock);
   if (realm->active && realm->active->policy_version > replacement->policy_version) {
-    rc = TURBO_EBUSY;
+    rc = SALTS_EBUSY;
   } else if (realm->active && realm->active->policy_version == replacement->policy_version) {
     rc = realm->active->expires_at != 0u &&
                  (now_epoch_seconds == 0u || now_epoch_seconds >= realm->active->expires_at)
-             ? TURBO_EPROTO
-             : TURBO_OK;
+             ? SALTS_EPROTO
+             : SALTS_OK;
   } else {
     previous = realm->active;
     realm->active = replacement;
     replacement = NULL;
   }
-  turbo_mutex_unlock(&realm->snapshot_lock);
+  salts_mutex_unlock(&realm->snapshot_lock);
 
 done:
   flow_security_policy_snapshot_release(previous);
@@ -899,7 +899,7 @@ done:
   if (provider && provider->release && (bundle_loaded || bundle.provider_bundle))
     provider->release(provider->ctx, &bundle);
   atomic_store_explicit(&realm->last_status, rc, memory_order_release);
-  if (rc != TURBO_OK) atomic_fetch_add_explicit(&realm->failures, 1u, memory_order_relaxed);
+  if (rc != SALTS_OK) atomic_fetch_add_explicit(&realm->failures, 1u, memory_order_relaxed);
   return rc;
 }
 
@@ -927,20 +927,20 @@ static int flow_security_resource_matches(const turbo_flow_security_rule_t *rule
   *matched = 0;
   if (rule->match_kind == TURBO_FLOW_SECURITY_MATCH_EXACT) {
     *matched = strcmp(rule->pattern, request->resource) == 0;
-    return TURBO_OK;
+    return SALTS_OK;
   }
   if (rule->match_kind == TURBO_FLOW_SECURITY_MATCH_PREFIX) {
     pattern_size = strlen(rule->pattern);
     *matched = strncmp(rule->pattern, request->resource, pattern_size) == 0;
-    return TURBO_OK;
+    return SALTS_OK;
   }
-  return TURBO_ENOTSUP;
+  return SALTS_ENOTSUP;
 }
 
 static void flow_security_record(turbo_flow_security_realm_t *realm, int status,
                                  const turbo_flow_security_decision_t *decision) {
   atomic_fetch_add_explicit(&realm->evaluations, 1u, memory_order_relaxed);
-  if (status != TURBO_OK) {
+  if (status != SALTS_OK) {
     atomic_fetch_add_explicit(&realm->failures, 1u, memory_order_relaxed);
   } else if (decision->effect == TURBO_FLOW_SECURITY_ALLOW) {
     atomic_fetch_add_explicit(&realm->allowed, 1u, memory_order_relaxed);
@@ -966,7 +966,7 @@ static int flow_security_evaluate_entries(flow_security_policy_snapshot_t *snaps
                                           const turbo_flow_security_request_t *request,
                                           const vec_t *entries, size_t *deny_rule,
                                           size_t *allow_rule) {
-  if (!entries) return TURBO_OK;
+  if (!entries) return SALTS_OK;
   for (size_t position = 0u; position < vec_size(entries); ++position) {
     const size_t *rule_index = (const size_t *)vec_at_const(entries, position);
     const turbo_flow_security_rule_t *rule =
@@ -977,7 +977,7 @@ static int flow_security_evaluate_entries(flow_security_policy_snapshot_t *snaps
     int rc;
     if (!rule || !flow_security_subject_matches(rule, request->principal)) continue;
     rc = flow_security_resource_matches(rule, request, &matched);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     if (!matched) continue;
     if (rule->effect == TURBO_FLOW_SECURITY_DENY) {
       if (*deny_rule == SIZE_MAX || *rule_index < *deny_rule) *deny_rule = *rule_index;
@@ -985,7 +985,7 @@ static int flow_security_evaluate_entries(flow_security_policy_snapshot_t *snaps
       *allow_rule = *rule_index;
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 typedef struct flow_security_adapter_emit_context_s {
@@ -1001,17 +1001,17 @@ static int flow_security_adapter_emit(void *ctx, size_t candidate_position) {
   const size_t *rule_index;
   const turbo_flow_security_rule_t *rule;
   if (!emit || !emit->snapshot || !emit->leaf || !emit->deny_rule || !emit->allow_rule ||
-      emit->status != TURBO_OK || candidate_position >= vec_size(&emit->leaf->entries)) {
-    if (emit) emit->status = TURBO_EPROTO;
-    return TURBO_EPROTO;
+      emit->status != SALTS_OK || candidate_position >= vec_size(&emit->leaf->entries)) {
+    if (emit) emit->status = SALTS_EPROTO;
+    return SALTS_EPROTO;
   }
   rule_index = (const size_t *)vec_at_const(&emit->leaf->entries, candidate_position);
   rule = rule_index ? (const turbo_flow_security_rule_t *)vec_at_const(&emit->snapshot->rules,
                                                                              *rule_index)
                     : NULL;
   if (!rule || rule->match_kind != TURBO_FLOW_SECURITY_MATCH_ADAPTER) {
-    emit->status = TURBO_EPROTO;
-    return TURBO_EPROTO;
+    emit->status = SALTS_EPROTO;
+    return SALTS_EPROTO;
   }
   if (rule->effect == TURBO_FLOW_SECURITY_DENY) {
     if (*emit->deny_rule == SIZE_MAX || *rule_index < *emit->deny_rule)
@@ -1019,7 +1019,7 @@ static int flow_security_adapter_emit(void *ctx, size_t candidate_position) {
   } else if (*emit->allow_rule == SIZE_MAX || *rule_index < *emit->allow_rule) {
     *emit->allow_rule = *rule_index;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_security_evaluate_adapter_leaf(const turbo_flow_security_matcher_t *matcher,
@@ -1029,16 +1029,16 @@ static int flow_security_evaluate_adapter_leaf(const turbo_flow_security_matcher
                                                size_t *deny_rule, size_t *allow_rule) {
   flow_security_adapter_emit_context_t emit;
   int rc;
-  if (!leaf || vec_empty(&leaf->entries)) return TURBO_OK;
-  if (!matcher || !matcher->evaluate_leaf || !leaf->compiled) return TURBO_EPROTO;
+  if (!leaf || vec_empty(&leaf->entries)) return SALTS_OK;
+  if (!matcher || !matcher->evaluate_leaf || !leaf->compiled) return SALTS_EPROTO;
   emit.snapshot = snapshot;
   emit.leaf = leaf;
   emit.deny_rule = deny_rule;
   emit.allow_rule = allow_rule;
-  emit.status = TURBO_OK;
+  emit.status = SALTS_OK;
   rc = matcher->evaluate_leaf(matcher->ctx, leaf->compiled, request, flow_security_adapter_emit,
                               &emit);
-  return rc != TURBO_OK ? rc : emit.status;
+  return rc != SALTS_OK ? rc : emit.status;
 }
 
 static int flow_security_evaluate_subject(turbo_flow_security_realm_t *realm,
@@ -1055,13 +1055,13 @@ static int flow_security_evaluate_subject(turbo_flow_security_realm_t *realm,
       flow_security_rule_bucket_pattern(bucket, &bucket->exact_index, bucket->exact_subject_mask,
                                         subject_kind, subject, request->resource, resource_size);
   rc = flow_security_evaluate_entries(snapshot, request, candidates, deny_rule, allow_rule);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if ((bucket->prefix_subject_mask & (UINT32_C(1) << subject_kind)) != 0u) {
     candidates = flow_security_rule_bucket_pattern(bucket, &bucket->prefix_index,
                                                    bucket->prefix_subject_mask, subject_kind,
                                                    subject, request->resource, 0u);
     rc = flow_security_evaluate_entries(snapshot, request, candidates, deny_rule, allow_rule);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     size_t prefix_limit =
         resource_size < bucket->max_prefix_size ? resource_size : bucket->max_prefix_size;
     for (size_t prefix_size = 1u; prefix_size <= prefix_limit; ++prefix_size) {
@@ -1069,7 +1069,7 @@ static int flow_security_evaluate_subject(turbo_flow_security_realm_t *realm,
                                                      bucket->prefix_subject_mask, subject_kind,
                                                      subject, request->resource, prefix_size);
       rc = flow_security_evaluate_entries(snapshot, request, candidates, deny_rule, allow_rule);
-      if (rc != TURBO_OK) return rc;
+      if (rc != SALTS_OK) return rc;
     }
   }
   adapter = subject_kind == TURBO_FLOW_SECURITY_SUBJECT_ANY
@@ -1101,7 +1101,7 @@ static int flow_security_realm_evaluate_validated(turbo_flow_security_realm_t *r
   size_t resource_size;
   size_t deny_rule = SIZE_MAX;
   size_t allow_rule = SIZE_MAX;
-  int rc = TURBO_OK;
+  int rc = SALTS_OK;
   resource_size = strlen(request->resource);
   snapshot = flow_security_policy_snapshot_acquire(realm);
   result.policy_version = snapshot ? snapshot->policy_version : 0u;
@@ -1113,7 +1113,7 @@ static int flow_security_realm_evaluate_validated(turbo_flow_security_realm_t *r
   }
   if (request->principal->expires_at != 0u) {
     if (now_epoch_seconds == 0u) {
-      rc = TURBO_EINVAL;
+      rc = SALTS_EINVAL;
       goto complete;
     }
     if (now_epoch_seconds >= request->principal->expires_at) {
@@ -1139,22 +1139,22 @@ static int flow_security_realm_evaluate_validated(turbo_flow_security_realm_t *r
       rc = flow_security_evaluate_subject(realm, snapshot, request, bucket,
                                           TURBO_FLOW_SECURITY_SUBJECT_ANY, "", resource_size,
                                           &deny_rule, &allow_rule);
-      if (rc != TURBO_OK) goto complete;
+      if (rc != SALTS_OK) goto complete;
       rc = flow_security_evaluate_subject(
           realm, snapshot, request, bucket, TURBO_FLOW_SECURITY_SUBJECT_PRINCIPAL,
           request->principal->principal_id, resource_size, &deny_rule, &allow_rule);
-      if (rc != TURBO_OK) goto complete;
+      if (rc != SALTS_OK) goto complete;
       for (uint32_t i = 0u; i < request->principal->role_count; ++i) {
         rc = flow_security_evaluate_subject(
             realm, snapshot, request, bucket, TURBO_FLOW_SECURITY_SUBJECT_ROLE,
             request->principal->roles[i], resource_size, &deny_rule, &allow_rule);
-        if (rc != TURBO_OK) goto complete;
+        if (rc != SALTS_OK) goto complete;
       }
       for (uint32_t i = 0u; i < request->principal->group_count; ++i) {
         rc = flow_security_evaluate_subject(
             realm, snapshot, request, bucket, TURBO_FLOW_SECURITY_SUBJECT_GROUP,
             request->principal->groups[i], resource_size, &deny_rule, &allow_rule);
-        if (rc != TURBO_OK) goto complete;
+        if (rc != SALTS_OK) goto complete;
       }
     }
   }
@@ -1180,7 +1180,7 @@ int turbo_flow_security_realm_evaluate(turbo_flow_security_realm_t *realm,
                                        const turbo_flow_security_request_t *request,
                                        uint64_t now_epoch_seconds,
                                        turbo_flow_security_decision_t *decision) {
-  if (!flow_security_request_valid(realm, request, decision)) return TURBO_EINVAL;
+  if (!flow_security_request_valid(realm, request, decision)) return SALTS_EINVAL;
   return flow_security_realm_evaluate_validated(realm, request, now_epoch_seconds, decision);
 }
 
@@ -1192,15 +1192,15 @@ int turbo_flow_security_realm_authorize(turbo_flow_security_realm_t *realm,
   const turbo_flow_security_authorization_provider_t *authorization_provider;
   int needs_refresh = 0;
   int rc;
-  if (!flow_security_request_valid(realm, request, decision)) return TURBO_EINVAL;
-  turbo_mutex_lock(&realm->snapshot_lock);
+  if (!flow_security_request_valid(realm, request, decision)) return SALTS_EINVAL;
+  salts_mutex_lock(&realm->snapshot_lock);
   authorization_provider = realm->authorization_provider;
-  turbo_mutex_unlock(&realm->snapshot_lock);
+  salts_mutex_unlock(&realm->snapshot_lock);
   if (authorization_provider) {
     turbo_flow_security_decision_t remote = TURBO_FLOW_SECURITY_DECISION_INIT;
     rc = authorization_provider->authorize(authorization_provider->ctx, request,
                                            now_epoch_seconds, &remote);
-    if (rc == TURBO_OK &&
+    if (rc == SALTS_OK &&
         ((remote.effect != TURBO_FLOW_SECURITY_ALLOW &&
           remote.effect != TURBO_FLOW_SECURITY_DENY) ||
          remote.policy_version != request->principal->policy_version ||
@@ -1210,11 +1210,11 @@ int turbo_flow_security_realm_authorize(turbo_flow_security_realm_t *realm,
           remote.reason != TURBO_FLOW_SECURITY_REASON_DOMAIN_MISMATCH &&
           remote.reason != TURBO_FLOW_SECURITY_REASON_PRINCIPAL_EXPIRED &&
           remote.reason != TURBO_FLOW_SECURITY_REASON_POLICY_VERSION_MISMATCH)))
-      rc = TURBO_EPROTO;
-    if (rc != TURBO_OK) remote = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
+      rc = SALTS_EPROTO;
+    if (rc != SALTS_OK) remote = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
     flow_security_record(realm, rc, &remote);
     *decision = remote;
-    return rc == TURBO_OK && remote.effect == TURBO_FLOW_SECURITY_DENY ? TURBO_EPERM : rc;
+    return rc == SALTS_OK && remote.effect == TURBO_FLOW_SECURITY_DENY ? SALTS_EPERM : rc;
   }
   if (realm->policy_source) {
     snapshot = flow_security_policy_snapshot_acquire(realm);
@@ -1226,14 +1226,14 @@ int turbo_flow_security_realm_authorize(turbo_flow_security_realm_t *realm,
   if (needs_refresh) {
     rc = turbo_flow_security_realm_refresh(realm, request->principal->policy_version,
                                            now_epoch_seconds);
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
       if (decision && decision->size >= sizeof(*decision))
         *decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
       return rc;
     }
   }
   rc = flow_security_realm_evaluate_validated(realm, request, now_epoch_seconds, decision);
-  return rc == TURBO_OK && decision->effect == TURBO_FLOW_SECURITY_DENY ? TURBO_EPERM : rc;
+  return rc == SALTS_OK && decision->effect == TURBO_FLOW_SECURITY_DENY ? SALTS_EPERM : rc;
 }
 
 static int flow_security_resource_metadata(void *ctx, turbo_flow_resource_metadata_t *out) {
@@ -1241,7 +1241,7 @@ static int flow_security_resource_metadata(void *ctx, turbo_flow_resource_metada
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
   flow_security_policy_snapshot_t *snapshot;
   int written;
-  if (!realm || !out || out->size < sizeof(*out)) return TURBO_EINVAL;
+  if (!realm || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
   metadata.domain = TURBO_FLOW_DOMAIN_RULES;
   metadata.kind = TURBO_FLOW_RESOURCE_SECURITY_REALM;
   snapshot = flow_security_policy_snapshot_acquire((turbo_flow_security_realm_t *)realm);
@@ -1249,20 +1249,20 @@ static int flow_security_resource_metadata(void *ctx, turbo_flow_resource_metada
   metadata.observed_generation = snapshot ? snapshot->policy_version : 0u;
   flow_security_policy_snapshot_release(snapshot);
   written = snprintf(metadata.uid, sizeof(metadata.uid), "%s", realm->resource_uid);
-  if (written < 0 || (size_t)written >= sizeof(metadata.uid)) return TURBO_ENAMETOOLONG;
+  if (written < 0 || (size_t)written >= sizeof(metadata.uid)) return SALTS_ENAMETOOLONG;
   written = snprintf(metadata.owner_name, sizeof(metadata.owner_name), "%s", realm->owner_name);
-  if (written < 0 || (size_t)written >= sizeof(metadata.owner_name)) return TURBO_ENAMETOOLONG;
+  if (written < 0 || (size_t)written >= sizeof(metadata.owner_name)) return SALTS_ENAMETOOLONG;
   *out = metadata;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_security_resource_snapshot(void *ctx, turbo_flow_resource_snapshot_t *out) {
   turbo_flow_security_realm_t *realm = (turbo_flow_security_realm_t *)ctx;
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
   int rc;
-  if (!out || out->size < sizeof(*out)) return TURBO_EINVAL;
+  if (!out || out->size < sizeof(*out)) return SALTS_EINVAL;
   rc = flow_security_resource_metadata(ctx, &metadata);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   *out = (turbo_flow_resource_snapshot_t)TURBO_FLOW_RESOURCE_SNAPSHOT_INIT;
   out->domain = metadata.domain;
   out->kind = metadata.kind;
@@ -1271,7 +1271,7 @@ static int flow_security_resource_snapshot(void *ctx, turbo_flow_resource_snapsh
   out->generation = metadata.generation;
   out->observed_generation = metadata.observed_generation;
   out->last_status = atomic_load_explicit(&realm->last_status, memory_order_acquire);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_security_resource_document(void *ctx,
@@ -1283,10 +1283,10 @@ static int flow_security_resource_document(void *ctx,
   char payload[512];
   int written;
   int rc;
-  if (document_kind != TURBO_FLOW_RESOURCE_DOCUMENT_STATUS) return TURBO_ENOTSUP;
-  if (!realm || !out) return TURBO_EINVAL;
+  if (document_kind != TURBO_FLOW_RESOURCE_DOCUMENT_STATUS) return SALTS_ENOTSUP;
+  if (!realm || !out) return SALTS_EINVAL;
   rc = flow_security_resource_metadata(realm, &metadata);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   snapshot = flow_security_policy_snapshot_acquire(realm);
   written =
       snprintf(payload, sizeof(payload),
@@ -1301,14 +1301,14 @@ static int flow_security_resource_document(void *ctx,
                (unsigned long long)atomic_load_explicit(&realm->failures, memory_order_relaxed),
                atomic_load_explicit(&realm->last_status, memory_order_acquire));
   flow_security_policy_snapshot_release(snapshot);
-  if (written < 0 || (size_t)written >= sizeof(payload)) return TURBO_ERANGE;
+  if (written < 0 || (size_t)written >= sizeof(payload)) return SALTS_ERANGE;
   return turbo_flow_resource_document_set_payload_copy(out, &metadata, &FLOW_SECURITY_STATUS_SCHEMA,
                                                        payload, (size_t)written);
 }
 
 int turbo_flow_security_realm_register(turbo_flow_t *flow, turbo_flow_security_realm_t *realm) {
   turbo_flow_resource_provider_ops_t ops = TURBO_FLOW_RESOURCE_PROVIDER_OPS_INIT;
-  if (!flow || !realm) return TURBO_EINVAL;
+  if (!flow || !realm) return SALTS_EINVAL;
   ops.metadata = flow_security_resource_metadata;
   ops.snapshot = flow_security_resource_snapshot;
   ops.document = flow_security_resource_document;
@@ -1333,10 +1333,10 @@ static int flow_security_config_error(turbo_flow_config_error_t *error, int stat
 static int flow_security_json_fields(const json_value_t *object, const char *const *allowed,
                                      size_t allowed_count, const char *channel, const char *scope,
                                      turbo_flow_config_error_t *error) {
-  if (!object || turbo_json_type(object) != TURBO_JSON_OBJECT)
-    return flow_security_config_error(error, TURBO_EINVAL, channel, scope, "expected mapping");
-  for (size_t i = 0u; i < turbo_json_object_size(object); ++i) {
-    const char *field = turbo_json_object_key(object, i);
+  if (!object || json_type(object) != JSON_OBJECT)
+    return flow_security_config_error(error, SALTS_EINVAL, channel, scope, "expected mapping");
+  for (size_t i = 0u; i < json_object_size(object); ++i) {
+    const char *field = json_object_key(object, i);
     int known = 0;
     for (size_t j = 0u; j < allowed_count; ++j) {
       if (field && strcmp(field, allowed[j]) == 0) {
@@ -1345,15 +1345,15 @@ static int flow_security_json_fields(const json_value_t *object, const char *con
       }
     }
     if (!known)
-      return flow_security_config_error(error, TURBO_EINVAL, channel, field,
+      return flow_security_config_error(error, SALTS_EINVAL, channel, field,
                                         "unknown security realm field");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static const char *flow_security_json_string(const json_value_t *object, const char *field) {
-  json_value_t *value = turbo_json_object_get(object, field);
-  return value && turbo_json_type(value) == TURBO_JSON_STRING ? turbo_json_string(value) : NULL;
+  json_value_t *value = json_object_get(object, field);
+  return value && json_type(value) == JSON_STRING ? json_string(value) : NULL;
 }
 
 int turbo_flow_security_realm_create_resolved(const turbo_flow_resolved_config_t *resolved,
@@ -1362,7 +1362,7 @@ int turbo_flow_security_realm_create_resolved(const turbo_flow_resolved_config_t
                                               turbo_flow_security_realm_t **out,
                                               turbo_flow_config_error_t *error) {
   static const char *const allowed[] = {"resource_uid", "owner_name", "policy_source"};
-  turbo_json_doc_t *document = NULL;
+  json_value_t *document = NULL;
   turbo_flow_security_realm_config_t config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
   json_value_t *channels;
   json_value_t *channel;
@@ -1374,50 +1374,50 @@ int turbo_flow_security_realm_create_resolved(const turbo_flow_resolved_config_t
   if (out) *out = NULL;
   if (!resolved || !channel_name || !channel_name[0] || !out || !error ||
       error->size < sizeof(*error)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
   json = turbo_flow_resolved_config_json(resolved, &json_size);
-  if (!json || turbo_parse_json((const uint8_t *)json, json_size, &document) != TURBO_OK ||
-      !document) {
-    return flow_security_config_error(error, TURBO_EINVAL, channel_name, NULL,
+  if (json) document = json_parse(json, json_size);
+  if (!document) {
+    return flow_security_config_error(error, SALTS_EINVAL, channel_name, NULL,
                                       "invalid resolved configuration snapshot");
   }
-  channels = turbo_json_object_get(document, "channels");
-  channel = channels ? turbo_json_object_get(channels, channel_name) : NULL;
-  kind = channel ? turbo_json_object_get(channel, "kind") : NULL;
-  fields = channel ? turbo_json_object_get(channel, "config") : NULL;
-  if (!channel || turbo_json_type(channel) != TURBO_JSON_OBJECT) {
-    rc = flow_security_config_error(error, TURBO_ENOENT, channel_name, NULL,
+  channels = json_object_get(document, "channels");
+  channel = channels ? json_object_get(channels, channel_name) : NULL;
+  kind = channel ? json_object_get(channel, "kind") : NULL;
+  fields = channel ? json_object_get(channel, "config") : NULL;
+  if (!channel || json_type(channel) != JSON_OBJECT) {
+    rc = flow_security_config_error(error, SALTS_ENOENT, channel_name, NULL,
                                     "security realm channel is not resolved");
     goto done;
   }
-  if (!kind || turbo_json_type(kind) != TURBO_JSON_STRING ||
-      strcmp(turbo_json_string(kind), "security_realm") != 0) {
-    rc = flow_security_config_error(error, TURBO_EINVAL, channel_name, NULL,
+  if (!kind || json_type(kind) != JSON_STRING ||
+      strcmp(json_string(kind), "security_realm") != 0) {
+    rc = flow_security_config_error(error, SALTS_EINVAL, channel_name, NULL,
                                     "channel kind must be security_realm");
     goto done;
   }
   rc = flow_security_json_fields(fields, allowed, sizeof(allowed) / sizeof(allowed[0]),
                                  channel_name, NULL, error);
-  if (rc != TURBO_OK) goto done;
+  if (rc != SALTS_OK) goto done;
   config.resource_uid = flow_security_json_string(fields, "resource_uid");
   config.owner_name = flow_security_json_string(fields, "owner_name");
   config.policy_source = flow_security_json_string(fields, "policy_source");
   if (!config.resource_uid || !config.resource_uid[0] || !config.owner_name ||
       !config.owner_name[0] || !config.policy_source || !config.policy_source[0]) {
-    rc = flow_security_config_error(error, TURBO_EINVAL, channel_name, NULL,
+    rc = flow_security_config_error(error, SALTS_EINVAL, channel_name, NULL,
                                     "resource_uid, owner_name, and policy_source are required");
     goto done;
   }
   if (matcher) config.matcher = *matcher;
   rc = turbo_flow_security_realm_create(&config, out);
-  if (rc != TURBO_OK)
+  if (rc != SALTS_OK)
     rc =
         flow_security_config_error(error, rc, channel_name, NULL, "security realm creation failed");
 
 done:
-  turbo_free_json(&document);
+  json_free(document);
   return rc;
 }
 
@@ -1429,20 +1429,20 @@ int turbo_flow_security_secret_acquire(const turbo_flow_security_key_provider_t 
   if (!provider || provider->size < sizeof(*provider) || !provider->acquire || !provider->release ||
       !reference || !reference[0] || strlen(reference) > TURBO_FLOW_SECURITY_SECRET_REF_MAX ||
       !lease_out || lease_out->size < sizeof(*lease_out)) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   rc = provider->acquire(provider->ctx, reference, &lease);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     if (lease.provider_lease) provider->release(provider->ctx, &lease);
     return rc;
   }
   if (lease.size < sizeof(lease) || !lease.bytes || lease.byte_count == 0u ||
       !lease.provider_lease) {
     provider->release(provider->ctx, &lease);
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   *lease_out = lease;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void turbo_flow_security_secret_release(const turbo_flow_security_key_provider_t *provider,
@@ -1468,9 +1468,9 @@ int turbo_flow_security_auth_provider_owner_create_resolved(
       !factory->backend[0] || !factory->create_resolved || !resolved || !channel_name ||
       !channel_name[0] || !owner_out || owner_out->size < sizeof(*owner_out) || !error ||
       error->size < sizeof(*error))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   rc = factory->create_resolved(factory->ctx, resolved, channel_name, key_provider, &owner, error);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     if (owner.owner && owner.destroy) owner.destroy(owner.owner);
     return rc;
   }
@@ -1484,10 +1484,10 @@ int turbo_flow_security_auth_provider_owner_create_resolved(
         !owner.enhanced_provider->cancel)) ||
       !owner.owner || !owner.destroy) {
     if (owner.owner && owner.destroy) owner.destroy(owner.owner);
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   *owner_out = owner;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void turbo_flow_security_auth_provider_owner_destroy(
@@ -1505,15 +1505,15 @@ static int flow_security_provider_backend(const turbo_flow_resolved_config_t *re
   if (backend) *backend = NULL;
   if (!resolved || !channel_name || !channel_name[0] || !expected_kind || !backend || !error ||
       error->size < sizeof(*error))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   rc = turbo_flow_resolved_config_channel(resolved, channel_name, &view);
-  if (rc == TURBO_OK && strcmp(view.kind, expected_kind) != 0) rc = TURBO_EINVAL;
-  if (rc == TURBO_OK) rc = turbo_flow_resolved_channel_get_string(&view, "backend", backend);
-  if (rc == TURBO_OK && (!*backend || !(*backend)[0])) rc = TURBO_EINVAL;
-  if (rc != TURBO_OK)
+  if (rc == SALTS_OK && strcmp(view.kind, expected_kind) != 0) rc = SALTS_EINVAL;
+  if (rc == SALTS_OK) rc = turbo_flow_resolved_channel_get_string(&view, "backend", backend);
+  if (rc == SALTS_OK && (!*backend || !(*backend)[0])) rc = SALTS_EINVAL;
+  if (rc != SALTS_OK)
     return flow_security_config_error(error, rc, channel_name, "backend",
                                       "provider channel kind or backend is invalid");
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_security_auth_provider_owner_create_registered(
@@ -1528,25 +1528,25 @@ int turbo_flow_security_auth_provider_owner_create_registered(
     *owner_out =
         (turbo_flow_security_auth_provider_owner_t)TURBO_FLOW_SECURITY_AUTH_PROVIDER_OWNER_INIT;
   if (!factories || factory_count == 0u || !owner_out || owner_out->size < sizeof(*owner_out))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   rc = flow_security_provider_backend(resolved, channel_name, "auth_provider", &backend, error);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   for (size_t i = 0u; i < factory_count; ++i) {
     const turbo_flow_security_auth_provider_factory_t *factory = factories[i];
     if (!factory || factory->size < sizeof(*factory) ||
         factory->abi_version != TURBO_FLOW_SECURITY_ABI_V3 || !factory->backend ||
         !factory->backend[0] || !factory->create_resolved) {
-      return flow_security_config_error(error, TURBO_EINVAL, channel_name, "backend",
+      return flow_security_config_error(error, SALTS_EINVAL, channel_name, "backend",
                                         "authentication provider registry is invalid");
     }
     for (size_t j = 0u; j < i; ++j)
       if (strcmp(factories[j]->backend, factory->backend) == 0)
-        return flow_security_config_error(error, TURBO_EALREADY, channel_name, "backend",
+        return flow_security_config_error(error, SALTS_EALREADY, channel_name, "backend",
                                           "authentication provider backend is ambiguous");
     if (strcmp(factory->backend, backend) == 0) selected = factory;
   }
   if (!selected)
-    return flow_security_config_error(error, TURBO_ENOTSUP, channel_name, "backend",
+    return flow_security_config_error(error, SALTS_ENOTSUP, channel_name, "backend",
                                       "authentication provider backend is not registered");
   return turbo_flow_security_auth_provider_owner_create_resolved(selected, resolved, channel_name,
                                                                  key_provider, owner_out, error);
@@ -1568,9 +1568,9 @@ int turbo_flow_security_policy_provider_owner_create_resolved(
       !factory->backend[0] || !factory->create_resolved || !resolved || !channel_name ||
       !channel_name[0] || !owner_out || owner_out->size < sizeof(*owner_out) || !error ||
       error->size < sizeof(*error))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   rc = factory->create_resolved(factory->ctx, resolved, channel_name, key_provider, &owner, error);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     if (owner.owner && owner.destroy) owner.destroy(owner.owner);
     return rc;
   }
@@ -1584,10 +1584,10 @@ int turbo_flow_security_policy_provider_owner_create_resolved(
         !owner.authorization_provider->authorize)) ||
       !owner.owner || !owner.destroy) {
     if (owner.owner && owner.destroy) owner.destroy(owner.owner);
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   *owner_out = owner;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_security_policy_provider_owner_create_registered(
@@ -1602,25 +1602,25 @@ int turbo_flow_security_policy_provider_owner_create_registered(
     *owner_out =
         (turbo_flow_security_policy_provider_owner_t)TURBO_FLOW_SECURITY_POLICY_PROVIDER_OWNER_INIT;
   if (!factories || factory_count == 0u || !owner_out || owner_out->size < sizeof(*owner_out))
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   rc = flow_security_provider_backend(resolved, channel_name, "acl_provider", &backend, error);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   for (size_t i = 0u; i < factory_count; ++i) {
     const turbo_flow_security_policy_provider_factory_t *factory = factories[i];
     if (!factory || factory->size < sizeof(*factory) ||
         factory->abi_version != TURBO_FLOW_SECURITY_ABI_V3 || !factory->backend ||
         !factory->backend[0] || !factory->create_resolved) {
-      return flow_security_config_error(error, TURBO_EINVAL, channel_name, "backend",
+      return flow_security_config_error(error, SALTS_EINVAL, channel_name, "backend",
                                         "ACL provider registry is invalid");
     }
     for (size_t j = 0u; j < i; ++j)
       if (strcmp(factories[j]->backend, factory->backend) == 0)
-        return flow_security_config_error(error, TURBO_EALREADY, channel_name, "backend",
+        return flow_security_config_error(error, SALTS_EALREADY, channel_name, "backend",
                                           "ACL provider backend is ambiguous");
     if (strcmp(factory->backend, backend) == 0) selected = factory;
   }
   if (!selected)
-    return flow_security_config_error(error, TURBO_ENOTSUP, channel_name, "backend",
+    return flow_security_config_error(error, SALTS_ENOTSUP, channel_name, "backend",
                                       "ACL provider backend is not registered");
   return turbo_flow_security_policy_provider_owner_create_resolved(selected, resolved, channel_name,
                                                                    key_provider, owner_out, error);

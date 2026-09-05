@@ -1,7 +1,7 @@
 #include "turbo_flow_codec.h"
 
 #include "tinytest.h"
-#include "turbo_str.h"
+#include "salts_str.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -54,12 +54,12 @@ typedef struct codec_retry_capture_s {
 static int codec_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   codec_capture_ctx_t *capture = (codec_capture_ctx_t *)ctx;
 
-  if (!capture || !msg) return TURBO_EINVAL;
+  if (!capture || !msg) return SALTS_EINVAL;
   tstr_freep(&capture->payload);
   capture->payload = tstr_new_len(msg->payload.data ? msg->payload.data : "", msg->payload.len);
-  if (!capture->payload) return TURBO_ENOMEM;
+  if (!capture->payload) return SALTS_ENOMEM;
   atomic_fetch_add_explicit(&capture->count, 1, memory_order_release);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int codec_databind_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
@@ -70,30 +70,30 @@ static int codec_databind_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   const char *symbol_data = NULL;
   size_t symbol_len = 0;
 
-  if (!capture || !msg) return TURBO_EINVAL;
+  if (!capture || !msg) return SALTS_EINVAL;
   value = turbo_flow_codec_msg_databind_value(msg);
-  if (!value) return TURBO_EINVAL;
-  if (value != turbo_flow_msg_projection(msg, &schema) || !schema) return TURBO_EINVAL;
+  if (!value) return SALTS_EINVAL;
+  if (value != turbo_flow_msg_projection(msg, &schema) || !schema) return SALTS_EINVAL;
 
   capture->id = data_bind_value_as_int(data_bind_value_get(value, "id"));
   symbol = data_bind_value_get(value, "symbol");
   if (data_bind_value_get_string(symbol, &symbol_data, &symbol_len) != DATA_BIND_OK) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   tstr_freep(&capture->symbol);
   capture->symbol = tstr_new_len(symbol_data ? symbol_data : "", symbol_len);
-  if (!capture->symbol) return TURBO_ENOMEM;
+  if (!capture->symbol) return SALTS_ENOMEM;
   tstr_freep(&capture->payload);
   tstr_freep(&capture->schema_name);
   tstr_freep(&capture->type_name);
   capture->payload = tstr_new_len(msg->payload.data ? msg->payload.data : "", msg->payload.len);
   capture->schema_name = tstr_dup(schema->schema_name);
   capture->type_name = tstr_dup(schema->type_name);
-  if (!capture->payload || !capture->schema_name || !capture->type_name) return TURBO_ENOMEM;
+  if (!capture->payload || !capture->schema_name || !capture->type_name) return SALTS_ENOMEM;
   capture->content_state = turbo_flow_msg_content_state(msg);
   capture->encoding = schema->encoding;
   atomic_fetch_add_explicit(&capture->count, 1, memory_order_release);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void codec_databind_capture_cleanup(codec_databind_capture_ctx_t *capture) {
@@ -107,29 +107,29 @@ static void codec_databind_capture_cleanup(codec_databind_capture_ctx_t *capture
 static int codec_clone_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   codec_clone_capture_t *capture = (codec_clone_capture_t *)ctx;
 
-  if (!capture || !msg) return TURBO_EINVAL;
+  if (!capture || !msg) return SALTS_EINVAL;
   capture->source_projection = turbo_flow_codec_msg_databind_value(msg);
-  if (!capture->source_projection) return TURBO_EINVAL;
-  if (turbo_flow_msg_clone(&capture->clone, msg) != TURBO_OK) return TURBO_EPROTO;
+  if (!capture->source_projection) return SALTS_EINVAL;
+  if (turbo_flow_msg_clone(&capture->clone, msg) != SALTS_OK) return SALTS_EPROTO;
   atomic_fetch_add_explicit(&capture->count, 1, memory_order_release);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int codec_retry_attempt(void *ctx, turbo_flow_msg_t *msg, uint32_t attempt) {
   codec_retry_capture_t *capture = (codec_retry_capture_t *)ctx;
   const DataBindValue *value = turbo_flow_codec_msg_databind_value(msg);
 
-  if (!capture || !value || attempt == 0u || attempt > 2u) return TURBO_EINVAL;
-  if (value == capture->source_projection) return TURBO_EPROTO;
+  if (!capture || !value || attempt == 0u || attempt > 2u) return SALTS_EINVAL;
+  if (value == capture->source_projection) return SALTS_EPROTO;
   capture->independent_clones += 1u;
   capture->attempts = attempt;
-  if (data_bind_value_as_int(data_bind_value_get(value, "id")) != 23) return TURBO_EPROTO;
-  return attempt == 1u ? TURBO_EIO : TURBO_OK;
+  if (data_bind_value_as_int(data_bind_value_get(value, "id")) != 23) return SALTS_EPROTO;
+  return attempt == 1u ? SALTS_EIO : SALTS_OK;
 }
 
 static int codec_retryable(void *ctx, int status) {
   (void)ctx;
-  return status == TURBO_EIO;
+  return status == SALTS_EIO;
 }
 
 static int codec_retry_consume(void *ctx, turbo_flow_t *flow,
@@ -138,7 +138,7 @@ static int codec_retry_consume(void *ctx, turbo_flow_t *flow,
   (void)flow;
   (void)stage;
   (void)msg;
-  return TURBO_EIO;
+  return SALTS_EIO;
 }
 
 static int codec_retry_consume_retry(void *ctx, turbo_flow_t *flow,
@@ -147,9 +147,9 @@ static int codec_retry_consume_retry(void *ctx, turbo_flow_t *flow,
   turbo_flow_retry_ops_t ops;
 
   (void)flow;
-  if (!stage || !policy || policy->max_attempts != 2u) return TURBO_EINVAL;
+  if (!stage || !policy || policy->max_attempts != 2u) return SALTS_EINVAL;
   ((codec_retry_capture_t *)ctx)->source_projection = turbo_flow_codec_msg_databind_value(msg);
-  if (!((codec_retry_capture_t *)ctx)->source_projection) return TURBO_EINVAL;
+  if (!((codec_retry_capture_t *)ctx)->source_projection) return SALTS_EINVAL;
   memset(&ops, 0, sizeof(ops));
   ops.size = sizeof(ops);
   ops.attempt = codec_retry_attempt;
@@ -164,16 +164,16 @@ static int codec_csv_split_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   const char *data = NULL;
   size_t len = 0;
   int index;
-  if (!capture || !value) return TURBO_EINVAL;
+  if (!capture || !value) return SALTS_EINVAL;
   index = atomic_load_explicit(&capture->count, memory_order_acquire);
-  if (index < 0 || index >= 8) return TURBO_ENOSPC;
+  if (index < 0 || index >= 8) return SALTS_ENOSPC;
   capture->ids[index] = data_bind_value_as_int(data_bind_value_get(value, "id"));
   symbol = data_bind_value_get(value, "symbol");
-  if (data_bind_value_get_string(symbol, &data, &len) != DATA_BIND_OK) return TURBO_EPROTO;
+  if (data_bind_value_get_string(symbol, &data, &len) != DATA_BIND_OK) return SALTS_EPROTO;
   capture->symbols[index] = tstr_new_len(data ? data : "", len);
-  if (!capture->symbols[index]) return TURBO_ENOMEM;
+  if (!capture->symbols[index]) return SALTS_ENOMEM;
   atomic_fetch_add_explicit(&capture->count, 1, memory_order_release);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void codec_write_le32(unsigned char *out, uint32_t value) {
@@ -206,7 +206,7 @@ spec("turbo_flow_codec") {
     turbo_flow_msg_init(&msg);
     check_equal(turbo_flow_msg_bind_projection(&msg, &CODEC_OTHER_PROJECTION_SCHEMA, value, NULL,
                                                 codec_free_projection, NULL),
-                 TURBO_OK);
+                 SALTS_OK);
     check_null(turbo_flow_codec_msg_databind_value(&msg));
     check_equal((const void *)turbo_flow_msg_projection(&msg, NULL), (const void *)value);
     turbo_flow_msg_cleanup(&msg);
@@ -231,18 +231,18 @@ spec("turbo_flow_codec") {
     atomic_init(&capture.count, 0);
 
     check_not_null(flow);
-    check_equal(turbo_flow_codec_register_line_adapter(flow, "codec.lines", &config), TURBO_OK);
+    check_equal(turbo_flow_codec_register_line_adapter(flow, "codec.lines", &config), SALTS_OK);
     adapter_schema = turbo_flow_find_adapter_schema(flow, "codec.lines");
     check_not_null(adapter_schema);
     check_equal(adapter_schema->kind, TURBO_FLOW_ADAPTER_KIND_CODEC);
     check_equal(adapter_schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
     check_equal(turbo_flow_register_stage_ex(flow, "capture", codec_capture_stage, &capture, NULL),
-                 TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", "hello\n", 6u, TURBO_OK);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", "hello\n", 6u, SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
 
     check_equal(atomic_load_explicit(&capture.count, memory_order_acquire), 1);
     check_not_null(capture.payload);
@@ -262,13 +262,13 @@ spec("turbo_flow_codec") {
     turbo_flow_t *flow = turbo_flow_create();
 
     check_not_null(flow);
-    check_equal(turbo_flow_codec_register_line_adapter(flow, "codec.lines", NULL), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", "partial", 7u, TURBO_EPROTO);
-    codec_publish_payload(flow, "input", "one\ntwo\n", 8u, TURBO_ENOTSUP);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_codec_register_line_adapter(flow, "codec.lines", NULL), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", "partial", 7u, SALTS_EPROTO);
+    codec_publish_payload(flow, "input", "one\ntwo\n", 8u, SALTS_ENOTSUP);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -294,14 +294,14 @@ spec("turbo_flow_codec") {
     atomic_init(&capture.count, 0);
 
     check_not_null(flow);
-    check_equal(turbo_flow_codec_register_length_adapter(flow, "codec.length", &config), TURBO_OK);
+    check_equal(turbo_flow_codec_register_length_adapter(flow, "codec.length", &config), SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "capture", codec_capture_stage, &capture, NULL),
-                 TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", (const char *)payload, sizeof(payload), TURBO_OK);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", (const char *)payload, sizeof(payload), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
 
     check_equal(atomic_load_explicit(&capture.count, memory_order_acquire), 1);
     check_equal(tstr_len(capture.payload), sizeof(expected));
@@ -325,12 +325,12 @@ spec("turbo_flow_codec") {
     payload[5] = 'B';
 
     check_not_null(flow);
-    check_equal(turbo_flow_codec_register_length_adapter(flow, "codec.length", NULL), TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", (const char *)payload, sizeof(payload), TURBO_EPROTO);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_codec_register_length_adapter(flow, "codec.length", NULL), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", (const char *)payload, sizeof(payload), SALTS_EPROTO);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -357,19 +357,19 @@ spec("turbo_flow_codec") {
 
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
-                 TURBO_OK);
+                 SALTS_OK);
     adapter_schema = turbo_flow_find_adapter_schema(flow, "codec.databind");
     check_not_null(adapter_schema);
     check_equal(adapter_schema->kind, TURBO_FLOW_ADAPTER_KIND_DATABIND);
     check_equal(adapter_schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
     check_equal(
         turbo_flow_register_stage_ex(flow, "capture", codec_databind_capture_stage, &capture, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", json, strlen(json), TURBO_OK);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", json, strlen(json), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
 
     check_equal(atomic_load_explicit(&capture.count, memory_order_acquire), 1);
     check_equal(capture.id, 7);
@@ -411,15 +411,15 @@ spec("turbo_flow_codec") {
 
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "clone_capture", codec_clone_capture_stage,
                                               &capture, NULL),
-                 TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", json, strlen(json), TURBO_OK);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", json, strlen(json), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
 
     check_equal(atomic_load_explicit(&capture.count, memory_order_acquire), 1);
     copy = turbo_flow_codec_msg_databind_value(&capture.clone);
@@ -464,16 +464,16 @@ spec("turbo_flow_codec") {
 
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
-                 TURBO_OK);
-    check_equal(turbo_flow_register_adapter(flow, "retryable", &ops, &retry), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_register_adapter(flow, "retryable", &ops, &retry), SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "capture", codec_databind_capture_stage, &capture, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", json, strlen(json), TURBO_OK);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", json, strlen(json), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
 
     check_equal(retry.attempts, 2u);
     check_equal(retry.independent_clones, 2u);
@@ -511,15 +511,15 @@ spec("turbo_flow_codec") {
 
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "capture", codec_databind_capture_stage, &capture, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", (const char *)payload, sizeof(payload), TURBO_OK);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", (const char *)payload, sizeof(payload), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
 
     check_equal(atomic_load_explicit(&capture.count, memory_order_acquire), 1);
     check_equal(capture.id, 9);
@@ -557,15 +557,15 @@ spec("turbo_flow_codec") {
 
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "capture", codec_databind_capture_stage, &capture, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, bind_src, strlen(bind_src)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", csv, strlen(csv), TURBO_OK);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, bind_src, strlen(bind_src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", csv, strlen(csv), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     check_equal(capture.id, 11);
     check_equal(capture.symbol, "EFGH");
     codec_databind_capture_cleanup(&capture);
@@ -580,12 +580,12 @@ spec("turbo_flow_codec") {
 
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
-                 TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, validate_src, strlen(validate_src)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", xml, strlen(xml), TURBO_OK);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, validate_src, strlen(validate_src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", xml, strlen(xml), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -608,12 +608,12 @@ spec("turbo_flow_codec") {
 
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
-                 TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", json, strlen(json), TURBO_EPROTO);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", json, strlen(json), SALTS_EPROTO);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -630,7 +630,7 @@ spec("turbo_flow_codec") {
 
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
-                 TURBO_ENOTSUP);
+                 SALTS_ENOTSUP);
     turbo_flow_destroy(flow);
   }
 
@@ -661,22 +661,22 @@ spec("turbo_flow_codec") {
     check_not_null(flow);
     check_equal(
         turbo_flow_codec_register_csv_splitter_adapter(flow, "codec.csv.split", &split_config),
-        TURBO_OK);
+        SALTS_OK);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &bind_config),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "capture", codec_csv_split_capture_stage,
                                               &capture, NULL),
-                 TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", csv, strlen(csv), TURBO_OK);
+                 SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", csv, strlen(csv), SALTS_OK);
     check_equal(atomic_load_explicit(&capture.count, memory_order_acquire), 2);
     check_equal(capture.ids[0], 11);
     check_equal(capture.ids[1], 12);
     check_equal(capture.symbols[0], "A,B");
     check_equal(capture.symbols[1], "EFGH");
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     tstr_freep(&capture.symbols[0]);
     tstr_freep(&capture.symbols[1]);
     turbo_flow_destroy(flow);
@@ -702,15 +702,15 @@ spec("turbo_flow_codec") {
     atomic_init(&capture.count, 0);
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_csv_splitter_adapter(flow, "codec.csv.split", &config),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "capture", codec_capture_stage, &capture, NULL),
-                 TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
-    codec_publish_payload(flow, "input", csv, strlen(csv), TURBO_ENOSPC);
+                 SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    codec_publish_payload(flow, "input", csv, strlen(csv), SALTS_ENOSPC);
     check_equal(atomic_load_explicit(&capture.count, memory_order_acquire), 0);
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -731,19 +731,19 @@ spec("turbo_flow_codec") {
     config.output_source = "rows";
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_csv_splitter_adapter(flow, "codec.csv.split", &config),
-                 TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, recursive, strlen(recursive)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_ELOOP);
+                 SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, recursive, strlen(recursive)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_ELOOP);
     turbo_flow_destroy(flow);
 
     flow = turbo_flow_create();
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_csv_splitter_adapter(flow, "codec.csv.split", &config),
-                 TURBO_OK);
-    check_equal(turbo_flow_parse_string(flow, unknown, strlen(unknown)), TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_ENOENT);
+                 SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, unknown, strlen(unknown)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_ENOENT);
     turbo_flow_destroy(flow);
   }
 }

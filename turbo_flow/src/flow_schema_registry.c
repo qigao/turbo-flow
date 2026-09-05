@@ -1,6 +1,6 @@
 #include "turbo_flow.h"
 
-#include "turbo_thread.h"
+#include "salts_thread.h"
 #include "turbo_flow_stl_error_internal.h"
 
 #include <stdlib.h>
@@ -30,7 +30,7 @@ int turbo_flow_content_media_type_normalize(const char *media_type,
   size_t len;
   if (encoding_out) *encoding_out = TURBO_FLOW_DATA_ENCODING_OPAQUE;
   if (normalized_media_type_out) *normalized_media_type_out = NULL;
-  if (!media_type || !encoding_out || !normalized_media_type_out) return TURBO_EINVAL;
+  if (!media_type || !encoding_out || !normalized_media_type_out) return SALTS_EINVAL;
   begin = media_type;
   while (*begin == ' ' || *begin == '\t')
     ++begin;
@@ -66,22 +66,22 @@ int turbo_flow_content_media_type_normalize(const char *media_type,
     *encoding_out = TURBO_FLOW_DATA_ENCODING_JSON;
     *normalized_media_type_out = "application/vnd.turboflow.pg-command+json";
   } else {
-    return TURBO_ENOENT;
+    return SALTS_ENOENT;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int flow_content_copy(char *dst, size_t capacity, const char *src) {
   size_t len;
-  if (!dst || capacity == 0u) return TURBO_EINVAL;
+  if (!dst || capacity == 0u) return SALTS_EINVAL;
   if (!src) {
     dst[0] = '\0';
-    return TURBO_OK;
+    return SALTS_OK;
   }
   len = strlen(src);
-  if (len >= capacity) return TURBO_ENOSPC;
+  if (len >= capacity) return SALTS_ENOSPC;
   memcpy(dst, src, len + 1u);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_content_descriptor_init(turbo_flow_content_descriptor_t *descriptor,
@@ -94,7 +94,7 @@ int turbo_flow_content_descriptor_init(turbo_flow_content_descriptor_t *descript
       profile < TURBO_FLOW_CONTENT_PROFILE_GENERIC ||
       profile > TURBO_FLOW_CONTENT_PROFILE_MQTT_CONTROL ||
       encoding < TURBO_FLOW_DATA_ENCODING_TBE || encoding > TURBO_FLOW_DATA_ENCODING_OPAQUE) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(descriptor, 0, sizeof(*descriptor));
   descriptor->size = sizeof(*descriptor);
@@ -102,9 +102,9 @@ int turbo_flow_content_descriptor_init(turbo_flow_content_descriptor_t *descript
   descriptor->profile = profile;
   descriptor->encoding = encoding;
   rc = flow_content_copy(descriptor->media_type, sizeof(descriptor->media_type), media_type);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flow_content_copy(descriptor->identity, sizeof(descriptor->identity), identity);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   return turbo_flow_content_descriptor_check(descriptor);
 }
 
@@ -112,27 +112,27 @@ int turbo_flow_content_descriptor_declare_schema(turbo_flow_content_descriptor_t
                                                  const char *schema_name, const char *type_name,
                                                  uint32_t schema_version) {
   int rc;
-  if (turbo_flow_content_descriptor_check(descriptor) != TURBO_OK || !schema_name ||
+  if (turbo_flow_content_descriptor_check(descriptor) != SALTS_OK || !schema_name ||
       !schema_name[0] || !type_name || !type_name[0] || schema_version == 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if ((descriptor->flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) != 0u) {
     return descriptor->schema_version == schema_version &&
                    strcmp(descriptor->schema_name, schema_name) == 0 &&
                    strcmp(descriptor->type_name, type_name) == 0
-               ? TURBO_OK
-               : TURBO_EPROTO;
+               ? SALTS_OK
+               : SALTS_EPROTO;
   }
   rc = flow_content_copy(descriptor->schema_name, sizeof(descriptor->schema_name), schema_name);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flow_content_copy(descriptor->type_name, sizeof(descriptor->type_name), type_name);
-  if (rc != TURBO_OK) {
+  if (rc != SALTS_OK) {
     descriptor->schema_name[0] = '\0';
     return rc;
   }
   descriptor->schema_version = schema_version;
   descriptor->flags |= TURBO_FLOW_CONTENT_SCHEMA_DECLARED;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 typedef struct flow_schema_registry_entry_s {
@@ -145,7 +145,7 @@ typedef struct flow_schema_registry_entry_s {
 
 struct turbo_flow_schema_registry_s {
   vec_t entries;
-  turbo_mutex_t lock;
+  salts_mutex_t lock;
   int lock_initialized;
 };
 
@@ -192,46 +192,46 @@ int turbo_flow_content_descriptor_check(const turbo_flow_content_descriptor_t *d
       descriptor->profile > TURBO_FLOW_CONTENT_PROFILE_MQTT_CONTROL ||
       descriptor->encoding < TURBO_FLOW_DATA_ENCODING_TBE ||
       descriptor->encoding > TURBO_FLOW_DATA_ENCODING_OPAQUE) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (!flow_content_profile_domain_valid(descriptor->domain, descriptor->profile) ||
       (descriptor->flags & ~known_flags) != 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (descriptor->media_type[TURBO_FLOW_CONTENT_MEDIA_TYPE_MAX] != '\0' ||
       descriptor->schema_name[TURBO_FLOW_CONTENT_SCHEMA_NAME_MAX] != '\0' ||
       descriptor->type_name[TURBO_FLOW_CONTENT_TYPE_NAME_MAX] != '\0' ||
       descriptor->identity[TURBO_FLOW_CONTENT_IDENTITY_MAX] != '\0') {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (descriptor->profile != TURBO_FLOW_CONTENT_PROFILE_GENERIC &&
       descriptor->media_type[0] == '\0') {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if ((descriptor->flags & TURBO_FLOW_CONTENT_PROTOCOL_CONTROL) != 0u &&
       descriptor->profile != TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_CONTROL &&
       descriptor->profile != TURBO_FLOW_CONTENT_PROFILE_MQTT_CONTROL) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (descriptor->media_type[0] != '\0') {
     media_rc = turbo_flow_content_media_type_normalize(descriptor->media_type, &normalized_encoding,
                                                        &normalized_media_type);
-    if (media_rc == TURBO_OK && (descriptor->encoding != normalized_encoding ||
+    if (media_rc == SALTS_OK && (descriptor->encoding != normalized_encoding ||
                                  strcmp(descriptor->media_type, normalized_media_type) != 0)) {
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
-    if (media_rc != TURBO_OK && media_rc != TURBO_ENOENT) return media_rc;
+    if (media_rc != SALTS_OK && media_rc != SALTS_ENOENT) return media_rc;
   }
   if ((descriptor->flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) != 0u) {
     return descriptor->schema_name[0] != '\0' && descriptor->type_name[0] != '\0' &&
                    descriptor->schema_version != 0u
-               ? TURBO_OK
-               : TURBO_EINVAL;
+               ? SALTS_OK
+               : SALTS_EINVAL;
   }
   return descriptor->schema_name[0] == '\0' && descriptor->type_name[0] == '\0' &&
                  descriptor->schema_version == 0u
-             ? TURBO_OK
-             : TURBO_EINVAL;
+             ? SALTS_OK
+             : SALTS_EINVAL;
 }
 
 static int flow_schema_registry_key_equal(const flow_schema_registry_entry_t *entry,
@@ -267,18 +267,18 @@ turbo_flow_schema_registry_t *turbo_flow_schema_registry_create(void) {
   turbo_flow_schema_registry_t *registry =
       (turbo_flow_schema_registry_t *)calloc(1, sizeof(*registry));
   if (!registry) return NULL;
-  if (turbo_flow_stl_error(vec_init_bytes(&registry->entries, sizeof(flow_schema_registry_entry_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(&registry->entries, sizeof(flow_schema_registry_entry_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
     free(registry);
     return NULL;
   }
-  turbo_mutex_init(&registry->lock);
+  salts_mutex_init(&registry->lock);
   registry->lock_initialized = 1;
   return registry;
 }
 
 void turbo_flow_schema_registry_destroy(turbo_flow_schema_registry_t *registry) {
   if (!registry) return;
-  if (registry->lock_initialized) turbo_mutex_lock(&registry->lock);
+  if (registry->lock_initialized) salts_mutex_lock(&registry->lock);
   for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
     flow_schema_registry_entry_t **entry =
         (flow_schema_registry_entry_t **)vec_at(&registry->entries, i);
@@ -286,8 +286,8 @@ void turbo_flow_schema_registry_destroy(turbo_flow_schema_registry_t *registry) 
   }
   vec_destroy(&registry->entries);
   if (registry->lock_initialized) {
-    turbo_mutex_unlock(&registry->lock);
-    turbo_mutex_destroy(&registry->lock);
+    salts_mutex_unlock(&registry->lock);
+    salts_mutex_destroy(&registry->lock);
   }
   free(registry);
 }
@@ -297,33 +297,33 @@ int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
                                         const turbo_flow_data_schema_t *schema) {
   flow_schema_registry_entry_t *entry;
   int rc;
-  if (!registry || turbo_flow_content_descriptor_check(match) != TURBO_OK || !schema ||
+  if (!registry || turbo_flow_content_descriptor_check(match) != SALTS_OK || !schema ||
       schema->size < sizeof(*schema) || schema->domain != match->domain || !schema->schema_name ||
       !schema->schema_name[0] || !schema->type_name || !schema->type_name[0] ||
       !schema->projection_type || !schema->projection_type[0] || schema->schema_version == 0u ||
       schema->encoding != match->encoding || schema->schema_text) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if ((match->flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) != 0u &&
       (match->schema_version != schema->schema_version ||
        strcmp(match->schema_name, schema->schema_name) != 0 ||
        strcmp(match->type_name, schema->type_name) != 0)) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
-  turbo_mutex_lock(&registry->lock);
+  salts_mutex_lock(&registry->lock);
   for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
     flow_schema_registry_entry_t *const *current =
         (flow_schema_registry_entry_t *const *)vec_at_const(&registry->entries, i);
     if (current && flow_schema_registry_key_equal(*current, match, schema)) {
-      rc = flow_schema_registry_definition_equal(*current, schema) ? TURBO_EALREADY : TURBO_EPROTO;
-      turbo_mutex_unlock(&registry->lock);
+      rc = flow_schema_registry_definition_equal(*current, schema) ? SALTS_EALREADY : SALTS_EPROTO;
+      salts_mutex_unlock(&registry->lock);
       return rc;
     }
   }
   entry = (flow_schema_registry_entry_t *)calloc(1, sizeof(*entry));
   if (!entry) {
-    turbo_mutex_unlock(&registry->lock);
-    return TURBO_ENOMEM;
+    salts_mutex_unlock(&registry->lock);
+    return SALTS_ENOMEM;
   }
   entry->match = *match;
   entry->match.size = sizeof(entry->match);
@@ -332,8 +332,8 @@ int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
   entry->projection_type = tstr_dup(schema->projection_type);
   if (!entry->schema_name || !entry->type_name || !entry->projection_type) {
     flow_schema_registry_entry_destroy(entry);
-    turbo_mutex_unlock(&registry->lock);
-    return TURBO_ENOMEM;
+    salts_mutex_unlock(&registry->lock);
+    return SALTS_ENOMEM;
   }
   entry->schema = *schema;
   entry->schema.size = sizeof(entry->schema);
@@ -342,8 +342,8 @@ int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
   entry->schema.projection_type = entry->projection_type;
   entry->schema.schema_text = NULL;
   rc = turbo_flow_stl_error(vec_push(&registry->entries, &entry));
-  if (rc != TURBO_OK) flow_schema_registry_entry_destroy(entry);
-  turbo_mutex_unlock(&registry->lock);
+  if (rc != SALTS_OK) flow_schema_registry_entry_destroy(entry);
+  salts_mutex_unlock(&registry->lock);
   return rc;
 }
 
@@ -352,11 +352,11 @@ int turbo_flow_schema_registry_resolve(const turbo_flow_schema_registry_t *regis
                                        const turbo_flow_data_schema_t **schema_out) {
   turbo_flow_schema_registry_t *mutable_registry = (turbo_flow_schema_registry_t *)registry;
   if (schema_out) *schema_out = NULL;
-  if (!registry || !schema_out || turbo_flow_content_descriptor_check(descriptor) != TURBO_OK) {
-    return TURBO_EINVAL;
+  if (!registry || !schema_out || turbo_flow_content_descriptor_check(descriptor) != SALTS_OK) {
+    return SALTS_EINVAL;
   }
   const turbo_flow_data_schema_t *resolved = NULL;
-  turbo_mutex_lock(&mutable_registry->lock);
+  salts_mutex_lock(&mutable_registry->lock);
   for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
     flow_schema_registry_entry_t *const *entry =
         (flow_schema_registry_entry_t *const *)vec_at_const(&registry->entries, i);
@@ -366,11 +366,11 @@ int turbo_flow_schema_registry_resolve(const turbo_flow_schema_registry_t *regis
   }
   if (resolved) {
     *schema_out = resolved;
-    turbo_mutex_unlock(&mutable_registry->lock);
-    return TURBO_OK;
+    salts_mutex_unlock(&mutable_registry->lock);
+    return SALTS_OK;
   }
-  turbo_mutex_unlock(&mutable_registry->lock);
-  return TURBO_ENOENT;
+  salts_mutex_unlock(&mutable_registry->lock);
+  return SALTS_ENOENT;
 }
 
 int turbo_flow_content_descriptor_resolve(turbo_flow_content_descriptor_t *descriptor,
@@ -379,28 +379,28 @@ int turbo_flow_content_descriptor_resolve(turbo_flow_content_descriptor_t *descr
   const turbo_flow_data_schema_t *schema = NULL;
   int explicit_selector = selector != NULL;
   int rc;
-  if (turbo_flow_content_descriptor_check(descriptor) != TURBO_OK) return TURBO_EINVAL;
+  if (turbo_flow_content_descriptor_check(descriptor) != SALTS_OK) return SALTS_EINVAL;
   if (selector) {
     if (selector->size < sizeof(*selector) || !selector->schema_name || !selector->schema_name[0] ||
         !selector->type_name || !selector->type_name[0] || selector->schema_version == 0u ||
         !registry) {
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
     rc = turbo_flow_content_descriptor_declare_schema(
         descriptor, selector->schema_name, selector->type_name, selector->schema_version);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
-  if (!registry) return TURBO_OK;
+  if (!registry) return SALTS_OK;
   rc = turbo_flow_schema_registry_resolve(registry, descriptor, &schema);
-  if (rc == TURBO_ENOENT) return explicit_selector ? TURBO_EPROTO : TURBO_OK;
-  if (rc != TURBO_OK) return rc;
-  if (!schema) return TURBO_EPROTO;
+  if (rc == SALTS_ENOENT) return explicit_selector ? SALTS_EPROTO : SALTS_OK;
+  if (rc != SALTS_OK) return rc;
+  if (!schema) return SALTS_EPROTO;
   if ((descriptor->flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) != 0u) {
     return descriptor->schema_version == schema->schema_version &&
                    strcmp(descriptor->schema_name, schema->schema_name) == 0 &&
                    strcmp(descriptor->type_name, schema->type_name) == 0
-               ? TURBO_OK
-               : TURBO_EPROTO;
+               ? SALTS_OK
+               : SALTS_EPROTO;
   }
   return turbo_flow_content_descriptor_declare_schema(descriptor, schema->schema_name,
                                                       schema->type_name, schema->schema_version);
@@ -416,22 +416,22 @@ int turbo_flow_content_descriptor_from_media(turbo_flow_content_descriptor_t *de
   const char *normalized_media_type;
   int schema_fields = 0;
   int rc;
-  if (!descriptor || !media_type) return TURBO_EINVAL;
+  if (!descriptor || !media_type) return SALTS_EINVAL;
   if (binding) {
     if (binding->size < sizeof(*binding) || binding->schema.size < sizeof(binding->schema)) {
-      return TURBO_EINVAL;
+      return SALTS_EINVAL;
     }
     schema_fields = (binding->schema.schema_name && binding->schema.schema_name[0]) +
                     (binding->schema.type_name && binding->schema.type_name[0]) +
                     (binding->schema.schema_version != 0u);
-    if (schema_fields != 0 && schema_fields != 3) return TURBO_EINVAL;
+    if (schema_fields != 0 && schema_fields != 3) return SALTS_EINVAL;
     if (schema_fields == 3) selector = &binding->schema;
   }
   rc = turbo_flow_content_media_type_normalize(media_type, &encoding, &normalized_media_type);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_content_descriptor_init(descriptor, domain, profile, encoding,
                                           normalized_media_type, identity);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   return turbo_flow_content_descriptor_resolve(descriptor, binding ? binding->registry : NULL,
                                                selector);
 }
@@ -440,42 +440,42 @@ int turbo_flow_content_descriptor_validate(const turbo_flow_content_descriptor_t
                                            const turbo_flow_content_descriptor_t *actual) {
   const int expected_declared = (expected->flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) != 0u;
   const int actual_declared = (actual->flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) != 0u;
-  if (turbo_flow_content_descriptor_check(expected) != TURBO_OK ||
-      turbo_flow_content_descriptor_check(actual) != TURBO_OK) {
-    return TURBO_EINVAL;
+  if (turbo_flow_content_descriptor_check(expected) != SALTS_OK ||
+      turbo_flow_content_descriptor_check(actual) != SALTS_OK) {
+    return SALTS_EINVAL;
   }
   if (expected->domain != actual->domain || expected->profile != actual->profile ||
       expected->encoding != actual->encoding ||
       strcmp(expected->media_type, actual->media_type) != 0) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   if (expected_declared != actual_declared ||
       (expected_declared && (expected->schema_version != actual->schema_version ||
                              strcmp(expected->schema_name, actual->schema_name) != 0 ||
                              strcmp(expected->type_name, actual->type_name) != 0))) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_content_descriptor_validate_payload(const turbo_flow_content_descriptor_t *expected,
                                                    const turbo_flow_content_descriptor_t *actual) {
-  if (turbo_flow_content_descriptor_check(expected) != TURBO_OK ||
-      turbo_flow_content_descriptor_check(actual) != TURBO_OK) {
-    return TURBO_EINVAL;
+  if (turbo_flow_content_descriptor_check(expected) != SALTS_OK ||
+      turbo_flow_content_descriptor_check(actual) != SALTS_OK) {
+    return SALTS_EINVAL;
   }
   if (expected->encoding != actual->encoding ||
       strcmp(expected->media_type, actual->media_type) != 0) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   if ((expected->flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) != 0u &&
       ((actual->flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) == 0u ||
        expected->schema_version != actual->schema_version ||
        strcmp(expected->schema_name, actual->schema_name) != 0 ||
        strcmp(expected->type_name, actual->type_name) != 0)) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_msg_resolve_schema(const turbo_flow_msg_t *msg,
@@ -484,7 +484,7 @@ int turbo_flow_msg_resolve_schema(const turbo_flow_msg_t *msg,
   const turbo_flow_content_descriptor_t *descriptor = turbo_flow_msg_content_descriptor(msg);
   if (!descriptor) {
     if (schema_out) *schema_out = NULL;
-    return TURBO_ENOENT;
+    return SALTS_ENOENT;
   }
   return turbo_flow_schema_registry_resolve(registry, descriptor, schema_out);
 }

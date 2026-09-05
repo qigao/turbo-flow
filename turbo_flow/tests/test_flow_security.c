@@ -1,8 +1,8 @@
 #include "turbo_flow_security.h"
 
 #include "tinytest.h"
-#include "turbo_error.h"
-#include "turbo_str.h"
+#include "salts_error.h"
+#include "salts_str.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -53,7 +53,7 @@ static turbo_flow_security_realm_t *security_realm(const turbo_flow_security_rul
   config.policy_version = 9u;
   config.rules = rules;
   config.rule_count = rule_count;
-  check_equal(turbo_flow_security_realm_create(&config, &realm), TURBO_OK);
+  check_equal(turbo_flow_security_realm_create(&config, &realm), SALTS_OK);
   check_not_null(realm);
   return realm;
 }
@@ -64,10 +64,10 @@ static int security_authenticate(void *ctx, const turbo_flow_security_auth_reque
   ++*calls;
   if (request->secret_size != sizeof("secret") - 1u ||
       memcmp(request->secret, "secret", sizeof("secret") - 1u) != 0) {
-    return TURBO_EPERM;
+    return SALTS_EPERM;
   }
   *principal = security_principal("root-a", 9u);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 typedef struct security_secret_fixture_s {
@@ -103,18 +103,18 @@ static int security_matcher_compile(void *ctx, const turbo_flow_security_matcher
   security_matcher_fixture_t *fixture = (security_matcher_fixture_t *)ctx;
   if (!fixture || !input || input->size < sizeof(*input) || !input->rules ||
       !input->candidate_rule_indices || input->candidate_count == 0u || !compiled_leaf_out)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   ++fixture->compile_calls;
   fixture->candidate_count = input->candidate_count;
   *compiled_leaf_out = fixture;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int security_matcher_evaluate(void *ctx, const void *compiled_leaf,
                                      const turbo_flow_security_request_t *request,
                                      turbo_flow_security_match_emit_fn emit, void *emit_ctx) {
   security_matcher_fixture_t *fixture = (security_matcher_fixture_t *)ctx;
-  if (!fixture || compiled_leaf != fixture || !request || !emit) return TURBO_EINVAL;
+  if (!fixture || compiled_leaf != fixture || !request || !emit) return SALTS_EINVAL;
   ++fixture->evaluate_calls;
   return emit(emit_ctx, fixture->emit_position);
 }
@@ -129,13 +129,13 @@ static int security_policy_load(void *ctx, uint64_t required_version,
                                 turbo_flow_security_policy_bundle_t *bundle_out) {
   security_policy_fixture_t *fixture = (security_policy_fixture_t *)ctx;
   ++fixture->load_calls;
-  if (required_version != 9u) return TURBO_ENOENT;
+  if (required_version != 9u) return SALTS_ENOENT;
   *bundle_out = (turbo_flow_security_policy_bundle_t)TURBO_FLOW_SECURITY_POLICY_BUNDLE_INIT;
   bundle_out->policy_version = 9u;
   bundle_out->rules = &fixture->rule;
   bundle_out->rule_count = 1u;
   bundle_out->provider_bundle = fixture;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void security_policy_release(void *ctx, turbo_flow_security_policy_bundle_t *bundle) {
@@ -160,7 +160,7 @@ static int security_enhanced_begin(void *ctx,
   result_out->status = TURBO_FLOW_SECURITY_ENHANCED_AUTH_CONTINUE;
   result_out->data = challenge;
   result_out->data_size = sizeof(challenge) - 1u;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int security_enhanced_continue(void *ctx, void *exchange,
@@ -176,7 +176,7 @@ static int security_enhanced_continue(void *ctx, void *exchange,
   result_out->data = final_data;
   result_out->data_size = sizeof(final_data) - 1u;
   result_out->principal = security_principal("root-a", 9u);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void security_enhanced_cancel(void *ctx, void *exchange) {
@@ -190,13 +190,13 @@ static int security_secret_acquire(void *ctx, const char *reference,
   static const uint8_t bytes[] = {1u, 2u, 3u};
   security_secret_fixture_t *fixture = (security_secret_fixture_t *)ctx;
   ++fixture->acquire_calls;
-  if (strcmp(reference, "kms://mqtt/client") != 0) return TURBO_ENOENT;
+  if (strcmp(reference, "kms://mqtt/client") != 0) return SALTS_ENOENT;
   lease->bytes = bytes;
   lease->byte_count = sizeof(bytes);
   lease->version = 4u;
   lease->provider_lease = fixture->malformed ? NULL : fixture;
-  if (fixture->fail_after_lease) return TURBO_EIO;
-  return TURBO_OK;
+  if (fixture->fail_after_lease) return SALTS_EIO;
+  return SALTS_OK;
 }
 
 static void security_secret_release(void *ctx, turbo_flow_security_secret_lease_t *lease) {
@@ -211,7 +211,7 @@ spec("security realm v3") {
         "allow|role|writer|root-a|publish,subscribe|mqtt_topic|adapter|root-a/tele\\|metry/#\n";
     turbo_flow_security_rule_t rule = TURBO_FLOW_SECURITY_RULE_INIT;
 
-    check_equal(turbo_flow_security_rule_parse_line(line, sizeof(line) - 1u, &rule), TURBO_OK);
+    check_equal(turbo_flow_security_rule_parse_line(line, sizeof(line) - 1u, &rule), SALTS_OK);
     check_equal(rule.effect, TURBO_FLOW_SECURITY_ALLOW);
     check_equal(rule.subject_kind, TURBO_FLOW_SECURITY_SUBJECT_ROLE);
     check_equal(rule.subject, "writer");
@@ -228,9 +228,9 @@ spec("security realm v3") {
       turbo_flow_security_rule_t round_trip = TURBO_FLOW_SECURITY_RULE_INIT;
       check_equal(turbo_flow_security_rule_format_line(&rule, formatted, sizeof(formatted),
                                                         &formatted_size),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(turbo_flow_security_rule_parse_line(formatted, formatted_size, &round_trip),
-                   TURBO_OK);
+                   SALTS_OK);
       check_equal(round_trip.pattern, rule.pattern);
       check_equal(round_trip.action_mask, rule.action_mask);
     }
@@ -245,9 +245,9 @@ spec("security realm v3") {
 
     check_equal(
         turbo_flow_security_rule_parse_line(duplicate_action, sizeof(duplicate_action) - 1u, &rule),
-        TURBO_EPROTO);
+        SALTS_EPROTO);
     check_equal(turbo_flow_security_rule_parse_line(invalid_any, sizeof(invalid_any) - 1u, &rule),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
   }
 
   it("round trips and evaluates an empty prefix only for a connect parent rule") {
@@ -263,22 +263,22 @@ spec("security realm v3") {
     char formatted[TURBO_FLOW_SECURITY_RULE_LINE_MAX + 1u] = {0};
     size_t formatted_size = 0u;
 
-    check_equal(turbo_flow_security_rule_parse_line(line, sizeof(line) - 1u, &rule), TURBO_OK);
+    check_equal(turbo_flow_security_rule_parse_line(line, sizeof(line) - 1u, &rule), SALTS_OK);
     check_equal(turbo_flow_security_rule_format_line(&rule, formatted, sizeof(formatted),
                                                       &formatted_size),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(formatted, line);
     check_equal(turbo_flow_security_rule_parse_line(invalid, sizeof(invalid) - 1u, &rule),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
 
-    check_equal(turbo_flow_security_rule_parse_line(line, sizeof(line) - 1u, &rule), TURBO_OK);
+    check_equal(turbo_flow_security_rule_parse_line(line, sizeof(line) - 1u, &rule), SALTS_OK);
     realm = security_realm(&rule, 1u);
     request.principal = &principal;
     request.domain_id = "root-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_CONNECT;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_GENERIC;
     request.resource = "arbitrary-client-id";
-    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), SALTS_OK);
     check_equal(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
     turbo_flow_security_realm_destroy(realm);
   }
@@ -295,17 +295,17 @@ spec("security realm v3") {
     request.secret = (const uint8_t *)"secret";
     request.secret_size = sizeof("secret") - 1u;
     request.protocol = "mqtt5";
-    check_equal(turbo_flow_security_authenticate(&provider, &request, &principal), TURBO_OK);
+    check_equal(turbo_flow_security_authenticate(&provider, &request, &principal), SALTS_OK);
     check_equal(calls, 1);
     check_equal(principal.principal_id, "device-7");
     check_equal(principal.domain_id, "root-a");
     check_equal(principal.auth_method, "token");
     request.size = TURBO_FLOW_SECURITY_AUTH_REQUEST_BASE_SIZE;
     principal = (turbo_flow_security_principal_t)TURBO_FLOW_SECURITY_PRINCIPAL_INIT;
-    check_equal(turbo_flow_security_authenticate(&provider, &request, &principal), TURBO_OK);
+    check_equal(turbo_flow_security_authenticate(&provider, &request, &principal), SALTS_OK);
     check_equal(calls, 2);
     request.size = TURBO_FLOW_SECURITY_AUTH_REQUEST_BASE_SIZE - 1u;
-    check_equal(turbo_flow_security_authenticate(&provider, &request, &principal), TURBO_EINVAL);
+    check_equal(turbo_flow_security_authenticate(&provider, &request, &principal), SALTS_EINVAL);
     check_equal(calls, 2);
   }
 
@@ -327,7 +327,7 @@ spec("security realm v3") {
     request.protocol = "mqtt5";
     request.size = TURBO_FLOW_SECURITY_ENHANCED_AUTH_REQUEST_BASE_SIZE;
     check_equal(turbo_flow_security_enhanced_auth_begin(&provider, &request, &exchange, &result),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal((const void *)exchange, (const void *)&fixture);
     check_equal(result.status, TURBO_FLOW_SECURITY_ENHANCED_AUTH_CONTINUE);
     check_equal(result.data_size, sizeof("server-first") - 1u);
@@ -337,7 +337,7 @@ spec("security realm v3") {
     result =
         (turbo_flow_security_enhanced_auth_result_t)TURBO_FLOW_SECURITY_ENHANCED_AUTH_RESULT_INIT;
     check_equal(turbo_flow_security_enhanced_auth_continue(&provider, exchange, &request, &result),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(result.status, TURBO_FLOW_SECURITY_ENHANCED_AUTH_SUCCESS);
     check_equal(result.principal.principal_id, "device-7");
     turbo_flow_security_enhanced_auth_cancel(&provider, exchange);
@@ -350,7 +350,7 @@ spec("security realm v3") {
     result =
         (turbo_flow_security_enhanced_auth_result_t)TURBO_FLOW_SECURITY_ENHANCED_AUTH_RESULT_INIT;
     check_equal(turbo_flow_security_enhanced_auth_begin(&provider, &request, &exchange, &result),
-                 TURBO_EINVAL);
+                 SALTS_EINVAL);
     check_equal(fixture.begin_calls, 1);
 
     fixture.omit_exchange = 1;
@@ -361,7 +361,7 @@ spec("security realm v3") {
     request.data = (const uint8_t *)"client-first";
     request.data_size = sizeof("client-first") - 1u;
     check_equal(turbo_flow_security_enhanced_auth_begin(&provider, &request, &exchange, &result),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_null(exchange);
   }
 
@@ -381,20 +381,20 @@ spec("security realm v3") {
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/telemetry/value";
-    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), SALTS_OK);
     check_equal(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
     check_equal(decision.matched_rule, 0u);
 
     request.resource = "root-a/telemetry/private";
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
     check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
-                 TURBO_EPERM);
+                 SALTS_EPERM);
     check_equal(decision.reason, TURBO_FLOW_SECURITY_REASON_DENY_RULE);
     check_equal(decision.matched_rule, 1u);
 
     request.resource = "root-a/commands/reboot";
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
-    check_equal(turbo_flow_security_realm_evaluate(realm, &request, 100u, &decision), TURBO_OK);
+    check_equal(turbo_flow_security_realm_evaluate(realm, &request, 100u, &decision), SALTS_OK);
     check_equal(decision.effect, TURBO_FLOW_SECURITY_DENY);
     check_equal(decision.reason, TURBO_FLOW_SECURITY_REASON_DEFAULT_DENY);
     turbo_flow_security_realm_destroy(realm);
@@ -418,13 +418,13 @@ spec("security realm v3") {
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/telemetry/private/value";
     check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
-                 TURBO_EPERM);
+                 SALTS_EPERM);
     check_equal(decision.reason, TURBO_FLOW_SECURITY_REASON_DENY_RULE);
     check_equal(decision.matched_rule, 1u);
 
     request.resource = "root-a/telemetry/public/value";
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
-    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), SALTS_OK);
     check_equal(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
     check_equal(decision.matched_rule, 0u);
     turbo_flow_security_realm_destroy(realm);
@@ -449,7 +449,7 @@ spec("security realm v3") {
     config.matcher.compile_leaf = security_matcher_compile;
     config.matcher.evaluate_leaf = security_matcher_evaluate;
     config.matcher.destroy_leaf = security_matcher_destroy;
-    check_equal(turbo_flow_security_realm_create(&config, &realm), TURBO_OK);
+    check_equal(turbo_flow_security_realm_create(&config, &realm), SALTS_OK);
     check_equal(fixture.compile_calls, 1);
     check_equal(fixture.candidate_count, 1u);
 
@@ -458,13 +458,13 @@ spec("security realm v3") {
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/device-7";
-    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), SALTS_OK);
     check_equal(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
 
     fixture.emit_position = fixture.candidate_count;
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
     check_equal(turbo_flow_security_realm_evaluate(realm, &request, 100u, &decision),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(decision.effect, TURBO_FLOW_SECURITY_DENY);
     turbo_flow_security_realm_destroy(realm);
     check_equal(fixture.evaluate_calls, 2);
@@ -485,7 +485,7 @@ spec("security realm v3") {
     config.rule_count = 1u;
     config.matcher.ctx = &fixture;
     config.matcher.compile_leaf = security_matcher_compile;
-    check_equal(turbo_flow_security_realm_create(&config, &realm), TURBO_EINVAL);
+    check_equal(turbo_flow_security_realm_create(&config, &realm), SALTS_EINVAL);
     check_null(realm);
     check_equal(fixture.compile_calls, 0);
   }
@@ -508,15 +508,15 @@ spec("security realm v3") {
     config.resource_uid = "security:provider-lifetime";
     config.owner_name = "security.provider-lifetime";
     config.policy_source = "acl.fixture";
-    check_equal(turbo_flow_security_realm_create(&config, &realm), TURBO_OK);
-    check_equal(turbo_flow_security_realm_bind_policy_provider(realm, &provider), TURBO_OK);
+    check_equal(turbo_flow_security_realm_create(&config, &realm), SALTS_OK);
+    check_equal(turbo_flow_security_realm_bind_policy_provider(realm, &provider), SALTS_OK);
 
     request.principal = &principal;
     request.domain_id = "root-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/telemetry/value";
-    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), SALTS_OK);
     check_equal(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
     check_equal(fixture.load_calls, 1);
     check_equal(fixture.release_calls, 1);
@@ -543,14 +543,14 @@ spec("security realm v3") {
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "devices/7/events";
-    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), TURBO_OK);
+    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), SALTS_OK);
     check_equal(decision.effect, TURBO_FLOW_SECURITY_ALLOW);
 
     security_copy(principal.groups[0], sizeof(principal.groups[0]), "backend");
     principal.group_count = 1u;
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
     check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
-                 TURBO_EPERM);
+                 SALTS_EPERM);
     turbo_flow_security_realm_destroy(realm);
   }
 
@@ -569,21 +569,21 @@ spec("security realm v3") {
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-b/value";
     check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
-                 TURBO_EPERM);
+                 SALTS_EPERM);
     check_equal(decision.reason, TURBO_FLOW_SECURITY_REASON_DOMAIN_MISMATCH);
 
     principal.scope = TURBO_FLOW_SECURITY_SCOPE_SYSTEM;
     principal.policy_version = 8u;
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
     check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
-                 TURBO_EPERM);
+                 SALTS_EPERM);
     check_equal(decision.reason, TURBO_FLOW_SECURITY_REASON_POLICY_VERSION_MISMATCH);
 
     principal.policy_version = 9u;
     principal.expires_at = 100u;
     decision = (turbo_flow_security_decision_t)TURBO_FLOW_SECURITY_DECISION_INIT;
     check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision),
-                 TURBO_EPERM);
+                 SALTS_EPERM);
     check_equal(decision.reason, TURBO_FLOW_SECURITY_REASON_PRINCIPAL_EXPIRED);
     turbo_flow_security_realm_destroy(realm);
   }
@@ -613,18 +613,18 @@ spec("security realm v3") {
 
     check_not_null(flow);
     check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(
         turbo_flow_security_realm_create_resolved(resolved, "security.main", NULL, &realm, &error),
-        TURBO_OK);
-    check_equal(turbo_flow_security_realm_register(flow, realm), TURBO_OK);
-    check_equal(turbo_flow_resource_metadata_at(flow, 0u, &metadata), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_security_realm_register(flow, realm), SALTS_OK);
+    check_equal(turbo_flow_resource_metadata_at(flow, 0u, &metadata), SALTS_OK);
     check_equal(metadata.kind, TURBO_FLOW_RESOURCE_SECURITY_REALM);
     check_equal(metadata.generation, 1u);
     check_equal(metadata.observed_generation, 0u);
     check_equal(
         turbo_flow_resource_document_at(flow, 0u, TURBO_FLOW_RESOURCE_DOCUMENT_STATUS, &document),
-        TURBO_OK);
+        SALTS_OK);
     check_equal(document.schema->type_name, "SecurityRealmStatus");
     payload =
         tstr_new_len(mem_buffer_const_data(document.payload), mem_buffer_used(document.payload));
@@ -642,10 +642,10 @@ spec("security realm v3") {
     realm = NULL;
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     check_equal(turbo_flow_config_resolve_yaml(bad_yaml, sizeof(bad_yaml) - 1u, &resolved, &error),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(
         turbo_flow_security_realm_create_resolved(resolved, "security.main", NULL, &realm, &error),
-        TURBO_EINVAL);
+        SALTS_EINVAL);
     check_contains(error.path, "rules");
     check_null(realm);
     turbo_flow_resolved_config_destroy(resolved);
@@ -658,7 +658,7 @@ spec("security realm v3") {
     turbo_flow_security_secret_lease_t lease = TURBO_FLOW_SECURITY_SECRET_LEASE_INIT;
 
     check_equal(turbo_flow_security_secret_acquire(&provider, "kms://mqtt/client", &lease),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(lease.byte_count, 3u);
     check_equal(lease.version, 4u);
     turbo_flow_security_secret_release(&provider, &lease);
@@ -668,13 +668,13 @@ spec("security realm v3") {
 
     fixture.malformed = 1;
     check_equal(turbo_flow_security_secret_acquire(&provider, "kms://mqtt/client", &lease),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(fixture.release_calls, 2);
 
     fixture.malformed = 0;
     fixture.fail_after_lease = 1;
     check_equal(turbo_flow_security_secret_acquire(&provider, "kms://mqtt/client", &lease),
-                 TURBO_EIO);
+                 SALTS_EIO);
     check_equal(fixture.release_calls, 3);
   }
 }

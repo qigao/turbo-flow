@@ -27,7 +27,7 @@ turbo_flow_schedule_register_adapter(flow, "schedule.minute", &config, NULL);
 ```
 
 Interval and one-shot `delay_ms` values must be non-zero. Runtime delays use
-the shared `TurboUtils::Core` native timer. Delays larger than a platform timer
+the shared `Salts::Core` native timer. Delays larger than a platform timer
 period are advanced in bounded slices without narrowing the public delay
 range. `repeat_limit == 0` means an unbounded interval; any positive value
 stops that source after the specified number of successful publications.
@@ -37,11 +37,11 @@ and limited to 64 KiB.
 ## Cron Semantics
 
 Cron expressions are parsed once during registration by
-`turbo_cron_parse_ex()`. Runtime scheduling uses `turbo_cron_next()`; TurboFlow
+`salts_cron_parse_ex()`. Runtime scheduling uses `salts_cron_next()`; TurboFlow
 does not implement or repair cron text. Invalid expressions fail registration
-with `TURBO_EINVAL` before the flow starts.
+with `SALTS_EINVAL` before the flow starts.
 
-Cron follows TurboUtils local wall-clock semantics and has no per-adapter UTC
+Cron follows Salts local wall-clock semantics and has no per-adapter UTC
 or timezone setting. A local minute skipped by a DST transition does not fire.
 Repeated wall-clock minutes during a DST rollback are distinct epoch minutes
 and may both match. Repeated advancement within the same epoch minute is
@@ -55,12 +55,12 @@ advance increments `catch_up_truncations`. The limit is at most 1024.
 `manual_clock` is cron-only and intended for deterministic hosts and tests.
 After the flow starts, `turbo_flow_schedule_advance()` advances the borrowed
 schedule handle to a supplied `time_t`. It returns the number of ticks emitted,
-or a TurboUtils error code. Calls before start, after stop, or on a non-manual
-schedule return `TURBO_EINVAL`.
+or a Salts error code. Calls before start, after stop, or on a non-manual
+schedule return `SALTS_EINVAL`.
 
 ## Lifecycle
 
-The adapter owns a `TurboUtils::Core` native timer, copied payload, and cron
+The adapter owns a `Salts::Core` native timer, copied payload, and cron
 cursor. A short-lived bootstrap thread waits until the Flow has committed its
 `STARTED` state before arming the timer; it does not perform delay scheduling.
 Timer callbacks are coalesced so one Schedule never publishes concurrently

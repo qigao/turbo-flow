@@ -37,18 +37,18 @@ static int token_eq_cstr(flow_token_t token, const char *text) {
 }
 
 int flow_parse_ctx_init(flow_parse_ctx_t *ctx, turbo_flow_t *flow) {
-  if (!ctx || !flow) return TURBO_EINVAL;
+  if (!ctx || !flow) return SALTS_EINVAL;
   memset(ctx, 0, sizeof(*ctx));
   ctx->flow = flow;
   ctx->current_stage_template_index = SIZE_MAX;
-  if (turbo_flow_stl_error(vec_init_bytes(&ctx->node_refs, sizeof(flow_node_ref_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+  if (turbo_flow_stl_error(vec_init_bytes(&ctx->node_refs, sizeof(flow_node_ref_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  if (turbo_flow_stl_error(vec_init_bytes(&ctx->stage_templates, sizeof(flow_stage_template_decl_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(&ctx->stage_templates, sizeof(flow_stage_template_decl_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
     vec_destroy(&ctx->node_refs);
-    return flow_set_error(flow, TURBO_ENOMEM, 0, 0, "out of memory");
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void flow_parse_ctx_destroy(flow_parse_ctx_t *ctx) {
@@ -113,56 +113,56 @@ int flow_parse_u32(flow_parse_ctx_t *ctx, flow_token_t token, uint32_t *out) {
   size_t i;
 
   if (!out || !token.value || token.length == 0) {
-    return parse_fail(ctx, TURBO_EINVAL, token.line, token.column, "number required");
+    return parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "number required");
   }
 
   for (i = 0; i < token.length; ++i) {
     value = value * 10u + (uint32_t)(token.value[i] - '0');
     if (value > UINT32_MAX) {
-      return parse_fail(ctx, TURBO_ERANGE, token.line, token.column, "number is out of range");
+      return parse_fail(ctx, SALTS_ERANGE, token.line, token.column, "number is out of range");
     }
   }
 
   *out = (uint32_t)value;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_parse_set_worker(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token) {
   uint32_t count = 0;
   int rc;
-  if (!spec) return parse_fail(ctx, TURBO_EINVAL, token.line, token.column, "stage required");
+  if (!spec) return parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "stage required");
   if (spec->has_worker) {
-    return parse_fail(ctx, TURBO_EALREADY, token.line, token.column, "duplicate worker option");
+    return parse_fail(ctx, SALTS_EALREADY, token.line, token.column, "duplicate worker option");
   }
   rc = flow_parse_u32(ctx, token, &count);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (count == 0) {
-    return parse_fail(ctx, TURBO_EINVAL, token.line, token.column,
+    return parse_fail(ctx, SALTS_EINVAL, token.line, token.column,
                       "worker count must be greater than zero");
   }
   spec->data_strategy = TURBO_FLOW_DATA_WORKER_POOL;
   spec->data_worker_count = count;
   spec->has_worker = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_parse_set_data_pool(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token) {
   uint32_t capacity = 0;
   int rc;
-  if (!spec) return parse_fail(ctx, TURBO_EINVAL, token.line, token.column, "stage required");
+  if (!spec) return parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "stage required");
   if (spec->has_data_pool) {
-    return parse_fail(ctx, TURBO_EALREADY, token.line, token.column, "duplicate data pool option");
+    return parse_fail(ctx, SALTS_EALREADY, token.line, token.column, "duplicate data pool option");
   }
   rc = flow_parse_u32(ctx, token, &capacity);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (capacity == 0u || capacity > FLOW_WORKER_POOL_MAX_CAPACITY ||
       (capacity & (capacity - 1u)) != 0u) {
-    return parse_fail(ctx, TURBO_ERANGE, token.line, token.column,
+    return parse_fail(ctx, SALTS_ERANGE, token.line, token.column,
                       "data pool capacity must be a power of two between 1 and 1048576");
   }
   spec->data_pool_capacity = capacity;
   spec->has_data_pool = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_parse_set_retry(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t attempts,
@@ -171,29 +171,29 @@ int flow_parse_set_retry(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_to
   uint32_t delay_ms = 0;
   int rc;
 
-  if (!spec) return parse_fail(ctx, TURBO_EINVAL, attempts.line, attempts.column, "stage required");
+  if (!spec) return parse_fail(ctx, SALTS_EINVAL, attempts.line, attempts.column, "stage required");
   if (spec->has_retry) {
-    return parse_fail(ctx, TURBO_EALREADY, attempts.line, attempts.column,
+    return parse_fail(ctx, SALTS_EALREADY, attempts.line, attempts.column,
                       "duplicate retry option");
   }
   rc = flow_parse_u32(ctx, attempts, &max_attempts);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (max_attempts < 2u || max_attempts > TURBO_FLOW_RETRY_MAX_ATTEMPTS) {
-    return parse_fail(ctx, TURBO_ERANGE, attempts.line, attempts.column,
+    return parse_fail(ctx, SALTS_ERANGE, attempts.line, attempts.column,
                       "retry attempts must be between 2 and 64");
   }
   if (delay) {
     rc = flow_parse_u32(ctx, *delay, &delay_ms);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     if (delay_ms > TURBO_FLOW_RETRY_MAX_DELAY_MS) {
-      return parse_fail(ctx, TURBO_ERANGE, delay->line, delay->column,
+      return parse_fail(ctx, SALTS_ERANGE, delay->line, delay->column,
                         "retry delay exceeds one hour");
     }
   }
   spec->retry.max_attempts = max_attempts;
   spec->retry.delay_ms = delay_ms;
   spec->has_retry = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_parse_set_reorder(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t capacity,
@@ -202,69 +202,69 @@ int flow_parse_set_reorder(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_
   uint32_t timeout_ms = 0;
   int rc;
 
-  if (!spec) return parse_fail(ctx, TURBO_EINVAL, capacity.line, capacity.column, "stage required");
+  if (!spec) return parse_fail(ctx, SALTS_EINVAL, capacity.line, capacity.column, "stage required");
   if (spec->has_reorder) {
-    return parse_fail(ctx, TURBO_EALREADY, capacity.line, capacity.column,
+    return parse_fail(ctx, SALTS_EALREADY, capacity.line, capacity.column,
                       "duplicate reorder option");
   }
   rc = flow_parse_u32(ctx, capacity, &capacity_value);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   rc = flow_parse_u32(ctx, timeout, &timeout_ms);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (capacity_value == 0 || capacity_value > TURBO_FLOW_REORDER_MAX_CAPACITY) {
-    return parse_fail(ctx, TURBO_ERANGE, capacity.line, capacity.column,
+    return parse_fail(ctx, SALTS_ERANGE, capacity.line, capacity.column,
                       "reorder capacity must be between 1 and 1048576");
   }
   if (timeout_ms == 0 || timeout_ms > TURBO_FLOW_REORDER_MAX_TIMEOUT_MS) {
-    return parse_fail(ctx, TURBO_ERANGE, timeout.line, timeout.column,
+    return parse_fail(ctx, SALTS_ERANGE, timeout.line, timeout.column,
                       "reorder timeout must be between 1 ms and one hour");
   }
   spec->reorder.capacity = capacity_value;
   spec->reorder.timeout_ms = timeout_ms;
   spec->has_reorder = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_parse_set_adapter(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token) {
   if (!spec || !token.value || token.length == 0) {
-    return parse_fail(ctx, TURBO_EINVAL, token.line, token.column, "adapter name required");
+    return parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "adapter name required");
   }
   if (spec->has_adapter) {
-    return parse_fail(ctx, TURBO_EALREADY, token.line, token.column, "duplicate adapter option");
+    return parse_fail(ctx, SALTS_EALREADY, token.line, token.column, "duplicate adapter option");
   }
   spec->adapter_name = token_view(token);
   spec->adapter_line = token.line;
   spec->adapter_column = token.column;
   spec->has_adapter = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_parse_set_operation(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token) {
   if (!spec || token.length == 0) {
-    return parse_fail(ctx, TURBO_EINVAL, token.line, token.column, "operation name required");
+    return parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "operation name required");
   }
   if (spec->has_operation) {
-    return parse_fail(ctx, TURBO_EALREADY, token.line, token.column, "duplicate operation option");
+    return parse_fail(ctx, SALTS_EALREADY, token.line, token.column, "duplicate operation option");
   }
   spec->operation_name = token_view(token);
   spec->operation_line = token.line;
   spec->operation_column = token.column;
   spec->has_operation = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_parse_set_resource(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token) {
   if (!spec || token.length == 0) {
-    return parse_fail(ctx, TURBO_EINVAL, token.line, token.column, "resource name required");
+    return parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "resource name required");
   }
   if (spec->has_resource) {
-    return parse_fail(ctx, TURBO_EALREADY, token.line, token.column, "duplicate resource option");
+    return parse_fail(ctx, SALTS_EALREADY, token.line, token.column, "duplicate resource option");
   }
   spec->resource_name = token_view(token);
   spec->resource_line = token.line;
   spec->resource_column = token.column;
   spec->has_resource = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 flow_token_t flow_parse_append_dotted_name(flow_parse_ctx_t *ctx, flow_token_t left,
@@ -275,7 +275,7 @@ flow_token_t flow_parse_append_dotted_name(flow_parse_ctx_t *ctx, flow_token_t l
 
   if (!left.value || left.length == 0 || !dot.value || dot.length != 1 || !right.value ||
       right.length == 0 || left_end != dot.value || dot_end != right.value) {
-    parse_fail(ctx, TURBO_EINVAL, dot.line, dot.column,
+    parse_fail(ctx, SALTS_EINVAL, dot.line, dot.column,
                "dotted binding names cannot contain whitespace");
     return out;
   }
@@ -290,19 +290,19 @@ int flow_parse_set_exec_count(flow_parse_ctx_t *ctx, flow_exec_options_t *option
   int rc;
 
   if (!options || field < 0 || field > 2) {
-    return parse_fail(ctx, TURBO_EINVAL, token.line, token.column, "executor option is invalid");
+    return parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "executor option is invalid");
   }
   flag = 1u << (uint32_t)field;
   if (options->seen & flag) {
-    return parse_fail(ctx, TURBO_EALREADY, token.line, token.column,
+    return parse_fail(ctx, SALTS_EALREADY, token.line, token.column,
                       field == 0
                           ? "duplicate workers option"
                           : (field == 1 ? "duplicate lanes option" : "duplicate pool option"));
   }
   rc = flow_parse_u32(ctx, token, &count);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (count == 0) {
-    return parse_fail(ctx, TURBO_EINVAL, token.line, token.column,
+    return parse_fail(ctx, SALTS_EINVAL, token.line, token.column,
                       "executor option value must be greater than zero");
   }
 
@@ -310,40 +310,40 @@ int flow_parse_set_exec_count(flow_parse_ctx_t *ctx, flow_exec_options_t *option
   else if (field == 1) options->config.lanes = count;
   else options->config.pool_capacity = count;
   options->seen |= flag;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_parse_set_exec(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_exec_spec_t exec_spec,
                         flow_token_t exec_token) {
   if (!spec) {
-    return parse_fail(ctx, TURBO_EINVAL, exec_token.line, exec_token.column, "stage required");
+    return parse_fail(ctx, SALTS_EINVAL, exec_token.line, exec_token.column, "stage required");
   }
   if (spec->has_exec) {
-    return parse_fail(ctx, TURBO_EALREADY, exec_token.line, exec_token.column,
+    return parse_fail(ctx, SALTS_EALREADY, exec_token.line, exec_token.column,
                       "duplicate exec option");
   }
   if (!exec_spec.valid) {
-    return parse_fail(ctx, TURBO_EINVAL, exec_token.line, exec_token.column,
+    return parse_fail(ctx, SALTS_EINVAL, exec_token.line, exec_token.column,
                       "unknown executor kind");
   }
   if (exec_spec.exec.kind == TURBO_FLOW_EXEC_INLINE &&
       (exec_spec.exec.workers != 0 || exec_spec.exec.lanes != 0 ||
        exec_spec.exec.pool_capacity != 0)) {
-    return parse_fail(ctx, TURBO_EINVAL, exec_token.line, exec_token.column,
+    return parse_fail(ctx, SALTS_EINVAL, exec_token.line, exec_token.column,
                       "executor kind does not accept workers, lanes, or pool options");
   }
   if (exec_spec.exec.kind == TURBO_FLOW_EXEC_THREAD_POOL &&
       (exec_spec.exec.lanes != 0 || exec_spec.exec.pool_capacity != 0)) {
-    return parse_fail(ctx, TURBO_EINVAL, exec_token.line, exec_token.column,
+    return parse_fail(ctx, SALTS_EINVAL, exec_token.line, exec_token.column,
                       "thread executor only accepts workers");
   }
   if (exec_spec.exec.kind == TURBO_FLOW_EXEC_CORO_POOL && exec_spec.exec.workers != 0) {
-    return parse_fail(ctx, TURBO_EINVAL, exec_token.line, exec_token.column,
+    return parse_fail(ctx, SALTS_EINVAL, exec_token.line, exec_token.column,
                       "coro executor only accepts lanes and pool");
   }
   spec->exec = exec_spec.exec;
   spec->has_exec = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static tstr make_scoped_name(flow_parse_ctx_t *ctx, vstr name) {
@@ -389,9 +389,9 @@ static tstr replace_scoped_prefix(vstr name, vstr prefix, vstr replacement) {
 }
 
 static int clone_tstr(tstr *dst, tstr src) {
-  if (!src) return TURBO_OK;
+  if (!src) return SALTS_OK;
   *dst = tstr_from_v(tstr_to_v(src));
-  return *dst ? TURBO_OK : TURBO_ENOMEM;
+  return *dst ? SALTS_OK : SALTS_ENOMEM;
 }
 
 static int push_stage_template_copy(flow_parse_ctx_t *ctx, vstr name,
@@ -400,31 +400,31 @@ static int push_stage_template_copy(flow_parse_ctx_t *ctx, vstr name,
   flow_stage_template_decl_t stage_template;
 
   if (flow_find_stage_view(ctx->flow, name) >= 0 || find_stage_template_view(ctx, name) >= 0) {
-    return parse_fail(ctx, TURBO_EALREADY, line, column, "duplicate stage or source name");
+    return parse_fail(ctx, SALTS_EALREADY, line, column, "duplicate stage or source name");
   }
 
   memset(&stage_template, 0, sizeof(stage_template));
   stage_template.name = tstr_from_v(name);
-  if (!stage_template.name) return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
-  if (clone_tstr(&stage_template.first_input, source->first_input) != TURBO_OK ||
-      clone_tstr(&stage_template.first_output, source->first_output) != TURBO_OK) {
+  if (!stage_template.name) return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
+  if (clone_tstr(&stage_template.first_input, source->first_input) != SALTS_OK ||
+      clone_tstr(&stage_template.first_output, source->first_output) != SALTS_OK) {
     tstr_freep(&stage_template.name);
     tstr_freep(&stage_template.first_input);
     tstr_freep(&stage_template.first_output);
-    return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   }
   stage_template.line = line;
   stage_template.column = column;
   stage_template.input_count = source->input_count;
   stage_template.output_count = source->output_count;
 
-  if (turbo_flow_stl_error(vec_push(&ctx->stage_templates, &stage_template)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->stage_templates, &stage_template)) != SALTS_OK) {
     tstr_freep(&stage_template.name);
     tstr_freep(&stage_template.first_input);
     tstr_freep(&stage_template.first_output);
-    return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int copy_stage_with_prefix(flow_parse_ctx_t *ctx, const flow_stage_plan_impl_t *source,
@@ -434,11 +434,11 @@ static int copy_stage_with_prefix(flow_parse_ctx_t *ctx, const flow_stage_plan_i
 
   memset(&stage, 0, sizeof(stage));
   stage.name = replace_scoped_prefix(tstr_to_v(source->name), target_prefix, alias_prefix);
-  if (!stage.name) return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
+  if (!stage.name) return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   if (flow_find_stage_view(ctx->flow, tstr_to_v(stage.name)) >= 0 ||
       find_stage_template_view(ctx, tstr_to_v(stage.name)) >= 0) {
     flow_stage_impl_destroy(&stage);
-    return parse_fail(ctx, TURBO_EALREADY, line, column, "duplicate stage or source name");
+    return parse_fail(ctx, SALTS_EALREADY, line, column, "duplicate stage or source name");
   }
 
   stage.line = source->line;
@@ -453,18 +453,18 @@ static int copy_stage_with_prefix(flow_parse_ctx_t *ctx, const flow_stage_plan_i
   stage.mutability = source->mutability;
   stage.retry = source->retry;
   stage.reorder = source->reorder;
-  if (clone_tstr(&stage.adapter_name, source->adapter_name) != TURBO_OK ||
-      clone_tstr(&stage.operation_name, source->operation_name) != TURBO_OK ||
-      clone_tstr(&stage.resource_name, source->resource_name) != TURBO_OK) {
+  if (clone_tstr(&stage.adapter_name, source->adapter_name) != SALTS_OK ||
+      clone_tstr(&stage.operation_name, source->operation_name) != SALTS_OK ||
+      clone_tstr(&stage.resource_name, source->resource_name) != SALTS_OK) {
     flow_stage_impl_destroy(&stage);
-    return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   }
 
-  if (turbo_flow_stl_error(vec_push(&ctx->flow->stages, &stage)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->flow->stages, &stage)) != SALTS_OK) {
     flow_stage_impl_destroy(&stage);
-    return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int copy_edge_with_prefix(flow_parse_ctx_t *ctx, const flow_edge_plan_impl_t *source,
@@ -477,7 +477,7 @@ static int copy_edge_with_prefix(flow_parse_ctx_t *ctx, const flow_edge_plan_imp
   edge.to_name = replace_scoped_prefix(tstr_to_v(source->to_name), target_prefix, alias_prefix);
   if (!edge.from_name || !edge.to_name) {
     flow_edge_impl_destroy(&edge);
-    return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   }
   edge.from_stage = UINT32_MAX;
   edge.to_stage = UINT32_MAX;
@@ -485,17 +485,17 @@ static int copy_edge_with_prefix(flow_parse_ctx_t *ctx, const flow_edge_plan_imp
   edge.column = source->column;
   edge.is_stage_internal = source->is_stage_internal;
   edge.kind = source->kind;
-  if (clone_tstr(&edge.condition, source->condition) != TURBO_OK ||
-      clone_tstr(&edge.name, source->name) != TURBO_OK) {
+  if (clone_tstr(&edge.condition, source->condition) != SALTS_OK ||
+      clone_tstr(&edge.name, source->name) != SALTS_OK) {
     flow_edge_impl_destroy(&edge);
-    return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   }
 
-  if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != SALTS_OK) {
     flow_edge_impl_destroy(&edge);
-    return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int is_port,
@@ -505,12 +505,12 @@ static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int i
   int stage_index;
 
   if (flow_find_stage_view(ctx->flow, name) >= 0 || find_stage_template_view(ctx, name) >= 0) {
-    return parse_fail(ctx, TURBO_EALREADY, line, column, "duplicate stage or source name");
+    return parse_fail(ctx, SALTS_EALREADY, line, column, "duplicate stage or source name");
   }
 
   memset(&stage, 0, sizeof(stage));
   stage.name = tstr_from_v(name);
-  if (!stage.name) return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
+  if (!stage.name) return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   stage.line = line;
   stage.column = column;
   stage.is_source = is_source;
@@ -527,14 +527,14 @@ static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int i
     stage.adapter_name = tstr_from_v(spec.adapter_name);
     if (!stage.adapter_name) {
       flow_stage_impl_destroy(&stage);
-      return parse_fail(ctx, TURBO_ENOMEM, spec.adapter_line, spec.adapter_column, "out of memory");
+      return parse_fail(ctx, SALTS_ENOMEM, spec.adapter_line, spec.adapter_column, "out of memory");
     }
   }
   if (spec.operation_name.data && spec.operation_name.len > 0) {
     stage.operation_name = tstr_from_v(spec.operation_name);
     if (!stage.operation_name) {
       flow_stage_impl_destroy(&stage);
-      return parse_fail(ctx, TURBO_ENOMEM, spec.operation_line, spec.operation_column,
+      return parse_fail(ctx, SALTS_ENOMEM, spec.operation_line, spec.operation_column,
                         "out of memory");
     }
   }
@@ -542,29 +542,29 @@ static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int i
     stage.resource_name = tstr_from_v(spec.resource_name);
     if (!stage.resource_name) {
       flow_stage_impl_destroy(&stage);
-      return parse_fail(ctx, TURBO_ENOMEM, spec.resource_line, spec.resource_column,
+      return parse_fail(ctx, SALTS_ENOMEM, spec.resource_line, spec.resource_column,
                         "out of memory");
     }
   }
-  if (turbo_flow_stl_error(vec_push(&ctx->flow->stages, &stage)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->flow->stages, &stage)) != SALTS_OK) {
     flow_stage_impl_destroy(&stage);
-    return parse_fail(ctx, TURBO_ENOMEM, line, column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   }
 
   stage_index = flow_find_stage_view(ctx->flow, name);
   if (stage_index < 0) {
-    return parse_fail(ctx, TURBO_EINVAL, line, column, "stage declaration was not recorded");
+    return parse_fail(ctx, SALTS_EINVAL, line, column, "stage declaration was not recorded");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_parse_add_source(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec) {
   if (ctx->in_stage_template) {
-    return parse_fail(ctx, TURBO_EINVAL, name.line, name.column,
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                       "source declarations are only allowed in the root stage");
   }
   if (ctx->has_root_stage && !ctx->in_root_stage) {
-    return parse_fail(ctx, TURBO_EINVAL, name.line, name.column,
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                       "declarations are not allowed after the root block");
   }
   return stage_plan_add(ctx, token_view(name), 1, 0, 0, spec, name.line, name.column);
@@ -576,14 +576,14 @@ int flow_parse_add_stage(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_sp
 
   if (spec.has_data_pool && !spec.has_worker) {
     tstr_freep(&scoped);
-    return parse_fail(ctx, TURBO_EINVAL, name.line, name.column,
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                       "worker capacity requires a worker option");
   }
   if (!ctx->in_stage_template && ctx->has_root_stage && !ctx->in_root_stage) {
-    return parse_fail(ctx, TURBO_EINVAL, name.line, name.column,
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                       "declarations are not allowed after the root block");
   }
-  if (!scoped) return parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
+  if (!scoped) return parse_fail(ctx, SALTS_ENOMEM, name.line, name.column, "out of memory");
   rc = stage_plan_add(ctx, tstr_to_v(scoped), 0, 0, 0, spec, name.line, name.column);
   tstr_freep(&scoped);
   return rc;
@@ -596,25 +596,25 @@ int flow_parse_add_port(flow_parse_ctx_t *ctx, flow_token_t name, int is_output)
   int rc;
 
   if (!ctx->in_stage_template) {
-    return parse_fail(ctx, TURBO_EINVAL, name.line, name.column,
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                       "stage ports require a stage block");
   }
 
   scoped = make_scoped_name(ctx, token_view(name));
-  if (!scoped) return parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
+  if (!scoped) return parse_fail(ctx, SALTS_ENOMEM, name.line, name.column, "out of memory");
   rc = stage_plan_add(ctx, tstr_to_v(scoped), 0, 1, is_output, spec, name.line, name.column);
-  if (rc == TURBO_OK) {
+  if (rc == SALTS_OK) {
     stage_template = (flow_stage_template_decl_t *)vec_at(&ctx->stage_templates,
                                                                 ctx->current_stage_template_index);
     if (!stage_template) {
-      rc = parse_fail(ctx, TURBO_EINVAL, name.line, name.column,
+      rc = parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                       "stage declaration state is invalid");
     } else if (is_output) {
       stage_template->output_count += 1u;
       if (!stage_template->first_output) {
         stage_template->first_output = tstr_from_v(token_view(name));
         if (!stage_template->first_output) {
-          rc = parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
+          rc = parse_fail(ctx, SALTS_ENOMEM, name.line, name.column, "out of memory");
         }
       }
     } else {
@@ -622,7 +622,7 @@ int flow_parse_add_port(flow_parse_ctx_t *ctx, flow_token_t name, int is_output)
       if (!stage_template->first_input) {
         stage_template->first_input = tstr_from_v(token_view(name));
         if (!stage_template->first_input) {
-          rc = parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
+          rc = parse_fail(ctx, SALTS_ENOMEM, name.line, name.column, "out of memory");
         }
       }
     }
@@ -643,30 +643,30 @@ int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t
   int rc;
   size_t i;
 
-  if (!ctx || ctx->error) return ctx ? ctx->flow->last_error.code : TURBO_EINVAL;
+  if (!ctx || ctx->error) return ctx ? ctx->flow->last_error.code : SALTS_EINVAL;
   if (!ctx->in_root_stage && !ctx->in_stage_template) {
-    return parse_fail(ctx, TURBO_EINVAL, alias.line, alias.column,
+    return parse_fail(ctx, SALTS_EINVAL, alias.line, alias.column,
                       "use declarations require a stage block");
   }
 
   target_index = find_stage_template_view(ctx, target_view);
   if (target_index < 0) {
-    return parse_fail(ctx, TURBO_EINVAL, target.line, target.column, "unknown reusable stage");
+    return parse_fail(ctx, SALTS_EINVAL, target.line, target.column, "unknown reusable stage");
   }
   if (ctx->in_stage_template && ctx->current_stage_template.len == target_view.len &&
       memcmp(ctx->current_stage_template.data, target_view.data, target_view.len) == 0) {
-    return parse_fail(ctx, TURBO_EINVAL, target.line, target.column, "stage cannot use itself");
+    return parse_fail(ctx, SALTS_EINVAL, target.line, target.column, "stage cannot use itself");
   }
 
   target_template = (const flow_stage_template_decl_t *)vec_at_const(&ctx->stage_templates,
                                                                            (size_t)target_index);
   if (!target_template) {
-    return parse_fail(ctx, TURBO_EINVAL, target.line, target.column,
+    return parse_fail(ctx, SALTS_EINVAL, target.line, target.column,
                       "reusable stage declaration state is invalid");
   }
 
   alias_name = make_scoped_name(ctx, token_view(alias));
-  if (!alias_name) return parse_fail(ctx, TURBO_ENOMEM, alias.line, alias.column, "out of memory");
+  if (!alias_name) return parse_fail(ctx, SALTS_ENOMEM, alias.line, alias.column, "out of memory");
   alias_view = tstr_to_v(alias_name);
 
   stage_count = vec_size(&ctx->flow->stages);
@@ -674,7 +674,7 @@ int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t
   template_count = vec_size(&ctx->stage_templates);
 
   rc = push_stage_template_copy(ctx, alias_view, target_template, alias.line, alias.column);
-  if (rc != TURBO_OK) goto cleanup;
+  if (rc != SALTS_OK) goto cleanup;
 
   for (i = 0; i < template_count; ++i) {
     const flow_stage_template_decl_t *nested =
@@ -686,12 +686,12 @@ int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t
     }
     nested_name = replace_scoped_prefix(tstr_to_v(nested->name), target_view, alias_view);
     if (!nested_name) {
-      rc = parse_fail(ctx, TURBO_ENOMEM, alias.line, alias.column, "out of memory");
+      rc = parse_fail(ctx, SALTS_ENOMEM, alias.line, alias.column, "out of memory");
       goto cleanup;
     }
     rc = push_stage_template_copy(ctx, tstr_to_v(nested_name), nested, alias.line, alias.column);
     tstr_freep(&nested_name);
-    if (rc != TURBO_OK) goto cleanup;
+    if (rc != SALTS_OK) goto cleanup;
   }
 
   for (i = 0; i < stage_count; ++i) {
@@ -702,7 +702,7 @@ int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t
       continue;
     }
     rc = copy_stage_with_prefix(ctx, stage, target_view, alias_view, alias.line, alias.column);
-    if (rc != TURBO_OK) goto cleanup;
+    if (rc != SALTS_OK) goto cleanup;
   }
 
   for (i = 0; i < edge_count; ++i) {
@@ -715,7 +715,7 @@ int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t
       continue;
     }
     rc = copy_edge_with_prefix(ctx, edge, target_view, alias_view, alias.line, alias.column);
-    if (rc != TURBO_OK) goto cleanup;
+    if (rc != SALTS_OK) goto cleanup;
   }
 
 cleanup:
@@ -726,24 +726,24 @@ cleanup:
 int flow_parse_enter_stage_block(flow_parse_ctx_t *ctx, flow_token_t name) {
   if (!token_eq_cstr(name, "main")) {
     if (ctx->has_root_stage) {
-      return parse_fail(ctx, TURBO_EINVAL, name.line, name.column,
+      return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                         "stage declarations are not allowed after the root stage");
     }
     return flow_parse_enter_stage_template(ctx, name);
   }
 
   if (ctx->has_root_stage) {
-    return parse_fail(ctx, TURBO_EALREADY, name.line, name.column,
+    return parse_fail(ctx, SALTS_EALREADY, name.line, name.column,
                       "only one root stage orchestration block is supported");
   }
 
   tstr_freep(&ctx->root_stage_name);
   ctx->root_stage_name = tstr_from_v(token_view(name));
   if (!ctx->root_stage_name)
-    return parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, name.line, name.column, "out of memory");
   ctx->has_root_stage = 1;
   ctx->in_root_stage = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void flow_parse_leave_stage_block(flow_parse_ctx_t *ctx) {
@@ -757,32 +757,32 @@ int flow_parse_enter_stage_template(flow_parse_ctx_t *ctx, flow_token_t name) {
   size_t index;
 
   if (ctx->in_stage_template) {
-    return parse_fail(ctx, TURBO_EINVAL, name.line, name.column,
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                       "nested stage declarations are not supported");
   }
   if (flow_find_stage_view(ctx->flow, token_view(name)) >= 0 ||
       find_stage_template_view(ctx, token_view(name)) >= 0) {
-    return parse_fail(ctx, TURBO_EALREADY, name.line, name.column,
+    return parse_fail(ctx, SALTS_EALREADY, name.line, name.column,
                       "duplicate stage or source name");
   }
 
   memset(&stage_template, 0, sizeof(stage_template));
   stage_template.name = tstr_from_v(token_view(name));
   if (!stage_template.name)
-    return parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, name.line, name.column, "out of memory");
   stage_template.line = name.line;
   stage_template.column = name.column;
 
   index = vec_size(&ctx->stage_templates);
-  if (turbo_flow_stl_error(vec_push(&ctx->stage_templates, &stage_template)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->stage_templates, &stage_template)) != SALTS_OK) {
     tstr_freep(&stage_template.name);
-    return parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, name.line, name.column, "out of memory");
   }
 
   ctx->current_stage_template = tstr_to_v(stage_template.name);
   ctx->current_stage_template_index = index;
   ctx->in_stage_template = 1;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void flow_parse_leave_stage_template(flow_parse_ctx_t *ctx) {
@@ -804,8 +804,8 @@ flow_node_list_t flow_parse_node(flow_parse_ctx_t *ctx, flow_token_t name) {
 
   list.start = vec_size(&ctx->node_refs);
   list.count = 1;
-  if (turbo_flow_stl_error(vec_push(&ctx->node_refs, &ref)) != TURBO_OK) {
-    parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
+  if (turbo_flow_stl_error(vec_push(&ctx->node_refs, &ref)) != SALTS_OK) {
+    parse_fail(ctx, SALTS_ENOMEM, name.line, name.column, "out of memory");
     list.count = 0;
   }
   return list;
@@ -826,8 +826,8 @@ flow_node_list_t flow_parse_qualified_node(flow_parse_ctx_t *ctx, flow_token_t f
 
   list.start = vec_size(&ctx->node_refs);
   list.count = 1;
-  if (turbo_flow_stl_error(vec_push(&ctx->node_refs, &ref)) != TURBO_OK) {
-    parse_fail(ctx, TURBO_ENOMEM, first.line, first.column, "out of memory");
+  if (turbo_flow_stl_error(vec_push(&ctx->node_refs, &ref)) != SALTS_OK) {
+    parse_fail(ctx, SALTS_ENOMEM, first.line, first.column, "out of memory");
     list.count = 0;
   }
   return list;
@@ -847,7 +847,7 @@ static tstr make_stage_template_port_name(flow_parse_ctx_t *ctx,
   uint32_t port_count = use_output ? stage_template->output_count : stage_template->input_count;
 
   if (port_count != 1u || !port) {
-    parse_fail(ctx, TURBO_EINVAL, ref->line, ref->column,
+    parse_fail(ctx, SALTS_EINVAL, ref->line, ref->column,
                "stage shorthand requires exactly one input and one output port");
     return NULL;
   }
@@ -925,7 +925,7 @@ int flow_parse_add_edges(flow_parse_ctx_t *ctx, flow_node_list_t from, flow_node
       if (!edge.from_name || !edge.to_name) {
         flow_edge_impl_destroy(&edge);
         if (ctx->error) return ctx->flow->last_error.code;
-        return parse_fail(ctx, TURBO_ENOMEM, arrow.line, arrow.column, "out of memory");
+        return parse_fail(ctx, SALTS_ENOMEM, arrow.line, arrow.column, "out of memory");
       }
       edge.from_stage = UINT32_MAX;
       edge.to_stage = UINT32_MAX;
@@ -933,14 +933,14 @@ int flow_parse_add_edges(flow_parse_ctx_t *ctx, flow_node_list_t from, flow_node
       edge.column = arrow.column;
       edge.is_stage_internal = ctx->in_stage_template;
 
-      if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != TURBO_OK) {
+      if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != SALTS_OK) {
         flow_edge_impl_destroy(&edge);
-        return parse_fail(ctx, TURBO_ENOMEM, arrow.line, arrow.column, "out of memory");
+        return parse_fail(ctx, SALTS_ENOMEM, arrow.line, arrow.column, "out of memory");
       }
     }
   }
 
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_parse_add_conditional_edge(flow_parse_ctx_t *ctx, flow_node_list_t from,
@@ -950,15 +950,15 @@ int flow_parse_add_conditional_edge(flow_parse_ctx_t *ctx, flow_node_list_t from
   const flow_node_ref_t *to_ref;
   flow_edge_plan_impl_t edge;
 
-  if (!ctx || ctx->error) return ctx ? ctx->flow->last_error.code : TURBO_EINVAL;
+  if (!ctx || ctx->error) return ctx ? ctx->flow->last_error.code : SALTS_EINVAL;
   if (ctx->in_stage_template || from.count != 1u || to.count != 1u || condition.length == 0u) {
-    return parse_fail(ctx, TURBO_EINVAL, arrow.line, arrow.column,
+    return parse_fail(ctx, SALTS_EINVAL, arrow.line, arrow.column,
                       "conditional route requires one flow-level source and destination");
   }
   from_ref = (const flow_node_ref_t *)vec_at_const(&ctx->node_refs, from.start);
   to_ref = (const flow_node_ref_t *)vec_at_const(&ctx->node_refs, to.start);
   if (!from_ref || !to_ref) {
-    return parse_fail(ctx, TURBO_EINVAL, arrow.line, arrow.column,
+    return parse_fail(ctx, SALTS_EINVAL, arrow.line, arrow.column,
                       "conditional route contains an invalid node");
   }
 
@@ -969,18 +969,18 @@ int flow_parse_add_conditional_edge(flow_parse_ctx_t *ctx, flow_node_list_t from
   if (!edge.from_name || !edge.to_name || !edge.condition) {
     flow_edge_impl_destroy(&edge);
     if (ctx->error) return ctx->flow->last_error.code;
-    return parse_fail(ctx, TURBO_ENOMEM, condition.line, condition.column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, condition.line, condition.column, "out of memory");
   }
   edge.from_stage = UINT32_MAX;
   edge.to_stage = UINT32_MAX;
   edge.line = arrow.line;
   edge.column = arrow.column;
   edge.kind = TURBO_FLOW_EDGE_CONDITIONAL;
-  if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != SALTS_OK) {
     flow_edge_impl_destroy(&edge);
-    return parse_fail(ctx, TURBO_ENOMEM, arrow.line, arrow.column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, arrow.line, arrow.column, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int flow_parse_add_reject_edge(flow_parse_ctx_t *ctx, flow_token_t name, flow_node_list_t from,
@@ -989,15 +989,15 @@ int flow_parse_add_reject_edge(flow_parse_ctx_t *ctx, flow_token_t name, flow_no
   const flow_node_ref_t *to_ref;
   flow_edge_plan_impl_t edge;
 
-  if (!ctx || ctx->error) return ctx ? ctx->flow->last_error.code : TURBO_EINVAL;
+  if (!ctx || ctx->error) return ctx ? ctx->flow->last_error.code : SALTS_EINVAL;
   if (ctx->in_stage_template || from.count != 1u || to.count != 1u || name.length == 0u) {
-    return parse_fail(ctx, TURBO_EINVAL, arrow.line, arrow.column,
+    return parse_fail(ctx, SALTS_EINVAL, arrow.line, arrow.column,
                       "reject route requires a name and one flow-level source and destination");
   }
   from_ref = (const flow_node_ref_t *)vec_at_const(&ctx->node_refs, from.start);
   to_ref = (const flow_node_ref_t *)vec_at_const(&ctx->node_refs, to.start);
   if (!from_ref || !to_ref) {
-    return parse_fail(ctx, TURBO_EINVAL, arrow.line, arrow.column,
+    return parse_fail(ctx, SALTS_EINVAL, arrow.line, arrow.column,
                       "reject route contains an invalid node");
   }
 
@@ -1008,31 +1008,31 @@ int flow_parse_add_reject_edge(flow_parse_ctx_t *ctx, flow_token_t name, flow_no
   if (!edge.from_name || !edge.to_name || !edge.name) {
     flow_edge_impl_destroy(&edge);
     if (ctx->error) return ctx->flow->last_error.code;
-    return parse_fail(ctx, TURBO_ENOMEM, name.line, name.column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, name.line, name.column, "out of memory");
   }
   edge.from_stage = UINT32_MAX;
   edge.to_stage = UINT32_MAX;
   edge.line = arrow.line;
   edge.column = arrow.column;
   edge.kind = TURBO_FLOW_EDGE_REJECT;
-  if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != TURBO_OK) {
+  if (turbo_flow_stl_error(vec_push(&ctx->flow->edges, &edge)) != SALTS_OK) {
     flow_edge_impl_destroy(&edge);
-    return parse_fail(ctx, TURBO_ENOMEM, arrow.line, arrow.column, "out of memory");
+    return parse_fail(ctx, SALTS_ENOMEM, arrow.line, arrow.column, "out of memory");
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void flow_parse_syntax_error(flow_parse_ctx_t *ctx, flow_token_t token) {
   if (!ctx || ctx->error) return;
   if (token.value && token.length > 0) {
-    parse_fail(ctx, TURBO_EINVAL, token.line, token.column, "syntax error in flow grammar");
+    parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "syntax error in flow grammar");
   } else {
-    parse_fail(ctx, TURBO_EINVAL, token.line, token.column, "unexpected end of flow grammar");
+    parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "unexpected end of flow grammar");
   }
 }
 
 void flow_parse_unknown_executor(flow_parse_ctx_t *ctx, flow_token_t token) {
-  parse_fail(ctx, TURBO_EINVAL, token.line, token.column, "unknown executor kind");
+  parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "unknown executor kind");
 }
 
 static int run_generated_parser(flow_parse_ctx_t *ctx, const char *text, size_t len) {
@@ -1047,11 +1047,11 @@ static int run_generated_parser(flow_parse_ctx_t *ctx, const char *text, size_t 
   memset(&last_token, 0, sizeof(last_token));
 
   parser = TurboFlowParseAlloc(malloc);
-  if (!parser) return parse_fail(ctx, TURBO_ENOMEM, 0, 0, "out of memory");
+  if (!parser) return parse_fail(ctx, SALTS_ENOMEM, 0, 0, "out of memory");
 
   while ((token_id = flow_lexer_next(&lexer, &token)) != 0) {
     if (token_id < 0) {
-      parse_fail(ctx, TURBO_EINVAL, token.line, token.column, "unexpected character");
+      parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "unexpected character");
       break;
     }
 
@@ -1082,28 +1082,28 @@ static int run_generated_parser(flow_parse_ctx_t *ctx, const char *text, size_t 
   }
 
   TurboFlowParseFree(parser, free);
-  return ctx->error ? ctx->flow->last_error.code : TURBO_OK;
+  return ctx->error ? ctx->flow->last_error.code : SALTS_OK;
 }
 
 int turbo_flow_parse_string(turbo_flow_t *flow, const char *text, size_t len) {
   flow_parse_ctx_t ctx;
   int rc;
 
-  if (!flow || (!text && len > 0)) return TURBO_EINVAL;
+  if (!flow || (!text && len > 0)) return SALTS_EINVAL;
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, TURBO_EBUSY, 0, 0, "cannot parse after compile");
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0, "cannot parse after compile");
   }
 
   flow_clear_plan(flow);
   flow_clear_error(flow);
 
   rc = flow_parse_ctx_init(&ctx, flow);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
 
   rc = run_generated_parser(&ctx, text ? text : "", len);
   flow_parse_ctx_destroy(&ctx);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
 
   flow->state = TURBO_FLOW_STATE_PARSED;
-  return TURBO_OK;
+  return SALTS_OK;
 }

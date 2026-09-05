@@ -77,14 +77,14 @@ static const turbo_flow_expr_schema_t RULESFORGE_EXPR_SCHEMA = {
 static int rulesforge_projection_clone(const void *value, void *ctx, void **out) {
   rulesforge_projection_lifecycle_t *lifecycle = (rulesforge_projection_lifecycle_t *)ctx;
   rulesforge_projection_t *copy;
-  if (!value || !out) return TURBO_EINVAL;
+  if (!value || !out) return SALTS_EINVAL;
   *out = NULL;
   copy = (rulesforge_projection_t *)malloc(sizeof(*copy));
-  if (!copy) return TURBO_ENOMEM;
+  if (!copy) return SALTS_ENOMEM;
   *copy = *(const rulesforge_projection_t *)value;
   *out = copy;
   if (lifecycle) atomic_fetch_add_explicit(&lifecycle->clones, 1, memory_order_relaxed);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static void rulesforge_projection_destroy(void *value, void *ctx) {
@@ -97,11 +97,11 @@ static int rulesforge_projection_read(const void *value, uint32_t field_id,
                                       turbo_flow_expr_value_t *out, void *ctx) {
   const rulesforge_projection_t *projection = (const rulesforge_projection_t *)value;
   (void)ctx;
-  if (!projection || !out) return TURBO_EINVAL;
-  if (field_id != RULESFORGE_AGE_FIELD) return TURBO_ENOENT;
+  if (!projection || !out) return SALTS_EINVAL;
+  if (field_id != RULESFORGE_AGE_FIELD) return SALTS_ENOENT;
   out->type = TURBO_FLOW_EXPR_TYPE_I64;
   out->as.i64 = projection->age;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int rulesforge_bind_age_with_lifecycle(turbo_flow_msg_t *message, int64_t age,
@@ -109,12 +109,12 @@ static int rulesforge_bind_age_with_lifecycle(turbo_flow_msg_t *message, int64_t
   rulesforge_projection_t *projection =
       (rulesforge_projection_t *)malloc(sizeof(*projection));
   int rc;
-  if (!projection) return TURBO_ENOMEM;
+  if (!projection) return SALTS_ENOMEM;
   projection->age = age;
   rc = turbo_flow_msg_bind_projection(message, &RULESFORGE_PROJECTION_SCHEMA, projection,
                                       rulesforge_projection_clone, rulesforge_projection_destroy,
                                       lifecycle);
-  if (rc != TURBO_OK) free(projection);
+  if (rc != SALTS_OK) free(projection);
   return rc;
 }
 
@@ -126,17 +126,17 @@ static int rulesforge_mock_callback(turbo_flow_msg_t *message, const char *resou
                                     void *ctx) {
   rulesforge_mock_context_t *rules = (rulesforge_mock_context_t *)ctx;
 
-  if (!message || !resource_name || !ctx || resource_name[0] == '\0') return TURBO_EINVAL;
+  if (!message || !resource_name || !ctx || resource_name[0] == '\0') return SALTS_EINVAL;
   if (rules->matched) {
     message->flags |= RULESFORGE_MATCHED_FLAG;
   } else {
     message->flags &= ~(uint32_t)RULESFORGE_MATCHED_FLAG;
   }
-  if (turbo_flow_rulesforge_set_result(message, rules->matched ? 1u : 0u, TURBO_OK) != TURBO_OK) {
-    return TURBO_EPROTO;
+  if (turbo_flow_rulesforge_set_result(message, rules->matched ? 1u : 0u, SALTS_OK) != SALTS_OK) {
+    return SALTS_EPROTO;
   }
   rules->callback_count++;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int rulesforge_sink_counter(turbo_flow_msg_t *message, void *ctx) {
@@ -146,7 +146,7 @@ static int rulesforge_sink_counter(turbo_flow_msg_t *message, void *ctx) {
   sink->rule_status = message->data_decision.evaluation_status;
   sink->rule_match_count = message->data_decision.match_count;
   sink->rule_error = message->data_decision.evaluation_error;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int rulesforge_worker_projection_probe(turbo_flow_msg_t *message, void *ctx) {
@@ -154,20 +154,20 @@ static int rulesforge_worker_projection_probe(turbo_flow_msg_t *message, void *c
   const turbo_flow_data_schema_t *schema = NULL;
   const rulesforge_projection_t *projection;
 
-  if (!message || !worker) return TURBO_EINVAL;
+  if (!message || !worker) return SALTS_EINVAL;
   projection =
       (const rulesforge_projection_t *)turbo_flow_msg_projection(message, &schema);
-  if (!projection || schema != &RULESFORGE_PROJECTION_SCHEMA) return TURBO_EPROTO;
+  if (!projection || schema != &RULESFORGE_PROJECTION_SCHEMA) return SALTS_EPROTO;
   atomic_store_explicit(&worker->age, (long long)projection->age, memory_order_relaxed);
   atomic_fetch_add_explicit(&worker->count, 1, memory_order_relaxed);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int rulesforge_stage_counter(turbo_flow_msg_t *message, void *ctx) {
   rulesforge_dispatch_probe_t *probe = (rulesforge_dispatch_probe_t *)ctx;
-  if (!message || !probe) return TURBO_EINVAL;
+  if (!message || !probe) return SALTS_EINVAL;
   atomic_fetch_add_explicit(&probe->count, 1, memory_order_relaxed);
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 spec("rulesforge bridge operation") {
@@ -189,23 +189,23 @@ spec("rulesforge bridge operation") {
     registration.fn = rulesforge_mock_callback;
     registration.callback_ctx = &rules;
     check_not_null(flow);
-    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), TURBO_OK);
-    check_equal(turbo_flow_rulesforge_register_data_operation(flow, &registration), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), SALTS_OK);
+    check_equal(turbo_flow_rulesforge_register_data_operation(flow, &registration), SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
 
     turbo_flow_msg_init(&message);
-    check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
     check_equal(rules.callback_count, 1);
     check_equal(sink.count, 1);
     check_equal(sink.flags, RULESFORGE_MATCHED_FLAG);
     check_equal(sink.rule_status, TURBO_FLOW_DATA_MATCHED);
     check_equal(sink.rule_match_count, 1u);
 
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     turbo_flow_destroy(flow);
   }
@@ -230,17 +230,17 @@ spec("rulesforge bridge operation") {
     registration.fn = rulesforge_mock_callback;
     registration.callback_ctx = &rules;
     check_not_null(flow);
-    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), TURBO_OK);
-    check_equal(turbo_flow_rulesforge_register_data_operation(flow, &registration), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), SALTS_OK);
+    check_equal(turbo_flow_rulesforge_register_data_operation(flow, &registration), SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
 
     turbo_flow_msg_init(&matched_message);
     matched_message.flags = RULESFORGE_OTHER_FLAG;
-    check_equal(turbo_flow_publish(flow, "input", &matched_message), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &matched_message), SALTS_OK);
     check_equal(rules.callback_count, 1);
     check_equal(sink.count, 1);
     check_equal(sink.flags, RULESFORGE_MATCHED_FLAG | RULESFORGE_OTHER_FLAG);
@@ -248,11 +248,11 @@ spec("rulesforge bridge operation") {
 
     rules.matched = 0;
     turbo_flow_msg_init(&unmatched_message);
-    check_equal(turbo_flow_publish(flow, "input", &unmatched_message), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &unmatched_message), SALTS_OK);
     check_equal(rules.callback_count, 2);
     check_equal(sink.count, 1);
 
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&unmatched_message);
     turbo_flow_msg_cleanup(&matched_message);
     turbo_flow_destroy(flow);
@@ -283,29 +283,29 @@ spec("rulesforge bridge operation") {
     projection.expr_schema = &RULESFORGE_EXPR_SCHEMA;
     projection.read_field = rulesforge_projection_read;
     check_not_null(flow);
-    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), TURBO_OK);
-    check_equal(turbo_flow_rulesforge_register_data_operation(flow, &operation), TURBO_OK);
-    check_equal(turbo_flow_register_expr_projection(flow, &projection), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), SALTS_OK);
+    check_equal(turbo_flow_rulesforge_register_data_operation(flow, &operation), SALTS_OK);
+    check_equal(turbo_flow_register_expr_projection(flow, &projection), SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
 
     turbo_flow_msg_init(&adult_message);
-    check_equal(rulesforge_bind_age(&adult_message, 21), TURBO_OK);
-    check_equal(turbo_flow_publish(flow, "input", &adult_message), TURBO_OK);
+    check_equal(rulesforge_bind_age(&adult_message, 21), SALTS_OK);
+    check_equal(turbo_flow_publish(flow, "input", &adult_message), SALTS_OK);
     check_equal(sink.count, 1);
     check_equal(sink.rule_status, TURBO_FLOW_DATA_MATCHED);
     check_equal(sink.rule_match_count, 1u);
 
     turbo_flow_msg_init(&minor_message);
-    check_equal(rulesforge_bind_age(&minor_message, 17), TURBO_OK);
-    check_equal(turbo_flow_publish(flow, "input", &minor_message), TURBO_OK);
+    check_equal(rulesforge_bind_age(&minor_message, 17), SALTS_OK);
+    check_equal(turbo_flow_publish(flow, "input", &minor_message), SALTS_OK);
     check_equal(sink.count, 1);
     check_equal(rules.callback_count, 2);
 
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&minor_message);
     turbo_flow_msg_cleanup(&adult_message);
     turbo_flow_destroy(flow);
@@ -346,29 +346,29 @@ spec("rulesforge bridge operation") {
     projection.expr_schema = &RULESFORGE_EXPR_SCHEMA;
     projection.read_field = rulesforge_projection_read;
     check_not_null(flow);
-    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), TURBO_OK);
-    check_equal(turbo_flow_rulesforge_register_data_operation(flow, &operation), TURBO_OK);
-    check_equal(turbo_flow_register_expr_projection(flow, &projection), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), SALTS_OK);
+    check_equal(turbo_flow_rulesforge_register_data_operation(flow, &operation), SALTS_OK);
+    check_equal(turbo_flow_register_expr_projection(flow, &projection), SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "dispatch", rulesforge_worker_projection_probe, &worker,
                                      NULL),
-        TURBO_OK);
+        SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
     dispatch_plan =
         turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "dispatch"));
     check_not_null(dispatch_plan);
     check_equal(dispatch_plan->data_strategy, TURBO_FLOW_DATA_WORKER_POOL);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
 
     turbo_flow_msg_init(&adult_message);
-    check_equal(rulesforge_bind_age_with_lifecycle(&adult_message, 21, &lifecycle), TURBO_OK);
+    check_equal(rulesforge_bind_age_with_lifecycle(&adult_message, 21, &lifecycle), SALTS_OK);
     original_projection =
         (const rulesforge_projection_t *)turbo_flow_msg_projection(&adult_message, NULL);
     check_not_null(original_projection);
-    check_equal(turbo_flow_publish(flow, "input", &adult_message), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &adult_message), SALTS_OK);
     check_equal(atomic_load_explicit(&worker.count, memory_order_relaxed), 1);
     check_equal((int)atomic_load_explicit(&worker.age, memory_order_relaxed), 21);
     check_equal(sink.count, 1);
@@ -377,14 +377,14 @@ spec("rulesforge bridge operation") {
     check_equal((int)original_projection->age, 21);
 
     turbo_flow_msg_init(&minor_message);
-    check_equal(rulesforge_bind_age_with_lifecycle(&minor_message, 17, &lifecycle), TURBO_OK);
-    check_equal(turbo_flow_publish(flow, "input", &minor_message), TURBO_OK);
+    check_equal(rulesforge_bind_age_with_lifecycle(&minor_message, 17, &lifecycle), SALTS_OK);
+    check_equal(turbo_flow_publish(flow, "input", &minor_message), SALTS_OK);
     check_equal(atomic_load_explicit(&worker.count, memory_order_relaxed), 2);
     check_equal((int)atomic_load_explicit(&worker.age, memory_order_relaxed), 17);
     check_equal(sink.count, 1);
     check_equal(rules.callback_count, 2);
 
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     clone_count = atomic_load_explicit(&lifecycle.clones, memory_order_relaxed);
     check_greater_equal(clone_count, 2);
     check_equal(atomic_load_explicit(&lifecycle.destroys, memory_order_relaxed), clone_count);
@@ -444,19 +444,19 @@ spec("rulesforge bridge operation") {
     provider.max_rules = 16;
     atomic_init(&dispatch.count, 0);
     check_not_null(flow);
-    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), SALTS_OK);
     check_equal(
         turbo_flow_rulesforge_register_databind_provider(flow, "rules.test", &provider),
-        TURBO_OK);
+        SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "dispatch", rulesforge_stage_counter, &dispatch,
                                      NULL),
-        TURBO_OK);
+        SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
 
     turbo_flow_msg_init(&adult_message);
     adult_message.flags = RULESFORGE_OTHER_FLAG;
@@ -465,14 +465,14 @@ spec("rulesforge bridge operation") {
                  RULES_FORGE_OK);
     check_equal(turbo_flow_rulesforge_bind_databind_object(
                      &adult_message, &RULESFORGE_DATABIND_SCHEMA, object),
-                 TURBO_OK);
+                 SALTS_OK);
     object = NULL;
-    check_equal(turbo_flow_publish(flow, "input", &adult_message), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &adult_message), SALTS_OK);
     check_equal(sink.count, 1);
     check_equal(sink.flags, RULESFORGE_MATCHED_FLAG | RULESFORGE_OTHER_FLAG);
     check_equal(sink.rule_status, TURBO_FLOW_DATA_MATCHED);
     check_equal(sink.rule_match_count, 1u);
-    check_equal(sink.rule_error, TURBO_OK);
+    check_equal(sink.rule_error, SALTS_OK);
 
     turbo_flow_msg_init(&minor_message);
     check_equal(ruleforge_data_bind_object_from_json(schema_path, "Applicant", "{\"age\":17}",
@@ -480,13 +480,13 @@ spec("rulesforge bridge operation") {
                  RULES_FORGE_OK);
     check_equal(turbo_flow_rulesforge_bind_databind_object(
                      &minor_message, &RULESFORGE_DATABIND_SCHEMA, object),
-                 TURBO_OK);
+                 SALTS_OK);
     object = NULL;
-    check_equal(turbo_flow_publish(flow, "input", &minor_message), TURBO_OK);
+    check_equal(turbo_flow_publish(flow, "input", &minor_message), SALTS_OK);
     check_equal(sink.count, 1);
     check_equal(atomic_load_explicit(&dispatch.count, memory_order_relaxed), 2);
 
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&minor_message);
     turbo_flow_msg_cleanup(&adult_message);
     turbo_flow_destroy(flow);
@@ -545,34 +545,34 @@ spec("rulesforge bridge operation") {
     provider.max_rules = 16;
     atomic_init(&dispatch.count, 0);
     check_not_null(flow);
-    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), TURBO_OK);
+    check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), SALTS_OK);
     check_equal(turbo_flow_rulesforge_register_json_provider(flow, "rules.json", &provider),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "dispatch", rulesforge_stage_counter, &dispatch, NULL),
-        TURBO_OK);
+        SALTS_OK);
     check_equal(
         turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        TURBO_OK);
-    check_equal(turbo_flow_compile(flow), TURBO_OK);
-    check_equal(turbo_flow_start(flow), TURBO_OK);
+        SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
 
     turbo_flow_msg_init(&message);
     message.flags = RULESFORGE_OTHER_FLAG;
     message.owned_payload = tstr_dup("{\"age\":21}");
     check_not_null(message.owned_payload);
     message.payload = tstr_to_v(message.owned_payload);
-    check_equal(rulesforge_bind_age(&message, 99), TURBO_OK);
-    check_equal(turbo_flow_publish(flow, "input", &message), TURBO_OK);
+    check_equal(rulesforge_bind_age(&message, 99), SALTS_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
     check_equal(sink.count, 1);
     check_equal(sink.flags, RULESFORGE_MATCHED_FLAG | RULESFORGE_OTHER_FLAG);
     check_equal(sink.rule_status, TURBO_FLOW_DATA_MATCHED);
     check_equal(sink.rule_match_count, 1u);
-    check_equal(sink.rule_error, TURBO_OK);
+    check_equal(sink.rule_error, SALTS_OK);
     check_equal(atomic_load_explicit(&dispatch.count, memory_order_relaxed), 1);
     check_not_null(turbo_flow_msg_projection(&message, NULL));
 
-    check_equal(turbo_flow_stop(flow), TURBO_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     turbo_flow_destroy(flow);
     check_equal(ruleforge_kb_destroy(kb), RULES_FORGE_OK);

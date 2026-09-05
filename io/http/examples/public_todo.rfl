@@ -1,7 +1,0 @@
-import "public_todo.schema";
-
-rule "Todo requires work"
-when
-  Todo(completed == false)
-then
-end

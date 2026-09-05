@@ -25,7 +25,7 @@ target_include_directories(
          $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/turbo_flow/include>
          $<INSTALL_INTERFACE:include>)
 target_link_libraries(${TARGET_NAME}
-                      PUBLIC TurboUtils::Core PRIVATE ${CMAKE_DL_LIBS})
+                      PUBLIC Salts::Core PRIVATE ${CMAKE_DL_LIBS})
 
 install(
   FILES include/turbo_flow_protocol.h

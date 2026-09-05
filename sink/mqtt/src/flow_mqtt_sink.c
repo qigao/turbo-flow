@@ -1,21 +1,21 @@
 #include "turbo_flow_mqtt_sink.h"
 
-#include "turbo_error.h"
+#include "salts_error.h"
 
 #include <stdint.h>
 #include <string.h>
 
 static int flow_mqtt_sink_segment_length(const char *text, size_t maximum, size_t *length) {
   size_t size;
-  if (!text || !length) return TURBO_EINVAL;
+  if (!text || !length) return SALTS_EINVAL;
   for (size = 0u; size <= maximum && text[size] != '\0'; ++size) {
     const unsigned char ch = (unsigned char)text[size];
-    if (ch <= 0x20u || ch >= 0x7fu || ch == '/' || ch == '+' || ch == '#') return TURBO_EPROTO;
+    if (ch <= 0x20u || ch >= 0x7fu || ch == '/' || ch == '+' || ch == '#') return SALTS_EPROTO;
   }
-  if (size == 0u) return TURBO_EPROTO;
-  if (size > maximum) return TURBO_EMSGSIZE;
+  if (size == 0u) return SALTS_EPROTO;
+  if (size > maximum) return SALTS_EMSGSIZE;
   *length = size;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static size_t flow_mqtt_sink_max_batch_size(const turbo_flow_mqtt_sink_config_t *config) {
@@ -29,9 +29,9 @@ static int flow_mqtt_sink_config_check(const turbo_flow_mqtt_sink_config_t *conf
   if (!config || config->size < TURBO_FLOW_MQTT_SINK_CONFIG_V1_SIZE ||
       config->abi_version != TURBO_FLOW_MQTT_SINK_ABI_VERSION || config->qos > 2u ||
       config->retain > 1u)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   max_batch_size = flow_mqtt_sink_max_batch_size(config);
-  return max_batch_size <= TURBO_FLOW_MQTT_SINK_MAX_BATCH_SIZE ? TURBO_OK : TURBO_EINVAL;
+  return max_batch_size <= TURBO_FLOW_MQTT_SINK_MAX_BATCH_SIZE ? SALTS_OK : SALTS_EINVAL;
 }
 
 static int flow_mqtt_sink_message_shape_check(const turbo_flow_protocol_message_output_t *input,
@@ -44,8 +44,8 @@ static int flow_mqtt_sink_message_shape_check(const turbo_flow_protocol_message_
       input->metadata.abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION || !output ||
       output->size < sizeof(*output) || output->abi_version != TURBO_FLOW_MQTT_SINK_ABI_VERSION ||
       !output->topic || output->topic_capacity == 0u)
-    return TURBO_EINVAL;
-  return TURBO_OK;
+    return SALTS_EINVAL;
+  return SALTS_OK;
 }
 
 static int flow_mqtt_sink_map_one(const turbo_flow_mqtt_sink_config_t *config,
@@ -68,26 +68,26 @@ static int flow_mqtt_sink_map_one(const turbo_flow_mqtt_sink_config_t *config,
                 : input->metadata.direction == TURBO_FLOW_PROTOCOL_DIRECTION_DOWN ? "down"
                                                                                   : NULL;
   segments[5] = input->metadata.operation;
-  if (!segments[1] || !segments[4]) return TURBO_EPROTO;
+  if (!segments[1] || !segments[4]) return SALTS_EPROTO;
 
   rc = flow_mqtt_sink_segment_length(segments[0], TURBO_FLOW_MQTT_SINK_ROUTE_PREFIX_MAX,
                                      &lengths[0]);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = flow_mqtt_sink_segment_length(segments[1], TURBO_FLOW_PROTOCOL_OPERATION_MAX, &lengths[1]);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = flow_mqtt_sink_segment_length(segments[2], TURBO_FLOW_MQTT_SINK_TENANT_MAX, &lengths[2]);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK)
     rc = flow_mqtt_sink_segment_length(segments[3], TURBO_FLOW_PROTOCOL_DEVICE_ID_MAX, &lengths[3]);
-  if (rc == TURBO_OK) rc = flow_mqtt_sink_segment_length(segments[4], 4u, &lengths[4]);
-  if (rc == TURBO_OK)
+  if (rc == SALTS_OK) rc = flow_mqtt_sink_segment_length(segments[4], 4u, &lengths[4]);
+  if (rc == SALTS_OK)
     rc = flow_mqtt_sink_segment_length(segments[5], TURBO_FLOW_PROTOCOL_OPERATION_MAX, &lengths[5]);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
 
   for (size_t i = 0u; i < 6u; ++i) {
-    if (lengths[i] > SIZE_MAX - topic_size) return TURBO_ERANGE;
+    if (lengths[i] > SIZE_MAX - topic_size) return SALTS_ERANGE;
     topic_size += lengths[i];
   }
-  if (topic_size >= output->topic_capacity) return TURBO_EMSGSIZE;
+  if (topic_size >= output->topic_capacity) return SALTS_EMSGSIZE;
 
   cursor = output->topic;
   for (size_t i = 0u; i < 6u; ++i) {
@@ -101,7 +101,7 @@ static int flow_mqtt_sink_map_one(const turbo_flow_mqtt_sink_config_t *config,
   output->payload_size = input->payload_size;
   output->qos = config->qos;
   output->retain = config->retain;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_mqtt_sink_map_batch(const turbo_flow_mqtt_sink_config_t *config,
@@ -111,24 +111,24 @@ int turbo_flow_mqtt_sink_map_batch(const turbo_flow_mqtt_sink_config_t *config,
 
   if (mapped) *mapped = 0u;
   rc = flow_mqtt_sink_config_check(config);
-  if (rc != TURBO_OK) return rc;
+  if (rc != SALTS_OK) return rc;
   if (!batch || batch->size < sizeof(*batch) ||
       batch->abi_version != TURBO_FLOW_MQTT_SINK_ABI_VERSION || !batch->inputs || !batch->outputs ||
       batch->message_count == 0u)
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   max_batch_size = flow_mqtt_sink_max_batch_size(config);
-  if (batch->message_count > max_batch_size) return TURBO_EMSGSIZE;
+  if (batch->message_count > max_batch_size) return SALTS_EMSGSIZE;
 
   for (size_t i = 0u; i < batch->message_count; ++i) {
     rc = flow_mqtt_sink_message_shape_check(&batch->inputs[i], &batch->outputs[i]);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
   }
   for (size_t i = 0u; i < batch->message_count; ++i) {
     rc = flow_mqtt_sink_map_one(config, &batch->inputs[i], &batch->outputs[i]);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     if (mapped) *mapped = i + 1u;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int turbo_flow_mqtt_sink_map(const turbo_flow_mqtt_sink_config_t *config,
@@ -142,5 +142,5 @@ int turbo_flow_mqtt_sink_map(const turbo_flow_mqtt_sink_config_t *config,
   batch.outputs = output;
   batch.message_count = 1u;
   rc = turbo_flow_mqtt_sink_map_batch(config, &batch, &mapped);
-  return rc == TURBO_OK && mapped != 1u ? TURBO_EPROTO : rc;
+  return rc == SALTS_OK && mapped != 1u ? SALTS_EPROTO : rc;
 }

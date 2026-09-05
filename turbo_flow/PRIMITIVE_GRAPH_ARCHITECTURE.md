@@ -33,7 +33,7 @@ Protocol and message-pattern plane
   external protocol parser、session、FSM、correlation、ACK、retry boundary
 
 Transport plane
-  CoroNet context 和 TCP/TLS/WS/Pipe/UDP/KCP byte transport
+  仓库外 CNet/CHTTP context 和 TCP/TLS/WS/Pipe/UDP byte transport
 ```
 
 依赖只允许向下。管理面观察各平面，但不搬运业务 payload。协议 owner 可以向数据面提交
@@ -116,7 +116,7 @@ Input/Output 是跨 domain bridge 的方向性角色。
 
 Operation 不拥有 thread/coroutine/ring。内建计算 executor 只有 `inline`、thread pool 和
 coroutine pool，由 runtime 绑定到 node。Disruptor worker 是 bounded data handoff/consumer
-lane，不是第四种 executor；CoroNet context 是 IO owner placement，也不是计算 executor。
+lane，不是第四种 executor；CNet/CHTTP context 是外部 IO owner placement，也不是计算 executor。
 Operation 不能因为被 graph 调度而获得额外状态权限。
 
 ### 4.3 Domain catalog
@@ -133,7 +133,7 @@ Operation 不能因为被 graph 调度而获得额外状态权限。
 |---|---|---|---|
 | Data | MessageEnvelope、Schema、Batch | decode、validate、transform、filter、route、split、merge | message/batch owner |
 | Execution | Task、ExecutorPool、DisruptorSegment | submit、yield、cancel、wait、drain、resize | runtime |
-| IO/Transport | EndpointSpec、Listener、Connection、Stream/Datagram | listen、connect、read、write、interrupt、quiesce | adapter/CoroNet context |
+| IO/Transport | EndpointSpec、Listener、Connection、Stream/Datagram | listen、connect、read、write、interrupt、quiesce | 外部 CNet/CHTTP adapter context |
 | Protocol/Pattern | Frame、Session、Subscription、Correlation、DeliveryState | parse、encode、publish、request、reply、subscribe、settle | protocol owner |
 | Buffer/Persistence | Queue、Record、Checkpoint | enqueue、reserve、ack、requeue、recover | queue/storage owner |
 | Rules | RuleProgram、FactsSnapshot、Decision | compile、evaluate | rules owner；evaluation 无副作用 |
@@ -141,14 +141,8 @@ Operation 不能因为被 graph 调度而获得额外状态权限。
 
 HTTP、SMTP、MQTT、Redis 及外部协议可以各自形成 protocol subdomain，并按各自实现需要复用
 IO/Transport primitives。复用 connection/endpoint 不代表共享协议 FSM、options 或 transport
-实现。HTTP 已有 TurboHTTP/Iris native endpoint/adapter，保持该 owner 与 IO 路径，不迁移为
-`io/socket` primitive。`io.socket` 将 CoroNet endpoint 注册为 `SocketEndpoint`；
-`io.http.client/server` 分别将 native client/endpoint 注册为 `HttpClientConnection` /
-`HttpServerEndpoint`；RPC 同理注册自己的 client/server resource。它们共享的是
-module-adapter-resource 校验机制，不共享协议 FSM、连接池或 native transport 实现。
-RPC client 可由可信 host 通过 versioned binding 显式注入 borrowed/owned `http_client_t`，使其复用既有
-TurboHTTP provider 配置；未注入时仍创建私有 client。Borrowed client 必须比 RPC adapter
-活得更久，且不能被另一个 adapter 并发驱动。该 host object 不可由 YAML 构造。
+实现。当前仓库不实现网络 endpoint 或 client；后续接入必须由 CNet/CHTTP 宿主适配层注册
+typed resource/operation，并保持连接池、协议 FSM、凭据和 shutdown fence 的单一 owner。
 
 `MessageEnvelope` 同时承载 schema-bound 和 opaque data。Payload bytes 是唯一内容事实源；
 schema-bound 只表示 envelope 上附加了可选派生 projection，不要求所有 ingress 预先知道格式。
@@ -187,7 +181,7 @@ owner；resource-owned adapter operation 还必须匹配注册时固化的 primi
 Runtime pool 已提供 stable UID、generation、typed Status/Condition 和 checked
 resize command；operation execution deadline 已接入 inline、thread/coro pool、worker lane
 以及同步 adapter 边界。Worker runtime 已实现 block、fail 和 drop-newest；drop-oldest 因 active
-sequence 不能安全回收而返回 `TURBO_ENOTSUP`。Generic complete/requeue/dead-letter/canceled 和
+sequence 不能安全回收而返回 `SALTS_ENOTSUP`。Generic complete/requeue/dead-letter/canceled 和
 protocol ACK settlement 已通过显式 owner callback 接入全部 compute/handoff path；缺少 owner 或
 请求 operation 未声明的 action 时 fail fast。Connection、Queue、Storage 和 protocol owner 已
 提供 owner-scoped UID 与 generation-aware snapshot；其中固定 generation 为 `1` 的 immutable
@@ -199,7 +193,7 @@ Data operation 现已补充三种显式 provider 能力：bounded emitter 为 0.
 runtime-generation 状态事务；event-time tumbling provider 以消息 `ts_ns` 和 owner 提交的
 monotonic watermark 关闭有界 keyed accumulator。三者都复用现有 `operation` DSL binding，
 不引入第二套控制语法。Keyed callback 不持 store lock，成功后以 per-key revision 提交；冲突
-返回 `TURBO_EBUSY`，不隐式 retry。Window close callback 同样不持 store lock；watermark 先
+返回 `SALTS_EBUSY`，不隐式 retry。Window close callback 同样不持 store lock；watermark 先
 单调提交，再按 `(window_start, binary key)` 关闭窗口，从而使并发迟到事件在 commit 点失败。
 Source/adapter owner 负责合并多输入 watermark，store 不承担网络/session owner 或持久化
 checkpoint。
@@ -232,7 +226,7 @@ Native adapter catalog 已覆盖 HTTP、RPC、Queue 与 Storage。HTTP/RPC
 `StorageResource`，而不是将共享/持久化状态误报为 adapter-private state。
 
 例如 MQTT publish decode 的 scope 是：单 packet/message data、session-generation lifetime、
-MQTT owner-local state、CoroNet context 串行化；Policy route 是 message data、无共享状态、
+MQTT owner-local state、外部 CNet context 串行化；Policy route 是 message data、无共享状态、
 dispatch lifetime、pure authority；pool resize 是无 payload、runtime resource state、command
 deadline lifetime、host 串行化、typed-command authority。
 
@@ -335,7 +329,7 @@ generation；只有 caller 显式 retry 才以新 idempotency attempt 重试，�
 `pool:<pool-kind-number>:<stage-name>`；start/restart、成功 resize 和成功 rollback rebuild 在
 替换 pool 实例后推进 generation，stop/no-op resize 不推进。Pool Status 的 READY、ACCEPTING、
 DRAINED、SATURATED Conditions 从同一 snapshot 推导；Observe reconcile 使用其
-`observed_generation` 发送 checked resize，stale command 返回 `TURBO_EBUSY`。截断 resize
+`observed_generation` 发送 checked resize，stale command 返回 `SALTS_EBUSY`。截断 resize
 command 和零 generation 均被拒绝。Connection/Queue 已有稳定的 owner-scoped UID 和
 generation-aware snapshot，但当前 immutable owner 通常报告固定 generation `1`；它没有 runtime
 pool 那种 rebuild 时递增的 generation，因此不得把该 snapshot identity 当作跨 rebuild UID。
@@ -354,9 +348,9 @@ IO 不只是 socket callback，也不等于 monitoring/control plane。IO 是受
 - command：提供该 owner 支持的 idempotent quiesce、resume、drain、interrupt、replace 或
   protocol-specific command。
 
-HTTP/socket/SMTP/POP3/Redis/MQTT 可复用 connection、endpoint、deadline、admission、pool
-和 CoroNet execution primitives。协议 options 留在 typed protocol schema，因为它们的状态机
-和 settlement 语义不同。Queue 是 Buffer/Settlement resource，不是 IO connection。
+外部 HTTP/socket/SMTP/POP3/Redis/MQTT adapter 可复用 CNet/CHTTP 的 connection、endpoint、
+deadline、admission 与 pool。协议 options 留在 typed protocol schema，因为它们的状态机和
+settlement 语义不同。Queue 是 Buffer/Settlement resource，不是 IO connection。
 
 PostgreSQL outbox 同样是 Buffer/Persistence primitive，而不是外部协议产品或 graph runtime
 内部的特殊 queue。`.yml` named channel 独占 `conninfo/outbox_name/capacity/payload bound/poll`
