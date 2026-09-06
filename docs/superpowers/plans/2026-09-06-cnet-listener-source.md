@@ -179,7 +179,7 @@ ctest --preset win-release-user --output-on-failure
 Inspect exports/dependencies with `dumpbin`, run `git diff --check`, and scan production/CMake files with
 `rg.exe` for forbidden legacy names and fallback branches.
 
-- [ ] **Step 5: Commit and publish the stacked PR**
+- [x] **Step 5: Commit and publish the stacked PR**
 
 ```text
 git add io/cnet tests/install_consumer docs/superpowers/plans/2026-09-06-cnet-listener-source.md
