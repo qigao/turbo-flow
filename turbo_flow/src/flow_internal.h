@@ -273,6 +273,8 @@ typedef struct flow_compiled_plan_s {
   vec_t data_segments;
   vec_t executors;
   vec_t executor_by_stage;
+  /** Adapter registry entry for a stage, or FLOW_PLAN_INDEX_NONE. */
+  vec_t adapter_by_stage;
   /** Primary bounded data-plane segment for a stage, or FLOW_PLAN_INDEX_NONE. */
   vec_t data_segment_by_stage;
   vec_t semantic_types;
@@ -624,11 +626,13 @@ int flow_start_adapters(turbo_flow_t *flow);
 void flow_stop_adapters(turbo_flow_t *flow);
 const flow_adapter_registration_t *flow_adapter_for_stage(const turbo_flow_t *flow,
                                                           const flow_stage_plan_impl_t *stage);
+TURBO_FLOW_C_API const flow_adapter_registration_t *
+flow_adapter_for_compiled_stage(const turbo_flow_t *flow, uint32_t stage_index);
 int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
-                               turbo_flow_msg_t *msg);
+                               const flow_adapter_registration_t *adapter, turbo_flow_msg_t *msg);
 int flow_adapter_apply_settlement(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
-                                  turbo_flow_msg_t *msg, flow_stage_completion_t *completion,
-                                  int callback_status);
+                                  uint32_t stage_index, turbo_flow_msg_t *msg,
+                                  flow_stage_completion_t *completion, int callback_status);
 flow_stage_completion_t *flow_settlement_scope_enter(flow_stage_completion_t *completion);
 void flow_settlement_scope_leave(flow_stage_completion_t *previous);
 TURBO_FLOW_C_API const flow_executor_plan_t *flow_executor_plan_for_stage(const turbo_flow_t *flow,

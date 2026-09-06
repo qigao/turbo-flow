@@ -116,7 +116,7 @@ static int flow_dispatch_sync_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *
   if (runtime && runtime->deadline_ms != 0u) started_at = salts_hrtime();
   previous_settlement = flow_settlement_scope_enter(completion);
   if (adapter && adapter->ops.consume && !executor->fn) {
-    status = flow_adapter_consume_stage(flow, stage, msg);
+    status = flow_adapter_consume_stage(flow, stage, adapter, msg);
   } else {
     status = flow_dispatch_inline_stage(executor, msg);
   }
@@ -131,7 +131,8 @@ static int flow_dispatch_sync_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *
 int flow_dispatch_call_executor(turbo_flow_t *flow, flow_stage_plan_impl_t *stage,
                                 const flow_executor_plan_t *executor, uint32_t stage_index,
                                 turbo_flow_msg_t *msg, flow_stage_completion_t *completion) {
-  const flow_adapter_registration_t *adapter = flow_adapter_for_stage(flow, stage);
+  const flow_adapter_registration_t *adapter =
+      flow_adapter_for_compiled_stage(flow, stage_index);
 
   if (executor->exec.kind == TURBO_FLOW_EXEC_THREAD_POOL) {
     return flow_execute_threadpool_stage(flow, stage, executor, stage_index, msg, completion);
@@ -173,7 +174,8 @@ int flow_dispatch_validate_stage(turbo_flow_t *flow, uint32_t stage_index) {
   }
   if (!executor->fn && !executor->emit_fn && !executor->keyed_fn && !executor->keyed_emit_fn &&
       !executor->window_fn) {
-    const flow_adapter_registration_t *adapter = flow_adapter_for_stage(flow, stage);
+    const flow_adapter_registration_t *adapter =
+        flow_adapter_for_compiled_stage(flow, stage_index);
     if (adapter && adapter->ops.consume) return SALTS_OK;
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "executor callback is not available");
@@ -290,7 +292,7 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
   }
   if (!executor->emit_fn && !executor->keyed_fn && !executor->keyed_emit_fn &&
       !executor->window_fn) {
-    status = flow_adapter_apply_settlement(flow, stage, msg, completion, status);
+    status = flow_adapter_apply_settlement(flow, stage, stage_index, msg, completion, status);
   }
   if (status != SALTS_OK && flow_error_code(flow) == status) {
     msg->status = status;

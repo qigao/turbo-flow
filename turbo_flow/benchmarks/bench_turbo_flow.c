@@ -855,6 +855,7 @@ spec("Turbo Flow Bench") {
     uint8_t *reachable = (uint8_t *)calloc(FLOW_BENCH_REACHABILITY_STAGES, sizeof(*reachable));
     uint32_t *worklist = (uint32_t *)calloc(FLOW_BENCH_REACHABILITY_STAGES, sizeof(*worklist));
     const flow_executor_plan_t *executor_plan = NULL;
+    const flow_adapter_registration_t *stage_adapter = NULL;
     const flow_threadpool_adapter_t *thread_adapter = NULL;
     const flow_coro_adapter_t *coro_adapter = NULL;
     const flow_worker_pool_adapter_t *worker_adapter = NULL;
@@ -875,6 +876,14 @@ spec("Turbo Flow Bench") {
     check_equal(turbo_flow_stl_error(vec_resize(&flow->compiled_plan.executor_by_stage,
                                                 FLOW_BENCH_REACHABILITY_STAGES)),
                 SALTS_OK);
+    check_equal(turbo_flow_stl_error(vec_resize(&flow->compiled_plan.adapter_by_stage,
+                                                FLOW_BENCH_REACHABILITY_STAGES)),
+                SALTS_OK);
+    check_equal(
+        turbo_flow_stl_error(vec_resize(&flow->adapters, FLOW_BENCH_REACHABILITY_STAGES)),
+        SALTS_OK);
+    memset(vec_data(&flow->adapters), 0,
+           FLOW_BENCH_REACHABILITY_STAGES * sizeof(flow_adapter_registration_t));
     check_equal(turbo_flow_stl_error(
                     vec_resize(&flow->threadpool_adapters, FLOW_BENCH_REACHABILITY_STAGES)),
                 SALTS_OK);
@@ -903,6 +912,7 @@ spec("Turbo Flow Bench") {
       node->outgoing_count = stage + 1u < FLOW_BENCH_REACHABILITY_STAGES ? 1u : 0u;
       ((flow_executor_plan_t *)vec_at(&flow->compiled_plan.executors, stage))->stage_index = stage;
       *(uint32_t *)vec_at(&flow->compiled_plan.executor_by_stage, stage) = stage;
+      *(uint32_t *)vec_at(&flow->compiled_plan.adapter_by_stage, stage) = stage;
       memset(vec_at(&flow->threadpool_adapters, stage), 0, sizeof(flow_threadpool_adapter_t));
       ((flow_threadpool_adapter_t *)vec_at(&flow->threadpool_adapters, stage))->stage_index = stage;
       *(uint32_t *)vec_at(&flow->threadpool_adapter_by_stage, stage) = stage;
@@ -936,6 +946,11 @@ spec("Turbo Flow Bench") {
     }
     check_not_null(executor_plan);
     check_equal(executor_plan->stage_index, FLOW_BENCH_REACHABILITY_STAGES - 1u);
+    benchmark_ops("plan=sealed adapters=512 lookup=last-stage", FLOW_BENCH_EXECUTOR_ITERS, 1u) {
+      stage_adapter =
+          flow_adapter_for_compiled_stage(flow, FLOW_BENCH_REACHABILITY_STAGES - 1u);
+    }
+    check_not_null(stage_adapter);
     benchmark_ops("runtime=thread-adapters count=512 lookup=last-stage", FLOW_BENCH_EXECUTOR_ITERS,
                   1u) {
       thread_adapter = bench_threadpool_adapter(flow, FLOW_BENCH_REACHABILITY_STAGES - 1u);

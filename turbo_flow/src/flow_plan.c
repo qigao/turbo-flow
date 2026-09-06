@@ -30,6 +30,8 @@ int flow_compiled_plan_init(flow_compiled_plan_t *plan) {
           SALTS_OK ||
       turbo_flow_stl_error(vec_init_bytes(&plan->executor_by_stage, sizeof(uint32_t),
                                           _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&plan->adapter_by_stage, sizeof(uint32_t),
+                                          _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(vec_init_bytes(&plan->data_segment_by_stage, sizeof(uint32_t),
                                           _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(vec_init_bytes(&plan->semantic_types, sizeof(flow_semantic_type_plan_t),
@@ -55,6 +57,7 @@ void flow_compiled_plan_destroy(flow_compiled_plan_t *plan) {
   vec_destroy(&plan->data_segments);
   vec_destroy(&plan->executors);
   vec_destroy(&plan->executor_by_stage);
+  vec_destroy(&plan->adapter_by_stage);
   vec_destroy(&plan->data_segment_by_stage);
   vec_destroy(&plan->semantic_types);
   vec_destroy(&plan->stage_semantics);
@@ -118,9 +121,11 @@ flow_direct_operation_contract(const turbo_flow_t *flow, const flow_stage_plan_i
   return runtime && runtime->handoff == TURBO_FLOW_HANDOFF_DIRECT ? runtime : NULL;
 }
 
-static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t stage_count) {
+static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t stage_count,
+                                     size_t adapter_count) {
   if (!plan || plan->sealed || vec_size(&plan->nodes) != stage_count ||
       vec_size(&plan->executor_by_stage) != stage_count ||
+      vec_size(&plan->adapter_by_stage) != stage_count ||
       vec_size(&plan->data_segment_by_stage) != stage_count ||
       vec_size(&plan->stage_semantics) != stage_count || !plan->message_type ||
       !plan->operation_type || !cmeta_type_desc_valid(plan->message_type) ||
@@ -132,6 +137,8 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
         (const flow_runtime_node_plan_t *)vec_at_const(&plan->nodes, stage_index);
     const uint32_t *executor_index =
         (const uint32_t *)vec_at_const(&plan->executor_by_stage, stage_index);
+    const uint32_t *adapter_index =
+        (const uint32_t *)vec_at_const(&plan->adapter_by_stage, stage_index);
     const uint32_t *segment_index =
         (const uint32_t *)vec_at_const(&plan->data_segment_by_stage, stage_index);
     const flow_stage_semantic_plan_t *semantics =
@@ -144,11 +151,13 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
         segment_index && *segment_index != FLOW_PLAN_INDEX_NONE
             ? (const flow_data_segment_plan_t *)vec_at_const(&plan->data_segments, *segment_index)
             : NULL;
-    if (!node || !executor_index || !segment_index || node->stage_index != stage_index ||
+    if (!node || !executor_index || !adapter_index || !segment_index ||
+        node->stage_index != stage_index ||
         node->outgoing_begin > vec_size(&plan->edges) ||
         node->outgoing_count > vec_size(&plan->edges) - node->outgoing_begin ||
         (*executor_index != FLOW_PLAN_INDEX_NONE &&
          *executor_index >= vec_size(&plan->executors)) ||
+        (*adapter_index != FLOW_PLAN_INDEX_NONE && *adapter_index >= adapter_count) ||
         (*segment_index != FLOW_PLAN_INDEX_NONE &&
          *segment_index >= vec_size(&plan->data_segments)) ||
         (executor && executor->stage_index != stage_index) ||
@@ -237,12 +246,16 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
     rc = turbo_flow_stl_error(vec_resize(&candidate.executor_by_stage, stage_count));
   }
   if (rc == SALTS_OK) {
+    rc = turbo_flow_stl_error(vec_resize(&candidate.adapter_by_stage, stage_count));
+  }
+  if (rc == SALTS_OK) {
     rc = turbo_flow_stl_error(vec_resize(&candidate.data_segment_by_stage, stage_count));
   }
   if (rc != SALTS_OK) return flow_plan_fail(flow, &candidate, rc, "out of memory");
   memset(vec_data(&candidate.nodes), 0, stage_count * sizeof(flow_runtime_node_plan_t));
   for (size_t i = 0u; i < stage_count; ++i) {
     *(uint32_t *)vec_at(&candidate.executor_by_stage, i) = FLOW_PLAN_INDEX_NONE;
+    *(uint32_t *)vec_at(&candidate.adapter_by_stage, i) = FLOW_PLAN_INDEX_NONE;
     *(uint32_t *)vec_at(&candidate.data_segment_by_stage, i) = FLOW_PLAN_INDEX_NONE;
   }
 
@@ -253,6 +266,15 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
         (flow_runtime_node_plan_t *)vec_at(&candidate.nodes, stage_index);
 
     node->stage_index = (uint32_t)stage_index;
+    if (stage->adapter_name) {
+      int adapter_index = flow_find_adapter(flow, stage->adapter_name);
+      if (adapter_index < 0) {
+        return flow_plan_fail(flow, &candidate, SALTS_EPROTO,
+                              "compiled adapter binding is inconsistent");
+      }
+      *(uint32_t *)vec_at(&candidate.adapter_by_stage, stage_index) =
+          (uint32_t)adapter_index;
+    }
     if (stage->is_source) node->flags |= FLOW_RUNTIME_NODE_SOURCE;
     if (stage->is_port) node->flags |= FLOW_RUNTIME_NODE_PORT;
     if (stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) {
@@ -374,7 +396,7 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
                           rc == SALTS_ENOMEM ? "out of memory"
                                              : "compiled semantic plan is inconsistent");
   }
-  rc = flow_verify_compiled_plan(&candidate, stage_count);
+  rc = flow_verify_compiled_plan(&candidate, stage_count, vec_size(&flow->adapters));
   if (rc != SALTS_OK) {
     return flow_plan_fail(flow, &candidate, rc, "compiled runtime plan is inconsistent");
   }

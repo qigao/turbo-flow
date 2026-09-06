@@ -222,7 +222,7 @@ static int flow_requires_executor_data_path(const turbo_flow_t *flow) {
     stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, executor->stage_index);
     if (stage && (stage->effects & TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u) return 1;
-    if (stage && flow_adapter_for_stage(flow, stage)) return 1;
+    if (stage && flow_adapter_for_compiled_stage(flow, executor->stage_index)) return 1;
   }
   return 0;
 }

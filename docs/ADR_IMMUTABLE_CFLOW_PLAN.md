@@ -5,10 +5,10 @@ Status: Accepted for issue #3
 ## Context
 
 TurboFlow currently stores compiled nodes, CSR edges, data segments, and executor records as
-independent mutable vectors on `turbo_flow_t`. Runtime dispatch locates an executor or worker-pool
-segment by scanning those vectors, and pool resize mutates both the parsed stage and compiled
-records. The resulting ownership boundary is unclear: the compiler output is neither one object nor
-immutable, while a single message can repeat an O(V) executor lookup for each reachable stage.
+independent mutable vectors on `turbo_flow_t`. Runtime dispatch locates executors, worker-pool
+segments, and registered adapters by scanning vectors, and pool resize mutates both the parsed stage
+and compiled records. The resulting ownership boundary is unclear: the compiler output is neither
+one object nor immutable, while a single message can repeat O(V) lookups for each reachable stage.
 
 TurboFlow operation callbacks also use the domain-specific `turbo_flow_msg_t` ABI. The installed
 Salts CFlow callable universe does not admit that callback signature. Treating a message pointer as
@@ -17,10 +17,11 @@ an integer callable would violate CMeta type identity and would make CFlow valid
 ## Decision
 
 The graph compiler produces one `flow_compiled_plan_t` owned by the flow. It contains the stable
-stage-indexed nodes, CSR edges, executor records, segment records, O(1) lookup tables, semantic stage
-metadata, and lowering regions. Construction is transactional: all storage is built in a temporary
-plan, verified, sealed, and then moved into the flow. Runtime code receives only const views of this
-plan. Reset or destroy is the only operation that releases it.
+stage-indexed nodes, CSR edges, executor records, segment records, compile-time adapter bindings,
+O(1) stage-indexed lookup tables, semantic stage metadata, and lowering regions. Construction is
+transactional: all storage is built in a temporary plan, verified, sealed, and then moved into the
+flow. Runtime code receives only const views of this plan. Reset or destroy is the only operation
+that releases it.
 
 CMeta identities use stable strings and semantic comparison. They never use descriptor addresses as
 cross-translation-unit type IDs. Each executable stage records its input/output descriptor, mapped
@@ -32,12 +33,13 @@ settlement, windowing, dynamic routing, external I/O, ordering, and graph relati
 bounded emission maps to CFlow `FLAT_MAP`; keyed and window emission retain their state/window
 barriers. Legacy callbacks have no trusted effect contract and are recorded as
 `UNKNOWN | MAY_FAIL`; message mutability is not misclassified as cross-call state. Only an explicit
-typed operation contract may clear `UNKNOWN` and form a candidate CFlow lowering region. Candidate
-regions are planning metadata in this issue; they do not pretend that the existing message callback
-ABI is a CFlow typed callable. The internal required-CFlow compile gate therefore fails
-transactionally with `SALTS_ENOTSUP` whenever a region cannot be represented by admitted CFlow
-callables. It publishes no partial plan and never continues through native execution. Issue #4 owns
-the public size/versioned Reactive run surface and typed execution bridge.
+typed operation contract may clear `UNKNOWN` and form a candidate CFlow lowering region. Explicit
+operations whose declared state scope is not `NONE` remain `STATEFUL` barriers even if their
+authority is otherwise pure. Regions are planning metadata in this issue; they do not pretend that
+the existing message callback ABI is a CFlow typed callable. The internal required-CFlow compile
+gate therefore fails transactionally with `SALTS_ENOTSUP` whenever a region cannot be represented
+by admitted CFlow callables. It publishes no partial plan and never continues through native
+execution. Issue #4 owns the public size/versioned Reactive run surface and typed execution bridge.
 
 Pool parallelism is mutable runtime state. A stage-indexed runtime override table is initialized from
 the sealed plan and becomes the sole source for resize/rebuild. Pool resize no longer changes parsed
@@ -60,8 +62,8 @@ mutating the sealed plan.
 
 ## Consequences
 
-- Runtime executor, worker-segment, and thread/coroutine/worker adapter lookup are deterministic
-  O(1) array accesses.
+- Runtime executor, worker-segment, compile-time adapter binding, and thread/coroutine/worker
+  adapter lookup are deterministic O(1) array accesses.
 - Single-message topology work remains O(V+E); it performs no nested linear plan scans.
 - The compiled plan is immutable during concurrent publish. Per-message scratch and mutable pool
   capacity remain outside the plan.
@@ -90,5 +92,7 @@ DSL, public enum, or deployment format requires migration.
 - Differential tests reconstruct the legacy topology view from parsed stages/edges and compare it
   with the sealed plan.
 - Concurrent publish and pool resize suites verify that runtime state is isolated from plan state.
+- Issue #15 tracks deterministic fault injection for resize-rebuild rollback and double-failure
+  branches; it does not change the sealed-plan contract delivered here.
 - Benchmarks cover last-stage executor and runtime-adapter lookup at 512 stages and end-to-end
   linear/diamond/emitter graphs; full CTest remains the final regression gate.

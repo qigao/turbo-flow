@@ -78,6 +78,7 @@ static uint32_t flow_stage_barriers(const flow_stage_plan_impl_t *stage,
     barriers |= FLOW_LOWERING_BARRIER_MESSAGE_MUTATION;
   }
   if (stage->keyed_fn || stage->keyed_emit_fn || stage->window_fn || stage->keyed_store ||
+      (stage->operation_name && operation->scope.state != TURBO_FLOW_STATE_SCOPE_NONE) ||
       operation->scope.authority == TURBO_FLOW_AUTHORITY_OWNER_LOCAL ||
       operation->scope.authority == TURBO_FLOW_AUTHORITY_OWNER_COMMAND) {
     barriers |= FLOW_LOWERING_BARRIER_STATEFUL;

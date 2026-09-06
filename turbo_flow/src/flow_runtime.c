@@ -952,7 +952,7 @@ static const flow_adapter_registration_t *flow_publish_batch_direct_adapter(
        runtime->settlement != 0u)) {
     return NULL;
   }
-  adapter = flow_adapter_for_stage(flow, stage);
+  adapter = flow_adapter_for_compiled_stage(flow, source_edge->to_stage);
   if (!adapter || !adapter->ops.consume || !adapter->consume_batch) return NULL;
   *out_stage = stage;
   return adapter;
