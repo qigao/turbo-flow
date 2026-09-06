@@ -70,9 +70,16 @@ static uint32_t flow_stage_barriers(const flow_stage_plan_impl_t *stage,
   }
   if (!stage->is_source && !stage->is_port) {
     barriers |= FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE;
+    effects |= CMETA_EFFECT_MAY_FAIL;
+    if (!stage->operation_name) effects |= CMETA_EFFECT_UNKNOWN;
   }
-  if (stage->mutability != TURBO_FLOW_STAGE_READONLY || stage->keyed_fn ||
-      stage->keyed_emit_fn || stage->window_fn || stage->keyed_store) {
+  if (stage->mutability != TURBO_FLOW_STAGE_READONLY ||
+      (stage->operation_name && operation->scope.authority == TURBO_FLOW_AUTHORITY_DATA_MUTATION)) {
+    barriers |= FLOW_LOWERING_BARRIER_MESSAGE_MUTATION;
+  }
+  if (stage->keyed_fn || stage->keyed_emit_fn || stage->window_fn || stage->keyed_store ||
+      operation->scope.authority == TURBO_FLOW_AUTHORITY_OWNER_LOCAL ||
+      operation->scope.authority == TURBO_FLOW_AUTHORITY_OWNER_COMMAND) {
     barriers |= FLOW_LOWERING_BARRIER_STATEFUL;
     effects |= CMETA_EFFECT_STATEFUL;
   }
@@ -289,7 +296,8 @@ int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *pl
     }
     semantics->lowering_candidate =
         semantics->typed && !stage->is_source && !stage->is_port &&
-        (semantics->barriers & ~FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE) == 0u;
+        (semantics->barriers & ~FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE) == 0u &&
+        (semantics->effects & CMETA_EFFECT_UNKNOWN) == 0u;
   }
 
   /*

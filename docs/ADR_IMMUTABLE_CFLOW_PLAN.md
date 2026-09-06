@@ -24,20 +24,28 @@ plan. Reset or destroy is the only operation that releases it.
 
 CMeta identities use stable strings and semantic comparison. They never use descriptor addresses as
 cross-translation-unit type IDs. Each executable stage records its input/output descriptor, mapped
-`cmeta_effects`, and explicit barriers. Barriers include untyped callbacks, state, asynchronous or
-bounded handoff, retry, settlement, windowing, dynamic routing, external I/O, ordering, and graph
-relations. Stateless bounded emission maps to CFlow `FLAT_MAP`; keyed and window emission retain
-their state/window barriers. Connected typed stages whose only remaining obstacle is the legacy
-callable ABI form candidate CFlow lowering regions. Candidate regions are planning metadata in this
-issue; they do not pretend that the existing message callback ABI is a CFlow typed callable. The
-internal required-CFlow compile gate therefore fails transactionally with `SALTS_ENOTSUP` whenever
-a region cannot be represented by admitted CFlow callables. It publishes no partial plan and never
-continues through native execution. Issue #4 owns the public size/versioned Reactive run surface and
-typed execution bridge.
+`cmeta_effects`, and explicit barriers. Dynamic domain type descriptors describe the
+`turbo_flow_msg_t` transport envelope while their stable atom identifies the domain value carried by
+that envelope; cross-translation-unit probes therefore use the real envelope size and alignment.
+Barriers include untyped callbacks, message mutation, state, asynchronous or bounded handoff, retry,
+settlement, windowing, dynamic routing, external I/O, ordering, and graph relations. Stateless
+bounded emission maps to CFlow `FLAT_MAP`; keyed and window emission retain their state/window
+barriers. Legacy callbacks have no trusted effect contract and are recorded as
+`UNKNOWN | MAY_FAIL`; message mutability is not misclassified as cross-call state. Only an explicit
+typed operation contract may clear `UNKNOWN` and form a candidate CFlow lowering region. Candidate
+regions are planning metadata in this issue; they do not pretend that the existing message callback
+ABI is a CFlow typed callable. The internal required-CFlow compile gate therefore fails
+transactionally with `SALTS_ENOTSUP` whenever a region cannot be represented by admitted CFlow
+callables. It publishes no partial plan and never continues through native execution. Issue #4 owns
+the public size/versioned Reactive run surface and typed execution bridge.
 
 Pool parallelism is mutable runtime state. A stage-indexed runtime override table is initialized from
 the sealed plan and becomes the sole source for resize/rebuild. Pool resize no longer changes parsed
-stages, executors, segment widths, semantic descriptors, or lowering decisions.
+stages, executors, segment widths, semantic descriptors, or lowering decisions. Thread-pool,
+coroutine-pool, and worker-pool adapter vectors each have a mutable stage-indexed table containing an
+adapter vector index. Start/rebuild publishes those indexes only after adapter construction succeeds;
+stop clears them. Runtime validation and execution therefore use checked O(1) lookups without
+mutating the sealed plan.
 
 ## Alternatives considered
 
@@ -52,7 +60,8 @@ stages, executors, segment widths, semantic descriptors, or lowering decisions.
 
 ## Consequences
 
-- Runtime executor and worker-segment lookup are deterministic O(1) array accesses.
+- Runtime executor, worker-segment, and thread/coroutine/worker adapter lookup are deterministic
+  O(1) array accesses.
 - Single-message topology work remains O(V+E); it performs no nested linear plan scans.
 - The compiled plan is immutable during concurrent publish. Per-message scratch and mutable pool
   capacity remain outside the plan.
@@ -81,5 +90,5 @@ DSL, public enum, or deployment format requires migration.
 - Differential tests reconstruct the legacy topology view from parsed stages/edges and compare it
   with the sealed plan.
 - Concurrent publish and pool resize suites verify that runtime state is isolated from plan state.
-- Benchmarks cover last-stage executor lookup in a 512-stage sealed plan and end-to-end
+- Benchmarks cover last-stage executor and runtime-adapter lookup at 512 stages and end-to-end
   linear/diamond/emitter graphs; full CTest remains the final regression gate.

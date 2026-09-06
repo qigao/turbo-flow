@@ -2,6 +2,17 @@
 
 #include <string.h>
 
+int flow_runtime_stage_index_reset(vec_t *index_by_stage, size_t stage_count) {
+  int rc;
+  if (!index_by_stage) return SALTS_EINVAL;
+  rc = turbo_flow_stl_error(vec_resize(index_by_stage, stage_count));
+  if (rc != SALTS_OK) return rc;
+  for (size_t i = 0u; i < stage_count; ++i) {
+    *(uint32_t *)vec_at(index_by_stage, i) = FLOW_PLAN_INDEX_NONE;
+  }
+  return SALTS_OK;
+}
+
 int flow_compiled_plan_init(flow_compiled_plan_t *plan) {
   if (!plan) return SALTS_EINVAL;
   memset(plan, 0, sizeof(*plan));
@@ -199,7 +210,7 @@ static int flow_require_cflow_backend(turbo_flow_t *flow, const flow_compiled_pl
     }
   }
   return flow_set_error(flow, SALTS_ENOTSUP, 0, 0,
-                        "required CFlow backend has no admitted executable region");
+                        "required CFlow backend execution is not implemented");
 }
 
 int flow_build_runtime_plan(turbo_flow_t *flow) {

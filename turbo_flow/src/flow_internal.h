@@ -242,7 +242,8 @@ typedef enum flow_lowering_barrier_e {
   FLOW_LOWERING_BARRIER_DYNAMIC_ROUTE = 1u << 6,
   FLOW_LOWERING_BARRIER_EXTERNAL_IO = 1u << 7,
   FLOW_LOWERING_BARRIER_ORDERING = 1u << 8,
-  FLOW_LOWERING_BARRIER_RELATION = 1u << 9
+  FLOW_LOWERING_BARRIER_RELATION = 1u << 9,
+  FLOW_LOWERING_BARRIER_MESSAGE_MUTATION = 1u << 10
 } flow_lowering_barrier_t;
 
 typedef struct flow_semantic_type_plan_s {
@@ -476,9 +477,12 @@ struct turbo_flow_s {
   flow_plan_backend_requirement_t required_backend;
   vec_t runtime_stage_configs;
   vec_t threadpool_adapters;
+  vec_t threadpool_adapter_by_stage;
   vec_t coro_adapters;
+  vec_t coro_adapter_by_stage;
   vec_t broadcast_consumers;
   vec_t worker_pool_adapters;
+  vec_t worker_pool_adapter_by_stage;
   vec_t reorder_states;
   disruptor_t *broadcast_ring;
   disruptor_topology_t *broadcast_topology;
@@ -583,6 +587,7 @@ void flow_clear_runtime_plan(turbo_flow_t *flow);
 int flow_compiled_plan_init(flow_compiled_plan_t *plan);
 void flow_compiled_plan_destroy(flow_compiled_plan_t *plan);
 int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *plan);
+int flow_runtime_stage_index_reset(vec_t *index_by_stage, size_t stage_count);
 const flow_runtime_stage_config_t *flow_runtime_stage_config_for_stage(const turbo_flow_t *flow,
                                                                        uint32_t stage_index);
 flow_runtime_stage_config_t *flow_runtime_stage_config_for_stage_mut(turbo_flow_t *flow,
@@ -630,22 +635,23 @@ TURBO_FLOW_C_API const flow_executor_plan_t *flow_executor_plan_for_stage(const 
                                                                           uint32_t stage_index);
 TURBO_FLOW_C_API const flow_data_segment_plan_t *
 flow_worker_pool_segment_for_stage(const turbo_flow_t *flow, uint32_t stage_index);
-const flow_threadpool_adapter_t *flow_threadpool_adapter_for_stage(const turbo_flow_t *flow,
-                                                                   uint32_t stage_index);
-flow_coro_adapter_t *flow_coro_adapter_for_stage(turbo_flow_t *flow, uint32_t stage_index);
-TURBO_FLOW_C_API flow_worker_pool_adapter_t *flow_worker_pool_adapter_for_stage(turbo_flow_t *flow,
-                                                                         uint32_t stage_index);
-TURBO_FLOW_C_API int flow_worker_pool_submit(flow_worker_pool_adapter_t *adapter, turbo_flow_msg_t *msg,
-                                      flow_stage_completion_t *completion);
-TURBO_FLOW_C_API int flow_execution_task_init(flow_execution_task_t *task,
-                                       flow_execution_backend_t backend, turbo_flow_stage_fn fn,
-                                       void *ctx, turbo_flow_msg_t *msg,
-                                       const flow_stage_completion_t *completion,
-                                       uint64_t deadline_ms);
+TURBO_FLOW_C_API const flow_threadpool_adapter_t *
+flow_threadpool_adapter_for_stage(const turbo_flow_t *flow, uint32_t stage_index);
+TURBO_FLOW_C_API flow_coro_adapter_t *flow_coro_adapter_for_stage(turbo_flow_t *flow,
+                                                                  uint32_t stage_index);
+TURBO_FLOW_C_API flow_worker_pool_adapter_t *
+flow_worker_pool_adapter_for_stage(turbo_flow_t *flow, uint32_t stage_index);
+TURBO_FLOW_C_API int flow_worker_pool_submit(flow_worker_pool_adapter_t *adapter,
+                                             turbo_flow_msg_t *msg,
+                                             flow_stage_completion_t *completion);
+TURBO_FLOW_C_API int
+flow_execution_task_init(flow_execution_task_t *task, flow_execution_backend_t backend,
+                         turbo_flow_stage_fn fn, void *ctx, turbo_flow_msg_t *msg,
+                         const flow_stage_completion_t *completion, uint64_t deadline_ms);
 TURBO_FLOW_C_API void flow_execution_task_run(flow_execution_task_t *task);
 TURBO_FLOW_C_API void flow_execution_task_fail(flow_execution_task_t *task, int status);
 TURBO_FLOW_C_API int flow_execution_task_wait(flow_execution_task_t *task, turbo_flow_msg_t *msg,
-                                       flow_stage_completion_t *completion);
+                                              flow_stage_completion_t *completion);
 TURBO_FLOW_C_API void flow_execution_task_mark_accounting_done(flow_execution_task_t *task);
 TURBO_FLOW_C_API void flow_execution_task_wait_accounting(flow_execution_task_t *task);
 TURBO_FLOW_C_API int flow_execution_task_abort(flow_execution_task_t *task);

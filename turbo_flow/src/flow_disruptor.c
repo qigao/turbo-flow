@@ -262,6 +262,7 @@ void flow_stop_data_planes(turbo_flow_t *flow) {
     flow_worker_pool_stop(adapter);
   }
   turbo_flow_stl_error(vec_clear(&flow->worker_pool_adapters));
+  turbo_flow_stl_error(vec_clear(&flow->worker_pool_adapter_by_stage));
 }
 
 int flow_start_data_planes(turbo_flow_t *flow) {
@@ -271,6 +272,10 @@ int flow_start_data_planes(turbo_flow_t *flow) {
   if (!flow) return SALTS_EINVAL;
 
   flow_stop_data_planes(flow);
+  if (flow_runtime_stage_index_reset(&flow->worker_pool_adapter_by_stage,
+                                     vec_size(&flow->stages)) != SALTS_OK) {
+    return flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0, "out of memory");
+  }
 
   for (size_t stage_index = 0; stage_index < vec_size(&flow->stages); ++stage_index) {
     const flow_stage_plan_impl_t *stage =
@@ -319,6 +324,8 @@ int flow_start_data_planes(turbo_flow_t *flow) {
       return flow_set_error_keep_state(flow, SALTS_ENOMEM, stage->line, stage->column,
                                        "failed to create worker-pool data plane");
     }
+    *(uint32_t *)vec_at(&flow->worker_pool_adapter_by_stage, stage_index) =
+        (uint32_t)(vec_size(&flow->worker_pool_adapters) - 1u);
   }
 
   for (size_t i = 0; i < vec_size(&flow->worker_pool_adapters); ++i) {
@@ -412,13 +419,13 @@ int flow_start_data_planes(turbo_flow_t *flow) {
 
 flow_worker_pool_adapter_t *flow_worker_pool_adapter_for_stage(turbo_flow_t *flow,
                                                                uint32_t stage_index) {
-  if (!flow) return NULL;
-  for (size_t i = 0; i < vec_size(&flow->worker_pool_adapters); ++i) {
-    flow_worker_pool_adapter_t *adapter =
-        (flow_worker_pool_adapter_t *)vec_at(&flow->worker_pool_adapters, i);
-    if (adapter->stage_index == stage_index) return adapter;
-  }
-  return NULL;
+  const uint32_t *adapter_index;
+  flow_worker_pool_adapter_t *adapter;
+  if (!flow || stage_index >= vec_size(&flow->worker_pool_adapter_by_stage)) return NULL;
+  adapter_index = (const uint32_t *)vec_at_const(&flow->worker_pool_adapter_by_stage, stage_index);
+  if (!adapter_index || *adapter_index == FLOW_PLAN_INDEX_NONE) return NULL;
+  adapter = (flow_worker_pool_adapter_t *)vec_at(&flow->worker_pool_adapters, *adapter_index);
+  return adapter && adapter->stage_index == stage_index ? adapter : NULL;
 }
 
 static int flow_worker_pool_claim(flow_worker_pool_adapter_t *adapter,

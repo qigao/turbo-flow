@@ -348,15 +348,21 @@ turbo_flow_t *turbo_flow_create(void) {
       turbo_flow_stl_error(
           vec_init_bytes(&flow->threadpool_adapters, sizeof(flow_threadpool_adapter_t),
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->threadpool_adapter_by_stage, sizeof(uint32_t),
+                                          _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(vec_init_bytes(&flow->coro_adapters, sizeof(flow_coro_adapter_t),
                                           _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
           SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->coro_adapter_by_stage, sizeof(uint32_t),
+                                          _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&flow->broadcast_consumers, sizeof(flow_broadcast_consumer_t),
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&flow->worker_pool_adapters, sizeof(flow_worker_pool_adapter_t),
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->worker_pool_adapter_by_stage, sizeof(uint32_t),
+                                          _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(vec_init_bytes(&flow->reorder_states, sizeof(flow_reorder_state_t),
                                           _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
           SALTS_OK ||
@@ -418,9 +424,12 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   flow_compiled_plan_destroy(&flow->compiled_plan);
   vec_destroy(&flow->runtime_stage_configs);
   vec_destroy(&flow->threadpool_adapters);
+  vec_destroy(&flow->threadpool_adapter_by_stage);
   vec_destroy(&flow->coro_adapters);
+  vec_destroy(&flow->coro_adapter_by_stage);
   vec_destroy(&flow->broadcast_consumers);
   vec_destroy(&flow->worker_pool_adapters);
+  vec_destroy(&flow->worker_pool_adapter_by_stage);
   vec_destroy(&flow->reorder_states);
   vec_destroy(&flow->registrations);
   vec_destroy(&flow->operation_providers);
