@@ -456,11 +456,14 @@ Implemented modules:
 | `TurboFlow::Codec` | Line/length framing and DataBind for TBE, JSON, CSV, XML |
 | `TurboFlow::Observe` | Opt-in message/stage/adapter metrics and bounded summary sink |
 | `TurboFlow::Schedule` | Interval, one-shot, bounded-repeat, and local-time cron sources |
+| `TurboFlow::CNetAdapter` | Optional demand-driven CNet sources and async terminal sinks |
+| `TurboFlow::CHTTPAdapter` | Optional caller-polled CHTTP async client flat-map stage |
 
-Socket, HTTP, RPC, S3, and email transport targets and their compatibility
-aggregates have been removed. New network integration must be supplied by a
-separate host adapter over CNet/CHTTP; TurboFlow does not provide an in-tree
-fallback implementation.
+Legacy socket and HTTP transport targets and their compatibility aggregates have
+been removed. The optional CNet and CHTTP adapter components expose only explicit
+owner boundaries over Salts; they do not restore a legacy implementation or
+fallback. RPC, S3, email, product sessions, credentials, and endpoint policy
+remain host/product integrations.
 
 Core also provides an opt-in module catalog above primitive/operation
 registrations. A module declares its version, capabilities, primitive type and
@@ -475,8 +478,8 @@ through TurboDB ORM and do not become Graph adapter operations.
 
 TurboFlow is configured and installed as a graph data-processing product.
 Protocol codecs, security, codecs, observation, scheduling, and the MIR JIT backend form its
-repository-owned build graph. Network adapters, external protocol products, and TurboDB
-persistence repositories are not producer-side components.
+repository-owned build graph. Network adapter components remain separate from Core and Product;
+external protocol products and TurboDB persistence repositories are not producer-side components.
 
 Salts, SaltsUtils, RulesForge, and the other declared dependencies are required
 by every product build.
@@ -494,8 +497,9 @@ documented in `observe/README.md`.
 
 ## Polling Decision
 
-TurboFlow contains no protocol-client polling implementation. External CNet/CHTTP
-adapters own protocol-specific polling and connection state. `TurboFlow::Schedule`
+TurboFlow Core contains no protocol-client polling implementation. External
+CNet/CHTTP adapter owners, including `TurboFlow::CNetAdapter` and
+`TurboFlow::CHTTPAdapter`, own protocol-specific polling and connection state. `TurboFlow::Schedule`
 is limited to generic ticks, one-shot delays, bounded repeats, and cron triggers.
 It reuses the `Salts::Cron` five-field parser and local wall-clock calculation.
 Catch-up is explicitly bounded, and stop interrupts waits and joins the adapter

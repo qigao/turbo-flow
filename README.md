@@ -21,6 +21,8 @@ typed projection、调度、可观测性，以及可选的通用存储 adapter�
 | `TurboFlow::ProtocolIngress` | 可选 protocol codec/runtime，不依赖 MQTT broker |
 | `TurboFlow::ProtocolIngressGraph` | 将中立协议消息投递到 `TurboFlow::Graph` |
 | `TurboFlow::MqttSink` | 批量映射中立消息；不拥有 codec/session 或任何 I/O connection |
+| `TurboFlow::CNetAdapter` | 可选 CNet Source/Sink owner；拥有 transport progress 与有界请求状态 |
+| `TurboFlow::CHTTPAdapter` | 可选 CHTTP async client stage；以 owned response 恢复 Graph 下游 |
 
 所有构建开关只在 `CMakeOptions.cmake` 声明。不得在子目录新增隐藏 option，也不得把外部产品源码、
 协议状态机或安装组件重新并入本仓库。
@@ -59,6 +61,15 @@ static int publish_one(turbo_flow_t *flow) {
 
 `turbo_flow_publish()` 仍是同步 facade，但其执行路径同样经过 one-value Publisher、Subscription
 和 inline Scheduler；不存在旧 native fallback。
+
+## CHTTP 异步阶段
+
+`TurboFlow::CHTTPAdapter` 将 HTTP request 建模为 CFlow async `flat_map`：成功接纳后保留当前
+异步 publication，CHTTP terminal callback 再产生零或一个 owned response。一个 caller-owned
+client 独占 submit/poll/cancel 与 H1/H2 connection state；容量、protocol、TLS、retry、overall
+deadline 和 shutdown 都是显式契约，不提供旧 HTTP 实现或协议降级 fallback。使用方应在 Graph
+compile 前注册 client、start 后由一个 owner thread 调用 `turbo_flow_chttp_client_poll()`，并在
+Flow destroy/detach 后销毁 client。
 
 ## Windows 验证
 

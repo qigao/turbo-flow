@@ -11,6 +11,14 @@ typedef struct flow_async_terminal_claim_impl_s {
   flow_stage_completion_t completion;
 } flow_async_terminal_claim_impl_t;
 
+typedef struct flow_async_emit_claim_impl_s {
+  turbo_flow_t *flow;
+  flow_async_publication_t *publication;
+  uint32_t stage_index;
+  turbo_flow_msg_t message;
+  flow_stage_completion_t completion;
+} flow_async_emit_claim_impl_t;
+
 struct flow_async_publication_s {
   turbo_flow_t *flow;
   const char *source_name;
@@ -31,6 +39,11 @@ static SALTS_THREAD_LOCAL flow_async_publication_t *flow_current_async_publicati
 static int flow_async_terminal_claim_shape_valid(const turbo_flow_async_terminal_claim_t *claim) {
   return claim && claim->size >= sizeof(*claim) &&
          claim->version == TURBO_FLOW_ASYNC_TERMINAL_API_VERSION;
+}
+
+static int flow_async_emit_claim_shape_valid(const turbo_flow_async_emit_claim_t *claim) {
+  return claim && claim->size >= sizeof(*claim) &&
+         claim->version == TURBO_FLOW_ASYNC_EMIT_API_VERSION;
 }
 
 static void flow_async_publication_finalize(flow_async_publication_t *publication) {
@@ -207,6 +220,87 @@ int turbo_flow_async_terminal_complete(turbo_flow_async_terminal_claim_t *claim,
   return SALTS_OK;
 }
 
+int turbo_flow_async_emit_claim_move(turbo_flow_async_emit_claim_t *destination,
+                                     turbo_flow_async_emit_claim_t *source) {
+  if (!flow_async_emit_claim_shape_valid(destination) ||
+      !flow_async_emit_claim_shape_valid(source) || !source->_impl || destination->_impl) {
+    return SALTS_EINVAL;
+  }
+  destination->_impl = source->_impl;
+  source->_impl = NULL;
+  return SALTS_OK;
+}
+
+const turbo_flow_msg_t *
+turbo_flow_async_emit_claim_message(const turbo_flow_async_emit_claim_t *claim) {
+  const flow_async_emit_claim_impl_t *impl;
+  if (!flow_async_emit_claim_shape_valid(claim) || !claim->_impl) return NULL;
+  impl = (const flow_async_emit_claim_impl_t *)claim->_impl;
+  return &impl->message;
+}
+
+static void flow_async_emit_observe(flow_async_emit_claim_impl_t *impl, int status) {
+  const flow_stage_plan_impl_t *stage =
+      (const flow_stage_plan_impl_t *)vec_at_const(&impl->flow->stages, impl->stage_index);
+  turbo_flow_observe_event_t event;
+  uint64_t duration = impl->completion.async_started_at != 0u
+                          ? salts_hrtime() - impl->completion.async_started_at
+                          : 0u;
+  if (impl->flow->observer_ops.stage_complete) {
+    impl->flow->observer_ops.stage_complete(impl->flow->observer_ctx, stage ? stage->name : NULL,
+                                            stage ? stage->adapter_name : NULL, &impl->message,
+                                            duration, status);
+  }
+  memset(&event, 0, sizeof(event));
+  event.kind = TURBO_FLOW_OBSERVE_STAGE_END;
+  event.stage_name = stage ? stage->name : NULL;
+  event.adapter_name = stage ? stage->adapter_name : NULL;
+  event.operation_name = stage ? stage->operation_name : NULL;
+  event.msg = &impl->message;
+  event.status = status;
+  event.selected = -1;
+  event.edge_kind = -1;
+  event.attempt = impl->message.execution_attempt;
+  event.duration_ns = duration;
+  flow_observer_emit(impl->flow, &event);
+}
+
+int turbo_flow_async_emit_complete(turbo_flow_async_emit_claim_t *claim, int status,
+                                   turbo_flow_msg_t *output) {
+  flow_async_emit_claim_impl_t *impl;
+  flow_async_publication_t *publication;
+  flow_async_publication_t *previous_scope;
+  turbo_flow_msg_t local;
+  int terminal_status = status;
+  int has_output = output != NULL;
+
+  if (!flow_async_emit_claim_shape_valid(claim)) return SALTS_EINVAL;
+  if (!claim->_impl) return SALTS_EALREADY;
+  if ((status != SALTS_OK && output) ||
+      (output && (flow_msg_payload_validate(output) != SALTS_OK ||
+                  flow_msg_transport_context_is_borrowed(output)))) {
+    return SALTS_EINVAL;
+  }
+
+  impl = (flow_async_emit_claim_impl_t *)claim->_impl;
+  claim->_impl = NULL;
+  publication = impl->publication;
+  turbo_flow_msg_init(&local);
+  if (has_output) {
+    (void)turbo_flow_msg_move(&local, output);
+    previous_scope = flow_current_async_publication;
+    flow_current_async_publication = publication;
+    terminal_status = flow_run_message_from_stage(impl->flow, impl->stage_index, &local);
+    flow_current_async_publication = previous_scope;
+    turbo_flow_msg_cleanup(&local);
+  }
+  flow_async_emit_observe(impl, status);
+  turbo_flow_msg_cleanup(&impl->message);
+  free(impl);
+  flow_async_publication_release(publication, terminal_status);
+  return SALTS_OK;
+}
+
 static void flow_async_terminal_abandon(flow_async_terminal_claim_impl_t *impl) {
   flow_async_publication_t *publication = impl->publication;
   turbo_flow_msg_cleanup(&impl->message);
@@ -254,6 +348,59 @@ int flow_async_terminal_submit_stage(turbo_flow_t *flow, const flow_stage_plan_i
                                        "async terminal adapter moved a rejected claim");
     }
     flow_async_terminal_abandon(impl);
+    return rc;
+  }
+  completion->async_pending = 1;
+  return SALTS_OK;
+}
+
+static void flow_async_emit_abandon(flow_async_emit_claim_impl_t *impl) {
+  flow_async_publication_t *publication = impl->publication;
+  turbo_flow_msg_cleanup(&impl->message);
+  free(impl);
+  flow_async_publication_release(publication, SALTS_OK);
+}
+
+int flow_async_emit_submit_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
+                                 const flow_adapter_registration_t *adapter, turbo_flow_msg_t *msg,
+                                 flow_stage_completion_t *completion) {
+  flow_async_emit_claim_impl_t *impl;
+  turbo_flow_async_emit_claim_t claim = TURBO_FLOW_ASYNC_EMIT_CLAIM_INIT;
+  turbo_flow_stage_plan_t view;
+  int rc;
+  if (!flow_current_async_publication) {
+    return flow_set_error_keep_state(flow, SALTS_ENOTSUP, stage->line, stage->column,
+                                     "async emitting stage requires asynchronous publication");
+  }
+  impl = (flow_async_emit_claim_impl_t *)calloc(1u, sizeof(*impl));
+  if (!impl) return SALTS_ENOMEM;
+  turbo_flow_msg_init(&impl->message);
+  rc = turbo_flow_msg_clone(&impl->message, msg);
+  if (rc != SALTS_OK) {
+    free(impl);
+    return rc;
+  }
+  impl->flow = flow;
+  impl->publication = flow_current_async_publication;
+  impl->stage_index = completion->entry.stage_index;
+  impl->completion = *completion;
+  salts_mutex_lock(&impl->publication->mutex);
+  ++impl->publication->pending;
+  salts_mutex_unlock(&impl->publication->mutex);
+  claim._impl = impl;
+  flow_make_stage_view(stage, &view);
+  rc = adapter->async_emit_ops.submit(adapter->ctx, flow, &view, msg, &claim);
+  if (rc == SALTS_OK && claim._impl) {
+    flow_async_emit_abandon(impl);
+    return flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,
+                                     "async emitting adapter did not move its accepted claim");
+  }
+  if (rc != SALTS_OK) {
+    if (!claim._impl) {
+      return flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,
+                                       "async emitting adapter moved a rejected claim");
+    }
+    flow_async_emit_abandon(impl);
     return rc;
   }
   completion->async_pending = 1;
