@@ -82,9 +82,9 @@ int flow_runtime_generation_can_advance(const turbo_flow_t *flow) {
 
 void flow_runtime_generation_commit(turbo_flow_t *flow) {
   if (!flow || flow->runtime_generation == UINT64_MAX) return;
-  for (size_t index = 0u; index < vec_size(&flow->executor_plans); ++index) {
+  for (size_t index = 0u; index < vec_size(&flow->compiled_plan.executors); ++index) {
     const flow_executor_plan_t *executor =
-        (const flow_executor_plan_t *)vec_at_const(&flow->executor_plans, index);
+        (const flow_executor_plan_t *)vec_at_const(&flow->compiled_plan.executors, index);
     if (executor && executor->keyed_store) flow_keyed_state_store_reset(executor->keyed_store);
   }
   ++flow->runtime_generation;

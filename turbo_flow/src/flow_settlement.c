@@ -53,8 +53,8 @@ int turbo_flow_settlement_report(const turbo_flow_settlement_result_t *result) {
 }
 
 int flow_adapter_apply_settlement(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
-                                  turbo_flow_msg_t *msg, flow_stage_completion_t *completion,
-                                  int callback_status) {
+                                  uint32_t stage_index, turbo_flow_msg_t *msg,
+                                  flow_stage_completion_t *completion, int callback_status) {
   const turbo_flow_operation_runtime_contract_t *runtime;
   const flow_adapter_registration_t *adapter;
   turbo_flow_settlement_result_t automatic = TURBO_FLOW_SETTLEMENT_RESULT_INIT;
@@ -98,7 +98,7 @@ int flow_adapter_apply_settlement(turbo_flow_t *flow, const flow_stage_plan_impl
     return flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,
                                      "settlement status does not match stage status");
   }
-  adapter = flow_adapter_for_stage(flow, stage);
+  adapter = flow_adapter_for_compiled_stage(flow, stage_index);
   if (!adapter || !adapter->settlement_ops.apply) {
     return flow_set_error_keep_state(flow, SALTS_ENOTSUP, stage->line, stage->column,
                                      "operation settlement owner is not configured");

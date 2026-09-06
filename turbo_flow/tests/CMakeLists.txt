@@ -1,7 +1,8 @@
 cmake_add_test(
   test_turbo_flow
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_turbo_flow.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+          ${CMAKE_CURRENT_SOURCE_DIR}/flow_plan_type_probe.c
+  LIBS TurboFlow::Flow Salts::CFlow Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 

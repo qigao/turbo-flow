@@ -30,9 +30,18 @@ const flow_adapter_registration_t *flow_adapter_for_stage(const turbo_flow_t *fl
                                                                  (size_t)adapter_index);
 }
 
+const flow_adapter_registration_t *flow_adapter_for_compiled_stage(const turbo_flow_t *flow,
+                                                                   uint32_t stage_index) {
+  const uint32_t *adapter_index;
+  if (!flow || !flow->compiled_plan.sealed) return NULL;
+  adapter_index =
+      (const uint32_t *)vec_at_const(&flow->compiled_plan.adapter_by_stage, stage_index);
+  if (!adapter_index || *adapter_index == FLOW_PLAN_INDEX_NONE) return NULL;
+  return (const flow_adapter_registration_t *)vec_at_const(&flow->adapters, *adapter_index);
+}
+
 int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
-                               turbo_flow_msg_t *msg) {
-  const flow_adapter_registration_t *adapter = flow_adapter_for_stage(flow, stage);
+                               const flow_adapter_registration_t *adapter, turbo_flow_msg_t *msg) {
   turbo_flow_stage_plan_t view;
 
   if (!flow || !stage || !msg) return SALTS_EINVAL;
@@ -113,7 +122,13 @@ int flow_start_adapters(turbo_flow_t *flow) {
 
     if (!stage || !stage->adapter_name) continue;
 
-    adapter_index = flow_find_adapter(flow, stage->adapter_name);
+    {
+      const uint32_t *compiled_index = (const uint32_t *)vec_at_const(
+          &flow->compiled_plan.adapter_by_stage, stage_index);
+      adapter_index = compiled_index && *compiled_index != FLOW_PLAN_INDEX_NONE
+                          ? (int)*compiled_index
+                          : -1;
+    }
     if (adapter_index < 0) {
       rc = flow_set_error_keep_state(flow, SALTS_EINVAL, stage->line, stage->column,
                                      "stage or source adapter is not registered");

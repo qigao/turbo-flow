@@ -85,9 +85,7 @@ static void flow_coro_adapter_destroy(flow_coro_adapter_t *adapter) {
 }
 
 static int flow_coro_adapter_init(flow_coro_adapter_t *adapter,
-                                  const flow_executor_plan_t *executor) {
-  uint32_t lanes = executor->exec.lanes ? executor->exec.lanes : 1u;
-
+                                  const flow_executor_plan_t *executor, uint32_t lanes) {
   memset(adapter, 0, sizeof(*adapter));
   adapter->stage_index = executor->stage_index;
   adapter->lanes = lanes;
@@ -149,6 +147,7 @@ void flow_stop_runtime_executor_adapters(turbo_flow_t *flow) {
     flow_pool_record_set_state(record, TURBO_FLOW_POOL_STOPPED);
   }
   turbo_flow_stl_error(vec_clear(&flow->threadpool_adapters));
+  turbo_flow_stl_error(vec_clear(&flow->threadpool_adapter_by_stage));
 
   for (size_t i = 0; i < vec_size(&flow->coro_adapters); ++i) {
     flow_coro_adapter_t *adapter = (flow_coro_adapter_t *)vec_at(&flow->coro_adapters, i);
@@ -158,6 +157,7 @@ void flow_stop_runtime_executor_adapters(turbo_flow_t *flow) {
     flow_pool_record_set_state(record, TURBO_FLOW_POOL_STOPPED);
   }
   turbo_flow_stl_error(vec_clear(&flow->coro_adapters));
+  turbo_flow_stl_error(vec_clear(&flow->coro_adapter_by_stage));
 }
 
 void flow_stop_executor_adapters(turbo_flow_t *flow) {
@@ -169,18 +169,32 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
   if (!flow) return SALTS_EINVAL;
 
   flow_stop_runtime_executor_adapters(flow);
+  if (flow_runtime_stage_index_reset(&flow->threadpool_adapter_by_stage, vec_size(&flow->stages)) !=
+          SALTS_OK ||
+      flow_runtime_stage_index_reset(&flow->coro_adapter_by_stage, vec_size(&flow->stages)) !=
+          SALTS_OK) {
+    flow_stop_runtime_executor_adapters(flow);
+    return flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0, "out of memory");
+  }
 
-  for (size_t i = 0; i < vec_size(&flow->executor_plans); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->compiled_plan.executors); ++i) {
     const flow_executor_plan_t *executor =
-        (const flow_executor_plan_t *)vec_at_const(&flow->executor_plans, i);
+        (const flow_executor_plan_t *)vec_at_const(&flow->compiled_plan.executors, i);
+    const flow_runtime_stage_config_t *runtime_config =
+        flow_runtime_stage_config_for_stage(flow, executor->stage_index);
     flow_threadpool_adapter_t adapter;
     flow_coro_adapter_t coro_adapter;
 
+    if (!runtime_config) {
+      flow_stop_runtime_executor_adapters(flow);
+      return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
+                                       "executor runtime configuration is missing");
+    }
     if (executor->exec.kind == TURBO_FLOW_EXEC_CORO_POOL) {
-      uint32_t lanes = executor->exec.lanes ? executor->exec.lanes : 1u;
+      uint32_t lanes = runtime_config->coro_lanes ? runtime_config->coro_lanes : 1u;
       uint64_t resource_capacity =
           executor->exec.pool_capacity > 0u ? (uint64_t)lanes * executor->exec.pool_capacity : 0u;
-      int rc = flow_coro_adapter_init(&coro_adapter, executor);
+      int rc = flow_coro_adapter_init(&coro_adapter, executor, lanes);
       if (rc != SALTS_OK) {
         flow_stop_runtime_executor_adapters(flow);
         return flow_set_error_keep_state(flow, rc, 0, 0, "failed to create coro executor");
@@ -200,13 +214,15 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
         flow_stop_runtime_executor_adapters(flow);
         return flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0, "out of memory");
       }
+      *(uint32_t *)vec_at(&flow->coro_adapter_by_stage, executor->stage_index) =
+          (uint32_t)(vec_size(&flow->coro_adapters) - 1u);
       flow_pool_record_set_state(flow_pool_record_at(flow, coro_adapter.pool_record_index),
                                  TURBO_FLOW_POOL_RUNNING);
       continue;
     }
 
     if (executor->exec.kind != TURBO_FLOW_EXEC_THREAD_POOL) continue;
-    if (executor->exec.workers > (uint32_t)INT_MAX) {
+    if (runtime_config->thread_workers > (uint32_t)INT_MAX) {
       flow_stop_runtime_executor_adapters(flow);
       return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                        "thread executor worker count is too large");
@@ -214,7 +230,7 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
 
     adapter.stage_index = executor->stage_index;
     adapter.workers = 0u;
-    adapter.pool = salts_threadpool_create((int)executor->exec.workers);
+    adapter.pool = salts_threadpool_create((int)runtime_config->thread_workers);
     if (!adapter.pool) {
       flow_stop_runtime_executor_adapters(flow);
       return flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0,
@@ -239,6 +255,8 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
       flow_stop_runtime_executor_adapters(flow);
       return flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0, "out of memory");
     }
+    *(uint32_t *)vec_at(&flow->threadpool_adapter_by_stage, executor->stage_index) =
+        (uint32_t)(vec_size(&flow->threadpool_adapters) - 1u);
     flow_pool_record_set_state(flow_pool_record_at(flow, adapter.pool_record_index),
                                TURBO_FLOW_POOL_RUNNING);
   }
@@ -248,22 +266,24 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
 
 const flow_threadpool_adapter_t *flow_threadpool_adapter_for_stage(const turbo_flow_t *flow,
                                                                    uint32_t stage_index) {
-  if (!flow) return NULL;
-  for (size_t i = 0; i < vec_size(&flow->threadpool_adapters); ++i) {
-    const flow_threadpool_adapter_t *adapter =
-        (const flow_threadpool_adapter_t *)vec_at_const(&flow->threadpool_adapters, i);
-    if (adapter->stage_index == stage_index) return adapter;
-  }
-  return NULL;
+  const uint32_t *adapter_index;
+  const flow_threadpool_adapter_t *adapter;
+  if (!flow || stage_index >= vec_size(&flow->threadpool_adapter_by_stage)) return NULL;
+  adapter_index = (const uint32_t *)vec_at_const(&flow->threadpool_adapter_by_stage, stage_index);
+  if (!adapter_index || *adapter_index == FLOW_PLAN_INDEX_NONE) return NULL;
+  adapter =
+      (const flow_threadpool_adapter_t *)vec_at_const(&flow->threadpool_adapters, *adapter_index);
+  return adapter && adapter->stage_index == stage_index ? adapter : NULL;
 }
 
 flow_coro_adapter_t *flow_coro_adapter_for_stage(turbo_flow_t *flow, uint32_t stage_index) {
-  if (!flow) return NULL;
-  for (size_t i = 0; i < vec_size(&flow->coro_adapters); ++i) {
-    flow_coro_adapter_t *adapter = (flow_coro_adapter_t *)vec_at(&flow->coro_adapters, i);
-    if (adapter->stage_index == stage_index) return adapter;
-  }
-  return NULL;
+  const uint32_t *adapter_index;
+  flow_coro_adapter_t *adapter;
+  if (!flow || stage_index >= vec_size(&flow->coro_adapter_by_stage)) return NULL;
+  adapter_index = (const uint32_t *)vec_at_const(&flow->coro_adapter_by_stage, stage_index);
+  if (!adapter_index || *adapter_index == FLOW_PLAN_INDEX_NONE) return NULL;
+  adapter = (flow_coro_adapter_t *)vec_at(&flow->coro_adapters, *adapter_index);
+  return adapter && adapter->stage_index == stage_index ? adapter : NULL;
 }
 
 int flow_execute_threadpool_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *stage,

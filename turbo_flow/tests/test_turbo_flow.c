@@ -8,6 +8,10 @@
 #include <stdio.h>
 #include <string.h>
 
+const cmeta_type_desc *flow_plan_probe_message_type(void);
+const cmeta_type_desc *flow_plan_probe_operation_type(void);
+const cmeta_type_desc *flow_plan_probe_data_message_type(void);
+
 static int noop_stage(turbo_flow_msg_t *msg, void *ctx) {
   (void)msg;
   (void)ctx;
@@ -1311,20 +1315,335 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
 
-      for (size_t stage_index = 0u; stage_index < vec_size(&flow->runtime_nodes); ++stage_index) {
+      check_equal(flow->compiled_plan.sealed, 1);
+      check_equal(vec_size(&flow->compiled_plan.nodes), turbo_flow_stage_count(flow));
+      check_equal(vec_size(&flow->compiled_plan.edges), turbo_flow_edge_count(flow));
+      check_equal(vec_size(&flow->compiled_plan.executor_by_stage), turbo_flow_stage_count(flow));
+      check_equal(vec_size(&flow->compiled_plan.adapter_by_stage), turbo_flow_stage_count(flow));
+      check_equal(vec_size(&flow->compiled_plan.data_segment_by_stage),
+                  turbo_flow_stage_count(flow));
+
+      for (size_t stage_index = 0u; stage_index < vec_size(&flow->compiled_plan.nodes);
+           ++stage_index) {
         const flow_runtime_node_plan_t *node =
-            (const flow_runtime_node_plan_t *)vec_at_const(&flow->runtime_nodes, stage_index);
+            (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes, stage_index);
+        const uint32_t executor_index =
+            *(const uint32_t *)vec_at_const(&flow->compiled_plan.executor_by_stage, stage_index);
+        const uint32_t adapter_index =
+            *(const uint32_t *)vec_at_const(&flow->compiled_plan.adapter_by_stage, stage_index);
+        const uint32_t segment_index = *(const uint32_t *)vec_at_const(
+            &flow->compiled_plan.data_segment_by_stage, stage_index);
         check_not_null(node);
+        if ((node->flags & (FLOW_RUNTIME_NODE_SOURCE | FLOW_RUNTIME_NODE_PORT)) != 0u) {
+          check_equal(executor_index, FLOW_PLAN_INDEX_NONE);
+        } else {
+          const flow_executor_plan_t *executor = (const flow_executor_plan_t *)vec_at_const(
+              &flow->compiled_plan.executors, executor_index);
+          check_not_null(executor);
+          check_equal(executor->stage_index, stage_index);
+          check_true(flow_executor_plan_for_stage(flow, (uint32_t)stage_index) == executor);
+        }
+        check_equal(adapter_index, FLOW_PLAN_INDEX_NONE);
+        check_equal(segment_index, FLOW_PLAN_INDEX_NONE);
+        check_null(flow_worker_pool_segment_for_stage(flow, (uint32_t)stage_index));
         check_equal(node->outgoing_begin, next_edge);
         for (size_t offset = 0u; offset < node->outgoing_count; ++offset) {
           const flow_runtime_edge_plan_t *edge = (const flow_runtime_edge_plan_t *)vec_at_const(
-              &flow->runtime_edges, node->outgoing_begin + offset);
+              &flow->compiled_plan.edges, node->outgoing_begin + offset);
           check_not_null(edge);
           check_equal(edge->from_stage, stage_index);
         }
         next_edge += node->outgoing_count;
       }
-      check_equal(next_edge, vec_size(&flow->runtime_edges));
+      check_equal(next_edge, vec_size(&flow->compiled_plan.edges));
+      turbo_flow_destroy(flow);
+    }
+
+    it("records semantic CMeta identities and CFlow lowering candidates") {
+      static const char *src = "source input\n"
+                               "stage parse\n"
+                               "stage sink\n"
+                               "stage main {\n"
+                               "  input -> parse -> sink\n"
+                               "}\n";
+      turbo_flow_t *flow = turbo_flow_create();
+      int parse_index;
+      int sink_index;
+      const flow_stage_semantic_plan_t *parse_semantics;
+      const flow_stage_semantic_plan_t *sink_semantics;
+      const flow_semantic_type_plan_t *input_type;
+      const flow_semantic_type_plan_t *output_type;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check(flow->compiled_plan.message_type != flow_plan_probe_message_type());
+      check(flow->compiled_plan.operation_type != flow_plan_probe_operation_type());
+      check_true(
+          cmeta_type_equal(flow->compiled_plan.message_type, flow_plan_probe_message_type()));
+      check_true(
+          cmeta_type_equal(flow->compiled_plan.operation_type, flow_plan_probe_operation_type()));
+      check_equal(vec_size(&flow->compiled_plan.stage_semantics), turbo_flow_stage_count(flow));
+      parse_index = turbo_flow_find_stage(flow, "parse");
+      sink_index = turbo_flow_find_stage(flow, "sink");
+      check(parse_index >= 0);
+      check(sink_index >= 0);
+      parse_semantics = (const flow_stage_semantic_plan_t *)vec_at_const(
+          &flow->compiled_plan.stage_semantics, (size_t)parse_index);
+      sink_semantics = (const flow_stage_semantic_plan_t *)vec_at_const(
+          &flow->compiled_plan.stage_semantics, (size_t)sink_index);
+      check_not_null(parse_semantics);
+      check_not_null(sink_semantics);
+      check_equal(parse_semantics->typed, 1);
+      check_equal(parse_semantics->lowering_candidate, 0);
+      check_equal(parse_semantics->cflow_operator, CFLOW_OP_MAP);
+      check_bits(parse_semantics->barriers, FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE);
+      check_bits(parse_semantics->effects, CMETA_EFFECT_UNKNOWN);
+      check_bits(parse_semantics->effects, CMETA_EFFECT_MAY_FAIL);
+      check_equal(parse_semantics->candidate_region, FLOW_PLAN_INDEX_NONE);
+      check_equal(sink_semantics->candidate_region, FLOW_PLAN_INDEX_NONE);
+      check_equal(flow->compiled_plan.candidate_region_count, 0u);
+      input_type = (const flow_semantic_type_plan_t *)vec_at_const(
+          &flow->compiled_plan.semantic_types, parse_semantics->input_type_index);
+      output_type = (const flow_semantic_type_plan_t *)vec_at_const(
+          &flow->compiled_plan.semantic_types, parse_semantics->output_type_index);
+      check_not_null(input_type);
+      check_not_null(output_type);
+      check_true(cmeta_type_equal(&input_type->descriptor, &output_type->descriptor));
+      check_true(cmeta_type_equal(&input_type->descriptor, flow_plan_probe_data_message_type()));
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("admits explicitly typed pure operation contracts as CFlow candidates") {
+      static const char *src = "source input\n"
+                               "stage parse operation data.parse\n"
+                               "stage main {\n"
+                               "  input -> parse\n"
+                               "}\n";
+      turbo_flow_operation_descriptor_t operation = {0};
+      turbo_flow_operation_provider_registration_t provider =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      turbo_flow_t *flow = turbo_flow_create();
+      int parse_index;
+      const flow_stage_semantic_plan_t *semantics;
+
+      operation.size = sizeof(operation);
+      operation.name = "data.parse";
+      operation.version = 1u;
+      operation.domain = TURBO_FLOW_DOMAIN_DATA;
+      operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
+      operation.input_type = "Message";
+      operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
+      operation.output_type = "Message";
+      operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+      operation.scope.lifetime = TURBO_FLOW_LIFETIME_DISPATCH;
+      operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_INLINE_LANE;
+      operation.scope.authority = TURBO_FLOW_AUTHORITY_PURE;
+      operation.flags = TURBO_FLOW_OPERATION_STAGE;
+      operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+      provider.operation_name = operation.name;
+      provider.fn = noop_stage;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
+      check_equal(turbo_flow_register_operation_provider(flow, &provider), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      parse_index = turbo_flow_find_stage(flow, "parse");
+      check(parse_index >= 0);
+      semantics = (const flow_stage_semantic_plan_t *)vec_at_const(
+          &flow->compiled_plan.stage_semantics, (size_t)parse_index);
+      check_not_null(semantics);
+      check_equal(semantics->effects, CMETA_EFFECT_MAY_FAIL);
+      check_equal(semantics->barriers, FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE);
+      check_equal(semantics->lowering_candidate, 1);
+      check_equal(semantics->candidate_region, 0u);
+      check_equal(flow->compiled_plan.candidate_region_count, 1u);
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("separates message mutation from cross-call state effects") {
+      static const char *src = "source input\n"
+                               "stage mutate\n"
+                               "stage main {\n"
+                               "  input -> mutate\n"
+                               "}\n";
+      turbo_flow_stage_options_t options = {TURBO_FLOW_STAGE_MUTATES_PRIVATE,
+                                            TURBO_FLOW_STAGE_EFFECT_NONE};
+      turbo_flow_t *flow = turbo_flow_create();
+      int stage_index;
+      const flow_stage_semantic_plan_t *semantics;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "mutate", noop_stage, NULL, &options),
+                  SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      stage_index = turbo_flow_find_stage(flow, "mutate");
+      check(stage_index >= 0);
+      semantics = (const flow_stage_semantic_plan_t *)vec_at_const(
+          &flow->compiled_plan.stage_semantics, (size_t)stage_index);
+      check_not_null(semantics);
+      check_bits(semantics->barriers, FLOW_LOWERING_BARRIER_MESSAGE_MUTATION);
+      check_false((semantics->barriers & FLOW_LOWERING_BARRIER_STATEFUL) != 0u);
+      check_bits(semantics->effects, CMETA_EFFECT_UNKNOWN | CMETA_EFFECT_MAY_FAIL);
+      check_false((semantics->effects & CMETA_EFFECT_STATEFUL) != 0u);
+      check_equal(semantics->lowering_candidate, 0);
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("marks explicit operation state scopes as stateful barriers") {
+      static const char *src = "source input\n"
+                               "stage stateful operation data.stateful\n"
+                               "stage main {\n"
+                               "  input -> stateful\n"
+                               "}\n";
+      turbo_flow_operation_descriptor_t operation = {0};
+      turbo_flow_operation_provider_registration_t provider =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      turbo_flow_t *flow = turbo_flow_create();
+      int stage_index;
+      const flow_stage_semantic_plan_t *semantics;
+
+      operation.size = sizeof(operation);
+      operation.name = "data.stateful";
+      operation.version = 1u;
+      operation.domain = TURBO_FLOW_DOMAIN_DATA;
+      operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
+      operation.input_type = "Message";
+      operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
+      operation.output_type = "Message";
+      operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+      operation.scope.state = TURBO_FLOW_STATE_SCOPE_NODE;
+      operation.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_INLINE_LANE;
+      operation.scope.authority = TURBO_FLOW_AUTHORITY_PURE;
+      operation.flags = TURBO_FLOW_OPERATION_STAGE;
+      operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+      provider.operation_name = operation.name;
+      provider.fn = noop_stage;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
+      check_equal(turbo_flow_register_operation_provider(flow, &provider), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      stage_index = turbo_flow_find_stage(flow, "stateful");
+      check(stage_index >= 0);
+      semantics = (const flow_stage_semantic_plan_t *)vec_at_const(
+          &flow->compiled_plan.stage_semantics, (size_t)stage_index);
+      check_not_null(semantics);
+      check_bits(semantics->barriers, FLOW_LOWERING_BARRIER_STATEFUL);
+      check_bits(semantics->effects, CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL);
+      check_equal(semantics->lowering_candidate, 0);
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("fails compilation when the internal CFlow backend requirement cannot be lowered") {
+      static const char *src = "source input\n"
+                               "stage parse\n"
+                               "stage main {\n"
+                               "  input -> parse\n"
+                               "}\n";
+      turbo_flow_t *flow = turbo_flow_create();
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      flow->required_backend = FLOW_PLAN_BACKEND_CFLOW;
+      check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
+      check_false(flow->compiled_plan.sealed);
+      check_equal(vec_size(&flow->compiled_plan.nodes), 0u);
+      check_contains(turbo_flow_last_error(flow)->message, "CFlow backend");
+      check_equal(turbo_flow_last_error(flow)->line, 2u);
+      flow->required_backend = FLOW_PLAN_BACKEND_NATIVE;
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_true(flow->compiled_plan.sealed);
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("fails explicitly when a fully admissible CFlow plan has no execution backend") {
+      static const char *src = "source input\n";
+      turbo_flow_t *flow = turbo_flow_create();
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      flow->required_backend = FLOW_PLAN_BACKEND_CFLOW;
+      check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
+      check_false(flow->compiled_plan.sealed);
+      check_equal(vec_size(&flow->compiled_plan.nodes), 0u);
+      check_equal(turbo_flow_last_error(flow)->line, 0u);
+      check_equal(turbo_flow_last_error(flow)->column, 0u);
+      check_equal(turbo_flow_last_error(flow)->message,
+                  "required CFlow backend execution is not implemented");
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("preserves legacy topology routes effects and source locations in the sealed plan") {
+      static const char *src = "source input\n"
+                               "stage decide\n"
+                               "stage accepted\n"
+                               "stage main {\n"
+                               "  input -> decide\n"
+                               "  route decide -> accepted when msg.flags == 1\n"
+                               "}\n";
+      turbo_flow_t *flow = turbo_flow_create();
+      int decide_index;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "decide", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "accepted", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(vec_size(&flow->compiled_plan.nodes), vec_size(&flow->stages));
+      check_equal(vec_size(&flow->compiled_plan.edges), vec_size(&flow->edges));
+
+      for (size_t legacy_index = 0u; legacy_index < vec_size(&flow->edges); ++legacy_index) {
+        const flow_edge_plan_impl_t *legacy =
+            (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, legacy_index);
+        const flow_runtime_node_plan_t *node = (const flow_runtime_node_plan_t *)vec_at_const(
+            &flow->compiled_plan.nodes, legacy->from_stage);
+        size_t matches = 0u;
+        for (size_t offset = 0u; offset < node->outgoing_count; ++offset) {
+          const flow_runtime_edge_plan_t *compiled = (const flow_runtime_edge_plan_t *)vec_at_const(
+              &flow->compiled_plan.edges, node->outgoing_begin + offset);
+          if (compiled->to_stage != legacy->to_stage || compiled->line != legacy->line ||
+              compiled->column != legacy->column || compiled->kind != legacy->kind) {
+            continue;
+          }
+          ++matches;
+          check_equal(compiled->from_stage, legacy->from_stage);
+          check_equal(compiled->is_stage_internal, legacy->is_stage_internal);
+          check_equal(compiled->predicate != NULL, legacy->predicate != NULL);
+          if (legacy->name) {
+            check_equal(strcmp(compiled->name, legacy->name), 0);
+          } else {
+            check_null(compiled->name);
+          }
+        }
+        check_equal(matches, 1u);
+      }
+      decide_index = turbo_flow_find_stage(flow, "decide");
+      check(decide_index >= 0);
+      {
+        const flow_stage_semantic_plan_t *semantics =
+            (const flow_stage_semantic_plan_t *)vec_at_const(&flow->compiled_plan.stage_semantics,
+                                                             (size_t)decide_index);
+        check_not_null(semantics);
+        check_bits(semantics->barriers, FLOW_LOWERING_BARRIER_DYNAMIC_ROUTE);
+        check_bits(semantics->effects, CMETA_EFFECT_MAY_FAIL);
+        check_equal(semantics->lowering_candidate, 0);
+      }
+
       turbo_flow_destroy(flow);
     }
 
@@ -1740,6 +2059,20 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_register_adapter(flow, "smtp", &ops, &adapter_ctx), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
+      {
+        int sink_index = turbo_flow_find_stage(flow, "sink");
+        const uint32_t *adapter_index;
+        const flow_adapter_registration_t *adapter;
+        check(sink_index >= 0);
+        adapter_index = (const uint32_t *)vec_at_const(&flow->compiled_plan.adapter_by_stage,
+                                                       (size_t)sink_index);
+        check_not_null(adapter_index);
+        check(*adapter_index != FLOW_PLAN_INDEX_NONE);
+        adapter = (const flow_adapter_registration_t *)vec_at_const(&flow->adapters,
+                                                                    *adapter_index);
+        check_not_null(adapter);
+        check_true(flow_adapter_for_compiled_stage(flow, (uint32_t)sink_index) == adapter);
+      }
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(adapter_ctx.consume_count, 1);
@@ -2028,6 +2361,9 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_FAILED);
       check_contains(turbo_flow_last_error(flow)->message, "unknown stage");
+      check_equal(flow->compiled_plan.sealed, 0);
+      check_equal(vec_size(&flow->compiled_plan.nodes), 0u);
+      check_equal(vec_size(&flow->compiled_plan.edges), 0u);
 
       check_equal(turbo_flow_parse_string(flow, ok_src, strlen(ok_src)), SALTS_OK);
       check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_PARSED);
@@ -3549,11 +3885,25 @@ suite("Turbo Flow") {
 
       check_equal(turbo_flow_parse_string(flow, worker_src, strlen(worker_src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "enrich", record_stage, &enrich_ctx, NULL),
-                   SALTS_OK);
+                  SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist_ctx, NULL),
-                   SALTS_OK);
+                  SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
+      {
+        int enrich_index = turbo_flow_find_stage(flow, "enrich");
+        const uint32_t *adapter_index;
+        const flow_worker_pool_adapter_t *adapter;
+        check(enrich_index >= 0);
+        check_equal(vec_size(&flow->worker_pool_adapter_by_stage), turbo_flow_stage_count(flow));
+        adapter_index = (const uint32_t *)vec_at_const(&flow->worker_pool_adapter_by_stage,
+                                                       (size_t)enrich_index);
+        check_not_null(adapter_index);
+        adapter = (const flow_worker_pool_adapter_t *)vec_at_const(&flow->worker_pool_adapters,
+                                                                   *adapter_index);
+        check_not_null(adapter);
+        check_equal(adapter->stage_index, (uint32_t)enrich_index);
+      }
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -3565,21 +3915,37 @@ suite("Turbo Flow") {
       check_equal(trace.order[4], 1);
       check_equal(trace.order[5], 2);
       check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(vec_size(&flow->worker_pool_adapter_by_stage), 0u);
 
       check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       trace.count = 0;
       check_equal(turbo_flow_parse_string(flow, thread_src, strlen(thread_src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   SALTS_OK);
+                  SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                   SALTS_OK);
+                  SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
+      {
+        int parse_index = turbo_flow_find_stage(flow, "parse");
+        const uint32_t *adapter_index;
+        const flow_threadpool_adapter_t *adapter;
+        check(parse_index >= 0);
+        check_equal(vec_size(&flow->threadpool_adapter_by_stage), turbo_flow_stage_count(flow));
+        adapter_index =
+            (const uint32_t *)vec_at_const(&flow->threadpool_adapter_by_stage, (size_t)parse_index);
+        check_not_null(adapter_index);
+        adapter = (const flow_threadpool_adapter_t *)vec_at_const(&flow->threadpool_adapters,
+                                                                  *adapter_index);
+        check_not_null(adapter);
+        check_equal(adapter->stage_index, (uint32_t)parse_index);
+      }
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(trace.count, 2);
       check_equal(trace.order[0], 3);
       check_equal(trace.order[1], 4);
       check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(vec_size(&flow->threadpool_adapter_by_stage), 0u);
 
       trace.count = 0;
       check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -3615,17 +3981,31 @@ suite("Turbo Flow") {
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "async", coro_check_stage, &async_ctx, NULL),
-                   SALTS_OK);
+                  SALTS_OK);
       check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink_ctx, NULL),
-                   SALTS_OK);
+                  SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
+      {
+        int async_index = turbo_flow_find_stage(flow, "async");
+        const uint32_t *adapter_index;
+        const flow_coro_adapter_t *adapter;
+        check(async_index >= 0);
+        check_equal(vec_size(&flow->coro_adapter_by_stage), turbo_flow_stage_count(flow));
+        adapter_index =
+            (const uint32_t *)vec_at_const(&flow->coro_adapter_by_stage, (size_t)async_index);
+        check_not_null(adapter_index);
+        adapter = (const flow_coro_adapter_t *)vec_at_const(&flow->coro_adapters, *adapter_index);
+        check_not_null(adapter);
+        check_equal(adapter->stage_index, (uint32_t)async_index);
+      }
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
       check_equal(async_ctx.entered, 2);
       check_equal(async_ctx.resumed, 2);
       check_equal(sink_ctx.called, 2);
       check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(vec_size(&flow->coro_adapter_by_stage), 0u);
 
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -3827,7 +4207,7 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
-    it("runs concurrent public publishes on independent disruptor consumers") {
+    it("runs concurrent public publishes without mutating the sealed plan") {
       static const char *src = "source input\n"
                                "stage transform worker 2 capacity 64\n"
                                "stage main {\n"
@@ -3836,9 +4216,16 @@ suite("Turbo Flow") {
       worker_probe_ctx_t probe;
       concurrent_publish_t publishes[2];
       salts_thread_t threads[2] = {0};
+      flow_runtime_node_plan_t node_before;
+      flow_executor_plan_t executor_before;
+      flow_data_segment_plan_t segment_before;
+      flow_stage_semantic_plan_t semantics_before;
       atomic_int ready;
       atomic_int go;
       turbo_flow_t *flow = turbo_flow_create();
+      int transform_index;
+      uint32_t executor_index;
+      uint32_t segment_index;
 
       atomic_init(&probe.active, 0);
       atomic_init(&probe.peak, 0);
@@ -3853,6 +4240,20 @@ suite("Turbo Flow") {
           SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
+      transform_index = turbo_flow_find_stage(flow, "transform");
+      check(transform_index >= 0);
+      node_before = *(const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes,
+                                                                    (size_t)transform_index);
+      executor_index = *(const uint32_t *)vec_at_const(&flow->compiled_plan.executor_by_stage,
+                                                       (size_t)transform_index);
+      executor_before = *(const flow_executor_plan_t *)vec_at_const(&flow->compiled_plan.executors,
+                                                                    executor_index);
+      segment_index = *(const uint32_t *)vec_at_const(&flow->compiled_plan.data_segment_by_stage,
+                                                      (size_t)transform_index);
+      segment_before = *(const flow_data_segment_plan_t *)vec_at_const(
+          &flow->compiled_plan.data_segments, segment_index);
+      semantics_before = *(const flow_stage_semantic_plan_t *)vec_at_const(
+          &flow->compiled_plan.stage_semantics, (size_t)transform_index);
 
       for (size_t i = 0; i < 2; ++i) {
         memset(&publishes[i], 0, sizeof(publishes[i]));
@@ -3874,6 +4275,24 @@ suite("Turbo Flow") {
         check_equal(publishes[i].error_code, SALTS_OK);
       }
       check_greater_equal(atomic_load_explicit(&probe.peak, memory_order_acquire), 2);
+      check_equal(memcmp(&node_before,
+                         vec_at_const(&flow->compiled_plan.nodes, (size_t)transform_index),
+                         sizeof(node_before)),
+                  0);
+      check_equal(memcmp(&executor_before,
+                         vec_at_const(&flow->compiled_plan.executors, executor_index),
+                         sizeof(executor_before)),
+                  0);
+      check_equal(memcmp(&segment_before,
+                         vec_at_const(&flow->compiled_plan.data_segments, segment_index),
+                         sizeof(segment_before)),
+                  0);
+      check_equal(
+          memcmp(&semantics_before,
+                 vec_at_const(&flow->compiled_plan.stage_semantics, (size_t)transform_index),
+                 sizeof(semantics_before)),
+          0);
+      check_true(flow->compiled_plan.sealed);
       check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
@@ -4572,8 +4991,16 @@ suite("Turbo Flow") {
         turbo_flow_pool_resize_command_t command;
         turbo_flow_pool_resource_status_t status = TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
         turbo_flow_pool_snapshot_t pool;
+        flow_stage_plan_impl_t stage_before;
+        flow_executor_plan_t executor_before;
+        flow_data_segment_plan_t segment_before;
+        const flow_executor_plan_t *executor;
+        const flow_data_segment_plan_t *segment;
+        uint32_t executor_index;
+        uint32_t segment_index;
         turbo_flow_msg_t msg;
         turbo_flow_t *flow = turbo_flow_create();
+        int stage_index;
 
         check_not_null(flow);
         check_equal(turbo_flow_parse_string(flow, sources[i], strlen(sources[i])), SALTS_OK);
@@ -4581,6 +5008,23 @@ suite("Turbo Flow") {
                      SALTS_OK);
         check_equal(turbo_flow_compile(flow), SALTS_OK);
         check_equal(turbo_flow_start(flow), SALTS_OK);
+        stage_index = turbo_flow_find_stage(flow, "transform");
+        check(stage_index >= 0);
+        stage_before =
+            *(const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, (size_t)stage_index);
+        executor_index = *(const uint32_t *)vec_at_const(&flow->compiled_plan.executor_by_stage,
+                                                         (size_t)stage_index);
+        executor = (const flow_executor_plan_t *)vec_at_const(&flow->compiled_plan.executors,
+                                                              executor_index);
+        check_not_null(executor);
+        executor_before = *executor;
+        segment_index = *(const uint32_t *)vec_at_const(&flow->compiled_plan.data_segment_by_stage,
+                                                        (size_t)stage_index);
+        segment = segment_index == FLOW_PLAN_INDEX_NONE
+                      ? NULL
+                      : (const flow_data_segment_plan_t *)vec_at_const(
+                            &flow->compiled_plan.data_segments, segment_index);
+        if (segment) segment_before = *segment;
         memset(&command, 0, sizeof(command));
         command.size = sizeof(command);
         command.stage_name = "transform";
@@ -4597,6 +5041,19 @@ suite("Turbo Flow") {
         check_equal(pool.parallelism, 3);
         check_equal(pool.state, TURBO_FLOW_POOL_RUNNING);
         check_equal(pool.submitted, 0);
+        check_equal(memcmp(&stage_before, vec_at_const(&flow->stages, (size_t)stage_index),
+                           sizeof(stage_before)),
+                    0);
+        check_equal(memcmp(&executor_before,
+                           vec_at_const(&flow->compiled_plan.executors, executor_index),
+                           sizeof(executor_before)),
+                    0);
+        if (segment) {
+          check_equal(memcmp(&segment_before,
+                             vec_at_const(&flow->compiled_plan.data_segments, segment_index),
+                             sizeof(segment_before)),
+                      0);
+        }
         turbo_flow_msg_init(&msg);
         if (i == 0) {
           check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_ESHUTDOWN);

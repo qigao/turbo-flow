@@ -337,6 +337,34 @@ Pool 同时提供首个 schema-backed Status document：固定 envelope 携带 g
 identity，具体 counters/capacity/predicates 在 `TurboFlowResource.PoolStatus` V1 payload 中。
 真实 DataBind 测试验证 schema 动态绑定；现有 native pool Status 保留给 reconcile 热路径。
 
+### 6.1 不可变 CMeta/CFlow 编译计划
+
+`turbo_flow_compile()` 先完成现有 DSL、operation、resource 和拓扑校验，再事务性构建一个
+`flow_compiled_plan_t`。候选计划包含稳定 stage index、CSR outgoing edge、executor/data-segment
+记录、compile-time adapter binding、按 stage 索引的 O(1) 查询表，以及 CMeta type/effect 和
+CFlow operator/lowering region 元数据。只有候选计划完整通过结构与语义校验后才设置 `sealed`
+并替换旧计划；失败时不发布部分结果。运行期只读取 sealed plan，每次消息的
+reachable/done/fan-in/sequence scratch 仍由该次 run 独立拥有。
+
+CMeta 类型相等使用稳定 atom identity，不依赖不同 translation unit 中 descriptor 的地址；
+动态 domain type descriptor 的 layout 是承载该值的 `turbo_flow_msg_t` envelope layout。
+现有 `turbo_flow_msg_t` callback ABI 尚未进入 CFlow typed callable universe，因此节点仍带有
+`UNTYPED_CALLABLE` barrier。legacy callback 没有可信 effect contract，必须标为
+`UNKNOWN | MAY_FAIL`，不能推断为 pure；只有显式 typed operation contract 可以清除
+`UNKNOWN` 并形成候选 region；但显式 operation 只要声明非 `NONE` state scope，仍必须标记
+`STATEFUL` barrier。其他 barrier 包括 message mutation、async/bounded handoff、retry、
+settlement、window、dynamic route、external I/O、ordering 和 fan-in/fan-out relation；message
+mutation 不等于跨调用 stateful。stateless bounded emission 表达为 `CFLOW_OP_FLAT_MAP`；
+keyed/window emission 则同时受 state/window barrier 约束。
+
+当前公开 `turbo_flow_compile()` 继续选择 native 同步 facade，公开 DSL、枚举值和错误位置不变。
+供下一阶段 typed/Reactive backend 接入的内部 CFlow-required 编译闸门会检查完整 barrier；只要
+存在未接纳 callback 或 effect barrier，就在编译阶段返回 `SALTS_ENOTSUP`，销毁候选计划，绝不
+静默回落。Pool resize 的 worker/lane 数量属于独立 runtime overlay；resize/rebuild 不再修改
+parsed stage、executor、segment 或 semantic plan。thread/coro/worker runtime adapter 也各自
+维护按 stage 索引的 mutable overlay；start/rebuild 成功构造 adapter 后才发布索引，stop 清空，
+验证与执行路径均为 checked O(1) lookup。
+
 ## 7. IO 是受控 ingress/egress
 
 IO 不只是 socket callback，也不等于 monitoring/control plane。IO 是受控 ingress/egress，

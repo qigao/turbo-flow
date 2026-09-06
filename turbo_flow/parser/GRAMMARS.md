@@ -244,6 +244,24 @@ register the complete current bounded contract. A worker without an explicit
 binding receives a concrete bounded/block core operation with the node's exact
 capacity.
 
+After those checks, compilation transactionally publishes one sealed runtime
+plan. The plan uses stable stage indices, CSR outgoing edges, and stage-indexed
+executor, primary worker-segment, and registered-adapter tables; runtime lookup
+does not scan those record lists. Started thread, coroutine, and worker adapters
+have separate mutable stage-indexed tables, so validation and execution do not
+scan runtime adapter lists either. It also records CMeta stable type identities,
+effects, CFlow operator intent, candidate lowering regions, and explicit
+barriers for untyped callbacks, message mutation, state, asynchronous handoff,
+retry, settlement, windowing, dynamic routes, external I/O, ordering, and graph
+relations. Legacy callbacks are `UNKNOWN | MAY_FAIL`; only an explicit typed
+operation contract may clear `UNKNOWN`, and an explicit operation with any
+non-`NONE` state scope remains a `STATEFUL` barrier. Message mutation is not
+treated as cross-call state. The
+grammar does not select a backend. The current public compile path preserves
+the native synchronous behavior, while an internal required-CFlow gate returns
+`SALTS_ENOTSUP` and publishes no partial plan when any requested node cannot be
+lowered; it never silently falls back.
+
 `worker N` selects the data-plane worker-pool strategy for the stage. Optional
 `capacity M` sets its disruptor ring capacity; `M` must be a power of two from
 1 through 1048576 and defaults to 1024. `capacity` requires `worker`, but the

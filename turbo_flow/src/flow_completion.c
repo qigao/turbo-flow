@@ -11,7 +11,7 @@ int flow_mark_reachable_from_stage(const turbo_flow_t *flow, uint8_t *reachable,
   size_t stage_count;
 
   if (!flow || !reachable || !worklist) return SALTS_EINVAL;
-  stage_count = vec_size(&flow->runtime_nodes);
+  stage_count = vec_size(&flow->compiled_plan.nodes);
   if (stage_index >= stage_count || worklist_cap < stage_count) return SALTS_EINVAL;
   reachable[stage_index] = 1u;
   worklist[tail++] = stage_index;
@@ -19,14 +19,14 @@ int flow_mark_reachable_from_stage(const turbo_flow_t *flow, uint8_t *reachable,
   while (head < tail) {
     const uint32_t current = worklist[head++];
     const flow_runtime_node_plan_t *node =
-        (const flow_runtime_node_plan_t *)vec_at_const(&flow->runtime_nodes, current);
-    if (!node || node->outgoing_begin > vec_size(&flow->runtime_edges) ||
-        node->outgoing_count > vec_size(&flow->runtime_edges) - node->outgoing_begin) {
+        (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes, current);
+    if (!node || node->outgoing_begin > vec_size(&flow->compiled_plan.edges) ||
+        node->outgoing_count > vec_size(&flow->compiled_plan.edges) - node->outgoing_begin) {
       return SALTS_EPROTO;
     }
     for (uint32_t offset = 0u; offset < node->outgoing_count; ++offset) {
       const flow_runtime_edge_plan_t *edge = (const flow_runtime_edge_plan_t *)vec_at_const(
-          &flow->runtime_edges, node->outgoing_begin + offset);
+          &flow->compiled_plan.edges, node->outgoing_begin + offset);
       if (!edge || edge->from_stage != current || edge->to_stage >= stage_count) {
         return SALTS_EPROTO;
       }
@@ -49,11 +49,11 @@ static int flow_enqueue_ready(uint32_t *queue, size_t queue_cap, size_t *tail, u
 static const flow_runtime_edge_plan_t *flow_reject_edge_for_stage(const turbo_flow_t *flow,
                                                                   uint32_t stage_index) {
   const flow_runtime_node_plan_t *node =
-      (const flow_runtime_node_plan_t *)vec_at_const(&flow->runtime_nodes, stage_index);
+      (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes, stage_index);
   if (!node) return NULL;
   for (uint32_t offset = 0u; offset < node->outgoing_count; ++offset) {
     const flow_runtime_edge_plan_t *edge = (const flow_runtime_edge_plan_t *)vec_at_const(
-        &flow->runtime_edges, node->outgoing_begin + offset);
+        &flow->compiled_plan.edges, node->outgoing_begin + offset);
     if (edge && edge->from_stage == stage_index && edge->kind == TURBO_FLOW_EDGE_REJECT) {
       return edge;
     }
@@ -111,11 +111,11 @@ static int flow_data_route_exists(const turbo_flow_t *flow, uint32_t stage_index
                                   const char *route) {
   const flow_runtime_node_plan_t *node;
   if (!flow || !route || route[0] == '\0') return 0;
-  node = (const flow_runtime_node_plan_t *)vec_at_const(&flow->runtime_nodes, stage_index);
+  node = (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes, stage_index);
   if (!node) return 0;
   for (uint32_t offset = 0u; offset < node->outgoing_count; ++offset) {
     const flow_runtime_edge_plan_t *edge = (const flow_runtime_edge_plan_t *)vec_at_const(
-        &flow->runtime_edges, node->outgoing_begin + offset);
+        &flow->compiled_plan.edges, node->outgoing_begin + offset);
     const flow_stage_plan_impl_t *target;
     if (!edge || edge->from_stage != stage_index || edge->kind == TURBO_FLOW_EDGE_REJECT) continue;
     target = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->to_stage);
@@ -140,12 +140,12 @@ static int flow_release_downstream(turbo_flow_t *flow, uint32_t stage_index,
   if (!skipped_queue) return SALTS_EINVAL;
   for (;;) {
     const flow_runtime_node_plan_t *node =
-        (const flow_runtime_node_plan_t *)vec_at_const(&flow->runtime_nodes, current_stage);
+        (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes, current_stage);
     int has_downstream = 0;
     if (!node) return SALTS_EPROTO;
     for (uint32_t offset = 0u; offset < node->outgoing_count; ++offset) {
       const flow_runtime_edge_plan_t *edge = (const flow_runtime_edge_plan_t *)vec_at_const(
-          &flow->runtime_edges, node->outgoing_begin + offset);
+          &flow->compiled_plan.edges, node->outgoing_begin + offset);
       int active = 0;
       int rc;
 
@@ -223,7 +223,7 @@ int flow_apply_completion(turbo_flow_t *flow, const flow_stage_completion_t *com
       !tail || !skipped_queue) {
     return SALTS_EINVAL;
   }
-  if (completion->entry.stage_index >= vec_size(&flow->runtime_nodes)) return SALTS_EINVAL;
+  if (completion->entry.stage_index >= vec_size(&flow->compiled_plan.nodes)) return SALTS_EINVAL;
   if (msg->data_decision.stage_index == completion->entry.stage_index &&
       msg->data_decision.route[0] != '\0' &&
       !flow_data_route_exists(flow, completion->entry.stage_index, msg->data_decision.route)) {
