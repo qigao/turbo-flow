@@ -25,12 +25,47 @@ typed projection、调度、可观测性，以及可选的通用存储 adapter�
 所有构建开关只在 `CMakeOptions.cmake` 声明。不得在子目录新增隐藏 option，也不得把外部产品源码、
 协议状态机或安装组件重新并入本仓库。
 
+## Reactive run
+
+`TurboFlow::Graph` 公开基于 CFlow Publisher 的有界、按 demand 推进的 run。Publisher 必须使用
+`turbo_flow_message_type()` 返回的 managed CMeta 描述符。成功 open 后 Publisher 所有权转移给
+run；失败则仍归调用方。`NULL` Scheduler 使用 Flow 自有的有界 worker Scheduler，显式传入的
+Scheduler 借用至终态。`WAIT` 只由有效 waker 恢复，cancel/stop 会注销等待；queue full 与 closed
+分别返回 `SALTS_ENOSPC` 与 `SALTS_ESHUTDOWN`。
+
+```c
+#include <cflow/publishers.h>
+#include <turbo_flow.h>
+
+static int publish_one(turbo_flow_t *flow) {
+  turbo_flow_msg_t message;
+  cflow_publisher publisher = {0};
+  turbo_flow_run_t *run = NULL;
+  turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+
+  turbo_flow_msg_init(&message);
+  message.id = 42u;
+  if (!cflow_publisher_from_array(&publisher, turbo_flow_message_type(), &message, 1u))
+    return SALTS_ENOMEM;
+  int rc = turbo_flow_run_open(flow, "input", &publisher, NULL, &run);
+  if (rc == SALTS_OK) rc = turbo_flow_run_request(run, 1u);
+  if (rc == SALTS_OK) rc = turbo_flow_run_wait(run, UINT64_MAX, &result);
+  turbo_flow_run_close(run);
+  if (cflow_publisher_valid(&publisher)) cflow_publisher_destroy(&publisher);
+  turbo_flow_msg_cleanup(&message);
+  return rc;
+}
+```
+
+`turbo_flow_publish()` 仍是同步 facade，但其执行路径同样经过 one-value Publisher、Subscription
+和 inline Scheduler；不存在旧 native fallback。
+
 ## Windows 验证
 
 ```powershell
 cmake --fresh --preset win-release-user
 cmake --build --preset win-release-user --parallel
-ctest --preset win-release-user --output-on-failure
+ctest --test-dir build/Msvc-Release --output-on-failure
 ```
 
 安装后的 `TurboFlowConfig.cmake` 导出上述 targets 以及本仓库实际构建的 adapters；不会查找或导出

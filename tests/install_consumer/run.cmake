@@ -44,6 +44,7 @@ run_checked(
 
 set(package_prefixes
     "${stage_dir};${salts_root};${salts_utils_root};${rules_forge_root}")
+string(REPLACE ";" "\\;" package_prefixes_arg "${package_prefixes}")
 run_checked(
   "consumer configure"
   "${CMAKE_COMMAND}" -E env
@@ -53,7 +54,7 @@ run_checked(
   "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"
   -G "${TURBO_FLOW_GENERATOR}"
   "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DCMAKE_PREFIX_PATH=${package_prefixes}")
+  "-DCMAKE_PREFIX_PATH=${package_prefixes_arg}")
 
 run_checked(
   "consumer build"

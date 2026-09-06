@@ -337,7 +337,14 @@ synchronous with respect to the message envelope: they return only after they
 no longer depend on the current dispatch-owned message.
 
 `turbo_flow_publish()` remains synchronous and accepts concurrent producer
-calls. `turbo_flow_publish_batch()` executes an ordered producer callback under
+calls. It constructs a one-value managed CFlow Publisher, opens a Reactive run
+on an inline Scheduler, requests one value, and waits for the terminal result;
+there is no direct native fallback. The public `turbo_flow_run_*` boundary accepts
+typed Publishers, preserves exact demand across `WAIT`, and distinguishes full
+Scheduler admission from closed ingress and post-admission graph failure. A null
+Scheduler selects the Flow-owned bounded worker Scheduler. Each run owns its
+Subscription and first terminal result; the Flow owns the bounded registry of
+non-terminal runs. `turbo_flow_publish_batch()` executes an ordered producer callback under
 one publication admission and source lookup, cleans each transient message after
 its attempt, stops at the first failure, and reports the successful prefix without
 changing per-message graph execution or ownership.
@@ -367,10 +374,11 @@ inline execution. Socket queue/byte rejection fails the current receive.
 Protocol Graph admission returns `PENDING`, invokes one worker completion, and
 requires the host to marshal settlement back to the serialized protocol owner.
 
-Stop first closes publish admission, asks adapters to
-interrupt pending work, drains all already accepted calls, and only then
-destroys async ingress, data planes, and executors; a new call after admission
-closes returns `SALTS_ESHUTDOWN`.
+Stop first closes publish admission, asks adapters to interrupt pending work,
+closes the asynchronous ingress, cancels independent Reactive runs, drains
+already accepted synchronous facades, waits for the CFlow Scheduler to become
+idle, and only then destroys data planes and executors. A new call after
+admission closes returns `SALTS_ESHUTDOWN`.
 
 Reorder boundaries issue their own contiguous tickets only for publications
 that can reach that boundary. A publication that is filtered, fails upstream,

@@ -7,6 +7,8 @@
 #include "turbo_flow_security.h"
 #include "salts_thread.h"
 
+#include <cflow/publishers.h>
+
 #include <inttypes.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -848,6 +850,39 @@ static void bench_publish_message(turbo_flow_t *flow, const char *source_name,
   check_equal(turbo_flow_publish(flow, source_name, msg), SALTS_OK);
 }
 
+static int bench_publish_prepare_clone(void *ctx, size_t index, turbo_flow_msg_t *message) {
+  (void)index;
+  return turbo_flow_msg_clone(message, (const turbo_flow_msg_t *)ctx);
+}
+
+static int bench_publish_native_baseline(turbo_flow_t *flow, turbo_flow_msg_t *msg) {
+  turbo_flow_publish_batch_config_t config = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
+  size_t published = 0u;
+  config.message_count = 1u;
+  config.prepare = bench_publish_prepare_clone;
+  config.ctx = msg;
+  return turbo_flow_publish_batch(flow, "input", &config, &published);
+}
+
+static int bench_publish_reactive_once(turbo_flow_t *flow, const turbo_flow_msg_t *msg,
+                                       cflow_scheduler *scheduler) {
+  turbo_flow_run_config_t config = TURBO_FLOW_RUN_CONFIG_INIT;
+  turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+  turbo_flow_run_t *run = NULL;
+  cflow_publisher publisher = {0};
+  int rc;
+  config.scheduler = scheduler;
+  if (!cflow_publisher_from_array(&publisher, turbo_flow_message_type(), msg, 1u)) {
+    return SALTS_ENOMEM;
+  }
+  rc = turbo_flow_run_open(flow, "input", &publisher, &config, &run);
+  if (rc == SALTS_OK) rc = turbo_flow_run_request(run, 1u);
+  if (rc == SALTS_OK) rc = turbo_flow_run_wait(run, UINT64_MAX, &result);
+  turbo_flow_run_close(run);
+  if (cflow_publisher_valid(&publisher)) cflow_publisher_destroy(&publisher);
+  return rc;
+}
+
 spec("Turbo Flow Bench") {
   bench("reachability") {
     enum { FLOW_BENCH_REACHABILITY_STAGES = 512 };
@@ -1028,10 +1063,28 @@ spec("Turbo Flow Bench") {
     {
       turbo_flow_t *flow = bench_create_started_flow(
           linear_src, linear_stages, sizeof(linear_stages) / sizeof(linear_stages[0]));
-      benchmark("stage_plan=linear-3-stage executor=inline workers=1 payload_bytes=7 publish",
+      cflow_scheduler scheduler = {0};
+      int native_status = SALTS_OK;
+      int reactive_status = SALTS_OK;
+      check_true(cflow_scheduler_inline_init(&scheduler));
+      benchmark("stage_plan=linear-3-stage runtime=native-batch-1-baseline executor=inline workers=1 "
+                "payload_bytes=7 publish",
+                FLOW_BENCH_PUBLISH_ITERS, 1) {
+        native_status = bench_publish_native_baseline(flow, &msg);
+      }
+      check_equal(native_status, SALTS_OK);
+      benchmark("stage_plan=linear-3-stage runtime=reactive-run scheduler=borrowed-inline "
+                "workers=1 payload_bytes=7 publish",
+                FLOW_BENCH_PUBLISH_ITERS, 1) {
+        reactive_status = bench_publish_reactive_once(flow, &msg, &scheduler);
+      }
+      check_equal(reactive_status, SALTS_OK);
+      benchmark("stage_plan=linear-3-stage runtime=reactive-sync-facade executor=inline workers=1 "
+                "payload_bytes=7 publish",
                 FLOW_BENCH_PUBLISH_ITERS, 1) {
         bench_publish_message(flow, "input", &msg);
       }
+      cflow_scheduler_destroy(&scheduler);
       bench_destroy_started_flow(flow);
     }
 

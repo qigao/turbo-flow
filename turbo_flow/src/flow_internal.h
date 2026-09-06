@@ -500,6 +500,9 @@ struct turbo_flow_s {
   vec_t pool_records;
   vec_t resource_command_history;
   vec_t event_observers;
+  vec_t active_runs;
+  cflow_scheduler reactive_scheduler;
+  int reactive_scheduler_initialized;
   uint64_t runtime_generation;
   atomic_uint_fast64_t next_sequence;
   atomic_uint_fast64_t observer_failures;
@@ -526,6 +529,7 @@ void flow_clear_error(turbo_flow_t *flow);
 void flow_publish_error_context_begin(turbo_flow_t *flow);
 void flow_publish_error_context_end(turbo_flow_t *flow);
 int flow_error_code(const turbo_flow_t *flow);
+const cmeta_type_desc *flow_message_type_descriptor(void);
 int flow_observer_event_enabled(const turbo_flow_t *flow,
                                 turbo_flow_observe_event_kind_t kind);
 int flow_observer_has_handlers(const turbo_flow_t *flow);
@@ -599,6 +603,16 @@ void flow_clear_registry(turbo_flow_t *flow);
 int flow_build_runtime_plan(turbo_flow_t *flow);
 void flow_close_publish_admission(turbo_flow_t *flow);
 void flow_wait_for_publishes(turbo_flow_t *flow);
+int flow_reactive_runtime_start(turbo_flow_t *flow);
+void flow_reactive_runtime_cancel(turbo_flow_t *flow);
+void flow_reactive_runtime_stop(turbo_flow_t *flow);
+int flow_publish_message_entered(turbo_flow_t *flow, const char *source_name,
+                                 int resolved_source_index, const turbo_flow_msg_t *msg,
+                                 turbo_flow_publish_result_t *result);
+int flow_run_open_internal(turbo_flow_t *flow, const char *source_name,
+                           cflow_publisher *publisher,
+                           const turbo_flow_run_config_t *config, int drain_on_stop,
+                           turbo_flow_run_t **run_out);
 int flow_pool_record_add(turbo_flow_t *flow, turbo_flow_pool_kind_t kind, uint32_t stage_index,
                          uint32_t parallelism, uint64_t queue_capacity, uint64_t resource_capacity,
                          size_t *index);
