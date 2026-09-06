@@ -1,4 +1,5 @@
 add_library(tf_cnet_adapter SHARED
+  src/turbo_flow_cnet_listener_source.c
   src/turbo_flow_cnet_stream_source.c
   include/turbo_flow_cnet.h)
 cmake_config_target(
