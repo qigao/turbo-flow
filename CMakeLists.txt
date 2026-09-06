@@ -115,6 +115,7 @@ include(FindTools)
 add_subdirectory(vendor)
 
 add_subdirectory(turbo_flow)
+add_subdirectory(io/cnet)
   add_subdirectory(security)
   add_subdirectory(codec)
   add_subdirectory(observe)
@@ -130,6 +131,7 @@ foreach(
      turbo_flow_graph
      turbo_flow_product
      turbo_flow
+     tf_cnet_adapter
      tf_protocol
      tf_protocol_graph
      tf_protocol_mqtt_sn

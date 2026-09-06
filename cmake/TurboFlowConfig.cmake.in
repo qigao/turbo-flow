@@ -10,6 +10,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowTargets.cmake")
 
 set(TurboFlow_Config_FOUND TRUE)
 set(TurboFlow_Graph_FOUND TRUE)
+set(TurboFlow_CNetAdapter_FOUND TRUE)
 set(TurboFlow_Product_FOUND TRUE)
 set(TurboFlow_Flow_FOUND TRUE)
 set(TurboFlow_Codec_FOUND TRUE)
