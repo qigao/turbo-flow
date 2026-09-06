@@ -232,7 +232,7 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
   }
   salts_mutex_unlock(&run->mutex);
 
-  if (!run->drain_on_stop && flow->has_async_terminal_stage) {
+  if (!run->drain_on_stop && flow->has_async_stage) {
     flow_run_retain(run);
     salts_mutex_lock(&run->mutex);
     ++run->pending_values;

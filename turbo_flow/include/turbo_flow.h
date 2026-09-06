@@ -1152,6 +1152,59 @@ TURBO_FLOW_C_API int
 turbo_flow_async_terminal_complete(turbo_flow_async_terminal_claim_t *claim, int status,
                                    const turbo_flow_settlement_result_t *settlement);
 
+#define TURBO_FLOW_ASYNC_EMIT_API_VERSION 1u
+
+/**
+ * Move-only ownership of one deferred 0..1-output stage attempt.
+ *
+ * A successful adapter submission must move the claim into exactly one owner.
+ * Completion with a message moves one self-contained output into the graph and
+ * resumes downstream from the deferred stage. Completion with `SALTS_OK` and a
+ * NULL output represents an empty flat-map result. Any non-OK status is a
+ * terminal publication error and requires a NULL output.
+ */
+typedef struct turbo_flow_async_emit_claim_s {
+  size_t size;
+  uint32_t version;
+  void *_impl;
+} turbo_flow_async_emit_claim_t;
+
+#define TURBO_FLOW_ASYNC_EMIT_CLAIM_INIT                                                           \
+  {sizeof(turbo_flow_async_emit_claim_t), TURBO_FLOW_ASYNC_EMIT_API_VERSION, NULL}
+
+typedef int (*turbo_flow_async_emit_submit_fn)(void *ctx, turbo_flow_t *flow,
+                                               const turbo_flow_stage_plan_t *stage,
+                                               const turbo_flow_msg_t *message,
+                                               turbo_flow_async_emit_claim_t *claim);
+
+typedef struct turbo_flow_async_emit_adapter_ops_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_async_emit_submit_fn submit;
+} turbo_flow_async_emit_adapter_ops_t;
+
+#define TURBO_FLOW_ASYNC_EMIT_ADAPTER_OPS_INIT                                                     \
+  {sizeof(turbo_flow_async_emit_adapter_ops_t), TURBO_FLOW_ASYNC_EMIT_API_VERSION, NULL}
+
+/** Move a live deferred-output claim; rejection leaves both values unchanged. */
+TURBO_FLOW_C_API int
+turbo_flow_async_emit_claim_move(turbo_flow_async_emit_claim_t *destination,
+                                 turbo_flow_async_emit_claim_t *source);
+
+/** Borrow the retained input message while the claim remains live. */
+TURBO_FLOW_C_API const turbo_flow_msg_t *
+turbo_flow_async_emit_claim_message(const turbo_flow_async_emit_claim_t *claim);
+
+/**
+ * Consume one live claim exactly once.
+ *
+ * On successful validation a non-NULL output is moved and reset before return.
+ * The publication's terminal status is delivered through its asynchronous
+ * completion callback after all resumed downstream work settles.
+ */
+TURBO_FLOW_C_API int turbo_flow_async_emit_complete(turbo_flow_async_emit_claim_t *claim,
+                                                    int status, turbo_flow_msg_t *output);
+
 /**
  * Core-owned iterator for one native adapter batch.
  *
@@ -2053,6 +2106,11 @@ TURBO_FLOW_C_API int
 turbo_flow_register_adapter_async_terminal(turbo_flow_t *flow, const char *name,
                                            const turbo_flow_async_terminal_adapter_ops_t *ops);
 
+/** Attach an asynchronous 0..1-output stage submit contract before compile. */
+TURBO_FLOW_C_API int
+turbo_flow_register_adapter_async_emit(turbo_flow_t *flow, const char *name,
+                                       const turbo_flow_async_emit_adapter_ops_t *ops);
+
 /** Attach an explicit settlement owner to an existing adapter before compile. */
 TURBO_FLOW_C_API int turbo_flow_register_adapter_settlement(turbo_flow_t *flow, const char *name,
                                                      const turbo_flow_settlement_owner_ops_t *ops,
@@ -2084,6 +2142,12 @@ TURBO_FLOW_C_API int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const ch
 TURBO_FLOW_C_API int turbo_flow_register_async_terminal_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_adapter_ops_t *adapter_ops,
     const turbo_flow_async_terminal_adapter_ops_t *async_ops, void *ctx,
+    const turbo_flow_adapter_schema_t *schema);
+
+/** Atomically register a transform adapter with an asynchronous 0..1-output contract. */
+TURBO_FLOW_C_API int turbo_flow_register_async_emit_adapter_ex(
+    turbo_flow_t *flow, const char *name, const turbo_flow_adapter_ops_t *adapter_ops,
+    const turbo_flow_async_emit_adapter_ops_t *async_ops, void *ctx,
     const turbo_flow_adapter_schema_t *schema);
 
 /** Atomically register one adapter and zero or more independently addressable resources. */

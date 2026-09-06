@@ -1,11 +1,16 @@
 #include <turbo_flow.h>
 #include <turbo_flow_cnet.h>
+#include <turbo_flow_chttp.h>
 
 int main(void) {
   turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
   turbo_flow_run_result_t run_result = TURBO_FLOW_RUN_RESULT_INIT;
   turbo_flow_async_terminal_claim_t terminal_claim = TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
   turbo_flow_async_terminal_adapter_ops_t terminal_ops = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
+  turbo_flow_async_emit_claim_t emit_claim = TURBO_FLOW_ASYNC_EMIT_CLAIM_INIT;
+  turbo_flow_async_emit_adapter_ops_t emit_ops = TURBO_FLOW_ASYNC_EMIT_ADAPTER_OPS_INIT;
+  turbo_flow_chttp_client_config_t chttp_config = TURBO_FLOW_CHTTP_CLIENT_CONFIG_INIT;
+  turbo_flow_chttp_client_snapshot_t chttp_snapshot = TURBO_FLOW_CHTTP_CLIENT_SNAPSHOT_INIT;
   turbo_flow_cnet_stream_source_config_t cnet_config = TURBO_FLOW_CNET_STREAM_SOURCE_CONFIG_INIT;
   turbo_flow_cnet_listener_source_config_t listener_config =
       TURBO_FLOW_CNET_LISTENER_SOURCE_CONFIG_INIT;
@@ -94,6 +99,10 @@ int main(void) {
       terminal_claim.version != TURBO_FLOW_ASYNC_TERMINAL_API_VERSION ||
       terminal_ops.version != TURBO_FLOW_ASYNC_TERMINAL_API_VERSION || !terminal_move ||
       !terminal_complete ||
+      emit_claim.version != TURBO_FLOW_ASYNC_EMIT_API_VERSION ||
+      emit_ops.version != TURBO_FLOW_ASYNC_EMIT_API_VERSION ||
+      chttp_config.version != TURBO_FLOW_CHTTP_CLIENT_API_VERSION ||
+      chttp_snapshot.version != TURBO_FLOW_CHTTP_CLIENT_API_VERSION ||
       cnet_config.version != TURBO_FLOW_CNET_STREAM_SOURCE_API_VERSION ||
       listener_config.version != TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION ||
       listener_snapshot.version != TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION ||

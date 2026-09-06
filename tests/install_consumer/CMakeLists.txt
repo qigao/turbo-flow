@@ -10,6 +10,7 @@ target_link_libraries(
   PRIVATE TurboFlow::Config
           TurboFlow::Graph
           TurboFlow::CNetAdapter
+          TurboFlow::CHTTPAdapter
           TurboFlow::Product
           TurboFlow::Flow
           TurboFlow::ProtocolIngress

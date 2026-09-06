@@ -118,6 +118,8 @@ static int flow_dispatch_sync_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *
   if (adapter && !executor->fn) {
     if (adapter->async_terminal_ops.submit) {
       status = flow_async_terminal_submit_stage(flow, stage, adapter, msg, completion);
+    } else if (adapter->async_emit_ops.submit) {
+      status = flow_async_emit_submit_stage(flow, stage, adapter, msg, completion);
     } else {
       status = flow_adapter_consume_stage(flow, stage, adapter, msg);
     }
@@ -179,7 +181,8 @@ int flow_dispatch_validate_stage(turbo_flow_t *flow, uint32_t stage_index) {
   if (!executor->fn && !executor->emit_fn && !executor->keyed_fn && !executor->keyed_emit_fn &&
       !executor->window_fn) {
     const flow_adapter_registration_t *adapter = flow_adapter_for_compiled_stage(flow, stage_index);
-    if (adapter && (adapter->ops.consume || adapter->async_terminal_ops.submit)) return SALTS_OK;
+    if (adapter && (adapter->ops.consume || adapter->async_terminal_ops.submit ||
+                    adapter->async_emit_ops.submit)) return SALTS_OK;
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "executor callback is not available");
   }
