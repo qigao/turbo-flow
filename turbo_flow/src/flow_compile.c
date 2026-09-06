@@ -334,6 +334,7 @@ cleanup:
 static int compile_validate_registrations(turbo_flow_t *flow) {
   size_t i;
 
+  flow->has_async_terminal_stage = 0;
   for (i = 0; i < vec_size(&flow->stages); ++i) {
     flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, i);
     int reg_index = flow_find_registration(flow, stage->name);
@@ -355,6 +356,24 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
       if (!adapter) {
         return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "stage or source adapter is not registered");
+      }
+      if (adapter->async_terminal_ops.submit) {
+        size_t edge_index;
+        flow->has_async_terminal_stage = 1;
+        if (stage->is_source || stage->is_port || stage->exec.kind != TURBO_FLOW_EXEC_INLINE ||
+            stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL || stage->retry.max_attempts > 1u ||
+            stage->reorder.capacity > 0u) {
+          return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
+                                "async terminal adapter requires a direct inline terminal stage");
+        }
+        for (edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
+          const flow_edge_plan_impl_t *edge =
+              (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
+          if (edge && edge->from_stage == (uint32_t)i) {
+            return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
+                                  "async terminal adapter stage must not have outgoing edges");
+          }
+        }
       }
       if (adapter->schema.roles != 0) {
         uint32_t roles = adapter->schema.roles;
@@ -438,12 +457,14 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
     }
 
     if (!stage->is_source && !stage->is_port && reg_index < 0 && provider_index < 0 &&
-        (!adapter || !adapter->ops.consume)) {
-      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
-                            "stage callback, operation provider, or adapter consume callback is not registered");
+        (!adapter || (!adapter->ops.consume && !adapter->async_terminal_ops.submit))) {
+      return flow_set_error(
+          flow, SALTS_EINVAL, stage->line, stage->column,
+          "stage callback, operation provider, or adapter consume callback is not registered");
     }
     if (!stage->is_source && !stage->is_port && reg_index < 0 && provider_index < 0 && adapter &&
-        adapter->ops.consume && stage->exec.kind != TURBO_FLOW_EXEC_INLINE) {
+        (adapter->ops.consume || adapter->async_terminal_ops.submit) &&
+        stage->exec.kind != TURBO_FLOW_EXEC_INLINE) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "adapter-owned consume requires the inline executor");
     }
@@ -692,6 +713,11 @@ static int compile_validate_operation_runtime(turbo_flow_t *flow,
     return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                           "source operation deadline requires an adapter owner contract");
   }
+  if (adapter && adapter->async_terminal_ops.submit && runtime->deadline_ms != 0u) {
+    return flow_set_error(
+        flow, SALTS_ENOTSUP, stage->line, stage->column,
+        "async terminal operation deadline requires adapter-owned timeout completion");
+  }
   if (stage->is_source && runtime->settlement != 0u) {
     return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                           "source settlement requires an ingress owner completion contract");
@@ -829,7 +855,8 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
     if (operation->scope.concurrency == TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT &&
         ((stage->is_source && !stage->adapter_name) ||
          (!stage->is_source &&
-          (!adapter || !adapter->ops.consume || stage->exec.kind != TURBO_FLOW_EXEC_INLINE)))) {
+          (!adapter || (!adapter->ops.consume && !adapter->async_terminal_ops.submit) ||
+           stage->exec.kind != TURBO_FLOW_EXEC_INLINE)))) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             stage->is_source
                                 ? "owner-context source operation requires an adapter owner"

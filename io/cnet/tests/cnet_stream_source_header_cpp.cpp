@@ -27,3 +27,12 @@ extern "C" int cnet_packet_source_header_cpp_probe(void) {
              ? 0
              : 1;
 }
+
+extern "C" int cnet_terminal_sink_header_cpp_probe(void) {
+  turbo_flow_cnet_stream_sink_config_t stream = TURBO_FLOW_CNET_STREAM_SINK_CONFIG_INIT;
+  turbo_flow_cnet_datagram_sink_config_t datagram = TURBO_FLOW_CNET_DATAGRAM_SINK_CONFIG_INIT;
+  return stream.version == TURBO_FLOW_CNET_STREAM_SINK_API_VERSION &&
+                 datagram.version == TURBO_FLOW_CNET_DATAGRAM_SINK_API_VERSION
+             ? 0
+             : 1;
+}

@@ -1101,6 +1101,57 @@ typedef struct turbo_flow_adapter_ops_s {
   turbo_flow_adapter_command_fn command;
 } turbo_flow_adapter_ops_t;
 
+#define TURBO_FLOW_ASYNC_TERMINAL_API_VERSION 1u
+
+/**
+ * Move-only ownership of one deferred terminal stage attempt.
+ *
+ * The core creates a claim for an asynchronous publication. A successful
+ * adapter submit callback moves it to an explicit owner. Completing the moved
+ * claim releases its retained message and invalidates the claim value.
+ */
+typedef struct turbo_flow_async_terminal_claim_s {
+  size_t size;
+  uint32_t version;
+  void *_impl;
+} turbo_flow_async_terminal_claim_t;
+
+#define TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT                                                       \
+  {sizeof(turbo_flow_async_terminal_claim_t), TURBO_FLOW_ASYNC_TERMINAL_API_VERSION, NULL}
+
+typedef int (*turbo_flow_async_terminal_submit_fn)(void *ctx, turbo_flow_t *flow,
+                                                   const turbo_flow_stage_plan_t *stage,
+                                                   const turbo_flow_msg_t *message,
+                                                   turbo_flow_async_terminal_claim_t *claim);
+
+typedef struct turbo_flow_async_terminal_adapter_ops_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_async_terminal_submit_fn submit;
+} turbo_flow_async_terminal_adapter_ops_t;
+
+#define TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT                                                 \
+  {sizeof(turbo_flow_async_terminal_adapter_ops_t), TURBO_FLOW_ASYNC_TERMINAL_API_VERSION, NULL}
+
+/** Move a live claim; rejection leaves both claim values unchanged. */
+TURBO_FLOW_C_API int
+turbo_flow_async_terminal_claim_move(turbo_flow_async_terminal_claim_t *destination,
+                                     turbo_flow_async_terminal_claim_t *source);
+
+/** Borrow the retained message while the claim remains live. */
+TURBO_FLOW_C_API const turbo_flow_msg_t *
+turbo_flow_async_terminal_claim_message(const turbo_flow_async_terminal_claim_t *claim);
+
+/**
+ * Consume one live claim with its authoritative terminal result.
+ *
+ * `settlement` is copied before return and may be NULL when the stage does not
+ * report an explicit settlement action.
+ */
+TURBO_FLOW_C_API int
+turbo_flow_async_terminal_complete(turbo_flow_async_terminal_claim_t *claim, int status,
+                                   const turbo_flow_settlement_result_t *settlement);
+
 /**
  * Core-owned iterator for one native adapter batch.
  *
@@ -1997,6 +2048,11 @@ TURBO_FLOW_C_API int turbo_flow_register_stage_with_resources(
 TURBO_FLOW_C_API int turbo_flow_register_adapter(turbo_flow_t *flow, const char *name,
                                           const turbo_flow_adapter_ops_t *ops, void *ctx);
 
+/** Attach an asynchronous terminal-stage submit contract before compile. */
+TURBO_FLOW_C_API int
+turbo_flow_register_adapter_async_terminal(turbo_flow_t *flow, const char *name,
+                                           const turbo_flow_async_terminal_adapter_ops_t *ops);
+
 /** Attach an explicit settlement owner to an existing adapter before compile. */
 TURBO_FLOW_C_API int turbo_flow_register_adapter_settlement(turbo_flow_t *flow, const char *name,
                                                      const turbo_flow_settlement_owner_ops_t *ops,
@@ -2023,6 +2079,12 @@ TURBO_FLOW_C_API int turbo_flow_register_resource_provider(turbo_flow_t *flow, c
 TURBO_FLOW_C_API int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
                                              const turbo_flow_adapter_ops_t *ops, void *ctx,
                                              const turbo_flow_adapter_schema_t *schema);
+
+/** Atomically register an adapter together with its asynchronous terminal contract. */
+TURBO_FLOW_C_API int turbo_flow_register_async_terminal_adapter_ex(
+    turbo_flow_t *flow, const char *name, const turbo_flow_adapter_ops_t *adapter_ops,
+    const turbo_flow_async_terminal_adapter_ops_t *async_ops, void *ctx,
+    const turbo_flow_adapter_schema_t *schema);
 
 /** Atomically register one adapter and zero or more independently addressable resources. */
 TURBO_FLOW_C_API int turbo_flow_register_adapter_with_resources(

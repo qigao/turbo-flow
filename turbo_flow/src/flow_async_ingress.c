@@ -12,6 +12,16 @@ typedef struct flow_async_publish_task_s {
   size_t reserved_bytes;
 } flow_async_publish_task_t;
 
+static void flow_async_ingress_release(turbo_flow_t *flow, size_t bytes);
+
+static void flow_async_publish_task_finish(void *arg, const turbo_flow_publish_result_t *result) {
+  flow_async_publish_task_t *task = (flow_async_publish_task_t *)arg;
+  turbo_flow_msg_cleanup(&task->message);
+  flow_async_ingress_release(task->flow, task->reserved_bytes);
+  if (task->completion) task->completion(task->completion_ctx, result);
+  flow_publish_leave(task->flow);
+  free(task);
+}
 static int flow_async_ingress_config_resolve(const turbo_flow_async_ingress_config_t *config,
                                              turbo_flow_async_ingress_config_t *resolved) {
   turbo_flow_async_ingress_config_t effective = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
@@ -128,20 +138,33 @@ void flow_stop_async_ingress(turbo_flow_t *flow) {
 
 static void flow_async_publish_task_run(void *arg) {
   flow_async_publish_task_t *task = (flow_async_publish_task_t *)arg;
+  turbo_flow_t *flow = task->flow;
   turbo_flow_publish_result_t result = TURBO_FLOW_PUBLISH_RESULT_INIT;
+  flow_async_publication_t *publication;
   uint64_t observe_start = 0u;
 
-  flow_publish_error_context_begin(task->flow);
-  flow_clear_error(task->flow);
-  if (flow_observer_has_handlers(task->flow)) observe_start = salts_hrtime();
-  (void)flow_publish_local(task->flow, task->source_name, task->source_index, &task->message,
-                           observe_start, &result);
-  turbo_flow_msg_cleanup(&task->message);
-  flow_async_ingress_release(task->flow, task->reserved_bytes);
-  flow_publish_error_context_end(task->flow);
-  if (task->completion) task->completion(task->completion_ctx, &result);
-  flow_publish_leave(task->flow);
-  free(task);
+  flow_publish_error_context_begin(flow);
+  flow_clear_error(flow);
+  if (flow_observer_has_handlers(flow)) observe_start = salts_hrtime();
+  if (!flow->has_async_terminal_stage) {
+    (void)flow_publish_local(flow, task->source_name, task->source_index, &task->message,
+                             observe_start, &result, NULL);
+    flow_publish_error_context_end(flow);
+    flow_async_publish_task_finish(task, &result);
+    return;
+  }
+  publication = flow_async_publication_create(flow, task->source_name, &task->message,
+                                              observe_start, flow_async_publish_task_finish, task);
+  if (!publication) {
+    result.status = SALTS_ENOMEM;
+    flow_publish_error_context_end(flow);
+    flow_async_publish_task_finish(task, &result);
+    return;
+  }
+  (void)flow_publish_local(flow, task->source_name, task->source_index, &task->message,
+                           observe_start, &result, publication);
+  flow_publish_error_context_end(flow);
+  flow_async_publication_owner_leave(publication);
 }
 
 int turbo_flow_publish_async(turbo_flow_t *flow, const char *source_name,

@@ -472,9 +472,9 @@ int turbo_flow_stop(turbo_flow_t *flow) {
   salts_cond_broadcast(&flow->runtime_cond);
   salts_mutex_unlock(&flow->runtime_mutex);
 
-  flow_stop_adapters(flow);
   flow_stop_async_ingress(flow);
   flow_reactive_runtime_cancel(flow);
+  flow_stop_adapters(flow);
   flow_wait_for_publishes(flow);
   flow_reactive_runtime_stop(flow);
   flow_stop_data_planes(flow);
@@ -659,6 +659,10 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
       flow_clear_error(flow);
       continue;
     }
+    if (completion.async_pending) {
+      done[stage_index] = 1u;
+      continue;
+    }
     rc = flow_apply_completion(flow, &completion, message, done, reachable, remaining, activated,
                                queue, stage_count, &tail, skipped_queue, stage_count);
     if (rc != SALTS_OK) goto cleanup;
@@ -727,7 +731,8 @@ cleanup_watermark:
 
 int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t source_index,
                        turbo_flow_msg_t *local, uint64_t observe_start,
-                       turbo_flow_publish_result_t *result) {
+                       turbo_flow_publish_result_t *result,
+                       flow_async_publication_t *async_publication) {
   turbo_flow_observe_event_t event;
   int rc;
 
@@ -752,6 +757,11 @@ int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t sou
     rc = flow_run_message_from_stage(flow, source_index, local);
   }
 
+  if (async_publication) {
+    result->status = rc;
+    flow_async_publication_seal(async_publication, rc);
+    return rc;
+  }
   if (flow->observer_ops.message_complete) {
     flow->observer_ops.message_complete(flow->observer_ctx, source_name, local,
                                         salts_hrtime() - observe_start, rc);
@@ -792,11 +802,13 @@ static int flow_publish_source_index(turbo_flow_t *flow, const char *source_name
 
 int flow_publish_message_entered(turbo_flow_t *flow, const char *source_name,
                                  int resolved_source_index, const turbo_flow_msg_t *msg,
-                                 turbo_flow_publish_result_t *result) {
+                                 turbo_flow_publish_result_t *result,
+                                 flow_async_publication_t *async_publication) {
   turbo_flow_msg_t local;
   uint32_t source_index = 0u;
   uint64_t observe_start = 0u;
   int local_initialized = 0;
+  int async_sealed = 0;
   int rc;
 
   if (flow_observer_has_handlers(flow)) observe_start = salts_hrtime();
@@ -825,9 +837,12 @@ int flow_publish_message_entered(turbo_flow_t *flow, const char *source_name,
     goto cleanup;
   }
   local_initialized = 1;
-  rc = flow_publish_local(flow, source_name, source_index, &local, observe_start, result);
+  rc = flow_publish_local(flow, source_name, source_index, &local, observe_start, result,
+                          async_publication);
+  async_sealed = async_publication != NULL;
 
 cleanup:
+  if (async_publication && !async_sealed) flow_async_publication_seal(async_publication, rc);
   if (local_initialized) turbo_flow_msg_cleanup(&local);
   result->status = rc;
   return rc;
@@ -1060,8 +1075,8 @@ int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
       turbo_flow_msg_cleanup(&message);
       break;
     }
-    rc = flow_publish_message_entered(flow, source_name, (int)source_index, &message,
-                                      &result);
+    rc =
+        flow_publish_message_entered(flow, source_name, (int)source_index, &message, &result, NULL);
     turbo_flow_msg_cleanup(&message);
     if (rc != SALTS_OK) break;
     if (published) *published = index + 1u;

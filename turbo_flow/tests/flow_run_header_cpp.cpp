@@ -9,3 +9,11 @@ extern "C" int flow_run_cpp_header_probe(void) {
              ? 0
              : 1;
 }
+extern "C" int flow_async_terminal_cpp_header_probe(void) {
+  turbo_flow_async_terminal_claim_t claim = TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
+  turbo_flow_async_terminal_adapter_ops_t ops = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
+  return claim.version == TURBO_FLOW_ASYNC_TERMINAL_API_VERSION &&
+                 ops.version == TURBO_FLOW_ASYNC_TERMINAL_API_VERSION
+             ? 0
+             : 1;
+}

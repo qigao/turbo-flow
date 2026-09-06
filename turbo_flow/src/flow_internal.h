@@ -87,6 +87,7 @@ typedef struct flow_adapter_operation_binding_s {
 typedef struct flow_adapter_registration_s {
   tstr name;
   turbo_flow_adapter_ops_t ops;
+  turbo_flow_async_terminal_adapter_ops_t async_terminal_ops;
   turbo_flow_adapter_consume_batch_fn consume_batch;
   void *ctx;
   turbo_flow_settlement_owner_ops_t settlement_ops;
@@ -300,6 +301,9 @@ struct turbo_flow_emitter_s {
 };
 
 typedef struct flow_stage_completion_s flow_stage_completion_t;
+typedef struct flow_async_publication_s flow_async_publication_t;
+typedef void (*flow_async_publication_finish_fn)(void *ctx,
+                                                 const turbo_flow_publish_result_t *result);
 
 typedef enum flow_entry_ownership_e {
   FLOW_ENTRY_OWNERSHIP_BORROWED = 0,
@@ -341,6 +345,8 @@ struct flow_stage_completion_s {
   flow_entry_header_t entry;
   int status;
   int terminal;
+  int async_pending;
+  uint64_t async_started_at;
   int settlement_reported;
   int settlement_duplicate;
   turbo_flow_settlement_result_t settlement;
@@ -473,6 +479,7 @@ typedef struct flow_event_observer_registration_s {
 
 struct turbo_flow_s {
   turbo_flow_state_t state;
+  int has_async_terminal_stage;
   vec_t stages;
   vec_t edges;
   flow_compiled_plan_t compiled_plan;
@@ -608,9 +615,9 @@ void flow_reactive_runtime_cancel(turbo_flow_t *flow);
 void flow_reactive_runtime_stop(turbo_flow_t *flow);
 int flow_publish_message_entered(turbo_flow_t *flow, const char *source_name,
                                  int resolved_source_index, const turbo_flow_msg_t *msg,
-                                 turbo_flow_publish_result_t *result);
-int flow_run_open_internal(turbo_flow_t *flow, const char *source_name,
-                           cflow_publisher *publisher,
+                                 turbo_flow_publish_result_t *result,
+                                 flow_async_publication_t *async_publication);
+int flow_run_open_internal(turbo_flow_t *flow, const char *source_name, cflow_publisher *publisher,
                            const turbo_flow_run_config_t *config, int drain_on_stop,
                            turbo_flow_run_t **run_out);
 int flow_pool_record_add(turbo_flow_t *flow, turbo_flow_pool_kind_t kind, uint32_t stage_index,
@@ -644,6 +651,16 @@ TURBO_FLOW_C_API const flow_adapter_registration_t *
 flow_adapter_for_compiled_stage(const turbo_flow_t *flow, uint32_t stage_index);
 int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
                                const flow_adapter_registration_t *adapter, turbo_flow_msg_t *msg);
+int flow_async_terminal_submit_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
+                                     const flow_adapter_registration_t *adapter,
+                                     turbo_flow_msg_t *msg, flow_stage_completion_t *completion);
+flow_async_publication_t *flow_async_publication_create(turbo_flow_t *flow, const char *source_name,
+                                                        const turbo_flow_msg_t *message,
+                                                        uint64_t observe_start,
+                                                        flow_async_publication_finish_fn finish,
+                                                        void *ctx);
+void flow_async_publication_seal(flow_async_publication_t *publication, int status);
+void flow_async_publication_owner_leave(flow_async_publication_t *publication);
 int flow_adapter_apply_settlement(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
                                   uint32_t stage_index, turbo_flow_msg_t *msg,
                                   flow_stage_completion_t *completion, int callback_status);
@@ -706,7 +723,8 @@ void flow_publish_leave(turbo_flow_t *flow);
 void flow_stop_async_ingress(turbo_flow_t *flow);
 int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t source_index,
                        turbo_flow_msg_t *local, uint64_t observe_start,
-                       turbo_flow_publish_result_t *result);
+                       turbo_flow_publish_result_t *result,
+                       flow_async_publication_t *async_publication);
 int flow_emitter_init(turbo_flow_emitter_t *emitter, uint32_t max_outputs);
 void flow_emitter_close(turbo_flow_emitter_t *emitter);
 void flow_emitter_cleanup(turbo_flow_emitter_t *emitter);
