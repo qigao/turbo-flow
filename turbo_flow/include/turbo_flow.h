@@ -1101,6 +1101,19 @@ typedef struct turbo_flow_adapter_ops_s {
   turbo_flow_adapter_command_fn command;
 } turbo_flow_adapter_ops_t;
 
+/**
+ * Report a non-success status from the currently executing adapter stop callback.
+ *
+ * This function must be called synchronously on the callback's own thread. The
+ * first reported status is returned by `turbo_flow_stop()`. Before reporting, the
+ * adapter must settle every Flow claim it owns. A failed adapter remains active for
+ * a later `turbo_flow_stop()` retry; adapters that stopped successfully are not
+ * invoked again during that retry.
+ *
+ * @return `SALTS_OK`, or `SALTS_EINVAL` outside a stop callback or for `SALTS_OK`.
+ */
+TURBO_FLOW_C_API int turbo_flow_adapter_report_stop_status(turbo_flow_t *flow, int status);
+
 #define TURBO_FLOW_ASYNC_TERMINAL_API_VERSION 1u
 
 /**
@@ -1721,12 +1734,17 @@ TURBO_FLOW_C_API void turbo_flow_destroy(turbo_flow_t *flow);
 /**
  * Clear parsed/compiled stage plan state.
  *
- * Reset is rejected while the flow is STARTED. When `keep_registry` is non-zero,
- * registered stage callbacks and adapters remain available for the next
- * parse/compile cycle. When zero, the flow returns to an empty NEW state.
+ * Reset is rejected while the flow is STARTED or while a failed adapter stop is
+ * awaiting an explicit `turbo_flow_stop()` retry. When `keep_registry` is
+ * non-zero, registered stage callbacks and adapters remain available for the
+ * next parse/compile cycle. When zero, the flow returns to an empty NEW state.
  */
 TURBO_FLOW_C_API int turbo_flow_reset(turbo_flow_t *flow, int keep_registry);
 
+/**
+ * Parse a graph definition. Parsing is rejected while a failed adapter stop is
+ * awaiting an explicit `turbo_flow_stop()` retry.
+ */
 TURBO_FLOW_C_API int turbo_flow_parse_string(turbo_flow_t *flow, const char *text, size_t len);
 
 /**
@@ -1743,7 +1761,9 @@ TURBO_FLOW_C_API int turbo_flow_compile(turbo_flow_t *flow);
  * Start runtime data planes and executor adapters.
  *
  * Valid from COMPILED and STOPPED. Starting a STOPPED flow reuses the compiled
- * stage plan and recreates runtime rings/adapters.
+ * stage plan and recreates runtime rings/adapters. If start rollback cannot stop
+ * an adapter, the flow enters FAILED and requires an explicit `turbo_flow_stop()`
+ * retry before reset, parse, or another start.
  */
 TURBO_FLOW_C_API int turbo_flow_start(turbo_flow_t *flow);
 
@@ -1785,7 +1805,9 @@ TURBO_FLOW_C_API int turbo_flow_control(turbo_flow_t *flow, const char *text, si
  * Stop a STARTED flow and release runtime-only rings/adapters.
  *
  * The compiled stage plan and registries remain available, so the flow can be
- * started again or reset for another parse/compile cycle.
+ * started again or reset for another parse/compile cycle. If an adapter reports
+ * a stop error, the Flow enters FAILED and retains only failed adapter bindings;
+ * call this function again to retry their stop before restarting.
  */
 TURBO_FLOW_C_API int turbo_flow_stop(turbo_flow_t *flow);
 

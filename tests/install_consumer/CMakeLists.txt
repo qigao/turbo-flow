@@ -1,8 +1,25 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(TurboFlowInstallConsumer LANGUAGES C)
+if(TURBO_FLOW_CONSUMER_CXX_ONLY)
+  project(TurboFlowInstallConsumer LANGUAGES CXX)
+  set_source_files_properties(main.c PROPERTIES LANGUAGE CXX)
+else()
+  project(TurboFlowInstallConsumer LANGUAGES C)
+endif()
 
-find_package(TurboFlow 1.0 CONFIG REQUIRED)
+foreach(required_dir IN ITEMS
+        TurboFlow_DIR Salts_DIR SaltsUtils_DIR RulesForge_DIR)
+  if(NOT DEFINED ${required_dir} OR "${${required_dir}}" STREQUAL "")
+    message(FATAL_ERROR "Missing required package directory: ${required_dir}")
+  endif()
+  if(NOT IS_DIRECTORY "${${required_dir}}")
+    message(FATAL_ERROR
+            "${required_dir} is not a directory: ${${required_dir}}")
+  endif()
+endforeach()
+
+find_package(TurboFlow 1.0 CONFIG REQUIRED
+             PATHS "${TurboFlow_DIR}" NO_DEFAULT_PATH)
 
 add_executable(turbo_flow_install_consumer main.c)
 target_link_libraries(

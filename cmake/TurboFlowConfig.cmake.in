@@ -2,9 +2,32 @@
 
 include(CMakeFindDependencyMacro)
 
-find_dependency(Salts CONFIG REQUIRED)
-find_dependency(SaltsUtils CONFIG REQUIRED)
-find_dependency(RulesForge 0.9 CONFIG REQUIRED)
+foreach(_turbo_flow_dependency_dir IN ITEMS
+        Salts_DIR SaltsUtils_DIR RulesForge_DIR)
+  if(NOT DEFINED ${_turbo_flow_dependency_dir} OR
+     "${${_turbo_flow_dependency_dir}}" STREQUAL "")
+    set(TurboFlow_FOUND FALSE)
+    set(TurboFlow_NOT_FOUND_MESSAGE
+        "TurboFlow requires an explicit ${_turbo_flow_dependency_dir}")
+    return()
+  endif()
+  if(NOT IS_DIRECTORY "${${_turbo_flow_dependency_dir}}")
+    set(TurboFlow_FOUND FALSE)
+    set(TurboFlow_NOT_FOUND_MESSAGE
+        "${_turbo_flow_dependency_dir} is not a directory: ${${_turbo_flow_dependency_dir}}")
+    return()
+  endif()
+endforeach()
+
+find_dependency(Salts CONFIG REQUIRED
+                PATHS "${Salts_DIR}" NO_DEFAULT_PATH)
+find_dependency(SaltsUtils CONFIG REQUIRED
+                PATHS "${SaltsUtils_DIR}" NO_DEFAULT_PATH)
+find_dependency(RulesForge 0.9 CONFIG REQUIRED
+                PATHS "${RulesForge_DIR}" NO_DEFAULT_PATH)
+
+include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowRequireCHTTP.cmake")
+turbo_flow_require_chttp_deferred_cancel()
 
 include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowTargets.cmake")
 

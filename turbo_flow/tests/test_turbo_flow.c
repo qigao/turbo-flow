@@ -139,10 +139,18 @@ typedef struct adapter_ctx_s {
   int source_start_count;
   int stage_start_count;
   int fail_status;
+  int stop_fail_status;
+  int stop_failures_remaining;
   int command_count;
   turbo_flow_adapter_command_kind_t last_command;
   const char *expected_payload;
 } adapter_ctx_t;
+
+typedef struct blocking_stop_adapter_ctx_s {
+  atomic_int entered;
+  atomic_int allow_exit;
+  atomic_int stop_count;
+} blocking_stop_adapter_ctx_t;
 
 typedef struct failure_check_ctx_s {
   const char *stage_name;
@@ -554,9 +562,23 @@ static int test_adapter_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_
 
 static void test_adapter_stop(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage) {
   adapter_ctx_t *adapter = (adapter_ctx_t *)ctx;
-  (void)flow;
   check_not_null(stage);
   adapter->stop_count += 1;
+  if (adapter->stop_failures_remaining > 0) {
+    adapter->stop_failures_remaining -= 1;
+    check_equal(turbo_flow_adapter_report_stop_status(flow, adapter->stop_fail_status), SALTS_OK);
+  }
+}
+
+static void blocking_adapter_stop(void *ctx, turbo_flow_t *flow,
+                                  const turbo_flow_stage_plan_t *stage) {
+  blocking_stop_adapter_ctx_t *adapter = (blocking_stop_adapter_ctx_t *)ctx;
+  (void)flow;
+  check_not_null(stage);
+  atomic_fetch_add_explicit(&adapter->stop_count, 1, memory_order_acq_rel);
+  atomic_store_explicit(&adapter->entered, 1, memory_order_release);
+  while (!atomic_load_explicit(&adapter->allow_exit, memory_order_acquire))
+    salts_thread_yield();
 }
 
 static void test_adapter_shutdown(void *ctx) {
@@ -2029,6 +2051,147 @@ suite("Turbo Flow") {
 
       check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_equal(adapter_ctx.shutdown_count, 2);
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("reports adapter stop failures and retries only failed bindings") {
+      static const char *src = "source input adapter source\n"
+                               "stage output adapter sink\n"
+                               "stage main {\n"
+                               "  input -> output\n"
+                               "}\n";
+      adapter_ctx_t source = {0};
+      adapter_ctx_t sink = {0};
+      turbo_flow_adapter_ops_t ops;
+      turbo_flow_t *flow = turbo_flow_create();
+
+      memset(&ops, 0, sizeof(ops));
+      ops.start = test_adapter_start;
+      ops.stop = test_adapter_stop;
+      ops.consume = test_adapter_consume;
+      source.stop_fail_status = SALTS_EIO;
+      source.stop_failures_remaining = 1;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_adapter_report_stop_status(flow, SALTS_EIO), SALTS_EINVAL);
+      check_equal(turbo_flow_register_adapter(flow, "source", &ops, &source), SALTS_OK);
+      check_equal(turbo_flow_register_adapter(flow, "sink", &ops, &sink), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+
+      check_equal(turbo_flow_stop(flow), SALTS_EIO);
+      check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_FAILED);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_EIO);
+      check_equal(source.stop_count, 1);
+      check_equal(sink.stop_count, 1);
+      check_equal(turbo_flow_start(flow), SALTS_EINVAL);
+      check_equal(turbo_flow_reset(flow, 1), SALTS_EBUSY);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_EBUSY);
+      check_equal(source.stop_count, 1);
+      check_equal(sink.stop_count, 1);
+
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_STOPPED);
+      check_equal(source.stop_count, 2);
+      check_equal(sink.stop_count, 1);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(source.stop_count, 3);
+      check_equal(sink.stop_count, 2);
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("serializes concurrent stop calls before invoking adapters") {
+      static const char *src = "source input adapter blocker\n"
+                               "stage sink\n"
+                               "stage main {\n"
+                               "  input -> sink\n"
+                               "}\n";
+      blocking_stop_adapter_ctx_t adapter;
+      turbo_flow_adapter_ops_t ops;
+      stop_flow_ctx_t first_stop;
+      stop_flow_ctx_t second_stop;
+      salts_thread_t first_thread = NULL;
+      salts_thread_t second_thread = NULL;
+      turbo_flow_t *flow = turbo_flow_create();
+
+      atomic_init(&adapter.entered, 0);
+      atomic_init(&adapter.allow_exit, 0);
+      atomic_init(&adapter.stop_count, 0);
+      memset(&ops, 0, sizeof(ops));
+      ops.stop = blocking_adapter_stop;
+      first_stop.flow = flow;
+      second_stop.flow = flow;
+      atomic_init(&first_stop.result, SALTS_EIO);
+      atomic_init(&second_stop.result, SALTS_EIO);
+
+      check_not_null(flow);
+      check_equal(turbo_flow_register_adapter(flow, "blocker", &ops, &adapter), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+
+      check_equal(salts_thread_create(&first_thread, stop_flow_thread, &first_stop), SALTS_OK);
+      while (!atomic_load_explicit(&adapter.entered, memory_order_acquire))
+        salts_thread_yield();
+      check_equal(turbo_flow_adapter_report_stop_status(flow, SALTS_EIO), SALTS_EINVAL);
+      check_equal(salts_thread_create(&second_thread, stop_flow_thread, &second_stop), SALTS_OK);
+      check_equal(salts_thread_join(&second_thread), SALTS_OK);
+      check_equal(atomic_load_explicit(&second_stop.result, memory_order_acquire), SALTS_EBUSY);
+      check_equal(atomic_load_explicit(&adapter.stop_count, memory_order_acquire), 1);
+
+      atomic_store_explicit(&adapter.allow_exit, 1, memory_order_release);
+      check_equal(salts_thread_join(&first_thread), SALTS_OK);
+      check_equal(atomic_load_explicit(&first_stop.result, memory_order_acquire), SALTS_OK);
+      check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_STOPPED);
+      check_equal(atomic_load_explicit(&adapter.stop_count, memory_order_acquire), 1);
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("retains failed adapter stops when rolling back a failed start") {
+      static const char *src = "source input adapter first\n"
+                               "stage output adapter second\n"
+                               "stage main {\n"
+                               "  input -> output\n"
+                               "}\n";
+      adapter_ctx_t first = {0};
+      adapter_ctx_t second = {0};
+      turbo_flow_adapter_ops_t ops;
+      turbo_flow_t *flow = turbo_flow_create();
+
+      memset(&ops, 0, sizeof(ops));
+      ops.start = test_adapter_start;
+      ops.stop = test_adapter_stop;
+      ops.consume = test_adapter_consume;
+      first.stop_fail_status = SALTS_EIO;
+      first.stop_failures_remaining = 1;
+      second.fail_status = SALTS_EPROTO;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_register_adapter(flow, "first", &ops, &first), SALTS_OK);
+      check_equal(turbo_flow_register_adapter(flow, "second", &ops, &second), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+
+      check_equal(turbo_flow_start(flow), SALTS_EIO);
+      check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_FAILED);
+      check_equal(turbo_flow_last_error(flow)->code, SALTS_EIO);
+      check_contains(turbo_flow_last_error(flow)->message, "start rollback");
+      check_equal(first.start_count, 1);
+      check_equal(first.stop_count, 1);
+      check_equal(second.start_count, 0);
+      check_equal(second.stop_count, 0);
+      check_equal(turbo_flow_reset(flow, 1), SALTS_EBUSY);
+
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_STOPPED);
+      check_equal(first.stop_count, 2);
+      check_equal(second.stop_count, 0);
 
       turbo_flow_destroy(flow);
     }

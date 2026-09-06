@@ -182,8 +182,10 @@ void flow_clear_plan(turbo_flow_t *flow) {
 
   if (!flow) return;
   flow_close_publish_admission(flow);
-  flow_stop_adapters(flow);
+  (void)flow_stop_non_source_adapters(flow);
   flow_wait_for_publishes(flow);
+  (void)flow_stop_source_adapters(flow);
+  turbo_flow_stl_error(vec_clear(&flow->active_adapters));
   flow_stop_data_planes(flow);
   flow_stop_reorder_states(flow);
   flow_clear_reorder_states(flow);
@@ -468,6 +470,10 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
 
 int turbo_flow_reset(turbo_flow_t *flow, int keep_registry) {
   if (!flow) return SALTS_EINVAL;
+  if (flow->adapter_stop_retryable) {
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                     "adapter stop must succeed before reset");
+  }
   if (flow->state == TURBO_FLOW_STATE_STARTED) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0, "cannot reset a started flow");
   }

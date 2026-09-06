@@ -63,6 +63,8 @@ find_package(Salts CONFIG REQUIRED
              PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
 find_package(SaltsUtils CONFIG REQUIRED
              PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
+include(TurboFlowRequireCHTTP)
+turbo_flow_require_chttp_deferred_cancel()
 find_package(xxHash CONFIG REQUIRED)
 
 if(WIN32)
@@ -179,6 +181,7 @@ write_basic_package_version_file(
 # Install the config files
 install(FILES "${CMAKE_BINARY_DIR}/TurboFlowConfig.cmake"
               "${CMAKE_BINARY_DIR}/TurboFlowConfigVersion.cmake"
+              "${CMAKE_SOURCE_DIR}/cmake/TurboFlowRequireCHTTP.cmake"
         DESTINATION "lib/cmake/TurboFlow")
 
 # Install the export set
@@ -194,6 +197,10 @@ install(
   DESTINATION "lib/cmake/TurboFlow")
 
 if(BUILD_TESTING AND BUILD_TESTS)
+  if(WIN32)
+    get_filename_component(TURBO_FLOW_COMPILER_RUNTIME_DIR
+                           "${CMAKE_C_COMPILER}" DIRECTORY)
+  endif()
   add_test(
     NAME test_turbo_flow_install_consumer
     COMMAND
@@ -206,6 +213,9 @@ if(BUILD_TESTING AND BUILD_TESTS)
       "-DTURBO_FLOW_SALTS_ROOT=$ENV{SALTS_ROOT}"
       "-DTURBO_FLOW_SALTS_UTILS_ROOT=$ENV{SALTS_UTILS_ROOT}"
       "-DTURBO_FLOW_RULES_FORGE_ROOT=$ENV{RULES_FORGE_ROOT}"
+      "-DTURBO_FLOW_VCPKG_INSTALLED_DIR=${VCPKG_INSTALLED_DIR}"
+      "-DTURBO_FLOW_VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
+      "-DTURBO_FLOW_COMPILER_RUNTIME_DIR=${TURBO_FLOW_COMPILER_RUNTIME_DIR}"
       -P "${CMAKE_SOURCE_DIR}/tests/install_consumer/run.cmake")
   set_tests_properties(
     test_turbo_flow_install_consumer
