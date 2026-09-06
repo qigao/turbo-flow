@@ -85,9 +85,7 @@ static void flow_coro_adapter_destroy(flow_coro_adapter_t *adapter) {
 }
 
 static int flow_coro_adapter_init(flow_coro_adapter_t *adapter,
-                                  const flow_executor_plan_t *executor) {
-  uint32_t lanes = executor->exec.lanes ? executor->exec.lanes : 1u;
-
+                                  const flow_executor_plan_t *executor, uint32_t lanes) {
   memset(adapter, 0, sizeof(*adapter));
   adapter->stage_index = executor->stage_index;
   adapter->lanes = lanes;
@@ -170,17 +168,24 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
 
   flow_stop_runtime_executor_adapters(flow);
 
-  for (size_t i = 0; i < vec_size(&flow->executor_plans); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->compiled_plan.executors); ++i) {
     const flow_executor_plan_t *executor =
-        (const flow_executor_plan_t *)vec_at_const(&flow->executor_plans, i);
+        (const flow_executor_plan_t *)vec_at_const(&flow->compiled_plan.executors, i);
+    const flow_runtime_stage_config_t *runtime_config =
+        flow_runtime_stage_config_for_stage(flow, executor->stage_index);
     flow_threadpool_adapter_t adapter;
     flow_coro_adapter_t coro_adapter;
 
+    if (!runtime_config) {
+      flow_stop_runtime_executor_adapters(flow);
+      return flow_set_error_keep_state(flow, SALTS_EPROTO, 0, 0,
+                                       "executor runtime configuration is missing");
+    }
     if (executor->exec.kind == TURBO_FLOW_EXEC_CORO_POOL) {
-      uint32_t lanes = executor->exec.lanes ? executor->exec.lanes : 1u;
+      uint32_t lanes = runtime_config->coro_lanes ? runtime_config->coro_lanes : 1u;
       uint64_t resource_capacity =
           executor->exec.pool_capacity > 0u ? (uint64_t)lanes * executor->exec.pool_capacity : 0u;
-      int rc = flow_coro_adapter_init(&coro_adapter, executor);
+      int rc = flow_coro_adapter_init(&coro_adapter, executor, lanes);
       if (rc != SALTS_OK) {
         flow_stop_runtime_executor_adapters(flow);
         return flow_set_error_keep_state(flow, rc, 0, 0, "failed to create coro executor");
@@ -206,7 +211,7 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
     }
 
     if (executor->exec.kind != TURBO_FLOW_EXEC_THREAD_POOL) continue;
-    if (executor->exec.workers > (uint32_t)INT_MAX) {
+    if (runtime_config->thread_workers > (uint32_t)INT_MAX) {
       flow_stop_runtime_executor_adapters(flow);
       return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                        "thread executor worker count is too large");
@@ -214,7 +219,7 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
 
     adapter.stage_index = executor->stage_index;
     adapter.workers = 0u;
-    adapter.pool = salts_threadpool_create((int)executor->exec.workers);
+    adapter.pool = salts_threadpool_create((int)runtime_config->thread_workers);
     if (!adapter.pool) {
       flow_stop_runtime_executor_adapters(flow);
       return flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0,

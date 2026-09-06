@@ -851,33 +851,43 @@ spec("Turbo Flow Bench") {
         (uint8_t *)calloc(FLOW_BENCH_REACHABILITY_STAGES, sizeof(*reachable));
     uint32_t *worklist =
         (uint32_t *)calloc(FLOW_BENCH_REACHABILITY_STAGES, sizeof(*worklist));
+    const flow_executor_plan_t *executor_plan = NULL;
     int reachability_status = SALTS_OK;
 
     check_not_null(flow);
     check_not_null(reachable);
     check_not_null(worklist);
-    check_equal(turbo_flow_stl_error(vec_resize(&flow->runtime_nodes,
-                                                 FLOW_BENCH_REACHABILITY_STAGES)),
+    check_equal(turbo_flow_stl_error(
+                    vec_resize(&flow->compiled_plan.nodes, FLOW_BENCH_REACHABILITY_STAGES)),
                 SALTS_OK);
-    check_equal(turbo_flow_stl_error(vec_resize(&flow->runtime_edges,
-                                                 FLOW_BENCH_REACHABILITY_STAGES - 1u)),
+    check_equal(turbo_flow_stl_error(
+                    vec_resize(&flow->compiled_plan.edges, FLOW_BENCH_REACHABILITY_STAGES - 1u)),
+                SALTS_OK);
+    check_equal(turbo_flow_stl_error(
+                    vec_resize(&flow->compiled_plan.executors, FLOW_BENCH_REACHABILITY_STAGES)),
+                SALTS_OK);
+    check_equal(turbo_flow_stl_error(vec_resize(&flow->compiled_plan.executor_by_stage,
+                                                FLOW_BENCH_REACHABILITY_STAGES)),
                 SALTS_OK);
     for (uint32_t stage = 0u; stage < FLOW_BENCH_REACHABILITY_STAGES; ++stage) {
       flow_runtime_node_plan_t *node =
-          (flow_runtime_node_plan_t *)vec_at(&flow->runtime_nodes, stage);
+          (flow_runtime_node_plan_t *)vec_at(&flow->compiled_plan.nodes, stage);
       memset(node, 0, sizeof(*node));
       node->stage_index = stage;
       node->incoming_count = stage == 0u ? 0u : 1u;
       node->outgoing_begin = stage;
       node->outgoing_count = stage + 1u < FLOW_BENCH_REACHABILITY_STAGES ? 1u : 0u;
+      ((flow_executor_plan_t *)vec_at(&flow->compiled_plan.executors, stage))->stage_index = stage;
+      *(uint32_t *)vec_at(&flow->compiled_plan.executor_by_stage, stage) = stage;
       if (stage + 1u < FLOW_BENCH_REACHABILITY_STAGES) {
         flow_runtime_edge_plan_t *edge =
-            (flow_runtime_edge_plan_t *)vec_at(&flow->runtime_edges, stage);
+            (flow_runtime_edge_plan_t *)vec_at(&flow->compiled_plan.edges, stage);
         memset(edge, 0, sizeof(*edge));
         edge->from_stage = stage;
         edge->to_stage = stage + 1u;
       }
     }
+    flow->compiled_plan.sealed = 1;
 
     benchmark_ops("topology=linear stages=512 edges=511 mark-reachable",
                   FLOW_BENCH_REACHABILITY_ITERS, 1u) {
@@ -887,6 +897,11 @@ spec("Turbo Flow Bench") {
     }
     check_equal(reachability_status, SALTS_OK);
     check_equal(reachable[FLOW_BENCH_REACHABILITY_STAGES - 1u], 1u);
+    benchmark_ops("plan=sealed executors=512 lookup=last-stage", FLOW_BENCH_EXECUTOR_ITERS, 1u) {
+      executor_plan = flow_executor_plan_for_stage(flow, FLOW_BENCH_REACHABILITY_STAGES - 1u);
+    }
+    check_not_null(executor_plan);
+    check_equal(executor_plan->stage_index, FLOW_BENCH_REACHABILITY_STAGES - 1u);
     free(worklist);
     free(reachable);
     turbo_flow_destroy(flow);

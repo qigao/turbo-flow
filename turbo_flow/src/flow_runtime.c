@@ -138,11 +138,12 @@ int turbo_flow_start(turbo_flow_t *flow) {
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "flow must be compiled before start");
   }
-  if (vec_size(&flow->runtime_nodes) != vec_size(&flow->stages)) {
+  if (!flow->compiled_plan.sealed ||
+      vec_size(&flow->compiled_plan.nodes) != vec_size(&flow->stages)) {
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "compiled runtime plan is not available");
   }
-  if (vec_empty(&flow->data_segments) && !vec_empty(&flow->runtime_edges)) {
+  if (vec_empty(&flow->compiled_plan.data_segments) && !vec_empty(&flow->compiled_plan.edges)) {
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "compiled data plan is not available");
   }
@@ -267,9 +268,10 @@ done:
 }
 
 typedef struct flow_pool_resize_target_s {
-  flow_stage_plan_impl_t *stage;
-  flow_executor_plan_t *executor;
-  flow_data_segment_plan_t *segment;
+  const flow_stage_plan_impl_t *stage;
+  const flow_executor_plan_t *executor;
+  const flow_data_segment_plan_t *segment;
+  flow_runtime_stage_config_t *runtime_config;
   uint32_t previous_parallelism;
 } flow_pool_resize_target_t;
 
@@ -282,8 +284,10 @@ static int flow_find_pool_resize_target(turbo_flow_t *flow,
   memset(target, 0, sizeof(*target));
   stage_index = turbo_flow_find_stage(flow, command->stage_name);
   if (stage_index < 0) return SALTS_ENOENT;
-  target->stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, (size_t)stage_index);
+  target->stage = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, (size_t)stage_index);
   if (!target->stage) return SALTS_EINVAL;
+  target->runtime_config = flow_runtime_stage_config_for_stage_mut(flow, (uint32_t)stage_index);
+  if (!target->runtime_config) return SALTS_EPROTO;
 
   for (size_t i = 0; i < vec_size(&flow->pool_records); ++i) {
     const flow_pool_record_t *record =
@@ -298,17 +302,16 @@ static int flow_find_pool_resize_target(turbo_flow_t *flow,
   if (command->kind == TURBO_FLOW_POOL_DISRUPTOR) {
     target->segment = flow_worker_pool_segment_for_stage(flow, (uint32_t)stage_index);
     if (!target->segment) return SALTS_EINVAL;
-    target->previous_parallelism = target->stage->data_worker_count;
+    target->previous_parallelism = target->runtime_config->data_workers;
   } else {
-    target->executor =
-        (flow_executor_plan_t *)flow_executor_plan_for_stage(flow, (uint32_t)stage_index);
+    target->executor = flow_executor_plan_for_stage(flow, (uint32_t)stage_index);
     if (!target->executor) return SALTS_EINVAL;
     if (command->kind == TURBO_FLOW_POOL_THREAD &&
         target->executor->exec.kind == TURBO_FLOW_EXEC_THREAD_POOL) {
-      target->previous_parallelism = target->executor->exec.workers;
+      target->previous_parallelism = target->runtime_config->thread_workers;
     } else if (command->kind == TURBO_FLOW_POOL_CORO &&
                target->executor->exec.kind == TURBO_FLOW_EXEC_CORO_POOL) {
-      target->previous_parallelism = target->executor->exec.lanes;
+      target->previous_parallelism = target->runtime_config->coro_lanes;
     } else {
       return SALTS_EINVAL;
     }
@@ -319,14 +322,11 @@ static int flow_find_pool_resize_target(turbo_flow_t *flow,
 static void flow_apply_pool_parallelism(flow_pool_resize_target_t *target,
                                         turbo_flow_pool_kind_t kind, uint32_t parallelism) {
   if (kind == TURBO_FLOW_POOL_DISRUPTOR) {
-    target->stage->data_worker_count = parallelism;
-    target->segment->width = parallelism;
+    target->runtime_config->data_workers = parallelism;
   } else if (kind == TURBO_FLOW_POOL_THREAD) {
-    target->stage->exec.workers = parallelism;
-    target->executor->exec.workers = parallelism;
+    target->runtime_config->thread_workers = parallelism;
   } else {
-    target->stage->exec.lanes = parallelism;
-    target->executor->exec.lanes = parallelism;
+    target->runtime_config->coro_lanes = parallelism;
   }
 }
 
@@ -575,9 +575,9 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   salts_mutex_unlock(&flow->runtime_mutex);
   if (rc != SALTS_OK) goto cleanup;
 
-  for (size_t i = 0; i < vec_size(&flow->runtime_edges); ++i) {
+  for (size_t i = 0; i < vec_size(&flow->compiled_plan.edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, i);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->compiled_plan.edges, i);
     if (reachable[edge->from_stage] && reachable[edge->to_stage]) {
       remaining[edge->to_stage] += 1;
     }
@@ -685,9 +685,9 @@ int turbo_flow_advance_event_time_watermark(turbo_flow_t *flow,
   entered = 1;
   flow_clear_error(flow);
 
-  for (size_t index = 0u; index < vec_size(&flow->executor_plans); ++index) {
+  for (size_t index = 0u; index < vec_size(&flow->compiled_plan.executors); ++index) {
     const flow_executor_plan_t *executor =
-        (const flow_executor_plan_t *)vec_at_const(&flow->executor_plans, index);
+        (const flow_executor_plan_t *)vec_at_const(&flow->compiled_plan.executors, index);
     if (executor && executor->window_fn && executor->keyed_store == store) {
       window_executor = executor;
       break;
@@ -923,17 +923,17 @@ static const flow_adapter_registration_t *flow_publish_batch_direct_adapter(
   if (!flow || !out_stage || flow->broadcast_ring || flow_observer_has_handlers(flow)) {
     return NULL;
   }
-  for (size_t i = 0u; i < vec_size(&flow->runtime_edges); ++i) {
+  for (size_t i = 0u; i < vec_size(&flow->compiled_plan.edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, i);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->compiled_plan.edges, i);
     if (!edge || edge->from_stage != source_index) continue;
     if (source_edge || edge->kind != TURBO_FLOW_EDGE_UNCONDITIONAL || edge->predicate) return NULL;
     source_edge = edge;
   }
   if (!source_edge) return NULL;
-  for (size_t i = 0u; i < vec_size(&flow->runtime_edges); ++i) {
+  for (size_t i = 0u; i < vec_size(&flow->compiled_plan.edges); ++i) {
     const flow_runtime_edge_plan_t *edge =
-        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->runtime_edges, i);
+        (const flow_runtime_edge_plan_t *)vec_at_const(&flow->compiled_plan.edges, i);
     if (edge && edge->from_stage == source_edge->to_stage) return NULL;
   }
   stage = (const flow_stage_plan_impl_t *)vec_at_const(

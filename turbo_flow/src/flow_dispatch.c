@@ -51,7 +51,7 @@ static int flow_dispatch_prepare_completion(turbo_flow_t *flow, flow_stage_plan_
   completion->settlement = (turbo_flow_settlement_result_t)TURBO_FLOW_SETTLEMENT_RESULT_INIT;
 
   if (stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) {
-    flow_data_segment_plan_t *segment = flow_worker_pool_segment_for_stage(flow, stage_index);
+    const flow_data_segment_plan_t *segment = flow_worker_pool_segment_for_stage(flow, stage_index);
     if (!segment || segment->width == 0u) {
       completion->status = SALTS_EINVAL;
       return flow_set_error_keep_state(flow, SALTS_EINVAL, stage->line, stage->column,
@@ -232,12 +232,12 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
   event.attempt = msg->execution_attempt;
   flow_observer_emit(flow, &event);
   executor = flow_executor_plan_for_stage(flow, stage_index);
-  rc = flow_dispatch_validate_stage(flow, stage_index);
-  if (rc != SALTS_OK) {
+  if (!executor) {
     completion->entry = (flow_entry_header_t)FLOW_ENTRY_HEADER_INIT;
     completion->entry.stage_index = stage_index;
-    completion->status = rc;
-    result = rc;
+    completion->status = SALTS_EPROTO;
+    result = flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,
+                                       "sealed plan executor is not available");
     goto observe;
   }
 

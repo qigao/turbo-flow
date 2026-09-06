@@ -335,32 +335,67 @@ turbo_flow_t *turbo_flow_create(void) {
       (turbo_flow_async_ingress_config_t)TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
   atomic_init(&flow->next_sequence, 0u);
 
-  if (turbo_flow_stl_error(vec_init_bytes(&flow->stages, sizeof(flow_stage_plan_impl_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->edges, sizeof(flow_edge_plan_impl_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->runtime_nodes, sizeof(flow_runtime_node_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->runtime_edges, sizeof(flow_runtime_edge_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->data_segments, sizeof(flow_data_segment_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->executor_plans, sizeof(flow_executor_plan_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->threadpool_adapters, sizeof(flow_threadpool_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->coro_adapters, sizeof(flow_coro_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->broadcast_consumers, sizeof(flow_broadcast_consumer_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->worker_pool_adapters, sizeof(flow_worker_pool_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->reorder_states, sizeof(flow_reorder_state_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->registrations, sizeof(flow_stage_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->operation_providers, sizeof(flow_operation_provider_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+  if (turbo_flow_stl_error(vec_init_bytes(&flow->stages, sizeof(flow_stage_plan_impl_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
           SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->primitives, sizeof(flow_primitive_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->operations, sizeof(flow_operation_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->modules, sizeof(flow_module_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->adapters, sizeof(flow_adapter_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->resources, sizeof(flow_resource_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->expr_projection_registrations, sizeof(flow_expr_projection_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->active_adapters, sizeof(flow_active_adapter_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->pool_records, sizeof(flow_pool_record_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->resource_command_history, sizeof(flow_resource_command_record_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+      turbo_flow_stl_error(vec_init_bytes(&flow->edges, sizeof(flow_edge_plan_impl_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
           SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->event_observers, sizeof(flow_event_observer_registration_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
-          SALTS_OK) {
+      flow_compiled_plan_init(&flow->compiled_plan) != SALTS_OK ||
+      turbo_flow_stl_error(
+          vec_init_bytes(&flow->runtime_stage_configs, sizeof(flow_runtime_stage_config_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(
+          vec_init_bytes(&flow->threadpool_adapters, sizeof(flow_threadpool_adapter_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->coro_adapters, sizeof(flow_coro_adapter_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+          SALTS_OK ||
+      turbo_flow_stl_error(
+          vec_init_bytes(&flow->broadcast_consumers, sizeof(flow_broadcast_consumer_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(
+          vec_init_bytes(&flow->worker_pool_adapters, sizeof(flow_worker_pool_adapter_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->reorder_states, sizeof(flow_reorder_state_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+          SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->registrations, sizeof(flow_stage_registration_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+          SALTS_OK ||
+      turbo_flow_stl_error(
+          vec_init_bytes(&flow->operation_providers, sizeof(flow_operation_provider_registration_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->primitives, sizeof(flow_primitive_registration_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+          SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->operations, sizeof(flow_operation_registration_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+          SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->modules, sizeof(flow_module_registration_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+          SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->adapters, sizeof(flow_adapter_registration_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+          SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->resources, sizeof(flow_resource_registration_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+          SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(
+          &flow->expr_projection_registrations, sizeof(flow_expr_projection_registration_t),
+          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->active_adapters, sizeof(flow_active_adapter_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+          SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->pool_records, sizeof(flow_pool_record_t),
+                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
+          SALTS_OK ||
+      turbo_flow_stl_error(
+          vec_init_bytes(&flow->resource_command_history, sizeof(flow_resource_command_record_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(
+          vec_init_bytes(&flow->event_observers, sizeof(flow_event_observer_registration_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
     turbo_flow_destroy(flow);
     return NULL;
   }
@@ -380,10 +415,8 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   flow_observer_clear(flow);
   vec_destroy(&flow->stages);
   vec_destroy(&flow->edges);
-  vec_destroy(&flow->runtime_nodes);
-  vec_destroy(&flow->runtime_edges);
-  vec_destroy(&flow->data_segments);
-  vec_destroy(&flow->executor_plans);
+  flow_compiled_plan_destroy(&flow->compiled_plan);
+  vec_destroy(&flow->runtime_stage_configs);
   vec_destroy(&flow->threadpool_adapters);
   vec_destroy(&flow->coro_adapters);
   vec_destroy(&flow->broadcast_consumers);
@@ -421,6 +454,7 @@ int turbo_flow_reset(turbo_flow_t *flow, int keep_registry) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0, "cannot reset a started flow");
   }
   flow_clear_plan(flow);
+  flow->required_backend = FLOW_PLAN_BACKEND_NATIVE;
   turbo_flow_stl_error(vec_clear(&flow->resource_command_history));
   if (!keep_registry) flow_clear_registry(flow);
   atomic_store_explicit(&flow->next_sequence, 0u, memory_order_release);
