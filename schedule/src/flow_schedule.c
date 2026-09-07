@@ -101,6 +101,25 @@ static void flow_schedule_publish_complete(void *ctx, const turbo_flow_publish_r
   atomic_fetch_sub_explicit(&schedule->async_inflight, 1u, memory_order_release);
 }
 
+/* Completion commits counters/terminal state before releasing this single publication slot. */
+static int flow_schedule_try_reserve_publish(turbo_flow_schedule_t *schedule) {
+  unsigned expected = 0u;
+  if (!atomic_load_explicit(&schedule->started, memory_order_acquire) ||
+      atomic_load_explicit(&schedule->completed, memory_order_acquire)) {
+    return 0;
+  }
+  if (!atomic_compare_exchange_strong_explicit(&schedule->async_inflight, &expected, 1u,
+                                                memory_order_acq_rel, memory_order_acquire)) {
+    return 0;
+  }
+  if (!atomic_load_explicit(&schedule->started, memory_order_acquire) ||
+      atomic_load_explicit(&schedule->completed, memory_order_acquire)) {
+    atomic_store_explicit(&schedule->async_inflight, 0u, memory_order_release);
+    return 0;
+  }
+  return 1;
+}
+
 static int flow_schedule_publish_sync(turbo_flow_schedule_t *schedule, time_t scheduled_at) {
   turbo_flow_msg_t msg;
   int rc;
@@ -126,23 +145,34 @@ static int flow_schedule_publish_sync(turbo_flow_schedule_t *schedule, time_t sc
   return rc;
 }
 
-static int flow_schedule_publish_async(turbo_flow_schedule_t *schedule, time_t scheduled_at) {
+static int flow_schedule_publish_async(turbo_flow_schedule_t *schedule, time_t scheduled_at,
+                                       int slot_reserved) {
   turbo_flow_msg_t msg;
   int rc;
   if (!schedule || !schedule->flow || !schedule->source_name ||
       !atomic_load_explicit(&schedule->started, memory_order_acquire)) {
+    if (schedule && slot_reserved) {
+      atomic_store_explicit(&schedule->async_inflight, 0u, memory_order_release);
+    }
     return SALTS_ESHUTDOWN;
   }
   turbo_flow_msg_init(&msg);
   msg.owned_payload = tstr_clone(schedule->payload);
-  if (!msg.owned_payload) return SALTS_ENOMEM;
+  if (!msg.owned_payload) {
+    if (slot_reserved) {
+      atomic_store_explicit(&schedule->async_inflight, 0u, memory_order_release);
+    }
+    return SALTS_ENOMEM;
+  }
   msg.payload = tstr_to_v(msg.owned_payload);
   if (scheduled_at > 0 && (uint64_t)scheduled_at <= UINT64_MAX / UINT64_C(1000000000)) {
     msg.ts_ns = (uint64_t)scheduled_at * UINT64_C(1000000000);
   } else {
     msg.ts_ns = salts_hrtime();
   }
-  atomic_fetch_add_explicit(&schedule->async_inflight, 1u, memory_order_acq_rel);
+  if (!slot_reserved) {
+    atomic_fetch_add_explicit(&schedule->async_inflight, 1u, memory_order_acq_rel);
+  }
   rc = turbo_flow_publish_async(schedule->flow, schedule->source_name, &msg,
                                 flow_schedule_publish_complete, schedule);
   turbo_flow_msg_cleanup(&msg);
@@ -185,7 +215,7 @@ static int flow_schedule_advance_cron(turbo_flow_schedule_t *schedule, time_t no
       break;
     }
     rc = schedule->manual_clock ? flow_schedule_publish_sync(schedule, next_fire)
-                                : flow_schedule_publish_async(schedule, next_fire);
+                                : flow_schedule_publish_async(schedule, next_fire, 0);
     if (rc != SALTS_OK) return rc;
     emitted += 1u;
     check = next_fire;
@@ -214,10 +244,17 @@ static void flow_schedule_timer_callback(salts_timer_t *timer) {
     rc = flow_schedule_advance_cron(schedule, time(NULL));
   } else {
     uint64_t now_ms = salts_monotonic_ms();
-    uint64_t next_due_ms = atomic_load_explicit(&schedule->next_due_ms, memory_order_acquire);
-    if (now_ms < next_due_ms) goto done;
-    if (atomic_load_explicit(&schedule->async_inflight, memory_order_acquire) != 0u) goto done;
-    rc = flow_schedule_publish_async(schedule, 0);
+    uint64_t next_due_ms;
+    if (!flow_schedule_try_reserve_publish(schedule)) {
+      stop_timer = atomic_load_explicit(&schedule->completed, memory_order_acquire);
+      goto done;
+    }
+    next_due_ms = atomic_load_explicit(&schedule->next_due_ms, memory_order_acquire);
+    if (now_ms < next_due_ms) {
+      atomic_store_explicit(&schedule->async_inflight, 0u, memory_order_release);
+      goto done;
+    }
+    rc = flow_schedule_publish_async(schedule, 0, 1);
   }
 
   if (rc < 0) {

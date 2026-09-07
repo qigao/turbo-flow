@@ -343,9 +343,19 @@ static void flow_apply_pool_parallelism(flow_pool_resize_target_t *target,
 }
 
 static int flow_rebuild_pool_resources(turbo_flow_t *flow) {
+  int rc;
+
   flow_stop_data_planes(flow);
   flow_stop_runtime_executor_adapters(flow);
   turbo_flow_stl_error(vec_clear(&flow->pool_records));
+  if (flow->pool_rebuild_fault.before_create != NULL) {
+    flow->pool_rebuild_fault.attempts++;
+    rc = flow->pool_rebuild_fault.before_create(flow->pool_rebuild_fault.ctx,
+                                                flow->pool_rebuild_fault.attempts);
+    if (rc != SALTS_OK) {
+      return flow_set_error_keep_state(flow, rc, 0, 0, "pool resource rebuild failed");
+    }
+  }
   if (flow_start_data_planes(flow) != SALTS_OK) return flow->last_error.code;
   if (flow_start_executor_adapters(flow) != SALTS_OK) {
     flow_stop_data_planes(flow);
