@@ -186,7 +186,7 @@ rejection text or unowned TODO/FIXME/HACK markers.
 Run configure/build/test through `win-dev-user` and `win-release-user`, first focused and then full
 CTest. Install Debug through `install-win-dev-user` and run the installed C/C++ consumer checks.
 
-- [ ] **Step 4: Sync structure evidence and deliver**
+- [x] **Step 4: Sync structure evidence and deliver**
 
 Run `codegraph sync .`, inspect diff/impact, commit, push `refactor/issue-7-chttp-deferred-server`,
 update PR #32 and the #7 acceptance checklist, and leave merging to an explicit user request.
