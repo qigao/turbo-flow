@@ -193,8 +193,10 @@ Verification evidence (2026-09-07):
 - CodeGraph identified `turbo_flow/tests/test_turbo_flow.c` as the affected test surface.
 - `git diff --check` passed, and no public header or CMake file contains the private hook.
 
-- [ ] **Step 3: Commit, push, and create the PR**
+- [x] **Step 3: Commit, push, and create the PR**
 
 Commit the behavior/test change, record verification in this plan, push
 test/issue-15-resize-fault-injection, create a PR against master with Closes #15, update issue #15
 with the evidence, and leave the PR unmerged.
+
+Published as https://github.com/qigao/turbo-flow/pull/34 and left open for review.
