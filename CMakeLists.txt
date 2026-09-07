@@ -63,6 +63,8 @@ find_package(Salts CONFIG REQUIRED
              PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
 find_package(SaltsUtils CONFIG REQUIRED
              PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
+include(TurboFlowRequireCNet)
+turbo_flow_require_cnet_stop_drain_contract()
 include(TurboFlowRequireCHTTP)
 turbo_flow_require_chttp_deferred_cancel()
 find_package(xxHash CONFIG REQUIRED)
@@ -181,6 +183,7 @@ write_basic_package_version_file(
 # Install the config files
 install(FILES "${CMAKE_BINARY_DIR}/TurboFlowConfig.cmake"
               "${CMAKE_BINARY_DIR}/TurboFlowConfigVersion.cmake"
+              "${CMAKE_SOURCE_DIR}/cmake/TurboFlowRequireCNet.cmake"
               "${CMAKE_SOURCE_DIR}/cmake/TurboFlowRequireCHTTP.cmake"
         DESTINATION "lib/cmake/TurboFlow")
 
@@ -212,6 +215,18 @@ if(BUILD_TESTING AND BUILD_TESTS)
   set_tests_properties(
     test_turbo_flow_cmake_tools_failfast
     PROPERTIES LABELS "cmake;tools" RUN_SERIAL TRUE TIMEOUT 30)
+
+  add_test(
+    NAME test_turbo_flow_cnet_stop_drain_failfast
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DTURBO_FLOW_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+      "-DTURBO_FLOW_BINARY_DIR=${CMAKE_BINARY_DIR}"
+      "-DTURBO_FLOW_GENERATOR=${CMAKE_GENERATOR}"
+      -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_cnet_stop_drain_failfast.cmake")
+  set_tests_properties(
+    test_turbo_flow_cnet_stop_drain_failfast
+    PROPERTIES LABELS "cmake;cnet-adapter" RUN_SERIAL TRUE TIMEOUT 30)
 
   add_test(
     NAME test_turbo_flow_install_consumer

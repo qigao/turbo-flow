@@ -2,6 +2,7 @@ add_library(tf_cnet_adapter SHARED
   src/turbo_flow_cnet_datagram_sink.c
   src/turbo_flow_cnet_stream_sink.c
   src/turbo_flow_cnet_listener_source.c
+  src/turbo_flow_cnet_packet_sink.c
   src/turbo_flow_cnet_packet_source.c
   src/turbo_flow_cnet_stream_source.c
   include/turbo_flow_cnet.h)

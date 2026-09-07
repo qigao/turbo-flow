@@ -128,6 +128,8 @@ _TurboFlow_require_dependency_root(Salts SALTS_ROOT Salts::Core)
 find_dependency(Salts CONFIG REQUIRED
                 PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
 _TurboFlow_verify_dependency_root(Salts SALTS_ROOT)
+include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowRequireCNet.cmake")
+turbo_flow_require_cnet_stop_drain_contract()
 if(_TurboFlow_needs_salts_utils)
   _TurboFlow_require_dependency_root(SaltsUtils SALTS_UTILS_ROOT Salts::DataBind)
   find_dependency(SaltsUtils CONFIG REQUIRED

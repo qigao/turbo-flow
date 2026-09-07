@@ -627,7 +627,7 @@ typedef struct turbo_flow_cnet_datagram_sink_config_s {
    NULL,                                                                                           \
    NULL,                                                                                           \
    NULL,                                                                                           \
-   {0},                                                                                            \
+   {(cnet_datagram_address_family)0, 0u, 0u, {0}},                                                \
    CNET_DATAGRAM_MAX_PAYLOAD_BYTES,                                                                \
    TURBO_FLOW_CNET_DATAGRAM_SINK_DEFAULT_ACTOR_COMMAND_CAPACITY,                                   \
    TURBO_FLOW_CNET_DATAGRAM_SINK_DEFAULT_ACTOR_MAX_STEPS_PER_POLL,                                 \
@@ -670,6 +670,127 @@ turbo_flow_cnet_datagram_sink_snapshot(const turbo_flow_cnet_datagram_sink_t *si
 
 /** Release the outer handle after flow reset/destroy detached the registration. */
 TURBO_FLOW_C_API int turbo_flow_cnet_datagram_sink_destroy(turbo_flow_cnet_datagram_sink_t *sink);
+
+#define TURBO_FLOW_CNET_PACKET_SINK_API_VERSION 1u
+#define TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_SEND_CAPACITY 64u
+#define TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_MAX_MESSAGE_BYTES CNET_DATAGRAM_MAX_PAYLOAD_BYTES
+#define TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_ACTOR_COMMAND_CAPACITY 64u
+#define TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_ACTOR_MAX_STEPS_PER_POLL 64u
+#define TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_STOP_TIMEOUT_MS 5000u
+
+typedef struct turbo_flow_cnet_packet_sink_s turbo_flow_cnet_packet_sink_t;
+
+typedef enum turbo_flow_cnet_packet_sink_state_e {
+  TURBO_FLOW_CNET_PACKET_SINK_REGISTERED = 1,
+  TURBO_FLOW_CNET_PACKET_SINK_RUNNING,
+  TURBO_FLOW_CNET_PACKET_SINK_FAILED,
+  TURBO_FLOW_CNET_PACKET_SINK_STOPPING,
+  TURBO_FLOW_CNET_PACKET_SINK_STOPPED,
+  TURBO_FLOW_CNET_PACKET_SINK_DETACHED
+} turbo_flow_cnet_packet_sink_state_t;
+
+/**
+ * Fixed-peer packet terminal configuration consumed synchronously by register.
+ *
+ * The sink copies `endpoint`, including its embedded security material, and
+ * copies `endpoint->datagram.host`. The endpoint and observer callbacks in the
+ * supplied configuration must be unowned and empty. Each accepted graph claim
+ * is retained until the matching CNet tagged logical-send terminal arrives.
+ * `stop_timeout_ms` is one native stop-wait slice; shutdown repeats timed-out
+ * slices because returning before authoritative packet terminals would abandon
+ * accepted claims.
+ */
+typedef struct turbo_flow_cnet_packet_sink_config_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_t *flow;
+  const char *adapter_name;
+  const cnet_packet_endpoint_config *endpoint;
+  cnet_datagram_peer peer;
+  uint32_t conversation;
+  size_t send_capacity;
+  size_t max_message_bytes;
+  size_t actor_command_capacity;
+  size_t actor_max_steps_per_poll;
+  uint32_t stop_timeout_ms;
+} turbo_flow_cnet_packet_sink_config_t;
+
+#define TURBO_FLOW_CNET_PACKET_SINK_CONFIG_V1_SIZE sizeof(turbo_flow_cnet_packet_sink_config_t)
+#define TURBO_FLOW_CNET_PACKET_SINK_CONFIG_INIT                                                   \
+  {TURBO_FLOW_CNET_PACKET_SINK_CONFIG_V1_SIZE,                                                    \
+   TURBO_FLOW_CNET_PACKET_SINK_API_VERSION,                                                       \
+   NULL,                                                                                          \
+   NULL,                                                                                          \
+   NULL,                                                                                          \
+   {(cnet_datagram_address_family)0, 0u, 0u, {0}},                                               \
+   0u,                                                                                            \
+   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_SEND_CAPACITY,                                             \
+   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_MAX_MESSAGE_BYTES,                                         \
+   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_ACTOR_COMMAND_CAPACITY,                                    \
+   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_ACTOR_MAX_STEPS_PER_POLL,                                  \
+   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_STOP_TIMEOUT_MS}
+
+typedef struct turbo_flow_cnet_packet_sink_snapshot_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_cnet_packet_sink_state_t state;
+  int status;
+  cnet_packet_protocol protocol;
+  uint16_t bound_port;
+  cnet_packet_session session;
+  int session_open;
+  size_t active_requests;
+  uint64_t messages_sent;
+  uint64_t bytes_sent;
+  uint64_t terminals_failed;
+} turbo_flow_cnet_packet_sink_snapshot_t;
+
+#define TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_V1_SIZE                                              \
+  sizeof(turbo_flow_cnet_packet_sink_snapshot_t)
+#define TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT                                                 \
+  {TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_V1_SIZE,                                                  \
+   TURBO_FLOW_CNET_PACKET_SINK_API_VERSION,                                                       \
+   TURBO_FLOW_CNET_PACKET_SINK_REGISTERED,                                                        \
+   SALTS_OK,                                                                                      \
+   (cnet_packet_protocol)0,                                                                       \
+   0u,                                                                                            \
+   {0u, 0u},                                                                                      \
+   0,                                                                                             \
+   0u,                                                                                            \
+   0u,                                                                                            \
+   0u,                                                                                            \
+   0u}
+
+/** Register one fixed-peer UDP, KCP, secure-KCP, or secure-KCP/FEC terminal sink. */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_packet_sink_register(const turbo_flow_cnet_packet_sink_config_t *config,
+                                     turbo_flow_cnet_packet_sink_t **sink_out);
+
+/**
+ * Advance the single-owner CFlow IO Actor and CNet packet endpoint.
+ *
+ * Concurrent submitters are supported. Poll calls are single-owner and return
+ * `SALTS_EBUSY` when another poll owns the lane. Stop waits for that owner and
+ * prevents new submissions before destroying Actor, Executor, and endpoint.
+ */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_packet_sink_poll(turbo_flow_cnet_packet_sink_t *sink, uint32_t timeout_ms,
+                                 turbo_flow_cnet_packet_sink_snapshot_t *snapshot);
+
+/**
+ * Copy state without advancing the owner lane.
+ * Returns `SALTS_EBUSY` while poll, start, or stop owns that lane, including
+ * reentrant calls from terminal completion callbacks.
+ */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_packet_sink_snapshot(const turbo_flow_cnet_packet_sink_t *sink,
+                                     turbo_flow_cnet_packet_sink_snapshot_t *snapshot);
+
+/**
+ * Release the outer handle after Flow reset/destroy detached the registration.
+ * The caller must serialize destroy with all other handle calls.
+ */
+TURBO_FLOW_C_API int turbo_flow_cnet_packet_sink_destroy(turbo_flow_cnet_packet_sink_t *sink);
 
 #ifdef __cplusplus
 }
