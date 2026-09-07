@@ -8,7 +8,8 @@ foreach(required_var IN ITEMS
         TURBO_FLOW_CTEST_COMMAND
         TURBO_FLOW_SALTS_ROOT
         TURBO_FLOW_SALTS_UTILS_ROOT
-        TURBO_FLOW_RULES_FORGE_ROOT)
+        TURBO_FLOW_RULES_FORGE_ROOT
+        TURBO_FLOW_HAS_TURBODB_ADAPTER)
   if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
     message(FATAL_ERROR "Missing required variable: ${required_var}")
   endif()
@@ -28,6 +29,15 @@ endif()
 file(TO_CMAKE_PATH "${TURBO_FLOW_SALTS_ROOT}" salts_root)
 file(TO_CMAKE_PATH "${TURBO_FLOW_SALTS_UTILS_ROOT}" salts_utils_root)
 file(TO_CMAKE_PATH "${TURBO_FLOW_RULES_FORGE_ROOT}" rules_forge_root)
+if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
+  if(NOT DEFINED TURBO_FLOW_TURBODB_ROOT OR
+     "${TURBO_FLOW_TURBODB_ROOT}" STREQUAL "" OR
+     NOT IS_DIRECTORY "${TURBO_FLOW_TURBODB_ROOT}")
+    message(FATAL_ERROR
+            "TURBO_FLOW_TURBODB_ROOT is required for the installed TurboDb adapter")
+  endif()
+  file(TO_CMAKE_PATH "${TURBO_FLOW_TURBODB_ROOT}" turbodb_root)
+endif()
 
 set(test_root "${TURBO_FLOW_BINARY_DIR}/install-consumer-test")
 set(stage_dir "${test_root}/stage")
@@ -75,6 +85,17 @@ set(turbo_flow_package_dir "${stage_dir}/lib/cmake/TurboFlow")
 set(salts_package_dir "${salts_root}/lib/cmake/Salts")
 set(salts_utils_package_dir "${salts_utils_root}/lib/cmake/SaltsUtils")
 set(rules_forge_package_dir "${rules_forge_root}/lib/cmake/RulesForge")
+if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
+  set(orm_package_dir "${turbodb_root}/lib/cmake/Orm")
+  set(turbodb_consumer_env "TURBODB_ROOT=${turbodb_root}")
+  set(turbodb_consumer_cmake_args
+      "-DOrm_DIR=${orm_package_dir}"
+      -DTURBO_FLOW_TEST_HAS_TURBODB_ADAPTER=TRUE)
+else()
+  set(turbodb_consumer_env)
+  set(turbodb_consumer_cmake_args
+      -DTURBO_FLOW_TEST_HAS_TURBODB_ADAPTER=FALSE)
+endif()
 
 run_checked(
   "CXX-only consumer configure"
@@ -82,6 +103,7 @@ run_checked(
   "SALTS_ROOT=${salts_root}"
   "SALTS_UTILS_ROOT=${salts_utils_root}"
   "RULES_FORGE_ROOT=${rules_forge_root}"
+  ${turbodb_consumer_env}
   "${CMAKE_COMMAND}" -S "${full_consumer_source_dir}"
   -B "${cxx_consumer_build_dir}"
   -G "${TURBO_FLOW_GENERATOR}"
@@ -90,7 +112,8 @@ run_checked(
   "-DTurboFlow_DIR=${turbo_flow_package_dir}"
   "-DSalts_DIR=${salts_package_dir}"
   "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-  "-DRulesForge_DIR=${rules_forge_package_dir}")
+  "-DRulesForge_DIR=${rules_forge_package_dir}"
+  ${turbodb_consumer_cmake_args})
 
 run_checked(
   "CXX-only consumer build"
@@ -118,6 +141,9 @@ if(WIN32)
       "${salts_root}/bin"
       "${salts_utils_root}/bin"
       "${rules_forge_root}/bin")
+  if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
+    list(APPEND runtime_dirs "${turbodb_root}/bin")
+  endif()
   foreach(runtime_dir IN LISTS runtime_dirs)
     if(NOT IS_DIRECTORY "${runtime_dir}")
       message(FATAL_ERROR "Required runtime directory does not exist: ${runtime_dir}")
@@ -128,9 +154,17 @@ if(WIN32)
 elseif(APPLE)
   set(ENV{DYLD_LIBRARY_PATH}
       "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib:$ENV{DYLD_LIBRARY_PATH}")
+  if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
+    set(ENV{DYLD_LIBRARY_PATH}
+        "${turbodb_root}/lib:$ENV{DYLD_LIBRARY_PATH}")
+  endif()
 else()
   set(ENV{LD_LIBRARY_PATH}
       "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib:$ENV{LD_LIBRARY_PATH}")
+  if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
+    set(ENV{LD_LIBRARY_PATH}
+        "${turbodb_root}/lib:$ENV{LD_LIBRARY_PATH}")
+  endif()
 endif()
 
 set(config_consumer_build_dir "${test_root}/config-build")
@@ -163,6 +197,7 @@ run_checked(
   "SALTS_ROOT=${salts_root}"
   "SALTS_UTILS_ROOT=${salts_utils_root}"
   "RULES_FORGE_ROOT=${rules_forge_root}"
+  ${turbodb_consumer_env}
   "${CMAKE_COMMAND}" -S "${full_consumer_source_dir}"
   -B "${full_consumer_build_dir}"
   -G "${TURBO_FLOW_GENERATOR}"
@@ -171,6 +206,7 @@ run_checked(
   "-DSalts_DIR=${salts_package_dir}"
   "-DSaltsUtils_DIR=${salts_utils_package_dir}"
   "-DRulesForge_DIR=${rules_forge_package_dir}"
+  ${turbodb_consumer_cmake_args}
   -DTURBO_FLOW_TEST_ALL_COMPONENTS=TRUE)
 
 run_checked(
@@ -195,13 +231,15 @@ run_checked(
   "SALTS_ROOT=${salts_root}"
   "SALTS_UTILS_ROOT=${salts_utils_root}"
   "RULES_FORGE_ROOT=${rules_forge_root}"
+  ${turbodb_consumer_env}
   "${CMAKE_COMMAND}" -S "${full_consumer_source_dir}"
   -B "${unscoped_consumer_build_dir}" -G "${TURBO_FLOW_GENERATOR}"
   "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
   "-DTurboFlow_DIR=${turbo_flow_package_dir}"
   "-DSalts_DIR=${salts_package_dir}"
   "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-  "-DRulesForge_DIR=${rules_forge_package_dir}")
+  "-DRulesForge_DIR=${rules_forge_package_dir}"
+  ${turbodb_consumer_cmake_args})
 run_checked(
   "consumer without components build"
   "${CMAKE_COMMAND}" --build "${unscoped_consumer_build_dir}"
@@ -234,6 +272,52 @@ run_checked(
   "Graph consumer execution"
   "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${graph_consumer_build_dir}"
   -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+
+if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
+  set(turbodb_consumer_build_dir "${test_root}/turbodb-build")
+  run_checked(
+    "TurboDb adapter consumer configure"
+    "${CMAKE_COMMAND}" -E env
+    "SALTS_ROOT=${salts_root}"
+    "SALTS_UTILS_ROOT=${salts_utils_root}"
+    "RULES_FORGE_ROOT=${rules_forge_root}"
+    "TURBODB_ROOT=${turbodb_root}"
+    "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
+    -B "${turbodb_consumer_build_dir}" -G "${TURBO_FLOW_GENERATOR}"
+    "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+    "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+    "-DSalts_DIR=${salts_package_dir}"
+    "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+    "-DRulesForge_DIR=${rules_forge_package_dir}"
+    "-DOrm_DIR=${orm_package_dir}"
+    -DTURBO_FLOW_TEST_COMPONENT=TurboDbAdapter)
+  run_checked(
+    "TurboDb adapter consumer build"
+    "${CMAKE_COMMAND}" --build "${turbodb_consumer_build_dir}"
+    --config "${TURBO_FLOW_CONFIG}" --parallel)
+  run_checked(
+    "TurboDb adapter consumer execution"
+    "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${turbodb_consumer_build_dir}"
+    -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+
+  run_expected_failure(
+    "TurboDb adapter consumer configure without TURBODB_ROOT"
+    "TURBODB_ROOT"
+    "${CMAKE_COMMAND}" -E env
+    "SALTS_ROOT=${salts_root}"
+    "SALTS_UTILS_ROOT=${salts_utils_root}"
+    "RULES_FORGE_ROOT=${rules_forge_root}"
+    --unset=TURBODB_ROOT
+    "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
+    -B "${test_root}/turbodb-missing-root-build"
+    -G "${TURBO_FLOW_GENERATOR}"
+    "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+    "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+    "-DSalts_DIR=${salts_package_dir}"
+    "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+    "-DRulesForge_DIR=${rules_forge_package_dir}"
+    -DTURBO_FLOW_TEST_COMPONENT=TurboDbAdapter)
+endif()
 
 run_expected_failure(
   "Config-only consumer configure without SALTS_ROOT"

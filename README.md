@@ -23,6 +23,7 @@ typed projection、调度、可观测性，以及可选的通用存储 adapter�
 | `TurboFlow::MqttSink` | 批量映射中立消息；不拥有 codec/session 或任何 I/O connection |
 | `TurboFlow::CNetAdapter` | 可选 CNet Source/Sink owner；拥有 transport progress 与有界请求状态 |
 | `TurboFlow::CHTTPAdapter` | 可选 CHTTP client、deferred server 与 WebSocket Flow Source/Sink |
+| `TurboFlow::TurboDbAdapter` | 可选 TurboDb ORM Source；将 typed Publisher 的每一行转为 managed message projection |
 
 所有构建开关只在 `CMakeOptions.cmake` 声明。不得在子目录新增隐藏 option，也不得把外部产品源码、
 协议状态机或安装组件重新并入本仓库。
@@ -61,6 +62,25 @@ static int publish_one(turbo_flow_t *flow) {
 
 `turbo_flow_publish()` 仍是同步 facade，但其执行路径同样经过 one-value Publisher、Subscription
 和 inline Scheduler；不存在旧 native fallback。
+
+## TurboDb ORM Source
+
+桌面 user presets 会启用 `TurboFlow::TurboDbAdapter`，并严格要求与构建类型匹配的
+`TURBODB_ROOT`。核心 `TurboFlow::Graph` 不依赖 TurboDb；不需要数据库接入的构建可显式设置
+`TURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF`，此时 CMake 不查找 `Orm`。
+
+适配器直接包装 `orm_query_open_flow()` / `orm_query_open_command_flow()` 返回的 typed CFlow
+Publisher。每次 downstream demand 只拉取一行，将 CMeta 行值绑定为 message-owned projection；
+不物化 rowset、不转 JSON，也没有旧数据库路径 fallback。`WAIT`、waker、cancel 与 terminal
+状态保持原语义。调用方提供的 `turbo_flow_data_schema_t` 及其字符串、ORM query/connection、
+row shape（以及事务版本中的 transaction）必须比 Publisher 和所有派生消息活得更久。
+
+安装后按需请求组件：
+
+```cmake
+find_package(TurboFlow 1.0 CONFIG REQUIRED COMPONENTS TurboDbAdapter)
+target_link_libraries(app PRIVATE TurboFlow::TurboDbAdapter)
+```
 
 ## CHTTP 异步阶段
 

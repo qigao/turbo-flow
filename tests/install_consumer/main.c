@@ -1,12 +1,20 @@
 #include <turbo_flow.h>
 #include <turbo_flow_cnet.h>
 #include <turbo_flow_chttp.h>
+#if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
+#include <turbo_flow_turbodb.h>
+#endif
 
 #if !defined(CNET_STOP_DRAIN_CONTRACT_VERSION) || CNET_STOP_DRAIN_CONTRACT_VERSION < 1u
   #error "TurboFlow install consumers require CNet stop-drain contract v1"
 #endif
 
 int main(void) {
+#if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
+  turbo_flow_turbodb_source_config_t turbodb_config =
+      turbo_flow_turbodb_source_config_default();
+  (void)turbodb_config;
+#endif
   turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
   turbo_flow_run_result_t run_result = TURBO_FLOW_RUN_RESULT_INIT;
   turbo_flow_async_terminal_claim_t terminal_claim = TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;

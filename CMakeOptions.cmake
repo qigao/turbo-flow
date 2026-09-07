@@ -16,6 +16,9 @@ option(BUILD_EXAMPLES "Build example programs" ON)
 option(BUILD_TESTS "Build test suite" ON)
 option(BUILD_BENCHMARKS "Build benchmark suite" ON) 
 
+option(TURBO_FLOW_BUILD_TURBODB_ADAPTER
+       "Build the TurboDb ORM Publisher adapter" OFF)
+
 option(TURBO_FLOW_REDIS_LIVE_TESTS
        "Enable Redis integration tests against 127.0.0.1:6379" OFF)
 option(ENABLE_SANITIZER_ADDRESS "Enable AddressSanitizer" OFF)

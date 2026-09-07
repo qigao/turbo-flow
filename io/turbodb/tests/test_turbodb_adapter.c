@@ -1,0 +1,500 @@
+#include <tinytest.h>
+#include <turbo_flow_turbodb.h>
+
+#include <cflow/publishers.h>
+#include <cmeta/data.h>
+#include <cmeta/struct.h>
+#include <salts_error.h>
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define TEST_ROW_DATA_PREFIX_SIZE                                                                  \
+  (offsetof(cmeta_data_desc, shape) + sizeof(((cmeta_data_desc *)0)->shape))
+
+Struct(test_db_row, (int, id), (long, score));
+
+static const cmeta_type_identity TEST_DB_ROW_IDENTITY =
+    CMETA_TYPE_ID_ATOM_INIT("turboflow.test.DbRow");
+static const cmeta_type_traits TEST_DB_ROW_TRAITS = {.flags = CMETA_TRAIT_TRIVIAL_COPY |
+                                                              CMETA_TRAIT_TRIVIAL_DESTROY};
+static const cmeta_type_desc TEST_DB_ROW_TYPE = {.name = "test_db_row",
+                                                 .size = sizeof(test_db_row),
+                                                 .align = _Alignof(test_db_row),
+                                                 .kind = CMETA_T_OBJECT,
+                                                 .traits = &TEST_DB_ROW_TRAITS,
+                                                 .identity = &TEST_DB_ROW_IDENTITY};
+static const cmeta_data_field_desc TEST_DB_ROW_FIELDS[] = {
+    {"turboflow.test.DbRow.id", "id", offsetof(test_db_row, id), &cmeta_data_int},
+    {"turboflow.test.DbRow.score", "score", offsetof(test_db_row, score), &cmeta_data_long}};
+static const cmeta_data_struct_shape TEST_DB_ROW_SHAPE = {
+    .layout = StructMeta(test_db_row),
+    .fields = TEST_DB_ROW_FIELDS,
+    .field_count = sizeof(TEST_DB_ROW_FIELDS) / sizeof(TEST_DB_ROW_FIELDS[0])};
+static const cmeta_data_desc TEST_DB_ROW_DATA = {.struct_size = TEST_ROW_DATA_PREFIX_SIZE,
+                                                 .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+                                                 .stable_id = "turboflow.test.DbRow.data",
+                                                 .display_name = "TurboFlow test database row",
+                                                 .kind = CMETA_DATA_STRUCT,
+                                                 .storage_type = &TEST_DB_ROW_TYPE,
+                                                 .shape = &TEST_DB_ROW_SHAPE};
+
+static const turbo_flow_data_schema_t TEST_DB_ROW_SCHEMA = {
+    .size = sizeof(turbo_flow_data_schema_t),
+    .domain = TURBO_FLOW_DOMAIN_DATA,
+    .encoding = TURBO_FLOW_DATA_ENCODING_TBE,
+    .schema_name = "test.db.row",
+    .type_name = "TestDbRow",
+    .projection_type = "test_db_row",
+    .schema_id = 2u,
+    .schema_version = 1u};
+
+static const turbo_flow_data_schema_t TEST_DB_COMMAND_SCHEMA = {
+    .size = sizeof(turbo_flow_data_schema_t),
+    .domain = TURBO_FLOW_DOMAIN_DATA,
+    .encoding = TURBO_FLOW_DATA_ENCODING_TBE,
+    .schema_name = "test.db.command",
+    .type_name = "OrmCommandResult",
+    .projection_type = "orm_command_result_t",
+    .schema_id = 3u,
+    .schema_version = 1u};
+
+static const turbo_flow_data_schema_t INT_SCHEMA = {.size = sizeof(turbo_flow_data_schema_t),
+                                                    .domain = TURBO_FLOW_DOMAIN_DATA,
+                                                    .encoding = TURBO_FLOW_DATA_ENCODING_TBE,
+                                                    .schema_name = "test.int",
+                                                    .type_name = "TestInt",
+                                                    .projection_type = "int",
+                                                    .schema_id = 1u,
+                                                    .schema_version = 1u};
+
+typedef struct managed_row_s {
+  int *value;
+} managed_row_t;
+
+static size_t managed_row_live_allocations;
+
+static bool managed_row_copy(void *destination, const void *source) {
+  managed_row_t *copy = (managed_row_t *)destination;
+  const managed_row_t *original = (const managed_row_t *)source;
+  copy->value = (int *)malloc(sizeof(*copy->value));
+  if (!copy->value) return false;
+  *copy->value = *original->value;
+  ++managed_row_live_allocations;
+  return true;
+}
+
+static void managed_row_move(void *destination, void *source) {
+  *(managed_row_t *)destination = *(managed_row_t *)source;
+  ((managed_row_t *)source)->value = NULL;
+}
+
+static void managed_row_destroy(void *value) {
+  managed_row_t *row = (managed_row_t *)value;
+  if (!row->value) return;
+  free(row->value);
+  row->value = NULL;
+  --managed_row_live_allocations;
+}
+
+static const cmeta_type_identity MANAGED_ROW_IDENTITY =
+    CMETA_TYPE_ID_ATOM_INIT("turboflow.test.ManagedRow");
+static const cmeta_type_traits MANAGED_ROW_TRAITS = {.flags = CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE |
+                                                              CMETA_TRAIT_DESTROY,
+                                                     .copy_construct = managed_row_copy,
+                                                     .move_construct = managed_row_move,
+                                                     .destroy = managed_row_destroy};
+static const cmeta_type_desc MANAGED_ROW_TYPE = {.name = "managed_row_t",
+                                                 .size = sizeof(managed_row_t),
+                                                 .align = _Alignof(managed_row_t),
+                                                 .kind = CMETA_T_OBJECT,
+                                                 .traits = &MANAGED_ROW_TRAITS,
+                                                 .identity = &MANAGED_ROW_IDENTITY};
+static const turbo_flow_data_schema_t MANAGED_ROW_SCHEMA = {
+    .size = sizeof(turbo_flow_data_schema_t),
+    .domain = TURBO_FLOW_DOMAIN_DATA,
+    .encoding = TURBO_FLOW_DATA_ENCODING_TBE,
+    .schema_name = "test.managed.row",
+    .type_name = "ManagedRow",
+    .projection_type = "managed_row_t",
+    .schema_id = 4u,
+    .schema_version = 1u};
+
+int turbodb_adapter_header_cpp_probe(void);
+
+typedef struct wait_source_s {
+  size_t downstream_demand;
+  cflow_waker terminal_waker;
+  bool cancelled;
+  bool destroyed;
+} wait_source_t;
+
+static bool wait_source_waitable_arm(void *state, cflow_waker waker) {
+  (void)state;
+  (void)waker;
+  return true;
+}
+
+static void wait_source_waitable_cancel(void *state) { (void)state; }
+
+CMETA_IMPLEMENTS(cflow_waitable, test_waitable, 0, .arm = wait_source_waitable_arm,
+                 .cancel = wait_source_waitable_cancel);
+
+static const char *wait_source_name(void *state) {
+  (void)state;
+  return "test-wait-source";
+}
+
+static const cmeta_type_desc *wait_source_type(void *state) {
+  (void)state;
+  return &cmeta_type_int;
+}
+
+static cflow_step wait_source_resume(void *state, cflow_publish_context *context, void *out_value) {
+  wait_source_t *source = (wait_source_t *)state;
+  (void)out_value;
+  source->downstream_demand = context ? context->downstream_demand : 0u;
+  return (cflow_step){CFLOW_STEP_WAIT, test_waitable_as_cflow_waitable(source), NULL};
+}
+
+static void wait_source_cancel(void *state) { ((wait_source_t *)state)->cancelled = true; }
+
+static void wait_source_destroy(void *state) { ((wait_source_t *)state)->destroyed = true; }
+
+static void wait_source_bind_terminal_waker(void *state, cflow_waker waker) {
+  ((wait_source_t *)state)->terminal_waker = waker;
+}
+
+static cflow_publisher_terminal wait_source_poll_terminal(void *state, const char **error) {
+  (void)state;
+  if (error) *error = NULL;
+  return CFLOW_PUBLISHER_OPEN;
+}
+
+CMETA_IMPLEMENTS(cflow_publisher, wait_source, CFLOW_PUBLISHER_CAP_CONSTRUCTS_VALUES,
+                 .name = wait_source_name, .output_type = wait_source_type,
+                 .resume = wait_source_resume, .cancel = wait_source_cancel,
+                 .destroy = wait_source_destroy,
+                 .bind_terminal_waker = wait_source_bind_terminal_waker,
+                 .poll_terminal = wait_source_poll_terminal);
+
+static turbo_flow_turbodb_source_config_t int_source_config(uint64_t first_id) {
+  turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
+  config.projection_schema = &INT_SCHEMA;
+  config.first_message_id = first_id;
+  config.message_type = 17u;
+  config.message_flags = 23u;
+  return config;
+}
+
+static void ignore_wake(void *user) { (void)user; }
+
+static orm_connection_t *open_test_database(orm_error_t *error) {
+  orm_config_t config;
+  orm_option_t filename;
+  orm_connection_t *connection = NULL;
+
+  orm_config(&config);
+  filename.keyword = orm_view("filename");
+  filename.value = orm_view(":memory:");
+  config.driver = orm_view("sqlite");
+  config.options = &filename;
+  config.option_count = 1u;
+  check_equal(orm_connect(&config, &connection, error), ORM_STATUS_OK);
+  return connection;
+}
+
+static void execute_test_sql(orm_connection_t *connection, const char *sql, orm_error_t *error) {
+  orm_query_t *query = NULL;
+  orm_result_t *result = NULL;
+
+  check_equal(orm_raw(connection, orm_view(sql), &query, error), ORM_STATUS_OK);
+  check_equal(orm_query_execute(query, &result, error), ORM_STATUS_OK);
+  orm_result_destroy(result);
+  orm_query_destroy(query);
+}
+
+spec("TurboDb ORM Publisher adapter") {
+  it("provides versioned source defaults") {
+    turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
+
+    check_equal(config.size, sizeof(config));
+    check_equal(config.version, TURBO_FLOW_TURBODB_API_VERSION);
+    check_equal(config.first_message_id, 1u);
+    check_equal(turbodb_adapter_header_cpp_probe(), 0);
+  }
+
+  it("moves typed rows into owned cloneable message projections") {
+    const int rows[] = {7, 11};
+    turbo_flow_turbodb_source_config_t config = int_source_config(41u);
+    cflow_publish_context context = {.downstream_demand = 2u};
+    cflow_publisher typed = {0};
+    cflow_publisher messages = {0};
+    turbo_flow_msg_t first;
+    turbo_flow_msg_t cloned;
+    turbo_flow_msg_t second;
+    const turbo_flow_data_schema_t *schema = NULL;
+    const int *projection;
+    cflow_step step;
+
+    check_true(cflow_publisher_from_array(&typed, &cmeta_type_int, rows, 2u));
+    check_equal(turbo_flow_turbodb_publisher_wrap(&typed, &config, &messages), SALTS_OK);
+    check_false(cflow_publisher_valid(&typed));
+    check_true(cflow_publisher_valid(&messages));
+    check_true(cmeta_type_equal(cflow_publisher_output_type(&messages), turbo_flow_message_type()));
+
+    step = cflow_publisher_resume(&messages, &context, &first);
+    check_equal(step.kind, CFLOW_STEP_VALUE);
+    check_equal(first.id, 41u);
+    check_equal(first.type, 17u);
+    check_equal(first.flags, 23u);
+    projection = (const int *)turbo_flow_msg_projection(&first, &schema);
+    check_not_null(projection);
+    check_equal(*projection, 7);
+    check_true(schema == &INT_SCHEMA);
+
+    check_equal(turbo_flow_msg_clone(&cloned, &first), SALTS_OK);
+    projection = (const int *)turbo_flow_msg_projection(&cloned, &schema);
+    check_not_null(projection);
+    check_equal(*projection, 7);
+    check_true(schema == &INT_SCHEMA);
+    turbo_flow_msg_cleanup(&first);
+    turbo_flow_msg_cleanup(&cloned);
+
+    step = cflow_publisher_resume(&messages, &context, &second);
+    check_equal(step.kind, CFLOW_STEP_VALUE_AND_DONE);
+    check_equal(second.id, 42u);
+    projection = (const int *)turbo_flow_msg_projection(&second, NULL);
+    check_not_null(projection);
+    check_equal(*projection, 11);
+    turbo_flow_msg_cleanup(&second);
+    cflow_publisher_destroy(&messages);
+  }
+
+  it("forwards wait demand terminal wakers cancellation and destruction") {
+    turbo_flow_turbodb_source_config_t config = int_source_config(1u);
+    wait_source_t source = {0};
+    cflow_publisher typed = wait_source_as_cflow_publisher(&source);
+    cflow_publisher messages = {0};
+    cflow_publish_context context = {.downstream_demand = 19u};
+    cflow_waker terminal_waker = {.wake = ignore_wake, .user = &source};
+    turbo_flow_msg_t empty;
+    cflow_step step;
+
+    check_equal(turbo_flow_turbodb_publisher_wrap(&typed, &config, &messages), SALTS_OK);
+    memset(&empty, 0, sizeof(empty));
+    step = cflow_publisher_resume(&messages, &context, &empty);
+    check_equal(step.kind, CFLOW_STEP_WAIT);
+    check_equal(step.waitable.self, &source);
+    check_equal(source.downstream_demand, 19u);
+
+    cflow_publisher_bind_terminal_waker(&messages, terminal_waker);
+    check_true(source.terminal_waker.wake == ignore_wake);
+    check_equal(source.terminal_waker.user, &source);
+    cflow_publisher_cancel(&messages);
+    check_true(source.cancelled);
+    cflow_publisher_destroy(&messages);
+    check_true(source.destroyed);
+  }
+
+  it("uses managed CMeta copy and destroy traits for projections") {
+    managed_row_t row = {0};
+    turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
+    cflow_publisher typed = {0};
+    cflow_publisher messages = {0};
+    cflow_publish_context context = {.downstream_demand = 1u};
+    turbo_flow_msg_t message;
+    turbo_flow_msg_t clone;
+    const managed_row_t *projection;
+    cflow_step step;
+
+    managed_row_live_allocations = 0u;
+    row.value = (int *)malloc(sizeof(*row.value));
+    check_not_null(row.value);
+    *row.value = 37;
+    ++managed_row_live_allocations;
+    config.projection_schema = &MANAGED_ROW_SCHEMA;
+    check_true(cflow_publisher_from_array(&typed, &MANAGED_ROW_TYPE, &row, 1u));
+    check_equal(turbo_flow_turbodb_publisher_wrap(&typed, &config, &messages), SALTS_OK);
+    step = cflow_publisher_resume(&messages, &context, &message);
+    check_equal(step.kind, CFLOW_STEP_VALUE_AND_DONE);
+    projection = (const managed_row_t *)turbo_flow_msg_projection(&message, NULL);
+    check_not_null(projection);
+    check_equal(*projection->value, 37);
+    check_equal(turbo_flow_msg_clone(&clone, &message), SALTS_OK);
+    projection = (const managed_row_t *)turbo_flow_msg_projection(&clone, NULL);
+    check_not_null(projection);
+    check_equal(*projection->value, 37);
+    check_equal(managed_row_live_allocations, 3u);
+
+    turbo_flow_msg_cleanup(&message);
+    turbo_flow_msg_cleanup(&clone);
+    cflow_publisher_destroy(&messages);
+    managed_row_destroy(&row);
+    check_equal(managed_row_live_allocations, 0u);
+  }
+
+  it("fails on message ID overflow only when another row arrives") {
+    const int rows[] = {3, 5};
+    turbo_flow_turbodb_source_config_t config = int_source_config(UINT64_MAX);
+    cflow_publish_context context = {0};
+    cflow_publisher typed = {0};
+    cflow_publisher messages = {0};
+    turbo_flow_msg_t message;
+    cflow_step step;
+
+    check_true(cflow_publisher_from_array(&typed, &cmeta_type_int, rows, 2u));
+    check_equal(turbo_flow_turbodb_publisher_wrap(&typed, &config, &messages), SALTS_OK);
+    step = cflow_publisher_resume(&messages, &context, &message);
+    check_equal(step.kind, CFLOW_STEP_VALUE);
+    check_equal(message.id, UINT64_MAX);
+    turbo_flow_msg_cleanup(&message);
+    step = cflow_publisher_resume(&messages, &context, &message);
+    check_equal(step.kind, CFLOW_STEP_ERROR);
+    check_not_null(step.error);
+    cflow_publisher_destroy(&messages);
+  }
+
+  it("keeps source ownership when schema validation fails") {
+    const int rows[] = {7};
+    turbo_flow_data_schema_t wrong_schema = INT_SCHEMA;
+    turbo_flow_turbodb_source_config_t config = int_source_config(1u);
+    cflow_publisher typed = {0};
+    cflow_publisher messages = {0};
+
+    wrong_schema.projection_type = "double";
+    config.projection_schema = &wrong_schema;
+    check_true(cflow_publisher_from_array(&typed, &cmeta_type_int, rows, 1u));
+    check_equal(turbo_flow_turbodb_publisher_wrap(&typed, &config, &messages), SALTS_EINVAL);
+    check_true(cflow_publisher_valid(&typed));
+    check_false(cflow_publisher_valid(&messages));
+    cflow_publisher_destroy(&typed);
+  }
+
+  it("opens native ORM row and command Publishers without materialization") {
+    orm_error_t error;
+    orm_connection_t *connection;
+    orm_query_t *query = NULL;
+    orm_flow_config_t flow_config;
+    turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
+    cflow_publisher messages = {0};
+    cflow_publish_context context = {.downstream_demand = 2u};
+    turbo_flow_msg_t message;
+    const test_db_row *row;
+    const orm_command_result_t *command_result;
+    cflow_step step;
+
+    orm_error_init(&error);
+    connection = open_test_database(&error);
+    check_not_null(connection);
+    execute_test_sql(connection, "create table adapter_rows(id integer, score integer)", &error);
+    execute_test_sql(connection, "insert into adapter_rows values(7, 19), (11, 29)", &error);
+
+    check_equal(orm_raw(connection, orm_view("select id, score from adapter_rows order by id"),
+                        &query, &error),
+                ORM_STATUS_OK);
+    orm_flow_config(&flow_config, &TEST_DB_ROW_DATA);
+    config.projection_schema = &TEST_DB_ROW_SCHEMA;
+    config.first_message_id = 100u;
+    check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
+                SALTS_OK);
+    step = cflow_publisher_resume(&messages, &context, &message);
+    check_equal(step.kind, CFLOW_STEP_VALUE);
+    row = (const test_db_row *)turbo_flow_msg_projection(&message, NULL);
+    check_not_null(row);
+    check_equal(row->id, 7);
+    check_equal(row->score, 19L);
+    turbo_flow_msg_cleanup(&message);
+    step = cflow_publisher_resume(&messages, &context, &message);
+    check_true(step.kind == CFLOW_STEP_VALUE || step.kind == CFLOW_STEP_VALUE_AND_DONE);
+    row = (const test_db_row *)turbo_flow_msg_projection(&message, NULL);
+    check_not_null(row);
+    check_equal(row->id, 11);
+    check_equal(row->score, 29L);
+    turbo_flow_msg_cleanup(&message);
+    cflow_publisher_destroy(&messages);
+    messages = (cflow_publisher){0};
+    orm_query_destroy(query);
+    query = NULL;
+
+    check_equal(
+        orm_raw(connection, orm_view("insert into adapter_rows values(13, 31)"), &query, &error),
+        ORM_STATUS_OK);
+    config.projection_schema = &TEST_DB_COMMAND_SCHEMA;
+    config.first_message_id = 200u;
+    check_equal(turbo_flow_turbodb_command_open(query, &config, &messages, &error), SALTS_OK);
+    step = cflow_publisher_resume(&messages, &context, &message);
+    check_equal(step.kind, CFLOW_STEP_VALUE_AND_DONE);
+    command_result = (const orm_command_result_t *)turbo_flow_msg_projection(&message, NULL);
+    check_not_null(command_result);
+    check_equal(command_result->affected_rows, 1u);
+    turbo_flow_msg_cleanup(&message);
+    cflow_publisher_destroy(&messages);
+    orm_query_destroy(query);
+    orm_disconnect(connection);
+  }
+
+  it("preserves transaction ownership for row and command Publishers") {
+    orm_error_t error;
+    orm_connection_t *connection;
+    orm_transaction_t *transaction = NULL;
+    orm_query_t *query = NULL;
+    orm_flow_config_t flow_config;
+    turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
+    cflow_publisher messages = {0};
+    turbo_flow_msg_t message;
+    const test_db_row *row;
+    const orm_command_result_t *command_result;
+    cflow_step step;
+
+    orm_error_init(&error);
+    connection = open_test_database(&error);
+    check_not_null(connection);
+    execute_test_sql(connection, "create table transaction_rows(id integer, score integer)",
+                     &error);
+    check_equal(orm_transaction_begin(connection, ORM_ISOLATION_SERIALIZABLE, &transaction, &error),
+                ORM_STATUS_OK);
+
+    check_equal(orm_raw(connection, orm_view("insert into transaction_rows values(17, 43)"), &query,
+                        &error),
+                ORM_STATUS_OK);
+    config.projection_schema = &TEST_DB_COMMAND_SCHEMA;
+    check_equal(turbo_flow_turbodb_command_open_in_transaction(query, transaction, &config,
+                                                               &messages, &error),
+                SALTS_OK);
+    step = cflow_publisher_resume(&messages, NULL, &message);
+    check_equal(step.kind, CFLOW_STEP_VALUE_AND_DONE);
+    command_result = (const orm_command_result_t *)turbo_flow_msg_projection(&message, NULL);
+    check_not_null(command_result);
+    check_equal(command_result->affected_rows, 1u);
+    turbo_flow_msg_cleanup(&message);
+    cflow_publisher_destroy(&messages);
+    messages = (cflow_publisher){0};
+    orm_query_destroy(query);
+    query = NULL;
+
+    check_equal(
+        orm_raw(connection, orm_view("select id, score from transaction_rows"), &query, &error),
+        ORM_STATUS_OK);
+    orm_flow_config(&flow_config, &TEST_DB_ROW_DATA);
+    config.projection_schema = &TEST_DB_ROW_SCHEMA;
+    check_equal(turbo_flow_turbodb_query_open_in_transaction(query, transaction, &flow_config,
+                                                             &config, &messages, &error),
+                SALTS_OK);
+    step = cflow_publisher_resume(&messages, NULL, &message);
+    check_true(step.kind == CFLOW_STEP_VALUE || step.kind == CFLOW_STEP_VALUE_AND_DONE);
+    row = (const test_db_row *)turbo_flow_msg_projection(&message, NULL);
+    check_not_null(row);
+    check_equal(row->id, 17);
+    check_equal(row->score, 43L);
+    turbo_flow_msg_cleanup(&message);
+    cflow_publisher_destroy(&messages);
+    orm_query_destroy(query);
+
+    check_equal(orm_transaction_rollback(transaction, &error), ORM_STATUS_OK);
+    orm_transaction_destroy(transaction);
+    orm_disconnect(connection);
+  }
+}
