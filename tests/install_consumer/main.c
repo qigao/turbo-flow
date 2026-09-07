@@ -13,7 +13,11 @@ int main(void) {
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   turbo_flow_turbodb_source_config_t turbodb_config =
       turbo_flow_turbodb_source_config_default();
-  (void)turbodb_config;
+  turbo_flow_turbodb_outbox_source_config_t outbox_config =
+      turbo_flow_turbodb_outbox_source_config_default();
+  if (turbodb_config.version != TURBO_FLOW_TURBODB_API_VERSION ||
+      outbox_config.version != TURBO_FLOW_TURBODB_OUTBOX_SOURCE_API_VERSION)
+    return 1;
 #endif
   turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
   turbo_flow_run_result_t run_result = TURBO_FLOW_RUN_RESULT_INIT;

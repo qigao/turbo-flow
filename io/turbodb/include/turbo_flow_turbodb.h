@@ -118,6 +118,250 @@ TURBO_FLOW_C_API int turbo_flow_turbodb_command_open_in_transaction(
     const turbo_flow_turbodb_source_config_t *source_config, cflow_publisher *message_publisher,
     orm_error_t *orm_error);
 
+#define TURBO_FLOW_TURBODB_OUTBOX_SOURCE_API_VERSION UINT32_C(1)
+#define TURBO_FLOW_TURBODB_OUTBOX_DEFAULT_FETCH_COUNT 16u
+#define TURBO_FLOW_TURBODB_OUTBOX_DEFAULT_IN_FLIGHT_MESSAGES 64u
+#define TURBO_FLOW_TURBODB_OUTBOX_DEFAULT_IN_FLIGHT_BYTES (16u * 1024u * 1024u)
+#define TURBO_FLOW_TURBODB_OUTBOX_DEFAULT_MAX_IDENTITY_BYTES 256u
+#define TURBO_FLOW_TURBODB_OUTBOX_DEFAULT_MAX_PAYLOAD_BYTES (1024u * 1024u)
+#define TURBO_FLOW_TURBODB_OUTBOX_DEFAULT_MAX_DELIVERY_ATTEMPTS 32u
+
+typedef struct turbo_flow_turbodb_outbox_source_s turbo_flow_turbodb_outbox_source_t;
+
+/**
+ * Borrowed receipt returned by one provider fetch step.
+ *
+ * Every byte view remains valid only until fetch returns. A RECORD transfers
+ * one active token to the adapter; the provider must keep that token valid
+ * until acknowledge, requeue, or dead_letter followed by acknowledge succeeds.
+ * A WAIT waitable's cancel operation is a quiescent boundary: after cancel
+ * returns, it must neither retain nor invoke the previously armed waker.
+ */
+typedef struct turbo_flow_turbodb_outbox_record_s {
+  size_t size;
+  uint32_t version;
+  uint64_t token;
+  uint64_t raft_index;
+  uint64_t term;
+  uint32_t delivery_attempt;
+  vstr identity;
+  vstr payload;
+} turbo_flow_turbodb_outbox_record_t;
+
+#define TURBO_FLOW_TURBODB_OUTBOX_RECORD_INIT                                                      \
+  {sizeof(turbo_flow_turbodb_outbox_record_t),                                                     \
+   TURBO_FLOW_TURBODB_OUTBOX_SOURCE_API_VERSION,                                                   \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   {NULL, 0u},                                                                                     \
+   {NULL, 0u}}
+
+/**
+ * Exact remaining admission budget observed by a non-blocking provider fetch.
+ *
+ * A provider may internally obtain at most max_records, but returns one record
+ * per callback and drains that private batch before opening another fetch.
+ */
+typedef struct turbo_flow_turbodb_outbox_fetch_budget_s {
+  size_t size;
+  uint32_t version;
+  size_t max_records;
+  size_t max_retained_bytes;
+  size_t max_identity_bytes;
+  size_t max_payload_bytes;
+} turbo_flow_turbodb_outbox_fetch_budget_t;
+
+typedef enum turbo_flow_turbodb_outbox_fetch_kind_e {
+  TURBO_FLOW_TURBODB_OUTBOX_FETCH_IDLE = 0,
+  TURBO_FLOW_TURBODB_OUTBOX_FETCH_WAIT,
+  TURBO_FLOW_TURBODB_OUTBOX_FETCH_RECORD,
+  TURBO_FLOW_TURBODB_OUTBOX_FETCH_DATA_LOSS,
+  TURBO_FLOW_TURBODB_OUTBOX_FETCH_ERROR
+} turbo_flow_turbodb_outbox_fetch_kind_t;
+
+typedef struct turbo_flow_turbodb_outbox_fetch_step_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_turbodb_outbox_fetch_kind_t kind;
+  /** IDLE, WAIT, and RECORD require SALTS_OK; error kinds carry their cause. */
+  int status;
+  cflow_waitable waitable;
+  turbo_flow_turbodb_outbox_record_t record;
+} turbo_flow_turbodb_outbox_fetch_step_t;
+
+#define TURBO_FLOW_TURBODB_OUTBOX_FETCH_STEP_INIT                                                  \
+  {sizeof(turbo_flow_turbodb_outbox_fetch_step_t),                                                 \
+   TURBO_FLOW_TURBODB_OUTBOX_SOURCE_API_VERSION,                                                   \
+   TURBO_FLOW_TURBODB_OUTBOX_FETCH_IDLE,                                                           \
+   SALTS_OK,                                                                                       \
+   {0},                                                                                            \
+   TURBO_FLOW_TURBODB_OUTBOX_RECORD_INIT}
+
+typedef turbo_flow_turbodb_outbox_fetch_step_t (*turbo_flow_turbodb_outbox_fetch_fn)(
+    void *ctx, const turbo_flow_turbodb_outbox_fetch_budget_t *budget);
+typedef int (*turbo_flow_turbodb_outbox_cancel_fetch_fn)(void *ctx);
+typedef int (*turbo_flow_turbodb_outbox_settle_fn)(void *ctx, uint64_t token);
+
+/** Message-owned receipt metadata visible to Graph stages. */
+typedef struct turbo_flow_turbodb_outbox_message_context_s {
+  size_t size;
+  uint32_t version;
+  uint64_t raft_index;
+  uint64_t term;
+  uint32_t delivery_attempt;
+  size_t identity_size;
+} turbo_flow_turbodb_outbox_message_context_t;
+
+typedef int (*turbo_flow_turbodb_outbox_dead_letter_fn)(
+    void *ctx, uint64_t token, const turbo_flow_turbodb_outbox_message_context_t *receipt,
+    int graph_status);
+
+typedef struct turbo_flow_turbodb_outbox_provider_ops_s {
+  size_t size;
+  turbo_flow_turbodb_outbox_fetch_fn fetch;
+  turbo_flow_turbodb_outbox_cancel_fetch_fn cancel_fetch;
+  turbo_flow_turbodb_outbox_settle_fn acknowledge;
+  turbo_flow_turbodb_outbox_settle_fn requeue;
+  turbo_flow_turbodb_outbox_dead_letter_fn dead_letter;
+} turbo_flow_turbodb_outbox_provider_ops_t;
+
+#define TURBO_FLOW_TURBODB_OUTBOX_PROVIDER_OPS_INIT                                                \
+  {sizeof(turbo_flow_turbodb_outbox_provider_ops_t), NULL, NULL, NULL, NULL, NULL}
+
+typedef enum turbo_flow_turbodb_outbox_failure_disposition_e {
+  TURBO_FLOW_TURBODB_OUTBOX_FAILURE_RETRYABLE = 0,
+  TURBO_FLOW_TURBODB_OUTBOX_FAILURE_PERMANENT
+} turbo_flow_turbodb_outbox_failure_disposition_t;
+
+typedef turbo_flow_turbodb_outbox_failure_disposition_t (
+    *turbo_flow_turbodb_outbox_failure_classify_fn)(
+    void *ctx, const turbo_flow_turbodb_outbox_message_context_t *receipt, int graph_status);
+
+typedef enum turbo_flow_turbodb_outbox_permanent_failure_policy_e {
+  TURBO_FLOW_TURBODB_OUTBOX_PERMANENT_FAIL_SOURCE = 0,
+  TURBO_FLOW_TURBODB_OUTBOX_PERMANENT_DEAD_LETTER
+} turbo_flow_turbodb_outbox_permanent_failure_policy_t;
+
+typedef enum turbo_flow_turbodb_outbox_shutdown_policy_e {
+  TURBO_FLOW_TURBODB_OUTBOX_SHUTDOWN_REQUEUE = 0
+} turbo_flow_turbodb_outbox_shutdown_policy_t;
+
+typedef struct turbo_flow_turbodb_outbox_source_config_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_t *flow;
+  const char *source_name;
+  /** Borrowed by every in-flight Graph run; NULL selects the Flow-owned scheduler. */
+  cflow_scheduler *scheduler;
+  void *provider_ctx;
+  turbo_flow_turbodb_outbox_provider_ops_t provider;
+  turbo_flow_turbodb_outbox_failure_classify_fn classify_failure;
+  void *policy_ctx;
+  turbo_flow_turbodb_outbox_permanent_failure_policy_t permanent_failure_policy;
+  turbo_flow_turbodb_outbox_shutdown_policy_t shutdown_policy;
+  size_t fetch_count;
+  size_t in_flight_messages;
+  size_t in_flight_bytes;
+  size_t max_identity_bytes;
+  size_t max_payload_bytes;
+  uint32_t max_delivery_attempts;
+  uint64_t first_message_id;
+  uint32_t message_type;
+  uint32_t message_flags;
+} turbo_flow_turbodb_outbox_source_config_t;
+
+typedef enum turbo_flow_turbodb_outbox_source_state_e {
+  TURBO_FLOW_TURBODB_OUTBOX_SOURCE_RUNNING = 0,
+  TURBO_FLOW_TURBODB_OUTBOX_SOURCE_WAITING,
+  TURBO_FLOW_TURBODB_OUTBOX_SOURCE_STOPPING,
+  TURBO_FLOW_TURBODB_OUTBOX_SOURCE_STOPPED,
+  TURBO_FLOW_TURBODB_OUTBOX_SOURCE_FAILED
+} turbo_flow_turbodb_outbox_source_state_t;
+
+typedef struct turbo_flow_turbodb_outbox_source_snapshot_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_turbodb_outbox_source_state_t state;
+  int status;
+  size_t outstanding_demand;
+  size_t in_flight_messages;
+  size_t in_flight_bytes;
+  uint64_t fetched;
+  uint64_t acknowledged;
+  uint64_t requeued;
+  uint64_t dead_lettered;
+  uint64_t data_loss_events;
+  char error_stage[48];
+} turbo_flow_turbodb_outbox_source_snapshot_t;
+
+#define TURBO_FLOW_TURBODB_OUTBOX_SOURCE_SNAPSHOT_INIT                                             \
+  {sizeof(turbo_flow_turbodb_outbox_source_snapshot_t),                                            \
+   TURBO_FLOW_TURBODB_OUTBOX_SOURCE_API_VERSION,                                                   \
+   TURBO_FLOW_TURBODB_OUTBOX_SOURCE_RUNNING,                                                       \
+   SALTS_OK,                                                                                       \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   {0}}
+
+/** Return finite defaults; flow, source_name, callbacks, and contexts remain unset. */
+TURBO_FLOW_C_API turbo_flow_turbodb_outbox_source_config_t
+turbo_flow_turbodb_outbox_source_config_default(void);
+
+/**
+ * Open one owner-thread-affine, non-blocking outbox Source.
+ *
+ * The configuration and provider vtable are copied; flow, scheduler,
+ * provider_ctx, and policy_ctx are borrowed through successful destroy.
+ * No provider callback runs during open. The Flow must already be STARTED.
+ *
+ * @param config Immutable bounded source contract.
+ * @param source_out Receives the owned source and is cleared before validation.
+ * @return SALTS_OK, SALTS_EINVAL for invalid ABI/config/lifecycle, or SALTS_ENOMEM.
+ */
+TURBO_FLOW_C_API int
+turbo_flow_turbodb_outbox_source_open(const turbo_flow_turbodb_outbox_source_config_t *config,
+                                      turbo_flow_turbodb_outbox_source_t **source_out);
+
+/** Add finite downstream demand with saturating arithmetic; zero is invalid. */
+TURBO_FLOW_C_API int
+turbo_flow_turbodb_outbox_source_request(turbo_flow_turbodb_outbox_source_t *source, size_t demand);
+
+/**
+ * Perform at most max_steps owner-context fetch or slot-settlement transitions.
+ * Provider callback failures preserve the active token and may be retried by
+ * a later poll with the same idempotent operation. Non-terminal Graph request
+ * rejection preserves the token for requeue and returns the rejection status.
+ * Dead-letter and its following acknowledgement are always separate steps.
+ */
+TURBO_FLOW_C_API int
+turbo_flow_turbodb_outbox_source_poll(turbo_flow_turbodb_outbox_source_t *source, size_t max_steps);
+/** Copy counters and the first current error stage without advancing work. */
+TURBO_FLOW_C_API int
+turbo_flow_turbodb_outbox_source_snapshot(const turbo_flow_turbodb_outbox_source_t *source,
+                                          turbo_flow_turbodb_outbox_source_snapshot_t *snapshot);
+/**
+ * Stop admission, cancel an armed fetch and every live Graph run, then requeue
+ * all unsettled claims. A provider error leaves STOPPING state for an exact retry.
+ */
+TURBO_FLOW_C_API int
+turbo_flow_turbodb_outbox_source_stop(turbo_flow_turbodb_outbox_source_t *source);
+/** Release a successfully stopped source; a live owner returns SALTS_EBUSY. */
+TURBO_FLOW_C_API int
+turbo_flow_turbodb_outbox_source_destroy(turbo_flow_turbodb_outbox_source_t *source);
+/** Validate and borrow message-owned receipt metadata, or return NULL. */
+TURBO_FLOW_C_API const turbo_flow_turbodb_outbox_message_context_t *
+turbo_flow_turbodb_outbox_message_context(const turbo_flow_msg_t *message);
+/** Validate and borrow the stable outbox identity, or return an empty view. */
+TURBO_FLOW_C_API vstr turbo_flow_turbodb_outbox_message_identity(const turbo_flow_msg_t *message);
+
 #ifdef __cplusplus
 }
 #endif
