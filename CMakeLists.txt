@@ -193,6 +193,18 @@ install(
 
 if(BUILD_TESTING AND BUILD_TESTS)
   add_test(
+    NAME test_turbo_flow_cmake_tools_failfast
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DTURBO_FLOW_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+      "-DTURBO_FLOW_BINARY_DIR=${CMAKE_BINARY_DIR}"
+      "-DTURBO_FLOW_GENERATOR=${CMAKE_GENERATOR}"
+      -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_find_tools_failfast.cmake")
+  set_tests_properties(
+    test_turbo_flow_cmake_tools_failfast
+    PROPERTIES LABELS "cmake;tools" RUN_SERIAL TRUE TIMEOUT 30)
+
+  add_test(
     NAME test_turbo_flow_install_consumer
     COMMAND
       "${CMAKE_COMMAND}"
