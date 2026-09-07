@@ -3,6 +3,8 @@
 > Issue: [#31](https://github.com/qigao/turbo-flow/issues/31)
 >
 > Stacked prerequisites: TurboFlow PR #32, Salts PR #229, and Salts PR #233.
+>
+> Implementation: TurboFlow PR #33.
 
 ## Goal
 
@@ -41,7 +43,7 @@ callback-borrowed object, generic socket path, C fallback, or CMake fallback cro
 5. [x] Add WSS CA/SNI handshake coverage with the existing TLS fixture.
 6. [x] Add RFC 8441 two-sibling isolation coverage over one H2 connection.
 7. [x] Update CMake exports, C/C++ header probes, README/ADR, and issue acceptance evidence.
-8. [ ] Run focused tests, full Debug and Release presets, install/consumer verification, then push
+8. [x] Run focused tests, full Debug and Release presets, install/consumer verification, then push
        a stacked PR without merging it.
 
 ## Verification
