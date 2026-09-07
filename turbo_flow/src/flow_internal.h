@@ -27,6 +27,7 @@ typedef struct flow_stage_plan_impl_s {
   int is_source;
   int is_port;
   int is_port_output;
+  int async_emitting;
   tstr adapter_name;
   tstr operation_name;
   tstr resource_name;
@@ -88,6 +89,7 @@ typedef struct flow_adapter_registration_s {
   tstr name;
   turbo_flow_adapter_ops_t ops;
   turbo_flow_async_terminal_adapter_ops_t async_terminal_ops;
+  turbo_flow_async_emit_adapter_ops_t async_emit_ops;
   turbo_flow_adapter_consume_batch_fn consume_batch;
   void *ctx;
   turbo_flow_settlement_owner_ops_t settlement_ops;
@@ -488,7 +490,7 @@ typedef struct flow_pool_rebuild_fault_s {
 
 struct turbo_flow_s {
   turbo_flow_state_t state;
-  int has_async_terminal_stage;
+  int has_async_stage;
   vec_t stages;
   vec_t edges;
   flow_compiled_plan_t compiled_plan;
@@ -664,6 +666,9 @@ int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t 
 int flow_async_terminal_submit_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
                                      const flow_adapter_registration_t *adapter,
                                      turbo_flow_msg_t *msg, flow_stage_completion_t *completion);
+int flow_async_emit_submit_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
+                                 const flow_adapter_registration_t *adapter, turbo_flow_msg_t *msg,
+                                 flow_stage_completion_t *completion);
 flow_async_publication_t *flow_async_publication_create(turbo_flow_t *flow, const char *source_name,
                                                         const turbo_flow_msg_t *message,
                                                         uint64_t observe_start,

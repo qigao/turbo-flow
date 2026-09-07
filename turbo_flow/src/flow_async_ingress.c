@@ -146,7 +146,7 @@ static void flow_async_publish_task_run(void *arg) {
   flow_publish_error_context_begin(flow);
   flow_clear_error(flow);
   if (flow_observer_has_handlers(flow)) observe_start = salts_hrtime();
-  if (!flow->has_async_terminal_stage) {
+  if (!flow->has_async_stage) {
     (void)flow_publish_local(flow, task->source_name, task->source_index, &task->message,
                              observe_start, &result, NULL);
     flow_publish_error_context_end(flow);

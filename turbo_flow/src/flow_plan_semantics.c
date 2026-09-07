@@ -107,7 +107,7 @@ static uint32_t flow_stage_barriers(const flow_stage_plan_impl_t *stage,
     barriers |= FLOW_LOWERING_BARRIER_STATEFUL;
     effects |= CMETA_EFFECT_STATEFUL;
   }
-  if (stage->exec.kind != TURBO_FLOW_EXEC_INLINE ||
+  if (stage->async_emitting || stage->exec.kind != TURBO_FLOW_EXEC_INLINE ||
       stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL ||
       (runtime && runtime->handoff != TURBO_FLOW_HANDOFF_DIRECT)) {
     barriers |= FLOW_LOWERING_BARRIER_ASYNC;
@@ -298,8 +298,9 @@ int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *pl
     semantics->input_type_index = FLOW_PLAN_INDEX_NONE;
     semantics->output_type_index = FLOW_PLAN_INDEX_NONE;
     semantics->candidate_region = FLOW_PLAN_INDEX_NONE;
-    semantics->cflow_operator =
-        stage->emit_fn || stage->keyed_emit_fn ? CFLOW_OP_FLAT_MAP : CFLOW_OP_MAP;
+    semantics->cflow_operator = stage->async_emitting || stage->emit_fn || stage->keyed_emit_fn
+                                    ? CFLOW_OP_FLAT_MAP
+                                    : CFLOW_OP_MAP;
     if (stage->is_source || stage->is_port) semantics->cflow_operator = CFLOW_OP_INPUT;
     if (operation && operation->input_type) {
       rc = flow_semantic_type_add(plan, operation->input_domain, operation->input_type,
