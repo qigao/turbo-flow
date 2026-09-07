@@ -144,6 +144,27 @@ typedef struct adapter_ctx_s {
   const char *expected_payload;
 } adapter_ctx_t;
 
+typedef struct pool_rebuild_fault_script_s {
+  int results[2];
+  size_t count;
+  size_t calls;
+} pool_rebuild_fault_script_t;
+
+typedef struct pool_plan_snapshot_s {
+  int stage_index;
+  uint32_t executor_index;
+  uint32_t segment_index;
+  uint32_t adapter_index;
+  size_t node_count;
+  size_t executor_count;
+  size_t segment_count;
+  size_t semantic_count;
+  flow_runtime_node_plan_t node;
+  flow_executor_plan_t executor;
+  flow_data_segment_plan_t segment;
+  flow_stage_semantic_plan_t semantic;
+} pool_plan_snapshot_t;
+
 typedef struct failure_check_ctx_s {
   const char *stage_name;
   const char *adapter_name;
@@ -562,6 +583,90 @@ static void test_adapter_stop(void *ctx, turbo_flow_t *flow, const turbo_flow_st
 static void test_adapter_shutdown(void *ctx) {
   adapter_ctx_t *adapter = (adapter_ctx_t *)ctx;
   adapter->shutdown_count += 1;
+}
+
+static int pool_rebuild_fault_next(void *ctx, size_t attempt) {
+  pool_rebuild_fault_script_t *script = (pool_rebuild_fault_script_t *)ctx;
+  int result;
+
+  check_not_null(script);
+  check_equal(attempt, script->calls + 1u);
+  if (script->calls >= script->count) return SALTS_OK;
+  result = script->results[script->calls];
+  script->calls += 1u;
+  return result;
+}
+
+static pool_plan_snapshot_t pool_plan_snapshot_capture(const turbo_flow_t *flow,
+                                                       const char *stage_name) {
+  pool_plan_snapshot_t snapshot;
+  const uint32_t *index;
+
+  memset(&snapshot, 0, sizeof(snapshot));
+  snapshot.stage_index = turbo_flow_find_stage(flow, stage_name);
+  check(snapshot.stage_index >= 0);
+  snapshot.node_count = vec_size(&flow->compiled_plan.nodes);
+  snapshot.executor_count = vec_size(&flow->compiled_plan.executors);
+  snapshot.segment_count = vec_size(&flow->compiled_plan.data_segments);
+  snapshot.semantic_count = vec_size(&flow->compiled_plan.stage_semantics);
+  snapshot.node = *(const flow_runtime_node_plan_t *)vec_at_const(
+      &flow->compiled_plan.nodes, (size_t)snapshot.stage_index);
+  index = (const uint32_t *)vec_at_const(&flow->compiled_plan.executor_by_stage,
+                                        (size_t)snapshot.stage_index);
+  check_not_null(index);
+  snapshot.executor_index = *index;
+  snapshot.executor = *(const flow_executor_plan_t *)vec_at_const(
+      &flow->compiled_plan.executors, snapshot.executor_index);
+  index = (const uint32_t *)vec_at_const(&flow->compiled_plan.data_segment_by_stage,
+                                        (size_t)snapshot.stage_index);
+  check_not_null(index);
+  snapshot.segment_index = *index;
+  snapshot.segment = *(const flow_data_segment_plan_t *)vec_at_const(
+      &flow->compiled_plan.data_segments, snapshot.segment_index);
+  index = (const uint32_t *)vec_at_const(&flow->compiled_plan.adapter_by_stage,
+                                        (size_t)snapshot.stage_index);
+  check_not_null(index);
+  snapshot.adapter_index = *index;
+  snapshot.semantic = *(const flow_stage_semantic_plan_t *)vec_at_const(
+      &flow->compiled_plan.stage_semantics, (size_t)snapshot.stage_index);
+  return snapshot;
+}
+
+static void check_pool_plan_snapshot(const turbo_flow_t *flow,
+                                     const pool_plan_snapshot_t *snapshot) {
+  check_not_null(flow);
+  check_not_null(snapshot);
+  check_true(flow->compiled_plan.sealed);
+  check_equal(vec_size(&flow->compiled_plan.nodes), snapshot->node_count);
+  check_equal(vec_size(&flow->compiled_plan.executors), snapshot->executor_count);
+  check_equal(vec_size(&flow->compiled_plan.data_segments), snapshot->segment_count);
+  check_equal(vec_size(&flow->compiled_plan.stage_semantics), snapshot->semantic_count);
+  check_equal(*(const uint32_t *)vec_at_const(&flow->compiled_plan.executor_by_stage,
+                                             (size_t)snapshot->stage_index),
+              snapshot->executor_index);
+  check_equal(*(const uint32_t *)vec_at_const(&flow->compiled_plan.data_segment_by_stage,
+                                             (size_t)snapshot->stage_index),
+              snapshot->segment_index);
+  check_equal(*(const uint32_t *)vec_at_const(&flow->compiled_plan.adapter_by_stage,
+                                             (size_t)snapshot->stage_index),
+              snapshot->adapter_index);
+  check_equal(memcmp(&snapshot->node,
+                     vec_at_const(&flow->compiled_plan.nodes, (size_t)snapshot->stage_index),
+                     sizeof(snapshot->node)),
+              0);
+  check_equal(memcmp(&snapshot->executor,
+                     vec_at_const(&flow->compiled_plan.executors, snapshot->executor_index),
+                     sizeof(snapshot->executor)),
+              0);
+  check_equal(memcmp(&snapshot->segment,
+                     vec_at_const(&flow->compiled_plan.data_segments, snapshot->segment_index),
+                     sizeof(snapshot->segment)),
+              0);
+  check_equal(memcmp(&snapshot->semantic,
+                     vec_at_const(&flow->compiled_plan.stage_semantics,
+                                  (size_t)snapshot->stage_index),
+                     sizeof(snapshot->semantic)),
+              0);
 }
 
 static int test_adapter_command(void *ctx, turbo_flow_t *flow,
@@ -5068,6 +5173,120 @@ suite("Turbo Flow") {
         turbo_flow_msg_cleanup(&msg);
         turbo_flow_destroy(flow);
       }
+    }
+
+    it("restores the previous pool after the replacement rebuild fails") {
+      static const char *src = "source input\n"
+                               "stage transform worker 2 capacity 16\n"
+                               "stage main {\n"
+                               "  input -> transform\n"
+                               "}\n";
+      turbo_flow_pool_resource_status_t before = TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
+      turbo_flow_pool_resource_status_t after = TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
+      pool_rebuild_fault_script_t script = {{SALTS_ENOMEM, SALTS_OK}, 2u, 0u};
+      turbo_flow_pool_resize_command_t command;
+      pool_plan_snapshot_t plan_before;
+      turbo_flow_msg_t message;
+      turbo_flow_t *flow = turbo_flow_create();
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_pool_resource_status_at(flow, 0u, &before), SALTS_OK);
+      plan_before = pool_plan_snapshot_capture(flow, "transform");
+
+      memset(&command, 0, sizeof(command));
+      command.size = sizeof(command);
+      command.stage_name = "transform";
+      command.kind = TURBO_FLOW_POOL_DISRUPTOR;
+      command.parallelism = 3u;
+      command.drain_timeout_ms = UINT64_MAX;
+      command.expected_generation = before.observed_generation;
+      flow->pool_rebuild_fault.before_create = pool_rebuild_fault_next;
+      flow->pool_rebuild_fault.ctx = &script;
+
+      check_equal(turbo_flow_resize_pool(flow, &command), SALTS_ENOMEM);
+      check_equal(script.calls, 2u);
+      check_equal(flow->pool_rebuild_fault.attempts, 2u);
+      check_contains(turbo_flow_last_error(flow)->message, "previous configuration restored");
+      check_equal(turbo_flow_pool_resource_status_at(flow, 0u, &after), SALTS_OK);
+      check_equal(after.snapshot.parallelism, 2u);
+      check_equal(after.generation, before.generation + 1u);
+      check_equal(flow->admission_state, FLOW_ADMISSION_OPEN);
+      check_pool_plan_snapshot(flow, &plan_before);
+
+      flow->pool_rebuild_fault.before_create = NULL;
+      flow->pool_rebuild_fault.ctx = NULL;
+      turbo_flow_msg_init(&message);
+      check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      turbo_flow_msg_cleanup(&message);
+      turbo_flow_destroy(flow);
+    }
+
+    it("fails closed when replacement and rollback pool rebuilds both fail") {
+      static const char *src = "source input adapter probe.source\n"
+                               "stage transform worker 2 capacity 16\n"
+                               "stage main {\n"
+                               "  input -> transform\n"
+                               "}\n";
+      turbo_flow_pool_resource_status_t before = TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
+      pool_rebuild_fault_script_t script = {{SALTS_ENOMEM, SALTS_EIO}, 2u, 0u};
+      turbo_flow_pool_resize_command_t command;
+      pool_plan_snapshot_t plan_before;
+      turbo_flow_adapter_ops_t ops;
+      adapter_ctx_t adapter = {0};
+      uint64_t generation_before;
+      turbo_flow_t *flow = turbo_flow_create();
+
+      memset(&ops, 0, sizeof(ops));
+      ops.start = test_adapter_start;
+      ops.stop = test_adapter_stop;
+      check_not_null(flow);
+      check_equal(turbo_flow_register_adapter(flow, "probe.source", &ops, &adapter), SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
+                   SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(adapter.start_count, 1);
+      check_equal(turbo_flow_pool_resource_status_at(flow, 0u, &before), SALTS_OK);
+      generation_before = flow->runtime_generation;
+      plan_before = pool_plan_snapshot_capture(flow, "transform");
+
+      memset(&command, 0, sizeof(command));
+      command.size = sizeof(command);
+      command.stage_name = "transform";
+      command.kind = TURBO_FLOW_POOL_DISRUPTOR;
+      command.parallelism = 3u;
+      command.drain_timeout_ms = UINT64_MAX;
+      command.expected_generation = before.observed_generation;
+      flow->pool_rebuild_fault.before_create = pool_rebuild_fault_next;
+      flow->pool_rebuild_fault.ctx = &script;
+
+      check_equal(turbo_flow_resize_pool(flow, &command), SALTS_EIO);
+      check_equal(script.calls, 2u);
+      check_equal(flow->pool_rebuild_fault.attempts, 2u);
+      check_contains(turbo_flow_last_error(flow)->message, "resize and rollback both failed");
+      check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_FAILED);
+      check_equal(flow->admission_state, FLOW_ADMISSION_CLOSED);
+      check_equal(flow->runtime_generation, generation_before);
+      check_equal(adapter.stop_count, 1);
+      check_equal(vec_size(&flow->active_adapters), 0u);
+      check_equal(vec_size(&flow->pool_records), 0u);
+      check_equal(vec_size(&flow->worker_pool_adapters), 0u);
+      check_equal(vec_size(&flow->threadpool_adapters), 0u);
+      check_equal(vec_size(&flow->coro_adapters), 0u);
+      check_null(flow->broadcast_ring);
+      check_null(flow->broadcast_topology);
+      check_pool_plan_snapshot(flow, &plan_before);
+
+      flow->pool_rebuild_fault.before_create = NULL;
+      flow->pool_rebuild_fault.ctx = NULL;
+      turbo_flow_destroy(flow);
     }
 
     it("validates pool resize targets and keeps timeout admission paused") {
