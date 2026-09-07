@@ -1655,7 +1655,12 @@ const turbo_flow_adapter_schema_t *turbo_flow_find_adapter_schema(const turbo_fl
 }
 
 turbo_flow_state_t turbo_flow_state(const turbo_flow_t *flow) {
-  return flow ? flow->state : TURBO_FLOW_STATE_FAILED;
+  turbo_flow_state_t state;
+  if (!flow || !flow->runtime_sync_initialized) return TURBO_FLOW_STATE_FAILED;
+  salts_mutex_lock((salts_mutex_t *)&flow->runtime_mutex);
+  state = flow->state;
+  salts_mutex_unlock((salts_mutex_t *)&flow->runtime_mutex);
+  return state;
 }
 
 int turbo_flow_runtime_snapshot(const turbo_flow_t *flow, turbo_flow_runtime_snapshot_t *out) {
