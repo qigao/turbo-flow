@@ -74,6 +74,7 @@
                 "TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE": "$env{SALTS_UTILS_ROOT}/bin/tbe_compiler.exe"
             },
             "environment": {
+                "TURBO_FLOW_ACTIVE_PRESET": "win-dev-user",
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/debug",
@@ -89,6 +90,7 @@
                 "TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE": "$env{SALTS_UTILS_ROOT}/bin/tbe_compiler.exe"
             },
             "environment": {
+                "TURBO_FLOW_ACTIVE_PRESET": "win-release-user",
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/release",
@@ -105,6 +107,7 @@
                 "TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE": "$env{SALTS_UTILS_ROOT}/bin/tbe_compiler"
             },
             "environment": {
+                "TURBO_FLOW_ACTIVE_PRESET": "linux-dev-user",
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/debug",
@@ -120,6 +123,7 @@
                 "TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE": "$env{SALTS_UTILS_ROOT}/bin/tbe_compiler"
             },
             "environment": {
+                "TURBO_FLOW_ACTIVE_PRESET": "linux-release-user",
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/release",

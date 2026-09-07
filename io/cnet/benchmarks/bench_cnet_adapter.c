@@ -26,22 +26,44 @@
   #error "TF_CNET_BENCH_BUILD_TYPE must identify the measured CMake build type"
 #endif
 
-#ifndef TF_CNET_BENCH_GIT_DIRTY
-  #error "TF_CNET_BENCH_GIT_DIRTY must identify tracked source modifications"
+#ifndef TF_CNET_BENCH_GIT_EXECUTABLE
+  #error "TF_CNET_BENCH_GIT_EXECUTABLE must identify the Git executable"
+#endif
+
+#ifndef TF_CNET_BENCH_SOURCE_DIR
+  #error "TF_CNET_BENCH_SOURCE_DIR must identify the measured source tree"
 #endif
 
 #ifndef TF_CNET_BENCH_CPU_MODEL
   #error "TF_CNET_BENCH_CPU_MODEL must identify the build-host processor"
 #endif
 
+#ifndef TF_CNET_BENCH_ASAN
+  #error "TF_CNET_BENCH_ASAN must identify the AddressSanitizer mode"
+#endif
+
+#ifndef TF_CNET_BENCH_PRESET
+  #error "TF_CNET_BENCH_PRESET must identify the active public user preset"
+#endif
+
+#if defined(_WIN32)
+  #define cnet_bench_popen _popen
+  #define cnet_bench_pclose _pclose
+#else
+  #define cnet_bench_popen popen
+  #define cnet_bench_pclose pclose
+#endif
+
 enum {
   CNET_BENCH_PAYLOAD_BYTES = 256,
   CNET_BENCH_WARMUP_MESSAGES = 256,
-  CNET_BENCH_SAMPLE_MESSAGES = 4096,
+  CNET_BENCH_SAMPLE_MESSAGES = 131072,
   CNET_BENCH_REPLICATES = 7,
   CNET_BENCH_CAPACITY = 64,
   CNET_BENCH_QUEUE_CAPACITY = 128,
   CNET_BENCH_TIMEOUT_MS = 20000,
+  CNET_BENCH_GIT_COMMAND_BYTES = 4096,
+  CNET_BENCH_GIT_OUTPUT_BYTES = 128,
   CNET_BENCH_OWNER_ALLOCATIONS_PER_MESSAGE = 3
 };
 
@@ -57,6 +79,12 @@ typedef struct cnet_bench_completion_s {
 
 struct cnet_bench_run_state_s {
   atomic_size_t completed;
+  atomic_bool terminal_captured;
+  size_t expected;
+  uint64_t terminal_wall_ns;
+  uint64_t terminal_cpu_ns;
+  int terminal_cpu_status;
+  bool record_metrics;
 };
 
 typedef struct cnet_bench_peer_s {
@@ -73,6 +101,7 @@ typedef struct cnet_bench_fixture_s {
   turbo_flow_cnet_packet_sink_t *sink;
   turbo_flow_msg_t message;
   cnet_bench_completion_t *completions;
+  cnet_bench_run_state_t run;
   bool flow_started;
 } cnet_bench_fixture_t;
 
@@ -87,6 +116,7 @@ typedef struct cnet_bench_run_result_s {
   size_t retained_payload_bytes_max;
   size_t saturation_rejected;
   size_t saturation_recovered;
+  size_t pre_shutdown_active_requests;
 } cnet_bench_run_result_t;
 
 static const char *cnet_bench_os_name(void) {
@@ -144,6 +174,73 @@ static int cnet_bench_process_cpu_ns(uint64_t *out) {
   *out = (uint64_t)value.tv_sec * UINT64_C(1000000000) + (uint64_t)value.tv_nsec;
 #endif
   return SALTS_OK;
+}
+
+static int cnet_bench_git_query(const char *arguments, char *output, size_t output_capacity,
+                                bool *has_output) {
+  char command[CNET_BENCH_GIT_COMMAND_BYTES];
+  char chunk[CNET_BENCH_GIT_OUTPUT_BYTES];
+  FILE *pipe;
+  size_t used = 0u;
+  bool overflow = false;
+  int written;
+  int close_status;
+
+  if (!arguments || !has_output || (output && output_capacity == 0u)) return SALTS_EINVAL;
+  *has_output = false;
+  if (output) output[0] = '\0';
+  written = snprintf(command, sizeof(command), "\"%s\" -C \"%s\" %s 2>&1",
+                     TF_CNET_BENCH_GIT_EXECUTABLE, TF_CNET_BENCH_SOURCE_DIR, arguments);
+  if (written < 0 || (size_t)written >= sizeof(command)) return SALTS_ERANGE;
+  pipe = cnet_bench_popen(command, "r");
+  if (!pipe) return SALTS_EIO;
+  for (;;) {
+    const size_t count = fread(chunk, 1u, sizeof(chunk), pipe);
+    if (count == 0u) break;
+    *has_output = true;
+    if (output) {
+      const size_t available = output_capacity - 1u - used;
+      const size_t copied = count < available ? count : available;
+      if (copied != 0u) {
+        memcpy(output + used, chunk, copied);
+        used += copied;
+      }
+      if (copied != count) overflow = true;
+    }
+  }
+  if (output) output[used] = '\0';
+  if (ferror(pipe)) {
+    (void)cnet_bench_pclose(pipe);
+    return SALTS_EIO;
+  }
+  close_status = cnet_bench_pclose(pipe);
+  if (close_status != 0) return SALTS_EIO;
+  return overflow ? SALTS_ERANGE : SALTS_OK;
+}
+
+static int cnet_bench_validate_live_provenance(void) {
+  char actual_commit[CNET_BENCH_GIT_OUTPUT_BYTES];
+  bool has_output = false;
+  bool source_dirty = false;
+  size_t length;
+  int status = cnet_bench_git_query("rev-parse --verify HEAD", actual_commit,
+                                    sizeof(actual_commit), &has_output);
+  if (status != SALTS_OK || !has_output) return status != SALTS_OK ? status : SALTS_EPROTO;
+  length = strlen(actual_commit);
+  while (length != 0u &&
+         (actual_commit[length - 1u] == '\r' || actual_commit[length - 1u] == '\n'))
+    actual_commit[--length] = '\0';
+  status = cnet_bench_git_query("status --porcelain=v1 --untracked-files=normal -- .", NULL, 0u,
+                                &source_dirty);
+  if (status != SALTS_OK) return status;
+  status =
+      tf_cnet_benchmark_validate_provenance(TF_CNET_BENCH_GIT_COMMIT, actual_commit, source_dirty);
+  if (status != SALTS_OK) {
+    printf("CNET_BENCH_ERROR stage=provenance status=%d expected_commit=%s actual_commit=%s "
+           "source_dirty=%d action=reconfigure_and_rebuild_clean_tree\n",
+           status, TF_CNET_BENCH_GIT_COMMIT, actual_commit, source_dirty ? 1 : 0);
+  }
+  return status;
 }
 
 static native_io_backend_kind cnet_bench_backend(void) {
@@ -224,11 +321,22 @@ static void cnet_bench_peer_error(void *user, cnet_packet_endpoint *endpoint,
 
 static void cnet_bench_complete(void *ctx, const turbo_flow_publish_result_t *result) {
   cnet_bench_completion_t *completion = (cnet_bench_completion_t *)ctx;
+  cnet_bench_run_state_t *run;
+  uint64_t completed_at;
+  size_t previous;
   if (!completion || !completion->run) return;
-  completion->latency_ns = salts_hrtime() - completion->started_ns;
+  run = completion->run;
+  completed_at = salts_hrtime();
+  completion->latency_ns = completed_at - completion->started_ns;
   completion->status = result ? result->status : SALTS_EPROTO;
   atomic_store_explicit(&completion->done, true, memory_order_release);
-  (void)atomic_fetch_add_explicit(&completion->run->completed, 1u, memory_order_release);
+  previous = atomic_fetch_add_explicit(&run->completed, 1u, memory_order_acq_rel);
+  if (previous + 1u == run->expected) {
+    run->terminal_wall_ns = completed_at;
+    run->terminal_cpu_status =
+        run->record_metrics ? cnet_bench_process_cpu_ns(&run->terminal_cpu_ns) : SALTS_OK;
+    atomic_store_explicit(&run->terminal_captured, true, memory_order_release);
+  }
 }
 
 static int cnet_bench_progress(cnet_bench_fixture_t *fixture, size_t *peak_active_requests) {
@@ -248,26 +356,35 @@ static int cnet_bench_progress(cnet_bench_fixture_t *fixture, size_t *peak_activ
   return fixture->peer.status;
 }
 
-static void cnet_bench_fixture_cleanup(cnet_bench_fixture_t *fixture) {
-  if (!fixture) return;
+static int cnet_bench_fixture_cleanup(cnet_bench_fixture_t *fixture) {
+  int first_status = SALTS_OK;
+  int status;
+  if (!fixture) return SALTS_EINVAL;
   if (fixture->flow) {
-    if (fixture->flow_started) (void)turbo_flow_stop(fixture->flow);
+    if (fixture->flow_started) {
+      status = turbo_flow_stop(fixture->flow);
+      if (first_status == SALTS_OK && status != SALTS_OK) first_status = status;
+    }
     turbo_flow_destroy(fixture->flow);
     fixture->flow = NULL;
     fixture->flow_started = false;
   }
   if (fixture->sink) {
-    (void)turbo_flow_cnet_packet_sink_destroy(fixture->sink);
+    status = turbo_flow_cnet_packet_sink_destroy(fixture->sink);
+    if (first_status == SALTS_OK && status != SALTS_OK) first_status = status;
     fixture->sink = NULL;
   }
   turbo_flow_msg_cleanup(&fixture->message);
   if (fixture->peer.initialized) {
-    (void)cnet_packet_endpoint_stop(&fixture->peer.endpoint, CNET_BENCH_TIMEOUT_MS);
-    (void)cnet_packet_endpoint_destroy(&fixture->peer.endpoint);
+    status = cnet_packet_endpoint_stop(&fixture->peer.endpoint, CNET_BENCH_TIMEOUT_MS);
+    if (first_status == SALTS_OK && status != SALTS_OK) first_status = status;
+    status = cnet_packet_endpoint_destroy(&fixture->peer.endpoint);
+    if (first_status == SALTS_OK && status != SALTS_OK) first_status = status;
     fixture->peer.initialized = false;
   }
   free(fixture->completions);
   fixture->completions = NULL;
+  return first_status;
 }
 
 static int cnet_bench_fixture_init(cnet_bench_fixture_t *fixture) {
@@ -362,13 +479,24 @@ static int cnet_bench_fixture_init(cnet_bench_fixture_t *fixture) {
   return SALTS_OK;
 
 fail:
-  cnet_bench_fixture_cleanup(fixture);
+  {
+    const int cleanup_status = cnet_bench_fixture_cleanup(fixture);
+    if (cleanup_status != SALTS_OK)
+      printf("CNET_BENCH_DIAG stage=fixture_init_cleanup status=%d\n", cleanup_status);
+  }
   return status;
 }
 
-static void cnet_bench_prepare_completions(cnet_bench_fixture_t *fixture,
-                                           cnet_bench_run_state_t *run, size_t count) {
+static void cnet_bench_prepare_completions(cnet_bench_fixture_t *fixture, size_t count,
+                                           bool record_metrics) {
+  cnet_bench_run_state_t *run = &fixture->run;
   atomic_init(&run->completed, 0u);
+  atomic_init(&run->terminal_captured, false);
+  run->expected = count;
+  run->terminal_wall_ns = 0u;
+  run->terminal_cpu_ns = 0u;
+  run->terminal_cpu_status = SALTS_EALREADY;
+  run->record_metrics = record_metrics;
   for (size_t index = 0u; index < count; ++index) {
     fixture->completions[index].run = run;
     fixture->completions[index].started_ns = 0u;
@@ -396,8 +524,8 @@ static int cnet_bench_wait_for_receives(cnet_bench_fixture_t *fixture, size_t ta
 
 static int cnet_bench_run_batch(cnet_bench_fixture_t *fixture, size_t count,
                                 cnet_bench_run_result_t *result, bool record_metrics) {
-  cnet_bench_run_state_t run;
-  const size_t receives_before = fixture->peer.receives;
+  cnet_bench_run_state_t *run;
+  size_t receives_before;
   size_t submitted = 0u;
   size_t completed;
   uint64_t wall_start = 0u;
@@ -411,16 +539,18 @@ static int cnet_bench_run_batch(cnet_bench_fixture_t *fixture, size_t count,
   if (!fixture || count == 0u || count > CNET_BENCH_SAMPLE_MESSAGES ||
       (record_metrics && !result))
     return SALTS_EINVAL;
-  cnet_bench_prepare_completions(fixture, &run, count);
+  receives_before = fixture->peer.receives;
+  run = &fixture->run;
+  cnet_bench_prepare_completions(fixture, count, record_metrics);
   if (record_metrics) {
     status = cnet_bench_process_cpu_ns(&cpu_start);
     if (status != SALTS_OK) return status;
     wall_start = salts_hrtime();
   }
   deadline = salts_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
-  while (atomic_load_explicit(&run.completed, memory_order_acquire) < count &&
+  while (!atomic_load_explicit(&run->terminal_captured, memory_order_acquire) &&
          salts_monotonic_ms() < deadline) {
-    completed = atomic_load_explicit(&run.completed, memory_order_acquire);
+    completed = atomic_load_explicit(&run->completed, memory_order_acquire);
     while (submitted < count && submitted - completed < CNET_BENCH_CAPACITY) {
       cnet_bench_completion_t *completion = &fixture->completions[submitted];
       fixture->message.id = submitted;
@@ -433,21 +563,25 @@ static int cnet_bench_run_batch(cnet_bench_fixture_t *fixture, size_t count,
     status = cnet_bench_progress(fixture, result ? &result->peak_active_requests : NULL);
     if (status != SALTS_OK) return status;
   }
-  if (atomic_load_explicit(&run.completed, memory_order_acquire) != count) {
+  if (!atomic_load_explicit(&run->terminal_captured, memory_order_acquire) ||
+      atomic_load_explicit(&run->completed, memory_order_acquire) != count) {
     turbo_flow_cnet_packet_sink_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
     int snapshot_status = turbo_flow_cnet_packet_sink_snapshot(fixture->sink, &snapshot);
     printf("CNET_BENCH_DIAG stage=wait_for_terminals submitted=%zu completed=%zu expected=%zu "
            "receives=%zu snapshot_status=%d active_requests=%zu messages_sent=%" PRIu64 "\n",
-           submitted, atomic_load_explicit(&run.completed, memory_order_acquire), count,
+           submitted, atomic_load_explicit(&run->completed, memory_order_acquire), count,
            fixture->peer.receives, snapshot_status, snapshot.active_requests,
            snapshot.messages_sent);
     return SALTS_ETIMEDOUT;
   }
-  wall_elapsed = record_metrics ? salts_hrtime() - wall_start : 0u;
   if (record_metrics) {
-    status = cnet_bench_process_cpu_ns(&cpu_elapsed);
-    if (status != SALTS_OK) return status;
-    cpu_elapsed -= cpu_start;
+    if (run->terminal_cpu_status != SALTS_OK) return run->terminal_cpu_status;
+    if (run->terminal_wall_ns < wall_start || run->terminal_cpu_ns < cpu_start)
+      return SALTS_ERANGE;
+    wall_elapsed = run->terminal_wall_ns - wall_start;
+    cpu_elapsed = run->terminal_cpu_ns - cpu_start;
+  } else {
+    wall_elapsed = 0u;
   }
   for (size_t index = 0u; index < count; ++index) {
     if (!atomic_load_explicit(&fixture->completions[index].done, memory_order_acquire) ||
@@ -481,14 +615,17 @@ static int cnet_bench_run_batch(cnet_bench_fixture_t *fixture, size_t count,
 static int cnet_bench_saturation_recovery(cnet_bench_fixture_t *fixture,
                                           cnet_bench_run_result_t *result) {
   enum { SATURATION_MESSAGES = CNET_BENCH_CAPACITY + 1 };
-  cnet_bench_run_state_t run;
-  const size_t receives_before = fixture->peer.receives;
+  cnet_bench_run_state_t *run;
+  size_t receives_before;
   uint64_t deadline;
   size_t rejected = 0u;
   size_t succeeded = 0u;
   int status;
 
-  cnet_bench_prepare_completions(fixture, &run, SATURATION_MESSAGES);
+  if (!fixture || !result) return SALTS_EINVAL;
+  run = &fixture->run;
+  receives_before = fixture->peer.receives;
+  cnet_bench_prepare_completions(fixture, SATURATION_MESSAGES, false);
   for (size_t index = 0u; index < SATURATION_MESSAGES; ++index) {
     fixture->message.id = index;
     fixture->completions[index].started_ns = salts_hrtime();
@@ -497,18 +634,18 @@ static int cnet_bench_saturation_recovery(cnet_bench_fixture_t *fixture,
     if (status != SALTS_OK) return status;
   }
   deadline = salts_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
-  while (atomic_load_explicit(&run.completed, memory_order_acquire) == 0u &&
+  while (atomic_load_explicit(&run->completed, memory_order_acquire) == 0u &&
          salts_monotonic_ms() < deadline)
     salts_thread_yield();
-  if (atomic_load_explicit(&run.completed, memory_order_acquire) == 0u)
+  if (atomic_load_explicit(&run->completed, memory_order_acquire) == 0u)
     return SALTS_ETIMEDOUT;
 
-  while (atomic_load_explicit(&run.completed, memory_order_acquire) < SATURATION_MESSAGES &&
+  while (atomic_load_explicit(&run->completed, memory_order_acquire) < SATURATION_MESSAGES &&
          salts_monotonic_ms() < deadline) {
     status = cnet_bench_progress(fixture, &result->peak_active_requests);
     if (status != SALTS_OK) return status;
   }
-  if (atomic_load_explicit(&run.completed, memory_order_acquire) != SATURATION_MESSAGES)
+  if (atomic_load_explicit(&run->completed, memory_order_acquire) != SATURATION_MESSAGES)
     return SALTS_ETIMEDOUT;
   for (size_t index = 0u; index < SATURATION_MESSAGES; ++index) {
     if (!atomic_load_explicit(&fixture->completions[index].done, memory_order_acquire))
@@ -525,19 +662,19 @@ static int cnet_bench_saturation_recovery(cnet_bench_fixture_t *fixture,
                                         &result->peak_active_requests);
   if (status != SALTS_OK) return status;
 
-  cnet_bench_prepare_completions(fixture, &run, 1u);
+  cnet_bench_prepare_completions(fixture, 1u, false);
   fixture->message.id = UINT64_MAX;
   fixture->completions[0].started_ns = salts_hrtime();
   status = turbo_flow_publish_async(fixture->flow, "input", &fixture->message,
                                     cnet_bench_complete, &fixture->completions[0]);
   if (status != SALTS_OK) return status;
   deadline = salts_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
-  while (atomic_load_explicit(&run.completed, memory_order_acquire) == 0u &&
+  while (atomic_load_explicit(&run->completed, memory_order_acquire) == 0u &&
          salts_monotonic_ms() < deadline) {
     status = cnet_bench_progress(fixture, &result->peak_active_requests);
     if (status != SALTS_OK) return status;
   }
-  if (atomic_load_explicit(&run.completed, memory_order_acquire) != 1u ||
+  if (atomic_load_explicit(&run->completed, memory_order_acquire) != 1u ||
       !atomic_load_explicit(&fixture->completions[0].done, memory_order_acquire))
     return SALTS_ETIMEDOUT;
   if (fixture->completions[0].status != SALTS_OK) return fixture->completions[0].status;
@@ -550,11 +687,16 @@ static int cnet_bench_saturation_recovery(cnet_bench_fixture_t *fixture,
   return SALTS_OK;
 }
 
-static int cnet_bench_shutdown(cnet_bench_fixture_t *fixture, double *shutdown_us) {
+static int cnet_bench_shutdown(cnet_bench_fixture_t *fixture, cnet_bench_run_result_t *result) {
+  turbo_flow_cnet_packet_sink_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
   uint64_t started;
   int status;
-  if (!fixture || !fixture->flow || !fixture->sink || !fixture->peer.initialized || !shutdown_us)
+  if (!fixture || !fixture->flow || !fixture->sink || !fixture->peer.initialized || !result)
     return SALTS_EINVAL;
+  status = turbo_flow_cnet_packet_sink_snapshot(fixture->sink, &snapshot);
+  if (status != SALTS_OK) return status;
+  result->pre_shutdown_active_requests = snapshot.active_requests;
+  if (result->pre_shutdown_active_requests != 0u) return SALTS_EBUSY;
   started = salts_hrtime();
   status = turbo_flow_stop(fixture->flow);
   if (status != SALTS_OK) return status;
@@ -569,8 +711,8 @@ static int cnet_bench_shutdown(cnet_bench_fixture_t *fixture, double *shutdown_u
   status = cnet_packet_endpoint_destroy(&fixture->peer.endpoint);
   if (status != SALTS_OK) return status;
   fixture->peer.initialized = false;
-  *shutdown_us = (double)(salts_hrtime() - started) / 1000.0;
-  if (*shutdown_us <= 0.0) return SALTS_ERANGE;
+  result->shutdown_us = (double)(salts_hrtime() - started) / 1000.0;
+  if (result->shutdown_us <= 0.0) return SALTS_ERANGE;
   turbo_flow_msg_cleanup(&fixture->message);
   free(fixture->completions);
   fixture->completions = NULL;
@@ -597,21 +739,32 @@ static int cnet_adapter_benchmark_run(void) {
   double shutdown_us[CNET_BENCH_REPLICATES];
   int logical_cpus = salts_cpu_count();
   int status = SALTS_OK;
+  const bool baseline_eligible =
+      strcmp(TF_CNET_BENCH_PRESET, "win-release-user") == 0 &&
+      strcmp(TF_CNET_BENCH_BUILD_TYPE, "Release") == 0 && TF_CNET_BENCH_ASAN == 0;
 
   if (logical_cpus <= 0) return SALTS_EIO;
+  status = cnet_bench_validate_live_provenance();
+  if (status != SALTS_OK) return status;
   printf("CNET_BENCH_ENV version=1 scenario=udp_packet_terminal os=%s cpu_model=%s "
          "logical_cpus=%d "
-         "compiler=%s compiler_version=%lu cmake_build_type=%s required_baseline_preset="
-         "win-release-user source_commit=%s source_dirty=%d payload_bytes=%u warmup_messages=%u "
+         "compiler=%s compiler_version=%lu cmake_build_type=%s actual_preset=%s "
+         "required_baseline_preset=win-release-user asan=%d baseline_eligible=%d "
+         "source_commit=%s source_dirty=0 payload_bytes=%u warmup_messages=%u "
          "sample_messages=%u replicates=%u ingress_workers=1 ingress_capacity=%u "
          "send_capacity=%u actor_capacity=%u allocation_events_per_message=%u "
          "allocation_scope=turbo_flow_owner_objects\n",
          cnet_bench_os_name(), TF_CNET_BENCH_CPU_MODEL, logical_cpus, cnet_bench_compiler_name(),
-         cnet_bench_compiler_version(), TF_CNET_BENCH_BUILD_TYPE, TF_CNET_BENCH_GIT_COMMIT,
-         TF_CNET_BENCH_GIT_DIRTY, CNET_BENCH_PAYLOAD_BYTES, CNET_BENCH_WARMUP_MESSAGES,
-         CNET_BENCH_SAMPLE_MESSAGES,
+         cnet_bench_compiler_version(), TF_CNET_BENCH_BUILD_TYPE, TF_CNET_BENCH_PRESET,
+         TF_CNET_BENCH_ASAN, baseline_eligible ? 1 : 0, TF_CNET_BENCH_GIT_COMMIT,
+         CNET_BENCH_PAYLOAD_BYTES, CNET_BENCH_WARMUP_MESSAGES, CNET_BENCH_SAMPLE_MESSAGES,
          CNET_BENCH_REPLICATES, CNET_BENCH_QUEUE_CAPACITY, CNET_BENCH_CAPACITY,
          CNET_BENCH_CAPACITY, CNET_BENCH_OWNER_ALLOCATIONS_PER_MESSAGE);
+  printf("CNET_BENCH_AUDIT source_commit=%s "
+         "allocation_1=turbo_flow/src/flow_async_ingress.c:227 "
+         "allocation_2=turbo_flow/src/flow_async_terminal.c:95 "
+         "allocation_3=turbo_flow/src/flow_async_terminal.c:322\n",
+         TF_CNET_BENCH_GIT_COMMIT);
 
   for (size_t replicate = 0u; replicate < CNET_BENCH_REPLICATES; ++replicate) {
     cnet_bench_fixture_t fixture;
@@ -624,7 +777,12 @@ static int cnet_adapter_benchmark_run(void) {
     status = cnet_bench_run_batch(&fixture, CNET_BENCH_WARMUP_MESSAGES, NULL, false);
     if (status != SALTS_OK) {
       printf("CNET_BENCH_ERROR replicate=%zu stage=warmup status=%d\n", replicate + 1u, status);
-      cnet_bench_fixture_cleanup(&fixture);
+      {
+        const int cleanup_status = cnet_bench_fixture_cleanup(&fixture);
+        if (cleanup_status != SALTS_OK)
+          printf("CNET_BENCH_DIAG replicate=%zu stage=warmup_cleanup status=%d\n",
+                 replicate + 1u, cleanup_status);
+      }
       return status;
     }
     benchmark_io("scenario=udp_packet_terminal measured batch", 1u,
@@ -633,10 +791,15 @@ static int cnet_adapter_benchmark_run(void) {
       status = cnet_bench_run_batch(&fixture, CNET_BENCH_SAMPLE_MESSAGES, &results[replicate], true);
     }
     if (status == SALTS_OK) status = cnet_bench_saturation_recovery(&fixture, &results[replicate]);
-    if (status == SALTS_OK) status = cnet_bench_shutdown(&fixture, &results[replicate].shutdown_us);
+    if (status == SALTS_OK) status = cnet_bench_shutdown(&fixture, &results[replicate]);
     if (status != SALTS_OK) {
       printf("CNET_BENCH_ERROR replicate=%zu stage=measured status=%d\n", replicate + 1u, status);
-      cnet_bench_fixture_cleanup(&fixture);
+      {
+        const int cleanup_status = cnet_bench_fixture_cleanup(&fixture);
+        if (cleanup_status != SALTS_OK)
+          printf("CNET_BENCH_DIAG replicate=%zu stage=measured_cleanup status=%d\n",
+                 replicate + 1u, cleanup_status);
+      }
       return status;
     }
     throughput[replicate] = results[replicate].throughput_msg_s;
@@ -648,12 +811,14 @@ static int cnet_adapter_benchmark_run(void) {
     printf("CNET_BENCH_RUN replicate=%zu throughput_msg_s=%.3f p50_ns=%" PRIu64
            " p95_ns=%" PRIu64 " p99_ns=%" PRIu64
            " cpu_wall_ratio=%.6f peak_active_requests=%zu retained_payload_bytes_max=%zu "
-           "saturation_rejected=%zu saturation_recovered=%zu shutdown_us=%.3f\n",
+           "saturation_rejected=%zu saturation_recovered=%zu "
+           "pre_shutdown_active_requests=%zu shutdown_us=%.3f\n",
            replicate + 1u, results[replicate].throughput_msg_s, results[replicate].p50_ns,
            results[replicate].p95_ns, results[replicate].p99_ns,
            results[replicate].cpu_wall_ratio, results[replicate].peak_active_requests,
            results[replicate].retained_payload_bytes_max, results[replicate].saturation_rejected,
-           results[replicate].saturation_recovered, results[replicate].shutdown_us);
+           results[replicate].saturation_recovered,
+           results[replicate].pre_shutdown_active_requests, results[replicate].shutdown_us);
   }
 
   status = cnet_bench_print_summary("throughput_msg_s", throughput, CNET_BENCH_REPLICATES,

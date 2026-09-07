@@ -48,4 +48,15 @@ spec("CNet adapter benchmark statistics") {
     check_equal(tf_cnet_benchmark_summarize(non_positive, 2u, &summary), SALTS_ERANGE);
     check_equal(tf_cnet_benchmark_summarize(non_finite, 2u, &summary), SALTS_ERANGE);
   }
+
+  it("fails closed on stale or dirty benchmark provenance") {
+    static const char commit[] = "0123456789abcdef0123456789abcdef01234567";
+    static const char other[] = "89abcdef0123456789abcdef0123456789abcdef";
+
+    check_equal(tf_cnet_benchmark_validate_provenance(commit, commit, false), SALTS_OK);
+    check_equal(tf_cnet_benchmark_validate_provenance(commit, other, false), SALTS_EPROTO);
+    check_equal(tf_cnet_benchmark_validate_provenance(commit, commit, true), SALTS_EBUSY);
+    check_equal(tf_cnet_benchmark_validate_provenance(NULL, commit, false), SALTS_EINVAL);
+    check_equal(tf_cnet_benchmark_validate_provenance(commit, "", false), SALTS_EINVAL);
+  }
 }

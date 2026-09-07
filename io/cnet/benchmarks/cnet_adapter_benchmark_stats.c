@@ -4,6 +4,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 static int compare_u64(const void *left, const void *right) {
   const uint64_t lhs = *(const uint64_t *)left;
@@ -66,5 +67,16 @@ int tf_cnet_benchmark_summarize(const double *values, size_t count,
   out->median = median;
   out->mad = median_sorted(scratch, count);
   free(scratch);
+  return SALTS_OK;
+}
+
+int tf_cnet_benchmark_validate_provenance(const char *expected_commit,
+                                          const char *actual_commit,
+                                          bool source_dirty) {
+  if (!expected_commit || !actual_commit || expected_commit[0] == '\0' ||
+      actual_commit[0] == '\0')
+    return SALTS_EINVAL;
+  if (strcmp(expected_commit, actual_commit) != 0) return SALTS_EPROTO;
+  if (source_dirty) return SALTS_EBUSY;
   return SALTS_OK;
 }
