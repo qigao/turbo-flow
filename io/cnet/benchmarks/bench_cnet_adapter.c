@@ -189,8 +189,13 @@ static int cnet_bench_git_query(const char *arguments, char *output, size_t outp
   if (!arguments || !has_output || (output && output_capacity == 0u)) return SALTS_EINVAL;
   *has_output = false;
   if (output) output[0] = '\0';
+#if defined(_WIN32)
+  written = snprintf(command, sizeof(command), "\"\"%s\" -C \"%s\" %s 2>&1\"",
+                     TF_CNET_BENCH_GIT_EXECUTABLE, TF_CNET_BENCH_SOURCE_DIR, arguments);
+#else
   written = snprintf(command, sizeof(command), "\"%s\" -C \"%s\" %s 2>&1",
                      TF_CNET_BENCH_GIT_EXECUTABLE, TF_CNET_BENCH_SOURCE_DIR, arguments);
+#endif
   if (written < 0 || (size_t)written >= sizeof(command)) return SALTS_ERANGE;
   pipe = cnet_bench_popen(command, "r");
   if (!pipe) return SALTS_EIO;
@@ -214,7 +219,12 @@ static int cnet_bench_git_query(const char *arguments, char *output, size_t outp
     return SALTS_EIO;
   }
   close_status = cnet_bench_pclose(pipe);
-  if (close_status != 0) return SALTS_EIO;
+  if (close_status != 0) {
+    fprintf(stderr,
+            "CNET_BENCH_ERROR stage=git_query close_status=%d command=%s output=%s\n",
+            close_status, command, output ? output : "<not-captured>");
+    return SALTS_EIO;
+  }
   return overflow ? SALTS_ERANGE : SALTS_OK;
 }
 
