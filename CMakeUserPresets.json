@@ -134,6 +134,9 @@
         {
             "name": "linux-sdk-package",
             "binaryDir": "${sourceDir}/build/linux-gcc-sdk-package",
+            "environment": {
+                "TURBO_FLOW_ACTIVE_PRESET": "linux-sdk-package"
+            },
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "OFF",
                 "ENABLE_TESTS": "OFF",

@@ -60,7 +60,7 @@ The TinyTest `benchmark_io` table is labeled `harness total including peer drain
 
 Before emitting any measurement, the executable queries Git again, requires live `HEAD` to equal its compiled commit, and requires `git status --porcelain=v1 --untracked-files=normal -- .` to be empty. A dirty tree fails with `SALTS_EBUSY`; an executable built for a different commit fails with `SALTS_EPROTO`. Thus ignored build products are allowed, but tracked changes and untracked source/document files cannot silently contaminate a baseline.
 
-Allocation evidence at source commit `0f6767f3db51983bcd927bc77520ef54abba1b69`:
+Allocation evidence at source commit `14c9e4455e43e48cc4bb65dacf3459f0b55eb493`:
 
 | Owner allocation | Source |
 | --- | --- |
@@ -73,7 +73,7 @@ The packet sink allocates its operation and delivered-ID arrays during registrat
 ## Baseline environment
 
 - Date: 2026-09-07
-- Source commit: `0f6767f3db51983bcd927bc77520ef54abba1b69`
+- Source commit: `14c9e4455e43e48cc4bb65dacf3459f0b55eb493`
 - Runtime-validated source state: clean (`source_dirty=0`)
 - Preset/build type: `win-release-user` / `Release`
 - AddressSanitizer/baseline eligibility: `asan=0` / `baseline_eligible=1`
@@ -89,22 +89,22 @@ Every replicate observed `peak_active_requests=64`, `retained_payload_bytes_max=
 
 | Replicate | Throughput msg/s | P50 ns | P95 ns | P99 ns | CPU/wall | Shutdown us |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 158,530.650 | 365,800 | 439,400 | 560,700 | 1.190595 | 403.000 |
-| 2 | 179,825.300 | 324,600 | 365,500 | 474,400 | 1.243337 | 335.200 |
-| 3 | 181,581.261 | 322,000 | 363,600 | 460,500 | 1.168893 | 544.600 |
-| 4 | 181,581.689 | 319,800 | 354,800 | 485,600 | 1.190542 | 538.900 |
-| 5 | 166,963.256 | 348,300 | 445,200 | 521,200 | 1.154407 | 402.600 |
-| 6 | 162,701.133 | 352,200 | 484,800 | 531,400 | 1.202520 | 386.700 |
-| 7 | 166,194.688 | 348,600 | 458,800 | 531,700 | 1.168905 | 427.400 |
+| 1 | 168,505.669 | 348,200 | 371,800 | 448,600 | 1.305684 | 405.200 |
+| 2 | 177,193.238 | 330,800 | 364,400 | 475,900 | 1.267385 | 431.600 |
+| 3 | 182,718.778 | 321,800 | 347,500 | 425,900 | 1.197998 | 311.800 |
+| 4 | 172,365.885 | 327,900 | 454,300 | 591,400 | 1.212309 | 505.100 |
+| 5 | 156,587.681 | 363,500 | 515,800 | 593,100 | 1.138669 | 442.600 |
+| 6 | 160,066.707 | 362,700 | 476,100 | 545,800 | 1.183049 | 322.000 |
+| 7 | 162,215.754 | 360,800 | 433,500 | 534,400 | 1.218270 | 451.200 |
 
 | Metric | Median | MAD |
 | --- | ---: | ---: |
-| Throughput (msg/s) | 166,963.256 | 8,432.606 |
-| P50 (ns) | 348,300 | 17,500 |
-| P95 (ns) | 439,400 | 45,400 |
-| P99 (ns) | 521,200 | 35,600 |
-| CPU/wall ratio | 1.191 | 0.022 |
-| Shutdown (us) | 403.000 | 24.400 |
+| Throughput (msg/s) | 168,505.669 | 8,438.962 |
+| P50 (ns) | 348,200 | 15,300 |
+| P95 (ns) | 433,500 | 61,700 |
+| P99 (ns) | 534,400 | 58,500 |
+| CPU/wall ratio | 1.212 | 0.029 |
+| Shutdown (us) | 431.600 | 26.400 |
 
 The same harness also completed under `win-dev-user` with AddressSanitizer enabled. Debug/ASan numbers are intentionally excluded from the release baseline.
 
