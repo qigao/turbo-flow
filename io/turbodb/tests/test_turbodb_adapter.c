@@ -112,6 +112,12 @@ static const cmeta_type_desc MANAGED_ROW_TYPE = {.name = "managed_row_t",
                                                  .kind = CMETA_T_OBJECT,
                                                  .traits = &MANAGED_ROW_TRAITS,
                                                  .identity = &MANAGED_ROW_IDENTITY};
+static const cmeta_type_traits MISSING_LIFECYCLE_TRAITS = {0};
+static const cmeta_type_desc MISSING_LIFECYCLE_TYPE = {.name = "missing_lifecycle_row_t",
+                                                       .size = sizeof(int),
+                                                       .align = _Alignof(int),
+                                                       .kind = CMETA_T_OBJECT,
+                                                       .traits = &MISSING_LIFECYCLE_TRAITS};
 static const turbo_flow_data_schema_t MANAGED_ROW_SCHEMA = {
     .size = sizeof(turbo_flow_data_schema_t),
     .domain = TURBO_FLOW_DOMAIN_DATA,
@@ -152,6 +158,11 @@ static const cmeta_type_desc *wait_source_type(void *state) {
   return &cmeta_type_int;
 }
 
+static const cmeta_type_desc *missing_lifecycle_source_type(void *state) {
+  (void)state;
+  return &MISSING_LIFECYCLE_TYPE;
+}
+
 static cflow_step wait_source_resume(void *state, cflow_publish_context *context, void *out_value) {
   wait_source_t *source = (wait_source_t *)state;
   (void)out_value;
@@ -180,6 +191,13 @@ CMETA_IMPLEMENTS(cflow_publisher, wait_source, CFLOW_PUBLISHER_CAP_CONSTRUCTS_VA
                  .bind_terminal_waker = wait_source_bind_terminal_waker,
                  .poll_terminal = wait_source_poll_terminal);
 
+CMETA_IMPLEMENTS(cflow_publisher, missing_lifecycle_source, CFLOW_PUBLISHER_CAP_CONSTRUCTS_VALUES,
+                 .name = wait_source_name, .output_type = missing_lifecycle_source_type,
+                 .resume = wait_source_resume, .cancel = wait_source_cancel,
+                 .destroy = wait_source_destroy,
+                 .bind_terminal_waker = wait_source_bind_terminal_waker,
+                 .poll_terminal = wait_source_poll_terminal);
+
 static turbo_flow_turbodb_source_config_t int_source_config(uint64_t first_id) {
   turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
   config.projection_schema = &INT_SCHEMA;
@@ -191,7 +209,8 @@ static turbo_flow_turbodb_source_config_t int_source_config(uint64_t first_id) {
 
 static void ignore_wake(void *user) { (void)user; }
 
-static orm_connection_t *open_test_database(orm_error_t *error) {
+static orm_connection_t *open_test_database_with_limits(orm_error_t *error, uint64_t max_rows,
+                                                        uint64_t max_bytes) {
   orm_config_t config;
   orm_option_t filename;
   orm_connection_t *connection = NULL;
@@ -202,8 +221,14 @@ static orm_connection_t *open_test_database(orm_error_t *error) {
   config.driver = orm_view("sqlite");
   config.options = &filename;
   config.option_count = 1u;
+  if (max_rows != 0u) config.max_result_rows = max_rows;
+  if (max_bytes != 0u) config.max_result_bytes = max_bytes;
   check_equal(orm_connect(&config, &connection, error), ORM_STATUS_OK);
   return connection;
+}
+
+static orm_connection_t *open_test_database(orm_error_t *error) {
+  return open_test_database_with_limits(error, 0u, 0u);
 }
 
 static void execute_test_sql(orm_connection_t *connection, const char *sql, orm_error_t *error) {
@@ -214,6 +239,38 @@ static void execute_test_sql(orm_connection_t *connection, const char *sql, orm_
   check_equal(orm_query_execute(query, &result, error), ORM_STATUS_OK);
   orm_result_destroy(result);
   orm_query_destroy(query);
+}
+
+typedef struct db_graph_probe_s {
+  size_t count;
+  uint64_t ids[2];
+  int values[2];
+} db_graph_probe_t;
+
+static int db_graph_probe_stage(turbo_flow_msg_t *message, void *ctx) {
+  db_graph_probe_t *probe = (db_graph_probe_t *)ctx;
+  const test_db_row *row = (const test_db_row *)turbo_flow_msg_projection(message, NULL);
+  if (!probe || !row || probe->count >= 2u) return SALTS_EPROTO;
+  probe->ids[probe->count] = message->id;
+  probe->values[probe->count] = row->id;
+  ++probe->count;
+  return SALTS_OK;
+}
+
+static turbo_flow_t *open_db_graph(db_graph_probe_t *probe) {
+  static const char source[] = "source input\n"
+                               "stage sink\n"
+                               "stage main {\n"
+                               "  input -> sink\n"
+                               "}\n";
+  turbo_flow_t *flow = turbo_flow_create();
+  if (!flow || turbo_flow_parse_string(flow, source, strlen(source)) != SALTS_OK ||
+      turbo_flow_register_stage_ex(flow, "sink", db_graph_probe_stage, probe, NULL) != SALTS_OK ||
+      turbo_flow_compile(flow) != SALTS_OK || turbo_flow_start(flow) != SALTS_OK) {
+    turbo_flow_destroy(flow);
+    return NULL;
+  }
+  return flow;
 }
 
 spec("TurboDb ORM Publisher adapter") {
@@ -373,6 +430,22 @@ spec("TurboDb ORM Publisher adapter") {
     cflow_publisher_destroy(&typed);
   }
 
+  it("rejects a Publisher whose CMeta type lacks copy and destroy traits") {
+    turbo_flow_data_schema_t schema = INT_SCHEMA;
+    turbo_flow_turbodb_source_config_t config = int_source_config(1u);
+    wait_source_t source = {0};
+    cflow_publisher typed = missing_lifecycle_source_as_cflow_publisher(&source);
+    cflow_publisher messages = {0};
+
+    schema.projection_type = "missing_lifecycle_row_t";
+    config.projection_schema = &schema;
+    check_equal(turbo_flow_turbodb_publisher_wrap(&typed, &config, &messages), SALTS_EINVAL);
+    check_true(cflow_publisher_valid(&typed));
+    check_false(cflow_publisher_valid(&messages));
+    cflow_publisher_destroy(&typed);
+    check_true(source.destroyed);
+  }
+
   it("opens native ORM row and command Publishers without materialization") {
     orm_error_t error;
     orm_connection_t *connection;
@@ -380,9 +453,14 @@ spec("TurboDb ORM Publisher adapter") {
     orm_flow_config_t flow_config;
     turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
     cflow_publisher messages = {0};
-    cflow_publish_context context = {.downstream_demand = 2u};
+    cflow_publish_context context = {.downstream_demand = 1u};
+    db_graph_probe_t graph_probe = {0};
+    turbo_flow_t *flow;
+    turbo_flow_run_t *run = NULL;
+    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
+    turbo_flow_run_result_t run_result = TURBO_FLOW_RUN_RESULT_INIT;
+    cflow_scheduler scheduler = {0};
     turbo_flow_msg_t message;
-    const test_db_row *row;
     const orm_command_result_t *command_result;
     cflow_step step;
 
@@ -400,24 +478,38 @@ spec("TurboDb ORM Publisher adapter") {
     config.first_message_id = 100u;
     check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
                 SALTS_OK);
-    step = cflow_publisher_resume(&messages, &context, &message);
-    check_equal(step.kind, CFLOW_STEP_VALUE);
-    row = (const test_db_row *)turbo_flow_msg_projection(&message, NULL);
-    check_not_null(row);
-    check_equal(row->id, 7);
-    check_equal(row->score, 19L);
-    turbo_flow_msg_cleanup(&message);
-    step = cflow_publisher_resume(&messages, &context, &message);
-    check_true(step.kind == CFLOW_STEP_VALUE || step.kind == CFLOW_STEP_VALUE_AND_DONE);
-    row = (const test_db_row *)turbo_flow_msg_projection(&message, NULL);
-    check_not_null(row);
-    check_equal(row->id, 11);
-    check_equal(row->score, 29L);
-    turbo_flow_msg_cleanup(&message);
-    cflow_publisher_destroy(&messages);
-    messages = (cflow_publisher){0};
+    flow = open_db_graph(&graph_probe);
+    check_not_null(flow);
+    check_true(cflow_scheduler_inline_init(&scheduler));
+    run_config.scheduler = &scheduler;
+    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
+    check_false(cflow_publisher_valid(&messages));
+
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_OK);
+    check_equal(turbo_flow_run_snapshot(run, &run_result), SALTS_OK);
+    check_equal(run_result.values, 1u);
+    check_equal(graph_probe.count, 1u);
+    check_equal(graph_probe.ids[0], 100u);
+    check_equal(graph_probe.values[0], 7);
+
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_OK);
+    check_equal(turbo_flow_run_snapshot(run, &run_result), SALTS_OK);
+    check_equal(run_result.values, 2u);
+    check_equal(graph_probe.count, 2u);
+    check_equal(graph_probe.ids[1], 101u);
+    check_equal(graph_probe.values[1], 11);
+
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_OK);
+    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &run_result), SALTS_OK);
+    check_equal(run_result.state, TURBO_FLOW_RUN_COMPLETED);
+    check_equal(run_result.values, 2u);
+    check_equal(graph_probe.count, 2u);
+    turbo_flow_run_close(run);
+    cflow_scheduler_destroy(&scheduler);
     orm_query_destroy(query);
     query = NULL;
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
 
     check_equal(
         orm_raw(connection, orm_view("insert into adapter_rows values(13, 31)"), &query, &error),
@@ -431,6 +523,55 @@ spec("TurboDb ORM Publisher adapter") {
     check_not_null(command_result);
     check_equal(command_result->affected_rows, 1u);
     turbo_flow_msg_cleanup(&message);
+    cflow_publisher_destroy(&messages);
+    orm_query_destroy(query);
+    orm_disconnect(connection);
+  }
+
+  it("preserves ORM row and byte limit errors at the Publisher boundary") {
+    orm_error_t error;
+    orm_connection_t *connection;
+    orm_query_t *query = NULL;
+    orm_flow_config_t flow_config;
+    turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
+    cflow_publisher messages = {0};
+    turbo_flow_msg_t message;
+    cflow_step step;
+
+    orm_error_init(&error);
+    connection = open_test_database_with_limits(&error, 1u, 0u);
+    check_not_null(connection);
+    check_equal(orm_raw(connection,
+                        orm_view("select 7 as id, 19 as score "
+                                 "union all select 11, 29"),
+                        &query, &error),
+                ORM_STATUS_OK);
+    orm_flow_config(&flow_config, &TEST_DB_ROW_DATA);
+    config.projection_schema = &TEST_DB_ROW_SCHEMA;
+    check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
+                SALTS_OK);
+    step = cflow_publisher_resume(&messages, NULL, &message);
+    check_equal(step.kind, CFLOW_STEP_VALUE);
+    turbo_flow_msg_cleanup(&message);
+    step = cflow_publisher_resume(&messages, NULL, &message);
+    check_equal(step.kind, CFLOW_STEP_ERROR);
+    check_not_null(step.error);
+    cflow_publisher_destroy(&messages);
+    orm_query_destroy(query);
+    orm_disconnect(connection);
+
+    messages = (cflow_publisher){0};
+    query = NULL;
+    connection = open_test_database_with_limits(&error, 0u, sizeof(int64_t) * 2u - 1u);
+    check_not_null(connection);
+    check_equal(orm_raw(connection, orm_view("select 7 as id, 19 as score"), &query, &error),
+                ORM_STATUS_OK);
+    orm_flow_config(&flow_config, &TEST_DB_ROW_DATA);
+    check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
+                SALTS_OK);
+    step = cflow_publisher_resume(&messages, NULL, &message);
+    check_equal(step.kind, CFLOW_STEP_ERROR);
+    check_not_null(step.error);
     cflow_publisher_destroy(&messages);
     orm_query_destroy(query);
     orm_disconnect(connection);
