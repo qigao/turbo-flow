@@ -2,7 +2,31 @@ cmake_minimum_required(VERSION 3.20)
 
 project(TurboFlowInstallConsumer LANGUAGES C)
 
-find_package(TurboFlow 1.0 CONFIG REQUIRED)
+if(TURBO_FLOW_TEST_ALL_COMPONENTS)
+  find_package(
+    TurboFlow 1.0 CONFIG REQUIRED
+    COMPONENTS
+      Config
+      Graph
+      Product
+      Flow
+      ProtocolIngress
+      ProtocolIngressGraph
+      ProtocolMqttSn
+      ProtocolCoap
+      ProtocolLwm2m
+      ProtocolOcpp
+      ProtocolGbt32960
+      ProtocolJtt808
+      ProtocolBusinessOcpp201Core
+      MqttSink
+      SecuritySQLite
+      Codec
+      Observe
+      Schedule)
+else()
+  find_package(TurboFlow 1.0 CONFIG REQUIRED)
+endif()
 
 add_executable(turbo_flow_install_consumer main.c)
 target_link_libraries(
