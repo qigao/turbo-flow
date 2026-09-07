@@ -102,6 +102,9 @@ typedef struct flow_adapter_registration_s {
 typedef struct flow_resource_registration_s {
   tstr owner_name;
   turbo_flow_resource_provider_ops_t ops;
+  turbo_flow_managed_boundary_descriptor_t managed_boundary;
+  turbo_flow_managed_boundary_snapshot_fn managed_boundary_snapshot;
+  int has_managed_boundary;
   void *ctx;
 } flow_resource_registration_t;
 

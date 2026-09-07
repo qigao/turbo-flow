@@ -771,6 +771,102 @@ typedef int (*turbo_flow_resource_document_fn)(void *ctx,
                                                turbo_flow_resource_document_kind_t document_kind,
                                                turbo_flow_resource_document_t *out);
 
+#define TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION 1u
+
+typedef enum turbo_flow_managed_boundary_role_flags_e {
+  TURBO_FLOW_MANAGED_BOUNDARY_SOURCE = 1u << 0,
+  TURBO_FLOW_MANAGED_BOUNDARY_SINK = 1u << 1
+} turbo_flow_managed_boundary_role_flags_t;
+
+typedef enum turbo_flow_managed_boundary_capability_flags_e {
+  TURBO_FLOW_MANAGED_BOUNDARY_DEMAND_AWARE = 1u << 0,
+  TURBO_FLOW_MANAGED_BOUNDARY_REPLAYABLE = 1u << 1,
+  TURBO_FLOW_MANAGED_BOUNDARY_DURABLE_SETTLEMENT = 1u << 2,
+  TURBO_FLOW_MANAGED_BOUNDARY_MANUAL_REVIEW = 1u << 3
+} turbo_flow_managed_boundary_capability_flags_t;
+
+typedef enum turbo_flow_managed_boundary_command_flags_e {
+  TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_QUIESCE = 1u << 0,
+  TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_RESUME = 1u << 1,
+  TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_REPLACE_ENDPOINT = 1u << 2
+} turbo_flow_managed_boundary_command_flags_t;
+
+typedef enum turbo_flow_managed_boundary_state_e {
+  TURBO_FLOW_MANAGED_BOUNDARY_REGISTERED = 0,
+  TURBO_FLOW_MANAGED_BOUNDARY_STARTING,
+  TURBO_FLOW_MANAGED_BOUNDARY_RUNNING,
+  TURBO_FLOW_MANAGED_BOUNDARY_QUIESCING,
+  TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT,
+  TURBO_FLOW_MANAGED_BOUNDARY_DRAINING,
+  TURBO_FLOW_MANAGED_BOUNDARY_STOPPING,
+  TURBO_FLOW_MANAGED_BOUNDARY_STOPPED,
+  TURBO_FLOW_MANAGED_BOUNDARY_FAILED
+} turbo_flow_managed_boundary_state_t;
+
+/** Immutable, pointer-free Source/Sink capability contract copied at registration. */
+typedef struct turbo_flow_managed_boundary_descriptor_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_domain_t domain;
+  turbo_flow_resource_kind_t kind;
+  char uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u];
+  char owner_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
+  /** Bitwise turbo_flow_managed_boundary_role_flags_t values. */
+  uint32_t role_flags;
+  /** Bitwise turbo_flow_managed_boundary_capability_flags_t values. */
+  uint32_t capability_flags;
+  /** Bitwise command flags; zero declares a read-only boundary. */
+  uint32_t command_flags;
+  /** Required when the SINK role is present. */
+  turbo_flow_content_descriptor_t input;
+  /** Required when the SOURCE role is present. */
+  turbo_flow_content_descriptor_t output;
+} turbo_flow_managed_boundary_descriptor_t;
+
+#define TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT                                                \
+  {sizeof(turbo_flow_managed_boundary_descriptor_t),                                               \
+   TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION,                                                        \
+   TURBO_FLOW_DOMAIN_NONE,                                                                         \
+   TURBO_FLOW_RESOURCE_CONNECTION,                                                                 \
+   {0},                                                                                            \
+   {0},                                                                                            \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   TURBO_FLOW_CONTENT_DESCRIPTOR_INIT,                                                             \
+   TURBO_FLOW_CONTENT_DESCRIPTOR_INIT}
+
+/** Owner-synchronized, pointer-free operational projection for one managed boundary. */
+typedef struct turbo_flow_managed_boundary_snapshot_s {
+  size_t size;
+  uint32_t version;
+  char uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u];
+  uint64_t generation;
+  uint64_t observed_generation;
+  turbo_flow_managed_boundary_state_t state;
+  uint64_t demand;
+  uint64_t queue_depth;
+  uint64_t queue_capacity;
+  uint64_t in_flight;
+  uint64_t lag;
+  /** Items admitted to the boundary data path. */
+  uint64_t accepted;
+  /** Admitted items that reached an owner-defined terminal outcome. */
+  uint64_t completed;
+  /** Items rejected before admission; independent of accepted/completed. */
+  uint64_t rejected;
+  int backpressured;
+  int last_status;
+} turbo_flow_managed_boundary_snapshot_t;
+
+#define TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT                                                  \
+  {sizeof(turbo_flow_managed_boundary_snapshot_t), TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION}
+
+typedef int (*turbo_flow_managed_boundary_descriptor_fn)(
+    void *ctx, turbo_flow_managed_boundary_descriptor_t *out);
+typedef int (*turbo_flow_managed_boundary_snapshot_fn)(
+    void *ctx, turbo_flow_managed_boundary_snapshot_t *out);
+
 /** Legacy adapter-scoped command kinds retained for source and ABI compatibility. */
 typedef enum turbo_flow_adapter_command_kind_e {
   TURBO_FLOW_ADAPTER_QUIESCE = 1,
@@ -989,6 +1085,22 @@ typedef struct turbo_flow_resource_provider_ops_s {
 
 #define TURBO_FLOW_RESOURCE_PROVIDER_OPS_INIT                                                      \
   {sizeof(turbo_flow_resource_provider_ops_t), NULL, NULL, NULL, NULL}
+
+/** Additive provider contract that registers into the canonical resource registry. */
+typedef struct turbo_flow_managed_boundary_provider_ops_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_resource_provider_ops_t resource;
+  turbo_flow_managed_boundary_descriptor_fn descriptor;
+  turbo_flow_managed_boundary_snapshot_fn snapshot;
+} turbo_flow_managed_boundary_provider_ops_t;
+
+#define TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT                                              \
+  {sizeof(turbo_flow_managed_boundary_provider_ops_t),                                             \
+   TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION,                                                        \
+   TURBO_FLOW_RESOURCE_PROVIDER_OPS_INIT,                                                          \
+   NULL,                                                                                           \
+   NULL}
 
 typedef struct turbo_flow_resource_provider_registration_s {
   size_t size;
@@ -2147,6 +2259,17 @@ TURBO_FLOW_C_API int turbo_flow_register_adapter_settlement(turbo_flow_t *flow, 
 TURBO_FLOW_C_API int turbo_flow_register_resource_provider(turbo_flow_t *flow, const char *owner_name,
                                                     const turbo_flow_resource_provider_ops_t *ops,
                                                     void *ctx);
+/**
+ * Register one explicitly managed Source/Sink in the canonical resource registry.
+ * @param flow Mutable flow before compile/start.
+ * @param owner_name Stable owner name, equal to metadata and descriptor owner names.
+ * @param ops Versioned resource, descriptor, snapshot, and optional command provider contract.
+ * @param ctx Owner context retained by the caller through reset/destroy.
+ * @return SALTS_OK, an owner error, SALTS_EINVAL, SALTS_EPROTO, SALTS_EALREADY, or SALTS_ENOMEM.
+ */
+TURBO_FLOW_C_API int turbo_flow_register_managed_boundary_provider(
+    turbo_flow_t *flow, const char *owner_name,
+    const turbo_flow_managed_boundary_provider_ops_t *ops, void *ctx);
 
 /**
  * Register an adapter and immutable option metadata.
@@ -2225,6 +2348,31 @@ TURBO_FLOW_C_API int turbo_flow_adapter_connection_snapshot_at(const turbo_flow_
 TURBO_FLOW_C_API size_t turbo_flow_resource_count(const turbo_flow_t *flow);
 TURBO_FLOW_C_API int turbo_flow_resource_snapshot_at(const turbo_flow_t *flow, size_t index,
                                               turbo_flow_resource_snapshot_t *out);
+/**
+ * Enumerate only registered resources with an explicit managed Source/Sink contract.
+ * @param flow Flow registry; NULL returns zero.
+ * @return Boundary count. This read does not invoke owner callbacks.
+ */
+TURBO_FLOW_C_API size_t turbo_flow_managed_boundary_count(const turbo_flow_t *flow);
+/**
+ * Copy the immutable descriptor captured when its resource provider was registered.
+ * @param flow Flow registry serialized against reset/destroy.
+ * @param index Zero-based managed-boundary index.
+ * @param out Caller-owned initialized output.
+ * @return SALTS_OK, an owner error, SALTS_EINVAL, SALTS_ENOENT, or SALTS_EPROTO on identity drift.
+ */
+TURBO_FLOW_C_API int turbo_flow_managed_boundary_descriptor_at(
+    const turbo_flow_t *flow, size_t index, turbo_flow_managed_boundary_descriptor_t *out);
+/**
+ * Query and validate one owner-synchronized managed Source/Sink snapshot.
+ * @param flow Flow registry serialized against reset/destroy.
+ * @param index Zero-based managed-boundary index.
+ * @param out Caller-owned initialized output.
+ * @return SALTS_OK, an owner error, SALTS_EINVAL, SALTS_ENOENT, SALTS_EBUSY on concurrent
+ *         generation change, or SALTS_EPROTO on stable contract drift.
+ */
+TURBO_FLOW_C_API int turbo_flow_managed_boundary_snapshot_at(
+    const turbo_flow_t *flow, size_t index, turbo_flow_managed_boundary_snapshot_t *out);
 /** Enumerate explicitly stable adapter resources followed by runtime-owned pools. */
 TURBO_FLOW_C_API size_t turbo_flow_resource_metadata_count(const turbo_flow_t *flow);
 TURBO_FLOW_C_API int turbo_flow_resource_metadata_at(const turbo_flow_t *flow, size_t index,
