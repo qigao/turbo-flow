@@ -5,6 +5,7 @@ include(CMakeFindDependencyMacro)
 set(_TurboFlow_supported_components
     Config
     Graph
+    CNetAdapter
     Product
     Flow
     ProtocolIngress

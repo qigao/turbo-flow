@@ -33,6 +33,7 @@ target_link_libraries(
   turbo_flow_install_consumer
   PRIVATE TurboFlow::Config
           TurboFlow::Graph
+          TurboFlow::CNetAdapter
           TurboFlow::Product
           TurboFlow::Flow
           TurboFlow::ProtocolIngress
