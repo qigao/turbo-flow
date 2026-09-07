@@ -38,7 +38,7 @@ Fixed inputs:
 | Address | IPv4 loopback |
 | Payload | 256 bytes, one prebuilt shared `mem_buffer_t` |
 | Warmup | 256 messages per replicate |
-| Measured sample | 4,096 messages per replicate |
+| Measured sample | 131,072 messages per replicate |
 | Replicates | 7 independent fixtures |
 | Producer / ingress workers | 1 / 1 |
 | Async-ingress queue | 128 messages / 32,768 logical retained bytes |
@@ -47,16 +47,18 @@ Fixed inputs:
 
 ## Metric definitions
 
-- `throughput_msg_s = completed_messages * 1,000,000,000 / measured_wall_ns`. The interval starts immediately before the first measured publish attempt and ends after the final authoritative Graph completion callback. Fixture setup, warmup, peer catch-up, saturation, and shutdown are excluded.
+- `throughput_msg_s = completed_messages * 1,000,000,000 / measured_wall_ns`. The interval starts immediately before the first measured publish attempt and ends at the timestamp captured inside the final authoritative Graph completion callback. Fixture setup, warmup, peer catch-up, saturation, and shutdown are excluded, including peer polls that occur after that callback in the same progress call.
 - Per-message latency starts immediately before `turbo_flow_publish_async` and ends in its unique Graph completion callback. P50/P95/P99 use nearest rank: sort `N` samples and select rank `ceil(percentile * N / 100)`.
-- `cpu_wall_ratio = process_cpu_ns / measured_wall_ns`, where process CPU is Windows kernel plus user time over the same measured interval. Values above 1.0 are valid because the Flow ingress worker and progress owner can consume different cores.
+- `cpu_wall_ratio = process_cpu_ns / measured_wall_ns`, where process CPU is Windows kernel plus user time around the same measured batch. The start CPU sample is taken immediately before the wall start; the final callback captures the wall end and then takes the CPU end sample before returning. Values above 1.0 are valid because the Flow ingress worker and progress owner can consume different cores. The 131,072-message interval lasts about 0.72--0.83 seconds here, long enough to span roughly 46--53 observed 15.625 ms Windows CPU-accounting ticks instead of the 1--3 ticks seen in the rejected short-window design.
 - Replicate summaries report `median(x)` and `MAD = median(abs(x - median(x)))`. Samples from independent replicates are not pooled.
 - `retained_payload_bytes_max = peak_active_requests * 256`. This is the logical payload-retention bound at the packet terminal, not RSS and not an assertion that the shared benchmark buffer is physically copied once per request.
 - `allocation_events_per_message = 3` counts TurboFlow-owned steady-state owner allocations for an accepted `mem_buffer_t` message: async ingress task, async publication, and async terminal claim. Fixture allocation and the one prebuilt payload buffer are outside the measured message scope. RSS/working-set deltas are not used as allocation counts.
 - Saturation deliberately submits 65 messages to the 64-entry sink without progressing it, requires at least one concrete `SALTS_ENOSPC` completion, drains every accepted claim, then requires a new message to complete successfully.
-- `shutdown_us` covers Flow stop/destroy, packet-sink handle destroy, and peer endpoint stop/destroy after all accepted claims have terminal results.
+- `shutdown_us` covers Flow stop/destroy, packet-sink handle destroy, and peer endpoint stop/destroy. A snapshot must first report `pre_shutdown_active_requests=0`; otherwise the run fails before the timer starts.
 
-Allocation evidence at source commit `573154a32f44b4b7e7ac55d68e9f75242a8cd9af`:
+Before emitting any measurement, the executable queries Git again, requires live `HEAD` to equal its compiled commit, and requires `git status --porcelain=v1 --untracked-files=normal -- .` to be empty. A dirty tree fails with `SALTS_EBUSY`; an executable built for a different commit fails with `SALTS_EPROTO`. Thus ignored build products are allowed, but tracked changes and untracked source/document files cannot silently contaminate a baseline.
+
+Allocation evidence at source commit `0f6767f3db51983bcd927bc77520ef54abba1b69`:
 
 | Owner allocation | Source |
 | --- | --- |
@@ -69,9 +71,10 @@ The packet sink allocates its operation and delivered-ID arrays during registrat
 ## Baseline environment
 
 - Date: 2026-09-07
-- Source commit: `573154a32f44b4b7e7ac55d68e9f75242a8cd9af`
-- Tracked source state at configure: clean (`source_dirty=0`)
+- Source commit: `0f6767f3db51983bcd927bc77520ef54abba1b69`
+- Runtime-validated source state: clean (`source_dirty=0`)
 - Preset/build type: `win-release-user` / `Release`
+- AddressSanitizer/baseline eligibility: `asan=0` / `baseline_eligible=1`
 - OS: Microsoft Windows 11 家庭版 中文版, version 10.0.26200, build 26200
 - CPU: AMD Ryzen 9 7940HX with Radeon Graphics, 16 physical / 32 logical cores
 - Visible memory: 15.2 GiB
@@ -80,26 +83,26 @@ The packet sink allocates its operation and delivered-ID arrays during registrat
 
 ## Baseline results
 
-Every replicate observed `peak_active_requests=64`, `retained_payload_bytes_max=16384`, `saturation_rejected=1`, and `saturation_recovered=1`.
+Every replicate observed `peak_active_requests=64`, `retained_payload_bytes_max=16384`, `saturation_rejected=1`, `saturation_recovered=1`, and `pre_shutdown_active_requests=0`.
 
 | Replicate | Throughput msg/s | P50 ns | P95 ns | P99 ns | CPU/wall | Shutdown us |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 169,360.474 | 352,100 | 366,100 | 375,800 | 1.292118 | 366.800 |
-| 2 | 167,233.502 | 354,900 | 369,000 | 376,800 | 1.275890 | 376.600 |
-| 3 | 173,070.910 | 345,500 | 366,000 | 391,200 | 1.320426 | 348.200 |
-| 4 | 175,443.857 | 345,300 | 363,900 | 394,200 | 0.669265 | 250.500 |
-| 5 | 189,425.296 | 313,800 | 322,800 | 327,200 | 0.722600 | 305.800 |
-| 6 | 177,280.715 | 330,600 | 363,800 | 421,000 | 1.352545 | 292.500 |
-| 7 | 185,465.248 | 319,000 | 337,700 | 371,000 | 0.707494 | 334.200 |
+| 1 | 158,530.650 | 365,800 | 439,400 | 560,700 | 1.190595 | 403.000 |
+| 2 | 179,825.300 | 324,600 | 365,500 | 474,400 | 1.243337 | 335.200 |
+| 3 | 181,581.261 | 322,000 | 363,600 | 460,500 | 1.168893 | 544.600 |
+| 4 | 181,581.689 | 319,800 | 354,800 | 485,600 | 1.190542 | 538.900 |
+| 5 | 166,963.256 | 348,300 | 445,200 | 521,200 | 1.154407 | 402.600 |
+| 6 | 162,701.133 | 352,200 | 484,800 | 531,400 | 1.202520 | 386.700 |
+| 7 | 166,194.688 | 348,600 | 458,800 | 531,700 | 1.168905 | 427.400 |
 
 | Metric | Median | MAD |
 | --- | ---: | ---: |
-| Throughput (msg/s) | 175,443.857 | 6,083.383 |
-| P50 (ns) | 345,300 | 9,600 |
-| P95 (ns) | 363,900 | 2,200 |
-| P99 (ns) | 376,800 | 14,400 |
-| CPU/wall ratio | 1.276 | 0.077 |
-| Shutdown (us) | 334.200 | 32.600 |
+| Throughput (msg/s) | 166,963.256 | 8,432.606 |
+| P50 (ns) | 348,300 | 17,500 |
+| P95 (ns) | 439,400 | 45,400 |
+| P99 (ns) | 521,200 | 35,600 |
+| CPU/wall ratio | 1.191 | 0.022 |
+| Shutdown (us) | 403.000 | 24.400 |
 
 The same harness also completed under `win-dev-user` with AddressSanitizer enabled. Debug/ASan numbers are intentionally excluded from the release baseline.
 
