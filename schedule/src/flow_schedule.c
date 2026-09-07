@@ -252,6 +252,13 @@ static void flow_schedule_timer_callback(salts_timer_t *timer) {
     next_due_ms = atomic_load_explicit(&schedule->next_due_ms, memory_order_acquire);
     if (now_ms < next_due_ms) {
       atomic_store_explicit(&schedule->async_inflight, 0u, memory_order_release);
+      if (schedule->mode == TURBO_FLOW_SCHEDULE_ONE_SHOT &&
+          schedule->delay_ms <= FLOW_SCHEDULE_NATIVE_TIMER_MAX_MS &&
+          salts_timer_start(timer, flow_schedule_timer_callback, next_due_ms - now_ms, 0u) != 0) {
+        atomic_store_explicit(&schedule->last_status, SALTS_EIO, memory_order_release);
+        atomic_store_explicit(&schedule->completed, 1, memory_order_release);
+        stop_timer = 1;
+      }
       goto done;
     }
     rc = flow_schedule_publish_async(schedule, 0, 1);
