@@ -15,3 +15,14 @@ cmake_add_test(
   FOLDER "io/chttp/tests")
 
 set_tests_properties(test_chttp_server_adapter PROPERTIES LABELS "chttp-adapter;graph;server")
+
+cmake_add_test(
+  test_chttp_websocket_adapter
+  SOURCES test_chttp_websocket_adapter.c chttp_server_header_cpp.cpp
+  LIBS TurboFlow::CHTTPAdapter Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  FOLDER "io/chttp/tests")
+
+set_tests_properties(
+  test_chttp_websocket_adapter
+  PROPERTIES LABELS "chttp-adapter;graph;server;websocket")

@@ -52,10 +52,11 @@ rewriting a sibling stream. Requested HTTP/2, TLS, or ALPN setup errors are
 returned unchanged; the adapter never starts an H1 listener or synchronous Flow
 path as a fallback.
 
-WebSocket Upgrade and RFC 8441 handshakes remain CHTTP responsibilities. Frame
-and captured-session integration is a distinct CNet data-flow adapter because it
-has different message, demand, close, and backpressure semantics; HTTP request
-slots are never reused for WebSocket frames.
+WebSocket Upgrade and RFC 8441 handshakes remain CHTTP responsibilities. Their
+frame and captured-session integration is a distinct CHTTP WebSocket Flow
+adapter because it has different message, close, and backpressure semantics;
+HTTP request slots are never reused for WebSocket frames and the CNet engine is
+not exposed across the CHTTP boundary.
 
 ## Data and ownership protocol
 

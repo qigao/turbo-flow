@@ -14,6 +14,9 @@ extern "C" {
 
 #define TURBO_FLOW_CHTTP_CLIENT_API_VERSION 1u
 #define TURBO_FLOW_CHTTP_SERVER_API_VERSION 1u
+#define TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_API_VERSION 1u
+#define TURBO_FLOW_CHTTP_WEBSOCKET_MIN_FRAME_BYTES 2u
+#define TURBO_FLOW_CHTTP_WEBSOCKET_MAX_WIRE_HEADER_BYTES 14u
 #define TURBO_FLOW_CHTTP_DEFAULT_STOP_TIMEOUT_MS 5000u
 #define TURBO_FLOW_CHTTP_SERVER_DEFAULT_MAX_REQUEST_MESSAGE_BYTES (2u * 1024u * 1024u)
 #define TURBO_FLOW_CHTTP_SERVER_DEFAULT_SUCCESS_STATUS 200u
@@ -23,6 +26,7 @@ extern "C" {
 
 typedef struct turbo_flow_chttp_client_s turbo_flow_chttp_client_t;
 typedef struct turbo_flow_chttp_server_s turbo_flow_chttp_server_t;
+typedef struct turbo_flow_chttp_websocket_server_s turbo_flow_chttp_websocket_server_t;
 
 typedef enum turbo_flow_chttp_client_state_e {
   TURBO_FLOW_CHTTP_CLIENT_REGISTERED = 0,
@@ -213,6 +217,127 @@ typedef struct turbo_flow_chttp_server_request_context_s {
 #define TURBO_FLOW_CHTTP_SERVER_REQUEST_CONTEXT_V1_SIZE                                            \
   sizeof(turbo_flow_chttp_server_request_context_t)
 
+typedef enum turbo_flow_chttp_websocket_frame_type_e {
+  TURBO_FLOW_CHTTP_WEBSOCKET_FRAME_TEXT = 1,
+  TURBO_FLOW_CHTTP_WEBSOCKET_FRAME_BINARY,
+  TURBO_FLOW_CHTTP_WEBSOCKET_FRAME_PING,
+  TURBO_FLOW_CHTTP_WEBSOCKET_FRAME_PONG,
+  TURBO_FLOW_CHTTP_WEBSOCKET_FRAME_CLOSE
+} turbo_flow_chttp_websocket_frame_type_t;
+
+typedef enum turbo_flow_chttp_websocket_server_state_e {
+  TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_REGISTERED = 0,
+  TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STARTING,
+  TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING,
+  TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPING,
+  TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED,
+  TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_DETACHED,
+  TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_FAILED
+} turbo_flow_chttp_websocket_server_state_t;
+
+/**
+ * One CHTTP-owned WebSocket route exposed as a bounded Flow source and sink.
+ *
+ * CHTTP owns H1 Upgrade, WSS, RFC 8441, subprotocol selection and its CNet
+ * WebSocket engine. The adapter copies event payloads into Flow-owned messages.
+ * TLS configuration remains borrowed through registry detachment; all strings
+ * are copied during registration.
+ */
+typedef struct turbo_flow_chttp_websocket_server_config_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_t *flow;
+  const char *adapter_name;
+  const char *source_name;
+  const chttp_server_config *server;
+  const chttp_server_socket_options *socket_options;
+  const char *path;
+  const char *subprotocol;
+  size_t session_capacity;
+  size_t frame_capacity;
+  size_t max_frame_bytes;
+  size_t max_message_bytes;
+  size_t max_buffered_input_bytes;
+  uint64_t first_message_id;
+  uint32_t stop_timeout_ms;
+} turbo_flow_chttp_websocket_server_config_t;
+
+#define TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_CONFIG_V1_SIZE                                           \
+  sizeof(turbo_flow_chttp_websocket_server_config_t)
+#define TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_CONFIG_INIT                                              \
+  {TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_CONFIG_V1_SIZE,                                               \
+   TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_API_VERSION,                                                  \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   64u,                                                                                            \
+   256u,                                                                                           \
+   64u * 1024u,                                                                                    \
+   1024u * 1024u,                                                                                  \
+   64u * 1024u + TURBO_FLOW_CHTTP_WEBSOCKET_MAX_WIRE_HEADER_BYTES,                                 \
+   1u,                                                                                             \
+   TURBO_FLOW_CHTTP_DEFAULT_STOP_TIMEOUT_MS}
+
+/** Message-owned immutable metadata for one copied WebSocket event. */
+typedef struct turbo_flow_chttp_websocket_event_context_s {
+  size_t size;
+  uint32_t version;
+  chttp_server_websocket_session session;
+  turbo_flow_chttp_websocket_frame_type_t event_type;
+  chttp_websocket_message_type message_type;
+  uint16_t close_code;
+} turbo_flow_chttp_websocket_event_context_t;
+
+#define TURBO_FLOW_CHTTP_WEBSOCKET_EVENT_CONTEXT_V1_SIZE                                           \
+  sizeof(turbo_flow_chttp_websocket_event_context_t)
+
+typedef struct turbo_flow_chttp_websocket_server_snapshot_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_chttp_websocket_server_state_t state;
+  uint16_t bound_port;
+  size_t active_sessions;
+  size_t session_capacity;
+  size_t in_flight_frames;
+  size_t frame_capacity;
+  uint64_t sessions_opened;
+  uint64_t sessions_rejected;
+  uint64_t sessions_closed;
+  uint64_t frames_admitted;
+  uint64_t frames_rejected;
+  uint64_t frames_completed;
+  uint64_t bytes_admitted;
+  uint64_t commands_admitted;
+  uint64_t bytes_sent;
+  int last_status;
+} turbo_flow_chttp_websocket_server_snapshot_t;
+
+#define TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_SNAPSHOT_V1_SIZE                                         \
+  sizeof(turbo_flow_chttp_websocket_server_snapshot_t)
+#define TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_SNAPSHOT_INIT                                            \
+  {TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_SNAPSHOT_V1_SIZE,                                             \
+   TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_API_VERSION,                                                  \
+   TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_REGISTERED,                                                   \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   SALTS_OK}
+
 typedef struct turbo_flow_chttp_server_snapshot_s {
   size_t size;
   uint32_t version;
@@ -283,6 +408,24 @@ turbo_flow_chttp_server_snapshot(const turbo_flow_chttp_server_t *server,
  * @return SALTS_OK, SALTS_EINVAL, or SALTS_EBUSY while attached/active.
  */
 TURBO_FLOW_C_API int turbo_flow_chttp_server_destroy(turbo_flow_chttp_server_t *server);
+
+/** Atomically registers one WebSocket SOURCE|SINK adapter before compilation. */
+TURBO_FLOW_C_API int
+turbo_flow_chttp_websocket_server_register(const turbo_flow_chttp_websocket_server_config_t *config,
+                                           turbo_flow_chttp_websocket_server_t **out_server);
+
+/** Copies lifecycle, capacity, event and command counters without advancing work. */
+TURBO_FLOW_C_API int turbo_flow_chttp_websocket_server_snapshot(
+    const turbo_flow_chttp_websocket_server_t *server,
+    turbo_flow_chttp_websocket_server_snapshot_t *out_snapshot);
+
+/** Releases a WebSocket server only after Flow registry detachment. */
+TURBO_FLOW_C_API int
+turbo_flow_chttp_websocket_server_destroy(turbo_flow_chttp_websocket_server_t *server);
+
+/** Returns copied event metadata for a valid message-owned WebSocket event. */
+TURBO_FLOW_C_API const turbo_flow_chttp_websocket_event_context_t *
+turbo_flow_chttp_websocket_event_context(const turbo_flow_msg_t *message);
 
 /**
  * Returns request metadata only for a valid message-owned CHTTP server request.
