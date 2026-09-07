@@ -11,6 +11,8 @@ int main(void) {
   turbo_flow_async_emit_adapter_ops_t emit_ops = TURBO_FLOW_ASYNC_EMIT_ADAPTER_OPS_INIT;
   turbo_flow_chttp_client_config_t chttp_config = TURBO_FLOW_CHTTP_CLIENT_CONFIG_INIT;
   turbo_flow_chttp_client_snapshot_t chttp_snapshot = TURBO_FLOW_CHTTP_CLIENT_SNAPSHOT_INIT;
+  turbo_flow_chttp_server_config_t chttp_server_config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
+  turbo_flow_chttp_server_snapshot_t chttp_server_snapshot = TURBO_FLOW_CHTTP_SERVER_SNAPSHOT_INIT;
   turbo_flow_cnet_stream_source_config_t cnet_config = TURBO_FLOW_CNET_STREAM_SOURCE_CONFIG_INIT;
   turbo_flow_cnet_listener_source_config_t listener_config =
       TURBO_FLOW_CNET_LISTENER_SOURCE_CONFIG_INIT;
@@ -93,6 +95,14 @@ int main(void) {
       turbo_flow_cnet_datagram_sink_snapshot;
   int (*datagram_sink_destroy)(turbo_flow_cnet_datagram_sink_t *) =
       turbo_flow_cnet_datagram_sink_destroy;
+  int (*chttp_server_register)(const turbo_flow_chttp_server_config_t *,
+                               turbo_flow_chttp_server_t **) = turbo_flow_chttp_server_register;
+  int (*chttp_server_snapshot_copy)(const turbo_flow_chttp_server_t *,
+                                    turbo_flow_chttp_server_snapshot_t *) =
+      turbo_flow_chttp_server_snapshot;
+  int (*chttp_server_destroy)(turbo_flow_chttp_server_t *) = turbo_flow_chttp_server_destroy;
+  const turbo_flow_chttp_server_request_context_t *(*chttp_server_request_context)(
+      const turbo_flow_msg_t *) = turbo_flow_chttp_server_request_context;
   turbo_flow_t *flow = turbo_flow_create();
   if (!flow || run_config.version != TURBO_FLOW_RUN_API_VERSION ||
       run_result.version != TURBO_FLOW_RUN_API_VERSION ||
@@ -103,6 +113,8 @@ int main(void) {
       emit_ops.version != TURBO_FLOW_ASYNC_EMIT_API_VERSION ||
       chttp_config.version != TURBO_FLOW_CHTTP_CLIENT_API_VERSION ||
       chttp_snapshot.version != TURBO_FLOW_CHTTP_CLIENT_API_VERSION ||
+      chttp_server_config.version != TURBO_FLOW_CHTTP_SERVER_API_VERSION ||
+      chttp_server_snapshot.version != TURBO_FLOW_CHTTP_SERVER_API_VERSION ||
       cnet_config.version != TURBO_FLOW_CNET_STREAM_SOURCE_API_VERSION ||
       listener_config.version != TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION ||
       listener_snapshot.version != TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION ||
@@ -120,6 +132,8 @@ int main(void) {
       !packet_destroy || !stream_sink_register || !stream_sink_poll ||
       !stream_sink_snapshot_copy || !stream_sink_destroy || !datagram_sink_register ||
       !datagram_sink_poll || !datagram_sink_snapshot_copy || !datagram_sink_destroy ||
+      !chttp_server_register || !chttp_server_snapshot_copy || !chttp_server_destroy ||
+      !chttp_server_request_context ||
       !turbo_flow_message_type())
     return 1;
   turbo_flow_destroy(flow);

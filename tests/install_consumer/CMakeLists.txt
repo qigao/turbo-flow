@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(TurboFlowInstallConsumer LANGUAGES C)
+if(TURBO_FLOW_CONSUMER_CXX_ONLY)
+  project(TurboFlowInstallConsumer LANGUAGES CXX)
+  set_source_files_properties(main.c PROPERTIES LANGUAGE CXX)
+else()
+  project(TurboFlowInstallConsumer LANGUAGES C)
+endif()
 
 if(TURBO_FLOW_TEST_ALL_COMPONENTS)
   find_package(
@@ -8,6 +13,8 @@ if(TURBO_FLOW_TEST_ALL_COMPONENTS)
     COMPONENTS
       Config
       Graph
+      CNetAdapter
+      CHTTPAdapter
       Product
       Flow
       ProtocolIngress

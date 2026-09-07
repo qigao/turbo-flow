@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+static SALTS_THREAD_LOCAL turbo_flow_t *flow_active_adapter_stop_owner;
+
 void flow_make_stage_view(const flow_stage_plan_impl_t *stage, turbo_flow_stage_plan_t *view) {
   memset(view, 0, sizeof(*view));
   view->name = stage->name;
@@ -61,10 +63,11 @@ int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t 
   return adapter->ops.consume(adapter->ctx, flow, &view, msg);
 }
 
-void flow_stop_adapters(turbo_flow_t *flow) {
+static int flow_stop_adapter_phase(turbo_flow_t *flow, int source_phase) {
   size_t count;
+  int first_status = SALTS_OK;
 
-  if (!flow) return;
+  if (!flow) return SALTS_EINVAL;
 
   count = vec_size(&flow->active_adapters);
   while (count > 0) {
@@ -72,22 +75,38 @@ void flow_stop_adapters(turbo_flow_t *flow) {
     flow_adapter_registration_t *adapter;
     const flow_stage_plan_impl_t *stage;
     turbo_flow_stage_plan_t view;
+    int status;
 
     --count;
     active = (flow_active_adapter_t *)vec_at(&flow->active_adapters, count);
-    if (!active) continue;
+    if (!active || active->stopped) continue;
 
     adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, active->adapter_index);
     stage = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, active->stage_index);
-    if (!adapter || !stage) continue;
+    if (!adapter || !stage || !!stage->is_source != !!source_phase) continue;
 
     if (adapter->ops.stop) {
+      turbo_flow_t *previous_stop_owner = flow_active_adapter_stop_owner;
       flow_make_stage_view(stage, &view);
+      salts_mutex_lock(&flow->runtime_mutex);
+      flow->adapter_stop_callback_active = 1;
+      flow->adapter_stop_callback_status = SALTS_OK;
+      salts_mutex_unlock(&flow->runtime_mutex);
+      flow_active_adapter_stop_owner = flow;
       adapter->ops.stop(adapter->ctx, flow, &view);
+      flow_active_adapter_stop_owner = previous_stop_owner;
+      salts_mutex_lock(&flow->runtime_mutex);
+      status = flow->adapter_stop_callback_status;
+      flow->adapter_stop_callback_active = 0;
+      salts_mutex_unlock(&flow->runtime_mutex);
+    } else {
+      status = SALTS_OK;
     }
+    if (status == SALTS_OK) active->stopped = 1;
+    else if (first_status == SALTS_OK) first_status = status;
     if (flow->observer_ops.adapter_event) {
       flow->observer_ops.adapter_event(flow->observer_ctx, stage->name, adapter->name,
-                                       TURBO_FLOW_ADAPTER_EVENT_STOP, SALTS_OK);
+                                       TURBO_FLOW_ADAPTER_EVENT_STOP, status);
     }
     {
       turbo_flow_observe_event_t event;
@@ -96,14 +115,49 @@ void flow_stop_adapters(turbo_flow_t *flow) {
       event.stage_name = stage->name;
       event.adapter_name = adapter->name;
       event.operation_name = stage->operation_name;
-      event.status = SALTS_OK;
+      event.status = status;
       event.selected = -1;
       event.edge_kind = -1;
       flow_observer_emit(flow, &event);
     }
   }
+  return first_status;
+}
 
-  turbo_flow_stl_error(vec_clear(&flow->active_adapters));
+int flow_stop_non_source_adapters(turbo_flow_t *flow) {
+  return flow_stop_adapter_phase(flow, 0);
+}
+
+int flow_stop_source_adapters(turbo_flow_t *flow) {
+  return flow_stop_adapter_phase(flow, 1);
+}
+
+int flow_stop_adapters(turbo_flow_t *flow) {
+  int non_source_status;
+  int source_status;
+
+  if (!flow) return SALTS_EINVAL;
+  non_source_status = flow_stop_non_source_adapters(flow);
+  flow_wait_for_publishes(flow);
+  source_status = flow_stop_source_adapters(flow);
+  if (non_source_status == SALTS_OK && source_status == SALTS_OK)
+    turbo_flow_stl_error(vec_clear(&flow->active_adapters));
+  return non_source_status != SALTS_OK ? non_source_status : source_status;
+}
+
+int turbo_flow_adapter_report_stop_status(turbo_flow_t *flow, int status) {
+  if (!flow || status == SALTS_OK || !flow->runtime_sync_initialized ||
+      flow_active_adapter_stop_owner != flow)
+    return SALTS_EINVAL;
+  salts_mutex_lock(&flow->runtime_mutex);
+  if (!flow->adapter_stop_callback_active) {
+    salts_mutex_unlock(&flow->runtime_mutex);
+    return SALTS_EINVAL;
+  }
+  if (flow->adapter_stop_callback_status == SALTS_OK)
+    flow->adapter_stop_callback_status = status;
+  salts_mutex_unlock(&flow->runtime_mutex);
+  return SALTS_OK;
 }
 
 int flow_start_adapters(turbo_flow_t *flow) {
@@ -185,6 +239,19 @@ int flow_start_adapters(turbo_flow_t *flow) {
   return SALTS_OK;
 
 fail:
-  flow_stop_adapters(flow);
+  {
+    const int rollback_status = flow_stop_adapters(flow);
+    if (rollback_status != SALTS_OK) {
+      salts_mutex_lock(&flow->runtime_mutex);
+      (void)flow_set_error_keep_state(flow, rollback_status, 0, 0,
+                                      "adapter stop failed during start rollback");
+      flow->state = TURBO_FLOW_STATE_FAILED;
+      flow->admission_state = FLOW_ADMISSION_CLOSED;
+      flow->adapter_stop_retryable = 1;
+      salts_cond_broadcast(&flow->runtime_cond);
+      salts_mutex_unlock(&flow->runtime_mutex);
+      return rollback_status;
+    }
+  }
   return rc;
 }

@@ -130,6 +130,7 @@ typedef struct flow_module_registration_s {
 typedef struct flow_active_adapter_s {
   uint32_t stage_index;
   size_t adapter_index;
+  int stopped;
 } flow_active_adapter_t;
 
 typedef struct flow_edge_plan_impl_s {
@@ -534,6 +535,9 @@ struct turbo_flow_s {
   size_t async_ingress_inflight_bytes;
   uint32_t active_publishes;
   flow_admission_state_t admission_state;
+  int adapter_stop_callback_active;
+  int adapter_stop_callback_status;
+  int adapter_stop_retryable;
   int runtime_sync_initialized;
   turbo_flow_observer_ops_t observer_ops;
   void *observer_ctx;
@@ -656,7 +660,9 @@ int flow_start_executor_adapters(turbo_flow_t *flow);
 void flow_stop_runtime_executor_adapters(turbo_flow_t *flow);
 void flow_stop_executor_adapters(turbo_flow_t *flow);
 int flow_start_adapters(turbo_flow_t *flow);
-void flow_stop_adapters(turbo_flow_t *flow);
+int flow_stop_non_source_adapters(turbo_flow_t *flow);
+int flow_stop_source_adapters(turbo_flow_t *flow);
+int flow_stop_adapters(turbo_flow_t *flow);
 const flow_adapter_registration_t *flow_adapter_for_stage(const turbo_flow_t *flow,
                                                           const flow_stage_plan_impl_t *stage);
 TURBO_FLOW_C_API const flow_adapter_registration_t *

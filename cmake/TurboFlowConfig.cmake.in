@@ -141,6 +141,9 @@ if(_TurboFlow_needs_rules_forge)
   _TurboFlow_verify_dependency_root(RulesForge RULES_FORGE_ROOT)
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowRequireCHTTP.cmake")
+turbo_flow_require_chttp_deferred_cancel()
+
 include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowTargets.cmake")
 
 foreach(_TurboFlow_component IN LISTS _TurboFlow_supported_components)

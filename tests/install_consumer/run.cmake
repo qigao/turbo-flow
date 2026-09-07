@@ -14,6 +14,17 @@ foreach(required_var IN ITEMS
   endif()
 endforeach()
 
+if(WIN32)
+  foreach(required_var IN ITEMS
+          TURBO_FLOW_VCPKG_INSTALLED_DIR
+          TURBO_FLOW_VCPKG_TARGET_TRIPLET
+          TURBO_FLOW_COMPILER_RUNTIME_DIR)
+    if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
+      message(FATAL_ERROR "Missing required variable: ${required_var}")
+    endif()
+  endforeach()
+endif()
+
 file(TO_CMAKE_PATH "${TURBO_FLOW_SALTS_ROOT}" salts_root)
 file(TO_CMAKE_PATH "${TURBO_FLOW_SALTS_UTILS_ROOT}" salts_utils_root)
 file(TO_CMAKE_PATH "${TURBO_FLOW_RULES_FORGE_ROOT}" rules_forge_root)
@@ -21,6 +32,7 @@ file(TO_CMAKE_PATH "${TURBO_FLOW_RULES_FORGE_ROOT}" rules_forge_root)
 set(test_root "${TURBO_FLOW_BINARY_DIR}/install-consumer-test")
 set(stage_dir "${test_root}/stage")
 set(full_consumer_build_dir "${test_root}/full-build")
+set(cxx_consumer_build_dir "${test_root}/cxx-build")
 set(full_consumer_source_dir "${TURBO_FLOW_SOURCE_DIR}/tests/install_consumer")
 set(component_consumer_source_dir "${full_consumer_source_dir}/component")
 
@@ -64,9 +76,55 @@ set(salts_package_dir "${salts_root}/lib/cmake/Salts")
 set(salts_utils_package_dir "${salts_utils_root}/lib/cmake/SaltsUtils")
 set(rules_forge_package_dir "${rules_forge_root}/lib/cmake/RulesForge")
 
+run_checked(
+  "CXX-only consumer configure"
+  "${CMAKE_COMMAND}" -E env
+  "SALTS_ROOT=${salts_root}"
+  "SALTS_UTILS_ROOT=${salts_utils_root}"
+  "RULES_FORGE_ROOT=${rules_forge_root}"
+  "${CMAKE_COMMAND}" -S "${full_consumer_source_dir}"
+  -B "${cxx_consumer_build_dir}"
+  -G "${TURBO_FLOW_GENERATOR}"
+  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+  "-DTURBO_FLOW_CONSUMER_CXX_ONLY=ON"
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+  "-DRulesForge_DIR=${rules_forge_package_dir}")
+
+run_checked(
+  "CXX-only consumer build"
+  "${CMAKE_COMMAND}" --build "${cxx_consumer_build_dir}"
+  --config "${TURBO_FLOW_CONFIG}" --parallel)
+
 if(WIN32)
-  set(ENV{PATH}
-      "${stage_dir}/bin;${salts_root}/bin;${salts_utils_root}/bin;${rules_forge_root}/bin;$ENV{PATH}")
+  if(TURBO_FLOW_CONFIG STREQUAL "Debug")
+    set(vcpkg_runtime_dir
+        "${TURBO_FLOW_VCPKG_INSTALLED_DIR}/${TURBO_FLOW_VCPKG_TARGET_TRIPLET}/debug/bin")
+  elseif(TURBO_FLOW_CONFIG STREQUAL "Release")
+    set(vcpkg_runtime_dir
+        "${TURBO_FLOW_VCPKG_INSTALLED_DIR}/${TURBO_FLOW_VCPKG_TARGET_TRIPLET}/bin")
+  else()
+    message(FATAL_ERROR
+            "Unsupported install-consumer runtime configuration: ${TURBO_FLOW_CONFIG}")
+  endif()
+  if(NOT IS_DIRECTORY "${vcpkg_runtime_dir}")
+    message(FATAL_ERROR "vcpkg runtime directory does not exist: ${vcpkg_runtime_dir}")
+  endif()
+  set(runtime_dirs
+      "${vcpkg_runtime_dir}"
+      "${TURBO_FLOW_COMPILER_RUNTIME_DIR}"
+      "${stage_dir}/bin"
+      "${salts_root}/bin"
+      "${salts_utils_root}/bin"
+      "${rules_forge_root}/bin")
+  foreach(runtime_dir IN LISTS runtime_dirs)
+    if(NOT IS_DIRECTORY "${runtime_dir}")
+      message(FATAL_ERROR "Required runtime directory does not exist: ${runtime_dir}")
+    endif()
+  endforeach()
+  list(JOIN runtime_dirs ";" runtime_path)
+  set(ENV{PATH} "${runtime_path};$ENV{PATH}")
 elseif(APPLE)
   set(ENV{DYLD_LIBRARY_PATH}
       "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib:$ENV{DYLD_LIBRARY_PATH}")
@@ -123,6 +181,11 @@ run_checked(
 run_checked(
   "full consumer execution"
   "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${full_consumer_build_dir}"
+  -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+
+run_checked(
+  "CXX-only consumer execution"
+  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${cxx_consumer_build_dir}"
   -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
 
 set(unscoped_consumer_build_dir "${test_root}/unscoped-build")

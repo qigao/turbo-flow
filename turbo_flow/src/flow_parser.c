@@ -1090,6 +1090,10 @@ int turbo_flow_parse_string(turbo_flow_t *flow, const char *text, size_t len) {
   int rc;
 
   if (!flow || (!text && len > 0)) return SALTS_EINVAL;
+  if (flow->adapter_stop_retryable) {
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                     "adapter stop must succeed before parse");
+  }
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0, "cannot parse after compile");
   }

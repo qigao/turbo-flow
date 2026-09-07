@@ -188,6 +188,7 @@ int turbo_flow_start(turbo_flow_t *flow) {
   salts_mutex_lock(&flow->runtime_mutex);
   flow->state = TURBO_FLOW_STATE_STARTED;
   flow->admission_state = FLOW_ADMISSION_OPEN;
+  flow->adapter_stop_retryable = 0;
   salts_mutex_unlock(&flow->runtime_mutex);
   return SALTS_OK;
 }
@@ -370,6 +371,7 @@ int turbo_flow_resize_pool(turbo_flow_t *flow, const turbo_flow_pool_resize_comm
   uint64_t timeout_ns;
   int rc;
   int resize_rc;
+  int adapter_stop_status;
 
   if (!flow || !command || command->size < sizeof(*command) || !command->stage_name ||
       command->parallelism == 0u || command->expected_generation == 0u ||
@@ -440,15 +442,24 @@ int turbo_flow_resize_pool(turbo_flow_t *flow, const turbo_flow_pool_resize_comm
     flow_apply_pool_parallelism(&target, command->kind, target.previous_parallelism);
     rc = flow_rebuild_pool_resources(flow);
     if (rc != SALTS_OK) {
-      flow_stop_adapters(flow);
+      adapter_stop_status = flow_stop_adapters(flow);
       flow_stop_data_planes(flow);
       flow_stop_reorder_states(flow);
       flow_stop_executor_adapters(flow);
       salts_mutex_lock(&flow->runtime_mutex);
+      if (adapter_stop_status != SALTS_OK) {
+        (void)flow_set_error_keep_state(flow, adapter_stop_status, 0, 0,
+                                        "adapter stop failed during pool resize rollback");
+      } else {
+        (void)flow_set_error_keep_state(flow, rc, 0, 0,
+                                        "pool resize and rollback both failed");
+      }
       flow->state = TURBO_FLOW_STATE_FAILED;
       flow->admission_state = FLOW_ADMISSION_CLOSED;
+      flow->adapter_stop_retryable = adapter_stop_status != SALTS_OK;
+      salts_cond_broadcast(&flow->runtime_cond);
       salts_mutex_unlock(&flow->runtime_mutex);
-      return flow_set_error_keep_state(flow, rc, 0, 0, "pool resize and rollback both failed");
+      return adapter_stop_status != SALTS_OK ? adapter_stop_status : rc;
     }
     flow_runtime_generation_commit(flow);
     salts_mutex_lock(&flow->runtime_mutex);
@@ -468,9 +479,19 @@ int turbo_flow_resize_pool(turbo_flow_t *flow, const turbo_flow_pool_resize_comm
 }
 
 int turbo_flow_stop(turbo_flow_t *flow) {
+  int non_source_status;
+  int source_status;
+  int stop_status;
+  int retrying;
+
   if (!flow) return SALTS_EINVAL;
   salts_mutex_lock(&flow->runtime_mutex);
-  if (flow->state != TURBO_FLOW_STATE_STARTED || flow->admission_state == FLOW_ADMISSION_STOPPING) {
+  if (flow->admission_state == FLOW_ADMISSION_STOPPING) {
+    salts_mutex_unlock(&flow->runtime_mutex);
+    return SALTS_EBUSY;
+  }
+  retrying = flow->state == TURBO_FLOW_STATE_FAILED && flow->adapter_stop_retryable;
+  if (flow->state != TURBO_FLOW_STATE_STARTED && !retrying) {
     salts_mutex_unlock(&flow->runtime_mutex);
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0, "flow is not started");
   }
@@ -479,21 +500,47 @@ int turbo_flow_stop(turbo_flow_t *flow) {
     return SALTS_EBUSY;
   }
   flow->admission_state = FLOW_ADMISSION_STOPPING;
+  flow->adapter_stop_callback_active = 0;
+  flow->adapter_stop_callback_status = SALTS_OK;
   salts_cond_broadcast(&flow->runtime_cond);
   salts_mutex_unlock(&flow->runtime_mutex);
 
-  flow_stop_async_ingress(flow);
-  flow_reactive_runtime_cancel(flow);
-  flow_stop_adapters(flow);
+  if (!retrying) {
+    flow_reactive_runtime_cancel(flow);
+  }
+  non_source_status = flow_stop_non_source_adapters(flow);
+  if (!retrying) {
+    flow_stop_async_ingress(flow);
+  }
   flow_wait_for_publishes(flow);
-  flow_reactive_runtime_stop(flow);
-  flow_stop_data_planes(flow);
-  flow_stop_reorder_states(flow);
-  flow_stop_executor_adapters(flow);
+  source_status = flow_stop_source_adapters(flow);
+  stop_status = non_source_status != SALTS_OK ? non_source_status : source_status;
+
+  if (!retrying) {
+    flow_reactive_runtime_stop(flow);
+    flow_stop_data_planes(flow);
+    flow_stop_reorder_states(flow);
+    flow_stop_executor_adapters(flow);
+  }
+
+  if (stop_status != SALTS_OK) {
+    salts_mutex_lock(&flow->runtime_mutex);
+    (void)flow_set_error_keep_state(flow, stop_status, 0, 0, "adapter stop failed");
+    flow->state = TURBO_FLOW_STATE_FAILED;
+    flow->admission_state = FLOW_ADMISSION_CLOSED;
+    flow->adapter_stop_retryable = 1;
+    salts_cond_broadcast(&flow->runtime_cond);
+    salts_mutex_unlock(&flow->runtime_mutex);
+    return stop_status;
+  }
+
+  turbo_flow_stl_error(vec_clear(&flow->active_adapters));
   salts_mutex_lock(&flow->runtime_mutex);
   flow->state = TURBO_FLOW_STATE_STOPPED;
   flow->admission_state = FLOW_ADMISSION_CLOSED;
+  flow->adapter_stop_retryable = 0;
   salts_mutex_unlock(&flow->runtime_mutex);
+  flow_clear_error(flow);
   return SALTS_OK;
 }
 

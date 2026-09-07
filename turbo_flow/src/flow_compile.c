@@ -358,10 +358,10 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
         return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "stage or source adapter is not registered");
       }
-      if (adapter->async_terminal_ops.submit) {
+      if (adapter->async_terminal_ops.submit && !stage->is_source) {
         size_t edge_index;
         flow->has_async_stage = 1;
-        if (stage->is_source || stage->is_port || stage->exec.kind != TURBO_FLOW_EXEC_INLINE ||
+        if (stage->is_port || stage->exec.kind != TURBO_FLOW_EXEC_INLINE ||
             stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL || stage->retry.max_attempts > 1u ||
             stage->reorder.capacity > 0u) {
           return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
