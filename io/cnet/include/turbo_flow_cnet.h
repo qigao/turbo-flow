@@ -345,6 +345,165 @@ TURBO_FLOW_C_API int turbo_flow_cnet_listener_source_stop(turbo_flow_cnet_listen
 TURBO_FLOW_C_API int
 turbo_flow_cnet_listener_source_destroy(turbo_flow_cnet_listener_source_t *source);
 
+#define TURBO_FLOW_CNET_PACKET_SOURCE_API_VERSION 1u
+#define TURBO_FLOW_CNET_PACKET_SOURCE_DEFAULT_QUEUE_CAPACITY 64u
+#define TURBO_FLOW_CNET_PACKET_SOURCE_DEFAULT_MAX_MESSAGE_BYTES (1024u * 1024u)
+#define TURBO_FLOW_CNET_PACKET_SOURCE_DEFAULT_SCHEDULER_CAPACITY 64u
+#define TURBO_FLOW_CNET_PACKET_SOURCE_DEFAULT_MAX_STEPS 256u
+#define TURBO_FLOW_CNET_PACKET_SOURCE_ERROR_STAGE_CAPACITY 64u
+
+typedef struct turbo_flow_cnet_packet_source_s turbo_flow_cnet_packet_source_t;
+
+typedef enum turbo_flow_cnet_packet_source_state_e {
+  TURBO_FLOW_CNET_PACKET_SOURCE_NEW = 0,
+  TURBO_FLOW_CNET_PACKET_SOURCE_RUNNING,
+  TURBO_FLOW_CNET_PACKET_SOURCE_FAILED,
+  TURBO_FLOW_CNET_PACKET_SOURCE_STOPPING,
+  TURBO_FLOW_CNET_PACKET_SOURCE_STOPPED
+} turbo_flow_cnet_packet_source_state_t;
+
+/**
+ * Configuration synchronously consumed by packet-source open.
+ *
+ * `endpoint->observer` must be empty because the adapter owns that callback
+ * boundary. CNet copies the endpoint configuration, including secure-KCP key
+ * material. The returned owner, its Flow, and every public operation belong to
+ * one serialized thread.
+ */
+typedef struct turbo_flow_cnet_packet_source_config_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_t *flow;
+  const char *source_name;
+  const cnet_packet_endpoint_config *endpoint;
+  const turbo_flow_content_descriptor_t *content;
+  size_t queue_capacity;
+  size_t max_message_bytes;
+  size_t scheduler_capacity;
+  size_t scheduler_max_steps_per_poll;
+  uint64_t first_message_id;
+} turbo_flow_cnet_packet_source_config_t;
+
+#define TURBO_FLOW_CNET_PACKET_SOURCE_CONFIG_V1_SIZE sizeof(turbo_flow_cnet_packet_source_config_t)
+#define TURBO_FLOW_CNET_PACKET_SOURCE_CONFIG_INIT                                                  \
+  {TURBO_FLOW_CNET_PACKET_SOURCE_CONFIG_V1_SIZE,                                                   \
+   TURBO_FLOW_CNET_PACKET_SOURCE_API_VERSION,                                                      \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   TURBO_FLOW_CNET_PACKET_SOURCE_DEFAULT_QUEUE_CAPACITY,                                           \
+   TURBO_FLOW_CNET_PACKET_SOURCE_DEFAULT_MAX_MESSAGE_BYTES,                                        \
+   TURBO_FLOW_CNET_PACKET_SOURCE_DEFAULT_SCHEDULER_CAPACITY,                                       \
+   TURBO_FLOW_CNET_PACKET_SOURCE_DEFAULT_MAX_STEPS,                                                \
+   1u}
+
+/** Message-owned immutable packet identity stored inside `message->buffer`. */
+typedef struct turbo_flow_cnet_packet_message_context_s {
+  size_t size;
+  uint32_t version;
+  cnet_packet_session session;
+  cnet_packet_session_info info;
+} turbo_flow_cnet_packet_message_context_t;
+
+#define TURBO_FLOW_CNET_PACKET_MESSAGE_CONTEXT_V1_SIZE                                             \
+  sizeof(turbo_flow_cnet_packet_message_context_t)
+
+/** Caller-owned portable snapshot copied without advancing CNet or CFlow. */
+typedef struct turbo_flow_cnet_packet_source_snapshot_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_cnet_packet_source_state_t state;
+  int status;
+  cnet_packet_protocol protocol;
+  uint16_t bound_port;
+  size_t queue_depth;
+  size_t queue_capacity;
+  uint64_t sessions_admitted;
+  uint64_t sessions_opened;
+  uint64_t sessions_closed;
+  uint64_t messages_received;
+  uint64_t bytes_received;
+  size_t outstanding_demand;
+  cnet_packet_session last_error_session;
+  char error_stage[TURBO_FLOW_CNET_PACKET_SOURCE_ERROR_STAGE_CAPACITY];
+} turbo_flow_cnet_packet_source_snapshot_t;
+
+#define TURBO_FLOW_CNET_PACKET_SOURCE_SNAPSHOT_V1_SIZE                                             \
+  sizeof(turbo_flow_cnet_packet_source_snapshot_t)
+#define TURBO_FLOW_CNET_PACKET_SOURCE_SNAPSHOT_INIT                                                \
+  {TURBO_FLOW_CNET_PACKET_SOURCE_SNAPSHOT_V1_SIZE,                                                 \
+   TURBO_FLOW_CNET_PACKET_SOURCE_API_VERSION,                                                      \
+   TURBO_FLOW_CNET_PACKET_SOURCE_NEW,                                                              \
+   SALTS_OK,                                                                                       \
+   (cnet_packet_protocol)0,                                                                        \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   {0u, 0u},                                                                                       \
+   {0}}
+
+/** Open a bounded UDP/KCP endpoint and Graph source without polling either runtime. */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_packet_source_open(const turbo_flow_cnet_packet_source_config_t *config,
+                                   turbo_flow_cnet_packet_source_t **source_out);
+
+/** Add positive downstream-value demand; protocol progress is never demand-gated. */
+TURBO_FLOW_C_API int turbo_flow_cnet_packet_source_request(turbo_flow_cnet_packet_source_t *source,
+                                                           size_t demand);
+
+/** Drive bounded Scheduler, CNet packet/timer progress, then woken Scheduler work. */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_packet_source_poll(turbo_flow_cnet_packet_source_t *source, uint32_t timeout_ms,
+                                   turbo_flow_cnet_packet_source_snapshot_t *snapshot);
+
+/** Copy portable state without advancing CNet or CFlow. */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_packet_source_snapshot(const turbo_flow_cnet_packet_source_t *source,
+                                       turbo_flow_cnet_packet_source_snapshot_t *snapshot);
+
+/** Open one generation-checked peer mapping through the owned CNet endpoint. */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_packet_source_session_open(turbo_flow_cnet_packet_source_t *source,
+                                           const cnet_datagram_peer *peer, uint32_t conversation,
+                                           cnet_packet_session *session_out);
+
+/** Copy CNet's immutable identity for a currently live generation handle. */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_packet_source_session_get_info(const turbo_flow_cnet_packet_source_t *source,
+                                               cnet_packet_session session,
+                                               cnet_packet_session_info *info_out);
+
+/** Close one generation-checked session; stale handles return CNet's status. */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_packet_source_session_close(turbo_flow_cnet_packet_source_t *source,
+                                            cnet_packet_session session);
+
+/** Copy and admit one UDP datagram or reliable ordered KCP message. */
+TURBO_FLOW_C_API int turbo_flow_cnet_packet_source_send(turbo_flow_cnet_packet_source_t *source,
+                                                        cnet_packet_session session,
+                                                        const void *data, size_t size);
+
+/**
+ * Return packet identity owned by `message->buffer`, or NULL for another
+ * transport or a malformed/borrowed context. The pointer lives with `message`.
+ */
+TURBO_FLOW_C_API const turbo_flow_cnet_packet_message_context_t *
+turbo_flow_cnet_packet_message_context(const turbo_flow_msg_t *message);
+
+/** Stop session admission and protocol progress, then drain endpoint writes. */
+TURBO_FLOW_C_API int turbo_flow_cnet_packet_source_stop(turbo_flow_cnet_packet_source_t *source,
+                                                        uint32_t timeout_ms);
+
+/** Release a successfully stopped source; a live owner returns SALTS_EBUSY. */
+TURBO_FLOW_C_API int turbo_flow_cnet_packet_source_destroy(turbo_flow_cnet_packet_source_t *source);
+
 #ifdef __cplusplus
 }
 #endif
