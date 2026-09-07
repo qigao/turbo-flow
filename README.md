@@ -22,7 +22,7 @@ typed projection、调度、可观测性，以及可选的通用存储 adapter�
 | `TurboFlow::ProtocolIngressGraph` | 将中立协议消息投递到 `TurboFlow::Graph` |
 | `TurboFlow::MqttSink` | 批量映射中立消息；不拥有 codec/session 或任何 I/O connection |
 | `TurboFlow::CNetAdapter` | 可选 CNet Source/Sink owner；拥有 transport progress 与有界请求状态 |
-| `TurboFlow::CHTTPAdapter` | 可选 CHTTP async client stage；以 owned response 恢复 Graph 下游 |
+| `TurboFlow::CHTTPAdapter` | 可选 CHTTP client、deferred server 与 WebSocket Flow Source/Sink |
 
 所有构建开关只在 `CMakeOptions.cmake` 声明。不得在子目录新增隐藏 option，也不得把外部产品源码、
 协议状态机或安装组件重新并入本仓库。
@@ -70,6 +70,19 @@ client 独占 submit/poll/cancel 与 H1/H2 connection state；容量、protocol�
 deadline 和 shutdown 都是显式契约，不提供旧 HTTP 实现或协议降级 fallback。使用方应在 Graph
 compile 前注册 client、start 后由一个 owner thread 调用 `turbo_flow_chttp_client_poll()`，并在
 Flow destroy/detach 后销毁 client。
+
+## CHTTP WebSocket 数据流
+
+`TurboFlow::CHTTPAdapter` 也可注册一个 WebSocket `SOURCE|SINK`：CHTTP 独占
+HTTP/1.1 Upgrade、WSS/TLS、RFC 8441 Extended CONNECT、subprotocol 与 CNet WebSocket
+engine；callback-borrowed frame 会复制成 message-owned Flow 输入。消息的 `type` 表达
+text/binary/ping/pong/close，版本化 transport context 保存 generation-checked CHTTP session。
+
+session/frame/byte 容量均为硬边界。Flow ingress 满时只关闭受影响 session，CHTTP command
+queue 满时保留 `SALTS_ENOBUFS`，stale 与 duplicate close 分别保留
+`SALTS_ENOENT`/`SALTS_EALREADY`。不存在 H1、明文、generic socket 或 legacy transport
+fallback。完整所有权与关闭顺序见
+[`io/chttp/ADR_CHTTP_WEBSOCKET_FLOW.md`](io/chttp/ADR_CHTTP_WEBSOCKET_FLOW.md)。
 
 ## Windows 验证
 

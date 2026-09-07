@@ -1,6 +1,7 @@
 add_library(tf_chttp_adapter SHARED
   src/turbo_flow_chttp.c
   src/turbo_flow_chttp_server.c
+  src/turbo_flow_chttp_websocket_server.c
   include/turbo_flow_chttp.h)
 cmake_config_target(
   tf_chttp_adapter
