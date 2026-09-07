@@ -21,6 +21,14 @@ typedef struct schedule_capture_s {
   atomic_int max_active;
 } schedule_capture_t;
 
+typedef struct schedule_lifecycle_gate_s {
+  salts_mutex_t mutex;
+  salts_cond_t cond;
+  unsigned entered;
+  unsigned released;
+  unsigned stop_calls;
+} schedule_lifecycle_gate_t;
+
 static int schedule_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   schedule_capture_t *capture = (schedule_capture_t *)ctx;
   int active;
@@ -83,6 +91,73 @@ static int schedule_wait_called(schedule_capture_t *capture, int expected) {
   return schedule_capture_called(capture) >= expected;
 }
 
+static int schedule_lifecycle_gate_init(schedule_lifecycle_gate_t *gate) {
+  memset(gate, 0, sizeof(*gate));
+  salts_mutex_init(&gate->mutex);
+  salts_cond_init(&gate->cond);
+  if (!gate->mutex || !gate->cond) {
+    salts_cond_destroy(&gate->cond);
+    salts_mutex_destroy(&gate->mutex);
+    return SALTS_ENOMEM;
+  }
+  return SALTS_OK;
+}
+
+static void schedule_lifecycle_gate_destroy(schedule_lifecycle_gate_t *gate) {
+  salts_cond_destroy(&gate->cond);
+  salts_mutex_destroy(&gate->mutex);
+}
+
+static int schedule_lifecycle_gate_consume(void *ctx, turbo_flow_t *flow,
+                                           const turbo_flow_stage_plan_t *stage,
+                                           turbo_flow_msg_t *msg) {
+  schedule_lifecycle_gate_t *gate = (schedule_lifecycle_gate_t *)ctx;
+  unsigned generation;
+  (void)flow;
+  (void)stage;
+  (void)msg;
+  if (!gate) return SALTS_EINVAL;
+  salts_mutex_lock(&gate->mutex);
+  generation = ++gate->entered;
+  salts_cond_broadcast(&gate->cond);
+  while (gate->released < generation) {
+    salts_cond_wait(&gate->cond, &gate->mutex);
+  }
+  salts_mutex_unlock(&gate->mutex);
+  return SALTS_OK;
+}
+
+static void schedule_lifecycle_gate_stop(void *ctx, turbo_flow_t *flow,
+                                         const turbo_flow_stage_plan_t *stage) {
+  schedule_lifecycle_gate_t *gate = (schedule_lifecycle_gate_t *)ctx;
+  (void)flow;
+  (void)stage;
+  if (!gate) return;
+  salts_mutex_lock(&gate->mutex);
+  ++gate->stop_calls;
+  gate->released = gate->entered;
+  salts_cond_broadcast(&gate->cond);
+  salts_mutex_unlock(&gate->mutex);
+}
+
+static int schedule_lifecycle_gate_wait_entered(schedule_lifecycle_gate_t *gate,
+                                                unsigned expected) {
+  const uint64_t started_at = salts_hrtime();
+  int entered;
+  salts_mutex_lock(&gate->mutex);
+  while (gate->entered < expected) {
+    const uint64_t elapsed = salts_hrtime() - started_at;
+    if (elapsed >= SCHEDULE_TEST_WAIT_TIMEOUT_NS ||
+        salts_cond_timedwait(&gate->cond, &gate->mutex,
+                             SCHEDULE_TEST_WAIT_TIMEOUT_NS - elapsed) != 0) {
+      break;
+    }
+  }
+  entered = gate->entered >= expected;
+  salts_mutex_unlock(&gate->mutex);
+  return entered;
+}
+
 static turbo_flow_t *schedule_make_flow(const turbo_flow_schedule_config_t *config,
                                         schedule_capture_t *capture,
                                         turbo_flow_schedule_t **out_schedule) {
@@ -97,6 +172,31 @@ static turbo_flow_t *schedule_make_flow(const turbo_flow_schedule_config_t *conf
           SALTS_OK ||
       turbo_flow_register_stage_ex(flow, "capture", schedule_capture_stage, capture, NULL) !=
           SALTS_OK ||
+      turbo_flow_parse_string(flow, dsl, strlen(dsl)) != SALTS_OK ||
+      turbo_flow_compile(flow) != SALTS_OK) {
+    turbo_flow_destroy(flow);
+    return NULL;
+  }
+  return flow;
+}
+
+static turbo_flow_t *schedule_make_lifecycle_flow(const turbo_flow_schedule_config_t *config,
+                                                  schedule_lifecycle_gate_t *gate,
+                                                  turbo_flow_schedule_t **out_schedule) {
+  static const char *dsl = "source tick adapter schedule.test\n"
+                           "stage gated adapter schedule.lifecycle\n"
+                           "stage main {\n"
+                           "  tick -> gated\n"
+                           "}\n";
+  turbo_flow_adapter_ops_t ops;
+  turbo_flow_t *flow = turbo_flow_create();
+  memset(&ops, 0, sizeof(ops));
+  ops.consume = schedule_lifecycle_gate_consume;
+  ops.stop = schedule_lifecycle_gate_stop;
+  if (!flow ||
+      turbo_flow_schedule_register_adapter(flow, "schedule.test", config, out_schedule) !=
+          SALTS_OK ||
+      turbo_flow_register_adapter(flow, "schedule.lifecycle", &ops, gate) != SALTS_OK ||
       turbo_flow_parse_string(flow, dsl, strlen(dsl)) != SALTS_OK ||
       turbo_flow_compile(flow) != SALTS_OK) {
     turbo_flow_destroy(flow);
@@ -182,6 +282,39 @@ spec("turbo_flow_schedule") {
     check_equal(schedule_capture_called(&capture), 1);
     turbo_flow_destroy(flow);
     schedule_capture_destroy(&capture);
+  }
+
+  it("drains an accepted one-shot before restarting its generation") {
+    turbo_flow_schedule_config_t config;
+    turbo_flow_schedule_snapshot_t snapshot;
+    turbo_flow_schedule_t *schedule = NULL;
+    schedule_lifecycle_gate_t gate;
+    turbo_flow_t *flow;
+    memset(&config, 0, sizeof(config));
+    config.mode = TURBO_FLOW_SCHEDULE_ONE_SHOT;
+    config.delay_ms = 1;
+    check_equal(schedule_lifecycle_gate_init(&gate), SALTS_OK);
+    flow = schedule_make_lifecycle_flow(&config, &gate, &schedule);
+    check_not_null(flow);
+
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_true(schedule_lifecycle_gate_wait_entered(&gate, 1u));
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), SALTS_OK);
+    check_equal(snapshot.fired, 1u);
+    check_equal(snapshot.last_status, SALTS_OK);
+
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_true(schedule_lifecycle_gate_wait_entered(&gate, 2u));
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), SALTS_OK);
+    check_equal(snapshot.fired, 2u);
+    check_equal(snapshot.last_status, SALTS_OK);
+    check_equal(gate.entered, 2u);
+    check_equal(gate.stop_calls, 2u);
+
+    turbo_flow_destroy(flow);
+    schedule_lifecycle_gate_destroy(&gate);
   }
 
   it("stops an interval before its first tick") {

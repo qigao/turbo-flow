@@ -244,10 +244,14 @@ static void flow_schedule_timer_callback(salts_timer_t *timer) {
     rc = flow_schedule_advance_cron(schedule, time(NULL));
   } else {
     uint64_t now_ms = salts_monotonic_ms();
-    uint64_t next_due_ms = atomic_load_explicit(&schedule->next_due_ms, memory_order_acquire);
-    if (now_ms < next_due_ms) goto done;
+    uint64_t next_due_ms;
     if (!flow_schedule_try_reserve_publish(schedule)) {
       stop_timer = atomic_load_explicit(&schedule->completed, memory_order_acquire);
+      goto done;
+    }
+    next_due_ms = atomic_load_explicit(&schedule->next_due_ms, memory_order_acquire);
+    if (now_ms < next_due_ms) {
+      atomic_store_explicit(&schedule->async_inflight, 0u, memory_order_release);
       goto done;
     }
     rc = flow_schedule_publish_async(schedule, 0, 1);

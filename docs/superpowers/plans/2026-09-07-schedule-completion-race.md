@@ -205,3 +205,32 @@ git status --short
 ```
 
 Expected: no whitespace errors, only planned files changed, and a clean worktree.
+
+### Task 4: Close independent review findings
+
+**Files:**
+- Modify: `schedule/src/flow_schedule.c`
+- Test: `schedule/tests/test_turbo_flow_schedule.c`
+
+**Interfaces:**
+- Consumes: the private single-slot publication reservation and adapter `consume`/`stop` lifecycle.
+- Produces: due-time validation after slot ownership and a condition-controlled one-shot stop/restart test.
+
+- [x] **Step 1: Recheck the due time after acquiring the publication slot**
+
+Load `next_due_ms` only after the callback owns `async_inflight`. If the completion that released the slot moved the deadline forward, release the slot without publishing.
+
+- [x] **Step 2: Add an accepted-publication lifecycle barrier**
+
+Use a test sink adapter whose `consume` blocks on a condition and whose `stop` releases it. Start and stop the same one-shot flow twice, then assert `snapshot.fired` and the sink entry/stop counts are exactly two.
+
+- [x] **Step 3: Repeat focused verification in both configurations**
+
+```powershell
+cmake --build --preset win-dev-user --target test_turbo_flow_schedule
+ctest --preset win-dev-user -R "^test_turbo_flow_schedule$" --repeat until-fail:100 --output-on-failure
+cmake --build --preset win-release-user --target test_turbo_flow_schedule
+ctest --preset win-release-user -R "^test_turbo_flow_schedule$" --repeat until-fail:100 --output-on-failure
+```
+
+Expected: 100 consecutive passes in each configuration.
