@@ -1502,6 +1502,38 @@ typedef struct turbo_flow_adapter_schema_s {
   size_t field_count;
 } turbo_flow_adapter_schema_t;
 
+#define TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_API_VERSION 1u
+
+/**
+ * One explicit owner contract for an async-terminal adapter and its managed
+ * Sink boundary. The registry copies names, schemas, and the boundary
+ * descriptor. The input structure and nested tables are borrowed only for the
+ * call; callback code and `ctx` must remain valid until registry teardown after
+ * a successful registration. `ctx` remains caller-owned on failure.
+ */
+typedef struct turbo_flow_managed_async_terminal_registration_s {
+  size_t size;
+  uint32_t version;
+  const char *adapter_name;
+  const turbo_flow_adapter_ops_t *adapter_ops;
+  const turbo_flow_async_terminal_adapter_ops_t *async_ops;
+  const turbo_flow_adapter_schema_t *schema;
+  const char *owner_name;
+  const turbo_flow_managed_boundary_provider_ops_t *boundary_ops;
+  void *ctx;
+} turbo_flow_managed_async_terminal_registration_t;
+
+#define TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_INIT                                       \
+  {sizeof(turbo_flow_managed_async_terminal_registration_t),                                      \
+   TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_API_VERSION,                                    \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL}
+
 /**
  * Atomically register one native adapter and bind its executable operations to
  * their module owner. The registry copies all names and schemas; callback and
@@ -2288,6 +2320,21 @@ TURBO_FLOW_C_API int turbo_flow_register_async_terminal_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_adapter_ops_t *adapter_ops,
     const turbo_flow_async_terminal_adapter_ops_t *async_ops, void *ctx,
     const turbo_flow_adapter_schema_t *schema);
+
+/**
+ * Atomically register an asynchronous terminal adapter and exactly one
+ * explicitly managed Sink boundary for the same owner context.
+ *
+ * A failed call leaves both registries unchanged and retains caller ownership
+ * of `registration->ctx`. No boundary is inferred from adapter metadata.
+ * @param flow Mutable flow before compile/start.
+ * @param registration Size/versioned adapter, boundary, and owner contract.
+ * @return SALTS_OK, an owner error, SALTS_EINVAL, SALTS_EPROTO, SALTS_EALREADY,
+ * SALTS_EBUSY, or SALTS_ENOMEM.
+ */
+TURBO_FLOW_C_API int turbo_flow_register_managed_async_terminal_adapter(
+    turbo_flow_t *flow,
+    const turbo_flow_managed_async_terminal_registration_t *registration);
 
 /** Atomically register a transform adapter with an asynchronous 0..1-output contract. */
 TURBO_FLOW_C_API int turbo_flow_register_async_emit_adapter_ex(

@@ -492,6 +492,24 @@ typedef struct flow_pool_rebuild_fault_s {
   size_t attempts;
 } flow_pool_rebuild_fault_t;
 
+typedef enum flow_registration_checkpoint_e {
+  FLOW_REGISTRATION_ALLOC_ADAPTER_NAME = 0,
+  FLOW_REGISTRATION_ALLOC_ADAPTER_SCHEMA,
+  FLOW_REGISTRATION_ALLOC_ADAPTER_VECTOR,
+  FLOW_REGISTRATION_ASYNC_TERMINAL_BIND,
+  FLOW_REGISTRATION_ALLOC_RESOURCE_OWNER_NAME,
+  FLOW_REGISTRATION_ALLOC_RESOURCE_VECTOR,
+  FLOW_REGISTRATION_CHECKPOINT_COUNT
+} flow_registration_checkpoint_t;
+
+typedef int (*flow_registration_fault_fn)(void *ctx, flow_registration_checkpoint_t checkpoint);
+
+/** Private deterministic commit seam used only by internal registry tests. */
+typedef struct flow_registration_fault_s {
+  flow_registration_fault_fn before_commit;
+  void *ctx;
+} flow_registration_fault_t;
+
 struct turbo_flow_s {
   turbo_flow_state_t state;
   int has_async_stage;
@@ -521,6 +539,7 @@ struct turbo_flow_s {
   vec_t active_adapters;
   vec_t pool_records;
   flow_pool_rebuild_fault_t pool_rebuild_fault;
+  flow_registration_fault_t registration_fault;
   vec_t resource_command_history;
   vec_t event_observers;
   vec_t active_runs;
