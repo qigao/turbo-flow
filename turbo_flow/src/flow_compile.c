@@ -334,6 +334,7 @@ cleanup:
 static int compile_validate_registrations(turbo_flow_t *flow) {
   size_t i;
 
+  flow->has_async_stage = 0;
   for (i = 0; i < vec_size(&flow->stages); ++i) {
     flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, i);
     int reg_index = flow_find_registration(flow, stage->name);
@@ -348,6 +349,7 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
         stage->operation_name ? turbo_flow_find_operation(flow, stage->operation_name) : NULL;
     const flow_adapter_registration_t *adapter = NULL;
 
+    stage->async_emitting = 0;
     if (stage_in_inactive_template(flow, stage)) continue;
 
     if (stage->adapter_name) {
@@ -355,6 +357,39 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
       if (!adapter) {
         return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "stage or source adapter is not registered");
+      }
+      if (adapter->async_terminal_ops.submit) {
+        size_t edge_index;
+        flow->has_async_stage = 1;
+        if (stage->is_source || stage->is_port || stage->exec.kind != TURBO_FLOW_EXEC_INLINE ||
+            stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL || stage->retry.max_attempts > 1u ||
+            stage->reorder.capacity > 0u) {
+          return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
+                                "async terminal adapter requires a direct inline terminal stage");
+        }
+        for (edge_index = 0; edge_index < vec_size(&flow->edges); ++edge_index) {
+          const flow_edge_plan_impl_t *edge =
+              (const flow_edge_plan_impl_t *)vec_at_const(&flow->edges, edge_index);
+          if (edge && edge->from_stage == (uint32_t)i) {
+            return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
+                                  "async terminal adapter stage must not have outgoing edges");
+          }
+        }
+      }
+      if (adapter->async_emit_ops.submit) {
+        flow->has_async_stage = 1;
+        stage->async_emitting = 1;
+        if (stage->is_source || stage->is_port || stage->exec.kind != TURBO_FLOW_EXEC_INLINE ||
+            stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL || stage->retry.max_attempts > 1u ||
+            stage->reorder.capacity > 0u) {
+          return flow_set_error(
+              flow, SALTS_ENOTSUP, stage->line, stage->column,
+              "async emitting adapter requires a direct inline stage without retry or reorder");
+        }
+        if ((adapter->schema.roles & TURBO_FLOW_ADAPTER_TRANSFORM) == 0u) {
+          return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
+                                "async emitting adapter requires a transform schema");
+        }
       }
       if (adapter->schema.roles != 0) {
         uint32_t roles = adapter->schema.roles;
@@ -438,12 +473,16 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
     }
 
     if (!stage->is_source && !stage->is_port && reg_index < 0 && provider_index < 0 &&
-        (!adapter || !adapter->ops.consume)) {
-      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
-                            "stage callback, operation provider, or adapter consume callback is not registered");
+        (!adapter || (!adapter->ops.consume && !adapter->async_terminal_ops.submit &&
+                      !adapter->async_emit_ops.submit))) {
+      return flow_set_error(
+          flow, SALTS_EINVAL, stage->line, stage->column,
+          "stage callback, operation provider, or adapter consume callback is not registered");
     }
     if (!stage->is_source && !stage->is_port && reg_index < 0 && provider_index < 0 && adapter &&
-        adapter->ops.consume && stage->exec.kind != TURBO_FLOW_EXEC_INLINE) {
+        (adapter->ops.consume || adapter->async_terminal_ops.submit ||
+         adapter->async_emit_ops.submit) &&
+        stage->exec.kind != TURBO_FLOW_EXEC_INLINE) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "adapter-owned consume requires the inline executor");
     }
@@ -692,6 +731,13 @@ static int compile_validate_operation_runtime(turbo_flow_t *flow,
     return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                           "source operation deadline requires an adapter owner contract");
   }
+  if (adapter &&
+      (adapter->async_terminal_ops.submit || adapter->async_emit_ops.submit) &&
+      runtime->deadline_ms != 0u) {
+    return flow_set_error(
+        flow, SALTS_ENOTSUP, stage->line, stage->column,
+        "asynchronous adapter operation deadline requires adapter-owned timeout completion");
+  }
   if (stage->is_source && runtime->settlement != 0u) {
     return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                           "source settlement requires an ingress owner completion contract");
@@ -829,7 +875,9 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
     if (operation->scope.concurrency == TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT &&
         ((stage->is_source && !stage->adapter_name) ||
          (!stage->is_source &&
-          (!adapter || !adapter->ops.consume || stage->exec.kind != TURBO_FLOW_EXEC_INLINE)))) {
+          (!adapter || (!adapter->ops.consume && !adapter->async_terminal_ops.submit &&
+                        !adapter->async_emit_ops.submit) ||
+           stage->exec.kind != TURBO_FLOW_EXEC_INLINE)))) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             stage->is_source
                                 ? "owner-context source operation requires an adapter owner"
@@ -865,7 +913,9 @@ static int compile_validate_emitting_operations(turbo_flow_t *flow) {
     uint8_t *descendants;
     int changed;
 
-    if (!stage || (!stage->emit_fn && !stage->keyed_emit_fn && !stage->window_fn)) continue;
+    if (!stage ||
+        (!stage->async_emitting && !stage->emit_fn && !stage->keyed_emit_fn && !stage->window_fn))
+      continue;
     operation = flow_stage_operation_descriptor(stage);
     if (!operation) return SALTS_EINVAL;
     if (stage->exec.kind != TURBO_FLOW_EXEC_INLINE ||
@@ -873,11 +923,12 @@ static int compile_validate_emitting_operations(turbo_flow_t *flow) {
       return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                             "emitting operation requires direct inline execution without retry");
     }
-    if ((operation->scope.authority != TURBO_FLOW_AUTHORITY_PURE &&
-         operation->scope.authority != TURBO_FLOW_AUTHORITY_DATA_MUTATION) ||
-        operation->runtime.handoff != TURBO_FLOW_HANDOFF_DIRECT ||
-        operation->runtime.settlement != 0u || operation->runtime.deadline_ms != 0u ||
-        (operation->execution_mask & TURBO_FLOW_OPERATION_EXEC_INLINE) == 0u) {
+    if (!stage->async_emitting &&
+        ((operation->scope.authority != TURBO_FLOW_AUTHORITY_PURE &&
+          operation->scope.authority != TURBO_FLOW_AUTHORITY_DATA_MUTATION) ||
+         operation->runtime.handoff != TURBO_FLOW_HANDOFF_DIRECT ||
+         operation->runtime.settlement != 0u || operation->runtime.deadline_ms != 0u ||
+         (operation->execution_mask & TURBO_FLOW_OPERATION_EXEC_INLINE) == 0u)) {
       return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                             "emitting operation must be an inline direct pure-data contract without settlement");
     }

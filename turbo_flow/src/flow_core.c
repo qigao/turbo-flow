@@ -151,7 +151,11 @@ void flow_adapter_registration_destroy(flow_adapter_registration_t *adapter) {
   flow_adapter_schema_destroy(adapter);
   tstr_freep(&adapter->name);
   memset(&adapter->ops, 0, sizeof(adapter->ops));
+  memset(&adapter->async_terminal_ops, 0, sizeof(adapter->async_terminal_ops));
+  memset(&adapter->async_emit_ops, 0, sizeof(adapter->async_emit_ops));
+  memset(&adapter->settlement_ops, 0, sizeof(adapter->settlement_ops));
   adapter->ctx = NULL;
+  adapter->settlement_ctx = NULL;
 }
 
 void flow_resource_registration_destroy(flow_resource_registration_t *resource) {
@@ -468,6 +472,7 @@ int turbo_flow_reset(turbo_flow_t *flow, int keep_registry) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0, "cannot reset a started flow");
   }
   flow_clear_plan(flow);
+  flow->has_async_stage = 0;
   flow->required_backend = FLOW_PLAN_BACKEND_NATIVE;
   turbo_flow_stl_error(vec_clear(&flow->resource_command_history));
   if (!keep_registry) flow_clear_registry(flow);
@@ -717,6 +722,52 @@ int turbo_flow_register_adapter(turbo_flow_t *flow, const char *name,
   return turbo_flow_register_adapter_ex(flow, name, ops, ctx, NULL);
 }
 
+int turbo_flow_register_adapter_async_terminal(turbo_flow_t *flow, const char *name,
+                                               const turbo_flow_async_terminal_adapter_ops_t *ops) {
+  int index;
+  flow_adapter_registration_t *adapter;
+  if (!flow || !name || !ops || ops->size < sizeof(*ops) ||
+      ops->version != TURBO_FLOW_ASYNC_TERMINAL_API_VERSION || !ops->submit) {
+    return SALTS_EINVAL;
+  }
+  if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                     "cannot register async terminal adapter after compile");
+  }
+  index = flow_find_adapter(flow, name);
+  if (index < 0) return SALTS_ENOENT;
+  adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, (size_t)index);
+  if (!adapter) return SALTS_ENOENT;
+  if (adapter->async_terminal_ops.submit || adapter->async_emit_ops.submit) return SALTS_EALREADY;
+  if (adapter->ops.consume || adapter->ops.consume_retry) return SALTS_EINVAL;
+  adapter->async_terminal_ops = *ops;
+  adapter->async_terminal_ops.size = sizeof(adapter->async_terminal_ops);
+  return SALTS_OK;
+}
+
+int turbo_flow_register_adapter_async_emit(turbo_flow_t *flow, const char *name,
+                                           const turbo_flow_async_emit_adapter_ops_t *ops) {
+  int index;
+  flow_adapter_registration_t *adapter;
+  if (!flow || !name || !ops || ops->size < sizeof(*ops) ||
+      ops->version != TURBO_FLOW_ASYNC_EMIT_API_VERSION || !ops->submit) {
+    return SALTS_EINVAL;
+  }
+  if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                     "cannot register async emitting adapter after compile");
+  }
+  index = flow_find_adapter(flow, name);
+  if (index < 0) return SALTS_ENOENT;
+  adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, (size_t)index);
+  if (!adapter) return SALTS_ENOENT;
+  if (adapter->async_emit_ops.submit || adapter->async_terminal_ops.submit) return SALTS_EALREADY;
+  if (adapter->ops.consume || adapter->ops.consume_retry) return SALTS_EINVAL;
+  adapter->async_emit_ops = *ops;
+  adapter->async_emit_ops.size = sizeof(adapter->async_emit_ops);
+  return SALTS_OK;
+}
+
 int turbo_flow_register_adapter_settlement(turbo_flow_t *flow, const char *name,
                                            const turbo_flow_settlement_owner_ops_t *ops,
                                            void *ctx) {
@@ -883,6 +934,61 @@ int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
     return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
   return SALTS_OK;
+}
+
+int turbo_flow_register_async_terminal_adapter_ex(
+    turbo_flow_t *flow, const char *name, const turbo_flow_adapter_ops_t *adapter_ops,
+    const turbo_flow_async_terminal_adapter_ops_t *async_ops, void *ctx,
+    const turbo_flow_adapter_schema_t *schema) {
+  size_t adapters_before;
+  int rc;
+
+  if (!flow || !async_ops || async_ops->size < sizeof(*async_ops) ||
+      async_ops->version != TURBO_FLOW_ASYNC_TERMINAL_API_VERSION || !async_ops->submit) {
+    return SALTS_EINVAL;
+  }
+  adapters_before = vec_size(&flow->adapters);
+  rc = turbo_flow_register_adapter_ex(flow, name, adapter_ops, ctx, schema);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_register_adapter_async_terminal(flow, name, async_ops);
+  if (rc == SALTS_OK) return SALTS_OK;
+
+  while (vec_size(&flow->adapters) > adapters_before) {
+    size_t last = vec_size(&flow->adapters) - 1u;
+    flow_adapter_registration_t *adapter =
+        (flow_adapter_registration_t *)vec_at(&flow->adapters, last);
+    flow_adapter_registration_destroy(adapter);
+    (void)turbo_flow_stl_error(vec_resize(&flow->adapters, last));
+  }
+  return rc;
+}
+
+int turbo_flow_register_async_emit_adapter_ex(
+    turbo_flow_t *flow, const char *name, const turbo_flow_adapter_ops_t *adapter_ops,
+    const turbo_flow_async_emit_adapter_ops_t *async_ops, void *ctx,
+    const turbo_flow_adapter_schema_t *schema) {
+  size_t adapters_before;
+  int rc;
+
+  if (!flow || !async_ops || async_ops->size < sizeof(*async_ops) ||
+      async_ops->version != TURBO_FLOW_ASYNC_EMIT_API_VERSION || !async_ops->submit || !schema ||
+      (schema->roles & TURBO_FLOW_ADAPTER_TRANSFORM) == 0u) {
+    return SALTS_EINVAL;
+  }
+  adapters_before = vec_size(&flow->adapters);
+  rc = turbo_flow_register_adapter_ex(flow, name, adapter_ops, ctx, schema);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_register_adapter_async_emit(flow, name, async_ops);
+  if (rc == SALTS_OK) return SALTS_OK;
+
+  while (vec_size(&flow->adapters) > adapters_before) {
+    size_t last = vec_size(&flow->adapters) - 1u;
+    flow_adapter_registration_t *adapter =
+        (flow_adapter_registration_t *)vec_at(&flow->adapters, last);
+    flow_adapter_registration_destroy(adapter);
+    (void)turbo_flow_stl_error(vec_resize(&flow->adapters, last));
+  }
+  return rc;
 }
 
 int turbo_flow_register_adapter_with_resources(

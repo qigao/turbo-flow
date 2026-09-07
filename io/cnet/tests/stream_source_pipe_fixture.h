@@ -125,6 +125,38 @@ static int stream_source_pipe_fixture_write(stream_source_pipe_fixture_t *fixtur
   return transferred == size ? SALTS_OK : SALTS_EIO;
 }
 
+static int stream_source_pipe_fixture_read(stream_source_pipe_fixture_t *fixture, void *data,
+                                           size_t size) {
+  OVERLAPPED operation = {0};
+  HANDLE event;
+  DWORD transferred = 0u;
+  DWORD error;
+  DWORD wait_status;
+  BOOL accepted;
+  if (!fixture || fixture->server == INVALID_HANDLE_VALUE || !data || size == 0u ||
+      size > UINT32_MAX) {
+    return SALTS_EINVAL;
+  }
+  event = CreateEventA(NULL, TRUE, FALSE, NULL);
+  if (!event) return -(int)GetLastError();
+  operation.hEvent = event;
+  accepted = ReadFile(fixture->server, data, (DWORD)size, NULL, &operation);
+  if (!accepted && (error = GetLastError()) != ERROR_IO_PENDING) {
+    (void)CloseHandle(event);
+    return -(int)error;
+  }
+  wait_status = WaitForSingleObject(event, STREAM_SOURCE_PIPE_FIXTURE_TIMEOUT_MS);
+  if (wait_status != WAIT_OBJECT_0 ||
+      !GetOverlappedResult(fixture->server, &operation, &transferred, FALSE)) {
+    error = wait_status == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
+    (void)CancelIoEx(fixture->server, &operation);
+    (void)CloseHandle(event);
+    return error == ERROR_TIMEOUT ? SALTS_ETIMEDOUT : -(int)error;
+  }
+  (void)CloseHandle(event);
+  return transferred == size ? SALTS_OK : SALTS_EIO;
+}
+
 static void stream_source_pipe_fixture_close(stream_source_pipe_fixture_t *fixture) {
   if (!fixture) return;
   if (fixture->connect_event) (void)CloseHandle(fixture->connect_event);
@@ -189,6 +221,14 @@ static int stream_source_pipe_fixture_write(stream_source_pipe_fixture_t *fixtur
   if (!fixture || fixture->peer_write < 0 || !data || size == 0u) return SALTS_EINVAL;
   written = write(fixture->peer_write, data, size);
   return written == (ssize_t)size ? SALTS_OK : (written < 0 ? -errno : SALTS_EIO);
+}
+
+static int stream_source_pipe_fixture_read(stream_source_pipe_fixture_t *fixture, void *data,
+                                           size_t size) {
+  ssize_t received;
+  if (!fixture || fixture->peer_read < 0 || !data || size == 0u) return SALTS_EINVAL;
+  received = read(fixture->peer_read, data, size);
+  return received == (ssize_t)size ? SALTS_OK : (received < 0 ? -errno : SALTS_EIO);
 }
 
 static void stream_source_pipe_fixture_close(stream_source_pipe_fixture_t *fixture) {

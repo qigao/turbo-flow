@@ -1,4 +1,6 @@
 add_library(tf_cnet_adapter SHARED
+  src/turbo_flow_cnet_datagram_sink.c
+  src/turbo_flow_cnet_stream_sink.c
   src/turbo_flow_cnet_listener_source.c
   src/turbo_flow_cnet_packet_source.c
   src/turbo_flow_cnet_stream_source.c
@@ -13,7 +15,7 @@ target_include_directories(
   tf_cnet_adapter
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>)
-target_link_libraries(tf_cnet_adapter PUBLIC TurboFlow::Graph Salts::CNet Salts::CSTL)
+target_link_libraries(tf_cnet_adapter PUBLIC TurboFlow::Graph Salts::CNet Salts::CFlow Salts::CSTL)
 
 install(FILES include/turbo_flow_cnet.h DESTINATION include)
 

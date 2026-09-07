@@ -25,6 +25,8 @@ struct turbo_flow_run_s {
   int terminal;
   atomic_int registered;
   int drain_on_stop;
+  size_t pending_values;
+  int upstream_done;
   int pending_status;
   turbo_flow_error_t error;
   int setup_complete;
@@ -180,36 +182,89 @@ static int flow_run_finish(turbo_flow_run_t *run, turbo_flow_run_state_t state, 
   return 1;
 }
 
+static void flow_run_async_value_finish(void *user, const turbo_flow_publish_result_t *result) {
+  turbo_flow_run_t *run = (turbo_flow_run_t *)user;
+  int fail = 0;
+  int complete = 0;
+  if (!run || !result) return;
+  salts_mutex_lock(&run->mutex);
+  if (run->pending_values > 0u) --run->pending_values;
+  if (!run->terminal) {
+    if (result->status == SALTS_OK) {
+      ++run->values;
+      complete = run->upstream_done && run->pending_values == 0u;
+    } else {
+      run->pending_status = result->status;
+      flow_run_copy_error(run, result->status, "async terminal stage failed");
+      fail = 1;
+    }
+  }
+  salts_mutex_unlock(&run->mutex);
+  if (fail) {
+    cflow_subscription_cancel(&run->subscription);
+    cflow_subscription_close(&run->subscription);
+    (void)flow_run_finish(run, TURBO_FLOW_RUN_FAILED, result->status, "async terminal stage failed",
+                          1);
+  } else if (complete) {
+    (void)flow_run_finish(run, TURBO_FLOW_RUN_COMPLETED, SALTS_OK, NULL, 1);
+  }
+  flow_run_release(run);
+}
+
 static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const void *value) {
   turbo_flow_run_t *run = (turbo_flow_run_t *)user;
+  turbo_flow_t *flow;
   turbo_flow_publish_result_t result = TURBO_FLOW_PUBLISH_RESULT_INIT;
-  const turbo_flow_error_t *error;
+  flow_async_publication_t *publication = NULL;
+  const turbo_flow_error_t *error = NULL;
+  int error_context_entered = 0;
   int rc;
   if (!run || !type || !value || !cmeta_type_equal(type, flow_message_type_descriptor())) {
     return false;
   }
   flow_run_retain(run);
   salts_mutex_lock(&run->mutex);
-  if (run->terminal) {
+  flow = run->flow;
+  if (run->terminal || !flow) {
     salts_mutex_unlock(&run->mutex);
     flow_run_release(run);
     return false;
   }
   salts_mutex_unlock(&run->mutex);
 
-  flow_publish_error_context_begin(run->flow);
-  rc = flow_publish_message_entered(run->flow, run->source_name, (int)run->source_index,
-                                    (const turbo_flow_msg_t *)value, &result);
-  error = turbo_flow_last_error(run->flow);
+  if (!run->drain_on_stop && flow->has_async_stage) {
+    flow_run_retain(run);
+    salts_mutex_lock(&run->mutex);
+    ++run->pending_values;
+    salts_mutex_unlock(&run->mutex);
+    publication = flow_async_publication_create(
+        flow, run->source_name, (const turbo_flow_msg_t *)value,
+        flow_observer_has_handlers(flow) ? salts_hrtime() : 0u, flow_run_async_value_finish, run);
+    if (!publication) {
+      salts_mutex_lock(&run->mutex);
+      --run->pending_values;
+      salts_mutex_unlock(&run->mutex);
+      flow_run_release(run);
+      rc = SALTS_ENOMEM;
+      goto record_result;
+    }
+  }
+  flow_publish_error_context_begin(flow);
+  error_context_entered = 1;
+  rc = flow_publish_message_entered(flow, run->source_name, (int)run->source_index,
+                                    (const turbo_flow_msg_t *)value, &result, publication);
+  error = turbo_flow_last_error(flow);
+record_result:
   salts_mutex_lock(&run->mutex);
-  if (rc == SALTS_OK) {
+  if (!publication && rc == SALTS_OK) {
     ++run->values;
-  } else {
+  } else if (!publication && rc != SALTS_OK) {
     run->pending_status = rc;
     if (error) run->error = *error;
   }
   salts_mutex_unlock(&run->mutex);
-  flow_publish_error_context_end(run->flow);
+  if (error_context_entered) flow_publish_error_context_end(flow);
+  if (publication) flow_async_publication_owner_leave(publication);
   flow_run_release(run);
   return rc == SALTS_OK;
 }
@@ -233,10 +288,15 @@ static void flow_run_on_error(void *user, const char *message) {
 
 static void flow_run_on_done(void *user) {
   turbo_flow_run_t *run = (turbo_flow_run_t *)user;
+  int complete;
   if (!run) return;
   flow_run_retain(run);
   cflow_subscription_close(&run->subscription);
-  (void)flow_run_finish(run, TURBO_FLOW_RUN_COMPLETED, SALTS_OK, NULL, 1);
+  salts_mutex_lock(&run->mutex);
+  run->upstream_done = 1;
+  complete = !run->terminal && run->pending_values == 0u;
+  salts_mutex_unlock(&run->mutex);
+  if (complete) (void)flow_run_finish(run, TURBO_FLOW_RUN_COMPLETED, SALTS_OK, NULL, 1);
   flow_run_release(run);
 }
 
