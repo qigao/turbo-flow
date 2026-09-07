@@ -2,6 +2,10 @@
 #include <turbo_flow_cnet.h>
 #include <turbo_flow_chttp.h>
 
+#if !defined(CNET_STOP_DRAIN_CONTRACT_VERSION) || CNET_STOP_DRAIN_CONTRACT_VERSION < 1u
+  #error "TurboFlow install consumers require CNet stop-drain contract v1"
+#endif
+
 int main(void) {
   turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
   turbo_flow_run_result_t run_result = TURBO_FLOW_RUN_RESULT_INIT;
@@ -29,6 +33,10 @@ int main(void) {
       TURBO_FLOW_CNET_DATAGRAM_SINK_CONFIG_INIT;
   turbo_flow_cnet_datagram_sink_snapshot_t datagram_sink_snapshot =
       TURBO_FLOW_CNET_DATAGRAM_SINK_SNAPSHOT_INIT;
+  turbo_flow_cnet_packet_sink_config_t packet_sink_config =
+      TURBO_FLOW_CNET_PACKET_SINK_CONFIG_INIT;
+  turbo_flow_cnet_packet_sink_snapshot_t packet_sink_snapshot =
+      TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
   int (*terminal_move)(turbo_flow_async_terminal_claim_t *, turbo_flow_async_terminal_claim_t *) =
       turbo_flow_async_terminal_claim_move;
   int (*terminal_complete)(turbo_flow_async_terminal_claim_t *, int,
@@ -95,6 +103,17 @@ int main(void) {
       turbo_flow_cnet_datagram_sink_snapshot;
   int (*datagram_sink_destroy)(turbo_flow_cnet_datagram_sink_t *) =
       turbo_flow_cnet_datagram_sink_destroy;
+  int (*packet_sink_register)(const turbo_flow_cnet_packet_sink_config_t *,
+                              turbo_flow_cnet_packet_sink_t **) =
+      turbo_flow_cnet_packet_sink_register;
+  int (*packet_sink_poll)(turbo_flow_cnet_packet_sink_t *, uint32_t,
+                          turbo_flow_cnet_packet_sink_snapshot_t *) =
+      turbo_flow_cnet_packet_sink_poll;
+  int (*packet_sink_snapshot_copy)(const turbo_flow_cnet_packet_sink_t *,
+                                   turbo_flow_cnet_packet_sink_snapshot_t *) =
+      turbo_flow_cnet_packet_sink_snapshot;
+  int (*packet_sink_destroy)(turbo_flow_cnet_packet_sink_t *) =
+      turbo_flow_cnet_packet_sink_destroy;
   int (*chttp_server_register)(const turbo_flow_chttp_server_config_t *,
                                turbo_flow_chttp_server_t **) = turbo_flow_chttp_server_register;
   int (*chttp_server_snapshot_copy)(const turbo_flow_chttp_server_t *,
@@ -124,6 +143,8 @@ int main(void) {
       stream_sink_snapshot.version != TURBO_FLOW_CNET_STREAM_SINK_API_VERSION ||
       datagram_sink_config.version != TURBO_FLOW_CNET_DATAGRAM_SINK_API_VERSION ||
       datagram_sink_snapshot.version != TURBO_FLOW_CNET_DATAGRAM_SINK_API_VERSION ||
+      packet_sink_config.version != TURBO_FLOW_CNET_PACKET_SINK_API_VERSION ||
+      packet_sink_snapshot.version != TURBO_FLOW_CNET_PACKET_SINK_API_VERSION ||
       !listener_open ||
       !listener_request || !listener_poll || !listener_snapshot_copy || !listener_stop ||
       !listener_destroy || !packet_open || !packet_request || !packet_poll ||
@@ -132,6 +153,8 @@ int main(void) {
       !packet_destroy || !stream_sink_register || !stream_sink_poll ||
       !stream_sink_snapshot_copy || !stream_sink_destroy || !datagram_sink_register ||
       !datagram_sink_poll || !datagram_sink_snapshot_copy || !datagram_sink_destroy ||
+      !packet_sink_register || !packet_sink_poll || !packet_sink_snapshot_copy ||
+      !packet_sink_destroy ||
       !chttp_server_register || !chttp_server_snapshot_copy || !chttp_server_destroy ||
       !chttp_server_request_context ||
       !turbo_flow_message_type())
