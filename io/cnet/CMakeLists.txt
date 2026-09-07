@@ -23,3 +23,7 @@ install(FILES include/turbo_flow_cnet.h DESTINATION include)
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()
+
+if(BUILD_TESTING AND BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
+endif()

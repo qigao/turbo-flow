@@ -76,3 +76,14 @@ cmake_add_test(
 
 set_tests_properties(test_cnet_packet_sink
                      PROPERTIES LABELS "cnet-adapter;graph")
+
+cmake_add_test(
+  test_cnet_adapter_benchmark_stats
+  SOURCES test_cnet_adapter_benchmark_stats.c
+          ../benchmarks/cnet_adapter_benchmark_stats.c
+  LIBS Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks
+  FOLDER "io/cnet/tests")
+
+set_tests_properties(test_cnet_adapter_benchmark_stats
+                     PROPERTIES LABELS "benchmark;cnet-adapter")
