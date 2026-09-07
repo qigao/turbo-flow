@@ -177,7 +177,7 @@ ctest --preset win-dev-user -R "^test_turbo_flow_schedule$" --repeat until-fail:
 
 Expected: 100 consecutive passes with no ASan diagnostics.
 
-- [ ] **Step 2: Run the full Debug/ASan suite**
+- [x] **Step 2: Run the full Debug/ASan suite**
 
 ```powershell
 ctest --preset win-dev-user --output-on-failure
@@ -185,7 +185,7 @@ ctest --preset win-dev-user --output-on-failure
 
 Expected: all configured tests pass.
 
-- [ ] **Step 3: Configure, build, and run Release**
+- [x] **Step 3: Configure, build, and run Release**
 
 ```powershell
 cmake --fresh --preset win-release-user
@@ -196,7 +196,7 @@ ctest --preset win-release-user --output-on-failure
 
 Expected: both the schedule stress run and full Release suite pass.
 
-- [ ] **Step 4: Inspect the final diff and issue requirements**
+- [x] **Step 4: Inspect the final diff and issue requirements**
 
 ```powershell
 git diff master...HEAD --check
