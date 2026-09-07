@@ -124,13 +124,13 @@ if(WIN32)
     endif()
   endforeach()
   list(JOIN runtime_dirs ";" runtime_path)
-  set(ENV{PATH} "${runtime_path}")
+  set(ENV{PATH} "${runtime_path};$ENV{PATH}")
 elseif(APPLE)
   set(ENV{DYLD_LIBRARY_PATH}
-      "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib")
+      "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib:$ENV{DYLD_LIBRARY_PATH}")
 else()
   set(ENV{LD_LIBRARY_PATH}
-      "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib")
+      "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib:$ENV{LD_LIBRARY_PATH}")
 endif()
 
 set(config_consumer_build_dir "${test_root}/config-build")
