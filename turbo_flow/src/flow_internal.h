@@ -471,6 +471,15 @@ typedef struct flow_event_observer_registration_s {
   void *ctx;
 } flow_event_observer_registration_t;
 
+typedef int (*flow_pool_rebuild_fault_fn)(void *ctx, size_t attempt);
+
+/** Private deterministic resource-construction seam used by internal runtime tests. */
+typedef struct flow_pool_rebuild_fault_s {
+  flow_pool_rebuild_fault_fn before_create;
+  void *ctx;
+  size_t attempts;
+} flow_pool_rebuild_fault_t;
+
 struct turbo_flow_s {
   turbo_flow_state_t state;
   vec_t stages;
@@ -498,6 +507,7 @@ struct turbo_flow_s {
   vec_t expr_projection_registrations;
   vec_t active_adapters;
   vec_t pool_records;
+  flow_pool_rebuild_fault_t pool_rebuild_fault;
   vec_t resource_command_history;
   vec_t event_observers;
   uint64_t runtime_generation;
