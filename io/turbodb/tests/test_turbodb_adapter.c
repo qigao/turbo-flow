@@ -15,6 +15,8 @@
   (offsetof(cmeta_data_desc, shape) + sizeof(((cmeta_data_desc *)0)->shape))
 
 Struct(test_db_row, (int, id), (long, score));
+Struct(test_db_nested_inner, (int, value));
+Struct(test_db_nested_row, (test_db_nested_inner, inner));
 
 static const cmeta_type_identity TEST_DB_ROW_IDENTITY =
     CMETA_TYPE_ID_ATOM_INIT("turboflow.test.DbRow");
@@ -41,6 +43,55 @@ static const cmeta_data_desc TEST_DB_ROW_DATA = {.struct_size = TEST_ROW_DATA_PR
                                                  .storage_type = &TEST_DB_ROW_TYPE,
                                                  .shape = &TEST_DB_ROW_SHAPE};
 
+static const cmeta_type_identity TEST_DB_NESTED_INNER_IDENTITY =
+    CMETA_TYPE_ID_ATOM_INIT("turboflow.test.DbNestedInner");
+static const cmeta_type_desc TEST_DB_NESTED_INNER_TYPE = {.name = "test_db_nested_inner",
+                                                          .size = sizeof(test_db_nested_inner),
+                                                          .align = _Alignof(test_db_nested_inner),
+                                                          .kind = CMETA_T_OBJECT,
+                                                          .traits = &TEST_DB_ROW_TRAITS,
+                                                          .identity =
+                                                              &TEST_DB_NESTED_INNER_IDENTITY};
+static const cmeta_data_field_desc TEST_DB_NESTED_INNER_FIELDS[] = {
+    {"turboflow.test.DbNestedInner.value", "value", offsetof(test_db_nested_inner, value),
+     &cmeta_data_int}};
+static const cmeta_data_struct_shape TEST_DB_NESTED_INNER_SHAPE = {
+    .layout = StructMeta(test_db_nested_inner),
+    .fields = TEST_DB_NESTED_INNER_FIELDS,
+    .field_count = sizeof(TEST_DB_NESTED_INNER_FIELDS) / sizeof(TEST_DB_NESTED_INNER_FIELDS[0])};
+static const cmeta_data_desc TEST_DB_NESTED_INNER_DATA = {
+    .struct_size = TEST_ROW_DATA_PREFIX_SIZE,
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "turboflow.test.DbNestedInner.data",
+    .display_name = "TurboFlow test nested database inner row",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &TEST_DB_NESTED_INNER_TYPE,
+    .shape = &TEST_DB_NESTED_INNER_SHAPE};
+
+static const cmeta_type_identity TEST_DB_NESTED_ROW_IDENTITY =
+    CMETA_TYPE_ID_ATOM_INIT("turboflow.test.DbNestedRow");
+static const cmeta_type_desc TEST_DB_NESTED_ROW_TYPE = {.name = "test_db_nested_row",
+                                                        .size = sizeof(test_db_nested_row),
+                                                        .align = _Alignof(test_db_nested_row),
+                                                        .kind = CMETA_T_OBJECT,
+                                                        .traits = &TEST_DB_ROW_TRAITS,
+                                                        .identity = &TEST_DB_NESTED_ROW_IDENTITY};
+static const cmeta_data_field_desc TEST_DB_NESTED_ROW_FIELDS[] = {
+    {"turboflow.test.DbNestedRow.inner", "inner", offsetof(test_db_nested_row, inner),
+     &TEST_DB_NESTED_INNER_DATA}};
+static const cmeta_data_struct_shape TEST_DB_NESTED_ROW_SHAPE = {
+    .layout = StructMeta(test_db_nested_row),
+    .fields = TEST_DB_NESTED_ROW_FIELDS,
+    .field_count = sizeof(TEST_DB_NESTED_ROW_FIELDS) / sizeof(TEST_DB_NESTED_ROW_FIELDS[0])};
+static const cmeta_data_desc TEST_DB_NESTED_ROW_DATA = {
+    .struct_size = TEST_ROW_DATA_PREFIX_SIZE,
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "turboflow.test.DbNestedRow.data",
+    .display_name = "TurboFlow test nested database row",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &TEST_DB_NESTED_ROW_TYPE,
+    .shape = &TEST_DB_NESTED_ROW_SHAPE};
+
 static const turbo_flow_data_schema_t TEST_DB_ROW_SCHEMA = {
     .size = sizeof(turbo_flow_data_schema_t),
     .domain = TURBO_FLOW_DOMAIN_DATA,
@@ -59,6 +110,16 @@ static const turbo_flow_data_schema_t TEST_DB_COMMAND_SCHEMA = {
     .type_name = "OrmCommandResult",
     .projection_type = "orm_command_result_t",
     .schema_id = 3u,
+    .schema_version = 1u};
+
+static const turbo_flow_data_schema_t TEST_DB_NESTED_ROW_SCHEMA = {
+    .size = sizeof(turbo_flow_data_schema_t),
+    .domain = TURBO_FLOW_DOMAIN_DATA,
+    .encoding = TURBO_FLOW_DATA_ENCODING_TBE,
+    .schema_name = "test.db.nested.row",
+    .type_name = "TestDbNestedRow",
+    .projection_type = "test_db_nested_row",
+    .schema_id = 4u,
     .schema_version = 1u};
 
 static const turbo_flow_data_schema_t INT_SCHEMA = {.size = sizeof(turbo_flow_data_schema_t),
@@ -282,6 +343,10 @@ typedef struct int_graph_probe_s {
   int value;
 } int_graph_probe_t;
 
+typedef struct count_graph_probe_s {
+  size_t count;
+} count_graph_probe_t;
+
 static int db_graph_probe_stage(turbo_flow_msg_t *message, void *ctx) {
   db_graph_probe_t *probe = (db_graph_probe_t *)ctx;
   const test_db_row *row = (const test_db_row *)turbo_flow_msg_projection(message, NULL);
@@ -298,6 +363,13 @@ static int int_graph_probe_stage(turbo_flow_msg_t *message, void *ctx) {
   if (!probe || !value || probe->count != 0u) return SALTS_EPROTO;
   probe->id = message->id;
   probe->value = *value;
+  ++probe->count;
+  return SALTS_OK;
+}
+
+static int count_graph_probe_stage(turbo_flow_msg_t *message, void *ctx) {
+  count_graph_probe_t *probe = (count_graph_probe_t *)ctx;
+  if (!probe || !message) return SALTS_EPROTO;
   ++probe->count;
   return SALTS_OK;
 }
@@ -701,15 +773,70 @@ spec("TurboDb ORM Publisher adapter") {
     orm_disconnect(connection);
   }
 
-  it("preserves ORM row and byte limit errors at the Publisher boundary") {
+  it("accepts exact ORM row byte depth and scratch capacities through a Graph run") {
     orm_error_t error;
     orm_connection_t *connection;
     orm_query_t *query = NULL;
     orm_flow_config_t flow_config;
     turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
     cflow_publisher messages = {0};
-    turbo_flow_msg_t message;
-    cflow_step step;
+    db_graph_probe_t graph_probe = {0};
+    turbo_flow_t *flow;
+    turbo_flow_run_t *run = NULL;
+    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
+    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+    cflow_scheduler scheduler = {0};
+
+    orm_error_init(&error);
+    connection = open_test_database_with_limits(&error, 1u, sizeof(int64_t) * 2u);
+    check_not_null(connection);
+    check_equal(orm_raw(connection, orm_view("select 7 as id, 19 as score"), &query, &error),
+                ORM_STATUS_OK);
+    orm_flow_config(&flow_config, &TEST_DB_ROW_DATA);
+    flow_config.scratch_bytes = 1u;
+    flow_config.max_depth = 1u;
+    config.projection_schema = &TEST_DB_ROW_SCHEMA;
+    check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
+                SALTS_OK);
+    flow = open_graph(db_graph_probe_stage, &graph_probe);
+    check_not_null(flow);
+    check_true(cflow_scheduler_inline_init(&scheduler));
+    run_config.scheduler = &scheduler;
+    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
+    check_false(cflow_publisher_valid(&messages));
+
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_OK);
+    check_equal(turbo_flow_run_snapshot(run, &result), SALTS_OK);
+    check_equal(result.values, 1u);
+    check_equal(graph_probe.count, 1u);
+    check_equal(graph_probe.values[0], 7);
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_OK);
+    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_OK);
+    check_equal(result.state, TURBO_FLOW_RUN_COMPLETED);
+    check_equal(result.values, 1u);
+    check_equal(graph_probe.count, 1u);
+
+    turbo_flow_run_close(run);
+    cflow_scheduler_destroy(&scheduler);
+    orm_query_destroy(query);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    orm_disconnect(connection);
+  }
+
+  it("fails a Graph run when cumulative ORM row capacity is exceeded") {
+    orm_error_t error;
+    orm_connection_t *connection;
+    orm_query_t *query = NULL;
+    orm_flow_config_t flow_config;
+    turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
+    cflow_publisher messages = {0};
+    db_graph_probe_t graph_probe = {0};
+    turbo_flow_t *flow;
+    turbo_flow_run_t *run = NULL;
+    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
+    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+    cflow_scheduler scheduler = {0};
 
     orm_error_init(&error);
     connection = open_test_database_with_limits(&error, 1u, 0u);
@@ -723,30 +850,162 @@ spec("TurboDb ORM Publisher adapter") {
     config.projection_schema = &TEST_DB_ROW_SCHEMA;
     check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
                 SALTS_OK);
-    step = cflow_publisher_resume(&messages, NULL, &message);
-    check_equal(step.kind, CFLOW_STEP_VALUE);
-    turbo_flow_msg_cleanup(&message);
-    step = cflow_publisher_resume(&messages, NULL, &message);
-    check_equal(step.kind, CFLOW_STEP_ERROR);
-    check_not_null(step.error);
-    cflow_publisher_destroy(&messages);
-    orm_query_destroy(query);
-    orm_disconnect(connection);
+    flow = open_graph(db_graph_probe_stage, &graph_probe);
+    check_not_null(flow);
+    check_true(cflow_scheduler_inline_init(&scheduler));
+    run_config.scheduler = &scheduler;
+    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
 
-    messages = (cflow_publisher){0};
-    query = NULL;
+    check_equal(turbo_flow_run_request(run, 2u), SALTS_EIO);
+    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_EIO);
+    check_equal(result.state, TURBO_FLOW_RUN_FAILED);
+    check_equal(result.status, SALTS_EIO);
+    check_contains(result.error.message, "SQLite result exceeds configured bounds");
+    check_equal(result.values, 1u);
+    check_equal(graph_probe.count, 1u);
+    check_equal(graph_probe.values[0], 7);
+
+    turbo_flow_run_close(run);
+    cflow_scheduler_destroy(&scheduler);
+    orm_query_destroy(query);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    orm_disconnect(connection);
+  }
+
+  it("fails a Graph run before projection when ORM byte capacity is exceeded") {
+    orm_error_t error;
+    orm_connection_t *connection;
+    orm_query_t *query = NULL;
+    orm_flow_config_t flow_config;
+    turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
+    cflow_publisher messages = {0};
+    count_graph_probe_t graph_probe = {0};
+    turbo_flow_t *flow;
+    turbo_flow_run_t *run = NULL;
+    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
+    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+    cflow_scheduler scheduler = {0};
+
+    orm_error_init(&error);
     connection = open_test_database_with_limits(&error, 0u, sizeof(int64_t) * 2u - 1u);
     check_not_null(connection);
     check_equal(orm_raw(connection, orm_view("select 7 as id, 19 as score"), &query, &error),
                 ORM_STATUS_OK);
     orm_flow_config(&flow_config, &TEST_DB_ROW_DATA);
+    config.projection_schema = &TEST_DB_ROW_SCHEMA;
     check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
                 SALTS_OK);
-    step = cflow_publisher_resume(&messages, NULL, &message);
-    check_equal(step.kind, CFLOW_STEP_ERROR);
-    check_not_null(step.error);
-    cflow_publisher_destroy(&messages);
+    flow = open_graph(count_graph_probe_stage, &graph_probe);
+    check_not_null(flow);
+    check_true(cflow_scheduler_inline_init(&scheduler));
+    run_config.scheduler = &scheduler;
+    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
+
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_EIO);
+    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_EIO);
+    check_equal(result.state, TURBO_FLOW_RUN_FAILED);
+    check_equal(result.status, SALTS_EIO);
+    check_contains(result.error.message, "SQLite result exceeds configured bounds");
+    check_equal(result.values, 0u);
+    check_equal(graph_probe.count, 0u);
+
+    turbo_flow_run_close(run);
+    cflow_scheduler_destroy(&scheduler);
     orm_query_destroy(query);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    orm_disconnect(connection);
+  }
+
+  it("fails a Graph run before projection when CBind scratch capacity is insufficient") {
+    orm_error_t error;
+    orm_connection_t *connection;
+    orm_query_t *query = NULL;
+    orm_flow_config_t flow_config;
+    turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
+    cflow_publisher messages = {0};
+    count_graph_probe_t graph_probe = {0};
+    turbo_flow_t *flow;
+    turbo_flow_run_t *run = NULL;
+    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
+    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+    cflow_scheduler scheduler = {0};
+
+    orm_error_init(&error);
+    connection = open_test_database(&error);
+    check_not_null(connection);
+    check_equal(orm_raw(connection, orm_view("select 7 as id, 19 as score"), &query, &error),
+                ORM_STATUS_OK);
+    orm_flow_config(&flow_config, &TEST_DB_ROW_DATA);
+    flow_config.scratch_bytes = 0u;
+    config.projection_schema = &TEST_DB_ROW_SCHEMA;
+    check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
+                SALTS_OK);
+    flow = open_graph(count_graph_probe_stage, &graph_probe);
+    check_not_null(flow);
+    check_true(cflow_scheduler_inline_init(&scheduler));
+    run_config.scheduler = &scheduler;
+    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
+
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_EIO);
+    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_EIO);
+    check_equal(result.state, TURBO_FLOW_RUN_FAILED);
+    check_equal(result.status, SALTS_EIO);
+    check_contains(result.error.message, "row binding failed");
+    check_equal(result.values, 0u);
+    check_equal(graph_probe.count, 0u);
+
+    turbo_flow_run_close(run);
+    cflow_scheduler_destroy(&scheduler);
+    orm_query_destroy(query);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    orm_disconnect(connection);
+  }
+
+  it("fails a Graph run before projection when CBind depth capacity is insufficient") {
+    orm_error_t error;
+    orm_connection_t *connection;
+    orm_query_t *query = NULL;
+    orm_flow_config_t flow_config;
+    turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
+    cflow_publisher messages = {0};
+    count_graph_probe_t graph_probe = {0};
+    turbo_flow_t *flow;
+    turbo_flow_run_t *run = NULL;
+    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
+    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+    cflow_scheduler scheduler = {0};
+
+    orm_error_init(&error);
+    connection = open_test_database(&error);
+    check_not_null(connection);
+    check_equal(orm_raw(connection, orm_view("select 7 as inner"), &query, &error), ORM_STATUS_OK);
+    orm_flow_config(&flow_config, &TEST_DB_NESTED_ROW_DATA);
+    flow_config.max_depth = 1u;
+    config.projection_schema = &TEST_DB_NESTED_ROW_SCHEMA;
+    check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
+                SALTS_OK);
+    flow = open_graph(count_graph_probe_stage, &graph_probe);
+    check_not_null(flow);
+    check_true(cflow_scheduler_inline_init(&scheduler));
+    run_config.scheduler = &scheduler;
+    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
+
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_EIO);
+    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_EIO);
+    check_equal(result.state, TURBO_FLOW_RUN_FAILED);
+    check_equal(result.status, SALTS_EIO);
+    check_contains(result.error.message, "row binding failed");
+    check_equal(result.values, 0u);
+    check_equal(graph_probe.count, 0u);
+
+    turbo_flow_run_close(run);
+    cflow_scheduler_destroy(&scheduler);
+    orm_query_destroy(query);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
     orm_disconnect(connection);
   }
 
