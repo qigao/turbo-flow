@@ -7,19 +7,33 @@ else()
   project(TurboFlowInstallConsumer LANGUAGES C)
 endif()
 
-foreach(required_dir IN ITEMS
-        TurboFlow_DIR Salts_DIR SaltsUtils_DIR RulesForge_DIR)
-  if(NOT DEFINED ${required_dir} OR "${${required_dir}}" STREQUAL "")
-    message(FATAL_ERROR "Missing required package directory: ${required_dir}")
-  endif()
-  if(NOT IS_DIRECTORY "${${required_dir}}")
-    message(FATAL_ERROR
-            "${required_dir} is not a directory: ${${required_dir}}")
-  endif()
-endforeach()
-
-find_package(TurboFlow 1.0 CONFIG REQUIRED
-             PATHS "${TurboFlow_DIR}" NO_DEFAULT_PATH)
+if(TURBO_FLOW_TEST_ALL_COMPONENTS)
+  find_package(
+    TurboFlow 1.0 CONFIG REQUIRED
+    COMPONENTS
+      Config
+      Graph
+      CNetAdapter
+      CHTTPAdapter
+      Product
+      Flow
+      ProtocolIngress
+      ProtocolIngressGraph
+      ProtocolMqttSn
+      ProtocolCoap
+      ProtocolLwm2m
+      ProtocolOcpp
+      ProtocolGbt32960
+      ProtocolJtt808
+      ProtocolBusinessOcpp201Core
+      MqttSink
+      SecuritySQLite
+      Codec
+      Observe
+      Schedule)
+else()
+  find_package(TurboFlow 1.0 CONFIG REQUIRED)
+endif()
 
 add_executable(turbo_flow_install_consumer main.c)
 target_link_libraries(

@@ -31,10 +31,10 @@ file(TO_CMAKE_PATH "${TURBO_FLOW_RULES_FORGE_ROOT}" rules_forge_root)
 
 set(test_root "${TURBO_FLOW_BINARY_DIR}/install-consumer-test")
 set(stage_dir "${test_root}/stage")
-set(consumer_build_dir "${test_root}/build")
+set(full_consumer_build_dir "${test_root}/full-build")
 set(cxx_consumer_build_dir "${test_root}/cxx-build")
-set(rejected_build_dir "${test_root}/rejected-build")
-set(consumer_source_dir "${TURBO_FLOW_SOURCE_DIR}/tests/install_consumer")
+set(full_consumer_source_dir "${TURBO_FLOW_SOURCE_DIR}/tests/install_consumer")
+set(component_consumer_source_dir "${full_consumer_source_dir}/component")
 
 file(REMOVE_RECURSE "${test_root}")
 
@@ -50,21 +50,19 @@ function(run_checked operation)
   endif()
 endfunction()
 
-function(run_rejected operation expected_text)
+function(run_expected_failure operation expected_pattern)
   execute_process(
     COMMAND ${ARGN}
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
     ERROR_VARIABLE error)
   if(result EQUAL 0)
-    message(FATAL_ERROR
-            "${operation} unexpectedly succeeded\nstdout:\n${output}\nstderr:\n${error}")
+    message(FATAL_ERROR "${operation} unexpectedly succeeded")
   endif()
-  set(combined_output "${output}\n${error}")
-  string(FIND "${combined_output}" "${expected_text}" expected_offset)
-  if(expected_offset EQUAL -1)
+  string(CONCAT diagnostic "${output}" "\n" "${error}")
+  if(NOT diagnostic MATCHES "${expected_pattern}")
     message(FATAL_ERROR
-            "${operation} failed for the wrong reason\nstdout:\n${output}\nstderr:\n${error}")
+            "${operation} failed without '${expected_pattern}'\n${diagnostic}")
   endif()
 endfunction()
 
@@ -73,48 +71,26 @@ run_checked(
   "${CMAKE_COMMAND}" --install "${TURBO_FLOW_BINARY_DIR}"
   --prefix "${stage_dir}" --config "${TURBO_FLOW_CONFIG}")
 
-set(turbo_flow_dir "${stage_dir}/lib/cmake/TurboFlow")
-set(salts_dir "${salts_root}/lib/cmake/Salts")
-set(salts_utils_dir "${salts_utils_root}/lib/cmake/SaltsUtils")
-set(rules_forge_dir "${rules_forge_root}/lib/cmake/RulesForge")
-
-run_rejected(
-  "consumer configure without an exact Salts package directory"
-  "Salts_DIR is not a directory"
-  "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${rejected_build_dir}"
-  -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DCMAKE_PREFIX_PATH=${salts_root}"
-  "-DTurboFlow_DIR=${turbo_flow_dir}"
-  "-DSalts_DIR=${test_root}/missing-salts"
-  "-DSaltsUtils_DIR=${salts_utils_dir}"
-  "-DRulesForge_DIR=${rules_forge_dir}")
-
-run_checked(
-  "consumer configure"
-  "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"
-  -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTurboFlow_DIR=${turbo_flow_dir}"
-  "-DSalts_DIR=${salts_dir}"
-  "-DSaltsUtils_DIR=${salts_utils_dir}"
-  "-DRulesForge_DIR=${rules_forge_dir}")
-
-run_checked(
-  "consumer build"
-  "${CMAKE_COMMAND}" --build "${consumer_build_dir}"
-  --config "${TURBO_FLOW_CONFIG}" --parallel)
+set(turbo_flow_package_dir "${stage_dir}/lib/cmake/TurboFlow")
+set(salts_package_dir "${salts_root}/lib/cmake/Salts")
+set(salts_utils_package_dir "${salts_utils_root}/lib/cmake/SaltsUtils")
+set(rules_forge_package_dir "${rules_forge_root}/lib/cmake/RulesForge")
 
 run_checked(
   "CXX-only consumer configure"
-  "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${cxx_consumer_build_dir}"
+  "${CMAKE_COMMAND}" -E env
+  "SALTS_ROOT=${salts_root}"
+  "SALTS_UTILS_ROOT=${salts_utils_root}"
+  "RULES_FORGE_ROOT=${rules_forge_root}"
+  "${CMAKE_COMMAND}" -S "${full_consumer_source_dir}"
+  -B "${cxx_consumer_build_dir}"
   -G "${TURBO_FLOW_GENERATOR}"
   "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
   "-DTURBO_FLOW_CONSUMER_CXX_ONLY=ON"
-  "-DTurboFlow_DIR=${turbo_flow_dir}"
-  "-DSalts_DIR=${salts_dir}"
-  "-DSaltsUtils_DIR=${salts_utils_dir}"
-  "-DRulesForge_DIR=${rules_forge_dir}")
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+  "-DRulesForge_DIR=${rules_forge_package_dir}")
 
 run_checked(
   "CXX-only consumer build"
@@ -157,12 +133,156 @@ else()
       "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib")
 endif()
 
+set(config_consumer_build_dir "${test_root}/config-build")
 run_checked(
-  "consumer execution"
-  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${consumer_build_dir}"
+  "Config-only consumer configure"
+  "${CMAKE_COMMAND}" -E env
+  "SALTS_ROOT=${salts_root}"
+  --unset=SALTS_UTILS_ROOT
+  --unset=RULES_FORGE_ROOT
+  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
+  -B "${config_consumer_build_dir}" -G "${TURBO_FLOW_GENERATOR}"
+  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  -DCMAKE_DISABLE_FIND_PACKAGE_SaltsUtils=TRUE
+  -DCMAKE_DISABLE_FIND_PACKAGE_RulesForge=TRUE
+  -DTURBO_FLOW_TEST_COMPONENT=Config)
+run_checked(
+  "Config-only consumer build"
+  "${CMAKE_COMMAND}" --build "${config_consumer_build_dir}"
+  --config "${TURBO_FLOW_CONFIG}" --parallel)
+run_checked(
+  "Config-only consumer execution"
+  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${config_consumer_build_dir}"
+  -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+
+run_checked(
+  "full consumer configure"
+  "${CMAKE_COMMAND}" -E env
+  "SALTS_ROOT=${salts_root}"
+  "SALTS_UTILS_ROOT=${salts_utils_root}"
+  "RULES_FORGE_ROOT=${rules_forge_root}"
+  "${CMAKE_COMMAND}" -S "${full_consumer_source_dir}"
+  -B "${full_consumer_build_dir}"
+  -G "${TURBO_FLOW_GENERATOR}"
+  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+  "-DRulesForge_DIR=${rules_forge_package_dir}"
+  -DTURBO_FLOW_TEST_ALL_COMPONENTS=TRUE)
+
+run_checked(
+  "full consumer build"
+  "${CMAKE_COMMAND}" --build "${full_consumer_build_dir}"
+  --config "${TURBO_FLOW_CONFIG}" --parallel)
+
+run_checked(
+  "full consumer execution"
+  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${full_consumer_build_dir}"
   -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
 
 run_checked(
   "CXX-only consumer execution"
   "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${cxx_consumer_build_dir}"
   -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+
+set(unscoped_consumer_build_dir "${test_root}/unscoped-build")
+run_checked(
+  "consumer without components configure"
+  "${CMAKE_COMMAND}" -E env
+  "SALTS_ROOT=${salts_root}"
+  "SALTS_UTILS_ROOT=${salts_utils_root}"
+  "RULES_FORGE_ROOT=${rules_forge_root}"
+  "${CMAKE_COMMAND}" -S "${full_consumer_source_dir}"
+  -B "${unscoped_consumer_build_dir}" -G "${TURBO_FLOW_GENERATOR}"
+  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+  "-DRulesForge_DIR=${rules_forge_package_dir}")
+run_checked(
+  "consumer without components build"
+  "${CMAKE_COMMAND}" --build "${unscoped_consumer_build_dir}"
+  --config "${TURBO_FLOW_CONFIG}" --parallel)
+run_checked(
+  "consumer without components execution"
+  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${unscoped_consumer_build_dir}"
+  -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+
+set(graph_consumer_build_dir "${test_root}/graph-build")
+run_checked(
+  "Graph consumer configure"
+  "${CMAKE_COMMAND}" -E env
+  "SALTS_ROOT=${salts_root}"
+  "SALTS_UTILS_ROOT=${salts_utils_root}"
+  "RULES_FORGE_ROOT=${rules_forge_root}"
+  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
+  -B "${graph_consumer_build_dir}" -G "${TURBO_FLOW_GENERATOR}"
+  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+  "-DRulesForge_DIR=${rules_forge_package_dir}"
+  -DTURBO_FLOW_TEST_COMPONENT=Graph)
+run_checked(
+  "Graph consumer build"
+  "${CMAKE_COMMAND}" --build "${graph_consumer_build_dir}"
+  --config "${TURBO_FLOW_CONFIG}" --parallel)
+run_checked(
+  "Graph consumer execution"
+  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${graph_consumer_build_dir}"
+  -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+
+run_expected_failure(
+  "Config-only consumer configure without SALTS_ROOT"
+  "SALTS_ROOT"
+  "${CMAKE_COMMAND}" -E env
+  --unset=SALTS_ROOT
+  --unset=SALTS_UTILS_ROOT
+  --unset=RULES_FORGE_ROOT
+  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
+  -B "${test_root}/config-missing-root-build"
+  -G "${TURBO_FLOW_GENERATOR}"
+  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  -DCMAKE_DISABLE_FIND_PACKAGE_SaltsUtils=TRUE
+  -DCMAKE_DISABLE_FIND_PACKAGE_RulesForge=TRUE
+  -DTURBO_FLOW_TEST_COMPONENT=Config)
+
+run_expected_failure(
+  "Graph consumer configure without RULES_FORGE_ROOT"
+  "RULES_FORGE_ROOT"
+  "${CMAKE_COMMAND}" -E env
+  "SALTS_ROOT=${salts_root}"
+  "SALTS_UTILS_ROOT=${salts_utils_root}"
+  --unset=RULES_FORGE_ROOT
+  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
+  -B "${test_root}/graph-missing-dependency-build"
+  -G "${TURBO_FLOW_GENERATOR}"
+  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+  "-DRulesForge_DIR=${rules_forge_package_dir}"
+  -DCMAKE_DISABLE_FIND_PACKAGE_RulesForge=TRUE
+  -DTURBO_FLOW_TEST_COMPONENT=Graph)
+
+run_expected_failure(
+  "unknown component configure"
+  "MissingComponent"
+  "${CMAKE_COMMAND}" -E env
+  "SALTS_ROOT=${salts_root}"
+  "SALTS_UTILS_ROOT=${salts_utils_root}"
+  "RULES_FORGE_ROOT=${rules_forge_root}"
+  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
+  -B "${test_root}/unknown-component-build"
+  -G "${TURBO_FLOW_GENERATOR}"
+  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+  "-DRulesForge_DIR=${rules_forge_package_dir}"
+  -DTURBO_FLOW_TEST_COMPONENT=MissingComponent)
