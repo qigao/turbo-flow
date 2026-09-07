@@ -21,6 +21,12 @@ int main(void) {
 #endif
   turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
   turbo_flow_run_result_t run_result = TURBO_FLOW_RUN_RESULT_INIT;
+  turbo_flow_managed_boundary_descriptor_t boundary_descriptor =
+      TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+  turbo_flow_managed_boundary_snapshot_t boundary_snapshot =
+      TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+  turbo_flow_managed_boundary_provider_ops_t boundary_ops =
+      TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
   turbo_flow_async_terminal_claim_t terminal_claim = TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
   turbo_flow_async_terminal_adapter_ops_t terminal_ops = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
   turbo_flow_async_emit_claim_t emit_claim = TURBO_FLOW_ASYNC_EMIT_CLAIM_INIT;
@@ -137,6 +143,14 @@ int main(void) {
   turbo_flow_t *flow = turbo_flow_create();
   if (!flow || run_config.version != TURBO_FLOW_RUN_API_VERSION ||
       run_result.version != TURBO_FLOW_RUN_API_VERSION ||
+      boundary_descriptor.version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION ||
+      boundary_snapshot.version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION ||
+      boundary_ops.version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION ||
+      turbo_flow_register_managed_boundary_provider(flow, "invalid", &boundary_ops, NULL) !=
+          SALTS_EINVAL ||
+      turbo_flow_managed_boundary_count(flow) != 0u ||
+      turbo_flow_managed_boundary_descriptor_at(flow, 0u, &boundary_descriptor) != SALTS_ENOENT ||
+      turbo_flow_managed_boundary_snapshot_at(flow, 0u, &boundary_snapshot) != SALTS_ENOENT ||
       terminal_claim.version != TURBO_FLOW_ASYNC_TERMINAL_API_VERSION ||
       terminal_ops.version != TURBO_FLOW_ASYNC_TERMINAL_API_VERSION || !terminal_move ||
       !terminal_complete ||

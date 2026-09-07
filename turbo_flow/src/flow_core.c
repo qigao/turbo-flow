@@ -162,6 +162,9 @@ void flow_resource_registration_destroy(flow_resource_registration_t *resource) 
   if (!resource) return;
   tstr_freep(&resource->owner_name);
   memset(&resource->ops, 0, sizeof(resource->ops));
+  memset(&resource->managed_boundary, 0, sizeof(resource->managed_boundary));
+  resource->managed_boundary_snapshot = NULL;
+  resource->has_managed_boundary = 0;
   resource->ctx = NULL;
 }
 
@@ -795,34 +798,100 @@ int turbo_flow_register_adapter_settlement(turbo_flow_t *flow, const char *name,
   return SALTS_OK;
 }
 
-int turbo_flow_register_resource_provider(turbo_flow_t *flow, const char *owner_name,
-                                          const turbo_flow_resource_provider_ops_t *ops,
-                                          void *ctx) {
+static int flow_managed_boundary_descriptor_valid(
+    const turbo_flow_managed_boundary_descriptor_t *descriptor,
+    const turbo_flow_resource_metadata_t *metadata) {
+  const uint32_t valid_roles = TURBO_FLOW_MANAGED_BOUNDARY_SOURCE |
+                               TURBO_FLOW_MANAGED_BOUNDARY_SINK;
+  const uint32_t valid_capabilities = TURBO_FLOW_MANAGED_BOUNDARY_DEMAND_AWARE |
+                                      TURBO_FLOW_MANAGED_BOUNDARY_REPLAYABLE |
+                                      TURBO_FLOW_MANAGED_BOUNDARY_DURABLE_SETTLEMENT |
+                                      TURBO_FLOW_MANAGED_BOUNDARY_MANUAL_REVIEW;
+  const uint32_t valid_commands = TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_QUIESCE |
+                                  TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_RESUME |
+                                  TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_REPLACE_ENDPOINT;
+  if (!descriptor || !metadata || descriptor->size < sizeof(*descriptor) ||
+      descriptor->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION ||
+      descriptor->uid[0] == '\0' ||
+      memchr(descriptor->uid, '\0', sizeof(descriptor->uid)) == NULL ||
+      descriptor->owner_name[0] == '\0' ||
+      memchr(descriptor->owner_name, '\0', sizeof(descriptor->owner_name)) == NULL ||
+      descriptor->domain != metadata->domain || descriptor->kind != metadata->kind ||
+      strcmp(descriptor->uid, metadata->uid) != 0 ||
+      strcmp(descriptor->owner_name, metadata->owner_name) != 0 || descriptor->role_flags == 0u ||
+      (descriptor->role_flags & ~valid_roles) != 0u ||
+      (descriptor->capability_flags & ~valid_capabilities) != 0u ||
+      (descriptor->command_flags & ~valid_commands) != 0u) {
+    return 0;
+  }
+  if ((descriptor->capability_flags &
+       (TURBO_FLOW_MANAGED_BOUNDARY_DEMAND_AWARE | TURBO_FLOW_MANAGED_BOUNDARY_REPLAYABLE)) != 0u &&
+      (descriptor->role_flags & TURBO_FLOW_MANAGED_BOUNDARY_SOURCE) == 0u) {
+    return 0;
+  }
+  if ((descriptor->capability_flags & TURBO_FLOW_MANAGED_BOUNDARY_DURABLE_SETTLEMENT) != 0u &&
+      (descriptor->role_flags & TURBO_FLOW_MANAGED_BOUNDARY_SINK) == 0u) {
+    return 0;
+  }
+  if ((descriptor->role_flags & TURBO_FLOW_MANAGED_BOUNDARY_SINK) != 0u &&
+      (turbo_flow_content_descriptor_check(&descriptor->input) != SALTS_OK ||
+       (descriptor->input.flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) == 0u)) {
+    return 0;
+  }
+  if ((descriptor->role_flags & TURBO_FLOW_MANAGED_BOUNDARY_SOURCE) != 0u &&
+      (turbo_flow_content_descriptor_check(&descriptor->output) != SALTS_OK ||
+       (descriptor->output.flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) == 0u)) {
+    return 0;
+  }
+  return 1;
+}
+
+static int flow_register_resource_provider_impl(
+    turbo_flow_t *flow, const char *owner_name, const turbo_flow_resource_provider_ops_t *ops,
+    turbo_flow_managed_boundary_descriptor_fn boundary_descriptor,
+    turbo_flow_managed_boundary_snapshot_fn boundary_snapshot, void *ctx) {
   flow_resource_registration_t resource;
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
+  int rc;
   if (!flow || !owner_name || owner_name[0] == '\0' || !ops || ops->size < sizeof(*ops) ||
-      !ops->metadata) {
+      !ops->metadata || ((boundary_descriptor == NULL) != (boundary_snapshot == NULL))) {
     return SALTS_EINVAL;
   }
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "cannot register resource provider after compile");
   }
-  if (ops->metadata(ctx, &metadata) != SALTS_OK || !flow_resource_metadata_valid(&metadata) ||
-      strcmp(metadata.owner_name, owner_name) != 0) {
+  rc = ops->metadata(ctx, &metadata);
+  if (rc != SALTS_OK) return rc;
+  if (!flow_resource_metadata_valid(&metadata) || strcmp(metadata.owner_name, owner_name) != 0) {
     return SALTS_EPROTO;
   }
   for (size_t i = 0; i < vec_size(&flow->resources); ++i) {
     const flow_resource_registration_t *existing =
         (const flow_resource_registration_t *)vec_at_const(&flow->resources, i);
     turbo_flow_resource_metadata_t current = TURBO_FLOW_RESOURCE_METADATA_INIT;
-    if (!existing || existing->ops.metadata(existing->ctx, &current) != SALTS_OK ||
-        !flow_resource_metadata_valid(&current)) {
+    if (!existing) return SALTS_EPROTO;
+    rc = existing->ops.metadata(existing->ctx, &current);
+    if (rc != SALTS_OK) return boundary_descriptor ? rc : SALTS_EPROTO;
+    if (!flow_resource_metadata_valid(&current)) {
       return SALTS_EPROTO;
     }
     if (strcmp(current.uid, metadata.uid) == 0) return SALTS_EALREADY;
   }
   memset(&resource, 0, sizeof(resource));
+  if (boundary_descriptor) {
+    resource.managed_boundary = (turbo_flow_managed_boundary_descriptor_t)
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    rc = boundary_descriptor(ctx, &resource.managed_boundary);
+    if (rc != SALTS_OK) return rc;
+    if (!flow_managed_boundary_descriptor_valid(&resource.managed_boundary, &metadata) ||
+        (resource.managed_boundary.command_flags != 0u && !ops->command)) {
+      return SALTS_EPROTO;
+    }
+    resource.managed_boundary.size = sizeof(resource.managed_boundary);
+    resource.managed_boundary_snapshot = boundary_snapshot;
+    resource.has_managed_boundary = 1;
+  }
   resource.owner_name = tstr_dup(owner_name);
   if (!resource.owner_name) return SALTS_ENOMEM;
   resource.ops = *ops;
@@ -833,6 +902,24 @@ int turbo_flow_register_resource_provider(turbo_flow_t *flow, const char *owner_
     return SALTS_ENOMEM;
   }
   return SALTS_OK;
+}
+
+int turbo_flow_register_resource_provider(turbo_flow_t *flow, const char *owner_name,
+                                          const turbo_flow_resource_provider_ops_t *ops,
+                                          void *ctx) {
+  return flow_register_resource_provider_impl(flow, owner_name, ops, NULL, NULL, ctx);
+}
+
+int turbo_flow_register_managed_boundary_provider(
+    turbo_flow_t *flow, const char *owner_name,
+    const turbo_flow_managed_boundary_provider_ops_t *ops, void *ctx) {
+  if (!ops || ops->size < sizeof(*ops) ||
+      ops->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION || !ops->descriptor ||
+      !ops->snapshot) {
+    return SALTS_EINVAL;
+  }
+  return flow_register_resource_provider_impl(flow, owner_name, &ops->resource, ops->descriptor,
+                                              ops->snapshot, ctx);
 }
 
 static int flow_adapter_schema_copy(flow_adapter_registration_t *adapter,
@@ -1598,6 +1685,91 @@ int turbo_flow_resource_snapshot_at(const turbo_flow_t *flow, size_t index,
                         : pool.queue_capacity + pool.parallelism;
   }
   out->saturated = turbo_flow_pool_saturated(&pool);
+  return SALTS_OK;
+}
+
+size_t turbo_flow_managed_boundary_count(const turbo_flow_t *flow) {
+  size_t count = 0u;
+  if (!flow) return 0u;
+  for (size_t i = 0; i < vec_size(&flow->resources); ++i) {
+    const flow_resource_registration_t *resource =
+        (const flow_resource_registration_t *)vec_at_const(&flow->resources, i);
+    if (resource && resource->has_managed_boundary) ++count;
+  }
+  return count;
+}
+
+static const flow_resource_registration_t *flow_managed_boundary_at(const turbo_flow_t *flow,
+                                                                     size_t index) {
+  if (!flow) return NULL;
+  for (size_t i = 0; i < vec_size(&flow->resources); ++i) {
+    const flow_resource_registration_t *resource =
+        (const flow_resource_registration_t *)vec_at_const(&flow->resources, i);
+    if (!resource || !resource->has_managed_boundary) continue;
+    if (index == 0u) return resource;
+    --index;
+  }
+  return NULL;
+}
+
+static int flow_managed_boundary_metadata_matches(
+    const flow_resource_registration_t *resource,
+    const turbo_flow_resource_metadata_t *metadata) {
+  return resource && metadata && flow_resource_metadata_valid(metadata) &&
+         metadata->domain == resource->managed_boundary.domain &&
+         metadata->kind == resource->managed_boundary.kind &&
+         strcmp(metadata->uid, resource->managed_boundary.uid) == 0 &&
+         strcmp(metadata->owner_name, resource->managed_boundary.owner_name) == 0;
+}
+
+int turbo_flow_managed_boundary_descriptor_at(
+    const turbo_flow_t *flow, size_t index, turbo_flow_managed_boundary_descriptor_t *out) {
+  const flow_resource_registration_t *resource;
+  turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
+  int rc;
+  if (!flow || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  resource = flow_managed_boundary_at(flow, index);
+  if (!resource) return SALTS_ENOENT;
+  rc = resource->ops.metadata(resource->ctx, &metadata);
+  if (rc != SALTS_OK) return rc;
+  if (!flow_managed_boundary_metadata_matches(resource, &metadata)) return SALTS_EPROTO;
+  *out = resource->managed_boundary;
+  return SALTS_OK;
+}
+
+int turbo_flow_managed_boundary_snapshot_at(const turbo_flow_t *flow, size_t index,
+                                            turbo_flow_managed_boundary_snapshot_t *out) {
+  const flow_resource_registration_t *resource;
+  turbo_flow_resource_metadata_t metadata_before = TURBO_FLOW_RESOURCE_METADATA_INIT;
+  turbo_flow_resource_metadata_t metadata_after = TURBO_FLOW_RESOURCE_METADATA_INIT;
+  int rc;
+  if (!flow || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  resource = flow_managed_boundary_at(flow, index);
+  if (!resource) return SALTS_ENOENT;
+  rc = resource->ops.metadata(resource->ctx, &metadata_before);
+  if (rc != SALTS_OK) return rc;
+  if (!flow_managed_boundary_metadata_matches(resource, &metadata_before)) return SALTS_EPROTO;
+  *out = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+  rc = resource->managed_boundary_snapshot(resource->ctx, out);
+  if (rc != SALTS_OK) return rc;
+  rc = resource->ops.metadata(resource->ctx, &metadata_after);
+  if (rc != SALTS_OK) return rc;
+  if (!flow_managed_boundary_metadata_matches(resource, &metadata_after)) return SALTS_EPROTO;
+  if (metadata_before.generation != metadata_after.generation ||
+      metadata_before.observed_generation != metadata_after.observed_generation) {
+    return SALTS_EBUSY;
+  }
+  if (out->size < sizeof(*out) || out->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION ||
+      out->uid[0] == '\0' || memchr(out->uid, '\0', sizeof(out->uid)) == NULL ||
+      strcmp(out->uid, resource->managed_boundary.uid) != 0 ||
+      out->generation != metadata_after.generation ||
+      out->observed_generation != metadata_after.observed_generation ||
+      out->observed_generation > out->generation ||
+      out->state < TURBO_FLOW_MANAGED_BOUNDARY_REGISTERED ||
+      out->state > TURBO_FLOW_MANAGED_BOUNDARY_FAILED || out->queue_depth > out->queue_capacity ||
+      out->backpressured < 0 || out->backpressured > 1 || out->completed > out->accepted) {
+    return SALTS_EPROTO;
+  }
   return SALTS_OK;
 }
 

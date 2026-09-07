@@ -91,8 +91,27 @@ static int flow_resource_apply_registered(turbo_flow_t *flow, size_t metadata_in
                                           const turbo_flow_resource_command_t *command) {
   flow_resource_registration_t *resource =
       (flow_resource_registration_t *)vec_at(&flow->resources, metadata_index);
+  uint32_t boundary_command = 0u;
   if (!resource) return SALTS_ENOENT;
   if (!resource->ops.command) return SALTS_ENOTSUP;
+  if (resource->has_managed_boundary) {
+    switch (command->kind) {
+      case TURBO_FLOW_RESOURCE_COMMAND_QUIESCE:
+        boundary_command = TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_QUIESCE;
+        break;
+      case TURBO_FLOW_RESOURCE_COMMAND_RESUME:
+        boundary_command = TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_RESUME;
+        break;
+      case TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT:
+        boundary_command = TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_REPLACE_ENDPOINT;
+        break;
+      case TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL:
+        break;
+    }
+    if ((resource->managed_boundary.command_flags & boundary_command) == 0u) {
+      return SALTS_ENOTSUP;
+    }
+  }
   return resource->ops.command(resource->ctx, flow, command);
 }
 
