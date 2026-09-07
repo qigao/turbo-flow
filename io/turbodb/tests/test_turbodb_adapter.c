@@ -133,17 +133,29 @@ int turbodb_adapter_header_cpp_probe(void);
 typedef struct wait_source_s {
   size_t downstream_demand;
   cflow_waker terminal_waker;
-  bool cancelled;
-  bool destroyed;
+  cflow_waker waker;
+  size_t resumes;
+  size_t arms;
+  size_t wait_cancels;
+  size_t source_cancels;
+  size_t destroys;
+  int value;
+  bool ready;
+  bool invalid_waitable;
 } wait_source_t;
 
 static bool wait_source_waitable_arm(void *state, cflow_waker waker) {
-  (void)state;
-  (void)waker;
+  wait_source_t *source = (wait_source_t *)state;
+  source->waker = waker;
+  ++source->arms;
   return true;
 }
 
-static void wait_source_waitable_cancel(void *state) { (void)state; }
+static void wait_source_waitable_cancel(void *state) {
+  wait_source_t *source = (wait_source_t *)state;
+  source->waker = (cflow_waker){0};
+  ++source->wait_cancels;
+}
 
 CMETA_IMPLEMENTS(cflow_waitable, test_waitable, 0, .arm = wait_source_waitable_arm,
                  .cancel = wait_source_waitable_cancel);
@@ -165,14 +177,25 @@ static const cmeta_type_desc *missing_lifecycle_source_type(void *state) {
 
 static cflow_step wait_source_resume(void *state, cflow_publish_context *context, void *out_value) {
   wait_source_t *source = (wait_source_t *)state;
-  (void)out_value;
+  ++source->resumes;
   source->downstream_demand = context ? context->downstream_demand : 0u;
+  if (source->invalid_waitable) return (cflow_step){CFLOW_STEP_WAIT, {0}, NULL};
+  if (source->ready) {
+    *(int *)out_value = source->value;
+    return (cflow_step){CFLOW_STEP_VALUE_AND_DONE, {0}, NULL};
+  }
   return (cflow_step){CFLOW_STEP_WAIT, test_waitable_as_cflow_waitable(source), NULL};
 }
 
-static void wait_source_cancel(void *state) { ((wait_source_t *)state)->cancelled = true; }
+static void wait_source_cancel(void *state) {
+  wait_source_t *source = (wait_source_t *)state;
+  ++source->source_cancels;
+}
 
-static void wait_source_destroy(void *state) { ((wait_source_t *)state)->destroyed = true; }
+static void wait_source_destroy(void *state) {
+  wait_source_t *source = (wait_source_t *)state;
+  ++source->destroys;
+}
 
 static void wait_source_bind_terminal_waker(void *state, cflow_waker waker) {
   ((wait_source_t *)state)->terminal_waker = waker;
@@ -208,6 +231,12 @@ static turbo_flow_turbodb_source_config_t int_source_config(uint64_t first_id) {
 }
 
 static void ignore_wake(void *user) { (void)user; }
+
+static void wait_source_signal(wait_source_t *source) {
+  cflow_waker waker = source->waker;
+  source->waker = (cflow_waker){0};
+  waker.wake(waker.user);
+}
 
 static orm_connection_t *open_test_database_with_limits(orm_error_t *error, uint64_t max_rows,
                                                         uint64_t max_bytes) {
@@ -247,6 +276,12 @@ typedef struct db_graph_probe_s {
   int values[2];
 } db_graph_probe_t;
 
+typedef struct int_graph_probe_s {
+  size_t count;
+  uint64_t id;
+  int value;
+} int_graph_probe_t;
+
 static int db_graph_probe_stage(turbo_flow_msg_t *message, void *ctx) {
   db_graph_probe_t *probe = (db_graph_probe_t *)ctx;
   const test_db_row *row = (const test_db_row *)turbo_flow_msg_projection(message, NULL);
@@ -257,7 +292,17 @@ static int db_graph_probe_stage(turbo_flow_msg_t *message, void *ctx) {
   return SALTS_OK;
 }
 
-static turbo_flow_t *open_db_graph(db_graph_probe_t *probe) {
+static int int_graph_probe_stage(turbo_flow_msg_t *message, void *ctx) {
+  int_graph_probe_t *probe = (int_graph_probe_t *)ctx;
+  const int *value = (const int *)turbo_flow_msg_projection(message, NULL);
+  if (!probe || !value || probe->count != 0u) return SALTS_EPROTO;
+  probe->id = message->id;
+  probe->value = *value;
+  ++probe->count;
+  return SALTS_OK;
+}
+
+static turbo_flow_t *open_graph(turbo_flow_stage_fn stage, void *stage_context) {
   static const char source[] = "source input\n"
                                "stage sink\n"
                                "stage main {\n"
@@ -265,7 +310,7 @@ static turbo_flow_t *open_db_graph(db_graph_probe_t *probe) {
                                "}\n";
   turbo_flow_t *flow = turbo_flow_create();
   if (!flow || turbo_flow_parse_string(flow, source, strlen(source)) != SALTS_OK ||
-      turbo_flow_register_stage_ex(flow, "sink", db_graph_probe_stage, probe, NULL) != SALTS_OK ||
+      turbo_flow_register_stage_ex(flow, "sink", stage, stage_context, NULL) != SALTS_OK ||
       turbo_flow_compile(flow) != SALTS_OK || turbo_flow_start(flow) != SALTS_OK) {
     turbo_flow_destroy(flow);
     return NULL;
@@ -351,9 +396,137 @@ spec("TurboDb ORM Publisher adapter") {
     check_true(source.terminal_waker.wake == ignore_wake);
     check_equal(source.terminal_waker.user, &source);
     cflow_publisher_cancel(&messages);
-    check_true(source.cancelled);
+    check_equal(source.source_cancels, 1u);
     cflow_publisher_destroy(&messages);
-    check_true(source.destroyed);
+    check_equal(source.destroys, 1u);
+  }
+
+  it("wakes an adapted WAIT run once and preserves demand through the graph") {
+    turbo_flow_turbodb_source_config_t config = int_source_config(301u);
+    wait_source_t source = {.value = 47};
+    int_graph_probe_t probe = {0};
+    cflow_publisher typed = wait_source_as_cflow_publisher(&source);
+    cflow_publisher messages = {0};
+    cflow_scheduler scheduler = {0};
+    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
+    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+    turbo_flow_run_t *run = NULL;
+    turbo_flow_t *flow;
+
+    check_equal(turbo_flow_turbodb_publisher_wrap(&typed, &config, &messages), SALTS_OK);
+    flow = open_graph(int_graph_probe_stage, &probe);
+    check_not_null(flow);
+    check_true(cflow_scheduler_inline_init(&scheduler));
+    run_config.scheduler = &scheduler;
+    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
+    check_equal(source.resumes, 0u);
+    check_equal(source.arms, 0u);
+    check_equal(probe.count, 0u);
+
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_OK);
+    check_equal(source.resumes, 1u);
+    check_equal(source.arms, 1u);
+    check_equal(source.downstream_demand, 1u);
+    check_not_null(source.waker.wake);
+    check_equal(turbo_flow_run_wait(run, 0u, &result), SALTS_ETIMEDOUT);
+    check_equal(result.outstanding_demand, 1u);
+    check_equal(probe.count, 0u);
+
+    source.ready = true;
+    wait_source_signal(&source);
+    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_OK);
+    check_equal(result.state, TURBO_FLOW_RUN_COMPLETED);
+    check_equal(result.values, 1u);
+    check_equal(source.resumes, 2u);
+    check_equal(source.arms, 1u);
+    check_equal(source.wait_cancels, 0u);
+    check_null(source.waker.wake);
+    check_equal(probe.count, 1u);
+    check_equal(probe.id, 301u);
+    check_equal(probe.value, 47);
+
+    turbo_flow_run_close(run);
+    check_equal(source.destroys, 1u);
+    cflow_scheduler_destroy(&scheduler);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("cancels an adapted active WAIT and inner Publisher exactly once") {
+    turbo_flow_turbodb_source_config_t config = int_source_config(1u);
+    wait_source_t source = {0};
+    int_graph_probe_t probe = {0};
+    cflow_publisher typed = wait_source_as_cflow_publisher(&source);
+    cflow_publisher messages = {0};
+    cflow_scheduler scheduler = {0};
+    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
+    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+    turbo_flow_run_t *run = NULL;
+    turbo_flow_t *flow;
+
+    check_equal(turbo_flow_turbodb_publisher_wrap(&typed, &config, &messages), SALTS_OK);
+    flow = open_graph(int_graph_probe_stage, &probe);
+    check_not_null(flow);
+    check_true(cflow_scheduler_inline_init(&scheduler));
+    run_config.scheduler = &scheduler;
+    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_OK);
+    check_equal(source.resumes, 1u);
+    check_equal(source.arms, 1u);
+    check_not_null(source.waker.wake);
+
+    check_equal(turbo_flow_run_cancel(run), SALTS_OK);
+    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_ECANCELED);
+    check_equal(result.state, TURBO_FLOW_RUN_CANCELED);
+    check_equal(result.values, 0u);
+    check_equal(source.wait_cancels, 1u);
+    check_equal(source.source_cancels, 1u);
+    check_null(source.waker.wake);
+    check_equal(probe.count, 0u);
+
+    turbo_flow_run_close(run);
+    check_equal(source.wait_cancels, 1u);
+    check_equal(source.source_cancels, 1u);
+    check_equal(source.destroys, 1u);
+    cflow_scheduler_destroy(&scheduler);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("fails an adapted run on invalid WAIT without polling or fabricating a value") {
+    turbo_flow_turbodb_source_config_t config = int_source_config(1u);
+    wait_source_t source = {.invalid_waitable = true};
+    int_graph_probe_t probe = {0};
+    cflow_publisher typed = wait_source_as_cflow_publisher(&source);
+    cflow_publisher messages = {0};
+    cflow_scheduler scheduler = {0};
+    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
+    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+    turbo_flow_run_t *run = NULL;
+    turbo_flow_t *flow;
+
+    check_equal(turbo_flow_turbodb_publisher_wrap(&typed, &config, &messages), SALTS_OK);
+    flow = open_graph(int_graph_probe_stage, &probe);
+    check_not_null(flow);
+    check_true(cflow_scheduler_inline_init(&scheduler));
+    run_config.scheduler = &scheduler;
+    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_EIO);
+    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_EIO);
+    check_equal(result.state, TURBO_FLOW_RUN_FAILED);
+    check_equal(result.status, SALTS_EIO);
+    check_contains(result.error.message, "WAIT step has no armable waitable");
+    check_equal(result.values, 0u);
+    check_equal(source.resumes, 1u);
+    check_equal(source.arms, 0u);
+    check_equal(source.wait_cancels, 0u);
+    check_equal(probe.count, 0u);
+
+    turbo_flow_run_close(run);
+    check_equal(source.destroys, 1u);
+    cflow_scheduler_destroy(&scheduler);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
   }
 
   it("uses managed CMeta copy and destroy traits for projections") {
@@ -443,7 +616,7 @@ spec("TurboDb ORM Publisher adapter") {
     check_true(cflow_publisher_valid(&typed));
     check_false(cflow_publisher_valid(&messages));
     cflow_publisher_destroy(&typed);
-    check_true(source.destroyed);
+    check_equal(source.destroys, 1u);
   }
 
   it("opens native ORM row and command Publishers without materialization") {
@@ -478,7 +651,7 @@ spec("TurboDb ORM Publisher adapter") {
     config.first_message_id = 100u;
     check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
                 SALTS_OK);
-    flow = open_db_graph(&graph_probe);
+    flow = open_graph(db_graph_probe_stage, &graph_probe);
     check_not_null(flow);
     check_true(cflow_scheduler_inline_init(&scheduler));
     run_config.scheduler = &scheduler;
