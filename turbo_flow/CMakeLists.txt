@@ -102,8 +102,8 @@ target_include_directories(
           ${PROJECT_SOURCE_DIR}/vendor/mir)
 
 target_link_libraries(${TARGET_NAME} PUBLIC 
-  TurboFlow::Config Salts::Core Salts::CSTL RulesForge::RulesForge
-  PRIVATE Salts::CFlow Salts::DataBind Salts::JsonParser mir_static)
+  TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow RulesForge::RulesForge
+  PRIVATE Salts::DataBind Salts::JsonParser mir_static)
 
 add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
@@ -159,8 +159,8 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/parser
           ${CMAKE_CURRENT_BINARY_DIR}
           ${PROJECT_SOURCE_DIR}/vendor/mir)
-target_link_libraries(turbo_flow PUBLIC Salts::Core Salts::CSTL RulesForge::RulesForge
-                               PRIVATE Salts::CFlow Salts::CYamlJsonAdapter Salts::DataBind
+target_link_libraries(turbo_flow PUBLIC Salts::Core Salts::CSTL Salts::CFlow RulesForge::RulesForge
+                               PRIVATE Salts::CYamlJsonAdapter Salts::DataBind
                                        Salts::JsonParser mir_static)
 
 install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)

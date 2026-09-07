@@ -4,12 +4,35 @@
 
 static const cmeta_type_identity FLOW_MESSAGE_IDENTITY =
     CMETA_TYPE_ID_ATOM_INIT("turbo.flow.Message");
+static bool flow_message_copy(void *destination, const void *source) {
+  return turbo_flow_msg_clone((turbo_flow_msg_t *)destination,
+                              (const turbo_flow_msg_t *)source) == SALTS_OK;
+}
+
+static void flow_message_move(void *destination, void *source) {
+  (void)turbo_flow_msg_move((turbo_flow_msg_t *)destination, (turbo_flow_msg_t *)source);
+}
+
+static void flow_message_destroy(void *value) {
+  turbo_flow_msg_cleanup((turbo_flow_msg_t *)value);
+}
+
+static const cmeta_type_traits FLOW_MESSAGE_TRAITS = {
+    .flags = CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY,
+    .copy_construct = flow_message_copy,
+    .move_construct = flow_message_move,
+    .destroy = flow_message_destroy};
 static const cmeta_type_desc FLOW_MESSAGE_TYPE = {
     .name = "turbo_flow_msg_t",
     .size = sizeof(turbo_flow_msg_t),
     .align = _Alignof(turbo_flow_msg_t),
     .kind = CMETA_T_OBJECT,
+    .traits = &FLOW_MESSAGE_TRAITS,
     .identity = &FLOW_MESSAGE_IDENTITY};
+
+const cmeta_type_desc *flow_message_type_descriptor(void) { return &FLOW_MESSAGE_TYPE; }
+
+const cmeta_type_desc *turbo_flow_message_type(void) { return flow_message_type_descriptor(); }
 
 static const cmeta_type_identity FLOW_OPERATION_IDENTITY =
     CMETA_TYPE_ID_ATOM_INIT("turbo.flow.Operation");

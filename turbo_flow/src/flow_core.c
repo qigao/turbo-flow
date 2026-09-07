@@ -401,7 +401,10 @@ turbo_flow_t *turbo_flow_create(void) {
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&flow->event_observers, sizeof(flow_event_observer_registration_t),
-                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->active_runs, sizeof(turbo_flow_run_t *),
+                                          _Alignof(turbo_flow_run_t *),
+                                          TURBO_FLOW_ASYNC_INGRESS_MAX_CAPACITY)) != SALTS_OK) {
     turbo_flow_destroy(flow);
     return NULL;
   }
@@ -416,6 +419,7 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   if (!flow) return;
   if (flow->state == TURBO_FLOW_STATE_STARTED) (void)turbo_flow_stop(flow);
   flow_stop_async_ingress(flow);
+  flow_reactive_runtime_stop(flow);
   flow_clear_plan(flow);
   flow_clear_registry(flow);
   flow_observer_clear(flow);
@@ -443,6 +447,7 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   vec_destroy(&flow->pool_records);
   vec_destroy(&flow->resource_command_history);
   vec_destroy(&flow->event_observers);
+  vec_destroy(&flow->active_runs);
   if (flow->observer_ops.flow_destroyed) {
     flow->observer_ops.flow_destroyed(flow->observer_ctx);
   }

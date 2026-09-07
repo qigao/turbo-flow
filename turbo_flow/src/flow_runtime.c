@@ -133,6 +133,7 @@ void flow_wait_for_publishes(turbo_flow_t *flow) {
 }
 
 int turbo_flow_start(turbo_flow_t *flow) {
+  int reactive_rc;
   if (!flow) return SALTS_EINVAL;
   if (flow->state != TURBO_FLOW_STATE_COMPILED && flow->state != TURBO_FLOW_STATE_STOPPED) {
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
@@ -166,7 +167,17 @@ int turbo_flow_start(turbo_flow_t *flow) {
     turbo_flow_stl_error(vec_clear(&flow->pool_records));
     return flow->last_error.code;
   }
+  reactive_rc = flow_reactive_runtime_start(flow);
+  if (reactive_rc != SALTS_OK) {
+    flow_stop_executor_adapters(flow);
+    flow_stop_reorder_states(flow);
+    flow_stop_data_planes(flow);
+    turbo_flow_stl_error(vec_clear(&flow->pool_records));
+    return flow_set_error_keep_state(flow, reactive_rc, 0, 0,
+                                     "Reactive Scheduler initialization failed");
+  }
   if (flow_start_adapters(flow) != SALTS_OK) {
+    flow_reactive_runtime_stop(flow);
     flow_stop_executor_adapters(flow);
     flow_stop_reorder_states(flow);
     flow_stop_data_planes(flow);
@@ -472,8 +483,10 @@ int turbo_flow_stop(turbo_flow_t *flow) {
   salts_mutex_unlock(&flow->runtime_mutex);
 
   flow_stop_adapters(flow);
-  flow_wait_for_publishes(flow);
   flow_stop_async_ingress(flow);
+  flow_reactive_runtime_cancel(flow);
+  flow_wait_for_publishes(flow);
+  flow_reactive_runtime_stop(flow);
   flow_stop_data_planes(flow);
   flow_stop_reorder_states(flow);
   flow_stop_executor_adapters(flow);
@@ -787,10 +800,9 @@ static int flow_publish_source_index(turbo_flow_t *flow, const char *source_name
   return SALTS_OK;
 }
 
-static int flow_publish_message_entered(turbo_flow_t *flow, const char *source_name,
-                                        int resolved_source_index,
-                                        const turbo_flow_msg_t *msg,
-                                        turbo_flow_publish_result_t *result) {
+int flow_publish_message_entered(turbo_flow_t *flow, const char *source_name,
+                                 int resolved_source_index, const turbo_flow_msg_t *msg,
+                                 turbo_flow_publish_result_t *result) {
   turbo_flow_msg_t local;
   uint32_t source_index = 0u;
   uint64_t observe_start = 0u;
@@ -833,26 +845,36 @@ cleanup:
 
 int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name, const turbo_flow_msg_t *msg,
                           turbo_flow_publish_result_t *result) {
-  int rc = SALTS_OK;
-  int publish_entered = 0;
+  turbo_flow_run_config_t config = TURBO_FLOW_RUN_CONFIG_INIT;
+  turbo_flow_run_result_t run_result = TURBO_FLOW_RUN_RESULT_INIT;
+  turbo_flow_run_t *run = NULL;
+  cflow_scheduler scheduler = {0};
+  cflow_publisher publisher = {0};
+  int rc;
 
   if (!flow || !source_name || !msg || !result || result->size < sizeof(*result)) {
     return SALTS_EINVAL;
   }
   *result = (turbo_flow_publish_result_t)TURBO_FLOW_PUBLISH_RESULT_INIT;
   flow_publish_error_context_begin(flow);
-  rc = flow_publish_enter(flow);
-  if (rc != SALTS_OK) {
-    rc = flow_set_error_keep_state(flow, rc, 0, 0,
-                                   rc == SALTS_ESHUTDOWN ? "flow is not accepting publications"
-                                                         : "flow must be started before publish");
-    goto cleanup;
+  if (flow_msg_payload_validate(msg) != SALTS_OK) {
+    rc = flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
+                                   "publish payload must be within its backing buffer or owned payload");
+  } else if (!cflow_scheduler_inline_init(&scheduler)) {
+    rc = flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0,
+                                   "inline Reactive Scheduler initialization failed");
+  } else if (!cflow_publisher_from_array(&publisher, turbo_flow_message_type(), msg, 1u)) {
+    rc = flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0,
+                                   "single-message Reactive Publisher initialization failed");
+  } else {
+    config.scheduler = &scheduler;
+    rc = flow_run_open_internal(flow, source_name, &publisher, &config, 1, &run);
+    if (rc == SALTS_OK) rc = turbo_flow_run_request(run, 1u);
+    if (rc == SALTS_OK) rc = turbo_flow_run_wait(run, UINT64_MAX, &run_result);
   }
-  publish_entered = 1;
-  rc = flow_publish_message_entered(flow, source_name, -1, msg, result);
-
-cleanup:
-  if (publish_entered) flow_publish_leave(flow);
+  turbo_flow_run_close(run);
+  if (cflow_publisher_valid(&publisher)) cflow_publisher_destroy(&publisher);
+  if (cflow_scheduler_valid(&scheduler)) cflow_scheduler_destroy(&scheduler);
   flow_publish_error_context_end(flow);
   result->status = rc;
   return rc;

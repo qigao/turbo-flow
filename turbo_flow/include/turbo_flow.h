@@ -11,6 +11,8 @@
 #include "salts_str.h"
 #include "salts_vstr.h"
 
+#include <cflow/reactive.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -29,6 +31,7 @@ extern "C" {
 #endif
 
 typedef struct turbo_flow_s turbo_flow_t;
+typedef struct turbo_flow_run_s turbo_flow_run_t;
 typedef struct turbo_flow_stage_plan_s turbo_flow_stage_plan_t;
 typedef struct turbo_flow_schema_registry_s turbo_flow_schema_registry_t;
 typedef struct turbo_flow_emitter_s turbo_flow_emitter_t;
@@ -1762,6 +1765,82 @@ typedef struct turbo_flow_publish_result_s {
 } turbo_flow_publish_result_t;
 
 #define TURBO_FLOW_PUBLISH_RESULT_INIT {sizeof(turbo_flow_publish_result_t), SALTS_OK}
+
+#define TURBO_FLOW_RUN_API_VERSION 1u
+
+typedef enum turbo_flow_run_state_e {
+  TURBO_FLOW_RUN_OPEN = 0,
+  TURBO_FLOW_RUN_ACTIVE,
+  TURBO_FLOW_RUN_COMPLETED,
+  TURBO_FLOW_RUN_CANCELED,
+  TURBO_FLOW_RUN_FAILED
+} turbo_flow_run_state_t;
+
+/** Versioned options copied by `turbo_flow_run_open()`. */
+typedef struct turbo_flow_run_config_s {
+  size_t size;
+  uint32_t version;
+  /** Borrowed through terminal settlement; NULL selects the Flow-owned bounded Scheduler. */
+  cflow_scheduler *scheduler;
+  /** Relative monotonic deadline from open; zero disables the deadline. */
+  uint64_t deadline_ms;
+} turbo_flow_run_config_t;
+
+#define TURBO_FLOW_RUN_CONFIG_V1_SIZE sizeof(turbo_flow_run_config_t)
+#define TURBO_FLOW_RUN_CONFIG_INIT                                                                \
+  {TURBO_FLOW_RUN_CONFIG_V1_SIZE, TURBO_FLOW_RUN_API_VERSION, NULL, 0u}
+
+/** Caller-owned snapshot; error text is copied and remains valid with the snapshot. */
+typedef struct turbo_flow_run_result_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_run_state_t state;
+  int status;
+  size_t values;
+  size_t outstanding_demand;
+  turbo_flow_error_t error;
+} turbo_flow_run_result_t;
+
+#define TURBO_FLOW_RUN_RESULT_V1_SIZE sizeof(turbo_flow_run_result_t)
+#define TURBO_FLOW_RUN_RESULT_INIT                                                               \
+  {TURBO_FLOW_RUN_RESULT_V1_SIZE, TURBO_FLOW_RUN_API_VERSION, TURBO_FLOW_RUN_OPEN, SALTS_OK}
+
+/** Managed CMeta descriptor required by Publishers passed to `turbo_flow_run_open()`. */
+TURBO_FLOW_C_API const cmeta_type_desc *turbo_flow_message_type(void);
+
+/**
+ * Open one independently demand-driven Reactive run.
+ *
+ * On success CFlow takes `publisher`, clears it, and `*run_out` owns the returned handle.
+ * Any failure before subscribe leaves Publisher ownership with the caller. Active runs are
+ * bounded by the configured asynchronous-ingress capacity. A full bound returns SALTS_ENOSPC;
+ * closed Flow admission or Scheduler admission returns SALTS_ESHUTDOWN. A nonzero deadline
+ * requires delayed Scheduler capability and otherwise returns SALTS_ENOTSUP.
+ */
+TURBO_FLOW_C_API int turbo_flow_run_open(turbo_flow_t *flow, const char *source_name,
+                                         cflow_publisher *publisher,
+                                         const turbo_flow_run_config_t *config,
+                                         turbo_flow_run_t **run_out);
+
+/** Add downstream-value demand without blocking. A full Scheduler retains the demand. */
+TURBO_FLOW_C_API int turbo_flow_run_request(turbo_flow_run_t *run, size_t demand);
+
+/** Copy current state without advancing demand or execution. */
+TURBO_FLOW_C_API int turbo_flow_run_snapshot(const turbo_flow_run_t *run,
+                                             turbo_flow_run_result_t *result);
+
+/**
+ * Wait for a terminal result. Zero polls and UINT64_MAX waits without a caller deadline.
+ * SALTS_ETIMEDOUT from this function does not change or cancel the run.
+ */
+TURBO_FLOW_C_API int turbo_flow_run_wait(turbo_flow_run_t *run, uint64_t timeout_ms,
+                                         turbo_flow_run_result_t *result);
+
+/** Request cancellation and synchronously unregister any active WAIT waker. */
+TURBO_FLOW_C_API int turbo_flow_run_cancel(turbo_flow_run_t *run);
+
+/** Cancel if necessary and release the caller's handle. Concurrent handle close is unsupported. */
+TURBO_FLOW_C_API void turbo_flow_run_close(turbo_flow_run_t *run);
 
 #define TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS TURBO_FLOW_CONFIG_INGRESS_DEFAULT_WORKERS
 #define TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY TURBO_FLOW_CONFIG_INGRESS_DEFAULT_CAPACITY

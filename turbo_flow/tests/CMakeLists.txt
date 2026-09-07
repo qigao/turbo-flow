@@ -7,6 +7,13 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
+  test_flow_run
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_run.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/flow_run_header_cpp.cpp
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+
+cmake_add_test(
   test_flow_resource_document
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_resource_document.c
   LIBS TurboFlow::Flow Salts::DataBind Salts::TinyTest
