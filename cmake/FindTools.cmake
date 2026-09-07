@@ -1,33 +1,25 @@
-# Find re2c
-find_program(RE2C_EXECUTABLE re2c)
-if(NOT RE2C_EXECUTABLE)
-    message(WARNING "re2c not found - some lexers might not be generated")
+find_program(RE2C_EXECUTABLE NAMES re2c REQUIRED)
+if(NOT EXISTS "${RE2C_EXECUTABLE}")
+    message(FATAL_ERROR "FindTools: re2c executable does not exist: ${RE2C_EXECUTABLE}")
 endif()
 
-# Find lemon (use built-in or system)
-# Check for project-provided lemon target first (prefer direct target over alias)
-if(TARGET lemon)
-    set(LEMON_EXECUTABLE $<TARGET_FILE:lemon>)
-    set(LEMON_DEPENDS lemon)
-    message(STATUS "Using project-provided lemon target")
-else()
-    # Fallback to system lemon only if project target not available
-    find_program(LEMON_EXECUTABLE lemon)
-    if(NOT LEMON_EXECUTABLE)
-        message(WARNING "lemon not found - some parsers might not be generated")
-    else()
-        message(WARNING "Using system lemon - version mismatch may occur!")
-    endif()
-    set(LEMON_DEPENDS "")
+if(NOT TARGET lemon)
+    message(FATAL_ERROR
+            "FindTools: project-provided lemon target is required; system lemon fallback is not supported")
 endif()
+set(LEMON_EXECUTABLE $<TARGET_FILE:lemon>)
+set(LEMON_DEPENDS lemon)
 
-# Set path to lemon parser template
-set(LEMPAR "${CMAKE_SOURCE_DIR}/tools/lemon/lempar.c" CACHE PATH "Path to lemon parser template")
+get_filename_component(
+    LEMPAR "${CMAKE_CURRENT_LIST_DIR}/../tools/lemon/lempar.c" ABSOLUTE)
+if(NOT EXISTS "${LEMPAR}")
+    message(FATAL_ERROR "FindTools: project lemon template does not exist: ${LEMPAR}")
+endif()
 
 # Note: These variables are set in the root scope and will be inherited 
 # by all subdirectories added via add_subdirectory().
 
 message(STATUS "Tools detection:")
 message(STATUS "  re2c: ${RE2C_EXECUTABLE}")
-message(STATUS "  lemon: ${LEMON_EXECUTABLE}")
+message(STATUS "  lemon: ${LEMON_EXECUTABLE} (project target)")
 message(STATUS "  lempar: ${LEMPAR}")
