@@ -102,7 +102,7 @@ git commit -m "test(schedule): synchronize completion assertions"
 - Consumes: `turbo_flow_state(const turbo_flow_t *)`, `turbo_flow_publish_async()`, `flow_schedule_publish_complete()`, and `async_inflight`.
 - Produces: synchronized `turbo_flow_state()` reads and private `flow_schedule_try_reserve_publish(turbo_flow_schedule_t *)` single-slot admission.
 
-- [ ] **Step 1: Synchronize runtime state observation**
+- [x] **Step 1: Synchronize runtime state observation**
 
 Lock `runtime_mutex` around the `flow->state` read in `turbo_flow_state()`. This makes the schedule bootstrap observe `TURBO_FLOW_STATE_STARTED` only after `turbo_flow_start()` commits both state and open admission under the same mutex.
 
@@ -117,7 +117,7 @@ turbo_flow_state_t turbo_flow_state(const turbo_flow_t *flow) {
 }
 ```
 
-- [ ] **Step 2: Reserve the async publication slot atomically**
+- [x] **Step 2: Reserve the async publication slot atomically**
 
 Add a private helper that first checks `started` and `completed`, changes `async_inflight` from zero to one with compare-exchange, and then rechecks both terminal flags. If either flag changed while acquiring the slot, release it and refuse publication.
 
@@ -140,11 +140,11 @@ static int flow_schedule_try_reserve_publish(turbo_flow_schedule_t *schedule) {
 }
 ```
 
-- [ ] **Step 3: Transfer slot ownership through async completion**
+- [x] **Step 3: Transfer slot ownership through async completion**
 
 Call the reservation helper from `flow_schedule_timer_callback()` before building/submitting the message. Remove the separate inflight increment from `flow_schedule_publish_async()`. On submit failure and in `flow_schedule_publish_complete()`, release the owned slot with a release store after terminal state and counters have been committed.
 
-- [ ] **Step 4: Build and run the focused test GREEN**
+- [x] **Step 4: Build and run the focused test GREEN**
 
 ```powershell
 cmake --build --preset win-dev-user --target test_turbo_flow_schedule
@@ -153,7 +153,7 @@ ctest --preset win-dev-user -R "^test_turbo_flow_schedule$" --output-on-failure
 
 Expected: all schedule cases pass and every exact-count assertion remains unchanged.
 
-- [ ] **Step 5: Commit the runtime fix**
+- [x] **Step 5: Commit the runtime fix**
 
 ```powershell
 git add turbo_flow/src/flow_core.c schedule/src/flow_schedule.c
@@ -169,7 +169,7 @@ git commit -m "fix(schedule): serialize async completion admission"
 - Consumes: `win-dev-user`, `win-release-user`, and the CTest schedule target.
 - Produces: reproducible verification evidence for issue #35 and the pull request.
 
-- [ ] **Step 1: Stress Debug/ASan 100 times**
+- [x] **Step 1: Stress Debug/ASan 100 times**
 
 ```powershell
 ctest --preset win-dev-user -R "^test_turbo_flow_schedule$" --repeat until-fail:100 --output-on-failure
