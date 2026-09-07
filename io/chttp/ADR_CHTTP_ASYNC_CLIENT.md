@@ -42,9 +42,8 @@ terminal。
 Flow destroy 后销毁 opaque client。
 
 回滚只需移除 adapter 注册和 target linkage；core async emit API 是 transport-neutral，
-可继续服务数据库或 RPC operation。CHTTP server 的 HTTP/2 deferred response 尚未实现，
-由 [#7](https://github.com/qigao/turbo-flow/issues/7) 跟踪，不在 client adapter 内提供
-fallback。
+可继续服务数据库或 RPC operation。CHTTP server 的 HTTP/2 deferred response 边界由
+`ADR_CHTTP_DEFERRED_SERVER.md` 定义；client adapter 不提供协议 fallback。
 
 ## 验证范围
 

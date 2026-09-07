@@ -673,7 +673,6 @@ static int chttp_server_adapter_start_native(turbo_flow_chttp_server_t *server,
   int status;
   if (!out_bound_port) return SALTS_EINVAL;
   *out_bound_port = 0u;
-  if (server->config.enable_http2) return SALTS_ENOTSUP;
   status = chttp_server_init(&server->http, &server->config);
   if (status != SALTS_OK) return status;
   if (server->has_socket_options) {

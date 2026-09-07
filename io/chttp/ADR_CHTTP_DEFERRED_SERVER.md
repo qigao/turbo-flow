@@ -9,9 +9,10 @@ terminal boundaries. Passing either callback object through
 `turbo_flow_msg_t.transport_context` would therefore create a use-after-return
 risk.
 
-CHTTP currently supports generation-checked deferred responses only for
-HTTP/1.1. Its HTTP/2 deferred response work remains tracked by
-`qigao/salts#214`.
+CHTTP provides generation-checked deferred responses for HTTP/1.1 and HTTP/2.
+The HTTP/2 ownership and cancellation contract was completed by
+[`qigao/salts#214`](https://github.com/qigao/salts/issues/214) and is consumed
+directly here; TurboFlow does not mirror CHTTP connection or stream state.
 
 ## Decision
 
@@ -42,10 +43,14 @@ staged graph response only when the complete publication succeeded; otherwise it
 uses the configured graph-error response. CHTTP copies the selected body before
 reply submission returns.
 
-HTTP/2 configuration fails during adapter start with `SALTS_ENOTSUP`. The
-adapter neither starts an H1-only listener nor switches to synchronous Flow
-execution. H2 support can be added without changing the owned request message or
-response-stage contract after `qigao/salts#214` lands.
+The same handoff serves HTTP/1.1, cleartext HTTP/2 (h2c), and HTTP/2 negotiated
+by TLS ALPN `h2`. CHTTP remains the sole owner of each H2 connection, stream,
+and deferred response. TurboFlow stores only the opaque deferred token beside
+its matching request-slot generation. A stream-local graph failure therefore
+selects that request's configured graph-error response without closing or
+rewriting a sibling stream. Requested HTTP/2, TLS, or ALPN setup errors are
+returned unchanged; the adapter never starts an H1 listener or synchronous Flow
+path as a fallback.
 
 WebSocket Upgrade and RFC 8441 handshakes remain CHTTP responsibilities. Frame
 and captured-session integration is a distinct CNet data-flow adapter because it
@@ -56,8 +61,9 @@ slots are never reused for WebSocket frames.
 
 - **Data unit:** one HTTP request maps to one Flow publication and at most one
   staged response message.
-- **Primary fact source:** the adapter request slot owns generation, publication
-  state, deferred handle, staged response, and terminal status.
+- **Primary fact sources:** CHTTP owns protocol, connection, stream, and deferred
+  handle validity. The adapter request slot owns only its correlation generation,
+  publication state, opaque handle token, staged response, and terminal status.
 - **Lifetime:** CHTTP views end with the handler. The message buffer owns every
   copied request byte. Flow owns an accepted message. The slot owns a retained
   response until CHTTP has copied it.
@@ -68,6 +74,10 @@ slots are never reused for WebSocket frames.
   and at least 17 bytes so every synchronous adapter error fits. It is the sole
   terminal-response limit. Flow async ingress separately bounds queued message
   count and bytes. No queue grows on pressure.
+- **Buffered response boundary:** the terminal response must fit one owned Flow
+  message and the configured CHTTP buffered-response bound. Streaming response
+  sources and WebSocket frames are separate adapters, not an unbounded escape
+  path from this contract.
 - **Backpressure:** slot exhaustion or Flow `SALTS_ENOSPC` returns the configured
   overload status synchronously and creates no deferred handle.
 - **Threading:** CHTTP serializes handlers on its owner thread. Flow completion
@@ -124,10 +134,11 @@ owner from copied configuration.
 ## Verification
 
 Integration tests use a real loopback CHTTP client and cover request metadata
-copying, H1 success, graph error, timeout/cancellation status propagation,
+copying, H1 success, h2c and TLS-ALPN H2 success, H2 sibling-stream isolation,
+graph error, timeout/cancellation status propagation,
 duplicate response rejection, bounded ingress overload, response-size failure,
-deferred allocation failure followed by no-response cancellation, HTTP/2 start
-rejection, CHTTP-owned stop/drain ordering, restart, and concurrent lifecycle snapshots.
+deferred allocation failure followed by no-response cancellation, CHTTP-owned
+stop/drain ordering, restart, and concurrent lifecycle snapshots.
 Header probes and the installed consumer verify the additive public API and
 `Salts::CHTTP` dependency.
 

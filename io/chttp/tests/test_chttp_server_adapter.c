@@ -1,5 +1,7 @@
 #include "tinytest.h"
 
+#include "../../cnet/tests/listener_source_tls_fixture.h"
+
 #include <salts/thread.h>
 
 #include "turbo_flow_chttp.h"
@@ -66,8 +68,30 @@ static chttp_client_config chttp_server_adapter_client_config(void) {
   return config;
 }
 
+static chttp_server_config chttp_server_adapter_h2_config(void) {
+  chttp_server_config config = chttp_server_adapter_config();
+  config.network.max_send_bytes = 64u * 1024u;
+  config.enable_http2 = 1;
+  config.h2_stream_capacity = 4u;
+  config.h2_input_buffer_bytes = 64u * 1024u;
+  config.h2_output_buffer_bytes = 64u * 1024u;
+  config.h2_hpack_dynamic_table_bytes = 4096u;
+  config.h2_max_settings_count = 16u;
+  return config;
+}
+
+static chttp_client_config chttp_server_adapter_h2_client_config(void) {
+  chttp_client_config config = chttp_server_adapter_client_config();
+  config.network.max_send_bytes = 64u * 1024u;
+  config.h2_input_buffer_bytes = 64u * 1024u;
+  config.h2_hpack_dynamic_table_bytes = 4096u;
+  config.h2_max_settings_count = 16u;
+  return config;
+}
+
 typedef struct chttp_server_adapter_probe_s {
   atomic_size_t calls;
+  unsigned int http_major;
   chttp_method method;
   cnet_stream_peer peer;
   char target[64];
@@ -92,6 +116,14 @@ typedef struct chttp_server_adapter_completion_s {
   atomic_int called;
   atomic_int status;
 } chttp_server_adapter_completion_t;
+
+typedef struct chttp_server_adapter_http_completion_s {
+  size_t calls;
+  int status;
+  unsigned int response_status;
+  char body[64];
+  size_t body_size;
+} chttp_server_adapter_http_completion_t;
 
 typedef struct chttp_server_adapter_gate_s {
   atomic_size_t entered;
@@ -173,6 +205,35 @@ static int chttp_server_adapter_call(uint16_t port, const char *target, const ch
 static int chttp_server_adapter_return_status(turbo_flow_msg_t *message, void *ctx) {
   (void)message;
   return ctx ? *(const int *)ctx : SALTS_EINVAL;
+}
+
+static int chttp_server_adapter_fail_selected_payload(turbo_flow_msg_t *message, void *ctx) {
+  (void)ctx;
+  if (!message) return SALTS_EINVAL;
+  if (message->payload.len == sizeof("fail") - 1u &&
+      memcmp(message->payload.data, "fail", sizeof("fail") - 1u) == 0)
+    return SALTS_EIO;
+  return SALTS_OK;
+}
+
+static void chttp_server_adapter_http_complete(void *user, chttp_request request,
+                                               const chttp_response_view *response,
+                                               const chttp_error *error) {
+  chttp_server_adapter_http_completion_t *completion =
+      (chttp_server_adapter_http_completion_t *)user;
+  (void)request;
+  if (!completion) return;
+  ++completion->calls;
+  completion->status = error ? error->status : SALTS_OK;
+  if (!response) return;
+  completion->response_status = response->status_code;
+  completion->body_size = response->body_size;
+  if (response->body_size >= sizeof(completion->body)) {
+    completion->status = SALTS_EMSGSIZE;
+    return;
+  }
+  if (response->body_size != 0u) memcpy(completion->body, response->body, response->body_size);
+  completion->body[response->body_size] = '\0';
 }
 
 static int chttp_server_adapter_large_response(turbo_flow_msg_t *message, void *ctx) {
@@ -317,6 +378,7 @@ static int chttp_server_adapter_inspect(turbo_flow_msg_t *message, void *ctx) {
       chttp_server_adapter_copy_view(probe->path, sizeof(probe->path), path) != SALTS_OK) {
     return SALTS_EPROTO;
   }
+  probe->http_major = request->http_major;
   probe->method = request->method;
   probe->peer = request->peer;
   for (index = 0u; index < request->header_count; ++index) {
@@ -355,6 +417,17 @@ static int chttp_server_adapter_inspect(turbo_flow_msg_t *message, void *ctx) {
   return SALTS_OK;
 }
 
+static int chttp_server_adapter_require_h2(turbo_flow_msg_t *message, void *ctx) {
+  chttp_server_adapter_probe_t *probe = (chttp_server_adapter_probe_t *)ctx;
+  const turbo_flow_chttp_server_request_context_t *request =
+      turbo_flow_chttp_server_request_context(message);
+  if (!probe || !request || request->http_major != 2u || request->http_minor != 0u)
+    return SALTS_EPROTO;
+  probe->http_major = request->http_major;
+  (void)atomic_fetch_add_explicit(&probe->calls, 1u, memory_order_release);
+  return SALTS_OK;
+}
+
 spec("TurboFlow CHTTP deferred server adapter") {
   it("exports a size-versioned C and C++ server contract") {
     turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
@@ -367,20 +440,29 @@ spec("TurboFlow CHTTP deferred server adapter") {
     check_equal(chttp_server_header_cpp_probe(), 1);
   }
 
-  it("rejects HTTP2 at flow start without starting an HTTP1 fallback") {
+  it("completes an h2c request through the deferred Flow adapter") {
     static const char *dsl = "source http_in adapter http.server\n"
+                             "stage require_h2\n"
                              "stage response adapter http.server\n"
                              "stage main {\n"
-                             "  http_in -> response\n"
+                             "  http_in -> require_h2 -> response\n"
                              "}\n";
-    chttp_server_config native_config = chttp_server_adapter_config();
+    chttp_server_config native_config = chttp_server_adapter_h2_config();
+    chttp_client_config client_config = chttp_server_adapter_h2_client_config();
     turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
     turbo_flow_chttp_server_snapshot_t snapshot = TURBO_FLOW_CHTTP_SERVER_SNAPSHOT_INIT;
     turbo_flow_chttp_server_t *server = NULL;
+    chttp_server_adapter_probe_t probe = {0};
     turbo_flow_t *flow = turbo_flow_create();
+    chttp_client client = {0};
+    chttp_options options = {0};
+    chttp_response response = {0};
+    chttp_error error = {0};
+    char uri[64];
+    int start_status;
 
     check_not_null(flow);
-    native_config.enable_http2 = 1;
+    atomic_init(&probe.calls, 0u);
     config.flow = flow;
     config.adapter_name = "http.server";
     config.source_name = "http_in";
@@ -390,14 +472,218 @@ spec("TurboFlow CHTTP deferred server adapter") {
     check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
     check_not_null(server);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "require_h2", chttp_server_adapter_require_h2,
+                                             &probe, NULL),
+                SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
-    check_equal(turbo_flow_start(flow), SALTS_ENOTSUP);
-    check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
-    check_equal(snapshot.state, TURBO_FLOW_CHTTP_SERVER_FAILED);
-    check_equal(snapshot.bound_port, 0u);
+    start_status = turbo_flow_start(flow);
+    check_equal(start_status, SALTS_OK);
+    if (start_status == SALTS_OK) {
+      check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
+      check_equal(snapshot.state, TURBO_FLOW_CHTTP_SERVER_RUNNING);
+      check_true(snapshot.bound_port != 0u);
+      check_greater(
+          snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)snapshot.bound_port), 0);
+      check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+      options.connection_uri = uri;
+      options.authority = "127.0.0.1";
+      options.target = "/flow";
+      options.body = "ping";
+      options.body_size = 4u;
+      options.timeout_ms = 5000u;
+      options.protocol = CHTTP_HTTP_2;
+      check_equal(chttp_post(&client, &options, &response, &error), SALTS_OK);
+      check_equal(response.http_major, 2u);
+      check_equal(response.status_code, 200u);
+      check_equal(response.body, "ping", 4u);
+      check_equal(atomic_load_explicit(&probe.calls, memory_order_acquire), (size_t)1u);
+      check_equal(probe.http_major, 2u);
+      chttp_response_destroy(&response);
+      check_equal(chttp_client_destroy(&client, 5000u), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+    }
 
     turbo_flow_destroy(flow);
     check_equal(turbo_flow_chttp_server_destroy(server), SALTS_OK);
+  }
+
+  it("keeps a deferred H2 sibling alive when one Flow run fails") {
+    static const char *dsl = "source http_in adapter http.server\n"
+                             "stage fail_selected\n"
+                             "stage response adapter http.server\n"
+                             "stage main {\n"
+                             "  http_in -> fail_selected -> response\n"
+                             "}\n";
+    chttp_server_config native_config = chttp_server_adapter_h2_config();
+    chttp_client_config client_config = chttp_server_adapter_h2_client_config();
+    turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
+    turbo_flow_chttp_server_snapshot_t snapshot = TURBO_FLOW_CHTTP_SERVER_SNAPSHOT_INIT;
+    turbo_flow_chttp_server_t *server = NULL;
+    chttp_server_adapter_http_completion_t failed = {0};
+    chttp_server_adapter_http_completion_t sibling = {0};
+    turbo_flow_t *flow = turbo_flow_create();
+    chttp_async_client client = {0};
+    chttp_request failed_request = {0};
+    chttp_request sibling_request = {0};
+    chttp_request_options options = {0};
+    char uri[64];
+    size_t completions = 0u;
+    size_t polls = 0u;
+
+    check_not_null(flow);
+    config.flow = flow;
+    config.adapter_name = "http.server";
+    config.source_name = "http_in";
+    config.server = &native_config;
+    config.method = CHTTP_METHOD_POST;
+    config.path = "/flow";
+    config.graph_error_status = 598u;
+    config.graph_error_body = "mapped";
+    config.graph_error_body_size = sizeof("mapped") - 1u;
+    check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+    check_equal(turbo_flow_register_stage_ex(
+                    flow, "fail_selected", chttp_server_adapter_fail_selected_payload, NULL, NULL),
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
+    check_greater(
+        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)snapshot.bound_port), 0);
+    check_equal(chttp_async_client_init(&client, &client_config), SALTS_OK);
+    options.connection_uri = uri;
+    options.authority = "127.0.0.1";
+    options.target = "/flow";
+    options.method = CHTTP_METHOD_POST;
+    options.body = "fail";
+    options.body_size = sizeof("fail") - 1u;
+    options.on_complete = chttp_server_adapter_http_complete;
+    options.user = &failed;
+    options.protocol = CHTTP_HTTP_2;
+    check_equal(chttp_async_client_submit(&client, &options, &failed_request), SALTS_OK);
+    options.body = "good";
+    options.body_size = sizeof("good") - 1u;
+    options.user = &sibling;
+    check_equal(chttp_async_client_submit(&client, &options, &sibling_request), SALTS_OK);
+    while ((failed.calls == 0u || sibling.calls == 0u) && polls++ < 40u)
+      check_equal(chttp_async_client_poll(&client, 250u, &completions), SALTS_OK);
+
+    check_equal(failed.calls, (size_t)1u);
+    check_equal(failed.status, SALTS_OK);
+    check_equal(failed.response_status, 598u);
+    check_equal(failed.body, "mapped");
+    check_equal(sibling.calls, (size_t)1u);
+    check_equal(sibling.status, SALTS_OK);
+    check_equal(sibling.response_status, 200u);
+    check_equal(sibling.body, "good");
+    check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
+    check_equal(snapshot.active_requests, (size_t)0u);
+    check_equal(snapshot.admitted_requests, (uint64_t)2u);
+    check_equal(snapshot.completed_requests, (uint64_t)2u);
+
+    check_equal(chttp_async_client_stop(&client, 5000u), SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_chttp_server_destroy(server), SALTS_OK);
+  }
+
+  it("completes a deferred Flow response on TLS negotiated ALPN h2") {
+    static const char *alpn[] = {"h2"};
+    static const char *dsl = "source http_in adapter http.server\n"
+                             "stage require_h2\n"
+                             "stage response adapter http.server\n"
+                             "stage main {\n"
+                             "  http_in -> require_h2 -> response\n"
+                             "}\n";
+    listener_source_tls_fixture_t fixture = {0};
+    chttp_server_config native_config = chttp_server_adapter_h2_config();
+    chttp_client_config client_config = chttp_server_adapter_h2_client_config();
+    turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
+    turbo_flow_chttp_server_snapshot_t snapshot = TURBO_FLOW_CHTTP_SERVER_SNAPSHOT_INIT;
+    turbo_flow_chttp_server_t *server = NULL;
+    chttp_server_adapter_http_completion_t completion = {0};
+    chttp_server_adapter_probe_t probe = {0};
+    turbo_flow_t *flow = turbo_flow_create();
+    chttp_async_client client = {0};
+    chttp_tls_profile profile = {0};
+    cnet_tls_server_config server_tls = {0};
+    cnet_tls_client_config client_tls = {0};
+    chttp_request request = {0};
+    chttp_request_options options = {0};
+    char uri[64];
+    size_t completions = 0u;
+    size_t polls = 0u;
+
+    check_not_null(flow);
+    check_equal(listener_source_tls_fixture_init(&fixture), SALTS_OK);
+    atomic_init(&probe.calls, 0u);
+    native_config.network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
+    native_config.network.tls_handshake_timeout_ms = 5000u;
+    client_config.network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
+    client_config.network.tls_handshake_timeout_ms = 5000u;
+    server_tls = (cnet_tls_server_config){.size = sizeof(server_tls),
+                                          .cert_file = fixture.cert_path,
+                                          .key_file = fixture.key_path,
+                                          .client_auth = CNET_TLS_CLIENT_AUTH_NONE,
+                                          .alpn_protocols = alpn,
+                                          .alpn_protocol_count = 1u};
+    client_tls = (cnet_tls_client_config){.size = sizeof(client_tls),
+                                          .ca_file = fixture.cert_path,
+                                          .server_name = "localhost",
+                                          .alpn_protocols = alpn,
+                                          .alpn_protocol_count = 1u};
+    native_config.tls = &server_tls;
+    config.flow = flow;
+    config.adapter_name = "http.server";
+    config.source_name = "http_in";
+    config.server = &native_config;
+    config.method = CHTTP_METHOD_POST;
+    config.path = "/flow";
+    check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "require_h2", chttp_server_adapter_require_h2,
+                                             &probe, NULL),
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
+    check_greater(
+        snprintf(uri, sizeof(uri), "tls://127.0.0.1:%u", (unsigned int)snapshot.bound_port), 0);
+    check_equal(chttp_tls_profile_init(&profile, &client_tls), SALTS_OK);
+    check_equal(chttp_async_client_init(&client, &client_config), SALTS_OK);
+    options.connection_uri = uri;
+    options.authority = "localhost";
+    options.target = "/flow";
+    options.method = CHTTP_METHOD_POST;
+    options.body = "secure";
+    options.body_size = sizeof("secure") - 1u;
+    options.on_complete = chttp_server_adapter_http_complete;
+    options.user = &completion;
+    options.tls = &profile;
+    options.protocol = CHTTP_HTTP_2;
+    check_equal(chttp_async_client_submit(&client, &options, &request), SALTS_OK);
+    while (completion.calls == 0u && polls++ < 120u)
+      check_equal(chttp_async_client_poll(&client, 25u, &completions), SALTS_OK);
+
+    check_equal(completion.calls, (size_t)1u);
+    check_equal(completion.status, SALTS_OK);
+    check_equal(completion.response_status, 200u);
+    check_equal(completion.body, "secure");
+    check_equal(atomic_load_explicit(&probe.calls, memory_order_acquire), (size_t)1u);
+    check_equal(probe.http_major, 2u);
+    check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
+    check_equal(snapshot.active_requests, (size_t)0u);
+    check_equal(snapshot.admitted_requests, (uint64_t)1u);
+    check_equal(snapshot.completed_requests, (uint64_t)1u);
+
+    check_equal(chttp_async_client_stop(&client, 5000u), SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_chttp_server_destroy(server), SALTS_OK);
+    check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
+    listener_source_tls_fixture_destroy(&fixture);
   }
 
   it("rejects session and impossible error-response configurations") {

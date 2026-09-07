@@ -140,7 +140,7 @@ typedef enum turbo_flow_chttp_server_state_e {
 } turbo_flow_chttp_server_state_t;
 
 /**
- * One bounded HTTP/1.1 route exposed as a Flow source and terminal response sink.
+ * One bounded HTTP/1.1 or HTTP/2 route exposed as a Flow source and terminal response sink.
  *
  * Registration copies the server configuration, host, session cookie name,
  * adapter/source/path strings, response content types, and graph-error body.
@@ -260,8 +260,8 @@ turbo_flow_chttp_client_register(const turbo_flow_chttp_client_config_t *config,
  * @param config Borrowed configuration; documented strings are copied before return.
  * @param out_server Receives the adapter owner on success and NULL on failure.
  * @return SALTS_OK, SALTS_EINVAL for an invalid/unbounded contract, SALTS_ENOMEM,
- *         or the Flow registry error. HTTP/2 is accepted at registration but
- *         fails `turbo_flow_start()` with SALTS_ENOTSUP.
+ *         or the Flow registry error. CHTTP start errors, including TLS/ALPN or
+ *         HTTP/2 configuration errors, are returned by `turbo_flow_start()`.
  */
 TURBO_FLOW_C_API int
 turbo_flow_chttp_server_register(const turbo_flow_chttp_server_config_t *config,
