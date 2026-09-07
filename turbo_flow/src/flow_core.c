@@ -168,6 +168,32 @@ void flow_resource_registration_destroy(flow_resource_registration_t *resource) 
   resource->ctx = NULL;
 }
 
+static void flow_resource_registrations_rollback(turbo_flow_t *flow, size_t size_before) {
+  while (vec_size(&flow->resources) > size_before) {
+    size_t last = vec_size(&flow->resources) - 1u;
+    flow_resource_registration_t *resource =
+        (flow_resource_registration_t *)vec_at(&flow->resources, last);
+    flow_resource_registration_destroy(resource);
+    (void)turbo_flow_stl_error(vec_resize(&flow->resources, last));
+  }
+}
+
+static void flow_adapter_registrations_rollback(turbo_flow_t *flow, size_t size_before) {
+  while (vec_size(&flow->adapters) > size_before) {
+    size_t last = vec_size(&flow->adapters) - 1u;
+    flow_adapter_registration_t *adapter =
+        (flow_adapter_registration_t *)vec_at(&flow->adapters, last);
+    flow_adapter_registration_destroy(adapter);
+    (void)turbo_flow_stl_error(vec_resize(&flow->adapters, last));
+  }
+}
+
+static int flow_registration_commit_ready(turbo_flow_t *flow,
+                                          flow_registration_checkpoint_t checkpoint) {
+  if (!flow->registration_fault.before_commit) return SALTS_OK;
+  return flow->registration_fault.before_commit(flow->registration_fault.ctx, checkpoint);
+}
+
 void flow_edge_impl_destroy(flow_edge_plan_impl_t *edge) {
   if (!edge) return;
   turbo_flow_expr_destroy(edge->predicate);
@@ -892,11 +918,18 @@ static int flow_register_resource_provider_impl(
     resource.managed_boundary_snapshot = boundary_snapshot;
     resource.has_managed_boundary = 1;
   }
+  rc = flow_registration_commit_ready(flow, FLOW_REGISTRATION_ALLOC_RESOURCE_OWNER_NAME);
+  if (rc != SALTS_OK) return rc;
   resource.owner_name = tstr_dup(owner_name);
   if (!resource.owner_name) return SALTS_ENOMEM;
   resource.ops = *ops;
   resource.ops.size = sizeof(resource.ops);
   resource.ctx = ctx;
+  rc = flow_registration_commit_ready(flow, FLOW_REGISTRATION_ALLOC_RESOURCE_VECTOR);
+  if (rc != SALTS_OK) {
+    flow_resource_registration_destroy(&resource);
+    return rc;
+  }
   if (turbo_flow_stl_error(vec_push(&flow->resources, &resource)) != SALTS_OK) {
     flow_resource_registration_destroy(&resource);
     return SALTS_ENOMEM;
@@ -1003,12 +1036,18 @@ int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
   if (turbo_flow_stl_error(vec_init_bytes(&adapter.operation_bindings, sizeof(flow_adapter_operation_binding_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
     return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
+  rc = flow_registration_commit_ready(flow, FLOW_REGISTRATION_ALLOC_ADAPTER_NAME);
+  if (rc != SALTS_OK) {
+    vec_destroy(&adapter.operation_bindings);
+    return flow_set_error(flow, rc, 0, 0, "adapter name allocation failed");
+  }
   adapter.name = tstr_dup(name);
   if (!adapter.name) {
     vec_destroy(&adapter.operation_bindings);
     return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  rc = flow_adapter_schema_copy(&adapter, schema);
+  rc = flow_registration_commit_ready(flow, FLOW_REGISTRATION_ALLOC_ADAPTER_SCHEMA);
+  if (rc == SALTS_OK) rc = flow_adapter_schema_copy(&adapter, schema);
   if (rc != SALTS_OK) {
     flow_adapter_schema_destroy(&adapter);
     tstr_freep(&adapter.name);
@@ -1019,6 +1058,13 @@ int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
   adapter.ctx = ctx;
   if (ops) {
     adapter.ops = *ops;
+  }
+  rc = flow_registration_commit_ready(flow, FLOW_REGISTRATION_ALLOC_ADAPTER_VECTOR);
+  if (rc != SALTS_OK) {
+    flow_adapter_schema_destroy(&adapter);
+    tstr_freep(&adapter.name);
+    vec_destroy(&adapter.operation_bindings);
+    return flow_set_error(flow, rc, 0, 0, "adapter registry allocation failed");
   }
   if (turbo_flow_stl_error(vec_push(&flow->adapters, &adapter)) != SALTS_OK) {
     flow_adapter_schema_destroy(&adapter);
@@ -1043,17 +1089,83 @@ int turbo_flow_register_async_terminal_adapter_ex(
   adapters_before = vec_size(&flow->adapters);
   rc = turbo_flow_register_adapter_ex(flow, name, adapter_ops, ctx, schema);
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_register_adapter_async_terminal(flow, name, async_ops);
+  rc = flow_registration_commit_ready(flow, FLOW_REGISTRATION_ASYNC_TERMINAL_BIND);
+  if (rc == SALTS_OK) rc = turbo_flow_register_adapter_async_terminal(flow, name, async_ops);
   if (rc == SALTS_OK) return SALTS_OK;
 
-  while (vec_size(&flow->adapters) > adapters_before) {
-    size_t last = vec_size(&flow->adapters) - 1u;
-    flow_adapter_registration_t *adapter =
-        (flow_adapter_registration_t *)vec_at(&flow->adapters, last);
-    flow_adapter_registration_destroy(adapter);
-    (void)turbo_flow_stl_error(vec_resize(&flow->adapters, last));
-  }
+  flow_adapter_registrations_rollback(flow, adapters_before);
   return rc;
+}
+
+int turbo_flow_register_managed_async_terminal_adapter(
+    turbo_flow_t *flow,
+    const turbo_flow_managed_async_terminal_registration_t *registration) {
+  turbo_flow_adapter_ops_t staged_adapter_ops;
+  flow_adapter_registration_t *adapter;
+  const flow_resource_registration_t *resource;
+  size_t adapters_before;
+  size_t resources_before;
+  int rc;
+
+  if (!flow || !registration || registration->size < sizeof(*registration) ||
+      registration->version != TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_API_VERSION ||
+      !registration->adapter_name || registration->adapter_name[0] == '\0' ||
+      !registration->adapter_ops || registration->adapter_ops->consume ||
+      registration->adapter_ops->consume_retry || !registration->async_ops ||
+      registration->async_ops->size < sizeof(*registration->async_ops) ||
+      registration->async_ops->version != TURBO_FLOW_ASYNC_TERMINAL_API_VERSION ||
+      !registration->async_ops->submit || !registration->schema ||
+      (registration->schema->roles & TURBO_FLOW_ADAPTER_SINK) == 0u ||
+      !registration->owner_name || registration->owner_name[0] == '\0' ||
+      !registration->boundary_ops ||
+      registration->boundary_ops->size < sizeof(*registration->boundary_ops) ||
+      registration->boundary_ops->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION ||
+      registration->boundary_ops->resource.size <
+          sizeof(registration->boundary_ops->resource) ||
+      !registration->boundary_ops->resource.metadata || !registration->boundary_ops->descriptor ||
+      !registration->boundary_ops->snapshot) {
+    return SALTS_EINVAL;
+  }
+  if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                     "cannot register managed async terminal adapter after compile");
+  }
+  if (flow_find_adapter(flow, registration->adapter_name) >= 0) {
+    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "duplicate adapter");
+  }
+
+  staged_adapter_ops = *registration->adapter_ops;
+  staged_adapter_ops.shutdown = NULL;
+  adapters_before = vec_size(&flow->adapters);
+  resources_before = vec_size(&flow->resources);
+  rc = turbo_flow_register_async_terminal_adapter_ex(
+      flow, registration->adapter_name, &staged_adapter_ops, registration->async_ops,
+      registration->ctx, registration->schema);
+  if (rc != SALTS_OK) return rc;
+
+  rc = turbo_flow_register_managed_boundary_provider(
+      flow, registration->owner_name, registration->boundary_ops, registration->ctx);
+  if (rc != SALTS_OK) {
+    flow_adapter_registrations_rollback(flow, adapters_before);
+    return rc;
+  }
+  resource = (const flow_resource_registration_t *)vec_at_const(&flow->resources,
+                                                                 resources_before);
+  if (!resource || !resource->has_managed_boundary ||
+      (resource->managed_boundary.role_flags & TURBO_FLOW_MANAGED_BOUNDARY_SINK) == 0u) {
+    flow_resource_registrations_rollback(flow, resources_before);
+    flow_adapter_registrations_rollback(flow, adapters_before);
+    return SALTS_EPROTO;
+  }
+
+  adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, adapters_before);
+  if (!adapter) {
+    flow_resource_registrations_rollback(flow, resources_before);
+    flow_adapter_registrations_rollback(flow, adapters_before);
+    return SALTS_EPROTO;
+  }
+  adapter->ops.shutdown = registration->adapter_ops->shutdown;
+  return SALTS_OK;
 }
 
 int turbo_flow_register_async_emit_adapter_ex(
@@ -1074,13 +1186,7 @@ int turbo_flow_register_async_emit_adapter_ex(
   rc = turbo_flow_register_adapter_async_emit(flow, name, async_ops);
   if (rc == SALTS_OK) return SALTS_OK;
 
-  while (vec_size(&flow->adapters) > adapters_before) {
-    size_t last = vec_size(&flow->adapters) - 1u;
-    flow_adapter_registration_t *adapter =
-        (flow_adapter_registration_t *)vec_at(&flow->adapters, last);
-    flow_adapter_registration_destroy(adapter);
-    (void)turbo_flow_stl_error(vec_resize(&flow->adapters, last));
-  }
+  flow_adapter_registrations_rollback(flow, adapters_before);
   return rc;
 }
 
@@ -1106,20 +1212,8 @@ int turbo_flow_register_adapter_with_resources(
     rc = turbo_flow_register_resource_provider(flow, resources[i].owner_name, &resources[i].ops,
                                                resources[i].ctx);
     if (rc == SALTS_OK) continue;
-    while (vec_size(&flow->resources) > resources_before) {
-      size_t last = vec_size(&flow->resources) - 1u;
-      flow_resource_registration_t *resource =
-          (flow_resource_registration_t *)vec_at(&flow->resources, last);
-      flow_resource_registration_destroy(resource);
-      (void)turbo_flow_stl_error(vec_resize(&flow->resources, last));
-    }
-    if (vec_size(&flow->adapters) > adapters_before) {
-      size_t last = vec_size(&flow->adapters) - 1u;
-      flow_adapter_registration_t *adapter =
-          (flow_adapter_registration_t *)vec_at(&flow->adapters, last);
-      flow_adapter_registration_destroy(adapter);
-      (void)turbo_flow_stl_error(vec_resize(&flow->adapters, last));
-    }
+    flow_resource_registrations_rollback(flow, resources_before);
+    flow_adapter_registrations_rollback(flow, adapters_before);
     return rc;
   }
   return SALTS_OK;

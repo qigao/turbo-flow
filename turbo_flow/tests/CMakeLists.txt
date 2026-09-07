@@ -39,6 +39,13 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
+  test_flow_managed_async_terminal
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_managed_async_terminal.c
+  LIBS TurboFlow::Flow Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  FOLDER "turbo_flow/tests")
+
+cmake_add_test(
   test_flow_expr
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_expr.c
   LIBS TurboFlow::Flow Salts::TinyTest
