@@ -795,7 +795,7 @@ static int cnet_adapter_benchmark_run(void) {
       }
       return status;
     }
-    benchmark_io("scenario=udp_packet_terminal measured batch", 1u,
+    benchmark_io("harness total including peer drain and statistics", 1u,
                  CNET_BENCH_SAMPLE_MESSAGES,
                  CNET_BENCH_SAMPLE_MESSAGES * CNET_BENCH_PAYLOAD_BYTES) {
       status = cnet_bench_run_batch(&fixture, CNET_BENCH_SAMPLE_MESSAGES, &results[replicate], true);

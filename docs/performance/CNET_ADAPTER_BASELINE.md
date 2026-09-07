@@ -56,6 +56,8 @@ Fixed inputs:
 - Saturation deliberately submits 65 messages to the 64-entry sink without progressing it, requires at least one concrete `SALTS_ENOSPC` completion, drains every accepted claim, then requires a new message to complete successfully.
 - `shutdown_us` covers Flow stop/destroy, packet-sink handle destroy, and peer endpoint stop/destroy. A snapshot must first report `pre_shutdown_active_requests=0`; otherwise the run fails before the timer starts.
 
+The TinyTest `benchmark_io` table is labeled `harness total including peer drain and statistics`. It deliberately covers the whole harness call and is diagnostic only; it includes peer catch-up and percentile allocation/sorting. `CNET_BENCH_RUN throughput_msg_s` and the corresponding `CNET_BENCH_SUMMARY` are the authoritative baseline metrics defined above.
+
 Before emitting any measurement, the executable queries Git again, requires live `HEAD` to equal its compiled commit, and requires `git status --porcelain=v1 --untracked-files=normal -- .` to be empty. A dirty tree fails with `SALTS_EBUSY`; an executable built for a different commit fails with `SALTS_EPROTO`. Thus ignored build products are allowed, but tracked changes and untracked source/document files cannot silently contaminate a baseline.
 
 Allocation evidence at source commit `0f6767f3db51983bcd927bc77520ef54abba1b69`:
