@@ -137,9 +137,11 @@ main configure. Do not search for a system Lemon executable.
 
 Run CodeGraph sync/affected, `git diff --check`, and active-source searches confirming no TurboNet/TurboHttp/CoroNet/TurboParser target, root, or fallback was introduced.
 
-- [ ] **Step 3: Align the GitHub issue and publish**
+- [x] **Step 3: Align the GitHub issue and publish**
 
 Update issue #10's title/body to record that the later no-fallback decision supersedes its compatibility-window language. Commit, push `build/issue-10-component-dependencies`, open a PR against `master` with `Closes #10`, post verification evidence to the issue, and leave the PR unmerged.
+
+Published as PR #36: https://github.com/qigao/turbo-flow/pull/36
 
 ## Validation Evidence
 
