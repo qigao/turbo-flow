@@ -7,11 +7,15 @@
 #include <stdatomic.h>
 #include <string.h>
 
+#define SCHEDULE_TEST_WAIT_TIMEOUT_NS UINT64_C(1000000000)
+
 typedef struct schedule_capture_s {
   char payload[64];
   size_t payload_len;
   uint64_t last_ts_ns;
   uint64_t callback_delay_ms;
+  salts_mutex_t wait_mutex;
+  salts_cond_t called_cond;
   atomic_int called;
   atomic_int active;
   atomic_int max_active;
@@ -33,22 +37,50 @@ static int schedule_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   capture->last_ts_ns = msg->ts_ns;
   if (capture->callback_delay_ms > 0) salts_sleep_ms(capture->callback_delay_ms);
   atomic_fetch_add_explicit(&capture->called, 1, memory_order_release);
+  salts_mutex_lock(&capture->wait_mutex);
+  salts_cond_broadcast(&capture->called_cond);
+  salts_mutex_unlock(&capture->wait_mutex);
   atomic_fetch_sub_explicit(&capture->active, 1, memory_order_release);
   return SALTS_OK;
 }
 
-static void schedule_capture_init(schedule_capture_t *capture) {
+static int schedule_capture_init(schedule_capture_t *capture) {
   memset(capture, 0, sizeof(*capture));
+  salts_mutex_init(&capture->wait_mutex);
+  salts_cond_init(&capture->called_cond);
+  if (!capture->wait_mutex || !capture->called_cond) {
+    salts_cond_destroy(&capture->called_cond);
+    salts_mutex_destroy(&capture->wait_mutex);
+    return SALTS_ENOMEM;
+  }
   atomic_init(&capture->called, 0);
   atomic_init(&capture->active, 0);
   atomic_init(&capture->max_active, 0);
+  return SALTS_OK;
 }
 
-static void schedule_wait_called(schedule_capture_t *capture, int expected) {
-  for (int i = 0;
-       i < 200 && atomic_load_explicit(&capture->called, memory_order_acquire) < expected; ++i) {
-    salts_sleep_ms(5);
+static void schedule_capture_destroy(schedule_capture_t *capture) {
+  salts_cond_destroy(&capture->called_cond);
+  salts_mutex_destroy(&capture->wait_mutex);
+}
+
+static int schedule_capture_called(const schedule_capture_t *capture) {
+  return atomic_load_explicit(&capture->called, memory_order_acquire);
+}
+
+static int schedule_wait_called(schedule_capture_t *capture, int expected) {
+  const uint64_t started_at = salts_hrtime();
+  salts_mutex_lock(&capture->wait_mutex);
+  while (schedule_capture_called(capture) < expected) {
+    const uint64_t elapsed = salts_hrtime() - started_at;
+    if (elapsed >= SCHEDULE_TEST_WAIT_TIMEOUT_NS ||
+        salts_cond_timedwait(&capture->called_cond, &capture->wait_mutex,
+                             SCHEDULE_TEST_WAIT_TIMEOUT_NS - elapsed) != 0) {
+      break;
+    }
   }
+  salts_mutex_unlock(&capture->wait_mutex);
+  return schedule_capture_called(capture) >= expected;
 }
 
 static turbo_flow_t *schedule_make_flow(const turbo_flow_schedule_config_t *config,
@@ -100,7 +132,7 @@ spec("turbo_flow_schedule") {
     config.repeat_limit = 3;
     config.payload = payload;
     config.payload_len = sizeof(payload) - 1u;
-    schedule_capture_init(&capture);
+    check_equal(schedule_capture_init(&capture), SALTS_OK);
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
     check_not_null(schedule);
@@ -111,37 +143,45 @@ spec("turbo_flow_schedule") {
     check_equal(schema->direction, TURBO_FLOW_ADAPTER_INPUT);
     check_equal(schema->field_count, 8);
     check_equal(turbo_flow_start(flow), SALTS_OK);
-    schedule_wait_called(&capture, 3);
-    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 3);
+    check_true(schedule_wait_called(&capture, 3));
+    check_equal(schedule_capture_called(&capture), 3);
     check_equal(capture.payload_len, sizeof(payload) - 1u);
     check_equal(memcmp(capture.payload, payload, sizeof(payload) - 1u), 0);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), SALTS_OK);
     check_equal(snapshot.fired, 3);
     check_equal(snapshot.catch_up_truncations, 0);
     check_equal(snapshot.last_status, SALTS_OK);
-    check_equal(turbo_flow_stop(flow), SALTS_OK);
-    salts_sleep_ms(30);
-    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 3);
+    check_equal(schedule_capture_called(&capture), 3);
     turbo_flow_destroy(flow);
+    schedule_capture_destroy(&capture);
   }
 
   it("emits one one-shot tick") {
     turbo_flow_schedule_config_t config;
+    turbo_flow_schedule_snapshot_t snapshot;
     turbo_flow_schedule_t *schedule = NULL;
     schedule_capture_t capture;
     turbo_flow_t *flow;
+    int completed;
     memset(&config, 0, sizeof(config));
     config.mode = TURBO_FLOW_SCHEDULE_ONE_SHOT;
     config.delay_ms = 10;
-    schedule_capture_init(&capture);
+    check_equal(schedule_capture_init(&capture), SALTS_OK);
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
     check_equal(turbo_flow_start(flow), SALTS_OK);
-    schedule_wait_called(&capture, 1);
-    salts_sleep_ms(30);
-    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 1);
+    completed = schedule_wait_called(&capture, 1);
+    check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), SALTS_OK);
+    info("one-shot completion=%d called=%d fired=%llu status=%d", completed,
+         schedule_capture_called(&capture), (unsigned long long)snapshot.fired,
+         snapshot.last_status);
+    check_true(completed);
+    check_equal(schedule_capture_called(&capture), 1);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(schedule_capture_called(&capture), 1);
     turbo_flow_destroy(flow);
+    schedule_capture_destroy(&capture);
   }
 
   it("stops an interval before its first tick") {
@@ -152,14 +192,14 @@ spec("turbo_flow_schedule") {
     memset(&config, 0, sizeof(config));
     config.mode = TURBO_FLOW_SCHEDULE_INTERVAL;
     config.delay_ms = 100;
-    schedule_capture_init(&capture);
+    check_equal(schedule_capture_init(&capture), SALTS_OK);
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
-    salts_sleep_ms(120);
-    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 0);
+    check_equal(schedule_capture_called(&capture), 0);
     turbo_flow_destroy(flow);
+    schedule_capture_destroy(&capture);
   }
 
   it("coalesces overlapping native timer callbacks") {
@@ -171,16 +211,18 @@ spec("turbo_flow_schedule") {
     config.mode = TURBO_FLOW_SCHEDULE_INTERVAL;
     config.delay_ms = 1;
     config.repeat_limit = 3;
-    schedule_capture_init(&capture);
+    check_equal(schedule_capture_init(&capture), SALTS_OK);
     capture.callback_delay_ms = 10;
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
     check_equal(turbo_flow_start(flow), SALTS_OK);
-    schedule_wait_called(&capture, 3);
-    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 3);
+    check_true(schedule_wait_called(&capture, 3));
+    check_equal(schedule_capture_called(&capture), 3);
     check_equal(atomic_load_explicit(&capture.max_active, memory_order_acquire), 1);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(schedule_capture_called(&capture), 3);
     turbo_flow_destroy(flow);
+    schedule_capture_destroy(&capture);
   }
 
   it("resets a bounded interval count when the flow restarts") {
@@ -193,20 +235,21 @@ spec("turbo_flow_schedule") {
     config.mode = TURBO_FLOW_SCHEDULE_INTERVAL;
     config.delay_ms = 5;
     config.repeat_limit = 2;
-    schedule_capture_init(&capture);
+    check_equal(schedule_capture_init(&capture), SALTS_OK);
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
     check_equal(turbo_flow_start(flow), SALTS_OK);
-    schedule_wait_called(&capture, 2);
+    check_true(schedule_wait_called(&capture, 2));
     check_equal(turbo_flow_stop(flow), SALTS_OK);
-    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 2);
+    check_equal(schedule_capture_called(&capture), 2);
     check_equal(turbo_flow_start(flow), SALTS_OK);
-    schedule_wait_called(&capture, 4);
+    check_true(schedule_wait_called(&capture, 4));
     check_equal(turbo_flow_stop(flow), SALTS_OK);
-    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 4);
+    check_equal(schedule_capture_called(&capture), 4);
     check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), SALTS_OK);
     check_equal(snapshot.fired, 4);
     turbo_flow_destroy(flow);
+    schedule_capture_destroy(&capture);
   }
 
   it("does not truncate delays larger than a Windows native timer period") {
@@ -217,14 +260,16 @@ spec("turbo_flow_schedule") {
     memset(&config, 0, sizeof(config));
     config.mode = TURBO_FLOW_SCHEDULE_ONE_SHOT;
     config.delay_ms = (uint64_t)UINT32_MAX + UINT64_C(100);
-    schedule_capture_init(&capture);
+    check_equal(schedule_capture_init(&capture), SALTS_OK);
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     salts_sleep_ms(20);
-    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 0);
+    check_equal(schedule_capture_called(&capture), 0);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(schedule_capture_called(&capture), 0);
     turbo_flow_destroy(flow);
+    schedule_capture_destroy(&capture);
   }
 
   it("bounds cron catch-up and suppresses repeated minutes") {
@@ -240,22 +285,23 @@ spec("turbo_flow_schedule") {
     config.cron_expression = "* * * * *";
     config.catch_up_limit = 2;
     config.manual_clock = 1;
-    schedule_capture_init(&capture);
+    check_equal(schedule_capture_init(&capture), SALTS_OK);
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_schedule_advance(schedule, first + 5), 1);
     check_equal(turbo_flow_schedule_advance(schedule, first + 50), 0);
     check_equal(turbo_flow_schedule_advance(schedule, first + 5 * 60 + 5), 3);
-    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 4);
+    check_equal(schedule_capture_called(&capture), 4);
     check_equal(turbo_flow_schedule_snapshot(schedule, &snapshot), SALTS_OK);
     check_equal(snapshot.fired, 4);
     check_equal(snapshot.catch_up_truncations, 1);
     check_equal(capture.last_ts_ns, (uint64_t)(first + 3 * 60) * UINT64_C(1000000000));
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     check_equal(turbo_flow_schedule_advance(schedule, first + 6 * 60), SALTS_EINVAL);
-    check_equal(atomic_load_explicit(&capture.called, memory_order_acquire), 4);
+    check_equal(schedule_capture_called(&capture), 4);
     turbo_flow_destroy(flow);
+    schedule_capture_destroy(&capture);
   }
 
   it("rejects invalid mode-specific configuration") {
