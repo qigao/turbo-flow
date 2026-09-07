@@ -650,12 +650,13 @@ static int cnet_bench_saturation_recovery(cnet_bench_fixture_t *fixture,
   if (atomic_load_explicit(&run->completed, memory_order_acquire) == 0u)
     return SALTS_ETIMEDOUT;
 
-  while (atomic_load_explicit(&run->completed, memory_order_acquire) < SATURATION_MESSAGES &&
+  while (!atomic_load_explicit(&run->terminal_captured, memory_order_acquire) &&
          salts_monotonic_ms() < deadline) {
     status = cnet_bench_progress(fixture, &result->peak_active_requests);
     if (status != SALTS_OK) return status;
   }
-  if (atomic_load_explicit(&run->completed, memory_order_acquire) != SATURATION_MESSAGES)
+  if (!atomic_load_explicit(&run->terminal_captured, memory_order_acquire) ||
+      atomic_load_explicit(&run->completed, memory_order_acquire) != SATURATION_MESSAGES)
     return SALTS_ETIMEDOUT;
   for (size_t index = 0u; index < SATURATION_MESSAGES; ++index) {
     if (!atomic_load_explicit(&fixture->completions[index].done, memory_order_acquire))
@@ -679,12 +680,13 @@ static int cnet_bench_saturation_recovery(cnet_bench_fixture_t *fixture,
                                     cnet_bench_complete, &fixture->completions[0]);
   if (status != SALTS_OK) return status;
   deadline = salts_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
-  while (atomic_load_explicit(&run->completed, memory_order_acquire) == 0u &&
+  while (!atomic_load_explicit(&run->terminal_captured, memory_order_acquire) &&
          salts_monotonic_ms() < deadline) {
     status = cnet_bench_progress(fixture, &result->peak_active_requests);
     if (status != SALTS_OK) return status;
   }
-  if (atomic_load_explicit(&run->completed, memory_order_acquire) != 1u ||
+  if (!atomic_load_explicit(&run->terminal_captured, memory_order_acquire) ||
+      atomic_load_explicit(&run->completed, memory_order_acquire) != 1u ||
       !atomic_load_explicit(&fixture->completions[0].done, memory_order_acquire))
     return SALTS_ETIMEDOUT;
   if (fixture->completions[0].status != SALTS_OK) return fixture->completions[0].status;
