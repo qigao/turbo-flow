@@ -506,10 +506,12 @@ int turbo_flow_stop(turbo_flow_t *flow) {
   salts_mutex_unlock(&flow->runtime_mutex);
 
   if (!retrying) {
-    flow_stop_async_ingress(flow);
     flow_reactive_runtime_cancel(flow);
   }
   non_source_status = flow_stop_non_source_adapters(flow);
+  if (!retrying) {
+    flow_stop_async_ingress(flow);
+  }
   flow_wait_for_publishes(flow);
   source_status = flow_stop_source_adapters(flow);
   stop_status = non_source_status != SALTS_OK ? non_source_status : source_status;
