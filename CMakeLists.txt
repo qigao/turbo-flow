@@ -46,8 +46,13 @@ include(CMakeOptions.cmake)
 include(Sanitizers)
 include(CmakeUtils)
 
-foreach(_turbo_flow_dependency_root IN ITEMS
-        SALTS_ROOT SALTS_UTILS_ROOT RULES_FORGE_ROOT)
+set(_turbo_flow_required_dependency_roots
+    SALTS_ROOT SALTS_UTILS_ROOT RULES_FORGE_ROOT)
+if(TURBO_FLOW_BUILD_TURBODB_ADAPTER)
+  list(APPEND _turbo_flow_required_dependency_roots TURBODB_ROOT)
+endif()
+foreach(_turbo_flow_dependency_root IN LISTS
+        _turbo_flow_required_dependency_roots)
   if(NOT DEFINED ENV{${_turbo_flow_dependency_root}} OR
      "$ENV{${_turbo_flow_dependency_root}}" STREQUAL "")
     message(FATAL_ERROR
@@ -69,6 +74,19 @@ include(TurboFlowRequireCHTTP)
 turbo_flow_require_chttp_deferred_cancel()
 find_package(xxHash CONFIG REQUIRED)
 
+if(TURBO_FLOW_BUILD_TURBODB_ADAPTER)
+  find_package(Orm CONFIG REQUIRED PATHS "$ENV{TURBODB_ROOT}" NO_DEFAULT_PATH)
+  file(REAL_PATH "$ENV{TURBODB_ROOT}" TURBO_FLOW_TURBODB_REAL_ROOT)
+  file(REAL_PATH "${Orm_DIR}" TURBO_FLOW_ORM_REAL_DIR)
+  cmake_path(IS_PREFIX TURBO_FLOW_TURBODB_REAL_ROOT
+             "${TURBO_FLOW_ORM_REAL_DIR}" NORMALIZE
+             TURBO_FLOW_ORM_IS_WITHIN_TURBODB_ROOT)
+  if(NOT TURBO_FLOW_ORM_IS_WITHIN_TURBODB_ROOT)
+    message(FATAL_ERROR
+            "Orm resolved outside TURBODB_ROOT: ${Orm_DIR}")
+  endif()
+endif()
+
 if(WIN32)
   find_program(
     TURBO_FLOW_POWERSHELL_EXECUTABLE
@@ -79,6 +97,9 @@ if(WIN32)
       "$ENV{SALTS_ROOT}"
       "$ENV{SALTS_UTILS_ROOT}"
       "$ENV{RULES_FORGE_ROOT}")
+  if(TURBO_FLOW_BUILD_TURBODB_ADAPTER)
+    list(APPEND TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS "$ENV{TURBODB_ROOT}")
+  endif()
   list(REMOVE_DUPLICATES TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS)
 
   set(TURBO_FLOW_RUNTIME_COPY_COMMANDS)
@@ -121,6 +142,9 @@ add_subdirectory(vendor)
 add_subdirectory(turbo_flow)
 add_subdirectory(io/cnet)
 add_subdirectory(io/chttp)
+if(TURBO_FLOW_BUILD_TURBODB_ADAPTER)
+  add_subdirectory(io/turbodb)
+endif()
   add_subdirectory(security)
   add_subdirectory(codec)
   add_subdirectory(observe)
@@ -138,6 +162,7 @@ foreach(
      turbo_flow
      tf_cnet_adapter
      tf_chttp_adapter
+     tf_turbodb_adapter
      tf_protocol
      tf_protocol_graph
      tf_protocol_mqtt_sn
@@ -169,6 +194,7 @@ install(
 include(CMakePackageConfigHelpers)
 
 # Generate the config file
+set(TURBO_FLOW_HAS_TURBODB_ADAPTER ${TURBO_FLOW_BUILD_TURBODB_ADAPTER})
 configure_package_config_file(
   "${CMAKE_SOURCE_DIR}/cmake/TurboFlowConfig.cmake.in"
   "${CMAKE_BINARY_DIR}/TurboFlowConfig.cmake"
@@ -240,6 +266,8 @@ if(BUILD_TESTING AND BUILD_TESTS)
       "-DTURBO_FLOW_SALTS_ROOT=$ENV{SALTS_ROOT}"
       "-DTURBO_FLOW_SALTS_UTILS_ROOT=$ENV{SALTS_UTILS_ROOT}"
       "-DTURBO_FLOW_RULES_FORGE_ROOT=$ENV{RULES_FORGE_ROOT}"
+      "-DTURBO_FLOW_HAS_TURBODB_ADAPTER=${TURBO_FLOW_BUILD_TURBODB_ADAPTER}"
+      "-DTURBO_FLOW_TURBODB_ROOT=$ENV{TURBODB_ROOT}"
       "-DTURBO_FLOW_VCPKG_INSTALLED_DIR=${VCPKG_INSTALLED_DIR}"
       "-DTURBO_FLOW_VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
       "-DTURBO_FLOW_COMPILER_RUNTIME_DIR=${TURBO_FLOW_COMPILER_RUNTIME_DIR}"

@@ -24,6 +24,10 @@ set(_TurboFlow_supported_components
     Observe
     Schedule)
 
+if(@TURBO_FLOW_HAS_TURBODB_ADAPTER@)
+  list(APPEND _TurboFlow_supported_components TurboDbAdapter)
+endif()
+
 set(_TurboFlow_salts_utils_components
     Graph
     Product
@@ -33,7 +37,8 @@ set(_TurboFlow_salts_utils_components
     SecuritySQLite
     Codec
     Observe
-    Schedule)
+    Schedule
+    TurboDbAdapter)
 
 set(_TurboFlow_rules_forge_components
     Graph
@@ -43,7 +48,8 @@ set(_TurboFlow_rules_forge_components
     SecuritySQLite
     Codec
     Observe
-    Schedule)
+    Schedule
+    TurboDbAdapter)
 
 set(_TurboFlow_requested_components ${TurboFlow_FIND_COMPONENTS})
 if(NOT _TurboFlow_requested_components)
@@ -62,12 +68,16 @@ endforeach()
 
 set(_TurboFlow_needs_salts_utils FALSE)
 set(_TurboFlow_needs_rules_forge FALSE)
+set(_TurboFlow_needs_turbodb FALSE)
 foreach(_TurboFlow_component IN LISTS _TurboFlow_requested_components)
   if(_TurboFlow_component IN_LIST _TurboFlow_salts_utils_components)
     set(_TurboFlow_needs_salts_utils TRUE)
   endif()
   if(_TurboFlow_component IN_LIST _TurboFlow_rules_forge_components)
     set(_TurboFlow_needs_rules_forge TRUE)
+  endif()
+  if(_TurboFlow_component STREQUAL "TurboDbAdapter")
+    set(_TurboFlow_needs_turbodb TRUE)
   endif()
 endforeach()
 
@@ -142,6 +152,12 @@ if(_TurboFlow_needs_rules_forge)
                   PATHS "$ENV{RULES_FORGE_ROOT}" NO_DEFAULT_PATH)
   _TurboFlow_verify_dependency_root(RulesForge RULES_FORGE_ROOT)
 endif()
+if(_TurboFlow_needs_turbodb)
+  _TurboFlow_require_dependency_root(Orm TURBODB_ROOT Orm::C)
+  find_dependency(Orm CONFIG REQUIRED
+                  PATHS "$ENV{TURBODB_ROOT}" NO_DEFAULT_PATH)
+  _TurboFlow_verify_dependency_root(Orm TURBODB_ROOT)
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowRequireCHTTP.cmake")
 turbo_flow_require_chttp_deferred_cancel()
@@ -164,6 +180,7 @@ unset(_TurboFlow_dependency_is_within_root)
 unset(_TurboFlow_dependency_root)
 unset(_TurboFlow_needs_rules_forge)
 unset(_TurboFlow_needs_salts_utils)
+unset(_TurboFlow_needs_turbodb)
 unset(_TurboFlow_requested_components)
 unset(_TurboFlow_rules_forge_components)
 unset(_TurboFlow_salts_utils_components)

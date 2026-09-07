@@ -116,11 +116,11 @@ and closed after flow shutdown without accessing freed flow state.
 ## Migration and rollback
 
 Existing callers continue to use `turbo_flow_publish()` and receive the same visible result. New
-Publisher integrations adopt the run API explicitly. TurboDb can later supply a native Publisher
-without exposing database ownership inside TurboFlow. Rollback removes the additive run API and
-restores the direct synchronous call path; no DSL, persisted data, or deployment configuration
-requires migration. Because no fallback is retained, rollback is a source-level change rather than
-a runtime switch.
+Publisher integrations adopt the run API explicitly. The optional `TurboFlow::TurboDbAdapter` now
+wraps native ORM Publishers without exposing database ownership inside Graph core. Rollback removes
+the additive run API and restores the direct synchronous call path; no DSL, persisted data, or
+deployment configuration requires migration. Because no fallback is retained, rollback is a
+source-level change rather than a runtime switch.
 
 ## Verification
 

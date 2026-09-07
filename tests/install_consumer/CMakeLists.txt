@@ -8,9 +8,7 @@ else()
 endif()
 
 if(TURBO_FLOW_TEST_ALL_COMPONENTS)
-  find_package(
-    TurboFlow 1.0 CONFIG REQUIRED
-    COMPONENTS
+  set(turbo_flow_test_components
       Config
       Graph
       CNetAdapter
@@ -31,6 +29,11 @@ if(TURBO_FLOW_TEST_ALL_COMPONENTS)
       Codec
       Observe
       Schedule)
+  if(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
+    list(APPEND turbo_flow_test_components TurboDbAdapter)
+  endif()
+  find_package(TurboFlow 1.0 CONFIG REQUIRED
+               COMPONENTS ${turbo_flow_test_components})
 else()
   find_package(TurboFlow 1.0 CONFIG REQUIRED)
 endif()
@@ -58,6 +61,12 @@ target_link_libraries(
           TurboFlow::Codec
           TurboFlow::Observe
           TurboFlow::Schedule)
+if(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
+  target_link_libraries(turbo_flow_install_consumer
+                        PRIVATE TurboFlow::TurboDbAdapter)
+  target_compile_definitions(turbo_flow_install_consumer
+                             PRIVATE TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER=1)
+endif()
 
 enable_testing()
 add_test(NAME turbo_flow_install_consumer_runs COMMAND turbo_flow_install_consumer)
