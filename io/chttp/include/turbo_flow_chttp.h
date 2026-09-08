@@ -140,7 +140,9 @@ typedef enum turbo_flow_chttp_server_state_e {
   TURBO_FLOW_CHTTP_SERVER_STOPPING,
   TURBO_FLOW_CHTTP_SERVER_STOPPED,
   TURBO_FLOW_CHTTP_SERVER_DETACHED,
-  TURBO_FLOW_CHTTP_SERVER_FAILED
+  TURBO_FLOW_CHTTP_SERVER_FAILED,
+  /** Admission is closed; existing deferred responses may still be active. */
+  TURBO_FLOW_CHTTP_SERVER_QUIESCED
 } turbo_flow_chttp_server_state_t;
 
 /**
@@ -401,6 +403,28 @@ turbo_flow_chttp_server_register(const turbo_flow_chttp_server_config_t *config,
 TURBO_FLOW_C_API int
 turbo_flow_chttp_server_snapshot(const turbo_flow_chttp_server_t *server,
                                  turbo_flow_chttp_server_snapshot_t *out_snapshot);
+
+/**
+ * Close request admission without stopping accepted deferred responses.
+ * @param server Borrowed registered server owner.
+ * @return SALTS_OK (also when already quiesced), SALTS_EINVAL for NULL,
+ *         or SALTS_ESHUTDOWN outside RUNNING/QUIESCED.
+ * Reservation and quiesce share one mutex. Previously reserved requests may
+ * finish admission after return; new requests receive configured unavailable_status.
+ * This does not wait for active_requests to reach zero or close the listener.
+ * Serialize control calls with Flow start/stop/destroy; callbacks may run concurrently.
+ */
+TURBO_FLOW_C_API int turbo_flow_chttp_server_quiesce(turbo_flow_chttp_server_t *server);
+
+/**
+ * Reopen admission on a live server, retaining its port and deferred owners.
+ * @param server Borrowed registered server owner.
+ * @return SALTS_OK (also when already running), SALTS_EINVAL for NULL,
+ *         or SALTS_ESHUTDOWN outside RUNNING/QUIESCED.
+ * Example: quiesce(server), inspect snapshot.active_requests, resume(server).
+ * The same serialization contract as turbo_flow_chttp_server_quiesce applies.
+ */
+TURBO_FLOW_C_API int turbo_flow_chttp_server_resume(turbo_flow_chttp_server_t *server);
 
 /**
  * Releases a server only after Flow registry shutdown detached the adapter.

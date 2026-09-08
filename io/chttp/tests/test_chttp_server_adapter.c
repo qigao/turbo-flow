@@ -302,8 +302,7 @@ static void chttp_server_adapter_stop_thread(void *ctx) {
 }
 
 static void chttp_server_adapter_snapshot_thread(void *ctx) {
-  chttp_server_adapter_snapshot_thread_t *probe =
-      (chttp_server_adapter_snapshot_thread_t *)ctx;
+  chttp_server_adapter_snapshot_thread_t *probe = (chttp_server_adapter_snapshot_thread_t *)ctx;
   if (!probe) return;
   while (!atomic_load_explicit(&probe->stop, memory_order_acquire)) {
     turbo_flow_chttp_server_snapshot_t snapshot = TURBO_FLOW_CHTTP_SERVER_SNAPSHOT_INIT;
@@ -329,11 +328,11 @@ static void chttp_server_adapter_snapshot_thread(void *ctx) {
   }
 }
 
-static int chttp_server_adapter_holding_sink_submit(
-    void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
-    const turbo_flow_msg_t *message, turbo_flow_async_terminal_claim_t *claim) {
-  chttp_server_adapter_holding_sink_t *sink =
-      (chttp_server_adapter_holding_sink_t *)ctx;
+static int chttp_server_adapter_holding_sink_submit(void *ctx, turbo_flow_t *flow,
+                                                    const turbo_flow_stage_plan_t *stage,
+                                                    const turbo_flow_msg_t *message,
+                                                    turbo_flow_async_terminal_claim_t *claim) {
+  chttp_server_adapter_holding_sink_t *sink = (chttp_server_adapter_holding_sink_t *)ctx;
   int status;
   (void)flow;
   (void)stage;
@@ -346,8 +345,7 @@ static int chttp_server_adapter_holding_sink_submit(
 
 static void chttp_server_adapter_holding_sink_stop(void *ctx, turbo_flow_t *flow,
                                                    const turbo_flow_stage_plan_t *stage) {
-  chttp_server_adapter_holding_sink_t *sink =
-      (chttp_server_adapter_holding_sink_t *)ctx;
+  chttp_server_adapter_holding_sink_t *sink = (chttp_server_adapter_holding_sink_t *)ctx;
   (void)flow;
   if (!sink || !stage || stage->is_source) return;
   (void)atomic_fetch_add_explicit(&sink->stops, 1u, memory_order_release);
@@ -429,6 +427,31 @@ static int chttp_server_adapter_require_h2(turbo_flow_msg_t *message, void *ctx)
 }
 
 spec("TurboFlow CHTTP deferred server adapter") {
+  static turbo_flow_t *quiesce_cleanup_flow;
+  static turbo_flow_chttp_server_t *quiesce_cleanup_server;
+  static chttp_async_client *quiesce_cleanup_client;
+  static chttp_server_adapter_gate_t *quiesce_cleanup_gate;
+
+  after_each() {
+    if (quiesce_cleanup_gate)
+      atomic_store_explicit(&quiesce_cleanup_gate->allow_exit, 1, memory_order_release);
+    if (quiesce_cleanup_client) {
+      check_equal(chttp_async_client_stop(quiesce_cleanup_client, 5000u), SALTS_OK);
+      check_equal(chttp_async_client_destroy(quiesce_cleanup_client), SALTS_OK);
+      quiesce_cleanup_client = NULL;
+    }
+    if (quiesce_cleanup_flow) {
+      check_equal(turbo_flow_stop(quiesce_cleanup_flow), SALTS_OK);
+      turbo_flow_destroy(quiesce_cleanup_flow);
+      quiesce_cleanup_flow = NULL;
+    }
+    if (quiesce_cleanup_server) {
+      check_equal(turbo_flow_chttp_server_destroy(quiesce_cleanup_server), SALTS_OK);
+      quiesce_cleanup_server = NULL;
+    }
+    quiesce_cleanup_gate = NULL;
+  }
+
   it("exports a size-versioned C and C++ server contract") {
     turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
     turbo_flow_chttp_server_snapshot_t snapshot = TURBO_FLOW_CHTTP_SERVER_SNAPSHOT_INIT;
@@ -1229,6 +1252,134 @@ spec("TurboFlow CHTTP deferred server adapter") {
     check_equal(turbo_flow_chttp_server_destroy(server), SALTS_OK);
   }
 
+  it("quiesces H1 and H2 admission while accepted responses drain and explicitly resumes") {
+    static const char dsl[] = "source http_in adapter http.server\n"
+                              "stage gate\n"
+                              "stage response adapter http.server\n"
+                              "stage main {\n"
+                              "  http_in -> gate -> response\n"
+                              "}\n";
+    enum { MAX_POLLS = 100, POLL_MS = 50 };
+    const chttp_protocol protocols[] = {CHTTP_HTTP_1_1, CHTTP_HTTP_2};
+    for (size_t index = 0u; index < sizeof(protocols) / sizeof(protocols[0]); ++index) {
+      chttp_server_config native_config =
+          index == 0u ? chttp_server_adapter_config() : chttp_server_adapter_h2_config();
+      chttp_client_config client_config = index == 0u ? chttp_server_adapter_client_config()
+                                                      : chttp_server_adapter_h2_client_config();
+      turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
+      turbo_flow_chttp_server_snapshot_t snapshot = TURBO_FLOW_CHTTP_SERVER_SNAPSHOT_INIT;
+      turbo_flow_chttp_server_t *server = NULL;
+      static chttp_server_adapter_gate_t gate;
+      static chttp_server_adapter_http_completion_t accepted, rejected, resumed;
+      static chttp_async_client client;
+      chttp_request requests[3] = {0};
+      chttp_request_options options = {0};
+      turbo_flow_t *flow = turbo_flow_create();
+      char uri[64];
+      size_t completions;
+      uint16_t port;
+      /* H1 cannot multiplex a second request on the held response connection. */
+      client_config.network.connection_capacity = 2u;
+      atomic_init(&gate.entered, 0u);
+      atomic_init(&gate.allow_exit, 0);
+      accepted = (chttp_server_adapter_http_completion_t){0};
+      rejected = (chttp_server_adapter_http_completion_t){0};
+      resumed = (chttp_server_adapter_http_completion_t){0};
+      quiesce_cleanup_gate = &gate;
+      quiesce_cleanup_flow = flow;
+      check_not_null(flow);
+      config.flow = flow;
+      config.adapter_name = "http.server";
+      config.source_name = "http_in";
+      config.server = &native_config;
+      config.method = CHTTP_METHOD_POST;
+      config.path = "/flow";
+      check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
+      quiesce_cleanup_server = server;
+      check_equal(turbo_flow_chttp_server_quiesce(server), SALTS_ESHUTDOWN);
+      check_equal(turbo_flow_chttp_server_resume(server), SALTS_ESHUTDOWN);
+      check_equal(turbo_flow_parse_string(flow, dsl, sizeof(dsl) - 1u), SALTS_OK);
+      check_equal(
+          turbo_flow_register_stage_ex(flow, "gate", chttp_server_adapter_gate, &gate, NULL),
+          SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
+      port = snapshot.bound_port;
+      check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
+      check_equal(chttp_async_client_init(&client, &client_config), SALTS_OK);
+      quiesce_cleanup_client = &client;
+      options.connection_uri = uri;
+      options.authority = "127.0.0.1";
+      options.target = "/flow";
+      options.method = CHTTP_METHOD_POST;
+      options.body = "accepted";
+      options.body_size = sizeof("accepted") - 1u;
+      options.protocol = protocols[index];
+      options.on_complete = chttp_server_adapter_http_complete;
+      options.user = &accepted;
+      check_equal(chttp_async_client_submit(&client, &options, &requests[0]), SALTS_OK);
+      for (size_t poll = 0u;
+           poll < MAX_POLLS && atomic_load_explicit(&gate.entered, memory_order_acquire) == 0u;
+           ++poll)
+        check_equal(chttp_async_client_poll(&client, POLL_MS, &completions), SALTS_OK);
+      check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), (size_t)1u);
+      check_equal(turbo_flow_chttp_server_quiesce(server), SALTS_OK);
+      check_equal(turbo_flow_chttp_server_quiesce(server), SALTS_OK);
+      check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
+      check_equal(snapshot.state, TURBO_FLOW_CHTTP_SERVER_QUIESCED);
+      check_equal(snapshot.active_requests, (size_t)1u);
+      options.user = &rejected;
+      check_equal(chttp_async_client_submit(&client, &options, &requests[1]), SALTS_OK);
+      for (size_t poll = 0u; poll < MAX_POLLS && rejected.calls == 0u; ++poll)
+        check_equal(chttp_async_client_poll(&client, POLL_MS, &completions), SALTS_OK);
+      check_equal(rejected.calls, (size_t)1u);
+      check_equal(rejected.status, SALTS_OK);
+      check_equal(rejected.response_status, config.unavailable_status);
+      check_equal(accepted.calls, (size_t)0u);
+      atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
+      for (size_t poll = 0u; poll < MAX_POLLS && accepted.calls == 0u; ++poll)
+        check_equal(chttp_async_client_poll(&client, POLL_MS, &completions), SALTS_OK);
+      check_equal(accepted.calls, (size_t)1u);
+      check_equal(accepted.status, SALTS_OK);
+      check_equal(accepted.response_status, config.success_status);
+      check_equal(accepted.body, "accepted");
+      check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
+      check_equal(snapshot.state, TURBO_FLOW_CHTTP_SERVER_QUIESCED);
+      check_equal(snapshot.active_requests, (size_t)0u);
+      check_equal(snapshot.admitted_requests, (uint64_t)1u);
+      check_equal(snapshot.completed_requests, (uint64_t)1u);
+      check_equal(snapshot.rejected_requests, (uint64_t)1u);
+      check_equal(turbo_flow_chttp_server_resume(server), SALTS_OK);
+      check_equal(turbo_flow_chttp_server_resume(server), SALTS_OK);
+      options.user = &resumed;
+      check_equal(chttp_async_client_submit(&client, &options, &requests[2]), SALTS_OK);
+      for (size_t poll = 0u; poll < MAX_POLLS && resumed.calls == 0u; ++poll)
+        check_equal(chttp_async_client_poll(&client, POLL_MS, &completions), SALTS_OK);
+      check_equal(resumed.calls, (size_t)1u);
+      check_equal(resumed.response_status, config.success_status);
+      check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
+      check_equal(snapshot.bound_port, port);
+      check_equal(snapshot.completed_requests, (uint64_t)2u);
+      check_equal(chttp_async_client_stop(&client, 5000u), SALTS_OK);
+      check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+      quiesce_cleanup_client = NULL;
+      check_equal(turbo_flow_chttp_server_quiesce(server), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(turbo_flow_chttp_server_resume(server), SALTS_ESHUTDOWN);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
+      check_equal(snapshot.state, TURBO_FLOW_CHTTP_SERVER_RUNNING);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      turbo_flow_destroy(flow);
+      quiesce_cleanup_flow = NULL;
+      check_equal(turbo_flow_chttp_server_destroy(server), SALTS_OK);
+      quiesce_cleanup_server = NULL;
+    }
+    check_equal(turbo_flow_chttp_server_quiesce(NULL), SALTS_EINVAL);
+    check_equal(turbo_flow_chttp_server_resume(NULL), SALTS_EINVAL);
+  }
+
   it("drains accepted deferred work and rejects new admission during stop") {
     static const char *dsl = "source http_in adapter http.server\n"
                              "stage gate\n"
@@ -1336,8 +1487,8 @@ spec("TurboFlow CHTTP deferred server adapter") {
     schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
     schema.roles = TURBO_FLOW_ADAPTER_SINK;
     schema.direction = TURBO_FLOW_ADAPTER_OUTPUT;
-    check_equal(turbo_flow_register_async_terminal_adapter_ex(
-                    flow, "holding.sink", &adapter_ops, &async_ops, &sink, &schema),
+    check_equal(turbo_flow_register_async_terminal_adapter_ex(flow, "holding.sink", &adapter_ops,
+                                                              &async_ops, &sink, &schema),
                 SALTS_OK);
     native_config.network.write_timeout_ms = 100u;
     config.flow = flow;
