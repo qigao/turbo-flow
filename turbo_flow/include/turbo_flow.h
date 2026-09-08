@@ -8,8 +8,8 @@
 #include "salts_error.h"
 #include "turbo_flow_domain.h"
 #include "turbo_flow_config_limits.h"
-#include "salts_str.h"
-#include "salts_vstr.h"
+#include "tstr.h"
+#include "vstr.h"
 
 #include <cflow/reactive.h>
 
