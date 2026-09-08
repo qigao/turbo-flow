@@ -8,6 +8,8 @@ An owner passes its existing resource operations plus descriptor and snapshot ca
 
 An owner whose Sink is also an asynchronous terminal adapter uses `turbo_flow_register_managed_async_terminal_adapter()` instead of making two independent registration calls. Its size/versioned aggregate names both explicit contracts and one shared owner context. The adapter schema must include the Sink role, and the copied managed descriptor must also declare the Sink role. The API does not infer either contract from the other.
 
+A Source owner that feeds CFlow Reactive demand uses `turbo_flow_register_managed_source_adapter()` so its adapter and managed boundary commit as one transaction. During that exact Source adapter's synchronous `start` callback, it may call `turbo_flow_managed_source_run_open()` once. The callback-scoped API does not open global Flow admission, rejects copied stage views and calls from other threads, and leaves Publisher ownership with the caller on failure. The complete Source run contract is documented in [Managed Source Run Binding](MANAGED_SOURCE_RUNS.md).
+
 The descriptor is copied into the host during registration. It declares:
 
 - stable resource UID and owner identity;
@@ -29,6 +31,8 @@ The live snapshot remains owner-synchronized and reports lifecycle state, demand
 - All enumeration is O(R) in registered resources and performs no allocation. A descriptor query invokes one metadata callback; a live snapshot query invokes one snapshot callback bracketed by two metadata callbacks.
 
 For the combined async-terminal registration, the caller owns the context until the whole call succeeds. Core first validates the aggregate and rejects a duplicate adapter before invoking boundary callbacks. It copies the adapter operations into a staging registration with `shutdown` suppressed, then registers the managed resource in the canonical registry. An adapter-stage failure occurs before the resource phase. A resource-stage callback, validation, duplicate, or allocation failure removes the staging adapter, returns the original error, and does not invoke shutdown. Only after both registries contain the validated owner does core restore the adapter shutdown callback as the ownership-transfer commit point. A successful Flow teardown follows that callback exactly once.
+
+The managed Source aggregate uses the same staging transaction. On successful start, Core owns the returned run handle while the Source owner retains the Publisher backing state through cancellation. The run count shares `async_ingress_config.queue_capacity` with ordinary Reactive runs. Stop closes external admission, cancels ordinary runs, closes managed Source subscriptions in reverse adapter order, drains accepted graph work, and only then invokes Source `stop`; registry teardown invokes `shutdown` after no run can retain the owner context. No runtime registration, inferred capacity, alternate registry, or compatibility path is used.
 
 This staging order was selected over three alternatives:
 
@@ -56,8 +60,8 @@ Start, poll, stop, failure cleanup, and detach share one lifecycle owner lane. M
 
 ## Migration and rollback
 
-Existing owners and embedded resource-registration structures retain their layout and continue to register as ordinary resources. Migration is explicit: use the additive managed-provider entry point, or the combined async-terminal entry point for a terminal Sink, advertise only capabilities the owner actually implements, and keep the owner-native snapshot as the sole mutable state. There is no compatibility fallback from a managed contract to `turbo_flow_resource_snapshot_t`.
+Existing owners and embedded resource-registration structures retain their layout and continue to register as ordinary resources. Migration is explicit: use the additive managed-provider entry point, the combined async-terminal entry point for a terminal Sink, or the combined managed Source entry point for a Reactive Source. Advertise only capabilities the owner actually implements, and keep the owner-native snapshot as the sole mutable state. There is no compatibility fallback from a managed contract to `turbo_flow_resource_snapshot_t`.
 
 Removing the paired callbacks rolls a standalone owner back to an ordinary resource without changing its data path or existing resource commands. This is a source-level migration reversal, not a runtime fallback. The CNet stream and datagram Sinks now require the combined managed registration; other CNet, CHTTP, and TurboDb owners remain independently tracked under issue #28.
 
-The deterministic, buildable examples are `turbo_flow/tests/test_flow_managed_boundary.c` and `turbo_flow/tests/test_flow_managed_async_terminal.c`. The installed-package consumer in `tests/install_consumer/main.c` validates the same header, initializer, and exported symbol in both C and C++ modes.
+The deterministic, buildable examples are `turbo_flow/tests/test_flow_managed_boundary.c`, `turbo_flow/tests/test_flow_managed_async_terminal.c`, and `turbo_flow/tests/test_flow_managed_source.c`. The installed-package consumer in `tests/install_consumer/main.c` validates the same headers, initializers, and exported symbols in both C and C++ modes.

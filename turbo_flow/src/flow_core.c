@@ -212,6 +212,7 @@ void flow_clear_plan(turbo_flow_t *flow) {
   if (!flow) return;
   flow_close_publish_admission(flow);
   (void)flow_stop_non_source_adapters(flow);
+  flow_close_managed_source_runs(flow);
   flow_wait_for_publishes(flow);
   (void)flow_stop_source_adapters(flow);
   turbo_flow_stl_error(vec_clear(&flow->active_adapters));
@@ -454,6 +455,7 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   if (!flow) return;
   if (flow->state == TURBO_FLOW_STATE_STARTED) (void)turbo_flow_stop(flow);
   flow_stop_async_ingress(flow);
+  flow_close_managed_source_runs(flow);
   flow_reactive_runtime_stop(flow);
   flow_clear_plan(flow);
   flow_clear_registry(flow);
@@ -1164,6 +1166,71 @@ int turbo_flow_register_managed_async_terminal_adapter(
     flow_adapter_registrations_rollback(flow, adapters_before);
     return SALTS_EPROTO;
   }
+  adapter->ops.shutdown = registration->adapter_ops->shutdown;
+  return SALTS_OK;
+}
+
+int turbo_flow_register_managed_source_adapter(
+    turbo_flow_t *flow, const turbo_flow_managed_source_registration_t *registration) {
+  turbo_flow_adapter_ops_t staged_adapter_ops;
+  flow_adapter_registration_t *adapter;
+  const flow_resource_registration_t *resource;
+  size_t adapters_before;
+  size_t resources_before;
+  int rc;
+
+  if (!flow || !registration || registration->size < sizeof(*registration) ||
+      registration->version != TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_API_VERSION ||
+      !registration->adapter_name || registration->adapter_name[0] == '\0' ||
+      !registration->adapter_ops || !registration->adapter_ops->start ||
+      registration->adapter_ops->consume || registration->adapter_ops->consume_retry ||
+      !registration->schema || registration->schema->roles != TURBO_FLOW_ADAPTER_SOURCE ||
+      registration->schema->direction != TURBO_FLOW_ADAPTER_INPUT || !registration->owner_name ||
+      registration->owner_name[0] == '\0' || !registration->boundary_ops ||
+      registration->boundary_ops->size < sizeof(*registration->boundary_ops) ||
+      registration->boundary_ops->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION ||
+      registration->boundary_ops->resource.size < sizeof(registration->boundary_ops->resource) ||
+      !registration->boundary_ops->resource.metadata || !registration->boundary_ops->descriptor ||
+      !registration->boundary_ops->snapshot) {
+    return SALTS_EINVAL;
+  }
+  if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED ||
+      flow->state == TURBO_FLOW_STATE_STOPPED || flow->state == TURBO_FLOW_STATE_FAILED) {
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                     "cannot register managed Source adapter after compile");
+  }
+  if (flow_find_adapter(flow, registration->adapter_name) >= 0) {
+    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "duplicate adapter");
+  }
+
+  staged_adapter_ops = *registration->adapter_ops;
+  staged_adapter_ops.shutdown = NULL;
+  adapters_before = vec_size(&flow->adapters);
+  resources_before = vec_size(&flow->resources);
+  rc = turbo_flow_register_adapter_ex(flow, registration->adapter_name, &staged_adapter_ops,
+                                      registration->ctx, registration->schema);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_register_managed_boundary_provider(
+      flow, registration->owner_name, registration->boundary_ops, registration->ctx);
+  if (rc != SALTS_OK) {
+    flow_adapter_registrations_rollback(flow, adapters_before);
+    return rc;
+  }
+  resource = (const flow_resource_registration_t *)vec_at_const(&flow->resources,
+                                                                 resources_before);
+  if (!resource || !resource->has_managed_boundary ||
+      (resource->managed_boundary.role_flags & TURBO_FLOW_MANAGED_BOUNDARY_SOURCE) == 0u) {
+    flow_resource_registrations_rollback(flow, resources_before);
+    flow_adapter_registrations_rollback(flow, adapters_before);
+    return SALTS_EPROTO;
+  }
+  adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, adapters_before);
+  if (!adapter) {
+    flow_resource_registrations_rollback(flow, resources_before);
+    flow_adapter_registrations_rollback(flow, adapters_before);
+    return SALTS_EPROTO;
+  }
+  adapter->managed_source = 1;
   adapter->ops.shutdown = registration->adapter_ops->shutdown;
   return SALTS_OK;
 }

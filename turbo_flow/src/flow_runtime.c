@@ -509,6 +509,7 @@ int turbo_flow_stop(turbo_flow_t *flow) {
     flow_reactive_runtime_cancel(flow);
   }
   non_source_status = flow_stop_non_source_adapters(flow);
+  flow_close_managed_source_runs(flow);
   if (!retrying) {
     flow_stop_async_ingress(flow);
   }
@@ -930,7 +931,7 @@ int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name, const tur
                                    "single-message Reactive Publisher initialization failed");
   } else {
     config.scheduler = &scheduler;
-    rc = flow_run_open_internal(flow, source_name, &publisher, &config, 1, &run);
+    rc = flow_run_open_internal(flow, source_name, &publisher, &config, 1, 0, &run);
     if (rc == SALTS_OK) rc = turbo_flow_run_request(run, 1u);
     if (rc == SALTS_OK) rc = turbo_flow_run_wait(run, UINT64_MAX, &run_result);
   }

@@ -4,6 +4,16 @@
 
 static SALTS_THREAD_LOCAL turbo_flow_t *flow_active_adapter_stop_owner;
 
+typedef struct flow_managed_source_start_scope_s {
+  turbo_flow_t *flow;
+  const turbo_flow_stage_plan_t *stage_view;
+  uint32_t stage_index;
+  size_t adapter_index;
+  size_t active_index;
+} flow_managed_source_start_scope_t;
+
+static SALTS_THREAD_LOCAL flow_managed_source_start_scope_t *flow_managed_source_start_scope;
+
 void flow_make_stage_view(const flow_stage_plan_impl_t *stage, turbo_flow_stage_plan_t *view) {
   memset(view, 0, sizeof(*view));
   view->name = stage->name;
@@ -124,11 +134,28 @@ static int flow_stop_adapter_phase(turbo_flow_t *flow, int source_phase) {
   return first_status;
 }
 
+void flow_close_managed_source_runs(turbo_flow_t *flow) {
+  size_t count;
+  if (!flow) return;
+  count = vec_size(&flow->active_adapters);
+  while (count > 0u) {
+    flow_active_adapter_t *active;
+    turbo_flow_run_t *run;
+    --count;
+    active = (flow_active_adapter_t *)vec_at(&flow->active_adapters, count);
+    if (!active || !active->managed_source_run) continue;
+    run = active->managed_source_run;
+    active->managed_source_run = NULL;
+    turbo_flow_run_close(run);
+  }
+}
+
 int flow_stop_non_source_adapters(turbo_flow_t *flow) {
   return flow_stop_adapter_phase(flow, 0);
 }
 
 int flow_stop_source_adapters(turbo_flow_t *flow) {
+  flow_close_managed_source_runs(flow);
   return flow_stop_adapter_phase(flow, 1);
 }
 
@@ -138,8 +165,9 @@ int flow_stop_adapters(turbo_flow_t *flow) {
 
   if (!flow) return SALTS_EINVAL;
   non_source_status = flow_stop_non_source_adapters(flow);
+  flow_close_managed_source_runs(flow);
   flow_wait_for_publishes(flow);
-  source_status = flow_stop_source_adapters(flow);
+  source_status = flow_stop_adapter_phase(flow, 1);
   if (non_source_status == SALTS_OK && source_status == SALTS_OK)
     turbo_flow_stl_error(vec_clear(&flow->active_adapters));
   return non_source_status != SALTS_OK ? non_source_status : source_status;
@@ -165,6 +193,11 @@ int flow_start_adapters(turbo_flow_t *flow) {
 
   if (!flow) return SALTS_EINVAL;
   turbo_flow_stl_error(vec_clear(&flow->active_adapters));
+  if (turbo_flow_stl_error(vec_reserve(&flow->active_adapters, vec_size(&flow->stages))) !=
+      SALTS_OK) {
+    return flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0,
+                                     "active adapter reservation failed");
+  }
 
   for (size_t stage_index = 0; stage_index < vec_size(&flow->stages); ++stage_index) {
     const flow_stage_plan_impl_t *stage =
@@ -173,6 +206,7 @@ int flow_start_adapters(turbo_flow_t *flow) {
     flow_adapter_registration_t *adapter;
     flow_active_adapter_t active;
     turbo_flow_stage_plan_t view;
+    int active_registered = 0;
 
     if (!stage || !stage->adapter_name) continue;
 
@@ -196,9 +230,32 @@ int flow_start_adapters(turbo_flow_t *flow) {
       goto fail;
     }
 
+    if (adapter->managed_source) {
+      memset(&active, 0, sizeof(active));
+      active.stage_index = (uint32_t)stage_index;
+      active.adapter_index = (size_t)adapter_index;
+      if (turbo_flow_stl_error(vec_push(&flow->active_adapters, &active)) != SALTS_OK) {
+        rc = flow_set_error_keep_state(flow, SALTS_ENOMEM, stage->line, stage->column,
+                                       "active managed Source registration failed");
+        goto fail;
+      }
+      active_registered = 1;
+    }
+
     if (adapter->ops.start) {
+      flow_managed_source_start_scope_t scope;
+      flow_managed_source_start_scope_t *previous_scope = flow_managed_source_start_scope;
       flow_make_stage_view(stage, &view);
+      if (adapter->managed_source) {
+        scope.flow = flow;
+        scope.stage_view = &view;
+        scope.stage_index = (uint32_t)stage_index;
+        scope.adapter_index = (size_t)adapter_index;
+        scope.active_index = vec_size(&flow->active_adapters) - 1u;
+        flow_managed_source_start_scope = &scope;
+      }
       rc = adapter->ops.start(adapter->ctx, flow, &view);
+      flow_managed_source_start_scope = previous_scope;
       if (flow->observer_ops.adapter_event) {
         flow->observer_ops.adapter_event(flow->observer_ctx, stage->name, adapter->name,
                                          TURBO_FLOW_ADAPTER_EVENT_START, rc);
@@ -224,7 +281,7 @@ int flow_start_adapters(turbo_flow_t *flow) {
       }
     }
 
-    if (adapter->ops.start || adapter->ops.stop) {
+    if (!active_registered && (adapter->ops.start || adapter->ops.stop)) {
       memset(&active, 0, sizeof(active));
       active.stage_index = (uint32_t)stage_index;
       active.adapter_index = (size_t)adapter_index;
@@ -254,4 +311,36 @@ fail:
     }
   }
   return rc;
+}
+
+int turbo_flow_managed_source_run_open(turbo_flow_t *flow,
+                                       const turbo_flow_stage_plan_t *stage,
+                                       cflow_publisher *publisher,
+                                       const turbo_flow_run_config_t *config,
+                                       turbo_flow_run_t **run_out) {
+  flow_managed_source_start_scope_t *scope = flow_managed_source_start_scope;
+  flow_active_adapter_t *active;
+  const flow_adapter_registration_t *adapter;
+  turbo_flow_run_t *run = NULL;
+  int rc;
+
+  if (run_out) *run_out = NULL;
+  if (!flow || !stage || !publisher || !run_out || !scope || scope->flow != flow ||
+      scope->stage_view != stage || !stage->is_source || !stage->name || !stage->adapter_name) {
+    return SALTS_EINVAL;
+  }
+  active = (flow_active_adapter_t *)vec_at(&flow->active_adapters, scope->active_index);
+  adapter = (const flow_adapter_registration_t *)vec_at_const(&flow->adapters,
+                                                               scope->adapter_index);
+  if (!active || !adapter || !adapter->managed_source || active->managed_source_run ||
+      active->stage_index != scope->stage_index || active->adapter_index != scope->adapter_index ||
+      strcmp(stage->adapter_name, adapter->name) != 0) {
+    return SALTS_EINVAL;
+  }
+
+  rc = flow_run_open_internal(flow, stage->name, publisher, config, 0, 1, &run);
+  if (rc != SALTS_OK) return rc;
+  active->managed_source_run = run;
+  *run_out = run;
+  return SALTS_OK;
 }
