@@ -36,10 +36,18 @@ RulesForge/TurboScript 与控制/Raft bridge 均注册 size/versioned 的纯 C v
 实现。一次 generation 先冻结 catalog snapshot，对所有 Graph 引用执行无副作用 preflight，并预留
 有界 owner 存储；全部成功后才消费 parsed Graph，按 resource、adapter 顺序 materialize 并 compile。
 
-materialize 开始后失败会销毁整张新 Graph，并通过 DLL owner vtable 逆序回收已转移对象；不会调用
-legacy Product provider 兜底。运行方以 generation lease 包住 CFlow run 和异步 callback。退休顺序为
+materialize 开始后失败会先销毁整张新 Graph，使 adapter shutdown/detach 完成，再通过 DLL owner
+vtable 逆序回收已转移对象；不会调用 legacy Product provider 兜底。ABI minor 3 要求可能产生
+external-poll owner 的 DLL 在 root API 声明 `TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL`，并通过
+`turbo_flow_plugin_product_owner_publish()` 按 host 预置容量发布 descriptor；旧 host 会在
+materialize 前拒绝未知 capability，旧 v1.0 owner 也不会被新 host 读取尾 padding。声明
+`EXTERNAL_POLL` 的 owner
+由 Gateway 控制线程调用 `turbo_flow_plugin_generation_poll()` 推进：每轮每个 owner 至多一次，只有轮转
+首位获得该轮总等待预算，其余均为零等待；不声明者是 lifecycle-only owner。运行方以 generation lease
+包住 CFlow run 和异步 callback。退休顺序为
 owner quiesce、Graph stop、owner drain、owner shutdown、Graph destroy、owner destroy、snapshot release；
-生命周期失败保留可重试状态，DLL 在最后一个 snapshot/lease 释放前不可卸载。
+生命周期失败保留可重试状态，但 retirement 一旦开始就不再接受 poll。DLL 在最后一个
+snapshot/lease 释放前不可卸载。
 
 ## Reactive run
 

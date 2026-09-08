@@ -41,6 +41,10 @@
 #ifndef FLOW_PLUGIN_FIXTURE_MODE
   #define FLOW_PLUGIN_FIXTURE_MODE FLOW_PLUGIN_FIXTURE_MODE_GOOD
 #endif
+#ifndef FLOW_PLUGIN_FIXTURE_CAPABILITIES
+  #define FLOW_PLUGIN_FIXTURE_CAPABILITIES                                                         \
+    (TURBO_FLOW_PLUGIN_CAP_PRODUCT_ADAPTER | TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE)
+#endif
 
 typedef struct flow_plugin_fixture_s {
   const turbo_flow_plugin_host_v1_t *host;
@@ -153,7 +157,7 @@ static const turbo_flow_plugin_api_v1_t flow_plugin_fixture_api = {
     TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR,
     FLOW_PLUGIN_FIXTURE_ID,
     FLOW_PLUGIN_FIXTURE_VERSION,
-    TURBO_FLOW_PLUGIN_CAP_PRODUCT_ADAPTER | TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE,
+    FLOW_PLUGIN_FIXTURE_CAPABILITIES,
     flow_plugin_fixture_load,
     flow_plugin_fixture_register,
     flow_plugin_fixture_quiesce,

@@ -24,6 +24,19 @@ and snapshot catalogs. ABI minor 2 adds separate transactional Product factories
 generation ownership without changing the root symbol or ABI major. Later ABI-minor extensions may
 add typed operation and schema registration.
 
+ABI minor 3 adds the root `TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL` modifier and bounded
+`turbo_flow_plugin_product_owner_publish()` output negotiation. A plugin that may return an
+external-poll owner declares the modifier, so a pre-v1.3 host rejects the unknown capability before
+calling load or materialize. Materializers preserve the caller-seeded output size and never assign
+an extended owner directly across the DLL boundary.
+
+Transactional Product owners may append an `EXTERNAL_POLL` capability to the v1 descriptor. The
+flag requires the full descriptor tail and a non-NULL callback; lifecycle-only v1.0 prefixes remain
+valid. `turbo_flow_plugin_generation_poll()` is serialized with generation lifecycle on the Gateway
+control thread, visits every flagged owner once, and assigns the call's only nonzero wait budget to
+one rotating owner. Polling is rejected after retirement begins. This keeps CNet/CHTTP caller-owned
+progress explicit without a hidden worker or a concrete adapter cast in Gateway.
+
 Plugin loading is a control-plane transaction:
 
 ```text

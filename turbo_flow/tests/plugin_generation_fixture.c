@@ -52,8 +52,60 @@
 #ifndef FLOW_PLUGIN_GENERATION_EXPECT_STOPPED_ON_DRAIN
   #define FLOW_PLUGIN_GENERATION_EXPECT_STOPPED_ON_DRAIN 0
 #endif
+#ifndef FLOW_PLUGIN_GENERATION_ENABLE_POLL
+  #define FLOW_PLUGIN_GENERATION_ENABLE_POLL 0
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_POLL_OWNER_ORDINAL
+  #define FLOW_PLUGIN_GENERATION_POLL_OWNER_ORDINAL 0u
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_LEGACY_OWNER_PREFIX
+  #define FLOW_PLUGIN_GENERATION_LEGACY_OWNER_PREFIX 0
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_EXPECT_POLL_CALLS
+  #define FLOW_PLUGIN_GENERATION_EXPECT_POLL_CALLS SIZE_MAX
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_EXPECT_BLOCKING_POLL_CALLS
+  #define FLOW_PLUGIN_GENERATION_EXPECT_BLOCKING_POLL_CALLS SIZE_MAX
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_FORCE_COMPILE_ROLE_MISMATCH
+  #define FLOW_PLUGIN_GENERATION_FORCE_COMPILE_ROLE_MISMATCH 0
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY
+  #define FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY 0
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE
+  #define FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE 0
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_FAIL_POLL_CALL
+  #define FLOW_PLUGIN_GENERATION_FAIL_POLL_CALL 0u
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_1
+  #define FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_1 UINT32_MAX
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_2
+  #define FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_2 UINT32_MAX
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_3
+  #define FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_3 UINT32_MAX
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_4
+  #define FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_4 UINT32_MAX
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_5
+  #define FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_5 UINT32_MAX
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_6
+  #define FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_6 UINT32_MAX
+#endif
 
 #define FLOW_PLUGIN_GENERATION_LIFECYCLE_MAX 64u
+
+#if FLOW_PLUGIN_GENERATION_ENABLE_POLL || FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE == 1 ||      \
+    FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE == 3
+  #define FLOW_PLUGIN_GENERATION_ROOT_POLL_CAPABILITY TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL
+#else
+  #define FLOW_PLUGIN_GENERATION_ROOT_POLL_CAPABILITY 0u
+#endif
 
 typedef struct flow_plugin_generation_fixture_s {
   const turbo_flow_plugin_host_v1_t *host;
@@ -63,10 +115,15 @@ typedef struct flow_plugin_generation_fixture_s {
   size_t quiesce_calls;
   size_t drain_calls;
   size_t shutdown_calls;
+  size_t poll_calls;
+  size_t blocking_poll_calls;
+  size_t owner_destroy_before_graph_shutdown;
   size_t lifecycle_size;
   char lifecycle[FLOW_PLUGIN_GENERATION_LIFECYCLE_MAX + 1u];
   size_t assembly_size;
   char assembly[FLOW_PLUGIN_GENERATION_LIFECYCLE_MAX + 1u];
+  struct flow_plugin_generation_owner_s *retained_owners[FLOW_PLUGIN_GENERATION_LIFECYCLE_MAX];
+  size_t retained_owner_count;
 } flow_plugin_generation_fixture_t;
 
 typedef struct flow_plugin_generation_owner_s {
@@ -74,7 +131,39 @@ typedef struct flow_plugin_generation_owner_s {
   flow_plugin_generation_fixture_t *fixture;
   turbo_flow_t *flow;
   size_t ordinal;
+  int graph_shutdown;
 } flow_plugin_generation_owner_t;
+
+static void flow_plugin_generation_record(flow_plugin_generation_owner_t *owner, char event);
+
+static int flow_plugin_generation_owner_poll(void *ctx, uint32_t timeout_ms) {
+  static const uint32_t expected_timeouts[] = {
+      FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_1, FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_2,
+      FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_3, FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_4,
+      FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_5, FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_6};
+  flow_plugin_generation_owner_t *owner = (flow_plugin_generation_owner_t *)ctx;
+  size_t call_index;
+  if (!owner) return SALTS_EINVAL;
+  flow_plugin_generation_record(owner, 'p');
+  call_index = owner->fixture->poll_calls;
+  owner->fixture->poll_calls++;
+  if (timeout_ms != 0u) owner->fixture->blocking_poll_calls++;
+  if (call_index < sizeof(expected_timeouts) / sizeof(expected_timeouts[0]) &&
+      expected_timeouts[call_index] != UINT32_MAX && expected_timeouts[call_index] != timeout_ms)
+    return SALTS_EPROTO;
+  return owner->fixture->poll_calls == FLOW_PLUGIN_GENERATION_FAIL_POLL_CALL ? SALTS_EIO : SALTS_OK;
+}
+
+#if FLOW_PLUGIN_GENERATION_ENABLE_POLL
+static int flow_plugin_generation_poll_enabled(size_t ordinal) {
+  #if FLOW_PLUGIN_GENERATION_POLL_OWNER_ORDINAL == 0u
+  (void)ordinal;
+  return 1;
+  #else
+  return ordinal == FLOW_PLUGIN_GENERATION_POLL_OWNER_ORDINAL;
+  #endif
+}
+#endif
 
 static int flow_plugin_generation_error(turbo_flow_config_error_t *error, int status,
                                         const char *path, const char *message) {
@@ -85,6 +174,27 @@ static int flow_plugin_generation_error(turbo_flow_config_error_t *error, int st
     (void)snprintf(error->message, sizeof(error->message), "%s", message);
   }
   return status;
+}
+
+static int
+flow_plugin_generation_publish_fixture_owner(turbo_flow_plugin_product_owner_v1_t *owner_out,
+                                             const turbo_flow_plugin_product_owner_v1_t *owner) {
+#if FLOW_PLUGIN_GENERATION_LEGACY_OWNER_PREFIX
+  if (!owner_out || !owner || owner_out->size < TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE)
+    return SALTS_EINVAL;
+  memcpy(owner_out, owner, TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE);
+  owner_out->size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
+  return SALTS_OK;
+#elif FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE != 0
+  size_t copy_size;
+  if (!owner_out || !owner || owner_out->size < TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE)
+    return SALTS_EINVAL;
+  copy_size = owner_out->size < sizeof(*owner) ? owner_out->size : sizeof(*owner);
+  memcpy(owner_out, owner, copy_size);
+  return SALTS_OK;
+#else
+  return turbo_flow_plugin_product_owner_publish(owner_out, owner);
+#endif
 }
 
 static void flow_plugin_generation_record_assembly(flow_plugin_generation_fixture_t *fixture,
@@ -158,6 +268,11 @@ static int flow_plugin_generation_adapter_consume(void *ctx, turbo_flow_t *flow,
   return ctx && flow && stage && message ? SALTS_OK : SALTS_EINVAL;
 }
 
+static void flow_plugin_generation_adapter_shutdown(void *ctx) {
+  flow_plugin_generation_owner_t *owner = (flow_plugin_generation_owner_t *)ctx;
+  if (owner) owner->graph_shutdown = 1;
+}
+
 static void flow_plugin_generation_owner_destroy(void *ctx) {
   flow_plugin_generation_owner_t *owner = (flow_plugin_generation_owner_t *)ctx;
   const turbo_flow_plugin_host_v1_t *host;
@@ -165,8 +280,12 @@ static void flow_plugin_generation_owner_destroy(void *ctx) {
   host = owner->host;
   flow_plugin_generation_record(owner, 'x');
   owner->fixture->owner_destroys++;
+#if FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY
+  if (!owner->graph_shutdown) owner->fixture->owner_destroy_before_graph_shutdown++;
+#else
   memset(owner, 0, sizeof(*owner));
   host->deallocate(host->ctx, owner);
+#endif
 }
 
 static int flow_plugin_generation_materialize_adapter(
@@ -174,6 +293,7 @@ static int flow_plugin_generation_materialize_adapter(
     turbo_flow_plugin_product_owner_v1_t *owner_out, turbo_flow_config_error_t *error) {
   flow_plugin_generation_fixture_t *fixture = (flow_plugin_generation_fixture_t *)ctx;
   flow_plugin_generation_owner_t *owner;
+  turbo_flow_plugin_product_owner_v1_t descriptor = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
   turbo_flow_adapter_ops_t ops;
   int rc;
   (void)resolved;
@@ -186,27 +306,61 @@ static int flow_plugin_generation_materialize_adapter(
   owner =
       (flow_plugin_generation_owner_t *)fixture->host->allocate(fixture->host->ctx, sizeof(*owner));
   if (!owner) return SALTS_ENOMEM;
+  memset(owner, 0, sizeof(*owner));
   owner->host = fixture->host;
   owner->fixture = fixture;
   owner->flow = flow;
   owner->ordinal = fixture->materialize_calls;
+  if (fixture->retained_owner_count < FLOW_PLUGIN_GENERATION_LIFECYCLE_MAX)
+    fixture->retained_owners[fixture->retained_owner_count++] = owner;
   memset(&ops, 0, sizeof(ops));
   ops.consume = flow_plugin_generation_adapter_consume;
+#if FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY
+  ops.shutdown = flow_plugin_generation_adapter_shutdown;
+#endif
+#if FLOW_PLUGIN_GENERATION_FORCE_COMPILE_ROLE_MISMATCH
+  {
+    turbo_flow_adapter_schema_t schema = {0};
+    schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+    schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
+    schema.direction = TURBO_FLOW_ADAPTER_INPUT;
+    rc = turbo_flow_register_adapter_ex(flow, name, &ops, owner, &schema);
+  }
+#else
   rc = fixture->materialize_calls == FLOW_PLUGIN_GENERATION_SKIP_ADAPTER_REGISTRATION_CALL
            ? SALTS_OK
            : turbo_flow_register_adapter(flow, name, &ops, owner);
+#endif
   if (rc != SALTS_OK) {
+    fixture->retained_owner_count--;
     fixture->host->deallocate(fixture->host->ctx, owner);
     return rc;
   }
-  *owner_out = (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
-  owner_out->flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD;
-  owner_out->ctx = owner;
-  owner_out->quiesce = flow_plugin_generation_owner_quiesce;
-  owner_out->drain = flow_plugin_generation_owner_drain;
-  owner_out->shutdown = flow_plugin_generation_owner_shutdown;
-  owner_out->destroy = flow_plugin_generation_owner_destroy;
-  return SALTS_OK;
+  descriptor.flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD;
+  descriptor.ctx = owner;
+  descriptor.quiesce = flow_plugin_generation_owner_quiesce;
+  descriptor.drain = flow_plugin_generation_owner_drain;
+  descriptor.shutdown = flow_plugin_generation_owner_shutdown;
+  descriptor.destroy = flow_plugin_generation_owner_destroy;
+#if FLOW_PLUGIN_GENERATION_ENABLE_POLL
+  if (flow_plugin_generation_poll_enabled(owner->ordinal)) {
+    descriptor.flags |= TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
+    descriptor.poll = flow_plugin_generation_owner_poll;
+  }
+#endif
+#if FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE == 1
+  descriptor.flags |= TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
+#elif FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE == 2
+  descriptor.poll = flow_plugin_generation_owner_poll;
+#elif FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE == 3
+  descriptor.flags |= TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
+  descriptor.poll = flow_plugin_generation_owner_poll;
+  descriptor.size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
+#endif
+#if FLOW_PLUGIN_GENERATION_LEGACY_OWNER_PREFIX
+  descriptor.size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
+#endif
+  return flow_plugin_generation_publish_fixture_owner(owner_out, &descriptor);
 }
 
 static int flow_plugin_generation_materialize_resource(
@@ -214,6 +368,7 @@ static int flow_plugin_generation_materialize_resource(
     turbo_flow_plugin_product_owner_v1_t *owner_out, turbo_flow_config_error_t *error) {
   flow_plugin_generation_fixture_t *fixture = (flow_plugin_generation_fixture_t *)ctx;
   flow_plugin_generation_owner_t *owner;
+  turbo_flow_plugin_product_owner_v1_t descriptor = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
   (void)resolved;
   if (!fixture || !name || !name[0] || !owner_out) return SALTS_EINVAL;
   flow_plugin_generation_record_assembly(fixture, 'm', 'r');
@@ -224,18 +379,36 @@ static int flow_plugin_generation_materialize_resource(
   owner =
       (flow_plugin_generation_owner_t *)fixture->host->allocate(fixture->host->ctx, sizeof(*owner));
   if (!owner) return SALTS_ENOMEM;
+  memset(owner, 0, sizeof(*owner));
   owner->host = fixture->host;
   owner->fixture = fixture;
   owner->flow = flow;
   owner->ordinal = fixture->materialize_calls;
-  *owner_out = (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
-  owner_out->flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD;
-  owner_out->ctx = owner;
-  owner_out->quiesce = flow_plugin_generation_owner_quiesce;
-  owner_out->drain = flow_plugin_generation_owner_drain;
-  owner_out->shutdown = flow_plugin_generation_owner_shutdown;
-  owner_out->destroy = flow_plugin_generation_owner_destroy;
-  return SALTS_OK;
+  descriptor.flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD;
+  descriptor.ctx = owner;
+  descriptor.quiesce = flow_plugin_generation_owner_quiesce;
+  descriptor.drain = flow_plugin_generation_owner_drain;
+  descriptor.shutdown = flow_plugin_generation_owner_shutdown;
+  descriptor.destroy = flow_plugin_generation_owner_destroy;
+#if FLOW_PLUGIN_GENERATION_ENABLE_POLL
+  if (flow_plugin_generation_poll_enabled(owner->ordinal)) {
+    descriptor.flags |= TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
+    descriptor.poll = flow_plugin_generation_owner_poll;
+  }
+#endif
+#if FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE == 1
+  descriptor.flags |= TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
+#elif FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE == 2
+  descriptor.poll = flow_plugin_generation_owner_poll;
+#elif FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE == 3
+  descriptor.flags |= TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
+  descriptor.poll = flow_plugin_generation_owner_poll;
+  descriptor.size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
+#endif
+#if FLOW_PLUGIN_GENERATION_LEGACY_OWNER_PREFIX
+  descriptor.size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
+#endif
+  return flow_plugin_generation_publish_fixture_owner(owner_out, &descriptor);
 }
 
 static int flow_plugin_generation_fixture_load(const turbo_flow_plugin_host_v1_t *host,
@@ -298,6 +471,12 @@ static int flow_plugin_generation_fixture_shutdown(void *plugin) {
                                             FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS) ||
       !flow_plugin_generation_expected_size(fixture->owner_destroys,
                                             FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS) ||
+      !flow_plugin_generation_expected_size(fixture->poll_calls,
+                                            FLOW_PLUGIN_GENERATION_EXPECT_POLL_CALLS) ||
+      !flow_plugin_generation_expected_size(fixture->blocking_poll_calls,
+                                            FLOW_PLUGIN_GENERATION_EXPECT_BLOCKING_POLL_CALLS) ||
+      (FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY &&
+       fixture->owner_destroy_before_graph_shutdown != 0u) ||
       !flow_plugin_generation_expected_text(fixture->assembly,
                                             FLOW_PLUGIN_GENERATION_EXPECT_ASSEMBLY) ||
       !flow_plugin_generation_expected_text(fixture->lifecycle,
@@ -311,6 +490,14 @@ static void flow_plugin_generation_fixture_destroy(void *plugin) {
   const turbo_flow_plugin_host_v1_t *host;
   if (!fixture) return;
   host = fixture->host;
+#if FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY
+  for (size_t i = 0u; i < fixture->retained_owner_count; ++i) {
+    flow_plugin_generation_owner_t *owner = fixture->retained_owners[i];
+    if (!owner) continue;
+    memset(owner, 0, sizeof(*owner));
+    host->deallocate(host->ctx, owner);
+  }
+#endif
   memset(fixture, 0, sizeof(*fixture));
   host->deallocate(host->ctx, fixture);
 }
@@ -321,7 +508,8 @@ static const turbo_flow_plugin_api_v1_t flow_plugin_generation_fixture_api = {
     TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR,
     FLOW_PLUGIN_GENERATION_FIXTURE_ID,
     "1.0.0",
-    TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER | TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE,
+    TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER | TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE |
+        FLOW_PLUGIN_GENERATION_ROOT_POLL_CAPABILITY,
     flow_plugin_generation_fixture_load,
     flow_plugin_generation_fixture_register,
     flow_plugin_generation_fixture_quiesce,

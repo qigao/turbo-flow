@@ -25,6 +25,8 @@ struct turbo_flow_plugin_generation_s {
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
   vec_t owners;
   size_t leases;
+  size_t poll_cursor;
+  int poll_closed;
   turbo_flow_plugin_generation_state_t state;
 };
 
@@ -55,7 +57,7 @@ static int flow_plugin_generation_owner_error(turbo_flow_config_error_t *error, 
   (void)snprintf(path, sizeof(path), "$.%s.%s.owner.%s",
                  owner && owner->resource ? "channels" : "adapters",
                  owner && owner->name ? owner->name : "unknown", phase);
-  return flow_plugin_generation_error(error, status, path, "Product owner lifecycle failed");
+  return flow_plugin_generation_error(error, status, path, "Product owner callback failed");
 }
 
 static int flow_plugin_generation_reference_seen(const turbo_flow_t *flow, size_t stage_index,
@@ -253,23 +255,30 @@ static int flow_plugin_generation_preflight(
 
 static int flow_plugin_generation_owner_valid(const turbo_flow_plugin_product_owner_v1_t *owner) {
   const turbo_flow_plugin_product_owner_flags_t known =
-      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD | TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE;
-  return owner && owner->size >= sizeof(*owner) &&
+      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD | TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE |
+      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
+  const int external_poll =
+      owner && (owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) != 0u;
+  const int has_poll_extension = owner && owner->size >= sizeof(*owner);
+  return owner && owner->size >= TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE &&
          owner->abi_major == TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR && owner->ctx &&
          (owner->flags & ~known) == 0u &&
          ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD) != 0u) !=
              ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE) != 0u) &&
-         owner->quiesce && owner->drain && owner->shutdown && owner->destroy;
+         owner->quiesce && owner->drain && owner->shutdown && owner->destroy &&
+         (!external_poll || (has_poll_extension && owner->poll)) &&
+         (!has_poll_extension || (owner->reserved_v1_1 == 0u && (external_poll || !owner->poll)));
 }
 
 static void flow_plugin_generation_rollback(turbo_flow_plugin_generation_t *generation) {
   if (!generation) return;
+  turbo_flow_destroy(generation->flow);
+  generation->flow = NULL;
   for (size_t i = vec_size(&generation->owners); i > 0u; --i) {
     flow_plugin_generation_owner_t *entry =
         (flow_plugin_generation_owner_t *)vec_at(&generation->owners, i - 1u);
     if (entry && entry->owner.destroy) entry->owner.destroy(entry->owner.ctx);
   }
-  turbo_flow_destroy(generation->flow);
   turbo_flow_plugin_catalog_snapshot_destroy(generation->snapshot);
   vec_destroy(&generation->owners);
   memset(generation, 0, sizeof(*generation));
@@ -310,7 +319,22 @@ static int flow_plugin_generation_materialize(
             resource ? "resource provider materialization failed"
                      : "adapter provider materialization failed");
       if (!flow_plugin_generation_owner_valid(&owner)) {
-        if (owner.destroy && owner.ctx) owner.destroy(owner.ctx);
+        if (owner.destroy && owner.ctx) {
+          memset(&entry, 0, sizeof(entry));
+          entry.owner = owner;
+          entry.state = FLOW_PLUGIN_GENERATION_OWNER_ACTIVE;
+          entry.name = name;
+          entry.resource = resource;
+          rc = turbo_flow_stl_error(vec_push(&generation->owners, &entry));
+          if (rc != SALTS_OK) {
+            turbo_flow_destroy(generation->flow);
+            generation->flow = NULL;
+            owner.destroy(owner.ctx);
+            return flow_plugin_generation_error(
+                error, rc, "$.generation.owners",
+                "reserved owner storage rejected invalid-owner cleanup");
+          }
+        }
         return flow_plugin_generation_provider_error(
             error, SALTS_EPROTO, resource ? "channels" : "adapters", name,
             "provider returned an invalid Product owner vtable");
@@ -322,6 +346,8 @@ static int flow_plugin_generation_materialize(
       entry.resource = resource;
       rc = turbo_flow_stl_error(vec_push(&generation->owners, &entry));
       if (rc != SALTS_OK) {
+        turbo_flow_destroy(generation->flow);
+        generation->flow = NULL;
         owner.destroy(owner.ctx);
         return flow_plugin_generation_error(error, rc, "$.generation.owners",
                                             "reserved owner storage rejected materialization");
@@ -438,6 +464,46 @@ size_t turbo_flow_plugin_generation_owner_count(const turbo_flow_plugin_generati
   return generation ? vec_size(&generation->owners) : 0u;
 }
 
+int turbo_flow_plugin_generation_poll(turbo_flow_plugin_generation_t *generation,
+                                      uint32_t timeout_ms, turbo_flow_config_error_t *error) {
+  size_t owner_count;
+  size_t first = SIZE_MAX;
+  if (!generation || !error || error->size < sizeof(*error))
+    return flow_plugin_generation_error(error, SALTS_EINVAL, "$.generation.poll",
+                                        "invalid Graph generation poll arguments");
+  *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+  if (generation->poll_closed || !generation->flow ||
+      turbo_flow_state(generation->flow) != TURBO_FLOW_STATE_STARTED)
+    return flow_plugin_generation_error(error, SALTS_EBUSY, "$.generation.poll",
+                                        "Graph generation is not accepting progress");
+  owner_count = vec_size(&generation->owners);
+  if (owner_count == 0u) return SALTS_OK;
+  for (size_t offset = 0u; offset < owner_count; ++offset) {
+    const size_t index = (generation->poll_cursor + offset) % owner_count;
+    const flow_plugin_generation_owner_t *entry =
+        (const flow_plugin_generation_owner_t *)vec_at_const(&generation->owners, index);
+    if (entry && entry->owner.size >= sizeof(entry->owner) &&
+        (entry->owner.flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) != 0u) {
+      first = index;
+      break;
+    }
+  }
+  if (first == SIZE_MAX) return SALTS_OK;
+  generation->poll_cursor = (first + 1u) % owner_count;
+  for (size_t offset = 0u; offset < owner_count; ++offset) {
+    const size_t index = (first + offset) % owner_count;
+    const flow_plugin_generation_owner_t *entry =
+        (const flow_plugin_generation_owner_t *)vec_at_const(&generation->owners, index);
+    int rc;
+    if (!entry || entry->owner.size < sizeof(entry->owner) ||
+        (entry->owner.flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) == 0u)
+      continue;
+    rc = entry->owner.poll(entry->owner.ctx, index == first ? timeout_ms : 0u);
+    if (rc != SALTS_OK) return flow_plugin_generation_owner_error(error, rc, entry, "poll");
+  }
+  return SALTS_OK;
+}
+
 int turbo_flow_plugin_generation_lease_acquire(turbo_flow_plugin_generation_t *generation) {
   if (!generation) return SALTS_EINVAL;
   if (generation->leases == SIZE_MAX) return SALTS_ENOSPC;
@@ -461,6 +527,7 @@ int turbo_flow_plugin_generation_destroy(turbo_flow_plugin_generation_t *generat
   if (generation->leases != 0u)
     return flow_plugin_generation_error(error, SALTS_EBUSY, "$.generation.leases",
                                         "Graph generation still has active leases");
+  generation->poll_closed = 1;
   for (size_t i = vec_size(&generation->owners); i > 0u; --i) {
     flow_plugin_generation_owner_t *entry =
         (flow_plugin_generation_owner_t *)vec_at(&generation->owners, i - 1u);

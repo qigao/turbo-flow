@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <string.h>
 #include <turbo_flow.h>
 #include <turbo_flow_chttp.h>
@@ -46,6 +47,7 @@ int main(void) {
       TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_INIT;
   turbo_flow_plugin_host_config_t plugin_host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_plugin_protocol_catalog_v1_t plugin_protocol_catalog =
       TURBO_FLOW_PLUGIN_PROTOCOL_CATALOG_V1_INIT;
   turbo_flow_plugin_product_owner_v1_t plugin_product_owner =
@@ -122,6 +124,8 @@ int main(void) {
       const turbo_flow_plugin_generation_t *) = turbo_flow_plugin_generation_state;
   size_t (*plugin_generation_owner_count)(const turbo_flow_plugin_generation_t *) =
       turbo_flow_plugin_generation_owner_count;
+  int (*plugin_generation_poll)(turbo_flow_plugin_generation_t *, uint32_t,
+                                turbo_flow_config_error_t *) = turbo_flow_plugin_generation_poll;
   int (*plugin_generation_lease_acquire)(turbo_flow_plugin_generation_t *) =
       turbo_flow_plugin_generation_lease_acquire;
   int (*plugin_generation_lease_release)(turbo_flow_plugin_generation_t *) =
@@ -229,12 +233,15 @@ int main(void) {
       plugin_protocol_catalog.size != sizeof(turbo_flow_plugin_protocol_catalog_v1_t) ||
       plugin_protocol_catalog.abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       plugin_product_owner.size != sizeof(turbo_flow_plugin_product_owner_v1_t) ||
+      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE !=
+          offsetof(turbo_flow_plugin_product_owner_v1_t, reserved_v1_1) ||
+      plugin_product_owner.reserved_v1_1 != 0u ||
       transactional_adapter.size != sizeof(turbo_flow_plugin_transactional_adapter_provider_v1_t) ||
       transactional_resource.size !=
           sizeof(turbo_flow_plugin_transactional_resource_provider_v1_t) ||
       transactional_catalog.size != sizeof(turbo_flow_plugin_transactional_product_catalog_v1_t) ||
       generation_config.size != sizeof(turbo_flow_plugin_generation_config_t) ||
-      TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR != 1u || TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR != 2u ||
+      TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR != 1u || TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR != 3u ||
       plugin_host_config.protocol_provider_capacity == 0u ||
       plugin_host_config.business_provider_capacity == 0u ||
       plugin_host_config.transactional_adapter_provider_capacity == 0u ||
@@ -242,10 +249,11 @@ int main(void) {
       generation_config.owner_capacity == 0u || !plugin_host_create || !plugin_host_load ||
       !plugin_host_destroy || !plugin_protocol_catalog_read || !plugin_transactional_catalog_read ||
       !plugin_generation_create || !plugin_generation_flow || !plugin_generation_state ||
-      !plugin_generation_owner_count || !plugin_generation_lease_acquire ||
-      !plugin_generation_lease_release || !plugin_generation_destroy ||
-      !plugin_protocol_registry_create || !plugin_business_registry_create ||
-      !managed_terminal_register ||
+      !plugin_generation_owner_count || !plugin_generation_poll ||
+      plugin_generation_poll(NULL, 0u, &config_error) != SALTS_EINVAL ||
+      !plugin_generation_lease_acquire || !plugin_generation_lease_release ||
+      !plugin_generation_destroy || !plugin_protocol_registry_create ||
+      !plugin_business_registry_create || !managed_terminal_register ||
       managed_terminal_register(flow, &managed_terminal_registration) != SALTS_EINVAL ||
       !managed_source_register ||
       managed_source_register(flow, &managed_source_registration) != SALTS_EINVAL ||

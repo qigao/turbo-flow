@@ -56,6 +56,9 @@
 #ifndef FLOW_PLUGIN_FIXTURE_CAPABILITY_MISMATCH
   #error FLOW_PLUGIN_FIXTURE_CAPABILITY_MISMATCH is required
 #endif
+#ifndef FLOW_PLUGIN_FIXTURE_EXTERNAL_POLL_WITHOUT_TRANSACTIONAL
+  #error FLOW_PLUGIN_FIXTURE_EXTERNAL_POLL_WITHOUT_TRANSACTIONAL is required
+#endif
 #ifndef FLOW_PLUGIN_FIXTURE_INVALID_PROVIDER
   #error FLOW_PLUGIN_FIXTURE_INVALID_PROVIDER is required
 #endif
@@ -123,6 +126,21 @@ static void flow_plugin_test_check_event(const flow_plugin_test_probe_t *probe, 
 }
 
 spec("unified PluginHost") {
+  it("rejects external progress capability without a transactional Product provider") {
+    flow_plugin_test_probe_t probe = {0};
+    turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 1u, 2u, 1u);
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_plugin_host_t *host = NULL;
+
+    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(
+                    host, FLOW_PLUGIN_FIXTURE_EXTERNAL_POLL_WITHOUT_TRANSACTIONAL, &error),
+                SALTS_EPROTO);
+    check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_API);
+    check_equal(turbo_flow_plugin_host_module_count(host), 0u);
+    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
+  }
+
   it("atomically snapshots transactional adapter and resource providers") {
     flow_plugin_test_probe_t probe = {0};
     turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 1u, 0u, 0u);

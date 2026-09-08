@@ -228,6 +228,12 @@ turbo_flow_add_plugin_fixture(
   FLOW_PLUGIN_FIXTURE_RESOURCE_KIND="fixture.resource.capability-mismatch"
   FLOW_PLUGIN_FIXTURE_MODE=6)
 turbo_flow_add_plugin_fixture(
+  test_flow_plugin_external_poll_without_transactional
+  FLOW_PLUGIN_FIXTURE_ID="fixture.external-poll-without-transactional"
+  FLOW_PLUGIN_FIXTURE_ADAPTER_KIND="fixture.adapter.external-poll-without-transactional"
+  FLOW_PLUGIN_FIXTURE_RESOURCE_KIND="fixture.resource.external-poll-without-transactional"
+  FLOW_PLUGIN_FIXTURE_CAPABILITIES=TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL)
+turbo_flow_add_plugin_fixture(
   test_flow_plugin_invalid_provider
   FLOW_PLUGIN_FIXTURE_ID="fixture.invalid-provider"
   FLOW_PLUGIN_FIXTURE_ADAPTER_KIND="fixture.adapter.invalid-provider"
@@ -316,14 +322,16 @@ turbo_flow_add_generation_fixture(
   FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
   FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
   FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY=1
   FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="x1")
 turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_compile_fail
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-compile-fail"
-  FLOW_PLUGIN_GENERATION_SKIP_ADAPTER_REGISTRATION_CALL=2
+  FLOW_PLUGIN_GENERATION_FORCE_COMPILE_ROLE_MISMATCH=1
   FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
   FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
   FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY=1
   FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="x2x1")
 turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_lifecycle
@@ -389,6 +397,84 @@ turbo_flow_add_generation_fixture(
   FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
   FLOW_PLUGIN_GENERATION_EXPECT_ASSEMBLY="prpamrma"
   FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="x2x1")
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_external_poll
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-external-poll"
+  FLOW_PLUGIN_GENERATION_ENABLE_POLL=1
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=3
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=3
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_CALLS=6
+  FLOW_PLUGIN_GENERATION_EXPECT_BLOCKING_POLL_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_1=7
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_2=0
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_3=0
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_4=11
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_5=0
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_6=0
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=3
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="p1p2p3p2p3p1q3q2q1d3d2d1s3s2s1x3x2x1")
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_mixed_poll
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-mixed-poll"
+  FLOW_PLUGIN_GENERATION_ENABLE_POLL=1
+  FLOW_PLUGIN_GENERATION_POLL_OWNER_ORDINAL=2
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_BLOCKING_POLL_CALLS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_1=13
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_TIMEOUT_2=0
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="p2p2q2q1d2d1s2s1x2x1")
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_legacy_owner_prefix
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-legacy-owner-prefix"
+  FLOW_PLUGIN_GENERATION_LEGACY_OWNER_PREFIX=1
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_CALLS=0
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2)
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_poll_error
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-poll-error"
+  FLOW_PLUGIN_GENERATION_ENABLE_POLL=1
+  FLOW_PLUGIN_GENERATION_FAIL_POLL_CALL=2
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_BLOCKING_POLL_CALLS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="p1p2q2q1d2d1s2s1x2x1")
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_poll_closes
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-poll-closes"
+  FLOW_PLUGIN_GENERATION_ENABLE_POLL=1
+  FLOW_PLUGIN_GENERATION_FAIL_QUIESCE_CALL=1
+  FLOW_PLUGIN_GENERATION_LIFECYCLE_FAIL_STATUS=SALTS_ETIMEDOUT
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_POLL_CALLS=0
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q2q2q1d2d1s2s1x2x1"
+  FLOW_PLUGIN_GENERATION_EXPECT_STOPPED_ON_DRAIN=1)
+foreach(mode IN ITEMS flag_without_callback callback_without_flag small_descriptor)
+  if(mode STREQUAL "flag_without_callback")
+    set(mode_value 1)
+  elseif(mode STREQUAL "callback_without_flag")
+    set(mode_value 2)
+  else()
+    set(mode_value 3)
+  endif()
+  turbo_flow_add_generation_fixture(
+    test_flow_plugin_generation_poll_${mode}
+    FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-poll-${mode}"
+    FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE=${mode_value}
+    FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY=1
+    FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+    FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=1
+    FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=1
+    FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="x1")
+endforeach()
 
 cmake_add_test(
   test_flow_plugin_host
@@ -415,6 +501,7 @@ target_compile_definitions(
           FLOW_PLUGIN_FIXTURE_QUIESCE_ONCE="$<TARGET_FILE:test_flow_plugin_quiesce_once>"
           FLOW_PLUGIN_FIXTURE_SHUTDOWN_ONCE="$<TARGET_FILE:test_flow_plugin_shutdown_once>"
           FLOW_PLUGIN_FIXTURE_CAPABILITY_MISMATCH="$<TARGET_FILE:test_flow_plugin_capability_mismatch>"
+          FLOW_PLUGIN_FIXTURE_EXTERNAL_POLL_WITHOUT_TRANSACTIONAL="$<TARGET_FILE:test_flow_plugin_external_poll_without_transactional>"
           FLOW_PLUGIN_FIXTURE_INVALID_PROVIDER="$<TARGET_FILE:test_flow_plugin_invalid_provider>"
           FLOW_PLUGIN_FIXTURE_INVALID_PROVIDER_ABI="$<TARGET_FILE:test_flow_plugin_invalid_provider_abi>"
           FLOW_PLUGIN_FIXTURE_TRANSACTIONAL="$<TARGET_FILE:test_flow_plugin_transactional>"
@@ -439,6 +526,7 @@ add_dependencies(
   test_flow_plugin_quiesce_once
   test_flow_plugin_shutdown_once
   test_flow_plugin_capability_mismatch
+  test_flow_plugin_external_poll_without_transactional
   test_flow_plugin_invalid_provider
   test_flow_plugin_invalid_provider_abi
   test_flow_plugin_transactional
@@ -466,7 +554,15 @@ target_compile_definitions(
           FLOW_PLUGIN_GENERATION_FIXTURE_SHUTDOWN_ONCE="$<TARGET_FILE:test_flow_plugin_generation_shutdown_once>"
           FLOW_PLUGIN_GENERATION_FIXTURE_QUIESCE_TIMEOUT="$<TARGET_FILE:test_flow_plugin_generation_quiesce_timeout>"
           FLOW_PLUGIN_GENERATION_FIXTURE_DRAIN_TIMEOUT="$<TARGET_FILE:test_flow_plugin_generation_drain_timeout>"
-          FLOW_PLUGIN_GENERATION_FIXTURE_RESOURCE_ORDER="$<TARGET_FILE:test_flow_plugin_generation_resource_order>")
+          FLOW_PLUGIN_GENERATION_FIXTURE_RESOURCE_ORDER="$<TARGET_FILE:test_flow_plugin_generation_resource_order>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_EXTERNAL_POLL="$<TARGET_FILE:test_flow_plugin_generation_external_poll>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_MIXED_POLL="$<TARGET_FILE:test_flow_plugin_generation_mixed_poll>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY_OWNER_PREFIX="$<TARGET_FILE:test_flow_plugin_generation_legacy_owner_prefix>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_POLL_ERROR="$<TARGET_FILE:test_flow_plugin_generation_poll_error>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_POLL_CLOSES="$<TARGET_FILE:test_flow_plugin_generation_poll_closes>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_POLL_FLAG_WITHOUT_CALLBACK="$<TARGET_FILE:test_flow_plugin_generation_poll_flag_without_callback>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_POLL_CALLBACK_WITHOUT_FLAG="$<TARGET_FILE:test_flow_plugin_generation_poll_callback_without_flag>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_POLL_SMALL_DESCRIPTOR="$<TARGET_FILE:test_flow_plugin_generation_poll_small_descriptor>")
 add_dependencies(
   test_flow_plugin_generation
   test_flow_plugin_good_one
@@ -483,7 +579,15 @@ add_dependencies(
   test_flow_plugin_generation_shutdown_once
   test_flow_plugin_generation_quiesce_timeout
   test_flow_plugin_generation_drain_timeout
-  test_flow_plugin_generation_resource_order)
+  test_flow_plugin_generation_resource_order
+  test_flow_plugin_generation_external_poll
+  test_flow_plugin_generation_mixed_poll
+  test_flow_plugin_generation_legacy_owner_prefix
+  test_flow_plugin_generation_poll_error
+  test_flow_plugin_generation_poll_closes
+  test_flow_plugin_generation_poll_flag_without_callback
+  test_flow_plugin_generation_poll_callback_without_flag
+  test_flow_plugin_generation_poll_small_descriptor)
 
 set_tests_properties(
   test_turbo_flow test_flow_async_terminal test_flow_async_emit test_flow_resource_document test_flow_managed_boundary test_flow_config test_flow_compat_boundary

@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 #define TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR 1u
-#define TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR 2u
+#define TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR 3u
 #define TURBO_FLOW_PLUGIN_EXPORT_SYMBOL "turbo_flow_plugin_get_api"
 
 #define TURBO_FLOW_PLUGIN_ID_MAX 127u
@@ -39,7 +39,9 @@ enum {
   TURBO_FLOW_PLUGIN_CAP_PROTOCOL = UINT64_C(1) << 2,
   TURBO_FLOW_PLUGIN_CAP_PROTOCOL_BUSINESS = UINT64_C(1) << 3,
   TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER = UINT64_C(1) << 4,
-  TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE = UINT64_C(1) << 5
+  TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE = UINT64_C(1) << 5,
+  /** Modifier: this plugin may materialize an owner with external progress. */
+  TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL = UINT64_C(1) << 6
 };
 
 typedef enum turbo_flow_plugin_error_stage_e {
@@ -213,7 +215,9 @@ typedef void (*turbo_flow_plugin_destroy_fn)(void *plugin);
  *
  * plugin_id, plugin_version, callback code, provider descriptors, and every
  * provider context remain owned by the DLL until destroy returns. A plugin
- * instance is always destroyed on the same DLL/CRT side that created it.
+ * instance is always destroyed on the same DLL/CRT side that created it. Plugins that can publish
+ * external-poll Product owners declare TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL; pre-v1.3 hosts reject
+ * that unknown capability before calling load/materialize.
  */
 typedef struct turbo_flow_plugin_api_v1_s {
   size_t size;
