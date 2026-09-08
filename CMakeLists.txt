@@ -159,6 +159,7 @@ foreach(
      turbo_flow_config
      turbo_flow_graph
      turbo_flow_product
+     turbo_flow_plugin_host
      turbo_flow
      tf_cnet_adapter
      tf_chttp_adapter

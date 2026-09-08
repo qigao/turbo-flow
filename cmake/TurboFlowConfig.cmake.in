@@ -5,6 +5,7 @@ include(CMakeFindDependencyMacro)
 set(_TurboFlow_supported_components
     Config
     Graph
+    PluginHost
     CNetAdapter
     CHTTPAdapter
     Product
@@ -30,6 +31,7 @@ endif()
 
 set(_TurboFlow_salts_utils_components
     Graph
+    PluginHost
     Product
     Flow
     ProtocolIngressGraph
@@ -42,6 +44,7 @@ set(_TurboFlow_salts_utils_components
 
 set(_TurboFlow_rules_forge_components
     Graph
+    PluginHost
     Product
     Flow
     ProtocolIngressGraph
