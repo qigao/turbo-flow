@@ -1,8 +1,8 @@
 #ifndef TURBO_FLOW_PROTOCOL_H
 #define TURBO_FLOW_PROTOCOL_H
 
-#include "turbo_flow_export.h"
 #include "platform.h"
+#include "turbo_flow_export.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -63,10 +63,9 @@ typedef struct turbo_flow_protocol_open_request_s {
   size_t max_frame_size;
 } turbo_flow_protocol_open_request_t;
 
-#define TURBO_FLOW_PROTOCOL_OPEN_REQUEST_INIT                                                    \
-  {sizeof(turbo_flow_protocol_open_request_t), TURBO_FLOW_PROTOCOL_ABI_VERSION,                   \
-   TURBO_FLOW_PROTOCOL_MQTT_SN, NULL,                                                 \
-   TURBO_FLOW_PROTOCOL_DEFAULT_MAX_FRAME_SIZE}
+#define TURBO_FLOW_PROTOCOL_OPEN_REQUEST_INIT                                                      \
+  {sizeof(turbo_flow_protocol_open_request_t), TURBO_FLOW_PROTOCOL_ABI_VERSION,                    \
+   TURBO_FLOW_PROTOCOL_MQTT_SN, NULL, TURBO_FLOW_PROTOCOL_DEFAULT_MAX_FRAME_SIZE}
 
 /**
  * Borrowed device-protocol frame.
@@ -84,9 +83,8 @@ typedef struct turbo_flow_protocol_frame_view_s {
   const char *protocol_version;
 } turbo_flow_protocol_frame_view_t;
 
-#define TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT                                                     \
-  {sizeof(turbo_flow_protocol_frame_view_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, NULL, 0u, NULL,     \
-   NULL}
+#define TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT                                                        \
+  {sizeof(turbo_flow_protocol_frame_view_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, NULL, 0u, NULL, NULL}
 
 /** Pointer-free protocol metadata copied with every normalized ingress message. */
 typedef struct turbo_flow_protocol_metadata_s {
@@ -102,9 +100,17 @@ typedef struct turbo_flow_protocol_metadata_s {
   char correlation_id[TURBO_FLOW_PROTOCOL_CORRELATION_MAX + 1u];
 } turbo_flow_protocol_metadata_t;
 
-#define TURBO_FLOW_PROTOCOL_METADATA_INIT                                                       \
-  {sizeof(turbo_flow_protocol_metadata_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, 0, 0, 0u, 0u,        \
-   {0}, {0}, {0}, {0}}
+#define TURBO_FLOW_PROTOCOL_METADATA_INIT                                                          \
+  {sizeof(turbo_flow_protocol_metadata_t),                                                         \
+   TURBO_FLOW_PROTOCOL_ABI_VERSION,                                                                \
+   0,                                                                                              \
+   0,                                                                                              \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   {0},                                                                                            \
+   {0},                                                                                            \
+   {0},                                                                                            \
+   {0}}
 
 /** Immutable snapshot of one opened provider-neutral protocol. */
 typedef struct turbo_flow_protocol_info_s {
@@ -117,7 +123,7 @@ typedef struct turbo_flow_protocol_info_s {
   char protocol_version[TURBO_FLOW_PROTOCOL_VERSION_MAX + 1u];
 } turbo_flow_protocol_info_t;
 
-#define TURBO_FLOW_PROTOCOL_INFO_INIT                                                           \
+#define TURBO_FLOW_PROTOCOL_INFO_INIT                                                              \
   {sizeof(turbo_flow_protocol_info_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, 0, 0u, 0u, {0}, {0}}
 
 /** Caller-owned buffers receiving one protocol-neutral ingress message. */
@@ -130,8 +136,12 @@ typedef struct turbo_flow_protocol_message_output_s {
   turbo_flow_protocol_metadata_t metadata;
 } turbo_flow_protocol_message_output_t;
 
-#define TURBO_FLOW_PROTOCOL_MESSAGE_OUTPUT_INIT                                                 \
-  {sizeof(turbo_flow_protocol_message_output_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, NULL, 0u, 0u, \
+#define TURBO_FLOW_PROTOCOL_MESSAGE_OUTPUT_INIT                                                    \
+  {sizeof(turbo_flow_protocol_message_output_t),                                                   \
+   TURBO_FLOW_PROTOCOL_ABI_VERSION,                                                                \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   0u,                                                                                             \
    TURBO_FLOW_PROTOCOL_METADATA_INIT}
 
 /** Caller-owned frame buffer receiving one protocol frame. */
@@ -144,8 +154,8 @@ typedef struct turbo_flow_protocol_frame_output_s {
   turbo_flow_protocol_metadata_t metadata;
 } turbo_flow_protocol_frame_output_t;
 
-#define TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT                                                   \
-  {sizeof(turbo_flow_protocol_frame_output_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, NULL, 0u, 0u,    \
+#define TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT                                                      \
+  {sizeof(turbo_flow_protocol_frame_output_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, NULL, 0u, 0u,      \
    TURBO_FLOW_PROTOCOL_METADATA_INIT}
 
 /**
@@ -169,9 +179,16 @@ typedef struct turbo_flow_protocol_command_view_s {
   size_t payload_size;
 } turbo_flow_protocol_command_view_t;
 
-#define TURBO_FLOW_PROTOCOL_COMMAND_VIEW_INIT                                                   \
-  {sizeof(turbo_flow_protocol_command_view_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, NULL, NULL, NULL, \
-   NULL, 0u, NULL, 0u}
+#define TURBO_FLOW_PROTOCOL_COMMAND_VIEW_INIT                                                      \
+  {sizeof(turbo_flow_protocol_command_view_t),                                                     \
+   TURBO_FLOW_PROTOCOL_ABI_VERSION,                                                                \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   NULL,                                                                                           \
+   0u}
 
 /**
  * Build the protocol response that becomes legal after adapter/storage
@@ -182,10 +199,10 @@ typedef struct turbo_flow_protocol_command_view_s {
  * status is SALTS_OK for successful settlement, otherwise the terminal
  * settlement error that the codec maps to a protocol-defined rejection.
  */
-TURBO_FLOW_C_API int turbo_flow_protocol_reply(
-    turbo_flow_protocol_t *protocol,
-    const turbo_flow_protocol_frame_view_t *request, int status,
-    turbo_flow_protocol_frame_output_t *output);
+TURBO_FLOW_C_API int turbo_flow_protocol_reply(turbo_flow_protocol_t *protocol,
+                                               const turbo_flow_protocol_frame_view_t *request,
+                                               int status,
+                                               turbo_flow_protocol_frame_output_t *output);
 
 /**
  * Encode one protocol-neutral downlink command into a device wire frame.
@@ -194,10 +211,9 @@ TURBO_FLOW_C_API int turbo_flow_protocol_reply(
  * must choose semantic encoding explicitly; malformed raw frames never fall
  * back to a different interpretation.
  */
-TURBO_FLOW_C_API int turbo_flow_protocol_encode(
-    turbo_flow_protocol_t *protocol,
-    const turbo_flow_protocol_command_view_t *command,
-    turbo_flow_protocol_frame_output_t *output);
+TURBO_FLOW_C_API int turbo_flow_protocol_encode(turbo_flow_protocol_t *protocol,
+                                                const turbo_flow_protocol_command_view_t *command,
+                                                turbo_flow_protocol_frame_output_t *output);
 
 /**
  * Decode and validate one complete device-protocol frame into a neutral message.
@@ -206,18 +222,16 @@ TURBO_FLOW_C_API int turbo_flow_protocol_encode(
  * sequence and correlation data are returned separately in metadata. No MQTT
  * topic, QoS, retain flag, broker state or product session enters this boundary.
  */
-TURBO_FLOW_C_API int turbo_flow_protocol_decode(
-    turbo_flow_protocol_t *protocol,
-    const turbo_flow_protocol_frame_view_t *frame,
-    turbo_flow_protocol_message_output_t *output);
+TURBO_FLOW_C_API int turbo_flow_protocol_decode(turbo_flow_protocol_t *protocol,
+                                                const turbo_flow_protocol_frame_view_t *frame,
+                                                turbo_flow_protocol_message_output_t *output);
 
 /** Return the stable lowercase name of a protocol kind, or NULL if invalid. */
-TURBO_FLOW_C_API const char *
-turbo_flow_protocol_kind_name(turbo_flow_protocol_kind_t protocol);
+TURBO_FLOW_C_API const char *turbo_flow_protocol_kind_name(turbo_flow_protocol_kind_t protocol);
 
 /** Copy immutable identity, capability, version, and frame-limit metadata. */
-TURBO_FLOW_C_API int turbo_flow_protocol_get_info(
-    const turbo_flow_protocol_t *protocol, turbo_flow_protocol_info_t *out);
+TURBO_FLOW_C_API int turbo_flow_protocol_get_info(const turbo_flow_protocol_t *protocol,
+                                                  turbo_flow_protocol_info_t *out);
 
 typedef struct turbo_flow_protocol_service_s {
   size_t size;
@@ -229,15 +243,14 @@ typedef struct turbo_flow_protocol_service_s {
   void *owner;
 } turbo_flow_protocol_service_t;
 
-#define TURBO_FLOW_PROTOCOL_SERVICE_INIT                                                        \
-  {sizeof(turbo_flow_protocol_service_t), TURBO_FLOW_PROTOCOL_ABI_VERSION,                        \
+#define TURBO_FLOW_PROTOCOL_SERVICE_INIT                                                           \
+  {sizeof(turbo_flow_protocol_service_t), TURBO_FLOW_PROTOCOL_ABI_VERSION,                         \
    TURBO_FLOW_PROTOCOL_MQTT_SN, NULL, NULL}
 
-typedef int (*turbo_flow_protocol_open_fn)(
-    void *ctx, const turbo_flow_protocol_open_request_t *request,
-    turbo_flow_protocol_service_t *service);
-typedef void (*turbo_flow_protocol_close_fn)(void *ctx,
-                                            turbo_flow_protocol_service_t *service);
+typedef int (*turbo_flow_protocol_open_fn)(void *ctx,
+                                           const turbo_flow_protocol_open_request_t *request,
+                                           turbo_flow_protocol_service_t *service);
+typedef void (*turbo_flow_protocol_close_fn)(void *ctx, turbo_flow_protocol_service_t *service);
 
 /**
  * Stable plugin function table. Concrete codec and storage operations are not
@@ -255,48 +268,28 @@ typedef struct turbo_flow_protocol_plugin_api_s {
   turbo_flow_protocol_close_fn close;
 } turbo_flow_protocol_plugin_api_t;
 
-#define TURBO_FLOW_PROTOCOL_PLUGIN_EXPORT_SYMBOL "turbo_flow_protocol_plugin_get_api"
-
-typedef const turbo_flow_protocol_plugin_api_t *
-(*turbo_flow_protocol_plugin_get_api_fn)(void);
-
-TURBO_FLOW_C_API const turbo_flow_protocol_plugin_api_t *
-turbo_flow_protocol_plugin_get_api(void);
-
 /**
- * Create a caller-serialized, bounded protocol registry.
+ * Caller-serialized Protocol registry backed by a retained PluginHost snapshot.
  *
- * Direct registrations are borrowed. Dynamically loaded modules are owned by
- * the registry and remain loaded while an owner exists.
+ * Creation is declared in turbo_flow_plugin_protocol.h. The registry contains
+ * only immutable provider entries from the unified DLL catalog.
  */
-TURBO_FLOW_C_API int turbo_flow_protocol_registry_create(
-    size_t capacity, turbo_flow_protocol_registry_t **out);
-TURBO_FLOW_C_API int
-turbo_flow_protocol_registry_destroy(turbo_flow_protocol_registry_t *registry);
-TURBO_FLOW_C_API int turbo_flow_protocol_registry_register(
-    turbo_flow_protocol_registry_t *registry,
-    const turbo_flow_protocol_plugin_api_t *api);
-TURBO_FLOW_C_API int turbo_flow_protocol_registry_load(
-    turbo_flow_protocol_registry_t *registry, const char *path, char *reason,
-    size_t reason_size);
+TURBO_FLOW_C_API int turbo_flow_protocol_registry_destroy(turbo_flow_protocol_registry_t *registry);
 TURBO_FLOW_C_API const turbo_flow_protocol_plugin_api_t *
-turbo_flow_protocol_registry_find(const turbo_flow_protocol_registry_t *registry,
-                                 const char *name);
+turbo_flow_protocol_registry_find(const turbo_flow_protocol_registry_t *registry, const char *name);
 
 TURBO_FLOW_C_API int turbo_flow_protocol_owner_create_registered(
     turbo_flow_protocol_registry_t *registry, const char *name,
-    const turbo_flow_protocol_open_request_t *request,
-    turbo_flow_protocol_owner_t **out);
-TURBO_FLOW_C_API int turbo_flow_protocol_owner_instance(
-    const turbo_flow_protocol_owner_t *owner,
-    turbo_flow_protocol_kind_t expected_protocol,
-    turbo_flow_protocol_t **out);
+    const turbo_flow_protocol_open_request_t *request, turbo_flow_protocol_owner_t **out);
+TURBO_FLOW_C_API int
+turbo_flow_protocol_owner_instance(const turbo_flow_protocol_owner_t *owner,
+                                   turbo_flow_protocol_kind_t expected_protocol,
+                                   turbo_flow_protocol_t **out);
 TURBO_FLOW_C_API const char *
 turbo_flow_protocol_owner_name(const turbo_flow_protocol_owner_t *owner);
 TURBO_FLOW_C_API turbo_flow_protocol_kind_t
 turbo_flow_protocol_owner_protocol(const turbo_flow_protocol_owner_t *owner);
-TURBO_FLOW_C_API void turbo_flow_protocol_owner_destroy(
-    turbo_flow_protocol_owner_t *owner);
+TURBO_FLOW_C_API void turbo_flow_protocol_owner_destroy(turbo_flow_protocol_owner_t *owner);
 
 #ifdef __cplusplus
 }

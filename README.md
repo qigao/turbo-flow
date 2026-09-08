@@ -17,7 +17,7 @@ typed projection、调度、可观测性，以及可选的通用存储 adapter�
 | `TurboFlow::Config` | 解析并校验产品配置，生成只读 resolved config |
 | `TurboFlow::Graph` | Graph DSL、编译、执行和通用 operation/adapter API |
 | `TurboFlow::Product` | 用 resolved config 装配 Graph 与本仓库 adapters |
-| `TurboFlow::PluginHost` | 通过统一 DLL vtable 事务注册 Product capabilities，并以 catalog lease 保护模块生命周期 |
+| `TurboFlow::PluginHost` | 通过统一 DLL vtable 事务注册 Product/Protocol/Business capabilities，并以 catalog lease 保护模块生命周期 |
 | `TurboFlow::Flow` | 兼容聚合 target；新代码优先链接最小 target |
 | `TurboFlow::ProtocolIngress` | 可选 protocol codec/runtime，不依赖 MQTT broker |
 | `TurboFlow::ProtocolIngressGraph` | 将中立协议消息投递到 `TurboFlow::Graph` |

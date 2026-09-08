@@ -44,6 +44,7 @@ list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_co
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config_limits.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_protocol.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resolved_config.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_security.h)
 
@@ -127,7 +128,9 @@ target_link_libraries(turbo_flow_product PUBLIC TurboFlow::Graph TurboFlow::Conf
 
 add_library(turbo_flow_plugin_host SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h)
+  ${PROJECT_SOURCE_DIR}/ingress/protocol/common/src/flow_protocol_registry.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_protocol.h)
 cmake_config_target(
   turbo_flow_plugin_host
   ALIAS TurboFlow::PluginHost
@@ -137,9 +140,11 @@ target_compile_definitions(turbo_flow_plugin_host PRIVATE TURBO_FLOW_BUILD)
 target_include_directories(
   turbo_flow_plugin_host
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<INSTALL_INTERFACE:include>)
+         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/ingress/protocol/common/include>
+         $<INSTALL_INTERFACE:include>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(turbo_flow_plugin_host
-                      PUBLIC TurboFlow::Product
+                      PUBLIC TurboFlow::Product TurboFlow::ProtocolIngress
                       PRIVATE Salts::CSTL ${CMAKE_DL_LIBS})
 
 # Binary compatibility surface: keep the historical turbo_flow library and

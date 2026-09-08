@@ -153,19 +153,15 @@ static int flow_ocpp201_core_parse_call(const turbo_flow_protocol_business_event
       strcmp(event->metadata.protocol_version, FLOW_OCPP201_CORE_VERSION) != 0)
     return SALTS_ENOTSUP;
   document = json_parse((const char *)event->content.data, event->content.data_size);
-  if (!document || json_type(document) != JSON_ARRAY ||
-      json_array_size(document) != 4u)
-    goto done;
+  if (!document || json_type(document) != JSON_ARRAY || json_array_size(document) != 4u) goto done;
 
   message_type = json_array_get(document, 0u);
   correlation = json_array_get(document, 1u);
   operation = json_array_get(document, 2u);
   body = json_array_get(document, 3u);
-  if (!message_type || json_type(message_type) != JSON_NUMBER ||
-      json_number(message_type) != 2.0 || !correlation ||
-      json_type(correlation) != JSON_STRING || !operation ||
-      json_type(operation) != JSON_STRING || !body ||
-      json_type(body) != JSON_OBJECT)
+  if (!message_type || json_type(message_type) != JSON_NUMBER || json_number(message_type) != 2.0 ||
+      !correlation || json_type(correlation) != JSON_STRING || !operation ||
+      json_type(operation) != JSON_STRING || !body || json_type(body) != JSON_OBJECT)
     goto done;
 
   operation_size = json_string_len(operation);
@@ -201,8 +197,7 @@ static int flow_ocpp201_core_validate_boot(flow_ocpp201_core_owner_t *owner, jso
   size_t reason_object_size;
   int rc;
 
-  if (!owner || !body || json_type(body) != JSON_OBJECT ||
-      json_object_size(body) != 2u)
+  if (!owner || !body || json_type(body) != JSON_OBJECT || json_object_size(body) != 2u)
     return SALTS_EPROTO;
   station_value = json_object_get(body, "chargingStation");
   reason_value = json_object_get(body, "reason");
@@ -259,17 +254,15 @@ static int flow_ocpp201_core_validate_status(flow_ocpp201_core_owner_t *owner, j
   size_t body_json_size = 0u;
   int rc;
 
-  if (!owner || !body || json_type(body) != JSON_OBJECT ||
-      json_object_size(body) != 4u)
+  if (!owner || !body || json_type(body) != JSON_OBJECT || json_object_size(body) != 4u)
     return SALTS_EPROTO;
   timestamp = json_object_get(body, "timestamp");
   connector_status = json_object_get(body, "connectorStatus");
   evse_id = json_object_get(body, "evseId");
   connector_id = json_object_get(body, "connectorId");
   if (!flow_ocpp201_core_timestamp_valid(timestamp) || !connector_status ||
-      json_type(connector_status) != JSON_STRING || !evse_id ||
-      json_type(evse_id) != JSON_NUMBER || !connector_id ||
-      json_type(connector_id) != JSON_NUMBER)
+      json_type(connector_status) != JSON_STRING || !evse_id || json_type(evse_id) != JSON_NUMBER ||
+      !connector_id || json_type(connector_id) != JSON_NUMBER)
     return SALTS_EPROTO;
 
   body_json = json_serialize(body, &body_json_size);
@@ -345,8 +338,7 @@ static int flow_ocpp201_core_validate_transaction_evse(flow_ocpp201_core_owner_t
   if (!owner || !evse || json_type(evse) != JSON_OBJECT) return SALTS_EPROTO;
   id = json_object_get(evse, "id");
   connector = json_object_get(evse, "connectorId");
-  if (!id || json_type(id) != JSON_NUMBER ||
-      (connector && json_type(connector) != JSON_NUMBER) ||
+  if (!id || json_type(id) != JSON_NUMBER || (connector && json_type(connector) != JSON_NUMBER) ||
       json_object_size(evse) != 1u + (connector ? 1u : 0u))
     return SALTS_EPROTO;
 
@@ -355,11 +347,10 @@ static int flow_ocpp201_core_validate_transaction_evse(flow_ocpp201_core_owner_t
   TransactionEvseFacts_init(&facts);
   status = TransactionEvseFacts_from_json(owner->codec, &facts, json, json_size, &error);
   rc = flow_ocpp201_core_databind_status(status);
-  has_connector = flow_ocpp201_core_presence_has(
-      facts._presence, sizeof(facts._presence), TransactionEvseFacts_OPTIONAL_connectorId);
-  if (rc == SALTS_OK &&
-      (facts.id == 0u || has_connector != (connector != NULL) ||
-       (has_connector && facts.connectorId == 0u)))
+  has_connector = flow_ocpp201_core_presence_has(facts._presence, sizeof(facts._presence),
+                                                 TransactionEvseFacts_OPTIONAL_connectorId);
+  if (rc == SALTS_OK && (facts.id == 0u || has_connector != (connector != NULL) ||
+                         (has_connector && facts.connectorId == 0u)))
     rc = SALTS_EPROTO;
   TransactionEvseFacts_clear(&facts);
   json_serialize_free(json);
@@ -377,13 +368,11 @@ static int flow_ocpp201_core_validate_transaction_id_token(flow_ocpp201_core_own
   size_t json_size = 0u;
   int rc;
 
-  if (!owner || !id_token || json_type(id_token) != JSON_OBJECT ||
-      json_object_size(id_token) != 2u)
+  if (!owner || !id_token || json_type(id_token) != JSON_OBJECT || json_object_size(id_token) != 2u)
     return SALTS_EPROTO;
   value = json_object_get(id_token, "idToken");
   type = json_object_get(id_token, "type");
-  if (!value || json_type(value) != JSON_STRING || !type ||
-      json_type(type) != JSON_STRING)
+  if (!value || json_type(value) != JSON_STRING || !type || json_type(type) != JSON_STRING)
     return SALTS_EPROTO;
   json = json_serialize(id_token, &json_size);
   if (!json) return SALTS_ENOMEM;
@@ -401,8 +390,7 @@ static int flow_ocpp201_core_validate_authorize(flow_ocpp201_core_owner_t *owner
                                                 json_value_t *body) {
   json_value_t *id_token;
 
-  if (!owner || !body || json_type(body) != JSON_OBJECT ||
-      json_object_size(body) != 1u)
+  if (!owner || !body || json_type(body) != JSON_OBJECT || json_object_size(body) != 1u)
     return SALTS_EPROTO;
   id_token = json_object_get(body, "idToken");
   if (!id_token) return SALTS_EPROTO;
@@ -411,8 +399,8 @@ static int flow_ocpp201_core_validate_authorize(flow_ocpp201_core_owner_t *owner
 
 static int flow_ocpp201_core_validate_transaction(flow_ocpp201_core_owner_t *owner,
                                                   json_value_t *body) {
-  static const char *const event_keys[] = {
-      "eventType", "triggerReason", "seqNo", "timestamp", "offline"};
+  static const char *const event_keys[] = {"eventType", "triggerReason", "seqNo", "timestamp",
+                                           "offline"};
   json_value_t *event_values[5];
   TransactionEventFacts_t event;
   TransactionInfoRequired_t transaction;
@@ -449,14 +437,11 @@ static int flow_ocpp201_core_validate_transaction(flow_ocpp201_core_owner_t *own
                        : NULL;
   if (!event_type || json_type(event_type) != JSON_STRING ||
       !flow_ocpp201_core_timestamp_valid(timestamp) || !trigger_reason ||
-      json_type(trigger_reason) != JSON_STRING || !sequence ||
-      json_type(sequence) != JSON_NUMBER || !transaction_info ||
-      json_type(transaction_info) != JSON_OBJECT ||
+      json_type(trigger_reason) != JSON_STRING || !sequence || json_type(sequence) != JSON_NUMBER ||
+      !transaction_info || json_type(transaction_info) != JSON_OBJECT ||
       json_object_size(transaction_info) != 1u || !transaction_id ||
-      json_type(transaction_id) != JSON_STRING ||
-      (offline && json_type(offline) != JSON_BOOL) ||
-      json_object_size(body) !=
-          5u + (offline ? 1u : 0u) + (evse ? 1u : 0u) + (id_token ? 1u : 0u))
+      json_type(transaction_id) != JSON_STRING || (offline && json_type(offline) != JSON_BOOL) ||
+      json_object_size(body) != 5u + (offline ? 1u : 0u) + (evse ? 1u : 0u) + (id_token ? 1u : 0u))
     return SALTS_EPROTO;
 
   event_values[0] = event_type;
@@ -476,19 +461,19 @@ static int flow_ocpp201_core_validate_transaction(flow_ocpp201_core_owner_t *own
 
   TransactionEventFacts_init(&event);
   TransactionInfoRequired_init(&transaction);
-  status = TransactionEventFacts_from_json(owner->codec, &event, event_json, event_json_size, &error);
+  status =
+      TransactionEventFacts_from_json(owner->codec, &event, event_json, event_json_size, &error);
   rc = flow_ocpp201_core_databind_status(status);
   if (rc == SALTS_OK) {
     status = TransactionInfoRequired_from_json(owner->codec, &transaction, transaction_json,
                                                transaction_json_size, &error);
     rc = flow_ocpp201_core_databind_status(status);
   }
-  has_offline = flow_ocpp201_core_presence_has(
-      event._presence, sizeof(event._presence), TransactionEventFacts_OPTIONAL_offline);
+  has_offline = flow_ocpp201_core_presence_has(event._presence, sizeof(event._presence),
+                                               TransactionEventFacts_OPTIONAL_offline);
   if (rc == SALTS_OK &&
       (has_offline != (offline != NULL) || tstr_len(event.timestamp) == 0u ||
-       tstr_len(transaction.transactionId) == 0u ||
-       tstr_len(transaction.transactionId) > 36u))
+       tstr_len(transaction.transactionId) == 0u || tstr_len(transaction.transactionId) > 36u))
     rc = SALTS_EPROTO;
   TransactionInfoRequired_clear(&transaction);
   TransactionEventFacts_clear(&event);
@@ -544,12 +529,13 @@ flow_ocpp201_core_write_command(const turbo_flow_protocol_business_command_reque
 
   if (!request || !operation || !json || !output) return SALTS_EINVAL;
   if (json_size > output->payload_capacity) return SALTS_EMSGSIZE;
-  rc = flow_protocol_metadata_text(output->device_id, sizeof(output->device_id), request->device_id);
+  rc =
+      flow_protocol_metadata_text(output->device_id, sizeof(output->device_id), request->device_id);
   if (rc == SALTS_OK)
     rc = flow_protocol_metadata_text(output->operation, sizeof(output->operation), operation);
   if (rc == SALTS_OK)
     rc = flow_protocol_metadata_text(output->correlation_id, sizeof(output->correlation_id),
-                                    request->correlation_id);
+                                     request->correlation_id);
   if (rc != SALTS_OK) return rc;
   if (json_size > 0u) memcpy(output->payload, json, json_size);
   output->payload_size = json_size;
@@ -573,8 +559,7 @@ flow_ocpp201_core_prepare_reset(flow_ocpp201_core_owner_t *owner,
   rc = flow_ocpp201_core_content_is_typed_json(&request->content, "ResetRequest");
   if (rc != SALTS_OK) return rc;
   document = json_parse((const char *)request->content.data, request->content.data_size);
-  if (!document || json_type(document) != JSON_OBJECT ||
-      json_object_size(document) != 1u) {
+  if (!document || json_type(document) != JSON_OBJECT || json_object_size(document) != 1u) {
     rc = SALTS_EPROTO;
     goto done_without_reset;
   }
@@ -625,8 +610,7 @@ flow_ocpp201_core_prepare_unlock(flow_ocpp201_core_owner_t *owner,
   rc = flow_ocpp201_core_content_is_typed_json(&request->content, "UnlockConnectorRequest");
   if (rc != SALTS_OK) return rc;
   document = json_parse((const char *)request->content.data, request->content.data_size);
-  if (!document || json_type(document) != JSON_OBJECT ||
-      json_object_size(document) != 2u) {
+  if (!document || json_type(document) != JSON_OBJECT || json_object_size(document) != 2u) {
     rc = SALTS_EPROTO;
     goto done_without_unlock;
   }
@@ -703,12 +687,11 @@ static int flow_ocpp201_core_open(void *ctx,
 
   ops.consume_committed = flow_ocpp201_core_consume;
   ops.prepare_command = flow_ocpp201_core_prepare;
-  rc = turbo_flow_protocol_business_create(FLOW_OCPP201_CORE_BUSINESS,
-                                          TURBO_FLOW_PROTOCOL_OCPP,
-                                          FLOW_OCPP201_CORE_PROFILE, request->max_payload_size,
-                                          TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT |
-                                              TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND,
-                                          &ops, owner, &owner->business);
+  rc = turbo_flow_protocol_business_create(FLOW_OCPP201_CORE_BUSINESS, TURBO_FLOW_PROTOCOL_OCPP,
+                                           FLOW_OCPP201_CORE_PROFILE, request->max_payload_size,
+                                           TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT |
+                                               TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND,
+                                           &ops, owner, &owner->business);
   if (rc != SALTS_OK) goto fail;
 
   service->protocol = TURBO_FLOW_PROTOCOL_OCPP;
@@ -749,6 +732,4 @@ static const turbo_flow_protocol_business_plugin_api_t FLOW_OCPP201_CORE_API = {
     flow_ocpp201_core_open,
     flow_ocpp201_core_close};
 
-const turbo_flow_protocol_business_plugin_api_t *turbo_flow_protocol_business_plugin_get_api(void) {
-  return &FLOW_OCPP201_CORE_API;
-}
+FLOW_PROTOCOL_BUSINESS_DEFINE_UNIFIED_ROOT("ocpp201-core", "1.0.0", FLOW_OCPP201_CORE_API)

@@ -1,5 +1,6 @@
 #include "tinytest.h"
 #include "turbo_flow_plugin.h"
+#include "turbo_flow_plugin_protocol.h"
 
 #include <string.h>
 

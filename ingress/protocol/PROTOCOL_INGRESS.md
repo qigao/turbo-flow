@@ -28,14 +28,17 @@ session。`turbo_flow_protocol_graph_publish()` 将 payload 与 metadata 复制�
 ## 生命周期
 
 ```text
-registry_load/register
+PluginHost load -> catalog snapshot -> registry_create
   -> owner_create
   -> runtime/session_open
   -> session_feed -> decode -> graph/sink admission -> settle -> reply
   -> begin_shutdown -> drain/force -> destroy
 ```
 
-- Registry 容量在创建时固定；owner 存活时不可卸载插件。
+- PluginHost 是 DLL handle、根实例与 provider catalog 的唯一事实源；不存在协议专用 loader
+  或直接 register API。
+- Registry 从不可变 snapshot 构建并持有其 lease；owner 存活时 registry 销毁返回
+  `SALTS_EBUSY`，registry 存活时 PluginHost 销毁返回 `SALTS_EBUSY`。
 - TCP/TLS 流必须先有界重组完整帧；UDP/WS 一次 receive 是一个消息边界。
 - 每个 session 同时最多一个待 settlement，避免 ACK 顺序与业务提交顺序分叉。
 - `begin_shutdown` 关闭新 admission，但保留 event loop 和已接纳 socket，直到响应发送
@@ -58,6 +61,7 @@ registry_load/register
 ## 状态事实源
 
 - Wire/session/ACK 状态：Protocol runtime。
+- DLL 生命周期、provider catalog 与 generation lease：PluginHost。
 - 连接/TLS/handler 状态：仓库外的 CNet/CHTTP 宿主 owner。
 - Graph 执行状态：TurboFlow runtime。
 - MQTT broker/session、数据库 connection 与重试状态：产品注入的独立 I/O adapter。

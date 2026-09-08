@@ -134,8 +134,8 @@ static int flow_ocpp_inspect(void *ctx, const char *configured_version,
   if (json_array_size(document) < 3u) goto done;
   message_type_value = json_array_get(document, 0u);
   correlation_value = json_array_get(document, 1u);
-  if (!message_type_value || json_type(message_type_value) != JSON_NUMBER ||
-      !correlation_value || json_type(correlation_value) != JSON_STRING)
+  if (!message_type_value || json_type(message_type_value) != JSON_NUMBER || !correlation_value ||
+      json_type(correlation_value) != JSON_STRING)
     goto done;
   message_type_number = json_number(message_type_value);
   if (!isfinite(message_type_number) || message_type_number != floor(message_type_number) ||
@@ -146,8 +146,8 @@ static int flow_ocpp_inspect(void *ctx, const char *configured_version,
       json_string_len(correlation_value) > TURBO_FLOW_PROTOCOL_CORRELATION_MAX)
     goto done;
   if (flow_protocol_metadata_text_n(metadata->correlation_id, sizeof(metadata->correlation_id),
-                                   json_string(correlation_value),
-                                   json_string_len(correlation_value)) != SALTS_OK)
+                                    json_string(correlation_value),
+                                    json_string_len(correlation_value)) != SALTS_OK)
     goto done;
   if (message_type == 2u) {
     if (json_array_size(document) != 4u) goto done;
@@ -159,8 +159,7 @@ static int flow_ocpp_inspect(void *ctx, const char *configured_version,
     if (!flow_ocpp_action_supported(configured_version, json_string(operation_value),
                                     json_string_len(operation_value)))
       goto done;
-    if (!json_array_get(document, 3u) ||
-        json_type(json_array_get(document, 3u)) != JSON_OBJECT)
+    if (!json_array_get(document, 3u) || json_type(json_array_get(document, 3u)) != JSON_OBJECT)
       goto done;
     operation = json_string(operation_value);
   } else if (message_type == 3u) {
@@ -170,10 +169,8 @@ static int flow_ocpp_inspect(void *ctx, const char *configured_version,
     operation = "call-result";
   } else {
     if (json_array_size(document) != 5u || !json_array_get(document, 2u) ||
-        json_type(json_array_get(document, 2u)) != JSON_STRING ||
-        !json_array_get(document, 3u) ||
-        json_type(json_array_get(document, 3u)) != JSON_STRING ||
-        !json_array_get(document, 4u) ||
+        json_type(json_array_get(document, 2u)) != JSON_STRING || !json_array_get(document, 3u) ||
+        json_type(json_array_get(document, 3u)) != JSON_STRING || !json_array_get(document, 4u) ||
         json_type(json_array_get(document, 4u)) != JSON_OBJECT)
       goto done;
     operation = message_type == 3u ? "call-result" : "call-error";
@@ -181,8 +178,9 @@ static int flow_ocpp_inspect(void *ctx, const char *configured_version,
   metadata->message_type = message_type;
   if (message_type == 2u)
     rc = flow_protocol_metadata_text_n(metadata->operation, sizeof(metadata->operation), operation,
-                                      json_string_len(operation_value));
-  else rc = flow_protocol_metadata_text(metadata->operation, sizeof(metadata->operation), operation);
+                                       json_string_len(operation_value));
+  else
+    rc = flow_protocol_metadata_text(metadata->operation, sizeof(metadata->operation), operation);
 
 done:
   if (document) json_free(document);
@@ -256,8 +254,7 @@ static int flow_ocpp_payload_validate(const uint8_t *payload, size_t payload_siz
   int rc = SALTS_EPROTO;
   if (!payload || payload_size == 0u) return SALTS_EINVAL;
   document = json_parse((const char *)payload, payload_size);
-  if (document && json_type(document) == JSON_OBJECT)
-    rc = SALTS_OK;
+  if (document && json_type(document) == JSON_OBJECT) rc = SALTS_OK;
   if (document) json_free(document);
   return rc;
 }
@@ -381,6 +378,4 @@ static const turbo_flow_protocol_plugin_api_t FLOW_OCPP_API = {
     flow_protocol_plugin_open,
     flow_protocol_plugin_close};
 
-const turbo_flow_protocol_plugin_api_t *turbo_flow_protocol_plugin_get_api(void) {
-  return &FLOW_OCPP_API;
-}
+FLOW_PROTOCOL_DEFINE_UNIFIED_ROOT("ocpp", "1.0.0", FLOW_OCPP_API)

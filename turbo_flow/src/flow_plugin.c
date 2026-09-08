@@ -1,4 +1,5 @@
 #include "turbo_flow_plugin.h"
+#include "turbo_flow_plugin_protocol.h"
 
 #include "turbo_flow_stl_error_internal.h"
 
@@ -46,12 +47,24 @@ typedef struct flow_plugin_resource_provider_s {
   size_t module_index;
 } flow_plugin_resource_provider_t;
 
+typedef struct flow_plugin_protocol_provider_s {
+  turbo_flow_protocol_plugin_api_t provider;
+  size_t module_index;
+} flow_plugin_protocol_provider_t;
+
+typedef struct flow_plugin_business_provider_s {
+  turbo_flow_protocol_business_plugin_api_t provider;
+  size_t module_index;
+} flow_plugin_business_provider_t;
+
 struct turbo_flow_plugin_host_s {
   turbo_flow_plugin_host_config_t config;
   turbo_flow_plugin_host_v1_t host_api;
   vec_t modules;
   vec_t adapter_providers;
   vec_t resource_providers;
+  vec_t protocol_providers;
+  vec_t business_providers;
   size_t active_snapshots;
   flow_plugin_host_state_t state;
 };
@@ -60,7 +73,10 @@ struct turbo_flow_plugin_catalog_snapshot_s {
   turbo_flow_plugin_host_t *host;
   vec_t adapter_providers;
   vec_t resource_providers;
+  vec_t protocol_providers;
+  vec_t business_providers;
   size_t leased_module_count;
+  size_t references;
 };
 
 typedef struct flow_plugin_registration_context_s {
@@ -68,6 +84,8 @@ typedef struct flow_plugin_registration_context_s {
   size_t module_index;
   size_t adapter_count_before;
   size_t resource_count_before;
+  size_t protocol_count_before;
+  size_t business_count_before;
   int first_error;
 } flow_plugin_registration_context_t;
 
@@ -258,10 +276,58 @@ static int flow_plugin_find_resource_kind(const turbo_flow_plugin_host_t *host, 
   return -1;
 }
 
+static int flow_plugin_find_protocol_name(const turbo_flow_plugin_host_t *host, const char *name) {
+  if (!host || !name) return -1;
+  for (size_t i = 0u; i < vec_size(&host->protocol_providers); ++i) {
+    const flow_plugin_protocol_provider_t *entry =
+        (const flow_plugin_protocol_provider_t *)vec_at_const(&host->protocol_providers, i);
+    if (entry && entry->provider.name && strcmp(entry->provider.name, name) == 0) return (int)i;
+  }
+  return -1;
+}
+
+static int flow_plugin_find_business_name(const turbo_flow_plugin_host_t *host,
+                                          const char *business) {
+  if (!host || !business) return -1;
+  for (size_t i = 0u; i < vec_size(&host->business_providers); ++i) {
+    const flow_plugin_business_provider_t *entry =
+        (const flow_plugin_business_provider_t *)vec_at_const(&host->business_providers, i);
+    if (entry && entry->provider.business && strcmp(entry->provider.business, business) == 0)
+      return (int)i;
+  }
+  return -1;
+}
+
+static int flow_plugin_protocol_provider_valid(const turbo_flow_protocol_plugin_api_t *provider) {
+  const turbo_flow_protocol_capabilities_t required = TURBO_FLOW_PROTOCOL_CAP_INGRESS |
+                                                      TURBO_FLOW_PROTOCOL_CAP_EGRESS |
+                                                      TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE;
+  return provider && provider->size >= sizeof(*provider) &&
+         provider->version_major == TURBO_FLOW_PROTOCOL_PLUGIN_API_VERSION_MAJOR &&
+         flow_plugin_identity_valid(provider->name) &&
+         provider->protocol >= TURBO_FLOW_PROTOCOL_MQTT_SN &&
+         provider->protocol <= TURBO_FLOW_PROTOCOL_JTT_808 &&
+         (provider->capabilities & required) == required && provider->open && provider->close;
+}
+
+static int
+flow_plugin_business_provider_valid(const turbo_flow_protocol_business_plugin_api_t *provider) {
+  const turbo_flow_protocol_business_capabilities_t known =
+      TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT |
+      TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND;
+  return provider && provider->size >= sizeof(*provider) &&
+         provider->version_major == TURBO_FLOW_PROTOCOL_BUSINESS_PLUGIN_API_VERSION_MAJOR &&
+         flow_plugin_identity_valid(provider->business) &&
+         provider->protocol >= TURBO_FLOW_PROTOCOL_MQTT_SN &&
+         provider->protocol <= TURBO_FLOW_PROTOCOL_JTT_808 && provider->capabilities != 0u &&
+         (provider->capabilities & ~known) == 0u && provider->open && provider->close;
+}
+
 static int flow_plugin_api_validate(const turbo_flow_plugin_api_v1_t *api,
                                     turbo_flow_plugin_error_t *error, const char *path) {
   const turbo_flow_plugin_capabilities_t known =
-      TURBO_FLOW_PLUGIN_CAP_PRODUCT_ADAPTER | TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE;
+      TURBO_FLOW_PLUGIN_CAP_PRODUCT_ADAPTER | TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE |
+      TURBO_FLOW_PLUGIN_CAP_PROTOCOL | TURBO_FLOW_PLUGIN_CAP_PROTOCOL_BUSINESS;
   if (!api || api->size < sizeof(*api) || api->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       (api->capabilities & ~known) != 0u || api->capabilities == 0u || !api->load ||
       !api->register_capabilities || !api->quiesce || !api->shutdown || !api->destroy) {
@@ -348,6 +414,76 @@ static int flow_plugin_add_resource_provider(
   return rc;
 }
 
+static int flow_plugin_add_protocol_provider(
+    void *ctx, const turbo_flow_plugin_protocol_provider_v1_t *registration_provider) {
+  flow_plugin_registration_context_t *registration = (flow_plugin_registration_context_t *)ctx;
+  flow_plugin_protocol_provider_t entry;
+  const turbo_flow_protocol_plugin_api_t *provider;
+  int rc;
+  if (!registration) return SALTS_EINVAL;
+  if (registration->first_error != SALTS_OK) return registration->first_error;
+  if (!registration_provider || registration_provider->size < sizeof(*registration_provider) ||
+      registration_provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) {
+    registration->first_error = SALTS_EINVAL;
+    return registration->first_error;
+  }
+  provider = &registration_provider->provider;
+  if (!flow_plugin_protocol_provider_valid(provider)) {
+    registration->first_error = SALTS_EINVAL;
+    return registration->first_error;
+  }
+  if (flow_plugin_find_protocol_name(registration->host, provider->name) >= 0) {
+    registration->first_error = SALTS_EALREADY;
+    return registration->first_error;
+  }
+  if (vec_size(&registration->host->protocol_providers) >=
+      registration->host->config.protocol_provider_capacity) {
+    registration->first_error = SALTS_ENOSPC;
+    return registration->first_error;
+  }
+  memset(&entry, 0, sizeof(entry));
+  entry.provider = *provider;
+  entry.module_index = registration->module_index;
+  rc = turbo_flow_stl_error(vec_push(&registration->host->protocol_providers, &entry));
+  if (rc != SALTS_OK) registration->first_error = rc;
+  return rc;
+}
+
+static int flow_plugin_add_business_provider(
+    void *ctx, const turbo_flow_plugin_business_provider_v1_t *registration_provider) {
+  flow_plugin_registration_context_t *registration = (flow_plugin_registration_context_t *)ctx;
+  flow_plugin_business_provider_t entry;
+  const turbo_flow_protocol_business_plugin_api_t *provider;
+  int rc;
+  if (!registration) return SALTS_EINVAL;
+  if (registration->first_error != SALTS_OK) return registration->first_error;
+  if (!registration_provider || registration_provider->size < sizeof(*registration_provider) ||
+      registration_provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) {
+    registration->first_error = SALTS_EINVAL;
+    return registration->first_error;
+  }
+  provider = &registration_provider->provider;
+  if (!flow_plugin_business_provider_valid(provider)) {
+    registration->first_error = SALTS_EINVAL;
+    return registration->first_error;
+  }
+  if (flow_plugin_find_business_name(registration->host, provider->business) >= 0) {
+    registration->first_error = SALTS_EALREADY;
+    return registration->first_error;
+  }
+  if (vec_size(&registration->host->business_providers) >=
+      registration->host->config.business_provider_capacity) {
+    registration->first_error = SALTS_ENOSPC;
+    return registration->first_error;
+  }
+  memset(&entry, 0, sizeof(entry));
+  entry.provider = *provider;
+  entry.module_index = registration->module_index;
+  rc = turbo_flow_stl_error(vec_push(&registration->host->business_providers, &entry));
+  if (rc != SALTS_OK) registration->first_error = rc;
+  return rc;
+}
+
 static void flow_plugin_zero_vector_tail(vec_t *values, size_t first) {
   if (!values) return;
   for (size_t i = first; i < vec_size(values); ++i) {
@@ -363,6 +499,10 @@ static void flow_plugin_registration_rollback(flow_plugin_registration_context_t
                                registration->adapter_count_before);
   flow_plugin_zero_vector_tail(&registration->host->resource_providers,
                                registration->resource_count_before);
+  flow_plugin_zero_vector_tail(&registration->host->protocol_providers,
+                               registration->protocol_count_before);
+  flow_plugin_zero_vector_tail(&registration->host->business_providers,
+                               registration->business_count_before);
 }
 
 static void flow_plugin_cleanup_uncommitted(turbo_flow_plugin_host_t *host,
@@ -397,6 +537,14 @@ static int flow_plugin_vectors_initialize(turbo_flow_plugin_host_t *host) {
       vec_init_bytes(&host->resource_providers, sizeof(flow_plugin_resource_provider_t),
                      _Alignof(turbo_flow_max_align_t), host->config.resource_provider_capacity));
   if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_stl_error(
+      vec_init_bytes(&host->protocol_providers, sizeof(flow_plugin_protocol_provider_t),
+                     _Alignof(turbo_flow_max_align_t), host->config.protocol_provider_capacity));
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_stl_error(
+      vec_init_bytes(&host->business_providers, sizeof(flow_plugin_business_provider_t),
+                     _Alignof(turbo_flow_max_align_t), host->config.business_provider_capacity));
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_stl_error(vec_reserve(&host->modules, host->config.module_capacity));
   if (rc == SALTS_OK && host->config.adapter_provider_capacity > 0u)
     rc = turbo_flow_stl_error(
@@ -404,11 +552,19 @@ static int flow_plugin_vectors_initialize(turbo_flow_plugin_host_t *host) {
   if (rc == SALTS_OK && host->config.resource_provider_capacity > 0u)
     rc = turbo_flow_stl_error(
         vec_reserve(&host->resource_providers, host->config.resource_provider_capacity));
+  if (rc == SALTS_OK && host->config.protocol_provider_capacity > 0u)
+    rc = turbo_flow_stl_error(
+        vec_reserve(&host->protocol_providers, host->config.protocol_provider_capacity));
+  if (rc == SALTS_OK && host->config.business_provider_capacity > 0u)
+    rc = turbo_flow_stl_error(
+        vec_reserve(&host->business_providers, host->config.business_provider_capacity));
   return rc;
 }
 
 static void flow_plugin_vectors_destroy(turbo_flow_plugin_host_t *host) {
   if (!host) return;
+  vec_destroy(&host->business_providers);
+  vec_destroy(&host->protocol_providers);
   vec_destroy(&host->resource_providers);
   vec_destroy(&host->adapter_providers);
   vec_destroy(&host->modules);
@@ -417,14 +573,25 @@ static void flow_plugin_vectors_destroy(turbo_flow_plugin_host_t *host) {
 int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_config_t *config,
                                   turbo_flow_plugin_host_t **host_out,
                                   turbo_flow_plugin_error_t *error) {
+  turbo_flow_plugin_host_config_t normalized = {0};
   turbo_flow_plugin_host_t *host;
+  size_t copy_size;
   int rc;
   if (host_out) *host_out = NULL;
-  if (!host_out || !flow_plugin_error_valid(error) || !config || config->size < sizeof(*config) ||
-      config->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR || config->module_capacity == 0u ||
-      config->module_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_MODULES ||
-      config->adapter_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
-      config->resource_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS) {
+  if (!host_out || !flow_plugin_error_valid(error) || !config ||
+      config->size < TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_0_SIZE ||
+      config->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) {
+    return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL,
+                                   NULL, "invalid bounded PluginHost configuration");
+  }
+  copy_size = config->size < sizeof(normalized) ? config->size : sizeof(normalized);
+  memcpy(&normalized, config, copy_size);
+  if (normalized.module_capacity == 0u ||
+      normalized.module_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_MODULES ||
+      normalized.adapter_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
+      normalized.resource_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
+      normalized.protocol_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
+      normalized.business_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS) {
     return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL,
                                    NULL, "invalid bounded PluginHost configuration");
   }
@@ -433,7 +600,7 @@ int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_config_t *config,
   if (!host)
     return flow_plugin_error_write(error, SALTS_ENOMEM, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL,
                                    NULL, "failed to allocate PluginHost");
-  host->config = *config;
+  host->config = normalized;
   host->host_api.size = sizeof(host->host_api);
   host->host_api.abi_major = TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR;
   host->host_api.abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
@@ -517,6 +684,8 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
   registration.module_index = vec_size(&host->modules);
   registration.adapter_count_before = vec_size(&host->adapter_providers);
   registration.resource_count_before = vec_size(&host->resource_providers);
+  registration.protocol_count_before = vec_size(&host->protocol_providers);
+  registration.business_count_before = vec_size(&host->business_providers);
   registration.first_error = SALTS_OK;
   registration_api.size = sizeof(registration_api);
   registration_api.abi_major = TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR;
@@ -524,6 +693,8 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
   registration_api.ctx = &registration;
   registration_api.add_adapter_provider = flow_plugin_add_adapter_provider;
   registration_api.add_resource_provider = flow_plugin_add_resource_provider;
+  registration_api.add_protocol_provider = flow_plugin_add_protocol_provider;
+  registration_api.add_business_provider = flow_plugin_add_business_provider;
   rc = api->register_capabilities(plugin, &registration_api);
   if (registration.first_error != SALTS_OK) rc = registration.first_error;
   flow_plugin_observe(host, TURBO_FLOW_PLUGIN_LIFECYCLE_REGISTER, api->plugin_id, rc);
@@ -533,6 +704,10 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
       actual |= TURBO_FLOW_PLUGIN_CAP_PRODUCT_ADAPTER;
     if (vec_size(&host->resource_providers) > registration.resource_count_before)
       actual |= TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE;
+    if (vec_size(&host->protocol_providers) > registration.protocol_count_before)
+      actual |= TURBO_FLOW_PLUGIN_CAP_PROTOCOL;
+    if (vec_size(&host->business_providers) > registration.business_count_before)
+      actual |= TURBO_FLOW_PLUGIN_CAP_PROTOCOL_BUSINESS;
     if (actual != api->capabilities) rc = SALTS_EPROTO;
   }
   if (rc != SALTS_OK) {
@@ -576,7 +751,8 @@ size_t turbo_flow_plugin_host_resource_provider_count(const turbo_flow_plugin_ho
 }
 
 static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_snapshot_t *snapshot,
-                                                   size_t adapters, size_t resources) {
+                                                   size_t adapters, size_t resources,
+                                                   size_t protocols, size_t businesses) {
   int rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->adapter_providers,
                                                sizeof(turbo_flow_product_adapter_provider_t),
                                                _Alignof(turbo_flow_max_align_t), adapters));
@@ -585,14 +761,28 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
                                            sizeof(turbo_flow_product_resource_provider_t),
                                            _Alignof(turbo_flow_max_align_t), resources));
   if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->protocol_providers,
+                                           sizeof(turbo_flow_protocol_plugin_api_t),
+                                           _Alignof(turbo_flow_max_align_t), protocols));
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->business_providers,
+                                           sizeof(turbo_flow_protocol_business_plugin_api_t),
+                                           _Alignof(turbo_flow_max_align_t), businesses));
+  if (rc != SALTS_OK) return rc;
   if (adapters > 0u) rc = turbo_flow_stl_error(vec_reserve(&snapshot->adapter_providers, adapters));
   if (rc == SALTS_OK && resources > 0u)
     rc = turbo_flow_stl_error(vec_reserve(&snapshot->resource_providers, resources));
+  if (rc == SALTS_OK && protocols > 0u)
+    rc = turbo_flow_stl_error(vec_reserve(&snapshot->protocol_providers, protocols));
+  if (rc == SALTS_OK && businesses > 0u)
+    rc = turbo_flow_stl_error(vec_reserve(&snapshot->business_providers, businesses));
   return rc;
 }
 
 static void flow_plugin_snapshot_vectors_destroy(turbo_flow_plugin_catalog_snapshot_t *snapshot) {
   if (!snapshot) return;
+  vec_destroy(&snapshot->business_providers);
+  vec_destroy(&snapshot->protocol_providers);
   vec_destroy(&snapshot->resource_providers);
   vec_destroy(&snapshot->adapter_providers);
 }
@@ -623,8 +813,9 @@ int turbo_flow_plugin_catalog_snapshot_create(turbo_flow_plugin_host_t *host,
   if (!snapshot)
     return flow_plugin_error_write(error, SALTS_ENOMEM, TURBO_FLOW_PLUGIN_STAGE_LEASE, NULL, NULL,
                                    "failed to allocate catalog snapshot");
-  rc = flow_plugin_snapshot_vectors_initialize(snapshot, vec_size(&host->adapter_providers),
-                                               vec_size(&host->resource_providers));
+  rc = flow_plugin_snapshot_vectors_initialize(
+      snapshot, vec_size(&host->adapter_providers), vec_size(&host->resource_providers),
+      vec_size(&host->protocol_providers), vec_size(&host->business_providers));
   if (rc != SALTS_OK) goto allocation_failed;
   for (size_t i = 0u; i < vec_size(&host->adapter_providers); ++i) {
     const flow_plugin_adapter_provider_t *entry =
@@ -650,8 +841,29 @@ int turbo_flow_plugin_catalog_snapshot_create(turbo_flow_plugin_host_t *host,
       goto allocation_failed;
     }
   }
+  for (size_t i = 0u; i < vec_size(&host->protocol_providers); ++i) {
+    const flow_plugin_protocol_provider_t *entry =
+        (const flow_plugin_protocol_provider_t *)vec_at_const(&host->protocol_providers, i);
+    if (!entry) {
+      rc = SALTS_EPROTO;
+      goto allocation_failed;
+    }
+    rc = turbo_flow_stl_error(vec_push(&snapshot->protocol_providers, &entry->provider));
+    if (rc != SALTS_OK) goto allocation_failed;
+  }
+  for (size_t i = 0u; i < vec_size(&host->business_providers); ++i) {
+    const flow_plugin_business_provider_t *entry =
+        (const flow_plugin_business_provider_t *)vec_at_const(&host->business_providers, i);
+    if (!entry) {
+      rc = SALTS_EPROTO;
+      goto allocation_failed;
+    }
+    rc = turbo_flow_stl_error(vec_push(&snapshot->business_providers, &entry->provider));
+    if (rc != SALTS_OK) goto allocation_failed;
+  }
   snapshot->host = host;
   snapshot->leased_module_count = vec_size(&host->modules);
+  snapshot->references = 1u;
   for (size_t i = 0u; i < snapshot->leased_module_count; ++i) {
     flow_plugin_module_t *module = flow_plugin_module_at(host, i);
     module->leases++;
@@ -683,6 +895,10 @@ int turbo_flow_plugin_catalog_snapshot_product_registry(
 void turbo_flow_plugin_catalog_snapshot_destroy(turbo_flow_plugin_catalog_snapshot_t *snapshot) {
   turbo_flow_plugin_host_t *host;
   if (!snapshot) return;
+  if (snapshot->references > 1u) {
+    snapshot->references--;
+    return;
+  }
   host = snapshot->host;
   if (host) {
     for (size_t i = 0u; i < snapshot->leased_module_count; ++i) {
@@ -694,6 +910,31 @@ void turbo_flow_plugin_catalog_snapshot_destroy(turbo_flow_plugin_catalog_snapsh
   flow_plugin_snapshot_vectors_destroy(snapshot);
   memset(snapshot, 0, sizeof(*snapshot));
   free(snapshot);
+}
+
+int turbo_flow_plugin_catalog_snapshot_retain(turbo_flow_plugin_catalog_snapshot_t *snapshot) {
+  if (!snapshot || snapshot->references == 0u) return SALTS_EINVAL;
+  if (snapshot->references == SIZE_MAX) return SALTS_ENOSPC;
+  snapshot->references++;
+  return SALTS_OK;
+}
+
+int turbo_flow_plugin_catalog_snapshot_protocol_catalog(
+    const turbo_flow_plugin_catalog_snapshot_t *snapshot,
+    turbo_flow_plugin_protocol_catalog_v1_t *catalog_out) {
+  if (!snapshot || snapshot->references == 0u || !catalog_out ||
+      catalog_out->size < sizeof(*catalog_out) ||
+      catalog_out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR)
+    return SALTS_EINVAL;
+  catalog_out->abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
+  catalog_out->protocol_providers =
+      (const turbo_flow_protocol_plugin_api_t *)vec_data_const(&snapshot->protocol_providers);
+  catalog_out->protocol_provider_count = vec_size(&snapshot->protocol_providers);
+  catalog_out->business_providers =
+      (const turbo_flow_protocol_business_plugin_api_t *)vec_data_const(
+          &snapshot->business_providers);
+  catalog_out->business_provider_count = vec_size(&snapshot->business_providers);
+  return SALTS_OK;
 }
 
 int turbo_flow_plugin_host_destroy(turbo_flow_plugin_host_t *host, uint64_t quiesce_timeout_ms,

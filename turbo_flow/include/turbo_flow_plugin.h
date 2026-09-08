@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 #define TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR 1u
-#define TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR 0u
+#define TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR 1u
 #define TURBO_FLOW_PLUGIN_EXPORT_SYMBOL "turbo_flow_plugin_get_api"
 
 #define TURBO_FLOW_PLUGIN_ID_MAX 127u
@@ -35,7 +35,9 @@ typedef struct turbo_flow_plugin_catalog_snapshot_s turbo_flow_plugin_catalog_sn
 typedef uint64_t turbo_flow_plugin_capabilities_t;
 enum {
   TURBO_FLOW_PLUGIN_CAP_PRODUCT_ADAPTER = UINT64_C(1) << 0,
-  TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE = UINT64_C(1) << 1
+  TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE = UINT64_C(1) << 1,
+  TURBO_FLOW_PLUGIN_CAP_PROTOCOL = UINT64_C(1) << 2,
+  TURBO_FLOW_PLUGIN_CAP_PROTOCOL_BUSINESS = UINT64_C(1) << 3
 };
 
 typedef enum turbo_flow_plugin_error_stage_e {
@@ -100,7 +102,12 @@ typedef struct turbo_flow_plugin_host_config_s {
   size_t resource_provider_capacity;
   turbo_flow_plugin_lifecycle_observer_fn lifecycle_observer;
   void *lifecycle_observer_ctx;
+  size_t protocol_provider_capacity;
+  size_t business_provider_capacity;
 } turbo_flow_plugin_host_config_t;
+
+#define TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_0_SIZE                                                    \
+  offsetof(turbo_flow_plugin_host_config_t, protocol_provider_capacity)
 
 #define TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT                                                         \
   {sizeof(turbo_flow_plugin_host_config_t),                                                        \
@@ -110,7 +117,9 @@ typedef struct turbo_flow_plugin_host_config_s {
    64u,                                                                                            \
    64u,                                                                                            \
    NULL,                                                                                           \
-   NULL}
+   NULL,                                                                                           \
+   16u,                                                                                            \
+   16u}
 
 typedef void *(*turbo_flow_plugin_host_allocate_fn)(void *ctx, size_t size);
 typedef void (*turbo_flow_plugin_host_deallocate_fn)(void *ctx, void *memory);
@@ -145,6 +154,9 @@ typedef struct turbo_flow_plugin_product_resource_provider_v1_s {
   turbo_flow_product_resource_provider_t provider;
 } turbo_flow_plugin_product_resource_provider_v1_t;
 
+typedef struct turbo_flow_plugin_protocol_provider_v1_s turbo_flow_plugin_protocol_provider_v1_t;
+typedef struct turbo_flow_plugin_business_provider_v1_s turbo_flow_plugin_business_provider_v1_t;
+
 #define TURBO_FLOW_PLUGIN_PRODUCT_RESOURCE_PROVIDER_V1_INIT                                        \
   {sizeof(turbo_flow_plugin_product_resource_provider_v1_t), TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR,  \
    TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR, TURBO_FLOW_PRODUCT_RESOURCE_PROVIDER_INIT}
@@ -153,6 +165,10 @@ typedef int (*turbo_flow_plugin_add_adapter_provider_fn)(
     void *ctx, const turbo_flow_plugin_product_adapter_provider_v1_t *provider);
 typedef int (*turbo_flow_plugin_add_resource_provider_fn)(
     void *ctx, const turbo_flow_plugin_product_resource_provider_v1_t *provider);
+typedef int (*turbo_flow_plugin_add_protocol_provider_fn)(
+    void *ctx, const turbo_flow_plugin_protocol_provider_v1_t *provider);
+typedef int (*turbo_flow_plugin_add_business_provider_fn)(
+    void *ctx, const turbo_flow_plugin_business_provider_v1_t *provider);
 
 /** Registration is valid only during one root register_capabilities callback. */
 typedef struct turbo_flow_plugin_registration_v1_s {
@@ -162,6 +178,8 @@ typedef struct turbo_flow_plugin_registration_v1_s {
   void *ctx;
   turbo_flow_plugin_add_adapter_provider_fn add_adapter_provider;
   turbo_flow_plugin_add_resource_provider_fn add_resource_provider;
+  turbo_flow_plugin_add_protocol_provider_fn add_protocol_provider;
+  turbo_flow_plugin_add_business_provider_fn add_business_provider;
 } turbo_flow_plugin_registration_v1_t;
 
 typedef int (*turbo_flow_plugin_load_fn)(const turbo_flow_plugin_host_v1_t *host,
@@ -247,6 +265,10 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_product_registry(
 /** Release a snapshot and all module leases; accepts NULL. */
 TURBO_FLOW_C_API void
 turbo_flow_plugin_catalog_snapshot_destroy(turbo_flow_plugin_catalog_snapshot_t *snapshot);
+
+/** Retain a caller-serialized snapshot for another catalog owner. */
+TURBO_FLOW_C_API int
+turbo_flow_plugin_catalog_snapshot_retain(turbo_flow_plugin_catalog_snapshot_t *snapshot);
 
 /**
  * Quiesce, shut down, destroy, and unload all modules in reverse load order.
