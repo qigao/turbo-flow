@@ -23,11 +23,22 @@ TurboFlow::Config <--- TurboFlow::Graph <--- TurboFlow::Product
                               ^
                               |
                     external product adapter
+
+TurboFlow::Config + parsed Graph + PluginHost snapshot
+                              |
+                              v
+                 transactional Graph generation
+                              |
+                              v
+                  DLL resource/adapter vtables
 ```
 
 - `Config` 只解析和校验配置，不创建 runtime 资源。
 - `Graph` 拥有 DSL、plan、message、operation、执行器和通用 settlement contract。
-- `Product` 按 resolved config 装配本仓库 provider；装配失败必须销毁本次 generation。
+- `Product` 的旧 provider registry 仅供显式 embedded consumer；Gateway 不以它作为 fallback。
+- `PluginHost` generation 在消费 parsed Graph 前完成 catalog/ref/capacity/preflight 校验；消费后任何
+  materialize/compile 失败都销毁整张 Graph 与已转移 owner。
+- generation lease 覆盖 CFlow run、pending claim 与 callback；owner 逆序退休完成后才释放 DLL snapshot。
 - 外部产品拥有 wire protocol、连接、session、peer、ack、重连和持久化协议状态。
 - 外部 adapter 可调用 Graph；Graph 不包含任何具体协议产品头文件、target 或 owner registry。
 - `TurboFlow::Flow` 仅为现有消费者保留聚合 ABI，新代码选择最小 target。

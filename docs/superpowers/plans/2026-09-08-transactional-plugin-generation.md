@@ -74,7 +74,7 @@
 
   Reconfigure, build, and run `ctest --preset win-dev-user -R test_flow_plugin_host --output-on-failure`. Expected: fixture registration, duplicate/capacity validation, snapshot catalog view, and C++ compilation pass while existing ABI-minor-1 fixtures still load.
 
-- [ ] **Step 5: Commit the catalog slice**
+- [x] **Step 5: Commit the catalog slice**
 
   Commit the public header, host vectors, fixtures, and focused tests with `feat(plugin): add transactional provider catalog`.
 
@@ -91,27 +91,27 @@
 - Consumes: `turbo_flow_plugin_catalog_snapshot_transactional_product_catalog()`, `turbo_flow_plugin_catalog_snapshot_retain()`, public resolved adapter/channel views, public stage plan views, `turbo_flow_compile()`.
 - Produces: `turbo_flow_plugin_generation_create()`, `turbo_flow_plugin_generation_flow()`, `turbo_flow_plugin_generation_state()`, and `turbo_flow_plugin_generation_owner_count()`.
 
-- [ ] **Step 1: Write failing ownership and preflight tests**
+- [x] **Step 1: Write failing ownership and preflight tests**
 
   Cover a two-adapter parsed Graph with literal expected outcomes: owner capacity 1 returns `SALTS_ENOSPC`, invokes no callbacks, and leaves `flow_io` non-NULL; provider preflight failure invokes no materialize callback and leaves `flow_io` non-NULL; successful preflight moves `flow_io`, materializes each unique adapter once, compiles the Graph, and returns two owners.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
   Build and run `test_flow_plugin_generation`. Expected: compilation/link failure for missing generation entry points.
 
-- [ ] **Step 3: Implement preflight, move, materialize, and compile**
+- [x] **Step 3: Implement preflight, move, materialize, and compile**
 
   Resolve unique stage references in stage order using `turbo_flow_stage_at()`, `turbo_flow_resolved_config_adapter()`, and `turbo_flow_resolved_config_channel()`. Validate factory catalog structure and provider owner flags. Count required owners with checked addition, reject over-capacity before callbacks, reserve the CSTL vector, retain the snapshot, run all resource preflights followed by all adapter preflights, then move the Graph and materialize resources followed by adapters. Compile only after every owner is recorded.
 
-- [ ] **Step 4: Add failing rollback tests**
+- [x] **Step 4: Add failing rollback tests**
 
   Exercise failure at first and second materialize callbacks and a compile failure after successful materialization. Assert generation output is NULL, `flow_io` is NULL after materialization begins, successful owners receive exactly one reverse-order rollback destruction, and the caller's original structured provider error is preserved.
 
-- [ ] **Step 5: Implement rollback**
+- [x] **Step 5: Implement rollback**
 
   On materialize/owner-validation/compile failure, destroy all transferred owners in reverse order using their DLL-side `destroy`, destroy the moved Graph, release the retained snapshot, destroy the CSTL vector, and free the generation. Never call a legacy Product provider.
 
-- [ ] **Step 6: Run GREEN for assembly**
+- [x] **Step 6: Run GREEN for assembly**
 
   Run `ctest --preset win-dev-user -R "test_flow_plugin_(host|generation)" --output-on-failure`. Expected: all capacity, move, compile, and rollback cases pass.
 
@@ -132,7 +132,7 @@
 - Consumes: compiled generation and plugin-owned owner lifecycle callbacks.
 - Produces: `turbo_flow_plugin_generation_lease_acquire()`, `turbo_flow_plugin_generation_lease_release()`, and `turbo_flow_plugin_generation_destroy()`.
 
-- [ ] **Step 1: Write failing lease and reverse-lifecycle tests**
+- [x] **Step 1: Write failing lease and reverse-lifecycle tests**
 
   Assert an acquired lease makes generation destroy return `SALTS_EBUSY` without invoking lifecycle callbacks. After release, assert reverse-order quiesce, Graph stop, reverse-order drain, reverse-order shutdown, Graph destruction, reverse-order owner destruction, then snapshot release. Verify PluginHost destruction remains `SALTS_EBUSY` until generation destruction succeeds.
 
@@ -140,15 +140,15 @@
 
   Run the focused generation test. Expected: missing lease/destroy APIs or wrong lifecycle order fails.
 
-- [ ] **Step 3: Implement lease and lifecycle state machines**
+- [x] **Step 3: Implement lease and lifecycle state machines**
 
   Store one state per owner so successful lifecycle callbacks are never repeated. Reject lease counter overflow with `SALTS_ENOSPC` and release underflow with `SALTS_EINVAL`. Destroy returns `SALTS_EBUSY` while leases exist. On quiesce, Graph stop, drain, or shutdown failure, return the exact first status with `$.generation`/owner path context and keep the generation retryable. Free Graph, owners, snapshot, and generation only after every required transition succeeds.
 
-- [ ] **Step 4: Add failing retry tests**
+- [x] **Step 4: Add failing retry tests**
 
   Build fixture variants whose quiesce, drain, and shutdown callbacks each fail once. Assert the first destroy returns `SALTS_EIO`, the generation remains inspectable, the second destroy resumes at the failed transition, and every prior successful callback and final destroy occurs exactly once.
 
-- [ ] **Step 5: Run GREEN for lifecycle**
+- [x] **Step 5: Run GREEN for lifecycle**
 
   Run `test_flow_plugin_generation` repeatedly 100 times and run `test_flow_plugin_host`. Expected: no duplicate callbacks, invalid transitions, lease underflow, or unload-before-owner behavior.
 
@@ -169,15 +169,15 @@
 - Consumes: ABI minor 2 headers and PluginHost target.
 - Produces: installed C/C++ consumer coverage and migration guidance for #69/#71/#72/#74.
 
-- [ ] **Step 1: Add failing installed-consumer assertions**
+- [x] **Step 1: Add failing installed-consumer assertions**
 
   Include `turbo_flow_plugin_generation.h`, instantiate every initializer, bind function pointers to generation create/lease/destroy APIs, require ABI minor 2 and nonzero default transactional capacities, and build the installed consumer before installing the new header/symbols. Expected: install-consumer configure or link fails.
 
-- [ ] **Step 2: Update install/export and architecture documentation**
+- [x] **Step 2: Update install/export and architecture documentation**
 
   Install the new header through `TURBO_FLOW_HEADERS`; document Graph move semantics, preflight purity, owner callback requirements, retry states, explicit leases, reverse shutdown, and the fact that legacy Product assembly is embedded-only and never a Gateway fallback.
 
-- [ ] **Step 3: Run GREEN for installed consumption**
+- [x] **Step 3: Run GREEN for installed consumption**
 
   Run `cmake --build --preset install-win-dev-user` and the install-consumer CTest case under `win-dev-user`. Expected: the installed package supplies the header and all symbols through `TurboFlow::PluginHost`.
 

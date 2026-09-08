@@ -113,10 +113,66 @@ typedef struct turbo_flow_plugin_transactional_product_catalog_v1_s {
    NULL,                                                                                           \
    0u}
 
+#define TURBO_FLOW_PLUGIN_GENERATION_MAX_OWNERS 65536u
+
+typedef struct turbo_flow_plugin_generation_s turbo_flow_plugin_generation_t;
+
+typedef enum turbo_flow_plugin_generation_state_e {
+  TURBO_FLOW_PLUGIN_GENERATION_INVALID = 0,
+  TURBO_FLOW_PLUGIN_GENERATION_COMPILED,
+  TURBO_FLOW_PLUGIN_GENERATION_ACTIVE,
+  TURBO_FLOW_PLUGIN_GENERATION_QUIESCED,
+  TURBO_FLOW_PLUGIN_GENERATION_STOPPED,
+  TURBO_FLOW_PLUGIN_GENERATION_DRAINED,
+  TURBO_FLOW_PLUGIN_GENERATION_SHUTDOWN
+} turbo_flow_plugin_generation_state_t;
+
+typedef struct turbo_flow_plugin_generation_config_s {
+  size_t size;
+  uint32_t abi_major;
+  uint32_t abi_minor;
+  size_t owner_capacity;
+} turbo_flow_plugin_generation_config_t;
+
+#define TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT                                                   \
+  {sizeof(turbo_flow_plugin_generation_config_t), TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR,             \
+   TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR, 256u}
+
 /** Fill a caller-owned immutable transactional Product catalog view. */
 TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(
     const turbo_flow_plugin_catalog_snapshot_t *snapshot,
     turbo_flow_plugin_transactional_product_catalog_v1_t *catalog_out);
+
+/**
+ * Consume one parsed Graph only after bounded preflight succeeds, then materialize and compile it.
+ * `*flow_io` remains caller-owned on preflight failure and becomes NULL before the first factory
+ * side effect. The generation owns the Graph and one retained catalog snapshot on success.
+ */
+TURBO_FLOW_C_API int turbo_flow_plugin_generation_create(
+    turbo_flow_plugin_catalog_snapshot_t *snapshot, const turbo_flow_resolved_config_t *resolved,
+    turbo_flow_t **flow_io, const turbo_flow_plugin_generation_config_t *config,
+    turbo_flow_plugin_generation_t **generation_out, turbo_flow_config_error_t *error);
+
+/** Borrowed mutable Graph; the generation remains its sole destruction owner. */
+TURBO_FLOW_C_API turbo_flow_t *
+turbo_flow_plugin_generation_flow(turbo_flow_plugin_generation_t *generation);
+TURBO_FLOW_C_API turbo_flow_plugin_generation_state_t
+turbo_flow_plugin_generation_state(const turbo_flow_plugin_generation_t *generation);
+TURBO_FLOW_C_API size_t
+turbo_flow_plugin_generation_owner_count(const turbo_flow_plugin_generation_t *generation);
+
+TURBO_FLOW_C_API int
+turbo_flow_plugin_generation_lease_acquire(turbo_flow_plugin_generation_t *generation);
+TURBO_FLOW_C_API int
+turbo_flow_plugin_generation_lease_release(turbo_flow_plugin_generation_t *generation);
+
+/**
+ * Retire owners and the Graph in retryable reverse lifecycle order, then release the DLL snapshot.
+ * On SALTS_OK the generation is freed and must not be used again.
+ */
+TURBO_FLOW_C_API int
+turbo_flow_plugin_generation_destroy(turbo_flow_plugin_generation_t *generation,
+                                     uint64_t timeout_ms, turbo_flow_config_error_t *error);
 
 #ifdef __cplusplus
 }
