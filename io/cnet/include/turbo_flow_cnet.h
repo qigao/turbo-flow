@@ -654,21 +654,37 @@ typedef struct turbo_flow_cnet_datagram_sink_snapshot_s {
    0u,                                                                                             \
    0u}
 
-/** Register one fixed-peer raw UDP terminal sink before graph compilation. */
+/**
+ * Atomically register one fixed-peer raw UDP terminal adapter and managed Sink boundary.
+ *
+ * The CFlow IO Actor request capacity is `datagram->send_capacity`. Admission at capacity
+ * fails with `SALTS_ENOSPC`; accepted claims remain owned through authoritative CNet terminal
+ * completion or stop cancellation.
+ */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_datagram_sink_register(const turbo_flow_cnet_datagram_sink_config_t *config,
                                        turbo_flow_cnet_datagram_sink_t **sink_out);
 
-/** Advance owner-thread Actor and CNet datagram progress. */
+/**
+ * Advance the single-owner Actor and CNet datagram progress lane.
+ * Concurrent or reentrant poll returns `SALTS_EBUSY`; stop waits for the current owner.
+ */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_datagram_sink_poll(turbo_flow_cnet_datagram_sink_t *sink, uint32_t timeout_ms,
                                    turbo_flow_cnet_datagram_sink_snapshot_t *snapshot);
 
+/**
+ * Copy native sink state without advancing progress.
+ * Returns `SALTS_EBUSY` while start, poll, stop, or async admission mutates the owner boundary.
+ */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_datagram_sink_snapshot(const turbo_flow_cnet_datagram_sink_t *sink,
                                        turbo_flow_cnet_datagram_sink_snapshot_t *snapshot);
 
-/** Release the outer handle after flow reset/destroy detached the registration. */
+/**
+ * Release the outer handle after Flow reset/destroy detached the registration.
+ * The caller serializes destroy with every other handle call.
+ */
 TURBO_FLOW_C_API int turbo_flow_cnet_datagram_sink_destroy(turbo_flow_cnet_datagram_sink_t *sink);
 
 #define TURBO_FLOW_CNET_PACKET_SINK_API_VERSION 1u
