@@ -38,10 +38,18 @@ This staging order was selected over three alternatives:
 
 The combined path remains setup-only. Duplicate checks retain the current O(A) adapter-name and O(R) resource-UID scans, while normal dispatch receives no new allocation, lookup, or branch.
 
+## CNet stream Sink
+
+`turbo_flow_cnet_stream_sink_register()` is the first concrete combined owner. One call atomically registers its async-terminal adapter and managed Sink boundary. For names that fit the managed contract, its owner is the adapter name and its stable UID is `cnet-stream-sink:<adapter-name>`. Longer existing adapter names remain valid: registration derives one bounded `xxh3-128:<digest>` owner identity and uses `cnet-stream-sink:<owner>` as the UID. The input descriptor declares IO-transport opaque `application/octet-stream` content with schema `CNetStream/NonEmptyBytes/v1`, matching the runtime rejection of null or empty payloads.
+
+The boundary advertises durable settlement and no management commands. Its single-request CFlow IO Actor supplies capacity, queued, in-flight, and backpressure facts; it does not invent demand or lag. `accepted` advances only after Actor admission, `completed` only when the accepted terminal claim is consumed exactly once, and `rejected` records pre-admission failure independently. Registered, connecting, connected, stopping/draining, stopped/detached, and failed owner states map directly to the corresponding managed lifecycle. Snapshot access is synchronized with Actor initialization, admission, drain, and destruction; a query racing the short admission commit window returns `SALTS_EBUSY`.
+
+The owner does not project `turbo_flow_cnet_stream_sink_snapshot_t` into this contract. Managed callbacks read the sink and IO Actor facts directly, and the zero command mask has no hidden command or compatibility path.
+
 ## Migration and rollback
 
 Existing owners and embedded resource-registration structures retain their layout and continue to register as ordinary resources. Migration is explicit: use the additive managed-provider entry point, or the combined async-terminal entry point for a terminal Sink, advertise only capabilities the owner actually implements, and keep the owner-native snapshot as the sole mutable state. There is no compatibility fallback from a managed contract to `turbo_flow_resource_snapshot_t`.
 
-Removing the paired callbacks rolls a standalone owner back to an ordinary resource without changing its data path or existing resource commands. A combined owner can roll back by returning to its previous explicit async-adapter registration; no data format or persisted state changes. The first migration target is the CNet stream Sink tracked by issue #55, while other CNet, CHTTP, and TurboDb owners remain independently tracked under issue #28.
+Removing the paired callbacks rolls a standalone owner back to an ordinary resource without changing its data path or existing resource commands. A combined owner can roll back by returning to its previous explicit async-adapter registration; no data format or persisted state changes. The CNet stream Sink now uses the combined managed registration; other CNet, CHTTP, and TurboDb owners remain independently tracked under issue #28.
 
 The deterministic, buildable examples are `turbo_flow/tests/test_flow_managed_boundary.c` and `turbo_flow/tests/test_flow_managed_async_terminal.c`. The installed-package consumer in `tests/install_consumer/main.c` validates the same header, initializer, and exported symbol in both C and C++ modes.
