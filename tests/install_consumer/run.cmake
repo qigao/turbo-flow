@@ -43,8 +43,11 @@ set(test_root "${TURBO_FLOW_BINARY_DIR}/install-consumer-test")
 set(stage_dir "${test_root}/stage")
 set(full_consumer_build_dir "${test_root}/full-build")
 set(cxx_consumer_build_dir "${test_root}/cxx-build")
+set(cnet_plugin_consumer_build_dir "${test_root}/cnet-plugin-build")
 set(full_consumer_source_dir "${TURBO_FLOW_SOURCE_DIR}/tests/install_consumer")
 set(component_consumer_source_dir "${full_consumer_source_dir}/component")
+set(cnet_plugin_consumer_source_dir
+    "${TURBO_FLOW_SOURCE_DIR}/tests/install_cnet_plugin_consumer")
 
 file(REMOVE_RECURSE "${test_root}")
 
@@ -165,6 +168,131 @@ else()
     set(ENV{LD_LIBRARY_PATH}
         "${turbodb_root}/lib:$ENV{LD_LIBRARY_PATH}")
   endif()
+endif()
+
+if(WIN32)
+  set(installed_cnet_plugin "${stage_dir}/bin/tf_cnet_plugin.dll")
+  set(cnet_plugin_consumer_executable
+      "${cnet_plugin_consumer_build_dir}/turbo_flow_cnet_plugin_consumer.exe")
+elseif(APPLE)
+  set(installed_cnet_plugin "${stage_dir}/lib/libtf_cnet_plugin.dylib")
+  set(cnet_plugin_consumer_executable
+      "${cnet_plugin_consumer_build_dir}/turbo_flow_cnet_plugin_consumer")
+else()
+  set(installed_cnet_plugin "${stage_dir}/lib/libtf_cnet_plugin.so")
+  set(cnet_plugin_consumer_executable
+      "${cnet_plugin_consumer_build_dir}/turbo_flow_cnet_plugin_consumer")
+endif()
+if(NOT EXISTS "${installed_cnet_plugin}")
+  message(FATAL_ERROR "Installed CNet provider DLL is missing: ${installed_cnet_plugin}")
+endif()
+
+run_checked(
+  "CNet plugin Gateway consumer configure"
+  "${CMAKE_COMMAND}" -E env
+  "SALTS_ROOT=${salts_root}"
+  "SALTS_UTILS_ROOT=${salts_utils_root}"
+  "RULES_FORGE_ROOT=${rules_forge_root}"
+  "${CMAKE_COMMAND}" -S "${cnet_plugin_consumer_source_dir}"
+  -B "${cnet_plugin_consumer_build_dir}" -G "${TURBO_FLOW_GENERATOR}"
+  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+  "-DRulesForge_DIR=${rules_forge_package_dir}"
+  "-DTURBO_FLOW_CNET_PLUGIN_PATH=${installed_cnet_plugin}")
+
+run_checked(
+  "CNet plugin Gateway consumer build"
+  "${CMAKE_COMMAND}" --build "${cnet_plugin_consumer_build_dir}"
+  --config "${TURBO_FLOW_CONFIG}" --parallel)
+
+if(WIN32)
+  set(dumpbin "${TURBO_FLOW_COMPILER_RUNTIME_DIR}/dumpbin.exe")
+  if(NOT EXISTS "${dumpbin}")
+    message(FATAL_ERROR "Required dumpbin executable does not exist: ${dumpbin}")
+  endif()
+  execute_process(
+    COMMAND "${dumpbin}" /nologo /exports "${installed_cnet_plugin}"
+    RESULT_VARIABLE export_result
+    OUTPUT_VARIABLE export_output
+    ERROR_VARIABLE export_error)
+  if(NOT export_result EQUAL 0)
+    message(FATAL_ERROR
+            "CNet plugin export inspection failed (${export_result})\n${export_output}\n${export_error}")
+  endif()
+  string(REPLACE "\r\n" "\n" export_output "${export_output}")
+  string(REGEX MATCHALL
+         "\n[ \t]+[0-9]+[ \t]+[0-9A-Fa-f]+[ \t]+[0-9A-Fa-f]+[ \t]+[^ \t\r\n]+"
+         export_rows "${export_output}")
+  list(LENGTH export_rows export_count)
+  if(export_count EQUAL 1)
+    list(GET export_rows 0 export_row)
+    string(REGEX MATCH "[^ \t\r\n]+$" export_name "${export_row}")
+  endif()
+  if(NOT export_count EQUAL 1 OR
+     NOT export_name STREQUAL "turbo_flow_plugin_get_api")
+    message(FATAL_ERROR
+            "CNet plugin must export only turbo_flow_plugin_get_api\n${export_output}")
+  endif()
+
+  execute_process(
+    COMMAND "${dumpbin}" /nologo /dependents "${installed_cnet_plugin}"
+    RESULT_VARIABLE plugin_dependent_result
+    OUTPUT_VARIABLE plugin_dependent_output
+    ERROR_VARIABLE plugin_dependent_error)
+  if(NOT plugin_dependent_result EQUAL 0 OR
+     NOT plugin_dependent_output MATCHES "tf_cnet_adapter\\.dll" OR
+     NOT plugin_dependent_output MATCHES "salts_cnet\\.dll")
+    message(FATAL_ERROR
+            "CNet plugin dependency inspection failed\n${plugin_dependent_output}\n${plugin_dependent_error}")
+  endif()
+  if(TURBO_FLOW_CONFIG STREQUAL "Debug")
+    if(NOT plugin_dependent_output MATCHES "VCRUNTIME140D\\.dll")
+      message(FATAL_ERROR "Debug CNet plugin does not use the Debug CRT\n${plugin_dependent_output}")
+    endif()
+  elseif(plugin_dependent_output MATCHES "VCRUNTIME140D\\.dll|ucrtbased\\.dll")
+    message(FATAL_ERROR "Release CNet plugin depends on the Debug CRT\n${plugin_dependent_output}")
+  endif()
+
+  execute_process(
+    COMMAND "${dumpbin}" /nologo /dependents "${cnet_plugin_consumer_executable}"
+    RESULT_VARIABLE consumer_dependent_result
+    OUTPUT_VARIABLE consumer_dependent_output
+    ERROR_VARIABLE consumer_dependent_error)
+  if(NOT consumer_dependent_result EQUAL 0)
+    message(FATAL_ERROR
+            "Gateway dependency inspection failed (${consumer_dependent_result})\n${consumer_dependent_output}\n${consumer_dependent_error}")
+  endif()
+  if(consumer_dependent_output MATCHES "tf_cnet_adapter\\.dll|salts_cnet\\.dll")
+    message(FATAL_ERROR
+            "Gateway consumer must not link the CNet adapter or CNet runtime\n${consumer_dependent_output}")
+  endif()
+endif()
+
+run_checked(
+  "CNet plugin Gateway consumer loopback"
+  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${cnet_plugin_consumer_build_dir}"
+  -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+
+run_expected_failure(
+  "CNet plugin Gateway missing DLL"
+  "failed at plugin DLL load"
+  "${cnet_plugin_consumer_executable}"
+  "${stage_dir}/bin/missing-cnet-plugin.dll")
+
+if(WIN32)
+  set(cnet_missing_dependency_dir "${test_root}/cnet-missing-dependency")
+  file(MAKE_DIRECTORY "${cnet_missing_dependency_dir}")
+  configure_file(
+    "${installed_cnet_plugin}"
+    "${cnet_missing_dependency_dir}/tf_cnet_plugin.dll"
+    COPYONLY)
+  run_expected_failure(
+    "CNet plugin Gateway missing transitive dependency"
+    "Win32 dynamic library error 126"
+    "${cnet_plugin_consumer_executable}"
+    "${cnet_missing_dependency_dir}/tf_cnet_plugin.dll")
 endif()
 
 set(config_consumer_build_dir "${test_root}/config-build")

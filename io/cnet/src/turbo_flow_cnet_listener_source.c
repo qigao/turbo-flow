@@ -63,6 +63,7 @@ struct turbo_flow_cnet_listener_source_s {
   bool ready;
   bool receive_pending;
   bool publisher_destroyed;
+  bool managed_run;
   bool publisher_cancelled;
   bool has_content;
   bool message_id_exhausted;
@@ -362,7 +363,8 @@ static void listener_source_on_receive(void *user, cnet_connection connection,
   listener_source_wake(&source->value_waker);
 }
 
-static int listener_source_config_validate(const turbo_flow_cnet_listener_source_config_t *config) {
+static int listener_source_config_validate(const turbo_flow_cnet_listener_source_config_t *config,
+                                           bool managed) {
   int status;
   if (!config || config->size < sizeof(*config) ||
       config->version != TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION || !config->flow ||
@@ -375,7 +377,9 @@ static int listener_source_config_validate(const turbo_flow_cnet_listener_source
       config->scheduler_capacity == 0u || config->scheduler_max_steps_per_poll == 0u ||
       config->first_message_id == 0u || config->listener->backend != config->client->backend)
     return SALTS_EINVAL;
-  if (turbo_flow_state(config->flow) != TURBO_FLOW_STATE_STARTED) return SALTS_EBUSY;
+  if ((!managed && turbo_flow_state(config->flow) != TURBO_FLOW_STATE_STARTED) ||
+      (managed && turbo_flow_state(config->flow) != TURBO_FLOW_STATE_COMPILED))
+    return SALTS_EBUSY;
   if (config->listener_options) {
     status = cnet_listener_options_validate(config->listener_options);
     if (status != SALTS_OK) return status;
@@ -398,7 +402,7 @@ static void listener_source_open_cleanup(turbo_flow_cnet_listener_source_t *sour
                                          cflow_publisher *publisher) {
   if (!source) return;
   if (source->run) {
-    turbo_flow_run_close(source->run);
+    if (!source->managed_run) turbo_flow_run_close(source->run);
     source->run = NULL;
   } else if (publisher && cflow_publisher_valid(publisher)) {
     cflow_publisher_destroy(publisher);
@@ -419,8 +423,9 @@ static void listener_source_open_cleanup(turbo_flow_cnet_listener_source_t *sour
   free(source);
 }
 
-int turbo_flow_cnet_listener_source_open(const turbo_flow_cnet_listener_source_config_t *config,
-                                         turbo_flow_cnet_listener_source_t **source_out) {
+static int listener_source_open_impl(const turbo_flow_cnet_listener_source_config_t *config,
+                                     const turbo_flow_stage_plan_t *managed_stage,
+                                     turbo_flow_cnet_listener_source_t **source_out) {
   turbo_flow_cnet_listener_source_t *source;
   turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
   cflow_publisher publisher = {0};
@@ -428,7 +433,7 @@ int turbo_flow_cnet_listener_source_open(const turbo_flow_cnet_listener_source_c
   int status;
   if (!source_out) return SALTS_EINVAL;
   *source_out = NULL;
-  status = listener_source_config_validate(config);
+  status = listener_source_config_validate(config, managed_stage != NULL);
   if (status != SALTS_OK) return status;
   source = (turbo_flow_cnet_listener_source_t *)calloc(1u, sizeof(*source));
   if (!source) return SALTS_ENOMEM;
@@ -440,6 +445,7 @@ int turbo_flow_cnet_listener_source_open(const turbo_flow_cnet_listener_source_c
   source->max_message_bytes = config->max_message_bytes;
   source->scheduler_max_steps_per_poll = config->scheduler_max_steps_per_poll;
   source->next_message_id = config->first_message_id;
+  source->managed_run = managed_stage != NULL;
   source->tls_enabled = config->tls != NULL;
   turbo_flow_msg_init(&source->ready_message);
   if (!source->source_name || !source->slots) {
@@ -493,8 +499,10 @@ int turbo_flow_cnet_listener_source_open(const turbo_flow_cnet_listener_source_c
   }
   publisher = listener_source_publisher_as_cflow_publisher(source);
   run_config.scheduler = &source->scheduler;
-  status =
-      turbo_flow_run_open(config->flow, config->source_name, &publisher, &run_config, &source->run);
+  status = managed_stage ? turbo_flow_managed_source_run_open(config->flow, managed_stage,
+                                                              &publisher, &run_config, &source->run)
+                         : turbo_flow_run_open(config->flow, config->source_name, &publisher,
+                                               &run_config, &source->run);
   if (status != SALTS_OK) {
     listener_source_open_cleanup(source, &publisher);
     return status;
@@ -502,6 +510,20 @@ int turbo_flow_cnet_listener_source_open(const turbo_flow_cnet_listener_source_c
   source->state = TURBO_FLOW_CNET_LISTENER_SOURCE_LISTENING;
   *source_out = source;
   return SALTS_OK;
+}
+
+int turbo_flow_cnet_listener_source_open(const turbo_flow_cnet_listener_source_config_t *config,
+                                         turbo_flow_cnet_listener_source_t **source_out) {
+  return listener_source_open_impl(config, NULL, source_out);
+}
+
+int turbo_flow_cnet_listener_source_open_managed(
+    const turbo_flow_cnet_listener_source_config_t *config, const turbo_flow_stage_plan_t *stage,
+    turbo_flow_cnet_listener_source_t **source_out) {
+  if (!stage || !config || !config->source_name || !stage->name ||
+      strcmp(config->source_name, stage->name) != 0)
+    return SALTS_EINVAL;
+  return listener_source_open_impl(config, stage, source_out);
 }
 
 static listener_source_slot_t *
@@ -655,7 +677,7 @@ int turbo_flow_cnet_listener_source_stop(turbo_flow_cnet_listener_source_t *sour
     }
   }
   if (source->run) {
-    turbo_flow_run_close(source->run);
+    if (!source->managed_run) turbo_flow_run_close(source->run);
     source->run = NULL;
   }
   listener_source_close_connections(source);
