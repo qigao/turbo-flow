@@ -19,13 +19,14 @@ OCPP、JT/T 808、GB/T 32960、CoAP、LwM2M 等协议需要不同的 transport�
 3. 中立输出仅包含原始 payload 与结构化 protocol metadata。
 4. Graph bridge 以 message-owned buffer 调用 `turbo_flow_publish()`。
 5. MQTT、HTTP、storage 等都是 Graph 后的可选 Sink；协议 runtime 不依赖它们。
-6. TurboFlow Core/Graph 不反向依赖具体协议插件或网络 listener。
+6. PluginHost 通过统一根 vtable 加载 codec/business DLL，并以 snapshot lease 向 registry
+   提供不可变 provider view；TurboFlow Core/Graph 不反向依赖具体协议插件或网络 listener。
 
 依赖方向固定为：
 
 ```text
-protocol plugins -> protocol runtime -> Graph bridge -> TurboFlow::Graph
-optional sinks   -> TurboFlow::Graph output
+protocol/business DLL -> PluginHost snapshot -> registry/runtime -> Graph bridge -> TurboFlow::Graph
+optional sinks        -> TurboFlow::Graph output
 ```
 
 ## 权衡

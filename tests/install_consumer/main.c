@@ -1,10 +1,11 @@
-#include <turbo_flow.h>
-#include <turbo_flow_cnet.h>
-#include <turbo_flow_chttp.h>
-#include <turbo_flow_plugin.h>
 #include <string.h>
+#include <turbo_flow.h>
+#include <turbo_flow_chttp.h>
+#include <turbo_flow_cnet.h>
+#include <turbo_flow_plugin.h>
+#include <turbo_flow_plugin_protocol.h>
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
-#include <turbo_flow_turbodb.h>
+  #include <turbo_flow_turbodb.h>
 #endif
 
 #if !defined(CNET_STOP_DRAIN_CONTRACT_VERSION) || CNET_STOP_DRAIN_CONTRACT_VERSION < 1u
@@ -23,8 +24,7 @@ static native_io_backend_kind install_consumer_backend(void) {
 
 int main(void) {
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
-  turbo_flow_turbodb_source_config_t turbodb_config =
-      turbo_flow_turbodb_source_config_default();
+  turbo_flow_turbodb_source_config_t turbodb_config = turbo_flow_turbodb_source_config_default();
   turbo_flow_turbodb_outbox_source_config_t outbox_config =
       turbo_flow_turbodb_outbox_source_config_default();
   if (turbodb_config.version != TURBO_FLOW_TURBODB_API_VERSION ||
@@ -45,6 +45,8 @@ int main(void) {
       TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_INIT;
   turbo_flow_plugin_host_config_t plugin_host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  turbo_flow_plugin_protocol_catalog_v1_t plugin_protocol_catalog =
+      TURBO_FLOW_PLUGIN_PROTOCOL_CATALOG_V1_INIT;
   turbo_flow_plugin_host_t *plugin_host = NULL;
   turbo_flow_async_terminal_claim_t terminal_claim = TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
   turbo_flow_async_terminal_adapter_ops_t terminal_ops = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
@@ -62,8 +64,7 @@ int main(void) {
   turbo_flow_cnet_packet_source_config_t packet_config = TURBO_FLOW_CNET_PACKET_SOURCE_CONFIG_INIT;
   turbo_flow_cnet_packet_source_snapshot_t packet_snapshot =
       TURBO_FLOW_CNET_PACKET_SOURCE_SNAPSHOT_INIT;
-  turbo_flow_cnet_stream_sink_config_t stream_sink_config =
-      TURBO_FLOW_CNET_STREAM_SINK_CONFIG_INIT;
+  turbo_flow_cnet_stream_sink_config_t stream_sink_config = TURBO_FLOW_CNET_STREAM_SINK_CONFIG_INIT;
   turbo_flow_cnet_stream_sink_snapshot_t stream_sink_snapshot =
       TURBO_FLOW_CNET_STREAM_SINK_SNAPSHOT_INIT;
   turbo_flow_cnet_datagram_sink_config_t datagram_sink_config =
@@ -72,8 +73,7 @@ int main(void) {
       TURBO_FLOW_CNET_DATAGRAM_SINK_SNAPSHOT_INIT;
   cnet_datagram_config datagram_native = CNET_DATAGRAM_CONFIG_INIT;
   turbo_flow_cnet_datagram_sink_t *datagram_sink = NULL;
-  turbo_flow_cnet_packet_sink_config_t packet_sink_config =
-      TURBO_FLOW_CNET_PACKET_SINK_CONFIG_INIT;
+  turbo_flow_cnet_packet_sink_config_t packet_sink_config = TURBO_FLOW_CNET_PACKET_SINK_CONFIG_INIT;
   turbo_flow_cnet_packet_sink_snapshot_t packet_sink_snapshot =
       TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
   int (*terminal_move)(turbo_flow_async_terminal_claim_t *, turbo_flow_async_terminal_claim_t *) =
@@ -81,21 +81,29 @@ int main(void) {
   int (*terminal_complete)(turbo_flow_async_terminal_claim_t *, int,
                            const turbo_flow_settlement_result_t *) =
       turbo_flow_async_terminal_complete;
-  int (*managed_terminal_register)(
-      turbo_flow_t *, const turbo_flow_managed_async_terminal_registration_t *) =
+  int (*managed_terminal_register)(turbo_flow_t *,
+                                   const turbo_flow_managed_async_terminal_registration_t *) =
       turbo_flow_register_managed_async_terminal_adapter;
-  int (*managed_source_register)(turbo_flow_t *,
-                                 const turbo_flow_managed_source_registration_t *) =
+  int (*managed_source_register)(turbo_flow_t *, const turbo_flow_managed_source_registration_t *) =
       turbo_flow_register_managed_source_adapter;
-  int (*managed_source_run_open)(turbo_flow_t *, const turbo_flow_stage_plan_t *,
-                                 cflow_publisher *, const turbo_flow_run_config_t *,
-                                 turbo_flow_run_t **) = turbo_flow_managed_source_run_open;
+  int (*managed_source_run_open)(turbo_flow_t *, const turbo_flow_stage_plan_t *, cflow_publisher *,
+                                 const turbo_flow_run_config_t *, turbo_flow_run_t **) =
+      turbo_flow_managed_source_run_open;
   int (*plugin_host_create)(const turbo_flow_plugin_host_config_t *, turbo_flow_plugin_host_t **,
                             turbo_flow_plugin_error_t *) = turbo_flow_plugin_host_create;
   int (*plugin_host_load)(turbo_flow_plugin_host_t *, const char *, turbo_flow_plugin_error_t *) =
       turbo_flow_plugin_host_load;
   int (*plugin_host_destroy)(turbo_flow_plugin_host_t *, uint64_t, turbo_flow_plugin_error_t *) =
       turbo_flow_plugin_host_destroy;
+  int (*plugin_protocol_catalog_read)(const turbo_flow_plugin_catalog_snapshot_t *,
+                                      turbo_flow_plugin_protocol_catalog_v1_t *) =
+      turbo_flow_plugin_catalog_snapshot_protocol_catalog;
+  int (*plugin_protocol_registry_create)(turbo_flow_plugin_catalog_snapshot_t *,
+                                         turbo_flow_protocol_registry_t **) =
+      turbo_flow_protocol_registry_create;
+  int (*plugin_business_registry_create)(turbo_flow_plugin_catalog_snapshot_t *,
+                                         turbo_flow_protocol_business_registry_t **) =
+      turbo_flow_protocol_business_registry_create;
   int (*listener_open)(const turbo_flow_cnet_listener_source_config_t *,
                        turbo_flow_cnet_listener_source_t **) = turbo_flow_cnet_listener_source_open;
   int (*listener_request)(turbo_flow_cnet_listener_source_t *, size_t) =
@@ -144,8 +152,7 @@ int main(void) {
   int (*stream_sink_snapshot_copy)(const turbo_flow_cnet_stream_sink_t *,
                                    turbo_flow_cnet_stream_sink_snapshot_t *) =
       turbo_flow_cnet_stream_sink_snapshot;
-  int (*stream_sink_destroy)(turbo_flow_cnet_stream_sink_t *) =
-      turbo_flow_cnet_stream_sink_destroy;
+  int (*stream_sink_destroy)(turbo_flow_cnet_stream_sink_t *) = turbo_flow_cnet_stream_sink_destroy;
   int (*datagram_sink_register)(const turbo_flow_cnet_datagram_sink_config_t *,
                                 turbo_flow_cnet_datagram_sink_t **) =
       turbo_flow_cnet_datagram_sink_register;
@@ -166,8 +173,7 @@ int main(void) {
   int (*packet_sink_snapshot_copy)(const turbo_flow_cnet_packet_sink_t *,
                                    turbo_flow_cnet_packet_sink_snapshot_t *) =
       turbo_flow_cnet_packet_sink_snapshot;
-  int (*packet_sink_destroy)(turbo_flow_cnet_packet_sink_t *) =
-      turbo_flow_cnet_packet_sink_destroy;
+  int (*packet_sink_destroy)(turbo_flow_cnet_packet_sink_t *) = turbo_flow_cnet_packet_sink_destroy;
   int (*chttp_server_register)(const turbo_flow_chttp_server_config_t *,
                                turbo_flow_chttp_server_t **) = turbo_flow_chttp_server_register;
   int (*chttp_server_snapshot_copy)(const turbo_flow_chttp_server_t *,
@@ -189,8 +195,13 @@ int main(void) {
       plugin_host_config.abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       plugin_error.size != sizeof(turbo_flow_plugin_error_t) ||
       plugin_error.abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR != 1u || !plugin_host_create || !plugin_host_load ||
-      !plugin_host_destroy ||
+      plugin_protocol_catalog.size != sizeof(turbo_flow_plugin_protocol_catalog_v1_t) ||
+      plugin_protocol_catalog.abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR != 1u || TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR != 1u ||
+      plugin_host_config.protocol_provider_capacity == 0u ||
+      plugin_host_config.business_provider_capacity == 0u || !plugin_host_create ||
+      !plugin_host_load || !plugin_host_destroy || !plugin_protocol_catalog_read ||
+      !plugin_protocol_registry_create || !plugin_business_registry_create ||
       !managed_terminal_register ||
       managed_terminal_register(flow, &managed_terminal_registration) != SALTS_EINVAL ||
       !managed_source_register ||
@@ -204,8 +215,7 @@ int main(void) {
       turbo_flow_managed_boundary_snapshot_at(flow, 0u, &boundary_snapshot) != SALTS_ENOENT ||
       terminal_claim.version != TURBO_FLOW_ASYNC_TERMINAL_API_VERSION ||
       terminal_ops.version != TURBO_FLOW_ASYNC_TERMINAL_API_VERSION || !terminal_move ||
-      !terminal_complete ||
-      emit_claim.version != TURBO_FLOW_ASYNC_EMIT_API_VERSION ||
+      !terminal_complete || emit_claim.version != TURBO_FLOW_ASYNC_EMIT_API_VERSION ||
       emit_ops.version != TURBO_FLOW_ASYNC_EMIT_API_VERSION ||
       chttp_config.version != TURBO_FLOW_CHTTP_CLIENT_API_VERSION ||
       chttp_snapshot.version != TURBO_FLOW_CHTTP_CLIENT_API_VERSION ||
@@ -221,20 +231,17 @@ int main(void) {
       datagram_sink_config.version != TURBO_FLOW_CNET_DATAGRAM_SINK_API_VERSION ||
       datagram_sink_snapshot.version != TURBO_FLOW_CNET_DATAGRAM_SINK_API_VERSION ||
       packet_sink_config.version != TURBO_FLOW_CNET_PACKET_SINK_API_VERSION ||
-      packet_sink_snapshot.version != TURBO_FLOW_CNET_PACKET_SINK_API_VERSION ||
-      !listener_open ||
+      packet_sink_snapshot.version != TURBO_FLOW_CNET_PACKET_SINK_API_VERSION || !listener_open ||
       !listener_request || !listener_poll || !listener_snapshot_copy || !listener_stop ||
       !listener_destroy || !packet_open || !packet_request || !packet_poll ||
       !packet_snapshot_copy || !packet_session_open || !packet_session_info ||
       !packet_session_close || !packet_send || !packet_message_context || !packet_stop ||
-      !packet_destroy || !stream_sink_register || !stream_sink_poll ||
-      !stream_sink_snapshot_copy || !stream_sink_destroy || !datagram_sink_register ||
-      !datagram_sink_poll || !datagram_sink_snapshot_copy || !datagram_sink_destroy ||
-      !packet_sink_register || !packet_sink_poll || !packet_sink_snapshot_copy ||
-      !packet_sink_destroy ||
+      !packet_destroy || !stream_sink_register || !stream_sink_poll || !stream_sink_snapshot_copy ||
+      !stream_sink_destroy || !datagram_sink_register || !datagram_sink_poll ||
+      !datagram_sink_snapshot_copy || !datagram_sink_destroy || !packet_sink_register ||
+      !packet_sink_poll || !packet_sink_snapshot_copy || !packet_sink_destroy ||
       !chttp_server_register || !chttp_server_snapshot_copy || !chttp_server_destroy ||
-      !chttp_server_request_context ||
-      !turbo_flow_message_type())
+      !chttp_server_request_context || !turbo_flow_message_type())
     return 1;
 
   plugin_host_config.module_capacity = 0u;

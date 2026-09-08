@@ -2,15 +2,14 @@
 
 ## Status
 
-Accepted for #65 as the first implementation slice of #63.
+Accepted for #65 and extended by #67 as implementation slices of #63.
 
 ## Context
 
-Protocol and Business Protocol currently own separate dynamic-library registries. Product assembly
-instead receives caller-built arrays of adapter and resource providers. The former retains DLLs but
-cannot register general flow capabilities; the latter can assemble configured Graphs but has no
-module ownership, transaction, or lease. Moving CNet, CHTTP, TurboDB, FlowMQ, protocol, and business
-capabilities behind DLLs requires one host-owned boundary before individual providers can migrate.
+Product assembly previously received caller-built arrays of adapter and resource providers, while
+Protocol and Business Protocol owned separate dynamic-library registries. That split produced three
+module/registry ownership models. Moving CNet, CHTTP, TurboDB, FlowMQ, protocol, and business
+capabilities behind DLLs requires one host-owned boundary.
 
 Salts supplies the graph, metadata, containers, schedulers, and platform primitives used by
 TurboFlow, but it does not currently expose a general-purpose plugin loader. The platform dynamic
@@ -19,10 +18,10 @@ library calls therefore remain isolated in this PluginHost adapter and do not en
 ## Decision
 
 Add `TurboFlow::PluginHost`, with one canonical export named `turbo_flow_plugin_get_api`. The root
-API and every host/registration/config/error structure are pure C and size/versioned. This first ABI
-minor supports Product adapter and resource provider capabilities. Later ABI-minor extensions add
-typed operation, schema, protocol, and business capability registration without changing the root
-symbol or ABI major.
+API and every host/registration/config/error structure are pure C and size/versioned. ABI minor 0
+supports Product adapter/resource providers. ABI minor 1 adds typed Protocol/Business registration
+and snapshot catalogs without changing the root symbol or ABI major. Later ABI-minor extensions may
+add typed operation and schema registration.
 
 Plugin loading is a control-plane transaction:
 
@@ -34,17 +33,19 @@ open explicit DLL -> resolve root symbol -> validate root API -> plugin load
 Any failure discards staged entries, shuts down and destroys a produced plugin instance, then unloads
 the DLL. Duplicate plugin IDs or provider kinds and every capacity violation fail before commit.
 
-A catalog snapshot copies the committed Product provider descriptors and holds one lease on every
-module represented by those descriptors. A Graph generation owner retains the snapshot until its
-adapters, resources, CFlow runs, pending claims, and callbacks have drained. Host shutdown returns
+A catalog snapshot copies every committed typed provider descriptor and holds one lease on every
+module represented by those descriptors. Protocol/Business registries retain that snapshot rather
+than owning DLL handles. A Graph generation owner retains the snapshot until its adapters,
+resources, protocol owners, CFlow runs, pending claims, and callbacks have drained. Host shutdown returns
 `SALTS_EBUSY` while a snapshot exists. Once leases reach zero, modules quiesce, shut down, destroy,
 and unload in reverse load order. A failed quiesce/shutdown leaves the host allocated in an explicit
 retryable state; it never unloads code that may still be callable.
 
 ## Consequences
 
-- Architecture: Config and Graph remain unaware of DLLs. Product consumes a read-only provider view;
-  PluginHost owns module handles, lifecycle, committed catalogs, and generation leases.
+- Architecture: Config and Graph remain unaware of DLLs. Product and Protocol consume read-only
+  provider views; PluginHost owns module handles, lifecycle, committed catalogs, and generation
+  leases. The specialized Protocol/Business loaders and direct registry mutation APIs are removed.
 - Interface: a new additive installed C ABI and CMake component are introduced. Existing Product
   calls remain source-compatible.
 - State: PluginHost is the sole fact source for module state and lease counts. Snapshot arrays are
@@ -58,8 +59,9 @@ retryable state; it never unloads code that may still be callable.
   later #63 deployment work.
 - Performance: discovery and string lookup occur only during load or Product preflight. Compiled
   Graph callbacks retain direct vtable/function pointers under a module lease.
-- Migration: subsequent #63 slices add capability categories, migrate the two protocol registries,
-  package concrete I/O provider DLLs, then make Gateway manifests the only assembly source.
+- Migration: #67 migrates both protocol registries and all current codec/business DLLs. Subsequent
+  #63 slices add remaining capability categories, package concrete I/O provider DLLs, then make
+  Gateway manifests the only assembly source.
 - Rollback: before Gateway migration, removing the new target/API restores the prior deployment.
   After a provider migrates, rollback is deployment-level selection of an older complete package,
   never a runtime fallback to a statically linked implementation.

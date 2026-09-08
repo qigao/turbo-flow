@@ -2,8 +2,8 @@
 
 #include "salts_error.h"
 
-#include <stddef.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -20,16 +20,14 @@ static uint16_t flow_jtt808_next_serial(atomic_uint *counter) {
   current = atomic_load_explicit(counter, memory_order_relaxed);
   for (;;) {
     next = current >= UINT16_MAX ? 1u : current + 1u;
-    if (atomic_compare_exchange_weak_explicit(
-            counter, &current, next, memory_order_relaxed,
-            memory_order_relaxed))
+    if (atomic_compare_exchange_weak_explicit(counter, &current, next, memory_order_relaxed,
+                                              memory_order_relaxed))
       return (uint16_t)next;
   }
 }
 
-static int flow_jtt808_unescape(
-    const turbo_flow_protocol_frame_view_t *frame, uint8_t *capture,
-    size_t capture_size, size_t *decoded_size, uint8_t *xor_value) {
+static int flow_jtt808_unescape(const turbo_flow_protocol_frame_view_t *frame, uint8_t *capture,
+                                size_t capture_size, size_t *decoded_size, uint8_t *xor_value) {
   size_t count = 0u;
   uint8_t checksum = 0u;
   if (!frame || frame->data_size < 2u || frame->data[0] != 0x7eu ||
@@ -39,12 +37,9 @@ static int flow_jtt808_unescape(
     uint8_t value = frame->data[i];
     if (value == 0x7du) {
       if (++i + 1u >= frame->data_size) return SALTS_EPROTO;
-      if (frame->data[i] == 0x01u)
-        value = 0x7du;
-      else if (frame->data[i] == 0x02u)
-        value = 0x7eu;
-      else
-        return SALTS_EPROTO;
+      if (frame->data[i] == 0x01u) value = 0x7du;
+      else if (frame->data[i] == 0x02u) value = 0x7eu;
+      else return SALTS_EPROTO;
     }
     if (count < capture_size) capture[count] = value;
     checksum ^= value;
@@ -55,8 +50,7 @@ static int flow_jtt808_unescape(
   return SALTS_OK;
 }
 
-static int flow_jtt808_device_id(const uint8_t *bcd, size_t bcd_size,
-                                 char *out, size_t capacity) {
+static int flow_jtt808_device_id(const uint8_t *bcd, size_t bcd_size, char *out, size_t capacity) {
   if (!bcd || !out || capacity <= bcd_size * 2u) return SALTS_EINVAL;
   for (size_t i = 0u; i < bcd_size; ++i) {
     const uint8_t high = bcd[i] >> 4u;
@@ -69,10 +63,9 @@ static int flow_jtt808_device_id(const uint8_t *bcd, size_t bcd_size,
   return SALTS_OK;
 }
 
-static int flow_jtt808_inspect(
-    void *ctx, const char *configured_version,
-    const turbo_flow_protocol_frame_view_t *frame,
-    turbo_flow_protocol_metadata_t *metadata) {
+static int flow_jtt808_inspect(void *ctx, const char *configured_version,
+                               const turbo_flow_protocol_frame_view_t *frame,
+                               turbo_flow_protocol_metadata_t *metadata) {
   uint8_t header[FLOW_JTT808_CAPTURE_SIZE] = {0};
   size_t decoded_size = 0u;
   size_t header_size;
@@ -88,10 +81,8 @@ static int flow_jtt808_inspect(
   int rc;
   (void)ctx;
   (void)configured_version;
-  rc = flow_jtt808_unescape(frame, header, sizeof(header), &decoded_size,
-                            &checksum);
-  if (rc != SALTS_OK || checksum != 0u || decoded_size < 5u)
-    return SALTS_EPROTO;
+  rc = flow_jtt808_unescape(frame, header, sizeof(header), &decoded_size, &checksum);
+  if (rc != SALTS_OK || checksum != 0u || decoded_size < 5u) return SALTS_EPROTO;
   message_id = ((uint16_t)header[0] << 8u) | header[1];
   properties = ((uint16_t)header[2] << 8u) | header[3];
   body_size = properties & 0x03ffu;
@@ -100,8 +91,7 @@ static int flow_jtt808_inspect(
     phone_offset = 5u;
     phone_size = 10u;
     serial_offset = 15u;
-    if (decoded_size < header_size + 1u || header[4] != 1u)
-      return SALTS_EPROTO;
+    if (decoded_size < header_size + 1u || header[4] != 1u) return SALTS_EPROTO;
   } else {
     header_size = FLOW_JTT808_LEGACY_HEADER_SIZE;
     phone_offset = 4u;
@@ -114,27 +104,18 @@ static int flow_jtt808_inspect(
     uint16_t package_index;
     header_size += 4u;
     if (decoded_size < header_size + 1u) return SALTS_EPROTO;
-    package_total =
-        ((uint16_t)header[base_header_size] << 8u) |
-        header[base_header_size + 1u];
-    package_index =
-        ((uint16_t)header[base_header_size + 2u] << 8u) |
-        header[base_header_size + 3u];
-    if (package_total == 0u || package_index == 0u ||
-        package_index > package_total)
+    package_total = ((uint16_t)header[base_header_size] << 8u) | header[base_header_size + 1u];
+    package_index = ((uint16_t)header[base_header_size + 2u] << 8u) | header[base_header_size + 3u];
+    if (package_total == 0u || package_index == 0u || package_index > package_total)
       return SALTS_EPROTO;
   }
-  if (body_size > SIZE_MAX - header_size - 1u ||
-      decoded_size != header_size + body_size + 1u)
+  if (body_size > SIZE_MAX - header_size - 1u || decoded_size != header_size + body_size + 1u)
     return SALTS_EPROTO;
-  rc = flow_jtt808_device_id(header + phone_offset, phone_size,
-                             metadata->device_id,
+  rc = flow_jtt808_device_id(header + phone_offset, phone_size, metadata->device_id,
                              sizeof(metadata->device_id));
   if (rc != SALTS_OK) return rc;
   metadata->message_type = message_id;
-  metadata->sequence =
-      ((uint64_t)header[serial_offset] << 8u) |
-      header[serial_offset + 1u];
+  metadata->sequence = ((uint64_t)header[serial_offset] << 8u) | header[serial_offset + 1u];
   switch (message_id) {
   case 0x0001u:
     operation = "terminal-ack";
@@ -188,47 +169,35 @@ static int flow_jtt808_inspect(
     operation = NULL;
     break;
   }
-  return operation
-             ? flow_protocol_metadata_text(metadata->operation,
-                                          sizeof(metadata->operation),
-                                          operation)
-             : flow_protocol_metadata_format(metadata->operation,
-                                            sizeof(metadata->operation),
-                                            "message-%04x", message_id);
+  return operation ? flow_protocol_metadata_text(metadata->operation, sizeof(metadata->operation),
+                                                 operation)
+                   : flow_protocol_metadata_format(metadata->operation, sizeof(metadata->operation),
+                                                   "message-%04x", message_id);
 }
 
-static int flow_jtt808_bcd_write(const char *digits, size_t digit_count,
-                                 uint8_t *out) {
+static int flow_jtt808_bcd_write(const char *digits, size_t digit_count, uint8_t *out) {
   if (!digits || !out || (digit_count & 1u) != 0u) return SALTS_EINVAL;
   for (size_t i = 0u; i < digit_count; i += 2u) {
-    if (digits[i] < '0' || digits[i] > '9' ||
-        digits[i + 1u] < '0' || digits[i + 1u] > '9')
+    if (digits[i] < '0' || digits[i] > '9' || digits[i + 1u] < '0' || digits[i + 1u] > '9')
       return SALTS_EINVAL;
-    out[i / 2u] =
-        (uint8_t)(((digits[i] - '0') << 4u) | (digits[i + 1u] - '0'));
+    out[i / 2u] = (uint8_t)(((digits[i] - '0') << 4u) | (digits[i + 1u] - '0'));
   }
   return SALTS_OK;
 }
 
-static int flow_jtt808_frame_write(
-    uint16_t message_id, const char *device_id, int version_2019,
-    uint16_t serial, const uint8_t *body, size_t body_size,
-    turbo_flow_protocol_frame_output_t *output) {
+static int flow_jtt808_frame_write(uint16_t message_id, const char *device_id, int version_2019,
+                                   uint16_t serial, const uint8_t *body, size_t body_size,
+                                   turbo_flow_protocol_frame_output_t *output) {
   uint8_t header[FLOW_JTT808_2019_HEADER_SIZE];
   uint16_t properties;
-  size_t header_size =
-      version_2019 ? FLOW_JTT808_2019_HEADER_SIZE
-                   : FLOW_JTT808_LEGACY_HEADER_SIZE;
+  size_t header_size = version_2019 ? FLOW_JTT808_2019_HEADER_SIZE : FLOW_JTT808_LEGACY_HEADER_SIZE;
   size_t raw_size;
   size_t offset = 0u;
   uint8_t checksum = 0u;
   int rc;
-  if (!device_id || serial == 0u || (!body && body_size != 0u) ||
-      !output || !output->data)
+  if (!device_id || serial == 0u || (!body && body_size != 0u) || !output || !output->data)
     return SALTS_EINVAL;
-  if (body_size > 0x03ffu ||
-      strlen(device_id) != (version_2019 ? 20u : 12u))
-    return SALTS_EMSGSIZE;
+  if (body_size > 0x03ffu || strlen(device_id) != (version_2019 ? 20u : 12u)) return SALTS_EMSGSIZE;
   properties = (uint16_t)body_size;
   if (version_2019) properties |= UINT16_C(0x4000);
   header[0] = (uint8_t)(message_id >> 8u);
@@ -247,16 +216,13 @@ static int flow_jtt808_frame_write(
   }
   if (rc != SALTS_OK) return rc;
   raw_size = header_size + body_size + 1u;
-  if (raw_size > (SIZE_MAX - 2u) / 2u ||
-      raw_size * 2u + 2u > output->capacity)
+  if (raw_size > (SIZE_MAX - 2u) / 2u || raw_size * 2u + 2u > output->capacity)
     return SALTS_EMSGSIZE;
   output->data[offset++] = UINT8_C(0x7e);
   for (size_t i = 0u; i <= header_size + body_size; ++i) {
     uint8_t value;
-    if (i < header_size)
-      value = header[i];
-    else if (i < header_size + body_size)
-      value = body[i - header_size];
+    if (i < header_size) value = header[i];
+    else if (i < header_size + body_size) value = body[i - header_size];
     else {
       value = checksum;
     }
@@ -276,10 +242,9 @@ static int flow_jtt808_frame_write(
   return SALTS_OK;
 }
 
-static int flow_jtt808_reply(
-    void *ctx, const char *configured_version,
-    const turbo_flow_protocol_frame_view_t *request, int status,
-    turbo_flow_protocol_frame_output_t *output) {
+static int flow_jtt808_reply(void *ctx, const char *configured_version,
+                             const turbo_flow_protocol_frame_view_t *request, int status,
+                             turbo_flow_protocol_frame_output_t *output) {
   uint8_t header[FLOW_JTT808_CAPTURE_SIZE] = {0};
   uint8_t body[5];
   uint8_t checksum = 0u;
@@ -294,17 +259,14 @@ static int flow_jtt808_reply(
   int rc;
   (void)configured_version;
   if (!ctx) return SALTS_EINVAL;
-  rc = flow_jtt808_unescape(request, header, sizeof(header), &decoded_size,
-                            &checksum);
-  if (rc != SALTS_OK || checksum != 0u || decoded_size < 5u)
-    return SALTS_EPROTO;
+  rc = flow_jtt808_unescape(request, header, sizeof(header), &decoded_size, &checksum);
+  if (rc != SALTS_OK || checksum != 0u || decoded_size < 5u) return SALTS_EPROTO;
   properties = ((uint16_t)header[2] << 8u) | header[3];
   version_2019 = (properties & UINT16_C(0x4000)) != 0u;
   phone_offset = version_2019 ? 5u : 4u;
   phone_size = version_2019 ? 10u : 6u;
   serial_offset = version_2019 ? 15u : 10u;
-  rc = flow_jtt808_device_id(header + phone_offset, phone_size, device_id,
-                             sizeof(device_id));
+  rc = flow_jtt808_device_id(header + phone_offset, phone_size, device_id, sizeof(device_id));
   if (rc != SALTS_OK) return rc;
   body[0] = header[serial_offset];
   body[1] = header[serial_offset + 1u];
@@ -313,59 +275,49 @@ static int flow_jtt808_reply(
   body[4] = status == SALTS_OK ? 0u : status == SALTS_ENOTSUP ? 3u : 1u;
   next = flow_jtt808_next_serial((atomic_uint *)ctx);
   if (next == 0u) return SALTS_ERANGE;
-  return flow_jtt808_frame_write(UINT16_C(0x8001), device_id, version_2019,
-                                 next, body, sizeof(body), output);
+  return flow_jtt808_frame_write(UINT16_C(0x8001), device_id, version_2019, next, body,
+                                 sizeof(body), output);
 }
 
 static int flow_jtt808_message_id(const char *operation, uint16_t *out) {
   if (!operation || !out) return SALTS_EINVAL;
-  if (strcmp(operation, "platform-ack") == 0)
-    *out = UINT16_C(0x8001);
-  else if (strcmp(operation, "register-response") == 0)
-    *out = UINT16_C(0x8100);
-  else if (strcmp(operation, "set-parameters") == 0)
-    *out = UINT16_C(0x8103);
-  else if (strcmp(operation, "query-parameters") == 0)
-    *out = UINT16_C(0x8104);
-  else if (strcmp(operation, "terminal-control") == 0)
-    *out = UINT16_C(0x8105);
-  else if (strcmp(operation, "location-query") == 0)
-    *out = UINT16_C(0x8201);
-  else if (strcmp(operation, "text") == 0)
-    *out = UINT16_C(0x8300);
-  else if (strcmp(operation, "call") == 0)
-    *out = UINT16_C(0x8400);
-  else if (strcmp(operation, "platform-transparent-data") == 0)
-    *out = UINT16_C(0x8900);
-  else
-    return SALTS_ENOTSUP;
+  if (strcmp(operation, "platform-ack") == 0) *out = UINT16_C(0x8001);
+  else if (strcmp(operation, "register-response") == 0) *out = UINT16_C(0x8100);
+  else if (strcmp(operation, "set-parameters") == 0) *out = UINT16_C(0x8103);
+  else if (strcmp(operation, "query-parameters") == 0) *out = UINT16_C(0x8104);
+  else if (strcmp(operation, "terminal-control") == 0) *out = UINT16_C(0x8105);
+  else if (strcmp(operation, "location-query") == 0) *out = UINT16_C(0x8201);
+  else if (strcmp(operation, "text") == 0) *out = UINT16_C(0x8300);
+  else if (strcmp(operation, "call") == 0) *out = UINT16_C(0x8400);
+  else if (strcmp(operation, "platform-transparent-data") == 0) *out = UINT16_C(0x8900);
+  else return SALTS_ENOTSUP;
   return SALTS_OK;
 }
 
-static int flow_jtt808_encode(
-    void *ctx, const char *configured_version,
-    const turbo_flow_protocol_command_view_t *command,
-    turbo_flow_protocol_frame_output_t *output) {
+static int flow_jtt808_encode(void *ctx, const char *configured_version,
+                              const turbo_flow_protocol_command_view_t *command,
+                              turbo_flow_protocol_frame_output_t *output) {
   uint16_t message_id;
   int rc;
   (void)ctx;
   (void)configured_version;
-  if (!command || command->sequence == 0u ||
-      command->sequence > UINT16_MAX)
-    return SALTS_EINVAL;
+  if (!command || command->sequence == 0u || command->sequence > UINT16_MAX) return SALTS_EINVAL;
   rc = flow_jtt808_message_id(command->operation, &message_id);
   if (rc != SALTS_OK) return rc;
-  return flow_jtt808_frame_write(
-      message_id, command->device_id, 1, (uint16_t)command->sequence,
-      command->payload, command->payload_size, output);
+  return flow_jtt808_frame_write(message_id, command->device_id, 1, (uint16_t)command->sequence,
+                                 command->payload, command->payload_size, output);
 }
 
 static const char *const FLOW_JTT808_VERSIONS[] = {"2019-A1"};
 static const flow_protocol_plugin_descriptor_t FLOW_JTT808_DESCRIPTOR = {
-    "jtt808", TURBO_FLOW_PROTOCOL_JTT_808, "2019-A1",
+    "jtt808",
+    TURBO_FLOW_PROTOCOL_JTT_808,
+    "2019-A1",
     FLOW_JTT808_VERSIONS,
     sizeof(FLOW_JTT808_VERSIONS) / sizeof(FLOW_JTT808_VERSIONS[0]),
-    flow_jtt808_inspect, flow_jtt808_reply, flow_jtt808_encode,
+    flow_jtt808_inspect,
+    flow_jtt808_reply,
+    flow_jtt808_encode,
     &FLOW_JTT808_NEXT_SERIAL};
 
 static const turbo_flow_protocol_plugin_api_t FLOW_JTT808_API = {
@@ -375,14 +327,10 @@ static const turbo_flow_protocol_plugin_api_t FLOW_JTT808_API = {
     "jtt808",
     TURBO_FLOW_PROTOCOL_JTT_808,
     TURBO_FLOW_PROTOCOL_CAP_INGRESS | TURBO_FLOW_PROTOCOL_CAP_EGRESS |
-        TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE |
-        TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY |
+        TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE | TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY |
         TURBO_FLOW_PROTOCOL_CAP_COMMAND_ENCODE,
     (void *)&FLOW_JTT808_DESCRIPTOR,
     flow_protocol_plugin_open,
     flow_protocol_plugin_close};
 
-const turbo_flow_protocol_plugin_api_t *
-turbo_flow_protocol_plugin_get_api(void) {
-  return &FLOW_JTT808_API;
-}
+FLOW_PROTOCOL_DEFINE_UNIFIED_ROOT("jtt808", "1.0.0", FLOW_JTT808_API)

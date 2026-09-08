@@ -1,13 +1,15 @@
 # Unified PluginHost Core
 
 `TurboFlow::PluginHost` is the cold-path owner for explicit TurboFlow capability DLLs. It loads one
-canonical root symbol, commits Product providers transactionally, and exposes an immutable catalog
-snapshot. CFlow and the compiled Graph retain direct provider callbacks; neither performs DLL
-discovery, symbol lookup, string lookup, allocation, or registry locking per message.
+canonical root symbol, commits Product, Protocol, and Business providers transactionally, and
+exposes immutable catalog snapshots. CFlow, compiled Graphs, and protocol runtimes retain direct
+provider callbacks; none performs DLL discovery, symbol lookup, string lookup, allocation, or
+registry locking per message.
 
-This document describes ABI major 1, minor 0. It supports Product adapter and resource providers.
-Typed operation, schema, protocol, and business registration and the concrete CNet/CHTTP/TurboDB
-provider DLLs remain tracked by #63. Their absence never activates a static or legacy fallback.
+This document describes ABI major 1, minor 1. Minor 1 adds typed Protocol and Business providers to
+the Product adapter/resource capabilities introduced in minor 0. Typed operation/schema
+registration and concrete CNet/CHTTP/TurboDB provider DLLs remain tracked by #63. Their absence
+never activates a static or legacy fallback.
 
 ## DLL contract
 
@@ -35,34 +37,41 @@ leases, but it does not isolate memory corruption or process crashes. Manifest a
 verification, permissions, and optional process isolation remain later #63 work.
 
 `register_capabilities` runs synchronously on the Gateway control thread. The registration vtable is
-call-scoped and must not be retained or called from another thread. Product descriptors cross this
-boundary inside `turbo_flow_plugin_product_adapter_provider_v1_t` and
-`turbo_flow_plugin_product_resource_provider_v1_t`, so both the outer DLL contract and the embedded
-Product descriptor are size-checked and the outer ABI major is checked. Every declared capability
-must register at least one matching provider, and a plugin may not register a capability it did not
-declare. Provider kinds are unique across the complete host catalog.
+call-scoped and must not be retained or called from another thread. Every descriptor crosses the
+boundary in a size/versioned wrapper: Product wrappers are in `turbo_flow_plugin.h`; Protocol and
+Business wrappers are in `turbo_flow_plugin_protocol.h`. The outer wrapper and embedded provider
+descriptor are both validated. Every declared capability must register at least one matching
+provider, and a plugin may not register a capability it did not declare. Provider identities are
+unique within their typed catalog.
 
 ## Host API
 
 All mutable PluginHost calls are control-thread confined.
 
 - `turbo_flow_plugin_host_create(config, host_out, error)` validates the size/versioned capacity
-  configuration and allocates bounded CSTL registries. Module capacity must be 1–1024; adapter and
-  resource capacities may be zero and may not exceed 65536. It returns `SALTS_OK`, `SALTS_EINVAL`,
-  or `SALTS_ENOMEM`; `host_out` is null on failure.
+  configuration and allocates bounded CSTL registries. Module capacity must be 1–1024; adapter,
+  resource, protocol, and business capacities may be zero and may not exceed 65536. A minor-0-sized
+  config has no Protocol/Business fields, so those capacities are exactly zero; trailing caller
+  memory is never inspected. It returns `SALTS_OK`, `SALTS_EINVAL`, or `SALTS_ENOMEM`; `host_out` is
+  null on failure.
 - `turbo_flow_plugin_host_load(host, path, error)` accepts one non-empty UTF-8 path of at most 511
   bytes. On Windows it uses `LoadLibraryExW`; on POSIX it uses `dlopen(RTLD_NOW | RTLD_LOCAL)`. It
   returns the exact callback/registry status, including `SALTS_ENOENT`, `SALTS_EPROTO`,
   `SALTS_EALREADY`, or `SALTS_ENOSPC`. `error.stage`, `plugin_id`, `path`, and `message` identify the
   failing boundary. No other path or implementation is attempted.
-- `turbo_flow_plugin_catalog_snapshot_create(host, snapshot_out, error)` copies the Product provider
+- `turbo_flow_plugin_catalog_snapshot_create(host, snapshot_out, error)` copies all typed provider
   arrays and acquires one module lease per committed DLL. It returns `SALTS_OK`, `SALTS_EBUSY`,
   `SALTS_ENOSPC`, or `SALTS_ENOMEM`.
 - `turbo_flow_plugin_catalog_snapshot_product_registry(snapshot, registry_out)` fills a caller-owned
   `turbo_flow_product_provider_registry_t`. The arrays are immutable and valid until snapshot
   destruction. It returns `SALTS_OK` or `SALTS_EINVAL`.
-- `turbo_flow_plugin_catalog_snapshot_destroy(snapshot)` releases every lease and invalidates all
-  borrowed catalog views. It accepts null.
+- `turbo_flow_plugin_catalog_snapshot_protocol_catalog(snapshot, catalog_out)` fills borrowed,
+  immutable Protocol and Business arrays. `turbo_flow_protocol_registry_create` and
+  `turbo_flow_protocol_business_registry_create` retain the snapshot and copy only bounded registry
+  entries; they never open a DLL.
+- `turbo_flow_plugin_catalog_snapshot_retain(snapshot)` adds a caller-serialized reference.
+  `turbo_flow_plugin_catalog_snapshot_destroy(snapshot)` releases one reference; the final release
+  drops every module lease and invalidates all borrowed catalog views. Destroy accepts null.
 - `turbo_flow_plugin_host_destroy(host, quiesce_timeout_ms, error)` returns `SALTS_EBUSY` without
   lifecycle side effects while a snapshot exists. Otherwise it quiesces all modules, shuts them
   down, then destroys and unloads them, with each phase in reverse load order. A quiesce/shutdown
@@ -82,13 +91,13 @@ open explicit DLL
   -> resolve turbo_flow_plugin_get_api
   -> validate root ABI and identity
   -> load plugin instance
-  -> stage adapter/resource providers
+  -> stage typed Product/Protocol/Business providers
   -> validate capabilities and duplicates
   -> commit module plus all providers
 ```
 
 Until the final commit, count/query APIs expose no part of the staged plugin to other host code. Any
-failure truncates both staged provider vectors to their original sizes, calls `shutdown` and
+failure truncates every staged provider vector to its original size, calls `shutdown` and
 `destroy` when `load` produced an instance, and unloads the DLL. The first failure status remains the
 reported result even when cleanup reports a later error through the lifecycle observer.
 
@@ -100,7 +109,7 @@ must retain its snapshot until Source admission is stopped and all adapters, res
 pending claims, and callbacks are drained. Releasing it earlier permits a later host shutdown to
 unload callable code and is therefore a lifecycle contract violation.
 
-The initial implementation permits load followed by whole-host shutdown; it does not expose runtime
+The implementation permits load followed by whole-host shutdown; it does not expose runtime
 per-module unload or hot reload. Later generation cutover must load and validate the new module and
 Graph generation, switch admission atomically, drain the old generation, then release its snapshot.
 

@@ -5,7 +5,6 @@ add_library(
   src/flow_protocol.c
   src/flow_protocol_business.c
   src/flow_protocol_runtime.c
-  src/flow_protocol_registry.c
   include/turbo_flow_protocol.h
   include/turbo_flow_protocol_business.h
   include/turbo_flow_protocol_business_plugin.h
@@ -25,7 +24,7 @@ target_include_directories(
          $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/turbo_flow/include>
          $<INSTALL_INTERFACE:include>)
 target_link_libraries(${TARGET_NAME}
-                      PUBLIC Salts::Core PRIVATE ${CMAKE_DL_LIBS})
+                      PUBLIC Salts::Core)
 
 install(
   FILES include/turbo_flow_protocol.h

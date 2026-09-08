@@ -1,13 +1,12 @@
-#include "tinytest.h"
 #include "salts_error.h"
+#include "tinytest.h"
+#include "turbo_flow_plugin_protocol.h"
 #include "turbo_flow_protocol_business.h"
 #include "turbo_flow_protocol_business_plugin.h"
 
 #include <string.h>
 
 typedef struct business_probe_s {
-  size_t opens;
-  size_t closes;
   size_t events;
   size_t commands;
   int event_status;
@@ -43,54 +42,12 @@ static int business_probe_prepare(void *ctx,
   return SALTS_OK;
 }
 
-static int business_probe_open(void *ctx, const turbo_flow_protocol_business_open_request_t *request,
-                               turbo_flow_protocol_business_service_t *service) {
-  turbo_flow_protocol_business_ops_t ops = TURBO_FLOW_PROTOCOL_BUSINESS_OPS_INIT;
-  business_probe_t *probe = (business_probe_t *)ctx;
-  turbo_flow_protocol_business_t *business = NULL;
-  int rc;
-  ops.consume_committed = business_probe_consume;
-  ops.prepare_command = business_probe_prepare;
-  rc = turbo_flow_protocol_business_create("probe-biz", request->protocol, request->profile,
-                                          request->max_payload_size,
-                                          TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT |
-                                              TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND,
-                                          &ops, probe, &business);
-  if (rc != SALTS_OK) return rc;
-  probe->opens++;
-  service->protocol = request->protocol;
-  service->instance = business;
-  service->owner = business;
-  return SALTS_OK;
-}
-
-static void business_probe_close(void *ctx, turbo_flow_protocol_business_service_t *service) {
-  business_probe_t *probe = (business_probe_t *)ctx;
-  turbo_flow_protocol_business_destroy((turbo_flow_protocol_business_t *)service->owner);
-  service->instance = NULL;
-  service->owner = NULL;
-  probe->closes++;
-}
-
-static turbo_flow_protocol_business_plugin_api_t business_probe_api(business_probe_t *probe) {
-  turbo_flow_protocol_business_plugin_api_t api = {
-      sizeof(turbo_flow_protocol_business_plugin_api_t),
-      TURBO_FLOW_PROTOCOL_BUSINESS_PLUGIN_API_VERSION_MAJOR,
-      TURBO_FLOW_PROTOCOL_BUSINESS_PLUGIN_API_VERSION_MINOR,
-      "probe-biz",
-      TURBO_FLOW_PROTOCOL_OCPP,
-      TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT |
-          TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND,
-      probe,
-      business_probe_open,
-      business_probe_close};
-  return api;
-}
-
 spec("protocol business service") {
-  it("keeps the plugin export limited while an opaque owner is alive") {
-    business_probe_t probe = {0};
-    turbo_flow_protocol_business_plugin_api_t api = business_probe_api(&probe);
+  it("keeps the unified plugin snapshot while an opaque owner is alive") {
+    turbo_flow_plugin_host_config_t config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
+    turbo_flow_plugin_host_t *host = NULL;
     turbo_flow_protocol_business_open_request_t request =
         TURBO_FLOW_PROTOCOL_BUSINESS_OPEN_REQUEST_INIT;
     turbo_flow_protocol_business_registry_t *registry = NULL;
@@ -98,25 +55,32 @@ spec("protocol business service") {
     turbo_flow_protocol_business_t *business = NULL;
     turbo_flow_protocol_business_info_t info = TURBO_FLOW_PROTOCOL_BUSINESS_INFO_INIT;
     request.protocol = TURBO_FLOW_PROTOCOL_OCPP;
-    request.profile = "ocpp-2.0.1-core";
+    request.profile = "ocpp-2.0.1-core-minimal";
     request.max_payload_size = 128u;
-    check_equal(turbo_flow_protocol_business_registry_create(1u, &registry), SALTS_OK);
-    check_equal(turbo_flow_protocol_business_registry_register(registry, &api), SALTS_OK);
-    check_equal(turbo_flow_protocol_business_registry_register(registry, &api), SALTS_EALREADY);
-    check_equal(turbo_flow_protocol_business_owner_create_registered(registry, "probe-biz",
+    config.module_capacity = 1u;
+    config.adapter_provider_capacity = 0u;
+    config.resource_provider_capacity = 0u;
+    config.protocol_provider_capacity = 0u;
+    config.business_provider_capacity = 1u;
+    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, FLOW_PROTOCOL_BUSINESS_MODULE, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &error), SALTS_OK);
+    check_equal(turbo_flow_protocol_business_registry_create(snapshot, &registry), SALTS_OK);
+    turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+    check_equal(turbo_flow_protocol_business_owner_create_registered(registry, "ocpp201-core",
                                                                      &request, &owner),
-                 SALTS_OK);
-    check_equal(turbo_flow_protocol_business_owner_instance(owner, TURBO_FLOW_PROTOCOL_OCPP,
-                                                            &business),
-                 SALTS_OK);
+                SALTS_OK);
+    check_equal(
+        turbo_flow_protocol_business_owner_instance(owner, TURBO_FLOW_PROTOCOL_OCPP, &business),
+        SALTS_OK);
     check_equal(turbo_flow_protocol_business_get_info(business, &info), SALTS_OK);
-    check_equal(info.business, "probe-biz");
-    check_equal(info.profile, "ocpp-2.0.1-core");
+    check_equal(info.business, "ocpp201-core");
+    check_equal(info.profile, "ocpp-2.0.1-core-minimal");
     check_equal(turbo_flow_protocol_business_registry_destroy(registry), SALTS_EBUSY);
+    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_EBUSY);
     turbo_flow_protocol_business_owner_destroy(owner);
-    check_equal(probe.opens, 1u);
-    check_equal(probe.closes, 1u);
     check_equal(turbo_flow_protocol_business_registry_destroy(registry), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
   }
 
   it("delivers only a borrowed post-commit schema identity") {
@@ -127,9 +91,9 @@ spec("protocol business service") {
     turbo_flow_protocol_business_event_view_t event = TURBO_FLOW_PROTOCOL_BUSINESS_EVENT_VIEW_INIT;
     ops.consume_committed = business_probe_consume;
     check_equal(turbo_flow_protocol_business_create(
-                     "event-probe", TURBO_FLOW_PROTOCOL_OCPP, "ocpp-2.0.1-core", 128u,
-                     TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT, &ops, &probe, &business),
-                 SALTS_OK);
+                    "event-probe", TURBO_FLOW_PROTOCOL_OCPP, "ocpp-2.0.1-core", 128u,
+                    TURBO_FLOW_PROTOCOL_BUSINESS_CAP_COMMITTED_EVENT, &ops, &probe, &business),
+                SALTS_OK);
     event.delivery_id = 41u;
     event.session_id = 7u;
     event.session_generation = 2u;
@@ -170,9 +134,9 @@ spec("protocol business service") {
     turbo_flow_protocol_command_view_t command = TURBO_FLOW_PROTOCOL_COMMAND_VIEW_INIT;
     ops.prepare_command = business_probe_prepare;
     check_equal(turbo_flow_protocol_business_create(
-                     "command-probe", TURBO_FLOW_PROTOCOL_JTT_808, "jtt808-2019", 64u,
-                     TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND, &ops, &probe, &business),
-                 SALTS_OK);
+                    "command-probe", TURBO_FLOW_PROTOCOL_JTT_808, "jtt808-2019", 64u,
+                    TURBO_FLOW_PROTOCOL_BUSINESS_CAP_PREPARE_COMMAND, &ops, &probe, &business),
+                SALTS_OK);
     request.command_id = 9u;
     request.protocol = TURBO_FLOW_PROTOCOL_JTT_808;
     request.tenant = "fleet-a";
@@ -187,7 +151,7 @@ spec("protocol business service") {
     output.payload = output_payload;
     output.payload_capacity = sizeof(output_payload);
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 SALTS_OK);
+                SALTS_OK);
     check_equal(probe.commands, 1u);
     check_equal(probe.last_action, "set-terminal-parameters");
     check_equal(output.device_id, "013800138000");
@@ -203,7 +167,7 @@ spec("protocol business service") {
     check_equal(command.payload[2], 0x03u);
     output.payload_capacity = sizeof(payload) - 1u;
     check_equal(turbo_flow_protocol_business_prepare_command(business, &request, &output),
-                 SALTS_EMSGSIZE);
+                SALTS_EMSGSIZE);
     check_equal(output.payload_size, 0u);
     turbo_flow_protocol_business_destroy(business);
   }

@@ -40,7 +40,8 @@ cmake_config_target(
   tf_protocol_business_ocpp201_core
   FOLDER "ingress/protocol/business"
   EXPORT_NAME ProtocolBusinessOcpp201Core)
-target_compile_definitions(tf_protocol_business_ocpp201_core PRIVATE TURBO_FLOW_BUILD)
+target_compile_definitions(tf_protocol_business_ocpp201_core
+                           PRIVATE TURBO_FLOW_BUILD TURBO_FLOW_PLUGIN_BUILD)
 target_include_directories(
   tf_protocol_business_ocpp201_core
   PRIVATE "${PROJECT_SOURCE_DIR}/ingress/protocol/src")

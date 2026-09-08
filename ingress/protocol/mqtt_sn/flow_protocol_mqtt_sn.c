@@ -16,20 +16,16 @@ static uint16_t flow_mqtt_sn_next_topic_id(atomic_uint *counter) {
   current = atomic_load_explicit(counter, memory_order_relaxed);
   for (;;) {
     next = current >= UINT16_MAX - 1u ? 1u : current + 1u;
-    if (atomic_compare_exchange_weak_explicit(
-            counter, &current, next, memory_order_relaxed,
-            memory_order_relaxed))
+    if (atomic_compare_exchange_weak_explicit(counter, &current, next, memory_order_relaxed,
+                                              memory_order_relaxed))
       return (uint16_t)next;
   }
 }
 
-static int flow_mqtt_sn_header(
-    const turbo_flow_protocol_frame_view_t *frame, size_t *type_offset,
-    uint8_t *type) {
+static int flow_mqtt_sn_header(const turbo_flow_protocol_frame_view_t *frame, size_t *type_offset,
+                               uint8_t *type) {
   size_t declared_size;
-  if (!frame || !frame->data || !type_offset || !type ||
-      frame->data_size < 2u)
-    return SALTS_EPROTO;
+  if (!frame || !frame->data || !type_offset || !type || frame->data_size < 2u) return SALTS_EPROTO;
   if (frame->data[0] == 1u) {
     if (frame->data_size < 4u) return SALTS_EPROTO;
     declared_size = ((size_t)frame->data[1] << 8u) | frame->data[2];
@@ -39,25 +35,20 @@ static int flow_mqtt_sn_header(
     declared_size = frame->data[0];
     *type_offset = 1u;
   }
-  if (declared_size != frame->data_size ||
-      *type_offset >= frame->data_size)
-    return SALTS_EPROTO;
+  if (declared_size != frame->data_size || *type_offset >= frame->data_size) return SALTS_EPROTO;
   *type = frame->data[*type_offset];
   return SALTS_OK;
 }
 
-static int flow_mqtt_sn_inspect(
-    void *ctx, const char *configured_version,
-    const turbo_flow_protocol_frame_view_t *frame,
-    turbo_flow_protocol_metadata_t *metadata) {
+static int flow_mqtt_sn_inspect(void *ctx, const char *configured_version,
+                                const turbo_flow_protocol_frame_view_t *frame,
+                                turbo_flow_protocol_metadata_t *metadata) {
   size_t type_offset;
   uint8_t type;
   const char *operation = NULL;
   (void)ctx;
   (void)configured_version;
-  if (!metadata ||
-      flow_mqtt_sn_header(frame, &type_offset, &type) != SALTS_OK)
-    return SALTS_EPROTO;
+  if (!metadata || flow_mqtt_sn_header(frame, &type_offset, &type) != SALTS_OK) return SALTS_EPROTO;
   switch (type) {
   case 0x04u:
     operation = "connect";
@@ -81,78 +72,67 @@ static int flow_mqtt_sn_inspect(
     operation = "register";
     if (frame->data_size < type_offset + 5u) return SALTS_EPROTO;
     metadata->sequence =
-        ((uint64_t)frame->data[type_offset + 3u] << 8u) |
-        frame->data[type_offset + 4u];
+        ((uint64_t)frame->data[type_offset + 3u] << 8u) | frame->data[type_offset + 4u];
     break;
   case 0x0bu:
     operation = "register-ack";
     if (frame->data_size != type_offset + 6u) return SALTS_EPROTO;
     metadata->sequence =
-        ((uint64_t)frame->data[type_offset + 3u] << 8u) |
-        frame->data[type_offset + 4u];
+        ((uint64_t)frame->data[type_offset + 3u] << 8u) | frame->data[type_offset + 4u];
     break;
   case 0x0cu:
     operation = "publish";
     if (frame->data_size < type_offset + 6u) return SALTS_EPROTO;
     metadata->sequence =
-        ((uint64_t)frame->data[type_offset + 4u] << 8u) |
-        frame->data[type_offset + 5u];
+        ((uint64_t)frame->data[type_offset + 4u] << 8u) | frame->data[type_offset + 5u];
     break;
   case 0x0du:
     operation = "puback";
     if (frame->data_size != type_offset + 6u) return SALTS_EPROTO;
     metadata->sequence =
-        ((uint64_t)frame->data[type_offset + 3u] << 8u) |
-        frame->data[type_offset + 4u];
+        ((uint64_t)frame->data[type_offset + 3u] << 8u) | frame->data[type_offset + 4u];
     break;
   case 0x0eu:
     operation = "pubcomp";
     if (frame->data_size != type_offset + 3u) return SALTS_EPROTO;
     metadata->sequence =
-        ((uint64_t)frame->data[type_offset + 1u] << 8u) |
-        frame->data[type_offset + 2u];
+        ((uint64_t)frame->data[type_offset + 1u] << 8u) | frame->data[type_offset + 2u];
     break;
   case 0x0fu:
     operation = "pubrec";
     if (frame->data_size != type_offset + 3u) return SALTS_EPROTO;
     metadata->sequence =
-        ((uint64_t)frame->data[type_offset + 1u] << 8u) |
-        frame->data[type_offset + 2u];
+        ((uint64_t)frame->data[type_offset + 1u] << 8u) | frame->data[type_offset + 2u];
     break;
   case 0x10u:
     operation = "pubrel";
     if (frame->data_size != type_offset + 3u) return SALTS_EPROTO;
     metadata->sequence =
-        ((uint64_t)frame->data[type_offset + 1u] << 8u) |
-        frame->data[type_offset + 2u];
+        ((uint64_t)frame->data[type_offset + 1u] << 8u) | frame->data[type_offset + 2u];
     break;
   case 0x12u:
     operation = "subscribe";
     if (frame->data_size < type_offset + 5u) return SALTS_EPROTO;
     metadata->sequence =
-        ((uint64_t)frame->data[type_offset + 2u] << 8u) |
-        frame->data[type_offset + 3u];
+        ((uint64_t)frame->data[type_offset + 2u] << 8u) | frame->data[type_offset + 3u];
     break;
   case 0x13u:
     operation = "suback";
     if (frame->data_size != type_offset + 7u) return SALTS_EPROTO;
     metadata->sequence =
-        ((uint64_t)frame->data[type_offset + 4u] << 8u) |
-        frame->data[type_offset + 5u];
+        ((uint64_t)frame->data[type_offset + 4u] << 8u) | frame->data[type_offset + 5u];
     break;
   case 0x14u:
     operation = "unsubscribe";
     if (frame->data_size < type_offset + 5u) return SALTS_EPROTO;
     metadata->sequence =
-        ((uint64_t)frame->data[type_offset + 2u] << 8u) |
-        frame->data[type_offset + 3u];
+        ((uint64_t)frame->data[type_offset + 2u] << 8u) | frame->data[type_offset + 3u];
     break;
   case 0x15u:
     operation = "unsuback";
     if (frame->data_size != type_offset + 3u) return SALTS_EPROTO;
     metadata->sequence =
-        ((uint64_t)frame->data[type_offset + 1u] << 8u) |
-        frame->data[type_offset + 2u];
+        ((uint64_t)frame->data[type_offset + 1u] << 8u) | frame->data[type_offset + 2u];
     break;
   case 0x16u:
     operation = "pingreq";
@@ -179,28 +159,22 @@ static int flow_mqtt_sn_inspect(
     break;
   }
   metadata->message_type = type;
-  return operation
-             ? flow_protocol_metadata_text(metadata->operation,
-                                          sizeof(metadata->operation),
-                                          operation)
-             : flow_protocol_metadata_format(metadata->operation,
-                                            sizeof(metadata->operation),
-                                            "type-%02x", type);
+  return operation ? flow_protocol_metadata_text(metadata->operation, sizeof(metadata->operation),
+                                                 operation)
+                   : flow_protocol_metadata_format(metadata->operation, sizeof(metadata->operation),
+                                                   "type-%02x", type);
 }
 
 static uint8_t flow_mqtt_sn_return_code(int status) {
   if (status == SALTS_OK) return 0u;
-  if (status == SALTS_EBUSY || status == SALTS_ENOSPC ||
-      status == SALTS_ENOBUFS)
-    return 1u;
+  if (status == SALTS_EBUSY || status == SALTS_ENOSPC || status == SALTS_ENOBUFS) return 1u;
   if (status == SALTS_ENOTSUP) return 3u;
   return 2u;
 }
 
-static int flow_mqtt_sn_reply(
-    void *ctx, const char *configured_version,
-    const turbo_flow_protocol_frame_view_t *request, int status,
-    turbo_flow_protocol_frame_output_t *output) {
+static int flow_mqtt_sn_reply(void *ctx, const char *configured_version,
+                              const turbo_flow_protocol_frame_view_t *request, int status,
+                              turbo_flow_protocol_frame_output_t *output) {
   size_t type_offset;
   uint8_t type;
   uint8_t return_code = flow_mqtt_sn_return_code(status);
@@ -212,18 +186,14 @@ static int flow_mqtt_sn_reply(
     return SALTS_EINVAL;
   switch (type) {
   case 0x04u:
-    if (request->data_size < type_offset + 6u ||
-        request->data[type_offset + 2u] != 1u)
+    if (request->data_size < type_offset + 6u || request->data[type_offset + 2u] != 1u)
       return SALTS_EPROTO;
     if (output->capacity < 3u) return SALTS_EMSGSIZE;
     output->data[0] = 3u;
     output->data[1] =
-        (request->data[type_offset + 1u] & UINT8_C(0x08)) != 0u
-            ? UINT8_C(0x06)
-            : UINT8_C(0x05);
+        (request->data[type_offset + 1u] & UINT8_C(0x08)) != 0u ? UINT8_C(0x06) : UINT8_C(0x05);
     output->data[2] = return_code;
-    output->data_size =
-        output->data[1] == UINT8_C(0x06) ? 2u : 3u;
+    output->data_size = output->data[1] == UINT8_C(0x06) ? 2u : 3u;
     output->data[0] = (uint8_t)output->data_size;
     return SALTS_OK;
   case 0x07u:
@@ -242,8 +212,7 @@ static int flow_mqtt_sn_reply(
   case 0x0au:
     if (request->data_size < type_offset + 5u) return SALTS_EPROTO;
     if (output->capacity < 7u) return SALTS_EMSGSIZE;
-    topic_id = ((uint16_t)request->data[type_offset + 1u] << 8u) |
-               request->data[type_offset + 2u];
+    topic_id = ((uint16_t)request->data[type_offset + 1u] << 8u) | request->data[type_offset + 2u];
     if (topic_id == 0u && return_code == 0u) {
       topic_id = flow_mqtt_sn_next_topic_id((atomic_uint *)ctx);
     }
@@ -294,8 +263,8 @@ static int flow_mqtt_sn_reply(
     flags = request->data[type_offset + 1u];
     topic_id = flow_mqtt_sn_next_topic_id((atomic_uint *)ctx);
     if ((flags & 0x03u) != 0u && request->data_size >= type_offset + 6u)
-      topic_id = ((uint16_t)request->data[type_offset + 4u] << 8u) |
-                 request->data[type_offset + 5u];
+      topic_id =
+          ((uint16_t)request->data[type_offset + 4u] << 8u) | request->data[type_offset + 5u];
     if (topic_id == 0u || topic_id == UINT16_MAX) return SALTS_ERANGE;
     output->data[0] = 8u;
     output->data[1] = UINT8_C(0x13);
@@ -332,8 +301,7 @@ static int flow_mqtt_sn_reply(
   case 0x1cu:
     if (output->capacity < 3u) return SALTS_EMSGSIZE;
     output->data[0] = 3u;
-    output->data[1] =
-        type == UINT8_C(0x1a) ? UINT8_C(0x1b) : UINT8_C(0x1d);
+    output->data[1] = type == UINT8_C(0x1a) ? UINT8_C(0x1b) : UINT8_C(0x1d);
     output->data[2] = return_code;
     output->data_size = 3u;
     return SALTS_OK;
@@ -348,16 +316,14 @@ static int flow_mqtt_sn_topic_id(const char *text, uint16_t *out) {
   unsigned long value;
   if (!text || !text[0] || !out) return SALTS_EINVAL;
   value = strtoul(text, &end, 10);
-  if (!end || *end != '\0' || value == 0ul || value >= UINT16_MAX)
-    return SALTS_EINVAL;
+  if (!end || *end != '\0' || value == 0ul || value >= UINT16_MAX) return SALTS_EINVAL;
   *out = (uint16_t)value;
   return SALTS_OK;
 }
 
-static int flow_mqtt_sn_encode(
-    void *ctx, const char *configured_version,
-    const turbo_flow_protocol_command_view_t *command,
-    turbo_flow_protocol_frame_output_t *output) {
+static int flow_mqtt_sn_encode(void *ctx, const char *configured_version,
+                               const turbo_flow_protocol_command_view_t *command,
+                               turbo_flow_protocol_frame_output_t *output) {
   uint16_t topic_id;
   uint16_t message_id;
   size_t frame_size;
@@ -370,8 +336,7 @@ static int flow_mqtt_sn_encode(
       return SALTS_EINVAL;
     message_id = (uint16_t)command->sequence;
     frame_size = 7u + command->payload_size;
-    if (frame_size > UINT8_MAX || frame_size > output->capacity)
-      return SALTS_EMSGSIZE;
+    if (frame_size > UINT8_MAX || frame_size > output->capacity) return SALTS_EMSGSIZE;
     output->data[0] = (uint8_t)frame_size;
     output->data[1] = UINT8_C(0x0c);
     output->data[2] = UINT8_C(0x20); /* QoS 1, normal topic id */
@@ -384,13 +349,10 @@ static int flow_mqtt_sn_encode(
     output->data_size = frame_size;
     return SALTS_OK;
   }
-  if (strcmp(command->operation, "pingreq") == 0 ||
-      strcmp(command->operation, "disconnect") == 0) {
+  if (strcmp(command->operation, "pingreq") == 0 || strcmp(command->operation, "disconnect") == 0) {
     if (output->capacity < 2u) return SALTS_EMSGSIZE;
     output->data[0] = 2u;
-    output->data[1] =
-        strcmp(command->operation, "pingreq") == 0 ? UINT8_C(0x16)
-                                                    : UINT8_C(0x18);
+    output->data[1] = strcmp(command->operation, "pingreq") == 0 ? UINT8_C(0x16) : UINT8_C(0x18);
     output->data_size = 2u;
     return SALTS_OK;
   }
@@ -399,10 +361,14 @@ static int flow_mqtt_sn_encode(
 
 static const char *const FLOW_MQTT_SN_VERSIONS[] = {"1.2"};
 static const flow_protocol_plugin_descriptor_t FLOW_MQTT_SN_DESCRIPTOR = {
-    "mqtt-sn", TURBO_FLOW_PROTOCOL_MQTT_SN, "1.2",
+    "mqtt-sn",
+    TURBO_FLOW_PROTOCOL_MQTT_SN,
+    "1.2",
     FLOW_MQTT_SN_VERSIONS,
     sizeof(FLOW_MQTT_SN_VERSIONS) / sizeof(FLOW_MQTT_SN_VERSIONS[0]),
-    flow_mqtt_sn_inspect, flow_mqtt_sn_reply, flow_mqtt_sn_encode,
+    flow_mqtt_sn_inspect,
+    flow_mqtt_sn_reply,
+    flow_mqtt_sn_encode,
     &FLOW_MQTT_SN_NEXT_TOPIC_ID};
 
 static const turbo_flow_protocol_plugin_api_t FLOW_MQTT_SN_API = {
@@ -412,14 +378,10 @@ static const turbo_flow_protocol_plugin_api_t FLOW_MQTT_SN_API = {
     "mqtt-sn",
     TURBO_FLOW_PROTOCOL_MQTT_SN,
     TURBO_FLOW_PROTOCOL_CAP_INGRESS | TURBO_FLOW_PROTOCOL_CAP_EGRESS |
-        TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE |
-        TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY |
+        TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE | TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY |
         TURBO_FLOW_PROTOCOL_CAP_COMMAND_ENCODE,
     (void *)&FLOW_MQTT_SN_DESCRIPTOR,
     flow_protocol_plugin_open,
     flow_protocol_plugin_close};
 
-const turbo_flow_protocol_plugin_api_t *
-turbo_flow_protocol_plugin_get_api(void) {
-  return &FLOW_MQTT_SN_API;
-}
+FLOW_PROTOCOL_DEFINE_UNIFIED_ROOT("mqtt-sn", "1.0.0", FLOW_MQTT_SN_API)
