@@ -369,12 +369,19 @@ static int flow_plugin_api_validate(const turbo_flow_plugin_api_v1_t *api,
   const turbo_flow_plugin_capabilities_t known =
       TURBO_FLOW_PLUGIN_CAP_PRODUCT_ADAPTER | TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE |
       TURBO_FLOW_PLUGIN_CAP_PROTOCOL | TURBO_FLOW_PLUGIN_CAP_PROTOCOL_BUSINESS |
-      TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER | TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE;
+      TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER | TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE |
+      TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL;
   if (!api || api->size < sizeof(*api) || api->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       (api->capabilities & ~known) != 0u || api->capabilities == 0u || !api->load ||
       !api->register_capabilities || !api->quiesce || !api->shutdown || !api->destroy) {
     return flow_plugin_error_write(error, SALTS_EPROTO, TURBO_FLOW_PLUGIN_STAGE_API, NULL, path,
                                    "invalid plugin root ABI or lifecycle vtable");
+  }
+  if ((api->capabilities & TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL) != 0u &&
+      (api->capabilities & (TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER |
+                            TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE)) == 0u) {
+    return flow_plugin_error_write(error, SALTS_EPROTO, TURBO_FLOW_PLUGIN_STAGE_API, NULL, path,
+                                   "external progress requires a transactional Product provider");
   }
   if (!flow_plugin_identity_valid(api->plugin_id) ||
       !flow_plugin_version_valid(api->plugin_version)) {
@@ -852,7 +859,7 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
     if (vec_size(&host->transactional_resource_providers) >
         registration.transactional_resource_count_before)
       actual |= TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE;
-    if (actual != api->capabilities) rc = SALTS_EPROTO;
+    if (actual != (api->capabilities & ~TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL)) rc = SALTS_EPROTO;
   }
   if (rc != SALTS_OK) {
     flow_plugin_registration_rollback(&registration);

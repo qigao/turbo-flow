@@ -48,6 +48,30 @@
 #ifndef FLOW_PLUGIN_GENERATION_FIXTURE_RESOURCE_ORDER
   #error FLOW_PLUGIN_GENERATION_FIXTURE_RESOURCE_ORDER is required
 #endif
+#ifndef FLOW_PLUGIN_GENERATION_FIXTURE_EXTERNAL_POLL
+  #error FLOW_PLUGIN_GENERATION_FIXTURE_EXTERNAL_POLL is required
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_FIXTURE_MIXED_POLL
+  #error FLOW_PLUGIN_GENERATION_FIXTURE_MIXED_POLL is required
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY_OWNER_PREFIX
+  #error FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY_OWNER_PREFIX is required
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_FIXTURE_POLL_ERROR
+  #error FLOW_PLUGIN_GENERATION_FIXTURE_POLL_ERROR is required
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_FIXTURE_POLL_CLOSES
+  #error FLOW_PLUGIN_GENERATION_FIXTURE_POLL_CLOSES is required
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_FIXTURE_POLL_FLAG_WITHOUT_CALLBACK
+  #error FLOW_PLUGIN_GENERATION_FIXTURE_POLL_FLAG_WITHOUT_CALLBACK is required
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_FIXTURE_POLL_CALLBACK_WITHOUT_FLAG
+  #error FLOW_PLUGIN_GENERATION_FIXTURE_POLL_CALLBACK_WITHOUT_FLAG is required
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_FIXTURE_POLL_SMALL_DESCRIPTOR
+  #error FLOW_PLUGIN_GENERATION_FIXTURE_POLL_SMALL_DESCRIPTOR is required
+#endif
 
 static const char flow_plugin_generation_yaml[] = "version: 1\n"
                                                   "adapters:\n"
@@ -72,6 +96,26 @@ static const char flow_plugin_generation_graph[] = "source input adapter input.a
                                                    "stage main {\n"
                                                    "  input -> output\n"
                                                    "}\n";
+
+static const char flow_plugin_generation_three_yaml[] = "version: 1\n"
+                                                        "adapters:\n"
+                                                        "  input.adapter:\n"
+                                                        "    kind: fixture.transactional.adapter\n"
+                                                        "    config: {}\n"
+                                                        "  middle.adapter:\n"
+                                                        "    kind: fixture.transactional.adapter\n"
+                                                        "    config: {}\n"
+                                                        "  output.adapter:\n"
+                                                        "    kind: fixture.transactional.adapter\n"
+                                                        "    config: {}\n";
+
+static const char flow_plugin_generation_three_graph[] = "source input adapter input.adapter\n"
+                                                         "stage middle adapter middle.adapter\n"
+                                                         "stage output adapter output.adapter\n"
+                                                         "stage main {\n"
+                                                         "  input -> middle\n"
+                                                         "  middle -> output\n"
+                                                         "}\n";
 
 static const char flow_plugin_generation_duplicate_reference_graph[] =
     "source input adapter input.adapter\n"
@@ -104,6 +148,12 @@ typedef struct flow_plugin_generation_test_context_s {
   turbo_flow_resolved_config_t *resolved;
   turbo_flow_t *flow;
 } flow_plugin_generation_test_context_t;
+
+static int flow_plugin_generation_test_poll(void *ctx, uint32_t timeout_ms) {
+  (void)ctx;
+  (void)timeout_ms;
+  return SALTS_OK;
+}
 
 static int flow_plugin_generation_test_open(flow_plugin_generation_test_context_t *context,
                                             const char *plugin_path,
@@ -169,6 +219,37 @@ flow_plugin_generation_test_replace_documents(flow_plugin_generation_test_contex
 }
 
 spec("transactional plugin Graph generation") {
+  it("publishes Product owners within the caller-provided ABI capacity") {
+    union {
+      turbo_flow_plugin_product_owner_v1_t alignment;
+      unsigned char bytes[TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE + sizeof(uint64_t)];
+    } storage;
+    const uint64_t canary = UINT64_C(0x6B3A1D5E92C7408F);
+    uint64_t observed_canary = 0u;
+    turbo_flow_plugin_product_owner_v1_t desired = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+    turbo_flow_plugin_product_owner_v1_t *legacy_out =
+        (turbo_flow_plugin_product_owner_v1_t *)(void *)storage.bytes;
+
+    memset(&storage, 0, sizeof(storage));
+    legacy_out->size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
+    memcpy(storage.bytes + TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE, &canary, sizeof(canary));
+    desired.flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD |
+                    TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
+    desired.poll = flow_plugin_generation_test_poll;
+    check_equal(turbo_flow_plugin_product_owner_publish(legacy_out, &desired), SALTS_ENOTSUP);
+    memcpy(&observed_canary, storage.bytes + TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE,
+           sizeof(observed_canary));
+    check_equal(observed_canary, canary);
+
+    desired.flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD;
+    desired.poll = NULL;
+    check_equal(turbo_flow_plugin_product_owner_publish(legacy_out, &desired), SALTS_OK);
+    check_equal(legacy_out->size, TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE);
+    memcpy(&observed_canary, storage.bytes + TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE,
+           sizeof(observed_canary));
+    check_equal(observed_canary, canary);
+  }
+
   it("rejects a legacy-only Product catalog without fallback") {
     flow_plugin_generation_test_context_t context = {0};
     turbo_flow_plugin_host_config_t host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
@@ -300,6 +381,165 @@ spec("transactional plugin Graph generation") {
       check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &config_error), SALTS_OK);
       check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
     }
+  }
+
+  it("accepts lifecycle-only v1.0 owner prefixes") {
+    flow_plugin_generation_test_context_t context;
+    turbo_flow_plugin_generation_config_t generation_config =
+        TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_generation_t *generation = NULL;
+    generation_config.owner_capacity = 2u;
+
+    check_equal(flow_plugin_generation_test_open(&context,
+                                                 FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY_OWNER_PREFIX,
+                                                 &plugin_error, &config_error),
+                SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+                                                    &context.flow, &generation_config, &generation,
+                                                    &config_error),
+                SALTS_OK);
+    check_not_null(generation);
+    check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_poll(generation, 7u, &config_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &config_error), SALTS_OK);
+    check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
+  }
+
+  it("polls external owners once per round with a rotating total timeout") {
+    flow_plugin_generation_test_context_t context;
+    turbo_flow_plugin_generation_config_t generation_config =
+        TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_generation_t *generation = NULL;
+    generation_config.owner_capacity = 3u;
+
+    check_equal(flow_plugin_generation_test_open(&context,
+                                                 FLOW_PLUGIN_GENERATION_FIXTURE_EXTERNAL_POLL,
+                                                 &plugin_error, &config_error),
+                SALTS_OK);
+    check_equal(flow_plugin_generation_test_replace_documents(
+                    &context, flow_plugin_generation_three_yaml,
+                    sizeof(flow_plugin_generation_three_yaml) - 1u,
+                    flow_plugin_generation_three_graph,
+                    sizeof(flow_plugin_generation_three_graph) - 1u, &config_error),
+                SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+                                                    &context.flow, &generation_config, &generation,
+                                                    &config_error),
+                SALTS_OK);
+    turbo_flow_plugin_catalog_snapshot_destroy(context.snapshot);
+    context.snapshot = NULL;
+    check_equal(turbo_flow_plugin_generation_poll(generation, 7u, &config_error), SALTS_EBUSY);
+    check_equal(config_error.path, "$.generation.poll");
+    check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_poll(generation, 7u, &config_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_poll(generation, 11u, &config_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &config_error), SALTS_OK);
+    check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
+  }
+
+  it("polls one eligible owner among lifecycle-only owners including zero timeout") {
+    flow_plugin_generation_test_context_t context;
+    turbo_flow_plugin_generation_config_t generation_config =
+        TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_generation_t *generation = NULL;
+    generation_config.owner_capacity = 2u;
+
+    check_equal(flow_plugin_generation_test_open(&context,
+                                                 FLOW_PLUGIN_GENERATION_FIXTURE_MIXED_POLL,
+                                                 &plugin_error, &config_error),
+                SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+                                                    &context.flow, &generation_config, &generation,
+                                                    &config_error),
+                SALTS_OK);
+    check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_poll(generation, 13u, &config_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_poll(generation, 0u, &config_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &config_error), SALTS_OK);
+    check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
+  }
+
+  it("rejects inconsistent external poll descriptors transactionally") {
+    const char *fixtures[] = {FLOW_PLUGIN_GENERATION_FIXTURE_POLL_FLAG_WITHOUT_CALLBACK,
+                              FLOW_PLUGIN_GENERATION_FIXTURE_POLL_CALLBACK_WITHOUT_FLAG,
+                              FLOW_PLUGIN_GENERATION_FIXTURE_POLL_SMALL_DESCRIPTOR};
+    for (size_t i = 0u; i < sizeof(fixtures) / sizeof(fixtures[0]); ++i) {
+      flow_plugin_generation_test_context_t context;
+      turbo_flow_plugin_generation_config_t generation_config =
+          TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+      turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+      turbo_flow_plugin_generation_t *generation = NULL;
+      generation_config.owner_capacity = 2u;
+
+      check_equal(
+          flow_plugin_generation_test_open(&context, fixtures[i], &plugin_error, &config_error),
+          SALTS_OK);
+      check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+                                                      &context.flow, &generation_config,
+                                                      &generation, &config_error),
+                  SALTS_EPROTO);
+      check_equal(config_error.path, "$.adapters.input.adapter");
+      check_null(context.flow);
+      check_null(generation);
+      check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
+    }
+  }
+
+  it("returns the exact external owner poll error path") {
+    flow_plugin_generation_test_context_t context;
+    turbo_flow_plugin_generation_config_t generation_config =
+        TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_generation_t *generation = NULL;
+    generation_config.owner_capacity = 2u;
+
+    check_equal(flow_plugin_generation_test_open(&context,
+                                                 FLOW_PLUGIN_GENERATION_FIXTURE_POLL_ERROR,
+                                                 &plugin_error, &config_error),
+                SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+                                                    &context.flow, &generation_config, &generation,
+                                                    &config_error),
+                SALTS_OK);
+    check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_poll(generation, 5u, &config_error), SALTS_EIO);
+    check_equal(config_error.path, "$.adapters.output.adapter.owner.poll");
+    check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &config_error), SALTS_OK);
+    check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
+  }
+
+  it("keeps progress closed after retirement begins") {
+    flow_plugin_generation_test_context_t context;
+    turbo_flow_plugin_generation_config_t generation_config =
+        TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_generation_t *generation = NULL;
+    generation_config.owner_capacity = 2u;
+
+    check_equal(flow_plugin_generation_test_open(&context,
+                                                 FLOW_PLUGIN_GENERATION_FIXTURE_POLL_CLOSES,
+                                                 &plugin_error, &config_error),
+                SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+                                                    &context.flow, &generation_config, &generation,
+                                                    &config_error),
+                SALTS_OK);
+    check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_destroy(generation, 1u, &config_error),
+                SALTS_ETIMEDOUT);
+    check_equal(turbo_flow_plugin_generation_poll(generation, 0u, &config_error), SALTS_EBUSY);
+    check_equal(config_error.path, "$.generation.poll");
+    check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &config_error), SALTS_OK);
+    check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
   }
 
   it("materializes one owner for a repeated named adapter reference") {

@@ -3,6 +3,8 @@
 
 #include "turbo_flow_plugin.h"
 
+#include <string.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -10,13 +12,15 @@ extern "C" {
 typedef uint64_t turbo_flow_plugin_product_owner_flags_t;
 enum {
   TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD = UINT64_C(1) << 0,
-  TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE = UINT64_C(1) << 1
+  TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE = UINT64_C(1) << 1,
+  TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL = UINT64_C(1) << 2
 };
 
 typedef int (*turbo_flow_plugin_product_owner_quiesce_fn)(void *ctx, uint64_t timeout_ms);
 typedef int (*turbo_flow_plugin_product_owner_drain_fn)(void *ctx, uint64_t timeout_ms);
 typedef int (*turbo_flow_plugin_product_owner_shutdown_fn)(void *ctx);
 typedef void (*turbo_flow_plugin_product_owner_destroy_fn)(void *ctx);
+typedef int (*turbo_flow_plugin_product_owner_poll_fn)(void *ctx, uint32_t timeout_ms);
 
 /**
  * One plugin-owned Product instance. The descriptor is copied by the host.
@@ -34,7 +38,14 @@ typedef struct turbo_flow_plugin_product_owner_v1_s {
   turbo_flow_plugin_product_owner_drain_fn drain;
   turbo_flow_plugin_product_owner_shutdown_fn shutdown;
   turbo_flow_plugin_product_owner_destroy_fn destroy;
+  /** Keeps appended fields beyond the complete v1.0 object on every supported C ABI. Must be zero.
+   */
+  uint64_t reserved_v1_1;
+  turbo_flow_plugin_product_owner_poll_fn poll;
 } turbo_flow_plugin_product_owner_v1_t;
+
+#define TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE                                                  \
+  offsetof(turbo_flow_plugin_product_owner_v1_t, reserved_v1_1)
 
 #define TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT                                                    \
   {sizeof(turbo_flow_plugin_product_owner_v1_t),                                                   \
@@ -45,7 +56,35 @@ typedef struct turbo_flow_plugin_product_owner_v1_s {
    NULL,                                                                                           \
    NULL,                                                                                           \
    NULL,                                                                                           \
+   NULL,                                                                                           \
+   0u,                                                                                             \
    NULL}
+
+/**
+ * Publish a complete local owner descriptor within the capacity pre-seeded by the host.
+ *
+ * A materializer must inspect/preserve `owner_out->size` and use this helper instead of assigning
+ * the complete structure. External-poll owners fail with SALTS_ENOTSUP when the caller only owns a
+ * v1.0 buffer; lifecycle-only owners are safely truncated to that prefix.
+ */
+static inline int
+turbo_flow_plugin_product_owner_publish(turbo_flow_plugin_product_owner_v1_t *owner_out,
+                                        const turbo_flow_plugin_product_owner_v1_t *owner) {
+  size_t capacity;
+  size_t copy_size;
+  if (!owner_out || !owner) return SALTS_EINVAL;
+  capacity = owner_out->size;
+  if ((capacity != TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE && capacity < sizeof(*owner_out)) ||
+      owner->size < sizeof(*owner) || owner->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR)
+    return SALTS_EINVAL;
+  if ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) != 0u &&
+      capacity < sizeof(*owner_out))
+    return SALTS_ENOTSUP;
+  copy_size = capacity < sizeof(*owner_out) ? capacity : sizeof(*owner_out);
+  memcpy(owner_out, owner, copy_size);
+  owner_out->size = copy_size;
+  return SALTS_OK;
+}
 
 typedef int (*turbo_flow_plugin_product_preflight_fn)(void *ctx,
                                                       const turbo_flow_resolved_config_t *resolved,
@@ -58,7 +97,10 @@ typedef int (*turbo_flow_plugin_product_materialize_fn)(
 /**
  * A DLL-owned transactional adapter factory descriptor. preflight must validate without external
  * side effects. A successful materialize transfers exactly one owner; after failure, the plugin
- * remains responsible for any partial state and must leave owner_out empty.
+ * remains responsible for any partial state and must leave owner_out empty. materialize treats the
+ * initial owner_out->size as caller capacity and publishes through
+ * turbo_flow_plugin_product_owner_publish(); a plugin that may publish EXTERNAL_POLL also declares
+ * TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL in its root API.
  */
 struct turbo_flow_plugin_transactional_adapter_provider_v1_s {
   size_t size;
@@ -182,6 +224,20 @@ TURBO_FLOW_C_API turbo_flow_plugin_generation_state_t
 turbo_flow_plugin_generation_state(const turbo_flow_plugin_generation_t *generation);
 TURBO_FLOW_C_API size_t
 turbo_flow_plugin_generation_owner_count(const turbo_flow_plugin_generation_t *generation);
+
+/**
+ * Drive one external-poll round while the Graph is started.
+ *
+ * On a successful round each eligible owner is invoked exactly once. One rotating owner receives
+ * the total `timeout_ms`; every remaining owner receives zero, so the round has one bounded
+ * blocking budget. Lifecycle-only owners are skipped. The first callback error stops the round.
+ * Calls are serialized on the Gateway control thread and must not re-enter generation poll,
+ * lifecycle, or lease mutation from an owner callback.
+ * @return SALTS_OK, SALTS_EBUSY outside the active state, or the exact owner callback error.
+ */
+TURBO_FLOW_C_API int turbo_flow_plugin_generation_poll(turbo_flow_plugin_generation_t *generation,
+                                                       uint32_t timeout_ms,
+                                                       turbo_flow_config_error_t *error);
 
 /**
  * Acquire one control-thread-serialized lease before publishing a run, claim, or callback that can
