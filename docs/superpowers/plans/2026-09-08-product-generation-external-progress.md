@@ -111,6 +111,6 @@
 
   Run focused repeats and full suites under `win-dev-user` and `win-release-user`, then `install-win-dev-user` and installed C/C++ consumers.
 
-- [ ] **Step 4: Review, push, merge, and record evidence**
+- [x] **Step 4: Review, push, merge, and record evidence**
 
   Review every #78 acceptance item against named evidence, open a PR linked to #78, merge a clean verified head, update #78 and #63, then return to #69 from updated `master`.
