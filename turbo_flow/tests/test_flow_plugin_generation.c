@@ -3,6 +3,9 @@
 
 #include <string.h>
 
+#ifndef FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY
+  #error FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY is required
+#endif
 #ifndef FLOW_PLUGIN_GENERATION_FIXTURE_CAPACITY
   #error FLOW_PLUGIN_GENERATION_FIXTURE_CAPACITY is required
 #endif
@@ -11,6 +14,9 @@
 #endif
 #ifndef FLOW_PLUGIN_GENERATION_FIXTURE_SUCCESS
   #error FLOW_PLUGIN_GENERATION_FIXTURE_SUCCESS is required
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_FIXTURE_DUPLICATE_REFERENCE
+  #error FLOW_PLUGIN_GENERATION_FIXTURE_DUPLICATE_REFERENCE is required
 #endif
 #ifndef FLOW_PLUGIN_GENERATION_FIXTURE_MATERIALIZE_FIRST_FAIL
   #error FLOW_PLUGIN_GENERATION_FIXTURE_MATERIALIZE_FIRST_FAIL is required
@@ -52,11 +58,27 @@ static const char flow_plugin_generation_yaml[] = "version: 1\n"
                                                   "    kind: fixture.transactional.adapter\n"
                                                   "    config: {}\n";
 
+static const char flow_plugin_generation_legacy_yaml[] = "version: 1\n"
+                                                         "adapters:\n"
+                                                         "  input.adapter:\n"
+                                                         "    kind: fixture.adapter.one\n"
+                                                         "    config: {}\n"
+                                                         "  output.adapter:\n"
+                                                         "    kind: fixture.adapter.one\n"
+                                                         "    config: {}\n";
+
 static const char flow_plugin_generation_graph[] = "source input adapter input.adapter\n"
                                                    "stage output adapter output.adapter\n"
                                                    "stage main {\n"
                                                    "  input -> output\n"
                                                    "}\n";
+
+static const char flow_plugin_generation_duplicate_reference_graph[] =
+    "source input adapter input.adapter\n"
+    "stage output adapter input.adapter\n"
+    "stage main {\n"
+    "  input -> output\n"
+    "}\n";
 
 static const char flow_plugin_generation_resource_yaml[] =
     "version: 1\n"
@@ -147,6 +169,52 @@ flow_plugin_generation_test_replace_documents(flow_plugin_generation_test_contex
 }
 
 spec("transactional plugin Graph generation") {
+  it("rejects a legacy-only Product catalog without fallback") {
+    flow_plugin_generation_test_context_t context = {0};
+    turbo_flow_plugin_host_config_t host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
+    turbo_flow_plugin_generation_config_t generation_config =
+        TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_generation_t *generation = NULL;
+    host_config.module_capacity = 1u;
+    host_config.adapter_provider_capacity = 1u;
+    host_config.resource_provider_capacity = 1u;
+    host_config.protocol_provider_capacity = 0u;
+    host_config.business_provider_capacity = 0u;
+    host_config.transactional_adapter_provider_capacity = 0u;
+    host_config.transactional_resource_provider_capacity = 0u;
+    generation_config.owner_capacity = 2u;
+
+    check_equal(turbo_flow_plugin_host_create(&host_config, &context.host, &plugin_error),
+                SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(context.host, FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY,
+                                            &plugin_error),
+                SALTS_OK);
+    check_equal(
+        turbo_flow_plugin_catalog_snapshot_create(context.host, &context.snapshot, &plugin_error),
+        SALTS_OK);
+    check_equal(turbo_flow_config_resolve_yaml(flow_plugin_generation_legacy_yaml,
+                                               sizeof(flow_plugin_generation_legacy_yaml) - 1u,
+                                               &context.resolved, &config_error),
+                SALTS_OK);
+    context.flow = turbo_flow_create();
+    check_not_null(context.flow);
+    check_equal(turbo_flow_parse_string(context.flow, flow_plugin_generation_graph,
+                                        sizeof(flow_plugin_generation_graph) - 1u),
+                SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+                                                    &context.flow, &generation_config, &generation,
+                                                    &config_error),
+                SALTS_ENOTSUP);
+    check_equal(config_error.path, "$.adapters.input.adapter");
+    check_null(generation);
+    check_not_null(context.flow);
+    check_equal(turbo_flow_state(context.flow), TURBO_FLOW_STATE_PARSED);
+    check_equal(turbo_flow_adapter_count(context.flow), 0u);
+    check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
+  }
+
   it("rejects owner capacity before preflight or materialization and preserves the Graph") {
     for (size_t capacity = 0u; capacity <= 1u; ++capacity) {
       flow_plugin_generation_test_context_t context;
@@ -198,35 +266,68 @@ spec("transactional plugin Graph generation") {
     check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
   }
 
-  it("moves, materializes, and compiles one bounded Graph generation") {
+  it("moves and compiles with exact and one-spare owner capacity") {
+    for (size_t capacity = 2u; capacity <= 3u; ++capacity) {
+      flow_plugin_generation_test_context_t context;
+      turbo_flow_plugin_generation_config_t generation_config =
+          TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+      turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+      turbo_flow_plugin_generation_t *generation = NULL;
+      turbo_flow_t *compiled_flow;
+      generation_config.owner_capacity = capacity;
+
+      check_equal(flow_plugin_generation_test_open(&context, FLOW_PLUGIN_GENERATION_FIXTURE_SUCCESS,
+                                                   &plugin_error, &config_error),
+                  SALTS_OK);
+      {
+        const int rc =
+            turbo_flow_plugin_generation_create(context.snapshot, context.resolved, &context.flow,
+                                                &generation_config, &generation, &config_error);
+        info("generation status=%d path=%s message=%s", rc, config_error.path,
+             config_error.message);
+        check_equal(rc, SALTS_OK);
+      }
+      check_null(context.flow);
+      check_not_null(generation);
+      check_equal(turbo_flow_plugin_generation_state(generation),
+                  TURBO_FLOW_PLUGIN_GENERATION_COMPILED);
+      check_equal(turbo_flow_plugin_generation_owner_count(generation), 2u);
+      compiled_flow = turbo_flow_plugin_generation_flow(generation);
+      check_not_null(compiled_flow);
+      check_equal(turbo_flow_state(compiled_flow), TURBO_FLOW_STATE_COMPILED);
+      check_equal(turbo_flow_adapter_count(compiled_flow), 2u);
+      check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &config_error), SALTS_OK);
+      check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
+    }
+  }
+
+  it("materializes one owner for a repeated named adapter reference") {
     flow_plugin_generation_test_context_t context;
     turbo_flow_plugin_generation_config_t generation_config =
         TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
     turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_plugin_generation_t *generation = NULL;
-    turbo_flow_t *compiled_flow;
-    generation_config.owner_capacity = 2u;
+    generation_config.owner_capacity = 1u;
 
-    check_equal(flow_plugin_generation_test_open(&context, FLOW_PLUGIN_GENERATION_FIXTURE_SUCCESS,
+    check_equal(flow_plugin_generation_test_open(&context,
+                                                 FLOW_PLUGIN_GENERATION_FIXTURE_DUPLICATE_REFERENCE,
                                                  &plugin_error, &config_error),
                 SALTS_OK);
-    {
-      const int rc =
-          turbo_flow_plugin_generation_create(context.snapshot, context.resolved, &context.flow,
-                                              &generation_config, &generation, &config_error);
-      info("generation status=%d path=%s message=%s", rc, config_error.path, config_error.message);
-      check_equal(rc, SALTS_OK);
-    }
+    check_equal(flow_plugin_generation_test_replace_documents(
+                    &context, flow_plugin_generation_yaml, sizeof(flow_plugin_generation_yaml) - 1u,
+                    flow_plugin_generation_duplicate_reference_graph,
+                    sizeof(flow_plugin_generation_duplicate_reference_graph) - 1u, &config_error),
+                SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+                                                    &context.flow, &generation_config, &generation,
+                                                    &config_error),
+                SALTS_OK);
     check_null(context.flow);
     check_not_null(generation);
-    check_equal(turbo_flow_plugin_generation_state(generation),
-                TURBO_FLOW_PLUGIN_GENERATION_COMPILED);
-    check_equal(turbo_flow_plugin_generation_owner_count(generation), 2u);
-    compiled_flow = turbo_flow_plugin_generation_flow(generation);
-    check_not_null(compiled_flow);
-    check_equal(turbo_flow_state(compiled_flow), TURBO_FLOW_STATE_COMPILED);
-    check_equal(turbo_flow_adapter_count(compiled_flow), 2u);
+    check_equal(turbo_flow_plugin_generation_owner_count(generation), 1u);
+    check_equal(turbo_flow_adapter_count(turbo_flow_plugin_generation_flow(generation)), 1u);
     check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &config_error), SALTS_OK);
     check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
   }

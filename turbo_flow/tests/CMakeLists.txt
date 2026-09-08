@@ -296,6 +296,12 @@ turbo_flow_add_generation_fixture(
   FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
   FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2)
 turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_duplicate_reference
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-duplicate-reference"
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=1)
+turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_materialize_first_fail
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-materialize-first-fail"
   FLOW_PLUGIN_GENERATION_FAIL_MATERIALIZE_CALL=1
@@ -446,9 +452,11 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 target_compile_definitions(
   test_flow_plugin_generation
-  PRIVATE FLOW_PLUGIN_GENERATION_FIXTURE_CAPACITY="$<TARGET_FILE:test_flow_plugin_generation_capacity>"
+  PRIVATE FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY="$<TARGET_FILE:test_flow_plugin_good_one>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_CAPACITY="$<TARGET_FILE:test_flow_plugin_generation_capacity>"
           FLOW_PLUGIN_GENERATION_FIXTURE_PREFLIGHT_FAIL="$<TARGET_FILE:test_flow_plugin_generation_preflight_fail>"
           FLOW_PLUGIN_GENERATION_FIXTURE_SUCCESS="$<TARGET_FILE:test_flow_plugin_generation_success>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_DUPLICATE_REFERENCE="$<TARGET_FILE:test_flow_plugin_generation_duplicate_reference>"
           FLOW_PLUGIN_GENERATION_FIXTURE_MATERIALIZE_FIRST_FAIL="$<TARGET_FILE:test_flow_plugin_generation_materialize_first_fail>"
           FLOW_PLUGIN_GENERATION_FIXTURE_MATERIALIZE_SECOND_FAIL="$<TARGET_FILE:test_flow_plugin_generation_materialize_second_fail>"
           FLOW_PLUGIN_GENERATION_FIXTURE_COMPILE_FAIL="$<TARGET_FILE:test_flow_plugin_generation_compile_fail>"
@@ -461,9 +469,11 @@ target_compile_definitions(
           FLOW_PLUGIN_GENERATION_FIXTURE_RESOURCE_ORDER="$<TARGET_FILE:test_flow_plugin_generation_resource_order>")
 add_dependencies(
   test_flow_plugin_generation
+  test_flow_plugin_good_one
   test_flow_plugin_generation_capacity
   test_flow_plugin_generation_preflight_fail
   test_flow_plugin_generation_success
+  test_flow_plugin_generation_duplicate_reference
   test_flow_plugin_generation_materialize_first_fail
   test_flow_plugin_generation_materialize_second_fail
   test_flow_plugin_generation_compile_fail

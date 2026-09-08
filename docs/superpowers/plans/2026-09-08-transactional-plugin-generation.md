@@ -115,7 +115,7 @@
 
   Run `ctest --preset win-dev-user -R "test_flow_plugin_(host|generation)" --output-on-failure`. Expected: all capacity, move, compile, and rollback cases pass.
 
-- [ ] **Step 7: Commit the assembly slice**
+- [x] **Step 7: Commit the assembly slice**
 
   Commit with `feat(plugin): assemble transactional graph generations`.
 
@@ -152,7 +152,7 @@
 
   Run `test_flow_plugin_generation` repeatedly 100 times and run `test_flow_plugin_host`. Expected: no duplicate callbacks, invalid transitions, lease underflow, or unload-before-owner behavior.
 
-- [ ] **Step 6: Commit the lifecycle slice**
+- [x] **Step 6: Commit the lifecycle slice**
 
   Commit with `feat(plugin): govern generation lifecycle and leases`.
 
@@ -181,7 +181,7 @@
 
   Run `cmake --build --preset install-win-dev-user` and the install-consumer CTest case under `win-dev-user`. Expected: the installed package supplies the header and all symbols through `TurboFlow::PluginHost`.
 
-- [ ] **Step 4: Commit documentation and packaging**
+- [x] **Step 4: Commit documentation and packaging**
 
   Commit with `docs(plugin): define graph generation ownership contract`.
 
@@ -195,19 +195,19 @@
 - Consumes: completed implementation and test artifacts.
 - Produces: merged PR and reproducible evidence for #70.
 
-- [ ] **Step 1: Run source and ABI hygiene checks**
+- [x] **Step 1: Run source and ABI hygiene checks**
 
   Run formatting on changed C/C++ files, `git diff --check`, placeholder scans, legacy-fallback scans, and CodeGraph affected analysis. Inspect the DLL fixture export table to confirm only `turbo_flow_plugin_get_api` is exported.
 
-- [ ] **Step 2: Run Debug/ASan verification**
+- [x] **Step 2: Run Debug/ASan verification**
 
   Under `VsDevCmd.bat`, run fresh configure, full build, focused generation/host/Product tests, 100 focused repetitions, and full `ctest --preset win-dev-user --output-on-failure`.
 
-- [ ] **Step 3: Run Release and install verification**
+- [x] **Step 3: Run Release and install verification**
 
   Under `VsDevCmd.bat`, run `cmake --fresh --preset win-release-user`, full Release build/test, `cmake --build --preset install-win-dev-user`, and installed C/C++ consumers.
 
-- [ ] **Step 4: Review the complete diff against #70**
+- [x] **Step 4: Review the complete diff against #70**
 
   Check every acceptance item against a named test/output, verify existing embedded `turbo_flow_product_assemble_graph()` tests are unchanged, and confirm no code path invokes it from the new generation API.
 

@@ -20,7 +20,9 @@ typedef void (*turbo_flow_plugin_product_owner_destroy_fn)(void *ctx);
 
 /**
  * One plugin-owned Product instance. The descriptor is copied by the host.
- * The plugin that creates ctx must destroy it through this vtable.
+ * The plugin that creates ctx must destroy it through this vtable. Exactly one threading flag is
+ * required. CONTROL_THREAD confines every lifecycle callback to the caller-serialized Gateway
+ * control thread; THREAD_SAFE declares that the opaque owner tolerates calls from any host thread.
  */
 typedef struct turbo_flow_plugin_product_owner_v1_s {
   size_t size;
@@ -53,7 +55,11 @@ typedef int (*turbo_flow_plugin_product_materialize_fn)(
     void *ctx, turbo_flow_t *flow, const turbo_flow_resolved_config_t *resolved, const char *name,
     turbo_flow_plugin_product_owner_v1_t *owner_out, turbo_flow_config_error_t *error);
 
-/** A DLL-owned transactional adapter factory descriptor. */
+/**
+ * A DLL-owned transactional adapter factory descriptor. preflight must validate without external
+ * side effects. A successful materialize transfers exactly one owner; after failure, the plugin
+ * remains responsible for any partial state and must leave owner_out empty.
+ */
 struct turbo_flow_plugin_transactional_adapter_provider_v1_s {
   size_t size;
   uint32_t abi_major;
@@ -73,7 +79,10 @@ struct turbo_flow_plugin_transactional_adapter_provider_v1_s {
    NULL,                                                                                           \
    NULL}
 
-/** A DLL-owned transactional resource factory descriptor. */
+/**
+ * A DLL-owned transactional resource factory descriptor. Its transaction and ownership rules are
+ * identical to the adapter provider contract.
+ */
 struct turbo_flow_plugin_transactional_resource_provider_v1_s {
   size_t size;
   uint32_t abi_major;
@@ -138,7 +147,12 @@ typedef struct turbo_flow_plugin_generation_config_s {
   {sizeof(turbo_flow_plugin_generation_config_t), TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR,             \
    TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR, 256u}
 
-/** Fill a caller-owned immutable transactional Product catalog view. */
+/**
+ * Fill a caller-owned immutable transactional Product catalog view.
+ * @param snapshot Live snapshot that retains all represented DLLs.
+ * @param catalog_out Initialized size/versioned output borrowing arrays from snapshot.
+ * @return SALTS_OK, or SALTS_EINVAL for an invalid snapshot or output descriptor.
+ */
 TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(
     const turbo_flow_plugin_catalog_snapshot_t *snapshot,
     turbo_flow_plugin_transactional_product_catalog_v1_t *catalog_out);
@@ -146,7 +160,15 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_ca
 /**
  * Consume one parsed Graph only after bounded preflight succeeds, then materialize and compile it.
  * `*flow_io` remains caller-owned on preflight failure and becomes NULL before the first factory
- * side effect. The generation owns the Graph and one retained catalog snapshot on success.
+ * side effect. The generation owns the Graph and one retained catalog snapshot on success. Create,
+ * lease mutation, and destroy are caller-serialized on the Gateway control thread.
+ * @param snapshot Live immutable provider snapshot; retained by the generation.
+ * @param resolved Immutable resolved configuration borrowed for the duration of this call.
+ * @param flow_io In/out parsed Graph; moved only after every preflight succeeds.
+ * @param config Initialized size/versioned capacity configuration.
+ * @param generation_out Receives the owned generation on success and NULL on failure.
+ * @param error Initialized structured error output.
+ * @return SALTS_OK, or the exact validation, capacity, provider, allocation, or compile error.
  */
 TURBO_FLOW_C_API int turbo_flow_plugin_generation_create(
     turbo_flow_plugin_catalog_snapshot_t *snapshot, const turbo_flow_resolved_config_t *resolved,
@@ -161,14 +183,29 @@ turbo_flow_plugin_generation_state(const turbo_flow_plugin_generation_t *generat
 TURBO_FLOW_C_API size_t
 turbo_flow_plugin_generation_owner_count(const turbo_flow_plugin_generation_t *generation);
 
+/**
+ * Acquire one control-thread-serialized lease before publishing a run, claim, or callback that can
+ * outlive its initiating control operation. The lease must be released after its last callback.
+ * @return SALTS_OK, SALTS_EINVAL for no generation, or SALTS_ENOSPC on counter overflow.
+ */
 TURBO_FLOW_C_API int
 turbo_flow_plugin_generation_lease_acquire(turbo_flow_plugin_generation_t *generation);
+/**
+ * Release one control-thread-serialized active lease.
+ * @return SALTS_OK, or SALTS_EINVAL for no generation or lease underflow.
+ */
 TURBO_FLOW_C_API int
 turbo_flow_plugin_generation_lease_release(turbo_flow_plugin_generation_t *generation);
 
 /**
  * Retire owners and the Graph in retryable reverse lifecycle order, then release the DLL snapshot.
- * On SALTS_OK the generation is freed and must not be used again.
+ * Active leases return SALTS_EBUSY without invoking lifecycle callbacks. Timeout or lifecycle
+ * failure leaves an inspectable generation whose completed transitions are not repeated. On
+ * SALTS_OK the generation is freed and must not be used again.
+ * @param generation Owned generation, called from the same serialized control thread.
+ * @param timeout_ms Bounded timeout forwarded independently to each owner callback.
+ * @param error Initialized structured error output.
+ * @return SALTS_OK, SALTS_EBUSY, SALTS_ETIMEDOUT, or the exact owner/Graph lifecycle error.
  */
 TURBO_FLOW_C_API int
 turbo_flow_plugin_generation_destroy(turbo_flow_plugin_generation_t *generation,
