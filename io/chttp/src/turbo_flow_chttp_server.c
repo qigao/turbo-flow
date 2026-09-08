@@ -253,7 +253,9 @@ static int chttp_server_adapter_reserve_slot(turbo_flow_chttp_server_t *server,
   if (!server || !out_slot || !message_id) return SALTS_EINVAL;
   *out_slot = NULL;
   salts_mutex_lock(&server->mutex);
-  if (server->next_message_id != 0u) {
+  if (server->state != TURBO_FLOW_CHTTP_SERVER_RUNNING) {
+    status = SALTS_ESHUTDOWN;
+  } else if (server->next_message_id != 0u) {
     for (index = 0u; index < server->slot_count; ++index) {
       turbo_flow_chttp_server_slot_t *slot = &server->slots[index];
       if (slot->occupied) continue;
@@ -478,10 +480,10 @@ static void chttp_server_adapter_finish_reply(chttp_server_reply_work_t *work, i
   turbo_flow_msg_init(&released);
   salts_mutex_lock(&server->mutex);
   if (slot->occupied && slot->generation == work->generation) {
-    const bool reply_terminal = reply_status == SALTS_OK || reply_status == SALTS_ENOENT ||
-                                reply_status == SALTS_EALREADY;
-    const bool cancel_terminal = !reply_terminal &&
-                                 (cancel_status == SALTS_OK || cancel_status == SALTS_ENOENT);
+    const bool reply_terminal =
+        reply_status == SALTS_OK || reply_status == SALTS_ENOENT || reply_status == SALTS_EALREADY;
+    const bool cancel_terminal =
+        !reply_terminal && (cancel_status == SALTS_OK || cancel_status == SALTS_ENOENT);
     server->last_status = reply_status;
     if (reply_terminal || cancel_terminal) {
       if (reply_status == SALTS_OK) {
@@ -516,8 +518,7 @@ static void chttp_server_adapter_execute_reply(turbo_flow_chttp_server_slot_t *s
                                               .body = work.body,
                                               .body_size = work.body_size};
   reply_status = chttp_server_deferred_reply(&work.deferred, &response);
-  if (reply_status != SALTS_OK && reply_status != SALTS_ENOENT &&
-      reply_status != SALTS_EALREADY) {
+  if (reply_status != SALTS_OK && reply_status != SALTS_ENOENT && reply_status != SALTS_EALREADY) {
     cancel_status = chttp_server_deferred_cancel(&work.deferred);
   }
   chttp_server_adapter_finish_reply(&work, reply_status, cancel_status);
@@ -559,13 +560,6 @@ static int chttp_server_adapter_handler(void *user, const chttp_server_request_v
   bool release_completed_publication = false;
   int status;
   if (!server || !request || !response) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
-  status = server->state == TURBO_FLOW_CHTTP_SERVER_RUNNING ? SALTS_OK : SALTS_ESHUTDOWN;
-  salts_mutex_unlock(&server->mutex);
-  if (status != SALTS_OK) {
-    return chttp_server_adapter_immediate(response, server->unavailable_status,
-                                          server->error_content_type, "flow unavailable");
-  }
   status = chttp_server_adapter_reserve_slot(server, &slot, &message_id);
   if (status != SALTS_OK) {
     salts_mutex_lock(&server->mutex);
@@ -722,6 +716,28 @@ static int chttp_server_adapter_start(void *ctx, turbo_flow_t *flow,
   server->last_status = status;
   salts_mutex_unlock(&server->mutex);
   return status;
+}
+
+static int chttp_server_adapter_set_admission(turbo_flow_chttp_server_t *server,
+                                              turbo_flow_chttp_server_state_t state) {
+  if (!server) return SALTS_EINVAL;
+  salts_mutex_lock(&server->mutex);
+  if (server->state != TURBO_FLOW_CHTTP_SERVER_RUNNING &&
+      server->state != TURBO_FLOW_CHTTP_SERVER_QUIESCED) {
+    salts_mutex_unlock(&server->mutex);
+    return SALTS_ESHUTDOWN;
+  }
+  server->state = state;
+  salts_mutex_unlock(&server->mutex);
+  return SALTS_OK;
+}
+
+int turbo_flow_chttp_server_quiesce(turbo_flow_chttp_server_t *server) {
+  return chttp_server_adapter_set_admission(server, TURBO_FLOW_CHTTP_SERVER_QUIESCED);
+}
+
+int turbo_flow_chttp_server_resume(turbo_flow_chttp_server_t *server) {
+  return chttp_server_adapter_set_admission(server, TURBO_FLOW_CHTTP_SERVER_RUNNING);
 }
 
 static int chttp_server_adapter_stop_native(turbo_flow_chttp_server_t *server,
