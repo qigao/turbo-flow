@@ -243,9 +243,32 @@ turbo_flow_add_plugin_fixture(
 add_library(test_flow_plugin_missing_symbol SHARED plugin_fixture_missing_symbol.c)
 set_target_properties(test_flow_plugin_missing_symbol PROPERTIES FOLDER "turbo_flow/tests/plugin-fixtures")
 
+add_library(test_flow_plugin_transactional SHARED plugin_generation_fixture.c)
+target_link_libraries(test_flow_plugin_transactional PRIVATE TurboFlow::Product)
+target_compile_definitions(test_flow_plugin_transactional PRIVATE TURBO_FLOW_PLUGIN_BUILD)
+set_target_properties(
+  test_flow_plugin_transactional
+  PROPERTIES C_VISIBILITY_PRESET hidden
+             VISIBILITY_INLINES_HIDDEN YES
+             FOLDER "turbo_flow/tests/plugin-fixtures")
+
+add_library(test_flow_plugin_transactional_duplicate_kind SHARED plugin_generation_fixture.c)
+target_link_libraries(test_flow_plugin_transactional_duplicate_kind PRIVATE TurboFlow::Product)
+target_compile_definitions(
+  test_flow_plugin_transactional_duplicate_kind
+  PRIVATE TURBO_FLOW_PLUGIN_BUILD
+          FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.transactional-duplicate-kind"
+          FLOW_PLUGIN_GENERATION_ADAPTER_KIND="fixture.adapter.one")
+set_target_properties(
+  test_flow_plugin_transactional_duplicate_kind
+  PROPERTIES C_VISIBILITY_PRESET hidden
+             VISIBILITY_INLINES_HIDDEN YES
+             FOLDER "turbo_flow/tests/plugin-fixtures")
+
 cmake_add_test(
   test_flow_plugin_host
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_plugin_host.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/plugin_generation_header_cpp.cpp
   LIBS TurboFlow::PluginHost Salts::TinyTest
   FOLDER "turbo_flow/tests")
 target_compile_definitions(
@@ -269,6 +292,8 @@ target_compile_definitions(
           FLOW_PLUGIN_FIXTURE_CAPABILITY_MISMATCH="$<TARGET_FILE:test_flow_plugin_capability_mismatch>"
           FLOW_PLUGIN_FIXTURE_INVALID_PROVIDER="$<TARGET_FILE:test_flow_plugin_invalid_provider>"
           FLOW_PLUGIN_FIXTURE_INVALID_PROVIDER_ABI="$<TARGET_FILE:test_flow_plugin_invalid_provider_abi>"
+          FLOW_PLUGIN_FIXTURE_TRANSACTIONAL="$<TARGET_FILE:test_flow_plugin_transactional>"
+          FLOW_PLUGIN_FIXTURE_TRANSACTIONAL_DUPLICATE_KIND="$<TARGET_FILE:test_flow_plugin_transactional_duplicate_kind>"
           FLOW_PLUGIN_FIXTURE_MISSING_SYMBOL="$<TARGET_FILE:test_flow_plugin_missing_symbol>")
 add_dependencies(
   test_flow_plugin_host
@@ -291,6 +316,8 @@ add_dependencies(
   test_flow_plugin_capability_mismatch
   test_flow_plugin_invalid_provider
   test_flow_plugin_invalid_provider_abi
+  test_flow_plugin_transactional
+  test_flow_plugin_transactional_duplicate_kind
   test_flow_plugin_missing_symbol)
 
 set_tests_properties(
