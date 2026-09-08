@@ -62,7 +62,26 @@ Start, poll, stop, failure cleanup, and detach share one lifecycle owner lane. M
 
 Gateway assembly loads `tf_cnet_plugin` through the canonical PluginHost entry and obtains all six CNet Source/Sink kinds from one transactional vtable catalog. The Gateway consumer links only `TurboFlow::PluginHost`; missing DLLs, symbols, kinds, dependencies, explicit fields, or capacity never select the embedded `TurboFlow::CNetAdapter` API. The module snapshot retains the DLL, the Graph generation retains the six bounded owner vtables, and network progress remains caller-driven through generation poll.
 
-The three provider-created Sources use the combined managed Source registration. Their operational snapshot reads the concrete CNet Source snapshot, so demand, queue depth, in-flight receive, message count, and last status are observed owner facts rather than configuration-derived estimates. Stream and datagram terminal Sinks retain the combined managed registration described above. The packet terminal Sink is loaded and governed by the same plugin owner vtable but does not yet expose the uniform managed-boundary projection; that remaining control-plane contract is tracked by issue #28. See `io/cnet/ADR_CNET_PLUGIN.md` for the complete ownership, rollback, deployment, and no-fallback decision.
+The three provider-created Sources use the combined managed Source registration. Their operational snapshot reads the concrete CNet Source snapshot, so demand, queue depth, in-flight receive, message count, and last status are observed owner facts rather than configuration-derived estimates. All three terminal Sinks use combined managed registration. See `io/cnet/ADR_CNET_PLUGIN.md` for ownership, rollback, deployment, and the no-fallback decision.
+
+### CNet packet Sink
+
+The fixed-peer UDP/KCP/secure-KCP/FEC Sink atomically registers its adapter, resource
+metadata and managed boundary. Its UID is `cnet-packet-sink:<owner>`; oversized
+adapter names use the same bounded XXH3-128 owner identity as the other CNet Sinks.
+Input is opaque `application/octet-stream`, schema `CNetPacket/NonEmptyBytes` v1.
+Durable settlement follows the existing UDP send completion or KCP ACK contract.
+No managed write commands are advertised.
+
+The Actor owns queue and in-flight state. Managed snapshots derive queue depth
+from admitted plus ready requests and in-flight from the remaining active requests.
+Accepted/completed/rejected are cumulative across restart; generation identifies
+the registration, independently of packet session generations. Admission commits
+return `SALTS_EBUSY` to a concurrent managed snapshot. Stop closes admission,
+waits for admitted submitters, drains endpoint terminals and then destroys the
+quiescent Actor. Successful stop has zero queue/in-flight and equal accepted and
+completed counts. Native snapshot still reports `SALTS_EBUSY` while the owner lane
+is active and waits for the short admission commit.
 
 ## Migration and rollback
 

@@ -50,9 +50,9 @@ bind/connect/listen 只发生在 `turbo_flow_start()` 的 adapter start 阶段�
 三个 Source 使用 managed-run open：Flow 持有 run，CNet Source 持有输入 endpoint 和 demand
 handoff。初始 demand 只在 generation 第一次 external poll 时注入，避免 Flow 尚未完全 STARTED
 时推进输入。Managed boundary snapshot 从具体 Source 的只读 snapshot 映射实际 demand、队列、
-in-flight、接收计数和错误；不从配置推测运行状态。stream/datagram Sink 保持其既有 managed
-terminal boundary；packet Sink 的统一 managed-boundary 投影属于 #28，插件加载和 owner vtable
-生命周期不依赖该后续能力。
+in-flight、接收计数和错误；不从配置推测运行状态。stream/datagram/packet 三种 Sink 均通过
+combined registration 原子发布 adapter、metadata 与 managed boundary。packet Sink（#80）
+保留 UDP send completion / KCP ACK 结算，统一投影 Actor 队列和累计结算计数。
 
 ## 停止、排空和卸载
 

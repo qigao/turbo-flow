@@ -58,6 +58,7 @@ target_compile_definitions(tf_cnet_packet_sink_test_support
                            PRIVATE TURBO_FLOW_CNET_INTERNAL_TESTING)
 target_include_directories(
   tf_cnet_packet_sink_test_support
+  PRIVATE $<TARGET_PROPERTY:xxHash::xxhash,INTERFACE_INCLUDE_DIRECTORIES>
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../include
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_link_libraries(

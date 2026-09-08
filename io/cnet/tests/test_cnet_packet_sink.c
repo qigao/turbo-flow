@@ -42,9 +42,74 @@ typedef struct packet_sink_race_s {
   atomic_bool publisher_ready;
   atomic_bool stopper_ready;
   atomic_bool go;
+  atomic_bool stopped;
   int publish_status;
   int stop_status;
 } packet_sink_race_t;
+
+static const char PACKET_SINK_RESOURCE_UID[] = "cnet-packet-sink:cnet.packet.out";
+
+typedef struct packet_sink_boundary_fixture_s {
+  turbo_flow_resource_metadata_t metadata;
+  turbo_flow_managed_boundary_descriptor_t descriptor;
+  turbo_flow_managed_boundary_snapshot_t snapshot;
+} packet_sink_boundary_fixture_t;
+
+static int packet_sink_boundary_metadata(void *ctx, turbo_flow_resource_metadata_t *out) {
+  packet_sink_boundary_fixture_t *fixture = (packet_sink_boundary_fixture_t *)ctx;
+  if (!fixture || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  *out = fixture->metadata;
+  return SALTS_OK;
+}
+
+static int packet_sink_boundary_descriptor(void *ctx,
+                                           turbo_flow_managed_boundary_descriptor_t *out) {
+  packet_sink_boundary_fixture_t *fixture = (packet_sink_boundary_fixture_t *)ctx;
+  if (!fixture || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  *out = fixture->descriptor;
+  return SALTS_OK;
+}
+
+static int packet_sink_boundary_snapshot(void *ctx, turbo_flow_managed_boundary_snapshot_t *out) {
+  packet_sink_boundary_fixture_t *fixture = (packet_sink_boundary_fixture_t *)ctx;
+  if (!fixture || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  *out = fixture->snapshot;
+  return SALTS_OK;
+}
+
+static void packet_sink_boundary_fixture_init(packet_sink_boundary_fixture_t *fixture) {
+  memset(fixture, 0, sizeof(*fixture));
+  fixture->metadata = (turbo_flow_resource_metadata_t)TURBO_FLOW_RESOURCE_METADATA_INIT;
+  fixture->metadata.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+  fixture->metadata.kind = TURBO_FLOW_RESOURCE_CONNECTION;
+  memcpy(fixture->metadata.uid, PACKET_SINK_RESOURCE_UID, sizeof(PACKET_SINK_RESOURCE_UID));
+  memcpy(fixture->metadata.owner_name, "existing-owner", sizeof("existing-owner"));
+  fixture->metadata.generation = 1u;
+  fixture->metadata.observed_generation = 1u;
+  fixture->descriptor =
+      (turbo_flow_managed_boundary_descriptor_t)TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+  fixture->descriptor.domain = fixture->metadata.domain;
+  fixture->descriptor.kind = fixture->metadata.kind;
+  memcpy(fixture->descriptor.uid, fixture->metadata.uid, sizeof(PACKET_SINK_RESOURCE_UID));
+  memcpy(fixture->descriptor.owner_name, fixture->metadata.owner_name, sizeof("existing-owner"));
+  fixture->descriptor.role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SINK;
+  fixture->descriptor.capability_flags = TURBO_FLOW_MANAGED_BOUNDARY_DURABLE_SETTLEMENT;
+  check_equal(turbo_flow_content_descriptor_init(
+                  &fixture->descriptor.input, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
+                  TURBO_FLOW_CONTENT_PROFILE_GENERIC, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+                  "application/octet-stream", "existing-owner"),
+              SALTS_OK);
+  check_equal(turbo_flow_content_descriptor_declare_schema(&fixture->descriptor.input, "CNetPacket",
+                                                           "NonEmptyBytes", 1u),
+              SALTS_OK);
+  fixture->snapshot =
+      (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+  memcpy(fixture->snapshot.uid, fixture->metadata.uid, sizeof(PACKET_SINK_RESOURCE_UID));
+  fixture->snapshot.generation = 1u;
+  fixture->snapshot.observed_generation = 1u;
+  fixture->snapshot.state = TURBO_FLOW_MANAGED_BOUNDARY_REGISTERED;
+  fixture->snapshot.queue_capacity = 2u;
+}
 
 static native_io_backend_kind packet_sink_backend(void) {
 #if defined(_WIN32)
@@ -141,8 +206,8 @@ static void packet_sink_peer_error(void *user, cnet_packet_endpoint *endpoint,
   owner->status = status;
 }
 
-static int packet_sink_peer_init(packet_sink_peer_t *peer,
-                                 cnet_packet_endpoint_config *config, uint16_t *port_out) {
+static int packet_sink_peer_init(packet_sink_peer_t *peer, cnet_packet_endpoint_config *config,
+                                 uint16_t *port_out) {
   memset(peer, 0, sizeof(*peer));
   peer->status = SALTS_OK;
   config->observer.on_admit = packet_sink_peer_admit;
@@ -167,8 +232,7 @@ static void packet_sink_complete(void *ctx, const turbo_flow_publish_result_t *r
 
 static void packet_sink_complete_with_snapshot(void *ctx,
                                                const turbo_flow_publish_result_t *result) {
-  packet_sink_snapshot_completion_t *completion =
-      (packet_sink_snapshot_completion_t *)ctx;
+  packet_sink_snapshot_completion_t *completion = (packet_sink_snapshot_completion_t *)ctx;
   turbo_flow_cnet_packet_sink_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
   int snapshot_status = turbo_flow_cnet_packet_sink_snapshot(completion->sink, &snapshot);
   atomic_store_explicit(&completion->snapshot_status, snapshot_status, memory_order_relaxed);
@@ -179,16 +243,19 @@ static void packet_sink_complete_with_snapshot(void *ctx,
 static void packet_sink_race_publish(void *ctx) {
   packet_sink_race_t *race = (packet_sink_race_t *)ctx;
   atomic_store_explicit(&race->publisher_ready, true, memory_order_release);
-  while (!atomic_load_explicit(&race->go, memory_order_acquire)) salts_thread_yield();
+  while (!atomic_load_explicit(&race->go, memory_order_acquire))
+    salts_thread_yield();
   race->publish_status = turbo_flow_publish_async(race->flow, "input", &race->message,
-                                                   packet_sink_complete, &race->completion);
+                                                  packet_sink_complete, &race->completion);
 }
 
 static void packet_sink_race_stop(void *ctx) {
   packet_sink_race_t *race = (packet_sink_race_t *)ctx;
   atomic_store_explicit(&race->stopper_ready, true, memory_order_release);
-  while (!atomic_load_explicit(&race->go, memory_order_acquire)) salts_thread_yield();
+  while (!atomic_load_explicit(&race->go, memory_order_acquire))
+    salts_thread_yield();
   race->stop_status = turbo_flow_stop(race->flow);
+  atomic_store_explicit(&race->stopped, true, memory_order_release);
 }
 
 static void packet_sink_datagram_ignore_receive(void *user, cnet_datagram *datagram,
@@ -201,8 +268,8 @@ static void packet_sink_datagram_ignore_receive(void *user, cnet_datagram *datag
 }
 
 static void packet_sink_datagram_ignore_send(void *user, cnet_datagram *datagram,
-                                             const cnet_datagram_peer *peer, size_t size, int status,
-                                             uint64_t tag) {
+                                             const cnet_datagram_peer *peer, size_t size,
+                                             int status, uint64_t tag) {
   (void)user;
   (void)datagram;
   (void)peer;
@@ -254,6 +321,7 @@ static void packet_sink_round_trip(cnet_packet_protocol protocol, int secure, si
   packet_sink_peer_t peer_owner;
   turbo_flow_cnet_packet_sink_t *sink = NULL;
   turbo_flow_cnet_packet_sink_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
+  turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
   packet_sink_completion_t completion;
   turbo_flow_msg_t message;
   turbo_flow_t *flow;
@@ -307,12 +375,23 @@ static void packet_sink_round_trip(cnet_packet_protocol protocol, int secure, si
     check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_OK);
     check_equal(snapshot.messages_sent, (uint64_t)(cycle + 1u));
     check_equal(snapshot.bytes_sent, (uint64_t)((cycle + 1u) * (sizeof(payload) - 1u)));
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_RUNNING);
+    check_equal(managed.accepted, (uint64_t)(cycle + 1u));
+    check_equal(managed.completed, (uint64_t)(cycle + 1u));
+    check_equal(managed.rejected, (uint64_t)0u);
     check_equal(peer_owner.receives, cycle + 1u);
     check_equal(peer_owner.payload_size, sizeof(payload) - 1u);
     check_equal(peer_owner.payload, payload, sizeof(payload) - 1u);
     if (protocol == CNET_PACKET_KCP)
       check_equal(cnet_packet_session_close(&peer_owner.endpoint, peer_owner.session), SALTS_OK);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
+    managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_STOPPED);
+    check_equal(managed.accepted, (uint64_t)(cycle + 1u));
+    check_equal(managed.completed, (uint64_t)(cycle + 1u));
+    check_equal(managed.rejected, (uint64_t)0u);
   }
   turbo_flow_destroy(flow);
   check_equal(turbo_flow_cnet_packet_sink_destroy(sink), SALTS_OK);
@@ -328,6 +407,56 @@ spec("TurboFlow CNet packet terminal sink") {
     check_equal(snapshot.size, TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_V1_SIZE);
     check_equal(snapshot.version, TURBO_FLOW_CNET_PACKET_SINK_API_VERSION);
     check_equal(cnet_terminal_sink_header_cpp_probe(), 0);
+  }
+
+  it("registers one atomic managed packet Sink contract") {
+    cnet_packet_endpoint_config endpoint = packet_sink_endpoint_config(CNET_PACKET_UDP);
+    turbo_flow_cnet_packet_sink_config_t config = TURBO_FLOW_CNET_PACKET_SINK_CONFIG_INIT;
+    turbo_flow_cnet_packet_sink_t *sink = NULL;
+    turbo_flow_managed_boundary_descriptor_t descriptor =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+
+    check_not_null(flow);
+    config.flow = flow;
+    config.adapter_name = "cnet.packet.out";
+    config.endpoint = &endpoint;
+    config.peer = packet_sink_peer_address(9u);
+    config.send_capacity = 2u;
+    config.max_message_bytes = 256u;
+    check_equal(turbo_flow_cnet_packet_sink_register(&config, &sink), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_count(flow), (size_t)1u);
+    check_equal(turbo_flow_resource_metadata_count(flow), (size_t)1u);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(flow, 0u, &descriptor), SALTS_OK);
+    check_equal(descriptor.domain, TURBO_FLOW_DOMAIN_IO_TRANSPORT);
+    check_equal(descriptor.kind, TURBO_FLOW_RESOURCE_CONNECTION);
+    check_equal(descriptor.uid, "cnet-packet-sink:cnet.packet.out");
+    check_equal(descriptor.owner_name, "cnet.packet.out");
+    check_equal(descriptor.role_flags, (uint32_t)TURBO_FLOW_MANAGED_BOUNDARY_SINK);
+    check_equal(descriptor.capability_flags,
+                (uint32_t)TURBO_FLOW_MANAGED_BOUNDARY_DURABLE_SETTLEMENT);
+    check_equal(descriptor.command_flags, (uint32_t)0u);
+    check_equal(descriptor.input.media_type, "application/octet-stream");
+    check_equal(descriptor.input.schema_name, "CNetPacket");
+    check_equal(descriptor.input.type_name, "NonEmptyBytes");
+    check_equal(descriptor.input.schema_version, (uint32_t)1u);
+    check_equal(descriptor.input.identity, "cnet.packet.out");
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.uid, "cnet-packet-sink:cnet.packet.out");
+    check_equal(managed.generation, (uint64_t)1u);
+    check_equal(managed.observed_generation, (uint64_t)1u);
+    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_REGISTERED);
+    check_equal(managed.queue_capacity, (uint64_t)2u);
+    check_equal(managed.queue_depth, (uint64_t)0u);
+    check_equal(managed.in_flight, (uint64_t)0u);
+    check_equal(managed.accepted, (uint64_t)0u);
+    check_equal(managed.completed, (uint64_t)0u);
+    check_equal(managed.rejected, (uint64_t)0u);
+    check_equal(managed.backpressured, 0);
+
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_packet_sink_destroy(sink), SALTS_OK);
   }
 
   it("rejects invalid bounds, observers and packet session identity before publication") {
@@ -456,9 +585,9 @@ spec("TurboFlow CNet packet terminal sink") {
     check_equal(snapshot.session_open, 1);
 
     packet_sink_message(&message, "previous-generation-terminal");
-    check_equal(turbo_flow_publish_async(flow, "input", &message, packet_sink_complete,
-                                         &completion),
-                SALTS_OK);
+    check_equal(
+        turbo_flow_publish_async(flow, "input", &message, packet_sink_complete, &completion),
+        SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
@@ -474,9 +603,9 @@ spec("TurboFlow CNet packet terminal sink") {
     atomic_store_explicit(&completion.calls, 0u, memory_order_release);
     atomic_store_explicit(&completion.status, SALTS_EALREADY, memory_order_relaxed);
     packet_sink_message(&message, "current-generation-claim");
-    check_equal(turbo_flow_publish_async(flow, "input", &message, packet_sink_complete,
-                                         &completion),
-                SALTS_OK);
+    check_equal(
+        turbo_flow_publish_async(flow, "input", &message, packet_sink_complete, &completion),
+        SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     do {
@@ -514,14 +643,15 @@ spec("TurboFlow CNet packet terminal sink") {
 
     endpoint.kcp.mtu = 64u;
     endpoint.kcp.send_segment_capacity = 1u;
-    flow = packet_sink_flow(&endpoint, packet_sink_peer_address(9u), UINT32_C(0x12345678), 2u,
-                            &sink);
+    flow =
+        packet_sink_flow(&endpoint, packet_sink_peer_address(9u), UINT32_C(0x12345678), 2u, &sink);
     check_not_null(flow);
     atomic_init(&completion.calls, 0u);
     atomic_init(&completion.status, SALTS_EALREADY);
     packet_sink_message(&message, fragmented);
-    check_equal(turbo_flow_publish_async(flow, "input", &message, packet_sink_complete, &completion),
-                SALTS_OK);
+    check_equal(
+        turbo_flow_publish_async(flow, "input", &message, packet_sink_complete, &completion),
+        SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
@@ -541,16 +671,17 @@ spec("TurboFlow CNet packet terminal sink") {
     turbo_flow_cnet_packet_sink_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
     packet_sink_completion_t completion;
     turbo_flow_msg_t message;
-    turbo_flow_t *flow = packet_sink_flow(&endpoint, packet_sink_peer_address(9u),
-                                          UINT32_C(0x12345678), 1u, &sink);
+    turbo_flow_t *flow =
+        packet_sink_flow(&endpoint, packet_sink_peer_address(9u), UINT32_C(0x12345678), 1u, &sink);
     uint64_t deadline;
 
     check_not_null(flow);
     atomic_init(&completion.calls, 0u);
     atomic_init(&completion.status, SALTS_EALREADY);
     packet_sink_message(&message, "pending-kcp");
-    check_equal(turbo_flow_publish_async(flow, "input", &message, packet_sink_complete, &completion),
-                SALTS_OK);
+    check_equal(
+        turbo_flow_publish_async(flow, "input", &message, packet_sink_complete, &completion),
+        SALTS_OK);
     turbo_flow_msg_cleanup(&message);
 
     deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
@@ -576,17 +707,17 @@ spec("TurboFlow CNet packet terminal sink") {
     turbo_flow_cnet_packet_sink_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
     packet_sink_completion_t completion;
     turbo_flow_msg_t message;
-    turbo_flow_t *flow = packet_sink_flow(&endpoint, packet_sink_peer_address(9u),
-                                          UINT32_C(0x12345678), 1u, &sink);
+    turbo_flow_t *flow =
+        packet_sink_flow(&endpoint, packet_sink_peer_address(9u), UINT32_C(0x12345678), 1u, &sink);
     uint64_t deadline;
 
     check_not_null(flow);
     atomic_init(&completion.calls, 0u);
     atomic_init(&completion.status, SALTS_EALREADY);
     packet_sink_message(&message, "stop-error-retry");
-    check_equal(turbo_flow_publish_async(flow, "input", &message, packet_sink_complete,
-                                         &completion),
-                SALTS_OK);
+    check_equal(
+        turbo_flow_publish_async(flow, "input", &message, packet_sink_complete, &completion),
+        SALTS_OK);
     turbo_flow_msg_cleanup(&message);
 
     deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
@@ -622,8 +753,8 @@ spec("TurboFlow CNet packet terminal sink") {
     turbo_flow_cnet_packet_sink_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
     cnet_datagram_config attacker_config = CNET_DATAGRAM_CONFIG_INIT;
     cnet_datagram attacker = {0};
-    turbo_flow_t *flow = packet_sink_flow(&endpoint, packet_sink_peer_address(9u),
-                                          UINT32_C(0x12345678), 1u, &sink);
+    turbo_flow_t *flow =
+        packet_sink_flow(&endpoint, packet_sink_peer_address(9u), UINT32_C(0x12345678), 1u, &sink);
     cnet_datagram_peer target;
     size_t events = 0u;
     uint64_t deadline;
@@ -667,6 +798,7 @@ spec("TurboFlow CNet packet terminal sink") {
     packet_sink_completion_t second;
     turbo_flow_msg_t first_message;
     turbo_flow_msg_t second_message;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
     turbo_flow_t *flow = packet_sink_flow(&endpoint, packet_sink_peer_address(9u), 0u, 1u, &sink);
     uint64_t deadline;
 
@@ -677,8 +809,9 @@ spec("TurboFlow CNet packet terminal sink") {
     atomic_init(&second.status, SALTS_EALREADY);
     packet_sink_message(&first_message, "first");
     packet_sink_message(&second_message, "second");
-    check_equal(turbo_flow_publish_async(flow, "input", &first_message, packet_sink_complete, &first),
-                SALTS_OK);
+    check_equal(
+        turbo_flow_publish_async(flow, "input", &first_message, packet_sink_complete, &first),
+        SALTS_OK);
     check_equal(
         turbo_flow_publish_async(flow, "input", &second_message, packet_sink_complete, &second),
         SALTS_OK);
@@ -697,6 +830,97 @@ spec("TurboFlow CNet packet terminal sink") {
     check_equal(atomic_load_explicit(&first.calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&first.status, memory_order_acquire), SALTS_ECANCELED);
     check_equal(atomic_load_explicit(&second.calls, memory_order_acquire), (size_t)1u);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_STOPPED);
+    check_equal(managed.queue_capacity, (uint64_t)1u);
+    check_equal(managed.queue_depth, (uint64_t)0u);
+    check_equal(managed.in_flight, (uint64_t)0u);
+    check_equal(managed.accepted, (uint64_t)1u);
+    check_equal(managed.completed, (uint64_t)1u);
+    check_equal(managed.rejected, (uint64_t)1u);
+    check_equal(managed.backpressured, 0);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_packet_sink_destroy(sink), SALTS_OK);
+  }
+
+  it("rolls back the staged adapter when the managed UID already exists") {
+    cnet_packet_endpoint_config endpoint = packet_sink_endpoint_config(CNET_PACKET_UDP);
+    packet_sink_boundary_fixture_t fixture;
+    turbo_flow_managed_boundary_provider_ops_t boundary_ops =
+        TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
+    turbo_flow_cnet_packet_sink_t *sink = NULL;
+    turbo_flow_cnet_packet_sink_config_t config = TURBO_FLOW_CNET_PACKET_SINK_CONFIG_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+
+    check_not_null(flow);
+    packet_sink_boundary_fixture_init(&fixture);
+    boundary_ops.resource.metadata = packet_sink_boundary_metadata;
+    boundary_ops.descriptor = packet_sink_boundary_descriptor;
+    boundary_ops.snapshot = packet_sink_boundary_snapshot;
+    check_equal(turbo_flow_register_managed_boundary_provider(flow, "existing-owner", &boundary_ops,
+                                                              &fixture),
+                SALTS_OK);
+    config.flow = flow;
+    config.adapter_name = "cnet.packet.out";
+    config.endpoint = &endpoint;
+    config.send_capacity = 2u;
+    config.peer = packet_sink_peer_address(9u);
+    config.max_message_bytes = 256u;
+    config.stop_timeout_ms = PACKET_SINK_TEST_TIMEOUT_MS;
+    check_equal(turbo_flow_cnet_packet_sink_register(&config, &sink), SALTS_EALREADY);
+    check_null(sink);
+    check_null(turbo_flow_find_adapter_schema(flow, "cnet.packet.out"));
+    check_equal(turbo_flow_managed_boundary_count(flow), (size_t)1u);
+    check_equal(turbo_flow_resource_metadata_count(flow), (size_t)1u);
+
+    turbo_flow_destroy(flow);
+  }
+
+  it("reports full capacity N and rejects N+1 before exact stop settlement") {
+    enum { CAPACITY = 3, PUBLISH_COUNT = CAPACITY + 1 };
+    cnet_packet_endpoint_config endpoint = packet_sink_endpoint_config(CNET_PACKET_UDP);
+    turbo_flow_cnet_packet_sink_t *sink = NULL;
+    packet_sink_completion_t completions[PUBLISH_COUNT];
+    turbo_flow_t *flow =
+        packet_sink_flow(&endpoint, packet_sink_peer_address(9u), 0u, CAPACITY, &sink);
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    uint64_t deadline;
+    check_not_null(flow);
+    for (size_t index = 0u; index < PUBLISH_COUNT; ++index) {
+      turbo_flow_msg_t message;
+      atomic_init(&completions[index].calls, 0u);
+      atomic_init(&completions[index].status, SALTS_EALREADY);
+      packet_sink_message(&message, "bounded-packet");
+      check_equal(turbo_flow_publish_async(flow, "input", &message, packet_sink_complete,
+                                           &completions[index]),
+                  SALTS_OK);
+      turbo_flow_msg_cleanup(&message);
+    }
+    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    while (atomic_load_explicit(&completions[CAPACITY].calls, memory_order_acquire) == 0u &&
+           salts_monotonic_ms() < deadline)
+      salts_sleep_ms(1u);
+    check_equal(atomic_load_explicit(&completions[CAPACITY].calls, memory_order_acquire),
+                (size_t)1u);
+    check_equal(atomic_load_explicit(&completions[CAPACITY].status, memory_order_acquire),
+                SALTS_ENOSPC);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.accepted, (uint64_t)CAPACITY);
+    check_equal(managed.completed, (uint64_t)0u);
+    check_equal(managed.rejected, (uint64_t)1u);
+    check_equal(managed.queue_depth + managed.in_flight, (uint64_t)CAPACITY);
+    check_equal(managed.queue_capacity, (uint64_t)CAPACITY);
+    check_equal(managed.backpressured, 1);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.completed, (uint64_t)CAPACITY);
+    check_equal(managed.queue_depth + managed.in_flight, (uint64_t)0u);
+    for (size_t index = 0u; index < CAPACITY; ++index) {
+      check_equal(atomic_load_explicit(&completions[index].calls, memory_order_acquire),
+                  (size_t)1u);
+      check_equal(atomic_load_explicit(&completions[index].status, memory_order_acquire),
+                  SALTS_ECANCELED);
+    }
     turbo_flow_destroy(flow);
     check_equal(turbo_flow_cnet_packet_sink_destroy(sink), SALTS_OK);
   }
@@ -711,8 +935,7 @@ spec("TurboFlow CNet packet terminal sink") {
       salts_thread_t stopper = NULL;
 
       memset(&race, 0, sizeof(race));
-      race.flow =
-          packet_sink_flow(&endpoint, packet_sink_peer_address(9u), 0u, 1u, &sink);
+      race.flow = packet_sink_flow(&endpoint, packet_sink_peer_address(9u), 0u, 1u, &sink);
       check_not_null(race.flow);
       packet_sink_message(&race.message, "publish-stop-race");
       atomic_init(&race.completion.calls, 0u);
@@ -720,6 +943,7 @@ spec("TurboFlow CNet packet terminal sink") {
       atomic_init(&race.publisher_ready, false);
       atomic_init(&race.stopper_ready, false);
       atomic_init(&race.go, false);
+      atomic_init(&race.stopped, false);
       race.publish_status = SALTS_EALREADY;
       race.stop_status = SALTS_EALREADY;
 
@@ -729,23 +953,48 @@ spec("TurboFlow CNet packet terminal sink") {
              !atomic_load_explicit(&race.stopper_ready, memory_order_acquire))
         salts_thread_yield();
       atomic_store_explicit(&race.go, true, memory_order_release);
+      {
+        turbo_flow_managed_boundary_snapshot_t previous = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+        do {
+          turbo_flow_managed_boundary_snapshot_t current =
+              TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+          int snapshot_status = turbo_flow_managed_boundary_snapshot_at(race.flow, 0u, &current);
+          check_true(snapshot_status == SALTS_OK || snapshot_status == SALTS_EBUSY);
+          if (snapshot_status == SALTS_OK) {
+            check_true(current.accepted >= previous.accepted);
+            check_true(current.completed >= previous.completed);
+            check_true(current.rejected >= previous.rejected);
+            check_true(current.completed <= current.accepted);
+            check_true(current.queue_depth + current.in_flight <= current.queue_capacity);
+            previous = current;
+          }
+          salts_thread_yield();
+        } while (!atomic_load_explicit(&race.stopped, memory_order_acquire));
+      }
       check_equal(salts_thread_join(&publisher), SALTS_OK);
       check_equal(salts_thread_join(&stopper), SALTS_OK);
       salts_thread_destroy(&publisher);
       salts_thread_destroy(&stopper);
 
       check_equal(race.stop_status, SALTS_OK);
+      {
+        turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+        check_equal(turbo_flow_managed_boundary_snapshot_at(race.flow, 0u, &managed), SALTS_OK);
+        check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_STOPPED);
+        check_equal(managed.accepted, managed.completed);
+        check_equal(managed.queue_depth + managed.in_flight, (uint64_t)0u);
+      }
       capture(race.publish_status, "%d");
       check_true(race.publish_status == SALTS_OK || race.publish_status == SALTS_ESHUTDOWN ||
                  race.publish_status == SALTS_EINVAL);
       if (race.publish_status == SALTS_OK) {
         check_equal(atomic_load_explicit(&race.completion.calls, memory_order_acquire), (size_t)1u);
         capture(race.completion.status, "%d");
-        check_true(atomic_load_explicit(&race.completion.status, memory_order_acquire) == SALTS_OK ||
-                   atomic_load_explicit(&race.completion.status, memory_order_acquire) ==
-                       SALTS_ECANCELED ||
-                   atomic_load_explicit(&race.completion.status, memory_order_acquire) ==
-                       SALTS_ESHUTDOWN);
+        check_true(
+            atomic_load_explicit(&race.completion.status, memory_order_acquire) == SALTS_OK ||
+            atomic_load_explicit(&race.completion.status, memory_order_acquire) ==
+                SALTS_ECANCELED ||
+            atomic_load_explicit(&race.completion.status, memory_order_acquire) == SALTS_ESHUTDOWN);
       } else {
         check_equal(atomic_load_explicit(&race.completion.calls, memory_order_acquire), (size_t)0u);
       }
