@@ -97,6 +97,7 @@ typedef struct flow_adapter_registration_s {
   turbo_flow_adapter_schema_t schema;
   turbo_flow_option_field_t *schema_fields;
   vec_t operation_bindings;
+  int managed_source;
 } flow_adapter_registration_t;
 
 typedef struct flow_resource_registration_s {
@@ -133,6 +134,7 @@ typedef struct flow_module_registration_s {
 typedef struct flow_active_adapter_s {
   uint32_t stage_index;
   size_t adapter_index;
+  turbo_flow_run_t *managed_source_run;
   int stopped;
 } flow_active_adapter_t;
 
@@ -657,6 +659,7 @@ int flow_publish_message_entered(turbo_flow_t *flow, const char *source_name,
                                  flow_async_publication_t *async_publication);
 int flow_run_open_internal(turbo_flow_t *flow, const char *source_name, cflow_publisher *publisher,
                            const turbo_flow_run_config_t *config, int drain_on_stop,
+                           int managed_source_start,
                            turbo_flow_run_t **run_out);
 int flow_pool_record_add(turbo_flow_t *flow, turbo_flow_pool_kind_t kind, uint32_t stage_index,
                          uint32_t parallelism, uint64_t queue_capacity, uint64_t resource_capacity,
@@ -682,6 +685,7 @@ int flow_start_executor_adapters(turbo_flow_t *flow);
 void flow_stop_runtime_executor_adapters(turbo_flow_t *flow);
 void flow_stop_executor_adapters(turbo_flow_t *flow);
 int flow_start_adapters(turbo_flow_t *flow);
+void flow_close_managed_source_runs(turbo_flow_t *flow);
 int flow_stop_non_source_adapters(turbo_flow_t *flow);
 int flow_stop_source_adapters(turbo_flow_t *flow);
 int flow_stop_adapters(turbo_flow_t *flow);

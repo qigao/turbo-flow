@@ -46,6 +46,13 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
+  test_flow_managed_source
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_managed_source.c
+  LIBS TurboFlow::Flow Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  FOLDER "turbo_flow/tests")
+
+cmake_add_test(
   test_flow_expr
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_expr.c
   LIBS TurboFlow::Flow Salts::TinyTest
@@ -117,7 +124,7 @@ cmake_add_test(
 
 set_tests_properties(
   test_turbo_flow test_flow_async_terminal test_flow_async_emit test_flow_resource_document test_flow_managed_boundary test_flow_config test_flow_compat_boundary
-  test_resolved_config_boundary
+  test_flow_managed_source test_resolved_config_boundary
   PROPERTIES LABELS "graph;core")
 
 if(WIN32)

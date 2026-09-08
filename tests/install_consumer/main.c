@@ -40,6 +40,8 @@ int main(void) {
       TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
   turbo_flow_managed_async_terminal_registration_t managed_terminal_registration =
       TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_INIT;
+  turbo_flow_managed_source_registration_t managed_source_registration =
+      TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_INIT;
   turbo_flow_async_terminal_claim_t terminal_claim = TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
   turbo_flow_async_terminal_adapter_ops_t terminal_ops = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
   turbo_flow_async_emit_claim_t emit_claim = TURBO_FLOW_ASYNC_EMIT_CLAIM_INIT;
@@ -78,6 +80,12 @@ int main(void) {
   int (*managed_terminal_register)(
       turbo_flow_t *, const turbo_flow_managed_async_terminal_registration_t *) =
       turbo_flow_register_managed_async_terminal_adapter;
+  int (*managed_source_register)(turbo_flow_t *,
+                                 const turbo_flow_managed_source_registration_t *) =
+      turbo_flow_register_managed_source_adapter;
+  int (*managed_source_run_open)(turbo_flow_t *, const turbo_flow_stage_plan_t *,
+                                 cflow_publisher *, const turbo_flow_run_config_t *,
+                                 turbo_flow_run_t **) = turbo_flow_managed_source_run_open;
   int (*listener_open)(const turbo_flow_cnet_listener_source_config_t *,
                        turbo_flow_cnet_listener_source_t **) = turbo_flow_cnet_listener_source_open;
   int (*listener_request)(turbo_flow_cnet_listener_source_t *, size_t) =
@@ -166,8 +174,13 @@ int main(void) {
       boundary_ops.version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION ||
       managed_terminal_registration.version !=
           TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_API_VERSION ||
+      managed_source_registration.version != TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_API_VERSION ||
       !managed_terminal_register ||
       managed_terminal_register(flow, &managed_terminal_registration) != SALTS_EINVAL ||
+      !managed_source_register ||
+      managed_source_register(flow, &managed_source_registration) != SALTS_EINVAL ||
+      !managed_source_run_open ||
+      managed_source_run_open(flow, NULL, NULL, NULL, NULL) != SALTS_EINVAL ||
       turbo_flow_register_managed_boundary_provider(flow, "invalid", &boundary_ops, NULL) !=
           SALTS_EINVAL ||
       turbo_flow_managed_boundary_count(flow) != 0u ||

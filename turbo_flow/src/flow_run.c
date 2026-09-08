@@ -25,6 +25,7 @@ struct turbo_flow_run_s {
   int terminal;
   atomic_int registered;
   int drain_on_stop;
+  int managed_source;
   size_t pending_values;
   int upstream_done;
   int pending_status;
@@ -189,6 +190,7 @@ static void flow_run_async_value_finish(void *user, const turbo_flow_publish_res
   if (!run || !result) return;
   salts_mutex_lock(&run->mutex);
   if (run->pending_values > 0u) --run->pending_values;
+  if (run->pending_values == 0u) salts_cond_broadcast(&run->cond);
   if (!run->terminal) {
     if (result->status == SALTS_OK) {
       ++run->values;
@@ -354,11 +356,18 @@ static int flow_run_graph_init(turbo_flow_run_t *run) {
   return SALTS_OK;
 }
 
-static int flow_run_registry_add(turbo_flow_t *flow, turbo_flow_run_t *run) {
+static int flow_run_registry_add(turbo_flow_t *flow, turbo_flow_run_t *run,
+                                 int managed_source_start) {
   int rc = SALTS_OK;
   salts_mutex_lock(&flow->runtime_mutex);
-  if (flow->state != TURBO_FLOW_STATE_STARTED || flow->admission_state != FLOW_ADMISSION_OPEN ||
-      !flow->reactive_scheduler_initialized) {
+  if (!flow->reactive_scheduler_initialized ||
+      (!managed_source_start &&
+       (flow->state != TURBO_FLOW_STATE_STARTED ||
+        flow->admission_state != FLOW_ADMISSION_OPEN)) ||
+      (managed_source_start &&
+       ((flow->state != TURBO_FLOW_STATE_COMPILED && flow->state != TURBO_FLOW_STATE_STOPPED) ||
+        (flow->admission_state != FLOW_ADMISSION_CLOSED &&
+         flow->admission_state != FLOW_ADMISSION_STOPPING)))) {
     rc = flow->admission_state == FLOW_ADMISSION_STOPPING ? SALTS_ESHUTDOWN : SALTS_EINVAL;
   } else if (vec_size(&flow->active_runs) >= flow->async_ingress_config.queue_capacity) {
     rc = SALTS_ENOSPC;
@@ -374,6 +383,7 @@ static int flow_run_registry_add(turbo_flow_t *flow, turbo_flow_run_t *run) {
 int flow_run_open_internal(turbo_flow_t *flow, const char *source_name,
                            cflow_publisher *publisher,
                            const turbo_flow_run_config_t *config, int drain_on_stop,
+                           int managed_source_start,
                            turbo_flow_run_t **run_out) {
   turbo_flow_run_config_t effective = TURBO_FLOW_RUN_CONFIG_INIT;
   turbo_flow_run_t *run = NULL;
@@ -394,7 +404,21 @@ int flow_run_open_internal(turbo_flow_t *flow, const char *source_name,
     }
     effective = *config;
   }
-  rc = flow_publish_enter(flow);
+  if (managed_source_start) {
+    salts_mutex_lock(&flow->runtime_mutex);
+    if ((flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STOPPED) &&
+        (flow->admission_state == FLOW_ADMISSION_CLOSED ||
+         flow->admission_state == FLOW_ADMISSION_STOPPING) &&
+        flow->reactive_scheduler_initialized) {
+      ++flow->active_publishes;
+      rc = SALTS_OK;
+    } else {
+      rc = SALTS_EINVAL;
+    }
+    salts_mutex_unlock(&flow->runtime_mutex);
+  } else {
+    rc = flow_publish_enter(flow);
+  }
   if (rc != SALTS_OK) {
     return flow_set_error_keep_state(flow, rc, 0, 0,
                                      rc == SALTS_ESHUTDOWN
@@ -436,6 +460,7 @@ int flow_run_open_internal(turbo_flow_t *flow, const char *source_name,
   run->status = SALTS_OK;
   run->pending_status = SALTS_OK;
   run->drain_on_stop = drain_on_stop != 0;
+  run->managed_source = managed_source_start != 0;
   if (!cflow_scheduler_valid(run->scheduler)) {
     rc = SALTS_EINVAL;
     goto cleanup;
@@ -468,7 +493,7 @@ int flow_run_open_internal(turbo_flow_t *flow, const char *source_name,
     salts_mutex_unlock(&run->mutex);
   }
 
-  rc = flow_run_registry_add(flow, run);
+  rc = flow_run_registry_add(flow, run, managed_source_start);
   if (rc != SALTS_OK) goto cleanup;
   subscribe_result = cflow_subscribe_with_options(&run->subscription, &run->graph, publisher,
                                                   run->scheduler, &run->subscriber, NULL);
@@ -501,8 +526,8 @@ cleanup:
 }
 
 int turbo_flow_run_open(turbo_flow_t *flow, const char *source_name, cflow_publisher *publisher,
-                        const turbo_flow_run_config_t *config, turbo_flow_run_t **run_out) {
-  return flow_run_open_internal(flow, source_name, publisher, config, 0, run_out);
+                         const turbo_flow_run_config_t *config, turbo_flow_run_t **run_out) {
+  return flow_run_open_internal(flow, source_name, publisher, config, 0, 0, run_out);
 }
 
 int turbo_flow_run_request(turbo_flow_run_t *run, size_t demand) {
@@ -581,12 +606,19 @@ int turbo_flow_run_cancel(turbo_flow_run_t *run) {
 
 void turbo_flow_run_close(turbo_flow_run_t *run) {
   int terminal;
+  int managed_source;
   if (!run) return;
   salts_mutex_lock(&run->mutex);
   terminal = run->terminal;
+  managed_source = run->managed_source;
   salts_mutex_unlock(&run->mutex);
   if (!terminal) (void)flow_run_cancel_with_status(run, SALTS_ECANCELED);
   cflow_subscription_close(&run->subscription);
+  if (managed_source) {
+    salts_mutex_lock(&run->mutex);
+    while (run->pending_values > 0u) salts_cond_wait(&run->cond, &run->mutex);
+    salts_mutex_unlock(&run->mutex);
+  }
   flow_run_registry_remove(run);
   flow_run_release(run);
 }
@@ -618,7 +650,7 @@ void flow_reactive_runtime_cancel(turbo_flow_t *flow) {
       for (size_t i = 0u; i < vec_size(&flow->active_runs); ++i) {
         turbo_flow_run_t *const *entry =
             (turbo_flow_run_t *const *)vec_at_const(&flow->active_runs, i);
-        if (entry && *entry && !(*entry)->drain_on_stop) {
+        if (entry && *entry && !(*entry)->drain_on_stop && !(*entry)->managed_source) {
           run = *entry;
           flow_run_retain(run);
           break;

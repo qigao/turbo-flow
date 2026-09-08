@@ -1534,6 +1534,28 @@ typedef struct turbo_flow_managed_async_terminal_registration_s {
    NULL,                                                                                           \
    NULL}
 
+#define TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_API_VERSION 1u
+
+/**
+ * One explicit owner contract for a Source adapter and its managed boundary.
+ * Names, schema, and descriptor are copied during registration. Callback code
+ * and `ctx` remain valid until registry teardown after a successful call.
+ */
+typedef struct turbo_flow_managed_source_registration_s {
+  size_t size;
+  uint32_t version;
+  const char *adapter_name;
+  const turbo_flow_adapter_ops_t *adapter_ops;
+  const turbo_flow_adapter_schema_t *schema;
+  const char *owner_name;
+  const turbo_flow_managed_boundary_provider_ops_t *boundary_ops;
+  void *ctx;
+} turbo_flow_managed_source_registration_t;
+
+#define TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_INIT                                               \
+  {sizeof(turbo_flow_managed_source_registration_t),                                              \
+   TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_API_VERSION, NULL, NULL, NULL, NULL, NULL, NULL}
+
 /**
  * Atomically register one native adapter and bind its executable operations to
  * their module owner. The registry copies all names and schemas; callback and
@@ -2092,6 +2114,19 @@ TURBO_FLOW_C_API int turbo_flow_run_open(turbo_flow_t *flow, const char *source_
                                          const turbo_flow_run_config_t *config,
                                          turbo_flow_run_t **run_out);
 
+/**
+ * Open the Flow-owned run for the exact managed Source whose synchronous start callback is active.
+ *
+ * This function succeeds at most once for that callback and never opens global Flow admission.
+ * On success CFlow takes `publisher`, clears it, and `*run_out` is a borrowed handle owned by the
+ * Flow. The Source may request, inspect, wait for, or cancel that handle while its owner is live,
+ * but must not call `turbo_flow_run_close()` on it. Calls outside the matching callback, from a
+ * different thread, with a copied stage view, or after one successful open fail with SALTS_EINVAL.
+ */
+TURBO_FLOW_C_API int turbo_flow_managed_source_run_open(
+    turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage, cflow_publisher *publisher,
+    const turbo_flow_run_config_t *config, turbo_flow_run_t **run_out);
+
 /** Add downstream-value demand without blocking. A full Scheduler retains the demand. */
 TURBO_FLOW_C_API int turbo_flow_run_request(turbo_flow_run_t *run, size_t demand);
 
@@ -2335,6 +2370,14 @@ TURBO_FLOW_C_API int turbo_flow_register_async_terminal_adapter_ex(
 TURBO_FLOW_C_API int turbo_flow_register_managed_async_terminal_adapter(
     turbo_flow_t *flow,
     const turbo_flow_managed_async_terminal_registration_t *registration);
+
+/**
+ * Atomically register a Source adapter and exactly one explicitly managed
+ * Source boundary for the same owner context. Failure leaves both registries
+ * unchanged and retains caller ownership of `registration->ctx`.
+ */
+TURBO_FLOW_C_API int turbo_flow_register_managed_source_adapter(
+    turbo_flow_t *flow, const turbo_flow_managed_source_registration_t *registration);
 
 /** Atomically register a transform adapter with an asynchronous 0..1-output contract. */
 TURBO_FLOW_C_API int turbo_flow_register_async_emit_adapter_ex(
