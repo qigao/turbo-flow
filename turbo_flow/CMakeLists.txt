@@ -30,7 +30,8 @@ file(GLOB TURBO_FLOW_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*
 list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c)
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c)
 set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_export.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow.h
@@ -44,6 +45,7 @@ list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_co
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config_limits.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_generation.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_protocol.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resolved_config.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_security.h)
@@ -128,8 +130,10 @@ target_link_libraries(turbo_flow_product PUBLIC TurboFlow::Graph TurboFlow::Conf
 
 add_library(turbo_flow_plugin_host SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c
   ${PROJECT_SOURCE_DIR}/ingress/protocol/common/src/flow_protocol_registry.c
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_generation.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_protocol.h)
 cmake_config_target(
   turbo_flow_plugin_host

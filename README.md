@@ -17,7 +17,7 @@ typed projection、调度、可观测性，以及可选的通用存储 adapter�
 | `TurboFlow::Config` | 解析并校验产品配置，生成只读 resolved config |
 | `TurboFlow::Graph` | Graph DSL、编译、执行和通用 operation/adapter API |
 | `TurboFlow::Product` | 用 resolved config 装配 Graph 与本仓库 adapters |
-| `TurboFlow::PluginHost` | 通过统一 DLL vtable 事务注册 Product/Protocol/Business capabilities，并以 catalog lease 保护模块生命周期 |
+| `TurboFlow::PluginHost` | 通过统一 DLL vtable 事务注册 Product/Protocol/Business capabilities，编译 Graph generation，并以 lease 保护模块生命周期 |
 | `TurboFlow::Flow` | 兼容聚合 target；新代码优先链接最小 target |
 | `TurboFlow::ProtocolIngress` | 可选 protocol codec/runtime，不依赖 MQTT broker |
 | `TurboFlow::ProtocolIngressGraph` | 将中立协议消息投递到 `TurboFlow::Graph` |
@@ -28,6 +28,18 @@ typed projection、调度、可观测性，以及可选的通用存储 adapter�
 
 所有构建开关只在 `CMakeOptions.cmake` 声明。不得在子目录新增隐藏 option，也不得把外部产品源码、
 协议状态机或安装组件重新并入本仓库。
+
+## DLL Graph generation
+
+Gateway 的外部能力只通过 `TurboFlow::PluginHost` 加载：CNet、CHTTP、TurboDB、FlowMQ、
+RulesForge/TurboScript 与控制/Raft bridge 均注册 size/versioned 的纯 C vtable，不由 Graph 静态选择
+实现。一次 generation 先冻结 catalog snapshot，对所有 Graph 引用执行无副作用 preflight，并预留
+有界 owner 存储；全部成功后才消费 parsed Graph，按 resource、adapter 顺序 materialize 并 compile。
+
+materialize 开始后失败会销毁整张新 Graph，并通过 DLL owner vtable 逆序回收已转移对象；不会调用
+legacy Product provider 兜底。运行方以 generation lease 包住 CFlow run 和异步 callback。退休顺序为
+owner quiesce、Graph stop、owner drain、owner shutdown、Graph destroy、owner destroy、snapshot release；
+生命周期失败保留可重试状态，DLL 在最后一个 snapshot/lease 释放前不可卸载。
 
 ## Reactive run
 

@@ -1,5 +1,6 @@
 #include "tinytest.h"
 #include "turbo_flow_plugin.h"
+#include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_plugin_protocol.h"
 
 #include <string.h>
@@ -64,6 +65,12 @@
 #ifndef FLOW_PLUGIN_FIXTURE_MISSING_SYMBOL
   #error FLOW_PLUGIN_FIXTURE_MISSING_SYMBOL is required
 #endif
+#ifndef FLOW_PLUGIN_FIXTURE_TRANSACTIONAL
+  #error FLOW_PLUGIN_FIXTURE_TRANSACTIONAL is required
+#endif
+#ifndef FLOW_PLUGIN_FIXTURE_TRANSACTIONAL_DUPLICATE_KIND
+  #error FLOW_PLUGIN_FIXTURE_TRANSACTIONAL_DUPLICATE_KIND is required
+#endif
 
 #define FLOW_PLUGIN_TEST_MAX_EVENTS 64u
 
@@ -116,6 +123,77 @@ static void flow_plugin_test_check_event(const flow_plugin_test_probe_t *probe, 
 }
 
 spec("unified PluginHost") {
+  it("atomically snapshots transactional adapter and resource providers") {
+    flow_plugin_test_probe_t probe = {0};
+    turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 1u, 0u, 0u);
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_plugin_transactional_product_catalog_v1_t catalog =
+        TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
+    turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
+    turbo_flow_plugin_host_t *host = NULL;
+
+    config.transactional_adapter_provider_capacity = 1u;
+    config.transactional_resource_provider_capacity = 1u;
+    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, FLOW_PLUGIN_FIXTURE_TRANSACTIONAL, &error),
+                SALTS_OK);
+    check_equal(turbo_flow_plugin_host_transactional_adapter_provider_count(host), 1u);
+    check_equal(turbo_flow_plugin_host_transactional_resource_provider_count(host), 1u);
+    check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &error), SALTS_OK);
+    check_equal(
+        turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog),
+        SALTS_OK);
+    check_equal(catalog.adapter_provider_count, 1u);
+    check_equal(catalog.resource_provider_count, 1u);
+    check_equal(catalog.adapter_providers[0].kind, "fixture.transactional.adapter");
+    check_equal(catalog.resource_providers[0].kind, "fixture.transactional.resource");
+
+    turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
+  }
+
+  it("rolls back transactional providers on bounded capacity exhaustion") {
+    const size_t adapter_capacities[] = {0u, 1u};
+    const size_t resource_capacities[] = {1u, 0u};
+    for (size_t i = 0u; i < 2u; ++i) {
+      flow_plugin_test_probe_t probe = {0};
+      turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 1u, 0u, 0u);
+      turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      turbo_flow_plugin_host_t *host = NULL;
+      config.transactional_adapter_provider_capacity = adapter_capacities[i];
+      config.transactional_resource_provider_capacity = resource_capacities[i];
+
+      check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
+      check_equal(turbo_flow_plugin_host_load(host, FLOW_PLUGIN_FIXTURE_TRANSACTIONAL, &error),
+                  SALTS_ENOSPC);
+      check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_REGISTRATION);
+      check_equal(turbo_flow_plugin_host_module_count(host), 0u);
+      check_equal(turbo_flow_plugin_host_transactional_adapter_provider_count(host), 0u);
+      check_equal(turbo_flow_plugin_host_transactional_resource_provider_count(host), 0u);
+      check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
+    }
+  }
+
+  it("rejects one kind shared by legacy and transactional catalogs") {
+    flow_plugin_test_probe_t probe = {0};
+    turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 2u, 1u, 1u);
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_plugin_host_t *host = NULL;
+    config.transactional_adapter_provider_capacity = 1u;
+    config.transactional_resource_provider_capacity = 1u;
+
+    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, FLOW_PLUGIN_FIXTURE_GOOD_ONE, &error), SALTS_OK);
+    check_equal(
+        turbo_flow_plugin_host_load(host, FLOW_PLUGIN_FIXTURE_TRANSACTIONAL_DUPLICATE_KIND, &error),
+        SALTS_EALREADY);
+    check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_REGISTRATION);
+    check_equal(turbo_flow_plugin_host_module_count(host), 1u);
+    check_equal(turbo_flow_plugin_host_transactional_adapter_provider_count(host), 0u);
+    check_equal(turbo_flow_plugin_host_transactional_resource_provider_count(host), 0u);
+    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
+  }
+
   it("rejects zero module capacity before allocating a host") {
     flow_plugin_test_probe_t probe = {0};
     turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 0u, 1u, 1u);

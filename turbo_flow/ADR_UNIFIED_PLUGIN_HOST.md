@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for #65 and extended by #67 as implementation slices of #63.
+Accepted for #65 and extended by #67 and #70 as implementation slices of #63.
 
 ## Context
 
@@ -20,7 +20,8 @@ library calls therefore remain isolated in this PluginHost adapter and do not en
 Add `TurboFlow::PluginHost`, with one canonical export named `turbo_flow_plugin_get_api`. The root
 API and every host/registration/config/error structure are pure C and size/versioned. ABI minor 0
 supports Product adapter/resource providers. ABI minor 1 adds typed Protocol/Business registration
-and snapshot catalogs without changing the root symbol or ABI major. Later ABI-minor extensions may
+and snapshot catalogs. ABI minor 2 adds separate transactional Product factories and Graph
+generation ownership without changing the root symbol or ABI major. Later ABI-minor extensions may
 add typed operation and schema registration.
 
 Plugin loading is a control-plane transaction:
@@ -33,6 +34,19 @@ open explicit DLL -> resolve root symbol -> validate root API -> plugin load
 Any failure discards staged entries, shuts down and destroys a produced plugin instance, then unloads
 the DLL. Duplicate plugin IDs or provider kinds and every capacity violation fail before commit.
 
+Gateway Graph assembly is a second transaction:
+
+```text
+snapshot catalog -> validate every referenced resource/adapter -> reserve owner slots
+  -> run every resource/adapter preflight -> move parsed Graph
+  -> materialize resources -> materialize adapters -> compile -> publish generation
+```
+
+Preflight cannot mutate the Graph. Before materialization, failure leaves the parsed Graph with the
+caller. Once materialization begins, failure destroys the new Graph and all transferred owners in
+reverse order; the legacy Product provider catalog is never a fallback. Exactly one owner vtable is
+required per successful factory call, and that DLL destroys the opaque object it created.
+
 A catalog snapshot copies every committed typed provider descriptor and holds one lease on every
 module represented by those descriptors. Protocol/Business registries retain that snapshot rather
 than owning DLL handles. A Graph generation owner retains the snapshot until its adapters,
@@ -41,13 +55,19 @@ resources, protocol owners, CFlow runs, pending claims, and callbacks have drain
 and unload in reverse load order. A failed quiesce/shutdown leaves the host allocated in an explicit
 retryable state; it never unloads code that may still be callable.
 
+Generation retirement is caller-serialized and retryable. An explicit lease covers every active
+CFlow run or asynchronous callback. With no leases, owners quiesce in reverse order, Graph stops,
+owners drain and shut down in reverse order, Graph is destroyed, owners are destroyed in reverse
+order, and only then is the catalog snapshot released. A successful lifecycle transition is not
+repeated after a later callback fails.
+
 ## Consequences
 
 - Architecture: Config and Graph remain unaware of DLLs. Product and Protocol consume read-only
   provider views; PluginHost owns module handles, lifecycle, committed catalogs, and generation
   leases. The specialized Protocol/Business loaders and direct registry mutation APIs are removed.
 - Interface: a new additive installed C ABI and CMake component are introduced. Existing Product
-  calls remain source-compatible.
+  calls remain source-compatible but are embedded-only and are not accepted by Gateway generation.
 - State: PluginHost is the sole fact source for module state and lease counts. Snapshot arrays are
   derived immutable copies.
 - Errors: file, symbol, ABI, identity, lifecycle, callback, duplicate, and capacity failures report a

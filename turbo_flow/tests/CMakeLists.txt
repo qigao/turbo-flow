@@ -243,9 +243,157 @@ turbo_flow_add_plugin_fixture(
 add_library(test_flow_plugin_missing_symbol SHARED plugin_fixture_missing_symbol.c)
 set_target_properties(test_flow_plugin_missing_symbol PROPERTIES FOLDER "turbo_flow/tests/plugin-fixtures")
 
+add_library(test_flow_plugin_transactional SHARED plugin_generation_fixture.c)
+target_link_libraries(test_flow_plugin_transactional PRIVATE TurboFlow::Product)
+target_compile_definitions(test_flow_plugin_transactional PRIVATE TURBO_FLOW_PLUGIN_BUILD)
+set_target_properties(
+  test_flow_plugin_transactional
+  PROPERTIES C_VISIBILITY_PRESET hidden
+             VISIBILITY_INLINES_HIDDEN YES
+             FOLDER "turbo_flow/tests/plugin-fixtures")
+
+add_library(test_flow_plugin_transactional_duplicate_kind SHARED plugin_generation_fixture.c)
+target_link_libraries(test_flow_plugin_transactional_duplicate_kind PRIVATE TurboFlow::Product)
+target_compile_definitions(
+  test_flow_plugin_transactional_duplicate_kind
+  PRIVATE TURBO_FLOW_PLUGIN_BUILD
+          FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.transactional-duplicate-kind"
+          FLOW_PLUGIN_GENERATION_ADAPTER_KIND="fixture.adapter.one")
+set_target_properties(
+  test_flow_plugin_transactional_duplicate_kind
+  PROPERTIES C_VISIBILITY_PRESET hidden
+             VISIBILITY_INLINES_HIDDEN YES
+             FOLDER "turbo_flow/tests/plugin-fixtures")
+
+function(turbo_flow_add_generation_fixture target_name)
+  add_library(${target_name} SHARED plugin_generation_fixture.c)
+  target_link_libraries(${target_name} PRIVATE TurboFlow::Product)
+  target_compile_definitions(${target_name} PRIVATE TURBO_FLOW_PLUGIN_BUILD ${ARGN})
+  set_target_properties(
+    ${target_name}
+    PROPERTIES C_VISIBILITY_PRESET hidden
+               VISIBILITY_INLINES_HIDDEN YES
+               FOLDER "turbo_flow/tests/plugin-fixtures")
+endfunction()
+
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_capacity
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-capacity"
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=0
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=0
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=0)
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_preflight_fail
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-preflight-fail"
+  FLOW_PLUGIN_GENERATION_FAIL_PREFLIGHT_CALL=1
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=0
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=0)
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_success
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-success"
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2)
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_duplicate_reference
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-duplicate-reference"
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=1)
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_materialize_first_fail
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-materialize-first-fail"
+  FLOW_PLUGIN_GENERATION_FAIL_MATERIALIZE_CALL=1
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=0
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="")
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_materialize_second_fail
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-materialize-second-fail"
+  FLOW_PLUGIN_GENERATION_FAIL_MATERIALIZE_CALL=2
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="x1")
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_compile_fail
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-compile-fail"
+  FLOW_PLUGIN_GENERATION_SKIP_ADAPTER_REGISTRATION_CALL=2
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="x2x1")
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_lifecycle
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-lifecycle"
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q2q1d2d1s2s1x2x1"
+  FLOW_PLUGIN_GENERATION_EXPECT_STOPPED_ON_DRAIN=1)
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_quiesce_once
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-quiesce-once"
+  FLOW_PLUGIN_GENERATION_FAIL_QUIESCE_CALL=1
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q2q2q1d2d1s2s1x2x1"
+  FLOW_PLUGIN_GENERATION_EXPECT_STOPPED_ON_DRAIN=1)
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_drain_once
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-drain-once"
+  FLOW_PLUGIN_GENERATION_FAIL_DRAIN_CALL=1
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q2q1d2d2d1s2s1x2x1"
+  FLOW_PLUGIN_GENERATION_EXPECT_STOPPED_ON_DRAIN=1)
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_shutdown_once
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-shutdown-once"
+  FLOW_PLUGIN_GENERATION_FAIL_SHUTDOWN_CALL=1
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q2q1d2d1s2s2s1x2x1"
+  FLOW_PLUGIN_GENERATION_EXPECT_STOPPED_ON_DRAIN=1)
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_quiesce_timeout
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-quiesce-timeout"
+  FLOW_PLUGIN_GENERATION_FAIL_QUIESCE_CALL=1
+  FLOW_PLUGIN_GENERATION_LIFECYCLE_FAIL_STATUS=SALTS_ETIMEDOUT
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q2q2q1d2d1s2s1x2x1"
+  FLOW_PLUGIN_GENERATION_EXPECT_STOPPED_ON_DRAIN=1)
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_drain_timeout
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-drain-timeout"
+  FLOW_PLUGIN_GENERATION_FAIL_DRAIN_CALL=1
+  FLOW_PLUGIN_GENERATION_LIFECYCLE_FAIL_STATUS=SALTS_ETIMEDOUT
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q2q1d2d2d1s2s1x2x1"
+  FLOW_PLUGIN_GENERATION_EXPECT_STOPPED_ON_DRAIN=1)
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_resource_order
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-resource-order"
+  FLOW_PLUGIN_GENERATION_SKIP_ADAPTER_REGISTRATION_CALL=2
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_ASSEMBLY="prpamrma"
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="x2x1")
+
 cmake_add_test(
   test_flow_plugin_host
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_plugin_host.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/plugin_generation_header_cpp.cpp
   LIBS TurboFlow::PluginHost Salts::TinyTest
   FOLDER "turbo_flow/tests")
 target_compile_definitions(
@@ -269,6 +417,8 @@ target_compile_definitions(
           FLOW_PLUGIN_FIXTURE_CAPABILITY_MISMATCH="$<TARGET_FILE:test_flow_plugin_capability_mismatch>"
           FLOW_PLUGIN_FIXTURE_INVALID_PROVIDER="$<TARGET_FILE:test_flow_plugin_invalid_provider>"
           FLOW_PLUGIN_FIXTURE_INVALID_PROVIDER_ABI="$<TARGET_FILE:test_flow_plugin_invalid_provider_abi>"
+          FLOW_PLUGIN_FIXTURE_TRANSACTIONAL="$<TARGET_FILE:test_flow_plugin_transactional>"
+          FLOW_PLUGIN_FIXTURE_TRANSACTIONAL_DUPLICATE_KIND="$<TARGET_FILE:test_flow_plugin_transactional_duplicate_kind>"
           FLOW_PLUGIN_FIXTURE_MISSING_SYMBOL="$<TARGET_FILE:test_flow_plugin_missing_symbol>")
 add_dependencies(
   test_flow_plugin_host
@@ -291,11 +441,54 @@ add_dependencies(
   test_flow_plugin_capability_mismatch
   test_flow_plugin_invalid_provider
   test_flow_plugin_invalid_provider_abi
+  test_flow_plugin_transactional
+  test_flow_plugin_transactional_duplicate_kind
   test_flow_plugin_missing_symbol)
+
+cmake_add_test(
+  test_flow_plugin_generation
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_plugin_generation.c
+  LIBS TurboFlow::PluginHost Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+target_compile_definitions(
+  test_flow_plugin_generation
+  PRIVATE FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY="$<TARGET_FILE:test_flow_plugin_good_one>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_CAPACITY="$<TARGET_FILE:test_flow_plugin_generation_capacity>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_PREFLIGHT_FAIL="$<TARGET_FILE:test_flow_plugin_generation_preflight_fail>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_SUCCESS="$<TARGET_FILE:test_flow_plugin_generation_success>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_DUPLICATE_REFERENCE="$<TARGET_FILE:test_flow_plugin_generation_duplicate_reference>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_MATERIALIZE_FIRST_FAIL="$<TARGET_FILE:test_flow_plugin_generation_materialize_first_fail>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_MATERIALIZE_SECOND_FAIL="$<TARGET_FILE:test_flow_plugin_generation_materialize_second_fail>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_COMPILE_FAIL="$<TARGET_FILE:test_flow_plugin_generation_compile_fail>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_LIFECYCLE="$<TARGET_FILE:test_flow_plugin_generation_lifecycle>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_QUIESCE_ONCE="$<TARGET_FILE:test_flow_plugin_generation_quiesce_once>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_DRAIN_ONCE="$<TARGET_FILE:test_flow_plugin_generation_drain_once>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_SHUTDOWN_ONCE="$<TARGET_FILE:test_flow_plugin_generation_shutdown_once>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_QUIESCE_TIMEOUT="$<TARGET_FILE:test_flow_plugin_generation_quiesce_timeout>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_DRAIN_TIMEOUT="$<TARGET_FILE:test_flow_plugin_generation_drain_timeout>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_RESOURCE_ORDER="$<TARGET_FILE:test_flow_plugin_generation_resource_order>")
+add_dependencies(
+  test_flow_plugin_generation
+  test_flow_plugin_good_one
+  test_flow_plugin_generation_capacity
+  test_flow_plugin_generation_preflight_fail
+  test_flow_plugin_generation_success
+  test_flow_plugin_generation_duplicate_reference
+  test_flow_plugin_generation_materialize_first_fail
+  test_flow_plugin_generation_materialize_second_fail
+  test_flow_plugin_generation_compile_fail
+  test_flow_plugin_generation_lifecycle
+  test_flow_plugin_generation_quiesce_once
+  test_flow_plugin_generation_drain_once
+  test_flow_plugin_generation_shutdown_once
+  test_flow_plugin_generation_quiesce_timeout
+  test_flow_plugin_generation_drain_timeout
+  test_flow_plugin_generation_resource_order)
 
 set_tests_properties(
   test_turbo_flow test_flow_async_terminal test_flow_async_emit test_flow_resource_document test_flow_managed_boundary test_flow_config test_flow_compat_boundary
   test_flow_managed_source test_resolved_config_boundary test_flow_plugin_host
+  test_flow_plugin_generation
   PROPERTIES LABELS "graph;core")
 
 if(WIN32)

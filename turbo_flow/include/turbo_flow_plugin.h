@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 #define TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR 1u
-#define TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR 1u
+#define TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR 2u
 #define TURBO_FLOW_PLUGIN_EXPORT_SYMBOL "turbo_flow_plugin_get_api"
 
 #define TURBO_FLOW_PLUGIN_ID_MAX 127u
@@ -37,7 +37,9 @@ enum {
   TURBO_FLOW_PLUGIN_CAP_PRODUCT_ADAPTER = UINT64_C(1) << 0,
   TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE = UINT64_C(1) << 1,
   TURBO_FLOW_PLUGIN_CAP_PROTOCOL = UINT64_C(1) << 2,
-  TURBO_FLOW_PLUGIN_CAP_PROTOCOL_BUSINESS = UINT64_C(1) << 3
+  TURBO_FLOW_PLUGIN_CAP_PROTOCOL_BUSINESS = UINT64_C(1) << 3,
+  TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER = UINT64_C(1) << 4,
+  TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE = UINT64_C(1) << 5
 };
 
 typedef enum turbo_flow_plugin_error_stage_e {
@@ -104,10 +106,14 @@ typedef struct turbo_flow_plugin_host_config_s {
   void *lifecycle_observer_ctx;
   size_t protocol_provider_capacity;
   size_t business_provider_capacity;
+  size_t transactional_adapter_provider_capacity;
+  size_t transactional_resource_provider_capacity;
 } turbo_flow_plugin_host_config_t;
 
 #define TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_0_SIZE                                                    \
   offsetof(turbo_flow_plugin_host_config_t, protocol_provider_capacity)
+#define TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_1_SIZE                                                    \
+  offsetof(turbo_flow_plugin_host_config_t, transactional_adapter_provider_capacity)
 
 #define TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT                                                         \
   {sizeof(turbo_flow_plugin_host_config_t),                                                        \
@@ -119,7 +125,9 @@ typedef struct turbo_flow_plugin_host_config_s {
    NULL,                                                                                           \
    NULL,                                                                                           \
    16u,                                                                                            \
-   16u}
+   16u,                                                                                            \
+   64u,                                                                                            \
+   64u}
 
 typedef void *(*turbo_flow_plugin_host_allocate_fn)(void *ctx, size_t size);
 typedef void (*turbo_flow_plugin_host_deallocate_fn)(void *ctx, void *memory);
@@ -156,6 +164,10 @@ typedef struct turbo_flow_plugin_product_resource_provider_v1_s {
 
 typedef struct turbo_flow_plugin_protocol_provider_v1_s turbo_flow_plugin_protocol_provider_v1_t;
 typedef struct turbo_flow_plugin_business_provider_v1_s turbo_flow_plugin_business_provider_v1_t;
+typedef struct turbo_flow_plugin_transactional_adapter_provider_v1_s
+    turbo_flow_plugin_transactional_adapter_provider_v1_t;
+typedef struct turbo_flow_plugin_transactional_resource_provider_v1_s
+    turbo_flow_plugin_transactional_resource_provider_v1_t;
 
 #define TURBO_FLOW_PLUGIN_PRODUCT_RESOURCE_PROVIDER_V1_INIT                                        \
   {sizeof(turbo_flow_plugin_product_resource_provider_v1_t), TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR,  \
@@ -169,6 +181,10 @@ typedef int (*turbo_flow_plugin_add_protocol_provider_fn)(
     void *ctx, const turbo_flow_plugin_protocol_provider_v1_t *provider);
 typedef int (*turbo_flow_plugin_add_business_provider_fn)(
     void *ctx, const turbo_flow_plugin_business_provider_v1_t *provider);
+typedef int (*turbo_flow_plugin_add_transactional_adapter_provider_fn)(
+    void *ctx, const turbo_flow_plugin_transactional_adapter_provider_v1_t *provider);
+typedef int (*turbo_flow_plugin_add_transactional_resource_provider_fn)(
+    void *ctx, const turbo_flow_plugin_transactional_resource_provider_v1_t *provider);
 
 /** Registration is valid only during one root register_capabilities callback. */
 typedef struct turbo_flow_plugin_registration_v1_s {
@@ -180,6 +196,8 @@ typedef struct turbo_flow_plugin_registration_v1_s {
   turbo_flow_plugin_add_resource_provider_fn add_resource_provider;
   turbo_flow_plugin_add_protocol_provider_fn add_protocol_provider;
   turbo_flow_plugin_add_business_provider_fn add_business_provider;
+  turbo_flow_plugin_add_transactional_adapter_provider_fn add_transactional_adapter_provider;
+  turbo_flow_plugin_add_transactional_resource_provider_fn add_transactional_resource_provider;
 } turbo_flow_plugin_registration_v1_t;
 
 typedef int (*turbo_flow_plugin_load_fn)(const turbo_flow_plugin_host_v1_t *host,
@@ -242,6 +260,10 @@ TURBO_FLOW_C_API size_t
 turbo_flow_plugin_host_adapter_provider_count(const turbo_flow_plugin_host_t *host);
 TURBO_FLOW_C_API size_t
 turbo_flow_plugin_host_resource_provider_count(const turbo_flow_plugin_host_t *host);
+TURBO_FLOW_C_API size_t
+turbo_flow_plugin_host_transactional_adapter_provider_count(const turbo_flow_plugin_host_t *host);
+TURBO_FLOW_C_API size_t
+turbo_flow_plugin_host_transactional_resource_provider_count(const turbo_flow_plugin_host_t *host);
 
 /**
  * Copy an immutable Product catalog and retain every represented DLL.
