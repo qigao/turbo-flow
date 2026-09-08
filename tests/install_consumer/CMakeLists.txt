@@ -11,6 +11,7 @@ if(TURBO_FLOW_TEST_ALL_COMPONENTS)
   set(turbo_flow_test_components
       Config
       Graph
+      PluginHost
       CNetAdapter
       CHTTPAdapter
       Product
@@ -43,6 +44,7 @@ target_link_libraries(
   turbo_flow_install_consumer
   PRIVATE TurboFlow::Config
           TurboFlow::Graph
+          TurboFlow::PluginHost
           TurboFlow::CNetAdapter
           TurboFlow::CHTTPAdapter
           TurboFlow::Product

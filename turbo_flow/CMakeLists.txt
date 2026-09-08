@@ -29,7 +29,8 @@ endif()
 file(GLOB TURBO_FLOW_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c)
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c)
 set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_export.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow.h
@@ -42,6 +43,7 @@ list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_di
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config_limits.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resolved_config.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_security.h)
 
@@ -122,6 +124,23 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(turbo_flow_product PUBLIC TurboFlow::Graph TurboFlow::Config
                                         PRIVATE Salts::JsonParser)
+
+add_library(turbo_flow_plugin_host SHARED
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h)
+cmake_config_target(
+  turbo_flow_plugin_host
+  ALIAS TurboFlow::PluginHost
+  FOLDER "turbo_flow/plugin"
+  EXPORT_NAME PluginHost)
+target_compile_definitions(turbo_flow_plugin_host PRIVATE TURBO_FLOW_BUILD)
+target_include_directories(
+  turbo_flow_plugin_host
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:include>)
+target_link_libraries(turbo_flow_plugin_host
+                      PUBLIC TurboFlow::Product
+                      PRIVATE Salts::CSTL ${CMAKE_DL_LIBS})
 
 # Binary compatibility surface: keep the historical turbo_flow library and
 # its exported symbols while new consumers move to the smaller targets above.

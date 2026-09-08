@@ -1,6 +1,7 @@
 #include <turbo_flow.h>
 #include <turbo_flow_cnet.h>
 #include <turbo_flow_chttp.h>
+#include <turbo_flow_plugin.h>
 #include <string.h>
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
 #include <turbo_flow_turbodb.h>
@@ -42,6 +43,9 @@ int main(void) {
       TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_INIT;
   turbo_flow_managed_source_registration_t managed_source_registration =
       TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_INIT;
+  turbo_flow_plugin_host_config_t plugin_host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
+  turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  turbo_flow_plugin_host_t *plugin_host = NULL;
   turbo_flow_async_terminal_claim_t terminal_claim = TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
   turbo_flow_async_terminal_adapter_ops_t terminal_ops = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
   turbo_flow_async_emit_claim_t emit_claim = TURBO_FLOW_ASYNC_EMIT_CLAIM_INIT;
@@ -86,6 +90,12 @@ int main(void) {
   int (*managed_source_run_open)(turbo_flow_t *, const turbo_flow_stage_plan_t *,
                                  cflow_publisher *, const turbo_flow_run_config_t *,
                                  turbo_flow_run_t **) = turbo_flow_managed_source_run_open;
+  int (*plugin_host_create)(const turbo_flow_plugin_host_config_t *, turbo_flow_plugin_host_t **,
+                            turbo_flow_plugin_error_t *) = turbo_flow_plugin_host_create;
+  int (*plugin_host_load)(turbo_flow_plugin_host_t *, const char *, turbo_flow_plugin_error_t *) =
+      turbo_flow_plugin_host_load;
+  int (*plugin_host_destroy)(turbo_flow_plugin_host_t *, uint64_t, turbo_flow_plugin_error_t *) =
+      turbo_flow_plugin_host_destroy;
   int (*listener_open)(const turbo_flow_cnet_listener_source_config_t *,
                        turbo_flow_cnet_listener_source_t **) = turbo_flow_cnet_listener_source_open;
   int (*listener_request)(turbo_flow_cnet_listener_source_t *, size_t) =
@@ -175,6 +185,12 @@ int main(void) {
       managed_terminal_registration.version !=
           TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_API_VERSION ||
       managed_source_registration.version != TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_API_VERSION ||
+      plugin_host_config.size != sizeof(turbo_flow_plugin_host_config_t) ||
+      plugin_host_config.abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      plugin_error.size != sizeof(turbo_flow_plugin_error_t) ||
+      plugin_error.abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR != 1u || !plugin_host_create || !plugin_host_load ||
+      !plugin_host_destroy ||
       !managed_terminal_register ||
       managed_terminal_register(flow, &managed_terminal_registration) != SALTS_EINVAL ||
       !managed_source_register ||
@@ -219,6 +235,11 @@ int main(void) {
       !chttp_server_register || !chttp_server_snapshot_copy || !chttp_server_destroy ||
       !chttp_server_request_context ||
       !turbo_flow_message_type())
+    return 1;
+
+  plugin_host_config.module_capacity = 0u;
+  if (plugin_host_create(&plugin_host_config, &plugin_host, &plugin_error) != SALTS_EINVAL ||
+      plugin_host != NULL || plugin_error.stage != TURBO_FLOW_PLUGIN_STAGE_ARGUMENT)
     return 1;
 
   datagram_native.backend = install_consumer_backend();
