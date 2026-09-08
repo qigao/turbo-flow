@@ -1,15 +1,11 @@
-#include "turbo_flow_cnet.h"
+#include "turbo_flow_cnet_managed_sink.h"
 
 #include <cflow/executor.h>
 #include <cflow/io_actor.h>
 #include <salts/thread.h>
-#define XXH_INLINE_ALL
-#include <xxhash.h>
 
-#include <inttypes.h>
 #include <stdatomic.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,7 +16,6 @@ enum {
 };
 
 static const char STREAM_SINK_RESOURCE_UID_PREFIX[] = "cnet-stream-sink:";
-static const char STREAM_SINK_HASHED_OWNER_PREFIX[] = "xxh3-128:";
 static const char STREAM_SINK_SCHEMA_NAME[] = "CNetStream";
 static const char STREAM_SINK_SCHEMA_TYPE[] = "NonEmptyBytes";
 static const char STREAM_SINK_MEDIA_TYPE[] = "application/octet-stream";
@@ -35,8 +30,7 @@ struct turbo_flow_cnet_stream_sink_s {
   turbo_flow_t *flow;
   tstr adapter_name;
   tstr uri;
-  char managed_owner_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
-  char resource_uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u];
+  turbo_flow_cnet_sink_identity_t identity;
   cnet_client_config client_config;
   cnet_stream_socket_options socket_options;
   const cnet_tls_client_config *tls;
@@ -80,21 +74,8 @@ static void stream_sink_cleanup_internal(turbo_flow_cnet_stream_sink_t *sink,
                                          stream_sink_cleanup_mode_t mode);
 
 static int stream_sink_managed_identity_init(turbo_flow_cnet_stream_sink_t *sink) {
-  const size_t adapter_name_len = tstr_len(sink->adapter_name);
-  int written;
-  if (adapter_name_len <= TURBO_FLOW_RESOURCE_OWNER_MAX) {
-    memcpy(sink->managed_owner_name, sink->adapter_name, adapter_name_len + 1u);
-  } else {
-    const XXH128_hash_t hash = XXH3_128bits(sink->adapter_name, adapter_name_len);
-    written = snprintf(sink->managed_owner_name, sizeof(sink->managed_owner_name),
-                       "%s%016" PRIx64 "%016" PRIx64, STREAM_SINK_HASHED_OWNER_PREFIX, hash.high64,
-                       hash.low64);
-    if (written < 0 || (size_t)written >= sizeof(sink->managed_owner_name)) return SALTS_ERANGE;
-  }
-  written = snprintf(sink->resource_uid, sizeof(sink->resource_uid), "%s%s",
-                     STREAM_SINK_RESOURCE_UID_PREFIX, sink->managed_owner_name);
-  if (written < 0 || (size_t)written >= sizeof(sink->resource_uid)) return SALTS_ERANGE;
-  return SALTS_OK;
+  return turbo_flow_cnet_sink_identity_init(&sink->identity, sink->adapter_name,
+                                            STREAM_SINK_RESOURCE_UID_PREFIX);
 }
 
 static int stream_sink_lifecycle_init(turbo_flow_cnet_stream_sink_t *sink) {
@@ -149,8 +130,8 @@ static int stream_sink_resource_metadata(void *ctx, turbo_flow_resource_metadata
   if (!sink || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
   metadata.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
   metadata.kind = TURBO_FLOW_RESOURCE_CONNECTION;
-  memcpy(metadata.uid, sink->resource_uid, strlen(sink->resource_uid) + 1u);
-  memcpy(metadata.owner_name, sink->managed_owner_name, strlen(sink->managed_owner_name) + 1u);
+  memcpy(metadata.uid, sink->identity.uid, strlen(sink->identity.uid) + 1u);
+  memcpy(metadata.owner_name, sink->identity.owner, strlen(sink->identity.owner) + 1u);
   metadata.generation = STREAM_SINK_RESOURCE_GENERATION;
   metadata.observed_generation = STREAM_SINK_RESOURCE_GENERATION;
   *out = metadata;
@@ -165,14 +146,14 @@ static int stream_sink_managed_descriptor(void *ctx,
   if (!sink || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
   descriptor.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
   descriptor.kind = TURBO_FLOW_RESOURCE_CONNECTION;
-  memcpy(descriptor.uid, sink->resource_uid, strlen(sink->resource_uid) + 1u);
-  memcpy(descriptor.owner_name, sink->managed_owner_name, strlen(sink->managed_owner_name) + 1u);
+  memcpy(descriptor.uid, sink->identity.uid, strlen(sink->identity.uid) + 1u);
+  memcpy(descriptor.owner_name, sink->identity.owner, strlen(sink->identity.owner) + 1u);
   descriptor.role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SINK;
   descriptor.capability_flags = TURBO_FLOW_MANAGED_BOUNDARY_DURABLE_SETTLEMENT;
   descriptor.command_flags = 0u;
   rc = turbo_flow_content_descriptor_init(
       &descriptor.input, TURBO_FLOW_DOMAIN_IO_TRANSPORT, TURBO_FLOW_CONTENT_PROFILE_GENERIC,
-      TURBO_FLOW_DATA_ENCODING_OPAQUE, STREAM_SINK_MEDIA_TYPE, sink->managed_owner_name);
+      TURBO_FLOW_DATA_ENCODING_OPAQUE, STREAM_SINK_MEDIA_TYPE, sink->identity.owner);
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_content_descriptor_declare_schema(&descriptor.input, STREAM_SINK_SCHEMA_NAME,
                                                     STREAM_SINK_SCHEMA_TYPE, 1u);
@@ -206,7 +187,7 @@ static int stream_sink_managed_snapshot(void *ctx, turbo_flow_managed_boundary_s
     salts_mutex_unlock(&sink->lifecycle_mutex);
     return SALTS_EPROTO;
   }
-  memcpy(snapshot.uid, sink->resource_uid, strlen(sink->resource_uid) + 1u);
+  memcpy(snapshot.uid, sink->identity.uid, strlen(sink->identity.uid) + 1u);
   snapshot.generation = STREAM_SINK_RESOURCE_GENERATION;
   snapshot.observed_generation = STREAM_SINK_RESOURCE_GENERATION;
   snapshot.state = stream_sink_managed_state(stream_sink_state(sink), stats.active_requests);
@@ -264,22 +245,14 @@ static int stream_sink_completion_status(const cflow_io_completion *completion) 
   }
 }
 
-static void stream_sink_counter_increment(atomic_uint_fast64_t *counter) {
-  uint_fast64_t current = atomic_load_explicit(counter, memory_order_relaxed);
-  while (current != UINT64_MAX &&
-         !atomic_compare_exchange_weak_explicit(counter, &current, current + 1u,
-                                                memory_order_relaxed, memory_order_relaxed)) {
-  }
-}
-
 static int stream_sink_reject(turbo_flow_cnet_stream_sink_t *sink, int status) {
-  if (sink) stream_sink_counter_increment(&sink->rejected);
+  if (sink) turbo_flow_cnet_sink_counter_increment(&sink->rejected);
   return status;
 }
 
 static void stream_sink_submission_finish(turbo_flow_cnet_stream_sink_t *sink, bool accepted) {
   salts_mutex_lock(&sink->lifecycle_mutex);
-  stream_sink_counter_increment(accepted ? &sink->accepted : &sink->rejected);
+  turbo_flow_cnet_sink_counter_increment(accepted ? &sink->accepted : &sink->rejected);
   --sink->submissions_active;
   salts_cond_broadcast(&sink->lifecycle_cond);
   salts_mutex_unlock(&sink->lifecycle_mutex);
@@ -288,7 +261,7 @@ static void stream_sink_submission_finish(turbo_flow_cnet_stream_sink_t *sink, b
 static void stream_sink_operation_complete(stream_sink_operation_t *operation, int status) {
   if (!operation || !operation->claim._impl) return;
   if (turbo_flow_async_terminal_complete(&operation->claim, status, NULL) == SALTS_OK)
-    stream_sink_counter_increment(&operation->sink->completed);
+    turbo_flow_cnet_sink_counter_increment(&operation->sink->completed);
 }
 
 static void stream_sink_operation_release(void *user) {
@@ -754,7 +727,7 @@ int turbo_flow_cnet_stream_sink_register(const turbo_flow_cnet_stream_sink_confi
   registration.adapter_ops = &adapter_ops;
   registration.async_ops = &async_ops;
   registration.schema = &schema;
-  registration.owner_name = sink->managed_owner_name;
+  registration.owner_name = sink->identity.owner;
   registration.boundary_ops = &boundary_ops;
   registration.ctx = sink;
   rc = turbo_flow_register_managed_async_terminal_adapter(config->flow, &registration);

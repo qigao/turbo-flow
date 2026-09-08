@@ -440,8 +440,10 @@ spec("cnet_plugin") {
     check_equal(turbo_flow_plugin_generation_owner_count(generation), 6u);
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
     check_equal(turbo_flow_managed_boundary_count(turbo_flow_plugin_generation_flow(generation)),
-                5u);
+                6u);
     size_t source_boundary_count = 0u;
+    size_t sink_boundary_count = 0u;
+    bool packet_sink_found = false;
     for (size_t i = 0u;
          i < turbo_flow_managed_boundary_count(turbo_flow_plugin_generation_flow(generation));
          ++i) {
@@ -451,6 +453,22 @@ spec("cnet_plugin") {
       check_equal(turbo_flow_managed_boundary_descriptor_at(
                       turbo_flow_plugin_generation_flow(generation), i, &descriptor),
                   SALTS_OK);
+      if ((descriptor.role_flags & TURBO_FLOW_MANAGED_BOUNDARY_SINK) != 0u) {
+        ++sink_boundary_count;
+        if (strcmp(descriptor.input.schema_name, "CNetPacket") == 0) {
+          packet_sink_found = true;
+          check_equal(descriptor.capability_flags,
+                      (uint32_t)TURBO_FLOW_MANAGED_BOUNDARY_DURABLE_SETTLEMENT);
+          check_equal(turbo_flow_managed_boundary_snapshot_at(
+                          turbo_flow_plugin_generation_flow(generation), i, &boundary),
+                      SALTS_OK);
+          check_equal(boundary.state, TURBO_FLOW_MANAGED_BOUNDARY_RUNNING);
+          check_true(boundary.queue_capacity > 0u);
+          check_equal(boundary.accepted, (uint64_t)0u);
+          check_equal(boundary.completed, (uint64_t)0u);
+          check_equal(boundary.rejected, (uint64_t)0u);
+        }
+      }
       if ((descriptor.role_flags & TURBO_FLOW_MANAGED_BOUNDARY_SOURCE) == 0u) continue;
       check_equal(turbo_flow_managed_boundary_snapshot_at(
                       turbo_flow_plugin_generation_flow(generation), i, &boundary),
@@ -461,6 +479,8 @@ spec("cnet_plugin") {
       ++source_boundary_count;
     }
     check_equal(source_boundary_count, 3u);
+    check_equal(sink_boundary_count, 3u);
+    check_true(packet_sink_found);
     plugin_error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
     check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &plugin_error), SALTS_EBUSY);
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;

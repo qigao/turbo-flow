@@ -794,7 +794,21 @@ typedef struct turbo_flow_cnet_packet_sink_snapshot_s {
    0u,                                                                                             \
    0u}
 
-/** Register one fixed-peer UDP, KCP, secure-KCP, or secure-KCP/FEC terminal sink. */
+/**
+ * Register one fixed-peer UDP, KCP, secure-KCP, or secure-KCP/FEC terminal sink.
+ * config and sink_out must be non-NULL; config is copied on successful registration.
+ * Atomically publishes the async terminal adapter, resource metadata and managed
+ * Sink boundary. Failure leaves no partial registration and clears sink_out.
+ * Returns SALTS_OK, SALTS_EINVAL for invalid configuration, SALTS_EALREADY for
+ * a duplicate identity, or the allocation/registration error.
+ *
+ * The managed input is opaque application/octet-stream, CNetPacket/NonEmptyBytes
+ * schema v1, with durable settlement at UDP send completion or KCP ACK.
+ * Managed snapshots derive queue/in-flight from the Actor and return SALTS_EBUSY
+ * during admission commit. Accepted/completed/rejected counters span restarts;
+ * resource generation remains the registration identity, not a session generation.
+ * The caller retains the handle until Flow detach and successful handle destroy.
+ */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_packet_sink_register(const turbo_flow_cnet_packet_sink_config_t *config,
                                      turbo_flow_cnet_packet_sink_t **sink_out);
@@ -814,6 +828,7 @@ turbo_flow_cnet_packet_sink_poll(turbo_flow_cnet_packet_sink_t *sink, uint32_t t
  * Copy state without advancing the owner lane.
  * Returns `SALTS_EBUSY` while poll, start, or stop owns that lane, including
  * reentrant calls from terminal completion callbacks.
+ * Waits for an admission commit; returns SALTS_EPROTO if Actor statistics fail.
  */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_packet_sink_snapshot(const turbo_flow_cnet_packet_sink_t *sink,
