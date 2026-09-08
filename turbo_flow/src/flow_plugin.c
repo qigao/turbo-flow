@@ -208,11 +208,14 @@ static flow_plugin_module_handle_t flow_plugin_module_open(const char *path) {
 #ifdef _WIN32
   wchar_t wide_path[TURBO_FLOW_PLUGIN_PATH_MAX + 1u];
   int wide_size;
+  int index;
   if (!path) return NULL;
   SetLastError(ERROR_SUCCESS);
   wide_size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide_path,
                                   (int)(sizeof(wide_path) / sizeof(wide_path[0])));
   if (wide_size <= 0) return NULL;
+  for (index = 0; index < wide_size; ++index)
+    if (wide_path[index] == L'/') wide_path[index] = L'\\';
   return LoadLibraryExW(wide_path, NULL,
                         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 #else

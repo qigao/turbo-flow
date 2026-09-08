@@ -124,6 +124,12 @@ TURBO_FLOW_C_API int
 turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_config_t *config,
                                    turbo_flow_cnet_stream_source_t **source_out);
 
+/** Open from the exact Managed Source start callback; Flow owns the created run. */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_stream_source_open_managed(const turbo_flow_cnet_stream_source_config_t *config,
+                                           const turbo_flow_stage_plan_t *stage,
+                                           turbo_flow_cnet_stream_source_t **source_out);
+
 /**
  * Add graph-output demand. Network receive admission remains demand-gated.
  *
@@ -316,6 +322,12 @@ TURBO_FLOW_C_API int
 turbo_flow_cnet_listener_source_open(const turbo_flow_cnet_listener_source_config_t *config,
                                      turbo_flow_cnet_listener_source_t **source_out);
 
+/** Open from the exact Managed Source start callback; Flow owns the created run. */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_listener_source_open_managed(const turbo_flow_cnet_listener_source_config_t *config,
+                                             const turbo_flow_stage_plan_t *stage,
+                                             turbo_flow_cnet_listener_source_t **source_out);
+
 /** Add positive downstream-value demand; receive admission remains demand-gated. */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_listener_source_request(turbo_flow_cnet_listener_source_t *source, size_t demand);
@@ -453,6 +465,12 @@ typedef struct turbo_flow_cnet_packet_source_snapshot_s {
 TURBO_FLOW_C_API int
 turbo_flow_cnet_packet_source_open(const turbo_flow_cnet_packet_source_config_t *config,
                                    turbo_flow_cnet_packet_source_t **source_out);
+
+/** Open from the exact Managed Source start callback; Flow owns the created run. */
+TURBO_FLOW_C_API int
+turbo_flow_cnet_packet_source_open_managed(const turbo_flow_cnet_packet_source_config_t *config,
+                                           const turbo_flow_stage_plan_t *stage,
+                                           turbo_flow_cnet_packet_source_t **source_out);
 
 /** Add positive downstream-value demand; protocol progress is never demand-gated. */
 TURBO_FLOW_C_API int turbo_flow_cnet_packet_source_request(turbo_flow_cnet_packet_source_t *source,
@@ -627,7 +645,7 @@ typedef struct turbo_flow_cnet_datagram_sink_config_s {
    NULL,                                                                                           \
    NULL,                                                                                           \
    NULL,                                                                                           \
-   {(cnet_datagram_address_family)0, 0u, 0u, {0}},                                                \
+   {(cnet_datagram_address_family)0, 0u, 0u, {0}},                                                 \
    CNET_DATAGRAM_MAX_PAYLOAD_BYTES,                                                                \
    TURBO_FLOW_CNET_DATAGRAM_SINK_DEFAULT_ACTOR_COMMAND_CAPACITY,                                   \
    TURBO_FLOW_CNET_DATAGRAM_SINK_DEFAULT_ACTOR_MAX_STEPS_PER_POLL,                                 \
@@ -732,18 +750,18 @@ typedef struct turbo_flow_cnet_packet_sink_config_s {
 } turbo_flow_cnet_packet_sink_config_t;
 
 #define TURBO_FLOW_CNET_PACKET_SINK_CONFIG_V1_SIZE sizeof(turbo_flow_cnet_packet_sink_config_t)
-#define TURBO_FLOW_CNET_PACKET_SINK_CONFIG_INIT                                                   \
-  {TURBO_FLOW_CNET_PACKET_SINK_CONFIG_V1_SIZE,                                                    \
-   TURBO_FLOW_CNET_PACKET_SINK_API_VERSION,                                                       \
-   NULL,                                                                                          \
-   NULL,                                                                                          \
-   NULL,                                                                                          \
-   {(cnet_datagram_address_family)0, 0u, 0u, {0}},                                               \
-   0u,                                                                                            \
-   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_SEND_CAPACITY,                                             \
-   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_MAX_MESSAGE_BYTES,                                         \
-   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_ACTOR_COMMAND_CAPACITY,                                    \
-   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_ACTOR_MAX_STEPS_PER_POLL,                                  \
+#define TURBO_FLOW_CNET_PACKET_SINK_CONFIG_INIT                                                    \
+  {TURBO_FLOW_CNET_PACKET_SINK_CONFIG_V1_SIZE,                                                     \
+   TURBO_FLOW_CNET_PACKET_SINK_API_VERSION,                                                        \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   NULL,                                                                                           \
+   {(cnet_datagram_address_family)0, 0u, 0u, {0}},                                                 \
+   0u,                                                                                             \
+   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_SEND_CAPACITY,                                              \
+   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_MAX_MESSAGE_BYTES,                                          \
+   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_ACTOR_COMMAND_CAPACITY,                                     \
+   TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_ACTOR_MAX_STEPS_PER_POLL,                                   \
    TURBO_FLOW_CNET_PACKET_SINK_DEFAULT_STOP_TIMEOUT_MS}
 
 typedef struct turbo_flow_cnet_packet_sink_snapshot_s {
@@ -761,20 +779,19 @@ typedef struct turbo_flow_cnet_packet_sink_snapshot_s {
   uint64_t terminals_failed;
 } turbo_flow_cnet_packet_sink_snapshot_t;
 
-#define TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_V1_SIZE                                              \
-  sizeof(turbo_flow_cnet_packet_sink_snapshot_t)
-#define TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT                                                 \
-  {TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_V1_SIZE,                                                  \
-   TURBO_FLOW_CNET_PACKET_SINK_API_VERSION,                                                       \
-   TURBO_FLOW_CNET_PACKET_SINK_REGISTERED,                                                        \
-   SALTS_OK,                                                                                      \
-   (cnet_packet_protocol)0,                                                                       \
-   0u,                                                                                            \
-   {0u, 0u},                                                                                      \
-   0,                                                                                             \
-   0u,                                                                                            \
-   0u,                                                                                            \
-   0u,                                                                                            \
+#define TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_V1_SIZE sizeof(turbo_flow_cnet_packet_sink_snapshot_t)
+#define TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT                                                  \
+  {TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_V1_SIZE,                                                   \
+   TURBO_FLOW_CNET_PACKET_SINK_API_VERSION,                                                        \
+   TURBO_FLOW_CNET_PACKET_SINK_REGISTERED,                                                         \
+   SALTS_OK,                                                                                       \
+   (cnet_packet_protocol)0,                                                                        \
+   0u,                                                                                             \
+   {0u, 0u},                                                                                       \
+   0,                                                                                              \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   0u,                                                                                             \
    0u}
 
 /** Register one fixed-peer UDP, KCP, secure-KCP, or secure-KCP/FEC terminal sink. */

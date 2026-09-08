@@ -34,6 +34,7 @@ struct turbo_flow_cnet_stream_source_s {
   bool ready;
   bool receive_pending;
   bool publisher_destroyed;
+  bool managed_run;
   bool publisher_cancelled;
   bool has_content;
   bool message_id_exhausted;
@@ -274,7 +275,8 @@ static void stream_source_on_receive(void *user, cnet_connection connection,
   stream_source_wake(&source->value_waker);
 }
 
-static int stream_source_config_validate(const turbo_flow_cnet_stream_source_config_t *config) {
+static int stream_source_config_validate(const turbo_flow_cnet_stream_source_config_t *config,
+                                         bool managed) {
   bool is_tcp;
   bool is_tls;
   bool is_pipe;
@@ -288,7 +290,9 @@ static int stream_source_config_validate(const turbo_flow_cnet_stream_source_con
       config->max_message_bytes > config->client->receive_buffer_bytes) {
     return SALTS_EINVAL;
   }
-  if (turbo_flow_state(config->flow) != TURBO_FLOW_STATE_STARTED) return SALTS_EBUSY;
+  if ((!managed && turbo_flow_state(config->flow) != TURBO_FLOW_STATE_STARTED) ||
+      (managed && turbo_flow_state(config->flow) != TURBO_FLOW_STATE_COMPILED))
+    return SALTS_EBUSY;
   is_tcp = strncmp(config->uri, "tcp://", sizeof("tcp://") - 1u) == 0;
   is_tls = strncmp(config->uri, "tls://", sizeof("tls://") - 1u) == 0;
   is_pipe = strncmp(config->uri, "pipe://", sizeof("pipe://") - 1u) == 0;
@@ -309,7 +313,7 @@ static void stream_source_open_cleanup(turbo_flow_cnet_stream_source_t *source,
                                        cflow_publisher *publisher) {
   if (!source) return;
   if (source->run) {
-    turbo_flow_run_close(source->run);
+    if (!source->managed_run) turbo_flow_run_close(source->run);
     source->run = NULL;
   } else if (publisher && cflow_publisher_valid(publisher)) {
     cflow_publisher_destroy(publisher);
@@ -324,8 +328,9 @@ static void stream_source_open_cleanup(turbo_flow_cnet_stream_source_t *source,
   free(source);
 }
 
-int turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_config_t *config,
-                                       turbo_flow_cnet_stream_source_t **source_out) {
+static int stream_source_open_impl(const turbo_flow_cnet_stream_source_config_t *config,
+                                   const turbo_flow_stage_plan_t *managed_stage,
+                                   turbo_flow_cnet_stream_source_t **source_out) {
   turbo_flow_cnet_stream_source_t *source;
   turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
   cnet_connect_options connect_options = {0};
@@ -333,7 +338,7 @@ int turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_confi
   int rc;
   if (!source_out) return SALTS_EINVAL;
   *source_out = NULL;
-  rc = stream_source_config_validate(config);
+  rc = stream_source_config_validate(config, managed_stage != NULL);
   if (rc != SALTS_OK) return rc;
   source = (turbo_flow_cnet_stream_source_t *)calloc(1u, sizeof(*source));
   if (!source) return SALTS_ENOMEM;
@@ -343,6 +348,7 @@ int turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_confi
   source->max_message_bytes = config->max_message_bytes;
   source->scheduler_max_steps_per_poll = config->scheduler_max_steps_per_poll;
   source->next_message_id = config->first_message_id;
+  source->managed_run = managed_stage != NULL;
   turbo_flow_msg_init(&source->ready_message);
   if (!source->source_name) {
     stream_source_open_cleanup(source, &publisher);
@@ -370,14 +376,6 @@ int turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_confi
       return rc;
     }
   }
-  publisher = stream_source_publisher_as_cflow_publisher(source);
-  run_config.scheduler = &source->scheduler;
-  rc =
-      turbo_flow_run_open(config->flow, config->source_name, &publisher, &run_config, &source->run);
-  if (rc != SALTS_OK) {
-    stream_source_open_cleanup(source, &publisher);
-    return rc;
-  }
   connect_options.uri = config->uri;
   connect_options.tls = config->tls;
   connect_options.observer.on_state = stream_source_on_state;
@@ -389,8 +387,32 @@ int turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_confi
     stream_source_open_cleanup(source, &publisher);
     return rc;
   }
+  publisher = stream_source_publisher_as_cflow_publisher(source);
+  run_config.scheduler = &source->scheduler;
+  rc = managed_stage ? turbo_flow_managed_source_run_open(config->flow, managed_stage, &publisher,
+                                                          &run_config, &source->run)
+                     : turbo_flow_run_open(config->flow, config->source_name, &publisher,
+                                           &run_config, &source->run);
+  if (rc != SALTS_OK) {
+    stream_source_open_cleanup(source, &publisher);
+    return rc;
+  }
   *source_out = source;
   return SALTS_OK;
+}
+
+int turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_config_t *config,
+                                       turbo_flow_cnet_stream_source_t **source_out) {
+  return stream_source_open_impl(config, NULL, source_out);
+}
+
+int turbo_flow_cnet_stream_source_open_managed(const turbo_flow_cnet_stream_source_config_t *config,
+                                               const turbo_flow_stage_plan_t *stage,
+                                               turbo_flow_cnet_stream_source_t **source_out) {
+  if (!stage || !config || !config->source_name || !stage->name ||
+      strcmp(config->source_name, stage->name) != 0)
+    return SALTS_EINVAL;
+  return stream_source_open_impl(config, stage, source_out);
 }
 
 static void stream_source_refresh_run(turbo_flow_cnet_stream_source_t *source) {
@@ -477,7 +499,7 @@ int turbo_flow_cnet_stream_source_stop(turbo_flow_cnet_stream_source_t *source,
   if (source->state == TURBO_FLOW_CNET_STREAM_SOURCE_STOPPED) return SALTS_EALREADY;
   source->state = TURBO_FLOW_CNET_STREAM_SOURCE_STOPPING;
   if (source->run) {
-    turbo_flow_run_close(source->run);
+    if (!source->managed_run) turbo_flow_run_close(source->run);
     source->run = NULL;
   }
   stop_rc = source->client_initialized ? cnet_client_stop(&source->client, timeout_ms) : SALTS_OK;
