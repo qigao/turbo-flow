@@ -41,3 +41,15 @@ cmake_add_test(
   FOLDER "io/chttp/tests")
 set_tests_properties(test_chttp_websocket_close_fault
   PROPERTIES LABELS "chttp-adapter;graph;server;websocket")
+
+add_library(tf_chttp_client_fault_support STATIC ../src/turbo_flow_chttp.c)
+target_compile_definitions(tf_chttp_client_fault_support PRIVATE
+  chttp_async_client_stop=chttp_test_client_stop)
+target_include_directories(tf_chttp_client_fault_support PUBLIC ../include)
+target_link_libraries(tf_chttp_client_fault_support PUBLIC TurboFlow::Graph Salts::CHTTP)
+cmake_config_target(tf_chttp_client_fault_support NO_INSTALL FOLDER "io/chttp/tests")
+cmake_add_test(test_chttp_client_stop_fault
+  SOURCES test_chttp_client_stop_fault.c chttp_header_cpp.cpp
+  LIBS tf_chttp_client_fault_support Salts::TinyTest
+  FOLDER "io/chttp/tests")
+set_tests_properties(test_chttp_client_stop_fault PROPERTIES LABELS "chttp-adapter;graph")

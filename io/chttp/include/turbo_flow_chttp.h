@@ -369,7 +369,13 @@ typedef struct turbo_flow_chttp_server_snapshot_s {
    0u,                                                                                             \
    SALTS_OK}
 
-/** Registers one asynchronous 0..1 response transform before graph compilation. */
+/**
+ * Registers one asynchronous 0..1 response transform before graph compilation.
+ * Flow stop makes one bounded native stop attempt. On failure it settles pending
+ * Flow claims, reports the exact error, and retains native callback storage in
+ * FAILED state. The caller must retry turbo_flow_stop() explicitly before owner
+ * destruction; late native completions never settle a Flow claim twice.
+ */
 TURBO_FLOW_C_API int
 turbo_flow_chttp_client_register(const turbo_flow_chttp_client_config_t *config,
                                  turbo_flow_chttp_client_t **out_client);
