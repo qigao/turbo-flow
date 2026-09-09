@@ -1,36 +1,40 @@
 #include "flow_internal.h"
+#include "flow_projection_owner_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 #define FLOW_MSG_PROJECTION_MAGIC UINT64_C(0x544650524f4a5631)
 
-typedef struct flow_msg_projection_s {
-  uint64_t magic;
-  const turbo_flow_content_descriptor_t *descriptor;
-  const turbo_flow_data_schema_t *schema;
-  void *value;
-  turbo_flow_projection_clone_fn clone;
-  turbo_flow_destroy_fn destroy;
-  void *ctx;
-  turbo_flow_content_descriptor_t owned_descriptor;
-  int owns_descriptor;
-} flow_msg_projection_t;
-
 static int flow_msg_projection_empty(const flow_msg_projection_t *projection) {
   return projection && !projection->descriptor && !projection->value;
 }
 
+static turbo_flow_projection_owner_t *flow_msg_projection_release_value(
+    flow_msg_projection_t *projection) {
+  turbo_flow_projection_owner_t *owner = projection->owner;
+  if (projection->value && projection->destroy)
+    projection->destroy(projection->value, projection->ctx);
+  /* The caller returns quota after freeing or detaching the retained wrapper. */
+  projection->owner = NULL;
+  projection->value = NULL;
+  projection->schema = NULL;
+  projection->clone = NULL;
+  projection->destroy = NULL;
+  projection->ctx = NULL;
+  return owner;
+}
+
 static void flow_msg_projection_destroy(void *ptr, void *ctx) {
   flow_msg_projection_t *projection = (flow_msg_projection_t *)ptr;
+  turbo_flow_projection_owner_t *owner;
 
   (void)ctx;
   if (!projection || projection->magic != FLOW_MSG_PROJECTION_MAGIC) return;
   projection->magic = 0u;
-  if (projection->value && projection->destroy) {
-    projection->destroy(projection->value, projection->ctx);
-  }
+  owner = flow_msg_projection_release_value(projection);
   free(projection);
+  if (owner) flow_projection_owner_release(owner);
 }
 
 static const flow_msg_projection_t *flow_msg_projection(const turbo_flow_msg_t *msg) {
@@ -61,6 +65,33 @@ static int flow_msg_projection_clone(turbo_flow_msg_t *dst, const turbo_flow_msg
   int rc;
 
   if (!source) return SALTS_EINVAL;
+  if (source->owner) {
+    rc = flow_projection_owner_reserve(source->owner);
+    if (rc != SALTS_OK) return rc;
+    if (!source->clone) {
+      flow_projection_owner_release(source->owner);
+      return SALTS_ENOTSUP;
+    }
+    copy = (flow_msg_projection_t *)calloc(1, sizeof(*copy));
+    if (!copy) {
+      flow_projection_owner_release(source->owner);
+      return SALTS_ENOMEM;
+    }
+    rc = source->clone(source->value, source->ctx, &value);
+    if (value == source->value) {
+      rc = SALTS_EPROTO;
+      value = NULL;
+    } else if (rc == SALTS_OK && !value) {
+      rc = SALTS_EPROTO;
+    }
+    if (rc != SALTS_OK) {
+      if (value) source->destroy(value, source->ctx);
+      free(copy);
+      flow_projection_owner_release(source->owner);
+      return rc;
+    }
+    goto publish;
+  }
   if (source->value) {
     if (!source->clone) return SALTS_ENOTSUP;
     rc = source->clone(source->value, source->ctx, &value);
@@ -72,6 +103,7 @@ static int flow_msg_projection_clone(turbo_flow_msg_t *dst, const turbo_flow_msg
     if (value) source->destroy(value, source->ctx);
     return SALTS_ENOMEM;
   }
+publish:
   *copy = *source;
   if (copy->owns_descriptor) copy->descriptor = &copy->owned_descriptor;
   copy->value = value;
@@ -310,6 +342,24 @@ int turbo_flow_msg_bind_projection(turbo_flow_msg_t *msg, const turbo_flow_data_
   return SALTS_OK;
 }
 
+int turbo_flow_msg_bind_retained_projection(turbo_flow_msg_t *msg,
+                                            turbo_flow_projection_owner_t *owner, void *value) {
+  const turbo_flow_projection_owner_config_t *config;
+  int rc;
+  if (!msg || !owner || !value) return SALTS_EINVAL;
+  config = flow_projection_owner_config(owner);
+  rc = flow_projection_owner_reserve(owner);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_msg_bind_projection(msg, config->schema, value, config->clone,
+                                      config->destroy, config->ctx);
+  if (rc != SALTS_OK) {
+    flow_projection_owner_release(owner);
+    return rc;
+  }
+  ((flow_msg_projection_t *)msg->_content_handle)->owner = owner;
+  return SALTS_OK;
+}
+
 const void *turbo_flow_msg_projection(const turbo_flow_msg_t *msg,
                                       const turbo_flow_data_schema_t **schema_out) {
   const flow_msg_projection_t *projection = flow_msg_projection(msg);
@@ -320,39 +370,31 @@ const void *turbo_flow_msg_projection(const turbo_flow_msg_t *msg,
 
 void turbo_flow_msg_clear_projection(turbo_flow_msg_t *msg) {
   flow_msg_projection_t *projection = (flow_msg_projection_t *)flow_msg_projection(msg);
+  turbo_flow_projection_owner_t *owner;
   if (!projection || !projection->value) return;
-  projection->destroy(projection->value, projection->ctx);
-  projection->value = NULL;
-  projection->schema = NULL;
-  projection->clone = NULL;
-  projection->destroy = NULL;
-  projection->ctx = NULL;
+  owner = flow_msg_projection_release_value(projection);
   if (flow_msg_projection_empty(projection)) {
     free(projection);
     msg->_content_handle = NULL;
   }
+  if (owner) flow_projection_owner_release(owner);
 }
 
 void turbo_flow_msg_clear_content(turbo_flow_msg_t *msg) {
   flow_msg_projection_t *projection;
+  turbo_flow_projection_owner_t *owner;
   if (!msg) return;
   projection = (flow_msg_projection_t *)flow_msg_projection(msg);
   if (!projection) return;
-  if (projection->value && projection->destroy) {
-    projection->destroy(projection->value, projection->ctx);
-  }
+  owner = flow_msg_projection_release_value(projection);
   projection->descriptor = NULL;
   projection->owns_descriptor = 0;
   memset(&projection->owned_descriptor, 0, sizeof(projection->owned_descriptor));
-  projection->schema = NULL;
-  projection->value = NULL;
-  projection->clone = NULL;
-  projection->destroy = NULL;
-  projection->ctx = NULL;
   if (flow_msg_projection_empty(projection)) {
     free(projection);
     msg->_content_handle = NULL;
   }
+  if (owner) flow_projection_owner_release(owner);
 }
 
 int turbo_flow_msg_set_content_descriptor(turbo_flow_msg_t *msg,
