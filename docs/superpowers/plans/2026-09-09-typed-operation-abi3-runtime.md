@@ -153,6 +153,9 @@ Create `turbo_flow/tests/test_flow_operation_result.c`，Modify `turbo_flow/test
 **Interfaces:** 完整实现并公开spec中的bind_typed_projection/projection_data/schema_match，
 以及result_claim/commit/abort/result/clear_result；这些独立Graph API不依赖PluginHost，
 全部成功/失败路径已工作才公开。复用已有projection owner容量与同步原语。
+新增完整公开接口`turbo_flow_value_require_disjoint(const void *, size_t, const void *, size_t)`、
+`turbo_flow_result_memory_requirements(size_t, size_t, turbo_flow_result_memory_requirements_t *)`，
+成本结构及init函数按spec定义。Graph是范围判定与私有布局成本的唯一实现方。
 
 - [ ] RED：原message绑定schema A projection并拥有descriptor，result schema B；
   记录payload内容、projection指针、descriptor、settlement callback计数。
@@ -177,13 +180,26 @@ check_null(claim);
   pointer安装后清io。不在commit新分配，不清原projection。clone先完成临时组合再发布：
 
 ```c
-/* value由execute/clone创建，commit成功前仍由当前调用拥有。 */
-rc = turbo_flow_msg_result_commit(&claim, &value);
+/* output_size/input_size来自已通过schema验证的固定storage size。 */
+const int independent = turbo_flow_value_require_disjoint(
+    input_value, input_size, value, output_size);
+rc = independent == SALTS_OK ? turbo_flow_msg_result_commit(&claim, &value) : SALTS_EPROTO;
 if (rc != SALTS_OK) {
-  if (value && value != input_value) destroy_result(value, result_context);
+  if (independent == SALTS_OK) destroy_result(value, result_context);
   turbo_flow_msg_result_abort(&claim);
 }
 ```
+
+  callback本身失败时也先用同一helper得到independent，仅OK才销毁返回值；保留callback
+  首错，alias诊断写结果phase。helper不得解引用candidate；NULL/区间溢出/重叠都不destroy。
+  该示例borrowed span是当前typed input；clone以原result span代入，其他已知借用span
+  也必须全部验证通过后才允许清理，不能单独比较根指针。
+- [ ] 添加struct输入两个int32字段，DLL分别在成功/失败返回时给出第二字段地址，
+  断言EPROTO或原callback错误、destroy_result调用0次、两个输入字段原值不变、result为空、
+  abort后outstanding/retained_bytes回到调用前；clone内部地址别名同样不destroy。
+- [ ] 范围helper单测覆盖相同根、内部地址、尾部交叠、完全包含、首尾相接、独立区间、
+  NULL/0长度和UINTPTR_MAX加法溢出。查询成本单测验证O+C*(K+M)及C*R、capacity/R零、
+  SIZE_MAX容量导致乘加溢出，错误不发布部分数值；查询过程工厂和allocation计数均0。
 
 - [ ] 加clone原projection失败/result失败/alias/NULL、move、clear_content后result仍在、
   clear_result后descriptor仍在、cleanup只释放一次、已claim后stop仍可commit的测试。
@@ -244,6 +260,8 @@ Create `turbo_flow/src/flow_plugin_operation.c`、`turbo_flow/tests/test_flow_pl
 **Interfaces:** 从internal移出spec所有完整operation/result-domain声明与init函数；host
 operation_capacity、registration.add_operation、generation.operation_memory_budget_bytes；
 spec新的generation_create 8参数、operation_error/cleanup_error查询，FAILED_CLEANUP=7。
+preflight消费Task3的Graph成本查询，只在PluginHost本模块计算bridge/ledger成本H；
+不得include Graph private header或复制owner/claim/content布局进行预算计算。
 最终生产库统一编入所有已通过测试的实现，此时才接受bit8、移除非空bindings总ENOTSUP门。
 先将spec定义的`fixture.double` Graph metadata通过`turbo_flow_register_operation`注册到
 测试Graph（DATA/message→DATA/message、MESSAGE/NONE/CALL/INLINE_LANE/DATA_MUTATION、
@@ -265,6 +283,12 @@ catalog自动创建Graph operation metadata。实际typed输入由bind_typed_pro
 | max_inflight或bytes/steps超过声明，域容量不足，C<max_inflight | ENOSPC |
 | 元数据size/version非法、乘加溢出、两out别名、非READY域 | EINVAL |
 | 任意provider preflight失败 | 原错误码，全部factory0 |
+
+- [ ] 内存预算用真实Graph成本查询复算required；预算=required时通过，预算=required-1
+  时ENOSPC；Graph查询capacity乘法/加法溢出、多个binding合计溢出时EINVAL。
+  所有拒绝都断言Graph未转移、domain仍READY、两个out为NULL、全部factory计数0。
+  query返回的peak_metadata_bytes变化必须自然反映到required，不允许测试/Host维护另一
+  份硬编码Graph每槽成本。
 
 - [ ] build `test_flow_plugin_operation_runtime`再
   `ctest --preset win-dev-user -R '^test_flow_plugin_operation_runtime$' --output-on-failure`，记录RED。
@@ -291,6 +315,8 @@ static int flow_plugin_operation_charge(void *ctx, uint32_t steps) {
 - [ ] 执行顺序严格为schema验证→inflight accept→result claim→execute→首错/NULL/alias
   验证→commit/销毁临时值+abort→inflight release。每种return检查destroy计数、reservation
   回归0、原payload/descriptor/settlement未变。最近错误复制到binding mutex保护的固定槽。
+  success/failure返回输入第二字段地址均通过Task3同一范围helper处理；无法证明独立时
+  destroy0，只abort并归还reservation，不因callback返回OK就信任其拥有权。
 - [ ] 改create事务：所有preflight成功才attach和转移；所有ctx先入预留ledger。替换void
   rollback为spec同一退役流程；失败out规则用以下调用点模式同步迁移，不能丢cleanup：
 
@@ -368,6 +394,8 @@ ctest --preset win-release-user -R 'plugin_operation|plugin_result_domain|operat
 - [ ] ABI所有wrapper/host/registration/owner/query的major/minor/size拒绝：Task1/6。
 - [ ] catalog重复/容量/首错粘住/吞错/整模块回滚/来源/多TU语义：Task2。
 - [ ] 输入metadata可信绑定、原descriptor保留、结果失败原子性：Task3/5。
+- [ ] 内部地址alias无invalid free、验证与清理共享checked范围helper：Task3/5。
+- [ ] Graph唯一私有成本查询、精确预算/少一字节/乘加溢出在factory前验证：Task3/5。
 - [ ] 独立结果越过generation、clone、worker不动snapshot、busy和release重试：Task4/5。
 - [ ] preflight不移Graph、权限/effect/thread/cancel/quota拒绝、steps强制观察：Task5。
 - [ ] cleanup_out不丢、factory异常输出、Graph compile失败与逆序退役：Task5。

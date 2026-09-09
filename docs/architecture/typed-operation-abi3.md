@@ -230,6 +230,29 @@ bind_typed_projection 是可信输入适配器的声明边界，先完整验证�
 
 ```c
 typedef struct turbo_flow_result_claim_s turbo_flow_result_claim_t;
+TURBO_FLOW_C_API int turbo_flow_value_require_disjoint(
+  const void *borrowed, size_t borrowed_bytes,
+  const void *candidate, size_t candidate_bytes);
+typedef struct turbo_flow_result_memory_requirements_s {
+  size_t size;
+  uint32_t abi_major, abi_minor;
+  size_t owner_bytes;
+  size_t claim_bytes;
+  size_t message_bytes;
+  size_t peak_metadata_bytes;
+  size_t payload_bound_bytes;
+} turbo_flow_result_memory_requirements_t;
+static inline void turbo_flow_result_memory_requirements_init(
+  turbo_flow_result_memory_requirements_t *out) {
+  turbo_flow_result_memory_requirements_t initial = {0};
+  initial.size = sizeof(initial);
+  initial.abi_major = TURBO_FLOW_PROJECTION_ABI_MAJOR;
+  initial.abi_minor = TURBO_FLOW_PROJECTION_ABI_MINOR;
+  *out = initial;
+}
+TURBO_FLOW_C_API int turbo_flow_result_memory_requirements(
+  size_t capacity, size_t max_result_bytes,
+  turbo_flow_result_memory_requirements_t *out);
 TURBO_FLOW_C_API int turbo_flow_msg_result_claim(turbo_flow_msg_t *msg,
   turbo_flow_projection_owner_t *owner, const cmeta_data_desc *data,
   turbo_flow_result_claim_t **claim_out);
@@ -255,8 +278,20 @@ stop不撤销它，允许完成。abort不销毁caller value，只释放私有cl
 接受NULL。数据不允许内嵌指针，本profile没有无法检测的嵌套alias；与input根alias返回
 EPROTO且绝不可用result destroy释放输入。typed输入还要检查完整固定storage地址范围
 重叠（先验证uintptr_t加法不溢出）；指向输入内部字段的输出同样是alias，不可销毁。
-execute包装层执行此范围检查，Graph通用commit只对自己具有可信storage元数据的输入
-执行相同检查；未经typed绑定的普通projection保留原借用契约。
+范围检查的唯一实现是Graph公开`turbo_flow_value_require_disjoint`：两指针必须非NULL、
+两长度非零且可表示为uintptr_t，分别检查base<=UINTPTR_MAX-length；不满足返回EINVAL。
+两个半开区间`[base, base+length)`有交集返回EPROTO，否则OK。仅进行整数比较，不解引用
+candidate，首尾相接属于不重叠。它证明范围独立，不认证任意DLL指针是否来自合法分配。
+helper的EINVAL是范围参数错误；已验证input/layout的operation和commit边界将无效candidate
+（包括NULL、地址加法溢出）统一转换为EPROTO，避免改变成功返回NULL的既定错误语义。
+execute验证、失败输出清理、Graph commit和result clone必须调用同一个函数；只有返回OK
+才能按可信DLL独立分配契约销毁candidate。NULL、重叠或无法证明范围独立都不得destroy，
+只记录错误并abort/归还reservation；不得改用`candidate != borrowed`的另一套判定。
+execute的borrowed_bytes取可信input storage size，candidate_bytes取已验证output storage
+size；result clone取原result和output同一固定storage size。对commit可达的每个已知借用
+span都要通过此函数；未经typed绑定且无可信长度的普通projection，仅凭不同根地址不能
+证明独立，typed-result commit返回ENOTSUP，调用方仍按自身原始所有权协议处理value。
+本profile的typed输入已提供完整长度，因此不会走这条拒绝分支。
 
 clone必须先在临时目标完整clone原projection和result；任一失败销毁已成功的独立临时值，
 保留source不变，目标按现有clone失败契约清空。result clone预reserve同一owner，拒绝
@@ -301,16 +336,41 @@ host在invoke之前用独立原子inflight admission计数，满立即ENOSPC；�
 owner容量C=floor(max_retained_bytes/R)，额外受1048576上限；config要求C>=max_inflight，
 否则ENOSPC。clone与执行共用这一个Graph count/bytes事实源。没有另一份插件内收费计数。
 
-计算：result保留上限=C*R<=max_retained_bytes；预分配元数据容量的乘法必须先检查
-C<=SIZE_MAX/sizeof(slot)，再检查加法<=SIZE_MAX-current。所有bindings预算相加也checked。
+计算：result保留上限=C*R<=max_retained_bytes。Graph私有大小只能由
+`turbo_flow_result_memory_requirements(C,R,&cost)`计算，PluginHost不得复制私有结构、
+使用猜测的sizeof或硬编码每槽字节数。查询不分配、不建owner、不调用DLL，不改变状态。
+out由`turbo_flow_result_memory_requirements_init`初始化：清零后size=sizeof(T)，
+abi_major/minor使用Graph的TURBO_FLOW_PROJECTION_ABI_MAJOR/MINOR（当前1/0），不是插件3/0。
+完整size及精确版本必须匹配；有效out在参数失败时所有成本字段清零。capacity/R非零，
+所有乘加先checked，溢出或非法参数EINVAL。查询不限制capacity为1048576，以便通用Graph
+用户做预检；PluginHost另验证其profile上限。ENOMEM不能由纯查询产生。
+
+返回值单位全为字节，定义如下：O=owner_bytes为一个Graph owner的直接分配请求大小；
+K=claim_bytes为一个尚未commit的claim私有存储请求大小；M=message_bytes为一份完整
+组合content/result槽的直接分配请求大小。Graph实现从自己的最终布局计算O/K/M，
+`peak_metadata_bytes=O+C*(K+M)`，`payload_bound_bytes=C*R`。这是有界保守峰值：允许
+每个reservation同时持有claim和一个目标message槽，成功commit后claim必须立即释放；
+clone源的result占自己的reservation，目标另占一个，故不另加隐式双倍容量。原输入
+已有content仍归上游input预算；这里始终计满目标组合槽，不能因为复用而降低准入额度。
+如果实现新增Graph直接分配或改变同时存活对象数，必须同步调整查询公式和边界测试。
+这些数值是Graph直接请求的存储字节，非进程RSS；allocator元数据、Salts opaque mutex
+后端/OS内核对象不属于可由Graph sizeof计算的字节值，不得将此查询称为进程总内存硬限。
+这些外部资源仍受每owner一个mutex及C个reservation的计数上限约束。
+
+所有bindings预算相加也checked；查询输出是Graph bookkeeping的唯一成本事实源。
 session与result_context各一个/binding，descriptor max_session_bytes/max_result_context_bytes
 各1..1GiB；generation_config增加 `size_t operation_memory_budget_bytes`（默认64MiB），
-包括所有session/context声明上界及Graph claim/owner bookkeeping，不含已单独收费payload；
+包括所有session/context声明上界及Graph查询的peak_metadata_bytes，不含已单独收费payload；
 超过预算ENOSPC、算术溢出EINVAL。每个callback分配仍由可信DLL兑现声明，不能拦截native
 malloc或保证恶意DLL不超限；真实引擎必须以原生allocator/资源预算证明才能验收。
 命名常量为`TURBO_FLOW_PLUGIN_OPERATION_MEMORY_BUDGET_DEFAULT = 67108864u`；配置为0
 且有bindings时ENOSPC。domain控制面的entry数组内存按capacity预留，独立于每generation
-预算，create检查capacity*sizeof(entry)溢出；总内存上界可由两个额度相加复算。
+预算，create检查capacity*sizeof(entry)溢出；上述计费口径的存储上界可由两个额度相加复算。
+PluginHost自身的projection bridge和每binding执行/错误ledger由其实际实现计算成本H，
+同样计入operation_memory_budget_bytes，不复制Graph大小。准确准入公式为
+`required=sum(max_session_bytes + max_result_context_bytes + cost.peak_metadata_bytes + H)`。
+在所有工厂之前checked求和并比较预算；恰好required通过，required-1返回ENOSPC；
+query或合计溢出返回EINVAL。Graph数据结构与其查询共同维护，PluginHost只消费公开结果。
 
 budget是host栈上状态，charge每次steps>=1，在执行对应步骤之前调用；检查
 steps<=max_steps-used，成功才增加used。超额ENOSPC粘住，之后不能继续步骤；DLL即便
