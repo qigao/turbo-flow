@@ -239,10 +239,11 @@ int turbo_flow_resolved_config_operation_binding_at(
   size_t size;
   json_value_t *bindings, *binding, *resource, *permissions;
   const char *execution, *threading, *cancellation;
-  if (!config || !view || view->size < sizeof(*view)) return SALTS_EINVAL;
+  if (!view || view->size < sizeof(*view)) return SALTS_EINVAL;
   size = view->size;
   memset(view, 0, sizeof(*view));
   view->size = size;
+  if (!config) return SALTS_EINVAL;
   bindings = flow_operation_bindings(config);
   if (!bindings || index >= json_array_size(bindings)) return SALTS_ENOENT;
   binding = json_array_get(bindings, index);

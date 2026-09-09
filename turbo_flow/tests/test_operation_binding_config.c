@@ -433,7 +433,14 @@ spec("operation binding configuration") {
     check_equal(turbo_flow_resolved_config_operation_binding_count(NULL, &n), SALTS_EINVAL);
     check_equal(n, (size_t)0);
     check_equal(turbo_flow_resolved_config_operation_binding_count(c, NULL), SALTS_EINVAL);
+    v.operation = "sentinel";
+    v.resource = "sentinel";
+    v.permission_count = 9u;
     check_equal(turbo_flow_resolved_config_operation_binding_at(NULL, 0u, &v), SALTS_EINVAL);
+    check_equal(v.size, sizeof(v));
+    check_null(v.operation);
+    check_null(v.resource);
+    check_equal(v.permission_count, (size_t)0);
     check_equal(turbo_flow_resolved_config_operation_binding_at(c, 0u, NULL), SALTS_EINVAL);
     v.size = sizeof(v) - 1;
     v.operation = "sentinel";
