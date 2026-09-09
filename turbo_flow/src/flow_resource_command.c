@@ -1,6 +1,86 @@
 #include "flow_internal.h"
 
+#include <stdio.h>
 #include <string.h>
+
+int flow_resource_metadata_valid(const turbo_flow_resource_metadata_t *metadata) {
+  return metadata && metadata->size >= sizeof(*metadata) &&
+         metadata->domain > TURBO_FLOW_DOMAIN_NONE &&
+         metadata->domain <= TURBO_FLOW_DOMAIN_MANAGEMENT &&
+         metadata->kind >= TURBO_FLOW_RESOURCE_CONNECTION &&
+         metadata->kind <= TURBO_FLOW_RESOURCE_SECURITY_REALM && metadata->uid[0] != '\0' &&
+         memchr(metadata->uid, '\0', sizeof(metadata->uid)) != NULL &&
+         metadata->owner_name[0] != '\0' &&
+         memchr(metadata->owner_name, '\0', sizeof(metadata->owner_name)) != NULL &&
+         metadata->generation != 0u && metadata->observed_generation <= metadata->generation;
+}
+
+static atomic_uint_fast64_t flow_resource_command_sequence = 0u;
+
+static int flow_resource_next_command_key(char *key, size_t key_size) {
+  uint_fast64_t current;
+  int written;
+  if (!key || key_size == 0u) return SALTS_EINVAL;
+  current = atomic_load_explicit(&flow_resource_command_sequence, memory_order_relaxed);
+  for (;;) {
+    if (current == UINT_FAST64_MAX) return SALTS_ERANGE;
+    if (atomic_compare_exchange_weak_explicit(&flow_resource_command_sequence, &current, current + 1u,
+                                              memory_order_relaxed,
+                                              memory_order_relaxed)) {
+      break;
+    }
+  }
+  written = snprintf(key, key_size, "internal:%llu", (unsigned long long)(current + 1u));
+  return written < 0 || (size_t)written >= key_size ? SALTS_ENAMETOOLONG : SALTS_OK;
+}
+
+int flow_resource_command_init(turbo_flow_resource_command_t *resource_command,
+                                              turbo_flow_resource_command_kind_t kind,
+                                              const char *target_uid, uint64_t generation) {
+  int written;
+  int rc;
+  if (!resource_command || !target_uid || target_uid[0] == '\0' || generation == 0u) {
+    return SALTS_EINVAL;
+  }
+  *resource_command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
+  resource_command->kind = kind;
+  resource_command->expected_generation = generation;
+  written = snprintf(resource_command->target_uid, sizeof(resource_command->target_uid), "%s",
+                     target_uid);
+  if (written < 0 || (size_t)written >= sizeof(resource_command->target_uid)) {
+    return SALTS_ENAMETOOLONG;
+  }
+  rc = flow_resource_next_command_key(resource_command->idempotency_key,
+                                     sizeof(resource_command->idempotency_key));
+  return rc;
+}
+
+int flow_find_adapter_command_resource(turbo_flow_t *flow, const char *adapter_name,
+                                              turbo_flow_resource_metadata_t *metadata) {
+  int found = 0;
+  if (!flow || !adapter_name || !metadata) return SALTS_EINVAL;
+  for (size_t i = 0u; i < vec_size(&flow->resources); ++i) {
+    const flow_resource_registration_t *resource =
+        (const flow_resource_registration_t *)vec_at_const(&flow->resources, i);
+    turbo_flow_resource_metadata_t current = TURBO_FLOW_RESOURCE_METADATA_INIT;
+    int rc;
+    if (!resource || !resource->ops.command) continue;
+    rc = resource->ops.metadata(resource->ctx, &current);
+    if (rc != SALTS_OK) return rc;
+    if (!flow_resource_metadata_valid(&current) ||
+        strcmp(current.owner_name, resource->owner_name) != 0) {
+      return SALTS_EPROTO;
+    }
+    if (current.kind != TURBO_FLOW_RESOURCE_CONNECTION ||
+        strcmp(current.owner_name, adapter_name) != 0) {
+      continue;
+    }
+    if (found) return SALTS_EPROTO;
+    *metadata = current;
+    found = 1;
+  }
+  return found ? SALTS_OK : SALTS_ENOENT;
+}
 
 int flow_resource_command_valid(const turbo_flow_resource_command_t *command) {
   if (!command || command->size < sizeof(*command) ||
@@ -53,22 +133,6 @@ static int flow_resource_command_lookup(turbo_flow_t *flow,
     return result->status;
   }
   return SALTS_ENOENT;
-}
-
-static int flow_resource_command_record(turbo_flow_t *flow,
-                                        const turbo_flow_resource_command_t *command,
-                                        const turbo_flow_resource_command_result_t *result) {
-  flow_resource_command_record_t record;
-  if (vec_size(&flow->resource_command_history) >=
-      TURBO_FLOW_RESOURCE_COMMAND_HISTORY_MAX) {
-    return SALTS_ENOSPC;
-  }
-  memset(&record, 0, sizeof(record));
-  record.command = *command;
-  record.command.size = sizeof(record.command);
-  record.result = *result;
-  record.result.size = sizeof(record.result);
-  return turbo_flow_stl_error(vec_push(&flow->resource_command_history, &record));
 }
 
 static int flow_resource_metadata_find(const turbo_flow_t *flow, const char *uid, size_t *index,
@@ -149,26 +213,40 @@ static int flow_resource_apply_pool(turbo_flow_t *flow, size_t metadata_index,
   return turbo_flow_resize_pool(flow, &resize);
 }
 
-int turbo_flow_resource_command(turbo_flow_t *flow,
+static int flow_resource_command_execute(turbo_flow_t *flow,
+                                flow_resource_command_scope_t *scope,
                                 const turbo_flow_resource_command_t *command,
                                 turbo_flow_resource_command_result_t *out) {
   turbo_flow_resource_command_result_t result = TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
   turbo_flow_resource_metadata_t after = TURBO_FLOW_RESOURCE_METADATA_INIT;
   size_t metadata_index = 0u;
+  size_t record_index;
+  flow_resource_command_record_t *record_slot;
   int rc;
 
   if (!flow || !out || out->size < sizeof(*out) || !flow_resource_command_valid(command)) {
     return SALTS_EINVAL;
   }
+  if (flow->command_in_progress || flow->active_command_scope != scope) return SALTS_EBUSY;
   rc = flow_resource_command_lookup(flow, command, &result);
-  if (rc != SALTS_ENOENT) {
-    if (rc == SALTS_EPROTO) return rc;
+  if (result.replayed || rc != SALTS_ENOENT) {
+    if (!result.replayed && rc == SALTS_EPROTO) return rc;
     *out = result;
     return rc;
   }
-  if (vec_size(&flow->resource_command_history) >= TURBO_FLOW_RESOURCE_COMMAND_HISTORY_MAX)
-    return SALTS_ENOSPC;
+  if (scope && scope->remaining == 0u) return SALTS_ENOSPC;
+  record_index = vec_size(&flow->resource_command_history);
+  if (record_index >= TURBO_FLOW_RESOURCE_COMMAND_HISTORY_MAX) return SALTS_ENOSPC;
+  flow->command_in_progress = 1;
+  /* Claim raw storage before callbacks; vec_push would allocate a temporary even after reserve. */
+  rc = turbo_flow_stl_error(vec_resize(&flow->resource_command_history, record_index + 1u));
+  if (rc != SALTS_OK) {
+    flow->command_in_progress = 0;
+    return rc;
+  }
+  record_slot = (flow_resource_command_record_t *)vec_at(&flow->resource_command_history, record_index);
+  if (scope) --scope->remaining;
   if (command->deadline_ns != UINT64_MAX && salts_hrtime() >= command->deadline_ns) {
     rc = SALTS_ETIMEDOUT;
     goto record;
@@ -200,7 +278,46 @@ int turbo_flow_resource_command(turbo_flow_t *flow,
 
 record:
   result.status = rc;
-  if (flow_resource_command_record(flow, command, &result) != SALTS_OK) return SALTS_ENOSPC;
+  record_slot->command = *command;
+  record_slot->command.size = sizeof(record_slot->command);
+  record_slot->result = result;
+  flow->command_in_progress = 0;
   *out = result;
   return rc;
+}
+
+int turbo_flow_resource_command(turbo_flow_t *flow,
+                                const turbo_flow_resource_command_t *command,
+                                turbo_flow_resource_command_result_t *out) {
+  return flow_resource_command_execute(flow, NULL, command, out);
+}
+
+int flow_resource_command_scope_begin(turbo_flow_t *flow, size_t budget,
+                                      flow_resource_command_scope_t *scope) {
+  size_t used;
+  int rc;
+  if (!flow || !scope || scope->flow || scope->remaining || budget == 0u) return SALTS_EINVAL;
+  if (flow->active_command_scope || flow->command_in_progress) return SALTS_EBUSY;
+  used = vec_size(&flow->resource_command_history);
+  if (budget > TURBO_FLOW_RESOURCE_COMMAND_HISTORY_MAX - used) return SALTS_ENOSPC;
+  rc = turbo_flow_stl_error(vec_reserve(&flow->resource_command_history, used + budget));
+  if (rc != SALTS_OK) return rc;
+  scope->flow = flow;
+  scope->remaining = budget;
+  flow->active_command_scope = scope;
+  return SALTS_OK;
+}
+
+int flow_resource_command_scope_execute(flow_resource_command_scope_t *scope,
+                                        const turbo_flow_resource_command_t *command,
+                                        turbo_flow_resource_command_result_t *out) {
+  if (!scope || !scope->flow || scope->flow->active_command_scope != scope) return SALTS_EINVAL;
+  return flow_resource_command_execute(scope->flow, scope, command, out);
+}
+
+void flow_resource_command_scope_end(flow_resource_command_scope_t *scope) {
+  if (!scope || !scope->flow || scope->flow->active_command_scope != scope) return;
+  scope->flow->active_command_scope = NULL;
+  scope->flow = NULL;
+  scope->remaining = 0u;
 }

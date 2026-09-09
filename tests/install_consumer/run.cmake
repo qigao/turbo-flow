@@ -263,6 +263,21 @@ if(WIN32)
     message(FATAL_ERROR "Required dumpbin executable does not exist: ${dumpbin}")
   endif()
   execute_process(
+    COMMAND "${dumpbin}" /nologo /exports "${stage_dir}/bin/turbo_flow_graph.dll"
+    RESULT_VARIABLE graph_export_result
+    OUTPUT_VARIABLE graph_export_output
+    ERROR_VARIABLE graph_export_error)
+  if(NOT graph_export_result EQUAL 0)
+    message(FATAL_ERROR
+      "Graph export inspection failed (${graph_export_result})\n${graph_export_error}")
+  endif()
+  if(graph_export_output MATCHES "[ \t]turbo_flow_adapter_command([ \t\r\n]|$)")
+    message(FATAL_ERROR "Graph still exports the removed adapter command API")
+  endif()
+  if(NOT graph_export_output MATCHES "[ \t]turbo_flow_resource_command([ \t\r\n]|$)")
+    message(FATAL_ERROR "Graph is missing the stable resource command API")
+  endif()
+  execute_process(
     COMMAND "${dumpbin}" /nologo /exports "${installed_cnet_plugin}"
     RESULT_VARIABLE export_result
     OUTPUT_VARIABLE export_output

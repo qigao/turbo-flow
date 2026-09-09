@@ -26,6 +26,12 @@ cmake_add_test(
   LIBS TurboFlow::Graph Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
+cmake_add_test(
+  test_flow_resource_command_fault
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_resource_command_fault.c
+  LIBS TurboFlow::Graph Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  FOLDER "turbo_flow/tests")
 set_tests_properties(test_flow_projection_owner test_flow_projection_owner_fault
   PROPERTIES LABELS "graph;core" TIMEOUT 30)
 

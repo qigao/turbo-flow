@@ -16,16 +16,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifndef TURBO_FLOW_DEPRECATED
-  #if defined(_MSC_VER)
-    #define TURBO_FLOW_DEPRECATED(message) __declspec(deprecated(message))
-  #elif defined(__GNUC__) || defined(__clang__)
-    #define TURBO_FLOW_DEPRECATED(message) __attribute__((deprecated(message)))
-  #else
-    #define TURBO_FLOW_DEPRECATED(message)
-  #endif
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -867,34 +857,6 @@ typedef int (*turbo_flow_managed_boundary_descriptor_fn)(
 typedef int (*turbo_flow_managed_boundary_snapshot_fn)(
     void *ctx, turbo_flow_managed_boundary_snapshot_t *out);
 
-/** Legacy adapter-scoped command kinds retained for source and ABI compatibility. */
-typedef enum turbo_flow_adapter_command_kind_e {
-  TURBO_FLOW_ADAPTER_QUIESCE = 1,
-  TURBO_FLOW_ADAPTER_RESUME,
-  TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT
-} turbo_flow_adapter_command_kind_t;
-
-typedef struct turbo_flow_adapter_endpoint_s {
-  /** Required for network transports and ignored by path-only transports. */
-  const char *host;
-  int port;
-  /** Required for path-only transports; optional protocol path otherwise. */
-  const char *path;
-} turbo_flow_adapter_endpoint_t;
-
-/**
- * Legacy adapter-scoped command payload.
- *
- * New controllable adapters expose a stable resource provider and accept
- * turbo_flow_resource_command_t through its command callback.
- */
-typedef struct turbo_flow_adapter_command_s {
-  /** Set to sizeof(turbo_flow_adapter_command_t). */
-  size_t size;
-  turbo_flow_adapter_command_kind_t kind;
-  turbo_flow_adapter_endpoint_t endpoint;
-} turbo_flow_adapter_command_t;
-
 typedef enum turbo_flow_resource_command_kind_e {
   TURBO_FLOW_RESOURCE_COMMAND_QUIESCE = 1,
   TURBO_FLOW_RESOURCE_COMMAND_RESUME,
@@ -1113,9 +1075,6 @@ typedef struct turbo_flow_resource_provider_registration_s {
   {sizeof(turbo_flow_resource_provider_registration_t), NULL,                                      \
    TURBO_FLOW_RESOURCE_PROVIDER_OPS_INIT, NULL}
 
-typedef int (*turbo_flow_adapter_command_fn)(void *ctx, turbo_flow_t *flow,
-                                             const turbo_flow_adapter_command_t *command);
-
 typedef int (*turbo_flow_settlement_apply_fn)(void *ctx, turbo_flow_t *flow,
                                               const turbo_flow_stage_plan_t *stage,
                                               const turbo_flow_msg_t *msg,
@@ -1206,11 +1165,6 @@ typedef struct turbo_flow_adapter_ops_s {
   void (*shutdown)(void *ctx);
   /** Optional lock-free or internally synchronized connection/resource snapshot. */
   turbo_flow_adapter_connection_snapshot_fn connection_snapshot;
-  /**
-   * @deprecated Compatibility callback for adapters without a stable resource provider.
-   * New controllable adapters implement turbo_flow_resource_provider_ops_t::command.
-   */
-  turbo_flow_adapter_command_fn command;
 } turbo_flow_adapter_ops_t;
 
 /**
@@ -2485,7 +2439,16 @@ TURBO_FLOW_C_API const turbo_flow_resource_schema_t *
 turbo_flow_resource_governance_schema(turbo_flow_domain_t domain,
                                       turbo_flow_resource_kind_t resource_kind,
                                       turbo_flow_resource_document_kind_t document_kind);
-/** Execute one generation-checked idempotent resource command. Hosts serialize lifecycle calls. */
+/**
+ * Execute one generation-checked idempotent resource command.
+ * Hosts serialize resource commands, discovery, control and lifecycle on the flow.
+ * Callbacks must not reenter commands or modify the registry/history/lifecycle;
+ * command reentry or an active internal discovery scope returns SALTS_EBUSY.
+ * New commands claim history storage before metadata/owner callbacks. Exhausted
+ * history returns SALTS_ENOSPC and allocation failure SALTS_ENOMEM without effects.
+ * Replay does not allocate or consume history. History remains bounded by
+ * TURBO_FLOW_RESOURCE_COMMAND_HISTORY_MAX; records are not evicted to admit work.
+ */
 TURBO_FLOW_C_API int turbo_flow_resource_command(turbo_flow_t *flow,
                                           const turbo_flow_resource_command_t *command,
                                           turbo_flow_resource_command_result_t *result);
@@ -2503,19 +2466,6 @@ TURBO_FLOW_C_API int turbo_flow_resize_workflow_tick(turbo_flow_t *flow,
                                               turbo_flow_resize_workflow_result_t *result);
 /** Retry the explicitly failed step with a new idempotency attempt. */
 TURBO_FLOW_C_API int turbo_flow_resize_workflow_retry(turbo_flow_resize_workflow_state_t *state);
-/**
- * Execute one adapter-owned command by registry binding name on a STARTED flow.
- *
- * @deprecated Register a command-capable stable resource with
- * turbo_flow_register_adapter_with_resources() and dispatch a
- * turbo_flow_resource_command_t through turbo_flow_resource_command(). This
- * entry point remains available for source and ABI compatibility.
- */
-TURBO_FLOW_C_API TURBO_FLOW_DEPRECATED(
-    "use turbo_flow_resource_command() with a stable resource "
-    "provider") int turbo_flow_adapter_command(turbo_flow_t *flow, const char *adapter_name,
-                                               const turbo_flow_adapter_command_t *command);
-
 /** Return registry-owned metadata valid until reset without keep_registry or destroy. */
 TURBO_FLOW_C_API const turbo_flow_adapter_schema_t *turbo_flow_adapter_schema_at(const turbo_flow_t *flow,
                                                                           size_t index);
