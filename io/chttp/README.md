@@ -69,6 +69,16 @@ Graph detach、owner destroy、snapshot release。进入该流程后不再开放
 不要把 destroy 当作暂停 admission 的 API。失败 owner 与模块保持存活，调用者处理
 明确错误并在满足生命周期条件后重试，不吞掉 stop/drain 错误。
 
+启动失败若未取得 native 所有权，或 native cleanup 已成功，adapter snapshot
+使用既有 `STOPPED` 表示资源已停止，`last_status` 保留启动错误。此时 generation
+仍可完成 quiesce/drain/detach 并释放 owner 与 DLL；端口占用或 client 初始化
+ENOMEM 不要求先成功运行一次。client 仍只允许从 REGISTERED 启动，STOPPED
+不能重新启动；server/WebSocket 沿用原有 STOPPED 启动入口。
+若 startup cleanup 或正常 stop 失败且 native storage 仍存活，则保留
+`FAILED` 和 native 所有权，返回具体清理错误；请求计数归零不证明 callback storage
+可释放。已有 stop-failed 的显式 stop 重试与迟到回调只结算一次的契约不变，
+provider 不接受任意 FAILED 状态，也不自动重试。
+
 ## 兼容与迁移
 
 现有 Graph DSL 和直接 adapter API 不变；旧调用者不会自动转换成 plugin 配置。

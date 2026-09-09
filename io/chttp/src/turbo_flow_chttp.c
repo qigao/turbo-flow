@@ -342,8 +342,11 @@ static int chttp_adapter_start(void *ctx, turbo_flow_t *flow,
   salts_mutex_unlock(&client->mutex);
   status = chttp_async_client_init(&client->http, &client->config);
   salts_mutex_lock(&client->mutex);
-  client->state =
-      status == SALTS_OK ? TURBO_FLOW_CHTTP_CLIENT_RUNNING : TURBO_FLOW_CHTTP_CLIENT_FAILED;
+  /* Failed init owns no native callback storage. Preserve the error separately
+   * from the stopped resource state used by generation teardown. */
+  client->state = status == SALTS_OK  ? TURBO_FLOW_CHTTP_CLIENT_RUNNING
+                  : client->http.impl ? TURBO_FLOW_CHTTP_CLIENT_FAILED
+                                      : TURBO_FLOW_CHTTP_CLIENT_STOPPED;
   client->last_status = status;
   salts_mutex_unlock(&client->mutex);
   return status;

@@ -307,7 +307,69 @@ static void teardown_http_done(void *ctx, chttp_request request,
   probe->response_status = response ? response->status_code : 0u;
 }
 
+static void start_failure_destroy(const char *path, const char *yaml, const char *graph,
+                                  int client) {
+  turbo_flow_plugin_host_t *host = plugin_host(3u);
+  turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
+  turbo_flow_resolved_config_t *resolved = NULL;
+  turbo_flow_plugin_generation_t *generation = NULL;
+  turbo_flow_plugin_generation_config_t gc = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+  turbo_flow_t *flow = turbo_flow_create();
+  check_equal(turbo_flow_plugin_host_load(host, path, &pe), SALTS_OK);
+  check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &pe), SALTS_OK);
+  check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), SALTS_OK);
+  check_equal(turbo_flow_parse_string(flow, graph, strlen(graph)), SALTS_OK);
+  if (client)
+    check_equal(turbo_flow_register_stage_ex(flow, "output", plugin_sink, NULL, NULL), SALTS_OK);
+  check_equal(
+      turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &error),
+      SALTS_OK);
+  turbo_flow_resolved_config_destroy(resolved);
+  turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+  int start_status = turbo_flow_start(turbo_flow_plugin_generation_flow(generation));
+  if (client) {
+    check_equal(start_status, SALTS_ENOMEM);
+  } else {
+    check_not_equal(start_status, SALTS_OK);
+  }
+  check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &pe), SALTS_EBUSY);
+  int destroy_status = turbo_flow_plugin_generation_destroy(generation, 1000u, &error);
+  info("start failure destroy: %d %s %s", destroy_status, error.path, error.message);
+  check_equal(destroy_status, SALTS_OK);
+  check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &pe), SALTS_OK);
+}
+
 spec("chttp_plugin") {
+  it("destroys a plugin client generation after native init allocation failure") {
+    start_failure_destroy(CHTTP_DELIVERY_FIXTURE_5, client_yaml,
+                          "source input\nstage request adapter client\nstage output\nstage "
+                          "main {\n input -> request -> output\n}\n",
+                          1);
+  }
+  for (size_t kind = 0u; kind < 2u; ++kind) {
+    it(kind == 0u ? "destroys a server generation after an occupied listener start failure"
+                  : "destroys a websocket generation after an occupied listener start failure") {
+      static const char *const yamls[] = {server_yaml, websocket_yaml};
+      static const char *const graphs[] = {"source input adapter server\nstage output adapter "
+                                           "server\nstage main {\n input -> output\n}\n",
+                                           "source input adapter websocket\nstage output adapter "
+                                           "websocket\nstage main {\n input -> output\n}\n"};
+      chttp_server listener = {0};
+      chttp_server_config config = traffic_server_config();
+      uint16_t port = 0u;
+      char field[64], yaml[PLUGIN_TEST_YAML_BYTES];
+      check_equal(chttp_server_init(&listener, &config), SALTS_OK);
+      check_equal(chttp_server_start(&listener), SALTS_OK);
+      check_equal(chttp_server_port(&listener, &port), SALTS_OK);
+      snprintf(field, sizeof(field), "bind_port: %u", (unsigned)port);
+      check_equal(replace_once(yamls[kind], "bind_port: 0", field, yaml), SALTS_OK);
+      start_failure_destroy(TURBO_FLOW_CHTTP_PLUGIN_PATH, yaml, graphs[kind], 0);
+      check_equal(chttp_server_stop(&listener, 1000u), SALTS_OK);
+      check_equal(chttp_server_destroy(&listener), SALTS_OK);
+    }
+  }
   it("retains a server-owned accepted request after owner quiesce timeout and releases it on "
      "retry") {
     static const char graph[] =

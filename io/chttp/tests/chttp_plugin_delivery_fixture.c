@@ -105,9 +105,12 @@ static int delivery_quiesce(void *ctx, uint64_t timeout) {
   if (root->attempts != FIXTURE_FAIL_SECOND_OWNER || root->allocated != 2u || root->freed != 1u)
     return SALTS_EPROTO;
 #endif
-#if CHTTP_DELIVERY_MODE >= 3
+#if CHTTP_DELIVERY_MODE == 3 || CHTTP_DELIVERY_MODE == 4
   if (delivery_quiesce_attempts != 2u || root->allocated != 2u || root->freed != 1u)
     return SALTS_EPROTO;
+#endif
+#if CHTTP_DELIVERY_MODE == 5
+  if (root->allocated != 2u || root->freed != 1u) return SALTS_EPROTO;
 #endif
   return chttp_delivery_native_api()->quiesce(root->native, timeout);
 }

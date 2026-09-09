@@ -518,9 +518,14 @@ static int websocket_start_native(turbo_flow_chttp_websocket_server_t *server, u
   if (status != SALTS_OK) goto fail;
   status = chttp_server_port(&server->http, out_port);
   if (status == SALTS_OK) return SALTS_OK;
-  (void)chttp_server_stop(&server->http, 0u);
-fail:
-  (void)chttp_server_destroy(&server->http);
+  {
+    const int cleanup_status = chttp_server_stop(&server->http, server->stop_timeout_ms);
+    if (cleanup_status != SALTS_OK) return cleanup_status;
+  }
+fail: {
+  const int cleanup_status = chttp_server_destroy(&server->http);
+  if (cleanup_status != SALTS_OK) return cleanup_status;
+}
   return status;
 }
 
@@ -543,10 +548,12 @@ static int websocket_adapter_start(void *ctx, turbo_flow_t *flow,
   salts_mutex_unlock(&server->mutex);
   status = websocket_start_native(server, &port);
   salts_mutex_lock(&server->mutex);
-  server->http_initialized = status == SALTS_OK;
+  /* Native ownership survives a failed cleanup, including a failed start. */
+  server->http_initialized = server->http.impl != NULL;
   server->bound_port = status == SALTS_OK ? port : 0u;
-  server->state = status == SALTS_OK ? TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING
-                                     : TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_FAILED;
+  server->state = status == SALTS_OK         ? TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING
+                  : server->http_initialized ? TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_FAILED
+                                             : TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED;
   server->last_status = status;
   salts_mutex_unlock(&server->mutex);
   return status;
