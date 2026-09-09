@@ -580,6 +580,16 @@ static int test_adapter_consume(void *ctx, turbo_flow_t *flow, const turbo_flow_
   return SALTS_OK;
 }
 
+static int worker_adapter_consume(void *ctx, turbo_flow_t *flow,
+                                  const turbo_flow_stage_plan_t *stage, turbo_flow_msg_t *msg) {
+  atomic_int *consumed = (atomic_int *)ctx;
+  (void)flow;
+  (void)stage;
+  (void)msg;
+  atomic_fetch_add_explicit(consumed, 1, memory_order_relaxed);
+  return SALTS_OK;
+}
+
 static void test_adapter_stop(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage) {
   adapter_ctx_t *adapter = (adapter_ctx_t *)ctx;
   check_not_null(stage);
@@ -2364,6 +2374,60 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
+    it("delivers adapter-owned worker messages with default and explicit capacity") {
+      enum { EXPLICIT_CAPACITY = 16, PUBLISH_COUNT = 32, WORKER_COUNT = 2 };
+      static const char *const sources[] = {
+          "source input\nstage sink adapter test worker 2\n"
+          "stage main {\n input -> sink\n}\n",
+          "source input\nstage sink adapter test worker 2 capacity 16\n"
+          "stage main {\n input -> sink\n}\n"};
+      const uint32_t capacities[] = {FLOW_WORKER_POOL_DEFAULT_CAPACITY, EXPLICIT_CAPACITY};
+
+      for (size_t scenario = 0; scenario < sizeof(sources) / sizeof(sources[0]); ++scenario) {
+        turbo_flow_adapter_ops_t ops = {0};
+        atomic_int consumed;
+        turbo_flow_msg_t msg;
+        turbo_flow_t *flow = turbo_flow_create();
+        size_t worker_segments = 0;
+        atomic_init(&consumed, 0);
+        ops.consume = worker_adapter_consume;
+        turbo_flow_msg_init(&msg);
+        check_not_null(flow);
+        check_equal(turbo_flow_register_adapter(flow, "test", &ops, (void *)&consumed), SALTS_OK);
+        check_equal(turbo_flow_parse_string(flow, sources[scenario], strlen(sources[scenario])),
+                    SALTS_OK);
+        check_equal(turbo_flow_compile(flow), SALTS_OK);
+        int sink_index = turbo_flow_find_stage(flow, "sink");
+        check_true(sink_index >= 0);
+        const turbo_flow_operation_descriptor_t *operation =
+            turbo_flow_stage_operation_at(flow, (size_t)sink_index);
+        check_not_null(operation);
+        check_equal(operation->scope.concurrency, TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT);
+        check_equal(operation->scope.authority, TURBO_FLOW_AUTHORITY_OWNER_LOCAL);
+        check_equal(operation->execution_mask, TURBO_FLOW_OPERATION_EXEC_INLINE);
+        for (size_t index = 0; index < turbo_flow_segment_count(flow); ++index) {
+          turbo_flow_segment_plan_t segment;
+          check_equal(turbo_flow_segment_plan_at(flow, index, &segment), SALTS_OK);
+          if (segment.kind != TURBO_FLOW_SEGMENT_WORKER_POOL) continue;
+          ++worker_segments;
+          check_equal(segment.stage_index, (uint32_t)sink_index);
+          check_equal(segment.width, (uint32_t)WORKER_COUNT);
+          check_equal(segment.capacity, capacities[scenario]);
+          check_equal(segment.operation.handoff, TURBO_FLOW_HANDOFF_BOUNDED);
+          check_equal(segment.operation.backpressure, TURBO_FLOW_BACKPRESSURE_BLOCK);
+          check_equal(segment.operation.capacity, capacities[scenario]);
+        }
+        check_equal(worker_segments, (size_t)1);
+        check_equal(turbo_flow_start(flow), SALTS_OK);
+        for (size_t index = 0; index < PUBLISH_COUNT; ++index)
+          check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+        check_equal(turbo_flow_stop(flow), SALTS_OK);
+        check_equal(atomic_load_explicit(&consumed, memory_order_relaxed), PUBLISH_COUNT);
+        turbo_flow_msg_cleanup(&msg);
+        turbo_flow_destroy(flow);
+      }
+    }
+
     it("rejects pooled execution for adapter-owned consume callbacks") {
       static const char *thread_src = "source input\n"
                                       "stage sink adapter smtp exec thread workers 1\n"
@@ -2867,9 +2931,11 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_parse_string(flow, from_input, strlen(from_input)), SALTS_OK);
       flow_test_operation_t operation_42 =
           flow_test_operation_init("test.persist", noop_stage, NULL);
-      check_equal(flow_test_operation_register(flow, &operation_42), SALTS_EALREADY);
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_42.provider),
+                  SALTS_EALREADY);
       flow_test_operation_t operation_43 = flow_test_operation_init("test.fetch", noop_stage, NULL);
-      check_equal(flow_test_operation_register(flow, &operation_43), SALTS_EALREADY);
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_43.provider),
+                  SALTS_EALREADY);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "composite stage output");
 

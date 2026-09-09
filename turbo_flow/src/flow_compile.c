@@ -574,6 +574,11 @@ static void flow_resolve_core_operation(const turbo_flow_t *flow, flow_stage_pla
     operation->execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
     operation->scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
     operation->scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+    if (stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) {
+      operation->runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation->runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation->runtime.capacity = stage->data_pool_capacity;
+    }
     if (stage->retry.max_attempts > 1u) {
       operation->runtime.error_mode = TURBO_FLOW_ERROR_RETRY;
       operation->runtime.settlement = TURBO_FLOW_SETTLEMENT_RETRY;
