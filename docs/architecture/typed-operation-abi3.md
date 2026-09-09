@@ -300,6 +300,15 @@ NULL与source alias；move转移组合对象，无retain。clear_projection/clea
 复制descriptor仍只按原API复制结构，不深复制其外部借用。bytes/count在payload destroy
 返回以后才归还。结果schema来自owner复制wrapper，data来自domain pin的不可变模块。
 
+`turbo_flow_msg_retain_view(dst,src)`不共享拥有型result。只要src有result，必须在分配
+content副本、修改dst或retain buffer之前返回SALTS_EINVAL；即便此前已调用
+clear_projection或clear_content，独立result仍使该调用被拒绝。失败不改变src/dst、
+owner outstanding/retained_bytes、buffer引用计数，不调用result clone/destroy。
+携带result的消息只能用clone创建独立值，或用move转移所有权。无result时保留既有
+retain_view规则及成功路径，包括清除原projection后保留descriptor的buffer借用视图。
+依据：`flow_message.c:227`目前只检查owned_payload和原projection，`:234`浅复制content；
+不增加此准入检查会浅复制新增result/owner而不reserve，造成重复释放及额度下溢。
+
 ## 执行准入、额度与错误
 
 支持值必须 execution=SYNC(1)、threading=THREAD_SAFE(1)、cancellation=NONE(0)、

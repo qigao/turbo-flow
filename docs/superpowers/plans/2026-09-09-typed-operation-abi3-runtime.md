@@ -149,6 +149,8 @@ if (rc != SALTS_OK) {
 `turbo_flow/src/flow_internal.h`、`turbo_flow/src/flow_projection_owner.c`、
 `turbo_flow/src/flow_projection_owner_internal.h`、`turbo_flow/CMakeLists.txt`；
 Create `turbo_flow/tests/test_flow_operation_result.c`，Modify `turbo_flow/tests/CMakeLists.txt`。
+同时修改`turbo_flow/include/turbo_flow.h`的retain_view契约说明，并扩展
+`turbo_flow/tests/test_flow_plugin_projection.c`的clear→retain回归。
 
 **Interfaces:** 完整实现并公开spec中的bind_typed_projection/projection_data/schema_match，
 以及result_claim/commit/abort/result/clear_result；这些独立Graph API不依赖PluginHost，
@@ -205,6 +207,22 @@ if (rc != SALTS_OK) {
   clear_result后descriptor仍在、cleanup只释放一次、已claim后stop仍可commit的测试。
   fault注入复用`test_flow_projection_owner_fault.c`的分配器测试方法，不加生产开关。
   bind_typed_projection验证失败仍归caller，普通projection进入typed路径ENOTSUP。
+- [ ] retain_view在src有result时先返回SALTS_EINVAL，不分配副本、不修改dst、不retain
+  buffer；不可把result作为普通content字段浅复制。分别测试刚绑定result、clear_projection
+  后、clear_content后三种状态；对每次拒绝保存并比较src/dst完整有效状态、owner
+  outstanding/retained_bytes和buffer引用计数，clone/destroy callback计数均不变。
+  测试使用初始化且有可辨识id的dst，确认拒绝发生在turbo_flow_msg_init(dst)之前：
+
+```c
+/* source具有独立result，原projection已清；view是有效初始化的目标。 */
+const uint64_t before_id = view.id;
+check_equal(turbo_flow_msg_retain_view(&view, &source), SALTS_EINVAL);
+check_equal(view.id, before_id);
+check_equal(turbo_flow_msg_result(&source, NULL, NULL), result_value);
+```
+
+  保留`test_flow_plugin_projection.c`原无result、clear_projection后retain成功的测试；
+  新增clear_result后重新满足原条件的retain成功，确认普通buffer/descriptor视图不回归。
 - [ ] GREEN及相邻 `ctest --preset win-dev-user -R 'operation_result|projection_owner|message|content_descriptor' --output-on-failure`；
   commit `feat(graph): commit independent typed results atomically`。
 
@@ -394,6 +412,7 @@ ctest --preset win-release-user -R 'plugin_operation|plugin_result_domain|operat
 - [ ] ABI所有wrapper/host/registration/owner/query的major/minor/size拒绝：Task1/6。
 - [ ] catalog重复/容量/首错粘住/吞错/整模块回滚/来源/多TU语义：Task2。
 - [ ] 输入metadata可信绑定、原descriptor保留、结果失败原子性：Task3/5。
+- [ ] result存在时retain_view提前拒绝且src/dst/owner/buffer不变；无result旧路径成功：Task3。
 - [ ] 内部地址alias无invalid free、验证与清理共享checked范围helper：Task3/5。
 - [ ] Graph唯一私有成本查询、精确预算/少一字节/乘加溢出在factory前验证：Task3/5。
 - [ ] 独立结果越过generation、clone、worker不动snapshot、busy和release重试：Task4/5。
