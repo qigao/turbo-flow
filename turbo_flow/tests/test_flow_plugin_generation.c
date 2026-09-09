@@ -283,7 +283,7 @@ spec("transactional plugin Graph generation") {
   it("publishes Product owners within the caller-provided ABI capacity") {
     union {
       turbo_flow_plugin_product_owner_v1_t alignment;
-      unsigned char bytes[TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE + sizeof(uint64_t)];
+      unsigned char bytes[offsetof(turbo_flow_plugin_product_owner_v1_t, poll) + sizeof(uint64_t)];
     } storage;
     const uint64_t canary = UINT64_C(0x6B3A1D5E92C7408F);
     uint64_t observed_canary = 0u;
@@ -292,21 +292,21 @@ spec("transactional plugin Graph generation") {
         (turbo_flow_plugin_product_owner_v1_t *)(void *)storage.bytes;
 
     memset(&storage, 0, sizeof(storage));
-    legacy_out->size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
-    memcpy(storage.bytes + TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE, &canary, sizeof(canary));
+    legacy_out->size = offsetof(turbo_flow_plugin_product_owner_v1_t, poll);
+    memcpy(storage.bytes + offsetof(turbo_flow_plugin_product_owner_v1_t, poll), &canary, sizeof(canary));
     desired.flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD |
                     TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
     desired.poll = flow_plugin_generation_test_poll;
-    check_equal(turbo_flow_plugin_product_owner_publish(legacy_out, &desired), SALTS_ENOTSUP);
-    memcpy(&observed_canary, storage.bytes + TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE,
+    check_equal(turbo_flow_plugin_product_owner_publish(legacy_out, &desired), SALTS_EINVAL);
+    memcpy(&observed_canary, storage.bytes + offsetof(turbo_flow_plugin_product_owner_v1_t, poll),
            sizeof(observed_canary));
     check_equal(observed_canary, canary);
 
     desired.flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD;
     desired.poll = NULL;
-    check_equal(turbo_flow_plugin_product_owner_publish(legacy_out, &desired), SALTS_OK);
-    check_equal(legacy_out->size, TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE);
-    memcpy(&observed_canary, storage.bytes + TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE,
+    check_equal(turbo_flow_plugin_product_owner_publish(legacy_out, &desired), SALTS_EINVAL);
+    check_equal(legacy_out->size, offsetof(turbo_flow_plugin_product_owner_v1_t, poll));
+    memcpy(&observed_canary, storage.bytes + offsetof(turbo_flow_plugin_product_owner_v1_t, poll),
            sizeof(observed_canary));
     check_equal(observed_canary, canary);
   }
@@ -444,7 +444,7 @@ spec("transactional plugin Graph generation") {
     }
   }
 
-  it("accepts lifecycle-only v1.0 owner prefixes") {
+  it("rejects truncated lifecycle-only owners transactionally") {
     flow_plugin_generation_test_context_t context;
     turbo_flow_plugin_generation_config_t generation_config =
         TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
@@ -460,11 +460,8 @@ spec("transactional plugin Graph generation") {
     check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
                                                     &context.flow, &generation_config, &generation,
                                                     &config_error),
-                SALTS_OK);
-    check_not_null(generation);
-    check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
-    check_equal(turbo_flow_plugin_generation_poll(generation, 7u, &config_error), SALTS_OK);
-    check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &config_error), SALTS_OK);
+                SALTS_EPROTO);
+    check_null(generation);
     check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
   }
 

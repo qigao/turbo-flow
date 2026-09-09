@@ -563,8 +563,12 @@ Adapter commands use `turbo_flow_resource_command()` and a stable command-capabl
 connection resource provider. The former `turbo_flow_adapter_command()` API,
 its payload types and the adapter ops command tail field have been removed.
 Consumers must register resource metadata/command callbacks and recompile against
-the new adapter ops layout. Package 2.0.0 and plugin root ABI 1.4 remain unchanged;
-the plugin root vtable layout is unaffected. Snapshot data remains observed state.
+the new adapter ops layout. Package 2.0.0 is unchanged; plugin ABI is 2.0.
+ABI 1.x plugins are rejected before load or registration: the unchanged root
+vtable also gates adapter layouts passed later across DLL boundaries. Host config
+and Product owner descriptors must be complete; old short layouts and padding
+compatibility are removed. Existing `_v1` type names do not enable ABI 1.x support.
+Snapshot data remains observed state.
 
 Hosts serialize adapter commands with lifecycle/configuration calls. For sink
 endpoint replacement, first pause and drain core publication so no consume call

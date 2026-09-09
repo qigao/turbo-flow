@@ -356,15 +356,13 @@ int main(void) {
       plugin_protocol_catalog.size != sizeof(turbo_flow_plugin_protocol_catalog_v1_t) ||
       plugin_protocol_catalog.abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       plugin_product_owner.size != sizeof(turbo_flow_plugin_product_owner_v1_t) ||
-      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE !=
-          offsetof(turbo_flow_plugin_product_owner_v1_t, reserved_v1_1) ||
-      plugin_product_owner.reserved_v1_1 != 0u ||
+      plugin_product_owner.abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       transactional_adapter.size != sizeof(turbo_flow_plugin_transactional_adapter_provider_v1_t) ||
       transactional_resource.size !=
           sizeof(turbo_flow_plugin_transactional_resource_provider_v1_t) ||
       transactional_catalog.size != sizeof(turbo_flow_plugin_transactional_product_catalog_v1_t) ||
       generation_config.size != sizeof(turbo_flow_plugin_generation_config_t) ||
-      TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR != 1u || TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR != 4u ||
+      TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR != 2u || TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR != 0u ||
       plugin_host_config.protocol_provider_capacity == 0u ||
       plugin_host_config.business_provider_capacity == 0u ||
       plugin_host_config.transactional_adapter_provider_capacity == 0u ||

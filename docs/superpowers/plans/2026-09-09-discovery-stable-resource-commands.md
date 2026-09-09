@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - 删除 turbo_flow_adapter_command、turbo_flow_adapter_command_t、turbo_flow_adapter_command_kind_t、turbo_flow_adapter_endpoint_t、turbo_flow_adapter_command_fn、TURBO_FLOW_ADAPTER_QUIESCE/RESUME/REPLACE_ENDPOINT 和 turbo_flow_adapter_ops_t.command。禁止 alias、wrapper、保留槽位或 C/CMake fallback。现代 resource provider 的 ops.command 必须保留。
-- 保持包 2.0.0、控制 DSL 文本与插件 ABI 1.4；adapter ops 删除尾字段是批准的 C breaking 迁移，仓内消费者全部重编译；插件 root vtable 的实际布局不变，不盲目扩大 ABI 更改。
+- 保持包 2.0.0 与控制 DSL 文本；插件 ABI 升为 2.0，旧 1.x 必须在 load/register 前拒绝。adapter ops 删除尾字段缩小了跨 DLL 传递的结构，root vtable 布局不变不代表 ABI 兼容。仓内 host/plugin/消费者全部重编译，不保留旧槽位、短 host config 兼容或版本降级。
 - 不增加命令历史上限、不驱逐/清空历史换取容量、不绕过 dispatcher；总历史上限仍 TURBO_FLOW_RESOURCE_COMMAND_HISTORY_MAX。不修改外部 SDK/依赖/presets。
 - 同一 flow 的 discovery、resource commands、control 和生命周期调用由 host 串行化；回调不可修改注册表或销毁/reset flow。内部 scope 阻止回调重入另一个命令/scope，不声称新增跨线程并发支持。
 - 先真实 RED 后生产改动；使用 apply_patch，已有 worktree，rg.exe/fd.exe；scratch/.codegraph 不提交。所有错误检查/补偿不得静默吞错。
@@ -82,7 +82,9 @@ check_equal(first.generation, 2u);
 - [ ] Step 5: 分别增加以下真实行为测试（未实现前应RED）：create缺provider/歧义预检零副作用；两slot创建中途失败恢复前slot、恢复失败明确报错；replace原有版本幂等/冲突/回滚及回滚失败后拒绝新操作；执行前不足历史拒绝且peer/version/provider状态不变；精确预算可容纳失败及补偿，少一条则零副作用；scope释放后普通命令可执行；provider回调重入命令返回EBUSY且不消耗预留；stop后replace/poll拒绝且fetch无调用；不同controller keys不碰撞、每次读取当前generation。历史填充用真实resource命令，不直接伪造history vec。资源command既有 replay/同key异payload/full行为回归保留。
 - [ ] Step 6: 增加可复验存储分配失败测试：使用仓内已有fault-test宏替换/编译方式（先查现有 *_fault.c），让scope历史reserve和普通命令resize claim分别失败，断言 owner调用0、generation未变，且后续调用可重试（guard已释放）；不要修改全局分配器或污染公开头。普通命令record也禁止副作用后push/分配。使用真实rawvec实现的测试验证scope预留后连续记录及补偿，不造替代容器。
 - [ ] Step 7: 更新公开discovery/resourcecommand文档：host序列化、不可重入、STARTED、stableprovider要求、配额公式/ENOSPC、create补偿错误诊断和destroy借用期；当前旧API文档改为移除/迁移说明，历史计划不机械清理。rg确认旧symbols在有效C/header已无引用，不碰新 resource commands。验证安装Graph导出没有旧函数（既有Windows dumpbin检查可扩展，不引入旧DLLfixture）。
-- [ ] Step 8: 两profileconfigure/build，先最小相关tests再全量CTest各一次，安装consumer验证source/ABI重编译和包不回退；git diff --check、自审、显式提交；完整报告只写scratch不提交。
+- [ ] Step 8: 同步插件 ABI 2.0 边界：更新版本宏、schema 当前版本校验与诊断、生产插件/fixtures/当前文档。删除旧 host config V1_0/V1_1/V1_3 短尺寸支持及公开尺寸宏，要求当前完整结构；不添加 ABI1 兼容。保留未改变布局的现有类型名不等于接受 ABI1。补实际 RED/GREEN：ABI1.4 插件在任何 load/register 回调前拒绝；短 host config 拒绝；ABI2 当前插件与 schema 正常加载。通过根 vtable 版本验证新插件不会被旧主版本 host 接受。涉及文件扩展到 turbo_flow_plugin.h、flow_plugin.c、plugin fixtures/host/schema tests及其CMake注册；不引入第二套插件系统。
+- Step 8 补充：plugin_generation.h 的 PRODUCT_OWNER_V1_0_SIZE、reserved_v1_1 和 publish 的 lifecycle-only 短结构截断是实际旧ABI兼容，ABI2一并删除。publish 与 generation owner 校验要求完整当前结构，短输出在任何写入前拒绝；保留边界 canary 测试并改为验证拒绝后不修改。更新 initializer 和相关 generation fixtures/tests；移除仅为旧poll尾扩展存在的检测分支，保留有效poll能力及生命周期校验。
+- [ ] Step 9: 两profileconfigure/build，先最小相关tests再全量CTest各一次，安装consumer验证source/ABI重编译和包不回退；git diff --check、自审、显式提交；完整报告只写scratch不提交。
 
 ```powershell
 cmd.exe /d /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\VsDevCmd.bat" -no_logo -arch=amd64 -host_arch=amd64 && cmake --preset win-dev-user && cmake --build --preset win-dev-user && ctest --preset win-dev-user --output-on-failure'

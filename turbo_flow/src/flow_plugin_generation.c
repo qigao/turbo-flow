@@ -259,15 +259,13 @@ static int flow_plugin_generation_owner_valid(const turbo_flow_plugin_product_ow
       TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
   const int external_poll =
       owner && (owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) != 0u;
-  const int has_poll_extension = owner && owner->size >= sizeof(*owner);
-  return owner && owner->size >= TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE &&
+  return owner && owner->size >= sizeof(*owner) &&
          owner->abi_major == TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR && owner->ctx &&
          (owner->flags & ~known) == 0u &&
          ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD) != 0u) !=
              ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE) != 0u) &&
          owner->quiesce && owner->drain && owner->shutdown && owner->destroy &&
-         (!external_poll || (has_poll_extension && owner->poll)) &&
-         (!has_poll_extension || (owner->reserved_v1_1 == 0u && (external_poll || !owner->poll)));
+         (!external_poll || owner->poll) && (external_poll || !owner->poll);
 }
 
 static void flow_plugin_generation_rollback(turbo_flow_plugin_generation_t *generation) {
@@ -491,8 +489,7 @@ int turbo_flow_plugin_generation_poll(turbo_flow_plugin_generation_t *generation
     const size_t index = (generation->poll_cursor + offset) % owner_count;
     const flow_plugin_generation_owner_t *entry =
         (const flow_plugin_generation_owner_t *)vec_at_const(&generation->owners, index);
-    if (entry && entry->owner.size >= sizeof(entry->owner) &&
-        (entry->owner.flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) != 0u) {
+    if (entry && (entry->owner.flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) != 0u) {
       first = index;
       break;
     }
@@ -504,7 +501,7 @@ int turbo_flow_plugin_generation_poll(turbo_flow_plugin_generation_t *generation
     const flow_plugin_generation_owner_t *entry =
         (const flow_plugin_generation_owner_t *)vec_at_const(&generation->owners, index);
     int rc;
-    if (!entry || entry->owner.size < sizeof(entry->owner) ||
+    if (!entry ||
         (entry->owner.flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) == 0u)
       continue;
     rc = entry->owner.poll(entry->owner.ctx, index == first ? timeout_ms : 0u);

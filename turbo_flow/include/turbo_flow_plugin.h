@@ -11,8 +11,6 @@
 extern "C" {
 #endif
 
-#define TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR 1u
-#define TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR 4u
 #define TURBO_FLOW_PLUGIN_EXPORT_SYMBOL "turbo_flow_plugin_get_api"
 
 #define TURBO_FLOW_PLUGIN_ID_MAX 127u
@@ -114,13 +112,6 @@ typedef struct turbo_flow_plugin_host_config_s {
   size_t transactional_resource_provider_capacity;
   size_t schema_capacity;
 } turbo_flow_plugin_host_config_t;
-
-#define TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_0_SIZE                                                    \
-  offsetof(turbo_flow_plugin_host_config_t, protocol_provider_capacity)
-#define TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_1_SIZE                                                    \
-  offsetof(turbo_flow_plugin_host_config_t, transactional_adapter_provider_capacity)
-#define TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_3_SIZE                                                    \
-  offsetof(turbo_flow_plugin_host_config_t, schema_capacity)
 
 #define TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT                                                         \
   {sizeof(turbo_flow_plugin_host_config_t),                                                        \

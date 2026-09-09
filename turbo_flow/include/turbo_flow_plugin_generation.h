@@ -38,14 +38,8 @@ typedef struct turbo_flow_plugin_product_owner_v1_s {
   turbo_flow_plugin_product_owner_drain_fn drain;
   turbo_flow_plugin_product_owner_shutdown_fn shutdown;
   turbo_flow_plugin_product_owner_destroy_fn destroy;
-  /** Keeps appended fields beyond the complete v1.0 object on every supported C ABI. Must be zero.
-   */
-  uint64_t reserved_v1_1;
   turbo_flow_plugin_product_owner_poll_fn poll;
 } turbo_flow_plugin_product_owner_v1_t;
-
-#define TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE                                                  \
-  offsetof(turbo_flow_plugin_product_owner_v1_t, reserved_v1_1)
 
 #define TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT                                                    \
   {sizeof(turbo_flow_plugin_product_owner_v1_t),                                                   \
@@ -57,32 +51,26 @@ typedef struct turbo_flow_plugin_product_owner_v1_s {
    NULL,                                                                                           \
    NULL,                                                                                           \
    NULL,                                                                                           \
-   0u,                                                                                             \
    NULL}
 
 /**
  * Publish a complete local owner descriptor within the capacity pre-seeded by the host.
  *
  * A materializer must inspect/preserve `owner_out->size` and use this helper instead of assigning
- * the complete structure. External-poll owners fail with SALTS_ENOTSUP when the caller only owns a
- * v1.0 buffer; lifecycle-only owners are safely truncated to that prefix.
+ * the complete structure. ABI 2 requires the complete descriptor for every owner;
+ * short buffers fail with SALTS_EINVAL without modifying the output.
  */
 static inline int
 turbo_flow_plugin_product_owner_publish(turbo_flow_plugin_product_owner_v1_t *owner_out,
                                         const turbo_flow_plugin_product_owner_v1_t *owner) {
   size_t capacity;
-  size_t copy_size;
   if (!owner_out || !owner) return SALTS_EINVAL;
   capacity = owner_out->size;
-  if ((capacity != TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE && capacity < sizeof(*owner_out)) ||
+  if (capacity < sizeof(*owner_out) ||
       owner->size < sizeof(*owner) || owner->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR)
     return SALTS_EINVAL;
-  if ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) != 0u &&
-      capacity < sizeof(*owner_out))
-    return SALTS_ENOTSUP;
-  copy_size = capacity < sizeof(*owner_out) ? capacity : sizeof(*owner_out);
-  memcpy(owner_out, owner, copy_size);
-  owner_out->size = copy_size;
+  memcpy(owner_out, owner, sizeof(*owner_out));
+  owner_out->size = sizeof(*owner_out);
   return SALTS_OK;
 }
 

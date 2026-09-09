@@ -186,9 +186,9 @@ turbo_flow_add_schema_fixture(test_flow_plugin_schema_duplicate FLOW_SCHEMA_FIXT
 turbo_flow_add_schema_fixture(test_flow_plugin_schema_bad_version FLOW_SCHEMA_FIXTURE_ID="fixture.schema.bad-version" FLOW_SCHEMA_MODE=2)
 turbo_flow_add_schema_fixture(test_flow_plugin_schema_bad_descriptor FLOW_SCHEMA_FIXTURE_ID="fixture.schema.bad-descriptor" FLOW_SCHEMA_MODE=3)
 turbo_flow_add_schema_fixture(test_flow_plugin_schema_swallow FLOW_SCHEMA_FIXTURE_ID="fixture.schema.swallow" FLOW_SCHEMA_MODE=4)
-turbo_flow_add_schema_fixture(test_flow_plugin_schema_old_abi FLOW_SCHEMA_FIXTURE_ID="fixture.schema.old-abi" FLOW_SCHEMA_ABI_MINOR=3)
+turbo_flow_add_schema_fixture(test_flow_plugin_schema_old_abi FLOW_SCHEMA_FIXTURE_ID="fixture.schema.old-abi" FLOW_SCHEMA_ABI_MAJOR=1 FLOW_SCHEMA_ABI_MINOR=4)
 turbo_flow_add_schema_fixture(test_flow_plugin_schema_bad_abi FLOW_SCHEMA_FIXTURE_ID="fixture.schema.bad-abi" FLOW_SCHEMA_DESCRIPTOR_MINOR=99)
-turbo_flow_add_schema_fixture(test_flow_plugin_schema_old_wrapper FLOW_SCHEMA_FIXTURE_ID="fixture.schema.old-wrapper" FLOW_SCHEMA_DESCRIPTOR_MINOR=3)
+turbo_flow_add_schema_fixture(test_flow_plugin_schema_old_wrapper FLOW_SCHEMA_FIXTURE_ID="fixture.schema.old-wrapper" FLOW_SCHEMA_DESCRIPTOR_MAJOR=1 FLOW_SCHEMA_DESCRIPTOR_MINOR=4)
 turbo_flow_add_schema_fixture(test_flow_plugin_schema_bad_id FLOW_SCHEMA_FIXTURE_ID="fixture.schema.bad-id" FLOW_SCHEMA_MODE=5)
 turbo_flow_add_schema_fixture(test_flow_plugin_schema_long_id FLOW_SCHEMA_FIXTURE_ID="fixture.schema.long-id" FLOW_SCHEMA_MODE=6)
 turbo_flow_add_schema_fixture(test_flow_plugin_schema_version_two FLOW_SCHEMA_FIXTURE_ID="fixture.schema.version-two" FLOW_SCHEMA_VERSION=2)
@@ -504,9 +504,9 @@ turbo_flow_add_generation_fixture(
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-legacy-owner-prefix"
   FLOW_PLUGIN_GENERATION_LEGACY_OWNER_PREFIX=1
   FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
-  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=1
   FLOW_PLUGIN_GENERATION_EXPECT_POLL_CALLS=0
-  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2)
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=1)
 turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_poll_error
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-poll-error"

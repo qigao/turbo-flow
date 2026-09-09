@@ -31,14 +31,12 @@ static int protocol_probe_inspect(void *ctx, const char *configured_version,
 }
 
 spec("protocol registry") {
-  it("treats ABI 1.0 host config as a bounded prefix without protocol fallback") {
+  it("rejects a short host config without protocol fallback") {
     turbo_flow_plugin_host_config_t config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
     turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-    turbo_flow_plugin_protocol_catalog_v1_t catalog = TURBO_FLOW_PLUGIN_PROTOCOL_CATALOG_V1_INIT;
-    turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
     turbo_flow_plugin_host_t *host = NULL;
 
-    config.size = TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_0_SIZE;
+    config.size = offsetof(turbo_flow_plugin_host_config_t, protocol_provider_capacity);
     config.abi_minor = 0u;
     config.module_capacity = 1u;
     config.adapter_provider_capacity = 0u;
@@ -46,14 +44,8 @@ spec("protocol registry") {
     config.protocol_provider_capacity = 99u;
     config.business_provider_capacity = 99u;
 
-    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
-    check_equal(turbo_flow_plugin_host_load(host, FLOW_PROTOCOL_COAP_MODULE, &error), SALTS_ENOSPC);
-    check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &error), SALTS_OK);
-    check_equal(turbo_flow_plugin_catalog_snapshot_protocol_catalog(snapshot, &catalog), SALTS_OK);
-    check_equal(catalog.protocol_provider_count, 0u);
-    check_equal(catalog.business_provider_count, 0u);
-    turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
-    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_EINVAL);
+    check_null(host);
   }
 
   it("retains the unified module snapshot while its owner is alive") {
