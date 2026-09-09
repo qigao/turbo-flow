@@ -18,11 +18,11 @@ typedef struct turbo_flow_plugin_catalog_snapshot_s turbo_flow_plugin_catalog_sn
 /**
  * Size/version wrapper for one DLL-owned schema descriptor.
  *
- * The plugin must keep this metadata, the referenced CMeta descriptor tree,
- * and every callback reachable from it immutable and valid until the last
- * snapshot that contains the schema is destroyed. The host copies this
- * wrapper only; ownership of `data` and its reachable metadata is not
- * transferred.
+ * The host copies the wrapper during registration; the original wrapper need
+ * not outlive the registration call. The CMeta descriptor tree referenced by
+ * `data` and every callback reachable from it remain DLL-owned. The plugin must
+ * keep them immutable and valid for the registered module's lifetime. Snapshot
+ * leases prevent module unload while snapshots still reference that metadata.
  */
 typedef struct turbo_flow_plugin_schema_v1_s {
   size_t size;
@@ -53,10 +53,11 @@ typedef int (*turbo_flow_plugin_add_schema_fn)(void *ctx,
  * Borrow the immutable schema array captured by a live catalog snapshot.
  *
  * Initialize `catalog_out` with `TURBO_FLOW_PLUGIN_SCHEMA_CATALOG_V1_INIT`
- * before calling. On success, `schemas` and all metadata or callbacks
- * reachable through its entries remain DLL-owned and may be read only until
- * the corresponding snapshot is destroyed; callers must not retain any such
- * pointer beyond that lifetime.
+ * before calling. On success, `schemas` points to snapshot-owned wrapper
+ * copies; their referenced CMeta metadata and callbacks remain DLL-owned.
+ * Hold a live snapshot reference throughout the query and every use of these
+ * borrowed pointers. A released reference must not be used again, and passing
+ * a pointer to a destroyed snapshot is invalid, not a detectable error case.
  *
  * Example, after `snapshot` has been created successfully:
  * @code
@@ -74,8 +75,9 @@ typedef int (*turbo_flow_plugin_add_schema_fn)(void *ctx,
  *
  * @param snapshot Live snapshot that owns the module leases and copied wrappers.
  * @param catalog_out Caller-owned initialized output structure.
- * @return `SALTS_OK` on success; `SALTS_EINVAL` if either argument is invalid,
- *         the snapshot is no longer live, or the output size/ABI version is unsupported.
+ * @return `SALTS_OK` on success; `SALTS_EINVAL` for NULL arguments or an
+ *         unsupported output size/ABI version. Non-NULL arguments must point
+ *         to valid objects; the snapshot must be live.
  */
 TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_schema_catalog(
     const turbo_flow_plugin_catalog_snapshot_t *snapshot,
