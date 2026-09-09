@@ -377,9 +377,9 @@ spec("versioned rule program") {
     check_equal(decision.route, "stable");
   }
 
-  it("routes graph fan-out through the typed data-rule stage") {
+  it("routes graph fan-out through rules.apply") {
     static const char source[] = "source input\n"
-                                 "stage rules\n"
+                                 "stage rules operation rules.apply resource rules.test\n"
                                  "stage selected\n"
                                  "stage skipped\n"
                                  "stage main {\n"
@@ -397,7 +397,7 @@ spec("versioned rule program") {
     check_not_null(flow);
     check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
-    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
     check_equal(turbo_flow_resource_metadata_count(flow), 1u);
     check_equal(turbo_flow_register_stage_ex(flow, "selected", count_stage, &selected, NULL),
                  SALTS_OK);
@@ -661,7 +661,7 @@ spec("versioned rule program") {
 
   it("stops normal downstream release when a data rule drops the message") {
     static const char source[] = "source input\n"
-                                 "stage rules\n"
+                                 "stage rules operation rules.apply resource rules.test\n"
                                  "stage sink\n"
                                  "stage main {\n"
                                  "  input -> rules -> sink\n"
@@ -676,7 +676,7 @@ spec("versioned rule program") {
     check_not_null(flow);
     check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
-    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "sink", count_stage, &sink, NULL), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -691,7 +691,7 @@ spec("versioned rule program") {
 
   it("fails fast when a data rule selects an unknown downstream route") {
     static const char source[] = "source input\n"
-                                 "stage rules\n"
+                                 "stage rules operation rules.apply resource rules.test\n"
                                  "stage sink\n"
                                  "stage main {\n"
                                  "  input -> rules -> sink\n"
@@ -707,7 +707,7 @@ spec("versioned rule program") {
     check_not_null(flow);
     check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
-    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
     check_equal(turbo_flow_register_stage_ex(flow, "sink", count_stage, &sink, NULL), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -721,9 +721,9 @@ spec("versioned rule program") {
     turbo_flow_rule_processor_destroy(processor);
   }
 
-  it("rejects pooled execution for an inline data-rule evaluator") {
+  it("rejects pooled execution for rules.apply") {
     static const char source[] = "source input\n"
-                                 "stage rules exec thread workers 1\n"
+                                 "stage rules operation rules.apply resource rules.test exec thread workers 1\n"
                                  "stage main {\n"
                                  "  input -> rules\n"
                                  "}\n";
@@ -735,7 +735,7 @@ spec("versioned rule program") {
     check_not_null(flow);
     check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
-    check_equal(turbo_flow_rule_register_data_stage(flow, "rules", processor, NULL), SALTS_OK);
+    check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
     check_contains(turbo_flow_last_error(flow)->message, "inline executor");
     turbo_flow_destroy(flow);

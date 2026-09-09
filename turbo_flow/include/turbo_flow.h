@@ -2243,12 +2243,6 @@ TURBO_FLOW_C_API int turbo_flow_advance_event_time_watermark(turbo_flow_t *flow,
                                                       uint64_t watermark_ns,
                                                       size_t *closed_windows);
 
-/** Atomically register one stage callback and zero or more independently addressable resources. */
-TURBO_FLOW_C_API int turbo_flow_register_stage_with_resources(
-    turbo_flow_t *flow, const char *name, turbo_flow_stage_fn fn, void *ctx,
-    const turbo_flow_stage_options_t *options,
-    const turbo_flow_resource_provider_registration_t *resources, size_t resource_count);
-
 /**
  * Register a source/sink adapter name referenced by DSL `adapter` metadata.
  *
