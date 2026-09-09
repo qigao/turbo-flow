@@ -1,3 +1,4 @@
+#include "../../tests/flow_operation_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
 #include "turbo_flow_control.h"
@@ -80,7 +81,7 @@ static turbo_flow_t *control_started_flow_ex(control_adapter_t *adapter,
                                              control_adapter_t *extra_resource) {
   static const char source[] = "source input\n"
                                "stage main {\n"
-                               "  step transform exec thread workers 2\n"
+                               "  step transform operation test.transform exec thread workers 2\n"
                                "  input -> transform\n"
                                "}\n";
   turbo_flow_adapter_ops_t ops;
@@ -116,8 +117,11 @@ static turbo_flow_t *control_started_flow_ex(control_adapter_t *adapter,
     check_equal(turbo_flow_register_adapter_ex(flow, "mock", &ops, adapter, &schema), SALTS_OK);
   }
   check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
-  check_equal(turbo_flow_register_stage_ex(flow, "transform", control_noop_stage, NULL, NULL),
-               SALTS_OK);
+  flow_test_operation_t operation_transform_0 =
+      flow_test_operation_init("test.transform", control_noop_stage, NULL);
+  operation_transform_0.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+  operation_transform_0.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_THREAD;
+  check_equal(flow_test_operation_register(flow, &operation_transform_0), SALTS_OK);
   check_equal(turbo_flow_compile(flow), SALTS_OK);
   check_equal(turbo_flow_start(flow), SALTS_OK);
   return flow;

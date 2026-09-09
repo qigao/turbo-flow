@@ -1,7 +1,8 @@
 #include "turbo_flow_policy.h"
 
-#include "tinytest.h"
+#include "../../tests/flow_operation_fixture.h"
 #include "salts_error.h"
+#include "tinytest.h"
 #include "tstr.h"
 
 #include <stdint.h>
@@ -380,8 +381,8 @@ spec("versioned rule program") {
   it("routes graph fan-out through rules.apply") {
     static const char source[] = "source input\n"
                                  "stage rules operation rules.apply resource rules.test\n"
-                                 "stage selected\n"
-                                 "stage skipped\n"
+                                 "stage selected operation test.selected\n"
+                                 "stage skipped operation test.skipped\n"
                                  "stage main {\n"
                                  "  input -> rules -> [selected, skipped]\n"
                                  "}\n";
@@ -399,10 +400,16 @@ spec("versioned rule program") {
     check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
     check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
     check_equal(turbo_flow_resource_metadata_count(flow), 1u);
-    check_equal(turbo_flow_register_stage_ex(flow, "selected", count_stage, &selected, NULL),
-                 SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "skipped", count_stage, &skipped, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_selected_0 =
+        flow_test_operation_init("test.selected", count_stage, &selected);
+    operation_selected_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_selected_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_selected_0), SALTS_OK);
+    flow_test_operation_t operation_skipped_1 =
+        flow_test_operation_init("test.skipped", count_stage, &skipped);
+    operation_skipped_1.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_skipped_1.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_skipped_1), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);
@@ -442,7 +449,7 @@ spec("versioned rule program") {
   it("binds rules.apply to a resource primitive from any graph node") {
     static const char source[] = "source input\n"
                                  "stage apply operation rules.apply resource rules.test\n"
-                                 "stage sink\n"
+                                 "stage sink operation test.sink\n"
                                  "stage main {\n"
                                  "  input -> apply -> sink\n"
                                  "}\n";
@@ -459,8 +466,11 @@ spec("versioned rule program") {
     check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
     check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", observe_rule_operation, &probe, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_sink_2 =
+        flow_test_operation_init("test.sink", observe_rule_operation, &probe);
+    operation_sink_2.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_2.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_2), SALTS_OK);
     check_not_null(turbo_flow_find_primitive(flow, "rules.test"));
     check_not_null(turbo_flow_find_operation(flow, TURBO_FLOW_RULE_APPLY_OPERATION));
     check_not_null(turbo_flow_find_module(flow, TURBO_FLOW_RULE_MODULE));
@@ -496,7 +506,7 @@ spec("versioned rule program") {
   it("materializes typed schema facts before rules.apply") {
     static const char source[] = "source input\n"
                                  "stage apply operation rules.apply resource rules.test\n"
-                                 "stage sink\n"
+                                 "stage sink operation test.sink\n"
                                  "stage main {\n"
                                  "  input -> apply -> sink\n"
                                  "}\n";
@@ -517,9 +527,11 @@ spec("versioned rule program") {
     check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
     check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "sink", observe_rule_operation, &operation_probe, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_sink_3 =
+        flow_test_operation_init("test.sink", observe_rule_operation, &operation_probe);
+    operation_sink_3.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_3.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_3), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);
@@ -537,7 +549,7 @@ spec("versioned rule program") {
   it("materializes rules.apply facts from an attached typed projection") {
     static const char source[] = "source input\n"
                                  "stage apply operation rules.apply resource rules.test\n"
-                                 "stage sink\n"
+                                 "stage sink operation test.sink\n"
                                  "stage main {\n"
                                  "  input -> apply -> sink\n"
                                  "}\n";
@@ -565,9 +577,11 @@ spec("versioned rule program") {
     check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
     check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "sink", observe_rule_operation, &operation_probe, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_sink_4 =
+        flow_test_operation_init("test.sink", observe_rule_operation, &operation_probe);
+    operation_sink_4.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_4.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_4), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);
@@ -662,7 +676,7 @@ spec("versioned rule program") {
   it("stops normal downstream release when a data rule drops the message") {
     static const char source[] = "source input\n"
                                  "stage rules operation rules.apply resource rules.test\n"
-                                 "stage sink\n"
+                                 "stage sink operation test.sink\n"
                                  "stage main {\n"
                                  "  input -> rules -> sink\n"
                                  "}\n";
@@ -677,7 +691,11 @@ spec("versioned rule program") {
     check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
     check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", count_stage, &sink, NULL), SALTS_OK);
+    flow_test_operation_t operation_sink_5 =
+        flow_test_operation_init("test.sink", count_stage, &sink);
+    operation_sink_5.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_5.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_5), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);
@@ -692,7 +710,7 @@ spec("versioned rule program") {
   it("fails fast when a data rule selects an unknown downstream route") {
     static const char source[] = "source input\n"
                                  "stage rules operation rules.apply resource rules.test\n"
-                                 "stage sink\n"
+                                 "stage sink operation test.sink\n"
                                  "stage main {\n"
                                  "  input -> rules -> sink\n"
                                  "}\n";
@@ -708,7 +726,11 @@ spec("versioned rule program") {
     check_equal(turbo_flow_rule_processor_create(&config, &processor, NULL), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, source, strlen(source)), SALTS_OK);
     check_equal(turbo_flow_rule_register_data_operation(flow, "rules.test", processor), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", count_stage, &sink, NULL), SALTS_OK);
+    flow_test_operation_t operation_sink_6 =
+        flow_test_operation_init("test.sink", count_stage, &sink);
+    operation_sink_6.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_6.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_6), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&message);

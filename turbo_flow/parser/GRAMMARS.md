@@ -220,9 +220,11 @@ stage_options   := empty
 the node. `resource` binds a host-registered resource primitive required by
 that operation. The DSL cannot declare or override scope/authority; those are
 trusted registry metadata. A `resource` option without `operation` is rejected
-during compile. A node without a domain-specific binding resolves to a complete
-`core.source` or `core.stage.inline/thread/coro/worker` contract; it does not
-bypass operation validation.
+during compile. A callback stage requires an explicit operation identity and a
+registered descriptor/provider pair; the node name never selects its callback.
+Sources, routing ports and adapter-owned consume may resolve to built-in
+`core.source`, `core.port.input/output` and `core.stage.owner` contracts, which
+still pass operation validation.
 
 The compiler validates source/stage role, resource domain/type, selected
 executor and worker capability, owner/pool concurrency scope, and explicit

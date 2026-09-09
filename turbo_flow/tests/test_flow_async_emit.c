@@ -1,3 +1,4 @@
+#include "../../tests/flow_operation_fixture.h"
 #include "flow_internal.h"
 #include "tinytest.h"
 
@@ -67,7 +68,7 @@ static void async_emit_wait_for(atomic_size_t *value, size_t expected) {
 static turbo_flow_t *async_emit_flow(async_emit_probe_t *probe) {
   static const char graph[] = "source input\n"
                               "stage request adapter async.request\n"
-                              "stage output\n"
+                              "stage output operation test.output\n"
                               "stage main {\n"
                               "  input -> request -> output\n"
                               "}\n";
@@ -79,11 +80,14 @@ static turbo_flow_t *async_emit_flow(async_emit_probe_t *probe) {
   schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
   schema.roles = TURBO_FLOW_ADAPTER_TRANSFORM;
   schema.direction = TURBO_FLOW_ADAPTER_BIDIRECTIONAL;
+  flow_test_operation_t operation_output =
+      flow_test_operation_init("test.output", async_emit_downstream, probe);
+  operation_output.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+  operation_output.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
   if (!flow ||
       turbo_flow_register_async_emit_adapter_ex(flow, "async.request", &adapter_ops, &async_ops,
                                                 probe, &schema) != SALTS_OK ||
-      turbo_flow_register_stage_ex(flow, "output", async_emit_downstream, probe, NULL) !=
-          SALTS_OK ||
+      flow_test_operation_register(flow, &operation_output) != SALTS_OK ||
       turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u) != SALTS_OK ||
       turbo_flow_compile(flow) != SALTS_OK || turbo_flow_start(flow) != SALTS_OK) {
     turbo_flow_destroy(flow);
@@ -304,7 +308,7 @@ spec("Flow async emitting adapter") {
     static const char graph[] = "source input\n"
                                 "source other\n"
                                 "stage request adapter async.request\n"
-                                "stage output\n"
+                                "stage output operation test.output\n"
                                 "stage main {\n"
                                 "  input -> request -> output\n"
                                 "  other -> output\n"
@@ -322,8 +326,11 @@ spec("Flow async emitting adapter") {
     check_equal(turbo_flow_register_async_emit_adapter_ex(flow, "async.request", &adapter_ops,
                                                           &async_ops, &probe, &schema),
                 SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "output", async_emit_downstream, &probe, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_output =
+        flow_test_operation_init("test.output", async_emit_downstream, &probe);
+    operation_output.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_output.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_output), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
     turbo_flow_destroy(flow);

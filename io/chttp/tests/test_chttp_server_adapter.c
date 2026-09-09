@@ -1,3 +1,4 @@
+#include "../../../tests/flow_operation_fixture.h"
 #include "tinytest.h"
 
 #include "../../cnet/tests/listener_source_tls_fixture.h"
@@ -465,7 +466,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
 
   it("completes an h2c request through the deferred Flow adapter") {
     static const char *dsl = "source http_in adapter http.server\n"
-                             "stage require_h2\n"
+                             "stage require_h2 operation test.require_h2\n"
                              "stage response adapter http.server\n"
                              "stage main {\n"
                              "  http_in -> require_h2 -> response\n"
@@ -495,9 +496,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
     check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
     check_not_null(server);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "require_h2", chttp_server_adapter_require_h2,
-                                             &probe, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_require_h2_0 =
+        flow_test_operation_init("test.require_h2", chttp_server_adapter_require_h2, &probe);
+    operation_require_h2_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_require_h2_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_require_h2_0), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     start_status = turbo_flow_start(flow);
     check_equal(start_status, SALTS_OK);
@@ -532,7 +535,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
 
   it("keeps a deferred H2 sibling alive when one Flow run fails") {
     static const char *dsl = "source http_in adapter http.server\n"
-                             "stage fail_selected\n"
+                             "stage fail_selected operation test.fail_selected\n"
                              "stage response adapter http.server\n"
                              "stage main {\n"
                              "  http_in -> fail_selected -> response\n"
@@ -565,9 +568,9 @@ spec("TurboFlow CHTTP deferred server adapter") {
     config.graph_error_body_size = sizeof("mapped") - 1u;
     check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(
-                    flow, "fail_selected", chttp_server_adapter_fail_selected_payload, NULL, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_fail_selected_1 = flow_test_operation_init(
+        "test.fail_selected", chttp_server_adapter_fail_selected_payload, NULL);
+    check_equal(flow_test_operation_register(flow, &operation_fail_selected_1), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -614,7 +617,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
   it("completes a deferred Flow response on TLS negotiated ALPN h2") {
     static const char *alpn[] = {"h2"};
     static const char *dsl = "source http_in adapter http.server\n"
-                             "stage require_h2\n"
+                             "stage require_h2 operation test.require_h2\n"
                              "stage response adapter http.server\n"
                              "stage main {\n"
                              "  http_in -> require_h2 -> response\n"
@@ -665,9 +668,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
     config.path = "/flow";
     check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "require_h2", chttp_server_adapter_require_h2,
-                                             &probe, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_require_h2_2 =
+        flow_test_operation_init("test.require_h2", chttp_server_adapter_require_h2, &probe);
+    operation_require_h2_2.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_require_h2_2.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_require_h2_2), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -750,7 +755,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
 
   it("copies callback request views and replies once after the graph completes") {
     static const char *dsl = "source http_in adapter http.server\n"
-                             "stage inspect\n"
+                             "stage inspect operation test.inspect\n"
                              "stage response adapter http.server\n"
                              "stage main {\n"
                              "  http_in -> inspect -> response\n"
@@ -781,9 +786,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
     config.response_content_type = "text/plain";
     check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "inspect", chttp_server_adapter_inspect, &probe, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_inspect_3 =
+        flow_test_operation_init("test.inspect", chttp_server_adapter_inspect, &probe);
+    operation_inspect_3.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_inspect_3.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_inspect_3), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -827,7 +834,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
 
   it("maps graph errors cancellation and timeout to one configured response") {
     static const char *dsl = "source http_in adapter http.server\n"
-                             "stage fail\n"
+                             "stage fail operation test.fail\n"
                              "stage response adapter http.server\n"
                              "stage main {\n"
                              "  http_in -> fail -> response\n"
@@ -855,9 +862,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
       config.graph_error_body_size = sizeof("mapped") - 1u;
       check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "fail", chttp_server_adapter_return_status,
-                                               (void *)&graph_statuses[index], NULL),
-                  SALTS_OK);
+      flow_test_operation_t operation_fail_4 = flow_test_operation_init(
+          "test.fail", chttp_server_adapter_return_status, (void *)&graph_statuses[index]);
+      operation_fail_4.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_fail_4.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_fail_4), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -921,7 +930,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
 
   it("rejects stale request generations at the terminal boundary") {
     static const char *dsl = "source http_in adapter http.server\n"
-                             "stage capture\n"
+                             "stage capture operation test.capture\n"
                              "stage response adapter http.server\n"
                              "stage main {\n"
                              "  http_in -> capture -> response\n"
@@ -948,9 +957,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
     config.path = "/flow";
     check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "capture", chttp_server_adapter_capture_request,
-                                             &capture, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_capture_5 =
+        flow_test_operation_init("test.capture", chttp_server_adapter_capture_request, &capture);
+    operation_capture_5.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_capture_5.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_capture_5), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -980,7 +991,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
                                      "  http_in -> response\n"
                                      "}\n";
     static const char *response_dsl = "source http_in adapter http.server\n"
-                                      "stage enlarge\n"
+                                      "stage enlarge operation test.enlarge\n"
                                       "stage response adapter http.server\n"
                                       "stage main {\n"
                                       "  http_in -> enlarge -> response\n"
@@ -1015,11 +1026,13 @@ spec("TurboFlow CHTTP deferred server adapter") {
       check_equal(turbo_flow_parse_string(flow, pass == 0u ? request_dsl : response_dsl,
                                           pass == 0u ? strlen(request_dsl) : strlen(response_dsl)),
                   SALTS_OK);
-      if (pass != 0u)
-        check_equal(turbo_flow_register_stage_ex(flow, "enlarge",
-                                                 chttp_server_adapter_large_response,
-                                                 (void *)oversized_response, NULL),
-                    SALTS_OK);
+      if (pass != 0u) {
+        flow_test_operation_t operation_enlarge_6 = flow_test_operation_init(
+            "test.enlarge", chttp_server_adapter_large_response, (void *)oversized_response);
+        operation_enlarge_6.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+        operation_enlarge_6.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+        check_equal(flow_test_operation_register(flow, &operation_enlarge_6), SALTS_OK);
+      }
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -1040,7 +1053,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
 
   it("cancels without a replacement response when deferred reply exhausts its buffer budget") {
     static const char *dsl = "source http_in adapter http.server\n"
-                             "stage enlarge\n"
+                             "stage enlarge operation test.enlarge\n"
                              "stage response adapter http.server\n"
                              "stage main {\n"
                              "  http_in -> enlarge -> response\n"
@@ -1065,9 +1078,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
     config.path = "/flow";
     check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "enlarge", chttp_server_adapter_filled_response,
-                                             (void *)&response_body_size, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_enlarge_7 = flow_test_operation_init(
+        "test.enlarge", chttp_server_adapter_filled_response, (void *)&response_body_size);
+    operation_enlarge_7.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_enlarge_7.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_enlarge_7), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -1088,7 +1103,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
 
   it("rejects a nonempty terminal body for an HTTP status that forbids one") {
     static const char *dsl = "source http_in adapter http.server\n"
-                             "stage no_content\n"
+                             "stage no_content operation test.no_content\n"
                              "stage response adapter http.server\n"
                              "stage main {\n"
                              "  http_in -> no_content -> response\n"
@@ -1113,9 +1128,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
     config.graph_error_body_size = sizeof("bad") - 1u;
     check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "no_content", chttp_server_adapter_set_status,
-                                             (void *)&no_content_status, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_no_content_8 = flow_test_operation_init(
+        "test.no_content", chttp_server_adapter_set_status, (void *)&no_content_status);
+    operation_no_content_8.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_no_content_8.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_no_content_8), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -1177,7 +1194,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
 
   it("returns overload synchronously when bounded Flow ingress is full") {
     static const char *dsl = "source http_in adapter http.server\n"
-                             "stage gate\n"
+                             "stage gate operation test.gate\n"
                              "stage response adapter http.server\n"
                              "stage main {\n"
                              "  http_in -> gate -> response\n"
@@ -1209,8 +1226,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
     check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
     check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "gate", chttp_server_adapter_gate, &gate, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_gate_9 =
+        flow_test_operation_init("test.gate", chttp_server_adapter_gate, &gate);
+    operation_gate_9.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_gate_9.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_gate_9), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -1254,7 +1274,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
 
   it("quiesces H1 and H2 admission while accepted responses drain and explicitly resumes") {
     static const char dsl[] = "source http_in adapter http.server\n"
-                              "stage gate\n"
+                              "stage gate operation test.gate\n"
                               "stage response adapter http.server\n"
                               "stage main {\n"
                               "  http_in -> gate -> response\n"
@@ -1299,9 +1319,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
       check_equal(turbo_flow_chttp_server_quiesce(server), SALTS_ESHUTDOWN);
       check_equal(turbo_flow_chttp_server_resume(server), SALTS_ESHUTDOWN);
       check_equal(turbo_flow_parse_string(flow, dsl, sizeof(dsl) - 1u), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "gate", chttp_server_adapter_gate, &gate, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_gate_10 =
+          flow_test_operation_init("test.gate", chttp_server_adapter_gate, &gate);
+      operation_gate_10.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_gate_10.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_gate_10), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -1382,7 +1404,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
 
   it("drains accepted deferred work and rejects new admission during stop") {
     static const char *dsl = "source http_in adapter http.server\n"
-                             "stage gate\n"
+                             "stage gate operation test.gate\n"
                              "stage response adapter http.server\n"
                              "stage main {\n"
                              "  http_in -> gate -> response\n"
@@ -1412,8 +1434,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
     config.path = "/flow";
     check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "gate", chttp_server_adapter_gate, &gate, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_gate_11 =
+        flow_test_operation_init("test.gate", chttp_server_adapter_gate, &gate);
+    operation_gate_11.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_gate_11.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_gate_11), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);

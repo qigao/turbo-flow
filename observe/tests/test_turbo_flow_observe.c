@@ -1,7 +1,8 @@
 #include "turbo_flow_observe.h"
 
-#include "tinytest.h"
+#include "../../tests/flow_operation_fixture.h"
 #include "salts_error.h"
+#include "tinytest.h"
 #include "tstr.h"
 
 #include <string.h>
@@ -183,7 +184,7 @@ static int observe_publish(turbo_flow_t *flow, const char *payload) {
 spec("turbo_flow_observe") {
   it("collects message stage and adapter lifecycle counters") {
     static const char *dsl = "source input\n"
-                             "stage work\n"
+                             "stage work operation test.work\n"
                              "stage output adapter target.sink\n"
                              "stage main {\n"
                              "  input -> work -> output\n"
@@ -230,8 +231,9 @@ spec("turbo_flow_observe") {
     check_equal(turbo_flow_register_resource_provider(
                      flow, queue_resource.owner_name, &resource_ops, &queue_resource),
                  SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "work", observe_stage_ok, NULL, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_work_0 =
+        flow_test_operation_init("test.work", observe_stage_ok, NULL);
+    check_equal(flow_test_operation_register(flow, &operation_work_0), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_observe_attach(observe, flow), SALTS_OK);
@@ -329,8 +331,8 @@ spec("turbo_flow_observe") {
 
   it("counts stage failures and bounds per-stage series") {
     static const char *dsl = "source input\n"
-                             "stage first\n"
-                             "stage fail\n"
+                             "stage first operation test.first\n"
+                             "stage fail operation test.fail\n"
                              "stage main {\n"
                              "  input -> first -> fail\n"
                              "}\n";
@@ -340,10 +342,12 @@ spec("turbo_flow_observe") {
     turbo_flow_observe_snapshot_t snapshot;
     check_not_null(flow);
     check_not_null(observe);
-    check_equal(turbo_flow_register_stage_ex(flow, "first", observe_stage_ok, NULL, NULL),
-                 SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "fail", observe_stage_fail, NULL, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_first_1 =
+        flow_test_operation_init("test.first", observe_stage_ok, NULL);
+    check_equal(flow_test_operation_register(flow, &operation_first_1), SALTS_OK);
+    flow_test_operation_t operation_fail_2 =
+        flow_test_operation_init("test.fail", observe_stage_fail, NULL);
+    check_equal(flow_test_operation_register(flow, &operation_fail_2), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_observe_attach(observe, flow), SALTS_OK);
@@ -368,7 +372,7 @@ spec("turbo_flow_observe") {
 
   it("observes each attempted batch message through the first failure") {
     static const char *dsl = "source input\n"
-                             "stage work\n"
+                             "stage work operation test.work\n"
                              "stage main {\n"
                              "  input -> work\n"
                              "}\n";
@@ -381,8 +385,11 @@ spec("turbo_flow_observe") {
 
     check_not_null(flow);
     check_not_null(observe);
-    check_equal(turbo_flow_register_stage_ex(flow, "work", observe_batch_stage, &state, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_work_3 =
+        flow_test_operation_init("test.work", observe_batch_stage, &state);
+    operation_work_3.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_work_3.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_work_3), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_observe_attach(observe, flow), SALTS_OK);
@@ -669,7 +676,7 @@ spec("turbo_flow_observe") {
 
   it("reconciles idle pool load with hysteresis bounds and cooldown") {
     static const char *dsl = "source input\n"
-                             "stage work worker 4 capacity 16\n"
+                             "stage work operation test.work worker 4 capacity 16\n"
                              "stage main {\n"
                              "  input -> work\n"
                              "}\n";
@@ -683,8 +690,13 @@ spec("turbo_flow_observe") {
 
     check_not_null(flow);
     check_not_null(observe);
-    check_equal(turbo_flow_register_stage_ex(flow, "work", observe_stage_ok, NULL, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_work_4 =
+        flow_test_operation_init("test.work", observe_stage_ok, NULL);
+    operation_work_4.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+    operation_work_4.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+    operation_work_4.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+    operation_work_4.descriptor.runtime.capacity = 16u;
+    check_equal(flow_test_operation_register(flow, &operation_work_4), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_observe_attach(observe, flow), SALTS_OK);

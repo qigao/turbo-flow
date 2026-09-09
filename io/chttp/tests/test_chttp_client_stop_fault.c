@@ -21,7 +21,7 @@ spec("CHTTP bounded client stop failure") {
     for (unsigned int protocol = 0u; protocol < 2u; ++protocol) {
       static const char graph[] = "source input\n"
                                   "stage request adapter http.shutdown\n"
-                                  "stage output\n"
+                                  "stage output operation test.output\n"
                                   "stage main {\n"
                                   "  input -> request -> output\n"
                                   "}\n";
@@ -66,8 +66,11 @@ spec("CHTTP bounded client stop failure") {
       adapter_config.stop_timeout_ms = CHTTP_ADAPTER_TEST_TIMEOUT_MS;
       check_equal(turbo_flow_chttp_client_register(&adapter_config, &client), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &probe, NULL),
-                  SALTS_OK);
+      flow_test_operation_t operation_output_0 =
+          flow_test_operation_init("test.output", chttp_adapter_sink, &probe);
+      operation_output_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_output_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_output_0), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 

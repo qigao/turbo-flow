@@ -84,13 +84,6 @@ void flow_stage_impl_destroy(flow_stage_plan_impl_t *stage) {
   tstr_freep(&stage->resource_name);
 }
 
-void flow_registration_destroy(flow_stage_registration_t *reg) {
-  if (!reg) return;
-  tstr_freep(&reg->name);
-  reg->fn = NULL;
-  reg->ctx = NULL;
-}
-
 void flow_operation_provider_registration_destroy(
     flow_operation_provider_registration_t *provider) {
   if (!provider) return;
@@ -237,13 +230,6 @@ void flow_clear_registry(turbo_flow_t *flow) {
   size_t i;
 
   if (!flow) return;
-  for (i = 0; i < vec_size(&flow->registrations); ++i) {
-    flow_stage_registration_t *reg =
-        (flow_stage_registration_t *)vec_at(&flow->registrations, i);
-    flow_registration_destroy(reg);
-  }
-  turbo_flow_stl_error(vec_clear(&flow->registrations));
-
   for (i = 0; i < vec_size(&flow->operation_providers); ++i) {
     flow_operation_provider_registration_t *provider =
         (flow_operation_provider_registration_t *)vec_at(&flow->operation_providers, i);
@@ -299,18 +285,6 @@ int flow_find_stage_view(const turbo_flow_t *flow, vstr name) {
         memcmp(stage->name, name.data, name.len) == 0) {
       return (int)i;
     }
-  }
-  return -1;
-}
-
-int flow_find_registration(const turbo_flow_t *flow, const char *name) {
-  size_t i;
-
-  if (!flow || !name) return -1;
-  for (i = 0; i < vec_size(&flow->registrations); ++i) {
-    const flow_stage_registration_t *reg =
-        (const flow_stage_registration_t *)vec_at_const(&flow->registrations, i);
-    if (reg && flow_name_eq_cstr(reg->name, name)) return (int)i;
   }
   return -1;
 }
@@ -402,9 +376,6 @@ turbo_flow_t *turbo_flow_create(void) {
       turbo_flow_stl_error(vec_init_bytes(&flow->reorder_states, sizeof(flow_reorder_state_t),
                                           _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
           SALTS_OK ||
-      turbo_flow_stl_error(vec_init_bytes(&flow->registrations, sizeof(flow_stage_registration_t),
-                                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
-          SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&flow->operation_providers, sizeof(flow_operation_provider_registration_t),
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
@@ -472,7 +443,6 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   vec_destroy(&flow->worker_pool_adapters);
   vec_destroy(&flow->worker_pool_adapter_by_stage);
   vec_destroy(&flow->reorder_states);
-  vec_destroy(&flow->registrations);
   vec_destroy(&flow->operation_providers);
   vec_destroy(&flow->primitives);
   vec_destroy(&flow->operations);
@@ -516,40 +486,6 @@ int turbo_flow_reset(turbo_flow_t *flow, int keep_registry) {
   atomic_store_explicit(&flow->next_sequence, 0u, memory_order_release);
   flow->state = TURBO_FLOW_STATE_NEW;
   flow_clear_error(flow);
-  return SALTS_OK;
-}
-
-int turbo_flow_register_stage_ex(turbo_flow_t *flow, const char *name, turbo_flow_stage_fn fn,
-                                 void *ctx, const turbo_flow_stage_options_t *options) {
-  flow_stage_registration_t reg;
-
-  if (!flow || !name || name[0] == '\0' || !fn ||
-      (options && (options->mutability < TURBO_FLOW_STAGE_READONLY ||
-                   options->mutability > TURBO_FLOW_STAGE_MUTATES_IN_PLACE ||
-                   (options->effects & ~TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u))) {
-    return SALTS_EINVAL;
-  }
-  if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
-                                     "cannot register stage after compile");
-  }
-  if (flow_find_registration(flow, name) >= 0) {
-    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "duplicate stage registration");
-  }
-
-  memset(&reg, 0, sizeof(reg));
-  reg.name = tstr_dup(name);
-  if (!reg.name) return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
-  reg.fn = fn;
-  reg.ctx = ctx;
-  if (options) reg.options = *options;
-  else reg.options.mutability = TURBO_FLOW_STAGE_READONLY;
-
-  if (turbo_flow_stl_error(vec_push(&flow->registrations, &reg)) != SALTS_OK) {
-    flow_registration_destroy(&reg);
-    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
-  }
-
   return SALTS_OK;
 }
 

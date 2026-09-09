@@ -1,5 +1,6 @@
 #include "turbo_flow_codec.h"
 
+#include "../../tests/flow_operation_fixture.h"
 #include "tinytest.h"
 #include "tstr.h"
 
@@ -215,7 +216,7 @@ spec("turbo_flow_codec") {
   it("extracts one line-delimited frame") {
     static const char *src = "source input\n"
                              "stage lines adapter \"codec.lines\"\n"
-                             "stage capture\n"
+                             "stage capture operation test.capture\n"
                              "stage main {\n"
                              "  input -> lines -> capture\n"
                              "}\n";
@@ -236,8 +237,11 @@ spec("turbo_flow_codec") {
     check_not_null(adapter_schema);
     check_equal(adapter_schema->kind, TURBO_FLOW_ADAPTER_KIND_CODEC);
     check_equal(adapter_schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
-    check_equal(turbo_flow_register_stage_ex(flow, "capture", codec_capture_stage, &capture, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_capture_0 =
+        flow_test_operation_init("test.capture", codec_capture_stage, &capture);
+    operation_capture_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_capture_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_capture_0), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -275,7 +279,7 @@ spec("turbo_flow_codec") {
   it("extracts a length-prefixed binary frame") {
     static const char *src = "source input\n"
                              "stage frame adapter \"codec.length\"\n"
-                             "stage capture\n"
+                             "stage capture operation test.capture\n"
                              "stage main {\n"
                              "  input -> frame -> capture\n"
                              "}\n";
@@ -295,8 +299,11 @@ spec("turbo_flow_codec") {
 
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_length_adapter(flow, "codec.length", &config), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "capture", codec_capture_stage, &capture, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_capture_1 =
+        flow_test_operation_init("test.capture", codec_capture_stage, &capture);
+    operation_capture_1.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_capture_1.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_capture_1), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -337,7 +344,7 @@ spec("turbo_flow_codec") {
   it("binds JSON payloads to DataBind parsed values") {
     static const char *src = "source input\n"
                              "stage bind adapter \"codec.databind\"\n"
-                             "stage capture\n"
+                             "stage capture operation test.capture\n"
                              "stage main {\n"
                              "  input -> bind -> capture\n"
                              "}\n";
@@ -362,9 +369,11 @@ spec("turbo_flow_codec") {
     check_not_null(adapter_schema);
     check_equal(adapter_schema->kind, TURBO_FLOW_ADAPTER_KIND_DATABIND);
     check_equal(adapter_schema->roles, TURBO_FLOW_ADAPTER_TRANSFORM);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "capture", codec_databind_capture_stage, &capture, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_capture_2 =
+        flow_test_operation_init("test.capture", codec_databind_capture_stage, &capture);
+    operation_capture_2.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_capture_2.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_capture_2), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -387,7 +396,7 @@ spec("turbo_flow_codec") {
   it("deep clones DataBind projections across a message lifetime boundary") {
     static const char *src = "source input\n"
                              "stage bind adapter \"codec.databind\"\n"
-                             "stage clone_capture\n"
+                             "stage clone_capture operation test.clone_capture\n"
                              "stage main {\n"
                              "  input -> bind -> clone_capture\n"
                              "}\n";
@@ -412,9 +421,11 @@ spec("turbo_flow_codec") {
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
                  SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "clone_capture", codec_clone_capture_stage,
-                                              &capture, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_clone_capture_3 =
+        flow_test_operation_init("test.clone_capture", codec_clone_capture_stage, &capture);
+    operation_clone_capture_3.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_clone_capture_3.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_clone_capture_3), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -439,7 +450,7 @@ spec("turbo_flow_codec") {
     static const char *src = "source input\n"
                              "stage bind adapter \"codec.databind\"\n"
                              "stage remote adapter retryable retry attempts 2\n"
-                             "stage capture\n"
+                             "stage capture operation test.capture\n"
                              "stage main {\n"
                              "  input -> bind -> remote -> capture\n"
                              "}\n";
@@ -466,9 +477,11 @@ spec("turbo_flow_codec") {
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
                  SALTS_OK);
     check_equal(turbo_flow_register_adapter(flow, "retryable", &ops, &retry), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "capture", codec_databind_capture_stage, &capture, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_capture_4 =
+        flow_test_operation_init("test.capture", codec_databind_capture_stage, &capture);
+    operation_capture_4.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_capture_4.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_capture_4), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -488,7 +501,7 @@ spec("turbo_flow_codec") {
   it("binds bin payloads through the same DataBind adapter") {
     static const char *src = "source input\n"
                              "stage bind adapter \"codec.databind\"\n"
-                             "stage capture\n"
+                             "stage capture operation test.capture\n"
                              "stage main {\n"
                              "  input -> bind -> capture\n"
                              "}\n";
@@ -512,9 +525,11 @@ spec("turbo_flow_codec") {
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
                  SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "capture", codec_databind_capture_stage, &capture, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_capture_5 =
+        flow_test_operation_init("test.capture", codec_databind_capture_stage, &capture);
+    operation_capture_5.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_capture_5.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_capture_5), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -532,7 +547,7 @@ spec("turbo_flow_codec") {
   it("binds CSV payloads and validates XML payloads through DataBind") {
     static const char *bind_src = "source input\n"
                                   "stage bind adapter \"codec.databind\"\n"
-                                  "stage capture\n"
+                                  "stage capture operation test.capture\n"
                                   "stage main {\n"
                                   "  input -> bind -> capture\n"
                                   "}\n";
@@ -558,9 +573,11 @@ spec("turbo_flow_codec") {
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &config),
                  SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "capture", codec_databind_capture_stage, &capture, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_capture_6 =
+        flow_test_operation_init("test.capture", codec_databind_capture_stage, &capture);
+    operation_capture_6.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_capture_6.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_capture_6), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, bind_src, strlen(bind_src)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -639,7 +656,7 @@ spec("turbo_flow_codec") {
                              "source rows\n"
                              "stage split adapter codec.csv.split\n"
                              "stage bind adapter codec.databind\n"
-                             "stage capture\n"
+                             "stage capture operation test.capture\n"
                              "stage main {\n"
                              "  input -> split\n"
                              "  rows -> bind -> capture\n"
@@ -664,9 +681,11 @@ spec("turbo_flow_codec") {
         SALTS_OK);
     check_equal(turbo_flow_codec_register_databind_adapter(flow, "codec.databind", &bind_config),
                  SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "capture", codec_csv_split_capture_stage,
-                                              &capture, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_capture_7 =
+        flow_test_operation_init("test.capture", codec_csv_split_capture_stage, &capture);
+    operation_capture_7.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_capture_7.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_capture_7), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -686,7 +705,7 @@ spec("turbo_flow_codec") {
     static const char *dsl = "source input\n"
                              "source rows\n"
                              "stage split adapter codec.csv.split\n"
-                             "stage capture\n"
+                             "stage capture operation test.capture\n"
                              "stage main {\n"
                              "  input -> split\n"
                              "  rows -> capture\n"
@@ -703,8 +722,11 @@ spec("turbo_flow_codec") {
     check_not_null(flow);
     check_equal(turbo_flow_codec_register_csv_splitter_adapter(flow, "codec.csv.split", &config),
                  SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "capture", codec_capture_stage, &capture, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_capture_8 =
+        flow_test_operation_init("test.capture", codec_capture_stage, &capture);
+    operation_capture_8.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_capture_8.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_capture_8), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);

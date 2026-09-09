@@ -173,10 +173,11 @@ validation metadata，不是包含所有 domain 方法的胖 vtable。
 domain/type/version range、execution mask、owner/pool concurrency scope、management authority 和相邻显式
 operation 的 input/output domain/type，并把 bounded backpressure、ordering、retry 和 reject 要求核对
 到既有 worker Disruptor、reorder、adapter retry 和 reject edge。所有 runtime node 都解析为
-完整 operation；未显式绑定的 node 使用可查询的 `core.source` / `core.stage.*` concrete contract，
-未显式绑定的 callback/adapter 仍是兼容路径，不能计入 module-level executable proof。对于已进入
-module catalog 的 operation，compiler 会校验 typed provider 或 native adapter 已绑定唯一 module
-owner；resource-owned adapter operation 还必须匹配注册时固化的 primitive name。Legacy callback
+完整 operation。Callback stage 必须显式绑定 operation identity，并分别注册 descriptor/provider；
+不再存在按 stage 名称查找 callback 的 registry。Source、port 和 adapter-owned consume 可使用
+`core.source`、`core.port.input/output`、`core.stage.owner` 内建契约，后者不计入 module-level
+executable proof。Cataloged operation 的 provider 或 native adapter 必须绑定唯一 module owner；
+resource-owned adapter operation 还须匹配注册时固化的 primitive name。未绑定 module 的 provider
 不能冒充 cataloged operation，`ADAPTER_OWNER` 必须由 typed adapter 执行。
 Runtime pool 已提供 stable UID、generation、typed Status/Condition 和 checked
 resize command；operation execution deadline 已接入 inline、thread/coro pool、worker lane
@@ -210,8 +211,7 @@ downstream failure 后反向回滚已提交 state。Processing-time timer、slid
 typed provider 绑定回该 module。`rules.apply` 是 Rules domain 的显式
 stage operation，`RuleSet` 是带 owner/resource contract 的 primitive。Host 通过
 `turbo_flow_rule_register_data_operation()` 绑定一个规则资源；compiler 按
-`(operation, resource)` 选择 executable provider，旧的按 stage callback 注册方式继续
-作为兼容路径。这样规则节点可以放在任意满足 Message 类型边的 DAG 位置，而不把规则
+`(operation, resource)` 选择 executable provider，不提供 stage-name callback 兼容路径。这样规则节点可以放在任意满足 Message 类型边的 DAG 位置，而不把规则
 程序、资源状态或执行调度塞进 parser/descriptor。无 schema 的 processor 可以直接使用；
 带 schema 的 processor 必须通过
 `turbo_flow_rule_facts_provider_fn` 显式提供同一字段顺序、字段 ID 和类型的 typed facts。
