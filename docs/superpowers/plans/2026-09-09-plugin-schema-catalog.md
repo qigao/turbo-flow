@@ -21,6 +21,10 @@
 
 ## Task 1: 事务化 schema catalog
 
+**执行状态（2026-09-09）：** schema 阶段已实现，并通过 task review 与 final review。
+Debug/ASan、Release 全量测试均为 53/53 通过。本阶段不代表 #73 的 operation 工厂、
+generation 或引擎迁移已完成。
+
 **Files:**
 - Create: `turbo_flow/include/turbo_flow_plugin_operation.h`
 - Modify: `turbo_flow/include/turbo_flow_plugin.h`, `turbo_flow/src/flow_plugin.c`, `turbo_flow/CMakeLists.txt`
@@ -51,8 +55,8 @@ int turbo_flow_plugin_catalog_snapshot_schema_catalog(
     turbo_flow_plugin_schema_catalog_v1_t *catalog_out);
 ```
 
-- [ ] 添加真实 DLL fixture 与 TinyTest，先运行目标，确认新头/接口尚不存在导致构建失败。Fixture 通过唯一导出注册 CMeta int schema；重复条目、错误版本、非法 descriptor 与吞掉注册错误使用独立 DLL 变体。
-- [ ] 核心用例按如下断言验证真实加载和卸载边界；host/config/error/snapshot 均由测试独立初始化，最后销毁 snapshot 再销毁 host。
+- [ ] 添加真实 DLL fixture 与 TinyTest，先运行目标，确认新头/接口尚不存在导致构建失败。Fixture 通过唯一导出注册 CMeta int schema；重复条目、错误版本、非法 descriptor 与吞掉注册错误使用独立 DLL 变体。**历史缺口：** 最初构建先被失效的 re2c cache 阻断，未取得 missing-header RED；controller 裁决接受如实披露，并以临时移除 schema wrapper ABI 下界检查的行为 mutation（新断言按预期失败）证明回归检测能力，不将本项勾为已执行。
+- [x] 核心用例按如下断言验证真实加载和卸载边界；host/config/error/snapshot 均由测试独立初始化，最后销毁 snapshot 再销毁 host。
 
 ```c
 check_equal(turbo_flow_plugin_host_load(host, FLOW_SCHEMA_GOOD, &error), SALTS_OK);
@@ -64,9 +68,9 @@ check_true(cmeta_type_equal(catalog.schemas[0].data->storage_type, cmeta_type(in
 check_equal(turbo_flow_plugin_host_destroy(host, 0u, &error), SALTS_EBUSY);
 ```
 
-- [ ] 实现 descriptor、容量、capability 位和 add_schema 回调。验证 size、major、minor>=4 且不高于当前 host、schema_version 非零、CMeta descriptor/storage type 有效、stable_id 有界且合法。重复组合返回 SALTS_EALREADY，零容量返回 SALTS_ENOSPC，非法输入返回 SALTS_EINVAL。
-- [ ] 用现有 CSTL vec 保存 wrapper；add_schema 的失败写入 registration.first_error。load 成功时将实际 schema capability 与声明一起校验，任何失败调用原事务 rollback 并撤销 schema tail。
-- [ ] snapshot 创建时复制 schema wrapper 数组，沿用现有所有模块 lease。查询验证输出 size/version 后写入只读数组及数量；不转移 metadata 所有权。销毁 snapshot 时释放该数组；host 清理也销毁 schema vec。
-- [ ] 验证零容量、旧配置前缀、重复 schema、吞错回滚后可成功加载、错误 descriptor/ABI、旧 snapshot 不被后续注册改变、CMeta 跨 DLL 语义相等。
-- [ ] 运行 `cmake --build --preset win-dev-user --target test_flow_plugin_schema test_flow_plugin_host test_flow_plugin_generation`，再 `ctest --preset win-dev-user -R test_flow_plugin --output-on-failure`；Release 使用对应 `win-release-user`。所有 Windows 命令从 VsDevCmd 环境运行。
-- [ ] 对新测试执行 5 次重复，检查 C++ 头消费和安装头清单，再提交 `feat(plugin): add transactional schema catalogs`。全部步骤完成前不合并；#73 后续 operation 工厂、generation、引擎、安装依赖解耦仍按 Spec 跟踪。
+- [x] 实现 descriptor、容量、capability 位和 add_schema 回调。验证 size、major、minor>=4 且不高于当前 host、schema_version 非零、CMeta descriptor/storage type 有效、stable_id 有界且合法。重复组合返回 SALTS_EALREADY，零容量返回 SALTS_ENOSPC，非法输入返回 SALTS_EINVAL。
+- [x] 用现有 CSTL vec 保存 wrapper；add_schema 的失败写入 registration.first_error。load 成功时将实际 schema capability 与声明一起校验，任何失败调用原事务 rollback 并撤销 schema tail。
+- [x] snapshot 创建时复制 schema wrapper 数组，沿用现有所有模块 lease。查询验证输出 size/version 后写入只读数组及数量；不转移 metadata 所有权。销毁 snapshot 时释放该数组；host 清理也销毁 schema vec。
+- [x] 验证零容量、旧配置前缀、重复 schema、吞错回滚后可成功加载、错误 descriptor/ABI、旧 snapshot 不被后续注册改变、CMeta 跨 DLL 语义相等。
+- [x] 运行 `cmake --build --preset win-dev-user --target test_flow_plugin_schema test_flow_plugin_host test_flow_plugin_generation`，再 `ctest --preset win-dev-user -R test_flow_plugin --output-on-failure`；Release 使用对应 `win-release-user`。所有 Windows 命令从 VsDevCmd 环境运行。
+- [x] 对新测试执行 5 次重复，检查 C++ 头消费和安装头清单，再提交 `feat(plugin): add transactional schema catalogs`。全部步骤完成前不合并；#73 后续 operation 工厂、generation、引擎、安装依赖解耦仍按 Spec 跟踪。
