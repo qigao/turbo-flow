@@ -212,6 +212,44 @@ if(WIN32)
   if(NOT EXISTS "${dumpbin}")
     message(FATAL_ERROR "Required dumpbin executable does not exist: ${dumpbin}")
   endif()
+  set(installed_compat_flow "${stage_dir}/bin/turbo_flow.dll")
+  execute_process(
+    COMMAND "${dumpbin}" /nologo /exports "${installed_compat_flow}"
+    RESULT_VARIABLE compat_export_result
+    OUTPUT_VARIABLE compat_export_output
+    ERROR_VARIABLE compat_export_error)
+  if(NOT compat_export_result EQUAL 0)
+    message(FATAL_ERROR
+            "compat Flow export inspection failed\n${compat_export_output}\n${compat_export_error}")
+  endif()
+  set(historical_config_exports
+      turbo_flow_config_resolve_yaml
+      turbo_flow_resolved_adapter_array_size
+      turbo_flow_resolved_adapter_array_string_at
+      turbo_flow_resolved_adapter_field_count
+      turbo_flow_resolved_adapter_field_name
+      turbo_flow_resolved_adapter_field_type
+      turbo_flow_resolved_adapter_get_bool
+      turbo_flow_resolved_adapter_get_i64
+      turbo_flow_resolved_adapter_get_string
+      turbo_flow_resolved_adapter_get_u64
+      turbo_flow_resolved_channel_get_string
+      turbo_flow_resolved_config_adapter
+      turbo_flow_resolved_config_channel
+      turbo_flow_resolved_config_destroy
+      turbo_flow_resolved_config_json
+      turbo_flow_resolved_config_preflight_adapter_kinds
+      turbo_flow_resolved_config_profile_adapter
+      turbo_flow_resolved_config_profile_adapter_optional
+      turbo_flow_resolved_config_profile_channel
+      turbo_flow_resolved_config_profile_channel_optional)
+  foreach(historical_export IN LISTS historical_config_exports)
+    if(NOT compat_export_output MATCHES
+       "${historical_export}.*forwarded to turbo_flow_config\\.${historical_export}")
+      message(FATAL_ERROR
+              "compat Flow is missing historical Config forwarder ${historical_export}\n${compat_export_output}")
+    endif()
+  endforeach()
   execute_process(
     COMMAND "${dumpbin}" /nologo /exports "${installed_cnet_plugin}"
     RESULT_VARIABLE export_result
@@ -343,6 +381,23 @@ run_checked(
   "full consumer build"
   "${CMAKE_COMMAND}" --build "${full_consumer_build_dir}"
   --config "${TURBO_FLOW_CONFIG}" --parallel)
+
+if(WIN32)
+  set(legacy_consumer "${full_consumer_build_dir}/turbo_flow_legacy_config_consumer.exe")
+  execute_process(
+    COMMAND dumpbin /nologo /imports "${legacy_consumer}"
+    RESULT_VARIABLE legacy_import_result
+    OUTPUT_VARIABLE legacy_import_output
+    ERROR_VARIABLE legacy_import_error)
+  if(NOT legacy_import_result EQUAL 0)
+    message(FATAL_ERROR "legacy consumer import inspection failed: ${legacy_import_error}")
+  endif()
+  if(NOT legacy_import_output MATCHES "turbo_flow\\.dll" OR
+     legacy_import_output MATCHES "turbo_flow_config\\.dll")
+    message(FATAL_ERROR
+            "legacy consumer must import config APIs from turbo_flow.dll\n${legacy_import_output}")
+  endif()
+endif()
 
 run_checked(
   "full consumer execution"

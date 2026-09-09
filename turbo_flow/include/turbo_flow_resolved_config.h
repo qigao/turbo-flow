@@ -138,13 +138,22 @@ TURBO_FLOW_C_API void turbo_flow_resolved_config_destroy(turbo_flow_resolved_con
 TURBO_FLOW_C_API const char *
 turbo_flow_resolved_config_json(const turbo_flow_resolved_config_t *config, size_t *json_len);
 
+/** Write the binding count; zeroes `count` on error. */
 TURBO_FLOW_C_API int
 turbo_flow_resolved_config_operation_binding_count(const turbo_flow_resolved_config_t *config,
                                                    size_t *count);
+/**
+ * Project a borrowed binding by index. `view->size` must equal sizeof(*view).
+ * A valid-sized view is cleared on error while preserving size. Returns SALTS_ENOENT when absent.
+ */
 TURBO_FLOW_C_API int
 turbo_flow_resolved_config_operation_binding_at(const turbo_flow_resolved_config_t *config,
                                                 size_t index,
                                                 turbo_flow_resolved_operation_binding_view_t *view);
+/**
+ * Project a borrowed permission by binding and permission index.
+ * Sets `permission` to NULL on error and returns SALTS_ENOENT when either index is absent.
+ */
 TURBO_FLOW_C_API int turbo_flow_resolved_config_operation_binding_permission_at(
     const turbo_flow_resolved_config_t *config, size_t binding_index, size_t permission_index,
     const char **permission);

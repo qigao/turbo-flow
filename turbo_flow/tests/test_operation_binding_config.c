@@ -253,6 +253,29 @@ spec("operation binding configuration") {
     }
     free(base);
   }
+  it("rejects enum strings with embedded NUL suffixes") {
+    static const struct enum_nul_case_s {
+      const char *field;
+      const char *literal;
+    } cases[] = {{"execution", "inline"},
+                 {"threading", "owner"},
+                 {"cancellation", "none"}};
+    char *base = document(fields);
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+      char original[96];
+      char replacement[128];
+      char path[128];
+      (void)snprintf(original, sizeof(original), "    %s: %s\n", cases[i].field,
+                     cases[i].literal);
+      (void)snprintf(replacement, sizeof(replacement), "    %s: \"%s\\u0000junk\"\n",
+                     cases[i].field, cases[i].literal);
+      (void)snprintf(path, sizeof(path), "$.operation_bindings[0].%s", cases[i].field);
+      char *yaml = replace(base, original, replacement);
+      rejected(yaml, SALTS_EINVAL, path);
+      free(yaml);
+    }
+    free(base);
+  }
   it("enforces every numeric field at its exact integer boundaries") {
     static const struct numeric_case_s {
       const char *field;

@@ -171,6 +171,10 @@ add_library(turbo_flow SHARED
   ${TURBO_FLOW_CONTROL_GRAMMAR_GEN}
   ${TURBO_FLOW_SECURITY_RULE_LEXER_GEN}
   ${TURBO_FLOW_HEADERS})
+if(WIN32)
+  target_sources(turbo_flow PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_flow_config_forwarders.def)
+endif()
 add_dependencies(turbo_flow
   ${TURBO_FLOW_LEXER_TARGET}
   ${TURBO_FLOW_GRAMMAR_TARGET}

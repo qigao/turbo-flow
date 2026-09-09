@@ -73,7 +73,9 @@ static int flow_operation_enum(const json_value_t *value, size_t index, const ch
     return flow_config_error(error, SALTS_EINVAL, path, "expected enum string");
   text = json_string(value);
   for (size_t i = 0; i < value_count; ++i)
-    if (strcmp(text, values[i]) == 0) return SALTS_OK;
+    if (json_string_len(value) == strlen(values[i]) &&
+        memcmp(text, values[i], json_string_len(value)) == 0)
+      return SALTS_OK;
   return flow_config_error(error, SALTS_EINVAL, path, "unsupported enum value");
 }
 
