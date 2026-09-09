@@ -6,6 +6,23 @@ cmake_add_test(test_chttp_plugin
 set_tests_properties(test_chttp_plugin PROPERTIES LABELS "chttp-plugin;plugin;graph")
 add_dependencies(test_chttp_plugin tf_chttp_plugin)
 
+foreach(mode RANGE 0 2)
+  add_library(tf_chttp_delivery_fixture_${mode} SHARED
+    chttp_plugin_delivery_fixture.c ../src/turbo_flow_chttp_plugin_config.c)
+  target_compile_definitions(tf_chttp_delivery_fixture_${mode} PRIVATE
+    TURBO_FLOW_PLUGIN_BUILD CHTTP_DELIVERY_MODE=${mode})
+  target_include_directories(tf_chttp_delivery_fixture_${mode} PRIVATE ../include ../src)
+  target_link_libraries(tf_chttp_delivery_fixture_${mode} PRIVATE
+    tf_chttp_adapter TurboFlow::Product Salts::CSTL Salts::UriParser)
+  if(WIN32)
+    target_link_libraries(tf_chttp_delivery_fixture_${mode} PRIVATE ws2_32)
+  endif()
+  cmake_config_target(tf_chttp_delivery_fixture_${mode} NO_INSTALL FOLDER "io/chttp/tests")
+  target_compile_definitions(test_chttp_plugin PRIVATE
+    CHTTP_DELIVERY_FIXTURE_${mode}="$<TARGET_FILE:tf_chttp_delivery_fixture_${mode}>")
+  add_dependencies(test_chttp_plugin tf_chttp_delivery_fixture_${mode})
+endforeach()
+
 cmake_add_test(
   test_chttp_adapter
   SOURCES test_chttp_adapter.c chttp_header_cpp.cpp

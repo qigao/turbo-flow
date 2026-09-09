@@ -55,26 +55,36 @@ Test: `io/chttp/tests/test_chttp_plugin.c`。
 
 Interfaces: 沿用 `turbo_flow_plugin_transactional_adapter_provider_v1_t` 的 preflight/materialize 和 `turbo_flow_plugin_product_owner_publish`；kind 精确为 `chttp.client`, `chttp.server`, `chttp.websocket_server`。
 
-- [ ] 先写 PluginHost loading/catalog 测试：三种 kind 同时存在，重复注册导致整个注册事务失败。
-- [ ] 建立 schema_version=1 的严格 resolved-config reader；字段分 common network/TLS、client request、server route/deferred、WebSocket frame/session 四组。所有容量和 timeout 为显式数值，类型不转换、不自动补全。
-- [ ] client 必须配置 connection_uri/authority/target/method/protocol、请求/响应/header 界限、max_attempts/idempotent/retry_delay/overall_timeout、TLS 引用/ALPN、poll budget。
-- [ ] server 必须配置 bind/route、H1 或显式 H1+H2 策略、H2 stream/HPACK/input/output 界限、TLS 引用/ALPN、deferred response/body/message 限额、状态码和 stop timeout。原生 server enable_http2 表示同时接受 H1/H2，不能把它宣传为 H2-only。
-- [ ] WebSocket 同时要求 session/frame/message/buffer 硬界限。检查 source 与 terminal stage 引用同一 adapter；client 只能用于 async transform stage。
-- [ ] preflight 完成所有字段、交叉容量、URI、协议/TLS/ALPN 校验后，materialize 才创建 profile/adapter。复制需要越过 resolved lifetime 的所有字符串。
-- [ ] root 使用有上限的 CSTL owner 集合；失败按逆序回收。注册后不能单独 unregister 时，由 generation 既有 rollback/detach 处理，绝不释放 registry 仍借用的 ctx。
-- [ ] client owner poll 调用原 adapter poll；server/WebSocket owner quiesce 调用 #83/#85 接口。未启动 owner 允许无副作用退出；已运行 owner 仅在原 snapshot 证明停止/无残余后通过 drain/shutdown。
-- [ ] sole-export DLL 私有依赖 adapter/Product/CHTTP；Windows CRT 与 TLS/profile 存储均在创建者边界释放。
+- [x] 先写 PluginHost loading/catalog 测试：三种 kind 同时存在，重复注册导致整个注册事务失败。Task 3 追加不同模块身份的 kind 冲突测试。
+- [x] 建立 schema_version=1 的严格 resolved-config reader；字段分 common network/TLS、client request、server route/deferred、WebSocket frame/session 四组。所有容量和 timeout 为显式数值，类型不转换、不自动补全。
+- [x] client 必须配置 connection_uri/authority/target/method/protocol、请求/响应/header 界限、max_attempts/idempotent/retry_delay/overall_timeout、TLS 引用/ALPN、poll budget。
+- [x] server 必须配置 bind/route、H1 或显式 H1+H2 策略、H2 stream/HPACK/input/output 界限、TLS 引用/ALPN、deferred response/body/message 限额、状态码和 stop timeout。原生 server enable_http2 表示同时接受 H1/H2，不能把它宣传为 H2-only。
+- [x] WebSocket 同时要求 session/frame/message/buffer 硬界限。检查 source 与 terminal stage 引用同一 adapter；client 只能用于 async transform stage。
+- [x] preflight 完成所有字段、交叉容量、URI、协议/TLS/ALPN 校验后，materialize 才创建 profile/adapter。复制需要越过 resolved lifetime 的所有字符串。
+- [x] root 使用有上限的 CSTL owner 集合；失败按逆序回收。注册后不能单独 unregister 时，由 generation 既有 rollback/detach 处理，绝不释放 registry 仍借用的 ctx。
+- [x] client owner poll 调用原 adapter poll；server/WebSocket owner quiesce 调用 #83/#85 接口。未启动 owner 允许无副作用退出；已运行 owner 仅在原 snapshot 证明停止/无残余后通过 drain/shutdown。
+- [x] sole-export DLL 私有依赖 adapter/Product/CHTTP；Windows CRT 与 TLS/profile 存储均在创建者边界释放。
+
+Task 2 在 `65b0efc` 完成限定复审；配置词法缺口已由 RED/GREEN 测试修复。`3bd9fc4` 完整 Debug/ASan 52/52，修复后 focused plugin 13 项通过；Task 3 仍需最终双配置交付验证。client 增加原 owner mutex 管理的 quiesce/resume，不复制 admission 状态。未编译 Graph 的 terminal outgoing 仍由 compile 校验，装配失败由 generation 回收，配置字段提前失败的约束不变。
 
 ## Task 3: Gateway 测试与交付门禁
 
 Files: `io/chttp/tests/test_chttp_plugin.c`, `io/chttp/tests/CMakeLists.txt`, `tests/install_consumer/main.c`, install consumer CMake 与检查脚本，CHTTP README/ADR。
 
-- [ ] Gateway-style consumer 仅链接 PluginHost/Product/Graph，通过 catalog/generation 使用三类能力；网络对端 fixture 可链接原生 CHTTP，但不得调用具体 Flow adapter。
-- [ ] 用真实 H1/H2 server 验证 client 输出、H2 多请求共享 session 与取消隔离；用原生 client 验证 deferred H1/H2 server 与 H1/RFC8441 WebSocket echo。
-- [ ] 遍历未知/缺失/错误类型/零容量/溢出/不匹配协议/TLS/ALPN，断言 create 前失败，原 Flow 所有权不转移。
-- [ ] 测试第二个 owner 装配失败回滚；accepted request、session、claim、run、显式 lease 存活时卸载 EBUSY，终结与释放次数各一次。
-- [ ] 验证 DLL sole export/dependency table、安装路径动态加载、Debug/Release profile 隔离。运行 focused repeats、完整 CTest 与 install 两套门禁。
+- [x] Gateway-style consumer 仅链接 PluginHost/Product/Graph，通过 catalog/generation 使用三类能力；网络对端 fixture 可链接原生 CHTTP，但不得调用具体 Flow adapter。
+- [x] 用真实 H1/H2 server 验证 client 输出、H2 多请求共享 session 与取消隔离；用原生 client 验证 deferred H1/H2 server 与 H1/RFC8441 WebSocket echo。
+- [x] 遍历未知/缺失/错误类型/零容量/溢出/不匹配协议/TLS/ALPN，断言 create 前失败，原 Flow 所有权不转移。
+- [x] 测试第二个 owner 装配失败回滚；accepted request、session、claim、run、显式 lease 存活时卸载 EBUSY，终结与释放次数各一次。
+- [x] 验证 DLL sole export/dependency table、安装路径动态加载、Debug/Release profile 隔离。运行 focused repeats、完整 CTest 与 install 两套门禁。
 - [ ] 独立审查后创建 PR 关联 #71；逐项核对 issue 验收再勾选。无实测性能数据不得宣称吞吐提升。
+
+Task 3 本地验证：Debug/ASan 与 Release 各完整构建、CTest 52/52、
+插件 focused 连续 10 次以及各自 install preset 通过。新增独立安装消费者，
+插件测试合计 17 项，包含三类 H2/TLS 实际往返、共享连接计数、
+native peer 单流取消、ACTIVE run/deferred 请求保活和真实 provider 的
+allocator 故障/注册冲突 fixture。取消来源为 peer，不代表新增 Gateway client cancel API；
+emit claim 的在途证据来自 accepted native 请求与尚未 terminal 的 run，
+没有额外公开 claim 计数。PR/独立审查由主线程继续处理。
 
 ## 兼容、迁移与回滚
 

@@ -1,6 +1,8 @@
+#include "../../cnet/tests/listener_source_tls_fixture.h"
 #include "chttp_plugin_fixtures.h"
 #include "tinytest.h"
 #include "turbo_flow_plugin_generation.h"
+#include <cflow/publishers.h>
 #include <chttp/chttp.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
@@ -21,6 +23,33 @@ static int replace_once(const char *input, const char *needle, const char *repla
   memcpy(output + prefix + strlen(replacement), at + strlen(needle),
          strlen(at + strlen(needle)) + 1u);
   return SALTS_OK;
+}
+
+static void replace_field(char yaml[PLUGIN_TEST_YAML_BYTES], const char *before,
+                          const char *after) {
+  char temporary[PLUGIN_TEST_YAML_BYTES];
+  check_equal(replace_once(yaml, before, after, temporary), SALTS_OK);
+  memcpy(yaml, temporary, strlen(temporary) + 1u);
+}
+
+static void tls_path_field(char yaml[PLUGIN_TEST_YAML_BYTES], const char *key, const char *path) {
+  char before[128], after[1024];
+  snprintf(before, sizeof(before), "%s: \"\"", key);
+  check_less(snprintf(after, sizeof(after), "%s: \"%s\"", key, path), (int)sizeof(after));
+  for (char *p = after; *p; ++p)
+    if (*p == '\\') *p = '/';
+  replace_field(yaml, before, after);
+}
+
+static void tls_yaml(char yaml[PLUGIN_TEST_YAML_BYTES]) {
+  char io_buffer[128];
+  snprintf(io_buffer, sizeof(io_buffer), "network_tls_io_buffer_bytes: %u",
+           (unsigned)CNET_TLS_MIN_IO_BUFFER_BYTES);
+  replace_field(yaml, "tls_enabled: false", "tls_enabled: true");
+  replace_field(yaml, "network_tls_handshake_timeout_ms: 0",
+                "network_tls_handshake_timeout_ms: 5000");
+  replace_field(yaml, "network_tls_io_buffer_bytes: 0", io_buffer);
+  replace_field(yaml, "tls_alpn: []", "tls_alpn: [\"h2\"]");
 }
 
 static int preflight_yaml(const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog,
@@ -49,6 +78,27 @@ static int plugin_sink(turbo_flow_msg_t *message, void *ctx) {
   (void)message;
   (void)ctx;
   return SALTS_OK;
+}
+
+static void rejected_generation_preserves_flow(turbo_flow_plugin_catalog_snapshot_t *snapshot,
+                                               const char *yaml) {
+  static const char graph[] = "source input\nstage request adapter client\nstage output\nstage "
+                              "main {\n input -> request -> output\n}\n";
+  turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  turbo_flow_plugin_generation_config_t config = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+  turbo_flow_resolved_config_t *resolved = NULL;
+  turbo_flow_plugin_generation_t *generation = NULL;
+  turbo_flow_t *flow = turbo_flow_create(), *original = flow;
+  check_equal(turbo_flow_parse_string(flow, graph, strlen(graph)), SALTS_OK);
+  int rc = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error);
+  if (rc == SALTS_OK)
+    rc = turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &config, &generation,
+                                             &error);
+  check_not_equal(rc, SALTS_OK);
+  check_true(flow == original);
+  check_null(generation);
+  turbo_flow_resolved_config_destroy(resolved);
+  turbo_flow_destroy(flow);
 }
 
 static void lexical_preflight(const char *input, size_t provider, const char *name,
@@ -212,7 +262,228 @@ static void traffic_done(void *ctx, const turbo_flow_publish_result_t *result) {
   atomic_fetch_add(&p->done, 1);
 }
 
+enum { ISOLATION_REQUESTS = 2, ISOLATION_TIMEOUT_MS = 3000 };
+typedef struct isolation_peer_s {
+  chttp_server_deferred requests[ISOLATION_REQUESTS];
+  atomic_int admitted;
+} isolation_peer_t;
+
+static int isolation_defer(void *ctx, const chttp_server_request_view *request,
+                           chttp_server_response *response) {
+  isolation_peer_t *peer = ctx;
+  (void)request;
+  int index = atomic_load(&peer->admitted);
+  if (index >= ISOLATION_REQUESTS) return SALTS_ENOSPC;
+  int rc = chttp_server_response_defer(response, &peer->requests[index]);
+  if (rc == SALTS_OK) atomic_fetch_add(&peer->admitted, 1);
+  return rc;
+}
+
 spec("chttp_plugin") {
+  it("retains the plugin until an active Graph run and its accepted emit claim settle") {
+    static const char graph[] = "source input\nstage request adapter client\nstage output\nstage "
+                                "main {\n input -> request -> output\n}\n";
+    chttp_server server = {0};
+    chttp_server_config nc = traffic_server_config();
+    isolation_peer_t peer = {0};
+    traffic_fixture_t f = {0};
+    traffic_probe_t sink = {0};
+    char yaml[PLUGIN_TEST_YAML_BYTES], uri[128];
+    uint16_t port = 0u;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_run_t *run = NULL;
+    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+    turbo_flow_run_config_t rc = TURBO_FLOW_RUN_CONFIG_INIT;
+    cflow_publisher publisher = {0};
+    cflow_scheduler scheduler = {0};
+    turbo_flow_msg_t message;
+    turbo_flow_msg_init(&message);
+    message.id = 1u;
+    message.owned_payload = tstr_dup("ping");
+    message.payload = tstr_to_v(message.owned_payload);
+    check_equal(chttp_server_init(&server, &nc), SALTS_OK);
+    check_equal(chttp_server_route(&server, CHTTP_METHOD_POST, "/echo", isolation_defer, &peer),
+                SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)port);
+    check_equal(replace_once(client_yaml, "tcp://127.0.0.1:9", uri, yaml), SALTS_OK);
+    traffic_open(&f, yaml, graph, traffic_sink, &sink);
+    check_true(cflow_scheduler_inline_init(&scheduler));
+    check_true(cflow_publisher_from_array(&publisher, turbo_flow_message_type(), &message, 1u));
+    rc.scheduler = &scheduler;
+    check_equal(turbo_flow_plugin_generation_lease_acquire(f.generation), SALTS_OK);
+    check_equal(turbo_flow_run_open(turbo_flow_plugin_generation_flow(f.generation), "input",
+                                    &publisher, &rc, &run),
+                SALTS_OK);
+    check_equal(turbo_flow_run_request(run, 1u), SALTS_OK);
+    uint64_t deadline = salts_monotonic_ms() + ISOLATION_TIMEOUT_MS;
+    while (atomic_load(&peer.admitted) != 1 && salts_monotonic_ms() < deadline)
+      check_equal(turbo_flow_plugin_generation_poll(f.generation, 1u, &error), SALTS_OK);
+    check_equal(atomic_load(&peer.admitted), 1);
+    check_not_null(peer.requests[0].impl);
+    check_equal(turbo_flow_run_snapshot(run, &result), SALTS_OK);
+    check_equal(result.state, TURBO_FLOW_RUN_ACTIVE);
+    check_equal(result.values, 0u);
+    check_equal(turbo_flow_plugin_generation_destroy(f.generation, 0u, &error), SALTS_EBUSY);
+    check_equal(turbo_flow_plugin_host_destroy(f.host, 0u, &pe), SALTS_EBUSY);
+    chttp_server_deferred_response reply = {.size = sizeof(reply),
+                                            .status_code = 200u,
+                                            .content_type = "application/octet-stream",
+                                            .body = "ping",
+                                            .body_size = 4u};
+    check_equal(chttp_server_deferred_reply(&peer.requests[0], &reply), SALTS_OK);
+    deadline = salts_monotonic_ms() + ISOLATION_TIMEOUT_MS;
+    int wait_status = SALTS_ETIMEDOUT;
+    while (wait_status == SALTS_ETIMEDOUT && salts_monotonic_ms() < deadline) {
+      check_equal(turbo_flow_plugin_generation_poll(f.generation, 1u, &error), SALTS_OK);
+      wait_status = turbo_flow_run_wait(run, 0u, &result);
+    }
+    check_equal(wait_status, SALTS_OK);
+    check_equal(result.state, TURBO_FLOW_RUN_COMPLETED);
+    check_equal(result.values, 1u);
+    check_equal(atomic_load(&sink.received), 1);
+    turbo_flow_run_close(run);
+    check_equal(turbo_flow_plugin_generation_lease_release(f.generation), SALTS_OK);
+    cflow_scheduler_destroy(&scheduler);
+    turbo_flow_msg_cleanup(&message);
+    traffic_close(&f);
+    check_equal(atomic_load(&sink.received), 1);
+    check_equal(chttp_server_stop(&server, 1000u), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+  it("rolls back the first real owner after second-owner allocation failure with exact allocator "
+     "pairing") {
+    static const char graph[] =
+        "source input\nsource inbound adapter server\nstage request adapter client\n"
+        "stage reply adapter server\nstage output\nstage main {\n"
+        " input -> request -> output\n inbound -> reply\n}\n";
+    char yaml[PLUGIN_TEST_YAML_BYTES];
+    const char *server = strstr(server_yaml, "  server:");
+    check_not_null(server);
+    check_less(snprintf(yaml, sizeof(yaml), "%s%s", client_yaml, server), (int)sizeof(yaml));
+    turbo_flow_plugin_host_t *host = plugin_host(3u);
+    turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_config_error_t ce = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_generation_config_t gc = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+    turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
+    turbo_flow_resolved_config_t *resolved = NULL;
+    turbo_flow_plugin_generation_t *generation = NULL;
+    turbo_flow_t *flow = turbo_flow_create();
+    check_equal(turbo_flow_plugin_host_load(host, CHTTP_DELIVERY_FIXTURE_0, &pe), SALTS_OK);
+    check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &pe), SALTS_OK);
+    check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &ce), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, graph, strlen(graph)), SALTS_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "output", plugin_sink, NULL, NULL), SALTS_OK);
+    check_equal(
+        turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &ce),
+        SALTS_ENOMEM);
+    check_null(flow);
+    check_null(generation);
+    turbo_flow_resolved_config_destroy(resolved);
+    turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+    /* Fixture quiesce checks root + first owner allocation, exactly one owner free,
+     * and failed third allocation. Destroy checks the remaining root free. */
+    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &pe), SALTS_OK);
+  }
+  it("rolls back earlier kinds when a distinct DLL already owns the second or third kind") {
+    static const char *const fixtures[] = {CHTTP_DELIVERY_FIXTURE_1, CHTTP_DELIVERY_FIXTURE_2};
+    static const char *const kinds[] = {"chttp.server", "chttp.websocket_server"};
+    for (size_t i = 0u; i < 2u; ++i) {
+      turbo_flow_plugin_host_t *host = plugin_host(6u);
+      turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
+      turbo_flow_plugin_transactional_product_catalog_v1_t catalog =
+          TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
+      check_equal(turbo_flow_plugin_host_load(host, fixtures[i], &pe), SALTS_OK);
+      for (size_t attempt = 0u; attempt < 2u; ++attempt) {
+        check_not_equal(turbo_flow_plugin_host_load(host, TURBO_FLOW_CHTTP_PLUGIN_PATH, &pe),
+                        SALTS_OK);
+        check_equal(pe.stage, TURBO_FLOW_PLUGIN_STAGE_REGISTRATION);
+        check_equal(turbo_flow_plugin_host_module_count(host), 1u);
+        check_equal(turbo_flow_plugin_host_transactional_adapter_provider_count(host), 1u);
+      }
+      check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &pe), SALTS_OK);
+      check_equal(
+          turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog),
+          SALTS_OK);
+      check_equal(catalog.adapter_provider_count, 1u);
+      check_equal(catalog.adapter_providers[0].kind, kinds[i]);
+      check_equal(preflight_yaml(&catalog, 0u, i ? "websocket" : "server",
+                                 i ? websocket_yaml : server_yaml),
+                  SALTS_OK);
+      turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+      check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &pe), SALTS_OK);
+    }
+  }
+  it("keeps an accepted H2 sibling alive when the peer cancels one shared-session stream") {
+    static const char graph[] = "source input\nstage request adapter client\nstage output\nstage "
+                                "main {\n input -> request -> output\n}\n";
+    chttp_server server = {0};
+    chttp_server_config nc = traffic_server_config();
+    chttp_server_stats stats = {0};
+    isolation_peer_t peer = {0};
+    traffic_fixture_t f = {0};
+    traffic_probe_t probes[ISOLATION_REQUESTS] = {0}, sink = {0};
+    char yaml[PLUGIN_TEST_YAML_BYTES], uri[128];
+    uint16_t port = 0u;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    check_equal(chttp_server_init(&server, &nc), SALTS_OK);
+    check_equal(chttp_server_route(&server, CHTTP_METHOD_POST, "/echo", isolation_defer, &peer),
+                SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)port);
+    check_equal(replace_once(client_yaml, "tcp://127.0.0.1:9", uri, yaml), SALTS_OK);
+    replace_field(yaml, "protocol: \"h1\"", "protocol: \"h2\"");
+    traffic_open(&f, yaml, graph, traffic_sink, &sink);
+    for (size_t i = 0u; i < ISOLATION_REQUESTS; ++i) {
+      turbo_flow_msg_t message;
+      turbo_flow_msg_init(&message);
+      message.id = i + 1u;
+      message.owned_payload = tstr_dup("ping");
+      message.payload = tstr_to_v(message.owned_payload);
+      check_equal(turbo_flow_publish_async(turbo_flow_plugin_generation_flow(f.generation), "input",
+                                           &message, traffic_done, &probes[i]),
+                  SALTS_OK);
+      turbo_flow_msg_cleanup(&message);
+    }
+    uint64_t deadline = salts_monotonic_ms() + ISOLATION_TIMEOUT_MS;
+    while (atomic_load(&peer.admitted) < ISOLATION_REQUESTS && salts_monotonic_ms() < deadline)
+      check_equal(turbo_flow_plugin_generation_poll(f.generation, 1u, &error), SALTS_OK);
+    check_equal(atomic_load(&peer.admitted), ISOLATION_REQUESTS);
+    check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+    check_equal(stats.accepted_connections, (uint64_t)1u);
+    check_equal(stats.active_connections, (size_t)1u);
+    check_equal(atomic_load(&probes[0].done) + atomic_load(&probes[1].done), 0);
+    check_equal(turbo_flow_plugin_host_destroy(f.host, 0u, &pe), SALTS_EBUSY);
+    check_equal(chttp_server_deferred_cancel(&peer.requests[0]), SALTS_OK);
+    chttp_server_deferred_response reply = {.size = sizeof(reply),
+                                            .status_code = 200u,
+                                            .content_type = "application/octet-stream",
+                                            .body = "ping",
+                                            .body_size = 4u};
+    check_equal(chttp_server_deferred_reply(&peer.requests[1], &reply), SALTS_OK);
+    deadline = salts_monotonic_ms() + ISOLATION_TIMEOUT_MS;
+    while (atomic_load(&probes[0].done) + atomic_load(&probes[1].done) < ISOLATION_REQUESTS &&
+           salts_monotonic_ms() < deadline)
+      check_equal(turbo_flow_plugin_generation_poll(f.generation, 1u, &error), SALTS_OK);
+    check_equal(atomic_load(&probes[0].done), 1);
+    check_equal(atomic_load(&probes[1].done), 1);
+    int successes =
+        (atomic_load(&probes[0].status) == SALTS_OK) + (atomic_load(&probes[1].status) == SALTS_OK);
+    check_equal(successes, 1);
+    check_equal(atomic_load(&sink.received), 1);
+    check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+    check_equal(stats.accepted_connections, (uint64_t)1u);
+    traffic_close(&f);
+    check_equal(atomic_load(&probes[0].done), 1);
+    check_equal(atomic_load(&probes[1].done), 1);
+    check_equal(chttp_server_stop(&server, 1000u), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
   it("rejects a WebSocket subprotocol containing a non-token slash in preflight") {
     lexical_preflight(websocket_yaml, 2u, "websocket", "subprotocol: \"\"",
                       "subprotocol: \"chat/v1\"", 0);
@@ -241,7 +512,11 @@ spec("chttp_plugin") {
   it("round trips WebSocket frames through the plugin on H1 and explicit H1 plus H2 listeners") {
     static const char graph[] = "source input adapter websocket\nstage output adapter "
                                 "websocket\nstage main {\n input -> output\n}\n";
-    for (int h2 = 0; h2 < 2; ++h2) {
+    for (int mode = 0; mode < 3; ++mode) {
+      int h2 = mode != 0, tls = mode == 2;
+      listener_source_tls_fixture_t certificates = {0};
+      static const char *const alpn[] = {"h2"};
+      chttp_tls_profile profile = {0};
       traffic_fixture_t f = {0};
       char yaml[PLUGIN_TEST_YAML_BYTES], h2_yaml[PLUGIN_TEST_YAML_BYTES];
       char port_field[64], uri[128];
@@ -249,6 +524,19 @@ spec("chttp_plugin") {
       snprintf(port_field, sizeof(port_field), "bind_port: %u", (unsigned)port);
       check_equal(replace_once(websocket_yaml, "bind_port: 0", port_field, yaml), SALTS_OK);
       if (h2) traffic_h2(yaml, h2_yaml);
+      if (tls) {
+        check_equal(listener_source_tls_fixture_init(&certificates), SALTS_OK);
+        tls_yaml(h2_yaml);
+        replace_field(h2_yaml, "tls_alpn: [\"h2\"]", "tls_alpn: [\"h2\", \"http/1.1\"]");
+        tls_path_field(h2_yaml, "tls_cert_file", certificates.cert_path);
+        tls_path_field(h2_yaml, "tls_key_file", certificates.key_path);
+        cnet_tls_client_config trust = {.size = sizeof(trust),
+                                        .ca_file = certificates.cert_path,
+                                        .server_name = "localhost",
+                                        .alpn_protocols = alpn,
+                                        .alpn_protocol_count = 1u};
+        check_equal(chttp_tls_profile_init(&profile, &trust), SALTS_OK);
+      }
       traffic_open(&f, h2 ? h2_yaml : yaml, graph, NULL, NULL);
       chttp_websocket_client client = {0};
       chttp_websocket_client_config nc = {.size = sizeof(nc)};
@@ -264,13 +552,20 @@ spec("chttp_plugin") {
       chttp_websocket_connect_options options = {.size = sizeof(options)};
       chttp_websocket_event event = {0};
       unsigned int status = 0u;
-      snprintf(uri, sizeof(uri), "ws://127.0.0.1:%u/echo", (unsigned)port);
+      if (tls) {
+        nc.network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
+        nc.network.tls_handshake_timeout_ms = 5000u;
+        options.tls = &profile;
+      }
+      snprintf(uri, sizeof(uri), "%s://127.0.0.1:%u/echo", tls ? "wss" : "ws", (unsigned)port);
       options.uri = uri;
       options.timeout_ms = 1000u;
       options.protocol = h2 ? CHTTP_HTTP_2 : CHTTP_HTTP_1_1;
       check_equal(chttp_websocket_client_init(&client, &nc), SALTS_OK);
       check_equal(chttp_websocket_client_connect(&client, &options, &status), SALTS_OK);
       check_equal(status, h2 ? 200u : 101u);
+      turbo_flow_plugin_error_t busy = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      check_equal(turbo_flow_plugin_host_destroy(f.host, 0u, &busy), SALTS_EBUSY);
       check_equal(chttp_websocket_client_send_text(&client, "ping", 4u, 1000u), SALTS_OK);
       check_equal(chttp_websocket_client_receive(&client, 1000u, &event), SALTS_OK);
       check_equal(event.size, 4u);
@@ -278,6 +573,10 @@ spec("chttp_plugin") {
       check_equal(chttp_websocket_client_close(&client, 1000u, NULL, 0u, 1000u), SALTS_OK);
       check_equal(chttp_websocket_client_destroy(&client, 1000u), SALTS_OK);
       traffic_close(&f);
+      if (tls) {
+        check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
+        listener_source_tls_fixture_destroy(&certificates);
+      }
     }
   }
   it("rolls back registered server owners when compile rejects a nonterminal response stage") {
@@ -309,23 +608,44 @@ spec("chttp_plugin") {
   it("polls plugin client requests through H1 and multiplexed H2 with owned response payloads") {
     static const char graph[] = "source input\nstage request adapter client\nstage output\nstage "
                                 "main {\n input -> request -> output\n}\n";
-    for (int h2 = 0; h2 < 2; ++h2) {
+    for (int mode = 0; mode < 3; ++mode) {
+      int h2 = mode != 0, tls = mode == 2;
+      listener_source_tls_fixture_t certificates = {0};
+      static const char *const alpn[] = {"h2"};
+      cnet_tls_server_config server_tls = {0};
       chttp_server server = {0};
       chttp_server_config nc = traffic_server_config();
       uint16_t port = 0u;
       char uri[128], yaml[PLUGIN_TEST_YAML_BYTES], protocol_yaml[PLUGIN_TEST_YAML_BYTES];
       traffic_fixture_t f = {0};
       traffic_probe_t probe = {0};
+      if (tls) {
+        check_equal(listener_source_tls_fixture_init(&certificates), SALTS_OK);
+        server_tls = (cnet_tls_server_config){.size = sizeof(server_tls),
+                                              .cert_file = certificates.cert_path,
+                                              .key_file = certificates.key_path,
+                                              .client_auth = CNET_TLS_CLIENT_AUTH_NONE,
+                                              .alpn_protocols = alpn,
+                                              .alpn_protocol_count = 1u};
+        nc.tls = &server_tls;
+        nc.network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
+        nc.network.tls_handshake_timeout_ms = 5000u;
+      }
       check_equal(chttp_server_init(&server, &nc), SALTS_OK);
       check_equal(chttp_server_route(&server, CHTTP_METHOD_POST, "/echo", traffic_echo, NULL),
                   SALTS_OK);
       check_equal(chttp_server_start(&server), SALTS_OK);
       check_equal(chttp_server_port(&server, &port), SALTS_OK);
-      snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)port);
+      snprintf(uri, sizeof(uri), "%s://127.0.0.1:%u", tls ? "tls" : "tcp", (unsigned)port);
       check_equal(replace_once(client_yaml, "tcp://127.0.0.1:9", uri, yaml), SALTS_OK);
       check_equal(replace_once(yaml, "protocol: \"h1\"",
                                h2 ? "protocol: \"h2\"" : "protocol: \"h1\"", protocol_yaml),
                   SALTS_OK);
+      if (tls) {
+        tls_yaml(protocol_yaml);
+        tls_path_field(protocol_yaml, "tls_ca_file", certificates.cert_path);
+        replace_field(protocol_yaml, "tls_server_name: \"\"", "tls_server_name: \"localhost\"");
+      }
       traffic_open(&f, protocol_yaml, graph, traffic_sink, &probe);
       for (uint64_t i = 1u; i <= 2u; ++i) {
         turbo_flow_msg_t message;
@@ -345,15 +665,27 @@ spec("chttp_plugin") {
       check_equal(atomic_load(&probe.done), 2);
       check_equal(atomic_load(&probe.status), SALTS_OK);
       check_equal(atomic_load(&probe.received), 2);
+      if (h2) {
+        chttp_server_stats stats = {0};
+        check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+        check_equal(stats.accepted_connections, (uint64_t)1u);
+        check_equal(stats.requests, (uint64_t)2u);
+      }
       traffic_close(&f);
       check_equal(chttp_server_stop(&server, 1000u), SALTS_OK);
       check_equal(chttp_server_destroy(&server), SALTS_OK);
+      if (tls) listener_source_tls_fixture_destroy(&certificates);
     }
   }
   it("serves deferred H1 and H2 replies through the plugin source and terminal") {
     static const char graph[] = "source input adapter server\nstage output adapter server\nstage "
                                 "main {\n input -> output\n}\n";
-    for (int h2 = 0; h2 < 2; ++h2) {
+    for (int mode = 0; mode < 3; ++mode) {
+      int h2 = mode != 0, tls = mode == 2;
+      listener_source_tls_fixture_t certificates = {0};
+      static const char *const alpn[] = {"h2"};
+      cnet_tls_client_config client_tls = {0};
+      chttp_tls_profile profile = {0};
       traffic_fixture_t f = {0};
       char yaml[PLUGIN_TEST_YAML_BYTES], h2_yaml[PLUGIN_TEST_YAML_BYTES];
       char port_field[64], uri[128];
@@ -361,13 +693,32 @@ spec("chttp_plugin") {
       snprintf(port_field, sizeof(port_field), "bind_port: %u", (unsigned)port);
       check_equal(replace_once(server_yaml, "bind_port: 0", port_field, yaml), SALTS_OK);
       if (h2) traffic_h2(yaml, h2_yaml);
+      if (tls) {
+        check_equal(listener_source_tls_fixture_init(&certificates), SALTS_OK);
+        tls_yaml(h2_yaml);
+        /* h1_h2 policy explicitly requires both advertised protocols. */
+        replace_field(h2_yaml, "tls_alpn: [\"h2\"]", "tls_alpn: [\"h2\", \"http/1.1\"]");
+        tls_path_field(h2_yaml, "tls_cert_file", certificates.cert_path);
+        tls_path_field(h2_yaml, "tls_key_file", certificates.key_path);
+        client_tls = (cnet_tls_client_config){.size = sizeof(client_tls),
+                                              .ca_file = certificates.cert_path,
+                                              .server_name = "localhost",
+                                              .alpn_protocols = alpn,
+                                              .alpn_protocol_count = 1u};
+        check_equal(chttp_tls_profile_init(&profile, &client_tls), SALTS_OK);
+      }
       traffic_open(&f, h2 ? h2_yaml : yaml, graph, NULL, NULL);
       chttp_client client = {0};
       chttp_client_config nc = traffic_client_config();
       chttp_options options = {0};
       chttp_response response = {0};
       chttp_error error = {0};
-      snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)port);
+      if (tls) {
+        nc.network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
+        nc.network.tls_handshake_timeout_ms = 5000u;
+        options.tls = &profile;
+      }
+      snprintf(uri, sizeof(uri), "%s://127.0.0.1:%u", tls ? "tls" : "tcp", (unsigned)port);
       options.connection_uri = uri;
       options.authority = "127.0.0.1";
       options.target = "/echo";
@@ -383,6 +734,10 @@ spec("chttp_plugin") {
       chttp_response_destroy(&response);
       check_equal(chttp_client_destroy(&client, 1000u), SALTS_OK);
       traffic_close(&f);
+      if (tls) {
+        check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
+        listener_source_tls_fixture_destroy(&certificates);
+      }
     }
   }
   it("materializes starts and detaches every native owner while generation pins the DLL") {
@@ -449,6 +804,7 @@ spec("chttp_plugin") {
                    {"poll_budget_ms: 1", "unknown_budget: 1"},
                    {"network_command_capacity: 16", "network_command_capacity: 3"},
                    {"request_capacity: 4", "request_capacity: 0"},
+                   {"request_capacity: 4", "request_capacity: 18446744073709551616"},
                    {"tcp://127.0.0.1:9", "tcp://127.0.0.1"},
                    {"tcp://127.0.0.1:9", "tls://127.0.0.1:9"},
                    {"protocol: \"h1\"", "protocol: \"auto\""},
@@ -460,6 +816,7 @@ spec("chttp_plugin") {
       info("invalid case %zu: %s", i, invalid[i].after);
       check_equal(replace_once(client_yaml, invalid[i].before, invalid[i].after, yaml), SALTS_OK);
       check_not_equal(preflight_yaml(&catalog, 0u, "client", yaml), SALTS_OK);
+      rejected_generation_preserves_flow(snapshot, yaml);
     }
     check_equal(replace_once(server_yaml, "protocol: \"h1\"", "protocol: \"h2\"", yaml), SALTS_OK);
     check_equal(preflight_yaml(&catalog, 1u, "server", yaml), SALTS_ENOTSUP);
