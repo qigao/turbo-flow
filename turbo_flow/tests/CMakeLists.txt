@@ -1,3 +1,34 @@
+add_library(test_flow_plugin_projection_fixture SHARED plugin_projection_fixture.c)
+target_link_libraries(test_flow_plugin_projection_fixture PRIVATE TurboFlow::Product)
+target_compile_definitions(test_flow_plugin_projection_fixture PRIVATE TURBO_FLOW_PLUGIN_BUILD)
+set_target_properties(test_flow_plugin_projection_fixture PROPERTIES
+  C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES FOLDER "turbo_flow/tests/plugin-fixtures")
+cmake_add_test(test_flow_plugin_projection
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_plugin_projection.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/plugin_operation_header_cpp.cpp
+  LIBS TurboFlow::PluginHost Salts::TinyTest FOLDER "turbo_flow/tests")
+target_compile_definitions(test_flow_plugin_projection PRIVATE
+  FLOW_PROJECTION_FIXTURE="$<TARGET_FILE:test_flow_plugin_projection_fixture>"
+  FLOW_PROJECTION_GENERATION_FIXTURE="$<TARGET_FILE:test_flow_plugin_generation_success>")
+add_dependencies(test_flow_plugin_projection test_flow_plugin_projection_fixture test_flow_plugin_generation_success)
+set_tests_properties(test_flow_plugin_projection PROPERTIES LABELS "plugin;graph" TIMEOUT 30)
+
+cmake_add_test(
+  test_flow_projection_owner
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_projection_owner.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/projection_header_cpp.cpp
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+
+cmake_add_test(
+  test_flow_projection_owner_fault
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_projection_owner_fault.c
+  LIBS TurboFlow::Graph Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_projection_owner test_flow_projection_owner_fault
+  PROPERTIES LABELS "graph;core" TIMEOUT 30)
+
 cmake_add_test(
   test_turbo_flow
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_turbo_flow.c
