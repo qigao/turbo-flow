@@ -34,7 +34,8 @@ typedef enum turbo_flow_chttp_client_state_e {
   TURBO_FLOW_CHTTP_CLIENT_STOPPING,
   TURBO_FLOW_CHTTP_CLIENT_STOPPED,
   TURBO_FLOW_CHTTP_CLIENT_DETACHED,
-  TURBO_FLOW_CHTTP_CLIENT_FAILED
+  TURBO_FLOW_CHTTP_CLIENT_FAILED,
+  TURBO_FLOW_CHTTP_CLIENT_QUIESCED
 } turbo_flow_chttp_client_state_t;
 
 /**
@@ -369,7 +370,13 @@ typedef struct turbo_flow_chttp_server_snapshot_s {
    0u,                                                                                             \
    SALTS_OK}
 
-/** Registers one asynchronous 0..1 response transform before graph compilation. */
+/**
+ * Registers one asynchronous 0..1 response transform before graph compilation.
+ * Flow stop makes one bounded native stop attempt. On failure it settles pending
+ * Flow claims, reports the exact error, and retains native callback storage in
+ * FAILED state. The caller must retry turbo_flow_stop() explicitly before owner
+ * destruction; late native completions never settle a Flow claim twice.
+ */
 TURBO_FLOW_C_API int
 turbo_flow_chttp_client_register(const turbo_flow_chttp_client_config_t *config,
                                  turbo_flow_chttp_client_t **out_client);
@@ -510,6 +517,16 @@ TURBO_FLOW_C_API int turbo_flow_chttp_client_poll(turbo_flow_chttp_client_t *cli
 /** Requests cancellation by the unique message id of a queued or active request. */
 TURBO_FLOW_C_API int turbo_flow_chttp_client_cancel(turbo_flow_chttp_client_t *client,
                                                     uint64_t message_id);
+
+/** Close new admission while polling, cancellation and retries of accepted requests continue.
+ * Control calls must be serialized with Flow start/stop/destroy. Returns SALTS_OK
+ * when live/already quiesced, SALTS_EINVAL for NULL, SALTS_ESHUTDOWN otherwise.
+ */
+TURBO_FLOW_C_API int turbo_flow_chttp_client_quiesce(turbo_flow_chttp_client_t *client);
+/** Reopen a live quiesced client; never restarts a stopped/failed owner.
+ * Same control serialization and return contract as quiesce.
+ */
+TURBO_FLOW_C_API int turbo_flow_chttp_client_resume(turbo_flow_chttp_client_t *client);
 
 /** Copies a synchronized lifecycle and capacity snapshot. */
 TURBO_FLOW_C_API int

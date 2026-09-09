@@ -295,6 +295,8 @@ if(WIN32)
     "${cnet_missing_dependency_dir}/tf_cnet_plugin.dll")
 endif()
 
+include("${TURBO_FLOW_SOURCE_DIR}/tests/install_chttp_plugin_consumer/run.cmake")
+
 set(config_consumer_build_dir "${test_root}/config-build")
 run_checked(
   "Config-only consumer configure"

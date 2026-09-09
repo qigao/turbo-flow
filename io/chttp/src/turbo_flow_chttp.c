@@ -300,11 +300,19 @@ static void chttp_adapter_complete(void *user, chttp_request request,
   now = salts_monotonic_ms();
 
   salts_mutex_lock(&client->mutex);
+  if (!turbo_flow_async_emit_claim_message(&slot->claim)) {
+    /* A failed stop already settled the Flow claim; native teardown still
+     * owns this callback and slot storage until an explicit stop retry. */
+    salts_mutex_unlock(&client->mutex);
+    return;
+  }
   if (slot->cancel_requested) {
     status = slot->cancel_status;
   } else if (slot->deadline_ms != 0u && now >= slot->deadline_ms) {
     status = SALTS_ETIMEDOUT;
-  } else if (status != SALTS_OK && client->state == TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+  } else if (status != SALTS_OK &&
+             (client->state == TURBO_FLOW_CHTTP_CLIENT_RUNNING ||
+              client->state == TURBO_FLOW_CHTTP_CLIENT_QUIESCED) &&
              chttp_adapter_method_idempotent(client) && chttp_adapter_retryable(status) &&
              slot->attempts < client->max_attempts) {
     slot->state = TURBO_FLOW_CHTTP_SLOT_RETRY_WAIT;
@@ -334,8 +342,11 @@ static int chttp_adapter_start(void *ctx, turbo_flow_t *flow,
   salts_mutex_unlock(&client->mutex);
   status = chttp_async_client_init(&client->http, &client->config);
   salts_mutex_lock(&client->mutex);
-  client->state =
-      status == SALTS_OK ? TURBO_FLOW_CHTTP_CLIENT_RUNNING : TURBO_FLOW_CHTTP_CLIENT_FAILED;
+  /* Failed init owns no native callback storage. Preserve the error separately
+   * from the stopped resource state used by generation teardown. */
+  client->state = status == SALTS_OK  ? TURBO_FLOW_CHTTP_CLIENT_RUNNING
+                  : client->http.impl ? TURBO_FLOW_CHTTP_CLIENT_FAILED
+                                      : TURBO_FLOW_CHTTP_CLIENT_STOPPED;
   client->last_status = status;
   salts_mutex_unlock(&client->mutex);
   return status;
@@ -397,6 +408,7 @@ static void chttp_adapter_stop(void *ctx, turbo_flow_t *flow,
   if (!client) return;
   salts_mutex_lock(&client->mutex);
   if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+      client->state != TURBO_FLOW_CHTTP_CLIENT_QUIESCED &&
       client->state != TURBO_FLOW_CHTTP_CLIENT_FAILED) {
     salts_mutex_unlock(&client->mutex);
     return;
@@ -422,12 +434,23 @@ static void chttp_adapter_stop(void *ctx, turbo_flow_t *flow,
   }
 
   if (client->http.impl) {
-    do {
-      status = chttp_async_client_stop(&client->http, client->stop_timeout_ms);
-    } while (status == SALTS_ETIMEDOUT);
+    status = chttp_async_client_stop(&client->http, client->stop_timeout_ms);
     if (status == SALTS_OK) status = chttp_async_client_destroy(&client->http);
   } else {
     status = client->last_status;
+  }
+  if (status != SALTS_OK) {
+    /* Flow cannot finish stopping with outstanding emit claims. Native request
+     * storage stays alive, but its later callbacks no longer own a Flow claim. */
+    for (index = 0u; index < client->slot_count; ++index) {
+      salts_mutex_lock(&client->mutex);
+      const int pending = turbo_flow_async_emit_claim_message(&client->slots[index].claim) != NULL;
+      if (pending) client->slots[index].state = TURBO_FLOW_CHTTP_SLOT_COMPLETING;
+      salts_mutex_unlock(&client->mutex);
+      if (pending) chttp_adapter_finish(&client->slots[index], status, NULL, 0);
+    }
+    const int report_status = turbo_flow_adapter_report_stop_status(flow, status);
+    if (report_status != SALTS_OK) status = report_status;
   }
   salts_mutex_lock(&client->mutex);
   client->state =
@@ -540,7 +563,8 @@ static int chttp_adapter_poll_slot(turbo_flow_chttp_slot_t *slot, uint64_t now) 
     salts_mutex_unlock(&client->mutex);
     return SALTS_OK;
   }
-  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING) {
+  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+      client->state != TURBO_FLOW_CHTTP_CLIENT_QUIESCED) {
     slot->state = TURBO_FLOW_CHTTP_SLOT_COMPLETING;
     salts_mutex_unlock(&client->mutex);
     chttp_adapter_finish(slot, SALTS_ESHUTDOWN, NULL, 0);
@@ -659,7 +683,8 @@ int turbo_flow_chttp_client_poll(turbo_flow_chttp_client_t *client, uint32_t tim
   int status;
   if (!client) return SALTS_EINVAL;
   salts_mutex_lock(&client->mutex);
-  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING) {
+  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+      client->state != TURBO_FLOW_CHTTP_CLIENT_QUIESCED) {
     salts_mutex_unlock(&client->mutex);
     return SALTS_ESHUTDOWN;
   }
@@ -696,12 +721,31 @@ done:
   return status;
 }
 
+static int chttp_adapter_admission(turbo_flow_chttp_client_t *client, int enabled) {
+  if (!client) return SALTS_EINVAL;
+  salts_mutex_lock(&client->mutex);
+  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+      client->state != TURBO_FLOW_CHTTP_CLIENT_QUIESCED) {
+    salts_mutex_unlock(&client->mutex);
+    return SALTS_ESHUTDOWN;
+  }
+  client->state = enabled ? TURBO_FLOW_CHTTP_CLIENT_RUNNING : TURBO_FLOW_CHTTP_CLIENT_QUIESCED;
+  salts_mutex_unlock(&client->mutex);
+  return SALTS_OK;
+}
+int turbo_flow_chttp_client_quiesce(turbo_flow_chttp_client_t *client) {
+  return chttp_adapter_admission(client, 0);
+}
+int turbo_flow_chttp_client_resume(turbo_flow_chttp_client_t *client) {
+  return chttp_adapter_admission(client, 1);
+}
 int turbo_flow_chttp_client_cancel(turbo_flow_chttp_client_t *client, uint64_t message_id) {
   size_t index;
   int status = SALTS_ENOENT;
   if (!client) return SALTS_EINVAL;
   salts_mutex_lock(&client->mutex);
-  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING) {
+  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+      client->state != TURBO_FLOW_CHTTP_CLIENT_QUIESCED) {
     salts_mutex_unlock(&client->mutex);
     return SALTS_ESHUTDOWN;
   }
