@@ -91,6 +91,34 @@ static const char flow_plugin_generation_legacy_yaml[] = "version: 1\n"
                                                          "    kind: fixture.adapter.one\n"
                                                          "    config: {}\n";
 
+static const char flow_plugin_generation_operation_binding_yaml[] =
+    "version: 1\n"
+    "operation_bindings:\n"
+    "  - operation: decision.evaluate\n"
+    "    plugin: fixture.typed\n"
+    "    version: 1\n"
+    "    input_schema: example.Input\n"
+    "    input_schema_version: 1\n"
+    "    output_schema: example.Decision\n"
+    "    output_schema_version: 1\n"
+    "    permissions: []\n"
+    "    execution: inline\n"
+    "    threading: owner\n"
+    "    cancellation: none\n"
+    "    max_inflight: 1\n"
+    "    max_input_bytes: 4096\n"
+    "    max_result_bytes: 1024\n"
+    "    max_retained_bytes: 8192\n"
+    "    max_steps: 10000\n"
+    "    deadline_ms: 0\n"
+    "adapters:\n"
+    "  input.adapter:\n"
+    "    kind: fixture.transactional.adapter\n"
+    "    config: {}\n"
+    "  output.adapter:\n"
+    "    kind: fixture.transactional.adapter\n"
+    "    config: {}\n";
+
 static const char flow_plugin_generation_graph[] = "source input adapter input.adapter\n"
                                                    "stage output adapter output.adapter\n"
                                                    "stage main {\n"
@@ -219,6 +247,39 @@ flow_plugin_generation_test_replace_documents(flow_plugin_generation_test_contex
 }
 
 spec("transactional plugin Graph generation") {
+  it("rejects configured operation bindings before consuming or materializing the Graph") {
+    flow_plugin_generation_test_context_t context;
+    turbo_flow_plugin_generation_config_t generation_config =
+        TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_generation_t *generation = NULL;
+    turbo_flow_t *original_flow;
+    generation_config.owner_capacity = 2u;
+
+    check_equal(flow_plugin_generation_test_open(&context, FLOW_PLUGIN_GENERATION_FIXTURE_CAPACITY,
+                                                 &plugin_error, &config_error),
+                SALTS_OK);
+    check_equal(flow_plugin_generation_test_replace_documents(
+                    &context, flow_plugin_generation_operation_binding_yaml,
+                    sizeof(flow_plugin_generation_operation_binding_yaml) - 1u,
+                    flow_plugin_generation_graph, sizeof(flow_plugin_generation_graph) - 1u,
+                    &config_error),
+                SALTS_OK);
+    original_flow = context.flow;
+    check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+                                                    &context.flow, &generation_config, &generation,
+                                                    &config_error),
+                SALTS_ENOTSUP);
+    check_equal(config_error.status, SALTS_ENOTSUP);
+    check_equal(config_error.path, "$.operation_bindings");
+    check_null(generation);
+    check(context.flow == original_flow);
+    check_equal(turbo_flow_state(context.flow), TURBO_FLOW_STATE_PARSED);
+    check_equal(turbo_flow_adapter_count(context.flow), 0u);
+    check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
+  }
+
   it("publishes Product owners within the caller-provided ABI capacity") {
     union {
       turbo_flow_plugin_product_owner_v1_t alignment;

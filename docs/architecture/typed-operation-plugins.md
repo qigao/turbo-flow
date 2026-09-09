@@ -38,6 +38,39 @@ Core 必需链接，改为显式 DLL 加载且无 fallback。既有 DSL 的 sour
 
 ## 契约分层
 
+### 配置与只读查询边界（#93 第一阶段）
+
+根字段 `operation_bindings` 可缺省，也可为数组；缺省或空数组表示没有显式 DLL
+operation 绑定。每项的唯一键是 `(operation, resource)`，其中 `resource` 可缺省以表示
+stateless operation；若提供，则必须引用 `channels` 中已有名称。数组顺序和权限顺序均
+原样保留，不去重、不裁剪、不改变大小写。
+
+每项必须包含 `operation`、`plugin`、`version`、`input_schema`、
+`input_schema_version`、`output_schema`、`output_schema_version`、`permissions`、
+`execution`、`threading`、`cancellation`、`max_inflight`、`max_input_bytes`、
+`max_result_bytes`、`max_retained_bytes`、`max_steps`、`deadline_ms`；只允许额外的可选
+`resource`。标识符和权限由 ASCII `[A-Za-z0-9_.-]` 组成，长度为 1..127 字节。
+版本为 1..`UINT32_MAX`；`execution` 为 `inline`/`thread`/`coro`，`threading` 为
+`owner`/`thread_safe`，`cancellation` 为 `none`/`cooperative`。
+
+`max_inflight` 单位为并发调用数，范围 1..1048576。三个 `*_bytes` 以字节计，范围
+1..1073741824，且 `max_result_bytes <= max_retained_bytes`。`max_steps` 为抽象执行步数，
+范围 1..`UINT32_MAX`；`deadline_ms` 以毫秒计，范围 0..3600000。bindings 最多 1024
+项，每项 permissions 最多 32 项。所有数值必须为有限整数；类型、字段、标识、范围、
+枚举、resource 引用错误返回 `SALTS_EINVAL`，重复返回 `SALTS_EALREADY`，数量超限返回
+`SALTS_ENOSPC`，并在 `turbo_flow_config_error_t.path` 中定位到对应字段。解析失败不发布
+部分 resolved snapshot。
+
+`turbo_flow_resolved_config_operation_binding_count`、`..._at` 和
+`..._permission_at` 只返回借用视图；所有字符串及视图内容仅在对应 resolved config
+销毁前有效。这些 API 只证明配置的词法和额度关系有效，不证明 input/output schema 的
+payload 布局相容，也不证明 provider 具备相应权限、线程、取消或资源能力。
+
+配置支持不代表执行已接入。当前 generation 对合法的非空 bindings 在任何 provider
+preflight、materialize 或 Graph 所有权转移之前返回 `SALTS_ENOTSUP`。因此示例配置仅可
+用于解析与查询，不能描述为完整可运行 Flow；真实 descriptor/vtable、catalog 来源验证、
+owner 与取消状态机完成后才可移除此 admission gate。
+
 1. **Schema 注册**：size/ABI-version 包装不可变 CMeta 元数据，携带稳定 schema
    identity、版本、storage type 及所有权说明。跨 DLL/TU 用 `cmeta_type_equal`
    判断类型兼容，禁止以地址相等作为语义条件。

@@ -19,8 +19,8 @@ typedef struct flow_config_ingress_s {
   size_t max_inflight_bytes;
 } flow_config_ingress_t;
 
-static int flow_config_error(turbo_flow_config_error_t *error, int status, const char *path,
-                             const char *message) {
+int flow_config_error(turbo_flow_config_error_t *error, int status, const char *path,
+                      const char *message) {
   if (error && error->size >= sizeof(*error)) {
     *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     error->status = status;
@@ -37,9 +37,9 @@ static int flow_config_key_allowed(const char *key, const char *const *allowed, 
   return 0;
 }
 
-static int flow_config_object_keys(const json_value_t *object, const char *path,
-                                   const char *const *allowed, size_t count,
-                                   turbo_flow_config_error_t *error) {
+int flow_config_object_keys(const json_value_t *object, const char *path,
+                            const char *const *allowed, size_t count,
+                            turbo_flow_config_error_t *error) {
   if (!object || json_type(object) != JSON_OBJECT) {
     return flow_config_error(error, SALTS_EINVAL, path, "expected mapping");
   }
@@ -122,9 +122,8 @@ static int flow_config_validate_profiles(const json_value_t *profiles, const jso
     for (size_t field = 0; field < json_object_size(profile); ++field) {
       const char *parameter = json_object_key(profile, field);
       json_value_t *reference = json_object_value(profile, field);
-      const char *adapter = reference && json_type(reference) == JSON_STRING
-                                ? json_string(reference)
-                                : NULL;
+      const char *adapter =
+          reference && json_type(reference) == JSON_STRING ? json_string(reference) : NULL;
       const int adapter_found = adapter && json_object_get(adapters, adapter);
       const int channel_found = adapter && channels && json_object_get(channels, adapter);
       if (!adapter || (!adapter_found && !channel_found) || (adapter_found && channel_found)) {
@@ -147,8 +146,7 @@ static int flow_config_validate_profiles(const json_value_t *profiles, const jso
 static int flow_config_validate_fragments(const json_value_t *fragments,
                                           turbo_flow_config_error_t *error) {
   if (!fragments) return SALTS_OK;
-  for (size_t category_index = 0; category_index < json_object_size(fragments);
-       ++category_index) {
+  for (size_t category_index = 0; category_index < json_object_size(fragments); ++category_index) {
     const char *category = json_object_key(fragments, category_index);
     json_value_t *category_map = json_object_value(fragments, category_index);
     char category_path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
@@ -259,18 +257,16 @@ static int flow_config_validate_runtime(const json_value_t *runtime,
     async_ingress->queue_capacity = value;
   }
   if (max_message_bytes) {
-    rc = flow_config_read_runtime_integer(max_message_bytes,
-                                          "$.runtime.ingress.max_message_bytes",
+    rc = flow_config_read_runtime_integer(max_message_bytes, "$.runtime.ingress.max_message_bytes",
                                           TURBO_FLOW_CONFIG_INGRESS_MAX_MESSAGE_BYTES, &value,
                                           error);
     if (rc != SALTS_OK) return rc;
     async_ingress->max_message_bytes = value;
   }
   if (max_inflight_bytes) {
-    rc = flow_config_read_runtime_integer(max_inflight_bytes,
-                                          "$.runtime.ingress.max_inflight_bytes",
-                                          TURBO_FLOW_CONFIG_INGRESS_MAX_INFLIGHT_BYTES, &value,
-                                          error);
+    rc = flow_config_read_runtime_integer(
+        max_inflight_bytes, "$.runtime.ingress.max_inflight_bytes",
+        TURBO_FLOW_CONFIG_INGRESS_MAX_INFLIGHT_BYTES, &value, error);
     if (rc != SALTS_OK) return rc;
     async_ingress->max_inflight_bytes = value;
   }
@@ -281,9 +277,8 @@ static int flow_config_validate_runtime(const json_value_t *runtime,
   return SALTS_OK;
 }
 
-static int
-flow_config_add_resolved_runtime(json_value_t *resolved,
-                                 const flow_config_ingress_t *async_ingress) {
+static int flow_config_add_resolved_runtime(json_value_t *resolved,
+                                            const flow_config_ingress_t *async_ingress) {
   json_value_t *runtime = NULL;
   json_value_t *ingress = NULL;
   int rc = SALTS_ENOMEM;
@@ -345,8 +340,7 @@ static int flow_config_resolve_adapters(const json_value_t *input_adapters,
     kind = adapter ? json_object_get(adapter, "kind") : NULL;
     refs = adapter ? json_object_get(adapter, "fragments") : NULL;
     local = adapter ? json_object_get(adapter, "config") : NULL;
-    if (rc == SALTS_OK &&
-        (!kind || json_type(kind) != JSON_STRING || !json_string(kind)[0]))
+    if (rc == SALTS_OK && (!kind || json_type(kind) != JSON_STRING || !json_string(kind)[0]))
       rc = flow_config_error(error, SALTS_EINVAL, path, "kind must be a non-empty string");
     if (rc == SALTS_OK && refs) {
       if (json_type(refs) != JSON_OBJECT)
@@ -354,13 +348,11 @@ static int flow_config_resolve_adapters(const json_value_t *input_adapters,
       for (size_t ref = 0; rc == SALTS_OK && ref < json_object_size(refs); ++ref) {
         const char *category = json_object_key(refs, ref);
         json_value_t *reference = json_object_value(refs, ref);
-        const char *fragment_name = reference && json_type(reference) == JSON_STRING
-                                        ? json_string(reference)
-                                        : NULL;
+        const char *fragment_name =
+            reference && json_type(reference) == JSON_STRING ? json_string(reference) : NULL;
         json_value_t *category_map = fragments ? json_object_get(fragments, category) : NULL;
-        json_value_t *fields = fragment_name && category_map
-                                   ? json_object_get(category_map, fragment_name)
-                                   : NULL;
+        json_value_t *fields =
+            fragment_name && category_map ? json_object_get(category_map, fragment_name) : NULL;
         char source[256];
         if (!fragment_name || !fields) {
           rc = flow_config_error(error, fragment_name ? SALTS_ENOENT : SALTS_EINVAL, path,
@@ -401,8 +393,8 @@ static int flow_config_resolve_adapters(const json_value_t *input_adapters,
 int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
                                    turbo_flow_resolved_config_t **out,
                                    turbo_flow_config_error_t *error) {
-  static const char *const root_keys[] = {"version",   "runtime",  "profiles",
-                                          "fragments", "channels", "adapters"};
+  static const char *const root_keys[] = {"version",  "runtime",  "profiles",          "fragments",
+                                          "channels", "adapters", "operation_bindings"};
   static const char *const fragment_keys[] = {"connection", "timer", "thread", "coro"};
   cyaml_doc_t *yaml_doc = NULL;
   json_value_t *input = NULL;
@@ -415,18 +407,18 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   json_value_t *fragments;
   json_value_t *channels;
   json_value_t *adapters;
-  flow_config_ingress_t async_ingress = {
-      TURBO_FLOW_CONFIG_INGRESS_DEFAULT_WORKERS, TURBO_FLOW_CONFIG_INGRESS_DEFAULT_CAPACITY,
-      TURBO_FLOW_CONFIG_INGRESS_DEFAULT_MAX_MESSAGE_BYTES,
-      TURBO_FLOW_CONFIG_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES};
+  json_value_t *operation_bindings;
+  flow_config_ingress_t async_ingress = {TURBO_FLOW_CONFIG_INGRESS_DEFAULT_WORKERS,
+                                         TURBO_FLOW_CONFIG_INGRESS_DEFAULT_CAPACITY,
+                                         TURBO_FLOW_CONFIG_INGRESS_DEFAULT_MAX_MESSAGE_BYTES,
+                                         TURBO_FLOW_CONFIG_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES};
   int rc;
   if (out) *out = NULL;
   if (!yaml || yaml_len == 0u || !out || !error || error->size < sizeof(*error))
     return SALTS_EINVAL;
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
   yaml_doc = cyaml_parse(yaml, yaml_len, NULL, NULL);
-  if (!yaml_doc)
-    return flow_config_error(error, SALTS_EINVAL, "$", "invalid YAML document");
+  if (!yaml_doc) return flow_config_error(error, SALTS_EINVAL, "$", "invalid YAML document");
   input = json_value_from_cyaml(yaml_doc);
   if (!input) {
     rc = flow_config_error(error, SALTS_EINVAL, "$", "YAML cannot be represented as JSON");
@@ -440,8 +432,9 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   fragments = json_object_get(input, "fragments");
   channels = json_object_get(input, "channels");
   adapters = json_object_get(input, "adapters");
-  if (rc == SALTS_OK && (!version || json_type(version) != JSON_NUMBER ||
-                         json_number(version) != 1.0))
+  operation_bindings = json_object_get(input, "operation_bindings");
+  if (rc == SALTS_OK &&
+      (!version || json_type(version) != JSON_NUMBER || json_number(version) != 1.0))
     rc = flow_config_error(error, SALTS_EINVAL, "$.version", "version must be integer 1");
   if (rc == SALTS_OK) rc = flow_config_validate_runtime(runtime, &async_ingress, error);
   if (rc == SALTS_OK && fragments)
@@ -449,6 +442,8 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
                                  sizeof(fragment_keys) / sizeof(fragment_keys[0]), error);
   if (rc == SALTS_OK) rc = flow_config_validate_fragments(fragments, error);
   if (rc == SALTS_OK) rc = flow_config_validate_channels(channels, error);
+  if (rc == SALTS_OK)
+    rc = flow_config_validate_operation_bindings(operation_bindings, channels, error);
   if (rc != SALTS_OK) goto done;
   resolved = json_create_object();
   resolved_adapters = json_create_object();
@@ -465,6 +460,11 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
     goto done;
   }
   if (channels && flow_config_add_clone(resolved, "channels", channels) != SALTS_OK) {
+    rc = SALTS_ENOMEM;
+    goto done;
+  }
+  if (operation_bindings &&
+      flow_config_add_clone(resolved, "operation_bindings", operation_bindings) != SALTS_OK) {
     rc = SALTS_ENOMEM;
     goto done;
   }
@@ -543,9 +543,9 @@ int turbo_flow_resolved_config_profile_adapter(const turbo_flow_resolved_config_
   return SALTS_OK;
 }
 
-int turbo_flow_resolved_config_profile_adapter_optional(
-    const turbo_flow_resolved_config_t *config, const char *profile, const char *parameter,
-    const char **adapter_name) {
+int turbo_flow_resolved_config_profile_adapter_optional(const turbo_flow_resolved_config_t *config,
+                                                        const char *profile, const char *parameter,
+                                                        const char **adapter_name) {
   json_value_t *profiles;
   json_value_t *profile_value;
   json_value_t *reference;
@@ -597,9 +597,9 @@ int turbo_flow_resolved_config_profile_channel(const turbo_flow_resolved_config_
   return SALTS_OK;
 }
 
-int turbo_flow_resolved_config_profile_channel_optional(
-    const turbo_flow_resolved_config_t *config, const char *profile, const char *parameter,
-    const char **channel_name) {
+int turbo_flow_resolved_config_profile_channel_optional(const turbo_flow_resolved_config_t *config,
+                                                        const char *profile, const char *parameter,
+                                                        const char **channel_name) {
   json_value_t *profiles;
   json_value_t *profile_value;
   json_value_t *reference;
@@ -640,8 +640,8 @@ int turbo_flow_resolved_config_channel(const turbo_flow_resolved_config_t *confi
   if (!channel || json_type(channel) != JSON_OBJECT) return SALTS_ENOENT;
   kind = json_object_get(channel, "kind");
   fields = json_object_get(channel, "config");
-  if (!kind || json_type(kind) != JSON_STRING || !json_string(kind)[0] ||
-      !fields || json_type(fields) != JSON_OBJECT)
+  if (!kind || json_type(kind) != JSON_STRING || !json_string(kind)[0] || !fields ||
+      json_type(fields) != JSON_OBJECT)
     return SALTS_EPROTO;
   view->name = name;
   view->kind = json_string(kind);
@@ -678,8 +678,7 @@ int turbo_flow_resolved_config_preflight_adapter_kinds(const turbo_flow_resolved
     const char *name = json_object_key(adapters, i);
     json_value_t *adapter = json_object_value(adapters, i);
     json_value_t *kind = adapter ? json_object_get(adapter, "kind") : NULL;
-    const char *kind_name =
-        kind && json_type(kind) == JSON_STRING ? json_string(kind) : NULL;
+    const char *kind_name = kind && json_type(kind) == JSON_STRING ? json_string(kind) : NULL;
     int enabled = 0;
     char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
     if (!name || !name[0] || !kind_name || !kind_name[0])
@@ -716,8 +715,8 @@ int turbo_flow_resolved_config_adapter(const turbo_flow_resolved_config_t *confi
   if (!adapter || json_type(adapter) != JSON_OBJECT) return SALTS_ENOENT;
   kind = json_object_get(adapter, "kind");
   fields = json_object_get(adapter, "config");
-  if (!kind || json_type(kind) != JSON_STRING || !json_string(kind)[0] ||
-      !fields || json_type(fields) != JSON_OBJECT)
+  if (!kind || json_type(kind) != JSON_STRING || !json_string(kind)[0] || !fields ||
+      json_type(fields) != JSON_OBJECT)
     return SALTS_EPROTO;
   view->name = NULL;
   for (size_t i = 0u; i < json_object_size(adapters); ++i)
