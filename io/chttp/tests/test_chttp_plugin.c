@@ -1,3 +1,4 @@
+#include "../../../tests/flow_operation_fixture.h"
 #include "../../../tests/install_chttp_plugin_consumer/chttp_plugin_fixtures.h"
 #include "../../cnet/tests/listener_source_tls_fixture.h"
 #include "tinytest.h"
@@ -82,8 +83,9 @@ static int plugin_sink(turbo_flow_msg_t *message, void *ctx) {
 
 static void rejected_generation_preserves_flow(turbo_flow_plugin_catalog_snapshot_t *snapshot,
                                                const char *yaml) {
-  static const char graph[] = "source input\nstage request adapter client\nstage output\nstage "
-                              "main {\n input -> request -> output\n}\n";
+  static const char graph[] =
+      "source input\nstage request adapter client\nstage output operation test.output\nstage "
+      "main {\n input -> request -> output\n}\n";
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_plugin_generation_config_t config = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
   turbo_flow_resolved_config_t *resolved = NULL;
@@ -138,7 +140,10 @@ static void traffic_open_path(traffic_fixture_t *f, const char *path, const char
   check_equal(turbo_flow_plugin_catalog_snapshot_create(f->host, &snapshot, &pe), SALTS_OK);
   check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), SALTS_OK);
   check_equal(turbo_flow_parse_string(flow, graph, strlen(graph)), SALTS_OK);
-  if (sink) check_equal(turbo_flow_register_stage_ex(flow, "output", sink, ctx, NULL), SALTS_OK);
+  flow_test_operation_t operation_output_0 = flow_test_operation_init("test.output", sink, ctx);
+  operation_output_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+  operation_output_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+  if (sink) check_equal(flow_test_operation_register(flow, &operation_output_0), SALTS_OK);
   int rc =
       turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &f->generation, &error);
   info("traffic generation: %s %s", error.path, error.message);
@@ -321,8 +326,11 @@ static void start_failure_destroy(const char *path, const char *yaml, const char
   check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &pe), SALTS_OK);
   check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), SALTS_OK);
   check_equal(turbo_flow_parse_string(flow, graph, strlen(graph)), SALTS_OK);
-  if (client)
-    check_equal(turbo_flow_register_stage_ex(flow, "output", plugin_sink, NULL, NULL), SALTS_OK);
+  if (client) {
+    flow_test_operation_t operation_output_1 =
+        flow_test_operation_init("test.output", plugin_sink, NULL);
+    check_equal(flow_test_operation_register(flow, &operation_output_1), SALTS_OK);
+  }
   check_equal(
       turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &error),
       SALTS_OK);
@@ -343,10 +351,11 @@ static void start_failure_destroy(const char *path, const char *yaml, const char
 
 spec("chttp_plugin") {
   it("destroys a plugin client generation after native init allocation failure") {
-    start_failure_destroy(CHTTP_DELIVERY_FIXTURE_5, client_yaml,
-                          "source input\nstage request adapter client\nstage output\nstage "
-                          "main {\n input -> request -> output\n}\n",
-                          1);
+    start_failure_destroy(
+        CHTTP_DELIVERY_FIXTURE_5, client_yaml,
+        "source input\nstage request adapter client\nstage output operation test.output\nstage "
+        "main {\n input -> request -> output\n}\n",
+        1);
   }
   for (size_t kind = 0u; kind < 2u; ++kind) {
     it(kind == 0u ? "destroys a server generation after an occupied listener start failure"
@@ -372,9 +381,9 @@ spec("chttp_plugin") {
   }
   it("retains a server-owned accepted request after owner quiesce timeout and releases it on "
      "retry") {
-    static const char graph[] =
-        "source input adapter server\nstage output\nstage reply adapter server\n"
-        "stage main {\n input -> output -> reply\n}\n";
+    static const char graph[] = "source input adapter server\nstage output operation "
+                                "test.output\nstage reply adapter server\n"
+                                "stage main {\n input -> output -> reply\n}\n";
     traffic_fixture_t f = {0};
     teardown_probe_t probe = {0};
     char yaml[PLUGIN_TEST_YAML_BYTES], port_field[64], uri[128];
@@ -471,8 +480,9 @@ spec("chttp_plugin") {
     check_equal(chttp_websocket_client_destroy(&client, 1000u), SALTS_OK);
   }
   it("retains the plugin until an active Graph run and its accepted emit claim settle") {
-    static const char graph[] = "source input\nstage request adapter client\nstage output\nstage "
-                                "main {\n input -> request -> output\n}\n";
+    static const char graph[] =
+        "source input\nstage request adapter client\nstage output operation test.output\nstage "
+        "main {\n input -> request -> output\n}\n";
     chttp_server server = {0};
     chttp_server_config nc = traffic_server_config();
     isolation_peer_t peer = {0};
@@ -547,7 +557,7 @@ spec("chttp_plugin") {
      "pairing") {
     static const char graph[] =
         "source input\nsource inbound adapter server\nstage request adapter client\n"
-        "stage reply adapter server\nstage output\nstage main {\n"
+        "stage reply adapter server\nstage output operation test.output\nstage main {\n"
         " input -> request -> output\n inbound -> reply\n}\n";
     char yaml[PLUGIN_TEST_YAML_BYTES];
     const char *server = strstr(server_yaml, "  server:");
@@ -565,7 +575,9 @@ spec("chttp_plugin") {
     check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &pe), SALTS_OK);
     check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &ce), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, strlen(graph)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "output", plugin_sink, NULL, NULL), SALTS_OK);
+    flow_test_operation_t operation_output_2 =
+        flow_test_operation_init("test.output", plugin_sink, NULL);
+    check_equal(flow_test_operation_register(flow, &operation_output_2), SALTS_OK);
     check_equal(
         turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &ce),
         SALTS_ENOMEM);
@@ -608,8 +620,9 @@ spec("chttp_plugin") {
     }
   }
   it("keeps an accepted H2 sibling alive when the peer cancels one shared-session stream") {
-    static const char graph[] = "source input\nstage request adapter client\nstage output\nstage "
-                                "main {\n input -> request -> output\n}\n";
+    static const char graph[] =
+        "source input\nstage request adapter client\nstage output operation test.output\nstage "
+        "main {\n input -> request -> output\n}\n";
     chttp_server server = {0};
     chttp_server_config nc = traffic_server_config();
     chttp_server_stats stats = {0};
@@ -772,8 +785,9 @@ spec("chttp_plugin") {
     }
   }
   it("rolls back registered server owners when compile rejects a nonterminal response stage") {
-    static const char graph[] = "source input adapter server\nstage reply adapter server\nstage "
-                                "output\nstage main {\n input -> reply -> output\n}\n";
+    static const char graph[] =
+        "source input adapter server\nstage reply adapter server\nstage "
+        "output operation test.output\nstage main {\n input -> reply -> output\n}\n";
     turbo_flow_plugin_host_t *host = plugin_host(3u);
     turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -787,7 +801,9 @@ spec("chttp_plugin") {
     check_equal(turbo_flow_config_resolve_yaml(server_yaml, strlen(server_yaml), &resolved, &error),
                 SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, strlen(graph)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "output", plugin_sink, NULL, NULL), SALTS_OK);
+    flow_test_operation_t operation_output_3 =
+        flow_test_operation_init("test.output", plugin_sink, NULL);
+    check_equal(flow_test_operation_register(flow, &operation_output_3), SALTS_OK);
     check_not_equal(
         turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &error),
         SALTS_OK);
@@ -798,8 +814,9 @@ spec("chttp_plugin") {
     check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &pe), SALTS_OK);
   }
   it("polls plugin client requests through H1 and multiplexed H2 with owned response payloads") {
-    static const char graph[] = "source input\nstage request adapter client\nstage output\nstage "
-                                "main {\n input -> request -> output\n}\n";
+    static const char graph[] =
+        "source input\nstage request adapter client\nstage output operation test.output\nstage "
+        "main {\n input -> request -> output\n}\n";
     for (int mode = 0; mode < 3; ++mode) {
       int h2 = mode != 0, tls = mode == 2;
       listener_source_tls_fixture_t certificates = {0};
@@ -936,12 +953,13 @@ spec("chttp_plugin") {
   }
   it("materializes starts and detaches every native owner while generation pins the DLL") {
     static const char *const yamls[] = {client_yaml, server_yaml, websocket_yaml};
-    static const char *const graphs[] = {"source input\nstage request adapter client\nstage "
-                                         "output\nstage main {\n input -> request -> output\n}\n",
-                                         "source input adapter server\nstage output adapter "
-                                         "server\nstage main {\n input -> output\n}\n",
-                                         "source input adapter websocket\nstage output adapter "
-                                         "websocket\nstage main {\n input -> output\n}\n"};
+    static const char *const graphs[] = {
+        "source input\nstage request adapter client\nstage "
+        "output operation test.output\nstage main {\n input -> request -> output\n}\n",
+        "source input adapter server\nstage output adapter "
+        "server\nstage main {\n input -> output\n}\n",
+        "source input adapter websocket\nstage output adapter "
+        "websocket\nstage main {\n input -> output\n}\n"};
     for (size_t i = 0u; i < 3u; ++i) {
       turbo_flow_plugin_host_t *host = plugin_host(3u);
       turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
@@ -956,9 +974,11 @@ spec("chttp_plugin") {
       check_equal(turbo_flow_config_resolve_yaml(yamls[i], strlen(yamls[i]), &resolved, &error),
                   SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, graphs[i], strlen(graphs[i])), SALTS_OK);
-      if (i == 0u)
-        check_equal(turbo_flow_register_stage_ex(flow, "output", plugin_sink, NULL, NULL),
-                    SALTS_OK);
+      if (i == 0u) {
+        flow_test_operation_t operation_output_4 =
+            flow_test_operation_init("test.output", plugin_sink, NULL);
+        check_equal(flow_test_operation_register(flow, &operation_output_4), SALTS_OK);
+      }
       int create_rc =
           turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &error);
       info("kind %zu generation: %s %s", i, error.path, error.message);

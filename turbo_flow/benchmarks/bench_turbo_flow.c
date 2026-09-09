@@ -397,10 +397,45 @@ static int bench_event_window_close(const turbo_flow_event_time_window_t *window
   return rc;
 }
 
-static void bench_register_stage(turbo_flow_t *flow, const char *name) {
-  check_equal(
-      turbo_flow_register_stage_ex(flow, name, bench_stage, (void *)&g_flow_bench_count, NULL),
-      SALTS_OK);
+/* The benchmark owns explicit execution and state contracts independently of DSL. */
+static turbo_flow_operation_descriptor_t
+bench_operation_descriptor(const char *name, uint32_t execution_mask, size_t worker_capacity) {
+  turbo_flow_operation_descriptor_t operation = {0};
+  operation.size = sizeof(operation);
+  operation.name = name;
+  operation.version = 1u;
+  operation.domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.input_type = "Message";
+  operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.output_type = "Message";
+  operation.flags = TURBO_FLOW_OPERATION_STAGE;
+  operation.execution_mask = execution_mask;
+  operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  operation.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+  operation.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+  operation.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
+  operation.scope.concurrency =
+      worker_capacity || execution_mask != TURBO_FLOW_OPERATION_EXEC_INLINE
+          ? TURBO_FLOW_CONCURRENCY_POOL
+          : TURBO_FLOW_CONCURRENCY_INLINE_LANE;
+  if (worker_capacity) {
+    operation.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+    operation.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+    operation.runtime.capacity = worker_capacity;
+  }
+  return operation;
+}
+
+static void bench_register_operation(turbo_flow_t *flow,
+                                     const turbo_flow_operation_descriptor_t *operation) {
+  turbo_flow_operation_provider_registration_t provider =
+      TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+  provider.operation_name = operation->name;
+  provider.fn = bench_stage;
+  provider.ctx = (void *)&g_flow_bench_count;
+  check_equal(turbo_flow_register_operation(flow, operation), SALTS_OK);
+  check_equal(turbo_flow_register_operation_provider(flow, &provider), SALTS_OK);
 }
 
 static int bench_u64_compare(const void *lhs, const void *rhs) {
@@ -606,7 +641,8 @@ static void bench_report_idle_cpu(turbo_flow_t *flow, const char *stage_plan, co
   (void)flow;
 }
 
-static turbo_flow_t *bench_create_executor_flow(const char *exec_spec) {
+static turbo_flow_t *bench_create_executor_flow(const char *exec_spec, uint32_t execution_mask,
+                                                size_t worker_capacity) {
   char src[256];
   turbo_flow_t *flow = turbo_flow_create();
   int written;
@@ -614,26 +650,29 @@ static turbo_flow_t *bench_create_executor_flow(const char *exec_spec) {
   if (!flow) return NULL;
   written = snprintf(src, sizeof(src),
                      "source input\n"
-                     "stage work %s\n"
+                     "stage work operation bench.work %s\n"
                      "stage main {\n"
                      "  input -> work\n"
                      "}\n",
                      exec_spec ? exec_spec : "");
   check_true(written > 0 && (size_t)written < sizeof(src));
   check_equal(turbo_flow_parse_string(flow, src, (size_t)written), SALTS_OK);
-  bench_register_stage(flow, "work");
+  turbo_flow_operation_descriptor_t operation =
+      bench_operation_descriptor("bench.work", execution_mask, worker_capacity);
+  bench_register_operation(flow, &operation);
   check_equal(turbo_flow_compile(flow), SALTS_OK);
   check_equal(turbo_flow_start(flow), SALTS_OK);
   return flow;
 }
 
-static turbo_flow_t *bench_create_started_flow(const char *src, const char *const *stage_names,
+static turbo_flow_t *bench_create_started_flow(const char *src,
+                                               const turbo_flow_operation_descriptor_t *operations,
                                                size_t stage_count) {
   turbo_flow_t *flow = turbo_flow_create();
   check_not_null(flow);
   check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
   for (size_t i = 0; i < stage_count; ++i) {
-    bench_register_stage(flow, stage_names[i]);
+    bench_register_operation(flow, &operations[i]);
   }
   check_equal(turbo_flow_compile(flow), SALTS_OK);
   check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -643,7 +682,7 @@ static turbo_flow_t *bench_create_started_flow(const char *src, const char *cons
 static turbo_flow_t *bench_create_emitting_flow(flow_bench_emitter_t *bench) {
   static const char *src = "source input operation data.input\n"
                            "stage expand operation data.expand\n"
-                           "stage sink\n"
+                           "stage sink operation bench.sink\n"
                            "stage main {\n"
                            "  input -> expand -> sink\n"
                            "}\n";
@@ -680,8 +719,15 @@ static turbo_flow_t *bench_create_emitting_flow(flow_bench_emitter_t *bench) {
   check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
   check_equal(turbo_flow_register_operation(flow, &expand), SALTS_OK);
   check_equal(turbo_flow_register_emitting_operation_provider(flow, &provider), SALTS_OK);
-  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_emitter_sink, bench, NULL),
-               SALTS_OK);
+  turbo_flow_operation_descriptor_t operation_sink =
+      bench_operation_descriptor("bench.sink", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u);
+  turbo_flow_operation_provider_registration_t provider_sink =
+      TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+  provider_sink.operation_name = operation_sink.name;
+  provider_sink.fn = bench_emitter_sink;
+  provider_sink.ctx = bench;
+  check_equal(turbo_flow_register_operation(flow, &operation_sink), SALTS_OK);
+  check_equal(turbo_flow_register_operation_provider(flow, &provider_sink), SALTS_OK);
   check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
   check_equal(turbo_flow_compile(flow), SALTS_OK);
   check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -692,7 +738,7 @@ static turbo_flow_t *bench_create_keyed_flow(flow_bench_keyed_t *bench, size_t m
                                              int emitting) {
   static const char *src = "source input operation data.input\n"
                            "stage count operation data.count\n"
-                           "stage sink\n"
+                           "stage sink operation bench.sink\n"
                            "stage main {\n"
                            "  input -> count -> sink\n"
                            "}\n";
@@ -752,7 +798,15 @@ static turbo_flow_t *bench_create_keyed_flow(flow_bench_keyed_t *bench, size_t m
     provider.store = bench->store;
     check_equal(turbo_flow_register_keyed_operation_provider(flow, &provider), SALTS_OK);
   }
-  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), SALTS_OK);
+  turbo_flow_operation_descriptor_t operation_sink =
+      bench_operation_descriptor("bench.sink", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u);
+  turbo_flow_operation_provider_registration_t provider_sink =
+      TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+  provider_sink.operation_name = operation_sink.name;
+  provider_sink.fn = bench_keyed_sink;
+  provider_sink.ctx = bench;
+  check_equal(turbo_flow_register_operation(flow, &operation_sink), SALTS_OK);
+  check_equal(turbo_flow_register_operation_provider(flow, &provider_sink), SALTS_OK);
   check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
   check_equal(turbo_flow_compile(flow), SALTS_OK);
   check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -763,7 +817,7 @@ static turbo_flow_t *bench_create_event_window_flow(flow_bench_keyed_t *bench, s
                                                     uint64_t window_size_ns) {
   static const char *src = "source input operation data.input\n"
                            "stage window operation data.event_window\n"
-                           "stage sink\n"
+                           "stage sink operation bench.sink\n"
                            "stage main {\n"
                            "  input -> window -> sink\n"
                            "}\n";
@@ -815,7 +869,15 @@ static turbo_flow_t *bench_create_event_window_flow(flow_bench_keyed_t *bench, s
   check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
   check_equal(turbo_flow_register_operation(flow, &window), SALTS_OK);
   check_equal(turbo_flow_register_event_time_window_provider(flow, &provider), SALTS_OK);
-  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), SALTS_OK);
+  turbo_flow_operation_descriptor_t operation_sink =
+      bench_operation_descriptor("bench.sink", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u);
+  turbo_flow_operation_provider_registration_t provider_sink =
+      TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+  provider_sink.operation_name = operation_sink.name;
+  provider_sink.fn = bench_keyed_sink;
+  provider_sink.ctx = bench;
+  check_equal(turbo_flow_register_operation(flow, &operation_sink), SALTS_OK);
+  check_equal(turbo_flow_register_operation_provider(flow, &provider_sink), SALTS_OK);
   check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
   check_equal(turbo_flow_compile(flow), SALTS_OK);
   check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -824,16 +886,31 @@ static turbo_flow_t *bench_create_event_window_flow(flow_bench_keyed_t *bench, s
 
 static turbo_flow_t *bench_create_keyed_baseline_flow(flow_bench_keyed_t *bench) {
   static const char *src = "source input\n"
-                           "stage count\n"
-                           "stage sink\n"
+                           "stage count operation bench.count\n"
+                           "stage sink operation bench.sink\n"
                            "stage main {\n"
                            "  input -> count -> sink\n"
                            "}\n";
   turbo_flow_t *flow = turbo_flow_create();
   check_not_null(flow);
-  check_equal(turbo_flow_register_stage_ex(flow, "count", bench_keyed_baseline_stage, bench, NULL),
-               SALTS_OK);
-  check_equal(turbo_flow_register_stage_ex(flow, "sink", bench_keyed_sink, bench, NULL), SALTS_OK);
+  turbo_flow_operation_descriptor_t operation_count =
+      bench_operation_descriptor("bench.count", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u);
+  turbo_flow_operation_provider_registration_t provider_count =
+      TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+  provider_count.operation_name = operation_count.name;
+  provider_count.fn = bench_keyed_baseline_stage;
+  provider_count.ctx = bench;
+  check_equal(turbo_flow_register_operation(flow, &operation_count), SALTS_OK);
+  check_equal(turbo_flow_register_operation_provider(flow, &provider_count), SALTS_OK);
+  turbo_flow_operation_descriptor_t operation_sink =
+      bench_operation_descriptor("bench.sink", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u);
+  turbo_flow_operation_provider_registration_t provider_sink =
+      TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+  provider_sink.operation_name = operation_sink.name;
+  provider_sink.fn = bench_keyed_sink;
+  provider_sink.ctx = bench;
+  check_equal(turbo_flow_register_operation(flow, &operation_sink), SALTS_OK);
+  check_equal(turbo_flow_register_operation_provider(flow, &provider_sink), SALTS_OK);
   check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
   check_equal(turbo_flow_compile(flow), SALTS_OK);
   check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -1008,9 +1085,9 @@ spec("Turbo Flow Bench") {
 
   bench("compile") {
     static const char *src = "source input\n"
-                             "stage parse\n"
-                             "stage validate\n"
-                             "stage sink\n"
+                             "stage parse operation bench.parse\n"
+                             "stage validate operation bench.validate\n"
+                             "stage sink operation bench.sink\n"
                              "stage main {\n"
                              "  input -> parse -> validate -> sink\n"
                              "}\n";
@@ -1020,9 +1097,15 @@ spec("Turbo Flow Bench") {
       turbo_flow_t *flow = turbo_flow_create();
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      bench_register_stage(flow, "parse");
-      bench_register_stage(flow, "validate");
-      bench_register_stage(flow, "sink");
+      turbo_flow_operation_descriptor_t operation_parse =
+          bench_operation_descriptor("bench.parse", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u);
+      bench_register_operation(flow, &operation_parse);
+      turbo_flow_operation_descriptor_t operation_validate =
+          bench_operation_descriptor("bench.validate", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u);
+      bench_register_operation(flow, &operation_validate);
+      turbo_flow_operation_descriptor_t operation_sink =
+          bench_operation_descriptor("bench.sink", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u);
+      bench_register_operation(flow, &operation_sink);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
@@ -1030,29 +1113,39 @@ spec("Turbo Flow Bench") {
 
   bench("publish") {
     static const char *linear_src = "source input\n"
-                                    "stage parse\n"
-                                    "stage validate\n"
-                                    "stage sink\n"
+                                    "stage parse operation bench.parse\n"
+                                    "stage validate operation bench.validate\n"
+                                    "stage sink operation bench.sink\n"
                                     "stage main {\n"
                                     "  input -> parse -> validate -> sink\n"
                                     "}\n";
     static const char *diamond_src = "source input\n"
-                                     "stage parse\n"
-                                     "stage validate\n"
-                                     "stage enrich\n"
-                                     "stage sink\n"
+                                     "stage parse operation bench.parse\n"
+                                     "stage validate operation bench.validate\n"
+                                     "stage enrich operation bench.enrich\n"
+                                     "stage sink operation bench.sink\n"
                                      "stage main {\n"
                                      "  input -> parse -> [validate, enrich] -> sink\n"
                                      "}\n";
     static const char *worker_src = "source input\n"
-                                    "stage enrich worker 4\n"
-                                    "stage sink\n"
+                                    "stage enrich operation bench.enrich worker 4\n"
+                                    "stage sink operation bench.sink\n"
                                     "stage main {\n"
                                     "  input -> enrich -> sink\n"
                                     "}\n";
-    const char *linear_stages[] = {"parse", "validate", "sink"};
-    const char *diamond_stages[] = {"parse", "validate", "enrich", "sink"};
-    const char *worker_stages[] = {"enrich", "sink"};
+    turbo_flow_operation_descriptor_t linear_stages[] = {
+        bench_operation_descriptor("bench.parse", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u),
+        bench_operation_descriptor("bench.validate", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u),
+        bench_operation_descriptor("bench.sink", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u)};
+    turbo_flow_operation_descriptor_t diamond_stages[] = {
+        bench_operation_descriptor("bench.parse", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u),
+        bench_operation_descriptor("bench.validate", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u),
+        bench_operation_descriptor("bench.enrich", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u),
+        bench_operation_descriptor("bench.sink", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u)};
+    turbo_flow_operation_descriptor_t worker_stages[] = {
+        bench_operation_descriptor("bench.enrich", TURBO_FLOW_OPERATION_EXEC_INLINE,
+                                   FLOW_WORKER_POOL_DEFAULT_CAPACITY),
+        bench_operation_descriptor("bench.sink", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u)};
     char raw[] = "payload";
     turbo_flow_msg_t msg;
 
@@ -1238,7 +1331,7 @@ spec("Turbo Flow Bench") {
 
   bench("async ingress") {
     static const char *src = "source input\n"
-                             "stage sink\n"
+                             "stage sink operation bench.sink\n"
                              "stage main {\n"
                              "  input -> sink\n"
                              "}\n";
@@ -1254,7 +1347,9 @@ spec("Turbo Flow Bench") {
     check_not_null(flow);
     check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    bench_register_stage(flow, "sink");
+    turbo_flow_operation_descriptor_t operation_sink =
+        bench_operation_descriptor("bench.sink", TURBO_FLOW_OPERATION_EXEC_INLINE, 0u);
+    bench_register_operation(flow, &operation_sink);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     turbo_flow_msg_init(&msg);
@@ -1290,35 +1385,40 @@ spec("Turbo Flow Bench") {
       int written =
           snprintf(exec_spec, sizeof(exec_spec), "exec thread workers %" PRIu32, worker_counts[i]);
       check_true(written > 0 && (size_t)written < sizeof(exec_spec));
-      flow = bench_create_executor_flow(exec_spec);
+      flow = bench_create_executor_flow(exec_spec, TURBO_FLOW_OPERATION_EXEC_THREAD, 0u);
       bench_report_publish(flow, "linear-1-stage", "thread", worker_counts[i], payload_size,
                            FLOW_BENCH_EXECUTOR_ITERS);
       bench_destroy_started_flow(flow);
     }
 
     {
-      turbo_flow_t *flow = bench_create_executor_flow("exec coro lanes 2");
+      turbo_flow_t *flow =
+          bench_create_executor_flow("exec coro lanes 2", TURBO_FLOW_OPERATION_EXEC_CORO, 0u);
       bench_report_publish(flow, "linear-1-stage", "coro-unpooled", 2, payload_size,
                            FLOW_BENCH_EXECUTOR_ITERS);
       bench_destroy_started_flow(flow);
     }
 
     {
-      turbo_flow_t *flow = bench_create_executor_flow("exec coro lanes 2 pool 128");
+      turbo_flow_t *flow = bench_create_executor_flow("exec coro lanes 2 pool 128",
+                                                      TURBO_FLOW_OPERATION_EXEC_CORO, 0u);
       bench_report_publish(flow, "linear-1-stage", "coro-pooled", 2, payload_size,
                            FLOW_BENCH_EXECUTOR_ITERS);
       bench_destroy_started_flow(flow);
     }
 
     {
-      turbo_flow_t *flow = bench_create_executor_flow("worker 4");
+      turbo_flow_t *flow = bench_create_executor_flow("worker 4", TURBO_FLOW_OPERATION_EXEC_INLINE,
+                                                      FLOW_WORKER_POOL_DEFAULT_CAPACITY);
       bench_report_publish(flow, "worker-cross-ring", "inline", 4, payload_size,
                            FLOW_BENCH_EXECUTOR_ITERS);
       bench_destroy_started_flow(flow);
     }
 
     {
-      turbo_flow_t *flow = bench_create_executor_flow("worker 4 capacity 1024");
+      turbo_flow_t *flow =
+          bench_create_executor_flow("worker 4 capacity 1024", TURBO_FLOW_OPERATION_EXEC_INLINE,
+                                     FLOW_WORKER_POOL_DEFAULT_CAPACITY);
       bench_report_idle_cpu(flow, "worker-cross-ring", "disruptor-parked", 4);
       bench_report_concurrent_publish(flow, "worker-cross-ring", "inline", 4, 4, payload_size,
                                       FLOW_BENCH_EXECUTOR_ITERS);
@@ -1326,7 +1426,8 @@ spec("Turbo Flow Bench") {
     }
 
     {
-      turbo_flow_t *flow = bench_create_executor_flow("exec coro lanes 4 pool 128");
+      turbo_flow_t *flow = bench_create_executor_flow("exec coro lanes 4 pool 128",
+                                                      TURBO_FLOW_OPERATION_EXEC_CORO, 0u);
       bench_report_concurrent_publish(flow, "linear-1-stage", "coro-pooled", 4, 4, payload_size,
                                       FLOW_BENCH_EXECUTOR_ITERS);
       bench_destroy_started_flow(flow);
@@ -1337,7 +1438,8 @@ spec("Turbo Flow Bench") {
     benchmark(
         "stage_plan=linear-1-stage executor=thread workers=4 jobs=idle payload_bytes=0 teardown",
         FLOW_BENCH_TEARDOWN_ITERS, 1) {
-      turbo_flow_t *flow = bench_create_executor_flow("exec thread workers 4");
+      turbo_flow_t *flow =
+          bench_create_executor_flow("exec thread workers 4", TURBO_FLOW_OPERATION_EXEC_THREAD, 0u);
       bench_destroy_started_flow(flow);
     }
 
@@ -1345,7 +1447,8 @@ spec("Turbo Flow Bench") {
               "payload_bytes=7 teardown",
               FLOW_BENCH_TEARDOWN_ITERS, 1) {
       turbo_flow_msg_t msg;
-      turbo_flow_t *flow = bench_create_executor_flow("exec thread workers 4");
+      turbo_flow_t *flow =
+          bench_create_executor_flow("exec thread workers 4", TURBO_FLOW_OPERATION_EXEC_THREAD, 0u);
       turbo_flow_msg_init(&msg);
       msg.owned_payload = tstr_dup("payload");
       msg.payload = tstr_to_v(msg.owned_payload);
@@ -1357,7 +1460,8 @@ spec("Turbo Flow Bench") {
     benchmark(
         "stage_plan=linear-1-stage executor=thread workers=4 jobs=live payload_bytes=0 teardown",
         FLOW_BENCH_TEARDOWN_ITERS, 1) {
-      turbo_flow_t *flow = bench_create_executor_flow("exec thread workers 4");
+      turbo_flow_t *flow =
+          bench_create_executor_flow("exec thread workers 4", TURBO_FLOW_OPERATION_EXEC_THREAD, 0u);
       uint32_t stage_index = (uint32_t)turbo_flow_find_stage(flow, "work");
       const flow_threadpool_adapter_t *adapter = bench_threadpool_adapter(flow, stage_index);
       flow_bench_live_jobs_t jobs;

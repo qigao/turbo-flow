@@ -1,3 +1,4 @@
+#include "../../tests/flow_operation_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
 
@@ -337,6 +338,86 @@ operation_descriptor(const char *name, turbo_flow_domain_t domain, turbo_flow_do
   return descriptor;
 }
 
+suite("Explicit operation binding") {
+  it("reuses one operation across differently named stages") {
+    const char *dsl = "source input\n"
+                      "stage first operation test.transform\n"
+                      "stage second operation test.transform\n"
+                      "stage main {\n input -> first -> second\n}\n";
+    turbo_flow_t *flow = turbo_flow_create();
+    int calls = 0;
+    flow_test_operation_t operation =
+        flow_test_operation_init("test.transform", domain_count_stage, &calls);
+    turbo_flow_msg_t message;
+    operation.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    turbo_flow_msg_init(&message);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
+    check_equal(calls, 2);
+    turbo_flow_msg_cleanup(&message);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("does not bind a same-name operation without explicit DSL identity") {
+    const char *dsl = "source input\nstage transform\nstage main {\n input -> transform\n}\n";
+    turbo_flow_t *flow = turbo_flow_create();
+    int calls = 0;
+    flow_test_operation_t operation =
+        flow_test_operation_init("transform", domain_count_stage, &calls);
+    check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
+    check_equal(calls, 0);
+    turbo_flow_destroy(flow);
+  }
+
+  it("rejects a missing descriptor or provider before any callback") {
+    const char *dsl = "source input\nstage transform operation test.transform\n"
+                      "stage main {\n input -> transform\n}\n";
+    for (int provider_only = 0; provider_only < 2; ++provider_only) {
+      turbo_flow_t *flow = turbo_flow_create();
+      int calls = 0;
+      flow_test_operation_t operation =
+          flow_test_operation_init("test.transform", domain_count_stage, &calls);
+      check_equal(provider_only ? turbo_flow_register_operation_provider(flow, &operation.provider)
+                                : turbo_flow_register_operation(flow, &operation.descriptor),
+                  SALTS_OK);
+      check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
+      check_equal(calls, 0);
+      turbo_flow_destroy(flow);
+    }
+  }
+
+  it("locks compiled registration and resets both contracts together") {
+    const char *dsl = "source input\nstage transform operation test.transform\n"
+                      "stage main {\n input -> transform\n}\n";
+    turbo_flow_t *flow = turbo_flow_create();
+    flow_test_operation_t operation =
+        flow_test_operation_init("test.transform", domain_noop_stage, NULL);
+    check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+    check_equal(turbo_flow_register_operation(flow, &operation.descriptor), SALTS_EALREADY);
+    check_equal(turbo_flow_register_operation_provider(flow, &operation.provider), SALTS_EALREADY);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_register_operation(flow, &operation.descriptor), SALTS_EBUSY);
+    check_equal(turbo_flow_register_operation_provider(flow, &operation.provider), SALTS_EBUSY);
+    check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
+    check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+}
+
 static int register_domain_batch_graph(turbo_flow_t *flow, domain_batch_probe_t *probe,
                                        size_t registration_size) {
   static const char *dsl =
@@ -429,7 +510,11 @@ static int register_emitting_graph(turbo_flow_t *flow, emission_probe_t *probe,
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_emitting_operation_provider(flow, &provider);
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_register_stage_ex(flow, "sink", domain_emission_sink, probe, NULL);
+  flow_test_operation_t operation_provider_0 =
+      flow_test_operation_init("test.sink", domain_emission_sink, probe);
+  operation_provider_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+  operation_provider_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+  rc = flow_test_operation_register(flow, &operation_provider_0);
   if (rc != SALTS_OK) return rc;
   return turbo_flow_parse_string(flow, dsl, strlen(dsl));
 }
@@ -1016,8 +1101,12 @@ suite("Turbo Flow Domain Contracts") {
       check_equal(turbo_flow_register_primitive(flow, &session), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &validate), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "validate", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_1 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_1.operation_name = validate.name;
+      operation_provider_1.fn = domain_noop_stage;
+      operation_provider_1.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_1), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
 
@@ -1050,8 +1139,12 @@ suite("Turbo Flow Domain Contracts") {
       check_equal(turbo_flow_register_primitive(flow, &queue), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &validate), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "validate", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_2 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_2.operation_name = validate.name;
+      operation_provider_2.fn = domain_noop_stage;
+      operation_provider_2.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_2), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message,
@@ -1088,9 +1181,12 @@ suite("Turbo Flow Domain Contracts") {
         check_equal(turbo_flow_register_primitive(flow, &queue), SALTS_OK);
         check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
         check_equal(turbo_flow_register_operation(flow, &validate), SALTS_OK);
-        check_equal(
-            turbo_flow_register_stage_ex(flow, "validate", domain_noop_stage, NULL, NULL),
-            SALTS_OK);
+        turbo_flow_operation_provider_registration_t operation_provider_3 =
+            TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+        operation_provider_3.operation_name = validate.name;
+        operation_provider_3.fn = domain_noop_stage;
+        operation_provider_3.ctx = NULL;
+        check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_3), SALTS_OK);
         check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
         check_equal(turbo_flow_compile(flow), expected[scenario]);
         if (scenario == 1u) {
@@ -1125,8 +1221,12 @@ suite("Turbo Flow Domain Contracts") {
       check_equal(turbo_flow_register_primitive(flow, &session), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &validate), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "validate", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_4 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_4.operation_name = validate.name;
+      operation_provider_4.fn = domain_noop_stage;
+      operation_provider_4.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_4), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "requires an adapter owner");
@@ -1150,8 +1250,12 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &validate), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "validate", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_5 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_5.operation_name = validate.name;
+      operation_provider_5.fn = domain_noop_stage;
+      operation_provider_5.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_5), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "domain or type is incompatible");
@@ -1183,17 +1287,26 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(management_flow);
       check_not_null(worker_flow);
       check_equal(turbo_flow_register_operation(management_flow, &command), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(management_flow, "command", domain_noop_stage, NULL, NULL),
-          SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_6 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_6.operation_name = command.name;
+      operation_provider_6.fn = domain_noop_stage;
+      operation_provider_6.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(management_flow, &operation_provider_6),
+                  SALTS_OK);
       check_equal(turbo_flow_parse_string(management_flow, management_dsl, strlen(management_dsl)),
                    SALTS_OK);
       check_equal(turbo_flow_compile(management_flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(management_flow)->message, "management command");
 
       check_equal(turbo_flow_register_operation(worker_flow, &validate), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(worker_flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_7 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_7.operation_name = validate.name;
+      operation_provider_7.fn = domain_noop_stage;
+      operation_provider_7.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(worker_flow, &operation_provider_7),
+                  SALTS_OK);
       check_equal(turbo_flow_parse_string(worker_flow, worker_dsl, strlen(worker_dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(worker_flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(worker_flow)->message, "worker segment");
@@ -1217,8 +1330,12 @@ suite("Turbo Flow Domain Contracts") {
                                   TURBO_FLOW_OPERATION_EXEC_CORO;
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_8 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_8.operation_name = operation.name;
+      operation_provider_8.fn = domain_noop_stage;
+      operation_provider_8.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_8), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "pool-scoped operation");
@@ -1229,7 +1346,7 @@ suite("Turbo Flow Domain Contracts") {
   group("Bounded emitting operations") {
     static const char *linear_dsl = "source input operation data.input\n"
                                     "stage expand operation data.expand\n"
-                                    "stage sink\n"
+                                    "stage sink operation test.sink\n"
                                     "stage main {\n"
                                     "  input -> expand -> sink\n"
                                     "}\n";
@@ -1356,8 +1473,8 @@ suite("Turbo Flow Domain Contracts") {
     it("rejects downstream fan-in from outside the emitted subtree") {
       static const char *dsl = "source input operation data.input\n"
                                "stage expand operation data.expand\n"
-                               "stage other\n"
-                               "stage sink\n"
+                               "stage other operation test.other\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> expand -> sink\n"
                                "  input -> other -> sink\n"
@@ -1368,8 +1485,9 @@ suite("Turbo Flow Domain Contracts") {
       memset(&probe, 0, sizeof(probe));
       check_not_null(flow);
       check_equal(register_emitting_graph(flow, &probe, 1u, dsl), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "other", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_provider_9 =
+          flow_test_operation_init("test.other", domain_noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_provider_9), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
       check_contains(turbo_flow_last_error(flow)->message, "external branch");
       turbo_flow_destroy(flow);
@@ -1377,26 +1495,34 @@ suite("Turbo Flow Domain Contracts") {
   }
 
   group("Runtime contract lowering") {
-    it("resolves a complete core operation contract for every runtime node") {
-      static const char *dsl = "source input\n"
-                               "stage inline_stage\n"
-                               "stage thread_stage exec thread workers 1\n"
-                               "stage coro_stage exec coro lanes 1 pool 2\n"
-                               "stage worker_stage worker 2 capacity 16\n"
-                               "stage main {\n"
-                               "  input -> inline_stage -> thread_stage -> coro_stage -> worker_stage\n"
-                               "}\n";
+    it("resolves explicit stage contracts and built-in source contracts for every runtime node") {
+      static const char *dsl =
+          "source input\n"
+          "stage inline_stage operation test.inline_stage\n"
+          "stage thread_stage operation test.thread_stage exec thread workers 1\n"
+          "stage coro_stage operation test.coro_stage exec coro lanes 1 pool 2\n"
+          "stage worker_stage operation test.worker_stage worker 2 capacity 16\n"
+          "stage main {\n"
+          "  input -> inline_stage -> thread_stage -> coro_stage -> worker_stage\n"
+          "}\n";
       const char *stage_names[] = {"input", "inline_stage", "thread_stage", "coro_stage",
                                    "worker_stage"};
-      const char *operation_names[] = {"core.source", "core.stage.inline", "core.stage.thread",
-                                       "core.stage.coro", "core.stage.worker"};
+      const uint32_t execution_masks[] = {
+          TURBO_FLOW_OPERATION_EXEC_INLINE, TURBO_FLOW_OPERATION_EXEC_INLINE,
+          TURBO_FLOW_OPERATION_EXEC_THREAD, TURBO_FLOW_OPERATION_EXEC_CORO,
+          TURBO_FLOW_OPERATION_EXEC_INLINE};
+      const char *operation_names[] = {"core.source", "test.inline_stage", "test.thread_stage",
+                                       "test.coro_stage", "test.worker_stage"};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
       for (size_t i = 1u; i < sizeof(stage_names) / sizeof(stage_names[0]); ++i) {
-        check_equal(turbo_flow_register_stage_ex(flow, stage_names[i], domain_noop_stage, NULL,
-                                                  NULL),
-                     SALTS_OK);
+        flow_test_operation_t contract =
+            flow_test_operation_init(operation_names[i], domain_noop_stage, NULL);
+        contract.descriptor.execution_mask = execution_masks[i];
+        if (i != 1u) contract.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+        if (i == 4u) require_worker_handoff(&contract.descriptor, 16u);
+        check_equal(flow_test_operation_register(flow, &contract), SALTS_OK);
       }
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
@@ -1434,7 +1560,7 @@ suite("Turbo Flow Domain Contracts") {
                                "}\n"
                                "stage main {\n"
                                "  source input\n"
-                               "  step sink\n"
+                               "  step sink operation test.sink\n"
                                "  use pass = passthrough\n"
                                "  input -> pass -> sink\n"
                                "}\n";
@@ -1445,8 +1571,9 @@ suite("Turbo Flow Domain Contracts") {
       const turbo_flow_operation_descriptor_t *output_operation;
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_provider_11 =
+          flow_test_operation_init("test.sink", domain_noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_provider_11), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       input_port = turbo_flow_find_stage(flow, "pass.value");
@@ -1486,8 +1613,12 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_12 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_12.operation_name = work.name;
+      operation_provider_12.fn = domain_noop_stage;
+      operation_provider_12.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_12), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
 
@@ -1523,8 +1654,12 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_13 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_13.operation_name = work.name;
+      operation_provider_13.fn = domain_noop_stage;
+      operation_provider_13.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_13), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "does not match worker capacity");
@@ -1550,8 +1685,12 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_14 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_14.operation_name = work.name;
+      operation_provider_14.fn = domain_noop_stage;
+      operation_provider_14.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_14), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
 
@@ -1561,8 +1700,12 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_15 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_15.operation_name = work.name;
+      operation_provider_15.fn = domain_noop_stage;
+      operation_provider_15.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_15), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       turbo_flow_destroy(flow);
@@ -1587,8 +1730,12 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_16 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_16.operation_name = work.name;
+      operation_provider_16.fn = domain_noop_stage;
+      operation_provider_16.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_16), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
       check_contains(turbo_flow_last_error(flow)->message, "cannot drop an older entry");
@@ -1629,10 +1776,16 @@ suite("Turbo Flow Domain Contracts") {
         atomic_init(&probe.release, 0);
         check_not_null(flow);
         check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+        work.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+        work.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+        work.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
         check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-        check_equal(turbo_flow_register_stage_ex(flow, "work", domain_blocking_stage, &probe,
-                                                  NULL),
-                     SALTS_OK);
+        turbo_flow_operation_provider_registration_t operation_provider_17 =
+            TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+        operation_provider_17.operation_name = work.name;
+        operation_provider_17.fn = domain_blocking_stage;
+        operation_provider_17.ctx = &probe;
+        check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_17), SALTS_OK);
         check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
         check_equal(turbo_flow_compile(flow), SALTS_OK);
         check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -1699,8 +1852,12 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_18 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_18.operation_name = work.name;
+      operation_provider_18.fn = domain_noop_stage;
+      operation_provider_18.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_18), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "requires a reorder boundary");
@@ -1727,8 +1884,12 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_19 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_19.operation_name = work.name;
+      operation_provider_19.fn = domain_noop_stage;
+      operation_provider_19.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_19), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       turbo_flow_destroy(flow);
@@ -1752,8 +1913,12 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_20 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_20.operation_name = work.name;
+      operation_provider_20.fn = domain_noop_stage;
+      operation_provider_20.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_20), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       turbo_flow_destroy(flow);
@@ -1778,7 +1943,7 @@ suite("Turbo Flow Domain Contracts") {
     it("reports inline operation timeout after callback return and stops downstream") {
       static const char *dsl = "source input operation data.input\n"
                                "stage work operation data.validate\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> work -> sink\n"
                                "}\n";
@@ -1797,13 +1962,21 @@ suite("Turbo Flow Domain Contracts") {
       turbo_flow_msg_init(&message);
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+      work.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      work.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      work.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_slow_inline_stage, &probe,
-                                                NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", domain_count_stage, &sink_called,
-                                                NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_21 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_21.operation_name = work.name;
+      operation_provider_21.fn = domain_slow_inline_stage;
+      operation_provider_21.ctx = &probe;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_21), SALTS_OK);
+      flow_test_operation_t operation_provider_22 =
+          flow_test_operation_init("test.sink", domain_count_stage, &sink_called);
+      operation_provider_22.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_provider_22.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_provider_22), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -1855,10 +2028,16 @@ suite("Turbo Flow Domain Contracts") {
         turbo_flow_msg_init(&message);
         check_not_null(flow);
         check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+        work.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+        work.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+        work.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
         check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-        check_equal(turbo_flow_register_stage_ex(flow, "work", domain_deadline_yield_stage,
-                                                  &probe, NULL),
-                     SALTS_OK);
+        turbo_flow_operation_provider_registration_t operation_provider_23 =
+            TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+        operation_provider_23.operation_name = work.name;
+        operation_provider_23.fn = domain_deadline_yield_stage;
+        operation_provider_23.ctx = &probe;
+        check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_23), SALTS_OK);
         check_equal(turbo_flow_parse_string(flow, dsls[i], strlen(dsls[i])), SALTS_OK);
         check_equal(turbo_flow_compile(flow), SALTS_OK);
         check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -1889,8 +2068,12 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_24 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_24.operation_name = work.name;
+      operation_provider_24.fn = domain_noop_stage;
+      operation_provider_24.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_24), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "requires a reject edge");
@@ -1900,7 +2083,7 @@ suite("Turbo Flow Domain Contracts") {
     it("accepts reject error mode when the stage owns a reject edge") {
       static const char *dsl = "source input operation data.input\n"
                                "stage work operation data.validate\n"
-                               "stage rejected\n"
+                               "stage rejected operation test.rejected\n"
                                "stage main {\n"
                                "  input -> work\n"
                                "  reject validation_failed work -> rejected\n"
@@ -1917,10 +2100,15 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "rejected", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_25 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_25.operation_name = work.name;
+      operation_provider_25.fn = domain_noop_stage;
+      operation_provider_25.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_25), SALTS_OK);
+      flow_test_operation_t operation_provider_26 =
+          flow_test_operation_init("test.rejected", domain_noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_provider_26), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       turbo_flow_destroy(flow);
@@ -1945,8 +2133,12 @@ suite("Turbo Flow Domain Contracts") {
       check_not_null(flow);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_27 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_27.operation_name = work.name;
+      operation_provider_27.fn = domain_noop_stage;
+      operation_provider_27.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_27), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "requires a retry policy");
@@ -2005,8 +2197,12 @@ suite("Turbo Flow Domain Contracts") {
       check_equal(turbo_flow_register_adapter(flow, "owner", &adapter_ops, NULL), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                   SALTS_OK);
+      turbo_flow_operation_provider_registration_t operation_provider_28 =
+          TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+      operation_provider_28.operation_name = work.name;
+      operation_provider_28.fn = domain_noop_stage;
+      operation_provider_28.ctx = NULL;
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_28), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
       check_contains(turbo_flow_last_error(flow)->message, "settlement owner");
@@ -2016,7 +2212,7 @@ suite("Turbo Flow Domain Contracts") {
     it("delivers automatic complete and explicit protocol ACK to the owner") {
       static const char *dsl = "source input operation data.input\n"
                                "stage work adapter owner operation data.validate\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> work -> sink\n"
                                "}\n";
@@ -2052,12 +2248,19 @@ suite("Turbo Flow Domain Contracts") {
         check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
         check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
         if (action_index == 0u) {
-          check_equal(turbo_flow_register_stage_ex(flow, "work", domain_noop_stage, NULL, NULL),
-                       SALTS_OK);
+          turbo_flow_operation_provider_registration_t operation_provider_29 =
+              TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+          operation_provider_29.operation_name = work.name;
+          operation_provider_29.fn = domain_noop_stage;
+          operation_provider_29.ctx = NULL;
+          check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_29),
+                      SALTS_OK);
         }
-        check_equal(turbo_flow_register_stage_ex(flow, "sink", domain_count_stage, &sink_called,
-                                                  NULL),
-                     SALTS_OK);
+        flow_test_operation_t operation_provider_30 =
+            flow_test_operation_init("test.sink", domain_count_stage, &sink_called);
+        operation_provider_30.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+        operation_provider_30.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+        check_equal(flow_test_operation_register(flow, &operation_provider_30), SALTS_OK);
         check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
         check_equal(turbo_flow_compile(flow), SALTS_OK);
         check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -2078,7 +2281,7 @@ suite("Turbo Flow Domain Contracts") {
     it("delivers terminal settlement actions without releasing normal downstream") {
       static const char *dsl = "source input operation data.input\n"
                                "stage work adapter owner operation data.validate\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> work -> sink\n"
                                "}\n";
@@ -2112,9 +2315,11 @@ suite("Turbo Flow Domain Contracts") {
                    SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
       check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", domain_count_stage, &sink_called,
-                                                NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_provider_31 =
+          flow_test_operation_init("test.sink", domain_count_stage, &sink_called);
+      operation_provider_31.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_provider_31.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_provider_31), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -2184,10 +2389,16 @@ suite("Turbo Flow Domain Contracts") {
         check_equal(turbo_flow_register_adapter_settlement(flow, "owner", &owner_ops, &probe),
                      SALTS_OK);
         check_equal(turbo_flow_register_operation(flow, &input), SALTS_OK);
+        work.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+        work.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+        work.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
         check_equal(turbo_flow_register_operation(flow, &work), SALTS_OK);
-        check_equal(turbo_flow_register_stage_ex(flow, "work", domain_settlement_stage, &probe,
-                                                  NULL),
-                     SALTS_OK);
+        turbo_flow_operation_provider_registration_t operation_provider_32 =
+            TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+        operation_provider_32.operation_name = work.name;
+        operation_provider_32.fn = domain_settlement_stage;
+        operation_provider_32.ctx = &probe;
+        check_equal(turbo_flow_register_operation_provider(flow, &operation_provider_32), SALTS_OK);
         check_equal(turbo_flow_parse_string(flow, dsls[path], strlen(dsls[path])), SALTS_OK);
         check_equal(turbo_flow_compile(flow), SALTS_OK);
         check_equal(turbo_flow_start(flow), SALTS_OK);

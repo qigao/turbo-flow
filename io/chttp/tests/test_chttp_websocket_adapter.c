@@ -1,3 +1,4 @@
+#include "../../../tests/flow_operation_fixture.h"
 #include "tinytest.h"
 
 #include "../../cnet/tests/listener_source_tls_fixture.h"
@@ -250,7 +251,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
 
   it("round-trips one HTTP/1.1 text frame through a Flow source and sink") {
     static const char *dsl = "source ws_in adapter ws.server\n"
-                             "stage capture\n"
+                             "stage capture operation test.capture\n"
                              "stage ws_out adapter ws.server\n"
                              "stage main {\n"
                              "  ws_in -> capture -> ws_out\n"
@@ -289,9 +290,11 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     config.max_buffered_input_bytes = 8192u;
     check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "capture", websocket_adapter_capture, &stale, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_capture_0 =
+        flow_test_operation_init("test.capture", websocket_adapter_capture, &stale);
+    operation_capture_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_capture_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_capture_0), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
@@ -496,7 +499,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
 
   it("maps binary and control events to typed Flow commands") {
     static const char *dsl = "source ws_in adapter ws.server\n"
-                             "stage route_control\n"
+                             "stage route_control operation test.route_control\n"
                              "stage ws_out adapter ws.server\n"
                              "stage main {\n"
                              "  ws_in -> route_control -> ws_out\n"
@@ -529,9 +532,11 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     config.max_buffered_input_bytes = 8192u;
     check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "route_control", websocket_adapter_route_control,
-                                             &probe, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_route_control_1 =
+        flow_test_operation_init("test.route_control", websocket_adapter_route_control, &probe);
+    operation_route_control_1.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_route_control_1.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_route_control_1), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
@@ -613,7 +618,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
 
   it("drains an admitted frame before Flow stop closes the CHTTP owner") {
     static const char *dsl = "source ws_in adapter ws.server\n"
-                             "stage gate\n"
+                             "stage gate operation test.gate\n"
                              "stage ws_out adapter ws.server\n"
                              "stage main {\n"
                              "  ws_in -> gate -> ws_out\n"
@@ -650,8 +655,11 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     config.max_buffered_input_bytes = 8192u;
     check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "gate", websocket_adapter_gate, &gate, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_gate_2 =
+        flow_test_operation_init("test.gate", websocket_adapter_gate, &gate);
+    operation_gate_2.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_gate_2.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_gate_2), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
@@ -689,7 +697,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
   it("drains accepted H1 and H2 frames before quiesced session close") {
     for (size_t protocol_index = 0u; protocol_index < 2u; ++protocol_index) {
       static const char *dsl = "source ws_in adapter ws.server\n"
-                               "stage gate\n"
+                               "stage gate operation test.gate\n"
                                "stage ws_out adapter ws.server\n"
                                "stage main {\n"
                                "  ws_in -> gate -> ws_out\n"
@@ -730,8 +738,11 @@ spec("TurboFlow CHTTP WebSocket adapter") {
       check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_OK);
       ws_cleanup_server = server;
       check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "gate", websocket_adapter_gate, &gate, NULL),
-                  SALTS_OK);
+      flow_test_operation_t operation_gate_3 =
+          flow_test_operation_init("test.gate", websocket_adapter_gate, &gate);
+      operation_gate_3.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_gate_3.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_gate_3), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
@@ -897,7 +908,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
 
   it("closes only the saturated session when the bounded frame source has no slot") {
     static const char *dsl = "source ws_in adapter ws.server\n"
-                             "stage gate\n"
+                             "stage gate operation test.gate\n"
                              "stage ws_out adapter ws.server\n"
                              "stage main {\n"
                              "  ws_in -> gate -> ws_out\n"
@@ -932,8 +943,11 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     config.max_buffered_input_bytes = 8192u;
     check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "gate", websocket_adapter_gate, &gate, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_gate_4 =
+        flow_test_operation_init("test.gate", websocket_adapter_gate, &gate);
+    operation_gate_4.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_gate_4.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_gate_4), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
@@ -982,7 +996,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
 
   it("propagates bounded Flow ingress demand as a session-local close") {
     static const char *dsl = "source ws_in adapter ws.server\n"
-                             "stage gate\n"
+                             "stage gate operation test.gate\n"
                              "stage ws_out adapter ws.server\n"
                              "stage main {\n"
                              "  ws_in -> gate -> ws_out\n"
@@ -1022,8 +1036,11 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
     check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "gate", websocket_adapter_gate, &gate, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_gate_5 =
+        flow_test_operation_init("test.gate", websocket_adapter_gate, &gate);
+    operation_gate_5.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_gate_5.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_gate_5), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);

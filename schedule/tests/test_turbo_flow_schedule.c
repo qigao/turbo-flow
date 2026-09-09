@@ -1,8 +1,9 @@
 #include "turbo_flow_schedule.h"
 
-#include "tinytest.h"
+#include "../../tests/flow_operation_fixture.h"
 #include "salts_error.h"
 #include "salts_thread.h"
+#include "tinytest.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -162,16 +163,19 @@ static turbo_flow_t *schedule_make_flow(const turbo_flow_schedule_config_t *conf
                                         schedule_capture_t *capture,
                                         turbo_flow_schedule_t **out_schedule) {
   static const char *dsl = "source tick adapter schedule.test\n"
-                           "stage capture\n"
+                           "stage capture operation test.capture\n"
                            "stage main {\n"
                            "  tick -> capture\n"
                            "}\n";
   turbo_flow_t *flow = turbo_flow_create();
+  flow_test_operation_t operation_capture =
+      flow_test_operation_init("test.capture", schedule_capture_stage, capture);
+  operation_capture.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+  operation_capture.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
   if (!flow ||
       turbo_flow_schedule_register_adapter(flow, "schedule.test", config, out_schedule) !=
           SALTS_OK ||
-      turbo_flow_register_stage_ex(flow, "capture", schedule_capture_stage, capture, NULL) !=
-          SALTS_OK ||
+      flow_test_operation_register(flow, &operation_capture) != SALTS_OK ||
       turbo_flow_parse_string(flow, dsl, strlen(dsl)) != SALTS_OK ||
       turbo_flow_compile(flow) != SALTS_OK) {
     turbo_flow_destroy(flow);

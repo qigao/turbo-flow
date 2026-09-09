@@ -1,3 +1,4 @@
+#include "../../../tests/flow_operation_fixture.h"
 #include <tinytest.h>
 #include <turbo_flow_turbodb.h>
 
@@ -378,13 +379,17 @@ static int count_graph_probe_stage(turbo_flow_msg_t *message, void *ctx) {
 
 static turbo_flow_t *open_graph(turbo_flow_stage_fn stage, void *stage_context) {
   static const char source[] = "source input\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> sink\n"
                                "}\n";
   turbo_flow_t *flow = turbo_flow_create();
+  flow_test_operation_t operation_sink_0 =
+      flow_test_operation_init("test.sink", stage, stage_context);
+  operation_sink_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+  operation_sink_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
   if (!flow || turbo_flow_parse_string(flow, source, strlen(source)) != SALTS_OK ||
-      turbo_flow_register_stage_ex(flow, "sink", stage, stage_context, NULL) != SALTS_OK ||
+      flow_test_operation_register(flow, &operation_sink_0) != SALTS_OK ||
       turbo_flow_compile(flow) != SALTS_OK || turbo_flow_start(flow) != SALTS_OK) {
     turbo_flow_destroy(flow);
     return NULL;

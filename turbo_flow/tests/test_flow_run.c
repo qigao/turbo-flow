@@ -1,3 +1,4 @@
+#include "../../tests/flow_operation_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
 
@@ -118,7 +119,7 @@ static int flow_run_probe_stage(turbo_flow_msg_t *message, void *ctx) {
 
 static turbo_flow_t *flow_run_test_flow_with_capacity(flow_run_probe_t *probe, size_t capacity) {
   static const char source[] = "source input\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> sink\n"
                                "}\n";
@@ -126,9 +127,13 @@ static turbo_flow_t *flow_run_test_flow_with_capacity(flow_run_probe_t *probe, s
   turbo_flow_async_ingress_config_t ingress = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
   ingress.workers = 1u;
   ingress.queue_capacity = capacity;
+  flow_test_operation_t operation_sink =
+      flow_test_operation_init("test.sink", flow_run_probe_stage, probe);
+  operation_sink.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+  operation_sink.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
   if (!flow || turbo_flow_configure_async_ingress(flow, &ingress) != SALTS_OK ||
       turbo_flow_parse_string(flow, source, strlen(source)) != SALTS_OK ||
-      turbo_flow_register_stage_ex(flow, "sink", flow_run_probe_stage, probe, NULL) != SALTS_OK ||
+      flow_test_operation_register(flow, &operation_sink) != SALTS_OK ||
       turbo_flow_compile(flow) != SALTS_OK || turbo_flow_start(flow) != SALTS_OK) {
     turbo_flow_destroy(flow);
     return NULL;

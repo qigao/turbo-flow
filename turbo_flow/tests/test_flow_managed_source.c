@@ -1,3 +1,4 @@
+#include "../../tests/flow_operation_fixture.h"
 #include "flow_internal.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
@@ -431,7 +432,7 @@ spec("Flow managed Source registration") {
 
   it("opens one Flow-owned Reactive run from the exact managed Source start callback") {
     static const char graph[] = "source input adapter managed.source\n"
-                                "stage sink\n"
+                                "stage sink operation test.sink\n"
                                 "stage main {\n"
                                 "  input -> sink\n"
                                 "}\n";
@@ -449,8 +450,9 @@ spec("Flow managed Source registration") {
     fixture.open_on_start = 1;
     registration = managed_source_registration(&fixture, &adapter_ops, &schema, &boundary_ops);
     check_equal(turbo_flow_register_managed_source_adapter(flow, &registration), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", managed_source_sink, NULL, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_sink_0 =
+        flow_test_operation_init("test.sink", managed_source_sink, NULL);
+    check_equal(flow_test_operation_register(flow, &operation_sink_0), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
 
@@ -479,7 +481,7 @@ spec("Flow managed Source registration") {
 
   it("rejects copied-stage, invalid-config, cross-thread, duplicate, and out-of-scope opens") {
     static const char graph[] = "source input adapter managed.source\n"
-                                "stage sink\n"
+                                "stage sink operation test.sink\n"
                                 "stage main {\n"
                                 "  input -> sink\n"
                                 "}\n";
@@ -504,8 +506,11 @@ spec("Flow managed Source registration") {
     fixture.try_duplicate_open = 1;
     registration = managed_source_registration(&fixture, &adapter_ops, &schema, &boundary_ops);
     check_equal(turbo_flow_register_managed_source_adapter(flow, &registration), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", managed_source_sink, &fixture, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_sink_1 =
+        flow_test_operation_init("test.sink", managed_source_sink, &fixture);
+    operation_sink_1.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_1.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_1), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
 
@@ -542,7 +547,7 @@ spec("Flow managed Source registration") {
   it("enforces the shared Reactive run capacity without taking the rejected Publisher") {
     static const char graph[] = "source first adapter source.first\n"
                                 "source second adapter source.second\n"
-                                "stage sink\n"
+                                "stage sink operation test.sink\n"
                                 "stage main {\n"
                                 "  first -> sink\n"
                                 "  second -> sink\n"
@@ -575,8 +580,9 @@ spec("Flow managed Source registration") {
     check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
     check_equal(turbo_flow_register_managed_source_adapter(flow, &first_registration), SALTS_OK);
     check_equal(turbo_flow_register_managed_source_adapter(flow, &second_registration), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", managed_source_sink, NULL, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_sink_2 =
+        flow_test_operation_init("test.sink", managed_source_sink, NULL);
+    check_equal(flow_test_operation_register(flow, &operation_sink_2), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -594,7 +600,7 @@ spec("Flow managed Source registration") {
 
   it("rejects managed Source registry mutation after the runtime has compiled") {
     static const char graph[] = "source input adapter managed.source\n"
-                                "stage sink\n"
+                                "stage sink operation test.sink\n"
                                 "stage main {\n"
                                 "  input -> sink\n"
                                 "}\n";
@@ -616,8 +622,9 @@ spec("Flow managed Source registration") {
     registration = managed_source_registration(&fixture, &adapter_ops, &schema, &boundary_ops);
     late_registration = managed_source_registration(&late, &late_ops, &late_schema, &late_boundary);
     check_equal(turbo_flow_register_managed_source_adapter(flow, &registration), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", managed_source_sink, NULL, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_sink_3 =
+        flow_test_operation_init("test.sink", managed_source_sink, NULL);
+    check_equal(flow_test_operation_register(flow, &operation_sink_3), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_register_managed_source_adapter(flow, &late_registration), SALTS_EBUSY);
@@ -634,7 +641,7 @@ spec("Flow managed Source registration") {
 
   it("closes a partial managed Source run before rollback stop and owner shutdown") {
     static const char graph[] = "source input adapter managed.source\n"
-                                "stage sink\n"
+                                "stage sink operation test.sink\n"
                                 "stage main {\n"
                                 "  input -> sink\n"
                                 "}\n";
@@ -652,8 +659,11 @@ spec("Flow managed Source registration") {
     fixture.start_return_status = SALTS_EIO;
     registration = managed_source_registration(&fixture, &adapter_ops, &schema, &boundary_ops);
     check_equal(turbo_flow_register_managed_source_adapter(flow, &registration), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", managed_source_sink, &fixture, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_sink_4 =
+        flow_test_operation_init("test.sink", managed_source_sink, &fixture);
+    operation_sink_4.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_4.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_4), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_EIO);
@@ -673,7 +683,7 @@ spec("Flow managed Source registration") {
 
   it("propagates a Publisher error and releases its ownership before Source stop") {
     static const char graph[] = "source input adapter managed.source\n"
-                                "stage sink\n"
+                                "stage sink operation test.sink\n"
                                 "stage main {\n"
                                 "  input -> sink\n"
                                 "}\n";
@@ -692,8 +702,11 @@ spec("Flow managed Source registration") {
     fixture.publisher_error_on_resume = 1;
     registration = managed_source_registration(&fixture, &adapter_ops, &schema, &boundary_ops);
     check_equal(turbo_flow_register_managed_source_adapter(flow, &registration), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", managed_source_sink, &fixture, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_sink_5 =
+        flow_test_operation_init("test.sink", managed_source_sink, &fixture);
+    operation_sink_5.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_5.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_5), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -757,7 +770,7 @@ spec("Flow managed Source registration") {
 
   it("preserves an accepted message and closes the managed run before normal Source stop") {
     static const char graph[] = "source input adapter managed.source\n"
-                                "stage sink exec thread workers 1\n"
+                                "stage sink operation test.sink exec thread workers 1\n"
                                 "stage main {\n"
                                 "  input -> sink\n"
                                 "}\n";
@@ -778,8 +791,13 @@ spec("Flow managed Source registration") {
     fixture.block_sink = 1;
     registration = managed_source_registration(&fixture, &adapter_ops, &schema, &boundary_ops);
     check_equal(turbo_flow_register_managed_source_adapter(flow, &registration), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "sink", managed_source_sink, &fixture, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_sink_6 =
+        flow_test_operation_init("test.sink", managed_source_sink, &fixture);
+    operation_sink_6.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_6.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    operation_sink_6.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+    operation_sink_6.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_THREAD;
+    check_equal(flow_test_operation_register(flow, &operation_sink_6), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);

@@ -1858,7 +1858,7 @@ TURBO_FLOW_C_API void turbo_flow_destroy(turbo_flow_t *flow);
  *
  * Reset is rejected while the flow is STARTED or while a failed adapter stop is
  * awaiting an explicit `turbo_flow_stop()` retry. When `keep_registry` is
- * non-zero, registered stage callbacks and adapters remain available for the
+ * non-zero, registered operation contracts, providers and adapters remain available for the
  * next parse/compile cycle. When zero, the flow returns to an empty NEW state.
  */
 TURBO_FLOW_C_API int turbo_flow_reset(turbo_flow_t *flow, int keep_registry);
@@ -2185,10 +2185,6 @@ TURBO_FLOW_C_API int turbo_flow_publish_async(turbo_flow_t *flow, const char *so
 TURBO_FLOW_C_API int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name,
                                     const turbo_flow_msg_t *msg,
                                     turbo_flow_publish_result_t *result);
-
-TURBO_FLOW_C_API int turbo_flow_register_stage_ex(turbo_flow_t *flow, const char *name,
-                                           turbo_flow_stage_fn fn, void *ctx,
-                                           const turbo_flow_stage_options_t *options);
 
 /**
  * Register an executable implementation for a domain operation.

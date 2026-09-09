@@ -1,3 +1,4 @@
+#include "../../../tests/flow_operation_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow_chttp.h"
 
@@ -196,7 +197,7 @@ spec("TurboFlow CHTTP async client adapter") {
   it("supports six request methods and resumes with an owned response") {
     static const char graph[] = "source input\n"
                                 "stage request adapter http.request\n"
-                                "stage output\n"
+                                "stage output operation test.output\n"
                                 "stage main {\n"
                                 "  input -> request -> output\n"
                                 "}\n";
@@ -237,8 +238,11 @@ spec("TurboFlow CHTTP async client adapter") {
       adapter_config.method = methods[index];
       check_equal(turbo_flow_chttp_client_register(&adapter_config, &client), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &probe, NULL),
-                  SALTS_OK);
+      flow_test_operation_t operation_output_0 =
+          flow_test_operation_init("test.output", chttp_adapter_sink, &probe);
+      operation_output_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_output_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_output_0), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -281,7 +285,7 @@ spec("TurboFlow CHTTP async client adapter") {
   it("rejects capacity overflow and cancels an accepted request exactly once") {
     static const char graph[] = "source input\n"
                                 "stage request adapter http.deferred\n"
-                                "stage output\n"
+                                "stage output operation test.output\n"
                                 "stage main {\n"
                                 "  input -> request -> output\n"
                                 "}\n";
@@ -325,8 +329,11 @@ spec("TurboFlow CHTTP async client adapter") {
     adapter_config.target = "/deferred";
     check_equal(turbo_flow_chttp_client_register(&adapter_config, &client), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &first, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_output_1 =
+        flow_test_operation_init("test.output", chttp_adapter_sink, &first);
+    operation_output_1.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_output_1.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_output_1), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -379,7 +386,7 @@ spec("TurboFlow CHTTP async client adapter") {
   it("quiesced clients finish accepted retries within the original overall deadline") {
     static const char graph[] = "source input\n"
                                 "stage request adapter http.retry\n"
-                                "stage output\n"
+                                "stage output operation test.output\n"
                                 "stage main {\n"
                                 "  input -> request -> output\n"
                                 "}\n";
@@ -425,8 +432,11 @@ spec("TurboFlow CHTTP async client adapter") {
       adapter_config.idempotent = explicit_idempotency[index];
       check_equal(turbo_flow_chttp_client_register(&adapter_config, &client), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &probe, NULL),
-                  SALTS_OK);
+      flow_test_operation_t operation_output_2 =
+          flow_test_operation_init("test.output", chttp_adapter_sink, &probe);
+      operation_output_2.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_output_2.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_output_2), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -498,7 +508,7 @@ spec("TurboFlow CHTTP async client adapter") {
   it("caps a long owner poll at the request overall deadline") {
     static const char graph[] = "source input\n"
                                 "stage request adapter http.deadline\n"
-                                "stage output\n"
+                                "stage output operation test.output\n"
                                 "stage main {\n"
                                 "  input -> request -> output\n"
                                 "}\n";
@@ -541,8 +551,11 @@ spec("TurboFlow CHTTP async client adapter") {
     adapter_config.overall_timeout_ms = 40u;
     check_equal(turbo_flow_chttp_client_register(&adapter_config, &client), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &probe, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_output_3 =
+        flow_test_operation_init("test.output", chttp_adapter_sink, &probe);
+    operation_output_3.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_output_3.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_output_3), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -620,7 +633,7 @@ spec("TurboFlow CHTTP async client adapter") {
   it("reports an HTTP/2 to HTTP/1.1 protocol mismatch without fallback") {
     static const char graph[] = "source input\n"
                                 "stage request adapter http.protocol\n"
-                                "stage output\n"
+                                "stage output operation test.output\n"
                                 "stage main {\n"
                                 "  input -> request -> output\n"
                                 "}\n";
@@ -654,8 +667,11 @@ spec("TurboFlow CHTTP async client adapter") {
     adapter_config.protocol = CHTTP_HTTP_2;
     check_equal(turbo_flow_chttp_client_register(&adapter_config, &client), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &probe, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_output_4 =
+        flow_test_operation_init("test.output", chttp_adapter_sink, &probe);
+    operation_output_4.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_output_4.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_output_4), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -689,7 +705,7 @@ spec("TurboFlow CHTTP async client adapter") {
   it("reports request and response body bounds without a fallback") {
     static const char graph[] = "source input\n"
                                 "stage request adapter http.bounds\n"
-                                "stage output\n"
+                                "stage output operation test.output\n"
                                 "stage main {\n"
                                 "  input -> request -> output\n"
                                 "}\n";
@@ -727,9 +743,11 @@ spec("TurboFlow CHTTP async client adapter") {
     adapter_config.method = CHTTP_METHOD_POST;
     check_equal(turbo_flow_chttp_client_register(&adapter_config, &client), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &response_limit, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_output_5 =
+        flow_test_operation_init("test.output", chttp_adapter_sink, &response_limit);
+    operation_output_5.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_output_5.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_output_5), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -774,7 +792,7 @@ spec("TurboFlow CHTTP async client adapter") {
   it("reconnects after an HTTP/1.1 response closes the pooled connection") {
     static const char graph[] = "source input\n"
                                 "stage request adapter http.h1\n"
-                                "stage output\n"
+                                "stage output operation test.output\n"
                                 "stage main {\n"
                                 "  input -> request -> output\n"
                                 "}\n";
@@ -810,8 +828,11 @@ spec("TurboFlow CHTTP async client adapter") {
     adapter_config.target = "/close";
     check_equal(turbo_flow_chttp_client_register(&adapter_config, &client), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &probe, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_output_6 =
+        flow_test_operation_init("test.output", chttp_adapter_sink, &probe);
+    operation_output_6.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_output_6.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_output_6), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -856,7 +877,7 @@ spec("TurboFlow CHTTP async client adapter") {
   it("isolates a failed HTTP/2 stream from its sibling on one connection") {
     static const char graph[] = "source input\n"
                                 "stage request adapter http.h2\n"
-                                "stage output\n"
+                                "stage output operation test.output\n"
                                 "stage main {\n"
                                 "  input -> request -> output\n"
                                 "}\n";
@@ -895,8 +916,11 @@ spec("TurboFlow CHTTP async client adapter") {
     adapter_config.protocol = CHTTP_HTTP_2;
     check_equal(turbo_flow_chttp_client_register(&adapter_config, &client), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &sink, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_output_7 =
+        flow_test_operation_init("test.output", chttp_adapter_sink, &sink);
+    operation_output_7.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_output_7.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_output_7), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -948,7 +972,7 @@ spec("TurboFlow CHTTP async client adapter") {
   it("makes every accepted request terminal exactly once during shutdown") {
     static const char graph[] = "source input\n"
                                 "stage request adapter http.shutdown\n"
-                                "stage output\n"
+                                "stage output operation test.output\n"
                                 "stage main {\n"
                                 "  input -> request -> output\n"
                                 "}\n";
@@ -990,8 +1014,11 @@ spec("TurboFlow CHTTP async client adapter") {
     adapter_config.stop_timeout_ms = 10u;
     check_equal(turbo_flow_chttp_client_register(&adapter_config, &client), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &probe, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_output_8 =
+        flow_test_operation_init("test.output", chttp_adapter_sink, &probe);
+    operation_output_8.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_output_8.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_output_8), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 

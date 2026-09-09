@@ -17,10 +17,11 @@ reject-edge mechanisms. Operation execution deadlines are enforced at their
 selected runtime boundary. Generic and protocol settlement actions execute only
 through an explicitly registered settlement owner; a missing owner or unsupported
 action fails compile with `SALTS_ENOTSUP`.
-Every runtime node has a complete resolved operation contract. DSL nodes without
-a domain-specific binding resolve to typed `core.source` or `core.stage.*`
-contracts derived from their selected executor/handoff; direct inline paths do
-not gain an extra ring.
+Every runtime node has a complete resolved operation contract. Callback stages
+require an explicit DSL operation identity and separately registered descriptor
+and provider. Node names never select a callback. Built-in `core.source`,
+`core.port.input/output` and `core.stage.owner` contracts remain available for
+sources, routing ports and adapter-owned consume; direct inline paths gain no extra ring.
 The public fields, registration example, lifetime, and compile errors are
 documented in `DOMAIN_CONTRACTS.md`.
 

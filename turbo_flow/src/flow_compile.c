@@ -337,7 +337,6 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
   flow->has_async_stage = 0;
   for (i = 0; i < vec_size(&flow->stages); ++i) {
     flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, i);
-    int reg_index = flow_find_registration(flow, stage->name);
     int provider_index = stage->operation_name
                              ? flow_find_operation_provider(flow, stage->operation_name,
                                                             stage->resource_name)
@@ -422,7 +421,7 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
         return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                               "retry requires an adapter retry callback");
       }
-      if (reg_index >= 0 || provider_index >= 0) {
+      if (provider_index >= 0) {
         return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "retry adapter stage may not override consume with a callback");
       }
@@ -441,9 +440,6 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
           return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                                 "cataloged operation provider is not bound to its module owner");
         }
-      } else if (reg_index >= 0) {
-        return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
-                              "legacy stage callback cannot implement a cataloged operation");
       } else if (adapter) {
         const flow_adapter_operation_binding_t *binding =
             flow_find_adapter_operation_binding(adapter, stage->operation_name);
@@ -472,48 +468,41 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
                             "adapter-owner operation requires a module owner");
     }
 
-    if (!stage->is_source && !stage->is_port && reg_index < 0 && provider_index < 0 &&
+    if (!stage->is_source && !stage->is_port && provider_index < 0 &&
         (!adapter || (!adapter->ops.consume && !adapter->async_terminal_ops.submit &&
                       !adapter->async_emit_ops.submit))) {
-      return flow_set_error(
-          flow, SALTS_EINVAL, stage->line, stage->column,
-          "stage callback, operation provider, or adapter consume callback is not registered");
+      return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
+                            "operation provider or adapter consume callback is not registered");
     }
-    if (!stage->is_source && !stage->is_port && reg_index < 0 && provider_index < 0 && adapter &&
+    if (!stage->is_source && !stage->is_port && provider_index < 0 && adapter &&
         (adapter->ops.consume || adapter->async_terminal_ops.submit ||
          adapter->async_emit_ops.submit) &&
         stage->exec.kind != TURBO_FLOW_EXEC_INLINE) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "adapter-owned consume requires the inline executor");
     }
-    if (!stage->is_source && !stage->is_port && (reg_index >= 0 || provider_index >= 0)) {
-      const flow_stage_registration_t *reg = NULL;
-      const flow_operation_provider_registration_t *provider = NULL;
-      if (provider_index >= 0) {
-        provider = (const flow_operation_provider_registration_t *)vec_at_const(
-            &flow->operation_providers, (size_t)provider_index);
-      } else {
-        reg = (const flow_stage_registration_t *)vec_at_const(&flow->registrations,
-                                                                    (size_t)reg_index);
-      }
-      stage->mutability = provider ? provider->options.mutability : reg->options.mutability;
-      stage->effects = provider ? provider->options.effects : reg->options.effects;
+    if (!stage->is_source && !stage->is_port && provider_index >= 0) {
+      const flow_operation_provider_registration_t *provider =
+          (const flow_operation_provider_registration_t *)vec_at_const(&flow->operation_providers,
+                                                                       (size_t)provider_index);
+      stage->mutability = provider->options.mutability;
+      stage->effects = provider->options.effects;
       if ((stage->effects & TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u &&
           stage->exec.kind != TURBO_FLOW_EXEC_INLINE) {
         return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "dynamic decision stage requires the inline executor");
       }
-      stage->fn = provider ? provider->fn : reg->fn;
-      stage->emit_fn = provider ? provider->emit_fn : NULL;
-      stage->key_selector = provider ? provider->key_selector : NULL;
-      stage->key_ctx = provider ? provider->key_ctx : NULL;
-      stage->keyed_fn = provider ? provider->keyed_fn : NULL;
-      stage->keyed_emit_fn = provider ? provider->keyed_emit_fn : NULL;
-      stage->window_fn = provider ? provider->window_fn : NULL;
-      stage->window_close_fn = provider ? provider->window_close_fn : NULL;
-      stage->keyed_store = provider ? provider->keyed_store : NULL;
-      stage->max_outputs = provider ? provider->max_outputs : 0u;
-      stage->ctx = provider ? provider->ctx : reg->ctx;
+      stage->fn = provider->fn;
+      stage->emit_fn = provider->emit_fn;
+      stage->key_selector = provider->key_selector;
+      stage->key_ctx = provider->key_ctx;
+      stage->keyed_fn = provider->keyed_fn;
+      stage->keyed_emit_fn = provider->keyed_emit_fn;
+      stage->window_fn = provider->window_fn;
+      stage->window_close_fn = provider->window_close_fn;
+      stage->keyed_store = provider->keyed_store;
+      stage->max_outputs = provider->max_outputs;
+      stage->ctx = provider->ctx;
     }
   }
   return SALTS_OK;
@@ -534,11 +523,7 @@ static uint32_t operation_exec_bit(turbo_flow_exec_kind_t kind) {
 
 static const char FLOW_CORE_MESSAGE_TYPE[] = "Message";
 static const char FLOW_CORE_SOURCE_OPERATION[] = "core.source";
-static const char FLOW_CORE_INLINE_OPERATION[] = "core.stage.inline";
 static const char FLOW_CORE_OWNER_OPERATION[] = "core.stage.owner";
-static const char FLOW_CORE_THREAD_OPERATION[] = "core.stage.thread";
-static const char FLOW_CORE_CORO_OPERATION[] = "core.stage.coro";
-static const char FLOW_CORE_WORKER_OPERATION[] = "core.stage.worker";
 static const char FLOW_CORE_INPUT_PORT_OPERATION[] = "core.port.input";
 static const char FLOW_CORE_OUTPUT_PORT_OPERATION[] = "core.port.output";
 
@@ -549,11 +534,7 @@ static const char *flow_core_operation_name(const flow_stage_plan_impl_t *stage)
     return stage->is_port_output ? FLOW_CORE_OUTPUT_PORT_OPERATION : FLOW_CORE_INPUT_PORT_OPERATION;
   }
   if (stage->is_source) return FLOW_CORE_SOURCE_OPERATION;
-  if (stage->adapter_name && !stage->fn) return FLOW_CORE_OWNER_OPERATION;
-  if (stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) return FLOW_CORE_WORKER_OPERATION;
-  if (stage->exec.kind == TURBO_FLOW_EXEC_THREAD_POOL) return FLOW_CORE_THREAD_OPERATION;
-  if (stage->exec.kind == TURBO_FLOW_EXEC_CORO_POOL) return FLOW_CORE_CORO_OPERATION;
-  return FLOW_CORE_INLINE_OPERATION;
+  return FLOW_CORE_OWNER_OPERATION;
 }
 
 static void flow_resolve_core_operation(const turbo_flow_t *flow, flow_stage_plan_impl_t *stage,
@@ -590,20 +571,9 @@ static void flow_resolve_core_operation(const turbo_flow_t *flow, flow_stage_pla
     operation->flags = TURBO_FLOW_OPERATION_STAGE;
     operation->input_domain = TURBO_FLOW_DOMAIN_DATA;
     operation->input_type = FLOW_CORE_MESSAGE_TYPE;
-    operation->execution_mask = operation_exec_bit(stage->exec.kind);
-    operation->scope.concurrency = stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL ||
-                                           stage->exec.kind != TURBO_FLOW_EXEC_INLINE
-                                       ? TURBO_FLOW_CONCURRENCY_POOL
-                                       : TURBO_FLOW_CONCURRENCY_INLINE_LANE;
-    if (stage->adapter_name && !stage->fn) {
-      operation->scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
-      operation->scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
-    }
-    if (stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) {
-      operation->runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
-      operation->runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
-      operation->runtime.capacity = stage->data_pool_capacity;
-    }
+    operation->execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+    operation->scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+    operation->scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
     if (stage->retry.max_attempts > 1u) {
       operation->runtime.error_mode = TURBO_FLOW_ERROR_RETRY;
       operation->runtime.settlement = TURBO_FLOW_SETTLEMENT_RETRY;

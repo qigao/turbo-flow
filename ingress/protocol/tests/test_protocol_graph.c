@@ -1,7 +1,8 @@
-#include "tinytest.h"
+#include "../../../tests/flow_operation_fixture.h"
 #include "salts_error.h"
-#include "turbo_flow_protocol_graph.h"
 #include "salts_thread.h"
+#include "tinytest.h"
+#include "turbo_flow_protocol_graph.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -90,7 +91,7 @@ static int graph_probe_stage(turbo_flow_msg_t *message, void *ctx) {
 spec("protocol graph bridge") {
   it("publishes a neutral protocol message without an MQTT boundary") {
     static const char *dsl = "source protocol_in\n"
-                             "stage inspect\n"
+                             "stage inspect operation test.inspect\n"
                              "stage main {\n"
                              "  protocol_in -> inspect\n"
                              "}\n";
@@ -109,9 +110,11 @@ spec("protocol graph bridge") {
     check_not_null(flow);
     turbo_flow_msg_init(&probe.retained);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "inspect", graph_probe_stage,
-                                              &probe, NULL),
-                 SALTS_OK);
+    flow_test_operation_t operation_inspect_0 =
+        flow_test_operation_init("test.inspect", graph_probe_stage, &probe);
+    operation_inspect_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_inspect_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_inspect_0), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -153,7 +156,7 @@ spec("protocol graph bridge") {
 
   it("admits async protocol messages without blocking and completes once") {
     static const char *dsl = "source protocol_in\n"
-                             "stage gate\n"
+                             "stage gate operation test.gate\n"
                              "stage main {\n"
                              "  protocol_in -> gate\n"
                              "}\n";
@@ -184,8 +187,11 @@ spec("protocol graph bridge") {
     check_not_null(flow);
     check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "gate", graph_async_gate_stage, &gate, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_gate_1 =
+        flow_test_operation_init("test.gate", graph_async_gate_stage, &gate);
+    operation_gate_1.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_gate_1.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_gate_1), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -239,7 +245,7 @@ spec("protocol graph bridge") {
       const char *source_name;
     } legacy_protocol_graph_sink_t;
     static const char *dsl = "source protocol_in\n"
-                             "stage inspect\n"
+                             "stage inspect operation test.inspect\n"
                              "stage main {\n"
                              "  protocol_in -> inspect\n"
                              "}\n";
@@ -267,8 +273,11 @@ spec("protocol graph bridge") {
     request.session_generation = 1u;
     request.message = &message;
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "inspect", graph_probe_stage, &probe, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_inspect_2 =
+        flow_test_operation_init("test.inspect", graph_probe_stage, &probe);
+    operation_inspect_2.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_inspect_2.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_inspect_2), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_protocol_graph_publish(
@@ -283,7 +292,7 @@ spec("protocol graph bridge") {
 
   it("does not enter pending or complete when bounded admission rejects") {
     static const char *dsl = "source protocol_in\n"
-                             "stage inspect\n"
+                             "stage inspect operation test.inspect\n"
                              "stage main {\n"
                              "  protocol_in -> inspect\n"
                              "}\n";
@@ -312,8 +321,11 @@ spec("protocol graph bridge") {
     check_not_null(flow);
     check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
-    check_equal(turbo_flow_register_stage_ex(flow, "inspect", graph_probe_stage, &probe, NULL),
-                SALTS_OK);
+    flow_test_operation_t operation_inspect_3 =
+        flow_test_operation_init("test.inspect", graph_probe_stage, &probe);
+    operation_inspect_3.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_inspect_3.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_inspect_3), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 

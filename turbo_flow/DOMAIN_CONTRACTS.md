@@ -4,13 +4,14 @@
 
 `turbo_flow_domain.h` 定义 TurboFlow graph 的 domain contract。Host 先注册 primitive
 和 operation descriptor，再解析使用 `operation` / `resource` binding 的 DSL。Descriptor
-承载可信的类型、作用域和 runtime boundary 要求；stage callback、adapter consume 和资源
+承载可信的类型、作用域和 runtime boundary 要求；operation provider、adapter consume 和资源
 实例生命周期仍由现有 owner API 管理。
 
-每个 runtime node 都必须具有完整 operation contract。未显式声明 domain-specific
-`operation` 的 node 在 compile 时解析为 `core.source` 或 `core.stage.inline/thread/coro/worker`；
-这些 contract 按实际 executor、handoff、capacity、retry/reject 和 authority 生成，并可通过
-`turbo_flow_stage_operation_at()` 查询。Core contract 不会隐式创建 Queue、Connection 或 Session。
+每个 runtime node 都必须具有完整 operation contract。Callback stage 必须显式声明
+`operation` 并注册 descriptor/provider，节点名称不参与 provider 查找。Source、routing port
+和 adapter-owned consume 保留 `core.source`、`core.port.input/output`、`core.stage.owner`
+内建契约，仍接受类型、scope 与 runtime 校验，并可通过 `turbo_flow_stage_operation_at()` 查询。
+Core contract 不会隐式创建 Queue、Connection 或 Session。
 
 ## 2. Primitive descriptor
 
@@ -121,7 +122,7 @@ stage main {
 }
 ```
 
-Host 仍需注册 `data.validate` descriptor、`validate` stage callback 和 `mqtt.server` adapter，
+Host 仍需注册 `data.validate` descriptor、同名 operation provider 和 `mqtt.server` adapter，
 并由 adapter owner 执行 ingress。Source 不使用 stage `exec`；其 owner-context scope 通过
 adapter owner 满足。DSL 不能修改 `publish_in` 的 session authority 或 owner-context 约束。
 

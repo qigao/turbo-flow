@@ -1,3 +1,4 @@
+#include "../../../tests/flow_operation_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow_cnet.h"
 
@@ -66,14 +67,17 @@ static int packet_source_graph_sink(turbo_flow_msg_t *message, void *ctx) {
 
 static turbo_flow_t *packet_source_started_flow(packet_source_graph_probe_t *probe) {
   static const char dsl[] = "source input\n"
-                            "stage sink\n"
+                            "stage sink operation test.sink\n"
                             "stage main {\n"
                             "  input -> sink\n"
                             "}\n";
   turbo_flow_t *flow = turbo_flow_create();
+  flow_test_operation_t operation_sink =
+      flow_test_operation_init("test.sink", packet_source_graph_sink, probe);
+  operation_sink.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+  operation_sink.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
   if (!flow || turbo_flow_parse_string(flow, dsl, strlen(dsl)) != SALTS_OK ||
-      turbo_flow_register_stage_ex(flow, "sink", packet_source_graph_sink, probe, NULL) !=
-          SALTS_OK ||
+      flow_test_operation_register(flow, &operation_sink) != SALTS_OK ||
       turbo_flow_compile(flow) != SALTS_OK || turbo_flow_start(flow) != SALTS_OK) {
     turbo_flow_destroy(flow);
     return NULL;

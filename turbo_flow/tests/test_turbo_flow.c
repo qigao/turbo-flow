@@ -1,8 +1,9 @@
+#include "../../tests/flow_operation_fixture.h"
 #include "flow_internal.h"
-#include "tinytest.h"
 #include "salts_coro.h"
-#include "turbo_flow.h"
 #include "salts_thread.h"
+#include "tinytest.h"
+#include "turbo_flow.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -690,12 +691,6 @@ static void check_pool_plan_snapshot(const turbo_flow_t *flow,
 }
 
 
-static void register_stage_names(turbo_flow_t *flow, const char *const *names, size_t count) {
-  for (size_t i = 0; i < count; ++i) {
-    check_equal(turbo_flow_register_stage_ex(flow, names[i], noop_stage, NULL, NULL), SALTS_OK);
-  }
-}
-
 static void register_schema_adapter(turbo_flow_t *flow, const char *name,
                                     turbo_flow_adapter_kind_t kind, uint32_t roles,
                                     turbo_flow_adapter_direction_t direction) {
@@ -732,13 +727,14 @@ static turbo_flow_t *reorder_test_flow(uint32_t capacity, uint32_t timeout_ms,
                                        uint32_t *stage_index) {
   char source[256];
   turbo_flow_t *flow = turbo_flow_create();
+  flow_test_operation_t operation_1 = flow_test_operation_init("test.ordered", noop_stage, NULL);
   if (!flow ||
       snprintf(source, sizeof(source),
-               "source input\nstage ordered reorder capacity %u timeout %u\n"
+               "source input\nstage ordered operation test.ordered reorder capacity %u timeout %u\n"
                "stage main {\n  input -> ordered\n}\n",
                capacity, timeout_ms) < 0 ||
       turbo_flow_parse_string(flow, source, strlen(source)) != SALTS_OK ||
-      turbo_flow_register_stage_ex(flow, "ordered", noop_stage, NULL, NULL) != SALTS_OK ||
+      flow_test_operation_register(flow, &operation_1) != SALTS_OK ||
       turbo_flow_compile(flow) != SALTS_OK || turbo_flow_start(flow) != SALTS_OK) {
     turbo_flow_destroy(flow);
     return NULL;
@@ -1416,9 +1412,9 @@ suite("Turbo Flow") {
   group("compile validation") {
     it("compiles runtime edges into contiguous per-stage adjacency") {
       static const char *src = "source input\n"
-                               "stage left\n"
-                               "stage right\n"
-                               "stage sink\n"
+                               "stage left operation test.left\n"
+                               "stage right operation test.right\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> [left, right] -> sink\n"
                                "}\n";
@@ -1427,9 +1423,12 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "left", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "right", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_2 = flow_test_operation_init("test.left", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_2), SALTS_OK);
+      flow_test_operation_t operation_3 = flow_test_operation_init("test.right", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_3), SALTS_OK);
+      flow_test_operation_t operation_4 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_4), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       check_equal(flow->compiled_plan.sealed, 1);
@@ -1478,8 +1477,8 @@ suite("Turbo Flow") {
 
     it("records semantic CMeta identities and CFlow lowering candidates") {
       static const char *src = "source input\n"
-                               "stage parse\n"
-                               "stage sink\n"
+                               "stage parse operation test.parse\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> parse -> sink\n"
                                "}\n";
@@ -1493,8 +1492,12 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_5 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      operation_5.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_NONE;
+      check_equal(flow_test_operation_register(flow, &operation_5), SALTS_OK);
+      flow_test_operation_t operation_6 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      operation_6.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_NONE;
+      check_equal(flow_test_operation_register(flow, &operation_6), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check(flow->compiled_plan.message_type != flow_plan_probe_message_type());
       check(flow->compiled_plan.operation_type != flow_plan_probe_operation_type());
@@ -1517,7 +1520,8 @@ suite("Turbo Flow") {
       check_equal(parse_semantics->lowering_candidate, 0);
       check_equal(parse_semantics->cflow_operator, CFLOW_OP_MAP);
       check_bits(parse_semantics->barriers, FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE);
-      check_bits(parse_semantics->effects, CMETA_EFFECT_UNKNOWN);
+      check_false((parse_semantics->effects & CMETA_EFFECT_UNKNOWN) != 0u);
+      check_bits(parse_semantics->barriers, FLOW_LOWERING_BARRIER_MESSAGE_MUTATION);
       check_bits(parse_semantics->effects, CMETA_EFFECT_MAY_FAIL);
       check_equal(parse_semantics->candidate_region, FLOW_PLAN_INDEX_NONE);
       check_equal(sink_semantics->candidate_region, FLOW_PLAN_INDEX_NONE);
@@ -1585,7 +1589,7 @@ suite("Turbo Flow") {
 
     it("separates message mutation from cross-call state effects") {
       static const char *src = "source input\n"
-                               "stage mutate\n"
+                               "stage mutate operation test.mutate\n"
                                "stage main {\n"
                                "  input -> mutate\n"
                                "}\n";
@@ -1597,8 +1601,10 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "mutate", noop_stage, NULL, &options),
-                  SALTS_OK);
+      flow_test_operation_t operation_7 = flow_test_operation_init("test.mutate", noop_stage, NULL);
+      operation_7.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_NONE;
+      operation_7.provider.options = options;
+      check_equal(flow_test_operation_register(flow, &operation_7), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       stage_index = turbo_flow_find_stage(flow, "mutate");
       check(stage_index >= 0);
@@ -1607,7 +1613,8 @@ suite("Turbo Flow") {
       check_not_null(semantics);
       check_bits(semantics->barriers, FLOW_LOWERING_BARRIER_MESSAGE_MUTATION);
       check_false((semantics->barriers & FLOW_LOWERING_BARRIER_STATEFUL) != 0u);
-      check_bits(semantics->effects, CMETA_EFFECT_UNKNOWN | CMETA_EFFECT_MAY_FAIL);
+      check_bits(semantics->effects, CMETA_EFFECT_MAY_FAIL);
+      check_false((semantics->effects & CMETA_EFFECT_UNKNOWN) != 0u);
       check_false((semantics->effects & CMETA_EFFECT_STATEFUL) != 0u);
       check_equal(semantics->lowering_candidate, 0);
 
@@ -1664,7 +1671,7 @@ suite("Turbo Flow") {
 
     it("fails compilation when the internal CFlow backend requirement cannot be lowered") {
       static const char *src = "source input\n"
-                               "stage parse\n"
+                               "stage parse operation test.parse\n"
                                "stage main {\n"
                                "  input -> parse\n"
                                "}\n";
@@ -1672,7 +1679,8 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_8 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_8), SALTS_OK);
       flow->required_backend = FLOW_PLAN_BACKEND_CFLOW;
       check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
       check_false(flow->compiled_plan.sealed);
@@ -1707,8 +1715,8 @@ suite("Turbo Flow") {
 
     it("preserves legacy topology routes effects and source locations in the sealed plan") {
       static const char *src = "source input\n"
-                               "stage decide\n"
-                               "stage accepted\n"
+                               "stage decide operation test.decide\n"
+                               "stage accepted operation test.accepted\n"
                                "stage main {\n"
                                "  input -> decide\n"
                                "  route decide -> accepted when msg.flags == 1\n"
@@ -1718,8 +1726,11 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "decide", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "accepted", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_9 = flow_test_operation_init("test.decide", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_9), SALTS_OK);
+      flow_test_operation_t operation_10 =
+          flow_test_operation_init("test.accepted", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_10), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(vec_size(&flow->compiled_plan.nodes), vec_size(&flow->stages));
       check_equal(vec_size(&flow->compiled_plan.edges), vec_size(&flow->edges));
@@ -1768,12 +1779,12 @@ suite("Turbo Flow") {
       static const char *src = "stage cleanse {\n"
                                "  in raw\n"
                                "  out clean\n"
-                               "  step trim\n"
+                               "  step trim operation test.trim\n"
                                "  raw -> trim -> clean\n"
                                "}\n"
                                "stage main {\n"
                                "  source input\n"
-                               "  step load\n"
+                               "  step load operation test.load\n"
                                "  use c = cleanse\n"
                                "  input -> c -> load\n"
                                "}\n";
@@ -1781,8 +1792,10 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "c.trim", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "load", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_11 = flow_test_operation_init("test.trim", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_11), SALTS_OK);
+      flow_test_operation_t operation_12 = flow_test_operation_init("test.load", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_12), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       turbo_flow_destroy(flow);
@@ -1792,19 +1805,19 @@ suite("Turbo Flow") {
       static const char *src = "stage cleanse {\n"
                                "  in raw\n"
                                "  out clean\n"
-                               "  step trim\n"
+                               "  step trim operation test.trim\n"
                                "  raw -> trim -> clean\n"
                                "}\n"
                                "stage pipeline {\n"
                                "  in raw\n"
                                "  out done\n"
                                "  use c = cleanse\n"
-                               "  step encode\n"
+                               "  step encode operation test.encode\n"
                                "  raw -> c -> encode -> done\n"
                                "}\n"
                                "stage main {\n"
                                "  source input\n"
-                               "  step sink\n"
+                               "  step sink operation test.sink\n"
                                "  use p = pipeline\n"
                                "  input -> p -> sink\n"
                                "}\n";
@@ -1812,11 +1825,13 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "p.c.trim", noop_stage, NULL, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "p.encode", noop_stage, NULL, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_13 = flow_test_operation_init("test.trim", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_13), SALTS_OK);
+      flow_test_operation_t operation_14 =
+          flow_test_operation_init("test.encode", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_14), SALTS_OK);
+      flow_test_operation_t operation_15 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_15), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       turbo_flow_destroy(flow);
@@ -1939,18 +1954,23 @@ suite("Turbo Flow") {
 
     it("resolves late stage declarations across reset") {
       static const char *src = "source input\n"
-                               "stage parse\n"
-                               "stage sink\n"
+                               "stage parse operation test.parse\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> parse -> sink\n"
                                "}\n";
-      const char *names[] = {"parse", "sink"};
+      const char *names[] = {"test.parse", "test.sink"};
       turbo_flow_t *flow = turbo_flow_create();
       const turbo_flow_edge_plan_t *edge = NULL;
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      register_stage_names(flow, names, sizeof(names) / sizeof(names[0]));
+      for (size_t operation_index = 0; operation_index < sizeof(names) / sizeof(names[0]);
+           ++operation_index) {
+        flow_test_operation_t operation =
+            flow_test_operation_init(names[operation_index], noop_stage, NULL);
+        check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+      }
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_COMPILED);
 
@@ -1988,7 +2008,8 @@ suite("Turbo Flow") {
 
       check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, sink_adapter, strlen(sink_adapter)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_16 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_16), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "adapter");
       check_equal(turbo_flow_last_error(flow)->line, 2);
@@ -2074,7 +2095,7 @@ suite("Turbo Flow") {
                                            "}\n";
       static const char *nonterminal_sink = "source input\n"
                                             "stage mail adapter mail\n"
-                                            "stage tail\n"
+                                            "stage tail operation test.tail\n"
                                             "stage main {\n"
                                             "  input -> mail -> tail\n"
                                             "}\n";
@@ -2095,7 +2116,8 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, nonterminal_sink, strlen(nonterminal_sink)),
                    SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "tail", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_17 = flow_test_operation_init("test.tail", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_17), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "terminal");
 
@@ -2104,7 +2126,7 @@ suite("Turbo Flow") {
 
     it("starts, stops, and shuts down registered source and sink adapters") {
       static const char *src = "source http_in adapter \"http.server\"\n"
-                               "stage email_out adapter smtp\n"
+                               "stage email_out adapter smtp operation test.email_out\n"
                                "stage main {\n"
                                "  http_in -> email_out\n"
                                "}\n";
@@ -2123,8 +2145,9 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_register_adapter(flow, "smtp", &ops, &adapter_ctx), SALTS_EALREADY);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "email_out", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_18 =
+          flow_test_operation_init("test.email_out", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_18), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_register_adapter(flow, "late", &ops, &adapter_ctx), SALTS_EBUSY);
       check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -2201,7 +2224,7 @@ suite("Turbo Flow") {
 
     it("serializes concurrent stop calls before invoking adapters") {
       static const char *src = "source input adapter blocker\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> sink\n"
                                "}\n";
@@ -2225,7 +2248,8 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_register_adapter(flow, "blocker", &ops, &adapter), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_19 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_19), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -2371,7 +2395,7 @@ suite("Turbo Flow") {
 
     it("allows source adapters without consume callbacks") {
       static const char *src = "source socket_in adapter \"socket.tcp\"\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  socket_in -> sink\n"
                                "}\n";
@@ -2394,8 +2418,11 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_register_adapter(flow, "socket.tcp", &ops, &adapter_ctx), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_20 =
+          flow_test_operation_init("test.sink", check_payload_stage, &sink_ctx);
+      operation_20.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_20.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_20), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -2445,7 +2472,7 @@ suite("Turbo Flow") {
     }
 
     it("rejects stage plans without a publishable source") {
-      static const char *stage_only = "stage parse\n"
+      static const char *stage_only = "stage parse operation test.parse\n"
                                       "stage main {\n"
                                       "}\n";
       turbo_flow_t *flow = turbo_flow_create();
@@ -2456,7 +2483,8 @@ suite("Turbo Flow") {
       check_contains(turbo_flow_last_error(flow)->message, "source");
 
       check_equal(turbo_flow_parse_string(flow, stage_only, strlen(stage_only)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_21 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_21), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "source");
 
@@ -2465,24 +2493,24 @@ suite("Turbo Flow") {
 
     it("rejects missing registrations unknown stages and cycles") {
       static const char *missing_cb = "source input\n"
-                                      "stage parse\n"
+                                      "stage parse operation test.parse\n"
                                       "stage main {\n"
                                       "  input -> parse\n"
                                       "}\n";
       static const char *unknown_stage = "source input\n"
-                                         "stage parse\n"
+                                         "stage parse operation test.parse\n"
                                          "stage main {\n"
                                          "  input -> missing\n"
                                          "}\n";
       static const char *cycle = "source input\n"
-                                 "stage a\n"
-                                 "stage b\n"
+                                 "stage a operation test.a\n"
+                                 "stage b operation test.b\n"
                                  "stage main {\n"
                                  "  input -> a\n"
                                  "  a -> b\n"
                                  "  b -> a\n"
                                  "}\n";
-      const char *cycle_names[] = {"a", "b"};
+      const char *cycle_names[] = {"test.a", "test.b"};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
@@ -2493,12 +2521,18 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_last_error(flow)->column, 7);
 
       check_equal(turbo_flow_parse_string(flow, unknown_stage, strlen(unknown_stage)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_22 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_22), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "unknown stage");
 
       check_equal(turbo_flow_parse_string(flow, cycle, strlen(cycle)), SALTS_OK);
-      register_stage_names(flow, cycle_names, sizeof(cycle_names) / sizeof(cycle_names[0]));
+      for (size_t operation_index = 0;
+           operation_index < sizeof(cycle_names) / sizeof(cycle_names[0]); ++operation_index) {
+        flow_test_operation_t operation =
+            flow_test_operation_init(cycle_names[operation_index], noop_stage, NULL);
+        check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+      }
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "cycle");
 
@@ -2526,7 +2560,7 @@ suite("Turbo Flow") {
 
     it("rejects duplicate stage edges during compile") {
       static const char *src = "source input\n"
-                               "stage parse\n"
+                               "stage parse operation test.parse\n"
                                "stage main {\n"
                                "  input -> parse\n"
                                "  input -> parse\n"
@@ -2535,7 +2569,8 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_23 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_23), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate stage edge");
       check_equal(turbo_flow_last_error(flow)->line, 5);
@@ -2545,17 +2580,22 @@ suite("Turbo Flow") {
 
     it("rejects stages that are not reachable from any source") {
       static const char *src = "source input\n"
-                               "stage parse\n"
-                               "stage unused\n"
+                               "stage parse operation test.parse\n"
+                               "stage unused operation test.unused\n"
                                "stage main {\n"
                                "  input -> parse\n"
                                "}\n";
-      const char *names[] = {"parse", "unused"};
+      const char *names[] = {"test.parse", "test.unused"};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      register_stage_names(flow, names, sizeof(names) / sizeof(names[0]));
+      for (size_t operation_index = 0; operation_index < sizeof(names) / sizeof(names[0]);
+           ++operation_index) {
+        flow_test_operation_t operation =
+            flow_test_operation_init(names[operation_index], noop_stage, NULL);
+        check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+      }
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "not reachable");
       check_equal(turbo_flow_last_error(flow)->line, 3);
@@ -2565,12 +2605,12 @@ suite("Turbo Flow") {
 
     it("recovers from failed compile by parsing a new plan") {
       static const char *bad_src = "source input\n"
-                                   "stage parse\n"
+                                   "stage parse operation test.parse\n"
                                    "stage main {\n"
                                    "  input -> missing\n"
                                    "}\n";
       static const char *ok_src = "source input\n"
-                                  "stage parse\n"
+                                  "stage parse operation test.parse\n"
                                   "stage main {\n"
                                   "  input -> parse\n"
                                   "}\n";
@@ -2578,7 +2618,8 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, bad_src, strlen(bad_src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_24 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_24), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_FAILED);
       check_contains(turbo_flow_last_error(flow)->message, "unknown stage");
@@ -2595,9 +2636,9 @@ suite("Turbo Flow") {
 
     it("rejects mutable stages on immediate broadcast fan-out") {
       static const char *src = "source input\n"
-                               "stage parse\n"
-                               "stage validate\n"
-                               "stage enrich\n"
+                               "stage parse operation test.parse\n"
+                               "stage validate operation test.validate\n"
+                               "stage enrich operation test.enrich\n"
                                "stage main {\n"
                                "  input -> parse -> [validate, enrich]\n"
                                "}\n";
@@ -2606,10 +2647,15 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "validate", noop_stage, NULL, &mutates),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "enrich", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_25 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_25), SALTS_OK);
+      flow_test_operation_t operation_26 =
+          flow_test_operation_init("test.validate", noop_stage, NULL);
+      operation_26.provider.options = mutates;
+      check_equal(flow_test_operation_register(flow, &operation_26), SALTS_OK);
+      flow_test_operation_t operation_27 =
+          flow_test_operation_init("test.enrich", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_27), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "mutable");
       check_equal(turbo_flow_last_error(flow)->line, 6);
@@ -2619,21 +2665,21 @@ suite("Turbo Flow") {
 
     it("rejects mutable descendants before fan-in but allows mutation after fan-in") {
       static const char *bad_src = "source input\n"
-                                   "stage parse\n"
-                                   "stage validate\n"
-                                   "stage mutate\n"
-                                   "stage metrics\n"
-                                   "stage sink\n"
+                                   "stage parse operation test.parse\n"
+                                   "stage validate operation test.validate\n"
+                                   "stage mutate operation test.mutate\n"
+                                   "stage metrics operation test.metrics\n"
+                                   "stage sink operation test.sink\n"
                                    "stage main {\n"
                                    "  input -> parse -> [validate, metrics]\n"
                                    "  validate -> mutate -> sink\n"
                                    "  metrics -> sink\n"
                                    "}\n";
       static const char *ok_src = "source input\n"
-                                  "stage parse\n"
-                                  "stage validate\n"
-                                  "stage metrics\n"
-                                  "stage sink\n"
+                                  "stage parse operation test.parse\n"
+                                  "stage validate operation test.validate\n"
+                                  "stage metrics operation test.metrics\n"
+                                  "stage sink operation test.sink\n"
                                   "stage main {\n"
                                   "  input -> parse -> [validate, metrics] -> sink\n"
                                   "}\n";
@@ -2642,24 +2688,36 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, bad_src, strlen(bad_src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "validate", noop_stage, NULL, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "mutate", noop_stage, NULL, &mutates),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "metrics", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_28 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_28), SALTS_OK);
+      flow_test_operation_t operation_29 =
+          flow_test_operation_init("test.validate", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_29), SALTS_OK);
+      flow_test_operation_t operation_30 =
+          flow_test_operation_init("test.mutate", noop_stage, NULL);
+      operation_30.provider.options = mutates;
+      check_equal(flow_test_operation_register(flow, &operation_30), SALTS_OK);
+      flow_test_operation_t operation_31 =
+          flow_test_operation_init("test.metrics", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_31), SALTS_OK);
+      flow_test_operation_t operation_32 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_32), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "mutable");
 
       check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, ok_src, strlen(ok_src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "validate", noop_stage, NULL, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "metrics", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, &mutates),
-                   SALTS_OK);
+      flow_test_operation_t operation_33 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_33), SALTS_OK);
+      flow_test_operation_t operation_34 =
+          flow_test_operation_init("test.validate", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_34), SALTS_OK);
+      flow_test_operation_t operation_35 =
+          flow_test_operation_init("test.metrics", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_35), SALTS_OK);
+      flow_test_operation_t operation_36 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      operation_36.provider.options = mutates;
+      check_equal(flow_test_operation_register(flow, &operation_36), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       turbo_flow_destroy(flow);
@@ -2667,18 +2725,29 @@ suite("Turbo Flow") {
 
     it("rejects worker-pool branches at ordered fan-in without reorder strategy") {
       static const char *src = "source input\n"
-                               "stage enrich worker 2\n"
-                               "stage metrics\n"
-                               "stage sink\n"
+                               "stage enrich operation test.enrich worker 2\n"
+                               "stage metrics operation test.metrics\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> [enrich, metrics] -> sink\n"
                                "}\n";
-      const char *names[] = {"enrich", "metrics", "sink"};
+      const char *names[] = {"test.enrich", "test.metrics", "test.sink"};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      register_stage_names(flow, names, sizeof(names) / sizeof(names[0]));
+      for (size_t operation_index = 0; operation_index < sizeof(names) / sizeof(names[0]);
+           ++operation_index) {
+        flow_test_operation_t operation =
+            flow_test_operation_init(names[operation_index], noop_stage, NULL);
+        if (operation_index == 0u) {
+          operation.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+          operation.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+          operation.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+          operation.descriptor.runtime.capacity = FLOW_WORKER_POOL_DEFAULT_CAPACITY;
+        }
+        check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+      }
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "worker-pool");
       check_contains(turbo_flow_last_error(flow)->message, "reorder");
@@ -2688,18 +2757,27 @@ suite("Turbo Flow") {
 
     it("rejects thread executor branches at ordered fan-in without reorder strategy") {
       static const char *src = "source input\n"
-                               "stage parse exec thread workers 2\n"
-                               "stage metrics\n"
-                               "stage sink\n"
+                               "stage parse operation test.parse exec thread workers 2\n"
+                               "stage metrics operation test.metrics\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> [parse, metrics] -> sink\n"
                                "}\n";
-      const char *names[] = {"parse", "metrics", "sink"};
+      const char *names[] = {"test.parse", "test.metrics", "test.sink"};
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      register_stage_names(flow, names, sizeof(names) / sizeof(names[0]));
+      for (size_t operation_index = 0; operation_index < sizeof(names) / sizeof(names[0]);
+           ++operation_index) {
+        flow_test_operation_t operation =
+            flow_test_operation_init(names[operation_index], noop_stage, NULL);
+        if (operation_index == 0u) {
+          operation.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+          operation.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_THREAD;
+        }
+        check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+      }
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "thread executor");
       check_contains(turbo_flow_last_error(flow)->message, "reorder");
@@ -2709,7 +2787,7 @@ suite("Turbo Flow") {
 
     it("rejects duplicate registration and registration after compile") {
       static const char *src = "source input\n"
-                               "stage parse\n"
+                               "stage parse operation test.parse\n"
                                "stage main {\n"
                                "  input -> parse\n"
                                "}\n";
@@ -2717,12 +2795,15 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL),
-                   SALTS_EALREADY);
+      flow_test_operation_t operation_37 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_37), SALTS_OK);
+      flow_test_operation_t operation_38 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_38.provider),
+                  SALTS_EALREADY);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "other", noop_stage, NULL, NULL),
-                   SALTS_EBUSY);
+      flow_test_operation_t operation_39 = flow_test_operation_init("test.other", noop_stage, NULL);
+      check_equal(turbo_flow_register_operation_provider(flow, &operation_39.provider),
+                  SALTS_EBUSY);
 
       turbo_flow_destroy(flow);
     }
@@ -2750,22 +2831,22 @@ suite("Turbo Flow") {
 
     it("rejects external edges that use composite stage ports in the wrong direction") {
       static const char *to_output = "source input\n"
-                                     "stage persist\n"
+                                     "stage persist operation test.persist\n"
                                      "stage enrich {\n"
                                      "  in input\n"
                                      "  out output\n"
-                                     "  step fetch\n"
+                                     "  step fetch operation test.fetch\n"
                                      "  input -> fetch -> output\n"
                                      "}\n"
                                      "stage main {\n"
                                      "  input -> enrich.output\n"
                                      "}\n";
       static const char *from_input = "source input\n"
-                                      "stage persist\n"
+                                      "stage persist operation test.persist\n"
                                       "stage enrich {\n"
                                       "  in input\n"
                                       "  out output\n"
-                                      "  step fetch\n"
+                                      "  step fetch operation test.fetch\n"
                                       "  input -> fetch -> output\n"
                                       "}\n"
                                       "stage main {\n"
@@ -2775,17 +2856,20 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, to_output, strlen(to_output)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "persist", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "enrich.fetch", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_40 =
+          flow_test_operation_init("test.persist", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_40), SALTS_OK);
+      flow_test_operation_t operation_41 = flow_test_operation_init("test.fetch", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_41), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "composite stage input");
 
       check_equal(turbo_flow_parse_string(flow, from_input, strlen(from_input)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "persist", noop_stage, NULL, NULL),
-                   SALTS_EALREADY);
-      check_equal(turbo_flow_register_stage_ex(flow, "enrich.fetch", noop_stage, NULL, NULL),
-                   SALTS_EALREADY);
+      flow_test_operation_t operation_42 =
+          flow_test_operation_init("test.persist", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_42), SALTS_EALREADY);
+      flow_test_operation_t operation_43 = flow_test_operation_init("test.fetch", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_43), SALTS_EALREADY);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "composite stage output");
 
@@ -2872,9 +2956,9 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
-    it("defines reset behavior for keeping or clearing stage registry") {
+    it("defines reset behavior for keeping or clearing operation registry") {
       static const char *src = "source input\n"
-                               "stage parse\n"
+                               "stage parse operation test.parse\n"
                                "stage main {\n"
                                "  input -> parse\n"
                                "}\n";
@@ -2882,7 +2966,8 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_44 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_44), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
@@ -2891,7 +2976,8 @@ suite("Turbo Flow") {
 
       check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_45 = flow_test_operation_init("test.parse", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_45), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
@@ -3498,8 +3584,8 @@ suite("Turbo Flow") {
   group("inline runtime") {
     it("rejects publish before start and runs a linear stage plan in order after start") {
       static const char *src = "source input\n"
-                               "stage parse\n"
-                               "stage validate\n"
+                               "stage parse operation test.parse\n"
+                               "stage validate operation test.validate\n"
                                "stage main {\n"
                                "  input -> parse -> validate\n"
                                "}\n";
@@ -3518,11 +3604,16 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "validate", record_stage, &validate_ctx, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_46 =
+          flow_test_operation_init("test.parse", record_stage, &parse_ctx);
+      operation_46.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_46.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_46), SALTS_OK);
+      flow_test_operation_t operation_47 =
+          flow_test_operation_init("test.validate", record_stage, &validate_ctx);
+      operation_47.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_47.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_47), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EINVAL);
       check_equal(trace.count, 0);
@@ -3557,7 +3648,7 @@ suite("Turbo Flow") {
 
     it("publishes an ordered batch under one admission and stops at the first failure") {
       static const char *src = "source input\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> sink\n"
                                "}\n";
@@ -3572,9 +3663,11 @@ suite("Turbo Flow") {
       batch_config.prepare = batch_prepare_message;
       batch_config.ctx = &prepare_probe;
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", batch_publish_probe_stage,
-                                                &probe, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_48 =
+          flow_test_operation_init("test.sink", batch_publish_probe_stage, &probe);
+      operation_48.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_48.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_48), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
 
       check_equal(turbo_flow_publish_batch(flow, "input", &batch_config, &published),
@@ -3623,7 +3716,6 @@ suite("Turbo Flow") {
     it("runs a deep graph through bounded iterative scratch storage") {
       enum { LARGE_GRAPH_STAGE_COUNT = 1024, LARGE_GRAPH_SOURCE_CAPACITY = 65536 };
       char source[LARGE_GRAPH_SOURCE_CAPACITY];
-      char stage_name[32];
       size_t used = 0u;
       turbo_flow_msg_t msg;
       turbo_flow_t *flow = turbo_flow_create();
@@ -3634,7 +3726,8 @@ suite("Turbo Flow") {
       check_true(written > 0 && (size_t)written < sizeof(source) - used);
       used += (size_t)written;
       for (unsigned i = 0u; i < LARGE_GRAPH_STAGE_COUNT; ++i) {
-        written = snprintf(source + used, sizeof(source) - used, "stage node_%u\n", i);
+        written = snprintf(source + used, sizeof(source) - used,
+                           "stage node_%u operation test.noop\n", i);
         check_true(written > 0 && (size_t)written < sizeof(source) - used);
         used += (size_t)written;
       }
@@ -3651,12 +3744,8 @@ suite("Turbo Flow") {
       used += (size_t)written;
 
       check_equal(turbo_flow_parse_string(flow, source, used), SALTS_OK);
-      for (unsigned i = 0u; i < LARGE_GRAPH_STAGE_COUNT; ++i) {
-        written = snprintf(stage_name, sizeof(stage_name), "node_%u", i);
-        check_true(written > 0 && (size_t)written < sizeof(stage_name));
-        check_equal(turbo_flow_register_stage_ex(flow, stage_name, noop_stage, NULL, NULL),
-                     SALTS_OK);
-      }
+      flow_test_operation_t noop = flow_test_operation_init("test.noop", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &noop), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_msg_init(&msg);
@@ -3669,10 +3758,10 @@ suite("Turbo Flow") {
 
     it("runs a diamond stage plan only after both fan-in branches complete") {
       static const char *src = "source input\n"
-                               "stage parse\n"
-                               "stage validate\n"
-                               "stage enrich\n"
-                               "stage sink\n"
+                               "stage parse operation test.parse\n"
+                               "stage validate operation test.validate\n"
+                               "stage enrich operation test.enrich\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> parse -> [validate, enrich] -> sink\n"
                                "}\n";
@@ -3693,15 +3782,26 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "validate", record_stage, &validate_ctx, NULL),
-          SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "enrich", record_stage, &enrich_ctx, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_50 =
+          flow_test_operation_init("test.parse", record_stage, &parse_ctx);
+      operation_50.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_50.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_50), SALTS_OK);
+      flow_test_operation_t operation_51 =
+          flow_test_operation_init("test.validate", record_stage, &validate_ctx);
+      operation_51.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_51.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_51), SALTS_OK);
+      flow_test_operation_t operation_52 =
+          flow_test_operation_init("test.enrich", record_stage, &enrich_ctx);
+      operation_52.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_52.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_52), SALTS_OK);
+      flow_test_operation_t operation_53 =
+          flow_test_operation_init("test.sink", record_stage, &sink_ctx);
+      operation_53.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_53.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_53), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -3719,9 +3819,9 @@ suite("Turbo Flow") {
     it("runs only the published source slice when a plan has shared fan-in") {
       static const char *src = "source orders\n"
                                "source refunds\n"
-                               "stage parse_order\n"
-                               "stage parse_refund\n"
-                               "stage audit\n"
+                               "stage parse_order operation test.parse_order\n"
+                               "stage parse_refund operation test.parse_refund\n"
+                               "stage audit operation test.audit\n"
                                "stage main {\n"
                                "  orders -> parse_order -> audit\n"
                                "  refunds -> parse_refund -> audit\n"
@@ -3742,14 +3842,21 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "parse_order", record_stage, &order_ctx, NULL),
-          SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "parse_refund", record_stage, &refund_ctx, NULL),
-          SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "audit", record_stage, &audit_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_54 =
+          flow_test_operation_init("test.parse_order", record_stage, &order_ctx);
+      operation_54.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_54.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_54), SALTS_OK);
+      flow_test_operation_t operation_55 =
+          flow_test_operation_init("test.parse_refund", record_stage, &refund_ctx);
+      operation_55.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_55.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_55), SALTS_OK);
+      flow_test_operation_t operation_56 =
+          flow_test_operation_init("test.audit", record_stage, &audit_ctx);
+      operation_56.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_56.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_56), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -3770,13 +3877,13 @@ suite("Turbo Flow") {
 
     it("runs a composite stage as a namespaced orchestrator with ports") {
       static const char *src = "source input\n"
-                               "stage validate\n"
-                               "stage persist\n"
+                               "stage validate operation test.validate\n"
+                               "stage persist operation test.persist\n"
                                "stage enrich {\n"
                                "  in input\n"
                                "  out output\n"
-                               "  step fetch\n"
-                               "  step normalize\n"
+                               "  step fetch operation test.fetch\n"
+                               "  step normalize operation test.normalize\n"
                                "  input --> fetch --> normalize --> output\n"
                                "}\n"
                                "stage main {\n"
@@ -3805,17 +3912,26 @@ suite("Turbo Flow") {
       check_true(turbo_flow_find_stage(flow, "enrich.input") >= 0);
       check_true(turbo_flow_find_stage(flow, "enrich.output") >= 0);
 
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "validate", record_stage, &validate_ctx, NULL),
-          SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "enrich.fetch", record_stage, &fetch_ctx, NULL),
-          SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "enrich.normalize", record_stage,
-                                                &normalize_ctx, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_57 =
+          flow_test_operation_init("test.validate", record_stage, &validate_ctx);
+      operation_57.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_57.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_57), SALTS_OK);
+      flow_test_operation_t operation_58 =
+          flow_test_operation_init("test.fetch", record_stage, &fetch_ctx);
+      operation_58.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_58.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_58), SALTS_OK);
+      flow_test_operation_t operation_59 =
+          flow_test_operation_init("test.normalize", record_stage, &normalize_ctx);
+      operation_59.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_59.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_59), SALTS_OK);
+      flow_test_operation_t operation_60 =
+          flow_test_operation_init("test.persist", record_stage, &persist_ctx);
+      operation_60.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_60.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_60), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -3832,11 +3948,11 @@ suite("Turbo Flow") {
 
     it("runs a single-port stage through shorthand orchestration") {
       static const char *src = "source input\n"
-                               "stage persist\n"
+                               "stage persist operation test.persist\n"
                                "stage enrich {\n"
                                "  in input\n"
                                "  out output\n"
-                               "  step fetch\n"
+                               "  step fetch operation test.fetch\n"
                                "  input -> fetch -> output\n"
                                "}\n"
                                "stage main {\n"
@@ -3857,11 +3973,16 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "enrich.fetch", record_stage, &fetch_ctx, NULL),
-          SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_61 =
+          flow_test_operation_init("test.fetch", record_stage, &fetch_ctx);
+      operation_61.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_61.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_61), SALTS_OK);
+      flow_test_operation_t operation_62 =
+          flow_test_operation_init("test.persist", record_stage, &persist_ctx);
+      operation_62.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_62.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_62), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -3876,8 +3997,8 @@ suite("Turbo Flow") {
 
     it("stops normal downstream execution when a stage fails") {
       static const char *src = "source input\n"
-                               "stage parse\n"
-                               "stage sink\n"
+                               "stage parse operation test.parse\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> parse -> sink\n"
                                "}\n";
@@ -3896,10 +4017,16 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_63 =
+          flow_test_operation_init("test.parse", record_stage, &parse_ctx);
+      operation_63.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_63.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_63), SALTS_OK);
+      flow_test_operation_t operation_64 =
+          flow_test_operation_init("test.sink", record_stage, &sink_ctx);
+      operation_64.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_64.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_64), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EPROTO);
@@ -3924,7 +4051,7 @@ suite("Turbo Flow") {
 
     it("publishes owned payload by cloning it for runtime ownership") {
       static const char *src = "source input\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> sink\n"
                                "}\n";
@@ -3938,8 +4065,11 @@ suite("Turbo Flow") {
       msg.payload = tstr_to_v(msg.owned_payload);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_65 =
+          flow_test_operation_init("test.sink", check_payload_stage, &sink_ctx);
+      operation_65.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_65.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_65), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -3952,7 +4082,7 @@ suite("Turbo Flow") {
 
     it("rejects publish payload views without backing ownership") {
       static const char *src = "source input\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> sink\n"
                                "}\n";
@@ -3965,7 +4095,8 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_66 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_66), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EINVAL);
@@ -3977,7 +4108,7 @@ suite("Turbo Flow") {
 
     it("rejects publish payload views outside their declared backing buffer") {
       static const char *src = "source input\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> sink\n"
                                "}\n";
@@ -3993,7 +4124,8 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(outside, sizeof(outside) - 1u);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_67 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_67), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EINVAL);
@@ -4005,7 +4137,7 @@ suite("Turbo Flow") {
 
     it("rejects batch payload views outside their declared backing buffer") {
       static const char *src = "source input\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> sink\n"
                                "}\n";
@@ -4027,9 +4159,11 @@ suite("Turbo Flow") {
       batch.ctx = &invalid;
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", batch_publish_probe_stage, &sink,
-                                                NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_68 =
+          flow_test_operation_init("test.sink", batch_publish_probe_stage, &sink);
+      operation_68.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_68.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_68), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish_batch(flow, "input", &batch, &published), SALTS_EINVAL);
@@ -4044,7 +4178,7 @@ suite("Turbo Flow") {
 
     it("rejects async payload views outside their declared backing buffer") {
       static const char *src = "source input\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> sink\n"
                                "}\n";
@@ -4063,7 +4197,8 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(outside, sizeof(outside) - 1u);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_69 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_69), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish_async(flow, "input", &msg, async_publish_complete, &completion),
@@ -4077,17 +4212,18 @@ suite("Turbo Flow") {
 
     it("runs inline worker-pool stages and thread executor baseline") {
       static const char *worker_src = "source input\n"
-                                      "stage enrich worker 2\n"
-                                      "stage persist\n"
+                                      "stage enrich operation test.enrich worker 2\n"
+                                      "stage persist operation test.persist\n"
                                       "stage main {\n"
                                       "  input -> enrich -> persist\n"
                                       "}\n";
-      static const char *thread_src = "source input\n"
-                                      "stage parse worker 2 exec thread workers 2\n"
-                                      "stage sink\n"
-                                      "stage main {\n"
-                                      "  input -> parse -> sink\n"
-                                      "}\n";
+      static const char *thread_src =
+          "source input\n"
+          "stage parse operation test.parse worker 2 exec thread workers 2\n"
+          "stage sink operation test.sink\n"
+          "stage main {\n"
+          "  input -> parse -> sink\n"
+          "}\n";
       char raw[] = "abc";
       turbo_flow_msg_t msg;
       mem_buffer_t *buffer = mem_wrap_external(raw, sizeof(raw) - 1, NULL, NULL);
@@ -4105,10 +4241,20 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, worker_src, strlen(worker_src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "enrich", record_stage, &enrich_ctx, NULL),
-                  SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist_ctx, NULL),
-                  SALTS_OK);
+      flow_test_operation_t operation_70 =
+          flow_test_operation_init("test.enrich", record_stage, &enrich_ctx);
+      operation_70.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_70.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_70.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_70.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_70.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_70.descriptor.runtime.capacity = FLOW_WORKER_POOL_DEFAULT_CAPACITY;
+      check_equal(flow_test_operation_register(flow, &operation_70), SALTS_OK);
+      flow_test_operation_t operation_71 =
+          flow_test_operation_init("test.persist", record_stage, &persist_ctx);
+      operation_71.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_71.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_71), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       {
@@ -4141,10 +4287,22 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       trace.count = 0;
       check_equal(turbo_flow_parse_string(flow, thread_src, strlen(thread_src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                  SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                  SALTS_OK);
+      flow_test_operation_t operation_72 =
+          flow_test_operation_init("test.parse", record_stage, &parse_ctx);
+      operation_72.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_72.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_72.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_72.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_72.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_72.descriptor.runtime.capacity = FLOW_WORKER_POOL_DEFAULT_CAPACITY;
+      operation_72.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_72.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_THREAD;
+      check_equal(flow_test_operation_register(flow, &operation_72), SALTS_OK);
+      flow_test_operation_t operation_73 =
+          flow_test_operation_init("test.sink", record_stage, &sink_ctx);
+      operation_73.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_73.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_73), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       {
@@ -4182,8 +4340,8 @@ suite("Turbo Flow") {
 
     it("runs coro scheduler executor stages to synchronous completion") {
       static const char *src = "source input\n"
-                               "stage async exec coro lanes 2 pool 2\n"
-                               "stage sink\n"
+                               "stage async operation test.async exec coro lanes 2 pool 2\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> async -> sink\n"
                                "}\n";
@@ -4201,10 +4359,18 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "async", coro_check_stage, &async_ctx, NULL),
-                  SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink_ctx, NULL),
-                  SALTS_OK);
+      flow_test_operation_t operation_74 =
+          flow_test_operation_init("test.async", coro_check_stage, &async_ctx);
+      operation_74.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_74.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_74.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_74.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_CORO;
+      check_equal(flow_test_operation_register(flow, &operation_74), SALTS_OK);
+      flow_test_operation_t operation_75 =
+          flow_test_operation_init("test.sink", check_payload_stage, &sink_ctx);
+      operation_75.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_75.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_75), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       {
@@ -4241,14 +4407,14 @@ suite("Turbo Flow") {
 
     it("runs executor stages with default thread and coro options") {
       static const char *thread_src = "source input\n"
-                                      "stage parse exec thread\n"
-                                      "stage sink\n"
+                                      "stage parse operation test.parse exec thread\n"
+                                      "stage sink operation test.sink\n"
                                       "stage main {\n"
                                       "  input -> parse -> sink\n"
                                       "}\n";
       static const char *coro_src = "source input\n"
-                                    "stage async exec coro\n"
-                                    "stage sink\n"
+                                    "stage async operation test.async exec coro\n"
+                                    "stage sink operation test.sink\n"
                                     "stage main {\n"
                                     "  input -> async -> sink\n"
                                     "}\n";
@@ -4269,10 +4435,18 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, thread_src, strlen(thread_src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_76 =
+          flow_test_operation_init("test.parse", record_stage, &parse_ctx);
+      operation_76.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_76.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_76.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_76.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_THREAD;
+      check_equal(flow_test_operation_register(flow, &operation_76), SALTS_OK);
+      flow_test_operation_t operation_77 =
+          flow_test_operation_init("test.sink", record_stage, &sink_ctx);
+      operation_77.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_77.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_77), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -4283,11 +4457,18 @@ suite("Turbo Flow") {
 
       check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, coro_src, strlen(coro_src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "async", coro_check_stage, &async_ctx, NULL),
-                   SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &coro_sink_ctx, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_78 =
+          flow_test_operation_init("test.async", coro_check_stage, &async_ctx);
+      operation_78.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_78.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_78.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_78.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_CORO;
+      check_equal(flow_test_operation_register(flow, &operation_78), SALTS_OK);
+      flow_test_operation_t operation_79 =
+          flow_test_operation_init("test.sink", check_payload_stage, &coro_sink_ctx);
+      operation_79.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_79.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_79), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -4302,8 +4483,8 @@ suite("Turbo Flow") {
 
     it("rejects coro executor stages that suspend without ready work") {
       static const char *src = "source input\n"
-                               "stage async exec coro lanes 1 pool 1\n"
-                               "stage sink\n"
+                               "stage async operation test.async exec coro lanes 1 pool 1\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> async -> sink\n"
                                "}\n";
@@ -4321,11 +4502,18 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "async", coro_wait_once_stage, &async_ctx, NULL),
-          SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_80 =
+          flow_test_operation_init("test.async", coro_wait_once_stage, &async_ctx);
+      operation_80.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_80.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_80.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_80.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_CORO;
+      check_equal(flow_test_operation_register(flow, &operation_80), SALTS_OK);
+      flow_test_operation_t operation_81 =
+          flow_test_operation_init("test.sink", check_payload_stage, &sink_ctx);
+      operation_81.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_81.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_81), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_ENOTSUP);
@@ -4343,8 +4531,8 @@ suite("Turbo Flow") {
 
     it("moves worker-pool transformed owned payloads through the data plane") {
       static const char *src = "source input\n"
-                               "stage transform worker 2\n"
-                               "stage sink\n"
+                               "stage transform operation test.transform worker 2\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> transform -> sink\n"
                                "}\n";
@@ -4363,11 +4551,20 @@ suite("Turbo Flow") {
       check_equal(mem_buffer_ref_count(buffer), 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", replace_payload_stage,
-                                                &transform_ctx, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_82 =
+          flow_test_operation_init("test.transform", replace_payload_stage, &transform_ctx);
+      operation_82.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_82.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_82.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_82.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_82.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_82.descriptor.runtime.capacity = FLOW_WORKER_POOL_DEFAULT_CAPACITY;
+      check_equal(flow_test_operation_register(flow, &operation_82), SALTS_OK);
+      flow_test_operation_t operation_83 =
+          flow_test_operation_init("test.sink", check_payload_stage, &sink_ctx);
+      operation_83.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_83.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_83), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -4382,7 +4579,7 @@ suite("Turbo Flow") {
 
     it("runs worker-pool requests on independent disruptor consumers") {
       static const char *src = "source input\n"
-                               "stage transform worker 2 capacity 64\n"
+                               "stage transform operation test.transform worker 2 capacity 64\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -4399,9 +4596,15 @@ suite("Turbo Flow") {
       atomic_init(&probe.ran_off_submitter, 0);
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "transform", worker_probe_stage, &probe, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_84 =
+          flow_test_operation_init("test.transform", worker_probe_stage, &probe);
+      operation_84.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_84.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_84.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_84.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_84.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_84.descriptor.runtime.capacity = 64u;
+      check_equal(flow_test_operation_register(flow, &operation_84), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -4430,7 +4633,7 @@ suite("Turbo Flow") {
 
     it("runs concurrent public publishes without mutating the sealed plan") {
       static const char *src = "source input\n"
-                               "stage transform worker 2 capacity 64\n"
+                               "stage transform operation test.transform worker 2 capacity 64\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -4456,9 +4659,15 @@ suite("Turbo Flow") {
       atomic_init(&go, 0);
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "transform", worker_probe_stage, &probe, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_85 =
+          flow_test_operation_init("test.transform", worker_probe_stage, &probe);
+      operation_85.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_85.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_85.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_85.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_85.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_85.descriptor.runtime.capacity = 64u;
+      check_equal(flow_test_operation_register(flow, &operation_85), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       transform_index = turbo_flow_find_stage(flow, "transform");
@@ -4520,7 +4729,7 @@ suite("Turbo Flow") {
 
     it("blocks bounded worker admission without dropping concurrent publishes") {
       static const char *src = "source input\n"
-                               "stage transform worker 2 capacity 2\n"
+                               "stage transform operation test.transform worker 2 capacity 2\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -4540,9 +4749,15 @@ suite("Turbo Flow") {
       atomic_init(&go, 0);
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "transform", worker_probe_stage, &probe, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_86 =
+          flow_test_operation_init("test.transform", worker_probe_stage, &probe);
+      operation_86.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_86.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_86.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_86.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_86.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_86.descriptor.runtime.capacity = 2u;
+      check_equal(flow_test_operation_register(flow, &operation_86), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -4571,7 +4786,7 @@ suite("Turbo Flow") {
 
     it("uses one coroutine shell pool per concurrent scheduler lane") {
       static const char *src = "source input\n"
-                               "stage transform exec coro lanes 2 pool 8\n"
+                               "stage transform operation test.transform exec coro lanes 2 pool 8\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -4592,9 +4807,13 @@ suite("Turbo Flow") {
       atomic_init(&go, 0);
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "transform", worker_probe_stage, &probe, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_87 =
+          flow_test_operation_init("test.transform", worker_probe_stage, &probe);
+      operation_87.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_87.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_87.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_87.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_CORO;
+      check_equal(flow_test_operation_register(flow, &operation_87), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -4637,7 +4856,7 @@ suite("Turbo Flow") {
 
     it("keeps concurrent publish errors local to each producer") {
       static const char *src = "source input\n"
-                               "stage transform worker 2 capacity 64\n"
+                               "stage transform operation test.transform worker 2 capacity 64\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -4651,9 +4870,13 @@ suite("Turbo Flow") {
       atomic_init(&go, 0);
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "transform", fail_by_message_id_stage, NULL, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_88 =
+          flow_test_operation_init("test.transform", fail_by_message_id_stage, NULL);
+      operation_88.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_88.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_88.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_88.descriptor.runtime.capacity = 64u;
+      check_equal(flow_test_operation_register(flow, &operation_88), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       for (size_t i = 0; i < 2; ++i) {
@@ -4684,7 +4907,7 @@ suite("Turbo Flow") {
 
     it("drains accepted publishes before stop and rejects new admission") {
       static const char *src = "source input\n"
-                               "stage transform worker 1 capacity 8\n"
+                               "stage transform operation test.transform worker 1 capacity 8\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -4707,9 +4930,15 @@ suite("Turbo Flow") {
       atomic_init(&go, 1);
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "transform", execution_yield_stage, &probe, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_89 =
+          flow_test_operation_init("test.transform", execution_yield_stage, &probe);
+      operation_89.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_89.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_89.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_89.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_89.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_89.descriptor.runtime.capacity = 8u;
+      check_equal(flow_test_operation_register(flow, &operation_89), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -4746,7 +4975,7 @@ suite("Turbo Flow") {
 
     it("runs async source ingress off the producer and owns the accepted message") {
       static const char *src = "source input\n"
-                               "stage transform\n"
+                               "stage transform operation test.transform\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -4765,8 +4994,11 @@ suite("Turbo Flow") {
       check_not_null(flow);
       check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", async_gate_stage, &gate, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_90 =
+          flow_test_operation_init("test.transform", async_gate_stage, &gate);
+      operation_90.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_90.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_90), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_EBUSY);
@@ -4823,7 +5055,7 @@ suite("Turbo Flow") {
 
     it("bounds retained async message bytes and releases the reservation after completion") {
       static const char *src = "source input\n"
-                               "stage transform\n"
+                               "stage transform operation test.transform\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -4850,8 +5082,11 @@ suite("Turbo Flow") {
       check_not_null(flow);
       check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", async_gate_stage, &gate, NULL),
-                  SALTS_OK);
+      flow_test_operation_t operation_91 =
+          flow_test_operation_init("test.transform", async_gate_stage, &gate);
+      operation_91.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_91.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_91), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -4917,7 +5152,7 @@ suite("Turbo Flow") {
 
     it("fails fast at async ingress capacity and drains accepted work on stop") {
       static const char *src = "source input\n"
-                               "stage transform\n"
+                               "stage transform operation test.transform\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -4941,8 +5176,11 @@ suite("Turbo Flow") {
       check_not_null(flow);
       check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", async_gate_stage, &gate, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_92 =
+          flow_test_operation_init("test.transform", async_gate_stage, &gate);
+      operation_92.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_92.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_92), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_msg_init(&msg);
@@ -4986,7 +5224,7 @@ suite("Turbo Flow") {
 
     it("pauses resumes and stops from paused admission") {
       static const char *src = "source input\n"
-                               "stage transform\n"
+                               "stage transform operation test.transform\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -4995,8 +5233,9 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_93 =
+          flow_test_operation_init("test.transform", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_93), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_pause(flow), SALTS_OK);
@@ -5015,7 +5254,7 @@ suite("Turbo Flow") {
 
     it("interrupts parked disruptor workers on stop and restart") {
       static const char *src = "source input\n"
-                               "stage transform worker 4 capacity 16\n"
+                               "stage transform operation test.transform worker 4 capacity 16\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -5025,8 +5264,13 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_94 =
+          flow_test_operation_init("test.transform", noop_stage, NULL);
+      operation_94.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_94.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_94.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_94.descriptor.runtime.capacity = 16u;
+      check_equal(flow_test_operation_register(flow, &operation_94), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_pool_count(flow), 1);
@@ -5062,7 +5306,7 @@ suite("Turbo Flow") {
 
     it("derives pool resource status and conditions from one generation snapshot") {
       static const char *src = "source input\n"
-                               "stage transform worker 2 capacity 16\n"
+                               "stage transform operation test.transform worker 2 capacity 16\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -5072,8 +5316,13 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_95 =
+          flow_test_operation_init("test.transform", noop_stage, NULL);
+      operation_95.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_95.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_95.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_95.descriptor.runtime.capacity = 16u;
+      check_equal(flow_test_operation_register(flow, &operation_95), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       status.size = sizeof(status) - 1u;
@@ -5119,7 +5368,7 @@ suite("Turbo Flow") {
 
     it("advances pool generation and rejects stale resize commands") {
       static const char *src = "source input\n"
-                               "stage transform worker 2 capacity 16\n"
+                               "stage transform operation test.transform worker 2 capacity 16\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -5130,8 +5379,13 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_96 =
+          flow_test_operation_init("test.transform", noop_stage, NULL);
+      operation_96.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_96.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_96.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_96.descriptor.runtime.capacity = 16u;
+      check_equal(flow_test_operation_register(flow, &operation_96), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_pool_resource_status_at(flow, 0, &before), SALTS_OK);
@@ -5161,7 +5415,7 @@ suite("Turbo Flow") {
 
     it("rejects unchecked and truncated pool resize commands") {
       static const char *src = "source input\n"
-                               "stage transform worker 2 capacity 16\n"
+                               "stage transform operation test.transform worker 2 capacity 16\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -5170,8 +5424,13 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_97 =
+          flow_test_operation_init("test.transform", noop_stage, NULL);
+      operation_97.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_97.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_97.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_97.descriptor.runtime.capacity = 16u;
+      check_equal(flow_test_operation_register(flow, &operation_97), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       memset(&command, 0, sizeof(command));
@@ -5189,21 +5448,24 @@ suite("Turbo Flow") {
     }
 
     it("resizes runtime-owned disruptor thread and coro pools") {
-      static const char *worker_src = "source input\n"
-                                      "stage transform worker 2 capacity 16\n"
-                                      "stage main {\n"
-                                      "  input -> transform\n"
-                                      "}\n";
-      static const char *thread_src = "source input\n"
-                                      "stage transform exec thread workers 2\n"
-                                      "stage main {\n"
-                                      "  input -> transform\n"
-                                      "}\n";
-      static const char *coro_src = "source input\n"
-                                    "stage transform exec coro lanes 2 pool 8\n"
-                                    "stage main {\n"
-                                    "  input -> transform\n"
-                                    "}\n";
+      static const char *worker_src =
+          "source input\n"
+          "stage transform operation test.transform worker 2 capacity 16\n"
+          "stage main {\n"
+          "  input -> transform\n"
+          "}\n";
+      static const char *thread_src =
+          "source input\n"
+          "stage transform operation test.transform exec thread workers 2\n"
+          "stage main {\n"
+          "  input -> transform\n"
+          "}\n";
+      static const char *coro_src =
+          "source input\n"
+          "stage transform operation test.transform exec coro lanes 2 pool 8\n"
+          "stage main {\n"
+          "  input -> transform\n"
+          "}\n";
       const char *sources[] = {worker_src, thread_src, coro_src};
       const turbo_flow_pool_kind_t kinds[] = {TURBO_FLOW_POOL_DISRUPTOR, TURBO_FLOW_POOL_THREAD,
                                               TURBO_FLOW_POOL_CORO};
@@ -5225,8 +5487,18 @@ suite("Turbo Flow") {
 
         check_not_null(flow);
         check_equal(turbo_flow_parse_string(flow, sources[i], strlen(sources[i])), SALTS_OK);
-        check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                     SALTS_OK);
+        flow_test_operation_t operation_98 =
+            flow_test_operation_init("test.transform", noop_stage, NULL);
+        operation_98.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+        operation_98.descriptor.execution_mask = i == 1u   ? TURBO_FLOW_OPERATION_EXEC_THREAD
+                                                 : i == 2u ? TURBO_FLOW_OPERATION_EXEC_CORO
+                                                           : TURBO_FLOW_OPERATION_EXEC_INLINE;
+        if (i == 0u) {
+          operation_98.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+          operation_98.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+          operation_98.descriptor.runtime.capacity = 16u;
+        }
+        check_equal(flow_test_operation_register(flow, &operation_98), SALTS_OK);
         check_equal(turbo_flow_compile(flow), SALTS_OK);
         check_equal(turbo_flow_start(flow), SALTS_OK);
         stage_index = turbo_flow_find_stage(flow, "transform");
@@ -5293,7 +5565,7 @@ suite("Turbo Flow") {
 
     it("restores the previous pool after the replacement rebuild fails") {
       static const char *src = "source input\n"
-                               "stage transform worker 2 capacity 16\n"
+                               "stage transform operation test.transform worker 2 capacity 16\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -5307,8 +5579,13 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_99 =
+          flow_test_operation_init("test.transform", noop_stage, NULL);
+      operation_99.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_99.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_99.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_99.descriptor.runtime.capacity = 16u;
+      check_equal(flow_test_operation_register(flow, &operation_99), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_pool_resource_status_at(flow, 0u, &before), SALTS_OK);
@@ -5345,7 +5622,7 @@ suite("Turbo Flow") {
 
     it("fails closed when replacement and rollback pool rebuilds both fail") {
       static const char *src = "source input adapter probe.source\n"
-                               "stage transform worker 2 capacity 16\n"
+                               "stage transform operation test.transform worker 2 capacity 16\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -5364,8 +5641,13 @@ suite("Turbo Flow") {
       check_not_null(flow);
       check_equal(turbo_flow_register_adapter(flow, "probe.source", &ops, &adapter), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_100 =
+          flow_test_operation_init("test.transform", noop_stage, NULL);
+      operation_100.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_100.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_100.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_100.descriptor.runtime.capacity = 16u;
+      check_equal(flow_test_operation_register(flow, &operation_100), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(adapter.start_count, 1);
@@ -5407,7 +5689,7 @@ suite("Turbo Flow") {
 
     it("validates pool resize targets and keeps timeout admission paused") {
       static const char *src = "source input\n"
-                               "stage transform worker 1 capacity 8\n"
+                               "stage transform operation test.transform worker 1 capacity 8\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -5429,9 +5711,15 @@ suite("Turbo Flow") {
       atomic_init(&go, 1);
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "transform", execution_yield_stage, &probe, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_101 =
+          flow_test_operation_init("test.transform", execution_yield_stage, &probe);
+      operation_101.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_101.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_101.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_101.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_101.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_101.descriptor.runtime.capacity = 8u;
+      check_equal(flow_test_operation_register(flow, &operation_101), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       memset(&command, 0, sizeof(command));
@@ -5469,7 +5757,7 @@ suite("Turbo Flow") {
 
     it("drains active publishes with deadline and remains paused") {
       static const char *src = "source input\n"
-                               "stage transform worker 1 capacity 8\n"
+                               "stage transform operation test.transform worker 1 capacity 8\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -5489,9 +5777,15 @@ suite("Turbo Flow") {
       atomic_init(&go, 1);
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "transform", execution_yield_stage, &probe, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_102 =
+          flow_test_operation_init("test.transform", execution_yield_stage, &probe);
+      operation_102.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_102.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_102.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_102.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_102.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_102.descriptor.runtime.capacity = 8u;
+      check_equal(flow_test_operation_register(flow, &operation_102), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -5523,7 +5817,7 @@ suite("Turbo Flow") {
 
     it("propagates worker failures and restarts the disruptor data plane") {
       static const char *src = "source input\n"
-                               "stage transform worker 1\n"
+                               "stage transform operation test.transform worker 1\n"
                                "stage main {\n"
                                "  input -> transform\n"
                                "}\n";
@@ -5537,8 +5831,15 @@ suite("Turbo Flow") {
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "transform", record_stage, &stage_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_103 =
+          flow_test_operation_init("test.transform", record_stage, &stage_ctx);
+      operation_103.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_103.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_103.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_103.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_103.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_103.descriptor.runtime.capacity = FLOW_WORKER_POOL_DEFAULT_CAPACITY;
+      check_equal(flow_test_operation_register(flow, &operation_103), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -5586,22 +5887,22 @@ suite("Turbo Flow") {
 
     it("keeps borrowed transport context inline and rejects every asynchronous boundary") {
       static const char *broadcast_src = "source input\n"
-                                         "stage sink\n"
+                                         "stage sink operation test.sink\n"
                                          "stage main {\n"
                                          "  input -> sink\n"
                                          "}\n";
       static const char *worker_src = "source input\n"
-                                      "stage sink worker 1\n"
+                                      "stage sink operation test.sink worker 1\n"
                                       "stage main {\n"
                                       "  input -> sink\n"
                                       "}\n";
       static const char *thread_src = "source input\n"
-                                      "stage sink exec thread workers 1\n"
+                                      "stage sink operation test.sink exec thread workers 1\n"
                                       "stage main {\n"
                                       "  input -> sink\n"
                                       "}\n";
       static const char *coro_src = "source input\n"
-                                    "stage sink exec coro lanes 1 pool 1\n"
+                                    "stage sink operation test.sink exec coro lanes 1 pool 1\n"
                                     "stage main {\n"
                                     "  input -> sink\n"
                                     "}\n";
@@ -5619,8 +5920,20 @@ suite("Turbo Flow") {
         msg.id = 100u + i;
         msg.transport_context = &transport_marker;
         check_equal(turbo_flow_parse_string(flow, plans[i], strlen(plans[i])), SALTS_OK);
-        check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                     SALTS_OK);
+        flow_test_operation_t operation_104 =
+            flow_test_operation_init("test.sink", record_stage, &sink_ctx);
+        operation_104.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+        operation_104.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+        operation_104.descriptor.execution_mask = i == 2u   ? TURBO_FLOW_OPERATION_EXEC_THREAD
+                                                  : i == 3u ? TURBO_FLOW_OPERATION_EXEC_CORO
+                                                            : TURBO_FLOW_OPERATION_EXEC_INLINE;
+        if (i != 0u) operation_104.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+        if (i == 1u) {
+          operation_104.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+          operation_104.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+          operation_104.descriptor.runtime.capacity = FLOW_WORKER_POOL_DEFAULT_CAPACITY;
+        }
+        check_equal(flow_test_operation_register(flow, &operation_104), SALTS_OK);
         check_equal(turbo_flow_compile(flow), SALTS_OK);
         check_equal(turbo_flow_start(flow), SALTS_OK);
         check_equal(turbo_flow_publish(flow, "input", &msg), i == 0u ? SALTS_OK : SALTS_EINVAL);
@@ -5636,22 +5949,22 @@ suite("Turbo Flow") {
 
     it("moves buffer-backed transport context through every graph data plane") {
       static const char *broadcast_src = "source input\n"
-                                         "stage sink\n"
+                                         "stage sink operation test.sink\n"
                                          "stage main {\n"
                                          "  input -> sink\n"
                                          "}\n";
       static const char *worker_src = "source input\n"
-                                      "stage sink worker 1\n"
+                                      "stage sink operation test.sink worker 1\n"
                                       "stage main {\n"
                                       "  input -> sink\n"
                                       "}\n";
       static const char *thread_src = "source input\n"
-                                      "stage sink exec thread workers 1\n"
+                                      "stage sink operation test.sink exec thread workers 1\n"
                                       "stage main {\n"
                                       "  input -> sink\n"
                                       "}\n";
       static const char *coro_src = "source input\n"
-                                    "stage sink exec coro lanes 1 pool 1\n"
+                                    "stage sink operation test.sink exec coro lanes 1 pool 1\n"
                                     "stage main {\n"
                                     "  input -> sink\n"
                                     "}\n";
@@ -5675,8 +5988,20 @@ suite("Turbo Flow") {
         msg.payload = vstr_from_buf(owned.payload, sizeof(owned.payload));
         msg.transport_context = &owned.transport_marker;
         check_equal(turbo_flow_parse_string(flow, plans[i], strlen(plans[i])), SALTS_OK);
-        check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                     SALTS_OK);
+        flow_test_operation_t operation_105 =
+            flow_test_operation_init("test.sink", record_stage, &sink_ctx);
+        operation_105.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+        operation_105.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+        operation_105.descriptor.execution_mask = i == 2u   ? TURBO_FLOW_OPERATION_EXEC_THREAD
+                                                  : i == 3u ? TURBO_FLOW_OPERATION_EXEC_CORO
+                                                            : TURBO_FLOW_OPERATION_EXEC_INLINE;
+        if (i != 0u) operation_105.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+        if (i == 1u) {
+          operation_105.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+          operation_105.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+          operation_105.descriptor.runtime.capacity = FLOW_WORKER_POOL_DEFAULT_CAPACITY;
+        }
+        check_equal(flow_test_operation_register(flow, &operation_105), SALTS_OK);
         check_equal(turbo_flow_compile(flow), SALTS_OK);
         check_equal(turbo_flow_start(flow), SALTS_OK);
         check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -5692,8 +6017,8 @@ suite("Turbo Flow") {
 
     it("returns thread executor message ownership before downstream release") {
       static const char *src = "source input\n"
-                               "stage parse exec thread workers 2\n"
-                               "stage sink\n"
+                               "stage parse operation test.parse exec thread workers 2\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> parse -> sink\n"
                                "}\n";
@@ -5710,12 +6035,18 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "parse", set_msg_status_stage, &expected_status, NULL),
-          SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", check_msg_status_stage,
-                                                &expected_status, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_106 =
+          flow_test_operation_init("test.parse", set_msg_status_stage, &expected_status);
+      operation_106.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_106.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_106.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_106.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_THREAD;
+      check_equal(flow_test_operation_register(flow, &operation_106), SALTS_OK);
+      flow_test_operation_t operation_107 =
+          flow_test_operation_init("test.sink", check_msg_status_stage, &expected_status);
+      operation_107.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_107.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_107), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -5727,8 +6058,8 @@ suite("Turbo Flow") {
 
     it("does not release thread executor downstream when callback fails") {
       static const char *src = "source input\n"
-                               "stage parse exec thread workers 2\n"
-                               "stage sink\n"
+                               "stage parse operation test.parse exec thread workers 2\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> parse -> sink\n"
                                "}\n";
@@ -5747,10 +6078,18 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "parse", record_stage, &parse_ctx, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_108 =
+          flow_test_operation_init("test.parse", record_stage, &parse_ctx);
+      operation_108.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_108.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_108.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_108.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_THREAD;
+      check_equal(flow_test_operation_register(flow, &operation_108), SALTS_OK);
+      flow_test_operation_t operation_109 =
+          flow_test_operation_init("test.sink", record_stage, &sink_ctx);
+      operation_109.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_109.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_109), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EPROTO);
@@ -5774,8 +6113,8 @@ suite("Turbo Flow") {
 
     it("does not release worker-pool downstream when callback fails") {
       static const char *src = "source input\n"
-                               "stage enrich worker 2\n"
-                               "stage persist\n"
+                               "stage enrich operation test.enrich worker 2\n"
+                               "stage persist operation test.persist\n"
                                "stage main {\n"
                                "  input -> enrich -> persist\n"
                                "}\n";
@@ -5794,10 +6133,20 @@ suite("Turbo Flow") {
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
 
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "enrich", record_stage, &enrich_ctx, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist_ctx, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_110 =
+          flow_test_operation_init("test.enrich", record_stage, &enrich_ctx);
+      operation_110.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_110.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_110.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_110.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_110.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_110.descriptor.runtime.capacity = FLOW_WORKER_POOL_DEFAULT_CAPACITY;
+      check_equal(flow_test_operation_register(flow, &operation_110), SALTS_OK);
+      flow_test_operation_t operation_111 =
+          flow_test_operation_init("test.persist", record_stage, &persist_ctx);
+      operation_111.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_111.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_111), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EPROTO);
@@ -5821,9 +6170,9 @@ suite("Turbo Flow") {
 
     it("filters routes using the upstream stage output") {
       static const char *src = "source input\n"
-                               "stage validate\n"
-                               "stage accepted\n"
-                               "stage rejected\n"
+                               "stage validate operation test.validate\n"
+                               "stage accepted operation test.accepted\n"
+                               "stage rejected operation test.rejected\n"
                                "stage main {\n"
                                "  input -> validate\n"
                                "  route validate -> accepted when msg.flags == 7 # accepted\n"
@@ -5840,13 +6189,21 @@ suite("Turbo Flow") {
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "validate", set_flags_stage, &validated_flags, NULL),
-          SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "accepted", record_stage, &accepted, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "rejected", record_stage, &rejected, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_112 =
+          flow_test_operation_init("test.validate", set_flags_stage, &validated_flags);
+      operation_112.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_112.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_112), SALTS_OK);
+      flow_test_operation_t operation_113 =
+          flow_test_operation_init("test.accepted", record_stage, &accepted);
+      operation_113.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_113.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_113), SALTS_OK);
+      flow_test_operation_t operation_114 =
+          flow_test_operation_init("test.rejected", record_stage, &rejected);
+      operation_114.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_114.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_114), SALTS_OK);
       check_equal(turbo_flow_edge_count(flow), 3);
       edge = turbo_flow_edge_at(flow, 1);
       check_not_null(edge);
@@ -5882,7 +6239,7 @@ suite("Turbo Flow") {
 
     it("treats a conditional no-match as a successful filtered branch") {
       static const char *src = "source input\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  route input -> sink when msg.flags == 9\n"
                                "}\n";
@@ -5894,7 +6251,11 @@ suite("Turbo Flow") {
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink, NULL), SALTS_OK);
+      flow_test_operation_t operation_115 =
+          flow_test_operation_init("test.sink", record_stage, &sink);
+      operation_115.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_115.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_115), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -5906,9 +6267,9 @@ suite("Turbo Flow") {
 
     it("resolves conditional fan-in after every potential predecessor") {
       static const char *src = "source input\n"
-                               "stage left\n"
-                               "stage right\n"
-                               "stage sink\n"
+                               "stage left operation test.left\n"
+                               "stage right operation test.right\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> [left, right]\n"
                                "  route left -> sink when msg.flags == 1\n"
@@ -5925,10 +6286,21 @@ suite("Turbo Flow") {
       turbo_flow_msg_init(&msg);
       msg.flags = 1;
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "left", record_stage, &left, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "right", record_stage, &right, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", record_stage, &sink, NULL), SALTS_OK);
+      flow_test_operation_t operation_116 =
+          flow_test_operation_init("test.left", record_stage, &left);
+      operation_116.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_116.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_116), SALTS_OK);
+      flow_test_operation_t operation_117 =
+          flow_test_operation_init("test.right", record_stage, &right);
+      operation_117.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_117.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_117), SALTS_OK);
+      flow_test_operation_t operation_118 =
+          flow_test_operation_init("test.sink", record_stage, &sink);
+      operation_118.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_118.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_118), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -5943,19 +6315,20 @@ suite("Turbo Flow") {
 
     it("rejects invalid conditional route expressions during compile") {
       static const char *non_bool = "source input\n"
-                                    "stage sink\n"
+                                    "stage sink operation test.sink\n"
                                     "stage main {\n"
                                     "  route input -> sink when msg.status + 1\n"
                                     "}\n";
       static const char *unknown = "source input\n"
-                                   "stage sink\n"
+                                   "stage sink operation test.sink\n"
                                    "stage main {\n"
                                    "  route input -> sink when parsed.missing == 1\n"
                                    "}\n";
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_119 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_119), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, non_bool, strlen(non_bool)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EPROTO);
       check_contains(turbo_flow_last_error(flow)->message, "BOOL");
@@ -5969,7 +6342,7 @@ suite("Turbo Flow") {
 
     it("fails publish when a selected route predicate cannot be evaluated") {
       static const char *src = "source input\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  route input -> sink when msg.flags / msg.status > 0\n"
                                "}\n";
@@ -5981,7 +6354,8 @@ suite("Turbo Flow") {
       msg.flags = 1;
       msg.status = 0;
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_120 = flow_test_operation_init("test.sink", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_120), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_EINVAL);
@@ -5993,9 +6367,9 @@ suite("Turbo Flow") {
 
     it("routes a stage failure through one named reject edge") {
       static const char *src = "source input\n"
-                               "stage validate\n"
-                               "stage persist\n"
-                               "stage rejected\n"
+                               "stage validate operation test.validate\n"
+                               "stage persist operation test.persist\n"
+                               "stage rejected operation test.rejected\n"
                                "stage main {\n"
                                "  input -> validate\n"
                                "  validate -> persist\n"
@@ -6020,13 +6394,22 @@ suite("Turbo Flow") {
       check_equal(edge->kind, TURBO_FLOW_EDGE_REJECT);
       check_equal(edge->name, "validation_failed");
       check_null(edge->condition);
-      check_equal(turbo_flow_register_stage_ex(flow, "validate", record_stage, &validate, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist, NULL),
-                   SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "rejected", check_failure_stage, &rejected, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_121 =
+          flow_test_operation_init("test.validate", record_stage, &validate);
+      operation_121.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_121.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_121.descriptor.runtime.error_mode = TURBO_FLOW_ERROR_REJECT;
+      check_equal(flow_test_operation_register(flow, &operation_121), SALTS_OK);
+      flow_test_operation_t operation_122 =
+          flow_test_operation_init("test.persist", record_stage, &persist);
+      operation_122.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_122.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_122), SALTS_OK);
+      flow_test_operation_t operation_123 =
+          flow_test_operation_init("test.rejected", check_failure_stage, &rejected);
+      operation_123.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_123.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_123), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -6045,9 +6428,9 @@ suite("Turbo Flow") {
 
     it("keeps reject inactive when the upstream stage succeeds") {
       static const char *src = "source input\n"
-                               "stage validate\n"
-                               "stage persist\n"
-                               "stage rejected\n"
+                               "stage validate operation test.validate\n"
+                               "stage persist operation test.persist\n"
+                               "stage rejected operation test.rejected\n"
                                "stage main {\n"
                                "  input -> validate\n"
                                "  validate -> persist\n"
@@ -6063,12 +6446,22 @@ suite("Turbo Flow") {
       check_not_null(flow);
       turbo_flow_msg_init(&msg);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "validate", record_stage, &validate, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "persist", record_stage, &persist, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "rejected", record_stage, &rejected, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_124 =
+          flow_test_operation_init("test.validate", record_stage, &validate);
+      operation_124.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_124.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_124.descriptor.runtime.error_mode = TURBO_FLOW_ERROR_REJECT;
+      check_equal(flow_test_operation_register(flow, &operation_124), SALTS_OK);
+      flow_test_operation_t operation_125 =
+          flow_test_operation_init("test.persist", record_stage, &persist);
+      operation_125.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_125.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_125), SALTS_OK);
+      flow_test_operation_t operation_126 =
+          flow_test_operation_init("test.rejected", record_stage, &rejected);
+      operation_126.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_126.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_126), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -6083,7 +6476,7 @@ suite("Turbo Flow") {
     it("captures the adapter name for a handled adapter failure") {
       static const char *src = "source input\n"
                                "stage deliver adapter failing\n"
-                               "stage rejected\n"
+                               "stage rejected operation test.rejected\n"
                                "stage main {\n"
                                "  input -> deliver\n"
                                "  reject delivery_failed deliver -> rejected\n"
@@ -6101,9 +6494,11 @@ suite("Turbo Flow") {
       turbo_flow_msg_init(&msg);
       check_equal(turbo_flow_register_adapter(flow, "failing", &ops, &adapter), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(
-          turbo_flow_register_stage_ex(flow, "rejected", check_failure_stage, &rejected, NULL),
-          SALTS_OK);
+      flow_test_operation_t operation_127 =
+          flow_test_operation_init("test.rejected", check_failure_stage, &rejected);
+      operation_127.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_127.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_127), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
@@ -6115,51 +6510,61 @@ suite("Turbo Flow") {
 
     it("rejects ambiguous or invalid reject route declarations") {
       static const char *duplicate_name = "source input\n"
-                                          "stage first\n"
-                                          "stage second\n"
-                                          "stage rejected\n"
+                                          "stage first operation test.first\n"
+                                          "stage second operation test.second\n"
+                                          "stage rejected operation test.rejected\n"
                                           "stage main {\n"
                                           "  input -> first -> second\n"
                                           "  reject failed first -> rejected\n"
                                           "  reject failed second -> rejected\n"
                                           "}\n";
       static const char *multiple = "source input\n"
-                                    "stage work\n"
-                                    "stage first_reject\n"
-                                    "stage second_reject\n"
+                                    "stage work operation test.work\n"
+                                    "stage first_reject operation test.first_reject\n"
+                                    "stage second_reject operation test.second_reject\n"
                                     "stage main {\n"
                                     "  input -> work\n"
                                     "  reject first work -> first_reject\n"
                                     "  reject second work -> second_reject\n"
                                     "}\n";
       static const char *source_reject = "source input\n"
-                                         "stage rejected\n"
+                                         "stage rejected operation test.rejected\n"
                                          "stage main {\n"
                                          "  reject source_failed input -> rejected\n"
                                          "}\n";
       turbo_flow_t *flow = turbo_flow_create();
-      const char *names[] = {"first", "second", "rejected"};
+      const char *names[] = {"test.first", "test.second", "test.rejected"};
 
       check_not_null(flow);
-      register_stage_names(flow, names, 3);
+      for (size_t operation_index = 0; operation_index < sizeof(names) / sizeof(names[0]);
+           ++operation_index) {
+        flow_test_operation_t operation =
+            flow_test_operation_init(names[operation_index], noop_stage, NULL);
+        if (operation_index < 2u) operation.descriptor.runtime.error_mode = TURBO_FLOW_ERROR_REJECT;
+        check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+      }
       check_equal(turbo_flow_parse_string(flow, duplicate_name, strlen(duplicate_name)), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "duplicate reject route name");
 
       check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, multiple, strlen(multiple)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "work", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "first_reject", noop_stage, NULL, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "second_reject", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_128 = flow_test_operation_init("test.work", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_128), SALTS_OK);
+      flow_test_operation_t operation_129 =
+          flow_test_operation_init("test.first_reject", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_129), SALTS_OK);
+      flow_test_operation_t operation_130 =
+          flow_test_operation_init("test.second_reject", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_130), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EALREADY);
       check_contains(turbo_flow_last_error(flow)->message, "more than one reject route");
 
       check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, source_reject, strlen(source_reject)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "rejected", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_131 =
+          flow_test_operation_init("test.rejected", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_131), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_EINVAL);
       check_contains(turbo_flow_last_error(flow)->message, "executable stage");
 
@@ -6169,7 +6574,7 @@ suite("Turbo Flow") {
     it("retries through the adapter ABI and commits only the successful attempt") {
       static const char *src = "source input\n"
                                "stage remote adapter retryable retry attempts 3 delay 1\n"
-                               "stage sink\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> remote -> sink\n"
                                "}\n";
@@ -6192,8 +6597,11 @@ suite("Turbo Flow") {
       msg.payload = tstr_to_v(msg.owned_payload);
       check_equal(turbo_flow_register_adapter(flow, "retryable", &ops, &retry), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_132 =
+          flow_test_operation_init("test.sink", check_payload_stage, &sink);
+      operation_132.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_132.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_132), SALTS_OK);
       stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "remote"));
       check_not_null(stage);
       check_equal(stage->retry.max_attempts, 3u);
@@ -6317,23 +6725,35 @@ suite("Turbo Flow") {
     }
 
     it("accepts bounded reorder boundaries before ordered fan-in") {
-      static const char *src = "source input\n"
-                               "stage enrich worker 2\n"
-                               "stage ordered reorder capacity 32 timeout 100\n"
-                               "stage metrics\n"
-                               "stage sink\n"
-                               "stage main {\n"
-                               "  input -> [enrich, metrics]\n"
-                               "  enrich -> ordered -> sink\n"
-                               "  metrics -> sink\n"
-                               "}\n";
-      const char *names[] = {"enrich", "ordered", "metrics", "sink"};
+      static const char *src =
+          "source input\n"
+          "stage enrich operation test.enrich worker 2\n"
+          "stage ordered operation test.ordered reorder capacity 32 timeout 100\n"
+          "stage metrics operation test.metrics\n"
+          "stage sink operation test.sink\n"
+          "stage main {\n"
+          "  input -> [enrich, metrics]\n"
+          "  enrich -> ordered -> sink\n"
+          "  metrics -> sink\n"
+          "}\n";
+      const char *names[] = {"test.enrich", "test.ordered", "test.metrics", "test.sink"};
       turbo_flow_t *flow = turbo_flow_create();
       const turbo_flow_stage_plan_t *ordered;
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      register_stage_names(flow, names, sizeof(names) / sizeof(names[0]));
+      for (size_t operation_index = 0; operation_index < sizeof(names) / sizeof(names[0]);
+           ++operation_index) {
+        flow_test_operation_t operation =
+            flow_test_operation_init(names[operation_index], noop_stage, NULL);
+        if (operation_index == 0u) {
+          operation.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+          operation.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+          operation.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+          operation.descriptor.runtime.capacity = FLOW_WORKER_POOL_DEFAULT_CAPACITY;
+        }
+        check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+      }
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       ordered = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "ordered"));
       check_not_null(ordered);
@@ -6343,15 +6763,16 @@ suite("Turbo Flow") {
     }
 
     it("uses boundary-local reorder tickets across independent sources") {
-      static const char *src = "source ordered_input\n"
-                               "source other_input\n"
-                               "stage before worker 2 capacity 16\n"
-                               "stage ordered reorder capacity 16 timeout 100\n"
-                               "stage other\n"
-                               "stage main {\n"
-                               "  ordered_input -> before -> ordered\n"
-                               "  other_input -> other\n"
-                               "}\n";
+      static const char *src =
+          "source ordered_input\n"
+          "source other_input\n"
+          "stage before operation test.before worker 2 capacity 16\n"
+          "stage ordered operation test.ordered reorder capacity 16 timeout 100\n"
+          "stage other operation test.other\n"
+          "stage main {\n"
+          "  ordered_input -> before -> ordered\n"
+          "  other_input -> other\n"
+          "}\n";
       worker_probe_ctx_t probe;
       turbo_flow_msg_t msg;
       turbo_flow_t *flow = turbo_flow_create();
@@ -6362,10 +6783,21 @@ suite("Turbo Flow") {
       atomic_init(&probe.ran_off_submitter, 0);
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "before", worker_probe_stage, &probe, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "ordered", noop_stage, NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "other", noop_stage, NULL, NULL), SALTS_OK);
+      flow_test_operation_t operation_133 =
+          flow_test_operation_init("test.before", worker_probe_stage, &probe);
+      operation_133.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_133.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_133.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_133.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+      operation_133.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+      operation_133.descriptor.runtime.capacity = 16u;
+      check_equal(flow_test_operation_register(flow, &operation_133), SALTS_OK);
+      flow_test_operation_t operation_134 =
+          flow_test_operation_init("test.ordered", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_134), SALTS_OK);
+      flow_test_operation_t operation_135 =
+          flow_test_operation_init("test.other", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_135), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_msg_init(&msg);
@@ -6499,9 +6931,9 @@ suite("Turbo Flow") {
   group("structured observers") {
     it("observes source stage route sink and completion without controlling the flow") {
       static const char *src = "source input\n"
-                               "stage validate\n"
-                               "stage accepted\n"
-                               "stage rejected\n"
+                               "stage validate operation test.validate\n"
+                               "stage accepted operation test.accepted\n"
+                               "stage rejected operation test.rejected\n"
                                "stage main {\n"
                                "  input -> validate\n"
                                "  route validate -> accepted when msg.flags == 1\n"
@@ -6522,12 +6954,15 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_register_observer(flow, "probe", &ops, &probe), SALTS_EALREADY);
       check_equal(turbo_flow_observer_count(flow), 1u);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "validate", noop_stage, NULL, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "accepted", noop_stage, NULL, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "rejected", noop_stage, NULL, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_136 =
+          flow_test_operation_init("test.validate", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_136), SALTS_OK);
+      flow_test_operation_t operation_137 =
+          flow_test_operation_init("test.accepted", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_137), SALTS_OK);
+      flow_test_operation_t operation_138 =
+          flow_test_operation_init("test.rejected", noop_stage, NULL);
+      check_equal(flow_test_operation_register(flow, &operation_138), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_unregister_observer(flow, "probe"), SALTS_EBUSY);
@@ -6652,8 +7087,8 @@ suite("Turbo Flow") {
 
     it("exposes cooperative abort controls to DSL stage callbacks") {
       static const char *src = "source input\n"
-                               "stage cancel exec thread workers 1\n"
-                               "stage sink\n"
+                               "stage cancel operation test.cancel exec thread workers 1\n"
+                               "stage sink operation test.sink\n"
                                "stage main {\n"
                                "  input -> cancel -> sink\n"
                                "}\n";
@@ -6670,11 +7105,18 @@ suite("Turbo Flow") {
       msg.buffer = buffer;
       msg.payload = vstr_from_buf(raw, sizeof(raw) - 1);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "cancel", execution_self_abort_stage,
-                                                &cancel_called, NULL),
-                   SALTS_OK);
-      check_equal(turbo_flow_register_stage_ex(flow, "sink", check_payload_stage, &sink, NULL),
-                   SALTS_OK);
+      flow_test_operation_t operation_139 =
+          flow_test_operation_init("test.cancel", execution_self_abort_stage, &cancel_called);
+      operation_139.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_139.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      operation_139.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+      operation_139.descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_THREAD;
+      check_equal(flow_test_operation_register(flow, &operation_139), SALTS_OK);
+      flow_test_operation_t operation_140 =
+          flow_test_operation_init("test.sink", check_payload_stage, &sink);
+      operation_140.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+      operation_140.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+      check_equal(flow_test_operation_register(flow, &operation_140), SALTS_OK);
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_ECANCELED);

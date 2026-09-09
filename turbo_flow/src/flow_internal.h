@@ -54,13 +54,6 @@ typedef struct flow_stage_plan_impl_s {
   void *ctx;
 } flow_stage_plan_impl_t;
 
-typedef struct flow_stage_registration_s {
-  tstr name;
-  turbo_flow_stage_fn fn;
-  void *ctx;
-  turbo_flow_stage_options_t options;
-} flow_stage_registration_t;
-
 typedef struct flow_operation_provider_registration_s {
   tstr operation_name;
   tstr resource_name;
@@ -547,7 +540,6 @@ struct turbo_flow_s {
   vec_t reorder_states;
   disruptor_t *broadcast_ring;
   disruptor_topology_t *broadcast_topology;
-  vec_t registrations;
   vec_t operation_providers;
   vec_t primitives;
   vec_t operations;
@@ -611,7 +603,6 @@ int flow_entry_header_validate(const turbo_flow_t *flow, const flow_entry_header
 
 int flow_view_eq_cstr(vstr view, const char *text);
 int flow_find_stage_view(const turbo_flow_t *flow, vstr name);
-int flow_find_registration(const turbo_flow_t *flow, const char *name);
 int flow_find_operation_provider(const turbo_flow_t *flow, const char *operation_name,
                                  const char *resource_name);
 int flow_find_adapter(const turbo_flow_t *flow, const char *name);
@@ -643,7 +634,6 @@ flow_find_adapter_operation_binding(const flow_adapter_registration_t *adapter,
                                     const char *operation_name);
 
 void flow_stage_impl_destroy(flow_stage_plan_impl_t *stage);
-void flow_registration_destroy(flow_stage_registration_t *reg);
 void flow_operation_provider_registration_destroy(flow_operation_provider_registration_t *provider);
 void flow_resource_registration_destroy(flow_resource_registration_t *resource);
 void flow_adapter_registration_destroy(flow_adapter_registration_t *adapter);

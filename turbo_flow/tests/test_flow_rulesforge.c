@@ -1,6 +1,7 @@
 #include "turbo_flow_rulesforge.h"
 #include "turbo_flow_expr.h"
 
+#include "../../tests/flow_operation_fixture.h"
 #include "tinytest.h"
 
 #include <stdio.h>
@@ -174,7 +175,7 @@ spec("rulesforge bridge operation") {
   it("registers rulesforge.apply and executes callback from graph stage") {
     static const char source[] = "source input\n"
                                  "stage rulesforge operation rulesforge.apply resource rules.test\n"
-                                 "stage sink\n"
+                                 "stage sink operation test.sink\n"
                                  "stage main {\n"
                                  "  input -> rulesforge -> sink\n"
                                  "}\n";
@@ -191,9 +192,11 @@ spec("rulesforge bridge operation") {
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), SALTS_OK);
     check_equal(turbo_flow_rulesforge_register_data_operation(flow, &registration), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_sink_0 =
+        flow_test_operation_init("test.sink", rulesforge_sink_counter, &sink);
+    operation_sink_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_0), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -213,7 +216,7 @@ spec("rulesforge bridge operation") {
   it("filters unmatched data through a conditional graph route") {
     static const char source[] = "source input\n"
                                  "stage rulesforge operation rulesforge.apply resource rules.test\n"
-                                 "stage sink\n"
+                                 "stage sink operation test.sink\n"
                                  "stage main {\n"
                                  "  input -> rulesforge\n"
                                  "  route rulesforge -> sink when msg.rule_matched\n"
@@ -232,9 +235,11 @@ spec("rulesforge bridge operation") {
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), SALTS_OK);
     check_equal(turbo_flow_rulesforge_register_data_operation(flow, &registration), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_sink_1 =
+        flow_test_operation_init("test.sink", rulesforge_sink_counter, &sink);
+    operation_sink_1.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_1.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_1), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -261,7 +266,7 @@ spec("rulesforge bridge operation") {
   it("routes RulesForge projection fields through parsed schema expressions") {
     static const char source[] = "source input\n"
                                  "stage rulesforge operation rulesforge.apply resource rules.test\n"
-                                 "stage sink\n"
+                                 "stage sink operation test.sink\n"
                                  "stage main {\n"
                                  "  input -> rulesforge\n"
                                  "  route rulesforge -> sink when parsed.age >= 18\n"
@@ -286,9 +291,11 @@ spec("rulesforge bridge operation") {
     check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), SALTS_OK);
     check_equal(turbo_flow_rulesforge_register_data_operation(flow, &operation), SALTS_OK);
     check_equal(turbo_flow_register_expr_projection(flow, &projection), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_sink_2 =
+        flow_test_operation_init("test.sink", rulesforge_sink_counter, &sink);
+    operation_sink_2.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_2.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_2), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -314,8 +321,8 @@ spec("rulesforge bridge operation") {
   it("keeps projection ownership valid through worker-pool disruptor routing") {
     static const char source[] = "source input\n"
                                  "stage rulesforge operation rulesforge.apply resource rules.test\n"
-                                 "stage dispatch worker 1 capacity 64\n"
-                                 "stage sink\n"
+                                 "stage dispatch operation test.dispatch worker 1 capacity 64\n"
+                                 "stage sink operation test.sink\n"
                                  "stage main {\n"
                                  "  input -> rulesforge -> dispatch\n"
                                  "  route dispatch -> sink when parsed.age >= 18\n"
@@ -349,13 +356,20 @@ spec("rulesforge bridge operation") {
     check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), SALTS_OK);
     check_equal(turbo_flow_rulesforge_register_data_operation(flow, &operation), SALTS_OK);
     check_equal(turbo_flow_register_expr_projection(flow, &projection), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "dispatch", rulesforge_worker_projection_probe, &worker,
-                                     NULL),
-        SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_dispatch_3 =
+        flow_test_operation_init("test.dispatch", rulesforge_worker_projection_probe, &worker);
+    operation_dispatch_3.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_dispatch_3.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    operation_dispatch_3.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+    operation_dispatch_3.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+    operation_dispatch_3.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+    operation_dispatch_3.descriptor.runtime.capacity = 64u;
+    check_equal(flow_test_operation_register(flow, &operation_dispatch_3), SALTS_OK);
+    flow_test_operation_t operation_sink_4 =
+        flow_test_operation_init("test.sink", rulesforge_sink_counter, &sink);
+    operation_sink_4.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_4.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_4), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     dispatch_plan =
         turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "dispatch"));
@@ -400,8 +414,8 @@ spec("rulesforge bridge operation") {
         "message Applicant { int64 age; }";
     static const char source[] = "source input\n"
                                  "stage rulesforge operation rulesforge.apply resource rules.test\n"
-                                 "stage dispatch worker 1 capacity 64\n"
-                                 "stage sink\n"
+                                 "stage dispatch operation test.dispatch worker 1 capacity 64\n"
+                                 "stage sink operation test.sink\n"
                                  "stage main {\n"
                                  "  input -> rulesforge -> dispatch\n"
                                  "  route dispatch -> sink when msg.rule_matched\n"
@@ -448,13 +462,20 @@ spec("rulesforge bridge operation") {
     check_equal(
         turbo_flow_rulesforge_register_databind_provider(flow, "rules.test", &provider),
         SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "dispatch", rulesforge_stage_counter, &dispatch,
-                                     NULL),
-        SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_dispatch_5 =
+        flow_test_operation_init("test.dispatch", rulesforge_stage_counter, &dispatch);
+    operation_dispatch_5.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_dispatch_5.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    operation_dispatch_5.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+    operation_dispatch_5.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+    operation_dispatch_5.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+    operation_dispatch_5.descriptor.runtime.capacity = 64u;
+    check_equal(flow_test_operation_register(flow, &operation_dispatch_5), SALTS_OK);
+    flow_test_operation_t operation_sink_6 =
+        flow_test_operation_init("test.sink", rulesforge_sink_counter, &sink);
+    operation_sink_6.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_6.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_6), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -502,8 +523,8 @@ spec("rulesforge bridge operation") {
         "message Applicant { int64 age; }";
     static const char source[] = "source input\n"
                                  "stage rulesforge operation rulesforge.apply resource rules.json\n"
-                                 "stage dispatch worker 1 capacity 64\n"
-                                 "stage sink\n"
+                                 "stage dispatch operation test.dispatch worker 1 capacity 64\n"
+                                 "stage sink operation test.sink\n"
                                  "stage main {\n"
                                  "  input -> rulesforge -> dispatch\n"
                                  "  route dispatch -> sink when msg.rule_matched\n"
@@ -548,12 +569,20 @@ spec("rulesforge bridge operation") {
     check_equal(turbo_flow_parse_string(flow, source, sizeof(source) - 1u), SALTS_OK);
     check_equal(turbo_flow_rulesforge_register_json_provider(flow, "rules.json", &provider),
                  SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "dispatch", rulesforge_stage_counter, &dispatch, NULL),
-        SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "sink", rulesforge_sink_counter, &sink, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_dispatch_7 =
+        flow_test_operation_init("test.dispatch", rulesforge_stage_counter, &dispatch);
+    operation_dispatch_7.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_dispatch_7.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    operation_dispatch_7.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+    operation_dispatch_7.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+    operation_dispatch_7.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+    operation_dispatch_7.descriptor.runtime.capacity = 64u;
+    check_equal(flow_test_operation_register(flow, &operation_dispatch_7), SALTS_OK);
+    flow_test_operation_t operation_sink_8 =
+        flow_test_operation_init("test.sink", rulesforge_sink_counter, &sink);
+    operation_sink_8.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+    operation_sink_8.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+    check_equal(flow_test_operation_register(flow, &operation_sink_8), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 

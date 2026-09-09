@@ -1,6 +1,7 @@
+#include "../../tests/flow_operation_fixture.h"
+#include "salts_thread.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
-#include "salts_thread.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -275,7 +276,10 @@ static int register_keyed_graph(turbo_flow_t *flow, turbo_flow_keyed_state_store
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_keyed_operation_provider(flow, &provider);
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_register_stage_ex(flow, "sink", keyed_sink, probe, NULL);
+  flow_test_operation_t operation_sink_0 = flow_test_operation_init("test.sink", keyed_sink, probe);
+  operation_sink_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+  operation_sink_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+  rc = flow_test_operation_register(flow, &operation_sink_0);
   if (rc != SALTS_OK) return rc;
   return turbo_flow_parse_string(flow, dsl, strlen(dsl));
 }
@@ -307,7 +311,11 @@ static int register_keyed_window_graph(turbo_flow_t *flow,
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_keyed_emitting_operation_provider(flow, &provider);
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_register_stage_ex(flow, "sink", keyed_window_sink, probe, NULL);
+  flow_test_operation_t operation_sink_1 =
+      flow_test_operation_init("test.sink", keyed_window_sink, probe);
+  operation_sink_1.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+  operation_sink_1.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+  rc = flow_test_operation_register(flow, &operation_sink_1);
   if (rc != SALTS_OK) return rc;
   return turbo_flow_parse_string(flow, dsl, strlen(dsl));
 }
@@ -340,7 +348,11 @@ static int register_event_window_graph(turbo_flow_t *flow,
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_register_event_time_window_provider(flow, &provider);
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_register_stage_ex(flow, "sink", event_window_sink, probe, NULL);
+  flow_test_operation_t operation_sink_2 =
+      flow_test_operation_init("test.sink", event_window_sink, probe);
+  operation_sink_2.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
+  operation_sink_2.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
+  rc = flow_test_operation_register(flow, &operation_sink_2);
   if (rc != SALTS_OK) return rc;
   return turbo_flow_parse_string(flow, dsl, strlen(dsl));
 }
@@ -391,7 +403,7 @@ static int publish_event(turbo_flow_t *flow, uint64_t id, uint64_t timestamp_ns)
 suite("Turbo Flow keyed state") {
   static const char *linear_dsl = "source input operation data.input\n"
                                   "stage count operation data.count\n"
-                                  "stage sink\n"
+                                  "stage sink operation test.sink\n"
                                   "stage main {\n"
                                   "  input -> count -> sink\n"
                                   "}\n";
@@ -521,7 +533,7 @@ suite("Turbo Flow keyed state") {
     static const char *duplicate_dsl = "source input operation data.input\n"
                                        "stage first operation data.count\n"
                                        "stage second operation data.count\n"
-                                       "stage sink\n"
+                                       "stage sink operation test.sink\n"
                                        "stage main {\n"
                                        "  input -> first -> second -> sink\n"
                                        "}\n";
@@ -578,7 +590,7 @@ suite("Turbo Flow keyed state") {
 suite("Turbo Flow keyed emitting state") {
   static const char *window_dsl = "source input operation data.input\n"
                                   "stage window operation data.window\n"
-                                  "stage sink\n"
+                                  "stage sink operation test.sink\n"
                                   "stage main {\n"
                                   "  input -> window -> sink\n"
                                   "}\n";
@@ -675,7 +687,7 @@ suite("Turbo Flow keyed emitting state") {
 suite("Turbo Flow event-time tumbling windows") {
   static const char *event_window_dsl = "source input operation data.input\n"
                                         "stage window operation data.event_window\n"
-                                        "stage sink\n"
+                                        "stage sink operation test.sink\n"
                                         "stage main {\n"
                                         "  input -> window -> sink\n"
                                         "}\n";
@@ -691,7 +703,7 @@ suite("Turbo Flow event-time tumbling windows") {
     keyed_probe_t keyed_probe;
     static const char *keyed_dsl = "source input operation data.input\n"
                                    "stage count operation data.count\n"
-                                   "stage sink\n"
+                                   "stage sink operation test.sink\n"
                                    "stage main {\n"
                                    "  input -> count -> sink\n"
                                    "}\n";

@@ -34,6 +34,14 @@ TurboFlow 2.0 移除了聚合 `TurboFlow::Flow`、`turbo_flow` 动态库及
 
 ## DLL Graph generation
 
+Callback stage 必须在 DSL 中写出 `operation`，并通过
+`turbo_flow_register_operation()` 和 `turbo_flow_register_operation_provider()` 分别注册
+契约和实现。例如 `stage output operation consumer.discard` 绑定的是
+`consumer.discard`，不是节点名称 `output`。同一 operation 可由不同节点复用；缺少
+descriptor/provider 或省略绑定会在 compile 时失败。完整公开 API 用法见可编译的
+[安装消费示例](tests/install_chttp_plugin_consumer/main.c)；它不依赖测试 fixture 或私有 Graph。
+Source、routing port 和 adapter-owned consume 仍可使用内建契约。
+
 Gateway 的外部能力只通过 `TurboFlow::PluginHost` 加载：CNet、CHTTP、TurboDB、FlowMQ、
 RulesForge/TurboScript 与控制/Raft bridge 均注册 size/versioned 的纯 C vtable，不由 Graph 静态选择
 实现。一次 generation 先冻结 catalog snapshot，对所有 Graph 引用执行无副作用 preflight，并预留

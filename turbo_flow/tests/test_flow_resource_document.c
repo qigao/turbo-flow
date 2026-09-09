@@ -1,3 +1,4 @@
+#include "../../tests/flow_operation_fixture.h"
 #include "data_bind.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
@@ -365,7 +366,7 @@ spec("Turbo Flow resource document") {
 
   it("binds pool status dynamically through its DataBind schema") {
     static const char *src = "source input\n"
-                             "stage transform worker 2 capacity 16\n"
+                             "stage transform operation test.transform worker 2 capacity 16\n"
                              "stage main {\n"
                              "  input -> transform\n"
                              "}\n";
@@ -383,9 +384,13 @@ spec("Turbo Flow resource document") {
 
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_transform_0 =
+        flow_test_operation_init("test.transform", resource_document_noop_stage, NULL);
+    operation_transform_0.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+    operation_transform_0.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+    operation_transform_0.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+    operation_transform_0.descriptor.runtime.capacity = 16u;
+    check_equal(flow_test_operation_register(flow, &operation_transform_0), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     document.size = sizeof(document) - 1u;
@@ -460,7 +465,7 @@ spec("Turbo Flow resource document") {
 
   it("enumerates provider, runtime, segment, and pool resources by stable identity") {
     static const char *src = "source input\n"
-                             "stage transform worker 1 capacity 8\n"
+                             "stage transform operation test.transform worker 1 capacity 8\n"
                              "stage main {\n"
                              "  input -> transform\n"
                              "}\n";
@@ -483,9 +488,13 @@ spec("Turbo Flow resource document") {
     check_equal(resource_fixture_register(flow, &fixture, 0, 0), SALTS_OK);
     check_equal(turbo_flow_resource_metadata_count(flow), 1u);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_transform_1 =
+        flow_test_operation_init("test.transform", resource_document_noop_stage, NULL);
+    operation_transform_1.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+    operation_transform_1.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+    operation_transform_1.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+    operation_transform_1.descriptor.runtime.capacity = 8u;
+    check_equal(flow_test_operation_register(flow, &operation_transform_1), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_resource_metadata_count(flow), 5u);
@@ -612,7 +621,7 @@ spec("Turbo Flow resource document") {
 
   it("dispatches pool resize through the same stable resource command") {
     static const char *src = "source input\n"
-                             "stage transform worker 1 capacity 8\n"
+                             "stage transform operation test.transform worker 1 capacity 8\n"
                              "stage main {\n"
                              "  input -> transform\n"
                              "}\n";
@@ -624,9 +633,13 @@ spec("Turbo Flow resource document") {
 
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_transform_2 =
+        flow_test_operation_init("test.transform", resource_document_noop_stage, NULL);
+    operation_transform_2.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+    operation_transform_2.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+    operation_transform_2.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+    operation_transform_2.descriptor.runtime.capacity = 8u;
+    check_equal(flow_test_operation_register(flow, &operation_transform_2), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(resource_metadata_find(flow, TURBO_FLOW_RESOURCE_POOL, "transform", &metadata),
@@ -648,7 +661,7 @@ spec("Turbo Flow resource document") {
 
   it("observes and controls native runtime resources without mutating queries") {
     static const char *src = "source input\n"
-                             "stage transform\n"
+                             "stage transform operation test.transform\n"
                              "stage main {\n"
                              "  input -> transform\n"
                              "}\n";
@@ -666,9 +679,9 @@ spec("Turbo Flow resource document") {
     check_not_null(flow);
     check_equal(turbo_flow_resource_metadata_count(flow), 0u);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_transform_3 =
+        flow_test_operation_init("test.transform", resource_document_noop_stage, NULL);
+    check_equal(flow_test_operation_register(flow, &operation_transform_3), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     for (size_t i = 0; i < turbo_flow_resource_metadata_count(flow); ++i) {
       turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
@@ -790,7 +803,7 @@ spec("Turbo Flow resource document") {
 
   it("advances the explicit multi-owner resize workflow one operation per tick") {
     static const char *src = "source input\n"
-                             "stage transform worker 2 capacity 8\n"
+                             "stage transform operation test.transform worker 2 capacity 8\n"
                              "stage main {\n"
                              "  input -> transform\n"
                              "}\n";
@@ -813,9 +826,13 @@ spec("Turbo Flow resource document") {
     fixture.metadata.observed_generation = 1u;
     check_not_null(flow);
     check_equal(resource_fixture_register(flow, &fixture, 0, 1), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_transform_4 =
+        flow_test_operation_init("test.transform", resource_document_noop_stage, NULL);
+    operation_transform_4.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+    operation_transform_4.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+    operation_transform_4.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+    operation_transform_4.descriptor.runtime.capacity = 8u;
+    check_equal(flow_test_operation_register(flow, &operation_transform_4), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -865,7 +882,7 @@ spec("Turbo Flow resource document") {
 
   it("stops a failed workflow at its owner boundary and retries explicitly") {
     static const char *src = "source input\n"
-                             "stage transform worker 1 capacity 8\n"
+                             "stage transform operation test.transform worker 1 capacity 8\n"
                              "stage main {\n"
                              "  input -> transform\n"
                              "}\n";
@@ -888,9 +905,13 @@ spec("Turbo Flow resource document") {
     fixture.command_fail_kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
     check_not_null(flow);
     check_equal(resource_fixture_register(flow, &fixture, 0, 1), SALTS_OK);
-    check_equal(
-        turbo_flow_register_stage_ex(flow, "transform", resource_document_noop_stage, NULL, NULL),
-        SALTS_OK);
+    flow_test_operation_t operation_transform_5 =
+        flow_test_operation_init("test.transform", resource_document_noop_stage, NULL);
+    operation_transform_5.descriptor.scope.concurrency = TURBO_FLOW_CONCURRENCY_POOL;
+    operation_transform_5.descriptor.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+    operation_transform_5.descriptor.runtime.backpressure = TURBO_FLOW_BACKPRESSURE_BLOCK;
+    operation_transform_5.descriptor.runtime.capacity = 8u;
+    check_equal(flow_test_operation_register(flow, &operation_transform_5), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);

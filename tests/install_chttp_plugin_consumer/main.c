@@ -13,12 +13,13 @@ static int discard_response(turbo_flow_msg_t *message, void *ctx) {
 
 static int run_kind(turbo_flow_plugin_host_t *host, size_t kind) {
   static const char *const yamls[] = {client_yaml, server_yaml, websocket_yaml};
-  static const char *const graphs[] = {"source input\nstage request adapter client\nstage "
-                                       "output\nstage main {\n input -> request -> output\n}\n",
-                                       "source input adapter server\nstage output adapter "
-                                       "server\nstage main {\n input -> output\n}\n",
-                                       "source input adapter websocket\nstage output adapter "
-                                       "websocket\nstage main {\n input -> output\n}\n"};
+  static const char *const graphs[] = {
+      "source input\nstage request adapter client\nstage "
+      "output operation consumer.discard\nstage main {\n input -> request -> output\n}\n",
+      "source input adapter server\nstage output adapter "
+      "server\nstage main {\n input -> output\n}\n",
+      "source input adapter websocket\nstage output adapter "
+      "websocket\nstage main {\n input -> output\n}\n"};
   turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
   turbo_flow_config_error_t ce = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_plugin_generation_config_t gc = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
@@ -38,7 +39,29 @@ static int run_kind(turbo_flow_plugin_host_t *host, size_t kind) {
   rc = turbo_flow_parse_string(flow, graphs[kind], strlen(graphs[kind]));
   if (rc != SALTS_OK) goto cleanup;
   if (kind == 0u) {
-    rc = turbo_flow_register_stage_ex(flow, "output", discard_response, NULL, NULL);
+    turbo_flow_operation_descriptor_t operation = {0};
+    turbo_flow_operation_provider_registration_t provider =
+        TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+    operation.size = sizeof(operation);
+    operation.name = "consumer.discard";
+    operation.version = 1u;
+    operation.domain = TURBO_FLOW_DOMAIN_DATA;
+    operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
+    operation.input_type = "Message";
+    operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
+    operation.output_type = "Message";
+    operation.flags = TURBO_FLOW_OPERATION_STAGE;
+    operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+    operation.scope.state = TURBO_FLOW_STATE_SCOPE_NONE;
+    operation.scope.lifetime = TURBO_FLOW_LIFETIME_DISPATCH;
+    operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_INLINE_LANE;
+    operation.scope.authority = TURBO_FLOW_AUTHORITY_PURE;
+    operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+    provider.operation_name = operation.name;
+    provider.fn = discard_response;
+    rc = turbo_flow_register_operation(flow, &operation);
+    if (rc != SALTS_OK) goto cleanup;
+    rc = turbo_flow_register_operation_provider(flow, &provider);
     if (rc != SALTS_OK) goto cleanup;
   }
   rc = turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &ce);

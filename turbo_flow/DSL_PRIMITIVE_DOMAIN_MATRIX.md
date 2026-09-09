@@ -61,7 +61,7 @@ Control DSL -> parser -> typed facts evaluation -> resource command / reconcile 
 | DSL 能力 | 语义 | 编译/运行影响 | 语法状态 |
 |---|---|---|---|
 | `source name` | graph ingress，必须无 input、有 output | source operation 或 `core.source` | 已实现 |
-| `stage/step name` | graph processor/egress node | 显式 operation 或 `core.stage.*` | 已实现 |
+| `stage/step name` | graph processor/egress node | 显式 operation；adapter-owned consume 可用 `core.stage.owner` | 已实现 |
 | `adapter name` | 绑定已注册 adapter owner | adapter schema、consume、生命周期、settlement | 已实现 |
 | `operation name` | 绑定注册 operation contract | 类型、scope、executor、runtime contract 校验 | 已实现，但生产 catalog 覆盖不全 |
 | `resource name` | 绑定 primitive resource name | domain/type/kind/version range 必须匹配 operation | 已实现，不能自动创建资源 |
@@ -175,15 +175,15 @@ catalog。
 
 当前 module catalog 已能为 typed operation provider 记录唯一 module owner，也能通过
 `turbo_flow_register_module_adapter()` 原子注册 `(module, operation, adapter)` 关联。Cataloged
-operation 若实际解析到 legacy stage callback、未绑定 adapter 或错误 module owner，compiler 会
+operation 若实际解析到未绑定 module 的 provider、未绑定 adapter 或错误 module owner，compiler 会
 fail fast；resource-owned operation 进一步要求 typed native adapter 固定绑定实际 primitive。
 Socket、HTTP/RPC、Queue 和 Storage 已使用该路径；其他 domain adapter 仍需增量接入。
 
 影响：未 catalog 的旧 DSL 仍只能得到 `core.*` contract、adapter schema 与模块自有测试的保证；
 它不会被错误地计入 module-level executable proof，但能力发现与跨模块组合仍不完整。
 
-后续按模块增量注册静态 operation catalog；旧 stage callback/adapter consume 继续作为未显式
-operation 的 compatibility path，不能把它们计入 explicit operation proof。
+后续按模块增量注册静态 operation catalog。Callback stage 已要求显式 descriptor/provider；
+未 catalog 的 adapter consume 仍使用内建 owner 契约，不能计入 module-level operation proof。
 
 ### 已解决：resource compatibility 包含显式版本范围
 
@@ -300,13 +300,12 @@ settlement。
 2. **契约阶段**：补 descriptor、required resource version/range 和 compatibility tests；注册失败
    必须 fail fast，不能静默降级。
 3. **执行绑定阶段**（公共机制已完成，模块增量接入）：显式 operation 必须绑定 typed operation provider 或 typed adapter；
-   legacy stage callback/adapter consume 只保留在 `core.*` compatibility path，并记录 migration
-   diagnostic。
+   stage-name callback registry 已移除；adapter consume 保留 `core.stage.owner` 内建契约。
 4. **资源绑定阶段**：adapter/provider 注册同时关联 owner resource primitive；校验
    name/type/domain/contract-version/owner-kind/UID 关系，解决 primitive 与 management resource
    registry 漂移。
-5. **显式阶段**：新 Graph DSL 必须显式 `operation`；旧无 operation 的图继续生成 `core.*`，但
-   禁止新 domain 能力只走 implicit path。Management command 继续使用 Control DSL/API，不迁入
+5. **显式阶段**：callback stage 必须显式 `operation`；缺 descriptor/provider 在 compile 时拒绝。
+   source、port、adapter-owned consume 保留内建契约。Management command 继续使用 Control DSL/API，不迁入
    payload graph。
 6. **验证阶段**：每个 operation 至少覆盖正常、错误、边界容量、stop during pending wait、
    retry/settlement、ownership 和适用 transport；再用跨 domain negative matrix 验证 compiler
