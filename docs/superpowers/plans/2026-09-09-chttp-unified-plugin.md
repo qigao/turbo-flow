@@ -76,7 +76,7 @@ Files: `io/chttp/tests/test_chttp_plugin.c`, `io/chttp/tests/CMakeLists.txt`, `t
 - [x] 遍历未知/缺失/错误类型/零容量/溢出/不匹配协议/TLS/ALPN，断言 create 前失败，原 Flow 所有权不转移。
 - [x] 测试第二个 owner 装配失败回滚；外部 run/claim/callback 按契约持 caller lease，验证 teardown fast-fail；native Source 已接受请求与 WebSocket session 无额外 lease 时，经真实 owner vtable 首次 quiesce 返回 exact timeout/busy 并保留 generation/module，显式重试后终结及 owner/root 释放各一次。
 - [x] 验证 DLL sole export/dependency table、安装路径动态加载、Debug/Release profile 隔离。运行 focused repeats、完整 CTest 与 install 两套门禁。
-- [ ] 独立审查后创建 PR 关联 #71；逐项核对 issue 验收再勾选。无实测性能数据不得宣称吞吐提升。
+- [x] 独立审查后创建 PR 关联 #71；逐项核对 issue 验收再勾选。无实测性能数据不得宣称吞吐提升。
 
 Task 3 在 `8c47222` 的本地验证：Debug/ASan 与 Release 各完整构建、CTest 52/52、
 插件 focused 连续 10 次以及各自 install preset 通过。新增独立安装消费者，
@@ -84,14 +84,28 @@ Task 3 在 `8c47222` 的本地验证：Debug/ASan 与 Release 各完整构建、
 native peer 单流取消、ACTIVE run/deferred 请求保活和真实 provider 的
 allocator 故障/注册冲突 fixture。取消来源为 peer，不代表新增 Gateway client cancel API；
 emit claim 的在途证据来自 accepted native 请求与尚未 terminal 的 run，
-没有额外公开 claim 计数。PR/独立审查由主线程继续处理。
+没有额外公开 claim 计数。最终审查与交付结果见下文。
 
 Task 3 fix round 1：新增无 caller lease 的 native Source/session teardown 失败保留与重试，
 fixture 在 adapter quiesce 边界注入首次超时/忙错误，仍经过真实插件 owner vtable；
 caller lease fast-fail 与 owner teardown 分别提供证据。
 安装 gate 精确要求 `salts_chttp-2.dll`，拒绝无版本名与其他 ABI；
 独立 consumer 目录复制到 build 后编译。插件 focused 与安装 consumer 已通过，
-本轮完整双 profile 回归待复审后由主线程统一执行。
+该修复已通过限定复审，并纳入主线程最终双 profile 回归。
+
+## 最终审查与交付
+
+[PR #87](https://github.com/qigao/turbo-flow/pull/87) 关联 #71。全分支审查发现并修复了三类
+adapter 启动失败后无法销毁 generation 的缺口：只有 native 未取得所有权或已确认清理成功时
+使用 STOPPED，last_status 保留启动错误；cleanup/stop 失败仍持有 native storage 时保持 FAILED。
+没有新增公开 API，也没有放宽任意 FAILED。真实占用端口与 client init 故障三条 RED 在修复后通过，
+原 stop-failed 显式重试和 exact-once 测试继续通过；最终限定复审无新增问题。
+
+最终代码 `d890f0b` 经主线程独立验证：Debug/ASan 完整 build、CTest 52/52（56.40 秒）、
+插件连续 10 次（23.26 秒）和 install preset 均通过；Release 完整 build、CTest 52/52
+（47.51 秒）、插件连续 10 次（10.08 秒）和 install preset 均通过。插件测试共 22 项。
+完整 CTest 包括从独立复制目录构建的 installed Gateway、sole export、ABI 2、CRT 及缺失依赖门禁。
+实测范围为 Windows amd64；未声称 Linux/macOS、完整 mTLS 矩阵或性能 benchmark 已验证。
 
 ## 兼容、迁移与回滚
 
