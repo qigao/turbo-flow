@@ -6,6 +6,11 @@ cmake_add_test(test_chttp_plugin
 set_tests_properties(test_chttp_plugin PROPERTIES LABELS "chttp-plugin;plugin;graph")
 add_dependencies(test_chttp_plugin tf_chttp_plugin)
 
+cmake_add_test(test_chttp_plugin_abi
+  SOURCES ../../../tests/plugin_host_abi_test.c
+  LIBS TurboFlow::PluginHost Salts::TinyTest tf_chttp_plugin
+  FOLDER "io/chttp/tests")
+
 foreach(mode RANGE 0 5)
   add_library(tf_chttp_delivery_fixture_${mode} SHARED
     chttp_plugin_delivery_fixture.c ../src/turbo_flow_chttp_plugin_config.c)

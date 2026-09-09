@@ -564,6 +564,7 @@ static int cnet_plugin_load(const turbo_flow_plugin_host_v1_t *host, void **plug
   if (plugin_out) *plugin_out = NULL;
   if (!host || host->size < sizeof(*host) || !host->allocate || !host->deallocate || !plugin_out)
     return SALTS_EINVAL;
+  if (host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) return SALTS_EPROTO;
   root = (cnet_plugin_root_t *)host->allocate(host->ctx, sizeof(*root));
   if (!root) return SALTS_ENOMEM;
   memset(root, 0, sizeof(*root));

@@ -13,11 +13,17 @@
 #ifndef FLOW_SCHEMA_ABI_MINOR
 #define FLOW_SCHEMA_ABI_MINOR TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR
 #endif
+#ifndef FLOW_SCHEMA_ABI_MAJOR
+#define FLOW_SCHEMA_ABI_MAJOR TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR
+#endif
 #ifndef FLOW_SCHEMA_STABLE_ID
 #define FLOW_SCHEMA_STABLE_ID "fixture.schema.int"
 #endif
 #ifndef FLOW_SCHEMA_DESCRIPTOR_MINOR
-#define FLOW_SCHEMA_DESCRIPTOR_MINOR TURBO_FLOW_PLUGIN_SCHEMA_ABI_MINOR
+#define FLOW_SCHEMA_DESCRIPTOR_MINOR TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR
+#endif
+#ifndef FLOW_SCHEMA_DESCRIPTOR_MAJOR
+#define FLOW_SCHEMA_DESCRIPTOR_MAJOR TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR
 #endif
 #ifndef FLOW_SCHEMA_VERSION
 #define FLOW_SCHEMA_VERSION 1u
@@ -60,6 +66,7 @@ static int fixture_register(void *plugin, const turbo_flow_plugin_registration_v
   if (!plugin || !registration || !registration->add_schema) return SALTS_EINVAL;
   schema.schema_version = FLOW_SCHEMA_MODE == FLOW_SCHEMA_BAD_VERSION ? 0u : FLOW_SCHEMA_VERSION;
   schema.abi_minor = FLOW_SCHEMA_DESCRIPTOR_MINOR;
+  schema.abi_major = FLOW_SCHEMA_DESCRIPTOR_MAJOR;
   schema.data = &fixture_int_data;
 #if FLOW_SCHEMA_MODE == 3
   fixture_int_data.storage_type = NULL;
@@ -87,7 +94,7 @@ static void fixture_destroy(void *plugin) {
 }
 
 static const turbo_flow_plugin_api_v1_t fixture_api = {
-    sizeof(turbo_flow_plugin_api_v1_t), TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR, FLOW_SCHEMA_ABI_MINOR,
+    sizeof(turbo_flow_plugin_api_v1_t), FLOW_SCHEMA_ABI_MAJOR, FLOW_SCHEMA_ABI_MINOR,
     FLOW_SCHEMA_FIXTURE_ID, "1.0.0", TURBO_FLOW_PLUGIN_CAP_SCHEMA, fixture_load, fixture_register,
     fixture_quiesce, fixture_shutdown, fixture_destroy};
 

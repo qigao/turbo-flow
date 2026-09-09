@@ -40,10 +40,10 @@ RulesForge/TurboScript 与控制/Raft bridge 均注册 size/versioned 的纯 C v
 有界 owner 存储；全部成功后才消费 parsed Graph，按 resource、adapter 顺序 materialize 并 compile。
 
 materialize 开始后失败会先销毁整张新 Graph，使 adapter shutdown/detach 完成，再通过 DLL owner
-vtable 逆序回收已转移对象；不会调用 legacy Product provider 兜底。ABI minor 3 要求可能产生
+vtable 逆序回收已转移对象；不会调用 legacy Product provider 兜底。插件 ABI 2.0 要求可能产生
 external-poll owner 的 DLL 在 root API 声明 `TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL`，并通过
-`turbo_flow_plugin_product_owner_publish()` 按 host 预置容量发布 descriptor；旧 host 会在
-materialize 前拒绝未知 capability，旧 v1.0 owner 也不会被新 host 读取尾 padding。声明
+`turbo_flow_plugin_product_owner_publish()` 按 host 预置容量发布完整 descriptor；ABI 1.x
+插件在 load/register 前拒绝，旧短 host config、owner 布局及兼容 padding 已移除。声明
 `EXTERNAL_POLL` 的 owner
 由 Gateway 控制线程调用 `turbo_flow_plugin_generation_poll()` 推进：每轮每个 owner 至多一次，只有轮转
 首位获得该轮总等待预算，其余均为零等待；不声明者是 lifecycle-only owner。运行方以 generation lease

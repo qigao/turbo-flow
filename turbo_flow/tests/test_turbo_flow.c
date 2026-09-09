@@ -141,8 +141,6 @@ typedef struct adapter_ctx_s {
   int fail_status;
   int stop_fail_status;
   int stop_failures_remaining;
-  int command_count;
-  turbo_flow_adapter_command_kind_t last_command;
   const char *expected_payload;
 } adapter_ctx_t;
 
@@ -691,14 +689,6 @@ static void check_pool_plan_snapshot(const turbo_flow_t *flow,
               0);
 }
 
-static int test_adapter_command(void *ctx, turbo_flow_t *flow,
-                                const turbo_flow_adapter_command_t *command) {
-  adapter_ctx_t *adapter = (adapter_ctx_t *)ctx;
-  (void)flow;
-  adapter->command_count += 1;
-  adapter->last_command = command->kind;
-  return adapter->fail_status;
-}
 
 static void register_stage_names(turbo_flow_t *flow, const char *const *names, size_t count) {
   for (size_t i = 0; i < count; ++i) {
@@ -2378,43 +2368,6 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
-    it("dispatches adapter control commands only through the runtime owner") {
-      static const char *src = "source input\n"
-                               "stage sink adapter controlled\n"
-                               "stage main {\n"
-                               "  input -> sink\n"
-                               "}\n";
-      adapter_ctx_t adapter_ctx = {0};
-      turbo_flow_adapter_ops_t ops;
-      turbo_flow_adapter_command_t command;
-      turbo_flow_t *flow = turbo_flow_create();
-
-      memset(&ops, 0, sizeof(ops));
-      ops.consume = test_adapter_consume;
-      ops.command = test_adapter_command;
-      memset(&command, 0, sizeof(command));
-      command.size = sizeof(command);
-      command.kind = TURBO_FLOW_ADAPTER_QUIESCE;
-      check_not_null(flow);
-      check_equal(turbo_flow_register_adapter(flow, "controlled", &ops, &adapter_ctx), SALTS_OK);
-      check_equal(turbo_flow_register_adapter(flow, "unmanaged", NULL, NULL), SALTS_OK);
-      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-      check_equal(turbo_flow_compile(flow), SALTS_OK);
-      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), SALTS_EINVAL);
-      check_equal(turbo_flow_start(flow), SALTS_OK);
-      check_equal(turbo_flow_adapter_command(flow, "missing", &command), SALTS_ENOENT);
-      check_equal(turbo_flow_adapter_command(flow, "unmanaged", &command), SALTS_ENOTSUP);
-      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), SALTS_OK);
-      check_equal(adapter_ctx.command_count, 1);
-      check_equal(adapter_ctx.last_command, TURBO_FLOW_ADAPTER_QUIESCE);
-      adapter_ctx.fail_status = SALTS_EIO;
-      command.kind = TURBO_FLOW_ADAPTER_RESUME;
-      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), SALTS_EIO);
-      check_equal(adapter_ctx.command_count, 2);
-      check_equal(turbo_flow_stop(flow), SALTS_OK);
-      check_equal(turbo_flow_adapter_command(flow, "controlled", &command), SALTS_EINVAL);
-      turbo_flow_destroy(flow);
-    }
 
     it("allows source adapters without consume callbacks") {
       static const char *src = "source socket_in adapter \"socket.tcp\"\n"

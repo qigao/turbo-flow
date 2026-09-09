@@ -512,6 +512,23 @@ typedef struct flow_registration_fault_s {
   void *ctx;
 } flow_registration_fault_t;
 
+typedef struct flow_resource_command_scope_s {
+  turbo_flow_t *flow;
+  size_t remaining;
+} flow_resource_command_scope_t;
+
+int flow_resource_command_scope_begin(turbo_flow_t *flow, size_t budget,
+                                      flow_resource_command_scope_t *scope);
+int flow_resource_command_scope_execute(flow_resource_command_scope_t *scope,
+                                        const turbo_flow_resource_command_t *command,
+                                        turbo_flow_resource_command_result_t *out);
+void flow_resource_command_scope_end(flow_resource_command_scope_t *scope);
+int flow_find_adapter_command_resource(turbo_flow_t *flow, const char *adapter_name,
+                                       turbo_flow_resource_metadata_t *metadata);
+int flow_resource_command_init(turbo_flow_resource_command_t *command,
+                               turbo_flow_resource_command_kind_t kind,
+                               const char *uid, uint64_t generation);
+
 struct turbo_flow_s {
   turbo_flow_state_t state;
   int has_async_stage;
@@ -543,6 +560,8 @@ struct turbo_flow_s {
   flow_pool_rebuild_fault_t pool_rebuild_fault;
   flow_registration_fault_t registration_fault;
   vec_t resource_command_history;
+  flow_resource_command_scope_t *active_command_scope;
+  int command_in_progress;
   vec_t event_observers;
   vec_t active_runs;
   cflow_scheduler reactive_scheduler;

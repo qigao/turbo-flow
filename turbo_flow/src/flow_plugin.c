@@ -394,11 +394,6 @@ static int flow_plugin_api_validate(const turbo_flow_plugin_api_v1_t *api,
     return flow_plugin_error_write(error, SALTS_EPROTO, TURBO_FLOW_PLUGIN_STAGE_API, NULL, path,
                                    "external progress requires a transactional Product provider");
   }
-  if ((api->capabilities & TURBO_FLOW_PLUGIN_CAP_SCHEMA) != 0u &&
-      api->abi_minor < TURBO_FLOW_PLUGIN_SCHEMA_ABI_MINOR) {
-    return flow_plugin_error_write(error, SALTS_EPROTO, TURBO_FLOW_PLUGIN_STAGE_API, NULL, path,
-                                   "schema capability requires plugin ABI 1.4 or newer");
-  }
   if (!flow_plugin_identity_valid(api->plugin_id) ||
       !flow_plugin_version_valid(api->plugin_version)) {
     return flow_plugin_error_write(error, SALTS_EPROTO, TURBO_FLOW_PLUGIN_STAGE_IDENTITY, NULL,
@@ -622,7 +617,6 @@ static int flow_plugin_add_schema(void *ctx, const turbo_flow_plugin_schema_v1_t
   if (registration->first_error != SALTS_OK) return registration->first_error;
   if (!schema || schema->size < sizeof(*schema) ||
       schema->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      schema->abi_minor < TURBO_FLOW_PLUGIN_SCHEMA_ABI_MINOR ||
       schema->abi_minor > TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || schema->schema_version == 0u ||
       !schema->data || !cmeta_data_desc_valid(schema->data) ||
       !cmeta_type_desc_valid(schema->data->storage_type) ||
@@ -771,20 +765,15 @@ int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_config_t *config,
                                   turbo_flow_plugin_error_t *error) {
   turbo_flow_plugin_host_config_t normalized = {0};
   turbo_flow_plugin_host_t *host;
-  size_t copy_size;
   int rc;
   if (host_out) *host_out = NULL;
   if (!host_out || !flow_plugin_error_valid(error) || !config ||
-      config->size < TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_0_SIZE ||
+      config->size < sizeof(*config) ||
       config->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) {
     return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL,
                                    NULL, "invalid bounded PluginHost configuration");
   }
-  copy_size = config->size >= sizeof(normalized) ? sizeof(normalized) :
-              (config->size < TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_3_SIZE
-                   ? config->size
-                   : TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_3_SIZE);
-  memcpy(&normalized, config, copy_size);
+  normalized = *config;
   if (normalized.module_capacity == 0u ||
       normalized.module_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_MODULES ||
       normalized.adapter_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
@@ -1192,7 +1181,6 @@ int turbo_flow_plugin_catalog_snapshot_schema_catalog(
   if (!snapshot || snapshot->references == 0u || !catalog_out ||
       catalog_out->size < sizeof(*catalog_out) ||
       catalog_out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      catalog_out->abi_minor < TURBO_FLOW_PLUGIN_SCHEMA_ABI_MINOR ||
       catalog_out->abi_minor > TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
     return SALTS_EINVAL;
   catalog_out->abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;

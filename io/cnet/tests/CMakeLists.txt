@@ -90,6 +90,11 @@ if(WIN32)
 endif()
 set_tests_properties(test_cnet_plugin PROPERTIES LABELS "cnet-plugin;plugin;graph")
 
+cmake_add_test(test_cnet_plugin_abi
+  SOURCES ../../../tests/plugin_host_abi_test.c
+  LIBS TurboFlow::PluginHost Salts::TinyTest tf_cnet_plugin
+  FOLDER "io/cnet/tests")
+
 cmake_add_test(
   test_cnet_adapter_benchmark_stats
   SOURCES test_cnet_adapter_benchmark_stats.c

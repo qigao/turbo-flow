@@ -12,7 +12,9 @@
 extern "C" {
 #endif
 
-#define TURBO_FLOW_PLUGIN_SCHEMA_ABI_MINOR 4u
+/* Shared plugin ABI includes every descriptor passed across the DLL boundary. */
+#define TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR 2u
+#define TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR 0u
 
 typedef struct turbo_flow_plugin_catalog_snapshot_s turbo_flow_plugin_catalog_snapshot_t;
 
@@ -56,7 +58,8 @@ typedef struct turbo_flow_plugin_schema_v1_s {
 } turbo_flow_plugin_schema_v1_t;
 
 #define TURBO_FLOW_PLUGIN_SCHEMA_V1_INIT                                                   \
-  {sizeof(turbo_flow_plugin_schema_v1_t), 1u, TURBO_FLOW_PLUGIN_SCHEMA_ABI_MINOR, 0u, NULL}
+  {sizeof(turbo_flow_plugin_schema_v1_t), TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR, \
+   TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR, 0u, NULL}
 
 typedef struct turbo_flow_plugin_schema_catalog_v1_s {
   size_t size;
@@ -67,7 +70,8 @@ typedef struct turbo_flow_plugin_schema_catalog_v1_s {
 } turbo_flow_plugin_schema_catalog_v1_t;
 
 #define TURBO_FLOW_PLUGIN_SCHEMA_CATALOG_V1_INIT                                      \
-  {sizeof(turbo_flow_plugin_schema_catalog_v1_t), 1u, TURBO_FLOW_PLUGIN_SCHEMA_ABI_MINOR, NULL, 0u}
+  {sizeof(turbo_flow_plugin_schema_catalog_v1_t), TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR, \
+   TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR, NULL, 0u}
 
 typedef int (*turbo_flow_plugin_add_schema_fn)(void *ctx,
                                                const turbo_flow_plugin_schema_v1_t *schema);

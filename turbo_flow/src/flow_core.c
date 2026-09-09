@@ -434,7 +434,7 @@ turbo_flow_t *turbo_flow_create(void) {
           SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&flow->resource_command_history, sizeof(flow_resource_command_record_t),
-                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+                         _Alignof(turbo_flow_max_align_t), TURBO_FLOW_RESOURCE_COMMAND_HISTORY_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&flow->event_observers, sizeof(flow_event_observer_registration_t),
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
@@ -1934,17 +1934,6 @@ int turbo_flow_managed_boundary_snapshot_at(const turbo_flow_t *flow, size_t ind
   return SALTS_OK;
 }
 
-int flow_resource_metadata_valid(const turbo_flow_resource_metadata_t *metadata) {
-  return metadata && metadata->size >= sizeof(*metadata) &&
-         metadata->domain > TURBO_FLOW_DOMAIN_NONE &&
-         metadata->domain <= TURBO_FLOW_DOMAIN_MANAGEMENT &&
-         metadata->kind >= TURBO_FLOW_RESOURCE_CONNECTION &&
-         metadata->kind <= TURBO_FLOW_RESOURCE_SECURITY_REALM && metadata->uid[0] != '\0' &&
-         memchr(metadata->uid, '\0', sizeof(metadata->uid)) != NULL &&
-         metadata->owner_name[0] != '\0' &&
-         memchr(metadata->owner_name, '\0', sizeof(metadata->owner_name)) != NULL &&
-         metadata->generation != 0u && metadata->observed_generation <= metadata->generation;
-}
 
 size_t turbo_flow_resource_metadata_count(const turbo_flow_t *flow) {
   if (!flow) return 0u;
@@ -1994,38 +1983,6 @@ int turbo_flow_resource_metadata_at(const turbo_flow_t *flow, size_t index,
     memcpy(out, &metadata, sizeof(metadata));
     return SALTS_OK;
   }
-}
-
-int turbo_flow_adapter_command(turbo_flow_t *flow, const char *adapter_name,
-                               const turbo_flow_adapter_command_t *command) {
-  flow_adapter_registration_t *adapter;
-  int index;
-  int rc;
-
-  if (!flow || !adapter_name || adapter_name[0] == '\0' || !command ||
-      command->size < sizeof(*command) || command->kind < TURBO_FLOW_ADAPTER_QUIESCE ||
-      command->kind > TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT) {
-    return SALTS_EINVAL;
-  }
-  salts_mutex_lock(&flow->runtime_mutex);
-  if (flow->state != TURBO_FLOW_STATE_STARTED || flow->admission_state == FLOW_ADMISSION_STOPPING ||
-      flow->admission_state == FLOW_ADMISSION_RESIZING) {
-    rc = flow->state == TURBO_FLOW_STATE_STARTED ? SALTS_EBUSY : SALTS_EINVAL;
-    salts_mutex_unlock(&flow->runtime_mutex);
-    return rc;
-  }
-  salts_mutex_unlock(&flow->runtime_mutex);
-
-  index = flow_find_adapter(flow, adapter_name);
-  if (index < 0) return SALTS_ENOENT;
-  adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, (size_t)index);
-  if (!adapter || !adapter->ops.command) return SALTS_ENOTSUP;
-  rc = adapter->ops.command(adapter->ctx, flow, command);
-  if (rc != SALTS_OK) {
-    return flow_set_error_keep_state(flow, rc, 0, 0, "adapter command failed");
-  }
-  flow_clear_error(flow);
-  return SALTS_OK;
 }
 
 const turbo_flow_adapter_schema_t *turbo_flow_adapter_schema_at(const turbo_flow_t *flow,

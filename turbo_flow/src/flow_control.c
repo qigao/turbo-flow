@@ -31,8 +31,6 @@ typedef struct flow_control_eval_s {
   const turbo_flow_control_facts_t *external;
 } flow_control_eval_t;
 
-static atomic_uint_fast64_t flow_control_command_sequence = 0u;
-
 static void flow_control_error(turbo_flow_error_t *error, int code, uint32_t line, uint32_t column,
                                const char *message) {
   if (!error || error->code != SALTS_OK) return;
@@ -503,77 +501,10 @@ static int flow_control_condition(turbo_flow_t *flow, const turbo_flow_control_c
   return rc;
 }
 
-static int flow_control_next_command_key(char *key, size_t key_size) {
-  uint_fast64_t current;
-  int written;
-  if (!key || key_size == 0u) return SALTS_EINVAL;
-  current = atomic_load_explicit(&flow_control_command_sequence, memory_order_relaxed);
-  for (;;) {
-    if (current == UINT_FAST64_MAX) return SALTS_ERANGE;
-    if (atomic_compare_exchange_weak_explicit(&flow_control_command_sequence, &current, current + 1u,
-                                              memory_order_relaxed,
-                                              memory_order_relaxed)) {
-      break;
-    }
-  }
-  written = snprintf(key, key_size, "control:%llu", (unsigned long long)(current + 1u));
-  return written < 0 || (size_t)written >= key_size ? SALTS_ENAMETOOLONG : SALTS_OK;
-}
-
-static int flow_control_resource_command_init(turbo_flow_t *flow,
-                                              turbo_flow_resource_command_t *resource_command,
-                                              turbo_flow_resource_command_kind_t kind,
-                                              const char *target_uid, uint64_t generation) {
-  int written;
-  int rc;
-  if (!resource_command || !target_uid || target_uid[0] == '\0' || generation == 0u) {
-    return SALTS_EINVAL;
-  }
-  *resource_command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
-  resource_command->kind = kind;
-  resource_command->expected_generation = generation;
-  written = snprintf(resource_command->target_uid, sizeof(resource_command->target_uid), "%s",
-                     target_uid);
-  if (written < 0 || (size_t)written >= sizeof(resource_command->target_uid)) {
-    return SALTS_ENAMETOOLONG;
-  }
-  (void)flow;
-  rc = flow_control_next_command_key(resource_command->idempotency_key,
-                                     sizeof(resource_command->idempotency_key));
-  return rc;
-}
-
 static int flow_control_execute_resource_command(turbo_flow_t *flow,
                                                  turbo_flow_resource_command_t *resource_command) {
   turbo_flow_resource_command_result_t result = TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
   return turbo_flow_resource_command(flow, resource_command, &result);
-}
-
-static int flow_control_find_adapter_resource(turbo_flow_t *flow, const char *adapter_name,
-                                              turbo_flow_resource_metadata_t *metadata) {
-  int found = 0;
-  if (!flow || !adapter_name || !metadata) return SALTS_EINVAL;
-  for (size_t i = 0u; i < vec_size(&flow->resources); ++i) {
-    const flow_resource_registration_t *resource =
-        (const flow_resource_registration_t *)vec_at_const(&flow->resources, i);
-    turbo_flow_resource_metadata_t current = TURBO_FLOW_RESOURCE_METADATA_INIT;
-    int rc;
-    if (!resource || !resource->ops.command) continue;
-    rc = resource->ops.metadata(resource->ctx, &current);
-    if (rc != SALTS_OK) return rc;
-    if (!flow_resource_metadata_valid(&current) ||
-        strcmp(current.owner_name, resource->owner_name) != 0) {
-      return SALTS_EPROTO;
-    }
-    if (current.kind != TURBO_FLOW_RESOURCE_CONNECTION ||
-        strcmp(current.owner_name, adapter_name) != 0) {
-      continue;
-    }
-    if (found) return SALTS_EPROTO;
-    *metadata = current;
-    found = 1;
-  }
-  return found ? SALTS_OK : SALTS_ENOENT;
 }
 
 static int flow_control_execute_action(turbo_flow_t *flow,
@@ -601,7 +532,7 @@ static int flow_control_execute_action(turbo_flow_t *flow,
       status = (turbo_flow_pool_resource_status_t)TURBO_FLOW_POOL_RESOURCE_STATUS_INIT;
     }
     if (!found) return SALTS_ENOENT;
-    rc = flow_control_resource_command_init(flow, &resource_command,
+    rc = flow_resource_command_init(&resource_command,
                                             TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL, status.uid,
                                             status.generation);
     if (rc != SALTS_OK) return rc;
@@ -613,9 +544,9 @@ static int flow_control_execute_action(turbo_flow_t *flow,
     turbo_flow_resource_command_t resource_command;
     turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
     int rc;
-    rc = flow_control_find_adapter_resource(flow, command->target, &metadata);
+    rc = flow_find_adapter_command_resource(flow, command->target, &metadata);
     if (rc != SALTS_OK) return rc;
-    rc = flow_control_resource_command_init(flow, &resource_command, command->resource_kind,
+    rc = flow_resource_command_init(&resource_command, command->resource_kind,
                                             metadata.uid, metadata.generation);
     if (rc != SALTS_OK) return rc;
     if (command->resource_kind == TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT) {

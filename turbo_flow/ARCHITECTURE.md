@@ -559,10 +559,16 @@ retry policy determines whether that external message is retried.
 
 ## Adapter Control Commands
 
-`turbo_flow_adapter_command()` routes desired-state commands by adapter binding
-name to the adapter owner. An adapter may implement idempotent quiesce/resume
-and structured endpoint replacement. Snapshot data is observed state and is
-never mutated by Observe.
+Adapter commands use `turbo_flow_resource_command()` and a stable command-capable
+connection resource provider. The former `turbo_flow_adapter_command()` API,
+its payload types and the adapter ops command tail field have been removed.
+Consumers must register resource metadata/command callbacks and recompile against
+the new adapter ops layout. Package 2.0.0 is unchanged; plugin ABI is 2.0.
+ABI 1.x plugins are rejected before load or registration: the unchanged root
+vtable also gates adapter layouts passed later across DLL boundaries. Host config
+and Product owner descriptors must be complete; old short layouts and padding
+compatibility are removed. Existing `_v1` type names do not enable ABI 1.x support.
+Snapshot data remains observed state.
 
 Hosts serialize adapter commands with lifecycle/configuration calls. For sink
 endpoint replacement, first pause and drain core publication so no consume call
@@ -581,11 +587,34 @@ from uncertain state. Replaying identical data at the current version is a
 no-op, conflicting current-version data is rejected, and older versions are
 rejected. Registry fetch errors issue no adapter command.
 
-Controller creation requires a started flow and initially quiesces every managed
-slot, so no configured endpoint is mistaken for a discovered peer. Destroying
-the controller only releases reconciliation metadata and does not alter the last
-committed adapter state. Hosts serialize calls on each controller with flow
-lifecycle and other adapter commands.
+Creation, replacement and polling require STARTED; stopped polling never calls
+the registry fetch callback. Creation preflights every slot's unique connection
+provider and copies its stable UID before quiescing owners. Missing providers fail
+with ENOENT and ambiguity with EPROTO. Every later command queries that UID's current
+generation and owner/kind; a replacement UID is not silently rebound.
+
+One flow owns a shared 256-record command history. Creation reserves `2*N` entries;
+replacement reserves `3*A + 2*U + 2*R` for actual additions, updates and removals,
+including compensation. Empty history therefore permits at most 128 creation slots.
+Insufficient history returns ENOSPC and allocation failure returns ENOMEM before
+owner effects. Version replays and unchanged peer sets consume no records. Capacity
+is never increased, history is never evicted and requests are never implicitly split.
+The internal scope reserves a raw CSTL vector; each dispatcher command claims its
+record with raw resize before callbacks, then fills that record without allocating.
+`vec_push` is unsuitable here because its temporary copy allocates even after reserve.
+
+On create failure every applied slot is resumed as far as possible. A failed
+compensation returns its first error, leaves the output controller null and records
+both failure codes in the flow diagnostic. Replacement retains the old committed
+peer/version facts on failure; owner actual state remains observable. Rollback of
+a new slot makes it inactive but does not claim to restore an unmodeled endpoint.
+Failed replacement compensation prevents further operations on that controller.
+
+The controller borrows the flow and must be destroyed before flow reset/destroy.
+Destroy only frees reconciliation metadata. Hosts serialize all discovery, control,
+resource commands and lifecycle operations on a flow. Callbacks must not reenter
+them, mutate registries or invalidate storage; the internal command guard rejects
+reentrant commands with EBUSY and does not provide cross-thread synchronization.
 
 ## Conditional Control Rules
 

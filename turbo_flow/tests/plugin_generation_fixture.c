@@ -180,14 +180,14 @@ static int
 flow_plugin_generation_publish_fixture_owner(turbo_flow_plugin_product_owner_v1_t *owner_out,
                                              const turbo_flow_plugin_product_owner_v1_t *owner) {
 #if FLOW_PLUGIN_GENERATION_LEGACY_OWNER_PREFIX
-  if (!owner_out || !owner || owner_out->size < TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE)
+  if (!owner_out || !owner || owner_out->size < offsetof(turbo_flow_plugin_product_owner_v1_t, poll))
     return SALTS_EINVAL;
-  memcpy(owner_out, owner, TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE);
-  owner_out->size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
+  memcpy(owner_out, owner, offsetof(turbo_flow_plugin_product_owner_v1_t, poll));
+  owner_out->size = offsetof(turbo_flow_plugin_product_owner_v1_t, poll);
   return SALTS_OK;
 #elif FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE != 0
   size_t copy_size;
-  if (!owner_out || !owner || owner_out->size < TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE)
+  if (!owner_out || !owner || owner_out->size < offsetof(turbo_flow_plugin_product_owner_v1_t, poll))
     return SALTS_EINVAL;
   copy_size = owner_out->size < sizeof(*owner) ? owner_out->size : sizeof(*owner);
   memcpy(owner_out, owner, copy_size);
@@ -355,10 +355,10 @@ static int flow_plugin_generation_materialize_adapter(
 #elif FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE == 3
   descriptor.flags |= TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
   descriptor.poll = flow_plugin_generation_owner_poll;
-  descriptor.size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
+  descriptor.size = offsetof(turbo_flow_plugin_product_owner_v1_t, poll);
 #endif
 #if FLOW_PLUGIN_GENERATION_LEGACY_OWNER_PREFIX
-  descriptor.size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
+  descriptor.size = offsetof(turbo_flow_plugin_product_owner_v1_t, poll);
 #endif
   return flow_plugin_generation_publish_fixture_owner(owner_out, &descriptor);
 }
@@ -403,10 +403,10 @@ static int flow_plugin_generation_materialize_resource(
 #elif FLOW_PLUGIN_GENERATION_POLL_DESCRIPTOR_MODE == 3
   descriptor.flags |= TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
   descriptor.poll = flow_plugin_generation_owner_poll;
-  descriptor.size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
+  descriptor.size = offsetof(turbo_flow_plugin_product_owner_v1_t, poll);
 #endif
 #if FLOW_PLUGIN_GENERATION_LEGACY_OWNER_PREFIX
-  descriptor.size = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_0_SIZE;
+  descriptor.size = offsetof(turbo_flow_plugin_product_owner_v1_t, poll);
 #endif
   return flow_plugin_generation_publish_fixture_owner(owner_out, &descriptor);
 }

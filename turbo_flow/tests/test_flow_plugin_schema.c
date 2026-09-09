@@ -10,6 +10,14 @@ static turbo_flow_plugin_host_config_t schema_config(size_t capacity) {
   return config;
 }
 
+static void schema_observe(void *ctx, turbo_flow_plugin_lifecycle_event_t event,
+                           const char *plugin_id, int status) {
+  (void)event;
+  (void)plugin_id;
+  (void)status;
+  ++*(size_t *)ctx;
+}
+
 spec("plugin schema catalog") {
   it("loads one semantic CMeta schema and leases its DLL through the snapshot") {
     turbo_flow_plugin_host_config_t config = schema_config(1u);
@@ -47,25 +55,28 @@ spec("plugin schema catalog") {
     }
   }
 
-  it("rejects schema capability from a pre-1.4 root ABI") {
+  it("rejects ABI 1.4 at the root before load or registration") {
+    size_t lifecycle_calls = 0u;
     turbo_flow_plugin_host_config_t config = schema_config(1u);
     turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_plugin_host_t *host = NULL;
+    config.lifecycle_observer = schema_observe;
+    config.lifecycle_observer_ctx = &lifecycle_calls;
     check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
     check_equal(turbo_flow_plugin_host_load(host, FLOW_SCHEMA_OLD_ABI, &error), SALTS_EPROTO);
     check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_API);
+    check_equal(lifecycle_calls, (size_t)0);
+    check_equal(turbo_flow_plugin_host_module_count(host), (size_t)0);
     check_equal(turbo_flow_plugin_host_destroy(host, 0u, &error), SALTS_OK);
   }
 
-  it("treats a complete 1.3 host configuration as zero schema capacity") {
+  it("rejects short host configuration instead of zero extending it") {
     turbo_flow_plugin_host_config_t config = schema_config(99u);
     turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_plugin_host_t *host = NULL;
-    config.size = TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_3_SIZE;
-    config.abi_minor = 3u;
-    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
-    check_equal(turbo_flow_plugin_host_load(host, FLOW_SCHEMA_GOOD, &error), SALTS_ENOSPC);
-    check_equal(turbo_flow_plugin_host_destroy(host, 0u, &error), SALTS_OK);
+    config.size = offsetof(turbo_flow_plugin_host_config_t, schema_capacity);
+    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_EINVAL);
+    check_null(host);
   }
 
   it("rejects future schema wrappers and malformed catalog outputs") {
@@ -114,7 +125,7 @@ spec("plugin schema catalog") {
     }
   }
 
-  it("rejects a pre-1.4 schema wrapper from a 1.4 plugin") {
+  it("rejects an ABI 1.4 schema wrapper from an ABI 2 plugin") {
     turbo_flow_plugin_host_config_t config = schema_config(1u);
     turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_plugin_host_t *host = NULL;
