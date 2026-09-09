@@ -175,7 +175,8 @@ typedef struct turbo_flow_operation_runtime_contract_s {
  * Type names are domain-local stable identifiers. A NULL input/output type
  * means the operation has no graph input/output on that side. Resource fields
  * are both NULL for a stateless operation, or both non-NULL/non-NONE when a
- * resource primitive binding is required. `size` must cover this structure.
+ * resource primitive binding is required. `size` must equal
+ * `sizeof(turbo_flow_operation_descriptor_t)`.
  */
 typedef struct turbo_flow_operation_descriptor_s {
   size_t size;
@@ -192,15 +193,11 @@ typedef struct turbo_flow_operation_descriptor_s {
   uint32_t flags;
   uint32_t execution_mask;
   turbo_flow_operation_runtime_contract_t runtime;
-  /** Inclusive primitive version lower bound; zero preserves the V1 any-version contract. */
+  /** Inclusive primitive version lower bound; zero means any current primitive version. */
   uint32_t resource_min_version;
   /** Inclusive upper bound; zero means unbounded when resource_min_version is nonzero. */
   uint32_t resource_max_version;
 } turbo_flow_operation_descriptor_t;
-
-/** Binary size accepted from callers compiled against the V1 descriptor. */
-#define TURBO_FLOW_OPERATION_DESCRIPTOR_V1_SIZE                                                   \
-  offsetof(turbo_flow_operation_descriptor_t, resource_min_version)
 
 /** Stable module boundary advertised to the graph compiler and management code. */
 typedef enum turbo_flow_module_capability_flags_e {

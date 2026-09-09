@@ -559,21 +559,16 @@ spec("ABI3 generation operation runtime") {
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
       int open_rc =
           runtime_open_contract(&t, FLOW_OPERATION_OK, operation_yaml, operation_dsl, fault);
-      check_equal(open_rc, fault == 9 || fault == 14 ? SALTS_EINVAL : SALTS_OK);
+      check_equal(open_rc, fault == 9 || fault == 13 || fault == 14 ? SALTS_EINVAL : SALTS_OK);
       if (fault == 10) --t.config.size;
       if (fault == 11) ++t.config.size;
       if (fault == 12) t.config.abi_major = 2;
       turbo_flow_t *original = t.flow;
       int rc = open_rc == SALTS_OK ? runtime_create(&t) : open_rc;
       info("Graph/config fault %d: %d %s", fault, rc, t.error.path);
-      check_equal(rc, fault == 13  ? SALTS_OK
-                      : fault <= 2 ? SALTS_EPROTO
+      check_equal(rc, fault <= 2 ? SALTS_EPROTO
                       : fault <= 8 ? SALTS_ENOTSUP
                                    : SALTS_EINVAL);
-      if (fault == 13) {
-        check_equal(runtime_close(&t), SALTS_OK);
-        continue;
-      }
       check(t.flow == original);
       check_null(t.generation);
       check_null(t.cleanup);

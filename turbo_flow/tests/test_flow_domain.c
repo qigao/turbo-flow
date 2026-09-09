@@ -606,10 +606,75 @@ suite("Turbo Flow Domain Contracts") {
       turbo_flow_destroy(flow);
     }
 
-    it("normalizes V1 resource contracts and validates version ranges") {
+    it("rejects non-exact operation descriptor layouts without registry side effects") {
       turbo_flow_t *flow = turbo_flow_create();
-      turbo_flow_operation_descriptor_t legacy = operation_descriptor(
-          "queue.legacy", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, TURBO_FLOW_DOMAIN_DATA,
+      turbo_flow_operation_descriptor_t operation = operation_descriptor(
+          "queue.exact", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, TURBO_FLOW_DOMAIN_DATA,
+          "Message", TURBO_FLOW_DOMAIN_DATA, "Message",
+          TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
+      static const size_t invalid_sizes[] = {
+          0u,
+          sizeof(size_t),
+          offsetof(turbo_flow_operation_descriptor_t, resource_min_version),
+          sizeof(turbo_flow_operation_descriptor_t) - 1u,
+          sizeof(turbo_flow_operation_descriptor_t) + 1u,
+          SIZE_MAX};
+      unsigned char original[sizeof(operation)];
+      size_t *physical_short;
+      unsigned char *legacy_prefix;
+
+      require_resource(&operation, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, "Queue");
+      operation.resource_min_version = 9u;
+      operation.resource_max_version = 9u;
+      check_not_null(flow);
+      physical_short = (size_t *)malloc(sizeof(*physical_short));
+      check_not_null(physical_short);
+      *physical_short = sizeof(*physical_short);
+      check_equal(turbo_flow_register_operation(
+                      flow, (const turbo_flow_operation_descriptor_t *)physical_short),
+                  SALTS_EINVAL);
+      check_equal(*physical_short, sizeof(*physical_short));
+      check_equal(turbo_flow_operation_count(flow), 0u);
+      check_null(turbo_flow_find_operation(flow, operation.name));
+      free(physical_short);
+
+      legacy_prefix = (unsigned char *)malloc(
+          offsetof(turbo_flow_operation_descriptor_t, resource_min_version));
+      check_not_null(legacy_prefix);
+      memcpy(legacy_prefix, &operation,
+             offsetof(turbo_flow_operation_descriptor_t, resource_min_version));
+      *(size_t *)legacy_prefix =
+          offsetof(turbo_flow_operation_descriptor_t, resource_min_version);
+      memcpy(original, legacy_prefix,
+             offsetof(turbo_flow_operation_descriptor_t, resource_min_version));
+      check_equal(turbo_flow_register_operation(
+                      flow, (const turbo_flow_operation_descriptor_t *)legacy_prefix),
+                  SALTS_EINVAL);
+      check_equal(legacy_prefix, original,
+                  offsetof(turbo_flow_operation_descriptor_t, resource_min_version));
+      check_equal(turbo_flow_operation_count(flow), 0u);
+      check_null(turbo_flow_find_operation(flow, operation.name));
+      free(legacy_prefix);
+
+      for (size_t i = 0u; i < sizeof(invalid_sizes) / sizeof(invalid_sizes[0]); ++i) {
+        operation.size = invalid_sizes[i];
+        memcpy(original, &operation, sizeof(operation));
+        check_equal(turbo_flow_register_operation(flow, &operation), SALTS_EINVAL);
+        check_equal(&operation, original, sizeof(operation));
+        check_equal(turbo_flow_operation_count(flow), 0u);
+        check_null(turbo_flow_find_operation(flow, operation.name));
+      }
+      operation.size = sizeof(operation);
+      check_equal(turbo_flow_register_operation(flow, &operation), SALTS_OK);
+      check_equal(turbo_flow_operation_count(flow), 1u);
+      check_not_null(turbo_flow_find_operation(flow, operation.name));
+      turbo_flow_destroy(flow);
+    }
+
+    it("preserves exact resource versions and rejects inverted ranges") {
+      turbo_flow_t *flow = turbo_flow_create();
+      turbo_flow_operation_descriptor_t bounded = operation_descriptor(
+          "queue.bounded", TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, TURBO_FLOW_DOMAIN_DATA,
           "Message", TURBO_FLOW_DOMAIN_DATA, "Message",
           TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
       turbo_flow_operation_descriptor_t invalid = operation_descriptor(
@@ -618,18 +683,18 @@ suite("Turbo Flow Domain Contracts") {
           TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
       const turbo_flow_operation_descriptor_t *stored;
 
-      require_resource(&legacy, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, "Queue");
-      legacy.resource_min_version = 9u;
-      legacy.resource_max_version = 9u;
-      legacy.size = TURBO_FLOW_OPERATION_DESCRIPTOR_V1_SIZE;
+      require_resource(&bounded, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, "Queue");
+      bounded.resource_min_version = 9u;
+      bounded.resource_max_version = 9u;
       require_resource(&invalid, TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE, "Queue");
+      invalid.resource_min_version = 3u;
       invalid.resource_max_version = 2u;
       check_not_null(flow);
-      check_equal(turbo_flow_register_operation(flow, &legacy), SALTS_OK);
-      stored = turbo_flow_find_operation(flow, "queue.legacy");
+      check_equal(turbo_flow_register_operation(flow, &bounded), SALTS_OK);
+      stored = turbo_flow_find_operation(flow, "queue.bounded");
       check_not_null(stored);
-      check_equal(stored->resource_min_version, 0u);
-      check_equal(stored->resource_max_version, 0u);
+      check_equal(stored->resource_min_version, 9u);
+      check_equal(stored->resource_max_version, 9u);
       check_equal(turbo_flow_register_operation(flow, &invalid), SALTS_EINVAL);
       turbo_flow_destroy(flow);
     }
@@ -729,6 +794,65 @@ suite("Turbo Flow Domain Contracts") {
       check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u),
                    SALTS_EPROTO);
       turbo_flow_destroy(flow);
+    }
+
+    it("rejects non-exact operation layouts from module contracts before registry access") {
+      static const char *const operation_names[] = {"data.validate"};
+
+      for (size_t existing = 0u; existing < 2u; ++existing) {
+        turbo_flow_t *flow = turbo_flow_create();
+        turbo_flow_operation_descriptor_t operation = operation_descriptor(
+            "data.validate", TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DOMAIN_DATA, "Message",
+            TURBO_FLOW_DOMAIN_DATA, "Message", TURBO_FLOW_OPERATION_STAGE);
+        turbo_flow_module_descriptor_t module = {0};
+        size_t *physical_short;
+        unsigned char *legacy_prefix;
+
+        module.size = sizeof(module);
+        module.name = "data.validation";
+        module.version = 1u;
+        module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS;
+        module.operation_names = operation_names;
+        module.operation_count = 1u;
+        check_not_null(flow);
+        if (existing != 0u) {
+          check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u),
+                      SALTS_OK);
+        }
+
+        physical_short = (size_t *)malloc(sizeof(*physical_short));
+        check_not_null(physical_short);
+        *physical_short = sizeof(*physical_short);
+        check_equal(turbo_flow_register_module_contract(
+                        flow, &module,
+                        (const turbo_flow_operation_descriptor_t *)physical_short, 1u),
+                    SALTS_EINVAL);
+        check_equal(turbo_flow_operation_count(flow), existing);
+        check_equal(turbo_flow_module_count(flow), existing);
+        free(physical_short);
+
+        legacy_prefix = (unsigned char *)malloc(
+            offsetof(turbo_flow_operation_descriptor_t, resource_min_version));
+        check_not_null(legacy_prefix);
+        memcpy(legacy_prefix, &operation,
+               offsetof(turbo_flow_operation_descriptor_t, resource_min_version));
+        *(size_t *)legacy_prefix =
+            offsetof(turbo_flow_operation_descriptor_t, resource_min_version);
+        check_equal(turbo_flow_register_module_contract(
+                        flow, &module,
+                        (const turbo_flow_operation_descriptor_t *)legacy_prefix, 1u),
+                    SALTS_EINVAL);
+        check_equal(turbo_flow_operation_count(flow), existing);
+        check_equal(turbo_flow_module_count(flow), existing);
+        free(legacy_prefix);
+
+        operation.size = sizeof(operation) + 1u;
+        check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u),
+                    SALTS_EINVAL);
+        check_equal(turbo_flow_operation_count(flow), existing);
+        check_equal(turbo_flow_module_count(flow), existing);
+        turbo_flow_destroy(flow);
+      }
     }
 
     it("binds typed providers to the module that exports their resource type") {
