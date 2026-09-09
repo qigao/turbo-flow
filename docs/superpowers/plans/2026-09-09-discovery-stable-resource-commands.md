@@ -63,7 +63,9 @@ int flow_resource_command_init(turbo_flow_resource_command_t *command,
                               const char *uid, uint64_t generation);
 ```
 
-flow 内部保存 active scope 指针和 command_in_progress guard（默认0）；scope begin 要求 caller 初始化为{0}，失败不安装 active scope。begin 对预算为0返回EINVAL；无变化路径无需 begin。execute 必须验证 active scope 身份及 remaining，复用统一执行函数。public dispatcher 与 scope execute 都拒绝 command_in_progress 重入；common 单条路径在回调前 reserve 一条存储（scope 已预留则无需新增分配），record 成功后才消耗scope预算。确保错误/早返回释放执行 guard；历史 replay 不新增记录或消耗预算。end 仅释放scope预留身份，不删除历史。
+flow 内部保存 active scope 指针和 command_in_progress guard（默认0）；scope begin 要求 caller 初始化为{0}，失败不安装 active scope。begin 对预算为0返回EINVAL；无变化路径无需 begin。execute 必须验证 active scope 身份及 remaining，复用统一执行函数。public dispatcher 与 scope execute 都拒绝 command_in_progress 重入；common 单条路径在校验/replay之后、任何metadata/owner回调之前，以 raw vec_resize(history, old_size+1) 取得记录槽并检查返回值，然后用 vec_at 取得槽位。普通命令可能在此分配；scope已reserve覆盖预算，因此raw resize无新增分配。取得槽位时消耗scope预算，该命令所有执行结果（包括deadline/metadata错误）必须填充同一槽，不再vec_push/vec_set。命令进行中槽位是内部pending状态，重入guard及host串行化禁止另一次history查询看到它；callback不得修改history/注册表/生命周期。确保错误/早返回释放执行 guard；历史 replay 不新增记录或消耗预算。end 仅释放scope预留身份，不删除历史。
+
+已核对 Salts cstl/src/vec.c：vec_push(:212)经vec_prepare_copy(:62)无条件分配临时值；raw vec_resize(:187)在容量内仅清零/改size，故采用副作用前claim、之后直接填槽。禁止把reserve后push作为无分配保证；不更改外部Salts。
 
 - [ ] Step 1: 先添加真实 RED：discovery fixture 同时有旧 callback 与正确 stable connection metadata/command；创建后应仅stable command调用且 generation 推进，旧callback计数0。当前实现将走旧 callback 而失败。运行 test_flow_discovery，记录实际失败不是编译错误。
 
@@ -78,7 +80,7 @@ check_equal(first.generation, 2u);
 - [ ] Step 3: discovery创建先分配/验证所有名字和provider，保存stableUID，再为正向与补偿预留。每条执行前查询该UID当前generation并核对owner/kind，不能在UID消失时改选同owner的新UID。所有命令与补偿调用scope_execute。替换在输入/版本校验之后计算实际A/U/R预算；版本no-op不begin。先完成资源命令再提交peer/version。所有scope有唯一end清理路径，补偿失败不得(void)丢弃；补偿尽力执行其余已应用slots并保留首个错误。新增槽位回滚后inactive，其非active endpoint不是已提交peer事实，不虚称恢复未建模endpoint。
 - [ ] Step 4: 删除旧公开类型/枚举/endpoint/函数声明、flow_core.c旧实现及adapter ops.command尾字段。删除test_turbo_flow旧API专用test/helper/fields；有用状态/错误覆盖在新discovery或现有resource测试中承接。test_flow_control旧callback探针移除，缺provider测试改为只有普通adapter、无commandprovider仍ENOENT。迁移discoveryfixture到仅stable ops，不保留旧命名callback壳。
 - [ ] Step 5: 分别增加以下真实行为测试（未实现前应RED）：create缺provider/歧义预检零副作用；两slot创建中途失败恢复前slot、恢复失败明确报错；replace原有版本幂等/冲突/回滚及回滚失败后拒绝新操作；执行前不足历史拒绝且peer/version/provider状态不变；精确预算可容纳失败及补偿，少一条则零副作用；scope释放后普通命令可执行；provider回调重入命令返回EBUSY且不消耗预留；stop后replace/poll拒绝且fetch无调用；不同controller keys不碰撞、每次读取当前generation。历史填充用真实resource命令，不直接伪造history vec。资源command既有 replay/同key异payload/full行为回归保留。
-- [ ] Step 6: 增加可复验存储分配失败测试：使用仓内已有fault-test宏替换/编译方式（先查现有 *_fault.c），让历史reserve失败，断言 owner调用0、generation未变；不要修改全局分配器或污染公开头。若实际CSTL reserve契约不能保证成功后push不分配，必须停下报告接口证据，不造替代容器。
+- [ ] Step 6: 增加可复验存储分配失败测试：使用仓内已有fault-test宏替换/编译方式（先查现有 *_fault.c），让scope历史reserve和普通命令resize claim分别失败，断言 owner调用0、generation未变，且后续调用可重试（guard已释放）；不要修改全局分配器或污染公开头。普通命令record也禁止副作用后push/分配。使用真实rawvec实现的测试验证scope预留后连续记录及补偿，不造替代容器。
 - [ ] Step 7: 更新公开discovery/resourcecommand文档：host序列化、不可重入、STARTED、stableprovider要求、配额公式/ENOSPC、create补偿错误诊断和destroy借用期；当前旧API文档改为移除/迁移说明，历史计划不机械清理。rg确认旧symbols在有效C/header已无引用，不碰新 resource commands。验证安装Graph导出没有旧函数（既有Windows dumpbin检查可扩展，不引入旧DLLfixture）。
 - [ ] Step 8: 两profileconfigure/build，先最小相关tests再全量CTest各一次，安装consumer验证source/ABI重编译和包不回退；git diff --check、自审、显式提交；完整报告只写scratch不提交。
 
