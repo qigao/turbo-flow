@@ -41,10 +41,10 @@ command ::= POOL name(N) DISRUPTOR RESIZE NUMBER(P) optional_timeout(T). {
   flow_control_set_resize(ctx, N, TURBO_FLOW_POOL_DISRUPTOR, P, T);
 }
 command ::= ADAPTER name(N) QUIESCE. {
-  flow_control_set_adapter(ctx, N, TURBO_FLOW_ADAPTER_QUIESCE);
+  flow_control_set_adapter(ctx, N, TURBO_FLOW_RESOURCE_COMMAND_QUIESCE);
 }
 command ::= ADAPTER name(N) RESUME. {
-  flow_control_set_adapter(ctx, N, TURBO_FLOW_ADAPTER_RESUME);
+  flow_control_set_adapter(ctx, N, TURBO_FLOW_RESOURCE_COMMAND_RESUME);
 }
 command ::= ADAPTER name(N) REPLACE HOST STRING(H) PORT NUMBER(P) optional_path(R). {
   flow_control_set_replace(ctx, N, H, P, R);

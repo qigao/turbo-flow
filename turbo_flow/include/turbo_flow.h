@@ -1885,9 +1885,11 @@ typedef struct turbo_flow_control_command_s {
   char target[TURBO_FLOW_CONTROL_NAME_MAX + 1u];
   turbo_flow_pool_kind_t pool_kind;
   uint32_t parallelism;
-  turbo_flow_adapter_command_t adapter;
+  /** Adapter actions accept QUIESCE, RESUME, or REPLACE_ENDPOINT only. */
+  turbo_flow_resource_command_kind_t resource_kind;
   char endpoint_host[TURBO_FLOW_ENDPOINT_MAX + 1u];
   char endpoint_path[TURBO_FLOW_ENDPOINT_MAX + 1u];
+  int endpoint_port;
   /** Empty for an unconditional command; otherwise an owned BOOL expression. */
   char condition[TURBO_FLOW_CONTROL_EXPR_MAX + 1u];
 } turbo_flow_control_command_t;

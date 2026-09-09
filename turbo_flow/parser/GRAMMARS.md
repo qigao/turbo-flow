@@ -37,15 +37,16 @@ one typed command only when true. Unknown fields and type mismatches are errors,
 not false or zero. Multi-action rules and arbitrary function calls are not part
 of this grammar.
 
-Pool actions and adapter actions with a stable connection resource are lowered
-through `turbo_flow_resource_command()`, so target identity, generation,
-deadline, idempotency, and provider-owned command semantics stay on the shared
-resource-command boundary. Adapters registered without a command-capable stable
-resource retain the direct adapter-command path as a compatibility boundary.
-That direct path and `turbo_flow_adapter_command()` are deprecated. New
-controllable adapters must register a command-capable stable resource with
-`turbo_flow_register_adapter_with_resources()`; adapters that expose no control
-surface may continue to use `turbo_flow_register_adapter_ex()`.
+Pool actions and adapter actions are lowered exclusively through
+`turbo_flow_resource_command()`, so target identity, generation, deadline,
+idempotency, and provider-owned command semantics stay on the shared
+resource-command boundary. An adapter action requires exactly one command-capable
+stable connection resource for its target: no such provider returns
+`SALTS_ENOENT`, duplicate or invalid metadata returns its validation error, and
+owner command errors propagate unchanged. Controllable adapters must register a
+command-capable stable resource with `turbo_flow_register_adapter_with_resources()`;
+adapters that expose no control surface may continue to use
+`turbo_flow_register_adapter_ex()`.
 
 ## Generation Flow
 

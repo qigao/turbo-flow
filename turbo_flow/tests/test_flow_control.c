@@ -9,6 +9,9 @@ typedef struct control_adapter_s {
   int resource_commands;
   int result;
   turbo_flow_resource_command_kind_t last_resource_command;
+  char last_endpoint_host[TURBO_FLOW_ENDPOINT_MAX + 1u];
+  char last_endpoint_path[TURBO_FLOW_ENDPOINT_MAX + 1u];
+  int last_endpoint_port;
   uint64_t generation;
 } control_adapter_t;
 
@@ -55,6 +58,9 @@ static int control_adapter_resource_command(void *ctx, turbo_flow_t *flow,
   if (!adapter || !command) return SALTS_EINVAL;
   adapter->resource_commands++;
   adapter->last_resource_command = command->kind;
+  memcpy(adapter->last_endpoint_host, command->endpoint_host, sizeof(adapter->last_endpoint_host));
+  memcpy(adapter->last_endpoint_path, command->endpoint_path, sizeof(adapter->last_endpoint_path));
+  adapter->last_endpoint_port = command->endpoint_port;
   if (adapter->result != SALTS_OK) return adapter->result;
   if (adapter->generation == UINT64_MAX) return SALTS_ERANGE;
   adapter->generation++;
@@ -116,7 +122,7 @@ static turbo_flow_t *control_started_flow_ex(control_adapter_t *adapter,
 }
 
 static turbo_flow_t *control_started_flow(control_adapter_t *adapter) {
-  return control_started_flow_ex(adapter, 0);
+  return control_started_flow_ex(adapter, 1);
 }
 
 spec("control_dsl") {
@@ -139,6 +145,16 @@ spec("control_dsl") {
                                           &error),
                  SALTS_OK);
     check_equal(command.target, "host.path");
+    check_equal(command.resource_kind, TURBO_FLOW_RESOURCE_COMMAND_QUIESCE);
+    check_equal(turbo_flow_control_parse("adapter mock replace host \"endpoint.example\" port 9443 path \"/v1\"",
+                                          sizeof("adapter mock replace host \"endpoint.example\" port 9443 path \"/v1\"") -
+                                              1u,
+                                          &command, &error),
+                 SALTS_OK);
+    check_equal(command.resource_kind, TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT);
+    check_equal(command.endpoint_host, "endpoint.example");
+    check_equal(command.endpoint_path, "/v1");
+    check_equal(command.endpoint_port, 9443);
   }
 
   it("executes one action only when core snapshot facts match") {
@@ -150,7 +166,8 @@ spec("control_dsl") {
     check_equal(turbo_flow_control_ex(flow, false_rule, strlen(false_rule), NULL, &error),
                  SALTS_OK);
     check_equal(turbo_flow_control(flow, true_rule, strlen(true_rule)), SALTS_OK);
-    check_equal(adapter.commands, 1);
+    check_equal(adapter.commands, 0);
+    check_equal(adapter.resource_commands, 1);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
@@ -164,6 +181,74 @@ spec("control_dsl") {
     check_equal(adapter.resource_commands, 1);
     check_equal(adapter.last_resource_command, TURBO_FLOW_RESOURCE_COMMAND_QUIESCE);
     check_equal(adapter.generation, 2u);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("rejects adapter controls when only the legacy callback is registered") {
+    control_adapter_t adapter = {0};
+    turbo_flow_t *flow = control_started_flow_ex(&adapter, 0);
+    check_equal(turbo_flow_control(flow, "adapter mock quiesce",
+                                   sizeof("adapter mock quiesce") - 1u),
+                SALTS_ENOENT);
+    check_equal(adapter.commands, 0);
+    check_equal(adapter.resource_commands, 0);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("uses the current provider generation for consecutive adapter commands") {
+    control_adapter_t adapter = {0};
+    turbo_flow_t *flow = control_started_flow(&adapter);
+    check_equal(turbo_flow_control(flow, "adapter mock quiesce",
+                                   sizeof("adapter mock quiesce") - 1u),
+                SALTS_OK);
+    check_equal(turbo_flow_control(flow, "adapter mock resume",
+                                   sizeof("adapter mock resume") - 1u),
+                SALTS_OK);
+    check_equal(adapter.resource_commands, 2);
+    check_equal(adapter.last_resource_command, TURBO_FLOW_RESOURCE_COMMAND_RESUME);
+    check_equal(adapter.generation, 3u);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("copies parsed replace endpoint values into the owner command") {
+    turbo_flow_control_command_t parsed;
+    turbo_flow_control_command_t command;
+    turbo_flow_error_t error;
+    control_adapter_t adapter = {0};
+    turbo_flow_t *flow = control_started_flow(&adapter);
+    const char *text = "adapter mock replace host \"api.example\" port 8443 path \"/health\"";
+    check_equal(turbo_flow_control_parse(text, strlen(text), &parsed, &error), SALTS_OK);
+    command = parsed;
+    memset(&parsed, 0, sizeof(parsed));
+    check_equal(turbo_flow_control_execute_ex(flow, &command, NULL, &error), SALTS_OK);
+    check_equal(adapter.resource_commands, 1);
+    check_equal(adapter.last_resource_command, TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT);
+    check_equal(adapter.last_endpoint_host, "api.example");
+    check_equal(adapter.last_endpoint_path, "/health");
+    check_equal(adapter.last_endpoint_port, 8443);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("rejects unsupported adapter resource commands before dispatch") {
+    turbo_flow_control_command_t command = TURBO_FLOW_CONTROL_COMMAND_INIT;
+    turbo_flow_error_t error;
+    control_adapter_t adapter = {0};
+    turbo_flow_t *flow = control_started_flow(&adapter);
+    command.kind = TURBO_FLOW_CONTROL_ADAPTER;
+    memcpy(command.target, "mock", sizeof("mock"));
+    check_equal(turbo_flow_control_execute_ex(flow, &command, NULL, &error), SALTS_EINVAL);
+    command.resource_kind = TURBO_FLOW_RESOURCE_COMMAND_RESIZE_POOL;
+    check_equal(turbo_flow_control_execute_ex(flow, &command, NULL, &error), SALTS_EINVAL);
+    command.resource_kind = TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT;
+    memcpy(command.endpoint_host, "api.example", sizeof("api.example"));
+    command.endpoint_port = 0;
+    check_equal(turbo_flow_control_execute_ex(flow, &command, NULL, &error), SALTS_EINVAL);
+    check_equal(adapter.commands, 0);
+    check_equal(adapter.resource_commands, 0);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
@@ -210,10 +295,12 @@ spec("control_dsl") {
     facts.read_field = control_external_read;
     facts.ctx = &invalid_type;
     check_equal(turbo_flow_control_ex(flow, rule, strlen(rule), &facts, &error), SALTS_OK);
-    check_equal(adapter.commands, 1);
+    check_equal(adapter.commands, 0);
+    check_equal(adapter.resource_commands, 1);
     invalid_type = 1;
     check_equal(turbo_flow_control_ex(flow, rule, strlen(rule), &facts, &error), SALTS_EPROTO);
-    check_equal(adapter.commands, 1);
+    check_equal(adapter.commands, 0);
+    check_equal(adapter.resource_commands, 1);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }

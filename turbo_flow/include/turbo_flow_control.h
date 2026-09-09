@@ -30,7 +30,14 @@ TURBO_FLOW_C_API int turbo_flow_control_execute_ex(turbo_flow_t *flow,
                                             const turbo_flow_control_facts_t *facts,
                                             turbo_flow_error_t *error);
 
-/** Parse and execute one command with optional host-owned typed snapshot facts. */
+/**
+ * Parse and execute one command with optional host-owned typed snapshot facts.
+ *
+ * Adapter actions require one command-capable stable connection resource whose
+ * owner name matches the target. Missing providers return SALTS_ENOENT; owner
+ * errors propagate unchanged. Control never falls back to the legacy adapter
+ * command callback.
+ */
 TURBO_FLOW_C_API int turbo_flow_control_ex(turbo_flow_t *flow, const char *text, size_t len,
                                     const turbo_flow_control_facts_t *facts,
                                     turbo_flow_error_t *error);
