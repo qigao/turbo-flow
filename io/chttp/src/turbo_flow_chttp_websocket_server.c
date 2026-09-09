@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define CHTTP_WEBSOCKET_EVENT_MAGIC UINT64_C(0x5446434857535631)
+enum { WEBSOCKET_QUIESCE_CLOSE_CODE = 1013u };
 
 typedef struct websocket_session_slot_s {
   chttp_server_websocket_session session;
@@ -17,6 +18,8 @@ typedef struct websocket_session_slot_s {
   bool closing;
   bool peer_closed;
   bool close_command_submitted;
+  bool close_on_drain;
+  bool close_retry_required;
 } websocket_session_slot_t;
 
 typedef struct websocket_frame_slot_s {
@@ -175,6 +178,8 @@ static int websocket_open(void *user, chttp_websocket *websocket,
       slot->closing = false;
       slot->peer_closed = false;
       slot->close_command_submitted = false;
+      slot->close_on_drain = false;
+      slot->close_retry_required = false;
       slot->in_flight_frames = 0u;
       selected = slot;
       ++server->active_sessions;
@@ -209,7 +214,8 @@ static int websocket_reserve_frame(turbo_flow_chttp_websocket_server_t *server,
   session_slot = websocket_find_session_locked(server, session, &session_index);
   if (!session_slot) {
     status = SALTS_ENOENT;
-  } else if (server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING) {
+  } else if (server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING ||
+             session_slot->close_on_drain) {
     status = SALTS_ESHUTDOWN;
   } else if (server->next_message_id == 0u) {
     status = SALTS_ERANGE;
@@ -239,10 +245,44 @@ static int websocket_reserve_frame(turbo_flow_chttp_websocket_server_t *server,
   if (event_type == TURBO_FLOW_CHTTP_WEBSOCKET_FRAME_CLOSE && session_slot) {
     session_slot->closing = true;
     session_slot->peer_closed = true;
+    if (status != SALTS_OK) websocket_retire_session_locked(server, session_slot);
   }
   salts_mutex_unlock(&server->mutex);
   *out_frame = frame;
   *out_session = session_slot;
+  return status;
+}
+
+/* Claim close under the owner lock; invoke CHTTP outside it. Failed admission
+ * leaves the same generation pending for an explicit quiesce retry. */
+static int websocket_close_drained(turbo_flow_chttp_websocket_server_t *server, size_t index,
+                                   bool explicit_retry) {
+  chttp_server_websocket_session captured = {0};
+  uint64_t generation;
+  websocket_session_slot_t *slot;
+  int status;
+  salts_mutex_lock(&server->mutex);
+  slot = &server->sessions[index];
+  if (!slot->active || !slot->close_on_drain || slot->in_flight_frames != 0u ||
+      slot->close_command_submitted || slot->peer_closed ||
+      (slot->close_retry_required && !explicit_retry)) {
+    salts_mutex_unlock(&server->mutex);
+    return SALTS_OK;
+  }
+  captured = slot->session;
+  generation = slot->generation;
+  slot->close_command_submitted = true;
+  salts_mutex_unlock(&server->mutex);
+  status = chttp_server_websocket_close(&captured, WEBSOCKET_QUIESCE_CLOSE_CODE, NULL, 0u);
+  if (status != SALTS_OK) {
+    salts_mutex_lock(&server->mutex);
+    if (slot->active && slot->generation == generation) {
+      slot->close_command_submitted = false;
+      slot->close_retry_required = true;
+    }
+    server->last_status = status;
+    salts_mutex_unlock(&server->mutex);
+  }
   return status;
 }
 
@@ -317,8 +357,10 @@ static void websocket_publication_complete(void *ctx, const turbo_flow_publish_r
   chttp_server_websocket_session close_session = {0};
   int status = result ? result->status : SALTS_EINVAL;
   if (!server) return;
+  const size_t session_index = frame->session_index;
   websocket_release_frame(server, frame, status, &close_session);
   if (close_session.impl) (void)chttp_server_websocket_close(&close_session, 1011u, NULL, 0u);
+  else (void)websocket_close_drained(server, session_index, false);
 }
 
 static void websocket_event(void *user, chttp_websocket *websocket,
@@ -356,9 +398,16 @@ static void websocket_event(void *user, chttp_websocket *websocket,
     }
   }
   if (status != SALTS_OK) {
+    bool draining = false;
     salts_mutex_lock(&server->mutex);
     server->last_status = status;
+    session = websocket_find_session_locked(server, captured, NULL);
+    draining = status == SALTS_ESHUTDOWN && session && session->close_on_drain;
     salts_mutex_unlock(&server->mutex);
+    if (draining) {
+      /* Rejected input must not retry a failed close admission. */
+      return;
+    }
     (void)chttp_websocket_close(websocket, status == SALTS_ENOSPC ? 1013u : 1011u, NULL, 0u);
   }
 }
@@ -503,6 +552,42 @@ static int websocket_adapter_start(void *ctx, turbo_flow_t *flow,
   return status;
 }
 
+int turbo_flow_chttp_websocket_server_quiesce(turbo_flow_chttp_websocket_server_t *server) {
+  if (!server) return SALTS_EINVAL;
+  salts_mutex_lock(&server->mutex);
+  if (server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING &&
+      server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED) {
+    salts_mutex_unlock(&server->mutex);
+    return SALTS_ESHUTDOWN;
+  }
+  server->state = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED;
+  for (size_t index = 0u; index < server->session_capacity; ++index) {
+    if (server->sessions[index].active) {
+      server->sessions[index].closing = true;
+      server->sessions[index].close_on_drain = true;
+    }
+  }
+  salts_mutex_unlock(&server->mutex);
+  for (size_t index = 0u; index < server->session_capacity; ++index) {
+    int status = websocket_close_drained(server, index, true);
+    if (status != SALTS_OK) return status;
+  }
+  return SALTS_OK;
+}
+
+int turbo_flow_chttp_websocket_server_resume(turbo_flow_chttp_websocket_server_t *server) {
+  if (!server) return SALTS_EINVAL;
+  salts_mutex_lock(&server->mutex);
+  if (server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING &&
+      server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED) {
+    salts_mutex_unlock(&server->mutex);
+    return SALTS_ESHUTDOWN;
+  }
+  server->state = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING;
+  salts_mutex_unlock(&server->mutex);
+  return SALTS_OK;
+}
+
 static int websocket_stop_native(turbo_flow_chttp_websocket_server_t *server, uint32_t timeout_ms) {
   int status = chttp_server_stop(&server->http, timeout_ms);
   if (status != SALTS_OK) return status;
@@ -520,6 +605,8 @@ static void websocket_clear_sessions_locked(turbo_flow_chttp_websocket_server_t 
     slot->closing = false;
     slot->peer_closed = false;
     slot->close_command_submitted = false;
+    slot->close_on_drain = false;
+    slot->close_retry_required = false;
   }
   for (index = 0u; index < server->frame_capacity; ++index)
     server->frames[index].occupied = false;

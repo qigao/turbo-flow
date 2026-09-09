@@ -234,7 +234,8 @@ typedef enum turbo_flow_chttp_websocket_server_state_e {
   TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPING,
   TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED,
   TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_DETACHED,
-  TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_FAILED
+  TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_FAILED,
+  TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED
 } turbo_flow_chttp_websocket_server_state_t;
 
 /**
@@ -442,6 +443,25 @@ turbo_flow_chttp_websocket_server_register(const turbo_flow_chttp_websocket_serv
 TURBO_FLOW_C_API int turbo_flow_chttp_websocket_server_snapshot(
     const turbo_flow_chttp_websocket_server_t *server,
     turbo_flow_chttp_websocket_server_snapshot_t *out_snapshot);
+
+/**
+ * Close session/frame admission and schedule session close after accepted frames drain.
+ * New handshakes receive HTTP 503; existing sessions close with code 1013 after
+ * their reserved frames complete. No new frames are retained while quiesced.
+ * Returns SALTS_OK, SALTS_EINVAL for NULL, SALTS_ESHUTDOWN outside a live state,
+ * or a native close admission error. Repeat quiesce explicitly retries pending closes.
+ * Caller serializes control with Flow start/stop/destroy; callbacks and snapshots may run.
+ */
+TURBO_FLOW_C_API int
+turbo_flow_chttp_websocket_server_quiesce(turbo_flow_chttp_websocket_server_t *server);
+
+/**
+ * Resume new-session admission; sessions already closing are never reopened.
+ * Returns SALTS_OK (also when running), SALTS_EINVAL for NULL, or SALTS_ESHUTDOWN
+ * outside RUNNING/QUIESCED. Uses the same serialization contract as quiesce.
+ */
+TURBO_FLOW_C_API int
+turbo_flow_chttp_websocket_server_resume(turbo_flow_chttp_websocket_server_t *server);
 
 /** Releases a WebSocket server only after Flow registry detachment. */
 TURBO_FLOW_C_API int
