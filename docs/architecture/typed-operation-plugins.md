@@ -8,7 +8,7 @@
 
 ## 背景与证据
 
-以 `eb8a445ac7832b6839c748994c5a75f93b63ca1b` 为实现基线：
+以下为历史事实，基线 `eb8a445ac7832b6839c748994c5a75f93b63ca1b`，不代表当前 ABI：
 
 - `turbo_flow/include/turbo_flow_plugin.h` 的 ABI 为 1.3；注册类别覆盖
   adapter/resource/protocol/business，没有 schema/typed operation。
@@ -24,6 +24,12 @@
 用户于 2026-09-09 明确批准扩展公开插件 ABI、移除旧 RulesForge 直接入口及
 Core 必需链接，改为显式 DLL 加载且无 fallback。既有 DSL 的 source/stage
 拓扑语法保持不变；引擎资源配置和直接调用消费者需要显式迁移。
+
+当前事实基线 `7bfcdf988c0fe9d7b8b7ad4a9a41250eeca4e468`：shared plugin ABI 为
+2.0，schema catalog 与 independent retained projection bridge 已实现；非空
+operation_bindings 仍由 generation 返回 ENOTSUP。批准目标为 ABI 3.0，精确结构、
+typed-result 提交协议和实施边界见 [ABI 3.0 契约](typed-operation-abi3.md)。
+该契约的首个执行 profile 不覆盖 #93 全部取消/线程能力，更不代表 #73 真实引擎验收。
 
 ## 方案比较与选择
 
@@ -84,9 +90,10 @@ owner 与取消状态机完成后才可移除此 admission gate。
    校验结果后提交 bounded typed decision sidecar。DLL 不能通过 message 获取网络、
    数据库或原输入 settlement 的可写 owner。
 
-Host 的注册配置和 callback 表采用尾部扩展并增加 ABI minor；新增类别只在完整
-size-prefix 与版本都满足时可用。旧 ABI 插件的原有能力仍按其原契约加载，
-但不能借此获得新能力。旧 Host 遇到要求新类别的插件必须拒绝。
+Host、插件和安装消费者同步重编译到 shared ABI 3.0；旧 ABI 1.x/2.x、未来不支持
+版本及短结构一律拒绝。没有旧布局 fallback、保留槽位或新旧双路；包版本与插件 ABI
+版本独立。结构的历史 `_v1_t` 名称不是兼容旧 ABI 的承诺，实际 size/major/minor 必须
+满足 ABI 3.0 的精确校验。
 非 size-version 化的 CMeta 描述符布局不得修改。
 
 注册期间一旦出现非法 descriptor、重复 identity/version、容量不足或 capability
@@ -110,6 +117,7 @@ size-prefix 与版本都满足时可用。旧 ABI 插件的原有能力仍按其
 immutable，就推导其原生 runtime 或全局初始化可并发。
 
 输入 view 默认只借用到调用返回；异步保留必须显式 retain，并纳入 run/module lease。
+ABI 3.0 首个 profile 仅允许同步借用，没有异步 invocation 或取消完成回调。
 结果若含 DLL-owned metadata 或 destroy callback，消息及 clone 都必须持有对应 lease；
 不能只保护 Graph 存活期间，也不能在 generation 销毁后留下失效回调。
 
@@ -133,6 +141,11 @@ drain**，不能把 session 指针伪装成 independent context。owner stop 关
 destroy 完成 → context release 成功 → snapshot 释放 → 模块 destroy/unload。
 原 borrowed projection 和 descriptor 生命周期契约保持不变，clear_projection
 不会自动延长 descriptor 的寿命。
+
+ABI 3.0 不清空原 projection 来存 operation 输出。Graph 新增一个独立 typed-result
+槽，claim/commit/abort 保证失败原子性；caller-owned result-domain 持有结果 owner 和
+snapshot，generation 仅借用该域。generation 完成退役后输出及 clone 仍有效；domain
+销毁的 busy/release 失败由调用方重试，不能强制释放 Graph 内仍被引用的数据。
 
 真实 DLL 集成测试覆盖 clone/move/clear、失败临时值、context 重试、callback 屏障
 和 generation 先销毁；Debug/ASan 用于检测内存错误，不证明没有数据竞争。
