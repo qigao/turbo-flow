@@ -1142,30 +1142,6 @@ static int flow_rule_data_stage(turbo_flow_msg_t *message, void *ctx) {
   return SALTS_OK;
 }
 
-int turbo_flow_rule_register_data_stage(turbo_flow_t *flow, const char *stage_name,
-                                        turbo_flow_rule_processor_t *processor,
-                                        const turbo_flow_stage_options_t *options) {
-  turbo_flow_stage_options_t effective;
-  turbo_flow_resource_provider_registration_t resource =
-      TURBO_FLOW_RESOURCE_PROVIDER_REGISTRATION_INIT;
-  if (!flow || !stage_name || stage_name[0] == '\0' || !processor ||
-      processor->domain != TURBO_FLOW_RULE_DATA ||
-      vec_size(&processor->schema_fields) != 0u ||
-      processor->limits.max_output_actions > FLOW_RULE_STAGE_MAX_ACTIONS) {
-    return SALTS_EINVAL;
-  }
-  effective = options ? *options : (turbo_flow_stage_options_t){0};
-  effective.mutability = TURBO_FLOW_STAGE_MUTATES_PRIVATE;
-  effective.effects |= TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION;
-  resource.owner_name = processor->owner_name;
-  resource.ops.metadata = flow_rule_resource_metadata;
-  resource.ops.snapshot = flow_rule_resource_snapshot;
-  resource.ops.document = flow_rule_resource_document;
-  resource.ctx = processor;
-  return turbo_flow_register_stage_with_resources(flow, stage_name, flow_rule_data_stage, processor,
-                                                  &effective, &resource, 1u);
-}
-
 int turbo_flow_rule_register_data_operation(turbo_flow_t *flow, const char *resource_name,
                                             turbo_flow_rule_processor_t *processor) {
   turbo_flow_resource_provider_registration_t resource =

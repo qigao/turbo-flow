@@ -224,11 +224,6 @@ TURBO_FLOW_C_API int turbo_flow_rule_apply_data_actions(turbo_flow_msg_t *messag
                                                  size_t action_count,
                                                  turbo_flow_rule_data_decision_t *decision);
 
-/** Register an inline data-rule stage. The caller retains immutable program ownership. */
-TURBO_FLOW_C_API int turbo_flow_rule_register_data_stage(turbo_flow_t *flow, const char *stage_name,
-                                                  turbo_flow_rule_processor_t *processor,
-                                                  const turbo_flow_stage_options_t *options);
-
 /**
  * Register the standard TurboFlow Policy data operation and bind one rule-set resource to it.
  *

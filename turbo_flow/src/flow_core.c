@@ -713,47 +713,6 @@ int turbo_flow_register_event_time_window_provider(
                                                registration->resource_name, &provider);
 }
 
-int turbo_flow_register_stage_with_resources(
-    turbo_flow_t *flow, const char *name, turbo_flow_stage_fn fn, void *ctx,
-    const turbo_flow_stage_options_t *options,
-    const turbo_flow_resource_provider_registration_t *resources, size_t resource_count) {
-  size_t resources_before;
-  size_t registrations_before;
-  int rc;
-  if (!flow || (resource_count > 0u && !resources)) return SALTS_EINVAL;
-  for (size_t i = 0; i < resource_count; ++i) {
-    if (resources[i].size < sizeof(resources[i]) || !resources[i].owner_name ||
-        resources[i].owner_name[0] == '\0') {
-      return SALTS_EINVAL;
-    }
-  }
-  resources_before = vec_size(&flow->resources);
-  registrations_before = vec_size(&flow->registrations);
-  rc = turbo_flow_register_stage_ex(flow, name, fn, ctx, options);
-  if (rc != SALTS_OK) return rc;
-  for (size_t i = 0; i < resource_count; ++i) {
-    rc = turbo_flow_register_resource_provider(flow, resources[i].owner_name, &resources[i].ops,
-                                               resources[i].ctx);
-    if (rc == SALTS_OK) continue;
-    while (vec_size(&flow->resources) > resources_before) {
-      size_t last = vec_size(&flow->resources) - 1u;
-      flow_resource_registration_t *resource =
-          (flow_resource_registration_t *)vec_at(&flow->resources, last);
-      flow_resource_registration_destroy(resource);
-      (void)turbo_flow_stl_error(vec_resize(&flow->resources, last));
-    }
-    if (vec_size(&flow->registrations) > registrations_before) {
-      size_t last = vec_size(&flow->registrations) - 1u;
-      flow_stage_registration_t *registration =
-          (flow_stage_registration_t *)vec_at(&flow->registrations, last);
-      flow_registration_destroy(registration);
-      (void)turbo_flow_stl_error(vec_resize(&flow->registrations, last));
-    }
-    return rc;
-  }
-  return SALTS_OK;
-}
-
 int turbo_flow_register_adapter(turbo_flow_t *flow, const char *name,
                                 const turbo_flow_adapter_ops_t *ops, void *ctx) {
   return turbo_flow_register_adapter_ex(flow, name, ops, ctx, NULL);

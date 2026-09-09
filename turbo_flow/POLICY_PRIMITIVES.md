@@ -26,8 +26,8 @@ snapshot。它们解决的是不同维度的问题，但局部实现若继续复
 - instruction、time、program memory、output action count 和 output bytes 均有显式 quota；
   schema identity、facts type 或 quota 不匹配时 fail fast。
 - data program 只返回 mutate-private、route、drop、batch-key、retry-class、dead-letter。
-  `turbo_flow_rule_register_data_stage()` 把纯 evaluator 注册成 inline stage，runtime 验证 action，
-  并通过 message-owned typed decision sidecar 驱动 route/terminal completion。
+  `rules.apply` runtime 验证 action，并通过 message-owned typed decision sidecar 驱动
+  route/terminal completion。
 - route、batch-key 和 retry-class 是单值决策；同一次 `ALL_MATCHES` 产生重复单值
   action 时返回 `SALTS_EPROTO`，message 和 decision 保持不变，不使用隐式的
   last-write-wins 规则。
@@ -56,7 +56,7 @@ completion。普通 `route ... when ...` 适合对当前上游输出的 TurboFlo
 因为配置中出现 `when` 而自动调用 RulesForge。
 
 RulesForge 是数据规则求值边界：领域字段先由 DataBind/schema materializer 形成 immutable
-typed facts snapshot，再由显式注册的 `rules.apply` operation 或 data stage 求值。规则输出
+typed facts snapshot，再由显式注册的 `rules.apply` operation 求值。规则输出
 是受 quota 约束的 typed decision sidecar，Graph 只消费其中的 route/drop/mutation 等决策并
 继续流转。facts provider、schema identity、类型或 quota 错误沿 operation boundary 返回
 失败；Observer、日志或 route predicate 不得吞掉这些错误。
@@ -88,31 +88,24 @@ channels:
           key: mqtt_fanout
 ```
 
-示例：
+完整可运行的集成用例见 `tests/test_flow_policy.c`。调用方创建 processor 后，把资源名同时用于
+operation 注册与 DSL；processor 由调用方拥有，必须先停止并销毁 flow，再销毁 processor：
 
-```c
-turbo_flow_rule_action_t priority = TURBO_FLOW_RULE_ACTION_INIT;
-priority.kind = TURBO_FLOW_RULE_ACTION_MUTATE_PRIVATE;
-priority.private_field = TURBO_FLOW_RULE_PRIVATE_MSG_FLAGS;
-priority.value = 1u;
-priority.mask = 1u;
-
-turbo_flow_rule_t rules[] = {
-    {"msg.type == 7 && msg.payload == \"urgent\"", 0, priority},
-};
-turbo_flow_rule_processor_config_t cfg = TURBO_FLOW_RULE_PROCESSOR_CONFIG_INIT;
-cfg.resource_uid = "rule-set:classify";
-cfg.owner_name = "classify";
-cfg.rules = rules;
-cfg.rule_count = 1;
-
-turbo_flow_rule_processor_t *processor = NULL;
-int rc = turbo_flow_rule_processor_create(&cfg, &processor, NULL);
-if (rc == SALTS_OK) {
-  rc = turbo_flow_rule_register_data_stage(flow, "classify", processor, NULL);
+```text
+source input
+stage rules operation rules.apply resource rules.test
+stage selected
+stage skipped
+stage main {
+  input -> rules -> [selected, skipped]
 }
-/* stop/destroy flow before destroying processor */
 ```
+
+旧的 `turbo_flow_rule_register_data_stage()` 与
+`turbo_flow_register_stage_with_resources()` 已删除；调用方必须显式迁移到
+`turbo_flow_rule_register_data_operation(flow, "rules.test", processor)` 和上述资源绑定。
+这里的内建 Policy expression evaluator 不等同于外部 RulesForge；后者的 DLL 化仍由
+#73/#93 跟踪。
 
 ## 候选方案
 
@@ -126,7 +119,7 @@ if (rc == SALTS_OK) {
 ## 性能与复杂度
 
 - rule evaluate：`n` 为 rule 数，最坏时间 `O(n)`；output 使用 caller-owned bounded array，
-  graph stage 使用 64-entry 固定栈数组，不在消息热路径分配。
+  graph operation 使用有界 thread-local 64-entry 数组，不在消息热路径分配。
 
 ## 迁移、兼容与回滚
 
@@ -139,6 +132,6 @@ if (rc == SALTS_OK) {
 
 ## 验证范围
 
-- processor：FIRST/ALL、固定 facts、schema identity/type、五类 quota、data stage route/drop、
+- processor：FIRST/ALL、固定 facts、schema identity/type、五类 quota、rules.apply route/drop、
   unknown route、control authorization/stale generation。
 - 外部 adapter：由 #5、#6、#7 对应实现覆盖 HWM、drain、selection 与 connection snapshot。
