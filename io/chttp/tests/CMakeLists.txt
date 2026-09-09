@@ -1,3 +1,11 @@
+cmake_add_test(test_chttp_plugin
+  SOURCES test_chttp_plugin.c
+  LIBS TurboFlow::PluginHost Salts::CHTTP Salts::TinyTest
+  DEFS TURBO_FLOW_CHTTP_PLUGIN_PATH="$<TARGET_FILE:tf_chttp_plugin>"
+  FOLDER "io/chttp/tests")
+set_tests_properties(test_chttp_plugin PROPERTIES LABELS "chttp-plugin;plugin;graph")
+add_dependencies(test_chttp_plugin tf_chttp_plugin)
+
 cmake_add_test(
   test_chttp_adapter
   SOURCES test_chttp_adapter.c chttp_header_cpp.cpp

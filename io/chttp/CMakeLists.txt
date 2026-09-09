@@ -17,6 +17,21 @@ target_link_libraries(tf_chttp_adapter PUBLIC TurboFlow::Graph Salts::CHTTP)
 
 install(FILES include/turbo_flow_chttp.h DESTINATION include)
 
+add_library(tf_chttp_plugin SHARED src/turbo_flow_chttp_plugin.c
+  src/turbo_flow_chttp_plugin_config.c src/turbo_flow_chttp_plugin_internal.h)
+cmake_config_target(tf_chttp_plugin FOLDER "io/chttp")
+target_compile_definitions(tf_chttp_plugin PRIVATE TURBO_FLOW_PLUGIN_BUILD)
+target_include_directories(tf_chttp_plugin PRIVATE include src)
+target_link_libraries(tf_chttp_plugin PRIVATE tf_chttp_adapter TurboFlow::Product Salts::CSTL
+                                             Salts::UriParser)
+set_target_properties(tf_chttp_plugin PROPERTIES C_VISIBILITY_PRESET hidden
+                                               VISIBILITY_INLINES_HIDDEN YES)
+install(TARGETS tf_chttp_plugin RUNTIME DESTINATION bin LIBRARY DESTINATION lib)
+if(WIN32)
+  target_link_libraries(tf_chttp_plugin PRIVATE ws2_32)
+  install(FILES $<TARGET_RUNTIME_DLLS:tf_chttp_plugin> DESTINATION bin)
+endif()
+
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()

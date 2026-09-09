@@ -310,7 +310,9 @@ static void chttp_adapter_complete(void *user, chttp_request request,
     status = slot->cancel_status;
   } else if (slot->deadline_ms != 0u && now >= slot->deadline_ms) {
     status = SALTS_ETIMEDOUT;
-  } else if (status != SALTS_OK && client->state == TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+  } else if (status != SALTS_OK &&
+             (client->state == TURBO_FLOW_CHTTP_CLIENT_RUNNING ||
+              client->state == TURBO_FLOW_CHTTP_CLIENT_QUIESCED) &&
              chttp_adapter_method_idempotent(client) && chttp_adapter_retryable(status) &&
              slot->attempts < client->max_attempts) {
     slot->state = TURBO_FLOW_CHTTP_SLOT_RETRY_WAIT;
@@ -403,6 +405,7 @@ static void chttp_adapter_stop(void *ctx, turbo_flow_t *flow,
   if (!client) return;
   salts_mutex_lock(&client->mutex);
   if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+      client->state != TURBO_FLOW_CHTTP_CLIENT_QUIESCED &&
       client->state != TURBO_FLOW_CHTTP_CLIENT_FAILED) {
     salts_mutex_unlock(&client->mutex);
     return;
@@ -557,7 +560,8 @@ static int chttp_adapter_poll_slot(turbo_flow_chttp_slot_t *slot, uint64_t now) 
     salts_mutex_unlock(&client->mutex);
     return SALTS_OK;
   }
-  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING) {
+  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+      client->state != TURBO_FLOW_CHTTP_CLIENT_QUIESCED) {
     slot->state = TURBO_FLOW_CHTTP_SLOT_COMPLETING;
     salts_mutex_unlock(&client->mutex);
     chttp_adapter_finish(slot, SALTS_ESHUTDOWN, NULL, 0);
@@ -676,7 +680,8 @@ int turbo_flow_chttp_client_poll(turbo_flow_chttp_client_t *client, uint32_t tim
   int status;
   if (!client) return SALTS_EINVAL;
   salts_mutex_lock(&client->mutex);
-  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING) {
+  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+      client->state != TURBO_FLOW_CHTTP_CLIENT_QUIESCED) {
     salts_mutex_unlock(&client->mutex);
     return SALTS_ESHUTDOWN;
   }
@@ -713,12 +718,31 @@ done:
   return status;
 }
 
+static int chttp_adapter_admission(turbo_flow_chttp_client_t *client, int enabled) {
+  if (!client) return SALTS_EINVAL;
+  salts_mutex_lock(&client->mutex);
+  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+      client->state != TURBO_FLOW_CHTTP_CLIENT_QUIESCED) {
+    salts_mutex_unlock(&client->mutex);
+    return SALTS_ESHUTDOWN;
+  }
+  client->state = enabled ? TURBO_FLOW_CHTTP_CLIENT_RUNNING : TURBO_FLOW_CHTTP_CLIENT_QUIESCED;
+  salts_mutex_unlock(&client->mutex);
+  return SALTS_OK;
+}
+int turbo_flow_chttp_client_quiesce(turbo_flow_chttp_client_t *client) {
+  return chttp_adapter_admission(client, 0);
+}
+int turbo_flow_chttp_client_resume(turbo_flow_chttp_client_t *client) {
+  return chttp_adapter_admission(client, 1);
+}
 int turbo_flow_chttp_client_cancel(turbo_flow_chttp_client_t *client, uint64_t message_id) {
   size_t index;
   int status = SALTS_ENOENT;
   if (!client) return SALTS_EINVAL;
   salts_mutex_lock(&client->mutex);
-  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING) {
+  if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
+      client->state != TURBO_FLOW_CHTTP_CLIENT_QUIESCED) {
     salts_mutex_unlock(&client->mutex);
     return SALTS_ESHUTDOWN;
   }

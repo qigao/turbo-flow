@@ -376,7 +376,7 @@ spec("TurboFlow CHTTP async client adapter") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
-  it("retries only replayable idempotent requests within one overall deadline") {
+  it("quiesced clients finish accepted retries within the original overall deadline") {
     static const char graph[] = "source input\n"
                                 "stage request adapter http.retry\n"
                                 "stage output\n"
@@ -440,6 +440,16 @@ spec("TurboFlow CHTTP async client adapter") {
                   SALTS_OK);
       turbo_flow_msg_cleanup(&message);
       deadline = started_at + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+      do {
+        check_equal(turbo_flow_chttp_client_snapshot(client, &snapshot), SALTS_OK);
+        if (snapshot.queued_requests) break;
+        salts_sleep_ms(1u);
+      } while (salts_monotonic_ms() < deadline);
+      check_equal(snapshot.queued_requests, (size_t)1u);
+      check_equal(turbo_flow_chttp_client_quiesce(client), SALTS_OK);
+      check_equal(turbo_flow_chttp_client_quiesce(client), SALTS_OK);
+      check_equal(turbo_flow_chttp_client_snapshot(client, &snapshot), SALTS_OK);
+      check_equal(snapshot.state, TURBO_FLOW_CHTTP_CLIENT_QUIESCED);
       while (atomic_load_explicit(&probe.publication_calls, memory_order_acquire) == 0u &&
              salts_monotonic_ms() < deadline)
         check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
@@ -458,7 +468,28 @@ spec("TurboFlow CHTTP async client adapter") {
         check_less(salts_monotonic_ms() - started_at, (uint64_t)500u);
       }
 
+      chttp_adapter_probe_t rejected = {0};
+      turbo_flow_msg_init(&message);
+      message.id = 900u + index;
+      message.owned_payload = tstr_dup("late");
+      message.payload = tstr_to_v(message.owned_payload);
+      check_equal(turbo_flow_publish_async(flow, "input", &message,
+                                           chttp_adapter_publication_complete, &rejected),
+                  SALTS_OK);
+      turbo_flow_msg_cleanup(&message);
+      deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+      while (!atomic_load(&rejected.publication_calls) && salts_monotonic_ms() < deadline)
+        salts_sleep_ms(1u);
+      check_equal(atomic_load(&rejected.publication_calls), (size_t)1u);
+      check_equal(atomic_load(&rejected.publication_status), SALTS_ESHUTDOWN);
+      check_equal(turbo_flow_chttp_client_resume(client), SALTS_OK);
+      check_equal(turbo_flow_chttp_client_resume(client), SALTS_OK);
+      check_equal(turbo_flow_chttp_client_snapshot(client, &snapshot), SALTS_OK);
+      check_equal(snapshot.state, TURBO_FLOW_CHTTP_CLIENT_RUNNING);
+      check_equal(turbo_flow_chttp_client_quiesce(client), SALTS_OK);
       check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(turbo_flow_chttp_client_resume(client), SALTS_ESHUTDOWN);
+      check_equal(turbo_flow_chttp_client_quiesce(client), SALTS_ESHUTDOWN);
       turbo_flow_destroy(flow);
       check_equal(turbo_flow_chttp_client_destroy(client), SALTS_OK);
     }
