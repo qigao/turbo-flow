@@ -1,6 +1,7 @@
 #include <tinytest.h>
 #include <turbo_flow_turbodb.h>
 
+#include <cbind/status.h>
 #include <cflow/publishers.h>
 #include <cmeta/data.h>
 #include <cmeta/struct.h>
@@ -8,6 +9,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1084,49 +1086,61 @@ spec("TurboDb ORM Publisher adapter") {
     orm_disconnect(connection);
   }
 
-  it("fails a Graph run before projection when CBind depth capacity is insufficient") {
-    orm_error_t error;
-    orm_connection_t *connection;
-    orm_query_t *query = NULL;
-    orm_flow_config_t flow_config;
-    turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
-    cflow_publisher messages = {0};
-    count_graph_probe_t graph_probe = {0};
-    turbo_flow_t *flow;
-    turbo_flow_run_t *run = NULL;
-    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
-    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
-    cflow_scheduler scheduler = {0};
+  it("distinguishes depth exhaustion from a nested row token mismatch before projection") {
+    static const struct {
+      size_t max_depth;
+      cbind_status expected_status;
+    } cases[] = {{1u, CBIND_LIMIT_EXCEEDED}, {2u, CBIND_TOKEN_MISMATCH}};
+    for (size_t case_index = 0u; case_index < sizeof(cases) / sizeof(cases[0]); ++case_index) {
+      orm_error_t error;
+      orm_connection_t *connection;
+      orm_query_t *query = NULL;
+      orm_flow_config_t flow_config;
+      turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
+      cflow_publisher messages = {0};
+      count_graph_probe_t graph_probe = {0};
+      turbo_flow_t *flow;
+      turbo_flow_run_t *run = NULL;
+      turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
+      turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+      cflow_scheduler scheduler = {0};
+      char expected_error[sizeof("row binding failed: cbind=-2147483648 ")];
 
-    orm_error_init(&error);
-    connection = open_test_database(&error);
-    check_not_null(connection);
-    check_equal(orm_raw(connection, orm_view("select 7 as inner"), &query, &error), ORM_STATUS_OK);
-    orm_flow_config(&flow_config, &TEST_DB_NESTED_ROW_DATA);
-    flow_config.max_depth = 1u;
-    config.projection_schema = &TEST_DB_NESTED_ROW_SCHEMA;
-    check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
-                SALTS_OK);
-    flow = open_graph(count_graph_probe_stage, &graph_probe);
-    check_not_null(flow);
-    check_true(cflow_scheduler_inline_init(&scheduler));
-    run_config.scheduler = &scheduler;
-    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
+      orm_error_init(&error);
+      connection = open_test_database(&error);
+      check_not_null(connection);
+      check_equal(orm_raw(connection, orm_view("select 7 as inner"), &query, &error),
+                  ORM_STATUS_OK);
+      orm_flow_config(&flow_config, &TEST_DB_NESTED_ROW_DATA);
+      flow_config.max_depth = cases[case_index].max_depth;
+      config.projection_schema = &TEST_DB_NESTED_ROW_SCHEMA;
+      check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
+                  SALTS_OK);
+      flow = open_graph(count_graph_probe_stage, &graph_probe);
+      check_not_null(flow);
+      check_true(cflow_scheduler_inline_init(&scheduler));
+      run_config.scheduler = &scheduler;
+      check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
 
-    check_equal(turbo_flow_run_request(run, 1u), SALTS_EIO);
-    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_EIO);
-    check_equal(result.state, TURBO_FLOW_RUN_FAILED);
-    check_equal(result.status, SALTS_EIO);
-    check_contains(result.error.message, "row binding failed");
-    check_equal(result.values, 0u);
-    check_equal(graph_probe.count, 0u);
+      check_equal(turbo_flow_run_request(run, 1u), SALTS_EIO);
+      check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_EIO);
+      check_equal(result.state, TURBO_FLOW_RUN_FAILED);
+      check_equal(result.status, SALTS_EIO);
+      check_greater(snprintf(expected_error, sizeof(expected_error),
+                             "row binding failed: cbind=%d ",
+                             (int)cases[case_index].expected_status),
+                    0);
+      check_contains(result.error.message, expected_error);
+      check_equal(result.values, 0u);
+      check_equal(graph_probe.count, 0u);
 
-    turbo_flow_run_close(run);
-    cflow_scheduler_destroy(&scheduler);
-    orm_query_destroy(query);
-    check_equal(turbo_flow_stop(flow), SALTS_OK);
-    turbo_flow_destroy(flow);
-    orm_disconnect(connection);
+      turbo_flow_run_close(run);
+      cflow_scheduler_destroy(&scheduler);
+      orm_query_destroy(query);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      turbo_flow_destroy(flow);
+      orm_disconnect(connection);
+    }
   }
 
   it("keeps a TidesDB transaction busy until the adapted run closes") {
