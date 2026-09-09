@@ -19,9 +19,13 @@
 #ifndef FLOW_SCHEMA_DESCRIPTOR_MINOR
 #define FLOW_SCHEMA_DESCRIPTOR_MINOR TURBO_FLOW_PLUGIN_SCHEMA_ABI_MINOR
 #endif
+#ifndef FLOW_SCHEMA_VERSION
+#define FLOW_SCHEMA_VERSION 1u
+#endif
 
 enum { FLOW_SCHEMA_GOOD = 0, FLOW_SCHEMA_DUPLICATE = 1, FLOW_SCHEMA_BAD_VERSION = 2,
-       FLOW_SCHEMA_BAD_DESCRIPTOR = 3, FLOW_SCHEMA_SWALLOW_ERROR = 4 };
+       FLOW_SCHEMA_BAD_DESCRIPTOR = 3, FLOW_SCHEMA_SWALLOW_ERROR = 4,
+       FLOW_SCHEMA_BAD_ID = 5, FLOW_SCHEMA_LONG_ID = 6 };
 
 typedef struct schema_fixture_s { const turbo_flow_plugin_host_v1_t *host; } schema_fixture_t;
 static cmeta_type_desc fixture_int_type;
@@ -34,6 +38,13 @@ static int fixture_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
   fixture_int_type = *CMETA_TYPEOF(int);
   fixture_int_data = cmeta_data_int;
   fixture_int_data.stable_id = FLOW_SCHEMA_STABLE_ID;
+#if FLOW_SCHEMA_MODE == 5
+  fixture_int_data.stable_id = "fixture.schema/invalid";
+#elif FLOW_SCHEMA_MODE == 6
+  fixture_int_data.stable_id =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+#endif
   fixture_int_data.display_name = "Fixture int";
   fixture_int_data.storage_type = &fixture_int_type;
   fixture = (schema_fixture_t *)host->allocate(host->ctx, sizeof(*fixture));
@@ -47,7 +58,7 @@ static int fixture_register(void *plugin, const turbo_flow_plugin_registration_v
   turbo_flow_plugin_schema_v1_t schema = TURBO_FLOW_PLUGIN_SCHEMA_V1_INIT;
   int rc;
   if (!plugin || !registration || !registration->add_schema) return SALTS_EINVAL;
-  schema.schema_version = FLOW_SCHEMA_MODE == FLOW_SCHEMA_BAD_VERSION ? 0u : 1u;
+  schema.schema_version = FLOW_SCHEMA_MODE == FLOW_SCHEMA_BAD_VERSION ? 0u : FLOW_SCHEMA_VERSION;
   schema.abi_minor = FLOW_SCHEMA_DESCRIPTOR_MINOR;
   schema.data = &fixture_int_data;
 #if FLOW_SCHEMA_MODE == 3

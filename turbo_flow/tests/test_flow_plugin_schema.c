@@ -83,6 +83,48 @@ spec("plugin schema catalog") {
     check_equal(turbo_flow_plugin_host_destroy(host, 0u, &error), SALTS_OK);
   }
 
+  it("accepts one stable identity at distinct schema versions") {
+    turbo_flow_plugin_host_config_t config = schema_config(2u);
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_plugin_schema_catalog_v1_t catalog = TURBO_FLOW_PLUGIN_SCHEMA_CATALOG_V1_INIT;
+    turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
+    turbo_flow_plugin_host_t *host = NULL;
+    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, FLOW_SCHEMA_GOOD, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, FLOW_SCHEMA_VERSION_TWO, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_catalog_snapshot_schema_catalog(snapshot, &catalog), SALTS_OK);
+    check_equal(catalog.schema_count, (size_t)2);
+    check_equal(catalog.schemas[0].schema_version, 1u);
+    check_equal(catalog.schemas[1].schema_version, 2u);
+    turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+    check_equal(turbo_flow_plugin_host_destroy(host, 0u, &error), SALTS_OK);
+  }
+
+  it("rejects illegal and overlong schema stable identities") {
+    const char *paths[] = {FLOW_SCHEMA_BAD_ID, FLOW_SCHEMA_LONG_ID};
+    for (size_t i = 0u; i < 2u; ++i) {
+      turbo_flow_plugin_host_config_t config = schema_config(1u);
+      turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      turbo_flow_plugin_host_t *host = NULL;
+      check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
+      check_equal(turbo_flow_plugin_host_load(host, paths[i], &error), SALTS_EINVAL);
+      check_equal(turbo_flow_plugin_host_module_count(host), (size_t)0);
+      check_equal(turbo_flow_plugin_host_destroy(host, 0u, &error), SALTS_OK);
+    }
+  }
+
+  it("rejects a pre-1.4 schema wrapper from a 1.4 plugin") {
+    turbo_flow_plugin_host_config_t config = schema_config(1u);
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_plugin_host_t *host = NULL;
+    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, FLOW_SCHEMA_OLD_WRAPPER, &error), SALTS_EINVAL);
+    check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_REGISTRATION);
+    check_equal(turbo_flow_plugin_host_module_count(host), (size_t)0);
+    check_equal(turbo_flow_plugin_host_destroy(host, 0u, &error), SALTS_OK);
+  }
+
   it("keeps snapshots immutable across later schema registration") {
     turbo_flow_plugin_host_config_t config = schema_config(2u);
     turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
