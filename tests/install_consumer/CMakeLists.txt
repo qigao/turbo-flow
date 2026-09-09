@@ -72,3 +72,16 @@ endif()
 
 enable_testing()
 add_test(NAME turbo_flow_install_consumer_runs COMMAND turbo_flow_install_consumer)
+
+if(WIN32 AND NOT TURBO_FLOW_CONSUMER_CXX_ONLY)
+  add_library(turbo_flow_legacy_import_fixture SHARED
+              legacy_config_import_stub.c legacy_config_imports.def)
+  set_target_properties(turbo_flow_legacy_import_fixture PROPERTIES
+                        OUTPUT_NAME turbo_flow
+                        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/legacy-fixture")
+  add_executable(turbo_flow_legacy_config_consumer legacy_config_main.c)
+  target_link_libraries(turbo_flow_legacy_config_consumer
+                        PRIVATE turbo_flow_legacy_import_fixture)
+  add_test(NAME turbo_flow_legacy_config_consumer_runs
+           COMMAND turbo_flow_legacy_config_consumer)
+endif()

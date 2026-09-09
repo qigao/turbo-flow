@@ -379,6 +379,15 @@ int turbo_flow_plugin_generation_create(turbo_flow_plugin_catalog_snapshot_t *sn
   if (turbo_flow_state(*flow_io) != TURBO_FLOW_STATE_PARSED)
     return flow_plugin_generation_error(error, SALTS_EINVAL, "$.graph",
                                         "Graph generation requires a parsed Graph");
+  rc = turbo_flow_resolved_config_operation_binding_count(resolved, &required);
+  if (rc != SALTS_OK)
+    return flow_plugin_generation_error(error, rc, "$.operation_bindings",
+                                        "operation binding configuration is invalid");
+  /* #93: replace this admission gate only when typed operation binding is fully implemented. */
+  if (required != 0u)
+    return flow_plugin_generation_error(error, SALTS_ENOTSUP, "$.operation_bindings",
+                                        "typed operation binding execution is not implemented");
+  required = 0u;
   rc = turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog);
   if (rc != SALTS_OK)
     return flow_plugin_generation_error(error, rc, "$.providers",

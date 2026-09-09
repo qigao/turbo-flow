@@ -1,12 +1,12 @@
 #include <stddef.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 #include <turbo_flow.h>
 #include <turbo_flow_chttp.h>
 #include <turbo_flow_cnet.h>
 #include <turbo_flow_plugin.h>
-#include <turbo_flow_plugin_operation.h>
 #include <turbo_flow_plugin_generation.h>
+#include <turbo_flow_plugin_operation.h>
 #include <turbo_flow_plugin_protocol.h>
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   #include <turbo_flow_turbodb.h>
@@ -26,6 +26,37 @@ static native_io_backend_kind install_consumer_backend(void) {
 #endif
 }
 
+static int install_operation_binding_config(void) {
+  static const char yaml[] =
+      "version: 1\noperation_bindings:\n  - operation: installed.evaluate\n"
+      "    plugin: installed.typed\n    version: 1\n    input_schema: installed.Input\n"
+      "    input_schema_version: 1\n    output_schema: installed.Output\n"
+      "    output_schema_version: 1\n    permissions: [installed.read]\n"
+      "    execution: inline\n    threading: owner\n    cancellation: none\n"
+      "    max_inflight: 1\n    max_input_bytes: 64\n    max_result_bytes: 32\n"
+      "    max_retained_bytes: 64\n    max_steps: 10\n    deadline_ms: 0\nadapters: {}\n";
+  turbo_flow_resolved_config_t *config = NULL;
+  turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  turbo_flow_resolved_operation_binding_view_t view =
+      TURBO_FLOW_RESOLVED_OPERATION_BINDING_VIEW_INIT;
+  const char *permission = NULL;
+  size_t count = 0u;
+  int rc = turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error);
+  if (rc == SALTS_OK) rc = turbo_flow_resolved_config_operation_binding_count(config, &count);
+  if (rc == SALTS_OK && count == 1u)
+    rc = turbo_flow_resolved_config_operation_binding_at(config, 0u, &view);
+  if (rc == SALTS_OK)
+    rc = turbo_flow_resolved_config_operation_binding_permission_at(config, 0u, 0u, &permission);
+  if (rc == SALTS_OK &&
+      (strcmp(view.operation, "installed.evaluate") != 0 || view.resource != NULL ||
+       strcmp(view.input_schema, "installed.Input") != 0 || view.input_schema_version != 1u ||
+       strcmp(view.output_schema, "installed.Output") != 0 || view.output_schema_version != 1u ||
+       strcmp(permission, "installed.read") != 0))
+    rc = SALTS_EPROTO;
+  turbo_flow_resolved_config_destroy(config);
+  return rc;
+}
+
 static void install_projection_destroy(void *value, void *ctx) {
   (void)ctx;
   free(value);
@@ -35,9 +66,15 @@ static int install_projection_release(void *ctx) {
   return SALTS_OK;
 }
 static int install_projection_owner(void) {
-  static const turbo_flow_data_schema_t schema = {
-      sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
-      TURBO_FLOW_DATA_ENCODING_OPAQUE, "installed.projection", "Integer", "installed.int", 1u, 1u, NULL};
+  static const turbo_flow_data_schema_t schema = {sizeof(turbo_flow_data_schema_t),
+                                                  TURBO_FLOW_DOMAIN_DATA,
+                                                  TURBO_FLOW_DATA_ENCODING_OPAQUE,
+                                                  "installed.projection",
+                                                  "Integer",
+                                                  "installed.int",
+                                                  1u,
+                                                  1u,
+                                                  NULL};
   turbo_flow_plugin_host_config_t host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
   turbo_flow_projection_owner_config_t config = TURBO_FLOW_PROJECTION_OWNER_CONFIG_INIT;
@@ -65,22 +102,29 @@ static int install_projection_owner(void) {
   config.destroy = install_projection_destroy;
   config.release_context = install_projection_release;
   config.ctx = malloc(sizeof(int));
-  if (!config.ctx) { rc = SALTS_ENOMEM; goto cleanup; }
+  if (!config.ctx) {
+    rc = SALTS_ENOMEM;
+    goto cleanup;
+  }
   rc = turbo_flow_plugin_projection_owner_create(snapshot, &config, &owner);
   if (rc != SALTS_OK) goto cleanup;
   config.ctx = NULL;
   turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
   snapshot = NULL;
   value = (int *)malloc(sizeof(*value));
-  if (!value) { rc = SALTS_ENOMEM; goto cleanup; }
+  if (!value) {
+    rc = SALTS_ENOMEM;
+    goto cleanup;
+  }
   *value = 1;
   rc = turbo_flow_msg_bind_retained_projection(&message, owner, value);
   if (rc != SALTS_OK) goto cleanup;
   value = NULL;
   rc = turbo_flow_projection_owner_snapshot(owner, &state);
-  if (rc == SALTS_OK && (state.outstanding != 1u ||
-      *(const int *)turbo_flow_msg_projection(&message, NULL) != 1 ||
-      turbo_flow_plugin_host_destroy(host, 0u, &error) != SALTS_EBUSY)) rc = SALTS_EPROTO;
+  if (rc == SALTS_OK &&
+      (state.outstanding != 1u || *(const int *)turbo_flow_msg_projection(&message, NULL) != 1 ||
+       turbo_flow_plugin_host_destroy(host, 0u, &error) != SALTS_EBUSY))
+    rc = SALTS_EPROTO;
 cleanup:
   free(value);
   free(config.ctx);
@@ -96,6 +140,7 @@ cleanup:
 }
 
 int main(void) {
+  if (install_operation_binding_config() != SALTS_OK) return 1;
   if (install_projection_owner() != SALTS_OK) return 1;
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   turbo_flow_turbodb_source_config_t turbodb_config = turbo_flow_turbodb_source_config_default();
@@ -324,9 +369,9 @@ int main(void) {
       plugin_host_config.business_provider_capacity == 0u ||
       plugin_host_config.transactional_adapter_provider_capacity == 0u ||
       plugin_host_config.transactional_resource_provider_capacity == 0u ||
-      plugin_host_config.schema_capacity == 0u ||
-      generation_config.owner_capacity == 0u || !plugin_host_create || !plugin_host_load ||
-      !plugin_host_destroy || !plugin_protocol_catalog_read || !plugin_transactional_catalog_read ||
+      plugin_host_config.schema_capacity == 0u || generation_config.owner_capacity == 0u ||
+      !plugin_host_create || !plugin_host_load || !plugin_host_destroy ||
+      !plugin_protocol_catalog_read || !plugin_transactional_catalog_read ||
       !plugin_generation_create || !plugin_generation_flow || !plugin_generation_state ||
       !plugin_generation_owner_count || !plugin_generation_poll ||
       plugin_generation_poll(NULL, 0u, &config_error) != SALTS_EINVAL ||

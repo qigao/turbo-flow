@@ -29,6 +29,7 @@ endif()
 file(GLOB TURBO_FLOW_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config_operation.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
@@ -55,6 +56,7 @@ list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_se
 
 add_library(turbo_flow_config SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config_operation.c
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resolved_config.h)
 cmake_config_target(
   turbo_flow_config
@@ -160,7 +162,6 @@ target_link_libraries(turbo_flow_plugin_host
 # its exported symbols while new consumers move to the smaller targets above.
 add_library(turbo_flow SHARED
   ${TURBO_FLOW_SOURCES}
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
   ${TURBO_FLOW_LEXER_GEN}
   ${TURBO_FLOW_GRAMMAR_GEN}
@@ -170,6 +171,10 @@ add_library(turbo_flow SHARED
   ${TURBO_FLOW_CONTROL_GRAMMAR_GEN}
   ${TURBO_FLOW_SECURITY_RULE_LEXER_GEN}
   ${TURBO_FLOW_HEADERS})
+if(WIN32)
+  target_sources(turbo_flow PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_flow_config_forwarders.def)
+endif()
 add_dependencies(turbo_flow
   ${TURBO_FLOW_LEXER_TARGET}
   ${TURBO_FLOW_GRAMMAR_TARGET}
@@ -192,7 +197,7 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/parser
           ${CMAKE_CURRENT_BINARY_DIR}
           ${PROJECT_SOURCE_DIR}/vendor/mir)
-target_link_libraries(turbo_flow PUBLIC Salts::Core Salts::CSTL Salts::CFlow RulesForge::RulesForge
+target_link_libraries(turbo_flow PUBLIC TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow RulesForge::RulesForge
                                PRIVATE Salts::CYamlJsonAdapter Salts::DataBind
                                        Salts::JsonParser mir_static)
 

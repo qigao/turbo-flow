@@ -142,6 +142,12 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
+  test_operation_binding_config
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_operation_binding_config.c
+  LIBS TurboFlow::Config Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+
+cmake_add_test(
   test_flow_compat_boundary
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_compat_boundary.c
   LIBS TurboFlow::Flow Salts::TinyTest
