@@ -44,7 +44,6 @@ set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_rulesforge.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_policy.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_discovery.h)
-list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config_limits.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h)
@@ -117,8 +116,7 @@ target_link_libraries(${TARGET_NAME} PUBLIC
 
 add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h
-  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config.h)
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
 cmake_config_target(
   turbo_flow_product
   ALIAS TurboFlow::Product
@@ -157,49 +155,6 @@ target_include_directories(
 target_link_libraries(turbo_flow_plugin_host
                       PUBLIC TurboFlow::Product TurboFlow::ProtocolIngress Salts::CMeta
                       PRIVATE Salts::CSTL ${CMAKE_DL_LIBS})
-
-# Binary compatibility surface: keep the historical turbo_flow library and
-# its exported symbols while new consumers move to the smaller targets above.
-add_library(turbo_flow SHARED
-  ${TURBO_FLOW_SOURCES}
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
-  ${TURBO_FLOW_LEXER_GEN}
-  ${TURBO_FLOW_GRAMMAR_GEN}
-  ${TURBO_FLOW_EXPR_LEXER_GEN}
-  ${TURBO_FLOW_EXPR_GRAMMAR_GEN}
-  ${TURBO_FLOW_CONTROL_LEXER_GEN}
-  ${TURBO_FLOW_CONTROL_GRAMMAR_GEN}
-  ${TURBO_FLOW_SECURITY_RULE_LEXER_GEN}
-  ${TURBO_FLOW_HEADERS})
-if(WIN32)
-  target_sources(turbo_flow PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_flow_config_forwarders.def)
-endif()
-add_dependencies(turbo_flow
-  ${TURBO_FLOW_LEXER_TARGET}
-  ${TURBO_FLOW_GRAMMAR_TARGET}
-  ${TURBO_FLOW_EXPR_LEXER_TARGET}
-  ${TURBO_FLOW_EXPR_GRAMMAR_TARGET}
-  ${TURBO_FLOW_CONTROL_LEXER_TARGET}
-  ${TURBO_FLOW_CONTROL_GRAMMAR_TARGET}
-  ${TURBO_FLOW_SECURITY_RULE_LEXER_TARGET})
-cmake_config_target(
-  turbo_flow
-  ALIAS TurboFlow::Flow
-  FOLDER "turbo_flow/compat"
-  EXPORT_NAME Flow)
-target_compile_definitions(turbo_flow PRIVATE TURBO_FLOW_BUILD TURBO_FLOW_EXPR_ENABLE_JIT=1)
-target_include_directories(
-  turbo_flow
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<INSTALL_INTERFACE:include>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
-          ${CMAKE_CURRENT_SOURCE_DIR}/parser
-          ${CMAKE_CURRENT_BINARY_DIR}
-          ${PROJECT_SOURCE_DIR}/vendor/mir)
-target_link_libraries(turbo_flow PUBLIC TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow RulesForge::RulesForge
-                               PRIVATE Salts::CYamlJsonAdapter Salts::DataBind
-                                       Salts::JsonParser mir_static)
 
 install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)
 

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(TurboFlowCNetPluginConsumer LANGUAGES C)
 
-find_package(TurboFlow 1.0 CONFIG REQUIRED COMPONENTS PluginHost)
+find_package(TurboFlow 2.0 CONFIG REQUIRED COMPONENTS PluginHost)
 
 add_executable(turbo_flow_cnet_plugin_consumer main.c)
 target_link_libraries(turbo_flow_cnet_plugin_consumer PRIVATE TurboFlow::PluginHost)

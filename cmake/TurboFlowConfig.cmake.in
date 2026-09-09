@@ -9,7 +9,6 @@ set(_TurboFlow_supported_components
     CNetAdapter
     CHTTPAdapter
     Product
-    Flow
     ProtocolIngress
     ProtocolIngressGraph
     ProtocolMqttSn
@@ -33,7 +32,6 @@ set(_TurboFlow_salts_utils_components
     Graph
     PluginHost
     Product
-    Flow
     ProtocolIngressGraph
     ProtocolBusinessOcpp201Core
     SecuritySQLite
@@ -46,7 +44,6 @@ set(_TurboFlow_rules_forge_components
     Graph
     PluginHost
     Product
-    Flow
     ProtocolIngressGraph
     SecuritySQLite
     Codec

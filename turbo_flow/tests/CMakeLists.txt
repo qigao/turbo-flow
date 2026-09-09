@@ -33,7 +33,7 @@ cmake_add_test(
   test_turbo_flow
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_turbo_flow.c
           ${CMAKE_CURRENT_SOURCE_DIR}/flow_plan_type_probe.c
-  LIBS TurboFlow::Flow Salts::CFlow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::CFlow Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 
@@ -53,86 +53,86 @@ cmake_add_test(
 cmake_add_test(
   test_flow_async_emit
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_async_emit.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_resource_document
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_resource_document.c
-  LIBS TurboFlow::Flow Salts::DataBind Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::DataBind Salts::TinyTest
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_managed_boundary
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_managed_boundary.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_managed_async_terminal
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_managed_async_terminal.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_managed_source
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_managed_source.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_expr
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_expr.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_control
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_control.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_policy
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_policy.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_rulesforge
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_rulesforge.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_security
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_security.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_domain
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_domain.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_keyed_state
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_keyed_state.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
   test_flow_discovery
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_discovery.c
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
@@ -145,12 +145,6 @@ cmake_add_test(
   test_operation_binding_config
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_operation_binding_config.c
   LIBS TurboFlow::Config Salts::TinyTest
-  FOLDER "turbo_flow/tests")
-
-cmake_add_test(
-  test_flow_compat_boundary
-  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_compat_boundary.c
-  LIBS TurboFlow::Flow Salts::TinyTest
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
@@ -663,14 +657,14 @@ add_dependencies(
   test_flow_plugin_generation_poll_small_descriptor)
 
 set_tests_properties(
-  test_turbo_flow test_flow_async_terminal test_flow_async_emit test_flow_resource_document test_flow_managed_boundary test_flow_config test_flow_compat_boundary
+  test_turbo_flow test_flow_async_terminal test_flow_async_emit test_flow_resource_document test_flow_managed_boundary test_flow_config
   test_flow_managed_source test_resolved_config_boundary test_flow_plugin_host
   test_flow_plugin_generation
   PROPERTIES LABELS "graph;core")
 
 if(WIN32)
   set_tests_properties(
-    test_flow_config test_flow_compat_boundary test_resolved_config_boundary
+    test_flow_config test_resolved_config_boundary
     PROPERTIES ENVIRONMENT_MODIFICATION
                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::Core>;PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::DataBind>")
 endif()

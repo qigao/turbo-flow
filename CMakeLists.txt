@@ -8,7 +8,7 @@ endif()
 
 project(
   TurboFlow
-  VERSION 1.0.0
+  VERSION 2.0.0
   LANGUAGES C CXX)
 
 # Project configuration - output directories
@@ -160,7 +160,6 @@ foreach(
      turbo_flow_graph
      turbo_flow_product
      turbo_flow_plugin_host
-     turbo_flow
      tf_cnet_adapter
      tf_chttp_adapter
      tf_turbodb_adapter
@@ -205,7 +204,7 @@ configure_package_config_file(
 write_basic_package_version_file(
   "${CMAKE_BINARY_DIR}/TurboFlowConfigVersion.cmake"
   VERSION ${PROJECT_VERSION}
-  COMPATIBILITY AnyNewerVersion)
+  COMPATIBILITY SameMajorVersion)
 
 # Install the config files
 install(FILES "${CMAKE_BINARY_DIR}/TurboFlowConfig.cmake"

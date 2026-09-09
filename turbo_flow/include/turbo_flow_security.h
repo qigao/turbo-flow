@@ -1,7 +1,8 @@
 #ifndef TURBO_FLOW_SECURITY_H
 #define TURBO_FLOW_SECURITY_H
 
-#include "turbo_flow_config.h"
+#include "turbo_flow.h"
+#include "turbo_flow_resolved_config.h"
 
 #include <stddef.h>
 #include <stdint.h>

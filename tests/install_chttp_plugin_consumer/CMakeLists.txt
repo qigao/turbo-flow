@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(TurboFlowCHTTPPluginConsumer LANGUAGES C)
 
-find_package(TurboFlow 1.0 CONFIG REQUIRED COMPONENTS PluginHost Product Graph)
+find_package(TurboFlow 2.0 CONFIG REQUIRED COMPONENTS PluginHost Product Graph)
 add_executable(turbo_flow_chttp_plugin_consumer main.c)
 target_link_libraries(turbo_flow_chttp_plugin_consumer PRIVATE
   TurboFlow::PluginHost TurboFlow::Product TurboFlow::Graph)

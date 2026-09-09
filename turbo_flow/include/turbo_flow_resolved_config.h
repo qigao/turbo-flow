@@ -85,7 +85,7 @@ typedef enum turbo_flow_config_value_type_e {
   TURBO_FLOW_CONFIG_OBJECT
 } turbo_flow_config_value_type_t;
 
-/** Borrowed immutable adapter projection from one resolved snapshot. */
+/** Borrowed immutable adapter projection, valid until its resolved config is destroyed. */
 typedef struct turbo_flow_resolved_adapter_view_s {
   size_t size;
   const char *name;
@@ -96,7 +96,7 @@ typedef struct turbo_flow_resolved_adapter_view_s {
 #define TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT                                                      \
   {sizeof(turbo_flow_resolved_adapter_view_t), NULL, NULL, NULL}
 
-/** Borrowed immutable channel projection from one resolved snapshot. */
+/** Borrowed immutable channel projection, valid until its resolved config is destroyed. */
 typedef struct turbo_flow_resolved_channel_view_s {
   size_t size;
   const char *name;
@@ -143,7 +143,8 @@ TURBO_FLOW_C_API int
 turbo_flow_resolved_config_operation_binding_count(const turbo_flow_resolved_config_t *config,
                                                    size_t *count);
 /**
- * Project a borrowed binding by index. `view->size` must equal sizeof(*view).
+ * Project a borrowed binding by index. `view->size` must be at least sizeof(*view);
+ * returned fields are valid until `config` is destroyed.
  * A valid-sized view is cleared on error while preserving size. Returns SALTS_ENOENT when absent.
  */
 TURBO_FLOW_C_API int
@@ -175,7 +176,8 @@ turbo_flow_resolved_config_profile_channel_optional(const turbo_flow_resolved_co
                                                     const char *profile, const char *parameter,
                                                     const char **channel_name);
 
-/** Project a borrowed named channel; returns SALTS_ENOENT when absent. */
+/** Project a borrowed named channel; `view->size` must be at least sizeof(*view), and its
+ * fields are valid until `config` is destroyed. Returns SALTS_ENOENT when absent. */
 TURBO_FLOW_C_API int turbo_flow_resolved_config_channel(const turbo_flow_resolved_config_t *config,
                                                         const char *name,
                                                         turbo_flow_resolved_channel_view_t *view);
@@ -187,7 +189,8 @@ TURBO_FLOW_C_API int turbo_flow_resolved_config_preflight_adapter_kinds(
     const turbo_flow_resolved_config_t *config, const char *const *enabled_kinds,
     size_t enabled_kind_count, turbo_flow_config_error_t *error);
 
-/** Project a borrowed named adapter; returns SALTS_ENOENT when absent. */
+/** Project a borrowed named adapter; `view->size` must be at least sizeof(*view), and its
+ * fields are valid until `config` is destroyed. Returns SALTS_ENOENT when absent. */
 TURBO_FLOW_C_API int turbo_flow_resolved_config_adapter(const turbo_flow_resolved_config_t *config,
                                                         const char *adapter_name,
                                                         turbo_flow_resolved_adapter_view_t *view);

@@ -84,9 +84,10 @@ if(WIN32)
     OUTPUT_VARIABLE plugin_dependent_output
     ERROR_VARIABLE plugin_dependent_error)
   if(NOT plugin_dependent_result EQUAL 0 OR
-     NOT plugin_dependent_output MATCHES "tf_chttp_adapter\\.dll")
+     NOT plugin_dependent_output MATCHES "tf_chttp_adapter\\.dll" OR
+     plugin_dependent_output MATCHES "turbo_flow\\.dll")
     message(FATAL_ERROR
-            "CHTTP plugin dependency inspection failed\n${plugin_dependent_output}\n${plugin_dependent_error}")
+            "CHTTP plugin must not depend on turbo_flow.dll\n${plugin_dependent_output}\n${plugin_dependent_error}")
   endif()
   chttp_require_native_abi("${plugin_dependent_output}")
   if(TURBO_FLOW_CONFIG STREQUAL "Debug")
@@ -106,9 +107,9 @@ if(WIN32)
     message(FATAL_ERROR
             "Gateway dependency inspection failed (${consumer_dependent_result})\n${consumer_dependent_output}\n${consumer_dependent_error}")
   endif()
-  if(consumer_dependent_output MATCHES "tf_chttp_adapter\\.dll|salts_chttp(-[0-9]+)?\\.dll")
+  if(consumer_dependent_output MATCHES "tf_chttp_adapter\\.dll|salts_chttp(-[0-9]+)?\\.dll|turbo_flow\\.dll")
     message(FATAL_ERROR
-            "Gateway consumer must not link the CHTTP adapter or CHTTP runtime\n${consumer_dependent_output}")
+            "Gateway consumer must not link the CHTTP adapter, CHTTP runtime, or turbo_flow.dll\n${consumer_dependent_output}")
   endif()
 endif()
 

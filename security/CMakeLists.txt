@@ -15,7 +15,7 @@ target_include_directories(
   ${TARGET_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                         $<INSTALL_INTERFACE:include>)
 target_link_libraries(${TARGET_NAME}
-  PUBLIC TurboFlow::Flow
+  PUBLIC TurboFlow::Graph
   PRIVATE SQLite::SQLite3 Salts::Core Salts::JsonParser)
 install(FILES include/turbo_flow_security_sqlite.h DESTINATION include)
 
