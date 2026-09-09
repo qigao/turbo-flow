@@ -8,6 +8,8 @@ typedef struct control_adapter_s {
   int commands;
   int resource_commands;
   int result;
+  int metadata_result;
+  const char *resource_uid;
   turbo_flow_resource_command_kind_t last_resource_command;
   char last_endpoint_host[TURBO_FLOW_ENDPOINT_MAX + 1u];
   char last_endpoint_path[TURBO_FLOW_ENDPOINT_MAX + 1u];
@@ -41,10 +43,12 @@ static int control_adapter_command(void *ctx, turbo_flow_t *flow,
 static int control_adapter_resource_metadata(void *ctx, turbo_flow_resource_metadata_t *out) {
   control_adapter_t *adapter = (control_adapter_t *)ctx;
   if (!adapter || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  if (adapter->metadata_result != SALTS_OK) return adapter->metadata_result;
   *out = (turbo_flow_resource_metadata_t)TURBO_FLOW_RESOURCE_METADATA_INIT;
   out->domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
   out->kind = TURBO_FLOW_RESOURCE_CONNECTION;
-  memcpy(out->uid, "connection:mock", sizeof("connection:mock"));
+  memcpy(out->uid, adapter->resource_uid ? adapter->resource_uid : "connection:mock",
+         strlen(adapter->resource_uid ? adapter->resource_uid : "connection:mock") + 1u);
   memcpy(out->owner_name, "mock", sizeof("mock"));
   out->generation = adapter->generation;
   out->observed_generation = adapter->generation;
@@ -82,7 +86,8 @@ static int control_external_read(void *ctx, uint32_t field_id, turbo_flow_expr_v
 }
 
 static turbo_flow_t *control_started_flow_ex(control_adapter_t *adapter,
-                                             int register_stable_resource) {
+                                             int register_stable_resource,
+                                             control_adapter_t *extra_resource) {
   static const char source[] = "source input\n"
                                "stage main {\n"
                                "  step transform exec thread workers 2\n"
@@ -110,6 +115,14 @@ static turbo_flow_t *control_started_flow_ex(control_adapter_t *adapter,
     check_equal(turbo_flow_register_adapter_with_resources(flow, "mock", &ops, adapter, &schema,
                                                             &resource, 1u),
                  SALTS_OK);
+    if (extra_resource) {
+      turbo_flow_resource_provider_ops_t extra_ops = TURBO_FLOW_RESOURCE_PROVIDER_OPS_INIT;
+      if (extra_resource->generation == 0u) extra_resource->generation = 1u;
+      extra_ops.metadata = control_adapter_resource_metadata;
+      extra_ops.command = control_adapter_resource_command;
+      check_equal(turbo_flow_register_resource_provider(flow, "mock", &extra_ops, extra_resource),
+                  SALTS_OK);
+    }
   } else {
     check_equal(turbo_flow_register_adapter_ex(flow, "mock", &ops, adapter, &schema), SALTS_OK);
   }
@@ -122,7 +135,7 @@ static turbo_flow_t *control_started_flow_ex(control_adapter_t *adapter,
 }
 
 static turbo_flow_t *control_started_flow(control_adapter_t *adapter) {
-  return control_started_flow_ex(adapter, 1);
+  return control_started_flow_ex(adapter, 1, NULL);
 }
 
 spec("control_dsl") {
@@ -174,7 +187,7 @@ spec("control_dsl") {
 
   it("dispatches stable adapter controls through the resource command owner") {
     control_adapter_t adapter = {0};
-    turbo_flow_t *flow = control_started_flow_ex(&adapter, 1);
+    turbo_flow_t *flow = control_started_flow_ex(&adapter, 1, NULL);
     const char *command = "adapter mock quiesce";
     check_equal(turbo_flow_control(flow, command, strlen(command)), SALTS_OK);
     check_equal(adapter.commands, 0);
@@ -187,7 +200,7 @@ spec("control_dsl") {
 
   it("rejects adapter controls when only the legacy callback is registered") {
     control_adapter_t adapter = {0};
-    turbo_flow_t *flow = control_started_flow_ex(&adapter, 0);
+    turbo_flow_t *flow = control_started_flow_ex(&adapter, 0, NULL);
     check_equal(turbo_flow_control(flow, "adapter mock quiesce",
                                    sizeof("adapter mock quiesce") - 1u),
                 SALTS_ENOENT);
@@ -209,6 +222,33 @@ spec("control_dsl") {
     check_equal(adapter.resource_commands, 2);
     check_equal(adapter.last_resource_command, TURBO_FLOW_RESOURCE_COMMAND_RESUME);
     check_equal(adapter.generation, 3u);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("rejects ambiguous command-capable connection providers without dispatch") {
+    control_adapter_t adapter = {0};
+    control_adapter_t extra = {.resource_uid = "connection:mock-secondary"};
+    turbo_flow_t *flow = control_started_flow_ex(&adapter, 1, &extra);
+    check_equal(turbo_flow_control(flow, "adapter mock quiesce",
+                                   sizeof("adapter mock quiesce") - 1u),
+                SALTS_EPROTO);
+    check_equal(adapter.commands, 0);
+    check_equal(adapter.resource_commands, 0);
+    check_equal(extra.resource_commands, 0);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("propagates stable provider metadata errors without dispatch") {
+    control_adapter_t adapter = {0};
+    turbo_flow_t *flow = control_started_flow(&adapter);
+    adapter.metadata_result = SALTS_EIO;
+    check_equal(turbo_flow_control(flow, "adapter mock quiesce",
+                                   sizeof("adapter mock quiesce") - 1u),
+                SALTS_EIO);
+    check_equal(adapter.commands, 0);
+    check_equal(adapter.resource_commands, 0);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
@@ -308,7 +348,7 @@ spec("control_dsl") {
   it("propagates typed command owner failures") {
     control_adapter_t adapter = {0};
     turbo_flow_error_t error;
-    turbo_flow_t *flow = control_started_flow_ex(&adapter, 1);
+    turbo_flow_t *flow = control_started_flow_ex(&adapter, 1, NULL);
     const char *command = "adapter mock resume";
     adapter.result = SALTS_EIO;
     check_equal(turbo_flow_control_ex(flow, command, strlen(command), NULL, &error), SALTS_EIO);
