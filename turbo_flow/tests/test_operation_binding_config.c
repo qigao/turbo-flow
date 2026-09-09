@@ -53,6 +53,38 @@ static char *many_bindings(size_t count) {
   return out;
 }
 
+static void accepted(const char *yaml, turbo_flow_resolved_operation_binding_view_t *view) {
+  turbo_flow_resolved_config_t *config = NULL;
+  turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &config, &error), SALTS_OK);
+  check_not_null(config);
+  if (view)
+    check_equal(turbo_flow_resolved_config_operation_binding_at(config, 0u, view), SALTS_OK);
+  turbo_flow_resolved_config_destroy(config);
+}
+
+static char *identifier_of_length(size_t length) {
+  char *identifier = (char *)malloc(length + 1u);
+  if (!identifier) return NULL;
+  memset(identifier, 'a', length);
+  identifier[length] = '\0';
+  return identifier;
+}
+
+static char *permissions_of_count(size_t count) {
+  size_t capacity = 4u + count * 8u;
+  char *permissions = (char *)malloc(capacity);
+  size_t used = 0u;
+  if (!permissions) return NULL;
+  permissions[used++] = '[';
+  for (size_t i = 0u; i < count; ++i)
+    used += (size_t)snprintf(permissions + used, capacity - used, "p%zu%s", i,
+                             i + 1u == count ? "" : ", ");
+  permissions[used++] = ']';
+  permissions[used] = '\0';
+  return permissions;
+}
+
 spec("operation binding configuration") {
   it("projects the complete immutable binding") {
     char *yaml = document(fields);
@@ -162,6 +194,33 @@ spec("operation binding configuration") {
     free(y);
     free(base);
   }
+  it("enforces identifier lengths and explicit resource values") {
+    char *base = document(fields);
+    char *one = identifier_of_length(1u);
+    char *maximum = identifier_of_length(127u);
+    char *over = identifier_of_length(128u);
+    char *y = replace(base, "decision.evaluate", one);
+    accepted(y, NULL);
+    free(y);
+    y = replace(base, "decision.evaluate", maximum);
+    accepted(y, NULL);
+    free(y);
+    y = replace(base, "decision.evaluate", over);
+    rejected(y, SALTS_EINVAL, "$.operation_bindings[0].operation");
+    free(y);
+    y = replace(base, "    plugin: fixture.typed\n",
+                "    resource: null\n    plugin: fixture.typed\n");
+    rejected(y, SALTS_EINVAL, "$.operation_bindings[0].resource");
+    free(y);
+    y = replace(base, "    plugin: fixture.typed\n",
+                "    resource: \"\"\n    plugin: fixture.typed\n");
+    rejected(y, SALTS_EINVAL, "$.operation_bindings[0].resource");
+    free(y);
+    free(over);
+    free(maximum);
+    free(one);
+    free(base);
+  }
   it("rejects invalid numbers enums permissions and byte relationships") {
     const char *from[] = {"    version: 1\n",   "max_inflight: 1",   "max_input_bytes: 4096",
                           "max_steps: 10000",   "deadline_ms: 0",    "max_result_bytes: 1024",
@@ -194,6 +253,61 @@ spec("operation binding configuration") {
     }
     free(base);
   }
+  it("enforces every numeric field at its exact integer boundaries") {
+    static const struct numeric_case_s {
+      const char *field;
+      const char *original;
+      const char *maximum;
+      const char *over_maximum;
+      int zero_is_valid;
+    } cases[] = {{"version", "1", "4294967295", "4294967296", 0},
+                 {"input_schema_version", "1", "4294967295", "4294967296", 0},
+                 {"output_schema_version", "1", "4294967295", "4294967296", 0},
+                 {"max_inflight", "1", "1048576", "1048577", 0},
+                 {"max_input_bytes", "4096", "1073741824", "1073741825", 0},
+                 {"max_result_bytes", "1024", "1073741824", "1073741825", 0},
+                 {"max_retained_bytes", "8192", "1073741824", "1073741825", 0},
+                 {"max_steps", "10000", "4294967295", "4294967296", 0},
+                 {"deadline_ms", "0", "3600000", "3600001", 1}};
+    char *base = document(fields);
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+      const char *invalid_values[] = {"-1", "1.5", cases[i].over_maximum,
+                                      "9007199254740992"};
+      char original[96];
+      char replacement[96];
+      char path[128];
+      (void)snprintf(original, sizeof(original), "    %s: %s\n", cases[i].field,
+                     cases[i].original);
+      (void)snprintf(path, sizeof(path), "$.operation_bindings[0].%s", cases[i].field);
+      for (size_t value_index = 0u;
+           value_index < sizeof(invalid_values) / sizeof(invalid_values[0]); ++value_index) {
+        (void)snprintf(replacement, sizeof(replacement), "    %s: %s\n", cases[i].field,
+                       invalid_values[value_index]);
+        char *y = replace(base, original, replacement);
+        rejected(y, SALTS_EINVAL, path);
+        free(y);
+      }
+      (void)snprintf(replacement, sizeof(replacement), "    %s: 0\n", cases[i].field);
+      char *zero = replace(base, original, replacement);
+      if (cases[i].zero_is_valid)
+        accepted(zero, NULL);
+      else
+        rejected(zero, SALTS_EINVAL, path);
+      free(zero);
+      (void)snprintf(replacement, sizeof(replacement), "    %s: %s\n", cases[i].field,
+                     cases[i].maximum);
+      char *maximum = replace(base, original, replacement);
+      if (strcmp(cases[i].field, "max_result_bytes") == 0) {
+        char *adjusted = replace(maximum, "    max_retained_bytes: 8192\n",
+                                 "    max_retained_bytes: 1073741824\n");
+        free(maximum);
+        maximum = adjusted;
+      }
+      accepted(maximum, NULL);
+      free(maximum);
+    }
+    free(base);
+  }
   it("rejects duplicate stateless pairs") {
     char *base = document(fields);
     const char *item = strstr(base, "  -\n"), *suffix = strstr(base, "channels:\n");
@@ -202,6 +316,31 @@ spec("operation binding configuration") {
     sprintf(y, "%.*s%.*s%s", (int)(suffix - base), base, (int)len, item, suffix);
     rejected(y, SALTS_EALREADY, "$.operation_bindings[1].operation");
     free(y);
+    free(base);
+  }
+  it("uses the operation and optional resource pair as the unique key") {
+    char *base = document(fields);
+    char *first = replace(base, "    plugin: fixture.typed\n",
+                          "    resource: routing\n    plugin: fixture.typed\n");
+    const char *item = strstr(first, "  -\n");
+    const char *suffix = strstr(first, "channels:\n");
+    size_t item_length = (size_t)(suffix - item);
+    size_t duplicate_size = strlen(first) + item_length + 1u;
+    char *duplicate = (char *)malloc(duplicate_size);
+    (void)snprintf(duplicate, duplicate_size, "%.*s%.*s%s", (int)(suffix - first), first,
+                   (int)item_length, item, suffix);
+    rejected(duplicate, SALTS_EALREADY, "$.operation_bindings[1].operation");
+
+    char *two_resources = replace(duplicate, "    resource: routing\n",
+                                  "    resource: routing_two\n");
+    char *with_channel = replace(two_resources, "channels:\n",
+                                 "channels:\n  routing_two:\n    kind: fixture.resource\n"
+                                 "    config: {}\n");
+    accepted(with_channel, NULL);
+    free(with_channel);
+    free(two_resources);
+    free(duplicate);
+    free(first);
     free(base);
   }
   it("enforces binding and permission capacity boundaries") {
@@ -229,6 +368,25 @@ spec("operation binding configuration") {
     free(y);
     free(base);
   }
+  it("accepts zero one and the maximum permission count") {
+    const size_t counts[] = {0u, 1u, TURBO_FLOW_CONFIG_OPERATION_MAX_PERMISSIONS};
+    char *base = document(fields);
+    for (size_t i = 0u; i < sizeof(counts) / sizeof(counts[0]); ++i) {
+      char *permissions = permissions_of_count(counts[i]);
+      char *y = replace(base, "[read.data, audit]", permissions);
+      turbo_flow_resolved_config_t *config = NULL;
+      turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+      turbo_flow_resolved_operation_binding_view_t view =
+          TURBO_FLOW_RESOLVED_OPERATION_BINDING_VIEW_INIT;
+      check_equal(turbo_flow_config_resolve_yaml(y, strlen(y), &config, &error), SALTS_OK);
+      check_equal(turbo_flow_resolved_config_operation_binding_at(config, 0u, &view), SALTS_OK);
+      check_equal(view.permission_count, counts[i]);
+      turbo_flow_resolved_config_destroy(config);
+      free(y);
+      free(permissions);
+    }
+    free(base);
+  }
   it("accepts a referenced resource and enum alternatives") {
     char *base = document(fields);
     char *a = replace(base, "    plugin: fixture.typed\n",
@@ -253,6 +411,16 @@ spec("operation binding configuration") {
     free(a);
     free(base);
   }
+  it("projects the coro execution alternative") {
+    char *base = document(fields);
+    char *y = replace(base, "execution: inline", "execution: coro");
+    turbo_flow_resolved_operation_binding_view_t view =
+        TURBO_FLOW_RESOLVED_OPERATION_BINDING_VIEW_INIT;
+    accepted(y, &view);
+    check_equal(view.execution, TURBO_FLOW_CONFIG_OPERATION_CORO);
+    free(y);
+    free(base);
+  }
   it("clears failed query outputs and does not overrun a short view") {
     char *y = document(fields);
     turbo_flow_resolved_config_t *c = NULL;
@@ -264,6 +432,9 @@ spec("operation binding configuration") {
     check_equal(turbo_flow_config_resolve_yaml(y, strlen(y), &c, &e), SALTS_OK);
     check_equal(turbo_flow_resolved_config_operation_binding_count(NULL, &n), SALTS_EINVAL);
     check_equal(n, (size_t)0);
+    check_equal(turbo_flow_resolved_config_operation_binding_count(c, NULL), SALTS_EINVAL);
+    check_equal(turbo_flow_resolved_config_operation_binding_at(NULL, 0u, &v), SALTS_EINVAL);
+    check_equal(turbo_flow_resolved_config_operation_binding_at(c, 0u, NULL), SALTS_EINVAL);
     v.size = sizeof(v) - 1;
     v.operation = "sentinel";
     check_equal(turbo_flow_resolved_config_operation_binding_at(c, 0, &v), SALTS_EINVAL);
@@ -274,6 +445,16 @@ spec("operation binding configuration") {
     check_equal(turbo_flow_resolved_config_operation_binding_at(c, 1, &v), SALTS_ENOENT);
     check_null(v.operation);
     check_equal(turbo_flow_resolved_config_operation_binding_permission_at(c, 0, 2, &p),
+                SALTS_ENOENT);
+    check_null(p);
+    p = "sentinel";
+    check_equal(turbo_flow_resolved_config_operation_binding_permission_at(NULL, 0u, 0u, &p),
+                SALTS_EINVAL);
+    check_null(p);
+    check_equal(turbo_flow_resolved_config_operation_binding_permission_at(c, 0u, 0u, NULL),
+                SALTS_EINVAL);
+    p = "sentinel";
+    check_equal(turbo_flow_resolved_config_operation_binding_permission_at(c, 1u, 0u, &p),
                 SALTS_ENOENT);
     check_null(p);
     turbo_flow_resolved_config_destroy(c);
