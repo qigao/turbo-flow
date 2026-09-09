@@ -76,7 +76,10 @@ static int flow_plugin_fixture_register_resource(void *ctx, turbo_flow_t *flow,
 
 static int flow_plugin_fixture_load(const turbo_flow_plugin_host_v1_t *host, void **plugin_out) {
   flow_plugin_fixture_t *fixture;
-  if (!host || !plugin_out || !host->allocate || !host->deallocate) return SALTS_EINVAL;
+  if (!host || host->size != sizeof(*host) ||
+      host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !plugin_out || !host->allocate ||
+      !host->deallocate) return SALTS_EINVAL;
   *plugin_out = NULL;
   fixture = (flow_plugin_fixture_t *)host->allocate(host->ctx, sizeof(*fixture));
   if (!fixture) return SALTS_ENOMEM;
@@ -96,7 +99,10 @@ static int flow_plugin_fixture_register(void *plugin,
   turbo_flow_plugin_product_resource_provider_v1_t resource =
       TURBO_FLOW_PLUGIN_PRODUCT_RESOURCE_PROVIDER_V1_INIT;
   int rc;
-  if (!plugin || !registration || !registration->add_adapter_provider ||
+  if (!plugin || !registration || registration->size != sizeof(*registration) ||
+      registration->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      registration->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
+      !registration->add_adapter_provider ||
       !registration->add_resource_provider)
     return SALTS_EINVAL;
   adapter.provider.kind = FLOW_PLUGIN_FIXTURE_ADAPTER_KIND;

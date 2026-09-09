@@ -11,6 +11,7 @@ struct turbo_flow_projection_owner_s {
 
 static int flow_projection_config_check(const turbo_flow_projection_owner_config_t *config) {
   const turbo_flow_data_schema_t *schema;
+  turbo_flow_result_memory_requirements_t requirements;
   const uint32_t required = TURBO_FLOW_PROJECTION_IMMUTABLE | TURBO_FLOW_PROJECTION_CROSS_THREAD |
                             TURBO_FLOW_PROJECTION_INDEPENDENT_CONTEXT;
   if (!config || config->size < sizeof(*config) ||
@@ -25,9 +26,12 @@ static int flow_projection_config_check(const turbo_flow_projection_owner_config
       !schema->schema_version || schema->encoding < TURBO_FLOW_DATA_ENCODING_TBE ||
       schema->encoding > TURBO_FLOW_DATA_ENCODING_OPAQUE || !config->destroy ||
       !config->release_context || !config->capacity || !config->max_result_bytes ||
-      !config->max_retained_bytes || config->max_result_bytes > config->max_retained_bytes ||
-      config->capacity > SIZE_MAX / config->max_result_bytes ||
-      config->capacity > SIZE_MAX / sizeof(flow_msg_projection_t)) return SALTS_EINVAL;
+      !config->max_retained_bytes || config->max_result_bytes > config->max_retained_bytes)
+    return SALTS_EINVAL;
+  turbo_flow_result_memory_requirements_init(&requirements);
+  if (turbo_flow_result_memory_requirements(config->capacity, config->max_result_bytes,
+                                            &requirements) != SALTS_OK)
+    return SALTS_EINVAL;
   return SALTS_OK;
 }
 
@@ -124,4 +128,26 @@ void flow_projection_owner_release(turbo_flow_projection_owner_t *owner) {
 const turbo_flow_projection_owner_config_t *
 flow_projection_owner_config(const turbo_flow_projection_owner_t *owner) {
   return &owner->config;
+}
+
+int turbo_flow_result_memory_requirements(size_t capacity, size_t max_result_bytes,
+                                          turbo_flow_result_memory_requirements_t *out) {
+  size_t per, peak, payload;
+  if (!out || out->size != sizeof(*out) ||
+      out->abi_major != TURBO_FLOW_PROJECTION_ABI_MAJOR ||
+      out->abi_minor != TURBO_FLOW_PROJECTION_ABI_MINOR) return SALTS_EINVAL;
+  out->owner_bytes = out->claim_bytes = out->message_bytes = 0u;
+  out->peak_metadata_bytes = out->payload_bound_bytes = 0u;
+  if (!capacity || !max_result_bytes) return SALTS_EINVAL;
+  per = sizeof(struct turbo_flow_result_claim_s) + sizeof(flow_msg_projection_t);
+  if (capacity > (SIZE_MAX - sizeof(turbo_flow_projection_owner_t)) / per ||
+      capacity > SIZE_MAX / max_result_bytes) return SALTS_EINVAL;
+  peak = sizeof(turbo_flow_projection_owner_t) + capacity * per;
+  payload = capacity * max_result_bytes;
+  out->owner_bytes = sizeof(turbo_flow_projection_owner_t);
+  out->claim_bytes = sizeof(struct turbo_flow_result_claim_s);
+  out->message_bytes = sizeof(flow_msg_projection_t);
+  out->peak_metadata_bytes = peak;
+  out->payload_bound_bytes = payload;
+  return SALTS_OK;
 }

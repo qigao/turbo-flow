@@ -224,9 +224,10 @@ static int plugin_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
   plugin_root_t *root;
   stl_status rc;
   if (out) *out = NULL;
-  if (!host || host->size < sizeof(*host) || !host->allocate || !host->deallocate || !out)
-    return SALTS_EINVAL;
-  if (host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) return SALTS_EPROTO;
+  if (!out || !host || host->size != sizeof(*host)) return SALTS_EINVAL;
+  if (host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) return SALTS_EINVAL;
+  if (!host->allocate || !host->deallocate) return SALTS_EINVAL;
   root = (plugin_root_t *)host->allocate(host->ctx, sizeof(*root));
   if (!root) return SALTS_ENOMEM;
   memset(root, 0, sizeof(*root));
@@ -248,7 +249,9 @@ static int plugin_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
 }
 static int plugin_register(void *ctx, const turbo_flow_plugin_registration_v1_t *registration) {
   plugin_root_t *root = (plugin_root_t *)ctx;
-  if (!root || !registration || registration->size < sizeof(*registration) ||
+  if (!root || !registration || registration->size != sizeof(*registration) ||
+      registration->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      registration->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
       !registration->add_transactional_adapter_provider)
     return SALTS_EINVAL;
   for (size_t i = 0u; i < CHTTP_PLUGIN_KIND_COUNT; ++i) {

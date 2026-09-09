@@ -33,6 +33,8 @@ list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_result_domain.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c)
 set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_export.h
@@ -111,7 +113,7 @@ target_include_directories(
           ${PROJECT_SOURCE_DIR}/vendor/mir)
 
 target_link_libraries(${TARGET_NAME} PUBLIC 
-  TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow RulesForge::RulesForge
+  TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow Salts::CMeta RulesForge::RulesForge
   PRIVATE Salts::DataBind Salts::JsonParser mir_static)
 
 add_library(turbo_flow_product SHARED
@@ -133,6 +135,8 @@ target_link_libraries(turbo_flow_product PUBLIC TurboFlow::Graph TurboFlow::Conf
 
 add_library(turbo_flow_plugin_host SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_result_domain.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c
   ${PROJECT_SOURCE_DIR}/ingress/protocol/common/src/flow_protocol_registry.c

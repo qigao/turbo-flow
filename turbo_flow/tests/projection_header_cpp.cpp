@@ -22,6 +22,10 @@ int release_context(void *ctx) {
 }
 
 extern "C" int flow_projection_cpp_example(void) {
+  turbo_flow_result_memory_requirements_t requirements;
+  turbo_flow_result_memory_requirements_init(&requirements);
+  if (turbo_flow_result_memory_requirements(result_capacity, sizeof(int), &requirements) != SALTS_OK)
+    return SALTS_EPROTO;
   turbo_flow_projection_owner_config_t config = TURBO_FLOW_PROJECTION_OWNER_CONFIG_INIT;
   turbo_flow_projection_owner_snapshot_t state = TURBO_FLOW_PROJECTION_OWNER_SNAPSHOT_INIT;
   turbo_flow_projection_owner_t *owner = nullptr;

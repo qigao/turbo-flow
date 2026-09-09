@@ -562,9 +562,10 @@ static int cnet_plugin_load(const turbo_flow_plugin_host_v1_t *host, void **plug
   cnet_plugin_root_t *root;
   int rc;
   if (plugin_out) *plugin_out = NULL;
-  if (!host || host->size < sizeof(*host) || !host->allocate || !host->deallocate || !plugin_out)
-    return SALTS_EINVAL;
-  if (host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) return SALTS_EPROTO;
+  if (!plugin_out || !host || host->size != sizeof(*host)) return SALTS_EINVAL;
+  if (host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) return SALTS_EINVAL;
+  if (!host->allocate || !host->deallocate) return SALTS_EINVAL;
   root = (cnet_plugin_root_t *)host->allocate(host->ctx, sizeof(*root));
   if (!root) return SALTS_ENOMEM;
   memset(root, 0, sizeof(*root));
@@ -590,7 +591,9 @@ static int cnet_plugin_load(const turbo_flow_plugin_host_v1_t *host, void **plug
 static int cnet_plugin_register(void *plugin,
                                 const turbo_flow_plugin_registration_v1_t *registration) {
   cnet_plugin_root_t *root = (cnet_plugin_root_t *)plugin;
-  if (!root || !registration || registration->size < sizeof(*registration) ||
+  if (!root || !registration || registration->size != sizeof(*registration) ||
+      registration->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      registration->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
       !registration->add_transactional_adapter_provider)
     return SALTS_EINVAL;
   for (size_t i = 0u; i < TURBO_FLOW_CNET_PLUGIN_KIND_COUNT; ++i) {

@@ -81,7 +81,14 @@ static int plugin_sink(turbo_flow_msg_t *message, void *ctx) {
   return SALTS_OK;
 }
 
-static void rejected_generation_preserves_flow(turbo_flow_plugin_catalog_snapshot_t *snapshot,
+typedef struct traffic_fixture_s {
+  turbo_flow_plugin_host_t *host;
+  turbo_flow_plugin_generation_t *generation;
+  turbo_flow_plugin_generation_t *cleanup_generation;
+} traffic_fixture_t;
+
+static void rejected_generation_preserves_flow(traffic_fixture_t *owner,
+                                               turbo_flow_plugin_catalog_snapshot_t *snapshot,
                                                const char *yaml) {
   static const char graph[] =
       "source input\nstage request adapter client\nstage output operation test.output\nstage "
@@ -94,11 +101,16 @@ static void rejected_generation_preserves_flow(turbo_flow_plugin_catalog_snapsho
   check_equal(turbo_flow_parse_string(flow, graph, strlen(graph)), SALTS_OK);
   int rc = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error);
   if (rc == SALTS_OK)
-    rc = turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &config, &generation,
-                                             &error);
+    rc = turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &config, NULL, &generation,
+                                             &owner->cleanup_generation, &error);
   check_not_equal(rc, SALTS_OK);
   check_true(flow == original);
   check_null(generation);
+  if (owner->cleanup_generation) {
+    check_equal(turbo_flow_plugin_generation_destroy(owner->cleanup_generation, 1000u, &error),
+                SALTS_OK);
+    owner->cleanup_generation = NULL;
+  }
   turbo_flow_resolved_config_destroy(resolved);
   turbo_flow_destroy(flow);
 }
@@ -123,10 +135,6 @@ static void lexical_preflight(const char *input, size_t provider, const char *na
   else check_not_equal(rc, SALTS_OK);
 }
 
-typedef struct traffic_fixture_s {
-  turbo_flow_plugin_host_t *host;
-  turbo_flow_plugin_generation_t *generation;
-} traffic_fixture_t;
 static void traffic_open_path(traffic_fixture_t *f, const char *path, const char *yaml,
                               const char *graph, turbo_flow_stage_fn sink, void *ctx) {
   turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
@@ -135,6 +143,7 @@ static void traffic_open_path(traffic_fixture_t *f, const char *path, const char
   turbo_flow_resolved_config_t *resolved = NULL;
   turbo_flow_plugin_generation_config_t gc = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
   turbo_flow_t *flow = turbo_flow_create();
+  f->cleanup_generation = NULL;
   f->host = plugin_host(3u);
   check_equal(turbo_flow_plugin_host_load(f->host, path, &pe), SALTS_OK);
   check_equal(turbo_flow_plugin_catalog_snapshot_create(f->host, &snapshot, &pe), SALTS_OK);
@@ -144,8 +153,8 @@ static void traffic_open_path(traffic_fixture_t *f, const char *path, const char
   operation_output_0.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
   operation_output_0.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
   if (sink) check_equal(flow_test_operation_register(flow, &operation_output_0), SALTS_OK);
-  int rc =
-      turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &f->generation, &error);
+  int rc = turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, NULL, &f->generation,
+                                               &f->cleanup_generation, &error);
   info("traffic generation: %s %s", error.path, error.message);
   check_equal(rc, SALTS_OK);
   turbo_flow_resolved_config_destroy(resolved);
@@ -159,7 +168,15 @@ static void traffic_open(traffic_fixture_t *f, const char *yaml, const char *gra
 static void traffic_close(traffic_fixture_t *f) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
-  check_equal(turbo_flow_plugin_generation_destroy(f->generation, 1000u, &error), SALTS_OK);
+  if (f->cleanup_generation) {
+    check_equal(turbo_flow_plugin_generation_destroy(f->cleanup_generation, 1000u, &error),
+                SALTS_OK);
+    f->cleanup_generation = NULL;
+  }
+  if (f->generation) {
+    check_equal(turbo_flow_plugin_generation_destroy(f->generation, 1000u, &error), SALTS_OK);
+    f->generation = NULL;
+  }
   check_equal(turbo_flow_plugin_host_destroy(f->host, 1000u, &pe), SALTS_OK);
 }
 static cnet_client_config traffic_network(void) {
@@ -312,18 +329,17 @@ static void teardown_http_done(void *ctx, chttp_request request,
   probe->response_status = response ? response->status_code : 0u;
 }
 
-static void start_failure_destroy(const char *path, const char *yaml, const char *graph,
-                                  int client) {
-  turbo_flow_plugin_host_t *host = plugin_host(3u);
+static void start_failure_destroy(traffic_fixture_t *owner, const char *path, const char *yaml,
+                                  const char *graph, int client) {
+  owner->host = plugin_host(3u);
   turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
   turbo_flow_resolved_config_t *resolved = NULL;
-  turbo_flow_plugin_generation_t *generation = NULL;
   turbo_flow_plugin_generation_config_t gc = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
   turbo_flow_t *flow = turbo_flow_create();
-  check_equal(turbo_flow_plugin_host_load(host, path, &pe), SALTS_OK);
-  check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &pe), SALTS_OK);
+  check_equal(turbo_flow_plugin_host_load(owner->host, path, &pe), SALTS_OK);
+  check_equal(turbo_flow_plugin_catalog_snapshot_create(owner->host, &snapshot, &pe), SALTS_OK);
   check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), SALTS_OK);
   check_equal(turbo_flow_parse_string(flow, graph, strlen(graph)), SALTS_OK);
   if (client) {
@@ -331,31 +347,41 @@ static void start_failure_destroy(const char *path, const char *yaml, const char
         flow_test_operation_init("test.output", plugin_sink, NULL);
     check_equal(flow_test_operation_register(flow, &operation_output_1), SALTS_OK);
   }
-  check_equal(
-      turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &error),
-      SALTS_OK);
+  check_equal(turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, NULL,
+                                                  &owner->generation, &owner->cleanup_generation,
+                                                  &error),
+              SALTS_OK);
+  if (owner->cleanup_generation) {
+    check_equal(turbo_flow_plugin_generation_destroy(owner->cleanup_generation, 1000u, &error),
+                SALTS_OK);
+    owner->cleanup_generation = NULL;
+  }
   turbo_flow_resolved_config_destroy(resolved);
   turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
-  int start_status = turbo_flow_start(turbo_flow_plugin_generation_flow(generation));
+  int start_status = turbo_flow_start(turbo_flow_plugin_generation_flow(owner->generation));
   if (client) {
     check_equal(start_status, SALTS_ENOMEM);
   } else {
     check_not_equal(start_status, SALTS_OK);
   }
-  check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &pe), SALTS_EBUSY);
-  int destroy_status = turbo_flow_plugin_generation_destroy(generation, 1000u, &error);
+  check_equal(turbo_flow_plugin_host_destroy(owner->host, 1000u, &pe), SALTS_EBUSY);
+  int destroy_status = turbo_flow_plugin_generation_destroy(owner->generation, 1000u, &error);
   info("start failure destroy: %d %s %s", destroy_status, error.path, error.message);
   check_equal(destroy_status, SALTS_OK);
-  check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &pe), SALTS_OK);
+  owner->generation = NULL;
+  check_equal(turbo_flow_plugin_host_destroy(owner->host, 1000u, &pe), SALTS_OK);
+  owner->host = NULL;
 }
 
 spec("chttp_plugin") {
   it("destroys a plugin client generation after native init allocation failure") {
+    traffic_fixture_t owner = {0};
     start_failure_destroy(
-        CHTTP_DELIVERY_FIXTURE_5, client_yaml,
+        &owner, CHTTP_DELIVERY_FIXTURE_5, client_yaml,
         "source input\nstage request adapter client\nstage output operation test.output\nstage "
         "main {\n input -> request -> output\n}\n",
         1);
+    if (owner.host) traffic_close(&owner);
   }
   for (size_t kind = 0u; kind < 2u; ++kind) {
     it(kind == 0u ? "destroys a server generation after an occupied listener start failure"
@@ -374,7 +400,9 @@ spec("chttp_plugin") {
       check_equal(chttp_server_port(&listener, &port), SALTS_OK);
       snprintf(field, sizeof(field), "bind_port: %u", (unsigned)port);
       check_equal(replace_once(yamls[kind], "bind_port: 0", field, yaml), SALTS_OK);
-      start_failure_destroy(TURBO_FLOW_CHTTP_PLUGIN_PATH, yaml, graphs[kind], 0);
+      traffic_fixture_t owner = {0};
+      start_failure_destroy(&owner, TURBO_FLOW_CHTTP_PLUGIN_PATH, yaml, graphs[kind], 0);
+      if (owner.host) traffic_close(&owner);
       check_equal(chttp_server_stop(&listener, 1000u), SALTS_OK);
       check_equal(chttp_server_destroy(&listener), SALTS_OK);
     }
@@ -570,6 +598,7 @@ spec("chttp_plugin") {
     turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_plugin_generation_t *generation = NULL;
+    turbo_flow_plugin_generation_t *cleanup_generation = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     check_equal(turbo_flow_plugin_host_load(host, CHTTP_DELIVERY_FIXTURE_0, &pe), SALTS_OK);
     check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &pe), SALTS_OK);
@@ -578,11 +607,15 @@ spec("chttp_plugin") {
     flow_test_operation_t operation_output_2 =
         flow_test_operation_init("test.output", plugin_sink, NULL);
     check_equal(flow_test_operation_register(flow, &operation_output_2), SALTS_OK);
-    check_equal(
-        turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &ce),
-        SALTS_ENOMEM);
+    check_equal(turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, NULL,
+                                                    &generation, &cleanup_generation, &ce),
+                SALTS_ENOMEM);
     check_null(flow);
     check_null(generation);
+    if (cleanup_generation) {
+      check_equal(turbo_flow_plugin_generation_destroy(cleanup_generation, 1000u, &ce), SALTS_OK);
+      cleanup_generation = NULL;
+    }
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     /* Fixture quiesce checks root + first owner allocation, exactly one owner free,
@@ -795,6 +828,7 @@ spec("chttp_plugin") {
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_plugin_generation_config_t gc = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
     turbo_flow_plugin_generation_t *generation = NULL;
+    turbo_flow_plugin_generation_t *cleanup_generation = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     check_equal(turbo_flow_plugin_host_load(host, TURBO_FLOW_CHTTP_PLUGIN_PATH, &pe), SALTS_OK);
     check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &pe), SALTS_OK);
@@ -804,11 +838,16 @@ spec("chttp_plugin") {
     flow_test_operation_t operation_output_3 =
         flow_test_operation_init("test.output", plugin_sink, NULL);
     check_equal(flow_test_operation_register(flow, &operation_output_3), SALTS_OK);
-    check_not_equal(
-        turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &error),
-        SALTS_OK);
+    check_not_equal(turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, NULL,
+                                                        &generation, &cleanup_generation, &error),
+                    SALTS_OK);
     check_null(generation);
     check_null(flow);
+    if (cleanup_generation) {
+      check_equal(turbo_flow_plugin_generation_destroy(cleanup_generation, 1000u, &error),
+                  SALTS_OK);
+      cleanup_generation = NULL;
+    }
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &pe), SALTS_OK);
@@ -967,6 +1006,7 @@ spec("chttp_plugin") {
       turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
       turbo_flow_resolved_config_t *resolved = NULL;
       turbo_flow_plugin_generation_t *generation = NULL;
+      turbo_flow_plugin_generation_t *cleanup_generation = NULL;
       turbo_flow_plugin_generation_config_t gc = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
       turbo_flow_t *flow = turbo_flow_create();
       check_equal(turbo_flow_plugin_host_load(host, TURBO_FLOW_CHTTP_PLUGIN_PATH, &pe), SALTS_OK);
@@ -979,12 +1019,17 @@ spec("chttp_plugin") {
             flow_test_operation_init("test.output", plugin_sink, NULL);
         check_equal(flow_test_operation_register(flow, &operation_output_4), SALTS_OK);
       }
-      int create_rc =
-          turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &error);
+      int create_rc = turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, NULL,
+                                                          &generation, &cleanup_generation, &error);
       info("kind %zu generation: %s %s", i, error.path, error.message);
       check_equal(create_rc, SALTS_OK);
       check_null(flow);
       check_equal(turbo_flow_plugin_generation_owner_count(generation), 1u);
+      if (cleanup_generation) {
+        check_equal(turbo_flow_plugin_generation_destroy(cleanup_generation, 1000u, &error),
+                    SALTS_OK);
+        cleanup_generation = NULL;
+      }
       turbo_flow_resolved_config_destroy(resolved);
       turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
       check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
@@ -996,6 +1041,7 @@ spec("chttp_plugin") {
   }
   it("validates all explicit policies and rejects malformed fields before materialization") {
     turbo_flow_plugin_host_t *host = plugin_host(3u);
+    traffic_fixture_t rejected_owner = {host, NULL, NULL};
     turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
     turbo_flow_plugin_transactional_product_catalog_v1_t catalog =
@@ -1030,7 +1076,8 @@ spec("chttp_plugin") {
       info("invalid case %zu: %s", i, invalid[i].after);
       check_equal(replace_once(client_yaml, invalid[i].before, invalid[i].after, yaml), SALTS_OK);
       check_not_equal(preflight_yaml(&catalog, 0u, "client", yaml), SALTS_OK);
-      rejected_generation_preserves_flow(snapshot, yaml);
+      rejected_generation_preserves_flow(&rejected_owner, snapshot, yaml);
+      check_null(rejected_owner.cleanup_generation);
     }
     check_equal(replace_once(server_yaml, "protocol: \"h1\"", "protocol: \"h2\"", yaml), SALTS_OK);
     check_equal(preflight_yaml(&catalog, 1u, "server", yaml), SALTS_ENOTSUP);

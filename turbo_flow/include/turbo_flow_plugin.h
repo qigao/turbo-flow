@@ -111,6 +111,7 @@ typedef struct turbo_flow_plugin_host_config_s {
   size_t transactional_adapter_provider_capacity;
   size_t transactional_resource_provider_capacity;
   size_t schema_capacity;
+  size_t operation_capacity;
 } turbo_flow_plugin_host_config_t;
 
 #define TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT                                                         \
@@ -124,6 +125,7 @@ typedef struct turbo_flow_plugin_host_config_s {
    NULL,                                                                                           \
    16u,                                                                                            \
    16u,                                                                                            \
+   64u,                                                                                            \
    64u,                                                                                            \
    64u,                                                                                            \
    64u}
@@ -198,6 +200,7 @@ typedef struct turbo_flow_plugin_registration_v1_s {
   turbo_flow_plugin_add_transactional_adapter_provider_fn add_transactional_adapter_provider;
   turbo_flow_plugin_add_transactional_resource_provider_fn add_transactional_resource_provider;
   turbo_flow_plugin_add_schema_fn add_schema;
+  turbo_flow_plugin_add_operation_fn add_operation;
 } turbo_flow_plugin_registration_v1_t;
 
 typedef int (*turbo_flow_plugin_load_fn)(const turbo_flow_plugin_host_v1_t *host,

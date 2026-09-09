@@ -38,8 +38,10 @@ int turbo_flow_plugin_projection_owner_create(
   if (!out) return SALTS_EINVAL;
   *out = NULL;
   /* 转发回调前验证原始必填项，不能用非 NULL 的 bridge callback 掩盖缺项。 */
-  if (!snapshot || !config || config->size < sizeof(*config) || !config->schema ||
-      config->schema->size < sizeof(*config->schema) || !config->destroy ||
+  if (!snapshot || !config || config->size != sizeof(*config) ||
+      config->abi_major != TURBO_FLOW_PROJECTION_ABI_MAJOR ||
+      config->abi_minor != TURBO_FLOW_PROJECTION_ABI_MINOR || !config->schema ||
+      config->schema->size != sizeof(*config->schema) || !config->destroy ||
       !config->release_context) return SALTS_EINVAL;
   bridge = (flow_plugin_projection_bridge_t *)malloc(sizeof(*bridge));
   if (!bridge) return SALTS_ENOMEM;

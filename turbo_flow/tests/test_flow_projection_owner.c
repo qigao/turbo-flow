@@ -381,7 +381,8 @@ spec("retained projection owner") {
       check_equal(turbo_flow_projection_owner_create(&config, &owner), SALTS_OK);
       check_equal(turbo_flow_msg_bind_retained_projection(&src, owner, value), SALTS_OK);
       check_equal(turbo_flow_msg_clone(&dst, &src),
-                  mode == CLONE_ERROR_VALUE ? SALTS_EIO : SALTS_EPROTO);
+                  mode == CLONE_ERROR_VALUE || mode == CLONE_ERROR_ALIAS ? SALTS_EIO
+                                                                         : SALTS_EPROTO);
       check_null(turbo_flow_msg_projection(&dst, NULL));
       check_equal(counts.payloads, mode == CLONE_ERROR_VALUE ? 1 : 0);
       check_equal(*(const int *)turbo_flow_msg_projection(&src, NULL), TEST_VALUE);

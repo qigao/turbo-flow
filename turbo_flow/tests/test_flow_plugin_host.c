@@ -166,6 +166,32 @@ spec("unified PluginHost") {
     check_equal(catalog.adapter_providers[0].kind, "fixture.transactional.adapter");
     check_equal(catalog.resource_providers[0].kind, "fixture.transactional.resource");
 
+    {
+      const uint64_t canary = UINT64_C(0xA42C199E7735D108);
+      struct physical_catalog_s {
+        size_t size;
+        uint32_t abi_major;
+        uint32_t abi_minor;
+        uint64_t canary;
+      } physical = {sizeof(turbo_flow_plugin_transactional_product_catalog_v1_t), 2u, 0u,
+                    UINT64_C(0xA42C199E7735D108)};
+      check_equal(turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(
+                      snapshot,
+                      (turbo_flow_plugin_transactional_product_catalog_v1_t *)(void *)&physical),
+                  SALTS_EINVAL);
+      check_equal(physical.canary, canary);
+    }
+    catalog = (turbo_flow_plugin_transactional_product_catalog_v1_t)
+        TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
+    catalog.size = sizeof(catalog) + 1u;
+    check_equal(turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog),
+                SALTS_EINVAL);
+    catalog = (turbo_flow_plugin_transactional_product_catalog_v1_t)
+        TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
+    catalog.abi_minor = 1u;
+    check_equal(turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog),
+                SALTS_EINVAL);
+
     turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
   }
@@ -228,6 +254,18 @@ spec("unified PluginHost") {
     check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_EINVAL);
     check_null(host);
     check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT);
+
+    config = flow_plugin_test_config(&probe, 1u, 1u, 1u);
+    config.abi_minor = 1u;
+    error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
+    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_EINVAL);
+    check_null(host);
+
+    config = flow_plugin_test_config(&probe, 1u, 1u, 1u);
+    config.size = sizeof(config) + 1u;
+    error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
+    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_EINVAL);
+    check_null(host);
   }
 
   it("atomically loads providers and holds their module through a catalog snapshot") {
@@ -366,11 +404,11 @@ spec("unified PluginHost") {
     check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_SYMBOL);
     error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
     check_equal(turbo_flow_plugin_host_load(host, FLOW_PLUGIN_FIXTURE_BAD_ABI, &error),
-                SALTS_EPROTO);
+                SALTS_EINVAL);
     check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_API);
     error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
     check_equal(turbo_flow_plugin_host_load(host, FLOW_PLUGIN_FIXTURE_BAD_SIZE, &error),
-                SALTS_EPROTO);
+                SALTS_EINVAL);
     check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_API);
     error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
     check_equal(turbo_flow_plugin_host_load(host, FLOW_PLUGIN_FIXTURE_MISSING_CALLBACK, &error),

@@ -1,3 +1,4 @@
+#include "flow_plugin_operation_internal.h"
 #include "turbo_flow_plugin.h"
 #include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_plugin_protocol.h"
@@ -73,6 +74,11 @@ typedef struct flow_plugin_schema_s {
   size_t module_index;
 } flow_plugin_schema_t;
 
+typedef struct flow_plugin_operation_s {
+  turbo_flow_plugin_operation_v3_t operation;
+  size_t module_index;
+} flow_plugin_operation_t;
+
 struct turbo_flow_plugin_host_s {
   turbo_flow_plugin_host_config_t config;
   turbo_flow_plugin_host_v1_t host_api;
@@ -84,6 +90,7 @@ struct turbo_flow_plugin_host_s {
   vec_t transactional_adapter_providers;
   vec_t transactional_resource_providers;
   vec_t schemas;
+  vec_t operations;
   size_t active_snapshots;
   flow_plugin_host_state_t state;
 };
@@ -97,6 +104,7 @@ struct turbo_flow_plugin_catalog_snapshot_s {
   vec_t transactional_adapter_providers;
   vec_t transactional_resource_providers;
   vec_t schemas;
+  vec_t operations;
   size_t leased_module_count;
   size_t references;
 };
@@ -111,12 +119,14 @@ typedef struct flow_plugin_registration_context_s {
   size_t transactional_adapter_count_before;
   size_t transactional_resource_count_before;
   size_t schema_count_before;
+  size_t operation_count_before;
   int first_error;
 } flow_plugin_registration_context_t;
 
 static int flow_plugin_error_valid(const turbo_flow_plugin_error_t *error) {
-  return error && error->size >= sizeof(*error) &&
-         error->abi_major == TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR;
+  return error && error->size == sizeof(*error) &&
+         error->abi_major == TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR &&
+         error->abi_minor == TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
 }
 
 static void flow_plugin_copy_text(char *target, size_t capacity, const char *source) {
@@ -381,12 +391,17 @@ static int flow_plugin_api_validate(const turbo_flow_plugin_api_v1_t *api,
       TURBO_FLOW_PLUGIN_CAP_PRODUCT_ADAPTER | TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE |
       TURBO_FLOW_PLUGIN_CAP_PROTOCOL | TURBO_FLOW_PLUGIN_CAP_PROTOCOL_BUSINESS |
       TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER | TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE |
-      TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL | TURBO_FLOW_PLUGIN_CAP_SCHEMA;
-  if (!api || api->size < sizeof(*api) || api->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      (api->capabilities & ~known) != 0u || api->capabilities == 0u || !api->load ||
+      TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL | TURBO_FLOW_PLUGIN_CAP_SCHEMA |
+      (uint32_t)TURBO_FLOW_PLUGIN_CAP_OPERATION;
+  if (!api || api->size != sizeof(*api) || api->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      api->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) {
+    return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_API, NULL, path,
+                                   "invalid plugin root ABI");
+  }
+  if ((api->capabilities & ~known) != 0u || api->capabilities == 0u || !api->load ||
       !api->register_capabilities || !api->quiesce || !api->shutdown || !api->destroy) {
     return flow_plugin_error_write(error, SALTS_EPROTO, TURBO_FLOW_PLUGIN_STAGE_API, NULL, path,
-                                   "invalid plugin root ABI or lifecycle vtable");
+                                   "invalid plugin root capabilities or lifecycle vtable");
   }
   if ((api->capabilities & TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL) != 0u &&
       (api->capabilities & (TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER |
@@ -410,8 +425,9 @@ static int flow_plugin_add_adapter_provider(
   int rc;
   if (!registration) return SALTS_EINVAL;
   if (registration->first_error != SALTS_OK) return registration->first_error;
-  if (!registration_provider || registration_provider->size < sizeof(*registration_provider) ||
-      registration_provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) {
+  if (!registration_provider || registration_provider->size != sizeof(*registration_provider) ||
+      registration_provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      registration_provider->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) {
     registration->first_error = SALTS_EINVAL;
     return registration->first_error;
   }
@@ -447,8 +463,9 @@ static int flow_plugin_add_resource_provider(
   int rc;
   if (!registration) return SALTS_EINVAL;
   if (registration->first_error != SALTS_OK) return registration->first_error;
-  if (!registration_provider || registration_provider->size < sizeof(*registration_provider) ||
-      registration_provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) {
+  if (!registration_provider || registration_provider->size != sizeof(*registration_provider) ||
+      registration_provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      registration_provider->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) {
     registration->first_error = SALTS_EINVAL;
     return registration->first_error;
   }
@@ -484,8 +501,9 @@ static int flow_plugin_add_protocol_provider(
   int rc;
   if (!registration) return SALTS_EINVAL;
   if (registration->first_error != SALTS_OK) return registration->first_error;
-  if (!registration_provider || registration_provider->size < sizeof(*registration_provider) ||
-      registration_provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) {
+  if (!registration_provider || registration_provider->size != sizeof(*registration_provider) ||
+      registration_provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      registration_provider->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) {
     registration->first_error = SALTS_EINVAL;
     return registration->first_error;
   }
@@ -519,8 +537,9 @@ static int flow_plugin_add_business_provider(
   int rc;
   if (!registration) return SALTS_EINVAL;
   if (registration->first_error != SALTS_OK) return registration->first_error;
-  if (!registration_provider || registration_provider->size < sizeof(*registration_provider) ||
-      registration_provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) {
+  if (!registration_provider || registration_provider->size != sizeof(*registration_provider) ||
+      registration_provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      registration_provider->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) {
     registration->first_error = SALTS_EINVAL;
     return registration->first_error;
   }
@@ -553,8 +572,9 @@ static int flow_plugin_add_transactional_adapter_provider(
   int rc;
   if (!registration) return SALTS_EINVAL;
   if (registration->first_error != SALTS_OK) return registration->first_error;
-  if (!provider || provider->size < sizeof(*provider) ||
+  if (!provider || provider->size != sizeof(*provider) ||
       provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      provider->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
       !flow_plugin_kind_valid(provider->kind) || !provider->preflight || !provider->materialize) {
     registration->first_error = SALTS_EINVAL;
     return registration->first_error;
@@ -584,8 +604,9 @@ static int flow_plugin_add_transactional_resource_provider(
   int rc;
   if (!registration) return SALTS_EINVAL;
   if (registration->first_error != SALTS_OK) return registration->first_error;
-  if (!provider || provider->size < sizeof(*provider) ||
+  if (!provider || provider->size != sizeof(*provider) ||
       provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      provider->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
       !flow_plugin_kind_valid(provider->kind) || !provider->preflight || !provider->materialize) {
     registration->first_error = SALTS_EINVAL;
     return registration->first_error;
@@ -615,9 +636,9 @@ static int flow_plugin_add_schema(void *ctx, const turbo_flow_plugin_schema_v1_t
   int rc;
   if (!registration) return SALTS_EINVAL;
   if (registration->first_error != SALTS_OK) return registration->first_error;
-  if (!schema || schema->size < sizeof(*schema) ||
+  if (!schema || schema->size != sizeof(*schema) ||
       schema->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      schema->abi_minor > TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || schema->schema_version == 0u ||
+      schema->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || schema->schema_version == 0u ||
       !schema->data || !cmeta_data_desc_valid(schema->data) ||
       !cmeta_type_desc_valid(schema->data->storage_type) ||
       !flow_plugin_identity_valid(schema->data->stable_id)) {
@@ -645,6 +666,106 @@ static int flow_plugin_add_schema(void *ctx, const turbo_flow_plugin_schema_v1_t
   return rc;
 }
 
+static int flow_plugin_operation_schema_valid(const turbo_flow_plugin_operation_schema_v3_t *s) {
+  if (s->size != sizeof(*s) || s->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      s->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !s->schema_version || !s->projection ||
+      s->projection->size != sizeof(*s->projection) ||
+      s->projection->schema_version != s->schema_version)
+    return SALTS_EINVAL;
+  return turbo_flow_data_schema_match(s->projection, s->data, s->projection, s->data);
+}
+
+static int flow_plugin_operation_valid(const turbo_flow_plugin_operation_v3_t *op) {
+  const turbo_flow_plugin_operation_limits_v3_t *limits;
+  int rc;
+  if (!op || op->size != sizeof(*op) || op->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      op->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
+    return SALTS_EINVAL;
+  limits = &op->limits;
+  if (!flow_plugin_identity_valid(op->operation_name) || !op->operation_version || !op->preflight ||
+      !op->create_session || !op->create_result_context || op->vtable.size != sizeof(op->vtable) ||
+      op->vtable.abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      op->vtable.abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !op->vtable.execute ||
+      !op->vtable.clone_result || !op->vtable.destroy_result || !op->vtable.release_session ||
+      !op->vtable.release_result_context || limits->size != sizeof(*limits) ||
+      limits->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      limits->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !limits->max_inflight ||
+      limits->max_inflight > FLOW_PLUGIN_OPERATION_MAX_INFLIGHT || !limits->max_input_bytes ||
+      limits->max_input_bytes > FLOW_PLUGIN_OPERATION_MAX_BYTES || !limits->max_result_bytes ||
+      limits->max_result_bytes > FLOW_PLUGIN_OPERATION_MAX_BYTES || !limits->max_retained_bytes ||
+      limits->max_retained_bytes > FLOW_PLUGIN_OPERATION_MAX_BYTES || !limits->max_steps ||
+      !op->max_session_bytes || op->max_session_bytes > FLOW_PLUGIN_OPERATION_MAX_BYTES ||
+      !op->max_result_context_bytes ||
+      op->max_result_context_bytes > FLOW_PLUGIN_OPERATION_MAX_BYTES ||
+      op->permission_count > TURBO_FLOW_PLUGIN_OPERATION_MAX_PERMISSIONS ||
+      (op->permission_count && !op->permissions))
+    return SALTS_EINVAL;
+  for (size_t i = 0; i < op->permission_count; ++i) {
+    if (!flow_plugin_identity_valid(op->permissions[i])) return SALTS_EINVAL;
+    for (size_t j = 0; j < i; ++j)
+      if (!strcmp(op->permissions[i], op->permissions[j])) return SALTS_EALREADY;
+  }
+  if (op->execution != TURBO_FLOW_PLUGIN_OPERATION_SYNC ||
+      op->threading != TURBO_FLOW_PLUGIN_OPERATION_THREAD_SAFE ||
+      op->cancellation != TURBO_FLOW_PLUGIN_OPERATION_CANCEL_NONE ||
+      op->effects != TURBO_FLOW_PLUGIN_OPERATION_EFFECT_RESULT ||
+      op->guarantees != TURBO_FLOW_PLUGIN_OPERATION_STEPS_CHARGED || limits->deadline_ms ||
+      op->permission_count)
+    return SALTS_ENOTSUP;
+  rc = flow_plugin_operation_schema_valid(&op->input);
+  return rc == SALTS_OK ? flow_plugin_operation_schema_valid(&op->output) : rc;
+}
+
+static int flow_plugin_add_operation(void *ctx, const turbo_flow_plugin_operation_v3_t *op) {
+  flow_plugin_registration_context_t *registration = ctx;
+  flow_plugin_operation_t entry;
+  int rc;
+  if (!registration || !registration->host) return SALTS_EINVAL;
+  if (registration->first_error != SALTS_OK) return registration->first_error;
+  rc = flow_plugin_operation_valid(op);
+  if (rc != SALTS_OK) return registration->first_error = rc;
+  for (size_t i = 0; i < vec_size(&registration->host->operations); ++i) {
+    const flow_plugin_operation_t *old = vec_at_const(&registration->host->operations, i);
+    if (old->module_index == registration->module_index &&
+        old->operation.operation_version == op->operation_version &&
+        !strcmp(old->operation.operation_name, op->operation_name))
+      return registration->first_error = SALTS_EALREADY;
+  }
+  if (vec_size(&registration->host->operations) >= registration->host->config.operation_capacity)
+    return registration->first_error = SALTS_ENOSPC;
+  entry.operation = *op;
+  entry.module_index = registration->module_index;
+  rc = turbo_flow_stl_error(vec_push(&registration->host->operations, &entry));
+  if (rc != SALTS_OK) registration->first_error = rc;
+  return rc;
+}
+
+static int flow_plugin_operation_resolve_schemas(flow_plugin_registration_context_t *r) {
+  for (size_t i = r->operation_count_before; i < vec_size(&r->host->operations); ++i) {
+    const flow_plugin_operation_t *entry = vec_at_const(&r->host->operations, i);
+    const turbo_flow_plugin_operation_schema_v3_t *schemas[] = {&entry->operation.input,
+                                                                &entry->operation.output};
+    for (size_t k = 0; k < 2; ++k) {
+      const turbo_flow_plugin_operation_schema_v3_t *wanted = schemas[k];
+      int found = 0;
+      for (size_t j = 0; j < vec_size(&r->host->schemas); ++j) {
+        const flow_plugin_schema_t *s = vec_at_const(&r->host->schemas, j);
+        if (s->module_index != r->module_index ||
+            s->schema.schema_version != wanted->schema_version ||
+            strcmp(s->schema.data->stable_id, wanted->data->stable_id))
+          continue;
+        int rc = turbo_flow_data_schema_match(wanted->projection, wanted->data, wanted->projection,
+                                              s->schema.data);
+        if (rc != SALTS_OK) return rc;
+        found = 1;
+        break;
+      }
+      if (!found) return SALTS_EPROTO;
+    }
+  }
+  return SALTS_OK;
+}
+
 static void flow_plugin_zero_vector_tail(vec_t *values, size_t first) {
   if (!values) return;
   for (size_t i = first; i < vec_size(values); ++i) {
@@ -669,6 +790,8 @@ static void flow_plugin_registration_rollback(flow_plugin_registration_context_t
   flow_plugin_zero_vector_tail(&registration->host->transactional_resource_providers,
                                registration->transactional_resource_count_before);
   flow_plugin_zero_vector_tail(&registration->host->schemas, registration->schema_count_before);
+  flow_plugin_zero_vector_tail(&registration->host->operations,
+                               registration->operation_count_before);
 }
 
 static void flow_plugin_cleanup_uncommitted(turbo_flow_plugin_host_t *host,
@@ -691,6 +814,14 @@ static void flow_plugin_cleanup_uncommitted(turbo_flow_plugin_host_t *host,
 
 static int flow_plugin_vectors_initialize(turbo_flow_plugin_host_t *host) {
   int rc;
+  rc = turbo_flow_stl_error(vec_init_bytes(&host->operations, sizeof(flow_plugin_operation_t),
+                                           _Alignof(turbo_flow_max_align_t),
+                                           host->config.operation_capacity));
+  if (rc != SALTS_OK) return rc;
+  if (host->config.operation_capacity) {
+    rc = turbo_flow_stl_error(vec_reserve(&host->operations, host->config.operation_capacity));
+    if (rc != SALTS_OK) return rc;
+  }
   rc = turbo_flow_stl_error(vec_init_bytes(&host->modules, sizeof(flow_plugin_module_t),
                                            _Alignof(turbo_flow_max_align_t),
                                            host->config.module_capacity));
@@ -750,6 +881,7 @@ static int flow_plugin_vectors_initialize(turbo_flow_plugin_host_t *host) {
 
 static void flow_plugin_vectors_destroy(turbo_flow_plugin_host_t *host) {
   if (!host) return;
+  vec_destroy(&host->operations);
   vec_destroy(&host->schemas);
   vec_destroy(&host->transactional_resource_providers);
   vec_destroy(&host->transactional_adapter_providers);
@@ -768,8 +900,9 @@ int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_config_t *config,
   int rc;
   if (host_out) *host_out = NULL;
   if (!host_out || !flow_plugin_error_valid(error) || !config ||
-      config->size < sizeof(*config) ||
-      config->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR) {
+      config->size != sizeof(*config) ||
+      config->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      config->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) {
     return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL,
                                    NULL, "invalid bounded PluginHost configuration");
   }
@@ -782,7 +915,8 @@ int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_config_t *config,
       normalized.business_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
       normalized.transactional_adapter_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
       normalized.transactional_resource_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
-      normalized.schema_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS) {
+      normalized.schema_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
+      normalized.operation_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS) {
     return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL,
                                    NULL, "invalid bounded PluginHost configuration");
   }
@@ -882,6 +1016,7 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
   registration.transactional_resource_count_before =
       vec_size(&host->transactional_resource_providers);
   registration.schema_count_before = vec_size(&host->schemas);
+  registration.operation_count_before = vec_size(&host->operations);
   registration.first_error = SALTS_OK;
   registration_api.size = sizeof(registration_api);
   registration_api.abi_major = TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR;
@@ -896,8 +1031,10 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
   registration_api.add_transactional_resource_provider =
       flow_plugin_add_transactional_resource_provider;
   registration_api.add_schema = flow_plugin_add_schema;
+  registration_api.add_operation = flow_plugin_add_operation;
   rc = api->register_capabilities(plugin, &registration_api);
   if (registration.first_error != SALTS_OK) rc = registration.first_error;
+  if (rc == SALTS_OK) rc = flow_plugin_operation_resolve_schemas(&registration);
   flow_plugin_observe(host, TURBO_FLOW_PLUGIN_LIFECYCLE_REGISTER, api->plugin_id, rc);
   if (rc == SALTS_OK) {
     turbo_flow_plugin_capabilities_t actual = 0u;
@@ -917,6 +1054,8 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
       actual |= TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE;
     if (vec_size(&host->schemas) > registration.schema_count_before)
       actual |= TURBO_FLOW_PLUGIN_CAP_SCHEMA;
+    if (vec_size(&host->operations) > registration.operation_count_before)
+      actual |= TURBO_FLOW_PLUGIN_CAP_OPERATION;
     if (actual != (api->capabilities & ~TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL)) rc = SALTS_EPROTO;
   }
   if (rc != SALTS_OK) {
@@ -973,12 +1112,20 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
                                                    size_t adapters, size_t resources,
                                                    size_t protocols, size_t businesses,
                                                    size_t transactional_adapters,
-                                                   size_t transactional_resources,
-                                                   size_t schemas) {
+                                                   size_t transactional_resources, size_t schemas,
+                                                   size_t operations) {
   int rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->adapter_providers,
                                                sizeof(turbo_flow_product_adapter_provider_t),
                                                _Alignof(turbo_flow_max_align_t), adapters));
   if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->operations,
+                                           sizeof(turbo_flow_plugin_operation_catalog_entry_v3_t),
+                                           _Alignof(turbo_flow_max_align_t), operations));
+  if (rc != SALTS_OK) return rc;
+  if (operations) {
+    rc = turbo_flow_stl_error(vec_reserve(&snapshot->operations, operations));
+    if (rc != SALTS_OK) return rc;
+  }
   rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->schemas,
                                            sizeof(turbo_flow_plugin_schema_v1_t),
                                            _Alignof(turbo_flow_max_align_t), schemas));
@@ -1025,6 +1172,7 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
 
 static void flow_plugin_snapshot_vectors_destroy(turbo_flow_plugin_catalog_snapshot_t *snapshot) {
   if (!snapshot) return;
+  vec_destroy(&snapshot->operations);
   vec_destroy(&snapshot->schemas);
   vec_destroy(&snapshot->transactional_resource_providers);
   vec_destroy(&snapshot->transactional_adapter_providers);
@@ -1064,7 +1212,8 @@ int turbo_flow_plugin_catalog_snapshot_create(turbo_flow_plugin_host_t *host,
       snapshot, vec_size(&host->adapter_providers), vec_size(&host->resource_providers),
       vec_size(&host->protocol_providers), vec_size(&host->business_providers),
       vec_size(&host->transactional_adapter_providers),
-      vec_size(&host->transactional_resource_providers), vec_size(&host->schemas));
+      vec_size(&host->transactional_resource_providers), vec_size(&host->schemas),
+      vec_size(&host->operations));
   if (rc != SALTS_OK) goto allocation_failed;
   for (size_t i = 0u; i < vec_size(&host->adapter_providers); ++i) {
     const flow_plugin_adapter_provider_t *entry =
@@ -1144,6 +1293,15 @@ int turbo_flow_plugin_catalog_snapshot_create(turbo_flow_plugin_host_t *host,
     rc = turbo_flow_stl_error(vec_push(&snapshot->schemas, &entry->schema));
     if (rc != SALTS_OK) goto allocation_failed;
   }
+  for (size_t i = 0; i < vec_size(&host->operations); ++i) {
+    const flow_plugin_operation_t *entry = vec_at_const(&host->operations, i);
+    const flow_plugin_module_t *module = flow_plugin_module_at_const(host, entry->module_index);
+    turbo_flow_plugin_operation_catalog_entry_v3_t copy;
+    copy.plugin_id = module->api->plugin_id;
+    copy.operation = entry->operation;
+    rc = turbo_flow_stl_error(vec_push(&snapshot->operations, &copy));
+    if (rc != SALTS_OK) goto allocation_failed;
+  }
   snapshot->host = host;
   snapshot->leased_module_count = vec_size(&host->modules);
   snapshot->references = 1u;
@@ -1179,9 +1337,9 @@ int turbo_flow_plugin_catalog_snapshot_schema_catalog(
     const turbo_flow_plugin_catalog_snapshot_t *snapshot,
     turbo_flow_plugin_schema_catalog_v1_t *catalog_out) {
   if (!snapshot || snapshot->references == 0u || !catalog_out ||
-      catalog_out->size < sizeof(*catalog_out) ||
+      catalog_out->size != sizeof(*catalog_out) ||
       catalog_out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      catalog_out->abi_minor > TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
+      catalog_out->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
     return SALTS_EINVAL;
   catalog_out->abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
   catalog_out->schemas =
@@ -1190,12 +1348,26 @@ int turbo_flow_plugin_catalog_snapshot_schema_catalog(
   return SALTS_OK;
 }
 
+int turbo_flow_plugin_catalog_snapshot_operation_catalog(
+    const turbo_flow_plugin_catalog_snapshot_t *snapshot,
+    turbo_flow_plugin_operation_catalog_v3_t *out) {
+  if (!out || out->size != sizeof(*out) || out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      out->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
+    return SALTS_EINVAL;
+  turbo_flow_plugin_operation_catalog_v3_init(out);
+  if (!snapshot || !snapshot->references) return SALTS_EINVAL;
+  out->entries = vec_data_const(&snapshot->operations);
+  out->count = vec_size(&snapshot->operations);
+  return SALTS_OK;
+}
+
 int turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(
     const turbo_flow_plugin_catalog_snapshot_t *snapshot,
     turbo_flow_plugin_transactional_product_catalog_v1_t *catalog_out) {
   if (!snapshot || snapshot->references == 0u || !catalog_out ||
-      catalog_out->size < sizeof(*catalog_out) ||
-      catalog_out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR)
+      catalog_out->size != sizeof(*catalog_out) ||
+      catalog_out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      catalog_out->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
     return SALTS_EINVAL;
   catalog_out->abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
   catalog_out->adapter_providers =
@@ -1240,8 +1412,9 @@ int turbo_flow_plugin_catalog_snapshot_protocol_catalog(
     const turbo_flow_plugin_catalog_snapshot_t *snapshot,
     turbo_flow_plugin_protocol_catalog_v1_t *catalog_out) {
   if (!snapshot || snapshot->references == 0u || !catalog_out ||
-      catalog_out->size < sizeof(*catalog_out) ||
-      catalog_out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR)
+      catalog_out->size != sizeof(*catalog_out) ||
+      catalog_out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      catalog_out->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
     return SALTS_EINVAL;
   catalog_out->abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
   catalog_out->protocol_providers =

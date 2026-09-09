@@ -42,6 +42,17 @@ endif()
 set(test_root "${TURBO_FLOW_BINARY_DIR}/install-consumer-test")
 set(stage_dir "${test_root}/stage")
 set(full_consumer_build_dir "${test_root}/full-build")
+set(fixture_stage_dir "${test_root}/fixture-stage")
+if(WIN32)
+  set(installed_operation_fixture
+      "${fixture_stage_dir}/bin/turbo_flow_install_operation_fixture.dll")
+elseif(APPLE)
+  set(installed_operation_fixture
+      "${fixture_stage_dir}/lib/libturbo_flow_install_operation_fixture.dylib")
+else()
+  set(installed_operation_fixture
+      "${fixture_stage_dir}/lib/libturbo_flow_install_operation_fixture.so")
+endif()
 set(cxx_consumer_build_dir "${test_root}/cxx-build")
 set(cnet_plugin_consumer_build_dir "${test_root}/cnet-plugin-build")
 set(full_consumer_source_dir "${TURBO_FLOW_SOURCE_DIR}/tests/install_consumer")
@@ -413,12 +424,48 @@ run_checked(
   "-DSaltsUtils_DIR=${salts_utils_package_dir}"
   "-DRulesForge_DIR=${rules_forge_package_dir}"
   ${turbodb_consumer_cmake_args}
+  "-DTURBO_FLOW_INSTALL_FIXTURE_PATH=${installed_operation_fixture}"
   -DTURBO_FLOW_TEST_ALL_COMPONENTS=TRUE)
 
 run_checked(
   "full consumer build"
   "${CMAKE_COMMAND}" --build "${full_consumer_build_dir}"
   --config "${TURBO_FLOW_CONFIG}" --parallel)
+
+run_checked(
+  "installed operation fixture staging"
+  "${CMAKE_COMMAND}" --install "${full_consumer_build_dir}"
+  --prefix "${fixture_stage_dir}" --config "${TURBO_FLOW_CONFIG}")
+
+if(NOT EXISTS "${installed_operation_fixture}")
+  message(FATAL_ERROR "Installed operation fixture is missing: ${installed_operation_fixture}")
+endif()
+
+if(WIN32)
+  execute_process(
+    COMMAND "${dumpbin}" /nologo /exports "${installed_operation_fixture}"
+    RESULT_VARIABLE operation_export_result
+    OUTPUT_VARIABLE operation_export_output
+    ERROR_VARIABLE operation_export_error)
+  if(NOT operation_export_result EQUAL 0)
+    message(FATAL_ERROR
+            "Operation fixture export inspection failed (${operation_export_result})\n${operation_export_error}")
+  endif()
+  string(REPLACE "\r\n" "\n" operation_export_output "${operation_export_output}")
+  string(REGEX MATCHALL
+         "\n[ \t]+[0-9]+[ \t]+[0-9A-Fa-f]+[ \t]+[0-9A-Fa-f]+[ \t]+[^ \t\r\n]+"
+         operation_export_rows "${operation_export_output}")
+  list(LENGTH operation_export_rows operation_export_count)
+  if(operation_export_count EQUAL 1)
+    list(GET operation_export_rows 0 operation_export_row)
+    string(REGEX MATCH "[^ \t\r\n]+$" operation_export_name "${operation_export_row}")
+  endif()
+  if(NOT operation_export_count EQUAL 1 OR
+     NOT operation_export_name STREQUAL "turbo_flow_plugin_get_api")
+    message(FATAL_ERROR
+            "Operation fixture must export only turbo_flow_plugin_get_api\n${operation_export_output}")
+  endif()
+endif()
 
 if(WIN32)
   execute_process(

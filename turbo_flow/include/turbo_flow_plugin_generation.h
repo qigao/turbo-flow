@@ -54,20 +54,21 @@ typedef struct turbo_flow_plugin_product_owner_v1_s {
    NULL}
 
 /**
- * Publish a complete local owner descriptor within the capacity pre-seeded by the host.
+ * Publish a complete local owner descriptor into an exact ABI 3.0 destination.
  *
- * A materializer must inspect/preserve `owner_out->size` and use this helper instead of assigning
- * the complete structure. ABI 2 requires the complete descriptor for every owner;
- * short buffers fail with SALTS_EINVAL without modifying the output.
+ * A materializer must preserve the host-seeded size/version and use this helper instead of
+ * assigning the complete structure. Both source and destination must have the exact size and
+ * version; incompatible headers fail with SALTS_EINVAL without modifying any output bytes.
  */
 static inline int
 turbo_flow_plugin_product_owner_publish(turbo_flow_plugin_product_owner_v1_t *owner_out,
                                         const turbo_flow_plugin_product_owner_v1_t *owner) {
-  size_t capacity;
   if (!owner_out || !owner) return SALTS_EINVAL;
-  capacity = owner_out->size;
-  if (capacity < sizeof(*owner_out) ||
-      owner->size < sizeof(*owner) || owner->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR)
+  if (owner_out->size != sizeof(*owner_out) ||
+      owner_out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      owner_out->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
+      owner->size != sizeof(*owner) || owner->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      owner->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
     return SALTS_EINVAL;
   memcpy(owner_out, owner, sizeof(*owner_out));
   owner_out->size = sizeof(*owner_out);
@@ -86,7 +87,7 @@ typedef int (*turbo_flow_plugin_product_materialize_fn)(
  * A DLL-owned transactional adapter factory descriptor. preflight must validate without external
  * side effects. A successful materialize transfers exactly one owner; after failure, the plugin
  * remains responsible for any partial state and must leave owner_out empty. materialize treats the
- * initial owner_out->size as caller capacity and publishes through
+ * initial owner_out size/version as an exact ABI contract and publishes through
  * turbo_flow_plugin_product_owner_publish(); a plugin that may publish EXTERNAL_POLL also declares
  * TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL in its root API.
  */
@@ -163,7 +164,8 @@ typedef enum turbo_flow_plugin_generation_state_e {
   TURBO_FLOW_PLUGIN_GENERATION_QUIESCED,
   TURBO_FLOW_PLUGIN_GENERATION_STOPPED,
   TURBO_FLOW_PLUGIN_GENERATION_DRAINED,
-  TURBO_FLOW_PLUGIN_GENERATION_SHUTDOWN
+  TURBO_FLOW_PLUGIN_GENERATION_SHUTDOWN,
+  TURBO_FLOW_PLUGIN_GENERATION_FAILED_CLEANUP = 7
 } turbo_flow_plugin_generation_state_t;
 
 typedef struct turbo_flow_plugin_generation_config_s {
@@ -171,11 +173,14 @@ typedef struct turbo_flow_plugin_generation_config_s {
   uint32_t abi_major;
   uint32_t abi_minor;
   size_t owner_capacity;
+  size_t operation_memory_budget_bytes;
 } turbo_flow_plugin_generation_config_t;
+
+enum { TURBO_FLOW_PLUGIN_OPERATION_MEMORY_BUDGET_DEFAULT = 67108864u };
 
 #define TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT                                                   \
   {sizeof(turbo_flow_plugin_generation_config_t), TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR,             \
-   TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR, 256u}
+   TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR, 256u, TURBO_FLOW_PLUGIN_OPERATION_MEMORY_BUDGET_DEFAULT}
 
 /**
  * Fill a caller-owned immutable transactional Product catalog view.
@@ -196,16 +201,35 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_ca
  * @param resolved Immutable resolved configuration borrowed for the duration of this call.
  * @param flow_io In/out parsed Graph; moved only after every preflight succeeds.
  * @param config Initialized size/versioned capacity configuration.
+ * @param result_domain Caller-owned READY domain with the same snapshot; required for operations.
  * @param generation_out Receives the owned generation on success and NULL on failure.
+ * @param cleanup_out Required distinct output retaining failed retirement. Retry recoverable
+ * busy/lifecycle failures. An invalid successful Product publication without a verifiable cleanup
+ * contract permanently returns EINVAL from destroy and pins the Graph/domain/modules until process
+ * exit; no force-unload or repair API exists. A NULL output does not release the caller-owned
+ * domain.
  * @param error Initialized structured error output.
  * @return SALTS_OK, or the exact validation, capacity, provider, allocation, or compile error.
  */
 TURBO_FLOW_C_API int turbo_flow_plugin_generation_create(
     turbo_flow_plugin_catalog_snapshot_t *snapshot, const turbo_flow_resolved_config_t *resolved,
     turbo_flow_t **flow_io, const turbo_flow_plugin_generation_config_t *config,
-    turbo_flow_plugin_generation_t **generation_out, turbo_flow_config_error_t *error);
+    turbo_flow_plugin_result_domain_t *result_domain,
+    turbo_flow_plugin_generation_t **generation_out, turbo_flow_plugin_generation_t **cleanup_out,
+    turbo_flow_config_error_t *error);
 
-/** Borrowed mutable Graph; the generation remains its sole destruction owner. */
+/** Read the most recently completed failure for the resolved binding index; never retries cleanup.
+ */
+TURBO_FLOW_C_API int
+turbo_flow_plugin_generation_operation_error(const turbo_flow_plugin_generation_t *generation,
+                                             size_t binding_index,
+                                             turbo_flow_plugin_operation_error_v3_t *out);
+/** Read the most recent retirement failure separately from the original create error. */
+TURBO_FLOW_C_API int
+turbo_flow_plugin_generation_cleanup_error(const turbo_flow_plugin_generation_t *generation,
+                                           turbo_flow_config_error_t *out);
+
+/** Borrowed mutable Graph, or NULL for FAILED_CLEANUP; generation remains its destruction owner. */
 TURBO_FLOW_C_API turbo_flow_t *
 turbo_flow_plugin_generation_flow(turbo_flow_plugin_generation_t *generation);
 TURBO_FLOW_C_API turbo_flow_plugin_generation_state_t
@@ -246,6 +270,8 @@ turbo_flow_plugin_generation_lease_release(turbo_flow_plugin_generation_t *gener
  * Active leases return SALTS_EBUSY without invoking lifecycle callbacks. Timeout or lifecycle
  * failure leaves an inspectable generation whose completed transitions are not repeated. On
  * SALTS_OK the generation is freed and must not be used again.
+ * Invalid Product publications with no verifiable cleanup contract return SALTS_EINVAL without
+ * callbacks or releasing the Graph/domain/module pins. Repeating destroy cannot repair that state.
  * @param generation Owned generation, called from the same serialized control thread.
  * @param timeout_ms Bounded timeout forwarded independently to each owner callback.
  * @param error Initialized structured error output.

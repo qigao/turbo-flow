@@ -69,4 +69,25 @@ if(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
 endif()
 
 enable_testing()
-add_test(NAME turbo_flow_install_consumer_runs COMMAND turbo_flow_install_consumer)
+if(TURBO_FLOW_TEST_ALL_COMPONENTS AND NOT TURBO_FLOW_CONSUMER_CXX_ONLY)
+  add_library(turbo_flow_install_operation_fixture SHARED
+              ../../turbo_flow/tests/operation_schema_fixture.c
+              ../../turbo_flow/tests/plugin_operation_fixture.c)
+  target_include_directories(turbo_flow_install_operation_fixture PRIVATE ../../turbo_flow/tests)
+  target_compile_definitions(turbo_flow_install_operation_fixture
+                             PRIVATE TURBO_FLOW_PLUGIN_BUILD)
+  target_link_libraries(turbo_flow_install_operation_fixture
+                        PRIVATE TurboFlow::PluginHost)
+  install(TARGETS turbo_flow_install_operation_fixture
+          RUNTIME DESTINATION bin
+          LIBRARY DESTINATION lib)
+  if(NOT DEFINED TURBO_FLOW_INSTALL_FIXTURE_PATH OR
+     TURBO_FLOW_INSTALL_FIXTURE_PATH STREQUAL "")
+    message(FATAL_ERROR "TURBO_FLOW_INSTALL_FIXTURE_PATH is required")
+  endif()
+  add_test(NAME turbo_flow_install_consumer_runs
+           COMMAND turbo_flow_install_consumer
+                   "${TURBO_FLOW_INSTALL_FIXTURE_PATH}")
+else()
+  add_test(NAME turbo_flow_install_consumer_runs COMMAND turbo_flow_install_consumer)
+endif()

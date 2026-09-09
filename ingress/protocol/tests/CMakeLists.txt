@@ -77,6 +77,13 @@ add_dependencies(
 set_tests_properties(test_protocol_registry test_protocol_plugins
                      PROPERTIES LABELS "protocol-ingress")
 
+add_executable(test_protocol_plugin_abi ../../../tests/plugin_host_abi_test.c)
+target_link_libraries(test_protocol_plugin_abi
+  PRIVATE TurboFlow::PluginHost Salts::TinyTest tf_protocol_coap)
+add_test(NAME test_protocol_plugin_abi COMMAND test_protocol_plugin_abi)
+set_target_properties(test_protocol_plugin_abi PROPERTIES FOLDER "ingress/protocol/tests")
+set_tests_properties(test_protocol_plugin_abi PROPERTIES LABELS "protocol-ingress;plugin")
+
 cmake_add_test(
   test_protocol_runtime
   SOURCES test_protocol_runtime.c

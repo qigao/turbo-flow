@@ -139,9 +139,226 @@ cleanup:
   return rc == SALTS_OK ? cleanup_rc : rc;
 }
 
-int main(void) {
+static int install_copy_int(const void *value, void *ctx, void **out) {
+  (void)ctx;
+  *out = malloc(sizeof(int));
+  if (!*out) return SALTS_ENOMEM;
+  *(int *)*out = *(const int *)value;
+  return SALTS_OK;
+}
+
+static void install_free_int(void *value, void *ctx) {
+  (void)ctx;
+  free(value);
+}
+
+static int install_capture_result(turbo_flow_msg_t *message, void *ctx) {
+  return turbo_flow_msg_clone((turbo_flow_msg_t *)ctx, message);
+}
+
+static void install_operation_lifecycle(void *ctx, turbo_flow_plugin_lifecycle_event_t event,
+                                        const char *plugin_id, int status) {
+  size_t *unloads = (size_t *)ctx;
+  (void)plugin_id;
+  (void)status;
+  if (event == TURBO_FLOW_PLUGIN_LIFECYCLE_UNLOAD) ++*unloads;
+}
+
+static int install_operation_runtime(const char *plugin_path) {
+  static const char yaml[] =
+      "version: 1\noperation_bindings:\n"
+      "  - operation: fixture.double\n    plugin: fixture.operation\n    version: 1\n"
+      "    input_schema: cmeta.int.data\n    input_schema_version: 1\n"
+      "    output_schema: cmeta.int.data\n    output_schema_version: 1\n"
+      "    execution: inline\n    threading: thread_safe\n    cancellation: none\n"
+      "    permissions: []\n    max_inflight: 1\n    max_input_bytes: 8\n"
+      "    max_result_bytes: 8\n    max_retained_bytes: 32\n    max_steps: 2\n"
+      "    deadline_ms: 0\n";
+  static const char dsl[] = "source input\nstage calculate operation fixture.double\n"
+                            "stage output operation fixture.capture\nstage main {\n input -> "
+                            "calculate\n calculate -> output\n}\n";
+  static const turbo_flow_data_schema_t input_schema = {sizeof(turbo_flow_data_schema_t),
+                                                        TURBO_FLOW_DOMAIN_DATA,
+                                                        TURBO_FLOW_DATA_ENCODING_OPAQUE,
+                                                        "cmeta.int.data",
+                                                        "Integer",
+                                                        "int",
+                                                        7u,
+                                                        1u,
+                                                        NULL};
+  turbo_flow_plugin_host_config_t host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
+  turbo_flow_plugin_generation_config_t generation_config =
+      TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+  turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  turbo_flow_operation_descriptor_t metadata = {0};
+  turbo_flow_operation_provider_registration_t capture =
+      TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+  turbo_flow_plugin_host_t *host = NULL;
+  turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
+  turbo_flow_plugin_result_domain_t *domain = NULL;
+  turbo_flow_plugin_generation_t *generation = NULL;
+  turbo_flow_plugin_generation_t *cleanup = NULL;
+  turbo_flow_resolved_config_t *resolved = NULL;
+  turbo_flow_t *flow = NULL;
+  turbo_flow_msg_t input, result, clone;
+  size_t unloads = 0u;
+  int *value = NULL;
+  int rc;
+  turbo_flow_msg_init(&input);
+  turbo_flow_msg_init(&result);
+  turbo_flow_msg_init(&clone);
+  host_config.lifecycle_observer = install_operation_lifecycle;
+  host_config.lifecycle_observer_ctx = &unloads;
+  rc = turbo_flow_plugin_host_create(&host_config, &host, &plugin_error);
+  if (rc != SALTS_OK) goto cleanup_all;
+  rc = turbo_flow_plugin_host_load(host, plugin_path, &plugin_error);
+  if (rc != SALTS_OK) goto cleanup_all;
+  rc = turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &plugin_error);
+  if (rc != SALTS_OK) goto cleanup_all;
+  rc = turbo_flow_plugin_result_domain_create(snapshot, 1u, &domain, &plugin_error);
+  if (rc != SALTS_OK) goto cleanup_all;
+  rc = turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &config_error);
+  if (rc != SALTS_OK) goto cleanup_all;
+  flow = turbo_flow_create();
+  if (!flow) {
+    rc = SALTS_ENOMEM;
+    goto cleanup_all;
+  }
+  metadata.size = sizeof(metadata);
+  metadata.name = "fixture.double";
+  metadata.version = 1u;
+  metadata.domain = metadata.input_domain = metadata.output_domain = TURBO_FLOW_DOMAIN_DATA;
+  metadata.input_type = metadata.output_type = "Message";
+  metadata.flags = TURBO_FLOW_OPERATION_STAGE;
+  metadata.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  metadata.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
+  metadata.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  rc = turbo_flow_register_operation(flow, &metadata);
+  if (rc != SALTS_OK) goto cleanup_all;
+  metadata.name = "fixture.capture";
+  rc = turbo_flow_register_operation(flow, &metadata);
+  if (rc != SALTS_OK) goto cleanup_all;
+  capture.operation_name = metadata.name;
+  capture.fn = install_capture_result;
+  capture.ctx = &result;
+  rc = turbo_flow_register_operation_provider(flow, &capture);
+  if (rc != SALTS_OK) goto cleanup_all;
+  rc = turbo_flow_parse_string(flow, dsl, sizeof(dsl) - 1u);
+  if (rc != SALTS_OK) goto cleanup_all;
+  rc = turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &generation_config, domain,
+                                           &generation, &cleanup, &config_error);
+  if (rc != SALTS_OK) goto cleanup_all;
+  value = (int *)malloc(sizeof(*value));
+  if (!value) {
+    rc = SALTS_ENOMEM;
+    goto cleanup_all;
+  }
+  *value = 7;
+  rc = turbo_flow_msg_bind_typed_projection(&input, &input_schema, &cmeta_data_int, value,
+                                            install_copy_int, install_free_int, NULL);
+  if (rc != SALTS_OK) goto cleanup_all;
+  value = NULL;
+  rc = turbo_flow_start(turbo_flow_plugin_generation_flow(generation));
+  if (rc != SALTS_OK) goto cleanup_all;
+  rc = turbo_flow_publish(turbo_flow_plugin_generation_flow(generation), "input", &input);
+  if (rc != SALTS_OK || !turbo_flow_msg_result(&result, NULL, NULL) ||
+      *(const int *)turbo_flow_msg_result(&result, NULL, NULL) != 14) {
+    if (rc == SALTS_OK) rc = SALTS_EPROTO;
+    goto cleanup_all;
+  }
+  rc = turbo_flow_plugin_generation_destroy(generation, 0u, &config_error);
+  if (rc != SALTS_OK) goto cleanup_all;
+  generation = NULL;
+  rc = turbo_flow_msg_clone(&clone, &result);
+  if (rc != SALTS_OK || *(const int *)turbo_flow_msg_result(&clone, NULL, NULL) != 14) {
+    if (rc == SALTS_OK) rc = SALTS_EPROTO;
+    goto cleanup_all;
+  }
+  turbo_flow_msg_cleanup(&clone);
+  turbo_flow_msg_cleanup(&result);
+  rc = turbo_flow_plugin_result_domain_destroy(domain, &plugin_error);
+  if (rc != SALTS_OK) goto cleanup_all;
+  domain = NULL;
+  turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+  snapshot = NULL;
+  rc = turbo_flow_plugin_host_destroy(host, 0u, &plugin_error);
+  if (rc != SALTS_OK) goto cleanup_all;
+  host = NULL;
+  if (unloads != 1u) rc = SALTS_EPROTO;
+
+cleanup_all:
+  free(value);
+  turbo_flow_msg_cleanup(&clone);
+  turbo_flow_msg_cleanup(&result);
+  turbo_flow_msg_cleanup(&input);
+  if (cleanup) {
+    int cleanup_rc = turbo_flow_plugin_generation_destroy(cleanup, 0u, &config_error);
+    if (rc == SALTS_OK) rc = cleanup_rc;
+  }
+  if (generation) {
+    int cleanup_rc = turbo_flow_plugin_generation_destroy(generation, 0u, &config_error);
+    if (rc == SALTS_OK) rc = cleanup_rc;
+  }
+  turbo_flow_destroy(flow);
+  if (domain) {
+    int cleanup_rc = turbo_flow_plugin_result_domain_destroy(domain, &plugin_error);
+    if (rc == SALTS_OK) rc = cleanup_rc;
+  }
+  turbo_flow_resolved_config_destroy(resolved);
+  turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+  if (host) {
+    int cleanup_rc = turbo_flow_plugin_host_destroy(host, 0u, &plugin_error);
+    if (rc == SALTS_OK) rc = cleanup_rc;
+  }
+  return rc;
+}
+
+int main(int argc, char **argv) {
+  turbo_flow_plugin_operation_schema_v3_t operation_schema;
+  turbo_flow_plugin_operation_limits_v3_t operation_limits;
+  turbo_flow_plugin_operation_input_v3_t operation_input;
+  turbo_flow_plugin_operation_budget_v3_t operation_budget;
+  turbo_flow_plugin_operation_error_v3_t operation_error;
+  turbo_flow_plugin_operation_vtable_v3_t operation_vtable;
+  turbo_flow_plugin_operation_request_v3_t operation_request;
+  turbo_flow_plugin_operation_v3_t operation;
+  turbo_flow_plugin_operation_catalog_v3_t operation_catalog;
+  turbo_flow_plugin_result_domain_snapshot_v3_t domain_snapshot;
+  turbo_flow_plugin_result_domain_t *domain = NULL;
+  int (*result_domain_create)(turbo_flow_plugin_catalog_snapshot_t *, size_t,
+                              turbo_flow_plugin_result_domain_t **, turbo_flow_plugin_error_t *) =
+      turbo_flow_plugin_result_domain_create;
+  int (*result_domain_destroy)(turbo_flow_plugin_result_domain_t *, turbo_flow_plugin_error_t *) =
+      turbo_flow_plugin_result_domain_destroy;
+  int (*result_domain_snapshot)(const turbo_flow_plugin_result_domain_t *,
+                                turbo_flow_plugin_result_domain_snapshot_v3_t *) =
+      turbo_flow_plugin_result_domain_snapshot;
+  turbo_flow_plugin_operation_schema_v3_init(&operation_schema);
+  turbo_flow_plugin_operation_limits_v3_init(&operation_limits);
+  turbo_flow_plugin_operation_input_v3_init(&operation_input);
+  turbo_flow_plugin_operation_budget_v3_init(&operation_budget);
+  turbo_flow_plugin_operation_error_v3_init(&operation_error);
+  turbo_flow_plugin_operation_vtable_v3_init(&operation_vtable);
+  turbo_flow_plugin_operation_request_v3_init(&operation_request);
+  turbo_flow_plugin_operation_v3_init(&operation);
+  turbo_flow_plugin_operation_catalog_v3_init(&operation_catalog);
+  turbo_flow_plugin_result_domain_snapshot_v3_init(&domain_snapshot);
+  if (operation_schema.size != sizeof(operation_schema) ||
+      operation_limits.size != sizeof(operation_limits) ||
+      operation_input.size != sizeof(operation_input) ||
+      operation_budget.size != sizeof(operation_budget) ||
+      operation_error.size != sizeof(operation_error) ||
+      operation_vtable.size != sizeof(operation_vtable) ||
+      operation_request.size != sizeof(operation_request) || operation.size != sizeof(operation) ||
+      operation_catalog.size != sizeof(operation_catalog) ||
+      domain_snapshot.size != sizeof(domain_snapshot) || !result_domain_create ||
+      !result_domain_destroy || !result_domain_snapshot || domain)
+    return 1;
   if (install_operation_binding_config() != SALTS_OK) return 1;
   if (install_projection_owner() != SALTS_OK) return 1;
+  if (argc == 2 && install_operation_runtime(argv[1]) != SALTS_OK) return 1;
+  if (argc > 2) return 1;
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   turbo_flow_turbodb_source_config_t turbodb_config = turbo_flow_turbodb_source_config_default();
   turbo_flow_turbodb_outbox_source_config_t outbox_config =
@@ -233,7 +450,8 @@ int main(void) {
       turbo_flow_plugin_catalog_snapshot_transactional_product_catalog;
   int (*plugin_generation_create)(
       turbo_flow_plugin_catalog_snapshot_t *, const turbo_flow_resolved_config_t *, turbo_flow_t **,
-      const turbo_flow_plugin_generation_config_t *, turbo_flow_plugin_generation_t **,
+      const turbo_flow_plugin_generation_config_t *, turbo_flow_plugin_result_domain_t *,
+      turbo_flow_plugin_generation_t **, turbo_flow_plugin_generation_t **,
       turbo_flow_config_error_t *) = turbo_flow_plugin_generation_create;
   turbo_flow_t *(*plugin_generation_flow)(turbo_flow_plugin_generation_t *) =
       turbo_flow_plugin_generation_flow;
@@ -362,7 +580,7 @@ int main(void) {
           sizeof(turbo_flow_plugin_transactional_resource_provider_v1_t) ||
       transactional_catalog.size != sizeof(turbo_flow_plugin_transactional_product_catalog_v1_t) ||
       generation_config.size != sizeof(turbo_flow_plugin_generation_config_t) ||
-      TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR != 2u || TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR != 0u ||
+      TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR != 3u || TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR != 0u ||
       plugin_host_config.protocol_provider_capacity == 0u ||
       plugin_host_config.business_provider_capacity == 0u ||
       plugin_host_config.transactional_adapter_provider_capacity == 0u ||

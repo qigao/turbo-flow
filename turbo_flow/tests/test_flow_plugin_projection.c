@@ -1,8 +1,19 @@
 #include "plugin_projection_fixture.h"
 #include "turbo_flow_plugin_generation.h"
 #include <tinytest.h>
+#include <stdlib.h>
 #include <string.h>
 int flow_plugin_projection_cpp_probe(void);
+static const turbo_flow_data_schema_t graph_result_schema = {
+  sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+  "cmeta.int.data", "Integer", "int", 91u, 1u, NULL};
+static int graph_result_clone(const void *value, void *ctx, void **out) {
+  (void)ctx; *out = malloc(sizeof(int));
+  if (!*out) return SALTS_ENOMEM;
+  *(int *)*out = *(const int *)value; return SALTS_OK;
+}
+static void graph_result_destroy(void *value, void *ctx) { (void)ctx; free(value); }
+static int graph_result_release(void *ctx) { (void)ctx; return SALTS_OK; }
 
 static void lifecycle(void *ctx, turbo_flow_plugin_lifecycle_event_t event,
                       const char *plugin_id, int status) {
@@ -18,6 +29,7 @@ typedef struct projection_test_s {
   projection_observer_t observer;
   turbo_flow_plugin_host_t *host;
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
+  turbo_flow_plugin_generation_t *cleanup;
   turbo_flow_projection_owner_config_t config;
   void *value;
 } projection_test_t;
@@ -51,6 +63,12 @@ static int test_open(projection_test_t *test, int generation) {
 }
 static int host_destroy(projection_test_t *test) {
   turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  if (test->cleanup) {
+    turbo_flow_config_error_t cleanup_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    int rc = turbo_flow_plugin_generation_destroy(test->cleanup, 0, &cleanup_error);
+    if (rc != SALTS_OK) return rc;
+    test->cleanup = NULL;
+  }
   return turbo_flow_plugin_host_destroy(test->host, 0u, &error);
 }
 static void observer_destroy(projection_test_t *test) {
@@ -84,6 +102,31 @@ static void projection_worker(void *ctx) {
   }
 }
 spec("PluginHost retained projection DLL leases") {
+  it("restores ordinary retain behavior after a real independent result is cleared") {
+    turbo_flow_projection_owner_config_t config = TURBO_FLOW_PROJECTION_OWNER_CONFIG_INIT;
+    turbo_flow_projection_owner_t *owner = NULL;
+    turbo_flow_result_claim_t *claim = NULL;
+    turbo_flow_msg_t source, view;
+    int *result = malloc(sizeof(int));
+    *result = 17;
+    config.flags = TURBO_FLOW_PROJECTION_IMMUTABLE | TURBO_FLOW_PROJECTION_CROSS_THREAD |
+                   TURBO_FLOW_PROJECTION_INDEPENDENT_CONTEXT;
+    config.capacity = 1; config.max_result_bytes = sizeof(int);
+    config.max_retained_bytes = sizeof(int); config.schema = &graph_result_schema;
+    config.clone = graph_result_clone; config.destroy = graph_result_destroy;
+    config.release_context = graph_result_release;
+    check_equal(turbo_flow_projection_owner_create(&config, &owner), SALTS_OK);
+    turbo_flow_msg_init(&source); turbo_flow_msg_init(&view); view.id = 81;
+    check_equal(turbo_flow_msg_result_claim(&source, owner, &cmeta_data_int, &claim), SALTS_OK);
+    check_equal(turbo_flow_msg_result_commit(&claim, (void **)&result), SALTS_OK);
+    check_equal(turbo_flow_msg_retain_view(&view, &source), SALTS_EINVAL);
+    check_equal(view.id, (uint64_t)81);
+    turbo_flow_msg_clear_result(&source);
+    check_equal(turbo_flow_msg_retain_view(&view, &source), SALTS_OK);
+    turbo_flow_msg_cleanup(&view); turbo_flow_msg_cleanup(&source);
+    check_equal(turbo_flow_projection_owner_stop(owner), SALTS_OK);
+    check_equal(turbo_flow_projection_owner_destroy(owner), SALTS_OK);
+  }
   it("calls the exported factory through its C++ public header") {
     check_equal(flow_plugin_projection_cpp_probe(), SALTS_EINVAL);
   }
@@ -335,8 +378,9 @@ spec("PluginHost retained projection DLL leases") {
     flow = turbo_flow_create();
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-    check_equal(turbo_flow_plugin_generation_create(test.snapshot, resolved, &flow,
-                &config, &generation, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_create(test.snapshot, resolved, &flow, &config, NULL,
+                                                    &generation, &test.cleanup, &error),
+                SALTS_OK);
     check_null(flow);
     check_equal(turbo_flow_plugin_generation_owner_count(generation), (size_t)2);
     check_equal(create_stack_owner(&test, &owner), SALTS_OK);
