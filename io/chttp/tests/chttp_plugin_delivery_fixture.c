@@ -1,11 +1,32 @@
 /* Test-only DLL: real providers with allocator fault injection or selective registration. */
 #include "../src/turbo_flow_chttp_plugin_internal.h"
 #include <stdlib.h>
+static unsigned delivery_quiesce_attempts;
+#if CHTTP_DELIVERY_MODE == 3
+static int delivery_server_quiesce(turbo_flow_chttp_server_t *server);
+  #define turbo_flow_chttp_server_quiesce delivery_server_quiesce
+#elif CHTTP_DELIVERY_MODE == 4
+static int delivery_websocket_quiesce(turbo_flow_chttp_websocket_server_t *server);
+  #define turbo_flow_chttp_websocket_server_quiesce delivery_websocket_quiesce
+#endif
 #undef TURBO_FLOW_PLUGIN_ENTRY
 #define TURBO_FLOW_PLUGIN_ENTRY
 #define turbo_flow_plugin_get_api chttp_delivery_native_api
 #include "../src/turbo_flow_chttp_plugin.c"
 #undef turbo_flow_plugin_get_api
+#if CHTTP_DELIVERY_MODE == 3
+  #undef turbo_flow_chttp_server_quiesce
+static int delivery_server_quiesce(turbo_flow_chttp_server_t *server) {
+  if (++delivery_quiesce_attempts == 1u) return SALTS_ETIMEDOUT;
+  return turbo_flow_chttp_server_quiesce(server);
+}
+#elif CHTTP_DELIVERY_MODE == 4
+  #undef turbo_flow_chttp_websocket_server_quiesce
+static int delivery_websocket_quiesce(turbo_flow_chttp_websocket_server_t *server) {
+  if (++delivery_quiesce_attempts == 1u) return SALTS_EBUSY;
+  return turbo_flow_chttp_websocket_server_quiesce(server);
+}
+#endif
 
 enum { FIXTURE_ALLOCATIONS = 4, FIXTURE_FAIL_SECOND_OWNER = 3 };
 typedef struct delivery_root_s {
@@ -41,6 +62,7 @@ static void delivery_deallocate(void *ctx, void *memory) {
   root->invalid_free = 1;
 }
 static int delivery_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
+  delivery_quiesce_attempts = 0u;
   delivery_root_t *root = host->allocate(host->ctx, sizeof(*root));
   if (!root) return SALTS_ENOMEM;
   memset(root, 0, sizeof(*root));
@@ -63,7 +85,7 @@ typedef struct delivery_registration_s {
 } delivery_registration_t;
 static int delivery_add(void *ctx, const turbo_flow_plugin_transactional_adapter_provider_v1_t *p) {
   delivery_registration_t *registration = ctx;
-#if CHTTP_DELIVERY_MODE != 0
+#if CHTTP_DELIVERY_MODE == 1 || CHTTP_DELIVERY_MODE == 2
   if (registration->index++ != CHTTP_DELIVERY_MODE) return SALTS_OK;
 #endif
   return registration->outer->add_transactional_adapter_provider(registration->outer->ctx, p);
@@ -81,6 +103,10 @@ static int delivery_quiesce(void *ctx, uint64_t timeout) {
   if (root->invalid_free || root->allocated - root->freed != 1u) return SALTS_EPROTO;
 #if CHTTP_DELIVERY_MODE == 0
   if (root->attempts != FIXTURE_FAIL_SECOND_OWNER || root->allocated != 2u || root->freed != 1u)
+    return SALTS_EPROTO;
+#endif
+#if CHTTP_DELIVERY_MODE >= 3
+  if (delivery_quiesce_attempts != 2u || root->allocated != 2u || root->freed != 1u)
     return SALTS_EPROTO;
 #endif
   return chttp_delivery_native_api()->quiesce(root->native, timeout);

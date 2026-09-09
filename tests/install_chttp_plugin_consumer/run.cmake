@@ -1,5 +1,7 @@
 set(chttp_plugin_consumer_build_dir "${test_root}/chttp-plugin-build")
-set(chttp_plugin_consumer_source_dir "${TURBO_FLOW_SOURCE_DIR}/tests/install_chttp_plugin_consumer")
+set(chttp_plugin_consumer_source_dir "${test_root}/chttp-plugin-source")
+file(COPY "${TURBO_FLOW_SOURCE_DIR}/tests/install_chttp_plugin_consumer/"
+     DESTINATION "${chttp_plugin_consumer_source_dir}")
 if(WIN32)
   set(installed_chttp_plugin "${stage_dir}/bin/tf_chttp_plugin.dll")
   set(chttp_plugin_consumer_executable
@@ -39,6 +41,16 @@ run_checked(
 
 if(WIN32)
   set(dumpbin "${TURBO_FLOW_COMPILER_RUNTIME_DIR}/dumpbin.exe")
+  include("${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
+  run_expected_failure("CHTTP rejects unversioned native ABI" "requires salts_chttp-2.dll"
+    "${CMAKE_COMMAND}" -DCHTTP_TEST_DEPENDENCY=salts_chttp.dll
+    -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
+  run_expected_failure("CHTTP rejects a different native ABI" "requires salts_chttp-2.dll"
+    "${CMAKE_COMMAND}" -DCHTTP_TEST_DEPENDENCY=salts_chttp-3.dll
+    -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
+  run_checked("CHTTP accepts current native ABI"
+    "${CMAKE_COMMAND}" -DCHTTP_TEST_DEPENDENCY=salts_chttp-2.dll
+    -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
   if(NOT EXISTS "${dumpbin}")
     message(FATAL_ERROR "Required dumpbin executable does not exist: ${dumpbin}")
   endif()
@@ -72,11 +84,11 @@ if(WIN32)
     OUTPUT_VARIABLE plugin_dependent_output
     ERROR_VARIABLE plugin_dependent_error)
   if(NOT plugin_dependent_result EQUAL 0 OR
-     NOT plugin_dependent_output MATCHES "tf_chttp_adapter\\.dll" OR
-     NOT plugin_dependent_output MATCHES "salts_chttp(-[0-9]+)?\\.dll")
+     NOT plugin_dependent_output MATCHES "tf_chttp_adapter\\.dll")
     message(FATAL_ERROR
             "CHTTP plugin dependency inspection failed\n${plugin_dependent_output}\n${plugin_dependent_error}")
   endif()
+  chttp_require_native_abi("${plugin_dependent_output}")
   if(TURBO_FLOW_CONFIG STREQUAL "Debug")
     if(NOT plugin_dependent_output MATCHES "VCRUNTIME140D\\.dll")
       message(FATAL_ERROR "Debug CHTTP plugin does not use the Debug CRT\n${plugin_dependent_output}")

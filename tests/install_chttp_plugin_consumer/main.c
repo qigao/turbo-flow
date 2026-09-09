@@ -1,4 +1,4 @@
-#include "../../io/chttp/tests/chttp_plugin_fixtures.h"
+#include "chttp_plugin_fixtures.h"
 #include "turbo_flow_plugin_generation.h"
 #include <stdio.h>
 #include <string.h>

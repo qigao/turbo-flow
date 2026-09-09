@@ -6,7 +6,7 @@ cmake_add_test(test_chttp_plugin
 set_tests_properties(test_chttp_plugin PROPERTIES LABELS "chttp-plugin;plugin;graph")
 add_dependencies(test_chttp_plugin tf_chttp_plugin)
 
-foreach(mode RANGE 0 2)
+foreach(mode RANGE 0 4)
   add_library(tf_chttp_delivery_fixture_${mode} SHARED
     chttp_plugin_delivery_fixture.c ../src/turbo_flow_chttp_plugin_config.c)
   target_compile_definitions(tf_chttp_delivery_fixture_${mode} PRIVATE

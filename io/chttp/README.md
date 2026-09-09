@@ -13,7 +13,8 @@ Windows 安装文件为 `bin/tf_chttp_plugin.dll`，macOS 为
 `lib/libtf_chttp_plugin.dylib`，其他受支持 Unix 为 `lib/libtf_chttp_plugin.so`。
 必须传入实际插件路径，并部署相同 profile 的动态依赖。
 Windows 的实际导入包含 `tf_chttp_adapter.dll`、版本化的
-`salts_chttp-2.dll` 和其传递依赖；安装门禁检查 DLL 的真实导入表。
+`salts_chttp-2.dll` 和其传递依赖；安装门禁检查 DLL 的真实导入表，
+拒绝无版本名 `salts_chttp.dll` 和其他 ABI 版本。
 Debug/ASan 与 Release 各自使用独立 build、依赖和安装前缀，不混装 CRT。
 缺少插件或依赖立即报错，不尝试静态、直接 adapter 或其他目录候选。
 
@@ -23,7 +24,7 @@ Debug/ASan 与 Release 各自使用独立 build、依赖和安装前缀，不混
 整数溢出和不一致容量在创建 native owner 前失败。空字符串、空数组或零值
 仅在对应字段明确允许时用于表示禁用，并不是字段缺失的默认值。
 可直接复用的三份完整配置在
-[chttp_plugin_fixtures.h](tests/chttp_plugin_fixtures.h)；
+[chttp_plugin_fixtures.h](../../tests/install_chttp_plugin_consumer/chttp_plugin_fixtures.h)；
 [字段表及范围验证](src/turbo_flow_chttp_plugin_config.c)是 schema 的代码事实源。
 测试中的容量与超时是小规模 loopback fixture 的值，不是生产容量建议。
 
@@ -93,6 +94,12 @@ focused 测试是 `test_chttp_plugin`；安装门禁是
 `test_turbo_flow_install_consumer`，包含独立 Gateway 消费者、sole export、
 真实依赖/CRT、缺 DLL/依赖的失败路径。
 测试 fixture DLL 不安装，不作为生产 provider。
+
+caller lease fast-fail 与 owner teardown 分别测试：
+native Source 已接受请求或 WebSocket session 存活时，通过真实插件 owner vtable
+在 adapter quiesce 边界注入一次 timeout/busy，验证 generation 保留、请求/session
+仍可结算，以及显式重试后 owner/root 回到原 allocator 各一次。
+这不代表正常 quiesce 必须返回 busy；正常 teardown 可以同步结算并安全成功。
 
 协议测试使用真实 native peer，经插件 catalog/generation 完成 H1/H2 HTTP、
 H1/RFC8441 WebSocket 和三类 H2/TLS 往返。

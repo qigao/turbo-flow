@@ -1,5 +1,5 @@
+#include "../../../tests/install_chttp_plugin_consumer/chttp_plugin_fixtures.h"
 #include "../../cnet/tests/listener_source_tls_fixture.h"
-#include "chttp_plugin_fixtures.h"
 #include "tinytest.h"
 #include "turbo_flow_plugin_generation.h"
 #include <cflow/publishers.h>
@@ -125,8 +125,8 @@ typedef struct traffic_fixture_s {
   turbo_flow_plugin_host_t *host;
   turbo_flow_plugin_generation_t *generation;
 } traffic_fixture_t;
-static void traffic_open(traffic_fixture_t *f, const char *yaml, const char *graph,
-                         turbo_flow_stage_fn sink, void *ctx) {
+static void traffic_open_path(traffic_fixture_t *f, const char *path, const char *yaml,
+                              const char *graph, turbo_flow_stage_fn sink, void *ctx) {
   turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
@@ -134,7 +134,7 @@ static void traffic_open(traffic_fixture_t *f, const char *yaml, const char *gra
   turbo_flow_plugin_generation_config_t gc = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
   turbo_flow_t *flow = turbo_flow_create();
   f->host = plugin_host(3u);
-  check_equal(turbo_flow_plugin_host_load(f->host, TURBO_FLOW_CHTTP_PLUGIN_PATH, &pe), SALTS_OK);
+  check_equal(turbo_flow_plugin_host_load(f->host, path, &pe), SALTS_OK);
   check_equal(turbo_flow_plugin_catalog_snapshot_create(f->host, &snapshot, &pe), SALTS_OK);
   check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &error), SALTS_OK);
   check_equal(turbo_flow_parse_string(flow, graph, strlen(graph)), SALTS_OK);
@@ -146,6 +146,10 @@ static void traffic_open(traffic_fixture_t *f, const char *yaml, const char *gra
   turbo_flow_resolved_config_destroy(resolved);
   turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
   check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(f->generation)), SALTS_OK);
+}
+static void traffic_open(traffic_fixture_t *f, const char *yaml, const char *graph,
+                         turbo_flow_stage_fn sink, void *ctx) {
+  traffic_open_path(f, TURBO_FLOW_CHTTP_PLUGIN_PATH, yaml, graph, sink, ctx);
 }
 static void traffic_close(traffic_fixture_t *f) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -279,7 +283,131 @@ static int isolation_defer(void *ctx, const chttp_server_request_view *request,
   return rc;
 }
 
+typedef struct teardown_probe_s {
+  atomic_int entered, release, exited;
+  int completions, status;
+  unsigned response_status;
+} teardown_probe_t;
+static int teardown_hold(turbo_flow_msg_t *message, void *ctx) {
+  teardown_probe_t *probe = ctx;
+  (void)message;
+  atomic_fetch_add(&probe->entered, 1);
+  uint64_t deadline = salts_monotonic_ms() + ISOLATION_TIMEOUT_MS;
+  while (!atomic_load(&probe->release) && salts_monotonic_ms() < deadline)
+    salts_sleep_ms(1u);
+  atomic_fetch_add(&probe->exited, 1);
+  return atomic_load(&probe->release) ? SALTS_OK : SALTS_ETIMEDOUT;
+}
+static void teardown_http_done(void *ctx, chttp_request request,
+                               const chttp_response_view *response, const chttp_error *error) {
+  teardown_probe_t *probe = ctx;
+  (void)request;
+  ++probe->completions;
+  probe->status = error ? error->status : SALTS_OK;
+  probe->response_status = response ? response->status_code : 0u;
+}
+
 spec("chttp_plugin") {
+  it("retains a server-owned accepted request after owner quiesce timeout and releases it on "
+     "retry") {
+    static const char graph[] =
+        "source input adapter server\nstage output\nstage reply adapter server\n"
+        "stage main {\n input -> output -> reply\n}\n";
+    traffic_fixture_t f = {0};
+    teardown_probe_t probe = {0};
+    char yaml[PLUGIN_TEST_YAML_BYTES], port_field[64], uri[128];
+    uint16_t port = traffic_port();
+    snprintf(port_field, sizeof(port_field), "bind_port: %u", (unsigned)port);
+    check_equal(replace_once(server_yaml, "bind_port: 0", port_field, yaml), SALTS_OK);
+    traffic_open_path(&f, CHTTP_DELIVERY_FIXTURE_3, yaml, graph, teardown_hold, &probe);
+    turbo_flow_t *original = turbo_flow_plugin_generation_flow(f.generation);
+    chttp_async_client client = {0};
+    chttp_client_config nc = traffic_client_config();
+    chttp_request_options options = {0};
+    chttp_request request = {0};
+    snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)port);
+    options.connection_uri = uri;
+    options.authority = "127.0.0.1";
+    options.target = "/echo";
+    options.method = CHTTP_METHOD_POST;
+    options.body = "ping";
+    options.body_size = 4u;
+    options.on_complete = teardown_http_done;
+    options.user = &probe;
+    check_equal(chttp_async_client_init(&client, &nc), SALTS_OK);
+    check_equal(chttp_async_client_submit(&client, &options, &request), SALTS_OK);
+    size_t completions = 0u;
+    uint64_t deadline = salts_monotonic_ms() + ISOLATION_TIMEOUT_MS;
+    while (!atomic_load(&probe.entered) && salts_monotonic_ms() < deadline)
+      check_equal(chttp_async_client_poll(&client, 1u, &completions), SALTS_OK);
+    check_equal(atomic_load(&probe.entered), 1);
+    check_equal(atomic_load(&probe.exited), 0);
+    check_equal(probe.completions, 0);
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    /* Native Source owns this publication; no external run/claim or caller lease exists. */
+    check_equal(turbo_flow_plugin_generation_destroy(f.generation, 0u, &error), SALTS_ETIMEDOUT);
+    check_not_null(strstr(error.path, ".owner.quiesce"));
+    check_true(turbo_flow_plugin_generation_flow(f.generation) == original);
+    check_equal(turbo_flow_plugin_generation_owner_count(f.generation), 1u);
+    check_equal(turbo_flow_plugin_host_module_count(f.host), 1u);
+    check_equal(turbo_flow_plugin_host_destroy(f.host, 0u, &pe), SALTS_EBUSY);
+    check_equal(probe.completions, 0);
+    atomic_store(&probe.release, 1);
+    deadline = salts_monotonic_ms() + ISOLATION_TIMEOUT_MS;
+    while (!probe.completions && salts_monotonic_ms() < deadline)
+      check_equal(chttp_async_client_poll(&client, 1u, &completions), SALTS_OK);
+    check_equal(probe.completions, 1);
+    check_equal(probe.status, SALTS_OK);
+    check_equal(probe.response_status, 200u);
+    check_equal(atomic_load(&probe.exited), 1);
+    traffic_close(&f);
+    check_equal(chttp_async_client_stop(&client, 1000u), SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+    check_equal(probe.completions, 1);
+  }
+  it("retains an open WebSocket after owner quiesce busy and safely tears it down on retry") {
+    static const char graph[] = "source input adapter websocket\nstage output adapter websocket\n"
+                                "stage main {\n input -> output\n}\n";
+    traffic_fixture_t f = {0};
+    char yaml[PLUGIN_TEST_YAML_BYTES], port_field[64], uri[128];
+    uint16_t port = traffic_port();
+    snprintf(port_field, sizeof(port_field), "bind_port: %u", (unsigned)port);
+    check_equal(replace_once(websocket_yaml, "bind_port: 0", port_field, yaml), SALTS_OK);
+    traffic_open_path(&f, CHTTP_DELIVERY_FIXTURE_4, yaml, graph, NULL, NULL);
+    chttp_websocket_client client = {0};
+    chttp_websocket_client_config nc = {.size = sizeof(nc)};
+    nc.network = traffic_network();
+    nc.max_frame_bytes = 512u;
+    nc.max_message_bytes = 1024u;
+    nc.max_buffered_input_bytes = 4096u;
+    nc.max_handshake_header_bytes = 4096u;
+    nc.event_capacity = 8u;
+    chttp_websocket_connect_options options = {.size = sizeof(options)};
+    chttp_websocket_event event = {0};
+    unsigned status = 0u;
+    snprintf(uri, sizeof(uri), "ws://127.0.0.1:%u/echo", (unsigned)port);
+    options.uri = uri;
+    options.timeout_ms = 1000u;
+    options.protocol = CHTTP_HTTP_1_1;
+    check_equal(chttp_websocket_client_init(&client, &nc), SALTS_OK);
+    check_equal(chttp_websocket_client_connect(&client, &options, &status), SALTS_OK);
+    check_equal(status, 101u);
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    check_equal(turbo_flow_plugin_generation_destroy(f.generation, 0u, &error), SALTS_EBUSY);
+    check_not_null(strstr(error.path, ".owner.quiesce"));
+    check_equal(turbo_flow_plugin_generation_owner_count(f.generation), 1u);
+    check_equal(turbo_flow_plugin_host_destroy(f.host, 0u, &pe), SALTS_EBUSY);
+    check_equal(chttp_websocket_client_send_text(&client, "ping", 4u, 1000u), SALTS_OK);
+    check_equal(chttp_websocket_client_receive(&client, 1000u, &event), SALTS_OK);
+    check_equal(event.size, 4u);
+    check_equal(memcmp(event.data, "ping", 4u), 0);
+    traffic_close(&f);
+    check_equal(chttp_websocket_client_receive(&client, 1000u, &event), SALTS_OK);
+    check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_CLOSE);
+    check_equal(chttp_websocket_client_destroy(&client, 1000u), SALTS_OK);
+  }
   it("retains the plugin until an active Graph run and its accepted emit claim settle") {
     static const char graph[] = "source input\nstage request adapter client\nstage output\nstage "
                                 "main {\n input -> request -> output\n}\n";
@@ -439,6 +567,7 @@ spec("chttp_plugin") {
     check_equal(replace_once(client_yaml, "tcp://127.0.0.1:9", uri, yaml), SALTS_OK);
     replace_field(yaml, "protocol: \"h1\"", "protocol: \"h2\"");
     traffic_open(&f, yaml, graph, traffic_sink, &sink);
+    check_equal(turbo_flow_plugin_generation_lease_acquire(f.generation), SALTS_OK);
     for (size_t i = 0u; i < ISOLATION_REQUESTS; ++i) {
       turbo_flow_msg_t message;
       turbo_flow_msg_init(&message);
@@ -478,6 +607,7 @@ spec("chttp_plugin") {
     check_equal(atomic_load(&sink.received), 1);
     check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
     check_equal(stats.accepted_connections, (uint64_t)1u);
+    check_equal(turbo_flow_plugin_generation_lease_release(f.generation), SALTS_OK);
     traffic_close(&f);
     check_equal(atomic_load(&probes[0].done), 1);
     check_equal(atomic_load(&probes[1].done), 1);
@@ -647,6 +777,7 @@ spec("chttp_plugin") {
         replace_field(protocol_yaml, "tls_server_name: \"\"", "tls_server_name: \"localhost\"");
       }
       traffic_open(&f, protocol_yaml, graph, traffic_sink, &probe);
+      check_equal(turbo_flow_plugin_generation_lease_acquire(f.generation), SALTS_OK);
       for (uint64_t i = 1u; i <= 2u; ++i) {
         turbo_flow_msg_t message;
         turbo_flow_msg_init(&message);
@@ -671,6 +802,7 @@ spec("chttp_plugin") {
         check_equal(stats.accepted_connections, (uint64_t)1u);
         check_equal(stats.requests, (uint64_t)2u);
       }
+      check_equal(turbo_flow_plugin_generation_lease_release(f.generation), SALTS_OK);
       traffic_close(&f);
       check_equal(chttp_server_stop(&server, 1000u), SALTS_OK);
       check_equal(chttp_server_destroy(&server), SALTS_OK);
