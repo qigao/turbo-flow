@@ -63,7 +63,7 @@ spec("plugin schema catalog") {
     config.lifecycle_observer = schema_observe;
     config.lifecycle_observer_ctx = &lifecycle_calls;
     check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
-    check_equal(turbo_flow_plugin_host_load(host, FLOW_SCHEMA_OLD_ABI, &error), SALTS_EPROTO);
+    check_equal(turbo_flow_plugin_host_load(host, FLOW_SCHEMA_OLD_ABI, &error), SALTS_EINVAL);
     check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_API);
     check_equal(lifecycle_calls, (size_t)0);
     check_equal(turbo_flow_plugin_host_module_count(host), (size_t)0);
@@ -89,6 +89,12 @@ spec("plugin schema catalog") {
     check_equal(turbo_flow_plugin_host_load(host, FLOW_SCHEMA_BAD_ABI, &error), SALTS_EINVAL);
     check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &error), SALTS_OK);
     catalog.size = 0u;
+    check_equal(turbo_flow_plugin_catalog_snapshot_schema_catalog(snapshot, &catalog), SALTS_EINVAL);
+    catalog = (turbo_flow_plugin_schema_catalog_v1_t)TURBO_FLOW_PLUGIN_SCHEMA_CATALOG_V1_INIT;
+    catalog.size = sizeof(catalog) + 1u;
+    check_equal(turbo_flow_plugin_catalog_snapshot_schema_catalog(snapshot, &catalog), SALTS_EINVAL);
+    catalog = (turbo_flow_plugin_schema_catalog_v1_t)TURBO_FLOW_PLUGIN_SCHEMA_CATALOG_V1_INIT;
+    catalog.abi_minor = 1u;
     check_equal(turbo_flow_plugin_catalog_snapshot_schema_catalog(snapshot, &catalog), SALTS_EINVAL);
     turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     check_equal(turbo_flow_plugin_host_destroy(host, 0u, &error), SALTS_OK);
@@ -125,7 +131,7 @@ spec("plugin schema catalog") {
     }
   }
 
-  it("rejects an ABI 1.4 schema wrapper from an ABI 2 plugin") {
+  it("rejects an ABI 1.4 schema wrapper from an ABI 3 plugin") {
     turbo_flow_plugin_host_config_t config = schema_config(1u);
     turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_plugin_host_t *host = NULL;

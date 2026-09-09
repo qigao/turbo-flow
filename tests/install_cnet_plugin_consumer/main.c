@@ -240,6 +240,7 @@ int main(int argc, char **argv) {
   turbo_flow_plugin_host_t *host = NULL;
   turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
   turbo_flow_plugin_generation_t *generation = NULL;
+  turbo_flow_plugin_generation_t *cleanup_generation = NULL;
   turbo_flow_resolved_config_t *resolved = NULL;
   turbo_flow_t *flow = NULL;
   test_socket_t receiver = TEST_INVALID_SOCKET;
@@ -312,8 +313,9 @@ int main(int argc, char **argv) {
   failure_status = turbo_flow_parse_string(flow, graph_text, sizeof(graph_text) - 1u);
   if (failure_status != SALTS_OK) goto cleanup;
   failure_stage = "graph generation";
-  failure_status = turbo_flow_plugin_generation_create(
-      snapshot, resolved, &flow, &generation_config, &generation, &config_error);
+  failure_status =
+      turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &generation_config, NULL,
+                                          &generation, &cleanup_generation, &config_error);
   if (failure_status != SALTS_OK) goto cleanup;
   failure_stage = "graph start";
   failure_status = turbo_flow_start(turbo_flow_plugin_generation_flow(generation));
@@ -397,6 +399,15 @@ int main(int argc, char **argv) {
   if (rc != 0) failure_status = SALTS_ETIMEDOUT;
 
 cleanup:
+  if (cleanup_generation) {
+    int cleanup_rc =
+        turbo_flow_plugin_generation_destroy(cleanup_generation, 1000u, &destroy_config_error);
+    if (cleanup_rc == SALTS_OK) cleanup_generation = NULL;
+    else {
+      failure_status = cleanup_rc;
+      rc = 1;
+    }
+  }
   if (generation) {
     destroy_config_error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     if (turbo_flow_plugin_generation_destroy(generation, 1000u, &destroy_config_error) !=

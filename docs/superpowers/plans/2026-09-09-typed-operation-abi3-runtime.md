@@ -20,18 +20,27 @@ Graph保留原projection并原子提交一个独立result槽，caller-owned resu
 - 所有preflight成功之前不转移Graph、不创建有副作用实例。
 - 只接受inline/thread_safe/none、deadline0、steps-charged、固定纯值schema和空permissions。
 - 首profile通过不关闭#93其余线程/取消验收，更不关闭#73真实引擎/链接解耦。
-- 不发布半实现capability、公共stub或安装中间SDK；Task2/4未接入代码只在内部非安装测试目标。
+- 不发布半实现capability、公共stub或安装中间SDK；Task2/4/5合为一个未发布集成单元，最终ABI类型只定义一次。
 - callback代码和metadata由匹配snapshot保护；worker不碰控制面非原子lease。
 - 所有源码改动前维护CodeGraph并至少读3处实现/测试；文件检索仅rg.exe/fd.exe。
 - 启动实施时使用plugin-system/cflow/cmeta/memory-design-protocols/cmake-presets/tinytest相关skill。
 
 ## 文件职责与命令约定
 
+实施顺序为Task1 → Task3 → Task2/4/5合并集成 → Task6。保留原任务编号以对应规格验收。
+原因：canonical registration参数就是公开结构，精确size校验下不能在Task2注册operation
+却把add_operation字段延迟到Task5；不以影子头、条件布局或测试注入注册通道解决。
+Task2/4/5由同一实施者按catalog/domain/runtime检查点推进，完整执行和消费者回归通过后
+统一提交。中间编译状态不是交付，不安装SDK、不声称已支持operation。
+Graph的schema_match实现及多TU语义测试随先行Task3完成，后续catalog直接复用。
+
 `flow_plugin.c`维护operation事务与snapshot，不拆新registry。`flow_plugin_operation.c`
 新增编译binding、budget和callback包装。`flow_plugin_result_domain.c`只处理结果域控制面
 所有权。`flow_message.c`/`flow_projection_owner.c`处理Graph原子result槽，
 `flow_data_schema.c`新增有限CMeta语义验证。`flow_plugin_generation.c`负责装配与退役。
 新文件不引入RulesForge/TurboScript头。测试fixture独立DLL，仅导出canonical entry。
+创建flow_plugin_operation.c/flow_plugin_result_domain.c时立即从Graph的src/*.c GLOB
+排除并显式加入既有turbo_flow_plugin_host target；不得让控制面误进入Graph。
 
 所有下列cmake/ctest命令在已由本机实际`VsDevCmd.bat -arch=x64 -host_arch=x64`
 初始化的终端执行。执行者先用vswhere定位VsDevCmd，不写死MSVC版本路径；自动化用
@@ -97,17 +106,19 @@ if (value->abi_major != 3u || value->abi_minor != 0u) return SALTS_EINVAL;
 ### Task 2: 有界operation catalog与可信schema匹配
 
 **Files:** Modify `turbo_flow/src/flow_plugin.c`；Create
-`turbo_flow/src/flow_data_schema.c`、`turbo_flow/src/flow_plugin_operation_internal.h`、
+`turbo_flow/src/flow_plugin_operation_internal.h`、
 `turbo_flow/tests/test_flow_plugin_operation.c`、`turbo_flow/tests/plugin_operation_fixture.c`、
 `turbo_flow/tests/plugin_operation_fixture.h`；Modify `turbo_flow/tests/CMakeLists.txt`。
-公共operation声明此时放非安装internal header，Task5原样移入公开头。
+公共operation声明只在最终公开头定义一次；本任务与Task4/5合并实施和提交。
+flow_plugin_operation_internal.h仅保存长期私有协作接口，不复制公开ABI布局。
 
 **Interfaces:** spec中`turbo_flow_plugin_operation_v3_t`及全部factory/vtable/limits/schema
-完整声明；内部实现 `turbo_flow_plugin_catalog_snapshot_operation_catalog(snapshot,catalog_out)`
-与 `turbo_flow_data_schema_match(left,left_data,right,right_data)`，签名同spec，不发布stub。
-测试目标独立编译这些实现并链接既有依赖；生产Host仍拒绝bit8。
+完整声明；实现 `turbo_flow_plugin_catalog_snapshot_operation_catalog(snapshot,catalog_out)`，
+复用先行Task3的 `turbo_flow_data_schema_match(left,left_data,right,right_data)`。
+测试链接同一个TurboFlow::PluginHost；不创建影子Host。bit8准入在整个集成单元完成时开放；
+此前真实DLL operation用例保持RED，不用测试专属准入绕过它。
 
-- [ ] 用现有schema fixture模式声明两个独立TU的同义int32 scalar metadata以及两个field
+- [ ] 复用Task3已完成的两个独立TU的同义int32 scalar metadata以及两个field
   struct，分别变更offset、bits、stable_id、alignment、字段顺序；相同地址不是通过条件。
   下列测试中的left/right及data来自这两份fixture静态描述，不手写伪CMeta布局：
 
@@ -138,10 +149,9 @@ if (rc != SALTS_OK) {
 }
 ```
 
-- [ ] schema walker只接受spec固定kind、深度16/节点256/fields64；逐层比较语义，不调用
+- [ ] 复用Task3 schema walker，只接受spec固定kind、深度16/节点256/fields64；逐层比较语义，不调用
   生命周期callback、不解引用payload。节点计数/offset用减法检查溢出后访问，循环ENOTSUP。
-- [ ] 运行新CTest与现有schema/host回归，确认生产root带bit8仍被拒绝；commit
-  `feat(plugin): implement bounded operation catalog contract internally`。
+- [ ] 集成完成后运行新CTest与现有schema/host回归；连同Task4/5统一提交，不单独交付catalog。
 
 ### Task 3: Graph typed input provenance与原子result槽
 
@@ -149,6 +159,8 @@ if (rc != SALTS_OK) {
 `turbo_flow/src/flow_internal.h`、`turbo_flow/src/flow_projection_owner.c`、
 `turbo_flow/src/flow_projection_owner_internal.h`、`turbo_flow/CMakeLists.txt`；
 Create `turbo_flow/tests/test_flow_operation_result.c`，Modify `turbo_flow/tests/CMakeLists.txt`。
+Create `turbo_flow/src/flow_data_schema.c`、`turbo_flow/tests/operation_schema_fixture.c`、
+`turbo_flow/tests/operation_schema_fixture.h`、`turbo_flow/tests/test_flow_data_schema.c`。
 同时修改`turbo_flow/include/turbo_flow.h`的retain_view契约说明，并扩展
 `turbo_flow/tests/test_flow_plugin_projection.c`的clear→retain回归。
 
@@ -158,6 +170,13 @@ Create `turbo_flow/tests/test_flow_operation_result.c`，Modify `turbo_flow/test
 新增完整公开接口`turbo_flow_value_require_disjoint(const void *, size_t, const void *, size_t)`、
 `turbo_flow_result_memory_requirements(size_t, size_t, turbo_flow_result_memory_requirements_t *)`，
 成本结构及init函数按spec定义。Graph是范围判定与私有布局成本的唯一实现方。
+
+- [ ] 先实现schema_match：用现有schema fixture模式在两个TU生成同义int32与双字段struct
+  CMeta元数据，独立地址但语义相同返回OK；分别改变offset、bits、stable_id、alignment、
+  字段顺序返回EPROTO，非法descriptor返回EINVAL，不支持kind/循环/深度16或节点256或
+  fields64上限超出返回ENOTSUP。metadata由真实CMeta API生成，不手写伪布局。
+  用原生CTest注册test_flow_data_schema，先构建/运行观察RED，再实现规格中有界walker，
+  通过后继续结果槽测试。该实现归Graph，后续catalog复用，不另造比较器。
 
 - [ ] RED：原message绑定schema A projection并拥有descriptor，result schema B；
   记录payload内容、projection指针、descriptor、settlement callback计数。
@@ -193,7 +212,8 @@ if (rc != SALTS_OK) {
 ```
 
   callback本身失败时也先用同一helper得到independent，仅OK才销毁返回值；保留callback
-  首错，alias诊断写结果phase。helper不得解引用candidate；NULL/区间溢出/重叠都不destroy。
+  首错及原phase（包括失败伴随alias）；仅callback成功后Host发现结果错误才写RESULT phase。
+  helper不得解引用candidate；NULL/区间溢出/重叠都不destroy。
   该示例borrowed span是当前typed input；clone以原result span代入，其他已知借用span
   也必须全部验证通过后才允许清理，不能单独比较根指针。
 - [ ] 添加struct输入两个int32字段，DLL分别在成功/失败返回时给出第二字段地址，
@@ -231,7 +251,7 @@ check_equal(turbo_flow_msg_result(&source, NULL, NULL), result_value);
 **Files:** Create `turbo_flow/src/flow_plugin_result_domain.c`、
 `turbo_flow/tests/test_flow_plugin_result_domain.c`；Modify
 `turbo_flow/src/flow_plugin_operation_internal.h`、`turbo_flow/tests/plugin_operation_fixture.c`、
-`turbo_flow/tests/CMakeLists.txt`；此任务未集成generation前仍为非安装内部实现。
+`turbo_flow/tests/CMakeLists.txt`；本任务与Task2/5同一未发布集成单元，直接链接PluginHost。
 
 **Interfaces:** spec完整result_domain_create/destroy/snapshot及snapshot struct；内部
 generation独占attach/detach规则：READY→ATTACHED→DETACHED→RETIRING，最多一次attach，
@@ -259,8 +279,7 @@ check_equal(state.state, (uint32_t)TURBO_FLOW_PLUGIN_RESULT_DOMAIN_ATTACHED);
 - [ ] 用barrier停在clone/destroy callback内，验证控制线程不能仅看outstanding0就free。
   join后重试destroy；worker无snapshot retain/destroy调用，观测snapshot操作发生在线程记录的
   控制线程。覆盖容量0/1/1024/1025和重复attach失败，失败generation消耗域不能再复用。
-- [ ] GREEN执行domain、projection、result回归；commit
-  `feat(plugin): own independent results in explicit retirement domains`。
+- [ ] 集成完成后执行domain、projection、result回归；连同Task2/5统一提交。
 
 ### Task 5: Generation装配、budget执行与失败句柄完整集成
 
@@ -275,7 +294,7 @@ Create `turbo_flow/src/flow_plugin_operation.c`、`turbo_flow/tests/test_flow_pl
 `tests/install_consumer/main.c`、`tests/install_cnet_plugin_consumer/main.c`、
 `tests/install_chttp_plugin_consumer/main.c` 的generation调用/函数指针。
 
-**Interfaces:** 从internal移出spec所有完整operation/result-domain声明与init函数；host
+**Interfaces:** 在最终公开头一次定义spec所有完整operation/result-domain声明与init函数；host
 operation_capacity、registration.add_operation、generation.operation_memory_budget_bytes；
 spec新的generation_create 8参数、operation_error/cleanup_error查询，FAILED_CLEANUP=7。
 preflight消费Task3的Graph成本查询，只在PluginHost本模块计算bridge/ledger成本H；
@@ -302,11 +321,20 @@ catalog自动创建Graph operation metadata。实际typed输入由bind_typed_pro
 | 元数据size/version非法、乘加溢出、两out别名、非READY域 | EINVAL |
 | 任意provider preflight失败 | 原错误码，全部factory0 |
 
+  窄澄清：重复resolved operation/resource绑定在工厂前EALREADY；Graph既存或materialize
+  新增provider冲突以实际公开注册返回EALREADY为准，允许此时Graph/domain已转移，必须
+  保留原错并执行统一可重试清理。测试release一次失败、cleanup_out、域状态及exact-once；
+  不新增Graph查询或读取私有注册表，不改变其余preflight无副作用要求。
+
 - [ ] 内存预算用真实Graph成本查询复算required；预算=required时通过，预算=required-1
   时ENOSPC；Graph查询capacity乘法/加法溢出、多个binding合计溢出时EINVAL。
   所有拒绝都断言Graph未转移、domain仍READY、两个out为NULL、全部factory计数0。
   query返回的peak_metadata_bytes变化必须自然反映到required，不允许测试/Host维护另一
   份硬编码Graph每槽成本。
+
+  当前x64合法输入下，多binding合计溢出由spec给出的上限和实际Graph查询/Host H证明
+  不可达；保留checked加乘，执行Graph查询SIZE_MAX溢出和catalog超上限拒绝测试。
+  不篡改snapshot制造非法generation输入；32位、容量或布局改变须重新评估此结论。
 
 - [ ] build `test_flow_plugin_operation_runtime`再
   `ctest --preset win-dev-user -R '^test_flow_plugin_operation_runtime$' --output-on-failure`，记录RED。

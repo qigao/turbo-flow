@@ -11,7 +11,8 @@ static int discard_response(turbo_flow_msg_t *message, void *ctx) {
   return SALTS_OK;
 }
 
-static int run_kind(turbo_flow_plugin_host_t *host, size_t kind) {
+static int run_kind(turbo_flow_plugin_host_t *host, size_t kind,
+                    turbo_flow_plugin_generation_t **cleanup_owner) {
   static const char *const yamls[] = {client_yaml, server_yaml, websocket_yaml};
   static const char *const graphs[] = {
       "source input\nstage request adapter client\nstage "
@@ -64,7 +65,8 @@ static int run_kind(turbo_flow_plugin_host_t *host, size_t kind) {
     rc = turbo_flow_register_operation_provider(flow, &provider);
     if (rc != SALTS_OK) goto cleanup;
   }
-  rc = turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, &generation, &ce);
+  rc = turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, NULL, &generation,
+                                           cleanup_owner, &ce);
   if (rc != SALTS_OK) goto cleanup;
   turbo_flow_resolved_config_destroy(resolved);
   resolved = NULL;
@@ -89,9 +91,17 @@ static int run_kind(turbo_flow_plugin_host_t *host, size_t kind) {
     goto cleanup;
   }
 cleanup:
+  if (*cleanup_owner) {
+    int cleanup_rc = turbo_flow_plugin_generation_destroy(*cleanup_owner, CONSUMER_TIMEOUT_MS, &ce);
+    if (cleanup_rc == SALTS_OK) *cleanup_owner = NULL;
+    else rc = cleanup_rc;
+  }
   if (generation) {
     int destroy_rc = turbo_flow_plugin_generation_destroy(generation, CONSUMER_TIMEOUT_MS, &ce);
-    if (destroy_rc != SALTS_OK) rc = destroy_rc;
+    if (destroy_rc != SALTS_OK) {
+      rc = destroy_rc;
+      *cleanup_owner = generation;
+    }
   }
   turbo_flow_destroy(flow);
   turbo_flow_resolved_config_destroy(resolved);
@@ -105,6 +115,7 @@ int main(int argc, char **argv) {
   turbo_flow_plugin_host_config_t config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
   turbo_flow_plugin_host_t *host = NULL;
+  turbo_flow_plugin_generation_t *cleanup_owner = NULL;
   if (argc != 2 || !argv[1][0]) return 1;
   config.module_capacity = 1u;
   config.transactional_adapter_provider_capacity = CONSUMER_PROVIDER_COUNT;
@@ -117,7 +128,14 @@ int main(int argc, char **argv) {
       turbo_flow_plugin_host_transactional_adapter_provider_count(host) != CONSUMER_PROVIDER_COUNT)
     rc = SALTS_EPROTO;
   for (size_t i = 0u; rc == SALTS_OK && i < CONSUMER_PROVIDER_COUNT; ++i)
-    rc = run_kind(host, i);
+    rc = run_kind(host, i, &cleanup_owner);
+  if (cleanup_owner) {
+    turbo_flow_config_error_t cleanup_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    int cleanup_rc =
+        turbo_flow_plugin_generation_destroy(cleanup_owner, CONSUMER_TIMEOUT_MS, &cleanup_error);
+    if (cleanup_rc == SALTS_OK) cleanup_owner = NULL;
+    else return 1;
+  }
   int destroy_rc = turbo_flow_plugin_host_destroy(host, CONSUMER_TIMEOUT_MS, &error);
   return rc == SALTS_OK && destroy_rc == SALTS_OK ? 0 : 1;
 }

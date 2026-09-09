@@ -7,7 +7,15 @@
 #define FLOW_MSG_PROJECTION_MAGIC UINT64_C(0x544650524f4a5631)
 
 static int flow_msg_projection_empty(const flow_msg_projection_t *projection) {
-  return projection && !projection->descriptor && !projection->value;
+  return projection && !projection->descriptor && !projection->value && !projection->result_value;
+}
+
+static turbo_flow_projection_owner_t *flow_msg_result_release_value(flow_msg_projection_t *p) {
+  turbo_flow_projection_owner_t *owner = p->result_owner;
+  if (p->result_value && p->result_destroy) p->result_destroy(p->result_value, p->result_ctx);
+  p->result_schema = NULL; p->result_data = NULL; p->result_value = NULL;
+  p->result_clone = NULL; p->result_destroy = NULL; p->result_ctx = NULL; p->result_owner = NULL;
+  return owner;
 }
 
 static turbo_flow_projection_owner_t *flow_msg_projection_release_value(
@@ -19,6 +27,7 @@ static turbo_flow_projection_owner_t *flow_msg_projection_release_value(
   projection->owner = NULL;
   projection->value = NULL;
   projection->schema = NULL;
+  projection->data = NULL;
   projection->clone = NULL;
   projection->destroy = NULL;
   projection->ctx = NULL;
@@ -28,13 +37,16 @@ static turbo_flow_projection_owner_t *flow_msg_projection_release_value(
 static void flow_msg_projection_destroy(void *ptr, void *ctx) {
   flow_msg_projection_t *projection = (flow_msg_projection_t *)ptr;
   turbo_flow_projection_owner_t *owner;
+  turbo_flow_projection_owner_t *result_owner;
 
   (void)ctx;
   if (!projection || projection->magic != FLOW_MSG_PROJECTION_MAGIC) return;
   projection->magic = 0u;
+  result_owner = flow_msg_result_release_value(projection);
   owner = flow_msg_projection_release_value(projection);
   free(projection);
   if (owner) flow_projection_owner_release(owner);
+  if (result_owner) flow_projection_owner_release(result_owner);
 }
 
 static const flow_msg_projection_t *flow_msg_projection(const turbo_flow_msg_t *msg) {
@@ -58,57 +70,91 @@ static int flow_msg_descriptor_accepts_schema(const turbo_flow_content_descripto
              : SALTS_EPROTO;
 }
 
+static int flow_msg_candidate_independent(const turbo_flow_msg_t *msg, const void *candidate,
+                                          size_t candidate_size, const void *temporary,
+                                          size_t temporary_size) {
+  const flow_msg_projection_t *source = flow_msg_projection(msg);
+  int rc;
+  if (!candidate || !candidate_size) return SALTS_EPROTO;
+  rc = turbo_flow_value_require_disjoint(candidate, candidate_size, candidate, candidate_size);
+  if (rc == SALTS_EINVAL) return SALTS_EPROTO;
+  if (source && source->value) {
+    if (!source->data) {
+      if (candidate == source->value) return SALTS_EPROTO;
+    } else {
+      rc = turbo_flow_value_require_disjoint(source->value, source->data->storage_type->size,
+                                             candidate, candidate_size);
+      if (rc != SALTS_OK) return SALTS_EPROTO;
+    }
+  }
+  if (source && source->result_value) {
+    rc = turbo_flow_value_require_disjoint(source->result_value,
+        source->result_data->storage_type->size, candidate, candidate_size);
+    if (rc != SALTS_OK) return SALTS_EPROTO;
+  }
+  if (msg->payload.data && msg->payload.len) {
+    rc = turbo_flow_value_require_disjoint(msg->payload.data, msg->payload.len,
+                                           candidate, candidate_size);
+    if (rc != SALTS_OK) return SALTS_EPROTO;
+  }
+  if (temporary && temporary_size) {
+    rc = turbo_flow_value_require_disjoint(temporary, temporary_size, candidate, candidate_size);
+    if (rc != SALTS_OK) return SALTS_EPROTO;
+  }
+  return SALTS_OK;
+}
+
 static int flow_msg_projection_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src) {
   const flow_msg_projection_t *source = flow_msg_projection(src);
-  flow_msg_projection_t *copy;
-  void *value = NULL;
-  int rc;
+  flow_msg_projection_t *copy = NULL;
+  void *value = NULL, *result = NULL;
+  int projection_reserved = 0, result_reserved = 0;
+  int value_independent = 0, result_independent = 0;
+  int rc = SALTS_OK;
 
   if (!source) return SALTS_EINVAL;
+  if (source->claim_active) return SALTS_EBUSY;
+  if (source->result_value && source->value && !source->data) return SALTS_ENOTSUP;
   if (source->owner) {
     rc = flow_projection_owner_reserve(source->owner);
     if (rc != SALTS_OK) return rc;
-    if (!source->clone) {
-      flow_projection_owner_release(source->owner);
-      return SALTS_ENOTSUP;
-    }
-    copy = (flow_msg_projection_t *)calloc(1, sizeof(*copy));
-    if (!copy) {
-      flow_projection_owner_release(source->owner);
-      return SALTS_ENOMEM;
-    }
-    rc = source->clone(source->value, source->ctx, &value);
-    if (value == source->value) {
-      rc = SALTS_EPROTO;
-      value = NULL;
-    } else if (rc == SALTS_OK && !value) {
-      rc = SALTS_EPROTO;
-    }
-    if (rc != SALTS_OK) {
-      if (value) source->destroy(value, source->ctx);
-      free(copy);
-      flow_projection_owner_release(source->owner);
-      return rc;
-    }
-    goto publish;
-  }
-  if (source->value) {
-    if (!source->clone) return SALTS_ENOTSUP;
-    rc = source->clone(source->value, source->ctx, &value);
-    if (rc != SALTS_OK) return rc;
-    if (!value) return SALTS_EPROTO;
+    projection_reserved = 1;
   }
   copy = (flow_msg_projection_t *)calloc(1, sizeof(*copy));
-  if (!copy) {
-    if (value) source->destroy(value, source->ctx);
-    return SALTS_ENOMEM;
+  if (!copy) { rc = SALTS_ENOMEM; goto fail; }
+  if (source->value) {
+    if (!source->clone) { rc = SALTS_ENOTSUP; goto fail; }
+    rc = source->clone(source->value, source->ctx, &value);
+    if (value) value_independent = flow_msg_candidate_independent(
+        src, value, source->data ? source->data->storage_type->size : 1u, NULL, 0u) == SALTS_OK;
+    if (rc == SALTS_OK && !value_independent) rc = SALTS_EPROTO;
+    if (rc != SALTS_OK) goto fail;
   }
-publish:
+  if (source->result_value) {
+    if (!source->result_clone) { rc = SALTS_ENOTSUP; goto fail; }
+    rc = flow_projection_owner_reserve(source->result_owner);
+    if (rc != SALTS_OK) goto fail;
+    result_reserved = 1;
+    rc = source->result_clone(source->result_value, source->result_ctx, &result);
+    if (result) result_independent = flow_msg_candidate_independent(
+        src, result, source->result_data->storage_type->size, value,
+        source->data ? source->data->storage_type->size : 0u) == SALTS_OK;
+    if (rc == SALTS_OK && !result_independent) rc = SALTS_EPROTO;
+    if (rc != SALTS_OK) goto fail;
+  }
   *copy = *source;
   if (copy->owns_descriptor) copy->descriptor = &copy->owned_descriptor;
   copy->value = value;
+  copy->result_value = result;
   dst->_content_handle = copy;
   return SALTS_OK;
+fail:
+  if (result && result_independent) source->result_destroy(result, source->result_ctx);
+  if (result_reserved) flow_projection_owner_release(source->result_owner);
+  if (value && value_independent) source->destroy(value, source->ctx);
+  if (projection_reserved) flow_projection_owner_release(source->owner);
+  free(copy);
+  return rc;
 }
 
 static void flow_msg_failure_cleanup(turbo_flow_failure_t *failure) {
@@ -211,6 +257,7 @@ void turbo_flow_msg_init(turbo_flow_msg_t *msg) {
 
 void turbo_flow_msg_cleanup(turbo_flow_msg_t *msg) {
   if (!msg) return;
+  if (flow_msg_projection(msg) && flow_msg_projection(msg)->claim_active) return;
   flow_msg_projection_destroy(msg->_content_handle, NULL);
   flow_msg_failure_cleanup(&msg->failure);
   tstr_freep(&msg->owned_payload);
@@ -224,7 +271,8 @@ int turbo_flow_msg_retain_view(turbo_flow_msg_t *dst, const turbo_flow_msg_t *sr
 
   if (!dst || !src || flow_msg_payload_validate(src) != SALTS_OK) return SALTS_EINVAL;
   source_binding = flow_msg_projection(src);
-  if (src->owned_payload || (source_binding && source_binding->value)) {
+  if (src->owned_payload || (source_binding &&
+      (source_binding->value || source_binding->result_value || source_binding->claim_active))) {
     return SALTS_EINVAL;
   }
   if (source_binding) {
@@ -298,6 +346,7 @@ int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src) {
 
 int turbo_flow_msg_move(turbo_flow_msg_t *dst, turbo_flow_msg_t *src) {
   if (!dst || !src) return SALTS_EINVAL;
+  if (flow_msg_projection(src) && flow_msg_projection(src)->claim_active) return SALTS_EBUSY;
   turbo_flow_msg_init(dst);
   *dst = *src;
   turbo_flow_msg_init(src);
@@ -324,6 +373,7 @@ int turbo_flow_msg_bind_projection(turbo_flow_msg_t *msg, const turbo_flow_data_
     return SALTS_EINVAL;
   }
   binding = (flow_msg_projection_t *)flow_msg_projection(msg);
+  if (binding && binding->claim_active) return SALTS_EBUSY;
   if (binding && binding->value) return SALTS_EBUSY;
   if (binding && flow_msg_descriptor_accepts_schema(binding->descriptor, schema) != SALTS_OK) {
     return SALTS_EPROTO;
@@ -340,6 +390,16 @@ int turbo_flow_msg_bind_projection(turbo_flow_msg_t *msg, const turbo_flow_data_
   binding->ctx = ctx;
   msg->_content_handle = binding;
   return SALTS_OK;
+}
+
+int turbo_flow_msg_bind_typed_projection(turbo_flow_msg_t *msg,
+    const turbo_flow_data_schema_t *schema, const cmeta_data_desc *data, void *value,
+    turbo_flow_projection_clone_fn clone, turbo_flow_destroy_fn destroy, void *ctx) {
+  int rc = turbo_flow_data_schema_match(schema, data, schema, data);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_msg_bind_projection(msg, schema, value, clone, destroy, ctx);
+  if (rc == SALTS_OK) ((flow_msg_projection_t *)msg->_content_handle)->data = data;
+  return rc;
 }
 
 int turbo_flow_msg_bind_retained_projection(turbo_flow_msg_t *msg,
@@ -368,10 +428,15 @@ const void *turbo_flow_msg_projection(const turbo_flow_msg_t *msg,
   return projection ? projection->value : NULL;
 }
 
+const cmeta_data_desc *turbo_flow_msg_projection_data(const turbo_flow_msg_t *msg) {
+  const flow_msg_projection_t *p = flow_msg_projection(msg);
+  return p && p->value ? p->data : NULL;
+}
+
 void turbo_flow_msg_clear_projection(turbo_flow_msg_t *msg) {
   flow_msg_projection_t *projection = (flow_msg_projection_t *)flow_msg_projection(msg);
   turbo_flow_projection_owner_t *owner;
-  if (!projection || !projection->value) return;
+  if (!projection || !projection->value || projection->claim_active) return;
   owner = flow_msg_projection_release_value(projection);
   if (flow_msg_projection_empty(projection)) {
     free(projection);
@@ -385,7 +450,7 @@ void turbo_flow_msg_clear_content(turbo_flow_msg_t *msg) {
   turbo_flow_projection_owner_t *owner;
   if (!msg) return;
   projection = (flow_msg_projection_t *)flow_msg_projection(msg);
-  if (!projection) return;
+  if (!projection || projection->claim_active) return;
   owner = flow_msg_projection_release_value(projection);
   projection->descriptor = NULL;
   projection->owns_descriptor = 0;
@@ -397,6 +462,89 @@ void turbo_flow_msg_clear_content(turbo_flow_msg_t *msg) {
   if (owner) flow_projection_owner_release(owner);
 }
 
+int turbo_flow_msg_result_claim(turbo_flow_msg_t *msg, turbo_flow_projection_owner_t *owner,
+                                const cmeta_data_desc *data, turbo_flow_result_claim_t **out) {
+  const turbo_flow_projection_owner_config_t *config;
+  flow_msg_projection_t *source, *prepared;
+  turbo_flow_result_claim_t *claim;
+  int rc;
+  if (!out) return SALTS_EINVAL;
+  *out = NULL;
+  if (!msg || !owner || !data) return SALTS_EINVAL;
+  source = (flow_msg_projection_t *)flow_msg_projection(msg);
+  if (source && (source->result_value || source->claim_active)) return SALTS_EALREADY;
+  if (source && source->value && !source->data) return SALTS_ENOTSUP;
+  config = flow_projection_owner_config(owner);
+  rc = turbo_flow_data_schema_match(config->schema, data, config->schema, data);
+  if (rc != SALTS_OK) return rc;
+  if (data->storage_type->size > config->max_result_bytes) return SALTS_EPROTO;
+  rc = flow_projection_owner_reserve(owner);
+  if (rc == SALTS_ECANCELED) rc = SALTS_EBUSY;
+  if (rc != SALTS_OK) return rc;
+  claim = (turbo_flow_result_claim_t *)calloc(1, sizeof(*claim));
+  prepared = (flow_msg_projection_t *)calloc(1, sizeof(*prepared));
+  if (!claim || !prepared) { free(claim); free(prepared); flow_projection_owner_release(owner); return SALTS_ENOMEM; }
+  if (source) *prepared = *source;
+  else prepared->magic = FLOW_MSG_PROJECTION_MAGIC;
+  if (prepared->owns_descriptor) prepared->descriptor = &prepared->owned_descriptor;
+  prepared->result_schema = config->schema; prepared->result_data = data;
+  prepared->result_clone = config->clone; prepared->result_destroy = config->destroy;
+  prepared->result_ctx = config->ctx; prepared->result_owner = owner;
+  claim->msg = msg; claim->original = source; claim->prepared = prepared; claim->owner = owner;
+  if (source) source->claim_active = 1;
+  *out = claim;
+  return SALTS_OK;
+}
+
+int turbo_flow_msg_result_commit(turbo_flow_result_claim_t **io, void **value) {
+  turbo_flow_result_claim_t *claim;
+  size_t output_size;
+  int rc;
+  if (!io || !(claim = *io) || !value) return SALTS_EINVAL;
+  if (!*value) return SALTS_EPROTO;
+  if (claim->msg->_content_handle != claim->original) return SALTS_EBUSY;
+  output_size = claim->prepared->result_data->storage_type->size;
+  rc = flow_msg_candidate_independent(claim->msg, *value, output_size, NULL, 0u);
+  if (rc != SALTS_OK) return SALTS_EPROTO;
+  claim->prepared->result_value = *value;
+  claim->prepared->claim_active = 0;
+  claim->msg->_content_handle = claim->prepared;
+  if (claim->original) {
+    claim->original->magic = 0u;
+    free(claim->original);
+  }
+  *value = NULL; free(claim); *io = NULL;
+  return SALTS_OK;
+}
+
+void turbo_flow_msg_result_abort(turbo_flow_result_claim_t **io) {
+  turbo_flow_result_claim_t *claim;
+  if (!io || !(claim = *io)) return;
+  if (claim->original && claim->msg && claim->msg->_content_handle == claim->original)
+    claim->original->claim_active = 0;
+  free(claim->prepared);
+  flow_projection_owner_release(claim->owner);
+  free(claim); *io = NULL;
+}
+
+const void *turbo_flow_msg_result(const turbo_flow_msg_t *msg,
+                                  const turbo_flow_data_schema_t **schema_out,
+                                  const cmeta_data_desc **data_out) {
+  const flow_msg_projection_t *p = flow_msg_projection(msg);
+  if (schema_out) *schema_out = p && p->result_value ? p->result_schema : NULL;
+  if (data_out) *data_out = p && p->result_value ? p->result_data : NULL;
+  return p ? p->result_value : NULL;
+}
+
+void turbo_flow_msg_clear_result(turbo_flow_msg_t *msg) {
+  flow_msg_projection_t *p = (flow_msg_projection_t *)flow_msg_projection(msg);
+  turbo_flow_projection_owner_t *owner;
+  if (!p || !p->result_value || p->claim_active) return;
+  owner = flow_msg_result_release_value(p);
+  if (flow_msg_projection_empty(p)) { free(p); msg->_content_handle = NULL; }
+  if (owner) flow_projection_owner_release(owner);
+}
+
 int turbo_flow_msg_set_content_descriptor(turbo_flow_msg_t *msg,
                                           const turbo_flow_content_descriptor_t *descriptor) {
   flow_msg_projection_t *binding;
@@ -404,6 +552,7 @@ int turbo_flow_msg_set_content_descriptor(turbo_flow_msg_t *msg,
     return SALTS_EINVAL;
   }
   binding = (flow_msg_projection_t *)flow_msg_projection(msg);
+  if (binding && binding->claim_active) return SALTS_EBUSY;
   if (binding && binding->schema &&
       flow_msg_descriptor_accepts_schema(descriptor, binding->schema) != SALTS_OK) {
     return SALTS_EPROTO;

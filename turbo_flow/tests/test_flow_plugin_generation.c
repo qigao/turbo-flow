@@ -1,6 +1,7 @@
 #include "tinytest.h"
 #include "turbo_flow_plugin_generation.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY
@@ -175,6 +176,7 @@ typedef struct flow_plugin_generation_test_context_s {
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
   turbo_flow_resolved_config_t *resolved;
   turbo_flow_t *flow;
+  turbo_flow_plugin_generation_t *cleanup;
 } flow_plugin_generation_test_context_t;
 
 static int flow_plugin_generation_test_poll(void *ctx, uint32_t timeout_ms) {
@@ -218,6 +220,12 @@ static int flow_plugin_generation_test_close(flow_plugin_generation_test_context
                                              turbo_flow_plugin_error_t *error) {
   int rc = SALTS_OK;
   if (!context) return SALTS_EINVAL;
+  if (context->cleanup) {
+    turbo_flow_config_error_t cleanup_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    rc = turbo_flow_plugin_generation_destroy(context->cleanup, 1000u, &cleanup_error);
+    if (rc != SALTS_OK) return rc;
+    context->cleanup = NULL;
+  }
   turbo_flow_destroy(context->flow);
   context->flow = NULL;
   turbo_flow_resolved_config_destroy(context->resolved);
@@ -225,7 +233,7 @@ static int flow_plugin_generation_test_close(flow_plugin_generation_test_context
   turbo_flow_plugin_catalog_snapshot_destroy(context->snapshot);
   context->snapshot = NULL;
   if (context->host) rc = turbo_flow_plugin_host_destroy(context->host, 1000u, error);
-  context->host = NULL;
+  if (rc == SALTS_OK) context->host = NULL;
   return rc;
 }
 
@@ -247,7 +255,30 @@ flow_plugin_generation_test_replace_documents(flow_plugin_generation_test_contex
 }
 
 spec("transactional plugin Graph generation") {
-  it("rejects configured operation bindings before consuming or materializing the Graph") {
+  it("preserves Graph stop failure and retries without repeating completed Product phases") {
+    flow_plugin_generation_test_context_t context;
+    turbo_flow_plugin_generation_config_t config = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+    turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_config_error_t ce = TURBO_FLOW_CONFIG_ERROR_INIT,
+                              observed = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_generation_t *generation = NULL;
+    check_equal(flow_plugin_generation_test_open(
+                    &context, FLOW_PLUGIN_GENERATION_FIXTURE_GRAPH_STOP, &pe, &ce),
+                SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+                                                    &context.flow, &config, NULL, &generation,
+                                                    &context.cleanup, &ce),
+                SALTS_OK);
+    check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_destroy(generation, 0, &ce), SALTS_EIO);
+    check_equal(ce.path, "$.generation.graph.stop");
+    check_equal(turbo_flow_plugin_generation_cleanup_error(generation, &observed), SALTS_OK);
+    check_equal(observed.status, SALTS_EIO);
+    check_equal(turbo_flow_plugin_host_destroy(context.host, 0, &pe), SALTS_EBUSY);
+    check_equal(turbo_flow_plugin_generation_destroy(generation, 0, &ce), SALTS_OK);
+    check_equal(flow_plugin_generation_test_close(&context, &pe), SALTS_OK);
+  }
+  it("rejects operation bindings without a result domain before consuming the Graph") {
     flow_plugin_generation_test_context_t context;
     turbo_flow_plugin_generation_config_t generation_config =
         TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
@@ -268,11 +299,11 @@ spec("transactional plugin Graph generation") {
                 SALTS_OK);
     original_flow = context.flow;
     check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                    &context.flow, &generation_config, &generation,
-                                                    &config_error),
-                SALTS_ENOTSUP);
-    check_equal(config_error.status, SALTS_ENOTSUP);
-    check_equal(config_error.path, "$.operation_bindings");
+                                                    &context.flow, &generation_config, NULL,
+                                                    &generation, &context.cleanup, &config_error),
+                SALTS_EINVAL);
+    check_equal(config_error.status, SALTS_EINVAL);
+    check_equal(config_error.path, "$.operation_bindings[0].result_domain");
     check_null(generation);
     check(context.flow == original_flow);
     check_equal(turbo_flow_state(context.flow), TURBO_FLOW_STATE_PARSED);
@@ -302,6 +333,28 @@ spec("transactional plugin Graph generation") {
            sizeof(observed_canary));
     check_equal(observed_canary, canary);
 
+    {
+      const size_t sizes[] = {0u,
+                              offsetof(turbo_flow_plugin_product_owner_v1_t, abi_minor) +
+                                  sizeof(uint32_t) - 1u,
+                              sizeof(desired) - 1u, sizeof(desired) + 1u};
+      for (size_t i = 0u; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
+        turbo_flow_plugin_product_owner_v1_t out = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+        desired = (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+        desired.size = sizes[i];
+        check_equal(turbo_flow_plugin_product_owner_publish(&out, &desired), SALTS_EINVAL);
+        check_equal(out.ctx, NULL);
+      }
+      desired = (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+      desired.abi_minor = 1u;
+      {
+        turbo_flow_plugin_product_owner_v1_t out = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+        check_equal(turbo_flow_plugin_product_owner_publish(&out, &desired), SALTS_EINVAL);
+        check_equal(out.ctx, NULL);
+      }
+    }
+
+    desired = (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
     desired.flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD;
     desired.poll = NULL;
     check_equal(turbo_flow_plugin_product_owner_publish(legacy_out, &desired), SALTS_EINVAL);
@@ -309,6 +362,42 @@ spec("transactional plugin Graph generation") {
     memcpy(&observed_canary, storage.bytes + offsetof(turbo_flow_plugin_product_owner_v1_t, poll),
            sizeof(observed_canary));
     check_equal(observed_canary, canary);
+  }
+
+  it("rejects incompatible owner publication destinations without modifying any output bytes") {
+    const uint32_t versions[][2] = {{2u, 0u}, {3u, 1u}, {4u, 0u}};
+    const size_t sizes[] = {0u, sizeof(size_t), sizeof(turbo_flow_plugin_product_owner_v1_t) - 1u,
+                            sizeof(turbo_flow_plugin_product_owner_v1_t) + 1u};
+    turbo_flow_plugin_product_owner_v1_t desired = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+    size_t *prefix = malloc(sizeof(*prefix));
+    check_not_null(prefix);
+    *prefix = sizeof(*prefix);
+    int prefix_rc = turbo_flow_plugin_product_owner_publish(
+        (turbo_flow_plugin_product_owner_v1_t *)(void *)prefix, &desired);
+    size_t prefix_after = *prefix;
+    free(prefix);
+    check_equal(prefix_rc, SALTS_EINVAL);
+    check_equal(prefix_after, sizeof(size_t));
+    for (size_t i = 0; i < sizeof(versions) / sizeof(versions[0]); ++i) {
+      turbo_flow_plugin_product_owner_v1_t out = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+      unsigned char before[sizeof(out)];
+      out.abi_major = versions[i][0];
+      out.abi_minor = versions[i][1];
+      out.ctx = &desired;
+      memcpy(before, &out, sizeof(out));
+      int rc = turbo_flow_plugin_product_owner_publish(&out, &desired);
+      check_equal(rc, SALTS_EINVAL);
+      check_equal(memcmp(before, &out, sizeof(out)), 0);
+    }
+    for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
+      turbo_flow_plugin_product_owner_v1_t out = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+      unsigned char before[sizeof(out)];
+      out.size = sizes[i];
+      out.ctx = &desired;
+      memcpy(before, &out, sizeof(out));
+      check_equal(turbo_flow_plugin_product_owner_publish(&out, &desired), SALTS_EINVAL);
+      check_equal(memcmp(before, &out, sizeof(out)), 0);
+    }
   }
 
   it("rejects a legacy-only Product catalog without fallback") {
@@ -346,8 +435,8 @@ spec("transactional plugin Graph generation") {
                                         sizeof(flow_plugin_generation_graph) - 1u),
                 SALTS_OK);
     check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                    &context.flow, &generation_config, &generation,
-                                                    &config_error),
+                                                    &context.flow, &generation_config, NULL,
+                                                    &generation, &context.cleanup, &config_error),
                 SALTS_ENOTSUP);
     check_equal(config_error.path, "$.adapters.input.adapter");
     check_null(generation);
@@ -372,8 +461,8 @@ spec("transactional plugin Graph generation") {
                                                    &plugin_error, &config_error),
                   SALTS_OK);
       check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                      &context.flow, &generation_config,
-                                                      &generation, &config_error),
+                                                      &context.flow, &generation_config, NULL,
+                                                      &generation, &context.cleanup, &config_error),
                   SALTS_ENOSPC);
       check_null(generation);
       check_not_null(context.flow);
@@ -397,8 +486,8 @@ spec("transactional plugin Graph generation") {
                                                  &plugin_error, &config_error),
                 SALTS_OK);
     check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                    &context.flow, &generation_config, &generation,
-                                                    &config_error),
+                                                    &context.flow, &generation_config, NULL,
+                                                    &generation, &context.cleanup, &config_error),
                 SALTS_EIO);
     check_equal(config_error.path, "$.fixture.preflight");
     check_null(generation);
@@ -423,9 +512,9 @@ spec("transactional plugin Graph generation") {
                                                    &plugin_error, &config_error),
                   SALTS_OK);
       {
-        const int rc =
-            turbo_flow_plugin_generation_create(context.snapshot, context.resolved, &context.flow,
-                                                &generation_config, &generation, &config_error);
+        const int rc = turbo_flow_plugin_generation_create(
+            context.snapshot, context.resolved, &context.flow, &generation_config, NULL,
+            &generation, &context.cleanup, &config_error);
         info("generation status=%d path=%s message=%s", rc, config_error.path,
              config_error.message);
         check_equal(rc, SALTS_OK);
@@ -442,27 +531,6 @@ spec("transactional plugin Graph generation") {
       check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &config_error), SALTS_OK);
       check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
     }
-  }
-
-  it("rejects truncated lifecycle-only owners transactionally") {
-    flow_plugin_generation_test_context_t context;
-    turbo_flow_plugin_generation_config_t generation_config =
-        TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
-    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    turbo_flow_plugin_generation_t *generation = NULL;
-    generation_config.owner_capacity = 2u;
-
-    check_equal(flow_plugin_generation_test_open(&context,
-                                                 FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY_OWNER_PREFIX,
-                                                 &plugin_error, &config_error),
-                SALTS_OK);
-    check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                    &context.flow, &generation_config, &generation,
-                                                    &config_error),
-                SALTS_EPROTO);
-    check_null(generation);
-    check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
   }
 
   it("polls external owners once per round with a rotating total timeout") {
@@ -485,8 +553,8 @@ spec("transactional plugin Graph generation") {
                     sizeof(flow_plugin_generation_three_graph) - 1u, &config_error),
                 SALTS_OK);
     check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                    &context.flow, &generation_config, &generation,
-                                                    &config_error),
+                                                    &context.flow, &generation_config, NULL,
+                                                    &generation, &context.cleanup, &config_error),
                 SALTS_OK);
     turbo_flow_plugin_catalog_snapshot_destroy(context.snapshot);
     context.snapshot = NULL;
@@ -513,8 +581,8 @@ spec("transactional plugin Graph generation") {
                                                  &plugin_error, &config_error),
                 SALTS_OK);
     check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                    &context.flow, &generation_config, &generation,
-                                                    &config_error),
+                                                    &context.flow, &generation_config, NULL,
+                                                    &generation, &context.cleanup, &config_error),
                 SALTS_OK);
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_poll(generation, 13u, &config_error), SALTS_OK);
@@ -525,8 +593,7 @@ spec("transactional plugin Graph generation") {
 
   it("rejects inconsistent external poll descriptors transactionally") {
     const char *fixtures[] = {FLOW_PLUGIN_GENERATION_FIXTURE_POLL_FLAG_WITHOUT_CALLBACK,
-                              FLOW_PLUGIN_GENERATION_FIXTURE_POLL_CALLBACK_WITHOUT_FLAG,
-                              FLOW_PLUGIN_GENERATION_FIXTURE_POLL_SMALL_DESCRIPTOR};
+                              FLOW_PLUGIN_GENERATION_FIXTURE_POLL_CALLBACK_WITHOUT_FLAG};
     for (size_t i = 0u; i < sizeof(fixtures) / sizeof(fixtures[0]); ++i) {
       flow_plugin_generation_test_context_t context;
       turbo_flow_plugin_generation_config_t generation_config =
@@ -540,8 +607,8 @@ spec("transactional plugin Graph generation") {
           flow_plugin_generation_test_open(&context, fixtures[i], &plugin_error, &config_error),
           SALTS_OK);
       check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                      &context.flow, &generation_config,
-                                                      &generation, &config_error),
+                                                      &context.flow, &generation_config, NULL,
+                                                      &generation, &context.cleanup, &config_error),
                   SALTS_EPROTO);
       check_equal(config_error.path, "$.adapters.input.adapter");
       check_null(context.flow);
@@ -564,8 +631,8 @@ spec("transactional plugin Graph generation") {
                                                  &plugin_error, &config_error),
                 SALTS_OK);
     check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                    &context.flow, &generation_config, &generation,
-                                                    &config_error),
+                                                    &context.flow, &generation_config, NULL,
+                                                    &generation, &context.cleanup, &config_error),
                 SALTS_OK);
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_poll(generation, 5u, &config_error), SALTS_EIO);
@@ -588,8 +655,8 @@ spec("transactional plugin Graph generation") {
                                                  &plugin_error, &config_error),
                 SALTS_OK);
     check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                    &context.flow, &generation_config, &generation,
-                                                    &config_error),
+                                                    &context.flow, &generation_config, NULL,
+                                                    &generation, &context.cleanup, &config_error),
                 SALTS_OK);
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_destroy(generation, 1u, &config_error),
@@ -619,8 +686,8 @@ spec("transactional plugin Graph generation") {
                     sizeof(flow_plugin_generation_duplicate_reference_graph) - 1u, &config_error),
                 SALTS_OK);
     check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                    &context.flow, &generation_config, &generation,
-                                                    &config_error),
+                                                    &context.flow, &generation_config, NULL,
+                                                    &generation, &context.cleanup, &config_error),
                 SALTS_OK);
     check_null(context.flow);
     check_not_null(generation);
@@ -646,8 +713,8 @@ spec("transactional plugin Graph generation") {
           flow_plugin_generation_test_open(&context, fixtures[i], &plugin_error, &config_error),
           SALTS_OK);
       check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                      &context.flow, &generation_config,
-                                                      &generation, &config_error),
+                                                      &context.flow, &generation_config, NULL,
+                                                      &generation, &context.cleanup, &config_error),
                   SALTS_EIO);
       check_equal(config_error.path, "$.fixture.materialize");
       check_equal(config_error.message, "fixture materialize failure");
@@ -671,9 +738,9 @@ spec("transactional plugin Graph generation") {
                                                  &plugin_error, &config_error),
                 SALTS_OK);
     {
-      const int rc =
-          turbo_flow_plugin_generation_create(context.snapshot, context.resolved, &context.flow,
-                                              &generation_config, &generation, &config_error);
+      const int rc = turbo_flow_plugin_generation_create(
+          context.snapshot, context.resolved, &context.flow, &generation_config, NULL, &generation,
+          &context.cleanup, &config_error);
       info("compile rollback generation status=%d path=%s message=%s", rc, config_error.path,
            config_error.message);
       check_equal(rc, SALTS_EINVAL);
@@ -715,9 +782,9 @@ spec("transactional plugin Graph generation") {
       check_null(turbo_flow_stage_at(context.flow, 1u)->adapter_name);
     }
     {
-      const int rc =
-          turbo_flow_plugin_generation_create(context.snapshot, context.resolved, &context.flow,
-                                              &generation_config, &generation, &config_error);
+      const int rc = turbo_flow_plugin_generation_create(
+          context.snapshot, context.resolved, &context.flow, &generation_config, NULL, &generation,
+          &context.cleanup, &config_error);
       info("resource order generation status=%d path=%s message=%s", rc, config_error.path,
            config_error.message);
       check_equal(rc, SALTS_EINVAL);
@@ -740,8 +807,8 @@ spec("transactional plugin Graph generation") {
                                                  &plugin_error, &config_error),
                 SALTS_OK);
     check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                    &context.flow, &generation_config, &generation,
-                                                    &config_error),
+                                                    &context.flow, &generation_config, NULL,
+                                                    &generation, &context.cleanup, &config_error),
                 SALTS_OK);
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_lease_acquire(generation), SALTS_OK);
@@ -784,8 +851,8 @@ spec("transactional plugin Graph generation") {
           flow_plugin_generation_test_open(&context, fixtures[i], &plugin_error, &config_error),
           SALTS_OK);
       check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
-                                                      &context.flow, &generation_config,
-                                                      &generation, &config_error),
+                                                      &context.flow, &generation_config, NULL,
+                                                      &generation, &context.cleanup, &config_error),
                   SALTS_OK);
       check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
       check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &config_error),

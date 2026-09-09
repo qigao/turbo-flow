@@ -39,7 +39,10 @@ static cmeta_data_desc fixture_int_data;
 
 static int fixture_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
   schema_fixture_t *fixture;
-  if (!host || !out || !host->allocate || !host->deallocate) return SALTS_EINVAL;
+  if (!host || host->size != sizeof(*host) ||
+      host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !out || !host->allocate ||
+      !host->deallocate) return SALTS_EINVAL;
   *out = NULL;
   fixture_int_type = *CMETA_TYPEOF(int);
   fixture_int_data = cmeta_data_int;
@@ -63,7 +66,10 @@ static int fixture_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
 static int fixture_register(void *plugin, const turbo_flow_plugin_registration_v1_t *registration) {
   turbo_flow_plugin_schema_v1_t schema = TURBO_FLOW_PLUGIN_SCHEMA_V1_INIT;
   int rc;
-  if (!plugin || !registration || !registration->add_schema) return SALTS_EINVAL;
+  if (!plugin || !registration || registration->size != sizeof(*registration) ||
+      registration->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      registration->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !registration->add_schema)
+    return SALTS_EINVAL;
   schema.schema_version = FLOW_SCHEMA_MODE == FLOW_SCHEMA_BAD_VERSION ? 0u : FLOW_SCHEMA_VERSION;
   schema.abi_minor = FLOW_SCHEMA_DESCRIPTOR_MINOR;
   schema.abi_major = FLOW_SCHEMA_DESCRIPTOR_MAJOR;

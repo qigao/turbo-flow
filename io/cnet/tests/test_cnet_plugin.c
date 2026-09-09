@@ -399,6 +399,7 @@ spec("cnet_plugin") {
     turbo_flow_plugin_generation_config_t generation_config =
         TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
     turbo_flow_plugin_generation_t *generation = NULL;
+    turbo_flow_plugin_generation_t *cleanup_generation = NULL;
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
@@ -433,7 +434,7 @@ spec("cnet_plugin") {
     }
     generation_config.owner_capacity = 6u;
     check_equal(turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &generation_config,
-                                                    &generation, &error),
+                                                    NULL, &generation, &cleanup_generation, &error),
                 SALTS_OK);
     check_null(flow);
     check_not_null(generation);
@@ -488,6 +489,11 @@ spec("cnet_plugin") {
     generation = NULL;
     turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     snapshot = NULL;
+    if (cleanup_generation) {
+      check_equal(turbo_flow_plugin_generation_destroy(cleanup_generation, 1000u, &error),
+                  SALTS_OK);
+      cleanup_generation = NULL;
+    }
     turbo_flow_resolved_config_destroy(resolved);
     plugin_error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
     check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &plugin_error), SALTS_OK);
@@ -652,6 +658,7 @@ spec("cnet_plugin") {
     turbo_flow_plugin_generation_config_t generation_config =
         TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
     turbo_flow_plugin_generation_t *generation = NULL;
+    turbo_flow_plugin_generation_t *cleanup_generation = NULL;
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
@@ -684,7 +691,7 @@ spec("cnet_plugin") {
                 SALTS_OK);
     generation_config.owner_capacity = 6u;
     check_equal(turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &generation_config,
-                                                    &generation, &error),
+                                                    NULL, &generation, &cleanup_generation, &error),
                 SALTS_OK);
     check_null(flow);
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
@@ -713,6 +720,11 @@ spec("cnet_plugin") {
     check_equal(boundary.last_status, poll_status);
 
     check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &error), SALTS_OK);
+    if (cleanup_generation) {
+      check_equal(turbo_flow_plugin_generation_destroy(cleanup_generation, 1000u, &error),
+                  SALTS_OK);
+      cleanup_generation = NULL;
+    }
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     cnet_plugin_test_refused_port_close(reservation);
@@ -876,6 +888,7 @@ spec("cnet_plugin") {
     turbo_flow_plugin_generation_config_t generation_config =
         TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
     turbo_flow_plugin_generation_t *generation = NULL;
+    turbo_flow_plugin_generation_t *cleanup_generation = NULL;
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
@@ -891,7 +904,7 @@ spec("cnet_plugin") {
                 SALTS_OK);
     generation_config.owner_capacity = 5u;
     check_equal(turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &generation_config,
-                                                    &generation, &error),
+                                                    NULL, &generation, &cleanup_generation, &error),
                 SALTS_ENOSPC);
     check_null(generation);
     check_not_null(flow);
@@ -899,6 +912,11 @@ spec("cnet_plugin") {
     check_equal(turbo_flow_adapter_count(flow), 0u);
 
     turbo_flow_destroy(flow);
+    if (cleanup_generation) {
+      check_equal(turbo_flow_plugin_generation_destroy(cleanup_generation, 1000u, &error),
+                  SALTS_OK);
+      cleanup_generation = NULL;
+    }
     turbo_flow_resolved_config_destroy(resolved);
     turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &plugin_error), SALTS_OK);

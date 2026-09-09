@@ -1,4 +1,50 @@
+add_executable(test_flow_plugin_operation test_flow_plugin_operation.c operation_schema_fixture.c)
+target_link_libraries(test_flow_plugin_operation PRIVATE TurboFlow::PluginHost Salts::TinyTest)
+set_target_properties(test_flow_plugin_operation PROPERTIES FOLDER "turbo_flow/tests")
+add_test(NAME test_flow_plugin_operation COMMAND test_flow_plugin_operation)
+add_executable(test_flow_plugin_result_domain test_flow_plugin_result_domain.c)
+target_link_libraries(test_flow_plugin_result_domain PRIVATE TurboFlow::PluginHost Salts::TinyTest)
+set_target_properties(test_flow_plugin_result_domain PROPERTIES FOLDER "turbo_flow/tests")
+add_test(NAME test_flow_plugin_result_domain COMMAND test_flow_plugin_result_domain)
+foreach(_operation_mode IN ITEMS OK DUPLICATE DUPLICATE_CHANGED TWO_VERSIONS NO_SCHEMA SWALLOW
+    EXECUTE_ALIAS EXECUTE_FAIL_ALIAS BAD_SHAPE BAD_ABI SHORT LONG BAD_VTABLE NO_GUARANTEE
+    BAD_EFFECT BAD_PERMISSION DUP_PERMISSION PERMISSION BAD_LIMIT MISSING_OUTPUT MEMORY_OVERFLOW OWNER_FAIL TWO_NAMES)
+  add_library(test_flow_operation_fixture_${_operation_mode} SHARED plugin_operation_fixture.c)
+  target_link_libraries(test_flow_operation_fixture_${_operation_mode} PRIVATE TurboFlow::PluginHost)
+  target_compile_definitions(test_flow_operation_fixture_${_operation_mode} PRIVATE
+    TURBO_FLOW_PLUGIN_BUILD FLOW_OPERATION_MODE=OP_FIXTURE_${_operation_mode})
+  set_target_properties(test_flow_operation_fixture_${_operation_mode} PROPERTIES
+    FOLDER "turbo_flow/tests/plugin-fixtures")
+  target_compile_definitions(test_flow_plugin_operation PRIVATE
+    FLOW_OPERATION_${_operation_mode}="$<TARGET_FILE:test_flow_operation_fixture_${_operation_mode}>")
+  add_dependencies(test_flow_plugin_operation test_flow_operation_fixture_${_operation_mode})
+endforeach()
+target_compile_definitions(test_flow_operation_fixture_NO_SCHEMA PRIVATE FLOW_OPERATION_ID="fixture.other")
+add_executable(test_flow_plugin_operation_runtime test_flow_plugin_operation_runtime.c)
+target_link_libraries(test_flow_plugin_operation_runtime PRIVATE TurboFlow::PluginHost Salts::TinyTest)
+target_compile_definitions(test_flow_plugin_operation_runtime PRIVATE
+  FLOW_OPERATION_OK="$<TARGET_FILE:test_flow_operation_fixture_OK>")
+add_dependencies(test_flow_plugin_operation_runtime test_flow_operation_fixture_OK)
+foreach(_operation_mode IN ITEMS EXECUTE_ALIAS EXECUTE_FAIL_ALIAS MEMORY_OVERFLOW OWNER_FAIL TWO_NAMES)
+  target_compile_definitions(test_flow_plugin_operation_runtime PRIVATE
+    FLOW_OPERATION_${_operation_mode}="$<TARGET_FILE:test_flow_operation_fixture_${_operation_mode}>")
+  add_dependencies(test_flow_plugin_operation_runtime test_flow_operation_fixture_${_operation_mode})
+endforeach()
+set_target_properties(test_flow_plugin_operation_runtime PROPERTIES FOLDER "turbo_flow/tests")
+add_test(NAME test_flow_plugin_operation_runtime COMMAND test_flow_plugin_operation_runtime)
+set_tests_properties(test_flow_plugin_operation test_flow_plugin_result_domain test_flow_plugin_operation_runtime
+  PROPERTIES LABELS "graph;plugin;abi3" TIMEOUT 30)
 add_library(test_flow_plugin_projection_fixture SHARED plugin_projection_fixture.c)
+add_executable(test_flow_data_schema test_flow_data_schema.c operation_schema_fixture.c)
+target_link_libraries(test_flow_data_schema PRIVATE TurboFlow::Graph Salts::TinyTest)
+set_target_properties(test_flow_data_schema PROPERTIES FOLDER "turbo_flow/tests")
+add_test(NAME test_flow_data_schema COMMAND test_flow_data_schema)
+add_executable(test_flow_operation_result test_flow_operation_result.c)
+target_link_libraries(test_flow_operation_result PRIVATE TurboFlow::Graph Salts::TinyTest)
+set_target_properties(test_flow_operation_result PROPERTIES FOLDER "turbo_flow/tests")
+add_test(NAME test_flow_operation_result COMMAND test_flow_operation_result)
+set_tests_properties(test_flow_data_schema test_flow_operation_result
+  PROPERTIES LABELS "graph;core" TIMEOUT 30)
 target_link_libraries(test_flow_plugin_projection_fixture PRIVATE TurboFlow::Product)
 target_compile_definitions(test_flow_plugin_projection_fixture PRIVATE TURBO_FLOW_PLUGIN_BUILD)
 set_target_properties(test_flow_plugin_projection_fixture PROPERTIES
@@ -374,6 +420,22 @@ turbo_flow_add_generation_fixture(
   FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
   FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
   FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2)
+
+add_executable(test_flow_plugin_projection_fixture_abi plugin_fixture_abi_test.c)
+target_link_libraries(test_flow_plugin_projection_fixture_abi
+  PRIVATE TurboFlow::PluginHost Salts::TinyTest test_flow_plugin_projection_fixture)
+add_test(NAME test_flow_plugin_projection_fixture_abi
+  COMMAND test_flow_plugin_projection_fixture_abi)
+add_executable(test_flow_plugin_generation_fixture_abi plugin_fixture_abi_test.c)
+# ABI rejection never preflights or materializes providers; the capacity fixture asserts zero.
+target_link_libraries(test_flow_plugin_generation_fixture_abi
+  PRIVATE TurboFlow::PluginHost Salts::TinyTest test_flow_plugin_generation_capacity)
+add_test(NAME test_flow_plugin_generation_fixture_abi
+  COMMAND test_flow_plugin_generation_fixture_abi)
+set_target_properties(test_flow_plugin_projection_fixture_abi
+  test_flow_plugin_generation_fixture_abi PROPERTIES FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_plugin_projection_fixture_abi
+                     test_flow_plugin_generation_fixture_abi PROPERTIES LABELS "plugin")
 turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_duplicate_reference
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-duplicate-reference"
@@ -396,7 +458,7 @@ turbo_flow_add_generation_fixture(
   FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
   FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=1
   FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY=1
-  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="x1")
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q1d1s1x1")
 turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_compile_fail
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-compile-fail"
@@ -405,7 +467,7 @@ turbo_flow_add_generation_fixture(
   FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
   FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
   FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY=1
-  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="x2x1")
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q2q1d2d1s2s1x2x1")
 turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_lifecycle
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-lifecycle"
@@ -469,7 +531,7 @@ turbo_flow_add_generation_fixture(
   FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
   FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
   FLOW_PLUGIN_GENERATION_EXPECT_ASSEMBLY="prpamrma"
-  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="x2x1")
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q2q1d2d1s2s1x2x1")
 turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_external_poll
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-external-poll"
@@ -661,6 +723,38 @@ add_dependencies(
   test_flow_plugin_generation_poll_flag_without_callback
   test_flow_plugin_generation_poll_callback_without_flag
   test_flow_plugin_generation_poll_small_descriptor)
+add_library(test_flow_plugin_generation_graph_stop SHARED plugin_generation_fixture.c)
+target_link_libraries(test_flow_plugin_generation_graph_stop PRIVATE TurboFlow::PluginHost)
+target_compile_definitions(test_flow_plugin_generation_graph_stop PRIVATE TURBO_FLOW_PLUGIN_BUILD
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-graph-stop"
+  FLOW_PLUGIN_GENERATION_FAIL_GRAPH_STOP=1
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q2q1g2g1g2d2d1s2s1x2x1")
+set_target_properties(test_flow_plugin_generation_graph_stop PROPERTIES FOLDER "turbo_flow/tests/plugin-fixtures")
+target_compile_definitions(test_flow_plugin_generation PRIVATE
+  FLOW_PLUGIN_GENERATION_FIXTURE_GRAPH_STOP="$<TARGET_FILE:test_flow_plugin_generation_graph_stop>")
+add_dependencies(test_flow_plugin_generation test_flow_plugin_generation_graph_stop)
+
+add_library(test_flow_plugin_invalid_owner_fixture SHARED plugin_generation_fixture.c)
+target_link_libraries(test_flow_plugin_invalid_owner_fixture PRIVATE TurboFlow::PluginHost)
+target_compile_definitions(test_flow_plugin_invalid_owner_fixture PRIVATE TURBO_FLOW_PLUGIN_BUILD
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.invalid-owner"
+  FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY=1)
+set_target_properties(test_flow_plugin_invalid_owner_fixture PROPERTIES FOLDER "turbo_flow/tests/plugin-fixtures")
+add_executable(test_flow_plugin_invalid_owner test_flow_plugin_invalid_owner.c)
+target_link_libraries(test_flow_plugin_invalid_owner PRIVATE TurboFlow::PluginHost Salts::TinyTest)
+target_compile_definitions(test_flow_plugin_invalid_owner PRIVATE
+  FLOW_INVALID_OWNER_FIXTURE="$<TARGET_FILE:test_flow_plugin_invalid_owner_fixture>"
+  FLOW_INVALID_OWNER_LEGACY="$<TARGET_FILE:test_flow_plugin_generation_legacy_owner_prefix>"
+  FLOW_INVALID_OWNER_SMALL_POLL="$<TARGET_FILE:test_flow_plugin_generation_poll_small_descriptor>")
+add_dependencies(test_flow_plugin_invalid_owner test_flow_plugin_invalid_owner_fixture
+  test_flow_plugin_generation_legacy_owner_prefix test_flow_plugin_generation_poll_small_descriptor)
+set_target_properties(test_flow_plugin_invalid_owner PROPERTIES FOLDER "turbo_flow/tests")
+add_test(NAME test_flow_plugin_invalid_owner COMMAND test_flow_plugin_invalid_owner --filter "destroys exact ABI")
+add_test(NAME test_flow_plugin_invalid_owner_abi COMMAND test_flow_plugin_invalid_owner --filter "pins unknown ABI")
+set_tests_properties(test_flow_plugin_invalid_owner test_flow_plugin_invalid_owner_abi PROPERTIES LABELS "graph;core" TIMEOUT 30)
 
 set_tests_properties(
   test_turbo_flow test_flow_async_terminal test_flow_async_emit test_flow_resource_document test_flow_managed_boundary test_flow_config

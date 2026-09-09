@@ -24,11 +24,13 @@ typedef struct flow_protocol_root_plugin_s {
 static inline int flow_protocol_root_load(const turbo_flow_plugin_host_v1_t *host,
                                           void **plugin_out) {
   flow_protocol_root_plugin_t *plugin;
-  if (!host || host->size < sizeof(*host) ||
-      host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR || !host->allocate ||
-      !host->deallocate || !plugin_out)
-    return SALTS_EINVAL;
+  if (!plugin_out) return SALTS_EINVAL;
   *plugin_out = NULL;
+  if (!host || host->size != sizeof(*host) ||
+      host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !host->allocate ||
+      !host->deallocate)
+    return SALTS_EINVAL;
   plugin = (flow_protocol_root_plugin_t *)host->allocate(host->ctx, sizeof(*plugin));
   if (!plugin) return SALTS_ENOMEM;
   plugin->host = host;
@@ -60,8 +62,9 @@ static inline void flow_protocol_root_destroy(void *value) {
   static int flow_protocol_root_register(                                                          \
       void *plugin, const turbo_flow_plugin_registration_v1_t *registration) {                     \
     provider_type provider = provider_init;                                                        \
-    if (!plugin || !registration || registration->size < sizeof(*registration) ||                  \
+    if (!plugin || !registration || registration->size != sizeof(*registration) ||                 \
         registration->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||                          \
+        registration->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||                          \
         !registration->add_provider_member)                                                        \
       return SALTS_EINVAL;                                                                         \
     provider.provider = (api_value);                                                               \

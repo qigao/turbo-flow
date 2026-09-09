@@ -1,6 +1,6 @@
 # Typed-operation ABI 3.0 精确契约
 
-状态：实施规格，尚未落地。事实基线为 `7bfcdf988c0fe9d7b8b7ad4a9a41250eeca4e468`。
+状态：首个同步 ABI 3.0 profile 已实施；事实基线为 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`。
 用户批准 shared ABI 3.0、拒绝旧 ABI/短布局、插件与消费者同步重编译。
 本文件定义 #93 首个完整同步 profile；#93 的 owner/thread/coro/cooperative 和
 #73 的真实 RulesForge/TurboScript、旧入口删除、Core 链接解耦继续开放。
@@ -31,6 +31,16 @@ registration、provider wrappers、owner、catalog、配置和错误输出逐一
 已有 `_v1_t` 名称保留为类型名，绝不保留旧二进制布局路径。CMeta 自身 ABI 不改，
 Graph projection 独立 ABI 1.0 也不变；传入插件边界时其完整结构仍须验证。
 TurboFlow package 2.0 与插件 ABI 3.0 独立，不自动提升包版本。
+
+Product owner publish 的源和目标都必须预置精确 ABI 3.0；先验证目标 size、再验证目标
+版本，之后才检查源并复制。任一头部不兼容返回 EINVAL，目标全部字节保持不变。
+operation 的 preflight、create_result_context、create_session、execute 每次返回后，
+Host 必须先检查 error 的精确 size，再检查 major/minor，之后才读取诊断尾字段、
+进入后续业务 callback 或提交结果。非法 error 头优先返回 EINVAL，即便 callback
+同时返回其他错误；Host 不读取或保留未知头的 status/engine_status/phase/message，
+而以全新 Host 诊断记录当前边界 phase、EINVAL、engine_status=0。已独立返回的
+context/session/result 仍进入原有安全清理或重试路径，借用 alias 不释放。只有合法
+error 头才适用保留原 callback 错误与 phase 的规则，不允许修补未知头伪装成合法输出。
 
 以下 C 声明放入 `turbo_flow_plugin_operation.h`，依赖该文件既有 Graph/CMeta 头，
 以及 `turbo_flow_resolved_config.h`。所有 enum 字段实际使用 uint32_t，避免 C enum
@@ -163,9 +173,10 @@ INIT 默认64，上限65536，0允许且首个 add 返回 ENOSPC。
 `turbo_flow_plugin_registration_v1_t` 在 add_schema 后增加
 `turbo_flow_plugin_add_operation_fn add_operation`。root 导出仍唯一
 `turbo_flow_plugin_get_api`；capability 原值0..7不变，operation为bit8。
-在最终执行集成之前，生产 Host 的 known capability 不接受bit8；operation catalog新增
-实现仅编进非安装的内部测试目标，其公共声明与导出在完整集成任务一次发布。不发布
-ENOTSUP公共stub，也不安装中间版本ABI3 SDK。
+catalog、result-domain与generation执行作为一个未发布的集成单元实施；最终ABI类型
+只在公开头定义一次，不增加影子头、条件布局或第二注册入口。完整执行链路通过前不提交
+可发布的中间实现、不安装ABI3 SDK，完成集成时才统一开放bit8与非空binding执行准入。
+分阶段保留catalog/domain/runtime测试检查点；不发布ENOTSUP公共stub。
 
 ## Catalog、来源与 schema
 
@@ -374,12 +385,21 @@ session与result_context各一个/binding，descriptor max_session_bytes/max_res
 malloc或保证恶意DLL不超限；真实引擎必须以原生allocator/资源预算证明才能验收。
 命名常量为`TURBO_FLOW_PLUGIN_OPERATION_MEMORY_BUDGET_DEFAULT = 67108864u`；配置为0
 且有bindings时ENOSPC。domain控制面的entry数组内存按capacity预留，独立于每generation
-预算，create检查capacity*sizeof(entry)溢出；上述计费口径的存储上界可由两个额度相加复算。
+预算，create检查capacity*sizeof(entry)溢出。两个额度相加给出保守上界：域已预留的
+每binding bridge仍计入generation准入，因此包含重叠收费，不是互斥实际分配量或RSS。
 PluginHost自身的projection bridge和每binding执行/错误ledger由其实际实现计算成本H，
-同样计入operation_memory_budget_bytes，不复制Graph大小。准确准入公式为
+同样计入operation_memory_budget_bytes，不复制Graph大小。
+当前H为`sizeof(flow_plugin_operation_binding_t)+sizeof(flow_plugin_result_entry_t)`。
+准确准入公式为
 `required=sum(max_session_bytes + max_result_context_bytes + cost.peak_metadata_bytes + H)`。
 在所有工厂之前checked求和并比较预算；恰好required通过，required-1返回ENOSPC；
 query或合计溢出返回EINVAL。Graph数据结构与其查询共同维护，PluginHost只消费公开结果。
+
+当前 x64 profile 下，合法 descriptor 的 session/context 各不超过1GiB，域最多1024
+bindings、每owner最多1048576 reservations，结合当前Graph公开成本查询及Host实际H，
+generation合计不会达到SIZE_MAX。该不可达分支以边界计算和checked算术审查验收；测试
+实际执行Graph查询的SIZE_MAX溢出及catalog超上限拒绝，不篡改不可变snapshot制造非法
+generation输入。32位平台、上述上限或布局改变时须重新评估；所有checked加乘仍必须保留。
 
 budget是host栈上状态，charge每次steps>=1，在执行对应步骤之前调用；检查
 steps<=max_steps-used，成功才增加used。超额ENOSPC粘住，之后不能继续步骤；DLL即便
@@ -460,6 +480,13 @@ generation_create的两个out必需且不得别名，进入后都清NULL；flow_
 entry和后续清理状态预留空间，然后转移Graph/attach域。凡已创建的ctx先登记在已预留entry，
 然后执行下一步；不能因为push失败丢owner。
 
+resolved中重复operation/resource绑定须在工厂前返回EALREADY。
+Graph既存或Product materialize期间新增的provider冲突，以公开register_operation_provider
+返回的EALREADY为准，保留原错误并进入同一可重试退役流程；该冲突可能在工厂已调用、
+Graph/domain已转移后发生。不得新增不可靠的provider查询或穿透Graph私有注册表，亦不得
+把冲突降级为成功。其余声明的schema/profile/额度及provider preflight拒绝仍必须在
+工厂前完成。
+
 工厂顺序：既有resources/adapters materialize → 对每binding create_result_context →
 Graph projection owner create（使用domain所持snapshot bridge）→ create_session → 注册
 缓存1:1 provider → compile。context成功非NULL；任何失败返回的非NULL临时context也由
@@ -489,6 +516,16 @@ Product owners → destroy Graph → destroy Product owners → detach域 → �
 snapshot/free generation。构建失败Graph从未start，也必须先撤销callback可达性再清session。
 成功步骤不重复调用；任一失败generation/ctx/snapshot仍可诊断重试。禁止调用旧void rollback。
 
+Product materialize 返回失败时，仍由 provider 清理部分状态并留下空 owner_out。
+成功输出先严格校验 owner size/ABI，再读取尾字段：未知 size/version 返回 EINVAL，
+不能调用任何 owner callback；精确 ABI3 但生命周期语义无效返回 EPROTO。后者若具有
+ctx 和 destroy，仅登记不可执行的 destroy-only 终态条目，Graph 销毁后才 destroy 一次。
+缺少 ctx 或 destroy、或未知布局均没有可验证的清理契约：保留 FAILED_CLEANUP、Graph、
+域 ATTACHED 和 snapshot pin，cleanup 查询及每次 destroy 均返回 EINVAL，不推进任何
+callback。此 native DLL 契约违规终态无法通过现有 API 修复，可能保留资源直到进程退出；
+不可声称重试必然成功，不提供强制卸载或静默释放。故意触发该终态的测试以独立 CTest
+进程隔离；正常及可安全清理的失败路径仍须验证恰好一次释放和最终模块卸载。
+
 generation detach后，domain result owners保持accepting，故输出clone可以越过generation。
 caller随后destroy domain：转RETIRING，stop全部result owner，等待外部caller保证不再有
 新API进入且worker已join；outstanding非零返回EBUSY。计数0不代替join。逆序逐个destroy
@@ -512,9 +549,17 @@ generation失败留下的owner也在同域中退役，不回收供新的generati
 实施计划：[runtime plan](../superpowers/plans/2026-09-09-typed-operation-abi3-runtime.md)。
 ABI和全插件消费者→Task1；schema和catalog来源→Task2；原子结果及clone→Task3；
 domain独立寿命及retry→Task4；generation/preflight/steps→Task5；安装与双profile→Task6。
+Task6 的安装测试从测试专用暂存安装目录加载唯一导出
+`turbo_flow_plugin_get_api` 的真实fixture，验证输入7得到结果14、generation退役后clone仍
+有效、清空结果并销毁domain后模块才可卸载；C和C++消费者都从安装头及导入target编译链接。
 HIGH兼容风险：generation_create新增参数必须同提交迁移全部调用方；共享插件ABI拒绝旧
 版本要求同步重编译。新增Graph APIs为加法，原projection可继续使用，但没有可信metadata
 的值不能进入typed operation。MED限制：一个结果槽、固定无指针schema子集、inline-only、
 无权限服务；其余请求拒绝，#93/#73不因本profile通过而关闭。
 设计不修改业务配置格式、不迁移持久化数据、不添加执行器、不安装引擎、不删除旧Core入口。
 回滚部署整个已验证旧二进制/配置集合；新Host不自动加载旧ABI或legacy引擎。
+已知边界：未知Product owner ABI或缺少可验证ctx/destroy的成功publication没有安全的
+回收协议，其失败cleanup句柄会永久pin Graph、domain与模块直到进程退出；其他可验证的
+release失败保留原对象并允许重试。generation admission 的每binding预算 H 保守同时计入
+binding ledger与result-domain entry bridge，二者可能与domain容量预留重叠，因此不能把
+预算值解释为互斥allocation或实际RSS。

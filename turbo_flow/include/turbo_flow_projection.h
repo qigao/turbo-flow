@@ -2,8 +2,10 @@
 #define TURBO_FLOW_PROJECTION_H
 
 #include "turbo_flow.h"
+#include <cmeta/data.h>
 
 typedef struct turbo_flow_projection_owner_s turbo_flow_projection_owner_t;
+typedef struct turbo_flow_result_claim_s turbo_flow_result_claim_t;
 /** 控制线程释放独立 context。成功销毁 ctx；失败须保留完整 ctx，允许重试。 */
 typedef int (*turbo_flow_projection_context_release_fn)(void *ctx);
 enum {
@@ -96,5 +98,74 @@ TURBO_FLOW_C_API int turbo_flow_projection_owner_destroy(turbo_flow_projection_o
  */
 TURBO_FLOW_C_API int turbo_flow_msg_bind_retained_projection(
     turbo_flow_msg_t *msg, turbo_flow_projection_owner_t *owner, void *value);
+
+typedef struct turbo_flow_result_memory_requirements_s {
+  size_t size;
+  uint32_t abi_major;
+  uint32_t abi_minor;
+  size_t owner_bytes;
+  size_t claim_bytes;
+  size_t message_bytes;
+  size_t peak_metadata_bytes;
+  size_t payload_bound_bytes;
+} turbo_flow_result_memory_requirements_t;
+
+static inline void turbo_flow_result_memory_requirements_init(
+    turbo_flow_result_memory_requirements_t *out) {
+  if (!out) return;
+  out->size = sizeof(*out);
+  out->abi_major = TURBO_FLOW_PROJECTION_ABI_MAJOR;
+  out->abi_minor = TURBO_FLOW_PROJECTION_ABI_MINOR;
+  out->owner_bytes = 0u;
+  out->claim_bytes = 0u;
+  out->message_bytes = 0u;
+  out->peak_metadata_bytes = 0u;
+  out->payload_bound_bytes = 0u;
+}
+
+/** Compare two nonempty representable half-open ranges without dereferencing them. */
+TURBO_FLOW_C_API int turbo_flow_value_require_disjoint(
+    const void *borrowed, size_t borrowed_bytes, const void *candidate, size_t candidate_bytes);
+/** Query exact Graph-private metadata and payload bounds without allocating or invoking callbacks.
+ * `out` must have the exact initialized ABI1/0 layout. Valid-output failures clear all cost fields.
+ */
+TURBO_FLOW_C_API int turbo_flow_result_memory_requirements(
+    size_t capacity, size_t max_result_bytes, turbo_flow_result_memory_requirements_t *out);
+/** Match exact schema identity and bounded semantic/physical CMeta layout; schema_text is ignored. */
+TURBO_FLOW_C_API int turbo_flow_data_schema_match(
+    const turbo_flow_data_schema_t *expected_schema, const cmeta_data_desc *expected_data,
+    const turbo_flow_data_schema_t *actual_schema, const cmeta_data_desc *actual_data);
+/** Bind an owned projection with validated CMeta provenance; ownership transfers only on success. */
+TURBO_FLOW_C_API int turbo_flow_msg_bind_typed_projection(
+    turbo_flow_msg_t *msg, const turbo_flow_data_schema_t *schema,
+    const cmeta_data_desc *data, void *value, turbo_flow_projection_clone_fn clone,
+    turbo_flow_destroy_fn destroy, void *ctx);
+/** Return borrowed validated provenance for a typed projection, or NULL for ordinary projections. */
+TURBO_FLOW_C_API const cmeta_data_desc *turbo_flow_msg_projection_data(
+    const turbo_flow_msg_t *msg);
+/**
+ * Reserve one unpublished result slot. Success transfers no value ownership; failure clears `out`
+ * and leaves the message unchanged. Existing result returns EALREADY, full owner ENOSPC, stopped
+ * owner EBUSY, unsupported untyped input ENOTSUP. From success until commit/abort, the caller must
+ * not move, clone, clean up, or mutate `msg`.
+ * A complete claim/commit/abort/cleanup example is built and run in
+ * `turbo_flow/tests/test_flow_operation_result.c`.
+ */
+TURBO_FLOW_C_API int turbo_flow_msg_result_claim(
+    turbo_flow_msg_t *msg, turbo_flow_projection_owner_t *owner,
+    const cmeta_data_desc *data, turbo_flow_result_claim_t **out);
+/** Atomically publish a non-NULL result disjoint from every known borrowed span.
+ * Success clears both IO pointers and transfers value ownership; EPROTO retains both unchanged.
+ */
+TURBO_FLOW_C_API int turbo_flow_msg_result_commit(
+    turbo_flow_result_claim_t **claim, void **value);
+/** Abort an unpublished claim without destroying the caller-owned candidate; NULL is accepted. */
+TURBO_FLOW_C_API void turbo_flow_msg_result_abort(turbo_flow_result_claim_t **claim);
+/** Borrow the immutable committed result and optionally its schema/data provenance. */
+TURBO_FLOW_C_API const void *turbo_flow_msg_result(
+    const turbo_flow_msg_t *msg, const turbo_flow_data_schema_t **schema_out,
+    const cmeta_data_desc **data_out);
+/** Destroy only the committed result and retain projection/content provenance. */
+TURBO_FLOW_C_API void turbo_flow_msg_clear_result(turbo_flow_msg_t *msg);
 
 #endif

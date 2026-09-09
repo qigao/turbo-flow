@@ -87,14 +87,22 @@ static int fixture_resource(void *ctx, turbo_flow_t *flow,
   return SALTS_ENOTSUP;
 }
 static int fixture_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
-  if (!host || !out) return SALTS_EINVAL;
+  if (!out) return SALTS_EINVAL;
+  *out = NULL;
+  if (!host || host->size != sizeof(*host)) return SALTS_EINVAL;
+  if (host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) return SALTS_EINVAL;
+  if (!host->allocate || !host->deallocate) return SALTS_EINVAL;
   *out = &projection_protocol;
   return SALTS_OK;
 }
 static int fixture_register(void *plugin, const turbo_flow_plugin_registration_v1_t *registration) {
   turbo_flow_plugin_product_resource_provider_v1_t provider =
       TURBO_FLOW_PLUGIN_PRODUCT_RESOURCE_PROVIDER_V1_INIT;
-  if (!plugin || !registration || !registration->add_resource_provider) return SALTS_EINVAL;
+  if (!plugin || !registration || registration->size != sizeof(*registration) ||
+      registration->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      registration->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
+      !registration->add_resource_provider) return SALTS_EINVAL;
   provider.provider.kind = "fixture.projection";
   provider.provider.ctx = plugin;
   provider.provider.register_resource = fixture_resource;

@@ -2528,6 +2528,11 @@ TURBO_FLOW_C_API int turbo_flow_segment_plan_at(const turbo_flow_t *flow, size_t
 
 TURBO_FLOW_C_API void turbo_flow_msg_init(turbo_flow_msg_t *msg);
 TURBO_FLOW_C_API void turbo_flow_msg_cleanup(turbo_flow_msg_t *msg);
+/**
+ * Retain a borrowed payload/descriptor view into an initialized destination.
+ * A source with an owned projection or independent result is rejected with
+ * SALTS_EINVAL before the destination or buffer reference count is modified.
+ */
 TURBO_FLOW_C_API int turbo_flow_msg_retain_view(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src);
 TURBO_FLOW_C_API int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src);
 TURBO_FLOW_C_API int turbo_flow_msg_move(turbo_flow_msg_t *dst, turbo_flow_msg_t *src);

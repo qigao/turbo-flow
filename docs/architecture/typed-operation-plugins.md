@@ -1,6 +1,7 @@
 # Typed-operation DLL 边界
 
-状态：设计决策已获用户确认；实现与验收仍在进行。本文件不是功能完成声明。
+状态：shared ABI 3.0 的首个同步typed-operation profile及安装消费验收已实施；#93其余
+线程/协程/取消profile与#73真实引擎仍在进行。本文件不是这些后续能力的完成声明。
 
 跟踪：[TurboFlow #73](https://github.com/qigao/turbo-flow/issues/73)，父任务
 [#63](https://github.com/qigao/turbo-flow/issues/63)，数据处理闭环
@@ -25,11 +26,11 @@
 Core 必需链接，改为显式 DLL 加载且无 fallback。既有 DSL 的 source/stage
 拓扑语法保持不变；引擎资源配置和直接调用消费者需要显式迁移。
 
-当前事实基线 `7bfcdf988c0fe9d7b8b7ad4a9a41250eeca4e468`：shared plugin ABI 为
-2.0，schema catalog 与 independent retained projection bridge 已实现；非空
-operation_bindings 仍由 generation 返回 ENOTSUP。批准目标为 ABI 3.0，精确结构、
-typed-result 提交协议和实施边界见 [ABI 3.0 契约](typed-operation-abi3.md)。
-该契约的首个执行 profile 不覆盖 #93 全部取消/线程能力，更不代表 #73 真实引擎验收。
+当前事实基线 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`：shared plugin ABI 3.0、
+schema/operation catalog、独立result-domain、typed-result提交及同步generation装配已实现。
+精确结构、生命周期和实施边界见 [ABI 3.0 契约](typed-operation-abi3.md)。该首个profile
+只接受inline、thread_safe、cancellation none、deadline 0；不覆盖#93全部取消/线程能力，
+更不代表#73真实RulesForge/TurboScript引擎验收。
 
 ## 方案比较与选择
 
@@ -72,10 +73,9 @@ stateless operation；若提供，则必须引用 `channels` 中已有名称。�
 销毁前有效。这些 API 只证明配置的词法和额度关系有效，不证明 input/output schema 的
 payload 布局相容，也不证明 provider 具备相应权限、线程、取消或资源能力。
 
-配置支持不代表执行已接入。当前 generation 对合法的非空 bindings 在任何 provider
-preflight、materialize 或 Graph 所有权转移之前返回 `SALTS_ENOTSUP`。因此示例配置仅可
-用于解析与查询，不能描述为完整可运行 Flow；真实 descriptor/vtable、catalog 来源验证、
-owner 与取消状态机完成后才可移除此 admission gate。
+合法的非空bindings仅在首个同步profile全部preflight通过后装配；不支持的execution、
+threading、cancellation、deadline、权限/effect或配额组合在Graph所有权转移前明确拒绝，
+不得自动降级到legacy provider或其他引擎。
 
 1. **Schema 注册**：size/ABI-version 包装不可变 CMeta 元数据，携带稳定 schema
    identity、版本、storage type 及所有权说明。跨 DLL/TU 用 `cmeta_type_equal`
@@ -146,6 +146,9 @@ ABI 3.0 不清空原 projection 来存 operation 输出。Graph 新增一个独�
 槽，claim/commit/abort 保证失败原子性；caller-owned result-domain 持有结果 owner 和
 snapshot，generation 仅借用该域。generation 完成退役后输出及 clone 仍有效；domain
 销毁的 busy/release 失败由调用方重试，不能强制释放 Graph 内仍被引用的数据。
+若native Product owner返回未知ABI，或缺少可验证的ctx/destroy，host不能安全调用未知
+callback；对应failed cleanup会永久保留Graph、domain和模块lease直到进程退出。此终态
+不可重试恢复，也没有force-unload fallback；其他拥有可信release契约的失败仍可重试。
 
 真实 DLL 集成测试覆盖 clone/move/clear、失败临时值、context 重试、callback 屏障
 和 generation 先销毁；Debug/ASan 用于检测内存错误，不证明没有数据竞争。
@@ -225,6 +228,8 @@ materialize 后失败按 owner 逆序清理，清理无法安全完成时保留�
   单独加载引擎 DLL 后验证其原生依赖，缺失依赖即失败，不搜索其他 profile SDK。
 - 单一导出、Debug/Release CRT、显式依赖根、Debug/ASan 和 Release 全量 CTest、
   focused repeats 以及两种配置的安装消费测试。
+- 安装消费fixture只从测试专用暂存安装目录加载，不从build tree加载；C/C++消费者使用
+  安装头和导入target，执行7→14、generation退役后clone及domain释放后卸载。
 - 热路径不进行 registry/symbol lookup；仍需一次缓存 vtable 调用，这是用户要求的
   DLL 边界，优先于仓库通用的“热路径禁止间接调用”建议。不能声称完全 direct-call。
   不以架构变化宣称性能提升；吞吐、尾延迟和原生 session 分配成本由 #11 实测。

@@ -50,8 +50,9 @@ static void flow_protocol_catalog_business_close(void *ctx,
 
 static int flow_protocol_catalog_load(const turbo_flow_plugin_host_v1_t *host, void **plugin_out) {
   flow_protocol_catalog_fixture_t *plugin;
-  if (!host || host->size < sizeof(*host) ||
-      host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR || !host->allocate ||
+  if (!host || host->size != sizeof(*host) ||
+      host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !host->allocate ||
       !host->deallocate || !plugin_out)
     return SALTS_EINVAL;
   *plugin_out = NULL;
@@ -66,8 +67,9 @@ static int flow_protocol_catalog_register(void *plugin,
                                           const turbo_flow_plugin_registration_v1_t *registration) {
   turbo_flow_plugin_protocol_provider_v1_t protocol = TURBO_FLOW_PLUGIN_PROTOCOL_PROVIDER_V1_INIT;
   int rc;
-  if (!plugin || !registration || registration->size < sizeof(*registration) ||
+  if (!plugin || !registration || registration->size != sizeof(*registration) ||
       registration->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      registration->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
       !registration->add_protocol_provider || !registration->add_business_provider)
     return SALTS_EINVAL;
   protocol.provider.size = sizeof(protocol.provider);

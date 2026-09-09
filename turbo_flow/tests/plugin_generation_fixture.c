@@ -1,3 +1,4 @@
+#include "plugin_generation_owner_fixture.h"
 #include "turbo_flow_plugin_generation.h"
 
 #include <stdint.h>
@@ -15,6 +16,9 @@
 #endif
 #ifndef FLOW_PLUGIN_GENERATION_FAIL_PREFLIGHT_CALL
   #define FLOW_PLUGIN_GENERATION_FAIL_PREFLIGHT_CALL 0u
+#endif
+#ifndef FLOW_PLUGIN_GENERATION_FAIL_GRAPH_STOP
+  #define FLOW_PLUGIN_GENERATION_FAIL_GRAPH_STOP 0
 #endif
 #ifndef FLOW_PLUGIN_GENERATION_FAIL_MATERIALIZE_CALL
   #define FLOW_PLUGIN_GENERATION_FAIL_MATERIALIZE_CALL 0u
@@ -108,6 +112,7 @@
 #endif
 
 typedef struct flow_plugin_generation_fixture_s {
+  generation_owner_observer_t observer;
   const turbo_flow_plugin_host_v1_t *host;
   size_t preflight_calls;
   size_t materialize_calls;
@@ -115,6 +120,7 @@ typedef struct flow_plugin_generation_fixture_s {
   size_t quiesce_calls;
   size_t drain_calls;
   size_t shutdown_calls;
+  size_t graph_stop_calls;
   size_t poll_calls;
   size_t blocking_poll_calls;
   size_t owner_destroy_before_graph_shutdown;
@@ -179,6 +185,50 @@ static int flow_plugin_generation_error(turbo_flow_config_error_t *error, int st
 static int
 flow_plugin_generation_publish_fixture_owner(turbo_flow_plugin_product_owner_v1_t *owner_out,
                                              const turbo_flow_plugin_product_owner_v1_t *owner) {
+  const flow_plugin_generation_owner_t *instance = owner->ctx;
+  turbo_flow_plugin_product_owner_v1_t fault = *owner;
+  switch (instance->fixture->observer.mode) {
+  case OWNER_FIXTURE_NO_QUIESCE:
+    fault.quiesce = NULL;
+    break;
+  case OWNER_FIXTURE_NO_DRAIN:
+    fault.drain = NULL;
+    break;
+  case OWNER_FIXTURE_NO_SHUTDOWN:
+    fault.shutdown = NULL;
+    break;
+  case OWNER_FIXTURE_SHORT:
+    --fault.size;
+    break;
+  case OWNER_FIXTURE_TINY:
+    fault.size = sizeof(size_t);
+    break;
+  case OWNER_FIXTURE_LONG:
+    ++fault.size;
+    break;
+  case OWNER_FIXTURE_OLD_MAJOR:
+    --fault.abi_major;
+    break;
+  case OWNER_FIXTURE_FUTURE_MAJOR:
+    ++fault.abi_major;
+    break;
+  case OWNER_FIXTURE_FUTURE_MINOR:
+    ++fault.abi_minor;
+    break;
+  case OWNER_FIXTURE_NO_DESTROY:
+    fault.destroy = NULL;
+    break;
+  case OWNER_FIXTURE_NO_CONTEXT:
+    fault.ctx = NULL;
+    break;
+  default:
+    break;
+  }
+  if (instance->fixture->observer.mode != OWNER_FIXTURE_NORMAL) {
+    /* Deliberately violate publication for true DLL boundary rejection tests. */
+    *owner_out = fault;
+    return SALTS_OK;
+  }
 #if FLOW_PLUGIN_GENERATION_LEGACY_OWNER_PREFIX
   if (!owner_out || !owner || owner_out->size < offsetof(turbo_flow_plugin_product_owner_v1_t, poll))
     return SALTS_EINVAL;
@@ -221,6 +271,8 @@ static void flow_plugin_generation_record(flow_plugin_generation_owner_t *owner,
   flow_plugin_generation_fixture_t *fixture;
   if (!owner || !owner->fixture) return;
   fixture = owner->fixture;
+  if (event == 'x') ++fixture->observer.destroys;
+  else ++fixture->observer.lifecycle_calls;
   if (fixture->lifecycle_size + 2u > FLOW_PLUGIN_GENERATION_LIFECYCLE_MAX) return;
   fixture->lifecycle[fixture->lifecycle_size++] = event;
   fixture->lifecycle[fixture->lifecycle_size++] = (char)('0' + owner->ordinal);
@@ -270,8 +322,21 @@ static int flow_plugin_generation_adapter_consume(void *ctx, turbo_flow_t *flow,
 
 static void flow_plugin_generation_adapter_shutdown(void *ctx) {
   flow_plugin_generation_owner_t *owner = (flow_plugin_generation_owner_t *)ctx;
-  if (owner) owner->graph_shutdown = 1;
+  if (owner) {
+    owner->graph_shutdown = 1;
+    ++owner->fixture->observer.graph_shutdowns;
+  }
 }
+#if FLOW_PLUGIN_GENERATION_FAIL_GRAPH_STOP
+static void flow_plugin_generation_adapter_stop(void *ctx, turbo_flow_t *flow,
+                                                const turbo_flow_stage_plan_t *stage) {
+  flow_plugin_generation_owner_t *owner = ctx;
+  (void)stage;
+  flow_plugin_generation_record(owner, 'g');
+  if (++owner->fixture->graph_stop_calls == 1u)
+    (void)turbo_flow_adapter_report_stop_status(flow, SALTS_EIO);
+}
+#endif
 
 static void flow_plugin_generation_owner_destroy(void *ctx) {
   flow_plugin_generation_owner_t *owner = (flow_plugin_generation_owner_t *)ctx;
@@ -280,6 +345,7 @@ static void flow_plugin_generation_owner_destroy(void *ctx) {
   host = owner->host;
   flow_plugin_generation_record(owner, 'x');
   owner->fixture->owner_destroys++;
+  if (!owner->graph_shutdown) ++owner->fixture->observer.destroys_before_graph;
 #if FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY
   if (!owner->graph_shutdown) owner->fixture->owner_destroy_before_graph_shutdown++;
 #else
@@ -315,6 +381,9 @@ static int flow_plugin_generation_materialize_adapter(
     fixture->retained_owners[fixture->retained_owner_count++] = owner;
   memset(&ops, 0, sizeof(ops));
   ops.consume = flow_plugin_generation_adapter_consume;
+#if FLOW_PLUGIN_GENERATION_FAIL_GRAPH_STOP
+  ops.stop = flow_plugin_generation_adapter_stop;
+#endif
 #if FLOW_PLUGIN_GENERATION_EXPECT_GRAPH_SHUTDOWN_BEFORE_OWNER_DESTROY
   ops.shutdown = flow_plugin_generation_adapter_shutdown;
 #endif
@@ -414,8 +483,12 @@ static int flow_plugin_generation_materialize_resource(
 static int flow_plugin_generation_fixture_load(const turbo_flow_plugin_host_v1_t *host,
                                                void **plugin_out) {
   flow_plugin_generation_fixture_t *fixture;
-  if (!host || !plugin_out || !host->allocate || !host->deallocate) return SALTS_EINVAL;
+  if (!plugin_out) return SALTS_EINVAL;
   *plugin_out = NULL;
+  if (!host || host->size != sizeof(*host)) return SALTS_EINVAL;
+  if (host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) return SALTS_EINVAL;
+  if (!host->allocate || !host->deallocate) return SALTS_EINVAL;
   fixture = (flow_plugin_generation_fixture_t *)host->allocate(host->ctx, sizeof(*fixture));
   if (!fixture) return SALTS_ENOMEM;
   memset(fixture, 0, sizeof(*fixture));
@@ -432,7 +505,10 @@ flow_plugin_generation_fixture_register(void *plugin,
   turbo_flow_plugin_transactional_resource_provider_v1_t resource =
       TURBO_FLOW_PLUGIN_TRANSACTIONAL_RESOURCE_PROVIDER_V1_INIT;
   int rc;
-  if (!plugin || !registration || !registration->add_transactional_adapter_provider ||
+  if (!plugin || !registration || registration->size != sizeof(*registration) ||
+      registration->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      registration->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
+      !registration->add_transactional_adapter_provider ||
       !registration->add_transactional_resource_provider)
     return SALTS_EINVAL;
   adapter.kind = FLOW_PLUGIN_GENERATION_ADAPTER_KIND;

@@ -7,10 +7,16 @@
 
 /* Compile the actual implementations with allocation failure confined to this TU. */
 static int fail_allocation;
+static int fail_allocation_after = -1;
 static void *observed_wrapper;
 static turbo_flow_projection_owner_t *observed_owner;
 static size_t outstanding_at_wrapper_free;
 static void *projection_fault_calloc(size_t count, size_t size) {
+  if (fail_allocation_after == 0) {
+    fail_allocation_after = -1;
+    return NULL;
+  }
+  if (fail_allocation_after > 0) --fail_allocation_after;
   if (fail_allocation) {
     fail_allocation = 0;
     return NULL;
@@ -37,6 +43,9 @@ typedef struct fault_context_s { int clones; int destroys; int releases; } fault
 static const turbo_flow_data_schema_t fault_schema = {
   sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DATA_ENCODING_OPAQUE,
   "fault", "Integer", "test.int", 1u, 1u, NULL};
+static const turbo_flow_data_schema_t fault_typed_schema = {
+  sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+  "cmeta.int.data", "Integer", "int", 2u, 1u, NULL};
 static int fault_clone(const void *value, void *ctx, void **out) {
   fault_context_t *counts = (fault_context_t *)ctx;
   ++counts->clones;
@@ -113,5 +122,98 @@ spec("retained projection allocation rollback") {
     check_equal(turbo_flow_projection_owner_destroy(owner), SALTS_OK);
     check_equal(counts.destroys, 2);
     check_equal(counts.releases, 1);
+  }
+  it("rolls back result reservation when claim metadata allocation fails") {
+    fault_context_t counts = {0};
+    turbo_flow_projection_owner_config_t config = TURBO_FLOW_PROJECTION_OWNER_CONFIG_INIT;
+    turbo_flow_projection_owner_snapshot_t state = TURBO_FLOW_PROJECTION_OWNER_SNAPSHOT_INIT;
+    turbo_flow_projection_owner_t *owner = NULL;
+    turbo_flow_result_claim_t *claim = NULL;
+    turbo_flow_msg_t msg, copy;
+    int *value = (int *)malloc(sizeof(*value));
+    char payload_bytes[4] = {1, 2, 3, 4};
+    *value = FAULT_VALUE;
+    config.flags = TURBO_FLOW_PROJECTION_IMMUTABLE | TURBO_FLOW_PROJECTION_CROSS_THREAD |
+                   TURBO_FLOW_PROJECTION_INDEPENDENT_CONTEXT;
+    config.capacity = 2; config.max_result_bytes = sizeof(int);
+    config.max_retained_bytes = 2u * sizeof(int); config.schema = &fault_typed_schema;
+    config.clone = fault_clone; config.destroy = fault_destroy;
+    config.ctx = &counts; config.release_context = fault_release;
+    check_equal(turbo_flow_projection_owner_create(&config, &owner), SALTS_OK);
+    turbo_flow_msg_init(&msg);
+    msg.buffer = mem_wrap_external(payload_bytes, sizeof(payload_bytes), NULL, NULL);
+    check_not_null(msg.buffer);
+    msg.payload = vstr_from_buf(payload_bytes, sizeof(payload_bytes));
+    check_equal(turbo_flow_msg_bind_typed_projection(&msg, &fault_typed_schema,
+                &cmeta_data_int, value, fault_clone, fault_destroy, &counts), SALTS_OK);
+    fail_allocation = 1;
+    check_equal(turbo_flow_msg_result_claim(&msg, owner, &cmeta_data_int, &claim), SALTS_ENOMEM);
+    check_null(claim);
+    check_equal(turbo_flow_projection_owner_snapshot(owner, &state), SALTS_OK);
+    check_equal(state.outstanding, (size_t)0);
+    check_equal(state.retained_bytes, (size_t)0);
+    fail_allocation_after = 1;
+    check_equal(turbo_flow_msg_result_claim(&msg, owner, &cmeta_data_int, &claim), SALTS_ENOMEM);
+    check_null(claim);
+    check_equal(turbo_flow_projection_owner_snapshot(owner, &state), SALTS_OK);
+    check_equal(state.outstanding, (size_t)0);
+    check_equal(state.retained_bytes, (size_t)0);
+    {
+      void *result = malloc(sizeof(int));
+      *(int *)result = FAULT_VALUE;
+      check_equal(turbo_flow_msg_result_claim(&msg, owner, &cmeta_data_int, &claim), SALTS_OK);
+      check_equal(turbo_flow_msg_result_commit(&claim, &result), SALTS_OK);
+      turbo_flow_msg_init(&copy);
+      fail_allocation = 1;
+      check_equal(turbo_flow_msg_clone(&copy, &msg), SALTS_ENOMEM);
+      check_equal(counts.clones, 0);
+      check_equal(turbo_flow_projection_owner_snapshot(owner, &state), SALTS_OK);
+      check_equal(state.outstanding, (size_t)1);
+      check_equal(state.retained_bytes, sizeof(int));
+
+      copy.id = 99u;
+      fail_allocation = 1;
+      check_equal(turbo_flow_msg_retain_view(&copy, &msg), SALTS_EINVAL);
+      check_equal(copy.id, (uint64_t)99);
+      check_null(projection_fault_calloc(1u, 1u));
+      check_equal(counts.clones, 0); check_equal(counts.destroys, 0);
+
+      turbo_flow_msg_clear_projection(&msg);
+      fail_allocation = 1;
+      check_equal(turbo_flow_msg_retain_view(&copy, &msg), SALTS_EINVAL);
+      check_equal(copy.id, (uint64_t)99);
+      check_null(projection_fault_calloc(1u, 1u));
+      check_equal(counts.clones, 0); check_equal(counts.destroys, 1);
+
+      turbo_flow_msg_clear_content(&msg);
+      fail_allocation = 1;
+      check_equal(turbo_flow_msg_retain_view(&copy, &msg), SALTS_EINVAL);
+      check_equal(copy.id, (uint64_t)99);
+      check_null(projection_fault_calloc(1u, 1u));
+      check_equal(counts.clones, 0); check_equal(counts.destroys, 1);
+      check_equal(turbo_flow_projection_owner_snapshot(owner, &state), SALTS_OK);
+      check_equal(state.outstanding, (size_t)1);
+      check_equal(state.retained_bytes, sizeof(int));
+    }
+    turbo_flow_msg_cleanup(&msg);
+    check_equal(turbo_flow_projection_owner_stop(owner), SALTS_OK);
+    check_equal(turbo_flow_projection_owner_destroy(owner), SALTS_OK);
+  }
+  it("computes result memory requirements without allocating") {
+    turbo_flow_result_memory_requirements_t requirements;
+    turbo_flow_projection_owner_config_t config = TURBO_FLOW_PROJECTION_OWNER_CONFIG_INIT;
+    turbo_flow_projection_owner_t *owner = NULL;
+    fault_context_t counts = {0};
+    turbo_flow_result_memory_requirements_init(&requirements);
+    fail_allocation = 1;
+    check_equal(turbo_flow_result_memory_requirements(2, sizeof(int), &requirements), SALTS_OK);
+    config.flags = TURBO_FLOW_PROJECTION_IMMUTABLE | TURBO_FLOW_PROJECTION_CROSS_THREAD |
+                   TURBO_FLOW_PROJECTION_INDEPENDENT_CONTEXT;
+    config.capacity = 1; config.max_result_bytes = sizeof(int);
+    config.max_retained_bytes = sizeof(int); config.schema = &fault_typed_schema;
+    config.clone = fault_clone; config.destroy = fault_destroy;
+    config.ctx = &counts; config.release_context = fault_release;
+    check_equal(turbo_flow_projection_owner_create(&config, &owner), SALTS_ENOMEM);
+    check_null(owner);
   }
 }
