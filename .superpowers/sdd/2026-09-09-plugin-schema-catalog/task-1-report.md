@@ -40,13 +40,14 @@ This history is reported explicitly: the requested initial missing-header RED wa
 
 All Windows commands ran through the required `VsDevCmd.bat` environment.
 
-- Debug focused build: `test_flow_plugin_schema test_flow_plugin_host test_flow_plugin_generation` — passed.
-- Debug schema repeat: `ctest --preset win-dev-user -R ^test_flow_plugin_schema$ --repeat until-fail:5 --output-on-failure` — 5/5 passed.
-- Debug plugin regression: `ctest --preset win-dev-user -R test_flow_plugin --output-on-failure` — 3/3 passed.
-- Release focused build: same three targets with `win-release-user` — passed.
-- Release schema repeat: 5/5 passed.
-- Release plugin regression: 3/3 passed.
-- Debug full suite: initial run 52/53 exposed the install consumer's stale literal ABI-minor assertion (`3u`); after updating it to `4u` and checking nonzero installed `schema_capacity`, rerun passed 53/53.
+- Debug focused build: `cmake --build --preset win-dev-user --target test_flow_plugin_schema test_flow_plugin_host test_flow_plugin_generation` — exit 0.
+- Debug schema repeat: `ctest --preset win-dev-user -R ^test_flow_plugin_schema$ --repeat until-fail:5 --output-on-failure` — exit 0, 5/5 passed.
+- Debug plugin regression: `ctest --preset win-dev-user -R test_flow_plugin --output-on-failure` — exit 0, 3/3 passed.
+- Release focused build: `cmake --build --preset win-release-user --target test_flow_plugin_schema test_flow_plugin_host test_flow_plugin_generation` — exit 0.
+- Release schema repeat: `ctest --preset win-release-user -R ^test_flow_plugin_schema$ --repeat until-fail:5 --output-on-failure` — exit 0, 5/5 passed.
+- Release plugin regression: `ctest --preset win-release-user -R test_flow_plugin --output-on-failure` — exit 0, 3/3 passed.
+- Debug full suite: `ctest --preset win-dev-user --output-on-failure`; initial exit 1 at 52/53 exposed the install consumer's stale literal ABI-minor assertion (`3u`). Updating this necessary adjacent installed consumer to `4u` and checking nonzero installed `schema_capacity` made the rerun exit 0, 53/53 passed.
+- Release full suite: `ctest --preset win-release-user --output-on-failure` — exit 0, 53/53 passed.
 - C++ public-header fixture compiled in both Debug and Release.
 - Install manifest contains `include/turbo_flow_plugin_operation.h`; the full install consumer passed.
 - `git diff --check` passed.
