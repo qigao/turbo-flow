@@ -20,7 +20,9 @@ extern "C" int chttp_server_header_cpp_probe(void) {
   (void)websocket_server;
   (void)websocket_event;
   if (turbo_flow_chttp_server_quiesce(nullptr) != SALTS_EINVAL ||
-      turbo_flow_chttp_server_resume(nullptr) != SALTS_EINVAL)
+      turbo_flow_chttp_server_resume(nullptr) != SALTS_EINVAL ||
+      turbo_flow_chttp_websocket_server_quiesce(nullptr) != SALTS_EINVAL ||
+      turbo_flow_chttp_websocket_server_resume(nullptr) != SALTS_EINVAL)
     return 0;
   return TURBO_FLOW_CHTTP_SERVER_API_VERSION == 1u &&
          TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_API_VERSION == 1u;

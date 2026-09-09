@@ -217,6 +217,10 @@ int main(void) {
   int (*chttp_server_destroy)(turbo_flow_chttp_server_t *) = turbo_flow_chttp_server_destroy;
   int (*chttp_server_quiesce)(turbo_flow_chttp_server_t *) = turbo_flow_chttp_server_quiesce;
   int (*chttp_server_resume)(turbo_flow_chttp_server_t *) = turbo_flow_chttp_server_resume;
+  int (*ws_quiesce)(turbo_flow_chttp_websocket_server_t *) =
+      turbo_flow_chttp_websocket_server_quiesce;
+  int (*ws_resume)(turbo_flow_chttp_websocket_server_t *) =
+      turbo_flow_chttp_websocket_server_resume;
   const turbo_flow_chttp_server_request_context_t *(*chttp_server_request_context)(
       const turbo_flow_msg_t *) = turbo_flow_chttp_server_request_context;
   turbo_flow_t *flow = turbo_flow_create();
@@ -294,8 +298,8 @@ int main(void) {
       !datagram_sink_snapshot_copy || !datagram_sink_destroy || !packet_sink_register ||
       !packet_sink_poll || !packet_sink_snapshot_copy || !packet_sink_destroy ||
       !chttp_server_register || !chttp_server_snapshot_copy || !chttp_server_destroy ||
-      !chttp_server_quiesce || !chttp_server_resume || !chttp_server_request_context ||
-      !turbo_flow_message_type())
+      !chttp_server_quiesce || !chttp_server_resume || !ws_quiesce || !ws_resume ||
+      !chttp_server_request_context || !turbo_flow_message_type())
     return 1;
 
   plugin_host_config.module_capacity = 0u;
