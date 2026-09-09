@@ -47,7 +47,7 @@ TurboFlow::Config + parsed Graph + PluginHost snapshot
   预置的 owner buffer 容量，禁止跨 DLL 整结构盲写。
 - 外部产品拥有 wire protocol、连接、session、peer、ack、重连和持久化协议状态。
 - 外部 adapter 可调用 Graph；Graph 不包含任何具体协议产品头文件、target 或 owner registry。
-- `TurboFlow::Flow` 仅为现有消费者保留聚合 ABI，新代码选择最小 target。
+- #95 已移除历史聚合 `TurboFlow::Flow` ABI；消费者按实际 API 链接最小组件。
 
 ## 影响与验证
 

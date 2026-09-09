@@ -18,7 +18,6 @@ typed projection、调度、可观测性，以及可选的通用存储 adapter�
 | `TurboFlow::Graph` | Graph DSL、编译、执行和通用 operation/adapter API |
 | `TurboFlow::Product` | 用 resolved config 装配 Graph 与本仓库 adapters |
 | `TurboFlow::PluginHost` | 通过统一 DLL vtable 事务注册 Product/Protocol/Business capabilities，编译 Graph generation，并以 lease 保护模块生命周期 |
-| `TurboFlow::Flow` | 兼容聚合 target；新代码优先链接最小 target |
 | `TurboFlow::ProtocolIngress` | 可选 protocol codec/runtime，不依赖 MQTT broker |
 | `TurboFlow::ProtocolIngressGraph` | 将中立协议消息投递到 `TurboFlow::Graph` |
 | `TurboFlow::MqttSink` | 批量映射中立消息；不拥有 codec/session 或任何 I/O connection |
@@ -28,6 +27,10 @@ typed projection、调度、可观测性，以及可选的通用存储 adapter�
 
 所有构建开关只在 `CMakeOptions.cmake` 声明。不得在子目录新增隐藏 option，也不得把外部产品源码、
 协议状态机或安装组件重新并入本仓库。
+
+TurboFlow 2.0 移除了聚合 `TurboFlow::Flow`、`turbo_flow` 动态库及
+`turbo_flow_config.h` 伞头。消费者必须按所用 API 链接 `Config`、`Graph`、`Product`
+或其他明确组件，并直接包含其所属头文件。
 
 ## DLL Graph generation
 
@@ -99,7 +102,7 @@ row shape（以及事务版本中的 transaction）必须比 Publisher 和所有
 安装后按需请求组件：
 
 ```cmake
-find_package(TurboFlow 1.0 CONFIG REQUIRED COMPONENTS TurboDbAdapter)
+find_package(TurboFlow 2.0 CONFIG REQUIRED COMPONENTS TurboDbAdapter)
 target_link_libraries(app PRIVATE TurboFlow::TurboDbAdapter)
 ```
 

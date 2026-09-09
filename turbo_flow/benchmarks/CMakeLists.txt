@@ -5,5 +5,5 @@ cmake_add_benchmark(
   bench_turbo_flow
   SOURCES ${BENCHMARK_SOURCES}
   FOLDER "turbo_flow/benchmarks"
-  LIBS TurboFlow::Flow Salts::TinyTest
+  LIBS TurboFlow::Graph Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src)

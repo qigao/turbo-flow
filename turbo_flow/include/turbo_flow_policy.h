@@ -1,8 +1,9 @@
 #ifndef TURBO_FLOW_POLICY_H
 #define TURBO_FLOW_POLICY_H
 
-#include "turbo_flow_config.h"
+#include "turbo_flow.h"
 #include "turbo_flow_expr.h"
+#include "turbo_flow_resolved_config.h"
 
 #include <stddef.h>
 #include <stdint.h>

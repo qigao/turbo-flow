@@ -368,7 +368,7 @@ Pool provider 通过 `turbo_flow_pool_status_document_at()` 输出 JSON encoding
 `TurboFlowResource.PoolStatus` V1 document。`turbo_flow_pool_status_schema()` 暴露其可信静态
 schema。测试使用真实 DataBind 从 schema text 创建 codec、校验 schema ID/version、动态绑定
 document，并按字段读取 parallelism、capacity 和 accepting。DataBind 只位于 consumer/test
-侧；`TurboFlow::Flow` 不公开或链接 `DataBindValue`，因此 core-only build 不增加 DataBind/JIT
+侧；`TurboFlow::Graph` 不公开 `DataBindValue`，因此 core-only build 不增加 DataBind/JIT
 依赖。
 
 Pool counters/capacity 是 `uint64_t`。JSON number 无法精确表达全部 64 位整数，因此 V1 schema

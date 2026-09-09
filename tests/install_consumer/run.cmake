@@ -84,6 +84,17 @@ run_checked(
   "${CMAKE_COMMAND}" --install "${TURBO_FLOW_BINARY_DIR}"
   --prefix "${stage_dir}" --config "${TURBO_FLOW_CONFIG}")
 
+file(GLOB _turbo_flow_legacy_stage_artifacts
+     "${stage_dir}/bin/turbo_flow.dll"
+     "${stage_dir}/lib/turbo_flow.lib"
+     "${stage_dir}/lib/libturbo_flow.so"
+     "${stage_dir}/lib/libturbo_flow.dylib"
+     "${stage_dir}/include/turbo_flow_config.h")
+if(_turbo_flow_legacy_stage_artifacts)
+  message(FATAL_ERROR
+          "TurboFlow 2.0 install stage contains retired aggregate artifacts: ${_turbo_flow_legacy_stage_artifacts}")
+endif()
+
 set(turbo_flow_package_dir "${stage_dir}/lib/cmake/TurboFlow")
 set(salts_package_dir "${salts_root}/lib/cmake/Salts")
 set(salts_utils_package_dir "${salts_utils_root}/lib/cmake/SaltsUtils")
@@ -99,6 +110,45 @@ else()
   set(turbodb_consumer_cmake_args
       -DTURBO_FLOW_TEST_HAS_TURBODB_ADAPTER=FALSE)
 endif()
+
+# A package requesting the retired aggregate must fail at component selection,
+# before a consumer can link the legacy target.
+run_expected_failure(
+  "removed Flow component"
+  "Unsupported TurboFlow component: Flow"
+  "${CMAKE_COMMAND}" -E env
+  "SALTS_ROOT=${salts_root}"
+  "SALTS_UTILS_ROOT=${salts_utils_root}"
+  "RULES_FORGE_ROOT=${rules_forge_root}"
+  ${turbodb_consumer_env}
+  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
+  -B "${test_root}/removed-flow-build" -G "${TURBO_FLOW_GENERATOR}"
+  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+  "-DRulesForge_DIR=${rules_forge_package_dir}"
+  ${turbodb_consumer_cmake_args}
+  -DTURBO_FLOW_TEST_COMPONENT=Flow)
+
+run_expected_failure(
+  "TurboFlow 1.x request"
+  "compatible with requested version"
+  "${CMAKE_COMMAND}" -E env
+  "SALTS_ROOT=${salts_root}"
+  "SALTS_UTILS_ROOT=${salts_utils_root}"
+  "RULES_FORGE_ROOT=${rules_forge_root}"
+  ${turbodb_consumer_env}
+  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
+  -B "${test_root}/version-1-build" -G "${TURBO_FLOW_GENERATOR}"
+  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
+  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
+  "-DSalts_DIR=${salts_package_dir}"
+  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
+  "-DRulesForge_DIR=${rules_forge_package_dir}"
+  ${turbodb_consumer_cmake_args}
+  -DTURBO_FLOW_TEST_COMPONENT=Config
+  -DTURBO_FLOW_TEST_PACKAGE_VERSION=1.0)
 
 run_checked(
   "CXX-only consumer configure"
@@ -212,44 +262,6 @@ if(WIN32)
   if(NOT EXISTS "${dumpbin}")
     message(FATAL_ERROR "Required dumpbin executable does not exist: ${dumpbin}")
   endif()
-  set(installed_compat_flow "${stage_dir}/bin/turbo_flow.dll")
-  execute_process(
-    COMMAND "${dumpbin}" /nologo /exports "${installed_compat_flow}"
-    RESULT_VARIABLE compat_export_result
-    OUTPUT_VARIABLE compat_export_output
-    ERROR_VARIABLE compat_export_error)
-  if(NOT compat_export_result EQUAL 0)
-    message(FATAL_ERROR
-            "compat Flow export inspection failed\n${compat_export_output}\n${compat_export_error}")
-  endif()
-  set(historical_config_exports
-      turbo_flow_config_resolve_yaml
-      turbo_flow_resolved_adapter_array_size
-      turbo_flow_resolved_adapter_array_string_at
-      turbo_flow_resolved_adapter_field_count
-      turbo_flow_resolved_adapter_field_name
-      turbo_flow_resolved_adapter_field_type
-      turbo_flow_resolved_adapter_get_bool
-      turbo_flow_resolved_adapter_get_i64
-      turbo_flow_resolved_adapter_get_string
-      turbo_flow_resolved_adapter_get_u64
-      turbo_flow_resolved_channel_get_string
-      turbo_flow_resolved_config_adapter
-      turbo_flow_resolved_config_channel
-      turbo_flow_resolved_config_destroy
-      turbo_flow_resolved_config_json
-      turbo_flow_resolved_config_preflight_adapter_kinds
-      turbo_flow_resolved_config_profile_adapter
-      turbo_flow_resolved_config_profile_adapter_optional
-      turbo_flow_resolved_config_profile_channel
-      turbo_flow_resolved_config_profile_channel_optional)
-  foreach(historical_export IN LISTS historical_config_exports)
-    if(NOT compat_export_output MATCHES
-       "${historical_export}.*forwarded to turbo_flow_config\\.${historical_export}")
-      message(FATAL_ERROR
-              "compat Flow is missing historical Config forwarder ${historical_export}\n${compat_export_output}")
-    endif()
-  endforeach()
   execute_process(
     COMMAND "${dumpbin}" /nologo /exports "${installed_cnet_plugin}"
     RESULT_VARIABLE export_result
@@ -281,9 +293,10 @@ if(WIN32)
     ERROR_VARIABLE plugin_dependent_error)
   if(NOT plugin_dependent_result EQUAL 0 OR
      NOT plugin_dependent_output MATCHES "tf_cnet_adapter\\.dll" OR
-     NOT plugin_dependent_output MATCHES "salts_cnet\\.dll")
+     NOT plugin_dependent_output MATCHES "salts_cnet\\.dll" OR
+     plugin_dependent_output MATCHES "turbo_flow\\.dll")
     message(FATAL_ERROR
-            "CNet plugin dependency inspection failed\n${plugin_dependent_output}\n${plugin_dependent_error}")
+            "CNet plugin must not depend on turbo_flow.dll\n${plugin_dependent_output}\n${plugin_dependent_error}")
   endif()
   if(TURBO_FLOW_CONFIG STREQUAL "Debug")
     if(NOT plugin_dependent_output MATCHES "VCRUNTIME140D\\.dll")
@@ -302,9 +315,9 @@ if(WIN32)
     message(FATAL_ERROR
             "Gateway dependency inspection failed (${consumer_dependent_result})\n${consumer_dependent_output}\n${consumer_dependent_error}")
   endif()
-  if(consumer_dependent_output MATCHES "tf_cnet_adapter\\.dll|salts_cnet\\.dll")
+  if(consumer_dependent_output MATCHES "tf_cnet_adapter\\.dll|salts_cnet\\.dll|turbo_flow\\.dll")
     message(FATAL_ERROR
-            "Gateway consumer must not link the CNet adapter or CNet runtime\n${consumer_dependent_output}")
+            "Gateway consumer must not link the CNet adapter, CNet runtime, or turbo_flow.dll\n${consumer_dependent_output}")
   endif()
 endif()
 
@@ -383,19 +396,15 @@ run_checked(
   --config "${TURBO_FLOW_CONFIG}" --parallel)
 
 if(WIN32)
-  set(legacy_consumer "${full_consumer_build_dir}/turbo_flow_legacy_config_consumer.exe")
   execute_process(
-    COMMAND dumpbin /nologo /imports "${legacy_consumer}"
-    RESULT_VARIABLE legacy_import_result
-    OUTPUT_VARIABLE legacy_import_output
-    ERROR_VARIABLE legacy_import_error)
-  if(NOT legacy_import_result EQUAL 0)
-    message(FATAL_ERROR "legacy consumer import inspection failed: ${legacy_import_error}")
-  endif()
-  if(NOT legacy_import_output MATCHES "turbo_flow\\.dll" OR
-     legacy_import_output MATCHES "turbo_flow_config\\.dll")
+    COMMAND "${dumpbin}" /nologo /dependents "${full_consumer_build_dir}/turbo_flow_install_consumer.exe"
+    RESULT_VARIABLE full_consumer_dependent_result
+    OUTPUT_VARIABLE full_consumer_dependent_output
+    ERROR_VARIABLE full_consumer_dependent_error)
+  if(NOT full_consumer_dependent_result EQUAL 0 OR
+     full_consumer_dependent_output MATCHES "turbo_flow\\.dll")
     message(FATAL_ERROR
-            "legacy consumer must import config APIs from turbo_flow.dll\n${legacy_import_output}")
+            "TurboFlow 2.0 consumer must not depend on turbo_flow.dll\n${full_consumer_dependent_output}\n${full_consumer_dependent_error}")
   endif()
 endif()
 

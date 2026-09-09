@@ -7,7 +7,11 @@ if(NOT DEFINED TURBO_FLOW_TEST_COMPONENT OR
   message(FATAL_ERROR "TURBO_FLOW_TEST_COMPONENT is required")
 endif()
 
-find_package(TurboFlow 1.0 CONFIG REQUIRED
+if(NOT DEFINED TURBO_FLOW_TEST_PACKAGE_VERSION)
+  set(TURBO_FLOW_TEST_PACKAGE_VERSION 2.0)
+endif()
+
+find_package(TurboFlow ${TURBO_FLOW_TEST_PACKAGE_VERSION} CONFIG REQUIRED
              COMPONENTS "${TURBO_FLOW_TEST_COMPONENT}")
 
 add_executable(turbo_flow_component_consumer main.c)

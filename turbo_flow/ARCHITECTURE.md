@@ -485,9 +485,9 @@ Salts, SaltsUtils, RulesForge, and the other declared dependencies are required
 by every product build.
 `find_package(TurboFlow COMPONENTS ...)` remains a consumer-side target
 availability check; it does not select or remove producer-side features.
-`TurboFlow::Flow` publicly links Salts foundation targets and privately embeds
-the repository `vendor/mir` static target; no MIR type enters the installed
-public headers.
+TurboFlow 2.0 removes the aggregate `TurboFlow::Flow` target. `Graph` owns the
+repository `vendor/mir` static target; no MIR type enters installed public headers.
+Consumers link the component that owns each API rather than a compatibility aggregate.
 
 Core exposes a single optional read-only observer callback slot. Timing and
 callbacks are skipped when it is empty. `TurboFlow::Observe` implements that

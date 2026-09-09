@@ -15,7 +15,7 @@ target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_BUILD)
 target_include_directories(
   ${TARGET_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                         $<INSTALL_INTERFACE:include>)
-target_link_libraries(${TARGET_NAME} PUBLIC TurboFlow::Flow Salts::Core)
+target_link_libraries(${TARGET_NAME} PUBLIC TurboFlow::Graph Salts::Core)
 install(FILES ${TURBO_FLOW_OBSERVE_HEADERS} DESTINATION include)
 
 if(BUILD_TESTS)
