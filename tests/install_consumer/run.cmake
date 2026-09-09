@@ -315,9 +315,9 @@ if(WIN32)
     message(FATAL_ERROR
             "Gateway dependency inspection failed (${consumer_dependent_result})\n${consumer_dependent_output}\n${consumer_dependent_error}")
   endif()
-  if(consumer_dependent_output MATCHES "tf_cnet_adapter\\.dll|salts_cnet\\.dll")
+  if(consumer_dependent_output MATCHES "tf_cnet_adapter\\.dll|salts_cnet\\.dll|turbo_flow\\.dll")
     message(FATAL_ERROR
-            "Gateway consumer must not link the CNet adapter or CNet runtime\n${consumer_dependent_output}")
+            "Gateway consumer must not link the CNet adapter, CNet runtime, or turbo_flow.dll\n${consumer_dependent_output}")
   endif()
 endif()
 
