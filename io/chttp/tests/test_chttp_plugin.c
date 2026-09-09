@@ -51,6 +51,26 @@ static int plugin_sink(turbo_flow_msg_t *message, void *ctx) {
   return SALTS_OK;
 }
 
+static void lexical_preflight(const char *input, size_t provider, const char *name,
+                              const char *before, const char *after, int accepted) {
+  turbo_flow_plugin_host_t *host = plugin_host(3u);
+  turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
+  turbo_flow_plugin_transactional_product_catalog_v1_t catalog =
+      TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
+  char yaml[PLUGIN_TEST_YAML_BYTES];
+  check_equal(turbo_flow_plugin_host_load(host, TURBO_FLOW_CHTTP_PLUGIN_PATH, &error), SALTS_OK);
+  check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &error), SALTS_OK);
+  check_equal(turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog),
+              SALTS_OK);
+  check_equal(replace_once(input, before, after, yaml), SALTS_OK);
+  int rc = preflight_yaml(&catalog, provider, name, yaml);
+  turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+  check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
+  if (accepted) check_equal(rc, SALTS_OK);
+  else check_not_equal(rc, SALTS_OK);
+}
+
 typedef struct traffic_fixture_s {
   turbo_flow_plugin_host_t *host;
   turbo_flow_plugin_generation_t *generation;
@@ -193,6 +213,31 @@ static void traffic_done(void *ctx, const turbo_flow_publish_result_t *result) {
 }
 
 spec("chttp_plugin") {
+  it("rejects a WebSocket subprotocol containing a non-token slash in preflight") {
+    lexical_preflight(websocket_yaml, 2u, "websocket", "subprotocol: \"\"",
+                      "subprotocol: \"chat/v1\"", 0);
+  }
+  it("rejects a response content type containing a control byte in preflight") {
+    lexical_preflight(server_yaml, 1u, "server",
+                      "response_content_type: \"application/octet-stream\"",
+                      "response_content_type: \"text/plain\\u0001\"", 0);
+  }
+  it("rejects an error content type containing a control byte in preflight") {
+    lexical_preflight(server_yaml, 1u, "server", "error_content_type: \"text/plain\"",
+                      "error_content_type: \"text/plain\\u0001\"", 0);
+  }
+  it("accepts a complete HTTP token or an absent WebSocket subprotocol") {
+    lexical_preflight(websocket_yaml, 2u, "websocket", "subprotocol: \"\"",
+                      "subprotocol: \"chat-v1.!#$%&'*+^_`|~\"", 1);
+    lexical_preflight(websocket_yaml, 2u, "websocket", "subprotocol: \"\"", "subprotocol: \"\"", 1);
+  }
+  it("accepts content type header values with legal spaces tabs and parameters") {
+    lexical_preflight(server_yaml, 1u, "server",
+                      "response_content_type: \"application/octet-stream\"",
+                      "response_content_type: \"text/plain;\\tcharset=utf-8\"", 1);
+    lexical_preflight(server_yaml, 1u, "server", "error_content_type: \"text/plain\"",
+                      "error_content_type: \"text/plain; charset=utf-8\"", 1);
+  }
   it("round trips WebSocket frames through the plugin on H1 and explicit H1 plus H2 listeners") {
     static const char graph[] = "source input adapter websocket\nstage output adapter "
                                 "websocket\nstage main {\n input -> output\n}\n";

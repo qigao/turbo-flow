@@ -231,18 +231,24 @@ static int header_name_equal(const char *left, const char *right) {
   return strcasecmp(left, right) == 0;
 #endif
 }
-static int header_valid(const char *name, const char *value, int h2) {
+static int http_token_valid(const char *value) {
   static const char token[] =
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'*+-.^_`|~";
-  if (!name[0] || strspn(name, token) != strlen(name) || header_name_equal(name, "host") ||
+  return value[0] && strspn(value, token) == strlen(value);
+}
+static int header_value_valid(const char *value) {
+  for (const unsigned char *p = (const unsigned char *)value; *p; ++p)
+    if ((*p < ' ' && *p != '\t') || *p == 127u) return 0;
+  return 1;
+}
+static int header_valid(const char *name, const char *value, int h2) {
+  if (!http_token_valid(name) || header_name_equal(name, "host") ||
       header_name_equal(name, "content-length") || header_name_equal(name, "transfer-encoding") ||
       header_name_equal(name, "connection") ||
       (h2 && (header_name_equal(name, "keep-alive") || header_name_equal(name, "upgrade") ||
               header_name_equal(name, "proxy-connection"))))
     return 0;
-  for (const unsigned char *p = (const unsigned char *)value; *p; ++p)
-    if ((*p < ' ' && *p != '\t') || *p == 127u) return 0;
-  return 1;
+  return header_value_valid(value);
 }
 static int pow2(size_t n) { return n && !(n & (n - 1u)); }
 static int body_status(unsigned int status) {
@@ -437,7 +443,8 @@ static int validate_server(chttp_plugin_config_t *c) {
     if (read_method(c->method, &a->method) != SALTS_OK || a->success_status < HTTP_STATUS_MIN ||
         a->success_status > HTTP_STATUS_MAX || !body_status(a->overload_status) ||
         !body_status(a->unavailable_status) || !body_status(a->graph_error_status) ||
-        strpbrk(c->response_content_type, "\r\n") || strpbrk(c->error_content_type, "\r\n") ||
+        !header_value_valid(c->response_content_type) ||
+        !header_value_valid(c->error_content_type) ||
         n->max_buffered_response_body_bytes < sizeof("request too large") - 1u ||
         strlen(c->graph_error_body) > n->max_buffered_response_body_bytes ||
         strlen(c->response_content_type) + 12u > n->max_response_header_bytes ||
@@ -458,7 +465,7 @@ static int validate_server(chttp_plugin_config_t *c) {
     if (a->max_frame_bytes < TURBO_FLOW_CHTTP_WEBSOCKET_MIN_FRAME_BYTES ||
         a->max_message_bytes < a->max_frame_bytes || wire > c->network.max_send_bytes ||
         a->max_buffered_input_bytes < wire || a->session_capacity > sessions ||
-        (c->subprotocol[0] && (!clean_text(c->subprotocol) || strchr(c->subprotocol, ','))))
+        (c->subprotocol[0] && !http_token_valid(c->subprotocol)))
       return SALTS_ERANGE;
     a->server = n;
     a->path = c->path;
