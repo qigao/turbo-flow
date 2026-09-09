@@ -68,6 +68,11 @@ typedef struct flow_plugin_transactional_resource_provider_s {
   size_t module_index;
 } flow_plugin_transactional_resource_provider_t;
 
+typedef struct flow_plugin_schema_s {
+  turbo_flow_plugin_schema_v1_t schema;
+  size_t module_index;
+} flow_plugin_schema_t;
+
 struct turbo_flow_plugin_host_s {
   turbo_flow_plugin_host_config_t config;
   turbo_flow_plugin_host_v1_t host_api;
@@ -78,6 +83,7 @@ struct turbo_flow_plugin_host_s {
   vec_t business_providers;
   vec_t transactional_adapter_providers;
   vec_t transactional_resource_providers;
+  vec_t schemas;
   size_t active_snapshots;
   flow_plugin_host_state_t state;
 };
@@ -90,6 +96,7 @@ struct turbo_flow_plugin_catalog_snapshot_s {
   vec_t business_providers;
   vec_t transactional_adapter_providers;
   vec_t transactional_resource_providers;
+  vec_t schemas;
   size_t leased_module_count;
   size_t references;
 };
@@ -103,6 +110,7 @@ typedef struct flow_plugin_registration_context_s {
   size_t business_count_before;
   size_t transactional_adapter_count_before;
   size_t transactional_resource_count_before;
+  size_t schema_count_before;
   int first_error;
 } flow_plugin_registration_context_t;
 
@@ -373,7 +381,7 @@ static int flow_plugin_api_validate(const turbo_flow_plugin_api_v1_t *api,
       TURBO_FLOW_PLUGIN_CAP_PRODUCT_ADAPTER | TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE |
       TURBO_FLOW_PLUGIN_CAP_PROTOCOL | TURBO_FLOW_PLUGIN_CAP_PROTOCOL_BUSINESS |
       TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER | TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE |
-      TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL;
+      TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL | TURBO_FLOW_PLUGIN_CAP_SCHEMA;
   if (!api || api->size < sizeof(*api) || api->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       (api->capabilities & ~known) != 0u || api->capabilities == 0u || !api->load ||
       !api->register_capabilities || !api->quiesce || !api->shutdown || !api->destroy) {
@@ -385,6 +393,11 @@ static int flow_plugin_api_validate(const turbo_flow_plugin_api_v1_t *api,
                             TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE)) == 0u) {
     return flow_plugin_error_write(error, SALTS_EPROTO, TURBO_FLOW_PLUGIN_STAGE_API, NULL, path,
                                    "external progress requires a transactional Product provider");
+  }
+  if ((api->capabilities & TURBO_FLOW_PLUGIN_CAP_SCHEMA) != 0u &&
+      api->abi_minor < TURBO_FLOW_PLUGIN_SCHEMA_ABI_MINOR) {
+    return flow_plugin_error_write(error, SALTS_EPROTO, TURBO_FLOW_PLUGIN_STAGE_API, NULL, path,
+                                   "schema capability requires plugin ABI 1.4 or newer");
   }
   if (!flow_plugin_identity_valid(api->plugin_id) ||
       !flow_plugin_version_valid(api->plugin_version)) {
@@ -601,6 +614,43 @@ static int flow_plugin_add_transactional_resource_provider(
   return rc;
 }
 
+static int flow_plugin_add_schema(void *ctx, const turbo_flow_plugin_schema_v1_t *schema) {
+  flow_plugin_registration_context_t *registration = (flow_plugin_registration_context_t *)ctx;
+  flow_plugin_schema_t entry;
+  int rc;
+  if (!registration) return SALTS_EINVAL;
+  if (registration->first_error != SALTS_OK) return registration->first_error;
+  if (!schema || schema->size < sizeof(*schema) ||
+      schema->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      schema->abi_minor < TURBO_FLOW_PLUGIN_SCHEMA_ABI_MINOR ||
+      schema->abi_minor > TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || schema->schema_version == 0u ||
+      !schema->data || !cmeta_data_desc_valid(schema->data) ||
+      !cmeta_type_desc_valid(schema->data->storage_type) ||
+      !flow_plugin_identity_valid(schema->data->stable_id)) {
+    registration->first_error = SALTS_EINVAL;
+    return registration->first_error;
+  }
+  for (size_t i = 0u; i < vec_size(&registration->host->schemas); ++i) {
+    const flow_plugin_schema_t *existing =
+        (const flow_plugin_schema_t *)vec_at_const(&registration->host->schemas, i);
+    if (existing && existing->schema.schema_version == schema->schema_version &&
+        strcmp(existing->schema.data->stable_id, schema->data->stable_id) == 0) {
+      registration->first_error = SALTS_EALREADY;
+      return registration->first_error;
+    }
+  }
+  if (vec_size(&registration->host->schemas) >= registration->host->config.schema_capacity) {
+    registration->first_error = SALTS_ENOSPC;
+    return registration->first_error;
+  }
+  memset(&entry, 0, sizeof(entry));
+  entry.schema = *schema;
+  entry.module_index = registration->module_index;
+  rc = turbo_flow_stl_error(vec_push(&registration->host->schemas, &entry));
+  if (rc != SALTS_OK) registration->first_error = rc;
+  return rc;
+}
+
 static void flow_plugin_zero_vector_tail(vec_t *values, size_t first) {
   if (!values) return;
   for (size_t i = first; i < vec_size(values); ++i) {
@@ -624,6 +674,7 @@ static void flow_plugin_registration_rollback(flow_plugin_registration_context_t
                                registration->transactional_adapter_count_before);
   flow_plugin_zero_vector_tail(&registration->host->transactional_resource_providers,
                                registration->transactional_resource_count_before);
+  flow_plugin_zero_vector_tail(&registration->host->schemas, registration->schema_count_before);
 }
 
 static void flow_plugin_cleanup_uncommitted(turbo_flow_plugin_host_t *host,
@@ -675,6 +726,10 @@ static int flow_plugin_vectors_initialize(turbo_flow_plugin_host_t *host) {
                                            _Alignof(turbo_flow_max_align_t),
                                            host->config.transactional_resource_provider_capacity));
   if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_stl_error(vec_init_bytes(&host->schemas, sizeof(flow_plugin_schema_t),
+                                           _Alignof(turbo_flow_max_align_t),
+                                           host->config.schema_capacity));
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_stl_error(vec_reserve(&host->modules, host->config.module_capacity));
   if (rc == SALTS_OK && host->config.adapter_provider_capacity > 0u)
     rc = turbo_flow_stl_error(
@@ -694,11 +749,14 @@ static int flow_plugin_vectors_initialize(turbo_flow_plugin_host_t *host) {
   if (rc == SALTS_OK && host->config.transactional_resource_provider_capacity > 0u)
     rc = turbo_flow_stl_error(vec_reserve(&host->transactional_resource_providers,
                                           host->config.transactional_resource_provider_capacity));
+  if (rc == SALTS_OK && host->config.schema_capacity > 0u)
+    rc = turbo_flow_stl_error(vec_reserve(&host->schemas, host->config.schema_capacity));
   return rc;
 }
 
 static void flow_plugin_vectors_destroy(turbo_flow_plugin_host_t *host) {
   if (!host) return;
+  vec_destroy(&host->schemas);
   vec_destroy(&host->transactional_resource_providers);
   vec_destroy(&host->transactional_adapter_providers);
   vec_destroy(&host->business_providers);
@@ -722,7 +780,10 @@ int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_config_t *config,
     return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL,
                                    NULL, "invalid bounded PluginHost configuration");
   }
-  copy_size = config->size < sizeof(normalized) ? config->size : sizeof(normalized);
+  copy_size = config->size >= sizeof(normalized) ? sizeof(normalized) :
+              (config->size < TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_3_SIZE
+                   ? config->size
+                   : TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_3_SIZE);
   memcpy(&normalized, config, copy_size);
   if (normalized.module_capacity == 0u ||
       normalized.module_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_MODULES ||
@@ -731,7 +792,8 @@ int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_config_t *config,
       normalized.protocol_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
       normalized.business_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
       normalized.transactional_adapter_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
-      normalized.transactional_resource_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS) {
+      normalized.transactional_resource_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
+      normalized.schema_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS) {
     return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL,
                                    NULL, "invalid bounded PluginHost configuration");
   }
@@ -830,6 +892,7 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
       vec_size(&host->transactional_adapter_providers);
   registration.transactional_resource_count_before =
       vec_size(&host->transactional_resource_providers);
+  registration.schema_count_before = vec_size(&host->schemas);
   registration.first_error = SALTS_OK;
   registration_api.size = sizeof(registration_api);
   registration_api.abi_major = TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR;
@@ -843,6 +906,7 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
       flow_plugin_add_transactional_adapter_provider;
   registration_api.add_transactional_resource_provider =
       flow_plugin_add_transactional_resource_provider;
+  registration_api.add_schema = flow_plugin_add_schema;
   rc = api->register_capabilities(plugin, &registration_api);
   if (registration.first_error != SALTS_OK) rc = registration.first_error;
   flow_plugin_observe(host, TURBO_FLOW_PLUGIN_LIFECYCLE_REGISTER, api->plugin_id, rc);
@@ -862,6 +926,8 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
     if (vec_size(&host->transactional_resource_providers) >
         registration.transactional_resource_count_before)
       actual |= TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE;
+    if (vec_size(&host->schemas) > registration.schema_count_before)
+      actual |= TURBO_FLOW_PLUGIN_CAP_SCHEMA;
     if (actual != (api->capabilities & ~TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL)) rc = SALTS_EPROTO;
   }
   if (rc != SALTS_OK) {
@@ -918,10 +984,15 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
                                                    size_t adapters, size_t resources,
                                                    size_t protocols, size_t businesses,
                                                    size_t transactional_adapters,
-                                                   size_t transactional_resources) {
+                                                   size_t transactional_resources,
+                                                   size_t schemas) {
   int rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->adapter_providers,
                                                sizeof(turbo_flow_product_adapter_provider_t),
                                                _Alignof(turbo_flow_max_align_t), adapters));
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->schemas,
+                                           sizeof(turbo_flow_plugin_schema_v1_t),
+                                           _Alignof(turbo_flow_max_align_t), schemas));
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->resource_providers,
                                            sizeof(turbo_flow_product_resource_provider_t),
@@ -958,11 +1029,14 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
   if (rc == SALTS_OK && transactional_resources > 0u)
     rc = turbo_flow_stl_error(
         vec_reserve(&snapshot->transactional_resource_providers, transactional_resources));
+  if (rc == SALTS_OK && schemas > 0u)
+    rc = turbo_flow_stl_error(vec_reserve(&snapshot->schemas, schemas));
   return rc;
 }
 
 static void flow_plugin_snapshot_vectors_destroy(turbo_flow_plugin_catalog_snapshot_t *snapshot) {
   if (!snapshot) return;
+  vec_destroy(&snapshot->schemas);
   vec_destroy(&snapshot->transactional_resource_providers);
   vec_destroy(&snapshot->transactional_adapter_providers);
   vec_destroy(&snapshot->business_providers);
@@ -1001,7 +1075,7 @@ int turbo_flow_plugin_catalog_snapshot_create(turbo_flow_plugin_host_t *host,
       snapshot, vec_size(&host->adapter_providers), vec_size(&host->resource_providers),
       vec_size(&host->protocol_providers), vec_size(&host->business_providers),
       vec_size(&host->transactional_adapter_providers),
-      vec_size(&host->transactional_resource_providers));
+      vec_size(&host->transactional_resource_providers), vec_size(&host->schemas));
   if (rc != SALTS_OK) goto allocation_failed;
   for (size_t i = 0u; i < vec_size(&host->adapter_providers); ++i) {
     const flow_plugin_adapter_provider_t *entry =
@@ -1071,6 +1145,16 @@ int turbo_flow_plugin_catalog_snapshot_create(turbo_flow_plugin_host_t *host,
         vec_push(&snapshot->transactional_resource_providers, &entry->provider));
     if (rc != SALTS_OK) goto allocation_failed;
   }
+  for (size_t i = 0u; i < vec_size(&host->schemas); ++i) {
+    const flow_plugin_schema_t *entry =
+        (const flow_plugin_schema_t *)vec_at_const(&host->schemas, i);
+    if (!entry) {
+      rc = SALTS_EPROTO;
+      goto allocation_failed;
+    }
+    rc = turbo_flow_stl_error(vec_push(&snapshot->schemas, &entry->schema));
+    if (rc != SALTS_OK) goto allocation_failed;
+  }
   snapshot->host = host;
   snapshot->leased_module_count = vec_size(&host->modules);
   snapshot->references = 1u;
@@ -1099,6 +1183,22 @@ int turbo_flow_plugin_catalog_snapshot_product_registry(
   registry_out->resource_providers =
       (const turbo_flow_product_resource_provider_t *)vec_data_const(&snapshot->resource_providers);
   registry_out->resource_provider_count = vec_size(&snapshot->resource_providers);
+  return SALTS_OK;
+}
+
+int turbo_flow_plugin_catalog_snapshot_schema_catalog(
+    const turbo_flow_plugin_catalog_snapshot_t *snapshot,
+    turbo_flow_plugin_schema_catalog_v1_t *catalog_out) {
+  if (!snapshot || snapshot->references == 0u || !catalog_out ||
+      catalog_out->size < sizeof(*catalog_out) ||
+      catalog_out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      catalog_out->abi_minor < TURBO_FLOW_PLUGIN_SCHEMA_ABI_MINOR ||
+      catalog_out->abi_minor > TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
+    return SALTS_EINVAL;
+  catalog_out->abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
+  catalog_out->schemas =
+      (const turbo_flow_plugin_schema_v1_t *)vec_data_const(&snapshot->schemas);
+  catalog_out->schema_count = vec_size(&snapshot->schemas);
   return SALTS_OK;
 }
 

@@ -2,6 +2,7 @@
 #define TURBO_FLOW_PLUGIN_H
 
 #include "turbo_flow_product.h"
+#include "turbo_flow_plugin_operation.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -11,7 +12,7 @@ extern "C" {
 #endif
 
 #define TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR 1u
-#define TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR 3u
+#define TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR 4u
 #define TURBO_FLOW_PLUGIN_EXPORT_SYMBOL "turbo_flow_plugin_get_api"
 
 #define TURBO_FLOW_PLUGIN_ID_MAX 127u
@@ -41,7 +42,8 @@ enum {
   TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER = UINT64_C(1) << 4,
   TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE = UINT64_C(1) << 5,
   /** Modifier: this plugin may materialize an owner with external progress. */
-  TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL = UINT64_C(1) << 6
+  TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL = UINT64_C(1) << 6,
+  TURBO_FLOW_PLUGIN_CAP_SCHEMA = UINT64_C(1) << 7
 };
 
 typedef enum turbo_flow_plugin_error_stage_e {
@@ -110,12 +112,15 @@ typedef struct turbo_flow_plugin_host_config_s {
   size_t business_provider_capacity;
   size_t transactional_adapter_provider_capacity;
   size_t transactional_resource_provider_capacity;
+  size_t schema_capacity;
 } turbo_flow_plugin_host_config_t;
 
 #define TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_0_SIZE                                                    \
   offsetof(turbo_flow_plugin_host_config_t, protocol_provider_capacity)
 #define TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_1_SIZE                                                    \
   offsetof(turbo_flow_plugin_host_config_t, transactional_adapter_provider_capacity)
+#define TURBO_FLOW_PLUGIN_HOST_CONFIG_V1_3_SIZE                                                    \
+  offsetof(turbo_flow_plugin_host_config_t, schema_capacity)
 
 #define TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT                                                         \
   {sizeof(turbo_flow_plugin_host_config_t),                                                        \
@@ -128,6 +133,7 @@ typedef struct turbo_flow_plugin_host_config_s {
    NULL,                                                                                           \
    16u,                                                                                            \
    16u,                                                                                            \
+   64u,                                                                                            \
    64u,                                                                                            \
    64u}
 
@@ -200,6 +206,7 @@ typedef struct turbo_flow_plugin_registration_v1_s {
   turbo_flow_plugin_add_business_provider_fn add_business_provider;
   turbo_flow_plugin_add_transactional_adapter_provider_fn add_transactional_adapter_provider;
   turbo_flow_plugin_add_transactional_resource_provider_fn add_transactional_resource_provider;
+  turbo_flow_plugin_add_schema_fn add_schema;
 } turbo_flow_plugin_registration_v1_t;
 
 typedef int (*turbo_flow_plugin_load_fn)(const turbo_flow_plugin_host_v1_t *host,

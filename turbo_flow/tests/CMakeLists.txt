@@ -136,6 +136,34 @@ function(turbo_flow_add_plugin_fixture target_name)
   endif()
 endfunction()
 
+function(turbo_flow_add_schema_fixture target_name)
+  add_library(${target_name} SHARED plugin_schema_fixture.c)
+  target_link_libraries(${target_name} PRIVATE TurboFlow::PluginHost Salts::CMeta)
+  target_compile_definitions(${target_name} PRIVATE TURBO_FLOW_PLUGIN_BUILD ${ARGN})
+  set_target_properties(${target_name} PROPERTIES C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES FOLDER "turbo_flow/tests/plugin-fixtures")
+endfunction()
+
+turbo_flow_add_schema_fixture(test_flow_plugin_schema_good)
+turbo_flow_add_schema_fixture(test_flow_plugin_schema_second FLOW_SCHEMA_FIXTURE_ID="fixture.schema.second" FLOW_SCHEMA_STABLE_ID="fixture.schema.long")
+turbo_flow_add_schema_fixture(test_flow_plugin_schema_duplicate FLOW_SCHEMA_FIXTURE_ID="fixture.schema.duplicate" FLOW_SCHEMA_MODE=1)
+turbo_flow_add_schema_fixture(test_flow_plugin_schema_bad_version FLOW_SCHEMA_FIXTURE_ID="fixture.schema.bad-version" FLOW_SCHEMA_MODE=2)
+turbo_flow_add_schema_fixture(test_flow_plugin_schema_bad_descriptor FLOW_SCHEMA_FIXTURE_ID="fixture.schema.bad-descriptor" FLOW_SCHEMA_MODE=3)
+turbo_flow_add_schema_fixture(test_flow_plugin_schema_swallow FLOW_SCHEMA_FIXTURE_ID="fixture.schema.swallow" FLOW_SCHEMA_MODE=4)
+turbo_flow_add_schema_fixture(test_flow_plugin_schema_old_abi FLOW_SCHEMA_FIXTURE_ID="fixture.schema.old-abi" FLOW_SCHEMA_ABI_MINOR=3)
+turbo_flow_add_schema_fixture(test_flow_plugin_schema_bad_abi FLOW_SCHEMA_FIXTURE_ID="fixture.schema.bad-abi" FLOW_SCHEMA_DESCRIPTOR_MINOR=99)
+
+cmake_add_test(test_flow_plugin_schema SOURCES test_flow_plugin_schema.c plugin_operation_header_cpp.cpp LIBS TurboFlow::PluginHost Salts::CMeta Salts::TinyTest FOLDER "turbo_flow/tests")
+target_compile_definitions(test_flow_plugin_schema PRIVATE
+  FLOW_SCHEMA_GOOD="$<TARGET_FILE:test_flow_plugin_schema_good>"
+  FLOW_SCHEMA_SECOND="$<TARGET_FILE:test_flow_plugin_schema_second>"
+  FLOW_SCHEMA_DUPLICATE="$<TARGET_FILE:test_flow_plugin_schema_duplicate>"
+  FLOW_SCHEMA_BAD_VERSION="$<TARGET_FILE:test_flow_plugin_schema_bad_version>"
+  FLOW_SCHEMA_BAD_DESCRIPTOR="$<TARGET_FILE:test_flow_plugin_schema_bad_descriptor>"
+  FLOW_SCHEMA_SWALLOW="$<TARGET_FILE:test_flow_plugin_schema_swallow>"
+  FLOW_SCHEMA_OLD_ABI="$<TARGET_FILE:test_flow_plugin_schema_old_abi>"
+  FLOW_SCHEMA_BAD_ABI="$<TARGET_FILE:test_flow_plugin_schema_bad_abi>")
+add_dependencies(test_flow_plugin_schema test_flow_plugin_schema_good test_flow_plugin_schema_second test_flow_plugin_schema_duplicate test_flow_plugin_schema_bad_version test_flow_plugin_schema_bad_descriptor test_flow_plugin_schema_swallow test_flow_plugin_schema_old_abi test_flow_plugin_schema_bad_abi)
+
 turbo_flow_add_plugin_fixture(test_flow_plugin_good_one)
 turbo_flow_add_plugin_fixture(
   test_flow_plugin_good_two

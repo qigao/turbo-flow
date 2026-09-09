@@ -247,11 +247,12 @@ int main(void) {
           sizeof(turbo_flow_plugin_transactional_resource_provider_v1_t) ||
       transactional_catalog.size != sizeof(turbo_flow_plugin_transactional_product_catalog_v1_t) ||
       generation_config.size != sizeof(turbo_flow_plugin_generation_config_t) ||
-      TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR != 1u || TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR != 3u ||
+      TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR != 1u || TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR != 4u ||
       plugin_host_config.protocol_provider_capacity == 0u ||
       plugin_host_config.business_provider_capacity == 0u ||
       plugin_host_config.transactional_adapter_provider_capacity == 0u ||
       plugin_host_config.transactional_resource_provider_capacity == 0u ||
+      plugin_host_config.schema_capacity == 0u ||
       generation_config.owner_capacity == 0u || !plugin_host_create || !plugin_host_load ||
       !plugin_host_destroy || !plugin_protocol_catalog_read || !plugin_transactional_catalog_read ||
       !plugin_generation_create || !plugin_generation_flow || !plugin_generation_state ||
