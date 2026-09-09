@@ -124,21 +124,20 @@ void flow_control_set_resize(flow_control_parse_ctx_t *ctx, flow_control_token_t
 }
 
 void flow_control_set_adapter(flow_control_parse_ctx_t *ctx, flow_control_token_t target,
-                              turbo_flow_adapter_command_kind_t kind) {
+                              turbo_flow_resource_command_kind_t resource_kind) {
   flow_control_begin(ctx, TURBO_FLOW_CONTROL_ADAPTER);
   if (!ctx || ctx->error.code != SALTS_OK) return;
   if (flow_control_copy_token(ctx->command.target, sizeof(ctx->command.target), target, ctx,
                               "adapter target is too long") != SALTS_OK)
     return;
-  ctx->command.adapter.size = sizeof(ctx->command.adapter);
-  ctx->command.adapter.kind = kind;
+  ctx->command.resource_kind = resource_kind;
 }
 
 void flow_control_set_replace(flow_control_parse_ctx_t *ctx, flow_control_token_t target,
                               flow_control_token_t host, flow_control_token_t port,
                               flow_control_token_t path) {
   uint64_t parsed = 0u;
-  flow_control_set_adapter(ctx, target, TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT);
+  flow_control_set_adapter(ctx, target, TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT);
   if (!ctx || ctx->error.code != SALTS_OK) return;
   if (flow_control_copy_token(ctx->command.endpoint_host, sizeof(ctx->command.endpoint_host), host,
                               ctx, "endpoint host is too long") != SALTS_OK ||
@@ -153,9 +152,7 @@ void flow_control_set_replace(flow_control_parse_ctx_t *ctx, flow_control_token_
       flow_control_copy_token(ctx->command.endpoint_path, sizeof(ctx->command.endpoint_path), path,
                               ctx, "endpoint path is too long") != SALTS_OK)
     return;
-  ctx->command.adapter.endpoint.host = ctx->command.endpoint_host;
-  ctx->command.adapter.endpoint.port = (int)parsed;
-  ctx->command.adapter.endpoint.path = ctx->command.endpoint_path;
+  ctx->command.endpoint_port = (int)parsed;
 }
 
 void flow_control_set_condition(flow_control_parse_ctx_t *ctx, flow_control_token_t token) {
@@ -214,8 +211,6 @@ int turbo_flow_control_parse(const char *text, size_t len, turbo_flow_control_co
     return rc;
   }
   *out = ctx.command;
-  out->adapter.endpoint.host = NULL;
-  out->adapter.endpoint.path = NULL;
   return SALTS_OK;
 }
 
@@ -617,50 +612,26 @@ static int flow_control_execute_action(turbo_flow_t *flow,
   case TURBO_FLOW_CONTROL_ADAPTER: {
     turbo_flow_resource_command_t resource_command;
     turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
-    turbo_flow_adapter_command_t adapter = command->adapter;
-    turbo_flow_resource_command_kind_t kind;
     int rc;
-    if (flow_find_adapter(flow, command->target) < 0) return SALTS_ENOENT;
-    switch (adapter.kind) {
-    case TURBO_FLOW_ADAPTER_QUIESCE:
-      kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
-      break;
-    case TURBO_FLOW_ADAPTER_RESUME:
-      kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
-      break;
-    case TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT:
-      kind = TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT;
-      break;
-    default:
-      return SALTS_EINVAL;
-    }
     rc = flow_control_find_adapter_resource(flow, command->target, &metadata);
-    if (rc == SALTS_OK) {
-      rc = flow_control_resource_command_init(flow, &resource_command, kind, metadata.uid,
-                                              metadata.generation);
-      if (rc != SALTS_OK) return rc;
-      if (kind == TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT) {
-        int host_written =
-            snprintf(resource_command.endpoint_host, sizeof(resource_command.endpoint_host), "%s",
-                     command->endpoint_host);
-        int path_written =
-            snprintf(resource_command.endpoint_path, sizeof(resource_command.endpoint_path), "%s",
-                     command->endpoint_path);
-        if (host_written < 0 || (size_t)host_written >= sizeof(resource_command.endpoint_host) ||
-            path_written < 0 || (size_t)path_written >= sizeof(resource_command.endpoint_path)) {
-          return SALTS_ENAMETOOLONG;
-        }
-        resource_command.endpoint_port = adapter.endpoint.port;
+    if (rc != SALTS_OK) return rc;
+    rc = flow_control_resource_command_init(flow, &resource_command, command->resource_kind,
+                                            metadata.uid, metadata.generation);
+    if (rc != SALTS_OK) return rc;
+    if (command->resource_kind == TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT) {
+      int host_written =
+          snprintf(resource_command.endpoint_host, sizeof(resource_command.endpoint_host), "%s",
+                   command->endpoint_host);
+      int path_written =
+          snprintf(resource_command.endpoint_path, sizeof(resource_command.endpoint_path), "%s",
+                   command->endpoint_path);
+      if (host_written < 0 || (size_t)host_written >= sizeof(resource_command.endpoint_host) ||
+          path_written < 0 || (size_t)path_written >= sizeof(resource_command.endpoint_path)) {
+        return SALTS_ENAMETOOLONG;
       }
-      return flow_control_execute_resource_command(flow, &resource_command);
+      resource_command.endpoint_port = command->endpoint_port;
     }
-    if (rc != SALTS_ENOENT) return rc;
-    /* Compatibility boundary for adapters that predate stable resource providers. */
-    if (adapter.kind == TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT) {
-      adapter.endpoint.host = command->endpoint_host;
-      adapter.endpoint.path = command->endpoint_path;
-    }
-    return turbo_flow_adapter_command(flow, command->target, &adapter);
+    return flow_control_execute_resource_command(flow, &resource_command);
   }
   default:
     return SALTS_EINVAL;
@@ -683,16 +654,16 @@ static int flow_control_validate_command(const turbo_flow_control_command_t *com
   }
   if (command->kind == TURBO_FLOW_CONTROL_ADAPTER) {
     if (!memchr(command->target, '\0', sizeof(command->target)) || command->target[0] == '\0' ||
-        command->adapter.size < sizeof(command->adapter) ||
-        command->adapter.kind < TURBO_FLOW_ADAPTER_QUIESCE ||
-        command->adapter.kind > TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT) {
+        (command->resource_kind != TURBO_FLOW_RESOURCE_COMMAND_QUIESCE &&
+         command->resource_kind != TURBO_FLOW_RESOURCE_COMMAND_RESUME &&
+         command->resource_kind != TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT)) {
       return SALTS_EINVAL;
     }
-    if (command->adapter.kind == TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT &&
+    if (command->resource_kind == TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT &&
         (!memchr(command->endpoint_host, '\0', sizeof(command->endpoint_host)) ||
          !memchr(command->endpoint_path, '\0', sizeof(command->endpoint_path)) ||
-         command->endpoint_host[0] == '\0' || command->adapter.endpoint.port <= 0 ||
-         command->adapter.endpoint.port > 65535)) {
+         command->endpoint_host[0] == '\0' || command->endpoint_port <= 0 ||
+         command->endpoint_port > 65535)) {
       return SALTS_EINVAL;
     }
   }

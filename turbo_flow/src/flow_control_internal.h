@@ -33,7 +33,7 @@ void flow_control_set_resize(flow_control_parse_ctx_t *ctx, flow_control_token_t
                              turbo_flow_pool_kind_t kind, flow_control_token_t parallelism,
                              flow_control_token_t timeout);
 void flow_control_set_adapter(flow_control_parse_ctx_t *ctx, flow_control_token_t target,
-                              turbo_flow_adapter_command_kind_t kind);
+                              turbo_flow_resource_command_kind_t resource_kind);
 void flow_control_set_replace(flow_control_parse_ctx_t *ctx, flow_control_token_t target,
                               flow_control_token_t host, flow_control_token_t port,
                               flow_control_token_t path);

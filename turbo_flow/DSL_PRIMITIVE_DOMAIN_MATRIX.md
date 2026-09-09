@@ -84,7 +84,7 @@ Control DSL 是独立的 Management 命令语言，不经过 graph compiler：
 | `flow pause/resume` | 暂停或恢复 ingress admission | runtime owner | 已实现 |
 | `flow drain timeout N` | 在 deadline 内等待 active publication 排空 | runtime owner | 已实现 |
 | `pool name thread/coro/disruptor resize N timeout M` | generation-checked pool resize | stable resource command | 已实现 |
-| `adapter name quiesce/resume` | endpoint/adapter owner 生命周期命令 | stable resource command；legacy direct adapter command 已废弃 | 已实现 |
+| `adapter name quiesce/resume` | endpoint/adapter owner 生命周期命令 | stable resource command；缺少 provider 返回 `SALTS_ENOENT` | 已实现 |
 | `adapter name replace host ... port ... path ...` | 原子替换 endpoint 配置 | stable resource command | 已实现 |
 | `if/when expr then command` | 对 immutable typed facts snapshot 求值后执行命令 | control expression evaluator + resource command | 已实现 |
 
