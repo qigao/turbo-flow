@@ -80,6 +80,30 @@ immutable，就推导其原生 runtime 或全局初始化可并发。
 结果若含 DLL-owned metadata 或 destroy callback，消息及 clone 都必须持有对应 lease；
 不能只保护 Graph 存活期间，也不能在 generation 销毁后留下失效回调。
 
+`turbo_flow_projection.h` 的显式 retained owner 接收 immutable payload、跨线程
+clone/destroy 和 independent context 三项完整声明；不满足时直接拒绝。Graph
+维护唯一的 count/byte reservation 事实源，clone 在调用 DLL 前预留额度，失败产生的
+临时值在 DLL destroy 完成后归还额度。每份结果固定按 provider 的
+`max_result_bytes` 收费；它是可信上界声明，不是 malloc 拦截或 native sandbox。
+
+`turbo_flow_plugin_projection_owner_create` 是 PluginHost 到 Graph 的薄桥接：
+控制线程 retain 一个 live catalog snapshot，复制 config/schema wrapper，worker
+只转发 clone/destroy 到原始独立 context。可信 host binding 必须保证 snapshot
+包含所有 callback/metadata 所属模块及依赖；这不是 DLL operation registration
+capability，也不替代 #73 的 catalog 来源校验。Graph 不反向依赖 PluginHost。
+
+独立结果 owner 可越过 generation；**依赖 session 的结果必须在 session 销毁前
+drain**，不能把 session 指针伪装成 independent context。owner stop 关闭新 bind/clone
+准入，已接受调用可完成；控制线程须禁止后续 API 进入并等待全部 worker API 返回，
+再销毁 owner。计数归零不足以证明所有裸 owner 使用者已静止。context release
+失败保留 owner 和 snapshot 供重试；成功才释放 snapshot，因此顺序为 payload
+destroy 完成 → context release 成功 → snapshot 释放 → 模块 destroy/unload。
+原 borrowed projection 和 descriptor 生命周期契约保持不变，clear_projection
+不会自动延长 descriptor 的寿命。
+
+真实 DLL 集成测试覆盖 clone/move/clear、失败临时值、context 重试、callback 屏障
+和 generation 先销毁；Debug/ASan 用于检测内存错误，不证明没有数据竞争。
+
 关闭顺序为：停止 admission → 等待已接受调用完成或完成取消 → 清空输出引用 →
 销毁 session/instance → 销毁 KB/module → 释放 generation snapshot → 卸载 DLL。
 quiesce/drain 失败保留 owner 与 lease，返回明确失败；禁止强杀线程或提前释放。

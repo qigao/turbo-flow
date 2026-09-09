@@ -31,6 +31,7 @@ list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c)
 set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_export.h
@@ -132,6 +133,7 @@ target_link_libraries(turbo_flow_product PUBLIC TurboFlow::Graph TurboFlow::Conf
 
 add_library(turbo_flow_plugin_host SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c
   ${PROJECT_SOURCE_DIR}/ingress/protocol/common/src/flow_protocol_registry.c
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h

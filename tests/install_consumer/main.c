@@ -1,9 +1,11 @@
 #include <stddef.h>
 #include <string.h>
+#include <stdlib.h>
 #include <turbo_flow.h>
 #include <turbo_flow_chttp.h>
 #include <turbo_flow_cnet.h>
 #include <turbo_flow_plugin.h>
+#include <turbo_flow_plugin_operation.h>
 #include <turbo_flow_plugin_generation.h>
 #include <turbo_flow_plugin_protocol.h>
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
@@ -24,7 +26,77 @@ static native_io_backend_kind install_consumer_backend(void) {
 #endif
 }
 
+static void install_projection_destroy(void *value, void *ctx) {
+  (void)ctx;
+  free(value);
+}
+static int install_projection_release(void *ctx) {
+  free(ctx);
+  return SALTS_OK;
+}
+static int install_projection_owner(void) {
+  static const turbo_flow_data_schema_t schema = {
+      sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
+      TURBO_FLOW_DATA_ENCODING_OPAQUE, "installed.projection", "Integer", "installed.int", 1u, 1u, NULL};
+  turbo_flow_plugin_host_config_t host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
+  turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  turbo_flow_projection_owner_config_t config = TURBO_FLOW_PROJECTION_OWNER_CONFIG_INIT;
+  turbo_flow_projection_owner_snapshot_t state = TURBO_FLOW_PROJECTION_OWNER_SNAPSHOT_INIT;
+  turbo_flow_plugin_host_t *host = NULL;
+  turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
+  turbo_flow_projection_owner_t *owner = NULL;
+  turbo_flow_msg_t message;
+  int *value = NULL;
+  int rc = SALTS_EIO;
+  int cleanup_rc;
+  turbo_flow_msg_init(&message);
+  if (turbo_flow_plugin_projection_owner_create(NULL, &config, &owner) != SALTS_EINVAL || owner)
+    return SALTS_EPROTO;
+  rc = turbo_flow_plugin_host_create(&host_config, &host, &error);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &error);
+  if (rc != SALTS_OK) goto cleanup;
+  config.flags = TURBO_FLOW_PROJECTION_IMMUTABLE | TURBO_FLOW_PROJECTION_CROSS_THREAD |
+                 TURBO_FLOW_PROJECTION_INDEPENDENT_CONTEXT;
+  config.capacity = 1u;
+  config.max_result_bytes = sizeof(int);
+  config.max_retained_bytes = sizeof(int);
+  config.schema = &schema;
+  config.destroy = install_projection_destroy;
+  config.release_context = install_projection_release;
+  config.ctx = malloc(sizeof(int));
+  if (!config.ctx) { rc = SALTS_ENOMEM; goto cleanup; }
+  rc = turbo_flow_plugin_projection_owner_create(snapshot, &config, &owner);
+  if (rc != SALTS_OK) goto cleanup;
+  config.ctx = NULL;
+  turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+  snapshot = NULL;
+  value = (int *)malloc(sizeof(*value));
+  if (!value) { rc = SALTS_ENOMEM; goto cleanup; }
+  *value = 1;
+  rc = turbo_flow_msg_bind_retained_projection(&message, owner, value);
+  if (rc != SALTS_OK) goto cleanup;
+  value = NULL;
+  rc = turbo_flow_projection_owner_snapshot(owner, &state);
+  if (rc == SALTS_OK && (state.outstanding != 1u ||
+      *(const int *)turbo_flow_msg_projection(&message, NULL) != 1 ||
+      turbo_flow_plugin_host_destroy(host, 0u, &error) != SALTS_EBUSY)) rc = SALTS_EPROTO;
+cleanup:
+  free(value);
+  free(config.ctx);
+  turbo_flow_msg_cleanup(&message);
+  if (owner) {
+    cleanup_rc = turbo_flow_projection_owner_stop(owner);
+    if (cleanup_rc == SALTS_OK) cleanup_rc = turbo_flow_projection_owner_destroy(owner);
+    if (cleanup_rc != SALTS_OK) return cleanup_rc;
+  }
+  turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+  cleanup_rc = turbo_flow_plugin_host_destroy(host, 0u, &error);
+  return rc == SALTS_OK ? cleanup_rc : rc;
+}
+
 int main(void) {
+  if (install_projection_owner() != SALTS_OK) return 1;
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   turbo_flow_turbodb_source_config_t turbodb_config = turbo_flow_turbodb_source_config_default();
   turbo_flow_turbodb_outbox_source_config_t outbox_config =
