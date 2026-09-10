@@ -281,11 +281,12 @@ static int domain_batch_prepare(void *ctx, size_t index, turbo_flow_msg_t *messa
 static void domain_batch_message_observed(void *ctx, const char *source_name,
                                           const turbo_flow_msg_t *message,
                                           uint64_t duration_ns, int status) {
-  (void)ctx;
+  size_t *observed = (size_t *)ctx;
   (void)source_name;
   (void)message;
   (void)duration_ns;
   (void)status;
+  if (observed) *observed += 1u;
 }
 
 static int domain_noop_adapter_start(void *ctx, turbo_flow_t *flow,
@@ -419,7 +420,7 @@ suite("Explicit operation binding") {
 }
 
 static int register_domain_batch_graph(turbo_flow_t *flow, domain_batch_probe_t *probe,
-                                       size_t registration_size) {
+                                       size_t registration_size, int native_batch) {
   static const char *dsl =
       "source input\n"
       "stage sink adapter native.batch.instance operation native.batch.consume\n"
@@ -460,7 +461,7 @@ static int register_domain_batch_graph(turbo_flow_t *flow, domain_batch_probe_t 
   adapter.schema = &schema;
   adapter.operation_names = operation_names;
   adapter.operation_count = 1u;
-  adapter.consume_batch = domain_batch_consume_native;
+  adapter.consume_batch = native_batch ? domain_batch_consume_native : NULL;
 
   rc = turbo_flow_register_module_contract(flow, &module, &operation, 1u);
   if (rc != SALTS_OK) return rc;
@@ -958,6 +959,155 @@ suite("Turbo Flow Domain Contracts") {
       check_equal(shutdown_count, 1);
       turbo_flow_destroy(flow);
     }
+
+    it("rejects every non-exact module adapter layout without registry or ownership changes") {
+      static const char *const operation_names[] = {"layout.consume"};
+      const size_t invalid_sizes[] = {
+          0u,
+          sizeof(size_t),
+          offsetof(turbo_flow_module_adapter_registration_t, operation_resource_names),
+          offsetof(turbo_flow_module_adapter_registration_t, consume_batch),
+          sizeof(turbo_flow_module_adapter_registration_t) - 1u,
+          sizeof(turbo_flow_module_adapter_registration_t) + 1u,
+          SIZE_MAX};
+
+      for (size_t retained = 0u; retained < 2u; ++retained) {
+        turbo_flow_t *flow = turbo_flow_create();
+        turbo_flow_operation_descriptor_t operation = operation_descriptor(
+            "layout.consume", TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN, TURBO_FLOW_DOMAIN_DATA,
+            "Message", TURBO_FLOW_DOMAIN_NONE, NULL,
+            TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
+        turbo_flow_module_descriptor_t module = {0};
+        turbo_flow_adapter_ops_t ops = {0};
+        turbo_flow_adapter_schema_t schema = {0};
+        turbo_flow_module_adapter_registration_t adapter =
+            TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+        int shutdown_count = 0;
+
+        operation.scope.state = TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER;
+        operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+        operation.scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+        module.size = sizeof(module);
+        module.name = "layout.module";
+        module.version = 1u;
+        module.capability_flags =
+            TURBO_FLOW_MODULE_GRAPH_OPERATIONS | TURBO_FLOW_MODULE_NATIVE_API;
+        module.operation_names = operation_names;
+        module.operation_count = 1u;
+        ops.consume = domain_noop_consume;
+        ops.shutdown = domain_count_shutdown;
+        schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+        schema.roles = TURBO_FLOW_ADAPTER_SINK;
+        schema.direction = TURBO_FLOW_ADAPTER_OUTPUT;
+        adapter.module_name = module.name;
+        adapter.adapter_name = "layout.instance";
+        adapter.ops = &ops;
+        adapter.ctx = &shutdown_count;
+        adapter.schema = &schema;
+        adapter.operation_names = operation_names;
+        adapter.operation_count = 1u;
+
+        check_not_null(flow);
+        check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u), SALTS_OK);
+        if (retained != 0u)
+          check_equal(turbo_flow_register_adapter(flow, "retained.adapter", NULL, NULL), SALTS_OK);
+        for (size_t index = 0u; index < sizeof(invalid_sizes) / sizeof(invalid_sizes[0]); ++index) {
+          turbo_flow_module_adapter_registration_t invalid = adapter;
+          turbo_flow_module_adapter_registration_t before;
+          size_t adapter_count = turbo_flow_adapter_count(flow);
+          size_t operation_count = turbo_flow_operation_count(flow);
+          size_t module_count = turbo_flow_module_count(flow);
+          size_t primitive_count = turbo_flow_primitive_count(flow);
+          size_t resource_count = turbo_flow_resource_count(flow);
+          invalid.size = invalid_sizes[index];
+          before = invalid;
+          check_equal(turbo_flow_register_module_adapter(flow, &invalid), SALTS_EINVAL);
+          check_equal(memcmp(&invalid, &before, sizeof(invalid)), 0);
+          check_equal(turbo_flow_adapter_count(flow), adapter_count);
+          check_equal(turbo_flow_operation_count(flow), operation_count);
+          check_equal(turbo_flow_module_count(flow), module_count);
+          check_equal(turbo_flow_primitive_count(flow), primitive_count);
+          check_equal(turbo_flow_resource_count(flow), resource_count);
+          check_null(turbo_flow_adapter_operation_module(flow, adapter.adapter_name,
+                                                          operation_names[0]));
+          check_equal(shutdown_count, 0);
+        }
+        turbo_flow_destroy(flow);
+        check_equal(shutdown_count, 0);
+      }
+    }
+
+    it("rejects physically short prefixes and permits an exact retry with one shutdown") {
+      static const char *const operation_names[] = {"short.consume"};
+      const size_t allocations[] = {
+          sizeof(size_t),
+          offsetof(turbo_flow_module_adapter_registration_t, operation_resource_names),
+          offsetof(turbo_flow_module_adapter_registration_t, consume_batch)};
+
+      for (size_t index = 0u; index < sizeof(allocations) / sizeof(allocations[0]); ++index) {
+        turbo_flow_t *flow = turbo_flow_create();
+        turbo_flow_operation_descriptor_t operation = operation_descriptor(
+            "short.consume", TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN, TURBO_FLOW_DOMAIN_DATA,
+            "Message", TURBO_FLOW_DOMAIN_NONE, NULL,
+            TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
+        turbo_flow_module_descriptor_t module = {0};
+        turbo_flow_adapter_ops_t ops = {0};
+        turbo_flow_adapter_schema_t schema = {0};
+        turbo_flow_module_adapter_registration_t adapter =
+            TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+        unsigned char *invalid = (unsigned char *)malloc(allocations[index]);
+        unsigned char *before = (unsigned char *)malloc(allocations[index]);
+        int rejected_shutdowns = 0;
+        int registered_shutdowns = 0;
+
+        check_not_null(flow);
+        check_not_null(invalid);
+        check_not_null(before);
+        operation.scope.state = TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER;
+        operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+        operation.scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+        module.size = sizeof(module);
+        module.name = "short.module";
+        module.version = 1u;
+        module.capability_flags =
+            TURBO_FLOW_MODULE_GRAPH_OPERATIONS | TURBO_FLOW_MODULE_NATIVE_API;
+        module.operation_names = operation_names;
+        module.operation_count = 1u;
+        ops.consume = domain_noop_consume;
+        ops.shutdown = domain_count_shutdown;
+        schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+        schema.roles = TURBO_FLOW_ADAPTER_SINK;
+        schema.direction = TURBO_FLOW_ADAPTER_OUTPUT;
+        adapter.module_name = module.name;
+        adapter.adapter_name = "short.instance";
+        adapter.ops = &ops;
+        adapter.ctx = &rejected_shutdowns;
+        adapter.schema = &schema;
+        adapter.operation_names = operation_names;
+        adapter.operation_count = 1u;
+        memcpy(invalid, &adapter, allocations[index]);
+        *(size_t *)invalid = allocations[index];
+        memcpy(before, invalid, allocations[index]);
+
+        check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u), SALTS_OK);
+        check_equal(turbo_flow_register_module_adapter(
+                        flow, (const turbo_flow_module_adapter_registration_t *)invalid),
+                    SALTS_EINVAL);
+        check_equal(memcmp(invalid, before, allocations[index]), 0);
+        check_equal(turbo_flow_adapter_count(flow), 0u);
+        check_equal(rejected_shutdowns, 0);
+        free(before);
+        free(invalid);
+
+        adapter.ctx = &registered_shutdowns;
+        check_equal(turbo_flow_register_module_adapter(flow, &adapter), SALTS_OK);
+        check_equal(turbo_flow_adapter_count(flow), 1u);
+        check_equal(registered_shutdowns, 0);
+        turbo_flow_destroy(flow);
+        check_equal(rejected_shutdowns, 0);
+        check_equal(registered_shutdowns, 1);
+      }
+    }
   }
 
   group("Native adapter batches") {
@@ -974,7 +1124,7 @@ suite("Turbo Flow Domain Contracts") {
       config.prepare = domain_batch_prepare;
       config.ctx = &prepare_probe;
       check_equal(register_domain_batch_graph(flow, &probe, sizeof(
-                                                        turbo_flow_module_adapter_registration_t)),
+                                                        turbo_flow_module_adapter_registration_t), 1),
                    SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
@@ -1022,16 +1172,14 @@ suite("Turbo Flow Domain Contracts") {
       turbo_flow_destroy(flow);
     }
 
-    it("falls back to scalar delivery for observers and older adapter registrations") {
-      for (size_t variant = 0u; variant < 2u; ++variant) {
+    it("falls back to scalar delivery when an observer is installed") {
+      {
         domain_batch_probe_t probe = {0};
         domain_batch_prepare_probe_t prepare_probe = {0u, SIZE_MAX, SALTS_EIO};
         turbo_flow_publish_batch_config_t config = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
         turbo_flow_observer_ops_t observer = {0};
         turbo_flow_t *flow = turbo_flow_create();
-        size_t registration_size =
-            variant == 0u ? sizeof(turbo_flow_module_adapter_registration_t)
-                          : TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_V2_SIZE;
+        size_t observer_calls = 0u;
         size_t published = SIZE_MAX;
 
         check_not_null(flow);
@@ -1039,21 +1187,46 @@ suite("Turbo Flow Domain Contracts") {
         config.message_count = 4u;
         config.prepare = domain_batch_prepare;
         config.ctx = &prepare_probe;
-        check_equal(register_domain_batch_graph(flow, &probe, registration_size), SALTS_OK);
-        if (variant == 0u) {
-          observer.size = sizeof(observer);
-          observer.message_complete = domain_batch_message_observed;
-          check_equal(turbo_flow_set_observer(flow, &observer, NULL), SALTS_OK);
-        }
+        check_equal(register_domain_batch_graph(
+                        flow, &probe, sizeof(turbo_flow_module_adapter_registration_t), 1),
+                    SALTS_OK);
+        observer.size = sizeof(observer);
+        observer.message_complete = domain_batch_message_observed;
+        check_equal(turbo_flow_set_observer(flow, &observer, &observer_calls), SALTS_OK);
         check_equal(turbo_flow_start(flow), SALTS_OK);
         check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), SALTS_OK);
         check_equal(published, 4u);
         check_equal(probe.batch_calls, 0u);
         check_equal(probe.scalar_calls, 4u);
         check_equal(probe.observed_count, 4u);
+        check_equal(observer_calls, 4u);
         check_equal(turbo_flow_stop(flow), SALTS_OK);
         turbo_flow_destroy(flow);
       }
+    }
+
+    it("keeps scalar delivery for a complete registration without a batch callback") {
+      domain_batch_probe_t probe = {0};
+      domain_batch_prepare_probe_t prepare_probe = {0u, SIZE_MAX, SALTS_EIO};
+      turbo_flow_publish_batch_config_t config = TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
+      turbo_flow_t *flow = turbo_flow_create();
+      size_t published = SIZE_MAX;
+
+      check_not_null(flow);
+      probe.fail_status = SALTS_EIO;
+      config.message_count = 4u;
+      config.prepare = domain_batch_prepare;
+      config.ctx = &prepare_probe;
+      check_equal(register_domain_batch_graph(
+                      flow, &probe, sizeof(turbo_flow_module_adapter_registration_t), 0),
+                  SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_publish_batch(flow, "input", &config, &published), SALTS_OK);
+      check_equal(published, 4u);
+      check_equal(probe.batch_calls, 0u);
+      check_equal(probe.scalar_calls, 4u);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      turbo_flow_destroy(flow);
     }
   }
 

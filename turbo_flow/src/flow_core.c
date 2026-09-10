@@ -1291,7 +1291,6 @@ static void flow_module_adapter_bindings_destroy(vec_t *bindings) {
 
 int turbo_flow_register_module_adapter(
     turbo_flow_t *flow, const turbo_flow_module_adapter_registration_t *registration) {
-  turbo_flow_module_adapter_registration_t normalized;
   const flow_module_registration_t *module;
   flow_adapter_registration_t *adapter;
   vec_t bindings = {0};
@@ -1303,16 +1302,10 @@ int turbo_flow_register_module_adapter(
   int rc;
 
   memset(&bindings, 0, sizeof(bindings));
-  memset(&normalized, 0, sizeof(normalized));
 
-  if (!flow || !registration ||
-      registration->size < TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_V1_SIZE) {
+  if (!flow || !registration || registration->size != sizeof(*registration)) {
     return SALTS_EINVAL;
   }
-  memcpy(&normalized, registration,
-         registration->size < sizeof(normalized) ? registration->size : sizeof(normalized));
-  normalized.size = sizeof(normalized);
-  registration = &normalized;
   if (!registration->module_name || registration->module_name[0] == '\0' ||
       !registration->adapter_name || registration->adapter_name[0] == '\0' ||
       !registration->ops || !registration->schema || !registration->operation_names ||
