@@ -962,6 +962,7 @@ suite("Turbo Flow Domain Contracts") {
 
     it("rejects every non-exact module adapter layout without registry or ownership changes") {
       static const char *const operation_names[] = {"layout.consume"};
+      static const char *const retained_operation_names[] = {"retained.consume"};
       const size_t invalid_sizes[] = {
           0u,
           sizeof(size_t),
@@ -978,11 +979,20 @@ suite("Turbo Flow Domain Contracts") {
             "Message", TURBO_FLOW_DOMAIN_NONE, NULL,
             TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
         turbo_flow_module_descriptor_t module = {0};
+        turbo_flow_operation_descriptor_t retained_operation = operation_descriptor(
+            "retained.consume", TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN, TURBO_FLOW_DOMAIN_DATA,
+            "Message", TURBO_FLOW_DOMAIN_NONE, NULL,
+            TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE);
+        turbo_flow_module_descriptor_t retained_module = {0};
         turbo_flow_adapter_ops_t ops = {0};
         turbo_flow_adapter_schema_t schema = {0};
+        turbo_flow_adapter_schema_t retained_schema = {0};
         turbo_flow_module_adapter_registration_t adapter =
             TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+        turbo_flow_module_adapter_registration_t retained_adapter =
+            TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
         int shutdown_count = 0;
+        int retained_shutdown_count = 0;
 
         operation.scope.state = TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER;
         operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
@@ -1006,11 +1016,35 @@ suite("Turbo Flow Domain Contracts") {
         adapter.schema = &schema;
         adapter.operation_names = operation_names;
         adapter.operation_count = 1u;
+        retained_operation.scope.state = TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER;
+        retained_operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+        retained_operation.scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+        retained_module.size = sizeof(retained_module);
+        retained_module.name = "retained.module";
+        retained_module.version = 1u;
+        retained_module.capability_flags =
+            TURBO_FLOW_MODULE_GRAPH_OPERATIONS | TURBO_FLOW_MODULE_NATIVE_API;
+        retained_module.operation_names = retained_operation_names;
+        retained_module.operation_count = 1u;
+        retained_schema.kind = TURBO_FLOW_ADAPTER_KIND_QUEUE;
+        retained_schema.roles = TURBO_FLOW_ADAPTER_SINK;
+        retained_schema.direction = TURBO_FLOW_ADAPTER_OUTPUT;
+        retained_adapter.module_name = retained_module.name;
+        retained_adapter.adapter_name = "retained.adapter";
+        retained_adapter.ops = &ops;
+        retained_adapter.ctx = &retained_shutdown_count;
+        retained_adapter.schema = &retained_schema;
+        retained_adapter.operation_names = retained_operation_names;
+        retained_adapter.operation_count = 1u;
 
         check_not_null(flow);
         check_equal(turbo_flow_register_module_contract(flow, &module, &operation, 1u), SALTS_OK);
-        if (retained != 0u)
-          check_equal(turbo_flow_register_adapter(flow, "retained.adapter", NULL, NULL), SALTS_OK);
+        if (retained != 0u) {
+          check_equal(turbo_flow_register_module_contract(
+                          flow, &retained_module, &retained_operation, 1u),
+                      SALTS_OK);
+          check_equal(turbo_flow_register_module_adapter(flow, &retained_adapter), SALTS_OK);
+        }
         for (size_t index = 0u; index < sizeof(invalid_sizes) / sizeof(invalid_sizes[0]); ++index) {
           turbo_flow_module_adapter_registration_t invalid = adapter;
           turbo_flow_module_adapter_registration_t before;
@@ -1030,10 +1064,23 @@ suite("Turbo Flow Domain Contracts") {
           check_equal(turbo_flow_resource_count(flow), resource_count);
           check_null(turbo_flow_adapter_operation_module(flow, adapter.adapter_name,
                                                           operation_names[0]));
+          if (retained != 0u) {
+            const turbo_flow_adapter_schema_t *existing =
+                turbo_flow_find_adapter_schema(flow, retained_adapter.adapter_name);
+            check_not_null(existing);
+            check_equal(existing->kind, retained_schema.kind);
+            check_equal(existing->roles, retained_schema.roles);
+            check_equal(existing->direction, retained_schema.direction);
+            check_equal(turbo_flow_adapter_operation_module(
+                            flow, retained_adapter.adapter_name, retained_operation_names[0]),
+                        retained_module.name);
+            check_equal(retained_shutdown_count, 0);
+          }
           check_equal(shutdown_count, 0);
         }
         turbo_flow_destroy(flow);
         check_equal(shutdown_count, 0);
+        check_equal(retained_shutdown_count, retained != 0u ? 1 : 0);
       }
     }
 
