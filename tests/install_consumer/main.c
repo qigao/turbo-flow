@@ -57,6 +57,65 @@ static int install_operation_binding_config(void) {
   return rc;
 }
 
+static int install_exact_ingress_layout(void) {
+  typedef struct legacy_async_ingress_config_s {
+    size_t size;
+    uint32_t workers;
+    size_t queue_capacity;
+  } legacy_async_ingress_config_t;
+  static const char yaml[] = "version: 1\nruntime:\n  ingress:\n    workers: 2\n"
+                             "    capacity: 7\n    max_message_bytes: 4096\n"
+                             "    max_inflight_bytes: 8192\nadapters: {}\n";
+  legacy_async_ingress_config_t legacy = {sizeof(legacy), 2u, 7u};
+  turbo_flow_async_ingress_config_t ingress = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
+  turbo_flow_async_ingress_config_t output = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
+  turbo_flow_resolved_config_t *resolved = NULL;
+  turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  turbo_flow_t *flow = turbo_flow_create();
+  int rc = flow ? SALTS_OK : SALTS_ENOMEM;
+
+  if (rc == SALTS_OK &&
+      turbo_flow_configure_async_ingress(
+          flow, (const turbo_flow_async_ingress_config_t *)&legacy) != SALTS_EINVAL)
+    rc = SALTS_EPROTO;
+  ingress.size = sizeof(ingress) + 1u;
+  if (rc == SALTS_OK && turbo_flow_configure_async_ingress(flow, &ingress) != SALTS_EINVAL)
+    rc = SALTS_EPROTO;
+  ingress.size = sizeof(ingress);
+  ingress.workers = TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS;
+  ingress.queue_capacity = TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY;
+  ingress.max_message_bytes = TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_MESSAGE_BYTES;
+  ingress.max_inflight_bytes = TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES;
+  ingress.workers = 2u;
+  ingress.queue_capacity = 7u;
+  ingress.max_message_bytes = 4096u;
+  ingress.max_inflight_bytes = 8192u;
+  if (rc == SALTS_OK) rc = turbo_flow_configure_async_ingress(flow, &ingress);
+  if (rc == SALTS_OK)
+    rc = turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error);
+  if (rc == SALTS_OK &&
+      turbo_flow_resolved_config_runtime_ingress(
+          resolved, (turbo_flow_async_ingress_config_t *)&legacy) != SALTS_EINVAL)
+    rc = SALTS_EPROTO;
+  output.size = sizeof(output) + 1u;
+  if (rc == SALTS_OK &&
+      turbo_flow_resolved_config_runtime_ingress(resolved, &output) != SALTS_EINVAL)
+    rc = SALTS_EPROTO;
+  output.size = sizeof(output);
+  output.workers = TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS;
+  output.queue_capacity = TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY;
+  output.max_message_bytes = TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_MESSAGE_BYTES;
+  output.max_inflight_bytes = TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES;
+  if (rc == SALTS_OK) rc = turbo_flow_resolved_config_runtime_ingress(resolved, &output);
+  if (rc == SALTS_OK &&
+      (output.workers != 2u || output.queue_capacity != 7u ||
+       output.max_message_bytes != 4096u || output.max_inflight_bytes != 8192u))
+    rc = SALTS_EPROTO;
+  turbo_flow_resolved_config_destroy(resolved);
+  turbo_flow_destroy(flow);
+  return rc;
+}
+
 static void install_projection_destroy(void *value, void *ctx) {
   (void)ctx;
   free(value);
@@ -384,7 +443,8 @@ int main(int argc, char **argv) {
       domain_snapshot.size != sizeof(domain_snapshot) || !result_domain_create ||
       !result_domain_destroy || !result_domain_snapshot || domain)
     return 1;
-  if (install_operation_binding_config() != SALTS_OK) return 1;
+  if (install_operation_binding_config() != SALTS_OK || install_exact_ingress_layout() != SALTS_OK)
+    return 1;
   if (install_projection_owner() != SALTS_OK) return 1;
   if (argc == 2 && install_operation_runtime(argv[1]) != SALTS_OK) return 1;
   if (argc > 2) return 1;

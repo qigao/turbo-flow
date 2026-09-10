@@ -24,17 +24,9 @@ static void flow_async_publish_task_finish(void *arg, const turbo_flow_publish_r
 }
 static int flow_async_ingress_config_resolve(const turbo_flow_async_ingress_config_t *config,
                                              turbo_flow_async_ingress_config_t *resolved) {
-  turbo_flow_async_ingress_config_t effective = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
-  if (!config || !resolved || config->size < TURBO_FLOW_ASYNC_INGRESS_CONFIG_V1_SIZE ||
-      (config->size > TURBO_FLOW_ASYNC_INGRESS_CONFIG_V1_SIZE && config->size < sizeof(*config))) {
-    return SALTS_EINVAL;
-  }
-  effective.workers = config->workers;
-  effective.queue_capacity = config->queue_capacity;
-  if (config->size >= sizeof(*config)) {
-    effective.max_message_bytes = config->max_message_bytes;
-    effective.max_inflight_bytes = config->max_inflight_bytes;
-  }
+  turbo_flow_async_ingress_config_t effective;
+  if (!config || !resolved || config->size != sizeof(*config)) return SALTS_EINVAL;
+  effective = *config;
   if (effective.workers == 0u || effective.workers > TURBO_FLOW_ASYNC_INGRESS_MAX_WORKERS ||
       effective.queue_capacity == 0u ||
       effective.queue_capacity > TURBO_FLOW_ASYNC_INGRESS_MAX_CAPACITY ||
