@@ -26,6 +26,81 @@ static native_io_backend_kind install_consumer_backend(void) {
 #endif
 }
 
+static int install_module_adapter_consume(void *ctx, turbo_flow_t *flow,
+                                          const turbo_flow_stage_plan_t *stage,
+                                          turbo_flow_msg_t *message) {
+  (void)ctx;
+  (void)flow;
+  (void)stage;
+  (void)message;
+  return SALTS_OK;
+}
+
+static int install_exact_module_adapter_layout(turbo_flow_t *flow) {
+  static const char *const operation_names[] = {"installed.adapter.consume"};
+  const size_t legacy_sizes[] = {
+      offsetof(turbo_flow_module_adapter_registration_t, operation_resource_names),
+      offsetof(turbo_flow_module_adapter_registration_t, consume_batch)};
+  turbo_flow_operation_descriptor_t operation = {0};
+  turbo_flow_module_descriptor_t module = {0};
+  turbo_flow_adapter_ops_t ops = {0};
+  turbo_flow_adapter_schema_t schema = {0};
+  turbo_flow_module_adapter_registration_t registration =
+      TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_INIT;
+  int rc;
+
+  operation.size = sizeof(operation);
+  operation.name = operation_names[0];
+  operation.version = 1u;
+  operation.domain = TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN;
+  operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.input_type = "Message";
+  operation.flags = TURBO_FLOW_OPERATION_STAGE | TURBO_FLOW_OPERATION_BRIDGE;
+  operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  operation.scope.state = TURBO_FLOW_STATE_SCOPE_ADAPTER_OWNER;
+  operation.scope.lifetime = TURBO_FLOW_LIFETIME_DISPATCH;
+  operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+  operation.scope.authority = TURBO_FLOW_AUTHORITY_OWNER_LOCAL;
+  operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  module.size = sizeof(module);
+  module.name = "installed.adapter.module";
+  module.version = 1u;
+  module.capability_flags = TURBO_FLOW_MODULE_GRAPH_OPERATIONS | TURBO_FLOW_MODULE_NATIVE_API;
+  module.operation_names = operation_names;
+  module.operation_count = 1u;
+  ops.consume = install_module_adapter_consume;
+  schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+  schema.roles = TURBO_FLOW_ADAPTER_SINK;
+  schema.direction = TURBO_FLOW_ADAPTER_OUTPUT;
+  registration.module_name = module.name;
+  registration.adapter_name = "installed.adapter.instance";
+  registration.ops = &ops;
+  registration.schema = &schema;
+  registration.operation_names = operation_names;
+  registration.operation_count = 1u;
+
+  rc = turbo_flow_register_module_contract(flow, &module, &operation, 1u);
+  if (rc != SALTS_OK) return rc;
+  for (size_t index = 0u; index < sizeof(legacy_sizes) / sizeof(legacy_sizes[0]); ++index) {
+    unsigned char *legacy = (unsigned char *)malloc(legacy_sizes[index]);
+    if (!legacy) return SALTS_ENOMEM;
+    memcpy(legacy, &registration, legacy_sizes[index]);
+    *(size_t *)legacy = legacy_sizes[index];
+    rc = turbo_flow_register_module_adapter(
+        flow, (const turbo_flow_module_adapter_registration_t *)legacy);
+    free(legacy);
+    if (rc != SALTS_EINVAL || turbo_flow_adapter_count(flow) != 0u) return SALTS_EPROTO;
+  }
+  registration.size = sizeof(registration) + 1u;
+  if (turbo_flow_register_module_adapter(flow, &registration) != SALTS_EINVAL ||
+      turbo_flow_adapter_count(flow) != 0u)
+    return SALTS_EPROTO;
+  registration.size = sizeof(registration);
+  rc = turbo_flow_register_module_adapter(flow, &registration);
+  if (rc != SALTS_OK || turbo_flow_adapter_count(flow) != 1u) return SALTS_EPROTO;
+  return SALTS_OK;
+}
+
 static int install_operation_binding_config(void) {
   static const char yaml[] =
       "version: 1\noperation_bindings:\n  - operation: installed.evaluate\n"
@@ -648,7 +723,12 @@ int main(int argc, char **argv) {
   const turbo_flow_chttp_server_request_context_t *(*chttp_server_request_context)(
       const turbo_flow_msg_t *) = turbo_flow_chttp_server_request_context;
   turbo_flow_t *flow = turbo_flow_create();
-  if (!flow || run_config.version != TURBO_FLOW_RUN_API_VERSION ||
+  if (!flow) return 1;
+  if (install_exact_module_adapter_layout(flow) != SALTS_OK) {
+    turbo_flow_destroy(flow);
+    return 1;
+  }
+  if (run_config.version != TURBO_FLOW_RUN_API_VERSION ||
       run_result.version != TURBO_FLOW_RUN_API_VERSION ||
       boundary_descriptor.version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION ||
       boundary_snapshot.version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION ||

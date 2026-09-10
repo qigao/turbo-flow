@@ -1520,9 +1520,10 @@ typedef struct turbo_flow_managed_source_registration_s {
  * parallel resource entry NULL. Resource/protocol-owner operations name a
  * compatible primitive exported by the module; missing primitive instances may
  * be supplied through `primitives`. A failed registration leaves no adapter,
- * resource provider, primitive, or operation binding behind. `ctx` remains
- * caller-owned on failure and transfers to registry shutdown ownership only on
- * success.
+ * resource provider, primitive, or operation binding behind. `size` must equal
+ * `sizeof(turbo_flow_module_adapter_registration_t)` exactly. A size mismatch
+ * is rejected before any field after `size` is read. `ctx` remains caller-owned
+ * on every failure and transfers to registry shutdown ownership only on success.
  */
 typedef struct turbo_flow_module_adapter_registration_s {
   size_t size;
@@ -1559,11 +1560,6 @@ typedef struct turbo_flow_module_adapter_registration_s {
    NULL,                                                                                           \
    0u,                                                                                             \
    NULL}
-
-#define TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_V1_SIZE                                             \
-  offsetof(turbo_flow_module_adapter_registration_t, operation_resource_names)
-#define TURBO_FLOW_MODULE_ADAPTER_REGISTRATION_V2_SIZE                                             \
-  offsetof(turbo_flow_module_adapter_registration_t, consume_batch)
 
 typedef enum turbo_flow_state_e {
   TURBO_FLOW_STATE_NEW = 0,
