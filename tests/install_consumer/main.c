@@ -201,6 +201,7 @@ static int install_operation_runtime(const char *plugin_path) {
   turbo_flow_plugin_generation_t *cleanup = NULL;
   turbo_flow_resolved_config_t *resolved = NULL;
   turbo_flow_t *flow = NULL;
+  unsigned char *legacy_metadata = NULL;
   turbo_flow_msg_t input, result, clone;
   size_t unloads = 0u;
   int *value = NULL;
@@ -234,6 +235,33 @@ static int install_operation_runtime(const char *plugin_path) {
   metadata.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
   metadata.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
   metadata.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  legacy_metadata = (unsigned char *)malloc(
+      offsetof(turbo_flow_operation_descriptor_t, resource_min_version));
+  if (!legacy_metadata) {
+    rc = SALTS_ENOMEM;
+    goto cleanup_all;
+  }
+  memcpy(legacy_metadata, &metadata,
+         offsetof(turbo_flow_operation_descriptor_t, resource_min_version));
+  *(size_t *)legacy_metadata =
+      offsetof(turbo_flow_operation_descriptor_t, resource_min_version);
+  rc = turbo_flow_register_operation(
+      flow, (const turbo_flow_operation_descriptor_t *)legacy_metadata);
+  if (rc != SALTS_EINVAL || turbo_flow_operation_count(flow) != 0u ||
+      turbo_flow_find_operation(flow, metadata.name) != NULL) {
+    rc = SALTS_EPROTO;
+    goto cleanup_all;
+  }
+  free(legacy_metadata);
+  legacy_metadata = NULL;
+  metadata.size = sizeof(metadata) + 1u;
+  rc = turbo_flow_register_operation(flow, &metadata);
+  if (rc != SALTS_EINVAL || turbo_flow_operation_count(flow) != 0u ||
+      turbo_flow_find_operation(flow, metadata.name) != NULL) {
+    rc = SALTS_EPROTO;
+    goto cleanup_all;
+  }
+  metadata.size = sizeof(metadata);
   rc = turbo_flow_register_operation(flow, &metadata);
   if (rc != SALTS_OK) goto cleanup_all;
   metadata.name = "fixture.capture";
@@ -288,6 +316,7 @@ static int install_operation_runtime(const char *plugin_path) {
   if (unloads != 1u) rc = SALTS_EPROTO;
 
 cleanup_all:
+  free(legacy_metadata);
   free(value);
   turbo_flow_msg_cleanup(&clone);
   turbo_flow_msg_cleanup(&result);

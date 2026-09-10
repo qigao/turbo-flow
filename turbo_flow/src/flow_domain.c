@@ -253,35 +253,30 @@ static int flow_operation_descriptor_valid(const turbo_flow_operation_descriptor
 int turbo_flow_register_operation(turbo_flow_t *flow,
                                   const turbo_flow_operation_descriptor_t *descriptor) {
   flow_operation_registration_t operation;
-  turbo_flow_operation_descriptor_t normalized;
 
-  if (!flow || !descriptor || descriptor->size < TURBO_FLOW_OPERATION_DESCRIPTOR_V1_SIZE) {
+  if (!flow || !descriptor || descriptor->size != sizeof(*descriptor)) {
     return SALTS_EINVAL;
   }
-  memset(&normalized, 0, sizeof(normalized));
-  memcpy(&normalized, descriptor,
-         descriptor->size < sizeof(normalized) ? descriptor->size : sizeof(normalized));
-  normalized.size = sizeof(normalized);
-  if (!flow_operation_descriptor_valid(&normalized)) return SALTS_EINVAL;
+  if (!flow_operation_descriptor_valid(descriptor)) return SALTS_EINVAL;
   if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "cannot register operation after compile");
   }
-  if (flow_find_operation_index(flow, normalized.name) >= 0) {
+  if (flow_find_operation_index(flow, descriptor->name) >= 0) {
     return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "duplicate operation");
   }
   memset(&operation, 0, sizeof(operation));
-  operation.name = tstr_dup(normalized.name);
-  if (normalized.input_type) operation.input_type = tstr_dup(normalized.input_type);
-  if (normalized.output_type) operation.output_type = tstr_dup(normalized.output_type);
-  if (normalized.resource_type) operation.resource_type = tstr_dup(normalized.resource_type);
-  if (!operation.name || (normalized.input_type && !operation.input_type) ||
-      (normalized.output_type && !operation.output_type) ||
-      (normalized.resource_type && !operation.resource_type)) {
+  operation.name = tstr_dup(descriptor->name);
+  if (descriptor->input_type) operation.input_type = tstr_dup(descriptor->input_type);
+  if (descriptor->output_type) operation.output_type = tstr_dup(descriptor->output_type);
+  if (descriptor->resource_type) operation.resource_type = tstr_dup(descriptor->resource_type);
+  if (!operation.name || (descriptor->input_type && !operation.input_type) ||
+      (descriptor->output_type && !operation.output_type) ||
+      (descriptor->resource_type && !operation.resource_type)) {
     flow_operation_registration_destroy(&operation);
     return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  operation.descriptor = normalized;
+  operation.descriptor = *descriptor;
   operation.descriptor.name = operation.name;
   operation.descriptor.input_type = operation.input_type;
   operation.descriptor.output_type = operation.output_type;
@@ -470,7 +465,7 @@ static int flow_optional_string_equal(const char *left, const char *right) {
 static int flow_operation_contract_compatible(
     const turbo_flow_operation_descriptor_t *current,
     const turbo_flow_operation_descriptor_t *required) {
-  return current && required && required->size >= sizeof(*required) &&
+  return current && required && required->size == sizeof(*required) &&
          current->version == required->version && current->domain == required->domain &&
          current->input_domain == required->input_domain &&
          current->output_domain == required->output_domain &&
@@ -550,7 +545,8 @@ int turbo_flow_register_module_contract(
   }
   for (i = 0; i < operation_count; ++i) {
     const turbo_flow_operation_descriptor_t *current;
-    if (!operations[i].name || strcmp(module->operation_names[i], operations[i].name) != 0) {
+    if (operations[i].size != sizeof(operations[i]) || !operations[i].name ||
+        strcmp(module->operation_names[i], operations[i].name) != 0) {
       return SALTS_EINVAL;
     }
     current = turbo_flow_find_operation(flow, operations[i].name);
