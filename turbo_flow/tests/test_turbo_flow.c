@@ -5097,25 +5097,67 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
-    it("accepts the legacy async ingress ABI with bounded current defaults") {
+    it("rejects non-exact async ingress layouts without changing the installed configuration") {
       typedef struct legacy_async_ingress_config_s {
         size_t size;
         uint32_t workers;
         size_t queue_capacity;
       } legacy_async_ingress_config_t;
-      legacy_async_ingress_config_t legacy = {sizeof(legacy), 2u, 7u};
+      const size_t invalid_sizes[] = {0u,
+                                      sizeof(size_t),
+                                      offsetof(turbo_flow_async_ingress_config_t,
+                                               max_message_bytes),
+                                      sizeof(turbo_flow_async_ingress_config_t) - 1u,
+                                      sizeof(turbo_flow_async_ingress_config_t) + 1u,
+                                      SIZE_MAX};
+      turbo_flow_async_ingress_config_t ingress = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
+      legacy_async_ingress_config_t legacy = {sizeof(legacy), 3u, 11u};
+      unsigned char *short_size = (unsigned char *)malloc(sizeof(size_t));
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
+      check_not_null(short_size);
+      ingress.workers = 2u;
+      ingress.queue_capacity = 7u;
+      ingress.max_message_bytes = 4096u;
+      ingress.max_inflight_bytes = 8192u;
+      check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
+      for (size_t i = 0u; i < sizeof(invalid_sizes) / sizeof(invalid_sizes[0]); ++i) {
+        turbo_flow_async_ingress_config_t invalid = ingress;
+        turbo_flow_async_ingress_config_t before;
+        invalid.size = invalid_sizes[i];
+        before = invalid;
+        check_equal(turbo_flow_configure_async_ingress(flow, &invalid), SALTS_EINVAL);
+        check_equal(memcmp(&invalid, &before, sizeof(invalid)), 0);
+        check_equal(flow->async_ingress_config.workers, 2u);
+        check_equal(flow->async_ingress_config.queue_capacity, (size_t)7);
+        check_equal(flow->async_ingress_config.max_message_bytes, (size_t)4096);
+        check_equal(flow->async_ingress_config.max_inflight_bytes, (size_t)8192);
+        check_equal(flow->state, TURBO_FLOW_STATE_NEW);
+        check_null(flow->async_ingress_pool);
+      }
+      memset(short_size, 0xa5, sizeof(size_t));
+      *(size_t *)short_size = sizeof(size_t);
+      unsigned char short_before[sizeof(size_t)];
+      memcpy(short_before, short_size, sizeof(short_before));
+      check_equal(turbo_flow_configure_async_ingress(
+                      flow, (const turbo_flow_async_ingress_config_t *)short_size),
+                  SALTS_EINVAL);
+      check_equal(memcmp(short_size, short_before, sizeof(short_before)), 0);
+      legacy_async_ingress_config_t legacy_before = legacy;
       check_equal(turbo_flow_configure_async_ingress(
                       flow, (const turbo_flow_async_ingress_config_t *)&legacy),
-                  SALTS_OK);
+                  SALTS_EINVAL);
+      check_equal(memcmp(&legacy, &legacy_before, sizeof(legacy)), 0);
       check_equal(flow->async_ingress_config.workers, 2u);
-      check_equal(flow->async_ingress_config.queue_capacity, 7u);
-      check_equal(flow->async_ingress_config.max_message_bytes,
-                  TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_MESSAGE_BYTES);
-      check_equal(flow->async_ingress_config.max_inflight_bytes,
-                  TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES);
+      check_equal(flow->async_ingress_config.queue_capacity, (size_t)7);
+      check_equal(flow->async_ingress_config.max_message_bytes, (size_t)4096);
+      check_equal(flow->async_ingress_config.max_inflight_bytes, (size_t)8192);
+      check_equal(flow->state, TURBO_FLOW_STATE_NEW);
+      check_null(flow->async_ingress_pool);
+      ingress = (turbo_flow_async_ingress_config_t)TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
+      check_equal(turbo_flow_configure_async_ingress(flow, &ingress), SALTS_OK);
+      free(short_size);
       turbo_flow_destroy(flow);
     }
 

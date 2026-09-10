@@ -2125,8 +2125,6 @@ typedef struct turbo_flow_async_ingress_config_s {
   size_t max_inflight_bytes;
 } turbo_flow_async_ingress_config_t;
 
-#define TURBO_FLOW_ASYNC_INGRESS_CONFIG_V1_SIZE                                                    \
-  offsetof(turbo_flow_async_ingress_config_t, max_message_bytes)
 #define TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT                                                       \
   {sizeof(turbo_flow_async_ingress_config_t), TURBO_FLOW_ASYNC_INGRESS_DEFAULT_WORKERS,            \
    TURBO_FLOW_ASYNC_INGRESS_DEFAULT_CAPACITY, TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_MESSAGE_BYTES,  \
@@ -2154,10 +2152,11 @@ typedef enum turbo_flow_source_handoff_mode_e {
  * Configure the lazily-created bounded async source ingress.
  *
  * The configuration is copied and survives stop/start. Call only while the
- * flow is not STARTED. Queue, per-message byte, or aggregate in-flight byte
+ * flow is not STARTED. `config->size` must equal `sizeof(*config)`; on failure
+ * the caller-owned configuration and the Flow's existing configuration and
+ * state remain unchanged. Queue, per-message byte, or aggregate in-flight byte
  * exhaustion is reported by publish_async as SALTS_ENOSPC; submissions never
- * block waiting for capacity. A V1-sized configuration remains accepted and
- * receives the current byte-budget defaults.
+ * block waiting for capacity.
  */
 TURBO_FLOW_C_API int turbo_flow_configure_async_ingress(turbo_flow_t *flow,
                                                  const turbo_flow_async_ingress_config_t *config);

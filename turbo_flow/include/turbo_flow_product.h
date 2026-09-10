@@ -50,6 +50,8 @@ typedef struct turbo_flow_product_provider_registry_s {
 
 /**
  * Copy the resolver-expanded bounded Graph ingress configuration.
+ * `ingress->size` must equal `sizeof(*ingress)`. The caller-owned output remains
+ * unchanged when this function fails.
  * @return SALTS_OK, SALTS_EINVAL for invalid arguments, or SALTS_EPROTO for a corrupt snapshot.
  */
 TURBO_FLOW_C_API int

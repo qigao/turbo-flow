@@ -41,14 +41,9 @@ int turbo_flow_resolved_config_runtime_ingress(const turbo_flow_resolved_config_
   json_value_t *capacity;
   json_value_t *max_message_bytes;
   json_value_t *max_inflight_bytes;
-  size_t output_size;
   size_t value;
-  if (!config || !config->document || !ingress ||
-      ingress->size < TURBO_FLOW_ASYNC_INGRESS_CONFIG_V1_SIZE ||
-      (ingress->size > TURBO_FLOW_ASYNC_INGRESS_CONFIG_V1_SIZE &&
-       ingress->size < sizeof(*ingress)))
+  if (!config || !config->document || !ingress || ingress->size != sizeof(*ingress))
     return SALTS_EINVAL;
-  output_size = ingress->size;
   runtime = json_object_get(config->document, "runtime");
   ingress_value = runtime ? json_object_get(runtime, "ingress") : NULL;
   workers = ingress_value ? json_object_get(ingress_value, "workers") : NULL;
@@ -76,12 +71,7 @@ int turbo_flow_resolved_config_runtime_ingress(const turbo_flow_resolved_config_
     return SALTS_EPROTO;
   resolved.max_inflight_bytes = value;
   if (resolved.max_message_bytes > resolved.max_inflight_bytes) return SALTS_EPROTO;
-  if (output_size >= sizeof(*ingress)) {
-    *ingress = resolved;
-  } else {
-    ingress->workers = resolved.workers;
-    ingress->queue_capacity = resolved.queue_capacity;
-  }
+  *ingress = resolved;
   return SALTS_OK;
 }
 

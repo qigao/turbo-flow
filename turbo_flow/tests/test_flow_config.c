@@ -3,6 +3,7 @@
 #include "turbo_flow_resolved_config.h"
 
 #include <string.h>
+#include <stdlib.h>
 
 typedef struct flow_product_provider_probe_s {
   int adapter_calls;
@@ -109,6 +110,66 @@ spec("flow_config") {
                 TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_MESSAGE_BYTES);
     check_equal(ingress.max_inflight_bytes,
                 TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES);
+    turbo_flow_resolved_config_destroy(config);
+  }
+
+  it("rejects non-exact ingress output layouts without changing caller storage") {
+    typedef struct legacy_async_ingress_config_s {
+      size_t size;
+      uint32_t workers;
+      size_t queue_capacity;
+    } legacy_async_ingress_config_t;
+    static const char explicit_yaml[] = "version: 1\n"
+                                        "runtime:\n"
+                                        "  ingress:\n"
+                                        "    workers: 3\n"
+                                        "    capacity: 17\n"
+                                        "    max_message_bytes: 4096\n"
+                                        "    max_inflight_bytes: 8192\n"
+                                        "adapters: {}\n";
+    const size_t invalid_sizes[] = {0u, sizeof(size_t),
+                                    offsetof(turbo_flow_async_ingress_config_t,
+                                             max_message_bytes),
+                                    sizeof(turbo_flow_async_ingress_config_t) - 1u,
+                                    sizeof(turbo_flow_async_ingress_config_t) + 1u, SIZE_MAX};
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    unsigned char *short_size = (unsigned char *)malloc(sizeof(size_t));
+    legacy_async_ingress_config_t legacy = {sizeof(legacy), 9u, 23u};
+
+    check_not_null(short_size);
+    check_equal(
+        turbo_flow_config_resolve_yaml(explicit_yaml, sizeof(explicit_yaml) - 1u, &config, &error),
+        SALTS_OK);
+    for (size_t i = 0u; i < sizeof(invalid_sizes) / sizeof(invalid_sizes[0]); ++i) {
+      turbo_flow_async_ingress_config_t invalid;
+      turbo_flow_async_ingress_config_t before;
+      memset(&invalid, 0xa5, sizeof(invalid));
+      invalid.size = invalid_sizes[i];
+      before = invalid;
+      check_equal(turbo_flow_resolved_config_runtime_ingress(config, &invalid), SALTS_EINVAL);
+      check_equal(memcmp(&invalid, &before, sizeof(invalid)), 0);
+    }
+    memset(short_size, 0xa5, sizeof(size_t));
+    *(size_t *)short_size = sizeof(size_t);
+    unsigned char short_before[sizeof(size_t)];
+    memcpy(short_before, short_size, sizeof(short_before));
+    check_equal(turbo_flow_resolved_config_runtime_ingress(
+                    config, (turbo_flow_async_ingress_config_t *)short_size),
+                SALTS_EINVAL);
+    check_equal(memcmp(short_size, short_before, sizeof(short_before)), 0);
+    legacy_async_ingress_config_t legacy_before = legacy;
+    check_equal(turbo_flow_resolved_config_runtime_ingress(
+                    config, (turbo_flow_async_ingress_config_t *)&legacy),
+                SALTS_EINVAL);
+    check_equal(memcmp(&legacy, &legacy_before, sizeof(legacy)), 0);
+    turbo_flow_async_ingress_config_t ingress = TURBO_FLOW_ASYNC_INGRESS_CONFIG_INIT;
+    check_equal(turbo_flow_resolved_config_runtime_ingress(config, &ingress), SALTS_OK);
+    check_equal(ingress.workers, 3u);
+    check_equal(ingress.queue_capacity, (size_t)17);
+    check_equal(ingress.max_message_bytes, (size_t)4096);
+    check_equal(ingress.max_inflight_bytes, (size_t)8192);
+    free(short_size);
     turbo_flow_resolved_config_destroy(config);
   }
 
