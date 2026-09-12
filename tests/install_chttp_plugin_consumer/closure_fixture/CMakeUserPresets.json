@@ -2,21 +2,39 @@
   "version": 6,
   "include": ["../../../CMakeUserPresets.json"],
   "configurePresets": [
+    { "name": "closure-positive", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/positive", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "positive", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/positive/install" } },
+    { "name": "closure-debug-positive", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/debug-positive", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "debug-positive", "CMAKE_BUILD_TYPE": "Debug", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/debug-positive/install" } },
     { "name": "closure-legacy", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/legacy", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "legacy", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/legacy/install" } },
     { "name": "closure-wrong-crt", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/wrong-crt", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "wrong-crt", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/wrong-crt/install" } },
+    { "name": "closure-debug-release-crt", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/debug-release-crt", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "debug-release-crt", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/debug-release-crt/install" } },
     { "name": "closure-unresolved", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/unresolved", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "unresolved", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/unresolved/install" } },
-    { "name": "closure-outside", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/outside", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "outside", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/outside/install" } }
+    { "name": "closure-outside", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/outside", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "outside", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/outside/install" } },
+    { "name": "closure-arbitrary-outside", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/arbitrary-outside", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "arbitrary-outside", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/arbitrary-outside/install" } },
+    { "name": "closure-system-forbidden", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/system-forbidden", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "system-forbidden", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/system-forbidden/install" } }
+    ,{ "name": "closure-system-unsigned", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/system-unsigned", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "system-unsigned", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/system-unsigned/install" } }
   ],
   "buildPresets": [
+    { "name": "install-closure-positive", "configurePreset": "closure-positive", "targets": ["install"] },
+    { "name": "install-closure-debug-positive", "configurePreset": "closure-debug-positive", "targets": ["install"] },
     { "name": "install-closure-legacy", "configurePreset": "closure-legacy", "targets": ["install"] },
     { "name": "install-closure-wrong-crt", "configurePreset": "closure-wrong-crt", "targets": ["install"] },
+    { "name": "install-closure-debug-release-crt", "configurePreset": "closure-debug-release-crt", "targets": ["install"] },
     { "name": "install-closure-unresolved", "configurePreset": "closure-unresolved", "targets": ["install"] },
-    { "name": "install-closure-outside", "configurePreset": "closure-outside", "targets": ["install"] }
+    { "name": "install-closure-outside", "configurePreset": "closure-outside", "targets": ["install"] },
+    { "name": "install-closure-arbitrary-outside", "configurePreset": "closure-arbitrary-outside", "targets": ["install"] },
+    { "name": "install-closure-system-forbidden", "configurePreset": "closure-system-forbidden", "targets": ["install"] }
+    ,{ "name": "install-closure-system-unsigned", "configurePreset": "closure-system-unsigned", "targets": ["install"] }
   ],
   "workflowPresets": [
+    { "name": "closure-positive", "steps": [{ "type": "configure", "name": "closure-positive" }, { "type": "build", "name": "install-closure-positive" }] },
+    { "name": "closure-debug-positive", "steps": [{ "type": "configure", "name": "closure-debug-positive" }, { "type": "build", "name": "install-closure-debug-positive" }] },
     { "name": "closure-legacy", "steps": [{ "type": "configure", "name": "closure-legacy" }, { "type": "build", "name": "install-closure-legacy" }] },
     { "name": "closure-wrong-crt", "steps": [{ "type": "configure", "name": "closure-wrong-crt" }, { "type": "build", "name": "install-closure-wrong-crt" }] },
+    { "name": "closure-debug-release-crt", "steps": [{ "type": "configure", "name": "closure-debug-release-crt" }, { "type": "build", "name": "install-closure-debug-release-crt" }] },
     { "name": "closure-unresolved", "steps": [{ "type": "configure", "name": "closure-unresolved" }, { "type": "build", "name": "install-closure-unresolved" }] },
-    { "name": "closure-outside", "steps": [{ "type": "configure", "name": "closure-outside" }, { "type": "build", "name": "install-closure-outside" }] }
+    { "name": "closure-outside", "steps": [{ "type": "configure", "name": "closure-outside" }, { "type": "build", "name": "install-closure-outside" }] },
+    { "name": "closure-arbitrary-outside", "steps": [{ "type": "configure", "name": "closure-arbitrary-outside" }, { "type": "build", "name": "install-closure-arbitrary-outside" }] },
+    { "name": "closure-system-forbidden", "steps": [{ "type": "configure", "name": "closure-system-forbidden" }, { "type": "build", "name": "install-closure-system-forbidden" }] }
+    ,{ "name": "closure-system-unsigned", "steps": [{ "type": "configure", "name": "closure-system-unsigned" }, { "type": "build", "name": "install-closure-system-unsigned" }] }
   ]
 }

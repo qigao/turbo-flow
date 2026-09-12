@@ -197,3 +197,76 @@ manifest 安装到测试自有 local prefix；未写产品 SDK。component prese
 - **HIGH（事实）**：Debug Chttp SDK 仍不存在，Debug 安装/消费/CRT 门禁未执行。
 - **MED（事实）**：Linux/Apple 与真实安装 DLL 的递归闭包未在当前 Windows 主机验证；
   test-only fixture 不替代真实安装产物证据。
+
+## Fix round 2（基于 `e35f319159aca9318a9dc813f048e45364a0901a`）
+
+### OS 边界与 provenance 修复
+
+- **HIGH（事实）**：不再把 System32/SysWOW64 中的任意文件直接当作可信 OS DLL。
+  `file(GET_RUNTIME_DEPENDENCIES)` 仍是唯一递归解析器；legacy CHTTP 和当前 profile 禁止的
+  CRT 通过 post-include 优先于系统文件排除进入结果并被拒绝。所有非系统 resolved 文件
+  不再按 basename 前缀筛选，而是一律要求位于当前 profile roots。
+- **HIGH（事实）**：系统目录只用于标识 loader 实际选择的精确候选路径。根模块和原生递归
+  结果中每个应用模块的直接系统边界由既有 dumpbin `/dependents` 观察；同目录优先后，按
+  Windows system roots 的顺序选定精确文件。选定文件去重后，以
+  `pwsh.exe -NoProfile -NonInteractive` 调用 `Get-AuthenticodeSignature -LiteralPath`；仅接受
+  `Status=Valid` 和三个明确、逐字相等的 Microsoft Windows/Microsoft Corporation publisher
+  subject。PowerShell、签名或 publisher 异常均 fail fast；未修改 execution policy、证书或
+  trust store。此边界裁决记录在 progress.md。
+- **HIGH（事实）**：Release 拒绝 Debug CRT，Debug 也拒绝 Release CRT。此 profile 约束针对
+  应用闭包；已验证的 Windows 系统组件自身运行时语义不被误判为应用跨 profile 复用。
+
+### RED / GREEN
+
+新增 fixture 后、修复前命令：
+
+```text
+ctest --preset win-release-user -R
+  "test_turbo_flow_chttp_closure_(debug_release_crt|arbitrary_outside|system_forbidden)$"
+50% tests passed, 3 tests failed out of 6
+debug_release_crt: CHTTP closure validation unexpectedly succeeded
+arbitrary_outside: CHTTP closure validation unexpectedly succeeded
+system_forbidden: 未命中 legacy 诊断，而先报 prefix-only outside 诊断
+```
+
+系统身份实现阶段的合法正例首先真实失败：VS 环境中 Windows PowerShell 5 错装载 Scoop
+PowerShell 7 Security module，报 `FormatXmlUpdateException`；未降级信任。固定使用仓库主机
+已有的官方 `pwsh.exe` 后，又分别暴露 subject 输出换行、Debug CRT 的明确 Compatibility/
+Microsoft Corporation publisher，以及 fake system root 少一层 `/bin`；均以精确数据边界
+修复，不以模糊 contains 或白名单跳过。
+
+最终聚焦命令：
+
+```text
+cmd /d /c "call ...VsDevCmd.bat -arch=x64 -host_arch=x64 >nul &&
+  cmake --preset win-release-user >nul &&
+  ctest --preset win-release-user -R
+  \"test_turbo_flow_chttp_(native|closure)\" --output-on-failure"
+100% tests passed, 0 tests failed out of 28
+Total Test time (real) = 14.34 sec
+```
+
+其中 closure 为十个 preset-owned setup 和十个验证：Release/Debug 合法两级闭包正例；
+legacy、Release→Debug CRT、Debug→Release CRT、unresolved、已识别前缀 outside、任意 basename
+outside、fake system legacy、fake system unsigned。unsigned 精确命中 `Status=NotSigned`；
+合法 Release/Debug 分别耗时 1.68/2.44 秒。
+
+另对现有指定 Release Chttp SDK 做只读正例（没有产品 install 或 SDK 写入）：
+
+```text
+cmake -DCHTTP_TEST_MODULE=C:/projects/cpp/external/pkgs/http-services/release/bin/chttp_client.dll
+  -DCHTTP_TEST_ALLOWED_ROOTS=<release Chttp;Salts;SaltsUtils;worktree vcpkg>
+  -DCHTTP_TEST_SEARCH_DIRS=<对应 bin>
+  -DCHTTP_TEST_CONFIG=Release
+  -P tests/install_chttp_plugin_consumer/check_native_abi.cmake
+exit 0, 10.88 sec
+```
+
+### 仍未满足
+
+- **HIGH（事实）**：外部 TurboFlow 2.0 安装仍未获授权，因此产品 install、真实新 installed
+  consumer/Config 矩阵和真实 `tf_chttp_adapter.dll` 闭包仍未执行。
+- **HIGH（事实）**：没有 Debug Chttp SDK；Debug fixture 只证明规则接受本 profile 构建及已签名
+  Debug OS runtime，不替代真实 Debug SDK/install consumer 门禁。
+- **MED（事实）**：该 Windows 测试新增 `pwsh` host 依赖与签名查询耗时；命令不可用或 trust
+  验证异常时按设计拒绝。Linux/Apple 仍未在本机验证。

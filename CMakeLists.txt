@@ -315,7 +315,7 @@ if(BUILD_TESTING AND BUILD_TESTS)
 
     set(chttp_closure_fixture_dir
         "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/closure_fixture")
-    foreach(closure_case IN ITEMS legacy wrong-crt unresolved outside)
+    foreach(closure_case IN ITEMS positive debug-positive legacy wrong-crt debug-release-crt unresolved outside arbitrary-outside system-forbidden system-unsigned)
       add_test(NAME test_turbo_flow_chttp_closure_setup_${closure_case}
         COMMAND "${CMAKE_COMMAND}" --workflow --preset "closure-${closure_case}")
       set_tests_properties(test_turbo_flow_chttp_closure_setup_${closure_case}
@@ -323,6 +323,20 @@ if(BUILD_TESTING AND BUILD_TESTS)
                    FIXTURES_SETUP "chttp-closure-${closure_case}"
                    LABELS "cmake;chttp-adapter" TIMEOUT 120)
     endforeach()
+    add_test(NAME test_turbo_flow_chttp_closure_positive
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/positive/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/positive/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/positive/install/allowed/bin"
+              -DCHTTP_TEST_CONFIG=Release
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_closure_debug_positive
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/debug-positive/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/debug-positive/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/debug-positive/install/allowed/bin"
+              -DCHTTP_TEST_CONFIG=Debug
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
     add_test(NAME test_turbo_flow_chttp_closure_legacy
       COMMAND "${CMAKE_COMMAND}"
               "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/legacy/install/allowed/bin/closure_root.dll"
@@ -355,14 +369,60 @@ if(BUILD_TESTING AND BUILD_TESTS)
               -DCHTTP_TEST_CONFIG=Release
               "-DCHTTP_EXPECT_FAILURE_PATTERN=resolved outside the active profile roots"
               -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_closure_debug_release_crt
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/debug-release-crt/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/debug-release-crt/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/debug-release-crt/install/allowed/bin"
+              -DCHTTP_TEST_CONFIG=Debug
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=Debug CHTTP recursive closure contains a Release CRT"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_closure_arbitrary_outside
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/arbitrary-outside/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/arbitrary-outside/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/arbitrary-outside/install/allowed/bin;${chttp_closure_fixture_dir}/build/arbitrary-outside/install/outside/bin"
+              -DCHTTP_TEST_CONFIG=Release
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=non-system dependency resolved outside the active profile roots"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_closure_system_forbidden
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/system-forbidden/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/system-forbidden/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/system-forbidden/install/allowed/bin;${chttp_closure_fixture_dir}/build/system-forbidden/install/system/bin"
+              "-DCHTTP_TEST_SYSTEM_ROOTS=${chttp_closure_fixture_dir}/build/system-forbidden/install/system/bin"
+              -DCHTTP_TEST_CONFIG=Release
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=recursive closure contains a legacy salts_chttp DLL"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_closure_system_unsigned
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/system-unsigned/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/system-unsigned/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/system-unsigned/install/allowed/bin;${chttp_closure_fixture_dir}/build/system-unsigned/install/system/bin"
+              "-DCHTTP_TEST_SYSTEM_ROOTS=${chttp_closure_fixture_dir}/build/system-unsigned/install/system/bin"
+              -DCHTTP_TEST_CONFIG=Release
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=Status=NotSigned"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
     set_tests_properties(test_turbo_flow_chttp_closure_legacy PROPERTIES
       FIXTURES_REQUIRED chttp-closure-legacy LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(test_turbo_flow_chttp_closure_positive PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-positive LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(test_turbo_flow_chttp_closure_debug_positive PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-debug-positive LABELS "cmake;chttp-adapter" TIMEOUT 30)
     set_tests_properties(test_turbo_flow_chttp_closure_wrong_crt PROPERTIES
       FIXTURES_REQUIRED chttp-closure-wrong-crt LABELS "cmake;chttp-adapter" TIMEOUT 30)
     set_tests_properties(test_turbo_flow_chttp_closure_unresolved PROPERTIES
       FIXTURES_REQUIRED chttp-closure-unresolved LABELS "cmake;chttp-adapter" TIMEOUT 30)
     set_tests_properties(test_turbo_flow_chttp_closure_outside PROPERTIES
       FIXTURES_REQUIRED chttp-closure-outside LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(test_turbo_flow_chttp_closure_debug_release_crt PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-debug-release-crt LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(test_turbo_flow_chttp_closure_arbitrary_outside PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-arbitrary-outside LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(test_turbo_flow_chttp_closure_system_forbidden PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-system-forbidden LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(test_turbo_flow_chttp_closure_system_unsigned PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-system-unsigned LABELS "cmake;chttp-adapter" TIMEOUT 30)
   endif()
 
   add_test(
