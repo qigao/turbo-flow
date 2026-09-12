@@ -751,6 +751,11 @@ spec("TurboFlow CHTTP WebSocket adapter") {
         TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_CONFIG_INIT;
     turbo_flow_chttp_websocket_server_snapshot_t snapshot =
         TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_SNAPSHOT_INIT;
+    turbo_flow_managed_boundary_descriptor_t descriptor =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    turbo_flow_resource_command_t command = TURBO_FLOW_RESOURCE_COMMAND_INIT;
+    turbo_flow_resource_command_result_t result = TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
     websocket_adapter_gate_t gate;
     websocket_adapter_stop_t stop;
     turbo_flow_chttp_websocket_server_t *server = NULL;
@@ -809,6 +814,34 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     check_equal(snapshot.state, TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED);
     check_equal(snapshot.in_flight_frames, (size_t)0u);
     check_equal(snapshot.frames_completed, (uint64_t)1u);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(flow, 0u, &descriptor), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    const uint64_t stopped_generation = managed.generation;
+    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_STOPPED);
+    command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
+    command.expected_generation = stopped_generation;
+    memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+    memcpy(command.idempotency_key, "websocket-stopped-quiesce",
+           sizeof("websocket-stopped-quiesce"));
+    check_equal(turbo_flow_resource_command(flow, &command, &result), SALTS_ESHUTDOWN);
+    check_equal(result.generation_after, stopped_generation);
+    managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_STOPPED);
+    check_equal(managed.generation, stopped_generation);
+    command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
+    result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+    command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
+    command.expected_generation = stopped_generation;
+    memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+    memcpy(command.idempotency_key, "websocket-stopped-resume",
+           sizeof("websocket-stopped-resume"));
+    check_equal(turbo_flow_resource_command(flow, &command, &result), SALTS_ESHUTDOWN);
+    check_equal(result.generation_after, stopped_generation);
+    managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_STOPPED);
+    check_equal(managed.generation, stopped_generation);
 
     check_equal(chttp_websocket_client_destroy(&client, WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS),
                 SALTS_OK);
@@ -909,6 +942,8 @@ spec("TurboFlow CHTTP WebSocket adapter") {
       managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
       check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
       check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_DRAINING);
+      check_equal(managed.in_flight, (uint64_t)1u);
+      check_equal(managed.backpressured, 0);
       command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
       result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
       command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
@@ -959,6 +994,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
       check_equal(managed.accepted, (uint64_t)1u);
       check_equal(managed.completed, (uint64_t)1u);
       check_equal(managed.rejected, (uint64_t)2u);
+      check_equal(managed.backpressured, 0);
 
       check_equal(chttp_websocket_client_destroy(&client, WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS),
                   SALTS_OK);

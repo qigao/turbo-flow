@@ -19,7 +19,12 @@ static atomic_int publish_gate;
 static atomic_int publish_entered;
 static atomic_int publish_allowed;
 static atomic_int completion_called;
+static atomic_int failure_finalization_gate;
+static atomic_int failure_finalization_armed;
+static atomic_int failure_finalization_entered;
+static atomic_int failure_finalization_allowed;
 static atomic_int operation_status;
+static atomic_int invalidate_message_type;
 
 typedef struct websocket_registration_fault_s {
   flow_registration_checkpoint_t fail_at;
@@ -51,8 +56,19 @@ int chttp_test_websocket_set_snapshot_state(turbo_flow_chttp_websocket_server_t 
                                             size_t session_frames, int frame_occupied,
                                             size_t pending_publications, uint64_t accepted,
                                             uint64_t completed);
-int chttp_test_websocket_saturate_managed_counters(
+int chttp_test_websocket_set_managed_counters(turbo_flow_chttp_websocket_server_t *server,
+                                              uint64_t accepted, uint64_t completed,
+                                              uint64_t rejected);
+int chttp_test_websocket_reject_unknown_session(
     turbo_flow_chttp_websocket_server_t *server);
+
+void chttp_test_websocket_failure_finalization_unlocked(void) {
+  if (!atomic_exchange_explicit(&failure_finalization_armed, 0, memory_order_acq_rel)) return;
+  atomic_store_explicit(&failure_finalization_entered, 1, memory_order_release);
+  while (atomic_load_explicit(&failure_finalization_gate, memory_order_acquire) &&
+         !atomic_load_explicit(&failure_finalization_allowed, memory_order_acquire))
+    salts_thread_yield();
+}
 
 mem_buffer_t *chttp_test_websocket_mem_get_buffer(mem_pool_t *pool, size_t min_size) {
   if (atomic_load_explicit(&allocation_gate, memory_order_acquire)) {
@@ -82,7 +98,11 @@ int chttp_test_websocket_publish_async(turbo_flow_t *flow, const char *source_na
                                        const turbo_flow_msg_t *message,
                                        turbo_flow_publish_completion_fn completion, void *ctx) {
   int status = atomic_exchange_explicit(&publish_failure, SALTS_OK, memory_order_relaxed);
-  if (status != SALTS_OK) return status;
+  if (status != SALTS_OK) {
+    if (atomic_load_explicit(&failure_finalization_gate, memory_order_acquire))
+      atomic_store_explicit(&failure_finalization_armed, 1, memory_order_release);
+    return status;
+  }
   if (!atomic_load_explicit(&publish_gate, memory_order_acquire))
     return turbo_flow_publish_async(flow, source_name, message, completion, ctx);
   publish_completion.completion = completion;
@@ -97,8 +117,8 @@ int chttp_test_websocket_publish_async(turbo_flow_t *flow, const char *source_na
 }
 
 static int websocket_fault_operation(turbo_flow_msg_t *message, void *ctx) {
-  (void)message;
   (void)ctx;
+  if (atomic_load_explicit(&invalidate_message_type, memory_order_relaxed)) message->type = 0u;
   return atomic_load_explicit(&operation_status, memory_order_relaxed);
 }
 
@@ -257,7 +277,7 @@ spec("CHTTP WebSocket close admission failure") {
     }
   }
 
-  it("rejects unstable and contradictory snapshots and saturates managed counters") {
+  it("rejects unstable snapshots contradictions and generation overflow") {
     chttp_server_config native = websocket_fault_server_config();
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_chttp_websocket_server_config_t config =
@@ -282,12 +302,6 @@ spec("CHTTP WebSocket close admission failure") {
     check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_EPROTO);
     check_equal(chttp_test_websocket_set_snapshot_state(server, 0u, 0u, 0u, 0, 0u, 0u, 0u),
                 SALTS_OK);
-    check_equal(chttp_test_websocket_saturate_managed_counters(server), SALTS_OK);
-    managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
-    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
-    check_equal(managed.accepted, UINT64_MAX);
-    check_equal(managed.completed, UINT64_MAX);
-    check_equal(managed.rejected, UINT64_MAX);
     check_equal(chttp_test_websocket_set_managed_generation(server, UINT64_MAX), SALTS_OK);
     check_equal(chttp_test_websocket_set_control_state(
                     server, TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED),
@@ -306,12 +320,83 @@ spec("CHTTP WebSocket close admission failure") {
     check_equal(turbo_flow_chttp_websocket_server_destroy(server), SALTS_OK);
   }
 
-  it("accounts make publish and terminal failures through the real owner path") {
+  it("saturates managed counters through real accept complete and reject paths") {
+    static const char graph[] = "source input adapter ws\n"
+                                "stage output adapter ws\n"
+                                "stage main {\n  input -> output\n}\n";
+    chttp_server_config native = websocket_fault_server_config();
+    chttp_websocket_client_config client_config = {.size = sizeof(client_config)};
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_chttp_websocket_server_config_t config =
+        websocket_fault_adapter_config(flow, &native, "ws");
+    turbo_flow_chttp_websocket_server_t *server = NULL;
+    turbo_flow_chttp_websocket_server_snapshot_t snapshot =
+        TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_SNAPSHOT_INIT;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    chttp_websocket_client client = {0};
+    chttp_websocket_connect_options options = {.size = sizeof(options)};
+    chttp_websocket_event event = {0};
+    unsigned int http_status = 0u;
+    char uri[128];
+
+    client_config.network = native.network;
+    client_config.max_frame_bytes = 4096u;
+    client_config.max_message_bytes = 4096u;
+    client_config.max_buffered_input_bytes = 8192u;
+    client_config.max_handshake_header_bytes = 4096u;
+    client_config.event_capacity = 8u;
+    atomic_store_explicit(&allocation_failure, SALTS_OK, memory_order_relaxed);
+    atomic_store_explicit(&allocation_gate, 0, memory_order_relaxed);
+    atomic_store_explicit(&publish_failure, SALTS_OK, memory_order_relaxed);
+    atomic_store_explicit(&publish_gate, 0, memory_order_relaxed);
+    atomic_store_explicit(&failure_finalization_gate, 0, memory_order_relaxed);
+    chttp_test_websocket_fail_calloc_call(0u);
+    check_not_null(flow);
+    check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "ws://127.0.0.1:%u/flow", snapshot.bound_port), 0);
+    options.uri = uri;
+    options.timeout_ms = CLOSE_TEST_TIMEOUT_MS;
+    check_equal(chttp_websocket_client_init(&client, &client_config), SALTS_OK);
+    check_equal(chttp_websocket_client_connect(&client, &options, &http_status), SALTS_OK);
+    check_equal(chttp_test_websocket_set_managed_counters(
+                    server, UINT64_MAX - 1u, UINT64_MAX - 1u, UINT64_MAX - 1u),
+                SALTS_OK);
+    for (size_t index = 0u; index < 2u; ++index) {
+      check_equal(chttp_websocket_client_send_text(&client, "saturate",
+                                                   sizeof("saturate") - 1u,
+                                                   CLOSE_TEST_TIMEOUT_MS),
+                  SALTS_OK);
+      check_equal(chttp_websocket_client_receive(&client, CLOSE_TEST_TIMEOUT_MS, &event),
+                  SALTS_OK);
+      check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_MESSAGE);
+    }
+    check_equal(chttp_test_websocket_reject_unknown_session(server), SALTS_ENOENT);
+    check_equal(chttp_test_websocket_reject_unknown_session(server), SALTS_ENOENT);
+    managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.accepted, UINT64_MAX);
+    check_equal(managed.completed, UINT64_MAX);
+    check_equal(managed.rejected, UINT64_MAX);
+    check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
+    check_equal(snapshot.frames_admitted, (uint64_t)2u);
+    check_equal(snapshot.frames_completed, (uint64_t)2u);
+    check_equal(snapshot.frames_rejected, (uint64_t)2u);
+    check_equal(chttp_websocket_client_destroy(&client, CLOSE_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_chttp_websocket_server_destroy(server), SALTS_OK);
+  }
+
+  it("atomically classifies make publish graph and send failures exactly once") {
     static const char graph[] = "source input adapter ws\n"
                                 "stage fault operation test.websocket.fault\n"
                                 "stage output adapter ws\n"
                                 "stage main {\n  input -> fault -> output\n}\n";
-    for (size_t mode = 0u; mode < 3u; ++mode) {
+    for (size_t mode = 0u; mode < 4u; ++mode) {
       chttp_server_config native = websocket_fault_server_config();
       chttp_websocket_client_config client_config = {.size = sizeof(client_config)};
       turbo_flow_t *flow = turbo_flow_create();
@@ -334,14 +419,20 @@ spec("CHTTP WebSocket close admission failure") {
       client_config.max_buffered_input_bytes = 8192u;
       client_config.max_handshake_header_bytes = 4096u;
       client_config.event_capacity = 8u;
+      config.frame_capacity = 1u;
       atomic_store_explicit(&allocation_failure, mode == 0u ? SALTS_ENOMEM : SALTS_OK,
                             memory_order_relaxed);
       atomic_store_explicit(&allocation_gate, 0, memory_order_relaxed);
       atomic_store_explicit(&publish_failure, mode == 1u ? SALTS_ENOSPC : SALTS_OK,
                             memory_order_relaxed);
       atomic_store_explicit(&publish_gate, 0, memory_order_relaxed);
+      atomic_store_explicit(&failure_finalization_gate, mode == 1u, memory_order_relaxed);
+      atomic_store_explicit(&failure_finalization_armed, 0, memory_order_relaxed);
+      atomic_store_explicit(&failure_finalization_entered, 0, memory_order_relaxed);
+      atomic_store_explicit(&failure_finalization_allowed, 0, memory_order_relaxed);
       atomic_store_explicit(&operation_status, mode == 2u ? SALTS_ENOBUFS : SALTS_OK,
                             memory_order_relaxed);
+      atomic_store_explicit(&invalidate_message_type, mode == 3u, memory_order_relaxed);
       chttp_test_websocket_fail_calloc_call(0u);
       check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_OK);
       check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
@@ -359,30 +450,60 @@ spec("CHTTP WebSocket close admission failure") {
       options.timeout_ms = CLOSE_TEST_TIMEOUT_MS;
       check_equal(chttp_websocket_client_init(&client, &client_config), SALTS_OK);
       check_equal(chttp_websocket_client_connect(&client, &options, &http_status), SALTS_OK);
+      check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+      check_equal(managed.accepted, (uint64_t)0u);
+      check_equal(managed.completed, (uint64_t)0u);
+      check_equal(managed.rejected, (uint64_t)0u);
+      check_equal(snapshot.frames_admitted, (uint64_t)0u);
+      check_equal(snapshot.frames_completed, (uint64_t)0u);
+      check_equal(snapshot.frames_rejected, (uint64_t)0u);
       check_equal(chttp_websocket_client_send_text(&client, "fault", sizeof("fault") - 1u,
                                                    CLOSE_TEST_TIMEOUT_MS),
                   SALTS_OK);
-      check_equal(chttp_websocket_client_receive(&client, CLOSE_TEST_TIMEOUT_MS, &event),
-                  SALTS_OK);
-      check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_CLOSE);
-      check_equal(chttp_websocket_client_destroy(&client, CLOSE_TEST_TIMEOUT_MS), SALTS_OK);
+      if (mode == 1u) {
+        for (unsigned int elapsed = 0u; elapsed < CLOSE_TEST_TIMEOUT_MS; ++elapsed) {
+          if (atomic_load_explicit(&failure_finalization_entered, memory_order_acquire)) break;
+          salts_sleep_ms(1u);
+        }
+        check_equal(atomic_load_explicit(&failure_finalization_entered, memory_order_acquire), 1);
+        managed =
+            (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+        check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+        check_equal(managed.in_flight, (uint64_t)0u);
+        check_equal(managed.rejected, (uint64_t)1u);
+        check_equal(managed.backpressured, 0);
+        atomic_store_explicit(&failure_finalization_gate, 0, memory_order_release);
+        atomic_store_explicit(&failure_finalization_allowed, 1, memory_order_release);
+      }
       for (unsigned int elapsed = 0u; elapsed < CLOSE_TEST_TIMEOUT_MS; ++elapsed) {
         managed =
             (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
         if (turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed) == SALTS_OK &&
-            managed.in_flight == 0u)
+            managed.in_flight == 0u &&
+            turbo_flow_chttp_websocket_server_snapshot(server, &snapshot) == SALTS_OK &&
+            snapshot.frames_rejected == 1u)
           break;
         salts_sleep_ms(1u);
       }
       check_equal(managed.in_flight, (uint64_t)0u);
       if (mode < 2u) {
-        check_true(managed.rejected >= 1u);
+        check_equal(managed.accepted, (uint64_t)0u);
+        check_equal(managed.completed, (uint64_t)0u);
+        check_equal(managed.rejected, (uint64_t)1u);
+        check_equal(snapshot.frames_admitted, (uint64_t)0u);
       } else {
-        check_true(managed.accepted >= 1u);
-        check_equal(managed.completed, managed.accepted);
-        check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
-        check_true(snapshot.frames_rejected >= 1u);
+        check_equal(managed.accepted, (uint64_t)1u);
+        check_equal(managed.completed, (uint64_t)1u);
+        check_equal(managed.rejected, (uint64_t)0u);
+        check_equal(snapshot.frames_admitted, (uint64_t)1u);
       }
+      check_equal(snapshot.in_flight_frames, (size_t)0u);
+      check_equal(snapshot.frames_completed, (uint64_t)0u);
+      check_equal(snapshot.frames_rejected, (uint64_t)1u);
+      check_equal(chttp_websocket_client_receive(&client, CLOSE_TEST_TIMEOUT_MS, &event),
+                  SALTS_OK);
+      check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_CLOSE);
+      check_equal(chttp_websocket_client_destroy(&client, CLOSE_TEST_TIMEOUT_MS), SALTS_OK);
       check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
       check_equal(turbo_flow_chttp_websocket_server_destroy(server), SALTS_OK);

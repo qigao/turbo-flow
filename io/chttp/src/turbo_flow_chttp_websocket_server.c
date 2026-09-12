@@ -330,7 +330,7 @@ static int websocket_close_drained(turbo_flow_chttp_websocket_server_t *server, 
 
 static void websocket_release_frame(turbo_flow_chttp_websocket_server_t *server,
                                     websocket_frame_slot_t *frame, int completion_status,
-                                    bool publication_terminal,
+                                    bool publication_terminal, bool publication_rejected,
                                     chttp_server_websocket_session *close_session) {
   websocket_session_slot_t *session = NULL;
   if (close_session) *close_session = (chttp_server_websocket_session){0};
@@ -353,6 +353,10 @@ static void websocket_release_frame(turbo_flow_chttp_websocket_server_t *server,
       server->last_status = completion_status;
     }
     if (publication_terminal) websocket_counter_increment(&server->managed_completed);
+  }
+  if (publication_rejected) {
+    websocket_counter_increment(&server->managed_rejected);
+    if (server->pending_publications != 0u) --server->pending_publications;
   }
   salts_mutex_unlock(&server->mutex);
 }
@@ -402,7 +406,7 @@ static void websocket_publication_complete(void *ctx, const turbo_flow_publish_r
   int status = result ? result->status : SALTS_EINVAL;
   if (!server) return;
   const size_t session_index = frame->session_index;
-  websocket_release_frame(server, frame, status, true, &close_session);
+  websocket_release_frame(server, frame, status, true, false, &close_session);
   if (close_session.impl) (void)chttp_server_websocket_close(&close_session, 1011u, NULL, 0u);
   else (void)websocket_close_drained(server, session_index, false);
 }
@@ -443,11 +447,7 @@ static void websocket_event(void *user, chttp_websocket *websocket,
       else server->last_status = SALTS_ERANGE;
       salts_mutex_unlock(&server->mutex);
     } else {
-      salts_mutex_lock(&server->mutex);
-      if (server->pending_publications != 0u) --server->pending_publications;
-      websocket_counter_increment(&server->managed_rejected);
-      salts_mutex_unlock(&server->mutex);
-      websocket_release_frame(server, frame, status, false, NULL);
+      websocket_release_frame(server, frame, status, false, true, NULL);
     }
   }
   if (status != SALTS_OK) {
