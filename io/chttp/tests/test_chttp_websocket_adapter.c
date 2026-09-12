@@ -236,6 +236,11 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     check_null(server);
 
     config.session_capacity = native_config.network.connection_capacity;
+    config.frame_capacity = 0u;
+    check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_EINVAL);
+    check_null(server);
+
+    config.frame_capacity = 8u;
     config.max_buffered_input_bytes = config.max_frame_bytes;
     check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_EINVAL);
     check_null(server);
@@ -247,6 +252,123 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_EINVAL);
     check_null(server);
     turbo_flow_destroy(flow);
+  }
+
+  it("registers one managed bidirectional WebSocket boundary with declared frame schemas") {
+    chttp_server_config native_config = websocket_adapter_test_server_config();
+    turbo_flow_chttp_websocket_server_config_t config =
+        TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_CONFIG_INIT;
+    turbo_flow_chttp_websocket_server_t *server = NULL;
+    turbo_flow_managed_boundary_descriptor_t descriptor =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+
+    check_not_null(flow);
+    config.flow = flow;
+    config.adapter_name = "ws.server";
+    config.source_name = "ws_in";
+    config.server = &native_config;
+    config.path = "/flow";
+    config.session_capacity = 4u;
+    config.frame_capacity = 8u;
+    config.max_frame_bytes = 4096u;
+    config.max_message_bytes = 4096u;
+    config.max_buffered_input_bytes = 8192u;
+    check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_count(flow), (size_t)1u);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(flow, 0u, &descriptor), SALTS_OK);
+    check_equal(descriptor.domain, TURBO_FLOW_DOMAIN_IO_TRANSPORT);
+    check_equal(descriptor.kind, TURBO_FLOW_RESOURCE_CONNECTION);
+    check_equal(descriptor.uid, "chttp-websocket:ws.server");
+    check_equal(descriptor.owner_name, "ws.server");
+    check_equal(descriptor.role_flags,
+                (uint32_t)(TURBO_FLOW_MANAGED_BOUNDARY_SOURCE |
+                           TURBO_FLOW_MANAGED_BOUNDARY_SINK));
+    check_equal(descriptor.capability_flags, (uint32_t)0u);
+    check_equal(descriptor.command_flags,
+                (uint32_t)(TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_QUIESCE |
+                           TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_RESUME));
+    check_equal(descriptor.input.domain, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN);
+    check_equal(descriptor.input.profile, TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA);
+    check_equal(descriptor.input.encoding, TURBO_FLOW_DATA_ENCODING_OPAQUE);
+    check_equal(descriptor.input.media_type, "application/octet-stream");
+    check_equal(descriptor.input.schema_name, "CHTTPWebSocketCommand");
+    check_equal(descriptor.input.type_name, "Frame");
+    check_equal(descriptor.input.schema_version, (uint32_t)1u);
+    check_equal(descriptor.input.identity, "ws.server");
+    check_equal(descriptor.output.domain, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN);
+    check_equal(descriptor.output.profile, TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA);
+    check_equal(descriptor.output.encoding, TURBO_FLOW_DATA_ENCODING_OPAQUE);
+    check_equal(descriptor.output.media_type, "application/octet-stream");
+    check_equal(descriptor.output.schema_name, "CHTTPWebSocketEvent");
+    check_equal(descriptor.output.type_name, "Frame");
+    check_equal(descriptor.output.schema_version, (uint32_t)1u);
+    check_equal(descriptor.output.identity, "ws.server");
+
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_chttp_websocket_server_destroy(server), SALTS_OK);
+  }
+
+  it("derives deterministic distinct bounded WebSocket identities for long adapter names") {
+    chttp_server_config native_config = websocket_adapter_test_server_config();
+    turbo_flow_chttp_websocket_server_config_t config =
+        TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_CONFIG_INIT;
+    turbo_flow_chttp_websocket_server_t *first_server = NULL;
+    turbo_flow_chttp_websocket_server_t *same_server = NULL;
+    turbo_flow_chttp_websocket_server_t *different_server = NULL;
+    turbo_flow_managed_boundary_descriptor_t first =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_managed_boundary_descriptor_t same =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_managed_boundary_descriptor_t different =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_t *first_flow = turbo_flow_create();
+    turbo_flow_t *same_flow = turbo_flow_create();
+    turbo_flow_t *different_flow = turbo_flow_create();
+    char long_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 258u];
+    char different_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 258u];
+
+    memset(long_name, 'w', sizeof(long_name) - 1u);
+    long_name[sizeof(long_name) - 1u] = '\0';
+    memset(different_name, 'x', sizeof(different_name) - 1u);
+    different_name[sizeof(different_name) - 1u] = '\0';
+    check_not_null(first_flow);
+    check_not_null(same_flow);
+    check_not_null(different_flow);
+    config.source_name = "ws_in";
+    config.server = &native_config;
+    config.path = "/flow";
+    config.session_capacity = 4u;
+    config.frame_capacity = 8u;
+    config.max_frame_bytes = 4096u;
+    config.max_message_bytes = 4096u;
+    config.max_buffered_input_bytes = 8192u;
+    config.flow = first_flow;
+    config.adapter_name = long_name;
+    check_equal(turbo_flow_chttp_websocket_server_register(&config, &first_server), SALTS_OK);
+    config.flow = same_flow;
+    check_equal(turbo_flow_chttp_websocket_server_register(&config, &same_server), SALTS_OK);
+    config.flow = different_flow;
+    config.adapter_name = different_name;
+    check_equal(turbo_flow_chttp_websocket_server_register(&config, &different_server), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(first_flow, 0u, &first), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(same_flow, 0u, &same), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(different_flow, 0u, &different),
+                SALTS_OK);
+    check_equal(strncmp(first.owner_name, "xxh3-128:", sizeof("xxh3-128:") - 1u), 0);
+    check_equal(strncmp(first.uid, "chttp-websocket:", sizeof("chttp-websocket:") - 1u), 0);
+    check_equal(first.owner_name, same.owner_name);
+    check_equal(first.uid, same.uid);
+    check_not_equal(first.owner_name, different.owner_name);
+    check_not_equal(first.uid, different.uid);
+    check_true(strlen(first.owner_name) <= TURBO_FLOW_RESOURCE_OWNER_MAX);
+    check_true(strlen(first.uid) <= TURBO_FLOW_RESOURCE_UID_MAX);
+    turbo_flow_destroy(first_flow);
+    turbo_flow_destroy(same_flow);
+    turbo_flow_destroy(different_flow);
+    check_equal(turbo_flow_chttp_websocket_server_destroy(first_server), SALTS_OK);
+    check_equal(turbo_flow_chttp_websocket_server_destroy(same_server), SALTS_OK);
+    check_equal(turbo_flow_chttp_websocket_server_destroy(different_server), SALTS_OK);
   }
 
   it("round-trips one HTTP/1.1 text frame through a Flow source and sink") {
@@ -708,6 +830,12 @@ spec("TurboFlow CHTTP WebSocket adapter") {
           TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_CONFIG_INIT;
       turbo_flow_chttp_websocket_server_snapshot_t snapshot =
           TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_SNAPSHOT_INIT;
+      turbo_flow_managed_boundary_descriptor_t descriptor =
+          TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+      turbo_flow_managed_boundary_snapshot_t managed =
+          TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+      turbo_flow_resource_command_t command = TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      turbo_flow_resource_command_result_t result = TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
       static websocket_adapter_gate_t gate;
       turbo_flow_chttp_websocket_server_t *server = NULL;
       chttp_websocket_connect_options options = {.size = sizeof(options)};
@@ -761,8 +889,37 @@ spec("TurboFlow CHTTP WebSocket adapter") {
         salts_sleep_ms(1u);
       }
       check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
-      check_equal(turbo_flow_chttp_websocket_server_quiesce(server), SALTS_OK);
-      check_equal(turbo_flow_chttp_websocket_server_resume(server), SALTS_OK);
+      check_equal(turbo_flow_managed_boundary_descriptor_at(flow, 0u, &descriptor), SALTS_OK);
+      check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_RUNNING);
+      check_equal(managed.queue_depth, (uint64_t)0u);
+      check_equal(managed.queue_capacity, (uint64_t)4u);
+      check_equal(managed.in_flight, (uint64_t)1u);
+      check_equal(managed.accepted, (uint64_t)1u);
+      check_equal(managed.completed, (uint64_t)0u);
+      check_equal(managed.rejected, (uint64_t)0u);
+      check_equal(managed.backpressured, 0);
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
+      command.expected_generation = managed.generation;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "websocket-drain-quiesce",
+             sizeof("websocket-drain-quiesce"));
+      check_equal(turbo_flow_resource_command(flow, &command, &result), SALTS_OK);
+      check_equal(result.generation_after, managed.generation + 1u);
+      managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+      check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_DRAINING);
+      command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
+      command.expected_generation = managed.generation;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "websocket-drain-resume",
+             sizeof("websocket-drain-resume"));
+      check_equal(turbo_flow_resource_command(flow, &command, &result), SALTS_OK);
+      managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+      check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_RUNNING);
       check_equal(chttp_websocket_client_send_text(&client, "late", sizeof("late") - 1u,
                                                    WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS),
                   SALTS_OK);
@@ -790,6 +947,18 @@ spec("TurboFlow CHTTP WebSocket adapter") {
       check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
       check_equal(snapshot.in_flight_frames, (size_t)0u);
       check_equal(snapshot.frames_completed, (uint64_t)1u);
+      for (size_t wait = 0u; wait < WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS; ++wait) {
+        managed =
+            (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+        check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+        if (managed.state == TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT) break;
+        salts_sleep_ms(1u);
+      }
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT);
+      check_equal(managed.in_flight, (uint64_t)0u);
+      check_equal(managed.accepted, (uint64_t)1u);
+      check_equal(managed.completed, (uint64_t)1u);
+      check_equal(managed.rejected, (uint64_t)2u);
 
       check_equal(chttp_websocket_client_destroy(&client, WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS),
                   SALTS_OK);
@@ -838,7 +1007,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     config.server = &native_config;
     config.path = "/flow/:id";
     config.session_capacity = 2u;
-    config.frame_capacity = 8u;
+    config.frame_capacity = 2u;
     config.max_frame_bytes = 4096u;
     config.max_message_bytes = 4096u;
     config.max_buffered_input_bytes = 8192u;
@@ -919,6 +1088,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
         TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_CONFIG_INIT;
     turbo_flow_chttp_websocket_server_snapshot_t snapshot =
         TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_SNAPSHOT_INIT;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
     websocket_adapter_gate_t gate;
     turbo_flow_chttp_websocket_server_t *server = NULL;
     chttp_websocket_connect_options options = {.size = sizeof(options)};
@@ -965,6 +1135,13 @@ spec("TurboFlow CHTTP WebSocket adapter") {
       salts_sleep_ms(1u);
     }
     check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.queue_capacity, (uint64_t)1u);
+    check_equal(managed.queue_depth, (uint64_t)0u);
+    check_equal(managed.in_flight, (uint64_t)1u);
+    check_equal(managed.accepted, (uint64_t)1u);
+    check_equal(managed.completed, (uint64_t)0u);
+    check_equal(managed.backpressured, 1);
     check_equal(chttp_websocket_client_send_text(&client, "second", sizeof("second") - 1u,
                                                  WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS),
                 SALTS_OK);
@@ -1008,6 +1185,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
         TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_CONFIG_INIT;
     turbo_flow_chttp_websocket_server_snapshot_t snapshot =
         TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_SNAPSHOT_INIT;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
     websocket_adapter_gate_t gate;
     turbo_flow_chttp_websocket_server_t *server = NULL;
     chttp_websocket_connect_options options = {.size = sizeof(options)};
@@ -1029,7 +1207,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     config.server = &native_config;
     config.path = "/flow";
     config.session_capacity = 4u;
-    config.frame_capacity = 8u;
+    config.frame_capacity = 2u;
     config.max_frame_bytes = 4096u;
     config.max_message_bytes = 4096u;
     config.max_buffered_input_bytes = 8192u;
@@ -1068,6 +1246,13 @@ spec("TurboFlow CHTTP WebSocket adapter") {
       salts_sleep_ms(1u);
     }
     check_equal(snapshot.frames_admitted, (uint64_t)2u);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.queue_capacity, (uint64_t)2u);
+    check_equal(managed.queue_depth, (uint64_t)0u);
+    check_equal(managed.in_flight, (uint64_t)2u);
+    check_equal(managed.accepted, (uint64_t)2u);
+    check_equal(managed.completed, (uint64_t)0u);
+    check_equal(managed.backpressured, 1);
     check_equal(chttp_websocket_client_send_text(&client, "three", sizeof("three") - 1u,
                                                  WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS),
                 SALTS_OK);
@@ -1090,7 +1275,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
                 SALTS_OK);
     check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
     check_true(snapshot.frames_rejected >= 1u);
-    check_equal(snapshot.frame_capacity, (size_t)8u);
+    check_equal(snapshot.frame_capacity, (size_t)2u);
 
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);

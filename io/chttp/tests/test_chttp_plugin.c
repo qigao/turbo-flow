@@ -787,6 +787,22 @@ spec("chttp_plugin") {
         check_equal(chttp_tls_profile_init(&profile, &trust), SALTS_OK);
       }
       traffic_open(&f, h2 ? h2_yaml : yaml, graph, NULL, NULL);
+      turbo_flow_t *generation_flow = turbo_flow_plugin_generation_flow(f.generation);
+      turbo_flow_managed_boundary_descriptor_t descriptor =
+          TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+      turbo_flow_managed_boundary_snapshot_t managed =
+          TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+      turbo_flow_resource_command_t command = TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      turbo_flow_resource_command_result_t result = TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+      check_equal(turbo_flow_managed_boundary_count(generation_flow), (size_t)1u);
+      check_equal(turbo_flow_managed_boundary_descriptor_at(generation_flow, 0u, &descriptor),
+                  SALTS_OK);
+      check_equal(descriptor.role_flags,
+                  (uint32_t)(TURBO_FLOW_MANAGED_BOUNDARY_SOURCE |
+                             TURBO_FLOW_MANAGED_BOUNDARY_SINK));
+      check_equal(turbo_flow_managed_boundary_snapshot_at(generation_flow, 0u, &managed),
+                  SALTS_OK);
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_RUNNING);
       chttp_websocket_client client = {0};
       chttp_websocket_client_config nc = {.size = sizeof(nc)};
       nc.network = traffic_network();
@@ -819,7 +835,41 @@ spec("chttp_plugin") {
       check_equal(chttp_websocket_client_receive(&client, 1000u, &event), SALTS_OK);
       check_equal(event.size, 4u);
       check_equal(memcmp(event.data, "ping", 4u), 0);
-      check_equal(chttp_websocket_client_close(&client, 1000u, NULL, 0u, 1000u), SALTS_OK);
+      check_equal(turbo_flow_managed_boundary_snapshot_at(generation_flow, 0u, &managed),
+                  SALTS_OK);
+      check_equal(managed.accepted, (uint64_t)1u);
+      check_equal(managed.completed, (uint64_t)1u);
+      check_equal(managed.in_flight, (uint64_t)0u);
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
+      command.expected_generation = managed.generation;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "plugin-websocket-quiesce",
+             sizeof("plugin-websocket-quiesce"));
+      check_equal(turbo_flow_resource_command(generation_flow, &command, &result), SALTS_OK);
+      check_equal(chttp_websocket_client_receive(&client, 1000u, &event), SALTS_OK);
+      check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_CLOSE);
+      check_equal(event.close_code, (uint16_t)1013u);
+      for (size_t wait = 0u; wait < 1000u; ++wait) {
+        managed =
+            (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+        check_equal(turbo_flow_managed_boundary_snapshot_at(generation_flow, 0u, &managed),
+                    SALTS_OK);
+        if (managed.state == TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT) break;
+        salts_sleep_ms(1u);
+      }
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT);
+      command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
+      command.expected_generation = managed.generation;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "plugin-websocket-resume",
+             sizeof("plugin-websocket-resume"));
+      check_equal(turbo_flow_resource_command(generation_flow, &command, &result), SALTS_OK);
+      managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+      check_equal(turbo_flow_managed_boundary_snapshot_at(generation_flow, 0u, &managed),
+                  SALTS_OK);
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_RUNNING);
       check_equal(chttp_websocket_client_destroy(&client, 1000u), SALTS_OK);
       traffic_close(&f);
       if (tls) {

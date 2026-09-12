@@ -2,13 +2,26 @@
 
 #include <salts/thread.h>
 
+#define XXH_INLINE_ALL
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <xxhash.h>
 
 #define CHTTP_WEBSOCKET_EVENT_MAGIC UINT64_C(0x5446434857535631)
-enum { WEBSOCKET_QUIESCE_CLOSE_CODE = 1013u };
+enum {
+  WEBSOCKET_QUIESCE_CLOSE_CODE = 1013u,
+  WEBSOCKET_RESOURCE_GENERATION_INITIAL = 1u
+};
+
+static const char WEBSOCKET_RESOURCE_UID_PREFIX[] = "chttp-websocket:";
+static const char WEBSOCKET_MEDIA_TYPE[] = "application/octet-stream";
+static const char WEBSOCKET_COMMAND_SCHEMA[] = "CHTTPWebSocketCommand";
+static const char WEBSOCKET_EVENT_SCHEMA[] = "CHTTPWebSocketEvent";
+static const char WEBSOCKET_FRAME_TYPE[] = "Frame";
 
 typedef struct websocket_session_slot_s {
   chttp_server_websocket_session session;
@@ -48,6 +61,8 @@ struct turbo_flow_chttp_websocket_server_s {
   tstr subprotocol;
   tstr host;
   tstr session_cookie_name;
+  char managed_owner[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
+  char managed_uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u];
   chttp_server_config config;
   chttp_server_socket_options socket_options;
   bool has_socket_options;
@@ -76,11 +91,36 @@ struct turbo_flow_chttp_websocket_server_s {
   uint64_t bytes_admitted;
   uint64_t commands_admitted;
   uint64_t bytes_sent;
+  uint64_t managed_generation;
+  uint64_t managed_accepted;
+  uint64_t managed_completed;
+  uint64_t managed_rejected;
+  size_t pending_publications;
   int last_status;
 };
 
 static void websocket_counter_increment(uint64_t *counter) {
   if (counter && *counter != UINT64_MAX) ++*counter;
+}
+
+static int websocket_managed_identity_init(turbo_flow_chttp_websocket_server_t *server,
+                                           const char *adapter_name) {
+  size_t length;
+  int written;
+  if (!server || !adapter_name) return SALTS_EINVAL;
+  length = strlen(adapter_name);
+  if (length <= TURBO_FLOW_RESOURCE_OWNER_MAX) {
+    memcpy(server->managed_owner, adapter_name, length + 1u);
+  } else {
+    const XXH128_hash_t hash = XXH3_128bits(adapter_name, length);
+    written = snprintf(server->managed_owner, sizeof(server->managed_owner),
+                       "xxh3-128:%016" PRIx64 "%016" PRIx64, hash.high64, hash.low64);
+    if (written < 0 || (size_t)written >= sizeof(server->managed_owner)) return SALTS_ERANGE;
+  }
+  written = snprintf(server->managed_uid, sizeof(server->managed_uid), "%s%s",
+                     WEBSOCKET_RESOURCE_UID_PREFIX, server->managed_owner);
+  if (written < 0 || (size_t)written >= sizeof(server->managed_uid)) return SALTS_ERANGE;
+  return SALTS_OK;
 }
 
 static bool websocket_session_equal(chttp_server_websocket_session left,
@@ -231,6 +271,7 @@ static int websocket_reserve_frame(turbo_flow_chttp_websocket_server_t *server,
       frame = candidate;
       ++session_slot->in_flight_frames;
       ++server->in_flight_frames;
+      ++server->pending_publications;
       *out_message_id = server->next_message_id;
       server->next_message_id =
           server->next_message_id == UINT64_MAX ? 0u : server->next_message_id + 1u;
@@ -240,6 +281,7 @@ static int websocket_reserve_frame(turbo_flow_chttp_websocket_server_t *server,
   }
   if (status != SALTS_OK) {
     websocket_counter_increment(&server->frames_rejected);
+    websocket_counter_increment(&server->managed_rejected);
     server->last_status = status;
   }
   if (event_type == TURBO_FLOW_CHTTP_WEBSOCKET_FRAME_CLOSE && session_slot) {
@@ -288,6 +330,7 @@ static int websocket_close_drained(turbo_flow_chttp_websocket_server_t *server, 
 
 static void websocket_release_frame(turbo_flow_chttp_websocket_server_t *server,
                                     websocket_frame_slot_t *frame, int completion_status,
+                                    bool publication_terminal,
                                     chttp_server_websocket_session *close_session) {
   websocket_session_slot_t *session = NULL;
   if (close_session) *close_session = (chttp_server_websocket_session){0};
@@ -309,6 +352,7 @@ static void websocket_release_frame(turbo_flow_chttp_websocket_server_t *server,
       websocket_counter_increment(&server->frames_rejected);
       server->last_status = completion_status;
     }
+    if (publication_terminal) websocket_counter_increment(&server->managed_completed);
   }
   salts_mutex_unlock(&server->mutex);
 }
@@ -358,7 +402,7 @@ static void websocket_publication_complete(void *ctx, const turbo_flow_publish_r
   int status = result ? result->status : SALTS_EINVAL;
   if (!server) return;
   const size_t session_index = frame->session_index;
-  websocket_release_frame(server, frame, status, &close_session);
+  websocket_release_frame(server, frame, status, true, &close_session);
   if (close_session.impl) (void)chttp_server_websocket_close(&close_session, 1011u, NULL, 0u);
   else (void)websocket_close_drained(server, session_index, false);
 }
@@ -372,13 +416,16 @@ static void websocket_event(void *user, chttp_websocket *websocket,
   turbo_flow_chttp_websocket_frame_type_t event_type;
   turbo_flow_msg_t message;
   uint64_t message_id = 0u;
+  bool reservation_attempted = false;
   int status;
   if (!server || !websocket || !event) return;
   event_type = websocket_event_type(event);
   status = event_type ? chttp_server_websocket_session_capture(websocket, &captured) : SALTS_EPROTO;
   if (status == SALTS_OK && event->size > server->max_message_bytes) status = SALTS_EMSGSIZE;
-  if (status == SALTS_OK)
+  if (status == SALTS_OK) {
+    reservation_attempted = true;
     status = websocket_reserve_frame(server, captured, event_type, &frame, &session, &message_id);
+  }
   if (status == SALTS_OK) {
     turbo_flow_msg_init(&message);
     status = websocket_make_message(server, frame, session, event, message_id, &message);
@@ -388,18 +435,25 @@ static void websocket_event(void *user, chttp_websocket *websocket,
     turbo_flow_msg_cleanup(&message);
     if (status == SALTS_OK) {
       salts_mutex_lock(&server->mutex);
+      websocket_counter_increment(&server->managed_accepted);
+      if (server->pending_publications != 0u) --server->pending_publications;
       websocket_counter_increment(&server->frames_admitted);
       if (server->bytes_admitted <= UINT64_MAX - (uint64_t)event->size)
         server->bytes_admitted += (uint64_t)event->size;
       else server->last_status = SALTS_ERANGE;
       salts_mutex_unlock(&server->mutex);
     } else {
-      websocket_release_frame(server, frame, status, NULL);
+      salts_mutex_lock(&server->mutex);
+      if (server->pending_publications != 0u) --server->pending_publications;
+      websocket_counter_increment(&server->managed_rejected);
+      salts_mutex_unlock(&server->mutex);
+      websocket_release_frame(server, frame, status, false, NULL);
     }
   }
   if (status != SALTS_OK) {
     bool draining = false;
     salts_mutex_lock(&server->mutex);
+    if (!reservation_attempted) websocket_counter_increment(&server->managed_rejected);
     server->last_status = status;
     session = websocket_find_session_locked(server, captured, NULL);
     draining = status == SALTS_ESHUTDOWN && session && session->close_on_drain;
@@ -495,6 +549,200 @@ static int websocket_terminal_submit(void *ctx, turbo_flow_t *flow,
   return turbo_flow_async_terminal_complete(&owned_claim, status, NULL);
 }
 
+static turbo_flow_managed_boundary_state_t
+websocket_managed_state(turbo_flow_chttp_websocket_server_state_t state,
+                        size_t active_sessions, size_t in_flight_frames) {
+  switch (state) {
+  case TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_REGISTERED:
+    return TURBO_FLOW_MANAGED_BOUNDARY_REGISTERED;
+  case TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STARTING:
+    return TURBO_FLOW_MANAGED_BOUNDARY_STARTING;
+  case TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING:
+    return TURBO_FLOW_MANAGED_BOUNDARY_RUNNING;
+  case TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED:
+    return active_sessions != 0u || in_flight_frames != 0u
+               ? TURBO_FLOW_MANAGED_BOUNDARY_DRAINING
+               : TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT;
+  case TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPING:
+    return TURBO_FLOW_MANAGED_BOUNDARY_STOPPING;
+  case TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED:
+  case TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_DETACHED:
+    return TURBO_FLOW_MANAGED_BOUNDARY_STOPPED;
+  case TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_FAILED:
+  default:
+    return TURBO_FLOW_MANAGED_BOUNDARY_FAILED;
+  }
+}
+
+static int websocket_resource_metadata(void *ctx, turbo_flow_resource_metadata_t *out) {
+  turbo_flow_chttp_websocket_server_t *server = (turbo_flow_chttp_websocket_server_t *)ctx;
+  turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
+  if (!server || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  salts_mutex_lock(&server->mutex);
+  metadata.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+  metadata.kind = TURBO_FLOW_RESOURCE_CONNECTION;
+  memcpy(metadata.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
+  memcpy(metadata.owner_name, server->managed_owner, strlen(server->managed_owner) + 1u);
+  metadata.generation = server->managed_generation;
+  metadata.observed_generation = server->managed_generation;
+  salts_mutex_unlock(&server->mutex);
+  *out = metadata;
+  return SALTS_OK;
+}
+
+static int websocket_managed_descriptor(void *ctx,
+                                        turbo_flow_managed_boundary_descriptor_t *out) {
+  turbo_flow_chttp_websocket_server_t *server = (turbo_flow_chttp_websocket_server_t *)ctx;
+  turbo_flow_managed_boundary_descriptor_t descriptor =
+      TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+  int status;
+  if (!server || !out || out->size < sizeof(*out) ||
+      out->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION) {
+    return SALTS_EINVAL;
+  }
+  salts_mutex_lock(&server->mutex);
+  descriptor.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+  descriptor.kind = TURBO_FLOW_RESOURCE_CONNECTION;
+  memcpy(descriptor.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
+  memcpy(descriptor.owner_name, server->managed_owner, strlen(server->managed_owner) + 1u);
+  salts_mutex_unlock(&server->mutex);
+  descriptor.role_flags =
+      TURBO_FLOW_MANAGED_BOUNDARY_SOURCE | TURBO_FLOW_MANAGED_BOUNDARY_SINK;
+  descriptor.capability_flags = 0u;
+  descriptor.command_flags = TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_QUIESCE |
+                             TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_RESUME;
+  status = turbo_flow_content_descriptor_init(
+      &descriptor.input, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
+      TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+      WEBSOCKET_MEDIA_TYPE, descriptor.owner_name);
+  if (status != SALTS_OK) return status;
+  status = turbo_flow_content_descriptor_declare_schema(
+      &descriptor.input, WEBSOCKET_COMMAND_SCHEMA, WEBSOCKET_FRAME_TYPE, 1u);
+  if (status != SALTS_OK) return status;
+  status = turbo_flow_content_descriptor_init(
+      &descriptor.output, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
+      TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+      WEBSOCKET_MEDIA_TYPE, descriptor.owner_name);
+  if (status != SALTS_OK) return status;
+  status = turbo_flow_content_descriptor_declare_schema(
+      &descriptor.output, WEBSOCKET_EVENT_SCHEMA, WEBSOCKET_FRAME_TYPE, 1u);
+  if (status != SALTS_OK) return status;
+  *out = descriptor;
+  return SALTS_OK;
+}
+
+static int websocket_managed_snapshot(void *ctx,
+                                      turbo_flow_managed_boundary_snapshot_t *out) {
+  turbo_flow_chttp_websocket_server_t *server = (turbo_flow_chttp_websocket_server_t *)ctx;
+  turbo_flow_managed_boundary_snapshot_t snapshot = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+  size_t occupied_frames = 0u;
+  size_t session_frames = 0u;
+  size_t active_sessions = 0u;
+  size_t index;
+  if (!server || !out || out->size < sizeof(*out) ||
+      out->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION) {
+    return SALTS_EINVAL;
+  }
+  salts_mutex_lock(&server->mutex);
+  if (server->pending_publications != 0u) {
+    const int status = server->pending_publications > server->frame_capacity ? SALTS_EPROTO
+                                                                             : SALTS_EBUSY;
+    salts_mutex_unlock(&server->mutex);
+    return status;
+  }
+  for (index = 0u; index < server->frame_capacity; ++index)
+    if (server->frames[index].occupied) ++occupied_frames;
+  for (index = 0u; index < server->session_capacity; ++index) {
+    const websocket_session_slot_t *slot = &server->sessions[index];
+    if (slot->active) {
+      ++active_sessions;
+      if (slot->in_flight_frames > SIZE_MAX - session_frames) {
+        salts_mutex_unlock(&server->mutex);
+        return SALTS_EPROTO;
+      }
+      session_frames += slot->in_flight_frames;
+    } else if (slot->in_flight_frames != 0u) {
+      salts_mutex_unlock(&server->mutex);
+      return SALTS_EPROTO;
+    }
+  }
+  if (occupied_frames != server->in_flight_frames || session_frames != occupied_frames ||
+      active_sessions != server->active_sessions ||
+      server->managed_completed > server->managed_accepted) {
+    salts_mutex_unlock(&server->mutex);
+    return SALTS_EPROTO;
+  }
+  memcpy(snapshot.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
+  snapshot.generation = server->managed_generation;
+  snapshot.observed_generation = server->managed_generation;
+  snapshot.state = websocket_managed_state(server->state, active_sessions, occupied_frames);
+  snapshot.queue_depth = 0u;
+  snapshot.queue_capacity = (uint64_t)server->frame_capacity;
+  snapshot.in_flight = (uint64_t)occupied_frames;
+  snapshot.accepted = server->managed_accepted;
+  snapshot.completed = server->managed_completed;
+  snapshot.rejected = server->managed_rejected;
+  snapshot.backpressured = occupied_frames == server->frame_capacity;
+  snapshot.last_status = server->last_status;
+  salts_mutex_unlock(&server->mutex);
+  *out = snapshot;
+  return SALTS_OK;
+}
+
+static int websocket_set_admission(turbo_flow_chttp_websocket_server_t *server,
+                                   turbo_flow_chttp_websocket_server_state_t desired,
+                                   bool check_generation, uint64_t expected_generation) {
+  int status = SALTS_OK;
+  size_t index;
+  if (!server) return SALTS_EINVAL;
+  salts_mutex_lock(&server->mutex);
+  if (check_generation && expected_generation != server->managed_generation) {
+    status = SALTS_EBUSY;
+  } else if (server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING &&
+             server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED) {
+    status = SALTS_ESHUTDOWN;
+  } else if (server->state != desired && server->managed_generation == UINT64_MAX) {
+    status = SALTS_ERANGE;
+  } else {
+    if (server->state != desired) {
+      server->state = desired;
+      ++server->managed_generation;
+    }
+    if (desired == TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED) {
+      for (index = 0u; index < server->session_capacity; ++index) {
+        if (server->sessions[index].active) {
+          server->sessions[index].closing = true;
+          server->sessions[index].close_on_drain = true;
+        }
+      }
+    }
+  }
+  salts_mutex_unlock(&server->mutex);
+  if (status != SALTS_OK || desired != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED) return status;
+  for (index = 0u; index < server->session_capacity; ++index) {
+    status = websocket_close_drained(server, index, true);
+    if (status != SALTS_OK) return status;
+  }
+  return SALTS_OK;
+}
+
+static int websocket_resource_command(void *ctx, turbo_flow_t *flow,
+                                      const turbo_flow_resource_command_t *command) {
+  turbo_flow_chttp_websocket_server_t *server = (turbo_flow_chttp_websocket_server_t *)ctx;
+  turbo_flow_chttp_websocket_server_state_t desired;
+  if (!server || !flow || flow != server->flow || !command ||
+      command->size < sizeof(*command)) {
+    return SALTS_EINVAL;
+  }
+  if (command->kind == TURBO_FLOW_RESOURCE_COMMAND_QUIESCE)
+    desired = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED;
+  else if (command->kind == TURBO_FLOW_RESOURCE_COMMAND_RESUME)
+    desired = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING;
+  else
+    return SALTS_ENOTSUP;
+  return websocket_set_admission(server, desired, true, command->expected_generation);
+}
+
 static int websocket_start_native(turbo_flow_chttp_websocket_server_t *server, uint16_t *out_port) {
   chttp_server_websocket_options options = {.size = sizeof(options),
                                             .path = server->route_path,
@@ -560,39 +808,11 @@ static int websocket_adapter_start(void *ctx, turbo_flow_t *flow,
 }
 
 int turbo_flow_chttp_websocket_server_quiesce(turbo_flow_chttp_websocket_server_t *server) {
-  if (!server) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
-  if (server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING &&
-      server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED) {
-    salts_mutex_unlock(&server->mutex);
-    return SALTS_ESHUTDOWN;
-  }
-  server->state = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED;
-  for (size_t index = 0u; index < server->session_capacity; ++index) {
-    if (server->sessions[index].active) {
-      server->sessions[index].closing = true;
-      server->sessions[index].close_on_drain = true;
-    }
-  }
-  salts_mutex_unlock(&server->mutex);
-  for (size_t index = 0u; index < server->session_capacity; ++index) {
-    int status = websocket_close_drained(server, index, true);
-    if (status != SALTS_OK) return status;
-  }
-  return SALTS_OK;
+  return websocket_set_admission(server, TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED, false, 0u);
 }
 
 int turbo_flow_chttp_websocket_server_resume(turbo_flow_chttp_websocket_server_t *server) {
-  if (!server) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
-  if (server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING &&
-      server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED) {
-    salts_mutex_unlock(&server->mutex);
-    return SALTS_ESHUTDOWN;
-  }
-  server->state = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING;
-  salts_mutex_unlock(&server->mutex);
-  return SALTS_OK;
+  return websocket_set_admission(server, TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING, false, 0u);
 }
 
 static int websocket_stop_native(turbo_flow_chttp_websocket_server_t *server, uint32_t timeout_ms) {
@@ -734,6 +954,10 @@ int turbo_flow_chttp_websocket_server_register(
   turbo_flow_chttp_websocket_server_t *server;
   turbo_flow_adapter_ops_t adapter_ops = {0};
   turbo_flow_async_terminal_adapter_ops_t async_ops = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
+  turbo_flow_managed_boundary_provider_ops_t boundary_ops =
+      TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
+  turbo_flow_managed_async_terminal_registration_t registration =
+      TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_INIT;
   turbo_flow_adapter_schema_t schema = {0};
   size_t index;
   int status;
@@ -752,6 +976,7 @@ int turbo_flow_chttp_websocket_server_register(
   server->next_message_id = config->first_message_id;
   server->stop_timeout_ms = config->stop_timeout_ms;
   server->state = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_REGISTERED;
+  server->managed_generation = WEBSOCKET_RESOURCE_GENERATION_INITIAL;
   server->last_status = SALTS_OK;
   server->adapter_name = tstr_dup(config->adapter_name);
   server->source_name = tstr_dup(config->source_name);
@@ -773,6 +998,13 @@ int turbo_flow_chttp_websocket_server_register(
     free(server);
     return SALTS_ENOMEM;
   }
+  status = websocket_managed_identity_init(server, server->adapter_name);
+  if (status != SALTS_OK) {
+    websocket_cleanup(server);
+    salts_mutex_destroy(&server->mutex);
+    free(server);
+    return status;
+  }
   server->config.host = server->host;
   server->config.session_cookie_name = server->session_cookie_name;
   if (config->socket_options) {
@@ -790,8 +1022,18 @@ int turbo_flow_chttp_websocket_server_register(
   schema.kind = TURBO_FLOW_ADAPTER_KIND_HTTP;
   schema.roles = TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK;
   schema.direction = TURBO_FLOW_ADAPTER_BIDIRECTIONAL;
-  status = turbo_flow_register_async_terminal_adapter_ex(config->flow, config->adapter_name,
-                                                         &adapter_ops, &async_ops, server, &schema);
+  boundary_ops.resource.metadata = websocket_resource_metadata;
+  boundary_ops.resource.command = websocket_resource_command;
+  boundary_ops.descriptor = websocket_managed_descriptor;
+  boundary_ops.snapshot = websocket_managed_snapshot;
+  registration.adapter_name = server->adapter_name;
+  registration.adapter_ops = &adapter_ops;
+  registration.async_ops = &async_ops;
+  registration.schema = &schema;
+  registration.owner_name = server->managed_owner;
+  registration.boundary_ops = &boundary_ops;
+  registration.ctx = server;
+  status = turbo_flow_register_managed_async_terminal_adapter(config->flow, &registration);
   if (status != SALTS_OK) {
     websocket_cleanup(server);
     salts_mutex_destroy(&server->mutex);

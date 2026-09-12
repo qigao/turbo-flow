@@ -459,7 +459,10 @@ TURBO_FLOW_C_API int turbo_flow_chttp_websocket_server_snapshot(
  * New handshakes receive HTTP 503; existing sessions close with code 1013 after
  * their reserved frames complete. No new frames are retained while quiesced.
  * Returns SALTS_OK, SALTS_EINVAL for NULL, SALTS_ESHUTDOWN outside a live state,
- * or a native close admission error. Repeat quiesce explicitly retries pending closes.
+ * SALTS_ERANGE when a real state change would overflow generation (leaving state
+ * unchanged), or a native close admission error after QUIESCED and its generation
+ * are committed. Native repeat quiesce, or a managed command with a new key and
+ * current generation, explicitly retries pending closes; there is no implicit retry.
  * Caller serializes control with Flow start/stop/destroy; callbacks and snapshots may run.
  */
 TURBO_FLOW_C_API int
@@ -467,8 +470,10 @@ turbo_flow_chttp_websocket_server_quiesce(turbo_flow_chttp_websocket_server_t *s
 
 /**
  * Resume new-session admission; sessions already closing are never reopened.
- * Returns SALTS_OK (also when running), SALTS_EINVAL for NULL, or SALTS_ESHUTDOWN
- * outside RUNNING/QUIESCED. Uses the same serialization contract as quiesce.
+ * Returns SALTS_OK (also when running), SALTS_EINVAL for NULL, SALTS_ERANGE when
+ * a real state change would overflow generation (leaving state unchanged), or
+ * SALTS_ESHUTDOWN outside RUNNING/QUIESCED. Uses the same serialization contract
+ * as quiesce and does not clear prior close-on-drain state.
  */
 TURBO_FLOW_C_API int
 turbo_flow_chttp_websocket_server_resume(turbo_flow_chttp_websocket_server_t *server);

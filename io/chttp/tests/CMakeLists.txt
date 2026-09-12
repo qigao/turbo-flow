@@ -84,8 +84,12 @@ set_tests_properties(
 # Substitute only the native close admission boundary in the isolated test build.
 add_library(tf_chttp_websocket_fault_support STATIC chttp_websocket_fault_support.c)
 target_compile_definitions(tf_chttp_websocket_fault_support PRIVATE
-  chttp_server_websocket_close=chttp_test_websocket_close)
-target_include_directories(tf_chttp_websocket_fault_support PUBLIC ../include)
+  chttp_server_websocket_close=chttp_test_websocket_close
+  mem_get_buffer=chttp_test_websocket_mem_get_buffer
+  turbo_flow_publish_async=chttp_test_websocket_publish_async)
+target_include_directories(tf_chttp_websocket_fault_support
+  PRIVATE $<TARGET_PROPERTY:xxHash::xxhash,INTERFACE_INCLUDE_DIRECTORIES>
+  PUBLIC ../include)
 target_link_libraries(tf_chttp_websocket_fault_support PUBLIC TurboFlow::Graph CHttp::Server)
 cmake_config_target(tf_chttp_websocket_fault_support NO_INSTALL FOLDER "io/chttp/tests")
 cmake_add_test(
