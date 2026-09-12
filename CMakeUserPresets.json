@@ -107,6 +107,20 @@
             "inherits": ["base-win-release-user", "win-paths"]
         },
         {
+            "name": "win-release-turbodb-off-user",
+            "inherits": "win-release-user",
+            "binaryDir": "${sourceDir}/build/Msvc-Release-TurboDb-Off",
+            "cacheVariables": {
+                "TURBO_FLOW_BUILD_TURBODB_ADAPTER": "OFF",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/sdk/turbodb-off/win-release"
+            },
+            "environment": {
+                "TURBO_FLOW_ACTIVE_PRESET": "win-release-user",
+                "TURBO_FLOW_ROOT": "${sourceDir}/build/sdk/turbodb-off/win-release",
+                "PATH": "${sourceDir}/build/Msvc-Release-TurboDb-Off/bin${pathListSep}${sourceDir}/build/sdk/turbodb-off/win-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{RULES_FORGE_ROOT}/bin${pathListSep}$penv{PATH}"
+            }
+        },
+        {
             "name": "linux-dev-user",
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "ON",
@@ -201,11 +215,13 @@
     "buildPresets": [
         { "name": "win-dev-user", "configurePreset": "win-dev-user" },
         { "name": "win-release-user", "configurePreset": "win-release-user" },
+        { "name": "win-release-turbodb-off-user", "configurePreset": "win-release-turbodb-off-user" },
         { "name": "linux-dev-user", "configurePreset": "linux-dev-user" },
         { "name": "linux-release-user", "configurePreset": "linux-release-user" },
         { "name": "linux-sdk-package", "configurePreset": "linux-sdk-package" },
         { "name": "install-win-dev-user", "configurePreset": "win-dev-user", "targets": ["install"] },
         { "name": "install-win-release-user", "configurePreset": "win-release-user", "targets": ["install"] },
+        { "name": "install-win-release-turbodb-off-user", "configurePreset": "win-release-turbodb-off-user", "targets": ["install"] },
         { "name": "install-linux-dev-user", "configurePreset": "linux-dev-user", "targets": ["install"] },
         { "name": "install-linux-release-user", "configurePreset": "linux-release-user", "targets": ["install"] },
         { "name": "install-linux-sdk-package", "configurePreset": "linux-sdk-package", "targets": ["install"] },
@@ -225,6 +241,7 @@
     "testPresets": [
         { "name": "win-dev-user", "inherits": "base-test", "configurePreset": "win-dev-user" },
         { "name": "win-release-user", "inherits": "base-test", "configurePreset": "win-release-user" },
+        { "name": "win-release-turbodb-off-user", "inherits": "base-test", "configurePreset": "win-release-turbodb-off-user", "filter": { "exclude": { "label": "install" } } },
         { "name": "linux-dev-user", "inherits": "base-test", "configurePreset": "linux-dev-user" },
         { "name": "linux-release-user", "inherits": "base-test", "configurePreset": "linux-release-user" }
     ]

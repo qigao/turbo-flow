@@ -83,6 +83,69 @@ elseif(CHTTP_PROBE_SCENARIO STREQUAL "preimport-outside-location")
       endif()
     endforeach()
   endforeach()
+elseif(CHTTP_PROBE_SCENARIO MATCHES
+       "^preimport-(client|server)-(cross-config|configurationless|alternate-candidates)$" OR
+       CHTTP_PROBE_SCENARIO STREQUAL "preimport-same-config-mapping")
+  find_package(Chttp CONFIG REQUIRED
+               PATHS "$ENV{HTTP_SERVICES_ROOT}" NO_DEFAULT_PATH)
+  if(CMAKE_CONFIGURATION_TYPES)
+    set(_fixture_requested_configs ${CMAKE_CONFIGURATION_TYPES})
+  else()
+    set(_fixture_requested_configs "${CMAKE_BUILD_TYPE}")
+  endif()
+  foreach(_fixture_config IN LISTS _fixture_requested_configs)
+    string(TOUPPER "${_fixture_config}" _fixture_config_upper)
+    if(_fixture_config_upper STREQUAL "DEBUG")
+      set(_fixture_alternate_config_upper "RELEASE")
+    else()
+      set(_fixture_alternate_config_upper "DEBUG")
+    endif()
+    if(CHTTP_PROBE_SCENARIO MATCHES "^preimport-client-")
+      set(_fixture_mapping_targets CHttp::Client)
+    elseif(CHTTP_PROBE_SCENARIO MATCHES "^preimport-server-")
+      set(_fixture_mapping_targets CHttp::Server)
+    else()
+      set(_fixture_mapping_targets CHttp::Client CHttp::Server)
+    endif()
+    foreach(_fixture_target IN LISTS _fixture_mapping_targets)
+      get_target_property(_fixture_location "${_fixture_target}"
+                          "IMPORTED_LOCATION_${_fixture_config_upper}")
+      if(WIN32)
+        get_target_property(_fixture_implib "${_fixture_target}"
+                            "IMPORTED_IMPLIB_${_fixture_config_upper}")
+      endif()
+      if(CHTTP_PROBE_SCENARIO MATCHES "-cross-config$")
+        set_target_properties("${_fixture_target}" PROPERTIES
+          "MAP_IMPORTED_CONFIG_${_fixture_config_upper}" "${_fixture_alternate_config_upper}"
+          "IMPORTED_LOCATION_${_fixture_alternate_config_upper}" "${_fixture_location}")
+        if(WIN32)
+          set_target_properties("${_fixture_target}" PROPERTIES
+            "IMPORTED_IMPLIB_${_fixture_alternate_config_upper}" "${_fixture_implib}")
+        endif()
+      elseif(CHTTP_PROBE_SCENARIO MATCHES "-configurationless$")
+        set_property(TARGET "${_fixture_target}" PROPERTY
+                     "MAP_IMPORTED_CONFIG_${_fixture_config_upper}" "")
+        set_target_properties("${_fixture_target}" PROPERTIES
+          IMPORTED_LOCATION "${_fixture_location}")
+        if(WIN32)
+          set_target_properties("${_fixture_target}" PROPERTIES
+            IMPORTED_IMPLIB "${_fixture_implib}")
+        endif()
+      elseif(CHTTP_PROBE_SCENARIO MATCHES "-alternate-candidates$")
+        set_target_properties("${_fixture_target}" PROPERTIES
+          "MAP_IMPORTED_CONFIG_${_fixture_config_upper}"
+            "${_fixture_config_upper};${_fixture_alternate_config_upper}"
+          "IMPORTED_LOCATION_${_fixture_alternate_config_upper}" "${_fixture_location}")
+        if(WIN32)
+          set_target_properties("${_fixture_target}" PROPERTIES
+            "IMPORTED_IMPLIB_${_fixture_alternate_config_upper}" "${_fixture_implib}")
+        endif()
+      else()
+        set_target_properties("${_fixture_target}" PROPERTIES
+          "MAP_IMPORTED_CONFIG_${_fixture_config_upper}" "${_fixture_config_upper}")
+      endif()
+    endforeach()
+  endforeach()
 elseif(CHTTP_PROBE_SCENARIO STREQUAL "wrong-config")
   if(CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_CONFIGURATION_TYPES TurboFlowWrongConfig)

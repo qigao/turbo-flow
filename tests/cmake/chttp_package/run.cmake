@@ -44,7 +44,10 @@ foreach(_language IN ITEMS c cxx)
   endif()
 endforeach()
 
-foreach(_state_scenario IN ITEMS preserve-static-try-compile preserve-undefined-try-compile)
+foreach(_state_scenario IN ITEMS
+        preserve-static-try-compile
+        preserve-undefined-try-compile
+        preimport-same-config-mapping)
   execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env
             "CHTTP_PROBE_SCENARIO=${_state_scenario}"
@@ -53,6 +56,51 @@ foreach(_state_scenario IN ITEMS preserve-static-try-compile preserve-undefined-
     RESULT_VARIABLE _result OUTPUT_VARIABLE _stdout ERROR_VARIABLE _stderr)
   if(NOT _result EQUAL 0)
     message(FATAL_ERROR "${_state_scenario} configure failed:\n${_stdout}\n${_stderr}")
+  endif()
+endforeach()
+
+if(_active_profile MATCHES "-dev-user$")
+  set(_requested_config_upper "DEBUG")
+  set(_alternate_config_upper "RELEASE")
+else()
+  set(_requested_config_upper "RELEASE")
+  set(_alternate_config_upper "DEBUG")
+endif()
+foreach(_mapping_scenario IN ITEMS
+        preimport-client-cross-config
+        preimport-server-cross-config
+        preimport-client-configurationless
+        preimport-client-alternate-candidates)
+  if(_mapping_scenario MATCHES "preimport-client")
+    set(_mapping_target "CHttp::Client")
+  else()
+    set(_mapping_target "CHttp::Server")
+  endif()
+  if(_mapping_scenario MATCHES "cross-config$")
+    set(_mapping_value "${_alternate_config_upper}")
+  elseif(_mapping_scenario MATCHES "configurationless$")
+    set(_mapping_value "")
+  else()
+    set(_mapping_value "${_requested_config_upper};${_alternate_config_upper}")
+  endif()
+  set(_expected
+      "${_mapping_target} MAP_IMPORTED_CONFIG_${_requested_config_upper} must be unset or map only to ${_requested_config_upper}; got '${_mapping_value}'")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+            "CHTTP_PROBE_SCENARIO=${_mapping_scenario}"
+            "${CMAKE_COMMAND}" --fresh --preset "${_fixture_profile}-c"
+    WORKING_DIRECTORY "${_fixture_dir}"
+    RESULT_VARIABLE _result OUTPUT_VARIABLE _stdout ERROR_VARIABLE _stderr)
+  if(_result EQUAL 0)
+    message(FATAL_ERROR "${_mapping_scenario} unexpectedly configured successfully")
+  endif()
+  string(CONCAT _output "${_stdout}" "${_stderr}")
+  string(REGEX REPLACE "[\r\n ]+" " " _normalized_output "${_output}")
+  string(REGEX REPLACE "[\r\n ]+" " " _normalized_expected "${_expected}")
+  string(FIND "${_normalized_output}" "${_normalized_expected}" _match)
+  if(_match EQUAL -1)
+    message(FATAL_ERROR
+      "${_mapping_scenario} did not report the exact mapping diagnostic '${_expected}':\n${_output}")
   endif()
 endforeach()
 
@@ -76,6 +124,11 @@ math(EXPR _negative_last "${_negative_count} - 1")
 foreach(_index RANGE ${_negative_last})
   list(GET _negative_scenarios ${_index} _scenario)
   list(GET _negative_messages ${_index} _expected)
+  if(_scenario STREQUAL "wrong-config" AND
+     _active_profile STREQUAL "win-dev-user")
+    set(_expected
+        "MAP_IMPORTED_CONFIG_RELWITHDEBINFO must be unset or map only to RELWITHDEBINFO")
+  endif()
   execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env
             "CHTTP_PROBE_SCENARIO=${_scenario}"
@@ -87,7 +140,9 @@ foreach(_index RANGE ${_negative_last})
     message(FATAL_ERROR "${_scenario} unexpectedly configured successfully")
   endif()
   string(CONCAT _output "${_stdout}" "${_stderr}")
-  string(FIND "${_output}" "${_expected}" _match)
+  string(REGEX REPLACE "[\r\n ]+" " " _normalized_output "${_output}")
+  string(REGEX REPLACE "[\r\n ]+" " " _normalized_expected "${_expected}")
+  string(FIND "${_normalized_output}" "${_normalized_expected}" _match)
   if(_match EQUAL -1)
     message(FATAL_ERROR "${_scenario} did not report '${_expected}':\n${_output}")
   endif()

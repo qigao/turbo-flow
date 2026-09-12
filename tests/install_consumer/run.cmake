@@ -8,6 +8,12 @@ foreach(required_var IN ITEMS
     message(FATAL_ERROR "Missing required variable: ${required_var}")
   endif()
 endforeach()
+if(NOT "${TURBO_FLOW_HAS_TURBODB_ADAPTER}" MATCHES "^(ON|OFF)$")
+  message(FATAL_ERROR
+    "TURBO_FLOW_HAS_TURBODB_ADAPTER parent metadata must be ON or OFF; got '${TURBO_FLOW_HAS_TURBODB_ADAPTER}'")
+endif()
+set(ENV{TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER}
+    "${TURBO_FLOW_HAS_TURBODB_ADAPTER}")
 
 foreach(required_root IN ITEMS SALTS_ROOT SALTS_UTILS_ROOT RULES_FORGE_ROOT)
   if(NOT DEFINED ENV{${required_root}} OR
@@ -38,6 +44,32 @@ if(NOT consumer_profile MATCHES "^(win|linux)-(dev|release)-user$")
   message(FATAL_ERROR
           "Unsupported install-consumer profile: ${consumer_profile}")
 endif()
+foreach(metadata_case IN ITEMS missing malformed)
+  if(metadata_case STREQUAL "missing")
+    set(metadata_command
+        "${CMAKE_COMMAND}" -E env
+        --unset=TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER
+        "${CMAKE_COMMAND}" --fresh --preset "consumer-cxx-${consumer_profile}")
+  else()
+    set(metadata_command
+        "${CMAKE_COMMAND}" -E env
+        "TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER=INVALID"
+        "${CMAKE_COMMAND}" --fresh --preset "consumer-cxx-${consumer_profile}")
+  endif()
+  execute_process(
+    COMMAND ${metadata_command}
+    WORKING_DIRECTORY "${TURBO_FLOW_SOURCE_DIR}/tests/install_consumer"
+    RESULT_VARIABLE metadata_result
+    OUTPUT_VARIABLE metadata_output
+    ERROR_VARIABLE metadata_error)
+  string(CONCAT metadata_diagnostic "${metadata_output}" "\n${metadata_error}")
+  if(metadata_result EQUAL 0 OR
+     NOT metadata_diagnostic MATCHES
+         "TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER environment metadata must be ON or OFF")
+    message(FATAL_ERROR
+      "${metadata_case} TurboDb capability metadata negative case failed\n${metadata_diagnostic}")
+  endif()
+endforeach()
 if(NOT DEFINED ENV{TURBO_FLOW_ROOT} OR
    "$ENV{TURBO_FLOW_ROOT}" STREQUAL "")
   message(FATAL_ERROR "TURBO_FLOW_ROOT is required")
@@ -104,7 +136,7 @@ foreach(failure_case IN ITEMS removed-flow version-1)
 endforeach()
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" --preset "consumer-cxx-${consumer_profile}"
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset "consumer-cxx-${consumer_profile}"
   WORKING_DIRECTORY "${full_consumer_source_dir}"
   COMMAND_ERROR_IS_FATAL ANY)
 execute_process(
@@ -303,6 +335,24 @@ execute_process(
   COMMAND_ERROR_IS_FATAL ANY)
 
 execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+          "TURBO_FLOW_CHTTP_SCENARIO=preimport-same-config-mapping"
+          "${CMAKE_COMMAND}" --fresh --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+
+execute_process(
   COMMAND "${CMAKE_COMMAND}" --fresh --preset
           "component-cnet-${consumer_profile}"
   WORKING_DIRECTORY "${component_consumer_source_dir}"
@@ -439,6 +489,56 @@ if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
   execute_process(COMMAND "${CMAKE_CTEST_COMMAND}" --preset "component-turbodb-${consumer_profile}"
     WORKING_DIRECTORY "${component_consumer_source_dir}" COMMAND_ERROR_IS_FATAL ANY)
 endif()
+
+if(TURBO_FLOW_CONFIG STREQUAL "Debug")
+  set(chttp_requested_config_upper "DEBUG")
+  set(chttp_alternate_config_upper "RELEASE")
+else()
+  set(chttp_requested_config_upper "RELEASE")
+  set(chttp_alternate_config_upper "DEBUG")
+endif()
+foreach(chttp_mapping_scenario IN ITEMS
+        preimport-client-cross-config
+        preimport-server-cross-config
+        preimport-client-configurationless
+        preimport-client-alternate-candidates)
+  if(chttp_mapping_scenario MATCHES "preimport-client")
+    set(chttp_mapping_target "CHttp::Client")
+  else()
+    set(chttp_mapping_target "CHttp::Server")
+  endif()
+  if(chttp_mapping_scenario MATCHES "cross-config$")
+    set(chttp_mapping_value "${chttp_alternate_config_upper}")
+  elseif(chttp_mapping_scenario MATCHES "configurationless$")
+    set(chttp_mapping_value "")
+  else()
+    set(chttp_mapping_value
+        "${chttp_requested_config_upper};${chttp_alternate_config_upper}")
+  endif()
+  set(chttp_mapping_expected
+      "${chttp_mapping_target} MAP_IMPORTED_CONFIG_${chttp_requested_config_upper} must be unset or map only to ${chttp_requested_config_upper}; got '${chttp_mapping_value}'")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+            "TURBO_FLOW_CHTTP_SCENARIO=${chttp_mapping_scenario}"
+            "${CMAKE_COMMAND}" --fresh --preset
+            "component-chttp-preimport-${consumer_profile}"
+    WORKING_DIRECTORY "${component_consumer_source_dir}"
+    RESULT_VARIABLE chttp_mapping_result
+    OUTPUT_VARIABLE chttp_mapping_output
+    ERROR_VARIABLE chttp_mapping_error)
+  string(CONCAT chttp_mapping_diagnostic
+         "${chttp_mapping_output}" "${chttp_mapping_error}")
+  string(REGEX REPLACE "[\r\n ]+" " " chttp_mapping_diagnostic_normalized
+                       "${chttp_mapping_diagnostic}")
+  string(REGEX REPLACE "[\r\n ]+" " " chttp_mapping_expected_normalized
+                       "${chttp_mapping_expected}")
+  string(FIND "${chttp_mapping_diagnostic_normalized}"
+              "${chttp_mapping_expected_normalized}" chttp_mapping_match)
+  if(chttp_mapping_result EQUAL 0 OR chttp_mapping_match EQUAL -1)
+    message(FATAL_ERROR
+      "${chttp_mapping_scenario} installed preimport negative case failed; expected '${chttp_mapping_expected}'\n${chttp_mapping_diagnostic}")
+  endif()
+endforeach()
 
 set(component_negative_cases
     config-missing-root graph-missing-root

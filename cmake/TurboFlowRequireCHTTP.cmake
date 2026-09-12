@@ -72,6 +72,23 @@ foreach(_turbo_flow_chttp_target IN ITEMS CHttp::Client CHttp::Server)
   get_target_property(_turbo_flow_chttp_configs "${_turbo_flow_chttp_target}" IMPORTED_CONFIGURATIONS)
   foreach(_turbo_flow_chttp_config IN LISTS _turbo_flow_chttp_requested_configs)
     string(TOUPPER "${_turbo_flow_chttp_config}" _turbo_flow_chttp_config_upper)
+    set(_turbo_flow_chttp_mapping_property
+        "MAP_IMPORTED_CONFIG_${_turbo_flow_chttp_config_upper}")
+    get_property(_turbo_flow_chttp_mapping_is_set
+                 TARGET "${_turbo_flow_chttp_target}"
+                 PROPERTY "${_turbo_flow_chttp_mapping_property}" SET)
+    if(_turbo_flow_chttp_mapping_is_set)
+      get_property(_turbo_flow_chttp_mapping
+                   TARGET "${_turbo_flow_chttp_target}"
+                   PROPERTY "${_turbo_flow_chttp_mapping_property}")
+      string(TOUPPER "${_turbo_flow_chttp_mapping}"
+                     _turbo_flow_chttp_mapping_upper)
+      if(NOT _turbo_flow_chttp_mapping_upper STREQUAL
+             _turbo_flow_chttp_config_upper)
+        message(FATAL_ERROR
+          "${_turbo_flow_chttp_target} ${_turbo_flow_chttp_mapping_property} must be unset or map only to ${_turbo_flow_chttp_config_upper}; got '${_turbo_flow_chttp_mapping}'")
+      endif()
+    endif()
     if(NOT _turbo_flow_chttp_config_upper IN_LIST _turbo_flow_chttp_configs)
       message(FATAL_ERROR "${_turbo_flow_chttp_target} does not declare requested configuration ${_turbo_flow_chttp_config}")
     endif()

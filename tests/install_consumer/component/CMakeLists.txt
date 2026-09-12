@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.20)
 
 project(TurboFlowComponentConsumer LANGUAGES C)
 
+if(DEFINED ENV{TURBO_FLOW_CHTTP_SCENARIO})
+  set(TURBO_FLOW_CHTTP_SCENARIO "$ENV{TURBO_FLOW_CHTTP_SCENARIO}")
+endif()
+
 if(NOT DEFINED TURBO_FLOW_TEST_COMPONENT OR
    "${TURBO_FLOW_TEST_COMPONENT}" STREQUAL "")
   message(FATAL_ERROR "TURBO_FLOW_TEST_COMPONENT is required")
@@ -46,6 +50,75 @@ elseif(TURBO_FLOW_CHTTP_SCENARIO STREQUAL "preimport-outside-location")
 elseif(TURBO_FLOW_CHTTP_SCENARIO STREQUAL "preimport-same-root")
   find_package(Chttp CONFIG REQUIRED
                PATHS "$ENV{HTTP_SERVICES_ROOT}" NO_DEFAULT_PATH)
+elseif(TURBO_FLOW_CHTTP_SCENARIO MATCHES
+       "^preimport-(client|server)-(cross-config|configurationless|alternate-candidates)$" OR
+       TURBO_FLOW_CHTTP_SCENARIO STREQUAL "preimport-same-config-mapping")
+  find_package(Chttp CONFIG REQUIRED
+               PATHS "$ENV{HTTP_SERVICES_ROOT}" NO_DEFAULT_PATH)
+  if(CMAKE_CONFIGURATION_TYPES)
+    set(chttp_fixture_configs ${CMAKE_CONFIGURATION_TYPES})
+  else()
+    set(chttp_fixture_configs "${CMAKE_BUILD_TYPE}")
+  endif()
+  foreach(chttp_fixture_config IN LISTS chttp_fixture_configs)
+    string(TOUPPER "${chttp_fixture_config}" chttp_fixture_config_upper)
+    if(chttp_fixture_config_upper STREQUAL "DEBUG")
+      set(chttp_fixture_alternate_config_upper "RELEASE")
+    else()
+      set(chttp_fixture_alternate_config_upper "DEBUG")
+    endif()
+    if(TURBO_FLOW_CHTTP_SCENARIO MATCHES "^preimport-client-")
+      set(chttp_fixture_mapping_targets CHttp::Client)
+    elseif(TURBO_FLOW_CHTTP_SCENARIO MATCHES "^preimport-server-")
+      set(chttp_fixture_mapping_targets CHttp::Server)
+    else()
+      set(chttp_fixture_mapping_targets CHttp::Client CHttp::Server)
+    endif()
+    foreach(chttp_fixture_target IN LISTS chttp_fixture_mapping_targets)
+      get_target_property(chttp_fixture_location "${chttp_fixture_target}"
+                          "IMPORTED_LOCATION_${chttp_fixture_config_upper}")
+      if(WIN32)
+        get_target_property(chttp_fixture_implib "${chttp_fixture_target}"
+                            "IMPORTED_IMPLIB_${chttp_fixture_config_upper}")
+      endif()
+      if(TURBO_FLOW_CHTTP_SCENARIO MATCHES "-cross-config$")
+        set_target_properties("${chttp_fixture_target}" PROPERTIES
+          "MAP_IMPORTED_CONFIG_${chttp_fixture_config_upper}"
+            "${chttp_fixture_alternate_config_upper}"
+          "IMPORTED_LOCATION_${chttp_fixture_alternate_config_upper}"
+            "${chttp_fixture_location}")
+        if(WIN32)
+          set_target_properties("${chttp_fixture_target}" PROPERTIES
+            "IMPORTED_IMPLIB_${chttp_fixture_alternate_config_upper}"
+              "${chttp_fixture_implib}")
+        endif()
+      elseif(TURBO_FLOW_CHTTP_SCENARIO MATCHES "-configurationless$")
+        set_property(TARGET "${chttp_fixture_target}" PROPERTY
+                     "MAP_IMPORTED_CONFIG_${chttp_fixture_config_upper}" "")
+        set_target_properties("${chttp_fixture_target}" PROPERTIES
+          IMPORTED_LOCATION "${chttp_fixture_location}")
+        if(WIN32)
+          set_target_properties("${chttp_fixture_target}" PROPERTIES
+            IMPORTED_IMPLIB "${chttp_fixture_implib}")
+        endif()
+      elseif(TURBO_FLOW_CHTTP_SCENARIO MATCHES "-alternate-candidates$")
+        set_target_properties("${chttp_fixture_target}" PROPERTIES
+          "MAP_IMPORTED_CONFIG_${chttp_fixture_config_upper}"
+            "${chttp_fixture_config_upper};${chttp_fixture_alternate_config_upper}"
+          "IMPORTED_LOCATION_${chttp_fixture_alternate_config_upper}"
+            "${chttp_fixture_location}")
+        if(WIN32)
+          set_target_properties("${chttp_fixture_target}" PROPERTIES
+            "IMPORTED_IMPLIB_${chttp_fixture_alternate_config_upper}"
+              "${chttp_fixture_implib}")
+        endif()
+      else()
+        set_target_properties("${chttp_fixture_target}" PROPERTIES
+          "MAP_IMPORTED_CONFIG_${chttp_fixture_config_upper}"
+            "${chttp_fixture_config_upper}")
+      endif()
+    endforeach()
+  endforeach()
 elseif(TURBO_FLOW_CHTTP_SCENARIO STREQUAL "wrong-config")
   if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_BUILD_TYPE Release)
