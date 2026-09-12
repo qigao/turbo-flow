@@ -351,7 +351,7 @@ if(BUILD_TESTING AND BUILD_TESTS)
     if(NOT chttp_signed_fixture_signature_result EQUAL 0)
       message(FATAL_ERROR "Windows CHTTP signed non-OS fixture host prerequisite failed")
     endif()
-    foreach(closure_case IN ITEMS positive debug-positive legacy wrong-crt wrong-msvcp-crt debug-release-crt unresolved outside arbitrary-outside system-forbidden system-unsigned system-signed-non-os)
+    foreach(closure_case IN ITEMS asan-outside positive debug-positive legacy wrong-crt wrong-msvcp-crt debug-release-crt unresolved outside arbitrary-outside system-forbidden system-unsigned system-signed-non-os runtime-release runtime-debug asan-positive asan-wrong-crt wrong-vc-suffix wrong-msvcp-suffix debug-vc-suffix debug-msvcp-suffix)
       add_test(NAME test_turbo_flow_chttp_closure_setup_${closure_case}
         COMMAND "${CMAKE_COMMAND}" --workflow --preset "closure-${closure_case}")
       set_tests_properties(test_turbo_flow_chttp_closure_setup_${closure_case}
@@ -359,6 +359,43 @@ if(BUILD_TESTING AND BUILD_TESTS)
                    FIXTURES_SETUP "chttp-closure-${closure_case}"
                    LABELS "cmake;chttp-adapter" TIMEOUT 120)
     endforeach()
+    foreach(closure_case IN ITEMS asan-outside runtime-release runtime-debug asan-positive asan-wrong-crt wrong-vc-suffix wrong-msvcp-suffix debug-vc-suffix debug-msvcp-suffix)
+      set(closure_config Release)
+      set(closure_expected_failure)
+      if(closure_case MATCHES "^(runtime-debug|asan-|debug-)")
+        set(closure_config Debug)
+      endif()
+      if(closure_case MATCHES "^wrong-")
+        set(closure_expected_failure "-DCHTTP_EXPECT_FAILURE_PATTERN=Release CHTTP recursive closure contains a Debug CRT")
+      elseif(closure_case STREQUAL "asan-outside")
+        set(closure_config Release)
+        set(closure_expected_failure "-DCHTTP_EXPECT_FAILURE_PATTERN=CHTTP ASan runtime resolved outside the active compiler")
+      elseif(closure_case MATCHES "^(debug-|asan-wrong-crt)")
+        set(closure_expected_failure "-DCHTTP_EXPECT_FAILURE_PATTERN=Debug CHTTP recursive closure contains a Release CRT")
+      endif()
+      add_test(NAME test_turbo_flow_chttp_closure_${closure_case}
+        COMMAND "${CMAKE_COMMAND}"
+                "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/${closure_case}/install/allowed/bin/closure_root.dll"
+                "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/${closure_case}/install/allowed"
+                "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/${closure_case}/install/allowed/bin"
+                "-DCHTTP_TEST_CONFIG=${closure_config}"
+                ${closure_expected_failure}
+                -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+      set_tests_properties(test_turbo_flow_chttp_closure_${closure_case} PROPERTIES
+        FIXTURES_REQUIRED chttp-closure-${closure_case} LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    endforeach()
+    add_test(NAME test_turbo_flow_chttp_closure_asan_path_shadow
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/asan-positive/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/asan-positive/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/asan-positive/install/allowed/bin"
+              -DCHTTP_TEST_CONFIG=Debug
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=CHTTP ASan runtime PATH provenance does not match the active compiler"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    set_tests_properties(test_turbo_flow_chttp_closure_asan_path_shadow PROPERTIES
+      FIXTURES_REQUIRED "chttp-closure-asan-positive;chttp-closure-asan-outside"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${chttp_closure_fixture_dir}/build/asan-outside/install/allowed/bin"
+      LABELS "cmake;chttp-adapter" TIMEOUT 30)
     add_test(NAME test_turbo_flow_chttp_closure_positive
       COMMAND "${CMAKE_COMMAND}"
               "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/positive/install/allowed/bin/closure_root.dll"

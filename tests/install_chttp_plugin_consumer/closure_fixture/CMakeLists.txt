@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 project(CHTTPClosureFixture LANGUAGES C)
 
-if(NOT CHTTP_CLOSURE_SCENARIO MATCHES "^(positive|debug-positive|legacy|wrong-crt|wrong-msvcp-crt|debug-release-crt|unresolved|outside|arbitrary-outside|system-forbidden|system-unsigned|system-signed-non-os)$")
+if(NOT CHTTP_CLOSURE_SCENARIO MATCHES "^(positive|debug-positive|legacy|wrong-crt|wrong-msvcp-crt|debug-release-crt|unresolved|outside|arbitrary-outside|system-forbidden|system-unsigned|system-signed-non-os|asan-outside|runtime-release|runtime-debug|asan-positive|asan-wrong-crt|wrong-vc-suffix|wrong-msvcp-suffix|debug-vc-suffix|debug-msvcp-suffix)$")
   message(FATAL_ERROR "Unknown CHTTP_CLOSURE_SCENARIO: ${CHTTP_CLOSURE_SCENARIO}")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/Sanitizers.cmake")
 add_library(closure_leaf SHARED leaf.c)
 add_library(closure_mid SHARED mid.c)
 add_library(closure_root SHARED root.c)
@@ -29,6 +30,33 @@ elseif(CHTTP_CLOSURE_SCENARIO STREQUAL "system-unsigned")
 elseif(CHTTP_CLOSURE_SCENARIO STREQUAL "system-signed-non-os")
   # The installed import resolves to the owning MSVC test host, never a copied DLL.
   set_target_properties(closure_leaf PROPERTIES OUTPUT_NAME "msobj140")
+elseif(CHTTP_CLOSURE_SCENARIO STREQUAL "wrong-vc-suffix")
+  set_target_properties(closure_leaf PROPERTIES OUTPUT_NAME "vcruntime140_1d")
+elseif(CHTTP_CLOSURE_SCENARIO STREQUAL "asan-outside")
+  # A same-named test DLL must never inherit the compiler runtime's identity.
+  set_target_properties(closure_leaf PROPERTIES OUTPUT_NAME "clang_rt.asan_dynamic-x86_64")
+elseif(CHTTP_CLOSURE_SCENARIO STREQUAL "wrong-msvcp-suffix")
+  set_target_properties(closure_leaf PROPERTIES OUTPUT_NAME "msvcp140d_atomic_wait")
+elseif(CHTTP_CLOSURE_SCENARIO MATCHES "^(debug-vc-suffix|asan-wrong-crt)$")
+  set_target_properties(closure_leaf PROPERTIES OUTPUT_NAME "vcruntime140_1")
+elseif(CHTTP_CLOSURE_SCENARIO STREQUAL "debug-msvcp-suffix")
+  set_target_properties(closure_leaf PROPERTIES OUTPUT_NAME "msvcp140_2")
+elseif(CHTTP_CLOSURE_SCENARIO MATCHES "^runtime-(release|debug)$")
+  # Only the import libraries are used; installed imports select real host CRTs.
+  if(CHTTP_CLOSURE_SCENARIO STREQUAL "runtime-debug")
+    set(runtime_basenames vcruntime140_1d vcruntime140_threadsd
+        msvcp140_1d msvcp140_2d msvcp140d_atomic_wait msvcp140d_codecvt_ids)
+  else()
+    set(runtime_basenames vcruntime140_1 vcruntime140_threads
+        msvcp140_1 msvcp140_2 msvcp140_atomic_wait msvcp140_codecvt_ids)
+  endif()
+  target_sources(closure_mid PRIVATE runtime_imports.c)
+  foreach(runtime_basename IN LISTS runtime_basenames)
+    add_library(${runtime_basename} SHARED leaf.c)
+    target_compile_definitions(${runtime_basename} PRIVATE
+        "closure_leaf_value=fixture_${runtime_basename}")
+    target_link_libraries(closure_mid PRIVATE ${runtime_basename})
+  endforeach()
 endif()
 
 install(TARGETS closure_root closure_mid RUNTIME DESTINATION allowed/bin)
