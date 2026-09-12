@@ -4,7 +4,8 @@
 #include "tinytest.h"
 #include "turbo_flow_plugin_generation.h"
 #include <cflow/publishers.h>
-#include <chttp/chttp.h>
+#include <http_client/http.h>
+#include <http_server/http.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
 #include <stdatomic.h>

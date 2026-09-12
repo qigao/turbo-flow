@@ -71,7 +71,6 @@ find_package(SaltsUtils CONFIG REQUIRED
 include(TurboFlowRequireCNet)
 turbo_flow_require_cnet_stop_drain_contract()
 include(TurboFlowRequireCHTTP)
-turbo_flow_require_chttp_deferred_cancel()
 find_package(xxHash CONFIG REQUIRED)
 
 if(TURBO_FLOW_BUILD_TURBODB_ADAPTER)
@@ -253,6 +252,14 @@ if(BUILD_TESTING AND BUILD_TESTS)
   set_tests_properties(
     test_turbo_flow_cnet_stop_drain_failfast
     PROPERTIES LABELS "cmake;cnet-adapter" RUN_SERIAL TRUE TIMEOUT 30)
+
+  add_test(
+    NAME test_turbo_flow_chttp_package
+    COMMAND "${CMAKE_COMMAND}"
+            "-DTURBO_FLOW_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+            -P "${CMAKE_SOURCE_DIR}/tests/cmake/chttp_package/run.cmake")
+  set_tests_properties(test_turbo_flow_chttp_package PROPERTIES
+    LABELS "cmake;chttp-adapter" RUN_SERIAL TRUE TIMEOUT 120)
 
   add_test(
     NAME test_turbo_flow_install_consumer

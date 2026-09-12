@@ -1,0 +1,40 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_MANIFEST_MODE": "ON",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
+      },
+      "environment": {
+        "PROJECT_ROOT": "C:/projects/cpp",
+        "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
+        "VCPKG_ROOT": "C:/tools/vcpkg",
+        "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/release",
+        "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
+        "PATH": "$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    { "name": "c-release", "inherits": "base", "cacheVariables": { "CHTTP_PROBE_LANGUAGE": "C" } },
+    { "name": "cxx-release", "inherits": "base", "cacheVariables": { "CHTTP_PROBE_LANGUAGE": "CXX" } },
+    { "name": "unset-root", "inherits": "base", "cacheVariables": { "CHTTP_PROBE_SCENARIO": "unset-root" } },
+    { "name": "empty-root", "inherits": "base", "cacheVariables": { "CHTTP_PROBE_SCENARIO": "empty-root" } },
+    { "name": "missing-root", "inherits": "base", "cacheVariables": { "CHTTP_PROBE_SCENARIO": "missing-root" } },
+    { "name": "empty-sdk", "inherits": "base", "cacheVariables": { "CHTTP_PROBE_SCENARIO": "empty-sdk" } },
+    { "name": "outside-cache", "inherits": "base", "cacheVariables": { "CHTTP_PROBE_SCENARIO": "outside-cache" } },
+    { "name": "preimport-without-provenance", "inherits": "base", "cacheVariables": { "CHTTP_PROBE_SCENARIO": "preimport-without-provenance" } },
+    { "name": "preimport-outside-location", "inherits": "base", "cacheVariables": { "CHTTP_PROBE_SCENARIO": "preimport-outside-location" } },
+    { "name": "wrong-config", "inherits": "base", "cacheVariables": { "CHTTP_PROBE_SCENARIO": "wrong-config" } },
+    { "name": "missing-deferred-cancel", "inherits": "base", "cacheVariables": { "CHTTP_PROBE_SCENARIO": "missing-deferred-cancel" } }
+  ],
+  "buildPresets": [
+    { "name": "c-release", "configurePreset": "c-release" },
+    { "name": "cxx-release", "configurePreset": "cxx-release" }
+  ]
+}

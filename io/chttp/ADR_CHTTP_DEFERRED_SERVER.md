@@ -2,7 +2,7 @@
 
 ## Context
 
-Issue #7 replaces the former synchronous HTTP server boundary with Salts CHTTP.
+Issue #7 replaces the former synchronous HTTP server boundary with the standalone Chttp SDK.
 CHTTP route request views and response builders are callback-borrowed, while a
 TurboFlow publication may cross worker, coroutine, Reactive, Actor, and async
 terminal boundaries. Passing either callback object through
@@ -10,7 +10,7 @@ terminal boundaries. Passing either callback object through
 risk.
 
 CHTTP provides generation-checked deferred responses for HTTP/1.1 and HTTP/2.
-The HTTP/2 ownership and cancellation contract was completed by
+The HTTP/2 ownership and cancellation contract originated in
 [`qigao/salts#214`](https://github.com/qigao/salts/issues/214) and is consumed
 directly here; TurboFlow does not mirror CHTTP connection or stream state.
 
@@ -141,7 +141,7 @@ duplicate response rejection, bounded ingress overload, response-size failure,
 deferred allocation failure followed by no-response cancellation, CHTTP-owned
 stop/drain ordering, restart, and concurrent lifecycle snapshots.
 Header probes and the installed consumer verify the additive public API and
-`Salts::CHTTP` dependency.
+standalone `Chttp` package with `CHttp::Client` and `CHttp::Server` dependencies.
 
 ## Rollback
 

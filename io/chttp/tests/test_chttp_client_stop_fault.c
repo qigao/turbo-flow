@@ -1,4 +1,4 @@
-#include <chttp/chttp.h>
+#include <http_client/http.h>
 #include <stdatomic.h>
 
 static atomic_int chttp_stop_fault_status;

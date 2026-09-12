@@ -13,7 +13,8 @@ target_include_directories(
   tf_chttp_adapter
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>)
-target_link_libraries(tf_chttp_adapter PUBLIC TurboFlow::Graph Salts::CHTTP)
+target_link_libraries(tf_chttp_adapter PUBLIC
+  TurboFlow::Graph CHttp::Client CHttp::Server)
 
 install(FILES include/turbo_flow_chttp.h DESTINATION include)
 

@@ -1,5 +1,5 @@
 /* Isolated DLL substitution at the native allocation boundary; no production fault hooks. */
-#include <chttp/chttp.h>
+#include <http_client/http.h>
 static int delivery_client_init(chttp_async_client *client, const chttp_client_config *config) {
   if (!client || client->impl || !config) return SALTS_EINVAL;
   return SALTS_ENOMEM;
