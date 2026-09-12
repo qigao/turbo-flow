@@ -1,5 +1,28 @@
 cmake_minimum_required(VERSION 3.20)
 
+if(DEFINED CHTTP_EXPECT_FAILURE_PATTERN AND
+   NOT DEFINED CHTTP_VALIDATE_ONLY)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+            "-DCHTTP_TEST_LAYER=${CHTTP_TEST_LAYER}"
+            "-DCHTTP_TEST_DEPENDENTS=${CHTTP_TEST_DEPENDENTS}"
+            -DCHTTP_VALIDATE_ONLY=ON
+            -P "${CMAKE_CURRENT_LIST_FILE}"
+    RESULT_VARIABLE expected_failure_result
+    OUTPUT_VARIABLE expected_failure_output
+    ERROR_VARIABLE expected_failure_error)
+  string(CONCAT expected_failure_diagnostic
+         "${expected_failure_output}" "\n${expected_failure_error}")
+  if(expected_failure_result EQUAL 0)
+    message(FATAL_ERROR "CHTTP dependency validation unexpectedly succeeded")
+  endif()
+  if(NOT expected_failure_diagnostic MATCHES "${CHTTP_EXPECT_FAILURE_PATTERN}")
+    message(FATAL_ERROR
+            "CHTTP dependency validation failed without '${CHTTP_EXPECT_FAILURE_PATTERN}'\n${expected_failure_diagnostic}")
+  endif()
+  return()
+endif()
+
 foreach(required_var IN ITEMS CHTTP_TEST_LAYER CHTTP_TEST_DEPENDENTS)
   if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
     message(FATAL_ERROR "Missing required variable: ${required_var}")

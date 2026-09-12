@@ -261,25 +261,56 @@ if(BUILD_TESTING AND BUILD_TESTS)
   set_tests_properties(test_turbo_flow_chttp_package PROPERTIES
     LABELS "cmake;chttp-adapter" RUN_SERIAL TRUE TIMEOUT 120)
 
+  if(WIN32)
+    add_test(NAME test_turbo_flow_chttp_native_adapter
+      COMMAND "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+              "-DCHTTP_TEST_DEPENDENTS=chttp_client.dll chttp_server.dll"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_native_legacy_unversioned
+      COMMAND "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+              "-DCHTTP_TEST_DEPENDENTS=salts_chttp.dll chttp_client.dll chttp_server.dll"
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=must not contain a legacy salts_chttp DLL"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_native_legacy_versioned
+      COMMAND "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+              "-DCHTTP_TEST_DEPENDENTS=salts_chttp-2.dll chttp_client.dll chttp_server.dll"
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=must not contain a legacy salts_chttp DLL"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_native_wrong_basename
+      COMMAND "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+              "-DCHTTP_TEST_DEPENDENTS=chttp_clientXdll chttp_client.dll chttp_server.dll"
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=unknown native import"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_native_missing_server
+      COMMAND "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+              "-DCHTTP_TEST_DEPENDENTS=chttp_client.dll"
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=requires exactly one chttp_server.dll import"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_native_duplicate_client
+      COMMAND "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+              "-DCHTTP_TEST_DEPENDENTS=chttp_client.dll chttp_client.dll chttp_server.dll"
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=requires exactly one chttp_client.dll import"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    set_tests_properties(test_turbo_flow_chttp_native_adapter PROPERTIES
+      LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(
+      test_turbo_flow_chttp_native_legacy_unversioned
+      test_turbo_flow_chttp_native_legacy_versioned
+      test_turbo_flow_chttp_native_wrong_basename
+      test_turbo_flow_chttp_native_missing_server
+      test_turbo_flow_chttp_native_duplicate_client
+      PROPERTIES LABELS "cmake;chttp-adapter" TIMEOUT 30)
+  endif()
+
   add_test(
     NAME test_turbo_flow_install_consumer
     COMMAND
       "${CMAKE_COMMAND}"
       "-DTURBO_FLOW_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
-      "-DTURBO_FLOW_BINARY_DIR=${CMAKE_BINARY_DIR}"
-      "-DTURBO_FLOW_GENERATOR=${CMAKE_GENERATOR}"
       "-DTURBO_FLOW_CONFIG=$<CONFIG>"
-      "-DTURBO_FLOW_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
-      "-DTURBO_FLOW_SALTS_ROOT=$ENV{SALTS_ROOT}"
-      "-DTURBO_FLOW_SALTS_UTILS_ROOT=$ENV{SALTS_UTILS_ROOT}"
-      "-DTURBO_FLOW_RULES_FORGE_ROOT=$ENV{RULES_FORGE_ROOT}"
       "-DTURBO_FLOW_HAS_TURBODB_ADAPTER=${TURBO_FLOW_BUILD_TURBODB_ADAPTER}"
-      "-DTURBO_FLOW_TURBODB_ROOT=$ENV{TURBODB_ROOT}"
-      "-DTURBO_FLOW_VCPKG_INSTALLED_DIR=${VCPKG_INSTALLED_DIR}"
-      "-DTURBO_FLOW_VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
-      "-DTURBO_FLOW_COMPILER_RUNTIME_DIR=${TURBO_FLOW_COMPILER_RUNTIME_DIR}"
       -P "${CMAKE_SOURCE_DIR}/tests/install_consumer/run.cmake")
   set_tests_properties(
     test_turbo_flow_install_consumer
-    PROPERTIES LABELS "install;package" RUN_SERIAL TRUE TIMEOUT 120)
+    PROPERTIES LABELS "install;package" RUN_SERIAL TRUE TIMEOUT 600)
 endif()

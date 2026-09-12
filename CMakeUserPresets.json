@@ -76,6 +76,7 @@
             },
             "environment": {
                 "TURBO_FLOW_ACTIVE_PRESET": "win-dev-user",
+                "TURBO_FLOW_ROOT": "$env{PKG_ROOT}/turboflow/debug",
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
                 "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/debug",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
@@ -95,6 +96,7 @@
             },
             "environment": {
                 "TURBO_FLOW_ACTIVE_PRESET": "win-release-user",
+                "TURBO_FLOW_ROOT": "$env{PKG_ROOT}/turboflow/release",
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
                 "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/release",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
@@ -115,6 +117,7 @@
             },
             "environment": {
                 "TURBO_FLOW_ACTIVE_PRESET": "linux-dev-user",
+                "TURBO_FLOW_ROOT": "$env{PKG_ROOT}/turboflow/debug",
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
                 "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/debug",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
@@ -134,6 +137,7 @@
             },
             "environment": {
                 "TURBO_FLOW_ACTIVE_PRESET": "linux-release-user",
+                "TURBO_FLOW_ROOT": "$env{PKG_ROOT}/turboflow/release",
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
                 "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/release",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
