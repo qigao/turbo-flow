@@ -417,7 +417,8 @@ turbo_flow_chttp_server_snapshot(const turbo_flow_chttp_server_t *server,
  * Close request admission without stopping accepted deferred responses.
  * @param server Borrowed registered server owner.
  * @return SALTS_OK (also when already quiesced), SALTS_EINVAL for NULL,
- *         or SALTS_ESHUTDOWN outside RUNNING/QUIESCED.
+ *         SALTS_ERANGE when a real state change would overflow generation
+ *         (leaving state unchanged), or SALTS_ESHUTDOWN outside RUNNING/QUIESCED.
  * Reservation and quiesce share one mutex. Previously reserved requests may
  * finish admission after return; new requests receive configured unavailable_status.
  * This does not wait for active_requests to reach zero or close the listener.
@@ -429,7 +430,8 @@ TURBO_FLOW_C_API int turbo_flow_chttp_server_quiesce(turbo_flow_chttp_server_t *
  * Reopen admission on a live server, retaining its port and deferred owners.
  * @param server Borrowed registered server owner.
  * @return SALTS_OK (also when already running), SALTS_EINVAL for NULL,
- *         or SALTS_ESHUTDOWN outside RUNNING/QUIESCED.
+ *         SALTS_ERANGE when a real state change would overflow generation
+ *         (leaving state unchanged), or SALTS_ESHUTDOWN outside RUNNING/QUIESCED.
  * Example: quiesce(server), inspect snapshot.active_requests, resume(server).
  * The same serialization contract as turbo_flow_chttp_server_quiesce applies.
  */
