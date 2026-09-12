@@ -180,11 +180,14 @@ if(DEFINED CHTTP_TEST_MODULE)
                  selected_system_dependency_name)
       string(TOLOWER "${selected_system_dependency_name}"
              selected_system_dependency_name_lower)
+      # Windows PowerShell parses -Command arguments again, including path spaces.
+      string(REPLACE "'" "''" selected_system_dependency_argument
+             "${selected_system_dependency}")
       execute_process(
         COMMAND "${CHTTP_POWERSHELL_EXECUTABLE}" -NoProfile -NonInteractive
                 -Command
                 "& { param([string]$Path) $ErrorActionPreference = 'Stop'; Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1'); Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class ChttpWrpIdentity { [DllImport(\"sfc.dll\", CharSet=CharSet.Unicode)] public static extern bool SfcIsFileProtected(IntPtr rpc, string path); }'; $Signature = Get-AuthenticodeSignature -LiteralPath $Path; $Product = (Get-Item -LiteralPath $Path).VersionInfo.ProductName; Write-Output ('Status=' + $Signature.Status); if ($Signature.SignerCertificate.Subject -ceq 'CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US') { Write-Output 'Publisher=MicrosoftWindows' } elseif ($Signature.SignerCertificate.Subject -ceq 'CN=Microsoft Windows Software Compatibility Publisher, O=Microsoft Corporation, L=Redmond, S=Washington, C=US') { Write-Output 'Publisher=MicrosoftWindowsCompatibility' } elseif ($Signature.SignerCertificate.Subject -ceq 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US') { Write-Output 'Publisher=MicrosoftCorporation' } else { Write-Output 'Publisher=Untrusted' }; if ([ChttpWrpIdentity]::SfcIsFileProtected([IntPtr]::Zero, $Path)) { Write-Output 'Identity=WindowsOS' } elseif (($Product -ceq 'Microsoft® Windows® Operating System' -or $Product -ceq 'Microsoft® Visual Studio®') -and ([IO.Path]::GetFileName($Path) -match '^(vcruntime[0-9]*d?|msvcp[0-9]*d?|ucrtbased?)\\.dll$')) { Write-Output 'Identity=MicrosoftRuntime' } else { Write-Output 'Identity=NonOS' } }"
-                "${selected_system_dependency}"
+                "'${selected_system_dependency_argument}'"
         RESULT_VARIABLE signature_result
         OUTPUT_VARIABLE signature_output
         ERROR_VARIABLE signature_error)

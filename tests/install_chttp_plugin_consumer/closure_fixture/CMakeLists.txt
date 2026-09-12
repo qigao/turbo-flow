@@ -27,7 +27,8 @@ elseif(CHTTP_CLOSURE_SCENARIO STREQUAL "system-forbidden")
 elseif(CHTTP_CLOSURE_SCENARIO STREQUAL "system-unsigned")
   set_target_properties(closure_leaf PROPERTIES OUTPUT_NAME "unsigned_helper")
 elseif(CHTTP_CLOSURE_SCENARIO STREQUAL "system-signed-non-os")
-  set_target_properties(closure_leaf PROPERTIES OUTPUT_NAME "concrt140")
+  # The installed import resolves to the owning MSVC test host, never a copied DLL.
+  set_target_properties(closure_leaf PROPERTIES OUTPUT_NAME "msobj140")
 endif()
 
 install(TARGETS closure_root closure_mid RUNTIME DESTINATION allowed/bin)

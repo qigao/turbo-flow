@@ -161,6 +161,11 @@ Windows 原生闭包测试使用系统内置 Windows PowerShell 与其
 `Microsoft.PowerShell.Security` 模块；配置阶段会显式验证该前置条件。测试以只读方式结合
 Windows Resource Protection 与 Authenticode 区分 OS 组件、当前 profile 的 Microsoft CRT
 和普通应用 DLL，模块或 trust 查询失败时直接拒绝，不回退到仅按目录或发布者放行。
+签名非 OS 负例直接读取当前 `VsDevCmd` 的 `dumpbin` 同目录下 `msobj140.dll`，不复制 DLL。
+启用这些测试的主机必须提供该 MSVC 文件及有效的 Microsoft Corporation 签名，且
+System32/SysWOW64 中不能有同名文件抢先解析；配置阶段显式检查这些条件。工具目录必须
+属于当前 `VCToolsInstallDir`。MSVC 布局变化导致此前置条件不满足时，须更新测试主机或
+fixture 契约；这不是产品运行依赖。负例须实际报告有效签名与 `Identity=NonOS` 才通过。
 
 ## 形式化模型
 

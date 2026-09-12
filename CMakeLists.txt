@@ -329,6 +329,32 @@ if(BUILD_TESTING AND BUILD_TESTS)
       message(FATAL_ERROR
               "Windows CHTTP closure tests require the built-in Microsoft.PowerShell.Security module")
     endif()
+    find_program(CHTTP_TEST_HOST_DUMPBIN dumpbin REQUIRED NO_CACHE)
+    cmake_path(GET CHTTP_TEST_HOST_DUMPBIN PARENT_PATH chttp_signed_fixture_dir)
+    file(TO_CMAKE_PATH "$ENV{VCToolsInstallDir}" chttp_test_tools_root)
+    cmake_path(IS_PREFIX chttp_test_tools_root "${chttp_signed_fixture_dir}"
+               NORMALIZE chttp_fixture_owned_by_tools)
+    if(chttp_test_tools_root STREQUAL "" OR NOT chttp_fixture_owned_by_tools OR
+       NOT EXISTS "${chttp_signed_fixture_dir}/msobj140.dll")
+      message(FATAL_ERROR
+              "Windows CHTTP closure tests require msobj140.dll beside the current VsDevCmd dumpbin in VCToolsInstallDir: ${chttp_signed_fixture_dir}")
+    endif()
+    # A system copy would win native resolution before the explicit fixture directory.
+    if(EXISTS "$ENV{WINDIR}/System32/msobj140.dll" OR
+       EXISTS "$ENV{WINDIR}/SysWOW64/msobj140.dll")
+      message(FATAL_ERROR
+              "Windows CHTTP signed non-OS fixture requires no system-directory msobj140.dll shadowing its MSVC source")
+    endif()
+    string(REPLACE "'" "''" chttp_signed_fixture_argument
+           "${chttp_signed_fixture_dir}/msobj140.dll")
+    execute_process(
+      COMMAND "${CHTTP_TEST_POWERSHELL_EXECUTABLE}" -NoProfile -NonInteractive
+              -Command "& { param([string]$Path) $ErrorActionPreference = 'Stop'; Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1'); $Signature = Get-AuthenticodeSignature -LiteralPath $Path; if ($Signature.Status -ne 'Valid' -or $Signature.SignerCertificate.Subject -cne 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US') { throw ('CHTTP signed fixture requires a valid Microsoft Corporation signature: ' + $Path) } }"
+              "'${chttp_signed_fixture_argument}'"
+      RESULT_VARIABLE chttp_signed_fixture_signature_result)
+    if(NOT chttp_signed_fixture_signature_result EQUAL 0)
+      message(FATAL_ERROR "Windows CHTTP signed non-OS fixture host prerequisite failed")
+    endif()
     foreach(closure_case IN ITEMS positive debug-positive legacy wrong-crt wrong-msvcp-crt debug-release-crt unresolved outside arbitrary-outside system-forbidden system-unsigned system-signed-non-os)
       add_test(NAME test_turbo_flow_chttp_closure_setup_${closure_case}
         COMMAND "${CMAKE_COMMAND}" --workflow --preset "closure-${closure_case}")
@@ -429,9 +455,10 @@ if(BUILD_TESTING AND BUILD_TESTS)
       COMMAND "${CMAKE_COMMAND}"
               "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/system-signed-non-os/install/allowed/bin/closure_root.dll"
               "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/system-signed-non-os/install/allowed"
-              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/system-signed-non-os/install/allowed/bin;$ENV{WINDIR}/System32"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/system-signed-non-os/install/allowed/bin;${chttp_signed_fixture_dir}"
+              "-DCHTTP_TEST_SYSTEM_ROOTS=${chttp_signed_fixture_dir}"
               -DCHTTP_TEST_CONFIG=Release
-              "-DCHTTP_EXPECT_FAILURE_PATTERN=Identity=NonOS"
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=msobj140.dll[\r\n ]+Status=Valid[\r\n ]+Publisher=MicrosoftCorporation[\r\n ]+Identity=NonOS"
               -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
     set_tests_properties(test_turbo_flow_chttp_closure_legacy PROPERTIES
       FIXTURES_REQUIRED chttp-closure-legacy LABELS "cmake;chttp-adapter" TIMEOUT 30)
