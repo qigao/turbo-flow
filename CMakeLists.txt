@@ -291,6 +291,16 @@ if(BUILD_TESTING AND BUILD_TESTS)
               "-DCHTTP_TEST_DEPENDENTS=chttp_client.dll chttp_client.dll chttp_server.dll"
               "-DCHTTP_EXPECT_FAILURE_PATTERN=requires exactly one chttp_client.dll import"
               -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_native_gateway_concrete
+      COMMAND "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=gateway
+              "-DCHTTP_TEST_DEPENDENTS=KERNEL32.dll chttp_client.dll"
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=Gateway must not link a concrete HTTP implementation"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_native_provider_missing_adapter
+      COMMAND "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=provider
+              "-DCHTTP_TEST_DEPENDENTS=KERNEL32.dll"
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=provider requires exactly one tf_chttp_adapter.dll import"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
     set_tests_properties(test_turbo_flow_chttp_native_adapter PROPERTIES
       LABELS "cmake;chttp-adapter" TIMEOUT 30)
     set_tests_properties(
@@ -299,7 +309,60 @@ if(BUILD_TESTING AND BUILD_TESTS)
       test_turbo_flow_chttp_native_wrong_basename
       test_turbo_flow_chttp_native_missing_server
       test_turbo_flow_chttp_native_duplicate_client
+      test_turbo_flow_chttp_native_gateway_concrete
+      test_turbo_flow_chttp_native_provider_missing_adapter
       PROPERTIES LABELS "cmake;chttp-adapter" TIMEOUT 30)
+
+    set(chttp_closure_fixture_dir
+        "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/closure_fixture")
+    foreach(closure_case IN ITEMS legacy wrong-crt unresolved outside)
+      add_test(NAME test_turbo_flow_chttp_closure_setup_${closure_case}
+        COMMAND "${CMAKE_COMMAND}" --workflow --preset "closure-${closure_case}")
+      set_tests_properties(test_turbo_flow_chttp_closure_setup_${closure_case}
+        PROPERTIES WORKING_DIRECTORY "${chttp_closure_fixture_dir}"
+                   FIXTURES_SETUP "chttp-closure-${closure_case}"
+                   LABELS "cmake;chttp-adapter" TIMEOUT 120)
+    endforeach()
+    add_test(NAME test_turbo_flow_chttp_closure_legacy
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/legacy/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/legacy/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/legacy/install/allowed/bin"
+              -DCHTTP_TEST_CONFIG=Release
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=recursive closure contains a legacy salts_chttp DLL"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_closure_wrong_crt
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/wrong-crt/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/wrong-crt/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/wrong-crt/install/allowed/bin"
+              -DCHTTP_TEST_CONFIG=Release
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=recursive closure contains a Debug CRT"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_closure_unresolved
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/unresolved/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/unresolved/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/unresolved/install/allowed/bin"
+              -DCHTTP_TEST_CONFIG=Release
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=closure has unresolved dependencies"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_closure_outside
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/outside/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/outside/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/outside/install/allowed/bin;${chttp_closure_fixture_dir}/build/outside/install/outside/bin"
+              -DCHTTP_TEST_CONFIG=Release
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=resolved outside the active profile roots"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    set_tests_properties(test_turbo_flow_chttp_closure_legacy PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-legacy LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(test_turbo_flow_chttp_closure_wrong_crt PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-wrong-crt LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(test_turbo_flow_chttp_closure_unresolved PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-unresolved LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(test_turbo_flow_chttp_closure_outside PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-outside LABELS "cmake;chttp-adapter" TIMEOUT 30)
   endif()
 
   add_test(

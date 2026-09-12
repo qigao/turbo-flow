@@ -393,9 +393,18 @@ if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
 endif()
 
 set(component_negative_cases
-    config-missing-root graph-missing-root chttp-missing-root unknown)
+    config-missing-root graph-missing-root
+    chttp-missing-root chttp-empty-root chttp-wrong-root chttp-empty-sdk
+    chttp-outside-cache chttp-preimport-no-provenance
+    chttp-preimport-outside chttp-wrong-config unknown)
 set(component_negative_patterns
-    SALTS_ROOT RULES_FORGE_ROOT HTTP_SERVICES_ROOT MissingComponent)
+    SALTS_ROOT RULES_FORGE_ROOT
+    "HTTP_SERVICES_ROOT is required" "HTTP_SERVICES_ROOT is required"
+    "Could not find.*Chttp" "HTTP_SERVICES_ROOT is an empty SDK directory"
+    "Chttp_DIR is outside HTTP_SERVICES_ROOT"
+    "already imported without verifiable Chttp_DIR provenance"
+    "runtime is outside HTTP_SERVICES_ROOT"
+    "does not declare requested configuration" MissingComponent)
 if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
   list(PREPEND component_negative_cases turbodb-missing-root)
   list(PREPEND component_negative_patterns TURBODB_ROOT)

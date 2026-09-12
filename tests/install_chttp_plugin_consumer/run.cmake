@@ -150,6 +150,39 @@ if(WIN32)
   set(CHTTP_TEST_LAYER adapter)
   set(CHTTP_TEST_DEPENDENTS "${adapter_dependent_output}")
   include("${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
+  set(chttp_closure_roots
+      "${stage_dir}" "$ENV{HTTP_SERVICES_ROOT}" "${salts_root}"
+      "${salts_utils_root}" "${rules_forge_root}")
+  set(chttp_closure_search_dirs
+      "${stage_dir}/bin" "$ENV{HTTP_SERVICES_ROOT}/bin" "${salts_root}/bin"
+      "${salts_utils_root}/bin" "${rules_forge_root}/bin")
+  if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
+    list(APPEND chttp_closure_roots "${turbodb_root}")
+    list(APPEND chttp_closure_search_dirs "${turbodb_root}/bin")
+  endif()
+  if(TURBO_FLOW_CONFIG STREQUAL "Debug")
+    list(APPEND chttp_closure_roots
+         "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/debug")
+    list(APPEND chttp_closure_search_dirs
+         "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin")
+  else()
+    list(APPEND chttp_closure_roots
+         "$ENV{VCPKG_INSTALLED_DIR}/x64-windows")
+    list(APPEND chttp_closure_search_dirs
+         "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/bin")
+  endif()
+  string(REPLACE ";" "__CHTTP_LIST__" chttp_closure_roots_arg
+         "${chttp_closure_roots}")
+  string(REPLACE ";" "__CHTTP_LIST__" chttp_closure_search_dirs_arg
+         "${chttp_closure_search_dirs}")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+            "-DCHTTP_TEST_MODULE=${stage_dir}/bin/tf_chttp_adapter.dll"
+            "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_roots_arg}"
+            "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_search_dirs_arg}"
+            "-DCHTTP_TEST_CONFIG=${TURBO_FLOW_CONFIG}"
+            -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake"
+    COMMAND_ERROR_IS_FATAL ANY)
   if(TURBO_FLOW_CONFIG STREQUAL "Debug")
     if(NOT adapter_dependent_output MATCHES "VCRUNTIME140D\\.dll")
       message(FATAL_ERROR

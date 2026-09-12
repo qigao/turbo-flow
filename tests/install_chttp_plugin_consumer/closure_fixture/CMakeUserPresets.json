@@ -1,0 +1,22 @@
+{
+  "version": 6,
+  "include": ["../../../CMakeUserPresets.json"],
+  "configurePresets": [
+    { "name": "closure-legacy", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/legacy", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "legacy", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/legacy/install" } },
+    { "name": "closure-wrong-crt", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/wrong-crt", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "wrong-crt", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/wrong-crt/install" } },
+    { "name": "closure-unresolved", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/unresolved", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "unresolved", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/unresolved/install" } },
+    { "name": "closure-outside", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/outside", "cacheVariables": { "CHTTP_CLOSURE_SCENARIO": "outside", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/outside/install" } }
+  ],
+  "buildPresets": [
+    { "name": "install-closure-legacy", "configurePreset": "closure-legacy", "targets": ["install"] },
+    { "name": "install-closure-wrong-crt", "configurePreset": "closure-wrong-crt", "targets": ["install"] },
+    { "name": "install-closure-unresolved", "configurePreset": "closure-unresolved", "targets": ["install"] },
+    { "name": "install-closure-outside", "configurePreset": "closure-outside", "targets": ["install"] }
+  ],
+  "workflowPresets": [
+    { "name": "closure-legacy", "steps": [{ "type": "configure", "name": "closure-legacy" }, { "type": "build", "name": "install-closure-legacy" }] },
+    { "name": "closure-wrong-crt", "steps": [{ "type": "configure", "name": "closure-wrong-crt" }, { "type": "build", "name": "install-closure-wrong-crt" }] },
+    { "name": "closure-unresolved", "steps": [{ "type": "configure", "name": "closure-unresolved" }, { "type": "build", "name": "install-closure-unresolved" }] },
+    { "name": "closure-outside", "steps": [{ "type": "configure", "name": "closure-outside" }, { "type": "build", "name": "install-closure-outside" }] }
+  ]
+}
