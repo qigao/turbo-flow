@@ -1,7 +1,6 @@
 set(chttp_plugin_consumer_build_dir "${test_root}/chttp-plugin-build")
-set(chttp_plugin_consumer_source_dir "${test_root}/chttp-plugin-source")
-file(COPY "${TURBO_FLOW_SOURCE_DIR}/tests/install_chttp_plugin_consumer/"
-     DESTINATION "${chttp_plugin_consumer_source_dir}")
+set(chttp_plugin_consumer_source_dir
+    "${TURBO_FLOW_SOURCE_DIR}/tests/install_chttp_plugin_consumer")
 if(WIN32)
   set(installed_chttp_plugin "${stage_dir}/bin/tf_chttp_plugin.dll")
   set(chttp_plugin_consumer_executable
@@ -41,15 +40,38 @@ run_checked(
 
 if(WIN32)
   set(dumpbin "${TURBO_FLOW_COMPILER_RUNTIME_DIR}/dumpbin.exe")
-  include("${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
-  run_expected_failure("CHTTP rejects unversioned native ABI" "requires salts_chttp-2.dll"
-    "${CMAKE_COMMAND}" -DCHTTP_TEST_DEPENDENCY=salts_chttp.dll
+  run_expected_failure("CHTTP rejects legacy unversioned native ABI"
+    "must not contain a legacy salts_chttp DLL"
+    "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+    "-DCHTTP_TEST_DEPENDENTS=salts_chttp.dll chttp_client.dll chttp_server.dll"
     -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
-  run_expected_failure("CHTTP rejects a different native ABI" "requires salts_chttp-2.dll"
-    "${CMAKE_COMMAND}" -DCHTTP_TEST_DEPENDENCY=salts_chttp-3.dll
+  run_expected_failure("CHTTP rejects legacy versioned native ABI"
+    "must not contain a legacy salts_chttp DLL"
+    "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+    "-DCHTTP_TEST_DEPENDENTS=salts_chttp-2.dll chttp_client.dll chttp_server.dll"
     -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
-  run_checked("CHTTP accepts current native ABI"
-    "${CMAKE_COMMAND}" -DCHTTP_TEST_DEPENDENCY=salts_chttp-2.dll
+  run_expected_failure("CHTTP rejects wrong native basename"
+    "unknown native import"
+    "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+    "-DCHTTP_TEST_DEPENDENTS=chttp_clientXdll chttp_client.dll chttp_server.dll"
+    -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
+  run_expected_failure("CHTTP rejects adapter without both native sides"
+    "requires exactly one chttp_server.dll import"
+    "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+    "-DCHTTP_TEST_DEPENDENTS=chttp_client.dll"
+    -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
+  run_expected_failure("CHTTP rejects duplicate native imports"
+    "requires exactly one chttp_client.dll import"
+    "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+    "-DCHTTP_TEST_DEPENDENTS=chttp_client.dll chttp_client.dll chttp_server.dll"
+    -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
+  run_checked("CHTTP accepts standalone Client and Server native ABI"
+    "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=adapter
+    "-DCHTTP_TEST_DEPENDENTS=chttp_client.dll chttp_server.dll"
+    -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
+  run_checked("CHTTP accepts Gateway without a concrete HTTP dependency"
+    "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=gateway
+    "-DCHTTP_TEST_DEPENDENTS=KERNEL32.dll"
     -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
   if(NOT EXISTS "${dumpbin}")
     message(FATAL_ERROR "Required dumpbin executable does not exist: ${dumpbin}")
@@ -89,7 +111,9 @@ if(WIN32)
     message(FATAL_ERROR
             "CHTTP plugin must not depend on turbo_flow.dll\n${plugin_dependent_output}\n${plugin_dependent_error}")
   endif()
-  chttp_require_native_abi("${plugin_dependent_output}")
+  set(CHTTP_TEST_LAYER provider)
+  set(CHTTP_TEST_DEPENDENTS "${plugin_dependent_output}")
+  include("${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
   if(TURBO_FLOW_CONFIG STREQUAL "Debug")
     if(NOT plugin_dependent_output MATCHES "VCRUNTIME140D\\.dll")
       message(FATAL_ERROR "Debug CHTTP plugin does not use the Debug CRT\n${plugin_dependent_output}")
@@ -111,6 +135,22 @@ if(WIN32)
     message(FATAL_ERROR
             "Gateway consumer must not link the CHTTP adapter, CHTTP runtime, or turbo_flow.dll\n${consumer_dependent_output}")
   endif()
+  set(CHTTP_TEST_LAYER gateway)
+  set(CHTTP_TEST_DEPENDENTS "${consumer_dependent_output}")
+  include("${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
+
+  execute_process(
+    COMMAND "${dumpbin}" /nologo /dependents "${stage_dir}/bin/tf_chttp_adapter.dll"
+    RESULT_VARIABLE adapter_dependent_result
+    OUTPUT_VARIABLE adapter_dependent_output
+    ERROR_VARIABLE adapter_dependent_error)
+  if(NOT adapter_dependent_result EQUAL 0)
+    message(FATAL_ERROR
+            "CHTTP adapter dependency inspection failed (${adapter_dependent_result})\n${adapter_dependent_output}\n${adapter_dependent_error}")
+  endif()
+  set(CHTTP_TEST_LAYER adapter)
+  set(CHTTP_TEST_DEPENDENTS "${adapter_dependent_output}")
+  include("${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
 endif()
 
 run_checked(
