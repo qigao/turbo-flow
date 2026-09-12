@@ -2,47 +2,82 @@ cmake_minimum_required(VERSION 3.20)
 
 foreach(required_var IN ITEMS
         TURBO_FLOW_SOURCE_DIR
-        TURBO_FLOW_BINARY_DIR
-        TURBO_FLOW_GENERATOR
         TURBO_FLOW_CONFIG
-        TURBO_FLOW_CTEST_COMMAND
-        TURBO_FLOW_SALTS_ROOT
-        TURBO_FLOW_SALTS_UTILS_ROOT
-        TURBO_FLOW_RULES_FORGE_ROOT
         TURBO_FLOW_HAS_TURBODB_ADAPTER)
   if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
     message(FATAL_ERROR "Missing required variable: ${required_var}")
   endif()
 endforeach()
-
-if(WIN32)
-  foreach(required_var IN ITEMS
-          TURBO_FLOW_VCPKG_INSTALLED_DIR
-          TURBO_FLOW_VCPKG_TARGET_TRIPLET
-          TURBO_FLOW_COMPILER_RUNTIME_DIR)
-    if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
-      message(FATAL_ERROR "Missing required variable: ${required_var}")
-    endif()
-  endforeach()
+if(NOT "${TURBO_FLOW_HAS_TURBODB_ADAPTER}" MATCHES "^(ON|OFF)$")
+  message(FATAL_ERROR
+    "TURBO_FLOW_HAS_TURBODB_ADAPTER parent metadata must be ON or OFF; got '${TURBO_FLOW_HAS_TURBODB_ADAPTER}'")
 endif()
+set(ENV{TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER}
+    "${TURBO_FLOW_HAS_TURBODB_ADAPTER}")
 
-file(TO_CMAKE_PATH "${TURBO_FLOW_SALTS_ROOT}" salts_root)
-file(TO_CMAKE_PATH "${TURBO_FLOW_SALTS_UTILS_ROOT}" salts_utils_root)
-file(TO_CMAKE_PATH "${TURBO_FLOW_RULES_FORGE_ROOT}" rules_forge_root)
-if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
-  if(NOT DEFINED TURBO_FLOW_TURBODB_ROOT OR
-     "${TURBO_FLOW_TURBODB_ROOT}" STREQUAL "" OR
-     NOT IS_DIRECTORY "${TURBO_FLOW_TURBODB_ROOT}")
-    message(FATAL_ERROR
-            "TURBO_FLOW_TURBODB_ROOT is required for the installed TurboDb adapter")
+foreach(required_root IN ITEMS SALTS_ROOT SALTS_UTILS_ROOT RULES_FORGE_ROOT)
+  if(NOT DEFINED ENV{${required_root}} OR
+     "$ENV{${required_root}}" STREQUAL "" OR
+     NOT IS_DIRECTORY "$ENV{${required_root}}")
+    message(FATAL_ERROR "${required_root} must name an installed SDK prefix")
   endif()
-  file(TO_CMAKE_PATH "${TURBO_FLOW_TURBODB_ROOT}" turbodb_root)
+endforeach()
+file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" salts_root)
+file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" salts_utils_root)
+file(TO_CMAKE_PATH "$ENV{RULES_FORGE_ROOT}" rules_forge_root)
+if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
+  if(NOT DEFINED ENV{TURBODB_ROOT} OR
+     "$ENV{TURBODB_ROOT}" STREQUAL "" OR
+     NOT IS_DIRECTORY "$ENV{TURBODB_ROOT}")
+    message(FATAL_ERROR
+            "TURBODB_ROOT is required for the installed TurboDb adapter")
+  endif()
+  file(TO_CMAKE_PATH "$ENV{TURBODB_ROOT}" turbodb_root)
 endif()
 
-set(test_root "${TURBO_FLOW_BINARY_DIR}/install-consumer-test")
-set(stage_dir "${test_root}/stage")
-set(full_consumer_build_dir "${test_root}/full-build")
-set(fixture_stage_dir "${test_root}/fixture-stage")
+if(NOT DEFINED ENV{TURBO_FLOW_ACTIVE_PRESET} OR
+   "$ENV{TURBO_FLOW_ACTIVE_PRESET}" STREQUAL "")
+  message(FATAL_ERROR "TURBO_FLOW_ACTIVE_PRESET is required")
+endif()
+set(consumer_profile "$ENV{TURBO_FLOW_ACTIVE_PRESET}")
+if(NOT consumer_profile MATCHES "^(win|linux)-(dev|release)-user$")
+  message(FATAL_ERROR
+          "Unsupported install-consumer profile: ${consumer_profile}")
+endif()
+foreach(metadata_case IN ITEMS missing malformed)
+  if(metadata_case STREQUAL "missing")
+    set(metadata_command
+        "${CMAKE_COMMAND}" -E env
+        --unset=TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER
+        "${CMAKE_COMMAND}" --fresh --preset "consumer-cxx-${consumer_profile}")
+  else()
+    set(metadata_command
+        "${CMAKE_COMMAND}" -E env
+        "TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER=INVALID"
+        "${CMAKE_COMMAND}" --fresh --preset "consumer-cxx-${consumer_profile}")
+  endif()
+  execute_process(
+    COMMAND ${metadata_command}
+    WORKING_DIRECTORY "${TURBO_FLOW_SOURCE_DIR}/tests/install_consumer"
+    RESULT_VARIABLE metadata_result
+    OUTPUT_VARIABLE metadata_output
+    ERROR_VARIABLE metadata_error)
+  string(CONCAT metadata_diagnostic "${metadata_output}" "\n${metadata_error}")
+  if(metadata_result EQUAL 0 OR
+     NOT metadata_diagnostic MATCHES
+         "TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER environment metadata must be ON or OFF")
+    message(FATAL_ERROR
+      "${metadata_case} TurboDb capability metadata negative case failed\n${metadata_diagnostic}")
+  endif()
+endforeach()
+if(NOT DEFINED ENV{TURBO_FLOW_ROOT} OR
+   "$ENV{TURBO_FLOW_ROOT}" STREQUAL "")
+  message(FATAL_ERROR "TURBO_FLOW_ROOT is required")
+endif()
+file(TO_CMAKE_PATH "$ENV{TURBO_FLOW_ROOT}" stage_dir)
+set(test_root "${TURBO_FLOW_SOURCE_DIR}/tests/install_consumer/build")
+set(full_consumer_build_dir "${test_root}/full-${consumer_profile}")
+set(fixture_stage_dir "${full_consumer_build_dir}/install")
 if(WIN32)
   set(installed_operation_fixture
       "${fixture_stage_dir}/bin/turbo_flow_install_operation_fixture.dll")
@@ -53,47 +88,18 @@ else()
   set(installed_operation_fixture
       "${fixture_stage_dir}/lib/libturbo_flow_install_operation_fixture.so")
 endif()
-set(cxx_consumer_build_dir "${test_root}/cxx-build")
-set(cnet_plugin_consumer_build_dir "${test_root}/cnet-plugin-build")
+set(cxx_consumer_build_dir "${test_root}/cxx-${consumer_profile}")
 set(full_consumer_source_dir "${TURBO_FLOW_SOURCE_DIR}/tests/install_consumer")
 set(component_consumer_source_dir "${full_consumer_source_dir}/component")
 set(cnet_plugin_consumer_source_dir
     "${TURBO_FLOW_SOURCE_DIR}/tests/install_cnet_plugin_consumer")
+set(cnet_plugin_consumer_build_dir
+    "${cnet_plugin_consumer_source_dir}/build/${consumer_profile}")
 
-file(REMOVE_RECURSE "${test_root}")
-
-function(run_checked operation)
-  execute_process(
-    COMMAND ${ARGN}
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE error)
-  if(NOT result EQUAL 0)
-    message(FATAL_ERROR
-            "${operation} failed (${result})\nstdout:\n${output}\nstderr:\n${error}")
-  endif()
-endfunction()
-
-function(run_expected_failure operation expected_pattern)
-  execute_process(
-    COMMAND ${ARGN}
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE error)
-  if(result EQUAL 0)
-    message(FATAL_ERROR "${operation} unexpectedly succeeded")
-  endif()
-  string(CONCAT diagnostic "${output}" "\n" "${error}")
-  if(NOT diagnostic MATCHES "${expected_pattern}")
-    message(FATAL_ERROR
-            "${operation} failed without '${expected_pattern}'\n${diagnostic}")
-  endif()
-endfunction()
-
-run_checked(
-  "TurboFlow install"
-  "${CMAKE_COMMAND}" --install "${TURBO_FLOW_BINARY_DIR}"
-  --prefix "${stage_dir}" --config "${TURBO_FLOW_CONFIG}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset "install-${consumer_profile}"
+  WORKING_DIRECTORY "${TURBO_FLOW_SOURCE_DIR}"
+  COMMAND_ERROR_IS_FATAL ANY)
 
 file(GLOB _turbo_flow_legacy_stage_artifacts
      "${stage_dir}/bin/turbo_flow.dll"
@@ -106,130 +112,37 @@ if(_turbo_flow_legacy_stage_artifacts)
           "TurboFlow 2.0 install stage contains retired aggregate artifacts: ${_turbo_flow_legacy_stage_artifacts}")
 endif()
 
-set(turbo_flow_package_dir "${stage_dir}/lib/cmake/TurboFlow")
-set(salts_package_dir "${salts_root}/lib/cmake/Salts")
-set(salts_utils_package_dir "${salts_utils_root}/lib/cmake/SaltsUtils")
-set(rules_forge_package_dir "${rules_forge_root}/lib/cmake/RulesForge")
-if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
-  set(orm_package_dir "${turbodb_root}/lib/cmake/Orm")
-  set(turbodb_consumer_env "TURBODB_ROOT=${turbodb_root}")
-  set(turbodb_consumer_cmake_args
-      "-DOrm_DIR=${orm_package_dir}"
-      -DTURBO_FLOW_TEST_HAS_TURBODB_ADAPTER=TRUE)
-else()
-  set(turbodb_consumer_env)
-  set(turbodb_consumer_cmake_args
-      -DTURBO_FLOW_TEST_HAS_TURBODB_ADAPTER=FALSE)
-endif()
-
 # A package requesting the retired aggregate must fail at component selection,
 # before a consumer can link the legacy target.
-run_expected_failure(
-  "removed Flow component"
-  "Unsupported TurboFlow component: Flow"
-  "${CMAKE_COMMAND}" -E env
-  "SALTS_ROOT=${salts_root}"
-  "SALTS_UTILS_ROOT=${salts_utils_root}"
-  "RULES_FORGE_ROOT=${rules_forge_root}"
-  ${turbodb_consumer_env}
-  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
-  -B "${test_root}/removed-flow-build" -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-  "-DSalts_DIR=${salts_package_dir}"
-  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-  "-DRulesForge_DIR=${rules_forge_package_dir}"
-  ${turbodb_consumer_cmake_args}
-  -DTURBO_FLOW_TEST_COMPONENT=Flow)
+foreach(failure_case IN ITEMS removed-flow version-1)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" --fresh --preset
+            "component-${failure_case}-${consumer_profile}"
+    WORKING_DIRECTORY "${component_consumer_source_dir}"
+    RESULT_VARIABLE configure_result
+    OUTPUT_VARIABLE configure_output
+    ERROR_VARIABLE configure_error)
+  if(configure_result EQUAL 0)
+    message(FATAL_ERROR "${failure_case} configure unexpectedly succeeded")
+  endif()
+  string(CONCAT configure_diagnostic "${configure_output}" "\n${configure_error}")
+  if(failure_case STREQUAL "removed-flow" AND
+     NOT configure_diagnostic MATCHES "Unsupported TurboFlow component: Flow")
+    message(FATAL_ERROR "removed Flow failed without the component diagnostic\n${configure_diagnostic}")
+  elseif(failure_case STREQUAL "version-1" AND
+         NOT configure_diagnostic MATCHES "compatible with requested version")
+    message(FATAL_ERROR "version 1 failed without the version diagnostic\n${configure_diagnostic}")
+  endif()
+endforeach()
 
-run_expected_failure(
-  "TurboFlow 1.x request"
-  "compatible with requested version"
-  "${CMAKE_COMMAND}" -E env
-  "SALTS_ROOT=${salts_root}"
-  "SALTS_UTILS_ROOT=${salts_utils_root}"
-  "RULES_FORGE_ROOT=${rules_forge_root}"
-  ${turbodb_consumer_env}
-  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
-  -B "${test_root}/version-1-build" -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-  "-DSalts_DIR=${salts_package_dir}"
-  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-  "-DRulesForge_DIR=${rules_forge_package_dir}"
-  ${turbodb_consumer_cmake_args}
-  -DTURBO_FLOW_TEST_COMPONENT=Config
-  -DTURBO_FLOW_TEST_PACKAGE_VERSION=1.0)
-
-run_checked(
-  "CXX-only consumer configure"
-  "${CMAKE_COMMAND}" -E env
-  "SALTS_ROOT=${salts_root}"
-  "SALTS_UTILS_ROOT=${salts_utils_root}"
-  "RULES_FORGE_ROOT=${rules_forge_root}"
-  ${turbodb_consumer_env}
-  "${CMAKE_COMMAND}" -S "${full_consumer_source_dir}"
-  -B "${cxx_consumer_build_dir}"
-  -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTURBO_FLOW_CONSUMER_CXX_ONLY=ON"
-  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-  "-DSalts_DIR=${salts_package_dir}"
-  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-  "-DRulesForge_DIR=${rules_forge_package_dir}"
-  ${turbodb_consumer_cmake_args})
-
-run_checked(
-  "CXX-only consumer build"
-  "${CMAKE_COMMAND}" --build "${cxx_consumer_build_dir}"
-  --config "${TURBO_FLOW_CONFIG}" --parallel)
-
-if(WIN32)
-  if(TURBO_FLOW_CONFIG STREQUAL "Debug")
-    set(vcpkg_runtime_dir
-        "${TURBO_FLOW_VCPKG_INSTALLED_DIR}/${TURBO_FLOW_VCPKG_TARGET_TRIPLET}/debug/bin")
-  elseif(TURBO_FLOW_CONFIG STREQUAL "Release")
-    set(vcpkg_runtime_dir
-        "${TURBO_FLOW_VCPKG_INSTALLED_DIR}/${TURBO_FLOW_VCPKG_TARGET_TRIPLET}/bin")
-  else()
-    message(FATAL_ERROR
-            "Unsupported install-consumer runtime configuration: ${TURBO_FLOW_CONFIG}")
-  endif()
-  if(NOT IS_DIRECTORY "${vcpkg_runtime_dir}")
-    message(FATAL_ERROR "vcpkg runtime directory does not exist: ${vcpkg_runtime_dir}")
-  endif()
-  set(runtime_dirs
-      "${vcpkg_runtime_dir}"
-      "${TURBO_FLOW_COMPILER_RUNTIME_DIR}"
-      "${stage_dir}/bin"
-      "${salts_root}/bin"
-      "${salts_utils_root}/bin"
-      "${rules_forge_root}/bin")
-  if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
-    list(APPEND runtime_dirs "${turbodb_root}/bin")
-  endif()
-  foreach(runtime_dir IN LISTS runtime_dirs)
-    if(NOT IS_DIRECTORY "${runtime_dir}")
-      message(FATAL_ERROR "Required runtime directory does not exist: ${runtime_dir}")
-    endif()
-  endforeach()
-  list(JOIN runtime_dirs ";" runtime_path)
-  set(ENV{PATH} "${runtime_path};$ENV{PATH}")
-elseif(APPLE)
-  set(ENV{DYLD_LIBRARY_PATH}
-      "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib:$ENV{DYLD_LIBRARY_PATH}")
-  if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
-    set(ENV{DYLD_LIBRARY_PATH}
-        "${turbodb_root}/lib:$ENV{DYLD_LIBRARY_PATH}")
-  endif()
-else()
-  set(ENV{LD_LIBRARY_PATH}
-      "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib:$ENV{LD_LIBRARY_PATH}")
-  if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
-    set(ENV{LD_LIBRARY_PATH}
-        "${turbodb_root}/lib:$ENV{LD_LIBRARY_PATH}")
-  endif()
-endif()
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset "consumer-cxx-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset "consumer-cxx-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
 
 if(WIN32)
   set(installed_cnet_plugin "${stage_dir}/bin/tf_cnet_plugin.dll")
@@ -248,28 +161,19 @@ if(NOT EXISTS "${installed_cnet_plugin}")
   message(FATAL_ERROR "Installed CNet provider DLL is missing: ${installed_cnet_plugin}")
 endif()
 
-run_checked(
-  "CNet plugin Gateway consumer configure"
-  "${CMAKE_COMMAND}" -E env
-  "SALTS_ROOT=${salts_root}"
-  "SALTS_UTILS_ROOT=${salts_utils_root}"
-  "RULES_FORGE_ROOT=${rules_forge_root}"
-  "${CMAKE_COMMAND}" -S "${cnet_plugin_consumer_source_dir}"
-  -B "${cnet_plugin_consumer_build_dir}" -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-  "-DSalts_DIR=${salts_package_dir}"
-  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-  "-DRulesForge_DIR=${rules_forge_package_dir}"
-  "-DTURBO_FLOW_CNET_PLUGIN_PATH=${installed_cnet_plugin}")
-
-run_checked(
-  "CNet plugin Gateway consumer build"
-  "${CMAKE_COMMAND}" --build "${cnet_plugin_consumer_build_dir}"
-  --config "${TURBO_FLOW_CONFIG}" --parallel)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --preset
+          "cnet-plugin-consumer-${consumer_profile}"
+  WORKING_DIRECTORY "${cnet_plugin_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset
+          "cnet-plugin-consumer-${consumer_profile}"
+  WORKING_DIRECTORY "${cnet_plugin_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
 
 if(WIN32)
-  set(dumpbin "${TURBO_FLOW_COMPILER_RUNTIME_DIR}/dumpbin.exe")
+  find_program(dumpbin dumpbin.exe REQUIRED)
   if(NOT EXISTS "${dumpbin}")
     message(FATAL_ERROR "Required dumpbin executable does not exist: ${dumpbin}")
   endif()
@@ -357,16 +261,23 @@ if(WIN32)
   endif()
 endif()
 
-run_checked(
-  "CNet plugin Gateway consumer loopback"
-  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${cnet_plugin_consumer_build_dir}"
-  -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset
+          "cnet-plugin-consumer-${consumer_profile}"
+  WORKING_DIRECTORY "${cnet_plugin_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
 
-run_expected_failure(
-  "CNet plugin Gateway missing DLL"
-  "failed at plugin DLL load"
-  "${cnet_plugin_consumer_executable}"
-  "${stage_dir}/bin/missing-cnet-plugin.dll")
+execute_process(
+  COMMAND "${cnet_plugin_consumer_executable}"
+          "${stage_dir}/bin/missing-cnet-plugin.dll"
+  RESULT_VARIABLE missing_cnet_result
+  OUTPUT_VARIABLE missing_cnet_output
+  ERROR_VARIABLE missing_cnet_error)
+string(CONCAT missing_cnet_diagnostic "${missing_cnet_output}" "\n${missing_cnet_error}")
+if(missing_cnet_result EQUAL 0 OR
+   NOT missing_cnet_diagnostic MATCHES "failed at plugin DLL load")
+  message(FATAL_ERROR "CNet missing-DLL negative case failed\n${missing_cnet_diagnostic}")
+endif()
 
 if(WIN32)
   set(cnet_missing_dependency_dir "${test_root}/cnet-missing-dependency")
@@ -375,67 +286,117 @@ if(WIN32)
     "${installed_cnet_plugin}"
     "${cnet_missing_dependency_dir}/tf_cnet_plugin.dll"
     COPYONLY)
-  run_expected_failure(
-    "CNet plugin Gateway missing transitive dependency"
-    "Win32 dynamic library error 126"
-    "${cnet_plugin_consumer_executable}"
-    "${cnet_missing_dependency_dir}/tf_cnet_plugin.dll")
+  execute_process(
+    COMMAND "${cnet_plugin_consumer_executable}"
+            "${cnet_missing_dependency_dir}/tf_cnet_plugin.dll"
+    RESULT_VARIABLE missing_cnet_dependency_result
+    OUTPUT_VARIABLE missing_cnet_dependency_output
+    ERROR_VARIABLE missing_cnet_dependency_error)
+  string(CONCAT missing_cnet_dependency_diagnostic
+         "${missing_cnet_dependency_output}" "\n${missing_cnet_dependency_error}")
+  if(missing_cnet_dependency_result EQUAL 0 OR
+     NOT missing_cnet_dependency_diagnostic MATCHES "Win32 dynamic library error 126")
+    message(FATAL_ERROR
+            "CNet missing-transitive negative case failed\n${missing_cnet_dependency_diagnostic}")
+  endif()
 endif()
 
 include("${TURBO_FLOW_SOURCE_DIR}/tests/install_chttp_plugin_consumer/run.cmake")
 
-set(config_consumer_build_dir "${test_root}/config-build")
-run_checked(
-  "Config-only consumer configure"
-  "${CMAKE_COMMAND}" -E env
-  "SALTS_ROOT=${salts_root}"
-  --unset=SALTS_UTILS_ROOT
-  --unset=RULES_FORGE_ROOT
-  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
-  -B "${config_consumer_build_dir}" -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-  "-DSalts_DIR=${salts_package_dir}"
-  -DCMAKE_DISABLE_FIND_PACKAGE_SaltsUtils=TRUE
-  -DCMAKE_DISABLE_FIND_PACKAGE_RulesForge=TRUE
-  -DTURBO_FLOW_TEST_COMPONENT=Config)
-run_checked(
-  "Config-only consumer build"
-  "${CMAKE_COMMAND}" --build "${config_consumer_build_dir}"
-  --config "${TURBO_FLOW_CONFIG}" --parallel)
-run_checked(
-  "Config-only consumer execution"
-  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${config_consumer_build_dir}"
-  -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+set(config_consumer_build_dir
+    "${component_consumer_source_dir}/build/config-${consumer_profile}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --preset "component-config-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset "component-config-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset "component-config-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
 
-run_checked(
-  "full consumer configure"
-  "${CMAKE_COMMAND}" -E env
-  "SALTS_ROOT=${salts_root}"
-  "SALTS_UTILS_ROOT=${salts_utils_root}"
-  "RULES_FORGE_ROOT=${rules_forge_root}"
-  ${turbodb_consumer_env}
-  "${CMAKE_COMMAND}" -S "${full_consumer_source_dir}"
-  -B "${full_consumer_build_dir}"
-  -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-  "-DSalts_DIR=${salts_package_dir}"
-  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-  "-DRulesForge_DIR=${rules_forge_package_dir}"
-  ${turbodb_consumer_cmake_args}
-  "-DTURBO_FLOW_INSTALL_FIXTURE_PATH=${installed_operation_fixture}"
-  -DTURBO_FLOW_TEST_ALL_COMPONENTS=TRUE)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
 
-run_checked(
-  "full consumer build"
-  "${CMAKE_COMMAND}" --build "${full_consumer_build_dir}"
-  --config "${TURBO_FLOW_CONFIG}" --parallel)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+          "TURBO_FLOW_CHTTP_SCENARIO=preimport-same-config-mapping"
+          "${CMAKE_COMMAND}" --fresh --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
 
-run_checked(
-  "installed operation fixture staging"
-  "${CMAKE_COMMAND}" --install "${full_consumer_build_dir}"
-  --prefix "${fixture_stage_dir}" --config "${TURBO_FLOW_CONFIG}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset
+          "component-cnet-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset
+          "component-cnet-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset
+          "component-cnet-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset
+          "component-salts-dir-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset
+          "component-salts-dir-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset
+          "component-salts-dir-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --preset "consumer-full-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset "consumer-full-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset
+          "install-consumer-full-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
 
 if(NOT EXISTS "${installed_operation_fixture}")
   message(FATAL_ERROR "Installed operation fixture is missing: ${installed_operation_fixture}")
@@ -480,159 +441,140 @@ if(WIN32)
   endif()
 endif()
 
-run_checked(
-  "full consumer execution"
-  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${full_consumer_build_dir}"
-  -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset "consumer-full-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset "consumer-cxx-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
 
-run_checked(
-  "CXX-only consumer execution"
-  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${cxx_consumer_build_dir}"
-  -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+set(unscoped_consumer_build_dir "${test_root}/unscoped-${consumer_profile}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --preset "consumer-unscoped-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset "consumer-unscoped-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset "consumer-unscoped-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
 
-set(unscoped_consumer_build_dir "${test_root}/unscoped-build")
-run_checked(
-  "consumer without components configure"
-  "${CMAKE_COMMAND}" -E env
-  "SALTS_ROOT=${salts_root}"
-  "SALTS_UTILS_ROOT=${salts_utils_root}"
-  "RULES_FORGE_ROOT=${rules_forge_root}"
-  ${turbodb_consumer_env}
-  "${CMAKE_COMMAND}" -S "${full_consumer_source_dir}"
-  -B "${unscoped_consumer_build_dir}" -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-  "-DSalts_DIR=${salts_package_dir}"
-  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-  "-DRulesForge_DIR=${rules_forge_package_dir}"
-  ${turbodb_consumer_cmake_args})
-run_checked(
-  "consumer without components build"
-  "${CMAKE_COMMAND}" --build "${unscoped_consumer_build_dir}"
-  --config "${TURBO_FLOW_CONFIG}" --parallel)
-run_checked(
-  "consumer without components execution"
-  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${unscoped_consumer_build_dir}"
-  -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
-
-set(graph_consumer_build_dir "${test_root}/graph-build")
-run_checked(
-  "Graph consumer configure"
-  "${CMAKE_COMMAND}" -E env
-  "SALTS_ROOT=${salts_root}"
-  "SALTS_UTILS_ROOT=${salts_utils_root}"
-  "RULES_FORGE_ROOT=${rules_forge_root}"
-  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
-  -B "${graph_consumer_build_dir}" -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-  "-DSalts_DIR=${salts_package_dir}"
-  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-  "-DRulesForge_DIR=${rules_forge_package_dir}"
-  -DTURBO_FLOW_TEST_COMPONENT=Graph)
-run_checked(
-  "Graph consumer build"
-  "${CMAKE_COMMAND}" --build "${graph_consumer_build_dir}"
-  --config "${TURBO_FLOW_CONFIG}" --parallel)
-run_checked(
-  "Graph consumer execution"
-  "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${graph_consumer_build_dir}"
-  -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
+set(graph_consumer_build_dir
+    "${component_consumer_source_dir}/build/graph-${consumer_profile}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --preset "component-graph-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset "component-graph-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset "component-graph-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
 
 if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
-  set(turbodb_consumer_build_dir "${test_root}/turbodb-build")
-  run_checked(
-    "TurboDb adapter consumer configure"
-    "${CMAKE_COMMAND}" -E env
-    "SALTS_ROOT=${salts_root}"
-    "SALTS_UTILS_ROOT=${salts_utils_root}"
-    "RULES_FORGE_ROOT=${rules_forge_root}"
-    "TURBODB_ROOT=${turbodb_root}"
-    "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
-    -B "${turbodb_consumer_build_dir}" -G "${TURBO_FLOW_GENERATOR}"
-    "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-    "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-    "-DSalts_DIR=${salts_package_dir}"
-    "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-    "-DRulesForge_DIR=${rules_forge_package_dir}"
-    "-DOrm_DIR=${orm_package_dir}"
-    -DTURBO_FLOW_TEST_COMPONENT=TurboDbAdapter)
-  run_checked(
-    "TurboDb adapter consumer build"
-    "${CMAKE_COMMAND}" --build "${turbodb_consumer_build_dir}"
-    --config "${TURBO_FLOW_CONFIG}" --parallel)
-  run_checked(
-    "TurboDb adapter consumer execution"
-    "${TURBO_FLOW_CTEST_COMMAND}" --test-dir "${turbodb_consumer_build_dir}"
-    -C "${TURBO_FLOW_CONFIG}" --output-on-failure)
-
-  run_expected_failure(
-    "TurboDb adapter consumer configure without TURBODB_ROOT"
-    "TURBODB_ROOT"
-    "${CMAKE_COMMAND}" -E env
-    "SALTS_ROOT=${salts_root}"
-    "SALTS_UTILS_ROOT=${salts_utils_root}"
-    "RULES_FORGE_ROOT=${rules_forge_root}"
-    --unset=TURBODB_ROOT
-    "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
-    -B "${test_root}/turbodb-missing-root-build"
-    -G "${TURBO_FLOW_GENERATOR}"
-    "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-    "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-    "-DSalts_DIR=${salts_package_dir}"
-    "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-    "-DRulesForge_DIR=${rules_forge_package_dir}"
-    -DTURBO_FLOW_TEST_COMPONENT=TurboDbAdapter)
+  set(turbodb_consumer_build_dir
+      "${component_consumer_source_dir}/build/turbodb-${consumer_profile}")
+  execute_process(COMMAND "${CMAKE_COMMAND}" --preset "component-turbodb-${consumer_profile}"
+    WORKING_DIRECTORY "${component_consumer_source_dir}" COMMAND_ERROR_IS_FATAL ANY)
+  execute_process(COMMAND "${CMAKE_COMMAND}" --build --preset "component-turbodb-${consumer_profile}"
+    WORKING_DIRECTORY "${component_consumer_source_dir}" COMMAND_ERROR_IS_FATAL ANY)
+  execute_process(COMMAND "${CMAKE_CTEST_COMMAND}" --preset "component-turbodb-${consumer_profile}"
+    WORKING_DIRECTORY "${component_consumer_source_dir}" COMMAND_ERROR_IS_FATAL ANY)
 endif()
 
-run_expected_failure(
-  "Config-only consumer configure without SALTS_ROOT"
-  "SALTS_ROOT"
-  "${CMAKE_COMMAND}" -E env
-  --unset=SALTS_ROOT
-  --unset=SALTS_UTILS_ROOT
-  --unset=RULES_FORGE_ROOT
-  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
-  -B "${test_root}/config-missing-root-build"
-  -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-  "-DSalts_DIR=${salts_package_dir}"
-  -DCMAKE_DISABLE_FIND_PACKAGE_SaltsUtils=TRUE
-  -DCMAKE_DISABLE_FIND_PACKAGE_RulesForge=TRUE
-  -DTURBO_FLOW_TEST_COMPONENT=Config)
+if(TURBO_FLOW_CONFIG STREQUAL "Debug")
+  set(chttp_requested_config_upper "DEBUG")
+  set(chttp_alternate_config_upper "RELEASE")
+else()
+  set(chttp_requested_config_upper "RELEASE")
+  set(chttp_alternate_config_upper "DEBUG")
+endif()
+foreach(chttp_mapping_scenario IN ITEMS
+        preimport-client-cross-config
+        preimport-server-cross-config
+        preimport-client-configurationless
+        preimport-client-alternate-candidates)
+  if(chttp_mapping_scenario MATCHES "preimport-client")
+    set(chttp_mapping_target "CHttp::Client")
+  else()
+    set(chttp_mapping_target "CHttp::Server")
+  endif()
+  if(chttp_mapping_scenario MATCHES "cross-config$")
+    set(chttp_mapping_value "${chttp_alternate_config_upper}")
+  elseif(chttp_mapping_scenario MATCHES "configurationless$")
+    set(chttp_mapping_value "")
+  else()
+    set(chttp_mapping_value
+        "${chttp_requested_config_upper};${chttp_alternate_config_upper}")
+  endif()
+  set(chttp_mapping_expected
+      "${chttp_mapping_target} MAP_IMPORTED_CONFIG_${chttp_requested_config_upper} must be unset or map only to ${chttp_requested_config_upper}; got '${chttp_mapping_value}'")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+            "TURBO_FLOW_CHTTP_SCENARIO=${chttp_mapping_scenario}"
+            "${CMAKE_COMMAND}" --fresh --preset
+            "component-chttp-preimport-${consumer_profile}"
+    WORKING_DIRECTORY "${component_consumer_source_dir}"
+    RESULT_VARIABLE chttp_mapping_result
+    OUTPUT_VARIABLE chttp_mapping_output
+    ERROR_VARIABLE chttp_mapping_error)
+  string(CONCAT chttp_mapping_diagnostic
+         "${chttp_mapping_output}" "${chttp_mapping_error}")
+  string(REGEX REPLACE "[\r\n ]+" " " chttp_mapping_diagnostic_normalized
+                       "${chttp_mapping_diagnostic}")
+  string(REGEX REPLACE "[\r\n ]+" " " chttp_mapping_expected_normalized
+                       "${chttp_mapping_expected}")
+  string(FIND "${chttp_mapping_diagnostic_normalized}"
+              "${chttp_mapping_expected_normalized}" chttp_mapping_match)
+  if(chttp_mapping_result EQUAL 0 OR chttp_mapping_match EQUAL -1)
+    message(FATAL_ERROR
+      "${chttp_mapping_scenario} installed preimport negative case failed; expected '${chttp_mapping_expected}'\n${chttp_mapping_diagnostic}")
+  endif()
+endforeach()
 
-run_expected_failure(
-  "Graph consumer configure without RULES_FORGE_ROOT"
-  "RULES_FORGE_ROOT"
-  "${CMAKE_COMMAND}" -E env
-  "SALTS_ROOT=${salts_root}"
-  "SALTS_UTILS_ROOT=${salts_utils_root}"
-  --unset=RULES_FORGE_ROOT
-  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
-  -B "${test_root}/graph-missing-dependency-build"
-  -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-  "-DSalts_DIR=${salts_package_dir}"
-  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-  "-DRulesForge_DIR=${rules_forge_package_dir}"
-  -DCMAKE_DISABLE_FIND_PACKAGE_RulesForge=TRUE
-  -DTURBO_FLOW_TEST_COMPONENT=Graph)
-
-run_expected_failure(
-  "unknown component configure"
-  "MissingComponent"
-  "${CMAKE_COMMAND}" -E env
-  "SALTS_ROOT=${salts_root}"
-  "SALTS_UTILS_ROOT=${salts_utils_root}"
-  "RULES_FORGE_ROOT=${rules_forge_root}"
-  "${CMAKE_COMMAND}" -S "${component_consumer_source_dir}"
-  -B "${test_root}/unknown-component-build"
-  -G "${TURBO_FLOW_GENERATOR}"
-  "-DCMAKE_BUILD_TYPE=${TURBO_FLOW_CONFIG}"
-  "-DTurboFlow_DIR=${turbo_flow_package_dir}"
-  "-DSalts_DIR=${salts_package_dir}"
-  "-DSaltsUtils_DIR=${salts_utils_package_dir}"
-  "-DRulesForge_DIR=${rules_forge_package_dir}"
-  -DTURBO_FLOW_TEST_COMPONENT=MissingComponent)
+set(component_negative_cases
+    config-missing-root graph-missing-root
+    chttp-missing-root chttp-empty-root chttp-wrong-root chttp-empty-sdk
+    chttp-outside-cache chttp-preimport-no-provenance
+    chttp-preimport-outside chttp-wrong-config salts-dir-outside unknown)
+set(component_negative_patterns
+    SALTS_ROOT RULES_FORGE_ROOT
+    "HTTP_SERVICES_ROOT is required" "HTTP_SERVICES_ROOT is required"
+    "Could not find.*Chttp" "HTTP_SERVICES_ROOT is an empty SDK directory"
+    "Chttp_DIR is outside HTTP_SERVICES_ROOT"
+    "already imported without verifiable Chttp_DIR provenance"
+    "runtime is outside HTTP_SERVICES_ROOT"
+    "does not declare requested configuration"
+    "Salts_DIR is outside SALTS_ROOT" MissingComponent)
+if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
+  list(PREPEND component_negative_cases turbodb-missing-root)
+  list(PREPEND component_negative_patterns TURBODB_ROOT)
+endif()
+list(LENGTH component_negative_cases component_negative_count)
+math(EXPR component_negative_last "${component_negative_count} - 1")
+foreach(component_negative_index RANGE 0 ${component_negative_last})
+  list(GET component_negative_cases ${component_negative_index} component_negative_case)
+  list(GET component_negative_patterns ${component_negative_index} component_negative_pattern)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" --fresh --preset
+            "component-${component_negative_case}-${consumer_profile}"
+    WORKING_DIRECTORY "${component_consumer_source_dir}"
+    RESULT_VARIABLE component_negative_result
+    OUTPUT_VARIABLE component_negative_output
+    ERROR_VARIABLE component_negative_error)
+  string(CONCAT component_negative_diagnostic
+         "${component_negative_output}" "\n${component_negative_error}")
+  if(component_negative_result EQUAL 0 OR
+     NOT component_negative_diagnostic MATCHES "${component_negative_pattern}")
+    message(FATAL_ERROR
+            "${component_negative_case} negative case failed\n${component_negative_diagnostic}")
+  endif()
+endforeach()

@@ -123,6 +123,12 @@ deadline 和 shutdown 都是显式契约，不提供旧 HTTP 实现或协议降�
 compile 前注册 client、start 后由一个 owner thread 调用 `turbo_flow_chttp_client_poll()`，并在
 Flow destroy/detach 后销毁 client。
 
+CHTTP 来自独立的 Chttp SDK。构建和安装消费环境必须令 `HTTP_SERVICES_ROOT` 指向与当前
+Debug/Release profile 匹配的安装前缀；TurboFlow 严格从该根查找 `Chttp`，adapter 直接链接
+`CHttp::Client` 与 `CHttp::Server`。旧 `Salts::CHTTP`、`salts_chttp*.dll`、默认搜索路径和
+跨 profile 复用均不受支持。应用只通过 `TurboFlow::PluginHost` 加载 provider；Gateway 不应
+直接导入 CHTTP adapter 或任一 Chttp native DLL。
+
 ## CHTTP WebSocket 数据流
 
 `TurboFlow::CHTTPAdapter` 也可注册一个 WebSocket `SOURCE|SINK`：CHTTP 独占
@@ -141,11 +147,25 @@ fallback。完整所有权与关闭顺序见
 ```powershell
 cmake --fresh --preset win-release-user
 cmake --build --preset win-release-user --parallel
-ctest --test-dir build/Msvc-Release --output-on-failure
+ctest --preset win-release-user
+cmake --build --preset install-win-release-user
 ```
 
 安装后的 `TurboFlowConfig.cmake` 导出上述 targets 以及本仓库实际构建的 adapters；不会查找或导出
-外部协议产品组件。
+外部协议产品组件。仓库内的 install-consumer CTest 会再用各自版本化 user preset 和 manifest
+从 `$env{PKG_ROOT}/turboflow/debug|release` 查找已安装包，并分别验证组件选择、C/C++ consumer、
+Gateway/provider/adapter 依赖层次及 operation fixture；它不会用源码 build-tree package 代替
+安装证据。
+
+Windows 原生闭包测试使用系统内置 Windows PowerShell 与其
+`Microsoft.PowerShell.Security` 模块；配置阶段会显式验证该前置条件。测试以只读方式结合
+Windows Resource Protection 与 Authenticode 区分 OS 组件、当前 profile 的 Microsoft CRT
+和普通应用 DLL，模块或 trust 查询失败时直接拒绝，不回退到仅按目录或发布者放行。
+签名非 OS 负例直接读取当前 `VsDevCmd` 的 `dumpbin` 同目录下 `msobj140.dll`，不复制 DLL。
+启用这些测试的主机必须提供该 MSVC 文件及有效的 Microsoft Corporation 签名，且
+System32/SysWOW64 中不能有同名文件抢先解析；配置阶段显式检查这些条件。工具目录必须
+属于当前 `VCToolsInstallDir`。MSVC 布局变化导致此前置条件不满足时，须更新测试主机或
+fixture 契约；这不是产品运行依赖。负例须实际报告有效签名与 `Identity=NonOS` 才通过。
 
 ## 形式化模型
 

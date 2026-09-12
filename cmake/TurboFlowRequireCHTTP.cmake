@@ -1,39 +1,153 @@
-function(turbo_flow_require_chttp_deferred_cancel)
-  if(NOT TARGET Salts::CHTTP)
-    message(FATAL_ERROR
-            "TurboFlow requires the imported target Salts::CHTTP")
+include(CMakePushCheckState)
+include(CheckCSourceCompiles)
+include(CheckCXXSourceCompiles)
+
+if(NOT DEFINED ENV{HTTP_SERVICES_ROOT} OR "$ENV{HTTP_SERVICES_ROOT}" STREQUAL "")
+  message(FATAL_ERROR "HTTP_SERVICES_ROOT is required for Chttp")
+endif()
+if(NOT IS_DIRECTORY "$ENV{HTTP_SERVICES_ROOT}")
+  message(FATAL_ERROR "HTTP_SERVICES_ROOT is not a directory: $ENV{HTTP_SERVICES_ROOT}")
+endif()
+file(GLOB _turbo_flow_chttp_root_entries "$ENV{HTTP_SERVICES_ROOT}/*")
+if(NOT _turbo_flow_chttp_root_entries)
+  message(FATAL_ERROR "HTTP_SERVICES_ROOT is an empty SDK directory: $ENV{HTTP_SERVICES_ROOT}")
+endif()
+file(REAL_PATH "$ENV{HTTP_SERVICES_ROOT}" _turbo_flow_chttp_root)
+
+if(TARGET CHttp::Client OR TARGET CHttp::Server)
+  if(NOT DEFINED Chttp_DIR OR "${Chttp_DIR}" STREQUAL "")
+    message(FATAL_ERROR "Chttp targets are already imported without verifiable Chttp_DIR provenance")
   endif()
+endif()
+if(DEFINED Chttp_DIR AND NOT "${Chttp_DIR}" STREQUAL "")
+  file(REAL_PATH "${Chttp_DIR}" _turbo_flow_chttp_presupplied_dir)
+  cmake_path(IS_PREFIX _turbo_flow_chttp_root "${_turbo_flow_chttp_presupplied_dir}"
+             NORMALIZE _turbo_flow_chttp_presupplied_in_root)
+  if(NOT _turbo_flow_chttp_presupplied_in_root)
+    message(FATAL_ERROR "Chttp_DIR is outside HTTP_SERVICES_ROOT: ${Chttp_DIR}")
+  endif()
+endif()
 
-  get_property(_turbo_flow_enabled_languages GLOBAL PROPERTY ENABLED_LANGUAGES)
-  set(CMAKE_REQUIRED_LIBRARIES Salts::CHTTP)
-  unset(TURBO_FLOW_HAS_CHTTP_SERVER_DEFERRED_CANCEL CACHE)
-  set(_turbo_flow_chttp_probe [[
-#include <chttp/chttp.h>
+find_package(Chttp CONFIG REQUIRED
+             PATHS "$ENV{HTTP_SERVICES_ROOT}" NO_DEFAULT_PATH)
+file(REAL_PATH "${Chttp_DIR}" _turbo_flow_chttp_dir)
+cmake_path(IS_PREFIX _turbo_flow_chttp_root "${_turbo_flow_chttp_dir}"
+           NORMALIZE _turbo_flow_chttp_dir_in_root)
+if(NOT _turbo_flow_chttp_dir_in_root)
+  message(FATAL_ERROR "Chttp resolved outside HTTP_SERVICES_ROOT: ${Chttp_DIR}")
+endif()
 
+if(CMAKE_CONFIGURATION_TYPES)
+  set(_turbo_flow_chttp_requested_configs ${CMAKE_CONFIGURATION_TYPES})
+elseif(DEFINED CMAKE_BUILD_TYPE AND NOT "${CMAKE_BUILD_TYPE}" STREQUAL "")
+  set(_turbo_flow_chttp_requested_configs "${CMAKE_BUILD_TYPE}")
+else()
+  message(FATAL_ERROR "Chttp validation requires CMAKE_BUILD_TYPE or CMAKE_CONFIGURATION_TYPES")
+endif()
+
+foreach(_turbo_flow_chttp_target IN ITEMS CHttp::Client CHttp::Server)
+  if(NOT TARGET "${_turbo_flow_chttp_target}")
+    message(FATAL_ERROR "Chttp package does not provide ${_turbo_flow_chttp_target}")
+  endif()
+  get_target_property(_turbo_flow_chttp_type "${_turbo_flow_chttp_target}" TYPE)
+  get_target_property(_turbo_flow_chttp_imported "${_turbo_flow_chttp_target}" IMPORTED)
+  if(NOT _turbo_flow_chttp_imported OR NOT _turbo_flow_chttp_type STREQUAL "SHARED_LIBRARY")
+    message(FATAL_ERROR "${_turbo_flow_chttp_target} must be a SHARED IMPORTED target")
+  endif()
+  get_target_property(_turbo_flow_chttp_includes "${_turbo_flow_chttp_target}" INTERFACE_INCLUDE_DIRECTORIES)
+  if(NOT _turbo_flow_chttp_includes)
+    message(FATAL_ERROR "${_turbo_flow_chttp_target} has no public include directory")
+  endif()
+  foreach(_turbo_flow_chttp_include IN LISTS _turbo_flow_chttp_includes)
+    if(NOT IS_DIRECTORY "${_turbo_flow_chttp_include}")
+      message(FATAL_ERROR "${_turbo_flow_chttp_target} public include directory does not exist: ${_turbo_flow_chttp_include}")
+    endif()
+    file(REAL_PATH "${_turbo_flow_chttp_include}" _turbo_flow_chttp_include_real)
+    cmake_path(IS_PREFIX _turbo_flow_chttp_root "${_turbo_flow_chttp_include_real}"
+               NORMALIZE _turbo_flow_chttp_include_in_root)
+    if(NOT _turbo_flow_chttp_include_in_root)
+      message(FATAL_ERROR "${_turbo_flow_chttp_target} include directory is outside HTTP_SERVICES_ROOT: ${_turbo_flow_chttp_include}")
+    endif()
+  endforeach()
+  get_target_property(_turbo_flow_chttp_configs "${_turbo_flow_chttp_target}" IMPORTED_CONFIGURATIONS)
+  foreach(_turbo_flow_chttp_config IN LISTS _turbo_flow_chttp_requested_configs)
+    string(TOUPPER "${_turbo_flow_chttp_config}" _turbo_flow_chttp_config_upper)
+    set(_turbo_flow_chttp_mapping_property
+        "MAP_IMPORTED_CONFIG_${_turbo_flow_chttp_config_upper}")
+    get_property(_turbo_flow_chttp_mapping_is_set
+                 TARGET "${_turbo_flow_chttp_target}"
+                 PROPERTY "${_turbo_flow_chttp_mapping_property}" SET)
+    if(_turbo_flow_chttp_mapping_is_set)
+      get_property(_turbo_flow_chttp_mapping
+                   TARGET "${_turbo_flow_chttp_target}"
+                   PROPERTY "${_turbo_flow_chttp_mapping_property}")
+      string(TOUPPER "${_turbo_flow_chttp_mapping}"
+                     _turbo_flow_chttp_mapping_upper)
+      if(NOT _turbo_flow_chttp_mapping_upper STREQUAL
+             _turbo_flow_chttp_config_upper)
+        message(FATAL_ERROR
+          "${_turbo_flow_chttp_target} ${_turbo_flow_chttp_mapping_property} must be unset or map only to ${_turbo_flow_chttp_config_upper}; got '${_turbo_flow_chttp_mapping}'")
+      endif()
+    endif()
+    if(NOT _turbo_flow_chttp_config_upper IN_LIST _turbo_flow_chttp_configs)
+      message(FATAL_ERROR "${_turbo_flow_chttp_target} does not declare requested configuration ${_turbo_flow_chttp_config}")
+    endif()
+    get_target_property(_turbo_flow_chttp_location "${_turbo_flow_chttp_target}" "IMPORTED_LOCATION_${_turbo_flow_chttp_config_upper}")
+    if(NOT _turbo_flow_chttp_location OR NOT EXISTS "${_turbo_flow_chttp_location}")
+      message(FATAL_ERROR "${_turbo_flow_chttp_target} has no existing runtime for ${_turbo_flow_chttp_config}")
+    endif()
+    file(REAL_PATH "${_turbo_flow_chttp_location}" _turbo_flow_chttp_location_real)
+    cmake_path(IS_PREFIX _turbo_flow_chttp_root "${_turbo_flow_chttp_location_real}"
+               NORMALIZE _turbo_flow_chttp_location_in_root)
+    if(NOT _turbo_flow_chttp_location_in_root)
+      message(FATAL_ERROR "${_turbo_flow_chttp_target} runtime is outside HTTP_SERVICES_ROOT: ${_turbo_flow_chttp_location}")
+    endif()
+    if(WIN32)
+      get_target_property(_turbo_flow_chttp_implib "${_turbo_flow_chttp_target}" "IMPORTED_IMPLIB_${_turbo_flow_chttp_config_upper}")
+      if(NOT _turbo_flow_chttp_implib OR NOT EXISTS "${_turbo_flow_chttp_implib}")
+        message(FATAL_ERROR "${_turbo_flow_chttp_target} has no existing import library for ${_turbo_flow_chttp_config}")
+      endif()
+      file(REAL_PATH "${_turbo_flow_chttp_implib}" _turbo_flow_chttp_implib_real)
+      cmake_path(IS_PREFIX _turbo_flow_chttp_root "${_turbo_flow_chttp_implib_real}"
+                 NORMALIZE _turbo_flow_chttp_implib_in_root)
+      if(NOT _turbo_flow_chttp_implib_in_root)
+        message(FATAL_ERROR "${_turbo_flow_chttp_target} import library is outside HTTP_SERVICES_ROOT: ${_turbo_flow_chttp_implib}")
+      endif()
+    endif()
+  endforeach()
+endforeach()
+
+if(DEFINED CMAKE_TRY_COMPILE_TARGET_TYPE)
+  set(_turbo_flow_chttp_try_compile_target_type_was_defined TRUE)
+  set(_turbo_flow_chttp_saved_try_compile_target_type "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
+else()
+  set(_turbo_flow_chttp_try_compile_target_type_was_defined FALSE)
+endif()
+cmake_push_check_state(RESET)
+set(CMAKE_TRY_COMPILE_TARGET_TYPE EXECUTABLE)
+set(CMAKE_REQUIRED_LIBRARIES CHttp::Server)
+unset(TURBO_FLOW_HAS_CHTTP_SERVER_DEFERRED_CANCEL)
+unset(TURBO_FLOW_HAS_CHTTP_SERVER_DEFERRED_CANCEL CACHE)
+set(_turbo_flow_chttp_probe [[
+#include <http_server/http.h>
 int main(void) {
   return chttp_server_deferred_cancel((chttp_server_deferred *)0);
 }
-  ]])
-
-  if("C" IN_LIST _turbo_flow_enabled_languages)
-    include(CheckCSourceCompiles)
-    check_c_source_compiles(
-      "${_turbo_flow_chttp_probe}"
-      TURBO_FLOW_HAS_CHTTP_SERVER_DEFERRED_CANCEL)
-  elseif("CXX" IN_LIST _turbo_flow_enabled_languages)
-    include(CheckCXXSourceCompiles)
-    check_cxx_source_compiles(
-      "${_turbo_flow_chttp_probe}"
-      TURBO_FLOW_HAS_CHTTP_SERVER_DEFERRED_CANCEL)
-  else()
-    message(FATAL_ERROR
-            "TurboFlow package discovery requires the C or CXX language")
-  endif()
-
-  if(NOT TURBO_FLOW_HAS_CHTTP_SERVER_DEFERRED_CANCEL)
-    message(
-      FATAL_ERROR
-        "TurboFlow requires Salts::CHTTP with chttp_server_deferred_cancel; install a compatible Salts package"
-    )
-  endif()
-endfunction()
+]])
+get_property(_turbo_flow_chttp_enabled_languages GLOBAL PROPERTY ENABLED_LANGUAGES)
+if("C" IN_LIST _turbo_flow_chttp_enabled_languages)
+  check_c_source_compiles("${_turbo_flow_chttp_probe}" TURBO_FLOW_HAS_CHTTP_SERVER_DEFERRED_CANCEL)
+elseif("CXX" IN_LIST _turbo_flow_chttp_enabled_languages)
+  check_cxx_source_compiles("${_turbo_flow_chttp_probe}" TURBO_FLOW_HAS_CHTTP_SERVER_DEFERRED_CANCEL)
+else()
+  message(FATAL_ERROR "Chttp capability validation requires enabled C or CXX")
+endif()
+cmake_pop_check_state()
+if(_turbo_flow_chttp_try_compile_target_type_was_defined)
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE "${_turbo_flow_chttp_saved_try_compile_target_type}")
+else()
+  unset(CMAKE_TRY_COMPILE_TARGET_TYPE)
+endif()
+if(NOT TURBO_FLOW_HAS_CHTTP_SERVER_DEFERRED_CANCEL)
+  message(FATAL_ERROR "CHttp::Server lacks linkable chttp_server_deferred_cancel")
+endif()

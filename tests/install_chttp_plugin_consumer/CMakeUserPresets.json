@@ -1,0 +1,22 @@
+{
+  "version": 6,
+  "include": ["../../CMakeUserPresets.json"],
+  "configurePresets": [
+    { "name": "chttp-plugin-consumer-win-dev-user", "inherits": "win-dev-user", "binaryDir": "${sourceDir}/build/win-dev-user", "environment": { "TURBO_FLOW_ROOT": "$env{PKG_ROOT}/turboflow/debug", "PATH": "$env{TURBO_FLOW_ROOT}/bin${pathListSep}$penv{PATH}" }, "cacheVariables": { "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/win-dev-user", "TURBO_FLOW_CHTTP_PLUGIN_PATH": "$env{TURBO_FLOW_ROOT}/bin/tf_chttp_plugin.dll" } },
+    { "name": "chttp-plugin-consumer-win-release-user", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/win-release-user", "environment": { "TURBO_FLOW_ROOT": "$env{PKG_ROOT}/turboflow/release", "PATH": "$env{TURBO_FLOW_ROOT}/bin${pathListSep}$penv{PATH}" }, "cacheVariables": { "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/win-release-user", "TURBO_FLOW_CHTTP_PLUGIN_PATH": "$env{TURBO_FLOW_ROOT}/bin/tf_chttp_plugin.dll" } },
+    { "name": "chttp-plugin-consumer-linux-dev-user", "inherits": "linux-dev-user", "binaryDir": "${sourceDir}/build/linux-dev-user", "environment": { "TURBO_FLOW_ROOT": "$env{PKG_ROOT}/turboflow/debug", "LD_LIBRARY_PATH": "$env{TURBO_FLOW_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}" }, "cacheVariables": { "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/linux-dev-user", "TURBO_FLOW_CHTTP_PLUGIN_PATH": "$env{TURBO_FLOW_ROOT}/lib/libtf_chttp_plugin.so" } },
+    { "name": "chttp-plugin-consumer-linux-release-user", "inherits": "linux-release-user", "binaryDir": "${sourceDir}/build/linux-release-user", "environment": { "TURBO_FLOW_ROOT": "$env{PKG_ROOT}/turboflow/release", "LD_LIBRARY_PATH": "$env{TURBO_FLOW_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}" }, "cacheVariables": { "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/linux-release-user", "TURBO_FLOW_CHTTP_PLUGIN_PATH": "$env{TURBO_FLOW_ROOT}/lib/libtf_chttp_plugin.so" } }
+  ],
+  "buildPresets": [
+    { "name": "chttp-plugin-consumer-win-dev-user", "configurePreset": "chttp-plugin-consumer-win-dev-user" },
+    { "name": "chttp-plugin-consumer-win-release-user", "configurePreset": "chttp-plugin-consumer-win-release-user" },
+    { "name": "chttp-plugin-consumer-linux-dev-user", "configurePreset": "chttp-plugin-consumer-linux-dev-user" },
+    { "name": "chttp-plugin-consumer-linux-release-user", "configurePreset": "chttp-plugin-consumer-linux-release-user" }
+  ],
+  "testPresets": [
+    { "name": "chttp-plugin-consumer-win-dev-user", "inherits": "base-test", "configurePreset": "chttp-plugin-consumer-win-dev-user" },
+    { "name": "chttp-plugin-consumer-win-release-user", "inherits": "base-test", "configurePreset": "chttp-plugin-consumer-win-release-user" },
+    { "name": "chttp-plugin-consumer-linux-dev-user", "inherits": "base-test", "configurePreset": "chttp-plugin-consumer-linux-dev-user" },
+    { "name": "chttp-plugin-consumer-linux-release-user", "inherits": "base-test", "configurePreset": "chttp-plugin-consumer-linux-release-user" }
+  ]
+}

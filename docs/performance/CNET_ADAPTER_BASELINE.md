@@ -113,3 +113,68 @@ The same harness also completed under `win-dev-user` with AddressSanitizer enabl
 This establishes that the current raw-UDP packet terminal can sustain a bounded 64-request pipeline, preserve authoritative completion, recover after explicit saturation, and shut down with no unresolved claim on this machine. It does not establish a statistically justified allowed regression percentage; future comparable runs are needed before #11 can turn this baseline into a numeric gate.
 
 This result does not cover TCP, TLS, Pipe, KCP, secure KCP/FEC, CHTTP, TurboDb, multiple producers, different payload sizes, power-management variance, or cross-platform comparisons. Those remain separate #11 matrix slices and must not reuse these numbers as their threshold.
+
+## Standalone CHTTP integration checkpoint — 2026-09-12
+
+This is one unchanged seven-replicate run at source commit
+`fae3efa4acde9407f0725247e4221db1ecaf66dc`, after the standalone CHTTP integration
+test fixes. The executable verified its compiled commit against live HEAD and
+reported `source_dirty=0`, `actual_preset=win-release-user`, `cmake_build_type=Release`,
+`asan=0`, and `baseline_eligible=1`. It reported the same AMD Ryzen 9 7940HX CPU,
+32 logical CPUs, and MSVC compiler version 1944. All fixed inputs and metric
+definitions above were retained; there was no tuning or second measurement attempt.
+
+Configure and target build used the two reproduction commands above in one x64
+VsDevCmd session. For direct execution, native `ctest --preset win-release-user -S`
+supplied the versioned preset environment to a local CMake script containing
+`execute_process(COMMAND <worktree>/build/Msvc-Release/bin/bench_cnet_adapter.exe)`.
+No CTest suite or installed consumer ran through that script. The resolved runtime
+PATH contained the current build, vcpkg, CHTTP, Salts, SaltsUtils, RulesForge and
+TurboDb Release directories, followed by the inherited developer environment.
+Dependency roots were not reconstructed in a separate launcher. Existing build
+runtime-sync rules ran as configured; no manual DLL copy or new deployment rule
+was introduced.
+
+The process exited 0, with one TinyTest assertion passed and none failed or skipped
+(harness total 6.012281 seconds). The complete local raw artifact is
+`.superpowers/sdd/2026-09-12-standalone-chttp/benchmark-fae3efa-raw.log`, SHA-256
+`2CBDB38A090ADE87317A101BC57A8D7099072C61139E7320A64ACE320BD1E1AE`.
+The artifact remains ignored; the authoritative measurement rows are preserved below.
+
+| Replicate | Throughput msg/s | P50 ns | P95 ns | P99 ns | CPU/wall | Shutdown us |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 156,477.293 | 363,500 | 468,700 | 578,500 | 1.287095 | 658.800 |
+| 2 | 175,428.734 | 330,900 | 389,900 | 487,900 | 1.171113 | 696.500 |
+| 3 | 178,279.382 | 326,200 | 375,800 | 480,700 | 1.147638 | 462.900 |
+| 4 | 163,565.251 | 340,400 | 492,800 | 611,300 | 1.267402 | 412.700 |
+| 5 | 154,641.517 | 366,900 | 493,300 | 590,200 | 1.142952 | 386.500 |
+| 6 | 156,056.172 | 359,700 | 482,200 | 592,000 | 1.190614 | 706.500 |
+| 7 | 148,273.959 | 374,700 | 539,700 | 647,800 | 1.272646 | 418.600 |
+
+| Metric | Median | MAD | Change from 2026-09-07 median |
+| --- | ---: | ---: | ---: |
+| Throughput (msg/s) | 156,477.293 | 7,087.958 | -7.14% |
+| P50 (ns) | 359,700 | 15,000 | +3.30% |
+| P95 (ns) | 482,200 | 13,500 | +11.23% |
+| P99 (ns) | 590,200 | 21,100 | +10.44% |
+| CPU/wall ratio | 1.191 | 0.048 | -1.73% |
+| Shutdown (us) | 462.900 | 76.400 | +7.25% |
+
+**Calculation:** medians and MAD were independently recomputed from the seven
+printed rows and agree with `CNET_BENCH_SUMMARY` at its displayed precision.
+Percentage change is `(new median / original median - 1) * 100`; the CPU comparison
+uses the displayed three-decimal medians, 1.191 and 1.212.
+
+**Fact:** all seven replicates reported `peak_active_requests=64`,
+`retained_payload_bytes_max=16384`, `saturation_rejected=1`,
+`saturation_recovered=1`, and `pre_shutdown_active_requests=0`.
+The printed `allocation_events_per_message=3` is the existing static source-audit
+constant, not a measured allocation counter. This run adds no allocation profiling.
+
+**MED — interpretation:** P95 and P99 increased by more than 10% relative to the
+original descriptive baseline, while throughput decreased. These observations
+warrant follow-up comparable runs; this checkpoint neither establishes a numerical
+regression gate nor attributes the change to the CHTTP integration. It did not
+control power state, background load or external SDK binary provenance against the
+September 7 run. No optimization claim, full #11 coverage, real installed CHTTP
+consumer validation or Debug CHTTP SDK validation follows from this UDP result.
