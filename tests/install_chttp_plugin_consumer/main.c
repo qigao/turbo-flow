@@ -80,6 +80,64 @@ static int run_kind(turbo_flow_plugin_host_t *host, size_t kind,
   if (rc != SALTS_OK) goto cleanup;
   rc = turbo_flow_plugin_generation_poll(generation, 0u, &ce);
   if (rc != SALTS_OK) goto cleanup;
+  if (kind == 1u) {
+    turbo_flow_t *generation_flow = turbo_flow_plugin_generation_flow(generation);
+    turbo_flow_managed_boundary_descriptor_t descriptor =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    turbo_flow_resource_command_t command = TURBO_FLOW_RESOURCE_COMMAND_INIT;
+    turbo_flow_resource_command_result_t result = TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+    const size_t managed_count = turbo_flow_managed_boundary_count(generation_flow);
+    if (managed_count != 1u) {
+      fprintf(stderr, "CHTTP server managed boundary count: expected 1, actual %zu\n",
+              managed_count);
+      rc = SALTS_EPROTO;
+      goto cleanup;
+    }
+    rc = turbo_flow_managed_boundary_descriptor_at(generation_flow, 0u, &descriptor);
+    if (rc != SALTS_OK ||
+        descriptor.role_flags !=
+            (uint32_t)(TURBO_FLOW_MANAGED_BOUNDARY_SOURCE | TURBO_FLOW_MANAGED_BOUNDARY_SINK) ||
+        descriptor.command_flags !=
+            (uint32_t)(TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_QUIESCE |
+                       TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_RESUME)) {
+      rc = SALTS_EPROTO;
+      goto cleanup;
+    }
+    rc = turbo_flow_managed_boundary_snapshot_at(generation_flow, 0u, &managed);
+    if (rc != SALTS_OK || managed.state != TURBO_FLOW_MANAGED_BOUNDARY_RUNNING ||
+        managed.in_flight != 0u) {
+      rc = SALTS_EPROTO;
+      goto cleanup;
+    }
+    command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
+    command.expected_generation = managed.generation;
+    memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+    memcpy(command.idempotency_key, "consumer-http-quiesce",
+           sizeof("consumer-http-quiesce"));
+    rc = turbo_flow_resource_command(generation_flow, &command, &result);
+    if (rc != SALTS_OK) goto cleanup;
+    managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    rc = turbo_flow_managed_boundary_snapshot_at(generation_flow, 0u, &managed);
+    if (rc != SALTS_OK || managed.state != TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT) {
+      rc = SALTS_EPROTO;
+      goto cleanup;
+    }
+    command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
+    result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+    command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
+    command.expected_generation = managed.generation;
+    memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+    memcpy(command.idempotency_key, "consumer-http-resume", sizeof("consumer-http-resume"));
+    rc = turbo_flow_resource_command(generation_flow, &command, &result);
+    if (rc != SALTS_OK) goto cleanup;
+    managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    rc = turbo_flow_managed_boundary_snapshot_at(generation_flow, 0u, &managed);
+    if (rc != SALTS_OK || managed.state != TURBO_FLOW_MANAGED_BOUNDARY_RUNNING) {
+      rc = SALTS_EPROTO;
+      goto cleanup;
+    }
+  }
   rc = turbo_flow_plugin_generation_lease_acquire(generation);
   if (rc != SALTS_OK) goto cleanup;
   int lease_busy = turbo_flow_plugin_generation_destroy(generation, CONSUMER_TIMEOUT_MS, &ce);

@@ -156,6 +156,78 @@ typedef struct chttp_server_adapter_holding_sink_s {
   atomic_size_t stops;
 } chttp_server_adapter_holding_sink_t;
 
+typedef struct chttp_server_adapter_managed_fixture_s {
+  turbo_flow_resource_metadata_t metadata;
+  turbo_flow_managed_boundary_descriptor_t descriptor;
+  turbo_flow_managed_boundary_snapshot_t snapshot;
+} chttp_server_adapter_managed_fixture_t;
+
+static int chttp_server_adapter_fixture_metadata(void *ctx, turbo_flow_resource_metadata_t *out) {
+  chttp_server_adapter_managed_fixture_t *fixture =
+      (chttp_server_adapter_managed_fixture_t *)ctx;
+  if (!fixture || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  *out = fixture->metadata;
+  return SALTS_OK;
+}
+
+static int chttp_server_adapter_fixture_descriptor(
+    void *ctx, turbo_flow_managed_boundary_descriptor_t *out) {
+  chttp_server_adapter_managed_fixture_t *fixture =
+      (chttp_server_adapter_managed_fixture_t *)ctx;
+  if (!fixture || !out || out->size < sizeof(*out) ||
+      out->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION) {
+    return SALTS_EINVAL;
+  }
+  *out = fixture->descriptor;
+  return SALTS_OK;
+}
+
+static int chttp_server_adapter_fixture_snapshot(
+    void *ctx, turbo_flow_managed_boundary_snapshot_t *out) {
+  chttp_server_adapter_managed_fixture_t *fixture =
+      (chttp_server_adapter_managed_fixture_t *)ctx;
+  if (!fixture || !out || out->size < sizeof(*out) ||
+      out->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION) {
+    return SALTS_EINVAL;
+  }
+  *out = fixture->snapshot;
+  return SALTS_OK;
+}
+
+static void chttp_server_adapter_fixture_init(chttp_server_adapter_managed_fixture_t *fixture,
+                                              const char *uid, const char *owner) {
+  memset(fixture, 0, sizeof(*fixture));
+  fixture->metadata = (turbo_flow_resource_metadata_t)TURBO_FLOW_RESOURCE_METADATA_INIT;
+  fixture->descriptor =
+      (turbo_flow_managed_boundary_descriptor_t)TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+  fixture->snapshot =
+      (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+  fixture->metadata.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+  fixture->metadata.kind = TURBO_FLOW_RESOURCE_CONNECTION;
+  memcpy(fixture->metadata.uid, uid, strlen(uid) + 1u);
+  memcpy(fixture->metadata.owner_name, owner, strlen(owner) + 1u);
+  fixture->metadata.generation = 1u;
+  fixture->metadata.observed_generation = 1u;
+  fixture->descriptor.domain = fixture->metadata.domain;
+  fixture->descriptor.kind = fixture->metadata.kind;
+  memcpy(fixture->descriptor.uid, uid, strlen(uid) + 1u);
+  memcpy(fixture->descriptor.owner_name, owner, strlen(owner) + 1u);
+  fixture->descriptor.role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SOURCE;
+  check_equal(turbo_flow_content_descriptor_init(
+                  &fixture->descriptor.output, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
+                  TURBO_FLOW_CONTENT_PROFILE_HTTP_REQUEST_BODY, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+                  "application/octet-stream", owner),
+              SALTS_OK);
+  check_equal(turbo_flow_content_descriptor_declare_schema(
+                  &fixture->descriptor.output, "CHTTPServerRequest", "Body", 1u),
+              SALTS_OK);
+  memcpy(fixture->snapshot.uid, uid, strlen(uid) + 1u);
+  fixture->snapshot.generation = 1u;
+  fixture->snapshot.observed_generation = 1u;
+  fixture->snapshot.state = TURBO_FLOW_MANAGED_BOUNDARY_REGISTERED;
+  fixture->snapshot.queue_capacity = 1u;
+}
+
 static int chttp_server_adapter_call_ex(uint16_t port, const char *target,
                                         const chttp_header *headers, size_t header_count,
                                         const char *body, chttp_server_adapter_result_t *result) {
@@ -475,6 +547,8 @@ spec("TurboFlow CHTTP deferred server adapter") {
     chttp_client_config client_config = chttp_server_adapter_h2_client_config();
     turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
     turbo_flow_chttp_server_snapshot_t snapshot = TURBO_FLOW_CHTTP_SERVER_SNAPSHOT_INIT;
+    turbo_flow_managed_boundary_descriptor_t descriptor =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
     turbo_flow_chttp_server_t *server = NULL;
     chttp_server_adapter_probe_t probe = {0};
     turbo_flow_t *flow = turbo_flow_create();
@@ -495,6 +569,31 @@ spec("TurboFlow CHTTP deferred server adapter") {
     config.path = "/flow";
     check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
     check_not_null(server);
+    check_equal(turbo_flow_managed_boundary_count(flow), (size_t)1u);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(flow, 0u, &descriptor), SALTS_OK);
+    check_equal(descriptor.role_flags,
+                (uint32_t)(TURBO_FLOW_MANAGED_BOUNDARY_SOURCE |
+                           TURBO_FLOW_MANAGED_BOUNDARY_SINK));
+    check_equal(descriptor.command_flags,
+                (uint32_t)(TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_QUIESCE |
+                           TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_RESUME));
+    check_equal(descriptor.capability_flags, (uint32_t)0u);
+    check_equal(descriptor.domain, TURBO_FLOW_DOMAIN_IO_TRANSPORT);
+    check_equal(descriptor.kind, TURBO_FLOW_RESOURCE_CONNECTION);
+    check_equal(descriptor.owner_name, "http.server");
+    check_equal(descriptor.uid, "chttp-server:http.server");
+    check_equal(descriptor.input.profile, TURBO_FLOW_CONTENT_PROFILE_HTTP_RESPONSE_BODY);
+    check_equal(descriptor.input.encoding, TURBO_FLOW_DATA_ENCODING_OPAQUE);
+    check_equal(descriptor.input.media_type, "application/octet-stream");
+    check_equal(descriptor.input.schema_name, "CHTTPServerResponse");
+    check_equal(descriptor.input.type_name, "Body");
+    check_equal(descriptor.input.schema_version, (uint32_t)1u);
+    check_equal(descriptor.output.profile, TURBO_FLOW_CONTENT_PROFILE_HTTP_REQUEST_BODY);
+    check_equal(descriptor.output.encoding, TURBO_FLOW_DATA_ENCODING_OPAQUE);
+    check_equal(descriptor.output.media_type, "application/octet-stream");
+    check_equal(descriptor.output.schema_name, "CHTTPServerRequest");
+    check_equal(descriptor.output.type_name, "Body");
+    check_equal(descriptor.output.schema_version, (uint32_t)1u);
     check_equal(turbo_flow_parse_string(flow, dsl, strlen(dsl)), SALTS_OK);
     flow_test_operation_t operation_require_h2_0 =
         flow_test_operation_init("test.require_h2", chttp_server_adapter_require_h2, &probe);
@@ -751,6 +850,142 @@ spec("TurboFlow CHTTP deferred server adapter") {
     check_null(server);
 
     turbo_flow_destroy(flow);
+  }
+
+  it("rolls back duplicate adapter and managed UID registration before retry") {
+    chttp_server_config native_config = chttp_server_adapter_config();
+    turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
+    turbo_flow_chttp_server_t *first = NULL;
+    turbo_flow_chttp_server_t *duplicate = NULL;
+    turbo_flow_chttp_server_t *retry = NULL;
+    turbo_flow_managed_boundary_provider_ops_t boundary_ops =
+        TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
+    chttp_server_adapter_managed_fixture_t fixture;
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_t *resource_flow = turbo_flow_create();
+
+    check_not_null(flow);
+    check_not_null(resource_flow);
+    config.flow = flow;
+    config.adapter_name = "http.server";
+    config.source_name = "http_in";
+    config.server = &native_config;
+    config.method = CHTTP_METHOD_POST;
+    config.path = "/flow";
+    check_equal(turbo_flow_chttp_server_register(&config, &first), SALTS_OK);
+    check_equal(turbo_flow_chttp_server_register(&config, &duplicate), SALTS_EALREADY);
+    check_null(duplicate);
+    check_equal(turbo_flow_managed_boundary_count(flow), (size_t)1u);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_chttp_server_destroy(first), SALTS_OK);
+
+    chttp_server_adapter_fixture_init(&fixture, "chttp-server:http.server", "existing-owner");
+    boundary_ops.resource.metadata = chttp_server_adapter_fixture_metadata;
+    boundary_ops.descriptor = chttp_server_adapter_fixture_descriptor;
+    boundary_ops.snapshot = chttp_server_adapter_fixture_snapshot;
+    check_equal(turbo_flow_register_managed_boundary_provider(
+                    resource_flow, fixture.metadata.owner_name, &boundary_ops, &fixture),
+                SALTS_OK);
+    config.flow = resource_flow;
+    check_equal(turbo_flow_chttp_server_register(&config, &duplicate), SALTS_EALREADY);
+    check_null(duplicate);
+    check_null(turbo_flow_find_adapter_schema(resource_flow, "http.server"));
+    check_equal(turbo_flow_managed_boundary_count(resource_flow), (size_t)1u);
+    config.adapter_name = "http.retry";
+    check_equal(turbo_flow_chttp_server_register(&config, &retry), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_count(resource_flow), (size_t)2u);
+    turbo_flow_destroy(resource_flow);
+    check_equal(turbo_flow_chttp_server_destroy(retry), SALTS_OK);
+  }
+
+  it("derives stable distinct bounded identities for long valid adapter names") {
+    chttp_server_config native_config = chttp_server_adapter_config();
+    turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
+    turbo_flow_chttp_server_t *first_server = NULL;
+    turbo_flow_chttp_server_t *same_server = NULL;
+    turbo_flow_chttp_server_t *long_server = NULL;
+    turbo_flow_chttp_server_t *same_long_server = NULL;
+    turbo_flow_chttp_server_t *different_long_server = NULL;
+    turbo_flow_managed_boundary_descriptor_t first =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_managed_boundary_descriptor_t same =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_managed_boundary_descriptor_t long_identity =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_managed_boundary_descriptor_t same_long_identity =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_managed_boundary_descriptor_t different_long_identity =
+        TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+    turbo_flow_t *first_flow = turbo_flow_create();
+    turbo_flow_t *same_flow = turbo_flow_create();
+    turbo_flow_t *long_flow = turbo_flow_create();
+    turbo_flow_t *same_long_flow = turbo_flow_create();
+    turbo_flow_t *different_long_flow = turbo_flow_create();
+    char name_255[256];
+    char name_long[TURBO_FLOW_RESOURCE_OWNER_MAX + 258u];
+    char different_name_long[TURBO_FLOW_RESOURCE_OWNER_MAX + 258u];
+
+    memset(name_255, 'a', sizeof(name_255) - 1u);
+    name_255[sizeof(name_255) - 1u] = '\0';
+    memset(name_long, 'b', sizeof(name_long) - 1u);
+    name_long[sizeof(name_long) - 1u] = '\0';
+    memset(different_name_long, 'c', sizeof(different_name_long) - 1u);
+    different_name_long[sizeof(different_name_long) - 1u] = '\0';
+    check_not_null(first_flow);
+    check_not_null(same_flow);
+    check_not_null(long_flow);
+    check_not_null(same_long_flow);
+    check_not_null(different_long_flow);
+    config.adapter_name = name_255;
+    config.source_name = "http_in";
+    config.server = &native_config;
+    config.method = CHTTP_METHOD_POST;
+    config.path = "/flow";
+    config.flow = first_flow;
+    check_equal(turbo_flow_chttp_server_register(&config, &first_server), SALTS_OK);
+    config.flow = same_flow;
+    check_equal(turbo_flow_chttp_server_register(&config, &same_server), SALTS_OK);
+    config.flow = long_flow;
+    config.adapter_name = name_long;
+    check_equal(turbo_flow_chttp_server_register(&config, &long_server), SALTS_OK);
+    config.flow = same_long_flow;
+    check_equal(turbo_flow_chttp_server_register(&config, &same_long_server), SALTS_OK);
+    config.flow = different_long_flow;
+    config.adapter_name = different_name_long;
+    check_equal(turbo_flow_chttp_server_register(&config, &different_long_server), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(first_flow, 0u, &first), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(same_flow, 0u, &same), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(long_flow, 0u, &long_identity),
+                SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(same_long_flow, 0u,
+                                                           &same_long_identity),
+                SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_descriptor_at(different_long_flow, 0u,
+                                                           &different_long_identity),
+                SALTS_OK);
+    check_equal(first.owner_name, same.owner_name);
+    check_equal(first.uid, same.uid);
+    check_equal(first.owner_name, name_255);
+    check_equal(strncmp(long_identity.owner_name, "xxh3-128:", sizeof("xxh3-128:") - 1u),
+                0);
+    check_equal(long_identity.owner_name, same_long_identity.owner_name);
+    check_equal(long_identity.uid, same_long_identity.uid);
+    check_not_equal(long_identity.owner_name, different_long_identity.owner_name);
+    check_not_equal(long_identity.uid, different_long_identity.uid);
+    check_true(strlen(first.owner_name) <= TURBO_FLOW_RESOURCE_OWNER_MAX);
+    check_true(strlen(first.uid) <= TURBO_FLOW_RESOURCE_UID_MAX);
+    check_not_equal(first.owner_name, long_identity.owner_name);
+    check_not_equal(first.uid, long_identity.uid);
+    turbo_flow_destroy(first_flow);
+    turbo_flow_destroy(same_flow);
+    turbo_flow_destroy(long_flow);
+    turbo_flow_destroy(same_long_flow);
+    turbo_flow_destroy(different_long_flow);
+    check_equal(turbo_flow_chttp_server_destroy(first_server), SALTS_OK);
+    check_equal(turbo_flow_chttp_server_destroy(same_server), SALTS_OK);
+    check_equal(turbo_flow_chttp_server_destroy(long_server), SALTS_OK);
+    check_equal(turbo_flow_chttp_server_destroy(same_long_server), SALTS_OK);
+    check_equal(turbo_flow_chttp_server_destroy(different_long_server), SALTS_OK);
   }
 
   it("copies callback request views and replies once after the graph completes") {
@@ -1062,6 +1297,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
     chttp_server_config native_config = chttp_server_adapter_config();
     turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
     turbo_flow_chttp_server_snapshot_t snapshot = TURBO_FLOW_CHTTP_SERVER_SNAPSHOT_INIT;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
     turbo_flow_chttp_server_t *server = NULL;
     chttp_server_adapter_result_t result = {0};
     turbo_flow_t *flow = turbo_flow_create();
@@ -1095,6 +1331,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
     check_equal(snapshot.active_requests, (size_t)0u);
     check_equal(snapshot.admitted_requests, (uint64_t)1u);
     check_equal(snapshot.completed_requests, (uint64_t)0u);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.accepted, (uint64_t)1u);
+    check_equal(managed.completed, (uint64_t)1u);
+    check_equal(managed.rejected, (uint64_t)0u);
+    check_equal(managed.in_flight, (uint64_t)0u);
 
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
@@ -1288,6 +1529,11 @@ spec("TurboFlow CHTTP deferred server adapter") {
                                                       : chttp_server_adapter_h2_client_config();
       turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
       turbo_flow_chttp_server_snapshot_t snapshot = TURBO_FLOW_CHTTP_SERVER_SNAPSHOT_INIT;
+      turbo_flow_managed_boundary_descriptor_t descriptor =
+          TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+      turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+      turbo_flow_resource_command_t command = TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      turbo_flow_resource_command_result_t command_result = TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
       turbo_flow_chttp_server_t *server = NULL;
       static chttp_server_adapter_gate_t gate;
       static chttp_server_adapter_http_completion_t accepted, rejected, resumed;
@@ -1346,8 +1592,57 @@ spec("TurboFlow CHTTP deferred server adapter") {
            ++poll)
         check_equal(chttp_async_client_poll(&client, POLL_MS, &completions), SALTS_OK);
       check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), (size_t)1u);
+      check_equal(turbo_flow_managed_boundary_descriptor_at(flow, 0u, &descriptor), SALTS_OK);
+      check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
+      command.expected_generation = managed.generation;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "http-quiesce-1", sizeof("http-quiesce-1"));
+      check_equal(turbo_flow_resource_command(flow, &command, &command_result), SALTS_OK);
+      check_equal(command_result.generation_before, managed.generation);
+      check_equal(command_result.generation_after, managed.generation + 1u);
+      check_equal(command_result.observed_generation, managed.generation + 1u);
+      check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_DRAINING);
+      check_equal(managed.in_flight, (uint64_t)1u);
+      check_equal(managed.accepted, (uint64_t)1u);
+      check_equal(managed.completed, (uint64_t)0u);
+      command_result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+      check_equal(turbo_flow_resource_command(flow, &command, &command_result), SALTS_OK);
+      check_equal(command_result.replayed, 1);
+      check_equal(command_result.generation_after, managed.generation);
+      command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
+      command.expected_generation = managed.generation - 1u;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "http-quiesce-stale", sizeof("http-quiesce-stale"));
+      command_result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+      check_equal(turbo_flow_resource_command(flow, &command, &command_result), SALTS_EBUSY);
+      command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
+      command.expected_generation = managed.generation;
+      command.deadline_ns = 1u;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "http-quiesce-expired", sizeof("http-quiesce-expired"));
+      command_result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+      check_equal(turbo_flow_resource_command(flow, &command, &command_result), SALTS_ETIMEDOUT);
+      command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_REPLACE_ENDPOINT;
+      command.expected_generation = managed.generation;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "http-replace-masked", sizeof("http-replace-masked"));
+      memcpy(command.endpoint_host, "127.0.0.1", sizeof("127.0.0.1"));
+      command.endpoint_port = 80;
+      command_result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+      check_equal(turbo_flow_resource_command(flow, &command, &command_result), SALTS_ENOTSUP);
       check_equal(turbo_flow_chttp_server_quiesce(server), SALTS_OK);
       check_equal(turbo_flow_chttp_server_quiesce(server), SALTS_OK);
+      {
+        turbo_flow_managed_boundary_snapshot_t unchanged =
+            TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+        check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &unchanged), SALTS_OK);
+        check_equal(unchanged.generation, managed.generation);
+      }
       check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
       check_equal(snapshot.state, TURBO_FLOW_CHTTP_SERVER_QUIESCED);
       check_equal(snapshot.active_requests, (size_t)1u);
@@ -1372,6 +1667,20 @@ spec("TurboFlow CHTTP deferred server adapter") {
       check_equal(snapshot.admitted_requests, (uint64_t)1u);
       check_equal(snapshot.completed_requests, (uint64_t)1u);
       check_equal(snapshot.rejected_requests, (uint64_t)1u);
+      check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT);
+      check_equal(managed.accepted, (uint64_t)1u);
+      check_equal(managed.completed, (uint64_t)1u);
+      check_equal(managed.rejected, (uint64_t)1u);
+      check_equal(managed.in_flight, (uint64_t)0u);
+      command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
+      command.expected_generation = managed.generation;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "http-resume-1", sizeof("http-resume-1"));
+      command_result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+      check_equal(turbo_flow_resource_command(flow, &command, &command_result), SALTS_OK);
+      check_equal(command_result.generation_after, managed.generation + 1u);
       check_equal(turbo_flow_chttp_server_resume(server), SALTS_OK);
       check_equal(turbo_flow_chttp_server_resume(server), SALTS_OK);
       options.user = &resumed;
@@ -1386,9 +1695,24 @@ spec("TurboFlow CHTTP deferred server adapter") {
       check_equal(chttp_async_client_stop(&client, 5000u), SALTS_OK);
       check_equal(chttp_async_client_destroy(&client), SALTS_OK);
       quiesce_cleanup_client = NULL;
+      check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
       check_equal(turbo_flow_chttp_server_quiesce(server), SALTS_OK);
+      {
+        turbo_flow_managed_boundary_snapshot_t quiesced =
+            TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+        check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &quiesced), SALTS_OK);
+        check_equal(quiesced.generation, managed.generation + 1u);
+        check_equal(quiesced.state, TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT);
+      }
       check_equal(turbo_flow_stop(flow), SALTS_OK);
       check_equal(turbo_flow_chttp_server_resume(server), SALTS_ESHUTDOWN);
+      command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
+      command.expected_generation = managed.generation + 1u;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "http-resume-stopped", sizeof("http-resume-stopped"));
+      command_result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+      check_equal(turbo_flow_resource_command(flow, &command, &command_result), SALTS_ESHUTDOWN);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
       check_equal(snapshot.state, TURBO_FLOW_CHTTP_SERVER_RUNNING);

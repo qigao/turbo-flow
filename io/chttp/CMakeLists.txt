@@ -11,6 +11,7 @@ cmake_config_target(
 target_compile_definitions(tf_chttp_adapter PRIVATE TURBO_FLOW_BUILD)
 target_include_directories(
   tf_chttp_adapter
+  PRIVATE $<TARGET_PROPERTY:xxHash::xxhash,INTERFACE_INCLUDE_DIRECTORIES>
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>)
 target_link_libraries(tf_chttp_adapter PUBLIC

@@ -443,6 +443,12 @@ spec("chttp_plugin") {
     check_equal(atomic_load(&probe.entered), 1);
     check_equal(atomic_load(&probe.exited), 0);
     check_equal(probe.completions, 0);
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    check_equal(turbo_flow_managed_boundary_count(original), (size_t)1u);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(original, 0u, &managed), SALTS_OK);
+    check_equal(managed.accepted, (uint64_t)1u);
+    check_equal(managed.completed, (uint64_t)0u);
+    check_equal(managed.in_flight, (uint64_t)1u);
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
     /* Native Source owns this publication; no external run/claim or caller lease exists. */
@@ -461,6 +467,10 @@ spec("chttp_plugin") {
     check_equal(probe.status, SALTS_OK);
     check_equal(probe.response_status, 200u);
     check_equal(atomic_load(&probe.exited), 1);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(original, 0u, &managed), SALTS_OK);
+    check_equal(managed.accepted, (uint64_t)1u);
+    check_equal(managed.completed, (uint64_t)1u);
+    check_equal(managed.in_flight, (uint64_t)0u);
     traffic_close(&f);
     check_equal(chttp_async_client_stop(&client, 1000u), SALTS_OK);
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
@@ -959,6 +969,19 @@ spec("chttp_plugin") {
         check_equal(chttp_tls_profile_init(&profile, &client_tls), SALTS_OK);
       }
       traffic_open(&f, h2 ? h2_yaml : yaml, graph, NULL, NULL);
+      turbo_flow_t *generation_flow = turbo_flow_plugin_generation_flow(f.generation);
+      turbo_flow_managed_boundary_descriptor_t descriptor =
+          TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+      turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+      check_equal(turbo_flow_managed_boundary_count(generation_flow), (size_t)1u);
+      check_equal(turbo_flow_managed_boundary_descriptor_at(generation_flow, 0u, &descriptor),
+                  SALTS_OK);
+      check_equal(descriptor.role_flags,
+                  (uint32_t)(TURBO_FLOW_MANAGED_BOUNDARY_SOURCE |
+                             TURBO_FLOW_MANAGED_BOUNDARY_SINK));
+      check_equal(turbo_flow_managed_boundary_snapshot_at(generation_flow, 0u, &managed),
+                  SALTS_OK);
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_RUNNING);
       chttp_client client = {0};
       chttp_client_config nc = traffic_client_config();
       chttp_options options = {0};
@@ -982,6 +1005,32 @@ spec("chttp_plugin") {
       check_equal(response.status_code, 200u);
       check_equal(response.body_size, 4u);
       check_equal(memcmp(response.body, "ping", 4u), 0);
+      check_equal(turbo_flow_managed_boundary_snapshot_at(generation_flow, 0u, &managed),
+                  SALTS_OK);
+      check_equal(managed.accepted, (uint64_t)1u);
+      check_equal(managed.completed, (uint64_t)1u);
+      check_equal(managed.in_flight, (uint64_t)0u);
+      turbo_flow_resource_command_t command = TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      turbo_flow_resource_command_result_t result = TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_QUIESCE;
+      command.expected_generation = managed.generation;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "plugin-http-quiesce",
+             sizeof("plugin-http-quiesce"));
+      check_equal(turbo_flow_resource_command(generation_flow, &command, &result), SALTS_OK);
+      check_equal(turbo_flow_managed_boundary_snapshot_at(generation_flow, 0u, &managed),
+                  SALTS_OK);
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT);
+      command = (turbo_flow_resource_command_t)TURBO_FLOW_RESOURCE_COMMAND_INIT;
+      result = (turbo_flow_resource_command_result_t)TURBO_FLOW_RESOURCE_COMMAND_RESULT_INIT;
+      command.kind = TURBO_FLOW_RESOURCE_COMMAND_RESUME;
+      command.expected_generation = managed.generation;
+      memcpy(command.target_uid, descriptor.uid, strlen(descriptor.uid) + 1u);
+      memcpy(command.idempotency_key, "plugin-http-resume", sizeof("plugin-http-resume"));
+      check_equal(turbo_flow_resource_command(generation_flow, &command, &result), SALTS_OK);
+      check_equal(turbo_flow_managed_boundary_snapshot_at(generation_flow, 0u, &managed),
+                  SALTS_OK);
+      check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_RUNNING);
       chttp_response_destroy(&response);
       check_equal(chttp_client_destroy(&client, 1000u), SALTS_OK);
       traffic_close(&f);

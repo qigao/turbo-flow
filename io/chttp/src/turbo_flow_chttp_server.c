@@ -2,12 +2,24 @@
 
 #include <salts/thread.h>
 
+#define XXH_INLINE_ALL
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <xxhash.h>
 
 #define CHTTP_SERVER_REQUEST_MAGIC UINT64_C(0x5446434853525631)
+
+enum { CHTTP_SERVER_RESOURCE_GENERATION_INITIAL = 1u };
+
+static const char CHTTP_SERVER_RESOURCE_UID_PREFIX[] = "chttp-server:";
+static const char CHTTP_SERVER_MEDIA_TYPE[] = "application/octet-stream";
+static const char CHTTP_SERVER_REQUEST_SCHEMA[] = "CHTTPServerRequest";
+static const char CHTTP_SERVER_RESPONSE_SCHEMA[] = "CHTTPServerResponse";
+static const char CHTTP_SERVER_BODY_TYPE[] = "Body";
 
 typedef struct chttp_server_message_field_s {
   size_t name_offset;
@@ -38,6 +50,7 @@ typedef struct turbo_flow_chttp_server_slot_s {
   uint64_t generation;
   uint64_t message_id;
   bool occupied;
+  bool managed_admitted;
   bool deferred_attached;
   bool defer_failed;
   bool publication_done;
@@ -69,6 +82,8 @@ struct turbo_flow_chttp_server_s {
   tstr response_content_type;
   tstr error_content_type;
   tstr graph_error_body;
+  char managed_owner[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
+  char managed_uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u];
   chttp_server_config config;
   chttp_server_socket_options socket_options;
   bool has_socket_options;
@@ -92,6 +107,10 @@ struct turbo_flow_chttp_server_s {
   uint64_t rejected_requests;
   uint64_t completed_requests;
   uint64_t response_bytes;
+  uint64_t managed_generation;
+  uint64_t managed_accepted;
+  uint64_t managed_completed;
+  uint64_t managed_rejected;
   int last_status;
 };
 
@@ -125,6 +144,26 @@ static int chttp_server_adapter_content_type_fits(const chttp_server_config *con
 
 static void chttp_server_adapter_counter_increment(uint64_t *counter) {
   if (counter && *counter != UINT64_MAX) ++*counter;
+}
+
+static int chttp_server_adapter_managed_identity_init(turbo_flow_chttp_server_t *server,
+                                                      const char *adapter_name) {
+  size_t length;
+  int written;
+  if (!server || !adapter_name) return SALTS_EINVAL;
+  length = strlen(adapter_name);
+  if (length <= TURBO_FLOW_RESOURCE_OWNER_MAX) {
+    memcpy(server->managed_owner, adapter_name, length + 1u);
+  } else {
+    const XXH128_hash_t hash = XXH3_128bits(adapter_name, length);
+    written = snprintf(server->managed_owner, sizeof(server->managed_owner),
+                       "xxh3-128:%016" PRIx64 "%016" PRIx64, hash.high64, hash.low64);
+    if (written < 0 || (size_t)written >= sizeof(server->managed_owner)) return SALTS_ERANGE;
+  }
+  written = snprintf(server->managed_uid, sizeof(server->managed_uid), "%s%s",
+                     CHTTP_SERVER_RESOURCE_UID_PREFIX, server->managed_owner);
+  if (written < 0 || (size_t)written >= sizeof(server->managed_uid)) return SALTS_ERANGE;
+  return SALTS_OK;
 }
 
 static const chttp_server_message_storage_t *
@@ -227,6 +266,10 @@ int turbo_flow_chttp_server_request_peer_certificate_sha256(const turbo_flow_msg
 static void chttp_server_adapter_slot_reset(turbo_flow_chttp_server_slot_t *slot,
                                             turbo_flow_msg_t *released_response) {
   if (!slot) return;
+  if (slot->managed_admitted) {
+    chttp_server_adapter_counter_increment(&slot->owner->managed_completed);
+    slot->managed_admitted = false;
+  }
   if (released_response) {
     turbo_flow_msg_init(released_response);
     (void)turbo_flow_msg_move(released_response, &slot->response);
@@ -291,9 +334,11 @@ static void chttp_server_adapter_release_unadmitted(turbo_flow_chttp_server_slot
   turbo_flow_msg_init(&released);
   salts_mutex_lock(&server->mutex);
   if (slot->occupied) {
+    const bool managed_admitted = slot->managed_admitted;
     chttp_server_adapter_slot_reset(slot, &released);
     if (server->active_requests != 0u) --server->active_requests;
     chttp_server_adapter_counter_increment(&server->rejected_requests);
+    if (!managed_admitted) chttp_server_adapter_counter_increment(&server->managed_rejected);
     server->last_status = status;
   }
   salts_mutex_unlock(&server->mutex);
@@ -564,6 +609,7 @@ static int chttp_server_adapter_handler(void *user, const chttp_server_request_v
   if (status != SALTS_OK) {
     salts_mutex_lock(&server->mutex);
     chttp_server_adapter_counter_increment(&server->rejected_requests);
+    chttp_server_adapter_counter_increment(&server->managed_rejected);
     server->last_status = status;
     salts_mutex_unlock(&server->mutex);
     return chttp_server_adapter_immediate(
@@ -592,6 +638,13 @@ static int chttp_server_adapter_handler(void *user, const chttp_server_request_v
                                           status == SALTS_ENOSPC ? "flow overloaded"
                                                                  : "flow unavailable");
   }
+  /* A successful publish owns the copied request before native defer admission is resolved. */
+  salts_mutex_lock(&server->mutex);
+  if (slot->occupied) {
+    slot->managed_admitted = true;
+    chttp_server_adapter_counter_increment(&server->managed_accepted);
+  }
+  salts_mutex_unlock(&server->mutex);
   status = chttp_server_response_defer(response, &deferred);
   salts_mutex_lock(&server->mutex);
   if (slot->occupied) {
@@ -661,6 +714,168 @@ static int chttp_server_adapter_terminal_submit(void *ctx, turbo_flow_t *flow,
   return status;
 }
 
+static turbo_flow_managed_boundary_state_t
+chttp_server_adapter_managed_state(turbo_flow_chttp_server_state_t state,
+                                   size_t active_requests) {
+  switch (state) {
+  case TURBO_FLOW_CHTTP_SERVER_REGISTERED:
+    return TURBO_FLOW_MANAGED_BOUNDARY_REGISTERED;
+  case TURBO_FLOW_CHTTP_SERVER_STARTING:
+    return TURBO_FLOW_MANAGED_BOUNDARY_STARTING;
+  case TURBO_FLOW_CHTTP_SERVER_RUNNING:
+    return TURBO_FLOW_MANAGED_BOUNDARY_RUNNING;
+  case TURBO_FLOW_CHTTP_SERVER_QUIESCED:
+    return active_requests != 0u ? TURBO_FLOW_MANAGED_BOUNDARY_DRAINING
+                                 : TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT;
+  case TURBO_FLOW_CHTTP_SERVER_STOPPING:
+    return TURBO_FLOW_MANAGED_BOUNDARY_STOPPING;
+  case TURBO_FLOW_CHTTP_SERVER_STOPPED:
+  case TURBO_FLOW_CHTTP_SERVER_DETACHED:
+    return TURBO_FLOW_MANAGED_BOUNDARY_STOPPED;
+  case TURBO_FLOW_CHTTP_SERVER_FAILED:
+  default:
+    return TURBO_FLOW_MANAGED_BOUNDARY_FAILED;
+  }
+}
+
+static int chttp_server_adapter_resource_metadata(void *ctx,
+                                                  turbo_flow_resource_metadata_t *out) {
+  turbo_flow_chttp_server_t *server = (turbo_flow_chttp_server_t *)ctx;
+  turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
+  if (!server || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  salts_mutex_lock(&server->mutex);
+  metadata.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+  metadata.kind = TURBO_FLOW_RESOURCE_CONNECTION;
+  memcpy(metadata.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
+  memcpy(metadata.owner_name, server->managed_owner, strlen(server->managed_owner) + 1u);
+  metadata.generation = server->managed_generation;
+  metadata.observed_generation = server->managed_generation;
+  salts_mutex_unlock(&server->mutex);
+  *out = metadata;
+  return SALTS_OK;
+}
+
+static int chttp_server_adapter_managed_descriptor(
+    void *ctx, turbo_flow_managed_boundary_descriptor_t *out) {
+  turbo_flow_chttp_server_t *server = (turbo_flow_chttp_server_t *)ctx;
+  turbo_flow_managed_boundary_descriptor_t descriptor =
+      TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+  int status;
+  if (!server || !out || out->size < sizeof(*out) ||
+      out->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION) {
+    return SALTS_EINVAL;
+  }
+  salts_mutex_lock(&server->mutex);
+  descriptor.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+  descriptor.kind = TURBO_FLOW_RESOURCE_CONNECTION;
+  memcpy(descriptor.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
+  memcpy(descriptor.owner_name, server->managed_owner, strlen(server->managed_owner) + 1u);
+  salts_mutex_unlock(&server->mutex);
+  descriptor.role_flags =
+      TURBO_FLOW_MANAGED_BOUNDARY_SOURCE | TURBO_FLOW_MANAGED_BOUNDARY_SINK;
+  descriptor.command_flags = TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_QUIESCE |
+                             TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_RESUME;
+  status = turbo_flow_content_descriptor_init(
+      &descriptor.input, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
+      TURBO_FLOW_CONTENT_PROFILE_HTTP_RESPONSE_BODY, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+      CHTTP_SERVER_MEDIA_TYPE, descriptor.owner_name);
+  if (status != SALTS_OK) return status;
+  status = turbo_flow_content_descriptor_declare_schema(
+      &descriptor.input, CHTTP_SERVER_RESPONSE_SCHEMA, CHTTP_SERVER_BODY_TYPE, 1u);
+  if (status != SALTS_OK) return status;
+  status = turbo_flow_content_descriptor_init(
+      &descriptor.output, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
+      TURBO_FLOW_CONTENT_PROFILE_HTTP_REQUEST_BODY, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+      CHTTP_SERVER_MEDIA_TYPE, descriptor.owner_name);
+  if (status != SALTS_OK) return status;
+  status = turbo_flow_content_descriptor_declare_schema(
+      &descriptor.output, CHTTP_SERVER_REQUEST_SCHEMA, CHTTP_SERVER_BODY_TYPE, 1u);
+  if (status != SALTS_OK) return status;
+  *out = descriptor;
+  return SALTS_OK;
+}
+
+static int chttp_server_adapter_managed_snapshot(void *ctx,
+                                                 turbo_flow_managed_boundary_snapshot_t *out) {
+  turbo_flow_chttp_server_t *server = (turbo_flow_chttp_server_t *)ctx;
+  turbo_flow_managed_boundary_snapshot_t snapshot = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+  size_t occupied = 0u;
+  size_t in_flight = 0u;
+  size_t index;
+  if (!server || !out || out->size < sizeof(*out) ||
+      out->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION) {
+    return SALTS_EINVAL;
+  }
+  salts_mutex_lock(&server->mutex);
+  for (index = 0u; index < server->slot_count; ++index) {
+    const turbo_flow_chttp_server_slot_t *slot = &server->slots[index];
+    if (!slot->occupied && slot->managed_admitted) {
+      salts_mutex_unlock(&server->mutex);
+      return SALTS_EPROTO;
+    }
+    if (!slot->occupied) continue;
+    ++occupied;
+    if (!slot->managed_admitted) {
+      salts_mutex_unlock(&server->mutex);
+      return SALTS_EBUSY;
+    }
+    ++in_flight;
+  }
+  if (occupied != server->active_requests || server->managed_completed > server->managed_accepted) {
+    salts_mutex_unlock(&server->mutex);
+    return SALTS_EPROTO;
+  }
+  memcpy(snapshot.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
+  snapshot.generation = server->managed_generation;
+  snapshot.observed_generation = server->managed_generation;
+  snapshot.state = chttp_server_adapter_managed_state(server->state, occupied);
+  snapshot.queue_capacity = (uint64_t)server->slot_count;
+  snapshot.in_flight = (uint64_t)in_flight;
+  snapshot.accepted = server->managed_accepted;
+  snapshot.completed = server->managed_completed;
+  snapshot.rejected = server->managed_rejected;
+  snapshot.backpressured = occupied == server->slot_count;
+  snapshot.last_status = server->last_status;
+  salts_mutex_unlock(&server->mutex);
+  *out = snapshot;
+  return SALTS_OK;
+}
+
+static int chttp_server_adapter_resource_command(
+    void *ctx, turbo_flow_t *flow, const turbo_flow_resource_command_t *command) {
+  turbo_flow_chttp_server_t *server = (turbo_flow_chttp_server_t *)ctx;
+  turbo_flow_chttp_server_state_t state;
+  int status;
+  if (!server || !flow || flow != server->flow || !command ||
+      command->size < sizeof(*command)) {
+    return SALTS_EINVAL;
+  }
+  if (command->kind == TURBO_FLOW_RESOURCE_COMMAND_QUIESCE) {
+    state = TURBO_FLOW_CHTTP_SERVER_QUIESCED;
+  } else if (command->kind == TURBO_FLOW_RESOURCE_COMMAND_RESUME) {
+    state = TURBO_FLOW_CHTTP_SERVER_RUNNING;
+  } else {
+    return SALTS_ENOTSUP;
+  }
+  salts_mutex_lock(&server->mutex);
+  if (command->expected_generation != server->managed_generation) {
+    status = SALTS_EBUSY;
+  } else if (server->state != TURBO_FLOW_CHTTP_SERVER_RUNNING &&
+             server->state != TURBO_FLOW_CHTTP_SERVER_QUIESCED) {
+    status = SALTS_ESHUTDOWN;
+  } else if (server->state == state) {
+    status = SALTS_OK;
+  } else if (server->managed_generation == UINT64_MAX) {
+    status = SALTS_ERANGE;
+  } else {
+    server->state = state;
+    ++server->managed_generation;
+    status = SALTS_OK;
+  }
+  salts_mutex_unlock(&server->mutex);
+  return status;
+}
+
 static int chttp_server_adapter_start_native(turbo_flow_chttp_server_t *server,
                                              uint16_t *out_bound_port) {
   uint16_t bound_port = 0u;
@@ -727,6 +942,7 @@ static int chttp_server_adapter_start(void *ctx, turbo_flow_t *flow,
 
 static int chttp_server_adapter_set_admission(turbo_flow_chttp_server_t *server,
                                               turbo_flow_chttp_server_state_t state) {
+  int status = SALTS_OK;
   if (!server) return SALTS_EINVAL;
   salts_mutex_lock(&server->mutex);
   if (server->state != TURBO_FLOW_CHTTP_SERVER_RUNNING &&
@@ -734,9 +950,16 @@ static int chttp_server_adapter_set_admission(turbo_flow_chttp_server_t *server,
     salts_mutex_unlock(&server->mutex);
     return SALTS_ESHUTDOWN;
   }
-  server->state = state;
+  if (server->state != state) {
+    if (server->managed_generation == UINT64_MAX) {
+      status = SALTS_ERANGE;
+    } else {
+      server->state = state;
+      ++server->managed_generation;
+    }
+  }
   salts_mutex_unlock(&server->mutex);
-  return SALTS_OK;
+  return status;
 }
 
 int turbo_flow_chttp_server_quiesce(turbo_flow_chttp_server_t *server) {
@@ -865,6 +1088,10 @@ int turbo_flow_chttp_server_register(const turbo_flow_chttp_server_config_t *con
   turbo_flow_chttp_server_t *server;
   turbo_flow_adapter_ops_t adapter_ops = {0};
   turbo_flow_async_terminal_adapter_ops_t async_ops = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
+  turbo_flow_managed_boundary_provider_ops_t boundary_ops =
+      TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
+  turbo_flow_managed_async_terminal_registration_t registration =
+      TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_INIT;
   turbo_flow_adapter_schema_t schema = {0};
   size_t index;
   int status;
@@ -885,6 +1112,7 @@ int turbo_flow_chttp_server_register(const turbo_flow_chttp_server_config_t *con
   server->next_message_id = config->first_message_id;
   server->slot_count = config->server->network.connection_capacity;
   server->state = TURBO_FLOW_CHTTP_SERVER_REGISTERED;
+  server->managed_generation = CHTTP_SERVER_RESOURCE_GENERATION_INITIAL;
   server->last_status = SALTS_OK;
   server->adapter_name = tstr_dup(config->adapter_name);
   server->source_name = tstr_dup(config->source_name);
@@ -908,6 +1136,13 @@ int turbo_flow_chttp_server_register(const turbo_flow_chttp_server_config_t *con
     free(server);
     return SALTS_ENOMEM;
   }
+  status = chttp_server_adapter_managed_identity_init(server, server->adapter_name);
+  if (status != SALTS_OK) {
+    chttp_server_adapter_cleanup(server);
+    salts_mutex_destroy(&server->mutex);
+    free(server);
+    return status;
+  }
   server->config.host = server->host;
   server->config.session_cookie_name = server->session_cookie_name;
   if (config->socket_options) {
@@ -926,8 +1161,18 @@ int turbo_flow_chttp_server_register(const turbo_flow_chttp_server_config_t *con
   schema.kind = TURBO_FLOW_ADAPTER_KIND_HTTP;
   schema.roles = TURBO_FLOW_ADAPTER_SOURCE | TURBO_FLOW_ADAPTER_SINK;
   schema.direction = TURBO_FLOW_ADAPTER_BIDIRECTIONAL;
-  status = turbo_flow_register_async_terminal_adapter_ex(config->flow, config->adapter_name,
-                                                         &adapter_ops, &async_ops, server, &schema);
+  boundary_ops.resource.metadata = chttp_server_adapter_resource_metadata;
+  boundary_ops.resource.command = chttp_server_adapter_resource_command;
+  boundary_ops.descriptor = chttp_server_adapter_managed_descriptor;
+  boundary_ops.snapshot = chttp_server_adapter_managed_snapshot;
+  registration.adapter_name = config->adapter_name;
+  registration.adapter_ops = &adapter_ops;
+  registration.async_ops = &async_ops;
+  registration.schema = &schema;
+  registration.owner_name = server->managed_owner;
+  registration.boundary_ops = &boundary_ops;
+  registration.ctx = server;
+  status = turbo_flow_register_managed_async_terminal_adapter(config->flow, &registration);
   if (status != SALTS_OK) {
     chttp_server_adapter_cleanup(server);
     salts_mutex_destroy(&server->mutex);

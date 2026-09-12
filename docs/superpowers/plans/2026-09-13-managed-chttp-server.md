@@ -145,7 +145,7 @@ state 映射：REGISTERED/STARTING/RUNNING/STOPPING/STOPPED/FAILED 对应 manage
 
 测试 255 字符和更长有效 adapter name、重复注册失败时数量不变和 out_server=NULL、同名重建 identity 一致、不同长名称 identity 不同。core aggregate 所有权测试继续覆盖 shutdown 精确一次，不修改 core 公共契约。
 
-在 `tests/install_chttp_plugin_consumer/main.c` 的真实 server kind start 后增加 managed count/descriptor/snapshot 与 QUIESCE/RESUME 检查（空请求时 QUIESCENT，恢复 RUNNING）。仅链接既有 PluginHost，仍由 argv 的实际已安装 DLL 提供 owner；错误走原 cleanup，不增加 embedded 路径。主控在候选安装之后跑既有版本化消费者 preset；子代理先报告该安装门禁待主控执行，不可对旧 SDK 的必然 RED 自动降级。
+在 `tests/install_chttp_plugin_consumer/main.c` 的真实 server kind start 后增加 managed count/descriptor/snapshot 与 QUIESCE/RESUME 检查（空请求时 QUIESCENT，恢复 RUNNING）。保持现有 PluginHost、Product、Graph 链接，不新增 CHTTPAdapter/CHttp 原生链接；仍由 argv 的实际已安装 DLL 提供 owner。错误走原 cleanup，不增加 embedded 路径。主控在候选安装之后跑既有版本化消费者 preset；子代理先报告该安装门禁待主控执行，不可对旧 SDK 的必然 RED 自动降级。
 
 - [ ] **Step 6: 文档、GREEN 与提交。**
 

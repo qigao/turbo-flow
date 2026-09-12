@@ -83,10 +83,44 @@ quiescent Actor. Successful stop has zero queue/in-flight and equal accepted and
 completed counts. Native snapshot still reports `SALTS_EBUSY` while the owner lane
 is active and waits for the short admission commit.
 
+## CHTTP deferred server Source and Sink
+
+`turbo_flow_chttp_server_register()` atomically registers the deferred HTTP server
+adapter and one managed Source/Sink boundary. A bounded adapter name is preserved
+as the owner and produces UID `chttp-server:<adapter-name>`; an oversized existing
+name instead uses a stable `xxh3-128:<digest>` owner. The input is the opaque
+`application/octet-stream` `CHTTPServerResponse/Body/v1` contract consumed by the
+terminal adapter. The output is the corresponding
+`CHTTPServerRequest/Body/v1` contract produced by request publication. Empty
+bodies remain valid, and neither contract is inferred from an HTTP Content-Type.
+
+The configured request-slot count is the managed capacity. Queue depth is zero
+because the server has no second owner queue, while in-flight counts slots whose
+request publication was accepted. `accepted` advances after publication accepts
+the request; every accepted slot advances `completed` exactly once when reply,
+cancel, or terminal failure releases it. `rejected` counts failures before that
+managed admission point, independently of the native server counters. In
+particular, a failure to defer after successful publication is one managed
+acceptance and completion but remains a native rejected request. A terminal
+settlement means that the server-owned deferred request has been resolved; it
+does not assert that a remote peer consumed the bytes or that any payload was
+persisted.
+
+The command mask contains `QUIESCE` and `RESUME`. They run on the same host thread
+that owns server progress, serialize with snapshot reads under the server mutex,
+honor the dispatcher deadline/idempotency checks, and recheck expected generation
+at the mutation point. A real transition increments generation exactly once; a
+same-state command is a successful no-op, and generation overflow fails without
+changing admission state. Registered, starting, and running map directly;
+quiesced with accepted slots still in flight maps to draining and otherwise to
+quiescent; stopping maps to stopping; stopped and detached map to stopped; failed
+maps to failed. The short publication-to-slot-accounting window is reported as
+`SALTS_EBUSY`, rather than exposing a mixed snapshot.
+
 ## Migration and rollback
 
 Existing owners and embedded resource-registration structures retain their layout and continue to register as ordinary resources. Migration is explicit: use the additive managed-provider entry point, the combined async-terminal entry point for a terminal Sink, or the combined managed Source entry point for a Reactive Source. Advertise only capabilities the owner actually implements, and keep the owner-native snapshot as the sole mutable state. There is no compatibility fallback from a managed contract to `turbo_flow_resource_snapshot_t`.
 
-Removing the paired callbacks rolls a standalone owner back to an ordinary resource without changing its data path or existing resource commands. This is a source-level migration reversal, not a runtime fallback. The CNet stream and datagram Sinks now require the combined managed registration; other CNet, CHTTP, and TurboDb owners remain independently tracked under issue #28.
+Removing the paired callbacks rolls a standalone owner back to an ordinary resource without changing its data path or existing resource commands. This is a source-level migration reversal, not a runtime fallback. The CNet stream and datagram Sinks, CNet packet Sink, and CHTTP deferred server now require their combined managed registration; other CHTTP and TurboDb owners remain independently tracked under issue #28.
 
 The deterministic, buildable examples are `turbo_flow/tests/test_flow_managed_boundary.c`, `turbo_flow/tests/test_flow_managed_async_terminal.c`, and `turbo_flow/tests/test_flow_managed_source.c`. The installed-package consumer in `tests/install_consumer/main.c` validates the same headers, initializers, and exported symbols in both C and C++ modes.
