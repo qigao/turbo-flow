@@ -18,15 +18,15 @@
   "buildPresets": [
     { "name": "fixture-win-release-c", "configurePreset": "fixture-win-release-c" },
     { "name": "fixture-win-release-cxx", "configurePreset": "fixture-win-release-cxx" },
-    { "name": "fixture-win-release-sdk", "configurePreset": "fixture-win-release-sdk", "targets": ["install"] },
+    { "name": "install-fixture-win-release-sdk", "configurePreset": "fixture-win-release-sdk", "targets": ["install"] },
     { "name": "fixture-win-dev-c", "configurePreset": "fixture-win-dev-c" },
     { "name": "fixture-win-dev-cxx", "configurePreset": "fixture-win-dev-cxx" },
-    { "name": "fixture-win-dev-sdk", "configurePreset": "fixture-win-dev-sdk", "targets": ["install"] },
+    { "name": "install-fixture-win-dev-sdk", "configurePreset": "fixture-win-dev-sdk", "targets": ["install"] },
     { "name": "fixture-linux-release-c", "configurePreset": "fixture-linux-release-c" },
     { "name": "fixture-linux-release-cxx", "configurePreset": "fixture-linux-release-cxx" },
-    { "name": "fixture-linux-release-sdk", "configurePreset": "fixture-linux-release-sdk", "targets": ["install"] },
+    { "name": "install-fixture-linux-release-sdk", "configurePreset": "fixture-linux-release-sdk", "targets": ["install"] },
     { "name": "fixture-linux-dev-c", "configurePreset": "fixture-linux-dev-c" },
     { "name": "fixture-linux-dev-cxx", "configurePreset": "fixture-linux-dev-cxx" },
-    { "name": "fixture-linux-dev-sdk", "configurePreset": "fixture-linux-dev-sdk", "targets": ["install"] }
+    { "name": "install-fixture-linux-dev-sdk", "configurePreset": "fixture-linux-dev-sdk", "targets": ["install"] }
   ]
 }

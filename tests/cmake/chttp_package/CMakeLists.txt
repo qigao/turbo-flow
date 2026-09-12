@@ -52,23 +52,45 @@ elseif(CHTTP_PROBE_SCENARIO STREQUAL "preimport-without-provenance")
   unset(Chttp_DIR)
   unset(Chttp_DIR CACHE)
 elseif(CHTTP_PROBE_SCENARIO STREQUAL "preimport-outside-location")
+  find_package(Chttp CONFIG REQUIRED
+               PATHS "$ENV{HTTP_SERVICES_ROOT}" NO_DEFAULT_PATH)
   file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/outside")
-  file(COPY_FILE "$ENV{HTTP_SERVICES_ROOT}/bin/chttp_client.dll" "${CMAKE_CURRENT_BINARY_DIR}/outside/client.dll")
-  file(COPY_FILE "$ENV{HTTP_SERVICES_ROOT}/lib/chttp_client.lib" "${CMAKE_CURRENT_BINARY_DIR}/outside/client.lib")
-  add_library(CHttp::Client SHARED IMPORTED)
-  add_library(CHttp::Server SHARED IMPORTED)
-  add_library(CHttp::S3 SHARED IMPORTED)
-  set(Chttp_DIR "$ENV{HTTP_SERVICES_ROOT}/lib/cmake/Chttp")
-  set_target_properties(CHttp::Client PROPERTIES IMPORTED_CONFIGURATIONS RELEASE
-    IMPORTED_LOCATION_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/outside/client.dll"
-    IMPORTED_IMPLIB_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/outside/client.lib"
-    INTERFACE_INCLUDE_DIRECTORIES "$ENV{HTTP_SERVICES_ROOT}/include")
-  set_target_properties(CHttp::Server PROPERTIES IMPORTED_CONFIGURATIONS RELEASE
-    IMPORTED_LOCATION_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/outside/server.dll"
-    IMPORTED_IMPLIB_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/outside/server.lib"
-    INTERFACE_INCLUDE_DIRECTORIES "$ENV{HTTP_SERVICES_ROOT}/include")
+  if(CMAKE_CONFIGURATION_TYPES)
+    set(_fixture_requested_configs ${CMAKE_CONFIGURATION_TYPES})
+  else()
+    set(_fixture_requested_configs "${CMAKE_BUILD_TYPE}")
+  endif()
+  foreach(_fixture_target IN ITEMS CHttp::Client CHttp::Server)
+    foreach(_fixture_config IN LISTS _fixture_requested_configs)
+      string(TOUPPER "${_fixture_config}" _fixture_config_upper)
+      get_target_property(_fixture_location "${_fixture_target}"
+                          "IMPORTED_LOCATION_${_fixture_config_upper}")
+      get_filename_component(_fixture_location_name "${_fixture_location}" NAME)
+      set(_fixture_outside_location
+          "${CMAKE_CURRENT_BINARY_DIR}/outside/${_fixture_location_name}")
+      file(COPY_FILE "${_fixture_location}" "${_fixture_outside_location}")
+      set_target_properties("${_fixture_target}" PROPERTIES
+        "IMPORTED_LOCATION_${_fixture_config_upper}" "${_fixture_outside_location}")
+      if(WIN32)
+        get_target_property(_fixture_implib "${_fixture_target}"
+                            "IMPORTED_IMPLIB_${_fixture_config_upper}")
+        get_filename_component(_fixture_implib_name "${_fixture_implib}" NAME)
+        set(_fixture_outside_implib
+            "${CMAKE_CURRENT_BINARY_DIR}/outside/${_fixture_implib_name}")
+        file(COPY_FILE "${_fixture_implib}" "${_fixture_outside_implib}")
+        set_target_properties("${_fixture_target}" PROPERTIES
+          "IMPORTED_IMPLIB_${_fixture_config_upper}" "${_fixture_outside_implib}")
+      endif()
+    endforeach()
+  endforeach()
 elseif(CHTTP_PROBE_SCENARIO STREQUAL "wrong-config")
-  set(CMAKE_BUILD_TYPE Debug)
+  if(CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_CONFIGURATION_TYPES TurboFlowWrongConfig)
+  elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CMAKE_BUILD_TYPE RelWithDebInfo)
+  else()
+    set(CMAKE_BUILD_TYPE Debug)
+  endif()
 elseif(CHTTP_PROBE_SCENARIO STREQUAL "missing-deferred-cancel")
   set(ENV{HTTP_SERVICES_ROOT} "${CHTTP_MISSING_SYMBOL_SDK_ROOT}")
 elseif(CHTTP_PROBE_SCENARIO STREQUAL "missing-deferred-cancel-static-try-compile")

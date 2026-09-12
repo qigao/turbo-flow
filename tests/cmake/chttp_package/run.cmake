@@ -13,6 +13,7 @@ else()
 endif()
 
 set(_sdk_preset "${_fixture_profile}-sdk")
+set(_sdk_install_preset "install-${_sdk_preset}")
 set(_sdk_root "${_fixture_dir}/build/${_sdk_preset}/install")
 execute_process(COMMAND "${CMAKE_COMMAND}" --fresh --preset "${_sdk_preset}"
                 WORKING_DIRECTORY "${_fixture_dir}"
@@ -20,7 +21,7 @@ execute_process(COMMAND "${CMAKE_COMMAND}" --fresh --preset "${_sdk_preset}"
 if(NOT _result EQUAL 0)
   message(FATAL_ERROR "missing-symbol SDK configure failed:\n${_stdout}\n${_stderr}")
 endif()
-execute_process(COMMAND "${CMAKE_COMMAND}" --build --preset "${_sdk_preset}"
+execute_process(COMMAND "${CMAKE_COMMAND}" --build --preset "${_sdk_install_preset}"
                 WORKING_DIRECTORY "${_fixture_dir}"
                 RESULT_VARIABLE _result OUTPUT_VARIABLE _stdout ERROR_VARIABLE _stderr)
 if(NOT _result EQUAL 0)
