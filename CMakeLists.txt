@@ -315,7 +315,21 @@ if(BUILD_TESTING AND BUILD_TESTS)
 
     set(chttp_closure_fixture_dir
         "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/closure_fixture")
-    foreach(closure_case IN ITEMS positive debug-positive legacy wrong-crt debug-release-crt unresolved outside arbitrary-outside system-forbidden system-unsigned)
+    set(CHTTP_TEST_POWERSHELL_EXECUTABLE
+        "$ENV{WINDIR}/System32/WindowsPowerShell/v1.0/powershell.exe")
+    if(NOT EXISTS "${CHTTP_TEST_POWERSHELL_EXECUTABLE}")
+      message(FATAL_ERROR
+              "Windows CHTTP closure tests require the built-in Windows PowerShell host")
+    endif()
+    execute_process(
+      COMMAND "${CHTTP_TEST_POWERSHELL_EXECUTABLE}" -NoProfile -NonInteractive
+              -Command "& { $ErrorActionPreference = 'Stop'; Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1'); Get-Command Get-AuthenticodeSignature -ErrorAction Stop | Out-Null }"
+      RESULT_VARIABLE CHTTP_TEST_POWERSHELL_CAPABILITY_RESULT)
+    if(NOT CHTTP_TEST_POWERSHELL_CAPABILITY_RESULT EQUAL 0)
+      message(FATAL_ERROR
+              "Windows CHTTP closure tests require the built-in Microsoft.PowerShell.Security module")
+    endif()
+    foreach(closure_case IN ITEMS positive debug-positive legacy wrong-crt wrong-msvcp-crt debug-release-crt unresolved outside arbitrary-outside system-forbidden system-unsigned system-signed-non-os)
       add_test(NAME test_turbo_flow_chttp_closure_setup_${closure_case}
         COMMAND "${CMAKE_COMMAND}" --workflow --preset "closure-${closure_case}")
       set_tests_properties(test_turbo_flow_chttp_closure_setup_${closure_case}
@@ -352,6 +366,14 @@ if(BUILD_TESTING AND BUILD_TESTS)
               "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/wrong-crt/install/allowed/bin"
               -DCHTTP_TEST_CONFIG=Release
               "-DCHTTP_EXPECT_FAILURE_PATTERN=recursive closure contains a Debug CRT"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_closure_wrong_msvcp_crt
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/wrong-msvcp-crt/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/wrong-msvcp-crt/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/wrong-msvcp-crt/install/allowed/bin"
+              -DCHTTP_TEST_CONFIG=Release
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=Release CHTTP recursive closure contains a Debug CRT"
               -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
     add_test(NAME test_turbo_flow_chttp_closure_unresolved
       COMMAND "${CMAKE_COMMAND}"
@@ -403,6 +425,14 @@ if(BUILD_TESTING AND BUILD_TESTS)
               -DCHTTP_TEST_CONFIG=Release
               "-DCHTTP_EXPECT_FAILURE_PATTERN=Status=NotSigned"
               -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    add_test(NAME test_turbo_flow_chttp_closure_system_signed_non_os
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_closure_fixture_dir}/build/system-signed-non-os/install/allowed/bin/closure_root.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_closure_fixture_dir}/build/system-signed-non-os/install/allowed"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_closure_fixture_dir}/build/system-signed-non-os/install/allowed/bin;$ENV{WINDIR}/System32"
+              -DCHTTP_TEST_CONFIG=Release
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=Identity=NonOS"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
     set_tests_properties(test_turbo_flow_chttp_closure_legacy PROPERTIES
       FIXTURES_REQUIRED chttp-closure-legacy LABELS "cmake;chttp-adapter" TIMEOUT 30)
     set_tests_properties(test_turbo_flow_chttp_closure_positive PROPERTIES
@@ -411,6 +441,8 @@ if(BUILD_TESTING AND BUILD_TESTS)
       FIXTURES_REQUIRED chttp-closure-debug-positive LABELS "cmake;chttp-adapter" TIMEOUT 30)
     set_tests_properties(test_turbo_flow_chttp_closure_wrong_crt PROPERTIES
       FIXTURES_REQUIRED chttp-closure-wrong-crt LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(test_turbo_flow_chttp_closure_wrong_msvcp_crt PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-wrong-msvcp-crt LABELS "cmake;chttp-adapter" TIMEOUT 30)
     set_tests_properties(test_turbo_flow_chttp_closure_unresolved PROPERTIES
       FIXTURES_REQUIRED chttp-closure-unresolved LABELS "cmake;chttp-adapter" TIMEOUT 30)
     set_tests_properties(test_turbo_flow_chttp_closure_outside PROPERTIES
@@ -423,6 +455,8 @@ if(BUILD_TESTING AND BUILD_TESTS)
       FIXTURES_REQUIRED chttp-closure-system-forbidden LABELS "cmake;chttp-adapter" TIMEOUT 30)
     set_tests_properties(test_turbo_flow_chttp_closure_system_unsigned PROPERTIES
       FIXTURES_REQUIRED chttp-closure-system-unsigned LABELS "cmake;chttp-adapter" TIMEOUT 30)
+    set_tests_properties(test_turbo_flow_chttp_closure_system_signed_non_os PROPERTIES
+      FIXTURES_REQUIRED chttp-closure-system-signed-non-os LABELS "cmake;chttp-adapter" TIMEOUT 30)
   endif()
 
   add_test(

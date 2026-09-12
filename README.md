@@ -157,6 +157,11 @@ cmake --build --preset install-win-release-user
 Gateway/provider/adapter 依赖层次及 operation fixture；它不会用源码 build-tree package 代替
 安装证据。
 
+Windows 原生闭包测试使用系统内置 Windows PowerShell 与其
+`Microsoft.PowerShell.Security` 模块；配置阶段会显式验证该前置条件。测试以只读方式结合
+Windows Resource Protection 与 Authenticode 区分 OS 组件、当前 profile 的 Microsoft CRT
+和普通应用 DLL，模块或 trust 查询失败时直接拒绝，不回退到仅按目录或发布者放行。
+
 ## 形式化模型
 
 [形式化模型规范](docs/FORMAL_FLOW_MODEL.md) 与 [Lean 验证入口](formal/README.md) 描述核心路由、fan-in 与生命周期的抽象证明。它不是对 C 源码、编译器输出或并发内存模型的 refinement proof。
