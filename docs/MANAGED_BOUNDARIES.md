@@ -106,16 +106,19 @@ settlement means that the server-owned deferred request has been resolved; it
 does not assert that a remote peer consumed the bytes or that any payload was
 persisted.
 
-The command mask contains `QUIESCE` and `RESUME`. They run on the same host thread
-that owns server progress, serialize with snapshot reads under the server mutex,
-honor the dispatcher deadline/idempotency checks, and recheck expected generation
-at the mutation point. A real transition increments generation exactly once; a
-same-state command is a successful no-op, and generation overflow fails without
-changing admission state. Registered, starting, and running map directly;
-quiesced with accepted slots still in flight maps to draining and otherwise to
-quiescent; stopping maps to stopping; stopped and detached map to stopped; failed
-maps to failed. The short publication-to-slot-accounting window is reported as
-`SALTS_EBUSY`, rather than exposing a mixed snapshot.
+The command mask contains `QUIESCE` and `RESUME`. Commands follow the existing
+serialized host command lane; this does not add a concurrent-dispatch guarantee.
+The native CHTTP server continues to make progress on its background owner, while
+commands, snapshots, and concurrent callbacks coordinate owner facts through the
+same server mutex. The dispatcher applies deadline/idempotency checks, and the
+owner rechecks expected generation at the mutation point. A real transition
+increments generation exactly once; a same-state command is a successful no-op,
+and generation overflow fails without changing admission state. Registered,
+starting, and running map directly; quiesced with accepted slots still in flight
+maps to draining and otherwise to quiescent; stopping maps to stopping; stopped
+and detached map to stopped; failed maps to failed. The short
+publication-to-slot-accounting window is reported as `SALTS_EBUSY`, rather than
+exposing a mixed snapshot.
 
 ## Migration and rollback
 

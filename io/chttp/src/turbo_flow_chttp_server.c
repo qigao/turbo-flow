@@ -1070,8 +1070,10 @@ static int chttp_server_adapter_config_valid(const turbo_flow_chttp_server_confi
 static void chttp_server_adapter_cleanup(turbo_flow_chttp_server_t *server) {
   size_t index;
   if (!server) return;
-  for (index = 0u; index < server->slot_count; ++index)
-    turbo_flow_msg_cleanup(&server->slots[index].response);
+  if (server->slots) {
+    for (index = 0u; index < server->slot_count; ++index)
+      turbo_flow_msg_cleanup(&server->slots[index].response);
+  }
   free(server->slots);
   tstr_free(server->adapter_name);
   tstr_free(server->source_name);

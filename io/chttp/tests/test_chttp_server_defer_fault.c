@@ -26,6 +26,12 @@ int chttp_test_server_set_managed_generation(turbo_flow_chttp_server_t *server,
                                              uint64_t generation);
 int chttp_test_server_direct_command(turbo_flow_chttp_server_t *server,
                                      const turbo_flow_resource_command_t *command);
+void chttp_test_server_fail_calloc_call(size_t call);
+int chttp_test_server_set_snapshot_state(turbo_flow_chttp_server_t *server, int occupied,
+                                         int managed_admitted, size_t active_requests,
+                                         uint64_t accepted, uint64_t completed,
+                                         uint64_t rejected);
+int chttp_test_server_saturate_managed_counters(turbo_flow_chttp_server_t *server);
 
 int chttp_test_server_response_defer(chttp_server_response *response,
                                      chttp_server_deferred *out_deferred) {
@@ -155,6 +161,7 @@ static void chttp_fault_reset(void) {
   atomic_store_explicit(&completion_allowed, 1, memory_order_relaxed);
   gated_completion = NULL;
   gated_completion_ctx = NULL;
+  chttp_test_server_fail_calloc_call(0u);
 }
 
 static int chttp_fault_owner_open(chttp_fault_owner_t *owner) {
@@ -237,6 +244,32 @@ static int chttp_fault_wait_active(turbo_flow_chttp_server_t *server, size_t exp
 spec("CHTTP managed deferred server fault boundaries") {
   before_each() { chttp_fault_reset(); }
 
+  it("returns ENOMEM without registry residue when request-slot allocation fails") {
+    chttp_server_config native = chttp_fault_server_config();
+    turbo_flow_chttp_server_config_t config = TURBO_FLOW_CHTTP_SERVER_CONFIG_INIT;
+    turbo_flow_chttp_server_t *server = (turbo_flow_chttp_server_t *)(uintptr_t)1u;
+    turbo_flow_t *flow = turbo_flow_create();
+    check_not_null(flow);
+    config.flow = flow;
+    config.adapter_name = "server";
+    config.source_name = "input";
+    config.server = &native;
+    config.method = CHTTP_METHOD_POST;
+    config.path = "/flow";
+    chttp_test_server_fail_calloc_call(2u);
+    check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_ENOMEM);
+    check_null(server);
+    check_equal(turbo_flow_adapter_count(flow), (size_t)0u);
+    check_equal(turbo_flow_managed_boundary_count(flow), (size_t)0u);
+    chttp_test_server_fail_calloc_call(0u);
+    check_equal(turbo_flow_chttp_server_register(&config, &server), SALTS_OK);
+    check_not_null(server);
+    check_equal(turbo_flow_adapter_count(flow), (size_t)1u);
+    check_equal(turbo_flow_managed_boundary_count(flow), (size_t)1u);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_chttp_server_destroy(server), SALTS_OK);
+  }
+
   it("settles managed admission when native defer fails after publish") {
     chttp_fault_owner_t owner;
     chttp_fault_client_t client = {0};
@@ -281,6 +314,61 @@ spec("CHTTP managed deferred server fault boundaries") {
     check_equal(managed.completed, (uint64_t)1u);
     check_equal(managed.rejected, (uint64_t)0u);
     check_equal(managed.in_flight, (uint64_t)0u);
+    chttp_fault_owner_close(&owner);
+  }
+
+  it("projects slot capacity, full backpressure, and idle quiescence") {
+    chttp_fault_owner_t owner;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    check_equal(chttp_fault_owner_open(&owner), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.queue_depth, (uint64_t)0u);
+    check_equal(managed.queue_capacity, (uint64_t)1u);
+    check_equal(managed.in_flight, (uint64_t)0u);
+    check_equal(managed.backpressured, 0);
+    check_equal(chttp_test_server_set_snapshot_state(owner.server, 1, 1, 1u, 1u, 0u, 0u),
+                SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.queue_depth, (uint64_t)0u);
+    check_equal(managed.queue_capacity, (uint64_t)1u);
+    check_equal(managed.in_flight, (uint64_t)1u);
+    check_equal(managed.backpressured, 1);
+    check_equal(chttp_test_server_set_snapshot_state(owner.server, 0, 0, 0u, 1u, 1u, 0u),
+                SALTS_OK);
+    check_equal(turbo_flow_chttp_server_quiesce(owner.server), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_QUIESCENT);
+    check_equal(managed.queue_depth, (uint64_t)0u);
+    check_equal(managed.queue_capacity, (uint64_t)1u);
+    check_equal(managed.in_flight, (uint64_t)0u);
+    check_equal(managed.backpressured, 0);
+    chttp_fault_owner_close(&owner);
+  }
+
+  it("rejects both stable slot snapshot contradictions") {
+    chttp_fault_owner_t owner;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    check_equal(chttp_fault_owner_open(&owner), SALTS_OK);
+    check_equal(chttp_test_server_set_snapshot_state(owner.server, 0, 1, 0u, 1u, 0u, 0u),
+                SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed), SALTS_EPROTO);
+    check_equal(chttp_test_server_set_snapshot_state(owner.server, 1, 1, 0u, 1u, 0u, 0u),
+                SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed), SALTS_EPROTO);
+    check_equal(chttp_test_server_set_snapshot_state(owner.server, 0, 0, 0u, 1u, 1u, 0u),
+                SALTS_OK);
+    chttp_fault_owner_close(&owner);
+  }
+
+  it("saturates managed counters without wrapping") {
+    chttp_fault_owner_t owner;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    check_equal(chttp_fault_owner_open(&owner), SALTS_OK);
+    check_equal(chttp_test_server_saturate_managed_counters(owner.server), SALTS_OK);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.accepted, UINT64_MAX);
+    check_equal(managed.completed, UINT64_MAX);
+    check_equal(managed.rejected, UINT64_MAX);
     chttp_fault_owner_close(&owner);
   }
 
