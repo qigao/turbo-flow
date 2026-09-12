@@ -30,6 +30,8 @@ endif()
 
 set(_TurboFlow_salts_utils_components
     Graph
+    CNetAdapter
+    CHTTPAdapter
     PluginHost
     Product
     ProtocolIngressGraph
@@ -42,6 +44,8 @@ set(_TurboFlow_salts_utils_components
 
 set(_TurboFlow_rules_forge_components
     Graph
+    CNetAdapter
+    CHTTPAdapter
     PluginHost
     Product
     ProtocolIngressGraph

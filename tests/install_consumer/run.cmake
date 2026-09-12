@@ -304,6 +304,22 @@ execute_process(
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}" --fresh --preset
+          "component-cnet-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset
+          "component-cnet-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset
+          "component-cnet-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset
           "component-salts-dir-${consumer_profile}"
   WORKING_DIRECTORY "${component_consumer_source_dir}"
   COMMAND_ERROR_IS_FATAL ANY)
