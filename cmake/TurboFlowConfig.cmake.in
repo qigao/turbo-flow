@@ -116,8 +116,6 @@ macro(_TurboFlow_require_dependency_root package_name root_name imported_target)
     endif()
   endif()
 
-  unset(${package_name}_DIR CACHE)
-  unset(${package_name}_DIR)
 endmacro()
 
 macro(_TurboFlow_verify_dependency_root package_name root_name)

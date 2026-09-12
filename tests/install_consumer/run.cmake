@@ -287,6 +287,38 @@ execute_process(
   COMMAND_ERROR_IS_FATAL ANY)
 
 execute_process(
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset
+          "component-chttp-preimport-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset
+          "component-salts-dir-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset
+          "component-salts-dir-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset
+          "component-salts-dir-${consumer_profile}"
+  WORKING_DIRECTORY "${component_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+
+execute_process(
   COMMAND "${CMAKE_COMMAND}" --preset "consumer-full-${consumer_profile}"
   WORKING_DIRECTORY "${full_consumer_source_dir}"
   COMMAND_ERROR_IS_FATAL ANY)
@@ -396,7 +428,7 @@ set(component_negative_cases
     config-missing-root graph-missing-root
     chttp-missing-root chttp-empty-root chttp-wrong-root chttp-empty-sdk
     chttp-outside-cache chttp-preimport-no-provenance
-    chttp-preimport-outside chttp-wrong-config unknown)
+    chttp-preimport-outside chttp-wrong-config salts-dir-outside unknown)
 set(component_negative_patterns
     SALTS_ROOT RULES_FORGE_ROOT
     "HTTP_SERVICES_ROOT is required" "HTTP_SERVICES_ROOT is required"
@@ -404,7 +436,8 @@ set(component_negative_patterns
     "Chttp_DIR is outside HTTP_SERVICES_ROOT"
     "already imported without verifiable Chttp_DIR provenance"
     "runtime is outside HTTP_SERVICES_ROOT"
-    "does not declare requested configuration" MissingComponent)
+    "does not declare requested configuration"
+    "Salts_DIR is outside SALTS_ROOT" MissingComponent)
 if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
   list(PREPEND component_negative_cases turbodb-missing-root)
   list(PREPEND component_negative_patterns TURBODB_ROOT)
