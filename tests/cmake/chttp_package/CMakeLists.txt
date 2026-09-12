@@ -1,10 +1,37 @@
 cmake_minimum_required(VERSION 3.20)
 
+if(DEFINED ENV{CHTTP_PROBE_SCENARIO})
+  set(CHTTP_PROBE_SCENARIO "$ENV{CHTTP_PROBE_SCENARIO}")
+endif()
+if(DEFINED ENV{CHTTP_MISSING_SYMBOL_SDK_ROOT})
+  set(CHTTP_MISSING_SYMBOL_SDK_ROOT "$ENV{CHTTP_MISSING_SYMBOL_SDK_ROOT}")
+endif()
+
 if(CHTTP_PROBE_LANGUAGE STREQUAL "CXX")
   project(TurboFlowCHTTPPackageProbe LANGUAGES CXX)
   set_source_files_properties(probe.c PROPERTIES LANGUAGE CXX)
 else()
   project(TurboFlowCHTTPPackageProbe LANGUAGES C)
+endif()
+
+if(CHTTP_PROBE_SCENARIO STREQUAL "build-missing-symbol-sdk")
+  find_package(Salts CONFIG REQUIRED PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
+  add_library(Client SHARED missing_symbol_client.c)
+  add_library(Server SHARED missing_symbol_server.c)
+  target_link_libraries(Client PUBLIC Salts::CNet Salts::CMeta Salts::CSerde)
+  target_link_libraries(Server PUBLIC Salts::CNet Salts::CMeta Salts::CSerde)
+  target_include_directories(Client PUBLIC
+    "$<BUILD_INTERFACE:$ENV{HTTP_SERVICES_ROOT}/include>"
+    "$<INSTALL_INTERFACE:include>")
+  target_include_directories(Server PUBLIC
+    "$<BUILD_INTERFACE:$ENV{HTTP_SERVICES_ROOT}/include>"
+    "$<INSTALL_INTERFACE:include>")
+  install(TARGETS Client Server EXPORT ChttpTargets
+    RUNTIME DESTINATION bin LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
+  install(EXPORT ChttpTargets NAMESPACE CHttp:: DESTINATION lib/cmake/Chttp)
+  install(FILES ChttpConfig.cmake DESTINATION lib/cmake/Chttp)
+  install(DIRECTORY "$ENV{HTTP_SERVICES_ROOT}/include/" DESTINATION include)
+  return()
 endif()
 
 if(CHTTP_PROBE_SCENARIO STREQUAL "unset-root")
@@ -43,29 +70,27 @@ elseif(CHTTP_PROBE_SCENARIO STREQUAL "preimport-outside-location")
 elseif(CHTTP_PROBE_SCENARIO STREQUAL "wrong-config")
   set(CMAKE_BUILD_TYPE Debug)
 elseif(CHTTP_PROBE_SCENARIO STREQUAL "missing-deferred-cancel")
-  set(_fixture_root "${CMAKE_CURRENT_BINARY_DIR}/missing-symbol-sdk")
-  file(MAKE_DIRECTORY "${_fixture_root}/include" "${_fixture_root}/bin"
-       "${_fixture_root}/lib" "${_fixture_root}/lib/cmake/Chttp")
-  file(COPY "$ENV{HTTP_SERVICES_ROOT}/include/" DESTINATION "${_fixture_root}/include")
-  file(COPY_FILE "$ENV{HTTP_SERVICES_ROOT}/bin/chttp_client.dll" "${_fixture_root}/bin/chttp_client.dll")
-  file(COPY_FILE "$ENV{HTTP_SERVICES_ROOT}/lib/chttp_client.lib" "${_fixture_root}/lib/chttp_client.lib")
-  file(WRITE "${_fixture_root}/lib/cmake/Chttp/ChttpConfig.cmake" "")
-  set(ENV{HTTP_SERVICES_ROOT} "${_fixture_root}")
-  set(Chttp_DIR "${_fixture_root}/lib/cmake/Chttp")
-  add_library(CHttp::Client SHARED IMPORTED)
-  add_library(CHttp::Server SHARED IMPORTED)
-  add_library(CHttp::S3 SHARED IMPORTED)
-  foreach(_fixture_target IN ITEMS CHttp::Client CHttp::Server)
-    set_target_properties(${_fixture_target} PROPERTIES
-      IMPORTED_CONFIGURATIONS RELEASE
-      IMPORTED_LOCATION_RELEASE "${_fixture_root}/bin/chttp_client.dll"
-      IMPORTED_IMPLIB_RELEASE "${_fixture_root}/lib/chttp_client.lib"
-      INTERFACE_INCLUDE_DIRECTORIES "${_fixture_root}/include")
-  endforeach()
+  set(ENV{HTTP_SERVICES_ROOT} "${CHTTP_MISSING_SYMBOL_SDK_ROOT}")
+elseif(CHTTP_PROBE_SCENARIO STREQUAL "missing-deferred-cancel-static-try-compile")
+  set(ENV{HTTP_SERVICES_ROOT} "${CHTTP_MISSING_SYMBOL_SDK_ROOT}")
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+elseif(CHTTP_PROBE_SCENARIO STREQUAL "preserve-static-try-compile")
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+elseif(CHTTP_PROBE_SCENARIO STREQUAL "preserve-undefined-try-compile")
+  unset(CMAKE_TRY_COMPILE_TARGET_TYPE)
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/../../../cmake")
 include(TurboFlowRequireCHTTP)
+
+if(CHTTP_PROBE_SCENARIO STREQUAL "preserve-static-try-compile" AND
+   NOT CMAKE_TRY_COMPILE_TARGET_TYPE STREQUAL "STATIC_LIBRARY")
+  message(FATAL_ERROR "CMAKE_TRY_COMPILE_TARGET_TYPE caller state was not restored")
+endif()
+if(CHTTP_PROBE_SCENARIO STREQUAL "preserve-undefined-try-compile" AND
+   DEFINED CMAKE_TRY_COMPILE_TARGET_TYPE)
+  message(FATAL_ERROR "undefined CMAKE_TRY_COMPILE_TARGET_TYPE caller state was not restored")
+endif()
 
 add_executable(chttp_package_probe probe.c)
 target_link_libraries(chttp_package_probe PRIVATE CHttp::Client CHttp::Server)
