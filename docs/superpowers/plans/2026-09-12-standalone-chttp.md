@@ -147,3 +147,71 @@ cmake --build --preset install-win-release-user
 Debug 使用对应 win-dev-user 和 install-win-dev-user，保持独立前缀。核对所有实际列出的 tests 被执行，禁用项如实报告。记录产物路径、commit、CRT 和 DLL 清单。
 
 - [ ] **Step 4: 恢复原性能测量并交付。** 完成代码提交且树干净后构建 bench_cnet_adapter，在同 Release preset runtime 环境直接运行现有程序，不更改 warmup、消息量、容量、七次重复和统计口径。与既有基线比较实际 median/MAD、P95/P99、CPU、饱和恢复和 stop/drain 指标；不填推算值，不把静态 allocation 审计写成运行测量。更新 #109 逐项证据和 #2/#63 相关进度，父问题保留未完成事项。运行最终 diff 检查和整分支审查后再请求合并，不由任务执行者 push/merge。
+
+### Task 3: 全量验证前置——两个旧 fail-fast fixture 的 preset 迁移
+
+全量预检发现两个 runner 仍裸调用 CMake 并递归删除目录。执行顺序调整为 Task 1、
+Task 2 已审查代码及原始基准、Task 3、Task 2 剩余交付门禁。不改变生产依赖契约。
+
+**Files:**
+- Modify: `tests/cmake/run_find_tools_failfast.cmake`, `tests/cmake/run_cnet_stop_drain_failfast.cmake`, root `CMakeLists.txt` 中对应两项测试注册。
+- Create: `tests/cmake/find_tools_without_lemon/CMakeUserPresets.json` 与 `vcpkg.json`。
+- Create: `tests/cmake/cnet_without_stop_drain/CMakeUserPresets.json` 与 `vcpkg.json`。
+- Read: 两个 fixture 的 CMakeLists、`cmake/FindTools.cmake`、`cmake/TurboFlowRequireCNet.cmake`、既有 CHTTP fixture runner/presets。
+
+**Interfaces:** 消费 source 参数及 `TURBO_FLOW_ACTIVE_PRESET`；产生原有两项同名 CTest。
+错误仍须分别命中 `project-provided lemon target is required`、
+`Salts::CNet stop-drain contract v1`，不能把任意失败视为成功。不改生产探针、HTTP checker、
+外部 SDK 或安装规则。
+
+- [ ] **Step 1: 入口 RED。** 两个 runner 删除 `REMOVE_RECURSE`、binary/generator 参数消费，保留 source 校验及原有退出码/准确诊断断言。各自的 configure 调用改为：
+
+```cmake
+if(NOT DEFINED ENV{TURBO_FLOW_ACTIVE_PRESET} OR
+   NOT "$ENV{TURBO_FLOW_ACTIVE_PRESET}" MATCHES "^(win|linux)-(dev|release)-user$")
+  message(FATAL_ERROR "A supported TURBO_FLOW_ACTIVE_PRESET is required")
+endif()
+set(fixture_preset "fixture-$ENV{TURBO_FLOW_ACTIVE_PRESET}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset "${fixture_preset}"
+  WORKING_DIRECTORY "${fixture_source_dir}"
+  RESULT_VARIABLE configure_result
+  OUTPUT_VARIABLE configure_stdout ERROR_VARIABLE configure_stderr)
+```
+
+新 presets 尚不存在时，在 VsDevCmd 中运行以下测试，预期因未命中原错误诊断而失败。
+记录这是入口缺失 RED，不伪称旧生产行为失败；不得先运行旧递归删除路径。
+
+```text
+ctest --preset win-release-user -R "^test_turbo_flow_(cmake_tools|cnet_stop_drain)_failfast$" --output-on-failure
+```
+
+- [ ] **Step 2: 版本化 fixture 入口。** 两个目录各使用下面完整内容；相同名字位于不同独立工程。继承 compiler/flags/toolchain/manifest，不复制 flags 或第一方依赖根进 cache。
+
+```json
+{
+  "version": 6,
+  "include": ["../../../CMakeUserPresets.json"],
+  "configurePresets": [
+    { "name": "fixture-win-release-user", "inherits": "win-release-user", "binaryDir": "${sourceDir}/build/win-release-user", "cacheVariables": { "TURBO_FLOW_SOURCE_DIR": "${sourceDir}/../../..", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/win-release-user/install" } },
+    { "name": "fixture-win-dev-user", "inherits": "win-dev-user", "binaryDir": "${sourceDir}/build/win-dev-user", "cacheVariables": { "TURBO_FLOW_SOURCE_DIR": "${sourceDir}/../../..", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/win-dev-user/install" } },
+    { "name": "fixture-linux-release-user", "inherits": "linux-release-user", "binaryDir": "${sourceDir}/build/linux-release-user", "cacheVariables": { "TURBO_FLOW_SOURCE_DIR": "${sourceDir}/../../..", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/linux-release-user/install" } },
+    { "name": "fixture-linux-dev-user", "inherits": "linux-dev-user", "binaryDir": "${sourceDir}/build/linux-dev-user", "cacheVariables": { "TURBO_FLOW_SOURCE_DIR": "${sourceDir}/../../..", "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/linux-dev-user/install" } }
+  ]
+}
+```
+
+两个 `vcpkg.json` 分别使用以下内容。工程按契约必定 configure 失败、无安装目标，
+不添加虚假的 build/install 成功入口。
+
+```json
+{ "name": "turbo-flow-find-tools-negative", "version-string": "1.0.0" }
+```
+
+```json
+{ "name": "turbo-flow-cnet-contract-negative", "version-string": "1.0.0" }
+```
+
+- [ ] **Step 3: root 注册。** 两项 `add_test` 保留 source 参数和 `-P` runner，删除不再消费的 `TURBO_FLOW_BINARY_DIR`、`TURBO_FLOW_GENERATOR`；保留测试名字、标签、串行设置及超时，只有实测超时证据才调整。禁止新增 function/macro，不重写 production include 既有函数。
+- [ ] **Step 4: GREEN 及归因。** `cmake --preset win-release-user` 后重跑 Step 1 两项测试，预期 2/2；检查输出确实命中各自准确诊断。CNet 编译日志必须是 contract 宏缺失，不是 compiler/vcpkg/缺头失败。确认 manifest 开启、再次运行不依赖递归清理、未知 active profile 明确失败。相邻回归仅 CHTTP package 与 native/closure；不运行外部安装消费者，不把缺 SDK 的 Debug 或未执行的 Linux 标记通过。
+- [ ] **Step 5: 提交与审查。** `git diff --check`；核实两个 runner 无递归删除或裸 `-S/-B/-G`，新增 manifest/preset 均版本化。提交本计划及限定文件，报告留在本地 SDD workspace。独立 review 后继续 Task 2 全量门禁；外部安装授权仍需明确取得。

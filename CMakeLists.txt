@@ -234,8 +234,6 @@ if(BUILD_TESTING AND BUILD_TESTS)
     COMMAND
       "${CMAKE_COMMAND}"
       "-DTURBO_FLOW_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
-      "-DTURBO_FLOW_BINARY_DIR=${CMAKE_BINARY_DIR}"
-      "-DTURBO_FLOW_GENERATOR=${CMAKE_GENERATOR}"
       -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_find_tools_failfast.cmake")
   set_tests_properties(
     test_turbo_flow_cmake_tools_failfast
@@ -246,8 +244,6 @@ if(BUILD_TESTING AND BUILD_TESTS)
     COMMAND
       "${CMAKE_COMMAND}"
       "-DTURBO_FLOW_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
-      "-DTURBO_FLOW_BINARY_DIR=${CMAKE_BINARY_DIR}"
-      "-DTURBO_FLOW_GENERATOR=${CMAKE_GENERATOR}"
       -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_cnet_stop_drain_failfast.cmake")
   set_tests_properties(
     test_turbo_flow_cnet_stop_drain_failfast
