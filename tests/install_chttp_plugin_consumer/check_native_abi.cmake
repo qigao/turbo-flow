@@ -220,7 +220,11 @@ if(DEFINED CHTTP_TEST_MODULE)
         endif()
         if(EXISTS "${application_module_dir}/${direct_dependency_name}")
           file(REAL_PATH "${application_module_dir}/${direct_dependency_name}" direct_dependency_real)
-          if(direct_dependency_real IN_LIST chttp_compiler_crt_files)
+          if(direct_dependency_real IN_LIST chttp_compiler_crt_files AND
+             NOT chttp_application_module_real STREQUAL chttp_compiler_runtime)
+            message(FATAL_ERROR
+                    "Compiler-local CRT is not owned by the authenticated ASan runtime: ${chttp_application_module} -> ${direct_dependency_real}")
+          elseif(direct_dependency_real IN_LIST chttp_compiler_crt_files)
             list(APPEND selected_system_dependencies "${direct_dependency_real}")
           endif()
           continue()
@@ -238,6 +242,11 @@ if(DEFINED CHTTP_TEST_MODULE)
           endif()
         endforeach()
         if(selected_system_dependency)
+          if(selected_system_dependency IN_LIST chttp_compiler_crt_files AND
+             NOT chttp_application_module_real STREQUAL chttp_compiler_runtime)
+            message(FATAL_ERROR
+                    "Compiler-local CRT is not owned by the authenticated ASan runtime: ${chttp_application_module} -> ${selected_system_dependency}")
+          endif()
           list(APPEND selected_system_dependencies
                "${selected_system_dependency}")
         endif()

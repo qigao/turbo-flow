@@ -215,3 +215,51 @@ ctest --preset win-release-user -R "^test_turbo_flow_(cmake_tools|cnet_stop_drai
 - [ ] **Step 3: root 注册。** 两项 `add_test` 保留 source 参数和 `-P` runner，删除不再消费的 `TURBO_FLOW_BINARY_DIR`、`TURBO_FLOW_GENERATOR`；保留测试名字、标签、串行设置及超时，只有实测超时证据才调整。禁止新增 function/macro，不重写 production include 既有函数。
 - [ ] **Step 4: GREEN 及归因。** `cmake --preset win-release-user` 后重跑 Step 1 两项测试，预期 2/2；检查输出确实命中各自准确诊断。CNet 编译日志必须是 contract 宏缺失，不是 compiler/vcpkg/缺头失败。确认 manifest 开启、再次运行不依赖递归清理、未知 active profile 明确失败。相邻回归仅 CHTTP package 与 native/closure；不运行外部安装消费者，不把缺 SDK 的 Debug 或未执行的 Linux 标记通过。
 - [ ] **Step 5: 提交与审查。** `git diff --check`；核实两个 runner 无递归删除或裸 `-S/-B/-G`，新增 manifest/preset 均版本化。提交本计划及限定文件，报告留在本地 SDD workspace。独立 review 后继续 Task 2 全量门禁；外部安装授权仍需明确取得。
+
+### Task 4: 安装验证前置——ASan CRT 所有权与负例重复执行
+
+**Files:** `tests/install_chttp_plugin_consumer/check_native_abi.cmake`、其
+`closure_fixture/` 既有 fixture/presets、根 CMake 测试注册、
+`tests/install_consumer/run.cmake`。不改公开 package 或产品加载器。
+**Interfaces:** 沿用实际依赖边、当前工具链精确路径与签名；Debug 应用仍禁止
+Release CRT，只有已认证 ASan 自身的导入允许其官方 Release CRT。
+
+- [ ] **Step 1: RED。** 读取 `task-2-fix5-review.md`，用既有 fixture 增加
+  不含 ASan 的闭包不能从 compiler directory 获得额外 CRT 信任的负例，
+  明确命中 provenance 错误，不能以任意失败算成功。保留既有 ASan 正例、
+  应用 wrong-CRT、outside 和 PATH-shadow 负例。另有已复现的重复运行 RED：
+  `root-release-install-fix5-tests.log` 中版本负例遗留 `TurboFlow_DIR-NOTFOUND`，
+  下一次被 component:57 拒绝，runner:102 未命中原版本诊断。
+- [ ] **Step 2: 最小所有权修复。** 只允许实际认证 ASan 的直接 CRT 依赖
+  使用 compiler-local platform boundary；其他应用边选中这些目录外 CRT 必须
+  fail fast。不得用“闭包任意地方有 ASan”给其他应用边全局豁免。依赖来源的
+  必要前置/后置检查只归入既有 checker；保留 native resolver，不手写 loader。
+
+```cmake
+if(direct_dependency_real IN_LIST chttp_compiler_crt_files AND
+   NOT chttp_application_module_real STREQUAL chttp_compiler_runtime)
+  message(FATAL_ERROR "Compiler-local CRT is not owned by the authenticated ASan runtime")
+endif()
+```
+
+  本地解析和搜索解析的实际选中文件都须受同一所有权规则约束；若需更改
+  native resolver 边界顺序才能保证不变量，先报告证据与最小调整。
+- [ ] **Step 3: 负例初始状态隔离。** 仅在两个 configure-negative 循环
+  的既有命令增加 `--fresh`，不修改正例或 package 的缓存来源校验：
+
+```cmake
+COMMAND "${CMAKE_COMMAND}" --fresh --preset
+        "component-${failure_case}-${consumer_profile}"
+```
+
+```cmake
+COMMAND "${CMAKE_COMMAND}" --fresh --preset
+        "component-${component_negative_case}-${consumer_profile}"
+```
+
+- [ ] **Step 4: 验证与提交。** Via VsDevCmd，最小新负例 RED/GREEN 后运行
+  `ctest --preset win-release-user -R "test_turbo_flow_chttp_(native|closure)_"`。
+  controller 随后连续两次运行实际 Release installed consumer，再跑 Debug。
+  版本负例必须始终命中原诊断；后续门禁若失败须报告具体阶段，不能称整体通过。
+  仅主控运行外部安装测试。提交限定代码与本计划，自审、独立审查，不新增
+  fallback/helper、复制 SDK DLL、关闭 ASan 或信任整个目录。

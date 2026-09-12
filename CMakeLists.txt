@@ -351,6 +351,16 @@ if(BUILD_TESTING AND BUILD_TESTS)
     if(NOT chttp_signed_fixture_signature_result EQUAL 0)
       message(FATAL_ERROR "Windows CHTTP signed non-OS fixture host prerequisite failed")
     endif()
+    add_test(NAME test_turbo_flow_chttp_closure_compiler_non_asan_root
+      COMMAND "${CMAKE_COMMAND}"
+              "-DCHTTP_TEST_MODULE=${chttp_signed_fixture_dir}/msvcp140.dll"
+              "-DCHTTP_TEST_ALLOWED_ROOTS=${chttp_signed_fixture_dir}"
+              "-DCHTTP_TEST_SEARCH_DIRS=${chttp_signed_fixture_dir}"
+              -DCHTTP_TEST_CONFIG=Release
+              "-DCHTTP_EXPECT_FAILURE_PATTERN=Compiler-local CRT is not owned by the authenticated ASan runtime"
+              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
+    set_tests_properties(test_turbo_flow_chttp_closure_compiler_non_asan_root
+      PROPERTIES LABELS "cmake;chttp-adapter" TIMEOUT 30)
     foreach(closure_case IN ITEMS asan-outside positive debug-positive legacy wrong-crt wrong-msvcp-crt debug-release-crt unresolved outside arbitrary-outside system-forbidden system-unsigned system-signed-non-os runtime-release runtime-debug asan-positive asan-wrong-crt wrong-vc-suffix wrong-msvcp-suffix debug-vc-suffix debug-msvcp-suffix)
       add_test(NAME test_turbo_flow_chttp_closure_setup_${closure_case}
         COMMAND "${CMAKE_COMMAND}" --workflow --preset "closure-${closure_case}")

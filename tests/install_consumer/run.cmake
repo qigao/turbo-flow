@@ -84,7 +84,7 @@ endif()
 # before a consumer can link the legacy target.
 foreach(failure_case IN ITEMS removed-flow version-1)
   execute_process(
-    COMMAND "${CMAKE_COMMAND}" --preset
+    COMMAND "${CMAKE_COMMAND}" --fresh --preset
             "component-${failure_case}-${consumer_profile}"
     WORKING_DIRECTORY "${component_consumer_source_dir}"
     RESULT_VARIABLE configure_result
@@ -415,7 +415,7 @@ foreach(component_negative_index RANGE 0 ${component_negative_last})
   list(GET component_negative_cases ${component_negative_index} component_negative_case)
   list(GET component_negative_patterns ${component_negative_index} component_negative_pattern)
   execute_process(
-    COMMAND "${CMAKE_COMMAND}" --preset
+    COMMAND "${CMAKE_COMMAND}" --fresh --preset
             "component-${component_negative_case}-${consumer_profile}"
     WORKING_DIRECTORY "${component_consumer_source_dir}"
     RESULT_VARIABLE component_negative_result
