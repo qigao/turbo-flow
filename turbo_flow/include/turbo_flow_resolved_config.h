@@ -17,6 +17,17 @@ extern "C" {
 #define TURBO_FLOW_CONFIG_MESSAGE_MAX 255u
 typedef struct turbo_flow_resolved_config_s turbo_flow_resolved_config_t;
 
+/** Borrowed immutable configured DLL identity, valid until its resolved config is destroyed. */
+typedef struct turbo_flow_resolved_plugin_view_s {
+  size_t size;
+  const char *id;
+  const char *version;
+  const char *path;
+} turbo_flow_resolved_plugin_view_t;
+
+#define TURBO_FLOW_RESOLVED_PLUGIN_VIEW_INIT                                                       \
+  {sizeof(turbo_flow_resolved_plugin_view_t), NULL, NULL, NULL}
+
 typedef enum turbo_flow_config_operation_exec_e {
   TURBO_FLOW_CONFIG_OPERATION_INLINE = 0,
   TURBO_FLOW_CONFIG_OPERATION_THREAD = 1,
@@ -137,6 +148,17 @@ TURBO_FLOW_C_API void turbo_flow_resolved_config_destroy(turbo_flow_resolved_con
  */
 TURBO_FLOW_C_API const char *
 turbo_flow_resolved_config_json(const turbo_flow_resolved_config_t *config, size_t *json_len);
+
+/** Write the ordered configured DLL count; zeroes `count` on error. */
+TURBO_FLOW_C_API int
+turbo_flow_resolved_config_plugin_count(const turbo_flow_resolved_config_t *config, size_t *count);
+/**
+ * Project one configured DLL by load order. The returned strings are borrowed from `config`.
+ * A valid-sized view is cleared on error while preserving its exact layout.
+ */
+TURBO_FLOW_C_API int
+turbo_flow_resolved_config_plugin_at(const turbo_flow_resolved_config_t *config, size_t index,
+                                     turbo_flow_resolved_plugin_view_t *view);
 
 /** Write the binding count; zeroes `count` on error. */
 TURBO_FLOW_C_API int

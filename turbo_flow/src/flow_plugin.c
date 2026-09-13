@@ -944,8 +944,10 @@ int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_config_t *config,
   return SALTS_OK;
 }
 
-int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path,
-                                turbo_flow_plugin_error_t *error) {
+static int flow_plugin_host_load_expected(turbo_flow_plugin_host_t *host, const char *path,
+                                          const char *expected_id,
+                                          const char *expected_version,
+                                          turbo_flow_plugin_error_t *error) {
   flow_plugin_module_handle_t module;
   turbo_flow_plugin_get_api_fn get_api = NULL;
   const turbo_flow_plugin_api_v1_t *api;
@@ -986,6 +988,14 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
   if (rc != SALTS_OK) {
     flow_plugin_module_close(module);
     return rc;
+  }
+  if ((expected_id && strcmp(api->plugin_id, expected_id) != 0) ||
+      (expected_version && strcmp(api->plugin_version, expected_version) != 0)) {
+    flow_plugin_error_write(error, SALTS_EPROTO, TURBO_FLOW_PLUGIN_STAGE_IDENTITY,
+                            expected_id ? expected_id : api->plugin_id, path,
+                            "configured plugin identity or version does not match DLL vtable");
+    flow_plugin_module_close(module);
+    return SALTS_EPROTO;
   }
   if (flow_plugin_find_module(host, api->plugin_id) >= 0) {
     flow_plugin_error_write(error, SALTS_EALREADY, TURBO_FLOW_PLUGIN_STAGE_IDENTITY, api->plugin_id,
@@ -1083,6 +1093,65 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
     return rc;
   }
   flow_plugin_observe(host, TURBO_FLOW_PLUGIN_LIFECYCLE_COMMIT, committed.plugin_id, SALTS_OK);
+  return SALTS_OK;
+}
+
+int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path,
+                                turbo_flow_plugin_error_t *error) {
+  return flow_plugin_host_load_expected(host, path, NULL, NULL, error);
+}
+
+int turbo_flow_plugin_host_create_configured(
+    const turbo_flow_plugin_host_config_t *host_config,
+    const turbo_flow_resolved_config_t *resolved, uint64_t rollback_timeout_ms,
+    turbo_flow_plugin_host_t **host_out, turbo_flow_plugin_error_t *error) {
+  turbo_flow_plugin_host_t *host = NULL;
+  size_t count = 0u;
+  int rc;
+  if (host_out) *host_out = NULL;
+  if (!host_config || !resolved || !host_out || !flow_plugin_error_valid(error))
+    return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL,
+                                   NULL, "invalid configured PluginHost arguments");
+  rc = turbo_flow_resolved_config_plugin_count(resolved, &count);
+  if (rc != SALTS_OK)
+    return flow_plugin_error_write(error, rc, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL, NULL,
+                                   "resolved plugin manifest is invalid");
+  rc = turbo_flow_plugin_host_create(host_config, &host, error);
+  if (rc != SALTS_OK) return rc;
+  if (count > host->config.module_capacity) {
+    turbo_flow_plugin_error_t cleanup_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    rc = flow_plugin_error_write(error, SALTS_ENOSPC, TURBO_FLOW_PLUGIN_STAGE_CAPACITY, NULL, NULL,
+                                 "configured plugin count exceeds host module capacity");
+    if (turbo_flow_plugin_host_destroy(host, rollback_timeout_ms, &cleanup_error) != SALTS_OK) {
+      *host_out = host;
+      *error = cleanup_error;
+      return cleanup_error.status;
+    }
+    return rc;
+  }
+  for (size_t i = 0u; i < count; ++i) {
+    turbo_flow_resolved_plugin_view_t plugin = TURBO_FLOW_RESOLVED_PLUGIN_VIEW_INIT;
+    rc = turbo_flow_resolved_config_plugin_at(resolved, i, &plugin);
+    if (rc != SALTS_OK)
+      (void)flow_plugin_error_write(error, rc, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL, NULL,
+                                    "resolved plugin manifest projection failed");
+    if (rc == SALTS_OK)
+      rc = flow_plugin_host_load_expected(host, plugin.path, plugin.id, plugin.version, error);
+    if (rc != SALTS_OK) {
+      turbo_flow_plugin_error_t load_error = *error;
+      turbo_flow_plugin_error_t rollback_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      const int rollback_rc =
+          turbo_flow_plugin_host_destroy(host, rollback_timeout_ms, &rollback_error);
+      if (rollback_rc != SALTS_OK) {
+        *host_out = host;
+        *error = rollback_error;
+        return rollback_rc;
+      }
+      *error = load_error;
+      return rc;
+    }
+  }
+  *host_out = host;
   return SALTS_OK;
 }
 

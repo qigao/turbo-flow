@@ -9,18 +9,25 @@ CNet/CHTTP host adapter
   -> protocol codec/session
   -> payload + protocol metadata
   -> TurboFlow::ProtocolIngressGraph
-  -> TurboFlow::Graph
-  -> optional sinks (MQTT, HTTP, storage, ...)
+  -> Source normalization (common business schema)
+  -> configured intake storage (bounded memory / TurboDB inbox)
+  -> shared RulesForge/TurboScript business graph
+  -> explicitly addressed sinks (MQTT, HTTP, socket, ...)
 ```
 
-MQTT 不是内部中间格式。协议 runtime 调用 `turbo_flow_protocol_decode()`，输出原始
+MQTT 接收属于 Source，发送属于 Sink；它不是内部中间格式。协议 runtime 调用 `turbo_flow_protocol_decode()`，输出原始
 payload 与 `turbo_flow_protocol_metadata_t`；`TurboFlow::ProtocolIngressGraph` 将二者放入
 同一个 message-owned `mem_buffer_t` 后，按 `source_handoff` 调用同步
 `turbo_flow_publish()` 或有界 `turbo_flow_publish_async()`。Graph stage 可通过
-`turbo_flow_protocol_graph_metadata()` 读取 metadata。只有明确选择 MQTT Sink 的调用方
-才链接 `TurboFlow::MqttSink` 并调用 `turbo_flow_mqtt_sink_map_batch()`。Sink 只处理
-调用方持有的有界 batch；MQTT client、数据库 connection、事务与重试由独立 I/O adapter
-拥有。
+`turbo_flow_protocol_graph_metadata()` 读取 metadata。旧 `TurboFlow::MqttSink`
+topic mapper 已删除；它没有 I/O owner，也不是可配置 Sink。MQTT 接收/发送必须由统一
+PluginHost 加载真实客户端 provider DLL，分别注册 Source/Sink，并显式绑定 schema、
+接收存储和目的地。
+
+上述原始帧/metadata 契约属于协议适配层，不是业务 schema。业务节点应只依赖统一业务对象，
+存储/查询通过 RulesForge/TurboScript 使用受控能力，输出目的地不默认绑定输入协议。
+不存在 protocol-derived topic mapper 或兼容入口。
+完整目标与现状见[业务图设计](../../docs/architecture/transport-independent-business-graph.md)。
 
 ## 协议与传输
 
@@ -33,7 +40,7 @@ payload 与 `turbo_flow_protocol_metadata_t`；`TurboFlow::ProtocolIngressGraph`
 | JT/T 808 | TCP / TLS | 帧内终端号 |
 | MQTT-SN 1.2 | UDP | transport identity resolver |
 
-MQTT-SN 是设备侧 wire protocol，不等同于可选的 MQTT Sink。协议插件不创建 MQTT
+MQTT-SN 是设备侧 wire protocol，不等同于 MQTT 客户端 Source/Sink。协议插件不创建 MQTT
 client，不保存 broker session、QoS、retained 或离线消息状态。
 
 ## 所有权与反压

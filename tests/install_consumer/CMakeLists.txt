@@ -57,7 +57,6 @@ if(TURBO_FLOW_TEST_ALL_COMPONENTS)
       ProtocolGbt32960
       ProtocolJtt808
       ProtocolBusinessOcpp201Core
-      MqttSink
       SecuritySQLite
       Codec
       Observe
@@ -70,6 +69,10 @@ if(TURBO_FLOW_TEST_ALL_COMPONENTS)
 else()
   find_package(TurboFlow 2.0 CONFIG REQUIRED
                PATHS "$ENV{TURBO_FLOW_ROOT}" NO_DEFAULT_PATH)
+endif()
+if(TARGET TurboFlow::MqttSink)
+  message(FATAL_ERROR
+    "TurboFlow::MqttSink is a removed mapper component; MQTT must be loaded as a provider DLL")
 endif()
 if(NOT TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   if(TARGET TurboFlow::TurboDbAdapter)
@@ -100,7 +103,6 @@ target_link_libraries(
           TurboFlow::ProtocolGbt32960
           TurboFlow::ProtocolJtt808
           TurboFlow::ProtocolBusinessOcpp201Core
-          TurboFlow::MqttSink
           TurboFlow::SecuritySQLite
           TurboFlow::Codec
           TurboFlow::Observe

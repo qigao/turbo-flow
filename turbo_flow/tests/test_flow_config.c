@@ -5,6 +5,12 @@
 #include <string.h>
 #include <stdlib.h>
 
+#ifdef _WIN32
+  #define FLOW_CONFIG_TEST_PLUGIN_ROOT "C:/plugins/"
+#else
+  #define FLOW_CONFIG_TEST_PLUGIN_ROOT "/opt/plugins/"
+#endif
+
 typedef struct flow_product_provider_probe_s {
   int adapter_calls;
   int resource_calls;
@@ -48,6 +54,72 @@ static int flow_product_test_resource_provider(void *ctx, turbo_flow_t *flow,
 }
 
 spec("flow_config") {
+  it("resolves an ordered explicit plugin DLL manifest") {
+    static const char yaml[] =
+        "version: 1\n"
+        "plugins:\n"
+        "  - id: turbo-flow.cnet\n"
+        "    version: 1.0.0\n"
+        "    path: " FLOW_CONFIG_TEST_PLUGIN_ROOT "turbo_flow_cnet_plugin.dll\n"
+        "  - id: turbo-flow.chttp\n"
+        "    version: 1.0.0\n"
+        "    path: " FLOW_CONFIG_TEST_PLUGIN_ROOT "turbo_flow_chttp_plugin.dll\n"
+        "adapters: {}\n";
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_resolved_plugin_view_t plugin = TURBO_FLOW_RESOLVED_PLUGIN_VIEW_INIT;
+    size_t count = 0u;
+
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+                SALTS_OK);
+    check_equal(turbo_flow_resolved_config_plugin_count(config, &count), SALTS_OK);
+    check_equal(count, 2u);
+    check_equal(turbo_flow_resolved_config_plugin_at(config, 0u, &plugin), SALTS_OK);
+    check_equal(plugin.id, "turbo-flow.cnet");
+    check_equal(plugin.version, "1.0.0");
+    check_equal(plugin.path, FLOW_CONFIG_TEST_PLUGIN_ROOT "turbo_flow_cnet_plugin.dll");
+    plugin = (turbo_flow_resolved_plugin_view_t)TURBO_FLOW_RESOLVED_PLUGIN_VIEW_INIT;
+    check_equal(turbo_flow_resolved_config_plugin_at(config, 1u, &plugin), SALTS_OK);
+    check_equal(plugin.id, "turbo-flow.chttp");
+    check_equal(turbo_flow_resolved_config_plugin_at(config, 2u, &plugin), SALTS_ENOENT);
+    {
+      turbo_flow_resolved_plugin_view_t invalid = TURBO_FLOW_RESOLVED_PLUGIN_VIEW_INIT;
+      invalid.size = sizeof(invalid) - 1u;
+      invalid.id = "unchanged";
+      check_equal(turbo_flow_resolved_config_plugin_at(config, 0u, &invalid), SALTS_EINVAL);
+      check_equal(invalid.id, "unchanged");
+    }
+    turbo_flow_resolved_config_destroy(config);
+  }
+
+  it("rejects ambiguous or incomplete plugin DLL manifests") {
+    const char *documents[] = {
+        "version: 1\nplugins: [{id: fixture.one, version: 1.0.0}]\nadapters: {}\n",
+        "version: 1\nplugins: [{id: fixture.one, version: 1.0.0, path: one.dll, "
+        "fallback: two.dll}]\nadapters: {}\n",
+        "version: 1\nplugins:\n"
+        "  - {id: fixture.one, version: 1.0.0, path: '"
+        FLOW_CONFIG_TEST_PLUGIN_ROOT "one.dll'}\n"
+        "  - {id: fixture.one, version: 2.0.0, path: '"
+        FLOW_CONFIG_TEST_PLUGIN_ROOT "two.dll'}\n"
+        "adapters: {}\n",
+        "version: 1\nplugins: [{id: fixture.one, version: 1.0.0, path: relative.dll}]\n"
+        "adapters: {}\n"};
+    const char *paths[] = {"$.plugins[0].path", "$.plugins[0].fallback", "$.plugins[1].id",
+                           "$.plugins[0].path"};
+    const int statuses[] = {SALTS_EINVAL, SALTS_EINVAL, SALTS_EALREADY, SALTS_EINVAL};
+
+    for (size_t i = 0u; i < sizeof(documents) / sizeof(documents[0]); ++i) {
+      turbo_flow_resolved_config_t *config = NULL;
+      turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+      check_equal(turbo_flow_config_resolve_yaml(documents[i], strlen(documents[i]), &config,
+                                                 &error),
+                  statuses[i]);
+      check_equal(error.path, paths[i]);
+      check_null(config);
+    }
+  }
+
   it("resolves process async ingress defaults and explicit bounds") {
     static const char defaults_yaml[] = "version: 1\n";
     static const char explicit_yaml[] = "version: 1\n"

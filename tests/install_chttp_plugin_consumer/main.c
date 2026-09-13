@@ -181,14 +181,26 @@ cleanup:
 int main(int argc, char **argv) {
   turbo_flow_plugin_host_config_t config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_plugin_host_t *host = NULL;
+  turbo_flow_resolved_config_t *resolved = NULL;
   turbo_flow_plugin_generation_t *cleanup_owner = NULL;
+  char manifest[1024];
+  int written;
   if (argc != 2 || !argv[1][0]) return 1;
   config.module_capacity = 1u;
   config.transactional_adapter_provider_capacity = CONSUMER_PROVIDER_COUNT;
-  int rc = turbo_flow_plugin_host_create(&config, &host, &error);
-  if (rc != SALTS_OK) return 1;
-  rc = turbo_flow_plugin_host_load(host, argv[1], &error);
+  written = snprintf(manifest, sizeof(manifest),
+                     "version: 1\nplugins:\n"
+                     "  - {id: turbo-flow.chttp, version: 1.0.0, path: '%s'}\n"
+                     "adapters: {}\n",
+                     argv[1]);
+  if (written <= 0 || (size_t)written >= sizeof(manifest)) return 1;
+  int rc = turbo_flow_config_resolve_yaml(manifest, (size_t)written, &resolved, &config_error);
+  if (rc == SALTS_OK)
+    rc = turbo_flow_plugin_host_create_configured(&config, resolved, CONSUMER_TIMEOUT_MS, &host,
+                                                  &error);
+  turbo_flow_resolved_config_destroy(resolved);
   if (rc != SALTS_OK)
     fprintf(stderr, "CHTTP consumer failed at plugin DLL load: %s\n", error.message);
   if (rc == SALTS_OK &&
@@ -203,6 +215,7 @@ int main(int argc, char **argv) {
     if (cleanup_rc == SALTS_OK) cleanup_owner = NULL;
     else return 1;
   }
-  int destroy_rc = turbo_flow_plugin_host_destroy(host, CONSUMER_TIMEOUT_MS, &error);
+  int destroy_rc =
+      host ? turbo_flow_plugin_host_destroy(host, CONSUMER_TIMEOUT_MS, &error) : SALTS_OK;
   return rc == SALTS_OK && destroy_rc == SALTS_OK ? 0 : 1;
 }

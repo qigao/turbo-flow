@@ -149,7 +149,6 @@ endif()
   add_subdirectory(observe)
   add_subdirectory(schedule)
   add_subdirectory(ingress/protocol)
-  add_subdirectory(sink/mqtt)
 
 set(TURBO_FLOW_EXPORT_TARGETS)
 foreach(
@@ -171,7 +170,6 @@ foreach(
      tf_protocol_gbt32960
      tf_protocol_jtt808
      tf_protocol_business_ocpp201_core
-     tf_mqtt_sink
      tf_security_sqlite
      tf_codec
      tf_observe

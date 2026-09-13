@@ -13,11 +13,11 @@ extern "C" {
 
 #define TURBO_FLOW_PLUGIN_EXPORT_SYMBOL "turbo_flow_plugin_get_api"
 
-#define TURBO_FLOW_PLUGIN_ID_MAX 127u
-#define TURBO_FLOW_PLUGIN_VERSION_MAX 63u
-#define TURBO_FLOW_PLUGIN_PATH_MAX 511u
+#define TURBO_FLOW_PLUGIN_ID_MAX TURBO_FLOW_CONFIG_PLUGIN_ID_MAX
+#define TURBO_FLOW_PLUGIN_VERSION_MAX TURBO_FLOW_CONFIG_PLUGIN_VERSION_MAX
+#define TURBO_FLOW_PLUGIN_PATH_MAX TURBO_FLOW_CONFIG_PLUGIN_PATH_MAX
 #define TURBO_FLOW_PLUGIN_ERROR_MESSAGE_MAX 255u
-#define TURBO_FLOW_PLUGIN_HOST_MAX_MODULES 1024u
+#define TURBO_FLOW_PLUGIN_HOST_MAX_MODULES TURBO_FLOW_CONFIG_PLUGIN_MAX_MODULES
 #define TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS 65536u
 
 #if defined(_WIN32) && defined(TURBO_FLOW_PLUGIN_BUILD)
@@ -249,6 +249,21 @@ TURBO_FLOW_PLUGIN_ENTRY const turbo_flow_plugin_api_v1_t *turbo_flow_plugin_get_
 TURBO_FLOW_C_API int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_config_t *config,
                                                    turbo_flow_plugin_host_t **host_out,
                                                    turbo_flow_plugin_error_t *error);
+
+/**
+ * Create a fresh host and load the ordered DLL manifest from a resolved configuration.
+ *
+ * Each configured path is opened exactly once. The DLL's canonical root vtable identity and
+ * version must exactly match the configured values before the plugin load callback is invoked.
+ * No name search, alternate path, static provider, or replacement DLL is attempted.
+ *
+ * On load failure, already loaded modules are shut down and the output remains NULL. If rollback
+ * itself fails, the retryable host is returned through `host_out` and the rollback error wins.
+ */
+TURBO_FLOW_C_API int turbo_flow_plugin_host_create_configured(
+    const turbo_flow_plugin_host_config_t *host_config,
+    const turbo_flow_resolved_config_t *resolved, uint64_t rollback_timeout_ms,
+    turbo_flow_plugin_host_t **host_out, turbo_flow_plugin_error_t *error);
 
 /**
  * Load one explicit UTF-8 DLL path and atomically commit all of its providers.

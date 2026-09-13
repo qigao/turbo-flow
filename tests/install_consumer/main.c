@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <turbo_flow.h>
@@ -299,8 +300,10 @@ static void install_operation_lifecycle(void *ctx, turbo_flow_plugin_lifecycle_e
 }
 
 static int install_operation_runtime(const char *plugin_path) {
-  static const char yaml[] =
-      "version: 1\noperation_bindings:\n"
+  static const char yaml_template[] =
+      "version: 1\nplugins:\n"
+      "  - {id: fixture.operation, version: 1.0.0, path: '%s'}\n"
+      "operation_bindings:\n"
       "  - operation: fixture.double\n    plugin: fixture.operation\n    version: 1\n"
       "    input_schema: cmeta.int.data\n    input_schema_version: 1\n"
       "    output_schema: cmeta.int.data\n    output_schema_version: 1\n"
@@ -336,24 +339,29 @@ static int install_operation_runtime(const char *plugin_path) {
   turbo_flow_resolved_config_t *resolved = NULL;
   turbo_flow_t *flow = NULL;
   unsigned char *legacy_metadata = NULL;
+  char yaml[4096];
   turbo_flow_msg_t input, result, clone;
   size_t unloads = 0u;
   int *value = NULL;
+  int yaml_size;
   int rc;
   turbo_flow_msg_init(&input);
   turbo_flow_msg_init(&result);
   turbo_flow_msg_init(&clone);
   host_config.lifecycle_observer = install_operation_lifecycle;
   host_config.lifecycle_observer_ctx = &unloads;
-  rc = turbo_flow_plugin_host_create(&host_config, &host, &plugin_error);
+  yaml_size = snprintf(yaml, sizeof(yaml), yaml_template, plugin_path);
+  if (yaml_size <= 0 || (size_t)yaml_size >= sizeof(yaml)) {
+    rc = SALTS_ERANGE;
+    goto cleanup_all;
+  }
+  rc = turbo_flow_config_resolve_yaml(yaml, (size_t)yaml_size, &resolved, &config_error);
   if (rc != SALTS_OK) goto cleanup_all;
-  rc = turbo_flow_plugin_host_load(host, plugin_path, &plugin_error);
+  rc = turbo_flow_plugin_host_create_configured(&host_config, resolved, 0u, &host, &plugin_error);
   if (rc != SALTS_OK) goto cleanup_all;
   rc = turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &plugin_error);
   if (rc != SALTS_OK) goto cleanup_all;
   rc = turbo_flow_plugin_result_domain_create(snapshot, 1u, &domain, &plugin_error);
-  if (rc != SALTS_OK) goto cleanup_all;
-  rc = turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &config_error);
   if (rc != SALTS_OK) goto cleanup_all;
   flow = turbo_flow_create();
   if (!flow) {

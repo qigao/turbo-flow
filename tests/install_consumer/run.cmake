@@ -275,7 +275,7 @@ execute_process(
   ERROR_VARIABLE missing_cnet_error)
 string(CONCAT missing_cnet_diagnostic "${missing_cnet_output}" "\n${missing_cnet_error}")
 if(missing_cnet_result EQUAL 0 OR
-   NOT missing_cnet_diagnostic MATCHES "failed at plugin DLL load")
+   NOT missing_cnet_diagnostic MATCHES "failed at configured plugin host create")
   message(FATAL_ERROR "CNet missing-DLL negative case failed\n${missing_cnet_diagnostic}")
 endif()
 

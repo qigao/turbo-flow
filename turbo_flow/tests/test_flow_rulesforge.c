@@ -517,16 +517,24 @@ spec("rulesforge bridge operation") {
     free(schema_path);
   }
 
-  it("processes raw JSON payload without replacing an existing projection") {
+  it("shares one JSON business rule and sink across transport-independent sources") {
     static const char schema_text[] =
         "schema TurboFlowJsonRules [id(3), version(1), byte_order(little)]; "
         "message Applicant { int64 age; }";
-    static const char source[] = "source input\n"
+    static const char *const inputs[] = {"http", "ws", "socket", "mqtt"};
+    static const char source[] = "source http\n"
+                                 "source ws\n"
+                                 "source socket\n"
+                                 "source mqtt\n"
                                  "stage rulesforge operation rulesforge.apply resource rules.json\n"
                                  "stage dispatch operation test.dispatch worker 1 capacity 64\n"
                                  "stage sink operation test.sink\n"
                                  "stage main {\n"
-                                 "  input -> rulesforge -> dispatch\n"
+                                 "  http -> rulesforge\n"
+                                 "  ws -> rulesforge\n"
+                                 "  socket -> rulesforge\n"
+                                 "  mqtt -> rulesforge\n"
+                                 "  rulesforge -> dispatch\n"
                                  "  route dispatch -> sink when msg.rule_matched\n"
                                  "}\n";
     char rfl[2048];
@@ -586,23 +594,37 @@ spec("rulesforge bridge operation") {
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
-    turbo_flow_msg_init(&message);
-    message.flags = RULESFORGE_OTHER_FLAG;
-    message.owned_payload = tstr_dup("{\"age\":21}");
-    check_not_null(message.owned_payload);
-    message.payload = tstr_to_v(message.owned_payload);
-    check_equal(rulesforge_bind_age(&message, 99), SALTS_OK);
-    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
-    check_equal(sink.count, 1);
-    check_equal(sink.flags, RULESFORGE_MATCHED_FLAG | RULESFORGE_OTHER_FLAG);
-    check_equal(sink.rule_status, TURBO_FLOW_DATA_MATCHED);
-    check_equal(sink.rule_match_count, 1u);
-    check_equal(sink.rule_error, SALTS_OK);
-    check_equal(atomic_load_explicit(&dispatch.count, memory_order_relaxed), 1);
-    check_not_null(turbo_flow_msg_projection(&message, NULL));
+    /* Source names model normalized adapter boundaries, not live network clients. */
+    for (i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+      turbo_flow_msg_init(&message);
+      message.flags = RULESFORGE_OTHER_FLAG;
+      message.owned_payload = tstr_dup("{\"age\":21}");
+      check_not_null(message.owned_payload);
+      message.payload = tstr_to_v(message.owned_payload);
+      check_equal(rulesforge_bind_age(&message, 99), SALTS_OK);
+      const void *projection = turbo_flow_msg_projection(&message, NULL);
+      check_not_null(projection);
+      check_equal(turbo_flow_publish(flow, inputs[i], &message), SALTS_OK);
+      check_equal(sink.count, (int)i + 1);
+      check_equal(sink.flags, RULESFORGE_MATCHED_FLAG | RULESFORGE_OTHER_FLAG);
+      check_equal(sink.rule_status, TURBO_FLOW_DATA_MATCHED);
+      check_equal(sink.rule_match_count, 1u);
+      check_equal(sink.rule_error, SALTS_OK);
+      check(turbo_flow_msg_projection(&message, NULL) == projection);
+      turbo_flow_msg_cleanup(&message);
+
+      turbo_flow_msg_init(&message);
+      message.owned_payload = tstr_dup("{\"age\":17}");
+      check_not_null(message.owned_payload);
+      message.payload = tstr_to_v(message.owned_payload);
+      check_equal(turbo_flow_publish(flow, inputs[i], &message), SALTS_OK);
+      check_equal(sink.count, (int)i + 1);
+      check_equal(atomic_load_explicit(&dispatch.count, memory_order_relaxed),
+                  (int)(i + 1u) * 2);
+      turbo_flow_msg_cleanup(&message);
+    }
 
     check_equal(turbo_flow_stop(flow), SALTS_OK);
-    turbo_flow_msg_cleanup(&message);
     turbo_flow_destroy(flow);
     check_equal(ruleforge_kb_destroy(kb), RULES_FORGE_OK);
     check_equal(ruleforge_cleanup(), RULES_FORGE_OK);

@@ -170,6 +170,82 @@ static int flow_config_validate_fragments(const json_value_t *fragments,
   return SALTS_OK;
 }
 
+static int flow_config_plugin_string(const json_value_t *plugin, const char *field, size_t maximum,
+                                     size_t index, turbo_flow_config_error_t *error) {
+  json_value_t *value = plugin ? json_object_get(plugin, field) : NULL;
+  const char *text = value && json_type(value) == JSON_STRING ? json_string(value) : NULL;
+  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  (void)snprintf(path, sizeof(path), "$.plugins[%zu].%s", index, field);
+  if (!text || !text[0])
+    return flow_config_error(error, SALTS_EINVAL, path, "expected non-empty string");
+  if (strlen(text) > maximum)
+    return flow_config_error(error, SALTS_ERANGE, path, "string exceeds configured ABI limit");
+  return SALTS_OK;
+}
+
+static int flow_config_plugin_path_is_absolute(const char *path) {
+  const size_t length = path ? strlen(path) : 0u;
+  const unsigned char first = length > 0u ? (unsigned char)path[0] : 0u;
+#ifdef _WIN32
+  if (length >= 2u &&
+      ((path[0] == '/' && path[1] == '/') || (path[0] == '\\' && path[1] == '\\')))
+    return 1;
+  if (length < 3u) return 0;
+  const unsigned char drive = (unsigned char)path[1];
+  const unsigned char separator = (unsigned char)path[2];
+  return ((first >= (unsigned char)'A' && first <= (unsigned char)'Z') ||
+          (first >= (unsigned char)'a' && first <= (unsigned char)'z')) &&
+         drive == (unsigned char)':' &&
+         (separator == (unsigned char)'/' || separator == (unsigned char)'\\');
+#else
+  return first == (unsigned char)'/';
+#endif
+}
+
+static int flow_config_validate_plugins(const json_value_t *plugins,
+                                        turbo_flow_config_error_t *error) {
+  static const char *const plugin_keys[] = {"id", "version", "path"};
+  if (!plugins) return SALTS_OK;
+  if (json_type(plugins) != JSON_ARRAY)
+    return flow_config_error(error, SALTS_EINVAL, "$.plugins", "expected ordered sequence");
+  if (json_array_size(plugins) > TURBO_FLOW_CONFIG_PLUGIN_MAX_MODULES)
+    return flow_config_error(error, SALTS_ENOSPC, "$.plugins",
+                             "configured plugin module capacity is exceeded");
+  for (size_t i = 0u; i < json_array_size(plugins); ++i) {
+    json_value_t *plugin = json_array_get(plugins, i);
+    json_value_t *id;
+    char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+    int rc;
+    (void)snprintf(path, sizeof(path), "$.plugins[%zu]", i);
+    rc = flow_config_object_keys(plugin, path, plugin_keys,
+                                 sizeof(plugin_keys) / sizeof(plugin_keys[0]), error);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_config_plugin_string(plugin, "id", TURBO_FLOW_CONFIG_PLUGIN_ID_MAX, i, error);
+    if (rc == SALTS_OK)
+      rc = flow_config_plugin_string(plugin, "version", TURBO_FLOW_CONFIG_PLUGIN_VERSION_MAX, i,
+                                     error);
+    if (rc == SALTS_OK)
+      rc = flow_config_plugin_string(plugin, "path", TURBO_FLOW_CONFIG_PLUGIN_PATH_MAX, i, error);
+    if (rc != SALTS_OK) return rc;
+    if (!flow_config_plugin_path_is_absolute(json_string(json_object_get(plugin, "path")))) {
+      (void)snprintf(path, sizeof(path), "$.plugins[%zu].path", i);
+      return flow_config_error(error, SALTS_EINVAL, path,
+                               "plugin path must be absolute; search and fallback are forbidden");
+    }
+    id = json_object_get(plugin, "id");
+    for (size_t prior = 0u; prior < i; ++prior) {
+      json_value_t *other = json_array_get(plugins, prior);
+      json_value_t *other_id = other ? json_object_get(other, "id") : NULL;
+      if (other_id && strcmp(json_string(id), json_string(other_id)) == 0) {
+        (void)snprintf(path, sizeof(path), "$.plugins[%zu].id", i);
+        return flow_config_error(error, SALTS_EALREADY, path,
+                                 "duplicate configured plugin identity");
+      }
+    }
+  }
+  return SALTS_OK;
+}
+
 static int flow_config_validate_channels(const json_value_t *channels,
                                          turbo_flow_config_error_t *error) {
   static const char *const channel_keys[] = {"kind", "config"};
@@ -393,8 +469,9 @@ static int flow_config_resolve_adapters(const json_value_t *input_adapters,
 int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
                                    turbo_flow_resolved_config_t **out,
                                    turbo_flow_config_error_t *error) {
-  static const char *const root_keys[] = {"version",  "runtime",  "profiles",          "fragments",
-                                          "channels", "adapters", "operation_bindings"};
+  static const char *const root_keys[] = {"version",  "plugins",  "runtime",  "profiles",
+                                          "fragments", "channels", "adapters",
+                                          "operation_bindings"};
   static const char *const fragment_keys[] = {"connection", "timer", "thread", "coro"};
   cyaml_doc_t *yaml_doc = NULL;
   json_value_t *input = NULL;
@@ -402,6 +479,7 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   json_value_t *resolved_adapters = NULL;
   turbo_flow_resolved_config_t *config = NULL;
   json_value_t *version;
+  json_value_t *plugins;
   json_value_t *runtime;
   json_value_t *profiles;
   json_value_t *fragments;
@@ -427,6 +505,7 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   rc = flow_config_object_keys(input, "$", root_keys, sizeof(root_keys) / sizeof(root_keys[0]),
                                error);
   version = json_object_get(input, "version");
+  plugins = json_object_get(input, "plugins");
   runtime = json_object_get(input, "runtime");
   profiles = json_object_get(input, "profiles");
   fragments = json_object_get(input, "fragments");
@@ -436,6 +515,7 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   if (rc == SALTS_OK &&
       (!version || json_type(version) != JSON_NUMBER || json_number(version) != 1.0))
     rc = flow_config_error(error, SALTS_EINVAL, "$.version", "version must be integer 1");
+  if (rc == SALTS_OK) rc = flow_config_validate_plugins(plugins, error);
   if (rc == SALTS_OK) rc = flow_config_validate_runtime(runtime, &async_ingress, error);
   if (rc == SALTS_OK && fragments)
     rc = flow_config_object_keys(fragments, "$.fragments", fragment_keys,
@@ -453,6 +533,10 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   }
   rc = flow_config_add_number(resolved, "version", 1.0);
   if (rc != SALTS_OK) goto done;
+  if (plugins && flow_config_add_clone(resolved, "plugins", plugins) != SALTS_OK) {
+    rc = SALTS_ENOMEM;
+    goto done;
+  }
   rc = flow_config_add_resolved_runtime(resolved, &async_ingress);
   if (rc != SALTS_OK) goto done;
   if (profiles && flow_config_add_clone(resolved, "profiles", profiles) != SALTS_OK) {
@@ -515,6 +599,45 @@ const char *turbo_flow_resolved_config_json(const turbo_flow_resolved_config_t *
                                             size_t *json_len) {
   if (json_len) *json_len = config ? config->json_len : 0u;
   return config ? config->json : NULL;
+}
+
+int turbo_flow_resolved_config_plugin_count(const turbo_flow_resolved_config_t *config,
+                                            size_t *count) {
+  json_value_t *plugins;
+  if (count) *count = 0u;
+  if (!config || !config->document || !count) return SALTS_EINVAL;
+  plugins = json_object_get(config->document, "plugins");
+  if (!plugins) return SALTS_OK;
+  if (json_type(plugins) != JSON_ARRAY) return SALTS_EPROTO;
+  *count = json_array_size(plugins);
+  return SALTS_OK;
+}
+
+int turbo_flow_resolved_config_plugin_at(const turbo_flow_resolved_config_t *config, size_t index,
+                                         turbo_flow_resolved_plugin_view_t *view) {
+  json_value_t *plugins;
+  json_value_t *plugin;
+  json_value_t *id;
+  json_value_t *version;
+  json_value_t *path;
+  if (view && view->size == sizeof(*view))
+    *view = (turbo_flow_resolved_plugin_view_t)TURBO_FLOW_RESOLVED_PLUGIN_VIEW_INIT;
+  if (!config || !config->document || !view || view->size != sizeof(*view)) return SALTS_EINVAL;
+  plugins = json_object_get(config->document, "plugins");
+  if (!plugins) return SALTS_ENOENT;
+  if (json_type(plugins) != JSON_ARRAY) return SALTS_EPROTO;
+  if (index >= json_array_size(plugins)) return SALTS_ENOENT;
+  plugin = json_array_get(plugins, index);
+  id = plugin ? json_object_get(plugin, "id") : NULL;
+  version = plugin ? json_object_get(plugin, "version") : NULL;
+  path = plugin ? json_object_get(plugin, "path") : NULL;
+  if (!id || json_type(id) != JSON_STRING || !version || json_type(version) != JSON_STRING ||
+      !path || json_type(path) != JSON_STRING)
+    return SALTS_EPROTO;
+  view->id = json_string(id);
+  view->version = json_string(version);
+  view->path = json_string(path);
+  return SALTS_OK;
 }
 
 int turbo_flow_resolved_config_profile_adapter(const turbo_flow_resolved_config_t *config,
