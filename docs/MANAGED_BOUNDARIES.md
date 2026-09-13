@@ -120,10 +120,56 @@ and detached map to stopped; failed maps to failed. The short
 publication-to-slot-accounting window is reported as `SALTS_EBUSY`, rather than
 exposing a mixed snapshot.
 
+## CHTTP WebSocket server Source and Sink
+
+`turbo_flow_chttp_websocket_server_register()` atomically registers its existing
+bidirectional adapter and one enumerable managed Source/Sink owner. Its resource
+domain and kind are `IO_TRANSPORT/CONNECTION`; bounded names are preserved and
+produce UID `chttp-websocket:<adapter-name>`, while longer valid names use the
+same stable `xxh3-128:<digest>` convention. Input and output content belong to
+the `PROTOCOL_PATTERN` domain and declare opaque `application/octet-stream`
+`CHTTPWebSocketCommand/Frame/v1` and `CHTTPWebSocketEvent/Frame/v1` schemas.
+Event context remains owned by the published message buffer; the descriptor does
+not introduce another serialized payload format.
+
+The configured frame capacity is the managed capacity. Queue depth is always
+zero because the owner has no separate queue, and in-flight is the number of
+occupied admitted frame slots. Backpressure therefore means every frame slot is
+occupied; quiescing an otherwise unsaturated owner does not report a full queue.
+`accepted` advances only after successful Flow publication handoff, `completed`
+advances for every accepted publication terminal (including graph or send
+admission error), and `rejected` counts only failures before publication. These
+counters saturate without wrapping and do not change the existing native
+session, frame, command, or byte counters. Native send admission does not claim
+peer delivery, persistence, or exactly-once settlement.
+
+Reservation and pending-publication accounting commit under the same owner
+mutex. A snapshot returns `SALTS_EBUSY` from reservation until make/publish
+outcome accounting finishes, including the legal case where completion already
+released the frame before `turbo_flow_publish_async()` returns. Stable session,
+frame, or cumulative-accounting contradictions return `SALTS_EPROTO`; pending is
+an accounting barrier and is intentionally not compared with current in-flight
+occupancy.
+
+The command mask contains only `QUIESCE` and `RESUME`, with no additional
+capability flags. A real RUNNING/QUIESCED transition increments the shared native
+and managed generation once; same-state calls are no-ops and overflow is rejected
+before mutation. Quiesce stops new sessions and frames, drains accepted frames,
+and closes existing sessions with code 1013. While an active session or admitted
+frame remains it projects `DRAINING`; resume permits new sessions but never
+reopens a session already marked for close.
+
+Control remains on the existing serialized host command lane. The dispatcher
+checks deadlines and caches results by idempotency key, while the owner rechecks
+generation under its mutex. If native close admission fails, the QUIESCED state
+and incremented generation remain committed. Reusing the same key replays that
+error without another close; an explicit retry requires a new key and the current
+generation. Delayed completion never retries the failed close implicitly.
+
 ## Migration and rollback
 
 Existing owners and embedded resource-registration structures retain their layout and continue to register as ordinary resources. Migration is explicit: use the additive managed-provider entry point, the combined async-terminal entry point for a terminal Sink, or the combined managed Source entry point for a Reactive Source. Advertise only capabilities the owner actually implements, and keep the owner-native snapshot as the sole mutable state. There is no compatibility fallback from a managed contract to `turbo_flow_resource_snapshot_t`.
 
-Removing the paired callbacks rolls a standalone owner back to an ordinary resource without changing its data path or existing resource commands. This is a source-level migration reversal, not a runtime fallback. The CNet stream and datagram Sinks, CNet packet Sink, and CHTTP deferred server now require their combined managed registration; other CHTTP and TurboDb owners remain independently tracked under issue #28.
+Removing the paired callbacks rolls a standalone owner back to an ordinary resource without changing its data path or existing resource commands. This is a source-level migration reversal, not a runtime fallback. The CNet stream and datagram Sinks, CNet packet Sink, CHTTP deferred server, and CHTTP WebSocket server now require their combined managed registration; other CHTTP and TurboDb owners remain independently tracked under issue #28.
 
 The deterministic, buildable examples are `turbo_flow/tests/test_flow_managed_boundary.c`, `turbo_flow/tests/test_flow_managed_async_terminal.c`, and `turbo_flow/tests/test_flow_managed_source.c`. The installed-package consumer in `tests/install_consumer/main.c` validates the same headers, initializers, and exported symbols in both C and C++ modes.
