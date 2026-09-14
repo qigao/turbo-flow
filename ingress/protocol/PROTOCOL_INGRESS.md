@@ -15,15 +15,23 @@ session。`turbo_flow_protocol_graph_publish()` 将 payload 与 metadata 复制�
 `mem_buffer_t`，因此 metadata 在 clone/move、线程池和异步 Graph 边界上保持与消息
 一致的生命周期。
 
+这里的归一化是 wire 表达统一，不是业务 schema 统一。Source 仍需将原始帧映射成明确版本的
+业务对象，交由同一 RulesForge/TurboScript 图处理；metadata 保留在适配上下文中。
+业务存储/查询通过引擎调用受控能力，Sink 目标显式绑定，不从输入协议默认推导。
+参见[协议无关业务图](../../docs/architecture/transport-independent-business-graph.md)。
+
 下行有两条显式路径：
 
 - `turbo_flow_protocol_encode()`：把协议中立 command 编码为新 wire frame；
 - `turbo_flow_protocol_reply()`：在 Graph/Sink settlement 后生成协议规定的响应。
 
-两条路径都 fail fast，不在解析失败时互相 fallback。独立的
-`TurboFlow::MqttSink` 只把调用方持有的有界 message batch 映射为 MQTT publications，
-不接触 codec、protocol session、runtime、Graph bridge、MQTT client 或数据库 connection。
-映射结果只在对应输入 payload 有效期间可用，外部 I/O adapter 决定事务、重试和背压。
+这是本 protocol runtime 的请求响应契约，不是所有 Source 的统一 ACK 策略。
+普通 MQTT Source 可按客户端原生接纳契约推进协议 ACK；它不证明业务处理或持久化完成。
+
+两条路径都 fail fast，不在解析失败时互相 fallback。旧 `TurboFlow::MqttSink`
+无 I/O mapper 已删除。MQTT 必须通过真实客户端 provider DLL 注册 Source/Sink；
+目的地、QoS、事务、重试和背压由该 owner 的显式配置与契约决定，不能由输入协议 metadata
+自动生成。
 
 ## 生命周期
 
@@ -65,6 +73,6 @@ PluginHost load -> catalog snapshot -> registry_create
 - 连接/TLS/handler 状态：仓库外的 CNet/CHTTP 宿主 owner。
 - Graph 执行状态：TurboFlow runtime。
 - MQTT broker/session、数据库 connection 与重试状态：产品注入的独立 I/O adapter。
-- MQTT topic/QoS/retain 映射策略：无连接、同步批处理的可选 MQTT Sink。
+- MQTT 客户端 Source/Sink：由真实 provider DLL 与原生会话 owner 实现，不属于 protocol runtime。
 
 这些状态不可双向同步，也不得在 Graph、协议插件和 Sink 中各维护一份。

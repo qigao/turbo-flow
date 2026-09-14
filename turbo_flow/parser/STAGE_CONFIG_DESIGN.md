@@ -119,6 +119,10 @@ source/sink adapters reference it rather than duplicating its configuration:
 
 ```yaml
 version: 1
+plugins:
+  - id: example.transport
+    version: 1.0.0
+    path: /opt/turbo-flow/plugins/example_transport.so
 runtime:
   ingress:
     workers: 1
@@ -181,6 +185,9 @@ adapters:
 
 Rules:
 
+- `plugins` is the ordered, bounded DLL manifest. Each entry has exactly
+  `id`, `version`, and an absolute `path`. PluginHost verifies the canonical
+  root vtable before invoking plugin load; it never searches another module.
 - `runtime.ingress` is process-level configuration for the Flow-owned bounded
   asynchronous source handoff. It is not profile-scoped and does not create a
   second graph ingress; omitted fields resolve to the public Flow defaults.

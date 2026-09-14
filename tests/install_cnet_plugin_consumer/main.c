@@ -111,11 +111,14 @@ static int test_socket_would_block(void) {
 #endif
 }
 
-static int test_config(char *output, size_t capacity, uint16_t tcp_input_port,
+static int test_config(char *output, size_t capacity, const char *plugin_path,
+                       uint16_t tcp_input_port,
                        uint16_t udp_receiver_port, uint16_t tcp_receiver_port) {
   int written =
       snprintf(output, capacity,
                "version: 1\n"
+               "plugins:\n"
+               "  - {id: turbo-flow.cnet, version: 1.0.0, path: '%s'}\n"
                "adapters:\n"
                "  tcp.input:\n"
                "    kind: cnet.stream_source\n"
@@ -217,7 +220,8 @@ static int test_config(char *output, size_t capacity, uint16_t tcp_input_port,
                "      actor_command_capacity: 8\n"
                "      actor_max_steps_per_poll: 32\n"
                "      stop_timeout_ms: 1000\n",
-               (unsigned)tcp_input_port, (unsigned)udp_receiver_port, (unsigned)tcp_receiver_port);
+               plugin_path, (unsigned)tcp_input_port, (unsigned)udp_receiver_port,
+               (unsigned)tcp_receiver_port);
   return written > 0 && (size_t)written < capacity ? 0 : 1;
 }
 
@@ -278,7 +282,8 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
   failure_stage = "config format";
-  if (test_config(yaml, sizeof(yaml), tcp_input_port, receiver_port, tcp_receiver_port) != 0) {
+  if (test_config(yaml, sizeof(yaml), argv[1], tcp_input_port, receiver_port,
+                  tcp_receiver_port) != 0) {
     failure_status = SALTS_ERANGE;
     goto cleanup;
   }
@@ -291,17 +296,15 @@ int main(int argc, char **argv) {
   host_config.transactional_adapter_provider_capacity = 6u;
   host_config.transactional_resource_provider_capacity = 0u;
   generation_config.owner_capacity = 3u;
-  failure_stage = "plugin host create";
-  failure_status = turbo_flow_plugin_host_create(&host_config, &host, &plugin_error);
+  failure_stage = "resolved config";
+  failure_status = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &config_error);
   if (failure_status != SALTS_OK) goto cleanup;
-  failure_stage = "plugin DLL load";
-  failure_status = turbo_flow_plugin_host_load(host, argv[1], &plugin_error);
+  failure_stage = "configured plugin host create";
+  failure_status = turbo_flow_plugin_host_create_configured(
+      &host_config, resolved, 1000u, &host, &plugin_error);
   if (failure_status != SALTS_OK) goto cleanup;
   failure_stage = "plugin catalog snapshot";
   failure_status = turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &plugin_error);
-  if (failure_status != SALTS_OK) goto cleanup;
-  failure_stage = "resolved config";
-  failure_status = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &config_error);
   if (failure_status != SALTS_OK) goto cleanup;
   flow = turbo_flow_create();
   failure_stage = "graph create";

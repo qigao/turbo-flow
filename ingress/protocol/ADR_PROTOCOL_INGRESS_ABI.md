@@ -4,6 +4,11 @@
 
 Accepted。
 
+2026-09-13 补充：[协议无关业务图决策](../../docs/architecture/transport-independent-business-graph.md)
+细化本 ADR 的业务边界。MQTT 同时可以提供接收 Source 和发送 Sink；原始帧 + metadata
+之后仍需 Source 的业务 schema 映射。业务处理/存储通过 RulesForge/TurboScript 表达，
+目的地独立于来源。旧 MQTT mapper 已删除；下文记录原协议层拆分决策。
+
 ## 背景
 
 OCPP、JT/T 808、GB/T 32960、CoAP、LwM2M 等协议需要不同的 transport、分帧、
@@ -33,9 +38,8 @@ optional sinks        -> TurboFlow::Graph output
 
 - 优点：协议可复用、Graph 与 broker 解耦、消息所有权明确，支持不部署 MQTT 的产品。
 - 代价：需要显式 Graph source 配置；异步 Sink 必须实现有界复制与 settlement。
-- 兼容性：旧 MQTT mapping API 已从 protocol Core 删除。需要 MQTT 输出时，调用方显式
-  链接独立的 `TurboFlow::MqttSink`；MQTT 下行若需要，应作为独立 ingress adapter 接入，
-  不伪装成 device protocol egress。
+- 兼容性：旧 MQTT mapping API、DLL 和 package component 均已删除且不兼容。
+  MQTT 输入/输出只能通过 PluginHost 加载真实客户端 provider DLL，不伪装成 protocol codec。
 
 ## 验证
 
