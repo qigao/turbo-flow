@@ -22,6 +22,10 @@ typed projection、调度、可观测性，以及可选的边界与能力 adapte
 因此终态或 close 后的原样 replay 仍返回原 receipt。该内存实现不提供崩溃恢复；TurboDB provider
 只接受预置的新 v2 schema，数据库错误不得触发内存 fallback。显式 takeover 将遗留 claim 标为
 `OWNER_LOST_UNKNOWN`；旧 claim 下一次 complete/fail 返回 `SALTS_ECANCELED` 并立即失效。
+`turbo_flow_inbox_source_t` 以非阻塞 `request/poll` 将已 claim 记录送入同一 CFlow Graph；Graph
+终态后才结算 Inbox。settlement 临时失败只允许显式 retry，`EALREADY` 必须通过 failed/history
+索引对账，任何路径都不会隐式重跑 Graph 或 Sink。该 driver 是执行边界，不代表协议 Source DLL
+已经接线。
 产品配置以有序 plugins: [{id, version, path}] 清单声明绝对 DLL 路径。PluginHost 只通过
 turbo_flow_plugin_get_api 取得 root vtable，并在插件 load() 前精确核验 ID/版本；任一 DLL
 失败会回滚整个新宿主，不搜索替代 DLL，也不切换静态实现。
@@ -40,7 +44,7 @@ turbo_flow_plugin_get_api 取得 root vtable，并在插件 load() 前精确核�
 | `TurboFlow::ProtocolIngressGraph` | 将中立协议消息投递到 `TurboFlow::Graph` |
 | `TurboFlow::CNetAdapter` | 可选 CNet Source/Sink owner；拥有 transport progress 与有界请求状态 |
 | `TurboFlow::CHTTPAdapter` | 可选 CHTTP client、deferred server 与 WebSocket Flow Source/Sink |
-| `TurboFlow::TurboDbAdapter` | 可选 TurboDb ORM Source；将 typed Publisher 的每一行转为 managed message projection |
+| `TurboFlow::TurboDbAdapter` | 可选 TurboDB ORM Source 与持久 Inbox v2 provider；数据库失败不回退内存 |
 
 所有构建开关只在 `CMakeOptions.cmake` 声明。不得在子目录新增隐藏 option，也不得把外部产品源码、
 协议状态机或安装组件重新并入本仓库。
