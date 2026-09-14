@@ -134,7 +134,7 @@ Run: `cmake --preset win-dev-user && cmake --build --preset win-dev-user --targe
 
 Expected: release suite and focused Debug/ASan test pass.
 
-- [ ] **Step 3: Commit and update issue #118**
+- [x] **Step 3: Commit and update issue #118**
 
 ```text
 feat(flow): add unified bounded intake inbox
