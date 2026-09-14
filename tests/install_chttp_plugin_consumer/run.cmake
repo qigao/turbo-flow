@@ -20,7 +20,7 @@ if(NOT EXISTS "${installed_chttp_plugin}")
 endif()
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" --preset
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset
           "chttp-plugin-consumer-${consumer_profile}"
   WORKING_DIRECTORY "${chttp_plugin_consumer_source_dir}"
   COMMAND_ERROR_IS_FATAL ANY)

@@ -21,7 +21,8 @@ set_tests_properties(test_turbodb_outbox_source
 cmake_add_test(
   test_turbodb_inbox
   SOURCES test_turbodb_inbox.c
-  LIBS TurboFlow::TurboDbAdapter Salts::TinyTest
+  LIBS TurboFlow::TurboDbAdapter TurboFlow::ProtocolIngressInbox
+       tf_protocol_inbox_schema Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
   FOLDER "io/turbodb/tests")
 

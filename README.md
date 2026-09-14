@@ -6,14 +6,16 @@ typed projection、调度、可观测性，以及可选的边界与能力 adapte
 消息队列等完整产品及其控制面、业务 session、peer 和重连事实不属于本仓库。
 具体 Source/Sink provider 可依赖它们的公开客户端 SDK；Graph/Core 不反向依赖完整产品。
 
-`ingress/protocol` 提供独立于产品的协议 codec/runtime：OCPP、JT/T 808、GB/T 32960、CoAP
-等协议完成分帧与校验后由 Source 显式映射到业务 schema。连接监听、HTTP endpoint 与网络
-生命周期由 CNet/CHTTP 适配 owner 管理。MQTT 接收是 Source，发送是 Sink，不是内部消息格式。
+`ingress/protocol` 提供独立于产品的协议 codec/Source：OCPP、JT/T 808、GB/T 32960、
+CoAP 等协议完成分帧与校验后，由协议 Inbox adapter 将规范化记录接纳到配置的 Inbox。连接监听、
+HTTP endpoint 与网络生命周期由 CNet/CHTTP 适配 owner 管理。MQTT 接收是 Source，发送是 Sink，
+不是内部消息格式。
 
-目标数据面为 **Source DLL → 统一业务 schema → 内存/数据库接收存储 → RulesForge/TurboScript 图 → Sink DLL**：
+目标数据面为 **Source DLL → 规范 protocol envelope → 内存/数据库 Inbox → RulesForge/TurboScript 业务图 → Sink DLL**：
 相同业务数据经 HTTP/WS/socket/MQTT 进入后复用同一处理图，输出目的地由显式绑定或业务规则决定，
-不由输入协议自动推导。接收存储是各 Source 共用的能力，配置选择内存或数据库，接纳成功后才
-执行业务图；数据库失败不回退内存。中间业务查询/存储通过引擎调用受控的 TurboDB 等能力。
+不由输入协议自动推导。接收存储是各 Source 共用的能力，配置选择内存或数据库；协议 Source
+在 Inbox 拥有不可变记录时即完成，不等待或直接执行 Graph，后续由 `turbo_flow_inbox_source_t`
+独立 claim 并驱动业务图。数据库失败不回退内存。中间业务查询/存储通过引擎调用受控的 TurboDB 等能力。
 协议 ACK、图完成与业务提交分别计量；延迟 ACK 不是普通 Source/Sink 的必需能力。
 `TurboFlow::Graph` 已提供 version 2 的统一 inbox vtable 与有界内存 provider：Source 以稳定的
 `source_id + admission_id` 幂等接纳完整记录，Graph 通过唯一 claim 借用不可变记录；失败记录可
@@ -40,8 +42,9 @@ turbo_flow_plugin_get_api 取得 root vtable，并在插件 load() 前精确核�
 | `TurboFlow::Graph` | Graph DSL、编译、执行和通用 operation/adapter API |
 | `TurboFlow::Product` | 用 resolved config 装配 Graph 与本仓库 adapters |
 | `TurboFlow::PluginHost` | 通过统一 DLL vtable 事务注册 Product/Protocol/Business capabilities，编译 Graph generation，并以 lease 保护模块生命周期 |
-| `TurboFlow::ProtocolIngress` | 可选 protocol codec/runtime，不依赖 MQTT broker |
-| `TurboFlow::ProtocolIngressGraph` | 将中立协议消息投递到 `TurboFlow::Graph` |
+| `TurboFlow::ProtocolIngress` | 可选 protocol codec/Source，不依赖 MQTT broker |
+| `TurboFlow::ProtocolIngressInbox` | 将已验证协议消息序列化为规范 envelope，并同步接纳到配置的 Inbox；不执行 Graph 或发送响应 |
+| `TurboFlow::ProtocolIngressInboxSchema` | 生成的静态 DataBind codec；与安装的 schema/RFL/TypeScript 声明共同定义唯一 envelope 布局 |
 | `TurboFlow::CNetAdapter` | 可选 CNet Source/Sink owner；拥有 transport progress 与有界请求状态 |
 | `TurboFlow::CHTTPAdapter` | 可选 CHTTP client、deferred server 与 WebSocket Flow Source/Sink |
 | `TurboFlow::TurboDbAdapter` | 可选 TurboDB ORM Source 与持久 Inbox v2 provider；数据库失败不回退内存 |

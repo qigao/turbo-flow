@@ -2,7 +2,7 @@
 
 `TurboFlow::PluginHost` is the cold-path owner for explicit TurboFlow capability DLLs. It loads one
 canonical root symbol, commits Product, Protocol, and Business providers transactionally, and
-exposes immutable catalog snapshots. CFlow, compiled Graphs, and protocol runtimes retain direct
+exposes immutable catalog snapshots. CFlow, compiled Graphs, and protocol Sources retain direct
 provider callbacks; none performs DLL discovery, symbol lookup, string lookup, allocation, or
 registry locking per message.
 

@@ -131,6 +131,9 @@ The descriptor is `DATA / PROTOCOL_DATA / TBE`, media type
 `ProtocolInboxEnvelope`, version 1 and stable identity `protocol.ingress`.
 Generated parse/serialize APIs or validated typed descriptors are the only
 binary encoding route; raw `memcpy` of the native metadata struct is forbidden.
+The package installs the generated C codec target/header plus the authored
+schema, generated RulesForge DSL and TypeScript declaration from this one
+source contract.
 
 RulesForge/TurboScript consume the declared schema through host-side DataBind
 ABI 8 object/projection registration. Generated TypeScript is a type declaration,
@@ -197,10 +200,10 @@ installed consumers and both full profiles from the x64 Visual Studio developer
 environment:
 
 ```powershell
-cmake --build --preset win-dev-user --target test_protocol_runtime test_protocol_inbox test_flow_inbox_source
-ctest --preset win-dev-user -R "^(test_protocol_runtime|test_protocol_inbox|test_flow_inbox_source)$" --output-on-failure
-cmake --build --preset win-release-user --target test_protocol_runtime test_protocol_inbox test_flow_inbox_source
-ctest --preset win-release-user -R "^(test_protocol_runtime|test_protocol_inbox|test_flow_inbox_source)$" --output-on-failure
+cmake --build --preset win-dev-user --target test_protocol_source test_protocol_inbox test_flow_inbox_source
+ctest --preset win-dev-user -R "^(test_protocol_source|test_protocol_inbox|test_flow_inbox_source)$" --output-on-failure
+cmake --build --preset win-release-user --target test_protocol_source test_protocol_inbox test_flow_inbox_source
+ctest --preset win-release-user -R "^(test_protocol_source|test_protocol_inbox|test_flow_inbox_source)$" --output-on-failure
 cmake --build --preset install-win-dev-user
 ctest --preset win-dev-user -R "^test_turbo_flow_install_consumer$" --output-on-failure
 ctest --preset win-dev-user --output-on-failure

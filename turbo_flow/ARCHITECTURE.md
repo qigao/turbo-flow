@@ -367,13 +367,12 @@ values to the public defaults before a host configures its Flow. Every accepted
 task owns one byte reservation and releases it after message cleanup, before
 its completion callback.
 
-Socket and protocol ingress expose this source boundary as two explicit
-profiles. `inline` remains the compatibility default and executes Graph on the
-producer/owner thread. `async_bounded` retains the message into the same Flow
-async ingress; it never creates an adapter-local queue and never falls back to
-inline execution. Socket queue/byte rejection fails the current receive.
-Protocol Graph admission returns `PENDING`, invokes one worker completion, and
-requires the host to marshal settlement back to the serialized protocol owner.
+Generic embedded producers may publish through the bounded Graph source boundary,
+but socket and protocol Sources do not execute Graph directly. Protocol Sources
+synchronously admit immutable records to the configured Inbox.
+Admission success means only that the Inbox provider owns the complete record;
+Graph execution, RulesForge/TurboScript processing, settlement, and response
+delivery are independent downstream Source/Sink stages.
 
 Stop first closes publish admission, asks adapters to interrupt pending work,
 closes the asynchronous ingress, cancels independent Reactive runs, drains
@@ -401,18 +400,20 @@ than mutating profile state.
 ## Provider, Message, and Graph Boundary
 
 Every protocol or storage provider owns its external representation and converts it at the
-adapter boundary. A decoder `frame`, HTTP request/response view, socket framing view, or Redis
-Stream entry is temporary provider state; it is not a graph message and cannot be retained across
-an asynchronous handoff. The adapter validates and materializes `turbo_flow_msg_t` with an owned
-buffer (or an explicit retained slice), then the graph may run zero or more stages and finally
-returns an owned message or settlement result to a provider sink.
+adapter boundary. A decoder `frame`, HTTP request/response view, socket framing view, MQTT
+publication, or Redis Stream entry is temporary provider state; it is not a graph message and
+cannot be retained across an asynchronous handoff. Protocol adapters encode a pointer-free TBE
+envelope and synchronously admit it to the configured Inbox. Only an explicitly requested Inbox
+Source claim materializes the stored record as `turbo_flow_msg_t`; the graph may then run zero or
+more stages before an independently configured Sink handles output.
 
 ```text
 provider bytes/frame/view
   -> provider validation and metadata normalization
-  -> turbo_flow_msg_t
+  -> protocol Source -> Inbox adapter -> configured Inbox
+  -> explicit Inbox Source claim -> turbo_flow_msg_t
   -> optional graph stages (Policy, process, store)
-  -> provider sink or owner settlement
+  -> configured socket/HTTP/WebSocket/MQTT/application Sink
 ```
 
 The graph does not become the owner of a protocol session, socket, protocol ACK, Redis consumer group,

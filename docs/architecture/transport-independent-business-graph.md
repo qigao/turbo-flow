@@ -176,8 +176,9 @@ generation drain 仍由 #117/#118 后续增量验收，不能把测试中的 htt
 
 必须分别报告：Source 接纳、Graph 完成、Sink 接纳、发送完成、协议确认、业务事务提交。
 普通 MQTT Source 不要求等业务 Graph 或领域数据库事务完成后才允许原生 ACK。延迟业务结算属于显式增强能力，
-不是基本接收/发送的前置条件，也不是运行时降级路径。原协议明确要求业务响应的路径仍保留其
-pending/reply 契约。没有真实证据不得宣称持久交付或端到端 exactly-once。
+不是基本接收/发送的前置条件，也不是运行时降级路径。原协议明确要求业务响应时，由显式 Sink
+消费业务结果、验证 route generation、调用纯 codec 编码并发送；Source 不保留 pending/reply
+状态。没有真实证据不得宣称持久交付或端到端 exactly-once。
 
 Source 的交接队列按消息数/字节有界；demand=0 禁止向图继续发布，但不等于停止协议控制流。
 满额、解析失败、缺少 schema/provider/权限必须明确报错；不无限缓存、丢弃后报成功或切换旧实现。
