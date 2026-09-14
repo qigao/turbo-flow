@@ -143,6 +143,15 @@ cmake_add_test(
 set_tests_properties(test_flow_inbox PROPERTIES LABELS "graph;core;inbox" TIMEOUT 30)
 
 cmake_add_test(
+  test_flow_inbox_source
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_inbox_source.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/inbox_source_header_cpp.cpp
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+target_include_directories(test_flow_inbox_source PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+set_tests_properties(test_flow_inbox_source PROPERTIES LABELS "graph;core;inbox" TIMEOUT 30)
+
+cmake_add_test(
   test_flow_expr
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_expr.c
   LIBS TurboFlow::Graph Salts::TinyTest

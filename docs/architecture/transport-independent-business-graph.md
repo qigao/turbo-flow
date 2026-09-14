@@ -107,6 +107,22 @@ provider 在成功接纳前复制身份、correlation 和 payload，
 不保留 Source 的借用内存。ABI 布局不匹配返回 `SALTS_EINVAL`，旧 envelope 名称或版本返回
 `SALTS_EPROTO`，不转换旧记录。
 
+`TurboFlow::Graph` 也提供 version 1 的 `turbo_flow_inbox_source_t`，作为 provider-neutral、
+单 owner 的非阻塞 Inbox→Graph driver。`request()` 每次最多 claim 一条记录，通过
+`turbo_flow_run_open()` / `turbo_flow_run_request()` 启动 demand=1 的 CFlow run，但不等待 Graph；
+宿主推进外部 I/O/Sink owner 后调用 `poll()` 观察终态，届时才对同一 claim 执行一次
+complete/fail。这样 CNet/CHTTP 的 external-poll Sink 不会因为 source owner 同步等待而自锁。
+显式 inline Scheduler 仍可能在 `request()` 返回前执行已接纳的 Graph work；需要持续推进外部 I/O
+的 owner 必须使用 Flow-owned worker 或其他 deferred Scheduler。driver 保证的是不调用终态等待，
+而不是改写所选 Scheduler 的执行语义。
+消息复制受 `max_message_bytes` 限制，source/admission/correlation 元数据使用 message-owned
+offset/size POD，不保存 provider 借用指针。
+
+settlement 临时失败保持 claim 和已确定的 Graph 结果，只能显式
+`retry_settlement()`，不得重跑 Graph；`SALTS_EALREADY` 进入未知态，只能通过 provider 的
+failed/history 索引 `reconcile_settlement()`。无法证明终态时 driver 保持 busy，既不把未知结果
+当成功，也不重新触发 Sink 副作用。
+
 状态机只有以下显式迁移：
 
 ```text
@@ -146,10 +162,10 @@ SQLite COMMIT 返回错误时，本次操作仍以失败返回，不发布 recei
 发送结果未知不得盲目重发。持久重放使用原幂等身份和新 run，拒绝旧 schema，不自动转换旧布局。
 关停先关闭 Source 接纳，再排空在途工作、归还 claim，最后销毁存储与协议 owner。
 
-事实：现有 `io/turbodb/include/turbo_flow_turbodb.h`、
-`io/turbodb/src/turbo_flow_turbodb_outbox.c` 及其测试提供 fetch/claim/settlement 的复用点，
-但不证明统一 inbox 写入端、内存/数据库双实现或真实 Source DLL 装配已经完成。
-内存 v2 接口已经实现并测试；数据库写入端与统一配置装配由 #118 当前增量继续验收。
+`TurboFlow::TurboDbAdapter` 已实现相同 Inbox v2 契约的 file-backed SQLite provider，要求调用方
+预置精确的新 schema/index，不执行 DDL、迁移、修复或内存 fallback。内存/TurboDB provider 与
+provider-neutral Graph driver 已分别实现；配置装配、Source 窄 admission vtable、真实协议接线及
+generation drain 仍由 #117/#118 后续增量验收，不能把测试中的 http/mqtt 名称当作网络覆盖。
 
 ### 协议与业务完成
 

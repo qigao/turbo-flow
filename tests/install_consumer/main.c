@@ -6,6 +6,7 @@
 #include <turbo_flow_chttp.h>
 #include <turbo_flow_cnet.h>
 #include <turbo_flow_inbox.h>
+#include <turbo_flow_inbox_source.h>
 #include <turbo_flow_plugin.h>
 #include <turbo_flow_plugin_generation.h>
 #include <turbo_flow_plugin_operation.h>
@@ -13,6 +14,18 @@
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   #include <turbo_flow_turbodb.h>
 #endif
+
+static int install_inbox_source_header(void) {
+  turbo_flow_inbox_source_config_t config = TURBO_FLOW_INBOX_SOURCE_CONFIG_INIT;
+  turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+  return config.size == sizeof(config) && config.version == TURBO_FLOW_INBOX_SOURCE_API_VERSION &&
+                 result.size == sizeof(result) &&
+                 result.version == TURBO_FLOW_INBOX_SOURCE_API_VERSION &&
+                 turbo_flow_inbox_source_context(NULL) == NULL &&
+                 turbo_flow_inbox_source_destroy(NULL) == SALTS_EINVAL
+             ? SALTS_OK
+             : SALTS_EPROTO;
+}
 
 #if !defined(CNET_STOP_DRAIN_CONTRACT_VERSION) || CNET_STOP_DRAIN_CONTRACT_VERSION < 1u
   #error "TurboFlow install consumers require CNet stop-drain contract v1"
@@ -534,7 +547,8 @@ int main(int argc, char **argv) {
       !result_domain_destroy || !result_domain_snapshot || domain)
     return 1;
   if (install_operation_binding_config() != SALTS_OK ||
-      install_exact_ingress_layout() != SALTS_OK || install_inbox_contract() != SALTS_OK)
+      install_exact_ingress_layout() != SALTS_OK || install_inbox_contract() != SALTS_OK ||
+      install_inbox_source_header() != SALTS_OK)
     return 1;
   if (install_projection_owner() != SALTS_OK) return 1;
   if (argc == 2 && install_operation_runtime(argv[1]) != SALTS_OK) return 1;
