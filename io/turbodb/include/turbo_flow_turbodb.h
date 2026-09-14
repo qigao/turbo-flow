@@ -2,6 +2,7 @@
 #define TURBO_FLOW_TURBODB_H
 
 #include "turbo_flow.h"
+#include "turbo_flow_inbox.h"
 
 #include <orm.h>
 
@@ -117,6 +118,104 @@ TURBO_FLOW_C_API int turbo_flow_turbodb_command_open_in_transaction(
     orm_query_t *query, orm_transaction_t *transaction,
     const turbo_flow_turbodb_source_config_t *source_config, cflow_publisher *message_publisher,
     orm_error_t *orm_error);
+
+#define TURBO_FLOW_TURBODB_INBOX_API_VERSION UINT32_C(1)
+#define TURBO_FLOW_TURBODB_INBOX_SCHEMA_VERSION UINT32_C(2)
+#define TURBO_FLOW_TURBODB_INBOX_DEFAULT_CONNECTIONS 4u
+#define TURBO_FLOW_TURBODB_INBOX_MAX_CONNECTIONS 64u
+#define TURBO_FLOW_TURBODB_INBOX_NAMESPACE_MAX 63u
+
+/**
+ * Exact v2 durable inbox configuration.
+ *
+ * `database` and every view reachable from it are borrowed only during create;
+ * successful create owns all opened ORM connections. `namespace_name` is also
+ * borrowed only during create and must match `[A-Za-z_][A-Za-z0-9_]*`. It maps
+ * to `<namespace_name>_inbox_meta_v2` and
+ * `<namespace_name>_inbox_records_v2`.
+ *
+ * Version 2 supports only TurboDB's file-backed SQLite driver with a durable
+ * rollback/WAL journal and FULL-or-stronger synchronization. Other drivers,
+ * `:memory:`, journal OFF/MEMORY, and weaker synchronization are rejected with
+ * `SALTS_ENOTSUP`; each additional backend requires its own transaction and
+ * failure verification before admission.
+ *
+ * The two tables and exactly one initialized metadata row must already exist.
+ * Create validates the current schema and data invariants but never creates,
+ * migrates, repairs, or deletes database objects. Record and byte limits count
+ * both live rows and terminal idempotency tombstones. Tombstones remain until
+ * explicit `turbo_flow_inbox_forget()`; exact replay still resolves after
+ * close. Limits are hard admission and lease-cache bounds. There is no
+ * alternate provider or memory fallback.
+ */
+typedef enum turbo_flow_turbodb_inbox_open_mode_e {
+  /** Acquire only a cleanly CLOSED namespace; an ACTIVE owner returns busy. */
+  TURBO_FLOW_TURBODB_INBOX_OPEN_EXCLUSIVE = 0,
+  /** Fence exactly expected_generation after an upper coordinator authorizes takeover. */
+  TURBO_FLOW_TURBODB_INBOX_OPEN_TAKEOVER = 1
+} turbo_flow_turbodb_inbox_open_mode_t;
+
+typedef struct turbo_flow_turbodb_inbox_config_s {
+  size_t size;
+  uint32_t version;
+  const orm_config_t *database;
+  const char *namespace_name;
+  size_t max_records;
+  size_t max_total_bytes;
+  size_t max_record_bytes;
+  size_t max_claims;
+  uint32_t connection_count;
+  turbo_flow_turbodb_inbox_open_mode_t open_mode;
+  /** Required and non-zero only for OPEN_TAKEOVER. */
+  uint64_t expected_generation;
+} turbo_flow_turbodb_inbox_config_t;
+
+/**
+ * Return finite defaults with database/namespace left unset.
+ *
+ * @return Exact-version configuration using the unified memory-provider
+ * capacity defaults and four ORM connections.
+ */
+TURBO_FLOW_C_API turbo_flow_turbodb_inbox_config_t turbo_flow_turbodb_inbox_config_default(void);
+
+/**
+ * Open a durable provider into an empty unified inbox handle.
+ *
+ * Exclusive open advances generation only from a cleanly CLOSED namespace.
+ * Explicit takeover requires an exact coordinator-provided generation, fences
+ * that owner, and marks its `CLAIMED` rows FAILED with
+ * `TURBO_FLOW_INBOX_FAILURE_OWNER_LOST_UNKNOWN`; it never requeues them.
+ * Callers discover those IDs with `turbo_flow_inbox_scan_failed()` and choose
+ * retry/discard explicitly. A stale provider returns `SALTS_EBUSY` for reads
+ * and ordinary mutations. Settling one of its old leases returns
+ * `SALTS_ECANCELED`, invalidates that lease, and never reports business
+ * completion. Calls may be concurrent; an exhausted finite connection pool or
+ * SQLite lock contention returns `SALTS_EBUSY`.
+ *
+ * @param config Exact-version configuration with a valid ORM config and
+ * pre-provisioned v2 namespace.
+ * @param out Exact-version empty `TURBO_FLOW_INBOX_INIT` handle receiving the
+ * provider vtable and ownership.
+ * @param orm_error Detailed error for an ORM boundary failure; initialized by
+ * this function before first use. It is not used to hide the returned Salts
+ * status.
+ * @return SALTS_OK; SALTS_EINVAL for invalid ABI/config; SALTS_EPROTO for a
+ * missing, old, or inconsistent schema/data contract; SALTS_ENOSPC when stored
+ * state exceeds configured bounds; SALTS_ENOMEM for owner allocation; or the
+ * mapped ORM failure. No failure selects another provider.
+ *
+ * @code{.c}
+ * turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
+ * turbo_flow_turbodb_inbox_config_t cfg =
+ *     turbo_flow_turbodb_inbox_config_default();
+ * cfg.database = &database;
+ * cfg.namespace_name = "orders";
+ * int rc = turbo_flow_turbodb_inbox_create(&cfg, &inbox, &error);
+ * @endcode
+ */
+TURBO_FLOW_C_API int
+turbo_flow_turbodb_inbox_create(const turbo_flow_turbodb_inbox_config_t *config,
+                                turbo_flow_inbox_t *out, orm_error_t *orm_error);
 
 #define TURBO_FLOW_TURBODB_OUTBOX_SOURCE_API_VERSION UINT32_C(1)
 #define TURBO_FLOW_TURBODB_OUTBOX_DEFAULT_FETCH_COUNT 16u

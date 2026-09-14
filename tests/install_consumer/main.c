@@ -3,9 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <turbo_flow.h>
-#include <turbo_flow_inbox.h>
 #include <turbo_flow_chttp.h>
 #include <turbo_flow_cnet.h>
+#include <turbo_flow_inbox.h>
 #include <turbo_flow_plugin.h>
 #include <turbo_flow_plugin_generation.h>
 #include <turbo_flow_plugin_operation.h>
@@ -179,9 +179,8 @@ static int install_exact_ingress_layout(void) {
   if (rc == SALTS_OK) rc = turbo_flow_configure_async_ingress(flow, &ingress);
   if (rc == SALTS_OK)
     rc = turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error);
-  if (rc == SALTS_OK &&
-      turbo_flow_resolved_config_runtime_ingress(
-          resolved, (turbo_flow_async_ingress_config_t *)&legacy) != SALTS_EINVAL)
+  if (rc == SALTS_OK && turbo_flow_resolved_config_runtime_ingress(
+                            resolved, (turbo_flow_async_ingress_config_t *)&legacy) != SALTS_EINVAL)
     rc = SALTS_EPROTO;
   output.size = sizeof(output) + 1u;
   if (rc == SALTS_OK &&
@@ -193,9 +192,8 @@ static int install_exact_ingress_layout(void) {
   output.max_message_bytes = TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_MESSAGE_BYTES;
   output.max_inflight_bytes = TURBO_FLOW_ASYNC_INGRESS_DEFAULT_MAX_INFLIGHT_BYTES;
   if (rc == SALTS_OK) rc = turbo_flow_resolved_config_runtime_ingress(resolved, &output);
-  if (rc == SALTS_OK &&
-      (output.workers != 2u || output.queue_capacity != 7u ||
-       output.max_message_bytes != 4096u || output.max_inflight_bytes != 8192u))
+  if (rc == SALTS_OK && (output.workers != 2u || output.queue_capacity != 7u ||
+                         output.max_message_bytes != 4096u || output.max_inflight_bytes != 8192u))
     rc = SALTS_EPROTO;
   turbo_flow_resolved_config_destroy(resolved);
   turbo_flow_destroy(flow);
@@ -387,18 +385,17 @@ static int install_operation_runtime(const char *plugin_path) {
   metadata.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
   metadata.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
   metadata.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
-  legacy_metadata = (unsigned char *)malloc(
-      offsetof(turbo_flow_operation_descriptor_t, resource_min_version));
+  legacy_metadata =
+      (unsigned char *)malloc(offsetof(turbo_flow_operation_descriptor_t, resource_min_version));
   if (!legacy_metadata) {
     rc = SALTS_ENOMEM;
     goto cleanup_all;
   }
   memcpy(legacy_metadata, &metadata,
          offsetof(turbo_flow_operation_descriptor_t, resource_min_version));
-  *(size_t *)legacy_metadata =
-      offsetof(turbo_flow_operation_descriptor_t, resource_min_version);
-  rc = turbo_flow_register_operation(
-      flow, (const turbo_flow_operation_descriptor_t *)legacy_metadata);
+  *(size_t *)legacy_metadata = offsetof(turbo_flow_operation_descriptor_t, resource_min_version);
+  rc = turbo_flow_register_operation(flow,
+                                     (const turbo_flow_operation_descriptor_t *)legacy_metadata);
   if (rc != SALTS_EINVAL || turbo_flow_operation_count(flow) != 0u ||
       turbo_flow_find_operation(flow, metadata.name) != NULL) {
     rc = SALTS_EPROTO;
@@ -536,17 +533,20 @@ int main(int argc, char **argv) {
       domain_snapshot.size != sizeof(domain_snapshot) || !result_domain_create ||
       !result_domain_destroy || !result_domain_snapshot || domain)
     return 1;
-  if (install_operation_binding_config() != SALTS_OK || install_exact_ingress_layout() != SALTS_OK ||
-      install_inbox_contract() != SALTS_OK)
+  if (install_operation_binding_config() != SALTS_OK ||
+      install_exact_ingress_layout() != SALTS_OK || install_inbox_contract() != SALTS_OK)
     return 1;
   if (install_projection_owner() != SALTS_OK) return 1;
   if (argc == 2 && install_operation_runtime(argv[1]) != SALTS_OK) return 1;
   if (argc > 2) return 1;
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   turbo_flow_turbodb_source_config_t turbodb_config = turbo_flow_turbodb_source_config_default();
+  turbo_flow_turbodb_inbox_config_t turbodb_inbox_config =
+      turbo_flow_turbodb_inbox_config_default();
   turbo_flow_turbodb_outbox_source_config_t outbox_config =
       turbo_flow_turbodb_outbox_source_config_default();
   if (turbodb_config.version != TURBO_FLOW_TURBODB_API_VERSION ||
+      turbodb_inbox_config.version != TURBO_FLOW_TURBODB_INBOX_API_VERSION ||
       outbox_config.version != TURBO_FLOW_TURBODB_OUTBOX_SOURCE_API_VERSION)
     return 1;
 #endif
