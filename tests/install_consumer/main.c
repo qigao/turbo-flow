@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <turbo_flow.h>
+#include <turbo_flow_inbox.h>
 #include <turbo_flow_chttp.h>
 #include <turbo_flow_cnet.h>
 #include <turbo_flow_plugin.h>
@@ -100,6 +101,15 @@ static int install_exact_module_adapter_layout(turbo_flow_t *flow) {
   rc = turbo_flow_register_module_adapter(flow, &registration);
   if (rc != SALTS_OK || turbo_flow_adapter_count(flow) != 1u) return SALTS_EPROTO;
   return SALTS_OK;
+}
+
+static int install_inbox_contract(void) {
+  turbo_flow_inbox_memory_config_t config = turbo_flow_inbox_memory_config_default();
+  turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
+  int rc = turbo_flow_inbox_memory_create(&config, &inbox);
+  if (rc == SALTS_OK) rc = turbo_flow_inbox_close(&inbox);
+  if (rc == SALTS_OK) rc = turbo_flow_inbox_destroy(&inbox);
+  return rc;
 }
 
 static int install_operation_binding_config(void) {
@@ -526,7 +536,8 @@ int main(int argc, char **argv) {
       domain_snapshot.size != sizeof(domain_snapshot) || !result_domain_create ||
       !result_domain_destroy || !result_domain_snapshot || domain)
     return 1;
-  if (install_operation_binding_config() != SALTS_OK || install_exact_ingress_layout() != SALTS_OK)
+  if (install_operation_binding_config() != SALTS_OK || install_exact_ingress_layout() != SALTS_OK ||
+      install_inbox_contract() != SALTS_OK)
     return 1;
   if (install_projection_owner() != SALTS_OK) return 1;
   if (argc == 2 && install_operation_runtime(argv[1]) != SALTS_OK) return 1;
