@@ -1,5 +1,6 @@
 add_library(tf_turbodb_adapter SHARED
   src/turbo_flow_turbodb.c
+  src/turbo_flow_turbodb_inbox.c
   src/turbo_flow_turbodb_outbox.c
   include/turbo_flow_turbodb.h)
 cmake_config_target(

@@ -100,9 +100,10 @@ DLL 必须逆序 quiesce、shutdown、destroy、unload，不能发布半配置 P
 派生视图，不能独立推进消费状态。若配置要求“确认前持久接纳”，须证明原生 Source 支持该
 确认时机；不支持则拒绝此保证，不把普通 MQTT ACK 等同于 inbox 提交。
 
-`TurboFlow::Graph` 现已公开 `turbo_flow_inbox_t` / `turbo_flow_inbox_ops_v1_t`，并提供
-`turbo_flow_inbox_memory_create()` 有界内存实现。只接受 `turbo-flow.inbox.record` version 1；
-记录内联携带 `turbo_flow_content_descriptor_t`，provider 在成功接纳前复制 correlation/payload，
+`TurboFlow::Graph` 现已公开 `turbo_flow_inbox_t` / `turbo_flow_inbox_ops_v2_t`，并提供
+`turbo_flow_inbox_memory_create()` 有界内存实现。只接受 `turbo-flow.inbox.record` version 2；
+记录内联携带 `turbo_flow_content_descriptor_t`，并用稳定 `source_id + admission_id` 表达幂等身份；
+provider 在成功接纳前复制身份、correlation 和 payload，
 不保留 Source 的借用内存。ABI 布局不匹配返回 `SALTS_EINVAL`，旧 envelope 名称或版本返回
 `SALTS_EPROTO`，不转换旧记录。
 
@@ -112,32 +113,43 @@ DLL 必须逆序 quiesce、shutdown、destroy、unload，不能发布半配置 P
 admit:    caller bytes --copy--> PENDING
 claim:    PENDING -> CLAIMED(record_id, claim_token)
 fail:     CLAIMED -> FAILED
+scan_failed:  FAILED -> 只读、按 record_id 排序的分页视图
 retry:    FAILED -> PENDING
-complete: CLAIMED -> removed
-discard:  FAILED -> removed
+complete: CLAIMED -> TOMBSTONE(COMPLETED)
+discard:  FAILED -> TOMBSTONE(DISCARDED)
+scan_history: TOMBSTONE -> 只读、按 record_id 排序的终态分页视图
+forget:   TOMBSTONE -> removed（显式确认后才释放幂等身份与配额）
 close:    OPEN -> CLOSED；已接纳记录仍可 drain
-destroy:  仅 CLOSED 且记录/claim 均为零时成功
+destroy:  仅 CLOSED 且 live record/claim 均为零时成功；持久 tombstone 不删除
 ```
 
 存储 owner 唯一管理记录、claim 与完成状态；Graph 只借用 claim 中的不可变 record view，
-该 view 在第一次成功 complete/fail 后立即失效，业务输出是独立结果。内存 provider 允许多个
+该 view 在第一次成功 complete/fail 或 owner-loss `SALTS_ECANCELED` 后立即失效，业务输出是独立结果；显式 crash takeover
+只允许在旧 owner 已由上层协调器判定失效后发生。内存 provider 允许多个
 Source 并发提交，但在 owner mutex 内串行推进记录、ID、claim 和计数；provider callback 不在锁内
 调用外部代码。destroy 必须与所有其他调用互斥。TurboDB inbox 必须实现相同 vtable，并由配置
 唯一选择；任何 provider 错误均原样返回，host 不得切换到内存实现。
 
-记录 ID、schema/version、correlation、处理状态是受约束字段；持久记录不保存进程指针、DLL
-地址或裸会话句柄。当前内存 provider 只保证进程内保管，不宣称 durable；TurboDB 写入、
-PluginHost capability 绑定以及 inbox 到 Graph run 的 driver 仍由 #118 后续增量完成。
+记录 ID、幂等身份、schema/version、correlation、处理状态是受约束字段；持久记录不保存进程指针、
+DLL 地址或裸会话句柄。当前内存 provider 只保证进程内保管，不宣称 durable。TurboDB 首版仅支持
+经过事务/故障验证的 file-backed SQLite；普通 open 不抢占 ACTIVE owner，显式 takeover 将遗留
+CLAIMED 标为 `OWNER_LOST_UNKNOWN`，须 `scan_failed` 后显式 retry/discard，绝不自动重放。
+旧 provider 的下一次 complete/fail 被 generation fence 拒绝并返回 `SALTS_ECANCELED`，同时使旧
+claim view 失效；旧 owner 不能关闭或覆盖新 generation。
+
+SQLite COMMIT 返回错误时，本次操作仍以失败返回，不发布 receipt 或状态迁移成功，也不把重读结果
+解释为成功。仍处于活动状态的事务由 TurboDB transaction 销毁路径回滚；provider 不做自动数据库
+重试、业务重试或 provider fallback。其他数据库后端须先补齐各自的隔离与 commit-outcome 证据。
 
 记录数、总字节、单记录字节和在途 claim 都有配置上限，数据库保留数据同样受配额约束。
 只处理已接纳记录；图完成与 Sink 投递完成分别记录。图失败保留明确失败状态，重试须显式配置；
-发送结果未知不得盲目重发。持久重放使用原记录身份和新 run，拒绝旧 schema，不自动转换旧布局。
+发送结果未知不得盲目重发。持久重放使用原幂等身份和新 run，拒绝旧 schema，不自动转换旧布局。
 关停先关闭 Source 接纳，再排空在途工作、归还 claim，最后销毁存储与协议 owner。
 
 事实：现有 `io/turbodb/include/turbo_flow_turbodb.h`、
 `io/turbodb/src/turbo_flow_turbodb_outbox.c` 及其测试提供 fetch/claim/settlement 的复用点，
 但不证明统一 inbox 写入端、内存/数据库双实现或真实 Source DLL 装配已经完成。
-内存接口已经实现并测试；数据库写入端与统一配置装配尚未完成，不提前暴露未实现 API。
+内存 v2 接口已经实现并测试；数据库写入端与统一配置装配由 #118 当前增量继续验收。
 
 ### 协议与业务完成
 

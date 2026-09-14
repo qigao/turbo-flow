@@ -10,13 +10,17 @@
 
 **Spec:** `docs/architecture/transport-independent-business-graph.md`
 
+> **修订：** 初始短期 v1 草案已被 #118 的不兼容 v2 契约原位替换。本计划记录最终 v2
+> 名称与状态机；不保留 v1 ABI、记录转换或兼容 shim。
+
 ## Global Constraints
 
 - 不兼容旧结构、旧数据、旧配置或旧 DLL ABI，也不提供 C/CMake/runtime fallback。
 - 持久化字段不得包含进程指针、DLL 地址、裸 session 或函数指针。
 - 记录数、总 retained bytes、单记录 retained bytes 与并发 claim 数都必须有硬上限。
 - 接纳失败保留调用方输入所有权；接纳成功后 provider 拥有完整副本。
-- Graph 借用 claim view，view 在成功 complete/fail 前有效；claim 只有一个 owner。
+- Graph 借用 claim view，view 在成功 complete/fail 或 owner-loss `SALTS_ECANCELED`
+  前有效；claim 只有一个 owner。
 - fail 只形成显式 FAILED 状态，只有 retry 才能重新领取。
 - close 后拒绝新接纳，但允许处理已接纳记录；destroy 仅在 closed 且 drained 时成功。
 
@@ -33,7 +37,7 @@
 
 **Interfaces:**
 - Consumes: `turbo_flow_content_descriptor_t`, `vstr`, `vec_t`, `mem_buffer_t`, `salts_mutex_t`.
-- Produces: `turbo_flow_inbox_t`, `turbo_flow_inbox_ops_v1_t`, `turbo_flow_inbox_memory_create()`, `turbo_flow_inbox_admit()`, `turbo_flow_inbox_claim()`, `turbo_flow_inbox_complete()`, `turbo_flow_inbox_fail()`, `turbo_flow_inbox_retry()`, `turbo_flow_inbox_discard()`, `turbo_flow_inbox_close()`, `turbo_flow_inbox_snapshot()`, `turbo_flow_inbox_destroy()`.
+- Produces: `turbo_flow_inbox_t`, `turbo_flow_inbox_ops_v2_t`, `turbo_flow_inbox_memory_create()`, `turbo_flow_inbox_admit()`, `turbo_flow_inbox_claim()`, `turbo_flow_inbox_complete()`, `turbo_flow_inbox_fail()`, `turbo_flow_inbox_retry()`, `turbo_flow_inbox_discard()`, `turbo_flow_inbox_forget()`, `turbo_flow_inbox_scan_failed()`, `turbo_flow_inbox_scan_history()`, `turbo_flow_inbox_close()`, `turbo_flow_inbox_snapshot()`, `turbo_flow_inbox_destroy()`.
 
 - [x] **Step 1: Write failing contract tests**
 
@@ -45,7 +49,10 @@ check_equal(claim.record.payload, "payload");
 check_equal(turbo_flow_inbox_complete(&inbox, &claim), SALTS_OK);
 ```
 
-Add independent cases for invalid 0 limits, N/N+1 records and bytes, old envelope schema, copy ownership, unique claim, FAILED visibility, explicit retry, stale token, close/drain, and destroy-before-drain.
+Add independent cases for invalid zero limits, N/N+1 records and bytes, old
+envelope schema, copy ownership, stable admission replay/conflict, unique claim,
+FAILED visibility, ordered failed/history scans, explicit retry/discard/forget,
+stale token, terminal tombstones, close/drain, and destroy-before-drain.
 
 - [x] **Step 2: Run RED**
 
@@ -59,7 +66,7 @@ Expected: configure/build fails because `turbo_flow_inbox.h` and its API do not 
 typedef struct turbo_flow_inbox_s {
   size_t size;
   uint32_t version;
-  const turbo_flow_inbox_ops_v1_t *ops;
+  const turbo_flow_inbox_ops_v2_t *ops;
   void *ctx;
 } turbo_flow_inbox_t;
 
@@ -93,13 +100,19 @@ admit: caller bytes --copy--> PENDING
 claim: PENDING -> CLAIMED(token)
 fail: CLAIMED(token) -> FAILED
 retry: FAILED -> PENDING
-complete: CLAIMED(token) -> removed
-close: OPEN -> CLOSED; destroy requires CLOSED + zero records
+complete: CLAIMED(token) -> TOMBSTONE(COMPLETED)
+discard: FAILED -> TOMBSTONE(DISCARDED)
+forget: TOMBSTONE -> removed
+close: OPEN -> CLOSED; exact retained-identity replay still resolves
+destroy: CLOSED + zero live records/claims; memory history is released
 ```
 
 - [x] **Step 2: State compatibility and provider rules**
 
-Document that only `turbo-flow.inbox.record` version 1 is accepted, TurboDB must implement the same vtable, configured provider identity is singular, and an error never triggers memory fallback.
+Document that only `turbo-flow.inbox.record` version 2 is accepted, TurboDB must
+implement the same v2 vtable, configured provider identity is singular, and an
+error never triggers memory fallback. Terminal history remains bounded and
+enumerable until explicit forget.
 
 - [x] **Step 3: Verify docs against exported names**
 
