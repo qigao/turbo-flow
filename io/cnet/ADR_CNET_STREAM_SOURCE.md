@@ -90,7 +90,7 @@ stop 前返回 `SALTS_EBUSY`，成功后释放 opaque owner。
 - 状态：CNet client 是连接事实源；Publisher slot 只是从 callback 派生的有界 owning handoff。
 - 性能：每个 receive 做一次必要的 borrowed-to-owning copy；不在未 profile 前增加第二队列或对象池。
 - 能力：该切片把每个 CNet stream receive chunk 当作一条 Graph message，不提供 framing、重连、
-  listener、UDP/KCP 或 sink；它们分别属于 protocol runtime、#19 与 #20。
+  listener、UDP/KCP 或 sink；它们分别属于 Protocol Source、#19 与 #20。
 
 ## 验证
 

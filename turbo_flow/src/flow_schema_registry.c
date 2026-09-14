@@ -171,6 +171,7 @@ static int flow_content_profile_domain_valid(turbo_flow_domain_t domain,
   case TURBO_FLOW_CONTENT_PROFILE_DATABASE_COMMAND_RESULT:
     return domain == TURBO_FLOW_DOMAIN_BUFFER_PERSISTENCE;
   case TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA:
+    return domain == TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN || domain == TURBO_FLOW_DOMAIN_DATA;
   case TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_CONTROL:
   case TURBO_FLOW_CONTENT_PROFILE_MQTT_APPLICATION:
   case TURBO_FLOW_CONTENT_PROFILE_MQTT_CONTROL:
@@ -267,7 +268,9 @@ turbo_flow_schema_registry_t *turbo_flow_schema_registry_create(void) {
   turbo_flow_schema_registry_t *registry =
       (turbo_flow_schema_registry_t *)calloc(1, sizeof(*registry));
   if (!registry) return NULL;
-  if (turbo_flow_stl_error(vec_init_bytes(&registry->entries, sizeof(flow_schema_registry_entry_t *), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
+  if (turbo_flow_stl_error(
+          vec_init_bytes(&registry->entries, sizeof(flow_schema_registry_entry_t *),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
     free(registry);
     return NULL;
   }

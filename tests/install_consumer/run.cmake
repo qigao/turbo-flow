@@ -101,6 +101,19 @@ execute_process(
   WORKING_DIRECTORY "${TURBO_FLOW_SOURCE_DIR}"
   COMMAND_ERROR_IS_FATAL ANY)
 
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset "consumer-schema-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build --preset "consumer-schema-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}" --preset "consumer-schema-${consumer_profile}"
+  WORKING_DIRECTORY "${full_consumer_source_dir}"
+  COMMAND_ERROR_IS_FATAL ANY)
+
 file(GLOB _turbo_flow_legacy_stage_artifacts
      "${stage_dir}/bin/turbo_flow.dll"
      "${stage_dir}/lib/turbo_flow.lib"
@@ -162,7 +175,7 @@ if(NOT EXISTS "${installed_cnet_plugin}")
 endif()
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" --preset
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset
           "cnet-plugin-consumer-${consumer_profile}"
   WORKING_DIRECTORY "${cnet_plugin_consumer_source_dir}"
   COMMAND_ERROR_IS_FATAL ANY)
@@ -306,7 +319,7 @@ include("${TURBO_FLOW_SOURCE_DIR}/tests/install_chttp_plugin_consumer/run.cmake"
 set(config_consumer_build_dir
     "${component_consumer_source_dir}/build/config-${consumer_profile}")
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" --preset "component-config-${consumer_profile}"
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset "component-config-${consumer_profile}"
   WORKING_DIRECTORY "${component_consumer_source_dir}"
   COMMAND_ERROR_IS_FATAL ANY)
 execute_process(
@@ -385,7 +398,7 @@ execute_process(
   COMMAND_ERROR_IS_FATAL ANY)
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" --preset "consumer-full-${consumer_profile}"
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset "consumer-full-${consumer_profile}"
   WORKING_DIRECTORY "${full_consumer_source_dir}"
   COMMAND_ERROR_IS_FATAL ANY)
 execute_process(
@@ -452,7 +465,7 @@ execute_process(
 
 set(unscoped_consumer_build_dir "${test_root}/unscoped-${consumer_profile}")
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" --preset "consumer-unscoped-${consumer_profile}"
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset "consumer-unscoped-${consumer_profile}"
   WORKING_DIRECTORY "${full_consumer_source_dir}"
   COMMAND_ERROR_IS_FATAL ANY)
 execute_process(
@@ -467,7 +480,7 @@ execute_process(
 set(graph_consumer_build_dir
     "${component_consumer_source_dir}/build/graph-${consumer_profile}")
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" --preset "component-graph-${consumer_profile}"
+  COMMAND "${CMAKE_COMMAND}" --fresh --preset "component-graph-${consumer_profile}"
   WORKING_DIRECTORY "${component_consumer_source_dir}"
   COMMAND_ERROR_IS_FATAL ANY)
 execute_process(
@@ -482,7 +495,7 @@ execute_process(
 if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
   set(turbodb_consumer_build_dir
       "${component_consumer_source_dir}/build/turbodb-${consumer_profile}")
-  execute_process(COMMAND "${CMAKE_COMMAND}" --preset "component-turbodb-${consumer_profile}"
+  execute_process(COMMAND "${CMAKE_COMMAND}" --fresh --preset "component-turbodb-${consumer_profile}"
     WORKING_DIRECTORY "${component_consumer_source_dir}" COMMAND_ERROR_IS_FATAL ANY)
   execute_process(COMMAND "${CMAKE_COMMAND}" --build --preset "component-turbodb-${consumer_profile}"
     WORKING_DIRECTORY "${component_consumer_source_dir}" COMMAND_ERROR_IS_FATAL ANY)

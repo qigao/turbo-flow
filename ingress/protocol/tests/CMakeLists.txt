@@ -29,14 +29,6 @@ turbo_flow_add_protocol_catalog_fixture(
   FLOW_PROTOCOL_CATALOG_FIXTURE_MODE=1)
 
 cmake_add_test(
-  test_protocol_graph
-  SOURCES test_protocol_graph.c
-  LIBS TurboFlow::ProtocolIngressGraph Salts::TinyTest
-  FOLDER "ingress/protocol/tests")
-set_tests_properties(test_protocol_graph
-                     PROPERTIES LABELS "protocol-ingress;graph")
-
-cmake_add_test(
   test_protocol_registry
   SOURCES test_protocol_registry.c
   LIBS TurboFlow::PluginHost Salts::TinyTest
@@ -85,12 +77,20 @@ set_target_properties(test_protocol_plugin_abi PROPERTIES FOLDER "ingress/protoc
 set_tests_properties(test_protocol_plugin_abi PROPERTIES LABELS "protocol-ingress;plugin")
 
 cmake_add_test(
-  test_protocol_runtime
-  SOURCES test_protocol_runtime.c
+  test_protocol_source
+  SOURCES test_protocol_source.c
   LIBS TurboFlow::ProtocolIngress Salts::TinyTest
   FOLDER "ingress/protocol/tests")
-set_tests_properties(test_protocol_runtime
-                     PROPERTIES LABELS "protocol-ingress;protocol-runtime")
+set_tests_properties(test_protocol_source
+                     PROPERTIES LABELS "protocol-ingress;protocol-source")
+
+cmake_add_test(
+  test_protocol_inbox
+  SOURCES test_protocol_inbox.c
+  LIBS TurboFlow::ProtocolIngressInbox tf_protocol_inbox_schema Salts::TinyTest
+  FOLDER "ingress/protocol/tests")
+set_tests_properties(test_protocol_inbox
+                     PROPERTIES LABELS "protocol-ingress;inbox;databind")
 
 cmake_add_test(
   test_protocol_business

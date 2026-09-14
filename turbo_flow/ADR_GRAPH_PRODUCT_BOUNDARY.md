@@ -12,9 +12,10 @@
 
 ## 决策
 
-设备协议 codec/runtime 归属仓库可选的 `ingress/protocol` 集成层。它只依赖
-`TurboFlow::Graph`，且不把 MQTT 作为固定中间格式；网络 listener 由仓库外的
-CNet/CHTTP 宿主适配层拥有，MQTT 仅可作为 Graph 后的可选 Sink。
+设备协议 codec 与 Source-to-Inbox adapter 归属仓库可选的 `ingress/protocol` 集成层。
+网络 listener 由仓库外的 CNet/CHTTP 宿主适配层拥有；HTTP、WebSocket、socket 与 MQTT
+都可以实现独立的 Source 或 Sink DLL。Source 只负责 decode 并写入配置的 Inbox，显式
+Inbox Source claim 才进入 Graph；业务响应和下行发送始终属于 Sink。
 
 依赖保持单向：
 

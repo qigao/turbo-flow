@@ -11,6 +11,9 @@
 #include <turbo_flow_plugin_generation.h>
 #include <turbo_flow_plugin_operation.h>
 #include <turbo_flow_plugin_protocol.h>
+#include <turbo_flow_protocol_inbox.h>
+#include <turbo_flow_protocol_inbox_envelope.h>
+#include <turbo_flow_protocol_source.h>
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   #include <turbo_flow_turbodb.h>
 #endif
@@ -25,6 +28,35 @@ static int install_inbox_source_header(void) {
                  turbo_flow_inbox_source_destroy(NULL) == SALTS_EINVAL
              ? SALTS_OK
              : SALTS_EPROTO;
+}
+
+static int install_protocol_source_inbox_headers(void) {
+  turbo_flow_protocol_source_config_t source = TURBO_FLOW_PROTOCOL_SOURCE_CONFIG_INIT;
+  turbo_flow_protocol_source_ops_t source_ops = TURBO_FLOW_PROTOCOL_SOURCE_OPS_INIT;
+  turbo_flow_protocol_source_feed_result_t feed = TURBO_FLOW_PROTOCOL_SOURCE_FEED_RESULT_INIT;
+  turbo_flow_protocol_inbox_config_t inbox = TURBO_FLOW_PROTOCOL_INBOX_CONFIG_INIT;
+  turbo_flow_protocol_inbox_identity_ops_t identity_ops =
+      TURBO_FLOW_PROTOCOL_INBOX_IDENTITY_OPS_INIT;
+  ProtocolInboxEnvelope_t envelope;
+  DataBind *codec = NULL;
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  int rc;
+
+  turbo_flow_protocol_inbox_destroy(NULL);
+  if (source.size != sizeof(source) ||
+      source.abi_version != TURBO_FLOW_PROTOCOL_SOURCE_ABI_VERSION ||
+      source_ops.size != sizeof(source_ops) || feed.size != sizeof(feed) ||
+      inbox.size != sizeof(inbox) || inbox.abi_version != TURBO_FLOW_PROTOCOL_INBOX_ABI_VERSION ||
+      identity_ops.size != sizeof(identity_ops) ||
+      turbo_flow_protocol_source_destroy(NULL) != SALTS_OK ||
+      turbo_flow_protocol_inbox_admit(NULL, NULL) != SALTS_EINVAL)
+    return SALTS_EPROTO;
+  ProtocolInboxEnvelope_init(&envelope);
+  rc = TurboFlowProtocolInbox_codec_create(&codec, &error);
+  if (rc != DATA_BIND_OK || !codec) return SALTS_EPROTO;
+  data_bind_free(codec);
+  ProtocolInboxEnvelope_clear(&envelope);
+  return SALTS_OK;
 }
 
 #if !defined(CNET_STOP_DRAIN_CONTRACT_VERSION) || CNET_STOP_DRAIN_CONTRACT_VERSION < 1u
@@ -548,7 +580,8 @@ int main(int argc, char **argv) {
     return 1;
   if (install_operation_binding_config() != SALTS_OK ||
       install_exact_ingress_layout() != SALTS_OK || install_inbox_contract() != SALTS_OK ||
-      install_inbox_source_header() != SALTS_OK)
+      install_inbox_source_header() != SALTS_OK ||
+      install_protocol_source_inbox_headers() != SALTS_OK)
     return 1;
   if (install_projection_owner() != SALTS_OK) return 1;
   if (argc == 2 && install_operation_runtime(argv[1]) != SALTS_OK) return 1;

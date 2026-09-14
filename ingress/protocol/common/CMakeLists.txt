@@ -4,11 +4,11 @@ add_library(
   ${TARGET_NAME} SHARED
   src/flow_protocol.c
   src/flow_protocol_business.c
-  src/flow_protocol_runtime.c
+  src/flow_protocol_source.c
   include/turbo_flow_protocol.h
   include/turbo_flow_protocol_business.h
   include/turbo_flow_protocol_business_plugin.h
-  include/turbo_flow_protocol_runtime.h
+  include/turbo_flow_protocol_source.h
   include/turbo_flow_protocol_plugin.h)
 
 cmake_config_target(
@@ -30,6 +30,6 @@ install(
   FILES include/turbo_flow_protocol.h
         include/turbo_flow_protocol_business.h
         include/turbo_flow_protocol_business_plugin.h
-        include/turbo_flow_protocol_runtime.h
+        include/turbo_flow_protocol_source.h
         include/turbo_flow_protocol_plugin.h
   DESTINATION include)

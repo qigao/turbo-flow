@@ -3264,6 +3264,23 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_content_descriptor_check(&descriptor), SALTS_EINVAL);
     }
 
+    it("accepts admitted protocol data in the Inbox data domain") {
+      turbo_flow_content_descriptor_t descriptor;
+
+      check_equal(turbo_flow_content_descriptor_init(
+                       &descriptor, TURBO_FLOW_DOMAIN_DATA,
+                       TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_TBE,
+                       "application/vnd.tbe", "protocol.ingress"),
+                   SALTS_OK);
+      check_equal(turbo_flow_content_descriptor_declare_schema(
+                       &descriptor, "turbo-flow.protocol.inbox", "ProtocolInboxEnvelope", 1u),
+                   SALTS_OK);
+      check_equal(turbo_flow_content_descriptor_check(&descriptor), SALTS_OK);
+
+      descriptor.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+      check_equal(turbo_flow_content_descriptor_check(&descriptor), SALTS_EINVAL);
+    }
+
     it("enforces one declared schema identity across descriptor and projection binding") {
       static const turbo_flow_data_schema_t conflicting_schema = {sizeof(turbo_flow_data_schema_t),
                                                                   TURBO_FLOW_DOMAIN_DATA,

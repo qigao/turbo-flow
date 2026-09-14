@@ -1,30 +1,35 @@
 # TurboFlow Protocol Ingress
 
-`ingress/protocol` 是 TurboFlow 的可选协议 codec/runtime 层。它完成协议分帧、校验、
-身份提取和响应编码，然后把中立消息投递给 `TurboFlow::Graph`。连接监听、TLS/WS、
-HTTP endpoint 和 event-loop 生命周期由仓库外的 CNet/CHTTP 宿主适配层拥有。
+`ingress/protocol` 是 TurboFlow 的可选协议 codec/Source 层。它完成协议分帧、
+校验和身份提取，并通过 `TurboFlow::ProtocolIngressInbox` 将已验证消息同步接纳到配置的
+Inbox。连接监听、TLS/WS、HTTP endpoint 和 event-loop 生命周期由 CNet/CHTTP 宿主
+适配层拥有。
 
 ```text
 CNet/CHTTP host adapter
-  -> protocol codec/session
-  -> payload + protocol metadata
-  -> TurboFlow::ProtocolIngressGraph
-  -> Source normalization (common business schema)
-  -> configured intake storage (bounded memory / TurboDB inbox)
+  -> protocol Source codec/session
+  -> TurboFlow::ProtocolIngressInbox
+  -> configured Inbox (bounded memory / TurboDB)
+  -> turbo_flow_inbox_source claim/request/poll
   -> shared RulesForge/TurboScript business graph
-  -> explicitly addressed sinks (MQTT, HTTP, socket, ...)
+  -> explicitly configured Sink (MQTT, HTTP, socket, ...)
 ```
 
-MQTT 接收属于 Source，发送属于 Sink；它不是内部中间格式。协议 runtime 调用 `turbo_flow_protocol_decode()`，输出原始
-payload 与 `turbo_flow_protocol_metadata_t`；`TurboFlow::ProtocolIngressGraph` 将二者放入
-同一个 message-owned `mem_buffer_t` 后，按 `source_handoff` 调用同步
-`turbo_flow_publish()` 或有界 `turbo_flow_publish_async()`。Graph stage 可通过
-`turbo_flow_protocol_graph_metadata()` 读取 metadata。旧 `TurboFlow::MqttSink`
-topic mapper 已删除；它没有 I/O owner，也不是可配置 Sink。MQTT 接收/发送必须由统一
-PluginHost 加载真实客户端 provider DLL，分别注册 Source/Sink，并显式绑定 schema、
-接收存储和目的地。
+协议 decode 输出只在 admission 调用期间借用。identity provider 返回的 view 必须持续到该次
+`turbo_flow_protocol_inbox_admit()` 返回。Inbox adapter 校验稳定 Source/admission 身份，将协议字段
+与 payload 序列化为带明确 schema/version 的 TBE envelope，并且只调用
+一次 `turbo_flow_inbox_admit()`。`SALTS_OK` 仅表示所选 provider 已复制并拥有不可变记录；
+它不表示 Graph、业务提交或发送成功，也不会隐式触发这些步骤。原生
+`turbo_flow_protocol_metadata_t` 的内存布局不是持久格式。
+安装后的 native consumer 通过 `TurboFlow::ProtocolIngressInboxSchema` 与
+`turbo_flow_protocol_inbox_envelope.h` 解码；RulesForge/TurboScript schema 产物位于
+`share/TurboFlow/protocol/inbox`。
 
-上述原始帧/metadata 契约属于协议适配层，不是业务 schema。业务节点应只依赖统一业务对象，
+MQTT 接收属于 Source，发送属于 Sink；它不是内部中间格式。MQTT 接收/发送必须由统一
+PluginHost 加载真实客户端 provider DLL，分别注册 Source/Sink，并显式绑定 schema、
+接收存储和目的地。协议响应同样由显式 Sink 编码并发送，Source 不拥有发送行为。
+
+上述 envelope 契约属于协议 Source 适配层，不是业务 schema。业务节点应只依赖统一业务对象，
 存储/查询通过 RulesForge/TurboScript 使用受控能力，输出目的地不默认绑定输入协议。
 不存在 protocol-derived topic mapper 或兼容入口。
 完整目标与现状见[业务图设计](../../docs/architecture/transport-independent-business-graph.md)。
@@ -45,18 +50,14 @@ client，不保存 broker session、QoS、retained 或离线消息状态。
 
 ## 所有权与反压
 
-- Protocol runtime 拥有分帧缓冲、session、pending delivery 与协议响应顺序。
+- Protocol Source 拥有有界分帧缓冲和 session；成功 admission 后可消费对应帧。
 - CNet/CHTTP 宿主 owner 拥有连接、event loop、TLS 身份和关闭栅栏。
-- Graph 拥有已接纳的 `turbo_flow_msg_t`，但不拥有 socket 或协议 session。
-- `inline` 是兼容默认值，Graph bridge 成功后返回 `SETTLED`。
-- `async_bounded` 只在 Flow 的队列、单消息字节和总在途字节预算内接纳；成功后返回
-  `PENDING`，worker completion 恰好回调一次。宿主必须把 completion 投递回网络
-  owner，并在原 publish callback 返回后调用 server/runtime `settle()`；worker 不得直接
-  重入单 owner protocol runtime。
-- 有界接纳失败立即返回具体错误，不产生 completion，也不回退到同步执行。
-- 一个 session 同时最多有一个 pending delivery；满额返回反压，不静默丢弃。
-- 关闭顺序为：关闭 listener admission → drain 已接纳消息 → 发送合法协议响应 →
-  等待 handler 退出 → 销毁 listener/execution。
+- Inbox provider 是已接纳协议记录、幂等 identity 和 claim 生命周期的唯一事实源。
+- 容量错误保留当前帧并返回 Source 反压；其他 provider 错误原样返回并使 session 显式失败。
+- `turbo_flow_inbox_source_t` 独立拥有 claim → Graph → settlement；Protocol Source 不等待
+  Graph，也不根据 Graph/Sink 结果修改已经完成的 admission。
+- 关闭 Source admission 只停止新接收并收束其 session；它不等待 Inbox 中已拥有的 Graph 工作。
+- 不自动重试 provider，不从数据库回退内存，不直接 publish Graph，也不隐式发送响应。
 
 ## 构建与测试
 
@@ -65,8 +66,8 @@ client，不保存 broker session、QoS、retained 或离线消息状态。
 
 ```powershell
 cmake --fresh --preset win-release-user
-cmake --build --preset win-release-user --parallel
-ctest --preset win-release-user -L protocol-ingress --output-on-failure
+cmake --build --preset win-release-user --target test_protocol_source test_protocol_inbox test_flow_inbox_source
+ctest --preset win-release-user -R "^(test_protocol_source|test_protocol_inbox|test_flow_inbox_source)$" --output-on-failure
 ```
 
 具体生命周期与错误契约见 [PROTOCOL_INGRESS.md](PROTOCOL_INGRESS.md)，架构决策见

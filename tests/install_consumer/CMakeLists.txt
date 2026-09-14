@@ -28,6 +28,28 @@ if(NOT DEFINED ENV{TURBO_FLOW_ROOT} OR "$ENV{TURBO_FLOW_ROOT}" STREQUAL "" OR
   message(FATAL_ERROR "TURBO_FLOW_ROOT must name the installed TurboFlow prefix")
 endif()
 file(REAL_PATH "$ENV{TURBO_FLOW_ROOT}" turbo_flow_root)
+foreach(turbo_flow_removed_protocol_artifact IN ITEMS
+        include/turbo_flow_protocol_runtime.h
+        include/turbo_flow_protocol_graph.h
+        bin/tf_protocol_graph.dll
+        lib/tf_protocol_graph.lib
+        lib/libtf_protocol_graph.so
+        lib/libtf_protocol_graph.dylib)
+  if(EXISTS "${turbo_flow_root}/${turbo_flow_removed_protocol_artifact}")
+    message(FATAL_ERROR
+      "Removed protocol artifact remains installed: ${turbo_flow_removed_protocol_artifact}")
+  endif()
+endforeach()
+foreach(turbo_flow_protocol_schema_artifact IN ITEMS
+        include/turbo_flow_protocol_inbox_envelope.h
+        share/TurboFlow/protocol/inbox/protocol_inbox.schema
+        share/TurboFlow/protocol/inbox/turbo_flow_protocol_inbox_envelope.rfl
+        share/TurboFlow/protocol/inbox/turbo_flow_protocol_inbox_envelope.d.ts)
+  if(NOT EXISTS "${turbo_flow_root}/${turbo_flow_protocol_schema_artifact}")
+    message(FATAL_ERROR
+      "Required protocol Inbox schema artifact is missing: ${turbo_flow_protocol_schema_artifact}")
+  endif()
+endforeach()
 if(DEFINED TurboFlow_DIR AND NOT "${TurboFlow_DIR}" STREQUAL "")
   if(NOT IS_DIRECTORY "${TurboFlow_DIR}")
     message(FATAL_ERROR "TurboFlow_DIR is not a directory: ${TurboFlow_DIR}")
@@ -40,7 +62,11 @@ if(DEFINED TurboFlow_DIR AND NOT "${TurboFlow_DIR}" STREQUAL "")
   endif()
 endif()
 
-if(TURBO_FLOW_TEST_ALL_COMPONENTS)
+if(TURBO_FLOW_TEST_SCHEMA_ONLY)
+  find_package(TurboFlow 2.0 CONFIG REQUIRED
+               COMPONENTS ProtocolIngressInboxSchema
+               PATHS "$ENV{TURBO_FLOW_ROOT}" NO_DEFAULT_PATH)
+elseif(TURBO_FLOW_TEST_ALL_COMPONENTS)
   set(turbo_flow_test_components
       Config
       Graph
@@ -49,7 +75,8 @@ if(TURBO_FLOW_TEST_ALL_COMPONENTS)
       CHTTPAdapter
       Product
       ProtocolIngress
-      ProtocolIngressGraph
+      ProtocolIngressInbox
+      ProtocolIngressInboxSchema
       ProtocolMqttSn
       ProtocolCoap
       ProtocolLwm2m
@@ -74,6 +101,14 @@ if(TARGET TurboFlow::MqttSink)
   message(FATAL_ERROR
     "TurboFlow::MqttSink is a removed mapper component; MQTT must be loaded as a provider DLL")
 endif()
+if(TARGET TurboFlow::ProtocolIngressGraph)
+  message(FATAL_ERROR
+    "TurboFlow::ProtocolIngressGraph is removed; protocol Sources must admit through Inbox")
+endif()
+if(NOT TARGET TurboFlow::ProtocolIngressInboxSchema)
+  message(FATAL_ERROR
+    "TurboFlow::ProtocolIngressInboxSchema exact generated codec target is required")
+endif()
 if(NOT TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   if(TARGET TurboFlow::TurboDbAdapter)
     message(FATAL_ERROR
@@ -85,33 +120,40 @@ if(NOT TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   endif()
 endif()
 
-add_executable(turbo_flow_install_consumer main.c)
-target_link_libraries(
-  turbo_flow_install_consumer
-  PRIVATE TurboFlow::Config
-          TurboFlow::Graph
-          TurboFlow::PluginHost
-          TurboFlow::CNetAdapter
-          TurboFlow::CHTTPAdapter
-          TurboFlow::Product
-          TurboFlow::ProtocolIngress
-          TurboFlow::ProtocolIngressGraph
-          TurboFlow::ProtocolMqttSn
-          TurboFlow::ProtocolCoap
-          TurboFlow::ProtocolLwm2m
-          TurboFlow::ProtocolOcpp
-          TurboFlow::ProtocolGbt32960
-          TurboFlow::ProtocolJtt808
-          TurboFlow::ProtocolBusinessOcpp201Core
-          TurboFlow::SecuritySQLite
-          TurboFlow::Codec
-          TurboFlow::Observe
-          TurboFlow::Schedule)
-if(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
+if(TURBO_FLOW_TEST_SCHEMA_ONLY)
+  add_executable(turbo_flow_install_consumer schema_main.c)
   target_link_libraries(turbo_flow_install_consumer
-                        PRIVATE TurboFlow::TurboDbAdapter)
-  target_compile_definitions(turbo_flow_install_consumer
-                             PRIVATE TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER=1)
+                        PRIVATE TurboFlow::ProtocolIngressInboxSchema)
+else()
+  add_executable(turbo_flow_install_consumer main.c)
+  target_link_libraries(
+    turbo_flow_install_consumer
+    PRIVATE TurboFlow::Config
+            TurboFlow::Graph
+            TurboFlow::PluginHost
+            TurboFlow::CNetAdapter
+            TurboFlow::CHTTPAdapter
+            TurboFlow::Product
+            TurboFlow::ProtocolIngress
+            TurboFlow::ProtocolIngressInboxSchema
+            TurboFlow::ProtocolIngressInbox
+            TurboFlow::ProtocolMqttSn
+            TurboFlow::ProtocolCoap
+            TurboFlow::ProtocolLwm2m
+            TurboFlow::ProtocolOcpp
+            TurboFlow::ProtocolGbt32960
+            TurboFlow::ProtocolJtt808
+            TurboFlow::ProtocolBusinessOcpp201Core
+            TurboFlow::SecuritySQLite
+            TurboFlow::Codec
+            TurboFlow::Observe
+            TurboFlow::Schedule)
+  if(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
+    target_link_libraries(turbo_flow_install_consumer
+                          PRIVATE TurboFlow::TurboDbAdapter)
+    target_compile_definitions(turbo_flow_install_consumer
+                               PRIVATE TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER=1)
+  endif()
 endif()
 
 enable_testing()
