@@ -100,10 +100,34 @@ DLL 必须逆序 quiesce、shutdown、destroy、unload，不能发布半配置 P
 派生视图，不能独立推进消费状态。若配置要求“确认前持久接纳”，须证明原生 Source 支持该
 确认时机；不支持则拒绝此保证，不把普通 MQTT ACK 等同于 inbox 提交。
 
-存储 owner 唯一管理记录、claim 与完成状态；Graph 持有不可变输入 lease，业务输出是独立结果。
-初始并发契约是多 Source 有界交接、单一串行存储 owner；图内并行使用既有调度器，
-worker 不直接修改存储游标。记录 ID、schema/version、correlation、处理状态是受约束字段；
-持久记录不保存进程指针、DLL 地址或裸会话句柄。
+`TurboFlow::Graph` 现已公开 `turbo_flow_inbox_t` / `turbo_flow_inbox_ops_v1_t`，并提供
+`turbo_flow_inbox_memory_create()` 有界内存实现。只接受 `turbo-flow.inbox.record` version 1；
+记录内联携带 `turbo_flow_content_descriptor_t`，provider 在成功接纳前复制 correlation/payload，
+不保留 Source 的借用内存。ABI 布局不匹配返回 `SALTS_EINVAL`，旧 envelope 名称或版本返回
+`SALTS_EPROTO`，不转换旧记录。
+
+状态机只有以下显式迁移：
+
+```text
+admit:    caller bytes --copy--> PENDING
+claim:    PENDING -> CLAIMED(record_id, claim_token)
+fail:     CLAIMED -> FAILED
+retry:    FAILED -> PENDING
+complete: CLAIMED -> removed
+discard:  FAILED -> removed
+close:    OPEN -> CLOSED；已接纳记录仍可 drain
+destroy:  仅 CLOSED 且记录/claim 均为零时成功
+```
+
+存储 owner 唯一管理记录、claim 与完成状态；Graph 只借用 claim 中的不可变 record view，
+该 view 在第一次成功 complete/fail 后立即失效，业务输出是独立结果。内存 provider 允许多个
+Source 并发提交，但在 owner mutex 内串行推进记录、ID、claim 和计数；provider callback 不在锁内
+调用外部代码。destroy 必须与所有其他调用互斥。TurboDB inbox 必须实现相同 vtable，并由配置
+唯一选择；任何 provider 错误均原样返回，host 不得切换到内存实现。
+
+记录 ID、schema/version、correlation、处理状态是受约束字段；持久记录不保存进程指针、DLL
+地址或裸会话句柄。当前内存 provider 只保证进程内保管，不宣称 durable；TurboDB 写入、
+PluginHost capability 绑定以及 inbox 到 Graph run 的 driver 仍由 #118 后续增量完成。
 
 记录数、总字节、单记录字节和在途 claim 都有配置上限，数据库保留数据同样受配额约束。
 只处理已接纳记录；图完成与 Sink 投递完成分别记录。图失败保留明确失败状态，重试须显式配置；
@@ -113,7 +137,7 @@ worker 不直接修改存储游标。记录 ID、schema/version、correlation、
 事实：现有 `io/turbodb/include/turbo_flow_turbodb.h`、
 `io/turbodb/src/turbo_flow_turbodb_outbox.c` 及其测试提供 fetch/claim/settlement 的复用点，
 但不证明统一 inbox 写入端、内存/数据库双实现或真实 Source DLL 装配已经完成。
-具体存储接口和配置仍需实施验证，不提前暴露未实现 API。
+内存接口已经实现并测试；数据库写入端与统一配置装配尚未完成，不提前暴露未实现 API。
 
 ### 协议与业务完成
 

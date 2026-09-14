@@ -15,6 +15,10 @@ typed projection、调度、可观测性，以及可选的边界与能力 adapte
 不由输入协议自动推导。接收存储是各 Source 共用的能力，配置选择内存或数据库，接纳成功后才
 执行业务图；数据库失败不回退内存。中间业务查询/存储通过引擎调用受控的 TurboDB 等能力。
 协议 ACK、图完成与业务提交分别计量；延迟 ACK 不是普通 Source/Sink 的必需能力。
+`TurboFlow::Graph` 已提供 version 1 的统一 inbox vtable 与有界内存 provider：Source 成功接纳后
+provider 拥有 correlation/payload 副本，Graph 通过唯一 claim 借用不可变记录；失败记录只有显式
+retry 才重新可见。该内存实现不提供崩溃恢复，TurboDB inbox 和配置到 provider 的绑定仍由 #118
+继续跟踪，且数据库错误不得触发内存 fallback。
 产品配置以有序 plugins: [{id, version, path}] 清单声明绝对 DLL 路径。PluginHost 只通过
 turbo_flow_plugin_get_api 取得 root vtable，并在插件 load() 前精确核验 ID/版本；任一 DLL
 失败会回滚整个新宿主，不搜索替代 DLL，也不切换静态实现。
