@@ -1,0 +1,340 @@
+name: Protocol network intake
+
+on:
+  push:
+    branches:
+      - master
+      - feat/118-real-protocol-intake
+    paths:
+      - 'ingress/protocol/**'
+      - 'io/cnet/**'
+      - 'turbo_flow/**'
+      - 'cmake/**'
+      - 'presets/**'
+      - 'CMakeLists.txt'
+      - 'CMakeOptions.cmake'
+      - 'CMakePresets.json'
+      - 'CMakeUserPresets.json'
+      - 'vcpkg.json'
+      - '.github/workflows/protocol-network-intake.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'ingress/protocol/**'
+      - 'io/cnet/**'
+      - 'turbo_flow/**'
+      - 'cmake/**'
+      - 'presets/**'
+      - 'CMakeLists.txt'
+      - 'CMakeOptions.cmake'
+      - 'CMakePresets.json'
+      - 'CMakeUserPresets.json'
+      - 'vcpkg.json'
+      - '.github/workflows/protocol-network-intake.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protocol-network-intake-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  VCPKG_COMMIT: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+  SALTS_COMMIT: 2804c2eb809fed4cb89f917f0a8cd00f482abb64
+  SALTS_UTILS_COMMIT: 0b3876018e5bdaed70fecbc0d0863cb394dd6044
+  CHTTP_COMMIT: 6ae1655506d5ddb093ed762dfd8bb8085e3edeba
+  RULESFORGE_COMMIT: 80eda13e90585ed2dad94c9e76574ea9e510eeda
+  ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
+  UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+
+jobs:
+  linux-debug-asan:
+    name: Linux Debug ASan + UBSan focused
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Require read-only token for private SDK dependencies
+        shell: bash
+        env:
+          QIGAO_CI_READ_TOKEN: ${{ secrets.QIGAO_CI_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${QIGAO_CI_READ_TOKEN}" ]]; then
+            echo '::error::QIGAO_CI_READ_TOKEN is required and must have read-only Contents access to qigao/chttp and qigao/RulesForge.'
+            exit 1
+          fi
+
+      - name: Checkout exact TurboFlow head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source identity
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/protocol-intake-evidence"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/protocol-intake-evidence/head.txt"
+          git diff --exit-code
+
+      - name: Checkout pinned Salts
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.SALTS_COMMIT }}
+          path: .ci/deps/salts
+          persist-credentials: false
+
+      - name: Checkout pinned SaltsUtils
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: ${{ env.SALTS_UTILS_COMMIT }}
+          path: .ci/deps/salts-utils
+          persist-credentials: false
+
+      - name: Checkout pinned Chttp
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/chttp
+          ref: ${{ env.CHTTP_COMMIT }}
+          path: .ci/deps/chttp
+          token: ${{ secrets.QIGAO_CI_READ_TOKEN }}
+          persist-credentials: false
+
+      - name: Checkout pinned RulesForge
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/RulesForge
+          ref: ${{ env.RULESFORGE_COMMIT }}
+          path: .ci/deps/rules-forge
+          token: ${{ secrets.QIGAO_CI_READ_TOKEN }}
+          persist-credentials: false
+
+      - name: Checkout pinned vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ env.VCPKG_COMMIT }}
+          path: vcpkg
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify dependency revisions
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git -C .ci/deps/salts rev-parse HEAD)" = "$SALTS_COMMIT"
+          test "$(git -C .ci/deps/salts-utils rev-parse HEAD)" = "$SALTS_UTILS_COMMIT"
+          test "$(git -C .ci/deps/chttp rev-parse HEAD)" = "$CHTTP_COMMIT"
+          test "$(git -C .ci/deps/rules-forge rev-parse HEAD)" = "$RULESFORGE_COMMIT"
+          test "$(git -C vcpkg rev-parse HEAD)" = "$VCPKG_COMMIT"
+          {
+            printf 'salts %s\n' "$SALTS_COMMIT"
+            printf 'salts-utils %s\n' "$SALTS_UTILS_COMMIT"
+            printf 'chttp %s\n' "$CHTTP_COMMIT"
+            printf 'RulesForge %s\n' "$RULESFORGE_COMMIT"
+            printf 'vcpkg %s\n' "$VCPKG_COMMIT"
+          } | tee "$RUNNER_TEMP/protocol-intake-evidence/dependencies.txt"
+
+      - name: Cache vcpkg binary archives
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: turbo-flow-protocol-intake-linux-${{ env.VCPKG_COMMIT }}-v1
+
+      - name: Prepare Linux toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils autoconf automake libtool
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          sudo mkdir -p /opt
+          sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
+
+      - name: Install pinned re2c 4.6 with Unicode tables
+        shell: bash
+        run: bash .ci/deps/salts-utils/cmake/ci/install-re2c.sh
+
+      - name: Build standalone host Lemon
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S .ci/deps/salts-utils/tools/lemon -B "$RUNNER_TEMP/host-lemon" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/host-lemon" --target lemon -j2
+          test -x "$RUNNER_TEMP/host-lemon/lemon"
+
+      - name: Build and install pinned Salts SDK
+        shell: bash
+        working-directory: .ci/deps/salts
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DENABLE_TESTS=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF
+          cmake --build build/linux-gcc-debug --target install -j2
+          test -d "$PROJECT_ROOT/external/pkgs/salts/debug"
+          sudo mkdir -p /opt/salts
+          sudo ln -sfn "$PROJECT_ROOT/external/pkgs/salts/debug" /opt/salts/debug
+
+      - name: Build and install pinned SaltsUtils SDK
+        shell: bash
+        working-directory: .ci/deps/salts-utils
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DENABLE_TESTS=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$RUNNER_TEMP/host-lemon/lemon" \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk/salts-utils-debug"
+          cmake --build build/linux-gcc-debug --target install -j2
+          test -x "$RUNNER_TEMP/sdk/salts-utils-debug/bin/tbe_compiler"
+          sudo mkdir -p /opt/salts-utils
+          sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
+
+      - name: Build and install pinned Chttp SDK
+        shell: bash
+        working-directory: .ci/deps/chttp
+        env:
+          SALTS_ROOT: /opt/salts/debug
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/ci-debug -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_INSTALLED_DIR="$PWD/vcpkg_installed" \
+            -DVCPKG_MANIFEST_MODE=ON \
+            -DVCPKG_OVERLAY_PORTS= \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DENABLE_TESTS=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_OPENAPI=OFF \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk/http-services-debug"
+          cmake --build build/ci-debug --target install -j2
+          test -f "$RUNNER_TEMP/sdk/http-services-debug/lib/cmake/Chttp/ChttpConfig.cmake"
+          sudo mkdir -p /opt/http-services
+          sudo ln -sfn "$RUNNER_TEMP/sdk/http-services-debug" /opt/http-services/debug
+
+      - name: Build and install pinned RulesForge SDK
+        shell: bash
+        working-directory: .ci/deps/rules-forge
+        env:
+          SALTS_ROOT: /opt/salts/debug
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/ci-debug -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_INSTALLED_DIR="$PWD/vcpkg_installed" \
+            -DVCPKG_MANIFEST_MODE=ON \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DENABLE_TESTS=OFF \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk/rules-forge-debug"
+          cmake --build build/ci-debug --target install -j2
+          test -f "$RUNNER_TEMP/sdk/rules-forge-debug/lib/cmake/RulesForge/RulesForgeConfig.cmake"
+          sudo mkdir -p /opt/rules_forge
+          sudo ln -sfn "$RUNNER_TEMP/sdk/rules-forge-debug" /opt/rules_forge/debug
+
+      - name: Configure exact-head TurboFlow with ASan and UBSan
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -x /opt/salts-utils/debug/bin/tbe_compiler
+          cmake --preset linux-dev-user \
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON \
+            -DBUILD_BENCHMARKS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/configure.log"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          commands = json.loads(Path('build/linux-gcc-debug/compile_commands.json').read_text())
+          required = {
+              'flow_protocol_network_intake_config.c',
+              'flow_protocol_network_intake_sink.c',
+              'flow_protocol_network_intake.c',
+              'test_protocol_network_intake.c',
+              'test_protocol_network_jtt808.c',
+              'test_protocol_network_coap.c',
+          }
+          found = set()
+          for entry in commands:
+              name = Path(entry['file']).name
+              if name not in required:
+                  continue
+              command = entry.get('command', ' '.join(entry.get('arguments', [])))
+              assert '-fsanitize=address' in command, command
+              assert '-fsanitize=undefined' in command, command
+              found.add(name)
+          assert found == required, (found, required)
+          PY
+
+      - name: Build focused protocol-network targets
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-gcc-debug --target \
+            test_protocol_network_intake_config \
+            test_protocol_network_intake_core \
+            test_protocol_network_intake_edges \
+            test_protocol_network_intake \
+            test_protocol_network_jtt808 \
+            test_protocol_network_coap \
+            -j2 2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/build.log"
+
+      - name: Run focused protocol-network tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error \
+            -R '^(test_protocol_network_intake_config|test_protocol_network_intake_core|test_protocol_network_intake_edges|test_protocol_network_intake|test_protocol_network_jtt808|test_protocol_network_coap)$' \
+            --output-on-failure \
+            --output-junit "$RUNNER_TEMP/protocol-intake-evidence/focused.xml" \
+            2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/focused.log"
+
+      - name: Verify committed source was not modified
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code
+
+      - name: Upload exact-head evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-network-intake-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/protocol-intake-evidence/
+            build/linux-gcc-debug/compile_commands.json
+            build/linux-gcc-debug/CMakeCache.txt
+            build/linux-gcc-debug/Testing/Temporary/
