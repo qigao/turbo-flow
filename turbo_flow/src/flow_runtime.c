@@ -545,6 +545,43 @@ int turbo_flow_stop(turbo_flow_t *flow) {
   return SALTS_OK;
 }
 
+int flow_mark_execution_region_from_stage(const turbo_flow_t *flow, uint8_t *reachable,
+                                          uint32_t *worklist, size_t worklist_cap,
+                                          uint32_t origin_stage) {
+  size_t head = 0u;
+  size_t tail = 0u;
+  size_t stage_count;
+
+  if (!flow || !reachable || !worklist) return SALTS_EINVAL;
+  stage_count = vec_size(&flow->compiled_plan.nodes);
+  if (origin_stage >= stage_count || worklist_cap < stage_count) return SALTS_EINVAL;
+  reachable[origin_stage] = 1u;
+  worklist[tail++] = origin_stage;
+
+  while (head < tail) {
+    const uint32_t current = worklist[head++];
+    const flow_runtime_node_plan_t *node =
+        (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes, current);
+    if (!node || node->outgoing_begin > vec_size(&flow->compiled_plan.edges) ||
+        node->outgoing_count > vec_size(&flow->compiled_plan.edges) - node->outgoing_begin) {
+      return SALTS_EPROTO;
+    }
+    if (current != origin_stage && (node->flags & FLOW_RUNTIME_NODE_BUFFER) != 0u) continue;
+    for (uint32_t offset = 0u; offset < node->outgoing_count; ++offset) {
+      const flow_runtime_edge_plan_t *edge = (const flow_runtime_edge_plan_t *)vec_at_const(
+          &flow->compiled_plan.edges, node->outgoing_begin + offset);
+      if (!edge || edge->from_stage != current || edge->to_stage >= stage_count) {
+        return SALTS_EPROTO;
+      }
+      if (reachable[edge->to_stage]) continue;
+      if (tail >= worklist_cap) return SALTS_ENOSPC;
+      reachable[edge->to_stage] = 1u;
+      worklist[tail++] = edge->to_stage;
+    }
+  }
+  return SALTS_OK;
+}
+
 static int flow_cancel_emission_descendant_reorders(turbo_flow_t *flow, uint32_t stage_index,
                                                     uint64_t *stage_sequences, size_t stage_count) {
   uint8_t stack_reachable[FLOW_RUNTIME_STACK_STAGE_CAPACITY] = {0};
@@ -617,12 +654,15 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   skipped_queue = workspace.skipped_queue;
   stage_sequences = workspace.stage_sequences;
 
-  rc = flow_mark_reachable_from_stage(flow, reachable, queue, stage_count, origin_stage);
+  rc = flow_mark_execution_region_from_stage(flow, reachable, queue, stage_count, origin_stage);
   if (rc != SALTS_OK) goto cleanup;
   for (size_t i = 0; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
-    if (!reachable[i] || i == origin_stage || stage->is_source || stage->is_port) continue;
+    if (!reachable[i] || i == origin_stage || stage->is_source || stage->is_port ||
+        stage->is_buffer) {
+      continue;
+    }
     rc = flow_dispatch_validate_stage(flow, (uint32_t)i);
     if (rc != SALTS_OK) goto cleanup;
   }
@@ -632,7 +672,10 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   for (size_t i = 0; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
-    if (!reachable[i] || i == origin_stage || stage->is_source || stage->is_port) continue;
+    if (!reachable[i] || i == origin_stage || stage->is_source || stage->is_port ||
+        stage->is_buffer) {
+      continue;
+    }
     stage_sequences[i] = sequence;
     if (stage->reorder.capacity > 0u) {
       rc = flow_reorder_reserve(flow, (uint32_t)i, &stage_sequences[i]);
@@ -670,6 +713,10 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
         (flow_stage_plan_impl_t *)vec_at(&flow->stages, (size_t)stage_index);
 
     if (done[stage_index]) continue;
+    if (stage->is_buffer) {
+      done[stage_index] = 1u;
+      continue;
+    }
     if (stage->is_port) {
       memset(&completion, 0, sizeof(completion));
       rc = flow_entry_header_init(flow, &completion.entry, stage_index, FLOW_DATA_SEGMENT_DIRECT,

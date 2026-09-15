@@ -178,7 +178,8 @@ typedef enum flow_runtime_node_flags_e {
   FLOW_RUNTIME_NODE_PORT = 1u << 1,
   FLOW_RUNTIME_NODE_WORKER_POOL = 1u << 2,
   FLOW_RUNTIME_NODE_FANOUT = 1u << 3,
-  FLOW_RUNTIME_NODE_FANIN = 1u << 4
+  FLOW_RUNTIME_NODE_FANIN = 1u << 4,
+  FLOW_RUNTIME_NODE_BUFFER = 1u << 5
 } flow_runtime_node_flags_t;
 
 typedef struct flow_runtime_node_plan_s {
@@ -774,6 +775,9 @@ int flow_execute_coro_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *stage,
 TURBO_FLOW_C_API int flow_mark_reachable_from_stage(const turbo_flow_t *flow, uint8_t *reachable,
                                                     uint32_t *worklist, size_t worklist_cap,
                                                     uint32_t stage_index);
+TURBO_FLOW_C_API int flow_mark_execution_region_from_stage(
+    const turbo_flow_t *flow, uint8_t *reachable, uint32_t *worklist,
+    size_t worklist_cap, uint32_t origin_stage);
 int flow_dispatch_validate_stage(turbo_flow_t *flow, uint32_t stage_index);
 int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg_t *msg,
                         uint64_t sequence, uint64_t msg_id, flow_stage_completion_t *completion,
