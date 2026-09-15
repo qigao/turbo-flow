@@ -90,6 +90,13 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
+  test_flow_durable_buffer
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_durable_buffer.c
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_durable_buffer PROPERTIES LABELS "graph;core" TIMEOUT 30)
+
+cmake_add_test(
   test_flow_run
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_run.c
           ${CMAKE_CURRENT_SOURCE_DIR}/flow_run_header_cpp.cpp
