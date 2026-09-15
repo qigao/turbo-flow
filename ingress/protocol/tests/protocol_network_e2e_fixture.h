@@ -55,7 +55,7 @@ typedef struct protocol_network_e2e_fixture_s {
 int protocol_network_e2e_jtt808_init(protocol_network_e2e_fixture_t *fixture,
                                      const char *cnet_module, const char *jtt808_module);
 int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
-                                  const char *cnet_module, const char *coap_module);
+                                   const char *cnet_module, const char *coap_module);
 int protocol_network_e2e_start(protocol_network_e2e_fixture_t *fixture,
                                turbo_flow_protocol_network_intake_snapshot_t *snapshot);
 int protocol_network_e2e_tcp_connect(protocol_network_e2e_fixture_t *fixture,
@@ -63,8 +63,8 @@ int protocol_network_e2e_tcp_connect(protocol_network_e2e_fixture_t *fixture,
 int protocol_network_e2e_tcp_send(protocol_network_e2e_fixture_t *fixture, const void *data,
                                   size_t size);
 int protocol_network_e2e_tcp_close(protocol_network_e2e_fixture_t *fixture, uint32_t timeout_ms);
-int protocol_network_e2e_udp_send(protocol_network_e2e_fixture_t *fixture, const char *endpoint,
-                                  const void *data, size_t size);
+int protocol_network_e2e_udp_send_frame(protocol_network_e2e_fixture_t *fixture,
+                                        const char *endpoint, const void *data, size_t size);
 int protocol_network_e2e_poll(protocol_network_e2e_fixture_t *fixture, uint32_t timeout_ms,
                               turbo_flow_protocol_network_intake_snapshot_t *snapshot);
 int protocol_network_e2e_business_request_and_drive(
