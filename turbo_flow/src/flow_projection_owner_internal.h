@@ -1,6 +1,7 @@
 #ifndef FLOW_PROJECTION_OWNER_INTERNAL_H
 #define FLOW_PROJECTION_OWNER_INTERNAL_H
 #include "turbo_flow_projection.h"
+#include "turbo_flow_durable_buffer.h"
 
 typedef struct flow_msg_projection_s {
   uint64_t magic;
@@ -22,6 +23,14 @@ typedef struct flow_msg_projection_s {
   void *result_ctx;
   turbo_flow_projection_owner_t *result_owner;
   int claim_active;
+  int has_durable_identity;
+  size_t durable_source_id_len;
+  size_t durable_admission_id_len;
+  size_t durable_correlation_len;
+  uint64_t durable_source_sequence;
+  char durable_source_id[TURBO_FLOW_DURABLE_SOURCE_ID_MAX + 1u];
+  char durable_admission_id[TURBO_FLOW_DURABLE_ADMISSION_ID_MAX + 1u];
+  char durable_correlation[TURBO_FLOW_DURABLE_CORRELATION_MAX + 1u];
 } flow_msg_projection_t;
 
 struct turbo_flow_result_claim_s {

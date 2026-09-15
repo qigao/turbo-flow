@@ -7,7 +7,8 @@
 #define FLOW_MSG_PROJECTION_MAGIC UINT64_C(0x544650524f4a5631)
 
 static int flow_msg_projection_empty(const flow_msg_projection_t *projection) {
-  return projection && !projection->descriptor && !projection->value && !projection->result_value;
+  return projection && !projection->descriptor && !projection->value && !projection->result_value &&
+         !projection->has_durable_identity;
 }
 
 static turbo_flow_projection_owner_t *flow_msg_result_release_value(flow_msg_projection_t *p) {
@@ -55,6 +56,80 @@ static const flow_msg_projection_t *flow_msg_projection(const turbo_flow_msg_t *
   if (!msg || !msg->_content_handle) return NULL;
   projection = (const flow_msg_projection_t *)msg->_content_handle;
   return projection->magic == FLOW_MSG_PROJECTION_MAGIC ? projection : NULL;
+}
+
+static int flow_msg_durable_identity_validate(const turbo_flow_durable_identity_t *identity) {
+  if (!identity || identity->size != sizeof(*identity) ||
+      identity->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION) {
+    return SALTS_EINVAL;
+  }
+  if (!identity->source_id.data || identity->source_id.len == 0u ||
+      !identity->admission_id.data || identity->admission_id.len == 0u ||
+      (!identity->correlation.data && identity->correlation.len != 0u)) {
+    return SALTS_EINVAL;
+  }
+  if (identity->source_id.len > TURBO_FLOW_DURABLE_SOURCE_ID_MAX ||
+      identity->admission_id.len > TURBO_FLOW_DURABLE_ADMISSION_ID_MAX ||
+      identity->correlation.len > TURBO_FLOW_DURABLE_CORRELATION_MAX) {
+    return SALTS_ERANGE;
+  }
+  return SALTS_OK;
+}
+
+int turbo_flow_msg_set_durable_identity(turbo_flow_msg_t *msg,
+                                        const turbo_flow_durable_identity_t *identity) {
+  flow_msg_projection_t *projection;
+  int rc;
+
+  if (!msg) return SALTS_EINVAL;
+  rc = flow_msg_durable_identity_validate(identity);
+  if (rc != SALTS_OK) return rc;
+  projection = (flow_msg_projection_t *)flow_msg_projection(msg);
+  if (projection && projection->claim_active) return SALTS_EBUSY;
+  if (!projection) {
+    projection = (flow_msg_projection_t *)calloc(1, sizeof(*projection));
+    if (!projection) return SALTS_ENOMEM;
+    projection->magic = FLOW_MSG_PROJECTION_MAGIC;
+    msg->_content_handle = projection;
+  }
+
+  memcpy(projection->durable_source_id, identity->source_id.data, identity->source_id.len);
+  projection->durable_source_id[identity->source_id.len] = '\0';
+  memcpy(projection->durable_admission_id, identity->admission_id.data,
+         identity->admission_id.len);
+  projection->durable_admission_id[identity->admission_id.len] = '\0';
+  if (identity->correlation.len != 0u) {
+    memcpy(projection->durable_correlation, identity->correlation.data,
+           identity->correlation.len);
+  }
+  projection->durable_correlation[identity->correlation.len] = '\0';
+  projection->durable_source_id_len = identity->source_id.len;
+  projection->durable_admission_id_len = identity->admission_id.len;
+  projection->durable_correlation_len = identity->correlation.len;
+  projection->durable_source_sequence = identity->source_sequence;
+  projection->has_durable_identity = 1;
+  return SALTS_OK;
+}
+
+int turbo_flow_msg_durable_identity(const turbo_flow_msg_t *msg,
+                                    turbo_flow_durable_identity_t *out) {
+  const flow_msg_projection_t *projection;
+
+  if (!msg || !out || out->size != sizeof(*out) ||
+      out->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION) {
+    return SALTS_EINVAL;
+  }
+  projection = flow_msg_projection(msg);
+  if (!projection || !projection->has_durable_identity) return SALTS_ENOENT;
+
+  out->source_id = vstr_from_buf(projection->durable_source_id,
+                                 projection->durable_source_id_len);
+  out->admission_id = vstr_from_buf(projection->durable_admission_id,
+                                    projection->durable_admission_id_len);
+  out->correlation = vstr_from_buf(projection->durable_correlation,
+                                   projection->durable_correlation_len);
+  out->source_sequence = projection->durable_source_sequence;
+  return SALTS_OK;
 }
 
 static int flow_msg_descriptor_accepts_schema(const turbo_flow_content_descriptor_t *descriptor,

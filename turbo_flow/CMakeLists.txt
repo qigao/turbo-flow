@@ -39,6 +39,7 @@ list(REMOVE_ITEM TURBO_FLOW_SOURCES
 set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_export.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_durable_buffer.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_inbox.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_inbox_source.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_projection.h
