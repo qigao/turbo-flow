@@ -20,6 +20,8 @@ typedef struct protocol_network_e2e_tcp_probe_s {
 typedef struct protocol_network_e2e_udp_probe_s {
   size_t received;
   size_t bytes;
+  size_t sent;
+  int last_send_status;
   uint8_t last_payload[4096];
   size_t last_payload_size;
 } protocol_network_e2e_udp_probe_t;
@@ -41,6 +43,7 @@ typedef struct protocol_network_e2e_fixture_s {
   cnet_datagram receiver;
   int receiver_initialized;
   uint16_t receiver_port;
+  uint64_t next_udp_tag;
   cnet_client client;
   int client_initialized;
   cnet_connection connection;
@@ -51,6 +54,8 @@ typedef struct protocol_network_e2e_fixture_s {
 
 int protocol_network_e2e_jtt808_init(protocol_network_e2e_fixture_t *fixture,
                                      const char *cnet_module, const char *jtt808_module);
+int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
+                                  const char *cnet_module, const char *coap_module);
 int protocol_network_e2e_start(protocol_network_e2e_fixture_t *fixture,
                                turbo_flow_protocol_network_intake_snapshot_t *snapshot);
 int protocol_network_e2e_tcp_connect(protocol_network_e2e_fixture_t *fixture,
@@ -58,6 +63,8 @@ int protocol_network_e2e_tcp_connect(protocol_network_e2e_fixture_t *fixture,
 int protocol_network_e2e_tcp_send(protocol_network_e2e_fixture_t *fixture, const void *data,
                                   size_t size);
 int protocol_network_e2e_tcp_close(protocol_network_e2e_fixture_t *fixture, uint32_t timeout_ms);
+int protocol_network_e2e_udp_send(protocol_network_e2e_fixture_t *fixture, const char *endpoint,
+                                  const void *data, size_t size);
 int protocol_network_e2e_poll(protocol_network_e2e_fixture_t *fixture, uint32_t timeout_ms,
                               turbo_flow_protocol_network_intake_snapshot_t *snapshot);
 int protocol_network_e2e_business_request_and_drive(
