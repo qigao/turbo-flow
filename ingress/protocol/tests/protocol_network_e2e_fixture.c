@@ -40,9 +40,9 @@ static void protocol_network_e2e_udp_receive(void *user, cnet_datagram *datagram
   probe->bytes += view->size;
 }
 
-static void protocol_network_e2e_udp_send(void *user, cnet_datagram *datagram,
-                                          const cnet_datagram_peer *peer, size_t size, int status,
-                                          uint64_t tag) {
+static void protocol_network_e2e_udp_send_terminal(void *user, cnet_datagram *datagram,
+                                                   const cnet_datagram_peer *peer, size_t size,
+                                                   int status, uint64_t tag) {
   (void)user;
   (void)datagram;
   (void)peer;
@@ -103,7 +103,7 @@ static int protocol_network_e2e_receiver_open(protocol_network_e2e_fixture_t *fi
   config.max_datagram_bytes = sizeof(fixture->udp.last_payload);
   config.receive_buffer_bytes = sizeof(fixture->udp.last_payload);
   config.observer.on_receive = protocol_network_e2e_udp_receive;
-  config.observer.on_send = protocol_network_e2e_udp_send;
+  config.observer.on_send = protocol_network_e2e_udp_send_terminal;
   config.observer.user = &fixture->udp;
   rc = cnet_datagram_init(&fixture->receiver, &config);
   if (rc != SALTS_OK) return rc;
