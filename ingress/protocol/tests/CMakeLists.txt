@@ -153,7 +153,7 @@ set_tests_properties(test_protocol_network_jtt808
 cmake_add_test(
   test_protocol_network_coap
   SOURCES test_protocol_network_coap.c protocol_network_e2e_fixture.c
-          protocol_network_e2e_coap_fixture.c
+          protocol_network_coap_fixture.c
   LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost Salts::CNet Salts::TinyTest
   DEFS
     FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
