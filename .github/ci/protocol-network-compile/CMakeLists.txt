@@ -82,10 +82,14 @@ target_link_libraries(protocol_network_tests PRIVATE Salts::Core Salts::CFlow Sa
 
 add_library(graph_durable_buffer_contract OBJECT
     "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/flow_plan_type_probe.c"
-    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_durable_buffer.c")
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_durable_buffer.c"
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_durable_identity.c"
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/durable_identity_header_cpp.cpp")
 target_include_directories(graph_durable_buffer_contract PRIVATE ${_tf_include_dirs})
 target_compile_definitions(graph_durable_buffer_contract PRIVATE TURBO_FLOW_BUILD)
-target_compile_options(graph_durable_buffer_contract PRIVATE $<$<COMPILE_LANGUAGE:C>:${_tf_c_options}>)
+target_compile_options(graph_durable_buffer_contract PRIVATE
+    $<$<COMPILE_LANGUAGE:C>:${_tf_c_options}>
+    $<$<COMPILE_LANGUAGE:CXX>:${_tf_cxx_options}>)
 target_link_libraries(graph_durable_buffer_contract PRIVATE Salts::Core Salts::CFlow)
 
 add_library(protocol_network_cpp_contract OBJECT
