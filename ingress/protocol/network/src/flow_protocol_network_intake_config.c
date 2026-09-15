@@ -215,9 +215,9 @@ static int intake_validate_bounds(const flow_protocol_network_intake_settings_t 
                                   turbo_flow_config_error_t *error) {
   size_t required_claims;
   size_t required_bytes;
-  if (settings->max_sessions > transport_capacity)
+  if (settings->max_sessions != transport_capacity)
     return intake_config_field_error(error, SALTS_ERANGE, intake_adapter_name, "max_sessions",
-                                     "protocol sessions exceed transport capacity");
+                                     "protocol sessions must equal transport capacity");
   if (settings->max_sessions == SIZE_MAX ||
       settings->max_frame_size > SIZE_MAX / (settings->max_sessions + 1u))
     return intake_config_field_error(error, SALTS_ERANGE, intake_adapter_name, "max_frame_size",
