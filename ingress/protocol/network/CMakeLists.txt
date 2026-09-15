@@ -36,4 +36,11 @@ target_link_libraries(
   PRIVATE tf_protocol_network_intake_core TurboFlow::CNetAdapter
           TurboFlow::ProtocolIngressInbox xxHash::xxhash)
 
+install(
+  TARGETS tf_protocol_network_intake
+  EXPORT TurboFlowTargets
+  RUNTIME DESTINATION bin
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  INCLUDES DESTINATION include)
 install(FILES include/turbo_flow_protocol_network_intake.h DESTINATION include)
