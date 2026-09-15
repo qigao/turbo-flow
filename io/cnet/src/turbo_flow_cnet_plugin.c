@@ -168,6 +168,93 @@ static int cnet_plugin_boundary_snapshot(void *ctx, turbo_flow_managed_boundary_
   return SALTS_OK;
 }
 
+static int cnet_plugin_endpoint_format(char *out, size_t capacity, const char *scheme,
+                                       const char *host, uint16_t port) {
+  int written;
+  if (!out || capacity == 0u || !scheme || !scheme[0] || !host || !host[0]) return SALTS_EINVAL;
+  written = strchr(host, ':')
+                ? snprintf(out, capacity, "%s://[%s]:%u", scheme, host, (unsigned)port)
+                : snprintf(out, capacity, "%s://%s:%u", scheme, host, (unsigned)port);
+  if (written < 0 || (size_t)written >= capacity) return SALTS_ERANGE;
+  return SALTS_OK;
+}
+
+static turbo_flow_connection_state_t
+cnet_plugin_source_connection_state(const cnet_plugin_owner_t *owner) {
+  if (!owner) return TURBO_FLOW_CONNECTION_FAILED;
+  switch (owner->state) {
+  case TURBO_FLOW_MANAGED_BOUNDARY_STARTING:
+    return TURBO_FLOW_CONNECTION_CONNECTING;
+  case TURBO_FLOW_MANAGED_BOUNDARY_RUNNING:
+    return TURBO_FLOW_CONNECTION_READY;
+  case TURBO_FLOW_MANAGED_BOUNDARY_QUIESCING:
+  case TURBO_FLOW_MANAGED_BOUNDARY_DRAINING:
+  case TURBO_FLOW_MANAGED_BOUNDARY_STOPPING:
+    return TURBO_FLOW_CONNECTION_CLOSING;
+  case TURBO_FLOW_MANAGED_BOUNDARY_FAILED:
+    return TURBO_FLOW_CONNECTION_FAILED;
+  default:
+    return TURBO_FLOW_CONNECTION_STOPPED;
+  }
+}
+
+static int cnet_plugin_source_connection_snapshot(void *ctx, turbo_flow_connection_snapshot_t *out) {
+  cnet_plugin_owner_t *owner = (cnet_plugin_owner_t *)ctx;
+  turbo_flow_connection_snapshot_t snapshot;
+  int rc;
+  if (!owner || !out) return SALTS_EINVAL;
+  memset(&snapshot, 0, sizeof(snapshot));
+  snapshot.adapter_name = owner->name;
+  snapshot.adapter_kind = TURBO_FLOW_ADAPTER_KIND_SOCKET;
+  snapshot.direction = TURBO_FLOW_ADAPTER_INPUT;
+  snapshot.state = cnet_plugin_source_connection_state(owner);
+  snapshot.last_status = owner->last_status;
+
+  if (owner->config.kind == TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE) {
+    turbo_flow_cnet_listener_source_snapshot_t source =
+        TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    uint16_t port = owner->config.listener.port;
+    snapshot.connection_limit = (uint64_t)owner->config.max_connections;
+    if (owner->handle.listener_source) {
+      rc = turbo_flow_cnet_listener_source_snapshot(owner->handle.listener_source, &source);
+      if (rc != SALTS_OK) return rc;
+      port = source.bound_port;
+      snapshot.connections_current = (uint64_t)source.active_connections;
+      snapshot.in_flight_messages = source.receive_pending ? 1u : 0u;
+      snapshot.last_status = source.status;
+    }
+    rc = cnet_plugin_endpoint_format(snapshot.endpoint, sizeof(snapshot.endpoint), "tcp",
+                                     owner->config.listener.host, port);
+    if (rc != SALTS_OK) return rc;
+    *out = snapshot;
+    return SALTS_OK;
+  }
+
+  if (owner->config.kind == TURBO_FLOW_CNET_PLUGIN_PACKET_SOURCE) {
+    turbo_flow_cnet_packet_source_snapshot_t source = TURBO_FLOW_CNET_PACKET_SOURCE_SNAPSHOT_INIT;
+    uint16_t port = owner->config.endpoint.datagram.port;
+    const char *scheme = owner->config.endpoint.protocol == CNET_PACKET_UDP ? "udp" : "kcp";
+    snapshot.connection_limit = (uint64_t)owner->config.endpoint.session_capacity;
+    if (owner->handle.packet_source) {
+      rc = turbo_flow_cnet_packet_source_snapshot(owner->handle.packet_source, &source);
+      if (rc != SALTS_OK) return rc;
+      port = source.bound_port;
+      snapshot.connections_current = source.sessions_opened >= source.sessions_closed
+                                         ? source.sessions_opened - source.sessions_closed
+                                         : 0u;
+      snapshot.in_flight_messages = (uint64_t)source.queue_depth;
+      snapshot.last_status = source.status;
+    }
+    rc = cnet_plugin_endpoint_format(snapshot.endpoint, sizeof(snapshot.endpoint), scheme,
+                                     owner->config.endpoint.datagram.host, port);
+    if (rc != SALTS_OK) return rc;
+    *out = snapshot;
+    return SALTS_OK;
+  }
+
+  return SALTS_ENOTSUP;
+}
+
 static int cnet_plugin_source_start(void *ctx, turbo_flow_t *flow,
                                     const turbo_flow_stage_plan_t *stage) {
   cnet_plugin_owner_t *owner = (cnet_plugin_owner_t *)ctx;
@@ -290,6 +377,9 @@ static int cnet_plugin_register_source(cnet_plugin_owner_t *owner, turbo_flow_t 
   ops.start = cnet_plugin_source_start;
   ops.stop = cnet_plugin_source_stop;
   ops.shutdown = cnet_plugin_source_shutdown;
+  if (owner->config.kind == TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE ||
+      owner->config.kind == TURBO_FLOW_CNET_PLUGIN_PACKET_SOURCE)
+    ops.connection_snapshot = cnet_plugin_source_connection_snapshot;
   schema.kind = TURBO_FLOW_ADAPTER_KIND_SOCKET;
   schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
   schema.direction = TURBO_FLOW_ADAPTER_INPUT;
