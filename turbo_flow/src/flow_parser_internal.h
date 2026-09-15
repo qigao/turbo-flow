@@ -115,6 +115,7 @@ int flow_parse_set_exec_count(flow_parse_ctx_t *ctx, flow_exec_options_t *option
                               flow_token_t token, int field);
 
 int flow_parse_add_source(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec);
+int flow_parse_add_buffer(flow_parse_ctx_t *ctx, flow_token_t name, flow_token_t resource);
 int flow_parse_add_stage(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec);
 int flow_parse_add_port(flow_parse_ctx_t *ctx, flow_token_t name, int is_output);
 int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t target);

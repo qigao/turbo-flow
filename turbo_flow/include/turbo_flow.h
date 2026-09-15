@@ -1777,6 +1777,7 @@ typedef struct turbo_flow_event_time_window_provider_registration_s {
 typedef struct turbo_flow_stage_plan_s {
   const char *name;
   int is_source;
+  int is_buffer;
   const char *adapter_name;
   turbo_flow_data_strategy_t data_strategy;
   uint32_t data_worker_count;

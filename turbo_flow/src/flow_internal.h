@@ -30,6 +30,7 @@ typedef struct flow_stage_plan_impl_s {
   uint32_t line;
   uint32_t column;
   int is_source;
+  int is_buffer;
   int is_port;
   int is_port_output;
   int async_emitting;
