@@ -2,75 +2,81 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 用安装态 `TurboFlow::ProtocolNetworkIntake` 完成 JT/T 808/TCP 与 CoAP/UDP 两条真实 Source -> ProtocolSource -> ProtocolInbox -> Inbox -> shared business Graph -> configured CNet Sink 路径，并保持 storage-before-business、bounded backpressure、generation fencing 和 no-fallback 语义。
+**Goal:** Deliver installed `TurboFlow::ProtocolNetworkIntake` support for real JT/T 808/TCP and CoAP/UDP input, with durable Inbox admission before business Graph execution, bounded backpressure, transport-generation fencing, deterministic replay identity, and configured CNet output.
 
-**Architecture:** 新增一个位于 Graph/CNet/Protocol/PluginHost 之上的高层 owner。它从同一 retained PluginHost catalog 中解析并 materialize 配置的 CNet Source Product owner、打开配置的 protocol provider，把 CNet message 送入 internal managed async-terminal intake Sink；完整 frame 只有在 `ProtocolInbox` admission 成功后才完成对应 async claim。business Graph 仍只由现有 `turbo_flow_inbox_source_t` 驱动，CNet datagram Sink 仍由普通 plugin generation materialize。
+**Architecture:** `ProtocolNetworkIntake` sits above Graph, PluginHost, CNetAdapter, ProtocolIngress, and ProtocolIngressInbox. It retains one PluginHost catalog snapshot, materializes exactly one configured CNet Source Product owner, opens exactly one configured protocol owner, terminates a two-stage intake Flow with a built-in managed async-terminal Sink, and feeds decoded messages only to the caller-selected Inbox. The post-Inbox business Flow remains an ordinary plugin generation driven by `turbo_flow_inbox_source_t` and a configured CNet datagram Sink.
 
-**Tech Stack:** C11/C17、C++17 header probes、TurboFlow Graph/PluginHost、Salts CFlow/CNet/DataBind、TurboDB ORM/SQLite、xxHash3-128、TinyTest、CMake presets。
+**Tech Stack:** C11/C17, C++17 header probes, TurboFlow Graph/PluginHost, Salts CFlow/CNet/DataBind, TurboDB ORM/SQLite, xxHash3-128, TinyTest, CMake presets.
 
 **Spec:** `docs/superpowers/specs/2026-09-15-issue-118-real-protocol-intake-design.md`
 
 ## Global Constraints
 
-- 执行前先使用 `superpowers:using-git-worktrees` 创建/确认隔离工作区；实现分支从批准 spec 的 exact head 开始。
-- 只支持 #118 已批准的两组 v1 pairing：`jtt808 + cnet.listener_source(TCP)` 与 `coap + cnet.packet_source(packet_mode=udp)`；KCP/secure-KCP 必须在 preflight fail closed。
-- 不修改 Inbox v2 ABI/schema，不新增 database->memory fallback，不恢复 protocol->Graph 直连路径。
-- 不扩 PluginHost root ABI，不扩 generic Product owner vtable，不增加 raw-feed public API。
-- `ProtocolNetworkIntake` 只拥有 intake plumbing Flow、CNet Source Product owner、protocol owner/registry、ProtocolSource/ProtocolInbox、parser/pending-claim state；它借用 caller-owned Inbox。
-- `resolved` 只在 create/preflight 期间借用并复制所需字段；catalog snapshot 必须 retain 到所有 Source/protocol callback 完全终止。
-- partial TCP bytes 可在复制进 bounded parser buffer 后完成 upstream async claim；包含完整但尚未写入 Inbox 的 frame 不得提前完成 claim。
-- backpressure 时 `ProtocolNetworkIntake::poll()` 不再调用 CNet Source Product owner `poll()`；只做 documented empty-feed retry 与 FIFO pending-claim drain。
-- production positive tests 必须使用真实 CNet Source/Sink、真实 protocol DLL、真实 memory/TurboDB Inbox；fixture 只能用于 focused contract/fault tests。
-- 不使用 legacy alias、兼容目录、静态替代 provider、候选 DLL 搜索或 CMake/runtime fallback。
-- 每个 task 先提交 RED，再只做该 task 的最小 GREEN；相邻失败不顺手修。
+- Before implementation, use `superpowers:using-git-worktrees`; create the implementation worktree from the exact reviewed plan head, not an older master/spec head.
+- Supported v1 pairings are only `jtt808 + cnet.listener_source` and `coap + cnet.packet_source(packet_mode=udp)`.
+- ProtocolNetworkIntake v1 rejects KCP/secure-KCP before native network side effects.
+- Do not change Inbox v2 ABI/schema and do not add database-to-memory fallback.
+- Do not restore protocol-to-business-Graph direct publication.
+- Do not extend PluginHost root ABI, generic Product-owner ABI, or add a raw-feed public API.
+- `resolved` is borrowed only during create; the caller-owned Inbox is borrowed until intake destruction; every required string/value is copied.
+- The catalog snapshot remains retained until the CNet Source owner and protocol owner/registry are fully destroyed.
+- Partial TCP bytes may complete their async claim only after ProtocolSource copied them into bounded parser storage. A complete frame blocked on Inbox capacity keeps its async claim live.
+- While storage is blocked, public `poll()` retries retained protocol work and must not call the CNet Source Product owner `poll()`; `snapshot.source_polls` proves this invariant.
+- Durable v1 `timestamp_ns` is exactly zero so exact network replay produces an identical Inbox record. Local arrival time belongs to observability, not durable identity.
+- Positive end-to-end tests use real CNet Source/Sink owners, real JT/T808 or CoAP DLLs, and real memory/TurboDB Inbox providers.
+- Fixture plugins are allowed only for focused lifecycle/fault tests.
+- Tasks 1–5 and 8–9 follow RED→GREEN. Tasks 6–7 are real-network acceptance gates over the implementation from Tasks 1–5; if they are already GREEN, do not invent speculative production changes.
+- Each commit contains only the task's scoped test/production changes. Do not fix unrelated failures.
 
 ---
 
-## File Structure
+## File Map
 
 ### New production files
 
-- `ingress/protocol/network/CMakeLists.txt` — internal core + installed `tf_protocol_network_intake` target。
-- `ingress/protocol/network/include/turbo_flow_protocol_network_intake.h` — size/versioned public owner API。
-- `ingress/protocol/network/src/flow_protocol_network_intake_internal.h` — private settings、sink、metrics contracts。
-- `ingress/protocol/network/src/flow_protocol_network_intake_config.c` — exact `protocol.intake` + Source config/topology preflight。
-- `ingress/protocol/network/src/flow_protocol_network_intake_sink.c` — async-terminal claim ownership、parser session mapping、identity、retry queue。
-- `ingress/protocol/network/src/flow_protocol_network_intake.c` — catalog/provider assembly、public lifecycle、Source owner poll ownership。
+- `ingress/protocol/network/CMakeLists.txt`
+- `ingress/protocol/network/include/turbo_flow_protocol_network_intake.h`
+- `ingress/protocol/network/src/flow_protocol_network_intake_internal.h`
+- `ingress/protocol/network/src/flow_protocol_network_intake_config.c`
+- `ingress/protocol/network/src/flow_protocol_network_intake_sink.c`
+- `ingress/protocol/network/src/flow_protocol_network_intake.c`
 
-### New test/support files
+### New tests/support
 
-- `ingress/protocol/tests/test_protocol_network_intake_config.c` — internal exact-config/topology RED/GREEN。
-- `ingress/protocol/tests/test_protocol_network_intake_core.c` — async Sink、partial frame、capacity retry、generation tests。
-- `ingress/protocol/tests/test_protocol_network_intake.c` — public owner ABI/lifecycle/catalog rollback tests。
-- `ingress/protocol/tests/protocol_network_intake_header_cpp.cpp` — installed/public C++ header probe。
-- `ingress/protocol/tests/protocol_network_source_fixture.c` — canonical-export transactional Source fixture for focused lifecycle faults only。
+- `ingress/protocol/tests/test_protocol_network_intake_config.c`
+- `ingress/protocol/tests/test_protocol_network_intake_core.c`
+- `ingress/protocol/tests/test_protocol_network_intake.c`
+- `ingress/protocol/tests/protocol_network_intake_header_cpp.cpp`
+- `ingress/protocol/tests/protocol_network_source_fixture.c`
 - `ingress/protocol/tests/protocol_network_e2e_fixture.h`
-- `ingress/protocol/tests/protocol_network_e2e_fixture.c` — cross-platform socket/config/business-driver harness shared by real network tests。
-- `ingress/protocol/tests/test_protocol_network_jtt808.c` — real fragmented TCP/JT808 path。
-- `ingress/protocol/tests/test_protocol_network_coap.c` — real UDP/CoAP + destination independence path。
+- `ingress/protocol/tests/protocol_network_e2e_fixture.c`
+- `ingress/protocol/tests/test_protocol_network_jtt808.c`
+- `ingress/protocol/tests/test_protocol_network_coap.c`
 - `ingress/protocol/tests/protocol_network_turbodb_fixture.h`
-- `ingress/protocol/tests/protocol_network_turbodb_fixture.c` — pre-provisioned v2 SQLite fixture and writer-lock helper。
-- `ingress/protocol/tests/test_protocol_network_turbodb.c` — real network/TurboDB parity, lock/no-fallback, restart recovery。
+- `ingress/protocol/tests/protocol_network_turbodb_fixture.c`
+- `ingress/protocol/tests/test_protocol_network_turbodb.c`
 - `tests/install_protocol_network_intake_consumer/CMakeLists.txt`
 - `tests/install_protocol_network_intake_consumer/main.c`
 - `tests/install_protocol_network_intake_consumer/header.cpp`
 - `tests/install_protocol_network_intake_consumer/run.cmake`
 
-### Existing files to modify
+### Existing files modified
 
 - `io/cnet/include/turbo_flow_cnet.h`
 - `io/cnet/src/turbo_flow_cnet_listener_source.c`
+- `io/cnet/src/turbo_flow_cnet_plugin.c`
 - `io/cnet/tests/test_cnet_listener_source.c`
 - `io/cnet/tests/cnet_stream_source_header_cpp.cpp`
+- `io/cnet/tests/test_cnet_plugin.c`
 - `ingress/protocol/CMakeLists.txt`
 - `ingress/protocol/tests/CMakeLists.txt`
 - `CMakeLists.txt`
 - `cmake/TurboFlowConfig.cmake.in`
-- `README.md` or `ingress/protocol/README.md` only in the final documentation task after all behavior gates are GREEN。
+- `ingress/protocol/README.md` only after all behavior gates are GREEN
 
 ---
 
-### Task 1: Add message-owned CNet listener connection identity
+### Task 1: Add message-owned TCP listener identity
 
 **Files:**
 - Modify: `io/cnet/include/turbo_flow_cnet.h`
@@ -79,67 +85,40 @@
 - Modify: `io/cnet/tests/cnet_stream_source_header_cpp.cpp`
 
 **Interfaces:**
-- Produces:
-  - `turbo_flow_cnet_listener_message_context_t`
-  - `turbo_flow_cnet_listener_message_context(const turbo_flow_msg_t *)`
-- Later tasks use `context->connection.slot` and `context->connection.generation` as the only TCP parser-session transport identity.
+- Produces `turbo_flow_cnet_listener_message_context_t` and `turbo_flow_cnet_listener_message_context()`.
+- Later parser-session mapping uses only `connection.slot` + `connection.generation` from this message-owned context.
 
-- [ ] **Step 1: Write the compile/runtime RED**
+- [ ] **Step 1: Write compile/runtime RED**
 
-Extend the existing C++ probe and listener graph probe before adding production declarations:
+Add this to the existing C++ header probe before the production declaration exists:
 
 ```cpp
-extern "C" int cnet_listener_source_header_cpp_probe(void) {
-  turbo_flow_cnet_listener_source_config_t config = TURBO_FLOW_CNET_LISTENER_SOURCE_CONFIG_INIT;
-  turbo_flow_cnet_listener_source_snapshot_t snapshot =
-      TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
-  turbo_flow_cnet_listener_message_context_t context = {0};
-  return config.version == TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION &&
-                 snapshot.version == TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION &&
-                 context.size == 0u
-             ? 0
-             : 1;
-}
+turbo_flow_cnet_listener_message_context_t listener_context = {0};
+if (listener_context.size != 0u) return 1;
 ```
 
-Change `listener_source_graph_probe_t` to retain contexts and require the accessor in the sink:
+Change the existing listener graph probe to require:
 
 ```c
-typedef struct listener_source_graph_probe_s {
-  size_t count;
-  uint64_t ids[4];
-  char payloads[4][32];
-  turbo_flow_cnet_listener_message_context_t contexts[4];
-} listener_source_graph_probe_t;
-
-static int listener_source_graph_sink(turbo_flow_msg_t *message, void *ctx) {
-  listener_source_graph_probe_t *probe = ctx;
-  const turbo_flow_cnet_listener_message_context_t *transport =
-      turbo_flow_cnet_listener_message_context(message);
-  if (!probe || !transport || transport->size != sizeof(*transport) ||
-      transport->version != TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION)
-    return SALTS_EPROTO;
-  probe->contexts[probe->count] = *transport;
-  /* keep the existing payload/id assertions and increment */
-  return SALTS_OK;
-}
+const turbo_flow_cnet_listener_message_context_t *context =
+    turbo_flow_cnet_listener_message_context(message);
+check_not_null(context);
+check_equal(context->size, sizeof(*context));
+check_equal(context->version, TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION);
+check_true(context->connection.generation != 0u);
 ```
 
-Also add a malformed-message accessor case where `transport_context` is outside `message->buffer`; expect NULL.
+Add one malformed message whose `transport_context` points outside `message->buffer` and assert the accessor returns NULL.
 
-- [ ] **Step 2: Run the focused target and verify RED**
-
-Run:
+- [ ] **Step 2: Verify RED**
 
 ```bash
 cmake --build --preset win-dev-user --target test_cnet_listener_source
 ```
 
-Expected: compile failure on the missing `turbo_flow_cnet_listener_message_context_t` / accessor. Do not patch any protocol code yet.
+Expected: compile failure on the missing context type/accessor.
 
-- [ ] **Step 3: Add the exact public CNet projection**
-
-In `turbo_flow_cnet.h` add:
+- [ ] **Step 3: Add exact public projection**
 
 ```c
 #define TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION 1u
@@ -157,72 +136,16 @@ TURBO_FLOW_C_API const turbo_flow_cnet_listener_message_context_t *
 turbo_flow_cnet_listener_message_context(const turbo_flow_msg_t *message);
 ```
 
-In `listener_source_on_receive()` allocate context + payload, never a second mutable connection state:
+In `listener_source_on_receive()` allocate `sizeof(context) + view->size`, write the context first, copy payload after it, set `message->transport_context`, and point `message->payload` after the context. Preserve existing message id/content-descriptor behavior.
 
-```c
-size_t buffer_size;
-turbo_flow_cnet_listener_message_context_t *transport;
+Accessor validation must match packet-context ownership rules: context address inside used buffer, exact context size/version, nonzero connection generation, and payload starting exactly after context inside the same buffer.
 
-if (view->size > SIZE_MAX - sizeof(*transport)) {
-  listener_source_fail(source, SALTS_ERANGE, 0, "receive_size");
-  return;
-}
-buffer_size = sizeof(*transport) + view->size;
-buffer = mem_get_buffer(mem_global(), buffer_size);
-if (!buffer) {
-  listener_source_fail(source, SALTS_ENOMEM, 0, "receive_copy");
-  return;
-}
-transport = (turbo_flow_cnet_listener_message_context_t *)mem_buffer_data(buffer);
-memset(transport, 0, sizeof(*transport));
-transport->size = sizeof(*transport);
-transport->version = TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION;
-transport->connection = connection;
-memcpy(mem_buffer_data(buffer) + sizeof(*transport), view->data, view->size);
-mem_set_used(buffer, buffer_size);
-source->ready_message.buffer = buffer;
-source->ready_message.payload =
-    vstr_from_buf(mem_buffer_const_data(buffer) + sizeof(*transport), view->size);
-source->ready_message.transport_context = transport;
-```
-
-Implement the accessor with the same structural rules as `turbo_flow_cnet_packet_message_context()`:
-
-```c
-const turbo_flow_cnet_listener_message_context_t *
-turbo_flow_cnet_listener_message_context(const turbo_flow_msg_t *message) {
-  const char *base;
-  const turbo_flow_cnet_listener_message_context_t *context;
-  uintptr_t base_address, context_address;
-  size_t used, offset;
-  if (!message || !message->buffer || !message->transport_context) return NULL;
-  base = mem_buffer_const_data(message->buffer);
-  used = mem_buffer_used(message->buffer);
-  base_address = (uintptr_t)base;
-  context_address = (uintptr_t)message->transport_context;
-  if (!base || context_address < base_address) return NULL;
-  offset = (size_t)(context_address - base_address);
-  if (offset > used || used - offset < sizeof(*context)) return NULL;
-  context = (const turbo_flow_cnet_listener_message_context_t *)message->transport_context;
-  if (context->size != sizeof(*context) ||
-      context->version != TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION ||
-      context->connection.generation == 0u)
-    return NULL;
-  if (message->payload.data != base + offset + context->size ||
-      message->payload.len > used - offset - context->size)
-    return NULL;
-  return context;
-}
-```
-
-- [ ] **Step 4: Run focused CNet regression**
+- [ ] **Step 4: Run GREEN**
 
 ```bash
 cmake --build --preset win-dev-user --target test_cnet_listener_source test_cnet_packet_source
 ctest --preset win-dev-user -R "^(test_cnet_listener_source|test_cnet_packet_source)$" --output-on-failure
 ```
-
-Expected: both PASS; existing payload text remains unchanged even though buffer offset changed.
 
 - [ ] **Step 5: Commit**
 
@@ -236,7 +159,138 @@ git commit -m "feat(cnet): preserve listener message connection identity"
 
 ---
 
-### Task 2: Freeze exact `protocol.intake` config and two-stage topology internally
+### Task 2: Populate the existing generic CNet Source connection snapshot
+
+**Files:**
+- Modify: `io/cnet/src/turbo_flow_cnet_plugin.c`
+- Modify: `io/cnet/tests/test_cnet_plugin.c`
+
+**Interfaces:**
+- Produces no new public ABI.
+- `turbo_flow_adapter_connection_snapshot_at()` becomes usable for configured `cnet.listener_source` and `cnet.packet_source`.
+- Later ProtocolNetworkIntake snapshots copy the configured Source endpoint from this existing public Graph seam.
+
+- [ ] **Step 1: Write RED in configured CNet plugin test**
+
+After an existing configured generation is started, enumerate adapter snapshots:
+
+```c
+turbo_flow_connection_snapshot_t connection;
+int listener_seen = 0;
+int packet_seen = 0;
+for (size_t i = 0u; i < turbo_flow_adapter_count(flow); ++i) {
+  memset(&connection, 0, sizeof(connection));
+  if (turbo_flow_adapter_connection_snapshot_at(flow, i, &connection) != SALTS_OK) continue;
+  if (connection.adapter_name && strcmp(connection.adapter_name, "listener.source") == 0) {
+    check_true(strncmp(connection.endpoint, "tcp://127.0.0.1:", 16u) == 0);
+    check_true(strcmp(connection.endpoint, "tcp://127.0.0.1:0") != 0);
+    listener_seen = 1;
+  }
+  if (connection.adapter_name && strcmp(connection.adapter_name, "packet.source") == 0) {
+    check_true(strncmp(connection.endpoint, "udp://127.0.0.1:", 16u) == 0);
+    check_true(strcmp(connection.endpoint, "udp://127.0.0.1:0") != 0);
+    packet_seen = 1;
+  }
+}
+check_true(listener_seen);
+check_true(packet_seen);
+```
+
+- [ ] **Step 2: Verify RED**
+
+```bash
+cmake --build --preset win-dev-user --target test_cnet_plugin
+ctest --preset win-dev-user -R "^test_cnet_plugin$" --output-on-failure
+```
+
+Expected: Source adapters return `SALTS_ENOTSUP` because `ops.connection_snapshot` is not populated.
+
+- [ ] **Step 3: Implement Source connection snapshot**
+
+Add one callback used only by CNet Source registrations:
+
+```c
+static int cnet_plugin_source_connection_snapshot(void *ctx,
+                                                  turbo_flow_connection_snapshot_t *out) {
+  cnet_plugin_owner_t *owner = (cnet_plugin_owner_t *)ctx;
+  if (!owner || !out) return SALTS_EINVAL;
+  memset(out, 0, sizeof(*out));
+  out->adapter_name = owner->name;
+  out->adapter_kind = TURBO_FLOW_ADAPTER_KIND_SOCKET;
+  out->direction = TURBO_FLOW_ADAPTER_INPUT;
+  out->connection_limit = owner->config.kind == TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE
+                              ? owner->config.max_connections
+                              : owner->config.endpoint.session_capacity;
+  out->last_status = owner->last_status;
+
+  if (owner->state == TURBO_FLOW_MANAGED_BOUNDARY_RUNNING)
+    out->state = TURBO_FLOW_CONNECTION_READY;
+  else if (owner->state == TURBO_FLOW_MANAGED_BOUNDARY_FAILED)
+    out->state = TURBO_FLOW_CONNECTION_FAILED;
+  else if (owner->state == TURBO_FLOW_MANAGED_BOUNDARY_STOPPING)
+    out->state = TURBO_FLOW_CONNECTION_CLOSING;
+  else
+    out->state = TURBO_FLOW_CONNECTION_STOPPED;
+
+  if (owner->config.kind == TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE) {
+    turbo_flow_cnet_listener_source_snapshot_t source =
+        TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    uint16_t port = owner->config.listener.port;
+    if (owner->handle.listener_source) {
+      int rc = turbo_flow_cnet_listener_source_snapshot(owner->handle.listener_source, &source);
+      if (rc != SALTS_OK) return rc;
+      port = source.bound_port;
+      out->connections_current = source.active_connections;
+      out->in_flight_messages = source.receive_pending != 0 ? 1u : 0u;
+      out->last_status = source.status;
+    }
+    (void)snprintf(out->endpoint, sizeof(out->endpoint), "tcp://%s:%u",
+                   owner->config.listener.host, (unsigned)port);
+    return SALTS_OK;
+  }
+
+  if (owner->config.kind == TURBO_FLOW_CNET_PLUGIN_PACKET_SOURCE) {
+    turbo_flow_cnet_packet_source_snapshot_t source = TURBO_FLOW_CNET_PACKET_SOURCE_SNAPSHOT_INIT;
+    uint16_t port = owner->config.endpoint.datagram.port;
+    const char *scheme = owner->config.endpoint.protocol == CNET_PACKET_UDP ? "udp" : "kcp";
+    if (owner->handle.packet_source) {
+      int rc = turbo_flow_cnet_packet_source_snapshot(owner->handle.packet_source, &source);
+      if (rc != SALTS_OK) return rc;
+      port = source.bound_port;
+      out->connections_current = source.sessions_opened >= source.sessions_closed
+                                     ? source.sessions_opened - source.sessions_closed
+                                     : 0u;
+      out->in_flight_messages = source.queue_depth;
+      out->last_status = source.status;
+    }
+    (void)snprintf(out->endpoint, sizeof(out->endpoint), "%s://%s:%u", scheme,
+                   owner->config.endpoint.datagram.host, (unsigned)port);
+    return SALTS_OK;
+  }
+
+  return SALTS_ENOTSUP;
+}
+```
+
+Set `ops.connection_snapshot = cnet_plugin_source_connection_snapshot` in `cnet_plugin_register_source()` only.
+
+- [ ] **Step 4: Run GREEN**
+
+```bash
+cmake --build --preset win-dev-user --target test_cnet_plugin
+ctest --preset win-dev-user -R "^test_cnet_plugin$" --output-on-failure
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add io/cnet/src/turbo_flow_cnet_plugin.c io/cnet/tests/test_cnet_plugin.c
+git commit -m "feat(cnet): expose configured source connection snapshots"
+```
+
+---
+
+### Task 3: Freeze exact `protocol.intake` configuration and topology
 
 **Files:**
 - Create: `ingress/protocol/network/CMakeLists.txt`
@@ -247,7 +301,6 @@ git commit -m "feat(cnet): preserve listener message connection identity"
 - Modify: `ingress/protocol/tests/CMakeLists.txt`
 
 **Interfaces:**
-- Produces internal-only:
 
 ```c
 typedef enum flow_protocol_network_transport_kind_e {
@@ -261,6 +314,8 @@ typedef struct flow_protocol_network_intake_settings_s {
   char protocol_provider[TURBO_FLOW_PROTOCOL_OPERATION_MAX + 1u];
   char protocol_version[TURBO_FLOW_PROTOCOL_VERSION_MAX + 1u];
   char source_id[TURBO_FLOW_PROTOCOL_INBOX_SOURCE_ID_MAX + 1u];
+  char source_adapter_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
+  char intake_adapter_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
   size_t max_sessions;
   size_t max_frame_size;
   size_t max_pending_claims;
@@ -276,14 +331,12 @@ int flow_protocol_network_intake_preflight(
     turbo_flow_config_error_t *error);
 ```
 
-- Later tasks must not reparse YAML or use CNet private config structs; they consume only `settings` plus public resolved/catalog APIs.
+- [ ] **Step 1: Add exact config/topology RED**
 
-- [ ] **Step 1: Add config/topology RED cases**
-
-Create `test_protocol_network_intake_config.c` with one valid parsed graph:
+Use a parsed Flow containing exactly:
 
 ```c
-static const char intake_graph[] =
+static const char graph[] =
     "source wire adapter tcp.input\n"
     "stage durable adapter protocol.store\n"
     "stage main {\n"
@@ -291,7 +344,7 @@ static const char intake_graph[] =
     "}\n";
 ```
 
-Use resolved YAML containing a full existing CNet listener config and:
+Use a full existing CNet listener config plus this exact intake config:
 
 ```yaml
 protocol.store:
@@ -308,80 +361,52 @@ protocol.store:
     max_pending_bytes: 65536
 ```
 
-RED assertions:
+Assert valid preflight returns `SALTS_OK`. Add independent negative cases for unknown/missing fields, wrong Source/protocol pairing, unsupported version, KCP packet Source, zero bounds, session bound above CNet capacity, insufficient pending-claim bound, insufficient pending-byte bound, wrong adapter names, non-PARSED Flow, stage count not equal to two, edge count not equal to one, and an edge other than source-index -> sink-index.
 
-```c
-check_equal(flow_protocol_network_intake_preflight(
-                resolved, flow, "tcp.input", "protocol.store", &settings, &error),
-            SALTS_OK); /* initially fails to link: implementation absent */
-```
-
-Then add independent negative fixtures for:
-- unknown/missing intake field -> `SALTS_EINVAL`;
-- `protocol_provider=coap` with listener Source -> `SALTS_EINVAL`;
-- JTT808 version other than `2019-A1` -> `SALTS_ENOTSUP`;
-- CoAP packet Source with `packet_mode=kcp` -> `SALTS_ENOTSUP`;
-- zero `max_sessions/max_pending_claims/max_pending_bytes` -> `SALTS_ERANGE`;
-- `max_pending_claims < 2 * scheduler_max_steps_per_poll` -> `SALTS_ERANGE`;
-- `max_pending_bytes < max_pending_claims * max_message_bytes` -> `SALTS_ERANGE`;
-- a third business stage in the intake Flow -> `SALTS_EINVAL`;
-- wrong adapter names or non-PARSED Flow -> `SALTS_EINVAL`.
-
-- [ ] **Step 2: Build and verify RED**
+- [ ] **Step 2: Verify RED**
 
 ```bash
 cmake --build --preset win-dev-user --target test_protocol_network_intake_config
 ```
 
-Expected: missing internal symbols/target implementation, not a CNet or protocol DLL failure.
+Expected: missing internal preflight implementation.
 
-- [ ] **Step 3: Implement exact settings parser**
+- [ ] **Step 3: Implement exact parser and topology check**
 
-Use exactly this allowed field table:
+Allowed intake fields are exactly:
 
 ```c
 static const char *const intake_fields[] = {
-    "schema_version",      "protocol_provider", "protocol_kind",
-    "protocol_version",    "source_id",         "max_sessions",
-    "max_frame_size",      "max_pending_claims", "max_pending_bytes"};
+    "schema_version", "protocol_provider", "protocol_kind", "protocol_version",
+    "source_id", "max_sessions", "max_frame_size", "max_pending_claims",
+    "max_pending_bytes"};
 ```
 
-Reject any field not present in that set and require the count to equal the array count. Parse `protocol_kind` only as `jtt808` or `coap`.
+Require exact field count and reject any other name. Parse only `jtt808` and `coap`. Read Source bounds using public resolved-config getters.
 
-Read Source bounds through public resolved-config accessors:
+Topology is accepted only when:
 
 ```c
-if (strcmp(source.kind, "cnet.listener_source") == 0) {
-  settings->transport_kind = FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP;
-  rc = turbo_flow_resolved_adapter_get_u64(&source, "max_connections", &transport_capacity);
-} else if (strcmp(source.kind, "cnet.packet_source") == 0) {
-  const char *mode = NULL;
-  settings->transport_kind = FLOW_PROTOCOL_NETWORK_TRANSPORT_PACKET_UDP;
-  rc = turbo_flow_resolved_adapter_get_string(&source, "packet_mode", &mode);
-  if (rc == SALTS_OK && strcmp(mode, "udp") != 0) rc = SALTS_ENOTSUP;
-  if (rc == SALTS_OK)
-    rc = turbo_flow_resolved_adapter_get_u64(&source, "session_capacity", &transport_capacity);
-} else {
-  rc = SALTS_ENOTSUP;
-}
+if (turbo_flow_state(flow) != TURBO_FLOW_STATE_PARSED) return SALTS_EINVAL;
+if (turbo_flow_stage_count(flow) != 2u) return SALTS_EINVAL;
+if (turbo_flow_edge_count(flow) != 1u) return SALTS_EINVAL;
 ```
 
-Check the conservative pending bound with overflow guards before multiplication:
+Find the source/sink stage by matching `stage->adapter_name` to the copied configured names, require `source->is_source != 0`, `sink->is_source == 0`, then require the sole `turbo_flow_edge_at(flow, 0u)` to connect those exact stage indexes and be `TURBO_FLOW_EDGE_UNCONDITIONAL`.
+
+For pending bounds:
 
 ```c
-if (steps > SIZE_MAX / 2u) return intake_config_error(..., SALTS_ERANGE, ...);
-required_claims = steps * 2u;
-if (settings->max_pending_claims < required_claims) return ...;
-if (settings->source_max_message_bytes > SIZE_MAX / settings->max_pending_claims) return ...;
-required_bytes = settings->source_max_message_bytes * settings->max_pending_claims;
-if (settings->max_pending_bytes < required_bytes) return ...;
+if (settings->source_scheduler_max_steps > SIZE_MAX / 2u) return SALTS_ERANGE;
+size_t required_claims = settings->source_scheduler_max_steps * 2u;
+if (settings->max_pending_claims < required_claims) return SALTS_ERANGE;
+if (settings->source_max_message_bytes > SIZE_MAX / settings->max_pending_claims)
+  return SALTS_ERANGE;
+size_t required_bytes = settings->source_max_message_bytes * settings->max_pending_claims;
+if (settings->max_pending_bytes < required_bytes) return SALTS_ERANGE;
 ```
 
-Validate exact pairings and exact two-stage Source -> terminal Sink topology using public stage-plan inspection. Do not compile or register adapters in this function.
-
-- [ ] **Step 4: Add the private core CMake target and run GREEN**
-
-In `ingress/protocol/network/CMakeLists.txt` start with an internal static target only:
+- [ ] **Step 4: Add internal core target and run GREEN**
 
 ```cmake
 add_library(tf_protocol_network_intake_core STATIC
@@ -395,22 +420,15 @@ target_link_libraries(tf_protocol_network_intake_core
   PUBLIC TurboFlow::Graph TurboFlow::ProtocolIngressInbox TurboFlow::PluginHost)
 ```
 
-Add `add_subdirectory(network)` after `common`/`inbox` in `ingress/protocol/CMakeLists.txt`.
-
-Run:
-
 ```bash
 cmake --build --preset win-dev-user --target test_protocol_network_intake_config
 ctest --preset win-dev-user -R "^test_protocol_network_intake_config$" --output-on-failure
 ```
 
-Expected: PASS.
-
 - [ ] **Step 5: Commit**
 
 ```bash
-git add ingress/protocol/network \
-        ingress/protocol/CMakeLists.txt \
+git add ingress/protocol/network ingress/protocol/CMakeLists.txt \
         ingress/protocol/tests/CMakeLists.txt \
         ingress/protocol/tests/test_protocol_network_intake_config.c
 git commit -m "test(protocol): freeze network intake configuration"
@@ -418,7 +436,7 @@ git commit -m "test(protocol): freeze network intake configuration"
 
 ---
 
-### Task 3: Implement the bounded async-terminal protocol intake engine
+### Task 4: Implement bounded async-terminal intake and deterministic replay identity
 
 **Files:**
 - Create: `ingress/protocol/network/src/flow_protocol_network_intake_sink.c`
@@ -428,12 +446,19 @@ git commit -m "test(protocol): freeze network intake configuration"
 - Modify: `ingress/protocol/tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes `flow_protocol_network_intake_settings_t` from Task 2.
-- Produces internal-only:
 
 ```c
 typedef struct flow_protocol_network_intake_sink_s
     flow_protocol_network_intake_sink_t;
+
+typedef struct flow_protocol_network_intake_sink_metrics_s {
+  size_t active_sessions;
+  size_t pending_claims;
+  size_t pending_bytes;
+  uint64_t frames_admitted;
+  int backpressured;
+  int terminal_status;
+} flow_protocol_network_intake_sink_metrics_t;
 
 typedef struct flow_protocol_network_intake_sink_config_s {
   turbo_flow_t *flow;
@@ -446,91 +471,41 @@ typedef struct flow_protocol_network_intake_sink_config_s {
 int flow_protocol_network_intake_sink_create(
     const flow_protocol_network_intake_sink_config_t *config,
     flow_protocol_network_intake_sink_t **out);
-int flow_protocol_network_intake_sink_register(
-    flow_protocol_network_intake_sink_t *sink);
-int flow_protocol_network_intake_sink_retry(
-    flow_protocol_network_intake_sink_t *sink);
-void flow_protocol_network_intake_sink_cancel(
-    flow_protocol_network_intake_sink_t *sink, int status);
+int flow_protocol_network_intake_sink_register(flow_protocol_network_intake_sink_t *sink);
+int flow_protocol_network_intake_sink_retry(flow_protocol_network_intake_sink_t *sink);
+void flow_protocol_network_intake_sink_cancel(flow_protocol_network_intake_sink_t *sink,
+                                             int status);
 void flow_protocol_network_intake_sink_metrics(
     const flow_protocol_network_intake_sink_t *sink,
-    size_t *active_sessions, size_t *pending_claims,
-    size_t *pending_bytes, uint64_t *frames_admitted, int *backpressured,
-    int *terminal_status);
-void flow_protocol_network_intake_sink_destroy(
-    flow_protocol_network_intake_sink_t *sink);
+    flow_protocol_network_intake_sink_metrics_t *metrics);
+void flow_protocol_network_intake_sink_destroy(flow_protocol_network_intake_sink_t *sink);
 ```
 
-- [ ] **Step 1: Write focused RED for partial-frame ownership and capacity retry**
+- [ ] **Step 1: Write focused RED**
 
-Build a tiny parsed Flow with logical source -> internal intake Sink. Create a test `turbo_flow_protocol_t` using `turbo_flow_protocol_create()` with kind JTT808 and a deterministic inspect callback.
+Required cases:
 
-Construct a listener-owned message buffer exactly as CNet will:
+1. first half of a valid JT/T808 frame completes its async publication after bounded parser copy and produces zero Inbox records;
+2. second half completes the frame while a one-slot Inbox is full, so publication remains pending;
+3. after capacity is freed, `sink_retry()` admits exactly one record without re-feeding frame bytes;
+4. one TCP message containing two frames can admit the first and retain the second;
+5. a second async claim arriving while blocked is queued without feeding;
+6. slot generation N partial bytes followed by later message id/generation N+1 closes N parser state and cannot complete N's frame;
+7. generation mismatch with non-increasing TurboFlow message id is stale and completes `SALTS_EPROTO`;
+8. missing/malformed CNet context fails before admission;
+9. CoAP packet context creates a nonempty canonical peer device id;
+10. identical complete wire frame replay produces one Inbox record, the same receipt identity, and a durable claimed record with `timestamp_ns == 0`;
+11. cancel completes all unadmitted retained/queued claims with `SALTS_ECANCELED`.
 
-```c
-static turbo_flow_msg_t listener_message(uint64_t id, uint32_t slot, uint32_t generation,
-                                         const uint8_t *data, size_t size) {
-  turbo_flow_msg_t message;
-  mem_buffer_t *buffer = mem_get_buffer(mem_global(),
-                                        sizeof(turbo_flow_cnet_listener_message_context_t) + size);
-  turbo_flow_cnet_listener_message_context_t *context =
-      (turbo_flow_cnet_listener_message_context_t *)mem_buffer_data(buffer);
-  context->size = sizeof(*context);
-  context->version = TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION;
-  context->connection.slot = slot;
-  context->connection.generation = generation;
-  memcpy(mem_buffer_data(buffer) + sizeof(*context), data, size);
-  mem_set_used(buffer, sizeof(*context) + size);
-  turbo_flow_msg_init(&message);
-  message.id = id;
-  message.buffer = buffer;
-  message.transport_context = context;
-  message.payload = vstr_from_buf(mem_buffer_const_data(buffer) + sizeof(*context), size);
-  return message;
-}
-```
-
-Required RED behavior:
-
-```c
-/* first half: copied parser state, async publication completes, no Inbox record */
-check_equal(turbo_flow_publish_async(flow, "wire", &first_half, completion_cb, &first), SALTS_OK);
-wait_for_completion(&first);
-check_equal(first.status, SALTS_OK);
-check_equal(inbox_snapshot.pending_records, 0u);
-
-/* prefill 1-slot Inbox; second half completes frame but publication stays pending */
-check_equal(turbo_flow_publish_async(flow, "wire", &second_half, completion_cb, &second), SALTS_OK);
-check_equal(second.calls, 0u);
-check_true(backpressured);
-
-/* free capacity, retry with no re-feed; one and only one protocol record appears */
-check_equal(flow_protocol_network_intake_sink_retry(sink), SALTS_OK);
-wait_for_completion(&second);
-check_equal(second.status, SALTS_OK);
-check_equal(protocol_record_count, 1u);
-```
-
-Also add RED cases for:
-- one message containing two JTT frames where the second blocks;
-- queued second async claim while first frame is blocked;
-- slot generation N partial then N+1 bytes -> no cross-generation completion;
-- crafted older generation/non-increasing message id -> `SALTS_EPROTO`;
-- malformed/missing CNet transport context;
-- CoAP packet context -> canonical peer-derived device id;
-- cancel -> every retained claim completes `SALTS_ECANCELED`, no unadmitted record appears.
-
-- [ ] **Step 2: Run RED**
+- [ ] **Step 2: Verify RED**
 
 ```bash
 cmake --build --preset win-dev-user --target test_protocol_network_intake_core
 ```
 
-Expected: missing sink engine symbols.
+Expected: missing sink symbols.
 
-- [ ] **Step 3: Implement fixed parser-session and pending-claim storage**
-
-Use preallocated arrays only:
+- [ ] **Step 3: Implement fixed parser/pending storage**
 
 ```c
 typedef struct intake_parser_slot_s {
@@ -547,45 +522,39 @@ typedef struct intake_pending_claim_s {
 } intake_pending_claim_t;
 ```
 
-Map protocol session id from transport slot without persisting it:
+Allocate both arrays to configured bounds during create. No reserve/growth path exists after create.
 
-```c
-static int intake_protocol_session_id(uint32_t slot, uint64_t *out) {
-  if (!out || (uint64_t)slot == UINT64_MAX) return SALTS_ERANGE;
-  *out = (uint64_t)slot + 1u;
-  return *out == 0u ? SALTS_ERANGE : SALTS_OK;
-}
+ProtocolSource session id is `(uint64_t)transport_slot + 1u`. On generation mismatch: reject as stale when message id is non-increasing; otherwise close old session before opening new generation.
+
+- [ ] **Step 4: Implement CoAP peer identity and ProtocolInbox identity**
+
+Canonical CoAP peer strings are:
+
+```text
+udp4-7f000001-<decimal-port>
+udp6-<32-lowercase-hex-address>-<decimal-port>-<decimal-scope>
 ```
 
-On generation change, call `turbo_flow_protocol_source_session_close()` before the new `session_open()`. Reject non-increasing message IDs for a different generation instead of reopening stale parser state.
-
-- [ ] **Step 4: Implement canonical CoAP device and durable admission identity**
-
-Do not persist raw packet structs. Format peer identity deterministically from bytes:
+Build admission identity with XXH3-128 over the raw-preserved decoded payload:
 
 ```c
-/* IPv4 example: udp4-7f000001-54321; IPv6 uses 32 hex digits plus port/scope. */
-static int intake_packet_device_id(const cnet_packet_session_info *info,
-                                   char out[TURBO_FLOW_PROTOCOL_DEVICE_ID_MAX + 1u]);
+XXH128_hash_t digest = XXH3_128bits(message->payload, message->payload_size);
+int count = snprintf(storage, sizeof(storage),
+                     "%s/%s/%" PRIu32 "/%" PRIu64 "/%016" PRIx64 "%016" PRIx64,
+                     protocol_name, metadata->device_id, metadata->message_type,
+                     metadata->sequence, digest.high64, digest.low64);
+if (count < 0 || (size_t)count >= sizeof(storage)) return SALTS_EMSGSIZE;
+identity->source_id = vstr_from_buf(settings->source_id, strlen(settings->source_id));
+identity->admission_id = vstr_from_buf(storage, (size_t)count);
+identity->source_sequence = metadata->sequence;
+identity->timestamp_ns = 0u;
 ```
 
-Create `ProtocolInbox` with an identity resolver that hashes the complete raw-preserved payload:
+Copy correlation from metadata when nonempty. Never use delivery id, parser id, CNet generation, or local arrival time in durable identity.
 
-```c
-XXH128_hash_t digest = XXH3_128bits(request->message->payload,
-                                    request->message->payload_size);
-int written = snprintf(admission_storage, sizeof(admission_storage),
-                       "%s/%s/%" PRIu32 "/%" PRIu64 "/%016" PRIx64 "%016" PRIx64,
-                       turbo_flow_protocol_kind_name(metadata->protocol),
-                       metadata->device_id, metadata->message_type, metadata->sequence,
-                       digest.high64, digest.low64);
-```
+- [ ] **Step 5: Implement claim ownership, retry, and cancel**
 
-Return `source_id` from the copied settings, correlation from metadata, sequence from metadata, and a nonzero host admission timestamp. Never include CNet generation in `admission_id`.
-
-- [ ] **Step 5: Implement async submit/retry/cancel rules**
-
-The submit callback always moves an accepted claim first:
+Every accepted submit first moves its claim:
 
 ```c
 turbo_flow_async_terminal_claim_t owned = TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
@@ -593,38 +562,40 @@ int rc = turbo_flow_async_terminal_claim_move(&owned, claim);
 if (rc != SALTS_OK) return rc;
 ```
 
-If not blocked, feed only the retained claim's message. On capacity result, store `owned` as the blocking claim. If already blocked, enqueue `owned` without feeding. On immediate success/partial copy, call:
+When clear, feed only this message once. Immediate partial/success completes `owned` with `SALTS_OK`. Capacity result stores it as the blocking claim. When already blocked, append `owned` to the fixed FIFO without feeding.
+
+`flow_protocol_network_intake_sink_retry()` calls `turbo_flow_protocol_source_session_feed(source, session_id, generation, NULL, 0u, &result)` only for the retained blocked frame. After success it completes that claim, then processes queued claims FIFO until clear or a new capacity block occurs.
+
+`flow_protocol_network_intake_sink_cancel()` first calls `turbo_flow_protocol_source_force_shutdown(protocol_source, status)`, then completes every live async claim with the same non-OK status.
+
+- [ ] **Step 6: Register exact managed async-terminal Sink**
+
+Use caller-owned Sink lifetime and a registry shutdown callback that only marks registration detached:
 
 ```c
-(void)turbo_flow_async_terminal_complete(&owned, SALTS_OK, NULL);
-```
-
-On non-capacity failure:
-
-```c
-sink->terminal_status = rc;
-(void)turbo_flow_async_terminal_complete(&owned, rc, NULL);
-```
-
-`retry()` must call only an empty feed for the blocked session, then drain pending claims FIFO until empty or another capacity block.
-
-- [ ] **Step 6: Register as a managed async-terminal Sink**
-
-Use `turbo_flow_register_managed_async_terminal_adapter()` with:
-
-```c
+turbo_flow_adapter_ops_t adapter_ops = {0};
+turbo_flow_async_terminal_adapter_ops_t async_ops =
+    TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
+turbo_flow_adapter_schema_t schema = {0};
+turbo_flow_managed_boundary_provider_ops_t boundary =
+    TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
+turbo_flow_managed_async_terminal_registration_t registration =
+    TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_INIT;
+adapter_ops.shutdown = intake_sink_registry_shutdown;
+async_ops.submit = intake_async_submit;
 schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
 schema.roles = TURBO_FLOW_ADAPTER_SINK;
 schema.direction = TURBO_FLOW_ADAPTER_OUTPUT;
-async_ops.submit = intake_async_submit;
 registration.adapter_name = sink->adapter_name;
+registration.adapter_ops = &adapter_ops;
+registration.async_ops = &async_ops;
+registration.schema = &schema;
 registration.owner_name = sink->adapter_name;
+registration.boundary_ops = &boundary;
 registration.ctx = sink;
 ```
 
-The boundary is read-only management metadata; no generic resource command is added.
-
-- [ ] **Step 7: Run focused GREEN**
+- [ ] **Step 7: Run GREEN**
 
 ```bash
 cmake --build --preset win-dev-user --target \
@@ -634,13 +605,10 @@ ctest --preset win-dev-user -R \
   --output-on-failure
 ```
 
-Expected: all PASS; especially the retained-frame test shows no duplicate admission.
-
 - [ ] **Step 8: Commit**
 
 ```bash
-git add ingress/protocol/network/src \
-        ingress/protocol/network/CMakeLists.txt \
+git add ingress/protocol/network/src ingress/protocol/network/CMakeLists.txt \
         ingress/protocol/tests/CMakeLists.txt \
         ingress/protocol/tests/test_protocol_network_intake_core.c
 git commit -m "feat(protocol): add bounded network intake sink"
@@ -648,7 +616,7 @@ git commit -m "feat(protocol): add bounded network intake sink"
 
 ---
 
-### Task 4: Add the complete installed `ProtocolNetworkIntake` owner and catalog lifecycle
+### Task 5: Add installed ProtocolNetworkIntake owner and exact lifecycle
 
 **Files:**
 - Create: `ingress/protocol/network/include/turbo_flow_protocol_network_intake.h`
@@ -661,61 +629,26 @@ git commit -m "feat(protocol): add bounded network intake sink"
 - Modify: `CMakeLists.txt`
 
 **Interfaces:**
-- Public API must match the approved spec exactly:
-  - `turbo_flow_protocol_network_intake_create`
-  - `start`
-  - `poll`
-  - `snapshot`
-  - `stop`
-  - `destroy`
-- Consumes internal preflight/settings and sink from Tasks 2–3.
-- Retains one catalog reference for Source provider callback lifetime; protocol registry retains its own catalog reference.
+- Public header exactly matches the approved spec, including snapshot fields `source_polls` and `source_endpoint`.
+- Consumes Tasks 3–4 internal interfaces and Task 2 generic connection snapshots.
 
-- [ ] **Step 1: Write public ABI/lifecycle RED**
+- [ ] **Step 1: Write ABI/lifecycle/catalog RED**
 
-The C++ probe must compile the exact public structures:
+C++ probe instantiates both public init macros. Focused fixture plugin registers exactly one transactional Source provider and returns a complete external-poll Product owner.
 
-```cpp
-#include "turbo_flow_protocol_network_intake.h"
-extern "C" int protocol_network_intake_header_cpp_probe(void) {
-  turbo_flow_protocol_network_intake_config_t config =
-      TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT;
-  turbo_flow_protocol_network_intake_snapshot_t snapshot =
-      TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
-  return config.version == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION &&
-                 snapshot.version == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION
-             ? 0
-             : 1;
-}
-```
+Required RED cases:
 
-Create a canonical-export fixture plugin that registers only one transactional adapter provider named `cnet.listener_source`. Its owner vtable must be complete and external-poll capable:
-
-```c
-descriptor.flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD |
-                   TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
-descriptor.ctx = owner;
-descriptor.quiesce = fixture_quiesce;
-descriptor.drain = fixture_drain;
-descriptor.shutdown = fixture_shutdown;
-descriptor.destroy = fixture_destroy;
-descriptor.poll = fixture_poll;
-```
-
-The fixture materializer registers a SOURCE adapter with the requested configured name but performs no network I/O. Compile variants for poll failure / materialize failure without extra DLL exports.
-
-RED cases:
-- valid fixture + real JTT808 protocol module creates COMPILED owner and moves `flow_io` to NULL;
-- invalid public sizes/versions leave `flow_io` and `out` unchanged;
-- Source preflight failure happens before `flow_io` ownership transfer;
-- protocol name/version mismatch happens before Source materialize;
-- materialize failure returns no public owner and destroys copied protocol/sink state;
-- host destroy returns `SALTS_EBUSY` after caller releases its snapshot reference while intake still retains one;
-- `poll()` before start -> `SALTS_EBUSY`;
-- fixture poll error -> intake FAILED with exact status;
-- stop from COMPILED performs no network start and reaches STOPPED;
-- destroy before stop -> `SALTS_EBUSY`;
-- after stop/destroy, PluginHost can unload fixture + protocol modules.
+- valid fixture + real JT/T808 protocol module creates COMPILED owner and moves `flow_io` to NULL;
+- public ABI mismatch leaves `flow_io` caller-owned and `out == NULL`;
+- Source provider preflight failure leaves Flow caller-owned;
+- protocol provider/version mismatch occurs before Source materialization;
+- Source materialize failure unwinds protocol/Sink/catalog ownership;
+- caller releases its snapshot reference, then PluginHost destroy returns `SALTS_EBUSY` while intake retains the catalog;
+- `poll()` before start returns `SALTS_EBUSY` and `source_polls == 0`;
+- fixture poll failure increments `source_polls` once and makes intake FAILED with the exact error;
+- stop from COMPILED reaches STOPPED without Source poll/start side effects;
+- destroy before STOPPED returns `SALTS_EBUSY`;
+- after stop/destroy, PluginHost unload succeeds.
 
 - [ ] **Step 2: Verify RED**
 
@@ -723,11 +656,7 @@ RED cases:
 cmake --build --preset win-dev-user --target test_protocol_network_intake
 ```
 
-Expected: missing public target/header/symbols.
-
-- [ ] **Step 3: Implement public owner shape and provider lookup**
-
-Internal owner fields:
+- [ ] **Step 3: Implement owner state and exact provider lookup**
 
 ```c
 struct turbo_flow_protocol_network_intake_s {
@@ -742,85 +671,88 @@ struct turbo_flow_protocol_network_intake_s {
   turbo_flow_plugin_product_owner_v1_t source_owner;
   flow_protocol_network_intake_sink_t *sink;
   flow_protocol_network_intake_settings_t settings;
+  uint64_t source_polls;
+  char source_endpoint[TURBO_FLOW_ENDPOINT_MAX + 1u];
 };
 ```
 
-Find the configured Source transactional provider by exact `source_view.kind`; reject zero or duplicate matches.
+Find exactly one transactional adapter provider with `provider.kind == resolved_source.kind`; zero or duplicate matches fail `SALTS_ENOTSUP`/`SALTS_EALREADY` before Flow transfer.
 
-Validate the returned Product owner exactly like generation semantics: exact ABI, exactly one threading flag, required quiesce/drain/shutdown/destroy, and external-poll implies non-NULL `poll`.
+Validate returned Source Product owner using the same shape rules as generation code: exact ABI; exactly one control-thread/thread-safe flag; quiesce/drain/shutdown/destroy required; `EXTERNAL_POLL` required and `poll` non-NULL.
 
-- [ ] **Step 4: Implement create with no network side effects**
+- [ ] **Step 4: Implement create without network side effects**
 
-Order:
+Execution order is fixed:
 
 ```text
-preflight settings/topology
-project transactional catalog + Source provider preflight
-retain snapshot
-create protocol registry
-create exact protocol owner and instance
-create/register internal intake Sink
-move *flow_io -> owner->flow
-materialize configured Source Product owner into that Flow
-compile Flow
-publish COMPILED owner
+flow/config/inbox validation
+transactional catalog projection and Source provider preflight
+catalog retain
+protocol registry create
+exact protocol owner create + instance
+ProtocolInbox/ProtocolSource/intake Sink create
+move intake Flow ownership
+Sink registration
+Source Product owner materialize
+Flow compile
+publish COMPILED intake
 ```
 
-Protocol request is exact:
+Protocol request:
 
 ```c
 turbo_flow_protocol_open_request_t request = TURBO_FLOW_PROTOCOL_OPEN_REQUEST_INIT;
-request.protocol = settings.protocol_kind;
-request.protocol_version = settings.protocol_version;
-request.max_frame_size = settings.max_frame_size;
+request.protocol = intake->settings.protocol_kind;
+request.protocol_version = intake->settings.protocol_version;
+request.max_frame_size = intake->settings.max_frame_size;
 ```
 
-No `turbo_flow_start()` occurs inside create.
+If any post-transfer step fails, destroy the Flow while registered callback contexts remain alive, destroy the unstarted Source owner when published, then Sink, protocol objects, and retained catalog. Return no public owner.
 
-If compile fails after CNet Source materialization, the Source has not been started, so destroy the Flow while the Source owner context still exists, invoke the unstarted owner cleanup, destroy Sink/protocol objects, and release the retained snapshot. Add a focused regression proving real CNet materialize + forced compile failure leaves PluginHost unloadable.
+- [ ] **Step 5: Implement start/snapshot/poll**
 
-- [ ] **Step 5: Implement start/poll/snapshot**
+`start()` only accepts COMPILED and calls `turbo_flow_start()` once.
 
-`start()`:
+After successful start and after every Source poll, refresh the configured Source endpoint by enumerating `turbo_flow_adapter_connection_snapshot_at()` until `snapshot.adapter_name` equals copied `source_adapter_name`; copy only a successful snapshot's endpoint.
+
+Poll order:
 
 ```c
-if (intake->state != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_COMPILED) return SALTS_EBUSY;
-rc = turbo_flow_start(intake->flow);
-intake->state = rc == SALTS_OK ? TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_RUNNING
-                               : TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_FAILED;
-intake->status = rc;
-return rc;
+flow_protocol_network_intake_sink_metrics_t metrics = {0};
+int rc = flow_protocol_network_intake_sink_retry(intake->sink);
+if (rc != SALTS_OK) return intake_fail(intake, rc);
+flow_protocol_network_intake_sink_metrics(intake->sink, &metrics);
+if (metrics.terminal_status != SALTS_OK) return intake_fail(intake, metrics.terminal_status);
+if (metrics.backpressured || metrics.pending_claims != 0u) {
+  intake->state = TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_BACKPRESSURED;
+  return intake_snapshot_copy(intake, snapshot);
+}
+if (intake->source_polls == UINT64_MAX) return intake_fail(intake, SALTS_ERANGE);
+++intake->source_polls;
+rc = intake->source_owner.poll(intake->source_owner.ctx, timeout_ms);
+if (rc != SALTS_OK) return intake_fail(intake, rc);
+intake->state = TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_RUNNING;
+return intake_snapshot_copy(intake, snapshot);
 ```
 
-`poll()`:
+- [ ] **Step 6: Implement stop/destroy**
 
-```c
-rc = flow_protocol_network_intake_sink_retry(intake->sink);
-flow_protocol_network_intake_sink_metrics(..., &backpressured, &terminal_status);
-if (terminal_status != SALTS_OK) return intake_fail(intake, terminal_status);
-if (!backpressured && pending_claims == 0u)
-  rc = intake->source_owner.poll(intake->source_owner.ctx, timeout_ms);
-/* refresh metrics; BACKPRESSURED is a state projection, not an error */
-```
-
-Never call Source owner `poll()` while sink metrics report retained/queued claims.
-
-- [ ] **Step 6: Implement stop/destroy in explicit lifecycle order**
-
-`stop()` from COMPILED simply quiesces/destroys no native handle and marks STOPPED. From RUNNING/BACKPRESSURED:
+RUNNING/BACKPRESSURED stop order:
 
 ```text
-state=STOPPING
-source_owner.quiesce(timeout)
-sink_cancel(SALTS_ECANCELED)
+state STOPPING
+Source owner quiesce(timeout)
+Sink cancel(SALTS_ECANCELED)
 turbo_flow_stop(flow)
-source_owner.drain(timeout)
-state=STOPPED
+Source owner drain(timeout)
+state STOPPED
 ```
 
-`destroy()` requires STOPPED, destroys the Flow first while adapter ctx is valid, then Source `shutdown/destroy`, Sink, protocol owner/registry, and retained catalog reference. It never closes/destroys caller-owned Inbox.
+COMPILED stop quiesces the unstarted Product owner and moves directly to STOPPED.
 
-- [ ] **Step 7: Add installed shared target, but no package component yet**
+Destroy requires STOPPED: destroy Flow first while adapter contexts remain valid; then Source owner shutdown/destroy; Sink object; ProtocolSource/ProtocolInbox; protocol owner/registry; retained catalog. Never close/destroy the caller Inbox.
+
+- [ ] **Step 7: Build installed shared target**
 
 ```cmake
 add_library(tf_protocol_network_intake SHARED
@@ -842,20 +774,19 @@ target_link_libraries(tf_protocol_network_intake
 install(FILES include/turbo_flow_protocol_network_intake.h DESTINATION include)
 ```
 
-Add `tf_protocol_network_intake` to the top-level export target list.
+Add `tf_protocol_network_intake` to `TURBO_FLOW_EXPORT_TARGETS`; package component registration remains Task 9.
 
-- [ ] **Step 8: Run focused lifecycle GREEN**
+- [ ] **Step 8: Run GREEN**
 
 ```bash
-cmake --build --preset win-dev-user --target test_protocol_network_intake
-ctest --preset win-dev-user -R "^test_protocol_network_intake$" --output-on-failure
+cmake --build --preset win-dev-user --target test_protocol_network_intake test_cnet_plugin
+ctest --preset win-dev-user -R "^(test_protocol_network_intake|test_cnet_plugin)$" --output-on-failure
 ```
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add ingress/protocol/network \
-        ingress/protocol/tests/test_protocol_network_intake.c \
+git add ingress/protocol/network ingress/protocol/tests/test_protocol_network_intake.c \
         ingress/protocol/tests/protocol_network_intake_header_cpp.cpp \
         ingress/protocol/tests/protocol_network_source_fixture.c \
         ingress/protocol/tests/CMakeLists.txt CMakeLists.txt
@@ -864,7 +795,7 @@ git commit -m "feat(protocol): add configured network intake owner"
 
 ---
 
-### Task 5: Prove real fragmented JT/T 808 over configured CNet TCP into memory Inbox
+### Task 6: Real fragmented JT/T808/TCP acceptance on memory Inbox
 
 **Files:**
 - Create: `ingress/protocol/tests/protocol_network_e2e_fixture.h`
@@ -873,26 +804,11 @@ git commit -m "feat(protocol): add configured network intake owner"
 - Modify: `ingress/protocol/tests/CMakeLists.txt`
 
 **Interfaces:**
-- Test harness owns configured PluginHost + snapshot, memory Inbox, ProtocolNetworkIntake, business CNet datagram-Sink generation, InboxSource driver, and real loopback sockets.
-- Production code changes are allowed only when this real gate exposes a behavior missing from Tasks 1–4; do not replace the network with a fixture.
+- Shared harness owns configured PluginHost/snapshot, caller-selected Inbox, ProtocolNetworkIntake, business CNet datagram-Sink generation, InboxSource driver, and real loopback peers.
 
-- [ ] **Step 1: Build a reusable real-network harness**
+- [ ] **Step 1: Build real configured harness**
 
-Reuse the repository's existing CNet YAML field set (`backend`, client/socket/TLS fields, bounded Source/Sink tails) rather than inventing shortened CNet config.
-
-The configured plugin manifest must load at least:
-
-```yaml
-plugins:
-  - id: turbo-flow.cnet
-    version: 1.0.0
-    path: <FLOW_CNET_PLUGIN_PATH>
-  - id: jtt808
-    version: 1.0.0
-    path: <FLOW_PROTOCOL_JTT808_MODULE>
-```
-
-Use the approved two-stage intake Flow:
+Plugin manifest contains exact `turbo-flow.cnet` v1.0.0 and `jtt808` v1.0.0 module paths supplied by CMake definitions. Intake Flow is exactly:
 
 ```c
 static const char intake_graph[] =
@@ -903,7 +819,7 @@ static const char intake_graph[] =
     "}\n";
 ```
 
-Business Flow remains separate:
+Business Flow is:
 
 ```c
 static const char business_graph[] =
@@ -914,61 +830,37 @@ static const char business_graph[] =
     "}\n";
 ```
 
-Materialize `udp.output` through normal `turbo_flow_plugin_generation_create()` and create `turbo_flow_inbox_source_t` against logical source `inbox`.
+Create normal business plugin generation, call `turbo_flow_start(turbo_flow_plugin_generation_flow(generation))`, and create `turbo_flow_inbox_source_t` against logical source `inbox`. During delivery, drive `turbo_flow_plugin_generation_poll(generation, 0u, &error)` and `turbo_flow_inbox_source_poll()` until terminal settlement.
 
-- [ ] **Step 2: Copy the existing canonical JTT808 frame builder into test support**
+- [ ] **Step 2: Use canonical real JT/T808 frame**
 
-Use the already-conforming unescaped bytes from protocol tests:
+Copy the existing protocol-conformance frame builder using this unescaped body and the same XOR/0x7d escaping rules:
 
 ```c
-const uint8_t unescaped[] = {
+static const uint8_t unescaped[] = {
     0x02u, 0x00u, 0x40u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x00u,
     0x00u, 0x00u, 0x00u, 0x01u, 0x23u, 0x45u, 0x00u, 0x01u};
 ```
 
-Keep the checksum/0x7d escaping logic byte-for-byte equivalent to `test_protocol_plugins.c` so the real JTT DLL, not a test codec, validates it.
+- [ ] **Step 3: Run the real acceptance**
 
-- [ ] **Step 3: Write the real TCP RED**
+After `ProtocolNetworkIntake.start()`, snapshot and parse `source_endpoint` with:
 
-Test sequence:
-
-```text
-create memory Inbox
-create configured PluginHost/snapshot
-create + start ProtocolNetworkIntake
-connect a real TCP client to configured listener port
-send first half of one valid JTT808 frame
-poll intake until bytes_received advances
-assert Inbox pending_records == 0
-send second half
-poll intake until Inbox pending_records == 1
-assert business UDP peer still received 0 datagrams
-request InboxSource business run
-poll business generation + InboxSource until settlement terminal
-assert real UDP peer receives exactly one datagram
+```c
+unsigned port = 0u;
+check_equal(sscanf(snapshot.source_endpoint, "tcp://127.0.0.1:%u", &port), 1);
+check_true(port > 0u && port <= UINT16_MAX);
 ```
 
-Add a Flow observer on the business Flow and assert its stage count remains zero before Inbox admission.
+Connect a real TCP client to that port. Send first frame half; poll intake until Source accepted bytes, then assert Inbox `pending_records == 0`. Send second half; poll until Inbox `pending_records == 1` and assert business UDP receiver still has zero datagrams. Request the InboxSource run, drive business generation/InboxSource, and assert exactly one real UDP datagram.
 
-- [ ] **Step 4: Verify RED before changing production**
+Register a business Flow observer and assert business stage-completion count is zero before the InboxSource request.
 
-```bash
-cmake --build --preset win-dev-user --target test_protocol_network_jtt808
-ctest --preset win-dev-user -R "^test_protocol_network_jtt808$" --output-on-failure
-```
+- [ ] **Step 4: Prove TCP generation reuse**
 
-Expected initial failure must point to a real composition/lifecycle bug if Tasks 1–4 are incomplete; do not replace the network gate with direct Sink calls.
+Open connection A, send only the first half, close A, then connect B to the same listener and send only the second half. Drive intake and assert no Inbox record appears. Send a complete valid frame on B and assert exactly one record appears. This is the real-network generation-fence gate; the focused stale-message-id case remains in Task 4.
 
-- [ ] **Step 5: Make only the minimal production correction, if RED exposes one**
-
-Allowed correction areas are only:
-- Task 4 source-owner poll/start/stop sequencing;
-- Task 3 async claim/parser semantics;
-- Task 1 listener context validation.
-
-Do not change JTT codec semantics or Inbox schema to satisfy the test.
-
-- [ ] **Step 6: Run focused GREEN and adjacent gates**
+- [ ] **Step 5: Run acceptance + adjacent gates**
 
 ```bash
 cmake --build --preset win-dev-user --target \
@@ -979,91 +871,66 @@ ctest --preset win-dev-user -R \
   --output-on-failure
 ```
 
-- [ ] **Step 7: Commit**
+A RED must be fixed only in the already-defined Task 1–5 contracts; do not alter JTT codec or Inbox schema.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add ingress/protocol/tests/protocol_network_e2e_fixture.* \
+git add ingress/protocol/tests/protocol_network_e2e_fixture.h \
+        ingress/protocol/tests/protocol_network_e2e_fixture.c \
         ingress/protocol/tests/test_protocol_network_jtt808.c \
-        ingress/protocol/tests/CMakeLists.txt \
-        ingress/protocol/network/src
+        ingress/protocol/tests/CMakeLists.txt ingress/protocol/network/src
 git commit -m "test(protocol): prove real JTT808 TCP intake"
 ```
 
 ---
 
-### Task 6: Prove real CoAP/UDP and destination independence
+### Task 7: Real CoAP/UDP acceptance and destination independence
 
 **Files:**
 - Create: `ingress/protocol/tests/test_protocol_network_coap.c`
 - Modify: `ingress/protocol/tests/protocol_network_e2e_fixture.c`
 - Modify: `ingress/protocol/tests/CMakeLists.txt`
-- Modify production network-intake files only if the real gate exposes a scoped bug.
 
 **Interfaces:**
-- Reuses the Task 5 harness.
-- Uses packet message context peer identity to supply CoAP `device_id`.
+- Reuses Task 6 harness and Task 4 canonical packet-device identity.
 
-- [ ] **Step 1: Add exact CoAP/UDP config and KCP negative test**
+- [ ] **Step 1: Add exact CoAP configuration and KCP negative gate**
 
-Positive Source config must use:
+Load exact `coap` v1.0.0 DLL. Positive Source uses `cnet.packet_source` with `packet_mode: udp` and explicit zero KCP/security/FEC fields. Intake uses `protocol_provider: coap`, `protocol_kind: coap`, `protocol_version: RFC7252`.
 
-```yaml
-kind: cnet.packet_source
-config:
-  packet_mode: udp
-  # all existing explicit empty KCP/security/FEC fields remain present
-```
-
-Intake config:
-
-```yaml
-protocol_provider: coap
-protocol_kind: coap
-protocol_version: RFC7252
-```
-
-Use the existing valid GET frame:
+Valid wire frame:
 
 ```c
 static const uint8_t coap_get[] = {0x40u, 0x01u, 0x12u, 0x34u};
 ```
 
-Before the positive path, change only `packet_mode` to `kcp` with a valid KCP policy and assert `turbo_flow_protocol_network_intake_create()` returns `SALTS_ENOTSUP` while the real Source has not opened a socket.
+Create a separate valid-KCP resolved config and assert `turbo_flow_protocol_network_intake_create()` returns `SALTS_ENOTSUP`, `flow_io` remains caller-owned, and its connection snapshot still shows configured port zero because the Source never started.
 
-- [ ] **Step 2: Write real UDP RED**
+- [ ] **Step 2: Run real UDP intake**
 
-Send `coap_get` from a bound real UDP peer to the configured packet Source. Poll intake until one Inbox record appears, then claim it directly once to verify decoded envelope metadata contains a nonempty canonical peer-derived device id; return the record to PENDING using the existing explicit failure/retry path or run this metadata check in a dedicated provider fixture so the business test still starts from PENDING.
-
-Preferred no-state-distortion approach: decode the TBE envelope from a read-only provider claim in a dedicated test instance, complete it, and use a fresh instance for business delivery.
-
-- [ ] **Step 3: Prove destination is configuration, not protocol**
-
-Run the same CoAP input twice with identical business graph shape and payload but two resolved configs:
-
-```text
-run A -> udp.output peer_port = receiver_A
-run B -> udp.output peer_port = receiver_B
-```
-
-Assertions:
+Start the UDP intake, obtain the actual endpoint:
 
 ```c
-check_equal(receiver_a.datagrams, 1u);
-check_equal(receiver_b.datagrams, 0u); /* after run A */
-/* reset, run B */
-check_equal(receiver_a.datagrams, 0u);
-check_equal(receiver_b.datagrams, 1u);
+unsigned port = 0u;
+check_equal(sscanf(snapshot.source_endpoint, "udp://127.0.0.1:%u", &port), 1);
+check_true(port > 0u && port <= UINT16_MAX);
 ```
 
-The `protocol.intake` section is unchanged between A/B; only the business CNet datagram Sink destination changes.
+Bind a real UDP sender, send `coap_get`, poll until one Inbox record appears, and in a dedicated test instance claim/decode the ProtocolInbox TBE envelope to assert `deviceId` starts with `udp4-` and is nonempty. Complete that dedicated record.
 
-- [ ] **Step 4: Add stale packet generation focused check**
+- [ ] **Step 3: Prove destination A/B independence**
 
-Use Task 3 internal test support to enqueue a valid packet-context message for slot S/generation N+1, then a crafted older S/N message with a non-increasing message ID. Assert the stale claim completes `SALTS_EPROTO` and Inbox admission count does not increase.
+Use two fresh runs. Keep protocol.intake config and CoAP wire input byte-identical. Configure only the business CNet datagram Sink peer port differently.
 
-The real positive CoAP test still uses the actual CNet packet Source.
+```c
+check_equal(run_a.receiver_a_datagrams, 1u);
+check_equal(run_a.receiver_b_datagrams, 0u);
+check_equal(run_b.receiver_a_datagrams, 0u);
+check_equal(run_b.receiver_b_datagrams, 1u);
+```
 
-- [ ] **Step 5: Run GREEN**
+- [ ] **Step 4: Run acceptance**
 
 ```bash
 cmake --build --preset win-dev-user --target \
@@ -1073,95 +940,85 @@ ctest --preset win-dev-user -R \
   --output-on-failure
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add ingress/protocol/tests/test_protocol_network_coap.c \
-        ingress/protocol/tests/protocol_network_e2e_fixture.* \
-        ingress/protocol/tests/CMakeLists.txt \
-        ingress/protocol/network/src
+        ingress/protocol/tests/protocol_network_e2e_fixture.c \
+        ingress/protocol/tests/CMakeLists.txt ingress/protocol/network/src
 git commit -m "test(protocol): prove real CoAP UDP intake"
 ```
 
 ---
 
-### Task 7: Run the same real network contract on TurboDB, including lock/no-fallback and restart recovery
+### Task 8: TurboDB parity, storage backpressure/failure, and restart recovery
 
 **Files:**
 - Create: `ingress/protocol/tests/protocol_network_turbodb_fixture.h`
 - Create: `ingress/protocol/tests/protocol_network_turbodb_fixture.c`
 - Create: `ingress/protocol/tests/test_protocol_network_turbodb.c`
+- Modify: `ingress/protocol/tests/protocol_network_e2e_fixture.h`
+- Modify: `ingress/protocol/tests/protocol_network_e2e_fixture.c`
 - Modify: `ingress/protocol/tests/CMakeLists.txt`
 
 **Interfaces:**
-- Reuses public `TurboFlow::TurboDbAdapter` and exact v2 schema.
-- Does not introduce a production failure hook.
+- Reuses public TurboDB Inbox v2 only; no production fault hook is introduced.
 
-- [ ] **Step 1: Create an exact v2 database fixture**
+- [ ] **Step 1: Add exact test-only v2 SQLite fixture**
 
-Copy the existing authoritative DDL from `io/turbodb/tests/test_turbodb_inbox.c` into one shared protocol-network test fixture, including:
-- `<namespace>_inbox_meta_v2` exact columns;
-- `<namespace>_inbox_records_v2` exact columns;
-- unique `(source_id, admission_id)` index;
-- phase index;
-- exact v2 metadata row;
-- file-backed SQLite config accepted by `turbo_flow_turbodb_inbox_create()`.
+Copy the authoritative column/index contracts from `io/turbodb/tests/test_turbodb_inbox.c`, changing only the namespace consistently to `network`. Provision a file-backed SQLite DB, exact meta row, unique `(source_id, admission_id)` index, and phase index.
 
-Use a protocol-specific namespace such as `network` consistently in table names and config.
+- [ ] **Step 2: Parameterize real-network harness by caller-selected Inbox**
 
-- [ ] **Step 2: Parameterize the Task 5/6 harness over `turbo_flow_inbox_t *`**
+Make the Task 6/7 harness accept `turbo_flow_inbox_t *`. Run one JT/T808 path and one CoAP path on memory, then the same two paths on TurboDB. Shared assertions are one admission, no business work before claim, one business UDP result, and valid post-stop admitted record state.
 
-The real TCP/JTT808 and UDP/CoAP routines must accept an already-created Inbox handle and make no provider-specific assumptions.
+- [ ] **Step 3: Write writer-lock RED for explicit backpressure and Source-poll gating**
 
-Run both paths once with memory and once with TurboDB. Assertions shared across providers:
-- exactly one admission;
-- business Graph starts only after claim;
-- exactly one UDP business result;
-- cancel/stop leaves admitted record state valid.
+With a live TurboDB Inbox, open a second ORM connection, begin a serializable transaction, and execute this no-op write inside it:
 
-- [ ] **Step 3: Add real SQLite writer-lock RED for no fallback**
-
-After creating the TurboDB Inbox, open a second ORM connection and hold a write transaction without changing logical metadata:
-
-```c
-check_equal(orm_transaction_begin(connection, ORM_ISOLATION_SERIALIZABLE,
-                                  &lock_tx, &error), ORM_STATUS_OK);
-/* acquire SQLite writer ownership with a no-op write */
-inbox_db_execute_in_transaction(connection, lock_tx,
-    "UPDATE network_inbox_meta_v2 SET admitted=admitted WHERE singleton_id=1", &error);
+```sql
+UPDATE network_inbox_meta_v2
+SET admitted = admitted
+WHERE singleton_id = 1
 ```
 
-Also create an unused memory Inbox and snapshot it.
-
-Send one valid real JTT808 or CoAP frame, then poll intake repeatedly while the DB writer lock is held:
+Send one real valid frame and poll until intake reports `backpressured`. Save `uint64_t blocked_source_polls = snapshot.source_polls`. While the writer lock remains held, call public intake `poll()` ten times with timeout zero and assert after every call:
 
 ```c
-check_equal(turbo_flow_protocol_network_intake_poll(intake, 0u, &snapshot), SALTS_OK);
 check_true(snapshot.backpressured);
+check_equal(snapshot.source_polls, blocked_source_polls);
 check_equal(business_stage_calls, 0u);
-check_equal(memory_snapshot.admitted, 0u);
 ```
 
-Rollback/release the external lock, poll again, and assert the same retained frame is admitted exactly once to TurboDB and memory remains zero.
+Rollback the external writer transaction, poll again, then assert TurboDB contains exactly one new record and the retained frame was not duplicated.
 
-- [ ] **Step 4: Add restart/recovery test**
+- [ ] **Step 4: Write non-capacity storage-failure RED with no alternate provider**
 
-Sequence:
+Use a fresh temp DB. After `turbo_flow_turbodb_inbox_create()` succeeds, use a second connection to execute:
+
+```sql
+DROP TABLE network_inbox_records_v2
+```
+
+Create a separate memory Inbox but do not pass it to ProtocolNetworkIntake. Snapshot its `admitted` counter before the network send. Send one real valid frame and poll until the storage operation returns a non-capacity error. Assert intake state is FAILED, business Graph count remains zero, and the unused memory Inbox `admitted` counter is unchanged.
+
+This proves the high-level owner cannot choose an alternate provider: its public config contains exactly one Inbox handle.
+
+- [ ] **Step 5: Add clean-close/reopen recovery**
 
 ```text
-real network intake -> committed TurboDB record
+real network frame -> committed TurboDB record
 stop/destroy ProtocolNetworkIntake
-close/destroy TurboDB Inbox provider
-reopen same pre-provisioned namespace from same file
-create/start the same business Graph + InboxSource
-claim/process record once
-assert UDP result exactly once
-assert no memory Inbox admission
+close/destroy TurboDB Inbox
+reopen same namespace/file with EXCLUSIVE mode
+start business generation + InboxSource
+process exactly one recovered record
+observe exactly one UDP business datagram
 ```
 
-Use exclusive reopen after clean close; takeover semantics remain covered by existing TurboDB tests and need not be reimplemented here.
+Do not duplicate takeover testing already covered by `test_turbodb_inbox`.
 
-- [ ] **Step 5: Run TurboDB focused and existing provider gates**
+- [ ] **Step 6: Run GREEN**
 
 ```bash
 cmake --build --preset win-dev-user --target \
@@ -1171,114 +1028,85 @@ ctest --preset win-dev-user -R \
   --output-on-failure
 ```
 
-Expected: real network/TurboDB test GREEN; existing schema/takeover gates unchanged.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add ingress/protocol/tests/protocol_network_turbodb_fixture.* \
+git add ingress/protocol/tests/protocol_network_turbodb_fixture.h \
+        ingress/protocol/tests/protocol_network_turbodb_fixture.c \
         ingress/protocol/tests/test_protocol_network_turbodb.c \
-        ingress/protocol/tests/protocol_network_e2e_fixture.* \
+        ingress/protocol/tests/protocol_network_e2e_fixture.h \
+        ingress/protocol/tests/protocol_network_e2e_fixture.c \
         ingress/protocol/tests/CMakeLists.txt
 git commit -m "test(protocol): prove durable network intake"
 ```
 
 ---
 
-### Task 8: Export/install the component and prove package/dependency closure
+### Task 9: Install/export ProtocolNetworkIntake and prove dependency closure
 
 **Files:**
 - Modify: `cmake/TurboFlowConfig.cmake.in`
+- Modify: `CMakeLists.txt`
 - Create: `tests/install_protocol_network_intake_consumer/CMakeLists.txt`
 - Create: `tests/install_protocol_network_intake_consumer/main.c`
 - Create: `tests/install_protocol_network_intake_consumer/header.cpp`
 - Create: `tests/install_protocol_network_intake_consumer/run.cmake`
-- Modify: `CMakeLists.txt`
 
 **Interfaces:**
-- Produces installed component/target: `TurboFlow::ProtocolNetworkIntake`.
-- No new runtime plugin export; protocol/CNet provider DLLs keep canonical `turbo_flow_plugin_get_api` only.
+- Produces installed `TurboFlow::ProtocolNetworkIntake` component.
+- Does not make NetworkIntake a plugin and does not add plugin exports.
 
-- [ ] **Step 1: Write package RED**
-
-Consumer CMake:
+- [ ] **Step 1: Write install-consumer RED**
 
 ```cmake
 cmake_minimum_required(VERSION 3.20)
 project(TurboFlowProtocolNetworkIntakeConsumer LANGUAGES C CXX)
 find_package(TurboFlow CONFIG REQUIRED COMPONENTS ProtocolNetworkIntake)
 add_executable(protocol_network_intake_consumer main.c header.cpp)
-target_link_libraries(protocol_network_intake_consumer
-  PRIVATE TurboFlow::ProtocolNetworkIntake)
+target_link_libraries(protocol_network_intake_consumer PRIVATE TurboFlow::ProtocolNetworkIntake)
 ```
 
-`main.c` must include only installed headers and instantiate exact init values:
+`main.c` includes only installed `turbo_flow_protocol_network_intake.h` and validates both init macro versions. `header.cpp` includes the same public header from C++.
 
-```c
-#include <turbo_flow_protocol_network_intake.h>
-int main(void) {
-  turbo_flow_protocol_network_intake_config_t config =
-      TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT;
-  turbo_flow_protocol_network_intake_snapshot_t snapshot =
-      TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
-  return config.version == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION &&
-                 snapshot.version == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION
-             ? 0
-             : 1;
-}
-```
-
-C++ file includes the same header and uses no private build-tree include path.
-
-- [ ] **Step 2: Run install consumer RED**
+- [ ] **Step 2: Verify RED**
 
 ```bash
 cmake --build --preset install-win-dev-user
 ctest --preset win-dev-user -R "protocol_network_intake.*install" --output-on-failure
 ```
 
-Expected before package update: unsupported `ProtocolNetworkIntake` component or missing imported target.
+Expected: package does not yet recognize `ProtocolNetworkIntake`.
 
-- [ ] **Step 3: Add package component/dependency declarations**
+- [ ] **Step 3: Register package component**
 
-Append `ProtocolNetworkIntake` to `_TurboFlow_supported_components`.
+Add `ProtocolNetworkIntake` to `_TurboFlow_supported_components`, `_TurboFlow_salts_utils_components`, and `_TurboFlow_rules_forge_components`. Do not add it to `_TurboFlow_needs_turbodb`, because the owner accepts any caller-supplied Inbox and does not require TurboDB at link/package time.
 
-Because its public headers/types use Graph/PluginHost and its installed shared library depends on the same SaltsUtils/RulesForge closure as Graph/CNet, add it to:
+Register the fresh-install CTest using the same isolated install-prefix pattern as existing consumers.
 
-```cmake
-_TurboFlow_salts_utils_components
-_TurboFlow_rules_forge_components
-```
+- [ ] **Step 4: Add explicit dependency/export closure assertions**
 
-Do **not** add it to `_TurboFlow_needs_turbodb`; the public owner accepts a caller-owned Inbox and does not require TurboDB unless the application explicitly requests `TurboDbAdapter`.
-
-- [ ] **Step 4: Register the install CTest in top-level CMake**
-
-Follow the existing installed-consumer pattern and run against the fresh install prefix, not the build tree.
-
-- [ ] **Step 5: Verify dependency direction**
-
-Check generated/imported link interfaces and platform DLL dependencies:
+The package gate must verify:
 
 ```text
-ProtocolNetworkIntake -> Graph, PluginHost, CNetAdapter, ProtocolIngressInbox, xxHash/Salts runtime
-Graph -X-> ProtocolNetworkIntake
-ProtocolIngress -X-> CNetAdapter
-Protocol DLLs -X-> ProtocolNetworkIntake
+ProtocolNetworkIntake -> Graph
+ProtocolNetworkIntake -> PluginHost
+ProtocolNetworkIntake -> CNetAdapter
+ProtocolNetworkIntake -> ProtocolIngressInbox
+Graph does not depend on ProtocolNetworkIntake
+ProtocolIngress does not depend on CNetAdapter
+JT/T808 and CoAP plugin DLLs do not depend on ProtocolNetworkIntake
 ```
 
-On Windows use the repository's existing dependency inspection scripts/tooling; on Unix use the existing CI closure mechanism. The test must fail if Graph gains a NetworkIntake/CNet/protocol DLL dependency.
+Use the repository's existing platform dependency-inspection mechanism. Also verify the JT/T808, CoAP, and CNet plugin DLLs retain only the canonical plugin discovery export; `tf_protocol_network_intake` is an ordinary shared library.
 
-Also assert every plugin DLL still exports only its canonical root discovery symbol for plugin registration; `tf_protocol_network_intake` is an ordinary installed library, not a plugin.
-
-- [ ] **Step 6: Run install GREEN**
+- [ ] **Step 5: Run GREEN**
 
 ```bash
 cmake --build --preset install-win-dev-user
 ctest --preset win-dev-user -R "protocol_network_intake.*install" --output-on-failure
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add cmake/TurboFlowConfig.cmake.in CMakeLists.txt \
@@ -1288,24 +1116,22 @@ git commit -m "build: install protocol network intake component"
 
 ---
 
-### Task 9: Final exact-head verification, docs, and #118 evidence update
+### Task 10: Exact-head full verification, documentation, and #118 evidence
 
 **Files:**
-- Modify only after all gates are GREEN:
-  - `ingress/protocol/README.md` and/or `README.md`
-  - issue #118 evidence/checklist through GitHub
-- No new behavior in this task.
+- Modify after all gates pass: `ingress/protocol/README.md`
+- Update GitHub issue #118 only with verified exact-head evidence.
 
 **Interfaces:**
-- Consumes all previous task outputs.
-- Produces the merge-ready exact-head evidence set.
+- Produces merge-ready evidence; no new behavior.
 
-- [ ] **Step 1: Run formatting/diff checks before broad CI**
+- [ ] **Step 1: Run formatting/diff checks**
 
 ```bash
 clang-format --dry-run --Werror \
   io/cnet/include/turbo_flow_cnet.h \
   io/cnet/src/turbo_flow_cnet_listener_source.c \
+  io/cnet/src/turbo_flow_cnet_plugin.c \
   ingress/protocol/network/include/turbo_flow_protocol_network_intake.h \
   ingress/protocol/network/src/*.c \
   ingress/protocol/network/src/*.h \
@@ -1315,17 +1141,15 @@ clang-format --dry-run --Werror \
 git diff --check
 ```
 
-- [ ] **Step 2: Run Debug/ASan focused exact-head gate**
+- [ ] **Step 2: Run Debug/ASan focused gate**
 
 ```bash
 cmake --preset win-dev-user
 cmake --build --preset win-dev-user --parallel
 ctest --preset win-dev-user -R \
-  "(protocol_network|protocol_source|protocol_inbox|flow_inbox_source|cnet_listener_source|cnet_packet_source|cnet_datagram_sink|turbodb_inbox)" \
+  "(protocol_network|protocol_source|protocol_inbox|flow_inbox_source|cnet_listener_source|cnet_packet_source|cnet_datagram_sink|cnet_plugin|turbodb_inbox)" \
   --output-on-failure
 ```
-
-Do not call Task 9 GREEN if any selected adjacent test is RED.
 
 - [ ] **Step 3: Run Release full suite**
 
@@ -1335,59 +1159,67 @@ cmake --build --preset win-release-user --parallel
 ctest --preset win-release-user --output-on-failure
 ```
 
-Expected: complete suite PASS at one exact commit SHA.
-
 - [ ] **Step 4: Run fresh install/package gate**
 
 ```bash
 cmake --build --preset install-win-dev-user
+ctest --preset win-dev-user -R "install" --output-on-failure
 ```
 
-Then run the repository's installed consumers including the new ProtocolNetworkIntake C/C++ consumer from the install prefix.
+- [ ] **Step 5: Check every acceptance item against a named test**
 
-- [ ] **Step 5: Verify the acceptance matrix explicitly**
-
-Record evidence for:
+Record exact test/run evidence for:
 
 ```text
-JT/T808/TCP real peer: GREEN
-CoAP/UDP real peer: GREEN
-store-before-business-Graph: GREEN
-TurboDB lock/no memory fallback: GREEN
-capacity retained-frame exactly-once admission: GREEN
-TCP generation reuse: GREEN
-stale UDP generation: GREEN
-KCP preflight rejection: GREEN
-memory/TurboDB parity: GREEN
-TurboDB clean-reopen recovery: GREEN
-destination A/B independence: GREEN
-catalog/module pin/unload: GREEN
-installed C/C++ consumer: GREEN
-full Debug/ASan + Release: GREEN
+public intake ABI/lifecycle
+listener message context
+configured Source actual endpoint
+real JT/T808/TCP
+real CoAP/UDP
+KCP preflight rejection
+store-before-business-Graph
+TurboDB lock backpressure
+non-capacity TurboDB failure/no alternate Inbox
+retained-frame exactly-once retry
+source_polls frozen while blocked
+partial TCP claim completion without Inbox admission
+TCP generation reuse
+stale UDP generation
+pending claim/byte bound
+deterministic replay with timestamp_ns=0
+business Graph failure settlement from existing test_flow_inbox_source
+stop cancellation preserving admitted records
+catalog/module pin/unload
+memory/TurboDB parity
+TurboDB clean reopen
+business destination A/B independence
+installed C/C++ consumer
+dependency/export/profile checks
+Debug/ASan and Release full suites
 ```
 
-If any line lacks a concrete test/run, leave #118 open and report that missing gate instead of broadening scope.
+If any line lacks evidence, leave #118 open and report that exact missing gate.
 
-- [ ] **Step 6: Update documentation only to claims proven above**
+- [ ] **Step 6: Update protocol documentation**
 
-Document the installed path:
+Document only the proven installed path:
 
 ```text
 configured CNet Source -> ProtocolNetworkIntake -> ProtocolSource -> ProtocolInbox -> Inbox
 InboxSource -> shared business Graph -> configured CNet Sink
 ```
 
-State explicitly that FlowMQ #74, Flowie #115, RulesForge DLL #73, and KCP intake remain separate.
+State that FlowMQ #74, Flowie #115, RulesForge DLL #73, and KCP intake remain separate.
 
-- [ ] **Step 7: Update #118 with exact head and verification evidence**
+- [ ] **Step 7: Update #118**
 
-Post the exact commit SHA, named CTest gates, full-suite result, install result, and the remaining non-goals. Close #118 only if its current issue body has no independent unchecked requirement beyond the approved two-protocol completion boundary.
+Post exact head SHA, named focused tests, Release full-suite count/result, install result, dependency/export result, and remaining non-goals. Close #118 only when the live issue has no independent unchecked requirement beyond the approved two-protocol boundary.
 
-- [ ] **Step 8: Commit documentation**
+- [ ] **Step 8: Commit docs**
 
 ```bash
-git add README.md ingress/protocol/README.md
+git add ingress/protocol/README.md
 git commit -m "docs: record real protocol intake completion"
 ```
 
-Do not include generated build artifacts, `.codegraph/`, local databases, or temporary socket fixtures.
+Do not commit build artifacts, `.codegraph/`, local SQLite files, or temporary socket files.
