@@ -26,15 +26,13 @@ struct turbo_flow_protocol_network_intake_s {
 
 static int intake_owner_error(turbo_flow_config_error_t *error, int status, const char *path,
                               const char *message) {
-  if (error && error->size >= sizeof(*error)) {
-    if (error->status == SALTS_OK) {
-      *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-      error->status = status;
-      (void)snprintf(error->path, sizeof(error->path), "%s",
-                     path ? path : "$.protocol_network_intake");
-      (void)snprintf(error->message, sizeof(error->message), "%s",
-                     message ? message : "ProtocolNetworkIntake error");
-    }
+  if (error && error->size >= sizeof(*error) && error->status == SALTS_OK) {
+    *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    error->status = status;
+    (void)snprintf(error->path, sizeof(error->path), "%s",
+                   path ? path : "$.protocol_network_intake");
+    (void)snprintf(error->message, sizeof(error->message), "%s",
+                   message ? message : "ProtocolNetworkIntake error");
   }
   return status;
 }
@@ -127,71 +125,64 @@ static int intake_owner_source_provider(
   return SALTS_OK;
 }
 
-static int intake_owner_source_owner_valid(const turbo_flow_plugin_product_owner_v1_t *owner) {
-  const turbo_flow_plugin_product_owner_flags_t known =
-      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD | TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE |
-      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
-  if (!owner || owner->size != sizeof(*owner) ||
-      owner->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      owner->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !owner->ctx ||
-      (owner->flags & ~known) != 0u ||
-      ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD) != 0u) ==
-          ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE) != 0u) ||
-      (owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) == 0u || !owner->quiesce ||
-      !owner->drain || !owner->shutdown || !owner->destroy || !owner->poll)
-    return 0;
-  return 1;
-}
-
 static int intake_owner_source_owner_abi_valid(const turbo_flow_plugin_product_owner_v1_t *owner) {
   return owner && owner->size == sizeof(*owner) &&
          owner->abi_major == TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR &&
          owner->abi_minor == TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
 }
 
-static void intake_owner_source_destroy_unstarted(
-    turbo_flow_plugin_product_owner_v1_t *owner, int validated_lifecycle) {
-  if (!owner || !owner->ctx) return;
-  if (validated_lifecycle) {
-    if (owner->quiesce) (void)owner->quiesce(owner->ctx, 0u);
-    if (owner->drain) (void)owner->drain(owner->ctx, 0u);
-    if (owner->shutdown) (void)owner->shutdown(owner->ctx);
-  }
-  if (owner->destroy) owner->destroy(owner->ctx);
+static int intake_owner_source_owner_valid(const turbo_flow_plugin_product_owner_v1_t *owner) {
+  const turbo_flow_plugin_product_owner_flags_t known =
+      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD | TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE |
+      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
+  return intake_owner_source_owner_abi_valid(owner) && owner->ctx &&
+         (owner->flags & ~known) == 0u &&
+         (((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD) != 0u) !=
+          ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE) != 0u)) &&
+         (owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) != 0u && owner->quiesce &&
+         owner->drain && owner->shutdown && owner->destroy && owner->poll;
+}
+
+static void intake_owner_destroy_unstarted_product(
+    turbo_flow_plugin_product_owner_v1_t *owner) {
+  if (!owner || !owner->ctx || !owner->destroy) return;
+  /* The Graph has already removed every registered callback. This mirrors generation-create
+     rollback: an unstarted Product owner is retired directly by its validated destroy callback. */
+  owner->destroy(owner->ctx);
   *owner = (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
 }
 
 static void intake_owner_pretransfer_cleanup(turbo_flow_protocol_network_intake_t *intake) {
   if (!intake) return;
   flow_protocol_network_intake_sink_destroy(intake->sink);
-  intake->sink = NULL;
   if (intake->protocol_owner) turbo_flow_protocol_owner_destroy(intake->protocol_owner);
-  intake->protocol_owner = NULL;
-  intake->protocol = NULL;
   if (intake->protocol_registry) (void)turbo_flow_protocol_registry_destroy(intake->protocol_registry);
-  intake->protocol_registry = NULL;
   if (intake->catalog) turbo_flow_plugin_catalog_snapshot_destroy(intake->catalog);
-  intake->catalog = NULL;
   free(intake);
 }
 
-static void intake_owner_failed_create_cleanup(turbo_flow_protocol_network_intake_t *intake,
-                                               int source_owner_valid) {
+static void intake_owner_failed_create_cleanup(turbo_flow_protocol_network_intake_t *intake) {
   if (!intake) return;
   if (intake->flow) {
     turbo_flow_destroy(intake->flow);
     intake->flow = NULL;
   }
-  if (intake->source_owner.ctx)
-    intake_owner_source_destroy_unstarted(&intake->source_owner, source_owner_valid);
+  intake_owner_destroy_unstarted_product(&intake->source_owner);
   flow_protocol_network_intake_sink_destroy(intake->sink);
-  intake->sink = NULL;
   if (intake->protocol_owner) turbo_flow_protocol_owner_destroy(intake->protocol_owner);
-  intake->protocol_owner = NULL;
-  intake->protocol = NULL;
   if (intake->protocol_registry) (void)turbo_flow_protocol_registry_destroy(intake->protocol_registry);
-  intake->protocol_registry = NULL;
   if (intake->catalog) turbo_flow_plugin_catalog_snapshot_destroy(intake->catalog);
+  free(intake);
+}
+
+static void intake_owner_pin_unretirable(turbo_flow_protocol_network_intake_t *intake) {
+  if (!intake) return;
+  if (intake->flow) turbo_flow_destroy(intake->flow);
+  flow_protocol_network_intake_sink_destroy(intake->sink);
+  if (intake->protocol_owner) turbo_flow_protocol_owner_destroy(intake->protocol_owner);
+  if (intake->protocol_registry) (void)turbo_flow_protocol_registry_destroy(intake->protocol_registry);
+  /* Keep the explicit catalog retain alive forever. The current ABI has no force-unload or
+     owner-repair operation for an opaque Product owner whose layout cannot be trusted. */
   intake->catalog = NULL;
   free(intake);
 }
@@ -200,15 +191,19 @@ static int intake_owner_refresh_endpoint(turbo_flow_protocol_network_intake_t *i
   turbo_flow_connection_snapshot_t snapshot;
   if (!intake || !intake->flow) return SALTS_EINVAL;
   for (size_t i = 0u; i < turbo_flow_adapter_count(intake->flow); ++i) {
+    const char *terminator;
     int rc;
     memset(&snapshot, 0, sizeof(snapshot));
     rc = turbo_flow_adapter_connection_snapshot_at(intake->flow, i, &snapshot);
     if (rc == SALTS_ENOTSUP || rc == SALTS_ENOENT) continue;
     if (rc != SALTS_OK) return rc;
-    if (!snapshot.adapter_name || strcmp(snapshot.adapter_name, intake->settings.source_adapter_name) != 0)
+    if (!snapshot.adapter_name ||
+        strcmp(snapshot.adapter_name, intake->settings.source_adapter_name) != 0)
       continue;
-    if (strlen(snapshot.endpoint) > TURBO_FLOW_ENDPOINT_MAX) return SALTS_EPROTO;
-    memcpy(intake->source_endpoint, snapshot.endpoint, strlen(snapshot.endpoint) + 1u);
+    terminator = (const char *)memchr(snapshot.endpoint, '\0', sizeof(snapshot.endpoint));
+    if (!terminator) return SALTS_EPROTO;
+    memcpy(intake->source_endpoint, snapshot.endpoint,
+           (size_t)(terminator - snapshot.endpoint) + 1u);
     return SALTS_OK;
   }
   return SALTS_ENOENT;
@@ -255,17 +250,15 @@ int turbo_flow_protocol_network_intake_create(
   turbo_flow_protocol_network_intake_t *intake = NULL;
   turbo_flow_protocol_open_request_t request = TURBO_FLOW_PROTOCOL_OPEN_REQUEST_INIT;
   turbo_flow_plugin_product_owner_v1_t source_owner = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
-  turbo_flow_protocol_t *protocol = NULL;
   flow_protocol_network_intake_sink_config_t sink_config;
   int rc;
-  int source_owner_valid = 0;
 
   rc = intake_owner_public_validate(config, intake_flow_io, out, error);
   if (rc != SALTS_OK) return rc;
-
   intake = (turbo_flow_protocol_network_intake_t *)calloc(1u, sizeof(*intake));
-  if (!intake) return intake_owner_error(error, SALTS_ENOMEM, "$.protocol_network_intake",
-                                         "failed to allocate ProtocolNetworkIntake owner");
+  if (!intake)
+    return intake_owner_error(error, SALTS_ENOMEM, "$.protocol_network_intake",
+                              "failed to allocate ProtocolNetworkIntake owner");
   intake->source_owner =
       (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
   intake->state = TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_COMPILED;
@@ -323,13 +316,12 @@ int turbo_flow_protocol_network_intake_create(
                               "configured protocol provider/version could not be opened");
   }
   rc = turbo_flow_protocol_owner_instance(intake->protocol_owner, intake->settings.protocol_kind,
-                                          &protocol);
-  if (rc != SALTS_OK || !protocol) {
+                                          &intake->protocol);
+  if (rc != SALTS_OK || !intake->protocol) {
     intake_owner_pretransfer_cleanup(intake);
     return intake_owner_error(error, rc != SALTS_OK ? rc : SALTS_EPROTO, "$.protocol",
                               "configured protocol owner returned no matching instance");
   }
-  intake->protocol = protocol;
 
   memset(&sink_config, 0, sizeof(sink_config));
   sink_config.flow = *intake_flow_io;
@@ -348,7 +340,7 @@ int turbo_flow_protocol_network_intake_create(
   *intake_flow_io = NULL;
   rc = flow_protocol_network_intake_sink_register(intake->sink);
   if (rc != SALTS_OK) {
-    intake_owner_failed_create_cleanup(intake, 0);
+    intake_owner_failed_create_cleanup(intake);
     return intake_owner_error(error, rc, "$.protocol_network_intake.sink",
                               "failed to register protocol intake Sink");
   }
@@ -357,44 +349,32 @@ int turbo_flow_protocol_network_intake_create(
   rc = source_provider->materialize(source_provider->ctx, intake->flow, config->resolved,
                                     config->source_adapter_name, &source_owner, error);
   if (rc != SALTS_OK) {
-    intake_owner_failed_create_cleanup(intake, 0);
+    intake_owner_failed_create_cleanup(intake);
     return intake_owner_error(error, rc, "$.adapters",
                               "configured Source provider materialization failed");
   }
   intake->source_owner = source_owner;
-  source_owner_valid = intake_owner_source_owner_valid(&intake->source_owner);
-  if (!source_owner_valid) {
-    const int abi_valid = intake_owner_source_owner_abi_valid(&intake->source_owner);
-    const int destroy_usable = abi_valid && intake->source_owner.ctx && intake->source_owner.destroy;
-    if (!destroy_usable) {
-      /* A successful provider returned an owner that cannot be retired safely. Keep the
-         catalog lease pinned rather than unloading callback code behind an opaque ctx. */
-      turbo_flow_destroy(intake->flow);
-      intake->flow = NULL;
-      flow_protocol_network_intake_sink_destroy(intake->sink);
-      intake->sink = NULL;
-      if (intake->protocol_owner) turbo_flow_protocol_owner_destroy(intake->protocol_owner);
-      intake->protocol_owner = NULL;
-      intake->protocol = NULL;
-      if (intake->protocol_registry)
-        (void)turbo_flow_protocol_registry_destroy(intake->protocol_registry);
-      intake->protocol_registry = NULL;
-      intake->catalog = NULL; /* intentionally pin the retained lease */
-      free(intake);
-      return intake_owner_error(error, SALTS_EINVAL, "$.adapters.owner",
-                                "provider returned an unretirable Product owner");
-    }
-    intake_owner_failed_create_cleanup(intake, 0);
+  if (!intake_owner_source_owner_abi_valid(&intake->source_owner)) {
+    intake_owner_pin_unretirable(intake);
     return intake_owner_error(error, SALTS_EINVAL, "$.adapters.owner",
-                              "provider returned an invalid Product owner contract");
+                              "provider returned an incompatible Product owner ABI");
+  }
+  if (!intake_owner_source_owner_valid(&intake->source_owner)) {
+    if (!intake->source_owner.ctx || !intake->source_owner.destroy) {
+      intake_owner_pin_unretirable(intake);
+      return intake_owner_error(error, SALTS_EPROTO, "$.adapters.owner",
+                                "provider returned an unretirable Product owner vtable");
+    }
+    intake_owner_failed_create_cleanup(intake);
+    return intake_owner_error(error, SALTS_EPROTO, "$.adapters.owner",
+                              "provider returned an invalid Product owner vtable");
   }
 
   rc = turbo_flow_compile(intake->flow);
   if (rc != SALTS_OK) {
-    intake_owner_failed_create_cleanup(intake, 1);
+    intake_owner_failed_create_cleanup(intake);
     return intake_owner_error(error, rc, "$.graph", "failed to compile intake Flow");
   }
-
   *out = intake;
   return SALTS_OK;
 }
@@ -425,7 +405,6 @@ int turbo_flow_protocol_network_intake_poll(
     (void)intake_owner_snapshot_copy(intake, snapshot);
     return SALTS_EBUSY;
   }
-
   rc = flow_protocol_network_intake_sink_retry(intake->sink);
   if (rc != SALTS_OK) return intake_owner_fail(intake, rc, snapshot);
   memset(&metrics, 0, sizeof(metrics));
@@ -437,14 +416,12 @@ int turbo_flow_protocol_network_intake_poll(
     intake->status = SALTS_OK;
     return intake_owner_snapshot_copy(intake, snapshot);
   }
-
   if (intake->source_polls == UINT64_MAX) return intake_owner_fail(intake, SALTS_ERANGE, snapshot);
   ++intake->source_polls;
   rc = intake->source_owner.poll(intake->source_owner.ctx, timeout_ms);
   if (rc != SALTS_OK) return intake_owner_fail(intake, rc, snapshot);
   rc = intake_owner_refresh_endpoint(intake);
   if (rc != SALTS_OK) return intake_owner_fail(intake, rc, snapshot);
-
   memset(&metrics, 0, sizeof(metrics));
   flow_protocol_network_intake_sink_metrics(intake->sink, &metrics);
   if (metrics.terminal_status != SALTS_OK)
@@ -466,10 +443,10 @@ int turbo_flow_protocol_network_intake_stop(turbo_flow_protocol_network_intake_t
                                             uint64_t timeout_ms) {
   int rc;
   int first_status = SALTS_OK;
+  turbo_flow_state_t flow_state;
   if (!intake) return SALTS_EINVAL;
   if (intake->state == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPED) return SALTS_EALREADY;
   if (intake->state == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPING) return SALTS_EBUSY;
-
   if (intake->state == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_COMPILED) {
     rc = intake->source_owner.quiesce(intake->source_owner.ctx, timeout_ms);
     if (rc != SALTS_OK) return intake_owner_fail(intake, rc, NULL);
@@ -482,7 +459,9 @@ int turbo_flow_protocol_network_intake_stop(turbo_flow_protocol_network_intake_t
   rc = intake->source_owner.quiesce(intake->source_owner.ctx, timeout_ms);
   if (rc != SALTS_OK) first_status = rc;
   flow_protocol_network_intake_sink_cancel(intake->sink, SALTS_ECANCELED);
-  if (intake->flow && turbo_flow_state(intake->flow) == TURBO_FLOW_STATE_STARTED) {
+  flow_state = intake->flow ? turbo_flow_state(intake->flow) : TURBO_FLOW_STATE_STOPPED;
+  if (intake->flow &&
+      (flow_state == TURBO_FLOW_STATE_STARTED || flow_state == TURBO_FLOW_STATE_FAILED)) {
     rc = turbo_flow_stop(intake->flow);
     if (rc != SALTS_OK && first_status == SALTS_OK) first_status = rc;
   }
@@ -500,7 +479,6 @@ int turbo_flow_protocol_network_intake_destroy(turbo_flow_protocol_network_intak
   int rc;
   if (!intake) return SALTS_OK;
   if (intake->state != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPED) return SALTS_EBUSY;
-
   if (intake->flow) {
     turbo_flow_destroy(intake->flow);
     intake->flow = NULL;
