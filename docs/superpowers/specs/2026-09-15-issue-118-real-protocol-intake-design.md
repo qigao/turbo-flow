@@ -124,11 +124,13 @@ A stale listener message retains the generation captured when the network callba
 
 The public payload contract remains `message->payload`; consumers must not assume payload begins at offset zero of `message->buffer`.
 
-## 7. Host-Owned Protocol-Intake Sink
+## 7. Internal Host-Owned Protocol-Intake Sink
 
-Introduce one host-owned composition helper, `turbo_flow_protocol_transport_intake_t`, used to back a single Sink in the dedicated intake plumbing Flow. It is not a new protocol provider, transport provider, database, queue, or business Graph.
+The transport-to-protocol composition is an internal host-owned Sink implementation. It adds **no new public lifecycle or raw-feed ABI**. The only new public ABI in this design is the listener message-context type/accessor in section 6.
 
-The intake owner contains:
+The intake Sink is linked only into the existing host/configuration assembly layer that already materializes provider generations. It depends on the public CNetAdapter, ProtocolIngress/ProtocolInbox, PluginHost, and Inbox contracts. It is not exported as a new protocol provider, not linked into Graph core as a transport dependency, and not placed inside a protocol DLL.
+
+The internal intake owner contains:
 
 - one retained/opened protocol provider instance selected by exact plugin ID/version;
 - one `turbo_flow_protocol_source_t`;
@@ -140,11 +142,11 @@ The intake owner contains:
 - no business Graph run;
 - no business result Sink.
 
-The Sink consumes the existing `turbo_flow_msg_t` emitted by CNet. No additional generic transport-message public ABI is introduced.
+The Sink consumes the existing `turbo_flow_msg_t` emitted by CNet. No additional generic transport-message ABI is introduced.
 
 For stream input, the Sink obtains transport identity only through `turbo_flow_cnet_listener_message_context(message)`. For packet input, it obtains transport identity only through `turbo_flow_cnet_packet_message_context(message)`.
 
-The helper may be public as an opaque lifecycle handle if required by the existing adapter/progress ownership pattern, but its message handoff remains the ordinary TurboFlow/CFlow Sink contract. There is no public `feed raw bytes` escape hatch that bypasses the configured real CNet Source in the installed integration path.
+Installed users configure this composition through the existing host manifest/configuration path; they do not call an alternate direct-feed function. Tests may exercise internal helpers through the normal test-only seam, but the installed positive path always starts from a real configured CNet Source.
 
 ## 8. Parser-Session Mapping
 
@@ -262,7 +264,7 @@ Preflight/startup order:
 4. create `ProtocolInbox`;
 5. create `ProtocolSource`;
 6. create the fixed parser-session table;
-7. assemble the dedicated intake plumbing Flow with the protocol-intake Sink;
+7. assemble the dedicated intake plumbing Flow with the internal protocol-intake Sink;
 8. open/start the real CNet Source owner against that intake Flow;
 9. publish the assembled generation only after every required owner is valid.
 
@@ -280,7 +282,7 @@ Shutdown order:
 8. release protocol/module leases after all callbacks using them are gone;
 9. destroy the stopped CNet Source owner according to its own lifecycle contract.
 
-If existing CFlow ownership requires the intake Flow to outlive the stopped CNet owner handle, implementation must order only the final handle destruction accordingly; it must not release protocol callbacks or Inbox ownership while an intake callback can still run.
+If existing CFlow ownership requires the intake Flow to outlive the stopped CNet owner handle, implementation orders only the final handle destruction accordingly; it must not release protocol callbacks or Inbox ownership while an intake callback can still run.
 
 Any live parser session, retained frame, Inbox claim, business Graph run, Sink terminal operation, or module callback that requires a DLL keeps the corresponding generation/module lease alive. Unload while such work exists returns busy/fails closed; it never invalidates borrowed callbacks.
 
@@ -299,7 +301,7 @@ Configuration explicitly selects:
 - CNet datagram Sink provider/resource;
 - explicit UDP destination.
 
-The installed integration path must materialize these through the existing host catalog/generation/configuration assembly. It must not hard-link a protocol DLL into Gateway/Core merely to satisfy this test.
+The installed integration path materializes these through the existing host catalog/generation/configuration assembly. It does not hard-link a protocol DLL into Gateway/Core merely to satisfy this test.
 
 Invalid or unsupported combinations fail preflight. There is no protocol fallback, transport fallback, database fallback, old DLL fallback, static engine fallback, or CMake-selected runtime fallback.
 
