@@ -24,7 +24,7 @@
 - Upstream success means provider admission/commit succeeded. It does not mean downstream Graph/Sink completion.
 - Downstream settlement remains explicit `complete/fail/retry/reconcile`; no blind retry and no exactly-once claim.
 - #127 is single-owner/single-record drain. Worker pools, batch claim, and partition ordering belong to #128.
-- #127 does not claim crash/restart detach support. Clean generation retirement drains accepted backlog while Graph is still running. If drain cannot reach idle because of timeout/failure/unknown state, retirement fails before Graph stop and preserves state. #130 owns crash detach/reopen/takeover and ambiguous restart recovery.
+- #127 does not claim crash/restart detach support. Clean generation retirement pre-drains accepted backlog while downstream operations/Sinks are still active. #130 owns crash detach/reopen/takeover and ambiguous restart recovery.
 - Transactional resource materialization happens before `turbo_flow_compile()`. A provider binds an already-created Inbox to a parsed buffer resource; compile validates the binding.
 - Every task follows exact RED -> GREEN. Do not fix a later failure before the current task's first failure is understood.
 - Keep PR #126 Draft. Do not mark Ready or merge until final exact-head runtime/package gates pass.
@@ -89,7 +89,7 @@ TURBO_FLOW_C_API int turbo_flow_msg_durable_identity(
     const turbo_flow_msg_t *message, turbo_flow_durable_identity_t *out);
 ```
 
-Source/admission IDs are required and copied; correlation is optional and copied when present. Metadata survives clone/move/retain-view and never uses `transport_context`.
+Source/admission IDs are required and copied; correlation is optional and copied. Metadata survives clone/move/retain-view and never uses `transport_context`.
 
 ### Provider-neutral binding
 
@@ -135,7 +135,7 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_unbind(
     turbo_flow_durable_buffer_binding_t *binding);
 ```
 
-Binding owns no Inbox. The Product owner owns Inbox lifetime. `progress` is caller-serialized/non-blocking. `quiesce` closes new admission. While Graph is still STARTED, `drain` may continue claiming/processing already-accepted backlog until idle or timeout; after Graph is STOPPED it may only settle an already-owned terminal/canceled claim and verify no backlog. `unbind` requires non-STARTED Graph and no unresolved claim.
+Binding owns no Inbox. Product owner owns Inbox lifetime. `progress` is caller-serialized/non-blocking. `quiesce` closes new admission. While Graph is STARTED, `drain` may continue processing accepted backlog until idle or timeout. After Graph is STOPPED/FAILED it may only settle an already-owned terminal/canceled claim and verify no live backlog. `unbind` requires non-STARTED Graph and no unresolved claim.
 
 ### Generated identity
 
@@ -148,9 +148,9 @@ source_sequence = local-sequence
 correlation     = empty
 ```
 
-The generated ID is reused for any internal retry of that admission operation. Sequence overflow returns `SALTS_ERANGE`. Provider generation avoids intentional key reuse across a new TurboDB ownership generation. Generated mode still promises only at-least-once producer redelivery semantics.
+The generated ID is reused for an internal retry of that admission operation. Sequence overflow returns `SALTS_ERANGE`. Provider generation avoids intentional key reuse across a new TurboDB ownership generation. Generated mode still promises only at-least-once producer redelivery semantics.
 
-Stable-required mode fails closed unless generic durable metadata provides non-empty source/admission IDs. Its optional correlation is copied to Inbox record correlation.
+Stable-required mode fails closed unless generic durable metadata provides non-empty source/admission IDs. Optional correlation is copied to Inbox correlation.
 
 ---
 
@@ -171,7 +171,7 @@ static const char graph[] =
     "}\n";
 ```
 
-Require `turbo_flow_stage_at(...)->is_buffer == 1`. Negative cases: missing resource, duplicate node name, buffer inside reusable stage template.
+Require `turbo_flow_stage_at(...)->is_buffer == 1`. Negative: missing resource, duplicate node name, buffer inside reusable stage template.
 
 ```bash
 cmake --preset linux-dev-user
@@ -181,8 +181,7 @@ ctest --test-dir build/linux-gcc-debug -R '^test_flow_durable_buffer$' --output-
 
 - [ ] Add `TURBO_FLOW_TOKEN_BUFFER`, root grammar `buffer_decl ::= BUFFER IDENT RESOURCE adapter_name`, and `flow_parse_add_buffer()`.
 - [ ] Store copied resource name, `is_buffer=1`, no adapter/operation/executor options; reject non-root declaration.
-- [ ] Add `is_buffer` to all internal/public stage view/copy/reset paths.
-
+- [ ] Add `is_buffer` to all internal/public stage copy/reset/view paths.
 - [ ] **GREEN:** `test_flow_durable_buffer` + `test_turbo_flow`.
 - [ ] Commit `feat(graph): parse durable buffer boundaries`.
 
@@ -190,11 +189,11 @@ ctest --test-dir build/linux-gcc-debug -R '^test_flow_durable_buffer$' --output-
 
 **Files:** `flow_internal.h`, `flow_compile.c`, `flow_plan.c`, `flow_runtime.c`, `test_flow_durable_buffer.c`.
 
-- [ ] **RED:** inspect sealed plan privately. Require `FLOW_RUNTIME_NODE_BUFFER`, no executor for buffer, ordinary executors unchanged, and external-I/O/settlement lowering barriers.
-- [ ] Add descriptor-only core semantic metadata `core.buffer` (Message input/output; never an executable callback).
+- [ ] **RED:** sealed-plan assertions: `FLOW_RUNTIME_NODE_BUFFER`, no executor, ordinary executors unchanged, external-I/O/settlement barriers.
+- [ ] Add descriptor-only core semantic metadata `core.buffer` with Message input/output and no executable callback.
 - [ ] `flow_build_runtime_plan()` skips buffer executor; `flow_verify_compiled_plan()` accepts no executor only for source/port/buffer special nodes.
-- [ ] Exclude buffers from native-to-CFlow lowering candidate regions.
-- [ ] Add:
+- [ ] Exclude buffer from native-to-CFlow lowering regions.
+- [ ] Add execution-region reachability:
 
 ```c
 int flow_mark_execution_region_from_stage(
@@ -202,23 +201,21 @@ int flow_mark_execution_region_from_stage(
     size_t capacity, uint32_t origin_stage);
 ```
 
-Reached buffers are included but traversal stops before outgoing edges unless buffer is `origin_stage`. Logical compile-time topology reachability is unchanged.
-- [ ] `flow_run_message_from_stage()` uses execution-region reachability for prevalidation/reorder/queue and explicitly skips `flow_dispatch_validate_stage()` for buffer nodes.
-
+Reached buffer is included but traversal stops before its outgoing edges unless it is `origin_stage`. Logical compile-time topology reachability remains unchanged.
+- [ ] `flow_run_message_from_stage()` uses execution-region reachability for prevalidation/reorder/queue and skips `flow_dispatch_validate_stage()` for buffer nodes.
 - [ ] **GREEN:** `test_flow_durable_buffer`, `test_flow_run`, `test_turbo_flow`.
 - [ ] Commit `feat(graph): compile durable buffer execution cuts`.
 
 ## Task 3: Add clone-safe generic durable metadata
 
-**Files:** new `turbo_flow_durable_buffer.h`, `flow_internal.h`, `flow_message.c`, `turbo_flow/CMakeLists.txt`, `test_flow_durable_buffer.c`, new `durable_buffer_header_cpp.cpp`, tests CMake.
+**Files:** new durable header, `flow_internal.h`, `flow_message.c`, Graph CMake, durable tests + C++ header probe.
 
-- [ ] **RED:** C/C++ probes and set/get/clone/retain-view/move/clear/cleanup. Caller buffers are mutated after setter; observed source/admission/correlation must remain original.
-- [ ] Negative: empty source/admission, over-limit source/admission/correlation, bad ABI, mutation while result claim active.
-- [ ] Store fixed bounded arrays + `has_durable_identity` inside existing `flow_msg_projection_t`; no second sidecar.
-- [ ] `flow_msg_projection_empty()` retains identity-only sidecar. Clone/retain-view and clear projection/content/result preserve independent durable metadata.
+- [ ] **RED:** set/get/clone/retain-view/move/clear/cleanup; mutate caller source/admission/correlation after setter and prove stored bytes independent.
+- [ ] Negative: empty source/admission, over-limit fields, bad ABI, mutation while result claim active.
+- [ ] Store fixed arrays + `has_durable_identity` inside existing `flow_msg_projection_t`; no second sidecar.
+- [ ] `flow_msg_projection_empty()` retains identity-only sidecar. Clone/retain-view and clear projection/content/result preserve durable metadata.
 - [ ] Install/export header with Graph.
-
-- [ ] **GREEN:** `test_flow_durable_buffer`, `test_flow_data_schema`, `test_flow_projection_owner`.
+- [ ] **GREEN:** durable test + data-schema/projection-owner regression.
 - [ ] Commit `feat(graph): add durable message identity metadata`.
 
 ## Task 4: Add provider-neutral binding registry and admission
@@ -237,31 +234,30 @@ stage main {
 }
 ```
 
-Publish one message. Require upstream `SALTS_OK`, Inbox `pending_records == 1`, `admitted == 1`, downstream counter zero.
-- [ ] Negative: unbound resource, one binding used by multiple buffers, stable-required without identity, malformed payload, non-null `transport_context`, non-persistable result sidecar, provider capacity/error. All have zero downstream execution when admission fails.
-- [ ] Add flow-owned registry of borrowed bindings keyed by exact resource name. Compile resolves each buffer to exactly one binding and sets buffer stage index/name.
+Publish one message. Require upstream `SALTS_OK`, Inbox pending/admitted one, downstream zero.
+- [ ] Negative: unbound resource, one binding used by multiple buffers, stable-required without identity, malformed payload, non-null `transport_context`, non-persistable result sidecar, provider capacity/error. Admission failure always leaves downstream zero.
+- [ ] Add flow-owned registry of borrowed bindings keyed by exact resource name. Compile resolves each buffer to one binding and sets stage index/name.
 - [ ] Bind snapshots Inbox generation; require nonzero generation and finite max-message bound.
 - [ ] Record encoder:
-  - payload backing must validate;
+  - validate payload backing;
   - reject non-null `transport_context`;
-  - reject `turbo_flow_msg_result(...) != NULL` or another message-local capability that cannot be recreated from payload;
-  - schema-bound projection is allowed only with canonical payload + content descriptor; persist payload/descriptor, not projection;
-  - when descriptor absent, use deterministic generic opaque DATA descriptor (`application/octet-stream`, buffer name identity);
-  - stable mode copies durable metadata correlation; generated mode correlation empty;
-  - copy timestamp/type/flags/payload only after all validation passes.
-- [ ] Generated local sequence overflow fails before provider call.
-- [ ] Add internal `flow_durable_buffer_admit_stage()`.
-- [ ] Runtime queued buffer branch: admit; on success mark this node terminal for current execution; call neither ordinary dispatch nor `flow_apply_completion()`; outgoing edges remain inactive.
-
-- [ ] **GREEN:** `test_flow_durable_buffer`, `test_flow_inbox`, `test_flow_run`.
+  - reject `turbo_flow_msg_result(...) != NULL` or other non-reconstructable runtime capability;
+  - allow schema projection only with canonical payload + content descriptor; persist payload/descriptor only;
+  - absent descriptor -> deterministic generic opaque DATA descriptor (`application/octet-stream`, buffer name identity);
+  - stable mode copies correlation; generated mode correlation empty;
+  - copy timestamp/type/flags/payload only after validation.
+- [ ] Generated sequence overflow fails before provider call.
+- [ ] Add `flow_durable_buffer_admit_stage()`.
+- [ ] Runtime queued buffer branch: admit; mark terminal for this execution; call neither ordinary dispatch nor `flow_apply_completion()`; outgoing edges remain inactive.
+- [ ] **GREEN:** durable + Inbox + run regression.
 - [ ] Commit `feat(graph): admit messages at durable buffer boundaries`.
 
 ## Task 5: Refactor InboxSource into shared claim-to-Graph driver
 
-**Files:** new `flow_inbox_driver_internal.h`, new `flow_inbox_driver.c`, `flow_inbox_source.c`, `flow_run.c`, `flow_internal.h`, Graph CMake, InboxSource/durable tests.
+**Files:** new `flow_inbox_driver_internal.h`, new `flow_inbox_driver.c`, `flow_inbox_source.c`, `flow_run.c`, `flow_internal.h`, Graph CMake/tests.
 
-- [ ] **RED:** freeze public InboxSource behavior and add buffer-origin claim case.
-- [ ] Shared internal config:
+- [ ] **RED:** freeze public InboxSource and add buffer-origin claim case.
+- [ ] Shared config:
 
 ```c
 typedef enum flow_inbox_driver_origin_kind_e {
@@ -279,39 +275,46 @@ typedef struct flow_inbox_driver_config_s {
 } flow_inbox_driver_config_t;
 ```
 
-- [ ] Move current record->message construction and `IDLE / GRAPH_RUNNING / SETTLE_COMPLETE / SETTLE_FAIL / SETTLE_UNKNOWN` state machine into shared driver with no settlement semantic change.
-- [ ] Public `turbo_flow_inbox_source_t` becomes thin adapter-free Source wrapper.
-- [ ] Generalize run origin internally, public `turbo_flow_run_open()` unchanged.
-- [ ] Normal Source keeps current publish path. Buffer origin starts from `origin_stage == buffer_stage`; execution-region traversal then follows outgoing edges without re-admitting.
-- [ ] **Critical:** do not use immediate return from bare `flow_run_message_from_stage()` as terminal. Add internal publish-from-origin path that participates in the same `flow_async_publication` accounting as ordinary Reactive runs, so async terminal/worker descendants keep run ACTIVE until their actual completion callback.
-- [ ] Preserve cancel, failed settlement retry, and EALREADY reconcile behavior exactly.
-
-- [ ] **GREEN:** `test_flow_inbox_source`, `test_flow_durable_buffer`, `test_flow_run`, `test_flow_async_terminal`.
+- [ ] Move record->message construction and existing claim/run/settlement phases into shared driver with no semantic change.
+- [ ] Public InboxSource becomes adapter-free Source wrapper.
+- [ ] Generalize run origin internally; public `turbo_flow_run_open()` unchanged. Buffer origin starts execution at `origin_stage == buffer_stage`, following outgoing edges without re-admission.
+- [ ] **Critical:** do not treat bare `flow_run_message_from_stage()` return as terminal. Buffer-origin publish participates in the same `flow_async_publication` completion accounting as ordinary Reactive runs, so async-terminal/worker descendants keep run ACTIVE until actual callback completion.
+- [ ] Preserve cancel, retry-settlement, and EALREADY reconcile behavior.
+- [ ] **GREEN:** InboxSource + durable + run + async-terminal tests.
 - [ ] Commit `refactor(graph): share inbox claim graph driver`.
 
-## Task 6: Implement single-owner automatic drain and clean lifecycle
+## Task 6: Implement single-owner drain plus generation pre-retire drain
 
-**Files:** `flow_durable_buffer.c`, `flow_inbox_driver.c`, durable header/tests.
+**Files:** `flow_durable_buffer.c`, `flow_inbox_driver.c`, durable header/tests, `turbo_flow/src/flow_plugin_generation.c`, `turbo_flow/src/flow_run.c`, generation tests.
 
-- [ ] **RED:** upstream admission yields one pending record and zero downstream; `progress()` eventually produces exactly one downstream run and completion. Empty progress is normal success.
-- [ ] Add downstream failure, cancel, settlement provider failure, EALREADY reconcile, stable replay.
-- [ ] `progress()` owns at most one claim: idle -> claim/start one; active -> poll/settle; `SALTS_ENOENT` -> `SALTS_OK`.
-- [ ] `quiesce()` closes new Inbox admission but does not discard accepted backlog.
-- [ ] `drain(binding, timeout)` has state-dependent semantics:
-  - Graph STARTED + binding quiesced: continue `progress()` until no pending/failed/in-flight live record remains or exact timeout/failure occurs; failed/unknown records are **not** implicitly retried/discarded, so they block clean drain;
-  - Graph STOPPED/FAILED: never claim new backlog; only poll/settle an already-owned terminal/canceled run, then verify storage is empty; residual backlog returns `SALTS_EBUSY`.
-- [ ] `unbind()` requires non-STARTED Graph, idle driver, and no unresolved claim; removes metadata only, never destroys Inbox.
+- [ ] **RED:** normal `progress()` converts one pending record into exactly one downstream execution/settlement; empty progress is success. Add downstream failure/cancel/settlement-unknown cases.
+- [ ] `progress()` owns at most one claim: idle -> claim/start one; active -> poll/settle; `SALTS_ENOENT` -> success.
+- [ ] `quiesce()` closes new Inbox admission; no implicit drop/retry.
+- [ ] `drain(binding, timeout)`:
+  - if Graph STARTED: continue `progress()` until no pending/in-flight live record remains or timeout/failure/unknown state blocks progress;
+  - if Graph STOPPED/FAILED: never claim new backlog, only settle an already-owned terminal/canceled claim and verify storage empty.
+- [ ] Add an **internal** buffer-origin run admission mode allowed while Graph is `STARTED` but ordinary publish admission is `PAUSED`. This mode is usable only by durable drain and still participates in active-run/async completion accounting.
+- [ ] Add internal `flow_durable_buffers_prepare_retire(flow, timeout_ms)`:
+  1. if flow has no durable bindings, return success without changing lifecycle;
+  2. pause ordinary Graph publish admission;
+  3. wait for already-accepted upstream publishes to leave their current execution region;
+  4. quiesce all durable bindings so no new buffer admission succeeds;
+  5. while operation bindings, Sink owners, and Graph runtime are still active, drain each durable binding to idle using the special paused-state buffer-origin run mode;
+  6. on timeout, failed/unknown record, or exact provider error, return that error **before** operation bindings are closed, owners are quiesced, or Graph is stopped;
+  7. on success, all durable bindings have no live records/claims and normal generation retirement may proceed.
+- [ ] Call this helper at the beginning of `flow_plugin_generation_retire()` before `flow_plugin_operations_close()`, `generation->poll_closed = 1`, owner quiesce, and Graph stop.
+- [ ] If pre-retire drain fails, keep generation/owners/operation bindings intact enough for diagnostic/operator handling; never continue destructive retirement steps.
+- [ ] Existing no-buffer generation lifecycle must remain behaviorally unchanged.
+- [ ] `unbind()` requires non-STARTED Graph and idle driver; removes metadata only, never destroys Inbox.
 
-This enables clean retirement without the generation-order deadlock: provider owner `quiesce` will close admission **and drain-to-idle while Graph is still running**. Only after that succeeds may PluginGeneration stop Graph. #130 remains responsible for crash/restart when clean drain was impossible.
-
-- [ ] **GREEN:** durable + InboxSource lifecycle tests.
-- [ ] Commit `feat(graph): drive durable buffer claims and settlement`.
+- [ ] **GREEN:** durable lifecycle + PluginGeneration retirement regression, including a case with pending healthy backlog that is drained before operation/sink owner quiesce.
+- [ ] Commit `feat(graph): drain durable buffers before generation retirement`.
 
 ## Task 7: Add configured bounded-memory resource provider
 
 **Files:** new `io/durable/CMakeLists.txt`, memory plugin/config/internal source, tests; root/package CMake.
 
-Provider kind `flow.durable.memory` with exact config:
+Provider kind `flow.durable.memory`:
 
 ```yaml
 channels:
@@ -327,25 +330,22 @@ channels:
       max_claims: 64
 ```
 
-- [ ] **RED:** PluginHost generation fails until transactional resource provider exists. Exact-schema negatives: unknown/missing field, zero bounds, claims > records, record bytes > total, bad identity mode, zero/multiple buffer refs.
+- [ ] **RED:** PluginHost generation fails until transactional resource provider exists. Negative exact-schema/bounds/reference cases.
 - [ ] Preflight is side-effect-free and requires exactly one `is_buffer` reference.
-- [ ] Materialize creates bounded memory Inbox, binds it, and returns Product owner `CONTROL_THREAD | EXTERNAL_POLL`; registers no Graph adapter.
-- [ ] Owner callbacks:
-  - `poll`: non-blocking `progress()`;
-  - `quiesce`: call buffer `quiesce`, then buffer `drain(timeout)` **before returning success**, while Graph is still STARTED;
-  - `drain` (PluginGeneration calls after Graph stop): verification-only buffer `drain(timeout)`; no new claims;
-  - `shutdown`: unbind, then destroy already-closed empty Inbox; propagate exact status;
-  - `destroy`: free owner after successful lifecycle.
-- [ ] Install `tf_durable_memory_plugin`; no redundant adapter library and no fallback provider.
-
-- [ ] **GREEN:** `test_durable_memory_plugin`, `test_flow_plugin_generation`.
+- [ ] Materialize creates bounded memory Inbox, binds it, returns Product owner `CONTROL_THREAD | EXTERNAL_POLL`; registers no Graph adapter.
+- [ ] Owner `poll` calls non-blocking `progress()`.
+- [ ] Owner `quiesce` is now verification/idempotent close only; normal PluginGeneration retirement has already run `flow_durable_buffers_prepare_retire()` while downstream remained active.
+- [ ] Owner `drain` after Graph stop verifies no live claim/backlog; never starts new work.
+- [ ] Owner `shutdown`: unbind then destroy closed/empty Inbox; exact error propagation. `destroy`: free owner.
+- [ ] Install `tf_durable_memory_plugin`; no redundant adapter library or fallback provider.
+- [ ] **GREEN:** memory plugin + PluginGeneration tests including exact retirement ordering.
 - [ ] Commit `feat(graph): add configured memory durable buffer provider`.
 
 ## Task 8: Add TurboDB resource provider with #127 parity
 
-**Files:** new `io/turbodb/src/turbo_flow_turbodb_plugin.c`, config/internal source, modify `io/turbodb/CMakeLists.txt`, new plugin test/CMake.
+**Files:** new TurboDB plugin/config/internal sources, modify `io/turbodb/CMakeLists.txt`, new plugin test/CMake.
 
-Provider kind `flow.durable.turbodb` with exact #127 config:
+Provider kind `flow.durable.turbodb`:
 
 ```yaml
 channels:
@@ -365,16 +365,14 @@ channels:
       open_mode: exclusive
 ```
 
-#127 supports file-backed SQLite and `exclusive` only. Takeover/restart is #130.
+#127 supports file-backed SQLite + `exclusive` only; takeover/restart is #130.
 
-- [ ] **RED:** reuse exact `test_turbodb_inbox.c` fixture shape: temp SQLite file; explicitly provision v2 meta/records/indexes; load plugin; same Graph topology as memory with only channel kind/config changed.
-- [ ] Negative: `:memory:`, old/wrong/missing schema, unknown config field, create/commit failure, no memory fallback, clean-retirement drain failure.
+- [ ] **RED:** existing TurboDB Inbox fixture shape: temp SQLite; explicit v2 schema/index provisioning; load plugin; same Graph topology as memory with only channel kind/config changed.
+- [ ] Negative: `:memory:`, old/wrong/missing schema, unknown config field, create/commit failure, no memory fallback, pre-retire drain failure.
 - [ ] Add separate SHARED `tf_turbodb_plugin` following CNet adapter+plugin packaging. Keep `TurboFlow::TurboDbAdapter` unchanged.
-- [ ] Preflight validates serialized config only; never creates/migrates/repairs database schema.
-- [ ] Materialize builds existing `orm_config_t` (`sqlite`, one `filename` option), calls `turbo_flow_turbodb_inbox_create()`, then same bind API as memory.
-- [ ] Product owner lifecycle matches Task 7. If quiesce drain cannot reach idle, return exact timeout/failure and PluginGeneration must not stop Graph. If destroy ever sees live records and returns `SALTS_EBUSY`, propagate; never force-close.
-
-- [ ] **GREEN in full SDK:**
+- [ ] Preflight validates serialized config only; never creates/migrates/repairs DB schema.
+- [ ] Materialize constructs existing `orm_config_t` (`sqlite`, one `filename` option), calls existing TurboDB Inbox create, then same bind API as memory.
+- [ ] Owner lifecycle matches Task 7. If pre-retire drain cannot reach idle, generation retirement stops before operation close/owner quiesce/Graph stop. If provider destroy nevertheless reports live records, propagate error; never force-close.
 
 ```bash
 cmake --preset linux-dev-user
@@ -388,33 +386,32 @@ ctest --test-dir build/linux-gcc-debug -R '^(test_turbodb_durable_buffer_plugin|
 
 **Files:** new `turbo_flow/tests/durable_buffer_conformance.h`, memory/TurboDB plugin tests, core durable test.
 
-- [ ] Share behavior assertions, not provider setup. Run equivalent cases against memory/TurboDB where durability differences do not apply:
+- [ ] Equivalent cases against both providers where durability differences do not apply:
   1. admission before downstream execution;
-  2. capacity 1/N/N+1 and byte limits;
-  3. generated identity internal provider-call retry stability;
-  4. stable identity + optional correlation exact replay;
-  5. stable identity with changed complete record -> `SALTS_EPROTO`;
-  6. transport context/result capability rejected, not silently dropped;
+  2. capacity 1/N/N+1 + byte limits;
+  3. generated identity internal retry stability;
+  4. stable identity + correlation exact replay;
+  5. changed complete record under same stable identity -> `SALTS_EPROTO`;
+  6. transport context/result capability rejected rather than lost;
   7. downstream success/failure/cancel;
   8. settlement pending/unknown/reconcile;
-  9. quiesce closes admission and clean-drains accepted backlog while Graph runs;
-  10. failed/unknown backlog blocks clean retirement without implicit retry/discard;
+  9. generation pre-retire pauses new publishes and drains accepted backlog while downstream operation/Sink owners are still live;
+  10. failed/unknown backlog aborts retirement before destructive lifecycle steps;
   11. provider error -> zero downstream + zero fallback.
-- [ ] Internal-edge case `source -> transform -> buffer -> transform -> sink`.
-- [ ] Fan-in two Sources -> one buffer, serialized FIFO in #127.
-- [ ] Fan-out after buffer occurs only in downstream execution.
-
-- [ ] **GREEN:** focused three durable targets.
+- [ ] Internal edge: `source -> transform -> buffer -> transform -> sink`.
+- [ ] Fan-in two Sources -> one buffer, serialized FIFO #127.
+- [ ] Fan-out after buffer only in downstream execution.
+- [ ] **GREEN:** focused durable core/memory/TurboDB targets.
 - [ ] Commit `test(graph): require durable buffer provider parity`.
 
 ## Task 10: Package, install, CI, and close #127 core gate
 
 **Files:** install consumers, package config, plugin install wiring, no-secret compile-contract workflow/project, spec/evidence updates.
 
-- [ ] Installed C/C++ consumers compile durable header and public `is_buffer` field.
+- [ ] Installed C/C++ consumers compile durable header + public `is_buffer`.
 - [ ] Graph component exports durable API without TurboDB dependency.
-- [ ] `TURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF` still builds/installs Graph + memory durable provider; no substitute path appears.
-- [ ] Verify `tf_durable_memory_plugin` and enabled `tf_turbodb_plugin` runtime install/export/dependency closure.
+- [ ] `TURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF` still builds/installs Graph + memory provider; no substitute path.
+- [ ] Verify memory and enabled TurboDB plugin runtime install/export/dependency closure.
 - [ ] Extend existing **no-secret** GitHub compile-contract CI for new core + memory-plugin TUs with ASan+UBSan. Do not reintroduce `QIGAO_CI_READ_TOKEN` or cross-repo secrets.
 - [ ] Do not claim no-secret CI runs TurboDB runtime without full ORM/private SDK. TurboDB runtime evidence comes from full SDK gates.
 
@@ -442,7 +439,7 @@ cmake --build --preset linux-release-user -j2
 ctest --test-dir build/linux-gcc-release --output-on-failure
 ```
 
-- [ ] Run repository fresh-prefix install-consumer/profile/ABI/export/dependency gates.
+- [ ] Run fresh-prefix install-consumer/profile/ABI/export/dependency gates.
 - [ ] `git diff --check` and formatting clean.
 - [ ] Scan new #127 source for unfinished implementation markers/placeholders, compatibility shims, database-to-memory fallback, or direct durable-buffer bypass; none remain.
 - [ ] Confirm #128/#130/#131 remain open and are not reported complete by #127.
@@ -457,13 +454,14 @@ One exact head must prove:
 - upstream success only after provider admission/commit;
 - downstream only after later claim;
 - memory/TurboDB selected by resource config without topology change;
-- generated/stable identity and correlation semantics match documented guarantees;
+- generated/stable identity + correlation semantics match documented guarantees;
 - runtime transport/result capabilities are rejected rather than silently lost;
 - no runtime pointer/session/projection is persisted;
 - no provider failure bypass/fallback;
-- existing InboxSource public behavior survives shared-driver refactor;
+- existing InboxSource behavior survives shared-driver refactor;
 - single-owner drain truthfully handles success/failure/cancel/settlement unknown;
-- clean retirement drains backlog before Graph stop; crash/restart detach remains #130;
+- PluginGeneration pre-retire drains accepted backlog while downstream bindings/Sinks are still available and aborts before destructive lifecycle steps on failure;
+- crash/restart detach remains #130;
 - provider-neutral conformance, Debug/ASan, Release, install/package, ABI/export, and no-secret compile-contract gates have fresh exact-head evidence.
 
 Only after #127 is green should #129 replace `ProtocolNetworkIntake -> Inbox -> InboxSource` with the generic durable-buffer boundary. #128 may then scale drain concurrency without changing #127 ownership/settlement semantics.
