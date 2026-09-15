@@ -309,7 +309,8 @@ spec("protocol network intake core") {
     check_equal(turbo_flow_inbox_claim(&inbox, &claim), SALTS_OK);
     check_equal(claim.record.timestamp_ns, (uint64_t)0u);
     check_equal(claim.record.source_sequence, (uint64_t)1u);
-    check_equal(claim.record.source_id, settings.source_id, strlen(settings.source_id));
+    check_equal(claim.record.source_id.len, strlen(settings.source_id));
+    check_equal(claim.record.source_id.data, settings.source_id, strlen(settings.source_id));
     receipt.record_id = claim.record_id;
     check_equal(turbo_flow_inbox_complete(&inbox, &claim), SALTS_OK);
     check_equal(turbo_flow_inbox_forget(&inbox, receipt.record_id), SALTS_OK);
