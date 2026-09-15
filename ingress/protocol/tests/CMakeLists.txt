@@ -151,6 +151,19 @@ set_tests_properties(test_protocol_network_jtt808
                      PROPERTIES LABELS "protocol-ingress;network-intake;e2e;cnet")
 
 cmake_add_test(
+  test_protocol_network_coap
+  SOURCES test_protocol_network_coap.c protocol_network_e2e_fixture.c
+          protocol_network_e2e_coap_fixture.c
+  LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost Salts::CNet Salts::TinyTest
+  DEFS
+    FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
+    FLOW_PROTOCOL_COAP_MODULE="$<TARGET_FILE:tf_protocol_coap>"
+  FOLDER "ingress/protocol/tests")
+add_dependencies(test_protocol_network_coap tf_cnet_plugin tf_protocol_coap)
+set_tests_properties(test_protocol_network_coap
+                     PROPERTIES LABELS "protocol-ingress;network-intake;e2e;cnet")
+
+cmake_add_test(
   test_protocol_business
   SOURCES test_protocol_business.c
   LIBS TurboFlow::PluginHost Salts::TinyTest
