@@ -39,7 +39,8 @@ static void protocol_network_coap_admit(protocol_network_e2e_fixture_t *fixture,
   check_equal(intake.state, TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_RUNNING);
   check_equal(sscanf(intake.source_endpoint, "udp://127.0.0.1:%u", &port), 1);
   check_true(port > 0u && port <= UINT16_MAX);
-  check_equal(protocol_network_e2e_udp_send(fixture, intake.source_endpoint, frame, 4u), SALTS_OK);
+  check_equal(protocol_network_e2e_udp_send_frame(fixture, intake.source_endpoint, frame, 4u),
+              SALTS_OK);
   protocol_network_coap_wait_record(fixture, &intake, &inbox);
   check_true(fixture->udp.sent > sent_before);
   check_equal(fixture->udp.last_send_status, SALTS_OK);
