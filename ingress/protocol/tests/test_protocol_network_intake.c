@@ -2,6 +2,7 @@
 
 #include "turbo_flow_protocol_network_intake.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #ifndef FLOW_PROTOCOL_NETWORK_SOURCE_FIXTURE
