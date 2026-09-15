@@ -1,0 +1,185 @@
+name: Task 3 durable identity runtime
+
+on:
+  push:
+    branches: [feat/127-graph-durable-buffer]
+    paths:
+      - 'turbo_flow/**'
+      - '.github/workflows/task3-durable-identity-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: task3-durable-identity-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_SHA: ${{ github.sha }}
+  VCPKG_COMMIT: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+  SALTS_COMMIT: 2804c2eb809fed4cb89f917f0a8cd00f482abb64
+  SALTS_UTILS_COMMIT: 0b3876018e5bdaed70fecbc0d0863cb394dd6044
+  ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
+  UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+
+jobs:
+  linux-runtime:
+    name: Linux Task 3 runtime gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact TurboFlow head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source identity
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/task3-evidence"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/task3-evidence/head.txt"
+          git diff --check HEAD^ HEAD
+          git diff --exit-code
+
+      - name: Checkout pinned Salts
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.SALTS_COMMIT }}
+          path: .ci/deps/salts
+          persist-credentials: false
+
+      - name: Checkout pinned SaltsUtils
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: ${{ env.SALTS_UTILS_COMMIT }}
+          path: .ci/deps/salts-utils
+          persist-credentials: false
+
+      - name: Checkout pinned vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ env.VCPKG_COMMIT }}
+          path: vcpkg
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare Linux toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils autoconf automake libtool
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          sudo mkdir -p /opt
+          sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
+
+      - name: Install pinned re2c 4.6 with Unicode tables
+        shell: bash
+        run: bash .ci/deps/salts-utils/cmake/ci/install-re2c.sh
+
+      - name: Build standalone host Lemon
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S .ci/deps/salts-utils/tools/lemon -B "$RUNNER_TEMP/host-lemon" -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/host-lemon" --target lemon -j2
+          test -x "$RUNNER_TEMP/host-lemon/lemon"
+
+      - name: Build and install pinned Salts SDK
+        shell: bash
+        working-directory: .ci/deps/salts
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build build/linux-gcc-debug --target install -j2
+          sudo mkdir -p /opt/salts
+          sudo ln -sfn "$PROJECT_ROOT/external/pkgs/salts/debug" /opt/salts/debug
+
+      - name: Build and install pinned SaltsUtils SDK
+        shell: bash
+        working-directory: .ci/deps/salts-utils
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$RUNNER_TEMP/host-lemon/lemon" -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk/salts-utils-debug"
+          cmake --build build/linux-gcc-debug --target install -j2
+          sudo mkdir -p /opt/salts-utils
+          sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
+
+      - name: Register Task 3 runtime sources in working tree
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('turbo_flow/tests/CMakeLists.txt')
+          text = path.read_text()
+          old = '''cmake_add_test(
+  test_flow_durable_buffer
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_durable_buffer.c
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")'''
+          new = '''cmake_add_test(
+  test_flow_durable_buffer
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_durable_buffer.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_durable_identity.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/durable_identity_header_cpp.cpp
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")'''
+          assert text.count(old) == 1, 'durable test target shape changed'
+          path.write_text(text.replace(old, new, 1))
+          PY
+          cp turbo_flow/tests/CMakeLists.txt "$RUNNER_TEMP/task3-evidence/CMakeLists.txt"
+          git diff --check -- turbo_flow/tests/CMakeLists.txt
+          git diff -- turbo_flow/tests/CMakeLists.txt | tee "$RUNNER_TEMP/task3-evidence/cmake.patch"
+
+      - name: Configure full Graph runtime tests
+        shell: bash
+        env:
+          SALTS_ROOT: /opt/salts/debug
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user 2>&1 | tee "$RUNNER_TEMP/task3-evidence/configure.log"
+
+      - name: Build Task 3 runtime gates
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-gcc-debug --target test_flow_durable_buffer test_flow_data_schema test_flow_projection_owner -j2 2>&1 | tee "$RUNNER_TEMP/task3-evidence/build.log"
+
+      - name: Run Task 3 runtime gates
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug -R '^(test_flow_durable_buffer|test_flow_data_schema|test_flow_projection_owner)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task3-evidence/ctest.log"
+
+      - name: Restore committed source and verify clean
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git checkout -- turbo_flow/tests/CMakeLists.txt
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code
+
+      - name: Upload Task 3 runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task3-durable-identity-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/task3-evidence/
