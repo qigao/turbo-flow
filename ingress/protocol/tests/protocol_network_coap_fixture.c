@@ -273,7 +273,7 @@ fail:
 }
 
 int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
-                                  const char *cnet_module, const char *coap_module) {
+                                   const char *cnet_module, const char *coap_module) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   char yaml[16384];
   int rc;
@@ -293,8 +293,8 @@ int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
   return rc;
 }
 
-int protocol_network_e2e_udp_send(protocol_network_e2e_fixture_t *fixture, const char *endpoint,
-                                  const void *data, size_t size) {
+int protocol_network_e2e_udp_send_frame(protocol_network_e2e_fixture_t *fixture,
+                                        const char *endpoint, const void *data, size_t size) {
   cnet_datagram_peer peer;
   unsigned port = 0u;
   uint64_t tag;
