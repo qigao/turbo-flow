@@ -29,10 +29,41 @@ typedef struct flow_protocol_network_intake_settings_s {
   size_t source_max_message_bytes;
 } flow_protocol_network_intake_settings_t;
 
+typedef struct flow_protocol_network_intake_sink_s flow_protocol_network_intake_sink_t;
+
+typedef struct flow_protocol_network_intake_sink_metrics_s {
+  size_t active_sessions;
+  size_t pending_claims;
+  size_t pending_bytes;
+  uint64_t frames_admitted;
+  int backpressured;
+  int terminal_status;
+} flow_protocol_network_intake_sink_metrics_t;
+
+typedef struct flow_protocol_network_intake_sink_config_s {
+  turbo_flow_t *flow;
+  const char *adapter_name;
+  turbo_flow_protocol_t *protocol;
+  turbo_flow_inbox_t *inbox;
+  const flow_protocol_network_intake_settings_t *settings;
+} flow_protocol_network_intake_sink_config_t;
+
 int flow_protocol_network_intake_preflight(
     const turbo_flow_resolved_config_t *resolved, const turbo_flow_t *flow,
     const char *source_adapter_name, const char *intake_adapter_name,
     flow_protocol_network_intake_settings_t *settings, turbo_flow_config_error_t *error);
+
+int flow_protocol_network_intake_sink_create(
+    const flow_protocol_network_intake_sink_config_t *config,
+    flow_protocol_network_intake_sink_t **out);
+int flow_protocol_network_intake_sink_register(flow_protocol_network_intake_sink_t *sink);
+int flow_protocol_network_intake_sink_retry(flow_protocol_network_intake_sink_t *sink);
+void flow_protocol_network_intake_sink_cancel(flow_protocol_network_intake_sink_t *sink,
+                                              int status);
+void flow_protocol_network_intake_sink_metrics(
+    const flow_protocol_network_intake_sink_t *sink,
+    flow_protocol_network_intake_sink_metrics_t *metrics);
+void flow_protocol_network_intake_sink_destroy(flow_protocol_network_intake_sink_t *sink);
 
 #ifdef __cplusplus
 }
