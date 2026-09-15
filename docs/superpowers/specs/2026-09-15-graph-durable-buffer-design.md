@@ -13,11 +13,11 @@ real network Source -> protocol decode -> Inbox admission
 InboxSource demand -> business Graph -> Sink -> settlement
 ```
 
-This works functionally, but it is too specialized for high-rate production data. A fast Source can outrun downstream Graph processing. If storage remains only an intake concern, every new Source family must either reproduce the same buffering pattern or stay synchronously coupled to downstream execution.
+This works, but it is too specialized for high-rate production data. A fast Source can outrun downstream Graph processing. If storage remains only an intake concern, every new Source family must reproduce the same buffering pattern or remain synchronously coupled to downstream execution.
 
 The system needs a provider-neutral Graph primitive that can absorb bursts, persist work, decouple producer and consumer rates, recover after process loss, and be inserted at any Graph edge.
 
-TurboDB must therefore be a storage provider for a generic durable Graph boundary, not a JTT808/CoAP-specific path.
+TurboDB is therefore a provider for a generic durable Graph boundary, not a JTT808/CoAP-specific path.
 
 ## Core decision
 
@@ -29,7 +29,7 @@ upstream Graph
     v
 [ durable admission / sink side ]
     |
-    | commit
+    | provider admission / commit
     v
 [ bounded provider: memory or TurboDB ]
     |
@@ -41,11 +41,43 @@ upstream Graph
 downstream Graph
 ```
 
-A successful upstream execution ends when the selected provider has accepted/committed the durable record. It does not synchronously continue through downstream Graph work.
+A successful upstream execution ends when the selected provider has accepted or committed the durable record. It does not synchronously continue through downstream Graph work.
 
 Downstream execution starts only when the durable source side claims records and receives explicit drain demand or worker progress.
 
 This boundary reuses the existing `turbo_flow_inbox_t` ownership/state-machine contract and `InboxSource` settlement semantics. It must not create a second queue, database abstraction, executor, or retry state machine.
+
+## Compiler and execution-region semantics
+
+`buffer` is **not** an ordinary transform stage. It is a compiler-visible execution cut.
+
+For a logical graph:
+
+```text
+source -> decode -> intake -> normalize -> rules -> sink
+```
+
+where `intake` is a durable buffer, the compiler/runtime lowers it conceptually into two execution regions:
+
+```text
+Region A:
+source -> decode -> durable-admission(intake) -> terminal
+
+Region B:
+durable-source(intake) -> normalize -> rules -> sink
+```
+
+Required rules:
+
+- the incoming side of a buffer is a terminal durable-admission boundary for that execution;
+- the outgoing side is a synthetic logical Source backed by provider claims;
+- no call stack, scheduler task, or synchronous continuation crosses the buffer boundary;
+- downstream scheduling may happen immediately after commit if capacity exists, but it is a new execution, not continuation of Region A;
+- one named buffer may fan in multiple producers intentionally; all admitted records emerge from the same logical durable source;
+- downstream fan-out is ordinary Graph fan-out after the durable source;
+- if different continuations require different recovery identities/order domains, use different named buffers rather than hiding route-specific state in provider internals.
+
+The implementation may initially materialize these as two runtime plans/owners even though the user config presents one logical Graph. The public semantics are the execution cut, not the internal plan count.
 
 ## Scope
 
@@ -69,7 +101,7 @@ The node has no protocol-specific fields.
 
 ## Provider model
 
-Initial provider set:
+Initial providers:
 
 1. **bounded memory**
    - finite records, bytes, record size, and claims;
@@ -83,17 +115,17 @@ Initial provider set:
    - process restart and owner-takeover semantics;
    - database failure never switches provider and never bypasses the boundary.
 
-The Graph topology must remain unchanged when switching providers. Provider/resource selection is configuration.
+The Graph topology remains unchanged when switching providers. Provider/resource selection is configuration.
 
-## Persisted Graph record
+## Durable record and message projection
 
-Never persist raw `turbo_flow_msg_t` memory. Runtime messages may contain process-local pointers, transport contexts, DLL/session/native handles, borrowed views, or other non-portable state.
+Never persist raw `turbo_flow_msg_t` memory. Runtime messages contain process-local state such as `transport_context` and private content projections; those must not cross process boundaries.
 
-Persist a pointer-free envelope derived from the current Inbox v2 record contract. The durable representation contains at minimum:
+Persist a pointer-free envelope derived from the current Inbox v2 record contract. It contains at minimum:
 
-- stable source identity;
-- stable admission/replay identity;
-- source sequence;
+- stable logical producer/source identity;
+- admission/replay identity;
+- source or boundary sequence where available;
 - timestamp or explicit unknown value;
 - message type and flags;
 - content descriptor/schema identity;
@@ -101,48 +133,59 @@ Persist a pointer-free envelope derived from the current Inbox v2 record contrac
 - payload bytes;
 - optional stable partition key once partitioned drain is enabled.
 
-Recovery always creates a fresh process-local Graph message from the durable envelope.
+The durable envelope does **not** persist:
 
-Any attempt to serialize transport/session pointers, DLL addresses, native handles, or borrowed runtime views is invalid.
+- `transport_context`;
+- `_content_handle` or parsed projection pointers;
+- DLL/native/session handles;
+- borrowed process addresses;
+- scheduler/run objects.
 
-## Graph semantics
+Recovery constructs a fresh `turbo_flow_msg_t` with new process-local ownership. Schema-bound projections are resolved/rebuilt lazily from the trusted content descriptor and registry after recovery.
 
-The durable buffer is not an ordinary synchronous transform stage.
+## Stable identity and replay modes
 
-Incorrect model:
+A generic intermediate Graph message does not automatically have a cross-process stable admission identity. The runtime message `id` is not sufficient as a universal durable replay key.
 
-```text
-source -> turbodb-stage -> slow-stage
-```
+The durable buffer therefore has two explicit identity modes.
 
-where the database stage writes and immediately calls the next stage in the same execution.
+### Stable upstream identity
 
-Correct model:
+When the upstream message carries a trusted, pointer-free stable identity supplied by the Source/domain adapter, the buffer uses it to form the durable admission key.
 
-```text
-Execution A:
-source -> durable admission -> provider commit -> upstream terminal
+Examples include protocol message sequence/correlation identities or another registered stable application identity.
 
-Execution B, later:
-provider claim -> durable source -> downstream Graph -> settlement
-```
+Exact replay of the same stable identity + complete record returns the original durable receipt according to the provider contract. Different content under the same identity is a protocol/data-integrity error.
 
-This separation is the mechanism that absorbs bursts and decouples Source speed from Graph speed.
+### Generated boundary identity
+
+If no stable upstream identity exists, the buffer generates a new bounded admission identity before its first provider call and reuses that identity for every retry of that admission attempt.
+
+Properties:
+
+- retries of the same in-process admission attempt reuse the same identity;
+- after successful commit the generated identity is part of the durable record;
+- if the process dies before the producer can prove whether the commit happened, a later producer redelivery may receive a new identity;
+- therefore generated mode provides at-least-once semantics but **does not claim cross-process duplicate suppression**.
+
+A deployment that requires exact replay deduplication across producer reconnect/restart must provide a stable upstream identity. The buffer must not synthesize a false exactly-once guarantee from a process-local message ID.
+
+The stable logical `source_id` for an intermediate buffer admission is derived from configured Graph identity (for example flow/buffer/producer identity), never from a process pointer or ephemeral plugin address.
 
 ## Admission semantics
 
 For each upstream message:
 
-1. validate content and stable identity;
+1. validate payload/content and durable-identity mode;
 2. encode a pointer-free durable record;
 3. admit through the selected provider;
-4. wait only for the provider's admission/commit contract;
-5. report upstream completion after successful admission;
-6. do not invoke downstream Graph as part of that execution.
+4. wait only for the provider admission/commit contract;
+5. report upstream terminal success after successful admission;
+6. never invoke downstream Graph as part of that execution.
 
 Failure behavior:
 
-- malformed message: fail closed;
+- malformed/non-persistable message: fail closed;
 - provider capacity: explicit backpressure/failure;
 - database transaction failure: exact error, zero downstream execution;
 - configured TurboDB failure: zero memory fallback;
@@ -168,19 +211,17 @@ This can initially reuse the current `InboxSource` implementation shape.
 
 The boundary provides **at-least-once downstream Graph execution** under durable replay. It must not claim end-to-end exactly-once semantics.
 
-Example ambiguous crash window:
+Ambiguous crash window:
 
 ```text
 claim
- -> downstream Sink side effect succeeds
+ -> downstream side effect succeeds
  -> process crashes before durable record completion
 ```
 
-After restart, the system cannot truthfully know that the side effect was globally committed unless that downstream system provides its own reconciliation mechanism.
+After restart, the system cannot truthfully know the global side-effect outcome unless the downstream system exposes its own idempotency/reconciliation contract.
 
-The record therefore remains replayable or transitions to explicit owner-lost/unknown state according to the provider contract.
-
-Retry and reconciliation are explicit operations.
+The record therefore remains replayable or transitions to explicit owner-lost/unknown state according to the provider contract. Retry and reconciliation are explicit operations.
 
 ## Ordering and parallelism
 
@@ -201,13 +242,13 @@ ordering = partition | global
 Semantics:
 
 - `ordering=partition`: records within one partition remain ordered; independent partitions may run concurrently;
-- `ordering=global`: one total order is preserved, with its throughput cost made explicit;
+- `ordering=global`: one total order is preserved, with its throughput cost explicit;
 - no hidden reordering inside a partition;
 - no unbounded worker queue;
 - each in-flight record owns one unique claim token;
 - worker loss cannot create simultaneous valid ownership of one record.
 
-This avoids one slow device blocking every other device while preserving per-device order where required.
+This prevents one slow device from blocking unrelated devices while preserving per-device order when required.
 
 ## Capacity and backpressure
 
@@ -221,24 +262,19 @@ Required finite limits include:
 - in-flight claims;
 - worker/in-flight bounds once partitioning exists.
 
-Follow-up controls may include:
+Follow-up controls (#131) include high/low watermarks, max record age where supported, pause/resume drain, and close-admission-while-draining.
 
-- high watermark;
-- low watermark;
-- max record age;
-- pause/resume drain;
-- close admission while draining.
-
-If producer rate is permanently higher than drain rate, the backlog eventually reaches the configured hard limit. At that point admission must return explicit backpressure/failure. Disk capacity is not an excuse for an unbounded queue.
+If producer rate is permanently higher than drain rate, backlog eventually reaches the configured hard limit. Admission must then return explicit backpressure/failure. Disk capacity does not create an unbounded queue.
 
 ## Configuration/DSL direction
 
-Exact parser syntax is subject to implementation design, but the semantic target is a named Graph boundary:
+Exact parser syntax is subject to implementation planning, but the semantic target is a named Graph boundary:
 
 ```text
 buffer intake {
   provider = turbodb
   resource = telemetry.db
+  identity = stable_or_generated
   max_records = 10000000
   max_bytes = 100GB
   max_record_bytes = 1MB
@@ -263,34 +299,15 @@ graph main {
 }
 ```
 
-A low-rate deployment may use:
-
-```text
-buffer intake {
-  provider = memory
-  ...
-}
-```
-
-without changing Graph topology.
+A low-rate deployment can select `provider = memory` without changing topology.
 
 Provider-specific database connection details belong to the configured resource/provider, not the Graph message path.
 
 ## Runtime ownership
 
-Storage provider owns record state.
+The storage provider owns record state. The durable-buffer owner orchestrates admission/drain but does not mutate provider internals directly.
 
-The durable-buffer owner may orchestrate admission/drain, but it does not mutate provider internals directly.
-
-Only provider operations advance:
-
-- admitted/pending;
-- claimed;
-- completed;
-- failed;
-- retried;
-- discarded/history;
-- owner-generation/takeover state.
+Only provider operations advance admitted/pending, claimed, completed, failed, retried, discarded/history, and owner-generation/takeover state.
 
 Downstream Graph borrows immutable message data derived from the claim. Graph execution does not own or directly mutate durable storage state.
 
@@ -298,88 +315,69 @@ Downstream Graph borrows immutable message data derived from the claim. Graph ex
 
 Storage commit, Graph completion, Sink completion, protocol ACK, and domain transaction remain distinct observations.
 
-Provider-neutral buffer snapshot should expose at minimum:
+Provider-neutral buffer snapshots (#131) expose at minimum admitted/committed records and bytes, pending records/bytes, in-flight claims, failed/unknown records, retained history counts, backpressure counts, oldest pending age/claim latency where measurable, drain rate, watermark state, and later worker/partition activity.
 
-- admitted/committed records and bytes;
-- pending records/bytes;
-- in-flight claims;
-- failed/unknown records;
-- completed/discarded history counts where retained;
-- admission rejection/backpressure counts;
-- oldest pending age / claim latency where measurable;
-- drain rate;
-- high/low watermark state;
-- active workers/partitions once #128 exists.
-
-No raw database cursor/handle is exposed through the public Graph surface.
+No raw database cursor/handle escapes through the public Graph surface.
 
 ## Recovery
 
-TurboDB recovery must preserve the existing fail-closed durable semantics:
+TurboDB recovery (#130) preserves fail-closed durable semantics:
 
 - committed pending record survives restart;
-- failed admission is invisible;
-- claimed record under owner takeover becomes explicit owner-lost/unknown if final Graph outcome is not known;
+- failed/uncommitted admission is invisible;
+- claimed record under owner takeover becomes explicit owner-lost/unknown when final Graph outcome is unknown;
 - stale claim tokens cannot settle a later generation;
 - completed/discarded history supports reconciliation;
 - unknown/old storage schema is rejected;
 - memory provider does not fake durable recovery.
 
-These are tracked by #130.
-
 ## Migration from current protocol intake
 
-Current PR #126 contains useful prototype work:
+Draft PR #126 contains useful prototype work:
 
 ```text
 CNet Source -> ProtocolNetworkIntake -> Inbox
 InboxSource -> business Graph -> CNet Sink
 ```
 
-This work is not discarded. It proves:
+It proves real JT/T808 TCP session/fragment behavior, real CoAP UDP input, storage-before-business ordering, deterministic protocol replay identity, bounded admission/backpressure, destination independence, and the current Inbox/InboxSource state machine.
 
-- real JT/T808 TCP session/fragment behavior;
-- real CoAP UDP input;
-- storage-before-business ordering;
-- deterministic replay identity;
-- bounded admission/backpressure;
-- configured destination independence;
-- the current Inbox provider/InboxSource state machine.
+Protocol-specific TurboDB parity stops here. Final production integration migrates those paths onto the generic Graph durable-buffer boundary (#129).
 
-However, protocol-specific TurboDB parity must stop here. Final production integration should migrate those paths onto the generic Graph durable-buffer boundary (#129).
-
-The end state must contain one production durable storage boundary, not both a generic Graph buffer and a competing protocol-only runtime.
+The end state contains one production durable storage boundary, not both a generic Graph buffer and a competing protocol-only runtime.
 
 ## Issue split
 
-- **#127**: provider-neutral durable-buffer core, memory/TurboDB selection, Graph boundary semantics.
+- **#127**: provider-neutral durable-buffer core, memory/TurboDB selection, compiler execution-cut semantics.
 - **#128**: bounded parallel drain, partition ordering, high-throughput worker model.
 - **#129**: migrate JT/T808/CoAP real-network intake onto the generic boundary.
 - **#130**: crash/restart/owner-loss/ambiguous-settlement conformance.
 - **#131**: backlog metrics, watermark state, pause/resume/close/drain controls.
-- **#118**: remains the real-protocol acceptance slice and validates #127/#129 rather than implementing a protocol-only database path.
+- **#118**: real-protocol acceptance slice validating #127/#129 rather than implementing a protocol-only database path.
 
 ## Acceptance
 
-Core acceptance for #127:
+Core #127:
 
 1. one provider-neutral Graph durable-buffer contract;
-2. memory and TurboDB use the same Graph topology;
-3. upstream Graph completes only after successful storage admission/commit;
-4. downstream Graph never runs before storage admission;
-5. admission/database failure produces zero downstream execution and zero provider fallback;
-6. durable representation is pointer-free;
-7. capacity 0/1/N/N+1 behavior is explicit and bounded;
-8. Graph success/failure/cancel/settlement-unknown/retry/reconcile states are explicit;
-9. process restart/owner takeover preserves truthful at-least-once semantics;
-10. any Source can feed the same buffer contract without protocol-specific storage code;
-11. installed consumer/ABI/export/dependency gates pass;
-12. Debug/ASan and Release gates pass.
+2. buffer is a compiler/runtime execution cut, not a synchronous stage;
+3. memory and TurboDB use the same logical Graph topology;
+4. upstream execution terminates only after successful storage admission/commit;
+5. downstream execution never starts as synchronous continuation of upstream;
+6. admission/database failure produces zero downstream execution and zero provider fallback;
+7. durable representation is pointer-free and projections are rebuilt after recovery;
+8. stable-identity mode provides exact replay matching; generated mode explicitly does not claim cross-process dedupe;
+9. capacity 0/1/N/N+1 behavior is explicit and bounded;
+10. Graph success/failure/cancel/settlement-unknown/retry/reconcile states are explicit;
+11. process restart/owner takeover preserves truthful at-least-once semantics;
+12. any Source/intermediate stage can feed the same buffer without protocol-specific storage code;
+13. installed consumer/ABI/export/dependency gates pass;
+14. Debug/ASan and Release gates pass.
 
-Real-network acceptance for #129/#118:
+Real-network #129/#118:
 
 1. fragmented JT/T808/TCP -> generic durable buffer -> business Graph -> real Sink;
-2. CoAP/UDP -> same generic durable buffer -> same business Graph shape -> real Sink;
+2. CoAP/UDP -> same generic durable buffer -> same downstream Graph shape -> real Sink;
 3. memory/TurboDB provider choice changes config, not topology;
 4. two explicit Sink destinations remain independent;
 5. TCP generation reuse cannot inherit partial parser state;
