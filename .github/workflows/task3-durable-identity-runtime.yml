@@ -20,6 +20,7 @@ env:
   VCPKG_COMMIT: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
   SALTS_COMMIT: 2804c2eb809fed4cb89f917f0a8cd00f482abb64
   SALTS_UTILS_COMMIT: 0b3876018e5bdaed70fecbc0d0863cb394dd6044
+  RULES_FORGE_COMMIT: 80eda13e90585ed2dad94c9e76574ea9e510eeda
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
 
@@ -60,6 +61,14 @@ jobs:
           repository: qigao/salts-utils
           ref: ${{ env.SALTS_UTILS_COMMIT }}
           path: .ci/deps/salts-utils
+          persist-credentials: false
+
+      - name: Checkout pinned RulesForge
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/RulesForge
+          ref: ${{ env.RULES_FORGE_COMMIT }}
+          path: .ci/deps/rules-forge
           persist-credentials: false
 
       - name: Checkout pinned vcpkg
@@ -116,6 +125,20 @@ jobs:
           sudo mkdir -p /opt/salts-utils
           sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
 
+      - name: Build and install pinned RulesForge SDK
+        shell: bash
+        working-directory: .ci/deps/rules-forge
+        env:
+          SALTS_ROOT: /opt/salts/debug
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_TESTS=OFF -DBUILD_TESTING=OFF -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk/rules-forge-debug"
+          cmake --build build/linux-gcc-debug --target install -j2
+          sudo mkdir -p /opt/rules_forge
+          sudo ln -sfn "$RUNNER_TEMP/sdk/rules-forge-debug" /opt/rules_forge/debug
+
       - name: Register Task 3 runtime sources in working tree
         shell: bash
         run: |
@@ -152,6 +175,7 @@ jobs:
         env:
           SALTS_ROOT: /opt/salts/debug
           SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          RULES_FORGE_ROOT: /opt/rules_forge/debug
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
           set -euxo pipefail
