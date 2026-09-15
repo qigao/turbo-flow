@@ -175,7 +175,7 @@ spec("protocol network intake configuration") {
     check_equal(run_preflight(yaml, packet_graph, "udp.input", &settings, &error), SALTS_ENOTSUP);
   }
 
-  it("rejects zero and insufficient bounds") {
+  it("rejects zero mismatched and insufficient bounds") {
     char yaml[4096];
     flow_protocol_network_intake_settings_t settings;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -185,9 +185,16 @@ spec("protocol network intake configuration") {
     check_equal(run_preflight(yaml, listener_graph, "tcp.input", &settings, &error), SALTS_ERANGE);
 
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_equal(replace_once(listener_yaml, "      max_sessions: 4\n", "      max_sessions: 3\n",
+                             yaml, sizeof(yaml)), SALTS_OK);
+    check_equal(run_preflight(yaml, listener_graph, "tcp.input", &settings, &error), SALTS_ERANGE);
+    check_contains(error.path, "max_sessions");
+
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     check_equal(replace_once(listener_yaml, "      max_sessions: 4\n", "      max_sessions: 5\n",
                              yaml, sizeof(yaml)), SALTS_OK);
     check_equal(run_preflight(yaml, listener_graph, "tcp.input", &settings, &error), SALTS_ERANGE);
+    check_contains(error.path, "max_sessions");
 
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     check_equal(replace_once(listener_yaml, "      max_pending_claims: 64\n",
