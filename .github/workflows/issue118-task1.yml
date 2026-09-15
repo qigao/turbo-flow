@@ -1,0 +1,358 @@
+name: issue118-task1
+
+on:
+  push:
+    branches:
+      - feat/118-real-protocol-intake
+
+permissions:
+  contents: write
+
+jobs:
+  task1:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/118-real-protocol-intake
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Apply Task 1 RED tests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one anchor, got {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "io/cnet/tests/cnet_stream_source_header_cpp.cpp",
+              '''extern "C" int cnet_listener_source_header_cpp_probe(void) {
+            turbo_flow_cnet_listener_source_config_t config = TURBO_FLOW_CNET_LISTENER_SOURCE_CONFIG_INIT;
+            turbo_flow_cnet_listener_source_snapshot_t snapshot =
+                TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+            return config.version == TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION &&
+                           snapshot.version == TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION
+                       ? 0
+                       : 1;
+          }
+          ''',
+              '''extern "C" int cnet_listener_source_header_cpp_probe(void) {
+            turbo_flow_cnet_listener_source_config_t config = TURBO_FLOW_CNET_LISTENER_SOURCE_CONFIG_INIT;
+            turbo_flow_cnet_listener_source_snapshot_t snapshot =
+                TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+            turbo_flow_cnet_listener_message_context_t context = {0};
+            return config.version == TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION &&
+                           snapshot.version == TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION &&
+                           context.size == 0u
+                       ? 0
+                       : 1;
+          }
+          ''')
+
+          replace_once(
+              "io/cnet/tests/test_cnet_listener_source.c",
+              '''#include <salts/clock.h>
+
+          #include <stdio.h>''',
+              '''#include <salts/clock.h>
+          #include <salts_buffer.h>
+
+          #include <stdio.h>''')
+
+          replace_once(
+              "io/cnet/tests/test_cnet_listener_source.c",
+              '''typedef struct listener_source_graph_probe_s {
+            size_t count;
+            uint64_t ids[4];
+            char payloads[4][32];
+          } listener_source_graph_probe_t;''',
+              '''typedef struct listener_source_graph_probe_s {
+            size_t count;
+            uint64_t ids[4];
+            char payloads[4][32];
+            turbo_flow_cnet_listener_message_context_t contexts[4];
+          } listener_source_graph_probe_t;''')
+
+          replace_once(
+              "io/cnet/tests/test_cnet_listener_source.c",
+              '''static int listener_source_graph_sink(turbo_flow_msg_t *message, void *ctx) {
+            listener_source_graph_probe_t *probe = (listener_source_graph_probe_t *)ctx;
+            size_t copy_size;
+            if (!probe || !message || probe->count >= 4u) return SALTS_EPROTO;
+            copy_size = message->payload.len;
+            if (copy_size >= sizeof(probe->payloads[0])) return SALTS_EMSGSIZE;
+            probe->ids[probe->count] = message->id;
+            if (copy_size > 0u) memcpy(probe->payloads[probe->count], message->payload.data, copy_size);
+            probe->payloads[probe->count][copy_size] = '\\0';
+            ++probe->count;
+            return SALTS_OK;
+          }''',
+              '''static int listener_source_graph_sink(turbo_flow_msg_t *message, void *ctx) {
+            listener_source_graph_probe_t *probe = (listener_source_graph_probe_t *)ctx;
+            const turbo_flow_cnet_listener_message_context_t *transport;
+            size_t copy_size;
+            if (!probe || !message || probe->count >= 4u) return SALTS_EPROTO;
+            transport = turbo_flow_cnet_listener_message_context(message);
+            if (!transport || transport->size != sizeof(*transport) ||
+                transport->version != TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION ||
+                transport->connection.generation == 0u)
+              return SALTS_EPROTO;
+            copy_size = message->payload.len;
+            if (copy_size >= sizeof(probe->payloads[0])) return SALTS_EMSGSIZE;
+            probe->ids[probe->count] = message->id;
+            probe->contexts[probe->count] = *transport;
+            if (copy_size > 0u) memcpy(probe->payloads[probe->count], message->payload.data, copy_size);
+            probe->payloads[probe->count][copy_size] = '\\0';
+            ++probe->count;
+            return SALTS_OK;
+          }''')
+
+          replace_once(
+              "io/cnet/tests/test_cnet_listener_source.c",
+              '''    check_equal(cnet_listener_source_header_cpp_probe(), 0);
+            }
+
+            it("rejects invalid configuration before publishing an owner") {''',
+              '''    check_equal(cnet_listener_source_header_cpp_probe(), 0);
+            }
+
+            it("rejects a listener transport context outside message-owned storage") {
+              turbo_flow_msg_t message;
+              mem_buffer_t *buffer = mem_get_buffer(mem_global(), 8u);
+              check_not_null(buffer);
+              mem_set_used(buffer, 8u);
+              turbo_flow_msg_init(&message);
+              message.buffer = buffer;
+              message.payload = vstr_from_buf(mem_buffer_const_data(buffer), 8u);
+              message.transport_context = (void *)(mem_buffer_const_data(buffer) + 8u);
+              check_null(turbo_flow_cnet_listener_message_context(&message));
+              turbo_flow_msg_cleanup(&message);
+            }
+
+            it("rejects invalid configuration before publishing an owner") {''')
+          PY
+          git diff --check
+          git add io/cnet/tests/test_cnet_listener_source.c io/cnet/tests/cnet_stream_source_header_cpp.cpp
+          git commit -m "test(cnet): require listener message connection identity"
+
+      - name: Verify Task 1 RED contract
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          header = Path("io/cnet/include/turbo_flow_cnet.h").read_text()
+          probe = Path("io/cnet/tests/cnet_stream_source_header_cpp.cpp").read_text()
+          test = Path("io/cnet/tests/test_cnet_listener_source.c").read_text()
+          assert "turbo_flow_cnet_listener_message_context_t context" in probe
+          assert "turbo_flow_cnet_listener_message_context(message)" in test
+          assert "typedef struct turbo_flow_cnet_listener_message_context_s" not in header
+          print("RED confirmed: tests require listener message context that production does not define")
+          PY
+
+      - name: Apply Task 1 GREEN production change
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one anchor, got {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "io/cnet/include/turbo_flow_cnet.h",
+              '''/**
+           * Caller-owned snapshot copied without advancing either runtime.
+           *
+           * `status` and `error_stage` describe a terminal owner failure.''',
+              '''/** Message-owned immutable listener connection identity stored inside `message->buffer`. */
+          typedef struct turbo_flow_cnet_listener_message_context_s {
+            size_t size;
+            uint32_t version;
+            cnet_connection connection;
+          } turbo_flow_cnet_listener_message_context_t;
+
+          #define TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION 1u
+          #define TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_V1_SIZE                                 \\
+            sizeof(turbo_flow_cnet_listener_message_context_t)
+
+          /**
+           * Caller-owned snapshot copied without advancing either runtime.
+           *
+           * `status` and `error_stage` describe a terminal owner failure.''')
+
+          replace_once(
+              "io/cnet/include/turbo_flow_cnet.h",
+              '''TURBO_FLOW_C_API int
+          turbo_flow_cnet_listener_source_destroy(turbo_flow_cnet_listener_source_t *source);
+
+          #define TURBO_FLOW_CNET_PACKET_SOURCE_API_VERSION 1u''',
+              '''TURBO_FLOW_C_API int
+          turbo_flow_cnet_listener_source_destroy(turbo_flow_cnet_listener_source_t *source);
+
+          /**
+           * Return listener connection identity only when it is owned by the message buffer.
+           *
+           * The returned view remains valid exactly as long as `message->buffer`. NULL means
+           * the message is not a listener-source message or its transport context is malformed.
+           */
+          TURBO_FLOW_C_API const turbo_flow_cnet_listener_message_context_t *
+          turbo_flow_cnet_listener_message_context(const turbo_flow_msg_t *message);
+
+          #define TURBO_FLOW_CNET_PACKET_SOURCE_API_VERSION 1u''')
+
+          replace_once(
+              "io/cnet/src/turbo_flow_cnet_listener_source.c",
+              '''  mem_buffer_t *buffer;
+            int status;''',
+              '''  turbo_flow_cnet_listener_message_context_t *message_context;
+            mem_buffer_t *buffer;
+            size_t buffer_size;
+            int status;''')
+
+          replace_once(
+              "io/cnet/src/turbo_flow_cnet_listener_source.c",
+              '''  buffer = mem_get_buffer(mem_global(), view->size);
+            if (!buffer) {
+              listener_source_fail(source, SALTS_ENOMEM, 0, "receive_copy");
+              return;
+            }
+            memcpy(mem_buffer_data(buffer), view->data, view->size);
+            mem_set_used(buffer, view->size);
+            turbo_flow_msg_init(&source->ready_message);
+            source->ready_message.id = source->next_message_id;
+            source->ready_message.buffer = buffer;
+            source->ready_message.payload = vstr_from_buf(mem_buffer_const_data(buffer), view->size);''',
+              '''  if (view->size > SIZE_MAX - sizeof(*message_context)) {
+              listener_source_fail(source, SALTS_ERANGE, 0, "receive_size");
+              return;
+            }
+            buffer_size = sizeof(*message_context) + view->size;
+            buffer = mem_get_buffer(mem_global(), buffer_size);
+            if (!buffer) {
+              listener_source_fail(source, SALTS_ENOMEM, 0, "receive_copy");
+              return;
+            }
+            message_context = (turbo_flow_cnet_listener_message_context_t *)mem_buffer_data(buffer);
+            memset(message_context, 0, sizeof(*message_context));
+            message_context->size = TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_V1_SIZE;
+            message_context->version = TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION;
+            message_context->connection = connection;
+            memcpy(mem_buffer_data(buffer) + sizeof(*message_context), view->data, view->size);
+            mem_set_used(buffer, buffer_size);
+            turbo_flow_msg_init(&source->ready_message);
+            source->ready_message.id = source->next_message_id;
+            source->ready_message.buffer = buffer;
+            source->ready_message.payload =
+                vstr_from_buf(mem_buffer_const_data(buffer) + sizeof(*message_context), view->size);
+            source->ready_message.transport_context = message_context;''')
+
+          replace_once(
+              "io/cnet/src/turbo_flow_cnet_listener_source.c",
+              '''  listener_source_wake(&source->value_waker);
+          }
+
+          static int listener_source_config_validate''',
+              '''  listener_source_wake(&source->value_waker);
+          }
+
+          const turbo_flow_cnet_listener_message_context_t *
+          turbo_flow_cnet_listener_message_context(const turbo_flow_msg_t *message) {
+            const turbo_flow_cnet_listener_message_context_t *context;
+            const char *base;
+            uintptr_t base_address;
+            uintptr_t context_address;
+            size_t used;
+            size_t offset;
+            if (!message || !message->buffer || !message->transport_context) return NULL;
+            base = mem_buffer_const_data(message->buffer);
+            used = mem_buffer_used(message->buffer);
+            base_address = (uintptr_t)base;
+            context_address = (uintptr_t)message->transport_context;
+            if (!base || context_address < base_address) return NULL;
+            offset = (size_t)(context_address - base_address);
+            if (offset > used || used - offset < sizeof(*context)) return NULL;
+            context = (const turbo_flow_cnet_listener_message_context_t *)message->transport_context;
+            if (context->size != TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_V1_SIZE ||
+                context->version != TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION ||
+                context->connection.generation == 0u)
+              return NULL;
+            if (message->payload.data != base + offset + context->size ||
+                message->payload.len > used - offset - context->size)
+              return NULL;
+            return context;
+          }
+
+          static int listener_source_config_validate''')
+          PY
+          git diff --check
+
+      - name: Run Task 1 structural and syntax checks
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          header = Path("io/cnet/include/turbo_flow_cnet.h").read_text()
+          source = Path("io/cnet/src/turbo_flow_cnet_listener_source.c").read_text()
+          test = Path("io/cnet/tests/test_cnet_listener_source.c").read_text()
+          assert header.count("typedef struct turbo_flow_cnet_listener_message_context_s") == 1
+          assert header.count("turbo_flow_cnet_listener_message_context(const turbo_flow_msg_t *message)") == 1
+          assert source.count("turbo_flow_cnet_listener_message_context(const turbo_flow_msg_t *message)") == 1
+          assert "source->ready_message.transport_context = message_context;" in source
+          assert "vstr_from_buf(mem_buffer_const_data(buffer) + sizeof(*message_context), view->size)" in source
+          assert "message.transport_context = (void *)(mem_buffer_const_data(buffer) + 8u);" in test
+          print("Task 1 structural checks passed")
+          PY
+          git diff --check
+
+          git clone --depth 1 https://github.com/qigao/salts.git /tmp/salts
+          mapfile -t incdirs < <(find "$PWD" /tmp/salts -type d -name include -print)
+          args=()
+          for d in "${incdirs[@]}"; do args+=("-I$d"); done
+          set +e
+          c++ -std=c++17 -fsyntax-only "${args[@]}" io/cnet/tests/cnet_stream_source_header_cpp.cpp > /tmp/header-check.log 2>&1
+          header_rc=$?
+          cc -std=c11 -fsyntax-only "${args[@]}" io/cnet/src/turbo_flow_cnet_listener_source.c > /tmp/source-check.log 2>&1
+          source_rc=$?
+          set -e
+          if [[ $header_rc -ne 0 ]]; then
+            echo "Header syntax check unavailable/failed; log follows"
+            cat /tmp/header-check.log
+          else
+            echo "C++ header syntax check passed"
+          fi
+          if [[ $source_rc -ne 0 ]]; then
+            echo "Listener source syntax check unavailable/failed; log follows"
+            cat /tmp/source-check.log
+          else
+            echo "C listener source syntax check passed"
+          fi
+
+      - name: Commit Task 1 GREEN and remove executor
+        shell: bash
+        run: |
+          git add io/cnet/include/turbo_flow_cnet.h \
+                  io/cnet/src/turbo_flow_cnet_listener_source.c \
+                  io/cnet/tests/test_cnet_listener_source.c \
+                  io/cnet/tests/cnet_stream_source_header_cpp.cpp
+          git commit -m "feat(cnet): preserve listener message connection identity"
+          git rm .github/workflows/issue118-task1.yml
+          git commit -m "chore: remove task 1 executor"
+          git push origin HEAD:feat/118-real-protocol-intake
