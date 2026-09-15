@@ -15,7 +15,7 @@ The accepted completion slice uses two real protocol sources with different tran
 - JT/T 808 over a real CNet TCP listener.
 - CoAP over a real CNet UDP packet endpoint.
 
-Both sources must pass through the same configured Inbox contract, the same existing Inbox-to-Graph driver, the same Graph topology, and the same Sink provider type. Destination selection is explicit configuration and must not be derived from ingress protocol identity.
+Both sources must pass through the same configured Inbox contract, the same existing Inbox-to-Graph driver, the same business Graph topology, and the same CNet datagram Sink provider type. Destination selection is explicit configuration and must not be derived from ingress protocol identity.
 
 FlowMQ remains tracked by #74. Flowie remains tracked by #115. The real RulesForge/TurboScript DLL migration remains tracked by #73. None of those tasks is a prerequisite for this #118 completion slice.
 
@@ -24,7 +24,7 @@ FlowMQ remains tracked by #74. Flowie remains tracked by #115. The real RulesFor
 The merged tree at base commit `ed4d51b7db575f4f59c95a583ff90c5538268ad9` already provides:
 
 1. Inbox v2 with bounded memory and durable TurboDB/SQLite providers, exact schema preflight, generation ownership, takeover, replay/history semantics, and no database-to-memory fallback.
-2. A provider-neutral Inbox-to-Graph driver from PR #123. Graph execution begins only after a record has been claimed from Inbox and settlement is explicit.
+2. A provider-neutral Inbox-to-Graph driver from PR #123. Business Graph execution begins only after a record has been claimed from Inbox and settlement is explicit.
 3. `ProtocolInbox` from PR #125. `turbo_flow_protocol_inbox_admit()` synchronously encodes a decoded protocol message into the durable `turbo-flow.protocol.inbox` v1 TBE envelope and admits it to the configured Inbox.
 4. `ProtocolSource` ABI v1. A caller opens a protocol parser session, feeds transport bytes, and receives complete decoded frames through one `admit` callback. A complete frame is not consumed until that callback succeeds. Capacity rejection retains the current frame and requires an explicit empty-feed retry.
 5. Independent protocol DLLs for MQTT-SN, CoAP, LwM2M, OCPP, GB/T 32960, and JT/T 808.
@@ -37,12 +37,12 @@ The missing piece is composition between the real CNet transport owners and `Pro
 
 This change must:
 
-- prove two real protocol network Sources can reach the same configured Inbox before any Graph work begins;
+- prove two real protocol network Sources can reach the same configured Inbox before any business Graph work begins;
 - keep the existing Inbox v2 ABI/schema and `ProtocolInbox` envelope unchanged;
 - keep protocol DLLs responsible only for framing/codec semantics;
 - keep CNet responsible for connection/session/transport truth;
 - keep Inbox responsible for record/claim/settlement truth;
-- keep the Graph driver responsible for starting and settling business execution;
+- keep the existing Inbox driver responsible for starting and settling business execution;
 - preserve explicit destination configuration at the Sink boundary;
 - preserve bounded memory and backpressure at every handoff;
 - preserve exact generation identity across connection/session reuse;
@@ -60,7 +60,7 @@ This slice does not:
 - delay native protocol ACK until business Graph completion unless the native protocol owner already requires that behavior;
 - add automatic retries for Graph, Sink, network, or database failures;
 - migrate legacy data/configuration/ABI;
-- add a second connection/session registry beside CNet;
+- add a second mutable connection/session registry beside CNet;
 - change Inbox v2 storage naming or schema;
 - allow protocol identity to implicitly select a Sink destination.
 
@@ -70,7 +70,7 @@ This slice does not:
 
 The TCP path is:
 
-`real TCP peer -> CNet listener Source -> transport/protocol intake bridge -> JT/T 808 protocol DLL -> ProtocolSource -> ProtocolInbox -> configured Inbox -> existing Inbox Graph driver -> shared Graph -> configured CNet Sink -> real peer`
+`real TCP peer -> CNet listener Source -> intake plumbing Flow -> protocol-intake Sink -> JT/T 808 protocol DLL -> ProtocolSource -> ProtocolInbox -> configured Inbox -> existing Inbox Graph driver -> shared business Graph -> CNet datagram Sink -> real UDP peer`
 
 The listener Source remains the transport owner. Its CNet connection handle `{slot, generation}` is the authoritative connection identity.
 
@@ -78,9 +78,24 @@ The listener Source remains the transport owner. Its CNet connection handle `{sl
 
 The UDP path is:
 
-`real UDP peer -> CNet packet Source -> transport/protocol intake bridge -> CoAP protocol DLL -> ProtocolSource -> ProtocolInbox -> configured Inbox -> existing Inbox Graph driver -> shared Graph -> configured CNet Sink -> real peer`
+`real UDP peer -> CNet packet Source -> intake plumbing Flow -> protocol-intake Sink -> CoAP protocol DLL -> ProtocolSource -> ProtocolInbox -> configured Inbox -> existing Inbox Graph driver -> shared business Graph -> CNet datagram Sink -> real UDP peer`
 
 The packet Source remains the transport/session owner. Its message-owned `turbo_flow_cnet_packet_message_context_t` and generation-checked `cnet_packet_session` are authoritative transport identity.
+
+### 5.3 Intake plumbing Flow is not the business Graph
+
+CNet Sources already publish `turbo_flow_msg_t` through CFlow/TurboFlow Source machinery. This design reuses that machinery rather than adding a second callback API to CNet.
+
+The pre-storage intake Flow is deliberately restricted to transport plumbing:
+
+- exactly one real CNet Source;
+- exactly one protocol-intake Sink;
+- no business transform/operation;
+- no business database capability;
+- no business destination routing;
+- no result Sink.
+
+The #118 invariant is therefore **storage admission before business Graph execution**, not "no scheduler or CFlow primitive may run before storage." A test counter for the store-before-Graph invariant counts only the post-Inbox business Graph requested by the existing Inbox driver.
 
 ## 6. Required CNet Listener Message Identity Addition
 
@@ -107,107 +122,95 @@ This is a projection only. It does not create a second mutable connection table.
 
 A stale listener message retains the generation captured when the network callback copied the bytes. Slot reuse therefore cannot cause old bytes to be parsed under a newer connection generation.
 
-## 7. Generic Transport-to-Protocol Intake Bridge
+The public payload contract remains `message->payload`; consumers must not assume payload begins at offset zero of `message->buffer`.
 
-Introduce one provider-neutral composition owner rather than one adapter per protocol.
+## 7. Host-Owned Protocol-Intake Sink
 
-Suggested public name:
+Introduce one host-owned composition helper, `turbo_flow_protocol_transport_intake_t`, used to back a single Sink in the dedicated intake plumbing Flow. It is not a new protocol provider, transport provider, database, queue, or business Graph.
 
-```c
-turbo_flow_protocol_transport_intake_t
-```
-
-The bridge owns:
+The intake owner contains:
 
 - one retained/opened protocol provider instance selected by exact plugin ID/version;
 - one `turbo_flow_protocol_source_t`;
 - one `turbo_flow_protocol_inbox_t`;
-- a bounded table of parser sessions keyed by transport identity;
-- one serialized progress lane;
-- no network socket, no database, no Graph run, and no Sink.
+- one fixed parser-session table sized exactly to configured transport capacity;
+- one serialized Sink/progress lane;
+- no network socket;
+- no database implementation;
+- no business Graph run;
+- no business result Sink.
 
-The bridge borrows or retains host-owned resources only through their public contracts. It never calls a protocol plugin's internal symbols and never accesses a CNet owner's internal state.
+The Sink consumes the existing `turbo_flow_msg_t` emitted by CNet. No additional generic transport-message public ABI is introduced.
 
-### 7.1 Transport events accepted by the bridge
+For stream input, the Sink obtains transport identity only through `turbo_flow_cnet_listener_message_context(message)`. For packet input, it obtains transport identity only through `turbo_flow_cnet_packet_message_context(message)`.
 
-The bridge accepts two exact transport event shapes:
+The helper may be public as an opaque lifecycle handle if required by the existing adapter/progress ownership pattern, but its message handoff remains the ordinary TurboFlow/CFlow Sink contract. There is no public `feed raw bytes` escape hatch that bypasses the configured real CNet Source in the installed integration path.
 
-```c
-typedef enum turbo_flow_protocol_transport_kind_e {
-  TURBO_FLOW_PROTOCOL_TRANSPORT_STREAM = 1,
-  TURBO_FLOW_PROTOCOL_TRANSPORT_PACKET = 2
-} turbo_flow_protocol_transport_kind_t;
+## 8. Parser-Session Mapping
 
-typedef struct turbo_flow_protocol_transport_message_s {
-  size_t size;
-  uint32_t abi_version;
-  turbo_flow_protocol_transport_kind_t transport_kind;
-  uint64_t owner_id;
-  uint64_t generation;
-  const char *device_id;
-  const uint8_t *data;
-  size_t data_size;
-} turbo_flow_protocol_transport_message_t;
-```
+The parser-session table is a bounded derived projection keyed by CNet's stable slot and generation. It is not a second mutable transport session registry.
 
-`owner_id` is the stable transport-local slot/session identity converted to a bridge-local scalar. `generation` must be nonzero and must come from the authoritative CNet handle. `device_id` is optional only for protocol DLLs that derive a stable identity from the frame itself.
-
-The implementation may use a private internal event representation if existing CFlow message APIs are sufficient; the public ABI must expose no raw pointer or DLL address in durable state.
-
-### 7.2 Parser-session mapping
-
-For every live transport identity, the bridge maintains at most one `ProtocolSource` parser session.
+For both listener and packet handles, slot zero-based identity is converted to a nonzero bridge key only for indexing/validation; the original CNet generation remains authoritative.
 
 Rules:
 
-1. First message for `{owner_id, generation}` lazily opens one parser session.
-2. Repeated messages for the same pair feed the same parser session.
-3. If the same `owner_id` appears with a newer generation, the bridge closes the previous parser session before opening the new one.
-4. A message with an older/stale generation is rejected and never admitted to Inbox.
-5. Parser session identifiers are bridge-owned counters and are not persisted as durable source identity.
-6. Shutdown closes all live parser sessions before destroying the `ProtocolSource`.
+1. The first message for a slot opens one `ProtocolSource` parser session using that CNet generation.
+2. Repeated messages for the same slot and generation feed the same parser session.
+3. If the same slot appears with a newer generation, the intake owner closes the old parser session before opening the new one.
+4. A message with an older generation than the slot's retained generation is rejected before durable admission.
+5. A generation change discards no accepted Inbox record; it only retires transport-local partial parser state that has not crossed the Inbox admission boundary.
+6. Parser session identifiers are process-local intake counters and are never persisted as durable source identity.
+7. The fixed parser-session table has the same slot bound as the configured transport owner. It cannot grow at runtime.
+8. A transport connection/session close does not require a second terminal-event channel solely for this slice. A parser entry may remain allocated but inactive until that slot is reused or the intake owner shuts down. This retained state is bounded by transport slot capacity; reuse performs exact generation retirement before new bytes are fed.
+9. Shutdown closes every retained parser session before destroying `ProtocolSource`.
 
-This prevents a partial JT/T 808 frame from one TCP connection from being completed by bytes belonging to a later connection reusing the same slot.
+This prevents a partial JT/T 808 frame from generation N from being completed by bytes belonging to generation N+1 after a TCP slot is reused.
 
-## 8. Admission and Backpressure Semantics
+## 9. Admission and Backpressure Semantics
 
-The bridge configures `ProtocolSource.ops.admit` to call `turbo_flow_protocol_inbox_admit()` and no other successful data-path callback.
+The intake owner configures `ProtocolSource.ops.admit` to call `turbo_flow_protocol_inbox_admit()` and no other successful data-path callback.
 
 A frame crosses the acceptance boundary only when the selected Inbox owns a complete independent copy.
 
-### 8.1 ProtocolSource retained frame
+### 9.1 ProtocolSource retained frame
 
-If `ProtocolInbox` or Inbox reports a capacity failure, `ProtocolSource` retains the complete current frame. The bridge must not re-feed those bytes. It retries only through the documented empty-feed call until admission succeeds or a terminal failure is selected by policy.
+If `ProtocolInbox` or Inbox reports a capacity failure, `ProtocolSource` retains the complete current frame. The intake Sink does not acknowledge successful consumption of the corresponding upstream message until the frame has either been admitted or a terminal failure has been selected.
 
-The test suite must prove one retained frame becomes exactly one Inbox record after capacity becomes available.
+The intake owner must not re-feed retained frame bytes. It retries only through the documented empty-feed call until admission succeeds or an explicit terminal action ends the intake operation.
 
-### 8.2 TCP backpressure
+A focused test must prove one retained frame becomes exactly one Inbox record after capacity becomes available.
 
-For the TCP listener path, once the bridge cannot accept more protocol work, it stops requesting new listener Source demand. CNet therefore does not admit another application receive into this bridge until capacity returns.
+### 9.2 TCP backpressure
 
-Transport close/error progress remains owned by the CNet listener contract. The bridge must not poll or peek CNet behind the listener owner.
+For the TCP listener path, when the intake Sink cannot accept another CFlow value, downstream demand remains withheld. The CNet listener Source therefore stops registering new application receives for this intake Flow until capacity returns.
 
-### 8.3 UDP backpressure
+Transport close/error progress remains owned by the CNet listener contract. The intake owner never polls or peeks CNet behind that owner.
 
-For the UDP packet path, protocol/transport progress cannot be globally demand-gated because KCP/secure-KCP control traffic may require polling even with zero Graph demand. The CNet packet owner therefore continues its own transport progress while bridge demand is stopped.
+### 9.3 UDP backpressure
 
-The packet Source's fixed queue is the bounded handoff. If that queue is exhausted, its existing terminal capacity behavior applies. The bridge must not add an unbounded spill queue.
+For the UDP packet path, protocol/transport progress cannot be globally demand-gated because KCP/secure-KCP control traffic may require polling even with zero downstream demand. The CNet packet owner therefore continues its own transport progress while the intake Flow withholds value demand.
 
-### 8.4 Durable failure
+The packet Source's fixed queue remains the bounded handoff. If that queue is exhausted, its existing capacity/terminal behavior applies. The intake owner adds no unbounded spill queue.
+
+### 9.4 Zero and bounded capacities
+
+A configured parser-session capacity of zero fails preflight before network side effects. Capacity one, N, and N+1 are exercised at runtime. Existing Inbox provider validation remains authoritative for record, byte, single-record, and in-flight-claim bounds; the intake layer does not reinterpret those limits.
+
+### 9.5 Durable failure
 
 When TurboDB Inbox admission/commit fails:
 
-- the Graph is not started for that record;
+- the business Graph is not started for that record;
 - the record is not silently admitted to memory;
 - the protocol intake does not bypass Inbox;
 - the failure remains observable as an intake/storage failure;
 - no implicit retry is performed unless a caller explicitly invokes a supported retry operation.
 
-## 9. Identity and Durable Envelope Rules
+## 10. Identity and Durable Envelope Rules
 
 `ProtocolInbox` continues to produce the existing `turbo-flow.protocol.inbox` v1 TBE envelope.
 
-The durable identity resolver must derive `source_id`, `admission_id`, `correlation`, `source_sequence`, and timestamp from configured source identity plus protocol/application metadata. It must not persist:
+The durable identity resolver derives `source_id`, `admission_id`, `correlation`, `source_sequence`, and timestamp from configured source identity plus protocol/application metadata. It does not persist:
 
 - C pointers;
 - DLL addresses;
@@ -215,120 +218,127 @@ The durable identity resolver must derive `source_id`, `admission_id`, `correlat
 - process-local parser session ids;
 - borrowed network buffers.
 
-CNet generation values may participate in in-process stale-event rejection but are not sufficient as the durable replay identity by themselves.
+CNet generation values participate in in-process stale-event rejection but are not sufficient as durable replay identity by themselves.
 
-JT/T 808 and CoAP tests must verify equivalent memory/TurboDB durable envelope semantics for the same normalized protocol input.
+JT/T 808 and CoAP tests verify equivalent memory/TurboDB durable envelope semantics for the same normalized protocol input.
 
-## 10. Graph Boundary
+## 11. Business Graph Boundary
 
-No network owner executes the business Graph directly.
+No network owner or intake plumbing Flow executes business logic.
 
-The only path to Graph execution is:
+The only path to business Graph execution is:
 
 1. protocol frame decoded;
 2. `ProtocolInbox` admission succeeds;
 3. Inbox record becomes claimable;
 4. the existing provider-neutral Inbox Source/driver claims the record;
-5. the shared Graph is requested;
-6. terminal Graph outcome settles the original Inbox claim according to the existing driver contract.
+5. the shared business Graph is requested;
+6. terminal business Graph outcome settles the original Inbox claim according to the existing driver contract.
 
-A focused test must hold Inbox admission before commit and assert the Graph invocation counter remains zero.
+A focused test holds or fails Inbox admission and asserts the post-Inbox business Graph invocation counter remains zero.
 
-The Graph used by this #118 acceptance is the existing CFlow graph contract. It is not evidence that #73 real RulesForge/TurboScript DLL migration is complete.
+The business Graph used by this #118 acceptance is the existing CFlow graph contract. It is not evidence that #73 real RulesForge/TurboScript DLL migration is complete.
 
-## 11. Sink and Destination Semantics
+## 12. Sink and Destination Semantics
 
-Both ingress protocols must use the same Sink provider type and Graph topology.
+Both ingress protocols use the same CNet datagram Sink provider type and the same business Graph topology.
 
-Run at least two explicit destination configurations. For example:
+Two explicit destination configurations are required:
 
-- configuration A sends the business result to UDP loopback destination A;
-- configuration B sends the same business result to UDP loopback destination B.
+- configuration A sends the business result to real UDP loopback peer A;
+- configuration B sends the same business result to real UDP loopback peer B.
 
-The output destination is read from explicit configured business/Sink binding. Changing ingress from JT/T 808 to CoAP must not change the selected destination when business input and destination configuration are otherwise the same.
+The output destination comes from explicit Sink/business binding. Changing ingress from JT/T 808 to CoAP does not change the selected destination when business input and destination configuration are otherwise the same.
 
-Protocol reply sinks, if tested, remain separate from independent business destination sinks. A reply-specific session/generation is not generalized into ordinary result routing.
+Protocol reply sinks, if separately tested, remain distinct from independent business destination sinks. A reply-specific session/generation is never generalized into ordinary result routing.
 
-## 12. Lifecycle and Ownership
+## 13. Lifecycle and Ownership
 
-Startup order:
+Preflight/startup order:
 
 1. validate exact configuration and capability versions with no network side effects;
 2. resolve/load the selected protocol DLL and retain its module lease;
 3. bind the selected Inbox provider;
 4. create `ProtocolInbox`;
 5. create `ProtocolSource`;
-6. create the transport/protocol bridge session table;
-7. start/open the real CNet Source owner;
-8. publish the assembled generation only after every required owner is valid.
+6. create the fixed parser-session table;
+7. assemble the dedicated intake plumbing Flow with the protocol-intake Sink;
+8. open/start the real CNet Source owner against that intake Flow;
+9. publish the assembled generation only after every required owner is valid.
 
 Failure during assembly unwinds in reverse order and publishes no partial generation.
 
 Shutdown order:
 
-1. stop new bridge demand/admission;
-2. stop new network application delivery while allowing native owner drain semantics;
-3. settle or cancel any bridge-retained complete protocol frame explicitly;
-4. close all parser sessions;
+1. close new intake Sink admission/demand;
+2. request the real CNet Source owner's documented stop/drain behavior so no new application values can enter;
+3. finish or explicitly terminate any currently retained complete `ProtocolSource` frame without feeding new transport bytes;
+4. close every retained parser session;
 5. destroy `ProtocolSource`;
 6. destroy `ProtocolInbox`;
-7. release protocol/module leases;
-8. release transport owner after its own stop/drain contract completes.
+7. tear down the intake plumbing Flow/Sink owner;
+8. release protocol/module leases after all callbacks using them are gone;
+9. destroy the stopped CNet Source owner according to its own lifecycle contract.
 
-Any live parser session, retained frame, Inbox claim, Graph run, Sink terminal operation, or module callback that requires a DLL must keep the corresponding generation/module lease alive. Unload while such work exists returns busy/fails closed; it never invalidates borrowed callbacks.
+If existing CFlow ownership requires the intake Flow to outlive the stopped CNet owner handle, implementation must order only the final handle destruction accordingly; it must not release protocol callbacks or Inbox ownership while an intake callback can still run.
 
-## 13. Configuration Rules
+Any live parser session, retained frame, Inbox claim, business Graph run, Sink terminal operation, or module callback that requires a DLL keeps the corresponding generation/module lease alive. Unload while such work exists returns busy/fails closed; it never invalidates borrowed callbacks.
 
-Configuration must explicitly select:
+## 14. Configuration Rules
 
-- transport owner/resource;
+Configuration explicitly selects:
+
+- real transport Source owner/resource;
 - protocol DLL provider ID and exact supported version;
 - protocol kind/version;
 - Inbox provider (`memory` or `turbodb`) and its resource;
 - bounded transport/protocol session capacity;
 - maximum protocol frame bytes;
 - Inbox record/byte/in-flight limits already defined by Inbox v2;
-- shared Graph binding;
-- Sink provider/resource;
-- explicit destination.
+- shared business Graph binding;
+- CNet datagram Sink provider/resource;
+- explicit UDP destination.
+
+The installed integration path must materialize these through the existing host catalog/generation/configuration assembly. It must not hard-link a protocol DLL into Gateway/Core merely to satisfy this test.
 
 Invalid or unsupported combinations fail preflight. There is no protocol fallback, transport fallback, database fallback, old DLL fallback, static engine fallback, or CMake-selected runtime fallback.
 
-## 14. RED -> GREEN Acceptance Matrix
+## 15. RED -> GREEN Acceptance Matrix
 
-The implementation must begin with focused RED tests that prove the current master lacks the required composition.
+Implementation begins with focused RED tests proving current master lacks the required real transport-to-ProtocolSource composition.
 
 Required GREEN coverage:
 
-1. **JT/T 808 TCP real peer**: fragmented real TCP traffic crosses listener Source -> bridge -> JT/T 808 DLL -> ProtocolSource -> ProtocolInbox -> Inbox -> Graph -> real Sink.
-2. **CoAP UDP real peer**: real UDP datagram crosses packet Source -> bridge -> CoAP DLL -> ProtocolSource -> ProtocolInbox -> Inbox -> the same Graph -> the same Sink provider type.
-3. **Store before Graph**: hold/fail Inbox admission and assert Graph invocation count is zero.
-4. **No database fallback**: force TurboDB commit failure and assert Graph count is zero and memory-provider admission count is zero.
-5. **Capacity 0/1/N/N+1**: cover bridge parser-session capacity, retained complete frame, Inbox record capacity, total bytes, and in-flight claims where applicable.
+1. **JT/T 808 TCP real peer**: fragmented real TCP traffic crosses listener Source -> intake Sink -> JT/T 808 DLL -> ProtocolSource -> ProtocolInbox -> Inbox -> business Graph -> real CNet datagram Sink.
+2. **CoAP UDP real peer**: real UDP datagram crosses packet Source -> intake Sink -> CoAP DLL -> ProtocolSource -> ProtocolInbox -> Inbox -> the same business Graph -> the same CNet datagram Sink provider type.
+3. **Store before business Graph**: hold/fail Inbox admission and assert business Graph invocation count is zero.
+4. **No database fallback**: force TurboDB commit failure and assert business Graph count is zero and memory-provider admission count is zero.
+5. **Capacity 0/1/N/N+1**: zero parser-session capacity fails before network open; runtime covers one/N/N+1 transport slots plus existing Inbox record/byte/in-flight limits.
 6. **Exactly one admission after retry**: a frame retained because of Inbox capacity is admitted exactly once after space becomes available.
-7. **TCP generation reuse**: feed a partial JT/T 808 frame on generation N, reuse the slot with generation N+1, and prove bytes from N cannot complete a frame in N+1.
+7. **TCP generation reuse**: feed a partial JT/T 808 frame on generation N, reuse the listener slot with generation N+1, and prove bytes from N cannot complete a frame in N+1.
 8. **Stale packet generation**: a stale CoAP packet session generation is rejected before durable admission.
-9. **Graph failure**: failure settles through the existing Inbox driver contract and does not trigger implicit replay.
-10. **Send outcome separation**: Sink admission, send terminal, and any protocol acknowledgement remain distinct observations.
-11. **Cancel/drain**: accepted ownership is either drained or explicitly cancelled; no accepted record disappears.
-12. **Unload lease**: active bridge/parser/claim/run/send work prevents provider unload; release becomes possible after terminal cleanup.
-13. **Memory/TurboDB parity**: both providers run the same network behavior assertions except durability-specific crash recovery expectations.
-14. **TurboDB recovery**: after committed admission and process/provider restart simulation, the record is claimable under the existing recovery/takeover contract and is not duplicated into memory.
-15. **Different destinations**: the same business result is observed at two different explicit destinations in two configurations; ingress protocol does not choose the destination.
-16. **Installed package**: C and C++ installed consumers configure and load the required public components without private build-tree linkage.
-17. **DLL gates**: unique canonical exports, dependency closure, CRT/profile checks, and no retired protocol Graph/runtime artifact.
+9. **Business Graph failure**: failure settles through the existing Inbox driver contract and does not trigger implicit replay.
+10. **Send outcome separation**: CNet datagram Sink admission/native terminal and any protocol acknowledgement remain distinct observations.
+11. **Cancel/drain**: accepted Inbox ownership is either drained or explicitly cancelled/failed through existing contracts; no accepted record disappears.
+12. **Unload lease**: active intake/parser/claim/run/send work prevents provider unload; release becomes possible after terminal cleanup.
+13. **Memory/TurboDB parity**: both providers run the same network behavior assertions except durability-specific recovery expectations.
+14. **TurboDB recovery**: after committed admission and restart/takeover under the existing provider contract, the record is claimable and is not duplicated into memory.
+15. **Different destinations**: the same business result is observed at UDP destination A and destination B in separate configurations; ingress protocol does not choose the destination.
+16. **Installed package**: C and C++ installed consumers configure/load required public components without private build-tree linkage.
+17. **DLL gates**: canonical exports, dependency closure, CRT/profile checks, and no retired protocol Graph/runtime artifact.
 18. **Debug/ASan and Release**: focused tests, affected adjacent tests, full CTest, install consumer, formatting, and `git diff --check` all pass.
 
-## 15. Test Architecture
+## 16. Test Architecture
 
 Keep three levels separate so no fixture is presented as a real network gate.
 
 ### Level A: focused contract tests
 
 - listener message context exact ABI and lifetime;
-- bridge parser-session generation behavior;
+- intake parser-session generation behavior;
 - retained-frame retry;
-- capacity and stale-event errors;
+- zero/one/N/N+1 capacity behavior;
+- stale-event errors;
 - assembly rollback and unload lease.
 
 ### Level B: real local network integration tests
@@ -338,8 +348,8 @@ Keep three levels separate so no fixture is presented as a real network gate.
 - real CNet Source owner on ingress;
 - real selected protocol DLL loaded through the catalog;
 - real memory or TurboDB Inbox;
-- existing Inbox Graph driver;
-- real CNet Sink to a loopback peer.
+- existing Inbox business-Graph driver;
+- real CNet datagram Sink to UDP loopback peer A or B.
 
 Mocks may observe counters but cannot replace the network Source/Sink, protocol DLL, or selected Inbox implementation in these tests.
 
@@ -351,17 +361,17 @@ Mocks may observe counters but cannot replace the network Source/Sink, protocol 
 - DLL exports/dependencies/CRT checks;
 - schema/package negative assertions for retired components and old ABI requests.
 
-## 16. Compatibility and Migration
+## 17. Compatibility and Migration
 
 This is an intentionally incompatible line of development under #117/#118 policy.
 
 No old protocol-to-Graph runtime is restored. No legacy source/sink mapper is restored. No previous storage schema is migrated or auto-created. No C/CMake/runtime compatibility alias is added.
 
-The listener message context is additive to the current CNet listener Source ABI, but consumers that rely on payload starting at buffer offset zero must continue to use `message->payload` rather than inspect `message->buffer` internals. The documented public payload view remains unchanged.
+The listener message context is additive to the current CNet listener Source ABI, but consumers that rely on payload starting at buffer offset zero must migrate to the documented `message->payload` view. No compatibility layout is provided for consumers inspecting private buffer internals.
 
-Deployment replaces the complete validated binary/configuration set. It must not mix a new bridge with stale protocol or storage DLL generations.
+Deployment replaces the complete validated binary/configuration set. It must not mix a new intake composition with stale protocol or storage DLL generations.
 
-## 17. Completion Boundary for #118
+## 18. Completion Boundary for #118
 
 After the acceptance matrix above is GREEN, #118 may mark its real two-protocol network requirement complete using JT/T 808/TCP and CoAP/UDP.
 
