@@ -80,6 +80,14 @@ target_compile_definitions(protocol_network_tests PRIVATE
 target_compile_options(protocol_network_tests PRIVATE $<$<COMPILE_LANGUAGE:C>:${_tf_c_options}>)
 target_link_libraries(protocol_network_tests PRIVATE Salts::Core Salts::CFlow Salts::CNet xxHash::xxhash)
 
+add_library(graph_durable_buffer_contract OBJECT
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/flow_plan_type_probe.c"
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_durable_buffer.c")
+target_include_directories(graph_durable_buffer_contract PRIVATE ${_tf_include_dirs})
+target_compile_definitions(graph_durable_buffer_contract PRIVATE TURBO_FLOW_BUILD)
+target_compile_options(graph_durable_buffer_contract PRIVATE $<$<COMPILE_LANGUAGE:C>:${_tf_c_options}>)
+target_link_libraries(graph_durable_buffer_contract PRIVATE Salts::Core Salts::CFlow)
+
 add_library(protocol_network_cpp_contract OBJECT
     "${TURBO_FLOW_SOURCE_DIR}/io/cnet/tests/cnet_stream_source_header_cpp.cpp"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/tests/protocol_network_intake_header_cpp.cpp")
