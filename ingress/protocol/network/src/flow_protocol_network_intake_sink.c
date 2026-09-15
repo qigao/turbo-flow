@@ -10,6 +10,11 @@
 
 enum { INTAKE_RESOURCE_GENERATION = 1u };
 
+static const char INTAKE_MEDIA_TYPE[] = "application/octet-stream";
+static const char INTAKE_CONTENT_IDENTITY[] = "protocol.network.intake";
+static const char INTAKE_SCHEMA_NAME[] = "ProtocolNetworkIntakeTransport";
+static const char INTAKE_TYPE_NAME[] = "MessageOwnedBytes";
+
 typedef struct intake_parser_slot_s {
   int in_use;
   uint32_t transport_slot;
@@ -49,6 +54,11 @@ struct flow_protocol_network_intake_sink_s {
   int detached;
   char admission_id[TURBO_FLOW_PROTOCOL_INBOX_ADMISSION_ID_MAX + 1u];
 };
+
+static void intake_counter_add(uint64_t *counter, uint64_t amount) {
+  if (!counter || amount == 0u || *counter == UINT64_MAX) return;
+  *counter = amount > UINT64_MAX - *counter ? UINT64_MAX : *counter + amount;
+}
 
 static size_t intake_text_size(const char *text, size_t capacity) {
   size_t size = 0u;
@@ -107,11 +117,11 @@ static int intake_ipv4_device_id(const cnet_datagram_peer *peer, char *out, size
 }
 
 static int intake_ipv6_device_id(const cnet_datagram_peer *peer, char *out, size_t capacity) {
+  static const char hex[] = "0123456789abcdef";
   char address[33];
   int count;
   if (!peer || !out || capacity == 0u || peer->port == 0u) return SALTS_EINVAL;
   for (size_t i = 0u; i < 16u; ++i) {
-    static const char hex[] = "0123456789abcdef";
     address[i * 2u] = hex[(peer->address[i] >> 4u) & 0x0fu];
     address[i * 2u + 1u] = hex[peer->address[i] & 0x0fu];
   }
@@ -239,10 +249,7 @@ static int intake_claim_complete(flow_protocol_network_intake_sink_t *sink,
   int rc;
   if (!sink || !entry || !entry->claim._impl) return SALTS_EINVAL;
   rc = turbo_flow_async_terminal_complete(&entry->claim, status, NULL);
-  if (rc == SALTS_OK) {
-    if (sink->completed != UINT64_MAX) ++sink->completed;
-    return SALTS_OK;
-  }
+  if (rc == SALTS_OK) intake_counter_add(&sink->completed, 1u);
   return rc;
 }
 
@@ -264,6 +271,7 @@ static int intake_process_front(flow_protocol_network_intake_sink_t *sink) {
   uint64_t session_id = 0u;
   uint64_t generation = 0u;
   int rc;
+  int complete_rc;
   if (!entry) return SALTS_OK;
   if (sink->blocked) {
     rc = turbo_flow_protocol_source_session_feed(sink->protocol_source, sink->blocked_session_id,
@@ -281,10 +289,13 @@ static int intake_process_front(flow_protocol_network_intake_sink_t *sink) {
             (const uint8_t *)message->payload.data, message->payload.len, &result);
     }
   }
-  if (result.frames_admitted > UINT64_MAX - sink->frames_admitted) rc = SALTS_ERANGE;
-  else sink->frames_admitted += result.frames_admitted;
+  intake_counter_add(&sink->frames_admitted, result.frames_admitted);
   if (rc != SALTS_OK) {
-    (void)intake_claim_complete(sink, entry, rc);
+    complete_rc = intake_claim_complete(sink, entry, rc);
+    if (complete_rc != SALTS_OK) {
+      sink->terminal_status = complete_rc;
+      return complete_rc;
+    }
     intake_pending_pop(sink);
     sink->blocked = 0;
     sink->blocked_session_id = 0u;
@@ -302,7 +313,11 @@ static int intake_process_front(flow_protocol_network_intake_sink_t *sink) {
   sink->blocked = 0;
   sink->blocked_session_id = 0u;
   sink->blocked_generation = 0u;
-  (void)intake_claim_complete(sink, entry, SALTS_OK);
+  complete_rc = intake_claim_complete(sink, entry, SALTS_OK);
+  if (complete_rc != SALTS_OK) {
+    sink->terminal_status = complete_rc;
+    return complete_rc;
+  }
   intake_pending_pop(sink);
   return SALTS_OK;
 }
@@ -326,7 +341,9 @@ static int intake_pending_append(flow_protocol_network_intake_sink_t *sink,
   int rc;
   if (!sink || !owned || !owned->_impl || bytes == 0u) return SALTS_EINVAL;
   if (sink->pending_count >= sink->settings.max_pending_claims) return SALTS_ENOSPC;
-  if (bytes > sink->settings.max_pending_bytes - sink->pending_bytes) return SALTS_ENOSPC;
+  if (sink->pending_bytes > sink->settings.max_pending_bytes ||
+      bytes > sink->settings.max_pending_bytes - sink->pending_bytes)
+    return SALTS_ENOSPC;
   tail = intake_pending_index(sink, sink->pending_count);
   entry = &sink->pending[tail];
   entry->claim = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
@@ -346,31 +363,35 @@ static int intake_async_submit(void *ctx, turbo_flow_t *flow, const turbo_flow_s
   int rc;
   (void)stage;
   if (!sink || flow != sink->flow || !message || !claim || !claim->_impl || sink->detached) {
-    if (sink && sink->rejected != UINT64_MAX) ++sink->rejected;
+    if (sink) intake_counter_add(&sink->rejected, 1u);
     return SALTS_EINVAL;
   }
   if (sink->terminal_status != SALTS_OK) {
-    if (sink->rejected != UINT64_MAX) ++sink->rejected;
+    intake_counter_add(&sink->rejected, 1u);
     return sink->terminal_status;
   }
-  if (!message->payload.data || message->payload.len == 0u ||
-      sink->pending_count >= sink->settings.max_pending_claims ||
+  if (!message->payload.data || message->payload.len == 0u) {
+    intake_counter_add(&sink->rejected, 1u);
+    return SALTS_EINVAL;
+  }
+  if (sink->pending_count >= sink->settings.max_pending_claims ||
+      sink->pending_bytes > sink->settings.max_pending_bytes ||
       message->payload.len > sink->settings.max_pending_bytes - sink->pending_bytes) {
-    if (sink->rejected != UINT64_MAX) ++sink->rejected;
-    return message->payload.len == 0u ? SALTS_EINVAL : SALTS_ENOSPC;
+    intake_counter_add(&sink->rejected, 1u);
+    return SALTS_ENOSPC;
   }
   rc = turbo_flow_async_terminal_claim_move(&owned, claim);
   if (rc != SALTS_OK) {
-    if (sink->rejected != UINT64_MAX) ++sink->rejected;
+    intake_counter_add(&sink->rejected, 1u);
     return rc;
   }
   rc = intake_pending_append(sink, &owned, message->payload.len);
   if (rc != SALTS_OK) {
     (void)turbo_flow_async_terminal_claim_move(claim, &owned);
-    if (sink->rejected != UINT64_MAX) ++sink->rejected;
+    intake_counter_add(&sink->rejected, 1u);
     return rc;
   }
-  if (sink->accepted != UINT64_MAX) ++sink->accepted;
+  intake_counter_add(&sink->accepted, 1u);
   if (sink->blocked) return SALTS_OK;
   return intake_drive(sink);
 }
@@ -411,6 +432,14 @@ static int intake_boundary_descriptor(void *ctx, turbo_flow_managed_boundary_des
   memcpy(descriptor.owner_name, metadata.owner_name, strlen(metadata.owner_name) + 1u);
   descriptor.role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SINK;
   descriptor.capability_flags = 0u;
+  rc = turbo_flow_content_descriptor_init(&descriptor.input, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
+                                          TURBO_FLOW_CONTENT_PROFILE_GENERIC,
+                                          TURBO_FLOW_DATA_ENCODING_OPAQUE, INTAKE_MEDIA_TYPE,
+                                          INTAKE_CONTENT_IDENTITY);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_content_descriptor_declare_schema(&descriptor.input, INTAKE_SCHEMA_NAME,
+                                                    INTAKE_TYPE_NAME, 1u);
+  if (rc != SALTS_OK) return rc;
   *out = descriptor;
   return SALTS_OK;
 }
@@ -552,12 +581,14 @@ void flow_protocol_network_intake_sink_cancel(flow_protocol_network_intake_sink_
                                               int status) {
   if (!sink || status == SALTS_OK) return;
   if (sink->terminal_status == SALTS_OK) sink->terminal_status = status;
-  if (sink->protocol_source) (void)turbo_flow_protocol_source_force_shutdown(sink->protocol_source, status);
+  if (sink->protocol_source)
+    (void)turbo_flow_protocol_source_force_shutdown(sink->protocol_source, status);
   while (sink->pending_count > 0u) {
     intake_pending_claim_t *entry = intake_pending_front(sink);
     if (entry) (void)intake_claim_complete(sink, entry, status);
     intake_pending_pop(sink);
   }
+  memset(sink->parser_slots, 0, sink->settings.max_sessions * sizeof(*sink->parser_slots));
   sink->blocked = 0;
   sink->blocked_session_id = 0u;
   sink->blocked_generation = 0u;
@@ -589,11 +620,13 @@ void flow_protocol_network_intake_sink_destroy(flow_protocol_network_intake_sink
       (void)turbo_flow_protocol_source_force_shutdown(sink->protocol_source, SALTS_ECANCELED);
     (void)turbo_flow_protocol_source_destroy(sink->protocol_source);
   }
-  turbo_flow_protocol_inbox_destroy(sink->protocol_inbox);
-  for (size_t i = 0u; i < sink->settings.max_pending_claims; ++i) {
-    if (sink->pending[i].claim._impl)
-      (void)turbo_flow_async_terminal_complete(&sink->pending[i].claim, SALTS_ECANCELED, NULL);
+  while (sink->pending_count > 0u) {
+    intake_pending_claim_t *entry = intake_pending_front(sink);
+    if (entry && entry->claim._impl)
+      (void)turbo_flow_async_terminal_complete(&entry->claim, SALTS_ECANCELED, NULL);
+    intake_pending_pop(sink);
   }
+  turbo_flow_protocol_inbox_destroy(sink->protocol_inbox);
   tstr_free(sink->adapter_name);
   free(sink->parser_slots);
   free(sink->pending);
