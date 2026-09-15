@@ -101,6 +101,14 @@ set_tests_properties(test_protocol_network_intake_config
                      PROPERTIES LABELS "protocol-ingress;network-intake;config")
 
 cmake_add_test(
+  test_protocol_network_intake_core
+  SOURCES test_protocol_network_intake_core.c
+  LIBS tf_protocol_network_intake_core Salts::TinyTest
+  FOLDER "ingress/protocol/tests")
+set_tests_properties(test_protocol_network_intake_core
+                     PROPERTIES LABELS "protocol-ingress;network-intake;inbox")
+
+cmake_add_test(
   test_protocol_business
   SOURCES test_protocol_business.c
   LIBS TurboFlow::PluginHost Salts::TinyTest
