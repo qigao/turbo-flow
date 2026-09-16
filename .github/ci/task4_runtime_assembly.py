@@ -48,6 +48,8 @@ insertion = "\n".join(
         '    FOLDER "turbo_flow/tests")',
         "  target_include_directories(${_test} PRIVATE ${PROJECT_SOURCE_DIR}/tests)",
         "endforeach()",
+        "target_sources(test_flow_run PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/flow_run_header_cpp.cpp)",
+        "target_sources(test_flow_inbox_source PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/inbox_source_header_cpp.cpp)",
         "return()",
         "",
         "",
