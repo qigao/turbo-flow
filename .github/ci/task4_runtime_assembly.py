@@ -74,6 +74,8 @@ registrations = registrations.replace("${CMAKE_CURRENT_SOURCE_DIR}/", "${CMAKE_C
 for filename in ("plugin_fixture.c", "plugin_generation_fixture.c"):
     registrations = registrations.replace("SHARED " + filename, 'SHARED "${CMAKE_CURRENT_SOURCE_DIR}/tests/' + filename + '"')
 insertion += "\n" + registrations + "\nreturn()\n"
+memory_contract = tests[tests.index("# Task 7 configured durable memory provider contract"):]
+insertion = insertion.replace("\nreturn()\n", "\n" + memory_contract + "\nreturn()\n", 1)
 anchor = "install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)"
 assert anchor in text
 text = text.replace(anchor, insertion + anchor, 1)

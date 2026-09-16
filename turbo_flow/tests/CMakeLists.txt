@@ -817,3 +817,13 @@ if(WIN32)
     PROPERTIES ENVIRONMENT_MODIFICATION
                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::Core>;PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::DataBind>")
 endif()
+
+# Task 7 configured durable memory provider contract
+cmake_add_test(test_flow_durable_memory_plugin
+  SOURCES ${PROJECT_SOURCE_DIR}/io/durable/tests/test_flow_durable_memory_plugin.c
+  LIBS TurboFlow::PluginHost Salts::TinyTest
+  FOLDER "io/durable/tests")
+add_dependencies(test_flow_durable_memory_plugin test_flow_plugin_good_one)
+set_tests_properties(test_flow_durable_memory_plugin PROPERTIES
+  LABELS "graph;core;durable;plugin"
+  ENVIRONMENT "TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH=$<TARGET_FILE:test_flow_plugin_good_one>")
