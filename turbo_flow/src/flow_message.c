@@ -271,6 +271,11 @@ static int flow_msg_view_within(const vstr *view, const void *base, size_t size)
   return offset <= size && view->len <= size - offset;
 }
 
+int flow_msg_has_active_result_claim(const turbo_flow_msg_t *msg) {
+  const flow_msg_projection_t *projection = flow_msg_projection(msg);
+  return projection && projection->claim_active;
+}
+
 int flow_msg_payload_validate(const turbo_flow_msg_t *msg) {
   if (!msg || (!msg->payload.data && msg->payload.len != 0u)) return SALTS_EINVAL;
   if (!msg->payload.data) return SALTS_OK;
@@ -559,6 +564,7 @@ int turbo_flow_msg_result_claim(turbo_flow_msg_t *msg, turbo_flow_projection_own
   claim = (turbo_flow_result_claim_t *)calloc(1, sizeof(*claim));
   prepared = (flow_msg_projection_t *)calloc(1, sizeof(*prepared));
   if (!claim || !prepared) { free(claim); free(prepared); flow_projection_owner_release(owner); return SALTS_ENOMEM; }
+  claim->owns_original = source == NULL;
   /* A claim must be visible even on a message without a prior projection. */
   if (!source) {
     source = (flow_msg_projection_t *)calloc(1, sizeof(*source));
@@ -606,6 +612,10 @@ void turbo_flow_msg_result_abort(turbo_flow_result_claim_t **io) {
   if (!io || !(claim = *io)) return;
   if (claim->original && claim->msg && claim->msg->_content_handle == claim->original)
     claim->original->claim_active = 0;
+  if (claim->owns_original && claim->msg && claim->msg->_content_handle == claim->original) {
+    claim->msg->_content_handle = NULL;
+    flow_msg_projection_destroy(claim->original, NULL);
+  }
   free(claim->prepared);
   flow_projection_owner_release(claim->owner);
   free(claim); *io = NULL;

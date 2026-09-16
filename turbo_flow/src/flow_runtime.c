@@ -972,6 +972,9 @@ int turbo_flow_publish_ex(turbo_flow_t *flow, const char *source_name, const tur
   if (flow_msg_payload_validate(msg) != SALTS_OK) {
     rc = flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                    "publish payload must be within its backing buffer or owned payload");
+  } else if (flow_msg_has_active_result_claim(msg)) {
+    rc = flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                   "publish cannot copy an active result claim");
   } else if (!cflow_scheduler_inline_init(&scheduler)) {
     rc = flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0,
                                    "inline Reactive Scheduler initialization failed");

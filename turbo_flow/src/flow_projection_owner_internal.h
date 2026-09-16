@@ -36,6 +36,7 @@ typedef struct flow_msg_projection_s {
 struct turbo_flow_result_claim_s {
   turbo_flow_msg_t *msg;
   flow_msg_projection_t *original;
+  int owns_original;
   flow_msg_projection_t *prepared;
   turbo_flow_projection_owner_t *owner;
 };

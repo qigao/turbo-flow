@@ -251,6 +251,7 @@ spec("Graph durable admission boundaries") {
     check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_EBUSY);
     turbo_flow_msg_result_abort(&claim);
     check_null(claim);
+    check_null(msg._content_handle);
     turbo_flow_msg_t copy;
     check_equal(turbo_flow_msg_clone(&copy, &msg), SALTS_OK);
     turbo_flow_msg_cleanup(&copy);

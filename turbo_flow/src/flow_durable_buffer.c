@@ -146,6 +146,7 @@ static int flow_durable_buffer_encode_record(turbo_flow_durable_buffer_binding_t
     return SALTS_EINVAL;
   }
   if (flow_msg_payload_validate(message) != SALTS_OK) return SALTS_EINVAL;
+  if (flow_msg_has_active_result_claim(message)) return SALTS_EBUSY;
   if (message->transport_context != NULL) return SALTS_ENOTSUP;
   if (turbo_flow_msg_result(message, NULL, NULL) != NULL) return SALTS_ENOTSUP;
 

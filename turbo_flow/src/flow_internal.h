@@ -672,6 +672,7 @@ void flow_edge_impl_destroy(flow_edge_plan_impl_t *edge);
 int flow_msg_set_failure(turbo_flow_msg_t *msg, const char *stage_name, const char *adapter_name,
                          const char *route_name, int code, uint32_t attempt);
 int flow_msg_payload_validate(const turbo_flow_msg_t *msg);
+int flow_msg_has_active_result_claim(const turbo_flow_msg_t *msg);
 int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg);
 void flow_clear_runtime_plan(turbo_flow_t *flow);
 int flow_compiled_plan_init(flow_compiled_plan_t *plan);
