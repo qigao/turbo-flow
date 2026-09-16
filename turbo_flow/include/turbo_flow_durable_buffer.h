@@ -104,6 +104,24 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_drain(
     turbo_flow_durable_buffer_binding_t *binding, uint64_t timeout_ms);
 
 /**
+ * Scan terminal completion/discard history for one named durable-buffer resource.
+ * This explicit operator observation never retries, reconciles, forgets, or otherwise
+ * advances provider state. Calls are caller-serialized with lifecycle and progress.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_scan_history(
+    turbo_flow_t *flow, const char *resource_name, uint64_t after_record_id,
+    turbo_flow_inbox_history_entry_t *entries, size_t capacity, size_t *out_count);
+
+/**
+ * Explicitly forget one terminal completion/discard tombstone for a named resource.
+ * Success releases provider quota and permits the same admission identity to become
+ * new work. Live, failed, pending, and unknown records are unchanged and rejected;
+ * no retry or reconciliation is implied.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_forget(
+    turbo_flow_t *flow, const char *resource_name, uint64_t record_id);
+
+/**
  * Remove one binding while the Flow is not started and its driver is idle
  * (EBUSY otherwise). Reset also rejects an unresolved driver. The void Flow
  * destroy operation preserves the complete Flow with EBUSY in its error state

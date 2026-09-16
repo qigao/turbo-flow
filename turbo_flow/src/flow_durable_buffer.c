@@ -489,6 +489,32 @@ int turbo_flow_durable_buffer_drain(turbo_flow_durable_buffer_binding_t *binding
   }
 }
 
+int turbo_flow_durable_buffer_scan_history(
+    turbo_flow_t *flow, const char *resource_name, uint64_t after_record_id,
+    turbo_flow_inbox_history_entry_t *entries, size_t capacity, size_t *out_count) {
+  turbo_flow_durable_buffer_binding_t *binding;
+  int rc;
+  if (!flow || !resource_name || resource_name[0] == '\0') return SALTS_EINVAL;
+  binding = flow_durable_buffer_find_binding(flow, resource_name, NULL);
+  if (!binding || !binding->inbox) return SALTS_ENOENT;
+  rc = flow_durable_buffer_validate_provider(binding);
+  if (rc != SALTS_OK) return rc;
+  return turbo_flow_inbox_scan_history(binding->inbox, after_record_id, entries, capacity,
+                                       out_count);
+}
+
+int turbo_flow_durable_buffer_forget(turbo_flow_t *flow, const char *resource_name,
+                                     uint64_t record_id) {
+  turbo_flow_durable_buffer_binding_t *binding;
+  int rc;
+  if (!flow || !resource_name || resource_name[0] == '\0') return SALTS_EINVAL;
+  binding = flow_durable_buffer_find_binding(flow, resource_name, NULL);
+  if (!binding || !binding->inbox) return SALTS_ENOENT;
+  rc = flow_durable_buffer_validate_provider(binding);
+  if (rc != SALTS_OK) return rc;
+  return turbo_flow_inbox_forget(binding->inbox, record_id);
+}
+
 int flow_durable_buffers_prepare_retire(turbo_flow_t *flow, uint64_t timeout_ms) {
   const uint64_t started = salts_hrtime();
   size_t *indegree = NULL;

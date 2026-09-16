@@ -364,10 +364,16 @@ retirement before operation close or owner quiesce. STOPPED/FAILED flows never c
 backlog. Unresolved drivers also block reset and preserve the complete Flow on void
 destroy. Caller-serialized lifecycle is required. No-buffer retirement remains unchanged.
 
-The frozen public binding API does not yet expose settlement retry/reconcile. Unknown
-settlement recovery currently requires the internal driver API; future provider/operator
-integration must add an explicit recovery contract. Retention is fail-closed safety, not
-publicly supported recovery for opaque binding callers.
+The public binding API exposes provider-neutral terminal-history scan and explicit
+forget by configured resource name, so bounded providers can release successful
+tombstones without exposing their Inbox handle. Forget never advances a live, failed,
+pending, or unknown record and never implies retry or reconciliation.
+
+The frozen public binding API does not yet expose failed/unknown settlement
+retry/reconcile. That recovery currently requires the internal driver API; future
+provider/operator integration must add an explicit recovery contract. Retention is
+fail-closed safety, not publicly supported failed-settlement recovery for opaque
+binding callers.
 
 ## Recovery
 

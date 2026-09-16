@@ -490,9 +490,11 @@ from admitting the already accepted record into `second`. Retirement therefore c
 and drains cuts in compiled DAG order. It never bypasses a closed provider. One timeout
 budget covers ordinary publish drain and all buffer drains. No-buffer retirement is unchanged.
 
-The frozen binding API has no public settlement retry/reconcile entry point. An unknown
-settlement remains pinned without replay; explicit recovery currently requires the internal
-Inbox driver interface. Provider/operator integration must design a public recovery entry
-point separately. Reset returns EBUSY, and void destroy retains the complete Flow with an
-EBUSY diagnostic while a driver is unresolved; this is a safe retained state, not a claim
-that an external opaque-binding caller can already recover it.
+The binding API exposes provider-neutral terminal-history scan and explicit forget by
+configured resource name. This releases successful tombstone quota without exposing an
+Inbox handle or advancing failed/unknown state. The frozen binding API still has no public
+failed/unknown settlement retry/reconcile entry point. Such recovery currently requires the
+internal Inbox driver interface and needs a separate public operator contract. Reset returns
+EBUSY, and void destroy retains the complete Flow with an EBUSY diagnostic while a driver is
+unresolved; this is a safe retained state, not a claim that an external opaque-binding caller
+can already recover it.
