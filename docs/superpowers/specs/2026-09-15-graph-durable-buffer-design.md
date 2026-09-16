@@ -310,6 +310,21 @@ A low-rate deployment can select `provider = memory` without changing topology.
 
 Provider-specific database connection details belong to the configured resource/provider, not the Graph message path.
 
+The configured bounded-memory resource uses channel kind `flow.durable.memory`.
+Its exact configuration requires `schema_version: 1`, `identity_mode`,
+`max_message_bytes`, `max_records`, `max_total_bytes`, `max_record_bytes`, and
+`max_claims`. `identity_mode` accepts only `generated` or `stable_required`;
+all capacity fields are explicit positive finite integer bounds.
+
+Transactional provider preflight validates configuration without side effects.
+The existing preflight ABI does not receive the Graph, so materialize checks that
+exactly one stage references this resource and that the stage has `is_buffer`,
+before allocating an owner or Inbox or creating a binding. A reference error can
+therefore follow another resource's materialization; the existing generation
+transaction rolls back those earlier owners. This division does not add a public
+ABI or make the generic generation layer depend on the memory provider kind.
+
+
 ## Runtime ownership
 
 The storage provider owns record state. The durable-buffer owner orchestrates admission/drain but does not mutate provider internals directly.

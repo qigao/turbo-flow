@@ -178,6 +178,21 @@ jobs:
           set -euxo pipefail
           ctest --test-dir build/task4-runtime -R '^test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
 
+      - name: Install and load the durable memory plugin component
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --install build/task4-runtime --prefix "$RUNNER_TEMP/durable-memory-install" --component DurableMemory 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/install-memory.log"
+          installed_plugin="$RUNNER_TEMP/durable-memory-install/lib/libtf_durable_memory_plugin.so"
+          test -f "$installed_plugin"
+          sha256sum "$installed_plugin" | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-sha256.txt"
+          cmake -E env \
+            "TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH=$installed_plugin" \
+            "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/task4-runtime/bin:/opt/salts/debug/lib:/opt/salts-utils/debug/lib" \
+            "$GITHUB_WORKSPACE/build/task4-runtime/bin/test_flow_durable_memory_plugin" \
+            2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-test.log"
+          cp build/task4-runtime/install_manifest_DurableMemory.txt "$RUNNER_TEMP/task4-runtime-evidence/"
+
       - name: Verify committed source remained untouched
         if: always()
         shell: bash

@@ -10,7 +10,7 @@ assert "include(TurboFlowRequireCHTTP)" in text
 text = text.replace("include(TurboFlowRequireCHTTP)\n", "", 1)
 start = text.index("add_subdirectory(turbo_flow)\n")
 end = text.index("set(TURBO_FLOW_EXPORT_TARGETS)", start)
-text = text[:start] + "add_subdirectory(ingress/protocol/common)\nadd_subdirectory(turbo_flow)\n\n" + text[end:]
+text = text[:start] + "add_subdirectory(ingress/protocol/common)\nadd_subdirectory(turbo_flow)\nadd_subdirectory(io/durable)\n\n" + text[end:]
 root.write_text(text)
 
 graph = Path("turbo_flow/CMakeLists.txt")
@@ -74,8 +74,6 @@ registrations = registrations.replace("${CMAKE_CURRENT_SOURCE_DIR}/", "${CMAKE_C
 for filename in ("plugin_fixture.c", "plugin_generation_fixture.c"):
     registrations = registrations.replace("SHARED " + filename, 'SHARED "${CMAKE_CURRENT_SOURCE_DIR}/tests/' + filename + '"')
 insertion += "\n" + registrations + "\nreturn()\n"
-memory_contract = tests[tests.index("# Task 7 configured durable memory provider contract"):]
-insertion = insertion.replace("\nreturn()\n", "\n" + memory_contract + "\nreturn()\n", 1)
 anchor = "install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)"
 assert anchor in text
 text = text.replace(anchor, insertion + anchor, 1)

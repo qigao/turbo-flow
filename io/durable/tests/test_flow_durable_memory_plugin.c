@@ -22,18 +22,17 @@ typedef struct fixture_s {
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
   turbo_flow_resolved_config_t *resolved;
   turbo_flow_t *flow;
+  turbo_flow_t *execution_flow;
   turbo_flow_plugin_generation_t *generation;
   turbo_flow_plugin_generation_t *cleanup;
   atomic_size_t delivered;
   atomic_size_t delivered_after_stop;
 } fixture_t;
-static int output(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
-                  turbo_flow_msg_t *msg) {
+static int output(turbo_flow_msg_t *msg, void *ctx) {
   fixture_t *f = ctx;
-  (void)stage;
   check_equal(msg->payload.len, (size_t)7u);
   check_equal(memcmp(msg->payload.data, "payload", 7u), 0);
-  if (turbo_flow_state(flow) != TURBO_FLOW_STATE_STARTED) ++f->delivered_after_stop;
+  if (turbo_flow_state(f->execution_flow) != TURBO_FLOW_STATE_STARTED) ++f->delivered_after_stop;
   ++f->delivered;
   return SALTS_OK;
 }
@@ -54,6 +53,7 @@ static void open_fixture(fixture_t *f, const char *graph) {
   check_equal(turbo_flow_plugin_catalog_snapshot_create(f->host, &f->snapshot, &e), SALTS_OK);
   resolve(f, valid_yaml);
   f->flow = turbo_flow_create(); check_not_null(f->flow);
+  f->execution_flow = f->flow;
   flow_test_operation_t op = flow_test_operation_init("test.output", output, f);
   check_equal(flow_test_operation_register(f->flow, &op), SALTS_OK);
   check_equal(turbo_flow_parse_string(f->flow, graph, strlen(graph)), SALTS_OK);
@@ -111,6 +111,7 @@ spec("configured bounded memory durable resource") {
       turbo_flow_t *flow = turbo_flow_plugin_generation_flow(f.generation);
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(publish(flow), SALTS_OK); check_equal(publish(flow), SALTS_OK);
+      check_equal(publish(flow), SALTS_ENOSPC);
       check_equal(atomic_load(&f.delivered), (size_t)0u);
       turbo_flow_config_error_t e = TURBO_FLOW_CONFIG_ERROR_INIT;
       check_equal(turbo_flow_plugin_generation_destroy(f.generation, TEST_TIMEOUT_MS, &e), SALTS_OK);
@@ -119,6 +120,57 @@ spec("configured bounded memory durable resource") {
       check_equal(atomic_load(&f.delivered_after_stop), (size_t)0u);
     }
     close_fixture(&f);
+  }
+  it("maps stable_required identity and deduplicates an exact stable replay") {
+    fixture_t f; open_fixture(&f, graph_text);
+    char yaml[YAML_BYTES];
+    replace_field("identity_mode: generated", "identity_mode: stable_required", yaml);
+    resolve(&f, yaml);
+    int rc = create_generation(&f); check_equal(rc, SALTS_OK);
+    if (rc == SALTS_OK) {
+      turbo_flow_t *flow = turbo_flow_plugin_generation_flow(f.generation);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(publish(flow), SALTS_EINVAL);
+      turbo_flow_msg_t msg;
+      turbo_flow_durable_identity_t identity = TURBO_FLOW_DURABLE_IDENTITY_INIT;
+      turbo_flow_msg_init(&msg);
+      msg.owned_payload = tstr_dup("payload"); msg.payload = tstr_to_v(msg.owned_payload);
+      identity.source_id = vstr_from_buf("source", 6u);
+      identity.admission_id = vstr_from_buf("record", 6u);
+      check_equal(turbo_flow_msg_set_durable_identity(&msg, &identity), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      turbo_flow_msg_cleanup(&msg);
+      turbo_flow_config_error_t e = TURBO_FLOW_CONFIG_ERROR_INIT;
+      for (size_t i=0u; i<POLL_ATTEMPTS && atomic_load(&f.delivered)==0u; ++i) {
+        check_equal(turbo_flow_plugin_generation_poll(f.generation, 0u, &e), SALTS_OK);
+        salts_sleep_ms(1u);
+      }
+      check_equal(atomic_load(&f.delivered), (size_t)1u);
+      check_equal(turbo_flow_plugin_generation_destroy(f.generation, TEST_TIMEOUT_MS, &e), SALTS_OK);
+      f.generation = NULL;
+      check_equal(atomic_load(&f.delivered), (size_t)1u);
+    }
+    close_fixture(&f);
+  }
+  it("rolls back an earlier memory owner on later materialization or compile failure") {
+    static const char *const graphs[] = {
+      "source input\nbuffer intake resource intake.store\n"
+      "stage output operation test.output resource bad.store\nstage main {\n input -> intake -> output\n}\n",
+      "source input\nbuffer intake resource intake.store\n"
+      "stage output operation test.missing\nstage main {\n input -> intake -> output\n}\n"
+    };
+    for (size_t i=0u; i<sizeof(graphs)/sizeof(graphs[0]); ++i) {
+      fixture_t f; open_fixture(&f, graphs[i]);
+      if (i == 0u) {
+        char yaml[YAML_BYTES];
+        (void)snprintf(yaml, sizeof(yaml), "%s  bad.store:\n%s", valid_yaml, strstr(valid_yaml, "    kind:"));
+        resolve(&f, yaml);
+      }
+      check_not_equal(create_generation(&f), SALTS_OK);
+      check_null(f.flow); check_null(f.generation); check_null(f.cleanup);
+      close_fixture(&f);
+    }
   }
   it("rejects exact schema type and finite bound violations without consuming the flow") {
     static const struct { const char *before; const char *after; } cases[] = {
@@ -182,12 +234,22 @@ spec("configured bounded memory durable resource") {
       turbo_flow_config_error_t e = TURBO_FLOW_CONFIG_ERROR_INIT;
       turbo_flow_plugin_product_owner_v1_t o = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
       check_equal(p->preflight(p->ctx, f.resolved, "intake.store", &e), SALTS_OK);
+      turbo_flow_plugin_product_owner_v1_t invalid = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+      invalid.abi_minor++;
+      check_equal(p->materialize(p->ctx, f.flow, f.resolved, "intake.store", &invalid, &e), SALTS_EINVAL);
+      check_null(invalid.ctx);
       check_equal(p->materialize(p->ctx, f.flow, f.resolved, "intake.store", &o, &e), SALTS_OK);
+      turbo_flow_plugin_product_owner_v1_t duplicate = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+      check_equal(p->materialize(p->ctx, f.flow, f.resolved, "intake.store", &duplicate, &e), SALTS_EALREADY);
+      check_null(duplicate.ctx);
       check_equal(o.flags, (turbo_flow_plugin_product_owner_flags_t)(TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD | TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL));
       check_equal(turbo_flow_compile(f.flow), SALTS_OK); check_equal(turbo_flow_start(f.flow), SALTS_OK);
       check_equal(publish(f.flow), SALTS_OK);
       check_equal(o.quiesce(o.ctx, 0u), SALTS_EBUSY);
+      check_equal(turbo_flow_stop(f.flow), SALTS_OK);
+      check_equal(o.drain(o.ctx, 0u), SALTS_EBUSY);
       check_equal(atomic_load(&f.delivered), (size_t)0u);
+      check_equal(turbo_flow_start(f.flow), SALTS_OK);
       int idle = SALTS_EBUSY;
       for (size_t i=0u; i<POLL_ATTEMPTS && idle == SALTS_EBUSY; ++i) {
         check_equal(o.poll(o.ctx, 0u), SALTS_OK);

@@ -331,7 +331,8 @@ channels:
 ```
 
 - [ ] **RED:** PluginHost generation fails until transactional resource provider exists. Negative exact-schema/bounds/reference cases.
-- [ ] Preflight is side-effect-free and requires exactly one `is_buffer` reference.
+- [ ] Preflight validates configuration without side effects. `identity_mode` accepts only `generated` or `stable_required`.
+- [ ] The existing transactional preflight ABI has no Graph argument. Materialize validates exactly one `is_buffer` reference before allocating an owner or Inbox or binding either; reference errors use existing transactional rollback for any earlier materialized resources.
 - [ ] Materialize creates bounded memory Inbox, binds it, returns Product owner `CONTROL_THREAD | EXTERNAL_POLL`; registers no Graph adapter.
 - [ ] Owner `poll` calls non-blocking `progress()`.
 - [ ] Owner `quiesce` is now verification/idempotent close only; normal PluginGeneration retirement has already run `flow_durable_buffers_prepare_retire()` while downstream remained active.

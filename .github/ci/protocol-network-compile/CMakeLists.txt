@@ -88,9 +88,11 @@ add_library(graph_durable_buffer_contract OBJECT
     "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_durable_lifecycle.c"
     "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_inbox_driver.c"
     "${TURBO_FLOW_SOURCE_DIR}/io/durable/tests/test_flow_durable_memory_plugin.c"
+    "${TURBO_FLOW_SOURCE_DIR}/io/durable/src/turbo_flow_durable_memory_plugin.c"
+    "${TURBO_FLOW_SOURCE_DIR}/io/durable/src/turbo_flow_durable_memory_config.c"
     "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/durable_identity_header_cpp.cpp")
 target_include_directories(graph_durable_buffer_contract PRIVATE ${_tf_include_dirs})
-target_compile_definitions(graph_durable_buffer_contract PRIVATE TURBO_FLOW_BUILD)
+target_compile_definitions(graph_durable_buffer_contract PRIVATE TURBO_FLOW_BUILD TURBO_FLOW_PLUGIN_BUILD)
 target_compile_options(graph_durable_buffer_contract PRIVATE
     $<$<COMPILE_LANGUAGE:C>:${_tf_c_options}>
     $<$<COMPILE_LANGUAGE:CXX>:${_tf_cxx_options}>)
