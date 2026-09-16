@@ -2,6 +2,7 @@
 #define TURBO_FLOW_DURABLE_BUFFER_H
 
 #include "turbo_flow.h"
+#include "turbo_flow_inbox.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,6 +32,41 @@ TURBO_FLOW_C_API int turbo_flow_msg_set_durable_identity(
 
 TURBO_FLOW_C_API int turbo_flow_msg_durable_identity(
     const turbo_flow_msg_t *message, turbo_flow_durable_identity_t *out);
+
+typedef struct turbo_flow_durable_buffer_binding_s turbo_flow_durable_buffer_binding_t;
+
+typedef enum turbo_flow_durable_identity_mode_e {
+  TURBO_FLOW_DURABLE_IDENTITY_GENERATED = 1,
+  TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED = 2
+} turbo_flow_durable_identity_mode_t;
+
+typedef struct turbo_flow_durable_buffer_binding_config_s {
+  size_t size;
+  uint32_t version;
+  const char *resource_name;
+  turbo_flow_inbox_t *inbox;
+  turbo_flow_durable_identity_mode_t identity_mode;
+  size_t max_message_bytes;
+} turbo_flow_durable_buffer_binding_config_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT                                             \
+  {sizeof(turbo_flow_durable_buffer_binding_config_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,       \
+   NULL, NULL, TURBO_FLOW_DURABLE_IDENTITY_GENERATED,                                               \
+   TURBO_FLOW_DURABLE_BUFFER_DEFAULT_MAX_MESSAGE_BYTES}
+
+/**
+ * Bind one configured durable-buffer resource to a caller-owned Inbox provider.
+ * The binding borrows `inbox`; provider ownership and lifetime remain with the caller.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_bind(
+    turbo_flow_t *flow, const turbo_flow_durable_buffer_binding_config_t *config,
+    turbo_flow_durable_buffer_binding_t **out);
+
+/**
+ * Remove one binding after the Flow has stopped. The Inbox remains caller-owned.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_unbind(
+    turbo_flow_durable_buffer_binding_t *binding);
 
 #ifdef __cplusplus
 }

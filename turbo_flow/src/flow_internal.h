@@ -2,6 +2,7 @@
 #define TURBO_FLOW_INTERNAL_H
 
 #include "turbo_flow.h"
+#include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_expr.h"
 
 #include "disruptor.h"
@@ -456,6 +457,17 @@ typedef struct flow_resource_command_record_s {
   turbo_flow_resource_command_result_t result;
 } flow_resource_command_record_t;
 
+struct turbo_flow_durable_buffer_binding_s {
+  turbo_flow_t *flow;
+  tstr resource_name;
+  turbo_flow_inbox_t *inbox;
+  turbo_flow_durable_identity_mode_t identity_mode;
+  size_t max_message_bytes;
+  uint64_t provider_generation;
+  atomic_uint_fast64_t next_sequence;
+  int bound;
+};
+
 typedef enum flow_admission_state_e {
   FLOW_ADMISSION_CLOSED = 0,
   FLOW_ADMISSION_OPEN,
@@ -553,6 +565,7 @@ struct turbo_flow_s {
   vec_t modules;
   vec_t adapters;
   vec_t resources;
+  vec_t durable_buffer_bindings;
   vec_t expr_projection_registrations;
   vec_t active_adapters;
   vec_t pool_records;
@@ -613,6 +626,9 @@ int flow_find_stage_view(const turbo_flow_t *flow, vstr name);
 int flow_find_operation_provider(const turbo_flow_t *flow, const char *operation_name,
                                  const char *resource_name);
 int flow_find_adapter(const turbo_flow_t *flow, const char *name);
+int flow_durable_buffer_admit_stage(turbo_flow_t *flow, uint32_t stage_index,
+                                    const turbo_flow_msg_t *message);
+void flow_durable_buffer_clear_bindings(turbo_flow_t *flow);
 int flow_resource_metadata_valid(const turbo_flow_resource_metadata_t *metadata);
 int flow_resource_command_valid(const turbo_flow_resource_command_t *command);
 size_t flow_native_resource_count(const turbo_flow_t *flow);
