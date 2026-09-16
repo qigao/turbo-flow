@@ -148,7 +148,12 @@ int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow) {
     if (!stage || !stage->is_buffer) continue;
     binding = flow_durable_buffer_find_resource(flow, stage->resource_name);
     if (!binding) {
-      goto unbound;
+      for (turbo_flow_durable_buffer_binding_t *current = flow->durable_buffer_bindings;
+           current; current = current->next) {
+        current->stage_index = FLOW_PLAN_INDEX_NONE;
+      }
+      return flow_set_error(flow, SALTS_ENOENT, stage->line, stage->column,
+                            "durable buffer resource is not bound");
     }
     if (binding->stage_index != FLOW_PLAN_INDEX_NONE) {
       for (turbo_flow_durable_buffer_binding_t *current = flow->durable_buffer_bindings;
@@ -161,18 +166,6 @@ int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow) {
     binding->stage_index = (uint32_t)i;
   }
   return SALTS_OK;
-
-unbound:
-  for (binding = flow->durable_buffer_bindings; binding; binding = binding->next) {
-    binding->stage_index = FLOW_PLAN_INDEX_NONE;
-  }
-  {
-    const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
-    return flow_set_error(flow, SALTS_ENOENT, stage ? stage->line : 0u,
-                          stage ? stage->column : 0u,
-                          "durable buffer resource is not bound");
-  }
 }
 
 static int flow_durable_buffer_next_sequence(turbo_flow_durable_buffer_binding_t *binding,
