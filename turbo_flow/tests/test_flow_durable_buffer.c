@@ -265,6 +265,22 @@ spec("Graph durable buffer DSL") {
     turbo_flow_destroy(flow);
   }
 
+  it("rejects start after its compiled durable binding is removed") {
+    size_t sink_calls = 0u;
+    durable_buffer_binding_fixture_t fixture = {0};
+    turbo_flow_t *flow = durable_buffer_compile_graph(&sink_calls);
+
+    check_equal(durable_buffer_bind_memory(flow, "intake.store", &fixture), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_durable_buffer_unbind(fixture.binding), SALTS_OK);
+    fixture.binding = NULL;
+    check_not_equal(turbo_flow_start(flow), SALTS_OK);
+
+    if (flow->state == TURBO_FLOW_STATE_STARTED) check_equal(turbo_flow_stop(flow), SALTS_OK);
+    durable_buffer_binding_fixture_cleanup(&fixture);
+    turbo_flow_destroy(flow);
+  }
+
   it("admits at a bound durable buffer without activating downstream") {
     static const char graph[] =
         "buffer intake resource intake.store\n"
