@@ -153,13 +153,13 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/task3-runtime --target test_flow_durable_buffer test_flow_data_schema test_flow_projection_owner -j2 2>&1 | tee "$RUNNER_TEMP/task3-runtime-evidence/build.log"
+          cmake --build build/task3-runtime --target test_flow_durable_buffer test_flow_durable_identity test_flow_data_schema test_flow_projection_owner -j2 2>&1 | tee "$RUNNER_TEMP/task3-runtime-evidence/build.log"
 
       - name: Run Task 3 runtime gates
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/task3-runtime -R '^(test_flow_durable_buffer|test_flow_data_schema|test_flow_projection_owner)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task3-runtime-evidence/ctest.log"
+          ctest --test-dir build/task3-runtime -R '^(test_flow_durable_buffer|test_flow_durable_identity|test_flow_data_schema|test_flow_projection_owner)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task3-runtime-evidence/ctest.log"
 
       - name: Verify exact Task 3 production/test source remained untouched
         if: always()
