@@ -95,6 +95,13 @@ cmake_add_test(
   LIBS TurboFlow::Graph Salts::TinyTest
   FOLDER "turbo_flow/tests")
 set_tests_properties(test_flow_durable_buffer PROPERTIES LABELS "graph;core" TIMEOUT 30)
+cmake_add_test(
+  test_flow_durable_admission
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_durable_admission.c
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_durable_admission PROPERTIES LABELS "graph;core" TIMEOUT 30)
+
 
 cmake_add_test(
   test_flow_run
