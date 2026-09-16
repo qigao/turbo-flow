@@ -5,6 +5,7 @@ on:
     branches: [feat/127-graph-durable-buffer]
     paths:
       - 'turbo_flow/**'
+      - 'tools/lemon/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/task4-runtime-focused.yml'
   workflow_dispatch:
