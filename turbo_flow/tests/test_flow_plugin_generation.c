@@ -257,7 +257,84 @@ flow_plugin_generation_test_replace_documents(flow_plugin_generation_test_contex
   return turbo_flow_parse_string(context->flow, graph, graph_size);
 }
 
+static void check_expired_managed_source_retirement(int pending) {
+  static const char graph[] = "source input adapter input.adapter\n"
+    "buffer intake resource intake.store\n"
+    "stage output adapter output.adapter\n"
+    "stage retained adapter async.adapter\n"
+    "stage main {\n input -> intake -> output\n input -> retained\n}\n";
+  static const char yaml[] = "version: 1\nchannels:\n"
+    "  intake.store:\n    kind: fixture.transactional.resource\n    config: {}\n"
+    "adapters:\n"
+    "  input.adapter:\n    kind: fixture.transactional.adapter\n    config: {}\n"
+    "  output.adapter:\n    kind: fixture.transactional.adapter\n    config: {}\n"
+    "  async.adapter:\n    kind: fixture.transactional.adapter\n    config: {}\n";
+  flow_plugin_generation_test_context_t context;
+  turbo_flow_plugin_generation_config_t config = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+  turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  turbo_flow_config_error_t ce = TURBO_FLOW_CONFIG_ERROR_INIT;
+  turbo_flow_plugin_generation_t *generation = NULL;
+  turbo_flow_plugin_transactional_product_catalog_v1_t catalog = TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
+  turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
+  turbo_flow_inbox_memory_config_t memory = turbo_flow_inbox_memory_config_default();
+  turbo_flow_durable_buffer_binding_config_t binding_config = TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+  turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  turbo_flow_run_result_t run = TURBO_FLOW_RUN_RESULT_INIT;
+  generation_owner_observer_t *observer;
+  check_equal(flow_plugin_generation_test_open(&context, FLOW_PLUGIN_GENERATION_FIXTURE_DURABLE, &pe, &ce), SALTS_OK);
+  check_equal(flow_plugin_generation_test_replace_documents(&context, yaml, sizeof(yaml)-1u,
+                                                             graph, sizeof(graph)-1u, &ce), SALTS_OK);
+  check_equal(turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(context.snapshot, &catalog), SALTS_OK);
+  observer = (generation_owner_observer_t *)catalog.adapter_providers[0].ctx;
+  observer->managed_source = 1;
+  observer->source_deadline_ms = 100u;
+  atomic_init(&observer->async_ready, 0);
+  check_equal(turbo_flow_inbox_memory_create(&memory, &inbox), SALTS_OK);
+  binding_config.resource_name = "intake.store"; binding_config.inbox = &inbox;
+  check_equal(turbo_flow_durable_buffer_bind(context.flow, &binding_config, &binding), SALTS_OK);
+  check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+    &context.flow, &config, NULL, &generation, &context.cleanup, &ce), SALTS_OK);
+  check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
+  if (pending) {
+    check_equal(turbo_flow_run_request(observer->source_run, 1u), SALTS_OK);
+    for (size_t i=0u; i<1000u && !atomic_load_explicit(&observer->async_ready, memory_order_acquire); ++i)
+      salts_sleep_ms(1u);
+    check_equal(atomic_load_explicit(&observer->async_ready, memory_order_acquire), 1);
+  }
+  check_equal(turbo_flow_run_wait(observer->source_run, 1000u, &run), SALTS_ETIMEDOUT);
+  check_equal(run.state, TURBO_FLOW_RUN_FAILED);
+  check_equal(run.status, SALTS_ETIMEDOUT);
+  if (pending) {
+    /* If the bug reaches owner quiesce, fail finitely rather than hanging in stop. */
+    observer->block_quiesce = 1;
+    check_equal(turbo_flow_plugin_generation_destroy(generation, 10u, &ce), SALTS_ETIMEDOUT);
+    check_equal(observer->lifecycle_calls, 0u);
+    check_equal(observer->destroys, 0u);
+    check_equal(turbo_flow_state(turbo_flow_plugin_generation_flow(generation)), TURBO_FLOW_STATE_STARTED);
+    check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
+    check_equal(snapshot.accepting, 1);
+    check_equal(snapshot.pending_records, 1u);
+    check_equal(turbo_flow_async_terminal_complete(observer->async_claim, SALTS_OK, NULL), SALTS_OK);
+    observer->block_quiesce = 0;
+  }
+  check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &ce), SALTS_OK);
+  check_equal(observer->consumes, (size_t)pending);
+  check_equal(observer->consumes_after_quiesce, 0u);
+  check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
+  check_equal(snapshot.records, 0u);
+  check_equal(turbo_flow_inbox_close(&inbox), SALTS_OK);
+  check_equal(turbo_flow_inbox_destroy(&inbox), SALTS_OK);
+  check_equal(flow_plugin_generation_test_close(&context, &pe), SALTS_OK);
+}
+
 spec("transactional plugin Graph generation") {
+  it("retires an idle managed source after its deadline released the lifetime count") {
+    check_expired_managed_source_retirement(0);
+  }
+  it("retains accepted async work after a managed source deadline") {
+    check_expired_managed_source_retirement(1);
+  }
   it("retires an open managed source while fencing new demand and draining accepted values") {
     static const char graph[] = "source input adapter input.adapter\n"
       "buffer intake resource intake.store\n"

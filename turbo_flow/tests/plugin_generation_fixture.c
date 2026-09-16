@@ -140,6 +140,7 @@ typedef struct flow_plugin_generation_owner_s {
   size_t ordinal;
   int graph_shutdown;
   turbo_flow_msg_t source_messages[2];
+  turbo_flow_async_terminal_claim_t terminal;
 } flow_plugin_generation_owner_t;
 
 static int durable_source_metadata(void *ctx, turbo_flow_resource_metadata_t *out) {
@@ -181,11 +182,13 @@ static int durable_source_start(void *ctx, turbo_flow_t *flow,
                                 const turbo_flow_stage_plan_t *stage) {
   flow_plugin_generation_owner_t *owner = ctx;
   cflow_publisher publisher = {0};
+  turbo_flow_run_config_t config = TURBO_FLOW_RUN_CONFIG_INIT;
   int rc;
+  config.deadline_ms = owner->fixture->observer.source_deadline_ms;
   for (size_t i = 0u; i < 2u; ++i) turbo_flow_msg_init(&owner->source_messages[i]);
   if (!cflow_publisher_from_array(&publisher, turbo_flow_message_type(), owner->source_messages, 2u))
     return SALTS_ENOMEM;
-  rc = turbo_flow_managed_source_run_open(flow, stage, &publisher, NULL,
+  rc = turbo_flow_managed_source_run_open(flow, stage, &publisher, &config,
                                           &owner->fixture->observer.source_run);
   if (cflow_publisher_valid(&publisher)) cflow_publisher_destroy(&publisher);
   return rc;
@@ -208,6 +211,32 @@ static int durable_source_register(flow_plugin_generation_owner_t *owner, const 
   registration.boundary_ops = &boundary;
   registration.ctx = owner;
   return turbo_flow_register_managed_source_adapter(owner->flow, &registration);
+}
+
+static int durable_async_submit(void *ctx, turbo_flow_t *flow,
+                                 const turbo_flow_stage_plan_t *stage,
+                                 const turbo_flow_msg_t *message,
+                                 turbo_flow_async_terminal_claim_t *claim) {
+  flow_plugin_generation_owner_t *owner = ctx;
+  int rc;
+  (void)flow; (void)stage; (void)message;
+  rc = turbo_flow_async_terminal_claim_move(&owner->terminal, claim);
+  if (rc == SALTS_OK) {
+    owner->fixture->observer.async_claim = &owner->terminal;
+    atomic_store_explicit(&owner->fixture->observer.async_ready, 1, memory_order_release);
+  }
+  return rc;
+}
+static int durable_async_register(flow_plugin_generation_owner_t *owner, const char *name) {
+  turbo_flow_adapter_ops_t ops = {0};
+  turbo_flow_adapter_schema_t schema = {0};
+  turbo_flow_async_terminal_adapter_ops_t async = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
+  owner->terminal = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
+  async.submit = durable_async_submit;
+  schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+  schema.roles = TURBO_FLOW_ADAPTER_SINK;
+  schema.direction = TURBO_FLOW_ADAPTER_OUTPUT;
+  return turbo_flow_register_async_terminal_adapter_ex(owner->flow, name, &ops, &async, owner, &schema);
 }
 
 static void flow_plugin_generation_record(flow_plugin_generation_owner_t *owner, char event);
@@ -355,6 +384,7 @@ static int flow_plugin_generation_owner_quiesce(void *ctx, uint64_t timeout_ms) 
   if (!owner) return SALTS_EINVAL;
   flow_plugin_generation_record(owner, 'q');
   owner->fixture->quiesce_calls++;
+  if (owner->fixture->observer.block_quiesce) return SALTS_EBUSY;
   return owner->fixture->quiesce_calls == FLOW_PLUGIN_GENERATION_FAIL_QUIESCE_CALL
              ? FLOW_PLUGIN_GENERATION_LIFECYCLE_FAIL_STATUS
              : SALTS_OK;
@@ -475,6 +505,8 @@ static int flow_plugin_generation_materialize_adapter(
 #else
   if (fixture->observer.managed_source && strcmp(name, "input.adapter") == 0)
     rc = durable_source_register(owner, name);
+  else if (strcmp(name, "async.adapter") == 0)
+    rc = durable_async_register(owner, name);
   else
     rc = fixture->materialize_calls == FLOW_PLUGIN_GENERATION_SKIP_ADAPTER_REGISTRATION_CALL
              ? SALTS_OK

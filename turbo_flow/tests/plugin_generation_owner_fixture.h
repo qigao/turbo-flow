@@ -2,6 +2,8 @@
 #define FLOW_PLUGIN_GENERATION_OWNER_FIXTURE_H
 
 #include <stddef.h>
+#include <stdint.h>
+#include <stdatomic.h>
 
 enum {
   OWNER_FIXTURE_NORMAL,
@@ -26,6 +28,10 @@ typedef struct generation_owner_observer_s {
   int managed_source;
   int paused_request_status;
   struct turbo_flow_run_s *source_run;
+  uint64_t source_deadline_ms;
+  void *async_claim;
+  atomic_int async_ready;
+  int block_quiesce;
   size_t lifecycle_calls, destroys, graph_shutdowns, destroys_before_graph;
 } generation_owner_observer_t;
 
