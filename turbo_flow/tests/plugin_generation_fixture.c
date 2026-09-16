@@ -1,5 +1,6 @@
 #include "plugin_generation_owner_fixture.h"
 #include "turbo_flow_plugin_generation.h"
+#include <cflow/publishers.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -138,7 +139,76 @@ typedef struct flow_plugin_generation_owner_s {
   turbo_flow_t *flow;
   size_t ordinal;
   int graph_shutdown;
+  turbo_flow_msg_t source_messages[2];
 } flow_plugin_generation_owner_t;
+
+static int durable_source_metadata(void *ctx, turbo_flow_resource_metadata_t *out) {
+  (void)ctx;
+  *out = (turbo_flow_resource_metadata_t)TURBO_FLOW_RESOURCE_METADATA_INIT;
+  out->domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+  out->kind = TURBO_FLOW_RESOURCE_CONNECTION;
+  memcpy(out->uid, "source:durable", sizeof("source:durable"));
+  memcpy(out->owner_name, "input.adapter", sizeof("input.adapter"));
+  out->generation = out->observed_generation = 1u;
+  return SALTS_OK;
+}
+static int durable_source_descriptor(void *ctx, turbo_flow_managed_boundary_descriptor_t *out) {
+  int rc;
+  (void)ctx;
+  *out = (turbo_flow_managed_boundary_descriptor_t)TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+  out->domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+  out->kind = TURBO_FLOW_RESOURCE_CONNECTION;
+  memcpy(out->uid, "source:durable", sizeof("source:durable"));
+  memcpy(out->owner_name, "input.adapter", sizeof("input.adapter"));
+  out->role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SOURCE;
+  out->capability_flags = TURBO_FLOW_MANAGED_BOUNDARY_DEMAND_AWARE;
+  rc = turbo_flow_content_descriptor_init(&out->output, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
+    TURBO_FLOW_CONTENT_PROFILE_GENERIC, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+    "application/octet-stream", "durable.source");
+  return rc == SALTS_OK ? turbo_flow_content_descriptor_declare_schema(
+    &out->output, "DurableSource", "Bytes", 1u) : rc;
+}
+static int durable_source_snapshot(void *ctx, turbo_flow_managed_boundary_snapshot_t *out) {
+  (void)ctx;
+  *out = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+  memcpy(out->uid, "source:durable", sizeof("source:durable"));
+  out->generation = out->observed_generation = 1u;
+  out->state = TURBO_FLOW_MANAGED_BOUNDARY_REGISTERED;
+  out->queue_capacity = 2u;
+  return SALTS_OK;
+}
+static int durable_source_start(void *ctx, turbo_flow_t *flow,
+                                const turbo_flow_stage_plan_t *stage) {
+  flow_plugin_generation_owner_t *owner = ctx;
+  cflow_publisher publisher = {0};
+  int rc;
+  for (size_t i = 0u; i < 2u; ++i) turbo_flow_msg_init(&owner->source_messages[i]);
+  if (!cflow_publisher_from_array(&publisher, turbo_flow_message_type(), owner->source_messages, 2u))
+    return SALTS_ENOMEM;
+  rc = turbo_flow_managed_source_run_open(flow, stage, &publisher, NULL,
+                                          &owner->fixture->observer.source_run);
+  if (cflow_publisher_valid(&publisher)) cflow_publisher_destroy(&publisher);
+  return rc;
+}
+static int durable_source_register(flow_plugin_generation_owner_t *owner, const char *name) {
+  turbo_flow_managed_source_registration_t registration = TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_INIT;
+  turbo_flow_adapter_ops_t ops = {0};
+  turbo_flow_adapter_schema_t schema = {0};
+  turbo_flow_managed_boundary_provider_ops_t boundary = TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
+  ops.start = durable_source_start;
+  schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+  schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
+  schema.direction = TURBO_FLOW_ADAPTER_INPUT;
+  boundary.resource.metadata = durable_source_metadata;
+  boundary.descriptor = durable_source_descriptor;
+  boundary.snapshot = durable_source_snapshot;
+  registration.adapter_name = registration.owner_name = name;
+  registration.adapter_ops = &ops;
+  registration.schema = &schema;
+  registration.boundary_ops = &boundary;
+  registration.ctx = owner;
+  return turbo_flow_register_managed_source_adapter(owner->flow, &registration);
+}
 
 static void flow_plugin_generation_record(flow_plugin_generation_owner_t *owner, char event);
 
@@ -320,6 +390,9 @@ static int flow_plugin_generation_adapter_consume(void *ctx, turbo_flow_t *flow,
   flow_plugin_generation_owner_t *owner = ctx;
   if (!owner || !flow || !stage || !message) return SALTS_EINVAL;
   ++owner->fixture->observer.consumes;
+  if (owner->fixture->observer.managed_source)
+    owner->fixture->observer.paused_request_status =
+        turbo_flow_run_request(owner->fixture->observer.source_run, 1u);
   if (owner->fixture->quiesce_calls) ++owner->fixture->observer.consumes_after_quiesce;
   return owner->fixture->observer.consume_status;
 }
@@ -400,9 +473,12 @@ static int flow_plugin_generation_materialize_adapter(
     rc = turbo_flow_register_adapter_ex(flow, name, &ops, owner, &schema);
   }
 #else
-  rc = fixture->materialize_calls == FLOW_PLUGIN_GENERATION_SKIP_ADAPTER_REGISTRATION_CALL
-           ? SALTS_OK
-           : turbo_flow_register_adapter(flow, name, &ops, owner);
+  if (fixture->observer.managed_source && strcmp(name, "input.adapter") == 0)
+    rc = durable_source_register(owner, name);
+  else
+    rc = fixture->materialize_calls == FLOW_PLUGIN_GENERATION_SKIP_ADAPTER_REGISTRATION_CALL
+             ? SALTS_OK
+             : turbo_flow_register_adapter(flow, name, &ops, owner);
 #endif
   if (rc != SALTS_OK) {
     fixture->retained_owner_count--;

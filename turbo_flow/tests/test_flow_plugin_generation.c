@@ -3,6 +3,7 @@
 #include "turbo_flow_durable_buffer.h"
 #include "plugin_generation_owner_fixture.h"
 
+#include <salts/clock.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -257,6 +258,72 @@ flow_plugin_generation_test_replace_documents(flow_plugin_generation_test_contex
 }
 
 spec("transactional plugin Graph generation") {
+  it("retires an open managed source while fencing new demand and draining accepted values") {
+    static const char graph[] = "source input adapter input.adapter\n"
+      "buffer intake resource intake.store\n"
+      "stage output adapter output.adapter\n"
+      "stage main {\n input -> intake -> output\n}\n";
+    static const char yaml[] = "version: 1\nchannels:\n"
+      "  intake.store:\n    kind: fixture.transactional.resource\n    config: {}\n"
+      "adapters:\n"
+      "  input.adapter:\n    kind: fixture.transactional.adapter\n    config: {}\n"
+      "  output.adapter:\n    kind: fixture.transactional.adapter\n    config: {}\n";
+    for (int accepted = 0; accepted < 2; ++accepted) {
+      flow_plugin_generation_test_context_t context;
+      turbo_flow_plugin_generation_config_t config = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+      turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      turbo_flow_config_error_t ce = TURBO_FLOW_CONFIG_ERROR_INIT;
+      turbo_flow_plugin_generation_t *generation = NULL;
+      turbo_flow_plugin_transactional_product_catalog_v1_t catalog = TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
+      turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
+      turbo_flow_inbox_memory_config_t memory = turbo_flow_inbox_memory_config_default();
+      turbo_flow_durable_buffer_binding_config_t binding_config = TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
+      turbo_flow_durable_buffer_binding_t *binding = NULL;
+      turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+      turbo_flow_run_result_t run = TURBO_FLOW_RUN_RESULT_INIT;
+      generation_owner_observer_t *observer;
+      int retired;
+      check_equal(flow_plugin_generation_test_open(&context, FLOW_PLUGIN_GENERATION_FIXTURE_DURABLE, &pe, &ce), SALTS_OK);
+      check_equal(flow_plugin_generation_test_replace_documents(&context, yaml, sizeof(yaml)-1u,
+                                                                 graph, sizeof(graph)-1u, &ce), SALTS_OK);
+      check_equal(turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(context.snapshot, &catalog), SALTS_OK);
+      observer = (generation_owner_observer_t *)catalog.adapter_providers[0].ctx;
+      observer->managed_source = 1;
+      check_equal(turbo_flow_inbox_memory_create(&memory, &inbox), SALTS_OK);
+      binding_config.resource_name = "intake.store"; binding_config.inbox = &inbox;
+      check_equal(turbo_flow_durable_buffer_bind(context.flow, &binding_config, &binding), SALTS_OK);
+      check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+        &context.flow, &config, NULL, &generation, &context.cleanup, &ce), SALTS_OK);
+      check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
+      check_not_null(observer->source_run);
+      if (accepted) {
+        check_equal(turbo_flow_run_request(observer->source_run, 1u), SALTS_OK);
+        for (size_t i=0u; i<1000u; ++i) {
+          check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
+          if (snapshot.pending_records == 1u) break;
+          salts_sleep_ms(1u);
+        }
+        check_equal(snapshot.pending_records, 1u);
+      }
+      check_equal(turbo_flow_run_snapshot(observer->source_run, &run), SALTS_OK);
+      check(run.state == TURBO_FLOW_RUN_OPEN || run.state == TURBO_FLOW_RUN_ACTIVE);
+      retired = turbo_flow_plugin_generation_destroy(generation, 100u, &ce);
+      check_equal(retired, SALTS_OK);
+      if (retired != SALTS_OK) {
+        /* Keep the RED regression bounded and release its real source subscription. */
+        (void)turbo_flow_run_cancel(observer->source_run);
+        check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &ce), SALTS_OK);
+      }
+      check_equal(observer->consumes, (size_t)accepted);
+      check_equal(observer->consumes_after_quiesce, 0u);
+      if (accepted) check_equal(observer->paused_request_status, SALTS_ESHUTDOWN);
+      check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
+      check_equal(snapshot.records, 0u); check_equal(snapshot.admitted, (uint64_t)accepted);
+      check_equal(turbo_flow_inbox_close(&inbox), SALTS_OK);
+      check_equal(turbo_flow_inbox_destroy(&inbox), SALTS_OK);
+      check_equal(flow_plugin_generation_test_close(&context, &pe), SALTS_OK);
+    }
+  }
   it("drains chained durable backlog before owner quiesce and preserves owners on failure") {
     static const char graph[] = "source input adapter input.adapter\n"
       "buffer second resource second.store\n"
