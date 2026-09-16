@@ -127,8 +127,10 @@ jobs:
         env:
           SALTS_ROOT: /opt/salts/debug
           SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          RULES_FORGE_ROOT: ${{ runner.temp }}/sdk/rules-forge-debug
         run: |
           set -euxo pipefail
+          mkdir -p "$RULES_FORGE_ROOT"
           cmake -S . -B build/task4-runtime -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
             -DBUILD_TESTING=ON \
