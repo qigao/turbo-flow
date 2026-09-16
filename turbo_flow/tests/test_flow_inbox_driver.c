@@ -121,7 +121,9 @@ spec("Internal Inbox claim-to-Graph driver") {
     static const char graph[] = "source input\n"
                                 "buffer intake resource intake.store\n"
                                 "stage sink adapter test.sink\n"
-                                "stage main { input -> intake -> sink }\n";
+                                "stage main {\n"
+                                "  input -> intake -> sink\n"
+                                "}\n";
     driver_probe_t probe = {0};
     turbo_flow_adapter_ops_t ops = {0};
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
@@ -168,7 +170,9 @@ spec("Internal Inbox claim-to-Graph driver") {
                                 "stage middle adapter test.middle\n"
                                 "buffer second resource second.store\n"
                                 "stage sink adapter test.sink\n"
-                                "stage main { input -> first -> middle -> second -> sink }\n";
+                                "stage main {\n"
+                                "  input -> first -> middle -> second -> sink\n"
+                                "}\n";
     driver_probe_t middle = {0};
     driver_probe_t sink = {0};
     turbo_flow_adapter_ops_t middle_ops = {0}, sink_ops = {0};
@@ -225,12 +229,15 @@ spec("Internal Inbox claim-to-Graph driver") {
     static const char graph[] = "source input\n"
                                 "buffer intake resource intake.store\n"
                                 "stage sink adapter test.sink\n"
-                                "stage main { input -> intake -> sink }\n";
+                                "stage main {\n"
+                                "  input -> intake -> sink\n"
+                                "}\n";
     driver_probe_t probe = {.status = SALTS_EPROTO};
     turbo_flow_adapter_ops_t ops = {0};
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
     turbo_flow_durable_buffer_binding_t *binding = NULL;
     turbo_flow_inbox_receipt_t receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
+    turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
     turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
     cflow_scheduler scheduler = {0};
     turbo_flow_t *flow = turbo_flow_create();
@@ -252,6 +259,9 @@ spec("Internal Inbox claim-to-Graph driver") {
     check_equal(result.state, TURBO_FLOW_INBOX_SOURCE_FAILED);
     check_equal(result.graph_status, SALTS_ECANCELED);
     check_equal(probe.calls, (size_t)0u);
+    check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
+    check_equal(snapshot.failed_records, (size_t)1u);
+    check_equal(turbo_flow_inbox_discard(&inbox, receipt.record_id), SALTS_OK);
     cleanup_driver(driver, flow, binding, &inbox, &scheduler);
   }
 
@@ -259,12 +269,15 @@ spec("Internal Inbox claim-to-Graph driver") {
     static const char graph[] = "source input\n"
                                 "buffer intake resource intake.store\n"
                                 "stage sink adapter test.sink\n"
-                                "stage main { input -> intake -> sink }\n";
+                                "stage main {\n"
+                                "  input -> intake -> sink\n"
+                                "}\n";
     driver_probe_t probe = {.status = SALTS_EPROTO};
     turbo_flow_adapter_ops_t ops = {0};
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
     turbo_flow_durable_buffer_binding_t *binding = NULL;
     turbo_flow_inbox_receipt_t receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
+    turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
     turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
     cflow_scheduler scheduler = {0};
     turbo_flow_t *flow = turbo_flow_create();
@@ -290,6 +303,9 @@ spec("Internal Inbox claim-to-Graph driver") {
     result = (turbo_flow_inbox_source_result_t)TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
     check_equal(flow_inbox_driver_poll(driver, &result), SALTS_ENOENT);
     check_equal(probe.calls, (size_t)1u);
+    check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
+    check_equal(snapshot.failed_records, (size_t)1u);
+    check_equal(turbo_flow_inbox_discard(&inbox, receipt.record_id), SALTS_OK);
 
     cleanup_driver(driver, flow, binding, &inbox, &scheduler);
   }
@@ -298,7 +314,9 @@ spec("Internal Inbox claim-to-Graph driver") {
     static const char graph[] = "source input\n"
                                 "buffer intake resource intake.store\n"
                                 "stage output adapter async.out\n"
-                                "stage main { input -> intake -> output }\n";
+                                "stage main {\n"
+                                "  input -> intake -> output\n"
+                                "}\n";
     async_probe_t probe = {0};
     turbo_flow_adapter_ops_t adapter_ops = {0};
     turbo_flow_async_terminal_adapter_ops_t async_ops = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
