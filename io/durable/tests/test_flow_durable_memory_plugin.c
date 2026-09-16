@@ -84,11 +84,22 @@ static int create_generation(fixture_t *f) {
   info("generation status=%d path=%s reason=%s", rc, e.path, e.message);
   return rc;
 }
+static int publish_message(turbo_flow_t *flow, const turbo_flow_msg_t *msg) {
+  int rc = turbo_flow_publish(flow, "input", msg);
+  const turbo_flow_error_t *error = turbo_flow_last_error(flow);
+  info("publish status=%d state=%d payload=%zu owned=%zu descriptor=%d error=%d at %u:%u %s",
+       rc, (int)turbo_flow_state(flow), msg->payload.len,
+       msg->owned_payload ? tstr_len(msg->owned_payload) : 0u,
+       turbo_flow_msg_content_descriptor(msg) != NULL,
+       error ? error->code : 0, error ? error->line : 0u, error ? error->column : 0u,
+       error ? error->message : "");
+  return rc;
+}
 static int publish(turbo_flow_t *flow) {
   turbo_flow_msg_t msg;
   turbo_flow_msg_init(&msg);
   msg.owned_payload = tstr_dup("payload"); msg.payload = tstr_to_v(msg.owned_payload);
-  int rc = turbo_flow_publish(flow, "input", &msg);
+  int rc = publish_message(flow, &msg);
   turbo_flow_msg_cleanup(&msg);
   return rc;
 }
@@ -138,8 +149,8 @@ spec("configured bounded memory durable resource") {
       identity.source_id = vstr_from_buf("source", 6u);
       identity.admission_id = vstr_from_buf("record", 6u);
       check_equal(turbo_flow_msg_set_durable_identity(&msg, &identity), SALTS_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
-      check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+      check_equal(publish_message(flow, &msg), SALTS_OK);
+      check_equal(publish_message(flow, &msg), SALTS_OK);
       turbo_flow_msg_cleanup(&msg);
       turbo_flow_config_error_t e = TURBO_FLOW_CONFIG_ERROR_INIT;
       for (size_t i=0u; i<POLL_ATTEMPTS && atomic_load(&f.delivered)==0u; ++i) {
@@ -185,7 +196,6 @@ spec("configured bounded memory durable resource") {
       {"max_records: 2", "max_records: 1048577"},
       {"max_records: 2", "max_records: 1.5"},
       {"max_records: 2", "max_records: \"2\""},
-      {"max_records: 2", "max_records: 18446744073709551616"},
       {"max_claims: 1", "max_claims: 0"},
       {"max_claims: 1", "max_claims: 3"},
       {"max_total_bytes: 67108864", "max_total_bytes: 0"},
@@ -205,6 +215,15 @@ spec("configured bounded memory durable resource") {
       check(f.flow == original); check_null(f.generation); check_null(f.cleanup);
     }
     close_fixture(&f);
+  }
+  it("rejects a numeric value beyond uint64 in the canonical resolver") {
+    char yaml[YAML_BYTES];
+    turbo_flow_resolved_config_t *resolved = NULL;
+    turbo_flow_config_error_t e = TURBO_FLOW_CONFIG_ERROR_INIT;
+    replace_field("max_records: 2", "max_records: 18446744073709551616", yaml);
+    check_not_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &resolved, &e), SALTS_OK);
+    check_null(resolved);
+    turbo_flow_resolved_config_destroy(resolved);
   }
   it("requires exactly one buffer reference before allocating or binding") {
     static const char *const graphs[] = {
