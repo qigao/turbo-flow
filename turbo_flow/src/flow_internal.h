@@ -806,6 +806,10 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
                         turbo_flow_emitter_t *emitter);
 int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
                                 turbo_flow_msg_t *message);
+int flow_run_open_from_stage(turbo_flow_t *flow, uint32_t origin_stage, int buffer_origin,
+                             cflow_publisher *publisher,
+                             const turbo_flow_run_config_t *config,
+                             turbo_flow_run_t **run_out);
 int flow_publish_enter(turbo_flow_t *flow);
 void flow_publish_leave(turbo_flow_t *flow);
 void flow_stop_async_ingress(turbo_flow_t *flow);

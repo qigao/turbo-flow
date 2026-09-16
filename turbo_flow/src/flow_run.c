@@ -14,6 +14,7 @@ struct turbo_flow_run_s {
   turbo_flow_t *flow;
   uint32_t source_index;
   const char *source_name;
+  int buffer_origin;
   cflow_scheduler *scheduler;
   cflow_graph graph;
   cflow_subscription subscription;
@@ -253,8 +254,20 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
   }
   flow_publish_error_context_begin(flow);
   error_context_entered = 1;
-  rc = flow_publish_message_entered(flow, run->source_name, (int)run->source_index,
-                                    (const turbo_flow_msg_t *)value, &result, publication);
+  if (run->buffer_origin) {
+    turbo_flow_msg_t local;
+    turbo_flow_msg_init(&local);
+    rc = turbo_flow_msg_clone(&local, (const turbo_flow_msg_t *)value);
+    if (rc == SALTS_OK) {
+      rc = flow_run_message_from_stage(flow, run->source_index, &local);
+      turbo_flow_msg_cleanup(&local);
+    }
+    result.status = rc;
+    if (publication) flow_async_publication_seal(publication, rc);
+  } else {
+    rc = flow_publish_message_entered(flow, run->source_name, (int)run->source_index,
+                                      (const turbo_flow_msg_t *)value, &result, publication);
+  }
   error = turbo_flow_last_error(flow);
 record_result:
   salts_mutex_lock(&run->mutex);
@@ -380,11 +393,12 @@ static int flow_run_registry_add(turbo_flow_t *flow, turbo_flow_run_t *run,
   return rc;
 }
 
-int flow_run_open_internal(turbo_flow_t *flow, const char *source_name,
-                           cflow_publisher *publisher,
-                           const turbo_flow_run_config_t *config, int drain_on_stop,
-                           int managed_source_start,
-                           turbo_flow_run_t **run_out) {
+static int flow_run_open_origin_internal(turbo_flow_t *flow, const char *source_name,
+                                         int resolved_origin, int buffer_origin,
+                                         cflow_publisher *publisher,
+                                         const turbo_flow_run_config_t *config, int drain_on_stop,
+                                         int managed_source_start,
+                                         turbo_flow_run_t **run_out) {
   turbo_flow_run_config_t effective = TURBO_FLOW_RUN_CONFIG_INIT;
   turbo_flow_run_t *run = NULL;
   const flow_stage_plan_impl_t *source;
@@ -426,14 +440,14 @@ int flow_run_open_internal(turbo_flow_t *flow, const char *source_name,
                                          : "flow must be started before opening a Reactive run");
   }
   entered = 1;
-  source_index = turbo_flow_find_stage(flow, source_name);
+  source_index = resolved_origin >= 0 ? resolved_origin : turbo_flow_find_stage(flow, source_name);
   if (source_index < 0) {
     rc = flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                    "Reactive run source is unknown");
     goto cleanup;
   }
   source = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, (size_t)source_index);
-  if (!source || !source->is_source) {
+  if (!source || (buffer_origin ? !source->is_buffer : !source->is_source)) {
     rc = flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                    "Reactive run target must be a source");
     goto cleanup;
@@ -455,6 +469,7 @@ int flow_run_open_internal(turbo_flow_t *flow, const char *source_name,
   run->flow = flow;
   run->source_index = (uint32_t)source_index;
   run->source_name = source->name;
+  run->buffer_origin = buffer_origin != 0;
   run->scheduler = effective.scheduler ? effective.scheduler : &flow->reactive_scheduler;
   run->state = TURBO_FLOW_RUN_OPEN;
   run->status = SALTS_OK;
@@ -523,6 +538,27 @@ cleanup:
   }
   if (entered) flow_publish_leave(flow);
   return rc;
+}
+
+int flow_run_open_internal(turbo_flow_t *flow, const char *source_name,
+                           cflow_publisher *publisher,
+                           const turbo_flow_run_config_t *config, int drain_on_stop,
+                           int managed_source_start,
+                           turbo_flow_run_t **run_out) {
+  return flow_run_open_origin_internal(flow, source_name, -1, 0, publisher, config,
+                                       drain_on_stop, managed_source_start, run_out);
+}
+
+int flow_run_open_from_stage(turbo_flow_t *flow, uint32_t origin_stage, int buffer_origin,
+                             cflow_publisher *publisher,
+                             const turbo_flow_run_config_t *config,
+                             turbo_flow_run_t **run_out) {
+  const flow_stage_plan_impl_t *origin;
+  if (!flow || origin_stage >= vec_size(&flow->stages) || !buffer_origin) return SALTS_EINVAL;
+  origin = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, origin_stage);
+  if (!origin || !origin->is_buffer) return SALTS_EINVAL;
+  return flow_run_open_origin_internal(flow, origin->name, (int)origin_stage, 1, publisher,
+                                       config, 0, 0, run_out);
 }
 
 int turbo_flow_run_open(turbo_flow_t *flow, const char *source_name, cflow_publisher *publisher,
