@@ -1,0 +1,224 @@
+name: Task 4 staging patch
+
+on:
+  push:
+    branches: [work/task4-durable-admission-green]
+    paths:
+      - '.github/workflows/task4-staging-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/task4-durable-admission-green
+          fetch-depth: 0
+
+      - name: Apply exact Task 4 wiring
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              assert count == 1, f"{path}: expected one match, found {count}"
+              p.write_text(text.replace(old, new, 1))
+
+          replace(
+              "turbo_flow/src/flow_internal.h",
+              "  vec_t stages;\n  vec_t edges;\n  flow_compiled_plan_t compiled_plan;",
+              "  vec_t stages;\n  vec_t edges;\n  struct turbo_flow_durable_buffer_binding_s *durable_buffer_bindings;\n"
+              "  flow_compiled_plan_t compiled_plan;",
+          )
+          replace(
+              "turbo_flow/src/flow_internal.h",
+              "void flow_clear_plan(turbo_flow_t *flow);\n"
+              "void flow_clear_registry(turbo_flow_t *flow);\n"
+              "int flow_build_runtime_plan(turbo_flow_t *flow);",
+              "void flow_clear_plan(turbo_flow_t *flow);\n"
+              "void flow_clear_registry(turbo_flow_t *flow);\n"
+              "void flow_durable_buffer_clear_bindings(turbo_flow_t *flow);\n"
+              "int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow);\n"
+              "int flow_durable_buffer_admit_stage(turbo_flow_t *flow, uint32_t stage_index,\n"
+              "                                    const turbo_flow_msg_t *message);\n"
+              "int flow_build_runtime_plan(turbo_flow_t *flow);",
+          )
+          replace(
+              "turbo_flow/src/flow_core.c",
+              "void flow_clear_registry(turbo_flow_t *flow) {\n  size_t i;\n\n  if (!flow) return;\n",
+              "void flow_clear_registry(turbo_flow_t *flow) {\n  size_t i;\n\n  if (!flow) return;\n"
+              "  flow_durable_buffer_clear_bindings(flow);\n",
+          )
+          replace(
+              "turbo_flow/src/flow_compile.c",
+              "  rc = compile_validate_fanout_mutability(flow);\n"
+              "  if (rc != SALTS_OK) return rc;\n"
+              "  rc = flow_build_runtime_plan(flow);",
+              "  rc = compile_validate_fanout_mutability(flow);\n"
+              "  if (rc != SALTS_OK) return rc;\n"
+              "  rc = flow_durable_buffer_resolve_bindings(flow);\n"
+              "  if (rc != SALTS_OK) return rc;\n"
+              "  rc = flow_build_runtime_plan(flow);",
+          )
+          replace(
+              "turbo_flow/src/flow_runtime.c",
+              "    if (stage->is_buffer) {\n"
+              "      done[stage_index] = 1u;\n"
+              "      continue;\n"
+              "    }",
+              "    if (stage->is_buffer) {\n"
+              "      rc = flow_durable_buffer_admit_stage(flow, stage_index, message);\n"
+              "      done[stage_index] = 1u;\n"
+              "      if (rc != SALTS_OK) goto cleanup;\n"
+              "      continue;\n"
+              "    }",
+          )
+
+          test_path = Path("turbo_flow/tests/test_flow_durable_buffer.c")
+          text = test_path.read_text()
+          anchor = "static turbo_flow_t *durable_buffer_compile_graph(size_t *sink_calls) {"
+          assert text.count(anchor) == 1
+          helper_anchor = "  return flow;\n}\n\nspec(\"Graph durable buffer DSL\") {"
+          assert text.count(helper_anchor) == 1
+          helpers = r'''  return flow;
+}
+
+static turbo_flow_durable_buffer_binding_t *durable_buffer_bind_memory(
+    turbo_flow_t *flow, turbo_flow_inbox_t *inbox) {
+  turbo_flow_inbox_memory_config_t inbox_config = turbo_flow_inbox_memory_config_default();
+  turbo_flow_durable_buffer_binding_config_t binding_config =
+      TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+
+  *inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
+  check_equal(turbo_flow_inbox_memory_create(&inbox_config, inbox), SALTS_OK);
+  binding_config.resource_name = "intake.store";
+  binding_config.inbox = inbox;
+  check_equal(turbo_flow_durable_buffer_bind(flow, &binding_config, &binding), SALTS_OK);
+  check_not_null(binding);
+  return binding;
+}
+
+static void durable_buffer_release_memory(turbo_flow_durable_buffer_binding_t *binding,
+                                          turbo_flow_inbox_t *inbox) {
+  check_equal(turbo_flow_durable_buffer_unbind(binding), SALTS_OK);
+  check_equal(turbo_flow_inbox_close(inbox), SALTS_OK);
+  check_equal(turbo_flow_inbox_destroy(inbox), SALTS_OK);
+}
+
+spec("Graph durable buffer DSL") {'''
+          text = text.replace(helper_anchor, helpers, 1)
+
+          old = r'''  it("compiles a buffer as a non-executor execution cut") {
+    size_t sink_calls = 0u;
+    turbo_flow_t *flow = durable_buffer_compile_graph(&sink_calls);
+    int source_index = turbo_flow_find_stage(flow, "telemetry");'''
+          new = r'''  it("compiles a buffer as a non-executor execution cut") {
+    size_t sink_calls = 0u;
+    turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
+    turbo_flow_t *flow = durable_buffer_compile_graph(&sink_calls);
+    turbo_flow_durable_buffer_binding_t *binding = durable_buffer_bind_memory(flow, &inbox);
+    int source_index = turbo_flow_find_stage(flow, "telemetry");'''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+          old = r'''    }
+
+    turbo_flow_destroy(flow);
+  }
+
+  it("stops an execution region at a reached buffer but can resume from that buffer") {'''
+          new = r'''    }
+
+    durable_buffer_release_memory(binding, &inbox);
+    turbo_flow_destroy(flow);
+  }
+
+  it("stops an execution region at a reached buffer but can resume from that buffer") {'''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = r'''  it("stops an execution region at a reached buffer but can resume from that buffer") {
+    size_t sink_calls = 0u;
+    turbo_flow_t *flow = durable_buffer_compile_graph(&sink_calls);
+    int source_index = turbo_flow_find_stage(flow, "telemetry");'''
+          new = r'''  it("stops an execution region at a reached buffer but can resume from that buffer") {
+    size_t sink_calls = 0u;
+    turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
+    turbo_flow_t *flow = durable_buffer_compile_graph(&sink_calls);
+    turbo_flow_durable_buffer_binding_t *binding = durable_buffer_bind_memory(flow, &inbox);
+    int source_index = turbo_flow_find_stage(flow, "telemetry");'''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+          marker = r'''    }
+
+    turbo_flow_destroy(flow);
+  }
+
+  it("admits at a bound durable buffer without activating downstream") {'''
+          replacement = r'''    }
+
+    durable_buffer_release_memory(binding, &inbox);
+    turbo_flow_destroy(flow);
+  }
+
+  it("requires every durable buffer resource to be bound before compile") {
+    size_t sink_calls = 0u;
+    turbo_flow_t *flow = durable_buffer_compile_graph(&sink_calls);
+
+    check_equal(turbo_flow_compile(flow), SALTS_ENOENT);
+    turbo_flow_destroy(flow);
+  }
+
+  it("rejects one binding shared by multiple durable buffer stages") {
+    static const char graph[] =
+        "buffer first resource intake.store\n"
+        "buffer second resource intake.store\n"
+        "source telemetry\n"
+        "stage normalize adapter sink\n"
+        "stage main {\n"
+        "  telemetry -> first\n"
+        "  first -> second\n"
+        "  second -> normalize\n"
+        "}\n";
+    turbo_flow_adapter_ops_t ops;
+    turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
+    turbo_flow_t *flow = durable_buffer_parse(graph);
+    turbo_flow_durable_buffer_binding_t *binding;
+    size_t sink_calls = 0u;
+
+    memset(&ops, 0, sizeof(ops));
+    ops.consume = durable_buffer_sink_consume;
+    check_equal(turbo_flow_register_adapter(flow, "sink", &ops, &sink_calls), SALTS_OK);
+    binding = durable_buffer_bind_memory(flow, &inbox);
+    check_equal(turbo_flow_compile(flow), SALTS_EALREADY);
+    durable_buffer_release_memory(binding, &inbox);
+    turbo_flow_destroy(flow);
+  }
+
+  it("admits at a bound durable buffer without activating downstream") {'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+          test_path.write_text(text)
+          PY
+          git diff --check
+          git diff --stat
+
+      - name: Commit staging patch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add turbo_flow/src/flow_internal.h turbo_flow/src/flow_core.c \
+                  turbo_flow/src/flow_compile.c turbo_flow/src/flow_runtime.c \
+                  turbo_flow/tests/test_flow_durable_buffer.c
+          git commit -m "feat(graph): wire durable buffer admission boundary"
+          git push origin HEAD:work/task4-durable-admission-green
