@@ -5,6 +5,7 @@ on:
     branches: [feat/127-graph-durable-buffer]
     paths:
       - 'turbo_flow/**'
+      - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/task4-runtime-focused.yml'
   workflow_dispatch:
 
@@ -122,15 +123,20 @@ jobs:
           sudo mkdir -p /opt/salts-utils
           sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
 
-      - name: Configure exact-source Graph build
+      - name: Apply focused Task 4 validation-only CMake assembly
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 .github/ci/task4_runtime_assembly.py
+          git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt | tee "$RUNNER_TEMP/task4-runtime-evidence/focused-cmake.patch"
+
+      - name: Configure focused exact-source Graph build
         shell: bash
         env:
           SALTS_ROOT: /opt/salts/debug
           SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          RULES_FORGE_ROOT: ${{ runner.temp }}/sdk/rules-forge-debug
         run: |
           set -euxo pipefail
-          mkdir -p "$RULES_FORGE_ROOT"
           cmake -S . -B build/task4-runtime -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
             -DBUILD_TESTING=ON \
@@ -163,8 +169,8 @@ jobs:
         run: |
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-          test -z "$(git status --porcelain --untracked-files=no)"
-          git diff --exit-code
+          test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt)$' || true)"
+          git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests
 
       - name: Upload Task 4 evidence
         if: always()
