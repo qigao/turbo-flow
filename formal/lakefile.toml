@@ -1,6 +1,0 @@
-name = "turbo_flow_formal"
-version = "0.1.0"
-defaultTargets = ["TurboFlow"]
-
-[[lean_lib]]
-name = "TurboFlow"

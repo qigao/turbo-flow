@@ -38,3 +38,13 @@ cmake_add_test(
 
 set_tests_properties(test_turbodb_inbox_source
                      PROPERTIES LABELS "turbodb-adapter;graph;inbox")
+
+cmake_add_test(test_turbodb_durable_buffer_plugin
+  SOURCES test_turbodb_durable_buffer_plugin.c
+  LIBS TurboFlow::PluginHost TurboFlow::TurboDbAdapter Salts::TinyTest
+  FOLDER "io/turbodb/tests")
+# RED loads a valid existing plugin to expose the missing resource kind.
+add_dependencies(test_turbodb_durable_buffer_plugin test_flow_plugin_good_one)
+set_tests_properties(test_turbodb_durable_buffer_plugin PROPERTIES
+  LABELS "turbodb-adapter;graph;durable;plugin"
+  ENVIRONMENT "TURBO_FLOW_TURBODB_PLUGIN_PATH=$<TARGET_FILE:test_flow_plugin_good_one>")

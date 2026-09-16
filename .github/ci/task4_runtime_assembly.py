@@ -1,4 +1,9 @@
 from pathlib import Path
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--turbodb", action="store_true")
+args = parser.parse_args()
 
 root = Path("CMakeLists.txt")
 text = root.read_text()
@@ -10,7 +15,10 @@ assert "include(TurboFlowRequireCHTTP)" in text
 text = text.replace("include(TurboFlowRequireCHTTP)\n", "", 1)
 start = text.index("add_subdirectory(turbo_flow)\n")
 end = text.index("set(TURBO_FLOW_EXPORT_TARGETS)", start)
-text = text[:start] + "add_subdirectory(ingress/protocol/common)\nadd_subdirectory(turbo_flow)\nadd_subdirectory(io/durable)\n\n" + text[end:]
+children = "add_subdirectory(ingress/protocol/common)\nadd_subdirectory(turbo_flow)\nadd_subdirectory(io/durable)\n"
+if args.turbodb:
+    children += "add_subdirectory(io/turbodb)\n"
+text = text[:start] + children + "\n" + text[end:]
 root.write_text(text)
 
 graph = Path("turbo_flow/CMakeLists.txt")
