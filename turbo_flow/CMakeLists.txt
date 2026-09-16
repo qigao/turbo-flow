@@ -119,6 +119,17 @@ target_link_libraries(${TARGET_NAME} PUBLIC
   TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow Salts::CMeta RulesForge::RulesForge
   PRIVATE Salts::DataBind Salts::JsonParser mir_static)
 
+if(BUILD_TESTING)
+  cmake_add_test(
+    test_flow_durable_identity
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_flow_durable_identity.c
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/durable_identity_header_cpp.cpp
+    LIBS TurboFlow::Graph Salts::TinyTest
+    FOLDER "turbo_flow/tests")
+  set_tests_properties(test_flow_durable_identity
+    PROPERTIES LABELS "graph;core" TIMEOUT 30)
+endif()
+
 add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
