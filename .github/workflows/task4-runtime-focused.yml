@@ -6,6 +6,7 @@ on:
     paths:
       - 'turbo_flow/**'
       - 'io/durable/**'
+      - 'io/turbodb/**'
       - 'tools/lemon/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/task4-runtime-focused.yml'

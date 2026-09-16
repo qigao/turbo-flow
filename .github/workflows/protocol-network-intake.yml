@@ -6,6 +6,8 @@ on:
     paths:
       - 'ingress/protocol/**'
       - 'io/cnet/**'
+      - 'io/durable/**'
+      - 'io/turbodb/**'
       - 'turbo_flow/**'
       - 'tools/lemon/**'
       - '.github/ci/protocol-network-compile/**'
@@ -15,6 +17,8 @@ on:
     paths:
       - 'ingress/protocol/**'
       - 'io/cnet/**'
+      - 'io/durable/**'
+      - 'io/turbodb/**'
       - 'turbo_flow/**'
       - 'tools/lemon/**'
       - '.github/ci/protocol-network-compile/**'
