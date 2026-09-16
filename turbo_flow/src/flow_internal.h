@@ -820,6 +820,7 @@ int flow_run_open_buffer_drain(turbo_flow_t *flow, uint32_t origin_stage,
                                 const turbo_flow_run_config_t *config,
                                 turbo_flow_run_t **run_out);
 int flow_run_has_pending_values(const turbo_flow_run_t *run);
+int flow_run_prepare_buffer_retire(turbo_flow_t *flow, uint64_t timeout_ms);
 int flow_publish_enter(turbo_flow_t *flow);
 void flow_publish_leave(turbo_flow_t *flow);
 void flow_stop_async_ingress(turbo_flow_t *flow);

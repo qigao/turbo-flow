@@ -1,6 +1,7 @@
 #include "flow_internal.h"
 
 #include <cflow/lower.h>
+#include <salts/clock.h>
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -221,6 +222,7 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
   flow_async_publication_t *publication = NULL;
   const turbo_flow_error_t *error = NULL;
   int error_context_entered = 0;
+  int region_entered = 0;
   int rc;
   if (!run || !type || !value || !cmeta_type_equal(type, flow_message_type_descriptor())) {
     return false;
@@ -234,6 +236,15 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
     return false;
   }
   salts_mutex_unlock(&run->mutex);
+
+  /* A managed subscription owns a lifetime count even while idle. Its values
+   * additionally own an admission-fenced execution region, so durable retirement
+   * can wait for accepted work without waiting for that idle subscription. */
+  if (run->managed_source) {
+    rc = flow_publish_enter(flow);
+    if (rc != SALTS_OK) goto record_result;
+    region_entered = 1;
+  }
 
   if (!run->drain_on_stop && flow->has_async_stage) {
     flow_run_retain(run);
@@ -280,6 +291,7 @@ record_result:
   salts_mutex_unlock(&run->mutex);
   if (error_context_entered) flow_publish_error_context_end(flow);
   if (publication) flow_async_publication_owner_leave(publication);
+  if (region_entered) flow_publish_leave(flow);
   flow_run_release(run);
   return rc == SALTS_OK;
 }
@@ -601,9 +613,28 @@ int turbo_flow_run_open(turbo_flow_t *flow, const char *source_name, cflow_publi
 
 int turbo_flow_run_request(turbo_flow_run_t *run, size_t demand) {
   cflow_status_result result;
+  turbo_flow_t *flow;
+  int managed_source;
   int terminal;
   int status;
   if (!run || demand == 0u) return SALTS_EINVAL;
+  salts_mutex_lock(&run->mutex);
+  terminal = run->terminal;
+  status = run->status;
+  managed_source = run->managed_source;
+  flow = run->flow;
+  salts_mutex_unlock(&run->mutex);
+  if (terminal) return status == SALTS_OK ? SALTS_ESHUTDOWN : status;
+  if (managed_source) {
+    if (!flow) return SALTS_ESHUTDOWN;
+    salts_mutex_lock(&flow->runtime_mutex);
+    status = flow->state == TURBO_FLOW_STATE_STARTED &&
+             flow->admission_state == FLOW_ADMISSION_OPEN ? SALTS_OK : SALTS_ESHUTDOWN;
+    salts_mutex_unlock(&flow->runtime_mutex);
+    if (status != SALTS_OK) return status;
+  }
+  /* Pause may race the demand check; on_value repeats the admission fence before
+   * entering an execution region, so queued demand cannot admit late input. */
   salts_mutex_lock(&run->mutex);
   terminal = run->terminal;
   status = run->status;
@@ -616,6 +647,39 @@ int turbo_flow_run_request(turbo_flow_run_t *run, size_t demand) {
   if (run->terminal && run->status != SALTS_OK) status = run->status;
   salts_mutex_unlock(&run->mutex);
   return status;
+}
+
+int flow_run_prepare_buffer_retire(turbo_flow_t *flow, uint64_t timeout_ms) {
+  const uint64_t started = salts_hrtime();
+  int rc = turbo_flow_pause(flow);
+  if (rc != SALTS_OK) return rc;
+  for (;;) {
+    size_t subscriptions = 0u;
+    uint32_t active;
+    salts_mutex_lock(&flow->runtime_mutex);
+    if (flow->state != TURBO_FLOW_STATE_STARTED ||
+        flow->admission_state != FLOW_ADMISSION_PAUSED) {
+      salts_mutex_unlock(&flow->runtime_mutex);
+      return SALTS_ESHUTDOWN;
+    }
+    /* Derive idle-subscription allowance from the sole run registry. Lifetime
+     * accounting is preserved for public drain; every managed value and async
+     * publication owns an additional count that this allowance cannot exclude.
+     * Detach removes the registry entry before releasing its lifetime count,
+     * which can only make this wait temporarily more conservative. O(active runs). */
+    for (size_t i = 0u; i < vec_size(&flow->active_runs); ++i) {
+      turbo_flow_run_t *const *slot = vec_at_const(&flow->active_runs, i);
+      if (slot && *slot && (*slot)->managed_source) ++subscriptions;
+    }
+    active = flow->active_publishes;
+    salts_mutex_unlock(&flow->runtime_mutex);
+    if (active < subscriptions) return SALTS_EPROTO;
+    if (active == subscriptions) return SALTS_OK;
+    if (timeout_ms != UINT64_MAX &&
+        (salts_hrtime() - started) / UINT64_C(1000000) >= timeout_ms)
+      return SALTS_ETIMEDOUT;
+    salts_sleep_ms(1u);
+  }
 }
 
 static int flow_run_result_valid(const turbo_flow_run_result_t *result) {

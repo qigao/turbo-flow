@@ -530,7 +530,7 @@ int flow_durable_buffers_prepare_retire(turbo_flow_t *flow, uint64_t timeout_ms)
     }
   }
   if (ordered != count) { rc = SALTS_EPROTO; goto done; }
-  rc = turbo_flow_drain(flow, flow_durable_remaining_ms(started, timeout_ms));
+  rc = flow_run_prepare_buffer_retire(flow, flow_durable_remaining_ms(started, timeout_ms));
   if (rc != SALTS_OK) goto done;
   for (size_t i = 0u; i < count; ++i) {
     for (size_t j = 0u; j < binding_count; ++j) {

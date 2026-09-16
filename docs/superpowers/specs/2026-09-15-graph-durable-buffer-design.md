@@ -333,6 +333,11 @@ leave their current region. The compiler already rejects stage cycles. Visit dur
 cuts in upstream-to-downstream DAG order, closing and draining each provider before
 closing the next downstream provider. Closing all providers first is invalid for chained
 buffers: accepted upstream records still need normal admission into the next cut.
+An idle managed Source subscription is not an accepted execution region. Each managed
+value is fenced by ordinary admission and owns an additional execution count; async
+publication counts remain until terminal completion. The retirement-only wait derives
+managed subscription lifetime counts from the run registry and excludes only those
+lifetimes, preserving public Graph drain semantics and keeping Source owners live.
 Buffer-origin drain alone may run while ordinary admission is paused; Graph active-run
 and async-completion accounting still applies. A shared timeout budget bounds the drain.
 
