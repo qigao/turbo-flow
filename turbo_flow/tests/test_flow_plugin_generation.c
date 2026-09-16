@@ -281,6 +281,7 @@ static void check_expired_managed_source_retirement(int pending) {
   turbo_flow_durable_buffer_binding_t *binding = NULL;
   turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
   turbo_flow_run_result_t run = TURBO_FLOW_RUN_RESULT_INIT;
+  turbo_flow_runtime_snapshot_t runtime = {0};
   generation_owner_observer_t *observer;
   check_equal(flow_plugin_generation_test_open(&context, FLOW_PLUGIN_GENERATION_FIXTURE_DURABLE, &pe, &ce), SALTS_OK);
   check_equal(flow_plugin_generation_test_replace_documents(&context, yaml, sizeof(yaml)-1u,
@@ -305,6 +306,13 @@ static void check_expired_managed_source_retirement(int pending) {
   check_equal(turbo_flow_run_wait(observer->source_run, 1000u, &run), SALTS_ETIMEDOUT);
   check_equal(run.state, TURBO_FLOW_RUN_FAILED);
   check_equal(run.status, SALTS_ETIMEDOUT);
+  /* Terminal notification precedes accounting release; observe the released count. */
+  for (size_t i=0u; i<1000u; ++i) {
+    check_equal(turbo_flow_runtime_snapshot(turbo_flow_plugin_generation_flow(generation), &runtime), SALTS_OK);
+    if (runtime.active_publishes == (uint32_t)pending) break;
+    salts_sleep_ms(1u);
+  }
+  check_equal(runtime.active_publishes, (uint32_t)pending);
   if (pending) {
     /* If the bug reaches owner quiesce, fail finitely rather than hanging in stop. */
     observer->block_quiesce = 1;
