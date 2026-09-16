@@ -177,14 +177,15 @@ spec("configured bounded memory durable resource") {
       size_t count = 0u;
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(publish(flow), SALTS_OK);
-      for (size_t i=0u; i<POLL_ATTEMPTS && atomic_load(&f.delivered)==0u; ++i) {
+      for (size_t i=0u; i<POLL_ATTEMPTS && count==0u; ++i) {
         check_equal(turbo_flow_plugin_generation_poll(f.generation, 0u, &e), SALTS_OK);
-        salts_sleep_ms(1u);
+        history = (turbo_flow_inbox_history_entry_t)TURBO_FLOW_INBOX_HISTORY_ENTRY_INIT;
+        check_equal(turbo_flow_durable_buffer_scan_history(
+                        flow, "intake.store", 0u, &history, 1u, &count), SALTS_OK);
+        if (count == 0u) salts_sleep_ms(1u);
       }
       check_equal(atomic_load(&f.delivered), (size_t)1u);
       check_equal(publish(flow), SALTS_ENOSPC);
-      check_equal(turbo_flow_durable_buffer_scan_history(
-                      flow, "intake.store", 0u, &history, 1u, &count), SALTS_OK);
       check_equal(count, (size_t)1u);
       check_equal(history.kind, TURBO_FLOW_INBOX_TERMINAL_COMPLETED);
       check_equal(turbo_flow_durable_buffer_forget(
