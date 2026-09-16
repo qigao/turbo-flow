@@ -248,6 +248,12 @@ spec("configured file-backed TurboDB durable resource") {
       turbo_flow_config_error_t e = TURBO_FLOW_CONFIG_ERROR_INIT;
       check_equal(p->preflight(p->ctx, f.resolved, "intake.store", &e), SALTS_OK);
       check_equal(scalar(&f, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"), (int64_t)0);
+      char generated_yaml[YAML_BYTES];
+      replace_field(&f, "identity_mode: stable_required", "identity_mode: generated",
+                    generated_yaml);
+      resolve(&f, generated_yaml);
+      check_equal(p->preflight(p->ctx, f.resolved, "intake.store", &e), SALTS_OK);
+      resolve(&f, f.yaml);
       for (size_t i=0u; i<sizeof(cases)/sizeof(cases[0]); ++i) {
         char yaml[YAML_BYTES]; replace_field(&f, cases[i].before, cases[i].after, yaml); resolve(&f, yaml);
         check_not_equal(p->preflight(p->ctx, f.resolved, "intake.store", &e), SALTS_OK);

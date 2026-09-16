@@ -89,7 +89,11 @@ int durable_turbodb_config_read(const turbo_flow_resolved_config_t *resolved, co
   if (values[5] > values[2]) return fail(error, SALTS_ERANGE, name, numbers[5]);
   rc = get_text(&fields, name, "identity_mode", identity, sizeof(identity), error);
   if (rc != SALTS_OK) return rc;
-  if (strcmp(identity, "stable_required"))
+  if (!strcmp(identity, "generated"))
+    out->identity_mode = TURBO_FLOW_DURABLE_IDENTITY_GENERATED;
+  else if (!strcmp(identity, "stable_required"))
+    out->identity_mode = TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED;
+  else
     return fail(error, SALTS_EINVAL, name, "identity_mode");
   rc = get_text(&fields, name, "filename", out->filename, sizeof(out->filename), error);
   if (rc != SALTS_OK) return rc;
@@ -101,7 +105,6 @@ int durable_turbodb_config_read(const turbo_flow_resolved_config_t *resolved, co
   rc = get_text(&fields, name, "open_mode", open_mode, sizeof(open_mode), error);
   if (rc != SALTS_OK) return rc;
   if (strcmp(open_mode, "exclusive")) return fail(error, SALTS_ENOTSUP, name, "open_mode");
-  out->identity_mode = TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED;
   out->max_message_bytes = (size_t)values[1];
   out->inbox = turbo_flow_turbodb_inbox_config_default();
   out->inbox.namespace_name = out->namespace_name;

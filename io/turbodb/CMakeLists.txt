@@ -18,19 +18,19 @@ target_link_libraries(
   PUBLIC TurboFlow::Graph Orm::C Salts::CFlow
   PRIVATE Salts::CSTL)
 
-add_library(tf_turbodb_durable_plugin SHARED
+add_library(tf_turbodb_plugin SHARED
   src/turbo_flow_turbodb_durable_plugin.c
   src/turbo_flow_turbodb_durable_config.c
   src/turbo_flow_turbodb_durable_internal.h)
-cmake_config_target(tf_turbodb_durable_plugin FOLDER "io/turbodb")
-target_compile_definitions(tf_turbodb_durable_plugin PRIVATE TURBO_FLOW_PLUGIN_BUILD)
-target_link_libraries(tf_turbodb_durable_plugin
+cmake_config_target(tf_turbodb_plugin FOLDER "io/turbodb")
+target_compile_definitions(tf_turbodb_plugin PRIVATE TURBO_FLOW_PLUGIN_BUILD)
+target_link_libraries(tf_turbodb_plugin
   PRIVATE TurboFlow::Product TurboFlow::TurboDbAdapter)
-set_target_properties(tf_turbodb_durable_plugin PROPERTIES
+set_target_properties(tf_turbodb_plugin PROPERTIES
   C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 
 install(FILES include/turbo_flow_turbodb.h DESTINATION include)
-install(TARGETS tf_turbodb_durable_plugin
+install(TARGETS tf_turbodb_plugin
   RUNTIME DESTINATION bin COMPONENT TurboDbDurable
   LIBRARY DESTINATION lib COMPONENT TurboDbDurable)
 
