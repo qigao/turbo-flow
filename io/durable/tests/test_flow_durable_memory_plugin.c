@@ -164,6 +164,42 @@ spec("configured bounded memory durable resource") {
     }
     close_fixture(&f);
   }
+  it("releases terminal history only through an explicit resource operator action") {
+    fixture_t f; open_fixture(&f, graph_text);
+    char yaml[YAML_BYTES];
+    replace_field("max_records: 2", "max_records: 1", yaml);
+    resolve(&f, yaml);
+    int rc = create_generation(&f); check_equal(rc, SALTS_OK);
+    if (rc == SALTS_OK) {
+      turbo_flow_t *flow = turbo_flow_plugin_generation_flow(f.generation);
+      turbo_flow_config_error_t e = TURBO_FLOW_CONFIG_ERROR_INIT;
+      turbo_flow_inbox_history_entry_t history = TURBO_FLOW_INBOX_HISTORY_ENTRY_INIT;
+      size_t count = 0u;
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(publish(flow), SALTS_OK);
+      for (size_t i=0u; i<POLL_ATTEMPTS && atomic_load(&f.delivered)==0u; ++i) {
+        check_equal(turbo_flow_plugin_generation_poll(f.generation, 0u, &e), SALTS_OK);
+        salts_sleep_ms(1u);
+      }
+      check_equal(atomic_load(&f.delivered), (size_t)1u);
+      check_equal(publish(flow), SALTS_ENOSPC);
+      check_equal(turbo_flow_durable_buffer_scan_history(
+                      flow, "intake.store", 0u, &history, 1u, &count), SALTS_OK);
+      check_equal(count, (size_t)1u);
+      check_equal(history.kind, TURBO_FLOW_INBOX_TERMINAL_COMPLETED);
+      check_equal(turbo_flow_durable_buffer_forget(
+                      flow, "intake.store", history.record_id), SALTS_OK);
+      check_equal(publish(flow), SALTS_OK);
+      for (size_t i=0u; i<POLL_ATTEMPTS && atomic_load(&f.delivered)==1u; ++i) {
+        check_equal(turbo_flow_plugin_generation_poll(f.generation, 0u, &e), SALTS_OK);
+        salts_sleep_ms(1u);
+      }
+      check_equal(atomic_load(&f.delivered), (size_t)2u);
+      check_equal(turbo_flow_plugin_generation_destroy(f.generation, TEST_TIMEOUT_MS, &e), SALTS_OK);
+      f.generation = NULL;
+    }
+    close_fixture(&f);
+  }
   it("rolls back an earlier memory owner on later materialization or compile failure") {
     static const char *const graphs[] = {
       "source input\nbuffer intake resource intake.store\n"
