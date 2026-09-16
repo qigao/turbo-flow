@@ -1,0 +1,56 @@
+name: Task 4 apply provider-neutral durable admission
+
+on:
+  push:
+    branches: [feat/127-graph-durable-buffer]
+    paths:
+      - '.github/workflows/task4-apply-production.yml'
+      - '.github/ci/task4-production.patch'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply-production:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact bootstrap head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply verified production patch
+        id: apply
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(sha256sum .github/ci/task4-production.patch | awk '{print $1}')" = "7235d565825db2170abc0c49b4447cd36c2acd01216383c987f4e9045fb62e59"
+          git apply --check .github/ci/task4-production.patch
+          git apply --index .github/ci/task4-production.patch
+          git rm .github/ci/task4-production.patch .github/workflows/task4-apply-production.yml
+          git diff --cached --check
+          test "$(git hash-object turbo_flow/include/turbo_flow_durable_buffer.h)" = "679d361ec5ecd25a1fe1a087f551eff917095ef3"
+          test "$(git hash-object turbo_flow/src/flow_completion.c)" = "6c7fd940b75bcf5d2ce41a880d248e6bc82723fc"
+          test "$(git hash-object turbo_flow/src/flow_core.c)" = "164fe301a8dbea876359aeaaf9f00f83c82b8525"
+          test "$(git hash-object turbo_flow/src/flow_durable_buffer.c)" = "fec6ec9794e45c207074d4bdab5741897c119b74"
+          test "$(git hash-object turbo_flow/src/flow_internal.h)" = "8c632a557b4fdf5eaff05a3ea5462af408e2a8fe"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(graph): add provider-neutral durable admission"
+          production_sha="$(git rev-parse HEAD)"
+          git push origin HEAD:feat/127-graph-durable-buffer
+          echo "production_sha=$production_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch exact-head Task 4 validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          gh workflow run task4-runtime-focused.yml --ref feat/127-graph-durable-buffer
+          echo "production_sha=${{ steps.apply.outputs.production_sha }}"
