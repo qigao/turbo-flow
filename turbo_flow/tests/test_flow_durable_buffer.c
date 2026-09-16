@@ -24,6 +24,46 @@ static int durable_buffer_sink_consume(void *ctx, turbo_flow_t *flow,
   return SALTS_OK;
 }
 
+typedef struct durable_buffer_binding_fixture_s {
+  turbo_flow_inbox_t inbox;
+  turbo_flow_durable_buffer_binding_t *binding;
+} durable_buffer_binding_fixture_t;
+
+static int durable_buffer_bind_memory(turbo_flow_t *flow, const char *resource_name,
+                                      durable_buffer_binding_fixture_t *fixture) {
+  turbo_flow_inbox_memory_config_t inbox_config = turbo_flow_inbox_memory_config_default();
+  turbo_flow_durable_buffer_binding_config_t binding_config =
+      TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
+  int rc;
+
+  if (!flow || !resource_name || !fixture) return SALTS_EINVAL;
+  fixture->inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
+  fixture->binding = NULL;
+  rc = turbo_flow_inbox_memory_create(&inbox_config, &fixture->inbox);
+  if (rc != SALTS_OK) return rc;
+  binding_config.resource_name = resource_name;
+  binding_config.inbox = &fixture->inbox;
+  rc = turbo_flow_durable_buffer_bind(flow, &binding_config, &fixture->binding);
+  if (rc != SALTS_OK) {
+    (void)turbo_flow_inbox_destroy(&fixture->inbox);
+    fixture->inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
+  }
+  return rc;
+}
+
+static void durable_buffer_binding_fixture_cleanup(durable_buffer_binding_fixture_t *fixture) {
+  if (!fixture) return;
+  if (fixture->binding) {
+    (void)turbo_flow_durable_buffer_unbind(fixture->binding);
+    fixture->binding = NULL;
+  }
+  if (fixture->inbox.ops) {
+    (void)turbo_flow_inbox_close(&fixture->inbox);
+    (void)turbo_flow_inbox_destroy(&fixture->inbox);
+  }
+  fixture->inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
+}
+
 static turbo_flow_t *durable_buffer_compile_graph(size_t *sink_calls) {
   static const char graph[] =
       "buffer intake resource intake.store\n"
@@ -116,8 +156,9 @@ spec("Graph durable buffer DSL") {
     turbo_flow_destroy(flow);
   }
 
-  it("compiles a buffer as a non-executor execution cut") {
+  it("compiles a bound buffer as a non-executor execution cut") {
     size_t sink_calls = 0u;
+    durable_buffer_binding_fixture_t fixture = {0};
     turbo_flow_t *flow = durable_buffer_compile_graph(&sink_calls);
     int source_index = turbo_flow_find_stage(flow, "telemetry");
     int buffer_index = turbo_flow_find_stage(flow, "intake");
@@ -127,6 +168,7 @@ spec("Graph durable buffer DSL") {
     check_true(source_index >= 0);
     check_true(buffer_index >= 0);
     check_true(sink_index >= 0);
+    check_equal(durable_buffer_bind_memory(flow, "intake.store", &fixture), SALTS_OK);
     rc = turbo_flow_compile(flow);
     check_equal(rc, SALTS_OK);
     if (rc == SALTS_OK) {
@@ -154,11 +196,13 @@ spec("Graph durable buffer DSL") {
       check_true((buffer_semantics->barriers & FLOW_LOWERING_BARRIER_SETTLEMENT) != 0u);
     }
 
+    durable_buffer_binding_fixture_cleanup(&fixture);
     turbo_flow_destroy(flow);
   }
 
-  it("stops an execution region at a reached buffer but can resume from that buffer") {
+  it("stops an execution region at a reached bound buffer but can resume from that buffer") {
     size_t sink_calls = 0u;
+    durable_buffer_binding_fixture_t fixture = {0};
     turbo_flow_t *flow = durable_buffer_compile_graph(&sink_calls);
     int source_index = turbo_flow_find_stage(flow, "telemetry");
     int buffer_index = turbo_flow_find_stage(flow, "intake");
@@ -170,6 +214,7 @@ spec("Graph durable buffer DSL") {
     check_true(source_index >= 0);
     check_true(buffer_index >= 0);
     check_true(sink_index >= 0);
+    check_equal(durable_buffer_bind_memory(flow, "intake.store", &fixture), SALTS_OK);
     rc = turbo_flow_compile(flow);
     check_equal(rc, SALTS_OK);
     if (rc == SALTS_OK) {
@@ -189,6 +234,34 @@ spec("Graph durable buffer DSL") {
       check_equal(reachable[sink_index], 1);
     }
 
+    durable_buffer_binding_fixture_cleanup(&fixture);
+    turbo_flow_destroy(flow);
+  }
+
+  it("rejects compile when a durable buffer resource is unbound") {
+    size_t sink_calls = 0u;
+    turbo_flow_t *flow = durable_buffer_compile_graph(&sink_calls);
+
+    check_not_equal(turbo_flow_compile(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("rejects one durable binding shared by multiple buffer stages") {
+    static const char graph[] =
+        "buffer intake resource shared.store\n"
+        "buffer archive resource shared.store\n"
+        "source telemetry\n"
+        "stage main {\n"
+        "  telemetry -> intake\n"
+        "  telemetry -> archive\n"
+        "}\n";
+    durable_buffer_binding_fixture_t fixture = {0};
+    turbo_flow_t *flow = durable_buffer_parse(graph);
+
+    check_equal(durable_buffer_bind_memory(flow, "shared.store", &fixture), SALTS_OK);
+    check_not_equal(turbo_flow_compile(flow), SALTS_OK);
+
+    durable_buffer_binding_fixture_cleanup(&fixture);
     turbo_flow_destroy(flow);
   }
 
