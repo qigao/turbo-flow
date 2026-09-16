@@ -143,7 +143,7 @@ At bind time snapshot Inbox provider generation. For each generated-mode admissi
 
 ```text
 source_id       = configured buffer stage name
-admission_id    = "g<provider-generation>:<local-sequence>"
+admission_id    = "g<provider-generation>:<binding-uuid>:<local-sequence>"
 source_sequence = local-sequence
 correlation     = empty
 ```
@@ -465,3 +465,19 @@ One exact head must prove:
 - provider-neutral conformance, Debug/ASan, Release, install/package, ABI/export, and no-secret compile-contract gates have fresh exact-head evidence.
 
 Only after #127 is green should #129 replace `ProtocolNetworkIntake -> Inbox -> InboxSource` with the generic durable-buffer boundary. #128 may then scale drain concurrency without changing #127 ownership/settlement semantics.
+
+### Task 4 admission boundary correction (2026-09-16)
+
+RED head `17b6bc01b5ba64c07a15c8e8e6eebf0102d71c19`: public compile run
+35067314312 / job 104700441378 passed; runtime run 35067310947 / job
+104700431505 reproduced seven failing admission cases (9 passed). First failure:
+projection with descriptor but no canonical payload was admitted instead of ENOTSUP.
+Additional failures cover an invisible active result claim on an unprojected message,
+stale generation/handle, restart validation, rebind ID reuse, and provider aliases.
+
+Generated bindings now allocate a Salts UUID namespace at bind time, failing on
+entropy errors. Generation plus local sequence alone collided after rebind and
+incorrectly deduplicated a new record. The namespace is an opaque admission-ID
+component, not a new persisted field or a cross-process deduplication guarantee.
+Provider identity and generation are checked at compile/start/admission. This is
+not an atomic takeover fence: that remains the provider's responsibility.

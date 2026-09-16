@@ -1,6 +1,7 @@
 #include "flow_internal.h"
 
 #include "turbo_flow_projection.h"
+#include "salts_uuid.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -32,6 +33,19 @@ flow_durable_buffer_find_binding(const turbo_flow_t *flow, const char *resource_
   return NULL;
 }
 
+/* The caller keeps the borrowed handle immutable. Providers must fence takeover
+ * atomically with admission; this snapshot detects already-stale bindings. */
+static int flow_durable_buffer_validate_provider(const turbo_flow_durable_buffer_binding_t *binding) {
+  turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  int rc;
+  if (!binding || !binding->inbox) return SALTS_EINVAL;
+  if (binding->inbox->ops != binding->provider_ops ||
+      binding->inbox->ctx != binding->provider_ctx) return SALTS_ECANCELED;
+  rc = turbo_flow_inbox_snapshot(binding->inbox, &snapshot);
+  if (rc != SALTS_OK) return rc;
+  return snapshot.generation == binding->provider_generation ? SALTS_OK : SALTS_ECANCELED;
+}
+
 int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow) {
   if (!flow) return SALTS_EINVAL;
 
@@ -55,6 +69,11 @@ int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow) {
     if (binding->stage_index != SIZE_MAX) {
       return flow_set_error_keep_state(flow, SALTS_EINVAL, stage->line, stage->column,
                                        "durable buffer binding must identify exactly one buffer");
+    }
+    int rc = flow_durable_buffer_validate_provider(binding);
+    if (rc != SALTS_OK) {
+      return flow_set_error_keep_state(flow, rc, stage->line, stage->column,
+                                       "durable buffer provider binding is stale or unavailable");
     }
     binding->stage_index = i;
   }
@@ -132,7 +151,7 @@ static int flow_durable_buffer_encode_record(turbo_flow_durable_buffer_binding_t
 
   descriptor = turbo_flow_msg_content_descriptor(message);
   projection = turbo_flow_msg_projection(message, NULL);
-  if (projection && !descriptor) return SALTS_ENOTSUP;
+  if (projection && (!descriptor || message->payload.len == 0u)) return SALTS_ENOTSUP;
 
   turbo_flow_inbox_record_init(record);
   if (descriptor) {
@@ -160,8 +179,8 @@ static int flow_durable_buffer_encode_record(turbo_flow_durable_buffer_binding_t
     if (tstr_len(stage->name) > TURBO_FLOW_DURABLE_SOURCE_ID_MAX) return SALTS_ERANGE;
     rc = flow_durable_buffer_next_sequence(binding, &sequence);
     if (rc != SALTS_OK) return rc;
-    count = snprintf(generated_admission, generated_admission_capacity, "g%" PRIu64 ":%" PRIu64,
-                     binding->provider_generation, sequence);
+    count = snprintf(generated_admission, generated_admission_capacity, "g%" PRIu64 ":%s:%" PRIu64,
+                     binding->provider_generation, binding->admission_namespace, sequence);
     if (count < 0 || (size_t)count >= generated_admission_capacity) return SALTS_ERANGE;
     record->source_id = vstr_from_buf(stage->name, tstr_len(stage->name));
     record->admission_id = vstr_from_buf(generated_admission, (size_t)count);
@@ -204,6 +223,13 @@ int turbo_flow_durable_buffer_bind(
   }
   if (flow_durable_buffer_find_binding(flow, config->resource_name, NULL)) return SALTS_EALREADY;
 
+  for (size_t i = 0u; i < vec_size(&flow->durable_buffer_bindings); ++i) {
+    turbo_flow_durable_buffer_binding_t *const *slot =
+        (turbo_flow_durable_buffer_binding_t *const *)vec_at_const(&flow->durable_buffer_bindings, i);
+    if (slot && *slot && (*slot)->bound && (*slot)->provider_ops == config->inbox->ops &&
+        (*slot)->provider_ctx == config->inbox->ctx) return SALTS_EALREADY;
+  }
+
   rc = turbo_flow_inbox_snapshot(config->inbox, &snapshot);
   if (rc != SALTS_OK) return rc;
   if (snapshot.generation == 0u) return SALTS_EPROTO;
@@ -215,6 +241,19 @@ int turbo_flow_durable_buffer_bind(
     free(binding);
     return SALTS_ENOMEM;
   }
+  if (config->identity_mode == TURBO_FLOW_DURABLE_IDENTITY_GENERATED) {
+    salts_uuid_t uuid;
+    rc = salts_uuid_v4_generate(&uuid);
+    if (rc == SALTS_OK)
+      rc = salts_uuid_format(&uuid, binding->admission_namespace, sizeof(binding->admission_namespace));
+    if (rc != SALTS_OK) {
+      tstr_freep(&binding->resource_name);
+      free(binding);
+      return rc;
+    }
+  }
+  binding->provider_ops = config->inbox->ops;
+  binding->provider_ctx = config->inbox->ctx;
   binding->flow = flow;
   binding->inbox = config->inbox;
   binding->identity_mode = config->identity_mode;
@@ -294,6 +333,11 @@ int flow_durable_buffer_admit_stage(turbo_flow_t *flow, uint32_t stage_index,
                                      "durable buffer binding does not match compiled stage");
   }
 
+  rc = flow_durable_buffer_validate_provider(binding);
+  if (rc != SALTS_OK) {
+    return flow_set_error_keep_state(flow, rc, stage->line, stage->column,
+                                     "durable buffer provider binding is stale or unavailable");
+  }
   memset(generated_admission, 0, sizeof(generated_admission));
   rc = flow_durable_buffer_encode_record(binding, stage, message, &record, generated_admission,
                                          sizeof(generated_admission));

@@ -464,6 +464,9 @@ struct turbo_flow_durable_buffer_binding_s {
   turbo_flow_durable_identity_mode_t identity_mode;
   size_t max_message_bytes;
   uint64_t provider_generation;
+  const turbo_flow_inbox_ops_v2_t *provider_ops;
+  void *provider_ctx;
+  char admission_namespace[37]; /* formatted Salts UUID, runtime binding metadata */
   size_t stage_index;
   atomic_uint_fast64_t next_sequence;
   int bound;

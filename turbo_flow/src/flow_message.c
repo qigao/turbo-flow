@@ -559,14 +559,23 @@ int turbo_flow_msg_result_claim(turbo_flow_msg_t *msg, turbo_flow_projection_own
   claim = (turbo_flow_result_claim_t *)calloc(1, sizeof(*claim));
   prepared = (flow_msg_projection_t *)calloc(1, sizeof(*prepared));
   if (!claim || !prepared) { free(claim); free(prepared); flow_projection_owner_release(owner); return SALTS_ENOMEM; }
-  if (source) *prepared = *source;
-  else prepared->magic = FLOW_MSG_PROJECTION_MAGIC;
+  /* A claim must be visible even on a message without a prior projection. */
+  if (!source) {
+    source = (flow_msg_projection_t *)calloc(1, sizeof(*source));
+    if (!source) {
+      free(claim); free(prepared); flow_projection_owner_release(owner);
+      return SALTS_ENOMEM;
+    }
+    source->magic = FLOW_MSG_PROJECTION_MAGIC;
+    msg->_content_handle = source;
+  }
+  *prepared = *source;
   if (prepared->owns_descriptor) prepared->descriptor = &prepared->owned_descriptor;
   prepared->result_schema = config->schema; prepared->result_data = data;
   prepared->result_clone = config->clone; prepared->result_destroy = config->destroy;
   prepared->result_ctx = config->ctx; prepared->result_owner = owner;
   claim->msg = msg; claim->original = source; claim->prepared = prepared; claim->owner = owner;
-  if (source) source->claim_active = 1;
+  source->claim_active = 1;
   *out = claim;
   return SALTS_OK;
 }

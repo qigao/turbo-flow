@@ -249,6 +249,13 @@ spec("Graph durable admission boundaries") {
     check_equal(turbo_flow_projection_owner_create(&config, &owner), SALTS_OK);
     check_equal(turbo_flow_msg_result_claim(&msg, owner, &cmeta_data_int, &claim), SALTS_OK);
     check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_EBUSY);
+    turbo_flow_msg_result_abort(&claim);
+    check_null(claim);
+    turbo_flow_msg_t copy;
+    check_equal(turbo_flow_msg_clone(&copy, &msg), SALTS_OK);
+    turbo_flow_msg_cleanup(&copy);
+    check_equal(turbo_flow_msg_result_claim(&msg, owner, &cmeta_data_int, &claim), SALTS_OK);
+    check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_EBUSY);
     check_equal(turbo_flow_msg_result_commit(&claim, &value), SALTS_OK);
     check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_ENOTSUP);
     check_equal(f.calls, 0u); check_storage(&f, 0u);

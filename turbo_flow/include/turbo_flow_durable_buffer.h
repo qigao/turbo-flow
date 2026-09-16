@@ -57,7 +57,13 @@ typedef struct turbo_flow_durable_buffer_binding_config_s {
 /**
  * Bind one configured durable-buffer resource to a caller-owned Inbox provider.
  * The binding borrows `inbox`; provider ownership and lifetime remain with the caller.
- * Keep the provider alive until unbind or Flow destruction/reset without keep_registry.
+ * Keep the provider alive and its handle immutable until unbind or Flow destruction/
+ * reset without keep_registry. Compile/start/admission reject a changed handle or
+ * generation with ECANCELED; snapshot errors propagate unchanged. Providers remain
+ * responsible for atomically fencing takeover against admission.
+ * Aliases of the same provider (ops/ctx) within one Flow are rejected with EALREADY.
+ * Generated IDs use a fresh binding UUID namespace plus generation and sequence;
+ * entropy failure rejects bind. Stable upstream identities are unchanged.
  * Configure before compile. Each buffer must resolve to a bound resource, and two
  * buffers cannot share a binding; compile/start reject these cases with ENOENT/EINVAL.
  * Serialize bind/unbind with Flow lifecycle operations. Successful bind returns a

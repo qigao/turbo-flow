@@ -161,6 +161,13 @@ Exact replay of the same stable identity + complete record returns the original 
 
 If no stable upstream identity exists, the buffer generates a new bounded admission identity before its first provider call and reuses that identity for every retry of that admission attempt.
 
+Each generated binding uses a fresh Salts UUID namespace together with provider
+generation and a checked local sequence (`g<generation>:<binding-uuid>:<sequence>`).
+This avoids identity reuse after unbind/rebind or across Flow instances; entropy
+failure rejects bind. Stable identity mode is unchanged. Provider pointers remain
+runtime-only metadata. A projection requires canonical payload bytes; neither an
+active result claim nor a committed result may cross admission.
+
 Properties:
 
 - retries of the same in-process admission attempt reuse the same identity;
