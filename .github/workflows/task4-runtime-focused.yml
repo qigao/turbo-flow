@@ -45,6 +45,16 @@ jobs:
           git diff --check HEAD^ HEAD
           git rev-parse HEAD | tee "$RUNNER_TEMP/task4-runtime-evidence/head.txt"
 
+      - name: Export exact Task 4 source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: task4-source-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 1
+          path: |
+            turbo_flow/include/
+            turbo_flow/src/
+            turbo_flow/tests/
+
       - name: Checkout pinned Salts
         uses: actions/checkout@v4
         with:
@@ -182,6 +192,3 @@ jobs:
           path: |
             ${{ runner.temp }}/task4-runtime-evidence/
             build/task4-runtime/CMakeCache.txt
-            turbo_flow/include/
-            turbo_flow/src/
-            turbo_flow/tests/
