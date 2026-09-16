@@ -265,6 +265,32 @@ spec("Graph durable buffer DSL") {
     turbo_flow_destroy(flow);
   }
 
+  it("resolves independent buffer bindings again after a stopped recompile") {
+    static const char graph[] =
+        "buffer intake resource intake.store\n"
+        "buffer archive resource archive.store\n"
+        "source telemetry\n"
+        "stage main {\n"
+        "  telemetry -> intake\n"
+        "  telemetry -> archive\n"
+        "}\n";
+    durable_buffer_binding_fixture_t intake = {0};
+    durable_buffer_binding_fixture_t archive = {0};
+    turbo_flow_t *flow = durable_buffer_parse(graph);
+
+    check_equal(durable_buffer_bind_memory(flow, "intake.store", &intake), SALTS_OK);
+    check_equal(durable_buffer_bind_memory(flow, "archive.store", &archive), SALTS_OK);
+    for (size_t i = 0u; i < 2u; ++i) {
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+    }
+
+    durable_buffer_binding_fixture_cleanup(&archive);
+    durable_buffer_binding_fixture_cleanup(&intake);
+    turbo_flow_destroy(flow);
+  }
+
   it("rejects start after its compiled durable binding is removed") {
     size_t sink_calls = 0u;
     durable_buffer_binding_fixture_t fixture = {0};

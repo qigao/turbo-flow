@@ -32,6 +32,35 @@ flow_durable_buffer_find_binding(const turbo_flow_t *flow, const char *resource_
   return NULL;
 }
 
+int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow) {
+  if (!flow) return SALTS_EINVAL;
+
+  /* Rebuild derived stage identities after parse/reset or a stopped recompile. */
+  for (size_t i = 0u; i < vec_size(&flow->durable_buffer_bindings); ++i) {
+    turbo_flow_durable_buffer_binding_t **slot =
+        (turbo_flow_durable_buffer_binding_t **)vec_at(&flow->durable_buffer_bindings, i);
+    if (slot && *slot) (*slot)->stage_index = SIZE_MAX;
+  }
+  for (size_t i = 0u; i < vec_size(&flow->stages); ++i) {
+    const flow_stage_plan_impl_t *stage =
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
+    turbo_flow_durable_buffer_binding_t *binding;
+
+    if (!stage || !stage->is_buffer) continue;
+    binding = flow_durable_buffer_find_binding(flow, stage->resource_name, NULL);
+    if (!binding || !binding->inbox) {
+      return flow_set_error_keep_state(flow, SALTS_ENOENT, stage->line, stage->column,
+                                       "durable buffer resource is not bound");
+    }
+    if (binding->stage_index != SIZE_MAX) {
+      return flow_set_error_keep_state(flow, SALTS_EINVAL, stage->line, stage->column,
+                                       "durable buffer binding must identify exactly one buffer");
+    }
+    binding->stage_index = i;
+  }
+  return SALTS_OK;
+}
+
 static int flow_durable_buffer_next_sequence(turbo_flow_durable_buffer_binding_t *binding,
                                              uint64_t *sequence_out) {
   uint_fast64_t observed;
@@ -191,6 +220,7 @@ int turbo_flow_durable_buffer_bind(
   binding->identity_mode = config->identity_mode;
   binding->max_message_bytes = config->max_message_bytes;
   binding->provider_generation = snapshot.generation;
+  binding->stage_index = SIZE_MAX;
   atomic_init(&binding->next_sequence, 0u);
   binding->bound = 1;
 
@@ -257,6 +287,11 @@ int flow_durable_buffer_admit_stage(turbo_flow_t *flow, uint32_t stage_index,
   if (!binding || !binding->inbox) {
     return flow_set_error_keep_state(flow, SALTS_ENOENT, stage->line, stage->column,
                                      "durable buffer resource is not bound");
+  }
+
+  if (binding->stage_index != (size_t)stage_index) {
+    return flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,
+                                     "durable buffer binding does not match compiled stage");
   }
 
   memset(generated_admission, 0, sizeof(generated_admission));

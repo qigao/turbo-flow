@@ -464,6 +464,7 @@ struct turbo_flow_durable_buffer_binding_s {
   turbo_flow_durable_identity_mode_t identity_mode;
   size_t max_message_bytes;
   uint64_t provider_generation;
+  size_t stage_index;
   atomic_uint_fast64_t next_sequence;
   int bound;
 };
@@ -628,6 +629,7 @@ int flow_find_operation_provider(const turbo_flow_t *flow, const char *operation
 int flow_find_adapter(const turbo_flow_t *flow, const char *name);
 int flow_durable_buffer_admit_stage(turbo_flow_t *flow, uint32_t stage_index,
                                     const turbo_flow_msg_t *message);
+int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow);
 void flow_durable_buffer_clear_bindings(turbo_flow_t *flow);
 int flow_resource_metadata_valid(const turbo_flow_resource_metadata_t *metadata);
 int flow_resource_command_valid(const turbo_flow_resource_command_t *command);

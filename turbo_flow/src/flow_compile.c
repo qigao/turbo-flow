@@ -1256,6 +1256,8 @@ int turbo_flow_compile(turbo_flow_t *flow) {
   if (rc != SALTS_OK) return rc;
   rc = compile_validate_cycles(flow);
   if (rc != SALTS_OK) return rc;
+  rc = flow_durable_buffer_resolve_bindings(flow);
+  if (rc != SALTS_OK) return rc;
   rc = compile_validate_registrations(flow);
   if (rc != SALTS_OK) return rc;
   rc = compile_resolve_operations(flow);

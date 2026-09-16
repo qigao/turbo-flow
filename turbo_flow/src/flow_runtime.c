@@ -148,6 +148,8 @@ int turbo_flow_start(turbo_flow_t *flow) {
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "compiled data plan is not available");
   }
+  reactive_rc = flow_durable_buffer_resolve_bindings(flow);
+  if (reactive_rc != SALTS_OK) return reactive_rc;
   if (flow_runtime_generation_can_advance(flow) != SALTS_OK) {
     return flow_set_error_keep_state(flow, SALTS_ERANGE, 0, 0, "runtime generation is exhausted");
   }

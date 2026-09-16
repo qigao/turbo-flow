@@ -57,13 +57,20 @@ typedef struct turbo_flow_durable_buffer_binding_config_s {
 /**
  * Bind one configured durable-buffer resource to a caller-owned Inbox provider.
  * The binding borrows `inbox`; provider ownership and lifetime remain with the caller.
+ * Keep the provider alive until unbind or Flow destruction/reset without keep_registry.
+ * Configure before compile. Each buffer must resolve to a bound resource, and two
+ * buffers cannot share a binding; compile/start reject these cases with ENOENT/EINVAL.
+ * Serialize bind/unbind with Flow lifecycle operations. Successful bind returns a
+ * Flow-owned handle in `out`; failure clears `out` without transferring Inbox ownership.
  */
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_bind(
     turbo_flow_t *flow, const turbo_flow_durable_buffer_binding_config_t *config,
     turbo_flow_durable_buffer_binding_t **out);
 
 /**
- * Remove one binding after the Flow has stopped. The Inbox remains caller-owned.
+ * Remove one binding while the Flow is not started (EBUSY otherwise).
+ * Success invalidates the handle; the Inbox remains caller-owned and is not closed.
+ * Start revalidates bindings, including when a binding was removed after compile.
  */
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_unbind(
     turbo_flow_durable_buffer_binding_t *binding);

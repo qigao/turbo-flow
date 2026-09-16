@@ -149,6 +149,8 @@ jobs:
           set -euxo pipefail
           cmake -S . -B build/task4-runtime -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=ON \
             -DBUILD_TESTING=ON \
             -DBUILD_TESTS=ON \
             -DBUILD_EXAMPLES=OFF \
