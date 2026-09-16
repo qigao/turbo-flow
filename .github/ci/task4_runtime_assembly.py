@@ -41,7 +41,7 @@ insertion = "\n".join(
         "  LIBS TurboFlow::Graph Salts::TinyTest",
         '  FOLDER "turbo_flow/tests")',
         "",
-        "foreach(_test IN ITEMS test_flow_durable_admission test_flow_inbox test_flow_inbox_source test_flow_run test_flow_operation_result test_flow_projection_owner test_flow_projection_owner_fault)",
+        "foreach(_test IN ITEMS test_flow_durable_admission test_flow_inbox test_flow_inbox_source test_flow_inbox_driver test_flow_async_terminal test_flow_run test_flow_operation_result test_flow_projection_owner test_flow_projection_owner_fault)",
         "  cmake_add_test(${_test}",
         "    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/${_test}.c",
         "    LIBS TurboFlow::Graph Salts::TinyTest",

@@ -1,4 +1,4 @@
-name: Task 4 focused durable buffer validation
+name: Durable buffer focused validation
 
 on:
   push:
@@ -26,7 +26,7 @@ env:
 
 jobs:
   focused-runtime:
-    name: Focused Graph Task 4 durable buffer test
+    name: Focused Graph durable buffer and shared driver tests
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -164,17 +164,17 @@ jobs:
             -DVCPKG_INSTALLED_DIR="$RUNNER_TEMP/vcpkg-installed" \
             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/configure.log"
 
-      - name: Build Task 4 durable buffer test
+      - name: Build durable buffer and shared driver tests
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/task4-runtime --target test_flow_durable_buffer test_flow_durable_admission test_flow_durable_identity test_flow_inbox test_flow_inbox_source test_flow_run test_flow_operation_result test_flow_projection_owner test_flow_projection_owner_fault -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
+          cmake --build build/task4-runtime --target test_flow_durable_buffer test_flow_durable_admission test_flow_durable_identity test_flow_inbox test_flow_inbox_source test_flow_inbox_driver test_flow_async_terminal test_flow_run test_flow_operation_result test_flow_projection_owner test_flow_projection_owner_fault -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
 
-      - name: Run Task 4 durable buffer test
+      - name: Run durable buffer and shared driver tests
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/task4-runtime -R '^test_flow_(durable_buffer|durable_admission|durable_identity|inbox|inbox_source|run|operation_result|projection_owner|projection_owner_fault)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
+          ctest --test-dir build/task4-runtime -R '^test_flow_(durable_buffer|durable_admission|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
 
       - name: Verify committed source remained untouched
         if: always()
