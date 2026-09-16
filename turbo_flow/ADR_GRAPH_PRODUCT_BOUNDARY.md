@@ -1,0 +1,59 @@
+# ADR: Config、Graph 与产品装配边界
+
+## 状态
+
+已采纳。
+
+## 背景
+
+历史聚合 target 同时承担配置解析、Graph runtime、provider 装配和协议产品适配，导致数据处理核心
+反向知道 wire pattern、session 与 acknowledgement 语义。这样既扩大公开 ABI，也让独立产品无法只
+把 TurboFlow 当作可选的数据处理引擎。
+
+## 决策
+
+设备协议 codec 与 Source-to-Inbox adapter 归属仓库可选的 `ingress/protocol` 集成层。
+网络 listener 由仓库外的 CNet/CHTTP 宿主适配层拥有；HTTP、WebSocket、socket 与 MQTT
+都可以实现独立的 Source 或 Sink DLL。Source 只负责 decode 并写入配置的 Inbox，显式
+Inbox Source claim 才进入 Graph；业务响应和下行发送始终属于 Sink。
+
+依赖保持单向：
+
+```text
+TurboFlow::Config <--- TurboFlow::Graph <--- TurboFlow::Product
+                              ^
+                              |
+                    external product adapter
+
+TurboFlow::Config + parsed Graph + PluginHost snapshot
+                              |
+                              v
+                 transactional Graph generation
+                              |
+                              v
+                  DLL resource/adapter vtables
+```
+
+- `Config` 只解析和校验配置，不创建 runtime 资源。
+- `Graph` 拥有 DSL、plan、message、operation、执行器和通用 settlement contract。
+- `Product` 的旧 provider registry 仅供显式 embedded consumer；Gateway 不以它作为 fallback。
+- `PluginHost` generation 在消费 parsed Graph 前完成 catalog/ref/capacity/preflight 校验；消费后任何
+  materialize/compile 失败都先销毁整张 Graph 以完成 registry shutdown/detach，再逆序销毁已转移
+  owner。
+- generation lease 覆盖 CFlow run、pending claim 与 callback；owner 逆序退休完成后才释放 DLL snapshot。
+- external-poll owner 由 generation 的控制线程入口轮转推进；一次调用只有一个 owner 获得总等待预算，
+  其余 owner 零等待。未声明 external-poll 的完整 owner 只参与生命周期，不创建隐藏 worker。
+- 插件 ABI 2.0 在 load/register 前拒绝 ABI 1.x，所有 owner 必须提供完整结构，不接受旧短前缀。
+  progress provider 仍须声明 root `TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL`；provider 必须用
+  `turbo_flow_plugin_product_owner_publish()` 尊重 caller 容量，禁止跨 DLL 整结构盲写。
+- 外部产品拥有 wire protocol、连接、session、peer、ack、重连和持久化协议状态。
+- 外部 adapter 可调用 Graph；Graph 不包含任何具体协议产品头文件、target 或 owner registry。
+- #95 已移除历史聚合 `TurboFlow::Flow` ABI；消费者按实际 API 链接最小组件。
+
+## 影响与验证
+
+公开协议专用 message sidecar 和 pattern helper 已移除。`turbo_flow_msg_t` 只携带 payload、通用执行
+元数据、content descriptor 与可选 typed projection。同步和异步 publish 只报告 graph 执行状态。
+
+验证至少覆盖：Config-only 链接、Graph 构建与测试、Product 装配、安装包消费测试，以及仓库级
+扫描确认没有外部产品源码、构建 target 或包依赖。

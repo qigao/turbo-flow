@@ -1,0 +1,127 @@
+cmake_add_test(
+  test_cnet_stream_source
+  SOURCES test_cnet_stream_source.c cnet_stream_source_header_cpp.cpp
+          stream_source_pipe_fixture.h
+  LIBS TurboFlow::CNetAdapter Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  FOLDER "io/cnet/tests")
+
+set_tests_properties(test_cnet_stream_source
+                     PROPERTIES LABELS "cnet-adapter;graph")
+
+cmake_add_test(
+  test_cnet_stream_sink
+  SOURCES test_cnet_stream_sink.c cnet_stream_source_header_cpp.cpp
+          stream_source_pipe_fixture.h
+  LIBS TurboFlow::CNetAdapter Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  FOLDER "io/cnet/tests")
+
+set_tests_properties(test_cnet_stream_sink
+                     PROPERTIES LABELS "cnet-adapter;graph")
+
+cmake_add_test(
+  test_cnet_datagram_sink
+  SOURCES test_cnet_datagram_sink.c cnet_stream_source_header_cpp.cpp
+  LIBS TurboFlow::CNetAdapter Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  FOLDER "io/cnet/tests")
+
+set_tests_properties(test_cnet_datagram_sink
+                     PROPERTIES LABELS "cnet-adapter;graph")
+
+cmake_add_test(
+  test_cnet_listener_source
+  SOURCES test_cnet_listener_source.c cnet_stream_source_header_cpp.cpp
+          listener_source_tls_fixture.h
+  LIBS TurboFlow::CNetAdapter Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  FOLDER "io/cnet/tests")
+
+set_tests_properties(test_cnet_listener_source
+                     PROPERTIES LABELS "cnet-adapter;graph")
+
+cmake_add_test(
+  test_cnet_listener_message_context
+  SOURCES test_cnet_listener_message_context.c cnet_stream_source_header_cpp.cpp
+  LIBS TurboFlow::CNetAdapter Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  FOLDER "io/cnet/tests")
+
+set_tests_properties(test_cnet_listener_message_context
+                     PROPERTIES LABELS "cnet-adapter;graph")
+
+cmake_add_test(
+  test_cnet_packet_source
+  SOURCES test_cnet_packet_source.c cnet_stream_source_header_cpp.cpp
+  LIBS TurboFlow::CNetAdapter Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  FOLDER "io/cnet/tests")
+
+set_tests_properties(test_cnet_packet_source
+                     PROPERTIES LABELS "cnet-adapter;graph")
+
+add_library(tf_cnet_packet_sink_test_support STATIC
+            ../src/turbo_flow_cnet_packet_sink.c
+            ../src/turbo_flow_cnet_test_internal.h)
+target_compile_definitions(tf_cnet_packet_sink_test_support
+                           PRIVATE TURBO_FLOW_CNET_INTERNAL_TESTING)
+target_include_directories(
+  tf_cnet_packet_sink_test_support
+  PRIVATE $<TARGET_PROPERTY:xxHash::xxhash,INTERFACE_INCLUDE_DIRECTORIES>
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_link_libraries(
+  tf_cnet_packet_sink_test_support
+  PUBLIC TurboFlow::Graph Salts::CNet Salts::CFlow Salts::CSTL)
+cmake_config_target(tf_cnet_packet_sink_test_support FOLDER "io/cnet/tests")
+
+cmake_add_test(
+  test_cnet_packet_sink
+  SOURCES test_cnet_packet_sink.c cnet_stream_source_header_cpp.cpp
+  LIBS tf_cnet_packet_sink_test_support Salts::TinyTest
+  DEFS TURBO_FLOW_CNET_INTERNAL_TESTING
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
+           ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  FOLDER "io/cnet/tests")
+
+set_tests_properties(test_cnet_packet_sink
+                     PROPERTIES LABELS "cnet-adapter;graph")
+
+cmake_add_test(
+  test_cnet_plugin
+  SOURCES test_cnet_plugin.c
+  LIBS TurboFlow::PluginHost Salts::TinyTest
+  DEFS TURBO_FLOW_CNET_PLUGIN_PATH="$<TARGET_FILE:tf_cnet_plugin>"
+  FOLDER "io/cnet/tests")
+add_dependencies(test_cnet_plugin tf_cnet_plugin)
+if(WIN32)
+  target_link_libraries(test_cnet_plugin PRIVATE ws2_32)
+endif()
+set_tests_properties(test_cnet_plugin PROPERTIES LABELS "cnet-plugin;plugin;graph")
+
+cmake_add_test(
+  test_cnet_plugin_source_snapshot
+  SOURCES test_cnet_plugin_source_snapshot.c
+  LIBS TurboFlow::PluginHost Salts::TinyTest
+  DEFS TURBO_FLOW_CNET_PLUGIN_PATH="$<TARGET_FILE:tf_cnet_plugin>"
+  FOLDER "io/cnet/tests")
+add_dependencies(test_cnet_plugin_source_snapshot tf_cnet_plugin)
+set_tests_properties(test_cnet_plugin_source_snapshot
+                     PROPERTIES LABELS "cnet-plugin;plugin;graph")
+
+cmake_add_test(test_cnet_plugin_abi
+  SOURCES ../../../tests/plugin_host_abi_test.c
+  LIBS TurboFlow::PluginHost Salts::TinyTest tf_cnet_plugin
+  FOLDER "io/cnet/tests")
+
+cmake_add_test(
+  test_cnet_adapter_benchmark_stats
+  SOURCES test_cnet_adapter_benchmark_stats.c
+          ../benchmarks/cnet_adapter_benchmark_stats.c
+  LIBS Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks
+  FOLDER "io/cnet/tests")
+
+set_tests_properties(test_cnet_adapter_benchmark_stats
+                     PROPERTIES LABELS "benchmark;cnet-adapter")

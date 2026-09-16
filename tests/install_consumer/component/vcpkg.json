@@ -1,0 +1,6 @@
+{
+  "name": "turbo-flow-component-consumer",
+  "version-string": "2.0.0",
+  "dependencies": ["boringssl", "pkgconf", "sqlite3", "xxhash", "zstd"],
+  "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"
+}

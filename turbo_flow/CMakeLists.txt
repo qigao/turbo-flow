@@ -1,0 +1,182 @@
+set(TARGET_NAME turbo_flow_graph)
+find_package(RulesForge 0.9 CONFIG REQUIRED
+             PATHS "$ENV{RULES_FORGE_ROOT}" NO_DEFAULT_PATH)
+cmake_add_grammar(TURBO_FLOW
+  LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/flow_lexer.re
+  GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/flow_grammar.y
+  FOLDER "turbo_flow/flow")
+
+cmake_add_grammar(TURBO_FLOW_EXPR
+  LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/expr_lexer.re
+  GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/expr_grammar.y
+  FOLDER "turbo_flow/expr")
+
+cmake_add_grammar(TURBO_FLOW_CONTROL
+  LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/control_lexer.re
+  GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/control_grammar.y
+  FOLDER "turbo_flow/control")
+
+cmake_add_grammar(TURBO_FLOW_SECURITY_RULE
+  LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/security_rule_lexer.re
+  FOLDER "turbo_flow/security")
+
+if(MSVC)
+  set_source_files_properties(${TURBO_FLOW_GRAMMAR_GEN} PROPERTIES COMPILE_OPTIONS "/wd4189")
+  set_source_files_properties(${TURBO_FLOW_EXPR_GRAMMAR_GEN} PROPERTIES COMPILE_OPTIONS "/wd4189")
+  set_source_files_properties(${TURBO_FLOW_CONTROL_GRAMMAR_GEN} PROPERTIES COMPILE_OPTIONS "/wd4189")
+endif()
+
+file(GLOB TURBO_FLOW_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
+list(REMOVE_ITEM TURBO_FLOW_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config_operation.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_result_domain.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c)
+set(TURBO_FLOW_HEADERS
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_export.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_durable_buffer.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_inbox.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_inbox_source.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_projection.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_domain.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_control.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_expr.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_rulesforge.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_policy.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_discovery.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config_limits.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_operation.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_generation.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_protocol.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resolved_config.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_security.h)
+
+add_library(turbo_flow_config SHARED
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config_operation.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resolved_config.h)
+cmake_config_target(
+  turbo_flow_config
+  ALIAS TurboFlow::Config
+  FOLDER "turbo_flow/config"
+  EXPORT_NAME Config)
+target_compile_definitions(turbo_flow_config PRIVATE TURBO_FLOW_BUILD)
+target_include_directories(
+  turbo_flow_config
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:include>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(turbo_flow_config PUBLIC Salts::Core
+                                        PRIVATE Salts::CYamlJsonAdapter)
+
+add_library(${TARGET_NAME} SHARED
+  ${TURBO_FLOW_SOURCES}
+  ${TURBO_FLOW_LEXER_GEN}
+  ${TURBO_FLOW_GRAMMAR_GEN}
+  ${TURBO_FLOW_EXPR_LEXER_GEN}
+  ${TURBO_FLOW_EXPR_GRAMMAR_GEN}
+  ${TURBO_FLOW_CONTROL_LEXER_GEN}
+  ${TURBO_FLOW_CONTROL_GRAMMAR_GEN}
+  ${TURBO_FLOW_SECURITY_RULE_LEXER_GEN}
+  ${TURBO_FLOW_HEADERS})
+
+add_dependencies(${TARGET_NAME}
+  ${TURBO_FLOW_LEXER_TARGET}
+  ${TURBO_FLOW_GRAMMAR_TARGET}
+  ${TURBO_FLOW_EXPR_LEXER_TARGET}
+  ${TURBO_FLOW_EXPR_GRAMMAR_TARGET})
+add_dependencies(${TARGET_NAME}
+  ${TURBO_FLOW_CONTROL_LEXER_TARGET}
+  ${TURBO_FLOW_CONTROL_GRAMMAR_TARGET})
+add_dependencies(${TARGET_NAME} ${TURBO_FLOW_SECURITY_RULE_LEXER_TARGET})
+
+cmake_config_target(
+  ${TARGET_NAME}
+  ALIAS TurboFlow::Graph
+  FOLDER "turbo_flow"
+  EXPORT_NAME Graph)
+
+target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_BUILD)
+target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_EXPR_ENABLE_JIT=1)
+
+target_include_directories(
+  ${TARGET_NAME}
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:include>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+          ${CMAKE_CURRENT_SOURCE_DIR}/parser
+          ${CMAKE_CURRENT_BINARY_DIR}
+          ${PROJECT_SOURCE_DIR}/vendor/mir)
+
+target_link_libraries(${TARGET_NAME} PUBLIC 
+  TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow Salts::CMeta RulesForge::RulesForge
+  PRIVATE Salts::DataBind Salts::JsonParser mir_static)
+
+if(BUILD_TESTING)
+  cmake_add_test(
+    test_flow_durable_identity
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_flow_durable_identity.c
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/durable_identity_header_cpp.cpp
+    LIBS TurboFlow::Graph Salts::TinyTest
+    FOLDER "turbo_flow/tests")
+  set_tests_properties(test_flow_durable_identity
+    PROPERTIES LABELS "graph;core" TIMEOUT 30)
+endif()
+
+add_library(turbo_flow_product SHARED
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
+cmake_config_target(
+  turbo_flow_product
+  ALIAS TurboFlow::Product
+  FOLDER "turbo_flow/product"
+  EXPORT_NAME Product)
+target_compile_definitions(turbo_flow_product PRIVATE TURBO_FLOW_BUILD)
+target_include_directories(
+  turbo_flow_product
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:include>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(turbo_flow_product PUBLIC TurboFlow::Graph TurboFlow::Config
+                                        PRIVATE Salts::JsonParser)
+
+add_library(turbo_flow_plugin_host SHARED
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_result_domain.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c
+  ${PROJECT_SOURCE_DIR}/ingress/protocol/common/src/flow_protocol_registry.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_operation.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_generation.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_protocol.h)
+cmake_config_target(
+  turbo_flow_plugin_host
+  ALIAS TurboFlow::PluginHost
+  FOLDER "turbo_flow/plugin"
+  EXPORT_NAME PluginHost)
+target_compile_definitions(turbo_flow_plugin_host PRIVATE TURBO_FLOW_BUILD)
+target_include_directories(
+  turbo_flow_plugin_host
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/ingress/protocol/common/include>
+         $<INSTALL_INTERFACE:include>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(turbo_flow_plugin_host
+                      PUBLIC TurboFlow::Product TurboFlow::ProtocolIngress Salts::CMeta
+                      PRIVATE Salts::CSTL ${CMAKE_DL_LIBS})
+
+install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+  add_subdirectory(benchmarks)
+endif()
