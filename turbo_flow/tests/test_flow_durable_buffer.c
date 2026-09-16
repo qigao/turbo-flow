@@ -1,5 +1,7 @@
 #include "tinytest.h"
 #include "turbo_flow.h"
+#include "turbo_flow_durable_buffer.h"
+#include "turbo_flow_inbox.h"
 #include "../src/flow_internal.h"
 
 #include <string.h>
@@ -187,6 +189,67 @@ spec("Graph durable buffer DSL") {
       check_equal(reachable[sink_index], 1);
     }
 
+    turbo_flow_destroy(flow);
+  }
+
+  it("admits at a bound durable buffer without activating downstream") {
+    static const char graph[] =
+        "buffer intake resource intake.store\n"
+        "source telemetry\n"
+        "stage downstream adapter sink\n"
+        "stage main {\n"
+        "  telemetry -> intake\n"
+        "  intake -> downstream\n"
+        "}\n";
+    char raw[] = "durable-payload";
+    turbo_flow_inbox_memory_config_t inbox_config = turbo_flow_inbox_memory_config_default();
+    turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
+    turbo_flow_durable_buffer_binding_config_t binding_config =
+        TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
+    turbo_flow_durable_buffer_binding_t *binding = NULL;
+    turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+    turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_adapter_ops_t ops;
+    turbo_flow_msg_t msg;
+    mem_buffer_t *buffer;
+    size_t sink_calls = 0u;
+    turbo_flow_t *flow = durable_buffer_parse(graph);
+
+    memset(&ops, 0, sizeof(ops));
+    ops.consume = durable_buffer_sink_consume;
+    check_equal(turbo_flow_register_adapter(flow, "sink", &ops, &sink_calls), SALTS_OK);
+    check_equal(turbo_flow_inbox_memory_create(&inbox_config, &inbox), SALTS_OK);
+
+    binding_config.resource_name = "intake.store";
+    binding_config.inbox = &inbox;
+    check_equal(turbo_flow_durable_buffer_bind(flow, &binding_config, &binding), SALTS_OK);
+    check_not_null(binding);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+
+    buffer = mem_wrap_external(raw, sizeof(raw) - 1u, NULL, NULL);
+    check_not_null(buffer);
+    turbo_flow_msg_init(&msg);
+    msg.id = 17u;
+    msg.ts_ns = 23u;
+    msg.type = 5u;
+    msg.flags = 7u;
+    msg.buffer = buffer;
+    msg.payload = vstr_from_buf(raw, sizeof(raw) - 1u);
+
+    check_equal(turbo_flow_publish(flow, "telemetry", &msg), SALTS_OK);
+    check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
+    check_equal(snapshot.admitted, 1u);
+    check_equal(snapshot.pending_records, 1u);
+    check_equal(sink_calls, 0u);
+
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_msg_cleanup(&msg);
+    check_equal(turbo_flow_durable_buffer_unbind(binding), SALTS_OK);
+    check_equal(turbo_flow_inbox_close(&inbox), SALTS_OK);
+    check_equal(turbo_flow_inbox_claim(&inbox, &claim), SALTS_OK);
+    check_equal(turbo_flow_inbox_complete(&inbox, &claim), SALTS_OK);
+    check_equal(turbo_flow_inbox_destroy(&inbox), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 }
