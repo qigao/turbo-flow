@@ -28,6 +28,8 @@ struct turbo_flow_run_s {
   atomic_int registered;
   int drain_on_stop;
   int managed_source;
+  /* Protected by flow->runtime_mutex together with active_publishes. */
+  int lifetime_counted;
   size_t pending_values;
   int upstream_done;
   int pending_status;
@@ -176,7 +178,13 @@ static int flow_run_finish(turbo_flow_run_t *run, turbo_flow_run_state_t state, 
   if (!won) return 0;
   flow_run_cancel_deadline(run);
   if (detach) flow_run_registry_remove(run);
-  flow_publish_leave(flow);
+  /* Deadlines retain registry membership. Publish allowance and the actual
+   * lifetime release must change atomically even on that detach=0 path. */
+  salts_mutex_lock(&flow->runtime_mutex);
+  run->lifetime_counted = 0;
+  if (flow->active_publishes > 0u) --flow->active_publishes;
+  if (flow->active_publishes == 0u) salts_cond_broadcast(&flow->runtime_cond);
+  salts_mutex_unlock(&flow->runtime_mutex);
   if (detach) {
     salts_mutex_lock(&run->mutex);
     run->flow = NULL;
@@ -400,6 +408,7 @@ static int flow_run_registry_add(turbo_flow_t *flow, turbo_flow_run_t *run,
   } else if (turbo_flow_stl_error(vec_push(&flow->active_runs, &run)) != SALTS_OK) {
     rc = SALTS_ENOMEM;
   } else {
+    run->lifetime_counted = 1;
     atomic_store_explicit(&run->registered, 1, memory_order_release);
   }
   salts_mutex_unlock(&flow->runtime_mutex);
@@ -662,14 +671,14 @@ int flow_run_prepare_buffer_retire(turbo_flow_t *flow, uint64_t timeout_ms) {
       salts_mutex_unlock(&flow->runtime_mutex);
       return SALTS_ESHUTDOWN;
     }
-    /* Derive idle-subscription allowance from the sole run registry. Lifetime
-     * accounting is preserved for public drain; every managed value and async
-     * publication owns an additional count that this allowance cannot exclude.
-     * Detach removes the registry entry before releasing its lifetime count,
-     * which can only make this wait temporarily more conservative. O(active runs). */
+    /* Exclude only managed lifetimes still held, not registry membership alone:
+     * a deadline leaves a terminal run registered after releasing its count.
+     * The marker and active_publishes share this mutex, so no accepted region or
+     * async publication can be mistaken for a released lifetime. Normal detach
+     * removes the entry before release, which is conservatively safe. O(active runs). */
     for (size_t i = 0u; i < vec_size(&flow->active_runs); ++i) {
       turbo_flow_run_t *const *slot = vec_at_const(&flow->active_runs, i);
-      if (slot && *slot && (*slot)->managed_source) ++subscriptions;
+      if (slot && *slot && (*slot)->managed_source && (*slot)->lifetime_counted) ++subscriptions;
     }
     active = flow->active_publishes;
     salts_mutex_unlock(&flow->runtime_mutex);
