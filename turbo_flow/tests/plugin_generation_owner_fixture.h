@@ -21,6 +21,8 @@ enum {
 /* Test-only observation prefix borrowed from the catalog's provider ctx. */
 typedef struct generation_owner_observer_s {
   int mode;
+  size_t consumes, consumes_after_quiesce;
+  int consume_status;
   size_t lifecycle_calls, destroys, graph_shutdowns, destroys_before_graph;
 } generation_owner_observer_t;
 

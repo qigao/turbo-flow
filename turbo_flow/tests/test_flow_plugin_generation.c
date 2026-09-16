@@ -1,5 +1,7 @@
 #include "tinytest.h"
 #include "turbo_flow_plugin_generation.h"
+#include "turbo_flow_durable_buffer.h"
+#include "plugin_generation_owner_fixture.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -255,6 +257,76 @@ flow_plugin_generation_test_replace_documents(flow_plugin_generation_test_contex
 }
 
 spec("transactional plugin Graph generation") {
+  it("drains chained durable backlog before owner quiesce and preserves owners on failure") {
+    static const char graph[] = "source input adapter input.adapter\n"
+      "buffer second resource second.store\n"
+      "buffer first resource first.store\n"
+      "stage output adapter output.adapter\n"
+      "stage main {\n input -> first -> second -> output\n}\n";
+    static const char yaml[] = "version: 1\nchannels:\n"
+      "  first.store:\n    kind: fixture.transactional.resource\n    config: {}\n"
+      "  second.store:\n    kind: fixture.transactional.resource\n    config: {}\n"
+      "adapters:\n"
+      "  input.adapter:\n    kind: fixture.transactional.adapter\n    config: {}\n"
+      "  output.adapter:\n    kind: fixture.transactional.adapter\n    config: {}\n";
+    for (int failing = 0; failing < 2; ++failing) {
+      flow_plugin_generation_test_context_t context;
+      turbo_flow_plugin_generation_config_t config = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+      turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      turbo_flow_config_error_t ce = TURBO_FLOW_CONFIG_ERROR_INIT;
+      turbo_flow_plugin_generation_t *generation = NULL;
+      turbo_flow_plugin_transactional_product_catalog_v1_t catalog = TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
+      turbo_flow_inbox_t inboxes[2] = {TURBO_FLOW_INBOX_INIT, TURBO_FLOW_INBOX_INIT};
+      turbo_flow_inbox_memory_config_t memory = turbo_flow_inbox_memory_config_default();
+      const char *resources[] = {"second.store", "first.store"};
+      turbo_flow_msg_t msg;
+      generation_owner_observer_t *observer;
+      check_equal(flow_plugin_generation_test_open(&context, FLOW_PLUGIN_GENERATION_FIXTURE_DURABLE, &pe, &ce), SALTS_OK);
+      check_equal(flow_plugin_generation_test_replace_documents(&context, yaml,
+        sizeof(yaml)-1u, graph, sizeof(graph)-1u, &ce), SALTS_OK);
+      check_equal(turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(context.snapshot, &catalog), SALTS_OK);
+      observer = (generation_owner_observer_t *)catalog.adapter_providers[0].ctx;
+      for (size_t i=0; i<2u; ++i) {
+        turbo_flow_durable_buffer_binding_config_t binding_config = TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
+        turbo_flow_durable_buffer_binding_t *binding = NULL;
+        check_equal(turbo_flow_inbox_memory_create(&memory, &inboxes[i]), SALTS_OK);
+        binding_config.resource_name=resources[i]; binding_config.inbox=&inboxes[i];
+        check_equal(turbo_flow_durable_buffer_bind(context.flow, &binding_config, &binding), SALTS_OK);
+      }
+      check_equal(turbo_flow_plugin_generation_create(context.snapshot, context.resolved,
+        &context.flow, &config, NULL, &generation, &context.cleanup, &ce), SALTS_OK);
+      check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
+      turbo_flow_msg_init(&msg); msg.owned_payload=tstr_dup("backlog"); msg.payload=tstr_to_v(msg.owned_payload);
+      check_equal(turbo_flow_publish(turbo_flow_plugin_generation_flow(generation), "input", &msg), SALTS_OK);
+      turbo_flow_msg_cleanup(&msg);
+      observer->consume_status = failing ? SALTS_EIO : SALTS_OK;
+      check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &ce), failing ? SALTS_EIO : SALTS_OK);
+      check_equal(observer->consumes, 1u);
+      check_equal(observer->consumes_after_quiesce, 0u);
+      if (failing) {
+        turbo_flow_inbox_failed_entry_t failed = TURBO_FLOW_INBOX_FAILED_ENTRY_INIT;
+        size_t count=0;
+        check_equal(observer->lifecycle_calls, 0u);
+        check_equal(observer->destroys, 0u);
+        check_equal(turbo_flow_state(turbo_flow_plugin_generation_flow(generation)), TURBO_FLOW_STATE_STARTED);
+        check_equal(turbo_flow_plugin_host_destroy(context.host, 0u, &pe), SALTS_EBUSY);
+        check_equal(turbo_flow_inbox_scan_failed(&inboxes[0], 0u, &failed, 1u, &count), SALTS_OK);
+        check_equal(count, 1u);
+        check_equal(turbo_flow_inbox_discard(&inboxes[0], failed.record_id), SALTS_OK);
+        observer->consume_status=SALTS_OK;
+        check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &ce), SALTS_OK);
+      }
+      for (size_t i=0; i<2u; ++i) {
+        turbo_flow_inbox_snapshot_t snapshot=TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+        check_equal(turbo_flow_inbox_snapshot(&inboxes[i], &snapshot), SALTS_OK);
+        check_equal(snapshot.records, 0u); check_equal(snapshot.in_flight_claims, 0u);
+        check_equal(turbo_flow_inbox_close(&inboxes[i]), SALTS_OK);
+        check_equal(turbo_flow_inbox_destroy(&inboxes[i]), SALTS_OK);
+      }
+      check_equal(flow_plugin_generation_test_close(&context, &pe), SALTS_OK);
+    }
+  }
+
   it("preserves Graph stop failure and retries without repeating completed Product phases") {
     flow_plugin_generation_test_context_t context;
     turbo_flow_plugin_generation_config_t config = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;

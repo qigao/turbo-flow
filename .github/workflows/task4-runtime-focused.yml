@@ -168,13 +168,13 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/task4-runtime --target test_flow_durable_buffer test_flow_durable_admission test_flow_durable_identity test_flow_inbox test_flow_inbox_source test_flow_inbox_driver test_flow_async_terminal test_flow_run test_flow_operation_result test_flow_projection_owner test_flow_projection_owner_fault -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
+          cmake --build build/task4-runtime --target test_flow_durable_buffer test_flow_durable_admission test_flow_durable_lifecycle test_flow_plugin_generation test_flow_durable_identity test_flow_inbox test_flow_inbox_source test_flow_inbox_driver test_flow_async_terminal test_flow_run test_flow_operation_result test_flow_projection_owner test_flow_projection_owner_fault -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
 
       - name: Run durable buffer and shared driver tests
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/task4-runtime -R '^test_flow_(durable_buffer|durable_admission|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
+          ctest --test-dir build/task4-runtime -R '^test_flow_(durable_buffer|durable_admission|durable_lifecycle|plugin_generation|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
 
       - name: Verify committed source remained untouched
         if: always()

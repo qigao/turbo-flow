@@ -317,7 +317,11 @@ static int flow_plugin_generation_owner_shutdown(void *ctx) {
 static int flow_plugin_generation_adapter_consume(void *ctx, turbo_flow_t *flow,
                                                   const turbo_flow_stage_plan_t *stage,
                                                   turbo_flow_msg_t *message) {
-  return ctx && flow && stage && message ? SALTS_OK : SALTS_EINVAL;
+  flow_plugin_generation_owner_t *owner = ctx;
+  if (!owner || !flow || !stage || !message) return SALTS_EINVAL;
+  ++owner->fixture->observer.consumes;
+  if (owner->fixture->quiesce_calls) ++owner->fixture->observer.consumes_after_quiesce;
+  return owner->fixture->observer.consume_status;
 }
 
 static void flow_plugin_generation_adapter_shutdown(void *ctx) {
