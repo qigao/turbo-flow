@@ -370,13 +370,14 @@ static int flow_run_graph_init(turbo_flow_run_t *run) {
 }
 
 static int flow_run_registry_add(turbo_flow_t *flow, turbo_flow_run_t *run,
-                                 int managed_source_start) {
+                                 int managed_source_start, int buffer_drain) {
   int rc = SALTS_OK;
   salts_mutex_lock(&flow->runtime_mutex);
   if (!flow->reactive_scheduler_initialized ||
       (!managed_source_start &&
        (flow->state != TURBO_FLOW_STATE_STARTED ||
-        flow->admission_state != FLOW_ADMISSION_OPEN)) ||
+        (flow->admission_state != FLOW_ADMISSION_OPEN &&
+         !(buffer_drain && flow->admission_state == FLOW_ADMISSION_PAUSED)))) ||
       (managed_source_start &&
        ((flow->state != TURBO_FLOW_STATE_COMPILED && flow->state != TURBO_FLOW_STATE_STOPPED) ||
         (flow->admission_state != FLOW_ADMISSION_CLOSED &&
@@ -397,7 +398,7 @@ static int flow_run_open_origin_internal(turbo_flow_t *flow, const char *source_
                                          int resolved_origin, int buffer_origin,
                                          cflow_publisher *publisher,
                                          const turbo_flow_run_config_t *config, int drain_on_stop,
-                                         int managed_source_start,
+                                         int managed_source_start, int buffer_drain,
                                          turbo_flow_run_t **run_out) {
   turbo_flow_run_config_t effective = TURBO_FLOW_RUN_CONFIG_INIT;
   turbo_flow_run_t *run = NULL;
@@ -418,7 +419,18 @@ static int flow_run_open_origin_internal(turbo_flow_t *flow, const char *source_
     }
     effective = *config;
   }
-  if (managed_source_start) {
+  if (buffer_drain) {
+    salts_mutex_lock(&flow->runtime_mutex);
+    if (buffer_origin && flow->state == TURBO_FLOW_STATE_STARTED &&
+        (flow->admission_state == FLOW_ADMISSION_OPEN ||
+         flow->admission_state == FLOW_ADMISSION_PAUSED)) {
+      ++flow->active_publishes;
+      rc = SALTS_OK;
+    } else {
+      rc = SALTS_ESHUTDOWN;
+    }
+    salts_mutex_unlock(&flow->runtime_mutex);
+  } else if (managed_source_start) {
     salts_mutex_lock(&flow->runtime_mutex);
     if ((flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STOPPED) &&
         (flow->admission_state == FLOW_ADMISSION_CLOSED ||
@@ -508,7 +520,7 @@ static int flow_run_open_origin_internal(turbo_flow_t *flow, const char *source_
     salts_mutex_unlock(&run->mutex);
   }
 
-  rc = flow_run_registry_add(flow, run, managed_source_start);
+  rc = flow_run_registry_add(flow, run, managed_source_start, buffer_drain);
   if (rc != SALTS_OK) goto cleanup;
   subscribe_result = cflow_subscribe_with_options(&run->subscription, &run->graph, publisher,
                                                   run->scheduler, &run->subscriber, NULL);
@@ -546,7 +558,7 @@ int flow_run_open_internal(turbo_flow_t *flow, const char *source_name,
                            int managed_source_start,
                            turbo_flow_run_t **run_out) {
   return flow_run_open_origin_internal(flow, source_name, -1, 0, publisher, config,
-                                       drain_on_stop, managed_source_start, run_out);
+                                       drain_on_stop, managed_source_start, 0, run_out);
 }
 
 int flow_run_open_from_stage(turbo_flow_t *flow, uint32_t origin_stage, int buffer_origin,
@@ -558,7 +570,28 @@ int flow_run_open_from_stage(turbo_flow_t *flow, uint32_t origin_stage, int buff
   origin = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, origin_stage);
   if (!origin || !origin->is_buffer) return SALTS_EINVAL;
   return flow_run_open_origin_internal(flow, origin->name, (int)origin_stage, 1, publisher,
-                                       config, 0, 0, run_out);
+                                       config, 0, 0, 0, run_out);
+}
+
+int flow_run_open_buffer_drain(turbo_flow_t *flow, uint32_t origin_stage,
+                                cflow_publisher *publisher,
+                                const turbo_flow_run_config_t *config,
+                                turbo_flow_run_t **run_out) {
+  const flow_stage_plan_impl_t *origin;
+  if (!flow || origin_stage >= vec_size(&flow->stages)) return SALTS_EINVAL;
+  origin = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, origin_stage);
+  if (!origin || !origin->is_buffer) return SALTS_EINVAL;
+  return flow_run_open_origin_internal(flow, origin->name, (int)origin_stage, 1, publisher,
+                                       config, 0, 0, 1, run_out);
+}
+
+int flow_run_has_pending_values(const turbo_flow_run_t *run) {
+  int pending;
+  if (!run) return 0;
+  salts_mutex_lock((salts_mutex_t *)&run->mutex);
+  pending = run->pending_values != 0u;
+  salts_mutex_unlock((salts_mutex_t *)&run->mutex);
+  return pending;
 }
 
 int turbo_flow_run_open(turbo_flow_t *flow, const char *source_name, cflow_publisher *publisher,

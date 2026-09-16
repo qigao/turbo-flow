@@ -74,7 +74,40 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_bind(
     turbo_flow_durable_buffer_binding_t **out);
 
 /**
- * Remove one binding while the Flow is not started (EBUSY otherwise).
+ * Progress at most one claim without blocking. Empty storage is success. Calls on
+ * a binding are caller-serialized with Flow lifecycle and provider mutation.
+ * A new claim requires STARTED/open ordinary admission; paused admission returns
+ * ESHUTDOWN without claiming. An owned run may be polled/settled while paused or
+ * stopped. Provider, Graph and settlement errors propagate unchanged; progress
+ * never implicitly retries or reconciles a pending/unknown settlement.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_progress(
+    turbo_flow_durable_buffer_binding_t *binding);
+
+/** Close the borrowed Inbox to new admissions; accepted records remain retained. */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_quiesce(
+    turbo_flow_durable_buffer_binding_t *binding);
+
+/**
+ * Drain accepted records with a single owner. STARTED permits buffer-origin runs
+ * even while ordinary Graph admission is paused. STOPPED/FAILED never claim new
+ * records: only an already-owned terminal/canceled run may settle. Failed records
+ * and unresolved settlement return their exact error, without retry/drop/replay.
+ * Pending stopped backlog returns EBUSY; a running backlog exceeding timeout_ms
+ * returns ETIMEDOUT. Zero is non-blocking; UINT64_MAX waits without a deadline.
+ * The owner must continue servicing any external I/O required by async Sinks.
+ * Example: quiesce(binding), then drain(binding, 1000), stop(flow), unbind(binding),
+ * checking each status before proceeding. For chained buffers use generation
+ * retirement, which closes and drains cuts in upstream-to-downstream order.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_drain(
+    turbo_flow_durable_buffer_binding_t *binding, uint64_t timeout_ms);
+
+/**
+ * Remove one binding while the Flow is not started and its driver is idle
+ * (EBUSY otherwise). Reset also rejects an unresolved driver. The void Flow
+ * destroy operation preserves the complete Flow with EBUSY in its error state
+ * until the caller explicitly settles/drains the claim and retries destruction.
  * Success invalidates the handle; the Inbox remains caller-owned and is not closed.
  * Start revalidates bindings, including when a binding was removed after compile.
  */

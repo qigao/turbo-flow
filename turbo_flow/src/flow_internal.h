@@ -457,7 +457,10 @@ typedef struct flow_resource_command_record_s {
   turbo_flow_resource_command_result_t result;
 } flow_resource_command_record_t;
 
+typedef struct flow_inbox_driver_s flow_inbox_driver_t;
+
 struct turbo_flow_durable_buffer_binding_s {
+  flow_inbox_driver_t *driver;
   turbo_flow_t *flow;
   tstr resource_name;
   turbo_flow_inbox_t *inbox;
@@ -634,6 +637,8 @@ int flow_durable_buffer_admit_stage(turbo_flow_t *flow, uint32_t stage_index,
                                     const turbo_flow_msg_t *message);
 int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow);
 void flow_durable_buffer_clear_bindings(turbo_flow_t *flow);
+int flow_durable_buffers_idle(const turbo_flow_t *flow);
+TURBO_FLOW_C_API int flow_durable_buffers_prepare_retire(turbo_flow_t *flow, uint64_t timeout_ms);
 int flow_resource_metadata_valid(const turbo_flow_resource_metadata_t *metadata);
 int flow_resource_command_valid(const turbo_flow_resource_command_t *command);
 size_t flow_native_resource_count(const turbo_flow_t *flow);
@@ -810,6 +815,11 @@ int flow_run_open_from_stage(turbo_flow_t *flow, uint32_t origin_stage, int buff
                              cflow_publisher *publisher,
                              const turbo_flow_run_config_t *config,
                              turbo_flow_run_t **run_out);
+int flow_run_open_buffer_drain(turbo_flow_t *flow, uint32_t origin_stage,
+                                cflow_publisher *publisher,
+                                const turbo_flow_run_config_t *config,
+                                turbo_flow_run_t **run_out);
+int flow_run_has_pending_values(const turbo_flow_run_t *run);
 int flow_publish_enter(turbo_flow_t *flow);
 void flow_publish_leave(turbo_flow_t *flow);
 void flow_stop_async_ingress(turbo_flow_t *flow);

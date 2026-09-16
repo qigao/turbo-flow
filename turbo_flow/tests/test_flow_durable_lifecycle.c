@@ -88,10 +88,6 @@ static const turbo_flow_inbox_ops_v2_t probe_ops = {
   probe_admit, probe_claim, probe_complete, probe_fail, probe_retry, probe_discard, probe_forget,
   probe_scan_failed, probe_scan_history, probe_close, probe_snapshot, probe_destroy
 };
-/* Task 6 contract declarations deliberately precede production implementation. */
-extern int turbo_flow_durable_buffer_progress(turbo_flow_durable_buffer_binding_t *);
-extern int turbo_flow_durable_buffer_quiesce(turbo_flow_durable_buffer_binding_t *);
-extern int turbo_flow_durable_buffer_drain(turbo_flow_durable_buffer_binding_t *, uint64_t);
 #include <salts/clock.h>
 
 static int sink(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
@@ -105,8 +101,9 @@ static int submit(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *
                   const turbo_flow_msg_t *msg, turbo_flow_async_terminal_claim_t *claim) {
   lifecycle_fixture_t *f = ctx;
   (void)flow; (void)stage; (void)msg;
-  ++f->sinks;
-  return turbo_flow_async_terminal_claim_move(&f->terminal, claim);
+  int rc = turbo_flow_async_terminal_claim_move(&f->terminal, claim);
+  if (rc == SALTS_OK) ++f->sinks;
+  return rc;
 }
 static void open_fixture(lifecycle_fixture_t *f, int asynchronous) {
   static const char graph[] = "source input\n"
@@ -227,6 +224,21 @@ spec("durable buffer lifecycle") {
     check_equal(f.sinks, 1u); check_equal(snapshot(&f).records, 0u);
     close_fixture(&f);
   }
+  it("rebuilds an idle driver after stopped reparse changes the buffer stage index") {
+    static const char reordered[] = "stage output adapter sink\n"
+      "source input\n"
+      "buffer intake resource intake.store\n"
+      "stage main {\n input -> intake -> output\n}\n";
+    lifecycle_fixture_t f; open_fixture(&f, 0); publish(&f);
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
+    check_equal(turbo_flow_stop(f.flow), SALTS_OK);
+    check_equal(turbo_flow_parse_string(f.flow, reordered, sizeof(reordered)-1u), SALTS_OK);
+    check_equal(turbo_flow_compile(f.flow), SALTS_OK);
+    check_equal(turbo_flow_start(f.flow), SALTS_OK);
+    publish(&f);
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
+    check_equal(f.sinks, 2u); close_fixture(&f);
+  }
   it("ordinary paused progress preserves backlog while explicit drain may execute") {
     lifecycle_fixture_t f; open_fixture(&f, 0); publish(&f);
     check_equal(turbo_flow_pause(f.flow), SALTS_OK);
@@ -261,6 +273,7 @@ spec("durable buffer lifecycle") {
     check_equal(turbo_flow_stop(f.flow), SALTS_OK);
     check_equal(turbo_flow_durable_buffer_unbind(f.binding), SALTS_EBUSY);
     check_equal(turbo_flow_reset(f.flow, 0), SALTS_EBUSY);
+    check_equal(turbo_flow_parse_string(f.flow, "", 0u), SALTS_EBUSY);
     turbo_flow_destroy(f.flow);
     check_equal(turbo_flow_state(f.flow), TURBO_FLOW_STATE_STOPPED);
     {

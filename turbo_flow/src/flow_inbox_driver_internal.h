@@ -22,6 +22,11 @@ typedef struct flow_inbox_driver_s flow_inbox_driver_t;
 int flow_inbox_driver_create(const flow_inbox_driver_config_t *config,
                              flow_inbox_driver_t **driver_out);
 int flow_inbox_driver_request(flow_inbox_driver_t *driver);
+/* Only a buffer drain may use paused Graph admission. */
+int flow_inbox_driver_request_drain(flow_inbox_driver_t *driver);
+/* Read-only phase/status; never settles, retries, or claims storage. */
+int flow_inbox_driver_status(const flow_inbox_driver_t *driver,
+                             turbo_flow_inbox_source_result_t *result);
 int flow_inbox_driver_poll(flow_inbox_driver_t *driver,
                            turbo_flow_inbox_source_result_t *result);
 int flow_inbox_driver_cancel(flow_inbox_driver_t *driver,

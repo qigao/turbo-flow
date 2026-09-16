@@ -298,8 +298,8 @@ typedef struct flow_inbox_driver_config_s {
   1. if flow has no durable bindings, return success without changing lifecycle;
   2. pause ordinary Graph publish admission;
   3. wait for already-accepted upstream publishes to leave their current execution region;
-  4. quiesce all durable bindings so no new buffer admission succeeds;
-  5. while operation bindings, Sink owners, and Graph runtime are still active, drain each durable binding to idle using the special paused-state buffer-origin run mode;
+  4. derive upstream-to-downstream buffer order from the compiled stage DAG (compile rejects cycles), independent of declaration/binding order;
+  5. in that order, quiesce one binding and drain it to idle using the special paused-state buffer-origin run mode while later providers, operation bindings, Sink owners, and Graph runtime remain active; finally verify every provider is closed and has no live records/claims;
   6. on timeout, failed/unknown record, or exact provider error, return that error **before** operation bindings are closed, owners are quiesced, or Graph is stopped;
   7. on success, all durable bindings have no live records/claims and normal generation retirement may proceed.
 - [ ] Call this helper at the beginning of `flow_plugin_generation_retire()` before `flow_plugin_operations_close()`, `generation->poll_closed = 1`, owner quiesce, and Graph stop.
@@ -481,3 +481,17 @@ incorrectly deduplicated a new record. The namespace is an opaque admission-ID
 component, not a new persisted field or a cross-process deduplication guarantee.
 Provider identity and generation are checked at compile/start/admission. This is
 not an atomic takeover fence: that remains the provider's responsibility.
+
+### Task 6 retirement ordering clarification (2026-09-16)
+
+Closing every provider before draining prevents a healthy `first -> second` buffer chain
+from admitting the already accepted record into `second`. Retirement therefore closes
+and drains cuts in compiled DAG order. It never bypasses a closed provider. One timeout
+budget covers ordinary publish drain and all buffer drains. No-buffer retirement is unchanged.
+
+The frozen binding API has no public settlement retry/reconcile entry point. An unknown
+settlement remains pinned without replay; explicit recovery currently requires the internal
+Inbox driver interface. Provider/operator integration must design a public recovery entry
+point separately. Reset returns EBUSY, and void destroy retains the complete Flow with an
+EBUSY diagnostic while a driver is unresolved; this is a safe retained state, not a claim
+that an external opaque-binding caller can already recover it.

@@ -239,7 +239,7 @@ static int flow_inbox_source_fail_claim(flow_inbox_driver_t *source, int graph_s
   return ignored.settlement_status == SALTS_OK ? failure_status : settlement_status;
 }
 
-int flow_inbox_driver_request(flow_inbox_driver_t *source) {
+static int flow_inbox_driver_request_internal(flow_inbox_driver_t *source, int buffer_drain) {
   turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
   turbo_flow_run_result_t snapshot = TURBO_FLOW_RUN_RESULT_INIT;
   turbo_flow_inbox_source_result_t ignored = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
@@ -249,6 +249,12 @@ int flow_inbox_driver_request(flow_inbox_driver_t *source) {
   if (!source) return SALTS_EINVAL;
   if (source->phase != FLOW_INBOX_SOURCE_IDLE) return SALTS_EBUSY;
   if (turbo_flow_state(source->config.flow) != TURBO_FLOW_STATE_STARTED) return SALTS_ESHUTDOWN;
+  salts_mutex_lock(&source->config.flow->runtime_mutex);
+  status = source->config.flow->admission_state == FLOW_ADMISSION_OPEN ||
+           (buffer_drain && source->config.flow->admission_state == FLOW_ADMISSION_PAUSED)
+               ? SALTS_OK : SALTS_ESHUTDOWN;
+  salts_mutex_unlock(&source->config.flow->runtime_mutex);
+  if (status != SALTS_OK) return status;
   status = turbo_flow_inbox_claim(source->config.inbox, &source->claim);
   if (status != SALTS_OK) return status;
   source->record_id = source->claim.record_id;
@@ -262,8 +268,11 @@ int flow_inbox_driver_request(flow_inbox_driver_t *source) {
   }
   run_config.scheduler = source->config.scheduler;
   if (source->config.origin_kind == FLOW_INBOX_DRIVER_BUFFER) {
-    status = flow_run_open_from_stage(source->config.flow, source->config.origin_stage, 1,
-                                      &publisher, &run_config, &source->run);
+    status = buffer_drain
+        ? flow_run_open_buffer_drain(source->config.flow, source->config.origin_stage,
+                                     &publisher, &run_config, &source->run)
+        : flow_run_open_from_stage(source->config.flow, source->config.origin_stage, 1,
+                                   &publisher, &run_config, &source->run);
   } else {
     const turbo_flow_stage_plan_t *origin =
         turbo_flow_stage_at(source->config.flow, source->config.origin_stage);
@@ -291,6 +300,29 @@ int flow_inbox_driver_request(flow_inbox_driver_t *source) {
   return flow_inbox_driver_poll(source, &ignored);
 }
 
+int flow_inbox_driver_request(flow_inbox_driver_t *source) {
+  return flow_inbox_driver_request_internal(source, 0);
+}
+
+int flow_inbox_driver_request_drain(flow_inbox_driver_t *source) {
+  if (!source || source->config.origin_kind != FLOW_INBOX_DRIVER_BUFFER) return SALTS_EINVAL;
+  return flow_inbox_driver_request_internal(source, 1);
+}
+
+int flow_inbox_driver_status(const flow_inbox_driver_t *source,
+                             turbo_flow_inbox_source_result_t *result) {
+  turbo_flow_inbox_source_result_state_t state;
+  if (flow_inbox_source_result_prepare(result) != SALTS_OK || !source) return SALTS_EINVAL;
+  switch (source->phase) {
+    case FLOW_INBOX_SOURCE_IDLE: state = TURBO_FLOW_INBOX_SOURCE_EMPTY; break;
+    case FLOW_INBOX_SOURCE_GRAPH_RUNNING: state = TURBO_FLOW_INBOX_SOURCE_GRAPH_ACTIVE; break;
+    case FLOW_INBOX_SOURCE_SETTLE_UNKNOWN: state = TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN; break;
+    default: state = TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_PENDING; break;
+  }
+  flow_inbox_source_result_set(source, state, result);
+  return SALTS_OK;
+}
+
 int flow_inbox_driver_poll(flow_inbox_driver_t *source,
                                  turbo_flow_inbox_source_result_t *result) {
   turbo_flow_run_result_t snapshot = TURBO_FLOW_RUN_RESULT_INIT;
@@ -312,7 +344,10 @@ int flow_inbox_driver_poll(flow_inbox_driver_t *source,
     flow_inbox_source_result_set(source, TURBO_FLOW_INBOX_SOURCE_GRAPH_ACTIVE, result);
     return status;
   }
-  if (snapshot.state == TURBO_FLOW_RUN_OPEN || snapshot.state == TURBO_FLOW_RUN_ACTIVE) {
+  /* Cancellation can precede release of an async terminal capability. Keep the
+   * storage claim and message owner until its callback has left the run. */
+  if (snapshot.state == TURBO_FLOW_RUN_OPEN || snapshot.state == TURBO_FLOW_RUN_ACTIVE ||
+      flow_run_has_pending_values(source->run)) {
     flow_inbox_source_result_set(source, TURBO_FLOW_INBOX_SOURCE_GRAPH_ACTIVE, result);
     return SALTS_OK;
   }

@@ -326,6 +326,27 @@ Provider-neutral buffer snapshots (#131) expose at minimum admitted/committed re
 
 No raw database cursor/handle escapes through the public Graph surface.
 
+## Clean generation retirement
+
+For #127, pause ordinary Graph admission and wait for already accepted executions to
+leave their current region. The compiler already rejects stage cycles. Visit durable
+cuts in upstream-to-downstream DAG order, closing and draining each provider before
+closing the next downstream provider. Closing all providers first is invalid for chained
+buffers: accepted upstream records still need normal admission into the next cut.
+Buffer-origin drain alone may run while ordinary admission is paused; Graph active-run
+and async-completion accounting still applies. A shared timeout budget bounds the drain.
+
+Operations, Sink owners, and runtime remain active until every binding is closed and
+empty. Any failed record, unknown settlement, timeout, or exact provider error aborts
+retirement before operation close or owner quiesce. STOPPED/FAILED flows never claim new
+backlog. Unresolved drivers also block reset and preserve the complete Flow on void
+destroy. Caller-serialized lifecycle is required. No-buffer retirement remains unchanged.
+
+The frozen public binding API does not yet expose settlement retry/reconcile. Unknown
+settlement recovery currently requires the internal driver API; future provider/operator
+integration must add an explicit recovery contract. Retention is fail-closed safety, not
+publicly supported recovery for opaque binding callers.
+
 ## Recovery
 
 TurboDB recovery (#130) preserves fail-closed durable semantics:

@@ -1123,6 +1123,9 @@ int turbo_flow_parse_string(turbo_flow_t *flow, const char *text, size_t len) {
   int rc;
 
   if (!flow || (!text && len > 0)) return SALTS_EINVAL;
+  if (!flow_durable_buffers_idle(flow))
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                     "durable buffer claims must be settled before parse");
   if (flow->adapter_stop_retryable) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "adapter stop must succeed before parse");

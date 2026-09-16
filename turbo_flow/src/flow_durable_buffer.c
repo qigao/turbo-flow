@@ -1,4 +1,6 @@
 #include "flow_internal.h"
+#include "flow_inbox_driver_internal.h"
+#include <salts/clock.h>
 
 #include "turbo_flow_projection.h"
 #include "salts_uuid.h"
@@ -48,12 +50,20 @@ static int flow_durable_buffer_validate_provider(const turbo_flow_durable_buffer
 
 int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow) {
   if (!flow) return SALTS_EINVAL;
+  if (!flow_durable_buffers_idle(flow)) return SALTS_EBUSY;
 
   /* Rebuild derived stage identities after parse/reset or a stopped recompile. */
   for (size_t i = 0u; i < vec_size(&flow->durable_buffer_bindings); ++i) {
     turbo_flow_durable_buffer_binding_t **slot =
         (turbo_flow_durable_buffer_binding_t **)vec_at(&flow->durable_buffer_bindings, i);
-    if (slot && *slot) (*slot)->stage_index = SIZE_MAX;
+    if (slot && *slot) {
+      if ((*slot)->driver) {
+        int rc = flow_inbox_driver_destroy((*slot)->driver);
+        if (rc != SALTS_OK) return rc;
+        (*slot)->driver = NULL;
+      }
+      (*slot)->stage_index = SIZE_MAX;
+    }
   }
   for (size_t i = 0u; i < vec_size(&flow->stages); ++i) {
     const flow_stage_plan_impl_t *stage =
@@ -281,12 +291,22 @@ int turbo_flow_durable_buffer_unbind(turbo_flow_durable_buffer_binding_t *bindin
 
   if (!binding || !binding->bound || !(flow = binding->flow)) return SALTS_EINVAL;
   if (flow->state == TURBO_FLOW_STATE_STARTED) return SALTS_EBUSY;
+  if (binding->driver) {
+    turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    rc = flow_inbox_driver_status(binding->driver, &result);
+    if (rc != SALTS_OK) return rc;
+    if (result.state != TURBO_FLOW_INBOX_SOURCE_EMPTY) return SALTS_EBUSY;
+  }
   if (flow_durable_buffer_find_binding(flow, binding->resource_name, &index) != binding ||
       index == SIZE_MAX) {
     return SALTS_ENOENT;
   }
   rc = turbo_flow_stl_error(vec_erase(&flow->durable_buffer_bindings, index, NULL));
   if (rc != SALTS_OK) return rc;
+  if (binding->driver) {
+    rc = flow_inbox_driver_destroy(binding->driver);
+    if (rc != SALTS_OK) return rc;
+  }
   binding->bound = 0;
   binding->flow = NULL;
   binding->inbox = NULL;
@@ -302,6 +322,7 @@ void flow_durable_buffer_clear_bindings(turbo_flow_t *flow) {
         (turbo_flow_durable_buffer_binding_t **)vec_at(&flow->durable_buffer_bindings, i);
     turbo_flow_durable_buffer_binding_t *binding = slot ? *slot : NULL;
     if (!binding) continue;
+    if (binding->driver) (void)flow_inbox_driver_destroy(binding->driver);
     binding->bound = 0;
     binding->flow = NULL;
     binding->inbox = NULL;
@@ -352,4 +373,186 @@ int flow_durable_buffer_admit_stage(turbo_flow_t *flow, uint32_t stage_index,
                                      "durable buffer provider admission failed");
   }
   return SALTS_OK;
+}
+
+int flow_durable_buffers_idle(const turbo_flow_t *flow) {
+  if (!flow) return 1;
+  for (size_t i = 0u; i < vec_size(&flow->durable_buffer_bindings); ++i) {
+    turbo_flow_durable_buffer_binding_t *const *slot =
+        (turbo_flow_durable_buffer_binding_t *const *)vec_at_const(&flow->durable_buffer_bindings, i);
+    turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    if (slot && *slot && (*slot)->driver &&
+        (flow_inbox_driver_status((*slot)->driver, &result) != SALTS_OK ||
+         result.state != TURBO_FLOW_INBOX_SOURCE_EMPTY)) return 0;
+  }
+  return 1;
+}
+
+static int flow_durable_buffer_progress_internal(turbo_flow_durable_buffer_binding_t *binding,
+                                                  int draining) {
+  turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+  int rc;
+  if (!binding || !binding->bound || !binding->flow) return SALTS_EINVAL;
+  rc = flow_durable_buffer_validate_provider(binding);
+  if (rc != SALTS_OK) return rc;
+  if (binding->driver) {
+    rc = flow_inbox_driver_status(binding->driver, &result);
+    if (rc != SALTS_OK) return rc;
+    if (result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_PENDING ||
+        result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN)
+      return result.settlement_status != SALTS_OK ? result.settlement_status : SALTS_EBUSY;
+    if (result.state == TURBO_FLOW_INBOX_SOURCE_GRAPH_ACTIVE)
+      return flow_inbox_driver_poll(binding->driver, &result);
+  }
+  if (binding->flow->state != TURBO_FLOW_STATE_STARTED) return SALTS_ESHUTDOWN;
+  if (!binding->driver) {
+    flow_inbox_driver_config_t config = {binding->inbox, binding->flow,
+      FLOW_INBOX_DRIVER_BUFFER, (uint32_t)binding->stage_index, NULL, binding->max_message_bytes};
+    if (binding->stage_index == SIZE_MAX || binding->stage_index > UINT32_MAX) return SALTS_EINVAL;
+    rc = flow_inbox_driver_create(&config, &binding->driver);
+    if (rc != SALTS_OK) return rc;
+  }
+  rc = draining ? flow_inbox_driver_request_drain(binding->driver)
+                : flow_inbox_driver_request(binding->driver);
+  return rc == SALTS_ENOENT ? SALTS_OK : rc;
+}
+
+int turbo_flow_durable_buffer_progress(turbo_flow_durable_buffer_binding_t *binding) {
+  return flow_durable_buffer_progress_internal(binding, 0);
+}
+
+int turbo_flow_durable_buffer_quiesce(turbo_flow_durable_buffer_binding_t *binding) {
+  int rc;
+  if (!binding || !binding->bound || !binding->flow) return SALTS_EINVAL;
+  rc = flow_durable_buffer_validate_provider(binding);
+  return rc == SALTS_OK ? turbo_flow_inbox_close(binding->inbox) : rc;
+}
+
+static int flow_durable_buffer_failed_status(turbo_flow_durable_buffer_binding_t *binding) {
+  turbo_flow_inbox_failed_entry_t failed = TURBO_FLOW_INBOX_FAILED_ENTRY_INIT;
+  size_t count = 0u;
+  int rc = turbo_flow_inbox_scan_failed(binding->inbox, 0u, &failed, 1u, &count);
+  if (rc != SALTS_OK) return rc;
+  if (count != 1u) return SALTS_EPROTO;
+  if (failed.kind == TURBO_FLOW_INBOX_FAILURE_OWNER_LOST_UNKNOWN) return SALTS_ECANCELED;
+  return failed.status != SALTS_OK ? failed.status : SALTS_EPROTO;
+}
+
+/* One wall-clock budget is shared across upstream drain and every buffer. */
+static uint64_t flow_durable_remaining_ms(uint64_t started, uint64_t timeout_ms) {
+  uint64_t elapsed;
+  if (timeout_ms == UINT64_MAX) return UINT64_MAX;
+  elapsed = (salts_hrtime() - started) / UINT64_C(1000000);
+  return elapsed >= timeout_ms ? 0u : timeout_ms - elapsed;
+}
+
+int turbo_flow_durable_buffer_drain(turbo_flow_durable_buffer_binding_t *binding,
+                                     uint64_t timeout_ms) {
+  const uint64_t started = salts_hrtime();
+  int rc;
+  if (!binding || !binding->bound || !binding->flow) return SALTS_EINVAL;
+  for (;;) {
+    turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+    turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    rc = flow_durable_buffer_validate_provider(binding);
+    if (rc != SALTS_OK) return rc;
+    if (binding->driver) {
+      rc = flow_inbox_driver_status(binding->driver, &result);
+      if (rc != SALTS_OK) return rc;
+      if (result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_PENDING ||
+          result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN)
+        return result.settlement_status != SALTS_OK ? result.settlement_status : SALTS_EBUSY;
+    }
+    rc = turbo_flow_inbox_snapshot(binding->inbox, &snapshot);
+    if (rc != SALTS_OK) return rc;
+    if (snapshot.failed_records) return flow_durable_buffer_failed_status(binding);
+    if (snapshot.records == 0u && snapshot.in_flight_claims == 0u &&
+        result.state == TURBO_FLOW_INBOX_SOURCE_EMPTY) return SALTS_OK;
+    if (binding->flow->state != TURBO_FLOW_STATE_STARTED &&
+        result.state == TURBO_FLOW_INBOX_SOURCE_EMPTY) return SALTS_EBUSY;
+    rc = flow_durable_buffer_progress_internal(binding, 1);
+    if (rc != SALTS_OK) return rc;
+    /* A non-blocking call gets one progress opportunity, then checks actual idle. */
+    if (flow_durable_remaining_ms(started, timeout_ms) == 0u) {
+      result = (turbo_flow_inbox_source_result_t)TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+      if (binding->driver) {
+        rc = flow_inbox_driver_status(binding->driver, &result);
+        if (rc != SALTS_OK) return rc;
+      }
+      rc = turbo_flow_inbox_snapshot(binding->inbox, &snapshot);
+      if (rc != SALTS_OK) return rc;
+      if (snapshot.failed_records) return flow_durable_buffer_failed_status(binding);
+      return snapshot.records == 0u && snapshot.in_flight_claims == 0u &&
+             result.state == TURBO_FLOW_INBOX_SOURCE_EMPTY ? SALTS_OK : SALTS_ETIMEDOUT;
+    }
+    salts_sleep_ms(1u);
+  }
+}
+
+int flow_durable_buffers_prepare_retire(turbo_flow_t *flow, uint64_t timeout_ms) {
+  const uint64_t started = salts_hrtime();
+  size_t *indegree = NULL;
+  uint32_t *order = NULL;
+  const size_t binding_count = flow ? vec_size(&flow->durable_buffer_bindings) : 0u;
+  size_t count, ordered = 0u;
+  int rc = SALTS_OK;
+  if (!binding_count) return SALTS_OK;
+  if (flow->state != TURBO_FLOW_STATE_STARTED) {
+    for (size_t i = 0u; i < binding_count; ++i) {
+      turbo_flow_durable_buffer_binding_t *binding =
+          *(turbo_flow_durable_buffer_binding_t **)vec_at(&flow->durable_buffer_bindings, i);
+      rc = turbo_flow_durable_buffer_quiesce(binding);
+      if (rc == SALTS_OK)
+        rc = turbo_flow_durable_buffer_drain(binding, flow_durable_remaining_ms(started, timeout_ms));
+      if (rc != SALTS_OK) return rc;
+    }
+    return SALTS_OK;
+  }
+  count = vec_size(&flow->stages);
+  if (count == 0u || count > UINT32_MAX || count > SIZE_MAX / sizeof(*indegree)) return SALTS_EPROTO;
+  indegree = calloc(count, sizeof(*indegree));
+  order = calloc(count, sizeof(*order));
+  if (!indegree || !order) { rc = SALTS_ENOMEM; goto done; }
+  for (size_t i = 0u; i < vec_size(&flow->edges); ++i) {
+    const flow_edge_plan_impl_t *edge = vec_at_const(&flow->edges, i);
+    if (edge->from_stage >= count || edge->to_stage >= count) { rc = SALTS_EPROTO; goto done; }
+    ++indegree[edge->to_stage];
+  }
+  for (size_t i = 0u; i < count; ++i) if (!indegree[i]) order[ordered++] = (uint32_t)i;
+  /* The compiler rejects cycles. O(V*E + V*B) retirement-only traversal, O(V) memory.
+   * Close/drain in upstream order: later Inbox admission must remain available
+   * for already accepted records crossing another durable cut. */
+  for (size_t i = 0u; i < ordered; ++i) {
+    for (size_t j = 0u; j < vec_size(&flow->edges); ++j) {
+      const flow_edge_plan_impl_t *edge = vec_at_const(&flow->edges, j);
+      if (edge->from_stage == order[i] && --indegree[edge->to_stage] == 0u)
+        order[ordered++] = edge->to_stage;
+    }
+  }
+  if (ordered != count) { rc = SALTS_EPROTO; goto done; }
+  rc = turbo_flow_drain(flow, flow_durable_remaining_ms(started, timeout_ms));
+  if (rc != SALTS_OK) goto done;
+  for (size_t i = 0u; i < count; ++i) {
+    for (size_t j = 0u; j < binding_count; ++j) {
+      turbo_flow_durable_buffer_binding_t *binding =
+          *(turbo_flow_durable_buffer_binding_t **)vec_at(&flow->durable_buffer_bindings, j);
+      if (binding->stage_index != order[i]) continue;
+      rc = turbo_flow_durable_buffer_quiesce(binding);
+      if (rc == SALTS_OK)
+        rc = turbo_flow_durable_buffer_drain(binding, flow_durable_remaining_ms(started, timeout_ms));
+      if (rc != SALTS_OK) goto done;
+    }
+  }
+  for (size_t i = 0u; i < binding_count; ++i) {
+    turbo_flow_durable_buffer_binding_t *binding =
+        *(turbo_flow_durable_buffer_binding_t **)vec_at(&flow->durable_buffer_bindings, i);
+    turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+    rc = turbo_flow_inbox_snapshot(binding->inbox, &snapshot);
+    if (rc != SALTS_OK) goto done;
+    if (snapshot.records || snapshot.in_flight_claims || snapshot.accepting) { rc = SALTS_EBUSY; goto done; }
+  }
+done:
+  free(order);
+  free(indegree);
+  return rc;
 }
