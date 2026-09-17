@@ -84,6 +84,12 @@ target_link_libraries(app PRIVATE TurboFlow::TurboDbAdapter)
 
 ## CHTTP 异步阶段
 
+HTTP 来自独立的 [Chttp SDK](https://github.com/qigao/chttp)。配置和安装包消费时，
+`HTTP_SERVICES_ROOT` 指向匹配的安装 profile：`http-services/debug` 或
+`http-services/release`，Android 使用 `http-services-android/<profile>`。
+`TurboFlow::CHTTPAdapter` 公开链接 `CHttp::Client` 和 `CHttp::Server`，使用
+`<http_client/http.h>` 与 `<http_server/http.h>`；Salts 提供 CNet 与 CFlow。
+
 `TurboFlow::CHTTPAdapter` 将 HTTP request 建模为 CFlow async `flat_map`：成功接纳后保留当前
 异步 publication，CHTTP terminal callback 再产生零或一个 owned response。一个 caller-owned
 client 独占 submit/poll/cancel 与 H1/H2 connection state；容量、protocol、TLS、retry、overall

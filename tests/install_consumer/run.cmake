@@ -8,6 +8,7 @@ foreach(required_var IN ITEMS
         TURBO_FLOW_CTEST_COMMAND
         TURBO_FLOW_SALTS_ROOT
         TURBO_FLOW_SALTS_UTILS_ROOT
+        TURBO_FLOW_HTTP_SERVICES_ROOT
         TURBO_FLOW_RULES_FORGE_ROOT
         TURBO_FLOW_HAS_TURBODB_ADAPTER)
   if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
@@ -28,6 +29,8 @@ endif()
 
 file(TO_CMAKE_PATH "${TURBO_FLOW_SALTS_ROOT}" salts_root)
 file(TO_CMAKE_PATH "${TURBO_FLOW_SALTS_UTILS_ROOT}" salts_utils_root)
+file(TO_CMAKE_PATH "${TURBO_FLOW_HTTP_SERVICES_ROOT}" http_services_root)
+set(ENV{HTTP_SERVICES_ROOT} "${http_services_root}")
 file(TO_CMAKE_PATH "${TURBO_FLOW_RULES_FORGE_ROOT}" rules_forge_root)
 if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
   if(NOT DEFINED TURBO_FLOW_TURBODB_ROOT OR
@@ -140,6 +143,7 @@ if(WIN32)
       "${stage_dir}/bin"
       "${salts_root}/bin"
       "${salts_utils_root}/bin"
+      "${http_services_root}/bin"
       "${rules_forge_root}/bin")
   if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
     list(APPEND runtime_dirs "${turbodb_root}/bin")
@@ -153,14 +157,14 @@ if(WIN32)
   set(ENV{PATH} "${runtime_path};$ENV{PATH}")
 elseif(APPLE)
   set(ENV{DYLD_LIBRARY_PATH}
-      "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib:$ENV{DYLD_LIBRARY_PATH}")
+      "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${http_services_root}/lib:${rules_forge_root}/lib:$ENV{DYLD_LIBRARY_PATH}")
   if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
     set(ENV{DYLD_LIBRARY_PATH}
         "${turbodb_root}/lib:$ENV{DYLD_LIBRARY_PATH}")
   endif()
 else()
   set(ENV{LD_LIBRARY_PATH}
-      "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${rules_forge_root}/lib:$ENV{LD_LIBRARY_PATH}")
+      "${stage_dir}/lib:${salts_root}/lib:${salts_utils_root}/lib:${http_services_root}/lib:${rules_forge_root}/lib:$ENV{LD_LIBRARY_PATH}")
   if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
     set(ENV{LD_LIBRARY_PATH}
         "${turbodb_root}/lib:$ENV{LD_LIBRARY_PATH}")

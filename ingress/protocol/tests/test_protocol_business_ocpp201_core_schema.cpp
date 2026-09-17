@@ -2,8 +2,8 @@
 #include "tinytest.hpp"
 
 spec("OCPP 2.0.1 Core generated DataBind ABI") {
-  it("publishes the additive schema revision") {
-    check_contains(Ocpp201Core_schema_text(), "version(5)");
+  it("publishes the fixed-before-variable schema revision") {
+    check_contains(Ocpp201Core_schema_text(), "version(6)");
   }
 
   it("publishes the complete TransactionEvent required enum sets") {
@@ -48,9 +48,13 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBind *codec = nullptr;
     StatusNotificationRequest_t notification;
+    StatusNotificationRequest_t decoded;
+    uint8_t *binary = nullptr;
+    size_t binary_size = 0u;
 
     check_equal(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
     StatusNotificationRequest_init(&notification);
+    StatusNotificationRequest_init(&decoded);
     check_equal(
         StatusNotificationRequest_from_json(codec, &notification, json, sizeof(json) - 1u, &error),
         DATA_BIND_OK);
@@ -59,6 +63,17 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(notification.evseId, 3);
     check_equal(notification.connectorId, 2);
 
+    check_equal(StatusNotificationRequest_to_bin(&notification, &binary, &binary_size, &error),
+                DATA_BIND_OK);
+    check_equal(StatusNotificationRequest_from_bin(codec, &decoded, binary, binary_size, &error),
+                DATA_BIND_OK);
+    check_equal(decoded.timestamp, notification.timestamp);
+    check_equal(decoded.connectorStatus, notification.connectorStatus);
+    check_equal(decoded.evseId, notification.evseId);
+    check_equal(decoded.connectorId, notification.connectorId);
+
+    data_bind_binary_free(binary);
+    StatusNotificationRequest_clear(&decoded);
     StatusNotificationRequest_clear(&notification);
     data_bind_free(codec);
   }
@@ -71,10 +86,14 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBind *codec = nullptr;
     TransactionEventRequired_t event;
+    TransactionEventRequired_t decoded;
+    uint8_t *binary = nullptr;
+    size_t binary_size = 0u;
     TransactionInfoRequired_t transaction;
 
     check_equal(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
     TransactionEventRequired_init(&event);
+    TransactionEventRequired_init(&decoded);
     TransactionInfoRequired_init(&transaction);
     check_equal(TransactionEventRequired_from_json(codec, &event, event_json,
                                                     sizeof(event_json) - 1u, &error),
@@ -88,6 +107,17 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(tstr_len(event.timestamp), sizeof("2026-07-27T10:16:00Z") - 1u);
     check_equal(tstr_len(transaction.transactionId), sizeof("transaction-42") - 1u);
 
+    check_equal(TransactionEventRequired_to_bin(&event, &binary, &binary_size, &error),
+                DATA_BIND_OK);
+    check_equal(TransactionEventRequired_from_bin(codec, &decoded, binary, binary_size, &error),
+                DATA_BIND_OK);
+    check_equal(decoded.eventType, event.eventType);
+    check_equal(decoded.triggerReason, event.triggerReason);
+    check_equal(decoded.seqNo, event.seqNo);
+    check_equal(decoded.timestamp, event.timestamp);
+
+    data_bind_binary_free(binary);
+    TransactionEventRequired_clear(&decoded);
     TransactionInfoRequired_clear(&transaction);
     TransactionEventRequired_clear(&event);
     data_bind_free(codec);
@@ -110,6 +140,9 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     TransactionEvseFacts_t evse;
     TransactionEvseFacts_t evse_without_connector;
     TransactionIdToken_t id_token;
+    TransactionIdToken_t decoded_token;
+    uint8_t *binary = nullptr;
+    size_t binary_size = 0u;
 
     check_equal(Ocpp201Core_codec_create(&codec, &error), DATA_BIND_OK);
     TransactionEventFacts_init(&event);
@@ -117,6 +150,7 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     TransactionEvseFacts_init(&evse);
     TransactionEvseFacts_init(&evse_without_connector);
     TransactionIdToken_init(&id_token);
+    TransactionIdToken_init(&decoded_token);
     check_equal(TransactionEventFacts_from_json(codec, &event, event_json,
                                                  sizeof(event_json) - 1u, &error),
                  DATA_BIND_OK);
@@ -145,6 +179,15 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(tstr_len(id_token.idToken), sizeof("04AABBCCDD") - 1u);
     check_equal(id_token.type, IdTokenType_ISO14443);
 
+    check_equal(TransactionIdToken_to_bin(&id_token, &binary, &binary_size, &error),
+                DATA_BIND_OK);
+    check_equal(TransactionIdToken_from_bin(codec, &decoded_token, binary, binary_size, &error),
+                DATA_BIND_OK);
+    check_equal(decoded_token.idToken, id_token.idToken);
+    check_equal(decoded_token.type, id_token.type);
+
+    data_bind_binary_free(binary);
+    TransactionIdToken_clear(&decoded_token);
     TransactionIdToken_clear(&id_token);
     TransactionEvseFacts_clear(&evse_without_connector);
     TransactionEvseFacts_clear(&evse);

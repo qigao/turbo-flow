@@ -1,14 +1,14 @@
 function(turbo_flow_require_chttp_deferred_cancel)
-  if(NOT TARGET Salts::CHTTP)
+  if(NOT TARGET CHttp::Client OR NOT TARGET CHttp::Server)
     message(FATAL_ERROR
-            "TurboFlow requires the imported target Salts::CHTTP")
+            "TurboFlow requires the imported targets CHttp::Client and CHttp::Server")
   endif()
 
   get_property(_turbo_flow_enabled_languages GLOBAL PROPERTY ENABLED_LANGUAGES)
-  set(CMAKE_REQUIRED_LIBRARIES Salts::CHTTP)
+  set(CMAKE_REQUIRED_LIBRARIES CHttp::Server)
   unset(TURBO_FLOW_HAS_CHTTP_SERVER_DEFERRED_CANCEL CACHE)
   set(_turbo_flow_chttp_probe [[
-#include <chttp/chttp.h>
+#include <http_server/http.h>
 
 int main(void) {
   return chttp_server_deferred_cancel((chttp_server_deferred *)0);
@@ -33,7 +33,7 @@ int main(void) {
   if(NOT TURBO_FLOW_HAS_CHTTP_SERVER_DEFERRED_CANCEL)
     message(
       FATAL_ERROR
-        "TurboFlow requires Salts::CHTTP with chttp_server_deferred_cancel; install a compatible Salts package"
+        "TurboFlow requires CHttp::Server with chttp_server_deferred_cancel; install a compatible Chttp package"
     )
   endif()
 endfunction()

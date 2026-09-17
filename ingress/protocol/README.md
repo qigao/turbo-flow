@@ -53,6 +53,12 @@ client，不保存 broker session、QoS、retained 或离线消息状态。
 
 ## 构建与测试
 
+OCPP 2.0.1 Core 的内部 DataBind schema 当前为版本 6。为满足
+`salts-utils/parsers` 的 TBE 字段顺序约束，`StatusNotificationRequest`、
+`TransactionEventRequired` 和 `TransactionIdToken` 将定长字段放在变长字符串之前。
+JSON 字段名、类型和业务校验不变；生成结构及 TBE 二进制布局按版本 6 重新生成，
+不承诺与版本 5 的生成结构或二进制数据兼容。升级时须重新编译生成库及其消费者。
+
 所有选项只在仓库根 `CMakeOptions.cmake` 声明。当前仓库不构建 transport soak；
 常规验证使用仓库 presets：
 

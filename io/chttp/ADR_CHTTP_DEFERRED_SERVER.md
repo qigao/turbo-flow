@@ -141,7 +141,7 @@ duplicate response rejection, bounded ingress overload, response-size failure,
 deferred allocation failure followed by no-response cancellation, CHTTP-owned
 stop/drain ordering, restart, and concurrent lifecycle snapshots.
 Header probes and the installed consumer verify the additive public API and
-`Salts::CHTTP` dependency.
+independent `Chttp` package with `CHttp::Client` and `CHttp::Server` dependencies.
 
 ## Rollback
 

@@ -30,6 +30,7 @@ endif()
 
 set(_TurboFlow_salts_utils_components
     Graph
+    CHTTPAdapter
     Product
     Flow
     ProtocolIngressGraph
@@ -42,6 +43,7 @@ set(_TurboFlow_salts_utils_components
 
 set(_TurboFlow_rules_forge_components
     Graph
+    CHTTPAdapter
     Product
     Flow
     ProtocolIngressGraph
@@ -159,8 +161,30 @@ if(_TurboFlow_needs_turbodb)
   _TurboFlow_verify_dependency_root(Orm TURBODB_ROOT)
 endif()
 
-include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowRequireCHTTP.cmake")
-turbo_flow_require_chttp_deferred_cancel()
+if("CHTTPAdapter" IN_LIST _TurboFlow_requested_components)
+  if(NOT DEFINED ENV{HTTP_SERVICES_ROOT} OR "$ENV{HTTP_SERVICES_ROOT}" STREQUAL ""
+     OR NOT IS_DIRECTORY "$ENV{HTTP_SERVICES_ROOT}")
+    set(TurboFlow_FOUND FALSE)
+    set(TurboFlow_NOT_FOUND_MESSAGE
+        "HTTP_SERVICES_ROOT must name the installed Chttp profile")
+    return()
+  endif()
+  find_dependency(Chttp CONFIG REQUIRED
+                  PATHS "$ENV{HTTP_SERVICES_ROOT}" NO_DEFAULT_PATH)
+  file(REAL_PATH "$ENV{HTTP_SERVICES_ROOT}" _TurboFlow_dependency_root)
+  file(REAL_PATH "${Chttp_DIR}" _TurboFlow_dependency_dir)
+  cmake_path(IS_PREFIX _TurboFlow_dependency_root
+             "${_TurboFlow_dependency_dir}" NORMALIZE
+             _TurboFlow_dependency_is_within_root)
+  if(NOT _TurboFlow_dependency_is_within_root)
+    set(TurboFlow_FOUND FALSE)
+    set(TurboFlow_NOT_FOUND_MESSAGE
+        "Chttp resolved outside HTTP_SERVICES_ROOT: ${Chttp_DIR}")
+    return()
+  endif()
+  include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowRequireCHTTP.cmake")
+  turbo_flow_require_chttp_deferred_cancel()
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowTargets.cmake")
 
