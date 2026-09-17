@@ -88,3 +88,29 @@ anchor = "install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)"
 assert anchor in text
 text = text.replace(anchor, insertion + anchor, 1)
 graph.write_text(text)
+
+if args.turbodb:
+    # SQLite Inbox tests exercise the canonical C codec, not RulesForge bindings.
+    # Keep the schema and enum values intact; the full declarations gate remains
+    # outside this focused assembly, which already excludes RulesForge.
+    inbox = Path("ingress/protocol/inbox/CMakeLists.txt")
+    text = inbox.read_text()
+    for line in (
+        '         "${_protocol_inbox_generated_rfl}"\n',
+        '    --dsl-output "${_protocol_inbox_generated_rfl}"\n',
+        '        "${_protocol_inbox_generated_rfl}"\n',
+    ):
+        assert line in text
+        text = text.replace(line, "", 1)
+    text = text.replace(
+        '  DEPENDS "${_protocol_inbox_generated_rfl}"\n'
+        '          "${_protocol_inbox_generated_ts}")',
+        '  DEPENDS "${_protocol_inbox_generated_ts}")',
+        1,
+    )
+    text = text.replace(
+        'COMMENT "Generating canonical protocol Inbox TBE and RulesForge bindings"',
+        'COMMENT "Generating canonical protocol Inbox TBE C bindings"',
+        1,
+    )
+    inbox.write_text(text)
