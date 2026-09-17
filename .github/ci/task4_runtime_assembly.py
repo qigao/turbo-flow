@@ -17,6 +17,8 @@ start = text.index("add_subdirectory(turbo_flow)\n")
 end = text.index("set(TURBO_FLOW_EXPORT_TARGETS)", start)
 children = "add_subdirectory(ingress/protocol/common)\nadd_subdirectory(turbo_flow)\nadd_subdirectory(io/durable)\n"
 if args.turbodb:
+    # The real Inbox tests use the protocol envelope and its generated schema.
+    children += "add_subdirectory(ingress/protocol/inbox)\n"
     children += "add_subdirectory(io/turbodb)\n"
 text = text[:start] + children + "\n" + text[end:]
 root.write_text(text)
