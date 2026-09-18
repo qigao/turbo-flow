@@ -77,7 +77,8 @@ set_target_properties(
              FOLDER "ingress/protocol/inbox/internal")
 target_include_directories(
   tf_protocol_envelope
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>)
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_link_libraries(
   tf_protocol_envelope
   PUBLIC TurboFlow::ProtocolIngress TurboFlow::Graph tf_protocol_inbox_schema)
