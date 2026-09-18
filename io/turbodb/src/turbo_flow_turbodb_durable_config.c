@@ -131,6 +131,9 @@ int durable_turbodb_config_read(const turbo_flow_resolved_config_t *resolved, co
   out->max_message_bytes = (size_t)values[1];
   out->inbox = turbo_flow_turbodb_inbox_config_default();
   out->inbox.namespace_name = out->namespace_name;
+  out->inbox.open_mode = !strcmp(open_mode, "takeover")
+                             ? TURBO_FLOW_TURBODB_INBOX_OPEN_TAKEOVER
+                             : TURBO_FLOW_TURBODB_INBOX_OPEN_EXCLUSIVE;
   out->inbox.max_records = (size_t)values[2];
   out->inbox.max_total_bytes = (size_t)values[3];
   out->inbox.max_record_bytes = (size_t)values[4];
