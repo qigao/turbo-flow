@@ -3,6 +3,7 @@
 
 #include "turbo_flow.h"
 #include "turbo_flow_inbox.h"
+#include "turbo_flow_inbox_source.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -102,6 +103,50 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_quiesce(
  */
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_drain(
     turbo_flow_durable_buffer_binding_t *binding, uint64_t timeout_ms);
+
+/**
+ * Retry only the currently retained settlement attempt for this binding.
+ * This never claims another record and never re-executes Graph work. It is valid
+ * only while the driver retains a known failed complete/fail settlement attempt;
+ * an already-unknown EALREADY outcome remains unknown and returns EALREADY.
+ * The result output must be an exact-version TURBO_FLOW_INBOX_SOURCE_RESULT_INIT value.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_retry_settlement(
+    turbo_flow_durable_buffer_binding_t *binding,
+    turbo_flow_inbox_source_result_t *result);
+
+/**
+ * Reconcile only an EALREADY/unknown settlement against provider failed/history
+ * indexes. Reconciliation does not retry Graph work or mutate provider record state.
+ * A durable owner-lost record resolves to OWNER_LOST_UNKNOWN/ECANCELED; an
+ * unobservable outcome remains fail-closed.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_reconcile_settlement(
+    turbo_flow_durable_buffer_binding_t *binding,
+    turbo_flow_inbox_source_result_t *result);
+
+/**
+ * Scan FAILED records for one named durable-buffer resource without advancing
+ * provider state. Entries preserve PROCESSING versus OWNER_LOST_UNKNOWN so an
+ * operator can make an explicit retry or discard decision.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_scan_failed(
+    turbo_flow_t *flow, const char *resource_name, uint64_t after_record_id,
+    turbo_flow_inbox_failed_entry_t *entries, size_t capacity, size_t *out_count);
+
+/**
+ * Explicitly move one FAILED record back to PENDING. This does not request or
+ * execute downstream Graph work; later progress/drain owns that decision.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_retry_failed(
+    turbo_flow_t *flow, const char *resource_name, uint64_t record_id);
+
+/**
+ * Explicitly discard one FAILED record and retain its idempotency tombstone.
+ * This never retries, reconciles, or executes downstream Graph work.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_discard_failed(
+    turbo_flow_t *flow, const char *resource_name, uint64_t record_id);
 
 /**
  * Scan terminal completion/discard history for one named durable-buffer resource.
