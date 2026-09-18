@@ -492,9 +492,10 @@ budget covers ordinary publish drain and all buffer drains. No-buffer retirement
 
 The binding API exposes provider-neutral terminal-history scan and explicit forget by
 configured resource name. This releases successful tombstone quota without exposing an
-Inbox handle or advancing failed/unknown state. The frozen binding API still has no public
-failed/unknown settlement retry/reconcile entry point. Such recovery currently requires the
-internal Inbox driver interface and needs a separate public operator contract. Reset returns
+Inbox handle or advancing failed/unknown state. The binding API now exposes explicit failed/unknown recovery without exposing the Inbox:
+named resources support failed scan/retry/discard, and an opaque binding supports settlement
+retry/reconcile. These calls never request new Graph work implicitly and preserve exact provider
+errors. Crash/reopen and owner-takeover conformance remains #130. Reset returns
 EBUSY, and void destroy retains the complete Flow with an EBUSY diagnostic while a driver is
 unresolved; this is a safe retained state, not a claim that an external opaque-binding caller
 can already recover it.
