@@ -1,7 +1,6 @@
 #ifndef TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_H
 #define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_H
 
-#include "turbo_flow_inbox.h"
 #include "turbo_flow_plugin.h"
 #include "turbo_flow_resolved_config.h"
 
@@ -9,7 +8,7 @@
 extern "C" {
 #endif
 
-#define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION UINT32_C(1)
+#define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION UINT32_C(2)
 
 typedef struct turbo_flow_protocol_network_intake_s turbo_flow_protocol_network_intake_t;
 
@@ -18,14 +17,19 @@ typedef struct turbo_flow_protocol_network_intake_config_s {
   uint32_t version;
   turbo_flow_plugin_catalog_snapshot_t *catalog;
   const turbo_flow_resolved_config_t *resolved;
-  turbo_flow_inbox_t *inbox;
+  /**
+   * Borrowed STARTED Flow receiving normalized protocol messages. The named
+   * decoded source must feed exactly one generic durable-buffer stage.
+   */
+  turbo_flow_t *downstream_flow;
   const char *source_adapter_name;
-  const char *intake_adapter_name;
+  const char *decoder_adapter_name;
+  const char *decoded_source_name;
 } turbo_flow_protocol_network_intake_config_t;
 
 #define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT                                             \
   {sizeof(turbo_flow_protocol_network_intake_config_t),                                            \
-   TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION, NULL, NULL, NULL, NULL, NULL}
+   TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION, NULL, NULL, NULL, NULL, NULL, NULL}
 
 typedef enum turbo_flow_protocol_network_intake_state_e {
   TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_COMPILED = 1,
@@ -44,6 +48,7 @@ typedef struct turbo_flow_protocol_network_intake_snapshot_s {
   size_t active_sessions;
   size_t pending_claims;
   size_t pending_bytes;
+  /** Decoded frames whose downstream publish returned durable admission success. */
   uint64_t frames_admitted;
   uint64_t source_polls;
   int backpressured;
