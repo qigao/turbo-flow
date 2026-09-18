@@ -1,4 +1,5 @@
 #include "../../../tests/flow_operation_fixture.h"
+#include "../../durable/tests/durable_provider_conformance.h"
 #include "tinytest.h"
 #include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_plugin_generation.h"
@@ -186,6 +187,19 @@ static int publish(turbo_flow_t *flow, const char *key) {
   int rc = turbo_flow_publish(flow, "input", &msg);
   turbo_flow_msg_cleanup(&msg); return rc;
 }
+static int conformance_publish_stable(void *ctx, const char *admission_id) {
+  fixture_t *f = ctx;
+  return publish(turbo_flow_plugin_generation_flow(f->generation), admission_id);
+}
+static int conformance_progress(void *ctx) {
+  fixture_t *f = ctx;
+  turbo_flow_config_error_t e = TURBO_FLOW_CONFIG_ERROR_INIT;
+  return turbo_flow_plugin_generation_poll(f->generation, 0u, &e);
+}
+static size_t conformance_delivered(void *ctx) {
+  fixture_t *f = ctx;
+  return atomic_load(&f->delivered);
+}
 static void replace_field(fixture_t *f, const char *before, const char *after, char *out) {
   const char *at = strstr(f->yaml, before); check_not_null(at);
   size_t prefix = (size_t)(at - f->yaml);
@@ -199,6 +213,19 @@ static void retire(fixture_t *f) {
   if (rc == SALTS_OK) f->generation = NULL;
 }
 spec("configured file-backed TurboDB durable resource") {
+  it("matches the shared provider-neutral durable conformance contract") {
+    fixture_t f; open_fixture(&f, graph_text, 1);
+    int rc = create_generation(&f); check_equal(rc, SALTS_OK);
+    if (rc == SALTS_OK) {
+      turbo_flow_t *flow = turbo_flow_plugin_generation_flow(f.generation);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      turbo_flow_durable_provider_conformance_v1_t contract = {
+        &f, flow, conformance_publish_stable, conformance_progress, conformance_delivered
+      };
+      turbo_flow_durable_provider_conformance_capacity_and_replay(&contract);
+    }
+    close_fixture(&f);
+  }
   it("registers the kind and commits the same Graph cut before downstream retirement") {
     fixture_t f; open_fixture(&f, graph_text, 1);
     check_not_null(provider(&f));
