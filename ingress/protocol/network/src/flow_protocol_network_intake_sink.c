@@ -1,5 +1,6 @@
 #include "flow_protocol_network_intake_internal.h"
 
+#include "flow_protocol_envelope_internal.h"
 #include "turbo_flow_cnet.h"
 
 #include <inttypes.h>
@@ -32,11 +33,13 @@ typedef struct intake_pending_claim_s {
 struct flow_protocol_network_intake_sink_s {
   turbo_flow_t *flow;
   turbo_flow_protocol_t *protocol;
-  turbo_flow_inbox_t *inbox;
-  turbo_flow_protocol_inbox_t *protocol_inbox;
+  turbo_flow_t *downstream_flow;
   turbo_flow_protocol_source_t *protocol_source;
   flow_protocol_network_intake_settings_t settings;
   tstr adapter_name;
+  tstr decoded_source_name;
+  uint8_t *envelope_scratch;
+  size_t max_envelope_bytes;
   intake_parser_slot_t *parser_slots;
   intake_pending_claim_t *pending;
   size_t pending_head;
