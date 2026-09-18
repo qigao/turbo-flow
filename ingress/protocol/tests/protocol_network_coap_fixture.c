@@ -57,11 +57,10 @@ static void protocol_network_coap_business_stage(void *ctx, const char *stage_na
                                                  uint64_t duration_ns, int status) {
   protocol_network_e2e_business_probe_t *probe =
       (protocol_network_e2e_business_probe_t *)ctx;
-  (void)stage_name;
   (void)adapter_name;
   (void)message;
   (void)duration_ns;
-  if (!probe) return;
+  if (!probe || !stage_name || strcmp(stage_name, "output") != 0) return;
   ++probe->stage_completions;
   if (status != SALTS_OK) ++probe->failed_completions;
 }
@@ -159,10 +158,10 @@ static int protocol_network_coap_yaml(protocol_network_e2e_fixture_t *fixture, c
       "      first_message_id: 1\n"
       "      initial_demand: 8\n"
       "      stop_timeout_ms: 1000\n"
-      "  protocol.store:\n"
-      "    kind: protocol.intake\n"
+      "  protocol.decode:\n"
+      "    kind: protocol.decode\n"
       "    config:\n"
-      "      schema_version: 1\n"
+      "      schema_version: 2\n"
       "      protocol_provider: coap\n"
       "      protocol_kind: coap\n"
       "      protocol_version: RFC7252\n"
@@ -207,9 +206,9 @@ static int protocol_network_coap_inbox_open(protocol_network_e2e_fixture_t *fixt
 
 static int protocol_network_coap_intake_open(protocol_network_e2e_fixture_t *fixture) {
   static const char graph[] = "source wire adapter udp.input\n"
-                              "stage durable adapter protocol.store\n"
+                              "stage decode adapter protocol.decode\n"
                               "stage main {\n"
-                              "  wire -> durable\n"
+                              "  wire -> decode\n"
                               "}\n";
   turbo_flow_protocol_network_intake_config_t config =
       TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT;
@@ -224,25 +223,29 @@ static int protocol_network_coap_intake_open(protocol_network_e2e_fixture_t *fix
   }
   config.catalog = fixture->catalog;
   config.resolved = fixture->resolved;
-  config.inbox = &fixture->inbox;
+  config.downstream_flow =
+      turbo_flow_plugin_generation_flow(fixture->business_generation);
   config.source_adapter_name = "udp.input";
-  config.intake_adapter_name = "protocol.store";
+  config.decoder_adapter_name = "protocol.decode";
+  config.decoded_source_name = "decoded";
   rc = turbo_flow_protocol_network_intake_create(&config, &flow, &fixture->intake, &error);
   if (flow) turbo_flow_destroy(flow);
   return rc;
 }
 
 static int protocol_network_coap_business_open(protocol_network_e2e_fixture_t *fixture) {
-  static const char graph[] = "source inbox\n"
+  static const char graph[] = "source decoded\n"
+                              "buffer intake resource intake.store\n"
                               "stage output adapter udp.output\n"
                               "stage main {\n"
-                              "  inbox -> output\n"
+                              "  decoded -> intake -> output\n"
                               "}\n";
   turbo_flow_plugin_generation_config_t generation_config =
       TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+  turbo_flow_durable_buffer_binding_config_t binding =
+      TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_observer_ops_t observer;
-  turbo_flow_inbox_source_config_t source_config = TURBO_FLOW_INBOX_SOURCE_CONFIG_INIT;
   turbo_flow_t *flow = turbo_flow_create();
   int rc;
   if (!flow) return SALTS_ENOMEM;
@@ -253,6 +256,12 @@ static int protocol_network_coap_business_open(protocol_network_e2e_fixture_t *f
   observer.stage_complete = protocol_network_coap_business_stage;
   rc = turbo_flow_set_observer(flow, &observer, &fixture->business);
   if (rc != SALTS_OK) goto fail;
+  binding.resource_name = "intake.store";
+  binding.inbox = &fixture->inbox;
+  binding.identity_mode = TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED;
+  binding.max_message_bytes = 4096u;
+  rc = turbo_flow_durable_buffer_bind(flow, &binding, &fixture->durable_binding);
+  if (rc != SALTS_OK) goto fail;
   generation_config.owner_capacity = 1u;
   rc = turbo_flow_plugin_generation_create(fixture->catalog, fixture->resolved, &flow,
                                            &generation_config, NULL,
@@ -261,13 +270,13 @@ static int protocol_network_coap_business_open(protocol_network_e2e_fixture_t *f
   if (rc != SALTS_OK) goto fail;
   rc = turbo_flow_start(turbo_flow_plugin_generation_flow(fixture->business_generation));
   if (rc != SALTS_OK) return rc;
-  source_config.inbox = &fixture->inbox;
-  source_config.flow = turbo_flow_plugin_generation_flow(fixture->business_generation);
-  source_config.graph_source_name = "inbox";
-  source_config.max_message_bytes = 4096u;
-  return turbo_flow_inbox_source_create(&source_config, &fixture->inbox_source);
+  return SALTS_OK;
 
 fail:
+  if (flow && fixture->durable_binding) {
+    (void)turbo_flow_durable_buffer_unbind(fixture->durable_binding);
+    fixture->durable_binding = NULL;
+  }
   if (flow) turbo_flow_destroy(flow);
   return rc;
 }
@@ -287,8 +296,8 @@ int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
   if (rc == SALTS_OK)
     rc = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &fixture->resolved, &error);
   if (rc == SALTS_OK) rc = protocol_network_coap_inbox_open(fixture);
-  if (rc == SALTS_OK) rc = protocol_network_coap_intake_open(fixture);
   if (rc == SALTS_OK) rc = protocol_network_coap_business_open(fixture);
+  if (rc == SALTS_OK) rc = protocol_network_coap_intake_open(fixture);
   if (rc != SALTS_OK) protocol_network_e2e_destroy(fixture);
   return rc;
 }
