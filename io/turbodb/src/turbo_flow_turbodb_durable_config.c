@@ -63,6 +63,7 @@ int durable_turbodb_config_read(const turbo_flow_resolved_config_t *resolved, co
                                         "max_total_bytes", "max_record_bytes", "max_claims",
                                         "connection_count"};
   uint64_t values[sizeof(numbers) / sizeof(numbers[0])] = {0u};
+  uint64_t expected_generation = 0u;
   turbo_flow_resolved_channel_view_t channel = TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT;
   turbo_flow_resolved_adapter_view_t fields = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
   char identity[32];
@@ -77,14 +78,14 @@ int durable_turbodb_config_read(const turbo_flow_resolved_config_t *resolved, co
   fields.name = channel.name;
   fields.kind = channel.kind;
   fields.config = channel.config;
-  if (turbo_flow_resolved_adapter_field_count(&fields) != 11u)
+  if (turbo_flow_resolved_adapter_field_count(&fields) != 12u)
     return fail(error, SALTS_EINVAL, name, NULL);
   for (size_t i = 0u; i < sizeof(numbers) / sizeof(numbers[0]); ++i) {
     uint64_t maximum = i == 6u ? TURBO_FLOW_TURBODB_INBOX_MAX_CONNECTIONS : INT64_MAX;
     rc = get_number(&fields, name, numbers[i], maximum, &values[i], error);
     if (rc != SALTS_OK) return rc;
   }
-  if (values[0] != 1u) return fail(error, SALTS_EINVAL, name, numbers[0]);
+  if (values[0] != 2u) return fail(error, SALTS_EINVAL, name, numbers[0]);
   if (values[4] > values[3]) return fail(error, SALTS_ERANGE, name, numbers[4]);
   if (values[5] > values[2]) return fail(error, SALTS_ERANGE, name, numbers[5]);
   rc = get_text(&fields, name, "identity_mode", identity, sizeof(identity), error);
@@ -102,9 +103,31 @@ int durable_turbodb_config_read(const turbo_flow_resolved_config_t *resolved, co
                 sizeof(out->namespace_name), error);
   if (rc != SALTS_OK) return rc;
   if (!namespace_valid(out->namespace_name)) return fail(error, SALTS_EINVAL, name, "namespace");
+  {
+    turbo_flow_config_value_type_t type;
+    rc = turbo_flow_resolved_adapter_field_type(&fields, "expected_generation", &type);
+    if (rc != SALTS_OK) return fail(error, rc, name, "expected_generation");
+    if (type != TURBO_FLOW_CONFIG_NUMBER)
+      return fail(error, SALTS_EINVAL, name, "expected_generation");
+    rc = turbo_flow_resolved_adapter_get_u64(&fields, "expected_generation",
+                                             &expected_generation);
+    if (rc != SALTS_OK || expected_generation > INT64_MAX)
+      return fail(error, rc != SALTS_OK ? rc : SALTS_ERANGE, name,
+                  "expected_generation");
+  }
   rc = get_text(&fields, name, "open_mode", open_mode, sizeof(open_mode), error);
   if (rc != SALTS_OK) return rc;
-  if (strcmp(open_mode, "exclusive")) return fail(error, SALTS_ENOTSUP, name, "open_mode");
+  if (!strcmp(open_mode, "exclusive")) {
+    if (expected_generation != 0u)
+      return fail(error, SALTS_EINVAL, name, "expected_generation");
+    out->inbox.open_mode = TURBO_FLOW_TURBODB_INBOX_OPEN_EXCLUSIVE;
+  } else if (!strcmp(open_mode, "takeover")) {
+    if (expected_generation == 0u)
+      return fail(error, SALTS_EINVAL, name, "expected_generation");
+    out->inbox.open_mode = TURBO_FLOW_TURBODB_INBOX_OPEN_TAKEOVER;
+  } else {
+    return fail(error, SALTS_ENOTSUP, name, "open_mode");
+  }
   out->max_message_bytes = (size_t)values[1];
   out->inbox = turbo_flow_turbodb_inbox_config_default();
   out->inbox.namespace_name = out->namespace_name;
@@ -113,6 +136,6 @@ int durable_turbodb_config_read(const turbo_flow_resolved_config_t *resolved, co
   out->inbox.max_record_bytes = (size_t)values[4];
   out->inbox.max_claims = (size_t)values[5];
   out->inbox.connection_count = (uint32_t)values[6];
-  out->inbox.open_mode = TURBO_FLOW_TURBODB_INBOX_OPEN_EXCLUSIVE;
+  out->inbox.expected_generation = expected_generation;
   return SALTS_OK;
 }
