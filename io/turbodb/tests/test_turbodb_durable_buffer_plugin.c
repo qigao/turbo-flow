@@ -19,6 +19,14 @@ static const char yaml_format[] =
     "      max_total_bytes: 67108864\n      max_record_bytes: 1048576\n"
     "      max_claims: 1\n      connection_count: 4\n      open_mode: exclusive\n"
     "      expected_generation: 0\n";
+static const char takeover_yaml_format[] =
+    "version: 1\nchannels:\n  intake.store:\n    kind: flow.durable.turbodb\n    config:\n"
+    "      schema_version: 2\n      identity_mode: stable_required\n"
+    "      filename: '%s'\n      namespace: orders\n"
+    "      max_message_bytes: 1048576\n      max_records: 2\n"
+    "      max_total_bytes: 67108864\n      max_record_bytes: 1048576\n"
+    "      max_claims: 1\n      connection_count: 4\n      open_mode: takeover\n"
+    "      expected_generation: 1\n";
 static const char graph_text[] =
     "source input\nbuffer intake resource intake.store\n"
     "stage output operation test.output\nstage main {\n input -> intake -> output\n}\n";
@@ -420,6 +428,119 @@ spec("configured file-backed TurboDB durable resource") {
     }
     close_fixture(&f);
   }
+  it("recovers pending and owner-lost work only through explicit takeover and retry") {
+    fixture_t f;
+    turbo_flow_turbodb_inbox_config_t seed_config;
+    turbo_flow_inbox_t seed_inbox = TURBO_FLOW_INBOX_INIT;
+    turbo_flow_durable_buffer_binding_config_t binding_config =
+        TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
+    turbo_flow_durable_buffer_binding_t *binding = NULL;
+    turbo_flow_inbox_claim_t old_claim = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_inbox_failed_entry_t failed = TURBO_FLOW_INBOX_FAILED_ENTRY_INIT;
+    turbo_flow_config_error_t e = TURBO_FLOW_CONFIG_ERROR_INIT;
+    orm_error_t oe;
+    flow_test_operation_t op;
+    char takeover_yaml[YAML_BYTES];
+    uint64_t owner_lost_record_id;
+    size_t count = 0u;
+    int rc;
+
+    open_fixture(&f, graph_text, 1);
+    seed_config = turbo_flow_turbodb_inbox_config_default();
+    seed_config.database = &f.database;
+    seed_config.namespace_name = "orders";
+    seed_config.max_records = 2u;
+    seed_config.max_total_bytes = 67108864u;
+    seed_config.max_record_bytes = 1048576u;
+    seed_config.max_claims = 1u;
+    seed_config.connection_count = 4u;
+    orm_error_init(&oe);
+    check_equal(turbo_flow_turbodb_inbox_create(&seed_config, &seed_inbox, &oe), SALTS_OK);
+
+    binding_config.resource_name = "intake.store";
+    binding_config.inbox = &seed_inbox;
+    binding_config.identity_mode = TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED;
+    binding_config.max_message_bytes = 1048576u;
+    check_equal(turbo_flow_durable_buffer_bind(f.flow, &binding_config, &binding), SALTS_OK);
+    check_equal(turbo_flow_compile(f.flow), SALTS_OK);
+    check_equal(turbo_flow_start(f.flow), SALTS_OK);
+    check_equal(publish(f.flow, "one"), SALTS_OK);
+    check_equal(publish(f.flow, "two"), SALTS_OK);
+    check_equal(atomic_load(&f.delivered), (size_t)0u);
+    check_equal(scalar(&f, "SELECT pending_records FROM orders_inbox_meta_v2"), (int64_t)2);
+    check_equal(turbo_flow_inbox_claim(&seed_inbox, &old_claim), SALTS_OK);
+    owner_lost_record_id = old_claim.record_id;
+    check_equal(scalar(&f, "SELECT pending_records FROM orders_inbox_meta_v2"), (int64_t)1);
+    check_equal(scalar(&f, "SELECT in_flight_claims FROM orders_inbox_meta_v2"), (int64_t)1);
+
+    check_equal(turbo_flow_stop(f.flow), SALTS_OK);
+    check_equal(turbo_flow_durable_buffer_unbind(binding), SALTS_OK);
+    binding = NULL;
+    turbo_flow_destroy(f.flow);
+    f.flow = NULL;
+
+    check_true((size_t)snprintf(takeover_yaml, sizeof(takeover_yaml), takeover_yaml_format, f.path) <
+               sizeof(takeover_yaml));
+    resolve(&f, takeover_yaml);
+    f.flow = turbo_flow_create();
+    check_not_null(f.flow);
+    f.execution_flow = f.flow;
+    op = flow_test_operation_init("test.output", output, &f);
+    check_equal(flow_test_operation_register(f.flow, &op), SALTS_OK);
+    check_equal(turbo_flow_parse_string(f.flow, graph_text, strlen(graph_text)), SALTS_OK);
+    rc = create_generation(&f);
+    check_equal(rc, SALTS_OK);
+    if (rc == SALTS_OK) {
+      turbo_flow_t *flow = turbo_flow_plugin_generation_flow(f.generation);
+      check_equal(scalar(&f, "SELECT generation FROM orders_inbox_meta_v2"), (int64_t)2);
+      check_equal(scalar(&f, "SELECT pending_records FROM orders_inbox_meta_v2"), (int64_t)1);
+      check_equal(scalar(&f, "SELECT failed_records FROM orders_inbox_meta_v2"), (int64_t)1);
+      check_equal(scalar(&f, "SELECT in_flight_claims FROM orders_inbox_meta_v2"), (int64_t)0);
+
+      check_equal(turbo_flow_durable_buffer_scan_failed(
+                      flow, "intake.store", 0u, &failed, 1u, &count),
+                  SALTS_OK);
+      check_equal(count, (size_t)1u);
+      check_equal(failed.record_id, owner_lost_record_id);
+      check_equal(failed.kind, TURBO_FLOW_INBOX_FAILURE_OWNER_LOST_UNKNOWN);
+
+      check_equal(turbo_flow_inbox_complete(&seed_inbox, &old_claim), SALTS_ECANCELED);
+      check_equal(old_claim.record_id, (uint64_t)0u);
+      check_equal(turbo_flow_inbox_destroy(&seed_inbox), SALTS_OK);
+
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      check_equal(atomic_load(&f.delivered), (size_t)0u);
+      check_equal(turbo_flow_plugin_generation_poll(f.generation, 0u, &e), SALTS_OK);
+      check_equal(atomic_load(&f.delivered), (size_t)1u);
+
+      failed = (turbo_flow_inbox_failed_entry_t)TURBO_FLOW_INBOX_FAILED_ENTRY_INIT;
+      count = 0u;
+      check_equal(turbo_flow_durable_buffer_scan_failed(
+                      flow, "intake.store", 0u, &failed, 1u, &count),
+                  SALTS_OK);
+      check_equal(count, (size_t)1u);
+      check_equal(failed.record_id, owner_lost_record_id);
+      check_equal(failed.kind, TURBO_FLOW_INBOX_FAILURE_OWNER_LOST_UNKNOWN);
+
+      check_equal(turbo_flow_durable_buffer_retry_failed(
+                      flow, "intake.store", owner_lost_record_id),
+                  SALTS_OK);
+      check_equal(atomic_load(&f.delivered), (size_t)1u);
+      check_equal(turbo_flow_plugin_generation_poll(f.generation, 0u, &e), SALTS_OK);
+      check_equal(atomic_load(&f.delivered), (size_t)2u);
+      check_equal(scalar(&f, "SELECT pending_records FROM orders_inbox_meta_v2"), (int64_t)0);
+      check_equal(scalar(&f, "SELECT failed_records FROM orders_inbox_meta_v2"), (int64_t)0);
+      check_equal(scalar(&f, "SELECT retried FROM orders_inbox_meta_v2"), (int64_t)1);
+      retire(&f);
+      check_equal(scalar(&f, "SELECT owner_state FROM orders_inbox_meta_v2"), (int64_t)0);
+      check_equal(scalar(&f, "SELECT completed FROM orders_inbox_meta_v2"), (int64_t)2);
+    } else {
+      (void)turbo_flow_inbox_complete(&seed_inbox, &old_claim);
+      (void)turbo_flow_inbox_destroy(&seed_inbox);
+    }
+    close_fixture(&f);
+  }
+
   it("rejects runtime-only transport capabilities before any SQL admission") {
     fixture_t f; open_fixture(&f, graph_text, 1);
     int rc = create_generation(&f); check_equal(rc, SALTS_OK);
