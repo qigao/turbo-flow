@@ -29,6 +29,7 @@ set(_tf_include_dirs
     "${TURBO_FLOW_SOURCE_DIR}/io/cnet/src"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/common/include"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/inbox/include"
+    "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/inbox/src"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/network/include"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/network/src"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/tests"
