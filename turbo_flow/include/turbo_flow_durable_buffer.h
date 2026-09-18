@@ -4,7 +4,6 @@
 #include "turbo_flow.h"
 #include "turbo_flow_inbox.h"
 #include "turbo_flow_inbox_source.h"
-#include "turbo_flow_inbox_source.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -104,56 +103,6 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_quiesce(
  */
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_drain(
     turbo_flow_durable_buffer_binding_t *binding, uint64_t timeout_ms);
-
-/**
- * Read the current single-owner downstream/settlement state without advancing it.
- * An unused binding reports EMPTY. This never claims, retries, reconciles, or
- * mutates provider state.
- */
-TURBO_FLOW_C_API int turbo_flow_durable_buffer_status(
-    turbo_flow_durable_buffer_binding_t *binding,
-    turbo_flow_inbox_source_result_t *result);
-
-/**
- * Explicitly retry only a transient pending settlement for the currently owned
- * Graph result. The Graph run is never replayed. Unknown settlement remains
- * unknown and returns EALREADY until reconcile is requested explicitly.
- */
-TURBO_FLOW_C_API int turbo_flow_durable_buffer_retry_settlement(
-    turbo_flow_durable_buffer_binding_t *binding,
-    turbo_flow_inbox_source_result_t *result);
-
-/**
- * Explicitly reconcile one unknown settlement against provider failed/history
- * state. Reconciliation never retries Graph execution or advances a provider
- * record that has no observable terminal/failed outcome.
- */
-TURBO_FLOW_C_API int turbo_flow_durable_buffer_reconcile_settlement(
-    turbo_flow_durable_buffer_binding_t *binding,
-    turbo_flow_inbox_source_result_t *result);
-
-/**
- * Scan FAILED/OWNER_LOST_UNKNOWN records for one named durable-buffer resource.
- * Observation never advances provider state.
- */
-TURBO_FLOW_C_API int turbo_flow_durable_buffer_scan_failed(
-    turbo_flow_t *flow, const char *resource_name, uint64_t after_record_id,
-    turbo_flow_inbox_failed_entry_t *entries, size_t capacity, size_t *out_count);
-
-/**
- * Explicitly move one FAILED/OWNER_LOST_UNKNOWN record back to PENDING.
- * This is the only durable-buffer operator replay entry point; it never occurs
- * implicitly during progress/drain/reconcile.
- */
-TURBO_FLOW_C_API int turbo_flow_durable_buffer_retry_failed(
-    turbo_flow_t *flow, const char *resource_name, uint64_t record_id);
-
-/**
- * Explicitly discard one FAILED/OWNER_LOST_UNKNOWN record and retain its
- * terminal idempotency tombstone.
- */
-TURBO_FLOW_C_API int turbo_flow_durable_buffer_discard_failed(
-    turbo_flow_t *flow, const char *resource_name, uint64_t record_id);
 
 /**
  * Retry only the currently retained settlement attempt for this binding.
