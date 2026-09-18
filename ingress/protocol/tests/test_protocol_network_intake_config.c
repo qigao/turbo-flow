@@ -13,8 +13,8 @@ static const char listener_yaml[] =
     "      max_connections: 4\n"
     "      max_message_bytes: 1024\n"
     "      scheduler_max_steps_per_poll: 32\n"
-    "  protocol.store:\n"
-    "    kind: protocol.intake\n"
+    "  protocol.decode:\n"
+    "    kind: protocol.decode\n"
     "    config:\n"
     "      schema_version: 1\n"
     "      protocol_provider: jtt808\n"
@@ -36,8 +36,8 @@ static const char packet_yaml[] =
     "      session_capacity: 4\n"
     "      max_message_bytes: 1024\n"
     "      scheduler_max_steps_per_poll: 32\n"
-    "  protocol.store:\n"
-    "    kind: protocol.intake\n"
+    "  protocol.decode:\n"
+    "    kind: protocol.decode\n"
     "    config:\n"
     "      schema_version: 1\n"
     "      protocol_provider: coap\n"
@@ -51,14 +51,14 @@ static const char packet_yaml[] =
 
 static const char listener_graph[] =
     "source wire adapter tcp.input\n"
-    "stage durable adapter protocol.store\n"
+    "stage decode adapter protocol.decode\n"
     "stage main {\n"
     "  wire -> durable\n"
     "}\n";
 
 static const char packet_graph[] =
     "source wire adapter udp.input\n"
-    "stage durable adapter protocol.store\n"
+    "stage decode adapter protocol.decode\n"
     "stage main {\n"
     "  wire -> durable\n"
     "}\n";
@@ -105,7 +105,7 @@ static int run_preflight(const char *yaml, const char *graph, const char *source
                          turbo_flow_config_error_t *error) {
   turbo_flow_resolved_config_t *resolved = resolved_yaml(yaml);
   turbo_flow_t *flow = parsed_flow(graph);
-  int rc = flow_protocol_network_intake_preflight(resolved, flow, source_name, "protocol.store",
+  int rc = flow_protocol_network_intake_preflight(resolved, flow, source_name, "protocol.decode",
                                                   settings, error);
   turbo_flow_destroy(flow);
   turbo_flow_resolved_config_destroy(resolved);
@@ -215,23 +215,23 @@ spec("protocol network intake configuration") {
     static const char extra_graph[] =
         "source wire adapter tcp.input\n"
         "stage middle\n"
-        "stage durable adapter protocol.store\n"
+        "stage decode adapter protocol.decode\n"
         "stage main {\n"
         "  wire -> middle -> durable\n"
         "}\n";
     turbo_flow_t *extra = parsed_flow(extra_graph);
     turbo_flow_t *unparsed = turbo_flow_create();
 
-    check_equal(flow_protocol_network_intake_preflight(resolved, flow, "missing", "protocol.store",
+    check_equal(flow_protocol_network_intake_preflight(resolved, flow, "missing", "protocol.decode",
                                                        &settings, &error),
                 SALTS_EINVAL);
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     check_equal(flow_protocol_network_intake_preflight(resolved, extra, "tcp.input",
-                                                       "protocol.store", &settings, &error),
+                                                       "protocol.decode", &settings, &error),
                 SALTS_EINVAL);
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     check_equal(flow_protocol_network_intake_preflight(resolved, unparsed, "tcp.input",
-                                                       "protocol.store", &settings, &error),
+                                                       "protocol.decode", &settings, &error),
                 SALTS_EINVAL);
 
     turbo_flow_destroy(unparsed);
