@@ -12,7 +12,6 @@ struct turbo_flow_protocol_network_intake_s {
   turbo_flow_protocol_network_intake_state_t state;
   int status;
   turbo_flow_t *flow;
-  turbo_flow_inbox_t *inbox;
   turbo_flow_plugin_catalog_snapshot_t *catalog;
   turbo_flow_protocol_registry_t *protocol_registry;
   turbo_flow_protocol_owner_t *protocol_owner;
@@ -37,26 +36,18 @@ static int intake_owner_error(turbo_flow_config_error_t *error, int status, cons
   return status;
 }
 
-static int intake_owner_inbox_valid(const turbo_flow_inbox_t *inbox) {
-  const turbo_flow_inbox_ops_v2_t *ops;
-  if (!inbox || inbox->size != sizeof(*inbox) || inbox->version != TURBO_FLOW_INBOX_API_VERSION ||
-      !inbox->ops || !inbox->ctx)
-    return 0;
-  ops = inbox->ops;
-  return ops->size == sizeof(*ops) && ops->version == TURBO_FLOW_INBOX_API_VERSION && ops->admit &&
-         ops->claim && ops->complete && ops->fail && ops->retry && ops->discard && ops->forget &&
-         ops->scan_failed && ops->scan_history && ops->close && ops->snapshot && ops->destroy;
-}
-
 static int intake_owner_public_validate(
     const turbo_flow_protocol_network_intake_config_t *config, turbo_flow_t **flow_io,
     turbo_flow_protocol_network_intake_t **out, turbo_flow_config_error_t *error) {
   if (out) *out = NULL;
   if (!config || config->size != sizeof(*config) ||
       config->version != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION || !config->catalog ||
-      !config->resolved || !intake_owner_inbox_valid(config->inbox) || !config->source_adapter_name ||
-      !config->source_adapter_name[0] || !config->intake_adapter_name ||
-      !config->intake_adapter_name[0] || !flow_io || !*flow_io || !out || !error ||
+      !config->resolved || !config->downstream_flow ||
+      turbo_flow_state(config->downstream_flow) != TURBO_FLOW_STATE_STARTED ||
+      !config->source_adapter_name || !config->source_adapter_name[0] ||
+      !config->decoder_adapter_name || !config->decoder_adapter_name[0] ||
+      !config->decoded_source_name || !config->decoded_source_name[0] ||
+      !flow_io || !*flow_io || !out || !error ||
       error->size < sizeof(*error))
     return intake_owner_error(error, SALTS_EINVAL, "$.protocol_network_intake",
                               "invalid ProtocolNetworkIntake create arguments");
@@ -263,11 +254,11 @@ int turbo_flow_protocol_network_intake_create(
       (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
   intake->state = TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_COMPILED;
   intake->status = SALTS_OK;
-  intake->inbox = config->inbox;
 
   rc = flow_protocol_network_intake_preflight(config->resolved, *intake_flow_io,
                                               config->source_adapter_name,
-                                              config->intake_adapter_name, &intake->settings, error);
+                                              config->decoder_adapter_name, &intake->settings,
+                                              error);
   if (rc != SALTS_OK) {
     free(intake);
     return rc;
@@ -325,9 +316,10 @@ int turbo_flow_protocol_network_intake_create(
 
   memset(&sink_config, 0, sizeof(sink_config));
   sink_config.flow = *intake_flow_io;
-  sink_config.adapter_name = intake->settings.intake_adapter_name;
+  sink_config.adapter_name = intake->settings.decoder_adapter_name;
   sink_config.protocol = intake->protocol;
-  sink_config.inbox = intake->inbox;
+  sink_config.downstream_flow = config->downstream_flow;
+  sink_config.decoded_source_name = config->decoded_source_name;
   sink_config.settings = &intake->settings;
   rc = flow_protocol_network_intake_sink_create(&sink_config, &intake->sink);
   if (rc != SALTS_OK) {
