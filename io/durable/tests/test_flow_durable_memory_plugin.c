@@ -1,5 +1,6 @@
 #include "../../../tests/flow_operation_fixture.h"
 #include "durable_provider_conformance.h"
+#include "durable_provider_conformance.h"
 #include "tinytest.h"
 #include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_plugin_generation.h"
@@ -96,6 +97,29 @@ static int publish_message(turbo_flow_t *flow, const turbo_flow_msg_t *msg) {
        error ? error->message : "");
   return rc;
 }
+static int conformance_publish_stable(void *ctx, const char *admission_id) {
+  fixture_t *f = ctx;
+  turbo_flow_msg_t msg;
+  turbo_flow_durable_identity_t identity = TURBO_FLOW_DURABLE_IDENTITY_INIT;
+  turbo_flow_msg_init(&msg);
+  msg.owned_payload = tstr_dup("payload");
+  msg.payload = tstr_to_v(msg.owned_payload);
+  identity.source_id = vstr_from_buf("source", 6u);
+  identity.admission_id = vstr_from_buf(admission_id, strlen(admission_id));
+  check_equal(turbo_flow_msg_set_durable_identity(&msg, &identity), SALTS_OK);
+  int rc = publish_message(turbo_flow_plugin_generation_flow(f->generation), &msg);
+  turbo_flow_msg_cleanup(&msg);
+  return rc;
+}
+static int conformance_progress(void *ctx) {
+  fixture_t *f = ctx;
+  turbo_flow_config_error_t e = TURBO_FLOW_CONFIG_ERROR_INIT;
+  return turbo_flow_plugin_generation_poll(f->generation, 0u, &e);
+}
+static size_t conformance_delivered(void *ctx) {
+  fixture_t *f = ctx;
+  return atomic_load(&f->delivered);
+}
 static int publish(turbo_flow_t *flow) {
   turbo_flow_msg_t msg;
   turbo_flow_msg_init(&msg);
@@ -135,6 +159,22 @@ static void replace_field(const char *before, const char *after, char *out) {
   strcpy(out + prefix, after); strcat(out, at + strlen(before));
 }
 spec("configured bounded memory durable resource") {
+  it("matches the shared provider-neutral durable conformance contract") {
+    fixture_t f; open_fixture(&f, graph_text);
+    char yaml[YAML_BYTES];
+    replace_field("identity_mode: generated", "identity_mode: stable_required", yaml);
+    resolve(&f, yaml);
+    int rc = create_generation(&f); check_equal(rc, SALTS_OK);
+    if (rc == SALTS_OK) {
+      turbo_flow_t *flow = turbo_flow_plugin_generation_flow(f.generation);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+      turbo_flow_durable_provider_conformance_v1_t contract = {
+        &f, flow, conformance_publish_stable, conformance_progress, conformance_delivered
+      };
+      turbo_flow_durable_provider_conformance_capacity_and_replay(&contract);
+    }
+    close_fixture(&f);
+  }
   it("satisfies the shared provider-neutral capacity and replay contract") {
     fixture_t f; open_fixture(&f, graph_text);
     char yaml[YAML_BYTES];
