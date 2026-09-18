@@ -55,7 +55,7 @@ struct flow_protocol_network_intake_sink_s {
   int terminal_status;
   int registered;
   int detached;
-  char admission_id[TURBO_FLOW_PROTOCOL_INBOX_ADMISSION_ID_MAX + 1u];
+  char admission_id[TURBO_FLOW_DURABLE_ADMISSION_ID_MAX + 1u];
 };
 
 static void intake_counter_add(uint64_t *counter, uint64_t amount) {
@@ -70,22 +70,19 @@ static size_t intake_text_size(const char *text, size_t capacity) {
   return size;
 }
 
-static int intake_identity_resolve(void *ctx,
-                                   const turbo_flow_protocol_inbox_identity_request_t *request,
-                                   turbo_flow_protocol_inbox_identity_t *identity) {
-  flow_protocol_network_intake_sink_t *sink = (flow_protocol_network_intake_sink_t *)ctx;
-  const turbo_flow_protocol_message_output_t *message;
+static int intake_identity_resolve(
+    flow_protocol_network_intake_sink_t *sink,
+    const turbo_flow_protocol_message_output_t *message,
+    turbo_flow_durable_identity_t *identity) {
   const turbo_flow_protocol_metadata_t *metadata;
   const char *protocol_name;
   XXH128_hash_t digest;
   size_t correlation_size;
   int count;
-  if (!sink || !request || request->size != sizeof(*request) ||
-      request->abi_version != TURBO_FLOW_PROTOCOL_INBOX_ABI_VERSION || !request->message ||
-      !identity || identity->size != sizeof(*identity) ||
-      identity->abi_version != TURBO_FLOW_PROTOCOL_INBOX_ABI_VERSION)
+  if (!sink || !message || !identity ||
+      identity->size != sizeof(*identity) ||
+      identity->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
     return SALTS_EINVAL;
-  message = request->message;
   metadata = &message->metadata;
   protocol_name = turbo_flow_protocol_kind_name(metadata->protocol);
   if (!protocol_name || metadata->device_id[0] == '\0' ||
@@ -99,15 +96,51 @@ static int intake_identity_resolve(void *ctx,
   if (count < 0 || (size_t)count >= sizeof(sink->admission_id)) return SALTS_EMSGSIZE;
   correlation_size = intake_text_size(metadata->correlation_id, sizeof(metadata->correlation_id));
   if (correlation_size == sizeof(metadata->correlation_id)) return SALTS_EPROTO;
-  *identity = (turbo_flow_protocol_inbox_identity_t)TURBO_FLOW_PROTOCOL_INBOX_IDENTITY_INIT;
+  *identity = (turbo_flow_durable_identity_t)TURBO_FLOW_DURABLE_IDENTITY_INIT;
   identity->source_id =
       vstr_from_buf(sink->settings.source_id, strlen(sink->settings.source_id));
   identity->admission_id = vstr_from_buf(sink->admission_id, (size_t)count);
   if (correlation_size > 0u)
     identity->correlation = vstr_from_buf(metadata->correlation_id, correlation_size);
   identity->source_sequence = metadata->sequence;
-  identity->timestamp_ns = 0u;
   return SALTS_OK;
+}
+
+static int intake_decoded_admit(void *ctx,
+                                const turbo_flow_protocol_source_admit_request_t *request) {
+  flow_protocol_network_intake_sink_t *sink = (flow_protocol_network_intake_sink_t *)ctx;
+  turbo_flow_durable_identity_t identity = TURBO_FLOW_DURABLE_IDENTITY_INIT;
+  turbo_flow_content_descriptor_t content = TURBO_FLOW_CONTENT_DESCRIPTOR_INIT;
+  turbo_flow_msg_t message;
+  mem_buffer_t *buffer = NULL;
+  size_t encoded_size = 0u;
+  int rc;
+  if (!sink || !request || request->size != sizeof(*request) ||
+      request->abi_version != TURBO_FLOW_PROTOCOL_SOURCE_ABI_VERSION ||
+      request->delivery_id == 0u || request->session_id == 0u ||
+      request->session_generation == 0u || !request->message)
+    return SALTS_EINVAL;
+  rc = intake_identity_resolve(sink, request->message, &identity);
+  if (rc != SALTS_OK) return rc;
+  rc = flow_protocol_envelope_encode(request->message, sink->settings.max_frame_size,
+                                     sink->envelope_scratch, sink->max_envelope_bytes,
+                                     &encoded_size);
+  if (rc != SALTS_OK) return rc;
+  buffer = mem_wrap_external(sink->envelope_scratch, encoded_size, NULL, NULL);
+  if (!buffer) return SALTS_ENOMEM;
+  turbo_flow_msg_init(&message);
+  message.id = request->delivery_id;
+  message.ts_ns = 0u;
+  message.type = request->message->metadata.message_type;
+  message.buffer = buffer;
+  message.payload = vstr_from_buf((const char *)sink->envelope_scratch, encoded_size);
+  rc = flow_protocol_envelope_content_descriptor(&content);
+  if (rc == SALTS_OK) rc = turbo_flow_msg_copy_content_descriptor(&message, &content);
+  if (rc == SALTS_OK) rc = turbo_flow_msg_set_durable_identity(&message, &identity);
+  if (rc == SALTS_OK)
+    rc = turbo_flow_publish(sink->downstream_flow, sink->decoded_source_name, &message);
+  turbo_flow_msg_cleanup(&message);
+  return rc;
 }
 
 static int intake_ipv4_device_id(const cnet_datagram_peer *peer, char *out, size_t capacity) {
