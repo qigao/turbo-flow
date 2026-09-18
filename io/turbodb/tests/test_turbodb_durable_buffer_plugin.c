@@ -17,7 +17,8 @@ static const char yaml_format[] =
     "      filename: '%s'\n      namespace: orders\n"
     "      max_message_bytes: 1048576\n      max_records: 2\n"
     "      max_total_bytes: 67108864\n      max_record_bytes: 1048576\n"
-    "      max_claims: 1\n      connection_count: 4\n      open_mode: exclusive\n";
+    "      max_claims: 1\n      connection_count: 4\n      open_mode: exclusive\n"
+    "      expected_generation: 0\n";
 static const char graph_text[] =
     "source input\nbuffer intake resource intake.store\n"
     "stage output operation test.output\nstage main {\n input -> intake -> output\n}\n";
