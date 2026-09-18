@@ -3,6 +3,7 @@
 
 #include "tinytest.h"
 #include "turbo_flow_durable_buffer.h"
+#include <salts/clock.h>
 #include <stddef.h>
 
 /*
@@ -39,8 +40,10 @@ static void turbo_flow_durable_provider_conformance_capacity_and_replay(
   /* Admission ends at the durable cut; downstream requires explicit progress. */
   check_equal(p->delivered(p->ctx), (size_t)0u);
 
-  for (size_t i = 0u; i < 1000u && p->delivered(p->ctx) < 2u; ++i)
+  for (size_t i = 0u; i < 1000u && p->delivered(p->ctx) < 2u; ++i) {
     check_equal(p->progress(p->ctx), SALTS_OK);
+    salts_sleep_ms(1u);
+  }
   check_equal(p->delivered(p->ctx), (size_t)2u);
 
   /*
