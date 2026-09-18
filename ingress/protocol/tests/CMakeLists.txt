@@ -103,7 +103,7 @@ set_tests_properties(test_protocol_network_intake_config
 cmake_add_test(
   test_protocol_network_intake_core
   SOURCES test_protocol_network_intake_core.c
-  LIBS tf_protocol_network_intake_core Salts::TinyTest
+  LIBS tf_protocol_network_intake_core TurboFlow::CNetAdapter Salts::TinyTest
   FOLDER "ingress/protocol/tests")
 set_tests_properties(test_protocol_network_intake_core
                      PROPERTIES LABELS "protocol-ingress;network-intake;inbox")
@@ -111,7 +111,7 @@ set_tests_properties(test_protocol_network_intake_core
 cmake_add_test(
   test_protocol_network_intake_edges
   SOURCES test_protocol_network_intake_edges.c
-  LIBS tf_protocol_network_intake_core Salts::TinyTest
+  LIBS tf_protocol_network_intake_core TurboFlow::CNetAdapter Salts::TinyTest
   FOLDER "ingress/protocol/tests")
 set_tests_properties(test_protocol_network_intake_edges
                      PROPERTIES LABELS "protocol-ingress;network-intake;inbox")
