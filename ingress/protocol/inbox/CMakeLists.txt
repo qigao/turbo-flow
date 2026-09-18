@@ -68,6 +68,21 @@ target_include_directories(
 target_link_libraries(tf_protocol_inbox_schema PUBLIC Salts::DataBind)
 
 add_library(
+  tf_protocol_envelope STATIC
+  src/flow_protocol_envelope.c
+  src/flow_protocol_envelope_internal.h)
+set_target_properties(
+  tf_protocol_envelope
+  PROPERTIES POSITION_INDEPENDENT_CODE ON
+             FOLDER "ingress/protocol/inbox/internal")
+target_include_directories(
+  tf_protocol_envelope
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>)
+target_link_libraries(
+  tf_protocol_envelope
+  PUBLIC TurboFlow::ProtocolIngress TurboFlow::Graph tf_protocol_inbox_schema)
+
+add_library(
   tf_protocol_inbox SHARED
   src/flow_protocol_inbox.c
   include/turbo_flow_protocol_inbox.h)
@@ -84,7 +99,7 @@ target_include_directories(
 target_link_libraries(
   tf_protocol_inbox
   PUBLIC TurboFlow::ProtocolIngress TurboFlow::Graph
-  PRIVATE tf_protocol_inbox_schema)
+  PRIVATE tf_protocol_envelope)
 
 install(FILES include/turbo_flow_protocol_inbox.h DESTINATION include)
 install(FILES "${_protocol_inbox_generated_header}" DESTINATION include)
