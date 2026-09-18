@@ -45,7 +45,6 @@ spec("real JT/T808 TCP protocol intake") {
     turbo_flow_protocol_network_intake_snapshot_t intake =
         TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
     turbo_flow_inbox_snapshot_t inbox = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
-    turbo_flow_inbox_source_result_t business = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
     uint8_t frame[64];
     size_t frame_size;
     size_t split;
@@ -82,11 +81,8 @@ spec("real JT/T808 TCP protocol intake") {
     check_equal(fixture.udp.received, 0u);
 
     check_equal(protocol_network_e2e_business_request_and_drive(
-                    &fixture, PROTOCOL_NETWORK_E2E_TIMEOUT_MS, &business),
+                    &fixture, PROTOCOL_NETWORK_E2E_TIMEOUT_MS),
                 SALTS_OK);
-    check_equal(business.state, TURBO_FLOW_INBOX_SOURCE_COMPLETED);
-    check_equal(business.graph_status, SALTS_OK);
-    check_equal(business.settlement_status, SALTS_OK);
     check_equal(fixture.business.stage_completions, 1u);
     check_equal(fixture.business.failed_completions, 0u);
     check_equal(fixture.udp.received, 1u);
@@ -137,6 +133,13 @@ spec("real JT/T808 TCP protocol intake") {
     check_equal(inbox.pending_records, 1u);
     check_equal(fixture.business.stage_completions, 0u);
     check_equal(fixture.udp.received, 0u);
+
+    check_equal(protocol_network_e2e_business_request_and_drive(
+                    &fixture, PROTOCOL_NETWORK_E2E_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(turbo_flow_inbox_snapshot(&fixture.inbox, &inbox), SALTS_OK);
+    check_equal(inbox.pending_records, 0u);
+    check_equal(inbox.completed, (uint64_t)1u);
 
     protocol_network_e2e_destroy(&fixture);
   }
