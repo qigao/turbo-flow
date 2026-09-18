@@ -13,7 +13,7 @@
 enum { YAML_BYTES = 4096, TEST_TIMEOUT_MS = 1000 };
 static const char yaml_format[] =
     "version: 1\nchannels:\n  intake.store:\n    kind: flow.durable.turbodb\n    config:\n"
-    "      schema_version: 1\n      identity_mode: stable_required\n"
+    "      schema_version: 2\n      identity_mode: stable_required\n"
     "      filename: '%s'\n      namespace: orders\n"
     "      max_message_bytes: 1048576\n      max_records: 2\n"
     "      max_total_bytes: 67108864\n      max_record_bytes: 1048576\n"
@@ -253,14 +253,17 @@ spec("configured file-backed TurboDB durable resource") {
   }
   it("keeps preflight config-only and rejects invalid serialized fields without consuming Graph") {
     static const struct { const char *before; const char *after; } cases[] = {
-      {"schema_version: 1", "schema_version: 2"},
-      {"schema_version: 1", "schema_version: '1'"},
-      {"schema_version: 1", "schema_version: 1\n      unknown: 1"},
+      {"schema_version: 2", "schema_version: 1"},
+      {"schema_version: 2", "schema_version: '2'"},
+      {"schema_version: 2", "schema_version: 2\n      unknown: 1"},
       {"identity_mode: stable_required", "identity_mode: automatic"},
       {"namespace: orders", "namespace: bad-name"},
       {"connection_count: 4", "connection_count: 0"},
       {"connection_count: 4", "connection_count: '4'"},
+      {"open_mode: exclusive", "open_mode: automatic"},
       {"open_mode: exclusive", "open_mode: takeover"},
+      {"expected_generation: 0", "expected_generation: 1"},
+      {"expected_generation: 0", "expected_generation: '0'"},
       {"max_records: 2", "max_records: 0"},
       {"max_records: 2", "max_records: -1"},
       {"max_claims: 1", "max_claims: 3"},
@@ -281,6 +284,30 @@ spec("configured file-backed TurboDB durable resource") {
       resolve(&f, generated_yaml);
       check_equal(p->preflight(p->ctx, f.resolved, "intake.store", &e), SALTS_OK);
       resolve(&f, f.yaml);
+      {
+        char takeover_yaml[YAML_BYTES];
+        char *open_mode;
+        char *expected_generation;
+        memcpy(takeover_yaml, f.yaml, strlen(f.yaml) + 1u);
+        open_mode = strstr(takeover_yaml, "open_mode: exclusive");
+        expected_generation = strstr(takeover_yaml, "expected_generation: 0");
+        check_not_null(open_mode);
+        check_not_null(expected_generation);
+        if (open_mode && expected_generation) {
+          const size_t tail = strlen(open_mode + strlen("open_mode: exclusive"));
+          memmove(open_mode + strlen("open_mode: takeover"),
+                  open_mode + strlen("open_mode: exclusive"), tail + 1u);
+          memcpy(open_mode, "open_mode: takeover", strlen("open_mode: takeover"));
+          expected_generation = strstr(takeover_yaml, "expected_generation: 0");
+          check_not_null(expected_generation);
+          if (expected_generation)
+            memcpy(expected_generation, "expected_generation: 1",
+                   strlen("expected_generation: 1"));
+          resolve(&f, takeover_yaml);
+          check_equal(p->preflight(p->ctx, f.resolved, "intake.store", &e), SALTS_OK);
+          resolve(&f, f.yaml);
+        }
+      }
       for (size_t i=0u; i<sizeof(cases)/sizeof(cases[0]); ++i) {
         char yaml[YAML_BYTES]; replace_field(&f, cases[i].before, cases[i].after, yaml); resolve(&f, yaml);
         check_not_equal(p->preflight(p->ctx, f.resolved, "intake.store", &e), SALTS_OK);
