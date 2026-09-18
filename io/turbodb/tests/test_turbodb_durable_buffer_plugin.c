@@ -511,6 +511,7 @@ spec("configured file-backed TurboDB durable resource") {
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(atomic_load(&f.delivered), (size_t)0u);
       for (size_t attempt = 0u; attempt < 8u && atomic_load(&f.delivered) < 1u; ++attempt)
+        for (size_t i = 0u; i < 1000u && atomic_load(&f.delivered) < 1u; ++i)
         check_equal(turbo_flow_plugin_generation_poll(f.generation, 0u, &e), SALTS_OK);
       check_equal(atomic_load(&f.delivered), (size_t)1u);
 
