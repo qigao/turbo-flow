@@ -12,8 +12,8 @@ target_include_directories(
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(
   tf_protocol_network_intake_core
-  PUBLIC TurboFlow::Graph TurboFlow::ProtocolIngressInbox TurboFlow::PluginHost
-  PRIVATE TurboFlow::CNetAdapter xxHash::xxhash)
+  PUBLIC TurboFlow::Graph TurboFlow::ProtocolIngress TurboFlow::PluginHost
+  PRIVATE tf_protocol_envelope TurboFlow::CNetAdapter xxHash::xxhash)
 
 add_library(
   tf_protocol_network_intake SHARED
@@ -34,7 +34,7 @@ target_link_libraries(
   tf_protocol_network_intake
   PUBLIC TurboFlow::Graph TurboFlow::PluginHost
   PRIVATE tf_protocol_network_intake_core TurboFlow::CNetAdapter
-          TurboFlow::ProtocolIngressInbox xxHash::xxhash)
+          xxHash::xxhash)
 
 install(
   TARGETS tf_protocol_network_intake
