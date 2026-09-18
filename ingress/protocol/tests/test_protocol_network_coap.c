@@ -49,13 +49,9 @@ static void protocol_network_coap_admit(protocol_network_e2e_fixture_t *fixture,
 }
 
 static void protocol_network_coap_deliver_business(protocol_network_e2e_fixture_t *fixture) {
-  turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
   check_equal(protocol_network_e2e_business_request_and_drive(
-                  fixture, PROTOCOL_NETWORK_COAP_TIMEOUT_MS, &result),
+                  fixture, PROTOCOL_NETWORK_COAP_TIMEOUT_MS),
               SALTS_OK);
-  check_equal(result.state, TURBO_FLOW_INBOX_SOURCE_COMPLETED);
-  check_equal(result.graph_status, SALTS_OK);
-  check_equal(result.settlement_status, SALTS_OK);
   check_equal(fixture->business.stage_completions, 1u);
   check_equal(fixture->business.failed_completions, 0u);
   check_equal(fixture->udp.received, 1u);
@@ -63,7 +59,7 @@ static void protocol_network_coap_deliver_business(protocol_network_e2e_fixture_
 }
 
 spec("real CoAP UDP protocol intake") {
-  it("admits a real UDP packet before business execution and sends only after InboxSource demand") {
+  it("admits a real UDP packet before business execution and sends only after explicit durable progress") {
     static const uint8_t coap_get[] = {0x40u, 0x01u, 0x12u, 0x34u};
     protocol_network_e2e_fixture_t fixture;
     turbo_flow_inbox_snapshot_t inbox = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
