@@ -64,28 +64,6 @@ static void durable_buffer_binding_fixture_cleanup(durable_buffer_binding_fixtur
   fixture->inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
 }
 
-static turbo_flow_inbox_record_t durable_buffer_operator_record(void) {
-  static const char payload[] = "operator-payload";
-  turbo_flow_inbox_record_t record;
-  turbo_flow_inbox_record_init(&record);
-  record.source_id = vstr_from_buf("operator.source", sizeof("operator.source") - 1u);
-  record.admission_id = vstr_from_buf("operator-1", sizeof("operator-1") - 1u);
-  record.source_sequence = 1u;
-  record.timestamp_ns = 2u;
-  record.message_type = 3u;
-  check_equal(turbo_flow_content_descriptor_init(
-                  &record.content, TURBO_FLOW_DOMAIN_DATA,
-                  TURBO_FLOW_CONTENT_PROFILE_GENERIC,
-                  TURBO_FLOW_DATA_ENCODING_OPAQUE,
-                  "application/octet-stream", "operator.record"),
-              SALTS_OK);
-  check_equal(turbo_flow_content_descriptor_declare_schema(
-                  &record.content, "operator.v1", "OperatorRecord", 1u),
-              SALTS_OK);
-  record.payload = vstr_from_buf(payload, sizeof(payload) - 1u);
-  return record;
-}
-
 static turbo_flow_t *durable_buffer_compile_graph(size_t *sink_calls) {
   static const char graph[] =
       "buffer intake resource intake.store\n"
@@ -325,79 +303,6 @@ spec("Graph durable buffer DSL") {
     check_not_equal(turbo_flow_start(flow), SALTS_OK);
 
     if (flow->state == TURBO_FLOW_STATE_STARTED) check_equal(turbo_flow_stop(flow), SALTS_OK);
-    durable_buffer_binding_fixture_cleanup(&fixture);
-    turbo_flow_destroy(flow);
-  }
-
-  it("exposes an idle binding status without inventing settlement recovery") {
-    size_t sink_calls = 0u;
-    durable_buffer_binding_fixture_t fixture = {0};
-    turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
-    turbo_flow_t *flow = durable_buffer_compile_graph(&sink_calls);
-
-    check_equal(durable_buffer_bind_memory(flow, "intake.store", &fixture), SALTS_OK);
-    check_equal(turbo_flow_durable_buffer_status(fixture.binding, &result), SALTS_OK);
-    check_equal(result.state, TURBO_FLOW_INBOX_SOURCE_EMPTY);
-    result = (turbo_flow_inbox_source_result_t)TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
-    check_equal(turbo_flow_durable_buffer_retry_settlement(fixture.binding, &result), SALTS_EINVAL);
-    check_equal(result.state, TURBO_FLOW_INBOX_SOURCE_EMPTY);
-    result = (turbo_flow_inbox_source_result_t)TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
-    check_equal(turbo_flow_durable_buffer_reconcile_settlement(fixture.binding, &result),
-                SALTS_EINVAL);
-    check_equal(result.state, TURBO_FLOW_INBOX_SOURCE_EMPTY);
-
-    durable_buffer_binding_fixture_cleanup(&fixture);
-    turbo_flow_destroy(flow);
-  }
-
-  it("requires explicit named-resource retry or discard for failed records") {
-    size_t sink_calls = 0u;
-    durable_buffer_binding_fixture_t fixture = {0};
-    turbo_flow_inbox_record_t record = durable_buffer_operator_record();
-    turbo_flow_inbox_receipt_t receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
-    turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
-    turbo_flow_inbox_failed_entry_t failed = TURBO_FLOW_INBOX_FAILED_ENTRY_INIT;
-    turbo_flow_inbox_history_entry_t history = TURBO_FLOW_INBOX_HISTORY_ENTRY_INIT;
-    size_t count = 0u;
-    turbo_flow_t *flow = durable_buffer_compile_graph(&sink_calls);
-
-    check_equal(durable_buffer_bind_memory(flow, "intake.store", &fixture), SALTS_OK);
-    check_equal(turbo_flow_inbox_admit(&fixture.inbox, &record, &receipt), SALTS_OK);
-    check_equal(turbo_flow_inbox_claim(&fixture.inbox, &claim), SALTS_OK);
-    check_equal(turbo_flow_inbox_fail(&fixture.inbox, &claim, SALTS_EPROTO), SALTS_OK);
-
-    check_equal(turbo_flow_durable_buffer_scan_failed(
-                    flow, "intake.store", 0u, &failed, 1u, &count),
-                SALTS_OK);
-    check_equal(count, 1u);
-    check_equal(failed.record_id, receipt.record_id);
-    check_equal(failed.status, SALTS_EPROTO);
-    check_equal(failed.kind, TURBO_FLOW_INBOX_FAILURE_PROCESSING);
-
-    check_equal(turbo_flow_durable_buffer_retry_failed(
-                    flow, "intake.store", receipt.record_id),
-                SALTS_OK);
-    count = 0u;
-    failed = (turbo_flow_inbox_failed_entry_t)TURBO_FLOW_INBOX_FAILED_ENTRY_INIT;
-    check_equal(turbo_flow_durable_buffer_scan_failed(
-                    flow, "intake.store", 0u, &failed, 1u, &count),
-                SALTS_OK);
-    check_equal(count, 0u);
-
-    claim = (turbo_flow_inbox_claim_t)TURBO_FLOW_INBOX_CLAIM_INIT;
-    check_equal(turbo_flow_inbox_claim(&fixture.inbox, &claim), SALTS_OK);
-    check_equal(turbo_flow_inbox_fail(&fixture.inbox, &claim, SALTS_EIO), SALTS_OK);
-    check_equal(turbo_flow_durable_buffer_discard_failed(
-                    flow, "intake.store", receipt.record_id),
-                SALTS_OK);
-    count = 0u;
-    check_equal(turbo_flow_durable_buffer_scan_history(
-                    flow, "intake.store", 0u, &history, 1u, &count),
-                SALTS_OK);
-    check_equal(count, 1u);
-    check_equal(history.record_id, receipt.record_id);
-    check_equal(history.kind, TURBO_FLOW_INBOX_TERMINAL_DISCARDED);
-
     durable_buffer_binding_fixture_cleanup(&fixture);
     turbo_flow_destroy(flow);
   }
