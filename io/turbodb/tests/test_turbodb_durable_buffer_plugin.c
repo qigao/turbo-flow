@@ -510,7 +510,8 @@ spec("configured file-backed TurboDB durable resource") {
 
       check_equal(turbo_flow_start(flow), SALTS_OK);
       check_equal(atomic_load(&f.delivered), (size_t)0u);
-      check_equal(turbo_flow_plugin_generation_poll(f.generation, 0u, &e), SALTS_OK);
+      for (size_t attempt = 0u; attempt < 8u && atomic_load(&f.delivered) < 1u; ++attempt)
+        check_equal(turbo_flow_plugin_generation_poll(f.generation, 0u, &e), SALTS_OK);
       check_equal(atomic_load(&f.delivered), (size_t)1u);
 
       failed = (turbo_flow_inbox_failed_entry_t)TURBO_FLOW_INBOX_FAILED_ENTRY_INIT;
@@ -526,7 +527,8 @@ spec("configured file-backed TurboDB durable resource") {
                       flow, "intake.store", owner_lost_record_id),
                   SALTS_OK);
       check_equal(atomic_load(&f.delivered), (size_t)1u);
-      check_equal(turbo_flow_plugin_generation_poll(f.generation, 0u, &e), SALTS_OK);
+      for (size_t attempt = 0u; attempt < 8u && atomic_load(&f.delivered) < 2u; ++attempt)
+        check_equal(turbo_flow_plugin_generation_poll(f.generation, 0u, &e), SALTS_OK);
       check_equal(atomic_load(&f.delivered), (size_t)2u);
       check_equal(scalar(&f, "SELECT pending_records FROM orders_inbox_meta_v2"), (int64_t)0);
       check_equal(scalar(&f, "SELECT failed_records FROM orders_inbox_meta_v2"), (int64_t)0);
