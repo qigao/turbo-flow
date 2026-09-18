@@ -264,6 +264,76 @@ spec("durable buffer lifecycle") {
       check_equal(f.sinks, 1u); close_fixture(&f);
     }
   }
+  it("retries failed work only through the public durable operator contract") {
+    lifecycle_fixture_t f;
+    turbo_flow_inbox_failed_entry_t failed = TURBO_FLOW_INBOX_FAILED_ENTRY_INIT;
+    size_t failed_count = 0u;
+    open_fixture(&f, 0);
+    f.sink_status = SALTS_EPROTO;
+    publish(&f);
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_EPROTO);
+    check_equal(f.sinks, 1u);
+    check_equal(turbo_flow_durable_buffer_scan_failed(
+                    f.flow, "intake.store", 0u, &failed, 1u, &failed_count),
+                SALTS_OK);
+    check_equal(failed_count, 1u);
+    check_equal(failed.kind, TURBO_FLOW_INBOX_FAILURE_PROCESSING);
+    check_equal(failed.status, SALTS_EPROTO);
+    f.sink_status = SALTS_OK;
+    check_equal(turbo_flow_durable_buffer_retry_failed(
+                    f.flow, "intake.store", failed.record_id),
+                SALTS_OK);
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
+    check_equal(f.sinks, 2u);
+    check_equal(snapshot(&f).failed_records, 0u);
+    check_equal(snapshot(&f).completed, UINT64_C(1));
+    close_fixture(&f);
+  }
+  it("discards failed work only through the public durable operator contract") {
+    lifecycle_fixture_t f;
+    turbo_flow_inbox_failed_entry_t failed = TURBO_FLOW_INBOX_FAILED_ENTRY_INIT;
+    turbo_flow_inbox_history_entry_t history = TURBO_FLOW_INBOX_HISTORY_ENTRY_INIT;
+    size_t count = 0u;
+    open_fixture(&f, 0);
+    f.sink_status = SALTS_EPROTO;
+    publish(&f);
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_EPROTO);
+    check_equal(turbo_flow_durable_buffer_scan_failed(
+                    f.flow, "intake.store", 0u, &failed, 1u, &count),
+                SALTS_OK);
+    check_equal(count, 1u);
+    check_equal(turbo_flow_durable_buffer_discard_failed(
+                    f.flow, "intake.store", failed.record_id),
+                SALTS_OK);
+    count = 0u;
+    check_equal(turbo_flow_durable_buffer_scan_failed(
+                    f.flow, "intake.store", 0u, &failed, 1u, &count),
+                SALTS_OK);
+    check_equal(count, 0u);
+    check_equal(turbo_flow_durable_buffer_scan_history(
+                    f.flow, "intake.store", 0u, &history, 1u, &count),
+                SALTS_OK);
+    check_equal(count, 1u);
+    check_equal(history.kind, TURBO_FLOW_INBOX_TERMINAL_DISCARDED);
+    close_fixture(&f);
+  }
+  it("retries a transient settlement without replaying Graph work") {
+    lifecycle_fixture_t f;
+    turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    open_fixture(&f, 0);
+    f.complete_status = SALTS_EBUSY;
+    publish(&f);
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_EBUSY);
+    check_equal(f.sinks, 1u);
+    check_equal(f.completions, 1u);
+    f.complete_status = SALTS_OK;
+    check_equal(turbo_flow_durable_buffer_retry_settlement(f.binding, &result), SALTS_OK);
+    check_equal(result.state, TURBO_FLOW_INBOX_SOURCE_COMPLETED);
+    check_equal(result.settlement_status, SALTS_OK);
+    check_equal(f.sinks, 1u);
+    check_equal(f.completions, 2u);
+    close_fixture(&f);
+  }
   it("does not implicitly retry unknown settlement") {
     lifecycle_fixture_t f; open_fixture(&f, 0); publish(&f); f.complete_status=SALTS_EALREADY;
     check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_EALREADY);
@@ -278,7 +348,7 @@ spec("durable buffer lifecycle") {
     check_equal(turbo_flow_state(f.flow), TURBO_FLOW_STATE_STOPPED);
     {
       turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
-      check_equal(flow_inbox_driver_reconcile_settlement(f.binding->driver, &result), SALTS_OK);
+      check_equal(turbo_flow_durable_buffer_reconcile_settlement(f.binding, &result), SALTS_OK);
     }
     close_fixture(&f);
   }
