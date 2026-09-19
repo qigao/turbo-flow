@@ -56,6 +56,41 @@ typedef struct turbo_flow_durable_buffer_binding_config_s {
    TURBO_FLOW_DURABLE_BUFFER_DEFAULT_MAX_MESSAGE_BYTES}
 
 /**
+ * Provider-neutral observation for one named durable-buffer resource.
+ *
+ * Storage counters are copied from the selected Inbox provider. Driver fields
+ * describe only TurboFlow-owned downstream progress and never expose provider
+ * handles/cursors. The snapshot is bounded and read-only.
+ */
+typedef struct turbo_flow_durable_buffer_snapshot_s {
+  size_t size;
+  uint32_t version;
+  uint64_t provider_generation;
+  int accepting;
+  int drain_paused;
+  size_t records;
+  size_t history_records;
+  size_t pending_records;
+  size_t failed_records;
+  size_t in_flight_claims;
+  size_t retained_bytes;
+  uint64_t admitted;
+  uint64_t completed;
+  uint64_t failed;
+  uint64_t retried;
+  uint64_t discarded;
+  turbo_flow_inbox_source_result_state_t driver_state;
+  uint64_t active_record_id;
+  int graph_status;
+  int settlement_status;
+} turbo_flow_durable_buffer_snapshot_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT                                                   \
+  {sizeof(turbo_flow_durable_buffer_snapshot_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,            \
+   0u, 0, 0, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,                                       \
+   TURBO_FLOW_INBOX_SOURCE_EMPTY, 0u, SALTS_OK, SALTS_OK}
+
+/**
  * Bind one configured durable-buffer resource to a caller-owned Inbox provider.
  * The binding borrows `inbox`; provider ownership and lifetime remain with the caller.
  * Keep the provider alive and its handle immutable until unbind or Flow destruction/
@@ -73,6 +108,27 @@ typedef struct turbo_flow_durable_buffer_binding_config_s {
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_bind(
     turbo_flow_t *flow, const turbo_flow_durable_buffer_binding_config_t *config,
     turbo_flow_durable_buffer_binding_t **out);
+
+/**
+ * Snapshot one named durable-buffer resource without advancing provider or Graph
+ * state. The output must be initialized with TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_snapshot_t *snapshot);
+
+/**
+ * Pause new ordinary downstream claims for one named durable buffer. Admission
+ * remains unchanged and an already-owned run may still be polled/settled.
+ * Explicit turbo_flow_durable_buffer_drain() is an operator action and may still
+ * drain accepted backlog while this control is paused.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_pause_drain(
+    turbo_flow_t *flow, const char *resource_name);
+
+/** Resume ordinary downstream claims after pause_drain(). */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_resume_drain(
+    turbo_flow_t *flow, const char *resource_name);
 
 /**
  * Progress at most one claim without blocking. Empty storage is success. Calls on

@@ -405,6 +405,7 @@ static int flow_durable_buffer_progress_internal(turbo_flow_durable_buffer_bindi
       return flow_inbox_driver_poll(binding->driver, &result);
   }
   if (binding->flow->state != TURBO_FLOW_STATE_STARTED) return SALTS_ESHUTDOWN;
+  if (!draining && binding->drain_paused) return SALTS_OK;
   if (!binding->driver) {
     flow_inbox_driver_config_t config = {binding->inbox, binding->flow,
       FLOW_INBOX_DRIVER_BUFFER, (uint32_t)binding->stage_index, NULL, binding->max_message_bytes};
@@ -523,6 +524,65 @@ static int flow_durable_buffer_operator_binding(
   rc = flow_durable_buffer_validate_provider(binding);
   if (rc != SALTS_OK) return rc;
   *binding_out = binding;
+  return SALTS_OK;
+}
+
+int turbo_flow_durable_buffer_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_snapshot_t *snapshot) {
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+  turbo_flow_inbox_snapshot_t provider = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  turbo_flow_inbox_source_result_t driver = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+  turbo_flow_durable_buffer_snapshot_t observed = TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT;
+  int rc;
+
+  if (!snapshot || snapshot->size != sizeof(*snapshot) ||
+      snapshot->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
+    return SALTS_EINVAL;
+  rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
+  if (rc != SALTS_OK) return rc;
+  if (binding->driver) {
+    rc = flow_inbox_driver_status(binding->driver, &driver);
+    if (rc != SALTS_OK) return rc;
+  }
+
+  observed.provider_generation = provider.generation;
+  observed.accepting = provider.accepting;
+  observed.drain_paused = binding->drain_paused;
+  observed.records = provider.records;
+  observed.history_records = provider.history_records;
+  observed.pending_records = provider.pending_records;
+  observed.failed_records = provider.failed_records;
+  observed.in_flight_claims = provider.in_flight_claims;
+  observed.retained_bytes = provider.retained_bytes;
+  observed.admitted = provider.admitted;
+  observed.completed = provider.completed;
+  observed.failed = provider.failed;
+  observed.retried = provider.retried;
+  observed.discarded = provider.discarded;
+  observed.driver_state = driver.state;
+  observed.active_record_id = driver.record_id;
+  observed.graph_status = driver.graph_status;
+  observed.settlement_status = driver.settlement_status;
+  *snapshot = observed;
+  return SALTS_OK;
+}
+
+int turbo_flow_durable_buffer_pause_drain(turbo_flow_t *flow, const char *resource_name) {
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+  int rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
+  if (rc != SALTS_OK) return rc;
+  binding->drain_paused = 1;
+  return SALTS_OK;
+}
+
+int turbo_flow_durable_buffer_resume_drain(turbo_flow_t *flow, const char *resource_name) {
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+  int rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
+  if (rc != SALTS_OK) return rc;
+  binding->drain_paused = 0;
   return SALTS_OK;
 }
 

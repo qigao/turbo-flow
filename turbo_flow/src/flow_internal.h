@@ -472,6 +472,7 @@ struct turbo_flow_durable_buffer_binding_s {
   char admission_namespace[37]; /* formatted Salts UUID, runtime binding metadata */
   size_t stage_index;
   atomic_uint_fast64_t next_sequence;
+  int drain_paused;
   int bound;
 };
 

@@ -247,6 +247,53 @@ spec("durable buffer lifecycle") {
     check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
     check_equal(f.sinks, 1u); close_fixture(&f);
   }
+
+  it("snapshots one resource and pauses only ordinary durable drain") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_snapshot_t observed = TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT;
+    open_fixture(&f, 0);
+
+    check_equal(turbo_flow_durable_buffer_snapshot(f.flow, "missing.store", &observed), SALTS_ENOENT);
+    check_equal(turbo_flow_durable_buffer_snapshot(f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.provider_generation, (uint64_t)1u);
+    check_equal(observed.accepting, 1);
+    check_equal(observed.drain_paused, 0);
+    check_equal(observed.driver_state, TURBO_FLOW_INBOX_SOURCE_EMPTY);
+
+    check_equal(turbo_flow_durable_buffer_pause_drain(f.flow, "intake.store"), SALTS_OK);
+    publish(&f);
+    publish(&f);
+    observed = (turbo_flow_durable_buffer_snapshot_t)TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_snapshot(f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.accepting, 1);
+    check_equal(observed.drain_paused, 1);
+    check_equal(observed.admitted, (uint64_t)2u);
+    check_equal(observed.pending_records, (size_t)2u);
+    check_equal(observed.in_flight_claims, (size_t)0u);
+
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    check_equal(f.sinks, (size_t)0u);
+    observed = (turbo_flow_durable_buffer_snapshot_t)TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_snapshot(f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.pending_records, (size_t)2u);
+    check_equal(observed.in_flight_claims, (size_t)0u);
+
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
+    check_equal(f.sinks, (size_t)2u);
+    observed = (turbo_flow_durable_buffer_snapshot_t)TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_snapshot(f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.drain_paused, 1);
+    check_equal(observed.pending_records, (size_t)0u);
+    check_equal(observed.in_flight_claims, (size_t)0u);
+    check_equal(observed.completed, (uint64_t)2u);
+    check_equal(observed.driver_state, TURBO_FLOW_INBOX_SOURCE_EMPTY);
+
+    check_equal(turbo_flow_durable_buffer_resume_drain(f.flow, "intake.store"), SALTS_OK);
+    observed = (turbo_flow_durable_buffer_snapshot_t)TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_snapshot(f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.drain_paused, 0);
+    close_fixture(&f);
+  }
   it("stopped drain never claims pending backlog") {
     lifecycle_fixture_t f; open_fixture(&f, 0); publish(&f);
     check_equal(turbo_flow_stop(f.flow), SALTS_OK);
