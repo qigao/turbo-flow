@@ -189,7 +189,6 @@
                 "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils-android/debug",
                 "SALTS_UTILS_HOST_ROOT": "$env{PKG_ROOT}/salts-utils/release",
                 "DATABIND_HOST_ROOT": "$env{PKG_ROOT}/salts-utils/release",
-                "DATABIND_HOST_ROOT": "$env{PKG_ROOT}/salts-utils/release",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge-android/debug"
             },
             "cacheVariables": {
@@ -206,6 +205,7 @@
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils-android/release",
                 "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils-android/release",
                 "SALTS_UTILS_HOST_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "DATABIND_HOST_ROOT": "$env{PKG_ROOT}/salts-utils/release",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge-android/release"
             },
             "cacheVariables": {
