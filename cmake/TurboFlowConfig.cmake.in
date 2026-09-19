@@ -10,6 +10,7 @@ set(_TurboFlow_supported_components
     CHTTPAdapter
     Product
     ProtocolIngress
+    ProtocolNetworkIntake
     ProtocolIngressInboxSchema
     ProtocolMqttSn
     ProtocolCoap
@@ -33,6 +34,7 @@ set(_TurboFlow_salts_utils_components
     CHTTPAdapter
     PluginHost
     Product
+    ProtocolNetworkIntake
     ProtocolIngressInboxSchema
     ProtocolBusinessOcpp201Core
     SecuritySQLite
@@ -47,6 +49,7 @@ set(_TurboFlow_rules_forge_components
     CHTTPAdapter
     PluginHost
     Product
+    ProtocolNetworkIntake
     SecuritySQLite
     Codec
     Observe

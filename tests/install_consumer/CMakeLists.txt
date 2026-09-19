@@ -81,6 +81,7 @@ elseif(TURBO_FLOW_TEST_ALL_COMPONENTS)
       CHTTPAdapter
       Product
       ProtocolIngress
+      ProtocolNetworkIntake
       ProtocolIngressInboxSchema
       ProtocolMqttSn
       ProtocolCoap
@@ -144,6 +145,7 @@ else()
             TurboFlow::CHTTPAdapter
             TurboFlow::Product
             TurboFlow::ProtocolIngress
+            TurboFlow::ProtocolNetworkIntake
             TurboFlow::ProtocolIngressInboxSchema
             TurboFlow::ProtocolMqttSn
             TurboFlow::ProtocolCoap

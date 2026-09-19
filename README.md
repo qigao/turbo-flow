@@ -43,6 +43,7 @@ turbo_flow_plugin_get_api 取得 root vtable，并在插件 load() 前精确核�
 | `TurboFlow::Product` | 用 resolved config 装配 Graph 与本仓库 adapters |
 | `TurboFlow::PluginHost` | 通过统一 DLL vtable 事务注册 Product/Protocol/Business capabilities，编译 Graph generation，并以 lease 保护模块生命周期 |
 | `TurboFlow::ProtocolIngress` | 可选 protocol codec/Source，不依赖 MQTT broker |
+| `TurboFlow::ProtocolNetworkIntake` | 真实 CNet Source + protocol decode owner；decoded message 只发布到 generic durable-buffer，不拥有独立存储 runtime |
 | `TurboFlow::ProtocolIngressInboxSchema` | 生成的静态 DataBind codec；与 `turbo_flow_protocol_envelope.h`、安装的 schema/RFL/TypeScript 声明共同定义 generic durable-buffer 中唯一的 protocol envelope 布局；不提供独立存储 runtime |
 | `TurboFlow::CNetAdapter` | 可选 CNet Source/Sink owner；拥有 transport progress 与有界请求状态 |
 | `TurboFlow::CHTTPAdapter` | 可选 CHTTP client、deferred server 与 WebSocket Flow Source/Sink |
