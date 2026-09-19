@@ -65,7 +65,7 @@ target_include_directories(
   tf_protocol_inbox_schema
   PUBLIC $<BUILD_INTERFACE:${_protocol_inbox_generated_dir}>
          $<INSTALL_INTERFACE:include>)
-target_link_libraries(tf_protocol_inbox_schema PUBLIC Salts::DataBind)
+target_link_libraries(tf_protocol_inbox_schema PUBLIC DataBind::Runtime)
 
 add_library(
   tf_protocol_inbox SHARED
