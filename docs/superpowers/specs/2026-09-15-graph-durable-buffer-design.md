@@ -161,6 +161,13 @@ Exact replay of the same stable identity + complete record returns the original 
 
 If no stable upstream identity exists, the buffer generates a new bounded admission identity before its first provider call and reuses that identity for every retry of that admission attempt.
 
+Each generated binding uses a fresh Salts UUID namespace together with provider
+generation and a checked local sequence (`g<generation>:<binding-uuid>:<sequence>`).
+This avoids identity reuse after unbind/rebind or across Flow instances; entropy
+failure rejects bind. Stable identity mode is unchanged. Provider pointers remain
+runtime-only metadata. A projection requires canonical payload bytes; neither an
+active result claim nor a committed result may cross admission.
+
 Properties:
 
 - retries of the same in-process admission attempt reuse the same identity;
@@ -303,6 +310,21 @@ A low-rate deployment can select `provider = memory` without changing topology.
 
 Provider-specific database connection details belong to the configured resource/provider, not the Graph message path.
 
+The configured bounded-memory resource uses channel kind `flow.durable.memory`.
+Its exact configuration requires `schema_version: 1`, `identity_mode`,
+`max_message_bytes`, `max_records`, `max_total_bytes`, `max_record_bytes`, and
+`max_claims`. `identity_mode` accepts only `generated` or `stable_required`;
+all capacity fields are explicit positive finite integer bounds.
+
+Transactional provider preflight validates configuration without side effects.
+The existing preflight ABI does not receive the Graph, so materialize checks that
+exactly one stage references this resource and that the stage has `is_buffer`,
+before allocating an owner or Inbox or creating a binding. A reference error can
+therefore follow another resource's materialization; the existing generation
+transaction rolls back those earlier owners. This division does not add a public
+ABI or make the generic generation layer depend on the memory provider kind.
+
+
 ## Runtime ownership
 
 The storage provider owns record state. The durable-buffer owner orchestrates admission/drain but does not mutate provider internals directly.
@@ -318,6 +340,40 @@ Storage commit, Graph completion, Sink completion, protocol ACK, and domain tran
 Provider-neutral buffer snapshots (#131) expose at minimum admitted/committed records and bytes, pending records/bytes, in-flight claims, failed/unknown records, retained history counts, backpressure counts, oldest pending age/claim latency where measurable, drain rate, watermark state, and later worker/partition activity.
 
 No raw database cursor/handle escapes through the public Graph surface.
+
+## Clean generation retirement
+
+For #127, pause ordinary Graph admission and wait for already accepted executions to
+leave their current region. The compiler already rejects stage cycles. Visit durable
+cuts in upstream-to-downstream DAG order, closing and draining each provider before
+closing the next downstream provider. Closing all providers first is invalid for chained
+buffers: accepted upstream records still need normal admission into the next cut.
+An idle managed Source subscription is not an accepted execution region. Each managed
+value is fenced by ordinary admission and owns an additional execution count; async
+publication counts remain until terminal completion. The retirement-only wait derives
+still-held managed subscription lifetime counts from the run registry. Each run's held
+marker and lifetime-counter release are synchronized under the same runtime mutex,
+including deadlines that retain terminal registry entries. Only those actual lifetimes
+are excluded, preserving public Graph drain semantics and keeping Source owners live.
+Buffer-origin drain alone may run while ordinary admission is paused; Graph active-run
+and async-completion accounting still applies. A shared timeout budget bounds the drain.
+
+Operations, Sink owners, and runtime remain active until every binding is closed and
+empty. Any failed record, unknown settlement, timeout, or exact provider error aborts
+retirement before operation close or owner quiesce. STOPPED/FAILED flows never claim new
+backlog. Unresolved drivers also block reset and preserve the complete Flow on void
+destroy. Caller-serialized lifecycle is required. No-buffer retirement remains unchanged.
+
+The public binding API exposes provider-neutral terminal-history scan and explicit
+forget by configured resource name, so bounded providers can release successful
+tombstones without exposing their Inbox handle. Forget never advances a live, failed,
+pending, or unknown record and never implies retry or reconciliation.
+
+The frozen public binding API does not yet expose failed/unknown settlement
+retry/reconcile. That recovery currently requires the internal driver API; future
+provider/operator integration must add an explicit recovery contract. Retention is
+fail-closed safety, not publicly supported failed-settlement recovery for opaque
+binding callers.
 
 ## Recovery
 

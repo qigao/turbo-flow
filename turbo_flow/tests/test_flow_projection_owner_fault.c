@@ -141,6 +141,14 @@ spec("retained projection allocation rollback") {
     config.ctx = &counts; config.release_context = fault_release;
     check_equal(turbo_flow_projection_owner_create(&config, &owner), SALTS_OK);
     turbo_flow_msg_init(&msg);
+    for (int allocation = 0; allocation < 3; ++allocation) {
+      fail_allocation_after = allocation;
+      check_equal(turbo_flow_msg_result_claim(&msg, owner, &cmeta_data_int, &claim), SALTS_ENOMEM);
+      check_null(claim); check_null(msg._content_handle);
+      check_equal(turbo_flow_projection_owner_snapshot(owner, &state), SALTS_OK);
+      check_equal(state.outstanding, (size_t)0);
+      check_equal(state.retained_bytes, (size_t)0);
+    }
     msg.buffer = mem_wrap_external(payload_bytes, sizeof(payload_bytes), NULL, NULL);
     check_not_null(msg.buffer);
     msg.payload = vstr_from_buf(payload_bytes, sizeof(payload_bytes));

@@ -843,6 +843,8 @@ static int inbox_admit(void *ctx, const turbo_flow_inbox_record_t *record,
     }
     mem_buffer_release(temp.storage);
   } else if (rc == SALTS_OK && rows == 0u) {
+    orm_result_destroy(result);
+    result = NULL;
     if (!inbox_is_accepting(owner)) rc = SALTS_ESHUTDOWN;
     if (rc == SALTS_OK && size_status != SALTS_OK) rc = size_status;
     if (rc == SALTS_OK && bytes > owner->max_record_bytes) rc = SALTS_ENOSPC;

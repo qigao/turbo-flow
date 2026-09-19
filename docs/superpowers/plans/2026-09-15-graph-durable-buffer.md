@@ -143,7 +143,7 @@ At bind time snapshot Inbox provider generation. For each generated-mode admissi
 
 ```text
 source_id       = configured buffer stage name
-admission_id    = "g<provider-generation>:<local-sequence>"
+admission_id    = "g<provider-generation>:<binding-uuid>:<local-sequence>"
 source_sequence = local-sequence
 correlation     = empty
 ```
@@ -298,8 +298,8 @@ typedef struct flow_inbox_driver_config_s {
   1. if flow has no durable bindings, return success without changing lifecycle;
   2. pause ordinary Graph publish admission;
   3. wait for already-accepted upstream publishes to leave their current execution region;
-  4. quiesce all durable bindings so no new buffer admission succeeds;
-  5. while operation bindings, Sink owners, and Graph runtime are still active, drain each durable binding to idle using the special paused-state buffer-origin run mode;
+  4. derive upstream-to-downstream buffer order from the compiled stage DAG (compile rejects cycles), independent of declaration/binding order;
+  5. in that order, quiesce one binding and drain it to idle using the special paused-state buffer-origin run mode while later providers, operation bindings, Sink owners, and Graph runtime remain active; finally verify every provider is closed and has no live records/claims;
   6. on timeout, failed/unknown record, or exact provider error, return that error **before** operation bindings are closed, owners are quiesced, or Graph is stopped;
   7. on success, all durable bindings have no live records/claims and normal generation retirement may proceed.
 - [ ] Call this helper at the beginning of `flow_plugin_generation_retire()` before `flow_plugin_operations_close()`, `generation->poll_closed = 1`, owner quiesce, and Graph stop.
@@ -331,7 +331,8 @@ channels:
 ```
 
 - [ ] **RED:** PluginHost generation fails until transactional resource provider exists. Negative exact-schema/bounds/reference cases.
-- [ ] Preflight is side-effect-free and requires exactly one `is_buffer` reference.
+- [ ] Preflight validates configuration without side effects. `identity_mode` accepts only `generated` or `stable_required`.
+- [ ] The existing transactional preflight ABI has no Graph argument. Materialize validates exactly one `is_buffer` reference before allocating an owner or Inbox or binding either; reference errors use existing transactional rollback for any earlier materialized resources.
 - [ ] Materialize creates bounded memory Inbox, binds it, returns Product owner `CONTROL_THREAD | EXTERNAL_POLL`; registers no Graph adapter.
 - [ ] Owner `poll` calls non-blocking `progress()`.
 - [ ] Owner `quiesce` is now verification/idempotent close only; normal PluginGeneration retirement has already run `flow_durable_buffers_prepare_retire()` while downstream remained active.
@@ -465,3 +466,36 @@ One exact head must prove:
 - provider-neutral conformance, Debug/ASan, Release, install/package, ABI/export, and no-secret compile-contract gates have fresh exact-head evidence.
 
 Only after #127 is green should #129 replace `ProtocolNetworkIntake -> Inbox -> InboxSource` with the generic durable-buffer boundary. #128 may then scale drain concurrency without changing #127 ownership/settlement semantics.
+
+### Task 4 admission boundary correction (2026-09-16)
+
+RED head `17b6bc01b5ba64c07a15c8e8e6eebf0102d71c19`: public compile run
+35067314312 / job 104700441378 passed; runtime run 35067310947 / job
+104700431505 reproduced seven failing admission cases (9 passed). First failure:
+projection with descriptor but no canonical payload was admitted instead of ENOTSUP.
+Additional failures cover an invisible active result claim on an unprojected message,
+stale generation/handle, restart validation, rebind ID reuse, and provider aliases.
+
+Generated bindings now allocate a Salts UUID namespace at bind time, failing on
+entropy errors. Generation plus local sequence alone collided after rebind and
+incorrectly deduplicated a new record. The namespace is an opaque admission-ID
+component, not a new persisted field or a cross-process deduplication guarantee.
+Provider identity and generation are checked at compile/start/admission. This is
+not an atomic takeover fence: that remains the provider's responsibility.
+
+### Task 6 retirement ordering clarification (2026-09-16)
+
+Closing every provider before draining prevents a healthy `first -> second` buffer chain
+from admitting the already accepted record into `second`. Retirement therefore closes
+and drains cuts in compiled DAG order. It never bypasses a closed provider. One timeout
+budget covers ordinary publish drain and all buffer drains. No-buffer retirement is unchanged.
+
+The binding API exposes provider-neutral terminal-history scan and explicit forget by
+configured resource name. This releases successful tombstone quota without exposing an
+Inbox handle or advancing failed/unknown state. The binding API now exposes explicit failed/unknown recovery without exposing the Inbox:
+named resources support failed scan/retry/discard, and an opaque binding supports settlement
+retry/reconcile. These calls never request new Graph work implicitly and preserve exact provider
+errors. Crash/reopen and owner-takeover conformance remains #130. Reset returns
+EBUSY, and void destroy retains the complete Flow with an EBUSY diagnostic while a driver is
+unresolved; this is a safe retained state, not a claim that an external opaque-binding caller
+can already recover it.

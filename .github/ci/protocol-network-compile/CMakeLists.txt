@@ -29,6 +29,7 @@ set(_tf_include_dirs
     "${TURBO_FLOW_SOURCE_DIR}/io/cnet/src"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/common/include"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/inbox/include"
+    "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/inbox/src"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/network/include"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/network/src"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/tests"
@@ -76,9 +77,28 @@ target_compile_definitions(protocol_network_tests PRIVATE
     FLOW_PROTOCOL_NETWORK_SOURCE_FIXTURE="unused-source-fixture"
     FLOW_CNET_PLUGIN_MODULE="unused-cnet-plugin"
     FLOW_PROTOCOL_JTT808_MODULE="unused-jtt808-plugin"
-    FLOW_PROTOCOL_COAP_MODULE="unused-coap-plugin")
+    FLOW_PROTOCOL_COAP_MODULE="unused-coap-plugin"
+    FLOW_DURABLE_MEMORY_PLUGIN_MODULE="unused-durable-memory-plugin")
 target_compile_options(protocol_network_tests PRIVATE $<$<COMPILE_LANGUAGE:C>:${_tf_c_options}>)
 target_link_libraries(protocol_network_tests PRIVATE Salts::Core Salts::CFlow Salts::CNet xxHash::xxhash)
+
+add_library(graph_durable_buffer_contract OBJECT
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/flow_plan_type_probe.c"
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_durable_buffer.c"
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_durable_identity.c"
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_durable_admission.c"
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_durable_lifecycle.c"
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_inbox_driver.c"
+    "${TURBO_FLOW_SOURCE_DIR}/io/durable/tests/test_flow_durable_memory_plugin.c"
+    "${TURBO_FLOW_SOURCE_DIR}/io/durable/src/turbo_flow_durable_memory_plugin.c"
+    "${TURBO_FLOW_SOURCE_DIR}/io/durable/src/turbo_flow_durable_memory_config.c"
+    "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/durable_identity_header_cpp.cpp")
+target_include_directories(graph_durable_buffer_contract PRIVATE ${_tf_include_dirs})
+target_compile_definitions(graph_durable_buffer_contract PRIVATE TURBO_FLOW_BUILD TURBO_FLOW_PLUGIN_BUILD)
+target_compile_options(graph_durable_buffer_contract PRIVATE
+    $<$<COMPILE_LANGUAGE:C>:${_tf_c_options}>
+    $<$<COMPILE_LANGUAGE:CXX>:${_tf_cxx_options}>)
+target_link_libraries(graph_durable_buffer_contract PRIVATE Salts::Core Salts::CFlow)
 
 add_library(protocol_network_cpp_contract OBJECT
     "${TURBO_FLOW_SOURCE_DIR}/io/cnet/tests/cnet_stream_source_header_cpp.cpp"

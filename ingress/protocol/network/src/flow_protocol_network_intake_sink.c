@@ -1,5 +1,6 @@
 #include "flow_protocol_network_intake_internal.h"
 
+#include "flow_protocol_envelope_internal.h"
 #include "turbo_flow_cnet.h"
 
 #include <inttypes.h>
@@ -32,11 +33,13 @@ typedef struct intake_pending_claim_s {
 struct flow_protocol_network_intake_sink_s {
   turbo_flow_t *flow;
   turbo_flow_protocol_t *protocol;
-  turbo_flow_inbox_t *inbox;
-  turbo_flow_protocol_inbox_t *protocol_inbox;
+  turbo_flow_t *downstream_flow;
   turbo_flow_protocol_source_t *protocol_source;
   flow_protocol_network_intake_settings_t settings;
   tstr adapter_name;
+  tstr decoded_source_name;
+  uint8_t *envelope_scratch;
+  size_t max_envelope_bytes;
   intake_parser_slot_t *parser_slots;
   intake_pending_claim_t *pending;
   size_t pending_head;
@@ -52,7 +55,7 @@ struct flow_protocol_network_intake_sink_s {
   int terminal_status;
   int registered;
   int detached;
-  char admission_id[TURBO_FLOW_PROTOCOL_INBOX_ADMISSION_ID_MAX + 1u];
+  char admission_id[TURBO_FLOW_DURABLE_ADMISSION_ID_MAX + 1u];
 };
 
 static void intake_counter_add(uint64_t *counter, uint64_t amount) {
@@ -67,22 +70,19 @@ static size_t intake_text_size(const char *text, size_t capacity) {
   return size;
 }
 
-static int intake_identity_resolve(void *ctx,
-                                   const turbo_flow_protocol_inbox_identity_request_t *request,
-                                   turbo_flow_protocol_inbox_identity_t *identity) {
-  flow_protocol_network_intake_sink_t *sink = (flow_protocol_network_intake_sink_t *)ctx;
-  const turbo_flow_protocol_message_output_t *message;
+static int intake_identity_resolve(
+    flow_protocol_network_intake_sink_t *sink,
+    const turbo_flow_protocol_message_output_t *message,
+    turbo_flow_durable_identity_t *identity) {
   const turbo_flow_protocol_metadata_t *metadata;
   const char *protocol_name;
   XXH128_hash_t digest;
   size_t correlation_size;
   int count;
-  if (!sink || !request || request->size != sizeof(*request) ||
-      request->abi_version != TURBO_FLOW_PROTOCOL_INBOX_ABI_VERSION || !request->message ||
-      !identity || identity->size != sizeof(*identity) ||
-      identity->abi_version != TURBO_FLOW_PROTOCOL_INBOX_ABI_VERSION)
+  if (!sink || !message || !identity ||
+      identity->size != sizeof(*identity) ||
+      identity->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
     return SALTS_EINVAL;
-  message = request->message;
   metadata = &message->metadata;
   protocol_name = turbo_flow_protocol_kind_name(metadata->protocol);
   if (!protocol_name || metadata->device_id[0] == '\0' ||
@@ -96,15 +96,51 @@ static int intake_identity_resolve(void *ctx,
   if (count < 0 || (size_t)count >= sizeof(sink->admission_id)) return SALTS_EMSGSIZE;
   correlation_size = intake_text_size(metadata->correlation_id, sizeof(metadata->correlation_id));
   if (correlation_size == sizeof(metadata->correlation_id)) return SALTS_EPROTO;
-  *identity = (turbo_flow_protocol_inbox_identity_t)TURBO_FLOW_PROTOCOL_INBOX_IDENTITY_INIT;
+  *identity = (turbo_flow_durable_identity_t)TURBO_FLOW_DURABLE_IDENTITY_INIT;
   identity->source_id =
       vstr_from_buf(sink->settings.source_id, strlen(sink->settings.source_id));
   identity->admission_id = vstr_from_buf(sink->admission_id, (size_t)count);
   if (correlation_size > 0u)
     identity->correlation = vstr_from_buf(metadata->correlation_id, correlation_size);
   identity->source_sequence = metadata->sequence;
-  identity->timestamp_ns = 0u;
   return SALTS_OK;
+}
+
+static int intake_decoded_admit(void *ctx,
+                                const turbo_flow_protocol_source_admit_request_t *request) {
+  flow_protocol_network_intake_sink_t *sink = (flow_protocol_network_intake_sink_t *)ctx;
+  turbo_flow_durable_identity_t identity = TURBO_FLOW_DURABLE_IDENTITY_INIT;
+  turbo_flow_content_descriptor_t content = TURBO_FLOW_CONTENT_DESCRIPTOR_INIT;
+  turbo_flow_msg_t message;
+  mem_buffer_t *buffer = NULL;
+  size_t encoded_size = 0u;
+  int rc;
+  if (!sink || !request || request->size != sizeof(*request) ||
+      request->abi_version != TURBO_FLOW_PROTOCOL_SOURCE_ABI_VERSION ||
+      request->delivery_id == 0u || request->session_id == 0u ||
+      request->session_generation == 0u || !request->message)
+    return SALTS_EINVAL;
+  rc = intake_identity_resolve(sink, request->message, &identity);
+  if (rc != SALTS_OK) return rc;
+  rc = flow_protocol_envelope_encode(request->message, sink->settings.max_frame_size,
+                                     sink->envelope_scratch, sink->max_envelope_bytes,
+                                     &encoded_size);
+  if (rc != SALTS_OK) return rc;
+  buffer = mem_wrap_external(sink->envelope_scratch, encoded_size, NULL, NULL);
+  if (!buffer) return SALTS_ENOMEM;
+  turbo_flow_msg_init(&message);
+  message.id = request->delivery_id;
+  message.ts_ns = 0u;
+  message.type = request->message->metadata.message_type;
+  message.buffer = buffer;
+  message.payload = vstr_from_buf((const char *)sink->envelope_scratch, encoded_size);
+  rc = flow_protocol_envelope_content_descriptor(&content);
+  if (rc == SALTS_OK) rc = turbo_flow_msg_copy_content_descriptor(&message, &content);
+  if (rc == SALTS_OK) rc = turbo_flow_msg_set_durable_identity(&message, &identity);
+  if (rc == SALTS_OK)
+    rc = turbo_flow_publish(sink->downstream_flow, sink->decoded_source_name, &message);
+  turbo_flow_msg_cleanup(&message);
+  return rc;
 }
 
 static int intake_ipv4_device_id(const cnet_datagram_peer *peer, char *out, size_t capacity) {
@@ -152,15 +188,15 @@ static int intake_transport_identity(flow_protocol_network_intake_sink_t *sink,
   if (sink->settings.transport_kind == FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP) {
     const turbo_flow_cnet_listener_message_context_t *context =
         turbo_flow_cnet_listener_message_context(message);
-    if (!context) return SALTS_EPROTO;
-    *slot_out = context->connection.slot;
+    if (!context || context->connection.slot == 0u) return SALTS_EPROTO;
+    *slot_out = context->connection.slot - 1u;
     *generation_out = context->connection.generation;
   } else if (sink->settings.transport_kind == FLOW_PROTOCOL_NETWORK_TRANSPORT_PACKET_UDP) {
     const turbo_flow_cnet_packet_message_context_t *context =
         turbo_flow_cnet_packet_message_context(message);
     int rc;
-    if (!context) return SALTS_EPROTO;
-    *slot_out = context->session.slot;
+    if (!context || context->session.slot == 0u) return SALTS_EPROTO;
+    *slot_out = context->session.slot - 1u;
     *generation_out = context->session.generation;
     rc = intake_packet_device_id(context, device_id, device_capacity);
     if (rc != SALTS_OK) return rc;
@@ -471,22 +507,48 @@ static int intake_boundary_snapshot(void *ctx, turbo_flow_managed_boundary_snaps
   return SALTS_OK;
 }
 
+static int intake_downstream_buffer_valid(turbo_flow_t *flow, const char *source_name) {
+  const turbo_flow_stage_plan_t *source;
+  const turbo_flow_stage_plan_t *buffer;
+  uint32_t selected_to_stage = 0u;
+  turbo_flow_edge_kind_t selected_kind = TURBO_FLOW_EDGE_UNCONDITIONAL;
+  int source_index;
+  size_t outgoing = 0u;
+  if (!flow || !source_name || !source_name[0] ||
+      turbo_flow_state(flow) != TURBO_FLOW_STATE_STARTED)
+    return 0;
+  source_index = turbo_flow_find_stage(flow, source_name);
+  if (source_index < 0) return 0;
+  source = turbo_flow_stage_at(flow, (size_t)source_index);
+  if (!source || !source->is_source || source->adapter_name) return 0;
+  for (size_t index = 0u; index < turbo_flow_edge_count(flow); ++index) {
+    const turbo_flow_edge_plan_t *edge = turbo_flow_edge_at(flow, index);
+    if (!edge || edge->from_stage != (uint32_t)source_index) continue;
+    ++outgoing;
+    selected_to_stage = edge->to_stage;
+    selected_kind = edge->kind;
+  }
+  if (outgoing != 1u || selected_kind != TURBO_FLOW_EDGE_UNCONDITIONAL) return 0;
+  buffer = turbo_flow_stage_at(flow, selected_to_stage);
+  return buffer && buffer->is_buffer && buffer->resource_name && buffer->resource_name[0];
+}
+
 int flow_protocol_network_intake_sink_create(
     const flow_protocol_network_intake_sink_config_t *config,
     flow_protocol_network_intake_sink_t **out) {
   flow_protocol_network_intake_sink_t *sink;
-  turbo_flow_protocol_inbox_config_t inbox_config = TURBO_FLOW_PROTOCOL_INBOX_CONFIG_INIT;
-  turbo_flow_protocol_inbox_identity_ops_t identity_ops = TURBO_FLOW_PROTOCOL_INBOX_IDENTITY_OPS_INIT;
   turbo_flow_protocol_source_config_t source_config = TURBO_FLOW_PROTOCOL_SOURCE_CONFIG_INIT;
   turbo_flow_protocol_source_ops_t source_ops = TURBO_FLOW_PROTOCOL_SOURCE_OPS_INIT;
   size_t source_buffer_bytes;
   int rc;
   if (out) *out = NULL;
   if (!config || !out || !config->flow || !config->adapter_name || !config->adapter_name[0] ||
-      !config->protocol || !config->inbox || !config->settings || config->settings->max_sessions == 0u ||
-      config->settings->max_frame_size == 0u || config->settings->max_pending_claims == 0u ||
-      config->settings->max_pending_bytes == 0u ||
-      strcmp(config->adapter_name, config->settings->intake_adapter_name) != 0)
+      !config->protocol || !config->downstream_flow || !config->decoded_source_name ||
+      !config->decoded_source_name[0] || !config->settings ||
+      config->settings->max_sessions == 0u || config->settings->max_frame_size == 0u ||
+      config->settings->max_pending_claims == 0u || config->settings->max_pending_bytes == 0u ||
+      strcmp(config->adapter_name, config->settings->decoder_adapter_name) != 0 ||
+      !intake_downstream_buffer_valid(config->downstream_flow, config->decoded_source_name))
     return SALTS_EINVAL;
   if (config->settings->max_sessions == SIZE_MAX ||
       config->settings->max_frame_size > SIZE_MAX / (config->settings->max_sessions + 1u) ||
@@ -499,42 +561,41 @@ int flow_protocol_network_intake_sink_create(
   if (!sink) return SALTS_ENOMEM;
   sink->flow = config->flow;
   sink->protocol = config->protocol;
-  sink->inbox = config->inbox;
+  sink->downstream_flow = config->downstream_flow;
   sink->settings = *config->settings;
+  sink->max_envelope_bytes =
+      sink->settings.max_frame_size + TURBO_FLOW_PROTOCOL_INBOX_ENVELOPE_OVERHEAD;
   sink->adapter_name = tstr_dup(config->adapter_name);
+  sink->decoded_source_name = tstr_dup(config->decoded_source_name);
+  sink->envelope_scratch = (uint8_t *)malloc(sink->max_envelope_bytes);
   sink->parser_slots =
       (intake_parser_slot_t *)calloc(sink->settings.max_sessions, sizeof(*sink->parser_slots));
   sink->pending =
       (intake_pending_claim_t *)calloc(sink->settings.max_pending_claims, sizeof(*sink->pending));
   sink->terminal_status = SALTS_OK;
-  if (!sink->adapter_name || !sink->parser_slots || !sink->pending) {
+  if (!sink->adapter_name || !sink->decoded_source_name || !sink->envelope_scratch ||
+      !sink->parser_slots || !sink->pending) {
     tstr_free(sink->adapter_name);
+    tstr_free(sink->decoded_source_name);
+    free(sink->envelope_scratch);
     free(sink->parser_slots);
     free(sink->pending);
     free(sink);
     return SALTS_ENOMEM;
   }
-  identity_ops.resolve = intake_identity_resolve;
-  inbox_config.inbox = sink->inbox;
-  inbox_config.identity_ops = &identity_ops;
-  inbox_config.identity_ctx = sink;
-  inbox_config.max_payload_bytes = sink->settings.max_frame_size;
-  inbox_config.max_envelope_bytes =
-      sink->settings.max_frame_size + TURBO_FLOW_PROTOCOL_INBOX_ENVELOPE_OVERHEAD;
-  rc = turbo_flow_protocol_inbox_create(&inbox_config, &sink->protocol_inbox);
-  if (rc != SALTS_OK) goto fail;
   source_config.max_sessions = sink->settings.max_sessions;
   source_config.max_frame_size = sink->settings.max_frame_size;
   source_config.max_buffered_bytes = source_buffer_bytes;
-  source_ops.admit = turbo_flow_protocol_inbox_admit;
+  source_ops.admit = intake_decoded_admit;
   rc = turbo_flow_protocol_source_create(sink->protocol, &source_config, &source_ops,
-                                         sink->protocol_inbox, &sink->protocol_source);
+                                         sink, &sink->protocol_source);
   if (rc != SALTS_OK) goto fail;
   *out = sink;
   return SALTS_OK;
 fail:
-  turbo_flow_protocol_inbox_destroy(sink->protocol_inbox);
   tstr_free(sink->adapter_name);
+  tstr_free(sink->decoded_source_name);
+  free(sink->envelope_scratch);
   free(sink->parser_slots);
   free(sink->pending);
   free(sink);
@@ -626,8 +687,9 @@ void flow_protocol_network_intake_sink_destroy(flow_protocol_network_intake_sink
       (void)turbo_flow_async_terminal_complete(&entry->claim, SALTS_ECANCELED, NULL);
     intake_pending_pop(sink);
   }
-  turbo_flow_protocol_inbox_destroy(sink->protocol_inbox);
   tstr_free(sink->adapter_name);
+  tstr_free(sink->decoded_source_name);
+  free(sink->envelope_scratch);
   free(sink->parser_slots);
   free(sink->pending);
   free(sink);

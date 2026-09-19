@@ -5,6 +5,7 @@
 #include <turbo_flow.h>
 #include <turbo_flow_chttp.h>
 #include <turbo_flow_cnet.h>
+#include <turbo_flow_durable_buffer.h>
 #include <turbo_flow_inbox.h>
 #include <turbo_flow_inbox_source.h>
 #include <turbo_flow_plugin.h>
@@ -17,6 +18,24 @@
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   #include <turbo_flow_turbodb.h>
 #endif
+
+static int install_durable_recovery_api(void) {
+  int (*scan_failed)(turbo_flow_t *, const char *, uint64_t, turbo_flow_inbox_failed_entry_t *,
+                     size_t, size_t *) = turbo_flow_durable_buffer_scan_failed;
+  int (*retry_failed)(turbo_flow_t *, const char *, uint64_t) =
+      turbo_flow_durable_buffer_retry_failed;
+  int (*discard_failed)(turbo_flow_t *, const char *, uint64_t) =
+      turbo_flow_durable_buffer_discard_failed;
+  int (*retry_settlement)(turbo_flow_durable_buffer_binding_t *,
+                          turbo_flow_inbox_source_result_t *) =
+      turbo_flow_durable_buffer_retry_settlement;
+  int (*reconcile_settlement)(turbo_flow_durable_buffer_binding_t *,
+                              turbo_flow_inbox_source_result_t *) =
+      turbo_flow_durable_buffer_reconcile_settlement;
+  return scan_failed && retry_failed && discard_failed && retry_settlement && reconcile_settlement
+             ? SALTS_OK
+             : SALTS_EPROTO;
+}
 
 static int install_inbox_source_header(void) {
   turbo_flow_inbox_source_config_t config = TURBO_FLOW_INBOX_SOURCE_CONFIG_INIT;
@@ -580,7 +599,7 @@ int main(int argc, char **argv) {
     return 1;
   if (install_operation_binding_config() != SALTS_OK ||
       install_exact_ingress_layout() != SALTS_OK || install_inbox_contract() != SALTS_OK ||
-      install_inbox_source_header() != SALTS_OK ||
+      install_durable_recovery_api() != SALTS_OK || install_inbox_source_header() != SALTS_OK ||
       install_protocol_source_inbox_headers() != SALTS_OK)
     return 1;
   if (install_projection_owner() != SALTS_OK) return 1;

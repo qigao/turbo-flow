@@ -1,4 +1,4 @@
-schema Ocpp201Core [name("ocpp.2.0.1.core.minimal"), version(5), byte_order(little)];
+schema Ocpp201Core [name("ocpp.2.0.1.core.minimal"), version(6), byte_order(little)];
 
 enum BootReason <uint8> {
     ApplicationReset = 1;
@@ -80,10 +80,10 @@ message ResetRequest {
 }
 
 message StatusNotificationRequest {
-    string timestamp;
     ConnectorStatus connectorStatus;
     uint32 evseId;
     uint32 connectorId;
+    string timestamp;
 }
 
 message UnlockConnectorRequest {
@@ -93,9 +93,9 @@ message UnlockConnectorRequest {
 
 message TransactionEventRequired {
     TransactionEventType eventType;
-    string timestamp;
     TriggerReason triggerReason;
     uint32 seqNo;
+    string timestamp;
 }
 
 message TransactionInfoRequired {
@@ -115,8 +115,8 @@ message TransactionEvseConnector {
 }
 
 message TransactionIdToken {
-    string idToken;
     IdTokenType type;
+    string idToken;
 }
 
 message TransactionEventFacts {

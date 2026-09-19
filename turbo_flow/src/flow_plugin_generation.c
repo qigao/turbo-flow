@@ -1,4 +1,5 @@
 #include "flow_plugin_operation_internal.h"
+#include "flow_internal.h"
 #include "turbo_flow_plugin_generation.h"
 
 #include "turbo_flow_stl_error_internal.h"
@@ -545,6 +546,10 @@ static int flow_plugin_generation_retire(turbo_flow_plugin_generation_t *generat
         error, SALTS_EINVAL, generation->unretirable_resource ? "channels" : "adapters",
         generation->unretirable_owner,
         "Product owner has no verifiable cleanup contract; resources remain pinned");
+  rc = flow_durable_buffers_prepare_retire(generation->flow, timeout_ms);
+  if (rc != SALTS_OK)
+    return flow_plugin_generation_error(error, rc, "$.generation.buffers",
+                                        "durable backlog must settle before retirement");
   rc = flow_plugin_operations_close(&generation->bindings);
   if (rc != SALTS_OK)
     return flow_plugin_generation_error(error, rc, "$.generation.inflight",

@@ -11,7 +11,7 @@
 #include <string.h>
 }
 
-%token SOURCE STAGE STEP USE IN OUT WORKER EXEC WORKERS LANES POOL ADAPTER OPERATION RESOURCE.
+%token SOURCE STAGE STEP USE IN OUT WORKER EXEC WORKERS LANES POOL ADAPTER OPERATION RESOURCE BUFFER.
 %token INLINE THREAD CORO ROUTE WHEN REJECT RETRY ATTEMPTS DELAY.
 %token REORDER CAPACITY TIMEOUT.
 %token IDENT NUMBER STRING ARROW EXPR.
@@ -35,12 +35,17 @@ top_items ::= .
 top_items ::= top_items top_item.
 
 top_item ::= source_decl NEWLINE.
+top_item ::= buffer_decl NEWLINE.
 top_item ::= stage_decl NEWLINE.
 top_item ::= stage_block.
 top_item ::= NEWLINE.
 
 source_decl ::= SOURCE IDENT(N) source_options(O). {
   flow_parse_add_source(ctx, N, O);
+}
+
+buffer_decl ::= BUFFER IDENT(N) RESOURCE adapter_name(R). {
+  flow_parse_add_buffer(ctx, N, R);
 }
 
 stage_decl ::= STAGE IDENT(N) stage_options(O). {
@@ -128,6 +133,7 @@ dotted_name(A) ::= dotted_name(L) DOT(D) binding_segment(R). {
 }
 binding_segment(A) ::= IDENT(T). { A = T; }
 binding_segment(A) ::= SOURCE(T). { A = T; }
+binding_segment(A) ::= BUFFER(T). { A = T; }
 binding_segment(A) ::= STAGE(T). { A = T; }
 binding_segment(A) ::= STEP(T). { A = T; }
 binding_segment(A) ::= USE(T). { A = T; }

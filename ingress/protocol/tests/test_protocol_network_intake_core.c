@@ -87,7 +87,7 @@ intake_test_settings(turbo_flow_protocol_kind_t kind) {
   memcpy(settings.source_id, kind == TURBO_FLOW_PROTOCOL_JTT_808 ? "fleet.test" : "coap.test",
          kind == TURBO_FLOW_PROTOCOL_JTT_808 ? sizeof("fleet.test") : sizeof("coap.test"));
   memcpy(settings.source_adapter_name, "wire.input", sizeof("wire.input"));
-  memcpy(settings.intake_adapter_name, "protocol.store", sizeof("protocol.store"));
+  memcpy(settings.decoder_adapter_name, "protocol.decode", sizeof("protocol.decode"));
   settings.max_sessions = 1u;
   settings.max_frame_size = 64u;
   settings.max_pending_claims = 4u;
@@ -108,29 +108,52 @@ static turbo_flow_inbox_t intake_test_inbox(size_t max_records) {
   return inbox;
 }
 
-static turbo_flow_t *intake_test_flow(flow_protocol_network_intake_sink_t **sink_out,
-                                      turbo_flow_protocol_t *protocol, turbo_flow_inbox_t *inbox,
-                                      const flow_protocol_network_intake_settings_t *settings) {
+static turbo_flow_t *intake_test_flow(
+    flow_protocol_network_intake_sink_t **sink_out, turbo_flow_protocol_t *protocol,
+    turbo_flow_inbox_t *inbox, const flow_protocol_network_intake_settings_t *settings,
+    turbo_flow_t **downstream_out, turbo_flow_durable_buffer_binding_t **binding_out) {
   static const char graph[] = "source input\n"
-                              "stage durable adapter protocol.store\n"
+                              "stage decode adapter protocol.decode\n"
                               "stage main {\n"
-                              "  input -> durable\n"
+                              "  input -> decode\n"
                               "}\n";
+  static const char downstream_graph[] = "source decoded\n"
+                                         "buffer intake resource protocol.store\n"
+                                         "stage main {\n"
+                                         "  decoded -> intake\n"
+                                         "}\n";
+  turbo_flow_durable_buffer_binding_config_t binding_config =
+      TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
   flow_protocol_network_intake_sink_config_t config;
+  turbo_flow_t *downstream = turbo_flow_create();
   turbo_flow_t *flow = turbo_flow_create();
+  check_not_null(downstream);
   check_not_null(flow);
+  check_equal(turbo_flow_parse_string(downstream, downstream_graph,
+                                      sizeof(downstream_graph) - 1u),
+              SALTS_OK);
+  binding_config.resource_name = "protocol.store";
+  binding_config.inbox = inbox;
+  binding_config.identity_mode = TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED;
+  binding_config.max_message_bytes = 4096u;
+  check_equal(turbo_flow_durable_buffer_bind(downstream, &binding_config, binding_out), SALTS_OK);
+  check_not_null(*binding_out);
+  check_equal(turbo_flow_compile(downstream), SALTS_OK);
+  check_equal(turbo_flow_start(downstream), SALTS_OK);
   check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
   memset(&config, 0, sizeof(config));
   config.flow = flow;
-  config.adapter_name = "protocol.store";
+  config.adapter_name = "protocol.decode";
   config.protocol = protocol;
-  config.inbox = inbox;
+  config.downstream_flow = downstream;
+  config.decoded_source_name = "decoded";
   config.settings = settings;
   check_equal(flow_protocol_network_intake_sink_create(&config, sink_out), SALTS_OK);
   check_not_null(*sink_out);
   check_equal(flow_protocol_network_intake_sink_register(*sink_out), SALTS_OK);
   check_equal(turbo_flow_compile(flow), SALTS_OK);
   check_equal(turbo_flow_start(flow), SALTS_OK);
+  *downstream_out = downstream;
   return flow;
 }
 
@@ -247,10 +270,15 @@ static void intake_free_one_record(turbo_flow_inbox_t *inbox) {
 }
 
 static void intake_destroy(turbo_flow_t *flow, flow_protocol_network_intake_sink_t *sink,
+                           turbo_flow_t *downstream,
+                           turbo_flow_durable_buffer_binding_t *binding,
                            turbo_flow_protocol_t *protocol, turbo_flow_inbox_t *inbox) {
   check_equal(turbo_flow_stop(flow), SALTS_OK);
   turbo_flow_destroy(flow);
   flow_protocol_network_intake_sink_destroy(sink);
+  check_equal(turbo_flow_stop(downstream), SALTS_OK);
+  check_equal(turbo_flow_durable_buffer_unbind(binding), SALTS_OK);
+  turbo_flow_destroy(downstream);
   turbo_flow_protocol_destroy(protocol);
   check_equal(turbo_flow_inbox_close(inbox), SALTS_OK);
   check_equal(turbo_flow_inbox_destroy(inbox), SALTS_OK);
@@ -266,7 +294,10 @@ spec("protocol network intake core") {
         intake_test_settings(TURBO_FLOW_PROTOCOL_JTT_808);
     turbo_flow_inbox_t inbox = intake_test_inbox(1u);
     flow_protocol_network_intake_sink_t *sink = NULL;
-    turbo_flow_t *flow = intake_test_flow(&sink, protocol, &inbox, &settings);
+    turbo_flow_t *downstream = NULL;
+    turbo_flow_durable_buffer_binding_t *binding = NULL;
+    turbo_flow_t *flow =
+        intake_test_flow(&sink, protocol, &inbox, &settings, &downstream, &binding);
     turbo_flow_inbox_record_t prefill = intake_prefill_record();
     turbo_flow_inbox_receipt_t receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
     turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
@@ -278,14 +309,14 @@ spec("protocol network intake core") {
 
     check_equal(turbo_flow_inbox_admit(&inbox, &prefill, &receipt), SALTS_OK);
     intake_probe_init(&first);
-    message = intake_listener_message(1u, 0u, 1u, first_half, sizeof(first_half));
+    message = intake_listener_message(1u, 1u, 1u, first_half, sizeof(first_half));
     check_equal(intake_publish(flow, &message, &first), SALTS_OK);
     intake_wait_calls(&first, 1u);
     check_equal(atomic_load_explicit(&first.calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&first.status, memory_order_acquire), SALTS_OK);
 
     intake_probe_init(&second);
-    message = intake_listener_message(2u, 0u, 1u, second_half, sizeof(second_half));
+    message = intake_listener_message(2u, 1u, 1u, second_half, sizeof(second_half));
     check_equal(intake_publish(flow, &message, &second), SALTS_OK);
     intake_wait_backpressure(sink, 1);
     check_equal(atomic_load_explicit(&second.calls, memory_order_acquire), (size_t)0u);
@@ -300,7 +331,7 @@ spec("protocol network intake core") {
     check_equal(snapshot.pending_records, 1u);
 
     intake_probe_init(&replay_completion);
-    message = intake_listener_message(3u, 0u, 1u, replay, sizeof(replay));
+    message = intake_listener_message(3u, 1u, 1u, replay, sizeof(replay));
     check_equal(intake_publish(flow, &message, &replay_completion), SALTS_OK);
     intake_wait_calls(&replay_completion, 1u);
     check_equal(atomic_load_explicit(&replay_completion.status, memory_order_acquire), SALTS_OK);
@@ -315,7 +346,7 @@ spec("protocol network intake core") {
     check_equal(turbo_flow_inbox_complete(&inbox, &claim), SALTS_OK);
     check_equal(turbo_flow_inbox_forget(&inbox, receipt.record_id), SALTS_OK);
 
-    intake_destroy(flow, sink, protocol, &inbox);
+    intake_destroy(flow, sink, downstream, binding, protocol, &inbox);
   }
 
   it("fences parser state on TCP generation reuse and rejects an older generation") {
@@ -326,7 +357,10 @@ spec("protocol network intake core") {
         intake_test_settings(TURBO_FLOW_PROTOCOL_JTT_808);
     turbo_flow_inbox_t inbox = intake_test_inbox(2u);
     flow_protocol_network_intake_sink_t *sink = NULL;
-    turbo_flow_t *flow = intake_test_flow(&sink, protocol, &inbox, &settings);
+    turbo_flow_t *downstream = NULL;
+    turbo_flow_durable_buffer_binding_t *binding = NULL;
+    turbo_flow_t *flow =
+        intake_test_flow(&sink, protocol, &inbox, &settings, &downstream, &binding);
     intake_completion_probe_t first;
     intake_completion_probe_t second;
     intake_completion_probe_t stale;
@@ -334,13 +368,13 @@ spec("protocol network intake core") {
     turbo_flow_msg_t message;
 
     intake_probe_init(&first);
-    message = intake_listener_message(10u, 0u, 1u, partial, sizeof(partial));
+    message = intake_listener_message(10u, 1u, 1u, partial, sizeof(partial));
     check_equal(intake_publish(flow, &message, &first), SALTS_OK);
     intake_wait_calls(&first, 1u);
     check_equal(atomic_load_explicit(&first.status, memory_order_acquire), SALTS_OK);
 
     intake_probe_init(&second);
-    message = intake_listener_message(11u, 0u, 2u, fresh, sizeof(fresh));
+    message = intake_listener_message(11u, 1u, 2u, fresh, sizeof(fresh));
     check_equal(intake_publish(flow, &message, &second), SALTS_OK);
     intake_wait_calls(&second, 1u);
     check_equal(atomic_load_explicit(&second.status, memory_order_acquire), SALTS_OK);
@@ -348,7 +382,7 @@ spec("protocol network intake core") {
     check_equal(snapshot.pending_records, 1u);
 
     intake_probe_init(&stale);
-    message = intake_listener_message(12u, 0u, 1u, fresh, sizeof(fresh));
+    message = intake_listener_message(12u, 1u, 1u, fresh, sizeof(fresh));
     check_equal(intake_publish(flow, &message, &stale), SALTS_OK);
     intake_wait_calls(&stale, 1u);
     check_equal(atomic_load_explicit(&stale.status, memory_order_acquire), SALTS_EPROTO);
@@ -356,7 +390,7 @@ spec("protocol network intake core") {
     check_equal(snapshot.pending_records, 1u);
 
     intake_free_one_record(&inbox);
-    intake_destroy(flow, sink, protocol, &inbox);
+    intake_destroy(flow, sink, downstream, binding, protocol, &inbox);
   }
 
   it("derives stable CoAP device identity from UDP peer context") {
@@ -365,14 +399,17 @@ spec("protocol network intake core") {
     flow_protocol_network_intake_settings_t settings = intake_test_settings(TURBO_FLOW_PROTOCOL_COAP);
     turbo_flow_inbox_t inbox = intake_test_inbox(1u);
     flow_protocol_network_intake_sink_t *sink = NULL;
-    turbo_flow_t *flow = intake_test_flow(&sink, protocol, &inbox, &settings);
+    turbo_flow_t *downstream = NULL;
+    turbo_flow_durable_buffer_binding_t *binding = NULL;
+    turbo_flow_t *flow =
+        intake_test_flow(&sink, protocol, &inbox, &settings, &downstream, &binding);
     intake_completion_probe_t completion;
     turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
     turbo_flow_msg_t message;
     uint64_t record_id;
 
     intake_probe_init(&completion);
-    message = intake_packet_message(1u, 0u, 1u, coap_get, sizeof(coap_get));
+    message = intake_packet_message(1u, 1u, 1u, coap_get, sizeof(coap_get));
     check_equal(intake_publish(flow, &message, &completion), SALTS_OK);
     intake_wait_calls(&completion, 1u);
     check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_OK);
@@ -386,6 +423,6 @@ spec("protocol network intake core") {
     check_equal(turbo_flow_inbox_complete(&inbox, &claim), SALTS_OK);
     check_equal(turbo_flow_inbox_forget(&inbox, record_id), SALTS_OK);
 
-    intake_destroy(flow, sink, protocol, &inbox);
+    intake_destroy(flow, sink, downstream, binding, protocol, &inbox);
   }
 }

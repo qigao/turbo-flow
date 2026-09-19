@@ -179,8 +179,17 @@ static int flow_release_downstream(turbo_flow_t *flow, uint32_t stage_index,
       if (active) ++activated[edge->to_stage];
       if (remaining[edge->to_stage] == 0) {
         if (activated[edge->to_stage] > 0) {
-          rc = flow_enqueue_ready(queue, queue_cap, tail, edge->to_stage);
-          if (rc != SALTS_OK) return rc;
+          const flow_stage_plan_impl_t *target =
+              (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->to_stage);
+          if (!target) return SALTS_EPROTO;
+          if (target->is_buffer) {
+            rc = flow_durable_buffer_admit_stage(flow, edge->to_stage, msg);
+            if (rc != SALTS_OK) return rc;
+            done[edge->to_stage] = 1u;
+          } else {
+            rc = flow_enqueue_ready(queue, queue_cap, tail, edge->to_stage);
+            if (rc != SALTS_OK) return rc;
+          }
         } else if (!done[edge->to_stage]) {
           done[edge->to_stage] = 1u;
           rc = flow_enqueue_ready(skipped_queue, skipped_queue_cap, &skipped_tail,

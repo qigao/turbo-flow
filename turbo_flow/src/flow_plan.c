@@ -164,7 +164,8 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
         (segment &&
          (segment->stage_index != stage_index || segment->kind != FLOW_DATA_SEGMENT_WORKER_POOL)) ||
         !semantics ||
-        (((node->flags & (FLOW_RUNTIME_NODE_SOURCE | FLOW_RUNTIME_NODE_PORT)) != 0u) !=
+        (((node->flags & (FLOW_RUNTIME_NODE_SOURCE | FLOW_RUNTIME_NODE_PORT |
+                          FLOW_RUNTIME_NODE_BUFFER)) != 0u) !=
          (*executor_index == FLOW_PLAN_INDEX_NONE)) ||
         (((node->flags & FLOW_RUNTIME_NODE_WORKER_POOL) != 0u) !=
          (*segment_index != FLOW_PLAN_INDEX_NONE)) ||
@@ -212,7 +213,10 @@ static int flow_require_cflow_backend(turbo_flow_t *flow, const flow_compiled_pl
       return flow_set_error(flow, SALTS_EPROTO, 0, 0,
                             "required CFlow backend received an invalid candidate plan");
     }
-    if ((node->flags & (FLOW_RUNTIME_NODE_SOURCE | FLOW_RUNTIME_NODE_PORT)) != 0u) continue;
+    if ((node->flags & (FLOW_RUNTIME_NODE_SOURCE | FLOW_RUNTIME_NODE_PORT |
+                        FLOW_RUNTIME_NODE_BUFFER)) != 0u) {
+      continue;
+    }
     if (!semantics->typed || semantics->barriers != FLOW_LOWERING_BARRIER_NONE) {
       return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                             "required CFlow backend cannot lower this stage");
@@ -277,10 +281,11 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
     }
     if (stage->is_source) node->flags |= FLOW_RUNTIME_NODE_SOURCE;
     if (stage->is_port) node->flags |= FLOW_RUNTIME_NODE_PORT;
+    if (stage->is_buffer) node->flags |= FLOW_RUNTIME_NODE_BUFFER;
     if (stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) {
       node->flags |= FLOW_RUNTIME_NODE_WORKER_POOL;
     }
-    if (!stage->is_source && !stage->is_port) {
+    if (!stage->is_source && !stage->is_port && !stage->is_buffer) {
       flow_executor_plan_t executor;
       const size_t executor_index = vec_size(&candidate.executors);
 

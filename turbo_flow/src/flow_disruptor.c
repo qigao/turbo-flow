@@ -211,6 +211,13 @@ static int flow_has_reorder_stage(const turbo_flow_t *flow) {
 }
 
 static int flow_requires_executor_data_path(const turbo_flow_t *flow) {
+  /* Whole-Graph broadcast consumers cannot cross execution cuts. Buffer admission
+   * and its later continuation must use the region-aware execution path. */
+  for (size_t i = 0; i < vec_size(&flow->compiled_plan.nodes); ++i) {
+    const flow_runtime_node_plan_t *node =
+        (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes, i);
+    if (node && (node->flags & FLOW_RUNTIME_NODE_BUFFER) != 0u) return 1;
+  }
   for (size_t i = 0; i < vec_size(&flow->compiled_plan.executors); ++i) {
     const flow_executor_plan_t *executor =
         (const flow_executor_plan_t *)vec_at_const(&flow->compiled_plan.executors, i);

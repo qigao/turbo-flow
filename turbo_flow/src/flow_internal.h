@@ -2,6 +2,7 @@
 #define TURBO_FLOW_INTERNAL_H
 
 #include "turbo_flow.h"
+#include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_expr.h"
 
 #include "disruptor.h"
@@ -30,6 +31,7 @@ typedef struct flow_stage_plan_impl_s {
   uint32_t line;
   uint32_t column;
   int is_source;
+  int is_buffer;
   int is_port;
   int is_port_output;
   int async_emitting;
@@ -177,7 +179,8 @@ typedef enum flow_runtime_node_flags_e {
   FLOW_RUNTIME_NODE_PORT = 1u << 1,
   FLOW_RUNTIME_NODE_WORKER_POOL = 1u << 2,
   FLOW_RUNTIME_NODE_FANOUT = 1u << 3,
-  FLOW_RUNTIME_NODE_FANIN = 1u << 4
+  FLOW_RUNTIME_NODE_FANIN = 1u << 4,
+  FLOW_RUNTIME_NODE_BUFFER = 1u << 5
 } flow_runtime_node_flags_t;
 
 typedef struct flow_runtime_node_plan_s {
@@ -454,6 +457,24 @@ typedef struct flow_resource_command_record_s {
   turbo_flow_resource_command_result_t result;
 } flow_resource_command_record_t;
 
+typedef struct flow_inbox_driver_s flow_inbox_driver_t;
+
+struct turbo_flow_durable_buffer_binding_s {
+  flow_inbox_driver_t *driver;
+  turbo_flow_t *flow;
+  tstr resource_name;
+  turbo_flow_inbox_t *inbox;
+  turbo_flow_durable_identity_mode_t identity_mode;
+  size_t max_message_bytes;
+  uint64_t provider_generation;
+  const turbo_flow_inbox_ops_v2_t *provider_ops;
+  void *provider_ctx;
+  char admission_namespace[37]; /* formatted Salts UUID, runtime binding metadata */
+  size_t stage_index;
+  atomic_uint_fast64_t next_sequence;
+  int bound;
+};
+
 typedef enum flow_admission_state_e {
   FLOW_ADMISSION_CLOSED = 0,
   FLOW_ADMISSION_OPEN,
@@ -551,6 +572,7 @@ struct turbo_flow_s {
   vec_t modules;
   vec_t adapters;
   vec_t resources;
+  vec_t durable_buffer_bindings;
   vec_t expr_projection_registrations;
   vec_t active_adapters;
   vec_t pool_records;
@@ -611,6 +633,12 @@ int flow_find_stage_view(const turbo_flow_t *flow, vstr name);
 int flow_find_operation_provider(const turbo_flow_t *flow, const char *operation_name,
                                  const char *resource_name);
 int flow_find_adapter(const turbo_flow_t *flow, const char *name);
+int flow_durable_buffer_admit_stage(turbo_flow_t *flow, uint32_t stage_index,
+                                    const turbo_flow_msg_t *message);
+int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow);
+void flow_durable_buffer_clear_bindings(turbo_flow_t *flow);
+int flow_durable_buffers_idle(const turbo_flow_t *flow);
+TURBO_FLOW_C_API int flow_durable_buffers_prepare_retire(turbo_flow_t *flow, uint64_t timeout_ms);
 int flow_resource_metadata_valid(const turbo_flow_resource_metadata_t *metadata);
 int flow_resource_command_valid(const turbo_flow_resource_command_t *command);
 size_t flow_native_resource_count(const turbo_flow_t *flow);
@@ -649,6 +677,7 @@ void flow_edge_impl_destroy(flow_edge_plan_impl_t *edge);
 int flow_msg_set_failure(turbo_flow_msg_t *msg, const char *stage_name, const char *adapter_name,
                          const char *route_name, int code, uint32_t attempt);
 int flow_msg_payload_validate(const turbo_flow_msg_t *msg);
+int flow_msg_has_active_result_claim(const turbo_flow_msg_t *msg);
 int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg);
 void flow_clear_runtime_plan(turbo_flow_t *flow);
 int flow_compiled_plan_init(flow_compiled_plan_t *plan);
@@ -773,12 +802,25 @@ int flow_execute_coro_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *stage,
 TURBO_FLOW_C_API int flow_mark_reachable_from_stage(const turbo_flow_t *flow, uint8_t *reachable,
                                                     uint32_t *worklist, size_t worklist_cap,
                                                     uint32_t stage_index);
+TURBO_FLOW_C_API int flow_mark_execution_region_from_stage(
+    const turbo_flow_t *flow, uint8_t *reachable, uint32_t *worklist,
+    size_t worklist_cap, uint32_t origin_stage);
 int flow_dispatch_validate_stage(turbo_flow_t *flow, uint32_t stage_index);
 int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg_t *msg,
                         uint64_t sequence, uint64_t msg_id, flow_stage_completion_t *completion,
                         turbo_flow_emitter_t *emitter);
 int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
                                 turbo_flow_msg_t *message);
+int flow_run_open_from_stage(turbo_flow_t *flow, uint32_t origin_stage, int buffer_origin,
+                             cflow_publisher *publisher,
+                             const turbo_flow_run_config_t *config,
+                             turbo_flow_run_t **run_out);
+int flow_run_open_buffer_drain(turbo_flow_t *flow, uint32_t origin_stage,
+                                cflow_publisher *publisher,
+                                const turbo_flow_run_config_t *config,
+                                turbo_flow_run_t **run_out);
+int flow_run_has_pending_values(const turbo_flow_run_t *run);
+int flow_run_prepare_buffer_retire(turbo_flow_t *flow, uint64_t timeout_ms);
 int flow_publish_enter(turbo_flow_t *flow);
 void flow_publish_leave(turbo_flow_t *flow);
 void flow_stop_async_ingress(turbo_flow_t *flow);

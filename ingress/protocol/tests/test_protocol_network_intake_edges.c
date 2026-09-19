@@ -56,7 +56,7 @@ static flow_protocol_network_intake_settings_t intake_edge_settings(void) {
   memcpy(settings.protocol_version, "2019-A1", sizeof("2019-A1"));
   memcpy(settings.source_id, "fleet.edge", sizeof("fleet.edge"));
   memcpy(settings.source_adapter_name, "wire.input", sizeof("wire.input"));
-  memcpy(settings.intake_adapter_name, "protocol.store", sizeof("protocol.store"));
+  memcpy(settings.decoder_adapter_name, "protocol.decode", sizeof("protocol.decode"));
   settings.max_sessions = 1u;
   settings.max_frame_size = 64u;
   settings.max_pending_claims = 4u;
@@ -77,28 +77,51 @@ static turbo_flow_inbox_t intake_edge_inbox(size_t max_records) {
   return inbox;
 }
 
-static turbo_flow_t *intake_edge_flow(flow_protocol_network_intake_sink_t **sink_out,
-                                      turbo_flow_protocol_t *protocol, turbo_flow_inbox_t *inbox,
-                                      const flow_protocol_network_intake_settings_t *settings) {
+static turbo_flow_t *intake_edge_flow(
+    flow_protocol_network_intake_sink_t **sink_out, turbo_flow_protocol_t *protocol,
+    turbo_flow_inbox_t *inbox, const flow_protocol_network_intake_settings_t *settings,
+    turbo_flow_t **downstream_out, turbo_flow_durable_buffer_binding_t **binding_out) {
   static const char graph[] = "source input\n"
-                              "stage durable adapter protocol.store\n"
+                              "stage decode adapter protocol.decode\n"
                               "stage main {\n"
-                              "  input -> durable\n"
+                              "  input -> decode\n"
                               "}\n";
+  static const char downstream_graph[] = "source decoded\n"
+                                         "buffer intake resource protocol.store\n"
+                                         "stage main {\n"
+                                         "  decoded -> intake\n"
+                                         "}\n";
+  turbo_flow_durable_buffer_binding_config_t binding_config =
+      TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
   flow_protocol_network_intake_sink_config_t config;
+  turbo_flow_t *downstream = turbo_flow_create();
   turbo_flow_t *flow = turbo_flow_create();
+  check_not_null(downstream);
   check_not_null(flow);
+  check_equal(turbo_flow_parse_string(downstream, downstream_graph,
+                                      sizeof(downstream_graph) - 1u),
+              SALTS_OK);
+  binding_config.resource_name = "protocol.store";
+  binding_config.inbox = inbox;
+  binding_config.identity_mode = TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED;
+  binding_config.max_message_bytes = 4096u;
+  check_equal(turbo_flow_durable_buffer_bind(downstream, &binding_config, binding_out), SALTS_OK);
+  check_not_null(*binding_out);
+  check_equal(turbo_flow_compile(downstream), SALTS_OK);
+  check_equal(turbo_flow_start(downstream), SALTS_OK);
   check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
   memset(&config, 0, sizeof(config));
   config.flow = flow;
-  config.adapter_name = "protocol.store";
+  config.adapter_name = "protocol.decode";
   config.protocol = protocol;
-  config.inbox = inbox;
+  config.downstream_flow = downstream;
+  config.decoded_source_name = "decoded";
   config.settings = settings;
   check_equal(flow_protocol_network_intake_sink_create(&config, sink_out), SALTS_OK);
   check_equal(flow_protocol_network_intake_sink_register(*sink_out), SALTS_OK);
   check_equal(turbo_flow_compile(flow), SALTS_OK);
   check_equal(turbo_flow_start(flow), SALTS_OK);
+  *downstream_out = downstream;
   return flow;
 }
 
@@ -113,7 +136,7 @@ static turbo_flow_msg_t intake_edge_listener_message(uint64_t id, uint64_t gener
   memset(context, 0, sizeof(*context));
   context->size = TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_V1_SIZE;
   context->version = TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION;
-  context->connection.slot = 0u;
+  context->connection.slot = 1u;
   context->connection.generation = generation;
   memcpy(mem_buffer_data(buffer) + sizeof(*context), data, size);
   mem_set_used(buffer, storage_size);
@@ -189,11 +212,16 @@ static void intake_edge_free_one(turbo_flow_inbox_t *inbox) {
   check_equal(turbo_flow_inbox_forget(inbox, id), SALTS_OK);
 }
 
-static void intake_edge_destroy(turbo_flow_t *flow, flow_protocol_network_intake_sink_t *sink,
-                                turbo_flow_protocol_t *protocol, turbo_flow_inbox_t *inbox) {
+static void intake_edge_destroy(
+    turbo_flow_t *flow, flow_protocol_network_intake_sink_t *sink, turbo_flow_t *downstream,
+    turbo_flow_durable_buffer_binding_t *binding, turbo_flow_protocol_t *protocol,
+    turbo_flow_inbox_t *inbox) {
   check_equal(turbo_flow_stop(flow), SALTS_OK);
   turbo_flow_destroy(flow);
   flow_protocol_network_intake_sink_destroy(sink);
+  check_equal(turbo_flow_stop(downstream), SALTS_OK);
+  check_equal(turbo_flow_durable_buffer_unbind(binding), SALTS_OK);
+  turbo_flow_destroy(downstream);
   turbo_flow_protocol_destroy(protocol);
   check_equal(turbo_flow_inbox_close(inbox), SALTS_OK);
   check_equal(turbo_flow_inbox_destroy(inbox), SALTS_OK);
@@ -206,7 +234,10 @@ spec("protocol network intake edge ownership") {
     flow_protocol_network_intake_settings_t settings = intake_edge_settings();
     turbo_flow_inbox_t inbox = intake_edge_inbox(1u);
     flow_protocol_network_intake_sink_t *sink = NULL;
-    turbo_flow_t *flow = intake_edge_flow(&sink, protocol, &inbox, &settings);
+    turbo_flow_t *downstream = NULL;
+    turbo_flow_durable_buffer_binding_t *binding = NULL;
+    turbo_flow_t *flow =
+        intake_edge_flow(&sink, protocol, &inbox, &settings, &downstream, &binding);
     intake_edge_completion_t completion;
     flow_protocol_network_intake_sink_metrics_t metrics;
     turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
@@ -234,7 +265,7 @@ spec("protocol network intake edge ownership") {
     check_equal(metrics.frames_admitted, (uint64_t)2u);
 
     intake_edge_free_one(&inbox);
-    intake_edge_destroy(flow, sink, protocol, &inbox);
+    intake_edge_destroy(flow, sink, downstream, binding, protocol, &inbox);
   }
 
   it("queues later claims without feeding and cancel completes every retained claim") {
@@ -244,7 +275,10 @@ spec("protocol network intake edge ownership") {
     flow_protocol_network_intake_settings_t settings = intake_edge_settings();
     turbo_flow_inbox_t inbox = intake_edge_inbox(1u);
     flow_protocol_network_intake_sink_t *sink = NULL;
-    turbo_flow_t *flow = intake_edge_flow(&sink, protocol, &inbox, &settings);
+    turbo_flow_t *downstream = NULL;
+    turbo_flow_durable_buffer_binding_t *binding = NULL;
+    turbo_flow_t *flow =
+        intake_edge_flow(&sink, protocol, &inbox, &settings, &downstream, &binding);
     turbo_flow_inbox_record_t prefill = intake_edge_prefill();
     turbo_flow_inbox_receipt_t receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
     intake_edge_completion_t first;
@@ -280,7 +314,7 @@ spec("protocol network intake edge ownership") {
     check_equal(metrics.terminal_status, SALTS_ECANCELED);
 
     intake_edge_free_one(&inbox);
-    intake_edge_destroy(flow, sink, protocol, &inbox);
+    intake_edge_destroy(flow, sink, downstream, binding, protocol, &inbox);
   }
 
   it("fails a malformed transport context before Inbox admission") {
@@ -289,7 +323,10 @@ spec("protocol network intake edge ownership") {
     flow_protocol_network_intake_settings_t settings = intake_edge_settings();
     turbo_flow_inbox_t inbox = intake_edge_inbox(1u);
     flow_protocol_network_intake_sink_t *sink = NULL;
-    turbo_flow_t *flow = intake_edge_flow(&sink, protocol, &inbox, &settings);
+    turbo_flow_t *downstream = NULL;
+    turbo_flow_durable_buffer_binding_t *binding = NULL;
+    turbo_flow_t *flow =
+        intake_edge_flow(&sink, protocol, &inbox, &settings, &downstream, &binding);
     intake_edge_completion_t completion;
     turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
     turbo_flow_msg_t message;
@@ -302,6 +339,6 @@ spec("protocol network intake edge ownership") {
     check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
     check_equal(snapshot.pending_records, (size_t)0u);
 
-    intake_edge_destroy(flow, sink, protocol, &inbox);
+    intake_edge_destroy(flow, sink, downstream, binding, protocol, &inbox);
   }
 }

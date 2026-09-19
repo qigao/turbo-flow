@@ -1,6 +1,7 @@
 #include "tinytest.h"
 
 #include "turbo_flow_protocol_network_intake.h"
+#include "turbo_flow_durable_buffer.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +21,8 @@ typedef struct intake_owner_fixture_s {
   turbo_flow_resolved_config_t *resolved;
   turbo_flow_inbox_t inbox;
   turbo_flow_t *flow;
+  turbo_flow_t *downstream_flow;
+  turbo_flow_durable_buffer_binding_t *durable_binding;
 } intake_owner_fixture_t;
 
 static void intake_owner_yaml(char *out, size_t capacity, const char *source_name,
@@ -33,10 +36,10 @@ static void intake_owner_yaml(char *out, size_t capacity, const char *source_nam
                       "      max_connections: 1\n"
                       "      max_message_bytes: 64\n"
                       "      scheduler_max_steps_per_poll: 2\n"
-                      "  protocol.store:\n"
-                      "    kind: protocol.intake\n"
+                      "  protocol.decode:\n"
+                      "    kind: protocol.decode\n"
                       "    config:\n"
-                      "      schema_version: 1\n"
+                      "      schema_version: 2\n"
                       "      protocol_provider: jtt808\n"
                       "      protocol_kind: jtt808\n"
                       "      protocol_version: %s\n"
@@ -51,11 +54,34 @@ static void intake_owner_yaml(char *out, size_t capacity, const char *source_nam
 static void intake_owner_graph(char *out, size_t capacity, const char *source_name) {
   check_true(snprintf(out, capacity,
                       "source wire adapter %s\n"
-                      "stage durable adapter protocol.store\n"
+                      "stage decode adapter protocol.decode\n"
                       "stage main {\n"
-                      "  wire -> durable\n"
+                      "  wire -> decode\n"
                       "}\n",
                       source_name) > 0);
+}
+
+static int intake_owner_downstream_open(intake_owner_fixture_t *fixture) {
+  static const char graph[] = "source decoded\n"
+                              "buffer intake resource protocol.store\n"
+                              "stage main {\n"
+                              "  decoded -> intake\n"
+                              "}\n";
+  turbo_flow_durable_buffer_binding_config_t binding =
+      TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
+  fixture->downstream_flow = turbo_flow_create();
+  if (!fixture->downstream_flow) return SALTS_ENOMEM;
+  int rc = turbo_flow_parse_string(fixture->downstream_flow, graph, sizeof(graph) - 1u);
+  if (rc != SALTS_OK) return rc;
+  binding.resource_name = "protocol.store";
+  binding.inbox = &fixture->inbox;
+  binding.identity_mode = TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED;
+  binding.max_message_bytes = 4096u;
+  rc = turbo_flow_durable_buffer_bind(fixture->downstream_flow, &binding,
+                                      &fixture->durable_binding);
+  if (rc == SALTS_OK) rc = turbo_flow_compile(fixture->downstream_flow);
+  if (rc == SALTS_OK) rc = turbo_flow_start(fixture->downstream_flow);
+  return rc;
 }
 
 static intake_owner_fixture_t intake_owner_fixture(const char *source_name,
@@ -90,15 +116,16 @@ static intake_owner_fixture_t intake_owner_fixture(const char *source_name,
   intake_owner_yaml(yaml, sizeof(yaml), source_name, protocol_version);
   check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &fixture.resolved, &config_error),
               SALTS_OK);
-  fixture.flow = turbo_flow_create();
-  check_not_null(fixture.flow);
-  intake_owner_graph(graph, sizeof(graph), source_name);
-  check_equal(turbo_flow_parse_string(fixture.flow, graph, strlen(graph)), SALTS_OK);
   inbox_config.max_records = 8u;
   inbox_config.max_total_bytes = 8192u;
   inbox_config.max_record_bytes = 4096u;
   inbox_config.max_claims = 8u;
   check_equal(turbo_flow_inbox_memory_create(&inbox_config, &fixture.inbox), SALTS_OK);
+  check_equal(intake_owner_downstream_open(&fixture), SALTS_OK);
+  fixture.flow = turbo_flow_create();
+  check_not_null(fixture.flow);
+  intake_owner_graph(graph, sizeof(graph), source_name);
+  check_equal(turbo_flow_parse_string(fixture.flow, graph, strlen(graph)), SALTS_OK);
   return fixture;
 }
 
@@ -108,9 +135,10 @@ intake_owner_config(intake_owner_fixture_t *fixture, const char *source_name) {
       TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT;
   config.catalog = fixture->catalog;
   config.resolved = fixture->resolved;
-  config.inbox = &fixture->inbox;
+  config.downstream_flow = fixture->downstream_flow;
   config.source_adapter_name = source_name;
-  config.intake_adapter_name = "protocol.store";
+  config.decoder_adapter_name = "protocol.decode";
+  config.decoded_source_name = "decoded";
   return config;
 }
 
@@ -120,14 +148,26 @@ static void intake_owner_fixture_release_inputs(intake_owner_fixture_t *fixture)
     turbo_flow_destroy(fixture->flow);
     fixture->flow = NULL;
   }
+  if (fixture->downstream_flow) {
+    if (turbo_flow_state(fixture->downstream_flow) == TURBO_FLOW_STATE_STARTED)
+      check_equal(turbo_flow_stop(fixture->downstream_flow), SALTS_OK);
+    if (fixture->durable_binding) {
+      check_equal(turbo_flow_durable_buffer_unbind(fixture->durable_binding), SALTS_OK);
+      fixture->durable_binding = NULL;
+    }
+    turbo_flow_destroy(fixture->downstream_flow);
+    fixture->downstream_flow = NULL;
+  }
   turbo_flow_resolved_config_destroy(fixture->resolved);
   fixture->resolved = NULL;
   if (fixture->catalog) {
     turbo_flow_plugin_catalog_snapshot_destroy(fixture->catalog);
     fixture->catalog = NULL;
   }
-  check_equal(turbo_flow_inbox_close(&fixture->inbox), SALTS_OK);
-  check_equal(turbo_flow_inbox_destroy(&fixture->inbox), SALTS_OK);
+  if (fixture->inbox.ops) {
+    check_equal(turbo_flow_inbox_close(&fixture->inbox), SALTS_OK);
+    check_equal(turbo_flow_inbox_destroy(&fixture->inbox), SALTS_OK);
+  }
 }
 
 static void intake_owner_host_destroy(intake_owner_fixture_t *fixture, int expected) {
@@ -185,10 +225,7 @@ spec("ProtocolNetworkIntake owner") {
     check_equal(snapshot.state, TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPED);
     check_equal(turbo_flow_protocol_network_intake_destroy(intake), SALTS_OK);
 
-    turbo_flow_resolved_config_destroy(fixture.resolved);
-    fixture.resolved = NULL;
-    check_equal(turbo_flow_inbox_close(&fixture.inbox), SALTS_OK);
-    check_equal(turbo_flow_inbox_destroy(&fixture.inbox), SALTS_OK);
+    intake_owner_fixture_release_inputs(&fixture);
     intake_owner_host_destroy(&fixture, SALTS_OK);
   }
 

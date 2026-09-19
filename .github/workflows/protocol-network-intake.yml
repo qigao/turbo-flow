@@ -6,15 +6,21 @@ on:
     paths:
       - 'ingress/protocol/**'
       - 'io/cnet/**'
+      - 'io/durable/**'
+      - 'io/turbodb/**'
       - 'turbo_flow/**'
+      - 'tools/lemon/**'
       - '.github/ci/protocol-network-compile/**'
       - '.github/workflows/protocol-network-intake.yml'
   pull_request:
-    branches: [master]
+    branches: [master, feat/118-real-protocol-intake]
     paths:
       - 'ingress/protocol/**'
       - 'io/cnet/**'
+      - 'io/durable/**'
+      - 'io/turbodb/**'
       - 'turbo_flow/**'
+      - 'tools/lemon/**'
       - '.github/ci/protocol-network-compile/**'
       - '.github/workflows/protocol-network-intake.yml'
   workflow_dispatch:

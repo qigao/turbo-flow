@@ -3,7 +3,168 @@
 #include <salts/clock.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+
+#if defined(FLOW_TURBODB_PLUGIN_MODULE)
+static const char protocol_network_e2e_meta_ddl[] =
+    "CREATE TABLE protocol_e2e_inbox_meta_v2 ("
+    "singleton_id integer primary key not null, schema_magic text not null, "
+    "schema_version integer not null, generation bigint not null, owner_state integer not null, "
+    "next_record_id bigint not null, next_claim_token bigint not null, max_records bigint not "
+    "null, max_total_bytes bigint not null, max_record_bytes bigint not null, max_claims bigint "
+    "not null, records bigint not null, history_records bigint not null, pending_records bigint "
+    "not null, failed_records bigint not null, in_flight_claims bigint not null, retained_bytes "
+    "bigint not null, admitted bigint not null, completed bigint not null, failed bigint not null, "
+    "retried bigint not null, discarded bigint not null)";
+
+static const char protocol_network_e2e_records_ddl[] =
+    "CREATE TABLE protocol_e2e_inbox_records_v2 ("
+    "record_id bigint primary key not null, phase integer not null, claim_generation bigint not "
+    "null, claim_token bigint not null, failure_status integer not null, failure_kind integer not "
+    "null, terminal_kind integer not null, envelope_schema text not null, envelope_schema_version "
+    "integer not null, source_id bytea not null, admission_id bytea not null, source_sequence_be "
+    "bytea not null, timestamp_ns_be bytea not null, message_type bigint not null, message_flags "
+    "bigint not null, content_domain integer not null, content_profile integer not null, "
+    "content_encoding integer not null, content_flags bigint not null, content_schema_version "
+    "bigint not null, content_media_type text not null, content_schema_name text not null, "
+    "content_type_name text not null, content_identity text not null, correlation bytea not null, "
+    "payload bytea not null, retained_bytes bigint not null)";
+
+static const char protocol_network_e2e_admission_index_ddl[] =
+    "CREATE UNIQUE INDEX protocol_e2e_inbox_records_v2_admission ON "
+    "protocol_e2e_inbox_records_v2(source_id, admission_id)";
+
+static const char protocol_network_e2e_phase_index_ddl[] =
+    "CREATE INDEX protocol_e2e_inbox_records_v2_phase ON "
+    "protocol_e2e_inbox_records_v2(phase, record_id)";
+
+static const char protocol_network_e2e_meta_row[] =
+    "INSERT INTO protocol_e2e_inbox_meta_v2 VALUES "
+    "(1, 'turbo-flow.turbodb.inbox', 2, 0, 0, 1, 1, 8, 32768, 4096, 1, "
+    "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
+
+static int protocol_network_e2e_sql(orm_connection_t *db, const char *text) {
+  orm_error_t error;
+  orm_query_t *query = NULL;
+  orm_result_t *result = NULL;
+  int rc = SALTS_EIO;
+  if (!db || !text) return SALTS_EINVAL;
+  orm_error_init(&error);
+  if (orm_raw(db, orm_view(text), &query, &error) != ORM_STATUS_OK) goto done;
+  if (orm_query_execute(query, &result, &error) != ORM_STATUS_OK) goto done;
+  rc = SALTS_OK;
+done:
+  if (result) orm_result_destroy(result);
+  if (query) orm_query_destroy(query);
+  return rc;
+}
+#endif
+
+int protocol_network_e2e_storage_prepare(protocol_network_e2e_fixture_t *fixture,
+                                         protocol_network_e2e_storage_kind_t storage,
+                                         char *turbodb_path) {
+  if (!fixture) return SALTS_EINVAL;
+  if (storage == PROTOCOL_NETWORK_E2E_STORAGE_MEMORY)
+    return turbodb_path ? SALTS_EINVAL : SALTS_OK;
+#if defined(FLOW_TURBODB_PLUGIN_MODULE)
+  if (storage == PROTOCOL_NETWORK_E2E_STORAGE_TURBODB) {
+    orm_error_t error;
+    int rc;
+    if (!turbodb_path) return SALTS_ENOMEM;
+    fixture->turbodb_path = turbodb_path;
+    orm_config(&fixture->turbodb_database);
+    fixture->turbodb_filename.keyword = orm_view("filename");
+    fixture->turbodb_filename.value = orm_view(fixture->turbodb_path);
+    fixture->turbodb_database.driver = orm_view("sqlite");
+    fixture->turbodb_database.options = &fixture->turbodb_filename;
+    fixture->turbodb_database.option_count = 1u;
+    orm_error_init(&error);
+    if (orm_connect(&fixture->turbodb_database, &fixture->turbodb_db, &error) != ORM_STATUS_OK) {
+      protocol_network_e2e_storage_cleanup(fixture);
+      return SALTS_EIO;
+    }
+    rc = protocol_network_e2e_sql(fixture->turbodb_db, protocol_network_e2e_meta_ddl);
+    if (rc == SALTS_OK)
+      rc = protocol_network_e2e_sql(fixture->turbodb_db, protocol_network_e2e_records_ddl);
+    if (rc == SALTS_OK)
+      rc = protocol_network_e2e_sql(fixture->turbodb_db,
+                                    protocol_network_e2e_admission_index_ddl);
+    if (rc == SALTS_OK)
+      rc = protocol_network_e2e_sql(fixture->turbodb_db, protocol_network_e2e_phase_index_ddl);
+    if (rc == SALTS_OK)
+      rc = protocol_network_e2e_sql(fixture->turbodb_db, protocol_network_e2e_meta_row);
+    orm_disconnect(fixture->turbodb_db);
+    fixture->turbodb_db = NULL;
+    if (rc != SALTS_OK) protocol_network_e2e_storage_cleanup(fixture);
+    return rc;
+  }
+#else
+  if (storage == PROTOCOL_NETWORK_E2E_STORAGE_TURBODB) return SALTS_ENOTSUP;
+#endif
+  return SALTS_EINVAL;
+}
+
+int protocol_network_e2e_storage_rewrite_yaml(protocol_network_e2e_fixture_t *fixture,
+                                              protocol_network_e2e_storage_kind_t storage,
+                                              char *yaml, size_t capacity) {
+  char *channels;
+  size_t prefix;
+  int written;
+  if (!fixture || !yaml || capacity == 0u) return SALTS_EINVAL;
+  if (storage == PROTOCOL_NETWORK_E2E_STORAGE_MEMORY) return SALTS_OK;
+#if defined(FLOW_TURBODB_PLUGIN_MODULE)
+  if (storage != PROTOCOL_NETWORK_E2E_STORAGE_TURBODB || !fixture->turbodb_path)
+    return SALTS_EINVAL;
+  channels = strstr(yaml, "channels:\n");
+  if (!channels) return SALTS_EPROTO;
+  prefix = (size_t)(channels - yaml);
+  if (prefix >= capacity) return SALTS_ENOSPC;
+  written = snprintf(
+      channels, capacity - prefix,
+      "channels:\n"
+      "  intake.store:\n"
+      "    kind: flow.durable.turbodb\n"
+      "    config:\n"
+      "      schema_version: 2\n"
+      "      identity_mode: stable_required\n"
+      "      filename: '%s'\n"
+      "      namespace: protocol_e2e\n"
+      "      max_message_bytes: 4096\n"
+      "      max_records: 8\n"
+      "      max_total_bytes: 32768\n"
+      "      max_record_bytes: 4096\n"
+      "      max_claims: 1\n"
+      "      connection_count: 4\n"
+      "      open_mode: exclusive\n"
+      "      expected_generation: 0\n",
+      fixture->turbodb_path);
+  return written < 0 || (size_t)written >= capacity - prefix ? SALTS_ENOSPC : SALTS_OK;
+#else
+  (void)channels;
+  (void)prefix;
+  (void)written;
+  return storage == PROTOCOL_NETWORK_E2E_STORAGE_TURBODB ? SALTS_ENOTSUP : SALTS_EINVAL;
+#endif
+}
+
+void protocol_network_e2e_storage_cleanup(protocol_network_e2e_fixture_t *fixture) {
+#if defined(FLOW_TURBODB_PLUGIN_MODULE)
+  if (!fixture) return;
+  if (fixture->turbodb_db) {
+    orm_disconnect(fixture->turbodb_db);
+    fixture->turbodb_db = NULL;
+  }
+  if (fixture->turbodb_path) {
+    (void)remove(fixture->turbodb_path);
+    free(fixture->turbodb_path);
+    fixture->turbodb_path = NULL;
+  }
+#else
+  (void)fixture;
+#endif
+}
 
 static native_io_backend_kind protocol_network_e2e_backend(void) {
 #if defined(_WIN32)
@@ -82,11 +243,10 @@ static void protocol_network_e2e_business_stage(void *ctx, const char *stage_nam
                                                 uint64_t duration_ns, int status) {
   protocol_network_e2e_business_probe_t *probe =
       (protocol_network_e2e_business_probe_t *)ctx;
-  (void)stage_name;
   (void)adapter_name;
   (void)message;
   (void)duration_ns;
-  if (!probe) return;
+  if (!probe || !stage_name || strcmp(stage_name, "output") != 0) return;
   ++probe->stage_completions;
   if (status != SALTS_OK) ++probe->failed_completions;
 }
@@ -129,7 +289,8 @@ static int protocol_network_e2e_client_open(protocol_network_e2e_fixture_t *fixt
   return SALTS_OK;
 }
 
-static int protocol_network_e2e_yaml(protocol_network_e2e_fixture_t *fixture, char *out,
+static int protocol_network_e2e_yaml(protocol_network_e2e_fixture_t *fixture,
+                                     protocol_network_e2e_storage_kind_t storage, char *out,
                                      size_t capacity) {
   const char *backend = protocol_network_e2e_backend_name();
   int written;
@@ -184,10 +345,10 @@ static int protocol_network_e2e_yaml(protocol_network_e2e_fixture_t *fixture, ch
       "      first_message_id: 1\n"
       "      initial_demand: 8\n"
       "      stop_timeout_ms: 1000\n"
-      "  protocol.store:\n"
-      "    kind: protocol.intake\n"
+      "  protocol.decode:\n"
+      "    kind: protocol.decode\n"
       "    config:\n"
-      "      schema_version: 1\n"
+      "      schema_version: 2\n"
       "      protocol_provider: jtt808\n"
       "      protocol_kind: jtt808\n"
       "      protocol_version: 2019-A1\n"
@@ -215,48 +376,52 @@ static int protocol_network_e2e_yaml(protocol_network_e2e_fixture_t *fixture, ch
       "      max_message_bytes: 4096\n"
       "      actor_command_capacity: 8\n"
       "      actor_max_steps_per_poll: 32\n"
-      "      stop_timeout_ms: 1000\n",
+      "      stop_timeout_ms: 1000\n"
+      "channels:\n"
+      "  intake.store:\n"
+      "    kind: flow.durable.memory\n"
+      "    config:\n"
+      "      schema_version: 1\n"
+      "      identity_mode: stable_required\n"
+      "      max_message_bytes: 4096\n"
+      "      max_records: 8\n"
+      "      max_total_bytes: 32768\n"
+      "      max_record_bytes: 4096\n"
+      "      max_claims: 1\n",
       backend, backend, (unsigned)fixture->receiver_port);
-  return written < 0 || (size_t)written >= capacity ? SALTS_ENOSPC : SALTS_OK;
+  if (written < 0 || (size_t)written >= capacity) return SALTS_ENOSPC;
+  return protocol_network_e2e_storage_rewrite_yaml(fixture, storage, out, capacity);
 }
 
 static int protocol_network_e2e_host_open(protocol_network_e2e_fixture_t *fixture,
-                                          const char *cnet_module, const char *jtt808_module) {
+                                          const char *cnet_module, const char *jtt808_module,
+                                          const char *durable_module) {
   turbo_flow_plugin_host_config_t config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
   int rc;
-  config.module_capacity = 2u;
+  config.module_capacity = 3u;
   config.adapter_provider_capacity = 0u;
   config.resource_provider_capacity = 0u;
   config.protocol_provider_capacity = 1u;
   config.business_provider_capacity = 0u;
   config.transactional_adapter_provider_capacity = 6u;
-  config.transactional_resource_provider_capacity = 0u;
+  config.transactional_resource_provider_capacity = 1u;
   config.schema_capacity = 0u;
   config.operation_capacity = 0u;
   rc = turbo_flow_plugin_host_create(&config, &fixture->host, &error);
   if (rc == SALTS_OK) rc = turbo_flow_plugin_host_load(fixture->host, cnet_module, &error);
   if (rc == SALTS_OK) rc = turbo_flow_plugin_host_load(fixture->host, jtt808_module, &error);
+  if (rc == SALTS_OK) rc = turbo_flow_plugin_host_load(fixture->host, durable_module, &error);
   if (rc == SALTS_OK)
     rc = turbo_flow_plugin_catalog_snapshot_create(fixture->host, &fixture->catalog, &error);
   return rc;
 }
 
-static int protocol_network_e2e_inbox_open(protocol_network_e2e_fixture_t *fixture) {
-  turbo_flow_inbox_memory_config_t config = turbo_flow_inbox_memory_config_default();
-  fixture->inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
-  config.max_records = 8u;
-  config.max_total_bytes = 32768u;
-  config.max_record_bytes = 4096u;
-  config.max_claims = 8u;
-  return turbo_flow_inbox_memory_create(&config, &fixture->inbox);
-}
-
 static int protocol_network_e2e_intake_open(protocol_network_e2e_fixture_t *fixture) {
   static const char graph[] = "source wire adapter tcp.input\n"
-                              "stage durable adapter protocol.store\n"
+                              "stage decode adapter protocol.decode\n"
                               "stage main {\n"
-                              "  wire -> durable\n"
+                              "  wire -> decode\n"
                               "}\n";
   turbo_flow_protocol_network_intake_config_t config =
       TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT;
@@ -271,25 +436,30 @@ static int protocol_network_e2e_intake_open(protocol_network_e2e_fixture_t *fixt
   }
   config.catalog = fixture->catalog;
   config.resolved = fixture->resolved;
-  config.inbox = &fixture->inbox;
+  config.downstream_flow =
+      turbo_flow_plugin_generation_flow(fixture->business_generation);
   config.source_adapter_name = "tcp.input";
-  config.intake_adapter_name = "protocol.store";
+  config.decoder_adapter_name = "protocol.decode";
+  config.decoded_source_name = "decoded";
   rc = turbo_flow_protocol_network_intake_create(&config, &flow, &fixture->intake, &error);
+  if (rc != SALTS_OK)
+    (void)fprintf(stderr, "jtt808 e2e intake create rc=%d path=%s reason=%s\n",
+                  rc, error.path, error.message);
   if (flow) turbo_flow_destroy(flow);
   return rc;
 }
 
 static int protocol_network_e2e_business_open(protocol_network_e2e_fixture_t *fixture) {
-  static const char graph[] = "source inbox\n"
+  static const char graph[] = "source decoded\n"
+                              "buffer intake resource intake.store\n"
                               "stage output adapter udp.output\n"
                               "stage main {\n"
-                              "  inbox -> output\n"
+                              "  decoded -> intake -> output\n"
                               "}\n";
   turbo_flow_plugin_generation_config_t generation_config =
       TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_observer_ops_t observer;
-  turbo_flow_inbox_source_config_t source_config = TURBO_FLOW_INBOX_SOURCE_CONFIG_INIT;
   turbo_flow_t *flow = turbo_flow_create();
   int rc;
   if (!flow) return SALTS_ENOMEM;
@@ -300,19 +470,19 @@ static int protocol_network_e2e_business_open(protocol_network_e2e_fixture_t *fi
   observer.stage_complete = protocol_network_e2e_business_stage;
   rc = turbo_flow_set_observer(flow, &observer, &fixture->business);
   if (rc != SALTS_OK) goto fail;
-  generation_config.owner_capacity = 1u;
+  generation_config.owner_capacity = 2u;
   rc = turbo_flow_plugin_generation_create(fixture->catalog, fixture->resolved, &flow,
                                            &generation_config, NULL,
                                            &fixture->business_generation,
                                            &fixture->business_cleanup, &error);
-  if (rc != SALTS_OK) goto fail;
+  if (rc != SALTS_OK) {
+    (void)fprintf(stderr, "jtt808 e2e business generation rc=%d path=%s reason=%s\n",
+                  rc, error.path, error.message);
+    goto fail;
+  }
   rc = turbo_flow_start(turbo_flow_plugin_generation_flow(fixture->business_generation));
   if (rc != SALTS_OK) return rc;
-  source_config.inbox = &fixture->inbox;
-  source_config.flow = turbo_flow_plugin_generation_flow(fixture->business_generation);
-  source_config.graph_source_name = "inbox";
-  source_config.max_message_bytes = 4096u;
-  return turbo_flow_inbox_source_create(&source_config, &fixture->inbox_source);
+  return SALTS_OK;
 
 fail:
   if (flow) turbo_flow_destroy(flow);
@@ -320,23 +490,28 @@ fail:
 }
 
 int protocol_network_e2e_jtt808_init(protocol_network_e2e_fixture_t *fixture,
-                                     const char *cnet_module, const char *jtt808_module) {
+                                     const char *cnet_module, const char *jtt808_module,
+                                     const char *durable_module,
+                                     protocol_network_e2e_storage_kind_t storage,
+                                     char *turbodb_path) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   char yaml[16384];
   int rc;
-  if (!fixture || !cnet_module || !cnet_module[0] || !jtt808_module || !jtt808_module[0])
+  if (!fixture || !cnet_module || !cnet_module[0] || !jtt808_module || !jtt808_module[0] ||
+      !durable_module || !durable_module[0])
     return SALTS_EINVAL;
   memset(fixture, 0, sizeof(*fixture));
-  fixture->inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
-  rc = protocol_network_e2e_receiver_open(fixture);
+  rc = protocol_network_e2e_storage_prepare(fixture, storage, turbodb_path);
+  if (rc == SALTS_OK) rc = protocol_network_e2e_receiver_open(fixture);
   if (rc == SALTS_OK) rc = protocol_network_e2e_client_open(fixture);
-  if (rc == SALTS_OK) rc = protocol_network_e2e_host_open(fixture, cnet_module, jtt808_module);
-  if (rc == SALTS_OK) rc = protocol_network_e2e_yaml(fixture, yaml, sizeof(yaml));
+  if (rc == SALTS_OK)
+    rc = protocol_network_e2e_host_open(fixture, cnet_module, jtt808_module,
+                                        durable_module);
+  if (rc == SALTS_OK) rc = protocol_network_e2e_yaml(fixture, storage, yaml, sizeof(yaml));
   if (rc == SALTS_OK)
     rc = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &fixture->resolved, &error);
-  if (rc == SALTS_OK) rc = protocol_network_e2e_inbox_open(fixture);
-  if (rc == SALTS_OK) rc = protocol_network_e2e_intake_open(fixture);
   if (rc == SALTS_OK) rc = protocol_network_e2e_business_open(fixture);
+  if (rc == SALTS_OK) rc = protocol_network_e2e_intake_open(fixture);
   if (rc != SALTS_OK) protocol_network_e2e_destroy(fixture);
   return rc;
 }
@@ -419,18 +594,14 @@ int protocol_network_e2e_tcp_close(protocol_network_e2e_fixture_t *fixture, uint
 }
 
 int protocol_network_e2e_business_request_and_drive(
-    protocol_network_e2e_fixture_t *fixture, uint32_t timeout_ms,
-    turbo_flow_inbox_source_result_t *result) {
+    protocol_network_e2e_fixture_t *fixture, uint32_t timeout_ms) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   size_t events = 0u;
   const size_t received_before = fixture ? fixture->udp.received : 0u;
+  const size_t completed_before = fixture ? fixture->business.stage_completions : 0u;
   uint64_t deadline;
   int rc;
-  if (!fixture || !fixture->business_generation || !fixture->inbox_source || !result ||
-      result->size != sizeof(*result) || result->version != TURBO_FLOW_INBOX_SOURCE_API_VERSION)
-    return SALTS_EINVAL;
-  rc = turbo_flow_inbox_source_request(fixture->inbox_source);
-  if (rc != SALTS_OK) return rc;
+  if (!fixture || !fixture->business_generation) return SALTS_EINVAL;
   deadline = salts_monotonic_ms() + timeout_ms;
   while (salts_monotonic_ms() < deadline) {
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -440,18 +611,9 @@ int protocol_network_e2e_business_request_and_drive(
       rc = cnet_datagram_poll(&fixture->receiver, 0u, &events);
       if (rc != SALTS_OK) return rc;
     }
-    *result = (turbo_flow_inbox_source_result_t)TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
-    rc = turbo_flow_inbox_source_poll(fixture->inbox_source, result);
-    if (result->state == TURBO_FLOW_INBOX_SOURCE_COMPLETED) {
-      while (fixture->udp.received == received_before && salts_monotonic_ms() < deadline) {
-        error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-        if (turbo_flow_plugin_generation_poll(fixture->business_generation, 0u, &error) != SALTS_OK)
-          break;
-        if (cnet_datagram_poll(&fixture->receiver, 1u, &events) != SALTS_OK) break;
-      }
-      return rc;
-    }
-    if (rc != SALTS_OK && result->state != TURBO_FLOW_INBOX_SOURCE_GRAPH_ACTIVE) return rc;
+    if (fixture->business.stage_completions > completed_before &&
+        fixture->udp.received > received_before)
+      return SALTS_OK;
     salts_sleep_ms(1u);
   }
   return SALTS_ETIMEDOUT;
@@ -460,20 +622,12 @@ int protocol_network_e2e_business_request_and_drive(
 void protocol_network_e2e_destroy(protocol_network_e2e_fixture_t *fixture) {
   turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-  turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
   if (!fixture) return;
 
   if (fixture->client_initialized) {
     (void)cnet_client_stop(&fixture->client, 1000u);
     (void)cnet_client_destroy(&fixture->client);
     fixture->client_initialized = 0;
-  }
-  if (fixture->inbox_source) {
-    if (turbo_flow_inbox_source_destroy(fixture->inbox_source) == SALTS_EBUSY) {
-      (void)turbo_flow_inbox_source_cancel(fixture->inbox_source, &result);
-      (void)turbo_flow_inbox_source_destroy(fixture->inbox_source);
-    }
-    fixture->inbox_source = NULL;
   }
   if (fixture->intake) {
     (void)turbo_flow_protocol_network_intake_stop(fixture->intake, 1000u);
@@ -495,11 +649,6 @@ void protocol_network_e2e_destroy(protocol_network_e2e_fixture_t *fixture) {
   }
   turbo_flow_resolved_config_destroy(fixture->resolved);
   fixture->resolved = NULL;
-  if (fixture->inbox.ops) {
-    (void)turbo_flow_inbox_close(&fixture->inbox);
-    (void)turbo_flow_inbox_destroy(&fixture->inbox);
-    fixture->inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
-  }
   if (fixture->receiver_initialized) {
     (void)cnet_datagram_stop(&fixture->receiver, 1000u);
     (void)cnet_datagram_destroy(&fixture->receiver);
@@ -509,6 +658,7 @@ void protocol_network_e2e_destroy(protocol_network_e2e_fixture_t *fixture) {
     (void)turbo_flow_plugin_host_destroy(fixture->host, 1000u, &plugin_error);
     fixture->host = NULL;
   }
+  protocol_network_e2e_storage_cleanup(fixture);
 }
 
 size_t protocol_network_e2e_jtt808_frame(uint8_t *out, size_t capacity) {

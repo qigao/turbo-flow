@@ -394,6 +394,10 @@ turbo_flow_t *turbo_flow_create(void) {
       turbo_flow_stl_error(vec_init_bytes(&flow->resources, sizeof(flow_resource_registration_t),
                                           _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
           SALTS_OK ||
+      turbo_flow_stl_error(vec_init_bytes(&flow->durable_buffer_bindings,
+                                          sizeof(turbo_flow_durable_buffer_binding_t *),
+                                          _Alignof(turbo_flow_durable_buffer_binding_t *),
+                                          SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(vec_init_bytes(
           &flow->expr_projection_registrations, sizeof(flow_expr_projection_registration_t),
           _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
@@ -424,6 +428,11 @@ turbo_flow_t *turbo_flow_create(void) {
 
 void turbo_flow_destroy(turbo_flow_t *flow) {
   if (!flow) return;
+  if (!flow_durable_buffers_idle(flow)) {
+    (void)flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                    "durable buffer claims must be settled before destroy");
+    return;
+  }
   if (flow->state == TURBO_FLOW_STATE_STARTED) (void)turbo_flow_stop(flow);
   flow_stop_async_ingress(flow);
   flow_close_managed_source_runs(flow);
@@ -449,6 +458,8 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   vec_destroy(&flow->modules);
   vec_destroy(&flow->adapters);
   vec_destroy(&flow->resources);
+  flow_durable_buffer_clear_bindings(flow);
+  vec_destroy(&flow->durable_buffer_bindings);
   vec_destroy(&flow->expr_projection_registrations);
   vec_destroy(&flow->active_adapters);
   vec_destroy(&flow->pool_records);
@@ -471,6 +482,9 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
 
 int turbo_flow_reset(turbo_flow_t *flow, int keep_registry) {
   if (!flow) return SALTS_EINVAL;
+  if (!flow_durable_buffers_idle(flow))
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                     "durable buffer claims must be settled before reset");
   if (flow->adapter_stop_retryable) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "adapter stop must succeed before reset");
@@ -482,7 +496,10 @@ int turbo_flow_reset(turbo_flow_t *flow, int keep_registry) {
   flow->has_async_stage = 0;
   flow->required_backend = FLOW_PLAN_BACKEND_NATIVE;
   turbo_flow_stl_error(vec_clear(&flow->resource_command_history));
-  if (!keep_registry) flow_clear_registry(flow);
+  if (!keep_registry) {
+    flow_clear_registry(flow);
+    flow_durable_buffer_clear_bindings(flow);
+  }
   atomic_store_explicit(&flow->next_sequence, 0u, memory_order_release);
   flow->state = TURBO_FLOW_STATE_NEW;
   flow_clear_error(flow);
@@ -1936,6 +1953,7 @@ const turbo_flow_stage_plan_t *turbo_flow_stage_at(const turbo_flow_t *flow, siz
   memset(&view, 0, sizeof(view));
   view.name = stage->name;
   view.is_source = stage->is_source;
+  view.is_buffer = stage->is_buffer;
   view.adapter_name = stage->adapter_name;
   view.operation_name =
       stage->operation_resolved ? stage->resolved_operation.name : stage->operation_name;

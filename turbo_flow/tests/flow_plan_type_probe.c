@@ -28,6 +28,12 @@ const cmeta_type_desc *flow_plan_probe_operation_type(void) {
   return &FLOW_PROBE_OPERATION_TYPE;
 }
 
+int flow_plan_probe_stage_is_buffer_field(void) {
+  turbo_flow_stage_plan_t stage = {0};
+  stage.is_buffer = 1;
+  return stage.is_buffer;
+}
+
 static const cmeta_type_identity FLOW_PROBE_DATA_MESSAGE_IDENTITY =
     CMETA_TYPE_ID_ATOM_INIT("turbo.flow.type.1.Message");
 static const cmeta_type_desc FLOW_PROBE_DATA_MESSAGE_TYPE = {
