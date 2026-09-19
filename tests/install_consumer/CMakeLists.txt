@@ -34,13 +34,19 @@ foreach(turbo_flow_removed_protocol_artifact IN ITEMS
         bin/tf_protocol_graph.dll
         lib/tf_protocol_graph.lib
         lib/libtf_protocol_graph.so
-        lib/libtf_protocol_graph.dylib)
+        lib/libtf_protocol_graph.dylib
+        include/turbo_flow_protocol_inbox.h
+        bin/tf_protocol_inbox.dll
+        lib/tf_protocol_inbox.lib
+        lib/libtf_protocol_inbox.so
+        lib/libtf_protocol_inbox.dylib)
   if(EXISTS "${turbo_flow_root}/${turbo_flow_removed_protocol_artifact}")
     message(FATAL_ERROR
       "Removed protocol artifact remains installed: ${turbo_flow_removed_protocol_artifact}")
   endif()
 endforeach()
 foreach(turbo_flow_protocol_schema_artifact IN ITEMS
+        include/turbo_flow_protocol_envelope.h
         include/turbo_flow_protocol_inbox_envelope.h
         share/TurboFlow/protocol/inbox/protocol_inbox.schema
         share/TurboFlow/protocol/inbox/turbo_flow_protocol_inbox_envelope.rfl
@@ -75,7 +81,6 @@ elseif(TURBO_FLOW_TEST_ALL_COMPONENTS)
       CHTTPAdapter
       Product
       ProtocolIngress
-      ProtocolIngressInbox
       ProtocolIngressInboxSchema
       ProtocolMqttSn
       ProtocolCoap
@@ -103,7 +108,11 @@ if(TARGET TurboFlow::MqttSink)
 endif()
 if(TARGET TurboFlow::ProtocolIngressGraph)
   message(FATAL_ERROR
-    "TurboFlow::ProtocolIngressGraph is removed; protocol Sources must admit through Inbox")
+    "TurboFlow::ProtocolIngressGraph is removed; protocol Sources publish through the generic durable buffer")
+endif()
+if(TARGET TurboFlow::ProtocolIngressInbox)
+  message(FATAL_ERROR
+    "TurboFlow::ProtocolIngressInbox is removed; protocol-specific storage runtime must not be exported")
 endif()
 if(NOT TARGET TurboFlow::ProtocolIngressInboxSchema)
   message(FATAL_ERROR
@@ -136,7 +145,6 @@ else()
             TurboFlow::Product
             TurboFlow::ProtocolIngress
             TurboFlow::ProtocolIngressInboxSchema
-            TurboFlow::ProtocolIngressInbox
             TurboFlow::ProtocolMqttSn
             TurboFlow::ProtocolCoap
             TurboFlow::ProtocolLwm2m

@@ -554,7 +554,7 @@ int flow_protocol_network_intake_sink_create(
       config->settings->max_frame_size > SIZE_MAX / (config->settings->max_sessions + 1u) ||
       config->settings->max_pending_claims > SIZE_MAX / sizeof(intake_pending_claim_t) ||
       config->settings->max_sessions > SIZE_MAX / sizeof(intake_parser_slot_t) ||
-      config->settings->max_frame_size > SIZE_MAX - TURBO_FLOW_PROTOCOL_INBOX_ENVELOPE_OVERHEAD)
+      config->settings->max_frame_size > SIZE_MAX - TURBO_FLOW_PROTOCOL_ENVELOPE_OVERHEAD)
     return SALTS_ERANGE;
   source_buffer_bytes = (config->settings->max_sessions + 1u) * config->settings->max_frame_size;
   sink = (flow_protocol_network_intake_sink_t *)calloc(1u, sizeof(*sink));
@@ -564,7 +564,7 @@ int flow_protocol_network_intake_sink_create(
   sink->downstream_flow = config->downstream_flow;
   sink->settings = *config->settings;
   sink->max_envelope_bytes =
-      sink->settings.max_frame_size + TURBO_FLOW_PROTOCOL_INBOX_ENVELOPE_OVERHEAD;
+      sink->settings.max_frame_size + TURBO_FLOW_PROTOCOL_ENVELOPE_OVERHEAD;
   sink->adapter_name = tstr_dup(config->adapter_name);
   sink->decoded_source_name = tstr_dup(config->decoded_source_name);
   sink->envelope_scratch = (uint8_t *)malloc(sink->max_envelope_bytes);

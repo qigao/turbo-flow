@@ -1,7 +1,7 @@
 #ifndef FLOW_PROTOCOL_ENVELOPE_INTERNAL_H
 #define FLOW_PROTOCOL_ENVELOPE_INTERNAL_H
 
-#include "turbo_flow_protocol_inbox.h"
+#include "turbo_flow_protocol_envelope.h"
 
 #ifdef __cplusplus
 extern "C" {
