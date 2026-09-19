@@ -272,11 +272,16 @@ static int intake_validate_topology(const turbo_flow_t *flow, const char *source
   if (source_index == SIZE_MAX || sink_index == SIZE_MAX)
     return intake_config_error(error, SALTS_EINVAL, "$.graph",
                                "configured Source or protocol.decode stage is missing");
+  /*
+   * PARSED Graph edges intentionally keep from_stage/to_stage unresolved until
+   * turbo_flow_compile(). Preflight can prove the bounded two-node shape and
+   * edge policy here; create validates the resolved Source->decoder endpoints
+   * immediately after compile, before the owner is published.
+   */
   edge = turbo_flow_edge_at(flow, 0u);
-  if (!edge || edge->from_stage != source_index || edge->to_stage != sink_index ||
-      edge->kind != TURBO_FLOW_EDGE_UNCONDITIONAL)
+  if (!edge || edge->kind != TURBO_FLOW_EDGE_UNCONDITIONAL)
     return intake_config_error(error, SALTS_EINVAL, "$.graph",
-                               "intake Flow must be one unconditional Source-to-Sink edge");
+                               "intake Flow edge must be unconditional");
   return SALTS_OK;
 }
 
