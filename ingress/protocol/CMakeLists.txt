@@ -1,14 +1,31 @@
-set(TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE
-    ""
-    CACHE FILEPATH
-          "Host tbe_compiler used to generate DataBind 2.0 typed protocol bindings")
+set(_turbo_flow_databind_host_root "$ENV{DATABIND_ROOT}")
+if(DEFINED ENV{DATABIND_HOST_ROOT} AND
+   NOT "$ENV{DATABIND_HOST_ROOT}" STREQUAL "")
+  set(_turbo_flow_databind_host_root "$ENV{DATABIND_HOST_ROOT}")
+endif()
+if(NOT IS_DIRECTORY "${_turbo_flow_databind_host_root}")
+  message(FATAL_ERROR
+          "DataBind host root is not a directory: ${_turbo_flow_databind_host_root}")
+endif()
 
-if(NOT EXISTS "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}")
-  message(
-    FATAL_ERROR
-      "The complete TurboFlow build requires the DataBind 2.0 host "
-      "tbe_compiler. Set TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE to the "
-      "compiler executable.")
+find_program(
+  TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE
+  NAMES tbe_compiler tbe_compiler.exe
+  PATHS "${_turbo_flow_databind_host_root}/bin"
+  NO_DEFAULT_PATH
+  REQUIRED)
+
+file(REAL_PATH "${_turbo_flow_databind_host_root}"
+     _turbo_flow_databind_host_real_root)
+file(REAL_PATH "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}"
+     _turbo_flow_tbe_compiler_real_path)
+cmake_path(IS_PREFIX _turbo_flow_databind_host_real_root
+           "${_turbo_flow_tbe_compiler_real_path}" NORMALIZE
+           _turbo_flow_tbe_compiler_is_within_databind_root)
+if(NOT _turbo_flow_tbe_compiler_is_within_databind_root)
+  message(FATAL_ERROR
+          "tbe_compiler resolved outside the DataBind host root: "
+          "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}")
 endif()
 
 add_subdirectory(common)
@@ -62,3 +79,8 @@ add_subdirectory(business)
 if(BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+
+unset(_turbo_flow_databind_host_real_root)
+unset(_turbo_flow_databind_host_root)
+unset(_turbo_flow_tbe_compiler_is_within_databind_root)
+unset(_turbo_flow_tbe_compiler_real_path)

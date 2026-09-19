@@ -35,13 +35,15 @@ set(_TurboFlow_salts_utils_components
     PluginHost
     Product
     ProtocolNetworkIntake
-    ProtocolIngressInboxSchema
     ProtocolBusinessOcpp201Core
     SecuritySQLite
     Codec
     Observe
     Schedule
     TurboDbAdapter)
+
+set(_TurboFlow_databind_components
+    ProtocolIngressInboxSchema)
 
 set(_TurboFlow_rules_forge_components
     Graph
@@ -72,11 +74,15 @@ foreach(_TurboFlow_component IN LISTS TurboFlow_FIND_COMPONENTS)
 endforeach()
 
 set(_TurboFlow_needs_salts_utils FALSE)
+set(_TurboFlow_needs_databind FALSE)
 set(_TurboFlow_needs_rules_forge FALSE)
 set(_TurboFlow_needs_turbodb FALSE)
 foreach(_TurboFlow_component IN LISTS _TurboFlow_requested_components)
   if(_TurboFlow_component IN_LIST _TurboFlow_salts_utils_components)
     set(_TurboFlow_needs_salts_utils TRUE)
+  endif()
+  if(_TurboFlow_component IN_LIST _TurboFlow_databind_components)
+    set(_TurboFlow_needs_databind TRUE)
   endif()
   if(_TurboFlow_component IN_LIST _TurboFlow_rules_forge_components)
     set(_TurboFlow_needs_rules_forge TRUE)
@@ -144,10 +150,22 @@ _TurboFlow_verify_dependency_root(Salts SALTS_ROOT)
 include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowRequireCNet.cmake")
 turbo_flow_require_cnet_stop_drain_contract()
 if(_TurboFlow_needs_salts_utils)
-  _TurboFlow_require_dependency_root(SaltsUtils SALTS_UTILS_ROOT Salts::DataBind)
+  _TurboFlow_require_dependency_root(SaltsUtils SALTS_UTILS_ROOT Salts::JsonParser)
   find_dependency(SaltsUtils CONFIG REQUIRED
                   PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
   _TurboFlow_verify_dependency_root(SaltsUtils SALTS_UTILS_ROOT)
+endif()
+if(_TurboFlow_needs_databind)
+  _TurboFlow_require_dependency_root(DataBind DATABIND_ROOT Salts::DataBind)
+  find_dependency(DataBind 3 CONFIG REQUIRED
+                  PATHS "$ENV{DATABIND_ROOT}" NO_DEFAULT_PATH)
+  _TurboFlow_verify_dependency_root(DataBind DATABIND_ROOT)
+  if(NOT TARGET Salts::TbeSchema)
+    set(TurboFlow_FOUND FALSE)
+    set(TurboFlow_NOT_FOUND_MESSAGE
+        "DataBind package does not provide Salts::TbeSchema")
+    return()
+  endif()
 endif()
 if(_TurboFlow_needs_rules_forge)
   _TurboFlow_require_dependency_root(RulesForge RULES_FORGE_ROOT RulesForge::RulesForge)
@@ -180,9 +198,11 @@ unset(_TurboFlow_component)
 unset(_TurboFlow_dependency_dir)
 unset(_TurboFlow_dependency_is_within_root)
 unset(_TurboFlow_dependency_root)
+unset(_TurboFlow_needs_databind)
 unset(_TurboFlow_needs_rules_forge)
 unset(_TurboFlow_needs_salts_utils)
 unset(_TurboFlow_needs_turbodb)
+unset(_TurboFlow_databind_components)
 unset(_TurboFlow_requested_components)
 unset(_TurboFlow_rules_forge_components)
 unset(_TurboFlow_salts_utils_components)
