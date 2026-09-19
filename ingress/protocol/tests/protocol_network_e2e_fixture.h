@@ -7,8 +7,17 @@
 
 #include <cnet/cnet.h>
 
+#if defined(FLOW_TURBODB_PLUGIN_MODULE)
+#include "turbo_flow_turbodb.h"
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
+
+typedef enum protocol_network_e2e_storage_kind_e {
+  PROTOCOL_NETWORK_E2E_STORAGE_MEMORY = 1,
+  PROTOCOL_NETWORK_E2E_STORAGE_TURBODB = 2
+} protocol_network_e2e_storage_kind_t;
 
 typedef struct protocol_network_e2e_tcp_probe_s {
   size_t connected;
@@ -38,6 +47,12 @@ typedef struct protocol_network_e2e_fixture_s {
   turbo_flow_protocol_network_intake_t *intake;
   turbo_flow_plugin_generation_t *business_generation;
   turbo_flow_plugin_generation_t *business_cleanup;
+#if defined(FLOW_TURBODB_PLUGIN_MODULE)
+  char *turbodb_path;
+  orm_option_t turbodb_filename;
+  orm_config_t turbodb_database;
+  orm_connection_t *turbodb_db;
+#endif
   cnet_datagram receiver;
   int receiver_initialized;
   uint16_t receiver_port;
@@ -50,12 +65,21 @@ typedef struct protocol_network_e2e_fixture_s {
   protocol_network_e2e_business_probe_t business;
 } protocol_network_e2e_fixture_t;
 
+int protocol_network_e2e_storage_prepare(protocol_network_e2e_fixture_t *fixture,
+                                         protocol_network_e2e_storage_kind_t storage);
+int protocol_network_e2e_storage_rewrite_yaml(protocol_network_e2e_fixture_t *fixture,
+                                              protocol_network_e2e_storage_kind_t storage,
+                                              char *yaml, size_t capacity);
+void protocol_network_e2e_storage_cleanup(protocol_network_e2e_fixture_t *fixture);
+
 int protocol_network_e2e_jtt808_init(protocol_network_e2e_fixture_t *fixture,
                                      const char *cnet_module, const char *jtt808_module,
-                                     const char *durable_memory_module);
+                                     const char *durable_module,
+                                     protocol_network_e2e_storage_kind_t storage);
 int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
                                    const char *cnet_module, const char *coap_module,
-                                   const char *durable_memory_module);
+                                   const char *durable_module,
+                                   protocol_network_e2e_storage_kind_t storage);
 int protocol_network_e2e_start(protocol_network_e2e_fixture_t *fixture,
                                turbo_flow_protocol_network_intake_snapshot_t *snapshot);
 int protocol_network_e2e_tcp_connect(protocol_network_e2e_fixture_t *fixture,

@@ -90,7 +90,7 @@ static int protocol_network_coap_receiver_open(protocol_network_e2e_fixture_t *f
 
 static int protocol_network_coap_host_open(protocol_network_e2e_fixture_t *fixture,
                                            const char *cnet_module, const char *coap_module,
-                                           const char *durable_memory_module) {
+                                           const char *durable_module) {
   turbo_flow_plugin_host_config_t config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
   int rc;
@@ -106,13 +106,14 @@ static int protocol_network_coap_host_open(protocol_network_e2e_fixture_t *fixtu
   rc = turbo_flow_plugin_host_create(&config, &fixture->host, &error);
   if (rc == SALTS_OK) rc = turbo_flow_plugin_host_load(fixture->host, cnet_module, &error);
   if (rc == SALTS_OK) rc = turbo_flow_plugin_host_load(fixture->host, coap_module, &error);
-  if (rc == SALTS_OK) rc = turbo_flow_plugin_host_load(fixture->host, durable_memory_module, &error);
+  if (rc == SALTS_OK) rc = turbo_flow_plugin_host_load(fixture->host, durable_module, &error);
   if (rc == SALTS_OK)
     rc = turbo_flow_plugin_catalog_snapshot_create(fixture->host, &fixture->catalog, &error);
   return rc;
 }
 
-static int protocol_network_coap_yaml(protocol_network_e2e_fixture_t *fixture, char *out,
+static int protocol_network_coap_yaml(protocol_network_e2e_fixture_t *fixture,
+                                      protocol_network_e2e_storage_kind_t storage, char *out,
                                       size_t capacity) {
   const char *backend = protocol_network_coap_backend_name();
   int written;
@@ -204,7 +205,8 @@ static int protocol_network_coap_yaml(protocol_network_e2e_fixture_t *fixture, c
       "      max_record_bytes: 4096\n"
       "      max_claims: 1\n",
       backend, backend, (unsigned)fixture->receiver_port);
-  return written < 0 || (size_t)written >= capacity ? SALTS_ENOSPC : SALTS_OK;
+  if (written < 0 || (size_t)written >= capacity) return SALTS_ENOSPC;
+  return protocol_network_e2e_storage_rewrite_yaml(fixture, storage, out, capacity);
 }
 
 static int protocol_network_coap_intake_open(protocol_network_e2e_fixture_t *fixture) {
@@ -281,19 +283,21 @@ fail:
 
 int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
                                    const char *cnet_module, const char *coap_module,
-                                   const char *durable_memory_module) {
+                                   const char *durable_module,
+                                   protocol_network_e2e_storage_kind_t storage) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   char yaml[16384];
   int rc;
   if (!fixture || !cnet_module || !cnet_module[0] || !coap_module || !coap_module[0] ||
-      !durable_memory_module || !durable_memory_module[0])
+      !durable_module || !durable_module[0])
     return SALTS_EINVAL;
   memset(fixture, 0, sizeof(*fixture));
-  rc = protocol_network_coap_receiver_open(fixture);
+  rc = protocol_network_e2e_storage_prepare(fixture, storage);
+  if (rc == SALTS_OK) rc = protocol_network_coap_receiver_open(fixture);
   if (rc == SALTS_OK)
     rc = protocol_network_coap_host_open(fixture, cnet_module, coap_module,
-                                         durable_memory_module);
-  if (rc == SALTS_OK) rc = protocol_network_coap_yaml(fixture, yaml, sizeof(yaml));
+                                         durable_module);
+  if (rc == SALTS_OK) rc = protocol_network_coap_yaml(fixture, storage, yaml, sizeof(yaml));
   if (rc == SALTS_OK)
     rc = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &fixture->resolved, &error);
   if (rc == SALTS_OK) rc = protocol_network_coap_business_open(fixture);
