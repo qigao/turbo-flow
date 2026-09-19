@@ -191,7 +191,8 @@ file(READ "${TURBO_FLOW_SOURCE_DIR}/CMakeLists.txt" root_cmake)
 foreach(required_fragment IN ITEMS
         "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT RULES_FORGE_ROOT"
         "find_package(DataBind 3 CONFIG REQUIRED"
-        "SALTS_UTILS_ROOT still owns DataBind target")
+        "SALTS_UTILS_ROOT still owns DataBind target"
+        "DATABIND_ROOT must be physically distinct from SALTS_UTILS_ROOT")
   string(FIND "${root_cmake}" "${required_fragment}" fragment_pos)
   if(fragment_pos EQUAL -1)
     message(FATAL_ERROR "source package cut missing fragment: ${required_fragment}")
@@ -231,6 +232,18 @@ endforeach()
 string(FIND "${user_presets}" "\"SALTS_UTILS_HOST_ROOT\"" stale_host_root)
 if(NOT stale_host_root EQUAL -1)
   message(FATAL_ERROR "presets still use SALTS_UTILS_HOST_ROOT for tbe_compiler")
+endif()
+string(FIND "${user_presets}"
+            [["DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils]]
+            stale_databind_profile_root)
+if(NOT stale_databind_profile_root EQUAL -1)
+  message(FATAL_ERROR "presets still place DataBind under the SaltsUtils root")
+endif()
+string(FIND "${user_presets}"
+            [["DATABIND_HOST_ROOT": "$env{PKG_ROOT}/salts-utils]]
+            stale_databind_host_root)
+if(NOT stale_databind_host_root EQUAL -1)
+  message(FATAL_ERROR "presets still source tbe_compiler from the SaltsUtils root")
 endif()
 
 message(STATUS "TurboFlow DataBind package-root contract passed")
