@@ -8,8 +8,13 @@
 #include <salts_thread.h>
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef TURBO_FLOW_TURBODB_INBOX_CRASH_HELPER
+  #error "test_turbodb_inbox requires the literal crash helper executable"
+#endif
 
 #define INBOX_TEST_MAX_RECORDS 4u
 #define INBOX_TEST_MAX_TOTAL_BYTES 256u
@@ -1116,6 +1121,92 @@ spec("TurboDB durable inbox v2") {
     check_equal(turbo_flow_inbox_complete(&new_inbox, &recovered), SALTS_OK);
     check_equal(turbo_flow_inbox_close(&new_inbox), SALTS_OK);
     check_equal(turbo_flow_inbox_destroy(&new_inbox), SALTS_OK);
+    inbox_db_fixture_destroy(&fixture);
+  }
+
+  it("recovers committed pending and claimed records after a literal process crash") {
+    inbox_db_fixture_t fixture;
+    turbo_flow_turbodb_inbox_config_t config;
+    turbo_flow_turbodb_inbox_config_t takeover;
+    turbo_flow_inbox_t blocked = TURBO_FLOW_INBOX_INIT;
+    turbo_flow_inbox_t recovered = TURBO_FLOW_INBOX_INIT;
+    turbo_flow_inbox_claim_t pending = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_inbox_claim_t retried = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_inbox_failed_entry_t failed = TURBO_FLOW_INBOX_FAILED_ENTRY_INIT;
+    turbo_flow_inbox_history_entry_t history[2] = {
+        TURBO_FLOW_INBOX_HISTORY_ENTRY_INIT, TURBO_FLOW_INBOX_HISTORY_ENTRY_INIT};
+    turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+    orm_connection_t *connection = NULL;
+    orm_error_t error;
+    char command[4096];
+    int command_size;
+    size_t count = 0u;
+
+    inbox_db_fixture_init(&fixture);
+    inbox_db_provision(&fixture, 0);
+
+    command_size = snprintf(command, sizeof(command), "\"%s\" \"%s\"",
+                            TURBO_FLOW_TURBODB_INBOX_CRASH_HELPER, fixture.path);
+    check_true(command_size > 0 && (size_t)command_size < sizeof(command));
+    check_not_equal(system(command), 0);
+
+    connection = inbox_db_connect(&fixture, &error);
+    check_equal(inbox_db_read_int64(
+                    connection, "SELECT generation FROM orders_inbox_meta_v2", &error),
+                (int64_t)1);
+    check_equal(inbox_db_read_int64(
+                    connection, "SELECT owner_state FROM orders_inbox_meta_v2", &error),
+                (int64_t)1);
+    check_equal(inbox_db_read_int64(
+                    connection, "SELECT records FROM orders_inbox_meta_v2", &error),
+                (int64_t)2);
+    check_equal(inbox_db_read_int64(
+                    connection, "SELECT pending_records FROM orders_inbox_meta_v2", &error),
+                (int64_t)1);
+    check_equal(inbox_db_read_int64(
+                    connection, "SELECT in_flight_claims FROM orders_inbox_meta_v2", &error),
+                (int64_t)1);
+    orm_disconnect(connection);
+    connection = NULL;
+
+    config = inbox_test_config(&fixture);
+    check_equal(turbo_flow_turbodb_inbox_create(&config, &blocked, &error), SALTS_EBUSY);
+    check_null(blocked.ops);
+
+    takeover = config;
+    takeover.open_mode = TURBO_FLOW_TURBODB_INBOX_OPEN_TAKEOVER;
+    takeover.expected_generation = 1u;
+    check_equal(turbo_flow_turbodb_inbox_create(&takeover, &recovered, &error), SALTS_OK);
+    check_equal(turbo_flow_inbox_snapshot(&recovered, &snapshot), SALTS_OK);
+    check_equal(snapshot.generation, (uint64_t)2u);
+    check_equal(snapshot.records, (size_t)2u);
+    check_equal(snapshot.pending_records, (size_t)1u);
+    check_equal(snapshot.failed_records, (size_t)1u);
+    check_equal(snapshot.in_flight_claims, (size_t)0u);
+
+    check_equal(turbo_flow_inbox_claim(&recovered, &pending), SALTS_OK);
+    check_view(pending.record.admission_id,
+               vstr_from_buf("pending-after-crash", sizeof("pending-after-crash") - 1u));
+    check_equal(turbo_flow_inbox_complete(&recovered, &pending), SALTS_OK);
+
+    check_equal(turbo_flow_inbox_scan_failed(&recovered, 0u, &failed, 1u, &count), SALTS_OK);
+    check_equal(count, (size_t)1u);
+    check_equal(failed.kind, TURBO_FLOW_INBOX_FAILURE_OWNER_LOST_UNKNOWN);
+    check_equal(turbo_flow_inbox_retry(&recovered, failed.record_id), SALTS_OK);
+    check_equal(turbo_flow_inbox_claim(&recovered, &retried), SALTS_OK);
+    check_equal(retried.record_id, failed.record_id);
+    check_view(retried.record.admission_id,
+               vstr_from_buf("claimed-before-crash", sizeof("claimed-before-crash") - 1u));
+    check_equal(turbo_flow_inbox_complete(&recovered, &retried), SALTS_OK);
+
+    count = 0u;
+    check_equal(turbo_flow_inbox_scan_history(&recovered, 0u, history, 2u, &count), SALTS_OK);
+    check_equal(count, (size_t)2u);
+    check_equal(history[0].kind, TURBO_FLOW_INBOX_TERMINAL_COMPLETED);
+    check_equal(history[1].kind, TURBO_FLOW_INBOX_TERMINAL_COMPLETED);
+
+    check_equal(turbo_flow_inbox_close(&recovered), SALTS_OK);
+    check_equal(turbo_flow_inbox_destroy(&recovered), SALTS_OK);
     inbox_db_fixture_destroy(&fixture);
   }
 

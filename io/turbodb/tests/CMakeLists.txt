@@ -18,6 +18,13 @@ cmake_add_test(
 set_tests_properties(test_turbodb_outbox_source
                      PROPERTIES LABELS "turbodb-adapter;graph;outbox")
 
+add_executable(test_turbodb_inbox_crash_helper turbodb_inbox_crash_helper.c)
+target_link_libraries(test_turbodb_inbox_crash_helper PRIVATE TurboFlow::TurboDbAdapter)
+target_include_directories(test_turbodb_inbox_crash_helper
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+set_target_properties(test_turbodb_inbox_crash_helper
+                      PROPERTIES FOLDER "io/turbodb/tests/helpers")
+
 cmake_add_test(
   test_turbodb_inbox
   SOURCES test_turbodb_inbox.c
@@ -26,6 +33,10 @@ cmake_add_test(
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
            ${PROJECT_SOURCE_DIR}/ingress/protocol/inbox/include
   FOLDER "io/turbodb/tests")
+add_dependencies(test_turbodb_inbox test_turbodb_inbox_crash_helper)
+target_compile_definitions(
+  test_turbodb_inbox
+  PRIVATE TURBO_FLOW_TURBODB_INBOX_CRASH_HELPER="$<TARGET_FILE:test_turbodb_inbox_crash_helper>")
 
 set_tests_properties(test_turbodb_inbox
                      PROPERTIES LABELS "turbodb-adapter;graph;inbox")
