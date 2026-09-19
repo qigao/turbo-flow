@@ -1,0 +1,80 @@
+name: DataBind package root contract
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'CMakeLists.txt'
+      - 'CMakeUserPresets.json'
+      - 'cmake/TurboFlowConfig.cmake.in'
+      - 'ingress/protocol/CMakeLists.txt'
+      - 'tests/install_consumer/**'
+      - 'tests/cmake/run_databind_package_root_contract.cmake'
+      - '.github/workflows/databind-package-root.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'CMakeLists.txt'
+      - 'CMakeUserPresets.json'
+      - 'cmake/TurboFlowConfig.cmake.in'
+      - 'ingress/protocol/CMakeLists.txt'
+      - 'tests/install_consumer/**'
+      - 'tests/cmake/run_databind_package_root_contract.cmake'
+      - '.github/workflows/databind-package-root.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: databind-package-root-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  package-root:
+    name: Exact-head DataBind package provenance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact committed source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source identity
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --check HEAD^ HEAD
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Run executable DataBind package-root contract
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake \
+            -DTURBO_FLOW_SOURCE_DIR="$GITHUB_WORKSPACE" \
+            -DTURBO_FLOW_TEST_ROOT="$RUNNER_TEMP/databind-package-root-contract" \
+            -P tests/cmake/run_databind_package_root_contract.cmake
+
+      - name: Verify preset JSON remains valid
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m json.tool CMakeUserPresets.json >/dev/null
+          python3 -m json.tool tests/install_consumer/CMakeUserPresets.json >/dev/null
+          python3 -m json.tool tests/install_consumer/component/CMakeUserPresets.json >/dev/null
+
+      - name: Verify committed source remained clean
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code
