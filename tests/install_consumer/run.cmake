@@ -554,12 +554,12 @@ foreach(chttp_mapping_scenario IN ITEMS
 endforeach()
 
 set(component_negative_cases
-    config-missing-root graph-missing-root
+    config-missing-root graph-missing-root databind-missing-root
     chttp-missing-root chttp-empty-root chttp-wrong-root chttp-empty-sdk
     chttp-outside-cache chttp-preimport-no-provenance
     chttp-preimport-outside chttp-wrong-config salts-dir-outside unknown)
 set(component_negative_patterns
-    SALTS_ROOT RULES_FORGE_ROOT
+    SALTS_ROOT RULES_FORGE_ROOT DATABIND_ROOT
     "HTTP_SERVICES_ROOT is required" "HTTP_SERVICES_ROOT is required"
     "Could not find.*Chttp" "HTTP_SERVICES_ROOT is an empty SDK directory"
     "Chttp_DIR is outside HTTP_SERVICES_ROOT"
