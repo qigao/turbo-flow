@@ -166,7 +166,7 @@ spec("protocol network intake configuration") {
 
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     check_equal(replace_once(listener_yaml, "      protocol_version: 2019-A1\n",
-                             "      protocol_version: 2013\n", yaml, sizeof(yaml)), SALTS_OK);
+                             "      protocol_version: 2013-A1\n", yaml, sizeof(yaml)), SALTS_OK);
     check_equal(run_preflight(yaml, listener_graph, "tcp.input", &settings, &error), SALTS_ENOTSUP);
 
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
