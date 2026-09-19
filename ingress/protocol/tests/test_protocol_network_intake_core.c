@@ -309,14 +309,14 @@ spec("protocol network intake core") {
 
     check_equal(turbo_flow_inbox_admit(&inbox, &prefill, &receipt), SALTS_OK);
     intake_probe_init(&first);
-    message = intake_listener_message(1u, 0u, 1u, first_half, sizeof(first_half));
+    message = intake_listener_message(1u, 1u, 1u, first_half, sizeof(first_half));
     check_equal(intake_publish(flow, &message, &first), SALTS_OK);
     intake_wait_calls(&first, 1u);
     check_equal(atomic_load_explicit(&first.calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&first.status, memory_order_acquire), SALTS_OK);
 
     intake_probe_init(&second);
-    message = intake_listener_message(2u, 0u, 1u, second_half, sizeof(second_half));
+    message = intake_listener_message(2u, 1u, 1u, second_half, sizeof(second_half));
     check_equal(intake_publish(flow, &message, &second), SALTS_OK);
     intake_wait_backpressure(sink, 1);
     check_equal(atomic_load_explicit(&second.calls, memory_order_acquire), (size_t)0u);
@@ -331,7 +331,7 @@ spec("protocol network intake core") {
     check_equal(snapshot.pending_records, 1u);
 
     intake_probe_init(&replay_completion);
-    message = intake_listener_message(3u, 0u, 1u, replay, sizeof(replay));
+    message = intake_listener_message(3u, 1u, 1u, replay, sizeof(replay));
     check_equal(intake_publish(flow, &message, &replay_completion), SALTS_OK);
     intake_wait_calls(&replay_completion, 1u);
     check_equal(atomic_load_explicit(&replay_completion.status, memory_order_acquire), SALTS_OK);
@@ -368,13 +368,13 @@ spec("protocol network intake core") {
     turbo_flow_msg_t message;
 
     intake_probe_init(&first);
-    message = intake_listener_message(10u, 0u, 1u, partial, sizeof(partial));
+    message = intake_listener_message(10u, 1u, 1u, partial, sizeof(partial));
     check_equal(intake_publish(flow, &message, &first), SALTS_OK);
     intake_wait_calls(&first, 1u);
     check_equal(atomic_load_explicit(&first.status, memory_order_acquire), SALTS_OK);
 
     intake_probe_init(&second);
-    message = intake_listener_message(11u, 0u, 2u, fresh, sizeof(fresh));
+    message = intake_listener_message(11u, 1u, 2u, fresh, sizeof(fresh));
     check_equal(intake_publish(flow, &message, &second), SALTS_OK);
     intake_wait_calls(&second, 1u);
     check_equal(atomic_load_explicit(&second.status, memory_order_acquire), SALTS_OK);
@@ -382,7 +382,7 @@ spec("protocol network intake core") {
     check_equal(snapshot.pending_records, 1u);
 
     intake_probe_init(&stale);
-    message = intake_listener_message(12u, 0u, 1u, fresh, sizeof(fresh));
+    message = intake_listener_message(12u, 1u, 1u, fresh, sizeof(fresh));
     check_equal(intake_publish(flow, &message, &stale), SALTS_OK);
     intake_wait_calls(&stale, 1u);
     check_equal(atomic_load_explicit(&stale.status, memory_order_acquire), SALTS_EPROTO);
@@ -409,7 +409,7 @@ spec("protocol network intake core") {
     uint64_t record_id;
 
     intake_probe_init(&completion);
-    message = intake_packet_message(1u, 0u, 1u, coap_get, sizeof(coap_get));
+    message = intake_packet_message(1u, 1u, 1u, coap_get, sizeof(coap_get));
     check_equal(intake_publish(flow, &message, &completion), SALTS_OK);
     intake_wait_calls(&completion, 1u);
     check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_OK);
