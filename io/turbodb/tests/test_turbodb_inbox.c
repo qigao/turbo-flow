@@ -11,6 +11,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if !defined(_WIN32)
+  #include <signal.h>
+  #include <sys/types.h>
+  #include <sys/wait.h>
+  #include <unistd.h>
+#endif
+
 #define INBOX_TEST_MAX_RECORDS 4u
 #define INBOX_TEST_MAX_TOTAL_BYTES 256u
 #define INBOX_TEST_MAX_RECORD_BYTES 128u
@@ -259,6 +266,68 @@ static void inbox_test_close_created(turbo_flow_inbox_t *inbox, int create_statu
   check_equal(turbo_flow_inbox_close(inbox), SALTS_OK);
   check_equal(turbo_flow_inbox_destroy(inbox), SALTS_OK);
 }
+
+#if !defined(_WIN32)
+static int inbox_crash_child_record(turbo_flow_inbox_record_t *record,
+                                    const char *admission_id,
+                                    const char *payload,
+                                    uint64_t sequence) {
+  int rc;
+  if (!record || !admission_id || !payload) return SALTS_EINVAL;
+  turbo_flow_inbox_record_init(record);
+  record->source_id = vstr_from_buf("crash.orders", sizeof("crash.orders") - 1u);
+  record->admission_id = vstr_from_buf(admission_id, strlen(admission_id));
+  record->source_sequence = sequence;
+  record->timestamp_ns = UINT64_C(9000000000) + sequence;
+  record->message_type = 17u;
+  rc = turbo_flow_content_descriptor_init(
+      &record->content, TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_CONTENT_PROFILE_GENERIC,
+      TURBO_FLOW_DATA_ENCODING_JSON, "application/json", "orders/crash-recovery");
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_content_descriptor_declare_schema(
+      &record->content, "orders.crash.v1", "CrashOrder", 1u);
+  if (rc != SALTS_OK) return rc;
+  record->correlation = vstr_from_buf(admission_id, strlen(admission_id));
+  record->payload = vstr_from_buf(payload, strlen(payload));
+  return SALTS_OK;
+}
+
+static int inbox_crash_child_run(const inbox_db_fixture_t *fixture) {
+  turbo_flow_turbodb_inbox_config_t config;
+  turbo_flow_inbox_record_t claimed_record;
+  turbo_flow_inbox_record_t pending_record;
+  turbo_flow_inbox_receipt_t claimed_receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
+  turbo_flow_inbox_receipt_t pending_receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
+  turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
+  turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
+  orm_error_t error;
+  int rc;
+
+  if (!fixture) return SALTS_EINVAL;
+  config = inbox_test_config(fixture);
+  rc = inbox_crash_child_record(&claimed_record, "claimed-before-crash", "claimed", 1u);
+  if (rc != SALTS_OK) return rc;
+  rc = inbox_crash_child_record(&pending_record, "pending-after-crash", "pending", 2u);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_turbodb_inbox_create(&config, &inbox, &error);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_inbox_admit(&inbox, &claimed_record, &claimed_receipt);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_inbox_admit(&inbox, &pending_record, &pending_receipt);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_inbox_claim(&inbox, &claim);
+  if (rc != SALTS_OK) return rc;
+  if (claim.record_id != claimed_receipt.record_id ||
+      pending_receipt.record_id == claimed_receipt.record_id)
+    return SALTS_EPROTO;
+
+  /*
+   * Deliberately do not close or destroy the Inbox. The caller kills this
+   * process after SALTS_OK so SQLite/provider cleanup cannot run.
+   */
+  return SALTS_OK;
+}
+#endif
 
 spec("TurboDB durable inbox v2") {
   it("provides v2 defaults and rejects non-file-backed SQLite or other drivers") {
@@ -1118,6 +1187,82 @@ spec("TurboDB durable inbox v2") {
     check_equal(turbo_flow_inbox_destroy(&new_inbox), SALTS_OK);
     inbox_db_fixture_destroy(&fixture);
   }
+
+#if !defined(_WIN32)
+  it("recovers committed pending and claimed records after a literal process crash") {
+    inbox_db_fixture_t fixture;
+    turbo_flow_turbodb_inbox_config_t config;
+    turbo_flow_turbodb_inbox_config_t takeover;
+    turbo_flow_inbox_t blocked = TURBO_FLOW_INBOX_INIT;
+    turbo_flow_inbox_t recovered = TURBO_FLOW_INBOX_INIT;
+    turbo_flow_inbox_claim_t pending = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_inbox_claim_t retried = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_inbox_failed_entry_t failed = TURBO_FLOW_INBOX_FAILED_ENTRY_INIT;
+    turbo_flow_inbox_history_entry_t history[2] = {
+        TURBO_FLOW_INBOX_HISTORY_ENTRY_INIT, TURBO_FLOW_INBOX_HISTORY_ENTRY_INIT};
+    turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+    orm_error_t error;
+    pid_t child;
+    int child_status = 0;
+    size_t count = 0u;
+
+    inbox_db_fixture_init(&fixture);
+    inbox_db_provision(&fixture, 0);
+
+    child = fork();
+    check_true(child >= 0);
+    if (child == 0) {
+      const int rc = inbox_crash_child_run(&fixture);
+      if (rc != SALTS_OK) _Exit(101);
+      (void)kill(getpid(), SIGKILL);
+      _Exit(102);
+    }
+
+    check_equal(waitpid(child, &child_status, 0), child);
+    check_true(WIFSIGNALED(child_status));
+    check_equal(WTERMSIG(child_status), SIGKILL);
+
+    config = inbox_test_config(&fixture);
+    check_equal(turbo_flow_turbodb_inbox_create(&config, &blocked, &error), SALTS_EBUSY);
+    check_null(blocked.ops);
+
+    takeover = config;
+    takeover.open_mode = TURBO_FLOW_TURBODB_INBOX_OPEN_TAKEOVER;
+    takeover.expected_generation = 1u;
+    check_equal(turbo_flow_turbodb_inbox_create(&takeover, &recovered, &error), SALTS_OK);
+    check_equal(turbo_flow_inbox_snapshot(&recovered, &snapshot), SALTS_OK);
+    check_equal(snapshot.generation, (uint64_t)2u);
+    check_equal(snapshot.records, (size_t)2u);
+    check_equal(snapshot.pending_records, (size_t)1u);
+    check_equal(snapshot.failed_records, (size_t)1u);
+    check_equal(snapshot.in_flight_claims, (size_t)0u);
+
+    check_equal(turbo_flow_inbox_claim(&recovered, &pending), SALTS_OK);
+    check_view(pending.record.admission_id,
+               vstr_from_buf("pending-after-crash", sizeof("pending-after-crash") - 1u));
+    check_equal(turbo_flow_inbox_complete(&recovered, &pending), SALTS_OK);
+
+    check_equal(turbo_flow_inbox_scan_failed(&recovered, 0u, &failed, 1u, &count), SALTS_OK);
+    check_equal(count, (size_t)1u);
+    check_equal(failed.kind, TURBO_FLOW_INBOX_FAILURE_OWNER_LOST_UNKNOWN);
+    check_equal(turbo_flow_inbox_retry(&recovered, failed.record_id), SALTS_OK);
+    check_equal(turbo_flow_inbox_claim(&recovered, &retried), SALTS_OK);
+    check_equal(retried.record_id, failed.record_id);
+    check_view(retried.record.admission_id,
+               vstr_from_buf("claimed-before-crash", sizeof("claimed-before-crash") - 1u));
+    check_equal(turbo_flow_inbox_complete(&recovered, &retried), SALTS_OK);
+
+    count = 0u;
+    check_equal(turbo_flow_inbox_scan_history(&recovered, 0u, history, 2u, &count), SALTS_OK);
+    check_equal(count, (size_t)2u);
+    check_equal(history[0].kind, TURBO_FLOW_INBOX_TERMINAL_COMPLETED);
+    check_equal(history[1].kind, TURBO_FLOW_INBOX_TERMINAL_COMPLETED);
+
+    check_equal(turbo_flow_inbox_close(&recovered), SALTS_OK);
+    check_equal(turbo_flow_inbox_destroy(&recovered), SALTS_OK);
+    inbox_db_fixture_destroy(&fixture);
+  }
+#endif
 
   it("allows exactly one concurrent settlement of copied claims") {
     inbox_db_fixture_t fixture;
