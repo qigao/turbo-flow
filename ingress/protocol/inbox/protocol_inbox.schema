@@ -1,10 +1,12 @@
 schema TurboFlowProtocolInbox [name("turbo-flow.protocol.inbox"), version(1), byte_order(little)];
 
 enum ProtocolEnvelopeVersion <uint32> {
+    Unspecified = 0;
     V1 = 1;
 }
 
 enum ProtocolKind <uint32> {
+    Unspecified = 0;
     MqttSn = 1;
     Coap = 2;
     Lwm2m = 3;
@@ -14,6 +16,7 @@ enum ProtocolKind <uint32> {
 }
 
 enum ProtocolDirection <uint32> {
+    Unspecified = 0;
     Up = 1;
     Down = 2;
 }
