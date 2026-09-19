@@ -360,8 +360,9 @@ spec("Graph durable admission boundaries") {
     check_equal(observed.rejected_message, UINT64_C(1));
 
     check_equal(turbo_flow_inbox_claim(&f.backing, &claim), SALTS_OK);
+    const uint64_t completed_record_id = claim.record_id;
     check_equal(turbo_flow_inbox_complete(&f.backing, &claim), SALTS_OK);
-    check_equal(turbo_flow_inbox_forget(&f.backing, claim.record_id), SALTS_OK);
+    check_equal(turbo_flow_inbox_forget(&f.backing, completed_record_id), SALTS_OK);
     observed = (turbo_flow_durable_buffer_pressure_snapshot_t)
         TURBO_FLOW_DURABLE_BUFFER_PRESSURE_SNAPSHOT_INIT;
     check_equal(turbo_flow_durable_buffer_pressure_snapshot(
