@@ -1,0 +1,234 @@
+name: TurboFlow DataBind package #138
+
+on:
+  push:
+    branches:
+      - refactor/databind-root-package
+    paths:
+      - CMakeLists.txt
+      - CMakeUserPresets.json
+      - cmake/**
+      - codec/**
+      - ingress/**
+      - turbo_flow/**
+      - tests/install_consumer/**
+      - README.md
+      - .github/workflows/databind-package-138.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: turboflow-databind-138-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SALTS_SHA: 117c7534c6eeb8462b50743abfc920fb313afd0c
+  SALTS_UTILS_SHA: 7907e71b20a783b41753f58a1e246bf0de116793
+  RULES_FORGE_SHA: d74496eb6dfce398c282693160576a6a8ae8c910
+  CHTTP_SHA: e56e52c499931306b2f0d0852399cb78ed051d6e
+  VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact TurboFlow head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          git diff --check HEAD^ HEAD
+
+      - name: Checkout exact Salts
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.SALTS_SHA }}
+          path: .ci/salts
+          persist-credentials: false
+
+      - name: Checkout exact SaltsUtils and DataBind
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: ${{ env.SALTS_UTILS_SHA }}
+          path: .ci/salts-utils
+          persist-credentials: false
+
+      - name: Checkout exact RulesForge
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/RulesForge
+          ref: ${{ env.RULES_FORGE_SHA }}
+          path: .ci/rulesforge
+          persist-credentials: false
+
+      - name: Checkout exact CHTTP
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/chttp
+          ref: ${{ env.CHTTP_SHA }}
+          path: .ci/chttp
+          persist-credentials: false
+
+      - name: Checkout vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ env.VCPKG_SHA }}
+          path: vcpkg
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Cache vcpkg archives
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: turboflow-databind-${{ runner.os }}-${{ env.VCPKG_SHA }}
+
+      - name: Set up Go for BoringSSL
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+
+      - name: Prepare toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils autoconf automake libtool
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          bash .ci/salts-utils/cmake/ci/install-re2c.sh
+
+      - name: Build host Lemon
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S .ci/salts-utils/tools/lemon -B "$RUNNER_TEMP/host-lemon"             -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/host-lemon" --target lemon -j2
+
+      - name: Build and install Salts
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          cmake -S .ci/salts -B "$RUNNER_TEMP/build/salts" -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk/salts"             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build "$RUNNER_TEMP/build/salts" --target install -j2
+          test -f "$RUNNER_TEMP/sdk/salts/lib/cmake/Salts/SaltsConfig.cmake"
+
+      - name: Build and install SaltsUtils and DataBind candidate
+        shell: bash
+        env:
+          SALTS_ROOT: ${{ runner.temp }}/sdk/salts
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          cmake -S .ci/salts-utils -B "$RUNNER_TEMP/build/salts-utils" -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk/salts-utils"             -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$RUNNER_TEMP/host-lemon/lemon"             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build "$RUNNER_TEMP/build/salts-utils" --target install -j2
+          test -f "$RUNNER_TEMP/sdk/salts-utils/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test -f "$RUNNER_TEMP/sdk/salts-utils/lib/cmake/DataBind/DataBindConfig.cmake"
+          test -x "$RUNNER_TEMP/sdk/salts-utils/bin/tbe_compiler"
+
+      - name: Build and install RulesForge consumer candidate
+        shell: bash
+        env:
+          SALTS_ROOT: ${{ runner.temp }}/sdk/salts
+          SALTS_UTILS_ROOT: ${{ runner.temp }}/sdk/salts-utils
+          DATABIND_ROOT: ${{ runner.temp }}/sdk/salts-utils
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          LD_LIBRARY_PATH: ${{ runner.temp }}/sdk/salts-utils/lib:${{ runner.temp }}/sdk/salts/lib
+        run: |
+          set -euxo pipefail
+          cmake -S .ci/rulesforge -B "$RUNNER_TEMP/build/rulesforge" -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk/rulesforge"             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DBUILD_TESTING=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build "$RUNNER_TEMP/build/rulesforge" --target install -j2
+          test -f "$RUNNER_TEMP/sdk/rulesforge/lib/cmake/RulesForge/RulesForgeConfig.cmake"
+
+      - name: Build and install CHTTP
+        shell: bash
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          LD_LIBRARY_PATH: ${{ runner.temp }}/sdk/salts-utils/lib:${{ runner.temp }}/sdk/salts/lib
+        run: |
+          set -euxo pipefail
+          cmake -S .ci/chttp -B "$RUNNER_TEMP/build/chttp" -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk/chttp"             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DSALTS_ROOT="$RUNNER_TEMP/sdk/salts"             -DSALTS_UTILS_ROOT="$RUNNER_TEMP/sdk/salts-utils"             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build "$RUNNER_TEMP/build/chttp" --target install -j2
+          test -f "$RUNNER_TEMP/sdk/chttp/lib/cmake/Chttp/ChttpConfig.cmake"
+
+      - name: Configure TurboFlow against independent DataBind root
+        shell: bash
+        env:
+          SALTS_ROOT: ${{ runner.temp }}/sdk/salts
+          SALTS_UTILS_ROOT: ${{ runner.temp }}/sdk/salts-utils
+          DATABIND_ROOT: ${{ runner.temp }}/sdk/salts-utils
+          RULES_FORGE_ROOT: ${{ runner.temp }}/sdk/rulesforge
+          HTTP_SERVICES_ROOT: ${{ runner.temp }}/sdk/chttp
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          LD_LIBRARY_PATH: ${{ runner.temp }}/sdk/chttp/lib:${{ runner.temp }}/sdk/rulesforge/lib:${{ runner.temp }}/sdk/salts-utils/lib:${{ runner.temp }}/sdk/salts/lib
+        run: |
+          set -euxo pipefail
+          cmake -S . -B "$RUNNER_TEMP/build/turboflow" -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk/turboflow"             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DBUILD_TESTING=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF             -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF             -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="$RUNNER_TEMP/sdk/salts-utils/bin/tbe_compiler"
+
+      - name: Build and install TurboFlow
+        shell: bash
+        env:
+          LD_LIBRARY_PATH: ${{ runner.temp }}/sdk/chttp/lib:${{ runner.temp }}/sdk/rulesforge/lib:${{ runner.temp }}/sdk/salts-utils/lib:${{ runner.temp }}/sdk/salts/lib
+        run: |
+          set -euxo pipefail
+          cmake --build "$RUNNER_TEMP/build/turboflow" --target install -j2
+          test -f "$RUNNER_TEMP/sdk/turboflow/lib/cmake/TurboFlow/TurboFlowConfig.cmake"
+
+      - name: Consume installed Graph with independent DataBind root
+        shell: bash
+        env:
+          TURBO_FLOW_ROOT: ${{ runner.temp }}/sdk/turboflow
+          SALTS_ROOT: ${{ runner.temp }}/sdk/salts
+          SALTS_UTILS_ROOT: ${{ runner.temp }}/sdk/salts-utils
+          DATABIND_ROOT: ${{ runner.temp }}/sdk/salts-utils
+          RULES_FORGE_ROOT: ${{ runner.temp }}/sdk/rulesforge
+          HTTP_SERVICES_ROOT: ${{ runner.temp }}/sdk/chttp
+          CMAKE_PREFIX_PATH: ${{ github.workspace }}/vcpkg_installed/x64-linux
+          LD_LIBRARY_PATH: ${{ runner.temp }}/sdk/turboflow/lib:${{ runner.temp }}/sdk/chttp/lib:${{ runner.temp }}/sdk/rulesforge/lib:${{ runner.temp }}/sdk/salts-utils/lib:${{ runner.temp }}/sdk/salts/lib
+        run: |
+          set -euxo pipefail
+          cmake -S tests/install_consumer/component -B "$RUNNER_TEMP/build/turboflow-consumer" -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DTURBO_FLOW_TEST_COMPONENT=Graph             -DTURBO_FLOW_TEST_PACKAGE_VERSION=2.0             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-linux
+          cmake --build "$RUNNER_TEMP/build/turboflow-consumer" -j2
+          ctest --test-dir "$RUNNER_TEMP/build/turboflow-consumer" --output-on-failure
+
+      - name: Prove Graph fails without DATABIND_ROOT
+        shell: bash
+        env:
+          TURBO_FLOW_ROOT: ${{ runner.temp }}/sdk/turboflow
+          SALTS_ROOT: ${{ runner.temp }}/sdk/salts
+          SALTS_UTILS_ROOT: ${{ runner.temp }}/sdk/salts-utils
+          RULES_FORGE_ROOT: ${{ runner.temp }}/sdk/rulesforge
+          HTTP_SERVICES_ROOT: ${{ runner.temp }}/sdk/chttp
+          CMAKE_PREFIX_PATH: ${{ github.workspace }}/vcpkg_installed/x64-linux
+        run: |
+          set -euxo pipefail
+          set +e
+          output="$(cmake -E env --unset=DATABIND_ROOT             cmake -S tests/install_consumer/component               -B "$RUNNER_TEMP/build/turboflow-missing-databind" -G Ninja               -DCMAKE_BUILD_TYPE=Release               -DTURBO_FLOW_TEST_COMPONENT=Graph               -DTURBO_FLOW_TEST_PACKAGE_VERSION=2.0               -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake"               -DVCPKG_TARGET_TRIPLET=x64-linux 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$rc" -ne 0
+          grep -q "DATABIND_ROOT" <<<"$output"
+
+      - name: Verify exact TurboFlow source remained untouched
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          git diff --exit-code
