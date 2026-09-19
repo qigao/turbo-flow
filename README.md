@@ -10,7 +10,7 @@ TurboFlow does **not** own broker products, database engines, transport implemen
 
 ## Built on Salts
 
-TurboFlow builds directly on the installed [Salts](https://github.com/qigao/salts) and [SaltsUtils](https://github.com/qigao/salts-utils) SDKs.
+TurboFlow resolves the Salts foundation, SaltsUtils utilities, and DataBind package as separate ownership boundaries.
 
 The shared foundation provides:
 
@@ -136,13 +136,14 @@ Reactive execution is demand-driven and bounded. Waiting resumes only through a 
 
 ## Dependency roots
 
-The build resolves dependencies from explicit installed SDK roots and fails if required roots are absent.
+The build resolves dependencies from explicit installed SDK roots and fails if required roots are absent. DataBind runtime/schema/compiler ownership is resolved through `DATABIND_ROOT`; SaltsUtils is not accepted as a legacy DataBind target owner.
 
 Current required roots include:
 
 ```text
 SALTS_ROOT
 SALTS_UTILS_ROOT
+DATABIND_ROOT
 RULES_FORGE_ROOT
 ```
 
