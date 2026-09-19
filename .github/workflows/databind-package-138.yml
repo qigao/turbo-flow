@@ -159,6 +159,8 @@ jobs:
       - name: Build and install CHTTP
         shell: bash
         env:
+          SALTS_ROOT: ${{ runner.temp }}/sdk/salts
+          SALTS_UTILS_ROOT: ${{ runner.temp }}/sdk/salts-utils
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           LD_LIBRARY_PATH: ${{ runner.temp }}/sdk/salts-utils/lib:${{ runner.temp }}/sdk/salts/lib
         run: |
