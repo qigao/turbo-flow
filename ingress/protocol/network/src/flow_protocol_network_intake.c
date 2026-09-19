@@ -200,6 +200,35 @@ static int intake_owner_refresh_endpoint(turbo_flow_protocol_network_intake_t *i
   return SALTS_ENOENT;
 }
 
+static int intake_owner_compiled_topology_validate(
+    const turbo_flow_protocol_network_intake_t *intake,
+    turbo_flow_config_error_t *error) {
+  size_t source_index = SIZE_MAX;
+  size_t decoder_index = SIZE_MAX;
+  const turbo_flow_edge_plan_t *edge;
+
+  if (!intake || !intake->flow ||
+      turbo_flow_state(intake->flow) != TURBO_FLOW_STATE_COMPILED)
+    return intake_owner_error(error, SALTS_EPROTO, "$.graph",
+                              "compiled intake Flow is unavailable");
+
+  for (size_t i = 0u; i < turbo_flow_stage_count(intake->flow); ++i) {
+    const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(intake->flow, i);
+    if (!stage || !stage->adapter_name) continue;
+    if (strcmp(stage->adapter_name, intake->settings.source_adapter_name) == 0)
+      source_index = i;
+    if (strcmp(stage->adapter_name, intake->settings.decoder_adapter_name) == 0)
+      decoder_index = i;
+  }
+  edge = turbo_flow_edge_at(intake->flow, 0u);
+  if (source_index == SIZE_MAX || decoder_index == SIZE_MAX || !edge ||
+      edge->from_stage != source_index || edge->to_stage != decoder_index ||
+      edge->kind != TURBO_FLOW_EDGE_UNCONDITIONAL)
+    return intake_owner_error(error, SALTS_EINVAL, "$.graph",
+                              "compiled intake Flow must be one unconditional Source-to-decoder edge");
+  return SALTS_OK;
+}
+
 static int intake_owner_snapshot_copy(const turbo_flow_protocol_network_intake_t *intake,
                                       turbo_flow_protocol_network_intake_snapshot_t *snapshot) {
   flow_protocol_network_intake_sink_metrics_t metrics;
@@ -366,6 +395,11 @@ int turbo_flow_protocol_network_intake_create(
   if (rc != SALTS_OK) {
     intake_owner_failed_create_cleanup(intake);
     return intake_owner_error(error, rc, "$.graph", "failed to compile intake Flow");
+  }
+  rc = intake_owner_compiled_topology_validate(intake, error);
+  if (rc != SALTS_OK) {
+    intake_owner_failed_create_cleanup(intake);
+    return rc;
   }
   *out = intake;
   return SALTS_OK;
