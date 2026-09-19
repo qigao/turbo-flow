@@ -77,7 +77,8 @@ target_compile_definitions(protocol_network_tests PRIVATE
     FLOW_PROTOCOL_NETWORK_SOURCE_FIXTURE="unused-source-fixture"
     FLOW_CNET_PLUGIN_MODULE="unused-cnet-plugin"
     FLOW_PROTOCOL_JTT808_MODULE="unused-jtt808-plugin"
-    FLOW_PROTOCOL_COAP_MODULE="unused-coap-plugin")
+    FLOW_PROTOCOL_COAP_MODULE="unused-coap-plugin"
+    FLOW_DURABLE_MEMORY_PLUGIN_MODULE="unused-durable-memory-plugin")
 target_compile_options(protocol_network_tests PRIVATE $<$<COMPILE_LANGUAGE:C>:${_tf_c_options}>)
 target_link_libraries(protocol_network_tests PRIVATE Salts::Core Salts::CFlow Salts::CNet xxHash::xxhash)
 
