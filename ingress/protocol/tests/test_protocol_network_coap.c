@@ -122,4 +122,61 @@ spec("real CoAP UDP protocol intake") {
     protocol_network_e2e_destroy(&second);
     protocol_network_e2e_destroy(&first);
   }
+
+#if defined(FLOW_E2E_DURABLE_TURBODB)
+  it("backpressures at a full TurboDB boundary without business execution or memory fallback") {
+    protocol_network_e2e_fixture_t fixture;
+    turbo_flow_protocol_network_intake_snapshot_t intake =
+        TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
+    uint8_t frame[] = {0x40u, 0x01u, 0x00u, 0x01u};
+    uint64_t deadline;
+    size_t sent_before;
+    unsigned port = 0u;
+
+    check_equal(protocol_network_e2e_coap_init(&fixture, FLOW_CNET_PLUGIN_MODULE,
+                                               FLOW_PROTOCOL_COAP_MODULE,
+                                               FLOW_E2E_DURABLE_PLUGIN_MODULE,
+                                               FLOW_E2E_STORAGE_KIND,
+                                               FLOW_E2E_STORAGE_PATH()),
+                SALTS_OK);
+    check_equal(protocol_network_e2e_start(&fixture, &intake), SALTS_OK);
+    check_equal(sscanf(intake.source_endpoint, "udp://127.0.0.1:%u", &port), 1);
+    check_true(port > 0u && port <= UINT16_MAX);
+
+    for (size_t i = 0u; i < 8u; ++i) {
+      frame[3] = (uint8_t)(i + 1u);
+      sent_before = fixture.udp.sent;
+      check_equal(protocol_network_e2e_udp_send_frame(&fixture, intake.source_endpoint, frame,
+                                                      sizeof(frame)),
+                  SALTS_OK);
+      deadline = salts_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
+      while (intake.frames_admitted < (uint64_t)(i + 1u) &&
+             salts_monotonic_ms() < deadline)
+        check_equal(protocol_network_e2e_poll(&fixture, 1u, &intake), SALTS_OK);
+      check_equal(intake.frames_admitted, (uint64_t)(i + 1u));
+      check_true(fixture.udp.sent > sent_before);
+      check_equal(fixture.business.stage_completions, (size_t)0u);
+      check_equal(fixture.udp.received, (size_t)0u);
+    }
+
+    frame[3] = 0x09u;
+    sent_before = fixture.udp.sent;
+    check_equal(protocol_network_e2e_udp_send_frame(&fixture, intake.source_endpoint, frame,
+                                                    sizeof(frame)),
+                SALTS_OK);
+    deadline = salts_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
+    while (intake.state != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_BACKPRESSURED &&
+           salts_monotonic_ms() < deadline)
+      check_equal(protocol_network_e2e_poll(&fixture, 1u, &intake), SALTS_OK);
+
+    check_true(fixture.udp.sent > sent_before);
+    check_equal(intake.state, TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_BACKPRESSURED);
+    check_equal(intake.frames_admitted, (uint64_t)8u);
+    check_equal(fixture.business.stage_completions, (size_t)0u);
+    check_equal(fixture.business.failed_completions, (size_t)0u);
+    check_equal(fixture.udp.received, (size_t)0u);
+
+    protocol_network_e2e_destroy(&fixture);
+  }
+#endif
 }
