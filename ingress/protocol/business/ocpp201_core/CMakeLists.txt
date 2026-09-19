@@ -32,7 +32,7 @@ target_include_directories(
   tf_protocol_business_ocpp201_core_schema
   PUBLIC "${_ocpp201_core_generated_dir}")
 target_link_libraries(tf_protocol_business_ocpp201_core_schema
-                      PUBLIC Salts::DataBind)
+                      PUBLIC DataBind::Runtime)
 
 add_library(tf_protocol_business_ocpp201_core SHARED
             flow_protocol_business_ocpp201_core.c)
@@ -50,7 +50,7 @@ target_link_libraries(
   PRIVATE tf_protocol_business_ocpp201_core_schema
           tf_protocol_plugin_support
           TurboFlow::ProtocolIngress
-          Salts::DataBind
+          DataBind::Runtime
           Salts::JsonParser)
 
 if(BUILD_TESTS)
@@ -63,7 +63,7 @@ if(BUILD_TESTS)
     tf_protocol_business_ocpp201_core_schema_shared
     PUBLIC "${_ocpp201_core_generated_dir}")
   target_link_libraries(tf_protocol_business_ocpp201_core_schema_shared
-                        PUBLIC Salts::DataBind)
+                        PUBLIC DataBind::Runtime)
   cmake_config_target(
     tf_protocol_business_ocpp201_core_schema_shared
     FOLDER "ingress/protocol/business/tests")
