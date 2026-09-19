@@ -353,6 +353,8 @@ spec("durable buffer lifecycle") {
                     f.flow, "missing.store", 1000u), SALTS_ENOENT);
     check_equal(turbo_flow_durable_buffer_close_and_drain(
                     f.flow, "intake.store", 0u), SALTS_ETIMEDOUT);
+    for (size_t i = 0u; i < 1000u && !f.sinks; ++i) salts_sleep_ms(1u);
+    check_equal(f.sinks, (size_t)1u);
     check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
     check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
     close_fixture(&f);
