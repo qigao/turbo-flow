@@ -10,6 +10,19 @@
 #include <stdint.h>
 #include <string.h>
 
+_Static_assert(ProtocolEnvelopeVersion_Unspecified == 0,
+               "RulesForge ordinal sentinel must remain zero");
+_Static_assert(ProtocolEnvelopeVersion_V1 == 1,
+               "protocol envelope wire version must remain one");
+_Static_assert(ProtocolKind_Unspecified == 0,
+               "protocol kind ordinal sentinel must remain zero");
+_Static_assert(ProtocolKind_MqttSn == 1 && ProtocolKind_Jtt808 == 6,
+               "protocol kind wire values must remain stable");
+_Static_assert(ProtocolDirection_Unspecified == 0,
+               "protocol direction ordinal sentinel must remain zero");
+_Static_assert(ProtocolDirection_Up == 1 && ProtocolDirection_Down == 2,
+               "protocol direction wire values must remain stable");
+
 typedef struct protocol_inbox_identity_probe_s {
   size_t calls;
   int status;
