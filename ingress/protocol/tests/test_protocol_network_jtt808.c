@@ -18,12 +18,14 @@
   #endif
   #define FLOW_E2E_DURABLE_PLUGIN_MODULE FLOW_TURBODB_PLUGIN_MODULE
   #define FLOW_E2E_STORAGE_KIND PROTOCOL_NETWORK_E2E_STORAGE_TURBODB
+  #define FLOW_E2E_STORAGE_PATH() tt_make_temp_file("turbo-flow-protocol-e2e", ".sqlite3")
 #else
   #ifndef FLOW_DURABLE_MEMORY_PLUGIN_MODULE
     #error FLOW_DURABLE_MEMORY_PLUGIN_MODULE is required
   #endif
   #define FLOW_E2E_DURABLE_PLUGIN_MODULE FLOW_DURABLE_MEMORY_PLUGIN_MODULE
   #define FLOW_E2E_STORAGE_KIND PROTOCOL_NETWORK_E2E_STORAGE_MEMORY
+  #define FLOW_E2E_STORAGE_PATH() NULL
 #endif
 
 enum { PROTOCOL_NETWORK_E2E_TIMEOUT_MS = 5000 };
@@ -63,7 +65,8 @@ spec("real JT/T808 TCP protocol intake") {
     check_equal(protocol_network_e2e_jtt808_init(&fixture, FLOW_CNET_PLUGIN_MODULE,
                                                  FLOW_PROTOCOL_JTT808_MODULE,
                                                  FLOW_E2E_DURABLE_PLUGIN_MODULE,
-                                                 FLOW_E2E_STORAGE_KIND),
+                                                 FLOW_E2E_STORAGE_KIND,
+                                                 FLOW_E2E_STORAGE_PATH()),
                 SALTS_OK);
     check_equal(protocol_network_e2e_start(&fixture, &intake), SALTS_OK);
     check_equal(intake.state, TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_RUNNING);
@@ -114,7 +117,8 @@ spec("real JT/T808 TCP protocol intake") {
     check_equal(protocol_network_e2e_jtt808_init(&fixture, FLOW_CNET_PLUGIN_MODULE,
                                                  FLOW_PROTOCOL_JTT808_MODULE,
                                                  FLOW_E2E_DURABLE_PLUGIN_MODULE,
-                                                 FLOW_E2E_STORAGE_KIND),
+                                                 FLOW_E2E_STORAGE_KIND,
+                                                 FLOW_E2E_STORAGE_PATH()),
                 SALTS_OK);
     check_equal(protocol_network_e2e_start(&fixture, &intake), SALTS_OK);
     check_equal(protocol_network_e2e_tcp_connect(&fixture, intake.source_endpoint,

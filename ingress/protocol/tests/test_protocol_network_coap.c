@@ -17,12 +17,14 @@
   #endif
   #define FLOW_E2E_DURABLE_PLUGIN_MODULE FLOW_TURBODB_PLUGIN_MODULE
   #define FLOW_E2E_STORAGE_KIND PROTOCOL_NETWORK_E2E_STORAGE_TURBODB
+  #define FLOW_E2E_STORAGE_PATH() tt_make_temp_file("turbo-flow-protocol-e2e", ".sqlite3")
 #else
   #ifndef FLOW_DURABLE_MEMORY_PLUGIN_MODULE
     #error FLOW_DURABLE_MEMORY_PLUGIN_MODULE is required
   #endif
   #define FLOW_E2E_DURABLE_PLUGIN_MODULE FLOW_DURABLE_MEMORY_PLUGIN_MODULE
   #define FLOW_E2E_STORAGE_KIND PROTOCOL_NETWORK_E2E_STORAGE_MEMORY
+  #define FLOW_E2E_STORAGE_PATH() NULL
 #endif
 
 enum { PROTOCOL_NETWORK_COAP_TIMEOUT_MS = 5000 };
@@ -73,7 +75,8 @@ spec("real CoAP UDP protocol intake") {
     check_equal(protocol_network_e2e_coap_init(&fixture, FLOW_CNET_PLUGIN_MODULE,
                                                FLOW_PROTOCOL_COAP_MODULE,
                                                FLOW_E2E_DURABLE_PLUGIN_MODULE,
-                                                 FLOW_E2E_STORAGE_KIND),
+                                                 FLOW_E2E_STORAGE_KIND,
+                                                 FLOW_E2E_STORAGE_PATH()),
                 SALTS_OK);
     protocol_network_coap_admit(&fixture, coap_get);
     check_equal(fixture.business.stage_completions, (size_t)0u);
@@ -91,12 +94,14 @@ spec("real CoAP UDP protocol intake") {
     check_equal(protocol_network_e2e_coap_init(&first, FLOW_CNET_PLUGIN_MODULE,
                                                FLOW_PROTOCOL_COAP_MODULE,
                                                FLOW_E2E_DURABLE_PLUGIN_MODULE,
-                                                 FLOW_E2E_STORAGE_KIND),
+                                                 FLOW_E2E_STORAGE_KIND,
+                                                 FLOW_E2E_STORAGE_PATH()),
                 SALTS_OK);
     check_equal(protocol_network_e2e_coap_init(&second, FLOW_CNET_PLUGIN_MODULE,
                                                FLOW_PROTOCOL_COAP_MODULE,
                                                FLOW_E2E_DURABLE_PLUGIN_MODULE,
-                                                 FLOW_E2E_STORAGE_KIND),
+                                                 FLOW_E2E_STORAGE_KIND,
+                                                 FLOW_E2E_STORAGE_PATH()),
                 SALTS_OK);
     check_true(first.receiver_port != 0u);
     check_true(second.receiver_port != 0u);

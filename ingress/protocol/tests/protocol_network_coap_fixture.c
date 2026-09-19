@@ -284,7 +284,8 @@ fail:
 int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
                                    const char *cnet_module, const char *coap_module,
                                    const char *durable_module,
-                                   protocol_network_e2e_storage_kind_t storage) {
+                                   protocol_network_e2e_storage_kind_t storage,
+                                   char *turbodb_path) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   char yaml[16384];
   int rc;
@@ -292,7 +293,7 @@ int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
       !durable_module || !durable_module[0])
     return SALTS_EINVAL;
   memset(fixture, 0, sizeof(*fixture));
-  rc = protocol_network_e2e_storage_prepare(fixture, storage);
+  rc = protocol_network_e2e_storage_prepare(fixture, storage, turbodb_path);
   if (rc == SALTS_OK) rc = protocol_network_coap_receiver_open(fixture);
   if (rc == SALTS_OK)
     rc = protocol_network_coap_host_open(fixture, cnet_module, coap_module,

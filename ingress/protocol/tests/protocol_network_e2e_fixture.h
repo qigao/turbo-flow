@@ -66,7 +66,8 @@ typedef struct protocol_network_e2e_fixture_s {
 } protocol_network_e2e_fixture_t;
 
 int protocol_network_e2e_storage_prepare(protocol_network_e2e_fixture_t *fixture,
-                                         protocol_network_e2e_storage_kind_t storage);
+                                         protocol_network_e2e_storage_kind_t storage,
+                                         char *turbodb_path);
 int protocol_network_e2e_storage_rewrite_yaml(protocol_network_e2e_fixture_t *fixture,
                                               protocol_network_e2e_storage_kind_t storage,
                                               char *yaml, size_t capacity);
@@ -75,11 +76,13 @@ void protocol_network_e2e_storage_cleanup(protocol_network_e2e_fixture_t *fixtur
 int protocol_network_e2e_jtt808_init(protocol_network_e2e_fixture_t *fixture,
                                      const char *cnet_module, const char *jtt808_module,
                                      const char *durable_module,
-                                     protocol_network_e2e_storage_kind_t storage);
+                                     protocol_network_e2e_storage_kind_t storage,
+                                     char *turbodb_path);
 int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
                                    const char *cnet_module, const char *coap_module,
                                    const char *durable_module,
-                                   protocol_network_e2e_storage_kind_t storage);
+                                   protocol_network_e2e_storage_kind_t storage,
+                                   char *turbodb_path);
 int protocol_network_e2e_start(protocol_network_e2e_fixture_t *fixture,
                                turbo_flow_protocol_network_intake_snapshot_t *snapshot);
 int protocol_network_e2e_tcp_connect(protocol_network_e2e_fixture_t *fixture,

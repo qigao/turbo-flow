@@ -1,5 +1,4 @@
 #include "protocol_network_e2e_fixture.h"
-#include "tinytest.h"
 
 #include <salts/clock.h>
 
@@ -64,15 +63,17 @@ done:
 #endif
 
 int protocol_network_e2e_storage_prepare(protocol_network_e2e_fixture_t *fixture,
-                                         protocol_network_e2e_storage_kind_t storage) {
+                                         protocol_network_e2e_storage_kind_t storage,
+                                         char *turbodb_path) {
   if (!fixture) return SALTS_EINVAL;
-  if (storage == PROTOCOL_NETWORK_E2E_STORAGE_MEMORY) return SALTS_OK;
+  if (storage == PROTOCOL_NETWORK_E2E_STORAGE_MEMORY)
+    return turbodb_path ? SALTS_EINVAL : SALTS_OK;
 #if defined(FLOW_TURBODB_PLUGIN_MODULE)
   if (storage == PROTOCOL_NETWORK_E2E_STORAGE_TURBODB) {
     orm_error_t error;
     int rc;
-    fixture->turbodb_path = tt_make_temp_file("turbo-flow-protocol-e2e", ".sqlite3");
-    if (!fixture->turbodb_path) return SALTS_ENOMEM;
+    if (!turbodb_path) return SALTS_ENOMEM;
+    fixture->turbodb_path = turbodb_path;
     orm_config(&fixture->turbodb_database);
     fixture->turbodb_filename.keyword = orm_view("filename");
     fixture->turbodb_filename.value = orm_view(fixture->turbodb_path);
@@ -156,7 +157,7 @@ void protocol_network_e2e_storage_cleanup(protocol_network_e2e_fixture_t *fixtur
     fixture->turbodb_db = NULL;
   }
   if (fixture->turbodb_path) {
-    (void)tt_remove_file(fixture->turbodb_path);
+    (void)remove(fixture->turbodb_path);
     free(fixture->turbodb_path);
     fixture->turbodb_path = NULL;
   }
@@ -491,7 +492,8 @@ fail:
 int protocol_network_e2e_jtt808_init(protocol_network_e2e_fixture_t *fixture,
                                      const char *cnet_module, const char *jtt808_module,
                                      const char *durable_module,
-                                     protocol_network_e2e_storage_kind_t storage) {
+                                     protocol_network_e2e_storage_kind_t storage,
+                                     char *turbodb_path) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   char yaml[16384];
   int rc;
@@ -499,7 +501,7 @@ int protocol_network_e2e_jtt808_init(protocol_network_e2e_fixture_t *fixture,
       !durable_module || !durable_module[0])
     return SALTS_EINVAL;
   memset(fixture, 0, sizeof(*fixture));
-  rc = protocol_network_e2e_storage_prepare(fixture, storage);
+  rc = protocol_network_e2e_storage_prepare(fixture, storage, turbodb_path);
   if (rc == SALTS_OK) rc = protocol_network_e2e_receiver_open(fixture);
   if (rc == SALTS_OK) rc = protocol_network_e2e_client_open(fixture);
   if (rc == SALTS_OK)
