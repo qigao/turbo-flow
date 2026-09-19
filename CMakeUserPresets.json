@@ -90,7 +90,7 @@
         "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
         "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/debug",
         "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/debug",
-        "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{RULES_FORGE_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}",
+        "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{DATABIND_ROOT}/bin${pathListSep}$env{RULES_FORGE_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}",
         "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils/debug"
       },
       "inherits": [
@@ -114,7 +114,7 @@
         "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
         "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/release",
         "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/release",
-        "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{RULES_FORGE_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}",
+        "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{DATABIND_ROOT}/bin${pathListSep}$env{RULES_FORGE_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}",
         "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils/release"
       },
       "inherits": [
@@ -133,7 +133,7 @@
       "environment": {
         "TURBO_FLOW_ACTIVE_PRESET": "win-release-user",
         "TURBO_FLOW_ROOT": "${sourceDir}/build/sdk/turbodb-off/win-release",
-        "PATH": "${sourceDir}/build/Msvc-Release-TurboDb-Off/bin${pathListSep}${sourceDir}/build/sdk/turbodb-off/win-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{RULES_FORGE_ROOT}/bin${pathListSep}$penv{PATH}"
+        "PATH": "${sourceDir}/build/Msvc-Release-TurboDb-Off/bin${pathListSep}${sourceDir}/build/sdk/turbodb-off/win-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{DATABIND_ROOT}/bin${pathListSep}$env{RULES_FORGE_ROOT}/bin${pathListSep}$penv{PATH}"
       }
     },
     {
@@ -153,7 +153,7 @@
         "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
         "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/debug",
         "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/debug",
-        "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{HTTP_SERVICES_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{RULES_FORGE_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{HTTP_SERVICES_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{DATABIND_ROOT}/lib${pathListSep}$env{RULES_FORGE_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
         "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils/debug"
       },
       "inherits": [
@@ -177,7 +177,7 @@
         "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
         "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/release",
         "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/release",
-        "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{HTTP_SERVICES_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{RULES_FORGE_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{HTTP_SERVICES_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{DATABIND_ROOT}/lib${pathListSep}$env{RULES_FORGE_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
         "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils/release"
       },
       "inherits": [
