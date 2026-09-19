@@ -301,6 +301,98 @@ spec("Graph durable admission boundaries") {
       check_storage(&f, capacities[c]); turbo_flow_msg_cleanup(&msg); fixture_close(&f);
     }
   }
+  it("reports deterministic pressure thresholds and admission rejection reasons") {
+    admission_fixture_t f;
+    turbo_flow_msg_t msg;
+    turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_inbox_memory_config_t limits = turbo_flow_inbox_memory_config_default();
+    turbo_flow_durable_buffer_pressure_config_t pressure =
+        TURBO_FLOW_DURABLE_BUFFER_PRESSURE_CONFIG_INIT;
+    turbo_flow_durable_buffer_pressure_snapshot_t observed =
+        TURBO_FLOW_DURABLE_BUFFER_PRESSURE_SNAPSHOT_INIT;
+
+    limits.max_records = 2u;
+    limits.max_claims = 1u;
+    fixture_create(&f, &limits);
+    check_equal(fixture_bind(&f, TURBO_FLOW_DURABLE_IDENTITY_GENERATED, 1024u), SALTS_OK);
+    pressure.high_records = 2u;
+    pressure.low_records = 1u;
+    check_equal(turbo_flow_durable_buffer_configure_pressure(
+                    f.flow, "intake.store", &pressure), SALTS_OK);
+    fixture_start(&f);
+
+    check_equal(turbo_flow_durable_buffer_pressure_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.state, TURBO_FLOW_DURABLE_PRESSURE_LOW);
+
+    message_init(&msg);
+    check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_OK);
+    observed = (turbo_flow_durable_buffer_pressure_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_PRESSURE_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_pressure_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.state, TURBO_FLOW_DURABLE_PRESSURE_LOW);
+
+    check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_OK);
+    observed = (turbo_flow_durable_buffer_pressure_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_PRESSURE_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_pressure_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.state, TURBO_FLOW_DURABLE_PRESSURE_HIGH);
+
+    check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_ENOSPC);
+    f.admit_status = SALTS_ESHUTDOWN;
+    check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_ESHUTDOWN);
+    f.admit_status = SALTS_EIO;
+    check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_EIO);
+    f.admit_status = SALTS_OK;
+    msg.transport_context = &f;
+    check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_ENOTSUP);
+    msg.transport_context = NULL;
+
+    observed = (turbo_flow_durable_buffer_pressure_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_PRESSURE_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_pressure_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.rejected_backpressure, UINT64_C(1));
+    check_equal(observed.rejected_closed, UINT64_C(1));
+    check_equal(observed.rejected_provider, UINT64_C(1));
+    check_equal(observed.rejected_message, UINT64_C(1));
+
+    check_equal(turbo_flow_inbox_claim(&f.backing, &claim), SALTS_OK);
+    check_equal(turbo_flow_inbox_complete(&f.backing, &claim), SALTS_OK);
+    check_equal(turbo_flow_inbox_forget(&f.backing, claim.record_id), SALTS_OK);
+    observed = (turbo_flow_durable_buffer_pressure_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_PRESSURE_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_pressure_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.state, TURBO_FLOW_DURABLE_PRESSURE_LOW);
+
+    turbo_flow_msg_cleanup(&msg);
+    fixture_close(&f);
+  }
+
+  it("rejects invalid pressure policies without mutating the binding") {
+    admission_fixture_t f;
+    turbo_flow_durable_buffer_pressure_config_t pressure =
+        TURBO_FLOW_DURABLE_BUFFER_PRESSURE_CONFIG_INIT;
+    turbo_flow_durable_buffer_pressure_snapshot_t observed =
+        TURBO_FLOW_DURABLE_BUFFER_PRESSURE_SNAPSHOT_INIT;
+    fixture_open(&f, TURBO_FLOW_DURABLE_IDENTITY_GENERATED);
+
+    check_equal(turbo_flow_durable_buffer_configure_pressure(
+                    f.flow, "intake.store", &pressure), SALTS_EINVAL);
+    pressure.high_records = 2u;
+    pressure.low_records = 2u;
+    check_equal(turbo_flow_durable_buffer_configure_pressure(
+                    f.flow, "intake.store", &pressure), SALTS_EINVAL);
+    check_equal(turbo_flow_durable_buffer_pressure_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.state, TURBO_FLOW_DURABLE_PRESSURE_DISABLED);
+    check_equal(observed.rejected_backpressure, UINT64_C(0));
+    fixture_close(&f);
+  }
+
   it("enforces binding, record and retained byte limits at the exact bound") {
     /* src(3) + admission(1) + correlation(4) + payload(4) = 12 variable bytes. */
     enum { RECORD_BYTES = 12 };

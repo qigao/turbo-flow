@@ -90,6 +90,54 @@ typedef struct turbo_flow_durable_buffer_snapshot_s {
    0u, 0, 0, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,                                       \
    TURBO_FLOW_INBOX_SOURCE_EMPTY, 0u, SALTS_OK, SALTS_OK}
 
+typedef enum turbo_flow_durable_buffer_pressure_state_e {
+  TURBO_FLOW_DURABLE_PRESSURE_DISABLED = 0,
+  TURBO_FLOW_DURABLE_PRESSURE_LOW = 1,
+  TURBO_FLOW_DURABLE_PRESSURE_NORMAL = 2,
+  TURBO_FLOW_DURABLE_PRESSURE_HIGH = 3
+} turbo_flow_durable_buffer_pressure_state_t;
+
+/**
+ * Resource-local pressure thresholds. Zero high threshold disables that dimension.
+ * At least one high threshold must be enabled. Low must be strictly below high.
+ */
+typedef struct turbo_flow_durable_buffer_pressure_config_s {
+  size_t size;
+  uint32_t version;
+  size_t high_records;
+  size_t low_records;
+  size_t high_retained_bytes;
+  size_t low_retained_bytes;
+} turbo_flow_durable_buffer_pressure_config_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_PRESSURE_CONFIG_INIT                                            \
+  {sizeof(turbo_flow_durable_buffer_pressure_config_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,    \
+   0u, 0u, 0u, 0u}
+
+/**
+ * Provider-neutral pressure and admission-rejection observation.
+ *
+ * Pressure is derived only from retained provider records/bytes plus the explicit
+ * thresholds above. Rejection counters are monotonic for the lifetime of one binding.
+ */
+typedef struct turbo_flow_durable_buffer_pressure_snapshot_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_durable_buffer_pressure_state_t state;
+  size_t high_records;
+  size_t low_records;
+  size_t high_retained_bytes;
+  size_t low_retained_bytes;
+  uint64_t rejected_backpressure;
+  uint64_t rejected_closed;
+  uint64_t rejected_provider;
+  uint64_t rejected_message;
+} turbo_flow_durable_buffer_pressure_snapshot_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_PRESSURE_SNAPSHOT_INIT                                          \
+  {sizeof(turbo_flow_durable_buffer_pressure_snapshot_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,  \
+   TURBO_FLOW_DURABLE_PRESSURE_DISABLED, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
+
 /**
  * Bind one configured durable-buffer resource to a caller-owned Inbox provider.
  * The binding borrows `inbox`; provider ownership and lifetime remain with the caller.
@@ -116,6 +164,19 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_bind(
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_snapshot(
     turbo_flow_t *flow, const char *resource_name,
     turbo_flow_durable_buffer_snapshot_t *snapshot);
+
+/**
+ * Configure resource-local high/low pressure thresholds.
+ * Caller serializes this operator action with admission/lifecycle calls.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_configure_pressure(
+    turbo_flow_t *flow, const char *resource_name,
+    const turbo_flow_durable_buffer_pressure_config_t *config);
+
+/** Read pressure state and monotonic admission rejection counters. */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_pressure_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_pressure_snapshot_t *snapshot);
 
 /**
  * Pause new ordinary downstream claims for one named durable buffer. Admission
