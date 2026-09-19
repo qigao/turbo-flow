@@ -136,7 +136,7 @@ static turbo_flow_msg_t intake_edge_listener_message(uint64_t id, uint64_t gener
   memset(context, 0, sizeof(*context));
   context->size = TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_V1_SIZE;
   context->version = TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION;
-  context->connection.slot = 0u;
+  context->connection.slot = 1u;
   context->connection.generation = generation;
   memcpy(mem_buffer_data(buffer) + sizeof(*context), data, size);
   mem_set_used(buffer, storage_size);
