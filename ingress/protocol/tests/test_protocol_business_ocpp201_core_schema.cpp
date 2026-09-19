@@ -3,7 +3,7 @@
 
 spec("OCPP 2.0.1 Core generated DataBind ABI") {
   it("publishes the additive schema revision") {
-    check_contains(Ocpp201Core_schema_text(), "version(5)");
+    check_contains(Ocpp201Core_schema_text(), "version(6)");
   }
 
   it("publishes the complete TransactionEvent required enum sets") {

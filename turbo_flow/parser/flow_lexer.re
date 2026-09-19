@@ -27,6 +27,7 @@ static int flow_keyword_token(const char *value, size_t length) {
   if (length == 7 && strncmp(value, "adapter", 7) == 0) return TURBO_FLOW_TOKEN_ADAPTER;
   if (length == 9 && strncmp(value, "operation", 9) == 0) return TURBO_FLOW_TOKEN_OPERATION;
   if (length == 8 && strncmp(value, "resource", 8) == 0) return TURBO_FLOW_TOKEN_RESOURCE;
+  if (length == 6 && strncmp(value, "buffer", 6) == 0) return TURBO_FLOW_TOKEN_BUFFER;
   if (length == 6 && strncmp(value, "inline", 6) == 0) return TURBO_FLOW_TOKEN_INLINE;
   if (length == 6 && strncmp(value, "source", 6) == 0) return TURBO_FLOW_TOKEN_SOURCE;
   if (length == 6 && strncmp(value, "worker", 6) == 0) return TURBO_FLOW_TOKEN_WORKER;

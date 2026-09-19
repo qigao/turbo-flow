@@ -141,6 +141,7 @@ add_subdirectory(vendor)
 add_subdirectory(turbo_flow)
 add_subdirectory(io/cnet)
 add_subdirectory(io/chttp)
+add_subdirectory(io/durable)
 if(TURBO_FLOW_BUILD_TURBODB_ADAPTER)
   add_subdirectory(io/turbodb)
 endif()
@@ -163,7 +164,6 @@ foreach(
      tf_turbodb_adapter
      tf_protocol
      tf_protocol_inbox_schema
-     tf_protocol_inbox
      tf_protocol_mqtt_sn
      tf_protocol_coap
      tf_protocol_lwm2m

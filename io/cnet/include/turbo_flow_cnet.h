@@ -188,6 +188,7 @@ TURBO_FLOW_C_API int turbo_flow_cnet_stream_source_destroy(turbo_flow_cnet_strea
 #define TURBO_FLOW_CNET_LISTENER_SOURCE_DEFAULT_MAX_MESSAGE_BYTES (1024u * 1024u)
 #define TURBO_FLOW_CNET_LISTENER_SOURCE_DEFAULT_SCHEDULER_CAPACITY 64u
 #define TURBO_FLOW_CNET_LISTENER_SOURCE_DEFAULT_MAX_STEPS 256u
+#define TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION 1u
 
 typedef struct turbo_flow_cnet_listener_source_s turbo_flow_cnet_listener_source_t;
 
@@ -259,6 +260,16 @@ typedef struct turbo_flow_cnet_listener_source_config_s {
    TURBO_FLOW_CNET_LISTENER_SOURCE_DEFAULT_SCHEDULER_CAPACITY,                                     \
    TURBO_FLOW_CNET_LISTENER_SOURCE_DEFAULT_MAX_STEPS,                                              \
    1u}
+
+/** Message-owned immutable listener connection identity stored inside `message->buffer`. */
+typedef struct turbo_flow_cnet_listener_message_context_s {
+  size_t size;
+  uint32_t version;
+  cnet_connection connection;
+} turbo_flow_cnet_listener_message_context_t;
+
+#define TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_V1_SIZE                                           \
+  sizeof(turbo_flow_cnet_listener_message_context_t)
 
 /**
  * Caller-owned snapshot copied without advancing either runtime.
@@ -356,6 +367,13 @@ TURBO_FLOW_C_API int turbo_flow_cnet_listener_source_stop(turbo_flow_cnet_listen
 /** Release a successfully stopped source; a live owner returns SALTS_EBUSY. */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_listener_source_destroy(turbo_flow_cnet_listener_source_t *source);
+
+/**
+ * Return listener identity owned by `message->buffer`, or NULL for another
+ * transport or a malformed/borrowed context. The pointer lives with `message`.
+ */
+TURBO_FLOW_C_API const turbo_flow_cnet_listener_message_context_t *
+turbo_flow_cnet_listener_message_context(const turbo_flow_msg_t *message);
 
 #define TURBO_FLOW_CNET_PACKET_SOURCE_API_VERSION 1u
 #define TURBO_FLOW_CNET_PACKET_SOURCE_DEFAULT_QUEUE_CAPACITY 64u

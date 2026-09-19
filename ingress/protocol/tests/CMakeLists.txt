@@ -85,12 +85,117 @@ set_tests_properties(test_protocol_source
                      PROPERTIES LABELS "protocol-ingress;protocol-source")
 
 cmake_add_test(
-  test_protocol_inbox
-  SOURCES test_protocol_inbox.c
-  LIBS TurboFlow::ProtocolIngressInbox tf_protocol_inbox_schema Salts::TinyTest
+  test_protocol_network_intake_config
+  SOURCES test_protocol_network_intake_config.c
+  LIBS tf_protocol_network_intake_core Salts::TinyTest
   FOLDER "ingress/protocol/tests")
-set_tests_properties(test_protocol_inbox
-                     PROPERTIES LABELS "protocol-ingress;inbox;databind")
+set_tests_properties(test_protocol_network_intake_config
+                     PROPERTIES LABELS "protocol-ingress;network-intake;config")
+
+cmake_add_test(
+  test_protocol_network_intake_core
+  SOURCES test_protocol_network_intake_core.c
+  LIBS tf_protocol_network_intake_core TurboFlow::CNetAdapter Salts::TinyTest
+  FOLDER "ingress/protocol/tests")
+set_tests_properties(test_protocol_network_intake_core
+                     PROPERTIES LABELS "protocol-ingress;network-intake;inbox")
+
+cmake_add_test(
+  test_protocol_network_intake_edges
+  SOURCES test_protocol_network_intake_edges.c
+  LIBS tf_protocol_network_intake_core TurboFlow::CNetAdapter Salts::TinyTest
+  FOLDER "ingress/protocol/tests")
+set_tests_properties(test_protocol_network_intake_edges
+                     PROPERTIES LABELS "protocol-ingress;network-intake;inbox")
+
+add_library(test_protocol_network_source_fixture SHARED
+            protocol_network_source_fixture.c)
+target_link_libraries(test_protocol_network_source_fixture PRIVATE TurboFlow::PluginHost)
+target_compile_definitions(test_protocol_network_source_fixture PRIVATE TURBO_FLOW_PLUGIN_BUILD)
+set_target_properties(
+  test_protocol_network_source_fixture
+  PROPERTIES C_VISIBILITY_PRESET hidden
+             VISIBILITY_INLINES_HIDDEN YES
+             FOLDER "ingress/protocol/tests/plugin-fixtures")
+
+cmake_add_test(
+  test_protocol_network_intake
+  SOURCES test_protocol_network_intake.c protocol_network_intake_header_cpp.cpp
+  LIBS TurboFlow::ProtocolNetworkIntake Salts::TinyTest
+  DEFS
+    FLOW_PROTOCOL_NETWORK_SOURCE_FIXTURE="$<TARGET_FILE:test_protocol_network_source_fixture>"
+    FLOW_PROTOCOL_JTT808_MODULE="$<TARGET_FILE:tf_protocol_jtt808>"
+  FOLDER "ingress/protocol/tests")
+add_dependencies(test_protocol_network_intake test_protocol_network_source_fixture tf_protocol_jtt808)
+set_tests_properties(test_protocol_network_intake
+                     PROPERTIES LABELS "protocol-ingress;network-intake;plugin")
+
+cmake_add_test(
+  test_protocol_network_jtt808
+  SOURCES test_protocol_network_jtt808.c protocol_network_e2e_fixture.c
+  LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost Salts::CNet Salts::TinyTest
+  DEFS
+    FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
+    FLOW_PROTOCOL_JTT808_MODULE="$<TARGET_FILE:tf_protocol_jtt808>"
+    FLOW_DURABLE_MEMORY_PLUGIN_MODULE="$<TARGET_FILE:tf_durable_memory_plugin>"
+  FOLDER "ingress/protocol/tests")
+add_dependencies(test_protocol_network_jtt808 tf_cnet_plugin tf_protocol_jtt808
+                 tf_durable_memory_plugin)
+set_tests_properties(test_protocol_network_jtt808
+                     PROPERTIES LABELS "protocol-ingress;network-intake;e2e;cnet")
+
+cmake_add_test(
+  test_protocol_network_coap
+  SOURCES test_protocol_network_coap.c protocol_network_e2e_fixture.c
+          protocol_network_coap_fixture.c
+  LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost Salts::CNet Salts::TinyTest
+  DEFS
+    FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
+    FLOW_PROTOCOL_COAP_MODULE="$<TARGET_FILE:tf_protocol_coap>"
+    FLOW_DURABLE_MEMORY_PLUGIN_MODULE="$<TARGET_FILE:tf_durable_memory_plugin>"
+  FOLDER "ingress/protocol/tests")
+add_dependencies(test_protocol_network_coap tf_cnet_plugin tf_protocol_coap
+                 tf_durable_memory_plugin)
+set_tests_properties(test_protocol_network_coap
+                     PROPERTIES LABELS "protocol-ingress;network-intake;e2e;cnet")
+
+
+if(TARGET tf_turbodb_plugin)
+  cmake_add_test(
+    test_protocol_network_jtt808_turbodb
+    SOURCES test_protocol_network_jtt808.c protocol_network_e2e_fixture.c
+    LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost TurboFlow::TurboDbAdapter
+         Salts::CNet Salts::TinyTest
+    DEFS
+      FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
+      FLOW_PROTOCOL_JTT808_MODULE="$<TARGET_FILE:tf_protocol_jtt808>"
+      FLOW_TURBODB_PLUGIN_MODULE="$<TARGET_FILE:tf_turbodb_plugin>"
+      FLOW_E2E_DURABLE_TURBODB=1
+    FOLDER "ingress/protocol/tests")
+  add_dependencies(test_protocol_network_jtt808_turbodb tf_cnet_plugin tf_protocol_jtt808
+                   tf_turbodb_plugin)
+  set_tests_properties(
+    test_protocol_network_jtt808_turbodb
+    PROPERTIES LABELS "protocol-ingress;network-intake;e2e;cnet;turbodb")
+
+  cmake_add_test(
+    test_protocol_network_coap_turbodb
+    SOURCES test_protocol_network_coap.c protocol_network_e2e_fixture.c
+            protocol_network_coap_fixture.c
+    LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost TurboFlow::TurboDbAdapter
+         Salts::CNet Salts::TinyTest
+    DEFS
+      FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
+      FLOW_PROTOCOL_COAP_MODULE="$<TARGET_FILE:tf_protocol_coap>"
+      FLOW_TURBODB_PLUGIN_MODULE="$<TARGET_FILE:tf_turbodb_plugin>"
+      FLOW_E2E_DURABLE_TURBODB=1
+    FOLDER "ingress/protocol/tests")
+  add_dependencies(test_protocol_network_coap_turbodb tf_cnet_plugin tf_protocol_coap
+                   tf_turbodb_plugin)
+  set_tests_properties(
+    test_protocol_network_coap_turbodb
+    PROPERTIES LABELS "protocol-ingress;network-intake;e2e;cnet;turbodb")
+endif()
 
 cmake_add_test(
   test_protocol_business

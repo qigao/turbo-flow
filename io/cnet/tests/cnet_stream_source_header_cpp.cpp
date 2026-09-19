@@ -13,8 +13,10 @@ extern "C" int cnet_listener_source_header_cpp_probe(void) {
   turbo_flow_cnet_listener_source_config_t config = TURBO_FLOW_CNET_LISTENER_SOURCE_CONFIG_INIT;
   turbo_flow_cnet_listener_source_snapshot_t snapshot =
       TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+  turbo_flow_cnet_listener_message_context_t context = {0};
   return config.version == TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION &&
-                 snapshot.version == TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION
+                 snapshot.version == TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION &&
+                 context.size == 0u
              ? 0
              : 1;
 }

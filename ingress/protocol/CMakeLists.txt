@@ -13,6 +13,7 @@ endif()
 
 add_subdirectory(common)
 add_subdirectory(inbox)
+add_subdirectory(network)
 
 add_library(
   tf_protocol_plugin_support STATIC

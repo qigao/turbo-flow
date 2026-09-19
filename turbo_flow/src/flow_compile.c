@@ -46,7 +46,7 @@ static int compile_validate_reject_edges(turbo_flow_t *flow) {
 
     if (!edge || edge->kind != TURBO_FLOW_EDGE_REJECT) continue;
     from = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->from_stage);
-    if (!from || from->is_source || from->is_port) {
+    if (!from || from->is_source || from->is_port || from->is_buffer) {
       return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                             "reject route source must be an executable stage");
     }
@@ -468,20 +468,20 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
                             "adapter-owner operation requires a module owner");
     }
 
-    if (!stage->is_source && !stage->is_port && provider_index < 0 &&
+    if (!stage->is_source && !stage->is_port && !stage->is_buffer && provider_index < 0 &&
         (!adapter || (!adapter->ops.consume && !adapter->async_terminal_ops.submit &&
                       !adapter->async_emit_ops.submit))) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "operation provider or adapter consume callback is not registered");
     }
-    if (!stage->is_source && !stage->is_port && provider_index < 0 && adapter &&
+    if (!stage->is_source && !stage->is_port && !stage->is_buffer && provider_index < 0 && adapter &&
         (adapter->ops.consume || adapter->async_terminal_ops.submit ||
          adapter->async_emit_ops.submit) &&
         stage->exec.kind != TURBO_FLOW_EXEC_INLINE) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "adapter-owned consume requires the inline executor");
     }
-    if (!stage->is_source && !stage->is_port && provider_index >= 0) {
+    if (!stage->is_source && !stage->is_port && !stage->is_buffer && provider_index >= 0) {
       const flow_operation_provider_registration_t *provider =
           (const flow_operation_provider_registration_t *)vec_at_const(&flow->operation_providers,
                                                                        (size_t)provider_index);
@@ -523,6 +523,7 @@ static uint32_t operation_exec_bit(turbo_flow_exec_kind_t kind) {
 
 static const char FLOW_CORE_MESSAGE_TYPE[] = "Message";
 static const char FLOW_CORE_SOURCE_OPERATION[] = "core.source";
+static const char FLOW_CORE_BUFFER_OPERATION[] = "core.buffer";
 static const char FLOW_CORE_OWNER_OPERATION[] = "core.stage.owner";
 static const char FLOW_CORE_INPUT_PORT_OPERATION[] = "core.port.input";
 static const char FLOW_CORE_OUTPUT_PORT_OPERATION[] = "core.port.output";
@@ -534,6 +535,7 @@ static const char *flow_core_operation_name(const flow_stage_plan_impl_t *stage)
     return stage->is_port_output ? FLOW_CORE_OUTPUT_PORT_OPERATION : FLOW_CORE_INPUT_PORT_OPERATION;
   }
   if (stage->is_source) return FLOW_CORE_SOURCE_OPERATION;
+  if (stage->is_buffer) return FLOW_CORE_BUFFER_OPERATION;
   return FLOW_CORE_OWNER_OPERATION;
 }
 
@@ -567,6 +569,16 @@ static void flow_resolve_core_operation(const turbo_flow_t *flow, flow_stage_pla
     operation->execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
     operation->scope.concurrency = stage->adapter_name ? TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT
                                                        : TURBO_FLOW_CONCURRENCY_INLINE_LANE;
+  } else if (stage->is_buffer) {
+    operation->flags = TURBO_FLOW_OPERATION_STAGE;
+    operation->input_domain = TURBO_FLOW_DOMAIN_DATA;
+    operation->input_type = FLOW_CORE_MESSAGE_TYPE;
+    operation->execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+    operation->scope.state = TURBO_FLOW_STATE_SCOPE_NONE;
+    operation->scope.concurrency = TURBO_FLOW_CONCURRENCY_INLINE_LANE;
+    operation->scope.authority = TURBO_FLOW_AUTHORITY_PURE;
+    operation->scope.lifetime = TURBO_FLOW_LIFETIME_DISPATCH;
+    operation->runtime.settlement = TURBO_FLOW_SETTLEMENT_COMPLETE;
   } else {
     operation->flags = TURBO_FLOW_OPERATION_STAGE;
     operation->input_domain = TURBO_FLOW_DOMAIN_DATA;
@@ -702,6 +714,7 @@ static int compile_validate_operation_runtime(turbo_flow_t *flow,
       TURBO_FLOW_SETTLEMENT_CANCELED;
   const flow_adapter_registration_t *adapter = flow_adapter_for_stage(flow, stage);
 
+  if (stage->is_buffer) return SALTS_OK;
   if (stage->is_source && runtime->deadline_ms != 0u) {
     return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                           "source operation deadline requires an adapter owner contract");
@@ -836,11 +849,11 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
         return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                               "resource primitive version is incompatible with operation contract");
       }
-    } else if (stage->resource_name) {
+    } else if (stage->resource_name && !stage->is_buffer) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "stateless operation cannot bind a resource primitive");
     }
-    if (!stage->is_source) {
+    if (!stage->is_source && !stage->is_buffer) {
       exec_bit = operation_exec_bit(stage->exec.kind);
       if (exec_bit == 0 || !(operation->execution_mask & exec_bit)) {
         return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
@@ -1242,6 +1255,8 @@ int turbo_flow_compile(turbo_flow_t *flow) {
   rc = compile_validate_source_reachability(flow);
   if (rc != SALTS_OK) return rc;
   rc = compile_validate_cycles(flow);
+  if (rc != SALTS_OK) return rc;
+  rc = flow_durable_buffer_resolve_bindings(flow);
   if (rc != SALTS_OK) return rc;
   rc = compile_validate_registrations(flow);
   if (rc != SALTS_OK) return rc;

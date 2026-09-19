@@ -1,0 +1,145 @@
+name: Protocol network intake source contract
+
+on:
+  push:
+    branches:
+      - master
+      - feat/118-real-protocol-intake
+    paths:
+      - 'ingress/protocol/**'
+      - 'io/cnet/**'
+      - 'turbo_flow/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/protocol-network-intake-source-contract.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'ingress/protocol/**'
+      - 'io/cnet/**'
+      - 'turbo_flow/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/protocol-network-intake-source-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protocol-network-intake-source-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  source-contract:
+    name: Exact-head source contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact committed source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source identity and whitespace
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --check HEAD^ HEAD
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Verify #118 source graph and forbidden legacy paths
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          required = [
+              'ingress/protocol/network/include/turbo_flow_protocol_network_intake.h',
+              'ingress/protocol/network/src/flow_protocol_network_intake_config.c',
+              'ingress/protocol/network/src/flow_protocol_network_intake_sink.c',
+              'ingress/protocol/network/src/flow_protocol_network_intake.c',
+              'ingress/protocol/tests/test_protocol_network_intake_config.c',
+              'ingress/protocol/tests/test_protocol_network_intake_core.c',
+              'ingress/protocol/tests/test_protocol_network_intake_edges.c',
+              'ingress/protocol/tests/test_protocol_network_intake.c',
+              'ingress/protocol/tests/protocol_network_e2e_fixture.c',
+              'ingress/protocol/tests/protocol_network_e2e_fixture.h',
+              'ingress/protocol/tests/test_protocol_network_jtt808.c',
+              'ingress/protocol/tests/protocol_network_coap_fixture.c',
+              'ingress/protocol/tests/test_protocol_network_coap.c',
+          ]
+          missing = [path for path in required if not Path(path).is_file()]
+          assert not missing, f'missing #118 sources: {missing}'
+
+          tests_cmake = Path('ingress/protocol/tests/CMakeLists.txt').read_text()
+          for target in (
+              'test_protocol_network_intake_config',
+              'test_protocol_network_intake_core',
+              'test_protocol_network_intake_edges',
+              'test_protocol_network_intake',
+              'test_protocol_network_jtt808',
+              'test_protocol_network_coap',
+          ):
+              assert target in tests_cmake, f'missing CMake target: {target}'
+          for source in (
+              'protocol_network_e2e_fixture.c',
+              'protocol_network_coap_fixture.c',
+              'test_protocol_network_jtt808.c',
+              'test_protocol_network_coap.c',
+          ):
+              assert source in tests_cmake, f'missing CMake source: {source}'
+
+          network_cmake = Path('ingress/protocol/network/CMakeLists.txt').read_text()
+          assert 'tf_protocol_network_intake_core' in network_cmake
+          assert 'tf_protocol_network_intake' in network_cmake
+          assert 'ALIAS TurboFlow::ProtocolNetworkIntake' in network_cmake
+
+          scan = [Path(path) for path in required]
+          forbidden = ('tf_protocol_graph', 'turbo_flow_protocol_graph')
+          placeholders = ('TODO', 'TBD', 'FIXME')
+          for path in scan:
+              text = path.read_text()
+              for token in forbidden:
+                  assert token not in text, f'legacy direct Graph token {token!r} in {path}'
+              for token in placeholders:
+                  assert token not in text, f'placeholder {token!r} in {path}'
+          PY
+
+      - name: Verify no compatibility or memory fallback was introduced in network intake
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          roots = [
+              Path('ingress/protocol/network/src'),
+              Path('ingress/protocol/network/include'),
+          ]
+          banned = (
+              'parser_compat',
+              'legacy_protocol_graph',
+              'memory_fallback',
+              'fallback_to_memory',
+          )
+          for root in roots:
+              for path in root.rglob('*'):
+                  if not path.is_file():
+                      continue
+                  text = path.read_text(errors='strict')
+                  for token in banned:
+                      assert token not in text, f'forbidden compatibility/fallback token {token!r} in {path}'
+          PY
+
+      - name: Verify committed source remained clean
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code

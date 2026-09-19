@@ -444,6 +444,7 @@ static int copy_stage_with_prefix(flow_parse_ctx_t *ctx, const flow_stage_plan_i
   stage.line = source->line;
   stage.column = source->column;
   stage.is_source = source->is_source;
+  stage.is_buffer = source->is_buffer;
   stage.is_port = source->is_port;
   stage.is_port_output = source->is_port_output;
   stage.data_strategy = source->data_strategy;
@@ -568,6 +569,38 @@ int flow_parse_add_source(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_s
                       "declarations are not allowed after the root block");
   }
   return stage_plan_add(ctx, token_view(name), 1, 0, 0, spec, name.line, name.column);
+}
+
+int flow_parse_add_buffer(flow_parse_ctx_t *ctx, flow_token_t name, flow_token_t resource) {
+  flow_stage_spec_t spec = flow_stage_spec_default();
+  flow_stage_plan_impl_t *stage;
+  int index;
+  int rc;
+
+  if (!ctx || ctx->in_stage_template || ctx->in_root_stage) {
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
+                      "buffer declarations are only allowed at flow root");
+  }
+  if (ctx->has_root_stage) {
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
+                      "declarations are not allowed after the root block");
+  }
+  rc = flow_parse_set_resource(ctx, &spec, resource);
+  if (rc != SALTS_OK) return rc;
+  rc = stage_plan_add(ctx, token_view(name), 0, 0, 0, spec, name.line, name.column);
+  if (rc != SALTS_OK) return rc;
+  index = flow_find_stage_view(ctx->flow, token_view(name));
+  if (index < 0) {
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
+                      "buffer declaration was not recorded");
+  }
+  stage = (flow_stage_plan_impl_t *)vec_at(&ctx->flow->stages, (size_t)index);
+  if (!stage) {
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
+                      "buffer declaration state is invalid");
+  }
+  stage->is_buffer = 1;
+  return SALTS_OK;
 }
 
 int flow_parse_add_stage(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec) {
@@ -1090,6 +1123,9 @@ int turbo_flow_parse_string(turbo_flow_t *flow, const char *text, size_t len) {
   int rc;
 
   if (!flow || (!text && len > 0)) return SALTS_EINVAL;
+  if (!flow_durable_buffers_idle(flow))
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                     "durable buffer claims must be settled before parse");
   if (flow->adapter_stop_retryable) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
                                      "adapter stop must succeed before parse");

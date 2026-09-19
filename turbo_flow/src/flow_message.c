@@ -7,7 +7,8 @@
 #define FLOW_MSG_PROJECTION_MAGIC UINT64_C(0x544650524f4a5631)
 
 static int flow_msg_projection_empty(const flow_msg_projection_t *projection) {
-  return projection && !projection->descriptor && !projection->value && !projection->result_value;
+  return projection && !projection->descriptor && !projection->value && !projection->result_value &&
+         !projection->has_durable_identity;
 }
 
 static turbo_flow_projection_owner_t *flow_msg_result_release_value(flow_msg_projection_t *p) {
@@ -55,6 +56,80 @@ static const flow_msg_projection_t *flow_msg_projection(const turbo_flow_msg_t *
   if (!msg || !msg->_content_handle) return NULL;
   projection = (const flow_msg_projection_t *)msg->_content_handle;
   return projection->magic == FLOW_MSG_PROJECTION_MAGIC ? projection : NULL;
+}
+
+static int flow_msg_durable_identity_validate(const turbo_flow_durable_identity_t *identity) {
+  if (!identity || identity->size != sizeof(*identity) ||
+      identity->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION) {
+    return SALTS_EINVAL;
+  }
+  if (!identity->source_id.data || identity->source_id.len == 0u ||
+      !identity->admission_id.data || identity->admission_id.len == 0u ||
+      (!identity->correlation.data && identity->correlation.len != 0u)) {
+    return SALTS_EINVAL;
+  }
+  if (identity->source_id.len > TURBO_FLOW_DURABLE_SOURCE_ID_MAX ||
+      identity->admission_id.len > TURBO_FLOW_DURABLE_ADMISSION_ID_MAX ||
+      identity->correlation.len > TURBO_FLOW_DURABLE_CORRELATION_MAX) {
+    return SALTS_ERANGE;
+  }
+  return SALTS_OK;
+}
+
+int turbo_flow_msg_set_durable_identity(turbo_flow_msg_t *msg,
+                                        const turbo_flow_durable_identity_t *identity) {
+  flow_msg_projection_t *projection;
+  int rc;
+
+  if (!msg) return SALTS_EINVAL;
+  rc = flow_msg_durable_identity_validate(identity);
+  if (rc != SALTS_OK) return rc;
+  projection = (flow_msg_projection_t *)flow_msg_projection(msg);
+  if (projection && projection->claim_active) return SALTS_EBUSY;
+  if (!projection) {
+    projection = (flow_msg_projection_t *)calloc(1, sizeof(*projection));
+    if (!projection) return SALTS_ENOMEM;
+    projection->magic = FLOW_MSG_PROJECTION_MAGIC;
+    msg->_content_handle = projection;
+  }
+
+  memcpy(projection->durable_source_id, identity->source_id.data, identity->source_id.len);
+  projection->durable_source_id[identity->source_id.len] = '\0';
+  memcpy(projection->durable_admission_id, identity->admission_id.data,
+         identity->admission_id.len);
+  projection->durable_admission_id[identity->admission_id.len] = '\0';
+  if (identity->correlation.len != 0u) {
+    memcpy(projection->durable_correlation, identity->correlation.data,
+           identity->correlation.len);
+  }
+  projection->durable_correlation[identity->correlation.len] = '\0';
+  projection->durable_source_id_len = identity->source_id.len;
+  projection->durable_admission_id_len = identity->admission_id.len;
+  projection->durable_correlation_len = identity->correlation.len;
+  projection->durable_source_sequence = identity->source_sequence;
+  projection->has_durable_identity = 1;
+  return SALTS_OK;
+}
+
+int turbo_flow_msg_durable_identity(const turbo_flow_msg_t *msg,
+                                    turbo_flow_durable_identity_t *out) {
+  const flow_msg_projection_t *projection;
+
+  if (!msg || !out || out->size != sizeof(*out) ||
+      out->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION) {
+    return SALTS_EINVAL;
+  }
+  projection = flow_msg_projection(msg);
+  if (!projection || !projection->has_durable_identity) return SALTS_ENOENT;
+
+  out->source_id = vstr_from_buf(projection->durable_source_id,
+                                 projection->durable_source_id_len);
+  out->admission_id = vstr_from_buf(projection->durable_admission_id,
+                                    projection->durable_admission_id_len);
+  out->correlation = vstr_from_buf(projection->durable_correlation,
+                                   projection->durable_correlation_len);
+  out->source_sequence = projection->durable_source_sequence;
+  return SALTS_OK;
 }
 
 static int flow_msg_descriptor_accepts_schema(const turbo_flow_content_descriptor_t *descriptor,
@@ -194,6 +269,11 @@ static int flow_msg_view_within(const vstr *view, const void *base, size_t size)
   if (data_address < base_address) return 0;
   offset = (size_t)(data_address - base_address);
   return offset <= size && view->len <= size - offset;
+}
+
+int flow_msg_has_active_result_claim(const turbo_flow_msg_t *msg) {
+  const flow_msg_projection_t *projection = flow_msg_projection(msg);
+  return projection && projection->claim_active;
 }
 
 int flow_msg_payload_validate(const turbo_flow_msg_t *msg) {
@@ -484,14 +564,24 @@ int turbo_flow_msg_result_claim(turbo_flow_msg_t *msg, turbo_flow_projection_own
   claim = (turbo_flow_result_claim_t *)calloc(1, sizeof(*claim));
   prepared = (flow_msg_projection_t *)calloc(1, sizeof(*prepared));
   if (!claim || !prepared) { free(claim); free(prepared); flow_projection_owner_release(owner); return SALTS_ENOMEM; }
-  if (source) *prepared = *source;
-  else prepared->magic = FLOW_MSG_PROJECTION_MAGIC;
+  claim->owns_original = source == NULL;
+  /* A claim must be visible even on a message without a prior projection. */
+  if (!source) {
+    source = (flow_msg_projection_t *)calloc(1, sizeof(*source));
+    if (!source) {
+      free(claim); free(prepared); flow_projection_owner_release(owner);
+      return SALTS_ENOMEM;
+    }
+    source->magic = FLOW_MSG_PROJECTION_MAGIC;
+    msg->_content_handle = source;
+  }
+  *prepared = *source;
   if (prepared->owns_descriptor) prepared->descriptor = &prepared->owned_descriptor;
   prepared->result_schema = config->schema; prepared->result_data = data;
   prepared->result_clone = config->clone; prepared->result_destroy = config->destroy;
   prepared->result_ctx = config->ctx; prepared->result_owner = owner;
   claim->msg = msg; claim->original = source; claim->prepared = prepared; claim->owner = owner;
-  if (source) source->claim_active = 1;
+  source->claim_active = 1;
   *out = claim;
   return SALTS_OK;
 }
@@ -522,6 +612,10 @@ void turbo_flow_msg_result_abort(turbo_flow_result_claim_t **io) {
   if (!io || !(claim = *io)) return;
   if (claim->original && claim->msg && claim->msg->_content_handle == claim->original)
     claim->original->claim_active = 0;
+  if (claim->owns_original && claim->msg && claim->msg->_content_handle == claim->original) {
+    claim->msg->_content_handle = NULL;
+    flow_msg_projection_destroy(claim->original, NULL);
+  }
   free(claim->prepared);
   flow_projection_owner_release(claim->owner);
   free(claim); *io = NULL;

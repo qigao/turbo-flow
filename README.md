@@ -48,7 +48,7 @@ The target data plane is:
 ```text
 Source DLL
   -> canonical protocol envelope
-  -> memory or durable Inbox
+  -> generic durable-buffer (memory or TurboDB provider)
   -> RulesForge / application graph
   -> Sink DLL
 ```
@@ -88,7 +88,7 @@ See [transport-independent business graph design](docs/architecture/transport-in
 - LwM2M
 - MQTT-SN
 
-Protocol decoders validate framing and then normalize accepted data into the canonical Inbox envelope.
+Protocol decoders validate framing and normalize accepted data into the canonical protocol envelope. Real network intake then publishes that message into the generic durable-buffer boundary; protocol ingress does not own a separate storage runtime.
 
 Connection listeners, HTTP endpoints, and network lifecycle remain owned by CNet/CHTTP-facing adapters. MQTT receive is a Source and MQTT send is a Sink; MQTT is not TurboFlow's internal message format.
 
@@ -101,8 +101,8 @@ Connection listeners, HTTP endpoints, and network lifecycle remain owned by CNet
 | `TurboFlow::Product` | Assemble Graph plus repository-owned adapters |
 | `TurboFlow::PluginHost` | Load/register versioned plugin capabilities and protect module lifetime |
 | `TurboFlow::ProtocolIngress` | Product-independent protocol codec/Source layer |
-| `TurboFlow::ProtocolIngressInbox` | Admit canonical protocol envelopes into Inbox |
-| `TurboFlow::ProtocolIngressInboxSchema` | Generated static DataBind codec/schema boundary |
+| `TurboFlow::ProtocolNetworkIntake` | Real CNet Source + protocol decode owner; decoded messages publish only through the generic durable-buffer boundary |
+| `TurboFlow::ProtocolIngressInboxSchema` | Generated static DataBind codec/schema boundary for the canonical protocol envelope; no separate storage runtime |
 | `TurboFlow::CNetAdapter` | Optional CNet Source/Sink owner |
 | `TurboFlow::CHTTPAdapter` | Optional HTTP/WebSocket Source/Sink adapter |
 | `TurboFlow::TurboDbAdapter` | Optional TurboDB provider/ORM adapter |

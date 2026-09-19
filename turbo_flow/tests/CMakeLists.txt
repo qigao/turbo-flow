@@ -90,6 +90,27 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
+  test_flow_durable_buffer
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_durable_buffer.c
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_durable_buffer PROPERTIES LABELS "graph;core" TIMEOUT 30)
+cmake_add_test(
+  test_flow_durable_admission
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_durable_admission.c
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_durable_admission PROPERTIES LABELS "graph;core" TIMEOUT 30)
+
+cmake_add_test(
+  test_flow_durable_lifecycle
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_durable_lifecycle.c
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_durable_lifecycle PROPERTIES LABELS "graph;core" TIMEOUT 30)
+
+
+cmake_add_test(
   test_flow_run
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_run.c
           ${CMAKE_CURRENT_SOURCE_DIR}/flow_run_header_cpp.cpp
@@ -150,6 +171,13 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 target_include_directories(test_flow_inbox_source PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 set_tests_properties(test_flow_inbox_source PROPERTIES LABELS "graph;core;inbox" TIMEOUT 30)
+
+cmake_add_test(
+  test_flow_inbox_driver
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_inbox_driver.c
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_inbox_driver PROPERTIES LABELS "graph;core;inbox" TIMEOUT 30)
 
 cmake_add_test(
   test_flow_expr
@@ -417,6 +445,9 @@ function(turbo_flow_add_generation_fixture target_name)
                FOLDER "turbo_flow/tests/plugin-fixtures")
 endfunction()
 
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_durable
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-durable")
 turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_capacity
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-capacity"
@@ -691,7 +722,8 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 target_compile_definitions(
   test_flow_plugin_generation
-  PRIVATE FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY="$<TARGET_FILE:test_flow_plugin_good_one>"
+  PRIVATE FLOW_PLUGIN_GENERATION_FIXTURE_DURABLE="$<TARGET_FILE:test_flow_plugin_generation_durable>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY="$<TARGET_FILE:test_flow_plugin_good_one>"
           FLOW_PLUGIN_GENERATION_FIXTURE_CAPACITY="$<TARGET_FILE:test_flow_plugin_generation_capacity>"
           FLOW_PLUGIN_GENERATION_FIXTURE_PREFLIGHT_FAIL="$<TARGET_FILE:test_flow_plugin_generation_preflight_fail>"
           FLOW_PLUGIN_GENERATION_FIXTURE_SUCCESS="$<TARGET_FILE:test_flow_plugin_generation_success>"
@@ -716,6 +748,7 @@ target_compile_definitions(
           FLOW_PLUGIN_GENERATION_FIXTURE_POLL_SMALL_DESCRIPTOR="$<TARGET_FILE:test_flow_plugin_generation_poll_small_descriptor>")
 add_dependencies(
   test_flow_plugin_generation
+  test_flow_plugin_generation_durable
   test_flow_plugin_good_one
   test_flow_plugin_generation_capacity
   test_flow_plugin_generation_preflight_fail

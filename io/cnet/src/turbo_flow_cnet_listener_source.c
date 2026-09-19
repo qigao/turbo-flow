@@ -314,7 +314,9 @@ static void listener_source_on_receive(void *user, cnet_connection connection,
                                        const cnet_receive_view *view) {
   listener_source_slot_t *slot = (listener_source_slot_t *)user;
   turbo_flow_cnet_listener_source_t *source = slot ? slot->owner : NULL;
+  turbo_flow_cnet_listener_message_context_t *message_context;
   mem_buffer_t *buffer;
+  size_t buffer_size;
   int status;
   if (!source || !slot->occupied || !listener_source_connection_equal(connection, slot->connection))
     return;
@@ -336,17 +338,29 @@ static void listener_source_on_receive(void *user, cnet_connection connection,
     listener_source_fail(source, SALTS_ERANGE, 0, "receive_counters");
     return;
   }
-  buffer = mem_get_buffer(mem_global(), view->size);
+  if (view->size > SIZE_MAX - sizeof(*message_context)) {
+    listener_source_fail(source, SALTS_ERANGE, 0, "receive_size");
+    return;
+  }
+  buffer_size = sizeof(*message_context) + view->size;
+  buffer = mem_get_buffer(mem_global(), buffer_size);
   if (!buffer) {
     listener_source_fail(source, SALTS_ENOMEM, 0, "receive_copy");
     return;
   }
-  memcpy(mem_buffer_data(buffer), view->data, view->size);
-  mem_set_used(buffer, view->size);
+  message_context = (turbo_flow_cnet_listener_message_context_t *)mem_buffer_data(buffer);
+  memset(message_context, 0, sizeof(*message_context));
+  message_context->size = TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_V1_SIZE;
+  message_context->version = TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION;
+  message_context->connection = connection;
+  memcpy(mem_buffer_data(buffer) + sizeof(*message_context), view->data, view->size);
+  mem_set_used(buffer, buffer_size);
   turbo_flow_msg_init(&source->ready_message);
   source->ready_message.id = source->next_message_id;
   source->ready_message.buffer = buffer;
-  source->ready_message.payload = vstr_from_buf(mem_buffer_const_data(buffer), view->size);
+  source->ready_message.payload =
+      vstr_from_buf(mem_buffer_const_data(buffer) + sizeof(*message_context), view->size);
+  source->ready_message.transport_context = message_context;
   if (source->has_content) {
     status = turbo_flow_msg_copy_content_descriptor(&source->ready_message, &source->content);
     if (status != SALTS_OK) {
@@ -361,6 +375,33 @@ static void listener_source_on_receive(void *user, cnet_connection connection,
   source->bytes_received += (uint64_t)view->size;
   source->ready = true;
   listener_source_wake(&source->value_waker);
+}
+
+const turbo_flow_cnet_listener_message_context_t *
+turbo_flow_cnet_listener_message_context(const turbo_flow_msg_t *message) {
+  const turbo_flow_cnet_listener_message_context_t *context;
+  const char *base;
+  uintptr_t base_address;
+  uintptr_t context_address;
+  size_t used;
+  size_t offset;
+  if (!message || !message->buffer || !message->transport_context) return NULL;
+  base = mem_buffer_const_data(message->buffer);
+  used = mem_buffer_used(message->buffer);
+  base_address = (uintptr_t)base;
+  context_address = (uintptr_t)message->transport_context;
+  if (!base || context_address < base_address) return NULL;
+  offset = (size_t)(context_address - base_address);
+  if (offset > used || used - offset < sizeof(*context)) return NULL;
+  context = (const turbo_flow_cnet_listener_message_context_t *)message->transport_context;
+  if (context->size != TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_V1_SIZE ||
+      context->version != TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_API_VERSION ||
+      context->connection.generation == 0u)
+    return NULL;
+  if (message->payload.data != base + offset + context->size ||
+      message->payload.len > used - offset - context->size)
+    return NULL;
+  return context;
 }
 
 static int listener_source_config_validate(const turbo_flow_cnet_listener_source_config_t *config,
