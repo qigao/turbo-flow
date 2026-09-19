@@ -21,7 +21,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:include>)
 
 target_link_libraries(${TARGET_NAME}
-  PUBLIC TurboFlow::Graph Salts::Core Salts::DataBind
+  PUBLIC TurboFlow::Graph Salts::Core DataBind::Runtime
   PRIVATE Salts::CsvParser)
 
 install(FILES ${TURBO_FLOW_CODEC_HEADERS} DESTINATION include)
