@@ -19,7 +19,7 @@ add_custom_command(
   DEPENDS "${_ocpp201_core_schema}"
           "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Generating DataBind 2.0 OCPP 2.0.1 Core typed bindings"
+  COMMENT "Generating DataBind 3 OCPP 2.0.1 Core typed bindings"
   VERBATIM)
 
 add_library(tf_protocol_business_ocpp201_core_schema STATIC
