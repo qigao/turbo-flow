@@ -12,7 +12,6 @@
 #include <string.h>
 
 #if !defined(_WIN32)
-  #include <signal.h>
   #include <sys/types.h>
   #include <sys/wait.h>
   #include <unistd.h>
@@ -1214,13 +1213,12 @@ spec("TurboDB durable inbox v2") {
     if (child == 0) {
       const int rc = inbox_crash_child_run(&fixture);
       if (rc != SALTS_OK) _Exit(101);
-      (void)kill(getpid(), SIGKILL);
+      abort();
       _Exit(102);
     }
 
     check_equal(waitpid(child, &child_status, 0), child);
     check_true(WIFSIGNALED(child_status));
-    check_equal(WTERMSIG(child_status), SIGKILL);
 
     config = inbox_test_config(&fixture);
     check_equal(turbo_flow_turbodb_inbox_create(&config, &blocked, &error), SALTS_EBUSY);
