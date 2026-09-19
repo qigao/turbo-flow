@@ -234,13 +234,13 @@ if(NOT stale_host_root EQUAL -1)
   message(FATAL_ERROR "presets still use SALTS_UTILS_HOST_ROOT for tbe_compiler")
 endif()
 string(FIND "${user_presets}"
-            "\"DATABIND_ROOT\": \"$env{PKG_ROOT}/salts-utils"
+            [["DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils]]
             stale_databind_profile_root)
 if(NOT stale_databind_profile_root EQUAL -1)
   message(FATAL_ERROR "presets still place DataBind under the SaltsUtils root")
 endif()
 string(FIND "${user_presets}"
-            "\"DATABIND_HOST_ROOT\": \"$env{PKG_ROOT}/salts-utils"
+            [["DATABIND_HOST_ROOT": "$env{PKG_ROOT}/salts-utils]]
             stale_databind_host_root)
 if(NOT stale_databind_host_root EQUAL -1)
   message(FATAL_ERROR "presets still source tbe_compiler from the SaltsUtils root")
