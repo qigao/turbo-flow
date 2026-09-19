@@ -139,6 +139,32 @@ typedef struct turbo_flow_durable_buffer_pressure_snapshot_s {
    TURBO_FLOW_DURABLE_PRESSURE_DISABLED, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
 
 /**
+ * Binding-lifetime throughput observation.
+ *
+ * These counters/rates begin when this TurboFlow binding is created. They do
+ * not claim to reconstruct pre-bind or cross-process timing from provider
+ * storage. Rates are fixed-point milli-events/second to keep the C ABI free of
+ * floating-point policy.
+ */
+typedef struct turbo_flow_durable_buffer_runtime_snapshot_s {
+  size_t size;
+  uint32_t version;
+  uint64_t elapsed_ns;
+  uint64_t admitted;
+  uint64_t completed;
+  uint64_t failed;
+  uint64_t retried;
+  uint64_t discarded;
+  uint64_t admitted_per_second_milli;
+  uint64_t completed_per_second_milli;
+  uint64_t failed_per_second_milli;
+} turbo_flow_durable_buffer_runtime_snapshot_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_RUNTIME_SNAPSHOT_INIT                                           \
+  {sizeof(turbo_flow_durable_buffer_runtime_snapshot_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,   \
+   0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
+
+/**
  * Bind one configured durable-buffer resource to a caller-owned Inbox provider.
  * The binding borrows `inbox`; provider ownership and lifetime remain with the caller.
  * Keep the provider alive and its handle immutable until unbind or Flow destruction/
@@ -177,6 +203,11 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_configure_pressure(
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_pressure_snapshot(
     turbo_flow_t *flow, const char *resource_name,
     turbo_flow_durable_buffer_pressure_snapshot_t *snapshot);
+
+/** Read binding-lifetime cumulative counts and fixed-point throughput rates. */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_runtime_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_runtime_snapshot_t *snapshot);
 
 /**
  * Pause new ordinary downstream claims for one named durable buffer. Admission
@@ -220,6 +251,14 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_quiesce(
  */
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_drain(
     turbo_flow_durable_buffer_binding_t *binding, uint64_t timeout_ms);
+
+/**
+ * Close one named resource to new admission and drain accepted backlog to idle
+ * under one timeout budget. This never changes provider selection and never
+ * retries failed/unknown work implicitly.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_close_and_drain(
+    turbo_flow_t *flow, const char *resource_name, uint64_t timeout_ms);
 
 /**
  * Retry only the currently retained settlement attempt for this binding.

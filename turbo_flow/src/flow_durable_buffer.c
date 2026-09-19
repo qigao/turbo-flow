@@ -311,6 +311,12 @@ int turbo_flow_durable_buffer_bind(
   atomic_init(&binding->rejected_closed, 0u);
   atomic_init(&binding->rejected_provider, 0u);
   atomic_init(&binding->rejected_message, 0u);
+  binding->runtime_started_ns = salts_hrtime();
+  binding->baseline_admitted = snapshot.admitted;
+  binding->baseline_completed = snapshot.completed;
+  binding->baseline_failed = snapshot.failed;
+  binding->baseline_retried = snapshot.retried;
+  binding->baseline_discarded = snapshot.discarded;
   binding->bound = 1;
 
   rc = turbo_flow_stl_error(vec_push(&flow->durable_buffer_bindings, &binding));
@@ -532,6 +538,20 @@ int turbo_flow_durable_buffer_drain(turbo_flow_durable_buffer_binding_t *binding
   }
 }
 
+int turbo_flow_durable_buffer_close_and_drain(
+    turbo_flow_t *flow, const char *resource_name, uint64_t timeout_ms) {
+  turbo_flow_durable_buffer_binding_t *binding;
+  const uint64_t started = salts_hrtime();
+  int rc;
+  if (!flow || !resource_name || resource_name[0] == '\0') return SALTS_EINVAL;
+  binding = flow_durable_buffer_find_binding(flow, resource_name, NULL);
+  if (!binding) return SALTS_ENOENT;
+  rc = turbo_flow_durable_buffer_quiesce(binding);
+  if (rc != SALTS_OK) return rc;
+  return turbo_flow_durable_buffer_drain(
+      binding, flow_durable_remaining_ms(started, timeout_ms));
+}
+
 int turbo_flow_durable_buffer_retry_settlement(
     turbo_flow_durable_buffer_binding_t *binding,
     turbo_flow_inbox_source_result_t *result) {
@@ -663,6 +683,58 @@ int turbo_flow_durable_buffer_pressure_snapshot(
       atomic_load_explicit(&binding->rejected_provider, memory_order_relaxed);
   observed.rejected_message =
       atomic_load_explicit(&binding->rejected_message, memory_order_relaxed);
+  *snapshot = observed;
+  return SALTS_OK;
+}
+
+static uint64_t flow_durable_rate_milli(uint64_t count, uint64_t elapsed_ns) {
+  if (count == 0u || elapsed_ns == 0u) return 0u;
+  if (count > UINT64_MAX / UINT64_C(1000000000000))
+    return UINT64_MAX;
+  return (count * UINT64_C(1000000000000)) / elapsed_ns;
+}
+
+int turbo_flow_durable_buffer_runtime_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_runtime_snapshot_t *snapshot) {
+  turbo_flow_durable_buffer_binding_t *binding;
+  turbo_flow_inbox_snapshot_t provider = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  turbo_flow_durable_buffer_runtime_snapshot_t observed =
+      TURBO_FLOW_DURABLE_BUFFER_RUNTIME_SNAPSHOT_INIT;
+  uint64_t now;
+  int rc;
+
+  if (!snapshot || snapshot->size != sizeof(*snapshot) ||
+      snapshot->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
+    return SALTS_EINVAL;
+  binding = flow_durable_buffer_find_binding(flow, resource_name, NULL);
+  if (!binding) return SALTS_ENOENT;
+  rc = flow_durable_buffer_validate_provider(binding);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
+  if (rc != SALTS_OK) return rc;
+  if (provider.admitted < binding->baseline_admitted ||
+      provider.completed < binding->baseline_completed ||
+      provider.failed < binding->baseline_failed ||
+      provider.retried < binding->baseline_retried ||
+      provider.discarded < binding->baseline_discarded)
+    return SALTS_EPROTO;
+
+  now = salts_hrtime();
+  observed.elapsed_ns = now >= binding->runtime_started_ns
+                            ? now - binding->runtime_started_ns
+                            : 0u;
+  observed.admitted = provider.admitted - binding->baseline_admitted;
+  observed.completed = provider.completed - binding->baseline_completed;
+  observed.failed = provider.failed - binding->baseline_failed;
+  observed.retried = provider.retried - binding->baseline_retried;
+  observed.discarded = provider.discarded - binding->baseline_discarded;
+  observed.admitted_per_second_milli =
+      flow_durable_rate_milli(observed.admitted, observed.elapsed_ns);
+  observed.completed_per_second_milli =
+      flow_durable_rate_milli(observed.completed, observed.elapsed_ns);
+  observed.failed_per_second_milli =
+      flow_durable_rate_milli(observed.failed, observed.elapsed_ns);
   *snapshot = observed;
   return SALTS_OK;
 }
