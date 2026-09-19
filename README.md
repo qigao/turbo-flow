@@ -1,196 +1,194 @@
 # TurboFlow
 
-TurboFlow 是基于有向 graph 的可配置数据处理器。仓库只拥有 Graph DSL、编译与执行、配置解析、
-typed projection、调度、可观测性，以及可选的边界与能力 adapter。
+**Provider-neutral graph, workflow, and durable execution infrastructure for the Salts ecosystem.**
 
-消息队列等完整产品及其控制面、业务 session、peer 和重连事实不属于本仓库。
-具体 Source/Sink provider 可依赖它们的公开客户端 SDK；Graph/Core 不反向依赖完整产品。
+TurboFlow turns Salts/CFlow execution primitives into configurable application graphs with explicit provider boundaries. It owns the Graph DSL, compilation and execution, configuration resolution, typed projection, scheduling, observability, protocol ingress, plugin hosting, and optional infrastructure adapters.
 
-`ingress/protocol` 提供独立于产品的协议 codec/Source：OCPP、JT/T 808、GB/T 32960、
-CoAP 等协议完成分帧与校验后，由协议 Inbox adapter 将规范化记录接纳到配置的 Inbox。连接监听、
-HTTP endpoint 与网络生命周期由 CNet/CHTTP 适配 owner 管理。MQTT 接收是 Source，发送是 Sink，
-不是内部消息格式。
+TurboFlow does **not** own broker products, database engines, transport implementations, or application-specific business state. Those capabilities are integrated through public provider/adapter boundaries.
 
-目标数据面为 **Source DLL → 规范 protocol envelope → 内存/数据库 Inbox → RulesForge/TurboScript 业务图 → Sink DLL**：
-相同业务数据经 HTTP/WS/socket/MQTT 进入后复用同一处理图，输出目的地由显式绑定或业务规则决定，
-不由输入协议自动推导。接收存储是各 Source 共用的能力，配置选择内存或数据库；协议 Source
-在 Inbox 拥有不可变记录时即完成，不等待或直接执行 Graph，后续由 `turbo_flow_inbox_source_t`
-独立 claim 并驱动业务图。数据库失败不回退内存。中间业务查询/存储通过引擎调用受控的 TurboDB 等能力。
-协议 ACK、图完成与业务提交分别计量；延迟 ACK 不是普通 Source/Sink 的必需能力。
-`TurboFlow::Graph` 已提供 version 2 的统一 inbox vtable 与有界内存 provider：Source 以稳定的
-`source_id + admission_id` 幂等接纳完整记录，Graph 通过唯一 claim 借用不可变记录；失败记录可
-通过 `scan_failed` 分页读取，且只有显式 retry 才重新可见。complete/discard 保留有界 tombstone，
-`scan_history` 按 record ID 枚举 completed/discarded 终态；只有显式 forget 才释放幂等身份与配额，
-因此终态或 close 后的原样 replay 仍返回原 receipt。该内存实现不提供崩溃恢复；TurboDB provider
-只接受预置的新 v2 schema，数据库错误不得触发内存 fallback。显式 takeover 将遗留 claim 标为
-`OWNER_LOST_UNKNOWN`；旧 claim 下一次 complete/fail 返回 `SALTS_ECANCELED` 并立即失效。
-`turbo_flow_inbox_source_t` 以非阻塞 `request/poll` 将已 claim 记录送入同一 CFlow Graph；Graph
-终态后才结算 Inbox。settlement 临时失败只允许显式 retry，`EALREADY` 必须通过 failed/history
-索引对账，任何路径都不会隐式重跑 Graph 或 Sink。该 driver 是执行边界，不代表协议 Source DLL
-已经接线。
-产品配置以有序 plugins: [{id, version, path}] 清单声明绝对 DLL 路径。PluginHost 只通过
-turbo_flow_plugin_get_api 取得 root vtable，并在插件 load() 前精确核验 ID/版本；任一 DLL
-失败会回滚整个新宿主，不搜索替代 DLL，也不切换静态实现。
-目标、现状与迁移风险见[协议无关业务图设计](docs/architecture/transport-independent-business-graph.md)；
-真实 Flowie/FlowMQ provider 和完整引擎 DLL 仍分别由 #115/#74/#73 跟踪。
+**Tags:** C11 · workflow · dataflow · graph · durable-execution · plugins · protocol-ingress · CFlow · RulesForge · TurboDB
 
-## 构建边界
+## Built on Salts
 
-| CMake target | 职责 |
+TurboFlow builds directly on the installed [Salts](https://github.com/qigao/salts) and [SaltsUtils](https://github.com/qigao/salts-utils) SDKs.
+
+The shared foundation provides:
+
+- **CFlow** for typed graph, reactive execution, demand/backpressure, scheduling, and lifecycle semantics.
+- **CMeta** for stable typed metadata and operation contracts.
+- **CNet** for network-facing adapters with explicit stop/drain behavior.
+- **DataBind / schema tooling** for canonical protocol envelopes and generated bindings.
+- **RulesForge** for optional rule-driven business execution.
+- **TurboDB** for optional durable storage and persistent Inbox providers.
+- **CHTTP** for HTTP/WebSocket adapter boundaries.
+
+TurboFlow keeps those capabilities provider-neutral: Graph/Core does not statically absorb product-specific implementations.
+
+## Ecosystem role
+
+```text
+Salts
+  ├── salts-utils
+  ├── salts-net
+  └── DataBind
+        ↓
+ CHTTP / TurboDB / RulesForge / Flowie
+        ↓
+      TurboFlow
+        ↓
+ products / gateways / business applications
+```
+
+TurboFlow is a **framework/application execution layer**. It composes lower-level infrastructure but keeps ownership of each external capability at its provider boundary.
+
+## Canonical data path
+
+The target data plane is:
+
+```text
+Source DLL
+  -> canonical protocol envelope
+  -> generic durable-buffer (memory or TurboDB provider)
+  -> RulesForge / application graph
+  -> Sink DLL
+```
+
+The same business payload can arrive through HTTP, WebSocket, socket, MQTT, or another protocol and then reuse the same business graph.
+
+Input transport does not implicitly choose output transport. Routing remains explicit in configuration or business rules.
+
+## Provider-neutral durable Inbox
+
+TurboFlow exposes a common Inbox boundary for memory and durable providers.
+
+Key rules:
+
+- Source admission uses stable source/admission identity.
+- Accepted records become immutable Inbox records.
+- Graph execution claims records independently from ingress.
+- Complete/discard/fail are explicit terminal transitions.
+- Durable-provider failure does **not** fall back to memory.
+- Retry is explicit.
+- Provider runtime state is not exposed as Graph identity.
+- Ownership and tombstone/history state remain bounded.
+- A provider must satisfy the same public boundary regardless of whether it is memory-backed or TurboDB-backed.
+
+The in-memory provider is intentionally not crash-durable. A TurboDB provider supplies durability through the same upper-layer contract.
+
+See [transport-independent business graph design](docs/architecture/transport-independent-business-graph.md).
+
+## Protocol ingress
+
+`ingress/protocol` contains product-independent protocol codecs and Sources, including protocol families such as:
+
+- OCPP
+- JT/T 808
+- GB/T 32960
+- CoAP
+- LwM2M
+- MQTT-SN
+
+Protocol decoders validate framing and normalize accepted data into the canonical protocol envelope. Real network intake then publishes that message into the generic durable-buffer boundary; protocol ingress does not own a separate storage runtime.
+
+Connection listeners, HTTP endpoints, and network lifecycle remain owned by CNet/CHTTP-facing adapters. MQTT receive is a Source and MQTT send is a Sink; MQTT is not TurboFlow's internal message format.
+
+## Public package targets
+
+| CMake target | Responsibility |
 | --- | --- |
-| `TurboFlow::Config` | 解析并校验产品配置，生成只读 resolved config |
-| `TurboFlow::Graph` | Graph DSL、编译、执行和通用 operation/adapter API |
-| `TurboFlow::Product` | 用 resolved config 装配 Graph 与本仓库 adapters |
-| `TurboFlow::PluginHost` | 通过统一 DLL vtable 事务注册 Product/Protocol/Business capabilities，编译 Graph generation，并以 lease 保护模块生命周期 |
-| `TurboFlow::ProtocolIngress` | 可选 protocol codec/Source，不依赖 MQTT broker |
-| `TurboFlow::ProtocolNetworkIntake` | 真实 CNet Source + protocol decode owner；decoded message 只发布到 generic durable-buffer，不拥有独立存储 runtime |
-| `TurboFlow::ProtocolIngressInboxSchema` | 生成的静态 DataBind codec；与 `turbo_flow_protocol_envelope.h`、安装的 schema/RFL/TypeScript 声明共同定义 generic durable-buffer 中唯一的 protocol envelope 布局；不提供独立存储 runtime |
-| `TurboFlow::CNetAdapter` | 可选 CNet Source/Sink owner；拥有 transport progress 与有界请求状态 |
-| `TurboFlow::CHTTPAdapter` | 可选 CHTTP client、deferred server 与 WebSocket Flow Source/Sink |
-| `TurboFlow::TurboDbAdapter` | 可选 TurboDB ORM Source 与持久 Inbox v2 provider；数据库失败不回退内存 |
+| `TurboFlow::Config` | Parse/validate product configuration and produce resolved configuration |
+| `TurboFlow::Graph` | Graph DSL, compile/execute, generic operation and adapter contracts |
+| `TurboFlow::Product` | Assemble Graph plus repository-owned adapters |
+| `TurboFlow::PluginHost` | Load/register versioned plugin capabilities and protect module lifetime |
+| `TurboFlow::ProtocolIngress` | Product-independent protocol codec/Source layer |
+| `TurboFlow::ProtocolNetworkIntake` | Real CNet Source + protocol decode owner; decoded messages publish only through the generic durable-buffer boundary |
+| `TurboFlow::ProtocolIngressInboxSchema` | Generated static DataBind codec/schema boundary for the canonical protocol envelope; no separate storage runtime |
+| `TurboFlow::CNetAdapter` | Optional CNet Source/Sink owner |
+| `TurboFlow::CHTTPAdapter` | Optional HTTP/WebSocket Source/Sink adapter |
+| `TurboFlow::TurboDbAdapter` | Optional TurboDB provider/ORM adapter |
 
-所有构建开关只在 `CMakeOptions.cmake` 声明。不得在子目录新增隐藏 option，也不得把外部产品源码、
-协议状态机或安装组件重新并入本仓库。
+TurboFlow 2.0 removed the old aggregate `TurboFlow::Flow` target and umbrella runtime assumptions. Consumers should link only the components they actually use.
 
-TurboFlow 2.0 移除了聚合 `TurboFlow::Flow`、`turbo_flow` 动态库及
-`turbo_flow_config.h` 伞头。消费者必须按所用 API 链接 `Config`、`Graph`、`Product`
-或其他明确组件，并直接包含其所属头文件。
+## Plugin host
 
-## DLL Graph generation
+External capabilities are loaded through a versioned C ABI rather than hard-coded implementation selection.
 
-Callback stage 必须在 DSL 中写出 `operation`，并通过
-`turbo_flow_register_operation()` 和 `turbo_flow_register_operation_provider()` 分别注册
-契约和实现。例如 `stage output operation consumer.discard` 绑定的是
-`consumer.discard`，不是节点名称 `output`。同一 operation 可由不同节点复用；缺少
-descriptor/provider 或省略绑定会在 compile 时失败。完整公开 API 用法见可编译的
-[安装消费示例](tests/install_chttp_plugin_consumer/main.c)；它不依赖测试 fixture 或私有 Graph。
-Source、routing port 和 adapter-owned consume 仍可使用内建契约。
+The plugin host:
 
-Gateway 的外部能力只通过 `TurboFlow::PluginHost` 加载：CNet、CHTTP、TurboDB、FlowMQ、
-RulesForge/TurboScript 与控制/Raft bridge 均注册 size/versioned 的纯 C vtable，不由 Graph 静态选择
-实现。一次 generation 先冻结 catalog snapshot，对所有 Graph 引用执行无副作用 preflight，并预留
-有界 owner 存储；全部成功后才消费 parsed Graph，按 resource、adapter 顺序 materialize 并 compile。
+1. validates plugin ID/version/capability descriptors;
+2. freezes a catalog snapshot;
+3. performs bounded preflight;
+4. materializes adapters/resources;
+5. compiles a graph generation;
+6. protects live generations with explicit leases.
 
-materialize 开始后失败会先销毁整张新 Graph，使 adapter shutdown/detach 完成，再通过 DLL owner
-vtable 逆序回收已转移对象；不会调用 legacy Product provider 兜底。插件 ABI 2.0 要求可能产生
-external-poll owner 的 DLL 在 root API 声明 `TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL`，并通过
-`turbo_flow_plugin_product_owner_publish()` 按 host 预置容量发布完整 descriptor；ABI 1.x
-插件在 load/register 前拒绝，旧短 host config、owner 布局及兼容 padding 已移除。声明
-`EXTERNAL_POLL` 的 owner
-由 Gateway 控制线程调用 `turbo_flow_plugin_generation_poll()` 推进：每轮每个 owner 至多一次，只有轮转
-首位获得该轮总等待预算，其余均为零等待；不声明者是 lifecycle-only owner。运行方以 generation lease
-包住 CFlow run 和异步 callback。退休顺序为
-owner quiesce、Graph stop、owner drain、owner shutdown、Graph destroy、owner destroy、snapshot release；
-生命周期失败保留可重试状态，但 retirement 一旦开始就不再接受 poll。DLL 在最后一个
-snapshot/lease 释放前不可卸载。
+A failed new generation is rolled back without falling back to a legacy/static implementation.
 
-## Reactive run
+DLL/module lifetime remains valid until the final generation/snapshot/lease is released.
 
-`TurboFlow::Graph` 公开基于 CFlow Publisher 的有界、按 demand 推进的 run。Publisher 必须使用
-`turbo_flow_message_type()` 返回的 managed CMeta 描述符。成功 open 后 Publisher 所有权转移给
-run；失败则仍归调用方。`NULL` Scheduler 使用 Flow 自有的有界 worker Scheduler，显式传入的
-Scheduler 借用至终态。`WAIT` 只由有效 waker 恢复，cancel/stop 会注销等待；queue full 与 closed
-分别返回 `SALTS_ENOSPC` 与 `SALTS_ESHUTDOWN`。
+## Graph execution
 
-```c
-#include <cflow/publishers.h>
-#include <turbo_flow.h>
+TurboFlow Graph uses CFlow's typed execution model.
 
-static int publish_one(turbo_flow_t *flow) {
-  turbo_flow_msg_t message;
-  cflow_publisher publisher = {0};
-  turbo_flow_run_t *run = NULL;
-  turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
+Callback stages bind explicit operation names rather than node display names. A provider must register the operation descriptor and implementation before compile succeeds.
 
-  turbo_flow_msg_init(&message);
-  message.id = 42u;
-  if (!cflow_publisher_from_array(&publisher, turbo_flow_message_type(), &message, 1u))
-    return SALTS_ENOMEM;
-  int rc = turbo_flow_run_open(flow, "input", &publisher, NULL, &run);
-  if (rc == SALTS_OK) rc = turbo_flow_run_request(run, 1u);
-  if (rc == SALTS_OK) rc = turbo_flow_run_wait(run, UINT64_MAX, &result);
-  turbo_flow_run_close(run);
-  if (cflow_publisher_valid(&publisher)) cflow_publisher_destroy(&publisher);
-  turbo_flow_msg_cleanup(&message);
-  return rc;
-}
+Reactive execution is demand-driven and bounded. Waiting resumes only through a valid waker, cancellation is explicit, and queue-full/closed states remain visible errors rather than implicit retries.
+
+## Dependency roots
+
+The build resolves dependencies from explicit installed SDK roots and fails if required roots are absent.
+
+Current required roots include:
+
+```text
+SALTS_ROOT
+SALTS_UTILS_ROOT
+RULES_FORGE_ROOT
 ```
 
-`turbo_flow_publish()` 仍是同步 facade，但其执行路径同样经过 one-value Publisher、Subscription
-和 inline Scheduler；不存在旧 native fallback。
+When the TurboDB adapter is enabled:
 
-## TurboDb ORM Source
-
-桌面 user presets 会启用 `TurboFlow::TurboDbAdapter`，并严格要求与构建类型匹配的
-`TURBODB_ROOT`。核心 `TurboFlow::Graph` 不依赖 TurboDb；不需要数据库接入的构建可显式设置
-`TURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF`，此时 CMake 不查找 `Orm`。
-
-适配器直接包装 `orm_query_open_flow()` / `orm_query_open_command_flow()` 返回的 typed CFlow
-Publisher。每次 downstream demand 只拉取一行，将 CMeta 行值绑定为 message-owned projection；
-不物化 rowset、不转 JSON，也没有旧数据库路径 fallback。`WAIT`、waker、cancel 与 terminal
-状态保持原语义。调用方提供的 `turbo_flow_data_schema_t` 及其字符串、ORM query/connection、
-row shape（以及事务版本中的 transaction）必须比 Publisher 和所有派生消息活得更久。
-
-安装后按需请求组件：
-
-```cmake
-find_package(TurboFlow 2.0 CONFIG REQUIRED COMPONENTS TurboDbAdapter)
-target_link_libraries(app PRIVATE TurboFlow::TurboDbAdapter)
+```text
+TURBODB_ROOT
 ```
 
-## CHTTP 异步阶段
+The CHTTP adapter is validated through the repository's package contract helper.
 
-`TurboFlow::CHTTPAdapter` 将 HTTP request 建模为 CFlow async `flat_map`：成功接纳后保留当前
-异步 publication，CHTTP terminal callback 再产生零或一个 owned response。一个 caller-owned
-client 独占 submit/poll/cancel 与 H1/H2 connection state；容量、protocol、TLS、retry、overall
-deadline 和 shutdown 都是显式契约，不提供旧 HTTP 实现或协议降级 fallback。使用方应在 Graph
-compile 前注册 client、start 后由一个 owner thread 调用 `turbo_flow_chttp_client_poll()`，并在
-Flow destroy/detach 后销毁 client。
+TurboFlow does not search unrelated profiles as a hidden fallback.
 
-CHTTP 来自独立的 Chttp SDK。构建和安装消费环境必须令 `HTTP_SERVICES_ROOT` 指向与当前
-Debug/Release profile 匹配的安装前缀；TurboFlow 严格从该根查找 `Chttp`，adapter 直接链接
-`CHttp::Client` 与 `CHttp::Server`。旧 `Salts::CHTTP`、`salts_chttp*.dll`、默认搜索路径和
-跨 profile 复用均不受支持。应用只通过 `TurboFlow::PluginHost` 加载 provider；Gateway 不应
-直接导入 CHTTP adapter 或任一 Chttp native DLL。
+## Build
 
-## CHTTP WebSocket 数据流
-
-`TurboFlow::CHTTPAdapter` 也可注册一个 WebSocket `SOURCE|SINK`：CHTTP 独占
-HTTP/1.1 Upgrade、WSS/TLS、RFC 8441 Extended CONNECT、subprotocol 与 CNet WebSocket
-engine；callback-borrowed frame 会复制成 message-owned Flow 输入。消息的 `type` 表达
-text/binary/ping/pong/close，版本化 transport context 保存 generation-checked CHTTP session。
-
-session/frame/byte 容量均为硬边界。Flow ingress 满时只关闭受影响 session，CHTTP command
-queue 满时保留 `SALTS_ENOBUFS`，stale 与 duplicate close 分别保留
-`SALTS_ENOENT`/`SALTS_EALREADY`。不存在 H1、明文、generic socket 或 legacy transport
-fallback。完整所有权与关闭顺序见
-[`io/chttp/ADR_CHTTP_WEBSOCKET_FLOW.md`](io/chttp/ADR_CHTTP_WEBSOCKET_FLOW.md)。
-
-## Windows 验证
+Typical Windows Release flow:
 
 ```powershell
-cmake --fresh --preset win-release-user
-cmake --build --preset win-release-user --parallel
-ctest --preset win-release-user
+cmake --preset win-release-user
+cmake --build --preset win-release-user
+ctest --preset win-release-user --output-on-failure
 cmake --build --preset install-win-release-user
 ```
 
-安装后的 `TurboFlowConfig.cmake` 导出上述 targets 以及本仓库实际构建的 adapters；不会查找或导出
-外部协议产品组件。仓库内的 install-consumer CTest 会再用各自版本化 user preset 和 manifest
-从 `$env{PKG_ROOT}/turboflow/debug|release` 查找已安装包，并分别验证组件选择、C/C++ consumer、
-Gateway/provider/adapter 依赖层次及 operation fixture；它不会用源码 build-tree package 代替
-安装证据。
+Linux uses the corresponding `linux-*` presets.
 
-Windows 原生闭包测试使用系统内置 Windows PowerShell 与其
-`Microsoft.PowerShell.Security` 模块；配置阶段会显式验证该前置条件。测试以只读方式结合
-Windows Resource Protection 与 Authenticode 区分 OS 组件、当前 profile 的 Microsoft CRT
-和普通应用 DLL，模块或 trust 查询失败时直接拒绝，不回退到仅按目录或发布者放行。
-签名非 OS 负例直接读取当前 `VsDevCmd` 的 `dumpbin` 同目录下 `msobj140.dll`，不复制 DLL。
-启用这些测试的主机必须提供该 MSVC 文件及有效的 Microsoft Corporation 签名，且
-System32/SysWOW64 中不能有同名文件抢先解析；配置阶段显式检查这些条件。工具目录必须
-属于当前 `VCToolsInstallDir`。MSVC 布局变化导致此前置条件不满足时，须更新测试主机或
-fixture 契约；这不是产品运行依赖。负例须实际报告有效签名与 `Identity=NonOS` 才通过。
+## Design principles
 
-## 形式化模型
+- **Provider-neutral boundaries.** Memory, TurboDB, CHTTP, CNet, broker, and rule providers satisfy explicit contracts.
+- **No fallback.** A failed durable/provider path does not silently switch implementation.
+- **Bounded ownership.** Admission, claims, queues, histories, plugin state, and execution state have explicit limits/lifetimes.
+- **Canonical typed envelopes.** Protocol-specific data is normalized before business execution.
+- **Transport-independent business graphs.** Business behavior is not coupled to its ingress transport.
+- **Stable identity.** Durable/application identity is not raw runtime pointer/driver state.
+- **One execution foundation.** TurboFlow reuses CFlow semantics instead of embedding a second graph scheduler/runtime.
+- **Explicit lifecycle.** Poll, drain, shutdown, retirement, and settlement are visible transitions.
 
-[形式化模型规范](docs/FORMAL_FLOW_MODEL.md) 与 [Lean 验证入口](formal/README.md) 描述核心路由、fan-in 与生命周期的抽象证明。它不是对 C 源码、编译器输出或并发内存模型的 refinement proof。
+## Related projects
+
+- [Salts](https://github.com/qigao/salts) — typed systems foundation.
+- [SaltsUtils](https://github.com/qigao/salts-utils) — parser/utility extension layer.
+- [RulesForge](https://github.com/qigao/RulesForge) — rule execution.
+- [TurboDB](https://github.com/qigao/turbodb) — durable storage/data infrastructure.
+- [CHTTP](https://github.com/qigao/chttp) — HTTP/WebSocket infrastructure.
+- [Flowie](https://github.com/qigao/flowie) — MQTT server/client infrastructure.
+
+---
+
+**Salts provides the typed execution foundation. TurboFlow composes it into provider-neutral business graphs and durable workflows.**
