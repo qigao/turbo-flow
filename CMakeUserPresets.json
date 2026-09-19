@@ -80,7 +80,7 @@
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
                 "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/debug",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
-                "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
+                "DATABIND_ROOT": "$env{PKG_ROOT}/databind/debug",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/debug",
                 "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/debug",
                 "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{DATABIND_ROOT}/bin${pathListSep}$env{RULES_FORGE_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}"
@@ -101,7 +101,7 @@
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
                 "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/release",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
-                "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "DATABIND_ROOT": "$env{PKG_ROOT}/databind/release",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/release",
                 "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/release",
                 "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{DATABIND_ROOT}/bin${pathListSep}$env{RULES_FORGE_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}"
@@ -137,7 +137,7 @@
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
                 "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/debug",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
-                "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
+                "DATABIND_ROOT": "$env{PKG_ROOT}/databind/debug",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/debug",
                 "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/debug",
                 "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{HTTP_SERVICES_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{DATABIND_ROOT}/lib${pathListSep}$env{RULES_FORGE_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
@@ -158,7 +158,7 @@
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
                 "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/release",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
-                "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "DATABIND_ROOT": "$env{PKG_ROOT}/databind/release",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge/release",
                 "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/release",
                 "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{HTTP_SERVICES_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{DATABIND_ROOT}/lib${pathListSep}$env{RULES_FORGE_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
@@ -186,8 +186,8 @@
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts-android/debug",
                 "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services-android/debug",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils-android/debug",
-                "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils-android/debug",
-                "DATABIND_HOST_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "DATABIND_ROOT": "$env{PKG_ROOT}/databind-android/debug",
+                "DATABIND_HOST_ROOT": "$env{PKG_ROOT}/databind/release",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge-android/debug"
             },
             "cacheVariables": {
@@ -202,8 +202,8 @@
                 "SALTS_ROOT": "$env{PKG_ROOT}/salts-android/release",
                 "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services-android/release",
                 "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils-android/release",
-                "DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils-android/release",
-                "DATABIND_HOST_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "DATABIND_ROOT": "$env{PKG_ROOT}/databind-android/release",
+                "DATABIND_HOST_ROOT": "$env{PKG_ROOT}/databind/release",
                 "RULES_FORGE_ROOT": "$env{PKG_ROOT}/rules_forge-android/release"
             },
             "cacheVariables": {
