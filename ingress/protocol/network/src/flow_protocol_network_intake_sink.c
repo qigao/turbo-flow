@@ -188,15 +188,15 @@ static int intake_transport_identity(flow_protocol_network_intake_sink_t *sink,
   if (sink->settings.transport_kind == FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP) {
     const turbo_flow_cnet_listener_message_context_t *context =
         turbo_flow_cnet_listener_message_context(message);
-    if (!context) return SALTS_EPROTO;
-    *slot_out = context->connection.slot;
+    if (!context || context->connection.slot == 0u) return SALTS_EPROTO;
+    *slot_out = context->connection.slot - 1u;
     *generation_out = context->connection.generation;
   } else if (sink->settings.transport_kind == FLOW_PROTOCOL_NETWORK_TRANSPORT_PACKET_UDP) {
     const turbo_flow_cnet_packet_message_context_t *context =
         turbo_flow_cnet_packet_message_context(message);
     int rc;
-    if (!context) return SALTS_EPROTO;
-    *slot_out = context->session.slot;
+    if (!context || context->session.slot == 0u) return SALTS_EPROTO;
+    *slot_out = context->session.slot - 1u;
     *generation_out = context->session.generation;
     rc = intake_packet_device_id(context, device_id, device_capacity);
     if (rc != SALTS_OK) return rc;
