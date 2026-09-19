@@ -1,6 +1,6 @@
 #include "data_bind.h"
 #include "tinytest.h"
-#include "turbo_flow_protocol_inbox.h"
+#include "turbo_flow_protocol_envelope.h"
 #include "turbo_flow_protocol_inbox_envelope.h"
 #include "turbo_flow_turbodb.h"
 
@@ -27,30 +27,6 @@ typedef struct inbox_settle_worker_s {
   turbo_flow_inbox_claim_t claim;
   int status;
 } inbox_settle_worker_t;
-
-typedef struct inbox_protocol_identity_s {
-  const char *source_id;
-  const char *admission_id;
-  uint64_t source_sequence;
-  uint64_t timestamp_ns;
-} inbox_protocol_identity_t;
-
-static int
-inbox_protocol_identity_resolve(void *ctx,
-                                const turbo_flow_protocol_inbox_identity_request_t *request,
-                                turbo_flow_protocol_inbox_identity_t *identity) {
-  const inbox_protocol_identity_t *value = (const inbox_protocol_identity_t *)ctx;
-  if (!value || !request || request->size != sizeof(*request) ||
-      request->abi_version != TURBO_FLOW_PROTOCOL_INBOX_ABI_VERSION || !request->message ||
-      !identity || identity->size != sizeof(*identity) ||
-      identity->abi_version != TURBO_FLOW_PROTOCOL_INBOX_ABI_VERSION)
-    return SALTS_EINVAL;
-  identity->source_id = vstr_from_buf(value->source_id, strlen(value->source_id));
-  identity->admission_id = vstr_from_buf(value->admission_id, strlen(value->admission_id));
-  identity->source_sequence = value->source_sequence;
-  identity->timestamp_ns = value->timestamp_ns;
-  return SALTS_OK;
-}
 
 static void inbox_complete_worker(void *arg) {
   inbox_settle_worker_t *worker = (inbox_settle_worker_t *)arg;
@@ -916,53 +892,66 @@ spec("TurboDB durable inbox v2") {
 
   it("preserves a canonical protocol envelope across explicit owner takeover") {
     static const uint8_t payload[] = {0xdeu, 0xadu};
-    static const turbo_flow_protocol_inbox_identity_ops_t identity_ops = {
-        sizeof(turbo_flow_protocol_inbox_identity_ops_t), TURBO_FLOW_PROTOCOL_INBOX_ABI_VERSION,
-        inbox_protocol_identity_resolve};
+    enum {
+      encoded_capacity =
+          TURBO_FLOW_PROTOCOL_ENVELOPE_TBE_FIXED_BYTES +
+          TURBO_FLOW_PROTOCOL_ENVELOPE_TBE_VARIABLE_FIELDS *
+              TURBO_FLOW_PROTOCOL_ENVELOPE_TBE_LENGTH_BYTES +
+          1u + 1u + 1u + 0u + sizeof(payload)
+    };
     inbox_db_fixture_t fixture;
     turbo_flow_turbodb_inbox_config_t config;
     turbo_flow_turbodb_inbox_config_t takeover;
-    inbox_protocol_identity_t identity = {"s", "a", UINT64_C(41), UINT64_C(123456789)};
-    turbo_flow_protocol_message_output_t message = TURBO_FLOW_PROTOCOL_MESSAGE_OUTPUT_INIT;
-    turbo_flow_protocol_source_admit_request_t request =
-        TURBO_FLOW_PROTOCOL_SOURCE_ADMIT_REQUEST_INIT;
-    turbo_flow_protocol_inbox_config_t adapter_config = TURBO_FLOW_PROTOCOL_INBOX_CONFIG_INIT;
-    turbo_flow_protocol_inbox_t *adapter = NULL;
+    turbo_flow_inbox_record_t record;
+    turbo_flow_inbox_receipt_t receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
     turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
     turbo_flow_inbox_t old_inbox = TURBO_FLOW_INBOX_INIT;
     turbo_flow_inbox_t recovered_inbox = TURBO_FLOW_INBOX_INIT;
+    ProtocolInboxEnvelope_builder_t builder;
     ProtocolInboxEnvelope_t envelope;
     DataBind *codec = NULL;
     orm_error_t error;
     DataBindError bind_error = DATA_BIND_ERROR_INIT;
+    uint8_t encoded[encoded_capacity];
+
+    check_true(ProtocolInboxEnvelope_builder_bind(&builder, encoded, sizeof(encoded)));
+    check_true(
+        ProtocolInboxEnvelope_envelopeVersion_set(&builder, ProtocolEnvelopeVersion_V1));
+    check_true(ProtocolInboxEnvelope_protocol_set(&builder, ProtocolKind_Coap));
+    check_true(ProtocolInboxEnvelope_direction_set(&builder, ProtocolDirection_Up));
+    check_true(ProtocolInboxEnvelope_messageType_set(&builder, 17u));
+    check_true(ProtocolInboxEnvelope_sequence_set(&builder, UINT64_C(9007199254740993)));
+    check_true(ProtocolInboxEnvelope_protocolVersion_set(&builder, "v", 1u));
+    check_true(ProtocolInboxEnvelope_deviceId_set(&builder, "d", 1u));
+    check_true(ProtocolInboxEnvelope_operation_set(&builder, "o", 1u));
+    check_true(ProtocolInboxEnvelope_correlationId_set(&builder, "", 0u));
+    check_true(ProtocolInboxEnvelope_payload_set(&builder, payload, sizeof(payload)));
+
+    turbo_flow_inbox_record_init(&record);
+    record.source_id = vstr_from_buf("s", 1u);
+    record.admission_id = vstr_from_buf("a", 1u);
+    record.source_sequence = UINT64_C(41);
+    record.timestamp_ns = UINT64_C(123456789);
+    record.message_type = 17u;
+    check_equal(turbo_flow_content_descriptor_init(
+                    &record.content, TURBO_FLOW_DOMAIN_DATA,
+                    TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA, TURBO_FLOW_DATA_ENCODING_TBE,
+                    TURBO_FLOW_PROTOCOL_ENVELOPE_MEDIA_TYPE,
+                    TURBO_FLOW_PROTOCOL_ENVELOPE_CONTENT_IDENTITY),
+                SALTS_OK);
+    check_equal(turbo_flow_content_descriptor_declare_schema(
+                    &record.content, TURBO_FLOW_PROTOCOL_ENVELOPE_SCHEMA_NAME,
+                    TURBO_FLOW_PROTOCOL_ENVELOPE_TYPE_NAME,
+                    TURBO_FLOW_PROTOCOL_ENVELOPE_SCHEMA_VERSION),
+                SALTS_OK);
+    record.payload = vstr_from_buf(encoded, sizeof(encoded));
 
     inbox_db_fixture_init(&fixture);
     inbox_db_provision(&fixture, 0);
     config = inbox_test_config(&fixture);
     check_equal(turbo_flow_turbodb_inbox_create(&config, &old_inbox, &error), SALTS_OK);
-    message.payload = (uint8_t *)payload;
-    message.payload_capacity = sizeof(payload);
-    message.payload_size = sizeof(payload);
-    message.metadata.protocol = TURBO_FLOW_PROTOCOL_COAP;
-    message.metadata.direction = TURBO_FLOW_PROTOCOL_DIRECTION_UP;
-    message.metadata.message_type = 17u;
-    message.metadata.sequence = UINT64_C(9007199254740993);
-    memcpy(message.metadata.protocol_version, "v", sizeof("v"));
-    memcpy(message.metadata.device_id, "d", sizeof("d"));
-    memcpy(message.metadata.operation, "o", sizeof("o"));
-    request.delivery_id = 1u;
-    request.session_id = 2u;
-    request.session_generation = 3u;
-    request.message = &message;
-    adapter_config.inbox = &old_inbox;
-    adapter_config.identity_ops = &identity_ops;
-    adapter_config.identity_ctx = &identity;
-    adapter_config.max_payload_bytes = sizeof(payload);
-    adapter_config.max_envelope_bytes =
-        sizeof(payload) + TURBO_FLOW_PROTOCOL_INBOX_ENVELOPE_OVERHEAD;
-    check_equal(turbo_flow_protocol_inbox_create(&adapter_config, &adapter), SALTS_OK);
-    check_equal(turbo_flow_protocol_inbox_admit(adapter, &request), SALTS_OK);
-    turbo_flow_protocol_inbox_destroy(adapter);
+    check_equal(turbo_flow_inbox_admit(&old_inbox, &record, &receipt), SALTS_OK);
+
     takeover = config;
     takeover.open_mode = TURBO_FLOW_TURBODB_INBOX_OPEN_TAKEOVER;
     takeover.expected_generation = 1u;
@@ -977,9 +966,11 @@ spec("TurboDB durable inbox v2") {
     check_equal(claim.record.content.domain, TURBO_FLOW_DOMAIN_DATA);
     check_equal(claim.record.content.profile, TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA);
     check_equal(claim.record.content.encoding, TURBO_FLOW_DATA_ENCODING_TBE);
-    check_equal(strcmp(claim.record.content.schema_name, TURBO_FLOW_PROTOCOL_INBOX_SCHEMA_NAME), 0);
-    check_equal(strcmp(claim.record.content.type_name, TURBO_FLOW_PROTOCOL_INBOX_TYPE_NAME), 0);
-    check_equal(claim.record.content.schema_version, TURBO_FLOW_PROTOCOL_INBOX_SCHEMA_VERSION);
+    check_equal(strcmp(claim.record.content.schema_name, TURBO_FLOW_PROTOCOL_ENVELOPE_SCHEMA_NAME),
+                0);
+    check_equal(strcmp(claim.record.content.type_name, TURBO_FLOW_PROTOCOL_ENVELOPE_TYPE_NAME), 0);
+    check_equal(claim.record.content.schema_version,
+                TURBO_FLOW_PROTOCOL_ENVELOPE_SCHEMA_VERSION);
     ProtocolInboxEnvelope_init(&envelope);
     check_equal(TurboFlowProtocolInbox_codec_create(&codec, &bind_error), DATA_BIND_OK);
     check_equal(ProtocolInboxEnvelope_from_bin(codec, &envelope, claim.record.payload.data,
