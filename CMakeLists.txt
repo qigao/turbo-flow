@@ -47,7 +47,7 @@ include(Sanitizers)
 include(CmakeUtils)
 
 set(_turbo_flow_required_dependency_roots
-    SALTS_ROOT SALTS_UTILS_ROOT RULES_FORGE_ROOT)
+    SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT RULES_FORGE_ROOT)
 if(TURBO_FLOW_BUILD_TURBODB_ADAPTER)
   list(APPEND _turbo_flow_required_dependency_roots TURBODB_ROOT)
 endif()
@@ -68,6 +68,23 @@ find_package(Salts CONFIG REQUIRED
              PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
 find_package(SaltsUtils CONFIG REQUIRED
              PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
+
+foreach(_turbo_flow_stale_databind_target IN ITEMS
+    Salts::DataBind Salts::DataBindCore Salts::DataBindCMeta
+    Salts::DataBindCFlow Salts::TbeSchema)
+  if(TARGET ${_turbo_flow_stale_databind_target})
+    message(FATAL_ERROR
+      "SALTS_UTILS_ROOT still owns DataBind target: ${_turbo_flow_stale_databind_target}")
+  endif()
+endforeach()
+
+find_package(DataBind 3 CONFIG REQUIRED
+             PATHS "$ENV{DATABIND_ROOT}" NO_DEFAULT_PATH)
+if(NOT TARGET Salts::DataBind OR NOT TARGET Salts::TbeSchema)
+  message(FATAL_ERROR
+    "DATABIND_ROOT does not provide the canonical DataBind base targets")
+endif()
+
 include(TurboFlowRequireCNet)
 turbo_flow_require_cnet_stop_drain_contract()
 include(TurboFlowRequireCHTTP)
@@ -95,6 +112,7 @@ if(WIN32)
   set(TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS
       "$ENV{SALTS_ROOT}"
       "$ENV{SALTS_UTILS_ROOT}"
+      "$ENV{DATABIND_ROOT}"
       "$ENV{RULES_FORGE_ROOT}")
   if(TURBO_FLOW_BUILD_TURBODB_ADAPTER)
     list(APPEND TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS "$ENV{TURBODB_ROOT}")
