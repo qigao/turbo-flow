@@ -232,6 +232,9 @@ static int protocol_network_coap_intake_open(protocol_network_e2e_fixture_t *fix
   config.decoder_adapter_name = "protocol.decode";
   config.decoded_source_name = "decoded";
   rc = turbo_flow_protocol_network_intake_create(&config, &flow, &fixture->intake, &error);
+  if (rc != SALTS_OK)
+    (void)fprintf(stderr, "coap e2e intake create rc=%d path=%s reason=%s\n",
+                  rc, error.path, error.message);
   if (flow) turbo_flow_destroy(flow);
   return rc;
 }
@@ -262,7 +265,11 @@ static int protocol_network_coap_business_open(protocol_network_e2e_fixture_t *f
                                            &generation_config, NULL,
                                            &fixture->business_generation,
                                            &fixture->business_cleanup, &error);
-  if (rc != SALTS_OK) goto fail;
+  if (rc != SALTS_OK) {
+    (void)fprintf(stderr, "coap e2e business generation rc=%d path=%s reason=%s\n",
+                  rc, error.path, error.message);
+    goto fail;
+  }
   rc = turbo_flow_start(turbo_flow_plugin_generation_flow(fixture->business_generation));
   if (rc != SALTS_OK) return rc;
   return SALTS_OK;
