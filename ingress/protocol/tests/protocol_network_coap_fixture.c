@@ -159,7 +159,7 @@ static int protocol_network_coap_yaml(protocol_network_e2e_fixture_t *fixture,
       "      scheduler_capacity: 8\n"
       "      scheduler_max_steps_per_poll: 32\n"
       "      first_message_id: 1\n"
-      "      initial_demand: 8\n"
+      "      initial_demand: 9\n"
       "      stop_timeout_ms: 1000\n"
       "  protocol.decode:\n"
       "    kind: protocol.decode\n"
