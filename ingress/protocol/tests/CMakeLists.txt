@@ -145,8 +145,10 @@ cmake_add_test(
   DEFS
     FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
     FLOW_PROTOCOL_JTT808_MODULE="$<TARGET_FILE:tf_protocol_jtt808>"
+    FLOW_DURABLE_MEMORY_PLUGIN_MODULE="$<TARGET_FILE:tf_durable_memory_plugin>"
   FOLDER "ingress/protocol/tests")
-add_dependencies(test_protocol_network_jtt808 tf_cnet_plugin tf_protocol_jtt808)
+add_dependencies(test_protocol_network_jtt808 tf_cnet_plugin tf_protocol_jtt808
+                 tf_durable_memory_plugin)
 set_tests_properties(test_protocol_network_jtt808
                      PROPERTIES LABELS "protocol-ingress;network-intake;e2e;cnet")
 
@@ -158,8 +160,10 @@ cmake_add_test(
   DEFS
     FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
     FLOW_PROTOCOL_COAP_MODULE="$<TARGET_FILE:tf_protocol_coap>"
+    FLOW_DURABLE_MEMORY_PLUGIN_MODULE="$<TARGET_FILE:tf_durable_memory_plugin>"
   FOLDER "ingress/protocol/tests")
-add_dependencies(test_protocol_network_coap tf_cnet_plugin tf_protocol_coap)
+add_dependencies(test_protocol_network_coap tf_cnet_plugin tf_protocol_coap
+                 tf_durable_memory_plugin)
 set_tests_properties(test_protocol_network_coap
                      PROPERTIES LABELS "protocol-ingress;network-intake;e2e;cnet")
 
