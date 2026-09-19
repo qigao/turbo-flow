@@ -95,14 +95,14 @@ spec("real JT/T808 TCP protocol intake") {
     protocol_network_e2e_fixture_t fixture;
     turbo_flow_protocol_network_intake_snapshot_t intake =
         TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
-    turbo_flow_inbox_snapshot_t inbox = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
     uint8_t frame[64];
     size_t frame_size;
     size_t split;
     size_t sent_before;
 
     check_equal(protocol_network_e2e_jtt808_init(&fixture, FLOW_CNET_PLUGIN_MODULE,
-                                                 FLOW_PROTOCOL_JTT808_MODULE),
+                                                 FLOW_PROTOCOL_JTT808_MODULE,
+                                                 FLOW_DURABLE_MEMORY_PLUGIN_MODULE),
                 SALTS_OK);
     check_equal(protocol_network_e2e_start(&fixture, &intake), SALTS_OK);
     check_equal(protocol_network_e2e_tcp_connect(&fixture, intake.source_endpoint,
@@ -115,8 +115,7 @@ spec("real JT/T808 TCP protocol intake") {
     sent_before = fixture.tcp.sent;
     check_equal(protocol_network_e2e_tcp_send(&fixture, frame, split), SALTS_OK);
     protocol_network_wait_first_fragment(&fixture, sent_before, &intake);
-    check_equal(turbo_flow_inbox_snapshot(&fixture.inbox, &inbox), SALTS_OK);
-    check_equal(inbox.pending_records, 0u);
+    check_equal(intake.frames_admitted, (uint64_t)0u);
 
     check_equal(protocol_network_e2e_tcp_close(&fixture, PROTOCOL_NETWORK_E2E_TIMEOUT_MS), SALTS_OK);
     check_equal(protocol_network_e2e_tcp_connect(&fixture, intake.source_endpoint,
