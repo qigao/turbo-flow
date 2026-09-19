@@ -16,7 +16,7 @@ static const char listener_yaml[] =
     "  protocol.decode:\n"
     "    kind: protocol.decode\n"
     "    config:\n"
-    "      schema_version: 1\n"
+    "      schema_version: 2\n"
     "      protocol_provider: jtt808\n"
     "      protocol_kind: jtt808\n"
     "      protocol_version: 2019-A1\n"
@@ -39,7 +39,7 @@ static const char packet_yaml[] =
     "  protocol.decode:\n"
     "    kind: protocol.decode\n"
     "    config:\n"
-    "      schema_version: 1\n"
+    "      schema_version: 2\n"
     "      protocol_provider: coap\n"
     "      protocol_kind: coap\n"
     "      protocol_version: RFC7252\n"
@@ -53,14 +53,14 @@ static const char listener_graph[] =
     "source wire adapter tcp.input\n"
     "stage decode adapter protocol.decode\n"
     "stage main {\n"
-    "  wire -> durable\n"
+    "  wire -> decode\n"
     "}\n";
 
 static const char packet_graph[] =
     "source wire adapter udp.input\n"
     "stage decode adapter protocol.decode\n"
     "stage main {\n"
-    "  wire -> durable\n"
+    "  wire -> decode\n"
     "}\n";
 
 static int replace_once(const char *input, const char *needle, const char *replacement,
@@ -217,7 +217,7 @@ spec("protocol network intake configuration") {
         "stage middle\n"
         "stage decode adapter protocol.decode\n"
         "stage main {\n"
-        "  wire -> middle -> durable\n"
+        "  wire -> middle -> decode\n"
         "}\n";
     turbo_flow_t *extra = parsed_flow(extra_graph);
     turbo_flow_t *unparsed = turbo_flow_create();
