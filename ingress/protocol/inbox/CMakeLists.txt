@@ -83,26 +83,10 @@ target_link_libraries(
   tf_protocol_envelope
   PUBLIC TurboFlow::ProtocolIngress TurboFlow::Graph tf_protocol_inbox_schema)
 
-add_library(
-  tf_protocol_inbox SHARED
-  src/flow_protocol_inbox.c
-  include/turbo_flow_protocol_inbox.h)
-cmake_config_target(
-  tf_protocol_inbox
-  ALIAS TurboFlow::ProtocolIngressInbox
-  FOLDER "ingress/protocol/inbox"
-  EXPORT_NAME ProtocolIngressInbox)
-target_compile_definitions(tf_protocol_inbox PRIVATE TURBO_FLOW_BUILD)
-target_include_directories(
-  tf_protocol_inbox
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<INSTALL_INTERFACE:include>)
-target_link_libraries(
-  tf_protocol_inbox
-  PUBLIC TurboFlow::ProtocolIngress TurboFlow::Graph
-  PRIVATE tf_protocol_envelope)
-
-install(FILES include/turbo_flow_protocol_inbox.h DESTINATION include)
+# The protocol envelope/schema remains the canonical persisted payload contract.
+# Protocol-specific Source -> Inbox runtime ownership was retired by #129; all
+# production admission now crosses the generic Graph durable-buffer boundary.
+install(FILES include/turbo_flow_protocol_envelope.h DESTINATION include)
 install(FILES "${_protocol_inbox_generated_header}" DESTINATION include)
 install(
   FILES "${_protocol_inbox_schema}"

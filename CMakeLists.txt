@@ -164,7 +164,6 @@ foreach(
      tf_turbodb_adapter
      tf_protocol
      tf_protocol_inbox_schema
-     tf_protocol_inbox
      tf_protocol_mqtt_sn
      tf_protocol_coap
      tf_protocol_lwm2m

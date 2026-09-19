@@ -75,16 +75,16 @@ static int envelope_message_validate(const turbo_flow_protocol_message_output_t 
 static int envelope_required_size(size_t payload_size, size_t protocol_version_size,
                                   size_t device_id_size, size_t operation_size,
                                   size_t correlation_id_size, size_t *out) {
-  size_t required = TURBO_FLOW_PROTOCOL_INBOX_TBE_FIXED_BYTES;
+  size_t required = TURBO_FLOW_PROTOCOL_ENVELOPE_TBE_FIXED_BYTES;
   const size_t lengths[] = {protocol_version_size, device_id_size, operation_size,
                             correlation_id_size, payload_size};
   if (!out) return SALTS_EINVAL;
-  for (size_t index = 0u; index < TURBO_FLOW_PROTOCOL_INBOX_TBE_VARIABLE_FIELDS; ++index) {
+  for (size_t index = 0u; index < TURBO_FLOW_PROTOCOL_ENVELOPE_TBE_VARIABLE_FIELDS; ++index) {
     if (lengths[index] > UINT32_MAX ||
-        required > SIZE_MAX - TURBO_FLOW_PROTOCOL_INBOX_TBE_LENGTH_BYTES ||
-        lengths[index] > SIZE_MAX - required - TURBO_FLOW_PROTOCOL_INBOX_TBE_LENGTH_BYTES)
+        required > SIZE_MAX - TURBO_FLOW_PROTOCOL_ENVELOPE_TBE_LENGTH_BYTES ||
+        lengths[index] > SIZE_MAX - required - TURBO_FLOW_PROTOCOL_ENVELOPE_TBE_LENGTH_BYTES)
       return SALTS_EMSGSIZE;
-    required += TURBO_FLOW_PROTOCOL_INBOX_TBE_LENGTH_BYTES + lengths[index];
+    required += TURBO_FLOW_PROTOCOL_ENVELOPE_TBE_LENGTH_BYTES + lengths[index];
   }
   *out = required;
   return SALTS_OK;
@@ -135,10 +135,10 @@ int flow_protocol_envelope_content_descriptor(turbo_flow_content_descriptor_t *c
   if (!content) return SALTS_EINVAL;
   rc = turbo_flow_content_descriptor_init(
       content, TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA,
-      TURBO_FLOW_DATA_ENCODING_TBE, TURBO_FLOW_PROTOCOL_INBOX_MEDIA_TYPE,
-      TURBO_FLOW_PROTOCOL_INBOX_CONTENT_IDENTITY);
+      TURBO_FLOW_DATA_ENCODING_TBE, TURBO_FLOW_PROTOCOL_ENVELOPE_MEDIA_TYPE,
+      TURBO_FLOW_PROTOCOL_ENVELOPE_CONTENT_IDENTITY);
   if (rc != SALTS_OK) return rc;
   return turbo_flow_content_descriptor_declare_schema(
-      content, TURBO_FLOW_PROTOCOL_INBOX_SCHEMA_NAME, TURBO_FLOW_PROTOCOL_INBOX_TYPE_NAME,
-      TURBO_FLOW_PROTOCOL_INBOX_SCHEMA_VERSION);
+      content, TURBO_FLOW_PROTOCOL_ENVELOPE_SCHEMA_NAME, TURBO_FLOW_PROTOCOL_ENVELOPE_TYPE_NAME,
+      TURBO_FLOW_PROTOCOL_ENVELOPE_SCHEMA_VERSION);
 }

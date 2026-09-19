@@ -12,7 +12,7 @@
 #include <turbo_flow_plugin_generation.h>
 #include <turbo_flow_plugin_operation.h>
 #include <turbo_flow_plugin_protocol.h>
-#include <turbo_flow_protocol_inbox.h>
+#include <turbo_flow_protocol_envelope.h>
 #include <turbo_flow_protocol_inbox_envelope.h>
 #include <turbo_flow_protocol_source.h>
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
@@ -49,26 +49,22 @@ static int install_inbox_source_header(void) {
              : SALTS_EPROTO;
 }
 
-static int install_protocol_source_inbox_headers(void) {
+static int install_protocol_source_envelope_headers(void) {
   turbo_flow_protocol_source_config_t source = TURBO_FLOW_PROTOCOL_SOURCE_CONFIG_INIT;
   turbo_flow_protocol_source_ops_t source_ops = TURBO_FLOW_PROTOCOL_SOURCE_OPS_INIT;
   turbo_flow_protocol_source_feed_result_t feed = TURBO_FLOW_PROTOCOL_SOURCE_FEED_RESULT_INIT;
-  turbo_flow_protocol_inbox_config_t inbox = TURBO_FLOW_PROTOCOL_INBOX_CONFIG_INIT;
-  turbo_flow_protocol_inbox_identity_ops_t identity_ops =
-      TURBO_FLOW_PROTOCOL_INBOX_IDENTITY_OPS_INIT;
   ProtocolInboxEnvelope_t envelope;
   DataBind *codec = NULL;
   DataBindError error = DATA_BIND_ERROR_INIT;
   int rc;
 
-  turbo_flow_protocol_inbox_destroy(NULL);
   if (source.size != sizeof(source) ||
       source.abi_version != TURBO_FLOW_PROTOCOL_SOURCE_ABI_VERSION ||
       source_ops.size != sizeof(source_ops) || feed.size != sizeof(feed) ||
-      inbox.size != sizeof(inbox) || inbox.abi_version != TURBO_FLOW_PROTOCOL_INBOX_ABI_VERSION ||
-      identity_ops.size != sizeof(identity_ops) ||
-      turbo_flow_protocol_source_destroy(NULL) != SALTS_OK ||
-      turbo_flow_protocol_inbox_admit(NULL, NULL) != SALTS_EINVAL)
+      TURBO_FLOW_PROTOCOL_ENVELOPE_SCHEMA_VERSION != UINT32_C(1) ||
+      strcmp(TURBO_FLOW_PROTOCOL_ENVELOPE_SCHEMA_NAME, "turbo-flow.protocol.inbox") != 0 ||
+      strcmp(TURBO_FLOW_PROTOCOL_ENVELOPE_TYPE_NAME, "ProtocolInboxEnvelope") != 0 ||
+      turbo_flow_protocol_source_destroy(NULL) != SALTS_OK)
     return SALTS_EPROTO;
   ProtocolInboxEnvelope_init(&envelope);
   rc = TurboFlowProtocolInbox_codec_create(&codec, &error);
@@ -600,7 +596,7 @@ int main(int argc, char **argv) {
   if (install_operation_binding_config() != SALTS_OK ||
       install_exact_ingress_layout() != SALTS_OK || install_inbox_contract() != SALTS_OK ||
       install_durable_recovery_api() != SALTS_OK || install_inbox_source_header() != SALTS_OK ||
-      install_protocol_source_inbox_headers() != SALTS_OK)
+      install_protocol_source_envelope_headers() != SALTS_OK)
     return 1;
   if (install_projection_owner() != SALTS_OK) return 1;
   if (argc == 2 && install_operation_runtime(argv[1]) != SALTS_OK) return 1;
