@@ -35,11 +35,9 @@ typedef struct protocol_network_e2e_fixture_s {
   turbo_flow_plugin_host_t *host;
   turbo_flow_plugin_catalog_snapshot_t *catalog;
   turbo_flow_resolved_config_t *resolved;
-  turbo_flow_inbox_t inbox;
   turbo_flow_protocol_network_intake_t *intake;
   turbo_flow_plugin_generation_t *business_generation;
   turbo_flow_plugin_generation_t *business_cleanup;
-  turbo_flow_durable_buffer_binding_t *durable_binding;
   cnet_datagram receiver;
   int receiver_initialized;
   uint16_t receiver_port;
@@ -53,9 +51,11 @@ typedef struct protocol_network_e2e_fixture_s {
 } protocol_network_e2e_fixture_t;
 
 int protocol_network_e2e_jtt808_init(protocol_network_e2e_fixture_t *fixture,
-                                     const char *cnet_module, const char *jtt808_module);
+                                     const char *cnet_module, const char *jtt808_module,
+                                     const char *durable_memory_module);
 int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
-                                   const char *cnet_module, const char *coap_module);
+                                   const char *cnet_module, const char *coap_module,
+                                   const char *durable_memory_module);
 int protocol_network_e2e_start(protocol_network_e2e_fixture_t *fixture,
                                turbo_flow_protocol_network_intake_snapshot_t *snapshot);
 int protocol_network_e2e_tcp_connect(protocol_network_e2e_fixture_t *fixture,
