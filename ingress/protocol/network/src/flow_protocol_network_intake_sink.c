@@ -510,7 +510,8 @@ static int intake_boundary_snapshot(void *ctx, turbo_flow_managed_boundary_snaps
 static int intake_downstream_buffer_valid(turbo_flow_t *flow, const char *source_name) {
   const turbo_flow_stage_plan_t *source;
   const turbo_flow_stage_plan_t *buffer;
-  const turbo_flow_edge_plan_t *selected = NULL;
+  uint32_t selected_to_stage = 0u;
+  turbo_flow_edge_kind_t selected_kind = TURBO_FLOW_EDGE_UNCONDITIONAL;
   int source_index;
   size_t outgoing = 0u;
   if (!flow || !source_name || !source_name[0] ||
@@ -524,11 +525,11 @@ static int intake_downstream_buffer_valid(turbo_flow_t *flow, const char *source
     const turbo_flow_edge_plan_t *edge = turbo_flow_edge_at(flow, index);
     if (!edge || edge->from_stage != (uint32_t)source_index) continue;
     ++outgoing;
-    selected = edge;
+    selected_to_stage = edge->to_stage;
+    selected_kind = edge->kind;
   }
-  if (outgoing != 1u || !selected || selected->kind != TURBO_FLOW_EDGE_UNCONDITIONAL)
-    return 0;
-  buffer = turbo_flow_stage_at(flow, selected->to_stage);
+  if (outgoing != 1u || selected_kind != TURBO_FLOW_EDGE_UNCONDITIONAL) return 0;
+  buffer = turbo_flow_stage_at(flow, selected_to_stage);
   return buffer && buffer->is_buffer && buffer->resource_name && buffer->resource_name[0];
 }
 
