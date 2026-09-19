@@ -10,7 +10,7 @@ TurboFlow does **not** own broker products, database engines, transport implemen
 
 ## Built on Salts
 
-TurboFlow builds directly on the installed [Salts](https://github.com/qigao/salts) and [SaltsUtils](https://github.com/qigao/salts-utils) SDKs.
+TurboFlow builds on separately owned installed SDKs: [Salts](https://github.com/qigao/salts), [SaltsUtils](https://github.com/qigao/salts-utils), and the independent DataBind package.
 
 The shared foundation provides:
 
@@ -143,6 +143,7 @@ Current required roots include:
 ```text
 SALTS_ROOT
 SALTS_UTILS_ROOT
+DATABIND_ROOT
 RULES_FORGE_ROOT
 ```
 
@@ -152,7 +153,7 @@ When the TurboDB adapter is enabled:
 TURBODB_ROOT
 ```
 
-The CHTTP adapter is validated through the repository's package contract helper.
+`DATABIND_ROOT` is the sole DataBind package root. SaltsUtils is not searched as a DataBind fallback. The CHTTP adapter is validated through the repository's package contract helper.
 
 TurboFlow does not search unrelated profiles as a hidden fallback.
 
