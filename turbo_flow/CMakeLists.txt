@@ -116,7 +116,7 @@ target_include_directories(
 
 target_link_libraries(${TARGET_NAME} PUBLIC 
   TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow Salts::CMeta RulesForge::RulesForge
-  PRIVATE Salts::DataBind Salts::JsonParser mir_static)
+  PRIVATE DataBind::Runtime Salts::JsonParser mir_static)
 
 add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
