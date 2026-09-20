@@ -7,8 +7,8 @@ args = parser.parse_args()
 
 root = Path("CMakeLists.txt")
 text = root.read_text()
-old = "set(_turbo_flow_required_dependency_roots\n    SALTS_ROOT SALTS_UTILS_ROOT RULES_FORGE_ROOT)"
-new = "set(_turbo_flow_required_dependency_roots\n    SALTS_ROOT SALTS_UTILS_ROOT)"
+old = "set(_turbo_flow_required_dependency_roots\n    SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT RULES_FORGE_ROOT)"
+new = "set(_turbo_flow_required_dependency_roots\n    SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT)"
 assert old in text
 text = text.replace(old, new, 1)
 assert "include(TurboFlowRequireCHTTP)" in text
