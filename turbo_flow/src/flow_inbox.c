@@ -298,21 +298,24 @@ static int flow_inbox_memory_admit(void *ctx, const turbo_flow_inbox_record_t *s
     size_status = SALTS_ERANGE;
   } else {
     retained_bytes = source->source_id.len + source->partition_key.len;
-    if (source->admission_id.len > SIZE_MAX - retained_bytes) {
+  }
+  if (size_status == SALTS_OK) {
+    if (source->admission_id.len > SIZE_MAX - retained_bytes)
       size_status = SALTS_ERANGE;
-    } else {
+    else
       retained_bytes += source->admission_id.len;
-    }
-    if (size_status == SALTS_OK && source->correlation.len > SIZE_MAX - retained_bytes) {
+  }
+  if (size_status == SALTS_OK) {
+    if (source->correlation.len > SIZE_MAX - retained_bytes)
       size_status = SALTS_ERANGE;
-    } else {
+    else
       retained_bytes += source->correlation.len;
-      if (source->payload.len > SIZE_MAX - retained_bytes) {
-        size_status = SALTS_ERANGE;
-      } else {
-        retained_bytes += source->payload.len;
-      }
-    }
+  }
+  if (size_status == SALTS_OK) {
+    if (source->payload.len > SIZE_MAX - retained_bytes)
+      size_status = SALTS_ERANGE;
+    else
+      retained_bytes += source->payload.len;
   }
 
   salts_mutex_lock(&memory->mutex);
