@@ -35,7 +35,7 @@ concurrency:
 env:
   EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   VCPKG_COMMIT: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_COMMIT: 2804c2eb809fed4cb89f917f0a8cd00f482abb64
+  SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae
   SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
