@@ -220,6 +220,98 @@ static void progress_until_settled(lifecycle_fixture_t *f, uint64_t completed) {
   check_equal(snapshot(f).completed, completed);
 }
 spec("durable buffer lifecycle") {
+  it("keeps global ordering single-owner even with a larger configured worker set") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_drain_config_t config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    turbo_flow_durable_buffer_drain_snapshot_t observed =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_SNAPSHOT_INIT;
+    open_fixture(&f, 1);
+
+    config.ordering = TURBO_FLOW_DURABLE_ORDER_GLOBAL;
+    config.workers = 3u;
+    config.max_in_flight = 3u;
+    config.batch_claim = 3u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_OK);
+    publish(&f);
+    publish(&f);
+
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 1u; ++i)
+      salts_sleep_ms(1u);
+    check_equal(atomic_load(&f.sinks), (size_t)1u);
+    check_equal(snapshot(&f).in_flight_claims, (size_t)1u);
+    check_equal(snapshot(&f).pending_records, (size_t)1u);
+    check_equal(turbo_flow_durable_buffer_drain_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.workers, (size_t)3u);
+    check_equal(observed.effective_workers, (size_t)1u);
+    check_equal(observed.active_workers, (size_t)1u);
+
+    check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    check_equal(snapshot(&f).completed, UINT64_C(1));
+    check_equal(snapshot(&f).in_flight_claims, (size_t)0u);
+    check_equal(snapshot(&f).pending_records, (size_t)1u);
+    check_equal(atomic_load(&f.sinks), (size_t)1u);
+
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 2u; ++i)
+      salts_sleep_ms(1u);
+    check_equal(atomic_load(&f.sinks), (size_t)2u);
+    check_equal(snapshot(&f).in_flight_claims, (size_t)1u);
+    check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_OK, NULL), SALTS_OK);
+    progress_until_settled(&f, 2u);
+    close_fixture(&f);
+  }
+
+  it("absorbs a partition burst without exceeding bounded live claims") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_drain_config_t config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    const size_t record_count = 12u;
+    open_fixture_mode(&f, 1, TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED);
+
+    config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
+    config.partition_by = TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+    config.workers = 2u;
+    config.max_in_flight = 2u;
+    config.batch_claim = 2u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_OK);
+
+    for (size_t i = 0u; i < record_count; ++i) {
+      char source_id[32];
+      char admission_id[32];
+      (void)snprintf(source_id, sizeof(source_id), "burst-%zu", i);
+      (void)snprintf(admission_id, sizeof(admission_id), "item-%zu", i);
+      publish_source(&f, source_id, admission_id, (uint64_t)(i + 1u));
+    }
+
+    for (size_t pass = 0u; pass < 1000u && snapshot(&f).completed < record_count; ++pass) {
+      turbo_flow_inbox_snapshot_t current;
+      if (f.terminal._impl)
+        check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
+      if (f.terminal2._impl)
+        check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_OK, NULL), SALTS_OK);
+      check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+      current = snapshot(&f);
+      check(current.in_flight_claims <= config.max_in_flight);
+      check(current.records <= record_count);
+      salts_sleep_ms(1u);
+    }
+    if (f.terminal._impl)
+      check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
+    if (f.terminal2._impl)
+      check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_OK, NULL), SALTS_OK);
+    progress_until_settled(&f, record_count);
+    check_equal(atomic_load(&f.sinks), record_count);
+    check_equal(snapshot(&f).pending_records, (size_t)0u);
+    check_equal(snapshot(&f).in_flight_claims, (size_t)0u);
+    close_fixture(&f);
+  }
+
   it("configures bounded partition workers and exposes scheduler state") {
     lifecycle_fixture_t f;
     turbo_flow_durable_buffer_drain_config_t config =
