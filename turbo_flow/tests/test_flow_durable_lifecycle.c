@@ -117,9 +117,9 @@ static int submit(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *
                   const turbo_flow_msg_t *msg, turbo_flow_async_terminal_claim_t *claim) {
   lifecycle_fixture_t *f = ctx;
   (void)flow; (void)stage; (void)msg;
-  int rc = turbo_flow_async_terminal_claim_move(&f->terminal, claim);
-  if (rc == SALTS_EBUSY)
-    rc = turbo_flow_async_terminal_claim_move(&f->terminal2, claim);
+  turbo_flow_async_terminal_claim_t *destination =
+      f->terminal._impl ? &f->terminal2 : &f->terminal;
+  int rc = turbo_flow_async_terminal_claim_move(destination, claim);
   if (rc == SALTS_OK) ++f->sinks;
   return rc;
 }
