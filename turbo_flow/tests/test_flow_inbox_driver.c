@@ -25,6 +25,7 @@ static turbo_flow_inbox_record_t driver_record(const char *admission, const char
   turbo_flow_inbox_record_t record;
   turbo_flow_inbox_record_init(&record);
   record.source_id = vstr_from_buf(source, sizeof(source) - 1u);
+  record.partition_key = record.source_id;
   record.admission_id = vstr_from_buf(admission, strlen(admission));
   record.source_sequence = 41u;
   record.timestamp_ns = 9001u;
