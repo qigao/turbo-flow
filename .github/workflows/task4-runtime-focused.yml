@@ -272,35 +272,3 @@ jobs:
             ${{ runner.temp }}/task4-runtime-evidence/
             build/task4-runtime/CMakeCache.txt
             build/task4-runtime-tsan/CMakeCache.txt
-        run: |
-          set -euxo pipefail
-          cmake --install build/task4-runtime --prefix "$RUNNER_TEMP/durable-memory-install" --component DurableMemory 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/install-memory.log"
-          installed_plugin="$RUNNER_TEMP/durable-memory-install/lib/libtf_durable_memory_plugin.so"
-          test -f "$installed_plugin"
-          sha256sum "$installed_plugin" | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-sha256.txt"
-          cmake -E env \
-            "TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH=$installed_plugin" \
-            "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/task4-runtime/bin:/opt/salts/debug/lib:/opt/salts-utils/debug/lib:/opt/databind/debug/lib" \
-            "$GITHUB_WORKSPACE/build/task4-runtime/bin/test_flow_durable_memory_plugin" \
-            2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-test.log"
-          cp build/task4-runtime/install_manifest_DurableMemory.txt "$RUNNER_TEMP/task4-runtime-evidence/"
-
-      - name: Verify committed source remained untouched
-        if: always()
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-          test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt)$' || true)"
-          git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable
-
-      - name: Upload Task 4 evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: task4-durable-buffer-${{ github.run_id }}-${{ github.run_attempt }}
-          retention-days: 14
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/task4-runtime-evidence/
-            build/task4-runtime/CMakeCache.txt
