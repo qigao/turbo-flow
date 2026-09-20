@@ -438,8 +438,8 @@ spec("Graph durable admission boundaries") {
   }
 
   it("enforces binding, record and retained byte limits at the exact bound") {
-    /* src(3) + admission(1) + correlation(4) + payload(4) = 12 variable bytes. */
-    enum { RECORD_BYTES = 12 };
+    /* src(3) + partition_key(3) + admission(1) + correlation(4) + payload(4) = 15 bytes. */
+    enum { RECORD_BYTES = 15 };
     for (int bound = 0; bound < 3; ++bound) {
       admission_fixture_t f; turbo_flow_msg_t msg;
       turbo_flow_inbox_memory_config_t limits = turbo_flow_inbox_memory_config_default();
