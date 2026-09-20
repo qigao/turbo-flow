@@ -58,6 +58,8 @@ typedef struct flow_inbox_memory_s {
   bool claim_token_exhausted;
 } flow_inbox_memory_t;
 
+static int flow_inbox_view_equal(vstr left, vstr right);
+
 static int flow_inbox_handle_valid(const turbo_flow_inbox_t *inbox) {
   const turbo_flow_inbox_ops_v2_t *ops;
   if (!inbox || inbox->size != sizeof(*inbox) || inbox->version != TURBO_FLOW_INBOX_API_VERSION ||
