@@ -300,6 +300,8 @@ spec("durable buffer lifecycle") {
     check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
     check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_OK, NULL), SALTS_OK);
     progress_until_settled(&f, 2u);
+    for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 3u; ++i)
+      salts_sleep_ms(1u);
     check_equal(atomic_load(&f.sinks), (size_t)3u);
     check_equal(snapshot(&f).in_flight_claims, (size_t)1u);
     check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
