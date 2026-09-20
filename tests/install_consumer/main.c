@@ -32,7 +32,15 @@ static int install_durable_recovery_api(void) {
   int (*reconcile_settlement)(turbo_flow_durable_buffer_binding_t *,
                               turbo_flow_inbox_source_result_t *) =
       turbo_flow_durable_buffer_reconcile_settlement;
-  return scan_failed && retry_failed && discard_failed && retry_settlement && reconcile_settlement
+  int (*latency_snapshot)(turbo_flow_t *, const char *,
+                          turbo_flow_durable_buffer_latency_snapshot_t *) =
+      turbo_flow_durable_buffer_latency_snapshot;
+  turbo_flow_durable_buffer_latency_snapshot_t latency =
+      TURBO_FLOW_DURABLE_BUFFER_LATENCY_SNAPSHOT_INIT;
+  return scan_failed && retry_failed && discard_failed && retry_settlement &&
+                 reconcile_settlement && latency_snapshot &&
+                 latency.size == sizeof(latency) &&
+                 latency.version == TURBO_FLOW_DURABLE_BUFFER_API_VERSION
              ? SALTS_OK
              : SALTS_EPROTO;
 }
