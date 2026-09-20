@@ -56,6 +56,115 @@ typedef struct turbo_flow_durable_buffer_binding_config_s {
    TURBO_FLOW_DURABLE_BUFFER_DEFAULT_MAX_MESSAGE_BYTES}
 
 /**
+ * Provider-neutral observation for one named durable-buffer resource.
+ *
+ * Storage counters are copied from the selected Inbox provider. Driver fields
+ * describe only TurboFlow-owned downstream progress and never expose provider
+ * handles/cursors. The snapshot is bounded and read-only.
+ */
+typedef struct turbo_flow_durable_buffer_snapshot_s {
+  size_t size;
+  uint32_t version;
+  uint64_t provider_generation;
+  int accepting;
+  int drain_paused;
+  size_t records;
+  size_t history_records;
+  size_t pending_records;
+  size_t failed_records;
+  size_t in_flight_claims;
+  size_t retained_bytes;
+  uint64_t admitted;
+  uint64_t completed;
+  uint64_t failed;
+  uint64_t retried;
+  uint64_t discarded;
+  turbo_flow_inbox_source_result_state_t driver_state;
+  uint64_t active_record_id;
+  int graph_status;
+  int settlement_status;
+} turbo_flow_durable_buffer_snapshot_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT                                                   \
+  {sizeof(turbo_flow_durable_buffer_snapshot_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,            \
+   0u, 0, 0, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,                                       \
+   TURBO_FLOW_INBOX_SOURCE_EMPTY, 0u, SALTS_OK, SALTS_OK}
+
+typedef enum turbo_flow_durable_buffer_pressure_state_e {
+  TURBO_FLOW_DURABLE_PRESSURE_DISABLED = 0,
+  TURBO_FLOW_DURABLE_PRESSURE_LOW = 1,
+  TURBO_FLOW_DURABLE_PRESSURE_NORMAL = 2,
+  TURBO_FLOW_DURABLE_PRESSURE_HIGH = 3
+} turbo_flow_durable_buffer_pressure_state_t;
+
+/**
+ * Resource-local pressure thresholds. Zero high threshold disables that dimension.
+ * At least one high threshold must be enabled. Low must be strictly below high.
+ */
+typedef struct turbo_flow_durable_buffer_pressure_config_s {
+  size_t size;
+  uint32_t version;
+  size_t high_records;
+  size_t low_records;
+  size_t high_retained_bytes;
+  size_t low_retained_bytes;
+} turbo_flow_durable_buffer_pressure_config_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_PRESSURE_CONFIG_INIT                                            \
+  {sizeof(turbo_flow_durable_buffer_pressure_config_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,    \
+   0u, 0u, 0u, 0u}
+
+/**
+ * Provider-neutral pressure and admission-rejection observation.
+ *
+ * Pressure is derived only from retained provider records/bytes plus the explicit
+ * thresholds above. Rejection counters are monotonic for the lifetime of one binding.
+ */
+typedef struct turbo_flow_durable_buffer_pressure_snapshot_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_durable_buffer_pressure_state_t state;
+  size_t high_records;
+  size_t low_records;
+  size_t high_retained_bytes;
+  size_t low_retained_bytes;
+  uint64_t rejected_backpressure;
+  uint64_t rejected_closed;
+  uint64_t rejected_provider;
+  uint64_t rejected_message;
+} turbo_flow_durable_buffer_pressure_snapshot_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_PRESSURE_SNAPSHOT_INIT                                          \
+  {sizeof(turbo_flow_durable_buffer_pressure_snapshot_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,  \
+   TURBO_FLOW_DURABLE_PRESSURE_DISABLED, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
+
+/**
+ * Binding-lifetime throughput observation.
+ *
+ * These counters/rates begin when this TurboFlow binding is created. They do
+ * not claim to reconstruct pre-bind or cross-process timing from provider
+ * storage. Rates are fixed-point milli-events/second to keep the C ABI free of
+ * floating-point policy.
+ */
+typedef struct turbo_flow_durable_buffer_runtime_snapshot_s {
+  size_t size;
+  uint32_t version;
+  uint64_t elapsed_ns;
+  uint64_t admitted;
+  uint64_t completed;
+  uint64_t failed;
+  uint64_t retried;
+  uint64_t discarded;
+  uint64_t admitted_per_second_milli;
+  uint64_t completed_per_second_milli;
+  uint64_t failed_per_second_milli;
+} turbo_flow_durable_buffer_runtime_snapshot_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_RUNTIME_SNAPSHOT_INIT                                           \
+  {sizeof(turbo_flow_durable_buffer_runtime_snapshot_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,   \
+   0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
+
+/**
  * Bind one configured durable-buffer resource to a caller-owned Inbox provider.
  * The binding borrows `inbox`; provider ownership and lifetime remain with the caller.
  * Keep the provider alive and its handle immutable until unbind or Flow destruction/
@@ -73,6 +182,45 @@ typedef struct turbo_flow_durable_buffer_binding_config_s {
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_bind(
     turbo_flow_t *flow, const turbo_flow_durable_buffer_binding_config_t *config,
     turbo_flow_durable_buffer_binding_t **out);
+
+/**
+ * Snapshot one named durable-buffer resource without advancing provider or Graph
+ * state. The output must be initialized with TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_snapshot_t *snapshot);
+
+/**
+ * Configure resource-local high/low pressure thresholds.
+ * Caller serializes this operator action with admission/lifecycle calls.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_configure_pressure(
+    turbo_flow_t *flow, const char *resource_name,
+    const turbo_flow_durable_buffer_pressure_config_t *config);
+
+/** Read pressure state and monotonic admission rejection counters. */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_pressure_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_pressure_snapshot_t *snapshot);
+
+/** Read binding-lifetime cumulative counts and fixed-point throughput rates. */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_runtime_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_runtime_snapshot_t *snapshot);
+
+/**
+ * Pause new ordinary downstream claims for one named durable buffer. Admission
+ * remains unchanged and an already-owned run may still be polled/settled.
+ * Explicit turbo_flow_durable_buffer_drain() is an operator action and may still
+ * drain accepted backlog while this control is paused.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_pause_drain(
+    turbo_flow_t *flow, const char *resource_name);
+
+/** Resume ordinary downstream claims after pause_drain(). */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_resume_drain(
+    turbo_flow_t *flow, const char *resource_name);
 
 /**
  * Progress at most one claim without blocking. Empty storage is success. Calls on
@@ -103,6 +251,14 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_quiesce(
  */
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_drain(
     turbo_flow_durable_buffer_binding_t *binding, uint64_t timeout_ms);
+
+/**
+ * Close one named resource to new admission and drain accepted backlog to idle
+ * under one timeout budget. This never changes provider selection and never
+ * retries failed/unknown work implicitly.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_close_and_drain(
+    turbo_flow_t *flow, const char *resource_name, uint64_t timeout_ms);
 
 /**
  * Retry only the currently retained settlement attempt for this binding.

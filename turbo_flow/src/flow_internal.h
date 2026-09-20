@@ -472,6 +472,18 @@ struct turbo_flow_durable_buffer_binding_s {
   char admission_namespace[37]; /* formatted Salts UUID, runtime binding metadata */
   size_t stage_index;
   atomic_uint_fast64_t next_sequence;
+  turbo_flow_durable_buffer_pressure_config_t pressure;
+  atomic_uint_fast64_t rejected_backpressure;
+  atomic_uint_fast64_t rejected_closed;
+  atomic_uint_fast64_t rejected_provider;
+  atomic_uint_fast64_t rejected_message;
+  uint64_t runtime_started_ns;
+  uint64_t baseline_admitted;
+  uint64_t baseline_completed;
+  uint64_t baseline_failed;
+  uint64_t baseline_retried;
+  uint64_t baseline_discarded;
+  int drain_paused;
   int bound;
 };
 

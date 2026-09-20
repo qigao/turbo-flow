@@ -48,6 +48,39 @@ static int flow_durable_buffer_validate_provider(const turbo_flow_durable_buffer
   return snapshot.generation == binding->provider_generation ? SALTS_OK : SALTS_ECANCELED;
 }
 
+static void flow_durable_buffer_count_rejection(
+    turbo_flow_durable_buffer_binding_t *binding, int status, int provider_admission) {
+  atomic_uint_fast64_t *counter;
+  if (!binding || status == SALTS_OK) return;
+  if (!provider_admission) {
+    counter = &binding->rejected_message;
+  } else if (status == SALTS_ENOSPC) {
+    counter = &binding->rejected_backpressure;
+  } else if (status == SALTS_ESHUTDOWN) {
+    counter = &binding->rejected_closed;
+  } else {
+    counter = &binding->rejected_provider;
+  }
+  (void)atomic_fetch_add_explicit(counter, UINT64_C(1), memory_order_relaxed);
+}
+
+static turbo_flow_durable_buffer_pressure_state_t flow_durable_buffer_pressure_state(
+    const turbo_flow_durable_buffer_pressure_config_t *config,
+    const turbo_flow_inbox_snapshot_t *provider) {
+  int low = 1;
+  if (!config || !provider ||
+      (config->high_records == 0u && config->high_retained_bytes == 0u))
+    return TURBO_FLOW_DURABLE_PRESSURE_DISABLED;
+  if ((config->high_records != 0u && provider->records >= config->high_records) ||
+      (config->high_retained_bytes != 0u &&
+       provider->retained_bytes >= config->high_retained_bytes))
+    return TURBO_FLOW_DURABLE_PRESSURE_HIGH;
+  if (config->high_records != 0u && provider->records > config->low_records) low = 0;
+  if (config->high_retained_bytes != 0u &&
+      provider->retained_bytes > config->low_retained_bytes) low = 0;
+  return low ? TURBO_FLOW_DURABLE_PRESSURE_LOW : TURBO_FLOW_DURABLE_PRESSURE_NORMAL;
+}
+
 int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow) {
   if (!flow) return SALTS_EINVAL;
   if (!flow_durable_buffers_idle(flow)) return SALTS_EBUSY;
@@ -272,6 +305,18 @@ int turbo_flow_durable_buffer_bind(
   binding->provider_generation = snapshot.generation;
   binding->stage_index = SIZE_MAX;
   atomic_init(&binding->next_sequence, 0u);
+  binding->pressure =
+      (turbo_flow_durable_buffer_pressure_config_t)TURBO_FLOW_DURABLE_BUFFER_PRESSURE_CONFIG_INIT;
+  atomic_init(&binding->rejected_backpressure, 0u);
+  atomic_init(&binding->rejected_closed, 0u);
+  atomic_init(&binding->rejected_provider, 0u);
+  atomic_init(&binding->rejected_message, 0u);
+  binding->runtime_started_ns = salts_hrtime();
+  binding->baseline_admitted = snapshot.admitted;
+  binding->baseline_completed = snapshot.completed;
+  binding->baseline_failed = snapshot.failed;
+  binding->baseline_retried = snapshot.retried;
+  binding->baseline_discarded = snapshot.discarded;
   binding->bound = 1;
 
   rc = turbo_flow_stl_error(vec_push(&flow->durable_buffer_bindings, &binding));
@@ -357,6 +402,7 @@ int flow_durable_buffer_admit_stage(turbo_flow_t *flow, uint32_t stage_index,
 
   rc = flow_durable_buffer_validate_provider(binding);
   if (rc != SALTS_OK) {
+    flow_durable_buffer_count_rejection(binding, rc, 1);
     return flow_set_error_keep_state(flow, rc, stage->line, stage->column,
                                      "durable buffer provider binding is stale or unavailable");
   }
@@ -364,11 +410,13 @@ int flow_durable_buffer_admit_stage(turbo_flow_t *flow, uint32_t stage_index,
   rc = flow_durable_buffer_encode_record(binding, stage, message, &record, generated_admission,
                                          sizeof(generated_admission));
   if (rc != SALTS_OK) {
+    flow_durable_buffer_count_rejection(binding, rc, 0);
     return flow_set_error_keep_state(flow, rc, stage->line, stage->column,
                                      "message cannot cross durable buffer boundary");
   }
   rc = turbo_flow_inbox_admit(binding->inbox, &record, &receipt);
   if (rc != SALTS_OK) {
+    flow_durable_buffer_count_rejection(binding, rc, 1);
     return flow_set_error_keep_state(flow, rc, stage->line, stage->column,
                                      "durable buffer provider admission failed");
   }
@@ -405,6 +453,7 @@ static int flow_durable_buffer_progress_internal(turbo_flow_durable_buffer_bindi
       return flow_inbox_driver_poll(binding->driver, &result);
   }
   if (binding->flow->state != TURBO_FLOW_STATE_STARTED) return SALTS_ESHUTDOWN;
+  if (!draining && binding->drain_paused) return SALTS_OK;
   if (!binding->driver) {
     flow_inbox_driver_config_t config = {binding->inbox, binding->flow,
       FLOW_INBOX_DRIVER_BUFFER, (uint32_t)binding->stage_index, NULL, binding->max_message_bytes};
@@ -489,6 +538,20 @@ int turbo_flow_durable_buffer_drain(turbo_flow_durable_buffer_binding_t *binding
   }
 }
 
+int turbo_flow_durable_buffer_close_and_drain(
+    turbo_flow_t *flow, const char *resource_name, uint64_t timeout_ms) {
+  turbo_flow_durable_buffer_binding_t *binding;
+  const uint64_t started = salts_hrtime();
+  int rc;
+  if (!flow || !resource_name || resource_name[0] == '\0') return SALTS_EINVAL;
+  binding = flow_durable_buffer_find_binding(flow, resource_name, NULL);
+  if (!binding) return SALTS_ENOENT;
+  rc = turbo_flow_durable_buffer_quiesce(binding);
+  if (rc != SALTS_OK) return rc;
+  return turbo_flow_durable_buffer_drain(
+      binding, flow_durable_remaining_ms(started, timeout_ms));
+}
+
 int turbo_flow_durable_buffer_retry_settlement(
     turbo_flow_durable_buffer_binding_t *binding,
     turbo_flow_inbox_source_result_t *result) {
@@ -523,6 +586,172 @@ static int flow_durable_buffer_operator_binding(
   rc = flow_durable_buffer_validate_provider(binding);
   if (rc != SALTS_OK) return rc;
   *binding_out = binding;
+  return SALTS_OK;
+}
+
+int turbo_flow_durable_buffer_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_snapshot_t *snapshot) {
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+  turbo_flow_inbox_snapshot_t provider = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  turbo_flow_inbox_source_result_t driver = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+  turbo_flow_durable_buffer_snapshot_t observed = TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT;
+  int rc;
+
+  if (!snapshot || snapshot->size != sizeof(*snapshot) ||
+      snapshot->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
+    return SALTS_EINVAL;
+  rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
+  if (rc != SALTS_OK) return rc;
+  if (binding->driver) {
+    rc = flow_inbox_driver_status(binding->driver, &driver);
+    if (rc != SALTS_OK) return rc;
+  }
+
+  observed.provider_generation = provider.generation;
+  observed.accepting = provider.accepting;
+  observed.drain_paused = binding->drain_paused;
+  observed.records = provider.records;
+  observed.history_records = provider.history_records;
+  observed.pending_records = provider.pending_records;
+  observed.failed_records = provider.failed_records;
+  observed.in_flight_claims = provider.in_flight_claims;
+  observed.retained_bytes = provider.retained_bytes;
+  observed.admitted = provider.admitted;
+  observed.completed = provider.completed;
+  observed.failed = provider.failed;
+  observed.retried = provider.retried;
+  observed.discarded = provider.discarded;
+  observed.driver_state = driver.state;
+  observed.active_record_id = driver.record_id;
+  observed.graph_status = driver.graph_status;
+  observed.settlement_status = driver.settlement_status;
+  *snapshot = observed;
+  return SALTS_OK;
+}
+
+int turbo_flow_durable_buffer_configure_pressure(
+    turbo_flow_t *flow, const char *resource_name,
+    const turbo_flow_durable_buffer_pressure_config_t *config) {
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+  int rc;
+  if (!config || config->size != sizeof(*config) ||
+      config->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION ||
+      (config->high_records == 0u && config->high_retained_bytes == 0u) ||
+      (config->high_records == 0u && config->low_records != 0u) ||
+      (config->high_retained_bytes == 0u && config->low_retained_bytes != 0u) ||
+      (config->high_records != 0u && config->low_records >= config->high_records) ||
+      (config->high_retained_bytes != 0u &&
+       config->low_retained_bytes >= config->high_retained_bytes))
+    return SALTS_EINVAL;
+  rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
+  if (rc != SALTS_OK) return rc;
+  binding->pressure = *config;
+  binding->pressure.size = sizeof(binding->pressure);
+  binding->pressure.version = TURBO_FLOW_DURABLE_BUFFER_API_VERSION;
+  return SALTS_OK;
+}
+
+int turbo_flow_durable_buffer_pressure_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_pressure_snapshot_t *snapshot) {
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+  turbo_flow_inbox_snapshot_t provider = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  turbo_flow_durable_buffer_pressure_snapshot_t observed =
+      TURBO_FLOW_DURABLE_BUFFER_PRESSURE_SNAPSHOT_INIT;
+  int rc;
+  if (!snapshot || snapshot->size != sizeof(*snapshot) ||
+      snapshot->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
+    return SALTS_EINVAL;
+  rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
+  if (rc != SALTS_OK) return rc;
+
+  observed.state = flow_durable_buffer_pressure_state(&binding->pressure, &provider);
+  observed.high_records = binding->pressure.high_records;
+  observed.low_records = binding->pressure.low_records;
+  observed.high_retained_bytes = binding->pressure.high_retained_bytes;
+  observed.low_retained_bytes = binding->pressure.low_retained_bytes;
+  observed.rejected_backpressure =
+      atomic_load_explicit(&binding->rejected_backpressure, memory_order_relaxed);
+  observed.rejected_closed =
+      atomic_load_explicit(&binding->rejected_closed, memory_order_relaxed);
+  observed.rejected_provider =
+      atomic_load_explicit(&binding->rejected_provider, memory_order_relaxed);
+  observed.rejected_message =
+      atomic_load_explicit(&binding->rejected_message, memory_order_relaxed);
+  *snapshot = observed;
+  return SALTS_OK;
+}
+
+static uint64_t flow_durable_rate_milli(uint64_t count, uint64_t elapsed_ns) {
+  if (count == 0u || elapsed_ns == 0u) return 0u;
+  if (count > UINT64_MAX / UINT64_C(1000000000000))
+    return UINT64_MAX;
+  return (count * UINT64_C(1000000000000)) / elapsed_ns;
+}
+
+int turbo_flow_durable_buffer_runtime_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_runtime_snapshot_t *snapshot) {
+  turbo_flow_durable_buffer_binding_t *binding;
+  turbo_flow_inbox_snapshot_t provider = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  turbo_flow_durable_buffer_runtime_snapshot_t observed =
+      TURBO_FLOW_DURABLE_BUFFER_RUNTIME_SNAPSHOT_INIT;
+  uint64_t now;
+  int rc;
+
+  if (!snapshot || snapshot->size != sizeof(*snapshot) ||
+      snapshot->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
+    return SALTS_EINVAL;
+  binding = flow_durable_buffer_find_binding(flow, resource_name, NULL);
+  if (!binding) return SALTS_ENOENT;
+  rc = flow_durable_buffer_validate_provider(binding);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
+  if (rc != SALTS_OK) return rc;
+  if (provider.admitted < binding->baseline_admitted ||
+      provider.completed < binding->baseline_completed ||
+      provider.failed < binding->baseline_failed ||
+      provider.retried < binding->baseline_retried ||
+      provider.discarded < binding->baseline_discarded)
+    return SALTS_EPROTO;
+
+  now = salts_hrtime();
+  observed.elapsed_ns = now >= binding->runtime_started_ns
+                            ? now - binding->runtime_started_ns
+                            : 0u;
+  observed.admitted = provider.admitted - binding->baseline_admitted;
+  observed.completed = provider.completed - binding->baseline_completed;
+  observed.failed = provider.failed - binding->baseline_failed;
+  observed.retried = provider.retried - binding->baseline_retried;
+  observed.discarded = provider.discarded - binding->baseline_discarded;
+  observed.admitted_per_second_milli =
+      flow_durable_rate_milli(observed.admitted, observed.elapsed_ns);
+  observed.completed_per_second_milli =
+      flow_durable_rate_milli(observed.completed, observed.elapsed_ns);
+  observed.failed_per_second_milli =
+      flow_durable_rate_milli(observed.failed, observed.elapsed_ns);
+  *snapshot = observed;
+  return SALTS_OK;
+}
+
+int turbo_flow_durable_buffer_pause_drain(turbo_flow_t *flow, const char *resource_name) {
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+  int rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
+  if (rc != SALTS_OK) return rc;
+  binding->drain_paused = 1;
+  return SALTS_OK;
+}
+
+int turbo_flow_durable_buffer_resume_drain(turbo_flow_t *flow, const char *resource_name) {
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+  int rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
+  if (rc != SALTS_OK) return rc;
+  binding->drain_paused = 0;
   return SALTS_OK;
 }
 
