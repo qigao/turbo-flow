@@ -333,6 +333,8 @@ spec("durable buffer lifecycle") {
     publish_source(&f, "source-A", "unknown-a", 1u);
     publish_source(&f, "source-B", "healthy-b", 1u);
     check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 2u; ++i)
+      salts_sleep_ms(1u);
     check_equal(atomic_load(&f.sinks), (size_t)2u);
     check_equal(snapshot(&f).in_flight_claims, (size_t)2u);
 
