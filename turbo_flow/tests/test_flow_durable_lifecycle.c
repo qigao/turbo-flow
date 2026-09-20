@@ -196,19 +196,32 @@ static void publish(lifecycle_fixture_t *f) {
   check_equal(turbo_flow_publish(f->flow, "input", &msg), SALTS_OK);
   turbo_flow_msg_cleanup(&msg);
 }
-static void publish_source(lifecycle_fixture_t *f, const char *source_id,
-                           const char *admission_id, uint64_t sequence) {
+static int publish_partition_identity(lifecycle_fixture_t *f, const char *source_id,
+                                      const char *device_id, const char *session_id,
+                                      const char *custom_key, const char *admission_id,
+                                      uint64_t sequence) {
   turbo_flow_durable_identity_t identity = TURBO_FLOW_DURABLE_IDENTITY_INIT;
   turbo_flow_msg_t msg;
+  int rc;
   turbo_flow_msg_init(&msg);
   msg.owned_payload = tstr_dup(admission_id);
   msg.payload = tstr_to_v(msg.owned_payload);
   identity.source_id = vstr_from_buf(source_id, strlen(source_id));
+  if (device_id) identity.device_id = vstr_from_buf(device_id, strlen(device_id));
+  if (session_id) identity.session_id = vstr_from_buf(session_id, strlen(session_id));
+  if (custom_key) identity.partition_key = vstr_from_buf(custom_key, strlen(custom_key));
   identity.admission_id = vstr_from_buf(admission_id, strlen(admission_id));
   identity.source_sequence = sequence;
-  check_equal(turbo_flow_msg_set_durable_identity(&msg, &identity), SALTS_OK);
-  check_equal(turbo_flow_publish(f->flow, "input", &msg), SALTS_OK);
+  rc = turbo_flow_msg_set_durable_identity(&msg, &identity);
+  if (rc == SALTS_OK) rc = turbo_flow_publish(f->flow, "input", &msg);
   turbo_flow_msg_cleanup(&msg);
+  return rc;
+}
+
+static void publish_source(lifecycle_fixture_t *f, const char *source_id,
+                           const char *admission_id, uint64_t sequence) {
+  check_equal(publish_partition_identity(f, source_id, NULL, NULL, NULL,
+                                         admission_id, sequence), SALTS_OK);
 }
 
 static turbo_flow_inbox_snapshot_t snapshot(lifecycle_fixture_t *f) {
@@ -242,6 +255,83 @@ static void progress_until_settled(lifecycle_fixture_t *f, uint64_t completed) {
   check_equal(snapshot(f).completed, completed);
 }
 spec("durable buffer lifecycle") {
+  it("maps device session and custom selectors into the same canonical partition scheduler") {
+    const turbo_flow_durable_buffer_partition_by_t selectors[] = {
+        TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID,
+        TURBO_FLOW_DURABLE_PARTITION_SESSION_ID,
+        TURBO_FLOW_DURABLE_PARTITION_CUSTOM};
+    for (size_t mode = 0u; mode < sizeof(selectors) / sizeof(selectors[0]); ++mode) {
+      lifecycle_fixture_t f;
+      turbo_flow_durable_buffer_drain_config_t config =
+          TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+      turbo_flow_durable_buffer_drain_snapshot_t observed =
+          TURBO_FLOW_DURABLE_BUFFER_DRAIN_SNAPSHOT_INIT;
+      const char *device_a = selectors[mode] == TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID ? "key-A" : "device";
+      const char *device_b = selectors[mode] == TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID ? "key-B" : "device";
+      const char *session_a = selectors[mode] == TURBO_FLOW_DURABLE_PARTITION_SESSION_ID ? "key-A" : "session";
+      const char *session_b = selectors[mode] == TURBO_FLOW_DURABLE_PARTITION_SESSION_ID ? "key-B" : "session";
+      const char *custom_a = selectors[mode] == TURBO_FLOW_DURABLE_PARTITION_CUSTOM ? "key-A" : "custom";
+      const char *custom_b = selectors[mode] == TURBO_FLOW_DURABLE_PARTITION_CUSTOM ? "key-B" : "custom";
+
+      open_fixture_mode(&f, 1, TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED);
+      config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
+      config.partition_by = selectors[mode];
+      config.workers = 3u;
+      config.max_in_flight = 3u;
+      config.batch_claim = 3u;
+      check_equal(turbo_flow_durable_buffer_configure_drain(
+                      f.flow, "intake.store", &config), SALTS_OK);
+
+      check_equal(publish_partition_identity(&f, "same-source", device_a, session_a, custom_a,
+                                             "a-1", 1u), SALTS_OK);
+      check_equal(publish_partition_identity(&f, "same-source", device_a, session_a, custom_a,
+                                             "a-2", 2u), SALTS_OK);
+      check_equal(publish_partition_identity(&f, "same-source", device_b, session_b, custom_b,
+                                             "b-1", 3u), SALTS_OK);
+      check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+      for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 2u; ++i)
+        salts_sleep_ms(1u);
+
+      check_equal(atomic_load(&f.sinks), (size_t)2u);
+      check_equal(snapshot(&f).pending_records, (size_t)1u);
+      check_equal(snapshot(&f).in_flight_claims, (size_t)2u);
+      check_equal(turbo_flow_durable_buffer_drain_snapshot(
+                      f.flow, "intake.store", &observed), SALTS_OK);
+      check_equal(observed.active_partitions, (size_t)2u);
+      check(observed.partition_blocked > 0u);
+
+      complete_ready_terminals(&f);
+      for (size_t i = 0u; i < 1000u && snapshot(&f).completed < 2u; ++i) {
+        check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+        salts_sleep_ms(1u);
+      }
+      complete_ready_terminals(&f);
+      check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
+      check_equal(snapshot(&f).completed, UINT64_C(3));
+      close_fixture(&f);
+    }
+  }
+
+  it("fails admission before provider mutation when the configured partition identity is missing") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_drain_config_t config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    open_fixture_mode(&f, 0, TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED);
+    config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
+    config.partition_by = TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID;
+    config.workers = 2u;
+    config.max_in_flight = 2u;
+    config.batch_claim = 2u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_OK);
+
+    check_equal(publish_partition_identity(&f, "source", NULL, "session", "custom",
+                                           "missing-device", 1u), SALTS_EINVAL);
+    check_equal(snapshot(&f).records, (size_t)0u);
+    check_equal(snapshot(&f).admitted, UINT64_C(0));
+    close_fixture(&f);
+  }
+
   it("keeps global ordering single-owner even with a larger configured worker set") {
     lifecycle_fixture_t f;
     turbo_flow_durable_buffer_drain_config_t config =
