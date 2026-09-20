@@ -805,7 +805,7 @@ spec("TurboDB durable inbox v3") {
     inbox_db_fixture_destroy(&invalid);
   }
 
-  it("rejects a nullable records primary key in the exact v2 schema") {
+  it("rejects a nullable records primary key in the exact v3 schema") {
     inbox_db_fixture_t fixture;
     turbo_flow_turbodb_inbox_config_t config;
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
@@ -828,9 +828,11 @@ spec("TurboDB durable inbox v3") {
     turbo_flow_turbodb_inbox_config_t config;
     turbo_flow_inbox_record_t record;
     turbo_flow_inbox_record_t conflict;
+    turbo_flow_inbox_record_t partition_conflict;
     turbo_flow_inbox_receipt_t receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
     turbo_flow_inbox_receipt_t replay = TURBO_FLOW_INBOX_RECEIPT_INIT;
     turbo_flow_inbox_receipt_t rejected = TURBO_FLOW_INBOX_RECEIPT_INIT;
+    turbo_flow_inbox_receipt_t partition_rejected = TURBO_FLOW_INBOX_RECEIPT_INIT;
     turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
     turbo_flow_inbox_history_entry_t history = TURBO_FLOW_INBOX_HISTORY_ENTRY_INIT;
     turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
@@ -846,6 +848,9 @@ spec("TurboDB durable inbox v3") {
                                UINT64_C(0x8000000000000001));
     conflict = record;
     conflict.message_flags += 1u;
+    partition_conflict = record;
+    partition_conflict.partition_key =
+        vstr_from_buf("other-partition", sizeof("other-partition") - 1u);
 
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_OK);
     check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
@@ -855,6 +860,9 @@ spec("TurboDB durable inbox v3") {
     check_equal(replay.record_id, receipt.record_id);
     check_equal(turbo_flow_inbox_admit(&inbox, &conflict, &rejected), SALTS_EPROTO);
     check_equal(rejected.record_id, (uint64_t)0u);
+    check_equal(turbo_flow_inbox_admit(&inbox, &partition_conflict, &partition_rejected),
+                SALTS_EPROTO);
+    check_equal(partition_rejected.record_id, (uint64_t)0u);
 
     connection = inbox_db_connect(&fixture, &error);
     inbox_db_check_text(connection, "SELECT hex(source_sequence_be) FROM orders_inbox_records_v3",
