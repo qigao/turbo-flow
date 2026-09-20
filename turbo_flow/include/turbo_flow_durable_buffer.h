@@ -9,8 +9,9 @@
 extern "C" {
 #endif
 
-#define TURBO_FLOW_DURABLE_BUFFER_API_VERSION UINT32_C(1)
+#define TURBO_FLOW_DURABLE_BUFFER_API_VERSION UINT32_C(2)
 #define TURBO_FLOW_DURABLE_SOURCE_ID_MAX 127u
+#define TURBO_FLOW_DURABLE_PARTITION_COMPONENT_MAX 255u
 #define TURBO_FLOW_DURABLE_ADMISSION_ID_MAX 255u
 #define TURBO_FLOW_DURABLE_CORRELATION_MAX 255u
 #define TURBO_FLOW_DURABLE_BUFFER_DEFAULT_MAX_MESSAGE_BYTES (2u * 1024u * 1024u)
@@ -19,6 +20,10 @@ typedef struct turbo_flow_durable_identity_s {
   size_t size;
   uint32_t version;
   vstr source_id;
+  vstr device_id;
+  vstr session_id;
+  /** Stable application-defined partition key; used only with CUSTOM selector. */
+  vstr partition_key;
   vstr admission_id;
   vstr correlation;
   uint64_t source_sequence;
@@ -63,11 +68,10 @@ typedef enum turbo_flow_durable_buffer_ordering_e {
 } turbo_flow_durable_buffer_ordering_t;
 
 typedef enum turbo_flow_durable_buffer_partition_by_e {
-  /**
-   * Current #128 implementation slice. source_id is already part of the exact
-   * persisted durable envelope and therefore survives provider restart.
-   */
-  TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID = 1
+  TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID = 1,
+  TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID = 2,
+  TURBO_FLOW_DURABLE_PARTITION_SESSION_ID = 3,
+  TURBO_FLOW_DURABLE_PARTITION_CUSTOM = 4
 } turbo_flow_durable_buffer_partition_by_t;
 
 /**
@@ -288,9 +292,10 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_snapshot(
 /**
  * Configure bounded high-throughput drain for one binding.
  *
- * The binding must be idle. PARTITION ordering currently supports persisted
- * source_id keys; device/session/custom keys require the later canonical
- * partition-key envelope slice and are not silently inferred.
+ * The binding must be idle. PARTITION ordering selects exactly one durable
+ * identity component at admission and persists it as the canonical partition
+ * key. Missing device/session/custom data fails closed; selectors never fall
+ * back to source_id or another identity component.
  */
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_configure_drain(
     turbo_flow_t *flow, const char *resource_name,
