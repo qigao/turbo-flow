@@ -60,7 +60,7 @@ static const flow_msg_projection_t *flow_msg_projection(const turbo_flow_msg_t *
 
 static int flow_msg_durable_identity_validate(const turbo_flow_durable_identity_t *identity) {
   if (!identity || identity->size != sizeof(*identity) ||
-      identity->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION) {
+      identity->version != TURBO_FLOW_DURABLE_IDENTITY_API_VERSION) {
     return SALTS_EINVAL;
   }
   if (!identity->source_id.data || identity->source_id.len == 0u ||
@@ -135,7 +135,7 @@ int turbo_flow_msg_durable_identity(const turbo_flow_msg_t *msg,
   const flow_msg_projection_t *projection;
 
   if (!msg || !out || out->size != sizeof(*out) ||
-      out->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION) {
+      out->version != TURBO_FLOW_DURABLE_IDENTITY_API_VERSION) {
     return SALTS_EINVAL;
   }
   projection = flow_msg_projection(msg);
