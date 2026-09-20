@@ -250,7 +250,7 @@ endif()
 file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/ci/task4_runtime_assembly.py"
           task4_runtime_assembly)
 foreach(required_fragment IN ITEMS
-        "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT RULESFORGE_ROOT"
+        "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT RULES_FORGE_ROOT"
         "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT")
   string(FIND "${task4_runtime_assembly}" "${required_fragment}" fragment_pos)
   if(fragment_pos EQUAL -1)
