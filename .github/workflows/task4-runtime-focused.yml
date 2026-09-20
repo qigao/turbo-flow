@@ -13,6 +13,8 @@ on:
   pull_request:
     branches: [master]
     paths:
+      - 'turbo_flow/**'
+      - 'io/durable/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/task4-runtime-focused.yml'
   workflow_dispatch:
