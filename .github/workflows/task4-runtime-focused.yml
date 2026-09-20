@@ -198,8 +198,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          python3 .github/ci/task4_runtime_assembly.py
-          git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt | tee "$RUNNER_TEMP/task4-runtime-evidence/focused-cmake.patch"
+          python3 .github/ci/task4_runtime_assembly.py --turbodb
+          git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt ingress/protocol/inbox/CMakeLists.txt | tee "$RUNNER_TEMP/task4-runtime-evidence/focused-cmake.patch"
 
       - name: Configure focused exact-source Graph build
         shell: bash
@@ -245,6 +245,7 @@ jobs:
           SALTS_ROOT: /opt/salts/debug
           SALTS_UTILS_ROOT: /opt/salts-utils/debug
           DATABIND_ROOT: /opt/databind/debug
+          TURBODB_ROOT: /opt/turbodb/debug
         run: |
           set -euxo pipefail
           cmake -S . -B build/task4-runtime-tsan -G Ninja \
@@ -256,7 +257,7 @@ jobs:
             -DBUILD_TESTS=ON \
             -DBUILD_EXAMPLES=OFF \
             -DBUILD_BENCHMARKS=OFF \
-            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON \
             -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="/opt/databind/debug/bin/tbe_compiler" \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=x64-linux \
@@ -301,7 +302,21 @@ jobs:
         run: |
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-          test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt)$' || true)"
+          test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt|ingress/protocol/inbox/CMakeLists\.txt)
+          git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable io/turbodb
+
+      - name: Upload Task 4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task4-durable-buffer-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/task4-runtime-evidence/
+            build/task4-runtime/CMakeCache.txt
+            build/task4-runtime-tsan/CMakeCache.txt
+ || true)"
           git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable io/turbodb
 
       - name: Upload Task 4 evidence
