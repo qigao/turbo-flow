@@ -901,44 +901,109 @@ static int inbox_admit(void *ctx, const turbo_flow_inbox_record_t *record,
   return rc;
 }
 
-static int inbox_claim(void *ctx, turbo_flow_inbox_claim_t *claim) {
-  inbox_owner_t *owner = ctx;
-  inbox_lease_t *lease = inbox_lease_reserve(owner);
-  if (!lease) return SALTS_ENOSPC;
-  inbox_connection_slot_t *slot = inbox_connection_acquire(owner);
-  if (!slot) {
-    inbox_lease_release(owner, lease);
-    return SALTS_EBUSY;
+static int inbox_claim_request_valid(
+    const turbo_flow_inbox_claim_request_t *request) {
+  size_t total_bytes = 0u;
+  if (!request || request->size != sizeof(*request) ||
+      request->version != TURBO_FLOW_INBOX_API_VERSION)
+    return 0;
+  if (request->ordering == TURBO_FLOW_INBOX_CLAIM_ORDER_GLOBAL)
+    return request->excluded_partition_count == 0u;
+  if (request->ordering != TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID ||
+      request->excluded_partition_count > TURBO_FLOW_INBOX_CLAIM_MAX_EXCLUDED_PARTITIONS ||
+      (request->excluded_partition_count != 0u && !request->excluded_partitions))
+    return 0;
+  for (size_t i = 0u; i < request->excluded_partition_count; ++i) {
+    const vstr key = request->excluded_partitions[i];
+    if (!key.data || key.len == 0u ||
+        key.len > TURBO_FLOW_INBOX_CLAIM_MAX_EXCLUDED_BYTES - total_bytes)
+      return 0;
+    total_bytes += key.len;
+    for (size_t j = 0u; j < i; ++j)
+      if (inbox_view_equal(key, request->excluded_partitions[j])) return 0;
   }
+  return 1;
+}
+
+static int inbox_claim_select(void *ctx,
+                              const turbo_flow_inbox_claim_request_t *request,
+                              turbo_flow_inbox_claim_t *claim) {
+  inbox_owner_t *owner = ctx;
+  inbox_lease_t *lease;
+  inbox_connection_slot_t *slot;
   orm_error_t error;
   orm_transaction_t *txn = NULL;
   orm_result_t *result = NULL;
   inbox_meta_t meta = {0};
-  char sql[1024];
-  uint64_t rows = 0;
+  orm_value_t excluded[TURBO_FLOW_INBOX_CLAIM_MAX_EXCLUDED_PARTITIONS];
+  char sql[2048];
+  size_t used = 0u;
+  uint64_t rows = 0u;
   int64_t id = 0;
   int rc;
+
+  if (!inbox_claim_request_valid(request)) return SALTS_EINVAL;
+  lease = inbox_lease_reserve(owner);
+  if (!lease) return SALTS_ENOSPC;
+  slot = inbox_connection_acquire(owner);
+  if (!slot) {
+    inbox_lease_release(owner, lease);
+    return SALTS_EBUSY;
+  }
+
   orm_error_init(&error);
   rc = inbox_begin(slot, &txn, &error);
   if (rc == SALTS_OK) rc = inbox_read_meta(owner, slot, txn, &meta, &error);
   if (rc == SALTS_OK && meta.generation != (int64_t)owner->generation) rc = SALTS_EBUSY;
   if (rc == SALTS_OK && meta.in_flight_claims >= (int64_t)owner->max_claims) rc = SALTS_ENOSPC;
   if (rc == SALTS_OK && meta.next_claim_token == INT64_MAX) rc = SALTS_ERANGE;
-  (void)snprintf(
-      sql, sizeof(sql),
-      "SELECT "
-      "record_id,envelope_schema_version,message_type,message_flags,content_domain,"
-      "content_profile,content_encoding,content_flags,content_schema_version,envelope_"
-      "schema,content_media_type,content_schema_name,content_type_name,content_identity,"
-      "'' ,source_id,admission_id,source_sequence_be,timestamp_ns_be,correlation,payload "
-      "FROM %s WHERE phase=0 ORDER BY record_id LIMIT 1",
-      owner->records_table);
-  if (rc == SALTS_OK) rc = inbox_exec(slot->connection, txn, sql, NULL, 0, &result, &error);
+
+  if (rc == SALTS_OK) {
+    int written = snprintf(sql, sizeof(sql), "SELECT record_id FROM %s WHERE phase=0",
+                           owner->records_table);
+    if (written < 0 || (size_t)written >= sizeof(sql)) rc = SALTS_ERANGE;
+    else used = (size_t)written;
+  }
+  if (rc == SALTS_OK &&
+      request->ordering == TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID &&
+      request->excluded_partition_count != 0u) {
+    int written = snprintf(sql + used, sizeof(sql) - used, " AND source_id NOT IN (");
+    if (written < 0 || (size_t)written >= sizeof(sql) - used) rc = SALTS_ERANGE;
+    else used += (size_t)written;
+    for (size_t i = 0u; rc == SALTS_OK && i < request->excluded_partition_count; ++i) {
+      written = snprintf(sql + used, sizeof(sql) - used, "%s?%zu", i == 0u ? "" : ",", i + 1u);
+      if (written < 0 || (size_t)written >= sizeof(sql) - used) rc = SALTS_ERANGE;
+      else {
+        used += (size_t)written;
+        excluded[i] = orm_blob(request->excluded_partitions[i].data,
+                               request->excluded_partitions[i].len);
+      }
+    }
+    if (rc == SALTS_OK) {
+      written = snprintf(sql + used, sizeof(sql) - used, ")");
+      if (written < 0 || (size_t)written >= sizeof(sql) - used) rc = SALTS_ERANGE;
+      else used += (size_t)written;
+    }
+  }
+  if (rc == SALTS_OK) {
+    int written = snprintf(sql + used, sizeof(sql) - used, " ORDER BY record_id LIMIT 1");
+    if (written < 0 || (size_t)written >= sizeof(sql) - used) rc = SALTS_ERANGE;
+  }
+
+  if (rc == SALTS_OK)
+    rc = inbox_exec(slot->connection, txn, sql,
+                    request->ordering == TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID
+                        ? excluded : NULL,
+                    request->ordering == TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID
+                        ? request->excluded_partition_count : 0u,
+                    &result, &error);
   if (rc == SALTS_OK) rc = inbox_orm_status(orm_result_row_count(result, &rows, &error));
-  if (rc == SALTS_OK && rows == 0) rc = SALTS_ENOENT;
-  if (rc == SALTS_OK) rc = inbox_get_i64(result, 0, &id, &error);
+  if (rc == SALTS_OK && rows == 0u) rc = SALTS_ENOENT;
+  if (rc == SALTS_OK && rows != 1u) rc = SALTS_EPROTO;
+  if (rc == SALTS_OK) rc = inbox_get_i64(result, 0u, &id, &error);
   orm_result_destroy(result);
   result = NULL;
+
   (void)snprintf(
       sql, sizeof(sql),
       "SELECT "
@@ -946,33 +1011,36 @@ static int inbox_claim(void *ctx, turbo_flow_inbox_claim_t *claim) {
       "encoding,content_flags,content_schema_version,retained_bytes,envelope_schema,content_media_"
       "type,content_schema_name,content_type_name,content_identity,'' "
       ",source_id,admission_id,source_sequence_be,timestamp_ns_be,correlation,payload FROM %s "
-      "WHERE "
-      "record_id=?1",
+      "WHERE record_id=?1",
       owner->records_table);
   orm_value_t idv = orm_i64(id);
-  if (rc == SALTS_OK) rc = inbox_exec(slot->connection, txn, sql, &idv, 1, &result, &error);
+  if (rc == SALTS_OK) rc = inbox_exec(slot->connection, txn, sql, &idv, 1u, &result, &error);
   if (rc == SALTS_OK) rc = inbox_record_from_result(owner, result, lease, &error);
   orm_result_destroy(result);
   result = NULL;
+
   orm_value_t uv[] = {orm_i64((int64_t)owner->generation), orm_i64(meta.next_claim_token),
                       orm_i64(id)};
   (void)snprintf(
       sql, sizeof(sql),
       "UPDATE %s SET phase=1,claim_generation=?1,claim_token=?2 WHERE record_id=?3 AND phase=0",
       owner->records_table);
-  if (rc == SALTS_OK) rc = inbox_exec(slot->connection, txn, sql, uv, 3, &result, &error);
+  if (rc == SALTS_OK) rc = inbox_exec(slot->connection, txn, sql, uv, 3u, &result, &error);
   if (rc == SALTS_OK) rc = inbox_affected_one(result, &error);
   orm_result_destroy(result);
   result = NULL;
-  orm_value_t mv = orm_i64((int64_t)owner->generation);
+
+  orm_value_t generation = orm_i64((int64_t)owner->generation);
   (void)snprintf(sql, sizeof(sql),
                  "UPDATE %s SET "
                  "next_claim_token=next_claim_token+1,pending_records=pending_records-1,in_flight_"
                  "claims=in_flight_claims+1 WHERE singleton_id=1 AND generation=?1",
                  owner->meta_table);
-  if (rc == SALTS_OK) rc = inbox_exec(slot->connection, txn, sql, &mv, 1, &result, &error);
+  if (rc == SALTS_OK)
+    rc = inbox_exec(slot->connection, txn, sql, &generation, 1u, &result, &error);
   if (rc == SALTS_OK) rc = inbox_affected_one(result, &error);
   orm_result_destroy(result);
+
   rc = inbox_finish(txn, rc, &error);
   inbox_connection_release(owner, slot);
   if (rc != SALTS_OK) {
@@ -984,6 +1052,16 @@ static int inbox_claim(void *ctx, turbo_flow_inbox_claim_t *claim) {
   claim->claim_token = lease->claim_token;
   claim->record = lease->record;
   return SALTS_OK;
+}
+
+static int inbox_claim(void *ctx, turbo_flow_inbox_claim_t *claim) {
+  const turbo_flow_inbox_claim_request_t request = TURBO_FLOW_INBOX_CLAIM_REQUEST_INIT;
+  return inbox_claim_select(ctx, &request, claim);
+}
+
+static int inbox_claim_ex(void *ctx, const turbo_flow_inbox_claim_request_t *request,
+                          turbo_flow_inbox_claim_t *claim) {
+  return inbox_claim_select(ctx, request, claim);
 }
 
 static int inbox_claim_transition(inbox_owner_t *owner, uint64_t id, uint64_t token, int status,
@@ -1414,6 +1492,7 @@ static const turbo_flow_inbox_ops_v2_t inbox_ops = {.size = sizeof(turbo_flow_in
                                                     .version = TURBO_FLOW_INBOX_API_VERSION,
                                                     .admit = inbox_admit,
                                                     .claim = inbox_claim,
+                                                    .claim_ex = inbox_claim_ex,
                                                     .complete = inbox_complete,
                                                     .fail = inbox_fail,
                                                     .retry = inbox_retry,
