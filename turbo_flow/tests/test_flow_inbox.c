@@ -675,9 +675,10 @@ spec("flow intake inbox") {
     check_equal(turbo_flow_inbox_destroy(&inbox), SALTS_OK);
   }
 
-  it("claims the oldest eligible source partition without mutating excluded backlog") {
-    static const char source_a[] = "source-A";
-    static const char source_b[] = "source-B";
+  it("claims the oldest eligible canonical partition without source-id coupling") {
+    static const char source[] = "same-source";
+    static const char key_a[] = "partition-A";
+    static const char key_b[] = "partition-B";
     char a1_id[] = "a-1";
     char a2_id[] = "a-2";
     char b1_id[] = "b-1";
@@ -697,12 +698,12 @@ spec("flow intake inbox") {
     vstr excluded[1];
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
 
-    a1.source_id = vstr_from_buf(source_a, sizeof(source_a) - 1u);
-    a1.partition_key = a1.source_id;
-    a2.source_id = vstr_from_buf(source_a, sizeof(source_a) - 1u);
-    a2.partition_key = a2.source_id;
-    b1.source_id = vstr_from_buf(source_b, sizeof(source_b) - 1u);
-    b1.partition_key = b1.source_id;
+    a1.source_id = vstr_from_buf(source, sizeof(source) - 1u);
+    a1.partition_key = vstr_from_buf(key_a, sizeof(key_a) - 1u);
+    a2.source_id = vstr_from_buf(source, sizeof(source) - 1u);
+    a2.partition_key = vstr_from_buf(key_a, sizeof(key_a) - 1u);
+    b1.source_id = vstr_from_buf(source, sizeof(source) - 1u);
+    b1.partition_key = vstr_from_buf(key_b, sizeof(key_b) - 1u);
     config.max_records = 4u;
     config.max_total_bytes = 256u;
     config.max_record_bytes = 64u;
@@ -712,10 +713,10 @@ spec("flow intake inbox") {
     check_equal(turbo_flow_inbox_admit(&inbox, &a2, &a2_receipt), SALTS_OK);
     check_equal(turbo_flow_inbox_admit(&inbox, &b1, &b1_receipt), SALTS_OK);
 
-    request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID;
+    request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_KEY;
     check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &first), SALTS_OK);
     check_equal(first.record_id, a1_receipt.record_id);
-    excluded[0] = first.record.source_id;
+    excluded[0] = first.record.partition_key;
     request.excluded_partitions = excluded;
     request.excluded_partition_count = 1u;
     check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &second), SALTS_OK);
@@ -762,13 +763,13 @@ spec("flow intake inbox") {
     check_equal(turbo_flow_inbox_memory_create(&config, &inbox), SALTS_OK);
     check_equal(turbo_flow_inbox_admit(&inbox, &record, &receipt), SALTS_OK);
     check_equal(turbo_flow_inbox_snapshot(&inbox, &before), SALTS_OK);
-    keys[0] = record.source_id;
-    keys[1] = record.source_id;
+    keys[0] = record.partition_key;
+    keys[1] = record.partition_key;
 
     request.excluded_partitions = keys;
     request.excluded_partition_count = 1u;
     check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &claim), SALTS_EINVAL);
-    request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID;
+    request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_KEY;
     request.excluded_partition_count = 2u;
     check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &claim), SALTS_EINVAL);
     request.excluded_partition_count = TURBO_FLOW_INBOX_CLAIM_MAX_EXCLUDED_PARTITIONS + 1u;
