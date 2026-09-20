@@ -938,6 +938,7 @@ spec("TurboDB durable inbox v3") {
 
     turbo_flow_inbox_record_init(&record);
     record.source_id = vstr_from_buf("s", 1u);
+    record.partition_key = record.source_id;
     record.admission_id = vstr_from_buf("a", 1u);
     record.source_sequence = UINT64_C(41);
     record.timestamp_ns = UINT64_C(123456789);
