@@ -318,6 +318,8 @@ spec("durable buffer lifecycle") {
     turbo_flow_durable_buffer_drain_config_t config =
         TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
     turbo_flow_inbox_source_result_t reconciled = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    turbo_flow_durable_buffer_snapshot_t aggregate =
+        TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT;
     open_fixture_mode(&f, 0, TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED);
 
     config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
@@ -338,6 +340,9 @@ spec("durable buffer lifecycle") {
     check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_EALREADY);
     check_equal(f.completions, (size_t)1u);
     check_equal(atomic_load(&f.sinks), (size_t)2u);
+    check_equal(turbo_flow_durable_buffer_snapshot(
+                    f.flow, "intake.store", &aggregate), SALTS_OK);
+    check_equal(aggregate.driver_state, TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN);
     check_equal(turbo_flow_durable_buffer_drain(f.binding, 0u), SALTS_EALREADY);
     check_equal(f.completions, (size_t)1u);
 
@@ -347,6 +352,10 @@ spec("durable buffer lifecycle") {
     check_equal(reconciled.state, TURBO_FLOW_INBOX_SOURCE_COMPLETED);
     check_equal(reconciled.settlement_status, SALTS_OK);
     check_equal(atomic_load(&f.sinks), (size_t)2u);
+    aggregate = (turbo_flow_durable_buffer_snapshot_t)TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_snapshot(
+                    f.flow, "intake.store", &aggregate), SALTS_OK);
+    check_equal(aggregate.driver_state, TURBO_FLOW_INBOX_SOURCE_GRAPH_ACTIVE);
 
     check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
     check_equal(f.completions, (size_t)2u);
