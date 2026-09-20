@@ -313,6 +313,49 @@ spec("durable buffer lifecycle") {
     close_fixture(&f);
   }
 
+  it("fails closed on one unknown worker and reconciles without replaying another partition") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_drain_config_t config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    turbo_flow_inbox_source_result_t reconciled = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    open_fixture_mode(&f, 0, TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED);
+
+    config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
+    config.partition_by = TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+    config.workers = 2u;
+    config.max_in_flight = 2u;
+    config.batch_claim = 2u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_OK);
+
+    publish_source(&f, "source-A", "unknown-a", 1u);
+    publish_source(&f, "source-B", "healthy-b", 1u);
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    check_equal(atomic_load(&f.sinks), (size_t)2u);
+    check_equal(snapshot(&f).in_flight_claims, (size_t)2u);
+
+    f.complete_status = SALTS_EALREADY;
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_EALREADY);
+    check_equal(f.completions, (size_t)1u);
+    check_equal(atomic_load(&f.sinks), (size_t)2u);
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 0u), SALTS_EALREADY);
+    check_equal(f.completions, (size_t)1u);
+
+    f.complete_status = SALTS_OK;
+    check_equal(turbo_flow_durable_buffer_reconcile_settlement(
+                    f.binding, &reconciled), SALTS_OK);
+    check_equal(reconciled.state, TURBO_FLOW_INBOX_SOURCE_COMPLETED);
+    check_equal(reconciled.settlement_status, SALTS_OK);
+    check_equal(atomic_load(&f.sinks), (size_t)2u);
+
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    check_equal(f.completions, (size_t)2u);
+    check_equal(snapshot(&f).completed, UINT64_C(2));
+    check_equal(snapshot(&f).in_flight_claims, (size_t)0u);
+    check_equal(atomic_load(&f.sinks), (size_t)2u);
+    close_fixture(&f);
+  }
+
   it("configures bounded partition workers and exposes scheduler state") {
     lifecycle_fixture_t f;
     turbo_flow_durable_buffer_drain_config_t config =
