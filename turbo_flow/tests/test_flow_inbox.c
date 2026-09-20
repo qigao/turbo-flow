@@ -758,6 +758,7 @@ spec("flow intake inbox") {
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
 
     record.source_id = vstr_from_buf(source, sizeof(source) - 1u);
+    record.partition_key = record.source_id;
     check_equal(turbo_flow_inbox_memory_create(&config, &inbox), SALTS_OK);
     check_equal(turbo_flow_inbox_admit(&inbox, &record, &receipt), SALTS_OK);
     check_equal(turbo_flow_inbox_snapshot(&inbox, &before), SALTS_OK);
