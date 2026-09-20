@@ -31,7 +31,7 @@ typedef struct turbo_flow_durable_identity_s {
 
 #define TURBO_FLOW_DURABLE_IDENTITY_INIT                                                   \
   {sizeof(turbo_flow_durable_identity_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,           \
-   {NULL, 0u}, {NULL, 0u}, {NULL, 0u}, 0u}
+   {NULL, 0u}, {NULL, 0u}, {NULL, 0u}, {NULL, 0u}, {NULL, 0u}, {NULL, 0u}, 0u}
 
 TURBO_FLOW_C_API int turbo_flow_msg_set_durable_identity(
     turbo_flow_msg_t *message, const turbo_flow_durable_identity_t *identity);
