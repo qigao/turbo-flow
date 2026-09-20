@@ -907,6 +907,16 @@ int turbo_flow_durable_buffer_reconcile_settlement(
   return flow_inbox_driver_reconcile_settlement(candidate, result);
 }
 
+static int flow_durable_driver_state_rank(
+    turbo_flow_inbox_source_result_state_t state) {
+  switch (state) {
+    case TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN: return 3;
+    case TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_PENDING: return 2;
+    case TURBO_FLOW_INBOX_SOURCE_GRAPH_ACTIVE: return 1;
+    default: return 0;
+  }
+}
+
 static int flow_durable_buffer_operator_binding(
     turbo_flow_t *flow, const char *resource_name,
     turbo_flow_durable_buffer_binding_t **binding_out) {
@@ -938,9 +948,15 @@ int turbo_flow_durable_buffer_snapshot(
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
   if (rc != SALTS_OK) return rc;
-  if (binding->driver) {
-    rc = flow_inbox_driver_status(binding->driver, &driver);
+  for (size_t i = 0u; i < TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS; ++i) {
+    flow_inbox_driver_t *candidate = flow_durable_buffer_driver_at(binding, i);
+    turbo_flow_inbox_source_result_t current = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    if (!candidate) continue;
+    rc = flow_inbox_driver_status(candidate, &current);
     if (rc != SALTS_OK) return rc;
+    if (flow_durable_driver_state_rank(current.state) >
+        flow_durable_driver_state_rank(driver.state))
+      driver = current;
   }
 
   observed.provider_generation = provider.generation;
