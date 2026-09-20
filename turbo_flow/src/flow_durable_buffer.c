@@ -782,37 +782,53 @@ int turbo_flow_durable_buffer_drain(turbo_flow_durable_buffer_binding_t *binding
   if (!binding || !binding->bound || !binding->flow) return SALTS_EINVAL;
   for (;;) {
     turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
-    turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    int all_empty = 1;
     rc = flow_durable_buffer_validate_provider(binding);
     if (rc != SALTS_OK) return rc;
-    if (binding->driver) {
-      rc = flow_inbox_driver_status(binding->driver, &result);
+
+    for (size_t i = 0u; i < TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS; ++i) {
+      flow_inbox_driver_t *driver = flow_durable_buffer_driver_at(binding, i);
+      turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+      if (!driver) continue;
+      rc = flow_inbox_driver_status(driver, &result);
       if (rc != SALTS_OK) return rc;
       if (result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_PENDING ||
           result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN)
         return result.settlement_status != SALTS_OK ? result.settlement_status : SALTS_EBUSY;
+      if (result.state != TURBO_FLOW_INBOX_SOURCE_EMPTY) all_empty = 0;
     }
+
     rc = turbo_flow_inbox_snapshot(binding->inbox, &snapshot);
     if (rc != SALTS_OK) return rc;
     if (snapshot.failed_records) return flow_durable_buffer_failed_status(binding);
-    if (snapshot.records == 0u && snapshot.in_flight_claims == 0u &&
-        result.state == TURBO_FLOW_INBOX_SOURCE_EMPTY) return SALTS_OK;
-    if (binding->flow->state != TURBO_FLOW_STATE_STARTED &&
-        result.state == TURBO_FLOW_INBOX_SOURCE_EMPTY) return SALTS_EBUSY;
+    if (snapshot.records == 0u && snapshot.in_flight_claims == 0u && all_empty)
+      return SALTS_OK;
+    if (binding->flow->state != TURBO_FLOW_STATE_STARTED && all_empty)
+      return SALTS_EBUSY;
+
     rc = flow_durable_buffer_progress_internal(binding, 1);
     if (rc != SALTS_OK) return rc;
-    /* A non-blocking call gets one progress opportunity, then checks actual idle. */
+
+    /* A non-blocking call gets one bounded progress opportunity, then checks actual idle. */
     if (flow_durable_remaining_ms(started, timeout_ms) == 0u) {
-      result = (turbo_flow_inbox_source_result_t)TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
-      if (binding->driver) {
-        rc = flow_inbox_driver_status(binding->driver, &result);
+      all_empty = 1;
+      for (size_t i = 0u; i < TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS; ++i) {
+        flow_inbox_driver_t *driver = flow_durable_buffer_driver_at(binding, i);
+        turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+        if (!driver) continue;
+        rc = flow_inbox_driver_status(driver, &result);
         if (rc != SALTS_OK) return rc;
+        if (result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_PENDING ||
+            result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN)
+          return result.settlement_status != SALTS_OK ? result.settlement_status : SALTS_EBUSY;
+        if (result.state != TURBO_FLOW_INBOX_SOURCE_EMPTY) all_empty = 0;
       }
       rc = turbo_flow_inbox_snapshot(binding->inbox, &snapshot);
       if (rc != SALTS_OK) return rc;
       if (snapshot.failed_records) return flow_durable_buffer_failed_status(binding);
-      return snapshot.records == 0u && snapshot.in_flight_claims == 0u &&
-             result.state == TURBO_FLOW_INBOX_SOURCE_EMPTY ? SALTS_OK : SALTS_ETIMEDOUT;
+      return snapshot.records == 0u && snapshot.in_flight_claims == 0u && all_empty
+                 ? SALTS_OK
+                 : SALTS_ETIMEDOUT;
     }
     salts_sleep_ms(1u);
   }
@@ -835,23 +851,47 @@ int turbo_flow_durable_buffer_close_and_drain(
 int turbo_flow_durable_buffer_retry_settlement(
     turbo_flow_durable_buffer_binding_t *binding,
     turbo_flow_inbox_source_result_t *result) {
+  flow_inbox_driver_t *candidate = NULL;
   int rc;
   if (!binding || !binding->bound || !binding->flow || !result) return SALTS_EINVAL;
   rc = flow_durable_buffer_validate_provider(binding);
   if (rc != SALTS_OK) return rc;
-  if (!binding->driver) return SALTS_EINVAL;
-  return flow_inbox_driver_retry_settlement(binding->driver, result);
+  for (size_t i = 0u; i < TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS; ++i) {
+    flow_inbox_driver_t *driver = flow_durable_buffer_driver_at(binding, i);
+    turbo_flow_inbox_source_result_t observed = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    if (!driver) continue;
+    rc = flow_inbox_driver_status(driver, &observed);
+    if (rc != SALTS_OK) return rc;
+    if (observed.state != TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_PENDING &&
+        observed.state != TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN)
+      continue;
+    if (candidate) return SALTS_EBUSY;
+    candidate = driver;
+  }
+  if (!candidate) return SALTS_EINVAL;
+  return flow_inbox_driver_retry_settlement(candidate, result);
 }
 
 int turbo_flow_durable_buffer_reconcile_settlement(
     turbo_flow_durable_buffer_binding_t *binding,
     turbo_flow_inbox_source_result_t *result) {
+  flow_inbox_driver_t *candidate = NULL;
   int rc;
   if (!binding || !binding->bound || !binding->flow || !result) return SALTS_EINVAL;
   rc = flow_durable_buffer_validate_provider(binding);
   if (rc != SALTS_OK) return rc;
-  if (!binding->driver) return SALTS_EINVAL;
-  return flow_inbox_driver_reconcile_settlement(binding->driver, result);
+  for (size_t i = 0u; i < TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS; ++i) {
+    flow_inbox_driver_t *driver = flow_durable_buffer_driver_at(binding, i);
+    turbo_flow_inbox_source_result_t observed = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    if (!driver) continue;
+    rc = flow_inbox_driver_status(driver, &observed);
+    if (rc != SALTS_OK) return rc;
+    if (observed.state != TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN) continue;
+    if (candidate) return SALTS_EBUSY;
+    candidate = driver;
+  }
+  if (!candidate) return SALTS_EINVAL;
+  return flow_inbox_driver_reconcile_settlement(candidate, result);
 }
 
 static int flow_durable_buffer_operator_binding(
