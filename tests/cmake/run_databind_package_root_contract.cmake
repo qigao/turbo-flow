@@ -246,4 +246,52 @@ if(NOT stale_databind_host_root EQUAL -1)
   message(FATAL_ERROR "presets still source tbe_compiler from the SaltsUtils root")
 endif()
 
+
+file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/ci/task4_runtime_assembly.py"
+          task4_runtime_assembly)
+foreach(required_fragment IN ITEMS
+        "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT RULESFORGE_ROOT"
+        "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT")
+  string(FIND "${task4_runtime_assembly}" "${required_fragment}" fragment_pos)
+  if(fragment_pos EQUAL -1)
+    message(FATAL_ERROR
+            "focused Task 4 assembly missing DataBind root fragment: ${required_fragment}")
+  endif()
+endforeach()
+
+file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/workflows/task4-runtime-focused.yml"
+          task4_runtime_workflow)
+foreach(required_fragment IN ITEMS
+        "SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7"
+        "--component Unspecified"
+        "--component DataBind"
+        "DATABIND_ROOT: /opt/databind/debug"
+        "TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE=\"/opt/databind/debug/bin/tbe_compiler\"")
+  string(FIND "${task4_runtime_workflow}" "${required_fragment}" fragment_pos)
+  if(fragment_pos EQUAL -1)
+    message(FATAL_ERROR
+            "focused Task 4 workflow missing DataBind provenance fragment: ${required_fragment}")
+  endif()
+endforeach()
+string(FIND "${task4_runtime_workflow}"
+            "salts-utils-debug/bin/tbe_compiler"
+            stale_task4_compiler_root)
+if(NOT stale_task4_compiler_root EQUAL -1)
+  message(FATAL_ERROR
+          "focused Task 4 workflow still sources tbe_compiler from SaltsUtils")
+endif()
+
+file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/workflows/protocol-network-intake.yml"
+          protocol_network_workflow)
+foreach(required_fragment IN ITEMS
+        "SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7"
+        "--component Unspecified"
+        "test ! -e \"$RUNNER_TEMP/sdk/salts-utils-debug/lib/cmake/DataBind/DataBindConfig.cmake\"")
+  string(FIND "${protocol_network_workflow}" "${required_fragment}" fragment_pos)
+  if(fragment_pos EQUAL -1)
+    message(FATAL_ERROR
+            "protocol public-compile workflow missing SaltsUtils-only install fragment: ${required_fragment}")
+  endif()
+endforeach()
+
 message(STATUS "TurboFlow DataBind package-root contract passed")
