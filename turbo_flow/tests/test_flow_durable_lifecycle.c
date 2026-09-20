@@ -15,6 +15,7 @@ typedef struct lifecycle_fixture_s {
   turbo_flow_durable_buffer_binding_t *binding;
   size_t calls;
   atomic_size_t sinks;
+  atomic_size_t terminal_slots;
   size_t owner_releases;
   int complete_status;
   size_t completions;
@@ -117,8 +118,9 @@ static int submit(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *
                   const turbo_flow_msg_t *msg, turbo_flow_async_terminal_claim_t *claim) {
   lifecycle_fixture_t *f = ctx;
   (void)flow; (void)stage; (void)msg;
+  const size_t slot = atomic_fetch_add(&f->terminal_slots, (size_t)1u);
   turbo_flow_async_terminal_claim_t *destination =
-      f->terminal._impl ? &f->terminal2 : &f->terminal;
+      (slot & 1u) == 0u ? &f->terminal : &f->terminal2;
   int rc = turbo_flow_async_terminal_claim_move(destination, claim);
   if (rc == SALTS_OK) ++f->sinks;
   return rc;
@@ -135,6 +137,7 @@ static void open_fixture_mode(lifecycle_fixture_t *f, int asynchronous,
   turbo_flow_adapter_ops_t ops = {0};
   memset(f, 0, sizeof(*f));
   atomic_init(&f->sinks, 0u);
+  atomic_init(&f->terminal_slots, 0u);
   f->generation = 1u;
   f->terminal = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
   f->terminal2 = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
