@@ -1215,7 +1215,7 @@ spec("TurboDB durable inbox v3") {
     inbox_db_fixture_destroy(&fixture);
   }
 
-  it("claims the oldest eligible source partition transactionally") {
+  it("claims the oldest eligible canonical partition transactionally") {
     inbox_db_fixture_t fixture;
     turbo_flow_turbodb_inbox_config_t config;
     turbo_flow_inbox_record_t records[3];
@@ -1234,17 +1234,20 @@ spec("TurboDB durable inbox v3") {
     inbox_db_fixture_init(&fixture);
     inbox_db_provision(&fixture, 0);
     config = inbox_test_config(&fixture);
-    records[0] = inbox_test_record("source-A", "a-1", "a-1", "item", 1u, 101u);
-    records[1] = inbox_test_record("source-A", "a-2", "a-2", "item", 2u, 102u);
-    records[2] = inbox_test_record("source-B", "b-1", "b-1", "item", 3u, 103u);
+    records[0] = inbox_test_record("same-source", "a-1", "a-1", "item", 1u, 101u);
+    records[1] = inbox_test_record("same-source", "a-2", "a-2", "item", 2u, 102u);
+    records[2] = inbox_test_record("same-source", "b-1", "b-1", "item", 3u, 103u);
+    records[0].partition_key = vstr_from_buf("partition-A", sizeof("partition-A") - 1u);
+    records[1].partition_key = vstr_from_buf("partition-A", sizeof("partition-A") - 1u);
+    records[2].partition_key = vstr_from_buf("partition-B", sizeof("partition-B") - 1u);
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_OK);
     for (size_t index = 0u; index < 3u; ++index)
       check_equal(turbo_flow_inbox_admit(&inbox, &records[index], &receipts[index]), SALTS_OK);
 
-    request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID;
+    request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_KEY;
     check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &first), SALTS_OK);
     check_equal(first.record_id, receipts[0].record_id);
-    excluded[0] = first.record.source_id;
+    excluded[0] = first.record.partition_key;
     request.excluded_partitions = excluded;
     request.excluded_partition_count = 1u;
     check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &second), SALTS_OK);
