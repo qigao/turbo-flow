@@ -1035,11 +1035,34 @@ int turbo_flow_durable_buffer_configure_drain(
     turbo_flow_t *flow, const char *resource_name,
     const turbo_flow_durable_buffer_drain_config_t *config) {
   turbo_flow_durable_buffer_binding_t *binding = NULL;
+  turbo_flow_inbox_snapshot_t provider = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  turbo_flow_durable_buffer_partition_by_t current_key_policy;
+  turbo_flow_durable_buffer_partition_by_t next_key_policy;
   int rc;
   if (!flow_durable_buffer_drain_config_valid(config)) return SALTS_EINVAL;
   rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
   if (rc != SALTS_OK) return rc;
   if (!flow_durable_buffer_drivers_idle(binding)) return SALTS_EBUSY;
+
+  /*
+   * The persisted partition key is chosen at admission time. Reusing live
+   * backlog under another key policy would mix incompatible partition
+   * semantics inside one buffer. GLOBAL and PARTITION_SOURCE_ID intentionally
+   * share the same SOURCE_ID admission policy.
+   */
+  current_key_policy =
+      binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION
+          ? binding->drain_config.partition_by
+          : TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+  next_key_policy =
+      config->ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION
+          ? config->partition_by
+          : TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+  if (current_key_policy != next_key_policy) {
+    rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
+    if (rc != SALTS_OK) return rc;
+    if (provider.records != 0u || provider.in_flight_claims != 0u) return SALTS_EBUSY;
+  }
 
   /*
    * Reconfiguration is an idle control-plane action. Drop reusable extra
