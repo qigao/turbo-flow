@@ -261,9 +261,9 @@ spec("durable buffer lifecycle") {
 
     config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
     config.partition_by = TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
-    config.workers = 2u;
-    config.max_in_flight = 2u;
-    config.batch_claim = 2u;
+    config.workers = 3u;
+    config.max_in_flight = 3u;
+    config.batch_claim = 3u;
     check_equal(turbo_flow_durable_buffer_configure_drain(
                     f.flow, "intake.store", &config), SALTS_OK);
 
@@ -290,8 +290,9 @@ spec("durable buffer lifecycle") {
     check_equal(turbo_flow_durable_buffer_drain_snapshot(
                     f.flow, "intake.store", &observed), SALTS_OK);
     check_equal(observed.active_workers, (size_t)2u);
+    check_equal(observed.active_partitions, (size_t)2u);
     check_equal(observed.backlog_records, (size_t)1u);
-    check(observed.worker_saturated > 0u);
+    check(observed.partition_blocked > 0u);
 
     check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
     check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_OK, NULL), SALTS_OK);
