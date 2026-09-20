@@ -342,11 +342,13 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_resume_drain(
     turbo_flow_t *flow, const char *resource_name);
 
 /**
- * Progress at most one claim without blocking. Empty storage is success. Calls on
- * a binding are caller-serialized with Flow lifecycle and provider mutation.
- * A new claim requires STARTED/open ordinary admission; paused admission returns
- * ESHUTDOWN without claiming. An owned run may be polled/settled while paused or
- * stopped. Provider, Graph and settlement errors propagate unchanged; progress
+ * Progress the configured bounded drain without blocking. The default GLOBAL
+ * configuration starts at most one claim; a configured partition drain may start
+ * up to batch_claim eligible claims while remaining within workers/max_in_flight.
+ * Calls on a binding are caller-serialized with Flow lifecycle and provider
+ * mutation. A new claim requires STARTED/open ordinary admission; paused admission
+ * returns ESHUTDOWN without claiming. Owned runs may be polled/settled while paused
+ * or stopped. Provider, Graph and settlement errors propagate unchanged; progress
  * never implicitly retries or reconciles a pending/unknown settlement.
  */
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_progress(
@@ -357,8 +359,10 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_quiesce(
     turbo_flow_durable_buffer_binding_t *binding);
 
 /**
- * Drain accepted records with a single owner. STARTED permits buffer-origin runs
- * even while ordinary Graph admission is paused. STOPPED/FAILED never claim new
+ * Drain accepted records with the configured bounded worker set. GLOBAL ordering
+ * deliberately has one effective owner; PARTITION ordering may execute independent
+ * partitions concurrently. STARTED permits buffer-origin runs even while ordinary
+ * Graph admission is paused. STOPPED/FAILED never claim new
  * records: only an already-owned terminal/canceled run may settle. Failed records
  * and unresolved settlement return their exact error, without retry/drop/replay.
  * Pending stopped backlog returns EBUSY; a running backlog exceeding timeout_ms
