@@ -239,7 +239,9 @@ static int flow_inbox_source_fail_claim(flow_inbox_driver_t *source, int graph_s
   return ignored.settlement_status == SALTS_OK ? failure_status : settlement_status;
 }
 
-static int flow_inbox_driver_request_internal(flow_inbox_driver_t *source, int buffer_drain) {
+static int flow_inbox_driver_request_internal(
+    flow_inbox_driver_t *source, int buffer_drain,
+    const turbo_flow_inbox_claim_request_t *claim_request) {
   turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
   turbo_flow_run_result_t snapshot = TURBO_FLOW_RUN_RESULT_INIT;
   turbo_flow_inbox_source_result_t ignored = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
@@ -259,7 +261,9 @@ static int flow_inbox_driver_request_internal(flow_inbox_driver_t *source, int b
     const int observed = source->config.claim_begin
                              ? source->config.claim_begin(source->config.claim_observer_ctx)
                              : 0;
-    status = turbo_flow_inbox_claim(source->config.inbox, &source->claim);
+    status = claim_request
+                 ? turbo_flow_inbox_claim_ex(source->config.inbox, claim_request, &source->claim)
+                 : turbo_flow_inbox_claim(source->config.inbox, &source->claim);
     if (source->config.claim_end)
       source->config.claim_end(source->config.claim_observer_ctx, observed, status,
                                status == SALTS_OK ? source->claim.record_id : 0u);
@@ -309,12 +313,36 @@ static int flow_inbox_driver_request_internal(flow_inbox_driver_t *source, int b
 }
 
 int flow_inbox_driver_request(flow_inbox_driver_t *source) {
-  return flow_inbox_driver_request_internal(source, 0);
+  return flow_inbox_driver_request_internal(source, 0, NULL);
+}
+
+int flow_inbox_driver_request_ex(flow_inbox_driver_t *source,
+                                 const turbo_flow_inbox_claim_request_t *request) {
+  if (!source || source->config.origin_kind != FLOW_INBOX_DRIVER_BUFFER || !request)
+    return SALTS_EINVAL;
+  return flow_inbox_driver_request_internal(source, 0, request);
 }
 
 int flow_inbox_driver_request_drain(flow_inbox_driver_t *source) {
   if (!source || source->config.origin_kind != FLOW_INBOX_DRIVER_BUFFER) return SALTS_EINVAL;
-  return flow_inbox_driver_request_internal(source, 1);
+  return flow_inbox_driver_request_internal(source, 1, NULL);
+}
+
+int flow_inbox_driver_request_drain_ex(flow_inbox_driver_t *source,
+                                       const turbo_flow_inbox_claim_request_t *request) {
+  if (!source || source->config.origin_kind != FLOW_INBOX_DRIVER_BUFFER || !request)
+    return SALTS_EINVAL;
+  return flow_inbox_driver_request_internal(source, 1, request);
+}
+
+int flow_inbox_driver_active_partition(const flow_inbox_driver_t *source, vstr *partition_out) {
+  if (!source || !partition_out) return SALTS_EINVAL;
+  *partition_out = (vstr){NULL, 0u};
+  if (source->phase == FLOW_INBOX_SOURCE_IDLE) return SALTS_ENOENT;
+  if (!source->claim.record.source_id.data || source->claim.record.source_id.len == 0u)
+    return SALTS_EPROTO;
+  *partition_out = source->claim.record.source_id;
+  return SALTS_OK;
 }
 
 int flow_inbox_driver_status(const flow_inbox_driver_t *source,
