@@ -421,20 +421,27 @@ spec("flow intake inbox") {
     turbo_flow_inbox_memory_config_t config = inbox_test_config();
     turbo_flow_inbox_record_t record = inbox_test_record(correlation, payload);
     turbo_flow_inbox_record_t conflict = record;
+    turbo_flow_inbox_record_t partition_conflict = record;
     turbo_flow_inbox_receipt_t first = TURBO_FLOW_INBOX_RECEIPT_INIT;
     turbo_flow_inbox_receipt_t replay = TURBO_FLOW_INBOX_RECEIPT_INIT;
     turbo_flow_inbox_receipt_t rejected = TURBO_FLOW_INBOX_RECEIPT_INIT;
+    turbo_flow_inbox_receipt_t partition_rejected = TURBO_FLOW_INBOX_RECEIPT_INIT;
     turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
     turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
 
     conflict.payload = vstr_from_buf(conflicting_payload, sizeof(conflicting_payload) - 1u);
+    partition_conflict.partition_key =
+        vstr_from_buf("other-partition", sizeof("other-partition") - 1u);
     check_equal(turbo_flow_inbox_memory_create(&config, &inbox), SALTS_OK);
     check_equal(turbo_flow_inbox_admit(&inbox, &record, &first), SALTS_OK);
     check_equal(turbo_flow_inbox_admit(&inbox, &record, &replay), SALTS_OK);
     check_equal(replay.record_id, first.record_id);
     check_equal(turbo_flow_inbox_admit(&inbox, &conflict, &rejected), SALTS_EPROTO);
     check_equal(rejected.record_id, (uint64_t)0u);
+    check_equal(turbo_flow_inbox_admit(&inbox, &partition_conflict, &partition_rejected),
+                SALTS_EPROTO);
+    check_equal(partition_rejected.record_id, (uint64_t)0u);
     check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
     check_equal(snapshot.generation, (uint64_t)1u);
     check_equal(snapshot.records, (size_t)1u);
