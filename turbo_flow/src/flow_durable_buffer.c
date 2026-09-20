@@ -635,6 +635,7 @@ static int flow_durable_buffer_progress_internal(
   size_t excluded_count = 0u;
   size_t active = 0u;
   size_t started = 0u;
+  int had_live_worker = 0;
   size_t effective;
   size_t claim_budget;
   int rc;
@@ -657,6 +658,7 @@ static int flow_durable_buffer_progress_internal(
     if (!driver) continue;
     rc = flow_inbox_driver_status(driver, &result);
     if (rc != SALTS_OK) return rc;
+    if (result.state != TURBO_FLOW_INBOX_SOURCE_EMPTY) had_live_worker = 1;
     if (result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_PENDING ||
         result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN)
       return result.settlement_status != SALTS_OK ? result.settlement_status : SALTS_EBUSY;
@@ -678,6 +680,17 @@ static int flow_durable_buffer_progress_internal(
       }
     }
   }
+
+  /*
+   * Preserve the pre-#128 single-owner progress contract in GLOBAL mode:
+   * a call that entered with an owned claim may poll/settle it, but it does not
+   * acquire a replacement claim in that same call. Explicit drain loops can
+   * make another bounded progress pass. Partition mode intentionally refills
+   * freed workers in the same pass for throughput.
+   */
+  if (binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_GLOBAL &&
+      had_live_worker)
+    return SALTS_OK;
 
   if (binding->flow->state != TURBO_FLOW_STATE_STARTED) return SALTS_ESHUTDOWN;
   if (!draining && binding->drain_paused) return SALTS_OK;
