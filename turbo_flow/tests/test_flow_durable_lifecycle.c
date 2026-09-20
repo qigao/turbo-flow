@@ -255,6 +255,48 @@ static void progress_until_settled(lifecycle_fixture_t *f, uint64_t completed) {
   check_equal(snapshot(f).completed, completed);
 }
 spec("durable buffer lifecycle") {
+  it("rejects partition-key policy changes while live backlog uses the previous key") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_drain_config_t source_config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    turbo_flow_durable_buffer_drain_config_t device_config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    turbo_flow_durable_buffer_drain_snapshot_t observed =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_SNAPSHOT_INIT;
+
+    open_fixture_mode(&f, 0, TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED);
+    check_equal(publish_partition_identity(&f, "source-A", "device-A", "session-A",
+                                           "custom-A", "pending", 1u), SALTS_OK);
+
+    source_config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
+    source_config.partition_by = TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+    source_config.workers = 2u;
+    source_config.max_in_flight = 2u;
+    source_config.batch_claim = 2u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &source_config), SALTS_OK);
+
+    device_config = source_config;
+    device_config.partition_by = TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &device_config), SALTS_EBUSY);
+    check_equal(turbo_flow_durable_buffer_drain_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.ordering, TURBO_FLOW_DURABLE_ORDER_PARTITION);
+    check_equal(observed.partition_by, TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID);
+
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
+    check_equal(snapshot(&f).records, (size_t)0u);
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &device_config), SALTS_OK);
+    observed = (turbo_flow_durable_buffer_drain_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_drain_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.partition_by, TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID);
+    close_fixture(&f);
+  }
+
   it("maps device session and custom selectors into the same canonical partition scheduler") {
     const turbo_flow_durable_buffer_partition_by_t selectors[] = {
         TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID,
