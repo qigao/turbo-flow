@@ -123,7 +123,8 @@ static int submit(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *
   if (rc == SALTS_OK) ++f->sinks;
   return rc;
 }
-static void open_fixture_mode(lifecycle_fixture_t *f, int asynchronous,\n                              turbo_flow_durable_identity_mode_t identity_mode) {
+static void open_fixture_mode(lifecycle_fixture_t *f, int asynchronous,
+                              turbo_flow_durable_identity_mode_t identity_mode) {
   static const char graph[] = "source input\n"
     "buffer intake resource intake.store\n"
     "stage output adapter sink\n"
