@@ -136,6 +136,11 @@ static int settlement_claim(void *ctx, turbo_flow_inbox_claim_t *claim) {
   settlement_fixture_t *fixture = (settlement_fixture_t *)ctx;
   return turbo_flow_inbox_claim(&fixture->backing, claim);
 }
+static int settlement_claim_ex(void *ctx, const turbo_flow_inbox_claim_request_t *request,
+                               turbo_flow_inbox_claim_t *claim) {
+  return turbo_flow_inbox_claim_ex(&((settlement_fixture_t *)ctx)->backing, request, claim);
+}
+
 
 static int settlement_complete(void *ctx, uint64_t record_id, uint64_t claim_token) {
   settlement_fixture_t *fixture = (settlement_fixture_t *)ctx;
@@ -205,6 +210,7 @@ static const turbo_flow_inbox_ops_v2_t settlement_ops = {.size = sizeof(settleme
                                                          .version = TURBO_FLOW_INBOX_API_VERSION,
                                                          .admit = settlement_admit,
                                                          .claim = settlement_claim,
+                                                         .claim_ex = settlement_claim_ex,
                                                          .complete = settlement_complete,
                                                          .fail = settlement_fail,
                                                          .retry = settlement_retry,
