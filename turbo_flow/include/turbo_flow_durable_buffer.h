@@ -55,6 +55,66 @@ typedef struct turbo_flow_durable_buffer_binding_config_s {
    NULL, NULL, TURBO_FLOW_DURABLE_IDENTITY_GENERATED,                                               \
    TURBO_FLOW_DURABLE_BUFFER_DEFAULT_MAX_MESSAGE_BYTES}
 
+#define TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS 64u
+
+typedef enum turbo_flow_durable_buffer_ordering_e {
+  TURBO_FLOW_DURABLE_ORDER_GLOBAL = 1,
+  TURBO_FLOW_DURABLE_ORDER_PARTITION = 2
+} turbo_flow_durable_buffer_ordering_t;
+
+typedef enum turbo_flow_durable_buffer_partition_by_e {
+  /**
+   * Current #128 implementation slice. source_id is already part of the exact
+   * persisted durable envelope and therefore survives provider restart.
+   */
+  TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID = 1
+} turbo_flow_durable_buffer_partition_by_t;
+
+/**
+ * Bounded drain scheduler configuration.
+ *
+ * workers is the number of reusable single-claim Graph drivers. max_in_flight is
+ * an explicit upper bound on owned claims and must be at least workers; the
+ * current no-hidden-queue implementation therefore never exceeds workers active
+ * claims. batch_claim bounds how many idle workers may acquire ownership during
+ * one progress call. GLOBAL ordering deliberately uses one effective worker.
+ */
+typedef struct turbo_flow_durable_buffer_drain_config_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_durable_buffer_ordering_t ordering;
+  turbo_flow_durable_buffer_partition_by_t partition_by;
+  size_t workers;
+  size_t max_in_flight;
+  size_t batch_claim;
+} turbo_flow_durable_buffer_drain_config_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT                                              \
+  {sizeof(turbo_flow_durable_buffer_drain_config_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,      \
+   TURBO_FLOW_DURABLE_ORDER_GLOBAL, TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID, 1u, 1u, 1u}
+
+typedef struct turbo_flow_durable_buffer_drain_snapshot_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_durable_buffer_ordering_t ordering;
+  turbo_flow_durable_buffer_partition_by_t partition_by;
+  size_t workers;
+  size_t effective_workers;
+  size_t max_in_flight;
+  size_t batch_claim;
+  size_t backlog_records;
+  size_t active_workers;
+  size_t active_partitions;
+  size_t in_flight_claims;
+  uint64_t partition_blocked;
+  uint64_t worker_saturated;
+} turbo_flow_durable_buffer_drain_snapshot_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_DRAIN_SNAPSHOT_INIT                                            \
+  {sizeof(turbo_flow_durable_buffer_drain_snapshot_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,    \
+   TURBO_FLOW_DURABLE_ORDER_GLOBAL, TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID,                       \
+   0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
+
 /**
  * Provider-neutral observation for one named durable-buffer resource.
  *
@@ -224,6 +284,22 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_bind(
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_snapshot(
     turbo_flow_t *flow, const char *resource_name,
     turbo_flow_durable_buffer_snapshot_t *snapshot);
+
+/**
+ * Configure bounded high-throughput drain for one binding.
+ *
+ * The binding must be idle. PARTITION ordering currently supports persisted
+ * source_id keys; device/session/custom keys require the later canonical
+ * partition-key envelope slice and are not silently inferred.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_configure_drain(
+    turbo_flow_t *flow, const char *resource_name,
+    const turbo_flow_durable_buffer_drain_config_t *config);
+
+/** Read worker/partition scheduling state without advancing the drain. */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_drain_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_drain_snapshot_t *snapshot);
 
 /**
  * Configure resource-local high/low pressure thresholds.
