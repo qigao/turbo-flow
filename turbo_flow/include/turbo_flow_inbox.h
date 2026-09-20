@@ -10,7 +10,7 @@
 extern "C" {
 #endif
 
-#define TURBO_FLOW_INBOX_API_VERSION UINT32_C(2)
+#define TURBO_FLOW_INBOX_API_VERSION UINT32_C(3)
 #define TURBO_FLOW_INBOX_RECORD_SCHEMA "turbo-flow.inbox.record"
 #define TURBO_FLOW_INBOX_RECORD_SCHEMA_VERSION UINT32_C(2)
 
@@ -81,6 +81,39 @@ typedef struct turbo_flow_inbox_claim_s {
 
 #define TURBO_FLOW_INBOX_CLAIM_INIT                                                                \
   {sizeof(turbo_flow_inbox_claim_t), TURBO_FLOW_INBOX_API_VERSION, 0u, 0u, {0}}
+
+#define TURBO_FLOW_INBOX_CLAIM_MAX_EXCLUDED_PARTITIONS 64u
+#define TURBO_FLOW_INBOX_CLAIM_MAX_EXCLUDED_BYTES (64u * 1024u)
+
+typedef enum turbo_flow_inbox_claim_ordering_e {
+  /** Preserve the existing total FIFO order. No partition exclusions are allowed. */
+  TURBO_FLOW_INBOX_CLAIM_ORDER_GLOBAL = 0,
+  /**
+   * Treat source_id as the stable partition key and skip pending records whose
+   * source_id appears in excluded_partitions. The oldest eligible record wins.
+   */
+  TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID = 1
+} turbo_flow_inbox_claim_ordering_t;
+
+/**
+ * Exact-version, caller-owned selector for one non-blocking claim.
+ *
+ * excluded_partitions is borrowed for the call. It is valid only for
+ * PARTITION_SOURCE_ID ordering, is explicitly bounded, and may not contain
+ * empty or duplicate keys. An excluded record remains PENDING; no provider
+ * counter or claim token advances for a skipped partition.
+ */
+typedef struct turbo_flow_inbox_claim_request_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_inbox_claim_ordering_t ordering;
+  const vstr *excluded_partitions;
+  size_t excluded_partition_count;
+} turbo_flow_inbox_claim_request_t;
+
+#define TURBO_FLOW_INBOX_CLAIM_REQUEST_INIT                                                        \
+  {sizeof(turbo_flow_inbox_claim_request_t), TURBO_FLOW_INBOX_API_VERSION,                         \
+   TURBO_FLOW_INBOX_CLAIM_ORDER_GLOBAL, NULL, 0u}
 
 typedef struct turbo_flow_inbox_snapshot_s {
   size_t size;
@@ -161,6 +194,8 @@ struct turbo_flow_inbox_ops_v2_s {
   int (*admit)(void *ctx, const turbo_flow_inbox_record_t *record,
                turbo_flow_inbox_receipt_t *receipt);
   int (*claim)(void *ctx, turbo_flow_inbox_claim_t *claim);
+  int (*claim_ex)(void *ctx, const turbo_flow_inbox_claim_request_t *request,
+                  turbo_flow_inbox_claim_t *claim);
   int (*complete)(void *ctx, uint64_t record_id, uint64_t claim_token);
   int (*fail)(void *ctx, uint64_t record_id, uint64_t claim_token, int status);
   int (*retry)(void *ctx, uint64_t record_id);
@@ -238,6 +273,17 @@ TURBO_FLOW_C_API int turbo_flow_inbox_admit(turbo_flow_inbox_t *inbox,
  */
 TURBO_FLOW_C_API int turbo_flow_inbox_claim(turbo_flow_inbox_t *inbox,
                                             turbo_flow_inbox_claim_t *claim);
+/**
+ * Non-blocking claim with an explicit ordering/partition selector.
+ *
+ * GLOBAL is identical to turbo_flow_inbox_claim(). PARTITION_SOURCE_ID selects
+ * the oldest pending record whose source_id is not in the bounded exclusion
+ * set. If pending backlog exists only in excluded partitions, SALTS_ENOENT is
+ * returned without changing provider state.
+ */
+TURBO_FLOW_C_API int turbo_flow_inbox_claim_ex(
+    turbo_flow_inbox_t *inbox, const turbo_flow_inbox_claim_request_t *request,
+    turbo_flow_inbox_claim_t *claim);
 /**
  * Complete one claim and retain its idempotency tombstone.
  * @return SALTS_OK on completion; SALTS_ECANCELED when owner takeover moved

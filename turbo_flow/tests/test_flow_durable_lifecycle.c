@@ -4,6 +4,7 @@
 #include "../src/flow_internal.h"
 #include "../src/flow_inbox_driver_internal.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,12 +16,15 @@ typedef struct lifecycle_fixture_s {
   turbo_flow_durable_buffer_binding_t *binding;
   size_t calls;
   atomic_size_t sinks;
+  atomic_size_t terminal_slots;
+  atomic_int terminal_ready[2];
   size_t owner_releases;
   int complete_status;
   size_t completions;
   int sink_status;
   int asynchronous;
   turbo_flow_async_terminal_claim_t terminal;
+  turbo_flow_async_terminal_claim_t terminal2;
   int admit_status;
   int snapshot_status;
   uint64_t generation;
@@ -43,6 +47,10 @@ static int probe_snapshot(void *ctx, turbo_flow_inbox_snapshot_t *snapshot) {
 }
 static int probe_claim(void *ctx, turbo_flow_inbox_claim_t *claim) {
   return turbo_flow_inbox_claim(&((lifecycle_fixture_t *)ctx)->backing, claim);
+}
+static int probe_claim_ex(void *ctx, const turbo_flow_inbox_claim_request_t *request,
+                          turbo_flow_inbox_claim_t *claim) {
+  return turbo_flow_inbox_claim_ex(&((lifecycle_fixture_t *)ctx)->backing, request, claim);
 }
 static int probe_complete(void *ctx, uint64_t id, uint64_t token) {
   lifecycle_fixture_t *f = ctx;
@@ -84,10 +92,21 @@ static int probe_destroy(void *ctx) {
   return turbo_flow_inbox_destroy(&((lifecycle_fixture_t *)ctx)->backing);
 }
 static const turbo_flow_inbox_ops_v2_t probe_ops = {
-  sizeof(turbo_flow_inbox_ops_v2_t), TURBO_FLOW_INBOX_API_VERSION,
-  probe_admit, probe_claim, probe_complete, probe_fail, probe_retry, probe_discard, probe_forget,
-  probe_scan_failed, probe_scan_history, probe_close, probe_snapshot, probe_destroy
-};
+    .size = sizeof(turbo_flow_inbox_ops_v2_t),
+    .version = TURBO_FLOW_INBOX_API_VERSION,
+    .admit = probe_admit,
+    .claim = probe_claim,
+    .claim_ex = probe_claim_ex,
+    .complete = probe_complete,
+    .fail = probe_fail,
+    .retry = probe_retry,
+    .discard = probe_discard,
+    .forget = probe_forget,
+    .scan_failed = probe_scan_failed,
+    .scan_history = probe_scan_history,
+    .close = probe_close,
+    .snapshot = probe_snapshot,
+    .destroy = probe_destroy};
 #include <salts/clock.h>
 
 static int sink(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
@@ -101,22 +120,49 @@ static int submit(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *
                   const turbo_flow_msg_t *msg, turbo_flow_async_terminal_claim_t *claim) {
   lifecycle_fixture_t *f = ctx;
   (void)flow; (void)stage; (void)msg;
-  int rc = turbo_flow_async_terminal_claim_move(&f->terminal, claim);
-  if (rc == SALTS_OK) ++f->sinks;
+  const size_t slot = atomic_fetch_add(&f->terminal_slots, (size_t)1u) & 1u;
+  turbo_flow_async_terminal_claim_t *destination =
+      slot == 0u ? &f->terminal : &f->terminal2;
+  int rc = turbo_flow_async_terminal_claim_move(destination, claim);
+  if (rc == SALTS_OK) {
+    atomic_store_explicit(&f->terminal_ready[slot], 1, memory_order_release);
+    atomic_fetch_add_explicit(&f->sinks, (size_t)1u, memory_order_release);
+  }
   return rc;
 }
-static void open_fixture(lifecycle_fixture_t *f, int asynchronous) {
+
+static int complete_ready_terminal(lifecycle_fixture_t *f, size_t slot) {
+  turbo_flow_async_terminal_claim_t *claim;
+  if (!f || slot > 1u) return 0;
+  if (!atomic_exchange_explicit(&f->terminal_ready[slot], 0, memory_order_acq_rel))
+    return 0;
+  claim = slot == 0u ? &f->terminal : &f->terminal2;
+  check_equal(turbo_flow_async_terminal_complete(claim, SALTS_OK, NULL), SALTS_OK);
+  return 1;
+}
+
+static void complete_ready_terminals(lifecycle_fixture_t *f) {
+  (void)complete_ready_terminal(f, 0u);
+  (void)complete_ready_terminal(f, 1u);
+}
+static void open_fixture_mode(lifecycle_fixture_t *f, int asynchronous,
+                              turbo_flow_durable_identity_mode_t identity_mode) {
   static const char graph[] = "source input\n"
     "buffer intake resource intake.store\n"
     "stage output adapter sink\n"
     "stage main {\n input -> intake -> output\n}\n";
   turbo_flow_inbox_memory_config_t memory = turbo_flow_inbox_memory_config_default();
+  memory.max_claims = 4u;
   turbo_flow_durable_buffer_binding_config_t config = TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
   turbo_flow_adapter_ops_t ops = {0};
   memset(f, 0, sizeof(*f));
   atomic_init(&f->sinks, 0u);
+  atomic_init(&f->terminal_slots, 0u);
+  atomic_init(&f->terminal_ready[0], 0);
+  atomic_init(&f->terminal_ready[1], 0);
   f->generation = 1u;
   f->terminal = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
+  f->terminal2 = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
   f->backing = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
   check_equal(turbo_flow_inbox_memory_create(&memory, &f->backing), SALTS_OK);
   f->provider = (turbo_flow_inbox_t){sizeof(f->provider), TURBO_FLOW_INBOX_API_VERSION, &probe_ops, f};
@@ -134,10 +180,15 @@ static void open_fixture(lifecycle_fixture_t *f, int asynchronous) {
   }
   check_equal(turbo_flow_parse_string(f->flow, graph, sizeof(graph)-1u), SALTS_OK);
   config.resource_name = "intake.store"; config.inbox = &f->provider;
+  config.identity_mode = identity_mode;
   check_equal(turbo_flow_durable_buffer_bind(f->flow, &config, &f->binding), SALTS_OK);
   check_equal(turbo_flow_compile(f->flow), SALTS_OK);
   check_equal(turbo_flow_start(f->flow), SALTS_OK);
 }
+static void open_fixture(lifecycle_fixture_t *f, int asynchronous) {
+  open_fixture_mode(f, asynchronous, TURBO_FLOW_DURABLE_IDENTITY_GENERATED);
+}
+
 static void publish(lifecycle_fixture_t *f) {
   turbo_flow_msg_t msg;
   turbo_flow_msg_init(&msg);
@@ -145,6 +196,21 @@ static void publish(lifecycle_fixture_t *f) {
   check_equal(turbo_flow_publish(f->flow, "input", &msg), SALTS_OK);
   turbo_flow_msg_cleanup(&msg);
 }
+static void publish_source(lifecycle_fixture_t *f, const char *source_id,
+                           const char *admission_id, uint64_t sequence) {
+  turbo_flow_durable_identity_t identity = TURBO_FLOW_DURABLE_IDENTITY_INIT;
+  turbo_flow_msg_t msg;
+  turbo_flow_msg_init(&msg);
+  msg.owned_payload = tstr_dup(admission_id);
+  msg.payload = tstr_to_v(msg.owned_payload);
+  identity.source_id = vstr_from_buf(source_id, strlen(source_id));
+  identity.admission_id = vstr_from_buf(admission_id, strlen(admission_id));
+  identity.source_sequence = sequence;
+  check_equal(turbo_flow_msg_set_durable_identity(&msg, &identity), SALTS_OK);
+  check_equal(turbo_flow_publish(f->flow, "input", &msg), SALTS_OK);
+  turbo_flow_msg_cleanup(&msg);
+}
+
 static turbo_flow_inbox_snapshot_t snapshot(lifecycle_fixture_t *f) {
   turbo_flow_inbox_snapshot_t s = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
   check_equal(turbo_flow_inbox_snapshot(&f->backing, &s), SALTS_OK);
@@ -176,6 +242,236 @@ static void progress_until_settled(lifecycle_fixture_t *f, uint64_t completed) {
   check_equal(snapshot(f).completed, completed);
 }
 spec("durable buffer lifecycle") {
+  it("keeps global ordering single-owner even with a larger configured worker set") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_drain_config_t config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    turbo_flow_durable_buffer_drain_snapshot_t observed =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_SNAPSHOT_INIT;
+    open_fixture(&f, 1);
+
+    config.ordering = TURBO_FLOW_DURABLE_ORDER_GLOBAL;
+    config.workers = 3u;
+    config.max_in_flight = 3u;
+    config.batch_claim = 3u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_OK);
+    publish(&f);
+    publish(&f);
+
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 1u; ++i)
+      salts_sleep_ms(1u);
+    check_equal(atomic_load(&f.sinks), (size_t)1u);
+    check_equal(snapshot(&f).in_flight_claims, (size_t)1u);
+    check_equal(snapshot(&f).pending_records, (size_t)1u);
+    check_equal(turbo_flow_durable_buffer_drain_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.workers, (size_t)3u);
+    check_equal(observed.effective_workers, (size_t)1u);
+    check_equal(observed.active_workers, (size_t)1u);
+
+    check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    check_equal(snapshot(&f).completed, UINT64_C(1));
+    check_equal(snapshot(&f).in_flight_claims, (size_t)0u);
+    check_equal(snapshot(&f).pending_records, (size_t)1u);
+    check_equal(atomic_load(&f.sinks), (size_t)1u);
+
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 2u; ++i)
+      salts_sleep_ms(1u);
+    check_equal(atomic_load(&f.sinks), (size_t)2u);
+    check_equal(snapshot(&f).in_flight_claims, (size_t)1u);
+    check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_OK, NULL), SALTS_OK);
+    progress_until_settled(&f, 2u);
+    close_fixture(&f);
+  }
+
+  it("absorbs a partition burst without exceeding bounded live claims") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_drain_config_t config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    const size_t record_count = 12u;
+    open_fixture_mode(&f, 1, TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED);
+
+    config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
+    config.partition_by = TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+    config.workers = 2u;
+    config.max_in_flight = 2u;
+    config.batch_claim = 2u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_OK);
+
+    for (size_t i = 0u; i < record_count; ++i) {
+      char source_id[32];
+      char admission_id[32];
+      (void)snprintf(source_id, sizeof(source_id), "burst-%zu", i);
+      (void)snprintf(admission_id, sizeof(admission_id), "item-%zu", i);
+      publish_source(&f, source_id, admission_id, (uint64_t)(i + 1u));
+    }
+
+    for (size_t pass = 0u; pass < 1000u && snapshot(&f).completed < record_count; ++pass) {
+      turbo_flow_inbox_snapshot_t current;
+      complete_ready_terminals(&f);
+      check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+      current = snapshot(&f);
+      check(current.in_flight_claims <= config.max_in_flight);
+      check(current.records <= record_count);
+      salts_sleep_ms(1u);
+    }
+    complete_ready_terminals(&f);
+    progress_until_settled(&f, record_count);
+    check_equal(atomic_load(&f.sinks), record_count);
+    check_equal(snapshot(&f).pending_records, (size_t)0u);
+    check_equal(snapshot(&f).in_flight_claims, (size_t)0u);
+    close_fixture(&f);
+  }
+
+  it("fails closed on one unknown worker and reconciles without replaying another partition") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_drain_config_t config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    turbo_flow_inbox_source_result_t reconciled = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    turbo_flow_durable_buffer_snapshot_t aggregate =
+        TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT;
+    open_fixture_mode(&f, 0, TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED);
+
+    config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
+    config.partition_by = TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+    config.workers = 2u;
+    config.max_in_flight = 2u;
+    config.batch_claim = 2u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_OK);
+
+    publish_source(&f, "source-A", "unknown-a", 1u);
+    publish_source(&f, "source-B", "healthy-b", 1u);
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 2u; ++i)
+      salts_sleep_ms(1u);
+    check_equal(atomic_load(&f.sinks), (size_t)2u);
+    check_equal(snapshot(&f).in_flight_claims, (size_t)2u);
+
+    f.complete_status = SALTS_EALREADY;
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_EALREADY);
+    check_equal(f.completions, (size_t)1u);
+    check_equal(atomic_load(&f.sinks), (size_t)2u);
+    check_equal(turbo_flow_durable_buffer_snapshot(
+                    f.flow, "intake.store", &aggregate), SALTS_OK);
+    check_equal(aggregate.driver_state, TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN);
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 0u), SALTS_EALREADY);
+    check_equal(f.completions, (size_t)1u);
+
+    f.complete_status = SALTS_OK;
+    check_equal(turbo_flow_durable_buffer_reconcile_settlement(
+                    f.binding, &reconciled), SALTS_OK);
+    check_equal(reconciled.state, TURBO_FLOW_INBOX_SOURCE_COMPLETED);
+    check_equal(reconciled.settlement_status, SALTS_OK);
+    check_equal(atomic_load(&f.sinks), (size_t)2u);
+    aggregate = (turbo_flow_durable_buffer_snapshot_t)TURBO_FLOW_DURABLE_BUFFER_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_snapshot(
+                    f.flow, "intake.store", &aggregate), SALTS_OK);
+    check_equal(aggregate.driver_state, TURBO_FLOW_INBOX_SOURCE_GRAPH_ACTIVE);
+
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    check_equal(f.completions, (size_t)2u);
+    check_equal(snapshot(&f).completed, UINT64_C(2));
+    check_equal(snapshot(&f).in_flight_claims, (size_t)0u);
+    check_equal(atomic_load(&f.sinks), (size_t)2u);
+    close_fixture(&f);
+  }
+
+  it("configures bounded partition workers and exposes scheduler state") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_drain_config_t config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    turbo_flow_durable_buffer_drain_snapshot_t observed =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_SNAPSHOT_INIT;
+    open_fixture(&f, 0);
+
+    config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
+    config.partition_by = TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+    config.workers = 4u;
+    config.max_in_flight = 4u;
+    config.batch_claim = 2u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_OK);
+    check_equal(turbo_flow_durable_buffer_drain_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.ordering, TURBO_FLOW_DURABLE_ORDER_PARTITION);
+    check_equal(observed.workers, (size_t)4u);
+    check_equal(observed.effective_workers, (size_t)4u);
+    check_equal(observed.max_in_flight, (size_t)4u);
+    check_equal(observed.batch_claim, (size_t)2u);
+    check_equal(observed.active_workers, (size_t)0u);
+
+    config.workers = TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS + 1u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_EINVAL);
+    config.workers = 4u;
+    config.max_in_flight = 3u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_EINVAL);
+    close_fixture(&f);
+  }
+
+  it("runs different partitions concurrently without preclaiming the same partition") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_drain_config_t config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    turbo_flow_durable_buffer_drain_snapshot_t observed =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_SNAPSHOT_INIT;
+    open_fixture_mode(&f, 1, TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED);
+
+    config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
+    config.partition_by = TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+    config.workers = 3u;
+    config.max_in_flight = 3u;
+    config.batch_claim = 3u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_OK);
+
+    publish_source(&f, "source-A", "a-1", 1u);
+    publish_source(&f, "source-A", "a-2", 2u);
+    publish_source(&f, "source-B", "b-1", 1u);
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 2u; ++i)
+      salts_sleep_ms(1u);
+    check_equal(atomic_load(&f.sinks), (size_t)2u);
+    check_equal(snapshot(&f).pending_records, (size_t)1u);
+    check_equal(snapshot(&f).in_flight_claims, (size_t)2u);
+
+    check_equal(turbo_flow_durable_buffer_drain_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.active_workers, (size_t)2u);
+    check_equal(observed.active_partitions, (size_t)2u);
+    check_equal(observed.backlog_records, (size_t)1u);
+    check(observed.in_flight_claims <= config.max_in_flight);
+
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    observed = (turbo_flow_durable_buffer_drain_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_drain_snapshot(
+                    f.flow, "intake.store", &observed), SALTS_OK);
+    check_equal(observed.active_workers, (size_t)2u);
+    check_equal(observed.active_partitions, (size_t)2u);
+    check_equal(observed.backlog_records, (size_t)1u);
+    check(observed.partition_blocked > 0u);
+
+    check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
+    check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_OK, NULL), SALTS_OK);
+    progress_until_settled(&f, 2u);
+    for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 3u; ++i)
+      salts_sleep_ms(1u);
+    check_equal(atomic_load(&f.sinks), (size_t)3u);
+    check_equal(snapshot(&f).in_flight_claims, (size_t)1u);
+    check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
+    progress_until_settled(&f, 3u);
+    check_equal(snapshot(&f).pending_records, (size_t)0u);
+    check_equal(snapshot(&f).in_flight_claims, (size_t)0u);
+    close_fixture(&f);
+  }
   it("empty progress succeeds and one progress owns at most one record") {
     lifecycle_fixture_t f; open_fixture(&f, 0);
     check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);

@@ -58,6 +58,8 @@ typedef struct flow_inbox_memory_s {
   bool claim_token_exhausted;
 } flow_inbox_memory_t;
 
+static int flow_inbox_view_equal(vstr left, vstr right);
+
 static int flow_inbox_handle_valid(const turbo_flow_inbox_t *inbox) {
   const turbo_flow_inbox_ops_v2_t *ops;
   if (!inbox || inbox->size != sizeof(*inbox) || inbox->version != TURBO_FLOW_INBOX_API_VERSION ||
@@ -66,8 +68,43 @@ static int flow_inbox_handle_valid(const turbo_flow_inbox_t *inbox) {
   }
   ops = inbox->ops;
   return ops->size == sizeof(*ops) && ops->version == TURBO_FLOW_INBOX_API_VERSION && ops->admit &&
-         ops->claim && ops->complete && ops->fail && ops->retry && ops->discard && ops->forget &&
-         ops->scan_failed && ops->scan_history && ops->close && ops->snapshot && ops->destroy;
+         ops->claim && ops->claim_ex && ops->complete && ops->fail && ops->retry && ops->discard &&
+         ops->forget && ops->scan_failed && ops->scan_history && ops->close && ops->snapshot &&
+         ops->destroy;
+}
+
+static int flow_inbox_claim_request_valid(const turbo_flow_inbox_claim_request_t *request) {
+  size_t total_bytes = 0u;
+  if (!request || request->size != sizeof(*request) ||
+      request->version != TURBO_FLOW_INBOX_API_VERSION)
+    return 0;
+  if (request->ordering == TURBO_FLOW_INBOX_CLAIM_ORDER_GLOBAL)
+    return request->excluded_partition_count == 0u;
+  if (request->ordering != TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID ||
+      request->excluded_partition_count > TURBO_FLOW_INBOX_CLAIM_MAX_EXCLUDED_PARTITIONS ||
+      (request->excluded_partition_count != 0u && !request->excluded_partitions))
+    return 0;
+  for (size_t i = 0u; i < request->excluded_partition_count; ++i) {
+    const vstr key = request->excluded_partitions[i];
+    if (!key.data || key.len == 0u ||
+        key.len > TURBO_FLOW_INBOX_CLAIM_MAX_EXCLUDED_BYTES - total_bytes)
+      return 0;
+    total_bytes += key.len;
+    for (size_t j = 0u; j < i; ++j)
+      if (flow_inbox_view_equal(key, request->excluded_partitions[j])) return 0;
+  }
+  return 1;
+}
+
+static int flow_inbox_claim_partition_excluded(
+    const turbo_flow_inbox_record_t *record,
+    const turbo_flow_inbox_claim_request_t *request) {
+  if (!record || !request ||
+      request->ordering != TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID)
+    return 0;
+  for (size_t i = 0u; i < request->excluded_partition_count; ++i)
+    if (flow_inbox_view_equal(record->source_id, request->excluded_partitions[i])) return 1;
+  return 0;
 }
 
 static int flow_inbox_record_valid(const turbo_flow_inbox_record_t *record) {
@@ -335,14 +372,18 @@ static int flow_inbox_memory_admit(void *ctx, const turbo_flow_inbox_record_t *s
   return rc;
 }
 
-static int flow_inbox_memory_claim(void *ctx, turbo_flow_inbox_claim_t *claim) {
+static int flow_inbox_memory_claim_select(
+    void *ctx, const turbo_flow_inbox_claim_request_t *request,
+    turbo_flow_inbox_claim_t *claim) {
   flow_inbox_memory_t *memory = (flow_inbox_memory_t *)ctx;
   flow_inbox_memory_record_t *record = NULL;
   int rc = SALTS_ENOENT;
+  if (!flow_inbox_claim_request_valid(request)) return SALTS_EINVAL;
   salts_mutex_lock(&memory->mutex);
   for (size_t index = 0u; index < vec_size(&memory->records); ++index) {
     flow_inbox_memory_slot_t *slot = (flow_inbox_memory_slot_t *)vec_at(&memory->records, index);
     if (slot && slot->record && slot->record->phase == FLOW_INBOX_RECORD_PENDING &&
+        !flow_inbox_claim_partition_excluded(&slot->record->view, request) &&
         (!record || slot->record->record_id < record->record_id)) {
       record = slot->record;
     }
@@ -362,6 +403,17 @@ static int flow_inbox_memory_claim(void *ctx, turbo_flow_inbox_claim_t *claim) {
   }
   salts_mutex_unlock(&memory->mutex);
   return rc;
+}
+
+static int flow_inbox_memory_claim(void *ctx, turbo_flow_inbox_claim_t *claim) {
+  const turbo_flow_inbox_claim_request_t request = TURBO_FLOW_INBOX_CLAIM_REQUEST_INIT;
+  return flow_inbox_memory_claim_select(ctx, &request, claim);
+}
+
+static int flow_inbox_memory_claim_ex(void *ctx,
+                                      const turbo_flow_inbox_claim_request_t *request,
+                                      turbo_flow_inbox_claim_t *claim) {
+  return flow_inbox_memory_claim_select(ctx, request, claim);
 }
 
 static int flow_inbox_memory_complete(void *ctx, uint64_t record_id, uint64_t claim_token) {
@@ -594,6 +646,7 @@ static const turbo_flow_inbox_ops_v2_t flow_inbox_memory_ops = {
     .version = TURBO_FLOW_INBOX_API_VERSION,
     .admit = flow_inbox_memory_admit,
     .claim = flow_inbox_memory_claim,
+    .claim_ex = flow_inbox_memory_claim_ex,
     .complete = flow_inbox_memory_complete,
     .fail = flow_inbox_memory_fail,
     .retry = flow_inbox_memory_retry,
@@ -670,6 +723,30 @@ int turbo_flow_inbox_claim(turbo_flow_inbox_t *inbox, turbo_flow_inbox_claim_t *
   *claim = (turbo_flow_inbox_claim_t)TURBO_FLOW_INBOX_CLAIM_INIT;
   if (!flow_inbox_handle_valid(inbox)) return SALTS_EINVAL;
   rc = inbox->ops->claim(inbox->ctx, claim);
+  if (rc != SALTS_OK) {
+    *claim = (turbo_flow_inbox_claim_t)TURBO_FLOW_INBOX_CLAIM_INIT;
+    return rc;
+  }
+  if (claim->size != sizeof(*claim) || claim->version != TURBO_FLOW_INBOX_API_VERSION ||
+      claim->record_id == 0u || claim->claim_token == 0u ||
+      flow_inbox_record_valid(&claim->record) != SALTS_OK) {
+    *claim = (turbo_flow_inbox_claim_t)TURBO_FLOW_INBOX_CLAIM_INIT;
+    return SALTS_EPROTO;
+  }
+  return SALTS_OK;
+}
+
+int turbo_flow_inbox_claim_ex(turbo_flow_inbox_t *inbox,
+                              const turbo_flow_inbox_claim_request_t *request,
+                              turbo_flow_inbox_claim_t *claim) {
+  int rc;
+  if (!claim || claim->size != sizeof(*claim) || claim->version != TURBO_FLOW_INBOX_API_VERSION ||
+      !flow_inbox_claim_request_valid(request))
+    return SALTS_EINVAL;
+  if (claim->record_id != 0u || claim->claim_token != 0u) return SALTS_EBUSY;
+  *claim = (turbo_flow_inbox_claim_t)TURBO_FLOW_INBOX_CLAIM_INIT;
+  if (!flow_inbox_handle_valid(inbox)) return SALTS_EINVAL;
+  rc = inbox->ops->claim_ex(inbox->ctx, request, claim);
   if (rc != SALTS_OK) {
     *claim = (turbo_flow_inbox_claim_t)TURBO_FLOW_INBOX_CLAIM_INIT;
     return rc;

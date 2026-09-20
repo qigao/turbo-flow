@@ -32,6 +32,13 @@ static int inbox_malformed_claim(void *ctx, turbo_flow_inbox_claim_t *claim) {
   return SALTS_OK;
 }
 
+static int inbox_malformed_claim_ex(void *ctx,
+                                    const turbo_flow_inbox_claim_request_t *request,
+                                    turbo_flow_inbox_claim_t *claim) {
+  (void)request;
+  return inbox_malformed_claim(ctx, claim);
+}
+
 static int inbox_malformed_settle(void *ctx, uint64_t record_id, uint64_t claim_token) {
   (void)ctx;
   (void)record_id;
@@ -162,6 +169,7 @@ static const turbo_flow_inbox_ops_v2_t inbox_malformed_ops = {
     .version = TURBO_FLOW_INBOX_API_VERSION,
     .admit = inbox_malformed_admit,
     .claim = inbox_malformed_claim,
+    .claim_ex = inbox_malformed_claim_ex,
     .complete = inbox_malformed_settle,
     .fail = inbox_malformed_fail,
     .retry = inbox_malformed_record_action,
@@ -661,6 +669,111 @@ spec("flow intake inbox") {
     check_equal(turbo_flow_inbox_claim(&inbox, &claim), SALTS_EBUSY);
     check_equal(claim.record_id, receipt.record_id);
     check_equal(claim.claim_token, claim_token);
+    check_equal(turbo_flow_inbox_complete(&inbox, &claim), SALTS_OK);
+    check_equal(turbo_flow_inbox_close(&inbox), SALTS_OK);
+    check_equal(turbo_flow_inbox_destroy(&inbox), SALTS_OK);
+  }
+
+  it("claims the oldest eligible source partition without mutating excluded backlog") {
+    static const char source_a[] = "source-A";
+    static const char source_b[] = "source-B";
+    char a1_id[] = "a-1";
+    char a2_id[] = "a-2";
+    char b1_id[] = "b-1";
+    char payload[] = "p";
+    turbo_flow_inbox_memory_config_t config = inbox_test_config();
+    turbo_flow_inbox_record_t a1 = inbox_test_record(a1_id, payload);
+    turbo_flow_inbox_record_t a2 = inbox_test_record(a2_id, payload);
+    turbo_flow_inbox_record_t b1 = inbox_test_record(b1_id, payload);
+    turbo_flow_inbox_receipt_t a1_receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
+    turbo_flow_inbox_receipt_t a2_receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
+    turbo_flow_inbox_receipt_t b1_receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
+    turbo_flow_inbox_claim_t first = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_inbox_claim_t second = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_inbox_claim_t blocked = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_inbox_claim_request_t request = TURBO_FLOW_INBOX_CLAIM_REQUEST_INIT;
+    turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+    vstr excluded[1];
+    turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
+
+    a1.source_id = vstr_from_buf(source_a, sizeof(source_a) - 1u);
+    a2.source_id = vstr_from_buf(source_a, sizeof(source_a) - 1u);
+    b1.source_id = vstr_from_buf(source_b, sizeof(source_b) - 1u);
+    config.max_records = 4u;
+    config.max_total_bytes = 256u;
+    config.max_record_bytes = 64u;
+    config.max_claims = 2u;
+    check_equal(turbo_flow_inbox_memory_create(&config, &inbox), SALTS_OK);
+    check_equal(turbo_flow_inbox_admit(&inbox, &a1, &a1_receipt), SALTS_OK);
+    check_equal(turbo_flow_inbox_admit(&inbox, &a2, &a2_receipt), SALTS_OK);
+    check_equal(turbo_flow_inbox_admit(&inbox, &b1, &b1_receipt), SALTS_OK);
+
+    request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID;
+    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &first), SALTS_OK);
+    check_equal(first.record_id, a1_receipt.record_id);
+    excluded[0] = first.record.source_id;
+    request.excluded_partitions = excluded;
+    request.excluded_partition_count = 1u;
+    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &second), SALTS_OK);
+    check_equal(second.record_id, b1_receipt.record_id);
+    check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
+    check_equal(snapshot.pending_records, (size_t)1u);
+    check_equal(snapshot.in_flight_claims, (size_t)2u);
+
+    blocked = (turbo_flow_inbox_claim_t)TURBO_FLOW_INBOX_CLAIM_INIT;
+    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &blocked), SALTS_ENOENT);
+    check_equal(blocked.record_id, (uint64_t)0u);
+    check_equal(turbo_flow_inbox_complete(&inbox, &second), SALTS_OK);
+    check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
+    check_equal(snapshot.pending_records, (size_t)1u);
+    check_equal(snapshot.in_flight_claims, (size_t)1u);
+    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &blocked), SALTS_ENOENT);
+
+    check_equal(turbo_flow_inbox_complete(&inbox, &first), SALTS_OK);
+    request.excluded_partitions = NULL;
+    request.excluded_partition_count = 0u;
+    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &blocked), SALTS_OK);
+    check_equal(blocked.record_id, a2_receipt.record_id);
+    check_equal(turbo_flow_inbox_complete(&inbox, &blocked), SALTS_OK);
+    check_equal(turbo_flow_inbox_close(&inbox), SALTS_OK);
+    check_equal(turbo_flow_inbox_destroy(&inbox), SALTS_OK);
+  }
+
+  it("rejects malformed or unbounded partition claim selectors before provider mutation") {
+    static const char source[] = "source-A";
+    char id[] = "one";
+    char payload[] = "p";
+    turbo_flow_inbox_memory_config_t config = inbox_test_config();
+    turbo_flow_inbox_record_t record = inbox_test_record(id, payload);
+    turbo_flow_inbox_receipt_t receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
+    turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_inbox_claim_request_t request = TURBO_FLOW_INBOX_CLAIM_REQUEST_INIT;
+    turbo_flow_inbox_snapshot_t before = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+    turbo_flow_inbox_snapshot_t after = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+    vstr keys[2];
+    turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
+
+    record.source_id = vstr_from_buf(source, sizeof(source) - 1u);
+    check_equal(turbo_flow_inbox_memory_create(&config, &inbox), SALTS_OK);
+    check_equal(turbo_flow_inbox_admit(&inbox, &record, &receipt), SALTS_OK);
+    check_equal(turbo_flow_inbox_snapshot(&inbox, &before), SALTS_OK);
+    keys[0] = record.source_id;
+    keys[1] = record.source_id;
+
+    request.excluded_partitions = keys;
+    request.excluded_partition_count = 1u;
+    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &claim), SALTS_EINVAL);
+    request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID;
+    request.excluded_partition_count = 2u;
+    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &claim), SALTS_EINVAL);
+    request.excluded_partition_count = TURBO_FLOW_INBOX_CLAIM_MAX_EXCLUDED_PARTITIONS + 1u;
+    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &claim), SALTS_EINVAL);
+    check_equal(turbo_flow_inbox_snapshot(&inbox, &after), SALTS_OK);
+    check_equal(after.pending_records, before.pending_records);
+    check_equal(after.in_flight_claims, before.in_flight_claims);
+
+    request = (turbo_flow_inbox_claim_request_t)TURBO_FLOW_INBOX_CLAIM_REQUEST_INIT;
+    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &claim), SALTS_OK);
     check_equal(turbo_flow_inbox_complete(&inbox, &claim), SALTS_OK);
     check_equal(turbo_flow_inbox_close(&inbox), SALTS_OK);
     check_equal(turbo_flow_inbox_destroy(&inbox), SALTS_OK);

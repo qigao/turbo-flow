@@ -29,8 +29,15 @@ typedef struct flow_inbox_driver_s flow_inbox_driver_t;
 int flow_inbox_driver_create(const flow_inbox_driver_config_t *config,
                              flow_inbox_driver_t **driver_out);
 int flow_inbox_driver_request(flow_inbox_driver_t *driver);
+/* Buffer-only eligible claim using the exact provider selector. */
+int flow_inbox_driver_request_ex(flow_inbox_driver_t *driver,
+                                 const turbo_flow_inbox_claim_request_t *request);
 /* Only a buffer drain may use paused Graph admission. */
 int flow_inbox_driver_request_drain(flow_inbox_driver_t *driver);
+int flow_inbox_driver_request_drain_ex(flow_inbox_driver_t *driver,
+                                       const turbo_flow_inbox_claim_request_t *request);
+/* Borrow the active claim partition while the driver is non-idle. */
+int flow_inbox_driver_active_partition(const flow_inbox_driver_t *driver, vstr *partition_out);
 /* Read-only phase/status; never settles, retries, or claims storage. */
 int flow_inbox_driver_status(const flow_inbox_driver_t *driver,
                              turbo_flow_inbox_source_result_t *result);

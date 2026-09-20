@@ -466,6 +466,10 @@ typedef struct flow_durable_latency_pending_s {
 
 struct turbo_flow_durable_buffer_binding_s {
   flow_inbox_driver_t *driver;
+  flow_inbox_driver_t *extra_drivers[TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS - 1u];
+  turbo_flow_durable_buffer_drain_config_t drain_config;
+  uint64_t partition_blocked;
+  uint64_t worker_saturated;
   turbo_flow_t *flow;
   tstr resource_name;
   turbo_flow_inbox_t *inbox;
