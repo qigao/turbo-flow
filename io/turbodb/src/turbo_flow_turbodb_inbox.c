@@ -955,8 +955,6 @@ static int inbox_claim_select(void *ctx,
   rc = inbox_begin(slot, &txn, &error);
   if (rc == SALTS_OK) rc = inbox_read_meta(owner, slot, txn, &meta, &error);
   if (rc == SALTS_OK && meta.generation != (int64_t)owner->generation) rc = SALTS_EBUSY;
-  if (rc == SALTS_OK && meta.in_flight_claims >= (int64_t)owner->max_claims) rc = SALTS_ENOSPC;
-  if (rc == SALTS_OK && meta.next_claim_token == INT64_MAX) rc = SALTS_ERANGE;
 
   if (rc == SALTS_OK) {
     int written = snprintf(sql, sizeof(sql), "SELECT record_id FROM %s WHERE phase=0",
@@ -1001,6 +999,8 @@ static int inbox_claim_select(void *ctx,
   if (rc == SALTS_OK && rows == 0u) rc = SALTS_ENOENT;
   if (rc == SALTS_OK && rows != 1u) rc = SALTS_EPROTO;
   if (rc == SALTS_OK) rc = inbox_get_i64(result, 0u, &id, &error);
+  if (rc == SALTS_OK && meta.in_flight_claims >= (int64_t)owner->max_claims) rc = SALTS_ENOSPC;
+  if (rc == SALTS_OK && meta.next_claim_token == INT64_MAX) rc = SALTS_ERANGE;
   orm_result_destroy(result);
   result = NULL;
 
