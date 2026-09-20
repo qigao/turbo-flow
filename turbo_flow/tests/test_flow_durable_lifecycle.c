@@ -44,6 +44,10 @@ static int probe_snapshot(void *ctx, turbo_flow_inbox_snapshot_t *snapshot) {
 static int probe_claim(void *ctx, turbo_flow_inbox_claim_t *claim) {
   return turbo_flow_inbox_claim(&((lifecycle_fixture_t *)ctx)->backing, claim);
 }
+static int probe_claim_ex(void *ctx, const turbo_flow_inbox_claim_request_t *request,
+                          turbo_flow_inbox_claim_t *claim) {
+  return turbo_flow_inbox_claim_ex(&((lifecycle_fixture_t *)ctx)->backing, request, claim);
+}
 static int probe_complete(void *ctx, uint64_t id, uint64_t token) {
   lifecycle_fixture_t *f = ctx;
   ++f->completions;
@@ -84,10 +88,21 @@ static int probe_destroy(void *ctx) {
   return turbo_flow_inbox_destroy(&((lifecycle_fixture_t *)ctx)->backing);
 }
 static const turbo_flow_inbox_ops_v2_t probe_ops = {
-  sizeof(turbo_flow_inbox_ops_v2_t), TURBO_FLOW_INBOX_API_VERSION,
-  probe_admit, probe_claim, probe_complete, probe_fail, probe_retry, probe_discard, probe_forget,
-  probe_scan_failed, probe_scan_history, probe_close, probe_snapshot, probe_destroy
-};
+    .size = sizeof(turbo_flow_inbox_ops_v2_t),
+    .version = TURBO_FLOW_INBOX_API_VERSION,
+    .admit = probe_admit,
+    .claim = probe_claim,
+    .claim_ex = probe_claim_ex,
+    .complete = probe_complete,
+    .fail = probe_fail,
+    .retry = probe_retry,
+    .discard = probe_discard,
+    .forget = probe_forget,
+    .scan_failed = probe_scan_failed,
+    .scan_history = probe_scan_history,
+    .close = probe_close,
+    .snapshot = probe_snapshot,
+    .destroy = probe_destroy};
 #include <salts/clock.h>
 
 static int sink(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
