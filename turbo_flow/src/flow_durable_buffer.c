@@ -445,6 +445,9 @@ static int flow_durable_buffer_encode_record(turbo_flow_durable_buffer_binding_t
     record->source_sequence = identity.source_sequence;
   } else {
     if (tstr_len(stage->name) > TURBO_FLOW_DURABLE_SOURCE_ID_MAX) return SALTS_ERANGE;
+    if (binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION &&
+        binding->drain_config.partition_by != TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID)
+      return SALTS_EINVAL;
     rc = flow_durable_buffer_next_sequence(binding, &sequence);
     if (rc != SALTS_OK) return rc;
     count = snprintf(generated_admission, generated_admission_capacity, "g%" PRIu64 ":%s:%" PRIu64,
