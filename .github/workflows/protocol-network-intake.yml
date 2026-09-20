@@ -35,8 +35,8 @@ concurrency:
 env:
   EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   VCPKG_COMMIT: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_COMMIT: 2804c2eb809fed4cb89f917f0a8cd00f482abb64
-  SALTS_UTILS_COMMIT: 0b3876018e5bdaed70fecbc0d0863cb394dd6044
+  SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae
+  SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
 
@@ -160,10 +160,13 @@ jobs:
             -DENABLE_TESTS=OFF \
             -DBUILD_TESTS=OFF \
             -DBUILD_EXAMPLES=OFF \
-            -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$RUNNER_TEMP/host-lemon/lemon" \
-            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk/salts-utils-debug"
-          cmake --build build/linux-gcc-debug --target install -j2
+            -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$RUNNER_TEMP/host-lemon/lemon"
+          cmake --build build/linux-gcc-debug -j2
+          cmake --install build/linux-gcc-debug \
+            --prefix "$RUNNER_TEMP/sdk/salts-utils-debug" --component Unspecified
           test -d "$RUNNER_TEMP/sdk/salts-utils-debug/include"
+          test -f "$RUNNER_TEMP/sdk/salts-utils-debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test ! -e "$RUNNER_TEMP/sdk/salts-utils-debug/lib/cmake/DataBind/DataBindConfig.cmake"
           sudo mkdir -p /opt/salts-utils
           sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
 
