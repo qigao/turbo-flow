@@ -92,11 +92,13 @@
       "binaryDir": "${sourceDir}/build/config-win-dev-user",
       "environment": {
         "SALTS_UTILS_ROOT": null,
+        "DATABIND_ROOT": null,
         "RULES_FORGE_ROOT": null
       },
       "cacheVariables": {
         "TURBO_FLOW_TEST_COMPONENT": "Config",
         "CMAKE_DISABLE_FIND_PACKAGE_SaltsUtils": true,
+        "CMAKE_DISABLE_FIND_PACKAGE_DataBind": true,
         "CMAKE_DISABLE_FIND_PACKAGE_RulesForge": true
       }
     },
@@ -106,11 +108,13 @@
       "binaryDir": "${sourceDir}/build/config-win-release-user",
       "environment": {
         "SALTS_UTILS_ROOT": null,
+        "DATABIND_ROOT": null,
         "RULES_FORGE_ROOT": null
       },
       "cacheVariables": {
         "TURBO_FLOW_TEST_COMPONENT": "Config",
         "CMAKE_DISABLE_FIND_PACKAGE_SaltsUtils": true,
+        "CMAKE_DISABLE_FIND_PACKAGE_DataBind": true,
         "CMAKE_DISABLE_FIND_PACKAGE_RulesForge": true
       }
     },
@@ -510,11 +514,13 @@
       "binaryDir": "${sourceDir}/build/config-linux-dev-user",
       "environment": {
         "SALTS_UTILS_ROOT": null,
+        "DATABIND_ROOT": null,
         "RULES_FORGE_ROOT": null
       },
       "cacheVariables": {
         "TURBO_FLOW_TEST_COMPONENT": "Config",
         "CMAKE_DISABLE_FIND_PACKAGE_SaltsUtils": true,
+        "CMAKE_DISABLE_FIND_PACKAGE_DataBind": true,
         "CMAKE_DISABLE_FIND_PACKAGE_RulesForge": true
       }
     },
@@ -524,11 +530,13 @@
       "binaryDir": "${sourceDir}/build/config-linux-release-user",
       "environment": {
         "SALTS_UTILS_ROOT": null,
+        "DATABIND_ROOT": null,
         "RULES_FORGE_ROOT": null
       },
       "cacheVariables": {
         "TURBO_FLOW_TEST_COMPONENT": "Config",
         "CMAKE_DISABLE_FIND_PACKAGE_SaltsUtils": true,
+        "CMAKE_DISABLE_FIND_PACKAGE_DataBind": true,
         "CMAKE_DISABLE_FIND_PACKAGE_RulesForge": true
       }
     },
