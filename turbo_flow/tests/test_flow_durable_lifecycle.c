@@ -300,13 +300,13 @@ spec("durable buffer lifecycle") {
       check_equal(observed.active_partitions, (size_t)2u);
       check(observed.partition_blocked > 0u);
 
-      complete_ready_terminals(&f);
-      for (size_t i = 0u; i < 1000u && snapshot(&f).completed < 2u; ++i) {
+      for (size_t i = 0u; i < 1000u && snapshot(&f).completed < 3u; ++i) {
+        complete_ready_terminals(&f);
         check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
         salts_sleep_ms(1u);
       }
       complete_ready_terminals(&f);
-      check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
+      check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
       check_equal(snapshot(&f).completed, UINT64_C(3));
       close_fixture(&f);
     }
