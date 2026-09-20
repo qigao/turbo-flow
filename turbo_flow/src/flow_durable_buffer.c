@@ -320,10 +320,12 @@ static int flow_durable_buffer_next_sequence(turbo_flow_durable_buffer_binding_t
   }
 }
 
-static int flow_durable_buffer_record_bytes(vstr source_id, vstr admission_id, vstr correlation,
+static int flow_durable_buffer_record_bytes(vstr source_id, vstr partition_key,
+                                            vstr admission_id, vstr correlation,
                                             vstr payload, size_t *out) {
   size_t total = 0u;
-  const size_t lengths[] = {source_id.len, admission_id.len, correlation.len, payload.len};
+  const size_t lengths[] = {source_id.len, partition_key.len, admission_id.len,
+                            correlation.len, payload.len};
 
   if (!out) return SALTS_EINVAL;
   for (size_t i = 0u; i < sizeof(lengths) / sizeof(lengths[0]); ++i) {
@@ -397,6 +399,7 @@ static int flow_durable_buffer_encode_record(turbo_flow_durable_buffer_binding_t
     if (rc == SALTS_ENOENT) return SALTS_EINVAL;
     if (rc != SALTS_OK) return rc;
     record->source_id = identity.source_id;
+    record->partition_key = identity.source_id;
     record->admission_id = identity.admission_id;
     record->correlation = identity.correlation;
     record->source_sequence = identity.source_sequence;
@@ -408,6 +411,7 @@ static int flow_durable_buffer_encode_record(turbo_flow_durable_buffer_binding_t
                      binding->provider_generation, binding->admission_namespace, sequence);
     if (count < 0 || (size_t)count >= generated_admission_capacity) return SALTS_ERANGE;
     record->source_id = vstr_from_buf(stage->name, tstr_len(stage->name));
+    record->partition_key = record->source_id;
     record->admission_id = vstr_from_buf(generated_admission, (size_t)count);
     record->correlation = (vstr){NULL, 0u};
     record->source_sequence = sequence;
@@ -418,8 +422,9 @@ static int flow_durable_buffer_encode_record(turbo_flow_durable_buffer_binding_t
   record->message_flags = message->flags;
   record->payload = message->payload;
 
-  rc = flow_durable_buffer_record_bytes(record->source_id, record->admission_id,
-                                        record->correlation, record->payload, &retained_bytes);
+  rc = flow_durable_buffer_record_bytes(record->source_id, record->partition_key,
+                                        record->admission_id, record->correlation,
+                                        record->payload, &retained_bytes);
   if (rc != SALTS_OK) return rc;
   if (retained_bytes > binding->max_message_bytes) return SALTS_ENOSPC;
   return SALTS_OK;
