@@ -120,21 +120,21 @@ TURBO_FLOW_C_API int turbo_flow_turbodb_command_open_in_transaction(
     orm_error_t *orm_error);
 
 #define TURBO_FLOW_TURBODB_INBOX_API_VERSION UINT32_C(1)
-#define TURBO_FLOW_TURBODB_INBOX_SCHEMA_VERSION UINT32_C(2)
+#define TURBO_FLOW_TURBODB_INBOX_SCHEMA_VERSION UINT32_C(3)
 #define TURBO_FLOW_TURBODB_INBOX_DEFAULT_CONNECTIONS 4u
 #define TURBO_FLOW_TURBODB_INBOX_MAX_CONNECTIONS 64u
 #define TURBO_FLOW_TURBODB_INBOX_NAMESPACE_MAX 63u
 
 /**
- * Exact v2 durable inbox configuration.
+ * Exact v3 durable inbox configuration.
  *
  * `database` and every view reachable from it are borrowed only during create;
  * successful create owns all opened ORM connections. `namespace_name` is also
  * borrowed only during create and must match `[A-Za-z_][A-Za-z0-9_]*`. It maps
- * to `<namespace_name>_inbox_meta_v2` and
- * `<namespace_name>_inbox_records_v2`.
+ * to `<namespace_name>_inbox_meta_v3` and
+ * `<namespace_name>_inbox_records_v3`.
  *
- * Version 2 supports only TurboDB's file-backed SQLite driver with a durable
+ * Version 3 supports only TurboDB's file-backed SQLite driver with a durable
  * rollback/WAL journal and FULL-or-stronger synchronization. Other drivers,
  * `:memory:`, journal OFF/MEMORY, and weaker synchronization are rejected with
  * `SALTS_ENOTSUP`; each additional backend requires its own transaction and
