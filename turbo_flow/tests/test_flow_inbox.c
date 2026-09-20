@@ -204,6 +204,7 @@ static turbo_flow_inbox_record_t inbox_test_record(char *correlation, char *payl
   turbo_flow_inbox_record_t record;
   turbo_flow_inbox_record_init(&record);
   record.source_id = vstr_from_buf(source_id, sizeof(source_id) - 1u);
+  record.partition_key = record.source_id;
   record.admission_id = vstr_from_buf(correlation, strlen(correlation));
   record.source_sequence = 41u;
   record.timestamp_ns = 42u;
@@ -222,8 +223,8 @@ static turbo_flow_inbox_record_t inbox_test_record(char *correlation, char *payl
 }
 
 static size_t inbox_test_record_bytes(const turbo_flow_inbox_record_t *record) {
-  return record->source_id.len + record->admission_id.len + record->correlation.len +
-         record->payload.len;
+  return record->source_id.len + record->partition_key.len + record->admission_id.len +
+         record->correlation.len + record->payload.len;
 }
 
 static turbo_flow_inbox_memory_config_t inbox_test_config(void) {
@@ -697,8 +698,11 @@ spec("flow intake inbox") {
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
 
     a1.source_id = vstr_from_buf(source_a, sizeof(source_a) - 1u);
+    a1.partition_key = a1.source_id;
     a2.source_id = vstr_from_buf(source_a, sizeof(source_a) - 1u);
+    a2.partition_key = a2.source_id;
     b1.source_id = vstr_from_buf(source_b, sizeof(source_b) - 1u);
+    b1.partition_key = b1.source_id;
     config.max_records = 4u;
     config.max_total_bytes = 256u;
     config.max_record_bytes = 64u;
