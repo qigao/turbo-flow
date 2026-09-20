@@ -126,7 +126,10 @@ static int flow_durable_buffer_drain_config_valid(
   if (config->ordering != TURBO_FLOW_DURABLE_ORDER_GLOBAL &&
       config->ordering != TURBO_FLOW_DURABLE_ORDER_PARTITION)
     return 0;
-  if (config->partition_by != TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID)
+  if (config->partition_by != TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID &&
+      config->partition_by != TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID &&
+      config->partition_by != TURBO_FLOW_DURABLE_PARTITION_SESSION_ID &&
+      config->partition_by != TURBO_FLOW_DURABLE_PARTITION_CUSTOM)
     return 0;
   if (config->workers == 0u ||
       config->workers > TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS ||
@@ -336,6 +339,40 @@ static int flow_durable_buffer_record_bytes(vstr source_id, vstr partition_key,
   return SALTS_OK;
 }
 
+static int flow_durable_buffer_select_partition_key(
+    const turbo_flow_durable_buffer_binding_t *binding,
+    const turbo_flow_durable_identity_t *identity, vstr generated_source, vstr *out) {
+  vstr selected = {NULL, 0u};
+  if (!binding || !out) return SALTS_EINVAL;
+
+  if (binding->drain_config.ordering != TURBO_FLOW_DURABLE_ORDER_PARTITION) {
+    selected = identity ? identity->source_id : generated_source;
+  } else {
+    switch (binding->drain_config.partition_by) {
+      case TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID:
+        selected = identity ? identity->source_id : generated_source;
+        break;
+      case TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID:
+        if (!identity) return SALTS_EINVAL;
+        selected = identity->device_id;
+        break;
+      case TURBO_FLOW_DURABLE_PARTITION_SESSION_ID:
+        if (!identity) return SALTS_EINVAL;
+        selected = identity->session_id;
+        break;
+      case TURBO_FLOW_DURABLE_PARTITION_CUSTOM:
+        if (!identity) return SALTS_EINVAL;
+        selected = identity->partition_key;
+        break;
+      default:
+        return SALTS_EINVAL;
+    }
+  }
+  if (!selected.data || selected.len == 0u) return SALTS_EINVAL;
+  *out = selected;
+  return SALTS_OK;
+}
+
 static int flow_durable_buffer_generic_content(const flow_stage_plan_impl_t *stage,
                                                turbo_flow_content_descriptor_t *content) {
   int rc;
@@ -399,7 +436,10 @@ static int flow_durable_buffer_encode_record(turbo_flow_durable_buffer_binding_t
     if (rc == SALTS_ENOENT) return SALTS_EINVAL;
     if (rc != SALTS_OK) return rc;
     record->source_id = identity.source_id;
-    record->partition_key = identity.source_id;
+    rc = flow_durable_buffer_select_partition_key(binding, &identity,
+                                                  (vstr){NULL, 0u},
+                                                  &record->partition_key);
+    if (rc != SALTS_OK) return rc;
     record->admission_id = identity.admission_id;
     record->correlation = identity.correlation;
     record->source_sequence = identity.source_sequence;
@@ -411,7 +451,9 @@ static int flow_durable_buffer_encode_record(turbo_flow_durable_buffer_binding_t
                      binding->provider_generation, binding->admission_namespace, sequence);
     if (count < 0 || (size_t)count >= generated_admission_capacity) return SALTS_ERANGE;
     record->source_id = vstr_from_buf(stage->name, tstr_len(stage->name));
-    record->partition_key = record->source_id;
+    rc = flow_durable_buffer_select_partition_key(binding, NULL, record->source_id,
+                                                  &record->partition_key);
+    if (rc != SALTS_OK) return rc;
     record->admission_id = vstr_from_buf(generated_admission, (size_t)count);
     record->correlation = (vstr){NULL, 0u};
     record->source_sequence = sequence;
@@ -723,7 +765,7 @@ static int flow_durable_buffer_progress_internal(
     if (status.state != TURBO_FLOW_INBOX_SOURCE_EMPTY) continue;
 
     if (binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION) {
-      request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID;
+      request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_KEY;
       request.excluded_partitions = excluded_count ? excluded : NULL;
       request.excluded_partition_count = excluded_count;
       rc = draining ? flow_inbox_driver_request_drain_ex(*slot, &request)
