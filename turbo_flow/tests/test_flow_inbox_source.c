@@ -31,6 +31,7 @@ static turbo_flow_inbox_record_t inbox_source_record(const char *source_id,
   turbo_flow_inbox_record_t record;
   turbo_flow_inbox_record_init(&record);
   record.source_id = vstr_from_buf(source_id, strlen(source_id));
+  record.partition_key = record.source_id;
   record.admission_id = vstr_from_buf(admission_id, strlen(admission_id));
   record.source_sequence = 41u;
   record.timestamp_ns = 42u;
