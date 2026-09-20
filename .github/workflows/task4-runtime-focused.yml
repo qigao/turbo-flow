@@ -234,7 +234,11 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/task4-runtime-tsan \
-            -R '^test_flow_(durable_lifecycle|inbox|inbox_driver|async_terminal)
+            -R '^test_flow_(durable_lifecycle|inbox|inbox_driver|async_terminal)$' \
+            --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest-tsan.log"
+
+      - name: Install and load the durable memory plugin component
+        shell: bash
         run: |
           set -euxo pipefail
           cmake --install build/task4-runtime --prefix "$RUNNER_TEMP/durable-memory-install" --component DurableMemory 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/install-memory.log"
@@ -268,11 +272,6 @@ jobs:
             ${{ runner.temp }}/task4-runtime-evidence/
             build/task4-runtime/CMakeCache.txt
             build/task4-runtime-tsan/CMakeCache.txt
- \
-            --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest-tsan.log"
-
-      - name: Install and load the durable memory plugin component
-        shell: bash
         run: |
           set -euxo pipefail
           cmake --install build/task4-runtime --prefix "$RUNNER_TEMP/durable-memory-install" --component DurableMemory 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/install-memory.log"
