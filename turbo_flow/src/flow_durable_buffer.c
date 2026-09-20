@@ -14,6 +14,10 @@
 #define FLOW_DURABLE_OPAQUE_TYPE "OpaquePayload"
 #define FLOW_DURABLE_OPAQUE_SCHEMA_VERSION UINT32_C(1)
 
+static int flow_durable_latency_claim_begin(void *ctx);
+static void flow_durable_latency_claim_end(void *ctx, int observed,
+                                           int claim_status, uint64_t record_id);
+
 static turbo_flow_durable_buffer_binding_t *
 flow_durable_buffer_find_binding(const turbo_flow_t *flow, const char *resource_name,
                                  size_t *index_out) {
