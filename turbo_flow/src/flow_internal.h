@@ -459,6 +459,11 @@ typedef struct flow_resource_command_record_s {
 
 typedef struct flow_inbox_driver_s flow_inbox_driver_t;
 
+typedef struct flow_durable_latency_pending_s {
+  uint64_t record_id;
+  uint64_t admitted_ns;
+} flow_durable_latency_pending_t;
+
 struct turbo_flow_durable_buffer_binding_s {
   flow_inbox_driver_t *driver;
   turbo_flow_t *flow;
@@ -483,6 +488,16 @@ struct turbo_flow_durable_buffer_binding_s {
   uint64_t baseline_failed;
   uint64_t baseline_retried;
   uint64_t baseline_discarded;
+  salts_mutex_t latency_mutex;
+  vec_t latency_pending;
+  atomic_int latency_enabled;
+  uint64_t latency_started_ns;
+  uint64_t latency_claim_samples;
+  uint64_t latency_claim_last_ns;
+  uint64_t latency_claim_mean_ns;
+  uint64_t latency_claim_max_ns;
+  uint64_t latency_untracked_claims;
+  int latency_tracking_uncertain;
   int drain_paused;
   int bound;
 };

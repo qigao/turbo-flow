@@ -320,6 +320,79 @@ spec("durable buffer lifecycle") {
     close_fixture(&f);
   }
 
+  it("reports tracked oldest-pending age and claim latency without using message time") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_latency_snapshot_t latency =
+        TURBO_FLOW_DURABLE_BUFFER_LATENCY_SNAPSHOT_INIT;
+    open_fixture(&f, 0);
+    check_equal(turbo_flow_durable_buffer_latency_snapshot(
+                    f.flow, "missing.store", &latency), SALTS_ENOENT);
+    check_equal(turbo_flow_durable_buffer_latency_snapshot(
+                    f.flow, "intake.store", &latency), SALTS_OK);
+    check_equal(latency.oldest_pending_age_valid, 1);
+    check_equal(latency.pending_records, (size_t)0u);
+    check_equal(latency.claim_samples, UINT64_C(0));
+
+    check_equal(turbo_flow_durable_buffer_pause_drain(
+                    f.flow, "intake.store"), SALTS_OK);
+    publish(&f);
+    salts_sleep_ms(2u);
+    latency = (turbo_flow_durable_buffer_latency_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_LATENCY_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_latency_snapshot(
+                    f.flow, "intake.store", &latency), SALTS_OK);
+    check_equal(latency.oldest_pending_age_valid, 1);
+    check_equal(latency.pending_records, (size_t)1u);
+    check_equal(latency.tracked_pending_records, (size_t)1u);
+    check_equal(latency.untracked_pending_records, (size_t)0u);
+    check(latency.oldest_pending_age_ns > 0u);
+
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
+    latency = (turbo_flow_durable_buffer_latency_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_LATENCY_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_latency_snapshot(
+                    f.flow, "intake.store", &latency), SALTS_OK);
+    check_equal(latency.oldest_pending_age_valid, 1);
+    check_equal(latency.pending_records, (size_t)0u);
+    check_equal(latency.tracked_pending_records, (size_t)0u);
+    check_equal(latency.claim_samples, UINT64_C(1));
+    check_equal(latency.untracked_claims, UINT64_C(0));
+    check(latency.last_claim_latency_ns > 0u);
+    check(latency.mean_claim_latency_ns > 0u);
+    check(latency.max_claim_latency_ns >= latency.last_claim_latency_ns);
+    close_fixture(&f);
+  }
+
+  it("marks pre-observation backlog untracked instead of inventing queue age") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_latency_snapshot_t latency =
+        TURBO_FLOW_DURABLE_BUFFER_LATENCY_SNAPSHOT_INIT;
+    open_fixture(&f, 0);
+    check_equal(turbo_flow_durable_buffer_pause_drain(
+                    f.flow, "intake.store"), SALTS_OK);
+    publish(&f);
+    salts_sleep_ms(2u);
+
+    check_equal(turbo_flow_durable_buffer_latency_snapshot(
+                    f.flow, "intake.store", &latency), SALTS_OK);
+    check_equal(latency.oldest_pending_age_valid, 0);
+    check_equal(latency.pending_records, (size_t)1u);
+    check_equal(latency.tracked_pending_records, (size_t)0u);
+    check_equal(latency.untracked_pending_records, (size_t)1u);
+    check_equal(latency.oldest_pending_age_ns, UINT64_C(0));
+
+    check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
+    latency = (turbo_flow_durable_buffer_latency_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_LATENCY_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_latency_snapshot(
+                    f.flow, "intake.store", &latency), SALTS_OK);
+    check_equal(latency.oldest_pending_age_valid, 1);
+    check_equal(latency.pending_records, (size_t)0u);
+    check_equal(latency.claim_samples, UINT64_C(0));
+    check_equal(latency.untracked_claims, UINT64_C(1));
+    close_fixture(&f);
+  }
+
   it("close-and-drain closes admission and reaches a stable idle resource") {
     lifecycle_fixture_t f;
     turbo_flow_durable_buffer_snapshot_t observed =

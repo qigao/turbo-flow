@@ -81,6 +81,102 @@ static turbo_flow_durable_buffer_pressure_state_t flow_durable_buffer_pressure_s
   return low ? TURBO_FLOW_DURABLE_PRESSURE_LOW : TURBO_FLOW_DURABLE_PRESSURE_NORMAL;
 }
 
+static size_t flow_durable_latency_find(
+    const turbo_flow_durable_buffer_binding_t *binding, uint64_t record_id) {
+  if (!binding || record_id == 0u) return SIZE_MAX;
+  for (size_t i = 0u; i < vec_size(&binding->latency_pending); ++i) {
+    const flow_durable_latency_pending_t *entry =
+        (const flow_durable_latency_pending_t *)vec_at_const(&binding->latency_pending, i);
+    if (entry && entry->record_id == record_id) return i;
+  }
+  return SIZE_MAX;
+}
+
+static int flow_durable_latency_claim_begin(void *ctx) {
+  turbo_flow_durable_buffer_binding_t *binding =
+      (turbo_flow_durable_buffer_binding_t *)ctx;
+  if (!binding ||
+      !atomic_load_explicit(&binding->latency_enabled, memory_order_acquire))
+    return 0;
+  salts_mutex_lock(&binding->latency_mutex);
+  return 1;
+}
+
+static void flow_durable_latency_claim_end(void *ctx, int observed,
+                                           int claim_status, uint64_t record_id) {
+  turbo_flow_durable_buffer_binding_t *binding =
+      (turbo_flow_durable_buffer_binding_t *)ctx;
+  if (!binding || !observed) return;
+  if (claim_status == SALTS_OK &&
+      atomic_load_explicit(&binding->latency_enabled, memory_order_relaxed)) {
+    const size_t index = flow_durable_latency_find(binding, record_id);
+    if (index == SIZE_MAX) {
+      if (binding->latency_untracked_claims != UINT64_MAX)
+        ++binding->latency_untracked_claims;
+    } else {
+      const flow_durable_latency_pending_t *entry =
+          (const flow_durable_latency_pending_t *)vec_at_const(
+              &binding->latency_pending, index);
+      const uint64_t now = salts_hrtime();
+      const uint64_t latency =
+          entry && now >= entry->admitted_ns ? now - entry->admitted_ns : 0u;
+      if (binding->latency_claim_samples != UINT64_MAX) {
+        const uint64_t samples = ++binding->latency_claim_samples;
+        if (latency >= binding->latency_claim_mean_ns)
+          binding->latency_claim_mean_ns +=
+              (latency - binding->latency_claim_mean_ns) / samples;
+        else
+          binding->latency_claim_mean_ns -=
+              (binding->latency_claim_mean_ns - latency) / samples;
+      }
+      binding->latency_claim_last_ns = latency;
+      if (latency > binding->latency_claim_max_ns)
+        binding->latency_claim_max_ns = latency;
+      (void)vec_erase(&binding->latency_pending, index, NULL);
+    }
+  }
+  salts_mutex_unlock(&binding->latency_mutex);
+}
+
+static int flow_durable_buffer_admit_observed(
+    turbo_flow_durable_buffer_binding_t *binding,
+    const turbo_flow_inbox_record_t *record,
+    turbo_flow_inbox_receipt_t *receipt) {
+  turbo_flow_inbox_snapshot_t before = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  turbo_flow_inbox_snapshot_t after = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  int rc;
+  if (!atomic_load_explicit(&binding->latency_enabled, memory_order_acquire))
+    return turbo_flow_inbox_admit(binding->inbox, record, receipt);
+
+  salts_mutex_lock(&binding->latency_mutex);
+  rc = turbo_flow_inbox_snapshot(binding->inbox, &before);
+  if (rc != SALTS_OK) {
+    binding->latency_tracking_uncertain = 1;
+    rc = turbo_flow_inbox_admit(binding->inbox, record, receipt);
+    salts_mutex_unlock(&binding->latency_mutex);
+    return rc;
+  }
+
+  rc = turbo_flow_inbox_admit(binding->inbox, record, receipt);
+  if (rc == SALTS_OK) {
+    const int snapshot_rc = turbo_flow_inbox_snapshot(binding->inbox, &after);
+    if (snapshot_rc != SALTS_OK) {
+      binding->latency_tracking_uncertain = 1;
+    } else if (after.admitted == before.admitted + UINT64_C(1) &&
+               after.pending_records == before.pending_records + 1u) {
+      flow_durable_latency_pending_t entry = {
+          receipt->record_id, salts_hrtime()};
+      if (turbo_flow_stl_error(vec_push(&binding->latency_pending, &entry)) != SALTS_OK)
+        binding->latency_tracking_uncertain = 1;
+    } else if (after.admitted != before.admitted ||
+               after.pending_records != before.pending_records) {
+      binding->latency_tracking_uncertain = 1;
+    }
+  }
+  salts_mutex_unlock(&binding->latency_mutex);
+  return rc;
+}
+
 int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow) {
   if (!flow) return SALTS_EINVAL;
   if (!flow_durable_buffers_idle(flow)) return SALTS_EBUSY;
@@ -317,10 +413,23 @@ int turbo_flow_durable_buffer_bind(
   binding->baseline_failed = snapshot.failed;
   binding->baseline_retried = snapshot.retried;
   binding->baseline_discarded = snapshot.discarded;
+  salts_mutex_init(&binding->latency_mutex);
+  rc = turbo_flow_stl_error(vec_init_bytes(
+      &binding->latency_pending, sizeof(flow_durable_latency_pending_t),
+      _Alignof(flow_durable_latency_pending_t), SIZE_MAX));
+  if (rc != SALTS_OK) {
+    salts_mutex_destroy(&binding->latency_mutex);
+    tstr_freep(&binding->resource_name);
+    free(binding);
+    return rc;
+  }
+  atomic_init(&binding->latency_enabled, 0);
   binding->bound = 1;
 
   rc = turbo_flow_stl_error(vec_push(&flow->durable_buffer_bindings, &binding));
   if (rc != SALTS_OK) {
+    vec_destroy(&binding->latency_pending);
+    salts_mutex_destroy(&binding->latency_mutex);
     tstr_freep(&binding->resource_name);
     free(binding);
     return rc;
@@ -355,6 +464,8 @@ int turbo_flow_durable_buffer_unbind(turbo_flow_durable_buffer_binding_t *bindin
   binding->bound = 0;
   binding->flow = NULL;
   binding->inbox = NULL;
+  vec_destroy(&binding->latency_pending);
+  salts_mutex_destroy(&binding->latency_mutex);
   tstr_freep(&binding->resource_name);
   free(binding);
   return SALTS_OK;
@@ -371,6 +482,8 @@ void flow_durable_buffer_clear_bindings(turbo_flow_t *flow) {
     binding->bound = 0;
     binding->flow = NULL;
     binding->inbox = NULL;
+    vec_destroy(&binding->latency_pending);
+    salts_mutex_destroy(&binding->latency_mutex);
     tstr_freep(&binding->resource_name);
     free(binding);
   }
@@ -414,7 +527,7 @@ int flow_durable_buffer_admit_stage(turbo_flow_t *flow, uint32_t stage_index,
     return flow_set_error_keep_state(flow, rc, stage->line, stage->column,
                                      "message cannot cross durable buffer boundary");
   }
-  rc = turbo_flow_inbox_admit(binding->inbox, &record, &receipt);
+  rc = flow_durable_buffer_admit_observed(binding, &record, &receipt);
   if (rc != SALTS_OK) {
     flow_durable_buffer_count_rejection(binding, rc, 1);
     return flow_set_error_keep_state(flow, rc, stage->line, stage->column,
@@ -455,8 +568,10 @@ static int flow_durable_buffer_progress_internal(turbo_flow_durable_buffer_bindi
   if (binding->flow->state != TURBO_FLOW_STATE_STARTED) return SALTS_ESHUTDOWN;
   if (!draining && binding->drain_paused) return SALTS_OK;
   if (!binding->driver) {
-    flow_inbox_driver_config_t config = {binding->inbox, binding->flow,
-      FLOW_INBOX_DRIVER_BUFFER, (uint32_t)binding->stage_index, NULL, binding->max_message_bytes};
+    flow_inbox_driver_config_t config = {
+      binding->inbox, binding->flow, FLOW_INBOX_DRIVER_BUFFER,
+      (uint32_t)binding->stage_index, NULL, binding->max_message_bytes,
+      flow_durable_latency_claim_begin, flow_durable_latency_claim_end, binding};
     if (binding->stage_index == SIZE_MAX || binding->stage_index > UINT32_MAX) return SALTS_EINVAL;
     rc = flow_inbox_driver_create(&config, &binding->driver);
     if (rc != SALTS_OK) return rc;
@@ -739,6 +854,79 @@ int turbo_flow_durable_buffer_runtime_snapshot(
   return SALTS_OK;
 }
 
+int turbo_flow_durable_buffer_latency_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_latency_snapshot_t *snapshot) {
+  turbo_flow_durable_buffer_binding_t *binding;
+  turbo_flow_inbox_snapshot_t provider = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  turbo_flow_durable_buffer_latency_snapshot_t observed =
+      TURBO_FLOW_DURABLE_BUFFER_LATENCY_SNAPSHOT_INIT;
+  uint64_t now;
+  size_t tracked;
+  int rc;
+
+  if (!snapshot || snapshot->size != sizeof(*snapshot) ||
+      snapshot->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
+    return SALTS_EINVAL;
+  binding = flow_durable_buffer_find_binding(flow, resource_name, NULL);
+  if (!binding) return SALTS_ENOENT;
+  rc = flow_durable_buffer_validate_provider(binding);
+  if (rc != SALTS_OK) return rc;
+
+  salts_mutex_lock(&binding->latency_mutex);
+  rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
+  if (rc != SALTS_OK) {
+    salts_mutex_unlock(&binding->latency_mutex);
+    return rc;
+  }
+  now = salts_hrtime();
+  if (!atomic_load_explicit(&binding->latency_enabled, memory_order_relaxed)) {
+    binding->latency_started_ns = now;
+    binding->latency_claim_samples = 0u;
+    binding->latency_claim_last_ns = 0u;
+    binding->latency_claim_mean_ns = 0u;
+    binding->latency_claim_max_ns = 0u;
+    binding->latency_untracked_claims = 0u;
+    binding->latency_tracking_uncertain = 0;
+    (void)vec_clear(&binding->latency_pending);
+    atomic_store_explicit(&binding->latency_enabled, 1, memory_order_release);
+  }
+
+  tracked = vec_size(&binding->latency_pending);
+  if (provider.pending_records == 0u && tracked == 0u)
+    binding->latency_tracking_uncertain = 0;
+  if (tracked > provider.pending_records)
+    binding->latency_tracking_uncertain = 1;
+
+  observed.observation_elapsed_ns =
+      now >= binding->latency_started_ns ? now - binding->latency_started_ns : 0u;
+  observed.pending_records = provider.pending_records;
+  observed.tracked_pending_records = tracked;
+  observed.untracked_pending_records =
+      provider.pending_records > tracked ? provider.pending_records - tracked : 0u;
+  observed.oldest_pending_age_valid =
+      !binding->latency_tracking_uncertain &&
+      provider.pending_records == tracked;
+  if (observed.oldest_pending_age_valid && tracked != 0u) {
+    uint64_t oldest = now;
+    for (size_t i = 0u; i < tracked; ++i) {
+      const flow_durable_latency_pending_t *entry =
+          (const flow_durable_latency_pending_t *)vec_at_const(
+              &binding->latency_pending, i);
+      if (entry && entry->admitted_ns < oldest) oldest = entry->admitted_ns;
+    }
+    observed.oldest_pending_age_ns = now >= oldest ? now - oldest : 0u;
+  }
+  observed.claim_samples = binding->latency_claim_samples;
+  observed.last_claim_latency_ns = binding->latency_claim_last_ns;
+  observed.mean_claim_latency_ns = binding->latency_claim_mean_ns;
+  observed.max_claim_latency_ns = binding->latency_claim_max_ns;
+  observed.untracked_claims = binding->latency_untracked_claims;
+  *snapshot = observed;
+  salts_mutex_unlock(&binding->latency_mutex);
+  return SALTS_OK;
+}
+
 int turbo_flow_durable_buffer_pause_drain(turbo_flow_t *flow, const char *resource_name) {
   turbo_flow_durable_buffer_binding_t *binding = NULL;
   int rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
@@ -770,7 +958,12 @@ int turbo_flow_durable_buffer_retry_failed(turbo_flow_t *flow, const char *resou
   turbo_flow_durable_buffer_binding_t *binding = NULL;
   int rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
   if (rc != SALTS_OK) return rc;
-  return turbo_flow_inbox_retry(binding->inbox, record_id);
+  if (!atomic_load_explicit(&binding->latency_enabled, memory_order_acquire))
+    return turbo_flow_inbox_retry(binding->inbox, record_id);
+  salts_mutex_lock(&binding->latency_mutex);
+  rc = turbo_flow_inbox_retry(binding->inbox, record_id);
+  salts_mutex_unlock(&binding->latency_mutex);
+  return rc;
 }
 
 int turbo_flow_durable_buffer_discard_failed(turbo_flow_t *flow, const char *resource_name,
