@@ -339,9 +339,10 @@ int flow_inbox_driver_active_partition(const flow_inbox_driver_t *source, vstr *
   if (!source || !partition_out) return SALTS_EINVAL;
   *partition_out = (vstr){NULL, 0u};
   if (source->phase == FLOW_INBOX_SOURCE_IDLE) return SALTS_ENOENT;
-  if (!source->claim.record.source_id.data || source->claim.record.source_id.len == 0u)
+  if (!source->claim.record.partition_key.data ||
+      source->claim.record.partition_key.len == 0u)
     return SALTS_EPROTO;
-  *partition_out = source->claim.record.source_id;
+  *partition_out = source->claim.record.partition_key;
   return SALTS_OK;
 }
 
