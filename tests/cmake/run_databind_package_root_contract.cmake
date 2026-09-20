@@ -262,6 +262,7 @@ endforeach()
 file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/workflows/task4-runtime-focused.yml"
           task4_runtime_workflow)
 foreach(required_fragment IN ITEMS
+        "SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae"
         "SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7"
         "--component Unspecified"
         "--component DataBind"
@@ -284,6 +285,7 @@ endif()
 file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/workflows/protocol-network-intake.yml"
           protocol_network_workflow)
 foreach(required_fragment IN ITEMS
+        "SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae"
         "SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7"
         "--component Unspecified"
         "test ! -e \"$RUNNER_TEMP/sdk/salts-utils-debug/lib/cmake/DataBind/DataBindConfig.cmake\"")
