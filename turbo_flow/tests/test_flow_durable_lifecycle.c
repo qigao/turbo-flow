@@ -17,6 +17,7 @@ typedef struct lifecycle_fixture_s {
   size_t calls;
   atomic_size_t sinks;
   atomic_size_t terminal_slots;
+  atomic_int terminal_ready[2];
   size_t owner_releases;
   int complete_status;
   size_t completions;
@@ -119,12 +120,30 @@ static int submit(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *
                   const turbo_flow_msg_t *msg, turbo_flow_async_terminal_claim_t *claim) {
   lifecycle_fixture_t *f = ctx;
   (void)flow; (void)stage; (void)msg;
-  const size_t slot = atomic_fetch_add(&f->terminal_slots, (size_t)1u);
+  const size_t slot = atomic_fetch_add(&f->terminal_slots, (size_t)1u) & 1u;
   turbo_flow_async_terminal_claim_t *destination =
-      (slot & 1u) == 0u ? &f->terminal : &f->terminal2;
+      slot == 0u ? &f->terminal : &f->terminal2;
   int rc = turbo_flow_async_terminal_claim_move(destination, claim);
-  if (rc == SALTS_OK) ++f->sinks;
+  if (rc == SALTS_OK) {
+    atomic_store_explicit(&f->terminal_ready[slot], 1, memory_order_release);
+    atomic_fetch_add_explicit(&f->sinks, (size_t)1u, memory_order_release);
+  }
   return rc;
+}
+
+static int complete_ready_terminal(lifecycle_fixture_t *f, size_t slot) {
+  turbo_flow_async_terminal_claim_t *claim;
+  if (!f || slot > 1u) return 0;
+  if (!atomic_exchange_explicit(&f->terminal_ready[slot], 0, memory_order_acq_rel))
+    return 0;
+  claim = slot == 0u ? &f->terminal : &f->terminal2;
+  check_equal(turbo_flow_async_terminal_complete(claim, SALTS_OK, NULL), SALTS_OK);
+  return 1;
+}
+
+static void complete_ready_terminals(lifecycle_fixture_t *f) {
+  (void)complete_ready_terminal(f, 0u);
+  (void)complete_ready_terminal(f, 1u);
 }
 static void open_fixture_mode(lifecycle_fixture_t *f, int asynchronous,
                               turbo_flow_durable_identity_mode_t identity_mode) {
@@ -139,6 +158,8 @@ static void open_fixture_mode(lifecycle_fixture_t *f, int asynchronous,
   memset(f, 0, sizeof(*f));
   atomic_init(&f->sinks, 0u);
   atomic_init(&f->terminal_slots, 0u);
+  atomic_init(&f->terminal_ready[0], 0);
+  atomic_init(&f->terminal_ready[1], 0);
   f->generation = 1u;
   f->terminal = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
   f->terminal2 = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
@@ -292,20 +313,14 @@ spec("durable buffer lifecycle") {
 
     for (size_t pass = 0u; pass < 1000u && snapshot(&f).completed < record_count; ++pass) {
       turbo_flow_inbox_snapshot_t current;
-      if (f.terminal._impl)
-        check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
-      if (f.terminal2._impl)
-        check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_OK, NULL), SALTS_OK);
+      complete_ready_terminals(&f);
       check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
       current = snapshot(&f);
       check(current.in_flight_claims <= config.max_in_flight);
       check(current.records <= record_count);
       salts_sleep_ms(1u);
     }
-    if (f.terminal._impl)
-      check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
-    if (f.terminal2._impl)
-      check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_OK, NULL), SALTS_OK);
+    complete_ready_terminals(&f);
     progress_until_settled(&f, record_count);
     check_equal(atomic_load(&f.sinks), record_count);
     check_equal(snapshot(&f).pending_records, (size_t)0u);
