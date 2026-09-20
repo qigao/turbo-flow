@@ -48,6 +48,90 @@ static int flow_durable_buffer_validate_provider(const turbo_flow_durable_buffer
   return snapshot.generation == binding->provider_generation ? SALTS_OK : SALTS_ECANCELED;
 }
 
+static flow_inbox_driver_t **flow_durable_buffer_driver_slot(
+    turbo_flow_durable_buffer_binding_t *binding, size_t index) {
+  if (!binding || index >= TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS) return NULL;
+  return index == 0u ? &binding->driver : &binding->extra_drivers[index - 1u];
+}
+
+static flow_inbox_driver_t *flow_durable_buffer_driver_at(
+    const turbo_flow_durable_buffer_binding_t *binding, size_t index) {
+  if (!binding || index >= TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS) return NULL;
+  return index == 0u ? binding->driver : binding->extra_drivers[index - 1u];
+}
+
+static size_t flow_durable_buffer_effective_workers(
+    const turbo_flow_durable_buffer_binding_t *binding) {
+  if (!binding) return 0u;
+  return binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_GLOBAL
+             ? 1u
+             : binding->drain_config.workers;
+}
+
+static int flow_durable_buffer_drivers_idle(
+    const turbo_flow_durable_buffer_binding_t *binding) {
+  if (!binding) return 1;
+  for (size_t i = 0u; i < TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS; ++i) {
+    flow_inbox_driver_t *driver = flow_durable_buffer_driver_at(binding, i);
+    turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    if (!driver) continue;
+    if (flow_inbox_driver_status(driver, &result) != SALTS_OK ||
+        result.state != TURBO_FLOW_INBOX_SOURCE_EMPTY)
+      return 0;
+  }
+  return 1;
+}
+
+static int flow_durable_buffer_destroy_drivers(
+    turbo_flow_durable_buffer_binding_t *binding) {
+  if (!binding) return SALTS_EINVAL;
+  for (size_t i = TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS; i > 0u; --i) {
+    flow_inbox_driver_t **slot = flow_durable_buffer_driver_slot(binding, i - 1u);
+    int rc;
+    if (!slot || !*slot) continue;
+    rc = flow_inbox_driver_destroy(*slot);
+    if (rc != SALTS_OK) return rc;
+    *slot = NULL;
+  }
+  return SALTS_OK;
+}
+
+static int flow_durable_buffer_ensure_driver(
+    turbo_flow_durable_buffer_binding_t *binding, size_t index) {
+  flow_inbox_driver_t **slot;
+  flow_inbox_driver_config_t config;
+  if (!binding || index >= flow_durable_buffer_effective_workers(binding))
+    return SALTS_EINVAL;
+  if (binding->stage_index == SIZE_MAX || binding->stage_index > UINT32_MAX)
+    return SALTS_EINVAL;
+  slot = flow_durable_buffer_driver_slot(binding, index);
+  if (!slot) return SALTS_EINVAL;
+  if (*slot) return SALTS_OK;
+  config = (flow_inbox_driver_config_t){
+      binding->inbox, binding->flow, FLOW_INBOX_DRIVER_BUFFER,
+      (uint32_t)binding->stage_index, NULL, binding->max_message_bytes,
+      flow_durable_latency_claim_begin, flow_durable_latency_claim_end, binding};
+  return flow_inbox_driver_create(&config, slot);
+}
+
+static int flow_durable_buffer_drain_config_valid(
+    const turbo_flow_durable_buffer_drain_config_t *config) {
+  if (!config || config->size != sizeof(*config) ||
+      config->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
+    return 0;
+  if (config->ordering != TURBO_FLOW_DURABLE_ORDER_GLOBAL &&
+      config->ordering != TURBO_FLOW_DURABLE_ORDER_PARTITION)
+    return 0;
+  if (config->partition_by != TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID)
+    return 0;
+  if (config->workers == 0u ||
+      config->workers > TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS ||
+      config->max_in_flight == 0u || config->workers > config->max_in_flight ||
+      config->batch_claim == 0u || config->batch_claim > config->max_in_flight)
+    return 0;
+  return 1;
+}
+
 static void flow_durable_buffer_count_rejection(
     turbo_flow_durable_buffer_binding_t *binding, int status, int provider_admission) {
   atomic_uint_fast64_t *counter;
@@ -186,11 +270,8 @@ int flow_durable_buffer_resolve_bindings(turbo_flow_t *flow) {
     turbo_flow_durable_buffer_binding_t **slot =
         (turbo_flow_durable_buffer_binding_t **)vec_at(&flow->durable_buffer_bindings, i);
     if (slot && *slot) {
-      if ((*slot)->driver) {
-        int rc = flow_inbox_driver_destroy((*slot)->driver);
-        if (rc != SALTS_OK) return rc;
-        (*slot)->driver = NULL;
-      }
+      int rc = flow_durable_buffer_destroy_drivers(*slot);
+      if (rc != SALTS_OK) return rc;
       (*slot)->stage_index = SIZE_MAX;
     }
   }
@@ -400,6 +481,10 @@ int turbo_flow_durable_buffer_bind(
   binding->max_message_bytes = config->max_message_bytes;
   binding->provider_generation = snapshot.generation;
   binding->stage_index = SIZE_MAX;
+  binding->drain_config =
+      (turbo_flow_durable_buffer_drain_config_t)TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+  binding->partition_blocked = 0u;
+  binding->worker_saturated = 0u;
   atomic_init(&binding->next_sequence, 0u);
   binding->pressure =
       (turbo_flow_durable_buffer_pressure_config_t)TURBO_FLOW_DURABLE_BUFFER_PRESSURE_CONFIG_INIT;
@@ -445,22 +530,15 @@ int turbo_flow_durable_buffer_unbind(turbo_flow_durable_buffer_binding_t *bindin
 
   if (!binding || !binding->bound || !(flow = binding->flow)) return SALTS_EINVAL;
   if (flow->state == TURBO_FLOW_STATE_STARTED) return SALTS_EBUSY;
-  if (binding->driver) {
-    turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
-    rc = flow_inbox_driver_status(binding->driver, &result);
-    if (rc != SALTS_OK) return rc;
-    if (result.state != TURBO_FLOW_INBOX_SOURCE_EMPTY) return SALTS_EBUSY;
-  }
+  if (!flow_durable_buffer_drivers_idle(binding)) return SALTS_EBUSY;
   if (flow_durable_buffer_find_binding(flow, binding->resource_name, &index) != binding ||
       index == SIZE_MAX) {
     return SALTS_ENOENT;
   }
   rc = turbo_flow_stl_error(vec_erase(&flow->durable_buffer_bindings, index, NULL));
   if (rc != SALTS_OK) return rc;
-  if (binding->driver) {
-    rc = flow_inbox_driver_destroy(binding->driver);
-    if (rc != SALTS_OK) return rc;
-  }
+  rc = flow_durable_buffer_destroy_drivers(binding);
+  if (rc != SALTS_OK) return rc;
   binding->bound = 0;
   binding->flow = NULL;
   binding->inbox = NULL;
@@ -478,7 +556,7 @@ void flow_durable_buffer_clear_bindings(turbo_flow_t *flow) {
         (turbo_flow_durable_buffer_binding_t **)vec_at(&flow->durable_buffer_bindings, i);
     turbo_flow_durable_buffer_binding_t *binding = slot ? *slot : NULL;
     if (!binding) continue;
-    if (binding->driver) (void)flow_inbox_driver_destroy(binding->driver);
+    (void)flow_durable_buffer_destroy_drivers(binding);
     binding->bound = 0;
     binding->flow = NULL;
     binding->inbox = NULL;
@@ -541,44 +619,127 @@ int flow_durable_buffers_idle(const turbo_flow_t *flow) {
   for (size_t i = 0u; i < vec_size(&flow->durable_buffer_bindings); ++i) {
     turbo_flow_durable_buffer_binding_t *const *slot =
         (turbo_flow_durable_buffer_binding_t *const *)vec_at_const(&flow->durable_buffer_bindings, i);
-    turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
-    if (slot && *slot && (*slot)->driver &&
-        (flow_inbox_driver_status((*slot)->driver, &result) != SALTS_OK ||
-         result.state != TURBO_FLOW_INBOX_SOURCE_EMPTY)) return 0;
+    if (slot && *slot && !flow_durable_buffer_drivers_idle(*slot)) return 0;
   }
   return 1;
 }
 
-static int flow_durable_buffer_progress_internal(turbo_flow_durable_buffer_binding_t *binding,
-                                                  int draining) {
-  turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+static int flow_durable_buffer_progress_internal(
+    turbo_flow_durable_buffer_binding_t *binding, int draining) {
+  turbo_flow_inbox_snapshot_t provider = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  vstr excluded[TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS];
+  size_t excluded_count = 0u;
+  size_t active = 0u;
+  size_t started = 0u;
+  size_t effective;
+  size_t claim_budget;
   int rc;
+
   if (!binding || !binding->bound || !binding->flow) return SALTS_EINVAL;
   rc = flow_durable_buffer_validate_provider(binding);
   if (rc != SALTS_OK) return rc;
-  if (binding->driver) {
-    rc = flow_inbox_driver_status(binding->driver, &result);
+
+  effective = flow_durable_buffer_effective_workers(binding);
+  if (effective == 0u || effective > TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS)
+    return SALTS_EPROTO;
+
+  /*
+   * Poll every live worker first. A partition remains excluded until its driver
+   * has fully released claim ownership, including settlement.
+   */
+  for (size_t i = 0u; i < effective; ++i) {
+    flow_inbox_driver_t *driver = flow_durable_buffer_driver_at(binding, i);
+    turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    if (!driver) continue;
+    rc = flow_inbox_driver_status(driver, &result);
     if (rc != SALTS_OK) return rc;
     if (result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_PENDING ||
         result.state == TURBO_FLOW_INBOX_SOURCE_SETTLEMENT_UNKNOWN)
       return result.settlement_status != SALTS_OK ? result.settlement_status : SALTS_EBUSY;
-    if (result.state == TURBO_FLOW_INBOX_SOURCE_GRAPH_ACTIVE)
-      return flow_inbox_driver_poll(binding->driver, &result);
+    if (result.state == TURBO_FLOW_INBOX_SOURCE_GRAPH_ACTIVE) {
+      rc = flow_inbox_driver_poll(driver, &result);
+      if (rc != SALTS_OK) return rc;
+      rc = flow_inbox_driver_status(driver, &result);
+      if (rc != SALTS_OK) return rc;
+    }
+    if (result.state != TURBO_FLOW_INBOX_SOURCE_EMPTY) {
+      vstr partition = {NULL, 0u};
+      ++active;
+      if (binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION) {
+        rc = flow_inbox_driver_active_partition(driver, &partition);
+        if (rc != SALTS_OK) return rc;
+        if (excluded_count >= TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS)
+          return SALTS_EPROTO;
+        excluded[excluded_count++] = partition;
+      }
+    }
   }
+
   if (binding->flow->state != TURBO_FLOW_STATE_STARTED) return SALTS_ESHUTDOWN;
   if (!draining && binding->drain_paused) return SALTS_OK;
-  if (!binding->driver) {
-    flow_inbox_driver_config_t config = {
-      binding->inbox, binding->flow, FLOW_INBOX_DRIVER_BUFFER,
-      (uint32_t)binding->stage_index, NULL, binding->max_message_bytes,
-      flow_durable_latency_claim_begin, flow_durable_latency_claim_end, binding};
-    if (binding->stage_index == SIZE_MAX || binding->stage_index > UINT32_MAX) return SALTS_EINVAL;
-    rc = flow_inbox_driver_create(&config, &binding->driver);
+
+  rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
+  if (rc != SALTS_OK) return rc;
+  if (active > binding->drain_config.max_in_flight ||
+      provider.in_flight_claims > binding->drain_config.max_in_flight)
+    return SALTS_EPROTO;
+
+  claim_budget = binding->drain_config.batch_claim;
+  if (claim_budget > effective - active) claim_budget = effective - active;
+  if (claim_budget > binding->drain_config.max_in_flight - provider.in_flight_claims)
+    claim_budget = binding->drain_config.max_in_flight - provider.in_flight_claims;
+
+  for (size_t i = 0u; i < effective && started < claim_budget; ++i) {
+    flow_inbox_driver_t **slot = flow_durable_buffer_driver_slot(binding, i);
+    turbo_flow_inbox_source_result_t status = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    turbo_flow_inbox_claim_request_t request = TURBO_FLOW_INBOX_CLAIM_REQUEST_INIT;
+    if (!slot) return SALTS_EPROTO;
+    rc = flow_durable_buffer_ensure_driver(binding, i);
     if (rc != SALTS_OK) return rc;
+    rc = flow_inbox_driver_status(*slot, &status);
+    if (rc != SALTS_OK) return rc;
+    if (status.state != TURBO_FLOW_INBOX_SOURCE_EMPTY) continue;
+
+    if (binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION) {
+      request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID;
+      request.excluded_partitions = excluded_count ? excluded : NULL;
+      request.excluded_partition_count = excluded_count;
+      rc = draining ? flow_inbox_driver_request_drain_ex(*slot, &request)
+                    : flow_inbox_driver_request_ex(*slot, &request);
+    } else {
+      rc = draining ? flow_inbox_driver_request_drain(*slot)
+                    : flow_inbox_driver_request(*slot);
+    }
+
+    if (rc == SALTS_ENOENT) {
+      if (binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION &&
+          provider.pending_records != 0u && binding->partition_blocked != UINT64_MAX)
+        ++binding->partition_blocked;
+      break;
+    }
+    if (rc != SALTS_OK) return rc;
+    ++started;
+    ++active;
+    ++provider.in_flight_claims;
+    if (provider.pending_records) --provider.pending_records;
+
+    if (binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION) {
+      vstr partition = {NULL, 0u};
+      rc = flow_inbox_driver_active_partition(*slot, &partition);
+      if (rc != SALTS_OK) return rc;
+      if (excluded_count >= TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS)
+        return SALTS_EPROTO;
+      excluded[excluded_count++] = partition;
+    }
   }
-  rc = draining ? flow_inbox_driver_request_drain(binding->driver)
-                : flow_inbox_driver_request(binding->driver);
-  return rc == SALTS_ENOENT ? SALTS_OK : rc;
+
+  if (provider.pending_records != 0u &&
+      (active >= effective ||
+       provider.in_flight_claims >= binding->drain_config.max_in_flight) &&
+      binding->worker_saturated != UINT64_MAX)
+    ++binding->worker_saturated;
+
+  return SALTS_OK;
 }
 
 int turbo_flow_durable_buffer_progress(turbo_flow_durable_buffer_binding_t *binding) {
@@ -743,6 +904,77 @@ int turbo_flow_durable_buffer_snapshot(
   observed.active_record_id = driver.record_id;
   observed.graph_status = driver.graph_status;
   observed.settlement_status = driver.settlement_status;
+  *snapshot = observed;
+  return SALTS_OK;
+}
+
+int turbo_flow_durable_buffer_configure_drain(
+    turbo_flow_t *flow, const char *resource_name,
+    const turbo_flow_durable_buffer_drain_config_t *config) {
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+  int rc;
+  if (!flow_durable_buffer_drain_config_valid(config)) return SALTS_EINVAL;
+  rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
+  if (rc != SALTS_OK) return rc;
+  if (!flow_durable_buffer_drivers_idle(binding)) return SALTS_EBUSY;
+
+  /*
+   * Reconfiguration is an idle control-plane action. Drop reusable extra
+   * workers so a lower worker count cannot retain stale scheduler state.
+   */
+  rc = flow_durable_buffer_destroy_drivers(binding);
+  if (rc != SALTS_OK) return rc;
+  binding->drain_config = *config;
+  binding->drain_config.size = sizeof(binding->drain_config);
+  binding->drain_config.version = TURBO_FLOW_DURABLE_BUFFER_API_VERSION;
+  binding->partition_blocked = 0u;
+  binding->worker_saturated = 0u;
+  return SALTS_OK;
+}
+
+int turbo_flow_durable_buffer_drain_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_drain_snapshot_t *snapshot) {
+  turbo_flow_durable_buffer_binding_t *binding = NULL;
+  turbo_flow_inbox_snapshot_t provider = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  turbo_flow_durable_buffer_drain_snapshot_t observed =
+      TURBO_FLOW_DURABLE_BUFFER_DRAIN_SNAPSHOT_INIT;
+  size_t active = 0u;
+  size_t partitions = 0u;
+  int rc;
+
+  if (!snapshot || snapshot->size != sizeof(*snapshot) ||
+      snapshot->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
+    return SALTS_EINVAL;
+  rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
+  if (rc != SALTS_OK) return rc;
+
+  for (size_t i = 0u; i < TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS; ++i) {
+    flow_inbox_driver_t *driver = flow_durable_buffer_driver_at(binding, i);
+    turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
+    if (!driver) continue;
+    rc = flow_inbox_driver_status(driver, &result);
+    if (rc != SALTS_OK) return rc;
+    if (result.state == TURBO_FLOW_INBOX_SOURCE_EMPTY) continue;
+    ++active;
+    if (binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION)
+      ++partitions;
+  }
+
+  observed.ordering = binding->drain_config.ordering;
+  observed.partition_by = binding->drain_config.partition_by;
+  observed.workers = binding->drain_config.workers;
+  observed.effective_workers = flow_durable_buffer_effective_workers(binding);
+  observed.max_in_flight = binding->drain_config.max_in_flight;
+  observed.batch_claim = binding->drain_config.batch_claim;
+  observed.backlog_records = provider.pending_records;
+  observed.active_workers = active;
+  observed.active_partitions = partitions;
+  observed.in_flight_claims = provider.in_flight_claims;
+  observed.partition_blocked = binding->partition_blocked;
+  observed.worker_saturated = binding->worker_saturated;
   *snapshot = observed;
   return SALTS_OK;
 }
