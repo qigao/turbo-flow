@@ -4,6 +4,7 @@
 #include "../src/flow_internal.h"
 #include "../src/flow_inbox_driver_internal.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
