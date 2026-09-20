@@ -165,6 +165,40 @@ typedef struct turbo_flow_durable_buffer_runtime_snapshot_s {
    0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
 
 /**
+ * Lazy binding-local queue/claim latency observation.
+ *
+ * The first latency snapshot starts one in-process observation epoch. TurboFlow
+ * tracks durable admissions made through this binding after that point; it never
+ * treats the message/event timestamp as queue time and never reconstructs age
+ * from provider storage. oldest_pending_age_valid is true only when every
+ * currently pending provider record has a tracked local admission time. It is
+ * also true with age zero when the queue is empty. Pre-existing/restarted or
+ * externally-mutated backlog remains explicit through untracked_pending_records.
+ *
+ * Claim samples contain only records with a tracked admission time. Claims of
+ * pre-existing/retried/untracked records increment untracked_claims instead.
+ */
+typedef struct turbo_flow_durable_buffer_latency_snapshot_s {
+  size_t size;
+  uint32_t version;
+  uint64_t observation_elapsed_ns;
+  int oldest_pending_age_valid;
+  size_t pending_records;
+  size_t tracked_pending_records;
+  size_t untracked_pending_records;
+  uint64_t oldest_pending_age_ns;
+  uint64_t claim_samples;
+  uint64_t last_claim_latency_ns;
+  uint64_t mean_claim_latency_ns;
+  uint64_t max_claim_latency_ns;
+  uint64_t untracked_claims;
+} turbo_flow_durable_buffer_latency_snapshot_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_LATENCY_SNAPSHOT_INIT                                           \
+  {sizeof(turbo_flow_durable_buffer_latency_snapshot_t), TURBO_FLOW_DURABLE_BUFFER_API_VERSION,   \
+   0u, 0, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
+
+/**
  * Bind one configured durable-buffer resource to a caller-owned Inbox provider.
  * The binding borrows `inbox`; provider ownership and lifetime remain with the caller.
  * Keep the provider alive and its handle immutable until unbind or Flow destruction/
@@ -208,6 +242,15 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_pressure_snapshot(
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_runtime_snapshot(
     turbo_flow_t *flow, const char *resource_name,
     turbo_flow_durable_buffer_runtime_snapshot_t *snapshot);
+
+/**
+ * Read queue/claim latency for the current binding-local observation epoch.
+ * Calling this for the first time enables tracking; observation never changes
+ * provider selection, storage state, retry policy, or settlement semantics.
+ */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_latency_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_latency_snapshot_t *snapshot);
 
 /**
  * Pause new ordinary downstream claims for one named durable buffer. Admission

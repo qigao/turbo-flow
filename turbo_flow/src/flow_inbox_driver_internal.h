@@ -8,6 +8,10 @@ typedef enum flow_inbox_driver_origin_kind_e {
   FLOW_INBOX_DRIVER_BUFFER = 2
 } flow_inbox_driver_origin_kind_t;
 
+typedef int (*flow_inbox_driver_claim_begin_fn)(void *ctx);
+typedef void (*flow_inbox_driver_claim_end_fn)(void *ctx, int observed,
+                                                int claim_status, uint64_t record_id);
+
 typedef struct flow_inbox_driver_config_s {
   turbo_flow_inbox_t *inbox;
   turbo_flow_t *flow;
@@ -15,6 +19,9 @@ typedef struct flow_inbox_driver_config_s {
   uint32_t origin_stage;
   cflow_scheduler *scheduler;
   size_t max_message_bytes;
+  flow_inbox_driver_claim_begin_fn claim_begin;
+  flow_inbox_driver_claim_end_fn claim_end;
+  void *claim_observer_ctx;
 } flow_inbox_driver_config_t;
 
 typedef struct flow_inbox_driver_s flow_inbox_driver_t;

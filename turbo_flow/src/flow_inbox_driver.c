@@ -255,7 +255,15 @@ static int flow_inbox_driver_request_internal(flow_inbox_driver_t *source, int b
                ? SALTS_OK : SALTS_ESHUTDOWN;
   salts_mutex_unlock(&source->config.flow->runtime_mutex);
   if (status != SALTS_OK) return status;
-  status = turbo_flow_inbox_claim(source->config.inbox, &source->claim);
+  {
+    const int observed = source->config.claim_begin
+                             ? source->config.claim_begin(source->config.claim_observer_ctx)
+                             : 0;
+    status = turbo_flow_inbox_claim(source->config.inbox, &source->claim);
+    if (source->config.claim_end)
+      source->config.claim_end(source->config.claim_observer_ctx, observed, status,
+                               status == SALTS_OK ? source->claim.record_id : 0u);
+  }
   if (status != SALTS_OK) return status;
   source->record_id = source->claim.record_id;
   status = flow_inbox_source_message_build(source);

@@ -32,10 +32,10 @@ int turbo_flow_inbox_source_create(const turbo_flow_inbox_source_config_t *confi
   if (stage_index < 0) return SALTS_EINVAL;
   source = (turbo_flow_inbox_source_t *)calloc(1u, sizeof(*source));
   if (!source) return SALTS_ENOMEM;
-  driver_config = (flow_inbox_driver_config_t){config->inbox, config->flow,
-                                               FLOW_INBOX_DRIVER_SOURCE,
-                                               (uint32_t)stage_index, config->scheduler,
-                                               config->max_message_bytes};
+  driver_config = (flow_inbox_driver_config_t){
+      config->inbox, config->flow, FLOW_INBOX_DRIVER_SOURCE,
+      (uint32_t)stage_index, config->scheduler, config->max_message_bytes,
+      NULL, NULL, NULL};
   rc = flow_inbox_driver_create(&driver_config, &source->driver);
   if (rc != SALTS_OK) { free(source); return rc; }
   *source_out = source;
