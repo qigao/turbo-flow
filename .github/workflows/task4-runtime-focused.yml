@@ -302,21 +302,7 @@ jobs:
         run: |
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-          test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt|ingress/protocol/inbox/CMakeLists\.txt)
-          git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable io/turbodb
-
-      - name: Upload Task 4 evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: task4-durable-buffer-${{ github.run_id }}-${{ github.run_attempt }}
-          retention-days: 14
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/task4-runtime-evidence/
-            build/task4-runtime/CMakeCache.txt
-            build/task4-runtime-tsan/CMakeCache.txt
- || true)"
+          test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt|ingress/protocol/inbox/CMakeLists\.txt)$' || true)"
           git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable io/turbodb
 
       - name: Upload Task 4 evidence
