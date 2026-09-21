@@ -210,6 +210,10 @@ TURBO_FLOW_C_API int turbo_flow_resolved_config_materializer_binding_at(
     const turbo_flow_resolved_config_t *config, size_t index,
     turbo_flow_resolved_materializer_binding_view_t *view);
 
+/** Resolve the bounded native-projection capacity for one materializer binding. */
+TURBO_FLOW_C_API int turbo_flow_resolved_config_materializer_binding_capacity(
+    const turbo_flow_resolved_config_t *config, size_t index, size_t *capacity);
+
 TURBO_FLOW_C_API int
 turbo_flow_resolved_config_profile_adapter(const turbo_flow_resolved_config_t *config,
                                            const char *profile, const char *parameter,
