@@ -24,7 +24,6 @@ typedef struct flow_plugin_generation_owner_s {
 
 typedef struct flow_plugin_generation_materializer_binding_s {
   turbo_flow_plugin_materializer_v1_t materializer;
-  size_t operation_binding_index;
 } flow_plugin_generation_materializer_binding_t;
 
 struct turbo_flow_plugin_generation_s {
@@ -364,7 +363,7 @@ static int flow_plugin_generation_prepare_materializers(
     const turbo_flow_plugin_materializer_catalog_entry_v1_t *selected = NULL;
     flow_plugin_generation_materializer_binding_t compiled;
     turbo_flow_data_encoding_t encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
-    size_t operation_index = SIZE_MAX;
+    size_t consumer_count = 0u;
     rc = turbo_flow_resolved_config_materializer_binding_at(resolved, i, &wanted);
     if (rc != SALTS_OK)
       return flow_plugin_generation_materializer_error(
@@ -406,18 +405,16 @@ static int flow_plugin_generation_prepare_materializers(
       if (rc != SALTS_OK)
         return flow_plugin_generation_materializer_error(
             error, SALTS_EPROTO, i, "schema",
-            "materializer schema/CMeta does not exactly match operation input");
-      operation_index = j;
-      break;
+            "materializer schema/CMeta does not exactly match every operation input consumer");
+      ++consumer_count;
     }
-    if (operation_index == SIZE_MAX)
+    if (consumer_count == 0u)
       return flow_plugin_generation_materializer_error(
           error, SALTS_EPROTO, i, "schema",
           "materializer binding has no exact typed-operation input consumer");
 
     memset(&compiled, 0, sizeof(compiled));
     compiled.materializer = selected->materializer;
-    compiled.operation_binding_index = operation_index;
     rc = turbo_flow_stl_error(vec_push(out, &compiled));
     if (rc != SALTS_OK)
       return flow_plugin_generation_materializer_error(
