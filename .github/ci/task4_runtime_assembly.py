@@ -3,44 +3,59 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--turbodb", action="store_true")
+parser.add_argument("--rulesforge", action="store_true")
 args = parser.parse_args()
+if args.turbodb and args.rulesforge:
+    parser.error("--turbodb and --rulesforge are mutually exclusive")
 
 root = Path("CMakeLists.txt")
 text = root.read_text()
-old = "set(_turbo_flow_required_dependency_roots\n    SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT RULES_FORGE_ROOT)"
-new = "set(_turbo_flow_required_dependency_roots\n    SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT)"
-assert old in text
-text = text.replace(old, new, 1)
+assert "set(_turbo_flow_required_dependency_roots\n    SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT)" in text
 assert "include(TurboFlowRequireCHTTP)" in text
 text = text.replace("include(TurboFlowRequireCHTTP)\n", "", 1)
 start = text.index("add_subdirectory(turbo_flow)\n")
 end = text.index("set(TURBO_FLOW_EXPORT_TARGETS)", start)
-children = "add_subdirectory(ingress/protocol/common)\nadd_subdirectory(turbo_flow)\nadd_subdirectory(io/durable)\n"
-if args.turbodb:
-    # The real Inbox tests use the protocol envelope and its generated schema.
-    children += "add_subdirectory(ingress/protocol/inbox)\n"
-    children += "add_subdirectory(io/turbodb)\n"
+if args.rulesforge:
+    children = (
+        "add_subdirectory(ingress/protocol/common)\n"
+        "add_subdirectory(turbo_flow)\n"
+        "add_subdirectory(plugins/rulesforge)\n"
+        "\n"
+        "cmake_add_test(\n"
+        "  test_flow_rulesforge_plugin\n"
+        "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_rulesforge_plugin.c\n"
+        "  LIBS TurboFlow::PluginHost Salts::TinyTest\n"
+        "  INCLUDES ${CMAKE_SOURCE_DIR}/plugins/rulesforge/include\n"
+        '  FOLDER "turbo_flow/tests")\n'
+        "target_compile_definitions(test_flow_rulesforge_plugin PRIVATE\n"
+        '  FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>")\n'
+        "add_dependencies(test_flow_rulesforge_plugin tf_rulesforge_provider)\n"
+    )
+else:
+    children = "add_subdirectory(ingress/protocol/common)\nadd_subdirectory(turbo_flow)\nadd_subdirectory(io/durable)\n"
+    if args.turbodb:
+        # The real Inbox tests use the protocol envelope and its generated schema.
+        children += "add_subdirectory(ingress/protocol/inbox)\n"
+        children += "add_subdirectory(io/turbodb)\n"
 text = text[:start] + children + "\n" + text[end:]
 root.write_text(text)
 
 graph = Path("turbo_flow/CMakeLists.txt")
 text = graph.read_text()
-rules = (
-    'find_package(RulesForge 0.9 CONFIG REQUIRED\n'
-    '             PATHS "$ENV{RULES_FORGE_ROOT}" NO_DEFAULT_PATH)\n'
-)
-assert rules in text
-text = text.replace(rules, "", 1)
-marker = "file(GLOB TURBO_FLOW_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)\n"
-assert marker in text
-text = text.replace(
-    marker,
-    marker
-    + "list(REMOVE_ITEM TURBO_FLOW_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_rulesforge.c)\n",
-    1,
-)
-assert "Salts::CMeta RulesForge::RulesForge" in text
-text = text.replace("Salts::CMeta RulesForge::RulesForge", "Salts::CMeta", 1)
+assert "RulesForge::RulesForge" not in text
+assert "find_package(RulesForge" not in text
+
+if args.rulesforge:
+    full_tests = """if(BUILD_TESTING)
+  add_subdirectory(tests)
+  add_subdirectory(benchmarks)
+endif()
+"""
+    assert full_tests in text
+    text = text.replace(full_tests, "", 1)
+    graph.write_text(text)
+    raise SystemExit(0)
+
 
 insertion = "\n".join(
     (
