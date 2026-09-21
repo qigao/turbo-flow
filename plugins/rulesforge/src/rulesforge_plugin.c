@@ -1,8 +1,12 @@
 #include "turbo_flow_rulesforge_plugin.h"
 
 #include "turbo_flow_plugin.h"
+#include "turbo_flow_plugin_materializer.h"
 #include "turbo_flow_resolved_config.h"
 
+#include <data_bind_format_provider.h>
+#include <data_bind_json_provider.h>
+#include <data_bind_native.h>
 #include <rules_forge.h>
 #include <salts_error.h>
 
@@ -28,6 +32,87 @@ typedef struct rulesforge_result_context_s {
 typedef struct rulesforge_session_s {
   rulesforge_result_context_t *context;
 } rulesforge_session_t;
+
+enum {
+  RULESFORGE_MATERIALIZER_MAX_ENCODED_BYTES = 4096u,
+  RULESFORGE_MATERIALIZER_WORKSPACE_BYTES = 4096u,
+  RULESFORGE_MATERIALIZER_MAX_DEPTH = 8u,
+  RULESFORGE_MATERIALIZER_MAX_ITEMS = 32u
+};
+
+static int rulesforge_databind_status(DataBindStatus status) {
+  switch (status) {
+  case DATA_BIND_OK:
+    return SALTS_OK;
+  case DATA_BIND_ERR_INVALID_ARG:
+    return SALTS_EINVAL;
+  case DATA_BIND_ERR_IO:
+    return SALTS_EIO;
+  case DATA_BIND_ERR_OOM:
+    return SALTS_ENOMEM;
+  case DATA_BIND_ERR_LIMIT:
+  case DATA_BIND_ERR_BUFFER_TOO_SMALL:
+    return SALTS_ENOSPC;
+  case DATA_BIND_ERR_CANCELED:
+    return SALTS_ECANCELED;
+  case DATA_BIND_ERR_PARSE:
+  case DATA_BIND_ERR_SCHEMA:
+  case DATA_BIND_ERR_TYPE_NOT_FOUND:
+  case DATA_BIND_ERR_TYPE_MISMATCH:
+  case DATA_BIND_ERR_RUNTIME:
+  default:
+    return SALTS_EPROTO;
+  }
+}
+
+static int rulesforge_materialize_applicant_json(
+    void *ctx, const turbo_flow_plugin_materializer_input_v1_t *input,
+    void *native_out, size_t native_capacity) {
+  unsigned char workspace[RULESFORGE_MATERIALIZER_WORKSPACE_BYTES];
+  DataBindNativeOptions options = DATA_BIND_NATIVE_OPTIONS_INIT;
+  DataBindNativeDiagnostic diagnostic = DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+  DataBindFormatReader reader = DATA_BIND_FORMAT_READER_INIT;
+  DataBindError reader_error = DATA_BIND_ERROR_INIT;
+  const DataBindFormatProvider *provider;
+  DataBindStatus status;
+  DataBindStatus close_status;
+  (void)ctx;
+
+  if (!input || input->size != sizeof(*input) ||
+      input->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      input->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
+      !input->data || input->data_size == 0u ||
+      input->data_size > RULESFORGE_MATERIALIZER_MAX_ENCODED_BYTES ||
+      !native_out || native_capacity != sizeof(turbo_flow_rulesforge_applicant))
+    return input && input->data_size > RULESFORGE_MATERIALIZER_MAX_ENCODED_BYTES
+               ? SALTS_ENOSPC
+               : SALTS_EINVAL;
+
+  options.workspace = workspace;
+  options.workspace_bytes = sizeof(workspace);
+  options.max_depth = RULESFORGE_MATERIALIZER_MAX_DEPTH;
+  options.max_items = RULESFORGE_MATERIALIZER_MAX_ITEMS;
+  options.max_owned_bytes = 0u;
+
+  status = data_bind_native_init(
+      &options, &turbo_flow_rulesforge_applicant_data,
+      native_out, native_capacity, &diagnostic);
+  if (status != DATA_BIND_OK) return rulesforge_databind_status(status);
+
+  provider = data_bind_json_format_provider();
+  if (!provider) return SALTS_ENOTSUP;
+  status = data_bind_format_reader_open(
+      provider, (const char *)input->data, input->data_size,
+      options.max_depth, &reader, &reader_error);
+  if (status != DATA_BIND_OK) return rulesforge_databind_status(status);
+
+  status = data_bind_native_decode(
+      &options, &turbo_flow_rulesforge_applicant_data, reader.reader,
+      native_out, native_capacity, &diagnostic);
+  close_status = data_bind_format_reader_close(&reader);
+  if (status != DATA_BIND_OK) return rulesforge_databind_status(status);
+  return rulesforge_databind_status(close_status);
+}
 
 static int rulesforge_status(ruleforge_status_t status) {
   switch (status) {
@@ -286,12 +371,15 @@ static int rulesforge_plugin_register(
   rulesforge_plugin_t *plugin = (rulesforge_plugin_t *)plugin_ptr;
   turbo_flow_plugin_schema_v1_t input_schema = TURBO_FLOW_PLUGIN_SCHEMA_V1_INIT;
   turbo_flow_plugin_schema_v1_t output_schema = TURBO_FLOW_PLUGIN_SCHEMA_V1_INIT;
+  turbo_flow_plugin_materializer_v1_t materializer =
+      TURBO_FLOW_PLUGIN_MATERIALIZER_V1_INIT;
   turbo_flow_plugin_operation_v3_t operation;
   int rc;
   if (!plugin || !registration || registration->size != sizeof(*registration) ||
       registration->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       registration->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
-      !registration->add_schema || !registration->add_operation)
+      !registration->add_schema || !registration->add_materializer ||
+      !registration->add_operation)
     return SALTS_EINVAL;
 
   input_schema.schema_version = TURBO_FLOW_RULESFORGE_SCHEMA_VERSION;
@@ -301,6 +389,17 @@ static int rulesforge_plugin_register(
   rc = registration->add_schema(registration->ctx, &input_schema);
   if (rc != SALTS_OK) return rc;
   rc = registration->add_schema(registration->ctx, &output_schema);
+  if (rc != SALTS_OK) return rc;
+
+  materializer.schema = turbo_flow_rulesforge_applicant_schema;
+  materializer.data = &turbo_flow_rulesforge_applicant_data;
+  materializer.max_encoded_bytes = RULESFORGE_MATERIALIZER_MAX_ENCODED_BYTES;
+  materializer.native_bytes = sizeof(turbo_flow_rulesforge_applicant);
+  materializer.threading = TURBO_FLOW_PLUGIN_MATERIALIZER_THREAD_SAFE;
+  materializer.ownership = TURBO_FLOW_PLUGIN_MATERIALIZER_CALLER_BUFFER;
+  materializer.ctx = plugin;
+  materializer.materialize = rulesforge_materialize_applicant_json;
+  rc = registration->add_materializer(registration->ctx, &materializer);
   if (rc != SALTS_OK) return rc;
 
   turbo_flow_plugin_operation_v3_init(&operation);
@@ -365,7 +464,8 @@ static const turbo_flow_plugin_api_v1_t rulesforge_plugin_api = {
     TURBO_FLOW_RULESFORGE_PLUGIN_ID,
     TURBO_FLOW_RULESFORGE_PLUGIN_VERSION,
     (turbo_flow_plugin_capabilities_t)(TURBO_FLOW_PLUGIN_CAP_SCHEMA |
-                                       TURBO_FLOW_PLUGIN_CAP_OPERATION),
+                                       TURBO_FLOW_PLUGIN_CAP_OPERATION |
+                                       TURBO_FLOW_PLUGIN_CAP_MATERIALIZER),
     rulesforge_plugin_load,
     rulesforge_plugin_register,
     rulesforge_plugin_quiesce,

@@ -1,5 +1,6 @@
 #include "tinytest.h"
 #include "turbo_flow_plugin.h"
+#include "turbo_flow_plugin_materializer.h"
 #include "turbo_flow_rulesforge_plugin.h"
 
 #include <salts_error.h>
@@ -41,12 +42,17 @@ spec("RulesForge ABI3 provider") {
     turbo_flow_plugin_host_t *host = NULL;
     turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
     turbo_flow_plugin_operation_catalog_v3_t catalog;
+    turbo_flow_plugin_materializer_catalog_v1_t materializers =
+        TURBO_FLOW_PLUGIN_MATERIALIZER_CATALOG_V1_INIT;
+    turbo_flow_plugin_materializer_input_v1_t encoded =
+        TURBO_FLOW_PLUGIN_MATERIALIZER_INPUT_V1_INIT;
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_plugin_operation_request_v3_t request;
     turbo_flow_plugin_operation_error_v3_t operation_error;
     turbo_flow_plugin_operation_input_v3_t input;
     turbo_flow_plugin_operation_budget_v3_t operation_budget;
     turbo_flow_rulesforge_applicant applicant = {0};
+    turbo_flow_rulesforge_applicant decoded = {0};
     turbo_flow_rulesforge_decision *decision = NULL;
     rulesforge_budget_t budget = {16u, 0u};
     void *result_context = NULL;
@@ -98,6 +104,38 @@ spec("RulesForge ABI3 provider") {
                 TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID);
     check_equal(catalog.entries[0].operation.output.data->stable_id,
                 TURBO_FLOW_RULESFORGE_OUTPUT_SCHEMA_ID);
+    check_equal(catalog.entries[0].operation.input.projection->encoding,
+                TURBO_FLOW_DATA_ENCODING_JSON);
+
+    check_equal(turbo_flow_plugin_catalog_snapshot_materializer_catalog(
+                    snapshot, &materializers),
+                SALTS_OK);
+    check_equal(materializers.count, (size_t)1u);
+    check_equal(materializers.entries[0].plugin_id, TURBO_FLOW_RULESFORGE_PLUGIN_ID);
+    check_equal(materializers.entries[0].materializer.schema.encoding,
+                TURBO_FLOW_DATA_ENCODING_JSON);
+    check_equal(strcmp(materializers.entries[0].materializer.schema.schema_name,
+                       TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID),
+                0);
+    check_equal(materializers.entries[0].materializer.native_bytes, sizeof(decoded));
+    check_not_null(materializers.entries[0].materializer.materialize);
+
+    encoded.data = "{\"age\":21}";
+    encoded.data_size = strlen((const char *)encoded.data);
+    check_equal(materializers.entries[0].materializer.materialize(
+                    materializers.entries[0].materializer.ctx, &encoded,
+                    &decoded, sizeof(decoded)),
+                SALTS_OK);
+    check_equal(decoded.age, 21);
+
+    decoded.age = 0;
+    encoded.data = "{\"age\":}";
+    encoded.data_size = strlen((const char *)encoded.data);
+    check_equal(materializers.entries[0].materializer.materialize(
+                    materializers.entries[0].materializer.ctx, &encoded,
+                    &decoded, sizeof(decoded)),
+                SALTS_EPROTO);
+    check_equal(decoded.age, 0);
 
     check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)count, &resolved, &config_error),
                 SALTS_OK);

@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 #define TURBO_FLOW_RULESFORGE_PLUGIN_ID "rulesforge.provider"
-#define TURBO_FLOW_RULESFORGE_PLUGIN_VERSION "1.0.0"
+#define TURBO_FLOW_RULESFORGE_PLUGIN_VERSION "1.1.0"
 #define TURBO_FLOW_RULESFORGE_OPERATION "rulesforge.apply"
 #define TURBO_FLOW_RULESFORGE_RESOURCE_KIND "rulesforge.knowledge-base"
 #define TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID "rulesforge.Applicant.data"
@@ -56,7 +56,7 @@ static const cmeta_data_desc turbo_flow_rulesforge_decision_data = {
     &turbo_flow_rulesforge_decision_shape, NULL, NULL, NULL};
 
 static const turbo_flow_data_schema_t turbo_flow_rulesforge_applicant_schema = {
-    sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+    sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DATA_ENCODING_JSON,
     TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID, "Applicant", "turbo_flow_rulesforge_applicant",
     7301u, TURBO_FLOW_RULESFORGE_SCHEMA_VERSION, NULL};
 

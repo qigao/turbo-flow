@@ -1,5 +1,7 @@
 find_package(RulesForge 0.9 CONFIG REQUIRED
              PATHS "$ENV{RULES_FORGE_ROOT}" NO_DEFAULT_PATH)
+find_package(DataBind 3 CONFIG REQUIRED COMPONENTS JsonAdapter
+             PATHS "$ENV{DATABIND_ROOT}" NO_DEFAULT_PATH)
 
 add_library(tf_rulesforge_provider SHARED
   src/rulesforge_plugin.c)
@@ -10,7 +12,17 @@ target_include_directories(tf_rulesforge_provider
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 target_link_libraries(tf_rulesforge_provider
-  PRIVATE TurboFlow::PluginHost RulesForge::RulesForge)
+  PRIVATE
+    TurboFlow::PluginHost
+    RulesForge::RulesForge
+    Salts::DataBindCore
+    Salts::DataBindJsonAdapter)
+
+if(UNIX AND NOT APPLE)
+  # DataBindCore/JSON adapter are private static implementation archives.
+  # Keep their global symbols out of the provider's dynamic export surface.
+  target_link_options(tf_rulesforge_provider PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
 
 set_target_properties(tf_rulesforge_provider PROPERTIES
   C_VISIBILITY_PRESET hidden
