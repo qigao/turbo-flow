@@ -27,6 +27,10 @@ typedef struct flow_plugin_materializer_projection_context_s {
   size_t native_bytes;
 } flow_plugin_materializer_projection_context_t;
 
+static int flow_plugin_generation_materializer_error(
+    turbo_flow_config_error_t *error, int status, size_t index,
+    const char *field, const char *message);
+
 struct turbo_flow_plugin_materializer_binding_s {
   turbo_flow_plugin_materializer_v1_t materializer;
   turbo_flow_projection_owner_t *owner;
@@ -748,6 +752,122 @@ turbo_flow_plugin_generation_state(const turbo_flow_plugin_generation_t *generat
 
 size_t turbo_flow_plugin_generation_owner_count(const turbo_flow_plugin_generation_t *generation) {
   return generation ? vec_size(&generation->owners) : 0u;
+}
+
+size_t turbo_flow_plugin_generation_materializer_count(
+    const turbo_flow_plugin_generation_t *generation) {
+  return generation ? vec_size(&generation->materializers) : 0u;
+}
+
+int turbo_flow_plugin_generation_materializer_at(
+    const turbo_flow_plugin_generation_t *generation, size_t index,
+    const turbo_flow_plugin_materializer_binding_t **out) {
+  const turbo_flow_plugin_materializer_binding_t *binding;
+  if (out) *out = NULL;
+  if (!generation || !out || index >= vec_size(&generation->materializers))
+    return SALTS_EINVAL;
+  binding = (const turbo_flow_plugin_materializer_binding_t *)
+      vec_at_const(&generation->materializers, index);
+  if (!binding || !binding->owner || !binding->materializer.materialize)
+    return SALTS_EPROTO;
+  *out = binding;
+  return SALTS_OK;
+}
+
+static int flow_plugin_materializer_descriptor_match(
+    const turbo_flow_plugin_materializer_binding_t *binding,
+    const turbo_flow_content_descriptor_t *descriptor) {
+  const turbo_flow_data_schema_t *schema;
+  if (!binding || !descriptor ||
+      turbo_flow_content_descriptor_check(descriptor) != SALTS_OK)
+    return SALTS_EINVAL;
+  schema = &binding->materializer.schema;
+  if ((descriptor->flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) == 0u)
+    return SALTS_EPROTO;
+  return descriptor->domain == schema->domain &&
+                 descriptor->encoding == schema->encoding &&
+                 descriptor->schema_version == schema->schema_version &&
+                 strcmp(descriptor->schema_name, schema->schema_name) == 0 &&
+                 strcmp(descriptor->type_name, schema->type_name) == 0
+             ? SALTS_OK
+             : SALTS_EPROTO;
+}
+
+int turbo_flow_plugin_materializer_materialize(
+    const turbo_flow_plugin_materializer_binding_t *binding, turbo_flow_msg_t *msg,
+    turbo_flow_config_error_t *error) {
+  turbo_flow_plugin_materializer_input_v1_t input =
+      TURBO_FLOW_PLUGIN_MATERIALIZER_INPUT_V1_INIT;
+  const turbo_flow_content_descriptor_t *descriptor;
+  void *value = NULL;
+  int rc;
+  if (!error || error->size < sizeof(*error))
+    return SALTS_EINVAL;
+  *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+  if (!binding || !binding->owner || !binding->materializer.materialize || !msg)
+    return flow_plugin_generation_materializer_error(
+        error, SALTS_EINVAL, binding ? binding->config_index : 0u, "execute",
+        "invalid materializer execution arguments");
+  if (flow_msg_payload_validate(msg) != SALTS_OK)
+    return flow_plugin_generation_materializer_error(
+        error, SALTS_EINVAL, binding->config_index, "payload",
+        "message payload backing is invalid");
+  if (flow_msg_has_active_result_claim(msg))
+    return flow_plugin_generation_materializer_error(
+        error, SALTS_EBUSY, binding->config_index, "execute",
+        "message has an active result claim");
+  if (turbo_flow_msg_projection(msg, NULL) != NULL)
+    return flow_plugin_generation_materializer_error(
+        error, SALTS_EBUSY, binding->config_index, "execute",
+        "message already has a typed projection");
+  descriptor = turbo_flow_msg_content_descriptor(msg);
+  rc = flow_plugin_materializer_descriptor_match(binding, descriptor);
+  if (rc != SALTS_OK)
+    return flow_plugin_generation_materializer_error(
+        error, rc, binding->config_index, "schema",
+        "message content descriptor does not match compiled materializer schema");
+  if (msg->payload.len > binding->materializer.max_encoded_bytes)
+    return flow_plugin_generation_materializer_error(
+        error, SALTS_ENOSPC, binding->config_index, "payload",
+        "message payload exceeds materializer encoded-byte bound");
+
+  rc = flow_projection_owner_reserve(binding->owner);
+  if (rc == SALTS_ECANCELED) rc = SALTS_EBUSY;
+  if (rc != SALTS_OK)
+    return flow_plugin_generation_materializer_error(
+        error, rc, binding->config_index, "capacity",
+        "materializer projection capacity is exhausted or closed");
+
+  value = malloc(binding->materializer.native_bytes);
+  if (!value) {
+    flow_projection_owner_release(binding->owner);
+    return flow_plugin_generation_materializer_error(
+        error, SALTS_ENOMEM, binding->config_index, "execute",
+        "native projection allocation failed");
+  }
+  memset(value, 0, binding->materializer.native_bytes);
+  input.data = msg->payload.data;
+  input.data_size = msg->payload.len;
+  rc = binding->materializer.materialize(binding->materializer.ctx, &input, value,
+                                          binding->materializer.native_bytes);
+  if (rc != SALTS_OK) {
+    free(value);
+    flow_projection_owner_release(binding->owner);
+    return flow_plugin_generation_materializer_error(
+        error, rc, binding->config_index, "execute",
+        "materializer callback failed");
+  }
+
+  rc = flow_msg_bind_reserved_typed_projection(
+      msg, binding->owner, binding->materializer.data, value);
+  if (rc != SALTS_OK) {
+    free(value);
+    flow_projection_owner_release(binding->owner);
+    return flow_plugin_generation_materializer_error(
+        error, rc, binding->config_index, "execute",
+        "materialized projection could not be bound to the message");
+  }
+  return SALTS_OK;
 }
 
 int turbo_flow_plugin_generation_poll(turbo_flow_plugin_generation_t *generation,
