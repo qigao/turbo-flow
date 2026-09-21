@@ -560,6 +560,46 @@ static int flow_plugin_generation_prepare_materializers(
   return SALTS_OK;
 }
 
+static int flow_plugin_generation_bind_operation_materializers(
+    vec_t *operations, const vec_t *materializers, turbo_flow_config_error_t *error) {
+  for (size_t i = 0u; i < vec_size(operations); ++i) {
+    flow_plugin_operation_binding_t *operation =
+        (flow_plugin_operation_binding_t *)vec_at(operations, i);
+    const turbo_flow_plugin_materializer_binding_t *selected = NULL;
+    if (!operation || !operation->operation.input.data ||
+        !operation->operation.input.projection)
+      continue;
+    for (size_t j = 0u; j < vec_size(materializers); ++j) {
+      const turbo_flow_plugin_materializer_binding_t *candidate =
+          (const turbo_flow_plugin_materializer_binding_t *)vec_at_const(materializers, j);
+      int rc;
+      if (!candidate || !candidate->owner || !candidate->materializer.data)
+        continue;
+      if (strcmp(candidate->materializer.schema.schema_name,
+                 operation->operation.input.data->stable_id) != 0 ||
+          candidate->materializer.schema.schema_version !=
+              operation->operation.input.schema_version ||
+          candidate->materializer.schema.encoding !=
+              operation->operation.input.projection->encoding)
+        continue;
+      rc = turbo_flow_data_schema_match(
+          &candidate->materializer.schema, candidate->materializer.data,
+          operation->operation.input.projection, operation->operation.input.data);
+      if (rc != SALTS_OK)
+        return flow_plugin_generation_error(
+            error, SALTS_EPROTO, "$.materializer_bindings",
+            "materializer schema does not exactly match typed-operation input");
+      if (selected)
+        return flow_plugin_generation_error(
+            error, SALTS_EPROTO, "$.materializer_bindings",
+            "multiple compiled materializers match one typed-operation input");
+      selected = candidate;
+    }
+    operation->materializer = selected;
+  }
+  return SALTS_OK;
+}
+
 static int flow_plugin_generation_materialize(
     turbo_flow_plugin_generation_t *generation, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog,
@@ -692,6 +732,9 @@ int turbo_flow_plugin_generation_create(
   if (rc != SALTS_OK) goto preflight_failed;
   rc = flow_plugin_generation_prepare_materializers(snapshot, resolved, &generation->bindings,
                                                     &generation->materializers, error);
+  if (rc != SALTS_OK) goto preflight_failed;
+  rc = flow_plugin_generation_bind_operation_materializers(
+      &generation->bindings, &generation->materializers, error);
   if (rc != SALTS_OK) goto preflight_failed;
   rc = flow_plugin_generation_preflight(*flow_io, resolved, &catalog, error);
   if (rc != SALTS_OK) goto preflight_failed;
