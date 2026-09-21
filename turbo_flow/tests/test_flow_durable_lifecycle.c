@@ -25,6 +25,8 @@ typedef struct lifecycle_fixture_s {
   int asynchronous;
   turbo_flow_async_terminal_claim_t terminal;
   turbo_flow_async_terminal_claim_t terminal2;
+  turbo_flow_async_emit_claim_t emitter;
+  atomic_int emit_ready;
   int admit_status;
   int snapshot_status;
   uint64_t generation;
@@ -131,6 +133,19 @@ static int submit(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *
   return rc;
 }
 
+static int emit_submit(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
+                       const turbo_flow_msg_t *msg, turbo_flow_async_emit_claim_t *claim) {
+  lifecycle_fixture_t *f = (lifecycle_fixture_t *)ctx;
+  int rc;
+  (void)flow;
+  (void)stage;
+  (void)msg;
+  rc = turbo_flow_async_emit_claim_move(&f->emitter, claim);
+  if (rc == SALTS_OK)
+    atomic_store_explicit(&f->emit_ready, 1, memory_order_release);
+  return rc;
+}
+
 static int complete_ready_terminal(lifecycle_fixture_t *f, size_t slot) {
   turbo_flow_async_terminal_claim_t *claim;
   if (!f || slot > 1u) return 0;
@@ -160,9 +175,11 @@ static void open_fixture_mode(lifecycle_fixture_t *f, int asynchronous,
   atomic_init(&f->terminal_slots, 0u);
   atomic_init(&f->terminal_ready[0], 0);
   atomic_init(&f->terminal_ready[1], 0);
+  atomic_init(&f->emit_ready, 0);
   f->generation = 1u;
   f->terminal = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
   f->terminal2 = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
+  f->emitter = (turbo_flow_async_emit_claim_t)TURBO_FLOW_ASYNC_EMIT_CLAIM_INIT;
   f->backing = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
   check_equal(turbo_flow_inbox_memory_create(&memory, &f->backing), SALTS_OK);
   f->provider = (turbo_flow_inbox_t){sizeof(f->provider), TURBO_FLOW_INBOX_API_VERSION, &probe_ops, f};
@@ -187,6 +204,54 @@ static void open_fixture_mode(lifecycle_fixture_t *f, int asynchronous,
 }
 static void open_fixture(lifecycle_fixture_t *f, int asynchronous) {
   open_fixture_mode(f, asynchronous, TURBO_FLOW_DURABLE_IDENTITY_GENERATED);
+}
+
+static void open_fixture_async_emit(lifecycle_fixture_t *f) {
+  static const char graph[] = "source input\n"
+    "buffer intake resource intake.store\n"
+    "stage request adapter emit\n"
+    "stage output adapter sink\n"
+    "stage main {\n input -> intake -> request -> output\n}\n";
+  turbo_flow_inbox_memory_config_t memory = turbo_flow_inbox_memory_config_default();
+  turbo_flow_durable_buffer_binding_config_t config = TURBO_FLOW_DURABLE_BUFFER_BINDING_CONFIG_INIT;
+  turbo_flow_adapter_ops_t emit_ops = {0};
+  turbo_flow_adapter_ops_t sink_ops = {0};
+  turbo_flow_async_emit_adapter_ops_t async_emit = TURBO_FLOW_ASYNC_EMIT_ADAPTER_OPS_INIT;
+  turbo_flow_adapter_schema_t schema = {0};
+
+  memory.max_claims = 4u;
+  memset(f, 0, sizeof(*f));
+  atomic_init(&f->sinks, 0u);
+  atomic_init(&f->terminal_slots, 0u);
+  atomic_init(&f->terminal_ready[0], 0);
+  atomic_init(&f->terminal_ready[1], 0);
+  atomic_init(&f->emit_ready, 0);
+  f->generation = 1u;
+  f->terminal = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
+  f->terminal2 = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
+  f->emitter = (turbo_flow_async_emit_claim_t)TURBO_FLOW_ASYNC_EMIT_CLAIM_INIT;
+  f->backing = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
+  check_equal(turbo_flow_inbox_memory_create(&memory, &f->backing), SALTS_OK);
+  f->provider =
+      (turbo_flow_inbox_t){sizeof(f->provider), TURBO_FLOW_INBOX_API_VERSION, &probe_ops, f};
+  f->flow = turbo_flow_create();
+  check_not_null(f->flow);
+
+  async_emit.submit = emit_submit;
+  schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+  schema.roles = TURBO_FLOW_ADAPTER_TRANSFORM;
+  schema.direction = TURBO_FLOW_ADAPTER_BIDIRECTIONAL;
+  check_equal(turbo_flow_register_async_emit_adapter_ex(
+                  f->flow, "emit", &emit_ops, &async_emit, f, &schema), SALTS_OK);
+  sink_ops.consume = sink;
+  check_equal(turbo_flow_register_adapter(f->flow, "sink", &sink_ops, f), SALTS_OK);
+  check_equal(turbo_flow_parse_string(f->flow, graph, sizeof(graph) - 1u), SALTS_OK);
+  config.resource_name = "intake.store";
+  config.inbox = &f->provider;
+  config.identity_mode = TURBO_FLOW_DURABLE_IDENTITY_GENERATED;
+  check_equal(turbo_flow_durable_buffer_bind(f->flow, &config, &f->binding), SALTS_OK);
+  check_equal(turbo_flow_compile(f->flow), SALTS_OK);
+  check_equal(turbo_flow_start(f->flow), SALTS_OK);
 }
 
 static void publish(lifecycle_fixture_t *f) {
@@ -255,6 +320,204 @@ static void progress_until_settled(lifecycle_fixture_t *f, uint64_t completed) {
   check_equal(snapshot(f).completed, completed);
 }
 spec("durable buffer lifecycle") {
+  it("carries Sink completion observation through an async emitting stage") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_completion_snapshot_t completion =
+        TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+    turbo_flow_msg_t output;
+
+    open_fixture_async_emit(&f);
+    publish(&f);
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+
+    for (size_t i = 0u; i < 1000u; ++i) {
+      completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+          TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+      check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                      f.flow, "intake.store", &completion), SALTS_OK);
+      if (completion.graph_completed == UINT64_C(1) &&
+          atomic_load_explicit(&f.emit_ready, memory_order_acquire))
+        break;
+      salts_sleep_ms(1u);
+    }
+    check_equal(completion.graph_completed, UINT64_C(1));
+    check_equal(completion.graph_failed, UINT64_C(0));
+    check_equal(completion.sink_completed, UINT64_C(0));
+    check_equal(completion.sink_failed, UINT64_C(0));
+    check_equal(snapshot(&f).completed, UINT64_C(0));
+    check_equal(snapshot(&f).in_flight_claims, (size_t)1u);
+
+    turbo_flow_msg_init(&output);
+    output.owned_payload = tstr_dup("emitted");
+    output.payload = tstr_to_v(output.owned_payload);
+    check_equal(turbo_flow_async_emit_complete(&f.emitter, SALTS_OK, &output), SALTS_OK);
+    check_null(output.owned_payload);
+
+    for (size_t i = 0u; i < 1000u; ++i) {
+      completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+          TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+      check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                      f.flow, "intake.store", &completion), SALTS_OK);
+      if (completion.sink_completed == UINT64_C(1) &&
+          atomic_load_explicit(&f.sinks, memory_order_acquire) == (size_t)1u)
+        break;
+      salts_sleep_ms(1u);
+    }
+    check_equal(completion.graph_completed, UINT64_C(1));
+    check_equal(completion.sink_completed, UINT64_C(1));
+    check_equal(completion.sink_failed, UINT64_C(0));
+    check_equal(snapshot(&f).completed, UINT64_C(0));
+
+    progress_until_settled(&f, 1u);
+    check_equal(snapshot(&f).completed, UINT64_C(1));
+    close_fixture(&f);
+  }
+
+  it("distinguishes Graph completion from async Sink completion and settlement") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_completion_snapshot_t completion =
+        TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+    turbo_flow_inbox_snapshot_t provider;
+    open_fixture(&f, 1);
+
+    check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                    f.flow, "intake.store", &completion), SALTS_OK);
+    check_equal(completion.graph_completed, UINT64_C(0));
+    check_equal(completion.sink_completed, UINT64_C(0));
+
+    publish(&f);
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    for (size_t i = 0u; i < 1000u; ++i) {
+      completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+          TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+      check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                      f.flow, "intake.store", &completion), SALTS_OK);
+      if (completion.graph_completed == UINT64_C(1) &&
+          atomic_load_explicit(&f.sinks, memory_order_acquire) == (size_t)1u)
+        break;
+      salts_sleep_ms(1u);
+    }
+
+    provider = snapshot(&f);
+    completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                    f.flow, "intake.store", &completion), SALTS_OK);
+    check_equal(completion.graph_completed, UINT64_C(1));
+    check_equal(completion.graph_failed, UINT64_C(0));
+    check_equal(completion.sink_completed, UINT64_C(0));
+    check_equal(completion.sink_failed, UINT64_C(0));
+    check_equal(provider.completed, UINT64_C(0));
+    check_equal(provider.in_flight_claims, (size_t)1u);
+
+    check(complete_ready_terminal(&f, 0u));
+    for (size_t i = 0u; i < 1000u; ++i) {
+      completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+          TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+      check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                      f.flow, "intake.store", &completion), SALTS_OK);
+      if (completion.sink_completed == UINT64_C(1)) break;
+      salts_sleep_ms(1u);
+    }
+    check_equal(completion.graph_completed, UINT64_C(1));
+    check_equal(completion.sink_completed, UINT64_C(1));
+    check_equal(snapshot(&f).completed, UINT64_C(0));
+
+    progress_until_settled(&f, 1u);
+    provider = snapshot(&f);
+    check_equal(provider.completed, UINT64_C(1));
+    check_equal(provider.in_flight_claims, (size_t)0u);
+    completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                    f.flow, "intake.store", &completion), SALTS_OK);
+    check_equal(completion.graph_completed, UINT64_C(1));
+    check_equal(completion.sink_completed, UINT64_C(1));
+    check(completion.graph_completed_per_second_milli > UINT64_C(0));
+    check(completion.sink_completed_per_second_milli > UINT64_C(0));
+    close_fixture(&f);
+  }
+
+  it("aggregates Graph and Sink completion across partition workers including Sink failure") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_drain_config_t config =
+        TURBO_FLOW_DURABLE_BUFFER_DRAIN_CONFIG_INIT;
+    turbo_flow_durable_buffer_completion_snapshot_t completion =
+        TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+    turbo_flow_inbox_snapshot_t provider;
+
+    open_fixture_mode(&f, 1, TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED);
+    config.ordering = TURBO_FLOW_DURABLE_ORDER_PARTITION;
+    config.partition_by = TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+    config.workers = 2u;
+    config.max_in_flight = 2u;
+    config.batch_claim = 2u;
+    check_equal(turbo_flow_durable_buffer_configure_drain(
+                    f.flow, "intake.store", &config), SALTS_OK);
+
+    publish_source(&f, "source-A", "a-1", 1u);
+    publish_source(&f, "source-B", "b-1", 1u);
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+
+    for (size_t i = 0u; i < 1000u; ++i) {
+      completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+          TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+      check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                      f.flow, "intake.store", &completion), SALTS_OK);
+      if (completion.graph_completed == UINT64_C(2) &&
+          atomic_load_explicit(&f.sinks, memory_order_acquire) == (size_t)2u)
+        break;
+      salts_sleep_ms(1u);
+    }
+    check_equal(completion.graph_completed, UINT64_C(2));
+    check_equal(completion.graph_failed, UINT64_C(0));
+    check_equal(completion.sink_completed, UINT64_C(0));
+    check_equal(completion.sink_failed, UINT64_C(0));
+    check_equal(snapshot(&f).in_flight_claims, (size_t)2u);
+
+    check(complete_ready_terminal(&f, 0u));
+    check(atomic_exchange_explicit(&f.terminal_ready[1], 0, memory_order_acq_rel));
+    check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_EPROTO, NULL), SALTS_OK);
+
+    for (size_t i = 0u; i < 1000u; ++i) {
+      completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+          TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+      check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                      f.flow, "intake.store", &completion), SALTS_OK);
+      if (completion.sink_completed == UINT64_C(1) &&
+          completion.sink_failed == UINT64_C(1))
+        break;
+      salts_sleep_ms(1u);
+    }
+    check_equal(completion.graph_completed, UINT64_C(2));
+    check_equal(completion.graph_failed, UINT64_C(0));
+    check_equal(completion.sink_completed, UINT64_C(1));
+    check_equal(completion.sink_failed, UINT64_C(1));
+
+    {
+      int observed_failure = 0;
+      for (size_t i = 0u; i < 1000u; ++i) {
+        int rc;
+        provider = snapshot(&f);
+        if (provider.completed == UINT64_C(1) && provider.failed == UINT64_C(1))
+          break;
+        rc = turbo_flow_durable_buffer_progress(f.binding);
+        if (rc == SALTS_EPROTO)
+          observed_failure = 1;
+        else
+          check_equal(rc, SALTS_OK);
+        salts_sleep_ms(1u);
+      }
+      check(observed_failure);
+    }
+    provider = snapshot(&f);
+    check_equal(provider.completed, UINT64_C(1));
+    check_equal(provider.failed, UINT64_C(1));
+    check_equal(provider.in_flight_claims, (size_t)0u);
+    check_equal(provider.failed_records, (size_t)1u);
+    close_fixture(&f);
+  }
+
   it("rejects partition-key policy changes while live backlog uses the previous key") {
     lifecycle_fixture_t f;
     turbo_flow_durable_buffer_drain_config_t source_config =

@@ -1570,6 +1570,26 @@ int flow_observer_has_handlers(const turbo_flow_t *flow) {
          flow->observer_ops.adapter_event || vec_size(&flow->event_observers) != 0u;
 }
 
+static SALTS_THREAD_LOCAL flow_sink_completion_observer_t
+    flow_current_sink_completion_observer;
+
+flow_sink_completion_observer_t flow_sink_completion_scope_enter(
+    flow_run_completion_observer_fn fn, void *ctx) {
+  const flow_sink_completion_observer_t previous =
+      flow_current_sink_completion_observer;
+  flow_current_sink_completion_observer.fn = fn;
+  flow_current_sink_completion_observer.ctx = ctx;
+  return previous;
+}
+
+void flow_sink_completion_scope_leave(flow_sink_completion_observer_t previous) {
+  flow_current_sink_completion_observer = previous;
+}
+
+flow_sink_completion_observer_t flow_sink_completion_scope_current(void) {
+  return flow_current_sink_completion_observer;
+}
+
 void flow_observer_emit(turbo_flow_t *flow, const turbo_flow_observe_event_t *event) {
   turbo_flow_observe_event_t view;
   uint64_t mask;
@@ -1578,6 +1598,11 @@ void flow_observer_emit(turbo_flow_t *flow, const turbo_flow_observe_event_t *ev
   view = *event;
   view.size = sizeof(view);
   if (view.timestamp_ns == 0u) view.timestamp_ns = salts_hrtime();
+  if (view.kind == TURBO_FLOW_OBSERVE_SINK_COMPLETE &&
+      flow_current_sink_completion_observer.fn) {
+    flow_current_sink_completion_observer.fn(
+        flow_current_sink_completion_observer.ctx, view.status);
+  }
   for (size_t i = 0u; i < vec_size(&flow->event_observers); ++i) {
     const flow_event_observer_registration_t *observer =
         (const flow_event_observer_registration_t *)vec_at_const(&flow->event_observers, i);

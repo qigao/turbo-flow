@@ -38,10 +38,24 @@ struct turbo_flow_run_s {
   int deadline_fired;
   int deadline_ref_pending;
   cflow_task_id deadline_task_id;
+  flow_run_completion_observer_fn graph_complete;
+  flow_run_completion_observer_fn sink_complete;
+  void *completion_observer_ctx;
 };
 
 static void flow_run_retain(turbo_flow_run_t *run) {
   if (run) (void)atomic_fetch_add_explicit(&run->ref_count, 1u, memory_order_relaxed);
+}
+
+static void flow_run_notify_graph_complete(turbo_flow_run_t *run, int status) {
+  flow_run_completion_observer_fn fn = NULL;
+  void *ctx = NULL;
+  if (!run) return;
+  salts_mutex_lock(&run->mutex);
+  fn = run->graph_complete;
+  ctx = run->completion_observer_ctx;
+  salts_mutex_unlock(&run->mutex);
+  if (fn) fn(ctx, status);
 }
 
 static void flow_run_release(turbo_flow_run_t *run) {
@@ -229,8 +243,13 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
   turbo_flow_publish_result_t result = TURBO_FLOW_PUBLISH_RESULT_INIT;
   flow_async_publication_t *publication = NULL;
   const turbo_flow_error_t *error = NULL;
+  flow_sink_completion_observer_t previous_sink_scope = {0};
+  flow_run_completion_observer_fn sink_complete = NULL;
+  void *completion_observer_ctx = NULL;
   int error_context_entered = 0;
   int region_entered = 0;
+  int sink_scope_entered = 0;
+  int graph_notified = 0;
   int rc;
   if (!run || !type || !value || !cmeta_type_equal(type, flow_message_type_descriptor())) {
     return false;
@@ -243,6 +262,8 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
     flow_run_release(run);
     return false;
   }
+  sink_complete = run->sink_complete;
+  completion_observer_ctx = run->completion_observer_ctx;
   salts_mutex_unlock(&run->mutex);
 
   /* A managed subscription owns a lifetime count even while idle. Its values
@@ -271,6 +292,11 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
       goto record_result;
     }
   }
+  if (sink_complete) {
+    previous_sink_scope =
+        flow_sink_completion_scope_enter(sink_complete, completion_observer_ctx);
+    sink_scope_entered = 1;
+  }
   flow_publish_error_context_begin(flow);
   error_context_entered = 1;
   if (run->buffer_origin) {
@@ -283,12 +309,19 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
     }
     result.status = rc;
     if (publication) flow_async_publication_seal(publication, rc);
+    flow_run_notify_graph_complete(run, rc);
+    graph_notified = 1;
   } else {
     rc = flow_publish_message_entered(flow, run->source_name, (int)run->source_index,
                                       (const turbo_flow_msg_t *)value, &result, publication);
   }
   error = turbo_flow_last_error(flow);
 record_result:
+  if (!graph_notified) flow_run_notify_graph_complete(run, rc);
+  if (sink_scope_entered) {
+    flow_sink_completion_scope_leave(previous_sink_scope);
+    sink_scope_entered = 0;
+  }
   salts_mutex_lock(&run->mutex);
   if (!publication && rc == SALTS_OK) {
     ++run->values;
@@ -604,6 +637,24 @@ int flow_run_open_buffer_drain(turbo_flow_t *flow, uint32_t origin_stage,
   if (!origin || !origin->is_buffer) return SALTS_EINVAL;
   return flow_run_open_origin_internal(flow, origin->name, (int)origin_stage, 1, publisher,
                                        config, 0, 0, 1, run_out);
+}
+
+int flow_run_set_completion_observers(turbo_flow_run_t *run,
+                                      flow_run_completion_observer_fn graph_complete,
+                                      flow_run_completion_observer_fn sink_complete,
+                                      void *ctx) {
+  if (!run || (!graph_complete && !sink_complete)) return SALTS_EINVAL;
+  salts_mutex_lock(&run->mutex);
+  if (run->terminal || run->state != TURBO_FLOW_RUN_OPEN || run->values != 0u ||
+      run->pending_values != 0u || run->graph_complete || run->sink_complete) {
+    salts_mutex_unlock(&run->mutex);
+    return SALTS_EBUSY;
+  }
+  run->graph_complete = graph_complete;
+  run->sink_complete = sink_complete;
+  run->completion_observer_ctx = ctx;
+  salts_mutex_unlock(&run->mutex);
+  return SALTS_OK;
 }
 
 int flow_run_has_pending_values(const turbo_flow_run_t *run) {
