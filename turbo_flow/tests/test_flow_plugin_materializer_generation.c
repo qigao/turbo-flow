@@ -1,5 +1,7 @@
+#include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_plugin_operation.h"
+#include "../src/flow_projection_owner_internal.h"
 
 #include <cmeta/type_select.h>
 #include <stdlib.h>
@@ -218,6 +220,16 @@ static void materializer_message(turbo_flow_msg_t *msg, const char *payload,
   check_equal(turbo_flow_msg_copy_content_descriptor(msg, &descriptor), SALTS_OK);
 }
 
+static void materializer_durable_identity(turbo_flow_msg_t *msg) {
+  static const char source_id[] = "durable-source";
+  static const char admission_id[] = "durable-admission";
+  turbo_flow_durable_identity_t identity = TURBO_FLOW_DURABLE_IDENTITY_INIT;
+  identity.source_id = vstr_from_buf(source_id, sizeof(source_id) - 1u);
+  identity.admission_id = vstr_from_buf(admission_id, sizeof(admission_id) - 1u);
+  identity.source_sequence = 1u;
+  check_equal(turbo_flow_msg_set_durable_identity(msg, &identity), SALTS_OK);
+}
+
 static void yaml_max_inflight(char *out, size_t capacity, uint32_t max_inflight) {
   char replacement[64];
   int n = snprintf(replacement, sizeof(replacement), "max_inflight: %u", max_inflight);
@@ -284,6 +296,68 @@ spec("generation materializer preflight") {
     check_equal(create_generation(&t), SALTS_OK);
     check_not_null(t.generation);
     check_null(t.cleanup);
+    close_test(&t);
+  }
+
+  it("materializes durable canonical bytes at the typed-operation boundary") {
+    materializer_generation_test_t t;
+    turbo_flow_t *flow;
+    turbo_flow_msg_t msg;
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(create_generation(&t), SALTS_OK);
+    flow = turbo_flow_plugin_generation_flow(t.generation);
+    check_not_null(flow);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+
+    /* Four bytes are required by the fixture materializer; choose a value whose
+     * little-endian int representation remains defined when the fixture doubles it. */
+    materializer_message(&msg, "!!!!", "cmeta.int.data", 1u);
+    materializer_durable_identity(&msg);
+    check_equal(flow_msg_mark_durable_claim(&msg), SALTS_OK);
+    check_null(turbo_flow_msg_projection(&msg, NULL));
+    check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+
+    turbo_flow_msg_cleanup(&msg);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    close_test(&t);
+  }
+
+  it("rejects public durable identity without internal claim provenance") {
+    materializer_generation_test_t t;
+    turbo_flow_t *flow;
+    turbo_flow_msg_t msg;
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(create_generation(&t), SALTS_OK);
+    flow = turbo_flow_plugin_generation_flow(t.generation);
+    check_not_null(flow);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+
+    materializer_message(&msg, "ABCD", "cmeta.int.data", 1u);
+    materializer_durable_identity(&msg);
+    check_null(turbo_flow_msg_projection(&msg, NULL));
+    check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_ENOTSUP);
+
+    turbo_flow_msg_cleanup(&msg);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    close_test(&t);
+  }
+
+  it("rejects non-durable raw bytes instead of bypassing the durable boundary") {
+    materializer_generation_test_t t;
+    turbo_flow_t *flow;
+    turbo_flow_msg_t msg;
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(create_generation(&t), SALTS_OK);
+    flow = turbo_flow_plugin_generation_flow(t.generation);
+    check_not_null(flow);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+
+    materializer_message(&msg, "ABCD", "cmeta.int.data", 1u);
+    check_null(turbo_flow_msg_projection(&msg, NULL));
+    check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_ENOTSUP);
+
+    turbo_flow_msg_cleanup(&msg);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     close_test(&t);
   }
 

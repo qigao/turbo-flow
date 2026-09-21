@@ -120,7 +120,16 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
           set -euxo pipefail
-          cmake --preset linux-dev-user -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          configured=0
+          for attempt in 1 2 3 4; do
+            if cmake --preset linux-dev-user -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF; then
+              configured=1
+              break
+            fi
+            echo "Salts configure/vcpkg bootstrap failed on attempt $attempt; retrying with already-downloaded distfiles" >&2
+            sleep $((attempt * 5))
+          done
+          test "$configured" -eq 1
           cmake --build build/linux-gcc-debug --target install -j2
           sudo mkdir -p /opt/salts
           sudo ln -sfn "$PROJECT_ROOT/external/pkgs/salts/debug" /opt/salts/debug

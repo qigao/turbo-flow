@@ -8,7 +8,7 @@
 
 static int flow_msg_projection_empty(const flow_msg_projection_t *projection) {
   return projection && !projection->descriptor && !projection->value && !projection->result_value &&
-         !projection->has_durable_identity;
+         !projection->has_durable_identity && !projection->has_durable_claim;
 }
 
 static turbo_flow_projection_owner_t *flow_msg_result_release_value(flow_msg_projection_t *p) {
@@ -155,6 +155,21 @@ int turbo_flow_msg_durable_identity(const turbo_flow_msg_t *msg,
                                    projection->durable_correlation_len);
   out->source_sequence = projection->durable_source_sequence;
   return SALTS_OK;
+}
+
+int flow_msg_mark_durable_claim(turbo_flow_msg_t *msg) {
+  flow_msg_projection_t *projection =
+      (flow_msg_projection_t *)flow_msg_projection(msg);
+  if (!projection || !projection->has_durable_identity) return SALTS_EINVAL;
+  if (projection->claim_active) return SALTS_EBUSY;
+  projection->has_durable_claim = 1;
+  return SALTS_OK;
+}
+
+int flow_msg_has_durable_claim(const turbo_flow_msg_t *msg) {
+  const flow_msg_projection_t *projection = flow_msg_projection(msg);
+  return projection && projection->has_durable_identity &&
+         projection->has_durable_claim;
 }
 
 static int flow_msg_descriptor_accepts_schema(const turbo_flow_content_descriptor_t *descriptor,

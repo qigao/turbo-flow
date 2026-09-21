@@ -24,6 +24,7 @@ typedef struct flow_msg_projection_s {
   turbo_flow_projection_owner_t *result_owner;
   int claim_active;
   int has_durable_identity;
+  int has_durable_claim;
   size_t durable_source_id_len;
   size_t durable_device_id_len;
   size_t durable_session_id_len;
@@ -47,6 +48,8 @@ struct turbo_flow_result_claim_s {
   turbo_flow_projection_owner_t *owner;
 };
 
+int flow_msg_mark_durable_claim(turbo_flow_msg_t *msg);
+int flow_msg_has_durable_claim(const turbo_flow_msg_t *msg);
 int flow_projection_owner_reserve(turbo_flow_projection_owner_t *owner);
 void flow_projection_owner_release(turbo_flow_projection_owner_t *owner);
 const turbo_flow_projection_owner_config_t *

@@ -1,4 +1,5 @@
 #include "flow_plugin_operation_internal.h"
+#include "flow_projection_owner_internal.h"
 #include "turbo_flow_stl_error_internal.h"
 #include <stdio.h>
 #include <string.h>
@@ -215,8 +216,23 @@ static int operation_invoke(turbo_flow_msg_t *msg, void *ctx) {
   turbo_flow_plugin_operation_error_v3_init(&error);
   error.phase = TURBO_FLOW_PLUGIN_OPERATION_PHASE_PREFLIGHT;
   if (!data || !value) {
-    rc = SALTS_ENOTSUP;
-    goto done;
+    turbo_flow_config_error_t materializer_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    if (!b->materializer || !flow_msg_has_durable_claim(msg)) {
+      rc = SALTS_ENOTSUP;
+      goto done;
+    }
+    rc = turbo_flow_plugin_materializer_materialize(b->materializer, msg, &materializer_error);
+    if (rc != SALTS_OK) {
+      (void)snprintf(error.message, sizeof(error.message),
+                     "typed materialization failed before operation execution");
+      goto done;
+    }
+    value = turbo_flow_msg_projection(msg, &schema);
+    data = turbo_flow_msg_projection_data(msg);
+    if (!data || !value) {
+      rc = SALTS_EPROTO;
+      goto done;
+    }
   }
   rc = turbo_flow_data_schema_match(b->operation.input.projection, b->operation.input.data, schema,
                                     data);
