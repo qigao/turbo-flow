@@ -1,7 +1,7 @@
-# Typed-operation ABI 3.0 精确契约
+# Typed-operation ABI 3.x 精确契约
 
-状态：首个同步 ABI 3.0 profile 已实施；事实基线为 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`。
-用户批准 shared ABI 3.0、拒绝旧 ABI/短布局、插件与消费者同步重编译。
+状态：首个同步 operation profile 最初在 shared ABI 3.0 下实施；事实基线为 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`。当前 shared PluginHost ABI 为 3.1，新增 materializer 注册面；operation v3 profile 的执行、结果和生命周期语义不变。
+共享 ABI 继续执行精确 size/major/minor 校验；插件与消费者必须同步重编译。ABI 3.1 明确拒绝旧 3.0 DLL、旧 major、短布局和未来未支持 minor。
 本文件定义 #93 首个完整同步 profile；#93 的 owner/thread/coro/cooperative 和
 #73 的真实 RulesForge/TurboScript、旧入口删除、Core 链接解耦继续开放。
 
@@ -30,9 +30,9 @@ registration、provider wrappers、owner、catalog、配置和错误输出逐一
 只允许先读取合法内存中的 size；size 小于版本头前不得读取版本。无自动布局转换。
 已有 `_v1_t` 名称保留为类型名，绝不保留旧二进制布局路径。CMeta 自身 ABI 不改，
 Graph projection 独立 ABI 1.0 也不变；传入插件边界时其完整结构仍须验证。
-TurboFlow package 2.0 与插件 ABI 3.0 独立，不自动提升包版本。
+TurboFlow package 2.0 与 shared plugin ABI 3.x 独立，不自动提升包版本。
 
-Product owner publish 的源和目标都必须预置精确 ABI 3.0；先验证目标 size、再验证目标
+Product owner publish 的源和目标都必须预置当前精确 shared ABI；先验证目标 size、再验证目标
 版本，之后才检查源并复制。任一头部不兼容返回 EINVAL，目标全部字节保持不变。
 operation 的 preflight、create_result_context、create_session、execute 每次返回后，
 Host 必须先检查 error 的精确 size，再检查 major/minor，之后才读取诊断尾字段、
