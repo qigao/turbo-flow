@@ -40,6 +40,7 @@ typedef struct flow_plugin_operation_binding_s {
   turbo_flow_plugin_operation_request_v3_t request;
   flow_plugin_result_entry_t *result;
   void *session;
+  const turbo_flow_plugin_materializer_binding_t *materializer;
   atomic_uint admission;
   salts_mutex_t error_mutex;
   turbo_flow_plugin_operation_error_v3_t error;
