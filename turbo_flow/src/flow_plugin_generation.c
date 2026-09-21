@@ -86,13 +86,24 @@ static int flow_plugin_generation_owner_error(turbo_flow_config_error_t *error, 
   return flow_plugin_generation_error(error, status, path, "Product owner callback failed");
 }
 
+static const char *flow_plugin_generation_product_reference(
+    const turbo_flow_stage_plan_t *stage, int resource) {
+  if (!stage) return NULL;
+  if (!resource) return stage->adapter_name;
+  /* A resource attached to an operation stage belongs to the ABI3 operation
+     binding. Product resource providers own Graph resources such as buffers,
+     not operation-private business-engine resources. */
+  if (stage->operation_name && stage->operation_name[0]) return NULL;
+  return stage->resource_name;
+}
+
 static int flow_plugin_generation_reference_seen(const turbo_flow_t *flow, size_t stage_index,
                                                  int resource, const char *name) {
   if (!name) return 1;
   for (size_t i = 0u; i < stage_index; ++i) {
     const turbo_flow_stage_plan_t *previous = turbo_flow_stage_at(flow, i);
     const char *previous_name =
-        previous ? (resource ? previous->resource_name : previous->adapter_name) : NULL;
+        flow_plugin_generation_product_reference(previous, resource);
     if (previous_name && strcmp(previous_name, name) == 0) return 1;
   }
   return 0;
@@ -207,8 +218,10 @@ static int flow_plugin_generation_plan_validate(
   for (size_t i = 0u; i < stage_count; ++i) {
     const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(flow, i);
     /* stage_at reuses one thread-local view; the names remain Graph-owned across nested lookups. */
-    const char *resource_name = stage ? stage->resource_name : NULL;
-    const char *adapter_name = stage ? stage->adapter_name : NULL;
+    const char *resource_name =
+        flow_plugin_generation_product_reference(stage, 1);
+    const char *adapter_name =
+        flow_plugin_generation_product_reference(stage, 0);
     const void *provider;
     int rc;
     if (!stage)
@@ -254,7 +267,7 @@ static int flow_plugin_generation_preflight(
   for (int resource = 1; resource >= 0; --resource) {
     for (size_t i = 0u; i < stage_count; ++i) {
       const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(flow, i);
-      const char *name = stage ? (resource ? stage->resource_name : stage->adapter_name) : NULL;
+      const char *name = flow_plugin_generation_product_reference(stage, resource);
       const void *untyped_provider = NULL;
       int rc;
       if (!name || flow_plugin_generation_reference_seen(flow, i, resource, name)) continue;
@@ -608,7 +621,7 @@ static int flow_plugin_generation_materialize(
   for (int resource = 1; resource >= 0; --resource) {
     for (size_t i = 0u; i < stage_count; ++i) {
       const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(generation->flow, i);
-      const char *name = stage ? (resource ? stage->resource_name : stage->adapter_name) : NULL;
+      const char *name = flow_plugin_generation_product_reference(stage, resource);
       const void *untyped_provider = NULL;
       turbo_flow_plugin_product_owner_v1_t owner = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
       flow_plugin_generation_owner_t entry;
