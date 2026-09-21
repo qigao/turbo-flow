@@ -303,7 +303,7 @@ spec("unified PluginHost") {
                 SALTS_EINVAL);
     catalog = (turbo_flow_plugin_transactional_product_catalog_v1_t)
         TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
-    catalog.abi_minor = 1u;
+    catalog.abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR + 1u;
     check_equal(turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog),
                 SALTS_EINVAL);
 
@@ -371,7 +371,7 @@ spec("unified PluginHost") {
     check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT);
 
     config = flow_plugin_test_config(&probe, 1u, 1u, 1u);
-    config.abi_minor = 1u;
+    config.abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR + 1u;
     error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
     check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_EINVAL);
     check_null(host);

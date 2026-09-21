@@ -570,7 +570,7 @@ spec("transactional plugin Graph generation") {
         check_equal(out.ctx, NULL);
       }
       desired = (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
-      desired.abi_minor = 1u;
+      desired.abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR + 1u;
       {
         turbo_flow_plugin_product_owner_v1_t out = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
         check_equal(turbo_flow_plugin_product_owner_publish(&out, &desired), SALTS_EINVAL);
@@ -589,7 +589,7 @@ spec("transactional plugin Graph generation") {
   }
 
   it("rejects incompatible owner publication destinations without modifying any output bytes") {
-    const uint32_t versions[][2] = {{2u, 0u}, {3u, 1u}, {4u, 0u}};
+    const uint32_t versions[][2] = {{2u, 0u}, {3u, 0u}, {3u, 2u}, {4u, 0u}};
     const size_t sizes[] = {0u, sizeof(size_t), sizeof(turbo_flow_plugin_product_owner_v1_t) - 1u,
                             sizeof(turbo_flow_plugin_product_owner_v1_t) + 1u};
     turbo_flow_plugin_product_owner_v1_t desired = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;

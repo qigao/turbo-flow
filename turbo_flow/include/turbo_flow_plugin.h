@@ -2,6 +2,7 @@
 #define TURBO_FLOW_PLUGIN_H
 
 #include "turbo_flow_product.h"
+#include "turbo_flow_plugin_materializer.h"
 #include "turbo_flow_plugin_operation.h"
 
 #include <stddef.h>
@@ -112,6 +113,7 @@ typedef struct turbo_flow_plugin_host_config_s {
   size_t transactional_resource_provider_capacity;
   size_t schema_capacity;
   size_t operation_capacity;
+  size_t materializer_capacity;
 } turbo_flow_plugin_host_config_t;
 
 #define TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT                                                         \
@@ -125,6 +127,7 @@ typedef struct turbo_flow_plugin_host_config_s {
    NULL,                                                                                           \
    16u,                                                                                            \
    16u,                                                                                            \
+   64u,                                                                                            \
    64u,                                                                                            \
    64u,                                                                                            \
    64u,                                                                                            \
@@ -201,6 +204,7 @@ typedef struct turbo_flow_plugin_registration_v1_s {
   turbo_flow_plugin_add_transactional_resource_provider_fn add_transactional_resource_provider;
   turbo_flow_plugin_add_schema_fn add_schema;
   turbo_flow_plugin_add_operation_fn add_operation;
+  turbo_flow_plugin_add_materializer_fn add_materializer;
 } turbo_flow_plugin_registration_v1_t;
 
 typedef int (*turbo_flow_plugin_load_fn)(const turbo_flow_plugin_host_v1_t *host,
@@ -284,6 +288,8 @@ TURBO_FLOW_C_API size_t
 turbo_flow_plugin_host_transactional_adapter_provider_count(const turbo_flow_plugin_host_t *host);
 TURBO_FLOW_C_API size_t
 turbo_flow_plugin_host_transactional_resource_provider_count(const turbo_flow_plugin_host_t *host);
+TURBO_FLOW_C_API size_t
+turbo_flow_plugin_host_materializer_count(const turbo_flow_plugin_host_t *host);
 
 /**
  * Copy an immutable Product catalog and retain every represented DLL.
@@ -304,6 +310,10 @@ turbo_flow_plugin_catalog_snapshot_create(turbo_flow_plugin_host_t *host,
 TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_product_registry(
     const turbo_flow_plugin_catalog_snapshot_t *snapshot,
     turbo_flow_product_provider_registry_t *registry_out);
+/** Borrow immutable materializer descriptors from a live catalog snapshot. */
+TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_materializer_catalog(
+    const turbo_flow_plugin_catalog_snapshot_t *snapshot,
+    turbo_flow_plugin_materializer_catalog_v1_t *catalog_out);
 /** Release a snapshot and all module leases; accepts NULL. */
 TURBO_FLOW_C_API void
 turbo_flow_plugin_catalog_snapshot_destroy(turbo_flow_plugin_catalog_snapshot_t *snapshot);

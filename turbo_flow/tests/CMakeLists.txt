@@ -275,6 +275,89 @@ function(turbo_flow_add_schema_fixture target_name)
   set_target_properties(${target_name} PROPERTIES C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES FOLDER "turbo_flow/tests/plugin-fixtures")
 endfunction()
 
+function(turbo_flow_add_materializer_fixture target_name)
+  add_library(${target_name} SHARED plugin_materializer_fixture.c)
+  target_link_libraries(${target_name} PRIVATE TurboFlow::PluginHost Salts::CMeta)
+  target_compile_definitions(${target_name} PRIVATE TURBO_FLOW_PLUGIN_BUILD ${ARGN})
+  set_target_properties(
+    ${target_name}
+    PROPERTIES C_VISIBILITY_PRESET hidden
+               VISIBILITY_INLINES_HIDDEN YES
+               FOLDER "turbo_flow/tests/plugin-fixtures")
+endfunction()
+
+turbo_flow_add_materializer_fixture(test_flow_plugin_materializer_good)
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_second
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.second")
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_duplicate
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.duplicate"
+  FLOW_MATERIALIZER_MODE=1)
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_bad_schema_version
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.bad-schema-version"
+  FLOW_MATERIALIZER_MODE=2)
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_bad_native_size
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.bad-native-size"
+  FLOW_MATERIALIZER_MODE=3)
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_bad_max_encoded
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.bad-max-encoded"
+  FLOW_MATERIALIZER_MODE=4)
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_missing_callback
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.missing-callback"
+  FLOW_MATERIALIZER_MODE=5)
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_swallow
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.swallow"
+  FLOW_MATERIALIZER_MODE=6)
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_bad_abi
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.bad-abi"
+  FLOW_MATERIALIZER_DESCRIPTOR_MINOR=99)
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_old_abi
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.old-abi"
+  FLOW_MATERIALIZER_ABI_MINOR=0)
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_version_two
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.version-two"
+  FLOW_MATERIALIZER_SCHEMA_VERSION=2)
+
+cmake_add_test(
+  test_flow_plugin_materializer
+  SOURCES test_flow_plugin_materializer.c plugin_materializer_header_cpp.cpp
+  LIBS TurboFlow::PluginHost Salts::CMeta Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+target_compile_definitions(test_flow_plugin_materializer PRIVATE
+  FLOW_MATERIALIZER_GOOD="$<TARGET_FILE:test_flow_plugin_materializer_good>"
+  FLOW_MATERIALIZER_SECOND="$<TARGET_FILE:test_flow_plugin_materializer_second>"
+  FLOW_MATERIALIZER_DUPLICATE="$<TARGET_FILE:test_flow_plugin_materializer_duplicate>"
+  FLOW_MATERIALIZER_BAD_SCHEMA_VERSION="$<TARGET_FILE:test_flow_plugin_materializer_bad_schema_version>"
+  FLOW_MATERIALIZER_BAD_NATIVE_SIZE="$<TARGET_FILE:test_flow_plugin_materializer_bad_native_size>"
+  FLOW_MATERIALIZER_BAD_MAX_ENCODED="$<TARGET_FILE:test_flow_plugin_materializer_bad_max_encoded>"
+  FLOW_MATERIALIZER_MISSING_CALLBACK="$<TARGET_FILE:test_flow_plugin_materializer_missing_callback>"
+  FLOW_MATERIALIZER_SWALLOW="$<TARGET_FILE:test_flow_plugin_materializer_swallow>"
+  FLOW_MATERIALIZER_BAD_ABI="$<TARGET_FILE:test_flow_plugin_materializer_bad_abi>"
+  FLOW_MATERIALIZER_OLD_ABI="$<TARGET_FILE:test_flow_plugin_materializer_old_abi>"
+  FLOW_MATERIALIZER_VERSION_TWO="$<TARGET_FILE:test_flow_plugin_materializer_version_two>")
+add_dependencies(
+  test_flow_plugin_materializer
+  test_flow_plugin_materializer_good
+  test_flow_plugin_materializer_second
+  test_flow_plugin_materializer_duplicate
+  test_flow_plugin_materializer_bad_schema_version
+  test_flow_plugin_materializer_bad_native_size
+  test_flow_plugin_materializer_bad_max_encoded
+  test_flow_plugin_materializer_missing_callback
+  test_flow_plugin_materializer_swallow
+  test_flow_plugin_materializer_bad_abi
+  test_flow_plugin_materializer_old_abi
+  test_flow_plugin_materializer_version_two)
+
 turbo_flow_add_schema_fixture(test_flow_plugin_schema_good)
 turbo_flow_add_schema_fixture(test_flow_plugin_schema_second FLOW_SCHEMA_FIXTURE_ID="fixture.schema.second" FLOW_SCHEMA_STABLE_ID="fixture.schema.long")
 turbo_flow_add_schema_fixture(test_flow_plugin_schema_duplicate FLOW_SCHEMA_FIXTURE_ID="fixture.schema.duplicate" FLOW_SCHEMA_MODE=1)
