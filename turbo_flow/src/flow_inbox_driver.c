@@ -1,5 +1,6 @@
 #include "flow_inbox_driver_internal.h"
 #include "flow_internal.h"
+#include "flow_projection_owner_internal.h"
 
 #include "turbo_flow_durable_buffer.h"
 
@@ -180,6 +181,7 @@ static int flow_inbox_source_message_build(flow_inbox_driver_t *source) {
     identity.correlation = vstr_from_buf(base + correlation_offset, record->correlation.len);
     identity.source_sequence = record->source_sequence;
     status = turbo_flow_msg_set_durable_identity(&source->message, &identity);
+    if (status == SALTS_OK) status = flow_msg_mark_durable_claim(&source->message);
   }
   if (status != SALTS_OK) {
     turbo_flow_msg_cleanup(&source->message);
