@@ -19,5 +19,8 @@ int flow_config_object_keys(const json_value_t *object, const char *path,
 int flow_config_validate_operation_bindings(const json_value_t *bindings,
                                             const json_value_t *channels,
                                             turbo_flow_config_error_t *error);
+int flow_config_validate_materializer_bindings(const json_value_t *bindings,
+                                                 const json_value_t *operation_bindings,
+                                                 turbo_flow_config_error_t *error);
 
 #endif /* TURBO_FLOW_CONFIG_INTERNAL_H */
