@@ -525,6 +525,23 @@ int turbo_flow_msg_bind_retained_projection(turbo_flow_msg_t *msg,
   return SALTS_OK;
 }
 
+int flow_msg_bind_reserved_typed_projection(turbo_flow_msg_t *msg,
+                                            turbo_flow_projection_owner_t *owner,
+                                            const cmeta_data_desc *data, void *value) {
+  const turbo_flow_projection_owner_config_t *config;
+  int rc;
+  if (!msg || !owner || !data || !value) return SALTS_EINVAL;
+  config = flow_projection_owner_config(owner);
+  rc = turbo_flow_data_schema_match(config->schema, data, config->schema, data);
+  if (rc != SALTS_OK) return rc;
+  if (data->storage_type->size > config->max_result_bytes) return SALTS_EPROTO;
+  rc = turbo_flow_msg_bind_typed_projection(msg, config->schema, data, value, config->clone,
+                                            config->destroy, config->ctx);
+  if (rc != SALTS_OK) return rc;
+  ((flow_msg_projection_t *)msg->_content_handle)->owner = owner;
+  return SALTS_OK;
+}
+
 const void *turbo_flow_msg_projection(const turbo_flow_msg_t *msg,
                                       const turbo_flow_data_schema_t **schema_out) {
   const flow_msg_projection_t *projection = flow_msg_projection(msg);
