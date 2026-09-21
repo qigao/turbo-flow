@@ -717,6 +717,8 @@ int flow_msg_bind_reserved_typed_projection(turbo_flow_msg_t *msg,
                                             turbo_flow_projection_owner_t *owner,
                                             const cmeta_data_desc *data, void *value);
 int flow_msg_has_active_result_claim(const turbo_flow_msg_t *msg);
+int flow_msg_mark_durable_claim_origin(turbo_flow_msg_t *msg);
+int flow_msg_has_durable_claim_origin(const turbo_flow_msg_t *msg);
 int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg);
 void flow_clear_runtime_plan(turbo_flow_t *flow);
 int flow_compiled_plan_init(flow_compiled_plan_t *plan);
