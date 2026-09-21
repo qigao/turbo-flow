@@ -448,6 +448,172 @@ static int flow_plugin_generation_prepare_materializers(
   return SALTS_OK;
 }
 
+static int flow_plugin_generation_materialization_acquire(
+    turbo_flow_plugin_generation_t *generation) {
+  uint_fast64_t observed;
+  if (!generation) return SALTS_EINVAL;
+  observed = atomic_load_explicit(&generation->materialization_leases, memory_order_acquire);
+  for (;;) {
+    if ((observed & FLOW_PLUGIN_MATERIALIZATION_CLOSED) != 0u) return SALTS_EBUSY;
+    if ((observed & FLOW_PLUGIN_MATERIALIZATION_COUNT_MASK) ==
+        FLOW_PLUGIN_MATERIALIZATION_COUNT_MASK)
+      return SALTS_ENOSPC;
+    if (atomic_compare_exchange_weak_explicit(
+            &generation->materialization_leases, &observed, observed + UINT64_C(1),
+            memory_order_acq_rel, memory_order_acquire))
+      return SALTS_OK;
+  }
+}
+
+static void flow_plugin_generation_materialization_release(
+    turbo_flow_plugin_generation_t *generation) {
+  if (!generation) return;
+  (void)atomic_fetch_sub_explicit(&generation->materialization_leases, UINT64_C(1),
+                                  memory_order_release);
+}
+
+static int flow_plugin_materializer_binding_reserve(
+    flow_plugin_generation_materializer_binding_t *binding) {
+  size_t observed;
+  if (!binding || binding->capacity == 0u) return SALTS_EINVAL;
+  observed = atomic_load_explicit(&binding->outstanding, memory_order_acquire);
+  for (;;) {
+    if (observed >= binding->capacity) return SALTS_ENOSPC;
+    if (atomic_compare_exchange_weak_explicit(&binding->outstanding, &observed,
+                                              observed + 1u, memory_order_acq_rel,
+                                              memory_order_acquire))
+      return SALTS_OK;
+  }
+}
+
+static void flow_plugin_materializer_binding_release(
+    flow_plugin_generation_materializer_binding_t *binding) {
+  if (!binding) return;
+  (void)atomic_fetch_sub_explicit(&binding->outstanding, 1u, memory_order_release);
+}
+
+static flow_plugin_materialized_value_t *flow_plugin_materialized_header(
+    const void *value) {
+  flow_plugin_materialized_value_t *const *slot;
+  flow_plugin_materialized_value_t *header;
+  if (!value) return NULL;
+  slot = (flow_plugin_materialized_value_t *const *)value;
+  header = slot[-1];
+  return header && header->magic == FLOW_PLUGIN_MATERIALIZED_MAGIC ? header : NULL;
+}
+
+static int flow_plugin_materialized_allocate(
+    turbo_flow_plugin_generation_t *generation,
+    flow_plugin_generation_materializer_binding_t *binding,
+    void **value_out) {
+  flow_plugin_materialized_value_t *header;
+  unsigned char *cursor;
+  uintptr_t address;
+  size_t alignment;
+  size_t overhead;
+  size_t total;
+  size_t padding;
+  void *value;
+  if (value_out) *value_out = NULL;
+  if (!generation || !binding || !value_out || !binding->materializer.data ||
+      !binding->materializer.data->storage_type || binding->materializer.native_bytes == 0u)
+    return SALTS_EINVAL;
+  alignment = binding->materializer.data->storage_type->align;
+  if (alignment < _Alignof(void *)) alignment = _Alignof(void *);
+  if (alignment == 0u || alignment > TURBO_FLOW_PLUGIN_MATERIALIZER_MAX_BYTES)
+    return SALTS_EPROTO;
+  if (sizeof(*header) > SIZE_MAX - sizeof(header))
+    return SALTS_ERANGE;
+  overhead = sizeof(*header) + sizeof(header);
+  if (alignment - 1u > SIZE_MAX - overhead) return SALTS_ERANGE;
+  overhead += alignment - 1u;
+  if (binding->materializer.native_bytes > SIZE_MAX - overhead) return SALTS_ERANGE;
+  total = overhead + binding->materializer.native_bytes;
+  header = (flow_plugin_materialized_value_t *)malloc(total);
+  if (!header) return SALTS_ENOMEM;
+  memset(header, 0, sizeof(*header));
+  cursor = (unsigned char *)(header + 1) + sizeof(header);
+  address = (uintptr_t)cursor;
+  padding = (size_t)(address % alignment);
+  if (padding != 0u) padding = alignment - padding;
+  value = cursor + padding;
+  ((flow_plugin_materialized_value_t **)value)[-1] = header;
+  header->magic = FLOW_PLUGIN_MATERIALIZED_MAGIC;
+  header->generation = generation;
+  header->binding = binding;
+  header->native_bytes = binding->materializer.native_bytes;
+  memset(value, 0, header->native_bytes);
+  *value_out = value;
+  return SALTS_OK;
+}
+
+static void flow_plugin_materialized_destroy(void *value, void *ctx) {
+  flow_plugin_materialized_value_t *header = flow_plugin_materialized_header(value);
+  turbo_flow_plugin_generation_t *generation;
+  flow_plugin_generation_materializer_binding_t *binding;
+  (void)ctx;
+  if (!header) return;
+  generation = header->generation;
+  binding = header->binding;
+  header->magic = 0u;
+  flow_plugin_materializer_binding_release(binding);
+  free(header);
+  flow_plugin_generation_materialization_release(generation);
+}
+
+static int flow_plugin_materialized_clone(const void *value, void *ctx, void **out) {
+  flow_plugin_materialized_value_t *source = flow_plugin_materialized_header(value);
+  turbo_flow_plugin_generation_t *generation;
+  flow_plugin_generation_materializer_binding_t *binding;
+  void *copy = NULL;
+  int rc;
+  (void)ctx;
+  if (out) *out = NULL;
+  if (!source || !out) return SALTS_EINVAL;
+  generation = source->generation;
+  binding = source->binding;
+  rc = flow_plugin_generation_materialization_acquire(generation);
+  if (rc != SALTS_OK) return rc;
+  rc = flow_plugin_materializer_binding_reserve(binding);
+  if (rc != SALTS_OK) {
+    flow_plugin_generation_materialization_release(generation);
+    return rc;
+  }
+  rc = flow_plugin_materialized_allocate(generation, binding, &copy);
+  if (rc != SALTS_OK) {
+    flow_plugin_materializer_binding_release(binding);
+    flow_plugin_generation_materialization_release(generation);
+    return rc;
+  }
+  memcpy(copy, value, source->native_bytes);
+  *out = copy;
+  return SALTS_OK;
+}
+
+static int flow_plugin_materializer_message_validate(
+    const flow_plugin_generation_materializer_binding_t *binding,
+    const turbo_flow_msg_t *message) {
+  const turbo_flow_content_descriptor_t *content;
+  const turbo_flow_data_schema_t *schema;
+  if (!binding || !message) return SALTS_EINVAL;
+  if (flow_msg_payload_validate(message) != SALTS_OK) return SALTS_EINVAL;
+  if (turbo_flow_msg_projection(message, NULL) != NULL ||
+      turbo_flow_msg_result(message, NULL, NULL) != NULL)
+    return SALTS_EALREADY;
+  content = turbo_flow_msg_content_descriptor(message);
+  schema = &binding->materializer.schema;
+  if (!content || turbo_flow_content_descriptor_check(content) != SALTS_OK ||
+      (content->flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) == 0u)
+    return SALTS_EINVAL;
+  if (content->domain != schema->domain || content->encoding != schema->encoding ||
+      content->schema_version != schema->schema_version ||
+      strcmp(content->schema_name, schema->schema_name) != 0 ||
+      strcmp(content->type_name, schema->type_name) != 0)
+    return SALTS_EPROTO;
+  if (message->payload.len > binding->materializer.max_encoded_bytes) return SALTS_ENOSPC;
+  return SALTS_OK;
+}
+
 static int flow_plugin_generation_materialize(
     turbo_flow_plugin_generation_t *generation, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog,
