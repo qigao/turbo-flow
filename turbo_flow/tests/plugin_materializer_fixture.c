@@ -42,7 +42,8 @@ enum {
   FLOW_MATERIALIZER_BAD_NATIVE_SIZE = 3,
   FLOW_MATERIALIZER_BAD_MAX_ENCODED = 4,
   FLOW_MATERIALIZER_MISSING_CALLBACK = 5,
-  FLOW_MATERIALIZER_SWALLOW_ERROR = 6
+  FLOW_MATERIALIZER_SWALLOW_ERROR = 6,
+  FLOW_MATERIALIZER_CALLBACK_FAIL = 7
 };
 
 typedef struct materializer_fixture_s {
@@ -62,6 +63,7 @@ static int fixture_materialize(
       !input->data || input->data_size != sizeof(int) ||
       !native_out || native_capacity != sizeof(int))
     return SALTS_EINVAL;
+  if (FLOW_MATERIALIZER_MODE == FLOW_MATERIALIZER_CALLBACK_FAIL) return SALTS_EIO;
   memcpy(native_out, input->data, sizeof(int));
   return SALTS_OK;
 }
