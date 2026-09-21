@@ -159,8 +159,25 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/materializer-abi --target test_flow_plugin_materializer -j2
-          ctest --test-dir build/materializer-abi -R '^test_flow_plugin_materializer$' --output-on-failure
+          cmake --build build/materializer-abi --target test_flow_plugin_materializer test_materializer_binding_config test_flow_plugin_materializer_generation -j2
+          ctest --test-dir build/materializer-abi -R '^(test_flow_plugin_materializer|test_materializer_binding_config|test_flow_plugin_materializer_generation)
+      - name: Restore validation-only CMake assembly
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git diff --name-only | sort > "$RUNNER_TEMP/validation-dirty-files.txt"
+          printf '%s\n' CMakeLists.txt turbo_flow/CMakeLists.txt | sort > "$RUNNER_TEMP/validation-expected-dirty-files.txt"
+          diff -u "$RUNNER_TEMP/validation-expected-dirty-files.txt" "$RUNNER_TEMP/validation-dirty-files.txt"
+          git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
+
+      - name: Verify committed source remained clean
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code
+ --output-on-failure
 
       - name: Restore validation-only CMake assembly
         shell: bash
