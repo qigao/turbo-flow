@@ -1,5 +1,5 @@
 #include "flow_plugin_operation_internal.h"
-#include "turbo_flow_durable_buffer.h"
+#include "flow_projection_owner_internal.h"
 #include "turbo_flow_stl_error_internal.h"
 #include <stdio.h>
 #include <string.h>
@@ -216,18 +216,11 @@ static int operation_invoke(turbo_flow_msg_t *msg, void *ctx) {
   turbo_flow_plugin_operation_error_v3_init(&error);
   error.phase = TURBO_FLOW_PLUGIN_OPERATION_PHASE_PREFLIGHT;
   if (!data || !value) {
-    turbo_flow_durable_identity_t identity = TURBO_FLOW_DURABLE_IDENTITY_INIT;
     turbo_flow_config_error_t materializer_error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    if (!b->materializer) {
+    if (!b->materializer || !flow_msg_has_durable_claim(msg)) {
       rc = SALTS_ENOTSUP;
       goto done;
     }
-    rc = turbo_flow_msg_durable_identity(msg, &identity);
-    if (rc == SALTS_ENOENT) {
-      rc = SALTS_ENOTSUP;
-      goto done;
-    }
-    if (rc != SALTS_OK) goto done;
     rc = turbo_flow_plugin_materializer_materialize(b->materializer, msg, &materializer_error);
     if (rc != SALTS_OK) {
       (void)snprintf(error.message, sizeof(error.message),
