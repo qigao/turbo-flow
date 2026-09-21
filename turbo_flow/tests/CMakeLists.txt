@@ -714,7 +714,6 @@ turbo_flow_add_generation_fixture(
   FLOW_PLUGIN_GENERATION_EXPECT_STOPPED_ON_DRAIN=1)
 turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_resource_order
-  test_flow_plugin_generation_operation_resource
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-resource-order"
   FLOW_PLUGIN_GENERATION_SKIP_ADAPTER_REGISTRATION_CALL=2
   FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
@@ -917,6 +916,7 @@ add_dependencies(
   test_flow_plugin_generation_quiesce_timeout
   test_flow_plugin_generation_drain_timeout
   test_flow_plugin_generation_resource_order
+  test_flow_plugin_generation_operation_resource
   test_flow_plugin_generation_external_poll
   test_flow_plugin_generation_mixed_poll
   test_flow_plugin_generation_legacy_owner_prefix
