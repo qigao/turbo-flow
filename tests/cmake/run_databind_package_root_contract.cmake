@@ -189,7 +189,9 @@ run_contract_case(
 
 file(READ "${TURBO_FLOW_SOURCE_DIR}/CMakeLists.txt" root_cmake)
 foreach(required_fragment IN ITEMS
-        "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT RULES_FORGE_ROOT"
+        "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT"
+        "if(TURBO_FLOW_BUILD_RULESFORGE_PLUGIN)"
+        "list(APPEND _turbo_flow_required_dependency_roots RULES_FORGE_ROOT)"
         "find_package(DataBind 3 CONFIG REQUIRED"
         "SALTS_UTILS_ROOT still owns DataBind target"
         "DATABIND_ROOT must be physically distinct from SALTS_UTILS_ROOT")
@@ -250,7 +252,6 @@ endif()
 file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/ci/task4_runtime_assembly.py"
           task4_runtime_assembly)
 foreach(required_fragment IN ITEMS
-        "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT RULES_FORGE_ROOT"
         "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT")
   string(FIND "${task4_runtime_assembly}" "${required_fragment}" fragment_pos)
   if(fragment_pos EQUAL -1)
