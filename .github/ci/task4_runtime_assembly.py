@@ -4,9 +4,10 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--turbodb", action="store_true")
 parser.add_argument("--rulesforge", action="store_true")
+parser.add_argument("--materializer", action="store_true")
 args = parser.parse_args()
-if args.turbodb and args.rulesforge:
-    parser.error("--turbodb and --rulesforge are mutually exclusive")
+if sum((args.turbodb, args.rulesforge, args.materializer)) > 1:
+    parser.error("--turbodb, --rulesforge and --materializer are mutually exclusive")
 
 root = Path("CMakeLists.txt")
 text = root.read_text()
@@ -31,6 +32,53 @@ if args.rulesforge:
         '  FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>")\n'
         "add_dependencies(test_flow_rulesforge_plugin tf_rulesforge_provider)\n"
     )
+elif args.materializer:
+    children = (
+        "add_subdirectory(ingress/protocol/common)\n"
+        "add_subdirectory(turbo_flow)\n"
+        "\n"
+        "function(turbo_flow_ci_add_materializer_fixture target_name)\n"
+        "  add_library(\${target_name} SHARED \${CMAKE_SOURCE_DIR}/turbo_flow/tests/plugin_materializer_fixture.c)\n"
+        "  target_link_libraries(\${target_name} PRIVATE TurboFlow::PluginHost Salts::CMeta)\n"
+        "  target_compile_definitions(\${target_name} PRIVATE TURBO_FLOW_PLUGIN_BUILD \${ARGN})\n"
+        "  set_target_properties(\${target_name} PROPERTIES C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)\n"
+        "endfunction()\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_good)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_second FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.second\\\")\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_duplicate FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.duplicate\\\" FLOW_MATERIALIZER_MODE=1)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_bad_schema_version FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.bad-schema-version\\\" FLOW_MATERIALIZER_MODE=2)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_bad_native_size FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.bad-native-size\\\" FLOW_MATERIALIZER_MODE=3)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_bad_max_encoded FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.bad-max-encoded\\\" FLOW_MATERIALIZER_MODE=4)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_missing_callback FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.missing-callback\\\" FLOW_MATERIALIZER_MODE=5)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_swallow FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.swallow\\\" FLOW_MATERIALIZER_MODE=6)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_bad_abi FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.bad-abi\\\" FLOW_MATERIALIZER_DESCRIPTOR_MINOR=99)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_old_abi FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.old-abi\\\" FLOW_MATERIALIZER_ABI_MINOR=0)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_version_two FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.version-two\\\" FLOW_MATERIALIZER_SCHEMA_VERSION=2)\n"
+        "cmake_add_test(\n"
+        "  test_flow_plugin_materializer\n"
+        "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_plugin_materializer.c ${CMAKE_SOURCE_DIR}/turbo_flow/tests/plugin_materializer_header_cpp.cpp\n"
+        "  LIBS TurboFlow::PluginHost Salts::CMeta Salts::TinyTest\n"
+        '  FOLDER "turbo_flow/tests")\n'
+        "target_compile_definitions(test_flow_plugin_materializer PRIVATE\n"
+        '  FLOW_MATERIALIZER_GOOD="$<TARGET_FILE:test_flow_plugin_materializer_good>"\n'
+        '  FLOW_MATERIALIZER_SECOND="$<TARGET_FILE:test_flow_plugin_materializer_second>"\n'
+        '  FLOW_MATERIALIZER_DUPLICATE="$<TARGET_FILE:test_flow_plugin_materializer_duplicate>"\n'
+        '  FLOW_MATERIALIZER_BAD_SCHEMA_VERSION="$<TARGET_FILE:test_flow_plugin_materializer_bad_schema_version>"\n'
+        '  FLOW_MATERIALIZER_BAD_NATIVE_SIZE="$<TARGET_FILE:test_flow_plugin_materializer_bad_native_size>"\n'
+        '  FLOW_MATERIALIZER_BAD_MAX_ENCODED="$<TARGET_FILE:test_flow_plugin_materializer_bad_max_encoded>"\n'
+        '  FLOW_MATERIALIZER_MISSING_CALLBACK="$<TARGET_FILE:test_flow_plugin_materializer_missing_callback>"\n'
+        '  FLOW_MATERIALIZER_SWALLOW="$<TARGET_FILE:test_flow_plugin_materializer_swallow>"\n'
+        '  FLOW_MATERIALIZER_BAD_ABI="$<TARGET_FILE:test_flow_plugin_materializer_bad_abi>"\n'
+        '  FLOW_MATERIALIZER_OLD_ABI="$<TARGET_FILE:test_flow_plugin_materializer_old_abi>"\n'
+        '  FLOW_MATERIALIZER_VERSION_TWO="$<TARGET_FILE:test_flow_plugin_materializer_version_two>")\n'
+        "add_dependencies(test_flow_plugin_materializer\n"
+        "  test_flow_plugin_materializer_good test_flow_plugin_materializer_second\n"
+        "  test_flow_plugin_materializer_duplicate test_flow_plugin_materializer_bad_schema_version\n"
+        "  test_flow_plugin_materializer_bad_native_size test_flow_plugin_materializer_bad_max_encoded\n"
+        "  test_flow_plugin_materializer_missing_callback test_flow_plugin_materializer_swallow\n"
+        "  test_flow_plugin_materializer_bad_abi test_flow_plugin_materializer_old_abi\n"
+        "  test_flow_plugin_materializer_version_two)\n"
+    )
 else:
     children = "add_subdirectory(ingress/protocol/common)\nadd_subdirectory(turbo_flow)\nadd_subdirectory(io/durable)\n"
     if args.turbodb:
@@ -45,7 +93,7 @@ text = graph.read_text()
 assert "RulesForge::RulesForge" not in text
 assert "find_package(RulesForge" not in text
 
-if args.rulesforge:
+if args.rulesforge or args.materializer:
     full_tests = """if(BUILD_TESTING)
   add_subdirectory(tests)
   add_subdirectory(benchmarks)
