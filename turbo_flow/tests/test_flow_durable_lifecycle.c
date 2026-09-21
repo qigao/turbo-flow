@@ -494,12 +494,21 @@ spec("durable buffer lifecycle") {
     check_equal(completion.sink_completed, UINT64_C(1));
     check_equal(completion.sink_failed, UINT64_C(1));
 
-    for (size_t i = 0u; i < 1000u; ++i) {
-      provider = snapshot(&f);
-      if (provider.completed == UINT64_C(1) && provider.failed == UINT64_C(1))
-        break;
-      check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
-      salts_sleep_ms(1u);
+    {
+      int observed_failure = 0;
+      for (size_t i = 0u; i < 1000u; ++i) {
+        int rc;
+        provider = snapshot(&f);
+        if (provider.completed == UINT64_C(1) && provider.failed == UINT64_C(1))
+          break;
+        rc = turbo_flow_durable_buffer_progress(f.binding);
+        if (rc == SALTS_EPROTO)
+          observed_failure = 1;
+        else
+          check_equal(rc, SALTS_OK);
+        salts_sleep_ms(1u);
+      }
+      check(observed_failure);
     }
     provider = snapshot(&f);
     check_equal(provider.completed, UINT64_C(1));
