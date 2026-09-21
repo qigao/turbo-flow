@@ -1,9 +1,12 @@
 #include "flow_plugin_operation_internal.h"
 #include "flow_internal.h"
 #include "turbo_flow_plugin_generation.h"
+#include "turbo_flow_projection.h"
 
 #include "turbo_flow_stl_error_internal.h"
 
+#include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +27,8 @@ typedef struct flow_plugin_generation_owner_s {
 
 typedef struct flow_plugin_generation_materializer_binding_s {
   turbo_flow_plugin_materializer_v1_t materializer;
+  size_t capacity;
+  atomic_size_t outstanding;
 } flow_plugin_generation_materializer_binding_t;
 
 struct turbo_flow_plugin_generation_s {
@@ -40,8 +45,20 @@ struct turbo_flow_plugin_generation_s {
   size_t leases;
   size_t poll_cursor;
   int poll_closed;
+  atomic_uint_fast64_t materialization_leases;
   turbo_flow_plugin_generation_state_t state;
 };
+
+#define FLOW_PLUGIN_MATERIALIZATION_CLOSED (UINT64_C(1) << 63)
+#define FLOW_PLUGIN_MATERIALIZATION_COUNT_MASK (FLOW_PLUGIN_MATERIALIZATION_CLOSED - UINT64_C(1))
+#define FLOW_PLUGIN_MATERIALIZED_MAGIC UINT64_C(0x54464d4154563031)
+
+typedef struct flow_plugin_materialized_value_s {
+  uint64_t magic;
+  turbo_flow_plugin_generation_t *generation;
+  flow_plugin_generation_materializer_binding_t *binding;
+  size_t native_bytes;
+} flow_plugin_materialized_value_t;
 
 static int flow_plugin_generation_error(turbo_flow_config_error_t *error, int status,
                                         const char *path, const char *message) {
@@ -348,10 +365,11 @@ static int flow_plugin_generation_prepare_materializers(
     return flow_plugin_generation_materializer_error(
         error, rc, 0u, NULL, "materializer binding allocation failed");
   if (count == 0u) return SALTS_OK;
-  rc = turbo_flow_stl_error(vec_reserve(out, count));
+  rc = turbo_flow_stl_error(vec_resize(out, count));
   if (rc != SALTS_OK)
     return flow_plugin_generation_materializer_error(
         error, rc, 0u, NULL, "materializer binding reservation failed");
+  memset(vec_data(out), 0, count * sizeof(flow_plugin_generation_materializer_binding_t));
   rc = turbo_flow_plugin_catalog_snapshot_materializer_catalog(snapshot, &catalog);
   if (rc != SALTS_OK)
     return flow_plugin_generation_materializer_error(
@@ -361,9 +379,11 @@ static int flow_plugin_generation_prepare_materializers(
     turbo_flow_resolved_materializer_binding_view_t wanted =
         TURBO_FLOW_RESOLVED_MATERIALIZER_BINDING_VIEW_INIT;
     const turbo_flow_plugin_materializer_catalog_entry_v1_t *selected = NULL;
-    flow_plugin_generation_materializer_binding_t compiled;
+    flow_plugin_generation_materializer_binding_t *compiled =
+        (flow_plugin_generation_materializer_binding_t *)vec_at(out, i);
     turbo_flow_data_encoding_t encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
     size_t consumer_count = 0u;
+    size_t capacity = 0u;
     rc = turbo_flow_resolved_config_materializer_binding_at(resolved, i, &wanted);
     if (rc != SALTS_OK)
       return flow_plugin_generation_materializer_error(
@@ -372,6 +392,11 @@ static int flow_plugin_generation_prepare_materializers(
     if (rc != SALTS_OK)
       return flow_plugin_generation_materializer_error(
           error, rc, i, "encoding", "materializer encoding is invalid");
+    rc = turbo_flow_resolved_config_materializer_binding_capacity(resolved, i, &capacity);
+    if (rc != SALTS_OK || capacity == 0u)
+      return flow_plugin_generation_materializer_error(
+          error, rc != SALTS_OK ? rc : SALTS_EINVAL, i, "capacity",
+          "materializer capacity is invalid");
 
     for (size_t j = 0u; j < catalog.count; ++j) {
       const turbo_flow_plugin_materializer_catalog_entry_v1_t *entry = &catalog.entries[j];
@@ -413,12 +438,12 @@ static int flow_plugin_generation_prepare_materializers(
           error, SALTS_EPROTO, i, "schema",
           "materializer binding has no exact typed-operation input consumer");
 
-    memset(&compiled, 0, sizeof(compiled));
-    compiled.materializer = selected->materializer;
-    rc = turbo_flow_stl_error(vec_push(out, &compiled));
-    if (rc != SALTS_OK)
+    if (!compiled)
       return flow_plugin_generation_materializer_error(
-          error, rc, i, NULL, "materializer binding commit failed");
+          error, SALTS_EPROTO, i, NULL, "materializer binding storage is unavailable");
+    compiled->materializer = selected->materializer;
+    compiled->capacity = capacity;
+    atomic_init(&compiled->outstanding, 0u);
   }
   return SALTS_OK;
 }
