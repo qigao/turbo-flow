@@ -696,6 +696,7 @@ static int flow_plugin_materializer_valid(const turbo_flow_plugin_materializer_v
       m->max_encoded_bytes > TURBO_FLOW_PLUGIN_MATERIALIZER_MAX_BYTES ||
       !m->native_bytes || m->native_bytes > TURBO_FLOW_PLUGIN_MATERIALIZER_MAX_BYTES ||
       m->native_bytes != m->data->storage_type->size ||
+      m->data->storage_type->align > _Alignof(max_align_t) ||
       m->threading != TURBO_FLOW_PLUGIN_MATERIALIZER_THREAD_SAFE ||
       m->ownership != TURBO_FLOW_PLUGIN_MATERIALIZER_CALLER_BUFFER ||
       !m->materialize)

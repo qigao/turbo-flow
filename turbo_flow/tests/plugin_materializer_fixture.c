@@ -42,7 +42,8 @@ enum {
   FLOW_MATERIALIZER_BAD_NATIVE_SIZE = 3,
   FLOW_MATERIALIZER_BAD_MAX_ENCODED = 4,
   FLOW_MATERIALIZER_MISSING_CALLBACK = 5,
-  FLOW_MATERIALIZER_SWALLOW_ERROR = 6
+  FLOW_MATERIALIZER_SWALLOW_ERROR = 6,
+  FLOW_MATERIALIZER_OVERALIGNED = 7
 };
 
 typedef struct materializer_fixture_s {
@@ -75,6 +76,8 @@ static int fixture_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
     return SALTS_EINVAL;
   *out = NULL;
   fixture_int_type = *CMETA_TYPEOF(int);
+  if (FLOW_MATERIALIZER_MODE == FLOW_MATERIALIZER_OVERALIGNED)
+    fixture_int_type.align = _Alignof(max_align_t) * 2u;
   fixture_int_data = cmeta_data_int;
   fixture_int_data.stable_id = FLOW_MATERIALIZER_SCHEMA_ID;
   fixture_int_data.display_name = "Fixture materialized int";

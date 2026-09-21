@@ -67,10 +67,11 @@ spec("plugin materializer catalog") {
         FLOW_MATERIALIZER_BAD_NATIVE_SIZE,
         FLOW_MATERIALIZER_BAD_MAX_ENCODED,
         FLOW_MATERIALIZER_MISSING_CALLBACK,
+        FLOW_MATERIALIZER_OVERALIGNED,
         FLOW_MATERIALIZER_SWALLOW};
     const int statuses[] = {
         SALTS_EALREADY, SALTS_EINVAL, SALTS_EINVAL,
-        SALTS_EINVAL, SALTS_EINVAL, SALTS_ENOSPC};
+        SALTS_EINVAL, SALTS_EINVAL, SALTS_EINVAL, SALTS_ENOSPC};
 
     for (size_t i = 0u; i < sizeof(paths) / sizeof(paths[0]); ++i) {
       turbo_flow_plugin_host_config_t config =

@@ -344,6 +344,10 @@ turbo_flow_add_materializer_fixture(
   FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.swallow"
   FLOW_MATERIALIZER_MODE=6)
 turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_overaligned
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.overaligned"
+  FLOW_MATERIALIZER_MODE=7)
+turbo_flow_add_materializer_fixture(
   test_flow_plugin_materializer_bad_abi
   FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.bad-abi"
   FLOW_MATERIALIZER_DESCRIPTOR_MINOR=99)
@@ -389,6 +393,7 @@ target_compile_definitions(test_flow_plugin_materializer PRIVATE
   FLOW_MATERIALIZER_BAD_MAX_ENCODED="$<TARGET_FILE:test_flow_plugin_materializer_bad_max_encoded>"
   FLOW_MATERIALIZER_MISSING_CALLBACK="$<TARGET_FILE:test_flow_plugin_materializer_missing_callback>"
   FLOW_MATERIALIZER_SWALLOW="$<TARGET_FILE:test_flow_plugin_materializer_swallow>"
+  FLOW_MATERIALIZER_OVERALIGNED="$<TARGET_FILE:test_flow_plugin_materializer_overaligned>"
   FLOW_MATERIALIZER_BAD_ABI="$<TARGET_FILE:test_flow_plugin_materializer_bad_abi>"
   FLOW_MATERIALIZER_OLD_ABI="$<TARGET_FILE:test_flow_plugin_materializer_old_abi>"
   FLOW_MATERIALIZER_VERSION_TWO="$<TARGET_FILE:test_flow_plugin_materializer_version_two>")
@@ -402,6 +407,7 @@ add_dependencies(
   test_flow_plugin_materializer_bad_max_encoded
   test_flow_plugin_materializer_missing_callback
   test_flow_plugin_materializer_swallow
+  test_flow_plugin_materializer_overaligned
   test_flow_plugin_materializer_bad_abi
   test_flow_plugin_materializer_old_abi
   test_flow_plugin_materializer_version_two)

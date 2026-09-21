@@ -51,6 +51,7 @@ elif args.materializer:
         "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_bad_max_encoded FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.bad-max-encoded\\\" FLOW_MATERIALIZER_MODE=4)\n"
         "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_missing_callback FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.missing-callback\\\" FLOW_MATERIALIZER_MODE=5)\n"
         "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_swallow FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.swallow\\\" FLOW_MATERIALIZER_MODE=6)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_overaligned FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.overaligned\\\" FLOW_MATERIALIZER_MODE=7)\n"
         "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_bad_abi FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.bad-abi\\\" FLOW_MATERIALIZER_DESCRIPTOR_MINOR=99)\n"
         "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_old_abi FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.old-abi\\\" FLOW_MATERIALIZER_ABI_MINOR=0)\n"
         "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_version_two FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.version-two\\\" FLOW_MATERIALIZER_SCHEMA_VERSION=2)\n"
@@ -68,6 +69,7 @@ elif args.materializer:
         '  FLOW_MATERIALIZER_BAD_MAX_ENCODED="$<TARGET_FILE:test_flow_plugin_materializer_bad_max_encoded>"\n'
         '  FLOW_MATERIALIZER_MISSING_CALLBACK="$<TARGET_FILE:test_flow_plugin_materializer_missing_callback>"\n'
         '  FLOW_MATERIALIZER_SWALLOW="$<TARGET_FILE:test_flow_plugin_materializer_swallow>"\n'
+        '  FLOW_MATERIALIZER_OVERALIGNED="$<TARGET_FILE:test_flow_plugin_materializer_overaligned>"\n'
         '  FLOW_MATERIALIZER_BAD_ABI="$<TARGET_FILE:test_flow_plugin_materializer_bad_abi>"\n'
         '  FLOW_MATERIALIZER_OLD_ABI="$<TARGET_FILE:test_flow_plugin_materializer_old_abi>"\n'
         '  FLOW_MATERIALIZER_VERSION_TWO="$<TARGET_FILE:test_flow_plugin_materializer_version_two>")\n'
@@ -76,6 +78,7 @@ elif args.materializer:
         "  test_flow_plugin_materializer_duplicate test_flow_plugin_materializer_bad_schema_version\n"
         "  test_flow_plugin_materializer_bad_native_size test_flow_plugin_materializer_bad_max_encoded\n"
         "  test_flow_plugin_materializer_missing_callback test_flow_plugin_materializer_swallow\n"
+        "  test_flow_plugin_materializer_overaligned\n"
         "  test_flow_plugin_materializer_bad_abi test_flow_plugin_materializer_old_abi\n"
         "  test_flow_plugin_materializer_version_two)\n"
         "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_operation FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.operation\\\" FLOW_MATERIALIZER_SCHEMA_ID=\\\"cmeta.int.data\\\" FLOW_MATERIALIZER_TYPE_NAME=\\\"Integer\\\" FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID=7)\n"
