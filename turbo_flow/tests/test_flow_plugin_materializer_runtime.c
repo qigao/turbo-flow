@@ -229,6 +229,61 @@ spec("compiled materializer runtime") {
     check_equal(runtime_close(&t), SALTS_OK);
   }
 
+  it("defines encoded payload 0/1/N/N+1 boundaries") {
+    runtime_t t;
+    turbo_flow_msg_t message;
+    turbo_flow_content_descriptor_t content = TURBO_FLOW_CONTENT_DESCRIPTOR_INIT;
+    unsigned char one = 0u;
+    unsigned char n_plus_one[sizeof(int) + 1u] = {0};
+    int exact = 17;
+
+    check_equal(runtime_open(&t, FLOW_MATERIALIZER_OPERATION, 2u), SALTS_OK);
+
+    turbo_flow_msg_init(&message);
+    check_equal(turbo_flow_content_descriptor_init(
+                    &content, TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_CONTENT_PROFILE_GENERIC,
+                    TURBO_FLOW_DATA_ENCODING_OPAQUE, "application/octet-stream",
+                    "materializer-runtime"),
+                SALTS_OK);
+    check_equal(turbo_flow_content_descriptor_declare_schema(
+                    &content, "cmeta.int.data", "Integer", 1u),
+                SALTS_OK);
+    check_equal(turbo_flow_msg_copy_content_descriptor(&message, &content), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_materialize_at(
+                    t.generation, 0u, &message, &t.error),
+                SALTS_EINVAL);
+    check_null(turbo_flow_msg_projection(&message, NULL));
+    turbo_flow_msg_cleanup(&message);
+
+    check_equal(message_prepare(&message, &one, 1u, "cmeta.int.data", "Integer", 1u,
+                                TURBO_FLOW_DATA_ENCODING_OPAQUE), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_materialize_at(
+                    t.generation, 0u, &message, &t.error),
+                SALTS_EINVAL);
+    check_null(turbo_flow_msg_projection(&message, NULL));
+    turbo_flow_msg_cleanup(&message);
+
+    check_equal(message_prepare(&message, &exact, sizeof(exact), "cmeta.int.data", "Integer", 1u,
+                                TURBO_FLOW_DATA_ENCODING_OPAQUE), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_materialize_at(
+                    t.generation, 0u, &message, &t.error),
+                SALTS_OK);
+    check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), exact);
+    turbo_flow_msg_cleanup(&message);
+
+    check_equal(message_prepare(&message, n_plus_one, sizeof(n_plus_one),
+                                "cmeta.int.data", "Integer", 1u,
+                                TURBO_FLOW_DATA_ENCODING_OPAQUE), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_materialize_at(
+                    t.generation, 0u, &message, &t.error),
+                SALTS_ENOSPC);
+    check_equal(strcmp(t.error.path, "$.materializer_bindings[0].payload"), 0);
+    check_null(turbo_flow_msg_projection(&message, NULL));
+    turbo_flow_msg_cleanup(&message);
+
+    check_equal(runtime_close(&t), SALTS_OK);
+  }
+
   it("enforces configured N/N+1 projection capacity and releases quota on cleanup") {
     runtime_t t;
     turbo_flow_msg_t a, b, c;
