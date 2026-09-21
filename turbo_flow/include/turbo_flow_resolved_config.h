@@ -87,6 +87,18 @@ typedef struct turbo_flow_resolved_operation_binding_view_s {
    0u,                                                                                             \
    0u}
 
+typedef struct turbo_flow_resolved_materializer_binding_view_s {
+  size_t size;
+  const char *plugin;
+  const char *schema;
+  uint32_t schema_version;
+  turbo_flow_data_encoding_t encoding;
+} turbo_flow_resolved_materializer_binding_view_t;
+
+#define TURBO_FLOW_RESOLVED_MATERIALIZER_BINDING_VIEW_INIT                                         \
+  {sizeof(turbo_flow_resolved_materializer_binding_view_t), NULL, NULL, 0u,                        \
+   TURBO_FLOW_DATA_ENCODING_OPAQUE}
+
 typedef enum turbo_flow_config_value_type_e {
   TURBO_FLOW_CONFIG_NULL = 0,
   TURBO_FLOW_CONFIG_BOOL,
@@ -180,6 +192,14 @@ turbo_flow_resolved_config_operation_binding_at(const turbo_flow_resolved_config
 TURBO_FLOW_C_API int turbo_flow_resolved_config_operation_binding_permission_at(
     const turbo_flow_resolved_config_t *config, size_t binding_index, size_t permission_index,
     const char **permission);
+
+/** Write the explicit materializer binding count; zeroes count on error. */
+TURBO_FLOW_C_API int turbo_flow_resolved_config_materializer_binding_count(
+    const turbo_flow_resolved_config_t *config, size_t *count);
+/** Project one explicit materializer binding by index. */
+TURBO_FLOW_C_API int turbo_flow_resolved_config_materializer_binding_at(
+    const turbo_flow_resolved_config_t *config, size_t index,
+    turbo_flow_resolved_materializer_binding_view_t *view);
 
 TURBO_FLOW_C_API int
 turbo_flow_resolved_config_profile_adapter(const turbo_flow_resolved_config_t *config,
