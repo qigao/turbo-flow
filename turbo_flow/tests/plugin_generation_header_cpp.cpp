@@ -27,3 +27,8 @@ static int (*owner_publish)(turbo_flow_plugin_product_owner_v1_t *,
     turbo_flow_plugin_product_owner_publish;
 static int (*generation_poll)(turbo_flow_plugin_generation_t *, uint32_t,
                               turbo_flow_config_error_t *) = turbo_flow_plugin_generation_poll;
+static int (*generation_materialize_at)(turbo_flow_plugin_generation_t *, size_t,
+                                        turbo_flow_msg_t *, turbo_flow_config_error_t *) =
+    turbo_flow_plugin_generation_materialize_at;
+static size_t (*generation_materializer_count)(
+    const turbo_flow_plugin_generation_t *) = turbo_flow_plugin_generation_materializer_count;
