@@ -308,9 +308,9 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
       turbo_flow_msg_cleanup(&local);
     }
     result.status = rc;
+    if (publication) flow_async_publication_seal(publication, rc);
     flow_run_notify_graph_complete(run, rc);
     graph_notified = 1;
-    if (publication) flow_async_publication_seal(publication, rc);
   } else {
     rc = flow_publish_message_entered(flow, run->source_name, (int)run->source_index,
                                       (const turbo_flow_msg_t *)value, &result, publication);
