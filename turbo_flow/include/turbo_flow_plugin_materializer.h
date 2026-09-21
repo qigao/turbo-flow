@@ -42,7 +42,9 @@ typedef struct turbo_flow_plugin_materializer_input_v1_s {
  *
  * v1 never transfers heap ownership across the DLL boundary. native_out points
  * to host-owned writable storage with exactly the descriptor's native_bytes
- * capacity. A callback must not retain encoded input or native_out.
+ * capacity. The registered CMeta storage alignment must not exceed max_align_t;
+ * over-aligned native layouts are rejected by PluginHost. A callback must not
+ * retain encoded input or native_out.
  */
 typedef int (*turbo_flow_plugin_materialize_fn)(
     void *ctx, const turbo_flow_plugin_materializer_input_v1_t *input,
