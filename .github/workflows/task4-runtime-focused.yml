@@ -35,6 +35,7 @@ env:
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
   TSAN_OPTIONS: halt_on_error=1:history_size=7
+  LD_LIBRARY_PATH: /opt/salts/debug/lib:/opt/salts-utils/debug/lib:/opt/databind/debug/lib:/opt/turbodb/debug/lib
 
 jobs:
   focused-runtime:
