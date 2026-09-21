@@ -249,6 +249,12 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
+  test_materializer_binding_config
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_materializer_binding_config.c
+  LIBS TurboFlow::Config Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+
+cmake_add_test(
   test_resolved_config_boundary
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_resolved_config_boundary.c
   LIBS TurboFlow::Config Salts::TinyTest
