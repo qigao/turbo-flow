@@ -94,7 +94,7 @@ spec("plugin schema catalog") {
     catalog.size = sizeof(catalog) + 1u;
     check_equal(turbo_flow_plugin_catalog_snapshot_schema_catalog(snapshot, &catalog), SALTS_EINVAL);
     catalog = (turbo_flow_plugin_schema_catalog_v1_t)TURBO_FLOW_PLUGIN_SCHEMA_CATALOG_V1_INIT;
-    catalog.abi_minor = 1u;
+    catalog.abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR + 1u;
     check_equal(turbo_flow_plugin_catalog_snapshot_schema_catalog(snapshot, &catalog), SALTS_EINVAL);
     turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     check_equal(turbo_flow_plugin_host_destroy(host, 0u, &error), SALTS_OK);
