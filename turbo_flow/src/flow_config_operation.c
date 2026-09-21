@@ -297,7 +297,7 @@ int turbo_flow_resolved_config_operation_binding_permission_at(
 
 
 static const char *const flow_materializer_keys[] = {
-    "plugin", "schema", "schema_version", "encoding"};
+    "plugin", "schema", "schema_version", "encoding", "capacity"};
 
 static void flow_materializer_path(char *path, size_t capacity, size_t index,
                                    const char *field) {
@@ -346,6 +346,29 @@ static int flow_materializer_schema_version(const json_value_t *value, size_t in
   if ((double)converted != number)
     return flow_config_error(error, SALTS_EINVAL, path, "expected integer");
   if (out) *out = (uint32_t)converted;
+  return SALTS_OK;
+}
+
+static int flow_materializer_capacity_value(
+    const json_value_t *value, size_t index, size_t *out,
+    turbo_flow_config_error_t *error) {
+  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  double number;
+  uint64_t converted;
+  if (out) *out = TURBO_FLOW_CONFIG_MATERIALIZER_DEFAULT_CAPACITY;
+  if (!value) return SALTS_OK;
+  flow_materializer_path(path, sizeof(path), index, "capacity");
+  if (json_type(value) != JSON_NUMBER)
+    return flow_config_error(error, SALTS_EINVAL, path, "expected integer");
+  number = json_number(value);
+  if (!isfinite(number) || number < 1.0 ||
+      number > (double)TURBO_FLOW_CONFIG_MATERIALIZER_MAX_CAPACITY)
+    return flow_config_error(error, SALTS_EINVAL, path,
+                             "capacity is outside the supported range");
+  converted = (uint64_t)number;
+  if ((double)converted != number)
+    return flow_config_error(error, SALTS_EINVAL, path, "expected integer");
+  if (out) *out = (size_t)converted;
   return SALTS_OK;
 }
 
@@ -403,6 +426,8 @@ int flow_config_validate_materializer_bindings(const json_value_t *bindings,
     if (rc != SALTS_OK) return rc;
     rc = flow_materializer_encoding_value(json_object_get(binding, "encoding"), i,
                                           &encoding, error);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_materializer_capacity_value(json_object_get(binding, "capacity"), i, NULL, error);
     if (rc != SALTS_OK) return rc;
     (void)plugin;
     for (size_t prior = 0u; prior < i; ++prior) {
@@ -468,4 +493,16 @@ int turbo_flow_resolved_config_materializer_binding_at(
       (uint32_t)json_number(json_object_get(binding, "schema_version"));
   view->encoding = encoding;
   return SALTS_OK;
+}
+
+int turbo_flow_resolved_config_materializer_binding_capacity(
+    const turbo_flow_resolved_config_t *config, size_t index, size_t *capacity) {
+  json_value_t *bindings, *binding;
+  if (capacity) *capacity = 0u;
+  if (!config || !capacity) return SALTS_EINVAL;
+  bindings = flow_materializer_bindings(config);
+  if (!bindings || index >= json_array_size(bindings)) return SALTS_ENOENT;
+  binding = json_array_get(bindings, index);
+  return flow_materializer_capacity_value(json_object_get(binding, "capacity"), index,
+                                          capacity, NULL);
 }
