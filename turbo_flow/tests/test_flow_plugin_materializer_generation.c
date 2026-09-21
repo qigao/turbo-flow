@@ -309,7 +309,9 @@ spec("generation materializer preflight") {
     check_not_null(flow);
     check_equal(turbo_flow_start(flow), SALTS_OK);
 
-    materializer_message(&msg, "ABCD", "cmeta.int.data", 1u);
+    /* Four bytes are required by the fixture materializer; choose a value whose
+     * little-endian int representation remains defined when the fixture doubles it. */
+    materializer_message(&msg, "!!!!", "cmeta.int.data", 1u);
     materializer_durable_identity(&msg);
     check_equal(flow_msg_mark_durable_claim(&msg), SALTS_OK);
     check_null(turbo_flow_msg_projection(&msg, NULL));
