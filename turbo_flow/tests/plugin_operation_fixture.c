@@ -226,7 +226,9 @@ static int context_release(void *ctx) {
 static int fixture_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
   if (!out) return SALTS_EINVAL;
   *out = NULL;
-  if (!host || host->size != sizeof(*host) || host->abi_major != 3u || host->abi_minor != 0u)
+  if (!host || host->size != sizeof(*host) ||
+      host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
     return SALTS_EINVAL;
   operation_fixture_t *f = calloc(1, sizeof(*f));
   if (!f) return SALTS_ENOMEM;
@@ -260,7 +262,9 @@ static int fixture_register(void *ctx, const turbo_flow_plugin_registration_v1_t
   turbo_flow_plugin_operation_v3_t op;
   int rc;
   int mode = ((operation_fixture_t *)ctx)->mode;
-  if (!r || r->size != sizeof(*r) || r->abi_major != 3u || r->abi_minor != 0u ||
+  if (!r || r->size != sizeof(*r) ||
+      r->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      r->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
       !r->add_operation || !r->add_schema)
     return SALTS_EINVAL;
   turbo_flow_plugin_product_adapter_provider_v1_t adapter =
@@ -398,9 +402,10 @@ static void fixture_destroy(void *ctx) {
   salts_mutex_destroy(&f->mutex);
   free(f);
 }
-static const turbo_flow_plugin_api_v1_t fixture_api = {sizeof(turbo_flow_plugin_api_v1_t),
-                                                       3u,
-                                                       0u,
+static const turbo_flow_plugin_api_v1_t fixture_api = {
+                                                       sizeof(turbo_flow_plugin_api_v1_t),
+                                                       TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR,
+                                                       TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR,
                                                        FLOW_OPERATION_ID,
                                                        "1.0.0",
                                                        (uint32_t)TURBO_FLOW_PLUGIN_CAP_OPERATION |

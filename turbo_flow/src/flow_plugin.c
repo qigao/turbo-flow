@@ -690,6 +690,8 @@ static int flow_plugin_materializer_valid(const turbo_flow_plugin_materializer_v
       m->schema.schema_id == 0u || m->schema.schema_version == 0u ||
       !m->data || !cmeta_data_desc_valid(m->data) ||
       !cmeta_type_desc_valid(m->data->storage_type) ||
+      !m->data->stable_id ||
+      strcmp(m->schema.schema_name, m->data->stable_id) != 0 ||
       !m->max_encoded_bytes ||
       m->max_encoded_bytes > TURBO_FLOW_PLUGIN_MATERIALIZER_MAX_BYTES ||
       !m->native_bytes || m->native_bytes > TURBO_FLOW_PLUGIN_MATERIALIZER_MAX_BYTES ||

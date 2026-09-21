@@ -78,6 +78,26 @@ elif args.materializer:
         "  test_flow_plugin_materializer_missing_callback test_flow_plugin_materializer_swallow\n"
         "  test_flow_plugin_materializer_bad_abi test_flow_plugin_materializer_old_abi\n"
         "  test_flow_plugin_materializer_version_two)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_operation FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.operation\\\" FLOW_MATERIALIZER_SCHEMA_ID=\\\"cmeta.int.data\\\" FLOW_MATERIALIZER_TYPE_NAME=\\\"Integer\\\" FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID=7)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_mismatch FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.operation\\\" FLOW_MATERIALIZER_SCHEMA_ID=\\\"cmeta.int.data\\\" FLOW_MATERIALIZER_TYPE_NAME=\\\"Integer\\\" FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID=99)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_unused FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.unused\\\" FLOW_MATERIALIZER_SCHEMA_ID=\\\"fixture.unused.data\\\" FLOW_MATERIALIZER_TYPE_NAME=\\\"Integer\\\" FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID=15999)\n"
+        "add_library(test_flow_operation_fixture_OK SHARED ${CMAKE_SOURCE_DIR}/turbo_flow/tests/plugin_operation_fixture.c)\n"
+        "target_link_libraries(test_flow_operation_fixture_OK PRIVATE TurboFlow::PluginHost)\n"
+        "target_compile_definitions(test_flow_operation_fixture_OK PRIVATE TURBO_FLOW_PLUGIN_BUILD FLOW_OPERATION_MODE=OP_FIXTURE_OK)\n"
+        "set_target_properties(test_flow_operation_fixture_OK PROPERTIES C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)\n"
+        "add_library(test_flow_operation_fixture_TWO_NAMES SHARED ${CMAKE_SOURCE_DIR}/turbo_flow/tests/plugin_operation_fixture.c)\n"
+        "target_link_libraries(test_flow_operation_fixture_TWO_NAMES PRIVATE TurboFlow::PluginHost)\n"
+        "target_compile_definitions(test_flow_operation_fixture_TWO_NAMES PRIVATE TURBO_FLOW_PLUGIN_BUILD FLOW_OPERATION_MODE=OP_FIXTURE_TWO_NAMES)\n"
+        "set_target_properties(test_flow_operation_fixture_TWO_NAMES PROPERTIES C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)\n"
+        'cmake_add_test(test_materializer_binding_config SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_materializer_binding_config.c LIBS TurboFlow::Config Salts::TinyTest FOLDER "turbo_flow/tests")\n'
+        'cmake_add_test(test_flow_plugin_materializer_generation SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_plugin_materializer_generation.c LIBS TurboFlow::PluginHost Salts::TinyTest FOLDER "turbo_flow/tests")\n'
+        "target_compile_definitions(test_flow_plugin_materializer_generation PRIVATE\n"
+        "  FLOW_OPERATION_OK=\\\"$<TARGET_FILE:test_flow_operation_fixture_OK>\\\"\n"
+        "  FLOW_OPERATION_TWO_NAMES=\\\"$<TARGET_FILE:test_flow_operation_fixture_TWO_NAMES>\\\"\n"
+        "  FLOW_MATERIALIZER_OPERATION=\\\"$<TARGET_FILE:test_flow_plugin_materializer_operation>\\\"\n"
+        "  FLOW_MATERIALIZER_MISMATCH=\\\"$<TARGET_FILE:test_flow_plugin_materializer_mismatch>\\\"\n"
+        "  FLOW_MATERIALIZER_UNUSED=\\\"$<TARGET_FILE:test_flow_plugin_materializer_unused>\\\")\n"
+        "add_dependencies(test_flow_plugin_materializer_generation test_flow_operation_fixture_OK test_flow_operation_fixture_TWO_NAMES test_flow_plugin_materializer_operation test_flow_plugin_materializer_mismatch test_flow_plugin_materializer_unused)\n"
     )
 else:
     children = "add_subdirectory(ingress/protocol/common)\nadd_subdirectory(turbo_flow)\nadd_subdirectory(io/durable)\n"

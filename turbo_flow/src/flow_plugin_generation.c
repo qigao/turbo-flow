@@ -22,11 +22,16 @@ typedef struct flow_plugin_generation_owner_s {
   int resource;
 } flow_plugin_generation_owner_t;
 
+typedef struct flow_plugin_generation_materializer_binding_s {
+  turbo_flow_plugin_materializer_v1_t materializer;
+} flow_plugin_generation_materializer_binding_t;
+
 struct turbo_flow_plugin_generation_s {
   turbo_flow_t *flow;
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
   vec_t owners;
   vec_t bindings;
+  vec_t materializers;
   turbo_flow_plugin_result_domain_t *domain;
   turbo_flow_config_error_t cleanup_error;
   const char *unretirable_owner;
@@ -286,6 +291,138 @@ static int flow_plugin_generation_owner_valid(const turbo_flow_plugin_product_ow
 }
 
 
+static int flow_plugin_generation_materializer_error(
+    turbo_flow_config_error_t *error, int status, size_t index,
+    const char *field, const char *message) {
+  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  (void)snprintf(path, sizeof(path), "$.materializer_bindings[%zu]%s%s", index,
+                 field ? "." : "", field ? field : "");
+  return flow_plugin_generation_error(error, status, path, message);
+}
+
+static int flow_plugin_generation_materializer_encoding(
+    turbo_flow_config_materializer_encoding_t configured,
+    turbo_flow_data_encoding_t *out) {
+  if (!out) return SALTS_EINVAL;
+  switch (configured) {
+  case TURBO_FLOW_CONFIG_MATERIALIZER_TBE:
+    *out = TURBO_FLOW_DATA_ENCODING_TBE;
+    return SALTS_OK;
+  case TURBO_FLOW_CONFIG_MATERIALIZER_JSON:
+    *out = TURBO_FLOW_DATA_ENCODING_JSON;
+    return SALTS_OK;
+  case TURBO_FLOW_CONFIG_MATERIALIZER_CSV:
+    *out = TURBO_FLOW_DATA_ENCODING_CSV;
+    return SALTS_OK;
+  case TURBO_FLOW_CONFIG_MATERIALIZER_XML:
+    *out = TURBO_FLOW_DATA_ENCODING_XML;
+    return SALTS_OK;
+  case TURBO_FLOW_CONFIG_MATERIALIZER_UTF8:
+    *out = TURBO_FLOW_DATA_ENCODING_UTF8;
+    return SALTS_OK;
+  case TURBO_FLOW_CONFIG_MATERIALIZER_OPAQUE:
+    *out = TURBO_FLOW_DATA_ENCODING_OPAQUE;
+    return SALTS_OK;
+  default:
+    return SALTS_EINVAL;
+  }
+}
+
+static int flow_plugin_generation_prepare_materializers(
+    turbo_flow_plugin_catalog_snapshot_t *snapshot,
+    const turbo_flow_resolved_config_t *resolved,
+    const vec_t *operations, vec_t *out,
+    turbo_flow_config_error_t *error) {
+  turbo_flow_plugin_materializer_catalog_v1_t catalog =
+      TURBO_FLOW_PLUGIN_MATERIALIZER_CATALOG_V1_INIT;
+  size_t count = 0u;
+  int rc;
+  rc = turbo_flow_resolved_config_materializer_binding_count(resolved, &count);
+  if (rc != SALTS_OK)
+    return flow_plugin_generation_materializer_error(
+        error, rc, 0u, NULL, "materializer binding config is unavailable");
+  rc = turbo_flow_stl_error(
+      vec_init_bytes(out, sizeof(flow_plugin_generation_materializer_binding_t),
+                     _Alignof(turbo_flow_max_align_t), count));
+  if (rc != SALTS_OK)
+    return flow_plugin_generation_materializer_error(
+        error, rc, 0u, NULL, "materializer binding allocation failed");
+  if (count == 0u) return SALTS_OK;
+  rc = turbo_flow_stl_error(vec_reserve(out, count));
+  if (rc != SALTS_OK)
+    return flow_plugin_generation_materializer_error(
+        error, rc, 0u, NULL, "materializer binding reservation failed");
+  rc = turbo_flow_plugin_catalog_snapshot_materializer_catalog(snapshot, &catalog);
+  if (rc != SALTS_OK)
+    return flow_plugin_generation_materializer_error(
+        error, rc, 0u, NULL, "materializer catalog is unavailable");
+
+  for (size_t i = 0u; i < count; ++i) {
+    turbo_flow_resolved_materializer_binding_view_t wanted =
+        TURBO_FLOW_RESOLVED_MATERIALIZER_BINDING_VIEW_INIT;
+    const turbo_flow_plugin_materializer_catalog_entry_v1_t *selected = NULL;
+    flow_plugin_generation_materializer_binding_t compiled;
+    turbo_flow_data_encoding_t encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
+    size_t consumer_count = 0u;
+    rc = turbo_flow_resolved_config_materializer_binding_at(resolved, i, &wanted);
+    if (rc != SALTS_OK)
+      return flow_plugin_generation_materializer_error(
+          error, rc, i, NULL, "materializer binding projection failed");
+    rc = flow_plugin_generation_materializer_encoding(wanted.encoding, &encoding);
+    if (rc != SALTS_OK)
+      return flow_plugin_generation_materializer_error(
+          error, rc, i, "encoding", "materializer encoding is invalid");
+
+    for (size_t j = 0u; j < catalog.count; ++j) {
+      const turbo_flow_plugin_materializer_catalog_entry_v1_t *entry = &catalog.entries[j];
+      if (!entry->plugin_id || strcmp(entry->plugin_id, wanted.plugin) != 0)
+        continue;
+      if (strcmp(entry->materializer.schema.schema_name, wanted.schema) != 0 ||
+          entry->materializer.schema.schema_version != wanted.schema_version ||
+          entry->materializer.schema.encoding != encoding)
+        continue;
+      selected = entry;
+      break;
+    }
+    if (!selected)
+      return flow_plugin_generation_materializer_error(
+          error, SALTS_ENOENT, i, "plugin",
+          "configured materializer provider/schema/version/encoding was not registered");
+
+    for (size_t j = 0u; j < vec_size(operations); ++j) {
+      const flow_plugin_operation_binding_t *operation =
+          (const flow_plugin_operation_binding_t *)vec_at_const(operations, j);
+      if (!operation || !operation->operation.input.data ||
+          !operation->operation.input.projection)
+        continue;
+      if (strcmp(operation->operation.input.data->stable_id, wanted.schema) != 0 ||
+          operation->operation.input.schema_version != wanted.schema_version ||
+          operation->operation.input.projection->encoding != encoding)
+        continue;
+      rc = turbo_flow_data_schema_match(
+          &selected->materializer.schema, selected->materializer.data,
+          operation->operation.input.projection, operation->operation.input.data);
+      if (rc != SALTS_OK)
+        return flow_plugin_generation_materializer_error(
+            error, SALTS_EPROTO, i, "schema",
+            "materializer schema/CMeta does not exactly match every operation input consumer");
+      ++consumer_count;
+    }
+    if (consumer_count == 0u)
+      return flow_plugin_generation_materializer_error(
+          error, SALTS_EPROTO, i, "schema",
+          "materializer binding has no exact typed-operation input consumer");
+
+    memset(&compiled, 0, sizeof(compiled));
+    compiled.materializer = selected->materializer;
+    rc = turbo_flow_stl_error(vec_push(out, &compiled));
+    if (rc != SALTS_OK)
+      return flow_plugin_generation_materializer_error(
+          error, rc, i, NULL, "materializer binding commit failed");
+  }
+  return SALTS_OK;
+}
+
 static int flow_plugin_generation_materialize(
     turbo_flow_plugin_generation_t *generation, const turbo_flow_resolved_config_t *resolved,
     const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog,
@@ -416,6 +553,9 @@ int turbo_flow_plugin_generation_create(
                                       config->operation_memory_budget_bytes, &generation->bindings,
                                       error);
   if (rc != SALTS_OK) goto preflight_failed;
+  rc = flow_plugin_generation_prepare_materializers(snapshot, resolved, &generation->bindings,
+                                                    &generation->materializers, error);
+  if (rc != SALTS_OK) goto preflight_failed;
   rc = flow_plugin_generation_preflight(*flow_io, resolved, &catalog, error);
   if (rc != SALTS_OK) goto preflight_failed;
   rc = flow_plugin_operations_preflight(&generation->bindings, error);
@@ -458,6 +598,7 @@ preflight_failed:
     flow_plugin_generation_error(error, rc, "$.generation.preflight",
                                  "generation preflight failed");
   if (generation->snapshot) turbo_flow_plugin_catalog_snapshot_destroy(generation->snapshot);
+  vec_destroy(&generation->materializers);
   flow_plugin_operations_free(&generation->bindings);
   vec_destroy(&generation->owners);
   free(generation);
@@ -606,6 +747,7 @@ static int flow_plugin_generation_retire(turbo_flow_plugin_generation_t *generat
   }
   flow_plugin_result_domain_detach(generation->domain);
   turbo_flow_plugin_catalog_snapshot_destroy(generation->snapshot);
+  vec_destroy(&generation->materializers);
   flow_plugin_operations_free(&generation->bindings);
   vec_destroy(&generation->owners);
   memset(generation, 0, sizeof(*generation));

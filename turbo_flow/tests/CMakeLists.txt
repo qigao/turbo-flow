@@ -34,6 +34,29 @@ set_target_properties(test_flow_plugin_operation_runtime PROPERTIES FOLDER "turb
 add_test(NAME test_flow_plugin_operation_runtime COMMAND test_flow_plugin_operation_runtime)
 set_tests_properties(test_flow_plugin_operation test_flow_plugin_result_domain test_flow_plugin_operation_runtime
   PROPERTIES LABELS "graph;plugin;abi3" TIMEOUT 30)
+add_executable(test_flow_plugin_materializer_generation
+  test_flow_plugin_materializer_generation.c)
+target_link_libraries(test_flow_plugin_materializer_generation
+  PRIVATE TurboFlow::PluginHost Salts::TinyTest)
+target_compile_definitions(test_flow_plugin_materializer_generation PRIVATE
+  FLOW_OPERATION_OK="$<TARGET_FILE:test_flow_operation_fixture_OK>"
+  FLOW_OPERATION_TWO_NAMES="$<TARGET_FILE:test_flow_operation_fixture_TWO_NAMES>"
+  FLOW_MATERIALIZER_OPERATION="$<TARGET_FILE:test_flow_plugin_materializer_operation>"
+  FLOW_MATERIALIZER_MISMATCH="$<TARGET_FILE:test_flow_plugin_materializer_mismatch>"
+  FLOW_MATERIALIZER_UNUSED="$<TARGET_FILE:test_flow_plugin_materializer_unused>")
+add_dependencies(test_flow_plugin_materializer_generation
+  test_flow_operation_fixture_OK
+  test_flow_operation_fixture_TWO_NAMES
+  test_flow_plugin_materializer_operation
+  test_flow_plugin_materializer_mismatch
+  test_flow_plugin_materializer_unused)
+set_target_properties(test_flow_plugin_materializer_generation
+  PROPERTIES FOLDER "turbo_flow/tests")
+add_test(NAME test_flow_plugin_materializer_generation
+  COMMAND test_flow_plugin_materializer_generation)
+set_tests_properties(test_flow_plugin_materializer_generation
+  PROPERTIES LABELS "graph;plugin;abi3;materializer" TIMEOUT 30)
+
 add_library(test_flow_plugin_projection_fixture SHARED plugin_projection_fixture.c)
 add_executable(test_flow_data_schema test_flow_data_schema.c operation_schema_fixture.c)
 target_link_libraries(test_flow_data_schema PRIVATE TurboFlow::Graph Salts::TinyTest)
@@ -249,6 +272,12 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
+  test_materializer_binding_config
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_materializer_binding_config.c
+  LIBS TurboFlow::Config Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+
+cmake_add_test(
   test_resolved_config_boundary
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_resolved_config_boundary.c
   LIBS TurboFlow::Config Salts::TinyTest
@@ -326,6 +355,25 @@ turbo_flow_add_materializer_fixture(
   test_flow_plugin_materializer_version_two
   FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.version-two"
   FLOW_MATERIALIZER_SCHEMA_VERSION=2)
+
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_operation
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.operation"
+  FLOW_MATERIALIZER_SCHEMA_ID="cmeta.int.data"
+  FLOW_MATERIALIZER_TYPE_NAME="Integer"
+  FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID=7)
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_mismatch
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.operation"
+  FLOW_MATERIALIZER_SCHEMA_ID="cmeta.int.data"
+  FLOW_MATERIALIZER_TYPE_NAME="Integer"
+  FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID=99)
+turbo_flow_add_materializer_fixture(
+  test_flow_plugin_materializer_unused
+  FLOW_MATERIALIZER_FIXTURE_ID="fixture.materializer.unused"
+  FLOW_MATERIALIZER_SCHEMA_ID="fixture.unused.data"
+  FLOW_MATERIALIZER_TYPE_NAME="Integer"
+  FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID=15999)
 
 cmake_add_test(
   test_flow_plugin_materializer
