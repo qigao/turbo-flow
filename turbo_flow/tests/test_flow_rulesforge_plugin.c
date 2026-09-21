@@ -83,8 +83,11 @@ spec("RulesForge ABI3 provider") {
     check_greater(count, 0);
     check_less(count, (int)sizeof(yaml));
 
+    const char *plugin_path = getenv("FLOW_RULESFORGE_PLUGIN_PATH");
+    if (!plugin_path || !plugin_path[0]) plugin_path = FLOW_RULESFORGE_PLUGIN;
+
     check_equal(turbo_flow_plugin_host_create(&host_config, &host, &plugin_error), SALTS_OK);
-    check_equal(turbo_flow_plugin_host_load(host, FLOW_RULESFORGE_PLUGIN, &plugin_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, plugin_path, &plugin_error), SALTS_OK);
     check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &plugin_error), SALTS_OK);
     turbo_flow_plugin_operation_catalog_v3_init(&catalog);
     check_equal(turbo_flow_plugin_catalog_snapshot_operation_catalog(snapshot, &catalog), SALTS_OK);
