@@ -1,6 +1,6 @@
 # Typed-operation DLL 边界
 
-状态：shared ABI 3.0 的首个同步typed-operation profile及安装消费验收已实施；#93其余
+状态：首个同步 typed-operation profile 最初在 shared ABI 3.0 下实施；当前 shared ABI 3.1 新增 materializer 注册面，operation v3 语义保持不变；#93其余
 线程/协程/取消profile与#73真实引擎仍在进行。本文件不是这些后续能力的完成声明。
 
 跟踪：[TurboFlow #73](https://github.com/qigao/turbo-flow/issues/73)，父任务
@@ -26,9 +26,9 @@
 Core 必需链接，改为显式 DLL 加载且无 fallback。既有 DSL 的 source/stage
 拓扑语法保持不变；引擎资源配置和直接调用消费者需要显式迁移。
 
-当前事实基线 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`：shared plugin ABI 3.0、
+历史事实基线 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`：shared plugin ABI 3.0；当前实现为 shared plugin ABI 3.1，
 schema/operation catalog、独立result-domain、typed-result提交及同步generation装配已实现。
-精确结构、生命周期和实施边界见 [ABI 3.0 契约](typed-operation-abi3.md)。该首个profile
+精确结构、生命周期和实施边界见 [ABI 3.x 契约](typed-operation-abi3.md)。该首个 profile
 只接受inline、thread_safe、cancellation none、deadline 0；不覆盖#93全部取消/线程能力，
 更不代表#73真实RulesForge/TurboScript引擎验收。
 
@@ -90,10 +90,10 @@ threading、cancellation、deadline、权限/effect或配额组合在Graph所有
    校验结果后提交 bounded typed decision sidecar。DLL 不能通过 message 获取网络、
    数据库或原输入 settlement 的可写 owner。
 
-Host、插件和安装消费者同步重编译到 shared ABI 3.0；旧 ABI 1.x/2.x、未来不支持
+Host、插件和安装消费者必须同步重编译到当前 shared ABI；旧 ABI 1.x/2.x、旧 3.0 以及未来不支持
 版本及短结构一律拒绝。没有旧布局 fallback、保留槽位或新旧双路；包版本与插件 ABI
 版本独立。结构的历史 `_v1_t` 名称不是兼容旧 ABI 的承诺，实际 size/major/minor 必须
-满足 ABI 3.0 的精确校验。
+满足当前 shared ABI 3.1 的精确校验。
 非 size-version 化的 CMeta 描述符布局不得修改。
 
 注册期间一旦出现非法 descriptor、重复 identity/version、容量不足或 capability
@@ -117,7 +117,7 @@ Host、插件和安装消费者同步重编译到 shared ABI 3.0；旧 ABI 1.x/2
 immutable，就推导其原生 runtime 或全局初始化可并发。
 
 输入 view 默认只借用到调用返回；异步保留必须显式 retain，并纳入 run/module lease。
-ABI 3.0 首个 profile 仅允许同步借用，没有异步 invocation 或取消完成回调。
+ABI 3.x 首个 operation profile 仅允许同步借用，没有异步 invocation 或取消完成回调。
 结果若含 DLL-owned metadata 或 destroy callback，消息及 clone 都必须持有对应 lease；
 不能只保护 Graph 存活期间，也不能在 generation 销毁后留下失效回调。
 
@@ -142,7 +142,7 @@ destroy 完成 → context release 成功 → snapshot 释放 → 模块 destroy
 原 borrowed projection 和 descriptor 生命周期契约保持不变，clear_projection
 不会自动延长 descriptor 的寿命。
 
-ABI 3.0 不清空原 projection 来存 operation 输出。Graph 新增一个独立 typed-result
+ABI 3.x operation profile 不清空原 projection 来存 operation 输出。Graph 新增一个独立 typed-result
 槽，claim/commit/abort 保证失败原子性；caller-owned result-domain 持有结果 owner 和
 snapshot，generation 仅借用该域。generation 完成退役后输出及 clone 仍有效；domain
 销毁的 busy/release 失败由调用方重试，不能强制释放 Graph 内仍被引用的数据。
