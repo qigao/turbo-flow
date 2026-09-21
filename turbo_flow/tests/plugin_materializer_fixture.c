@@ -13,6 +13,18 @@
 #ifndef FLOW_MATERIALIZER_SCHEMA_VERSION
 #define FLOW_MATERIALIZER_SCHEMA_VERSION 1u
 #endif
+#ifndef FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID
+#define FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID 15901u
+#endif
+#ifndef FLOW_MATERIALIZER_TYPE_NAME
+#define FLOW_MATERIALIZER_TYPE_NAME "FixtureInt"
+#endif
+#ifndef FLOW_MATERIALIZER_ENCODING
+#define FLOW_MATERIALIZER_ENCODING TURBO_FLOW_DATA_ENCODING_OPAQUE
+#endif
+#ifndef FLOW_MATERIALIZER_MAX_ENCODED_BYTES
+#define FLOW_MATERIALIZER_MAX_ENCODED_BYTES sizeof(int)
+#endif
 #ifndef FLOW_MATERIALIZER_MODE
 #define FLOW_MATERIALIZER_MODE 0
 #endif
@@ -36,7 +48,8 @@ enum {
   FLOW_MATERIALIZER_BAD_NATIVE_SIZE = 3,
   FLOW_MATERIALIZER_BAD_MAX_ENCODED = 4,
   FLOW_MATERIALIZER_MISSING_CALLBACK = 5,
-  FLOW_MATERIALIZER_SWALLOW_ERROR = 6
+  FLOW_MATERIALIZER_SWALLOW_ERROR = 6,
+  FLOW_MATERIALIZER_CALLBACK_FAIL = 7
 };
 
 typedef struct materializer_fixture_s {
@@ -50,6 +63,7 @@ static int fixture_materialize(
     void *ctx, const turbo_flow_plugin_materializer_input_v1_t *input,
     void *native_out, size_t native_capacity) {
   (void)ctx;
+  if (FLOW_MATERIALIZER_MODE == FLOW_MATERIALIZER_CALLBACK_FAIL) return SALTS_EIO;
   if (!input || input->size != sizeof(*input) ||
       input->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       input->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
@@ -94,11 +108,11 @@ static int fixture_register(
   materializer.abi_major = FLOW_MATERIALIZER_DESCRIPTOR_MAJOR;
   materializer.abi_minor = FLOW_MATERIALIZER_DESCRIPTOR_MINOR;
   materializer.schema.domain = TURBO_FLOW_DOMAIN_DATA;
-  materializer.schema.encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
+  materializer.schema.encoding = FLOW_MATERIALIZER_ENCODING;
   materializer.schema.schema_name = FLOW_MATERIALIZER_SCHEMA_ID;
-  materializer.schema.type_name = "FixtureInt";
+  materializer.schema.type_name = FLOW_MATERIALIZER_TYPE_NAME;
   materializer.schema.projection_type = fixture_int_type.name;
-  materializer.schema.schema_id = 15901u;
+  materializer.schema.schema_id = FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID;
   materializer.schema.schema_version =
       FLOW_MATERIALIZER_MODE == FLOW_MATERIALIZER_BAD_SCHEMA_VERSION
           ? 0u
@@ -107,7 +121,7 @@ static int fixture_register(
   materializer.max_encoded_bytes =
       FLOW_MATERIALIZER_MODE == FLOW_MATERIALIZER_BAD_MAX_ENCODED
           ? 0u
-          : sizeof(int);
+          : FLOW_MATERIALIZER_MAX_ENCODED_BYTES;
   materializer.native_bytes =
       FLOW_MATERIALIZER_MODE == FLOW_MATERIALIZER_BAD_NATIVE_SIZE
           ? sizeof(int) + 1u
