@@ -1,6 +1,7 @@
 #include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_plugin_operation.h"
+#include "../src/flow_projection_owner_internal.h"
 
 #include <cmeta/type_select.h>
 #include <stdlib.h>
@@ -310,8 +311,29 @@ spec("generation materializer preflight") {
 
     materializer_message(&msg, "ABCD", "cmeta.int.data", 1u);
     materializer_durable_identity(&msg);
+    check_equal(flow_msg_mark_durable_claim(&msg), SALTS_OK);
     check_null(turbo_flow_msg_projection(&msg, NULL));
     check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_OK);
+
+    turbo_flow_msg_cleanup(&msg);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    close_test(&t);
+  }
+
+  it("rejects public durable identity without internal claim provenance") {
+    materializer_generation_test_t t;
+    turbo_flow_t *flow;
+    turbo_flow_msg_t msg;
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(create_generation(&t), SALTS_OK);
+    flow = turbo_flow_plugin_generation_flow(t.generation);
+    check_not_null(flow);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+
+    materializer_message(&msg, "ABCD", "cmeta.int.data", 1u);
+    materializer_durable_identity(&msg);
+    check_null(turbo_flow_msg_projection(&msg, NULL));
+    check_equal(turbo_flow_publish(flow, "input", &msg), SALTS_ENOTSUP);
 
     turbo_flow_msg_cleanup(&msg);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
