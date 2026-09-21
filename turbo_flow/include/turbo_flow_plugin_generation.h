@@ -237,6 +237,32 @@ turbo_flow_plugin_generation_state(const turbo_flow_plugin_generation_t *generat
 TURBO_FLOW_C_API size_t
 turbo_flow_plugin_generation_owner_count(const turbo_flow_plugin_generation_t *generation);
 
+/** Return the number of schema-level materializer bindings compiled into this generation. */
+TURBO_FLOW_C_API size_t
+turbo_flow_plugin_generation_materializer_count(
+    const turbo_flow_plugin_generation_t *generation);
+
+/**
+ * Decode one canonical message payload through an already-compiled materializer binding.
+ *
+ * binding_index is the resolved materializer_bindings array index. No catalog, symbol, provider
+ * name, or schema-name lookup occurs on this data path. The message content descriptor must
+ * exactly match the compiled schema/version/encoding before the callback is invoked.
+ *
+ * On success, one caller-buffer native value is attached as a message-owned exact CMeta typed
+ * projection while the original payload bytes remain the source of truth. Projection clone and
+ * destroy retain/release a generation-local materialization lease, so generation retirement
+ * returns SALTS_EBUSY until every materialized projection is gone.
+ *
+ * @return SALTS_OK, SALTS_EINVAL for invalid arguments/content, SALTS_ENOENT for an invalid
+ * binding index, SALTS_EALREADY when a projection already exists, SALTS_ENOSPC for encoded-byte
+ * or configured concurrent-projection capacity exhaustion, SALTS_EBUSY after materialization
+ * admission has closed, SALTS_EPROTO for schema mismatch, or the exact provider callback error.
+ */
+TURBO_FLOW_C_API int turbo_flow_plugin_generation_materialize_at(
+    turbo_flow_plugin_generation_t *generation, size_t binding_index,
+    turbo_flow_msg_t *message, turbo_flow_config_error_t *error);
+
 /**
  * Drive one external-poll round while the Graph is started.
  *
