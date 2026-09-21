@@ -414,6 +414,12 @@ static int flow_plugin_generation_prepare_materializers(
           error, SALTS_ENOENT, i, "plugin",
           "configured materializer provider/schema/version/encoding was not registered");
 
+    if (selected->materializer.native_bytes >
+        TURBO_FLOW_PLUGIN_MATERIALIZER_MAX_RETAINED_BYTES / capacity)
+      return flow_plugin_generation_materializer_error(
+          error, SALTS_ENOSPC, i, "capacity",
+          "materializer capacity exceeds the retained native-byte budget");
+
     for (size_t j = 0u; j < vec_size(operations); ++j) {
       const flow_plugin_operation_binding_t *operation =
           (const flow_plugin_operation_binding_t *)vec_at_const(operations, j);
