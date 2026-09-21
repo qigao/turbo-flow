@@ -52,6 +52,9 @@
 #ifndef FLOW_PLUGIN_GENERATION_FIXTURE_RESOURCE_ORDER
   #error FLOW_PLUGIN_GENERATION_FIXTURE_RESOURCE_ORDER is required
 #endif
+#ifndef FLOW_PLUGIN_GENERATION_FIXTURE_OPERATION_RESOURCE
+  #error FLOW_PLUGIN_GENERATION_FIXTURE_OPERATION_RESOURCE is required
+#endif
 #ifndef FLOW_PLUGIN_GENERATION_FIXTURE_EXTERNAL_POLL
   #error FLOW_PLUGIN_GENERATION_FIXTURE_EXTERNAL_POLL is required
 #endif
@@ -169,7 +172,21 @@ static const char flow_plugin_generation_resource_yaml[] =
 
 static const char flow_plugin_generation_resource_graph[] =
     "source input adapter input.adapter\n"
-    "stage decide operation rules.apply resource routing\n"
+    "buffer routing_buffer resource routing\n"
+    "stage main {\n"
+    "  input -> routing_buffer\n"
+    "}\n";
+
+static const char flow_plugin_generation_operation_resource_yaml[] =
+    "version: 1\n"
+    "adapters:\n"
+    "  input.adapter:\n"
+    "    kind: fixture.transactional.adapter\n"
+    "    config: {}\n";
+
+static const char flow_plugin_generation_operation_resource_graph[] =
+    "source input adapter input.adapter\n"
+    "stage decide operation rules.apply resource rules.private\n"
     "stage main {\n"
     "  input -> decide\n"
     "}\n";
@@ -1003,7 +1020,8 @@ spec("transactional plugin Graph generation") {
       check_null(turbo_flow_stage_at(context.flow, 0u)->resource_name);
       check_equal(turbo_flow_stage_at(context.flow, 0u)->adapter_name, "input.adapter");
       check_equal(turbo_flow_stage_at(context.flow, 1u)->resource_name, "routing");
-      check_null(turbo_flow_stage_at(context.flow, 1u)->adapter_name);
+      check_true(turbo_flow_stage_at(context.flow, 1u)->is_buffer);
+      check_null(turbo_flow_stage_at(context.flow, 1u)->operation_name);
     }
     {
       const int rc = turbo_flow_plugin_generation_create(
@@ -1012,6 +1030,50 @@ spec("transactional plugin Graph generation") {
       info("resource order generation status=%d path=%s message=%s", rc, config_error.path,
            config_error.message);
       check_equal(rc, SALTS_EINVAL);
+    }
+    check_null(generation);
+    check_null(context.flow);
+    check_equal(flow_plugin_generation_test_close(&context, &plugin_error), SALTS_OK);
+  }
+
+  it("keeps operation-scoped resources out of the Product provider catalog") {
+    flow_plugin_generation_test_context_t context;
+    turbo_flow_plugin_generation_config_t generation_config =
+        TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
+    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_plugin_generation_t *generation = NULL;
+    generation_config.owner_capacity = 1u;
+
+    check_equal(flow_plugin_generation_test_open(
+                    &context, FLOW_PLUGIN_GENERATION_FIXTURE_OPERATION_RESOURCE,
+                    &plugin_error, &config_error),
+                SALTS_OK);
+    check_equal(flow_plugin_generation_test_replace_documents(
+                    &context, flow_plugin_generation_operation_resource_yaml,
+                    sizeof(flow_plugin_generation_operation_resource_yaml) - 1u,
+                    flow_plugin_generation_operation_resource_graph,
+                    sizeof(flow_plugin_generation_operation_resource_graph) - 1u,
+                    &config_error),
+                SALTS_OK);
+    {
+      const turbo_flow_stage_plan_t *operation_stage =
+          turbo_flow_stage_at(context.flow, 1u);
+      check_not_null(operation_stage);
+      check_equal(operation_stage->operation_name, "rules.apply");
+      check_equal(operation_stage->resource_name, "rules.private");
+    }
+    {
+      const int rc = turbo_flow_plugin_generation_create(
+          context.snapshot, context.resolved, &context.flow, &generation_config,
+          NULL, &generation, &context.cleanup, &config_error);
+      info("operation resource boundary status=%d path=%s message=%s",
+           rc, config_error.path, config_error.message);
+      /* The fixture deliberately does not register input.adapter, so Graph
+         compile fails only after Product assembly. A $.channels.rules.private
+         error here would mean the operation resource leaked back into Product. */
+      check_equal(rc, SALTS_EINVAL);
+      check_equal(config_error.path, "$.graph");
     }
     check_null(generation);
     check_null(context.flow);
