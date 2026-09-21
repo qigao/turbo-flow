@@ -156,6 +156,8 @@ typedef struct turbo_flow_plugin_transactional_product_catalog_v1_s {
 #define TURBO_FLOW_PLUGIN_GENERATION_MAX_OWNERS 65536u
 
 typedef struct turbo_flow_plugin_generation_s turbo_flow_plugin_generation_t;
+typedef struct turbo_flow_plugin_materializer_binding_s
+    turbo_flow_plugin_materializer_binding_t;
 
 typedef enum turbo_flow_plugin_generation_state_e {
   TURBO_FLOW_PLUGIN_GENERATION_INVALID = 0,
@@ -236,6 +238,42 @@ TURBO_FLOW_C_API turbo_flow_plugin_generation_state_t
 turbo_flow_plugin_generation_state(const turbo_flow_plugin_generation_t *generation);
 TURBO_FLOW_C_API size_t
 turbo_flow_plugin_generation_owner_count(const turbo_flow_plugin_generation_t *generation);
+
+/**
+ * Return the number of compiled schema-level materializer bindings.
+ * Binding order is the canonical resolved `materializer_bindings` order.
+ */
+TURBO_FLOW_C_API size_t turbo_flow_plugin_generation_materializer_count(
+    const turbo_flow_plugin_generation_t *generation);
+
+/**
+ * Borrow one immutable compiled materializer handle.
+ *
+ * The handle contains the already-resolved provider vtable and no PluginHost
+ * catalog lookup is performed by the execution API. It remains valid until the
+ * generation is successfully destroyed.
+ */
+TURBO_FLOW_C_API int turbo_flow_plugin_generation_materializer_at(
+    const turbo_flow_plugin_generation_t *generation, size_t index,
+    const turbo_flow_plugin_materializer_binding_t **out);
+
+/**
+ * Materialize one canonical message payload through a compiled handle.
+ *
+ * The message must have an owned/valid payload backing plus a declared content
+ * descriptor exactly matching the compiled schema/version/encoding/type.
+ * Admission is reserved before the DLL callback. On success a fixed-size,
+ * host-owned exact CMeta projection is attached while the original payload and
+ * descriptor remain unchanged. Clone/fan-out retain the same bounded projection
+ * owner; generation retirement returns EBUSY until every such projection drains.
+ *
+ * The callback is not invoked for invalid descriptors, oversized payloads,
+ * exhausted projection capacity, an existing projection, or an active result
+ * claim. Failure leaves the message without a new projection.
+ */
+TURBO_FLOW_C_API int turbo_flow_plugin_materializer_materialize(
+    const turbo_flow_plugin_materializer_binding_t *binding, turbo_flow_msg_t *msg,
+    turbo_flow_config_error_t *error);
 
 /**
  * Drive one external-poll round while the Graph is started.
