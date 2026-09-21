@@ -92,12 +92,12 @@ typedef struct turbo_flow_resolved_materializer_binding_view_s {
   const char *plugin;
   const char *schema;
   uint32_t schema_version;
-  turbo_flow_data_encoding_t encoding;
+  uint32_t encoding;
 } turbo_flow_resolved_materializer_binding_view_t;
 
 #define TURBO_FLOW_RESOLVED_MATERIALIZER_BINDING_VIEW_INIT                                         \
   {sizeof(turbo_flow_resolved_materializer_binding_view_t), NULL, NULL, 0u,                        \
-   TURBO_FLOW_DATA_ENCODING_OPAQUE}
+   0u}
 
 typedef enum turbo_flow_config_value_type_e {
   TURBO_FLOW_CONFIG_NULL = 0,
